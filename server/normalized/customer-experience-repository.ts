@@ -1079,6 +1079,7 @@ export class CustomerExperienceRepository {
     publicId: string
     idempotencyKey: string
   }>): Promise<{
+    id: string
     publicId: string
     status: string
     paymentRequired: boolean
@@ -1343,6 +1344,7 @@ export class CustomerExperienceRepository {
         })
       : null
     return {
+      id: registration.id,
       publicId: registration.public_id,
       status: registration.status,
       paymentRequired: registration.status === 'payment_pending',
@@ -1362,8 +1364,8 @@ export class CustomerExperienceRepository {
     registrationPublicId: string
     customerId: string
     reason: string
-  }>): Promise<{ publicId: string; status: 'cancelled' }> {
-    const result = await this.transaction.query<{ public_id: string; payment_id: string | null }>(`
+  }>): Promise<{ id: string; publicId: string; status: 'cancelled' }> {
+    const result = await this.transaction.query<{ id: string; public_id: string; payment_id: string | null }>(`
       WITH RECURSIVE ancestry AS (
         SELECT id, merged_into_customer_id FROM mbox.customers
         WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$4::uuid
@@ -1402,7 +1404,7 @@ export class CustomerExperienceRepository {
               )
           )
         )
-      RETURNING public_id, payment_id
+      RETURNING id, public_id, payment_id
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -1431,6 +1433,7 @@ export class CustomerExperienceRepository {
     }
     if (!row) {
       const current = await this.transaction.query<{
+        id: string
         public_id: string
         status: string
         payment_status: string
@@ -1454,7 +1457,7 @@ export class CustomerExperienceRepository {
           SELECT child.id FROM mbox.customers child JOIN family parent ON child.merged_into_customer_id=parent.id
           WHERE child.tenant_id=$1::uuid AND child.store_id=$2::uuid
         )
-        SELECT registration.public_id, registration.status, registration.payment_status,
+        SELECT registration.id, registration.public_id, registration.status, registration.payment_status,
           registration.paid_amount_minor, registration.payment_id,
           payment.status AS authoritative_payment_status,
           provider_action.state AS provider_action_state
@@ -1478,7 +1481,9 @@ export class CustomerExperienceRepository {
       if (!registration) {
         throw new CustomerExperienceRequestError('没有找到可取消的本人报名', 'ACTIVITY_REGISTRATION_NOT_FOUND', 404)
       }
-      if (registration.status === 'cancelled') return { publicId: registration.public_id, status: 'cancelled' }
+      if (registration.status === 'cancelled') {
+        return { id: registration.id, publicId: registration.public_id, status: 'cancelled' }
+      }
       if (money(registration.paid_amount_minor, 'registration paid amount') > 0
         || registration.payment_status === 'paid'
         || ['succeeded','partially_refunded','refunded'].includes(registration.authoritative_payment_status ?? '')) {
@@ -1498,7 +1503,7 @@ export class CustomerExperienceRepository {
       }
       throw new CustomerExperienceRequestError('当前报名状态不能由顾客取消', 'ACTIVITY_REGISTRATION_NOT_CANCELLABLE', 409)
     }
-    return { publicId: row.public_id, status: 'cancelled' }
+    return { id: row.id, publicId: row.public_id, status: 'cancelled' }
   }
 
   async createRecommendationSession(input: Readonly<{

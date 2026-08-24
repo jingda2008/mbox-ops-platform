@@ -1587,7 +1587,7 @@ export class CustomerExperienceService {
         paymentPublicId: string | null
       }>(),
     }, async (transaction) => {
-      const result = await new CustomerExperienceRepository(
+      const registered = await new CustomerExperienceRepository(
         transaction,
         this.activityPaymentProviderConfigured,
       ).registerActivity({
@@ -1604,12 +1604,13 @@ export class CustomerExperienceService {
         publicId: registrationPublicId,
         idempotencyKey: input.idempotencyKey,
       })
+      const { id, ...result } = registered
       return commandOutcome(
         result,
         guestActor(context),
         'community.activity.registered',
         'community_activity_registration',
-        result.publicId,
+        id,
         context.businessDate,
         { activityPublicId: input.activityPublicId, status: result.status, partySize: input.partySize },
       )
@@ -1631,17 +1632,18 @@ export class CustomerExperienceService {
       }),
       resultCodec: objectCodec<{ publicId: string; status: 'cancelled' }>(),
     }, async (transaction) => {
-      const result = await new CustomerExperienceRepository(transaction).cancelActivityRegistration({
+      const cancelled = await new CustomerExperienceRepository(transaction).cancelActivityRegistration({
         registrationPublicId: input.registrationPublicId,
         customerId: context.customerId,
         reason: input.reason,
       })
+      const { id, ...result } = cancelled
       return commandOutcome(
         result,
         guestActor(context),
         'community.activity.registration.cancelled',
         'community_activity_registration',
-        input.registrationPublicId,
+        id,
         context.businessDate,
         { reason: input.reason },
       )

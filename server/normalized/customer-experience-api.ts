@@ -1350,6 +1350,7 @@ function errorResponse(error: unknown): { statusCode: number; code: string; mess
     || error instanceof NormalizedStoreUnavailableError || error instanceof TrustedStoreScopeError) {
     return { statusCode: 403, code: 'SCOPE_DENIED', message: '当前门店或设备身份不匹配' }
   }
+  console.error('CUSTOMER_EXPERIENCE_UNMAPPED_ERROR', error instanceof Error ? error.stack ?? error.message : error)
   return { statusCode: 500, code: 'CUSTOMER_EXPERIENCE_FAILED', message: '客户体验服务暂时没有接上' }
 }
 

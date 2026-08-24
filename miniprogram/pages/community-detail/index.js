@@ -57,6 +57,57 @@ function validCommandKey(value) {
   return typeof value === 'string' && value.length >= 8 && value.length <= 128
 }
 
+const REGISTRATION_CLEARABLE_CODES = Object.freeze([
+  'ACTIVITY_CONTACT_INVALID',
+  'ACTIVITY_CONTACT_PROTECTION_FAILED',
+  'ACTIVITY_MEMBERSHIP_REQUIRED',
+  'ACTIVITY_TERMS_ACKNOWLEDGEMENT_REQUIRED',
+  'ACTIVITY_TERMS_NOT_CONFIGURED',
+  'ACTIVITY_AUDIENCE_DENIED',
+  'ACTIVITY_UNAVAILABLE',
+  'ACTIVITY_NOT_FOUND',
+  'ACTIVITY_PAYMENT_AUTHORITY_NOT_CONFIGURED',
+  'ACTIVITY_ALREADY_REGISTERED',
+])
+
+function registrationFailureMessage(error) {
+  const code = error && error.code ? String(error.code) : ''
+  if (code === 'ACTIVITY_PAYMENT_AUTHORITY_NOT_CONFIGURED') {
+    return '线上付款条件未就绪，本次没有建立收费报名，也没有占用名额。'
+  }
+  if (code === 'ACTIVITY_MEMBERSHIP_REQUIRED') {
+    return '加入 M-BOX 会员并授权手机号后，才可报名超嗨活动。'
+  }
+  if (code === 'ACTIVITY_CONTACT_INVALID') {
+    return '联系方式格式不正确。手机号请填 11 位（1 开头），或填写至少 3 个字的微信号。'
+  }
+  if (code === 'ACTIVITY_TERMS_ACKNOWLEDGEMENT_REQUIRED') {
+    return '请勾选确认当前版本的安全与退款规则后再报名。'
+  }
+  if (code === 'ACTIVITY_TERMS_NOT_CONFIGURED') {
+    return '活动安全或退款条款缺少有效版本，当前不能报名。'
+  }
+  if (code === 'ACTIVITY_AUDIENCE_DENIED') {
+    return '这个活动当前不在您的可报名范围内。'
+  }
+  if (code === 'ACTIVITY_UNAVAILABLE' || code === 'ACTIVITY_NOT_FOUND') {
+    return '这个活动已结束、暂停或不在您的可见范围内。'
+  }
+  if (code === 'ACTIVITY_ALREADY_REGISTERED') {
+    return '您已有这个活动的有效报名，请下拉刷新后查看状态。'
+  }
+  const message = error && error.message ? String(error.message).trim() : ''
+  if (message) return message
+  return '报名没有成功，请检查网络后重试。'
+}
+
+function shouldClearRegistrationAttempt(error) {
+  const code = error && error.code ? String(error.code) : ''
+  if (REGISTRATION_CLEARABLE_CODES.includes(code)) return true
+  const status = Number(error && error.statusCode)
+  return status === 400 || status === 403 || status === 409
+}
+
 function publicText(value, fallback) {
   if (!value || typeof value !== 'object') return fallback
   return value.summary || value.publicText || value.ruleText || fallback
@@ -345,20 +396,26 @@ Page({
     const previous = attempts[activity.publicId]
     if (typeof previous === 'string') {
       const recovered = await this.recoverRegistration(activity.publicId, null)
-      if (!recovered) this.setData({ error: '检测到旧版报名请求仍待核对。为避免重复占位，本页不会用新资料重发；请刷新后联系活动负责人核对。' })
+      if (recovered) return
+      this.clearRegistrationAttempt(activity.publicId)
+      this.setData({ error: '本机旧版待核对请求已清除（服务端没有对应报名）。请重新填写联系方式后报名。' })
       return
     }
     if (previous && typeof previous === 'object' && previous.payload && !validCommandKey(previous.idempotencyKey)) {
-      this.setData({ error: '本机保存的待核对请求编号异常。为避免重复报名，本页不会自动生成新请求，请联系活动负责人核对。' })
+      this.clearRegistrationAttempt(activity.publicId)
+      this.setData({ error: '本机待核对请求编号异常，已清除。请重新填写后报名。' })
       return
     }
     let attempt = previous && previous.payload ? previous : null
     if (attempt) {
-      const confirmed = await this.confirmPayment('上次报名结果尚未确认。本次只会原样重试同一请求，不会按当前页面内容新建第二份报名。')
+      const confirmed = await this.confirmPayment('上次报名结果尚未确认。可原样重试同一请求；若仍失败，将清除本机卡住的请求以便重新填写。')
       if (!confirmed) return
     } else {
       if (this.data.contact.trim().length < 3) return this.setData({ error: '请填写本次活动可联系的手机号或微信' })
       if (!this.data.ruleAcknowledged) return this.setData({ error: '请先阅读并确认报名、退款与安全规则版本' })
+      if (!activity.safetyPolicyVersion || !activity.refundPolicyVersion) {
+        return this.setData({ error: '活动安全或退款规则缺少可核验版本，本活动暂不接受报名。' })
+      }
       const payment = await this.choosePayment(activity)
       if (!payment) return
       const payload = {
@@ -411,11 +468,15 @@ Page({
       await this.showRegistrationOutcome(registration)
     } catch (error) {
       const recovered = await this.recoverRegistration(activity.publicId, attempt)
-      if (!recovered) {
-        this.setData({ error: error.code === 'ACTIVITY_PAYMENT_AUTHORITY_NOT_CONFIGURED'
-          ? '线上付款条件未就绪，本次没有建立收费报名。'
-          : '报名结果暂时无法确认。再次点击只会原样重试同一请求，不会创建第二份报名。' })
+      if (recovered) return
+      const detail = registrationFailureMessage(error)
+      if (shouldClearRegistrationAttempt(error)) {
+        this.clearRegistrationAttempt(activity.publicId)
+        this.setData({ error: `${detail} 本机待核对请求已清除，请按提示修改后重新报名。` })
+        return
       }
+      // 未知/网络类错误：保留幂等键重试，但展示真实原因，避免永远只看到笼统文案。
+      this.setData({ error: `${detail} 再次点击会原样重试同一请求；若持续失败，可退出小程序后重进再试。` })
     } finally { this.setData({ busy: false }) }
   },
 

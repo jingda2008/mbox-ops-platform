@@ -187,6 +187,13 @@ class PublicReservationOwnershipError extends Error {
   }
 }
 
+class PublicReservationStaffPermissionError extends Error {
+  constructor() {
+    super('当前岗位没有预约操作权限')
+    this.name = 'PublicReservationStaffPermissionError'
+  }
+}
+
 class PublicReservationRateLimitError extends Error {
   constructor(readonly retryAt: string) {
     super('操作有点快，请稍后再试')
@@ -734,7 +741,12 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
           COALESCE(array_agg(venue_table.code ORDER BY venue_table.code)
             FILTER (WHERE venue_table.code IS NOT NULL), ARRAY[]::text[]) AS table_codes,
           reservation.annual_priority_hold_minutes,queue_override.mode AS queue_override_mode,
-          queue_override.reason AS queue_override_reason,queue_override.created_at::text AS queue_override_created_at
+          queue_override.reason AS queue_override_reason,queue_override.created_at::text AS queue_override_created_at,
+          CASE queue_override.mode
+            WHEN 'promote' THEN 0
+            WHEN 'demote' THEN 3
+            ELSE CASE WHEN reservation.annual_priority_hold_minutes IS NULL THEN 2 ELSE 1 END
+          END AS queue_priority
         FROM mbox.reservations AS reservation
         LEFT JOIN mbox.reservation_private_contacts AS contact
           ON contact.tenant_id = reservation.tenant_id AND contact.store_id = reservation.store_id
@@ -765,7 +777,12 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
           waitlist.desired_arrival_at::text AS arrival_at, waitlist.status,
           waitlist.source, waitlist.owner_employee_id, ARRAY[]::text[] AS table_codes,
           waitlist.annual_priority_hold_minutes,queue_override.mode AS queue_override_mode,
-          queue_override.reason AS queue_override_reason,queue_override.created_at::text AS queue_override_created_at
+          queue_override.reason AS queue_override_reason,queue_override.created_at::text AS queue_override_created_at,
+          CASE queue_override.mode
+            WHEN 'promote' THEN 0
+            WHEN 'demote' THEN 3
+            ELSE CASE WHEN waitlist.annual_priority_hold_minutes IS NULL THEN 2 ELSE 1 END
+          END AS queue_priority
         FROM mbox.waitlist_entries AS waitlist
         LEFT JOIN LATERAL (
           SELECT override.mode,override.reason,override.created_at
@@ -779,13 +796,7 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
           AND waitlist.desired_arrival_at >= $3::timestamptz
           AND waitlist.desired_arrival_at < $4::timestamptz
           AND ($5::boolean OR waitlist.owner_employee_id = ANY($6::uuid[]))
-        ORDER BY arrival_at,
-          CASE queue_override_mode
-            WHEN 'promote' THEN 0
-            WHEN 'demote' THEN 3
-            ELSE CASE WHEN annual_priority_hold_minutes IS NULL THEN 2 ELSE 1 END
-          END,
-          public_id
+        ORDER BY arrival_at, queue_priority, public_id
         LIMIT 1000
       `, [
         transaction.scope.tenantId,
@@ -1392,7 +1403,7 @@ async function requireGuest(
 }
 
 function requirePermission(context: PublicReservationStaffContext, permission: string): void {
-  if (!context.permissions.includes(permission)) throw new PublicReservationOwnershipError()
+  if (!context.permissions.includes(permission)) throw new PublicReservationStaffPermissionError()
 }
 
 function readPriorityQueueTargetKind(value: string): PriorityQueueTargetKind {
@@ -1421,6 +1432,9 @@ function mapError(error: unknown): { status: number; code: string; message: stri
   }
   if (error instanceof ReservationGuestSessionInvalidError) {
     return { status: 401, code: 'RESERVATION_SESSION_INVALID', message: error.message }
+  }
+  if (error instanceof PublicReservationStaffPermissionError) {
+    return { status: 403, code: 'RESERVATION_PERMISSION_DENIED', message: error.message }
   }
   if (error instanceof PublicReservationOwnershipError || error instanceof WaitlistNotFoundError) {
     return { status: 404, code: 'RESERVATION_NOT_FOUND', message: error.message }

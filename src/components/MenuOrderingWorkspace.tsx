@@ -145,6 +145,20 @@ interface MenuOrderingWorkspaceProps {
   onCartCountChange?: (itemCount: number) => void
 }
 
+export function isMenuConfirmationDisabled(input: Readonly<{
+  busy: boolean
+  submitDisabled: boolean
+  confirmation: 'submit' | 'duplicate' | 'continue' | null
+  confirmedDuplicateOrderId: string
+}>): boolean {
+  // Continuing only resumes the local/shared-cart adjustment. It is not a
+  // checkout attempt, so a temporary checkout block must not trap the guest
+  // in the continuation confirmation.
+  return input.busy
+    || (input.confirmation !== 'continue' && input.submitDisabled)
+    || (input.confirmation === 'duplicate' && !input.confirmedDuplicateOrderId)
+}
+
 export function MenuOrderingWorkspace({
   products,
   tableLabel,
@@ -1040,7 +1054,12 @@ export function MenuOrderingWorkspace({
           {confirmationError && <div className="menu-confirm-error" role="alert">{confirmationError}</div>}
           <footer>
             <button className="secondary-button" disabled={busy} onClick={() => setConfirmation(null)}>再看看</button>
-            <button className="primary-button" data-haptic="action" disabled={busy || submitDisabled || (confirmation === 'duplicate' && !confirmedDuplicateOrderId)} onClick={() => {
+            <button className="primary-button" data-haptic="action" disabled={isMenuConfirmationDisabled({
+              busy,
+              submitDisabled,
+              confirmation,
+              confirmedDuplicateOrderId,
+            })} onClick={() => {
               if (confirmation === 'continue') confirmContinuation()
               else void executeSubmit(confirmation === 'duplicate' ? confirmedDuplicateOrderId : undefined)
             }}><Check size={17} />{busy ? '正在提交' : confirmation === 'duplicate' ? '确认继续加单' : confirmation === 'continue' ? '继续选商品' : complimentaryMode ? '确认赠送' : '确认上单'}</button>

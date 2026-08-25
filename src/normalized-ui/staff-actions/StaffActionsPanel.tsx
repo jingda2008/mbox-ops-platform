@@ -185,12 +185,27 @@ export function StaffActionsPanel({
       return
     }
     try {
-      const [reservationRows, priorityRows] = await Promise.all([
+      const [reservationResult, priorityResult] = await Promise.allSettled([
         api.loadReservations(query, controller.signal),
         api.loadReservationIntake === undefined ? Promise.resolve(null) : api.loadReservationIntake(controller.signal),
       ])
-      setReservations(reservationRows)
-      setPriorityQueue(priorityRows)
+      const results = splitReservationLoadResults(reservationResult, priorityResult)
+      if (results.reservationError !== null) throw results.reservationError
+      if (results.priorityError instanceof StaffActionsApiError && results.priorityError.code === 'ABORTED') return
+      setReservations(results.reservations)
+      setPriorityQueue(results.priorityQueue)
+      if (results.priorityError !== null) {
+        if (results.priorityError instanceof StaffActionsApiError && results.priorityError.status === 401) {
+          onLoginRequired?.()
+          return
+        }
+        if (results.priorityError instanceof StaffActionsApiError && results.priorityError.status === 403) {
+          setReservationMessage('预约列表已更新；当前岗位无权查看优先安排队列')
+          return
+        }
+        setReservationMessage('预约列表已更新；优先安排队列暂时无法读取，可刷新重试')
+        return
+      }
       setReservationMessage(null)
     } catch (error) {
       if (error instanceof StaffActionsApiError && error.code === 'ABORTED') return
@@ -1059,6 +1074,23 @@ export function normalizeMemberBenefitScanCode(value:string):string {
 
 export function memberBenefitTaskCount(tasks:StaffMemberBenefitTasks):number {
   return tasks.annualGifts.length+tasks.dailySnacks.length
+}
+
+export function splitReservationLoadResults(
+  reservations: PromiseSettledResult<StaffReservation[]>,
+  priorityQueue: PromiseSettledResult<StaffReservationIntakeEntry[] | null>,
+): Readonly<{
+  reservations: StaffReservation[] | null
+  reservationError: unknown | null
+  priorityQueue: StaffReservationIntakeEntry[] | null
+  priorityError: unknown | null
+}> {
+  return {
+    reservations: reservations.status === 'fulfilled' ? reservations.value : null,
+    reservationError: reservations.status === 'rejected' ? reservations.reason : null,
+    priorityQueue: priorityQueue.status === 'fulfilled' ? priorityQueue.value : null,
+    priorityError: priorityQueue.status === 'rejected' ? priorityQueue.reason : null,
+  }
 }
 
 function formatMemberBenefitTime(value:string|null):string {

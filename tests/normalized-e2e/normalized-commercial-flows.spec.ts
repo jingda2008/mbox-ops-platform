@@ -126,7 +126,7 @@ test('mobile guest scans a fixed table QR, searches, orders and sees payment res
   await page.getByRole('button', { name: /历史已下单/ }).click()
   const tableOrders = page.getByRole('dialog', { name: '本桌历史订单' })
   await expect(tableOrders).toContainText(data.orderableProductName)
-  await expect(tableOrders).toContainText(/等待付款|准备中|已送齐/)
+  await expect(tableOrders).toContainText(/付款进行中|等待付款|准备中|已送齐/)
   await tableOrders.getByRole('button', { name: '关闭' }).click()
 
   await page.getByRole('button', { name: `加入${data.orderableProductName}` }).click()
@@ -687,7 +687,9 @@ test('mobile manager payment choices stay synchronized with two guests at the sa
   await page.getByRole('button', { name: /W01.*已开台/ }).click()
   await expect(page.getByRole('button', { name: '协助点单' })).toBeVisible()
   await expect(page.getByRole('button', { name: '赠送商品' })).toBeVisible()
-  await expect(page.getByText('会员权益')).toHaveCount(0)
+  const memberBenefitTasks = page.getByRole('region', { name: 'W01会员权益' })
+  await expect(memberBenefitTasks).toBeVisible()
+  await expect(memberBenefitTasks).toContainText('当前范围没有会员权益暂留。')
 
   await page.getByRole('button', { name: '协助点单' }).click()
   const paidSheet = page.getByRole('dialog', { name: 'W01协助点单' })
@@ -761,14 +763,8 @@ test('mobile manager payment choices stay synchronized with two guests at the sa
     expect(await syncedOrders.getByText('服务员协助点单').count()).toBeGreaterThanOrEqual(4)
   }).toPass()
   const staffQrOrder = syncedOrders.getByTestId(`guest-table-order-${staffQrBody.data.providerAction.orderPublicId}`)
-  await expect(staffQrOrder.getByRole('button', { name: /微信支付/ })).toBeVisible()
-  const guestPayResponse = page.waitForResponse((response) => (
-    response.request().method() === 'POST' && /\/api\/guest\/orders\/.+\/payment$/.test(response.url())
-  ))
-  await staffQrOrder.getByRole('button', { name: /微信支付/ }).click()
-  const guestPayBody = await (await guestPayResponse).json() as { data: { paymentId: string } }
-  await expect(page.getByRole('status')).toContainText('测试付款流程已完成，未产生真实扣款')
-  expect(guestPayBody.data.paymentId).toBe(staffQrBody.data.providerAction.paymentId)
+  await expect(staffQrOrder).toContainText('同桌已有付款正在进行，请勿重复发起')
+  await expect(staffQrOrder.getByRole('button', { name: /微信支付/ })).toHaveCount(0)
 
   const barcodeOrder = syncedOrders.getByTestId(`guest-table-order-${barcodeBody.data.providerAction.orderPublicId}`)
   await expect(barcodeOrder).toContainText('员工正在扫描付款码，请勿重复支付')

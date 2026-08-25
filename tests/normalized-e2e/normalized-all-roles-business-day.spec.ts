@@ -148,6 +148,14 @@ async function expectStaffRoute(page: Page, route: string) {
     '/staff/inventory': '库存与酒水上架',
     '/staff/operations': '经营数据',
     '/staff/customer-experience': '客户体验与活动',
+    '/staff/member-fulfillment': '会员权益待办',
+    '/staff/member-exceptions': '会员权益异常',
+    '/staff/member-overview': '会员等级与权益',
+    '/staff/member-rule-drafts': '会员规则草稿',
+    '/staff/member-rule-approvals': '待审批会员规则',
+    '/staff/member-rule-publish': '会员规则发布',
+    '/staff/member-accounts': '会员账户查询',
+    '/staff/member-management': '其他会员经营配置',
     '/staff/devices': '设备与打印',
     '/staff/settings': '系统配置状态',
   } as Record<string, string>)[route]
@@ -299,7 +307,8 @@ test('future public reservation is confirmed by marketing and kept out of today 
 
   const marketing = await staffPage(browser, data, 'wuya')
   await marketing.page.getByRole('button', { name: '预约', exact: true }).first().click()
-  const pending = marketing.page.locator('.staff-reservation-card').filter({ hasText: customerName }).first()
+  const reservationWorkspace = marketing.page.getByRole('region', { name: '预约工作台' })
+  const pending = reservationWorkspace.locator('.staff-reservation-card').filter({ hasText: customerName }).first()
   await expect(pending).toBeVisible()
   await expect(pending).toContainText('待确认')
   await pending.getByRole('button', { name: '确认预约' }).click()

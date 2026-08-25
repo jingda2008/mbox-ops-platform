@@ -23,7 +23,9 @@ integration('public reservation API with PostgreSQL', () => {
   let customerId: string
   let tableId: string
   let scheduleId: string
+  let staffEmployeeId: string
   let publicSequence = 0
+  let staffPermissions = ['reservation.view', 'reservation.view.all', 'reservation.manage']
   const fixedNow = new Date()
   const crossMidnight = futureCrossMidnight(fixedNow)
 
@@ -40,6 +42,7 @@ integration('public reservation API with PostgreSQL', () => {
     customerId = randomUUID()
     tableId = randomUUID()
     scheduleId = randomUUID()
+    staffEmployeeId = randomUUID()
     const areaId = randomUUID()
     const performerId = randomUUID()
 
@@ -51,6 +54,10 @@ integration('public reservation API with PostgreSQL', () => {
       INSERT INTO mbox.stores (id, tenant_id, code, name, timezone, business_day_cutoff)
       VALUES ($1, $2, $3, 'Public reservation store', 'Asia/Shanghai', '06:00')
     `, [storeId, tenantId, `public-store-${storeId.slice(0, 8)}`])
+    await pool.query(`
+      INSERT INTO mbox.employees (id, tenant_id, store_id, employee_code, display_name)
+      VALUES ($1, $2, $3, $4, '预约测试员工')
+    `, [staffEmployeeId, tenantId, storeId, `reservation-staff-${staffEmployeeId.slice(0, 8)}`])
     await pool.query(`
       INSERT INTO mbox.public_reservation_policies (
         tenant_id, store_id, hold_minutes, deposit_mode, deposit_minor, deposit_rule_text
@@ -109,8 +116,8 @@ integration('public reservation API with PostgreSQL', () => {
       }),
       resolveStaff: () => ({
         scope: { tenantId, storeId },
-        employeeId: randomUUID(),
-        permissions: ['reservation.view', 'reservation.view.all'],
+        employeeId: staffEmployeeId,
+        permissions: staffPermissions,
         visibleOwnerEmployeeIds: [],
       }),
       protectContact: () => ({
@@ -291,6 +298,62 @@ integration('public reservation API with PostgreSQL', () => {
     })
     expect(availability.body).not.toContain('王女士')
     expect(availability.body).not.toContain(maskedContact)
+  })
+
+  it('lists future staff reservation intake without leaking the protected contact', async () => {
+    const from = new Date(Date.parse(crossMidnight.arrivalAt) - 60 * 60_000).toISOString()
+    const to = new Date(Date.parse(crossMidnight.arrivalAt) + 60 * 60_000).toISOString()
+    const waitlist = await app.inject({
+      method: 'POST',
+      url: '/public/waitlist',
+      headers: { 'idempotency-key': 'public-waitlist-intake-0001' },
+      payload: {
+        customerName: '候位王女士', contact: rawContact, guestCount: 2,
+        desiredArrivalAt: crossMidnight.arrivalAt,
+      },
+    })
+    expect(waitlist.statusCode).toBe(201)
+    const waitlistPublicId = waitlist.json().data.publicId as string
+    const override = await app.inject({
+      method: 'POST',
+      url: `/staff/reservation-intake/waitlist/${encodeURIComponent(waitlistPublicId)}/priority-override`,
+      headers: { 'idempotency-key': 'staff-waitlist-priority-override-0001' },
+      payload: { mode: 'promote', reason: '现场确认优先安排' },
+    })
+    expect(override.statusCode).toBe(200)
+    staffPermissions = ['reservation.view']
+    const forbiddenOverride = await app.inject({
+      method: 'POST',
+      url: `/staff/reservation-intake/waitlist/${encodeURIComponent(waitlistPublicId)}/priority-override`,
+      headers: { 'idempotency-key': 'staff-waitlist-priority-override-forbidden-0001' },
+      payload: { mode: 'demote', reason: '无权限不应保存' },
+    })
+    expect(forbiddenOverride.statusCode).toBe(403)
+    expect(forbiddenOverride.json().error.code).toBe('RESERVATION_PERMISSION_DENIED')
+    staffPermissions = ['reservation.view', 'reservation.view.all', 'reservation.manage']
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/staff/reservation-intake?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+    })
+
+    expect(response.statusCode).toBe(200)
+    const intake = response.json().data as Array<Record<string, unknown>>
+    const entry = intake.find((item) => (
+      item.kind === 'reservation' && item.customerName === '王女士'
+    ))
+    expect(entry).toMatchObject({ kind: 'reservation', customerName: '王女士', maskedContact, status: 'pending' })
+    expect(Date.parse(String(entry?.arrivalAt))).toBe(Date.parse(crossMidnight.arrivalAt))
+    const waitlistEntry = intake.find((item) => (
+      item.kind === 'waitlist' && item.publicId === waitlistPublicId
+    ))
+    expect(waitlistEntry).toMatchObject({
+      kind: 'waitlist', customerName: '候位王女士', maskedContact,
+      queueOverride: { mode: 'promote', reason: '现场确认优先安排' },
+    })
+    expect(intake.indexOf(waitlistEntry!)).toBeLessThan(intake.indexOf(entry!))
+    expect(response.body).not.toContain(rawContact)
+    expect(response.body).not.toContain(customerId)
   })
 
   it('returns only the signed-in customer reservation and masks contact details', async () => {

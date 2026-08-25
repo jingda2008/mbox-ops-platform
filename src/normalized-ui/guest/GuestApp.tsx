@@ -523,7 +523,8 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       setOrderResult(result)
       setPanel('checkout')
       void loadTableOrders(true)
-      if (cartProtocolVersion === 2) await loadSharedCart(true)
+      // The checkout is already authoritative. Cart refresh must not keep the payment result busy.
+      if (cartProtocolVersion === 2) void loadSharedCart(true)
       notify('订单已经送达吧台与收银，请完成付款。', 'success')
       if (!result.payment.simulated
         && result.payment.providerAction.status === 'pending'

@@ -564,7 +564,7 @@
 .staff-inline-error button { min-height: 44px; color: #7d222a; border-color: #cf9da1; background: #fff; }
 .staff-member-benefit-tools { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; padding: 0 12px 10px; }
 .staff-member-benefit-tools label { min-height: 44px; display: flex; align-items: center; gap: 7px; padding: 0 10px; border: 1px solid #bdc8c0; border-radius: 8px; background: #fff; }
-.staff-member-benefit-tools input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; }
+.staff-member-benefit-tools input { width: 100%; min-width: 0; min-height: 44px; border: 0; outline: 0; background: transparent; }
 .staff-member-benefit-tools button { min-height: 44px; display: flex; align-items: center; gap: 6px; }
 .staff-member-benefit-tasks { display: grid; gap: 8px; margin: 0 12px 12px; padding: 10px; border: 1px solid #c8d5cd; border-radius: 10px; background: #f3f8f4; }
 .staff-member-benefit-tasks > header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }

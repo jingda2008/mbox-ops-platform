@@ -2,7 +2,7 @@ import { createElement } from 'react'
 import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import { ActionList, filterMemberBenefitTasks, memberBenefitTaskCount, normalizeMemberBenefitScanCode, prioritizeActionFact, StaffActionsPanel } from './StaffActionsPanel'
+import { ActionList, filterMemberBenefitTasks, memberBenefitTaskCount, normalizeMemberBenefitScanCode, prioritizeActionFact, splitReservationLoadResults, StaffActionsPanel } from './StaffActionsPanel'
 import type { StaffActionsApiPort } from './staff-actions-api'
 import type { StaffFulfillmentData, StaffOperationsData, StaffReservation } from './types'
 
@@ -15,6 +15,12 @@ describe('StaffActionsPanel', () => {
     expect(rule).toContain('border-color: #07c160')
     expect(rule).toContain('color: #fff')
     expect(rule).toContain('box-shadow: none')
+  })
+
+  it('keeps the member-code input itself touch-sized on phone task pages', () => {
+    const css = readFileSync(new URL('./staff-actions-panel.css', import.meta.url), 'utf8')
+
+    expect(css).toMatch(/\.staff-member-benefit-tools input \{[^}]*min-height:\s*44px;/)
   })
 
   it('renders a compact honest loading state before authoritative data arrives', () => {
@@ -67,6 +73,21 @@ describe('StaffActionsPanel', () => {
     expect(prioritizeActionFact(actions, 'task-10', (item) => item.id).map((item) => item.id)).toEqual([
       'task-10', 'task-1', 'task-2', 'task-3', 'task-4', 'task-5', 'task-6', 'task-7',
     ])
+  })
+
+  it('keeps the reservation list when the secondary priority queue read fails', () => {
+    const reservations = [{ id: 'reservation-1' } as StaffReservation]
+    const priorityFailure = new Error('priority queue unavailable')
+
+    const result = splitReservationLoadResults(
+      { status: 'fulfilled', value: reservations },
+      { status: 'rejected', reason: priorityFailure },
+    )
+
+    expect(result.reservations).toEqual(reservations)
+    expect(result.reservationError).toBeNull()
+    expect(result.priorityQueue).toBeNull()
+    expect(result.priorityError).toBe(priorityFailure)
   })
 
   it('keeps member benefit holds visible on tasks and table scope and supports member-code lookup', () => {

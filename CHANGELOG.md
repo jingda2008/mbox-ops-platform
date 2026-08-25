@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.0-rc.127 - 2026-08-25
+
+- Adds the normalized migrations through `138`, including controlled shared
+  carts, closing safeguards, activity packages and their inventory holds,
+  activity cashier collection and receipts, refund recollection, receipt
+  reprints, and KDS remake lineage.
+- Adds staff and customer operational paths for activity registration,
+  packages, activity collection, controlled recollection, fulfillment and
+  follow-up handling while keeping payment, inventory and role authority on
+  the server.
+- Fixes customer duplicate-order continuation, staff reservation-intake
+  ordering, and mobile task controls so the current browser acceptance flows
+  use the intended operational paths.
+- Keeps native WeChat mini-program upload and real payment, printer, hardware
+  and staffed-field acceptance outside this staff/service/database release.
+
 ## 1.0.0-rc.126 - 2026-08-24
 
 - Maps expired or missing employee sessions to an explicit `401 AUTH_REQUIRED`

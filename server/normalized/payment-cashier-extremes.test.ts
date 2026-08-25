@@ -156,6 +156,7 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
     const fixture = await createOrder(pool, [8800, 6800])
     const original = await captureOnlinePayment(service, fixture.orderId)
     await succeedOnlineRefund(service, original, [allocation(fixture, 1, 6800)])
+    await authorizeRecollection(service, fixture.orderId)
 
     const replacement = await initiateOnlinePayment(service, fixture.orderId)
     expect(replacement.amountMinor).toBe(6800)
@@ -173,12 +174,22 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
     })
   })
 
+  it('requires an explicit cashier authorization before a refunded balance can be collected again', async () => {
+    const fixture = await createOrder(pool, [8800])
+    const original = await captureOnlinePayment(service, fixture.orderId)
+    await succeedOnlineRefund(service, original, [allocation(fixture, 0, 8800)])
+
+    await expect(initiateOnlinePayment(service, fixture.orderId))
+      .rejects.toThrow('退款后的订单须先由收银确认“重新收款”后才能再次扣款')
+  })
+
   it('re-collects the whole order after a full refund and blocks a second pending collection', async () => {
     const fixture = await createOrder(pool, [8800, 6800])
     const original = await captureOnlinePayment(service, fixture.orderId)
     await succeedOnlineRefund(service, original, fixture.itemIds.map((_, index) => (
       allocation(fixture, index, fixture.totals[index]!)
     )))
+    await authorizeRecollection(service, fixture.orderId)
 
     const attempts = await Promise.allSettled([
       initiateOnlinePayment(service, fixture.orderId),
@@ -203,6 +214,7 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
     await succeedOnlineRefund(service, original, fixture.itemIds.map((_, index) => (
       allocation(fixture, index, fixture.totals[index]!)
     )))
+    await authorizeRecollection(service, fixture.orderId)
 
     const replacement = await initiateOnlinePayment(service, fixture.orderId)
     await succeedPaymentCallback(service, replacement)
@@ -355,6 +367,7 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
       receiptReference: randomReference('cash-refund'),
       occurredAt: '2026-08-12T13:00:00.000Z',
     })
+    await authorizeRecollection(service, fixture.orderId)
     const replacement = await recordManualPayment(service, fixture.orderId, 'physical_pos')
 
     expect(replacement.amountMinor).toBe(2800)
@@ -525,6 +538,14 @@ async function initiateOnlinePayment(service: PaymentCommandService, orderId: st
 async function captureOnlinePayment(service: PaymentCommandService, orderId: string) {
   const payment = await initiateOnlinePayment(service, orderId)
   return succeedPaymentCallback(service, payment)
+}
+
+async function authorizeRecollection(service: PaymentCommandService, orderId: string) {
+  return (await service.authorizeRecollection({
+    ...metadata(`recollect-authorize-${randomUUID()}`, actor(cashierId)),
+    orderId,
+    reason: '退款后由收银确认采用新的收款方式',
+  })).value
 }
 
 async function succeedPaymentCallback(

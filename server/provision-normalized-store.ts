@@ -682,7 +682,12 @@ async function verifyRoleAccessDefaults(
     .filter((code) => !runtimeManaged.has(`permission:${code}`))
     .toSorted()
   if (JSON.stringify(actualPermissions) !== JSON.stringify(desiredPermissions)) {
-    throw new Error(`Role ${role.code} permission readback does not match versioned configuration`)
+    const missing = desiredPermissions.filter((code) => !actualPermissions.includes(code))
+    const unexpected = actualPermissions.filter((code) => !desiredPermissions.includes(code))
+    throw new Error(
+      `Role ${role.code} permission readback does not match versioned configuration`
+      + ` (missing: ${missing.join(',') || 'none'}; unexpected: ${unexpected.join(',') || 'none'})`,
+    )
   }
 
   const navigationResult = await client.query<{

@@ -652,6 +652,9 @@ function kdsTaskToJson(task: KdsTask): JsonObject {
   return {
     id: task.id,
     orderItemId: task.orderItemId,
+    // Preserve the explicit null as well as a concrete lineage reference so
+    // idempotent submission replays have the same response contract.
+    remakeOfTaskId: task.remakeOfTaskId,
     stationCode: task.stationCode,
     status: task.status,
     priority: task.priority,

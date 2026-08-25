@@ -320,6 +320,7 @@ postgresIt('executes the compact bootstrap query against normalized PostgreSQL t
       access: { permissions: [
         'checkout.upgrade.rule.draft',
         'checkout.upgrade.rule.view',
+        'community.activity.cashier',
         'community.activity.contact.reveal',
         'customer.membership.merge.approve',
         'customer.membership.recovery.verify',

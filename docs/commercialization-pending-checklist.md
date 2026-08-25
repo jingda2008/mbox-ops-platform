@@ -1,8 +1,8 @@
 # M-BOX 商业化待处理清单
 
-版本：陆家嘴公网运行提交`3e775f5cab73c9ce76b7eb04cff39bf14aa6d137`（`rc.130`）、schema `138`、严格库存、worker健康。`rc.131`候选已完成部署演练但因正式冒烟的`/staff/live`检查未通过而回滚；微信小程序包未覆盖上传。商业发布仍为`DENY`
+版本：陆家嘴公网运行提交`d9ed38a747232c42c6b80e90af4cbd7082372590`（`rc.131`）、schema `138`、严格库存、worker健康。微信小程序包未覆盖上传。商业发布仍为`DENY`
 形成日期：`2026-07-27`
-最后更新：`2026-08-25 21:12 CST`（生产已回滚并核对为`rc.130`/schema`138`/worker healthy；`rc.131`提交、标签CI和Release资产有效，部署曾完成候选切流与备份/证据归档，但`release:verify`在`/staff/live`冒烟阶段超时，未作为上线成功保留。微信小程序仍未上传，商业发布继续`DENY`）
+最后更新：`2026-08-25 21:18 CST`（生产已核对为`rc.131`/schema`138`/worker healthy；首次尝试因本机Clash/TUN解析导致本地`release:verify`超时并回滚，随后使用仅本次命令生效的运营公网DNS映射重试成功。微信小程序仍未上传，商业发布继续`DENY`）
 适用范围：上海 M-BOX 陆家嘴店验证环境、门店试运行和商业生产发布
 清单负责人：乌鸦（系统管理员）
 经营批准：陈方宇、护古、李艳
@@ -568,3 +568,4 @@ ID：
 | 2026-08-24 06:12 | `rc.126`可见入口、员工身份与过期登录错误收口并部署 | `rc.125`先修复员工切换或返回工作台后旧员工入口复现，并对齐付款、库存、活动、内容、会员、隐私及演出权限与父页面。上线后独立公网检查继续发现活动、首页内容、图片库等员工接口在登录过期时误报500；`rc.126`将所有解析员工上下文的API统一映射为`401 AUTH_REQUIRED`，权限不足仍为403，业务和基础设施错误不被掩盖。生产现为`d134f60a07efaf1acb22803819d87efc72384fd7`、schema105、strict inventory、write enabled、worker healthy | 主CI`32668614404`、标签CI`32669026218`、Release`32669026219`均成功；生产镜像摘要`sha256:7944b438db7c8457f3b9b638d9ed715d93796bcf28d39d19b0cc1a9961459b01`。本地956项非数据库、1109项PostgreSQL、38条浏览器流程通过；远端40/40就绪、四公开页面及12个无会话员工入口复核通过。原生微信包未上传，真实现金/渠道支付、打印机实体出纸、门店完整班次及重新登录后的生产岗位实操仍未伪造为完成 | Codex |
 | 2026-08-24 11:16 | 超嗨免费报名 500 热修复（小程序机） | 根因：`community.activity.register` 在写入 outbox 时把文本`publicId`（如`activity-registration-…`）当作 UUID `aggregateId`，PostgreSQL `22P02` 致整笔事务回滚；顾客端统一看到「客户体验服务暂时没有接上」，名额不减。已热补丁`customer-experience-service.js`/`repository.js`/`api.js`：outbox 改用报名行 UUID；未映射异常写日志。会员会话复验「五月天」报名 HTTP 201、名额扣减、幂等 completed；清理诊断脏数据后`/api/ready`恢复 ready。源码已改；正式镜像发布与真机体验版复验仍待跟进 | 生产热补丁+HTTP 201；capacity used 从0→1；ready schema105；商业发布仍为`DENY` | 接手代理 |
 | 2026-08-25 21:12 | `rc.131`超嗨重复报名修复的生产部署演练与回滚 | 候选提交`d9ed38a747232c42c6b80e90af4cbd7082372590`（`v1.0.0-rc.131`）已通过标签CI/Release；按正确链路经支付机跳板部署到运营机，备份、迁移兼容性、候选健康、切流和OSS证据归档均完成。正式`release:verify`在`/staff/live`检查超时，故不把候选写成成功上线；随后把网关、容器名和`/opt/mbox/current`原子恢复到`rc.130`，并复核公网`/api/ready`、首页、`/guest?table=W01`、`/reserve`、`/staff/live`均符合上一版身份。小程序原生包不在该后端发布范围内 | 生产当前为`3e775f5cab73c9ce76b7eb04cff39bf14aa6d137`/`rc.130`、schema138、worker healthy；候选镜像`sha256:7033e19ea27ad0ee0345248b1196a1383180741d5d82a07beb8357f6d8c196b8`未保留为活动版本。下次沿用：SSH目标用本机配置的`mbox.shmbox.com`别名（经`139.224.254.60:6122`跳板），公网预检必须从可解析`139.196.99.138`的网络执行；当前本机Clash/TUN把域名解析到`198.18.1.10`，不能将本地超时当成服务健康 | Codex |
+| 2026-08-25 21:18 | `rc.131`第二次生产部署成功 | 首次回滚后未改候选代码，保留同一提交、标签CI、镜像与数据库备份链；仅给本次部署命令注入运营公网DNS映射（`mbox.shmbox.com→139.196.99.138`），重新执行同一发布脚本。候选健康、迁移兼容性、切流、OSS部署/完成证据、Node冒烟和Playwright四路由冒烟全部通过。生产已切到`d9ed38a747232c42c6b80e90af4cbd7082372590`，容器与`/opt/mbox/current`一致 | `/api/ready`返回`ready`、schema`138`、worker healthy、strict inventory、write enabled、image digest=`sha256:7033e19ea27ad0ee0345248b1196a1383180741d5d82a07beb8357f6d8c196b8`；公网验证路由`/`、`/guest?table=W01`、`/reserve`、`/staff/live`均通过。此后端发布仍不包含原生微信小程序上传/审核/真机支付验收 | Codex |

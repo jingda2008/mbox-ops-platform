@@ -20,6 +20,7 @@ interface FulfillmentOrderRow extends Record<string, unknown> {
   payment_status: string
   fulfillment_state: 'awaiting_payment' | 'active' | 'released' | 'cancelled'
   fulfillment_expires_at: string | null
+  total_amount_minor: string | number
 }
 
 interface PlannedItemRow extends Record<string, unknown> {
@@ -162,6 +163,50 @@ export class PaymentFulfillmentRepository {
     return { activated: true, orderId, inventoryConsumptions, kdsTasks, experiencePlan }
   }
 
+  /**
+   * Complimentary benefit orders have a zero authoritative total and no
+   * external payment. Activation keeps their recipe inventory reserved until
+   * the KDS production start is committed; it must not create a fake payment
+   * movement or consume stock at redemption time.
+   */
+  async activateComplimentaryBenefitOrder(
+    orderId: string,
+    benefitId: string,
+  ): Promise<PaymentFulfillmentActivation> {
+    const state = await this.lockOrder(orderId)
+    if (state.settlement_mode !== 'immediate_payment'
+      || state.fulfillment_state !== 'awaiting_payment'
+      || Number(state.total_amount_minor) !== 0) {
+      throw new OrderNotPayableError(orderId, 'complimentary fulfillment requires a zero-value reserved order')
+    }
+    const activated = await this.transaction.query(`
+      UPDATE mbox.orders
+      SET payment_status='paid',fulfillment_state='active',fulfillment_expires_at=NULL,
+          fulfillment_activated_at=clock_timestamp(),updated_at=clock_timestamp()
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+        AND settlement_mode='immediate_payment' AND fulfillment_state='awaiting_payment'
+        AND total_amount_minor=0
+    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,orderId])
+    if (activated.rowCount !== 1) throw new OrderNotPayableError(orderId, 'complimentary activation lost a concurrent update')
+    await new FulfillmentCapacityRepository(this.transaction).activateForPaidOrder(orderId)
+    const intent = await this.transaction.query(`
+      INSERT INTO mbox.complimentary_fulfillment_intents(
+        tenant_id,store_id,order_id,benefit_id,status,next_attempt_at
+      ) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,'pending',clock_timestamp())
+      ON CONFLICT(tenant_id,store_id,order_id) DO UPDATE
+      SET benefit_id=EXCLUDED.benefit_id
+      WHERE complimentary_fulfillment_intents.benefit_id=EXCLUDED.benefit_id
+      RETURNING id
+    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,orderId,benefitId])
+    if (intent.rowCount !== 1) {
+      throw new Error(`Complimentary fulfillment intent conflicts with benefit for order ${orderId}`)
+    }
+    return {
+      activated:true,orderId,inventoryConsumptions:[],kdsTasks:[],
+      experiencePlan:absentPlan(),
+    }
+  }
+
   async releaseAfterDefinitiveFailure(orderId: string, reason: string): Promise<PaymentFulfillmentRelease> {
     const order = await this.lockOrder(orderId)
     if (order.settlement_mode !== 'immediate_payment' || order.fulfillment_state !== 'awaiting_payment') {
@@ -228,7 +273,7 @@ export class PaymentFulfillmentRepository {
   private async lockOrder(orderId: string): Promise<FulfillmentOrderRow> {
     const result = await this.transaction.query<FulfillmentOrderRow>(`
       SELECT id, settlement_mode, payment_status, fulfillment_state,
-        fulfillment_expires_at::text
+        fulfillment_expires_at::text,total_amount_minor
       FROM mbox.orders
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
       FOR UPDATE

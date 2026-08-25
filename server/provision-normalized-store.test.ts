@@ -88,7 +88,7 @@ describe('normalized store provisioning config', () => {
       'utf8',
     )) as unknown
     const config = parseStoreProvisionConfig(source)
-    expect(config.version).toBe('2026.08.22-v13')
+    expect(config.version).toBe('2026.08.24-v16')
     const role = (code: string) => config.roles.find((candidate) => candidate.code === code)
 
     expect(role('MANAGER')?.permissions.filter((code) => code.startsWith('refund.')))
@@ -103,12 +103,20 @@ describe('normalized store provisioning config', () => {
     }))
     const cashierPermissions = new Set(role('CASHIER')?.permissions)
     expect(cashierPermissions.has('printer.manage')).toBe(true)
+    expect(cashierPermissions.has('payment.collect.all_tables')).toBe(true)
+    expect(new Set(role('SERVER')?.permissions).has('payment.collect.all_tables')).toBe(false)
+    for (const roleCode of ['OWNER', 'OPS_LEAD', 'MANAGER']) {
+      expect(new Set(role(roleCode)?.permissions).has('payment.collect.all_tables')).toBe(true)
+    }
     for (const permission of ['hardware.view_all', 'hardware.manage', 'hardware.command', 'print.view_all', 'print.retry']) {
       expect(cashierPermissions.has(permission)).toBe(false)
     }
     expect(config.roles.filter((candidate) => candidate.code !== 'MANAGER' && candidate.code !== 'CASHIER')
       .flatMap((candidate) => candidate.permissions.filter((code) => code.startsWith('refund.'))))
       .toEqual([])
+    for (const roleCode of ['OWNER', 'MANAGER', 'SERVER']) {
+      expect(new Set(role(roleCode)?.permissions).has('guest.cart.freeze')).toBe(true)
+    }
   })
 
   it('assigns loyalty and membership-recovery permissions by operating duty, not technical access', () => {

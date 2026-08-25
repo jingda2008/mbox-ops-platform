@@ -1,6 +1,7 @@
 {
   "pages": [
     "pages/home/index",
+    "pages/brand-story/index",
     "pages/reservations/index",
     "pages/order/index",
     "pages/community/index",
@@ -12,6 +13,7 @@
     "pages/profile-notifications/index",
     "pages/performances/index",
     "pages/points/index",
+    "pages/member-center/index",
     "pages/membership-terms/index",
     "pages/account/index",
     "pages/service/index",

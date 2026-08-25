@@ -448,6 +448,10 @@ export class OrderRepository {
     if (updated.rowCount !== 1 || row === undefined) {
       throw new OrderDeliveryBlockedError(orderItemId)
     }
+    await this.transaction.query(
+      'SELECT mbox.complete_annual_benefit_fulfillment_for_order($1::uuid)',
+      [row.order_id],
+    )
     return mapOrderItem(row)
   }
 

@@ -60,7 +60,9 @@ Page({
       const rawOrders = await getTableOrders()
       const storedPending = wx.getStorageSync(PENDING_PAYMENT_KEY) || null
       const storedOrder = storedPending && (rawOrders || []).find((item) => item.publicId === storedPending.orderPublicId)
-      if (storedOrder && Number(storedOrder.payableAmountMinor || 0) === 0) wx.removeStorageSync(PENDING_PAYMENT_KEY)
+      if (storedPending && (!storedOrder || Number(storedOrder.payableAmountMinor || 0) === 0)) {
+        wx.removeStorageSync(PENDING_PAYMENT_KEY)
+      }
       const orders = (rawOrders || []).map((order) => ({
         publicId: order.publicId,
         roundText: `第 ${order.round} 轮`,
@@ -74,7 +76,8 @@ Page({
         paymentAccess: order.paymentAccess,
         canPay: order.paymentAccess === 'available' && Number(order.payableAmountMinor || 0) > 0,
         paymentHint: this.paymentHint(order.paymentAccess, Number(order.payableAmountMinor || 0)),
-        isMineText: order.isMine ? '本机下单' : '同桌订单',
+        sourceText: typeof order.sourceText === 'string' && order.sourceText.trim()
+          ? order.sourceText.trim() : '点单来源待确认',
         items: (order.items || []).map((item) => ({
           key: `${order.publicId}:${item.productId}`,
           name: item.name,
@@ -110,6 +113,7 @@ Page({
       retryIdempotencyKey,
       amountText: order.payableText,
       statusText: '订单等待付款',
+      canContinue: true,
     }
     wx.setStorageSync(PENDING_PAYMENT_KEY, pendingPayment)
     this.setData({ busyOrderId: orderPublicId, error: '', success: '' })

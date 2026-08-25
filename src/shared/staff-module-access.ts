@@ -34,16 +34,18 @@ export const staffModuleAccessDefinitions: readonly StaffModuleAccessDefinition[
   {
     code: 'payments', label: '收银与退款', route: '/staff/payments', sortOrder: 250,
     permissionCodes: [
-      'payment.manual.cash.record', 'payment.manual.pos.record',
+      'payment.manual.cash.record', 'payment.manual.pos.record', 'payment.manual.external.record',
       'payment.settlement.view', 'refund.request', 'refund.approve',
-      'refund.execute', 'reconciliation.view', 'reconciliation.manage', 'business_day.close',
+      'refund.execute', 'payment.recollect.authorize', 'community.activity.cashier',
+      'reconciliation.view', 'reconciliation.manage', 'business_day.close',
     ],
   },
   {
-    code: 'inventory', label: '库存', route: '/staff/inventory', sortOrder: 260,
+    code: 'inventory', label: '库存与酒水上架', route: '/staff/inventory', sortOrder: 260,
     permissionCodes: [
       'inventory.view', 'inventory.manage', 'inventory.cost.view', 'inventory.receive',
       'inventory.count', 'inventory.waste', 'inventory.barcode.bind', 'catalog.product.manage',
+      'catalog.price.manage', 'media.asset.menu.manage',
     ],
   },
   {
@@ -64,19 +66,6 @@ export const staffModuleAccessDefinitions: readonly StaffModuleAccessDefinition[
       'recommendation.analytics.view', 'product.observation.analytics.view', 'observation.view.raw',
       'recommendation.rule.view', 'recommendation.rule.draft', 'recommendation.rule.approve',
       'recommendation.rule.publish',
-      'loyalty.operations.view', 'loyalty.operations.control',
-      'loyalty.configuration.view', 'loyalty.configuration.edit', 'loyalty.configuration.preview',
-      'loyalty.configuration.approve',
-      'loyalty.promotion.view', 'loyalty.promotion.manage', 'loyalty.promotion.approve',
-      'loyalty.promotion.publish',
-      'loyalty.policy.view', 'loyalty.policy.manage', 'loyalty.policy.approve', 'loyalty.policy.publish',
-      'loyalty.redemption.catalog.manage', 'loyalty.redemption.catalog.approve',
-      'loyalty.redemption.catalog.publish', 'loyalty.redemption.control',
-      'loyalty.redemption.fulfill', 'loyalty.redemption.exception',
-      'loyalty.accrual.exception.view', 'loyalty.accrual.request', 'loyalty.accrual.approve',
-      'membership.terms.view', 'membership.terms.manage', 'membership.terms.approve',
-      'membership.terms.publish',
-      'customer.membership.recovery.verify', 'customer.membership.merge.approve',
       'checkout.upgrade.rule.view', 'checkout.upgrade.rule.draft',
       'checkout.upgrade.rule.approve', 'checkout.upgrade.rule.publish',
       'fulfillment.capacity.view', 'fulfillment.capacity.draft',
@@ -87,14 +76,60 @@ export const staffModuleAccessDefinitions: readonly StaffModuleAccessDefinition[
     ],
   },
   {
-    code: 'devices', label: '设备与打印', route: '/staff/devices', sortOrder: 290,
+    code: 'member-fulfillment', label: '会员权益待办', route: '/staff/member-fulfillment', sortOrder: 286,
+    permissionCodes: ['loyalty.redemption.fulfill'],
+  },
+  {
+    code: 'member-exceptions', label: '会员权益异常', route: '/staff/member-exceptions', sortOrder: 287,
+    permissionCodes: ['loyalty.redemption.exception', 'loyalty.accrual.exception.view'],
+  },
+  {
+    code: 'member-overview', label: '会员等级与权益', route: '/staff/member-overview', sortOrder: 288,
+    permissionCodes: ['loyalty.policy.view'],
+  },
+  {
+    code: 'member-rule-drafts', label: '会员规则草稿', route: '/staff/member-rule-drafts', sortOrder: 289,
+    permissionCodes: ['loyalty.policy.manage'],
+  },
+  {
+    code: 'member-rule-approvals', label: '待审批会员规则', route: '/staff/member-rule-approvals', sortOrder: 290,
+    permissionCodes: ['loyalty.policy.approve'],
+  },
+  {
+    code: 'member-rule-publish', label: '会员规则发布', route: '/staff/member-rule-publish', sortOrder: 291,
+    permissionCodes: ['loyalty.policy.publish'],
+  },
+  {
+    code: 'member-accounts', label: '会员账户查询', route: '/staff/member-accounts', sortOrder: 292,
+    permissionCodes: ['loyalty.account.view'],
+  },
+  {
+    code: 'member-management', label: '其他会员经营配置', route: '/staff/member-management', sortOrder: 293,
     permissionCodes: [
-      'hardware.view', 'hardware.view_all', 'hardware.command', 'hardware.manage',
-      'print.view', 'print.view_all', 'print.retry', 'printer.manage',
+      'loyalty.operations.view', 'loyalty.operations.control',
+      'loyalty.configuration.view', 'loyalty.configuration.edit', 'loyalty.configuration.preview',
+      'loyalty.configuration.approve',
+      'loyalty.promotion.view', 'loyalty.promotion.manage', 'loyalty.promotion.approve',
+      'loyalty.promotion.publish',
+      'loyalty.annual-benefit.view', 'loyalty.annual-benefit.manage', 'loyalty.annual-benefit.approve',
+      'loyalty.annual-benefit.publish', 'loyalty.annual-benefit.occurrence.confirm',
+      'loyalty.redemption.catalog.manage', 'loyalty.redemption.catalog.approve',
+      'loyalty.redemption.catalog.publish', 'loyalty.redemption.control',
+      'loyalty.accrual.request', 'loyalty.accrual.approve',
+      'membership.terms.view', 'membership.terms.manage', 'membership.terms.approve',
+      'membership.terms.publish',
+      'customer.membership.recovery.verify', 'customer.membership.merge.approve',
     ],
   },
   {
-    code: 'settings', label: '系统配置', route: '/staff/settings', sortOrder: 300,
+    code: 'devices', label: '设备与打印', route: '/staff/devices', sortOrder: 300,
+    permissionCodes: [
+      'hardware.view', 'hardware.view_all', 'hardware.command', 'hardware.manage',
+      'print.view', 'print.view_all', 'print.retry', 'print.reprint', 'printer.manage',
+    ],
+  },
+  {
+    code: 'settings', label: '系统配置', route: '/staff/settings', sortOrder: 310,
     permissionCodes: [
       'staff.access.configure', 'payment.policy.manage', 'table.manage',
       'customer.public-profile.manage', 'customer.public-profile.publish',
@@ -154,12 +189,20 @@ export function staffPermissionImpactLabel(permissionCode: string): string | nul
   const actionLabels: Record<string, string> = {
     'payment.manual.cash.record': '登记现金收款',
     'payment.manual.pos.record': '登记实体POS收款',
+    'payment.manual.external.record': '登记其他线下收款',
+    'loyalty.redemption.fulfill': '确认赠送与履约',
+    'loyalty.redemption.exception': '处理核销异常',
+    'loyalty.account.view': '查询会员账户与流水',
+    'media.asset.menu.manage': '管理商品图片素材',
     'printer.manage': '配置、检测和维护打印机',
     'print.retry': '重试失败打印任务',
+    'print.reprint': '补打已完成小票',
     'hardware.manage': '配置门店设备',
     'refund.request': '发起退款',
     'refund.approve': '复核退款',
     'refund.execute': '执行退款',
+    'payment.recollect.authorize': '授权退款后重新收款',
+    'community.activity.cashier': '处理活动收款、退款和退款后重收',
   }
   return `${module.label}${actionLabels[permissionCode] === undefined ? '' : ` > ${actionLabels[permissionCode]}`}`
 }

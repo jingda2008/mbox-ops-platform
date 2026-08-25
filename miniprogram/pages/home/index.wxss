@@ -187,6 +187,13 @@
 }
 .current-state,.reservation-state { margin-top: 22rpx; }
 .home-editorial-section { margin-top: 34rpx; }
+.brand-story-card { display: flex; width: 100%; min-height: 136rpx; margin: 0 0 18rpx; padding: 22rpx 24rpx; align-items: center; justify-content: space-between; gap: 22rpx; border: 1rpx solid #ddd5ca; border-radius: 20rpx; background: #efeae1; color: #37332f; text-align: left; box-sizing: border-box; }
+.brand-story-card__copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 5rpx; }
+.brand-story-card__copy text:nth-child(1) { color: #8b7965; font-size: 18rpx; font-weight: 700; letter-spacing: 1.6rpx; }
+.brand-story-card__copy text:nth-child(2) { font-family: "Songti SC","STSong",serif; font-size: 30rpx; font-weight: 650; line-height: 1.25; }
+.brand-story-card__copy text:nth-child(3) { overflow: hidden; color: #79716a; font-size: 20rpx; text-overflow: ellipsis; white-space: nowrap; }
+.brand-story-card__action { flex: 0 0 auto; color: #675a4e; font-size: 20rpx; font-weight: 700; }
+.brand-story-card--hover { background: #e7e0d6; }
 .featured-activity-card { position: relative; display: flex; overflow: hidden; width: 100%; min-height: 220rpx; margin: 0; padding: 0; flex-direction: row; align-items: stretch; border: 1rpx solid rgba(201, 171, 112, .36); border-radius: 26rpx; background: linear-gradient(145deg, #315d46, #214635 72%, #172c21); color: #fff; text-align: left; box-shadow: 0 16rpx 38rpx rgba(27, 65, 44, .18), inset 0 1rpx rgba(255, 255, 255, .1); }
 .featured-activity-card::after,.published-content-card::after { border: 0; content: none; }
 .featured-activity-card__art { position: relative; overflow: hidden; flex: 0 0 228rpx; width: 228rpx; min-height: 220rpx; background: radial-gradient(circle at 72% 22%, rgba(222, 190, 126, .26), transparent 34%), linear-gradient(145deg, #294f3b, #152b20); }

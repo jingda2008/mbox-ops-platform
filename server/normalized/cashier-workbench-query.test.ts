@@ -21,6 +21,7 @@ describe('PostgresCashierWorkbenchQuery', () => {
   it('returns current-day orders with payment and per-item remaining refundable amounts', async () => {
     const runner = new QueryRunner([
       [orderRow()],
+      [],
       [itemRow()],
       [paymentRow()],
       [refundRow()],
@@ -34,7 +35,7 @@ describe('PostgresCashierWorkbenchQuery', () => {
       scope: { tenantId, storeId },
       employeeId,
       businessDate: '2026-08-13',
-      capabilities: ['refund.request', 'refund.approve', 'refund.execute'],
+      capabilities: ['refund.request', 'refund.approve', 'refund.execute', 'community.activity.cashier'],
       query: ' VIP1 ',
       limit: 20,
     })
@@ -42,11 +43,17 @@ describe('PostgresCashierWorkbenchQuery', () => {
     expect(view.businessDate).toBe('2026-08-13')
     expect(view.query).toBe('VIP1')
     expect(view.actions).toEqual({
+      canInitiateOnlinePayment: false,
+      canQueryOnlinePayment: false,
+      onlinePaymentProvider: null,
       canRecordManualCash: false,
       canRecordManualPos: false,
+      canRecordManualExternal: false,
       canRequestRefund: true,
       canApproveRefund: true,
       canExecuteRefund: true,
+      canAuthorizeRecollection: false,
+      canUseActivityCashier: true,
       canViewReconciliation: false,
       canManageKdsException: false,
     })
@@ -57,6 +64,9 @@ describe('PostgresCashierWorkbenchQuery', () => {
       processingRefundCount: 0,
       carryoverOrderCount: 0,
       carryoverPendingPaymentCount: 0,
+      activityPendingPaymentCount: 0,
+      activityRequestedRefundCount: 0,
+      activityProcessingRefundCount: 0,
     })
     expect(view.orders[0]).toMatchObject({ publicId: 'ORDER-VIP1-0001', tableCode: 'VIP1', outstandingAmountMinor: 0 })
     expect(view.orders[0]?.payments[0]).toMatchObject({
@@ -83,7 +93,10 @@ describe('PostgresCashierWorkbenchQuery', () => {
       '2026-08-13',
       'VIP1',
       20,
+      employeeId,
+      true,
     ])
+    expect(runner.calls[0]?.sql).toContain("workbench_assignment.assignment_type IN ('primary','backup')")
     expect(runner.readOnly).toBe(true)
   })
 
@@ -168,7 +181,7 @@ describe('PostgresCashierWorkbenchQuery', () => {
     expect(view.orders[0]?.settlementException).toEqual({
       reasonCode: 'manager_comp', settledAmountMinor: 8_800, occurredAt: '2026-08-13T13:00:00.000Z',
     })
-    expect(runner.calls.at(-1)?.sql).toContain('order_settlement_exception_events')
+    expect(runner.calls.some((call) => call.sql.includes('order_settlement_exception_events'))).toBe(true)
   })
 
   it('keeps an unresolved prior-business-day refund visible as handover work', async () => {
@@ -195,6 +208,7 @@ describe('PostgresCashierWorkbenchQuery', () => {
     const runner = new QueryRunner([
       [orderRow()], [itemRow()], [paymentRow()], [succeededRefund], [allocationRow()],
       [{ id: '99999999-9999-4999-8999-999999999999', order_item_id: itemId, refundable_order_item_id: itemId, station_code: 'bar', status: 'accepted', quantity: 1 }],
+      [], [],
     ])
     const query = new PostgresCashierWorkbenchQuery(runner as unknown as ScopedPostgresTransactionRunner)
 
@@ -212,7 +226,7 @@ describe('PostgresCashierWorkbenchQuery', () => {
       quantity: 1,
       succeededRefundAmountMinor: 1_000,
     }])
-    expect(runner.calls.at(-2)?.sql).toContain('FROM mbox.kds_tasks')
+    expect(runner.calls.some((call) => call.sql.includes('FROM mbox.kds_tasks'))).toBe(true)
   })
 
   it('rejects callers without a financial capability before opening the database', () => {
@@ -252,7 +266,18 @@ describe('PostgresCashierWorkbenchQuery', () => {
       scope: { tenantId, storeId }, employeeId, businessDate: '2026-08-13',
       capabilities: ['payment.manual.cash.record'], limit: 20,
     })).resolves.toMatchObject({
-      actions: { canRecordManualCash: true, canRecordManualPos: false },
+      actions: { canRecordManualCash: true, canRecordManualPos: false, canRecordManualExternal: false },
+    })
+  })
+
+  it('exposes other offline collection only with its dedicated permission', async () => {
+    const runner = new QueryRunner([[]])
+    const query = new PostgresCashierWorkbenchQuery(runner as unknown as ScopedPostgresTransactionRunner)
+    await expect(query.get({
+      scope: { tenantId, storeId }, employeeId, businessDate: '2026-08-13',
+      capabilities: ['payment.manual.external.record'], limit: 20,
+    })).resolves.toMatchObject({
+      actions: { canRecordManualCash: false, canRecordManualPos: false, canRecordManualExternal: true },
     })
   })
 
@@ -286,6 +311,7 @@ integration('PostgresCashierWorkbenchQuery PostgreSQL integration', () => {
   const integrationSessionId = randomUUID()
   const integrationEmployeeId = randomUUID()
   const integrationApproverId = randomUUID()
+  const integrationServerRoleId = randomUUID()
   const integrationProductId = randomUUID()
   const integrationOrderId = randomUUID()
   const integrationItemId = randomUUID()
@@ -320,6 +346,16 @@ integration('PostgresCashierWorkbenchQuery PostgreSQL integration', () => {
       `cw-request-${suffix}`,
       integrationApproverId,
       `cw-approve-${suffix}`,
+    ])
+    await pool.query(`INSERT INTO mbox.roles(id,tenant_id,store_id,code,name)
+      VALUES($1,$2,$3,$4,'桌台服务角色')`, [
+      integrationServerRoleId, integrationTenantId, integrationStoreId, `CW_SERVER_${suffix.toUpperCase()}`,
+    ])
+    await pool.query(`INSERT INTO mbox.table_assignments(
+      tenant_id,store_id,table_id,employee_id,role_id,assignment_type,reason
+    ) VALUES($1,$2,$3,$4,$5,'primary','收银工作台桌台范围测试')`, [
+      integrationTenantId, integrationStoreId, integrationTableId,
+      integrationEmployeeId, integrationServerRoleId,
     ])
     await pool.query(`INSERT INTO mbox.table_sessions (
       id, tenant_id, store_id, table_id, public_id, business_date, guest_count
@@ -469,11 +505,35 @@ integration('PostgresCashierWorkbenchQuery PostgreSQL integration', () => {
       remainingRefundableMinor: 7_800,
     })
     expect(current.summary.processingRefundCount).toBe(1)
+    expect(current.activityRegistrations).toEqual([])
     expect(current.summary.carryoverPendingPaymentCount).toBe(1)
     expect(current.orders.some((order) => order.id === integrationCarryoverOrderId && order.carryover)).toBe(true)
     expect(stale.orders).toHaveLength(1)
     expect(stale.orders[0]).toMatchObject({ id: integrationCarryoverOrderId, carryover: false })
     expect(stale.summary.carryoverPendingPaymentCount).toBe(0)
+  })
+
+  it('limits a manual-collection or refund-request employee to assigned tables unless a dedicated store-wide capability exists', async () => {
+    const restricted = await query.get({
+      scope: { tenantId: integrationTenantId, storeId: integrationStoreId },
+      employeeId: integrationEmployeeId,
+      businessDate: '2026-08-13',
+      capabilities: ['payment.manual.cash.record', 'refund.request'],
+      limit: 20,
+    })
+    expect(restricted.orders.map((order) => order.id)).toEqual([integrationOrderId])
+    expect(restricted.orders.some((order) => order.id === integrationCarryoverOrderId)).toBe(false)
+
+    const storeWide = await query.get({
+      scope: { tenantId: integrationTenantId, storeId: integrationStoreId },
+      employeeId: integrationApproverId,
+      businessDate: '2026-08-13',
+      capabilities: ['refund.request', 'payment.collect.all_tables'],
+      limit: 20,
+    })
+    expect(storeWide.orders.map((order) => order.id).toSorted()).toEqual(
+      [integrationOrderId, integrationCarryoverOrderId].toSorted(),
+    )
   })
 })
 

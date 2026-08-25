@@ -8,12 +8,14 @@ const safeSessionId='44444444-4444-4444-8444-444444444444'
 const blockedSessionId='55555555-5555-4555-8555-555555555555'
 
 const zeroCounts={order_unsettled:'0',order_item_unresolved:'0',kds_active:'0',payment_pending:'0',
-  refund_pending:'0',service_active:'0',pricing_reserved:'0',song_active:'0',benefit_reserved:'0',
-  experience_active:'0',redemption_pending:'0',checkout_offer_active:'0'}
+  inventory_reserved:'0',refund_pending:'0',service_active:'0',pricing_reserved:'0',song_active:'0',
+  benefit_reserved:'0',experience_active:'0',redemption_pending:'0',checkout_offer_active:'0',
+  outstanding_order_count:'0',outstanding_amount_minor:'0'}
 
 describe('closeAwaitingBusinessDays',()=>{
   it('closes safe tables but keeps a prior day pending with explicit blockers',async()=>{
     const transaction:ScopedTransaction={scope,query:vi.fn(async(sql:string,values?:readonly unknown[])=>{
+      if(sql.includes('mbox.employee_has_effective_permission')) return {rows:[{allowed:true}],rowCount:1}
       if(sql.includes("FROM mbox.business_days") && sql.includes("status='awaiting_close'")){
         return {rows:[{id:dayId,business_date:'2026-08-20'}],rowCount:1}
       }
@@ -21,6 +23,12 @@ describe('closeAwaitingBusinessDays',()=>{
         {id:safeSessionId,table_code:'L01',status:'open'},
         {id:blockedSessionId,table_code:'VIP1',status:'closing'},
       ],rowCount:2}
+      if(sql.includes("'payment'::text AS entity_type")) return {rows:[{
+        entity_type:'payment',entity_id:'77777777-7777-4777-8777-777777777777',
+        reference:'PAYMENT-VIP1-0001',title:'付款结果待确认',status:'pending',amount_minor:'6800',
+        quantity_text:null,order_id:'88888888-8888-4888-8888-888888888888',
+        order_public_id:'ORDER-VIP1-0001',responsible_employee_name:'李艳',
+      }],rowCount:1}
       if(sql.includes('WITH scoped_orders AS')) return {
         rows:[values?.[2]===blockedSessionId ? {...zeroCounts,payment_pending:'2'}:zeroCounts],rowCount:1,
       }

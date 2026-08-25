@@ -12,22 +12,38 @@
   </view>
 
   <state-panel wx:if="{{loading}}" type="loading" title="正在读取会员与权益" />
+  <view wx:elif="{{error}}" class="profile-load-error">
+    <state-panel type="error" title="会员资料读取失败" message="{{error}}" />
+    <button bindtap="load">重新读取</button>
+    <text>当前状态无法判断是否为会员，因此不会显示访客卡或零值数据。</text>
+  </view>
   <block wx:else>
-    <view wx:if="{{error}}" class="error-banner">{{error}}</view>
+    <view wx:if="{{membership}}" class="profile-member-card profile-member-card--{{membership.level}}">
+      <view class="profile-member-card__glow"></view>
+      <view class="profile-member-card__corner"></view>
+      <view class="profile-member-card__top">
+        <image src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" />
+        <view class="profile-member-card__identity"><text>{{membership.levelText}}</text><text>{{membership.levelEnglish}}</text><text>{{membership.memberNo}}</text></view>
+        <button bindtap="openMemberCenter">会员中心 ›</button>
+      </view>
+      <view class="profile-member-card__progress">
+        <view class="profile-member-card__progress-copy"><text>{{membership.cardGrowthText}}</text><text>{{membership.cardDifferenceText}}</text></view>
+        <view wx:if="{{membership.cardProgressAvailable}}" class="profile-member-card__track"><view style="width: {{membership.cardProgressPercent}}%;"></view></view>
+        <view class="profile-member-card__foot"><view wx:if="{{membership.cardProgressAvailable}}"><text>{{membership.cardCurrentTierText}}</text><text>{{membership.cardNextTierText}}</text></view><button bindtap="openCoupons">{{membership.cardBenefitText}}</button></view>
+      </view>
+    </view>
 
-    <view class="identity-card">
+    <view wx:else class="identity-card">
       <view class="identity-main" bindtap="onIdentityTap" hover-class="identity-main--hover">
         <image class="identity-avatar" src="{{avatarUrl || '/assets/brand/mbox-logo-badge.png'}}" mode="aspectFill" />
         <view class="identity-copy">
           <view class="identity-name-row">
-            <text class="identity-name">{{membership ? (displayName || membership.levelText) : '访客'}}</text>
-            <text wx:if="{{membership}}" class="identity-badge">{{membership.levelText}}</text>
+            <text class="identity-name">访客</text>
           </view>
-          <text class="identity-sub">{{membership ? membership.memberNo : '加入会员，解锁积分、权益与超嗨活动'}}</text>
+          <text class="identity-sub">加入会员，解锁积分、权益与超嗨活动</text>
         </view>
       </view>
-      <button wx:if="{{membership}}" class="identity-action" bindtap="openMemberCenter">会员中心</button>
-      <button wx:else class="identity-action" bindtap="focusJoinInvitation">邀请加入</button>
+      <button class="identity-action" bindtap="focusJoinInvitation">邀请加入</button>
     </view>
 
     <view class="metric-card">
@@ -38,7 +54,7 @@
       </button>
       <button class="metric-item" bindtap="openCoupons" hover-class="metric-item--hover">
         <text class="metric-icon">券</text>
-        <text class="metric-value">{{benefitCount || 0}}</text>
+        <text class="metric-value">{{benefitError ? '待刷新' : (benefitCount || 0)}}</text>
         <view class="metric-label-row"><text class="metric-label">优惠券</text><text class="metric-chevron">›</text></view>
       </button>
       <button class="metric-item" bindtap="openPoints" hover-class="metric-item--hover">
@@ -49,7 +65,7 @@
       <button class="metric-item" bindtap="openBalance" hover-class="metric-item--hover">
         <text class="metric-icon">¥</text>
         <text class="metric-value">{{balanceText}}</text>
-        <view class="metric-label-row"><text class="metric-label">余额</text><text class="metric-chevron">›</text></view>
+        <view class="metric-label-row"><text class="metric-label">储值余额</text><text class="metric-chevron">›</text></view>
       </button>
     </view>
 
@@ -122,9 +138,9 @@
     </view>
     <view wx:if="{{registrationError}}" class="warning">{{registrationError}}</view>
 
+    <view wx:if="{{benefitError}}" class="warning">{{benefitError}}</view>
     <view wx:if="{{benefits.length}}" class="module-card">
       <view class="module-head"><view><text class="module-eyebrow">权益</text><text class="module-title">可用权益</text></view><text class="module-link" bindtap="openCoupons">全部 ›</text></view>
-      <view wx:if="{{benefitError}}" class="warning">{{benefitError}}</view>
       <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="benefit-scroll">
         <view class="benefit-row">
           <view wx:for="{{benefits}}" wx:key="id" class="benefit-card">
@@ -224,9 +240,8 @@
         <button
           wx:if="{{agreedToPolicies}}"
           class="login-action-link login-action-link--primary wx-phone-button"
-          open-type="getPhoneNumber|agreePrivacyAuthorization"
+          open-type="getPhoneNumber"
           bindgetphonenumber="quickLoginAndEnroll"
-          bindagreeprivacyauthorization="onAgreePrivacyAuthorization"
           hover-class="none"
           loading="{{busy}}"
         >确定加入并授权手机号</button>
@@ -234,9 +249,8 @@
         <button
           wx:if="{{agreedToPolicies}}"
           class="login-action-link wx-phone-button"
-          open-type="getPhoneNumber|agreePrivacyAuthorization"
+          open-type="getPhoneNumber"
           bindgetphonenumber="recoverMembership"
-          bindagreeprivacyauthorization="onAgreePrivacyAuthorization"
           hover-class="none"
           loading="{{recoveryBusy}}"
         >找回原会员</button>

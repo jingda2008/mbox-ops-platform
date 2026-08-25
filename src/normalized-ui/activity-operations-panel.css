@@ -35,11 +35,26 @@
 .activity-draft-editor .wide { grid-column: 1 / -1; }
 .activity-draft-editor input, .activity-draft-editor select, .activity-draft-editor textarea { width: 100%; box-sizing: border-box; padding: 9px; border: 1px solid #cbc5b5; border-radius: 5px; background: #fff; color: #302e29; font: inherit; }
 .activity-draft-editor textarea { min-height: 72px; resize: vertical; }
+.activity-package-component-selector { padding: 10px; border: 1px solid #ddd7c6; border-radius: 6px; background: #fcfbf7; display: grid; gap: 8px; }
+.activity-package-component-selector > header { display: grid; gap: 3px; }
+.activity-package-component-selector header small, .activity-package-component-selector > p, .activity-package-component-selector-actions small { color: #716d63; font-size: 10px; line-height: 1.45; }
+.activity-package-component-selector > p { margin: 0; }
+.activity-package-component-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(92px, .7fr) minmax(112px, .85fr) auto; align-items: end; gap: 7px; padding-top: 8px; border-top: 1px solid #e6e1d3; }
+.activity-package-component-row label { min-width: 0; }
+.activity-package-component-row button { min-width: 56px; }
+.activity-package-component-selector-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .activity-audience-options { padding: 9px; border: 1px solid #ddd7c6; border-radius: 5px; display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
 .activity-audience-options > span { width: 100%; }
 .activity-audience-options label { min-height: 44px; padding: 0 9px; border: 1px solid #ddd5bd; border-radius: 5px; display: flex; align-items: center; gap: 6px; }
 .activity-audience-options input { width: 18px; min-height: 18px; }
 .activity-registration-roster { display: grid; gap: 10px; }
+.activity-package-status-list { display: grid; gap: 8px; }
+.activity-package-status-list > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.activity-package-status-list > header > div, .activity-package-status-list article > div { display: grid; gap: 3px; }
+.activity-package-status-list small { color: #777168; font-size: 10px; line-height: 1.45; }
+.activity-package-status-list > p { margin: 0; color: #777168; font-size: 11px; }
+.activity-package-status-list article { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px; border: 1px solid #ded9cc; border-radius: 7px; background: #fff; }
+.activity-package-status-list article > div { min-width: 0; }
 .activity-registration-roster > header { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .activity-registration-roster > header > div { display: grid; gap: 3px; }
 .activity-registration-roster > header small { color: #777168; font-size: 10px; }
@@ -54,6 +69,7 @@
 .activity-registration-list article em { color: #635833; font-size: 10px; font-style: normal; font-weight: 850; }
 .activity-registration-list article p { margin: 0; color: #6b665d; font-size: 11px; }
 .activity-refund-state { padding: 7px 8px; border-radius: 5px; background: #f4f0e4; }
+.activity-package-fulfillment-state { padding: 7px 8px; border-radius: 5px; background: #eef5ef; color: #315943 !important; }
 .activity-contact-line { min-height: 44px; padding: 7px 9px; border-radius: 6px; background: #f7f5ee; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .activity-contact-line span { color: #37342d; font-weight: 760; }
 .activity-contact-line small { color: #806d36; }
@@ -84,6 +100,8 @@
   .activity-operations-list > button { min-height: 72px; }
   .activity-draft-editor fieldset { grid-template-columns: 1fr; }
   .activity-draft-editor .wide { grid-column: auto; }
+  .activity-package-component-row { grid-template-columns: 1fr 1fr; align-items: end; }
+  .activity-package-component-row > button { grid-column: 1 / -1; }
   .activity-operations-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .activity-registration-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .activity-registration-actions button { width: 100%; }

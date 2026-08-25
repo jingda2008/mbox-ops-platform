@@ -10,7 +10,7 @@ export const KDS_PRIORITY_OVERRIDE_CAPABILITY = 'kds.priority.override'
 // `cancel` remains only for the repository's manager-exception transition.
 // It is deliberately not exposed by the ordinary KDS HTTP action union.
 export type KdsEmployeeAction = 'claim' | 'accept' | 'start' | 'complete' | 'fail' | 'cancel'
-export type KdsScopedAction = KdsEmployeeAction | 'deliver' | 'manager_cancel'
+export type KdsScopedAction = KdsEmployeeAction | 'deliver' | 'manager_cancel' | 'manager_remake'
 
 export type KdsAuthorizationErrorCode =
   | 'KDS_ACTOR_INACTIVE'
@@ -123,7 +123,7 @@ export class NormalizedKdsAuthorization implements KdsAuthorizationPort {
       throw new KdsAuthorizationError('KDS_STATION_FORBIDDEN', input.action)
     }
 
-    if (input.action === 'manager_cancel') {
+    if (input.action === 'manager_cancel' || input.action === 'manager_remake') {
       const hasGlobalTableAccess = access.permissions.includes('table.view_all')
         || access.permissions.includes('fulfillment.view_all')
       if (!hasGlobalTableAccess) {
@@ -228,7 +228,7 @@ function permissionSql(): string {
 
 function requiredCapability(action: KdsScopedAction): string {
   if (action === 'deliver') return KDS_DELIVER_CAPABILITY
-  if (action === 'manager_cancel' || action === 'cancel') return KDS_EXCEPTION_MANAGE_CAPABILITY
+  if (action === 'manager_cancel' || action === 'manager_remake' || action === 'cancel') return KDS_EXCEPTION_MANAGE_CAPABILITY
   return KDS_PREPARE_CAPABILITY
 }
 
@@ -240,7 +240,7 @@ function errorForCapability(capability: string): KdsAuthorizationErrorCode {
 
 function isProductionAction(action: KdsScopedAction): boolean {
   return action === 'claim' || action === 'accept' || action === 'start'
-    || action === 'complete' || action === 'fail'
+    || action === 'complete' || action === 'fail' || action === 'manager_remake'
 }
 
 function stationAllowed(

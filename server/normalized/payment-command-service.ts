@@ -43,6 +43,14 @@ import {
   type ProviderObservationAuthorityPort,
 } from './provider-verification-observation.js'
 import { PrintTicketSourceRepository } from './print-ticket-source.js'
+import {
+  RecollectionAuthorizationRepository,
+  type OrderRecollectionAuthorization,
+} from './recollection-authorization-repository.js'
+import {
+  ActivityRecollectionAuthorizationRepository,
+  type ActivityRecollectionAuthorization,
+} from './activity-recollection-authorization-repository.js'
 
 interface CommandMetadata {
   scope: Readonly<StoreScope>
@@ -66,10 +74,17 @@ export interface InitiatePaymentCommand extends CommandMetadata {
 export interface RecordManualPaymentCommand extends CommandMetadata {
   orderId: string
   publicId: string
-  provider: Extract<PaymentProvider, 'cash' | 'physical_pos'>
+  provider: Extract<PaymentProvider, 'cash' | 'physical_pos' | 'external_manual'>
   method: Extract<PaymentMethod, 'cash' | 'card' | 'manual'>
   evidence: JsonObject
-  occurredAt: string
+}
+
+export interface RecordManualActivityPaymentCommand extends CommandMetadata {
+  registrationPublicId: string
+  publicId: string
+  provider: Extract<PaymentProvider, 'cash' | 'physical_pos' | 'external_manual'>
+  method: Extract<PaymentMethod, 'cash' | 'card' | 'manual'>
+  evidence: JsonObject
 }
 
 export interface PaymentCallbackCommand extends CommandMetadata {
@@ -135,7 +150,16 @@ export interface RecordManualRefundResultCommand extends CommandMetadata {
   succeeded: boolean
   receiptReference: string
   providerSnapshot?: JsonObject
-  occurredAt: string
+}
+
+export interface AuthorizeRecollectionCommand extends CommandMetadata {
+  orderId: string
+  reason: string
+}
+
+export interface AuthorizeActivityRecollectionCommand extends CommandMetadata {
+  registrationPublicId: string
+  reason: string
 }
 
 export class PaymentCommandService {
@@ -166,6 +190,11 @@ export class PaymentCommandService {
           transaction,
           employeeId,
           capability: 'payment.initiate.staff',
+        })
+        await this.authorization.assertEmployeeOrderAccess({
+          transaction,
+          employeeId,
+          orderId: input.orderId,
         })
       } else if (input.actor.type !== 'guest') {
         throw new TypeError('Guest payment initiation requires a guest actor')
@@ -198,7 +227,14 @@ export class PaymentCommandService {
         employeeId,
         capability: input.provider === 'cash'
           ? 'payment.manual.cash.record'
-          : 'payment.manual.pos.record',
+          : input.provider === 'physical_pos'
+            ? 'payment.manual.pos.record'
+            : 'payment.manual.external.record',
+      })
+      await this.authorization.assertEmployeeOrderAccess({
+        transaction,
+        employeeId,
+        orderId: input.orderId,
       })
       const fulfillment = new PaymentFulfillmentRepository(transaction)
       await fulfillment.ensureReservationBeforePayment(input.orderId)
@@ -218,6 +254,8 @@ export class PaymentCommandService {
         initialStatus: 'succeeded',
         principal: { type: 'employee', employeeId },
       })
+      const occurredAt=payment.succeededAt
+      if (occurredAt===null) throw new Error('Manual payment did not return an authoritative settlement time')
       await new ReconciliationRepository(transaction).append({
         paymentId: payment.id,
         entryType: 'payment',
@@ -226,7 +264,7 @@ export class PaymentCommandService {
         amountMinor: payment.amountMinor,
         currency: payment.currency,
         businessDate: input.businessDate,
-        occurredAt: input.occurredAt,
+        occurredAt,
         evidenceSnapshot: evidence,
       })
       if (payment.orderId === null) throw new Error('Manual payment lost its order target')
@@ -240,7 +278,7 @@ export class PaymentCommandService {
         await new LoyaltyAccrualRepository(transaction).recordPaidOrder({
           paymentId: payment.id,
           orderId: payment.orderId,
-          occurredAt: input.occurredAt,
+          occurredAt,
         })
       }
       const activation = await fulfillment.activatePaidOrder(payment.orderId, {
@@ -294,6 +332,183 @@ export class PaymentCommandService {
           })),
           ...outcome.outboxMessages,
         ],
+      }
+    })
+  }
+
+  recordManualActivity(input: Readonly<RecordManualActivityPaymentCommand>): Promise<CommandExecution<Payment>> {
+    const employeeId = requireEmployee(input.actor, 'Manual activity payment recording')
+    const evidence = sanitizeProviderSnapshot(input.evidence)
+    if (evidence.collectedByEmployeeId !== employeeId) {
+      throw new TypeError('Manual activity payment evidence collector must match the acting employee')
+    }
+    return this.commands.execute(command(input, 'payment.activity.manual-record', paymentCodec), async (transaction) => {
+      await this.authorization.assertEmployeeCapability({
+        transaction,
+        employeeId,
+        capability: input.provider === 'cash'
+          ? 'payment.manual.cash.record'
+          : input.provider === 'physical_pos'
+            ? 'payment.manual.pos.record'
+            : 'payment.manual.external.record',
+      })
+      await this.authorization.assertEmployeeCapability({
+        transaction,
+        employeeId,
+        capability: 'community.activity.cashier',
+      })
+      const result = await new PaymentRepository(transaction).recordManualForActivityRegistration({
+        registrationPublicId: input.registrationPublicId,
+        publicId: input.publicId,
+        provider: input.provider,
+        method: input.method,
+        evidence,
+        collectedByEmployeeId: employeeId,
+      })
+      const occurredAt = result.payment.succeededAt
+      if (occurredAt === null) throw new Error('Manual activity payment did not return an authoritative settlement time')
+      const reference = evidence.receiptReference
+      if (typeof reference !== 'string' || reference.trim().length === 0) {
+        throw new TypeError('Manual activity payment receipt reference is required')
+      }
+      await new ReconciliationRepository(transaction).append({
+        paymentId: result.payment.id,
+        entryType: 'payment',
+        provider: result.payment.provider,
+        providerReference: reference.trim(),
+        amountMinor: result.payment.amountMinor,
+        currency: result.payment.currency,
+        businessDate: input.businessDate,
+        occurredAt,
+        evidenceSnapshot: evidence,
+      })
+      const outcome = await paymentOutcome(
+        transaction,
+        input,
+        result.payment,
+        'payment.activity_manual_recorded',
+        1,
+        undefined,
+        undefined,
+        this.options.printTicketSources === true,
+      )
+      if (result.supersededOnlinePayments.length === 0) return outcome
+      return {
+        ...outcome,
+        auditEvents: [
+          ...result.supersededOnlinePayments.map((superseded) => ({
+            actor: input.actor,
+            action: 'payment.activity_unpresented_closed_for_manual',
+            objectType: 'payment',
+            objectId: superseded.id,
+            businessDate: input.businessDate,
+            afterData: {
+              publicId: superseded.publicId,
+              provider: superseded.provider,
+              status: 'closed',
+              registrationPublicId: input.registrationPublicId,
+              replacementPaymentId: result.payment.id,
+            },
+            reason: '尚未向支付渠道发起，改为活动现场收款',
+          })),
+          ...outcome.auditEvents,
+        ],
+        outboxMessages: [
+          ...result.supersededOnlinePayments.map((superseded) => ({
+            aggregateType: 'payment',
+            aggregateId: superseded.id,
+            aggregateVersion: 2,
+            eventType: 'payment.activity_unpresented_closed_for_manual.v1',
+            payload: {
+              id: superseded.id,
+              publicId: superseded.publicId,
+              provider: superseded.provider,
+              status: 'closed',
+              registrationPublicId: input.registrationPublicId,
+              replacementPaymentId: result.payment.id,
+            },
+          })),
+          ...outcome.outboxMessages,
+        ],
+      }
+    })
+  }
+
+  authorizeRecollection(
+    input: Readonly<AuthorizeRecollectionCommand>,
+  ): Promise<CommandExecution<OrderRecollectionAuthorization>> {
+    const employeeId = requireEmployee(input.actor, 'Refund recollection authorization')
+    return this.commands.execute(command(input, 'payment.recollection.authorize', recollectionCodec), async (transaction) => {
+      await this.authorization.assertEmployeeCapability({
+        transaction,
+        employeeId,
+        capability: 'payment.recollect.authorize',
+      })
+      const authorization = await new RecollectionAuthorizationRepository(transaction).authorize({
+        orderId: input.orderId,
+        employeeId,
+        reason: input.reason,
+      })
+      return {
+        result: authorization,
+        auditEvents: [{
+          actor: input.actor,
+          action: 'payment.recollection_authorized',
+          objectType: 'order_recollection_authorization',
+          objectId: authorization.id,
+          businessDate: input.businessDate,
+          afterData: recollectionToJson(authorization),
+          reason: authorization.reason,
+        }],
+        outboxMessages: [{
+          aggregateType: 'order_recollection_authorization',
+          aggregateId: authorization.id,
+          aggregateVersion: 1,
+          eventType: 'payment.recollection_authorized.v1',
+          payload: recollectionToJson(authorization),
+        }],
+      }
+    })
+  }
+
+  authorizeActivityRecollection(
+    input: Readonly<AuthorizeActivityRecollectionCommand>,
+  ): Promise<CommandExecution<ActivityRecollectionAuthorization>> {
+    const employeeId = requireEmployee(input.actor, 'Activity refund recollection authorization')
+    return this.commands.execute(command(input, 'payment.activity_recollection.authorize', activityRecollectionCodec), async (transaction) => {
+      await this.authorization.assertEmployeeCapability({
+        transaction,
+        employeeId,
+        capability: 'payment.recollect.authorize',
+      })
+      await this.authorization.assertEmployeeCapability({
+        transaction,
+        employeeId,
+        capability: 'community.activity.cashier',
+      })
+      const authorization = await new ActivityRecollectionAuthorizationRepository(transaction).authorize({
+        activityRegistrationPublicId: input.registrationPublicId,
+        employeeId,
+        reason: input.reason,
+      })
+      return {
+        result: authorization,
+        auditEvents: [{
+          actor: input.actor,
+          action: 'payment.activity_recollection_authorized',
+          objectType: 'activity_registration_recollection_authorization',
+          objectId: authorization.id,
+          businessDate: input.businessDate,
+          afterData: activityRecollectionToJson(authorization),
+          reason: authorization.reason,
+        }],
+        outboxMessages: [{
+          aggregateType: 'activity_registration_recollection_authorization',
+          aggregateId: authorization.id,
+          aggregateVersion: 1,
+          eventType: 'payment.activity_recollection_authorized.v1',
+          payload: activityRecollectionToJson(authorization),
+        }],
       }
     })
   }
@@ -647,6 +862,9 @@ export class PaymentCommandService {
         refund,
         refund.status === 'succeeded' ? 'refund.succeeded' : 'refund.failed',
         4,
+        undefined,
+        transaction,
+        this.options.printTicketSources === true,
       )
     })
   }
@@ -670,6 +888,11 @@ export class PaymentCommandService {
         providerSnapshot,
       })
       if (refund.status === 'succeeded') {
+        // `completeManualExecution` writes refunds.completed_at with
+        // clock_timestamp(). Never accept an employee/device completion time
+        // for a financial fact or a business-day reconciliation entry.
+        const occurredAt = refund.completedAt
+        if (occurredAt === null) throw new Error('Manual refund lacks an authoritative completion time')
         await new ReconciliationRepository(transaction).append({
           paymentId: refund.paymentId,
           refundId: refund.id,
@@ -679,7 +902,7 @@ export class PaymentCommandService {
           amountMinor: -refund.amountMinor,
           currency: refund.currency,
           businessDate: input.businessDate,
-          occurredAt: input.occurredAt,
+          occurredAt,
           evidenceSnapshot: providerSnapshot,
         })
         await refunds.syncPaymentRefundStatus(refund.paymentId)
@@ -696,7 +919,7 @@ export class PaymentCommandService {
             refundId: refund.id,
             paymentId: refund.paymentId,
             orderId: refund.orderId,
-            occurredAt: input.occurredAt,
+            occurredAt,
           })
           await payments.syncOrderPaymentStatus(refund.orderId)
           await new ExperiencePlanActivationRepository(transaction)
@@ -708,6 +931,9 @@ export class PaymentCommandService {
         refund,
         refund.status === 'succeeded' ? 'refund.manual_succeeded' : 'refund.manual_failed',
         4,
+        undefined,
+        transaction,
+        this.options.printTicketSources === true,
       )
     })
   }
@@ -771,16 +997,18 @@ async function paymentOutcome(
     eventType: `${action}.v1`,
     payload: snapshot,
   }
-  const producesCashierTicket = printTicketSources && payment.orderId !== null && (
-    action === 'payment.initiated' || payment.status === 'succeeded'
+  const producesCashierTicket = printTicketSources && (
+    (action === 'payment.initiated' && payment.orderId !== null) || payment.status === 'succeeded'
   )
   if (producesCashierTicket) {
     const sourceOutboxMessageId = await appendOutboxMessage(transaction, paymentOutbox)
     const sources = new PrintTicketSourceRepository(transaction)
     if (action === 'payment.initiated') {
       await sources.materializeCashierSettlement(sourceOutboxMessageId, payment.id)
-    } else {
+    } else if (payment.orderId !== null) {
       await sources.materializeCashierPayment(sourceOutboxMessageId, payment.id)
+    } else {
+      await sources.materializeActivityCashierPayment(sourceOutboxMessageId, payment.id)
     }
   }
   const fulfillmentOutbox: OutboxMessage | null = fulfillmentEvent === null ? null : {
@@ -820,14 +1048,31 @@ async function paymentOutcome(
   }
 }
 
-function refundOutcome(
+async function refundOutcome(
   input: Readonly<CommandMetadata>,
   refund: Refund,
   action: string,
   version: number,
   auditReason?: string,
-) {
+  transaction?: import('./transaction-runner.js').ScopedTransaction,
+  printTicketSources = false,
+): Promise<CommandOutcome<Refund>> {
   const snapshot = refundToJson(refund)
+  const refundOutbox: OutboxMessage = {
+    aggregateType: 'refund',
+    aggregateId: refund.id,
+    aggregateVersion: version,
+    eventType: `${action}.v1`,
+    payload: snapshot,
+  }
+  const producesRefundTicket = printTicketSources && transaction !== undefined
+    && refund.status === 'succeeded'
+  if (producesRefundTicket) {
+    const sourceOutboxMessageId = await appendOutboxMessage(transaction!, refundOutbox)
+    const sources = new PrintTicketSourceRepository(transaction!)
+    if (refund.orderId !== null) await sources.materializeCashierRefund(sourceOutboxMessageId, refund.id)
+    else await sources.materializeActivityCashierRefund(sourceOutboxMessageId, refund.id)
+  }
   return {
     result: refund,
     auditEvents: [{
@@ -839,13 +1084,7 @@ function refundOutcome(
       afterData: snapshot,
       reason: auditReason ?? refund.reason,
     }],
-    outboxMessages: [{
-      aggregateType: 'refund',
-      aggregateId: refund.id,
-      aggregateVersion: version,
-      eventType: `${action}.v1`,
-      payload: snapshot,
-    }],
+    outboxMessages: producesRefundTicket ? [] : [refundOutbox],
   }
 }
 
@@ -859,6 +1098,19 @@ const refundCodec: JsonCodec<Refund> = {
   decode: (value) => decodeObject<Refund>(value, ['id', 'paymentId', 'publicId', 'status']),
 }
 
+const recollectionCodec: JsonCodec<OrderRecollectionAuthorization> = {
+  encode: recollectionToJson,
+  decode: (value) => decodeObject<OrderRecollectionAuthorization>(value, ['id', 'publicId', 'orderId']),
+}
+
+const activityRecollectionCodec: JsonCodec<ActivityRecollectionAuthorization> = {
+  encode: activityRecollectionToJson,
+  decode: (value) => decodeObject<ActivityRecollectionAuthorization>(
+    value,
+    ['id', 'publicId', 'activityRegistrationId', 'sourceRefundId'],
+  ),
+}
+
 function paymentToJson(payment: Payment): JsonObject {
   return { ...payment, providerSnapshot: sanitizeProviderSnapshot(payment.providerSnapshot) }
 }
@@ -868,6 +1120,35 @@ function refundToJson(refund: Refund): JsonObject {
     ...refund,
     allocations: refund.allocations.map((allocation) => ({ ...allocation })),
     providerSnapshot: sanitizeProviderSnapshot(refund.providerSnapshot),
+  }
+}
+
+function activityRecollectionToJson(value: ActivityRecollectionAuthorization): JsonObject {
+  return {
+    id: value.id,
+    publicId: value.publicId,
+    activityRegistrationId: value.activityRegistrationId,
+    sourceRefundId: value.sourceRefundId,
+    amountMinor: value.amountMinor,
+    currency: value.currency,
+    reason: value.reason,
+    authorizedByEmployeeId: value.authorizedByEmployeeId,
+    expiresAt: value.expiresAt,
+    createdAt: value.createdAt,
+  }
+}
+
+function recollectionToJson(authorization: OrderRecollectionAuthorization): JsonObject {
+  return {
+    id: authorization.id,
+    publicId: authorization.publicId,
+    orderId: authorization.orderId,
+    amountMinor: authorization.amountMinor,
+    currency: authorization.currency,
+    reason: authorization.reason,
+    authorizedByEmployeeId: authorization.authorizedByEmployeeId,
+    expiresAt: authorization.expiresAt,
+    createdAt: authorization.createdAt,
   }
 }
 

@@ -59,14 +59,14 @@ export function actionableServiceTasks(
 }
 
 export function actionableFulfillmentItems(items: readonly StaffFulfillmentItem[]): StaffFulfillmentItem[] {
-  return visibleFulfillmentItems(items).filter((item) => item.canPrepare || item.canDeliver)
+  return visibleFulfillmentItems(items).filter((item) => item.canPrepare || item.canDeliver || item.canRemake)
 }
 
 export function visibleFulfillmentItems(items: readonly StaffFulfillmentItem[]): StaffFulfillmentItem[] {
   return items.toSorted((left, right) => {
     if (left.overdue !== right.overdue) return left.overdue ? -1 : 1
-    const leftActionable = left.canPrepare || left.canDeliver ? 1 : 0
-    const rightActionable = right.canPrepare || right.canDeliver ? 1 : 0
+    const leftActionable = left.canPrepare || left.canDeliver || left.canRemake ? 1 : 0
+    const rightActionable = right.canPrepare || right.canDeliver || right.canRemake ? 1 : 0
     if (leftActionable !== rightActionable) return rightActionable - leftActionable
     const leftReady = left.canDeliver && left.readyForDelivery ? 1 : 0
     const rightReady = right.canDeliver && right.readyForDelivery ? 1 : 0
@@ -105,6 +105,7 @@ function unifiedActionRank(action: StaffUnifiedAction): number {
     if (action.task.assignedToActor) return 4
     return action.task.priority === 'high' ? 5 : 6
   }
+  if (action.item.canRemake && action.item.kdsStatus === 'failed') return 1
   if (action.item.overdue) return 2
   if (action.item.readyForDelivery && action.item.canDeliver) {
     return action.item.table.assignmentType === null ? 5 : 3
@@ -118,7 +119,8 @@ function unifiedActionTime(action: StaffUnifiedAction): number {
     : eventTime(action.item.dueAt ?? action.item.nextActionAt ?? action.item.createdAt)
 }
 
-export function fulfillmentAction(item: StaffFulfillmentItem): 'complete' | 'deliver' | null {
+export function fulfillmentAction(item: StaffFulfillmentItem): 'complete' | 'deliver' | 'remake' | null {
+  if (item.canRemake && item.kdsStatus === 'failed') return 'remake'
   if (item.canDeliver && item.readyForDelivery && item.kdsStatus === 'ready') return 'deliver'
   if (item.canPrepare && item.kdsStatus !== 'ready') return 'complete'
   return null
@@ -175,6 +177,7 @@ export function guidanceForPermission(permission: StaffActionPermission): string
   if (permission === 'table.open') return '当前账号只能查看桌台，请联系店长或有开台权限的同事处理。'
   if (permission === 'table.close') return '关台会结束本桌服务，请联系店长或有翻台权限的同事处理。'
   if (permission === 'table.transfer') return '转桌需要有转桌权限的同事处理，系统会保留原桌次和责任记录。'
+  if (permission === 'guest.cart.freeze') return '锁定共享购物车需要负责本桌的服务人员或值班经理处理。'
   if (permission === 'service.execute') return '这项服务需要负责服务的同事或值班经理处理。'
   if (permission === 'kds.prepare') return '当前账号没有该出品站点的制作权限，请由对应制作岗位处理。'
   return '当前账号没有送达确认权限，请由负责本桌或候补服务员确认送达。'

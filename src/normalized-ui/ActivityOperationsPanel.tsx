@@ -23,6 +23,20 @@ interface ActivityDetail extends ActivitySummary {
   refundPolicyVersion: string | null; refundPolicySummary: string | null; activityDetails: string | null
   includedItems: string[]; participationRequirements: string[]; contactInstructions: string | null
   memberBenefitText: string | null; updatedAt: string
+  packageSelectionRequired: boolean; packages: ActivityPackage[]
+}
+
+interface ActivityPackage {
+  publicId: string; name: string; description: string; imageUrl: string | null; includedItems: string[]
+  capacity: number; memberPurchaseLimit: number; feeAmountMinor: number; depositAmountMinor: number
+  feeBasis: 'per_person' | 'per_registration'; paymentMode: ActivityPaymentMode; paymentDeadlineMinutes: number
+  paymentRuleText: string; redemptionPolicyVersion: string | null; refundPolicyVersion: string | null
+  status: 'draft' | 'published' | 'paused'; sortOrder: number; availableFrom: string | null; availableUntil: string | null
+  components: Array<{ inventoryItemId: string; quantity: string; perParticipant: boolean }>
+}
+
+interface ActivityPackageComponentCatalogItem {
+  id: string; sku: string; name: string; baseUnit: string
 }
 
 interface Registration {
@@ -33,6 +47,7 @@ interface Registration {
   totalFeeAmountMinor: number; amountDueMinor: number; paidAmountMinor: number; currency: string
   registeredAt: string; paymentDueAt: string | null; checkedInAt: string | null
   paymentId: string | null; authoritativePaymentStatus: string | null; providerActionState: string | null
+  packageFulfillmentStatus: 'not_required' | 'pending' | 'delivered'
   refund: null | { id: string; publicId: string; status: string; amountMinor: number; approvedByEmployeeId: string | null }
 }
 
@@ -47,6 +62,14 @@ interface DraftForm {
   refundPolicyVersion: string; refundPolicySummary: string; activityDetails: string
   includedItems: string; participationRequirements: string; contactInstructions: string
   memberBenefitText: string; reason: string
+  packageSelectionRequired: boolean; packages: PackageForm[]
+}
+
+interface PackageForm {
+  name: string; description: string; imageUrl: string; includedItems: string; capacity: string; memberPurchaseLimit: string
+  feeYuan: string; depositYuan: string; feeBasis: 'per_person' | 'per_registration'; paymentMode: ActivityPaymentMode
+  paymentDeadlineMinutes: string; paymentRuleText: string; redemptionPolicyVersion: string; refundPolicyVersion: string
+  availableFrom: string; availableUntil: string; components: string
 }
 
 const memberLevels = [['member','普通会员'],['silver','银卡'],['gold','金卡']] as const
@@ -69,6 +92,8 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
   const [phase, setPhase] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [busy, setBusy] = useState('')
   const [notice, setNotice] = useState('')
+  const [componentCatalog, setComponentCatalog] = useState<ActivityPackageComponentCatalogItem[]>([])
+  const [componentCatalogState, setComponentCatalogState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [revealedContacts,setRevealedContacts]=useState<Record<string,{value:string;expiresAt:string}>>({})
   const [contactClock,setContactClock]=useState(()=>Date.now())
 
@@ -100,6 +125,20 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
     })
     return () => { current = false }
   }, [api, expanded])
+  useEffect(() => {
+    if (!expanded || !canManage) return
+    let current = true
+    setComponentCatalogState('loading')
+    void api.getEndpoint<{ data: unknown }>('/api/staff/activity-operations/component-catalog').then((response) => {
+      if (!current) return
+      setComponentCatalog(componentCatalogItems(response.data))
+      setComponentCatalogState('ready')
+    }).catch(() => {
+      if (!current) return
+      setComponentCatalogState('error')
+    })
+    return () => { current = false }
+  }, [api, canManage, expanded])
   if (!canView) return null
 
   async function loadActivities() {
@@ -154,7 +193,7 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
     finally { setBusy('') }
   }
 
-  async function registrationAction(registration: Registration, action: 'check-in' | 'no-show' | 'cancel') {
+  async function registrationAction(registration: Registration, action: 'check-in' | 'fulfill-package' | 'no-show' | 'cancel') {
     const normalizedReason = reason.trim()
     if (normalizedReason.length < 2) return setNotice('请先填写本次操作原因（至少2个字）')
     setBusy(`${registration.publicId}:${action}`); setNotice('')
@@ -164,9 +203,31 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
         { reason: normalizedReason },
         { idempotencyKey: operationKey(`activity-${action}`) },
       )
-      setReason(''); setNotice(action === 'check-in' ? '签到已确认。' : action === 'no-show' ? '已标记未到。' : '报名已取消；仅明确释放的名额会进入候补递补。')
+      setReason(''); setNotice(action === 'check-in'
+        ? '签到已确认；如有套餐，库存仍为暂留，待实际交付后再登记出库。'
+        : action === 'fulfill-package' ? '套餐交付已登记，库存已按暂留数量实扣并写入流水。'
+          : action === 'no-show' ? '已标记未到。' : '报名已取消；仅明确释放的名额会进入候补递补。')
       await refreshSelected()
     } catch (error) { setNotice(message(error, '报名操作没有完成')) }
+    finally { setBusy('') }
+  }
+
+  async function setPackageAvailability(activity: ActivityDetail, activityPackage: ActivityPackage) {
+    const operation = activityPackage.status === 'published' ? 'pause' : 'resume'
+    const normalizedReason = reason.trim()
+    if (normalizedReason.length < 2) return setNotice('请先填写套餐上下架原因（至少2个字）')
+    if (busy || !window.confirm(`${operation === 'pause' ? '暂停' : '恢复'}“${activityPackage.name}”？不会修改已报名顾客的套餐承诺。`)) return
+    setBusy(`package:${activityPackage.publicId}:${operation}`); setNotice('')
+    try {
+      await api.postEndpoint(
+        `/api/staff/activity-operations/${encodeURIComponent(activity.publicId)}/packages/${encodeURIComponent(activityPackage.publicId)}/${operation}`,
+        { reason: normalizedReason },
+        { idempotencyKey: operationKey(`activity-package-${operation}`) },
+      )
+      setReason('')
+      setNotice(operation === 'pause' ? '套餐已暂停，新报名不可再选择；既有报名承诺不受影响。' : '套餐已恢复展示；顾客端仍会按名额、售卖窗口和库存逐项判断可订状态。')
+      await refreshSelected()
+    } catch (error) { setNotice(message(error, '套餐上下架没有完成')) }
     finally { setBusy('') }
   }
 
@@ -284,6 +345,18 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
   const updateDraft = (key: keyof DraftForm, value: DraftForm[typeof key]) => setDraft((current) => (
     current === null ? null : { ...current, [key]: value }
   ))
+  const updatePackage = (index: number, key: keyof PackageForm, value: PackageForm[typeof key]) => setDraft((current) => {
+    if (current === null) return null
+    return { ...current, packages: current.packages.map((activityPackage, currentIndex) => (
+      currentIndex === index ? { ...activityPackage, [key]: value } : activityPackage
+    )) }
+  })
+  const addPackage = () => setDraft((current) => current === null ? null : {
+    ...current, packages: [...current.packages, emptyPackage(current.capacity)],
+  })
+  const removePackage = (index: number) => setDraft((current) => current === null ? null : {
+    ...current, packages: current.packages.filter((_, currentIndex) => currentIndex !== index),
+  })
 
   return <section className="activity-operations-panel" aria-label="活动报名运营工作台">
     <header>
@@ -327,6 +400,36 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
             <label className="wide">会员权益或赠送<textarea rows={3} value={draft.memberBenefitText} onChange={(event) => updateDraft('memberBenefitText', event.target.value)} placeholder="没有则留空；已配置内容会在顾客详情可见" /></label>
             <p className="wide activity-operations-warning">活动积分奖励暂不开放：旧字段没有规则版本、预算和发放状态机，本页固定为0，不会在签到时静默发分。</p>
           </fieldset>
+          <fieldset><legend>活动套餐（活动票之外最多选一档）</legend>
+            <label className="wide activity-package-required"><input type="checkbox" checked={draft.packageSelectionRequired} onChange={(event) => updateDraft('packageSelectionRequired', event.target.checked)} />报名必须选择套餐</label>
+            <p className="wide activity-operations-warning">套餐价格为活动票的加购价；报名时冻结。库存物料只会暂留；签到只生成待交付记录，实际交付后才实扣，不会生成桌台订单。</p>
+            <div className="wide activity-package-editor-list">{draft.packages.map((activityPackage,index)=><article key={index} className="activity-package-editor">
+              <header><strong>套餐 {index+1}</strong><button type="button" onClick={()=>removePackage(index)}>删除</button></header>
+              <label>套餐名称<input required minLength={2} maxLength={120} value={activityPackage.name} onChange={(event)=>updatePackage(index,'name',event.target.value)} /></label>
+              <label>名额<input type="number" min={1} max={draft.capacity || 1000} value={activityPackage.capacity} onChange={(event)=>updatePackage(index,'capacity',event.target.value)} /></label>
+              <label>加购价（元）<input inputMode="decimal" value={activityPackage.feeYuan} onChange={(event)=>updatePackage(index,'feeYuan',event.target.value)} /></label>
+              <label>订金（元）<input inputMode="decimal" value={activityPackage.depositYuan} onChange={(event)=>updatePackage(index,'depositYuan',event.target.value)} /></label>
+              <label>计价方式<select value={activityPackage.feeBasis} onChange={(event)=>updatePackage(index,'feeBasis',event.target.value as PackageForm['feeBasis'])}><option value="per_registration">每次报名</option><option value="per_person">每人</option></select></label>
+              <label>预付方式<select value={activityPackage.paymentMode} onChange={(event)=>updatePackage(index,'paymentMode',event.target.value as ActivityPaymentMode)}><option value="none">无需预付</option><option value="deposit_optional">订金可选</option><option value="deposit_required">必须付订金</option><option value="full_required">必须全额预付</option></select></label>
+              <label>付款时限（分钟）<input type="number" min={5} max={1440} value={activityPackage.paymentDeadlineMinutes} onChange={(event)=>updatePackage(index,'paymentDeadlineMinutes',event.target.value)} /></label>
+              <label>每会员限购<input type="number" min={1} max={20} value={activityPackage.memberPurchaseLimit} onChange={(event)=>updatePackage(index,'memberPurchaseLimit',event.target.value)} /></label>
+              <label>开售时间（可空）<input type="datetime-local" value={activityPackage.availableFrom} onChange={(event)=>updatePackage(index,'availableFrom',event.target.value)} /></label>
+              <label>停售时间（可空）<input type="datetime-local" value={activityPackage.availableUntil} onChange={(event)=>updatePackage(index,'availableUntil',event.target.value)} /></label>
+              <label className="wide">付款说明<input required value={activityPackage.paymentRuleText} onChange={(event)=>updatePackage(index,'paymentRuleText',event.target.value)} /></label>
+              <label className="wide">套餐说明<textarea rows={2} value={activityPackage.description} onChange={(event)=>updatePackage(index,'description',event.target.value)} /></label>
+              <label className="wide">包含内容（每行一项）<textarea rows={2} value={activityPackage.includedItems} onChange={(event)=>updatePackage(index,'includedItems',event.target.value)} /></label>
+              <label className="wide">取用规则版本（可空）<input value={activityPackage.redemptionPolicyVersion} onChange={(event)=>updatePackage(index,'redemptionPolicyVersion',event.target.value)} /></label>
+              <label className="wide">退款规则版本（可空）<input value={activityPackage.refundPolicyVersion} onChange={(event)=>updatePackage(index,'refundPolicyVersion',event.target.value)} /></label>
+              <label className="wide">套餐图片地址（可空）<input value={activityPackage.imageUrl} placeholder="从站内图片库选择后的地址" onChange={(event)=>updatePackage(index,'imageUrl',event.target.value)} /></label>
+              <PackageComponentSelector
+                value={activityPackage.components}
+                catalog={componentCatalog}
+                state={componentCatalogState}
+                onChange={(components) => updatePackage(index, 'components', components)}
+              />
+            </article>)}</div>
+            <button type="button" onClick={addPackage}>新增套餐</button>
+          </fieldset>
           <fieldset><legend>退款、安全和参与承诺</legend>
             <label>退款规则版本<input value={draft.refundPolicyVersion} onChange={(event) => updateDraft('refundPolicyVersion', event.target.value)} /></label>
             <label>安全规则版本<input value={draft.safetyPolicyVersion} onChange={(event) => updateDraft('safetyPolicyVersion', event.target.value)} /></label>
@@ -340,6 +443,13 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
           </fieldset>
           <button type="submit" disabled={busy === 'draft'}>{busy === 'draft' ? '保存中' : detail.activity.publicId === '' ? '建立草稿并读回' : '保存草稿并读回'}</button>
         </form></details>}
+        {detail.activity.publicId !== '' && <section className="activity-package-status-list"><header><div><strong>套餐状态</strong><small>套餐为活动票加购项；暂停只影响新报名，已报名套餐承诺不变。</small></div><span>{detail.activity.packages.length} 档</span></header>
+          {detail.activity.packages.length === 0 && <p>本活动没有配置加购套餐。</p>}
+          {detail.activity.packages.map((activityPackage) => <article key={activityPackage.publicId}>
+            <div><strong>{activityPackage.name}</strong><small>{packageStatusLabel(activityPackage.status)} · {money(activityPackage.feeAmountMinor)}加购 · 每会员限购 {activityPackage.memberPurchaseLimit} 份</small><small>{activityPackage.components.length > 0 ? `库存履约：${activityPackage.components.length} 项物料，报名只暂留，实际交付才出库。` : '纯票务/非实物套餐：不产生库存暂留或扣减。'}</small></div>
+            {canManage && ['published','paused'].includes(activityPackage.status) && <button type="button" disabled={busy===`package:${activityPackage.publicId}:${activityPackage.status === 'published' ? 'pause' : 'resume'}`} onClick={() => void setPackageAvailability(detail.activity,activityPackage)}>{activityPackage.status === 'published' ? '暂停套餐' : '恢复套餐'}</button>}
+          </article>)}
+        </section>}
         {detail.activity.publicId !== '' && <section className="activity-registration-roster"><header><div><strong>报名与候补名单</strong><small>免费报名自动确认；收费报名须支付确认。候补按报名时间排序，收费候补不预扣款。</small></div><span>{detail.registrations.length} 条</span></header>
           {canManage && <label className="activity-operation-reason">本次操作原因<input minLength={2} maxLength={1000} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="例如：顾客来电取消 / 现场确认未到" /></label>}
           {canManage && detail.activity.waitlistedSeats > 0 && <button type="button" disabled={busy === 'waitlist-retry'} onClick={() => void retryWaitlistPromotion(detail.activity)}>重试系统候补任务</button>}
@@ -351,9 +461,12 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
               {revealedContacts[registration.publicId] && <small>{Math.max(0,Math.ceil((new Date(revealedContacts[registration.publicId]!.expiresAt).getTime()-contactClock)/1_000))} 秒后隐藏</small>}
               {canRevealContact && revealPurpose(registration)!==null && registration.maskedContact!=='已清除' && !revealedContacts[registration.publicId] && <button type="button" disabled={busy===`${registration.publicId}:contact`} onClick={()=>void revealContact(registration)}>{revealActionLabel(registration)} · 60秒</button>}
             </div>
+            {registration.packageFulfillmentStatus === 'pending' && <p className="activity-package-fulfillment-state">套餐库存已暂留；{registration.status === 'checked_in' ? '请在实际交付时登记出库。' : '签到后将进入待交付。'}</p>}
+            {registration.packageFulfillmentStatus === 'delivered' && <p className="activity-package-fulfillment-state">套餐已实际交付，库存流水已完成。</p>}
             {registration.refund && <p className="activity-refund-state">退款 {money(registration.refund.amountMinor)} · {refundStatusLabel(registration.refund.status)}</p>}
             <div className="activity-registration-actions">
               {canManage && registration.status === 'confirmed' && <><button type="button" onClick={() => void registrationAction(registration,'check-in')}><UserCheck size={16} />签到</button><button type="button" onClick={() => void registrationAction(registration,'no-show')}><XCircle size={16} />未到</button></>}
+              {canManage && registration.status === 'checked_in' && registration.packageFulfillmentStatus === 'pending' && <button type="button" disabled={busy===`${registration.publicId}:fulfill-package`} onClick={() => void registrationAction(registration,'fulfill-package')}>登记套餐交付</button>}
               {canManage && ['reserved','payment_pending','confirmed','waitlisted'].includes(registration.status) && registration.paymentStatus !== 'paid' && registration.paidAmountMinor === 0 && <button type="button" onClick={() => void registrationAction(registration,'cancel')}>取消报名</button>}
               {registration.status === 'payment_pending' && registration.providerActionState && registration.paymentId && <button type="button" onClick={() => void queryPayment(registration)}>先查支付</button>}
               {canRequestRefund && registration.paymentStatus === 'paid' && registration.refund === null && <button type="button" onClick={() => void refundAction(registration,'request')}>店长发起退款取消</button>}
@@ -382,6 +495,7 @@ function draftFromActivity(activity: ActivityDetail): DraftForm {
     refundPolicySummary: activity.refundPolicySummary ?? '', activityDetails: activity.activityDetails ?? '',
     includedItems: activity.includedItems.join('\n'), participationRequirements: activity.participationRequirements.join('\n'),
     contactInstructions: activity.contactInstructions ?? '', memberBenefitText: activity.memberBenefitText ?? '', reason: '',
+    packageSelectionRequired: activity.packageSelectionRequired, packages: activity.packages.map(packageForm),
   }
 }
 
@@ -399,7 +513,7 @@ function emptyDraft(): DraftForm {
     safetyAcknowledgementText: '我已阅读并同意本活动的安全与参与要求', safetyRequirements: '',
     refundPolicyVersion: 'activity-refund-v1', refundPolicySummary: '免费活动可在开始前取消',
     activityDetails: '', includedItems: '', participationRequirements: '',
-    contactInstructions: '', memberBenefitText: '', reason: '',
+    contactInstructions: '', memberBenefitText: '', reason: '', packageSelectionRequired: false, packages: [],
   }
 }
 
@@ -418,7 +532,8 @@ function draftShell(draft: DraftForm): ActivityDetail {
     safetyAcknowledgementText: draft.safetyAcknowledgementText, safetyRequirements: [],
     refundPolicyVersion: draft.refundPolicyVersion, refundPolicySummary: draft.refundPolicySummary,
     activityDetails: null, includedItems: [], participationRequirements: [],
-    contactInstructions: null, memberBenefitText: null, updatedAt: new Date().toISOString(),
+    contactInstructions: null, memberBenefitText: null, packageSelectionRequired: draft.packageSelectionRequired,
+    packages: draft.packages.map((activityPackage, index) => packageShell(activityPackage, index)), updatedAt: new Date().toISOString(),
   }
 }
 
@@ -439,13 +554,81 @@ function draftPayload(draft: DraftForm) {
     refundPolicySummary: draft.refundPolicySummary.trim(), activityDetails: draft.activityDetails.trim(),
     includedItems: lines(draft.includedItems), participationRequirements: lines(draft.participationRequirements),
     contactInstructions: draft.contactInstructions.trim(), memberBenefitText: draft.memberBenefitText.trim() || null,
+    packageSelectionRequired: draft.packageSelectionRequired,
+    packages: draft.packages.map((activityPackage, index) => ({
+      name: activityPackage.name.trim(), description: activityPackage.description.trim(), imageUrl: activityPackage.imageUrl.trim() || null,
+      includedItems: lines(activityPackage.includedItems), capacity: integer(activityPackage.capacity, '套餐名额'),
+      memberPurchaseLimit: integer(activityPackage.memberPurchaseLimit, '每会员限购'),
+      feeAmountMinor: yuanToMinor(activityPackage.feeYuan, '套餐加购价'), depositAmountMinor: yuanToMinor(activityPackage.depositYuan, '套餐订金'),
+      feeBasis: activityPackage.feeBasis, paymentMode: activityPackage.paymentMode,
+      paymentDeadlineMinutes: integer(activityPackage.paymentDeadlineMinutes, '套餐付款时限'),
+      paymentRuleText: activityPackage.paymentRuleText.trim(), redemptionPolicyVersion: activityPackage.redemptionPolicyVersion.trim() || null,
+      refundPolicyVersion: activityPackage.refundPolicyVersion.trim() || null, sortOrder: index,
+      availableFrom: activityPackage.availableFrom ? new Date(activityPackage.availableFrom).toISOString() : null,
+      availableUntil: activityPackage.availableUntil ? new Date(activityPackage.availableUntil).toISOString() : null,
+      components: packageComponents(activityPackage.components),
+    })),
     reason: draft.reason.trim(),
   }
+}
+
+function PackageComponentSelector({
+  value,
+  catalog,
+  state,
+  onChange,
+}: {
+  value: string
+  catalog: readonly ActivityPackageComponentCatalogItem[]
+  state: 'idle' | 'loading' | 'ready' | 'error'
+  onChange(value: string): void
+}) {
+  const components = componentEditorLines(value)
+  const update = (index: number, patch: Partial<PackageComponentEditorLine>) => {
+    onChange(componentEditorText(components.map((component, currentIndex) => (
+      currentIndex === index ? { ...component, ...patch } : component
+    ))))
+  }
+  const add = () => {
+    const first = catalog[0]
+    if (!first) return
+    onChange(componentEditorText([...components, {
+      inventoryItemId: first.id, quantity: '1', perParticipant: true,
+    }]))
+  }
+  return <div className="wide activity-package-component-selector">
+    <header><strong>库存履约物料（可选）</strong><small>只列出启用物料；不显示库存数量、成本或供应商。留空即为纯票务/非实物套餐。</small></header>
+    {components.length === 0 && <p>当前为纯票务/非实物套餐，不产生库存暂留或扣减。</p>}
+    {components.map((component, index) => {
+      const selected = catalog.find((item) => item.id === component.inventoryItemId)
+      return <div className="activity-package-component-row" key={`${component.inventoryItemId}:${index}`}>
+        <label>物料<select value={component.inventoryItemId} onChange={(event) => update(index, { inventoryItemId: event.target.value })}>
+          {selected === undefined && <option value={component.inventoryItemId}>{component.inventoryItemId === '' ? '旧草稿物料无法识别，请重新选择' : `已选物料当前不可用：${component.inventoryItemId}`}</option>}
+          {catalog.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.sku} · {item.baseUnit}</option>)}
+        </select></label>
+        <label>每份数量<input inputMode="decimal" value={component.quantity} onChange={(event) => update(index, { quantity: event.target.value })} /></label>
+        <label>用量方式<select value={component.perParticipant ? 'per_person' : 'per_registration'} onChange={(event) => update(index, { perParticipant: event.target.value === 'per_person' })}><option value="per_person">每人</option><option value="per_registration">每次报名</option></select></label>
+        <button type="button" onClick={() => onChange(componentEditorText(components.filter((_, currentIndex) => currentIndex !== index)))}>移除</button>
+      </div>
+    })}
+    <div className="activity-package-component-selector-actions">
+      <button type="button" disabled={state !== 'ready' || catalog.length === 0} onClick={add}>{state === 'loading' ? '正在读取物料…' : '添加库存物料'}</button>
+      {state === 'error' && <small>物料目录暂时无法读取；现有选择会保留，稍后重新打开活动工作台再试。</small>}
+      {state === 'ready' && catalog.length === 0 && <small>当前没有启用库存物料；可保留为纯票务套餐。</small>}
+    </div>
+  </div>
 }
 
 function activityList(value: unknown): ActivitySummary[] {
   if (!Array.isArray(value)) throw new Error('活动列表格式无法识别')
   return value.map(activitySummary)
+}
+function componentCatalogItems(value: unknown): ActivityPackageComponentCatalogItem[] {
+  if (!Array.isArray(value)) throw new Error('套餐物料目录格式无法识别')
+  return value.map((entry) => {
+    const item = object(entry, '套餐物料目录项')
+    return { id: string(item.id), sku: string(item.sku), name: string(item.name), baseUnit: string(item.baseUnit) }
+  })
 }
 function operationsDetail(value: unknown): OperationsDetail {
   const record = object(value,'活动运营详情')
@@ -476,8 +659,80 @@ function activityDetail(value: unknown): ActivityDetail {
     refundPolicySummary: nullableString(record.refundPolicySummary), activityDetails: nullableString(record.activityDetails),
     includedItems: strings(record.includedItems), participationRequirements: strings(record.participationRequirements),
     contactInstructions: nullableString(record.contactInstructions), memberBenefitText: nullableString(record.memberBenefitText),
+    packageSelectionRequired: record.packageSelectionRequired === true,
+    packages: Array.isArray(record.packages) ? record.packages.map(activityPackage) : [],
     updatedAt: string(record.updatedAt),
   }
+}
+function activityPackage(value: unknown): ActivityPackage {
+  const record = object(value, '活动套餐')
+  const components = Array.isArray(record.components) ? record.components.map((entry) => {
+    const component = object(entry, '套餐物料')
+    return { inventoryItemId: string(component.inventoryItemId), quantity: string(component.quantity), perParticipant: component.perParticipant === true }
+  }) : []
+  const status = string(record.status)
+  if (!['draft','published','paused'].includes(status)) throw new Error('套餐状态无法识别')
+  return {
+    publicId: string(record.publicId), name: string(record.name), description: string(record.description), imageUrl: nullableString(record.imageUrl),
+    includedItems: strings(record.includedItems), capacity: number(record.capacity), memberPurchaseLimit: number(record.memberPurchaseLimit),
+    feeAmountMinor: number(record.feeAmountMinor), depositAmountMinor: number(record.depositAmountMinor),
+    feeBasis: record.feeBasis === 'per_person' ? 'per_person' : 'per_registration', paymentMode: paymentMode(record.paymentMode),
+    paymentDeadlineMinutes: number(record.paymentDeadlineMinutes), paymentRuleText: string(record.paymentRuleText),
+    redemptionPolicyVersion: nullableString(record.redemptionPolicyVersion), refundPolicyVersion: nullableString(record.refundPolicyVersion),
+    status: status as ActivityPackage['status'], sortOrder: number(record.sortOrder), availableFrom: nullableString(record.availableFrom),
+    availableUntil: nullableString(record.availableUntil), components,
+  }
+}
+function packageForm(activityPackage: ActivityPackage): PackageForm {
+  return {
+    name: activityPackage.name, description: activityPackage.description, imageUrl: activityPackage.imageUrl ?? '', includedItems: activityPackage.includedItems.join('\n'),
+    capacity: String(activityPackage.capacity), memberPurchaseLimit: String(activityPackage.memberPurchaseLimit),
+    feeYuan: minorToYuan(activityPackage.feeAmountMinor), depositYuan: minorToYuan(activityPackage.depositAmountMinor),
+    feeBasis: activityPackage.feeBasis, paymentMode: activityPackage.paymentMode, paymentDeadlineMinutes: String(activityPackage.paymentDeadlineMinutes),
+    paymentRuleText: activityPackage.paymentRuleText, redemptionPolicyVersion: activityPackage.redemptionPolicyVersion ?? '', refundPolicyVersion: activityPackage.refundPolicyVersion ?? '',
+    availableFrom: activityPackage.availableFrom ? localDateTime(activityPackage.availableFrom) : '', availableUntil: activityPackage.availableUntil ? localDateTime(activityPackage.availableUntil) : '',
+    components: activityPackage.components.map((component) => `${component.inventoryItemId},${component.quantity},${component.perParticipant ? '每人' : '每次'}`).join('\n'),
+  }
+}
+function emptyPackage(capacity: string): PackageForm {
+  return {
+    name: '', description: '', imageUrl: '', includedItems: '', capacity, memberPurchaseLimit: '1', feeYuan: '0.00', depositYuan: '0.00',
+    feeBasis: 'per_registration', paymentMode: 'none', paymentDeadlineMinutes: '15', paymentRuleText: '本套餐无需预付',
+    redemptionPolicyVersion: '', refundPolicyVersion: '', availableFrom: '', availableUntil: '', components: '',
+  }
+}
+function packageShell(activityPackage: PackageForm, index: number): ActivityPackage {
+  return {
+    publicId: `draft-package-${index}`, name: activityPackage.name, description: activityPackage.description, imageUrl: activityPackage.imageUrl || null,
+    includedItems: lines(activityPackage.includedItems), capacity: Number(activityPackage.capacity) || 0, memberPurchaseLimit: Number(activityPackage.memberPurchaseLimit) || 1,
+    feeAmountMinor: 0, depositAmountMinor: 0, feeBasis: activityPackage.feeBasis, paymentMode: activityPackage.paymentMode,
+    paymentDeadlineMinutes: Number(activityPackage.paymentDeadlineMinutes) || 15, paymentRuleText: activityPackage.paymentRuleText,
+    redemptionPolicyVersion: activityPackage.redemptionPolicyVersion || null, refundPolicyVersion: activityPackage.refundPolicyVersion || null,
+    status: 'draft', sortOrder: index, availableFrom: activityPackage.availableFrom || null, availableUntil: activityPackage.availableUntil || null,
+    components: packageComponents(activityPackage.components),
+  }
+}
+function packageComponents(value: string): Array<{ inventoryItemId: string; quantity: string; perParticipant: boolean }> {
+  return lines(value).map((line, index) => {
+    const [inventoryItemId, quantity, basis = '每人'] = line.split(',').map((item) => item.trim())
+    if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(inventoryItemId || '') || !/^\d+(?:\.\d{1,6})?$/.test(quantity || '') || Number(quantity) <= 0) {
+      throw new Error(`套餐物料第${index + 1}项请选择物料，并填写正数用量`)
+    }
+    if (basis !== '每人' && basis !== '每次') throw new Error(`套餐物料第${index + 1}行最后一列只能是“每人”或“每次”`)
+    return { inventoryItemId, quantity, perParticipant: basis === '每人' }
+  })
+}
+type PackageComponentEditorLine = { inventoryItemId: string; quantity: string; perParticipant: boolean }
+function componentEditorLines(value: string): PackageComponentEditorLine[] {
+  return lines(value).map((line) => {
+    const [inventoryItemId = '', quantity = '1', basis = '每人'] = line.split(',').map((item) => item.trim())
+    return { inventoryItemId, quantity: quantity || '1', perParticipant: basis !== '每次' }
+  })
+}
+function componentEditorText(components: readonly PackageComponentEditorLine[]): string {
+  return components.map((component) => (
+    `${component.inventoryItemId},${component.quantity},${component.perParticipant ? '每人' : '每次'}`
+  )).join('\n')
 }
 function registration(value: unknown): Registration {
   const record = object(value,'报名')
@@ -492,6 +747,7 @@ function registration(value: unknown): Registration {
     amountDueMinor: number(record.amountDueMinor), paidAmountMinor: number(record.paidAmountMinor), currency: string(record.currency),
     registeredAt: string(record.registeredAt), paymentDueAt: nullableString(record.paymentDueAt), checkedInAt: nullableString(record.checkedInAt),
     paymentId: nullableString(record.paymentId), authoritativePaymentStatus: nullableString(record.authoritativePaymentStatus),
+    packageFulfillmentStatus: record.packageFulfillmentStatus === 'delivered' ? 'delivered' : record.packageFulfillmentStatus === 'pending' ? 'pending' : 'not_required',
     providerActionState: nullableString(record.providerActionState), refund: refund === null ? null : {
       id: string(refund.id), publicId: string(refund.publicId), status: string(refund.status), amountMinor: number(refund.amountMinor),
       approvedByEmployeeId: nullableString(refund.approvedByEmployeeId),
@@ -518,6 +774,7 @@ function message(error: unknown,fallback: string) { return error instanceof Erro
 function money(value: number) { return `¥${(value/100).toFixed(2)}` }
 function dateText(value: string) { return new Date(value).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) }
 function statusLabel(value: ActivityStatus) { return ({draft:'草稿',published:'报名中',full:'已满',cancelled:'已取消',completed:'已结束'} as const)[value] }
+function packageStatusLabel(value: ActivityPackage['status']) { return ({draft:'草稿',published:'上架中',paused:'已暂停'} as const)[value] }
 function registrationStatusLabel(value: RegistrationStatus) { return ({reserved:'已预留',payment_pending:'待付款',confirmed:'已确认',waitlisted:'候补',cancelled:'已取消',checked_in:'已签到',no_show:'未到',refunded:'已退款'} as const)[value] }
 function refundStatusLabel(value: string) { return ({requested:'待收银复核',approved:'待执行',rejected:'已驳回',processing:'渠道处理中',succeeded:'退款成功',failed:'退款失败'} as Record<string,string>)[value] ?? '状态待确认' }
 function paymentText(value: Registration) { if(value.paymentStatus==='paid') return `已付 ${money(value.paidAmountMinor)} · 取消须走退款链`; if(value.paymentStatus==='pending') return `待付 ${money(value.amountDueMinor)} · ${value.providerActionState ? '渠道已受理或待查' : '尚未创建渠道动作'}`; if(value.status==='waitlisted') return value.requestedPaymentChoice==='none' ? '候补中 · 递补后无需预付' : `候补中 · 现在不预扣，递补后待付 ${money(value.requestedAmountDueMinor)}`; return value.totalFeeAmountMinor>0 ? `活动费用 ${money(value.totalFeeAmountMinor)} · 当前零付款` : '无需预付' }

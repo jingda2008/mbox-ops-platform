@@ -412,6 +412,9 @@ describe('guest commerce/service API trust boundaries', () => {
       items: [{ productId, name: '青岛啤酒', quantity: 2, status: 'preparing' }],
     }] })
     expect(response.body).not.toMatch(/customerId|providerTransaction|providerSnapshot|openid|authCode/i)
+    expect(response.body).not.toContain(tableSessionId)
+    expect(response.json()).toMatchObject({ meta: { count: 1 } })
+    expect(response.json().meta).not.toHaveProperty('tableSessionId')
   })
 
   it('continues the employee-created QR payment on a guest phone without creating a second payment', async () => {

@@ -14,6 +14,7 @@ import { runNormalizedMigrations } from "../migrate-normalized.js";
 import {
   CATALOG_PRICE_MANAGE_PERMISSION,
   CATALOG_PRODUCT_MANAGE_PERMISSION,
+  INVENTORY_COST_VIEW_PERMISSION,
   catalogApiPlugin,
   type CatalogApiOptions,
 } from "./catalog-api.js";
@@ -430,6 +431,25 @@ describe("normalized catalog HTTP API", () => {
       true,
     ]);
     expect(response.json().data[0].productSnapshot.costAmount).toBeUndefined();
+    expect(response.json().data[0].costAmountMinor).toBeUndefined();
+  });
+
+  it("requires product-management access for staff reads and reveals cost only with the separate cost permission", async () => {
+    const denied = await createFixture({ grantedPermissions: [] });
+    const deniedResponse = await denied.app.inject({ method: "GET", url: "/api/catalog/products?status=all" });
+    expect(deniedResponse.statusCode).toBe(403);
+
+    const redacted = await createFixture({ grantedPermissions: [CATALOG_PRODUCT_MANAGE_PERMISSION] });
+    const redactedResponse = await redacted.app.inject({ method: "GET", url: "/api/catalog/products?status=all" });
+    expect(redactedResponse.statusCode).toBe(200);
+    expect(redactedResponse.json().data[0].costAmountMinor).toBeUndefined();
+
+    const costAuthorized = await createFixture({
+      grantedPermissions: [CATALOG_PRODUCT_MANAGE_PERMISSION, INVENTORY_COST_VIEW_PERMISSION],
+    });
+    const costResponse = await costAuthorized.app.inject({ method: "GET", url: "/api/catalog/products?status=all" });
+    expect(costResponse.statusCode).toBe(200);
+    expect(costResponse.json().data[0].costAmountMinor).toBe(1050);
   });
 
   it("requires an idempotency key and emits audit and outbox data from the command outcome", async () => {
@@ -840,6 +860,7 @@ function fakeQuery(
     const granted = options.grantedPermissions ?? [
       CATALOG_PRODUCT_MANAGE_PERMISSION,
       CATALOG_PRICE_MANAGE_PERMISSION,
+      INVENTORY_COST_VIEW_PERMISSION,
     ];
     return result(
       granted.map((code) => ({

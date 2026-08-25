@@ -25,10 +25,12 @@ import type {
 import {
   FULFILLMENT_VIEW_ALL_PERMISSION,
   KDS_DELIVER_PERMISSION,
+  KDS_EXCEPTION_MANAGE_PERMISSION,
   KDS_PREPARE_PERMISSION,
 } from './fulfillment-query-service.js'
 import {
   InventoryBalanceMissingError,
+  InventoryRepository,
   InventoryRecipeMissingError,
   InsufficientInventoryError,
 } from './inventory-repository.js'
@@ -61,6 +63,7 @@ import {
   StaffAccessRepository,
   StaffNotFoundError,
 } from './staff-access-repository.js'
+import { assertEmployeeTableSessionAccess } from './employee-table-access.js'
 import { StaffSessionNotFoundError } from './staff-session-repository.js'
 import type {
   ScopedPostgresTransactionRunner,
@@ -80,7 +83,7 @@ type CommerceCommandPort = Pick<CommerceCommandService, 'submitOrder'>
 type FulfillmentQueryPort = Pick<FulfillmentQueryService, 'getStaffWorkQueue'>
 type CommandExecutorPort = Pick<NormalizedCommandExecutor, 'execute'>
 type StaffAccessTransactionPort = Pick<ScopedPostgresTransactionRunner, 'run'>
-type KdsRepositoryPort = Pick<KdsRepository, 'accept' | 'startPreparing' | 'markReady' | 'cancel' | 'fail'>
+type KdsRepositoryPort = Pick<KdsRepository, 'accept' | 'startPreparing' | 'markReady' | 'cancel' | 'fail' | 'create'>
 type OrderRepositoryPort = Pick<OrderRepository, 'markDelivered'>
 
 export interface CommerceKdsApiOptions {
@@ -148,6 +151,7 @@ interface ApiErrorBody {
 interface KdsTaskLockRow extends Record<string, unknown> {
   id: string
   order_item_id: string
+  remake_of_task_id: string | null
   station_code: 'bar' | 'kitchen' | 'cashier'
   status: KdsStatus
   priority: number
@@ -217,16 +221,30 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
     const onlinePaymentAvailable = options.resolveOnlinePaymentAvailable === undefined
       ? options.onlinePaymentAvailable === true
       : await options.resolveOnlinePaymentAvailable(context.scope)
+    const hasPaymentInitiationPermission = access.permissions.includes('payment.initiate.staff')
+    const onlinePaymentProvider = options.onlinePaymentProvider ?? null
+    const paymentInitiationBlockReason = !hasPaymentInitiationPermission
+      ? 'permission_required'
+      : onlinePaymentProvider === null
+        ? 'provider_not_configured'
+        : !onlinePaymentAvailable
+          ? 'online_payment_unavailable'
+          : null
     const giftLimit = canCreateOrder && access.permissions.includes('order.gift')
       ? access.approvalLimits.find((limit) => limit.code === 'order.gift') ?? null
       : null
     return reply.send({
       data: {
         canCreateOrder,
-        canInitiatePayment: onlinePaymentAvailable
-          && access.permissions.includes('payment.initiate.staff'),
+        canInitiatePayment: paymentInitiationBlockReason === null,
+        paymentInitiationBlockReason,
         canQueryOnlinePayment: access.permissions.includes('reconciliation.view'),
-        onlinePaymentProvider: options.onlinePaymentProvider ?? null,
+        onlinePaymentProvider,
+        manualCollection: {
+          canRecordCash: access.permissions.includes('payment.manual.cash.record'),
+          canRecordPos: access.permissions.includes('payment.manual.pos.record'),
+          canRecordExternal: access.permissions.includes('payment.manual.external.record'),
+        },
         gift: giftLimit === null ? null : {
           enabled: giftLimit.allowFullGift,
           maximumAmountMinor: giftLimit.amountMinor,
@@ -234,6 +252,93 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
         },
       },
     })
+  }))
+
+  // This is deliberately a narrow, table-bound read model instead of exposing
+  // the cashier workbench to every server who may initiate a payment.  The
+  // payment command repeats both the capability and table-scope checks in its
+  // write transaction; this route only makes the correct existing order easy
+  // to select from the table page.
+  app.get('/commerce/table-sessions/:tableSessionId/payment-orders', async (request, reply) => handleRoute(reply, async () => {
+    const context = await resolveContext(options, request)
+    await requirePermission(options, context, 'payment.initiate.staff')
+    const tableSessionId = readUuid(
+      readRequiredString(readObject(request.params, '路由参数').tableSessionId, 'tableSessionId', 64),
+      'tableSessionId',
+    )
+    const data = await options.staffAccessTransactions.run(context.scope, async (transaction) => {
+      await assertEmployeeTableSessionAccess(transaction, {
+        employeeId: context.employeeId,
+        tableSessionId,
+        requiredPermissionCodes: ['payment.initiate.staff'],
+        includeTableViewAll: false,
+        allTablePermissionCodes: ['payment.collect.all_tables'],
+      })
+      const result = await transaction.query<{
+        id: string
+        public_id: string
+        currency: string
+        payment_status: string
+        outstanding_amount_minor: string | number
+        has_online_payment_in_progress: boolean
+      }>(`
+        SELECT order_header.id,order_header.public_id,order_header.currency,order_header.payment_status,
+          GREATEST(0,order_header.total_amount_minor-paid.captured_amount_minor-refund.refunded_amount_minor)
+            AS outstanding_amount_minor,
+          pending.has_online_payment_in_progress
+        FROM mbox.orders order_header
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(SUM(payment.amount_minor) FILTER (WHERE payment.status='succeeded'),0)::bigint
+            AS captured_amount_minor
+          FROM mbox.payments payment
+          WHERE payment.tenant_id=order_header.tenant_id AND payment.store_id=order_header.store_id
+            AND payment.order_id=order_header.id
+        ) paid ON true
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(SUM(refund_row.amount_minor) FILTER (WHERE refund_row.status='succeeded'),0)::bigint
+            AS refunded_amount_minor
+          FROM mbox.refunds refund_row
+          JOIN mbox.payments payment
+            ON payment.tenant_id=refund_row.tenant_id AND payment.store_id=refund_row.store_id
+           AND payment.id=refund_row.payment_id
+          WHERE refund_row.tenant_id=order_header.tenant_id AND refund_row.store_id=order_header.store_id
+            AND payment.order_id=order_header.id
+        ) refund ON true
+        LEFT JOIN LATERAL (
+          SELECT EXISTS(
+            SELECT 1 FROM mbox.payments payment
+            WHERE payment.tenant_id=order_header.tenant_id AND payment.store_id=order_header.store_id
+              AND payment.order_id=order_header.id AND payment.status='pending'
+              AND payment.provider IN ('wechat','postar','simulation')
+          ) AS has_online_payment_in_progress
+        ) pending ON true
+        LEFT JOIN LATERAL (
+          SELECT EXISTS(
+            SELECT 1 FROM mbox.order_recollection_authorizations recollection_authorization
+            WHERE recollection_authorization.tenant_id=order_header.tenant_id AND recollection_authorization.store_id=order_header.store_id
+              AND recollection_authorization.order_id=order_header.id AND recollection_authorization.status='active'
+              AND recollection_authorization.expires_at>clock_timestamp()
+          ) AS active
+        ) recollection ON true
+        WHERE order_header.tenant_id=$1::uuid AND order_header.store_id=$2::uuid
+          AND order_header.table_session_id=$3::uuid AND order_header.status<>'cancelled'
+          AND GREATEST(0,order_header.total_amount_minor-paid.captured_amount_minor-refund.refunded_amount_minor)>0
+          -- A server can collect only an ordinary unpaid balance, or a balance
+          -- that a cashier explicitly reopened after a completed refund.
+          AND (refund.refunded_amount_minor=0 OR recollection.active)
+        ORDER BY order_header.created_at DESC,order_header.id DESC
+        LIMIT 20
+      `, [context.scope.tenantId, context.scope.storeId, tableSessionId])
+      return result.rows.map((row) => ({
+        id: row.id,
+        publicId: row.public_id,
+        currency: row.currency,
+        paymentStatus: row.payment_status,
+        outstandingAmountMinor: Number(row.outstanding_amount_minor),
+        hasOnlinePaymentInProgress: row.has_online_payment_in_progress === true,
+      }))
+    })
+    return reply.send({ data })
   }))
 
   app.post('/commerce/assisted-order-contexts', async (request, reply) => handleRoute(reply, async () => {
@@ -296,6 +401,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
       'order.view',
       KDS_PREPARE_PERMISSION,
       KDS_DELIVER_PERMISSION,
+      KDS_EXCEPTION_MANAGE_PERMISSION,
       FULFILLMENT_VIEW_ALL_PERMISSION,
     ])
     const view = await options.fulfillmentQuery.getStaffWorkQueue(
@@ -369,6 +475,31 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
       return reply.send(kdsResponse(execution))
     }),
   )
+
+  // A failed production task must not disappear from the operating loop. An
+  // administrator can grant this narrow capability to a bartender, server or
+  // manager; the API records the decision and creates a new KDS task rather
+  // than reopening and rewriting the failed historical task.
+  app.post<{ Params: { taskId: string } }>(
+    '/commerce/kds/:taskId/remake',
+    async (request, reply) => handleRoute(reply, async () => {
+      const context = await resolveContext(options, request)
+      const body = readObject(request.body, '请求正文')
+      assertActorBinding(body, context.employeeId)
+      const taskId = readUuid(request.params.taskId, 'taskId')
+      const reason = readExceptionReason(body)
+      const idempotencyKey = readIdempotencyKey(request, body)
+      const execution = await executeKdsRemake(
+        options,
+        context,
+        taskId,
+        idempotencyKey,
+        request.id,
+        reason,
+      )
+      return reply.send(kdsResponse(execution))
+    }),
+  )
 }
 
 async function executeKdsAction(
@@ -413,16 +544,46 @@ async function executeKdsAction(
       task = await kds.accept(transitionInput('accept'))
     } else if (action === 'start') {
       if (task.status === 'pending') task = await kds.accept(transitionInput('accept'))
+      const inventory = new InventoryRepository(transaction)
+      await inventory.consumeOrderItemReservations(target.orderItemId, {
+        createdByEmployeeId: context.employeeId,
+        reason: 'KDS开始制作，消费已确认订单的库存预留',
+        metadata: { kdsTaskId: task.id, requestId, source: 'kds_production_start' },
+      })
+      await inventory.consumeRemakeMaterials(task.id, {
+        createdByEmployeeId: context.employeeId,
+        originalTaskId: task.remakeOfTaskId,
+        reason: 'KDS开始制作，消费重新制作预留的追加物料',
+        metadata: { kdsTaskId: task.id, requestId, source: 'kds_remake_production_start' },
+      })
       task = await kds.startPreparing(transitionInput('start'))
     } else if (action === 'complete') {
       if (task.status === 'pending') task = await kds.accept(transitionInput('accept'))
-      if (task.status === 'accepted') task = await kds.startPreparing(transitionInput('start'))
+      if (task.status === 'accepted') {
+        const inventory = new InventoryRepository(transaction)
+        await inventory.consumeOrderItemReservations(target.orderItemId, {
+          createdByEmployeeId: context.employeeId,
+          reason: 'KDS开始制作，消费已确认订单的库存预留',
+          metadata: { kdsTaskId: task.id, requestId, source: 'kds_production_start' },
+        })
+        await inventory.consumeRemakeMaterials(task.id, {
+          createdByEmployeeId: context.employeeId,
+          originalTaskId: task.remakeOfTaskId,
+          reason: 'KDS开始制作，消费重新制作预留的追加物料',
+          metadata: { kdsTaskId: task.id, requestId, source: 'kds_remake_production_start' },
+        })
+        task = await kds.startPreparing(transitionInput('start'))
+      }
       task = await kds.markReady(transitionInput('complete'))
     } else if (action === 'fail') {
       task = await kds.fail({
         ...transitionInput('fail'),
         metadata: { requestId, source: 'http_api', reasonCode: reason!.code, reasonNote: reason!.note },
       })
+      await new InventoryRepository(transaction).releaseRemakeMaterials(
+        task.id,
+        `重新制作任务未开始即失败：${reason!.note}`,
+      )
       const exceptionId = await insertKdsException(transaction, target, context.employeeId, 'production_failed', reason!, [
         'manager_review', 'inventory_review', 'remake_or_cancel_decision',
       ])
@@ -527,6 +688,10 @@ async function executeManagerCancellation(
         inventoryTruth: 'unchanged_pending_review',
       },
     })
+    await new InventoryRepository(transaction).releaseRemakeMaterials(
+      task.id,
+      `重新制作任务被终止：${reason.note}`,
+    )
     const exceptionId = await insertKdsException(
       transaction,
       target,
@@ -586,6 +751,166 @@ async function executeManagerCancellation(
   })
 }
 
+async function executeKdsRemake(
+  options: CommerceKdsApiOptions,
+  context: CommerceKdsRequestContext,
+  taskId: string,
+  idempotencyKey: string,
+  requestId: string,
+  reason: KdsExceptionReason,
+): Promise<CommandExecution<KdsActionResult>> {
+  return options.commandExecutor.execute({
+    scope: context.scope,
+    operationScope: 'commerce.kds.remake',
+    idempotencyKey,
+    requestFingerprint: JSON.stringify({ taskId, employeeId: context.employeeId, reason }),
+    resultCodec: kdsActionResultCodec,
+  }, async (transaction) => {
+    const target = await lockKdsCommandTarget(transaction, taskId)
+    if (target.task.status !== 'failed') {
+      throw new CommerceKdsRequestError(
+        'KDS_REMAKE_NOT_AVAILABLE',
+        '只有制作失败的出品可以重新制作；已取消的出品请先由收银或值班同事确认后续处理。',
+        409,
+      )
+    }
+    await new NormalizedKdsAuthorization().assertCanActOnTask({
+      transaction,
+      employeeId: context.employeeId,
+      staffSessionId: context.staffSessionId,
+      deviceAccessLeaseId: context.deviceAccessLeaseId,
+      action: 'manager_remake',
+      stationCode: target.task.stationCode,
+      tableId: target.tableId,
+    })
+    const exception = await transaction.query<{ id: string; reason_code: string; reason_note: string }>(`
+      SELECT exception.id,exception.reason_code,exception.reason_note
+      FROM mbox.kds_exceptions AS exception
+      WHERE exception.tenant_id=$1::uuid AND exception.store_id=$2::uuid
+        AND exception.kds_task_id=$3::uuid AND exception.status IN ('open','remediating')
+      ORDER BY exception.occurred_at DESC, exception.id DESC
+      LIMIT 1
+      FOR UPDATE OF exception
+    `, [transaction.scope.tenantId, transaction.scope.storeId, taskId])
+    const exceptionRow = exception.rows[0]
+    if (exceptionRow === undefined) {
+      throw new CommerceKdsRequestError('KDS_EXCEPTION_NOT_FOUND', '没有找到这项制作失败的异常记录，请刷新后重试', 409)
+    }
+    const exceptionId = exceptionRow.id
+    const item = await transaction.query<{ status: string }>(`
+      SELECT item.status
+      FROM mbox.order_items AS item
+      WHERE item.tenant_id=$1::uuid AND item.store_id=$2::uuid AND item.id=$3::uuid
+      FOR UPDATE OF item
+    `, [transaction.scope.tenantId, transaction.scope.storeId, target.orderItemId])
+    if (item.rows[0] === undefined || item.rows[0].status === 'delivered' || item.rows[0].status === 'cancelled') {
+      throw new CommerceKdsRequestError('KDS_REMAKE_ITEM_CLOSED', '对应商品已送达或已取消，不能重新制作', 409)
+    }
+    const remake = await options.createKdsRepository(transaction).create({
+      orderItemId: target.orderItemId,
+      remakeOfTaskId: taskId,
+      stationCode: target.task.stationCode,
+      quantity: target.task.quantity,
+      priority: target.task.priority,
+      dueAt: target.task.dueAt,
+      eventIdempotencyKey: `${idempotencyKey}:remake-created`,
+    })
+    const remakeReservations = await new InventoryRepository(transaction).reserveRemakeMaterials({
+      orderItemId: target.orderItemId,
+      originalTaskId: taskId,
+      remakeTaskId: remake.id,
+    })
+    // The failed task remains in the append-only event/exception history, but
+    // is terminally replaced so it does not remain an active KDS blocker once
+    // the replacement task is delivered.
+    const superseded = await transaction.query(`
+      UPDATE mbox.kds_tasks
+      SET status='cancelled',cancelled_at=clock_timestamp(),updated_at=clock_timestamp()
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND status='failed'
+    `, [transaction.scope.tenantId, transaction.scope.storeId, taskId])
+    if (superseded.rowCount !== 1) throw new CommerceKdsRequestError('KDS_REMAKE_CHANGED', '原制作任务状态已变化，请刷新后重试', 409)
+    const supersededEvent = await transaction.query(`
+      INSERT INTO mbox.kds_task_events(
+        tenant_id,store_id,kds_task_id,event_type,from_status,to_status,actor_employee_id,metadata,idempotency_key
+      ) VALUES($1::uuid,$2::uuid,$3::uuid,'task.remade','failed','cancelled',$4::uuid,$5::jsonb,$6)
+    `, [
+      transaction.scope.tenantId,
+      transaction.scope.storeId,
+      taskId,
+      context.employeeId,
+      JSON.stringify({ remakeTaskId: remake.id, remakeInventoryReservations: remakeReservations.map((item) => item.id) }),
+      `${idempotencyKey}:remake-superseded`,
+    ])
+    if (supersededEvent.rowCount !== 1) throw new Error('KDS remake history event was not recorded')
+    const resolved = await transaction.query(`
+      UPDATE mbox.kds_exceptions
+      SET status='resolved', financial_truth_status='no_action_required', inventory_truth_status='no_action_required',
+        resolved_by_employee_id=$4::uuid, resolved_at=clock_timestamp(),
+        resolution_note=$5
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND status IN ('open','remediating')
+    `, [
+      transaction.scope.tenantId,
+      transaction.scope.storeId,
+      exceptionId,
+      context.employeeId,
+      `重新制作：${reason.note}；原失败：${exceptionRow.reason_code} ${exceptionRow.reason_note}`,
+    ])
+    if (resolved.rowCount !== 1) throw new CommerceKdsRequestError('KDS_EXCEPTION_CHANGED', '出品异常已被其他同事处理，请刷新后确认', 409)
+    const result: KdsActionResult = {
+      task: remake,
+      target,
+      orderItem: null,
+      fulfillmentStatus: 'pending',
+      exceptionEvidence: {
+        id: exceptionId,
+        exceptionId,
+        type: 'remade',
+        exceptionKind: 'production_rejection',
+        reasonCode: reason.code,
+        reasonNote: reason.note,
+        orderId: target.orderId,
+        orderItemId: target.orderItemId,
+        kdsTaskId: remake.id,
+        originalOrderItemId: target.orderItemId,
+        originalKdsTaskId: taskId,
+        actorId: context.employeeId,
+        actorRoleId: 'normalized_employee',
+        occurredAt: new Date().toISOString(),
+        managerDisposition: 'remade',
+        remakeKdsTaskId: remake.id,
+        remakeInventoryReservations: remakeReservations.map((item) => ({
+          inventoryItemId: item.inventoryItemId,
+          quantity: item.quantity,
+        })),
+        financialTruth: 'no_action_required',
+        inventoryTruth: 'no_action_required',
+        requiredActions: [],
+      },
+    }
+    const evidence = kdsActionResultToJson(result)
+    return {
+      result,
+      auditEvents: [{
+        actor: { type: 'employee', employeeId: context.employeeId },
+        action: 'kds.exception_remade',
+        objectType: 'kds_exception',
+        objectId: exceptionId,
+        businessDate: context.businessDate,
+        afterData: evidence,
+        requestId,
+      }],
+      outboxMessages: [{
+        aggregateType: 'kds_task',
+        aggregateId: remake.id,
+        aggregateVersion: 1,
+        eventType: 'kds.exception.remade.v1',
+        payload: evidence,
+        headers: { requestId },
+      }],
+    }
+  })
+}
+
 async function insertKdsException(
   transaction: ScopedTransaction,
   target: KdsCommandTarget,
@@ -629,7 +954,7 @@ async function lockKdsCommandTarget(
   // descriptive joins out of this statement prevents PostgreSQL from choosing
   // a tenant-wide nested-loop plan as a store accumulates orders.
   const selectedTask = await transaction.query<KdsTaskLockRow>(`
-    SELECT task.id, task.order_item_id, task.station_code, task.status,
+    SELECT task.id, task.order_item_id, task.remake_of_task_id, task.station_code, task.status,
       task.priority, task.quantity, task.assigned_employee_id,
       task.due_at::text, task.next_action_at::text,
       task.accepted_at::text, task.ready_at::text, task.cancelled_at::text,
@@ -691,6 +1016,7 @@ async function lockKdsCommandTarget(
     task: {
       id: taskRow.id,
       orderItemId: taskRow.order_item_id,
+      remakeOfTaskId: taskRow.remake_of_task_id,
       stationCode: taskRow.station_code,
       status: taskRow.status,
       priority: taskRow.priority,
@@ -930,7 +1256,7 @@ function kdsResponse(execution: CommandExecution<KdsActionResult>) {
     productionSla: { targetSeconds: 0, dueAt: task.dueAt },
     pickupSla: null,
     deliveryServiceTask: null,
-    remakeOf: null,
+    remakeOf: task.remakeOfTaskId,
     exceptionEvents: result.exceptionEvidence === null ? [] : [result.exceptionEvidence],
     queuedAt: result.target.queuedAt,
     startedAt: task.acceptedAt,

@@ -53,6 +53,7 @@ const otherItemIds = {
 
 const authorization: PaymentCapabilityAuthorizationPort = {
   assertEmployeeCapability: async () => undefined,
+  assertEmployeeOrderAccess: async () => undefined,
   assertRefundRequestLimit: async () => undefined,
   assertRefundApproval: async () => undefined,
 }

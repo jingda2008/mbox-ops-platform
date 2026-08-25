@@ -91,6 +91,13 @@ interface ReservationCapacityRow extends Record<string, unknown> {
   committed_guests: string | number
 }
 
+interface AnnualPriorityReservationRow extends Record<string, unknown> {
+  rule_id: string
+  rule_code: string
+  title: string
+  reservation_hold_minutes: number
+}
+
 interface AvailableTableRow extends Record<string, unknown> {
   table_id: string
   table_code: string
@@ -134,6 +141,22 @@ interface IntakeRow extends Record<string, unknown> {
   source: string
   owner_employee_id: string | null
   table_codes: string[]
+  annual_priority_hold_minutes: number | null
+  queue_override_mode: PriorityQueueOverrideMode | null
+  queue_override_reason: string | null
+  queue_override_created_at: string | null
+}
+
+type PriorityQueueTargetKind = 'reservation' | 'waitlist'
+type PriorityQueueOverrideMode = 'promote' | 'demote' | 'clear'
+
+interface PriorityQueueOverride {
+  id: string
+  targetKind: PriorityQueueTargetKind
+  publicId: string
+  mode: PriorityQueueOverrideMode
+  reason: string
+  createdAt: string
 }
 
 class PublicReservationRequestError extends Error {
@@ -284,9 +307,11 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
       validateReservationWindow(arrivalAt, expectedEndAt, now(), policy.max_advance_days)
       const capacity = await readReservationCapacity(transaction, arrivalAt, expectedEndAt)
       if (!capacityAccepts(capacity, guestCount)) throw new PublicReservationCapacityUnavailableError()
+      const annualPriority = await readAnnualReservationPriority(transaction, context.customerId)
+      const requestHoldMinutes = annualPriority?.reservation_hold_minutes ?? policy.hold_minutes
       const heldUntil = new Date(Math.min(
         Date.parse(arrivalAt),
-        now().getTime() + policy.hold_minutes * 60_000,
+        now().getTime() + requestHoldMinutes * 60_000,
       )).toISOString()
       const deposit = publicDepositRule(policy, null)
       const reservation = await new ReservationRepository(transaction).create({
@@ -302,6 +327,10 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
         reservationSnapshot: {
           bookingMode: mode,
           depositRule: deposit,
+          priorityBooking: annualPriority === null ? null : {
+            ruleCode: annualPriority.rule_code,
+            title: annualPriority.title,
+          },
         },
         seatPreference,
         tableIds: [],
@@ -315,6 +344,8 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
         reservationPolicyVersion: policy.policy_version,
         reservationPolicyAcknowledgedVersion: acknowledgedPolicyVersion,
         preferredScheduleId,
+        annualPriorityRuleId: annualPriority?.rule_id ?? null,
+        annualPriorityHoldMinutes: annualPriority?.reservation_hold_minutes ?? null,
         customerCancelUntil: new Date(
           Date.parse(arrivalAt) - policy.customer_cancel_cutoff_minutes * 60_000,
         ).toISOString(),
@@ -545,12 +576,15 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
     const body = readObject(request.body)
     rejectClaims(body, ['customerId', 'source', 'status', 'actor', 'scope'])
     const contact = await options.protectContact(readString(body.contact, '联系方式', 3, 256))
+    const annualPriority = await options.transactions.run(context.scope, (transaction) => (
+      readAnnualReservationPriority(transaction, context.customerId)
+    ), { readOnly: true })
     const execution = await options.waitlists.create({
       scope: context.scope,
       actor: { type: 'guest', ref: context.actorRef },
       businessDate: context.businessDate,
       idempotencyKey: readIdempotencyKey(request),
-      requestFingerprint: fingerprint({ ...body, contact: contact.hash }),
+      requestFingerprint: fingerprint({ ...body, contact: contact.hash, annualPriorityRuleId: annualPriority?.rule_id ?? null }),
       publicId: createPublicId('waitlist'),
       customerId: context.customerId,
       customerName: readString(body.customerName, '候位姓名', 1, 128),
@@ -559,6 +593,8 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
       desiredArrivalAt: readTimestamp(body.desiredArrivalAt, '预计到店时间'),
       source: 'wechat',
       note: readOptionalString(body.note, '备注', 1000),
+      annualPriorityRuleId: annualPriority?.rule_id ?? null,
+      annualPriorityHoldMinutes: annualPriority?.reservation_hold_minutes ?? null,
     })
     return reply.code(execution.replayed ? 200 : 201).send({
       data: publicWaitlist(execution.value),
@@ -603,6 +639,84 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
     })
   ))
 
+  app.post<{ Params: { kind: string; publicId: string } }>('/staff/reservation-intake/:kind/:publicId/priority-override', async (request, reply) => handle(reply, async () => {
+    const context = await options.resolveStaff(request)
+    requirePermission(context, 'reservation.manage')
+    const body = readObject(request.body)
+    const targetKind = readPriorityQueueTargetKind(request.params.kind)
+    const publicId = readPublicId(request.params.publicId)
+    const mode = readPriorityQueueOverrideMode(body.mode)
+    const reason = readString(body.reason, '队列调整原因', 2, 500)
+    const businessDate = await options.currentBusinessDate(context.scope)
+    const execution = await options.commands.execute({
+      scope: context.scope,
+      operationScope: 'reservation.priority-queue.override',
+      idempotencyKey: readIdempotencyKey(request),
+      requestFingerprint: fingerprint({ targetKind, publicId, mode, reason }),
+      resultCodec: priorityQueueOverrideCodec,
+    }, async (transaction) => {
+      const target = await findVisiblePriorityQueueTarget(transaction, context, targetKind, publicId)
+      if (target === null) throw new PublicReservationOwnershipError()
+      const inserted = await transaction.query<{
+        id: string
+        target_kind: PriorityQueueTargetKind
+        mode: PriorityQueueOverrideMode
+        reason: string
+        created_at: string
+      }>(`
+        INSERT INTO mbox.reservation_priority_queue_overrides(
+          tenant_id,store_id,target_kind,reservation_id,waitlist_entry_id,mode,reason,overridden_by_employee_id
+        ) VALUES($1::uuid,$2::uuid,$3,$4::uuid,$5::uuid,$6,$7,$8::uuid)
+        RETURNING id,target_kind,mode,reason,created_at::text
+      `, [
+        transaction.scope.tenantId,
+        transaction.scope.storeId,
+        targetKind,
+        targetKind === 'reservation' ? target.id : null,
+        targetKind === 'waitlist' ? target.id : null,
+        mode,
+        reason,
+        context.employeeId,
+      ])
+      const row = inserted.rows[0]
+      if (row === undefined) throw new Error('优先队列调整未保存')
+      const override: PriorityQueueOverride = {
+        id: row.id,
+        targetKind: row.target_kind,
+        publicId: target.publicId,
+        mode: row.mode,
+        reason: row.reason,
+        createdAt: row.created_at,
+      }
+      const payload: JsonObject = {
+        targetKind: override.targetKind,
+        publicId: override.publicId,
+        mode: override.mode,
+        reason: override.reason,
+      }
+      return {
+        result: override,
+        auditEvents: [{
+          actor: { type: 'employee', employeeId: context.employeeId },
+          action: 'reservation.priority-queue.overridden',
+          objectType: targetKind === 'reservation' ? 'reservation' : 'waitlist_entry',
+          objectId: target.id,
+          businessDate,
+          reason,
+          afterData: payload,
+        }],
+        outboxMessages: [{
+          aggregateType: 'reservation_priority_queue_override',
+          aggregateId: override.id,
+          aggregateVersion: 1,
+          eventType: 'reservation.priority-queue.overridden.v1',
+          payload,
+        }],
+      }
+    })
+    return reply.send({ data: execution.value, meta: { replayed: execution.replayed } })
+  }))
+
   app.get('/staff/reservation-intake', async (request, reply) => handle(reply, async () => {
     const context = await options.resolveStaff(request)
     requirePermission(context, 'reservation.view')
@@ -618,7 +732,9 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
           reservation.guest_count, reservation.arrival_at::text AS arrival_at,
           reservation.status, reservation.source, reservation.owner_employee_id,
           COALESCE(array_agg(venue_table.code ORDER BY venue_table.code)
-            FILTER (WHERE venue_table.code IS NOT NULL), ARRAY[]::text[]) AS table_codes
+            FILTER (WHERE venue_table.code IS NOT NULL), ARRAY[]::text[]) AS table_codes,
+          reservation.annual_priority_hold_minutes,queue_override.mode AS queue_override_mode,
+          queue_override.reason AS queue_override_reason,queue_override.created_at::text AS queue_override_created_at
         FROM mbox.reservations AS reservation
         LEFT JOIN mbox.reservation_private_contacts AS contact
           ON contact.tenant_id = reservation.tenant_id AND contact.store_id = reservation.store_id
@@ -630,21 +746,46 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
         LEFT JOIN mbox.tables AS venue_table
           ON venue_table.tenant_id = table_lock.tenant_id AND venue_table.store_id = table_lock.store_id
           AND venue_table.id = table_lock.table_id
+        LEFT JOIN LATERAL (
+          SELECT override.mode,override.reason,override.created_at
+          FROM mbox.reservation_priority_queue_overrides AS override
+          WHERE override.tenant_id=reservation.tenant_id AND override.store_id=reservation.store_id
+            AND override.reservation_id=reservation.id
+          ORDER BY override.created_at DESC,override.id DESC
+          LIMIT 1
+        ) AS queue_override ON true
         WHERE reservation.tenant_id = $1::uuid AND reservation.store_id = $2::uuid
           AND reservation.arrival_at >= $3::timestamptz AND reservation.arrival_at < $4::timestamptz
           AND ($5::boolean OR reservation.owner_employee_id = ANY($6::uuid[]))
-        GROUP BY reservation.id, contact.masked_contact
+        GROUP BY reservation.id, contact.masked_contact, reservation.annual_priority_hold_minutes,
+          queue_override.mode,queue_override.reason,queue_override.created_at
         UNION ALL
         SELECT 'waitlist'::text AS kind, waitlist.public_id, waitlist.customer_name,
           waitlist.masked_contact, waitlist.guest_count,
           waitlist.desired_arrival_at::text AS arrival_at, waitlist.status,
-          waitlist.source, waitlist.owner_employee_id, ARRAY[]::text[] AS table_codes
+          waitlist.source, waitlist.owner_employee_id, ARRAY[]::text[] AS table_codes,
+          waitlist.annual_priority_hold_minutes,queue_override.mode AS queue_override_mode,
+          queue_override.reason AS queue_override_reason,queue_override.created_at::text AS queue_override_created_at
         FROM mbox.waitlist_entries AS waitlist
+        LEFT JOIN LATERAL (
+          SELECT override.mode,override.reason,override.created_at
+          FROM mbox.reservation_priority_queue_overrides AS override
+          WHERE override.tenant_id=waitlist.tenant_id AND override.store_id=waitlist.store_id
+            AND override.waitlist_entry_id=waitlist.id
+          ORDER BY override.created_at DESC,override.id DESC
+          LIMIT 1
+        ) AS queue_override ON true
         WHERE waitlist.tenant_id = $1::uuid AND waitlist.store_id = $2::uuid
           AND waitlist.desired_arrival_at >= $3::timestamptz
           AND waitlist.desired_arrival_at < $4::timestamptz
           AND ($5::boolean OR waitlist.owner_employee_id = ANY($6::uuid[]))
-        ORDER BY arrival_at, public_id
+        ORDER BY arrival_at,
+          CASE queue_override_mode
+            WHEN 'promote' THEN 0
+            WHEN 'demote' THEN 3
+            ELSE CASE WHEN annual_priority_hold_minutes IS NULL THEN 2 ELSE 1 END
+          END,
+          public_id
         LIMIT 1000
       `, [
         transaction.scope.tenantId,
@@ -666,6 +807,14 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
         arrivalAt: row.arrival_at,
         status: row.status,
         tableCodes: row.table_codes,
+        priorityBooking: row.annual_priority_hold_minutes === null ? null : {
+          requestHoldMinutes: Number(row.annual_priority_hold_minutes),
+        },
+        queueOverride: row.queue_override_mode === null ? null : {
+          mode: row.queue_override_mode,
+          reason: row.queue_override_reason,
+          createdAt: row.queue_override_created_at,
+        },
       })),
     })
   }))
@@ -791,6 +940,46 @@ async function readPolicy(transaction: ScopedTransaction, lock = false): Promise
   const row = result.rows[0]
   if (!row) throw new Error('门店预约规则尚未配置')
   return row
+}
+
+async function readAnnualReservationPriority(
+  transaction: ScopedTransaction,
+  customerId: string,
+): Promise<AnnualPriorityReservationRow | null> {
+  const result = await transaction.query<AnnualPriorityReservationRow>(`
+    WITH RECURSIVE ancestry(id,merged_into_customer_id) AS (
+      SELECT customer.id,customer.merged_into_customer_id FROM mbox.customers customer
+      WHERE customer.tenant_id=$1::uuid AND customer.store_id=$2::uuid AND customer.id=$3::uuid
+      UNION ALL
+      SELECT parent.id,parent.merged_into_customer_id FROM mbox.customers parent
+      JOIN ancestry child ON child.merged_into_customer_id=parent.id
+      WHERE parent.tenant_id=$1::uuid AND parent.store_id=$2::uuid
+    ), canonical AS (
+      SELECT id FROM ancestry WHERE merged_into_customer_id IS NULL LIMIT 1
+    )
+    SELECT rule.id AS rule_id,rule.rule_code,rule.title,rule.reservation_hold_minutes
+    FROM canonical
+    JOIN mbox.customer_memberships membership
+      ON membership.tenant_id=$1::uuid AND membership.store_id=$2::uuid
+     AND membership.customer_id=canonical.id AND membership.status='active'
+    JOIN mbox.loyalty_accounts account
+      ON account.tenant_id=membership.tenant_id AND account.store_id=membership.store_id
+     AND account.membership_id=membership.id AND account.customer_id=membership.customer_id
+    JOIN mbox.loyalty_annual_benefit_policy_versions policy
+      ON policy.tenant_id=membership.tenant_id AND policy.store_id=membership.store_id
+     AND policy.status='published' AND policy.effective_from<=clock_timestamp()
+     AND (policy.effective_until IS NULL OR policy.effective_until>clock_timestamp())
+    JOIN mbox.loyalty_annual_benefit_rules rule
+      ON rule.tenant_id=policy.tenant_id AND rule.store_id=policy.store_id
+     AND rule.policy_version_id=policy.id AND rule.enabled AND rule.rule_kind='priority_seating'
+    WHERE (account.current_tier=rule.eligible_tier OR (
+      rule.inherit_to_higher_tiers AND CASE account.current_tier WHEN 'gold' THEN 2 WHEN 'silver' THEN 1 ELSE 0 END
+        > CASE rule.eligible_tier WHEN 'gold' THEN 2 WHEN 'silver' THEN 1 ELSE 0 END
+    ))
+    ORDER BY policy.effective_from DESC,policy.version DESC,rule.rule_code
+    LIMIT 1
+  `, [transaction.scope.tenantId, transaction.scope.storeId, customerId])
+  return result.rows[0] ?? null
 }
 
 async function readReservationCapacity(
@@ -1024,6 +1213,8 @@ function publicReservation(reservation: Reservation, maskedContact: string): Jso
     arrivalGraceEndsAt: reservation.arrivalGraceEndsAt,
     reservationPolicyVersion: reservation.reservationPolicyVersion,
     preferredScheduleId: reservation.preferredScheduleId,
+    priorityBooking: reservation.annualPriorityRuleId === null || reservation.annualPriorityRuleId === undefined
+      ? null : { requestHoldMinutes: reservation.annualPriorityHoldMinutes ?? null },
     cancellationPolicy: reservation.cancellationPolicySnapshot,
   }
 }
@@ -1038,6 +1229,9 @@ function publicWaitlist(entry: WaitlistEntry): JsonObject {
     status: entry.status,
     arrivalState: entry.status === 'arrived' || entry.status === 'seated' ? 'arrived' : 'not_arrived',
     note: entry.note,
+    priorityBooking: entry.annualPriorityRuleId === null ? null : {
+      requestHoldMinutes: entry.annualPriorityHoldMinutes,
+    },
   }
 }
 
@@ -1088,6 +1282,8 @@ function reservationEvent(reservation: Reservation): JsonObject {
     preferredScheduleId: reservation.preferredScheduleId,
     reservationPolicyVersion: reservation.reservationPolicyVersion,
     reservationPolicyAcknowledgedVersion: reservation.reservationPolicyAcknowledgedVersion,
+    priorityBooking: reservation.annualPriorityRuleId === null || reservation.annualPriorityRuleId === undefined
+      ? null : { requestHoldMinutes: reservation.annualPriorityHoldMinutes ?? null },
     tableCodes: reservation.tableLocks.map((lock) => lock.tableCode),
   }
 }
@@ -1124,6 +1320,8 @@ const reservationCodec: JsonCodec<Reservation> = {
     reservationPolicyVersion: reservation.reservationPolicyVersion,
     reservationPolicyAcknowledgedVersion: reservation.reservationPolicyAcknowledgedVersion,
     preferredScheduleId: reservation.preferredScheduleId,
+    annualPriorityRuleId: reservation.annualPriorityRuleId ?? null,
+    annualPriorityHoldMinutes: reservation.annualPriorityHoldMinutes ?? null,
     tableLocks: reservation.tableLocks.map((lock) => ({ ...lock })),
   }),
   decode: (value) => {
@@ -1132,6 +1330,55 @@ const reservationCodec: JsonCodec<Reservation> = {
     }
     return value as unknown as Reservation
   },
+}
+
+const priorityQueueOverrideCodec: JsonCodec<PriorityQueueOverride> = {
+  encode: (value) => ({
+    id: value.id,
+    targetKind: value.targetKind,
+    publicId: value.publicId,
+    mode: value.mode,
+    reason: value.reason,
+    createdAt: value.createdAt,
+  }),
+  decode: (value) => {
+    if (!isObject(value) || typeof value.id !== 'string' || typeof value.publicId !== 'string'
+      || (value.targetKind !== 'reservation' && value.targetKind !== 'waitlist')
+      || (value.mode !== 'promote' && value.mode !== 'demote' && value.mode !== 'clear')
+      || typeof value.reason !== 'string' || typeof value.createdAt !== 'string') {
+      throw new TypeError('Stored priority queue override result is invalid')
+    }
+    return value as unknown as PriorityQueueOverride
+  },
+}
+
+async function findVisiblePriorityQueueTarget(
+  transaction: ScopedTransaction,
+  context: PublicReservationStaffContext,
+  targetKind: PriorityQueueTargetKind,
+  publicId: string,
+): Promise<{ id: string; publicId: string } | null> {
+  const table = targetKind === 'reservation' ? 'mbox.reservations' : 'mbox.waitlist_entries'
+  const liveStatuses = targetKind === 'reservation'
+    ? ['pending', 'confirmed', 'arrived']
+    : ['waiting', 'notified', 'arrived']
+  const result = await transaction.query<{ id: string; public_id: string }>(`
+    SELECT id,public_id
+    FROM ${table}
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND public_id=$3
+      AND status=ANY($4::text[])
+      AND ($5::boolean OR owner_employee_id=ANY($6::uuid[]))
+    FOR KEY SHARE
+  `, [
+    transaction.scope.tenantId,
+    transaction.scope.storeId,
+    publicId,
+    liveStatuses,
+    context.permissions.includes('reservation.view.all'),
+    [...context.visibleOwnerEmployeeIds],
+  ])
+  const row = result.rows[0]
+  return row === undefined ? null : { id: row.id, publicId: row.public_id }
 }
 
 async function requireGuest(
@@ -1146,6 +1393,16 @@ async function requireGuest(
 
 function requirePermission(context: PublicReservationStaffContext, permission: string): void {
   if (!context.permissions.includes(permission)) throw new PublicReservationOwnershipError()
+}
+
+function readPriorityQueueTargetKind(value: string): PriorityQueueTargetKind {
+  if (value === 'reservation' || value === 'waitlist') return value
+  throw new PublicReservationRequestError('队列对象必须是预约或候位记录')
+}
+
+function readPriorityQueueOverrideMode(value: unknown): PriorityQueueOverrideMode {
+  if (value === 'promote' || value === 'demote' || value === 'clear') return value
+  throw new PublicReservationRequestError('队列调整方式必须是上调、下调或恢复默认')
 }
 
 async function handle(reply: FastifyReply, operation: () => Promise<FastifyReply>): Promise<FastifyReply> {

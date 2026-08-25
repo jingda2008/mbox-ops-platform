@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { paymentPolicyPresentation } from './payment-policy-presentation'
 
 describe('paymentPolicyPresentation', () => {
@@ -25,5 +26,18 @@ describe('paymentPolicyPresentation', () => {
       onlinePaymentEnabled: false,
       providerConfigured: true,
     }).summary).toBe('已关闭')
+  })
+
+  it('keeps the exact cross-day blocker fact visible after entering another module',()=>{
+    const source=readFileSync(new URL('./StaffModulePanel.tsx',import.meta.url),'utf8')
+    expect(source).toContain('data-blocker-fact-id={initialBlockerFact.id}')
+    expect(source).toContain('上一营业日阻断的具体事实')
+    expect(source).toContain('任何处理仍按当前权限和服务端状态复验')
+  })
+
+  it('starts a new tier draft from the documented silver and gold thresholds',()=>{
+    const source=readFileSync(new URL('./CustomerExperienceManagementPanel.tsx',import.meta.url),'utf8')
+    expect(source).toContain("silverUpgradeGrowth: '5000', silverRetainGrowth: '3000'")
+    expect(source).toContain("goldUpgradeGrowth: '20000', goldRetainGrowth: '12000'")
   })
 })

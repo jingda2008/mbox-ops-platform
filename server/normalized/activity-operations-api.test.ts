@@ -63,6 +63,26 @@ describe('activity operations API', () => {
     await app.close()
   })
 
+  it('returns the activity component catalog with activity management only and never calls the inventory dashboard', async () => {
+    const permissions: string[] = []
+    const service = serviceMock()
+    service.componentCatalog.mockResolvedValueOnce([{
+      id: '10000000-0000-4000-8000-000000000099', sku: 'ACT-DRINK-001', name: '限定饮品基酒', baseUnit: 'ml',
+    }])
+    const app = await application(service, {
+      assertPermission: async (_employeeId: string, permission: string) => { permissions.push(permission) },
+    })
+    const response = await app.inject({ method: 'GET', url: '/staff/activity-operations/component-catalog' })
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toEqual({ data: [{
+      id: '10000000-0000-4000-8000-000000000099', sku: 'ACT-DRINK-001', name: '限定饮品基酒', baseUnit: 'ml',
+    }] })
+    expect(permissions).toEqual(['community.activity.manage'])
+    expect(service.componentCatalog).toHaveBeenCalledWith(context)
+    expect(service.detail).not.toHaveBeenCalled()
+    await app.close()
+  })
+
   it('creates a fully typed draft through the single operations contract', async () => {
     const permissions: string[] = []
     const service = serviceMock()
@@ -145,6 +165,72 @@ describe('activity operations API', () => {
     expect(service.transitionRegistration).toHaveBeenCalledWith(context, {
       publicId: 'activity-registration-001', operation: 'check_in',
       reason: '现场核对本人到场', idempotencyKey: 'activity-check-in-key-001',
+    })
+    await app.close()
+  })
+
+  it('keeps package delivery separate from check-in and accepts the compact delivery action', async () => {
+    const permissions: string[] = []
+    const service = serviceMock()
+    const app = await application(service, {
+      assertPermission: async (_employeeId: string, permission: string) => { permissions.push(permission) },
+    })
+    const response = await app.inject({
+      method: 'POST',
+      url: '/staff/activity-operations/registrations/activity-registration-001/fulfill-package',
+      headers: { 'idempotency-key': 'activity-package-delivery-key-001' },
+      payload: { reason: '吧台已实际交付套餐内容' },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(permissions).toEqual(['community.activity.manage'])
+    expect(service.transitionRegistration).toHaveBeenCalledWith(context, {
+      publicId: 'activity-registration-001', operation: 'fulfill_package',
+      reason: '吧台已实际交付套餐内容', idempotencyKey: 'activity-package-delivery-key-001',
+    })
+    await app.close()
+  })
+
+  it('accepts one fully specified package in the same activity draft request', async () => {
+    const service = serviceMock()
+    const app = await application(service)
+    const response = await app.inject({
+      method: 'POST', url: '/staff/activity-operations',
+      headers: { 'idempotency-key': 'activity-package-draft-key-001' },
+      payload: {
+        ...validDraft(), packageSelectionRequired: true,
+        packages: [validPackageDraft()],
+      },
+    })
+    expect(response.statusCode).toBe(201)
+    expect(service.createDraft).toHaveBeenCalledWith(context, expect.objectContaining({
+      draft: expect.objectContaining({
+        packageSelectionRequired: true,
+        packages: [expect.objectContaining({
+          name: '限定饮品加购', memberPurchaseLimit: 2,
+          redemptionPolicyVersion: 'package-redeem-v1', refundPolicyVersion: 'package-refund-v1',
+        })],
+      }),
+    }))
+    await app.close()
+  })
+
+  it('lets the activity operator pause a published package without granting activity publication', async () => {
+    const permissions: string[] = []
+    const service = serviceMock()
+    const app = await application(service, {
+      assertPermission: async (_employeeId: string, permission: string) => { permissions.push(permission) },
+    })
+    const response = await app.inject({
+      method: 'POST',
+      url: '/staff/activity-operations/community-activity-001/packages/activity-package-001/pause',
+      headers: { 'idempotency-key': 'activity-package-pause-key-001' },
+      payload: { reason: '套餐物料补货中' },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(permissions).toEqual(['community.activity.manage'])
+    expect(service.setPackageAvailability).toHaveBeenCalledWith(context, {
+      activityPublicId: 'community-activity-001', packagePublicId: 'activity-package-001',
+      operation: 'pause', reason: '套餐物料补货中', idempotencyKey: 'activity-package-pause-key-001',
     })
     await app.close()
   })
@@ -271,10 +357,12 @@ describe('activity operations API', () => {
 function serviceMock() {
   return {
     list: vi.fn(async () => []),
+    componentCatalog: vi.fn(async () => []),
     detail: vi.fn(async () => ({ activity: {}, registrations: [] })),
     createDraft: vi.fn(async () => ({ value: { publicId: 'community-activity-new', status: 'draft' }, replayed: false })),
     updateDraft: vi.fn(async () => ({ value: {}, replayed: false })),
     transitionRegistration: vi.fn(async () => ({ value: { status: 'checked_in' }, replayed: false })),
+    setPackageAvailability: vi.fn(async () => ({ value: { status: 'published' }, replayed: false })),
     retryWaitlistPromotion: vi.fn(async () => ({ value: { state: 'not_required' }, replayed: false })),
   }
 }
@@ -311,5 +399,16 @@ function validDraft() {
     activityDetails: '现场音乐、交流与限定饮品体验。', includedItems: ['欢迎饮品'],
     participationRequirements: ['请提前15分钟到场'], contactInstructions: '报名成功后在小程序查看集合通知',
     memberBenefitText: '会员获赠限定徽章', reason: '补充本周活动安排',
+  }
+}
+
+function validPackageDraft() {
+  return {
+    name: '限定饮品加购', description: '一杯限定鸡尾酒', imageUrl: null, includedItems: ['限定鸡尾酒'],
+    capacity: 20, memberPurchaseLimit: 2, feeAmountMinor: 2_800, depositAmountMinor: 0,
+    feeBasis: 'per_registration', paymentMode: 'full_required', paymentDeadlineMinutes: 15,
+    paymentRuleText: '需全额支付加购费用', redemptionPolicyVersion: 'package-redeem-v1',
+    refundPolicyVersion: 'package-refund-v1', sortOrder: 0, availableFrom: null, availableUntil: null,
+    components: [],
   }
 }

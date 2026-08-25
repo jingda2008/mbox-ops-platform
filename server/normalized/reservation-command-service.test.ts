@@ -43,9 +43,27 @@ integration('normalized reservation, customer and benefit transactions', () => {
     reservations = new ReservationCommandService(commands)
     customers = new CustomerCommandService(commands)
     benefits = new BenefitCommandService(commands, {
-      createGiftOrder: async (_transaction, input) => ({
-        reference: `gift-order:${input.benefitReservationId}`,
-      }),
+      createGiftOrder: async (transaction, input) => {
+        const orderId=randomUUID()
+        const orderItemId=randomUUID()
+        const reference=`gift-order:${input.benefitReservationId}`
+        await transaction.query(`INSERT INTO mbox.orders(
+          id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,
+          subtotal_amount_minor,discount_amount_minor,total_amount_minor,currency,
+          created_by_employee_id,submitted_at,settlement_mode,fulfillment_state
+        ) VALUES($1,$2,$3,$4,$5,'cashier','submitted','paid',0,0,0,'CNY',$6,
+          clock_timestamp(),'immediate_payment','active')`,
+        [orderId,transaction.scope.tenantId,transaction.scope.storeId,input.tableSessionId,
+          reference,input.redeemedByEmployeeId])
+        await transaction.query(`INSERT INTO mbox.order_items(
+          id,tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,
+          discount_amount_minor,total_amount_minor,currency,fulfillment_station,product_snapshot,status
+        ) VALUES($1,$2,$3,$4,$5,$6,0,0,0,'CNY','bar',
+          '{"source":"reservation_benefit_test"}'::jsonb,'submitted')`,
+        [orderItemId,transaction.scope.tenantId,transaction.scope.storeId,orderId,
+          input.selectedProductId??benefitProductId,input.quantity])
+        return {reference}
+      },
     })
     await nativePool.query(`
       INSERT INTO mbox.tenants (id, code, name)

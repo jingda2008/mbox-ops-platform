@@ -326,6 +326,8 @@
 
 .staff-action-list { display: grid; gap: 8px; padding-top: 10px; }
 .staff-action-card { display: flex; align-items: center; gap: 10px; min-height: 68px; padding: 10px; background: #fff; border: 1px solid var(--staff-line); border-left: 4px solid #b9c0ba; border-radius: 6px; box-shadow: var(--mbox-shadow-xs, 0 1px 2px rgb(16 23 18 / 7%)); }
+.staff-action-card:focus-visible,
+.staff-action-card.is-focused { outline: 3px solid color-mix(in srgb, var(--staff-green) 68%, white); outline-offset: 2px; }
 .staff-action-card.priority-urgent, .staff-action-card.is-overdue { border-left-color: var(--staff-red); }
 .staff-action-card.priority-high { border-left-color: var(--staff-gold); }
 .staff-action-card-main { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
@@ -560,6 +562,17 @@
 .staff-participant-loading { min-height: 160px; display: flex; align-items: center; justify-content: center; gap: 8px; }
 .staff-inline-error { margin: 0; color: #a32d35; font-size: 13px; display: grid; gap: 7px; }
 .staff-inline-error button { min-height: 44px; color: #7d222a; border-color: #cf9da1; background: #fff; }
+.staff-member-benefit-tools { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; padding: 0 12px 10px; }
+.staff-member-benefit-tools label { min-height: 44px; display: flex; align-items: center; gap: 7px; padding: 0 10px; border: 1px solid #bdc8c0; border-radius: 8px; background: #fff; }
+.staff-member-benefit-tools input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; }
+.staff-member-benefit-tools button { min-height: 44px; display: flex; align-items: center; gap: 6px; }
+.staff-member-benefit-tasks { display: grid; gap: 8px; margin: 0 12px 12px; padding: 10px; border: 1px solid #c8d5cd; border-radius: 10px; background: #f3f8f4; }
+.staff-member-benefit-tasks > header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.staff-member-benefit-tasks > header div { display: flex; align-items: center; gap: 7px; color: #214c3d; }
+.staff-member-benefit-tasks > header span { color: #5e6d64; font-size: 13px; }
+.staff-member-benefit-tasks .staff-action-card { margin: 0; background: #fff; }
+.staff-member-benefit-tasks label { display: grid; gap: 4px; color: #46564d; font-size: 13px; font-weight: 700; }
+.staff-member-benefit-tasks select,.staff-member-benefit-tasks input { min-height: 44px; padding: 0 9px; border: 1px solid #b9c4bc; border-radius: 7px; background: #fff; }
 
 @media (min-width: 720px) {
   .staff-actions-panel { max-width: 920px; margin: 0 auto; }
@@ -572,6 +585,7 @@
 @media (max-width: 480px) {
   .staff-reservation-history-range { grid-template-columns: 1fr; }
   .staff-reservation-history-range button { width: 100%; }
+  .staff-member-benefit-tools { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 560px) {

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNo
 import { ArrowLeft, ArrowRight, KeyRound, LoaderCircle, LogOut, Repeat2, ShieldCheck, UserRound, X } from 'lucide-react'
 import { NormalizedApiClient, NormalizedApiError, type StaffAuthView } from '../normalized-api'
 import type { StaffBootstrapView } from '../shared/normalized-contracts'
+import type { BusinessDayNavigationContext } from '../shared/business-day-closure-contracts'
 import { NormalizedStaffWorkspace, StaffBottomNavigation } from './NormalizedStaffWorkspace'
 import { StaffModulePanel } from './StaffModulePanel'
 import { StaffActionsPanel } from './staff-actions'
@@ -134,13 +135,14 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
     setMessage(null)
     loginRequired()
   }
-  const navigate = (route: string) => {
-    const next = normalizedStaffRoute(route)
+  const navigate = (route: string, context?: BusinessDayNavigationContext) => {
+    const target = new URL(route, window.location.origin)
+    const next = normalizedStaffRoute(target.pathname)
     if (next === null) {
       setMessage('这个岗位入口仍在规范化改造中，当前版本不会打开旧系统页面。')
       return
     }
-    window.history.pushState({}, '', route)
+    window.history.pushState(context ?? {}, '', `${target.pathname}${target.search}`)
     setMessage(null)
     setStaffRoute(next)
   }
@@ -162,8 +164,16 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
       {staffNavigation === null ? <StaffGateLoading /> : !staffNavigation.some((item) => item.code === normalizedStaffNavigationCode(window.location.pathname))
         ? <div className="normalized-route-notice" role="alert">当前账号没有这个页面的有效权限。请由管理员授权后刷新；直接输入页面地址不会绕过权限。</div>
         : isStaffActionsTab(staffRoute)
-        ? <StaffActionsPanel initialTab={staffRoute} onLoginRequired={loginRequired} />
-        : <StaffModulePanel key={staffWorkspaceIdentityKey(auth)} api={api} auth={auth} module={staffRoute} onLoginRequired={loginRequired} />}
+        ? <StaffActionsPanel
+            initialTab={staffRoute}
+            initialTableSessionId={new URLSearchParams(window.location.search).get('tableSessionId')}
+            initialFactId={new URLSearchParams(window.location.search).get('factId')}
+            initialFocus={new URLSearchParams(window.location.search).get('focus')}
+            onLoginRequired={loginRequired}
+          />
+        : <StaffModulePanel key={staffWorkspaceIdentityKey(auth)} api={api} auth={auth} module={staffRoute}
+            initialBlockerFact={businessDayBlockerFactFromHistory(window.history.state)}
+            onLoginRequired={loginRequired} onNavigate={navigate} />}
     </main>
   ) : (<>
       {message !== null && <p className="normalized-route-notice" role="status">{message}</p>}
@@ -186,6 +196,14 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
       onNavigate={navigate}
     />}
   </>
+}
+
+export function businessDayBlockerFactFromHistory(value: unknown) {
+  if (value === null || typeof value !== 'object') return null
+  const fact = (value as Partial<BusinessDayNavigationContext>).businessDayBlockerFact
+  if (fact === undefined || fact === null || typeof fact !== 'object') return null
+  return typeof fact.id === 'string' && typeof fact.title === 'string'
+    && typeof fact.statusLabel === 'string' && typeof fact.actionRoute === 'string' ? fact : null
 }
 
 function StaffSessionMenu({ api, auth, onSwitched, onLoggedOut }: {

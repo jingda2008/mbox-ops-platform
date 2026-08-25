@@ -38,6 +38,7 @@ interface BenefitAuthorityRow extends Record<string, unknown> {
   allowed_product_ids: string[]
   valid_from: string | Date
   valid_until: string | Date | null
+  has_active_benefit_reservation: boolean
 }
 
 interface ReservedAuthorizationRow extends Record<string, unknown> {
@@ -288,7 +289,13 @@ export class PostgresPricingAuthority implements PricingAuthorityPort {
           WHERE allowed.tenant_id=benefit.tenant_id AND allowed.store_id=benefit.store_id
             AND allowed.benefit_id=benefit.id
         ), '{}'::text[]) AS allowed_product_ids,
-        benefit.valid_from, benefit.valid_until
+        benefit.valid_from, benefit.valid_until,
+        EXISTS (
+          SELECT 1 FROM mbox.benefit_reservations benefit_reservation
+          WHERE benefit_reservation.tenant_id=benefit.tenant_id AND benefit_reservation.store_id=benefit.store_id
+            AND benefit_reservation.benefit_id=benefit.id AND benefit_reservation.table_session_id=$4::uuid
+            AND benefit_reservation.status='reserved' AND benefit_reservation.expires_at>clock_timestamp()
+        ) AS has_active_benefit_reservation
       FROM mbox.benefits AS benefit
       JOIN mbox.table_sessions AS session
         ON session.tenant_id = benefit.tenant_id
@@ -307,7 +314,8 @@ export class PostgresPricingAuthority implements PricingAuthorityPort {
       context.tableSessionId,
     ])
     const row = result.rows[0]
-    if (!row || row.benefit_status !== 'issued') {
+    if (!row || (row.benefit_status !== 'issued'
+      && (row.benefit_status !== 'reserved' || !row.has_active_benefit_reservation))) {
       throw new PricingAuthorizationDeniedError('Benefit is unavailable for this table session')
     }
     const validFrom = Date.parse(toIso(row.valid_from))
@@ -328,18 +336,20 @@ export class PostgresPricingAuthority implements PricingAuthorityPort {
     )
     const authorizationId = randomUUID()
 
-    const reserved = await transaction.query(`
-      UPDATE mbox.benefits
-      SET status = 'reserved', updated_at = clock_timestamp()
-      WHERE tenant_id = $1::uuid
-        AND store_id = $2::uuid
-        AND id = $3::uuid
-        AND status = 'issued'
-        AND valid_from <= clock_timestamp()
-        AND (valid_until IS NULL OR valid_until > clock_timestamp())
-    `, [transaction.scope.tenantId, transaction.scope.storeId, context.request.sourceId])
-    if (reserved.rowCount !== 1) {
-      throw new PricingAuthorizationDeniedError('Benefit could not be reserved')
+    if (row.benefit_status === 'issued') {
+      const reserved = await transaction.query(`
+        UPDATE mbox.benefits
+        SET status = 'reserved', updated_at = clock_timestamp()
+        WHERE tenant_id = $1::uuid
+          AND store_id = $2::uuid
+          AND id = $3::uuid
+          AND status = 'issued'
+          AND valid_from <= clock_timestamp()
+          AND (valid_until IS NULL OR valid_until > clock_timestamp())
+      `, [transaction.scope.tenantId, transaction.scope.storeId, context.request.sourceId])
+      if (reserved.rowCount !== 1) {
+        throw new PricingAuthorizationDeniedError('Benefit could not be reserved')
+      }
     }
 
     await reserveAuthorization(transaction, {
@@ -562,10 +572,12 @@ function benefitAdjustment(
   }
   if (benefitType === 'gift_product') {
     if (allowedProductIds.length === 0
-      || basket.productIds.some((productId) => !allowedProductIds.includes(productId))
-      || maximumAmountMinor < basket.subtotalAmountMinor) {
+      || basket.productIds.some((productId) => !allowedProductIds.includes(productId))) {
       throw new PricingAuthorizationDeniedError('Gift benefit does not cover every ordered product')
     }
+    // A gift authorizes the published product and quantity, not a stale price
+    // ceiling. The issue-time value remains an accounting snapshot; a price
+    // change during a valid hold must not make an authorized gift unredeemable.
     return { kind: 'gift', amountMinor: basket.subtotalAmountMinor }
   }
   throw new PricingAuthorizationDeniedError(`Benefit type is not valid for order pricing: ${benefitType}`)

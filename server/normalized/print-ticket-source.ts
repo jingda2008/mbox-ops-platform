@@ -49,6 +49,40 @@ interface PaymentContextRow extends OrderContextRow {
   settled_amount_minor: string | number
 }
 
+interface RefundContextRow extends OrderContextRow {
+  refund_id: string
+  refund_public_id: string
+  refund_amount_minor: string | number
+  refund_status: string
+  completed_at: string | null
+  payment_provider: string
+  payment_method: string
+}
+
+interface ActivityPaymentContextRow extends Record<string, unknown> {
+  payment_id: string
+  payment_public_id: string
+  payment_provider: string
+  payment_method: string
+  payment_amount_minor: string | number
+  payment_status_value: string
+  succeeded_at: string | null
+  business_date: string
+  activity_public_id: string
+  activity_title: string
+  registration_public_id: string
+  party_size: number
+  currency: string
+}
+
+interface ActivityRefundContextRow extends ActivityPaymentContextRow {
+  refund_id: string
+  refund_public_id: string
+  refund_amount_minor: string | number
+  refund_status: string
+  completed_at: string | null
+}
+
 interface RouteCategoryRow extends Record<string, unknown> {
   product_category_code: string | null
 }
@@ -121,18 +155,103 @@ export class PrintTicketSourceRepository {
     paymentId: string,
   ): Promise<readonly PrintJob[]> {
     const payment = await this.loadPaymentContext(paymentId)
-    // A receipt must never label a split settlement as a single payment method.
-    // It is produced after the order is fully settled by exactly this payment.
-    if (
-      payment.payment_status !== 'paid'
-      || payment.payment_status_value !== 'succeeded'
-      || numeric(payment.settled_payment_count, 'settled_payment_count') !== 1
-      || numeric(payment.settled_amount_minor, 'settled_amount_minor') !== numeric(payment.total_amount_minor, 'total_amount_minor')
-      || numeric(payment.payment_amount_minor, 'payment_amount_minor') !== numeric(payment.total_amount_minor, 'total_amount_minor')
-    ) return []
-    const items = await this.loadItems(payment.order_id)
-    const snapshot = cashierSnapshot(payment, 'cashier_payment', items, paymentFromRow(payment))
+    // A payment voucher states one committed payment, not the entire bill.
+    // That keeps split settlements and post-refund replacement payments
+    // printable without falsely labelling a partial collection as full payment.
+    if (payment.payment_status_value !== 'succeeded') return []
+    const snapshot = cashierPaymentSnapshot(payment)
     return this.materializeCashier(sourceOutboxMessageId, payment, snapshot)
+  }
+
+  async materializeActivityCashierPayment(
+    sourceOutboxMessageId: string,
+    paymentId: string,
+  ): Promise<readonly PrintJob[]> {
+    const payment = await this.loadActivityPaymentContext(paymentId)
+    if (payment.payment_status_value !== 'succeeded') return []
+    const snapshot = createPrintTicketSnapshot({
+      kind: 'cashier_payment',
+      subtitle: 'M-BOX · 活动现场收款凭条',
+      test: false,
+      issuedAt: requiredTime(payment.succeeded_at, 'activity payment succeeded_at'),
+      businessDate: payment.business_date,
+      ticketReference: payment.payment_public_id,
+      tableCode: null,
+      guestCount: payment.party_size,
+      operatorLabel: null,
+      note: null,
+      payment: paymentFromRow(payment),
+      lines: [{
+        name: `活动报名 · ${payment.activity_title}`,
+        quantity: payment.party_size,
+        totalAmountMinor: numeric(payment.payment_amount_minor, 'activity payment amount'),
+      }],
+      totalAmountMinor: numeric(payment.payment_amount_minor, 'activity payment amount'),
+      currency: currency(payment.currency),
+    })
+    return this.materializeActivityCashier(sourceOutboxMessageId, payment.payment_public_id, snapshot)
+  }
+
+  async materializeCashierRefund(
+    sourceOutboxMessageId: string,
+    refundId: string,
+  ): Promise<readonly PrintJob[]> {
+    const refund = await this.loadRefundContext(refundId)
+    if (refund.refund_status !== 'succeeded') return []
+    const snapshot = createPrintTicketSnapshot({
+      kind: 'cashier_refund',
+      subtitle: 'M-BOX · 退款已完成',
+      test: false,
+      issuedAt: refund.completed_at ?? refund.submitted_at,
+      businessDate: refund.business_date,
+      ticketReference: refund.refund_public_id,
+      tableCode: refund.table_code,
+      guestCount: refund.guest_count,
+      operatorLabel: null,
+      note: refund.order_note,
+      payment: paymentFromRefund(refund),
+      lines: [{ name: `订单退款 · ${refund.order_public_id}`, quantity: 1, totalAmountMinor: numeric(refund.refund_amount_minor, 'refund_amount_minor') }],
+      totalAmountMinor: numeric(refund.refund_amount_minor, 'refund_amount_minor'),
+      currency: currency(refund.currency),
+    })
+    if (!await this.hasActiveRoute('cashier')) return []
+    return this.hardware.materializeFromOutbox({
+      sourceOutboxMessageId,
+      stationCode: 'cashier',
+      sourceType: 'cashier',
+      sourceReference: refund.refund_public_id,
+      printSnapshot: ticketToJson(snapshot),
+      containsPriorityNote: snapshot.note !== null,
+    })
+  }
+
+  async materializeActivityCashierRefund(
+    sourceOutboxMessageId: string,
+    refundId: string,
+  ): Promise<readonly PrintJob[]> {
+    const refund = await this.loadActivityRefundContext(refundId)
+    if (refund.refund_status !== 'succeeded') return []
+    const snapshot = createPrintTicketSnapshot({
+      kind: 'cashier_refund',
+      subtitle: 'M-BOX · 活动退款已完成',
+      test: false,
+      issuedAt: requiredTime(refund.completed_at, 'activity refund completed_at'),
+      businessDate: refund.business_date,
+      ticketReference: refund.refund_public_id,
+      tableCode: null,
+      guestCount: refund.party_size,
+      operatorLabel: null,
+      note: null,
+      payment: paymentFromRow(refund),
+      lines: [{
+        name: `活动退款 · ${refund.activity_title}`,
+        quantity: refund.party_size,
+        totalAmountMinor: numeric(refund.refund_amount_minor, 'activity refund amount'),
+      }],
+      totalAmountMinor: numeric(refund.refund_amount_minor, 'activity refund amount'),
+      currency: currency(refund.currency),
+    })
+    return this.materializeActivityCashier(sourceOutboxMessageId, refund.refund_public_id, snapshot)
   }
 
   private async materializeCashier(
@@ -148,6 +267,22 @@ export class PrintTicketSourceRepository {
       sourceReference: payment.payment_public_id,
       printSnapshot: ticketToJson(snapshot),
       containsPriorityNote: snapshot.note !== null,
+    })
+  }
+
+  private async materializeActivityCashier(
+    sourceOutboxMessageId: string,
+    sourceReference: string,
+    snapshot: Readonly<PrintTicketSnapshot>,
+  ): Promise<readonly PrintJob[]> {
+    if (!await this.hasActiveRoute('cashier')) return []
+    return this.hardware.materializeFromOutbox({
+      sourceOutboxMessageId,
+      stationCode: 'cashier',
+      sourceType: 'cashier',
+      sourceReference,
+      printSnapshot: ticketToJson(snapshot),
+      containsPriorityNote: false,
     })
   }
 
@@ -204,6 +339,105 @@ export class PrintTicketSourceRepository {
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId])
     const row = result.rows[0]
     if (!row) throw new Error('打印源支付不存在')
+    return row
+  }
+
+  private async loadRefundContext(refundId: string): Promise<RefundContextRow> {
+    const result = await this.transaction.query<RefundContextRow>(`
+      SELECT ordering.id AS order_id, ordering.public_id AS order_public_id,
+        ordering.note AS order_note, ordering.total_amount_minor, ordering.currency,
+        ordering.payment_status, venue_table.code AS table_code, session.guest_count,
+        session.business_date::text, ordering.submitted_at::text,
+        refund.id AS refund_id, refund.public_id AS refund_public_id,
+        refund.amount_minor AS refund_amount_minor, refund.status AS refund_status,
+        refund.completed_at::text,
+        payment.provider AS payment_provider, payment.method AS payment_method
+      FROM mbox.refunds AS refund
+      JOIN mbox.payments AS payment
+        ON payment.tenant_id=refund.tenant_id AND payment.store_id=refund.store_id
+       AND payment.id=refund.payment_id
+      JOIN mbox.orders AS ordering
+        ON ordering.tenant_id=payment.tenant_id AND ordering.store_id=payment.store_id
+       AND ordering.id=payment.order_id
+      JOIN mbox.table_sessions AS session
+        ON session.tenant_id=ordering.tenant_id AND session.store_id=ordering.store_id
+       AND session.id=ordering.table_session_id
+      JOIN mbox.tables AS venue_table
+        ON venue_table.tenant_id=session.tenant_id AND venue_table.store_id=session.store_id
+       AND venue_table.id=session.table_id
+      WHERE refund.tenant_id=$1::uuid AND refund.store_id=$2::uuid AND refund.id=$3::uuid
+      FOR SHARE OF refund,payment,ordering,session,venue_table
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, refundId])
+    const row = result.rows[0]
+    if (!row) throw new Error('打印源退款不存在')
+    return row
+  }
+
+  private async loadActivityPaymentContext(paymentId: string): Promise<ActivityPaymentContextRow> {
+    const result = await this.transaction.query<ActivityPaymentContextRow>(`
+      SELECT payment.id AS payment_id,payment.public_id AS payment_public_id,
+        payment.provider AS payment_provider,payment.method AS payment_method,
+        payment.amount_minor AS payment_amount_minor,payment.status AS payment_status_value,
+        payment.succeeded_at::text,
+        COALESCE(reconciliation.business_date::text,(payment.succeeded_at AT TIME ZONE 'Asia/Shanghai')::date::text) AS business_date,
+        activity.public_id AS activity_public_id,activity.title AS activity_title,
+        registration.public_id AS registration_public_id,registration.party_size,registration.currency
+      FROM mbox.payments payment
+      JOIN mbox.community_activity_registrations registration
+        ON registration.tenant_id=payment.tenant_id AND registration.store_id=payment.store_id
+       AND registration.id=payment.activity_registration_id
+      JOIN mbox.community_activities activity
+        ON activity.tenant_id=registration.tenant_id AND activity.store_id=registration.store_id
+       AND activity.id=registration.activity_id
+      LEFT JOIN LATERAL (
+        SELECT entry.business_date
+        FROM mbox.reconciliation_entries entry
+        WHERE entry.tenant_id=payment.tenant_id AND entry.store_id=payment.store_id
+          AND entry.payment_id=payment.id AND entry.entry_type='payment'
+        ORDER BY entry.occurred_at DESC,entry.id DESC LIMIT 1
+      ) reconciliation ON true
+      WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid AND payment.id=$3::uuid
+        AND payment.payable_kind='activity_registration'
+      FOR SHARE OF payment,registration,activity
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId])
+    const row = result.rows[0]
+    if (!row) throw new Error('打印源活动支付不存在')
+    return row
+  }
+
+  private async loadActivityRefundContext(refundId: string): Promise<ActivityRefundContextRow> {
+    const result = await this.transaction.query<ActivityRefundContextRow>(`
+      SELECT payment.id AS payment_id,payment.public_id AS payment_public_id,
+        payment.provider AS payment_provider,payment.method AS payment_method,
+        payment.amount_minor AS payment_amount_minor,payment.status AS payment_status_value,
+        payment.succeeded_at::text,
+        COALESCE(reconciliation.business_date::text,(refund.completed_at AT TIME ZONE 'Asia/Shanghai')::date::text) AS business_date,
+        activity.public_id AS activity_public_id,activity.title AS activity_title,
+        registration.public_id AS registration_public_id,registration.party_size,registration.currency,
+        refund.id AS refund_id,refund.public_id AS refund_public_id,
+        refund.amount_minor AS refund_amount_minor,refund.status AS refund_status,refund.completed_at::text
+      FROM mbox.refunds refund
+      JOIN mbox.payments payment
+        ON payment.tenant_id=refund.tenant_id AND payment.store_id=refund.store_id AND payment.id=refund.payment_id
+      JOIN mbox.community_activity_registrations registration
+        ON registration.tenant_id=payment.tenant_id AND registration.store_id=payment.store_id
+       AND registration.id=payment.activity_registration_id
+      JOIN mbox.community_activities activity
+        ON activity.tenant_id=registration.tenant_id AND activity.store_id=registration.store_id
+       AND activity.id=registration.activity_id
+      LEFT JOIN LATERAL (
+        SELECT entry.business_date
+        FROM mbox.reconciliation_entries entry
+        WHERE entry.tenant_id=refund.tenant_id AND entry.store_id=refund.store_id
+          AND entry.refund_id=refund.id AND entry.entry_type='refund'
+        ORDER BY entry.occurred_at DESC,entry.id DESC LIMIT 1
+      ) reconciliation ON true
+      WHERE refund.tenant_id=$1::uuid AND refund.store_id=$2::uuid AND refund.id=$3::uuid
+        AND payment.payable_kind='activity_registration'
+      FOR SHARE OF refund,payment,registration,activity
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, refundId])
+    const row = result.rows[0]
+    if (!row) throw new Error('打印源活动退款不存在')
     return row
   }
 
@@ -316,6 +550,26 @@ function cashierSnapshot(
   })
 }
 
+function cashierPaymentSnapshot(context: Readonly<PaymentContextRow>): PrintTicketSnapshot {
+  const amount = numeric(context.payment_amount_minor, 'payment_amount_minor')
+  return createPrintTicketSnapshot({
+    kind: 'cashier_payment',
+    subtitle: 'M-BOX · 本次收款凭条',
+    test: false,
+    issuedAt: context.succeeded_at ?? context.submitted_at,
+    businessDate: context.business_date,
+    ticketReference: context.payment_public_id,
+    tableCode: context.table_code,
+    guestCount: context.guest_count,
+    operatorLabel: null,
+    note: context.order_note,
+    payment: paymentFromRow(context),
+    lines: [{ name: `本次收款 · ${context.order_public_id}`, quantity: 1, totalAmountMinor: amount }],
+    totalAmountMinor: amount,
+    currency: currency(context.currency),
+  })
+}
+
 function sourceItem(row: Readonly<OrderItemRow>): SourceItem {
   const snapshot = jsonObject(row.product_snapshot, 'product_snapshot')
   const name = text(snapshot.name, 'product_snapshot.name')
@@ -341,11 +595,23 @@ function toCashierLine(item: Readonly<SourceItem>): PrintTicketLine {
   return { name: item.name, quantity: item.quantity, note: item.note, totalAmountMinor: item.totalAmountMinor }
 }
 
-function paymentFromRow(row: Readonly<PaymentContextRow>): PrintTicketPayment {
+function paymentFromRow(row: Readonly<Pick<PaymentContextRow, 'payment_provider' | 'payment_method'>>): PrintTicketPayment {
   const provider = row.payment_provider
   const method = row.payment_method
-  if (!['wechat', 'postar', 'cash', 'physical_pos', 'simulation'].includes(provider)) throw new Error('支付方式无效')
+  if (!['wechat', 'postar', 'cash', 'physical_pos', 'external_manual', 'simulation'].includes(provider)) throw new Error('支付方式无效')
   if (!['jsapi', 'native_qr', 'auth_code', 'cash', 'card', 'manual'].includes(method)) throw new Error('支付渠道无效')
+  return { provider: provider as PrintTicketPayment['provider'], method: method as PrintTicketPayment['method'] }
+}
+
+function paymentFromRefund(row: Readonly<RefundContextRow>): PrintTicketPayment {
+  const provider = row.payment_provider
+  const method = row.payment_method
+  if (!['wechat', 'postar', 'cash', 'physical_pos', 'external_manual', 'simulation'].includes(provider)) {
+    throw new Error('退款支付方式无效')
+  }
+  if (!['jsapi', 'native_qr', 'auth_code', 'cash', 'card', 'manual'].includes(method)) {
+    throw new Error('退款支付渠道无效')
+  }
   return { provider: provider as PrintTicketPayment['provider'], method: method as PrintTicketPayment['method'] }
 }
 
@@ -377,4 +643,9 @@ function integer(value: number, field: string): number {
 function currency(value: string): 'CNY' {
   if (value !== 'CNY') throw new Error('暂不支持非CNY打印票据')
   return 'CNY'
+}
+
+function requiredTime(value: string | null, field: string): string {
+  if (value === null || Number.isNaN(Date.parse(value))) throw new Error(`${field}无效`)
+  return value
 }

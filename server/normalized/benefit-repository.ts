@@ -9,6 +9,7 @@ import { CustomerRepository } from './customer-repository.js'
 import { StaffAccessRepository } from './staff-access-repository.js'
 import type { ScopedTransaction, StoreScope } from './transaction-runner.js'
 import { lockBoundGuestTablePosition } from './guest-table-authority.js'
+import { assertEmployeeTableSessionAccess } from './employee-table-access.js'
 
 export type BenefitType = 'gift_product' | 'discount' | 'credit' | 'access' | 'other'
 export type BenefitStatus = 'issued' | 'reserved' | 'redeemed' | 'expired' | 'revoked'
@@ -91,6 +92,7 @@ export interface ReserveBenefitInput {
   expiresAt: string
   reservationIdempotencyKey: string
   reservationFingerprint: string
+  annualDailySnackClaimId?: string
 }
 
 export interface RedeemBenefitInput {
@@ -103,6 +105,9 @@ export interface RedeemBenefitInput {
   redemptionIdempotencyKey: string
   redemptionFingerprint: string
   redeemedAt?: string
+  businessDate?: string
+  selectedProductId?: string | null
+  substitutionReason?: string | null
 }
 
 export interface CancelBenefitReservationInput {
@@ -112,6 +117,7 @@ export interface CancelBenefitReservationInput {
   reason: string
   cancellationIdempotencyKey: string
   cancellationFingerprint: string
+  employeePermission?: 'loyalty.redemption.fulfill' | 'benefit.cancel'
 }
 
 export interface IssueBenefitCommand extends IssueBenefitInput {
@@ -145,6 +151,10 @@ export interface GiftOrderRequest {
   tableSessionId: string
   quantity: number
   benefitSnapshot: JsonObject
+  redeemedByEmployeeId: string | null
+  businessDate: string
+  selectedProductId: string | null
+  substitutionReason: string | null
 }
 
 export interface GiftOrderPort {
@@ -363,10 +373,14 @@ export class BenefitRepository {
     return mapBenefit(benefit)
   }
 
-  async reserve(input: Readonly<ReserveBenefitInput>,guestActorRef?: string): Promise<BenefitReservation> {
+  async reserve(
+    input: Readonly<ReserveBenefitInput>,guestActorRef?: string,employeeActorId?: string,
+  ): Promise<BenefitReservation> {
     validateReserve(input)
     const canonical = await new CustomerRepository(this.transaction).resolveCanonical(input.customerId)
-    await this.assertCurrentTableCustomer(canonical.id, input.tableSessionId,guestActorRef)
+    await this.assertCurrentTableCustomer(
+      canonical.id,input.tableSessionId,guestActorRef,employeeActorId,'loyalty.redemption.fulfill',
+    )
     await this.lockIdempotency(`benefit-reserve:${input.reservationIdempotencyKey}`)
     const existing = await this.transaction.query<ReservationRow>(`${reservationSelectSql()}
       AND reservation.reservation_idempotency_key = $3 LIMIT 1
@@ -382,6 +396,9 @@ export class BenefitRepository {
     const benefit = await this.selectById(input.benefitId, true)
     if (benefit === null) throw new BenefitNotFoundError(input.benefitId)
     if (!await this.isSameCustomerFamily(benefit.customer_id, canonical.id)) throw new BenefitOwnershipError()
+    await this.assertAnnualDailySnackClaimReservation(
+      benefit.id, input.tableSessionId, input.annualDailySnackClaimId,
+    )
     const updated = await this.transaction.query(`
       UPDATE mbox.benefits
       SET quantity_reserved = quantity_reserved + $4::integer,
@@ -417,10 +434,13 @@ export class BenefitRepository {
     input: Readonly<RedeemBenefitInput>,
     giftOrders?: GiftOrderPort,
     guestActorRef?: string,
+    employeeActorId?: string,
   ): Promise<BenefitRedemption> {
     validateRedeem(input)
     const canonical = await new CustomerRepository(this.transaction).resolveCanonical(input.customerId)
-    await this.assertCurrentTableCustomer(canonical.id, input.tableSessionId,guestActorRef)
+    await this.assertCurrentTableCustomer(
+      canonical.id,input.tableSessionId,guestActorRef,employeeActorId,'loyalty.redemption.fulfill',
+    )
     await this.lockIdempotency(`benefit-redeem:${input.redemptionIdempotencyKey}`)
     const existing = await this.transaction.query<RedemptionRow>(`${redemptionSelectSql()}
       AND redemption.redemption_idempotency_key = $3 LIMIT 1
@@ -468,6 +488,10 @@ export class BenefitRepository {
         tableSessionId: reservation.table_session_id,
         quantity: reservation.quantity,
         benefitSnapshot: benefit.benefit_snapshot,
+        redeemedByEmployeeId: input.redeemedByEmployeeId ?? null,
+        businessDate: input.businessDate ?? '',
+        selectedProductId: input.selectedProductId ?? null,
+        substitutionReason: input.substitutionReason?.trim() || null,
       })
       giftOrderReference = gift.reference
     }
@@ -526,11 +550,14 @@ export class BenefitRepository {
   }
 
   async cancelReservation(
-    input: Readonly<CancelBenefitReservationInput>,guestActorRef?: string,
+    input: Readonly<CancelBenefitReservationInput>,guestActorRef?: string,employeeActorId?: string,
   ): Promise<BenefitReservation> {
     validateCancel(input)
     const canonical = await new CustomerRepository(this.transaction).resolveCanonical(input.customerId)
-    await this.assertCurrentTableCustomer(canonical.id, input.tableSessionId,guestActorRef)
+    await this.assertCurrentTableCustomer(
+      canonical.id,input.tableSessionId,guestActorRef,employeeActorId,
+      input.employeePermission ?? 'benefit.cancel',
+    )
     const reservation = await this.selectReservation(input.benefitReservationId, true)
     if (reservation === null) throw new BenefitReservationNotFoundError(input.benefitReservationId)
     if (reservation.customer_id !== canonical.id || reservation.table_session_id !== input.tableSessionId) {
@@ -602,13 +629,23 @@ export class BenefitRepository {
   }
 
   private async assertCurrentTableCustomer(
-    canonicalCustomerId: string,tableSessionId: string,guestActorRef?: string,
+    canonicalCustomerId: string,tableSessionId: string,guestActorRef?: string,employeeActorId?: string,
+    employeePermission?: 'loyalty.redemption.fulfill' | 'benefit.cancel',
   ): Promise<void> {
     if (guestActorRef!==undefined) {
       if (!await lockBoundGuestTablePosition(this.transaction,{
         tableSessionId,customerId:canonicalCustomerId,actorRef:guestActorRef,
       })) throw new BenefitOwnershipError()
       return
+    }
+    if (employeeActorId!==undefined) {
+      if (employeePermission===undefined) throw new BenefitAuthorizationError(
+        'Employee table benefit action requires an explicit permission',
+      )
+      await new StaffAccessRepository(this.transaction).assertPermission(employeeActorId,employeePermission)
+      await assertEmployeeTableSessionAccess(this.transaction,{
+        employeeId:employeeActorId,tableSessionId,lockTableSession:true,
+      })
     }
     const result=await this.transaction.query<{ participation_id: string | null }>(`
       SELECT mbox.lock_active_table_customer_position($1::uuid,$2::uuid) AS participation_id
@@ -658,6 +695,23 @@ export class BenefitRepository {
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, id])
     return result.rows[0]?.valid === true
   }
+
+  private async assertAnnualDailySnackClaimReservation(
+    benefitId: string, tableSessionId: string, claimId: string | undefined,
+  ): Promise<void> {
+    const result = await this.transaction.query<{
+      id: string; table_session_id: string; status: string
+    }>(`
+      SELECT id,table_session_id,status FROM mbox.annual_daily_snack_claims
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND benefit_id=$3::uuid
+      FOR UPDATE
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, benefitId])
+    const claim = result.rows[0]
+    if (claim === undefined) return
+    if (claimId !== claim.id || claim.table_session_id !== tableSessionId || claim.status !== 'initiated') {
+      throw new BenefitUnavailableError('Daily snack benefits can only be reserved by their original table-side claim')
+    }
+  }
 }
 
 export class BenefitCommandService {
@@ -675,7 +729,11 @@ export class BenefitCommandService {
 
   reserve(input: Readonly<ReserveBenefitCommand>): Promise<CommandExecution<BenefitReservation>> {
     return this.executeBenefit('benefit.reserve', input, reservationCodec, async (repository) => ({
-      result: await repository.reserve(input,input.actor.type==='guest' ? input.actor.ref : undefined),
+      result: await repository.reserve(
+        input,
+        input.actor.type==='guest' ? input.actor.ref : undefined,
+        input.actor.type==='employee' ? input.actor.employeeId : undefined,
+      ),
       action: 'benefit.reserved',
     }))
   }
@@ -684,6 +742,7 @@ export class BenefitCommandService {
     return this.executeBenefit('benefit.redeem', input, redemptionCodec, async (repository) => ({
       result: await repository.redeem(
         input,this.giftOrders,input.actor.type==='guest' ? input.actor.ref : undefined,
+        input.actor.type==='employee' ? input.actor.employeeId : undefined,
       ),
       action: 'benefit.redeemed',
     }))
@@ -699,6 +758,7 @@ export class BenefitCommandService {
     }, reservationCodec, async (repository) => ({
       result: await repository.cancelReservation(
         input,input.actor.type==='guest' ? input.actor.ref : undefined,
+        input.actor.type==='employee' ? input.actor.employeeId : undefined,
       ),
       action: 'benefit.reservation-cancelled',
     }))

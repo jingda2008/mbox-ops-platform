@@ -69,7 +69,21 @@ const CONTENT_TAB_TARGETS = new Set([
   '/pages/home/index', '/pages/reservations/index', '/pages/order/index',
   '/pages/community/index', '/pages/profile/index',
 ])
-const CONTENT_PAGE_TARGETS = new Set(['/pages/performances/index'])
+const CONTENT_PAGE_TARGETS = new Set(['/pages/performances/index', '/pages/brand-story/index'])
+const MBOX_STORY_CARD = Object.freeze({
+  code: 'mbox-story-1999',
+  type: 'article',
+  eyebrow: 'M-BOX 故事',
+  title: '从1999开始',
+  summary: '一座仍在演出的城市档案',
+  imageUrl: '',
+  ctaLabel: '阅读全文',
+  targetPath: '/pages/brand-story/index',
+  displayMode: 'pinned',
+  hasTarget: true,
+  canOpen: true,
+  isMboxStory: true,
+})
 
 function safeContentTarget(value) {
   return CONTENT_TAB_TARGETS.has(value) || CONTENT_PAGE_TARGETS.has(value) ? value : null
@@ -89,19 +103,21 @@ function contentCardView(item) {
     displayMode: item.displayMode === 'pinned' ? 'pinned' : 'rotation',
     hasTarget: Boolean(targetPath && targetPath !== '/pages/home/index'),
     canOpen: true,
+    isMboxStory: String(item.code || '') === MBOX_STORY_CARD.code,
   }
 }
 
 function homepageContentCards(items) {
-  const cards = (items || []).filter((item) => item && item.type !== 'show')
+  // 首页只保留一个固定的品牌故事入口；其他文章类内容不再生成第二张“故事”卡。
+  const cards = (items || []).filter((item) => item && item.type !== 'show' && item.type !== 'article' && item.code !== MBOX_STORY_CARD.code)
     .sort((left, right) => Number(left.priority || 0) - Number(right.priority || 0))
     .map(contentCardView)
   const pinned = cards.filter((item) => item.displayMode === 'pinned')
   const rotating = cards.filter((item) => item.displayMode === 'rotation')
-  if (!rotating.length) return pinned
+  if (!rotating.length) return [MBOX_STORY_CARD].concat(pinned)
   const shanghaiWindow = Math.floor((Date.now() + 8 * 60 * 60 * 1000) / CONTENT_ROTATION_WINDOW_MS)
   const rotationIndex = shanghaiWindow % rotating.length
-  return pinned.concat(rotating[rotationIndex])
+  return [MBOX_STORY_CARD].concat(pinned, rotating[rotationIndex])
 }
 
 function activityFeatureView(item) {
@@ -137,6 +153,7 @@ Page({
     pendingActivityId: '',
     benefitCount: 0,
     upcomingActivity: null,
+    brandStoryCard: null,
     editorialCards: [],
     monthlyPerformanceCard: null,
     upcomingReservation: null,
@@ -191,13 +208,15 @@ Page({
       settled(() => getCustomerBenefits(), []),
     ])
     const app = getApp()
+    const homepageCards = homepageContentCards(bootstrap.content)
     this.setData({
       membership: bootstrap.membership || null,
       membershipTerms: bootstrap.membershipTerms || null,
       membershipInviteVisible: false,
       benefitCount: (benefits || []).reduce((sum, item) => sum + Number(item.quantityAvailable || 0), 0),
       upcomingActivity: activityFeatureView(bootstrap.activities && bootstrap.activities.length ? bootstrap.activities[0] : null),
-      editorialCards: homepageContentCards(bootstrap.content),
+      brandStoryCard: homepageCards.find((item) => item.isMboxStory) || MBOX_STORY_CARD,
+      editorialCards: homepageCards.filter((item) => !item.isMboxStory),
       monthlyPerformanceCard: contentCardView((bootstrap.content || []).find((item) => item && item.type === 'show') || {
         code: 'published-performance-calendar', type: 'show', title: '本月演出安排', summary: '按日期查看门店已发布的演出与舞台阵容', ctaLabel: '查看安排', targetPath: '/pages/performances/index',
       }),
@@ -299,8 +318,13 @@ Page({
   },
 
   openEditorial(event) {
-    const card = this.data.editorialCards.find((item) => item.code === event.currentTarget.dataset.code)
+    const cards = [this.data.brandStoryCard].concat(this.data.editorialCards || []).filter(Boolean)
+    const card = cards.find((item) => item.code === event.currentTarget.dataset.code)
     if (!card) return
+    if (card.isMboxStory) {
+      wx.navigateTo({ url: '/pages/brand-story/index' })
+      return
+    }
     if (card.type === 'article' || !card.hasTarget) {
       this.setData({ editorialPanel: card })
       return

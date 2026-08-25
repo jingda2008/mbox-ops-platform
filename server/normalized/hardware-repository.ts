@@ -44,6 +44,7 @@ export interface PrinterRoute {
 export interface PrintJob {
   id: string
   businessKey: string
+  sourceOutboxMessageId: string
   printerRouteId: string
   printerDeviceId: string
   printerCode: string
@@ -53,6 +54,8 @@ export interface PrintJob {
   productCategoryCode: string | null
   sourceType: 'order' | 'kds' | 'cashier'
   sourceReference: string
+  reprintOfJobId: string | null
+  reprintReason: string | null
   printSnapshot: JsonObject
   containsPriorityNote: boolean
   copies: number
@@ -167,6 +170,7 @@ interface RouteRow extends Record<string, unknown> {
 interface PrintJobRow extends Record<string, unknown> {
   id: string
   business_key: string
+  source_outbox_message_id: string
   printer_route_id: string
   printer_device_id: string
   printer_code: string
@@ -176,6 +180,8 @@ interface PrintJobRow extends Record<string, unknown> {
   product_category_code: string | null
   source_type: 'order' | 'kds' | 'cashier'
   source_reference: string
+  reprint_of_job_id: string | null
+  reprint_reason: string | null
   print_snapshot: JsonObject
   contains_priority_note: boolean
   copies: number
@@ -637,6 +643,64 @@ export class HardwareRepository {
     return result
   }
 
+  /**
+   * A reprint never rewrites, reopens, or retries the original printed job.
+   * It creates a separately auditable task from the immutable snapshot and
+   * adds a visible “补打” note to the new copy.
+   */
+  async reprintPrintJob(
+    jobId: string,
+    employeeId: string,
+    reason: string,
+    idempotencyKey: string,
+  ): Promise<PrintJob> {
+    assertUuid(jobId, 'jobId')
+    assertUuid(employeeId, 'employeeId')
+    const normalizedReason = requireText(reason, 'reason', 3, 1000)
+    const normalizedKey = requireText(idempotencyKey, 'idempotencyKey', 8, 128)
+    const original = await this.getById(jobId, true)
+    if (!original) throw new HardwareNotFoundError('打印任务不存在')
+    if (original.status !== 'printed') {
+      throw new HardwareConflictError('只有已完成打印的小票可以补打；失败任务请使用重试')
+    }
+    const businessKey = reprintBusinessKey(original.id, normalizedKey)
+    const snapshot = reprintSnapshot(original.printSnapshot, normalizedReason)
+    const inserted = await this.transaction.query<{ id: string }>(`
+      INSERT INTO mbox.print_jobs (
+        tenant_id,store_id,business_key,source_outbox_message_id,
+        printer_route_id,printer_device_id,station_code,product_category_code,
+        source_type,source_reference,print_snapshot,contains_priority_note,
+        copies,max_attempts,delivery_mode,print_bridge_id,reprint_of_job_id,reprint_reason
+      )
+      SELECT tenant_id,store_id,$4,source_outbox_message_id,
+        printer_route_id,printer_device_id,station_code,product_category_code,
+        source_type,source_reference,$5::jsonb,contains_priority_note,
+        copies,max_attempts,delivery_mode,print_bridge_id,id,$6
+      FROM mbox.print_jobs
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+      ON CONFLICT (tenant_id,store_id,business_key) DO NOTHING
+      RETURNING id
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      original.id,
+      businessKey,
+      JSON.stringify(snapshot),
+      normalizedReason,
+    ])
+    const reprint = await this.getByBusinessKey(businessKey, true)
+    if (!reprint) throw new HardwareConflictError('补打任务创建后无法读取')
+    if (reprint.reprintOfJobId !== original.id || reprint.reprintReason !== normalizedReason) {
+      throw new HardwareConflictError('补打幂等键与已有请求不一致')
+    }
+    if (inserted.rowCount === 1) {
+      await this.appendPrintJobEvent(
+        reprint.id, 'manual_reprint', null, 'pending', 'employee', employeeId, null, normalizedReason,
+      )
+    }
+    return reprint
+  }
+
   async requestHardwareCommand(input: Readonly<RequestHardwareCommandInput>) {
     assertUuid(input.deviceId, 'deviceId')
     assertUuid(input.requestedByEmployeeId, 'requestedByEmployeeId')
@@ -678,7 +742,7 @@ export class HardwareRepository {
     }
   }
 
-  private async getById(id: string): Promise<PrintJob | null> {
+  async getById(id: string, lock = false): Promise<PrintJob | null> {
     const result = await this.transaction.query<PrintJobRow>(`
       SELECT ${PRINT_JOB_COLUMNS}
       FROM mbox.print_jobs AS job
@@ -686,6 +750,7 @@ export class HardwareRepository {
         ON device.tenant_id = job.tenant_id AND device.store_id = job.store_id
        AND device.id = job.printer_device_id
       WHERE job.tenant_id = $1::uuid AND job.store_id = $2::uuid AND job.id = $3::uuid
+      ${lock ? 'FOR UPDATE OF job' : ''}
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, id])
     return result.rows[0] ? mapPrintJob(result.rows[0]) : null
   }
@@ -733,10 +798,10 @@ export class TrustedPrintOutboxConsumer implements TrustedPrintOutboxConsumerPor
 }
 
 const PRINT_JOB_COLUMNS = `
-  job.id, job.business_key, job.printer_route_id, job.printer_device_id,
+  job.id, job.business_key, job.source_outbox_message_id, job.printer_route_id, job.printer_device_id,
   device.code AS printer_code, device.name AS printer_name,
   device.connectivity_status, job.station_code, job.product_category_code,
-  job.source_type, job.source_reference, job.print_snapshot,
+  job.source_type, job.source_reference, job.reprint_of_job_id, job.reprint_reason, job.print_snapshot,
   job.contains_priority_note, job.copies, job.status, job.available_at,
   job.attempts, job.max_attempts, job.last_error_code, job.printed_at,
   job.created_at, job.updated_at
@@ -781,6 +846,7 @@ function mapPrintJob(row: PrintJobRow): PrintJob {
   return {
     id: row.id,
     businessKey: row.business_key,
+    sourceOutboxMessageId: row.source_outbox_message_id,
     printerRouteId: row.printer_route_id,
     printerDeviceId: row.printer_device_id,
     printerCode: row.printer_code,
@@ -790,6 +856,8 @@ function mapPrintJob(row: PrintJobRow): PrintJob {
     productCategoryCode: row.product_category_code,
     sourceType: row.source_type,
     sourceReference: row.source_reference,
+    reprintOfJobId: row.reprint_of_job_id,
+    reprintReason: row.reprint_reason,
     printSnapshot: row.print_snapshot,
     containsPriorityNote: row.contains_priority_note,
     copies: Number(row.copies),
@@ -802,6 +870,28 @@ function mapPrintJob(row: PrintJobRow): PrintJob {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
+}
+
+function reprintBusinessKey(jobId: string, idempotencyKey: string): string {
+  return `reprint:${jobId}:${createHash('sha256').update(idempotencyKey).digest('hex').slice(0, 32)}`
+}
+
+function reprintSnapshot(snapshot: JsonObject, reason: string): JsonObject {
+  // PrintTicketSnapshot caps notes at 240 characters.  The full, auditable
+  // reason lives in print_jobs.reprint_reason; the copy only needs a compact,
+  // visible marker so the bridge never rejects a valid reprint at render time.
+  const originalNote = typeof snapshot.note === 'string' ? snapshot.note.trim() : ''
+  const visibleReason = truncateText(reason, 120)
+  const combined = originalNote === ''
+    ? `补打：${visibleReason}`
+    : `补打：${visibleReason}\n原备注：${truncateText(originalNote, 100)}`
+  const note = truncateText(combined, 240)
+  return { ...snapshot, note }
+}
+
+function truncateText(value: string, limit: number): string {
+  const characters = [...value.trim()]
+  return characters.length <= limit ? characters.join('') : `${characters.slice(0, Math.max(1, limit - 1)).join('')}…`
 }
 
 function sameMaterialization(job: PrintJob, route: RouteRow, input: Readonly<MaterializePrintJobsInput>) {

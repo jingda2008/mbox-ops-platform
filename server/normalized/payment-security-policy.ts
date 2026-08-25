@@ -1,11 +1,18 @@
 import { createHash } from 'node:crypto'
 import type { JsonObject, JsonValue } from './command-executor.js'
 import type { ScopedTransaction } from './transaction-runner.js'
+import {
+  EmployeeTableAccessDeniedError,
+  assertEmployeeTableSessionAccess,
+} from './employee-table-access.js'
 
 export type PaymentCapability =
   | 'payment.initiate.staff'
   | 'payment.manual.cash.record'
   | 'payment.manual.pos.record'
+  | 'payment.manual.external.record'
+  | 'payment.recollect.authorize'
+  | 'community.activity.cashier'
   | 'refund.request'
   | 'refund.approve'
   | 'refund.execute'
@@ -14,6 +21,12 @@ export interface EmployeeCapabilityAuthorization {
   transaction: ScopedTransaction
   employeeId: string
   capability: Exclude<PaymentCapability, 'refund.approve'>
+}
+
+export interface EmployeeOrderAccessAuthorization {
+  transaction: ScopedTransaction
+  employeeId: string
+  orderId: string
 }
 
 export interface RefundApprovalAuthorization {
@@ -30,6 +43,7 @@ export interface RefundRequestLimitAuthorization {
 
 export interface PaymentCapabilityAuthorizationPort {
   assertEmployeeCapability(input: Readonly<EmployeeCapabilityAuthorization>): Promise<void>
+  assertEmployeeOrderAccess(input: Readonly<EmployeeOrderAccessAuthorization>): Promise<void>
   assertRefundRequestLimit(input: Readonly<RefundRequestLimitAuthorization>): Promise<void>
   assertRefundApproval(input: Readonly<RefundApprovalAuthorization>): Promise<void>
 }
@@ -142,6 +156,40 @@ implements PaymentCapabilityAuthorizationPort {
     }
     if (!row.allowed) {
       throw new PaymentAuthorizationError(`Employee lacks financial capability: ${input.capability}`)
+    }
+  }
+
+  async assertEmployeeOrderAccess(
+    input: Readonly<EmployeeOrderAccessAuthorization>,
+  ): Promise<void> {
+    const result = await input.transaction.query<{ table_session_id: string }>(`
+      SELECT ordering.table_session_id
+      FROM mbox.orders ordering
+      WHERE ordering.tenant_id=$1::uuid AND ordering.store_id=$2::uuid
+        AND ordering.id=$3::uuid
+      FOR SHARE OF ordering
+    `, [
+      input.transaction.scope.tenantId,
+      input.transaction.scope.storeId,
+      input.orderId,
+    ])
+    const tableSessionId = result.rows[0]?.table_session_id
+    if (tableSessionId === undefined) {
+      throw new PaymentAuthorizationError('Employee is not responsible for the order table')
+    }
+    try {
+      await assertEmployeeTableSessionAccess(input.transaction, {
+        employeeId: input.employeeId,
+        tableSessionId,
+        allTablePermissionCodes: ['payment.collect.all_tables'],
+        includeTableViewAll: false,
+        lockTableSession: true,
+      })
+    } catch (error) {
+      if (error instanceof EmployeeTableAccessDeniedError) {
+        throw new PaymentAuthorizationError('Employee is not responsible for the order table')
+      }
+      throw error
     }
   }
 

@@ -62,6 +62,17 @@ async function getMiniBootstrap() { return (await publicRequest('/api/public/min
 async function getPrivacyPolicy() { return (await publicRequest('/api/public/mini/privacy-policy')).data }
 async function getMiniLoyalty() { return (await publicRequest('/api/public/mini/loyalty')).data }
 async function getMiniLoyaltyLedger() { return (await publicRequest('/api/public/mini/loyalty/ledger')).data }
+async function recordBirthdayBenefitConsent(birthdayMonthDay) {
+  return (await publicRequest('/api/public/mini/annual-benefits/birthday-consent', {
+    method: 'PUT', headers: { 'idempotency-key': randomId('birthday-benefit-consent') }, data: { birthdayMonthDay },
+  })).data
+}
+async function withdrawBirthdayBenefitConsent(reason) {
+  return (await publicRequest('/api/public/mini/annual-benefits/birthday-consent/withdraw', {
+    method: 'POST', headers: { 'idempotency-key': randomId('birthday-benefit-consent-withdraw') },
+    data: { reason: reason || '顾客本人撤回生日礼遇授权' },
+  })).data
+}
 async function getNotificationConsent() { return (await publicRequest('/api/public/mini/notification-consent')).data }
 async function recordNotificationConsent(input) {
   return (await publicRequest('/api/public/mini/notification-consent', {
@@ -363,6 +374,7 @@ async function updatePreferences(preferences, displayName) {
 }
 async function registerActivity(
   activityPublicId,
+  activityPackagePublicId,
   partySize,
   contactSnapshot,
   termsAcknowledged,
@@ -376,6 +388,7 @@ async function registerActivity(
     method: 'POST', headers: { 'idempotency-key': idempotencyKey || randomId('activity-register') },
     data: Object.assign(
       {
+        activityPackagePublicId: activityPackagePublicId || null,
         partySize,
         contactSnapshot,
         termsAcknowledged,
@@ -551,10 +564,22 @@ async function checkout(items, checkoutUpgradeOfferPublicId, idempotencyKey, rec
   })
 }
 async function getSharedCart() { return (await request('/api/guest/shared-cart')).data }
-async function adjustSharedCart(productId, delta, expectedVersion, idempotencyKey) {
+async function adjustSharedCart(productId, delta, expectedGeneration, expectedVersion, idempotencyKey) {
   return (await request('/api/guest/shared-cart/lines', {
     method: 'POST', headers: { 'idempotency-key': idempotencyKey || randomId('shared-cart-adjust') },
-    data: { productId, delta, expectedVersion },
+    data: { productId, delta, expectedGeneration, expectedVersion },
+  })).data
+}
+async function removeSharedCartLine(productId, expectedGeneration, expectedVersion, idempotencyKey) {
+  return (await request(`/api/guest/shared-cart/lines/${encodeURIComponent(productId)}`, {
+    method: 'DELETE', headers: { 'idempotency-key': idempotencyKey || randomId('shared-cart-remove') },
+    data: { expectedGeneration, expectedVersion },
+  })).data
+}
+async function clearSharedCart(expectedGeneration, expectedVersion, idempotencyKey) {
+  return (await request('/api/guest/shared-cart/clear', {
+    method: 'POST', headers: { 'idempotency-key': idempotencyKey || randomId('shared-cart-clear') },
+    data: { expectedGeneration, expectedVersion },
   })).data
 }
 async function checkoutSharedCart(input, idempotencyKey) {
@@ -565,6 +590,7 @@ async function checkoutSharedCart(input, idempotencyKey) {
   return request('/api/guest/shared-cart/checkout', {
     method: 'POST', headers: { 'idempotency-key': idempotencyKey || randomId('shared-cart-checkout') },
     data: {
+      expectedGeneration: input.expectedGeneration,
       expectedVersion: input.expectedVersion,
       confirmedDuplicateOrderId: input.confirmedDuplicateOrderId || null,
       checkoutUpgradeOfferPublicId: input.checkoutUpgradeOfferPublicId || null,
@@ -611,6 +637,11 @@ async function reserveCustomerBenefit(benefitId, quantity) {
     method: 'POST', headers: { 'idempotency-key': randomId(`guest-benefit-${benefitId}`) }, data: { quantity: quantity || 1 },
   })).data
 }
+async function claimAnnualDailySnack() {
+  return (await request('/api/guest/customer/annual-daily-snacks/claim', {
+    method: 'POST', headers: { 'idempotency-key': randomId('annual-daily-snack') }, data: {},
+  })).data
+}
 async function cancelActivityRegistration(registrationPublicId, reason, idempotencyKey) {
   return (await publicRequest(`/api/public/mini/activity-registrations/${encodeURIComponent(registrationPublicId)}/cancel`, {
     method: 'POST', headers: { 'idempotency-key': idempotencyKey || randomId(`activity-cancel-${registrationPublicId}`) },
@@ -651,6 +682,7 @@ async function logoutWechatIdentity() {
 
 module.exports = {
   getGuestSession, getMiniBootstrap, getPrivacyPolicy, getMiniLoyalty, getMiniLoyaltyLedger,
+  recordBirthdayBenefitConsent, withdrawBirthdayBenefitConsent,
   getNotificationConsent, recordNotificationConsent,
   getWechatNotificationAuthorizations, recordWechatNotificationAuthorization,
   getProductRestrictions, withdrawProductRestriction,
@@ -667,8 +699,8 @@ module.exports = {
   getReservationPerformanceNotificationAuthorizations,
   recordReservationPerformanceNotificationAuthorization,
   getMenu, getPublicMenu, recommendExperience, recordRecommendationEvent, prepareCheckoutUpgrade, recordCheckoutUpgradeEvent,
-  checkout, getSharedCart, adjustSharedCart, checkoutSharedCart, getTableOrders, retryOrderPayment,
+  checkout, getSharedCart, adjustSharedCart, removeSharedCartLine, clearSharedCart, checkoutSharedCart, getTableOrders, retryOrderPayment,
   createServiceTask, getServiceRequests, actOnServiceTask,
-  getCustomerBenefits, getCustomerProfile, reserveCustomerBenefit, submitSongRequest, getTodayPerformances,
+  getCustomerBenefits, getCustomerProfile, reserveCustomerBenefit, claimAnnualDailySnack, submitSongRequest, getTodayPerformances,
   logoutWechatIdentity,
 }

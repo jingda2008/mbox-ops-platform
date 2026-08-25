@@ -92,6 +92,7 @@ export interface GuestSharedCart {
   generation: number
   version: number
   status: 'open' | 'submitting' | 'submitted' | 'expired'
+  guestWritesFrozen: boolean
   lines: Array<{
     productId: string
     name: string
@@ -100,6 +101,7 @@ export interface GuestSharedCart {
     subtotalAmountMinor: number | null
     currency: string | null
     available: boolean
+    unavailableReason: string | null
   }>
   totalAmountMinor: number | null
   currency: string | null
@@ -115,6 +117,7 @@ export interface GuestTableOrder {
   publicId: string
   round: number
   channel: 'guest_qr' | 'staff_assisted' | 'cashier' | 'reservation' | 'integration'
+  sourceText: string
   status: 'submitted' | 'confirmed' | 'fulfilling' | 'completed'
   visibility: 'shared'
   isMine: boolean
@@ -266,7 +269,7 @@ export class GuestApiClient {
   }
 
   async adjustSharedCart(
-    input: Readonly<{ productId: string; delta: number; expectedVersion: number }>,
+    input: Readonly<{ productId: string; delta: number; expectedGeneration: number; expectedVersion: number }>,
     options: Readonly<RequestOptions> & { idempotencyKey: string },
   ): Promise<GuestSharedCart> {
     const body = await this.request<unknown>('/api/guest/shared-cart/lines', {
@@ -277,8 +280,22 @@ export class GuestApiClient {
     return data
   }
 
+  async removeSharedCartLine(
+    input:Readonly<{ productId:string;expectedGeneration:number;expectedVersion:number }>,
+    options:Readonly<RequestOptions>&{ idempotencyKey:string },
+  ):Promise<GuestSharedCart> {
+    const body=await this.request<unknown>(`/api/guest/shared-cart/lines/${encodeURIComponent(input.productId)}`,{
+      method:'DELETE',body:{ expectedGeneration:input.expectedGeneration,expectedVersion:input.expectedVersion },
+      signal:options.signal,idempotencyKey:options.idempotencyKey,
+    })
+    const data=responseData(body)
+    if (!isSharedCart(data)) throw invalidResponse()
+    return data
+  }
+
   async checkoutSharedCart(
     input: Readonly<{
+      expectedGeneration: number
       expectedVersion: number
       note: string | null
       confirmedDuplicateOrderId?: string
@@ -354,7 +371,7 @@ export class GuestApiClient {
   private async request<Data>(
     url: string,
     options: Readonly<{
-      method: 'GET' | 'POST'
+      method: 'GET' | 'POST' | 'DELETE'
       body?: unknown
       signal?: AbortSignal
       idempotencyKey?: string
@@ -445,6 +462,7 @@ function isSharedCart(value: unknown): value is GuestSharedCart {
     && Number.isSafeInteger(value.generation)
     && Number.isSafeInteger(value.version)
     && ['open', 'submitting', 'submitted', 'expired'].includes(String(value.status))
+    && typeof value.guestWritesFrozen === 'boolean'
     && Array.isArray(value.lines)
     && value.lines.every((line) => isObject(line)
       && typeof line.productId === 'string'
@@ -453,7 +471,8 @@ function isSharedCart(value: unknown): value is GuestSharedCart {
       && (line.unitPriceMinor === null || Number.isSafeInteger(line.unitPriceMinor))
       && (line.subtotalAmountMinor === null || Number.isSafeInteger(line.subtotalAmountMinor))
       && (line.currency === null || typeof line.currency === 'string')
-      && typeof line.available === 'boolean')
+      && typeof line.available === 'boolean'
+      && (line.unavailableReason === null || typeof line.unavailableReason === 'string'))
     && (value.totalAmountMinor === null || Number.isSafeInteger(value.totalAmountMinor))
     && (value.currency === null || typeof value.currency === 'string')
     && typeof value.updatedAt === 'string'
@@ -517,6 +536,7 @@ function isTableOrder(value: unknown): value is GuestTableOrder {
     && typeof value.publicId === 'string'
     && Number.isSafeInteger(value.round)
     && typeof value.channel === 'string'
+    && typeof value.sourceText === 'string'
     && typeof value.status === 'string'
     && value.visibility === 'shared'
     && typeof value.isMine === 'boolean'

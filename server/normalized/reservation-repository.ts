@@ -56,6 +56,8 @@ export interface Reservation {
   reservationPolicyVersion: number
   reservationPolicyAcknowledgedVersion: number
   preferredScheduleId: string | null
+  annualPriorityRuleId?: string | null
+  annualPriorityHoldMinutes?: number | null
   tableLocks: ReservationTableLock[]
 }
 
@@ -83,6 +85,8 @@ export interface CreateReservationInput {
   reservationPolicyVersion: number
   reservationPolicyAcknowledgedVersion?: number
   preferredScheduleId?: string | null
+  annualPriorityRuleId?: string | null
+  annualPriorityHoldMinutes?: number | null
 }
 
 export interface ReservationMutationResult {
@@ -115,6 +119,8 @@ interface ReservationRow extends Record<string, unknown> {
   reservation_policy_version: string | number
   reservation_policy_acknowledged_version: string | number
   preferred_schedule_id: string | null
+  annual_priority_rule_id: string | null
+  annual_priority_hold_minutes: number | null
 }
 
 interface ReservationLockRow extends Record<string, unknown> {
@@ -258,19 +264,21 @@ export class ReservationRepository {
         arrival_at, expected_end_at, status, source, owner_employee_id, note,
         reservation_snapshot, customer_cancel_until, cancellation_policy_snapshot,
         request_hold_expires_at, arrival_grace_ends_at, reservation_policy_version,
-        reservation_policy_acknowledged_version, preferred_schedule_id, seat_preference
+        reservation_policy_acknowledged_version, preferred_schedule_id, seat_preference,
+        annual_priority_rule_id, annual_priority_hold_minutes
       ) VALUES (
         $1::uuid, $2::uuid, $3, $4::uuid, $5, $6, $7,
         $8::timestamptz, $9::timestamptz, $10, $11, $12::uuid, $13, $14::jsonb,
         $15::timestamptz, $16::jsonb, $17::timestamptz, $18::timestamptz, $19::integer,
-        $20::integer, $21::uuid, $22
+        $20::integer, $21::uuid, $22, $23::uuid, $24::smallint
       )
       RETURNING id, public_id, customer_id, customer_name, contact_token, guest_count,
         arrival_at::text, expected_end_at::text, status, source, owner_employee_id,
         note, reservation_snapshot, seat_preference, created_at::text, updated_at::text,
         aggregate_version, customer_cancel_until::text, cancellation_policy_snapshot,
         request_hold_expires_at::text, arrival_grace_ends_at::text, reservation_policy_version,
-        reservation_policy_acknowledged_version, preferred_schedule_id
+        reservation_policy_acknowledged_version, preferred_schedule_id,
+        annual_priority_rule_id, annual_priority_hold_minutes
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -294,6 +302,8 @@ export class ReservationRepository {
       input.reservationPolicyAcknowledgedVersion ?? input.reservationPolicyVersion ?? 1,
       input.preferredScheduleId ?? null,
       input.seatPreference ?? 'no_preference',
+      input.annualPriorityRuleId ?? null,
+      input.annualPriorityHoldMinutes ?? null,
     ])
     const reservationRow = inserted.rows[0]
     if (inserted.rowCount !== 1 || reservationRow === undefined) {
@@ -451,7 +461,8 @@ export class ReservationRepository {
         note, reservation_snapshot, seat_preference, created_at::text, updated_at::text,
         aggregate_version, customer_cancel_until::text, cancellation_policy_snapshot,
         request_hold_expires_at::text, arrival_grace_ends_at::text, reservation_policy_version,
-        reservation_policy_acknowledged_version, preferred_schedule_id
+        reservation_policy_acknowledged_version, preferred_schedule_id,
+        annual_priority_rule_id, annual_priority_hold_minutes
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -507,7 +518,7 @@ export class ReservationRepository {
         r.customer_cancel_until::text, r.cancellation_policy_snapshot,
         r.request_hold_expires_at::text, r.arrival_grace_ends_at::text,
         r.reservation_policy_version, r.reservation_policy_acknowledged_version,
-        r.preferred_schedule_id
+        r.preferred_schedule_id, r.annual_priority_rule_id, r.annual_priority_hold_minutes
       FROM mbox.reservations AS r
       WHERE r.tenant_id = $1::uuid AND r.store_id = $2::uuid AND ${predicate}
       ${lock}
@@ -542,6 +553,8 @@ function mapReservation(row: ReservationRow, locks: readonly ReservationLockRow[
     reservationPolicyVersion: Number(row.reservation_policy_version),
     reservationPolicyAcknowledgedVersion: Number(row.reservation_policy_acknowledged_version),
     preferredScheduleId: row.preferred_schedule_id,
+    annualPriorityRuleId: row.annual_priority_rule_id,
+    annualPriorityHoldMinutes: row.annual_priority_hold_minutes,
     tableLocks: locks.map((lock) => ({
       id: lock.id,
       reservationId: lock.reservation_id,

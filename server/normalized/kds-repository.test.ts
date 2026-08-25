@@ -144,6 +144,7 @@ function taskRow(status: KdsStatus): Record<string, unknown> {
   return {
     id: taskId,
     order_item_id: itemId,
+    remake_of_task_id: null,
     station_code: 'bar',
     status,
     priority: 100,

@@ -5,6 +5,7 @@ import {
   FULFILLMENT_VIEW_ALL_PERMISSION,
   FulfillmentQueryService,
   KDS_DELIVER_PERMISSION,
+  KDS_EXCEPTION_MANAGE_PERMISSION,
   KDS_PREPARE_PERMISSION,
   KDS_STATION_SCOPE,
 } from './fulfillment-query-service.js'
@@ -54,7 +55,7 @@ describe('FulfillmentQueryService', () => {
     })
 
     const query = fulfillmentCall(fixture.client)
-    expect(query.values.slice(3)).toEqual([false, ['bar'], true, false, '2026-08-11'])
+    expect(query.values.slice(3)).toEqual([false, ['bar'], true, false, '2026-08-11', false, false, ['bar']])
     expect(query.sql).toContain("(assignment.assignment_type IN ('primary', 'backup')) DESC")
     expect(query.sql).toContain("task.status = 'ready'")
     expect(query.sql).toContain('task.priority DESC')
@@ -90,7 +91,7 @@ describe('FulfillmentQueryService', () => {
       canDeliver: true,
       table: { assignmentType: 'backup' },
     })
-    expect(fulfillmentCall(fixture.client).values.slice(3)).toEqual([false, [], false, true, '2026-08-11'])
+    expect(fulfillmentCall(fixture.client).values.slice(3)).toEqual([false, [], false, true, '2026-08-11', false, false, []])
   })
 
   it('lets an unassigned delivery-capable employee take a ready item without exposing production work', async () => {
@@ -142,7 +143,39 @@ describe('FulfillmentQueryService', () => {
       canPrepare: false,
       canDeliver: false,
     })
-    expect(fulfillmentCall(fixture.client).values.slice(3)).toEqual([true, [], false, false, '2026-08-11'])
+    expect(fulfillmentCall(fixture.client).values.slice(3)).toEqual([true, [], false, false, '2026-08-11', false, true, []])
+  })
+
+  it('keeps a failed task visible only to an assigned employee with the narrow remake capability', async () => {
+    const fixture = scriptedService([
+      employeeRow(actorId, 'BAR02', '吧台同事'),
+      rows([{ code: 'BARTENDER', name: '调酒师' }]),
+      permissionRows(KDS_EXCEPTION_MANAGE_PERMISSION),
+      rows([{
+        scope_key: KDS_STATION_SCOPE, effect: 'include', value_kind: 'text_set', boolean_value: null, text_value: null, text_values: ['bar'],
+      }]),
+      rows([]),
+      rows([]),
+      rows([fulfillmentRow({
+        kds_status: 'failed',
+        can_remake: true,
+        assignment_type: 'primary',
+      })]),
+    ])
+
+    const result = await fixture.service.getStaffWorkQueue({ tenantId, storeId }, actorId, '2026-08-11')
+
+    expect(result.workItems[0]).toMatchObject({
+      kdsStatus: 'failed',
+      canPrepare: false,
+      canDeliver: false,
+      canRemake: true,
+      table: { assignmentType: 'primary' },
+    })
+    expect(fulfillmentCall(fixture.client).values.slice(3)).toEqual([
+      false, [], false, false, '2026-08-11', true, false, ['bar'],
+    ])
+    expect(fulfillmentCall(fixture.client).sql).toContain("exception.status IN ('open', 'remediating')")
   })
 })
 
@@ -326,6 +359,7 @@ function fulfillmentRow(overrides: Record<string, unknown> = {}): Record<string,
     ready_for_delivery: false,
     can_prepare: false,
     can_deliver: false,
+    can_remake: false,
     due_at: '2026-08-11T12:00:00.000Z',
     next_action_at: '2026-08-11T11:59:00.000Z',
     task_created_at: '2026-08-11T11:58:00.000Z',

@@ -81,11 +81,20 @@ import {
   type SettleCancelledUnpaidOrderInput,
   type SettleCancelledUnpaidOrderResult,
 } from './order-settlement-exception-repository.js'
+import {
+  RecollectionAuthorizationConflictError,
+  RecollectionAuthorizationRequiredError,
+} from './recollection-authorization-repository.js'
+import {
+  ActivityRecollectionAuthorizationConflictError,
+  ActivityRecollectionAuthorizationRequiredError,
+} from './activity-recollection-authorization-repository.js'
 
 type PaymentCommandPort = Pick<
   PaymentCommandService,
   | 'initiate'
   | 'recordManual'
+  | 'recordManualActivity'
   | 'recordSucceededCallback'
   | 'recordProviderQueryResult'
   | 'requestRefund'
@@ -94,6 +103,8 @@ type PaymentCommandPort = Pick<
   | 'beginRefundExecution'
   | 'recordProviderRefundResult'
   | 'recordManualRefundResult'
+  | 'authorizeRecollection'
+  | 'authorizeActivityRecollection'
 >
 
 type OnlinePaymentProvider = Extract<PaymentProvider, 'wechat' | 'postar' | 'simulation'>
@@ -204,6 +215,7 @@ export interface PaymentApiOptions {
     | 'requestRefund' | 'queryRefund' | 'listStalePendingPostarPaymentIds'
   > & Partial<Pick<OnlinePaymentService, 'readInitiatedPaymentStatus'>>
   resolveOnlinePaymentAvailable?: (scope: Readonly<StoreScope>) => Promise<boolean>
+  onlinePaymentProvider?: 'postar' | 'simulation' | null
   resolveActorContext(request: FastifyRequest): Promise<PaymentApiActorContext> | PaymentApiActorContext
   resolveStaffContext(request: FastifyRequest): Promise<PaymentApiStaffContext> | PaymentApiStaffContext
   resolveProviderBusinessDate(
@@ -281,6 +293,9 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
     const customerAuthCode = method === 'auth_code'
       ? readString(body.customerAuthCode, 'customerAuthCode', 32, 16)
       : undefined
+    const customerAuthCodeHash = customerAuthCode === undefined
+      ? null
+      : createHash('sha256').update('mbox:payment-auth-code:v1:').update(customerAuthCode).digest('hex')
     const principal = paymentInitiationPrincipal(context)
     let execution: CommandExecution<Payment>
     try {
@@ -290,6 +305,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
           publicId,
           provider,
           method,
+          customerAuthCodeHash,
           providerSnapshot: providerSnapshot ?? null,
           principal: principalToJson(principal),
         }),
@@ -319,6 +335,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       principal,
       clientIp: request.ip,
       operatorId: context.actor.type === 'employee' ? context.actor.employeeId : 'MBOXGUEST',
+      idempotencyKey,
       ...(customerAuthCode === undefined ? {} : { customerAuthCode }),
     })
     return reply.code(execution.replayed ? 200 : 201).send(paymentExecutionResponse(execution, action))
@@ -331,13 +348,18 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
     const provider = readManualProvider(body.provider)
     const method = readManualMethod(body.method)
     assertManualMethod(provider, method)
-    const occurredAt = readTimestamp(body.occurredAt, 'occurredAt')
     const evidence: JsonObject = {
-      receiptReference: readString(body.receiptReference, 'receiptReference', 256),
+      receiptReference: readString(body.receiptReference, 'receiptReference', 256, 3),
       collectedByEmployeeId: context.employeeId,
       ...(body.terminalId === undefined
         ? {}
         : { terminalId: readString(body.terminalId, 'terminalId', 128) }),
+      ...(provider === 'external_manual'
+        ? {
+            externalMethodCode: readExternalManualMethodCode(body.externalMethodCode),
+            collectionNote: readString(body.collectionNote, 'collectionNote', 500, 2),
+          }
+        : {}),
     }
     const idempotencyKey = readIdempotencyKey(request)
     const publicId = readOptionalString(body.publicId, 'publicId', 128, 8)
@@ -350,17 +372,109 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
         provider,
         method,
         evidence,
-        occurredAt,
       }),
       orderId,
       publicId,
       provider,
       method,
       evidence,
-      occurredAt,
     })
     return reply.code(execution.replayed ? 200 : 201).send(executionResponse(execution))
   }))
+
+  /**
+   * Activities deliberately use a separate payable kind from table orders.
+   * Keep their staff-only manual collection endpoint beside the general
+   * cashier endpoints so cash/POS/other money is never recorded as an order.
+   */
+  app.post<{ Params: { registrationPublicId: string } }>(
+    '/activity-registrations/:registrationPublicId/manual-collections',
+    async (request, reply) => handleRoute(reply, async () => {
+      const context = await resolveStaffContext(options, request)
+      requireStaffCapability(context, 'community.activity.cashier')
+      const body = readObject(request.body, '请求正文')
+      assertActorBinding(body, context.actor)
+      const provider = readManualProvider(body.provider)
+      const method = readManualMethod(body.method)
+      assertManualMethod(provider, method)
+      const evidence: JsonObject = {
+        receiptReference: readString(body.receiptReference, 'receiptReference', 256, 3),
+        collectedByEmployeeId: context.employeeId,
+        ...(body.terminalId === undefined
+          ? {}
+          : { terminalId: readString(body.terminalId, 'terminalId', 128) }),
+        ...(provider === 'external_manual'
+          ? {
+              externalMethodCode: readExternalManualMethodCode(body.externalMethodCode),
+              collectionNote: readString(body.collectionNote, 'collectionNote', 500, 2),
+            }
+          : {}),
+      }
+      const idempotencyKey = readIdempotencyKey(request)
+      const registrationPublicId = readString(
+        request.params.registrationPublicId,
+        'registrationPublicId',
+        128,
+        8,
+      )
+      const publicId = readOptionalString(body.publicId, 'publicId', 128, 8)
+        ?? createPublicId('payment')
+      const execution = await options.commands.recordManualActivity({
+        ...metadata(request, context, idempotencyKey, {
+          registrationPublicId,
+          publicId,
+          provider,
+          method,
+          evidence,
+        }),
+        registrationPublicId,
+        publicId,
+        provider,
+        method,
+        evidence,
+      })
+      return reply.code(execution.replayed ? 200 : 201).send(executionResponse(execution))
+    }),
+  )
+
+  app.post<{ Params: { orderId: string } }>('/orders/:orderId/recollection-authorizations', async (request, reply) => handleRoute(reply, async () => {
+    const context = await resolveStaffContext(options, request)
+    const body = readObject(request.body, '请求正文')
+    assertActorBinding(body, context.actor)
+    const orderId = readUuid(request.params.orderId, 'orderId')
+    const reason = readString(body.reason, 'reason', 500, 4)
+    const idempotencyKey = readIdempotencyKey(request)
+    const execution = await options.commands.authorizeRecollection({
+      ...metadata(request, context, idempotencyKey, { orderId, reason }),
+      orderId,
+      reason,
+    })
+    return reply.code(execution.replayed ? 200 : 201).send(executionResponse(execution))
+  }))
+
+  app.post<{ Params: { registrationPublicId: string } }>(
+    '/activity-registrations/:registrationPublicId/recollection-authorizations',
+    async (request, reply) => handleRoute(reply, async () => {
+      const context = await resolveStaffContext(options, request)
+      requireStaffCapability(context, 'community.activity.cashier')
+      const body = readObject(request.body, '请求正文')
+      assertActorBinding(body, context.actor)
+      const registrationPublicId = readString(
+        request.params.registrationPublicId,
+        'registrationPublicId',
+        128,
+        8,
+      )
+      const reason = readString(body.reason, 'reason', 500, 4)
+      const idempotencyKey = readIdempotencyKey(request)
+      const execution = await options.commands.authorizeActivityRecollection({
+        ...metadata(request, context, idempotencyKey, { registrationPublicId, reason }),
+        registrationPublicId,
+        reason,
+      })
+      return reply.code(execution.replayed ? 200 : 201).send(executionResponse(execution))
+    }),
+  )
 
   app.post<{ Params: { paymentId: string } }>(
     '/payments/:paymentId/provider-query',
@@ -635,7 +749,6 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       const refundId = readUuid(request.params.refundId, 'refundId')
       const succeeded = readBoolean(body.succeeded, 'succeeded')
       const receiptReference = readString(body.receiptReference, 'receiptReference', 256)
-      const occurredAt = readTimestamp(body.occurredAt, 'occurredAt')
       const providerSnapshot: JsonObject = {
         receiptReference,
         collectedByEmployeeId: context.employeeId,
@@ -648,13 +761,11 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
           succeeded,
           receiptReference,
           providerSnapshot: providerSnapshot ?? null,
-          occurredAt,
         }),
         refundId,
         succeeded,
         receiptReference,
         providerSnapshot,
-        occurredAt,
       })
       return reply.send(executionResponse(execution))
     }),
@@ -746,9 +857,11 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       'payment.settlement.view',
       'payment.manual.cash.record',
       'payment.manual.pos.record',
+      'payment.manual.external.record',
       'refund.request',
       'refund.approve',
       'refund.execute',
+      'community.activity.cashier',
       'business_day.close',
     ])
     const query = readObject(request.query, '查询参数')
@@ -775,7 +888,18 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       query: readOptionalString(query.query, 'query', 64) ?? undefined,
       limit: query.limit === undefined ? 50 : readInteger(query.limit, 'limit', 1, 100),
     })
-    return reply.send({ data: result })
+    const onlinePaymentEnabled = options.onlinePaymentProvider !== null
+      && options.onlinePaymentProvider !== undefined
+      && (options.resolveOnlinePaymentAvailable === undefined
+        || await options.resolveOnlinePaymentAvailable(context.scope))
+    return reply.send({ data: {
+      ...result,
+      actions: {
+        ...result.actions,
+        canInitiateOnlinePayment: result.actions.canInitiateOnlinePayment && onlinePaymentEnabled,
+        onlinePaymentProvider: onlinePaymentEnabled ? options.onlinePaymentProvider ?? null : null,
+      },
+    } })
   }))
 
   app.post<{ Params: { orderId: string } }>('/orders/:orderId/cancel-unpaid', async (request, reply) => (
@@ -1216,9 +1340,20 @@ function readCallbackProvider(value: unknown): Extract<OnlinePaymentProvider, 'w
   throw new PaymentProviderVerificationError('不支持的支付机构通知')
 }
 
-function readManualProvider(value: JsonValue | undefined): 'cash' | 'physical_pos' {
-  if (value === 'cash' || value === 'physical_pos') return value
-  throw new PaymentApiRequestError('人工收款provider必须是cash或physical_pos')
+function readManualProvider(value: JsonValue | undefined): 'cash' | 'physical_pos' | 'external_manual' {
+  if (value === 'cash' || value === 'physical_pos' || value === 'external_manual') return value
+  throw new PaymentApiRequestError('人工收款provider必须是cash、physical_pos或external_manual')
+}
+
+function readExternalManualMethodCode(
+  value: JsonValue | undefined,
+): 'bank_transfer' | 'mobile_wallet' | 'stored_value_voucher' | 'corporate_account' | 'other' {
+  if (value === 'bank_transfer'
+    || value === 'mobile_wallet'
+    || value === 'stored_value_voucher'
+    || value === 'corporate_account'
+    || value === 'other') return value
+  throw new PaymentApiRequestError('系统外收款方式无效')
 }
 
 function readOnlineMethod(value: JsonValue | undefined): 'jsapi' | 'native_qr' | 'auth_code' {
@@ -1240,12 +1375,18 @@ function assertOnlineMethod(
   throw new PaymentApiRequestError('支付机构与支付方式不匹配')
 }
 
-function assertManualMethod(provider: 'cash' | 'physical_pos', method: 'cash' | 'card' | 'manual'): void {
+function assertManualMethod(
+  provider: 'cash' | 'physical_pos' | 'external_manual',
+  method: 'cash' | 'card' | 'manual',
+): void {
   if (provider === 'cash' && method !== 'cash') {
     throw new PaymentApiRequestError('现金收款必须使用cash方式')
   }
   if (provider === 'physical_pos' && method === 'cash') {
     throw new PaymentApiRequestError('物理POS不能使用cash方式')
+  }
+  if (provider === 'external_manual' && method !== 'manual') {
+    throw new PaymentApiRequestError('系统外收款必须使用manual方式')
   }
 }
 
@@ -1436,6 +1577,18 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   }
   if (error instanceof RefundNotFoundError) return apiError(404, 'REFUND_NOT_FOUND', error.message)
   if (error instanceof OrderNotPayableError) return apiError(409, 'ORDER_NOT_PAYABLE', error.message)
+  if (error instanceof RecollectionAuthorizationRequiredError) {
+    return apiError(409, 'REFUND_RECOLLECTION_AUTHORIZATION_REQUIRED', error.message)
+  }
+  if (error instanceof RecollectionAuthorizationConflictError) {
+    return apiError(409, 'REFUND_RECOLLECTION_AUTHORIZATION_CONFLICT', error.message)
+  }
+  if (error instanceof ActivityRecollectionAuthorizationRequiredError) {
+    return apiError(409, 'ACTIVITY_REFUND_RECOLLECTION_AUTHORIZATION_REQUIRED', error.message)
+  }
+  if (error instanceof ActivityRecollectionAuthorizationConflictError) {
+    return apiError(409, 'ACTIVITY_REFUND_RECOLLECTION_AUTHORIZATION_CONFLICT', error.message)
+  }
   if (error instanceof ProviderPaymentInProgressError) {
     return apiError(409, 'PAYMENT_IN_PROGRESS', error.message)
   }

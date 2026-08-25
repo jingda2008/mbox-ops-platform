@@ -54,6 +54,13 @@ describe('staff actions model', () => {
     expect(fulfillmentAction(items[3]!)).toBeNull()
   })
 
+  it('keeps a failed production task actionable when the current employee has remake permission', () => {
+    const failed = fulfillmentItem({ taskId: 'failed', kdsStatus: 'failed', canRemake: true })
+
+    expect(fulfillmentAction(failed)).toBe('remake')
+    expect(actionableFulfillmentItems([failed])).toEqual([failed])
+  })
+
   it('presents guest mood as a compact table marker instead of an action', () => {
     expect(tableMoodPresentation('happy')).toEqual({ symbol: '☺', label: '开心' })
     expect(tableMoodPresentation('quiet')).toEqual({ symbol: '☾', label: '安静' })
@@ -110,7 +117,7 @@ function serviceTask(input: Partial<StaffServiceTask>): StaffServiceTask {
 function fulfillmentItem(input: Partial<StaffFulfillmentItem>): StaffFulfillmentItem {
   return {
     taskId: 'kds-1', stationCode: 'bar', kdsStatus: 'pending', priority: 1, overdue: false,
-    readyForDelivery: false, canPrepare: false, canDeliver: false, dueAt: null,
+    readyForDelivery: false, canPrepare: false, canDeliver: false, canRemake: false, dueAt: null,
     nextActionAt: '2026-08-11T12:05:00.000Z', createdAt: '2026-08-11T12:00:00.000Z',
     item: { productName: '鸡尾酒', quantity: 1, note: null },
     order: { publicId: 'order-1', note: null },

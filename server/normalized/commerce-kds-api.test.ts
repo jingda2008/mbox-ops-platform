@@ -55,6 +55,7 @@ const submittedOrderItem: OrderItem = {
 const baseTask: KdsTask = {
   id: taskId,
   orderItemId,
+  remakeOfTaskId: null,
   stationCode: 'bar',
   status: 'pending',
   priority: 100,
@@ -212,6 +213,7 @@ function fixture(input: {
         return rows([{
           id: taskId,
           order_item_id: orderItemId,
+          remake_of_task_id: null,
           station_code: 'bar',
           status: currentTask.status,
           priority: currentTask.priority,
@@ -224,6 +226,16 @@ function fixture(input: {
           cancelled_at: currentTask.cancelledAt,
           created_at: '2026-08-11T12:00:00.000Z',
         }]) as PostgresQueryResult<Row>
+      }
+      if (sql.includes('FROM mbox.kds_exceptions AS exception')) {
+        return rows([{
+          id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+          reason_code: 'ingredient_out_of_stock',
+          reason_note: '青柠临时缺货',
+        }]) as PostgresQueryResult<Row>
+      }
+      if (sql.startsWith('SELECT item.status FROM mbox.order_items AS item')) {
+        return rows([{ status: 'preparing' }]) as PostgresQueryResult<Row>
       }
       if (sql.includes('FROM mbox.order_items AS item')) {
         return rows([{
@@ -260,7 +272,22 @@ function fixture(input: {
       if (sql.includes('FROM mbox.table_assignments AS assignment')) {
         return rows([{ id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' }]) as PostgresQueryResult<Row>
       }
+      if (sql.includes('FROM mbox.inventory_order_reservations')) {
+        return rows([]) as PostgresQueryResult<Row>
+      }
+      if (sql.includes('FROM mbox.kds_remake_inventory_reservations')) {
+        return rows([]) as PostgresQueryResult<Row>
+      }
+      if (sql.startsWith('UPDATE mbox.kds_tasks SET status=')) {
+        return { rows: [] as Row[], rowCount: 1 }
+      }
+      if (sql.startsWith('INSERT INTO mbox.kds_task_events')) {
+        return { rows: [] as Row[], rowCount: 1 }
+      }
       if (sql.startsWith('INSERT INTO mbox.kds_exceptions')) {
+        return { rows: [] as Row[], rowCount: 1 }
+      }
+      if (sql.startsWith('UPDATE mbox.kds_exceptions')) {
         return { rows: [] as Row[], rowCount: 1 }
       }
       if (sql.includes('FROM mbox.role_approval_limits') || sql.includes('FROM mbox.role_navigation_items')) {
@@ -290,12 +317,18 @@ function fixture(input: {
   const acceptedTask = { ...currentTask, status: 'accepted' as const, assignedEmployeeId: employeeId }
   const preparingTask = { ...acceptedTask, status: 'preparing' as const }
   const readyTask = { ...preparingTask, status: 'ready' as const, readyAt: '2026-08-11T12:01:00.000Z' }
+  const remadeTask = {
+    ...baseTask,
+    id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+    status: 'pending' as const,
+  }
   const kdsRepository = {
     accept: vi.fn(async () => acceptedTask),
     startPreparing: vi.fn(async () => preparingTask),
     markReady: vi.fn(async () => readyTask),
     cancel: vi.fn(async () => ({ ...currentTask, status: 'cancelled' as const })),
     fail: vi.fn(async () => ({ ...currentTask, status: 'failed' as const })),
+    create: vi.fn(async () => remadeTask),
   }
   const deliveredItem = { ...submittedOrderItem, status: 'delivered' as const }
   const orderRepository = {
@@ -360,8 +393,10 @@ describe('commerceKdsApiPlugin', () => {
       data: {
         canCreateOrder: true,
         canInitiatePayment: false,
+        paymentInitiationBlockReason: 'permission_required',
         canQueryOnlinePayment: false,
         onlinePaymentProvider: null,
+        manualCollection: { canRecordCash: false, canRecordPos: false, canRecordExternal: false },
         gift: { enabled: true, maximumAmountMinor: 50_000, currency: 'CNY' },
       },
     })
@@ -380,8 +415,26 @@ describe('commerceKdsApiPlugin', () => {
     expect(response.json()).toMatchObject({ data: {
       canCreateOrder: true,
       canInitiatePayment: true,
+      paymentInitiationBlockReason: null,
       canQueryOnlinePayment: false,
       onlinePaymentProvider: 'simulation',
+    } })
+  })
+
+  it('reports each manual collection choice from live fine-grained permissions', async () => {
+    const value = fixture({
+      permissions: [
+        'order.create',
+        'payment.manual.cash.record',
+        'payment.manual.pos.record',
+        'payment.manual.external.record',
+      ],
+    })
+    const response = await value.app.inject({ method: 'GET', url: '/api/commerce/assisted-order-access' })
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({ data: {
+      canCreateOrder: true,
+      manualCollection: { canRecordCash: true, canRecordPos: true, canRecordExternal: true },
     } })
   })
 
@@ -395,7 +448,27 @@ describe('commerceKdsApiPlugin', () => {
     const response = await value.app.inject({ method: 'GET', url: '/api/commerce/assisted-order-access' })
 
     expect(response.statusCode).toBe(200)
-    expect(response.json()).toMatchObject({ data: { canInitiatePayment: false, onlinePaymentProvider: 'postar' } })
+    expect(response.json()).toMatchObject({ data: {
+      canInitiatePayment: false,
+      paymentInitiationBlockReason: 'online_payment_unavailable',
+      onlinePaymentProvider: 'postar',
+    } })
+  })
+
+  it('distinguishes an unconfigured payment provider from a missing service permission', async () => {
+    const value = fixture({
+      permissions: ['order.create', 'payment.initiate.staff'],
+      onlinePaymentAvailable: true,
+      onlinePaymentProvider: null,
+    })
+    const response = await value.app.inject({ method: 'GET', url: '/api/commerce/assisted-order-access' })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({ data: {
+      canInitiatePayment: false,
+      paymentInitiationBlockReason: 'provider_not_configured',
+      onlinePaymentProvider: null,
+    } })
   })
 
   it('issues a server-bound short-lived assisted-order context for an open assigned table', async () => {
@@ -829,6 +902,41 @@ describe('commerceKdsApiPlugin', () => {
     expect(value.executions[0]?.outcome.outboxMessages[0]).toMatchObject({
       eventType: 'kds.manager_cancelled.v1',
     })
+  })
+
+  it('keeps a failed production task visible through a narrow remake command without reopening its history', async () => {
+    const value = fixture({
+      permissions: ['kds.exception.manage'],
+      kdsStatus: 'failed',
+    })
+    const response = await value.app.inject({
+      method: 'POST',
+      url: `/api/commerce/kds/${taskId}/remake`,
+      payload: {
+        idempotencyKey: 'kds-remake-0001',
+        reasonCode: 'production_remake',
+        reasonNote: '现场确认后重新制作',
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({
+      normalizedStatus: 'pending',
+      exceptionEvents: [{
+        type: 'remade',
+        managerDisposition: 'remade',
+        originalKdsTaskId: taskId,
+        remakeKdsTaskId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        financialTruth: 'no_action_required',
+        inventoryTruth: 'no_action_required',
+      }],
+    })
+    expect(value.kdsRepository.create).toHaveBeenCalledWith(expect.objectContaining({
+      orderItemId,
+      stationCode: 'bar',
+    }))
+    expect(value.kdsRepository.fail).not.toHaveBeenCalled()
+    expect(value.executions[0]?.outcome.auditEvents[0]).toMatchObject({ action: 'kds.exception_remade' })
   })
 
   it('returns stable business errors for combined actions, stale products and idempotency conflicts', async () => {

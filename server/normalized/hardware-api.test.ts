@@ -151,6 +151,37 @@ describe('hardware API role cropping', () => {
     expect(response.statusCode).toBe(403)
     expect(fake.listPrintJobs).not.toHaveBeenCalled()
   })
+
+  it('lets the narrow reprint permission duplicate only a completed cashier receipt', async () => {
+    const fake = repository()
+    fake.getById.mockResolvedValue({ id: deviceId, stationCode: 'cashier', status: 'printed' })
+    fake.reprintPrintJob.mockResolvedValue({ id: '26200000-0000-4000-8000-000000000006', status: 'pending' })
+    const app = await build(['print.reprint'], fake)
+
+    const response = await app.inject({
+      method: 'POST', url: `/hardware/print-jobs/${deviceId}/reprint`,
+      headers: { 'idempotency-key': 'cashier-reprint-0001' },
+      payload: { reason: '顾客离店前补一张付款凭条' },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(fake.reprintPrintJob).toHaveBeenCalledWith(
+      deviceId, employeeId, '顾客离店前补一张付款凭条', 'cashier-reprint-0001',
+    )
+  })
+
+  it('does not let the narrow reprint permission duplicate a production ticket', async () => {
+    const fake = repository()
+    fake.getById.mockResolvedValue({ id: deviceId, stationCode: 'kitchen', status: 'printed' })
+    const app = await build(['print.reprint'], fake)
+    const response = await app.inject({
+      method: 'POST', url: `/hardware/print-jobs/${deviceId}/reprint`,
+      headers: { 'idempotency-key': 'cashier-reprint-0002' },
+      payload: { reason: '不应以收银权限补打后厨单' },
+    })
+    expect(response.statusCode).toBe(403)
+    expect(fake.reprintPrintJob).not.toHaveBeenCalled()
+  })
 })
 
 async function build(capabilities: string[], fake = repository()) {
@@ -188,6 +219,8 @@ function repository() {
     getPrinterRouteByCode: vi.fn().mockResolvedValue(null),
     upsertPrinterRoute: vi.fn(),
     retryPrintJob: vi.fn(),
+    getById: vi.fn().mockResolvedValue(null),
+    reprintPrintJob: vi.fn(),
     requestHardwareCommand: vi.fn().mockResolvedValue({
       id: '26200000-0000-4000-8000-000000000005',
       publicId: 'hardware-command-public-0001',

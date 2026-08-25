@@ -35,6 +35,7 @@ export interface OperationsTableView {
     guestCount: number
     capacityAtOpen: number
     guestProfileSnapshot: JsonObject
+    guestCartWritesFrozen: boolean
     latestMood: null | {
       code: string
       occurredAt: string
@@ -102,6 +103,7 @@ interface TableRow extends Record<string, unknown> {
   guest_count: number | null
   capacity_at_open: number | null
   guest_profile_snapshot: JsonObject | null
+  guest_cart_writes_frozen: boolean | null
   mood_code: string | null
   mood_occurred_at: string | null
   session_status: 'open' | 'closing' | null
@@ -219,7 +221,7 @@ async function readTables(
       ) AS assigned_to_actor,
       session.id AS session_id, session.public_id AS session_public_id,
       session.business_date::text, session.guest_count, session.capacity_at_open,
-      session.guest_profile_snapshot,
+      session.guest_profile_snapshot, session.guest_cart_writes_frozen,
       latest_mood.mood_code, latest_mood.mood_occurred_at,
       session.status AS session_status, session.opened_at::text
     FROM mbox.tables venue_table
@@ -370,6 +372,7 @@ function mapTable(row: TableRow): OperationsTableView {
       guestCount: row.guest_count!,
       capacityAtOpen: row.capacity_at_open!,
       guestProfileSnapshot: row.guest_profile_snapshot ?? {},
+      guestCartWritesFrozen: row.guest_cart_writes_frozen ?? false,
       latestMood: row.mood_code === null || row.mood_occurred_at === null
         ? null
         : { code: row.mood_code, occurredAt: row.mood_occurred_at },

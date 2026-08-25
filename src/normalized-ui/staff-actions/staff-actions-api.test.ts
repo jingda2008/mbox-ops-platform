@@ -138,6 +138,15 @@ describe('StaffActionsApi', () => {
         reasonNote: '上一营业日误留任务，现场已核对',
       }),
     }))
+
+    await api.runKdsAction('task-3', 'remake')
+    expect(send).toHaveBeenLastCalledWith('/api/commerce/kds/task-3/remake', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({
+        reasonCode: 'production_remake',
+        reasonNote: '现场确认后重新制作',
+      }),
+    }))
   })
 
   it('binds assisted ordering to the current table context and sends gift mode without a client authority id', async () => {

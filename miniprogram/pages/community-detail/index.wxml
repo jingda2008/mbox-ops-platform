@@ -3,7 +3,7 @@
   <block wx:elif="{{activity}}">
     <view class="detail-hero">
       <image wx:if="{{activity.coverUrl}}" src="{{activity.coverUrl}}" mode="aspectFill" />
-      <view wx:else class="detail-placeholder">SUPERHIGH</view>
+      <view wx:else class="detail-placeholder">超嗨</view>
       <view class="detail-shade"></view>
       <view class="detail-title"><text>{{activity.kindText}}</text><text>{{activity.title}}</text><text>{{activity.startsText}} · {{activity.assemblyLocation}}</text></view>
     </view>
@@ -31,14 +31,26 @@
     <view class="section detail-section">
       <text class="detail-heading">报名、付款与退款</text>
       <view class="payment-rule-grid">
-        <view><text>活动费用</text><text>{{activity.feeText}}</text></view>
-        <view><text>订金</text><text>{{activity.depositText}}</text></view>
+        <view><text>本次费用</text><text>{{selectedPricing ? selectedPricing.feeText : activity.feeText}}</text></view>
+        <view><text>订金</text><text>{{selectedPricing ? selectedPricing.depositText : activity.depositText}}</text></view>
         <view><text>付款时限</text><text>{{activity.deadlineText}}</text></view>
         <view><text>支付说明</text><text>{{activity.paymentText}}</text></view>
         <view><text>取消退款</text><text>{{activity.refundText}}</text></view>
         <view><text>安全规则</text><text>{{activity.safetyPolicyText}}</text></view>
       </view>
       <view wx:if="{{activity.paymentBlockedText}}" class="rule-card"><text class="blocked-copy">{{activity.paymentBlockedText}}</text></view>
+    </view>
+    <view wx:if="{{activity.packages.length}}" class="section detail-section">
+      <text class="detail-heading">可选活动套餐<text wx:if="{{activity.packageSelectionRequired}}">（需选择一档）</text></text>
+      <text class="detail-summary">活动票可{{activity.packageSelectionRequired ? '搭配下列其中一档套餐' : '单独报名，也可加购下列其中一档套餐'}}；价格与内容会在报名时固定。</text>
+      <view wx:if="{{!activity.packageSelectionRequired}}" class="activity-package {{!selectedPackagePublicId ? 'activity-package--selected' : ''}}" bindtap="clearPackageSelection">
+        <view><text>不加购套餐</text><text>仅报名活动票</text></view><text>已选</text>
+      </view>
+      <view wx:for="{{activity.packages}}" wx:key="publicId" class="activity-package {{selectedPackagePublicId === item.publicId ? 'activity-package--selected' : ''}} {{item.availability !== 'available' ? 'activity-package--disabled' : ''}}" data-package-id="{{item.publicId}}" bindtap="choosePackage">
+        <image wx:if="{{item.imageUrl}}" class="activity-package__image" src="{{item.imageUrl}}" mode="aspectFill" />
+        <view class="activity-package__main"><view><text>{{item.name}}</text><text>{{item.feeText}}</text></view><text wx:if="{{item.description}}">{{item.description}}</text><text wx:if="{{item.includedItems.length}}">含：<text wx:for="{{item.includedItems}}" wx:for-item="included" wx:key="*this">{{included}} </text></text><text>每会员限购 {{item.memberPurchaseLimit}} 份 · 剩余 {{item.remainingCapacity}} 位 · {{item.availabilityText}}</text></view>
+        <text wx:if="{{selectedPackagePublicId === item.publicId}}">已选</text>
+      </view>
     </view>
     <view wx:if="{{activity.participationRequirements.length}}" class="section detail-section"><text class="detail-heading">参加条件</text><view class="bullet-list"><view wx:for="{{activity.participationRequirements}}" wx:key="*this"><text>•</text><text>{{item}}</text></view></view></view>
     <view class="section detail-section"><text class="detail-heading">安全与参加要求</text><view wx:if="{{activity.safetyFacts.length}}" class="safety-facts"><text wx:for="{{activity.safetyFacts}}" wx:key="*this">{{item}}</text></view><view wx:if="{{activity.safetyRequirements.length}}" class="bullet-list"><view wx:for="{{activity.safetyRequirements}}" wx:key="*this"><text>!</text><text>{{item}}</text></view></view><text wx:else class="detail-summary">请根据自身健康和出行情况决定是否参加，并遵守现场指引。</text></view>
@@ -64,8 +76,8 @@
 
     <view class="detail-bottom-space"></view>
     <view class="detail-dock">
-      <view><text>{{registration ? registration.statusText : (activity.registrationBlocked ? '暂不开放' : activity.feeText)}}</text><text>{{registration ? (registration.stateGuide || registration.resolutionText || '请在“我的活动”中查看状态') : (activity.registrationBlocked ? '报名条件暂未开放' : activity.remainingCapacity > 0 ? ('剩余 ' + activity.remainingCapacity + ' 位') : '名额已满，可加入候补')}}</text></view>
-      <button wx:if="{{!registration || registration.canReRegister}}" disabled="{{busy}}" loading="{{busy}}" bindtap="register">{{activity.registrationBlocked ? '暂不开放' : registration && registration.canReRegister ? '重新报名' : activity.remainingCapacity <= 0 ? '加入候补' : activity.requiresPaymentOnSubmit ? '提交报名并支付' : activity.feeAmountMinor > 0 ? '提交报名' : '免费报名'}}</button>
+      <view><text>{{registration ? registration.statusText : (activity.registrationBlocked ? '暂不开放' : (selectedPricing ? selectedPricing.feeText : activity.feeText))}}</text><text>{{registration ? (registration.stateGuide || registration.resolutionText || '请在“我的活动”中查看状态') : (activity.registrationBlocked ? '报名条件暂未开放' : activity.remainingCapacity > 0 ? ('剩余 ' + activity.remainingCapacity + ' 位') : '名额已满，可加入候补')}}</text></view>
+      <button wx:if="{{!registration || registration.canReRegister}}" disabled="{{busy}}" loading="{{busy}}" bindtap="register">{{activity.registrationBlocked || (selectedPricing && selectedPricing.paymentAvailability === 'blocked') ? '暂不开放' : registration && registration.canReRegister ? '重新报名' : activity.remainingCapacity <= 0 ? '加入候补' : selectedPricing && selectedPricing.requiresPaymentOnSubmit ? '提交报名并支付' : selectedPricing && selectedPricing.feeAmountMinor > 0 ? '提交报名' : '免费报名'}}</button>
       <button wx:elif="{{registration.canStartPayment}}" class="payment-button" loading="{{busy}}" bindtap="startPayment">完成支付</button>
       <button wx:elif="{{registration.canQueryPayment}}" loading="{{busy}}" bindtap="queryPayment">查询付款结果</button>
       <button wx:elif="{{registration.canCancelDirectly}}" class="cancel-button" loading="{{busy}}" bindtap="cancelRegistration">取消报名</button>
@@ -81,14 +93,14 @@
       <text class="detail-member-kicker">M-BOX 会员</text>
       <text class="detail-member-title">加入会员，解锁超嗨活动</text>
       <text class="detail-member-copy">查看和报名活动需要先加入会员并授权手机号。</text>
-      <image class="detail-member-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX Shanghai 1999 Logo" />
+      <image class="detail-member-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX 标志" />
       <checkbox-group bindchange="onMembershipInviteAgreementChange">
         <label class="detail-member-agreement">
           <checkbox value="agree" checked="{{membershipInviteAgreed}}" color="#315d46" />
           <view><text>我已阅读并同意</text><text class="detail-member-terms" catchtap="showMembershipTerms">《{{membershipTerms.title}}》</text></view>
         </label>
       </checkbox-group>
-      <button wx:if="{{membershipInviteAgreed}}" class="detail-member-authorize wx-phone-button" open-type="getPhoneNumber|agreePrivacyAuthorization" bindgetphonenumber="acceptMembershipInvite" bindagreeprivacyauthorization="onAgreePrivacyAuthorization" loading="{{membershipInviteBusy}}">授权手机号并加入</button>
+      <button wx:if="{{membershipInviteAgreed}}" class="detail-member-authorize wx-phone-button" open-type="getPhoneNumber" bindgetphonenumber="acceptMembershipInvite" loading="{{membershipInviteBusy}}">授权手机号并加入</button>
       <button wx:else class="detail-member-authorize detail-member-authorize--disabled" bindtap="remindMembershipInviteAgreement">授权手机号并加入</button>
       <text class="detail-member-note">授权仅用于建立会员身份和活动服务联系。</text>
     </view>

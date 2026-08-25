@@ -7,7 +7,7 @@ import type {
   CashierWorkbenchRefund,
   CashierWorkbenchView,
 } from '../shared/cashier-workbench-contracts'
-import { CashierAfterSalesWorkbenchView } from './CashierAfterSalesWorkbench'
+import { businessDayFactNavigation, CashierAfterSalesWorkbenchView } from './CashierAfterSalesWorkbench'
 import { CashierMutationCoordinator, createIdempotencyKey, mutationSignature } from './cashier-mutation'
 
 const employeeId = '33333333-3333-4333-8333-333333333333'
@@ -132,6 +132,8 @@ describe('CashierAfterSalesWorkbenchView', () => {
     direct.orders[0]!.outstandingAmountMinor = 6_800
     const directHtml = render(direct)
     expect(directHtml).toContain('登记现金收款')
+    expect(directHtml).toContain('出示付款二维码')
+    expect(directHtml).toContain('扫顾客付款码')
     expect(directHtml).not.toContain('入口已锁定')
 
     const unpresented = payment('postar', [])
@@ -270,17 +272,78 @@ describe('CashierAfterSalesWorkbenchView', () => {
       view:workbench([]),phase:'ready' as const,message:null,busyKey:null,notice:null,
       onSearch:vi.fn(),onReload:vi.fn(),onMutation:vi.fn(async()=>true),
       onClosePendingBusinessDays:vi.fn(async()=>undefined),
+      onNavigate:vi.fn(),
       businessDayClosure:{businessDays:[{businessDayId:'day-1',businessDate:'2026-08-12',
         status:'awaiting_close' as const,closedTableSessions:[],blockers:[{
           tableSessionId:'table-session-1',tableCode:'VIP1',code:'PAYMENT_PENDING',count:2,
           label:'仍有待确认付款',resolution:'请先确认付款终态',
+          target:{route:'/staff/payments' as const,focus:'payments' as const,
+            tableSessionId:'table-session-1',tableCode:'VIP1',query:'VIP1'},
+          facts:[{type:'payment' as const,id:'payment-1',reference:'PAYMENT-VIP1-0001',
+            title:'付款结果待确认',status:'pending',statusLabel:'待处理',amountMinor:6800,
+            quantityText:null,orderId:'order-1',orderPublicId:'ORDER-VIP1-0001',
+            employeeRelationLabel:'收款发起人',relatedEmployeeName:'李艳',
+            actionRoute:'/staff/payments?tableSessionId=table-session-1'}],
         }]}],closedBusinessDayCount:0,closedTableSessionCount:0,blockedTableSessionCount:1},
     }))
     const denied=render(workbench([]),['reconciliation.view'])
     expect(allowed).toContain('检查并结束')
     expect(allowed).toContain('VIP1')
     expect(allowed).toContain('请先确认付款终态')
+    expect(allowed).toContain('aria-label="查看VIP1仍有待确认付款2项明细"')
+    expect(allowed).toContain('付款结果待确认')
+    expect(allowed).toContain('PAYMENT-VIP1-0001')
+    expect(allowed).toContain('收款发起人')
+    expect(allowed).toContain('李艳')
+    expect(allowed).toContain('¥68.00')
+    expect(allowed).toContain('打开收银与退款核对')
     expect(denied).not.toContain('检查并结束')
+  })
+
+  it('keeps exact blocker facts visible but does not pretend close-only staff can operate another module',()=>{
+    const html=renderToStaticMarkup(createElement(CashierAfterSalesWorkbenchView,{
+      auth:{...auth(),permissions:['business_day.close']},view:workbench([]),phase:'ready' as const,
+      message:null,busyKey:null,notice:null,onSearch:vi.fn(),onReload:vi.fn(),
+      onMutation:vi.fn(async()=>true),onNavigate:vi.fn(),
+      businessDayClosure:{businessDays:[{businessDayId:'day-2',businessDate:'2026-08-12',
+        status:'awaiting_close' as const,closedTableSessions:[],blockers:[{
+          tableSessionId:'table-session-2',tableCode:'L01',code:'INVENTORY_RESERVED' as const,count:1,
+          label:'库存预留',resolution:'请先释放库存预留',
+          target:{route:'/staff/payments' as const,focus:'inventory' as const,
+            tableSessionId:'table-session-2',tableCode:'L01',query:'L01'},
+          facts:[{type:'inventory_reservation' as const,id:'inventory-hold-1',reference:'ORDER-L01-0001',
+            title:'金酒库存',status:'reserved',statusLabel:'已预留',amountMinor:null,quantityText:'50 ml',
+            orderId:'order-2',orderPublicId:'ORDER-L01-0001',employeeRelationLabel:'处理分派',
+            relatedEmployeeName:null,actionRoute:'/staff/inventory?factId=inventory-hold-1'}],
+        }]}],closedBusinessDayCount:0,closedTableSessionCount:0,blockedTableSessionCount:1},
+    }))
+    expect(html).toContain('金酒库存')
+    expect(html).toContain('50 ml')
+    expect(html).toContain('处理分派')
+    expect(html).toContain('待分派')
+    expect(html).toContain('请交给具备“库存与酒水上架”入口权限的同事继续处理')
+    expect(html).not.toContain('打开库存核对')
+  })
+
+  it('opens a cashier blocker by exact order instead of table code or a same-route no-op',()=>{
+    expect(businessDayFactNavigation({
+      type:'payment',id:'payment-1',reference:'PAYMENT-VIP1-0001',title:'付款结果待确认',
+      status:'pending',statusLabel:'待处理',amountMinor:6800,quantityText:null,
+      orderId:'order-exact-1',orderPublicId:'ORDER-EXACT-0001',employeeRelationLabel:'收款发起人',
+      relatedEmployeeName:'李艳',actionRoute:'/staff/payments?tableSessionId=old-session&factId=payment-1',
+    })).toEqual({kind:'cashier_order',orderId:'order-exact-1',query:'ORDER-EXACT-0001'})
+  })
+
+  it('carries the exact non-cashier blocker fact into the target module',()=>{
+    const fact={
+      type:'inventory_reservation' as const,id:'inventory-hold-1',reference:'ORDER-L01-0001',
+      title:'金酒库存',status:'reserved',statusLabel:'已预留',amountMinor:null,quantityText:'50 ml',
+      orderId:'order-2',orderPublicId:'ORDER-L01-0001',employeeRelationLabel:'处理分派',
+      relatedEmployeeName:null,actionRoute:'/staff/inventory?factId=inventory-hold-1',
+    }
+    expect(businessDayFactNavigation(fact)).toEqual({
+      kind:'route',route:fact.actionRoute,context:{businessDayBlockerFact:fact},
+    })
   })
 })
 
@@ -296,6 +359,7 @@ function render(view: CashierWorkbenchView, permissions = auth().permissions): s
     onSearch: vi.fn(),
     onReload: vi.fn(),
     onMutation: vi.fn(async () => true),
+    onCreateOnlinePayment: vi.fn(async () => null),
   }))
 }
 
@@ -320,8 +384,12 @@ function workbench(payments: CashierWorkbenchPayment[]): CashierWorkbenchView {
     businessDate: '2026-08-13',
     query: 'VIP1',
     actions: {
+      canInitiateOnlinePayment: true,
+      canQueryOnlinePayment: true,
+      onlinePaymentProvider: 'postar',
       canRecordManualCash: true,
       canRecordManualPos: true,
+      canRecordManualExternal: true,
       canRequestRefund: true,
       canApproveRefund: true,
       canExecuteRefund: true,
@@ -361,7 +429,7 @@ function payment(
     id: `payment-${provider}`,
     publicId: `PAYMENT-${provider}`,
     provider,
-    method: provider === 'cash' ? 'cash' : provider === 'physical_pos' ? 'card' : 'native_qr',
+    method: provider === 'cash' ? 'cash' : provider === 'physical_pos' ? 'card' : provider === 'external_manual' ? 'manual' : 'native_qr',
     providerTransactionId: `TX-${provider}`,
     providerActionState: provider === 'postar' || provider === 'wechat' ? 'consumed' : null,
     amountMinor: 6_800,

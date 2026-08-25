@@ -49,6 +49,10 @@ import {
 import { CheckoutUpgradeManagementRepository } from './checkout-upgrade-management-repository.js'
 import { lockBoundGuestTablePosition } from './guest-table-authority.js'
 import { isPublicMediaAssetUrl } from './media-asset-url.js'
+import {
+  EmployeeTableAccessDeniedError,
+  assertEmployeeTableSessionAccess,
+} from './employee-table-access.js'
 
 type TransactionRunner = Pick<ScopedPostgresTransactionRunner, 'run'>
 
@@ -83,6 +87,116 @@ export class CustomerExperienceService {
     return this.transactions.run(context.scope, (transaction) => (
       new CustomerExperienceRepository(transaction).publicLoyalty(context.customerId)
     ), { readOnly: true })
+  }
+
+  recordBirthdayBenefitConsent(
+    context: PublicCustomerExperienceContext,
+    input: Readonly<{ birthdayMonthDay: string; idempotencyKey: string }>,
+  ) {
+    if (!/^\d{2}-\d{2}$/.test(input.birthdayMonthDay) || !validMonthDay(input.birthdayMonthDay)) {
+      throw new CustomerExperienceRequestError('生日日期格式不正确，请填写月日', 'BIRTHDAY_MONTH_DAY_INVALID', 400)
+    }
+    return this.commands.execute({
+      scope: context.scope,
+      operationScope: 'customer.annual-benefit.birthday-consent',
+      idempotencyKey: input.idempotencyKey,
+      requestFingerprint: fingerprint(input),
+      resultCodec: objectCodec<{ birthdayMonthDay: string; consentStatus: 'granted' }>(),
+    }, async (transaction) => {
+      const canonical = requiredRow((await transaction.query<{ id: string }>(`
+        SELECT mbox.canonical_customer_id($1::uuid,$2::uuid,$3::uuid) AS id
+      `, [transaction.scope.tenantId, transaction.scope.storeId, context.customerId])).rows[0], 'Canonical customer')
+      const previous = (await transaction.query<{
+        birthday_month_day: string | null
+        change_allowed: boolean
+      }>(`
+        SELECT CASE WHEN jsonb_typeof(preference_value)='string'
+            THEN preference_value #>> '{}' ELSE NULL END AS birthday_month_day,
+          updated_at<=clock_timestamp()-interval '30 days' AS change_allowed
+        FROM mbox.customer_preferences
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND customer_id=$3::uuid
+          AND preference_key='birthdayMonthDay'
+        FOR UPDATE
+      `, [transaction.scope.tenantId, transaction.scope.storeId, canonical.id])).rows[0]
+      if (previous?.birthday_month_day !== null && previous?.birthday_month_day !== undefined
+        && previous.birthday_month_day !== input.birthdayMonthDay
+        && previous.change_allowed !== true) {
+        throw new CustomerExperienceRequestError(
+          '生日月日每30天只能修改一次；如需立即更正，请联系门店核验',
+          'BIRTHDAY_CHANGE_TOO_FREQUENT',
+          409,
+        )
+      }
+      await transaction.query(`
+        INSERT INTO mbox.customer_preferences(
+          tenant_id,store_id,customer_id,preference_key,preference_value,visibility,source,observed_at
+        ) VALUES($1::uuid,$2::uuid,$3::uuid,'birthdayMonthDay',$4::jsonb,'public','annual_benefit_consent',clock_timestamp())
+        ON CONFLICT (tenant_id,store_id,customer_id,preference_key) DO UPDATE
+        SET preference_value=EXCLUDED.preference_value,visibility='public',source=EXCLUDED.source,
+          observed_at=clock_timestamp(),updated_at=clock_timestamp()
+      `, [transaction.scope.tenantId, transaction.scope.storeId, canonical.id, JSON.stringify(input.birthdayMonthDay)])
+      await transaction.query(`
+        INSERT INTO mbox.customer_annual_benefit_consents(
+          tenant_id,store_id,customer_id,consent_type,status,source
+        ) VALUES($1::uuid,$2::uuid,$3::uuid,'birthday_month_day','granted','mini_program')
+        ON CONFLICT DO NOTHING
+      `, [transaction.scope.tenantId, transaction.scope.storeId, canonical.id])
+      const result = { birthdayMonthDay: input.birthdayMonthDay, consentStatus: 'granted' as const }
+      return {
+        result,
+        auditEvents: [{ actor: { type: 'guest', ref: context.actorRef }, action: 'customer.annual-benefit.birthday-consent.granted',
+          objectType: 'customer_annual_benefit_consent', objectId: canonical.id, businessDate: context.businessDate,
+          beforeData: { birthdayMonthDay: previous?.birthday_month_day ?? null },
+          afterData: { consentType: 'birthday_month_day', consentStatus: 'granted', birthdayMonthDay: input.birthdayMonthDay } }],
+        outboxMessages: [{ businessEventKey: `customer.annual-benefit.birthday-consent.granted:${canonical.id}:${input.idempotencyKey}`,
+          aggregateType: 'customer_annual_benefit_consent', aggregateId: canonical.id, aggregateVersion: 1,
+          eventType: 'customer.annual-benefit.birthday-consent.granted.v1', payload: { consentType: 'birthday_month_day' } }],
+      }
+    })
+  }
+
+  withdrawBirthdayBenefitConsent(
+    context: PublicCustomerExperienceContext,
+    input: Readonly<{ reason: string; idempotencyKey: string }>,
+  ) {
+    const withdrawalReason = input.reason.trim()
+    if (withdrawalReason.length < 2 || withdrawalReason.length > 500) {
+      throw new CustomerExperienceRequestError('撤回说明长度不正确', 'BIRTHDAY_CONSENT_WITHDRAWAL_REASON_INVALID', 400)
+    }
+    return this.commands.execute({
+      scope: context.scope,
+      operationScope: 'customer.annual-benefit.birthday-consent.withdraw',
+      idempotencyKey: input.idempotencyKey,
+      requestFingerprint: fingerprint(input),
+      resultCodec: objectCodec<{ consentStatus: 'withdrawn' }>(),
+    }, async (transaction) => {
+      const canonical = requiredRow((await transaction.query<{ id: string }>(`
+        SELECT mbox.canonical_customer_id($1::uuid,$2::uuid,$3::uuid) AS id
+      `, [transaction.scope.tenantId, transaction.scope.storeId, context.customerId])).rows[0], 'Canonical customer')
+      const changed = await transaction.query(`
+        UPDATE mbox.customer_annual_benefit_consents SET status='withdrawn',withdrawn_at=clock_timestamp(),
+          withdrawal_reason=$4,updated_at=clock_timestamp()
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND customer_id=$3::uuid
+          AND consent_type='birthday_month_day' AND status='granted'
+      `, [transaction.scope.tenantId, transaction.scope.storeId, canonical.id, withdrawalReason])
+      if (changed.rowCount !== 1) throw new CustomerExperienceRequestError(
+        '没有可撤回的生日礼遇授权', 'BIRTHDAY_CONSENT_NOT_GRANTED', 409,
+      )
+      await transaction.query(`UPDATE mbox.customer_preferences SET preference_value='null'::jsonb,
+        observed_at=clock_timestamp(),updated_at=clock_timestamp()
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND customer_id=$3::uuid AND preference_key='birthdayMonthDay'`,
+      [transaction.scope.tenantId, transaction.scope.storeId, canonical.id])
+      const result = { consentStatus: 'withdrawn' as const }
+      return {
+        result,
+        auditEvents: [{ actor: { type: 'guest', ref: context.actorRef }, action: 'customer.annual-benefit.birthday-consent.withdrawn',
+          objectType: 'customer_annual_benefit_consent', objectId: canonical.id, businessDate: context.businessDate,
+          afterData: { consentType: 'birthday_month_day', consentStatus: 'withdrawn', withdrawalReason } }],
+        outboxMessages: [{ businessEventKey: `customer.annual-benefit.birthday-consent.withdrawn:${canonical.id}:${input.idempotencyKey}`,
+          aggregateType: 'customer_annual_benefit_consent', aggregateId: canonical.id, aggregateVersion: 2,
+          eventType: 'customer.annual-benefit.birthday-consent.withdrawn.v1', payload: { consentType: 'birthday_month_day' } }],
+      }
+    })
   }
 
   listCustomerPublicationEmployees(context: StaffCustomerExperienceContext) {
@@ -623,6 +737,7 @@ export class CustomerExperienceService {
       requestFingerprint: fingerprint(input),
       resultCodec: objectCodec<MemberRedemptionView>(),
     }, async (transaction) => {
+      await assertStaffRedemptionTableAccess(transaction, context.employeeId, input.publicId)
       const result = await new LoyaltyRedemptionRepository(transaction).fulfill({
         publicId: input.publicId,
         employeeId: context.employeeId,
@@ -655,6 +770,7 @@ export class CustomerExperienceService {
       requestFingerprint: fingerprint(input),
       resultCodec: objectCodec<MemberRedemptionView>(),
     }, async (transaction) => {
+      await assertStaffRedemptionTableAccess(transaction, context.employeeId, input.publicId)
       const result = await new LoyaltyRedemptionRepository(transaction).fail({
         ...input,
         employeeId: context.employeeId,
@@ -1104,6 +1220,65 @@ export class CustomerExperienceService {
     })
   }
 
+  pendingRedemptions(context: StaffCustomerExperienceContext) {
+    return this.transactions.run(context.scope, async (transaction) => {
+      const pending = await transaction.query<{
+        public_id: string; member_no: string; item_name: string; points_used: number
+        fulfillment_kind: string; status: string; expires_at: string; created_at: string
+        failure_code: string | null; recovery_state: string
+        recovery_requested_at: string | null; points_restored: number
+      }>(`
+        SELECT redemption.public_id,membership.member_no,item.name AS item_name,
+          redemption.points_used,redemption.fulfillment_kind,redemption.status,
+          redemption.expires_at::text,redemption.created_at::text,
+          redemption.failure_code,redemption.recovery_state,
+          redemption.recovery_requested_at::text,redemption.points_restored
+        FROM mbox.member_redemptions redemption
+        JOIN mbox.customer_memberships membership
+          ON membership.tenant_id=redemption.tenant_id AND membership.store_id=redemption.store_id
+         AND membership.id=redemption.membership_id
+        JOIN mbox.redemption_catalog_items item
+          ON item.tenant_id=redemption.tenant_id AND item.store_id=redemption.store_id
+         AND item.id=redemption.catalog_item_id
+        WHERE redemption.tenant_id=$1::uuid AND redemption.store_id=$2::uuid
+          AND redemption.status='awaiting_fulfillment'
+          AND EXISTS (
+            SELECT 1 FROM mbox.employees employee
+            WHERE employee.tenant_id=redemption.tenant_id AND employee.store_id=redemption.store_id
+              AND employee.id=$3::uuid AND employee.status='active'
+              AND (
+                mbox.employee_has_effective_permission(
+                  employee.tenant_id,employee.store_id,employee.id,'table.view_all'
+                )
+                OR (
+                  redemption.table_session_id IS NOT NULL
+                  AND EXISTS (
+                    SELECT 1
+                    FROM mbox.table_sessions session
+                    JOIN mbox.table_assignments assignment
+                      ON assignment.tenant_id=session.tenant_id AND assignment.store_id=session.store_id
+                     AND assignment.table_id=session.table_id AND assignment.employee_id=employee.id
+                     AND assignment.assignment_type IN ('primary','backup')
+                     AND assignment.starts_at<=clock_timestamp()
+                     AND (assignment.ends_at IS NULL OR assignment.ends_at>clock_timestamp())
+                    WHERE session.tenant_id=redemption.tenant_id AND session.store_id=redemption.store_id
+                      AND session.id=redemption.table_session_id AND session.status IN ('open','closing')
+                  )
+                )
+              )
+          )
+        ORDER BY redemption.expires_at,redemption.id LIMIT 200
+      `, [transaction.scope.tenantId, transaction.scope.storeId, context.employeeId])
+      return pending.rows.map((row) => ({
+        publicId: row.public_id, memberNo: row.member_no, itemName: row.item_name,
+        pointsUsed: row.points_used, fulfillmentKind: row.fulfillment_kind,
+        status: row.status, expiresAt: row.expires_at, createdAt: row.created_at,
+        failureCode: row.failure_code, recoveryState: row.recovery_state,
+        recoveryRequestedAt: row.recovery_requested_at, pointsRestored: row.points_restored,
+      }))
+    }, { readOnly: true })
+  }
+
   redemptionConfiguration(context: StaffCustomerExperienceContext) {
     return this.transactions.run(context.scope, async (transaction) => {
       const control = await transaction.query<{
@@ -1133,28 +1308,6 @@ export class CustomerExperienceService {
            AND item.catalog_version_id=version.id
           WHERE version.tenant_id=$1::uuid AND version.store_id=$2::uuid
           GROUP BY version.id ORDER BY version.version DESC,version.id DESC
-        `, [transaction.scope.tenantId, transaction.scope.storeId])
-      const pending = await transaction.query<{
-          public_id: string; member_no: string; item_name: string; points_used: number
-          fulfillment_kind: string; status: string; expires_at: string; created_at: string
-          failure_code: string | null; recovery_state: string
-          recovery_requested_at: string | null; points_restored: number
-        }>(`
-          SELECT redemption.public_id,membership.member_no,item.name AS item_name,
-            redemption.points_used,redemption.fulfillment_kind,redemption.status,
-            redemption.expires_at::text,redemption.created_at::text,
-            redemption.failure_code,redemption.recovery_state,
-            redemption.recovery_requested_at::text,redemption.points_restored
-          FROM mbox.member_redemptions redemption
-          JOIN mbox.customer_memberships membership
-            ON membership.tenant_id=redemption.tenant_id AND membership.store_id=redemption.store_id
-           AND membership.id=redemption.membership_id
-          JOIN mbox.redemption_catalog_items item
-            ON item.tenant_id=redemption.tenant_id AND item.store_id=redemption.store_id
-           AND item.id=redemption.catalog_item_id
-          WHERE redemption.tenant_id=$1::uuid AND redemption.store_id=$2::uuid
-            AND redemption.status='awaiting_fulfillment'
-          ORDER BY redemption.expires_at,redemption.id LIMIT 200
         `, [transaction.scope.tenantId, transaction.scope.storeId])
       const items = await transaction.query<{
           catalog_id: string; catalog_version: number; catalog_status: string
@@ -1211,13 +1364,6 @@ export class CustomerExperienceService {
           publishedAt: row.published_at,
           publicationMode: row.publication_mode,
           reason: row.reason, itemCount: row.item_count,
-        })),
-        pending: pending.rows.map((row) => ({
-          publicId: row.public_id, memberNo: row.member_no, itemName: row.item_name,
-          pointsUsed: row.points_used, fulfillmentKind: row.fulfillment_kind,
-          status: row.status, expiresAt: row.expires_at, createdAt: row.created_at,
-          failureCode: row.failure_code, recoveryState: row.recovery_state,
-          recoveryRequestedAt: row.recovery_requested_at, pointsRestored: row.points_restored,
         })),
         items: items.rows.map((row) => ({
           catalogId: row.catalog_id, catalogVersion: row.catalog_version,
@@ -1926,6 +2072,7 @@ export class CustomerExperienceService {
     context: PublicCustomerExperienceContext,
     input: Readonly<{
       activityPublicId: string
+      activityPackagePublicId: string | null
       partySize: number
       protectedContact: ProtectedActivityRegistrationContact
       termsAcknowledged: boolean
@@ -1945,6 +2092,7 @@ export class CustomerExperienceService {
       requestFingerprint: fingerprint({
         customerId: context.customerId,
         activityPublicId: input.activityPublicId,
+        activityPackagePublicId: input.activityPackagePublicId,
         partySize: input.partySize,
         contactType: input.protectedContact.contactType,
         contactHash: input.protectedContact.contactHash,
@@ -1975,6 +2123,7 @@ export class CustomerExperienceService {
         this.activityPaymentProviderConfigured,
       ).registerActivity({
         activityPublicId: input.activityPublicId,
+        activityPackagePublicId: input.activityPackagePublicId,
         customerId: context.customerId,
         partySize: input.partySize,
         protectedContact: input.protectedContact,
@@ -2955,7 +3104,75 @@ export class CustomerExperienceService {
           AND activity_details IS NOT NULL
           AND contact_instructions IS NOT NULL
           AND (
+            NOT package_selection_required
+            OR EXISTS (
+              SELECT 1 FROM mbox.community_activity_packages package
+              WHERE package.tenant_id=community_activities.tenant_id
+                AND package.store_id=community_activities.store_id
+                AND package.activity_id=community_activities.id AND package.status='draft'
+            )
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM mbox.community_activity_packages package
+            WHERE package.tenant_id=community_activities.tenant_id
+              AND package.store_id=community_activities.store_id
+              AND package.activity_id=community_activities.id
+              AND (
+                package.status<>'draft'
+                OR package.capacity>community_activities.capacity
+                OR package.available_from>=community_activities.ends_at
+                OR package.available_until>community_activities.ends_at
+                OR (package.available_from IS NOT NULL AND package.available_until IS NOT NULL
+                  AND package.available_until<=package.available_from)
+              )
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM mbox.community_activity_packages package
+            JOIN mbox.community_activity_package_components component
+              ON component.tenant_id=package.tenant_id AND component.store_id=package.store_id
+             AND component.activity_package_id=package.id
+            JOIN mbox.inventory_items inventory_item
+              ON inventory_item.tenant_id=component.tenant_id AND inventory_item.store_id=component.store_id
+             AND inventory_item.id=component.inventory_item_id
+            LEFT JOIN mbox.inventory_balances balance
+              ON balance.tenant_id=component.tenant_id AND balance.store_id=component.store_id
+             AND balance.inventory_item_id=component.inventory_item_id
+            WHERE package.tenant_id=community_activities.tenant_id
+              AND package.store_id=community_activities.store_id
+              AND package.activity_id=community_activities.id
+              AND (inventory_item.status<>'active'
+                OR COALESCE(balance.on_hand_quantity,0)-COALESCE(balance.reserved_quantity,0)<component.quantity)
+          )
+          AND (
             (fee_amount_minor = 0 AND deposit_amount_minor = 0 AND registration_payment_mode = 'none')
+            OR (
+              $5::boolean
+              AND EXISTS (
+                SELECT 1 FROM mbox.store_commerce_policies policy
+                WHERE policy.tenant_id=community_activities.tenant_id
+                  AND policy.store_id=community_activities.store_id
+                  AND policy.online_payment_enabled
+              )
+              AND EXISTS (
+                SELECT 1 FROM mbox.customer_experience_features feature
+                WHERE feature.tenant_id=community_activities.tenant_id
+                  AND feature.store_id=community_activities.store_id
+                  AND feature.feature_code='community.activity.payment'
+                  AND feature.rollout_state IN ('pilot','enabled')
+                  AND (feature.effective_from IS NULL OR feature.effective_from <= clock_timestamp())
+                  AND (feature.effective_until IS NULL OR feature.effective_until > clock_timestamp())
+              )
+            )
+          )
+          AND (
+            NOT EXISTS (
+              SELECT 1 FROM mbox.community_activity_packages package
+              WHERE package.tenant_id=community_activities.tenant_id
+                AND package.store_id=community_activities.store_id
+                AND package.activity_id=community_activities.id
+                AND package.payment_mode<>'none'
+            )
             OR (
               $5::boolean
               AND EXISTS (
@@ -3724,6 +3941,37 @@ export function normalizeActivityAudienceRule(
   return { memberLevels: [...new Set(source)] }
 }
 
+async function assertStaffRedemptionTableAccess(
+  transaction: ScopedTransaction,
+  employeeId: string,
+  publicId: string,
+): Promise<void> {
+  const selected = await transaction.query<{ table_session_id: string | null }>(`
+    SELECT table_session_id
+    FROM mbox.member_redemptions
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND public_id=$3
+    FOR SHARE
+  `, [transaction.scope.tenantId, transaction.scope.storeId, publicId])
+  const tableSessionId = selected.rows[0]?.table_session_id
+  if (tableSessionId !== undefined && tableSessionId !== null) {
+    await assertEmployeeTableSessionAccess(transaction, { employeeId, tableSessionId })
+    return
+  }
+  const global = await transaction.query<{ allowed: boolean }>(`
+    SELECT employee.status='active'
+      AND mbox.employee_has_effective_permission(
+        employee.tenant_id,employee.store_id,employee.id,'table.view_all'
+      ) AS allowed
+    FROM mbox.employees employee
+    WHERE employee.tenant_id=$1::uuid AND employee.store_id=$2::uuid
+      AND employee.id=$3::uuid
+    FOR SHARE
+  `, [transaction.scope.tenantId, transaction.scope.storeId, employeeId])
+  if (global.rows[0]?.allowed !== true) throw new EmployeeTableAccessDeniedError(
+    '当前员工无权处理非本人负责桌次的会员兑换',
+  )
+}
+
 function deterministicPublicId(kind: string, storeId: string, idempotencyKey: string): string {
   const digest = createHash('sha256').update(`${kind}:${storeId}:${idempotencyKey}`).digest('hex').slice(0, 24)
   return `${kind}-${digest}`
@@ -3773,6 +4021,15 @@ function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
   if (isObject(value)) return `{${Object.keys(value).toSorted().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`
   return JSON.stringify(value) ?? 'null'
+}
+
+function validMonthDay(value: string): boolean {
+  const match = /^(\d{2})-(\d{2})$/.exec(value)
+  if (match === null) return false
+  const month = Number(match[1])
+  const day = Number(match[2])
+  const date = new Date(Date.UTC(2000, month - 1, day))
+  return date.getUTCMonth() === month - 1 && date.getUTCDate() === day
 }
 
 function isObject(value: unknown): value is JsonObject {

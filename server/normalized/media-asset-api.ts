@@ -27,7 +27,7 @@ export const mediaAssetApiPlugin: FastifyPluginAsync<MediaAssetApiOptions> = asy
   app.get('/staff/media-assets', async (request, reply) => handle(reply, async () => {
     const context = await authorizedAny(options, request, [
       'community.activity.view', 'community.activity.manage', 'community.activity.publish',
-      'customer.experience.feature.manage',
+      'customer.experience.feature.manage', 'media.asset.menu.manage',
     ])
     return reply.send({ data: await options.service.list(context) })
   }))
@@ -37,7 +37,9 @@ export const mediaAssetApiPlugin: FastifyPluginAsync<MediaAssetApiOptions> = asy
     const purpose = enumeration(body.purpose, '图片用途', ['community_activity','home_content','menu','performer','support_contact'] as const) as MediaPurpose
     const context = purpose === 'support_contact'
       ? await authorizedAny(options, request, ['community.activity.manage', 'customer.experience.feature.manage'])
-      : await authorized(options, request, 'community.activity.manage')
+      : purpose === 'menu'
+        ? await authorized(options, request, 'media.asset.menu.manage')
+        : await authorized(options, request, 'community.activity.manage')
     const mimeType = enumeration(body.mimeType, '图片格式', ['image/jpeg','image/png','image/webp'] as const)
     const bytes = decodeBase64(body.base64)
     if (bytes.length > MAX_IMAGE_BYTES) throw invalid('图片压缩后不能超过 200KB')
@@ -53,7 +55,7 @@ export const mediaAssetApiPlugin: FastifyPluginAsync<MediaAssetApiOptions> = asy
   app.get<{ Params: { publicId: string } }>('/staff/media-assets/:publicId', async (request, reply) => handle(reply, async () => {
     const context = await authorizedAny(options, request, [
       'community.activity.view', 'community.activity.manage', 'community.activity.publish',
-      'customer.experience.feature.manage',
+      'customer.experience.feature.manage', 'media.asset.menu.manage',
     ])
     const value = await options.transactions.run(context.scope, (transaction) => (
       new MediaAssetRepository(transaction).staffBytes(assetPublicId(request.params.publicId))

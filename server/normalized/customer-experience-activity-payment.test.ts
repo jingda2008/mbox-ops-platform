@@ -20,6 +20,7 @@ import {
 import { protectActivityRegistrationContact } from './customer-experience-api.js'
 import { PaymentRepository } from './payment-repository.js'
 import { RefundRepository } from './refund-repository.js'
+import { ActivityRecollectionAuthorizationRepository } from './activity-recollection-authorization-repository.js'
 import {
   ScopedPostgresTransactionRunner,
   type PostgresPool,
@@ -328,6 +329,10 @@ describe('activity payment configuration', () => {
       channel: 'miniprogram', contact: raw, internalNote: '不允许',
     }, () => ({ hash: 'b'.repeat(64), encryptedBase64: 'x'.repeat(32), keyId: 'key-v1', masked: '138****8000' })))
       .rejects.toMatchObject({ code: 'ACTIVITY_CONTACT_INVALID' })
+    await expect(protectActivityRegistrationContact({
+      channel: 'miniprogram', contact: '12121',
+    }, () => ({ hash: 'b'.repeat(64), encryptedBase64: 'x'.repeat(32), keyId: 'key-v1', masked: '微***号' })))
+      .rejects.toMatchObject({ code: 'ACTIVITY_CONTACT_INVALID' })
   })
 })
 
@@ -414,8 +419,22 @@ integration('activity registration state and contact privacy with PostgreSQL', (
   const customerId = randomUUID()
   const paidCustomerId = randomUUID()
   const concurrentCustomerId = randomUUID()
+  const manualCollectionCustomerId = randomUUID()
+  const requiredPackageCustomerId = randomUUID()
+  const perPersonLimitCustomerId = randomUUID()
+  const concurrentPackageLimitCustomerId = randomUUID()
+  const unavailableStockCustomerId = randomUUID()
+  const availableStockCustomerId = randomUUID()
+  const capacityOccupyingCustomerId = randomUUID()
+  const capacityWaitlistCustomerId = randomUUID()
   const freeActivityId = randomUUID()
   const paidActivityId = randomUUID()
+  const packageRequiredActivityId = randomUUID()
+  const packageLimitActivityId = randomUUID()
+  const packageIsolationActivityId = randomUUID()
+  const unavailableStockItemId = randomUUID()
+  const availableStockItemId = randomUUID()
+  const paidActivityStockItemId = randomUUID()
   const dbScope = { tenantId, storeId }
   const dbContact = {
     contactType: 'phone', contactHash: 'c'.repeat(64),
@@ -459,6 +478,35 @@ integration('activity registration state and contact privacy with PostgreSQL', (
       INSERT INTO mbox.loyalty_accounts (tenant_id, store_id, membership_id, customer_id)
       SELECT tenant_id, store_id, id, customer_id FROM memberships
     `, [tenantId, storeId, customerId, paidCustomerId, concurrentCustomerId])
+    const packageScenarioCustomers = [
+      requiredPackageCustomerId,
+      perPersonLimitCustomerId,
+      concurrentPackageLimitCustomerId,
+      unavailableStockCustomerId,
+      availableStockCustomerId,
+      capacityOccupyingCustomerId,
+      capacityWaitlistCustomerId,
+      manualCollectionCustomerId,
+    ]
+    for (const [index, scenarioCustomerId] of packageScenarioCustomers.entries()) {
+      await pool.query(`
+        WITH membership AS (
+          INSERT INTO mbox.customers(id,tenant_id,store_id,public_id)
+          VALUES($1::uuid,$2::uuid,$3::uuid,$4)
+          RETURNING id,tenant_id,store_id
+        ), created_membership AS (
+          INSERT INTO mbox.customer_memberships(tenant_id,store_id,customer_id,member_no)
+          SELECT tenant_id,store_id,id,$5 FROM membership
+          RETURNING id,tenant_id,store_id,customer_id
+        )
+        INSERT INTO mbox.loyalty_accounts(tenant_id,store_id,membership_id,customer_id)
+        SELECT tenant_id,store_id,id,customer_id FROM created_membership
+      `, [
+        scenarioCustomerId, tenantId, storeId,
+        `customer-package-scenario-${scenarioCustomerId}`,
+        `MBX-ACT-PACKAGE-${String(index + 1).padStart(2, '0')}`,
+      ])
+    }
     const common = [
       tenantId, storeId, employeeId,
       JSON.stringify({
@@ -498,11 +546,190 @@ integration('activity registration state and contact privacy with PostgreSQL', (
         'published', clock_timestamp(), $3
       )
     `, [...common, freeActivityId, 'community-free-db-test', paidActivityId, 'community-paid-db-test'])
+
+    await seedPackageRegistrationScenarios()
   })
 
   afterAll(async () => {
     await pool?.end()
   })
+
+  async function seedPackageRegistrationScenarios() {
+    const activities = [
+      {
+        id: packageRequiredActivityId,
+        publicId: 'community-package-required-db',
+        title: '套餐必选活动',
+        packageSelectionRequired: true,
+      },
+      {
+        id: packageLimitActivityId,
+        publicId: 'community-package-limit-db',
+        title: '套餐限购活动',
+        packageSelectionRequired: false,
+      },
+      {
+        id: packageIsolationActivityId,
+        publicId: 'community-package-isolation-db',
+        title: '套餐库存隔离活动',
+        packageSelectionRequired: false,
+      },
+    ]
+    for (const activity of activities) {
+      await pool.query(`
+        INSERT INTO mbox.community_activities (
+          id,tenant_id,store_id,public_id,activity_kind,title,summary,
+          starts_at,ends_at,assembly_location,capacity,fee_amount_minor,
+          deposit_amount_minor,registration_payment_mode,refund_policy_snapshot,
+          safety_snapshot,sales_copy,safety_policy_version,
+          safety_acknowledgement_text,safety_requirements,
+          refund_policy_version,refund_policy_summary,activity_details,
+          included_items,participation_requirements,contact_instructions,
+          package_selection_required,status,published_at,created_by_employee_id
+        ) VALUES (
+          $1::uuid,$2::uuid,$3::uuid,$4,'member_night',$5,'套餐报名服务端门禁测试',
+          clock_timestamp()+interval '3 days',clock_timestamp()+interval '3 days 2 hours',
+          'M-BOX',20,0,0,'none',
+          '{"policyVersion":"refund-v1","summary":"免费活动无退款"}'::jsonb,
+          '{"policyVersion":"safety-v1","acknowledgementText":"我已阅读并同意安全要求","requirements":["遵守现场安全要求"]}'::jsonb,
+          '{"details":"套餐报名服务端门禁测试"}'::jsonb,
+          'safety-v1','我已阅读并同意安全要求',ARRAY['遵守现场安全要求']::text[],
+          'refund-v1','免费活动无退款','套餐报名服务端门禁测试。',
+          '{}'::text[],'{}'::text[],'报名后将由活动负责人联系',
+          $6,'published',clock_timestamp(),$7::uuid
+        )
+      `, [
+        activity.id, tenantId, storeId, activity.publicId, activity.title,
+        activity.packageSelectionRequired, employeeId,
+      ])
+    }
+
+    await createPackage({
+      activityId: packageRequiredActivityId,
+      publicId: 'package-required-paused',
+      name: '暂停中的必选套餐',
+      status: 'paused',
+    })
+    await createPackage({
+      activityId: packageLimitActivityId,
+      publicId: 'package-limit-per-person',
+      name: '按人数限购套餐',
+      feeBasis: 'per_person',
+      memberPurchaseLimit: 1,
+    })
+    await createPackage({
+      activityId: packageLimitActivityId,
+      publicId: 'package-limit-per-registration',
+      name: '按报名限购套餐',
+      feeBasis: 'per_registration',
+      memberPurchaseLimit: 1,
+    })
+
+    await pool.query(`
+      INSERT INTO mbox.inventory_items(id,tenant_id,store_id,sku,name,item_type,base_unit)
+      VALUES
+        ($1::uuid,$2::uuid,$3::uuid,'ACTIVITY-PACKAGE-EMPTY','库存为零的套餐物料','consumable','portion'),
+        ($4::uuid,$2::uuid,$3::uuid,'ACTIVITY-PACKAGE-AVAILABLE','有库存的套餐物料','consumable','portion'),
+        ($5::uuid,$2::uuid,$3::uuid,'ACTIVITY-PAID-HOLD','收费活动套餐物料','consumable','portion')
+    `, [unavailableStockItemId, tenantId, storeId, availableStockItemId, paidActivityStockItemId])
+    await pool.query(`
+      INSERT INTO mbox.inventory_balances(tenant_id,store_id,inventory_item_id,on_hand_quantity,reserved_quantity)
+      VALUES
+        ($1::uuid,$2::uuid,$3::uuid,0,0),
+        ($1::uuid,$2::uuid,$4::uuid,2,0),
+        ($1::uuid,$2::uuid,$5::uuid,10,0)
+    `, [tenantId, storeId, unavailableStockItemId, availableStockItemId, paidActivityStockItemId])
+    await createPackage({
+      activityId: paidActivityId,
+      publicId: 'package-paid-hold-expiry',
+      name: '收费活动履约暂留套餐',
+      inventoryItemId: paidActivityStockItemId,
+    })
+    await createPackage({
+      activityId: packageIsolationActivityId,
+      publicId: 'package-stock-unavailable',
+      name: '缺货套餐',
+      inventoryItemId: unavailableStockItemId,
+    })
+    await createPackage({
+      activityId: packageIsolationActivityId,
+      publicId: 'package-stock-available',
+      name: '可售套餐',
+      inventoryItemId: availableStockItemId,
+    })
+    await createPackage({
+      activityId: packageIsolationActivityId,
+      publicId: 'package-capacity-full',
+      name: '独立容量套餐',
+      capacity: 1,
+    })
+  }
+
+  async function createPackage(input: Readonly<{
+    activityId: string
+    publicId: string
+    name: string
+    status?: 'paused' | 'published'
+    capacity?: number
+    memberPurchaseLimit?: number
+    feeBasis?: 'per_person' | 'per_registration'
+    inventoryItemId?: string
+  }>) {
+    const packageId = randomUUID()
+    const status = input.status ?? 'published'
+    await pool.query(`
+      INSERT INTO mbox.community_activity_packages(
+        id,tenant_id,store_id,activity_id,public_id,name,capacity,member_purchase_limit,
+        fee_amount_minor,deposit_amount_minor,fee_basis,payment_mode,payment_deadline_minutes,
+        payment_rule_text,status
+      ) VALUES(
+        $1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6,$7,$8,
+        0,0,$9,'none',15,'本套餐无需预付',$10
+      )
+    `, [
+      packageId, tenantId, storeId, input.activityId, input.publicId, input.name,
+      input.capacity ?? 10, input.memberPurchaseLimit ?? 1,
+      input.feeBasis ?? 'per_registration', input.inventoryItemId === undefined ? status : 'draft',
+    ])
+    if (input.inventoryItemId !== undefined) {
+      await pool.query(`
+        INSERT INTO mbox.community_activity_package_components(
+          tenant_id,store_id,activity_package_id,inventory_item_id,quantity,per_participant
+        ) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,1,true)
+      `, [tenantId, storeId, packageId, input.inventoryItemId])
+      await pool.query(`
+        UPDATE mbox.community_activity_packages SET status=$4
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+      `, [tenantId, storeId, packageId, status])
+    }
+    return packageId
+  }
+
+  function registerPackageActivity(input: Readonly<{
+    activityPublicId: string
+    activityPackagePublicId: string | null
+    customerId: string
+    partySize?: number
+    suffix: string
+  }>) {
+    return transactions.run(dbScope, (transaction) => (
+      new CustomerExperienceRepository(transaction).registerActivity({
+        activityPublicId: input.activityPublicId,
+        activityPackagePublicId: input.activityPackagePublicId,
+        customerId: input.customerId,
+        partySize: input.partySize ?? 1,
+        protectedContact: dbContact,
+        termsAcknowledged: true,
+        acknowledgedSafetyPolicyVersion: 'safety-v1',
+        acknowledgedRefundPolicyVersion: 'refund-v1',
+        paymentChoice: 'none',
+        paymentMethod: 'native_qr',
+        publicId: `registration-package-${input.suffix}`,
+        paymentPublicId: `payment-package-${input.suffix}`,
+        idempotencyKey: `registration-package-key-${input.suffix}`,
+      })
+    ))
+  }
 
   it('enforces protected contact shape, supports idempotent cancel and safely re-registers a cancelled free activity', async () => {
     await expect(pool.query(`
@@ -616,6 +843,146 @@ integration('activity registration state and contact privacy with PostgreSQL', (
     expect(count.rows[0]?.count).toBe('1')
   })
 
+  it('rejects a package-required activity when every package is paused instead of silently accepting a ticket-only registration', async () => {
+    await expect(registerPackageActivity({
+      activityPublicId: 'community-package-required-db',
+      activityPackagePublicId: null,
+      customerId: requiredPackageCustomerId,
+      suffix: 'required-no-selectable-package',
+    })).rejects.toMatchObject({
+      code: 'ACTIVITY_PACKAGE_SELECTION_REQUIRED',
+      statusCode: 409,
+    })
+    const registrations = await pool.query<{ count: string }>(`
+      SELECT count(*)::text AS count
+      FROM mbox.community_activity_registrations
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        AND activity_id=$3::uuid AND customer_id=$4::uuid
+    `, [tenantId, storeId, packageRequiredActivityId, requiredPackageCustomerId])
+    expect(registrations.rows[0]).toEqual({ count: '0' })
+  })
+
+  it('enforces package member limits at the command boundary for per-person and concurrent per-registration attempts', async () => {
+    await expect(registerPackageActivity({
+      activityPublicId: 'community-package-limit-db',
+      activityPackagePublicId: 'package-limit-per-person',
+      customerId: perPersonLimitCustomerId,
+      partySize: 2,
+      suffix: 'per-person-over-limit',
+    })).rejects.toMatchObject({
+      code: 'ACTIVITY_PACKAGE_PURCHASE_LIMIT',
+      statusCode: 409,
+    })
+
+    const concurrentAttempts = await Promise.allSettled([
+      registerPackageActivity({
+        activityPublicId: 'community-package-limit-db',
+        activityPackagePublicId: 'package-limit-per-registration',
+        customerId: concurrentPackageLimitCustomerId,
+        suffix: 'per-registration-concurrent-a',
+      }),
+      registerPackageActivity({
+        activityPublicId: 'community-package-limit-db',
+        activityPackagePublicId: 'package-limit-per-registration',
+        customerId: concurrentPackageLimitCustomerId,
+        suffix: 'per-registration-concurrent-b',
+      }),
+    ])
+    expect(concurrentAttempts.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    const rejection = concurrentAttempts.find((result) => result.status === 'rejected')
+    expect(rejection).toMatchObject({
+      status: 'rejected',
+      reason: { code: 'ACTIVITY_PACKAGE_PURCHASE_LIMIT', statusCode: 409 },
+    })
+    const committed = await pool.query<{ registrations: string; committed_units: string }>(`
+      SELECT count(*)::text AS registrations,
+        COALESCE(sum(CASE WHEN activity_package_snapshot->>'feeBasis'='per_person'
+          THEN party_size ELSE 1 END),0)::text AS committed_units
+      FROM mbox.community_activity_registrations
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        AND activity_id=$3::uuid AND customer_id=$4::uuid
+        AND activity_package_id=(
+          SELECT id FROM mbox.community_activity_packages
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+            AND public_id='package-limit-per-registration'
+        )
+        AND status IN ('reserved','payment_pending','confirmed','checked_in')
+    `, [tenantId, storeId, packageLimitActivityId, concurrentPackageLimitCustomerId])
+    expect(committed.rows[0]).toEqual({ registrations: '1', committed_units: '1' })
+  })
+
+  it('keeps package capacity and stock scoped to the selected package: a full or out-of-stock package does not block another package', async () => {
+    const unavailableError = await registerPackageActivity({
+      activityPublicId: 'community-package-isolation-db',
+      activityPackagePublicId: 'package-stock-unavailable',
+      customerId: unavailableStockCustomerId,
+      suffix: 'stock-unavailable',
+    }).then(() => null, (error: unknown) => error as Record<string, unknown>)
+    expect(unavailableError).toMatchObject({
+      code: 'ACTIVITY_PACKAGE_INVENTORY_INSUFFICIENT',
+      statusCode: 409,
+    })
+    const occupied = await registerPackageActivity({
+      activityPublicId: 'community-package-isolation-db',
+      activityPackagePublicId: 'package-capacity-full',
+      customerId: capacityOccupyingCustomerId,
+      suffix: 'capacity-occupied',
+    })
+    expect(occupied).toMatchObject({ status: 'confirmed' })
+    const waitlisted = await registerPackageActivity({
+      activityPublicId: 'community-package-isolation-db',
+      activityPackagePublicId: 'package-capacity-full',
+      customerId: capacityWaitlistCustomerId,
+      suffix: 'capacity-waitlisted',
+    })
+    expect(waitlisted).toMatchObject({ status: 'waitlisted' })
+
+    const independentlyAvailable = await registerPackageActivity({
+      activityPublicId: 'community-package-isolation-db',
+      activityPackagePublicId: 'package-stock-available',
+      customerId: availableStockCustomerId,
+      suffix: 'stock-available',
+    })
+    expect(independentlyAvailable).toMatchObject({ status: 'confirmed' })
+    const scopedResults = await pool.query<{
+      customer_id: string
+      package_public_id: string
+      status: string
+    }>(`
+      SELECT registration.customer_id::text,package.public_id AS package_public_id,registration.status
+      FROM mbox.community_activity_registrations registration
+      JOIN mbox.community_activity_packages package
+        ON package.tenant_id=registration.tenant_id AND package.store_id=registration.store_id
+       AND package.id=registration.activity_package_id
+      WHERE registration.tenant_id=$1::uuid AND registration.store_id=$2::uuid
+        AND registration.activity_id=$3::uuid
+        AND registration.customer_id=ANY($4::uuid[])
+      ORDER BY package.public_id,registration.customer_id
+    `, [
+      tenantId, storeId, packageIsolationActivityId,
+      [capacityOccupyingCustomerId, capacityWaitlistCustomerId, availableStockCustomerId],
+    ])
+    expect(scopedResults.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ customer_id: capacityOccupyingCustomerId, package_public_id: 'package-capacity-full', status: 'confirmed' }),
+      expect.objectContaining({ customer_id: capacityWaitlistCustomerId, package_public_id: 'package-capacity-full', status: 'waitlisted' }),
+      expect.objectContaining({ customer_id: availableStockCustomerId, package_public_id: 'package-stock-available', status: 'confirmed' }),
+    ]))
+    const balances = await pool.query<{ sku: string; on_hand_quantity: number; reserved_quantity: number }>(`
+      SELECT item.sku,balance.on_hand_quantity::float8,balance.reserved_quantity::float8
+      FROM mbox.inventory_balances balance
+      JOIN mbox.inventory_items item
+        ON item.tenant_id=balance.tenant_id AND item.store_id=balance.store_id
+       AND item.id=balance.inventory_item_id
+      WHERE balance.tenant_id=$1::uuid AND balance.store_id=$2::uuid
+        AND item.id=ANY($3::uuid[])
+      ORDER BY item.sku
+    `, [tenantId, storeId, [unavailableStockItemId, availableStockItemId]])
+    expect(balances.rows).toEqual([
+      { sku: 'ACTIVITY-PACKAGE-AVAILABLE', on_hand_quantity: 2, reserved_quantity: 1 },
+      { sku: 'ACTIVITY-PACKAGE-EMPTY', on_hand_quantity: 0, reserved_quantity: 0 },
+    ])
+  })
+
   it('atomically creates a paid seat hold and authoritative activity payment, then rejects a forged amount', async () => {
     await pool.query(`
       INSERT INTO mbox.store_commerce_policies (
@@ -633,6 +1000,7 @@ integration('activity registration state and contact privacy with PostgreSQL', (
     const registered = await transactions.run(dbScope, (transaction) => (
       new CustomerExperienceRepository(transaction, true).registerActivity({
         activityPublicId: 'community-paid-db-test', customerId: paidCustomerId, partySize: 2,
+        activityPackagePublicId: 'package-paid-hold-expiry',
         protectedContact: dbContact,
         termsAcknowledged: true,
         acknowledgedSafetyPolicyVersion: 'safety-v1',
@@ -664,6 +1032,20 @@ integration('activity registration state and contact privacy with PostgreSQL', (
       payable_kind: 'activity_registration', order_id: null, amount_minor: '2000',
     })
     expect(stored.rows[0]?.activity_registration_id).toBeTruthy()
+    const beforeOnlinePayment = await pool.query<{ reservation_expires_at: string; activity_ends_at: string }>(`
+      SELECT reservation.expires_at::text AS reservation_expires_at,activity.ends_at::text AS activity_ends_at
+      FROM mbox.community_activity_package_inventory_reservations reservation
+      JOIN mbox.community_activity_registrations registration
+        ON registration.tenant_id=reservation.tenant_id AND registration.store_id=reservation.store_id
+       AND registration.id=reservation.registration_id AND registration.registration_cycle=reservation.registration_cycle
+      JOIN mbox.community_activities activity
+        ON activity.tenant_id=registration.tenant_id AND activity.store_id=registration.store_id
+       AND activity.id=registration.activity_id
+      WHERE registration.tenant_id=$1::uuid AND registration.store_id=$2::uuid
+        AND registration.public_id=$3 AND reservation.status='reserved'
+    `, [tenantId, storeId, registered.publicId])
+    expect(Date.parse(beforeOnlinePayment.rows[0]!.reservation_expires_at))
+      .toBeLessThan(Date.parse(beforeOnlinePayment.rows[0]!.activity_ends_at))
 
     const payableRegistrations = await transactions.run(dbScope, (transaction) => (
       new CustomerExperienceRepository(transaction, true).publicActivityRegistrations(paidCustomerId)
@@ -727,6 +1109,59 @@ integration('activity registration state and contact privacy with PostgreSQL', (
       WHERE tenant_id=$1 AND store_id=$2 AND public_id=$3
     `, [tenantId, storeId, registered.publicId])
     expect(confirmed.rows[0]).toEqual({ status: 'confirmed', payment_status: 'paid' })
+    const onlineFulfilmentHold = await pool.query<{ status: string; expires_at: string; activity_ends_at: string }>(`
+      SELECT reservation.status,reservation.expires_at::text,activity.ends_at::text AS activity_ends_at
+      FROM mbox.community_activity_package_inventory_reservations reservation
+      JOIN mbox.community_activity_registrations registration
+        ON registration.tenant_id=reservation.tenant_id AND registration.store_id=reservation.store_id
+       AND registration.id=reservation.registration_id AND registration.registration_cycle=reservation.registration_cycle
+      JOIN mbox.community_activities activity
+        ON activity.tenant_id=registration.tenant_id AND activity.store_id=registration.store_id
+       AND activity.id=registration.activity_id
+      WHERE registration.tenant_id=$1::uuid AND registration.store_id=$2::uuid
+        AND registration.public_id=$3
+    `, [tenantId, storeId, registered.publicId])
+    expect(onlineFulfilmentHold.rows[0]).toEqual({
+      status: 'reserved', expires_at: onlineFulfilmentHold.rows[0]?.activity_ends_at,
+      activity_ends_at: onlineFulfilmentHold.rows[0]?.activity_ends_at,
+    })
+
+    const manualRegistration = await transactions.run(dbScope, (transaction) => (
+      new CustomerExperienceRepository(transaction, true).registerActivity({
+        activityPublicId: 'community-paid-db-test', activityPackagePublicId: 'package-paid-hold-expiry',
+        customerId: manualCollectionCustomerId, partySize: 1, protectedContact: dbContact,
+        termsAcknowledged: true, acknowledgedSafetyPolicyVersion: 'safety-v1',
+        acknowledgedRefundPolicyVersion: 'refund-v1', paymentChoice: 'deposit',
+        paymentMethod: 'native_qr', publicId: 'registration-paid-manual-hold-db-test',
+        paymentPublicId: 'payment-paid-manual-hold-db-test',
+        idempotencyKey: 'registration-paid-manual-hold-key-0001',
+      })
+    ))
+    const manualCollection = await transactions.run(dbScope, (transaction) => (
+      new PaymentRepository(transaction).recordManualForActivityRegistration({
+        registrationPublicId: manualRegistration.publicId,
+        publicId: 'activity-manual-paid-hold-db-0001', provider: 'cash', method: 'cash',
+        collectedByEmployeeId: approverEmployeeId,
+        evidence: { collectedByEmployeeId: approverEmployeeId, receiptReference: 'ACT-CASH-PAID-HOLD-0001' },
+      })
+    ))
+    expect(manualCollection.payment).toMatchObject({ provider: 'cash', status: 'succeeded', amountMinor: 2_000 })
+    const manualFulfilmentHold = await pool.query<{ status: string; expires_at: string; activity_ends_at: string }>(`
+      SELECT reservation.status,reservation.expires_at::text,activity.ends_at::text AS activity_ends_at
+      FROM mbox.community_activity_package_inventory_reservations reservation
+      JOIN mbox.community_activity_registrations registration
+        ON registration.tenant_id=reservation.tenant_id AND registration.store_id=reservation.store_id
+       AND registration.id=reservation.registration_id AND registration.registration_cycle=reservation.registration_cycle
+      JOIN mbox.community_activities activity
+        ON activity.tenant_id=registration.tenant_id AND activity.store_id=registration.store_id
+       AND activity.id=registration.activity_id
+      WHERE registration.tenant_id=$1::uuid AND registration.store_id=$2::uuid
+        AND registration.public_id=$3
+    `, [tenantId, storeId, manualRegistration.publicId])
+    expect(manualFulfilmentHold.rows[0]).toEqual({
+      status: 'reserved', expires_at: manualFulfilmentHold.rows[0]?.activity_ends_at,
+      activity_ends_at: manualFulfilmentHold.rows[0]?.activity_ends_at,
+    })
 
     const requested = await transactions.run(dbScope, (transaction) => (
       new RefundRepository(transaction).requestActivity({
@@ -771,6 +1206,60 @@ integration('activity registration state and contact privacy with PostgreSQL', (
       WHERE tenant_id=$1 AND store_id=$2 AND public_id=$3
     `, [tenantId, storeId, registered.publicId])
     expect(refunded.rows[0]).toEqual({ status: 'refunded', payment_status: 'refunded' })
+
+    // Public registration IDs are the only identifier the cashier UI has.
+    // This is a PostgreSQL regression test for the public-id/uuid boundary,
+    // including the one-time authorization consumed by manual recollection.
+    const authorization = await transactions.run(dbScope, (transaction) => (
+      new ActivityRecollectionAuthorizationRepository(transaction).authorize({
+        activityRegistrationPublicId: registered.publicId,
+        employeeId: approverEmployeeId,
+        reason: '顾客到店确认改用现金付款',
+      })
+    ))
+    expect(authorization.activityRegistrationId).toBe(captured.activityRegistrationId)
+    const recollected = await transactions.run(dbScope, (transaction) => (
+      new PaymentRepository(transaction).recordManualForActivityRegistration({
+        registrationPublicId: registered.publicId,
+        publicId: 'activity-manual-recollection-db-0001',
+        provider: 'cash', method: 'cash', collectedByEmployeeId: approverEmployeeId,
+        evidence: {
+          collectedByEmployeeId: approverEmployeeId,
+          receiptReference: 'ACT-CASH-RECOLLECT-0001',
+        },
+      })
+    ))
+    expect(recollected.payment).toMatchObject({ provider: 'cash', status: 'succeeded', amountMinor: 2_000 })
+    const recovered = await pool.query<{
+      status: string; payment_status: string; registration_cycle: number; authorization_status: string
+      contact_status: string; contact_version: number
+    }>(`
+      SELECT registration.status,registration.payment_status,registration.registration_cycle,
+        recollection.status AS authorization_status,contact.status AS contact_status,
+        contact.version AS contact_version
+      FROM mbox.community_activity_registrations registration
+      JOIN mbox.activity_registration_recollection_authorizations recollection
+        ON recollection.tenant_id=registration.tenant_id AND recollection.store_id=registration.store_id
+       AND recollection.id=$4::uuid
+      JOIN mbox.community_activity_registration_contact_versions contact
+        ON contact.tenant_id=registration.tenant_id AND contact.store_id=registration.store_id
+       AND contact.registration_id=registration.id AND contact.registration_cycle=registration.registration_cycle
+      WHERE registration.tenant_id=$1 AND registration.store_id=$2 AND registration.public_id=$3
+    `, [tenantId, storeId, registered.publicId, authorization.id])
+    expect(recovered.rows[0]).toEqual({
+      status: 'confirmed', payment_status: 'paid', registration_cycle: 1, authorization_status: 'consumed',
+      contact_status: 'active', contact_version: 2,
+    })
+    // Promotion facts are append-only source evidence of the original activity
+    // payment. Recollection corrects the same attendance rather than mutating
+    // that fact's registration cycle or silently issuing a second promotion.
+    const promotion = await pool.query<{ count: string; payment_id: string }>(`
+      SELECT count(*)::text AS count, max(payment_id::text) AS payment_id
+      FROM mbox.loyalty_promotion_trigger_facts
+      WHERE tenant_id=$1 AND store_id=$2 AND trigger_kind='activity_payment'
+        AND registration_id=$3::uuid AND registration_cycle=1
+    `, [tenantId, storeId, captured.activityRegistrationId])
+    expect(promotion.rows[0]).toEqual({ count: '1', payment_id: captured.id })
   })
 
   it('serializes duplicate paid registration attempts so only one hold and one payment survive', async () => {

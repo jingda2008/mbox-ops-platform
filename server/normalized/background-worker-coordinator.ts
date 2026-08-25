@@ -14,6 +14,8 @@ import type { LoyaltyPointsExpiryBatch } from './loyalty-points-expiry-worker.js
 import type { LoyaltyAccrualDeferredBatch } from './loyalty-accrual-deferred-worker.js'
 import type { LoyaltyRedemptionRecoveryBatch } from './loyalty-redemption-recovery-worker.js'
 import type { LoyaltyTierBenefitExpiryBatch } from './loyalty-tier-benefit-expiry-worker.js'
+import type { LoyaltyAnnualBenefitGrantBatch } from './loyalty-annual-benefit-grant-worker.js'
+import type { AnnualDailySnackExpiryBatch } from './annual-daily-snack-expiry-worker.js'
 import type { LoyaltyTierReviewBatch } from './loyalty-tier-review-worker.js'
 import type { WechatLoyaltyNotificationBatch } from './wechat-loyalty-notification-worker.js'
 import type { ReservationPerformanceNotificationBatch } from './reservation-performance-notification-worker.js'
@@ -23,6 +25,7 @@ import type {
 } from './promotional-loyalty-worker.js'
 import type { StoreScope } from './transaction-runner.js'
 import type { PersonalContactDispositionBatch } from './personal-contact-disposition-worker.js'
+import type { ComplimentaryBenefitFulfillmentBatch } from './complimentary-benefit-fulfillment-worker.js'
 
 type ServiceSlaPort = {
   runBatch(scope: Readonly<StoreScope>, workerId: string): Promise<ServiceTaskSlaBatch>
@@ -57,6 +60,12 @@ type LoyaltyTierReviewPort = {
 type LoyaltyTierBenefitExpiryPort = {
   runBatch(scope: Readonly<StoreScope>, workerId: string): Promise<LoyaltyTierBenefitExpiryBatch>
 }
+type LoyaltyAnnualBenefitGrantPort = {
+  runBatch(scope: Readonly<StoreScope>, workerId: string): Promise<LoyaltyAnnualBenefitGrantBatch>
+}
+type AnnualDailySnackExpiryPort = {
+  runBatch(scope: Readonly<StoreScope>, workerId: string): Promise<AnnualDailySnackExpiryBatch>
+}
 type WechatLoyaltyNotificationPort = {
   runBatch(scope: Readonly<StoreScope>, workerId: string): Promise<WechatLoyaltyNotificationBatch>
 }
@@ -69,6 +78,9 @@ type PromotionalLoyaltyPort = {
 }
 type PersonalContactDispositionPort = {
   runBatch(scope:Readonly<StoreScope>,workerId:string):Promise<PersonalContactDispositionBatch>
+}
+type ComplimentaryBenefitFulfillmentPort = {
+  runBatch(scope:Readonly<StoreScope>,workerId:string):Promise<ComplimentaryBenefitFulfillmentBatch>
 }
 type IdempotencyCleanupPort = {
   runBatch(scope: Readonly<StoreScope>): Promise<IdempotencyCleanupResult>
@@ -131,6 +143,8 @@ export type NormalizedWorkerName =
   | 'loyalty-accrual-deferred'
   | 'loyalty-redemption-recovery'
   | 'loyalty-promotion'
+  | 'loyalty-annual-benefit-grant'
+  | 'annual-daily-snack-expiry'
   | 'loyalty-tier-benefit-expiry'
   | 'loyalty-tier-review'
   | 'wechat-loyalty-notification'
@@ -144,6 +158,7 @@ export type NormalizedWorkerName =
   | 'outbox'
   | 'notification'
   | 'personal-contact-disposition'
+  | 'complimentary-benefit-fulfillment'
 
 export interface NormalizedWorkerCycleResult {
   startedAt: string
@@ -162,6 +177,8 @@ export interface NormalizedWorkerCycleResult {
       triggers: PromotionalLoyaltyBatchResult
       refunds: PromotionalLoyaltyRefundBatchResult
     } | null
+    loyaltyAnnualBenefitGrant: LoyaltyAnnualBenefitGrantBatch | null
+    annualDailySnackExpiry: AnnualDailySnackExpiryBatch | null
     loyaltyTierBenefitExpiry: LoyaltyTierBenefitExpiryBatch | null
     loyaltyTierReview: LoyaltyTierReviewBatch | null
     wechatLoyaltyNotification: WechatLoyaltyNotificationBatch | null
@@ -175,6 +192,7 @@ export interface NormalizedWorkerCycleResult {
     outbox: OutboxBatchResult | null
     notification: NotificationBatchResult | null
     personalContactDisposition: PersonalContactDispositionBatch | null
+    complimentaryBenefitFulfillment: ComplimentaryBenefitFulfillmentBatch | null
   }
   failures: NormalizedWorkerName[]
 }
@@ -200,6 +218,8 @@ export class NormalizedBackgroundWorkerCoordinator {
       loyaltyAccrualDeferred?: LoyaltyAccrualDeferredPort
       loyaltyRedemptionRecovery?: LoyaltyRedemptionRecoveryPort
       promotionalLoyalty?: PromotionalLoyaltyPort
+      loyaltyAnnualBenefitGrant?: LoyaltyAnnualBenefitGrantPort
+      annualDailySnackExpiry?: AnnualDailySnackExpiryPort
       loyaltyTierBenefitExpiry?: LoyaltyTierBenefitExpiryPort
       loyaltyTierReview: LoyaltyTierReviewPort
       wechatLoyaltyNotification?: WechatLoyaltyNotificationPort
@@ -213,6 +233,7 @@ export class NormalizedBackgroundWorkerCoordinator {
       outbox?: OutboxPort
       notification?: NotificationPort
       personalContactDisposition: PersonalContactDispositionPort
+      complimentaryBenefitFulfillment?: ComplimentaryBenefitFulfillmentPort
     }>,
     private readonly delivery: Readonly<{
       outbox?: OutboxDelivery
@@ -265,6 +286,8 @@ export class NormalizedBackgroundWorkerCoordinator {
       'loyalty-accrual-deferred',
       'loyalty-redemption-recovery',
       'loyalty-promotion',
+      'loyalty-annual-benefit-grant',
+      'annual-daily-snack-expiry',
       'loyalty-tier-benefit-expiry',
       'loyalty-tier-review',
       'wechat-loyalty-notification',
@@ -278,6 +301,7 @@ export class NormalizedBackgroundWorkerCoordinator {
       'outbox',
       'notification',
       'personal-contact-disposition',
+      'complimentary-benefit-fulfillment',
     ]
     const executions = await Promise.allSettled([
       this.runWhenDue('service-sla', () => this.workers.serviceSla.runBatch(this.scope, `${this.options.workerId}:service-sla`)),
@@ -329,6 +353,16 @@ export class NormalizedBackgroundWorkerCoordinator {
           ])
           return { triggers, refunds }
         }),
+      this.workers.loyaltyAnnualBenefitGrant===undefined
+        ? Promise.resolve(null)
+        : this.runWhenDue('loyalty-annual-benefit-grant', () => this.workers.loyaltyAnnualBenefitGrant!.runBatch(
+          this.scope, `${this.options.workerId}:loyalty-annual-benefit-grant`,
+        )),
+      this.workers.annualDailySnackExpiry===undefined
+        ? Promise.resolve(null)
+        : this.runWhenDue('annual-daily-snack-expiry', () => this.workers.annualDailySnackExpiry!.runBatch(
+          this.scope, `${this.options.workerId}:annual-daily-snack-expiry`,
+        )),
       this.workers.loyaltyTierBenefitExpiry===undefined
         ? Promise.resolve(null)
         : this.runWhenDue('loyalty-tier-benefit-expiry', () => this.workers.loyaltyTierBenefitExpiry!.runBatch(
@@ -376,6 +410,13 @@ export class NormalizedBackgroundWorkerCoordinator {
       this.runWhenDue('personal-contact-disposition', () => this.workers.personalContactDisposition.runBatch(
         this.scope,`${this.options.workerId}:personal-contact-disposition`,
       )),
+      this.workers.complimentaryBenefitFulfillment===undefined
+        ? Promise.resolve(null)
+        : this.runWhenDue('complimentary-benefit-fulfillment', () => (
+          this.workers.complimentaryBenefitFulfillment!.runBatch(
+            this.scope,`${this.options.workerId}:complimentary-benefit-fulfillment`,
+          )
+        )),
     ] as const)
 
     const failures: NormalizedWorkerName[] = []
@@ -386,7 +427,7 @@ export class NormalizedBackgroundWorkerCoordinator {
       failures.push(worker)
       this.options.onError?.(worker, execution.reason)
     })
-    const personalContactDisposition = fulfilledValue(executions[22])
+    const personalContactDisposition = fulfilledValue(executions[24])
     if (personalContactDisposition !== null && personalContactDisposition.failed>0) {
       failures.push('personal-contact-disposition')
       this.options.onError?.(
@@ -409,19 +450,22 @@ export class NormalizedBackgroundWorkerCoordinator {
         loyaltyAccrualDeferred: fulfilledValue(executions[7]),
         loyaltyRedemptionRecovery: fulfilledValue(executions[8]),
         loyaltyPromotion: fulfilledValue(executions[9]),
-        loyaltyTierBenefitExpiry: fulfilledValue(executions[10]),
-        loyaltyTierReview: fulfilledValue(executions[11]),
-        wechatLoyaltyNotification: fulfilledValue(executions[12]),
-        reservationPerformanceNotification: fulfilledValue(executions[13]),
-        idempotencyCleanup: fulfilledValue(executions[14]),
-        staffLoginRateLimitCleanup: fulfilledValue(executions[15]),
-        businessDay: fulfilledValue(executions[16]),
-        sop: fulfilledValue(executions[17]),
-        aiScheduled: fulfilledValue(executions[18]),
-        print: fulfilledValue(executions[19]),
-        outbox: fulfilledValue(executions[20]),
-        notification: fulfilledValue(executions[21]),
-        personalContactDisposition,
+        loyaltyAnnualBenefitGrant: fulfilledValue(executions[10]),
+        annualDailySnackExpiry: fulfilledValue(executions[11]),
+        loyaltyTierBenefitExpiry: fulfilledValue(executions[12]),
+        loyaltyTierReview: fulfilledValue(executions[13]),
+        wechatLoyaltyNotification: fulfilledValue(executions[14]),
+        reservationPerformanceNotification: fulfilledValue(executions[15]),
+        idempotencyCleanup: fulfilledValue(executions[16]),
+        staffLoginRateLimitCleanup: fulfilledValue(executions[17]),
+        businessDay: fulfilledValue(executions[18]),
+        sop: fulfilledValue(executions[19]),
+        aiScheduled: fulfilledValue(executions[20]),
+        print: fulfilledValue(executions[21]),
+        outbox: fulfilledValue(executions[22]),
+        notification: fulfilledValue(executions[23]),
+        personalContactDisposition: fulfilledValue(executions[24]),
+        complimentaryBenefitFulfillment: fulfilledValue(executions[25]),
       },
       failures,
     }
@@ -468,6 +512,8 @@ const DEFAULT_WORKER_CADENCES: Readonly<Record<NormalizedWorkerName, number>> = 
   'loyalty-accrual-deferred': 30_000,
   'loyalty-redemption-recovery': 30_000,
   'loyalty-promotion': 5_000,
+  'loyalty-annual-benefit-grant': 60_000,
+  'annual-daily-snack-expiry': 2_000,
   'loyalty-tier-benefit-expiry': 60_000,
   'loyalty-tier-review': 60_000,
   'wechat-loyalty-notification': 30_000,
@@ -481,6 +527,7 @@ const DEFAULT_WORKER_CADENCES: Readonly<Record<NormalizedWorkerName, number>> = 
   outbox: 500,
   notification: 500,
   'personal-contact-disposition': 60_000,
+  'complimentary-benefit-fulfillment': 500,
 })
 
 function workerCadences(

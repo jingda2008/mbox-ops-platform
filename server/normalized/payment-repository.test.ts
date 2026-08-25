@@ -6,6 +6,8 @@ import {
   PaymentRepository,
   type PaymentStatus,
 } from './payment-repository.js'
+import { ActivityRecollectionAuthorizationConflictError } from './activity-recollection-authorization-repository.js'
+import { RecollectionAuthorizationRequiredError } from './recollection-authorization-repository.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
 const tenantId = '11111111-1111-4111-8111-111111111111'
@@ -67,7 +69,13 @@ describe('PaymentRepository', () => {
     const transaction = new ScriptedTransaction([
       rows([orderRow(12800)]),
       rows([{ gross_paid_minor: '3000', refunded_minor: '500', has_pending: false }]),
+      rows([{
+        id: '44444444-4444-4444-8444-444444444445', public_id: 'recollect-test-0001', order_id: orderId,
+        amount_minor: '10300', currency: 'CNY', reason: '客人确认改用另一种付款方式',
+        authorized_by_employee_id: employeeId, expires_at: '2026-08-30T00:00:00.000Z', created_at: '2026-08-24T00:00:00.000Z',
+      }]),
       rows([paymentRow('created', 10300)]),
+      rows([{ id: '44444444-4444-4444-8444-444444444445' }]),
     ])
 
     const payment = await new PaymentRepository(transaction).createForOrder({
@@ -81,7 +89,72 @@ describe('PaymentRepository', () => {
     expect(payment.amountMinor).toBe(10300)
     expect(transaction.calls[0]?.sql).toContain('FROM mbox.orders')
     expect(transaction.calls[0]?.sql).toContain('FOR UPDATE')
-    expect(transaction.calls[2]?.values[7]).toBe(10300)
+    expect(transaction.calls[3]?.values[7]).toBe(10300)
+  })
+
+  it('does not treat a completed refund as automatic permission to charge the table again', async () => {
+    const transaction = new ScriptedTransaction([
+      rows([orderRow(8800)]),
+      rows([{ gross_paid_minor: '8800', refunded_minor: '8800', has_pending: false }]),
+      rows([]),
+    ])
+
+    await expect(new PaymentRepository(transaction).createForOrder({
+      orderId,
+      publicId: 'payment-refund-without-authorization-0001',
+      provider: 'postar',
+      method: 'native_qr',
+      principal: employeePrincipal,
+    })).rejects.toBeInstanceOf(RecollectionAuthorizationRequiredError)
+
+    expect(transaction.calls).toHaveLength(3)
+    expect(transaction.calls[2]?.sql).toContain('mbox.order_recollection_authorizations')
+  })
+
+  it('does not create a recollection payment or consume the authorization when later registrations fill the activity', async () => {
+    const transaction = new ScriptedTransaction([
+      rows([refundedActivityRegistrationRow()]),
+      rows([{ status: 'refunded', payment_status: 'refunded' }]),
+      rows([activityRecollectionAuthorizationRow()]),
+      rows([{
+        id: '88888888-8888-4888-8888-888888888888', capacity: 1, status: 'published',
+        ends_at: '2099-08-11T12:00:00.000Z', registered_count: '1',
+      }]),
+    ])
+
+    await expect(new PaymentRepository(transaction).recordManualForActivityRegistration(activityManualInput()))
+      .rejects.toBeInstanceOf(ActivityRecollectionAuthorizationConflictError)
+
+    expect(transaction.calls.some((call) => call.sql.includes('INSERT INTO mbox.payments'))).toBe(false)
+    expect(transaction.calls.some((call) => call.sql.includes("SET status='consumed'"))).toBe(false)
+    expect(transaction.calls[3]?.sql).toContain('FOR UPDATE OF activity')
+  })
+
+  it('does not create a recollection payment or consume the authorization when package inventory was reserved later', async () => {
+    const transaction = new ScriptedTransaction([
+      rows([refundedActivityRegistrationRow()]),
+      rows([{ status: 'refunded', payment_status: 'refunded' }]),
+      rows([activityRecollectionAuthorizationRow()]),
+      rows([{
+        id: '88888888-8888-4888-8888-888888888888', capacity: 2, status: 'published',
+        ends_at: '2099-08-11T12:00:00.000Z', registered_count: '0',
+      }]),
+      rows([{ id: '99999999-9999-4999-8999-999999999999', capacity: 2, registered_count: '0' }]),
+      rows([{
+        id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        inventory_item_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        item_name: '活动专属酒水', item_status: 'active', required_quantity: '1',
+      }]),
+      rows([]),
+      rows([], 0),
+    ])
+
+    await expect(new PaymentRepository(transaction).recordManualForActivityRegistration(activityManualInput()))
+      .rejects.toBeInstanceOf(ActivityRecollectionAuthorizationConflictError)
+
+    expect(transaction.calls.some((call) => call.sql.includes('INSERT INTO mbox.payments'))).toBe(false)
+    expect(transaction.calls.some((call) => call.sql.includes("SET status='consumed'"))).toBe(false)
+    expect(transaction.calls[7]?.sql).toContain('on_hand_quantity-reserved_quantity>=')
   })
 
   it('accepts an already-applied identical callback without a second update', async () => {
@@ -427,6 +500,35 @@ function paymentRow(
 
 function paymentTargetRow(): Record<string, unknown> {
   return { id: paymentId, payable_kind: 'order', order_id: orderId, activity_registration_id: null }
+}
+
+function refundedActivityRegistrationRow(): Record<string, unknown> {
+  return {
+    id: '77777777-7777-4777-8777-777777777778',
+    status: 'refunded', payment_status: 'refunded', payment_id: paymentId,
+    amount_due_minor: '0', paid_amount_minor: '2000', currency: 'CNY',
+    activity_id: '88888888-8888-4888-8888-888888888888',
+    activity_package_id: '99999999-9999-4999-8999-999999999999',
+    party_size: 1, registration_cycle: 1,
+  }
+}
+
+function activityRecollectionAuthorizationRow(): Record<string, unknown> {
+  return {
+    id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', public_id: 'activity-recollect-0001',
+    activity_registration_id: '77777777-7777-4777-8777-777777777778',
+    source_refund_id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', amount_minor: '2000', currency: 'CNY',
+    reason: '顾客确认重新以现金收款', authorized_by_employee_id: employeeId,
+    expires_at: '2099-08-11T12:00:00.000Z', created_at: '2026-08-11T12:00:00.000Z',
+  }
+}
+
+function activityManualInput() {
+  return {
+    registrationPublicId: 'activity-registration-public-0001', publicId: 'activity-payment-public-0001',
+    provider: 'cash' as const, method: 'cash' as const, collectedByEmployeeId: employeeId,
+    evidence: { collectedByEmployeeId: employeeId, receiptReference: 'ACT-CASH-0001' },
+  }
 }
 
 function orderRow(totalAmountMinor: number): Record<string, unknown> {

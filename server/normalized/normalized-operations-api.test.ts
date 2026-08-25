@@ -67,7 +67,12 @@ const task: ServiceTask = {
 
 const transaction: ScopedTransaction = {
   scope: { tenantId, storeId },
-  query: async () => ({ rows: [], rowCount: 0 }),
+  query: async (sql) => {
+    if (String(sql).includes('FROM mbox.employees employee')) {
+      return { rows: [{ employee_status: 'active', session_status: 'open', allowed: true, permissions_allowed: true }], rowCount: 1 }
+    }
+    return { rows: [], rowCount: 0 }
+  },
 }
 
 const apps: FastifyInstance[] = []
@@ -282,9 +287,14 @@ describe('normalizedOperationsApiPlugin', () => {
   it('blocks final table closing while payable orders remain unsettled', async () => {
     const unsettledTransaction: ScopedTransaction = {
       scope: { tenantId, storeId },
-      query: vi.fn(async (sql: string) => sql.includes('outstanding_amount_minor')
-        ? { rows: [{ order_count: '2', outstanding_amount_minor: '15600' }], rowCount: 1 }
-        : { rows: [], rowCount: 0 }),
+      query: vi.fn(async (sql: string) => {
+        if (sql.includes('FROM mbox.employees employee')) return {
+          rows: [{ employee_status: 'active', session_status: 'open', allowed: true, permissions_allowed: true }], rowCount: 1,
+        }
+        return sql.includes('outstanding_amount_minor')
+          ? { rows: [{ order_unsettled: '2', outstanding_order_count: '2', outstanding_amount_minor: '15600' }], rowCount: 1 }
+          : { rows: [], rowCount: 0 }
+      }),
     }
     const commandExecutor = {
       execute: vi.fn(async <Result>(
@@ -316,9 +326,14 @@ describe('normalizedOperationsApiPlugin', () => {
   it('does not enter the closing state while payable orders remain unsettled', async () => {
     const unsettledTransaction: ScopedTransaction = {
       scope: { tenantId, storeId },
-      query: vi.fn(async (sql: string) => sql.includes('outstanding_amount_minor')
-        ? { rows: [{ order_count: '1', outstanding_amount_minor: '8800' }], rowCount: 1 }
-        : { rows: [], rowCount: 0 }),
+      query: vi.fn(async (sql: string) => {
+        if (sql.includes('FROM mbox.employees employee')) return {
+          rows: [{ employee_status: 'active', session_status: 'open', allowed: true, permissions_allowed: true }], rowCount: 1,
+        }
+        return sql.includes('outstanding_amount_minor')
+          ? { rows: [{ order_unsettled: '1', outstanding_order_count: '1', outstanding_amount_minor: '8800' }], rowCount: 1 }
+          : { rows: [], rowCount: 0 }
+      }),
     }
     const commandExecutor = {
       execute: vi.fn(async <Result>(
@@ -339,6 +354,177 @@ describe('normalizedOperationsApiPlugin', () => {
       error: { code: 'TABLE_SESSION_UNSETTLED', message: '本桌仍有1笔未结订单（待收¥88.00），请先完成收款再关台' },
     })
     expect(value.tableRepository.beginClosing).not.toHaveBeenCalled()
+  })
+
+  it('blocks closing when payment is settled but fulfillment or held resources remain unresolved', async () => {
+    const blockedTransaction: ScopedTransaction = {
+      scope: { tenantId, storeId },
+      query: vi.fn(async (sql: string) => {
+        if (sql.includes('FROM mbox.employees employee')) return {
+          rows: [{ employee_status: 'active', session_status: 'open', allowed: true, permissions_allowed: true }], rowCount: 1,
+        }
+        return { rows: [{
+          order_unsettled: '0',
+          outstanding_order_count: '0',
+          outstanding_amount_minor: '0',
+          order_item_unresolved: '2',
+          payment_pending: '1',
+          inventory_reserved: '1',
+          benefit_reserved: '1',
+          refund_pending: '1',
+          service_active: '1',
+          kds_active: '1',
+          pricing_reserved: '1',
+          song_active: '1',
+          experience_active: '1',
+          redemption_pending: '1',
+          checkout_offer_active: '1',
+        }],
+          rowCount: 1,
+        }
+      }),
+    }
+    const commandExecutor = {
+      execute: vi.fn(async <Result>(
+        _command: Readonly<IdempotentCommand<Result>>,
+        handler: (value: ScopedTransaction) => Promise<CommandOutcome<Result>>,
+      ) => ({ value: (await handler(blockedTransaction)).result, replayed: false })),
+    }
+    const value = fixture({ commandExecutor })
+
+    const response = await value.app.inject({
+      method: 'POST',
+      url: `/api/table-sessions/${sessionId}/close`,
+      headers: { 'idempotency-key': 'close-unfulfilled-vip1-0001' },
+    })
+
+    expect(response.statusCode).toBe(409)
+    expect(response.json()).toEqual({
+      error: {
+        code: 'TABLE_SESSION_UNSETTLED',
+        message: '本桌仍有2项出品未完成、1项出品任务状态未完成、1笔支付结果待确认、1项库存预留未释放、1笔退款仍在处理、1项桌台服务待办未完成、1项定价授权仍在占用、1项点歌请求未完成、1项会员权益暂留未处理、1项顾客体验计划未结束、1项会员兑换待履约、1项结账加单报价待处理，请先处理完成再关台',
+      },
+    })
+    const blockerQuery = vi.mocked(blockedTransaction.query).mock.calls
+      .find(([sql]) => String(sql).includes('outstanding_amount_minor'))
+    expect(blockerQuery?.[0]).toContain("item.fulfillment_station IN ('bar','kitchen')")
+    expect(value.tableRepository.completeClosing).not.toHaveBeenCalled()
+  })
+
+  it('lets an authorized employee freeze guest writes while preserving guest read access state', async () => {
+    const freezeTransaction: ScopedTransaction = {
+      scope: { tenantId, storeId },
+      query: vi.fn(async (sql: string) => {
+        if (sql.includes('FROM mbox.employees employee')) return {
+          rows: [{ employee_status: 'active', session_status: 'open', allowed: true, permissions_allowed: true }], rowCount: 1,
+        }
+        if (sql.includes('UPDATE mbox.table_sessions')) return {
+          rows: [{ id: sessionId, business_date: '2026-08-11', updated_at: '2026-08-11T12:10:00.000Z' }],
+          rowCount: 1,
+        }
+        if (sql.includes('UPDATE mbox.guest_shared_carts')) return { rows: [{ version: '4' }], rowCount: 1 }
+        return { rows: [], rowCount: 0 }
+      }),
+    }
+    const commandExecutor = {
+      execute: vi.fn(async <Result>(
+        _command: Readonly<IdempotentCommand<Result>>,
+        handler: (value: ScopedTransaction) => Promise<CommandOutcome<Result>>,
+      ) => ({ value: (await handler(freezeTransaction)).result, replayed: false })),
+    }
+    const value = fixture({
+      commandExecutor,
+      resolveContext: () => ({
+        scope: { tenantId, storeId }, employeeId, businessDate: '2026-08-11',
+        capabilities: ['guest.cart.freeze'],
+      }),
+    })
+    const response = await value.app.inject({
+      method: 'POST',
+      url: `/api/table-sessions/${sessionId}/guest-cart-freeze`,
+      headers: { 'idempotency-key': 'guest-cart-freeze-0001' },
+      payload: { frozen: true, reason: '服务人员核对本桌点单' },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toEqual({
+      data: {
+        tableSessionId: sessionId,
+        frozen: true,
+        reason: '服务人员核对本桌点单',
+        updatedAt: '2026-08-11T12:10:00.000Z',
+        cartVersion: 4,
+      },
+      meta: { replayed: false },
+    })
+    const tableUpdate = vi.mocked(freezeTransaction.query).mock.calls.find(([sql]) => String(sql).includes('UPDATE mbox.table_sessions'))
+    expect(tableUpdate?.[1]).toEqual([tenantId, storeId, sessionId, true, employeeId, '服务人员核对本桌点单'])
+  })
+
+  it('rejects close and cart-freeze commands for a table outside the employee responsibility scope', async () => {
+    const deniedTransaction: ScopedTransaction = {
+      scope: { tenantId, storeId },
+      query: vi.fn(async (sql: string) => {
+        if (sql.includes('FROM mbox.employees employee')) return {
+          rows: [{ employee_status: 'active', session_status: 'open', allowed: false }], rowCount: 1,
+        }
+        return { rows: [], rowCount: 0 }
+      }),
+    }
+    const commandExecutor = {
+      execute: vi.fn(async <Result>(
+        _command: Readonly<IdempotentCommand<Result>>,
+        handler: (value: ScopedTransaction) => Promise<CommandOutcome<Result>>,
+      ) => ({ value: (await handler(deniedTransaction)).result, replayed: false })),
+    }
+    const value = fixture({
+      commandExecutor,
+      resolveContext: () => ({
+        scope: { tenantId, storeId }, employeeId, businessDate: '2026-08-11',
+        capabilities: ['guest.cart.freeze', 'table.close'],
+      }),
+    })
+    const freeze = await value.app.inject({
+      method: 'POST', url: `/api/table-sessions/${sessionId}/guest-cart-freeze`,
+      headers: { 'idempotency-key': 'wrong-table-freeze-0001' },
+      payload: { frozen: true, reason: '核对当前桌点单明细' },
+    })
+    expect(freeze.statusCode).toBe(403)
+    expect(freeze.json()).toMatchObject({ error: { code: 'TABLE_ACCESS_FORBIDDEN' } })
+
+    const close = await value.app.inject({
+      method: 'POST', url: `/api/table-sessions/${sessionId}/close`,
+      headers: { 'idempotency-key': 'wrong-table-close-0001' }, payload: {},
+    })
+    expect(close.statusCode).toBe(403)
+    expect(close.json()).toMatchObject({ error: { code: 'TABLE_ACCESS_FORBIDDEN' } })
+  })
+
+  it('rejects shared-cart freezes without permission or a meaningful reason', async () => {
+    const denied = fixture()
+    const deniedResponse = await denied.app.inject({
+      method: 'POST',
+      url: `/api/table-sessions/${sessionId}/guest-cart-freeze`,
+      headers: { 'idempotency-key': 'guest-cart-freeze-denied' },
+      payload: { frozen: true, reason: '现场核对' },
+    })
+    expect(deniedResponse.statusCode).toBe(403)
+    expect(deniedResponse.json()).toMatchObject({ error: { code: 'CAPABILITY_FORBIDDEN' } })
+
+    const authorized = fixture({
+      resolveContext: () => ({
+        scope: { tenantId, storeId }, employeeId, businessDate: '2026-08-11',
+        capabilities: ['guest.cart.freeze'],
+      }),
+    })
+    const invalid = await authorized.app.inject({
+      method: 'POST',
+      url: `/api/table-sessions/${sessionId}/guest-cart-freeze`,
+      headers: { 'idempotency-key': 'guest-cart-freeze-invalid' },
+      payload: { frozen: true, reason: '核' },
+    })
+    expect(invalid.statusCode).toBe(400)
+    expect(invalid.json()).toMatchObject({ error: { code: 'REQUEST_INVALID' } })
   })
 
   it('lets authorized managers safely process only awaiting prior business days',async()=>{

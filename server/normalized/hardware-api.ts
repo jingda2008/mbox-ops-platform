@@ -67,7 +67,7 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
 
   app.get('/hardware/print-jobs', async (request, reply) => handle(reply, async () => {
     const context = await options.resolveContext(request)
-    requireAny(context, ['print.view', 'print.view_all', 'hardware.manage', 'printer.manage'])
+    requireAny(context, ['print.view', 'print.view_all', 'print.reprint', 'hardware.manage', 'printer.manage'])
     const stations = printStationsFor(context)
     const query = readObject(request.query ?? {})
     const requestedStation = optionalEnum(query.station, ['bar', 'kitchen', 'cashier']) as HardwareStation | undefined
@@ -204,6 +204,28 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
     return reply.send({ data: execution.value, replayed: execution.replayed })
   }))
 
+  app.post('/hardware/print-jobs/:jobId/reprint', async (request, reply) => handle(reply, async () => {
+    const context = await options.resolveContext(request)
+    requireAny(context, ['print.reprint', 'printer.manage'])
+    const body = readObject(request.body)
+    const reason = readString(body.reason, 'reason', 1000, 3)
+    const jobId = readUuid(readObject(request.params).jobId, 'jobId')
+    const execution = await options.commands.execute(command(request, context, 'print.job.reprint', body, codec()), async (transaction) => {
+      const store = repository(transaction)
+      const original = await store.getById(jobId)
+      if (!original) throw new HardwareNotFoundError('打印任务不存在')
+      if (!printStationsFor(context).includes(original.stationCode)) throw new HardwareAccessDeniedError()
+      const result = await store.reprintPrintJob(
+        jobId,
+        context.employeeId,
+        reason,
+        commandIdempotencyKey(request),
+      )
+      return outcome(context, 'print.job.reprinted.v1', 'print_job', result.id, reason, result)
+    })
+    return reply.send({ data: execution.value, replayed: execution.replayed })
+  }))
+
   app.post('/hardware/devices/:deviceId/commands', async (request, reply) => handle(reply, async () => {
     const context = await options.resolveContext(request)
     const body = readObject(request.body)
@@ -302,7 +324,16 @@ function printStationsFor(context: NormalizedOperationsRequestContext): Hardware
   if (context.capabilities.includes('work.bar')) stations.push('bar')
   if (context.capabilities.includes('work.kitchen')) stations.push('kitchen')
   if (context.capabilities.includes('work.cashier')) stations.push('cashier')
+  if (context.capabilities.includes('print.reprint')) stations.push('cashier')
   return stations
+}
+
+function commandIdempotencyKey(request: FastifyRequest): string {
+  const value = request.headers['idempotency-key'] ?? request.headers['x-idempotency-key']
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_.:-]{8,128}$/.test(value)) {
+    throw new HardwareRequestError('缺少有效的幂等键')
+  }
+  return value
 }
 
 function requireAny(context: NormalizedOperationsRequestContext, capabilities: readonly string[]) {

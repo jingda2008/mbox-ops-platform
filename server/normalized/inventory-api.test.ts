@@ -430,6 +430,153 @@ integration("normalized inventory API PostgreSQL integration", () => {
     ).rejects.toMatchObject({ code: "55000" });
   });
 
+  it("previews the selected receipt cost, rolls back a blocked publication, then atomically applies the new cost and publishes", async () => {
+    const launchItem = await createItem(
+      "LAUNCH-SPIRIT-ML",
+      "发布测试酒液",
+      false,
+      "inventory-launch-item-0001",
+      "ingredient",
+      "ml",
+      "spirits",
+    );
+    const bound = await app.inject({
+      method: "POST",
+      url: `/api/inventory/items/${launchItem.id}/barcodes`,
+      headers: headers(managerId, "inventory-launch-bind-0001"),
+      payload: { code: "6970000000123", packageQuantity: "750" },
+    });
+    expect(bound.statusCode).toBe(200);
+
+    const launchProductId = randomUUID();
+    await pool.query(
+      `INSERT INTO mbox.products(
+        id,tenant_id,store_id,code,name,category_code,fulfillment_station,product_kind,
+        product_snapshot,status,cost_amount_minor,inventory_control_mode,guest_visible,allowed_channels
+      ) VALUES($1,$2,$3,'LAUNCH-GLASS','发布测试单杯','spirits','bar','single',
+        '{"salesSpecificationType":"glass"}'::jsonb,'inactive',100,'tracked',true,ARRAY['guest_qr']::text[])
+      `,
+      [launchProductId, tenantId, storeId],
+    );
+    await pool.query(
+      `INSERT INTO mbox.product_prices(
+        tenant_id,store_id,product_id,price_type,currency,amount_minor,valid_from
+      ) VALUES($1,$2,$3,'standard','CNY',6800,clock_timestamp())`,
+      [tenantId, storeId, launchProductId],
+    );
+    const recipe = await app.inject({
+      method: "PUT",
+      url: `/api/inventory/products/${launchProductId}/recipe`,
+      headers: headers(managerId, "inventory-launch-recipe-0001"),
+      payload: {
+        yieldQuantity: 1,
+        components: [{ inventoryItemId: launchItem.id, quantity: "50", expectedWasteQuantity: "0" }],
+      },
+    });
+    expect(recipe.statusCode).toBe(200);
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/inventory/receipts",
+      headers: headers(managerId, "inventory-launch-receipt-0001"),
+      payload: {
+        invoiceTotalMinor: "30000",
+        lines: [{ scanCode: "6970000000123", batchCode: "LAUNCH-BATCH", packages: "2", totalCostMinor: "30000" }],
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const receiptId = created.json().data.id as string;
+
+    const preview = await app.inject({
+      method: "POST",
+      url: `/api/inventory/receipts/${receiptId}/receive-and-publish-preview`,
+      headers: headers(managerId, "inventory-launch-preview-0001"),
+      payload: { productId: launchProductId },
+    });
+    expect(preview.statusCode, preview.body).toBe(200);
+    expect(preview.json().data).toMatchObject({
+      productId: launchProductId,
+      salesSpecificationType: "glass",
+      costAmountMinor: 1000,
+      standardPriceMinor: 6800,
+      grossProfitMinor: 5800,
+      marginBasisPoints: 8529,
+      sellableServings: 30,
+      guestVisible: true,
+      allowedChannels: ["guest_qr"],
+      components: [{
+        inventoryItemId: launchItem.id,
+        incomingQuantity: "1500.000000",
+        totalAvailableAfterReceipt: "1500.000000",
+        perServingDeduction: "50.0000000000000000",
+        sourceUnitCostMinor: "20.000000",
+      }],
+    });
+    const before = await pool.query<{ status: string; on_hand: string; cost: string }>(
+      `SELECT receipt.status,balance.on_hand_quantity::text AS on_hand,product.cost_amount_minor::text AS cost
+       FROM mbox.purchase_receipts receipt
+       JOIN mbox.purchase_receipt_lines line ON line.receipt_id=receipt.id
+       JOIN mbox.inventory_balances balance ON balance.inventory_item_id=line.inventory_item_id
+        AND balance.tenant_id=line.tenant_id AND balance.store_id=line.store_id
+       JOIN mbox.products product ON product.id=$4
+       WHERE receipt.tenant_id=$1 AND receipt.store_id=$2 AND receipt.id=$3`,
+      [tenantId, storeId, receiptId, launchProductId],
+    );
+    expect(before.rows[0]).toEqual({ status: "draft", on_hand: "0.000000", cost: "100" });
+
+    const blocked = await app.inject({
+      method: "POST",
+      url: `/api/inventory/receipts/${receiptId}/receive-and-publish`,
+      headers: headers(managerId, "inventory-launch-publish-blocked-0001"),
+      payload: { productId: launchProductId },
+    });
+    expect(blocked.statusCode).toBe(409);
+    const rolledBack = await pool.query<{ status: string; on_hand: string; cost: string; cost_versions: string }>(
+      `SELECT receipt.status,balance.on_hand_quantity::text AS on_hand,product.cost_amount_minor::text AS cost,
+        (SELECT count(*)::text FROM mbox.recipe_cost_versions version WHERE version.product_id=$4) AS cost_versions
+       FROM mbox.purchase_receipts receipt
+       JOIN mbox.purchase_receipt_lines line ON line.receipt_id=receipt.id
+       JOIN mbox.inventory_balances balance ON balance.inventory_item_id=line.inventory_item_id
+        AND balance.tenant_id=line.tenant_id AND balance.store_id=line.store_id
+       JOIN mbox.products product ON product.id=$4
+       WHERE receipt.tenant_id=$1 AND receipt.store_id=$2 AND receipt.id=$3`,
+      [tenantId, storeId, receiptId, launchProductId],
+    );
+    expect(rolledBack.rows[0]).toEqual({ status: "draft", on_hand: "0.000000", cost: "100", cost_versions: "0" });
+
+    await pool.query(
+      `UPDATE mbox.products SET allowed_channels=ARRAY['guest_qr','staff_assisted']::text[] WHERE id=$1`,
+      [launchProductId],
+    );
+    const published = await app.inject({
+      method: "POST",
+      url: `/api/inventory/receipts/${receiptId}/receive-and-publish`,
+      headers: headers(managerId, "inventory-launch-publish-0002"),
+      payload: { productId: launchProductId },
+    });
+    expect(published.statusCode).toBe(200);
+    expect(published.json().data).toMatchObject({
+      productId: launchProductId,
+      productStatus: "active",
+      salesSpecificationType: "glass",
+      costAmountMinor: 1000,
+      standardPriceMinor: 6800,
+      grossProfitMinor: 5800,
+    });
+    const authoritative = await pool.query<{ status: string; on_hand: string; cost: string; version_id: string | null }>(
+      `SELECT receipt.status,balance.on_hand_quantity::text AS on_hand,product.cost_amount_minor::text AS cost,
+        product.recipe_cost_version_id::text AS version_id
+       FROM mbox.purchase_receipts receipt
+       JOIN mbox.purchase_receipt_lines line ON line.receipt_id=receipt.id
+       JOIN mbox.inventory_balances balance ON balance.inventory_item_id=line.inventory_item_id
+        AND balance.tenant_id=line.tenant_id AND balance.store_id=line.store_id
+       JOIN mbox.products product ON product.id=$4
+       WHERE receipt.tenant_id=$1 AND receipt.store_id=$2 AND receipt.id=$3`,
+      [tenantId, storeId, receiptId, launchProductId],
+    );
+    expect(authoritative.rows[0]).toMatchObject({ status: "received", on_hand: "1500.000000", cost: "1000" });
+    expect(authoritative.rows[0]?.version_id).toMatch(/^[0-9a-f-]{36}$/i);
+  });
+
   it("serializes competing deductions so stock cannot be overdrawn or rolled back by a stale click", async () => {
     const requests = [
       "waste-concurrent-one-0001",
@@ -764,12 +911,14 @@ async function seed(pool: Pool) {
     "bottle.view",
     "bottle.manage",
     "bottle.manage.all",
+    "catalog.product.manage",
   ];
   for (const code of permissions) {
     await pool.query(
       `
       INSERT INTO mbox.staff_permission_definitions(tenant_id, store_id, code, name, category)
       VALUES ($1, $2, $3, $3, 'inventory')
+      ON CONFLICT (tenant_id, store_id, code) DO UPDATE SET status='active'
     `,
       [tenantId, storeId, code],
     );

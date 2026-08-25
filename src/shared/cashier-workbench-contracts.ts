@@ -1,4 +1,4 @@
-export type CashierPaymentProvider = 'wechat' | 'postar' | 'cash' | 'physical_pos' | 'simulation'
+export type CashierPaymentProvider = 'wechat' | 'postar' | 'cash' | 'physical_pos' | 'external_manual' | 'simulation'
 export type CashierPaymentMethod = 'jsapi' | 'native_qr' | 'auth_code' | 'cash' | 'card' | 'manual'
 export type CashierPaymentStatus =
   | 'created'
@@ -107,6 +107,30 @@ export interface CashierWorkbenchPayment {
   refunds: CashierWorkbenchRefund[]
 }
 
+/**
+ * Activity registrations are a different payable kind from table orders.
+ * They intentionally expose no attendee contact fields in the cashier view.
+ */
+export interface CashierWorkbenchActivityRegistration {
+  id: string
+  publicId: string
+  activityPublicId: string
+  activityTitle: string
+  startsAt: string
+  partySize: number
+  status: string
+  paymentStatus: string
+  amountDueMinor: number
+  paidAmountMinor: number
+  currency: string
+  payment: CashierWorkbenchPayment | null
+  recollectionAuthorization?: {
+    id: string
+    amountMinor: number
+    expiresAt: string
+  } | null
+}
+
 export interface CashierWorkbenchOrder {
   id: string
   publicId: string
@@ -127,6 +151,12 @@ export interface CashierWorkbenchOrder {
     settledAmountMinor: number
     occurredAt: string
   } | null
+  /** A short-lived cashier approval required before a completed refund can be collected again. */
+  recollectionAuthorization?: {
+    id: string
+    amountMinor: number
+    expiresAt: string
+  } | null
   items: CashierWorkbenchItem[]
   kdsTasks: CashierWorkbenchKdsTask[]
   payments: CashierWorkbenchPayment[]
@@ -136,11 +166,18 @@ export interface CashierWorkbenchView {
   businessDate: string
   query: string
   actions: {
+    canInitiateOnlinePayment: boolean
+    canQueryOnlinePayment: boolean
+    onlinePaymentProvider: 'postar' | 'simulation' | null
     canRecordManualCash: boolean
     canRecordManualPos: boolean
+    canRecordManualExternal: boolean
     canRequestRefund: boolean
     canApproveRefund: boolean
     canExecuteRefund: boolean
+    canAuthorizeRecollection?: boolean
+    /** Grants the activity-only cashier surface; it does not grant activity editing or contact access. */
+    canUseActivityCashier?: boolean
     canViewReconciliation: boolean
     canManageKdsException: boolean
   }
@@ -152,6 +189,11 @@ export interface CashierWorkbenchView {
     carryoverOrderCount?: number
     /** Older initiated payments that still require a provider result query. */
     carryoverPendingPaymentCount?: number
+    activityPendingPaymentCount?: number
+    activityRequestedRefundCount?: number
+    activityProcessingRefundCount?: number
   }
   orders: CashierWorkbenchOrder[]
+  /** Optional for one rollout so older API fixtures remain compatible. */
+  activityRegistrations?: CashierWorkbenchActivityRegistration[]
 }

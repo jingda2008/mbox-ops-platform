@@ -116,8 +116,12 @@
       </view>
     </block>
 
-    <view wx:if="{{upcomingActivity || editorialCards.length}}" class="section home-editorial-section">
+    <view wx:if="{{brandStoryCard || upcomingActivity || editorialCards.length}}" class="section home-editorial-section">
       <view class="section-title"><text>发现 M-BOX</text><text class="section-link">精选内容</text></view>
+      <view wx:if="{{brandStoryCard}}" class="brand-story-card" data-code="{{brandStoryCard.code}}" bindtap="openEditorial" hover-class="brand-story-card--hover" role="button" aria-role="button">
+        <view class="brand-story-card__copy"><text>{{brandStoryCard.eyebrow}}</text><text>{{brandStoryCard.title}}</text><text>{{brandStoryCard.summary}}</text></view>
+        <text class="brand-story-card__action">阅读全文 ›</text>
+      </view>
       <view wx:if="{{upcomingActivity}}" class="featured-activity-card" bindtap="openFeaturedActivity" hover-class="featured-activity-card--hover" role="button" aria-role="button">
         <view class="featured-activity-card__art">
           <image wx:if="{{upcomingActivity.coverUrl}}" src="{{upcomingActivity.coverUrl}}" mode="aspectFill" />
@@ -178,7 +182,7 @@
       <text class="member-invite-kicker">M-BOX 会员</text>
       <text class="member-invite-title">欢迎加入 M-BOX</text>
       <text class="member-invite-copy">加入后享积分、会员权益与活动资格。</text>
-      <image class="member-invite-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX Shanghai 1999 Logo" />
+      <image class="member-invite-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX 标志" />
       <checkbox-group bindchange="onMembershipInviteAgreementChange">
         <label class="member-invite-agreement">
           <checkbox value="agree" checked="{{membershipInviteAgreed}}" color="#315d46" />
@@ -192,7 +196,7 @@
       </checkbox-group>
       <view class="member-invite-actions">
         <button class="member-invite-refuse" bindtap="declineMembershipInvite">暂不加入</button>
-        <button wx:if="{{membershipInviteAgreed}}" class="member-invite-agree wx-phone-button" open-type="getPhoneNumber|agreePrivacyAuthorization" bindgetphonenumber="acceptMembershipInvite" bindagreeprivacyauthorization="onAgreePrivacyAuthorization" hover-class="none" loading="{{membershipInviteBusy}}">同意入会</button>
+        <button wx:if="{{membershipInviteAgreed}}" class="member-invite-agree wx-phone-button" open-type="getPhoneNumber" bindgetphonenumber="acceptMembershipInvite" hover-class="none" loading="{{membershipInviteBusy}}">同意入会</button>
         <button wx:else class="member-invite-agree member-invite-agree--pending" bindtap="remindMembershipInviteAgreement" hover-class="none">同意入会</button>
       </view>
     </view>

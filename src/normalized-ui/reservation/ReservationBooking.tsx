@@ -817,6 +817,9 @@ function CompleteStep(props: ReservationBookingViewProps & { busy: boolean }) {
         <div><dt>联系</dt><dd>{record.maskedContact}</dd></div>
         {isReservation && <div><dt>位置偏好</dt><dd>{seatPreferenceLabel(props.reservation!.seatPreference)}</dd></div>}
         {isReservation && <div><dt>位置安排</dt><dd>{pending ? '确认后保留预约名额' : '到店后由门迎安排'}</dd></div>}
+        {record.priorityBooking !== null && record.priorityBooking !== undefined && (
+          <div><dt>会员优先安排</dt><dd>已进入优先安排队列，以现场可用座位为准，不承诺固定桌位。</dd></div>
+        )}
       </dl>
       {!cancelled && confirmed && props.arrivalHold.kind === 'active' && (
         <div className="reservation-hold" role="status">

@@ -30,7 +30,14 @@ const { getRuntimeConfig } = require('../../config/index')
 const { publicImageUrl } = require('../../utils/media')
 const { customerErrorCode, customerErrorMessage } = require('../../utils/customer-error')
 
-const LEVEL_NAMES = { member: 'M-BOX会员', silver: '银卡会员', gold: '金卡会员' }
+const LEVEL_NAMES = { member: '普卡会员', silver: '银卡会员', gold: '金卡会员' }
+const LEVEL_ENGLISH = { member: 'M-BOX MEMBER', silver: 'SILVER MEMBER', gold: 'GOLD MEMBER' }
+const CARD_LEVEL_NAMES = { member: '普卡', silver: '银卡', gold: '金卡' }
+const MEMBER_CARD_PREVIEW_PROGRESS = {
+  member: { rollingGrowth: 680, upgradeThreshold: 2000, upgradeRemaining: 1320, nextTier: 'silver' },
+  silver: { rollingGrowth: 3680, upgradeThreshold: 5000, upgradeRemaining: 1320, nextTier: 'gold' },
+  gold: { rollingGrowth: 5680, upgradeThreshold: null, upgradeRemaining: null, nextTier: null },
+}
 const BENEFIT_NAMES = { gift_product: '赠送好礼', discount: '折扣权益', credit: '金额权益', access: '专属资格', other: '会员权益' }
 const REGISTRATION_STATUS_NAMES = {
   reserved: '名额已暂留', payment_pending: '付款未完成', confirmed: '已报名',
@@ -117,8 +124,57 @@ async function activityRegistrationViews(items) {
   })
 }
 
+function memberCardPreviewLevel() {
+  try {
+    const options = wx.getEnterOptionsSync ? wx.getEnterOptionsSync() : wx.getLaunchOptionsSync()
+    const level = options && options.query && options.query.memberCardPreview
+    return getRuntimeConfig().isDevelopment && ['member', 'silver', 'gold'].includes(level) ? level : ''
+  } catch (_error) {
+    return ''
+  }
+}
+
+function formatMemberNumber(value) {
+  const number = Number(value)
+  return Number.isFinite(number) ? String(Math.round(number)).replace(/\B(?=(\d{3})+(?!\d))/g, ',') : ''
+}
+
+function memberCardProgress(level, progress, previewLevel) {
+  const source = previewLevel ? MEMBER_CARD_PREVIEW_PROGRESS[level] : progress
+  const growth = source && Number.isFinite(Number(source.rollingGrowth)) ? Number(source.rollingGrowth) : null
+  const threshold = source && Number.isFinite(Number(source.upgradeThreshold)) && Number(source.upgradeThreshold) > 0
+    ? Number(source.upgradeThreshold) : null
+  const nextTier = source && source.nextTier ? source.nextTier : null
+  const upgradeRemaining = source && Number.isFinite(Number(source.upgradeRemaining))
+    ? Math.max(0, Number(source.upgradeRemaining)) : null
+  const hasProgress = growth !== null
+  const progressPercent = !hasProgress ? 0 : threshold
+    ? Math.max(0, Math.min(100, Math.round((growth / threshold) * 100))) : 100
+  const nextTierName = nextTier ? (CARD_LEVEL_NAMES[nextTier] || '') : ''
+  return {
+    cardProgressAvailable: hasProgress,
+    cardGrowthText: threshold
+      ? `成长值 ${formatMemberNumber(growth)} / ${formatMemberNumber(threshold)}`
+      : hasProgress ? `成长值 ${formatMemberNumber(growth)}` : '成长值待核验',
+    cardDifferenceText: nextTier && upgradeRemaining !== null
+      ? upgradeRemaining > 0
+        ? `距${nextTierName}还差 ${formatMemberNumber(upgradeRemaining)}`
+        : `${nextTierName}等级已达成`
+      : level === 'gold' ? '金卡等级已达成' : '等级以已发布规则为准',
+    cardProgressPercent: progressPercent,
+    cardCurrentTierText: CARD_LEVEL_NAMES[level] || '普卡',
+    cardNextTierText: nextTier ? (CARD_LEVEL_NAMES[nextTier] || '') : '',
+    cardBenefitText: `查看${CARD_LEVEL_NAMES[nextTier || level] || '会员'}权益 ›`,
+  }
+}
+
 function membershipView(item) {
+  // 仅供开发者工具的编译模式预览；生产环境和普通启动均保留服务端返回等级。
+  const previewLevel = memberCardPreviewLevel()
+  const displayLevel = previewLevel || item.level
   const progress = item.tierProgress
+  const qualificationGrowth = progress && Number.isFinite(Number(progress.rollingGrowth))
+    ? Number(progress.rollingGrowth) : null
   const nextTierName = progress && progress.nextTier ? LEVEL_NAMES[progress.nextTier] : ''
   const upgradeText = !progress || !nextTierName || progress.upgradeRemaining === null
     ? ''
@@ -138,23 +194,32 @@ function membershipView(item) {
       : `本级周期至 ${String(periodAt).slice(0, 10)}`
   const expiry = item.pointsExpiry
   return Object.assign({}, item, {
-    levelText: LEVEL_NAMES[item.level] || 'M-BOX会员',
+    level: displayLevel,
+    levelText: LEVEL_NAMES[displayLevel] || 'M-BOX会员',
+    levelEnglish: LEVEL_ENGLISH[displayLevel] || 'MEMBER',
+    qualificationGrowth,
+    qualificationText: qualificationGrowth === null
+      ? '资格成长值以已发布规则和权威交易记录为准'
+      : `近${progress.evaluationWindowMonths}个月资格成长值 ${qualificationGrowth}`,
     upgradeText,
+    cardDifferenceText: upgradeText || '当前等级权益以已发布规则为准',
     retainText,
     periodText,
     expiryText: expiry
       ? `近30天有 ${expiry.expiringWithin30Days} 积分将到期，最近 ${String(expiry.nextExpiryAt).slice(0, 10)}`
       : '',
-  })
+  }, memberCardProgress(displayLevel, progress, previewLevel))
 }
 
 function benefitView(item) {
   const display = item.display || {}
+  const quantityAvailable = Number(item.quantityAvailable === undefined ? item.remainingQuantity : item.quantityAvailable) || 0
   return Object.assign({}, item, {
     title: display.title || display.name || BENEFIT_NAMES[item.type] || '会员权益',
     description: display.description || display.summary || display.usage || '使用条件以权益详情和现场确认为准',
     typeText: BENEFIT_NAMES[item.type] || '会员权益',
-    quantityText: `×${item.quantityAvailable}`,
+    quantityAvailable,
+    quantityText: `×${quantityAvailable}`,
     valueText: item.valueAmountMinor > 0 ? money(item.valueAmountMinor) : '',
     validText: item.validUntil ? String(item.validUntil).slice(0, 10) : '长期有效',
   })
@@ -253,7 +318,7 @@ Page({
     preferenceBusyId: '', showPreferenceEvidence: false, showPreferenceEditor: false,
     preferenceTypeOptions: PREFERENCE_TYPE_OPTIONS,
     ...preferenceEditorState(0),
-    benefitCount: 0, balanceText: '0', hasTableContext: false,
+    benefitCount: 0, balanceText: '未开通', hasTableContext: false,
     avatarUrl: '', displayName: '',
     loginSheetVisible: false,
     wechatNotificationAuthorizations: [],
@@ -281,7 +346,10 @@ Page({
       }
       const results = await Promise.all([
         getMiniBootstrap(),
-        getCustomerBenefits().catch((error) => { this.setData({ benefitError: soft(error) || '' }); return [] }),
+        getCustomerBenefits().catch((error) => {
+          this.setData({ benefitError: soft(error) || '权益暂时不可读取，请重新登录或稍后刷新' })
+          return null
+        }),
         getReservations().catch(() => ({ reservations: [] })),
         getActivityRegistrations().catch((error) => { this.setData({ registrationError: soft(error) || '' }); return [] }),
         getRedemptionCatalog().catch((error) => { this.setData({ redemptionError: soft(error) || '' }); return { items: [] } }),
@@ -294,6 +362,7 @@ Page({
         }),
       ])
       const data = results[0]
+      const benefitsAvailable = Array.isArray(results[1])
       const benefits = (results[1] || []).map(benefitView)
       const reservations = (results[2].reservations || []).filter((item) => {
         if (!['pending', 'confirmed'].includes(item.status)) return false
@@ -344,8 +413,10 @@ Page({
         supportContact: data.supportContact || null,
         points: (data.points || []).slice(0, 8),
         benefits,
-        benefitCount: benefits.reduce((sum, item) => sum + Number(item.quantityAvailable || 0), 0),
-        balanceText: '0',
+        benefitCount: benefitsAvailable
+          ? benefits.reduce((sum, item) => sum + Number(item.quantityAvailable || 0), 0)
+          : null,
+        balanceText: '未开通',
         reservations,
         registrations,
         redemptionItems,
@@ -362,10 +433,16 @@ Page({
       })
     } catch (error) {
       const message = String((error && error.message) || '')
-      const soft = /预约会话已失效|重新进入预约|登录状态已失效|登录或桌边会话已过期|请求的页面或接口不存在|ROUTE_NOT_FOUND/.test(message)
+      const soft = /预约会话已失效|重新进入预约|登录状态已失效|登录或桌边会话已过期/.test(message)
         ? ''
         : customerErrorMessage(error, '会员信息暂时无法读取')
-      this.setData({ loading: false, error: soft })
+      this.setData({
+        loading: false,error:soft,
+        membership:null,membershipTerms:null,supportContact:null,points:[],benefits:[],benefitCount:null,
+        reservations:[],registrations:[],redemptionItems:[],redemptions:[],productRestrictions:[],contentCards:[],
+        expiryNotificationOption:null,wechatNotificationAuthorizations:[],showRedemptions:false,
+        preferenceFacts:[],preferenceSources:[],preferenceSourceCount:0,preferenceActiveCount:0,
+      })
     }
   },
 
@@ -392,14 +469,15 @@ Page({
   },
 
   openMemberCenter() {
-    if (!this.requireMembership()) return
-    wx.navigateTo({ url: '/pages/points/index' })
+    if (!this.requireMembership('member-center')) return
+    wx.navigateTo({ url: '/pages/member-center/index' })
   },
 
   noop() {},
 
-  requireMembership() {
+  requireMembership(pendingAction) {
     if (this.data.membership) return true
+    this.pendingMembershipAction = typeof pendingAction === 'string' ? pendingAction : ''
     this.openLoginSheet()
     return false
   },
@@ -410,7 +488,30 @@ Page({
   },
 
   closeLoginSheet() {
+    this.pendingMembershipAction = ''
     this.setData({ loginSheetVisible: false, recoveryMessage: '' })
+  },
+
+  continuePendingMembershipAction() {
+    const action = this.pendingMembershipAction || ''
+    this.pendingMembershipAction = ''
+    if (!this.data.membership) return
+    const destinations = {
+      'member-center': ['/pages/member-center/index', 'navigateTo'],
+      reservations: ['/pages/reservations/index', 'switchTab'],
+      points: ['/pages/points/index', 'navigateTo'],
+      orders: ['/pages/account/index', 'navigateTo'],
+      preferences: ['/pages/profile-preferences/index', 'navigateTo'],
+      contact: ['/pages/profile-contact/index', 'navigateTo'],
+      coupons: ['/pages/profile-coupons/index', 'navigateTo'],
+    }
+    if (action === 'superhigh') {
+      void this.openSuperhighService()
+      return
+    }
+    const destination = destinations[action]
+    if (!destination) return
+    wx[destination[1]]({ url: destination[0] })
   },
 
   openPrivacy() { wx.navigateTo({ url: '/pages/privacy/index' }) },
@@ -483,6 +584,7 @@ Page({
         // 服务端注销失败时仍清除本地会话，避免卡在半登录态。
       }
       clearMemberLocalCache()
+      this.pendingMembershipAction = ''
       wx.removeStorageSync('mbox.membership.enroll.attempt.v1')
       wx.removeStorageSync('mbox.membership.recovery.attempt.v1')
       await restartAnonymousCustomerSession()
@@ -548,7 +650,9 @@ Page({
       this.setData({ loginSheetVisible: false })
       wx.showToast({ title: '登录成功', icon: 'success', duration: 1200 })
       await this.load()
+      this.continuePendingMembershipAction()
     } catch (error) {
+      this.pendingMembershipAction = ''
       const friendly = customerErrorCode(error) === 'ROUTE_NOT_FOUND'
         ? '会员登录服务暂时不可用，请稍后重试或联系门店'
         : customerErrorMessage(error, '登录暂时没有完成')
@@ -566,7 +670,7 @@ Page({
   },
 
   openMembershipBenefits() {
-    if (!this.requireMembership()) return
+    if (!this.requireMembership('member-center')) return
     this.showMembershipTerms()
   },
 
@@ -802,7 +906,7 @@ Page({
   },
 
   async cancelRedemption(event) {
-    if (!this.requireMembership()) return
+    if (!this.requireMembership('member-center')) return
     const id = event.currentTarget.dataset.id
     if (!id || this.data.redemptionBusyId) return
     const confirmed = await new Promise((resolve) => wx.showModal({
@@ -819,11 +923,11 @@ Page({
   },
 
   openReservations() {
-    if (!this.requireMembership()) return
+    if (!this.requireMembership('reservations')) return
     wx.switchTab({ url: '/pages/reservations/index' })
   },
   async openSuperhighService() {
-    if (!this.requireMembership()) return
+    if (!this.requireMembership('superhigh')) return
     try {
       const registrations = await activityRegistrationViews(await getActivityRegistrations())
       this.setData({ registrations, registrationError: '' }, () => {
@@ -846,27 +950,32 @@ Page({
   },
   openSuperhighTab() { wx.switchTab({ url: '/pages/community/index' }) },
   openPoints() {
-    if (!this.requireMembership()) return
+    if (!this.requireMembership('points')) return
     wx.navigateTo({ url: '/pages/points/index' })
   },
   openOrders() {
-    if (!this.requireMembership()) return
+    if (!this.requireMembership('orders')) return
     wx.navigateTo({ url: '/pages/account/index' })
   },
   openBalance() {
-    if (!this.requireMembership()) return
-    wx.navigateTo({ url: '/pages/account/index' })
+    if (!this.requireMembership('member-center')) return
+    wx.showModal({
+      title: '储值余额暂未开通',
+      content: '当前系统没有会员储值账户，因此不会把桌账或读取失败显示成余额 0。桌账请在“我的订单”查看。',
+      showCancel: false,
+      confirmText: '知道了',
+    })
   },
   openPreferenceSettings() {
-    if (!this.requireMembership()) return
+    if (!this.requireMembership('preferences')) return
     wx.navigateTo({ url: '/pages/profile-preferences/index' })
   },
   openContact() {
-    if (!this.requireMembership()) return
+    if (!this.requireMembership('contact')) return
     wx.navigateTo({ url: '/pages/profile-contact/index' })
   },
   openCoupons() {
-    if (!this.requireMembership()) return
+    if (!this.requireMembership('coupons')) return
     wx.navigateTo({ url: '/pages/profile-coupons/index' })
   },
   async openNotificationSettings() {

@@ -13,6 +13,7 @@ export type KdsStatus = 'pending' | 'accepted' | 'preparing' | 'ready' | 'cancel
 export interface KdsTask {
   id: string
   orderItemId: string
+  remakeOfTaskId: string | null
   stationCode: KdsStation
   status: KdsStatus
   priority: number
@@ -27,6 +28,7 @@ export interface KdsTask {
 
 export interface CreateKdsTaskInput {
   orderItemId: string
+  remakeOfTaskId?: string | null
   stationCode: KdsStation
   quantity: number
   priority?: number
@@ -51,6 +53,7 @@ export interface ClaimPendingKdsInput {
 interface KdsTaskRow extends Record<string, unknown> {
   id: string
   order_item_id: string
+  remake_of_task_id: string | null
   station_code: KdsStation
   status: KdsStatus
   priority: number
@@ -69,7 +72,7 @@ interface ClaimedKdsRow extends KdsTaskRow {
 }
 
 const TASK_COLUMNS = `
-  id, order_item_id, station_code, status, priority, quantity,
+  id, order_item_id, remake_of_task_id, station_code, status, priority, quantity,
   assigned_employee_id, due_at, next_action_at::text,
   accepted_at::text, ready_at::text, cancelled_at::text
 `
@@ -119,17 +122,18 @@ export class KdsRepository {
     validateCreate(input)
     const inserted = await this.transaction.query<KdsTaskRow>(`
       INSERT INTO mbox.kds_tasks (
-        tenant_id, store_id, order_item_id, station_code,
+        tenant_id, store_id, order_item_id, remake_of_task_id, station_code,
         status, priority, quantity, due_at, next_action_at
       ) VALUES (
-        $1::uuid, $2::uuid, $3::uuid, $4,
-        'pending', $5, $6, $7::timestamptz, clock_timestamp()
+        $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5,
+        'pending', $6, $7, $8::timestamptz, clock_timestamp()
       )
       RETURNING ${TASK_COLUMNS}
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
       input.orderItemId,
+      input.remakeOfTaskId ?? null,
       input.stationCode,
       input.priority ?? 100,
       input.quantity,
@@ -143,7 +147,11 @@ export class KdsRepository {
       toStatus: 'pending',
       actorEmployeeId: null,
       idempotencyKey: input.eventIdempotencyKey ?? null,
-      metadata: { orderItemId: row.order_item_id, stationCode: row.station_code },
+      metadata: {
+        orderItemId: row.order_item_id,
+        stationCode: row.station_code,
+        ...(row.remake_of_task_id === null ? {} : { remakeOfTaskId: row.remake_of_task_id }),
+      },
     })
     return mapTask(row)
   }
@@ -342,6 +350,9 @@ function actionForTargetStatus(targetStatus: KdsStatus): KdsEmployeeAction {
 
 function validateCreate(input: Readonly<CreateKdsTaskInput>): void {
   requireUuid('orderItemId', input.orderItemId)
+  if (input.remakeOfTaskId !== undefined && input.remakeOfTaskId !== null) {
+    requireUuid('remakeOfTaskId', input.remakeOfTaskId)
+  }
   if (!Number.isInteger(input.quantity) || input.quantity < 1 || input.quantity > 999) {
     throw new TypeError('quantity must be an integer between 1 and 999')
   }
@@ -386,6 +397,7 @@ function mapTask(row: KdsTaskRow): KdsTask {
   return {
     id: row.id,
     orderItemId: row.order_item_id,
+    remakeOfTaskId: row.remake_of_task_id,
     stationCode: row.station_code,
     status: row.status,
     priority: row.priority,

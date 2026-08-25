@@ -22,6 +22,17 @@ export interface InventoryOrderReservation {
   expiresAt: string | null;
 }
 
+export interface InventoryRemakeReservation {
+  id: string;
+  remakeTaskId: string;
+  originalTaskId: string;
+  orderItemId: string;
+  inventoryItemId: string;
+  sku: string;
+  quantity: string;
+  status: "reserved" | "consumed" | "released";
+}
+
 export interface ConsumeInventoryOptions {
   createdByEmployeeId?: string | null;
   reason?: string | null;
@@ -179,6 +190,18 @@ interface InventoryOrderReservationRow extends Record<string, unknown> {
   quantity: string;
   status: "reserved" | "consumed" | "released";
   expires_at: string | null;
+  movement_id: string | null;
+}
+
+interface InventoryRemakeReservationRow extends Record<string, unknown> {
+  id: string;
+  remake_task_id: string;
+  original_task_id: string;
+  order_item_id: string;
+  inventory_item_id: string;
+  sku: string;
+  quantity: string;
+  status: "reserved" | "consumed" | "released";
   movement_id: string | null;
 }
 
@@ -499,6 +522,10 @@ export class InventoryRepository {
     return this.recipeCostSnapshot(productId, false);
   }
 
+  async previewRecipeCostForReceipt(productId: string, receiptId: string): Promise<RecipeCostPreview> {
+    return this.recipeCostSnapshot(productId, false, receiptId);
+  }
+
   async applyRecipeCost(
     productId: string,
     employeeId: string,
@@ -544,7 +571,7 @@ export class InventoryRepository {
     return { ...preview, id: inserted.id, appliedAt: inserted.calculated_at };
   }
 
-  private async recipeCostSnapshot(productId: string, lock: boolean): Promise<RecipeCostPreview> {
+  private async recipeCostSnapshot(productId: string, lock: boolean, preferredReceiptId?: string): Promise<RecipeCostPreview> {
     const result = await this.transaction.query<RecipeCostRow>(`
       SELECT recipe.id AS recipe_id,recipe.version AS recipe_version,recipe.yield_quantity,
         component.id AS recipe_item_id,item.id AS inventory_item_id,item.name AS item_name,item.base_unit,
@@ -566,17 +593,18 @@ export class InventoryRepository {
         FROM mbox.purchase_receipt_lines AS line
         JOIN mbox.purchase_receipts AS receipt
           ON receipt.tenant_id=line.tenant_id AND receipt.store_id=line.store_id
-         AND receipt.id=line.receipt_id AND receipt.status='received'
+         AND receipt.id=line.receipt_id
         WHERE line.tenant_id=component.tenant_id AND line.store_id=component.store_id
           AND line.inventory_item_id=component.inventory_item_id
-        ORDER BY receipt.received_at DESC,line.id DESC
+          AND (receipt.status='received' OR receipt.id=$4::uuid)
+        ORDER BY (receipt.id=$4::uuid) DESC,receipt.received_at DESC,line.id DESC
         LIMIT 1
       ) AS latest ON true
       WHERE recipe.tenant_id=$1::uuid AND recipe.store_id=$2::uuid
         AND recipe.product_id=$3::uuid AND recipe.status='active'
       ORDER BY component.id
       ${lock ? 'FOR UPDATE OF recipe,component' : ''}
-    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,productId]);
+    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,productId,preferredReceiptId ?? null]);
     if (result.rows.length === 0) throw new InventoryNotFoundError('active inventory recipe', productId);
     const first = result.rows[0]!;
     const components = result.rows.map((row): RecipeCostComponent => ({
@@ -1389,6 +1417,185 @@ export class InventoryRepository {
   ): Promise<InventoryConsumption[]> {
     requireUuid("orderId", orderId);
     const reservations = await this.readOrderReservations(orderId, true);
+    return this.consumeLockedReservations(reservations, options);
+  }
+
+  async consumeOrderItemReservations(
+    orderItemId: string,
+    options: Readonly<ConsumeInventoryOptions> = {},
+  ): Promise<InventoryConsumption[]> {
+    requireUuid("orderItemId", orderItemId);
+    const reservations = await this.readOrderItemReservations(orderItemId, true);
+    return this.consumeLockedReservations(reservations, {
+      ...options,
+      reason: options.reason ?? "production started",
+    });
+  }
+
+  /**
+   * A remake only reserves its second batch when the original task has already
+   * consumed the order reservation.  Physical stock is consumed later, at the
+   * replacement task's production start.  If the original reservation remains
+   * reserved, the replacement task will use that original reservation once.
+   */
+  async reserveRemakeMaterials(input: Readonly<{
+    orderItemId: string;
+    remakeTaskId: string;
+    originalTaskId: string;
+  }>): Promise<InventoryRemakeReservation[]> {
+    requireUuid("orderItemId", input.orderItemId);
+    requireUuid("remakeTaskId", input.remakeTaskId);
+    requireUuid("originalTaskId", input.originalTaskId);
+    const reservations = await this.readOrderItemReservations(input.orderItemId, true);
+    if (reservations.length === 0 || reservations.every((row) => row.status === "reserved")) return [];
+    if (!reservations.every((row) => row.status === "consumed")) {
+      throw new InventoryConflictError("Order item inventory reservations are in mixed states during remake");
+    }
+
+    await this.lockReservationBalances(reservations);
+    const results: InventoryRemakeReservation[] = [];
+    for (const reservation of reservations) {
+      const quantity = normalizeDecimal(reservation.quantity);
+      const balance = await this.transaction.query(`
+        UPDATE mbox.inventory_balances
+        SET reserved_quantity=reserved_quantity+$4::numeric,updated_at=clock_timestamp()
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND inventory_item_id=$3::uuid
+          AND on_hand_quantity-reserved_quantity>=$4::numeric
+      `, [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        reservation.inventory_item_id,
+        quantity,
+      ]);
+      if (balance.rowCount !== 1) {
+        throw new InsufficientInventoryError(reservation.sku, "0", quantity);
+      }
+      const created = requireOne(
+        await this.transaction.query<InventoryRemakeReservationRow>(`
+          INSERT INTO mbox.kds_remake_inventory_reservations(
+            tenant_id,store_id,remake_task_id,original_task_id,order_item_id,inventory_item_id,quantity,status
+          ) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,$7::numeric,'reserved')
+          RETURNING id,remake_task_id,original_task_id,order_item_id,inventory_item_id,
+            (SELECT sku FROM mbox.inventory_items item
+             WHERE item.tenant_id=$1::uuid AND item.store_id=$2::uuid AND item.id=$6::uuid) AS sku,
+            quantity::text,status,movement_id
+        `, [
+          this.transaction.scope.tenantId,
+          this.transaction.scope.storeId,
+          input.remakeTaskId,
+          input.originalTaskId,
+          input.orderItemId,
+          reservation.inventory_item_id,
+          quantity,
+        ]),
+        "remake inventory reservation",
+      );
+      results.push(mapRemakeReservation(created));
+    }
+    return results;
+  }
+
+  /**
+   * Consumes the additional remake batch when this replacement task actually
+   * starts production.  The movement is recorded as waste because it is an
+   * extra physical batch for an already-paid order item.
+   */
+  async consumeRemakeMaterials(
+    remakeTaskId: string,
+    options: Readonly<ConsumeInventoryOptions & { originalTaskId?: string | null }> = {},
+  ): Promise<InventoryConsumption[]> {
+    requireUuid("remakeTaskId", remakeTaskId);
+    const reservations = await this.readRemakeReservations(remakeTaskId, true);
+    const reserved = reservations.filter((row) => row.status === "reserved");
+    if (reserved.length === 0) return [];
+    await this.lockRemakeReservationBalances(reserved);
+    const results: InventoryConsumption[] = [];
+    for (const reservation of reserved) {
+      const movement = await this.insertMovement({
+        inventoryItemId: reservation.inventory_item_id,
+        movementType: "waste",
+        quantityDelta: `-${normalizeDecimal(reservation.quantity)}`,
+        referenceType: "kds_remake",
+        referenceId: remakeTaskId,
+        orderItemId: reservation.order_item_id,
+        reason: options.reason ?? "制作失败后重新制作的追加物料消耗",
+        employeeId: options.createdByEmployeeId ?? null,
+        metadata: {
+          originalKdsTaskId: options.originalTaskId ?? reservation.original_task_id,
+          remakeKdsTaskId: remakeTaskId,
+          orderItemId: reservation.order_item_id,
+          ...(options.metadata ?? {}),
+        },
+      });
+      const balance = requireOne(
+        await this.transaction.query<{ on_hand_quantity: string }>(`
+          UPDATE mbox.inventory_balances
+          SET on_hand_quantity=on_hand_quantity-$4::numeric,reserved_quantity=reserved_quantity-$4::numeric,
+              last_movement_id=$5::uuid,updated_at=clock_timestamp()
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND inventory_item_id=$3::uuid
+            AND on_hand_quantity>=$4::numeric AND reserved_quantity>=$4::numeric
+          RETURNING on_hand_quantity::text
+        `, [
+          this.transaction.scope.tenantId,
+          this.transaction.scope.storeId,
+          reservation.inventory_item_id,
+          reservation.quantity,
+          movement,
+        ]),
+        "remake inventory consumption",
+      );
+      const consumed = await this.transaction.query(`
+        UPDATE mbox.kds_remake_inventory_reservations
+        SET status='consumed',movement_id=$4::uuid,consumed_at=clock_timestamp(),updated_at=clock_timestamp()
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND status='reserved'
+      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, reservation.id, movement]);
+      if (consumed.rowCount !== 1) throw new InventoryConflictError("Remake inventory reservation lost its consume transition");
+      results.push({
+        movementId: movement,
+        orderItemId: reservation.order_item_id,
+        inventoryItemId: reservation.inventory_item_id,
+        sku: reservation.sku,
+        quantity: reservation.quantity,
+        remainingOnHandQuantity: balance.on_hand_quantity,
+      });
+    }
+    return results;
+  }
+
+  async releaseRemakeMaterials(remakeTaskId: string, reason: string): Promise<number> {
+    requireUuid("remakeTaskId", remakeTaskId);
+    if (reason.trim().length < 3 || reason.length > 300) throw new TypeError("release reason is invalid");
+    const reservations = await this.readRemakeReservations(remakeTaskId, true);
+    const reserved = reservations.filter((row) => row.status === "reserved");
+    if (reserved.length === 0) return 0;
+    await this.lockRemakeReservationBalances(reserved);
+    for (const reservation of reserved) {
+      const balance = await this.transaction.query(`
+        UPDATE mbox.inventory_balances
+        SET reserved_quantity=reserved_quantity-$4::numeric,updated_at=clock_timestamp()
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND inventory_item_id=$3::uuid
+          AND reserved_quantity>=$4::numeric
+      `, [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        reservation.inventory_item_id,
+        reservation.quantity,
+      ]);
+      if (balance.rowCount !== 1) throw new InventoryConflictError("Remake reserved inventory balance is inconsistent");
+      const released = await this.transaction.query(`
+        UPDATE mbox.kds_remake_inventory_reservations
+        SET status='released',release_reason=$4,released_at=clock_timestamp(),updated_at=clock_timestamp()
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND status='reserved'
+      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, reservation.id, reason.trim()]);
+      if (released.rowCount !== 1) throw new InventoryConflictError("Remake inventory reservation lost its release transition");
+    }
+    return reserved.length;
+  }
+
+  private async consumeLockedReservations(
+    reservations: readonly InventoryOrderReservationRow[],
+    options: Readonly<ConsumeInventoryOptions>,
+  ): Promise<InventoryConsumption[]> {
     if (reservations.length === 0) return [];
     if (reservations.every((row) => row.status === "consumed")) return [];
     if (!reservations.every((row) => row.status === "reserved")) {
@@ -1500,6 +1707,45 @@ export class InventoryRepository {
     return result.rows;
   }
 
+  private async readOrderItemReservations(
+    orderItemId: string,
+    lock: boolean,
+  ): Promise<InventoryOrderReservationRow[]> {
+    const result = await this.transaction.query<InventoryOrderReservationRow>(`
+      SELECT reservation.id,reservation.order_id,reservation.order_item_id,
+        reservation.inventory_item_id,item.sku,reservation.quantity::text,
+        reservation.status,reservation.expires_at::text,reservation.movement_id
+      FROM mbox.inventory_order_reservations reservation
+      JOIN mbox.inventory_items item
+        ON item.tenant_id=reservation.tenant_id AND item.store_id=reservation.store_id
+       AND item.id=reservation.inventory_item_id
+      WHERE reservation.tenant_id=$1::uuid AND reservation.store_id=$2::uuid
+        AND reservation.order_item_id=$3::uuid
+      ORDER BY reservation.inventory_item_id
+      ${lock ? "FOR UPDATE OF reservation" : ""}
+    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,orderItemId]);
+    return result.rows;
+  }
+
+  private async readRemakeReservations(
+    remakeTaskId: string,
+    lock: boolean,
+  ): Promise<InventoryRemakeReservationRow[]> {
+    const result = await this.transaction.query<InventoryRemakeReservationRow>(`
+      SELECT reservation.id,reservation.remake_task_id,reservation.original_task_id,reservation.order_item_id,
+        reservation.inventory_item_id,item.sku,reservation.quantity::text,reservation.status,reservation.movement_id
+      FROM mbox.kds_remake_inventory_reservations AS reservation
+      JOIN mbox.inventory_items AS item
+        ON item.tenant_id=reservation.tenant_id AND item.store_id=reservation.store_id
+       AND item.id=reservation.inventory_item_id
+      WHERE reservation.tenant_id=$1::uuid AND reservation.store_id=$2::uuid
+        AND reservation.remake_task_id=$3::uuid
+      ORDER BY reservation.inventory_item_id
+      ${lock ? "FOR UPDATE OF reservation" : ""}
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, remakeTaskId]);
+    return result.rows;
+  }
+
   private async lockReservationBalances(
     reservations: readonly InventoryOrderReservationRow[],
   ): Promise<void> {
@@ -1509,6 +1755,22 @@ export class InventoryRepository {
       FROM mbox.inventory_balances
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND inventory_item_id = ANY($3::uuid[])
+      ORDER BY inventory_item_id
+      FOR UPDATE
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, inventoryItemIds]);
+    if (locked.rowCount !== inventoryItemIds.length) {
+      throw new InventoryBalanceMissingError(inventoryItemIds[0] ?? "unknown");
+    }
+  }
+
+  private async lockRemakeReservationBalances(
+    reservations: readonly InventoryRemakeReservationRow[],
+  ): Promise<void> {
+    const inventoryItemIds = [...new Set(reservations.map((row) => row.inventory_item_id))].sort();
+    const locked = await this.transaction.query(`
+      SELECT inventory_item_id
+      FROM mbox.inventory_balances
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND inventory_item_id=ANY($3::uuid[])
       ORDER BY inventory_item_id
       FOR UPDATE
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, inventoryItemIds]);
@@ -1886,6 +2148,19 @@ function mapOrderReservation(row: InventoryOrderReservationRow): InventoryOrderR
     quantity: row.quantity,
     status: row.status,
     expiresAt: row.expires_at,
+  };
+}
+
+function mapRemakeReservation(row: InventoryRemakeReservationRow): InventoryRemakeReservation {
+  return {
+    id: row.id,
+    remakeTaskId: row.remake_task_id,
+    originalTaskId: row.original_task_id,
+    orderItemId: row.order_item_id,
+    inventoryItemId: row.inventory_item_id,
+    sku: row.sku,
+    quantity: row.quantity,
+    status: row.status,
   };
 }
 

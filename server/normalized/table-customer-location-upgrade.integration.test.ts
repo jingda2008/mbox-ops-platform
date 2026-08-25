@@ -18,6 +18,8 @@ integration('096 table location historical upgrade',() => {
     const targetUrl=new URL(base);targetUrl.pathname=`/${databaseName}`
     const admin=new Client({ connectionString:adminUrl.toString() })
     await admin.connect()
+    await admin.query(`SELECT pg_advisory_lock(hashtext('mbox.normalized.historical-migration-test'))`)
+    let migrationLockHeld=true
     await admin.query(`CREATE DATABASE "${databaseName}"`)
     const client=new Client({ connectionString:targetUrl.toString() })
     await client.connect()
@@ -47,6 +49,8 @@ integration('096 table location historical upgrade',() => {
           throw error
         }
       }
+      await admin.query(`SELECT pg_advisory_unlock(hashtext('mbox.normalized.historical-migration-test'))`)
+      migrationLockHeld=false
       const tenant=randomUUID(),store=randomUUID(),area=randomUUID(),employee=randomUUID()
       const secondTransferEmployee=randomUUID()
       const [tableA,tableB,tableC,tableD]=[randomUUID(),randomUUID(),randomUUID(),randomUUID()]
@@ -166,6 +170,10 @@ integration('096 table location historical upgrade',() => {
         FROM mbox.table_session_transfer_events WHERE tenant_id=$1 AND store_id=$2`,[tenant,store])
       expect(legacyEvents.rows[0]?.count).toBe(3)
     } finally {
+      if (migrationLockHeld) {
+        await admin.query(`SELECT pg_advisory_unlock(hashtext('mbox.normalized.historical-migration-test'))`)
+          .catch(()=>undefined)
+      }
       await client.end()
       await admin.query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1`,[databaseName])
       await admin.query(`DROP DATABASE "${databaseName}"`)

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
@@ -38,6 +39,7 @@ const paymentTwoId = '44444444-4444-4444-8444-444444444442'
 const verifiedObservationId = '55555555-5555-4555-8555-555555555555'
 const allowAllAuthorization: PaymentCapabilityAuthorizationPort = {
   assertEmployeeCapability: async () => undefined,
+  assertEmployeeOrderAccess: async () => undefined,
   assertRefundRequestLimit: async () => undefined,
   assertRefundApproval: async () => undefined,
 }
@@ -181,6 +183,9 @@ describe('PaymentCommandService', () => {
         denied.push(capability)
         throw new PaymentAuthorizationError(`denied:${capability}`)
       },
+      assertEmployeeOrderAccess: async () => {
+        throw new PaymentAuthorizationError('denied:order.table')
+      },
       assertRefundRequestLimit: async () => {
         denied.push('refund.request.limit')
         throw new PaymentAuthorizationError('denied:refund.request.limit')
@@ -216,7 +221,6 @@ describe('PaymentCommandService', () => {
         receiptReference: 'CASH-0001',
         collectedByEmployeeId: employeeActor.employeeId,
       },
-      occurredAt: '2026-08-11T12:00:00.000Z',
     })).rejects.toThrow('denied:payment.manual.cash.record')
     await expect(service.recordManual({
       ...metadata('auth-pos-record-0001'),
@@ -229,7 +233,6 @@ describe('PaymentCommandService', () => {
         receiptReference: 'POS-0001',
         collectedByEmployeeId: employeeActor.employeeId,
       },
-      occurredAt: '2026-08-11T12:00:00.000Z',
     })).rejects.toThrow('denied:payment.manual.pos.record')
     await expect(service.requestRefund({
       ...metadata('auth-refund-request-0001'),
@@ -271,6 +274,27 @@ describe('PaymentCommandService', () => {
     ])
     expect(transaction.calls).toEqual([])
   })
+
+  it('requires current responsibility for the order table after payment capability is granted', async () => {
+    const transaction = new PaymentFlowTransaction(orderOneId, paymentOneId, 'initiate')
+    const assertEmployeeOrderAccess = async () => {
+      throw new PaymentAuthorizationError('Employee is not responsible for the order table')
+    }
+    const service = new PaymentCommandService(
+      new MemoryIdempotentExecutor(() => transaction),
+      {
+        ...allowAllAuthorization,
+        assertEmployeeOrderAccess,
+      },
+    )
+
+    await expect(service.initiate(initiateCommand(
+      orderOneId,
+      'wrong-table-payment-0001',
+      'wrong-table-payment-public-0001',
+    ))).rejects.toThrow('not responsible for the order table')
+    expect(transaction.calls).toEqual([])
+  })
 })
 
 const databaseUrl = process.env.TEST_NORMALIZED_DATABASE_URL
@@ -293,13 +317,14 @@ const integrationItemOne = 'c1000000-0000-4000-8000-000000000031'
 
 integration('normalized payment PostgreSQL integration', () => {
   let pool: Pool
+  let runner: ScopedPostgresTransactionRunner
   let service: PaymentCommandService
   let providerObservations: VerifiedProviderObservationService
 
   beforeAll(async () => {
     await runNormalizedMigrations(databaseUrl!)
     pool = new Pool({ connectionString: databaseUrl, max: 6 })
-    const runner = new ScopedPostgresTransactionRunner(asPool(pool))
+    runner = new ScopedPostgresTransactionRunner(asPool(pool))
     providerObservations = new VerifiedProviderObservationService(runner)
     service = new PaymentCommandService(
       new NormalizedCommandExecutor(runner),
@@ -311,6 +336,17 @@ integration('normalized payment PostgreSQL integration', () => {
 
   afterAll(async () => {
     await pool?.end()
+  })
+
+  it('allows a cashier to collect any current table but rejects an unassigned non-cashier', async () => {
+    const authorization = new NormalizedPaymentCapabilityAuthorization()
+    const scope = { tenantId: integrationTenantId, storeId: integrationStoreId }
+    await runner.run(scope, (transaction) => authorization.assertEmployeeOrderAccess({
+      transaction, employeeId: integrationRequesterId, orderId: integrationOrderOne,
+    }))
+    await expect(runner.run(scope, (transaction) => authorization.assertEmployeeOrderAccess({
+      transaction, employeeId: integrationApproverId, orderId: integrationOrderOne,
+    }))).rejects.toBeInstanceOf(PaymentAuthorizationError)
   })
 
   it('persists idempotent callback, human-approved item refund and financial evidence', async () => {
@@ -536,6 +572,47 @@ integration('normalized payment PostgreSQL integration', () => {
         integrationRequesterId,
       ])
     }
+  })
+
+  it('uses the database payment success time for manual cash reconciliation', async () => {
+    const manualOrderId=randomUUID()
+    const manualItemId=randomUUID()
+    await pool.query(`
+      INSERT INTO mbox.orders(
+        id,tenant_id,store_id,table_session_id,public_id,channel,status,
+        subtotal_amount_minor,discount_amount_minor,total_amount_minor,currency
+      ) SELECT $1::uuid,tenant_id,store_id,table_session_id,$2,'cashier','submitted',
+        10000,0,10000,'CNY' FROM mbox.orders WHERE id=$3::uuid
+    `,[manualOrderId,`manual-authority-order-${manualOrderId}`,integrationOrderRollback])
+    await pool.query(`
+      INSERT INTO mbox.order_items(
+        id,tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,
+        discount_amount_minor,total_amount_minor,currency,fulfillment_station,product_snapshot,status
+      ) SELECT $1::uuid,tenant_id,store_id,$2::uuid,product_id,1,10000,0,10000,
+        'CNY','none',product_snapshot,'submitted'
+      FROM mbox.order_items WHERE order_id=$3::uuid LIMIT 1
+    `,[manualItemId,manualOrderId,integrationOrderRollback])
+    const recorded=await service.recordManual({
+      ...integrationMetadata('integration-manual-authority-0001','{"manual":"server-time"}'),
+      actor:{type:'employee',employeeId:integrationRequesterId},orderId:manualOrderId,
+      publicId:`manual-payment-${manualOrderId}`,provider:'cash',method:'cash',
+      evidence:{receiptReference:`CASH-${manualOrderId}`,collectedByEmployeeId:integrationRequesterId},
+    })
+    const authority=await pool.query<{
+      succeeded_at:string;reconciliation_occurred_at:string;delta_ms:string
+    }>(`
+      SELECT payment.succeeded_at::text,
+        reconciliation.occurred_at::text AS reconciliation_occurred_at,
+        (extract(epoch FROM (reconciliation.occurred_at-payment.succeeded_at))*1000)::text AS delta_ms
+      FROM mbox.payments payment
+      JOIN mbox.reconciliation_entries reconciliation
+        ON reconciliation.tenant_id=payment.tenant_id AND reconciliation.store_id=payment.store_id
+       AND reconciliation.payment_id=payment.id AND reconciliation.entry_type='payment'
+      WHERE payment.id=$1::uuid
+    `,[recorded.value.id])
+    expect(authority.rows[0]?.succeeded_at).toBeTruthy()
+    expect(authority.rows[0]?.reconciliation_occurred_at).toBe(authority.rows[0]?.succeeded_at)
+    expect(Number(authority.rows[0]?.delta_ms)).toBe(0)
   })
 
   it('enforces captured-payment and reconciliation sign invariants in PostgreSQL', async () => {
@@ -970,8 +1047,8 @@ async function seedPaymentIntegration(pool: Pool): Promise<void> {
   await pool.query(`
     INSERT INTO mbox.roles(id, tenant_id, store_id, code, name, capabilities)
     VALUES
-      ($1::uuid, $3::uuid, $4::uuid, 'REFUND_REQUESTER', 'Refund Requester',
-        ARRAY['refund.request', 'payment.initiate.staff']::text[]),
+      ($1::uuid, $3::uuid, $4::uuid, 'CASHIER', 'Cashier',
+        ARRAY['refund.request', 'payment.initiate.staff', 'payment.manual.cash.record']::text[]),
       ($2::uuid, $3::uuid, $4::uuid, 'REFUND_APPROVER', 'Refund Approver',
         ARRAY['refund.approve', 'refund.execute']::text[])
     ON CONFLICT (id) DO UPDATE SET
@@ -1002,17 +1079,20 @@ async function seedPaymentIntegration(pool: Pool): Promise<void> {
   await pool.query(`
     INSERT INTO mbox.staff_permission_definitions(tenant_id, store_id, code, name)
     SELECT $1::uuid, $2::uuid, code, code
-    FROM unnest(ARRAY['refund.request','payment.initiate.staff','refund.approve','refund.execute']::text[]) code
+    FROM unnest(ARRAY['refund.request','payment.initiate.staff','payment.manual.cash.record',
+      'refund.approve','refund.execute']::text[]) code
     ON CONFLICT (tenant_id, store_id, code) DO UPDATE SET status='active'
   `, [integrationTenantId, integrationStoreId])
   await pool.query(`
     INSERT INTO mbox.role_permission_assignments(tenant_id, store_id, role_id, permission_id)
     SELECT $1::uuid, $2::uuid,
-      CASE WHEN permission.code IN ('refund.request','payment.initiate.staff') THEN $3::uuid ELSE $4::uuid END,
+      CASE WHEN permission.code IN ('refund.request','payment.initiate.staff','payment.manual.cash.record')
+        THEN $3::uuid ELSE $4::uuid END,
       permission.id
     FROM mbox.staff_permission_definitions permission
     WHERE permission.tenant_id=$1::uuid AND permission.store_id=$2::uuid
-      AND permission.code IN ('refund.request','payment.initiate.staff','refund.approve','refund.execute')
+      AND permission.code IN ('refund.request','payment.initiate.staff','payment.manual.cash.record',
+        'refund.approve','refund.execute')
     ON CONFLICT DO NOTHING
   `, [integrationTenantId, integrationStoreId, integrationRequesterRoleId, integrationApproverRoleId])
   await upsertPaymentApprovalLimit(pool)

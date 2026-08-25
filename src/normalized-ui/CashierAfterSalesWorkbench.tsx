@@ -1,23 +1,35 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type RefObject } from 'react'
 import {
   Check,
+  ChevronRight,
   ChevronDown,
   CircleAlert,
   Clock3,
   LoaderCircle,
   ReceiptText,
   RefreshCcw,
+  QrCode,
+  ScanLine,
   Search,
   Send,
   X,
 } from 'lucide-react'
 import type {
   CashierWorkbenchPayment,
+  CashierWorkbenchActivityRegistration,
   CashierWorkbenchOrder,
   CashierWorkbenchRefund,
   CashierWorkbenchKdsTask,
   CashierWorkbenchView,
 } from '../shared/cashier-workbench-contracts'
+import type { OnlinePaymentAction } from '../shared/online-payment-contracts'
+import type {
+  BusinessDayBlockerFact,
+  BusinessDayClosureResult,
+  BusinessDayNavigationContext,
+} from '../shared/business-day-closure-contracts'
+import { staffModuleForRoute } from '../shared/staff-module-access'
+import { CustomerPaymentCodeScanner } from '../components/CustomerPaymentCodeScanner'
 import { NormalizedApiClient, NormalizedApiError, type StaffAuthView } from '../normalized-api'
 import { CashierMutationCoordinator } from './cashier-mutation'
 import './cashier-after-sales-workbench.css'
@@ -53,30 +65,18 @@ interface KdsCancellationDraft {
   confirmed: boolean
 }
 
-interface BusinessDayClosureView {
-  businessDays: Array<{
-    businessDayId: string
-    businessDate: string
-    status: 'closed' | 'awaiting_close'
-    closedTableSessions: Array<{ tableSessionId: string; tableCode: string }>
-    blockers: Array<{
-      tableSessionId: string
-      tableCode: string
-      code: string
-      count: number
-      label: string
-      resolution: string
-    }>
-  }>
-  closedBusinessDayCount: number
-  closedTableSessionCount: number
-  blockedTableSessionCount: number
+interface CashierOnlinePaymentInput {
+  orderId: string
+  provider: 'postar' | 'simulation'
+  method: 'native_qr' | 'auth_code'
+  customerAuthCode?: string
 }
 
-export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, refreshToken }: {
+export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavigate, refreshToken }: {
   api: NormalizedApiClient
   auth: StaffAuthView
   onLoginRequired(): void
+  onNavigate?(route: string, context?: BusinessDayNavigationContext): void
   refreshToken: number
 }) {
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -85,7 +85,7 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, refresh
   const [query, setQuery] = useState('')
   const [busyKey, setBusyKey] = useState<string | null>(null)
   const [notice, setNotice] = useState<WorkbenchNotice | null>(null)
-  const [businessDayClosure, setBusinessDayClosure] = useState<BusinessDayClosureView | null>(null)
+  const [businessDayClosure, setBusinessDayClosure] = useState<BusinessDayClosureResult | null>(null)
   const noticeRef = useRef<HTMLDivElement | null>(null)
   const mutationCoordinator = useRef(new CashierMutationCoordinator())
 
@@ -156,7 +156,7 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, refresh
     setBusyKey(key)
     setNotice(null)
     try {
-      const result = await api.postEndpoint<BusinessDayClosureView>(
+      const result = await api.postEndpoint<BusinessDayClosureResult>(
         '/api/business-days/close-pending', {}, { idempotencyKey: attempt.idempotencyKey },
       )
       mutationCoordinator.current.complete(attempt.signature)
@@ -188,6 +188,44 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, refresh
     }
   }, [api, load, onLoginRequired, query])
 
+  const createOnlinePayment = useCallback(async (
+    input: Readonly<CashierOnlinePaymentInput>,
+  ): Promise<OnlinePaymentAction | null> => {
+    const key = `cashier-online-payment-${input.method}-${input.orderId}`
+    const attempt = mutationCoordinator.current.prepare(key, input)
+    setBusyKey(key)
+    setNotice(null)
+    try {
+      const result = await api.postEndpoint<{ providerAction: OnlinePaymentAction }>(
+        '/api/payments', input, { idempotencyKey: attempt.idempotencyKey },
+      )
+      mutationCoordinator.current.complete(attempt.signature)
+      setNotice({
+        kind: result.providerAction.status === 'failed' ? 'error' : 'success',
+        text: result.providerAction.status === 'failed'
+          ? '付款没有发起成功，请核对渠道或改用其他收款方式。'
+          : input.method === 'native_qr'
+            ? '付款二维码已生成，到账前请勿重复收款。'
+            : '顾客付款码已受理，到账结果以支付渠道回传为准。',
+      })
+      await load(query)
+      return result.providerAction
+    } catch (error) {
+      if (error instanceof NormalizedApiError && error.recovery === 'login') {
+        onLoginRequired()
+        return null
+      }
+      mutationCoordinator.current.fail(
+        attempt.signature,
+        error instanceof NormalizedApiError && error.retryable,
+      )
+      setNotice({ kind: 'error', text: error instanceof Error ? error.message : '收款没有发起成功' })
+      return null
+    } finally {
+      setBusyKey(null)
+    }
+  }, [api, load, onLoginRequired, query])
+
   return <CashierAfterSalesWorkbenchView
     auth={auth}
     view={view}
@@ -200,7 +238,9 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, refresh
     onSearch={setQuery}
     onReload={() => void load(query)}
     onMutation={mutate}
+    onCreateOnlinePayment={createOnlinePayment}
     onClosePendingBusinessDays={closePendingBusinessDays}
+    onNavigate={onNavigate}
   />
 }
 
@@ -217,7 +257,9 @@ export function CashierAfterSalesWorkbenchView({
   onSearch,
   onReload,
   onMutation,
+  onCreateOnlinePayment,
   onClosePendingBusinessDays,
+  onNavigate,
 }: {
   auth: StaffAuthView
   view: CashierWorkbenchView | null
@@ -226,12 +268,14 @@ export function CashierAfterSalesWorkbenchView({
   busyKey: string | null
   notice: WorkbenchNotice | null
   noticeRef?: RefObject<HTMLDivElement | null>
-  businessDayClosure?: BusinessDayClosureView | null
+  businessDayClosure?: BusinessDayClosureResult | null
   initialExpandedOrderId?: string | null
   onSearch(query: string): void
   onReload(): void
   onMutation(key: string, endpoint: string, body: unknown, successMessage: string): Promise<boolean>
+  onCreateOnlinePayment?: (input: Readonly<CashierOnlinePaymentInput>) => Promise<OnlinePaymentAction | null>
   onClosePendingBusinessDays?: () => Promise<void>
+  onNavigate?: (route: string, context?: BusinessDayNavigationContext) => void
 }) {
   const [searchDraft, setSearchDraft] = useState(view?.query ?? '')
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(initialExpandedOrderId)
@@ -242,7 +286,30 @@ export function CashierAfterSalesWorkbenchView({
   const [kdsCancellationDraft, setKdsCancellationDraft] = useState<KdsCancellationDraft | null>(null)
   const [settlementExceptionDraft, setSettlementExceptionDraft] = useState<SettlementExceptionDraft | null>(null)
   const [summaryFilter, setSummaryFilter] = useState<'all' | 'requested' | 'processing'>('all')
+  const [focusedBusinessDayOrderId, setFocusedBusinessDayOrderId] = useState<string | null>(null)
 
+  useEffect(() => {
+    if (focusedBusinessDayOrderId === null) return
+    const order = view?.orders.find((candidate) => candidate.id === focusedBusinessDayOrderId)
+    if (order === undefined) return
+    setExpandedOrderId(order.id)
+    setFocusedBusinessDayOrderId(null)
+    globalThis.setTimeout(() => {
+      document.querySelector<HTMLElement>(`[data-cashier-order-id="${order.id}"]`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 0)
+  }, [focusedBusinessDayOrderId, view])
+
+  function openBusinessDayFact(fact: BusinessDayBlockerFact) {
+    const decision = businessDayFactNavigation(fact)
+    if (decision.kind === 'cashier_order') {
+      setSearchDraft(decision.query)
+      setFocusedBusinessDayOrderId(decision.orderId)
+      onSearch(decision.query)
+      return
+    }
+    onNavigate?.(decision.route, decision.context)
+  }
   function submitSearch(event: FormEvent) {
     event.preventDefault()
     onSearch(searchDraft.trim())
@@ -358,16 +425,51 @@ export function CashierAfterSalesWorkbenchView({
       <span>{notice.text}</span>
     </div>}
 
-    {auth.permissions.includes('business_day.close') && onClosePendingBusinessDays && <section className="cashier-business-day-close" aria-label="上一营业日结束处理">
+    {auth.permissions.includes('business_day.close') && <section className="cashier-business-day-close" aria-label="上一营业日结束处理">
       <div><strong>上一营业日结束处理</strong><small>只关闭已经结清、出品和服务均完成的桌台；有未完成事项会保留并说明原因。</small></div>
-      <button type="button" disabled={busyKey !== null} onClick={() => void onClosePendingBusinessDays()}>
+      {onClosePendingBusinessDays && <button type="button" disabled={busyKey !== null} onClick={() => void onClosePendingBusinessDays()}>
         {busyKey === 'business-day-close-pending' ? <LoaderCircle className="is-spinning" size={17} /> : <Check size={17} />}
         检查并结束
-      </button>
+      </button>}
       {businessDayClosure?.businessDays.flatMap((day) => day.blockers).length ? <div className="cashier-business-day-blockers">
-        {businessDayClosure.businessDays.flatMap((day) => day.blockers).map((blocker) => <p key={`${blocker.tableSessionId}:${blocker.code}`}>
-          <b>{blocker.tableCode}</b><span>{blocker.label} {blocker.count}项</span><small>{blocker.resolution}</small>
-        </p>)}
+        {businessDayClosure.businessDays.flatMap((day) => day.blockers).map((blocker) => <details
+          key={`${blocker.tableSessionId}:${blocker.code}`}
+        >
+          <summary aria-label={`查看${blocker.tableCode}${blocker.label}${blocker.count}项明细`}>
+            <b>{blocker.tableCode}</b><span>{blocker.label} {blocker.count}项</span><small>{blocker.resolution}</small>
+            <ChevronRight size={16} aria-hidden="true" />
+          </summary>
+          <div className="cashier-business-day-facts" aria-label={`${blocker.tableCode}${blocker.label}明细`}>
+            {blocker.facts.length === 0
+              ? <p>权威事实正在确认，请刷新后重试；系统不会把读取失败解释成已经处理。</p>
+              : blocker.facts.map((fact) => {
+                const access = businessDayFactRouteAccess(fact.actionRoute, auth.permissions)
+                return <article
+                  key={`${fact.type}:${fact.id}`}
+                  className={access.allowed?'is-actionable':''}
+                  tabIndex={access.allowed?0:undefined}
+                  aria-label={access.allowed?`打开${fact.title}对应处理详情`:undefined}
+                  onClick={()=>{if(access.allowed) openBusinessDayFact(fact)}}
+                  onKeyDown={(event)=>{
+                    if(!access.allowed||event.currentTarget!==event.target||!['Enter',' '].includes(event.key)) return
+                    event.preventDefault();openBusinessDayFact(fact)
+                  }}
+                >
+                  <header><strong>{fact.title}</strong><span>{fact.statusLabel}</span></header>
+                  <p>{fact.orderPublicId ? `订单 ${shortReference(fact.orderPublicId)} · ` : ''}{fact.reference}</p>
+                  <dl>
+                    {fact.amountMinor !== null && <><dt>金额</dt><dd>¥{formatAmount(fact.amountMinor)}</dd></>}
+                    {fact.quantityText !== null && <><dt>数量</dt><dd>{fact.quantityText}</dd></>}
+                    <dt>当前状态</dt><dd>{fact.statusLabel}</dd>
+                    <dt>{fact.employeeRelationLabel}</dt><dd>{fact.relatedEmployeeName ?? '待分派'}</dd>
+                  </dl>
+                  {access.allowed
+                    ? <button type="button" onClick={(event) => {event.stopPropagation();openBusinessDayFact(fact)}}>打开{access.moduleLabel}核对</button>
+                    : <p>请交给具备“{access.moduleLabel}”入口权限的同事继续处理；本账号只能查看日结阻断事实。</p>}
+                </article>
+              })}
+          </div>
+        </details>)}
       </div> : null}
     </section>}
 
@@ -400,18 +502,29 @@ export function CashierAfterSalesWorkbenchView({
       ><b>{view.summary.processingRefundCount}</b><small>待执行</small></button>
       {(view.summary.carryoverOrderCount ?? 0) > 0 && <span className="has-attention"><b>{view.summary.carryoverOrderCount}</b><small>交班遗留</small></span>}
       {(view.summary.carryoverPendingPaymentCount ?? 0) > 0 && <span className="has-attention"><b>{view.summary.carryoverPendingPaymentCount}</b><small>待查渠道</small></span>}
+      {(view.summary.activityPendingPaymentCount ?? 0) > 0 && <span className="has-attention"><b>{view.summary.activityPendingPaymentCount}</b><small>活动待收款</small></span>}
+      {(view.summary.activityRequestedRefundCount ?? 0) > 0 && <span className="has-attention"><b>{view.summary.activityRequestedRefundCount}</b><small>活动待复核</small></span>}
+      {(view.summary.activityProcessingRefundCount ?? 0) > 0 && <span className="has-attention"><b>{view.summary.activityProcessingRefundCount}</b><small>活动待退款</small></span>}
     </div>
     {summaryFilter !== 'all' && <p className="cashier-guidance cashier-summary-filter-note">
       当前只显示{summaryFilter === 'requested' ? '待收银复核' : '待执行或待查渠道'}的订单。
       <button type="button" className="cashier-quiet-action" onClick={() => setSummaryFilter('all')}>显示全部</button>
     </p>}
 
+    {view.actions.canUseActivityCashier === true && <ActivityCashierPanel
+      registrations={view.activityRegistrations ?? []}
+      auth={auth}
+      actions={view.actions}
+      busyKey={busyKey}
+      onMutation={onMutation}
+    />}
+
     {filteredOrders.length === 0
       ? <div className="cashier-workbench-state"><ReceiptText /><strong>{view.query || summaryFilter !== 'all' ? '没有找到对应订单' : '本营业日暂无可处理订单'}</strong><p>可按桌号、订单号、支付单号或退款单号查找，或切换上方筛选。</p></div>
       : <div className="cashier-order-list">
           {filteredOrders.map((order) => {
             const expanded = expandedOrderId === order.id
-            return <article className="cashier-order" key={order.id}>
+            return <article className="cashier-order" key={order.id} data-cashier-order-id={order.id}>
               <button
                 type="button"
                 className="cashier-order-toggle"
@@ -439,6 +552,7 @@ export function CashierAfterSalesWorkbenchView({
                     actions={view.actions}
                     busyKey={busyKey}
                     onMutation={onMutation}
+                    onCreateOnlinePayment={onCreateOnlinePayment}
                   />
                   {order.payments.length === 0
                     ? <p className="cashier-guidance">该订单尚无支付记录；只有实际收到现金或实体POS确认到账后才能登记，未收款不能申请退款。</p>
@@ -616,16 +730,24 @@ export function CashierAfterSalesWorkbenchView({
   </div>
 }
 
-function ManualCollectionPanel({ order, actions, busyKey, onMutation }: {
+function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOnlinePayment }: {
   order: CashierWorkbenchOrder
   actions: CashierWorkbenchView['actions']
   busyKey: string | null
   onMutation(key: string, endpoint: string, body: unknown, successMessage: string): Promise<boolean>
+  onCreateOnlinePayment?: (input: Readonly<CashierOnlinePaymentInput>) => Promise<OnlinePaymentAction | null>
 }) {
-  const [provider, setProvider] = useState<'cash' | 'physical_pos' | null>(null)
+  const [provider, setProvider] = useState<'cash' | 'physical_pos' | 'external_manual' | null>(null)
   const [receiptReference, setReceiptReference] = useState('')
   const [terminalId, setTerminalId] = useState('')
+  const [externalMethodCode, setExternalMethodCode] = useState<'bank_transfer' | 'mobile_wallet' | 'stored_value_voucher' | 'corporate_account' | 'other'>('bank_transfer')
+  const [collectionNote, setCollectionNote] = useState('')
   const [confirmed, setConfirmed] = useState(false)
+  const [onlineAction, setOnlineAction] = useState<OnlinePaymentAction | null>(null)
+  const [showScanner, setShowScanner] = useState(false)
+  const [onlineError, setOnlineError] = useState<string | null>(null)
+  const [recollectionReason, setRecollectionReason] = useState('')
+  const [recollectionConfirmed, setRecollectionConfirmed] = useState(false)
   const activeOnlinePayment = order.payments.find((payment) => (
     (payment.provider === 'postar' || payment.provider === 'wechat')
     && (payment.status === 'created' || payment.status === 'pending')
@@ -638,14 +760,67 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation }: {
     && payment.providerTransactionId === null
     && (payment.providerActionState === null || payment.providerActionState === 'failed')
   ))
+  const canCreateOnline = actions.canInitiateOnlinePayment
+    && actions.onlinePaymentProvider !== null
+    && onCreateOnlinePayment !== undefined
+  const hasCompletedRefund = order.payments.some((payment) => payment.refunds.some((refund) => refund.status === 'succeeded'))
+  const requiresRecollectionAuthorization = hasCompletedRefund && order.outstandingAmountMinor > 0
   const canCollect = order.status !== 'cancelled' && order.outstandingAmountMinor > 0
-    && (actions.canRecordManualCash || actions.canRecordManualPos)
+    && (!requiresRecollectionAuthorization || order.recollectionAuthorization !== null)
+    && (canCreateOnline || actions.canRecordManualCash || actions.canRecordManualPos || actions.canRecordManualExternal)
+  if (requiresRecollectionAuthorization && order.recollectionAuthorization === null) {
+    const canAuthorize = actions.canAuthorizeRecollection === true
+    const authorizationKey = `refund-recollection-authorize-${order.id}`
+    const authorize = async () => {
+      if (!canAuthorize || recollectionReason.trim().length < 4) return
+      if (!recollectionConfirmed) { setRecollectionConfirmed(true); return }
+      const completed = await onMutation(
+        authorizationKey,
+        `/api/orders/${encodeURIComponent(order.id)}/recollection-authorizations`,
+        { reason: recollectionReason.trim() },
+        '已授权本单重新收款。授权仅适用于当前余额且会自动过期；请在下方选择实际收款方式。',
+      )
+      if (completed) { setRecollectionReason(''); setRecollectionConfirmed(false) }
+    }
+    return <div className="cashier-manual-collection is-blocked" aria-label="退款后重新收款授权">
+      <div><strong>退款后重新收款</strong><small>已完成退款不会自动恢复收款。需由收银确认客人仍要支付，再开启一次性收款。</small></div>
+      {canAuthorize ? <div className="cashier-manual-result">
+        <label className="cashier-field"><span>重新收款原因</span><textarea value={recollectionReason} maxLength={500}
+          placeholder="至少4个字，例如：原渠道退款后，顾客确认改用实体POS付款"
+          onChange={(event) => { setRecollectionReason(event.target.value); setRecollectionConfirmed(false) }} /></label>
+        {recollectionConfirmed && <p className="cashier-guidance">请再次确认：退款已完成，顾客明确同意重新支付 ¥{formatAmount(order.outstandingAmountMinor)}；本授权仅限本单、限时且只可使用一次。</p>}
+        <div className="cashier-action-row"><button type="button" className="cashier-primary-action"
+          disabled={busyKey !== null || recollectionReason.trim().length < 4}
+          onClick={() => void authorize()}>{busyKey === authorizationKey ? <LoaderCircle className="is-spinning" size={17} /> : null}{recollectionConfirmed ? '确认授权重新收款' : '核对并继续'}</button></div>
+      </div> : <p className="cashier-guidance">当前账号无“授权退款后重新收款”权限，请交给具备退款复核权限的收银处理。</p>}
+    </div>
+  }
   if (!canCollect) return null
   const blocked = activeOnlinePayment !== undefined
   const mutationKey = provider === null ? '' : `manual-payment-${provider}-${order.id}`
 
+  async function createPayment(method: 'native_qr' | 'auth_code', customerAuthCode?: string) {
+    if (!canCreateOnline || actions.onlinePaymentProvider === null || blocked) return false
+    setOnlineError(null)
+    const action = await onCreateOnlinePayment({
+      orderId: order.id,
+      provider: actions.onlinePaymentProvider,
+      method,
+      ...(customerAuthCode === undefined ? {} : { customerAuthCode }),
+    })
+    if (action === null) {
+      setOnlineError('收款没有发起成功，请核对上方提示。')
+      return false
+    }
+    setOnlineAction(action)
+    setShowScanner(false)
+    return true
+  }
+
   async function submit() {
     if (provider === null || blocked || receiptReference.trim().length < 3) return
+    if (provider === 'physical_pos' && terminalId.trim().length < 2) return
+    if (provider === 'external_manual' && collectionNote.trim().length < 2) return
     if (!confirmed) { setConfirmed(true); return }
     const completed = await onMutation(
       mutationKey,
@@ -653,42 +828,268 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation }: {
       {
         orderId: order.id,
         provider,
-        method: provider === 'cash' ? 'cash' : 'card',
+        method: provider === 'cash' ? 'cash' : provider === 'physical_pos' ? 'card' : 'manual',
         receiptReference: receiptReference.trim(),
         ...(provider === 'physical_pos' && terminalId.trim() ? { terminalId: terminalId.trim() } : {}),
-        occurredAt: new Date().toISOString(),
+        ...(provider === 'external_manual' ? {
+          externalMethodCode,
+          collectionNote: collectionNote.trim(),
+        } : {}),
       },
       provider === 'cash'
         ? '现金收款已登记，订单支付状态已刷新；已配置收银打印路由时会生成支付凭条。'
-        : '实体POS收款已登记，订单支付状态已刷新；已配置收银打印路由时会生成支付凭条。',
+        : provider === 'physical_pos'
+          ? '实体POS收款已登记，订单支付状态已刷新；已配置收银打印路由时会生成支付凭条。'
+          : '其他线下收款已登记，订单支付状态已刷新并进入日结对账。',
     )
     if (completed) {
-      setProvider(null); setReceiptReference(''); setTerminalId(''); setConfirmed(false)
+      setProvider(null); setReceiptReference(''); setTerminalId(''); setCollectionNote(''); setConfirmed(false)
     }
   }
 
+  const qrValue = onlineAction?.presentation === 'qr'
+    && typeof onlineAction.payload?.qrCodeUrl === 'string' ? onlineAction.payload.qrCodeUrl : null
+
   return <div className={`cashier-manual-collection${blocked ? ' is-blocked' : ''}`}>
-    <div><strong>现场收款</strong><small>剩余应收 ¥{formatAmount(order.outstandingAmountMinor)}；本次登记会收清全部剩余应收，不支持拆分金额。</small></div>
-    {blocked ? <p className="cashier-channel-pending">已有线上支付“{shortReference(activeOnlinePayment.publicId)}”已经向渠道发起，客人仍可能完成付款。现金和实体POS入口已锁定；客人表示付过但系统没收到结果时，请先在下方查询渠道结果，确认失败或关闭后再改收现金。</p> : <>
+    <div><strong>现场收款</strong><small>剩余应收 ¥{formatAmount(order.outstandingAmountMinor)}；{order.recollectionAuthorization !== null ? '退款后重新收款授权已生效，请在到期前完成一次实际收款。' : '可让顾客扫二维码、扫顾客付款码，或登记已实际收到的现金/POS/其他款项。'}</small></div>
+    {onlineAction !== null && onlineAction.status !== 'failed' ? <div className="cashier-manual-result" aria-live="polite">
+      {qrValue !== null ? <><CashierPaymentQr value={qrValue} /><strong>请顾客扫码付款</strong><p>到账前不要重复收款；本页下方会保留这笔付款的渠道查单入口。</p></>
+        : <><strong>顾客付款码已受理</strong><p>请勿重复扫码，实际到账以支付渠道回传和下方查单结果为准。</p></>}
+      <button type="button" className="cashier-quiet-action" onClick={() => setOnlineAction(null)}>暂时收起</button>
+    </div> : blocked ? <p className="cashier-channel-pending">已有线上支付“{shortReference(activeOnlinePayment.publicId)}”已经向渠道发起，客人仍可能完成付款。所有新收款入口已锁定；请先在下方查询渠道结果，确认失败或关闭后再重新收款。</p> : <>
       {unpresentedOnlinePayment !== undefined && <p className="cashier-guidance">系统发现一笔尚未向支付渠道发起的线上记录。登记现场收款时会在同一笔操作中安全关闭该记录，不需要客人继续线上待支付。</p>}
       {provider === null ? <div className="cashier-action-row">
+        {canCreateOnline && <button type="button" className="cashier-primary-action" disabled={busyKey !== null} onClick={() => void createPayment('native_qr')}><QrCode size={17} />出示付款二维码</button>}
+        {canCreateOnline && <button type="button" className="cashier-secondary-action" disabled={busyKey !== null} onClick={() => setShowScanner(true)}><ScanLine size={17} />扫顾客付款码</button>}
         {actions.canRecordManualCash && <button type="button" className="cashier-primary-action" disabled={busyKey !== null} onClick={() => setProvider('cash')}>登记现金收款</button>}
         {actions.canRecordManualPos && <button type="button" className="cashier-secondary-action" disabled={busyKey !== null} onClick={() => setProvider('physical_pos')}>登记实体POS收款</button>}
+        {actions.canRecordManualExternal && <button type="button" className="cashier-secondary-action" disabled={busyKey !== null} onClick={() => setProvider('external_manual')}>登记其他线下收款</button>}
       </div> : <div className="cashier-manual-result">
-        <strong>{provider === 'cash' ? '登记现金收款' : '登记实体POS收款'}</strong>
+        <strong>{manualCollectionLabel(provider)}</strong>
         <p>只在款项已经实际收到后登记。系统将记录当前登录员工、时间和凭证，不允许代填他人身份。</p>
-        <label className="cashier-field"><span>{provider === 'cash' ? '现金收款凭证号' : 'POS小票/交易号'}</span><input value={receiptReference} maxLength={256} placeholder={provider === 'cash' ? '例如 XJ-20260824-L01-001' : '例如 POS-20260824-0001'} onChange={(event) => { setReceiptReference(event.target.value); setConfirmed(false) }} /></label>
-        {provider === 'physical_pos' && <label className="cashier-field"><span>POS终端编号（选填）</span><input value={terminalId} maxLength={128} placeholder="例如 POS-01" onChange={(event) => { setTerminalId(event.target.value); setConfirmed(false) }} /></label>}
-        {confirmed && <p className="cashier-guidance">请再次核对：已经实际收到{provider === 'cash' ? '现金' : 'POS款项'} ¥{formatAmount(order.outstandingAmountMinor)}，凭证号为“{receiptReference.trim()}”。确认后将计入收款和对账。</p>}
+        {provider === 'external_manual' && <label className="cashier-field"><span>实际收款方式</span><select value={externalMethodCode} onChange={(event) => { setExternalMethodCode(event.target.value as typeof externalMethodCode); setConfirmed(false) }}><option value="bank_transfer">银行转账</option><option value="mobile_wallet">其他扫码或数字钱包</option><option value="stored_value_voucher">储值卡或代金凭证</option><option value="corporate_account">公司账户结算</option><option value="other">其他经批准方式</option></select></label>}
+        <label className="cashier-field"><span>{provider === 'cash' ? '现金收款凭证号' : provider === 'physical_pos' ? 'POS小票/交易号' : '外部交易号或凭证号'}</span><input value={receiptReference} maxLength={256} placeholder={provider === 'cash' ? '例如 XJ-20260824-L01-001' : provider === 'physical_pos' ? '例如 POS-20260824-0001' : '填写可供日结核对的真实凭证号'} onChange={(event) => { setReceiptReference(event.target.value); setConfirmed(false) }} /></label>
+        {provider === 'physical_pos' && <label className="cashier-field"><span>POS终端编号</span><input value={terminalId} maxLength={128} placeholder="例如 POS-01" onChange={(event) => { setTerminalId(event.target.value); setConfirmed(false) }} /></label>}
+        {provider === 'external_manual' && <label className="cashier-field"><span>收款说明</span><textarea value={collectionNote} maxLength={500} placeholder="说明收款平台、核对对象或其他可复核信息" onChange={(event) => { setCollectionNote(event.target.value); setConfirmed(false) }} /></label>}
+        {confirmed && <p className="cashier-guidance">请再次核对：已经实际收到{manualCollectionAmountLabel(provider)} ¥{formatAmount(order.outstandingAmountMinor)}，凭证号为“{receiptReference.trim()}”。确认后将计入收款和对账，并在订单收清后允许继续结台。</p>}
         <div className="cashier-action-row">
           <button type="button" className="cashier-quiet-action" disabled={busyKey !== null} onClick={() => { setProvider(null); setConfirmed(false) }}>返回</button>
-          <button type="button" className="cashier-primary-action" disabled={busyKey !== null || receiptReference.trim().length < 3} onClick={() => void submit()}>
-            {busyKey === mutationKey ? <LoaderCircle className="is-spinning" size={17} /> : null}{confirmed ? `确认已收到${provider === 'cash' ? '现金' : 'POS款项'}` : '核对并继续'}
+          <button type="button" className="cashier-primary-action" disabled={busyKey !== null || receiptReference.trim().length < 3 || (provider === 'physical_pos' && terminalId.trim().length < 2) || (provider === 'external_manual' && collectionNote.trim().length < 2)} onClick={() => void submit()}>
+            {busyKey === mutationKey ? <LoaderCircle className="is-spinning" size={17} /> : null}{confirmed ? `确认已收到${manualCollectionAmountLabel(provider)}` : '核对并继续'}
           </button>
         </div>
       </div>}
+      {onlineAction?.status === 'failed' && <p className="cashier-guidance">上一次线上收款未成功，可重新生成二维码、重新扫码或改用现场收款。</p>}
+      {onlineError !== null && <p className="cashier-guidance" role="alert">{onlineError}</p>}
     </>}
+    {showScanner && <CustomerPaymentCodeScanner
+      tableCode={order.tableCode}
+      amountLabel={`¥${formatAmount(order.outstandingAmountMinor)}`}
+      onClose={() => setShowScanner(false)}
+      onConfirm={(customerAuthCode) => createPayment('auth_code', customerAuthCode)}
+    />}
   </div>
+}
+
+/**
+ * Activity registrations stay in the same cashier screen, but are never
+ * rendered as table orders and never reveal attendee contact data.  All
+ * controls are capability-gated again by the server on command execution.
+ */
+function ActivityCashierPanel({ registrations, auth, actions, busyKey, onMutation }: {
+  registrations: readonly CashierWorkbenchActivityRegistration[]
+  auth: StaffAuthView
+  actions: CashierWorkbenchView['actions']
+  busyKey: string | null
+  onMutation(key: string, endpoint: string, body: unknown, successMessage: string): Promise<boolean>
+}) {
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  return <section className="cashier-activity-worklist" aria-label="活动收银工作台">
+    <header>
+      <span><b>活动收银</b><small>仅显示报名、支付、退款和库存名额恢复状态；不显示顾客联系方式。</small></span>
+      <strong>{registrations.length} 项</strong>
+    </header>
+    {registrations.length === 0
+      ? <p className="cashier-guidance">本营业日没有待处理的活动收银事项。已完成的活动收款和退款会进入日结对账。</p>
+      : <div className="cashier-order-list">
+        {registrations.map((registration) => <ActivityCashierRegistrationCard
+          key={registration.id}
+          registration={registration}
+          auth={auth}
+          actions={actions}
+          busyKey={busyKey}
+          expanded={expandedId === registration.id}
+          onToggle={() => setExpandedId((current) => current === registration.id ? null : registration.id)}
+          onMutation={onMutation}
+        />)}
+      </div>}
+  </section>
+}
+
+function ActivityCashierRegistrationCard({ registration, auth, actions, busyKey, expanded, onToggle, onMutation }: {
+  registration: CashierWorkbenchActivityRegistration
+  auth: StaffAuthView
+  actions: CashierWorkbenchView['actions']
+  busyKey: string | null
+  expanded: boolean
+  onToggle(): void
+  onMutation(key: string, endpoint: string, body: unknown, successMessage: string): Promise<boolean>
+}) {
+  const [provider, setProvider] = useState<'cash' | 'physical_pos' | 'external_manual' | null>(null)
+  const [receiptReference, setReceiptReference] = useState('')
+  const [terminalId, setTerminalId] = useState('')
+  const [externalMethodCode, setExternalMethodCode] = useState<'bank_transfer' | 'mobile_wallet' | 'stored_value_voucher' | 'corporate_account' | 'other'>('bank_transfer')
+  const [collectionNote, setCollectionNote] = useState('')
+  const [collectionConfirmed, setCollectionConfirmed] = useState(false)
+  const [recollectionReason, setRecollectionReason] = useState('')
+  const [refundReason, setRefundReason] = useState('')
+  const payment = registration.payment
+  const refund = payment?.refunds[0] ?? null
+  const recollectionAuthorization = registration.recollectionAuthorization ?? null
+  const isRefunded = registration.paymentStatus === 'refunded' || registration.status === 'refunded'
+  const dueMinor = isRefunded ? registration.paidAmountMinor : registration.amountDueMinor
+  const onlineActionPending = payment !== null
+    && (payment.provider === 'postar' || payment.provider === 'wechat')
+    && (payment.status === 'created' || payment.status === 'pending')
+    && (payment.providerTransactionId !== null
+      || (payment.providerActionState !== null && payment.providerActionState !== 'failed'))
+  const canManual = provider !== null
+    && ((provider === 'cash' && actions.canRecordManualCash)
+      || (provider === 'physical_pos' && actions.canRecordManualPos)
+      || (provider === 'external_manual' && actions.canRecordManualExternal))
+  const needsAuthorization = isRefunded && dueMinor > 0 && recollectionAuthorization === null
+  const canCollect = dueMinor > 0 && refund === null && !onlineActionPending
+    && (!needsAuthorization)
+    && (actions.canRecordManualCash || actions.canRecordManualPos || actions.canRecordManualExternal)
+  const canRequestRefund = payment !== null && payment.remainingRefundableMinor > 0
+    && refund === null && actions.canRequestRefund
+  const collectionKey = provider === null ? '' : `activity-manual-payment-${provider}-${registration.id}`
+
+  async function submitCollection() {
+    if (!canManual || provider === null || !collectionConfirmed || receiptReference.trim().length < 3) return
+    if (provider === 'physical_pos' && terminalId.trim().length < 2) return
+    if (provider === 'external_manual' && collectionNote.trim().length < 2) return
+    const completed = await onMutation(
+      collectionKey,
+      `/api/activity-registrations/${encodeURIComponent(registration.publicId)}/manual-collections`,
+      {
+        provider,
+        method: provider === 'cash' ? 'cash' : provider === 'physical_pos' ? 'card' : 'manual',
+        receiptReference: receiptReference.trim(),
+        ...(provider === 'physical_pos' ? { terminalId: terminalId.trim() } : {}),
+        ...(provider === 'external_manual' ? { externalMethodCode, collectionNote: collectionNote.trim() } : {}),
+      },
+      '活动现场收款已登记，并已写入日结对账。',
+    )
+    if (completed) {
+      setProvider(null); setReceiptReference(''); setTerminalId(''); setCollectionNote(''); setCollectionConfirmed(false)
+    }
+  }
+
+  return <article className="cashier-order cashier-activity-registration" data-cashier-activity-registration-id={registration.id}>
+    <button type="button" className="cashier-order-toggle" aria-expanded={expanded} onClick={onToggle}>
+      <span><b>{registration.activityTitle}</b><small>{shortReference(registration.publicId)} · {registration.partySize} 人 · {formatTime(registration.startsAt)}</small></span>
+      <span><strong>¥{formatAmount(isRefunded ? registration.paidAmountMinor : dueMinor)}</strong><em>{paymentStatusLabel(registration.paymentStatus)}</em></span>
+      <ChevronDown size={18} className={expanded ? 'is-open' : ''} />
+    </button>
+    {expanded && <div className="cashier-order-detail">
+      <section>
+        <h3>活动报名事实</h3>
+        <div className="cashier-line"><span><b>活动编号</b><small>{shortReference(registration.activityPublicId)} · 报名状态：{registration.status}</small></span><strong>{registration.partySize} 人</strong></div>
+        <p className="cashier-workbench-boundary">本页不显示或导出顾客联系方式。活动退款只能由店内收银处理，顾客端没有自助退款入口。</p>
+      </section>
+      <section>
+        <h3>收款、退款与受控重收</h3>
+        {onlineActionPending && <p className="cashier-channel-pending">这笔活动付款已经向线上渠道发起，系统已锁定其他收款入口。请先等待或查询渠道结果，避免重复收款。</p>}
+        {needsAuthorization && <div className="cashier-manual-collection is-blocked">
+          <div><strong>退款后重新收款</strong><small>退款已释放活动名额和套餐库存；重新收款前会重新校验活动名额、套餐名额和物料库存。</small></div>
+          {actions.canAuthorizeRecollection ? <>
+            <label className="cashier-field"><span>重新收款原因</span><textarea value={recollectionReason} maxLength={500} placeholder="至少4个字，例如：顾客确认改用实体POS付款" onChange={(event) => setRecollectionReason(event.target.value)} /></label>
+            <button type="button" className="cashier-primary-action" disabled={busyKey !== null || recollectionReason.trim().length < 4} onClick={() => void onMutation(
+              `activity-recollection-authorize-${registration.id}`,
+              `/api/activity-registrations/${encodeURIComponent(registration.publicId)}/recollection-authorizations`,
+              { reason: recollectionReason.trim() },
+              '已授权一次活动重新收款；实际收款前仍会重新占用名额和库存。',
+            )}>授权重新收款</button>
+          </> : <p className="cashier-guidance">当前账号不能授权退款后重新收款，请交给有该权限的收银或管理人员。</p>}
+        </div>}
+        {recollectionAuthorization !== null && <p className="cashier-guidance">已授权一次重新收款 ¥{formatAmount(recollectionAuthorization.amountMinor)}，到 {formatTime(recollectionAuthorization.expiresAt)} 前有效；若名额或库存不足，收款会被安全拒绝。</p>}
+        {canCollect && <div className="cashier-manual-collection">
+          <div><strong>登记活动现场收款</strong><small>应收 ¥{formatAmount(dueMinor)}；仅在实际收到款项后登记，凭证会和当前员工、时间一起进入审计与日结。</small></div>
+          {provider === null ? <div className="cashier-action-row">
+            {actions.canRecordManualCash && <button type="button" className="cashier-primary-action" disabled={busyKey !== null} onClick={() => setProvider('cash')}>登记现金</button>}
+            {actions.canRecordManualPos && <button type="button" className="cashier-secondary-action" disabled={busyKey !== null} onClick={() => setProvider('physical_pos')}>登记实体POS</button>}
+            {actions.canRecordManualExternal && <button type="button" className="cashier-secondary-action" disabled={busyKey !== null} onClick={() => setProvider('external_manual')}>登记其他方式</button>}
+          </div> : <div className="cashier-manual-result">
+            {provider === 'external_manual' && <label className="cashier-field"><span>实际收款方式</span><select value={externalMethodCode} onChange={(event) => { setExternalMethodCode(event.target.value as typeof externalMethodCode); setCollectionConfirmed(false) }}><option value="bank_transfer">银行转账</option><option value="mobile_wallet">其他扫码或数字钱包</option><option value="stored_value_voucher">储值卡或代金凭证</option><option value="corporate_account">公司账户结算</option><option value="other">其他经批准方式</option></select></label>}
+            <label className="cashier-field"><span>{provider === 'cash' ? '现金收款凭证号' : provider === 'physical_pos' ? 'POS小票/交易号' : '外部交易号或凭证号'}</span><input value={receiptReference} maxLength={256} onChange={(event) => { setReceiptReference(event.target.value); setCollectionConfirmed(false) }} /></label>
+            {provider === 'physical_pos' && <label className="cashier-field"><span>POS终端编号</span><input value={terminalId} maxLength={128} onChange={(event) => { setTerminalId(event.target.value); setCollectionConfirmed(false) }} /></label>}
+            {provider === 'external_manual' && <label className="cashier-field"><span>收款说明</span><textarea value={collectionNote} maxLength={500} onChange={(event) => { setCollectionNote(event.target.value); setCollectionConfirmed(false) }} /></label>}
+            {collectionConfirmed && <p className="cashier-guidance">请确认已实际收到 ¥{formatAmount(dueMinor)}，凭证“{receiptReference.trim()}”真实可核对。提交后会计入收款与日结。</p>}
+            <div className="cashier-action-row"><button type="button" className="cashier-quiet-action" disabled={busyKey !== null} onClick={() => { setProvider(null); setCollectionConfirmed(false) }}>返回</button><button type="button" className="cashier-primary-action" disabled={busyKey !== null || receiptReference.trim().length < 3 || (provider === 'physical_pos' && terminalId.trim().length < 2) || (provider === 'external_manual' && collectionNote.trim().length < 2)} onClick={() => { if (!collectionConfirmed) setCollectionConfirmed(true); else void submitCollection() }}>{collectionConfirmed ? '确认已实际收款' : '核对并继续'}</button></div>
+          </div>}
+        </div>}
+        {canRequestRefund && <div className="cashier-refund-form">
+          <h4>发起活动退款</h4>
+          <p className="cashier-guidance">退款金额为本次活动实际收款 ¥{formatAmount(payment.remainingRefundableMinor)}。顾客不能自助退款，申请后需由非申请人复核。</p>
+          <label className="cashier-field"><span>退款原因</span><textarea value={refundReason} maxLength={1000} placeholder="至少2个字；说明活动、原收款和退款原因" onChange={(event) => setRefundReason(event.target.value)} /></label>
+          <button type="button" className="cashier-danger-action" disabled={busyKey !== null || refundReason.trim().length < 2} onClick={() => void onMutation(
+            `activity-refund-request-${registration.id}`,
+            `/api/staff/community-activity-registrations/${encodeURIComponent(registration.publicId)}/refunds`,
+            { reason: refundReason.trim() },
+            '活动退款申请已提交，等待非申请人复核。',
+          )}>发起全额退款</button>
+        </div>}
+        {refund !== null && <ActivityRefundBlock
+          refund={refund}
+          payment={payment!}
+          auth={auth}
+          actions={actions}
+          busyKey={busyKey}
+          onMutation={onMutation}
+        />}
+      </section>
+    </div>}
+  </article>
+}
+
+function ActivityRefundBlock({ refund, payment, auth, actions, busyKey, onMutation }: {
+  refund: CashierWorkbenchRefund
+  payment: CashierWorkbenchPayment
+  auth: StaffAuthView
+  actions: CashierWorkbenchView['actions']
+  busyKey: string | null
+  onMutation(key: string, endpoint: string, body: unknown, successMessage: string): Promise<boolean>
+}) {
+  const [decisionReason, setDecisionReason] = useState('')
+  const [manualReceipt, setManualReceipt] = useState('')
+  return <RefundBlock
+    refund={refund}
+    payment={payment}
+    auth={auth}
+    actions={actions}
+    busyKey={busyKey}
+    decisionReason={decisionReason}
+    manualReceipt={manualReceipt}
+    manualProvider={payment.provider === 'cash' || payment.provider === 'physical_pos' || payment.provider === 'external_manual'}
+    onDecisionReason={(_, reason) => setDecisionReason(reason)}
+    onManualReceipt={(_, receipt) => setManualReceipt(receipt)}
+    onMutation={onMutation}
+  />
+}
+
+function CashierPaymentQr({ value }: { value: string }) {
+  const [image, setImage] = useState<string | null>(null)
+  useEffect(() => {
+    let active = true
+    void import('qrcode').then(({ default: QRCode }) => QRCode.toDataURL(value, {
+      width: 260, margin: 1, errorCorrectionLevel: 'M',
+    })).then((next) => { if (active) setImage(next) })
+    return () => { active = false }
+  }, [value])
+  return image === null
+    ? <LoaderCircle className="is-spinning" />
+    : <img className="staff-payment-qr" src={image} alt="顾客扫码付款二维码" />
 }
 
 function PaymentBlock({
@@ -742,7 +1143,9 @@ function PaymentBlock({
         && item !== undefined
         && amountMinor <= item.remainingRefundableMinor
     })
-  const manualProvider = payment.provider === 'cash' || payment.provider === 'physical_pos'
+  const manualProvider = payment.provider === 'cash'
+    || payment.provider === 'physical_pos'
+    || payment.provider === 'external_manual'
   return <div className="cashier-payment-block">
     <div className="cashier-payment-heading">
       <span><b>{providerLabel(payment.provider)}</b><small>{shortReference(payment.publicId)} · {paymentStatusLabel(payment.status)}</small></span>
@@ -980,7 +1383,7 @@ function RefundBlock({
               void onMutation(
                 `refund-manual-${succeeded ? 'success' : 'failed'}-${refund.id}`,
                 `/api/refunds/${encodeURIComponent(refund.id)}/manual-result`,
-                { succeeded, receiptReference: manualReceipt, occurredAt: new Date().toISOString() },
+                { succeeded, receiptReference: manualReceipt },
                 succeeded ? '人工退款凭证已登记并写入退款账。' : '已登记人工退款失败，金额未记入退款账。',
               )
             }}
@@ -1035,6 +1438,32 @@ function orderWorkflowGuidance(
   return null
 }
 
+function businessDayFactRouteAccess(actionRoute: string, permissions: readonly string[]): {
+  allowed: boolean
+  moduleLabel: string
+} {
+  const route = actionRoute.split('?')[0] ?? actionRoute
+  const module = staffModuleForRoute(route)
+  if (module === null) return { allowed: false, moduleLabel: '对应业务页面' }
+  const effective = new Set(permissions)
+  return {
+    allowed: module.permissionCodes.some((permission) => effective.has(permission)),
+    moduleLabel: module.label,
+  }
+}
+
+export function businessDayFactNavigation(fact: BusinessDayBlockerFact):
+  | { kind: 'cashier_order'; orderId: string; query: string }
+  | { kind: 'route'; route: string; context: BusinessDayNavigationContext } {
+  const target = new URL(fact.actionRoute, 'http://localhost')
+  if (target.pathname === '/staff/payments' && fact.orderId !== null) return {
+    kind: 'cashier_order',
+    orderId: fact.orderId,
+    query: fact.orderPublicId ?? fact.reference,
+  }
+  return { kind: 'route', route: fact.actionRoute, context: { businessDayBlockerFact: fact } }
+}
+
 function shortReference(value: string): string {
   return value.length <= 18 ? value : `${value.slice(0, 8)}…${value.slice(-6)}`
 }
@@ -1044,7 +1473,13 @@ function formatTime(value: string): string {
   return new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value))
 }
 function providerLabel(value: string): string {
-  return ({ postar: '星驿在线支付', wechat: '微信支付', cash: '现金', physical_pos: '实体POS', simulation: '模拟支付' } as Record<string, string>)[value] ?? value
+  return ({ postar: '星驿在线支付', wechat: '微信支付', cash: '现金', physical_pos: '实体POS', external_manual: '其他线下收款', simulation: '模拟支付' } as Record<string, string>)[value] ?? value
+}
+function manualCollectionLabel(provider: 'cash' | 'physical_pos' | 'external_manual'): string {
+  return provider === 'cash' ? '登记现金收款' : provider === 'physical_pos' ? '登记实体POS收款' : '登记其他线下收款'
+}
+function manualCollectionAmountLabel(provider: 'cash' | 'physical_pos' | 'external_manual'): string {
+  return provider === 'cash' ? '现金' : provider === 'physical_pos' ? 'POS款项' : '其他线下款项'
 }
 function paymentStatusLabel(value: string): string {
   return ({ created: '待提交', pending: '待支付', succeeded: '已收款', failed: '支付失败', closed: '已关闭', partially_refunded: '部分已退', refunded: '已全退', unpaid: '未支付', partially_paid: '部分支付', paid: '已支付' } as Record<string, string>)[value] ?? value

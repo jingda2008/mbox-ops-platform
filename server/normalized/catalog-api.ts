@@ -40,6 +40,7 @@ import { isPublicMiniProgramImageUrl } from './media-asset-url.js';
 
 export const CATALOG_PRODUCT_MANAGE_PERMISSION = "catalog.product.manage";
 export const CATALOG_PRICE_MANAGE_PERMISSION = "catalog.price.manage";
+export const INVENTORY_COST_VIEW_PERMISSION = "inventory.cost.view";
 
 type TransactionRunnerPort = Pick<ScopedPostgresTransactionRunner, "run">;
 type CommandExecutorPort = Pick<NormalizedCommandExecutor, "execute">;
@@ -162,7 +163,7 @@ interface CatalogProduct {
   maxOrderQuantity: number;
   kdsPriority: number;
   fulfillmentSlaSeconds: number | null;
-  costAmountMinor: number | null;
+  costAmountMinor?: number | null;
   status: ProductStatus;
   isAvailable: boolean;
   inventoryConfigurationComplete: boolean;
@@ -249,6 +250,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
         options.transactions,
         context.scope,
         query,
+        context.employeeId,
       );
     }),
   );
@@ -256,7 +258,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
   app.get("/catalog/categories", async (request, reply) =>
     handleRoute(reply, async () => {
       const context = await resolveStaffContext(options, request);
-      return sendCategoryList(reply, options.transactions, context.scope, false);
+      return sendCategoryList(reply, options.transactions, context.scope, false, context.employeeId);
     }),
   );
 
@@ -602,18 +604,31 @@ async function sendProductList(
   transactions: TransactionRunnerPort,
   scope: Readonly<StoreScope>,
   query: Readonly<ProductListQuery>,
+  employeeId?: string,
 ): Promise<FastifyReply> {
-  const products = await transactions.run(
+  const result = await transactions.run(
     scope,
-    (transaction) => listProducts(transaction, query),
+    async (transaction) => {
+      let includeCost = false;
+      if (employeeId !== undefined) {
+        await assertLivePermission(transaction, employeeId, CATALOG_PRODUCT_MANAGE_PERMISSION);
+        try {
+          await assertLivePermission(transaction, employeeId, INVENTORY_COST_VIEW_PERMISSION);
+          includeCost = true;
+        } catch (error) {
+          if (!(error instanceof StaffAccessDeniedError)) throw error;
+        }
+      }
+      return { products: await listProducts(transaction, query), includeCost };
+    },
     { readOnly: true },
   );
   return reply.send({
-    data: products.map((row) => mapProduct(row, query.guest)),
+    data: result.products.map((row) => mapProduct(row, query.guest, result.includeCost)),
     page: {
       limit: query.limit,
       offset: query.offset,
-      returned: products.length,
+      returned: result.products.length,
     },
   });
 }
@@ -623,8 +638,14 @@ async function sendCategoryList(
   transactions: TransactionRunnerPort,
   scope: Readonly<StoreScope>,
   guest: boolean,
+  employeeId?: string,
 ): Promise<FastifyReply> {
-  const categories = await transactions.run(scope, (transaction) => listCategories(transaction, guest), {
+  const categories = await transactions.run(scope, async (transaction) => {
+    if (employeeId !== undefined) {
+      await assertLivePermission(transaction, employeeId, CATALOG_PRODUCT_MANAGE_PERMISSION);
+    }
+    return listCategories(transaction, guest);
+  }, {
     readOnly: true,
   });
   return reply.send({
@@ -1247,7 +1268,7 @@ async function getProduct(
   return requiredProduct(result.rows[0]);
 }
 
-function mapProduct(row: ProductRow, guest = false): CatalogProduct {
+function mapProduct(row: ProductRow, guest = false, includeCost = true): CatalogProduct {
   const standardPrice =
     row.standard_price_id === null
       ? null
@@ -1291,7 +1312,7 @@ function mapProduct(row: ProductRow, guest = false): CatalogProduct {
     maxOrderQuantity: row.max_order_quantity,
     kdsPriority: row.kds_priority,
     fulfillmentSlaSeconds: row.fulfillment_sla_seconds,
-    costAmountMinor: row.cost_amount_minor === null ? null : Number(row.cost_amount_minor),
+    ...(includeCost ? { costAmountMinor: row.cost_amount_minor === null ? null : Number(row.cost_amount_minor) } : {}),
     status: row.status,
     isAvailable: catalogAvailable && row.inventory_available
       && (!guest || row.inventory_configuration_complete),
@@ -1927,7 +1948,7 @@ function catalogProductToJson(product: CatalogProduct): JsonObject {
     maxOrderQuantity: product.maxOrderQuantity,
     kdsPriority: product.kdsPriority,
     fulfillmentSlaSeconds: product.fulfillmentSlaSeconds,
-    costAmountMinor: product.costAmountMinor,
+    costAmountMinor: product.costAmountMinor ?? null,
     status: product.status,
     isAvailable: product.isAvailable,
     inventoryConfigurationComplete: product.inventoryConfigurationComplete,

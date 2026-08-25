@@ -14,6 +14,7 @@ interface ActivityRow extends Record<string, unknown> {
   title: string
   status: 'published' | 'full' | 'draft' | 'cancelled' | 'completed'
   starts_at: string
+  ends_at: string
   capacity: number
   payment_deadline_minutes: number
   payment_authorized: boolean
@@ -29,6 +30,8 @@ interface WaitlistedRow extends Record<string, unknown> {
   requested_payment_method: 'jsapi' | 'native_qr' | null
   requested_amount_due_minor: string | number
   currency: string
+  activity_package_id: string | null
+  activity_package_snapshot: Record<string, unknown>
 }
 
 export interface ActivityWaitlistPromotionBatch {
@@ -86,13 +89,19 @@ export class ActivityWaitlistPromotionWorker {
     }
 
     const promotedRegistrationIds: string[] = []
+    const skippedRegistrationIds: string[] = []
     while (true) {
       const occupiedSeats = await occupied(transaction, activity.id)
       const availableSeats = Math.max(0, activity.capacity - occupiedSeats)
-      const next = await firstWaitlisted(transaction, activity.id)
+      const next = await firstWaitlisted(transaction, activity.id, skippedRegistrationIds)
       if (next === null) {
         await setActivityCapacityStatus(transaction, activity.id, availableSeats, false)
-        await completeEvent(transaction, event.id, 'waitlist_empty', workerId)
+        await completeEvent(
+          transaction,
+          event.id,
+          skippedRegistrationIds.length === 0 ? 'waitlist_empty' : 'package_unavailable',
+          workerId,
+        )
         return { promotedRegistrationIds, deferred: false }
       }
       if (availableSeats < next.party_size) {
@@ -110,8 +119,21 @@ export class ActivityWaitlistPromotionWorker {
         || (!paymentRequired && (amountDueMinor !== 0 || next.requested_payment_method !== null))) {
         throw new Error('waitlisted activity payment intent is internally inconsistent')
       }
-      const promoted = await promoteRegistration(transaction, next, activity.payment_deadline_minutes)
+      const promoted = await promoteRegistration(
+        transaction,
+        next,
+        paymentDeadlineMinutes(next, activity.payment_deadline_minutes),
+      )
       if (!promoted) continue
+      const stockHeld = await reservePromotedPackageInventory(transaction, {
+        registration: next,
+        expiresAt: promoted.payment_due_at ?? activity.ends_at,
+      })
+      if (!stockHeld) {
+        await returnPromotionToWaitlist(transaction, next)
+        skippedRegistrationIds.push(next.id)
+        continue
+      }
       const payment = paymentRequired
         ? await new PaymentRepository(transaction).createForActivityRegistration({
           activityRegistrationId: next.id,
@@ -169,7 +191,7 @@ async function claimReleaseEvents(
 async function lockActivity(transaction: ScopedTransaction, activityId: string): Promise<ActivityRow | null> {
   const result = await transaction.query<ActivityRow>(`
     SELECT activity.id,activity.public_id,activity.title,activity.status,
-      activity.starts_at::text,activity.capacity,activity.payment_deadline_minutes,
+      activity.starts_at::text,activity.ends_at::text,activity.capacity,activity.payment_deadline_minutes,
       COALESCE(policy.online_payment_enabled,false)
         AND EXISTS (
           SELECT 1 FROM mbox.customer_experience_features feature
@@ -202,17 +224,37 @@ async function occupied(transaction: ScopedTransaction, activityId: string): Pro
 async function firstWaitlisted(
   transaction: ScopedTransaction,
   activityId: string,
+  excludedRegistrationIds: readonly string[],
 ): Promise<WaitlistedRow | null> {
   const result = await transaction.query<WaitlistedRow>(`
-    SELECT id,public_id,customer_id,registration_cycle,party_size,
-      requested_payment_choice,requested_payment_method,requested_amount_due_minor,currency
-    FROM mbox.community_activity_registrations
-    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND activity_id=$3::uuid
-      AND status='waitlisted'
-    ORDER BY registered_at,id
-    FOR UPDATE SKIP LOCKED
+    SELECT registration.id,registration.public_id,registration.customer_id,registration.registration_cycle,
+      registration.party_size,registration.requested_payment_choice,registration.requested_payment_method,
+      registration.requested_amount_due_minor,registration.currency,registration.activity_package_id,
+      registration.activity_package_snapshot
+    FROM mbox.community_activity_registrations registration
+    WHERE registration.tenant_id=$1::uuid AND registration.store_id=$2::uuid
+      AND registration.activity_id=$3::uuid AND registration.status='waitlisted'
+      AND NOT (registration.id=ANY($4::uuid[]))
+      AND (
+        registration.activity_package_id IS NULL OR EXISTS (
+          SELECT 1 FROM mbox.community_activity_packages package
+          WHERE package.tenant_id=registration.tenant_id AND package.store_id=registration.store_id
+            AND package.id=registration.activity_package_id AND package.status='published'
+            AND (package.available_from IS NULL OR package.available_from<=clock_timestamp())
+            AND (package.available_until IS NULL OR package.available_until>clock_timestamp())
+            AND COALESCE((
+              SELECT sum(active_registration.party_size)
+              FROM mbox.community_activity_registrations active_registration
+              WHERE active_registration.tenant_id=package.tenant_id AND active_registration.store_id=package.store_id
+                AND active_registration.activity_package_id=package.id
+                AND active_registration.status IN ('reserved','payment_pending','confirmed','checked_in')
+            ),0)+registration.party_size<=package.capacity
+        )
+      )
+    ORDER BY registration.registered_at,registration.id
+    FOR UPDATE OF registration SKIP LOCKED
     LIMIT 1
-  `, [transaction.scope.tenantId,transaction.scope.storeId,activityId])
+  `, [transaction.scope.tenantId,transaction.scope.storeId,activityId,[...excludedRegistrationIds]])
   return result.rows[0] ?? null
 }
 
@@ -241,6 +283,116 @@ async function promoteRegistration(
     registration.registration_cycle,paymentRequired,paymentDeadlineMinutes,
   ])
   return result.rows[0] ?? null
+}
+
+function paymentDeadlineMinutes(registration: WaitlistedRow, fallback: number): number {
+  const value = registration.activity_package_snapshot.paymentDeadlineMinutes
+  const parsed = typeof value === 'number' ? value : Number(value)
+  return Number.isInteger(parsed) && parsed >= 5 && parsed <= 1_440 ? parsed : fallback
+}
+
+/**
+ * The worker makes a real inventory hold before it emits a promotion payment
+ * object.  No table order is created.  A failed package hold simply leaves
+ * that candidate on the waitlist and permits a later, independently sellable
+ * package to be considered in the same release event.
+ */
+async function reservePromotedPackageInventory(
+  transaction: ScopedTransaction,
+  input: Readonly<{ registration: WaitlistedRow; expiresAt: string }>,
+): Promise<boolean> {
+  if (input.registration.activity_package_id === null) return true
+  const components = await transaction.query<{
+    id: string
+    inventory_item_id: string
+    item_status: string
+    required_quantity: string
+  }>(`
+    SELECT component.id,component.inventory_item_id,item.status AS item_status,
+      (component.quantity*CASE WHEN component.per_participant THEN $4::numeric ELSE 1::numeric END)::text
+        AS required_quantity
+    FROM mbox.community_activity_package_components component
+    JOIN mbox.inventory_items item
+      ON item.tenant_id=component.tenant_id AND item.store_id=component.store_id
+     AND item.id=component.inventory_item_id
+    WHERE component.tenant_id=$1::uuid AND component.store_id=$2::uuid
+      AND component.activity_package_id=$3::uuid
+    ORDER BY component.inventory_item_id,component.id
+    FOR KEY SHARE OF component,item
+  `, [
+    transaction.scope.tenantId,transaction.scope.storeId,
+    input.registration.activity_package_id,input.registration.party_size,
+  ])
+  if (components.rows.some((component) => component.item_status !== 'active')) return false
+  for (const component of components.rows) {
+    await transaction.query(`
+      INSERT INTO mbox.inventory_balances(tenant_id,store_id,inventory_item_id)
+      VALUES($1::uuid,$2::uuid,$3::uuid)
+      ON CONFLICT(tenant_id,store_id,inventory_item_id) DO NOTHING
+    `, [transaction.scope.tenantId,transaction.scope.storeId,component.inventory_item_id])
+  }
+  const balances = await transaction.query<{
+    inventory_item_id: string
+    on_hand_quantity: string
+    reserved_quantity: string
+  }>(`
+    SELECT balance.inventory_item_id,balance.on_hand_quantity::text,balance.reserved_quantity::text
+    FROM mbox.inventory_balances balance
+    WHERE balance.tenant_id=$1::uuid AND balance.store_id=$2::uuid
+      AND balance.inventory_item_id=ANY($3::uuid[])
+    ORDER BY balance.inventory_item_id
+    FOR UPDATE
+  `, [
+    transaction.scope.tenantId,transaction.scope.storeId,
+    components.rows.map((component) => component.inventory_item_id),
+  ])
+  const balanceByItem = new Map(balances.rows.map((balance) => [balance.inventory_item_id, balance]))
+  for (const component of components.rows) {
+    const balance = balanceByItem.get(component.inventory_item_id)
+    if (balance === undefined || Number(balance.on_hand_quantity) - Number(balance.reserved_quantity) < Number(component.required_quantity)) {
+      return false
+    }
+  }
+  for (const component of components.rows) {
+    const held = await transaction.query(`
+      UPDATE mbox.inventory_balances
+      SET reserved_quantity=reserved_quantity+$4::numeric,updated_at=clock_timestamp()
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND inventory_item_id=$3::uuid
+        AND on_hand_quantity-reserved_quantity>=$4::numeric
+    `, [
+      transaction.scope.tenantId,transaction.scope.storeId,
+      component.inventory_item_id,component.required_quantity,
+    ])
+    if (held.rowCount !== 1) throw new Error('locked activity package inventory balance changed unexpectedly')
+    await transaction.query(`
+      INSERT INTO mbox.community_activity_package_inventory_reservations(
+        tenant_id,store_id,registration_id,registration_cycle,package_component_id,
+        inventory_item_id,quantity,status,expires_at
+      ) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,$6::uuid,$7::numeric,'reserved',$8::timestamptz)
+    `, [
+      transaction.scope.tenantId,transaction.scope.storeId,input.registration.id,
+      input.registration.registration_cycle,component.id,component.inventory_item_id,
+      component.required_quantity,input.expiresAt,
+    ])
+  }
+  return true
+}
+
+async function returnPromotionToWaitlist(
+  transaction: ScopedTransaction,
+  registration: WaitlistedRow,
+): Promise<void> {
+  const restored = await transaction.query(`
+    UPDATE mbox.community_activity_registrations
+    SET status='waitlisted',payment_choice='none',payment_status='not_required',
+      amount_due_minor=0,payment_due_at=NULL,seat_hold_expires_at=NULL,updated_at=clock_timestamp()
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+      AND registration_cycle=$4 AND status IN ('confirmed','payment_pending') AND payment_id IS NULL
+  `, [
+    transaction.scope.tenantId,transaction.scope.storeId,
+    registration.id,registration.registration_cycle,
+  ])
+  if (restored.rowCount !== 1) throw new Error('unable to restore activity package waitlist candidate')
 }
 
 async function recordPromotion(transaction: ScopedTransaction, input: Readonly<{
@@ -306,7 +458,7 @@ async function setActivityCapacityStatus(
 async function completeEvent(
   transaction: ScopedTransaction,
   eventId: string,
-  resolution: 'activity_unavailable' | 'waitlist_empty' | 'head_party_does_not_fit',
+  resolution: 'activity_unavailable' | 'waitlist_empty' | 'head_party_does_not_fit' | 'package_unavailable',
   workerId: string,
 ): Promise<void> {
   const updated = await transaction.query(`

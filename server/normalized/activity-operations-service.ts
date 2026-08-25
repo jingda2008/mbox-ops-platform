@@ -11,6 +11,7 @@ import {
   type ActivityDraftInput,
   type ActivityOperationsActivity,
   type ActivityOperationsRegistration,
+  type ActivityPackageAvailabilityOperation,
   type ActivityRegistrationOperation,
   type ActivityWaitlistRetry,
 } from './activity-operations-repository.js'
@@ -32,6 +33,14 @@ export class ActivityOperationsService {
     return this.transactions.run(
       context.scope,
       (transaction) => new ActivityOperationsRepository(transaction).list(),
+      { readOnly: true },
+    )
+  }
+
+  componentCatalog(context: ActivityOperationsStaffContext) {
+    return this.transactions.run(
+      context.scope,
+      (transaction) => new ActivityOperationsRepository(transaction).componentCatalog(),
       { readOnly: true },
     )
   }
@@ -116,6 +125,40 @@ export class ActivityOperationsService {
     })
   }
 
+  setPackageAvailability(
+    context: ActivityOperationsStaffContext,
+    input: Readonly<{
+      activityPublicId: string
+      packagePublicId: string
+      operation: ActivityPackageAvailabilityOperation
+      reason: string
+      idempotencyKey: string
+    }>,
+  ): Promise<CommandExecution<ActivityOperationsActivity>> {
+    return this.commands.execute({
+      scope: context.scope,
+      operationScope: `community.activity.package.${input.operation}`,
+      idempotencyKey: input.idempotencyKey,
+      requestFingerprint: fingerprint(input),
+      resultCodec: objectCodec<ActivityOperationsActivity>(),
+    }, async (transaction) => {
+      const result = await new ActivityOperationsRepository(transaction).setPackageAvailability(
+        input.activityPublicId,input.packagePublicId,input.operation,
+      )
+      return {
+        result,
+        auditEvents: [audit(context, {
+          action: `community.activity.package_${input.operation}`,
+          objectType: 'community_activity_package',
+          objectId: input.packagePublicId,
+          reason: input.reason,
+          afterData: { activityPublicId: input.activityPublicId, operation: input.operation },
+        })],
+        outboxMessages: [],
+      }
+    })
+  }
+
   transitionRegistration(
     context: ActivityOperationsStaffContext,
     input: Readonly<{
@@ -127,7 +170,8 @@ export class ActivityOperationsService {
   ): Promise<CommandExecution<ActivityOperationsRegistration>> {
     const operationCode = input.operation === 'check_in'
       ? 'check-in'
-      : input.operation === 'no_show' ? 'no-show' : 'cancel'
+      : input.operation === 'fulfill_package' ? 'fulfill-package'
+        : input.operation === 'no_show' ? 'no-show' : 'cancel'
     return this.commands.execute({
       scope: context.scope,
       operationScope: `community.activity.registration.${operationCode}`,
@@ -136,7 +180,7 @@ export class ActivityOperationsService {
       resultCodec: objectCodec<ActivityOperationsRegistration>(),
     }, async (transaction) => {
       const result = await new ActivityOperationsRepository(transaction)
-        .transitionRegistration(input.publicId, input.operation, input.reason)
+        .transitionRegistration(input.publicId, input.operation, input.reason, context.employeeId)
       return {
         result,
         auditEvents: [audit(context, {

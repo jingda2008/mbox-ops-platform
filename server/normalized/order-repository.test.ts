@@ -167,12 +167,14 @@ describe('OrderRepository', () => {
 
   it('keeps delivery separate from KDS and requires every KDS task to be ready', async () => {
     const delivered = { ...itemRow(), status: 'delivered' }
-    const tx = new ScriptedTransaction([{ rows: [delivered] }])
+    const tx = new ScriptedTransaction([{ rows: [delivered] }, { rows: [{ complete_annual_benefit_fulfillment_for_order: 1 }] }])
     const item = await new OrderRepository(tx).markDelivered(itemId, employeeId)
     expect(item.status).toBe('delivered')
     expect(tx.calls[0]?.sql).toContain('NOT EXISTS')
     expect(tx.calls[0]?.sql).toContain("task.status <> 'ready'")
     expect(tx.calls[0]?.sql).not.toContain('UPDATE mbox.kds_tasks')
+    expect(tx.calls[1]?.sql).toContain('complete_annual_benefit_fulfillment_for_order')
+    expect(tx.calls[1]?.values).toEqual([orderId])
   })
 
   it('does not deliver when the conditional row lock loses the race', async () => {

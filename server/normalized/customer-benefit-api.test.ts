@@ -89,6 +89,29 @@ const apps: FastifyInstance[] = []
 afterEach(async () => Promise.all(apps.splice(0).map((app) => app.close())))
 
 describe('customerBenefitApiPlugin privacy and permission boundaries', () => {
+  it('returns a scannable daily-snack claim code without treating the QR as authorization', async () => {
+    const claim = vi.fn(async () => ({ replayed: false, value: {
+      id: 'daily-snack-claim-1', claimCode: 'DSN-ABCDEFGHIJ', benefitId,
+      benefitReservationId: reservationId, quantity: 1, status: 'reserved',
+      expiresAt: '2026-08-25T04:15:00.000Z', redeemedByEmployeeName: null,
+      redeemedAt: null, fulfilledAt: null, title: '每日点心', tableCode: 'VIP1',
+      tableSessionId, memberNo: 'MBX-35648', customerName: '林女士',
+    } }))
+    const value = fixture({ dailySnackClaims: { claim } as never })
+    const response = await value.app.inject({
+      method: 'POST', url: '/api/guest/customer/annual-daily-snacks/claim',
+      headers: { 'idempotency-key': 'daily-snack-qr-code-0001' }, payload: {},
+    })
+
+    expect(response.statusCode).toBe(201)
+    expect(response.json()).toMatchObject({ data: {
+      claimCode: 'DSN-ABCDEFGHIJ', claimCodeQrDataUrl: expect.stringMatching(/^data:image\/png;base64,/),
+    } })
+    expect(claim).toHaveBeenCalledWith(expect.objectContaining({ customerId, tableSessionId }), {
+      idempotencyKey: 'daily-snack-qr-code-0001',
+    })
+  })
+
   it('returns an authentication response instead of a service fault when guest identity is missing', async () => {
     const value = fixture({
       resolveGuestContext: vi.fn(async () => { throw new GuestAuthenticationRequiredError() }),
@@ -223,6 +246,69 @@ describe('customerBenefitApiPlugin privacy and permission boundaries', () => {
     expect(JSON.stringify(response.json())).not.toMatch(/[0-9a-f]{64}/)
   })
 
+  it('lists annual gift reservations only through the server-side employee table scope', async () => {
+    const originalProductId = '88888888-8888-4888-8888-888888888888'
+    const substituteProductId = '99999999-9999-4999-8999-999999999999'
+    const query = vi.fn(async (sql: string) => ({
+      rows: sql.includes('FROM mbox.benefit_reservations') ? [{
+        reservation_id: reservationId, benefit_id: benefitId, customer_id: customerId,
+        table_session_id: tableSessionId, table_code: 'VIP1', member_no: 'MBX000001',
+        customer_name: '林女士', rule_kind: 'birthday', rule_title: '金卡生日礼遇', quantity: 1,
+        reserved_at: '2026-08-11T12:00:00.000Z', expires_at: '2026-08-11T12:15:00.000Z',
+        original_product_id: originalProductId, original_product_name: '生日特调', allowed_products: [
+          { productId: originalProductId, name: '生日特调', isOriginal: true, configuredReason: null },
+          { productId: substituteProductId, name: '无酒精特调', isOriginal: false, configuredReason: '酒水合规无酒精替代' },
+        ],
+      }] : [],
+      rowCount: sql.includes('FROM mbox.benefit_reservations') ? 1 : 0,
+    }))
+    const value = fixture({
+      transactions: { run: vi.fn(async (_scope, operation) => operation({
+        scope: { tenantId, storeId }, query,
+      } as unknown as ScopedTransaction)) },
+    })
+    const response = await value.app.inject({
+      method: 'GET', url: `/api/staff/annual-benefit-reservations?tableSessionId=${tableSessionId}`,
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({ data: [{
+      reservationId, tableSessionId, tableCode: 'VIP1', memberNo: 'MBX000001', originalProductId,
+      allowedProducts: [{ productId: originalProductId, isOriginal: true },
+        { productId: substituteProductId, isOriginal: false }],
+    }] })
+    const queueSql = query.mock.calls.map(([sql]) => sql).find((sql) => sql.includes('FROM mbox.benefit_reservations')) ?? ''
+    expect(queueSql).toContain('mbox.employee_has_effective_permission')
+    expect(queueSql).toContain('mbox.table_assignments')
+    expect(queueSql).toContain("rule.rule_kind IN ('birthday','festival')")
+  })
+
+  it('lets a fulfillment employee cancel only an annual reservation in the current assigned table scope',async()=>{
+    const query=vi.fn(async(sql:string)=>({
+      rows:sql.includes('FROM mbox.benefit_reservations')?[{
+        reservation_id:reservationId,benefit_id:benefitId,customer_id:customerId,
+        table_session_id:tableSessionId,table_code:'VIP1',member_no:'MBX000001',customer_name:'林女士',
+        rule_kind:'birthday',rule_title:'金卡生日礼遇',quantity:1,reserved_at:'2026-08-11T12:00:00Z',
+        expires_at:'2099-08-11T12:15:00Z',original_product_id:'88888888-8888-4888-8888-888888888888',
+        original_product_name:'生日特调',allowed_products:[],
+      }]:[],rowCount:sql.includes('FROM mbox.benefit_reservations')?1:0,
+    }))
+    const value=fixture({transactions:{run:vi.fn(async(_scope,operation)=>operation({
+      scope:{tenantId,storeId},query,
+    } as unknown as ScopedTransaction))}})
+    const response=await value.app.inject({method:'POST',
+      url:`/api/staff/annual-benefit-reservations/${reservationId}/cancel`,
+      headers:{'idempotency-key':'annual-gift-cancel-assigned-0001'},
+      payload:{customerId,tableSessionId,reason:'顾客现场取消'},
+    })
+    expect(response.statusCode).toBe(200)
+    expect(value.cancelReservation).toHaveBeenCalledWith(expect.objectContaining({
+      benefitReservationId:reservationId,customerId,tableSessionId,
+      employeePermission:'loyalty.redemption.fulfill',reason:'顾客现场取消',
+    }))
+    expect(query.mock.calls.map(([sql])=>sql).find((sql)=>sql.includes('FROM mbox.benefit_reservations')))
+      .toContain('reservation.id=$5::uuid')
+  })
+
   it('rejects manual issuance before command execution when live permission is absent', async () => {
     const value = fixture({
       createStaffAccessRepository: () => ({
@@ -262,6 +348,7 @@ function fixture(overrides: Partial<CustomerBenefitApiOptions> = {}) {
   const reserve = vi.fn(async () => ({ value: reservation, replayed: false }))
   const issue = vi.fn(async () => ({ value: benefit, replayed: false }))
   const updateProfile = vi.fn()
+  const cancelReservation=vi.fn(async()=>({value:reservation,replayed:false}))
   const options: CustomerBenefitApiOptions = {
     transactions,
     resolveSelfContext: vi.fn(async () => ({
@@ -283,7 +370,7 @@ function fixture(overrides: Partial<CustomerBenefitApiOptions> = {}) {
       issue,
       reserve,
       redeem: vi.fn(),
-      cancelReservation: vi.fn(),
+      cancelReservation,
     } as unknown as BenefitCommandServiceMock,
     createCustomerRepository: () => ({
       findPublicById: vi.fn(async () => publicCustomer),
@@ -300,7 +387,7 @@ function fixture(overrides: Partial<CustomerBenefitApiOptions> = {}) {
   const app = Fastify()
   apps.push(app)
   app.register(customerBenefitApiPlugin, { prefix: '/api', ...options })
-  return { app, reserve, issue, updateProfile }
+  return { app, reserve, issue, updateProfile, cancelReservation }
 }
 
 type CustomerCommandServiceMock = CustomerBenefitApiOptions['customers']

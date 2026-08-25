@@ -10,6 +10,7 @@ import { RecommendationPolicyManagementPanel } from './RecommendationPolicyManag
 import { MembershipConfigurationCenterPanel } from './MembershipConfigurationCenterPanel'
 import { PersonalContactGovernancePanel } from './PersonalContactGovernancePanel'
 import { HomeContentManagementPanel } from './HomeContentManagementPanel'
+import { AnnualBenefitManagementPanel } from './AnnualBenefitManagementPanel'
 
 interface ActivitySummary {
   publicId: string
@@ -104,12 +105,13 @@ interface RedemptionCatalogItemAdmin {
 interface RedemptionConfigurationView {
   control: { state: string; pilotStartsAt: string | null; pilotEndsAt: string | null; reason: string }
   versions: Array<{ id: string; version: number; status: string; draftedByEmployeeId: string; approvedByEmployeeId: string | null; publishedByEmployeeId: string | null; itemCount: number; reason: string }>
-  pending: Array<{
-    publicId: string; memberNo: string; itemName: string; pointsUsed: number
-    fulfillmentKind: string; expiresAt: string; failureCode: string | null
-    recoveryState: string; recoveryRequestedAt: string | null; pointsRestored: number
-  }>
   items: RedemptionCatalogItemAdmin[]
+}
+
+interface PendingRedemptionView {
+  publicId: string; memberNo: string; itemName: string; pointsUsed: number
+  fulfillmentKind: string; expiresAt: string; failureCode: string | null
+  recoveryState: string; recoveryRequestedAt: string | null; pointsRestored: number
 }
 
 interface RedemptionProductOption { id: string; name: string; code: string; costAmountMinor: number }
@@ -179,11 +181,58 @@ export interface CustomerExperienceDashboard {
   activities: ActivitySummary[]
 }
 
-export function CustomerExperienceManagementPanel({ api, auth, dashboard }: {
+export type CustomerExperiencePanelMode = 'experience' | 'member-fulfillment' | 'member-exceptions'
+  | 'member-overview' | 'member-rule-drafts' | 'member-rule-approvals' | 'member-rule-publish'
+  | 'member-accounts' | 'member-management'
+
+export function CustomerExperienceManagementPanel({ api, auth, dashboard, mode = 'experience' }: {
   api: NormalizedApiClient
   auth: StaffAuthView
   dashboard: CustomerExperienceDashboard | null
+  mode?: CustomerExperiencePanelMode
 }) {
+  if (mode === 'member-fulfillment') return <div className="staff-module-body customer-experience-management">
+    <section className="customer-experience-publishing-intro"><strong>当前桌次会员权益待办</strong><small>只显示当前岗位可确认的赠送、核销与出品事项；每次操作记录当前员工并执行防重复校验。</small></section>
+    <LoyaltyTierAndRedemptionPanel api={api} auth={auth} />
+    <AnnualBenefitManagementPanel api={api} auth={auth} />
+  </div>
+  if (mode === 'member-exceptions') return <div className="staff-module-body customer-experience-management">
+    <section className="customer-experience-publishing-intro"><strong>会员权益异常</strong><small>处理过期、缺货、结果未知和已制作后的补偿；终态记录不能直接改回可用。</small></section>
+    <LoyaltyTierAndRedemptionPanel api={api} auth={auth} />
+    <AnnualBenefitManagementPanel api={api} auth={auth} />
+  </div>
+  if (mode === 'member-overview') return <div className="staff-module-body customer-experience-management">
+    <section className="customer-experience-publishing-intro"><strong>会员等级与权益</strong><small>只读查看当前已发布的积分、成长值、等级与等级权益规则；本入口不能起草、审批或发布。</small></section>
+    <LoyaltyPolicyPanel api={api} auth={auth} />
+    <TierBenefitPolicyPanel api={api} auth={auth} />
+  </div>
+  if (mode === 'member-rule-drafts' || mode === 'member-rule-approvals' || mode === 'member-rule-publish') {
+    const presentation = mode === 'member-rule-drafts'
+      ? ['会员规则草稿', '建立规则草稿并查看服务端影响预览；保存不会直接生效。']
+      : mode === 'member-rule-approvals'
+        ? ['待审批会员规则', '复核他人起草且影响预览仍有效的会员规则；审批人与起草人必须不同。']
+        : ['会员规则发布', '为已独立审批的规则安排生效时间；发布人与起草、审批人员必须不同。']
+    return <div className="staff-module-body customer-experience-management">
+      <section className="customer-experience-publishing-intro"><strong>{presentation[0]}</strong><small>{presentation[1]}</small></section>
+      <MembershipConfigurationCenterPanel api={api} auth={auth} />
+      <LoyaltyPolicyPanel api={api} auth={auth} />
+    </div>
+  }
+  if (mode === 'member-accounts') return <div className="staff-module-body customer-experience-management">
+    <section className="customer-experience-publishing-intro"><strong>会员账户查询</strong><small>按会员号读取积分、成长值和流水；不显示手机号、微信身份或其他无关个人资料。</small></section>
+    <MemberAccountLookupPanel api={api} auth={auth} />
+  </div>
+  if (mode === 'member-management') return <div className="staff-module-body customer-experience-management">
+    <section className="customer-experience-publishing-intro"><strong>其他会员经营配置</strong><small>年度礼遇、兑换目录、活动、会员条款与账户恢复按各自最终权限显示。</small></section>
+    <LoyaltyEmergencyControlPanel api={api} auth={auth} />
+    <MembershipConfigurationCenterPanel api={api} auth={auth} />
+    <PromotionalLoyaltyPanel api={api} auth={auth} />
+    <LoyaltyTierAndRedemptionPanel api={api} auth={auth} />
+    <TierBenefitPolicyPanel api={api} auth={auth} />
+    <AnnualBenefitManagementPanel api={api} auth={auth} />
+    <MembershipTermsManagementPanel api={api} auth={auth} />
+    <MembershipRecoveryPanel api={api} auth={auth} />
+  </div>
   return <div className="staff-module-body customer-experience-management">
     {dashboard !== null && <div className="staff-metric-grid">
       <article><small>进行中的桌台体验</small><strong>{dashboard.activePlanCount}</strong></article>
@@ -198,20 +247,70 @@ export function CustomerExperienceManagementPanel({ api, auth, dashboard }: {
     <ActivityOperationsPanel api={api} auth={auth} />
     <HomeContentManagementPanel api={api} auth={auth} />
     <CustomerExperienceAnalyticsPanel api={api} auth={auth} />
-    <LoyaltyEmergencyControlPanel api={api} auth={auth} />
-    <MembershipConfigurationCenterPanel api={api} auth={auth} />
-    <PromotionalLoyaltyPanel api={api} auth={auth} />
     <CheckoutUpgradeManagementPanel api={api} auth={auth} />
     <RecommendationPolicyManagementPanel api={api} auth={auth} />
-    <LoyaltyPolicyPanel api={api} auth={auth} />
-    <LoyaltyTierAndRedemptionPanel api={api} auth={auth} />
-    <TierBenefitPolicyPanel api={api} auth={auth} />
-    <MembershipTermsManagementPanel api={api} auth={auth} />
-    <MembershipRecoveryPanel api={api} auth={auth} />
     <PersonalContactGovernancePanel api={api} auth={auth} />
     <section className="staff-module-summary"><span><Clock3 size={18} /></span><div><strong>待付款名额自动释放</strong><small>达到付款时限后，未创建付款或付款已关闭的报名自动取消；支付结果仍未知时保持人工复核，不擅自释放。</small></div></section>
     <section className="staff-module-summary"><span><UsersRound size={18} /></span><div><strong>权限分开</strong><small>活动管理者可以建草稿；只有拥有活动发布权限的人可以让客户看到，避免一线人员随意承诺定金与退款。</small></div></section>
   </div>
+}
+
+interface StaffMemberAccountView {
+  memberNo: string
+  membershipStatus: string
+  tier: 'member' | 'silver' | 'gold'
+  availablePoints: number
+  pendingRecoveryPoints: number
+  lifetimeGrowth: number
+  qualificationGrowth: number
+  tierQualificationGrowth: number | null
+  tierPeriodEndsAt: string | null
+  updatedAt: string
+  pointEntries: Array<{ entryType: string; delta: number; balanceAfter: number; reason: string; occurredAt: string }>
+  growthEntries: Array<{ entryType: string; delta: number; balanceAfter: number; reason: string; occurredAt: string }>
+}
+
+function MemberAccountLookupPanel({ api, auth }: { api: NormalizedApiClient; auth: StaffAuthView }) {
+  const canView = auth.permissions.includes('loyalty.account.view')
+  const [memberNo, setMemberNo] = useState('')
+  const [account, setAccount] = useState<StaffMemberAccountView | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState('')
+  if (!canView) return null
+
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    if (memberNo.trim().length < 3 || busy) return
+    setBusy(true); setNotice(''); setAccount(null)
+    try {
+      const response = await api.getEndpoint<{ data: StaffMemberAccountView }>(`/api/staff/loyalty/accounts?memberNo=${encodeURIComponent(memberNo.trim())}`)
+      setAccount(response.data)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '会员账户暂时无法读取')
+    } finally { setBusy(false) }
+  }
+
+  return <section className="staff-module-summary"><div>
+    <strong>会员账户查询</strong><small>按完整会员号查询积分、三种成长值口径和最近流水；本入口不显示手机号或微信身份。</small>
+    <form className="staff-module-form" onSubmit={(event) => void submit(event)}>
+      <label>会员号<input minLength={3} maxLength={64} value={memberNo} placeholder="请输入完整会员号" onChange={(event) => setMemberNo(event.target.value)} /></label>
+      <button type="submit" disabled={busy || memberNo.trim().length < 3}>{busy ? '正在查询' : '查询账户'}</button>
+    </form>
+    {notice && <p className="staff-module-notice" role="status">{notice}</p>}
+    {account !== null && <>
+      <div className="staff-metric-grid">
+        <article><small>当前等级</small><strong>{({ member: '普卡', silver: '银卡', gold: '金卡' } as const)[account.tier]}</strong></article>
+        <article><small>可用积分</small><strong>{account.availablePoints}</strong></article>
+        <article><small>资格成长值</small><strong>{account.qualificationGrowth}</strong></article>
+        <article><small>累计成长值</small><strong>{account.lifetimeGrowth}</strong></article>
+        <article><small>等级周期资格快照</small><strong>{account.tierQualificationGrowth ?? '暂无'}</strong></article>
+        <article><small>待追回积分</small><strong>{account.pendingRecoveryPoints}</strong></article>
+      </div>
+      <p className="staff-module-footnote">会员号 {account.memberNo} · {account.membershipStatus === 'active' ? '有效会员' : '会员状态受限'} · 数据更新 {new Date(account.updatedAt).toLocaleString('zh-CN')}</p>
+      <div className="activity-admin-list"><header><strong>最近积分流水</strong><small>最多20条</small></header>{account.pointEntries.length === 0 ? <p>暂无积分流水。</p> : account.pointEntries.map((entry, index) => <article key={`point-${entry.occurredAt}-${index}`}><div><strong>{entry.delta > 0 ? '+' : ''}{entry.delta}积分 · 余额{entry.balanceAfter}</strong><small>{entry.reason} · {new Date(entry.occurredAt).toLocaleString('zh-CN')}</small></div></article>)}</div>
+      <div className="activity-admin-list"><header><strong>最近成长值流水</strong><small>最多20条</small></header>{account.growthEntries.length === 0 ? <p>暂无成长值流水。</p> : account.growthEntries.map((entry, index) => <article key={`growth-${entry.occurredAt}-${index}`}><div><strong>{entry.delta > 0 ? '+' : ''}{entry.delta}成长值 · 累计{entry.balanceAfter}</strong><small>{entry.reason} · {new Date(entry.occurredAt).toLocaleString('zh-CN')}</small></div></article>)}</div>
+    </>}
+  </div></section>
 }
 
 function TierBenefitPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth: StaffAuthView }) {
@@ -219,6 +318,7 @@ function TierBenefitPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth:
   const canManage = auth.permissions.includes('loyalty.policy.manage')
   const canApprove = auth.permissions.includes('loyalty.policy.approve')
   const canPublish = auth.permissions.includes('loyalty.policy.publish')
+  const canRead = canView || canManage || canApprove || canPublish
   const [configuration, setConfiguration] = useState<TierBenefitConfigurationView | null>(null)
   const [rules, setRules] = useState<TierBenefitRuleAdmin[]>([])
   const [form, setForm] = useState({
@@ -231,7 +331,7 @@ function TierBenefitPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth:
   const [notice, setNotice] = useState('')
 
   async function load() {
-    if (!canView) return
+    if (!canRead) return
     try {
       const response = await api.getEndpoint<{ data: TierBenefitConfigurationView }>('/api/staff/loyalty/tier-benefits')
       setConfiguration(response.data)
@@ -244,7 +344,7 @@ function TierBenefitPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth:
     } catch (error) { setNotice(error instanceof Error ? error.message : '等级权益配置暂时无法读取') }
   }
 
-  useEffect(() => { void load() }, [canView])
+  useEffect(() => { void load() }, [canRead])
   if (!canView && !canManage && !canApprove && !canPublish) return null
 
   function addRule() {
@@ -528,14 +628,17 @@ function LoyaltyTierAndRedemptionPanel({ api, auth }: { api: NormalizedApiClient
   const canControl = auth.permissions.includes('loyalty.redemption.control')
   const canFulfill = auth.permissions.includes('loyalty.redemption.fulfill')
   const canHandleException = auth.permissions.includes('loyalty.redemption.exception')
+  const canReadConfiguration = canView || canManageCatalog || canApproveCatalog || canPublishCatalog || canControl
+  const canReadPending = canFulfill || canHandleException
   const [tiers, setTiers] = useState<LoyaltyTierPolicyView[]>([])
   const [config, setConfig] = useState<RedemptionConfigurationView | null>(null)
+  const [pending, setPending] = useState<PendingRedemptionView[]>([])
   const [products, setProducts] = useState<RedemptionProductOption[]>([])
   const [busy, setBusy] = useState('')
   const [notice, setNotice] = useState('')
   const [tierForm, setTierForm] = useState({
-    silverUpgradeGrowth: '3000', silverRetainGrowth: '2000',
-    goldUpgradeGrowth: '10000', goldRetainGrowth: '8000',
+    silverUpgradeGrowth: '5000', silverRetainGrowth: '3000',
+    goldUpgradeGrowth: '20000', goldRetainGrowth: '12000',
     evaluationWindowMonths: '12', tierPeriodMonths: '12', downgradeGraceDays: '60',
     silverMultiplier: '1.10', goldMultiplier: '1.20', reason: '',
   })
@@ -546,22 +649,29 @@ function LoyaltyTierAndRedemptionPanel({ api, auth }: { api: NormalizedApiClient
   })
 
   async function load() {
-    if (!canView) return
     try {
-      const [tierResponse, configurationResponse, productResponse] = await Promise.all([
-        api.getEndpoint<{ data: LoyaltyTierPolicyView[] }>('/api/staff/loyalty/tier-policies'),
-        api.getEndpoint<{ data: RedemptionConfigurationView }>('/api/staff/loyalty/redemption-configuration'),
+      const [tierResponse, configurationResponse, productResponse, pendingResponse] = await Promise.all([
+        (canView
+          ? api.getEndpoint<{ data: LoyaltyTierPolicyView[] }>('/api/staff/loyalty/tier-policies')
+          : Promise.resolve({ data: [] as LoyaltyTierPolicyView[] })),
+        (canReadConfiguration
+          ? api.getEndpoint<{ data: RedemptionConfigurationView }>('/api/staff/loyalty/redemption-configuration')
+          : Promise.resolve({ data: null })),
         (canManageCatalog
           ? api.getEndpoint<{ data: unknown }>('/api/catalog/products?status=active&limit=100')
           : Promise.resolve({ data: [] })),
+        (canReadPending
+          ? api.getEndpoint<{ data: PendingRedemptionView[] }>('/api/staff/loyalty/redemptions/pending')
+          : Promise.resolve({ data: [] as PendingRedemptionView[] })),
       ])
       setTiers(Array.isArray(tierResponse.data) ? tierResponse.data : [])
       setConfig(configurationResponse.data)
       setProducts(redemptionProducts(productResponse.data))
+      setPending(Array.isArray(pendingResponse.data) ? pendingResponse.data : [])
     } catch (error) { setNotice(error instanceof Error ? error.message : '等级与兑换配置读取失败') }
   }
 
-  useEffect(() => { void load() }, [canView, canManageCatalog])
+  useEffect(() => { void load() }, [canView, canManageCatalog, canReadConfiguration, canReadPending])
   if (!canView && !canManage && !canApprove && !canPublish && !canManageCatalog
     && !canApproveCatalog && !canPublishCatalog && !canControl && !canFulfill && !canHandleException) return null
 
@@ -695,7 +805,7 @@ function LoyaltyTierAndRedemptionPanel({ api, auth }: { api: NormalizedApiClient
     finally { setBusy('') }
   }
 
-  async function failRedemption(item: RedemptionConfigurationView['pending'][number]) {
+  async function failRedemption(item: PendingRedemptionView) {
     if (busy) return
     const failureCode = ({
       product: 'product_unavailable', benefit: 'benefit_unavailable',
@@ -752,7 +862,7 @@ function LoyaltyTierAndRedemptionPanel({ api, auth }: { api: NormalizedApiClient
       {config?.versions.map((version) => <article key={version.id}><div><strong>目录版本 {version.version} · {releaseStatusLabel(version.status)}</strong><small>{version.itemCount}项 · {version.reason}</small></div><div className="staff-inline-actions">{version.status === 'draft' && canApproveCatalog && version.draftedByEmployeeId !== auth.employee.id && <button type="button" onClick={() => void approveCatalog(version)}>前往配置中心审批</button>}{version.status === 'approved' && canPublishCatalog && version.draftedByEmployeeId !== auth.employee.id && version.approvedByEmployeeId !== auth.employee.id && <button type="button" onClick={() => void publishCatalog(version)}>排期发布</button>}</div></article>)}
       {canControl && <div className="staff-module-actions"><button type="button" onClick={() => void setControl('pilot')}>试点开放</button><button type="button" onClick={() => void setControl('enabled')}>正式开放</button><button type="button" onClick={() => void setControl('paused')}>暂停</button><button type="button" onClick={() => void setControl('disabled')}>关闭</button></div>}
     </div>
-    {(canFulfill || canHandleException) && <div className="activity-admin-list"><header><strong>待实际交付</strong><small>商品须到KDS完成；确认尚未履约的门店失败才允许按原积分批次返还</small></header>{(config?.pending.length ?? 0) === 0 && <p>当前没有待交付兑换。</p>}{config?.pending.map((item) => <article key={item.publicId}><div><strong>{item.memberNo} · {item.itemName}</strong><small>{item.pointsUsed}积分 · {item.fulfillmentKind} · 截止{new Date(item.expiresAt).toLocaleString('zh-CN')}</small></div><div className="staff-inline-actions">{canFulfill && <button type="button" disabled={Boolean(busy)} onClick={() => void fulfill(item.publicId)}>确认已交付</button>}{canHandleException && <button type="button" className="is-danger" disabled={Boolean(busy)} onClick={() => void failRedemption(item)}>确认未履约并返还</button>}</div></article>)}</div>}
+    {(canFulfill || canHandleException) && <div className="activity-admin-list"><header><strong>待实际交付</strong><small>商品须到KDS完成；确认尚未履约的门店失败才允许按原积分批次返还</small></header>{pending.length === 0 && <p>当前没有待交付兑换。</p>}{pending.map((item) => <article key={item.publicId}><div><strong>{item.memberNo} · {item.itemName}</strong><small>{item.pointsUsed}积分 · {item.fulfillmentKind} · 截止{new Date(item.expiresAt).toLocaleString('zh-CN')}</small></div><div className="staff-inline-actions">{canFulfill && <button type="button" disabled={Boolean(busy)} onClick={() => void fulfill(item.publicId)}>确认已交付</button>}{canHandleException && <button type="button" className="is-danger" disabled={Boolean(busy)} onClick={() => void failRedemption(item)}>确认未履约并返还</button>}</div></article>)}</div>}
   </div></section>
 }
 
@@ -761,6 +871,7 @@ function LoyaltyPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth: Sta
   const canManage = auth.permissions.includes('loyalty.policy.manage')
   const canApprove = auth.permissions.includes('loyalty.policy.approve')
   const canPublish = auth.permissions.includes('loyalty.policy.publish')
+  const canRead = canView || canManage || canApprove || canPublish
   const canViewExceptions = auth.permissions.includes('loyalty.accrual.exception.view')
   const canRequestSupplement = auth.permissions.includes('loyalty.accrual.request')
   const canApproveSupplement = auth.permissions.includes('loyalty.accrual.approve')
@@ -778,7 +889,7 @@ function LoyaltyPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth: Sta
   async function load() {
     try {
       const [policyResponse, reconciliationResponse, supplementResponse] = await Promise.all([
-        canView
+        canRead
           ? api.getEndpoint<{ data: LoyaltyPolicyView[] }>('/api/staff/loyalty/policies')
           : Promise.resolve({ data: [] }),
         canViewExceptions
@@ -794,7 +905,7 @@ function LoyaltyPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth: Sta
     } catch (error) { setNotice(error instanceof Error ? error.message : '会员规则读取失败') }
   }
 
-  useEffect(() => { void load() }, [canView, canViewExceptions])
+  useEffect(() => { void load() }, [canRead, canViewExceptions])
   if (!canView && !canManage && !canApprove && !canPublish && !canViewExceptions) return null
 
   async function draft(event: FormEvent) {

@@ -7,6 +7,11 @@ import type { MembershipRecoveryService } from './membership-recovery-service.js
 import type { MembershipTermsService } from './membership-terms-service.js'
 import { StaffAccessDeniedError, StaffAccessRepository } from './staff-access-repository.js'
 import { readRequestToken } from './normalized-request-context.js'
+import {
+  IdempotencyConflictError,
+  IdempotencyInProgressError,
+  IdempotencyRecordError,
+} from './command-executor.js'
 
 const apps: FastifyInstance[] = []
 
@@ -16,6 +21,25 @@ afterEach(async () => {
 })
 
 describe('customer experience activity contact API', () => {
+  it('returns a non-cacheable scannable member identification code in the mini-program bootstrap', async () => {
+    const portal = vi.fn(async () => ({
+      features: [], membership: { memberNo: 'MBX-35648', level: 'silver' }, points: [], growth: [],
+      processing: [], preferences: {}, content: [], activities: [], benefits: [], annualBenefitCalendar: [],
+      membershipTerms: null, supportContact: null, updatedAt: '2026-08-25T04:00:00.000Z',
+      responseVersion: 'portal-member-code-test',
+    }))
+    const app = publicExperienceFixture({ portal })
+    const response = await app.inject({ method: 'GET', url: '/public/mini/bootstrap' })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.headers['cache-control']).toContain('private')
+    expect(response.headers['cache-control']).toContain('no-store')
+    expect(response.headers.pragma).toBe('no-cache')
+    expect(response.json()).toMatchObject({ data: { membership: {
+      memberNo: 'MBX-35648', memberCodeQrDataUrl: expect.stringMatching(/^data:image\/png;base64,/),
+    } } })
+  })
+
   it('retires the legacy activity writer so the operations workbench is the only activity entry', async () => {
     const app = recoveryFixture({ start: vi.fn(), verify: vi.fn() })
     const response = await app.inject({
@@ -185,6 +209,70 @@ describe('customer experience activity contact API', () => {
     expect(response.statusCode).toBe(400)
     expect(response.json()).toMatchObject({ error: { code: 'ACTIVITY_CONTACT_INVALID' } })
     expect(registerActivity).not.toHaveBeenCalled()
+  })
+
+  it('reports a contact-protection provider failure safely without creating a registration', async () => {
+    const registerActivity = vi.fn()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const app = fixture(registerActivity, '13800138000', undefined, () => {
+      throw new Error('key material unavailable: secret-value-must-not-leak')
+    })
+
+    const response = await registerActivityRequest(app)
+
+    expect(response.statusCode).toBe(503)
+    expect(response.json()).toEqual({ error: {
+      code: 'ACTIVITY_CONTACT_PROTECTION_UNAVAILABLE',
+      message: '报名服务配置异常，请稍后再试',
+    } })
+    expect(response.body).not.toContain('secret-value-must-not-leak')
+    expect(response.body).not.toContain('13800138000')
+    expect(registerActivity).not.toHaveBeenCalled()
+    expect(errorSpy).toHaveBeenCalledWith('ACTIVITY_CONTACT_PROTECTION_FAILED', {
+      reason: 'provider_threw',
+    })
+  })
+
+  it('rejects an invalid contact-protection result without creating a registration', async () => {
+    const registerActivity = vi.fn()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const app = fixture(registerActivity, '13800138000', undefined, () => ({
+      hash: 'not-a-hash', encryptedBase64: 'too-short', keyId: 'x', masked: 'x',
+    }))
+
+    const response = await registerActivityRequest(app)
+
+    expect(response.statusCode).toBe(503)
+    expect(response.json()).toMatchObject({ error: { code: 'ACTIVITY_CONTACT_PROTECTION_UNAVAILABLE' } })
+    expect(registerActivity).not.toHaveBeenCalled()
+    expect(errorSpy).toHaveBeenCalledWith('ACTIVITY_CONTACT_PROTECTION_FAILED', {
+      reason: 'provider_output_invalid',
+    })
+  })
+
+  it.each([
+    [new IdempotencyConflictError('community.activity.register', 'activity-registration-api-idempotency'), 409, 'ACTIVITY_REGISTRATION_IDEMPOTENCY_CONFLICT'],
+    [new IdempotencyInProgressError('community.activity.register', 'activity-registration-api-idempotency'), 425, 'ACTIVITY_REGISTRATION_IN_PROGRESS'],
+    [new IdempotencyRecordError('store internal idempotency data is unavailable'), 503, 'ACTIVITY_REGISTRATION_RESULT_UNCONFIRMED'],
+    [new Error('database diagnostic that must not reach a customer'), 503, 'ACTIVITY_REGISTRATION_RESULT_UNCONFIRMED'],
+  ])('maps registration command failures to their safe customer contract', async (failure, expectedStatus, expectedCode) => {
+    const registerActivity = vi.fn(async () => { throw failure })
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const app = fixture(registerActivity, '13800138000')
+
+    const response = await registerActivityRequest(app)
+
+    expect(response.statusCode).toBe(expectedStatus)
+    expect(response.json()).toMatchObject({ error: { code: expectedCode } })
+    expect(response.body).not.toContain(failure.message)
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(failure.message)
+    if (expectedStatus === 503) {
+      expect(errorSpy).toHaveBeenCalledWith('ACTIVITY_REGISTRATION_RESULT_UNCONFIRMED', {
+        kind: failure instanceof IdempotencyRecordError ? 'idempotency_record' : 'unexpected',
+      })
+    } else {
+      expect(errorSpy).not.toHaveBeenCalled()
+    }
   })
 
   it('marks the customer activity-registration list private and non-cacheable', async () => {
@@ -367,6 +455,29 @@ describe('customer experience activity contact API', () => {
     })
     expect(invalid.statusCode).toBe(400)
     expect(failRedemption).toHaveBeenCalledTimes(1)
+  })
+
+  it('lets a fulfillment-only employee read pending redemptions without policy-view permission', async () => {
+    const checkedPermissions: string[] = []
+    vi.spyOn(StaffAccessRepository.prototype, 'assertPermission').mockImplementation(async (_employeeId, permission) => {
+      checkedPermissions.push(permission)
+      if (permission !== 'loyalty.redemption.fulfill') throw new StaffAccessDeniedError(permission)
+      return {} as never
+    })
+    const pendingRedemptions = vi.fn(async () => [{
+      publicId: 'redemption-pending-api-0001', memberNo: 'MBX-35648', itemName: '会员赠饮',
+      pointsUsed: 600, fulfillmentKind: 'product', status: 'awaiting_fulfillment',
+      expiresAt: '2026-08-24T18:00:00.000Z', createdAt: '2026-08-24T12:00:00.000Z',
+      failureCode: null, recoveryState: 'not_required', recoveryRequestedAt: null, pointsRestored: 0,
+    }])
+    const app = staffReleaseFixture({ pendingRedemptions })
+
+    const response = await app.inject({ method: 'GET', url: '/staff/loyalty/redemptions/pending' })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({ data: [{ memberNo: 'MBX-35648', itemName: '会员赠饮' }] })
+    expect(checkedPermissions).toEqual(['loyalty.redemption.fulfill'])
+    expect(pendingRedemptions).toHaveBeenCalledTimes(1)
   })
 
   it('uses only the dedicated WeChat phone authorization port for membership recovery', async () => {
@@ -944,6 +1055,17 @@ function fixture(
   registerActivity: ReturnType<typeof vi.fn>,
   rawContact: string,
   activityPayments?: Pick<ActivityPaymentService, 'get' | 'createAction' | 'query'>,
+  protectContactOverride?: (value: string) => {
+    hash: string
+    encryptedBase64: string
+    keyId: string
+    masked: string
+  } | Promise<{
+    hash: string
+    encryptedBase64: string
+    keyId: string
+    masked: string
+  }>,
 ): FastifyInstance {
   const app = Fastify()
   apps.push(app)
@@ -960,7 +1082,7 @@ function fixture(
     }),
     resolveGuestContext: async () => { throw new Error('not used') },
     resolveStaffContext: async () => { throw new Error('not used') },
-    protectContact: (value) => {
+    protectContact: protectContactOverride ?? ((value) => {
       expect(value).toBe(rawContact)
       return {
         hash: 'a'.repeat(64),
@@ -968,10 +1090,26 @@ function fixture(
         keyId: 'test-key-v1',
         masked: '138****8000',
       }
-    },
+    }),
     ...(activityPayments === undefined ? {} : { activityPayments: activityPayments as ActivityPaymentService }),
   })
   return app
+}
+
+function registerActivityRequest(app: FastifyInstance) {
+  return app.inject({
+    method: 'POST',
+    url: '/public/mini/activities/community-activity-api-test/registrations',
+    headers: { 'idempotency-key': 'activity-registration-api-idempotency' },
+    payload: {
+      partySize: 2,
+      contactSnapshot: { channel: 'miniprogram', contact: '13800138000' },
+      termsAcknowledged: true,
+      acknowledgedSafetyPolicyVersion: 'safety-v1',
+      acknowledgedRefundPolicyVersion: 'refund-v1',
+      paymentChoice: 'none',
+    },
+  })
 }
 
 function loyaltyFixture(loyalty: ReturnType<typeof vi.fn>): FastifyInstance {

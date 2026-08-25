@@ -211,21 +211,32 @@ integration('table customer location movements', () => {
   it('blocks full merge on unfinished KDS work and never migrates historical commerce references', async () => {
     const source=await createSession(tables[26]!,1)
     const target=await createSession(tables[27]!,1)
-    const productId=randomUUID(),orderId=randomUUID(),itemId=randomUUID(),taskId=randomUUID(),paymentId=randomUUID()
+    const productId=randomUUID(),nonPhysicalProductId=randomUUID(),orderId=randomUUID()
+    const itemId=randomUUID(),nonPhysicalItemId=randomUUID(),taskId=randomUUID(),paymentId=randomUUID()
+    const inventoryItemId=randomUUID(),reservationId=randomUUID()
     await pool.query(`INSERT INTO mbox.products(
       id,tenant_id,store_id,code,name,category_code,fulfillment_station,product_snapshot
     ) VALUES($1,$2,$3,$4,'待出品饮品','drink','bar','{}')`,
     [productId,tenantId,storeId,`KDS-${randomUUID().slice(0,8)}`])
+    await pool.query(`INSERT INTO mbox.products(
+      id,tenant_id,store_id,code,name,category_code,fulfillment_station,product_snapshot
+    ) VALUES($1,$2,$3,$4,'无物理出品服务','service','none','{}')`,
+    [nonPhysicalProductId,tenantId,storeId,`NONE-${randomUUID().slice(0,8)}`])
     await pool.query(`INSERT INTO mbox.orders(
       id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,
       subtotal_amount_minor,discount_amount_minor,total_amount_minor
-    ) VALUES($1,$2,$3,$4,$5,'staff_assisted','completed','paid',100,0,100)`,
+    ) VALUES($1,$2,$3,$4,$5,'staff_assisted','submitted','paid',100,0,100)`,
     [orderId,tenantId,storeId,source,`order-${randomUUID()}`])
     await pool.query(`INSERT INTO mbox.order_items(
       id,tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,
       discount_amount_minor,total_amount_minor,fulfillment_station,product_snapshot,status
     ) VALUES($1,$2,$3,$4,$5,1,100,0,100,'bar','{}','submitted')`,
     [itemId,tenantId,storeId,orderId,productId])
+    await pool.query(`INSERT INTO mbox.order_items(
+      id,tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,
+      discount_amount_minor,total_amount_minor,fulfillment_station,product_snapshot,status
+    ) VALUES($1,$2,$3,$4,$5,1,0,0,0,'none','{}','submitted')`,
+    [nonPhysicalItemId,tenantId,storeId,orderId,nonPhysicalProductId])
     await pool.query(`INSERT INTO mbox.kds_tasks(
       id,tenant_id,store_id,order_item_id,station_code,status,quantity
     ) VALUES($1,$2,$3,$4,'bar','pending',1)`,[taskId,tenantId,storeId,itemId])
@@ -245,6 +256,19 @@ integration('table customer location movements', () => {
     expect(blockedState.rows.find((row) => row.id===target)).toMatchObject({ status:'open',guest_count:1 })
     await pool.query(`UPDATE mbox.order_items SET status='delivered' WHERE id=$1`,[itemId])
     await pool.query(`UPDATE mbox.kds_tasks SET status='ready',ready_at=clock_timestamp() WHERE id=$1`,[taskId])
+    await pool.query(`INSERT INTO mbox.inventory_items(
+      id,tenant_id,store_id,sku,name,item_type,base_unit
+    ) VALUES($1,$2,$3,$4,'并桌库存占用','ingredient','g')`,
+    [inventoryItemId,tenantId,storeId,`MOVE-${randomUUID().slice(0,8)}`])
+    await pool.query(`INSERT INTO mbox.inventory_order_reservations(
+      id,tenant_id,store_id,order_id,order_item_id,inventory_item_id,quantity,status,expires_at
+    ) VALUES($1,$2,$3,$4,$5,$6,1,'reserved',clock_timestamp()+interval '10 minutes')`,
+    [reservationId,tenantId,storeId,orderId,itemId,inventoryItemId])
+    await expect(runtimeMovement({ ...command,key:`inventory-blocked-${randomUUID()}` }))
+      .rejects.toMatchObject({ code:'55000' })
+    await pool.query(`UPDATE mbox.inventory_order_reservations
+      SET status='released',expires_at=NULL,released_at=clock_timestamp(),release_reason='并桌前已取消占用'
+      WHERE id=$1`,[reservationId])
     await runtimeMovement({ ...command,key:`kds-resolved-${randomUUID()}` })
     const immutableReferences=await pool.query(`SELECT
       (SELECT table_session_id FROM mbox.orders WHERE id=$1) AS order_session_id,
@@ -269,7 +293,7 @@ integration('table customer location movements', () => {
     await pool.query(`INSERT INTO mbox.orders(
       id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,
       subtotal_amount_minor,discount_amount_minor,total_amount_minor
-    ) VALUES($1,$2,$3,$4,$5,'staff_assisted','completed','partially_refunded',100,0,100)`,
+    ) VALUES($1,$2,$3,$4,$5,'staff_assisted','submitted','partially_refunded',100,0,100)`,
     [orderId,tenantId,storeId,source,`order-${randomUUID()}`])
     await pool.query(`INSERT INTO mbox.order_items(
       id,tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,

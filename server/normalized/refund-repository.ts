@@ -391,7 +391,9 @@ export class RefundRepository {
 
   async completeManualExecution(input: Readonly<CompleteManualRefundInput>): Promise<Refund> {
     const current = await this.lockRefund(input.refundId)
-    if (current.payment_provider !== 'cash' && current.payment_provider !== 'physical_pos') {
+    if (current.payment_provider !== 'cash'
+      && current.payment_provider !== 'physical_pos'
+      && current.payment_provider !== 'external_manual') {
       throw new RefundCallbackMismatchError('Online-provider refunds require a verified provider callback or query')
     }
     return this.completeLocked(current, {

@@ -13,6 +13,9 @@ describe('permission-derived staff modules', () => {
     expect(effectiveStaffNavigation(['payment.manual.cash.record'], [])).toEqual([
       expect.objectContaining({ code: 'payments', label: '收银与退款', route: '/staff/payments' }),
     ])
+    expect(effectiveStaffNavigation(['community.activity.cashier'], [])).toEqual([
+      expect.objectContaining({ code: 'payments', label: '收银与退款', route: '/staff/payments' }),
+    ])
     expect(effectiveStaffNavigation(['privacy.policy.publish'], [])).toEqual([
       expect.objectContaining({ code: 'settings', label: '系统配置', route: '/staff/settings' }),
     ])
@@ -31,6 +34,7 @@ describe('permission-derived staff modules', () => {
 
   it('binds direct routes and permission impact previews to the same registry', () => {
     expect(staffModuleForPermission('refund.approve')).toMatchObject({ code: 'payments' })
+    expect(staffModuleForPermission('community.activity.cashier')).toMatchObject({ code: 'payments' })
     expect(staffModuleForPermission('inventory.manage')).toMatchObject({ code: 'inventory' })
     expect(staffModuleForRoute('/staff/devices')).toMatchObject({ code: 'devices' })
     expect(staffModuleForRoute('https://example.com')).toBeNull()
@@ -45,7 +49,14 @@ describe('permission-derived staff modules', () => {
 
   it('maps every independently rendered customer and loyalty panel to its parent page', () => {
     expect(staffModuleForPermission('community.activity.publish')?.code).toBe('experience')
-    expect(staffModuleForPermission('loyalty.configuration.edit')?.code).toBe('experience')
+    expect(staffModuleForPermission('loyalty.configuration.edit')?.code).toBe('member-management')
+    expect(staffModuleForPermission('loyalty.policy.view')?.code).toBe('member-overview')
+    expect(staffModuleForPermission('loyalty.policy.manage')?.code).toBe('member-rule-drafts')
+    expect(staffModuleForPermission('loyalty.policy.approve')?.code).toBe('member-rule-approvals')
+    expect(staffModuleForPermission('loyalty.policy.publish')?.code).toBe('member-rule-publish')
+    expect(staffModuleForPermission('loyalty.account.view')?.code).toBe('member-accounts')
+    expect(staffModuleForPermission('loyalty.redemption.fulfill')?.code).toBe('member-fulfillment')
+    expect(staffModuleForPermission('loyalty.redemption.exception')?.code).toBe('member-exceptions')
     expect(staffModuleForPermission('recommendation.rule.approve')?.code).toBe('experience')
     expect(staffModuleForPermission('privacy.contact.retention.publish')?.code).toBe('experience')
     expect(staffModuleForPermission('community.activity.contact.reveal')).toBeNull()

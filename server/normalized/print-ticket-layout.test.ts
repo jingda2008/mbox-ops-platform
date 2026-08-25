@@ -10,7 +10,7 @@ import {
   ticketToJson,
 } from './print-ticket-layout.js'
 
-function ticket(kind: 'cashier_settlement' | 'cashier_payment' | 'bar_production' | 'kitchen_production') {
+function ticket(kind: 'cashier_settlement' | 'cashier_payment' | 'cashier_refund' | 'bar_production' | 'kitchen_production') {
   return createPrintTicketSnapshot({
     kind,
     subtitle: 'M-BOX 现场系统',
@@ -22,7 +22,7 @@ function ticket(kind: 'cashier_settlement' | 'cashier_payment' | 'bar_production
     guestCount: 3,
     operatorLabel: '测试员工',
     note: '少冰，不要香菜',
-    payment: kind === 'cashier_payment' ? { provider: 'wechat', method: 'jsapi' } : null,
+    payment: kind === 'cashier_payment' || kind === 'cashier_refund' ? { provider: 'wechat', method: 'jsapi' } : null,
     lines: [{ name: '金汤力', quantity: 2, note: '少冰', totalAmountMinor: 17600 }],
     totalAmountMinor: 17600,
     currency: 'CNY',
@@ -33,6 +33,7 @@ describe('print ticket layout', () => {
   it('uses a distinct, immutable title for every operational ticket', () => {
     expect(ticket('cashier_settlement').title).toBe('结账单')
     expect(ticket('cashier_payment').title).toBe('支付凭条')
+    expect(ticket('cashier_refund').title).toBe('退款凭条')
     expect(ticket('bar_production').title).toBe('吧台调酒制作单')
     expect(ticket('kitchen_production').title).toBe('后厨制作单')
     expect(renderPrintTicketHtml(ticket('cashier_settlement'))).toContain('陆家嘴中心 L+MALL')

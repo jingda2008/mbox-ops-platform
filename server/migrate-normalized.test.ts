@@ -37,7 +37,7 @@ describe('normalized migration baseline', () => {
       '037', '038', '039', '040', '041', '042', '043', '044', '045', '046', '047', '048',
       '049', '050', '051', '052', '053', '054', '055', '056', '057', '058', '059', '060',
       '061', '062', '063', '064', '065', '066', '067', '068', '069', '070', '071', '072',
-      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099', '100', '101', '102', '103', '104', '105', '106', '107', '108',
+      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099', '100', '101', '102', '103', '104', '105', '106', '107', '108', '109', '110', '111', '112', '113', '114', '115', '116', '117', '118', '119', '120', '121', '122', '123', '124', '125', '126', '127', '128', '129', '130', '131', '132', '133', '134', '135', '136', '137', '138',
     ])
     for (const migration of migrations) {
       expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/)
@@ -110,6 +110,190 @@ describe('normalized migration baseline', () => {
     expect(migration?.sql).toMatch(/remainder_numerator bigint NOT NULL DEFAULT 0/)
     expect(migration?.sql).toMatch(/FORCE ROW LEVEL SECURITY/)
     expect(migration?.sql).toMatch(/schema_version='108'/)
+  })
+
+  it('keeps annual benefit previews separate from confirmed dates and actual grants', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '109')
+    expect(migration?.sql).toMatch(/CREATE TABLE mbox\.loyalty_annual_benefit_policy_versions/)
+    expect(migration?.sql).toMatch(/CREATE TABLE mbox\.loyalty_annual_benefit_occurrences/)
+    expect(migration?.sql).toMatch(/CREATE TABLE mbox\.customer_annual_benefit_consents/)
+    expect(migration?.sql).toMatch(/CREATE TABLE mbox\.membership_annual_benefit_grants/)
+    expect(migration?.sql).toMatch(/movable\/lunar festivals are never silently calculated/)
+    expect(migration?.sql).toMatch(/schema_version='109'/)
+  })
+
+  it('keeps priority booking within capacity while using a short typed request hold', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '110')
+    expect(migration?.sql).toMatch(/reservation_hold_minutes smallint/)
+    expect(migration?.sql).toMatch(/reservation_hold_minutes BETWEEN 5 AND 30/)
+    expect(migration?.sql).toMatch(/never bypasses capacity or table-lock conflict checks/)
+    expect(migration?.sql).toMatch(/schema_version='110'/)
+  })
+
+  it('records authorized external collections as payments with mandatory reconciliation evidence', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '116')
+    expect(migration?.sql).toMatch(/external_manual/)
+    expect(migration?.sql).toMatch(/payments_external_manual_evidence_ck/)
+    expect(migration?.sql).toMatch(/payment\.manual\.external\.record/)
+    expect(migration?.sql).toMatch(/'OWNER', 'MANAGER', 'CASHIER'/)
+    expect(migration?.sql).not.toMatch(/role\.code='SERVER'.*payment\.manual\.external\.record/s)
+    expect(migration?.sql).toMatch(/schema_version='116'/)
+  })
+
+  it('separates member fulfillment, exceptions and management by permission', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '117')
+    expect(migration?.sql).toMatch(/member-fulfillment.*loyalty\.redemption\.fulfill/s)
+    expect(migration?.sql).toMatch(/member-exceptions.*loyalty\.redemption\.exception.*loyalty\.accrual\.exception\.view/s)
+    expect(migration?.sql).toMatch(/member-management.*loyalty\.account\.view/s)
+    expect(migration?.sql).toMatch(/\/staff\/member-management/)
+    expect(migration?.sql).toMatch(/schema_version='117'/)
+  })
+
+  it('adds only the missing controlled menu-image permission for the beverage package', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '118')
+    expect(migration?.sql).toMatch(/media\.asset\.menu\.manage/)
+    expect(migration?.sql).toMatch(/库存与酒水上架/)
+    expect(migration?.sql).not.toMatch(/inventory\.count\.approve/)
+    expect(migration?.sql).toMatch(/schema_version='118'/)
+  })
+
+  it('makes employee shared-cart freezes explicit, reasoned and permission-scoped', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '119')
+    expect(migration?.sql).toMatch(/guest_cart_writes_frozen boolean NOT NULL DEFAULT false/)
+    expect(migration?.sql).toMatch(/length\(btrim\(coalesce\(guest_cart_freeze_reason, ''\)\)\) BETWEEN 2 AND 500/)
+    expect(migration?.sql).toMatch(/guest\.cart\.freeze/)
+    expect(migration?.sql).toMatch(/'OWNER', 'MANAGER', 'SERVER'/)
+    expect(migration?.sql).toMatch(/schema_version='119'/)
+  })
+
+  it('separates all-table cashier collection scope from payment capability', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '120')
+    expect(migration?.sql).toMatch(/payment\.collect\.all_tables/)
+    expect(migration?.sql).toMatch(/'OWNER','OPS_LEAD','MANAGER','CASHIER'/)
+    expect(migration?.sql).not.toMatch(/'SERVER'.*payment\.collect\.all_tables/s)
+    expect(migration?.sql).toMatch(/schema_version='120'/)
+  })
+
+  it('makes annual gift stacking, inventory, substitution and revocation executable policy facts', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '121')
+    expect(migration?.sql).toMatch(/stack_group text/)
+    expect(migration?.sql).toMatch(/priority smallint/)
+    expect(migration?.sql).toMatch(/inventory_requirement/)
+    expect(migration?.sql).toMatch(/revocation_policy/)
+    expect(migration?.sql).toMatch(/feb29_policy/)
+    expect(migration?.sql).toMatch(/loyalty_annual_benefit_rule_substitutes/)
+    expect(migration?.sql).toMatch(/membership_annual_benefit_grants_stack_window_excl/)
+    expect(migration?.sql).toMatch(/schema_version='121'/)
+  })
+
+  it('separates annual benefit redemption from physical fulfillment', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '122')
+    expect(migration?.sql).toMatch(/status IN \('initiated','reserved','redeemed','fulfilled','cancelled','expired'\)/)
+    expect(migration?.sql).toMatch(/redeemed_by_employee_id uuid/)
+    expect(migration?.sql).toMatch(/gift_order_id uuid/)
+    expect(migration?.sql).toMatch(/complete_annual_benefit_fulfillment_for_order/)
+    expect(migration?.sql).toMatch(/schema_version='122'/)
+  })
+
+  it('holds real recipe inventory for a daily snack and releases it for retry or order conversion', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '123')
+    expect(migration?.sql).toMatch(/annual_daily_snack_inventory_holds/)
+    expect(migration?.sql).toMatch(/reserved_quantity=reserved_quantity-hold_row\.quantity/)
+    expect(migration?.sql).toMatch(/convert_annual_daily_snack_inventory_hold/)
+    expect(migration?.sql).toMatch(/OLD\.status IN \('cancelled','expired'\) AND NEW\.status='initiated'/)
+    expect(migration?.sql).toMatch(/schema_version='123'/)
+  })
+
+  it('persists complimentary fulfillment as a post-commit retryable intent', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '124')
+    expect(migration?.sql).toMatch(/complimentary_fulfillment_intents/)
+    expect(migration?.sql).toMatch(/status IN \('pending','retry','dispatched','failed'\)/)
+    expect(migration?.sql).toMatch(/next_attempt_at/)
+    expect(migration?.sql).toMatch(/schema_version='124'/)
+  })
+
+  it('deduplicates a shared-cart operation across submitted and open generations',async () => {
+    const migration=(await loadNormalizedMigrations()).find((entry)=>entry.version==='125')
+    expect(migration?.sql).toMatch(/ADD COLUMN table_session_id uuid/)
+    expect(migration?.sql).toMatch(/scope_operation_id/)
+    expect(migration?.sql).toMatch(/conflicting cross-generation requests/)
+    expect(migration?.sql).toMatch(/guest_shared_cart_operations_table_operation_uq/)
+    expect(migration?.sql).toMatch(/schema_version='125'/)
+  })
+
+  it('persists every authenticated shared-cart write attempt outside the business rollback path',async()=>{
+    const migration=(await loadNormalizedMigrations()).find((entry)=>entry.version==='130')
+    expect(migration?.sql).toMatch(/CREATE TABLE mbox\.guest_shared_cart_write_attempts/)
+    expect(migration?.sql).toMatch(/actor_session_ref.*sha256/)
+    expect(migration?.sql).toMatch(/guest_shared_cart_write_attempts_window_idx/)
+    expect(migration?.sql).toMatch(/FORCE ROW LEVEL SECURITY/)
+    expect(migration?.sql).toMatch(/schema_version='130'/)
+  })
+
+  it('keeps the SERVER assisted-payment template for roles created after migration',async()=>{
+    const migration=(await loadNormalizedMigrations()).find((entry)=>entry.version==='131')
+    expect(migration?.sql).toMatch(/seed_server_assisted_payment_permission/)
+    expect(migration?.sql).toMatch(/NEW\.code='SERVER'/)
+    expect(migration?.sql).toMatch(/payment\.initiate\.staff/)
+    expect(migration?.sql).not.toMatch(/payment\.collect\.all_tables/)
+    expect(migration?.sql).toMatch(/limit_cashier_navigation_to_cashier_authority/)
+    expect(migration?.sql).toMatch(/schema_version='131'/)
+  })
+
+  it('keeps member fulfillment narrow but available to SERVER roles created after migration',async()=>{
+    const migration=(await loadNormalizedMigrations()).find((entry)=>entry.version==='132')
+    expect(migration?.sql).toMatch(/seed_server_member_fulfillment_permission/)
+    expect(migration?.sql).toMatch(/NEW\.code='SERVER'/)
+    expect(migration?.sql).toMatch(/loyalty\.redemption\.fulfill/)
+    expect(migration?.sql).not.toMatch(/permission\.code='benefit\.cancel'/)
+    expect(migration?.sql).not.toMatch(/permission\.code='table\.view_all'/)
+    expect(migration?.sql).toMatch(/schema_version='132'/)
+  })
+
+  it('records priority booking as an immutable reservation fact', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '111')
+    expect(migration?.sql).toMatch(/annual_priority_rule_id uuid/)
+    expect(migration?.sql).toMatch(/annual_priority_hold_minutes smallint/)
+    expect(migration?.sql).toMatch(/assert_reservation_annual_priority_rule/)
+    expect(migration?.sql).toMatch(/schema_version='111'/)
+  })
+
+  it('makes each daily snack a table-bound, once-per-business-day claim before fulfillment', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '112')
+    expect(migration?.sql).toMatch(/redemption_hold_minutes smallint/)
+    expect(migration?.sql).toMatch(/CREATE TABLE mbox\.annual_daily_snack_claims/)
+    expect(migration?.sql).toMatch(/membership_id,rule_id,business_date/)
+    expect(migration?.sql).toMatch(/benefit_reservation_id/)
+    expect(migration?.sql).toMatch(/complete_annual_benefit_grant_from_redemption/)
+    expect(migration?.sql).toMatch(/schema_version='112'/)
+  })
+
+  it('keeps priority eligibility on the waitlist as a typed queue fact', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '113')
+    expect(migration?.sql).toMatch(/ALTER TABLE mbox\.waitlist_entries/)
+    expect(migration?.sql).toMatch(/annual_priority_rule_id uuid/)
+    expect(migration?.sql).toMatch(/assert_waitlist_annual_priority_rule/)
+    expect(migration?.sql).toMatch(/never converts a[\s-]+full venue into available capacity/)
+    expect(migration?.sql).toMatch(/schema_version='113'/)
+  })
+
+  it('makes employee priority-queue overrides reasoned, append-only ordering decisions', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '114')
+    expect(migration?.sql).toMatch(/CREATE TABLE mbox\.reservation_priority_queue_overrides/)
+    expect(migration?.sql).toMatch(/mode IN \('promote','demote','clear'\)/)
+    expect(migration?.sql).toMatch(/length\(btrim\(reason\)\) BETWEEN 2 AND 500/)
+    expect(migration?.sql).toMatch(/reservation_priority_queue_overrides_append_only/)
+    expect(migration?.sql).toMatch(/never bypasses capacity, table-lock or confirmation rules/)
+    expect(migration?.sql).toMatch(/schema_version='114'/)
+  })
+
+  it('grants standard service roles assisted online collection but not cash or POS recording', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '115')
+    expect(migration?.sql).toMatch(/role\.code='SERVER'/)
+    expect(migration?.sql).toMatch(/permission\.code='payment\.initiate\.staff'/)
+    expect(migration?.sql).not.toMatch(/payment\.manual\.cash\.record/)
+    expect(migration?.sql).not.toMatch(/payment\.manual\.pos\.record/)
+    expect(migration?.sql).toMatch(/schema_version='115'/)
   })
 
   it('keeps recommendation publication separate from customer rollout', async () => {

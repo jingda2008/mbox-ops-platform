@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Check, Gift, LoaderCircle, Minus, Plus, QrCode, RefreshCcw, ScanLine, Search, ShoppingCart, X } from 'lucide-react'
+import { Banknote, Check, CreditCard, Gift, LoaderCircle, Minus, Plus, QrCode, ReceiptText, RefreshCcw, ScanLine, Search, ShoppingCart, X } from 'lucide-react'
 import { MenuOrderingWorkspace, type MenuSubmitOptions } from '../../components/MenuOrderingWorkspace'
 import { CustomerPaymentCodeScanner } from '../../components/CustomerPaymentCodeScanner'
 import type { MenuProduct, MenuRecommendationConfig, MenuRecommendationScene } from '../../shared/contracts'
@@ -39,6 +39,7 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
   const [paymentStatus, setPaymentStatus] = useState<'pending' | 'succeeded' | 'failed' | 'closed'>('pending')
   const [paymentWaitingLong, setPaymentWaitingLong] = useState(false)
   const [paymentBusy, setPaymentBusy] = useState(false)
+  const [manualPaymentRecorded, setManualPaymentRecorded] = useState(false)
   const [showPaymentScanner, setShowPaymentScanner] = useState(false)
   const announcedPaymentId = useRef<string | null>(null)
 
@@ -153,6 +154,10 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
 
   const submitPaidOrder = async (items: Array<{ productId: string; quantity: number }>, options: MenuSubmitOptions) => {
     if (phase !== 'ready' || access?.canCreateOrder !== true || items.length === 0) return
+    if (settlementMode === 'immediate_payment' && !canSettleImmediately(access)) {
+      setError('当前岗位没有可用的线上或现场收款权限，请先挂桌账或联系收银负责人。')
+      return
+    }
     setPhase('submitting')
     setError(null)
     try {
@@ -182,6 +187,10 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
 
   const createPayment = async (method: 'native_qr' | 'auth_code', customerAuthCode?: string) => {
     if (paymentOrder === null || paymentBusy) return false
+    if (access?.canInitiatePayment !== true) {
+      setError(paymentInitiationMessage(access))
+      return false
+    }
     if (access?.onlinePaymentProvider === null || access?.onlinePaymentProvider === undefined) {
       setError('本店当前没有启用线上收款，请改为挂桌账或联系收银员。')
       return false
@@ -196,6 +205,7 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
         ...(customerAuthCode === undefined ? {} : { customerAuthCode }),
       })
       setPaymentAction(action)
+      setManualPaymentRecorded(false)
       setPaymentStatus(action.status === 'failed' ? 'failed' : 'pending')
       setPaymentWaitingLong(false)
       setShowPaymentScanner(false)
@@ -235,8 +245,39 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
     }
   }
 
+  const recordManualPayment = async (input: Readonly<{
+    provider: 'cash' | 'physical_pos' | 'external_manual'
+    receiptReference: string
+    terminalId?: string
+    externalMethodCode?: 'bank_transfer' | 'mobile_wallet' | 'stored_value_voucher' | 'corporate_account' | 'other'
+    collectionNote?: string
+  }>) => {
+    if (paymentOrder === null || paymentBusy) return false
+    setPaymentBusy(true)
+    setError(null)
+    try {
+      await api.recordManualPayment({ orderId: paymentOrder.paymentNextStep.orderId, ...input })
+      setManualPaymentRecorded(true)
+      setPaymentStatus('succeeded')
+      onSubmitted(input.provider === 'cash'
+        ? `${table.code} 现金收款已登记并进入日结对账`
+        : input.provider === 'physical_pos'
+          ? `${table.code} 实体POS收款已登记并进入日结对账`
+          : `${table.code} 其他线下收款已登记并进入日结对账`)
+      return true
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '现场收款没有登记成功，请到收银页面核对')
+      return false
+    } finally {
+      setPaymentBusy(false)
+    }
+  }
+
   if (mode === 'paid') {
     const menuProducts = products.map(assistedProductToMenuProduct)
+    const immediatePaymentMessage = paymentInitiationMessage(access)
+    const canInitiatePayment = access?.canInitiatePayment === true
+    const canImmediateSettle = canSettleImmediately(access)
     return <div className="staff-order-overlay" role="dialog" aria-modal="true" aria-label={`${table.code}协助点单`}>
       <section className="staff-order-sheet is-shared-menu">
         <header>
@@ -247,13 +288,14 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
           <button type="button" className={settlementMode === 'table_tab' ? 'is-active' : ''} onClick={() => setSettlementMode('table_tab')}>挂桌账</button>
           <button
             type="button"
-            disabled={access !== null && !access.canInitiatePayment}
-            title={access !== null && !access.canInitiatePayment ? '当前岗位没有发起收款权限' : undefined}
+            disabled={!canImmediateSettle}
+            title={!canImmediateSettle ? '当前岗位没有可用收款权限' : undefined}
             className={settlementMode === 'immediate_payment' ? 'is-active' : ''}
             onClick={() => setSettlementMode('immediate_payment')}
           >立即结算</button>
         </div>
         <p className="staff-order-payment-note">挂账可稍后统一结算；立即结算可让客人扫码，或扫描客人的付款码。</p>
+        {immediatePaymentMessage !== null && <p className="staff-order-payment-note">{immediatePaymentMessage}{canImmediateSettle ? '；仍可使用下单后显示的已授权现场收款方式。' : ''}</p>}
         {error !== null && <p className="staff-order-error" role="alert">{error}</p>}
         {paymentOrder !== null ? <StaffPaymentChoice
           action={paymentAction}
@@ -262,11 +304,16 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
           busy={paymentBusy}
           status={paymentStatus}
           waitingLong={paymentWaitingLong}
+          canInitiatePayment={canInitiatePayment}
+          paymentInitiationMessage={immediatePaymentMessage}
           canQuery={access?.canQueryOnlinePayment === true}
+          manualCollection={access?.manualCollection ?? { canRecordCash: false, canRecordPos: false, canRecordExternal: false }}
+          manualPaymentRecorded={manualPaymentRecorded}
           tableCode={table.code}
           onCreateQr={() => void createPayment('native_qr')}
           onScan={() => setShowPaymentScanner(true)}
           onQuery={() => void queryPayment()}
+          onManual={recordManualPayment}
           onDone={onClose}
         /> : phase === 'loading' ? <p className="staff-order-loading"><LoaderCircle className="is-spinning" /> 正在读取可售商品</p> : (
           <MenuOrderingWorkspace
@@ -362,18 +409,29 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
   </div>
 }
 
-function StaffPaymentChoice({ action, amountMinor, currency, busy, status, waitingLong, canQuery, tableCode, onCreateQr, onScan, onQuery, onDone }: {
+function StaffPaymentChoice({ action, amountMinor, currency, busy, status, waitingLong, canInitiatePayment, paymentInitiationMessage, canQuery, manualCollection, manualPaymentRecorded, tableCode, onCreateQr, onScan, onQuery, onManual, onDone }: {
   action: OnlinePaymentAction | null
   amountMinor: number
   currency: string
   busy: boolean
   status: 'pending' | 'succeeded' | 'failed' | 'closed'
   waitingLong: boolean
+  canInitiatePayment: boolean
+  paymentInitiationMessage: string | null
   canQuery: boolean
+  manualCollection: AssistedOrderAccess['manualCollection']
+  manualPaymentRecorded: boolean
   tableCode: string
   onCreateQr(): void
   onScan(): void
   onQuery(): void
+  onManual(input: Readonly<{
+    provider: 'cash' | 'physical_pos' | 'external_manual'
+    receiptReference: string
+    terminalId?: string
+    externalMethodCode?: 'bank_transfer' | 'mobile_wallet' | 'stored_value_voucher' | 'corporate_account' | 'other'
+    collectionNote?: string
+  }>): Promise<boolean>
   onDone(): void
 }) {
   const qrValue = action?.presentation === 'qr' && typeof action.payload?.qrCodeUrl === 'string'
@@ -382,16 +440,17 @@ function StaffPaymentChoice({ action, amountMinor, currency, busy, status, waiti
   return <section className="staff-payment-choice" aria-label={`${tableCode}收款`}>
     <div className="staff-payment-summary"><small>{tableCode} · 订单已同步本桌</small><strong>{money(amountMinor, currency)}</strong><span>只发起一笔付款，到账结果以支付通知为准。</span></div>
     {status === 'succeeded' ? <>
-      <span className="staff-payment-result is-succeeded"><Check /><strong>支付成功，已同步出品</strong></span>
-      <p>收银状态已更新；后厨、吧台和打印会按本单商品与门店配置继续处理。</p>
+      <span className="staff-payment-result is-succeeded"><Check /><strong>{manualPaymentRecorded ? '现场收款已登记' : '支付成功'}，已同步出品</strong></span>
+      <p>收款状态已更新；后厨、吧台和打印会按本单商品与门店配置继续处理。</p>
       <button type="button" className="staff-payment-done" onClick={onDone}><Check size={18} />完成</button>
     </> : status === 'failed' || status === 'closed' ? <>
       <span className="staff-payment-result"><X /><strong>本次付款未成功</strong></span>
       <p>请重新生成付款码或改由收银处理；不要把上一笔付款当作已到账。</p>
       <div className="staff-payment-methods">
-        <button type="button" disabled={busy} onClick={onCreateQr}><QrCode /><strong>重新生成付款码</strong><small>客人扫码付款</small></button>
-        <button type="button" disabled={busy} onClick={onScan}><ScanLine /><strong>扫描客人付款码</strong><small>摄像头或扫码枪</small></button>
+        <button type="button" disabled={busy || !canInitiatePayment} title={paymentInitiationMessage ?? undefined} onClick={onCreateQr}><QrCode /><strong>重新生成付款码</strong><small>客人扫码付款</small></button>
+        <button type="button" disabled={busy || !canInitiatePayment} title={paymentInitiationMessage ?? undefined} onClick={onScan}><ScanLine /><strong>扫描客人付款码</strong><small>摄像头或扫码枪</small></button>
       </div>
+      <ManualCollectionChoice access={manualCollection} amountMinor={amountMinor} currency={currency} busy={busy} onSubmit={onManual} />
     </> : action?.payload?.presentation === 'simulation' ? <>
       <span className="staff-payment-result"><Check /><strong>测试付款动作已建立</strong></span>
       <p>当前仅验证订单同步和操作流程，没有产生真实收款。</p>
@@ -413,13 +472,89 @@ function StaffPaymentChoice({ action, amountMinor, currency, busy, status, waiti
       <button type="button" className="staff-payment-done" onClick={onDone}><Check size={18} />完成</button>
     </> : <>
       <div className="staff-payment-methods">
-        <button type="button" disabled={busy} onClick={onCreateQr}><QrCode /><strong>客人扫二维码</strong><small>平板显示付款码</small></button>
-        <button type="button" disabled={busy} onClick={onScan}><ScanLine /><strong>扫客人付款码</strong><small>摄像头或扫码枪</small></button>
+        <button type="button" disabled={busy || !canInitiatePayment} title={paymentInitiationMessage ?? undefined} onClick={onCreateQr}><QrCode /><strong>客人扫二维码</strong><small>平板显示付款码</small></button>
+        <button type="button" disabled={busy || !canInitiatePayment} title={paymentInitiationMessage ?? undefined} onClick={onScan}><ScanLine /><strong>扫客人付款码</strong><small>摄像头或扫码枪</small></button>
       </div>
+      <ManualCollectionChoice access={manualCollection} amountMinor={amountMinor} currency={currency} busy={busy} onSubmit={onManual} />
       <p>这笔订单已经出现在桌码“本桌已点”中，客人可直接用自己的手机付款。</p>
     </>}
+    {paymentInitiationMessage !== null && <p className="staff-order-payment-note">{paymentInitiationMessage}</p>}
     {busy && <span className="staff-payment-busy"><LoaderCircle className="is-spinning" />正在安全发起，请勿重复操作</span>}
   </section>
+}
+
+function ManualCollectionChoice({ access, amountMinor, currency, busy, onSubmit }: {
+  access: AssistedOrderAccess['manualCollection']
+  amountMinor: number
+  currency: string
+  busy: boolean
+  onSubmit(input: Readonly<{
+    provider: 'cash' | 'physical_pos' | 'external_manual'
+    receiptReference: string
+    terminalId?: string
+    externalMethodCode?: 'bank_transfer' | 'mobile_wallet' | 'stored_value_voucher' | 'corporate_account' | 'other'
+    collectionNote?: string
+  }>): Promise<boolean>
+}) {
+  const [provider, setProvider] = useState<'cash' | 'physical_pos' | 'external_manual' | null>(null)
+  const [receiptReference, setReceiptReference] = useState('')
+  const [terminalId, setTerminalId] = useState('')
+  const [externalMethodCode, setExternalMethodCode] = useState<'bank_transfer' | 'mobile_wallet' | 'stored_value_voucher' | 'corporate_account' | 'other'>('bank_transfer')
+  const [collectionNote, setCollectionNote] = useState('')
+  const [confirmed, setConfirmed] = useState(false)
+  if (!access.canRecordCash && !access.canRecordPos && !access.canRecordExternal) return null
+
+  const ready = provider !== null && receiptReference.trim().length >= 3
+    && (provider !== 'physical_pos' || terminalId.trim().length >= 2)
+    && (provider !== 'external_manual' || collectionNote.trim().length >= 2)
+  const resetConfirmation = () => setConfirmed(false)
+  const submit = async () => {
+    if (provider === null || !ready || busy) return
+    if (!confirmed) { setConfirmed(true); return }
+    const completed = await onSubmit({
+      provider,
+      receiptReference,
+      ...(provider === 'physical_pos' ? { terminalId } : {}),
+      ...(provider === 'external_manual' ? { externalMethodCode, collectionNote } : {}),
+    })
+    if (completed) setProvider(null)
+  }
+
+  return <div className="staff-order-payment-note" aria-label="现场收款登记">
+    <strong>已实际收到现场款项？</strong>
+    <p>只在款项已到账后登记；员工、时间、凭证和方式会进入日结对账。</p>
+    {provider === null ? <div className="staff-payment-methods">
+      {access.canRecordCash && <button type="button" disabled={busy} onClick={() => setProvider('cash')}><Banknote /><strong>现金已收</strong><small>登记现金凭证</small></button>}
+      {access.canRecordPos && <button type="button" disabled={busy} onClick={() => setProvider('physical_pos')}><CreditCard /><strong>实体POS已收</strong><small>登记终端与小票</small></button>}
+      {access.canRecordExternal && <button type="button" disabled={busy} onClick={() => setProvider('external_manual')}><ReceiptText /><strong>其他方式已收</strong><small>登记外部凭证</small></button>}
+    </div> : <div className="staff-order-settlement">
+      {provider === 'external_manual' && <label>实际方式<select value={externalMethodCode} onChange={(event) => { setExternalMethodCode(event.target.value as typeof externalMethodCode); resetConfirmation() }}><option value="bank_transfer">银行转账</option><option value="mobile_wallet">其他扫码或数字钱包</option><option value="stored_value_voucher">储值卡或代金凭证</option><option value="corporate_account">公司账户结算</option><option value="other">其他经批准方式</option></select></label>}
+      <label>{provider === 'cash' ? '现金凭证号' : provider === 'physical_pos' ? 'POS小票/交易号' : '外部交易号或凭证号'}<input value={receiptReference} maxLength={256} onChange={(event) => { setReceiptReference(event.target.value); resetConfirmation() }} /></label>
+      {provider === 'physical_pos' && <label>POS终端编号<input value={terminalId} maxLength={128} onChange={(event) => { setTerminalId(event.target.value); resetConfirmation() }} /></label>}
+      {provider === 'external_manual' && <label>收款说明<textarea value={collectionNote} maxLength={500} onChange={(event) => { setCollectionNote(event.target.value); resetConfirmation() }} /></label>}
+      {confirmed && <p role="alert">请再次确认：已实际收到 {money(amountMinor, currency)}，凭证“{receiptReference.trim()}”真实可复核。确认后订单会结清并进入日结。</p>}
+      <div className="staff-payment-methods">
+        <button type="button" disabled={busy} onClick={() => { setProvider(null); setConfirmed(false) }}><X /><strong>返回</strong></button>
+        <button type="button" disabled={busy || !ready} onClick={() => void submit()}><Check /><strong>{confirmed ? '确认已到账并登记' : '核对并继续'}</strong></button>
+      </div>
+    </div>}
+  </div>
+}
+
+function canSettleImmediately(access: AssistedOrderAccess | null): boolean {
+  return access !== null && (access.canInitiatePayment
+    || access.manualCollection.canRecordCash
+    || access.manualCollection.canRecordPos
+    || access.manualCollection.canRecordExternal)
+}
+
+function paymentInitiationMessage(access: AssistedOrderAccess | null): string | null {
+  if (access === null) return '正在确认本岗位和门店的收款条件。'
+  if (access.canInitiatePayment) return null
+  if (access.paymentInitiationBlockReason === 'permission_required') return '当前岗位未获“发起员工协助收款”授权；请由店长在权限管理中授权后重新登录。'
+  if (access.paymentInitiationBlockReason === 'provider_not_configured') return '门店尚未配置可用的线上收款渠道，不能生成付款码或扫描客人付款码。'
+  if (access.paymentInitiationBlockReason === 'online_payment_unavailable') return '门店线上收款当前未开启；请由有权限的负责人核对收款开关和渠道状态。'
+  return '当前无法发起线上收款，请稍后刷新或联系收银负责人。'
 }
 
 function StaffPaymentQr({ value }: { value: string }) {

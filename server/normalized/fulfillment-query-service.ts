@@ -4,14 +4,16 @@ import {
   type ScopedTransaction,
   type StoreScope,
 } from './transaction-runner.js'
+import { KDS_EXCEPTION_MANAGE_CAPABILITY } from './kds-authorization-policy.js'
 
 export const FULFILLMENT_VIEW_ALL_PERMISSION = 'fulfillment.view_all'
 export const KDS_PREPARE_PERMISSION = 'kds.prepare'
 export const KDS_DELIVER_PERMISSION = 'kds.deliver'
+export const KDS_EXCEPTION_MANAGE_PERMISSION = KDS_EXCEPTION_MANAGE_CAPABILITY
 export const KDS_STATION_SCOPE = 'kds.station_codes'
 
 export type FulfillmentStation = 'bar' | 'kitchen' | 'cashier'
-export type FulfillmentKdsStatus = 'pending' | 'accepted' | 'preparing' | 'ready'
+export type FulfillmentKdsStatus = 'pending' | 'accepted' | 'preparing' | 'ready' | 'failed'
 
 export interface FulfillmentWorkItem {
   taskId: string
@@ -24,6 +26,7 @@ export interface FulfillmentWorkItem {
   readyForDelivery: boolean
   canPrepare: boolean
   canDeliver: boolean
+  canRemake: boolean
   dueAt: string | null
   nextActionAt: string
   createdAt: string
@@ -75,6 +78,7 @@ interface FulfillmentRow extends Record<string, unknown> {
   ready_for_delivery: boolean
   can_prepare: boolean
   can_deliver: boolean
+  can_remake: boolean
   due_at: string | null
   next_action_at: string
   task_created_at: string
@@ -111,15 +115,19 @@ export class FulfillmentQueryService {
       const canViewAll = access.permissions.includes(FULFILLMENT_VIEW_ALL_PERMISSION)
       const canPrepare = access.permissions.includes(KDS_PREPARE_PERMISSION)
       const canDeliver = access.permissions.includes(KDS_DELIVER_PERMISSION)
-      const allowedStations = canPrepare
-        ? resolveFulfillmentAllowedStations(access.dataScopes)
-        : []
+      const canManageExceptions = access.permissions.includes(KDS_EXCEPTION_MANAGE_PERMISSION)
+      const canManageAllTables = canViewAll || access.permissions.includes('table.view_all')
+      const scopedStations = resolveFulfillmentAllowedStations(access.dataScopes)
+      const allowedStations = canPrepare ? scopedStations : []
       const rows = await readFulfillmentRows(transaction, {
         employeeId,
         businessDate,
         canViewAll,
         canPrepare,
         canDeliver,
+        canManageExceptions,
+        canManageAllTables,
+        exceptionAllowedStations: scopedStations,
         allowedStations,
       })
 
@@ -140,6 +148,9 @@ async function readFulfillmentRows(
     canViewAll: boolean
     canPrepare: boolean
     canDeliver: boolean
+    canManageExceptions: boolean
+    canManageAllTables: boolean
+    exceptionAllowedStations: readonly FulfillmentStation[]
     allowedStations: readonly FulfillmentStation[]
   }>,
 ): Promise<FulfillmentRow[]> {
@@ -162,6 +173,12 @@ async function readFulfillmentRows(
         $7::boolean
         AND task.status = 'ready'
       ) AS can_deliver,
+      (
+        $9::boolean
+        AND task.status = 'failed'
+        AND task.station_code = ANY($11::text[])
+        AND ($10::boolean OR assignment.assignment_type IS NOT NULL)
+      ) AS can_remake,
       task.due_at::text,
       task.next_action_at::text,
       task.created_at::text AS task_created_at,
@@ -221,7 +238,18 @@ async function readFulfillmentRows(
     ) AS assignment ON true
     WHERE task.tenant_id = $1::uuid
       AND task.store_id = $2::uuid
-      AND task.status IN ('pending', 'accepted', 'preparing', 'ready')
+      AND task.status IN ('pending', 'accepted', 'preparing', 'ready', 'failed')
+      AND (
+        task.status <> 'failed'
+        OR EXISTS (
+          SELECT 1
+          FROM mbox.kds_exceptions AS exception
+          WHERE exception.tenant_id = task.tenant_id
+            AND exception.store_id = task.store_id
+            AND exception.kds_task_id = task.id
+            AND exception.status IN ('open', 'remediating')
+        )
+      )
       AND item.status IN ('submitted', 'accepted', 'preparing', 'ready')
       AND customer_order.status IN ('submitted', 'confirmed', 'fulfilling')
       AND (
@@ -230,6 +258,12 @@ async function readFulfillmentRows(
         OR (
           $7::boolean
           AND task.status = 'ready'
+        )
+        OR (
+          $9::boolean
+          AND task.status = 'failed'
+          AND task.station_code = ANY($11::text[])
+          AND ($10::boolean OR assignment.assignment_type IS NOT NULL)
         )
       )
     ORDER BY
@@ -249,6 +283,9 @@ async function readFulfillmentRows(
     access.canPrepare,
     access.canDeliver,
     access.businessDate,
+    access.canManageExceptions,
+    access.canManageAllTables,
+    [...access.exceptionAllowedStations],
   ])
   return result.rows
 }
@@ -313,6 +350,7 @@ function mapWorkItem(row: FulfillmentRow): FulfillmentWorkItem {
     readyForDelivery: row.ready_for_delivery,
     canPrepare: row.can_prepare,
     canDeliver: row.can_deliver,
+    canRemake: row.can_remake,
     dueAt: row.due_at,
     nextActionAt: row.next_action_at,
     createdAt: row.task_created_at,

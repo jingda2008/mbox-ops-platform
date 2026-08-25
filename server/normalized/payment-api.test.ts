@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { IdempotencyConflictError } from './command-executor.js'
@@ -95,10 +96,17 @@ const cashierWorkbench: CashierWorkbenchView = {
   businessDate: '2026-08-11',
   query: 'VIP1',
   actions: {
+    canInitiateOnlinePayment: false,
+    canQueryOnlinePayment: false,
+    onlinePaymentProvider: null,
+    canRecordManualCash: false,
+    canRecordManualPos: false,
+    canRecordManualExternal: false,
     canRequestRefund: false,
     canApproveRefund: false,
     canExecuteRefund: false,
     canViewReconciliation: true,
+    canManageKdsException: false,
   },
   summary: {
     orderCount: 1,
@@ -121,6 +129,7 @@ function fixture(overrides: Partial<PaymentApiOptions> = {}) {
       _input: Parameters<PaymentApiOptions['commands']['initiate']>[0],
     ) => ({ value: payment, replayed: false })),
     recordManual: vi.fn(async () => ({ value: { ...payment, status: 'succeeded' as const }, replayed: false })),
+    recordManualActivity: vi.fn(async () => ({ value: { ...payment, status: 'succeeded' as const }, replayed: false })),
     recordSucceededCallback: vi.fn(async (
       _input: Parameters<PaymentApiOptions['commands']['recordSucceededCallback']>[0],
     ) => ({
@@ -174,6 +183,14 @@ function fixture(overrides: Partial<PaymentApiOptions> = {}) {
         providerRefundId: 'POSTAR-REFUND-0001',
       },
       replayed: false,
+    })),
+    authorizeActivityRecollection: vi.fn(async () => ({
+      value: {
+        id: 'aaaaaaa1-aaaa-4aaa-8aaa-aaaaaaaaaaa1', publicId: 'activity-recollect-0001',
+        activityRegistrationId: 'bbbbbbb1-bbbb-4bbb-8bbb-bbbbbbbbbbb1', sourceRefundId: refundId,
+        amountMinor: 1000, currency: 'CNY', reason: '顾客确认改用现金付款',
+        authorizedByEmployeeId: employeeId, expiresAt: '2026-08-11T13:00:00.000Z', createdAt: '2026-08-11T12:30:00.000Z',
+      }, replayed: false,
     })),
   }
   const providerVerifier = {
@@ -310,6 +327,36 @@ describe('paymentApiPlugin', () => {
     const initiatedCommand = value.commands.initiate.mock.calls[0]?.[0]
     expect(initiatedCommand).toBeDefined()
     expect(initiatedCommand?.requestFingerprint).toContain(orderId)
+  })
+
+  it('binds a scanned customer payment code to both command and provider-action idempotency without storing it raw', async () => {
+    const customerAuthCode = '134567890123456789'
+    const onlinePayments = {
+      assertAvailable: vi.fn(), resolveActivePayment: vi.fn(), query: vi.fn(),
+      create: vi.fn(async () => ({
+        paymentId,paymentPublicId:payment.publicId,orderPublicId:'OORDER0001',status:'pending' as const,
+        presentation:'barcode' as const,expiresAt:'2026-08-11T12:05:00.000Z',payload:{ status:'submitted' },
+      })),
+    }
+    const value = fixture({
+      resolveActorContext: () => ({
+        scope: { tenantId, storeId },actor: { type: 'employee',employeeId },businessDate: '2026-08-11',
+      }),
+      onlinePayments,
+    })
+    const response = await value.app.inject({
+      method:'POST',url:'/api/payments',headers:{ 'idempotency-key':'barcode-payment-0001' },
+      payload:{ orderId,provider:'postar',method:'auth_code',customerAuthCode },
+    })
+
+    expect(response.statusCode).toBe(201)
+    expect(onlinePayments.create).toHaveBeenCalledWith(expect.objectContaining({
+      paymentId,idempotencyKey:'barcode-payment-0001',customerAuthCode,
+    }))
+    const initiated = value.commands.initiate.mock.calls[0]?.[0]
+    expect(initiated?.requestFingerprint).not.toContain(customerAuthCode)
+    expect(initiated?.requestFingerprint).toContain(createHash('sha256')
+      .update('mbox:payment-auth-code:v1:').update(customerAuthCode).digest('hex'))
   })
 
   it('cancels an unpaid order only through the scoped staff command', async () => {
@@ -711,6 +758,9 @@ describe('paymentApiPlugin', () => {
         collectedByEmployeeId: employeeId,
       },
     }))
+    expect(value.commands.recordManual).not.toHaveBeenCalledWith(expect.objectContaining({
+      occurredAt:expect.anything(),
+    }))
 
     const forged = await value.app.inject({
       method: 'POST',
@@ -728,6 +778,100 @@ describe('paymentApiPlugin', () => {
     expect(forged.statusCode).toBe(403)
     expect(forged.json()).toMatchObject({ error: { code: 'ACTOR_BINDING_FORBIDDEN' } })
     expect(value.commands.recordManual).toHaveBeenCalledTimes(1)
+  })
+
+  it('records activity cash only through the activity cashier capability and does not accept attendee data', async () => {
+    const value = fixture({
+      resolveStaffContext: async () => ({
+        scope: { tenantId, storeId }, actor: { type: 'employee', employeeId }, employeeId,
+        businessDate: '2026-08-11',
+        capabilities: [
+          'community.activity.cashier', 'payment.manual.cash.record',
+          'payment.manual.pos.record', 'payment.manual.external.record',
+        ],
+      }),
+    })
+    const response = await value.app.inject({
+      method: 'POST',
+      url: '/api/activity-registrations/activity-registration-0001/manual-collections',
+      headers: { 'idempotency-key': 'activity-manual-cash-0001' },
+      payload: {
+        provider: 'cash', method: 'cash', receiptReference: 'ACT-CASH-0001',
+        contact: '13800138000', occurredAt: '1999-01-01T00:00:00.000Z',
+      },
+    })
+    expect(response.statusCode).toBe(201)
+    expect(value.commands.recordManualActivity).toHaveBeenCalledWith(expect.objectContaining({
+      registrationPublicId: 'activity-registration-0001', provider: 'cash', method: 'cash',
+      evidence: { receiptReference: 'ACT-CASH-0001', collectedByEmployeeId: employeeId },
+    }))
+    expect(JSON.stringify(value.commands.recordManualActivity.mock.calls[0]?.[0])).not.toContain('13800138000')
+    expect(JSON.stringify(value.commands.recordManualActivity.mock.calls[0]?.[0])).not.toContain('1999-01-01')
+
+    const pos = await value.app.inject({
+      method: 'POST', url: '/api/activity-registrations/activity-registration-0002/manual-collections',
+      headers: { 'idempotency-key': 'activity-manual-pos-0001' },
+      payload: { provider: 'physical_pos', method: 'card', receiptReference: 'ACT-POS-0001', terminalId: 'POS-01' },
+    })
+    const external = await value.app.inject({
+      method: 'POST', url: '/api/activity-registrations/activity-registration-0003/manual-collections',
+      headers: { 'idempotency-key': 'activity-manual-external-0001' },
+      payload: {
+        provider: 'external_manual', method: 'manual', receiptReference: 'ACT-EXT-0001',
+        externalMethodCode: 'bank_transfer', collectionNote: '已核对门店对公账户到账记录',
+      },
+    })
+    expect(pos.statusCode).toBe(201)
+    expect(external.statusCode).toBe(201)
+    expect(value.commands.recordManualActivity).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      provider: 'physical_pos', evidence: expect.objectContaining({ terminalId: 'POS-01' }),
+    }))
+    expect(value.commands.recordManualActivity).toHaveBeenNthCalledWith(3, expect.objectContaining({
+      provider: 'external_manual', evidence: expect.objectContaining({ externalMethodCode: 'bank_transfer' }),
+    }))
+  })
+
+  it('requires the activity cashier capability before creating activity recollection authority', async () => {
+    const value = fixture()
+    const denied = await value.app.inject({
+      method: 'POST',
+      url: '/api/activity-registrations/activity-registration-0001/recollection-authorizations',
+      headers: { 'idempotency-key': 'activity-recollect-0001' },
+      payload: { reason: '顾客确认改用现金付款' },
+    })
+    expect(denied.statusCode).toBe(403)
+    expect(value.commands.authorizeActivityRecollection).not.toHaveBeenCalled()
+  })
+
+  it('requires typed evidence for an authorized system-external collection', async () => {
+    const value = fixture()
+    const response = await value.app.inject({
+      method: 'POST',
+      url: '/api/payments/manual',
+      headers: { 'idempotency-key': 'manual-external-0001' },
+      payload: {
+        orderId,
+        provider: 'external_manual',
+        method: 'manual',
+        externalMethodCode: 'bank_transfer',
+        receiptReference: 'BANK-RECEIPT-0001',
+        collectionNote: '已核对门店对公账户到账记录',
+        occurredAt: '2026-08-11T12:04:00.000Z',
+      },
+    })
+
+    expect(response.statusCode).toBe(201)
+    expect(value.commands.recordManual).toHaveBeenCalledWith(expect.objectContaining({
+      actor: { type: 'employee', employeeId },
+      provider: 'external_manual',
+      method: 'manual',
+      evidence: {
+        receiptReference: 'BANK-RECEIPT-0001',
+        collectedByEmployeeId: employeeId,
+        externalMethodCode: 'bank_transfer',
+        collectionNote: '已核对门店对公账户到账记录',
+      },
+    }))
   })
 
   it('never trusts callback body verification flags and calls no command when server verification fails', async () => {
@@ -1082,6 +1226,11 @@ describe('paymentApiPlugin', () => {
         resultCode: 'SUCCESS',
       },
     }))
+    // Frontend time is not a financial source. The command derives the
+    // reconciliation time from refunds.completed_at written by PostgreSQL.
+    expect(value.commands.recordManualRefundResult).not.toHaveBeenCalledWith(expect.objectContaining({
+      occurredAt: expect.anything(),
+    }))
     expect(JSON.stringify(value.commands.recordManualRefundResult.mock.calls[0]?.[0])).not.toContain('must-be-ignored')
   })
 
@@ -1303,6 +1452,7 @@ function fixtureCommands(): PaymentApiOptions['commands'] {
   return {
     initiate: vi.fn(async () => ({ value: payment, replayed: false })),
     recordManual: vi.fn(async () => ({ value: payment, replayed: false })),
+    recordManualActivity: vi.fn(async () => ({ value: payment, replayed: false })),
     recordSucceededCallback: vi.fn(async () => ({ value: payment, replayed: false })),
     recordProviderQueryResult: vi.fn(async () => ({ value: payment, replayed: false })),
     requestRefund: vi.fn(async () => ({ value: refund, replayed: false })),
@@ -1311,5 +1461,13 @@ function fixtureCommands(): PaymentApiOptions['commands'] {
     beginRefundExecution: vi.fn(async () => ({ value: refund, replayed: false })),
     recordProviderRefundResult: vi.fn(async () => ({ value: refund, replayed: false })),
     recordManualRefundResult: vi.fn(async () => ({ value: refund, replayed: false })),
+    authorizeActivityRecollection: vi.fn(async () => ({
+      value: {
+        id: 'aaaaaaa1-aaaa-4aaa-8aaa-aaaaaaaaaaa1', publicId: 'activity-recollect-0001',
+        activityRegistrationId: 'bbbbbbb1-bbbb-4bbb-8bbb-bbbbbbbbbbb1', sourceRefundId: refundId,
+        amountMinor: 1000, currency: 'CNY', reason: '顾客确认改用现金付款',
+        authorizedByEmployeeId: employeeId, expiresAt: '2026-08-11T13:00:00.000Z', createdAt: '2026-08-11T12:30:00.000Z',
+      }, replayed: false,
+    })),
   }
 }

@@ -22,6 +22,8 @@ import { LoyaltyPointsExpiryWorker } from './loyalty-points-expiry-worker.js'
 import { LoyaltyAccrualDeferredWorker } from './loyalty-accrual-deferred-worker.js'
 import { LoyaltyRedemptionRecoveryWorker } from './loyalty-redemption-recovery-worker.js'
 import { LoyaltyTierBenefitExpiryWorker } from './loyalty-tier-benefit-expiry-worker.js'
+import { LoyaltyAnnualBenefitGrantWorker } from './loyalty-annual-benefit-grant-worker.js'
+import { AnnualDailySnackExpiryWorker } from './annual-daily-snack-expiry-worker.js'
 import { LoyaltyTierReviewWorker } from './loyalty-tier-review-worker.js'
 import {
   WechatLoyaltyNotificationWorker,
@@ -31,6 +33,7 @@ import {
 import { ReservationPerformanceNotificationWorker } from './reservation-performance-notification-worker.js'
 import { PromotionalLoyaltyWorker } from './promotional-loyalty-worker.js'
 import { PersonalContactDispositionWorker } from './personal-contact-disposition-worker.js'
+import { ComplimentaryBenefitFulfillmentWorker } from './complimentary-benefit-fulfillment-worker.js'
 import type { WechatTemplateMessageDelivery } from './wechat-subscription-message-adapter.js'
 import type { ScopedPostgresTransactionRunner, StoreScope } from './transaction-runner.js'
 
@@ -129,6 +132,8 @@ export function createNormalizedWorkerRuntime(
     loyaltyAccrualDeferred: new LoyaltyAccrualDeferredWorker(transactions),
     loyaltyRedemptionRecovery: new LoyaltyRedemptionRecoveryWorker(transactions),
     promotionalLoyalty: new PromotionalLoyaltyWorker(transactions),
+    loyaltyAnnualBenefitGrant: new LoyaltyAnnualBenefitGrantWorker(transactions),
+    annualDailySnackExpiry: new AnnualDailySnackExpiryWorker(transactions),
     loyaltyTierBenefitExpiry: new LoyaltyTierBenefitExpiryWorker(transactions),
     loyaltyTierReview: new LoyaltyTierReviewWorker(transactions),
     ...(options.wechatLoyaltyNotification == null ? {} : {
@@ -151,6 +156,7 @@ export function createNormalizedWorkerRuntime(
     ...(adapters === null ? {} : { sop: new SopWorker(transactions, adapters.sop) }),
     aiScheduled: new AiScheduledExecutionWorker(transactions, options.aiExecutions),
     personalContactDisposition:new PersonalContactDispositionWorker(transactions),
+    complimentaryBenefitFulfillment:new ComplimentaryBenefitFulfillmentWorker(transactions),
     ...(adapters === null ? {} : {
       print: new PrintWorker(transactions),
       outbox: new OutboxDispatcher(transactions),

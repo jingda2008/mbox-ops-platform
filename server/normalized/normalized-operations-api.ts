@@ -44,7 +44,15 @@ import {
 } from './normalized-request-context.js'
 import { businessDayClosureCodec, closeAwaitingBusinessDays } from './business-day-closure.js'
 import { StaffSessionNotFoundError } from './staff-session-repository.js'
+import {
+  readTableSessionClosureState,
+  type TableSessionClosureBlocker,
+} from './table-session-closure-blockers.js'
 import type { ScopedTransaction, StoreScope } from './transaction-runner.js'
+import {
+  EmployeeTableAccessDeniedError,
+  assertEmployeeTableSessionAccess,
+} from './employee-table-access.js'
 
 export interface NormalizedOperationsRequestContext {
   scope: Readonly<StoreScope>
@@ -82,6 +90,14 @@ interface ApiErrorBody {
   }
 }
 
+interface GuestCartFreezeResult {
+  tableSessionId: string
+  frozen: boolean
+  reason: string | null
+  updatedAt: string
+  cartVersion: number | null
+}
+
 class RequestValidationError extends Error {
   constructor(message: string) {
     super(message)
@@ -105,10 +121,35 @@ class CapabilityDeniedError extends Error {
 
 class UnsettledTableSessionError extends Error {
   constructor(
-    public readonly orderCount: number,
+    public readonly blockers: readonly TableSessionClosureBlocker[],
+    public readonly outstandingOrderCount: number,
     public readonly outstandingAmountMinor: number,
   ) {
-    super(`本桌仍有${orderCount}笔未结订单（待收¥${(outstandingAmountMinor / 100).toFixed(2)}），请先完成收款再关台`)
+    const descriptions = blockers.map((blocker) => {
+      if (blocker.code === 'ORDER_UNSETTLED' && outstandingAmountMinor > 0) {
+        return `${outstandingOrderCount}笔未结订单（待收¥${(outstandingAmountMinor / 100).toFixed(2)}）`
+      }
+      const wording: Partial<Record<TableSessionClosureBlocker['code'], string>> = {
+        ORDER_UNSETTLED: '笔订单状态未完成',
+        ORDER_ITEM_UNRESOLVED: '项出品未完成',
+        KDS_ACTIVE: '项出品任务状态未完成',
+        PAYMENT_PENDING: '笔支付结果待确认',
+        INVENTORY_RESERVED: '项库存预留未释放',
+        REFUND_PENDING: '笔退款仍在处理',
+        SERVICE_ACTIVE: '项桌台服务待办未完成',
+        PRICING_RESERVED: '项定价授权仍在占用',
+        SONG_ACTIVE: '项点歌请求未完成',
+        BENEFIT_RESERVED: '项会员权益暂留未处理',
+        EXPERIENCE_ACTIVE: '项顾客体验计划未结束',
+        REDEMPTION_PENDING: '项会员兑换待履约',
+        CHECKOUT_OFFER_ACTIVE: '项结账加单报价待处理',
+      }
+      return `${blocker.count}${wording[blocker.code] ?? `项${blocker.label}`}`
+    })
+    const onlyNeedsCollection = blockers.length === 1
+      && blockers[0]?.code === 'ORDER_UNSETTLED'
+      && outstandingAmountMinor > 0
+    super(`本桌仍有${descriptions.join('、')}，${onlyNeedsCollection ? '请先完成收款再关台' : '请先处理完成再关台'}`)
     this.name = 'UnsettledTableSessionError'
   }
 }
@@ -197,6 +238,95 @@ export const normalizedOperationsApiPlugin: FastifyPluginAsync<NormalizedOperati
         idempotencyKey,
         fingerprint(request, context, { sessionId }),
       )
+      return reply.send(executionResponse(execution))
+    }),
+  )
+
+  app.post<{ Params: { sessionId: string } }>(
+    '/table-sessions/:sessionId/guest-cart-freeze',
+    async (request, reply) => handleRoute(reply, async () => {
+      const context = await resolveAndValidateContext(options, request)
+      requireCapability(context, 'guest.cart.freeze')
+      const body = readObject(request.body, '请求正文')
+      assertActorBinding(body, context.employeeId)
+      const tableSessionId = readUuid(request.params.sessionId, 'sessionId')
+      const frozen = readBoolean(body.frozen, 'frozen')
+      const reason = frozen ? readString(body.reason, 'reason', 500, 2) : null
+      const idempotencyKey = readIdempotencyKey(request)
+      const execution = await options.commandExecutor.execute({
+        scope: context.scope,
+        operationScope: 'guest-shared-cart.freeze',
+        idempotencyKey,
+        requestFingerprint: fingerprint(request, context, { tableSessionId, frozen, reason }),
+        resultCodec: guestCartFreezeCodec,
+      }, async (transaction) => {
+        await assertEmployeeTableSessionAccess(transaction, {
+          employeeId: context.employeeId,
+          tableSessionId,
+          requiredPermissionCodes: ['guest.cart.freeze'],
+          lockTableSession: true,
+        })
+        const updated = await transaction.query<{
+          id: string
+          business_date: string
+          updated_at: string
+        }>(`
+          UPDATE mbox.table_sessions
+          SET guest_cart_writes_frozen=$4::boolean,
+            guest_cart_frozen_by_employee_id=CASE WHEN $4::boolean THEN $5::uuid ELSE NULL END,
+            guest_cart_freeze_reason=CASE WHEN $4::boolean THEN $6::text ELSE NULL END,
+            guest_cart_frozen_at=CASE WHEN $4::boolean THEN clock_timestamp() ELSE NULL END,
+            updated_at=clock_timestamp()
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+            AND status IN ('open','closing')
+          RETURNING id,business_date::text,updated_at::text
+        `, [
+          transaction.scope.tenantId,
+          transaction.scope.storeId,
+          tableSessionId,
+          frozen,
+          context.employeeId,
+          reason,
+        ])
+        const session = updated.rows[0]
+        if (!session) throw new TableSessionNotFoundError(tableSessionId)
+        const cart = await transaction.query<{ version: number | string }>(`
+          UPDATE mbox.guest_shared_carts
+          SET version=version+1,updated_at=clock_timestamp()
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND table_session_id=$3::uuid
+            AND status='open'
+          RETURNING version
+        `, [transaction.scope.tenantId, transaction.scope.storeId, tableSessionId])
+        const result: GuestCartFreezeResult = {
+          tableSessionId,
+          frozen,
+          reason,
+          updatedAt: session.updated_at,
+          cartVersion: cart.rows[0] ? Number(cart.rows[0].version) : null,
+        }
+        const resultJson = guestCartFreezeToJson(result)
+        return {
+          result,
+          auditEvents: [{
+            actor: employeeActor(context.employeeId),
+            action: frozen ? 'guest_shared_cart.writes_frozen' : 'guest_shared_cart.writes_unfrozen',
+            objectType: 'table_session',
+            objectId: tableSessionId,
+            businessDate: session.business_date,
+            afterData: resultJson,
+            reason,
+          }],
+          outboxMessages: [{
+            aggregateType: 'table_session',
+            aggregateId: tableSessionId,
+            aggregateVersion: cart.rows[0] ? Number(cart.rows[0].version) : 1,
+            eventType: frozen
+              ? 'guest_shared_cart.writes_frozen.v1'
+              : 'guest_shared_cart.writes_unfrozen.v1',
+            payload: resultJson,
+          }],
+        }
+      })
       return reply.send(executionResponse(execution))
     }),
   )
@@ -311,6 +441,12 @@ async function executeTableTransition(
     requestFingerprint,
     resultCodec: tableSessionCodec,
   }, async (transaction) => {
+    await assertEmployeeTableSessionAccess(transaction, {
+      employeeId: context.employeeId,
+      tableSessionId: sessionId,
+      requiredPermissionCodes: ['table.close'],
+      lockTableSession: true,
+    })
     const repository = options.createTableSessionRepository(transaction)
     // Do not move a table into the intermediate closing state until it is actually
     // eligible to close. Otherwise an unpaid or unfulfilled order leaves staff
@@ -349,37 +485,13 @@ async function executeTableTransition(
 }
 
 async function assertTableSessionSettled(transaction: ScopedTransaction, sessionId: string): Promise<void> {
-  const result = await transaction.query<{ order_count: string; outstanding_amount_minor: string }>(`
-    WITH unsettled_orders AS (
-      SELECT ordering.id,
-        CASE
-          WHEN settlement_exception.id IS NOT NULL THEN 0::bigint
-          WHEN ordering.status='cancelled' THEN COALESCE((
-            SELECT sum(item.total_amount_minor)
-            FROM mbox.order_items item
-            WHERE item.tenant_id=ordering.tenant_id AND item.store_id=ordering.store_id
-              AND item.order_id=ordering.id AND item.status='delivered'
-          ),0)::bigint
-          ELSE ordering.total_amount_minor
-        END AS outstanding_amount_minor
-      FROM mbox.orders ordering
-      LEFT JOIN mbox.order_settlement_exception_events settlement_exception
-        ON settlement_exception.tenant_id=ordering.tenant_id
-       AND settlement_exception.store_id=ordering.store_id
-       AND settlement_exception.order_id=ordering.id
-      WHERE ordering.tenant_id=$1::uuid AND ordering.store_id=$2::uuid
-        AND ordering.table_session_id=$3::uuid
-        AND ordering.payment_status IN ('unpaid','pending')
-    ) SELECT count(*) FILTER (WHERE outstanding_amount_minor>0)::text AS order_count,
-      COALESCE(sum(outstanding_amount_minor) FILTER (WHERE outstanding_amount_minor>0),0)::text
-        AS outstanding_amount_minor
-    FROM unsettled_orders
-  `, [transaction.scope.tenantId, transaction.scope.storeId, sessionId])
-  const row = result.rows[0]
-  const orderCount = Number(row?.order_count ?? 0)
-  const outstandingAmountMinor = Number(row?.outstanding_amount_minor ?? 0)
-  if (orderCount > 0 || outstandingAmountMinor > 0) {
-    throw new UnsettledTableSessionError(orderCount, outstandingAmountMinor)
+  const state = await readTableSessionClosureState(transaction, sessionId)
+  if (state.blockers.length > 0) {
+    throw new UnsettledTableSessionError(
+      state.blockers,
+      state.outstandingOrderCount,
+      state.outstandingAmountMinor,
+    )
   }
 }
 
@@ -581,6 +693,11 @@ function readInteger(
   return value
 }
 
+function readBoolean(value: JsonValue | undefined, label: string): boolean {
+  if (typeof value !== 'boolean') throw new RequestValidationError(`${label}必须是布尔值`)
+  return value
+}
+
 function readUuid(value: unknown, label: string): string {
   if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
     throw new RequestValidationError(`${label}必须是有效UUID`)
@@ -662,6 +779,21 @@ const serviceTaskCodec: JsonCodec<ServiceTask> = {
   decode: (value) => decodeRecord<ServiceTask>(value, ['id', 'tableId', 'tableSessionId', 'status']),
 }
 
+const guestCartFreezeCodec: JsonCodec<GuestCartFreezeResult> = {
+  encode: guestCartFreezeToJson,
+  decode: (value) => {
+    if (!isJsonObject(value)
+      || typeof value.tableSessionId !== 'string'
+      || typeof value.frozen !== 'boolean'
+      || (value.reason !== null && typeof value.reason !== 'string')
+      || typeof value.updatedAt !== 'string'
+      || (value.cartVersion !== null && !Number.isSafeInteger(value.cartVersion))) {
+      throw new TypeError('Stored guest cart freeze result is invalid')
+    }
+    return value as unknown as GuestCartFreezeResult
+  },
+}
+
 function decodeRecord<Value>(value: unknown, required: readonly string[]): Value {
   if (!isJsonObject(value) || required.some((field) => typeof value[field] !== 'string')) {
     throw new TypeError('Stored command result is invalid')
@@ -686,6 +818,16 @@ function tableSessionToJson(session: TableSession): JsonObject {
     closedByEmployeeId: session.closedByEmployeeId,
     openedAt: session.openedAt,
     closedAt: session.closedAt,
+  }
+}
+
+function guestCartFreezeToJson(result: GuestCartFreezeResult): JsonObject {
+  return {
+    tableSessionId: result.tableSessionId,
+    frozen: result.frozen,
+    reason: result.reason,
+    updatedAt: result.updatedAt,
+    cartVersion: result.cartVersion,
   }
 }
 
@@ -755,6 +897,9 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   if (error instanceof ActorBindingError) return apiError(403, 'ACTOR_BINDING_FORBIDDEN', error.message)
   if (error instanceof CapabilityDeniedError) {
     return apiError(403, 'CAPABILITY_FORBIDDEN', error.message)
+  }
+  if (error instanceof EmployeeTableAccessDeniedError) {
+    return apiError(403, 'TABLE_ACCESS_FORBIDDEN', error.message)
   }
   if (error instanceof RequestValidationError || error instanceof TypeError) {
     return apiError(400, 'REQUEST_INVALID', error.message)

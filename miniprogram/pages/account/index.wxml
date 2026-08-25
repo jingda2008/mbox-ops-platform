@@ -19,7 +19,7 @@
           <view class="order-card__head">
             <view>
               <view class="order-title-row"><text class="list-row__title">{{item.roundText}} · {{item.statusText}}</text><text wx:if="{{item.pricingLabel}}" class="pricing-badge pricing-badge--{{item.pricingKind}}">{{item.pricingLabel}}</text></view>
-              <text class="list-row__meta">{{item.isMineText}} · {{item.createdAtText}}</text>
+              <text class="list-row__meta">{{item.sourceText}} · {{item.createdAtText}}</text>
             </view>
             <view class="order-card__amount"><text class="amount">{{item.payableText}}</text><text>{{item.paymentText}}</text></view>
           </view>

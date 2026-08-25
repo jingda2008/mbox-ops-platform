@@ -8,6 +8,7 @@ type ProductStatus = 'active' | 'sold_out' | 'inactive'
 type ProductKind = 'single' | 'bundle'
 type FulfillmentStation = 'bar' | 'kitchen' | 'cashier' | 'none'
 type InventoryControlMode = 'tracked' | 'not_managed'
+type SalesSpecificationType = 'whole_bottle' | 'glass' | 'shot' | 'cocktail' | 'custom'
 type PerformancePhaseCode = 'before_show' | 'acoustic' | 'band_live' | 'intermission' | 'after_show'
 
 const performancePhaseOptions: ReadonlyArray<{ code: PerformancePhaseCode; label: string }> = [
@@ -16,6 +17,14 @@ const performancePhaseOptions: ReadonlyArray<{ code: PerformancePhaseCode; label
   { code: 'band_live', label: '乐队现场' },
   { code: 'intermission', label: '中场' },
   { code: 'after_show', label: '演出后' },
+]
+
+const salesSpecificationOptions: ReadonlyArray<{ code: SalesSpecificationType; label: string }> = [
+  { code: 'whole_bottle', label: '整瓶' },
+  { code: 'glass', label: '单杯' },
+  { code: 'shot', label: 'Shot' },
+  { code: 'cocktail', label: '鸡尾酒' },
+  { code: 'custom', label: '自定义' },
 ]
 
 interface CatalogProduct {
@@ -66,6 +75,7 @@ interface ProductDraft {
   fulfillmentStation: FulfillmentStation
   productKind: ProductKind
   inventoryControlMode: InventoryControlMode
+  salesSpecificationType: SalesSpecificationType
   status: ProductStatus
   guestVisible: boolean
   searchText: string
@@ -299,6 +309,7 @@ export function CatalogManagementPanel({
       fulfillmentStation: product.fulfillmentStation,
       productKind: product.productKind,
       inventoryControlMode: product.inventoryControlMode,
+      salesSpecificationType: readSalesSpecificationType(product.productSnapshot.salesSpecificationType),
       status: product.status,
       guestVisible: product.guestVisible,
       searchText: product.searchText,
@@ -546,6 +557,7 @@ export function CatalogManagementPanel({
       ...draft.snapshot,
       description: draft.description.trim(),
       imageUrl: draft.imageUrl.trim(),
+      salesSpecificationType: draft.salesSpecificationType,
     }
     const currentPrice = draft.id === null
       ? null
@@ -616,7 +628,7 @@ export function CatalogManagementPanel({
       {notice !== null && <p className={`catalog-management-notice is-${notice.kind}`} role="status">{notice.kind === 'success' && <Check size={17} />}{notice.text}</p>}
       {phase === 'error' && <button type="button" onClick={() => void load()}>重新读取商品</button>}
       {phase === 'ready' && <>
-        {isInventoryFlow && <section className="catalog-selling-flow" aria-label="酒水上架步骤说明"><header><strong>第 4–5 步：建立商品并确认可售</strong><small>先建立停用商品和售价，再保存库存配方；已收货库存充足后，切换为“在售”。</small></header><ol><li><b>4</b><span><strong>商品与售价</strong><small>商品名称、售价、顾客可见与下单渠道。</small></span></li><li><b>5</b><span><strong>配方与开售</strong><small>每份用量、损耗、库存状态和实际可售结果。</small></span></li></ol><p>“在售”仅是商品状态；顾客可点还要通过配方和实时库存校验，系统不会因方便操作而跳过。</p></section>}
+        {isInventoryFlow && <section className="catalog-selling-flow" aria-label="酒水上架步骤说明"><header><strong>第 2–4 步：销售规格、配方成本与发布</strong><small>选择整瓶、单杯、Shot、鸡尾酒或自定义规格，保存售价与真实扣减配方，再回到入库卡生成发布预览。</small></header><ol><li><b>2</b><span><strong>销售规格</strong><small>同一库存物料可被多个销售规格共同引用。</small></span></li><li><b>3</b><span><strong>配方与预览</strong><small>配置每份用量、损耗、售价和渠道。</small></span></li><li><b>4</b><span><strong>确认发布</strong><small>按本次收货成本重新核算后原子发布。</small></span></li></ol><p>“在售”仅是商品状态；顾客可点还要通过配方和实时库存校验，系统不会因方便操作而跳过。</p></section>}
         <div className="catalog-management-tools"><input aria-label="搜索配置商品" placeholder="搜索商品名、编号或分类" value={query} onChange={(event) => setQuery(event.target.value)} /><button type="button" onClick={startCreate}><CirclePlus size={17} /> 新增商品</button><button type="button" onClick={() => void load()}>刷新可售状态</button></div>
         {draft !== null && <form className="catalog-management-form" onSubmit={(event) => void save(event)}>
           <header><strong>{draft.id === null ? '新增商品' : `编辑 ${draft.name}`}</strong><button type="button" onClick={closeDraft}>取消</button></header>
@@ -625,6 +637,7 @@ export function CatalogManagementPanel({
             <label>商品名称<input required maxLength={160} value={draft.name} onChange={(event) => updateDraft('name', event.target.value)} /></label>
             <label>分类编号<input required pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" value={draft.categoryCode} onChange={(event) => updateCategory(event.target.value)} /></label>
             <label>商品类型<select value={draft.productKind} onChange={(event) => updateDraft('productKind', event.target.value as ProductKind)}><option value="single">单品</option><option value="bundle">组合商品</option></select></label>
+            <label>销售规格<select disabled={draft.productKind === 'bundle'} value={draft.salesSpecificationType} onChange={(event) => updateDraft('salesSpecificationType', event.target.value as SalesSpecificationType)}>{salesSpecificationOptions.map((option) => <option key={option.code} value={option.code}>{option.label}</option>)}</select><small>规格只描述销售形态；真实库存始终由下方配方引用，不重复建立库存。</small></label>
             <label>出品岗位<select disabled={draft.productKind === 'bundle'} value={draft.productKind === 'bundle' ? 'none' : draft.fulfillmentStation} onChange={(event) => updateDraft('fulfillmentStation', event.target.value as FulfillmentStation)}><option value="bar">吧台</option><option value="kitchen">后厨</option><option value="cashier">收银</option><option value="none">无需出品</option></select></label>
             <label>销售状态<select value={draft.status} onChange={(event) => updateDraft('status', event.target.value as ProductStatus)}><option value="active">在售</option><option value="sold_out">售罄</option><option value="inactive">停用</option></select></label>
             <label>库存方式<select disabled={draft.productKind === 'bundle'} value={draft.productKind === 'bundle' ? 'tracked' : draft.inventoryControlMode} onChange={(event) => updateDraft('inventoryControlMode', event.target.value as InventoryControlMode)}><option value="tracked">跟踪库存（酒水等）</option><option value="not_managed">暂不管理数量（小吃水果）</option></select></label>
@@ -716,6 +729,7 @@ export function CatalogManagementPanel({
 function emptyDraft(): ProductDraft {
   return {
     id: null, code: '', name: '', categoryCode: 'drinks', fulfillmentStation: 'bar', productKind: 'single', inventoryControlMode: 'tracked',
+    salesSpecificationType: 'custom',
     status: 'inactive', guestVisible: true, searchText: '', recommendationEnabled: false,
     recommendationMinGuests: '1', recommendationMaxGuests: '100', recommendationPriority: '100',
     recommendationSceneTags: '', recommendationIntentTags: '', recommendationTasteTags: '',
@@ -726,6 +740,12 @@ function emptyDraft(): ProductDraft {
     maxOrderQuantity: '50', kdsPriority: '100', fulfillmentSlaSeconds: '',
     costYuan: '', priceYuan: '', priceReason: '新增商品标准售价', description: '', imageUrl: '', snapshot: {}, componentQuantities: {},
   }
+}
+
+function readSalesSpecificationType(value: unknown): SalesSpecificationType {
+  return salesSpecificationOptions.some((option) => option.code === value)
+    ? value as SalesSpecificationType
+    : 'custom'
 }
 
 function performancePhaseConfiguration(value: unknown, productId: string): {

@@ -83,6 +83,18 @@
 .loyalty-benefit-card > view:last-child > text:first-child { color: #3f3226; font-size: 23rpx; font-weight: 750; }
 .loyalty-benefit-card > view:last-child > text { color: #766653; font-size: 19rpx; line-height: 1.45; }
 
+.activity-package { display: flex; margin-top: 16rpx; padding: 18rpx; align-items: center; border: 1rpx solid #dfd8cf; border-radius: 18rpx; background: #fff; gap: 16rpx; }
+.activity-package--selected { border-color: #315d46; background: #f2f8f4; box-shadow: inset 0 0 0 1rpx rgba(49, 93, 70, .12); }
+.activity-package--disabled { opacity: .58; }
+.activity-package > view:first-child:not(.activity-package__main) { display: grid; flex: 1; gap: 5rpx; }
+.activity-package > view:first-child:not(.activity-package__main) text:first-child, .activity-package__main > view text:first-child { color: #2e3f34; font-size: 24rpx; font-weight: 750; }
+.activity-package > view:first-child:not(.activity-package__main) text:last-child, .activity-package__main > view text:last-child { color: #86613a; font-size: 20rpx; }
+.activity-package > text:last-child { flex: 0 0 auto; color: #315d46; font-size: 20rpx; font-weight: 700; }
+.activity-package__image { width: 104rpx; height: 104rpx; flex: 0 0 auto; border-radius: 12rpx; background: #e8e2d8; }
+.activity-package__main { display: grid; min-width: 0; flex: 1; gap: 5rpx; }
+.activity-package__main > view { display: flex; justify-content: space-between; gap: 10rpx; }
+.activity-package__main > text { overflow: hidden; color: #776f66; font-size: 19rpx; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+
 .registration-panel { margin-top: 30rpx; padding: 26rpx; border: 1rpx solid #d8d1c8; border-radius: 22rpx; background: #fff; }
 .party-row { display: flex; margin-bottom: 24rpx; align-items: center; justify-content: space-between; gap: 20rpx; }
 .party-row > view:first-child { min-width: 0; flex: 1; }

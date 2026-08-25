@@ -25,11 +25,13 @@ integration('migration 082 loyalty refund application backfill', () => {
     isolatedUrl.pathname = `/${databaseName}`
     admin = new Client({ connectionString: adminUrl.toString() })
     await admin.connect()
-    await admin.query(`CREATE DATABASE ${quoteIdentifier(databaseName)}`)
-    databaseCreated = true
-    client = new Client({ connectionString: isolatedUrl.toString() })
-    await client.connect()
-    await client.query(`
+    await admin.query(`SELECT pg_advisory_lock(hashtext('mbox.normalized.historical-migration-test'))`)
+    try {
+      await admin.query(`CREATE DATABASE ${quoteIdentifier(databaseName)}`)
+      databaseCreated = true
+      client = new Client({ connectionString: isolatedUrl.toString() })
+      await client.connect()
+      await client.query(`
       CREATE SCHEMA mbox;
       CREATE TABLE mbox.normalized_schema_metadata (
         singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
@@ -45,16 +47,19 @@ integration('migration 082 loyalty refund application backfill', () => {
         applied_at timestamptz NOT NULL DEFAULT clock_timestamp()
       )
     `)
-    await client.query(`
+      await client.query(`
       INSERT INTO mbox.normalized_schema_metadata(singleton,schema_flavor,schema_version)
       VALUES(true,$1,'000')
-    `, [NORMALIZED_SCHEMA_FLAVOR])
-    const migrations = await loadNormalizedMigrations()
-    for (const migration of migrations.filter((entry) => Number(entry.version)<=81)) {
-      await client.query(migration.sql)
-      await client.query(`
+      `, [NORMALIZED_SCHEMA_FLAVOR])
+      const migrations = await loadNormalizedMigrations()
+      for (const migration of migrations.filter((entry) => Number(entry.version)<=81)) {
+        await client.query(migration.sql)
+        await client.query(`
         INSERT INTO mbox.normalized_schema_migrations(version,filename,checksum) VALUES($1,$2,$3)
-      `, [migration.version, migration.filename, migration.checksum])
+        `, [migration.version, migration.filename, migration.checksum])
+      }
+    } finally {
+      await admin.query(`SELECT pg_advisory_unlock(hashtext('mbox.normalized.historical-migration-test'))`)
     }
   }, 30_000)
 

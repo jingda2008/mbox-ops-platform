@@ -11,9 +11,16 @@ type DetectorConstructor = {
 const preferredFormats = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'qr_code']
 type CameraState = 'starting' | 'ready' | 'detected' | 'unavailable'
 
-export function InventoryBarcodeScanner({ onClose, onDetected }: {
+export function InventoryBarcodeScanner({
+  onClose,
+  onDetected,
+  title = '扫描酒瓶条形码或二维码',
+  cameraLabel = '库存扫码摄像头画面',
+}: {
   onClose(): void
   onDetected(code: string): void
+  title?: string
+  cameraLabel?: string
 }) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [cameraState, setCameraState] = useState<CameraState>('starting')
@@ -147,9 +154,9 @@ export function InventoryBarcodeScanner({ onClose, onDetected }: {
 
   return <div className="inventory-scanner-overlay" role="presentation">
     <section className="inventory-scanner-dialog" role="dialog" aria-modal="true" aria-labelledby="inventory-scanner-title">
-      <header><div><small>手机摄像头</small><strong id="inventory-scanner-title">扫描酒瓶条形码或二维码</strong></div><button type="button" aria-label="关闭扫码" onClick={onClose}><X size={20} /></button></header>
+      <header><div><small>手机摄像头</small><strong id="inventory-scanner-title">{title}</strong></div><button type="button" aria-label="关闭扫码" onClick={onClose}><X size={20} /></button></header>
       <div className={`inventory-camera is-${cameraState}`}>
-        <video ref={videoRef} muted playsInline aria-label="库存扫码摄像头画面" />
+        <video ref={videoRef} muted playsInline aria-label={cameraLabel} />
         <i aria-hidden="true" />
         <span>{cameraState === 'detected' ? <><CheckCircle2 size={20} />识别成功</> : cameraState === 'unavailable' ? <><Camera size={20} />无法打开摄像头</> : <><ScanLine size={20} />{cameraState === 'ready' ? '将条码放入框内' : '正在打开后置摄像头'}</>}</span>
       </div>

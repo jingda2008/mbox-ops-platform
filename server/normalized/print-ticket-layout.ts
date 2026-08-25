@@ -2,7 +2,7 @@ import type { JsonObject, JsonValue } from './command-executor.js'
 
 export const PRINT_TICKET_SCHEMA_VERSION = 1
 
-export type PrintTicketKind = 'cashier_settlement' | 'cashier_payment' | 'bar_production' | 'kitchen_production'
+export type PrintTicketKind = 'cashier_settlement' | 'cashier_payment' | 'cashier_refund' | 'bar_production' | 'kitchen_production'
 export type PrintTicketPaper = '58mm' | '80mm' | 'a4'
 
 export interface PrintTicketOutputProfile {
@@ -24,7 +24,7 @@ export interface PrintTicketLine {
 }
 
 export interface PrintTicketPayment {
-  provider: 'wechat' | 'postar' | 'cash' | 'physical_pos' | 'simulation'
+  provider: 'wechat' | 'postar' | 'cash' | 'physical_pos' | 'external_manual' | 'simulation'
   method: 'jsapi' | 'native_qr' | 'auth_code' | 'cash' | 'card' | 'manual'
 }
 
@@ -50,6 +50,7 @@ export interface PrintTicketSnapshot {
 const TICKET_TITLES: Record<PrintTicketKind, string> = {
   cashier_settlement: '结账单',
   cashier_payment: '支付凭条',
+  cashier_refund: '退款凭条',
   bar_production: '吧台调酒制作单',
   kitchen_production: '后厨制作单',
 }
@@ -248,7 +249,7 @@ function readLines(value: unknown): PrintTicketLine[] {
 }
 
 function validatePayment(value: Readonly<PrintTicketPayment>) {
-  if (!['wechat', 'postar', 'cash', 'physical_pos', 'simulation'].includes(value.provider)) throw new TypeError('payment.provider无效')
+  if (!['wechat', 'postar', 'cash', 'physical_pos', 'external_manual', 'simulation'].includes(value.provider)) throw new TypeError('payment.provider无效')
   if (!['jsapi', 'native_qr', 'auth_code', 'cash', 'card', 'manual'].includes(value.method)) throw new TypeError('payment.method无效')
 }
 
@@ -266,11 +267,12 @@ export function paymentLabel(payment: Readonly<PrintTicketPayment>): string {
   if (payment.provider === 'postar') return payment.method === 'card' ? '银行卡支付' : '星驿支付'
   if (payment.provider === 'cash') return '现金支付'
   if (payment.provider === 'physical_pos') return 'POS刷卡支付'
+  if (payment.provider === 'external_manual') return '其他线下收款'
   return '模拟支付（测试）'
 }
 
 function assertTicketKind(value: unknown): asserts value is PrintTicketKind {
-  if (value !== 'cashier_settlement' && value !== 'cashier_payment' && value !== 'bar_production' && value !== 'kitchen_production') throw new TypeError('打印票据类型无效')
+  if (value !== 'cashier_settlement' && value !== 'cashier_payment' && value !== 'cashier_refund' && value !== 'bar_production' && value !== 'kitchen_production') throw new TypeError('打印票据类型无效')
 }
 
 function readKind(value: unknown): PrintTicketKind { assertTicketKind(value); return value }

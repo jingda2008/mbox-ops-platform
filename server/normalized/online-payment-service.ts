@@ -404,7 +404,9 @@ export class OnlinePaymentService {
       }
       if (context.provider === 'simulation') {
         const presentation = providerPresentation(context.method)
-        const claim = await repository.claim(input.paymentId, presentation, expiresAt, input.principal, input.idempotencyKey)
+        const claim = await repository.claim(
+          input.paymentId,presentation,expiresAt,input.principal,input.idempotencyKey,
+        )
         if (!claim.claimed) return { context, payerId: null, cached: claim, simulated: true as const }
         const payload = { presentation: 'simulation' }
         await repository.complete(context.id, presentation, payload, expiresAt, null)
@@ -418,7 +420,10 @@ export class OnlinePaymentService {
       if (presentation === 'barcode' && !input.customerAuthCode?.trim()) {
         throw new OnlinePaymentUnavailableError('这笔订单正在由员工扫描付款码，请勿从桌码重复发起')
       }
-      const claim = await repository.claim(input.paymentId, presentation, expiresAt, input.principal, input.idempotencyKey)
+      const claim = await repository.claim(
+        input.paymentId,presentation,expiresAt,input.principal,input.idempotencyKey,
+        presentation === 'barcode' ? input.customerAuthCode : undefined,
+      )
       if (!claim.claimed) {
         return { context, payerId: null, cached: claim, simulated: false as const }
       }

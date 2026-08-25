@@ -5,6 +5,12 @@
 .staff-module-panel > header small { color: #656c64; font-size: 11px; }
 .staff-module-panel > header h1 { margin: 0; font-size: 18px; }
 .staff-module-panel > header > button { width: 44px; height: 44px; display: grid; place-items: center; border: 1px solid #bfc5bd; border-radius: 6px; background: #fff; color: #343a34; box-shadow: 0 2px 0 #b9bfb7; }
+.staff-module-blocker-fact { display: grid; gap: 4px; margin: 10px 10px 0; padding: 11px 12px; border: 1px solid #d7c58d; border-left: 4px solid #b68b20; border-radius: 7px; background: #fffaf0; color: #403b2f; }
+.staff-module-blocker-fact small { color: #7b6220; font-size: 10px; font-weight: 800; }
+.staff-module-blocker-fact strong { font-size: 14px; }
+.staff-module-blocker-fact p, .staff-module-blocker-fact span, .staff-module-blocker-fact em { margin: 0; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.staff-module-blocker-fact span { color: #7a5e16; font-weight: 800; }
+.staff-module-blocker-fact em { color: #656052; font-style: normal; }
 .staff-module-body { display: grid; gap: 8px; padding: 10px; }
 .staff-module-summary { min-height: 66px; display: grid; grid-template-columns: 38px minmax(0, 1fr); align-items: center; gap: 10px; padding: 11px 12px; border: 1px solid #cbd2ca; border-radius: 7px; background: #fff; }
 .staff-module-summary.has-attention { border-color: #dfbd5d; background: #fffaf0; }
@@ -122,6 +128,21 @@
 .inventory-draft-receipts article small { color: #687068; font-size: 10px; }
 .inventory-draft-receipts article span { color: #3f4942; font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
 .inventory-draft-receipts article button { min-height: 42px; padding: 0 11px; border: 1px solid #176b4c; border-radius: 6px; background: #176b4c; color: #fff; font: inherit; font-size: 11px; font-weight: 800; }
+.inventory-publish-preview { padding: 13px; border: 1px solid #8ab89f; border-top: 3px solid #176b4c; border-radius: 8px; background: linear-gradient(135deg, #f0f8f3, #fff); display: grid; gap: 10px; }
+.inventory-publish-preview > header { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
+.inventory-publish-preview > header > div { min-width: 0; display: grid; gap: 3px; }
+.inventory-publish-preview > header strong { color: #174e37; font-size: 14px; }
+.inventory-publish-preview > header small { color: #5e6f64; font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
+.inventory-publish-preview > header em { flex: 0 0 auto; padding: 5px 8px; border-radius: 999px; background: #d9f0e2; color: #176b4c; font-size: 10px; font-style: normal; font-weight: 800; }
+.inventory-publish-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
+.inventory-publish-metrics > span { min-width: 0; padding: 8px; border: 1px solid #c7ded0; border-radius: 6px; background: #fff; display: grid; gap: 3px; }
+.inventory-publish-metrics small { color: #65736a; font-size: 9px; }
+.inventory-publish-metrics strong { color: #153e2d; font-size: 13px; overflow-wrap: anywhere; }
+.inventory-publish-components { display: grid; gap: 6px; }
+.inventory-publish-components article { padding: 8px; border: 1px solid #d5dfd8; border-radius: 6px; background: #fff; display: grid; grid-template-columns: minmax(110px, 1.1fr) repeat(3, minmax(0, 1fr)); gap: 5px 9px; align-items: center; }
+.inventory-publish-components article strong { color: #263d31; font-size: 11px; }
+.inventory-publish-components article span, .inventory-publish-preview > p { color: #5d6961; font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
+.inventory-publish-preview > p { margin: 0; padding: 8px; border-left: 3px solid #d4b44f; background: #fff9e9; }
 .inventory-scanner-overlay { position: fixed; inset: 0; z-index: 90; padding: max(14px, env(safe-area-inset-top)) 12px max(14px, env(safe-area-inset-bottom)); background: rgb(5 10 7 / 82%); display: grid; place-items: center; }
 .inventory-scanner-dialog { width: min(100%, 430px); max-height: 100%; padding: 13px; border-radius: 14px; background: #f7f8f5; box-shadow: 0 18px 60px rgb(0 0 0 / 38%); display: grid; gap: 11px; overflow-y: auto; }
 .inventory-scanner-dialog > header { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -221,7 +242,7 @@
 .inventory-selling-flow > header strong { color: #174e37; font-size: 15px; }
 .inventory-selling-flow > header small { color: #527362; font-size: 11px; line-height: 1.5; }
 .inventory-selling-flow > header > em { flex: 0 0 auto; padding: 4px 7px; border-radius: 999px; background: #d9f0e2; color: #176b4c; font-size: 10px; font-style: normal; font-weight: 800; }
-.inventory-selling-flow > ol { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; }
+.inventory-selling-flow > ol { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
 .inventory-selling-flow > ol > li { min-width: 0; min-height: 104px; padding: 9px; border: 1px solid #c5ddce; border-radius: 7px; background: #fff; display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; align-items: start; gap: 6px 7px; }
 .inventory-selling-flow > ol > li > b { width: 24px; height: 24px; border-radius: 50%; background: #176b4c; color: #fff; display: grid; place-items: center; font-size: 10px; }
 .inventory-selling-flow > ol > li > span { min-width: 0; display: grid; gap: 3px; }
@@ -401,6 +422,8 @@
   .inventory-receipt-confirm { grid-template-columns: 1fr; }
   .inventory-receipt-confirm header, .inventory-receipt-confirm p { grid-column: auto; }
   .inventory-draft-receipts article { grid-template-columns: 1fr; }
+  .inventory-publish-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .inventory-publish-components article { grid-template-columns: 1fr; }
   .inventory-selling-flow > ol { grid-template-columns: 1fr; }
   .inventory-selling-flow > ol > li { min-height: 0; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: 1fr; align-items: center; }
   .inventory-selling-flow > ol > li > button, .inventory-selling-flow > ol > li > em { grid-column: auto; min-width: 62px; }

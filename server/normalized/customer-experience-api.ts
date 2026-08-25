@@ -1,5 +1,11 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
-import type { JsonObject } from './command-executor.js'
+import {
+  IdempotencyConflictError,
+  IdempotencyInProgressError,
+  IdempotencyRecordError,
+  OutboxMessageConflictError,
+  type JsonObject,
+} from './command-executor.js'
 import {
   CustomerExperienceRequestError,
   type ProtectedActivityRegistrationContact,
@@ -39,6 +45,8 @@ import type {
 } from './membership-recovery-service.js'
 import type { MembershipTermsService } from './membership-terms-service.js'
 import type { MembershipEnrollmentService } from './membership-enrollment-service.js'
+import { EmployeeTableAccessDeniedError } from './employee-table-access.js'
+import { createMemberIdentificationQrDataUrl } from './member-code-qr.js'
 
 interface GuestExperienceContext {
   scope: Readonly<StoreScope>
@@ -83,10 +91,57 @@ interface PrivacyPolicyReleaseRow extends Record<string, unknown> {
   effective_at: string
 }
 
+interface StaffMemberAccountRow extends Record<string, unknown> {
+  membership_id: string
+  member_no: string
+  membership_status: string
+  current_tier: 'member' | 'silver' | 'gold'
+  available_points: string | number
+  pending_recovery_points: string | number
+  lifetime_growth: string | number
+  qualification_growth: string | number
+  tier_qualification_growth: string | number | null
+  tier_period_ends_at: string | null
+  updated_at: string
+}
+
+interface StaffMemberLedgerRow extends Record<string, unknown> {
+  entry_type: string
+  delta: string | number
+  balance_after: string | number
+  reason: string
+  occurred_at: string
+}
+
 export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceApiOptions> = async (app, options) => {
   app.get('/public/mini/bootstrap', async (request, reply) => handle(reply, async () => {
     const context = await options.resolvePublicContext(request)
-    return reply.send({ data: await options.service.portal(context) })
+    const portal = await options.service.portal(context)
+    const membership = portal.membership === null ? null : {
+      ...portal.membership,
+      memberCodeQrDataUrl: await createMemberIdentificationQrDataUrl(portal.membership.memberNo),
+    }
+    reply.header('cache-control', 'private, no-store')
+    reply.header('pragma', 'no-cache')
+    return reply.send({ data: { ...portal, membership } })
+  }))
+
+  app.put('/public/mini/annual-benefits/birthday-consent', async (request, reply) => handle(reply, async () => {
+    const context = await options.resolvePublicContext(request)
+    const body = objectBody(request.body)
+    const result = await options.service.recordBirthdayBenefitConsent(context, {
+      birthdayMonthDay: text(body.birthdayMonthDay, '生日月日', 5, 5), idempotencyKey: idempotencyKey(request),
+    })
+    return reply.send({ data: result.value, meta: { replayed: result.replayed } })
+  }))
+
+  app.post('/public/mini/annual-benefits/birthday-consent/withdraw', async (request, reply) => handle(reply, async () => {
+    const context = await options.resolvePublicContext(request)
+    const body = objectBody(request.body)
+    const result = await options.service.withdrawBirthdayBenefitConsent(context, {
+      reason: text(body.reason, '撤回说明', 2, 500), idempotencyKey: idempotencyKey(request),
+    })
+    return reply.send({ data: result.value, meta: { replayed: result.replayed } })
   }))
 
   app.get('/public/mini/privacy-policy', async (request, reply) => handle(reply, async () => {
@@ -332,8 +387,21 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
   )
 
   app.get('/staff/loyalty/redemption-configuration', async (request, reply) => handle(reply, async () => {
-    const context = await staffContextWithPermission(options, request, 'loyalty.policy.view')
+    const context = await staffContextWithAnyPermission(options, request, [
+      'loyalty.policy.view',
+      'loyalty.redemption.catalog.manage',
+      'loyalty.redemption.catalog.approve',
+      'loyalty.redemption.catalog.publish',
+      'loyalty.redemption.control',
+    ])
     return reply.send({ data: await options.service.redemptionConfiguration(context) })
+  }))
+
+  app.get('/staff/loyalty/redemptions/pending', async (request, reply) => handle(reply, async () => {
+    const context = await staffContextWithAnyPermission(options, request, [
+      'loyalty.redemption.fulfill', 'loyalty.redemption.exception',
+    ])
+    return reply.send({ data: await options.service.pendingRedemptions(context) })
   }))
 
   app.post('/staff/loyalty/redemption-catalogs', async (request, reply) => handle(reply, async () => {
@@ -605,11 +673,13 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
     return reply.send({ data: result.value, meta: { replayed: result.replayed } })
   }))
 
-  app.post<{ Params: { activityPublicId: string } }>('/public/mini/activities/:activityPublicId/registrations', async (request, reply) => handle(reply, async () => {
+  app.post<{ Params: { activityPublicId: string } }>('/public/mini/activities/:activityPublicId/registrations', async (request, reply) => handleActivityRegistration(reply, async () => {
     const context = await options.resolvePublicContext(request)
     const body = objectBody(request.body)
     const result = await options.service.registerActivity(context, {
       activityPublicId: publicId(request.params.activityPublicId),
+      activityPackagePublicId: body.activityPackagePublicId === undefined || body.activityPackagePublicId === null
+        ? null : publicId(text(body.activityPackagePublicId, '套餐编号', 8, 128)),
       partySize: integer(body.partySize, '报名人数', 1, 20),
       protectedContact: await protectActivityRegistrationContact(
         object(body.contactSnapshot, '联系信息'),
@@ -1071,6 +1141,86 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
     return reply.send({ data: result.value, meta: { replayed: result.replayed } })
   }))
 
+  app.get('/staff/loyalty/accounts', async (request, reply) => handle(reply, async () => {
+    const context = await staffContextWithPermission(options, request, 'loyalty.account.view')
+    const query = objectBody(request.query)
+    const memberNo = text(query.memberNo, '会员号', 3, 64)
+    const account = await options.transactions.run(context.scope, async (transaction) => {
+      const accountResult = await transaction.query<StaffMemberAccountRow>(`
+        SELECT membership.id AS membership_id,membership.member_no,
+          membership.status AS membership_status,account.current_tier,
+          account.available_points,account.pending_recovery_points,
+          account.growth_value AS lifetime_growth,
+          COALESCE(rolling.qualification_growth,0)::bigint AS qualification_growth,
+          period.qualification_growth AS tier_qualification_growth,
+          period.ends_at::text AS tier_period_ends_at,account.updated_at::text
+        FROM mbox.customer_memberships membership
+        JOIN mbox.loyalty_accounts account
+          ON account.tenant_id=membership.tenant_id AND account.store_id=membership.store_id
+         AND account.membership_id=membership.id
+        LEFT JOIN LATERAL (
+          SELECT SUM(ledger.growth_delta)::bigint AS qualification_growth
+          FROM mbox.loyalty_growth_ledger ledger
+          JOIN LATERAL (
+            SELECT policy.evaluation_window_months
+            FROM mbox.loyalty_tier_policy_versions policy
+            WHERE policy.tenant_id=membership.tenant_id AND policy.store_id=membership.store_id
+              AND policy.status='published' AND policy.effective_from<=clock_timestamp()
+              AND (policy.effective_until IS NULL OR policy.effective_until>clock_timestamp())
+            ORDER BY policy.effective_from DESC,policy.version DESC LIMIT 1
+          ) policy ON true
+          WHERE ledger.tenant_id=membership.tenant_id AND ledger.store_id=membership.store_id
+            AND ledger.membership_id=membership.id
+            AND ledger.occurred_at>=clock_timestamp()-make_interval(months=>policy.evaluation_window_months)
+        ) rolling ON true
+        LEFT JOIN LATERAL (
+          SELECT tier_period.qualification_growth,tier_period.ends_at
+          FROM mbox.membership_tier_periods tier_period
+          WHERE tier_period.tenant_id=membership.tenant_id AND tier_period.store_id=membership.store_id
+            AND tier_period.membership_id=membership.id AND tier_period.status IN ('active','grace')
+          ORDER BY tier_period.starts_at DESC,tier_period.id DESC LIMIT 1
+        ) period ON true
+        WHERE membership.tenant_id=$1::uuid AND membership.store_id=$2::uuid
+          AND membership.member_no=$3
+        LIMIT 1
+      `, [context.scope.tenantId, context.scope.storeId, memberNo])
+      const row = accountResult.rows[0]
+      if (row === undefined) {
+        throw new CustomerExperienceRequestError('未找到该会员账户', 'MEMBER_ACCOUNT_NOT_FOUND', 404)
+      }
+      const [pointEntries, growthEntries] = await Promise.all([
+        transaction.query<StaffMemberLedgerRow>(`
+          SELECT entry_type,points_delta AS delta,balance_after,reason,occurred_at::text
+          FROM mbox.loyalty_point_ledger
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND membership_id=$3::uuid
+          ORDER BY occurred_at DESC,id DESC LIMIT 20
+        `, [context.scope.tenantId, context.scope.storeId, row.membership_id]),
+        transaction.query<StaffMemberLedgerRow>(`
+          SELECT entry_type,growth_delta AS delta,balance_after,reason,occurred_at::text
+          FROM mbox.loyalty_growth_ledger
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND membership_id=$3::uuid
+          ORDER BY occurred_at DESC,id DESC LIMIT 20
+        `, [context.scope.tenantId, context.scope.storeId, row.membership_id]),
+      ])
+      return {
+        memberNo: row.member_no,
+        membershipStatus: row.membership_status,
+        tier: row.current_tier,
+        availablePoints: nonNegativeSafeNumber(row.available_points, '可用积分'),
+        pendingRecoveryPoints: nonNegativeSafeNumber(row.pending_recovery_points, '待追回积分'),
+        lifetimeGrowth: nonNegativeSafeNumber(row.lifetime_growth, '累计成长值'),
+        qualificationGrowth: nonNegativeSafeNumber(row.qualification_growth, '资格成长值'),
+        tierQualificationGrowth: row.tier_qualification_growth === null
+          ? null : nonNegativeSafeNumber(row.tier_qualification_growth, '等级周期资格快照'),
+        tierPeriodEndsAt: row.tier_period_ends_at,
+        updatedAt: row.updated_at,
+        pointEntries: pointEntries.rows.map(staffLedgerEntry),
+        growthEntries: growthEntries.rows.map(staffLedgerEntry),
+      }
+    }, { readOnly: true })
+    return reply.send({ data: account })
+  }))
+
   app.post<{ Params: { redemptionPublicId: string } }>(
     '/staff/loyalty/redemptions/:redemptionPublicId/fulfill',
     async (request, reply) => handle(reply, async () => {
@@ -1105,7 +1255,9 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
   )
 
   app.get('/staff/loyalty/policies', async (request, reply) => handle(reply, async () => {
-    const context = await staffContextWithPermission(options, request, 'loyalty.policy.view')
+    const context = await staffContextWithAnyPermission(options, request, [
+      'loyalty.policy.view','loyalty.policy.manage','loyalty.policy.approve','loyalty.policy.publish',
+    ])
     return reply.send({ data: await options.service.listLoyaltyPolicies(context) })
   }))
 
@@ -1146,7 +1298,9 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
   }))
 
   app.get('/staff/loyalty/tier-policies', async (request, reply) => handle(reply, async () => {
-    const context = await staffContextWithPermission(options, request, 'loyalty.policy.view')
+    const context = await staffContextWithAnyPermission(options, request, [
+      'loyalty.policy.view','loyalty.policy.manage','loyalty.policy.approve','loyalty.policy.publish',
+    ])
     return reply.send({ data: await options.service.listLoyaltyTierPolicies(context) })
   }))
 
@@ -1491,18 +1645,66 @@ async function handle(reply: FastifyReply, action: () => Promise<unknown>) {
 }
 
 function errorResponse(error: unknown): { statusCode: number; code: string; message: string } {
+  const known = knownErrorResponse(error)
+  if (known !== null) return known
+  console.error('CUSTOMER_EXPERIENCE_UNMAPPED_ERROR', error instanceof Error ? error.stack ?? error.message : error)
+  return { statusCode: 500, code: 'CUSTOMER_EXPERIENCE_FAILED', message: '客户体验服务暂时没有接上' }
+}
+
+function knownErrorResponse(error: unknown): { statusCode: number; code: string; message: string } | null {
   if (error instanceof CustomerExperienceRequestError) return { statusCode: error.statusCode, code: error.code, message: error.message }
   if (error instanceof ReservationGuestSessionInvalidError || error instanceof GuestAuthenticationRequiredError
     || error instanceof NormalizedAuthenticationRequiredError || error instanceof StaffSessionNotFoundError) {
     return { statusCode: 401, code: 'AUTHENTICATION_REQUIRED', message: '登录状态已失效，请重新进入' }
   }
   if (error instanceof StaffAccessDeniedError) return { statusCode: 403, code: 'PERMISSION_DENIED', message: '当前岗位没有这项权限' }
+  if (error instanceof EmployeeTableAccessDeniedError) return {
+    statusCode: 403, code: 'TABLE_ACCESS_DENIED', message: '当前员工不是该桌负责人，无权处理该桌会员权益',
+  }
   if (error instanceof GuestDeviceBindingError || error instanceof GuestStoreScopeError
     || error instanceof NormalizedStoreUnavailableError || error instanceof TrustedStoreScopeError) {
     return { statusCode: 403, code: 'SCOPE_DENIED', message: '当前门店或设备身份不匹配' }
   }
-  console.error('CUSTOMER_EXPERIENCE_UNMAPPED_ERROR', error instanceof Error ? error.stack ?? error.message : error)
-  return { statusCode: 500, code: 'CUSTOMER_EXPERIENCE_FAILED', message: '客户体验服务暂时没有接上' }
+  return null
+}
+
+async function handleActivityRegistration(reply: FastifyReply, action: () => Promise<unknown>) {
+  try { return await action() } catch (error) {
+    const mapped = activityRegistrationErrorResponse(error)
+    if (mapped.code === 'ACTIVITY_REGISTRATION_RESULT_UNCONFIRMED') {
+      console.error('ACTIVITY_REGISTRATION_RESULT_UNCONFIRMED', safeActivityRegistrationFailure(error))
+    }
+    return reply.code(mapped.statusCode).send({ error: { code: mapped.code, message: mapped.message } })
+  }
+}
+
+function activityRegistrationErrorResponse(error: unknown): { statusCode: number; code: string; message: string } {
+  if (error instanceof IdempotencyConflictError) {
+    return { statusCode: 409, code: 'ACTIVITY_REGISTRATION_IDEMPOTENCY_CONFLICT', message: '本次报名内容与之前的请求不一致，请刷新后重新报名' }
+  }
+  if (error instanceof IdempotencyInProgressError) {
+    return { statusCode: 425, code: 'ACTIVITY_REGISTRATION_IN_PROGRESS', message: '报名正在确认中，请稍后在“我的活动”查看结果' }
+  }
+  if (error instanceof IdempotencyRecordError || error instanceof OutboxMessageConflictError) {
+    return { statusCode: 503, code: 'ACTIVITY_REGISTRATION_RESULT_UNCONFIRMED', message: '报名结果确认中，请稍后在“我的活动”查看' }
+  }
+  if (error instanceof CustomerExperienceRequestError
+    && (error.code === 'ACTIVITY_CONTACT_PROTECTION_FAILED' || error.code === 'ACTIVITY_CONTACT_PROTECTION_UNAVAILABLE')) {
+    return { statusCode: 503, code: 'ACTIVITY_CONTACT_PROTECTION_UNAVAILABLE', message: '报名服务配置异常，请稍后再试' }
+  }
+  return knownErrorResponse(error)
+    ?? { statusCode: 503, code: 'ACTIVITY_REGISTRATION_RESULT_UNCONFIRMED', message: '报名结果确认中，请稍后在“我的活动”查看' }
+}
+
+function safeActivityRegistrationFailure(error: unknown) {
+  // Registration carries protected contact data.  Do not let a future error
+  // class smuggle message, code or name-derived content into an operational
+  // log.  The public response already distinguishes retriable uncertainty;
+  // this compact fixed taxonomy is enough for alerting without being a data
+  // exfiltration path.
+  if (error instanceof IdempotencyRecordError) return { kind: 'idempotency_record' as const }
+  if (error instanceof OutboxMessageConflictError) return { kind: 'outbox_conflict' as const }
+  return { kind: 'unexpected' as const }
 }
 
 function recommendationAnswers(body: JsonObject, partySize: number): RecommendationAnswer {
@@ -1517,7 +1719,9 @@ function recommendationAnswers(body: JsonObject, partySize: number): Recommendat
 
 function publicPreferences(value: unknown): JsonObject {
   const source = object(value, '偏好')
-  const allowed = ['preferredAlcohol', 'tasteNotes', 'musicStyles', 'serviceIntensity', 'seatPreference', 'dietaryNotes', 'birthdayMonthDay']
+  // Birthday month/day is purpose-bound personal data. It must only enter the
+  // system through the atomic annual-benefit consent command above.
+  const allowed = ['preferredAlcohol', 'tasteNotes', 'musicStyles', 'serviceIntensity', 'seatPreference', 'dietaryNotes']
   return Object.fromEntries(allowed.flatMap((key) => (
     source[key] === undefined ? [] : [[key, source[key]]]
   ))) as JsonObject
@@ -1639,13 +1843,27 @@ export async function protectActivityRegistrationContact(
     }
     contactValue = text(input.contact, '联系信息', 3, 256)
     contactType = /^1\d{10}$/.test(contactValue) ? 'phone' : 'wechat'
+    if (contactType === 'wechat' && !/^[A-Za-z][A-Za-z0-9_-]{2,19}$/.test(contactValue)) {
+      throw new CustomerExperienceRequestError('微信号格式不正确', 'ACTIVITY_CONTACT_INVALID')
+    }
   }
-  const protectedContact = await protectContact(contactValue)
+  let protectedContact: ProtectedContact
+  try {
+    protectedContact = await protectContact(contactValue)
+  } catch (error) {
+    console.error('ACTIVITY_CONTACT_PROTECTION_FAILED', { reason: 'provider_threw' })
+    throw new CustomerExperienceRequestError(
+      '报名服务配置异常', 'ACTIVITY_CONTACT_PROTECTION_UNAVAILABLE', 503,
+    )
+  }
   if (!/^[0-9a-f]{64}$/.test(protectedContact.hash)
     || protectedContact.encryptedBase64.length < 24 || protectedContact.encryptedBase64.length > 4096
     || protectedContact.keyId.trim().length < 3 || protectedContact.keyId.trim().length > 128
     || protectedContact.masked.trim().length < 3 || protectedContact.masked.trim().length > 64) {
-    throw new CustomerExperienceRequestError('联系信息保护失败', 'ACTIVITY_CONTACT_PROTECTION_FAILED', 500)
+    console.error('ACTIVITY_CONTACT_PROTECTION_FAILED', { reason: 'provider_output_invalid' })
+    throw new CustomerExperienceRequestError(
+      '报名服务配置异常', 'ACTIVITY_CONTACT_PROTECTION_UNAVAILABLE', 503,
+    )
   }
   return {
     contactType,
@@ -1706,6 +1924,25 @@ function uuid(value: unknown, label: string): string {
 }
 function optionalUuid(value: unknown, label: string): string | null {
   return value === undefined || value === null || value === '' ? null : uuid(value, label)
+}
+function nonNegativeSafeNumber(value: unknown, label: string): number {
+  const parsed = Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error(`${label}不是有效整数`)
+  return parsed
+}
+function staffLedgerEntry(row: StaffMemberLedgerRow) {
+  const delta = Number(row.delta)
+  const balanceAfter = Number(row.balance_after)
+  if (!Number.isSafeInteger(delta) || !Number.isSafeInteger(balanceAfter) || balanceAfter < 0) {
+    throw new Error('会员流水包含无效整数')
+  }
+  return {
+    entryType: row.entry_type,
+    delta,
+    balanceAfter,
+    reason: row.reason,
+    occurredAt: row.occurred_at,
+  }
 }
 function text(value: unknown, label: string, min: number, max: number): string {
   if (typeof value !== 'string' || value.trim().length < min || value.trim().length > max) throw new CustomerExperienceRequestError(`${label}不正确`)

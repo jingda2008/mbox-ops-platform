@@ -93,6 +93,7 @@ export interface PublicReservation {
   reservationPolicyVersion: number
   preferredScheduleId: string | null
   cancellationPolicy: Record<string, unknown>
+  priorityBooking?: { requestHoldMinutes: number | null } | null
 }
 
 export interface PublicWaitlist {
@@ -104,6 +105,7 @@ export interface PublicWaitlist {
   status: string
   arrivalState: 'arrived' | 'not_arrived'
   note: string | null
+  priorityBooking?: { requestHoldMinutes: number | null } | null
 }
 
 export interface ReservationDraft {

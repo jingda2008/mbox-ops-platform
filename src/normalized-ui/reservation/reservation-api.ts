@@ -321,6 +321,7 @@ function parseReservation(value: unknown): PublicReservation {
     reservationPolicyVersion: integer(record.reservationPolicyVersion, '预约规则版本'),
     preferredScheduleId: nullableText(record.preferredScheduleId, '演出偏好'),
     cancellationPolicy: object(record.cancellationPolicy, '取消规则'),
+    priorityBooking: priorityBooking(record.priorityBooking),
   }
 }
 
@@ -343,7 +344,18 @@ function parseWaitlist(value: unknown): PublicWaitlist {
     status: text(record.status, '候补状态'),
     arrivalState,
     note: nullableText(record.note, '备注'),
+    priorityBooking: priorityBooking(record.priorityBooking),
   }
+}
+
+function priorityBooking(value: unknown): { requestHoldMinutes: number | null } | null {
+  if (value === undefined || value === null) return null
+  const record = object(value, '会员优先安排')
+  const hold = record.requestHoldMinutes
+  if (hold === undefined || hold === null) return { requestHoldMinutes: null }
+  const minutes = integer(hold, '优先安排时限')
+  if (minutes < 5 || minutes > 30) invalid('优先安排时限')
+  return { requestHoldMinutes: minutes }
 }
 
 function tableStatus(table: Record<string, unknown>): ReservationTableStatus {

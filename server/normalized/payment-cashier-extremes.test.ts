@@ -29,6 +29,7 @@ let providerObservationRecorder: VerifiedProviderObservationService
 
 const allowAll: PaymentCapabilityAuthorizationPort = {
   assertEmployeeCapability: async () => undefined,
+  assertEmployeeOrderAccess: async () => undefined,
   assertRefundRequestLimit: async () => undefined,
   assertRefundApproval: async () => undefined,
 }

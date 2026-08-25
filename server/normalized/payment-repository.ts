@@ -1,10 +1,16 @@
+import { randomUUID } from 'node:crypto'
 import type { JsonObject } from './command-executor.js'
 import type { ChannelPaymentStatus, SettlementChannel } from '../../src/shared/payment-contracts.js'
 import { sanitizeProviderSnapshot } from './payment-security-policy.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 import { lockBoundGuestTablePosition } from './guest-table-authority.js'
+import { RecollectionAuthorizationRepository } from './recollection-authorization-repository.js'
+import {
+  ActivityRecollectionAuthorizationConflictError,
+  ActivityRecollectionAuthorizationRepository,
+} from './activity-recollection-authorization-repository.js'
 
-export type PaymentProvider = 'wechat' | 'postar' | 'cash' | 'physical_pos' | 'simulation'
+export type PaymentProvider = 'wechat' | 'postar' | 'cash' | 'physical_pos' | 'external_manual' | 'simulation'
 export type PaymentMethod = 'jsapi' | 'native_qr' | 'auth_code' | 'cash' | 'card' | 'manual'
 export type AuthoritativeSettlementChannel = Extract<SettlementChannel, 'wechat' | 'alipay' | 'unionpay'>
 export type PaymentStatus =
@@ -41,6 +47,15 @@ export interface CreatePaymentForActivityRegistrationInput {
   method: Extract<PaymentMethod, 'jsapi' | 'native_qr'>
   amountMinor: number
   currency: string
+}
+
+export interface RecordManualPaymentForActivityRegistrationInput {
+  registrationPublicId: string
+  publicId: string
+  provider: Extract<PaymentProvider, 'cash' | 'physical_pos' | 'external_manual'>
+  method: Extract<PaymentMethod, 'cash' | 'card' | 'manual'>
+  evidence: JsonObject
+  collectedByEmployeeId: string
 }
 
 export interface CreatePaymentForOrderInput {
@@ -122,6 +137,10 @@ export interface ClosedUnpresentedOnlinePayment {
   id: string
   publicId: string
   provider: Extract<PaymentProvider, 'wechat' | 'postar'>
+}
+
+export interface ClosedUnpresentedOnlineActivityPayment extends ClosedUnpresentedOnlinePayment {
+  activityRegistrationId: string
 }
 
 const CAPTURED_PAYMENT_STATUSES: readonly PaymentStatus[] = [
@@ -258,6 +277,15 @@ export class PaymentRepository {
     if (outstandingMinor <= 0) {
       throw new OrderNotPayableError(order.id, 'the order has no outstanding balance')
     }
+    // A refund records money leaving the venue. It must not by itself reopen a
+    // customer payment link: an explicit, short-lived cashier authorization is
+    // locked and consumed together with the replacement payment below.
+    const recollection = await new RecollectionAuthorizationRepository(this.transaction).prepareForPayment({
+      orderId: order.id,
+      outstandingMinor,
+      refundedMinor: toSafeMinor(settlement.refunded_minor, 'refunded'),
+      currency: order.currency,
+    })
 
     const status = input.initialStatus ?? 'created'
     const inserted = await this.transaction.query<PaymentRow>(`
@@ -285,7 +313,353 @@ export class PaymentRepository {
       status,
       JSON.stringify(sanitizeProviderSnapshot(input.evidence)),
     ])
-    return onePayment(inserted, 'Creating a payment did not insert exactly one row')
+    const payment = onePayment(inserted, 'Creating a payment did not insert exactly one row')
+    await new RecollectionAuthorizationRepository(this.transaction).consume(recollection.authorizationId, payment.id)
+    return payment
+  }
+
+  /**
+   * Records an in-store activity collection without turning the registration
+   * into a synthetic order. A provider action that might already have reached
+   * the rail is never replaced by cash/POS/manual collection.
+   */
+  async recordManualForActivityRegistration(
+    input: Readonly<RecordManualPaymentForActivityRegistrationInput>,
+  ): Promise<{ payment: Payment; supersededOnlinePayments: readonly ClosedUnpresentedOnlineActivityPayment[] }> {
+    validateManualActivityInput(input)
+    const registrationResult = await this.transaction.query<{
+      id: string
+      status: string
+      payment_status: string
+      payment_id: string | null
+      amount_due_minor: string | number
+      paid_amount_minor: string | number
+      currency: string
+      activity_id: string
+      activity_package_id: string | null
+      party_size: number
+      registration_cycle: number
+    }>(`
+      SELECT id,status,payment_status,payment_id,amount_due_minor,paid_amount_minor,currency,
+        activity_id,activity_package_id,party_size,registration_cycle
+      FROM mbox.community_activity_registrations
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND public_id=$3
+      FOR UPDATE
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.registrationPublicId])
+    const registration = registrationResult.rows[0]
+    if (registration === undefined) throw new OrderNotPayableError(input.registrationPublicId, 'activity registration was not found')
+
+    const isRefunded = registration.status === 'refunded' || registration.payment_status === 'refunded'
+    const amountMinor = isRefunded
+      ? toSafeMinor(registration.paid_amount_minor, 'refunded activity payment')
+      : toSafeMinor(registration.amount_due_minor, 'activity amount due')
+    if (amountMinor <= 0 || registration.currency.length !== 3) {
+      throw new OrderNotPayableError(registration.id, 'activity registration has no collectible balance')
+    }
+    if (!isRefunded && (registration.status !== 'payment_pending' || registration.payment_status !== 'pending')) {
+      throw new OrderNotPayableError(registration.id, 'activity registration is not awaiting payment')
+    }
+
+    const recollection = await new ActivityRecollectionAuthorizationRepository(this.transaction).prepareForPayment({
+      activityRegistrationId: registration.id,
+      amountMinor,
+      currency: registration.currency,
+    })
+    const supersededOnlinePayments = isRefunded
+      ? []
+      : await this.closeUnpresentedOnlineActivityPaymentsForManualCollection(
+          registration.id,
+          input.collectedByEmployeeId,
+        )
+
+    // A refund releases activity-package stock. Re-collecting the old price is
+    // therefore not enough: the original activity/package capacity and every
+    // package component must be held again before a new payment fact exists.
+    // This all runs in the same transaction, so any capacity or stock failure
+    // leaves both the authorization and registration safely refunded.
+    if (isRefunded) await this.reserveActivityRecoveryCapacityAndInventory(registration)
+
+    const reference = requiredEvidenceString(input.evidence, 'receiptReference')
+    const inserted = await this.transaction.query<PaymentRow>(`
+      INSERT INTO mbox.payments(
+        tenant_id,store_id,payable_kind,order_id,activity_registration_id,public_id,
+        provider,provider_transaction_id,method,amount_minor,currency,status,provider_snapshot,succeeded_at
+      ) VALUES (
+        $1::uuid,$2::uuid,'activity_registration',NULL,$3::uuid,$4,$5,$6,$7,$8::bigint,$9,
+        'succeeded',$10::jsonb,clock_timestamp()
+      )
+      RETURNING ${PAYMENT_COLUMNS}
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      registration.id,
+      input.publicId,
+      input.provider,
+      reference,
+      input.method,
+      amountMinor,
+      registration.currency,
+      JSON.stringify(sanitizeProviderSnapshot(input.evidence)),
+    ])
+    const payment = onePayment(inserted, 'Creating an activity manual payment did not insert exactly one row')
+    const linked = await this.transaction.query(`
+      UPDATE mbox.community_activity_registrations
+      SET payment_id=$4::uuid,status='confirmed',payment_status='paid',
+        paid_amount_minor=$5::bigint,amount_due_minor=0,payment_due_at=NULL,
+        seat_hold_expires_at=NULL,cancelled_at=NULL,
+        updated_at=clock_timestamp()
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+        AND (
+          (status='payment_pending' AND payment_status='pending')
+          OR (status='refunded' AND payment_status='refunded')
+        )
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      registration.id,
+      payment.id,
+      amountMinor,
+    ])
+    if (linked.rowCount !== 1) throw new OrderNotPayableError(registration.id, 'activity registration changed while collecting')
+    await this.extendPaidActivityPackageReservationToActivityEnd(registration.id, payment.id)
+    if (isRefunded) {
+      await this.restoreActivityRegistrationContactForRecollection({
+        registrationId: registration.id,
+        registrationCycle: registration.registration_cycle,
+        paymentId: payment.id,
+      })
+    }
+    await new ActivityRecollectionAuthorizationRepository(this.transaction).consume(recollection.authorizationId, payment.id)
+    return { payment, supersededOnlinePayments }
+  }
+
+  /** Re-acquires the original promised package without creating an order. */
+  private async reserveActivityRecoveryCapacityAndInventory(registration: Readonly<{
+    id: string
+    activity_id: string
+    activity_package_id: string | null
+    party_size: number
+    registration_cycle: number
+  }>): Promise<void> {
+    const activity = await this.transaction.query<{
+      id: string; capacity: number; status: string; ends_at: string; registered_count: string | number
+    }>(`
+      SELECT activity.id,activity.capacity,activity.status,activity.ends_at::text,
+        COALESCE((
+          SELECT sum(active_registration.party_size)
+          FROM mbox.community_activity_registrations active_registration
+          WHERE active_registration.tenant_id=activity.tenant_id AND active_registration.store_id=activity.store_id
+            AND active_registration.activity_id=activity.id
+            AND active_registration.status IN ('reserved','payment_pending','confirmed','checked_in')
+        ),0)::text AS registered_count
+      FROM mbox.community_activities activity
+      WHERE activity.tenant_id=$1::uuid AND activity.store_id=$2::uuid AND activity.id=$3::uuid
+      FOR UPDATE OF activity
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, registration.activity_id])
+    const activityRow = activity.rows[0]
+    if (activityRow === undefined || !['published', 'full'].includes(activityRow.status)
+      || new Date(activityRow.ends_at).getTime() <= Date.now()) {
+      throw new ActivityRecollectionAuthorizationConflictError('活动已结束或不再可履约，不能恢复收款')
+    }
+    if (toSafeMinor(activityRow.registered_count, 'active activity registrations') + registration.party_size > activityRow.capacity) {
+      throw new ActivityRecollectionAuthorizationConflictError('活动名额已被后续报名占满，不能恢复收款')
+    }
+    // `registration_cycle` is part of immutable promotion trigger facts.
+    // A corrected cashier collection reopens the same attendance, rather than
+    // manufacturing another attendance cycle and breaking those source facts.
+    if (registration.activity_package_id === null) return
+
+    const packageResult = await this.transaction.query<{
+      id: string; capacity: number; registered_count: string | number
+    }>(`
+      SELECT package.id,package.capacity,COALESCE((
+        SELECT sum(package_registration.party_size)
+        FROM mbox.community_activity_registrations package_registration
+        WHERE package_registration.tenant_id=package.tenant_id AND package_registration.store_id=package.store_id
+          AND package_registration.activity_package_id=package.id
+          AND package_registration.status IN ('reserved','payment_pending','confirmed','checked_in')
+      ),0)::text AS registered_count
+      FROM mbox.community_activity_packages package
+      WHERE package.tenant_id=$1::uuid AND package.store_id=$2::uuid
+        AND package.id=$3::uuid AND package.activity_id=$4::uuid
+      FOR UPDATE OF package
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      registration.activity_package_id,
+      registration.activity_id,
+    ])
+    const packageRow = packageResult.rows[0]
+    if (packageRow === undefined) {
+      throw new ActivityRecollectionAuthorizationConflictError('原活动套餐已不存在，不能恢复收款')
+    }
+    if (toSafeMinor(packageRow.registered_count, 'active package registrations') + registration.party_size > packageRow.capacity) {
+      throw new ActivityRecollectionAuthorizationConflictError('原活动套餐名额已被后续报名占满，不能恢复收款')
+    }
+
+    const components = await this.transaction.query<{
+      id: string; inventory_item_id: string; item_name: string; item_status: string; required_quantity: string
+    }>(`
+      SELECT component.id,component.inventory_item_id,item.name AS item_name,item.status AS item_status,
+        (component.quantity * CASE WHEN component.per_participant THEN $4::numeric ELSE 1::numeric END)::text
+          AS required_quantity
+      FROM mbox.community_activity_package_components component
+      JOIN mbox.inventory_items item
+        ON item.tenant_id=component.tenant_id AND item.store_id=component.store_id
+       AND item.id=component.inventory_item_id
+      WHERE component.tenant_id=$1::uuid AND component.store_id=$2::uuid
+        AND component.activity_package_id=$3::uuid
+      ORDER BY component.inventory_item_id,component.id
+      FOR KEY SHARE OF component,item
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      registration.activity_package_id,
+      registration.party_size,
+    ])
+    for (const component of components.rows) {
+      if (component.item_status !== 'active') {
+        throw new ActivityRecollectionAuthorizationConflictError(`套餐物料“${component.item_name}”当前不可用，不能恢复收款`)
+      }
+      await this.transaction.query(`
+        INSERT INTO mbox.inventory_balances(tenant_id,store_id,inventory_item_id)
+        VALUES($1::uuid,$2::uuid,$3::uuid)
+        ON CONFLICT(tenant_id,store_id,inventory_item_id) DO NOTHING
+      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, component.inventory_item_id])
+      const held = await this.transaction.query(`
+        UPDATE mbox.inventory_balances
+        SET reserved_quantity=reserved_quantity+$4::numeric,updated_at=clock_timestamp()
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND inventory_item_id=$3::uuid
+          AND on_hand_quantity-reserved_quantity>=$4::numeric
+      `, [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        component.inventory_item_id,
+        component.required_quantity,
+      ])
+      if (held.rowCount !== 1) {
+        throw new ActivityRecollectionAuthorizationConflictError(`套餐物料“${component.item_name}”库存不足，不能恢复收款`)
+      }
+      const reservation = await this.transaction.query<{ id: string }>(`
+        INSERT INTO mbox.community_activity_package_inventory_reservations(
+          tenant_id,store_id,registration_id,registration_cycle,package_component_id,
+          inventory_item_id,quantity,status,expires_at
+        ) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,$6::uuid,$7::numeric,'reserved',$8::timestamptz)
+        ON CONFLICT(tenant_id,store_id,registration_id,registration_cycle,package_component_id)
+        DO UPDATE SET
+          inventory_item_id=EXCLUDED.inventory_item_id,quantity=EXCLUDED.quantity,
+          status='reserved',expires_at=EXCLUDED.expires_at,movement_id=NULL,
+          release_reason=NULL,released_at=NULL,consumed_at=NULL,updated_at=clock_timestamp()
+        WHERE mbox.community_activity_package_inventory_reservations.status='released'
+        RETURNING id
+      `, [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        registration.id,
+        registration.registration_cycle,
+        component.id,
+        component.inventory_item_id,
+        component.required_quantity,
+        activityRow.ends_at,
+      ])
+      if (reservation.rowCount !== 1) {
+        throw new ActivityRecollectionAuthorizationConflictError('原活动套餐库存预留状态异常，不能恢复收款')
+      }
+    }
+  }
+
+  /**
+   * Refund processing deliberately inactivates the old-cycle contact purpose.
+   * A confirmed recollection keeps the original attendance cycle, because that
+   * cycle is referenced by immutable promotion facts. Restore the same
+   * protected customer evidence as the next governed contact version; we never
+   * expose or accept contact fields from the cashier request.
+   */
+  private async restoreActivityRegistrationContactForRecollection(input: Readonly<{
+    registrationId: string
+    registrationCycle: number
+    paymentId: string
+  }>): Promise<void> {
+    const copied = await this.transaction.query<{ id: string }>(`
+      WITH prior AS (
+        SELECT contact.*
+        FROM mbox.community_activity_registration_contact_versions contact
+        WHERE contact.tenant_id=$1::uuid AND contact.store_id=$2::uuid
+          AND contact.registration_id=$3::uuid AND contact.registration_cycle=$4
+          AND contact.status='inactive'
+        ORDER BY contact.version DESC,contact.id DESC LIMIT 1
+        FOR SHARE
+      )
+      INSERT INTO mbox.community_activity_registration_contact_versions(
+        tenant_id,store_id,public_id,registration_id,registration_cycle,version,status,
+        supersedes_contact_version_id,contact_type,contact_hash,encrypted_contact,
+        encryption_key_id,masked_contact,contact_source,created_by_customer_id,
+        idempotency_key,request_sha256,captured_at
+      )
+      SELECT $1::uuid,$2::uuid,$5,$3::uuid,$4,prior.version+1,'active',
+        prior.id,prior.contact_type,prior.contact_hash,prior.encrypted_contact,
+        prior.encryption_key_id,prior.masked_contact,prior.contact_source,prior.created_by_customer_id,
+        $6,prior.request_sha256,clock_timestamp()
+      FROM prior
+      RETURNING id
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      input.registrationId,
+      input.registrationCycle,
+      `ACV${randomUUID().replaceAll('-', '').toUpperCase()}`,
+      `activity-recollect-${input.paymentId}`,
+    ])
+    if (copied.rowCount !== 1) {
+      throw new ActivityRecollectionAuthorizationConflictError('原报名联系方式证据不可恢复，不能确认重新收款')
+    }
+  }
+
+  private async closeUnpresentedOnlineActivityPaymentsForManualCollection(
+    activityRegistrationId: string,
+    employeeId: string,
+  ): Promise<ClosedUnpresentedOnlineActivityPayment[]> {
+    const selected = await this.transaction.query<PendingOnlinePaymentRow>(`
+      SELECT payment.id,payment.public_id,payment.provider,payment.provider_transaction_id,
+        provider_action.state AS provider_action_state,
+        (payment.provider_snapshot ? 'providerOrderCreatedAt' OR payment.provider_snapshot ? 'providerOrderId')
+          AS provider_order_created
+      FROM mbox.payments payment
+      LEFT JOIN mbox.payment_provider_actions provider_action
+        ON provider_action.tenant_id=payment.tenant_id AND provider_action.store_id=payment.store_id
+       AND provider_action.payment_id=payment.id
+      WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid
+        AND payment.activity_registration_id=$3::uuid
+        AND payment.provider IN ('wechat','postar') AND payment.status IN ('created','pending')
+      ORDER BY payment.created_at,payment.id FOR UPDATE OF payment
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, activityRegistrationId])
+    if (selected.rows.length === 0) return []
+    const unsafe = selected.rows.find((payment) => (
+      payment.provider_transaction_id !== null || payment.provider_order_created
+      || payment.provider_action_state !== null
+    ))
+    if (unsafe !== undefined) {
+      throw new OrderNotPayableError(activityRegistrationId, 'activity payment has a provider action; query or close it before manual collection')
+    }
+    const ids = selected.rows.map((payment) => payment.id)
+    const closed = await this.transaction.query(`
+      UPDATE mbox.payments
+      SET status='closed',provider_snapshot=provider_snapshot || jsonb_build_object(
+        'providerStatus','closed','closeReason','replaced_by_manual_activity_collection_before_provider_submission',
+        'closedByEmployeeId',$4::uuid,'closedAt',clock_timestamp()::text
+      ),updated_at=clock_timestamp()
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=ANY($3::uuid[])
+        AND status IN ('created','pending')
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, ids, employeeId])
+    if (closed.rowCount !== ids.length) {
+      throw new OrderNotPayableError(activityRegistrationId, 'activity online payment changed while switching to manual collection')
+    }
+    return selected.rows.map((payment) => ({
+      id: payment.id,
+      publicId: payment.public_id,
+      provider: payment.provider,
+      activityRegistrationId,
+    }))
   }
 
   async createForActivityRegistration(
@@ -607,6 +981,7 @@ export class PaymentRepository {
           throw new Error('Activity registration lost its payment confirmation transition')
         }
       }
+      await this.extendPaidActivityPackageReservationToActivityEnd(payment.activityRegistrationId, payment.id)
       return
     }
     if (payment.status === 'failed' || payment.status === 'closed') {
@@ -639,6 +1014,45 @@ export class PaymentRepository {
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
         AND payment_id=$4::uuid AND payment_status='paid'
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, payment.activity_registration_id, paymentId])
+  }
+
+  /**
+   * A pending registration's package stock follows its payment deadline. Once
+   * paid, the same stock must remain held through the activity's fulfilment
+   * window. Terminal or refund-in-flight reservations are deliberately left
+   * untouched; their own workflow remains the only authority to release them.
+   */
+  private async extendPaidActivityPackageReservationToActivityEnd(
+    registrationId: string,
+    paymentId: string,
+  ): Promise<void> {
+    await this.transaction.query(`
+      UPDATE mbox.community_activity_package_inventory_reservations reservation
+      SET expires_at=activity.ends_at,updated_at=clock_timestamp()
+      FROM mbox.community_activity_registrations registration
+      JOIN mbox.community_activities activity
+        ON activity.tenant_id=registration.tenant_id AND activity.store_id=registration.store_id
+       AND activity.id=registration.activity_id
+      WHERE reservation.tenant_id=$1::uuid AND reservation.store_id=$2::uuid
+        AND reservation.registration_id=registration.id
+        AND reservation.registration_cycle=registration.registration_cycle
+        AND reservation.status='reserved'
+        AND reservation.expires_at<activity.ends_at
+        AND registration.id=$3::uuid AND registration.payment_id=$4::uuid
+        AND registration.status='confirmed' AND registration.payment_status='paid'
+        AND activity.ends_at>clock_timestamp()
+        AND NOT EXISTS (
+          SELECT 1 FROM mbox.refunds refund
+          WHERE refund.tenant_id=registration.tenant_id AND refund.store_id=registration.store_id
+            AND refund.payment_id=registration.payment_id
+            AND refund.status IN ('requested','approved','processing')
+        )
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      registrationId,
+      paymentId,
+    ])
   }
 
   private async lockPayable(reference: Readonly<{
@@ -775,9 +1189,52 @@ function validateCreateInput(input: Readonly<CreatePaymentForOrderInput>): void 
     if (input.initialStatus !== 'succeeded') {
       throw new PaymentEvidenceError('Physical POS payments must be recorded as already collected')
     }
+  } else if (input.provider === 'external_manual') {
+    if (input.method !== 'manual') {
+      throw new PaymentEvidenceError('External manual payments must use the manual method')
+    }
+    requireEvidence(
+      evidence,
+      ['externalMethodCode', 'receiptReference', 'collectionNote', 'collectedByEmployeeId'],
+      'external manual payment',
+    )
+    if (input.initialStatus !== 'succeeded') {
+      throw new PaymentEvidenceError('External manual payments must be recorded as already collected')
+    }
   } else if (input.method === 'cash' || input.method === 'card') {
     throw new PaymentEvidenceError('Online providers cannot use cash or card manual methods')
   }
+}
+
+function validateManualActivityInput(input: Readonly<RecordManualPaymentForActivityRegistrationInput>): void {
+  nonBlank('registrationPublicId', input.registrationPublicId)
+  nonBlank('collectedByEmployeeId', input.collectedByEmployeeId)
+  if (input.publicId.length < 8 || input.publicId.length > 128) {
+    throw new TypeError('publicId must contain between 8 and 128 characters')
+  }
+  if (input.evidence.collectedByEmployeeId !== input.collectedByEmployeeId) {
+    throw new PaymentEvidenceError('Activity payment collector must match the acting employee')
+  }
+  if (input.provider === 'cash') {
+    if (input.method !== 'cash') throw new PaymentEvidenceError('Cash payments must use the cash method')
+    requireEvidence(input.evidence, ['receiptReference', 'collectedByEmployeeId'], 'cash')
+    return
+  }
+  if (input.provider === 'physical_pos') {
+    if (input.method !== 'card' && input.method !== 'manual') {
+      throw new PaymentEvidenceError('Physical POS payments must use card or manual method')
+    }
+    requireEvidence(input.evidence, ['terminalId', 'receiptReference', 'collectedByEmployeeId'], 'physical POS')
+    return
+  }
+  if (input.method !== 'manual') {
+    throw new PaymentEvidenceError('External manual payments must use the manual method')
+  }
+  requireEvidence(
+    input.evidence,
+    ['externalMethodCode', 'receiptReference', 'collectionNote', 'collectedByEmployeeId'],
+    'external manual payment',
+  )
 }
 
 function validateCallbackInput(input: Readonly<ApplyPaymentCallbackInput>): void {
@@ -801,6 +1258,14 @@ function requireEvidence(evidence: JsonObject, keys: readonly string[], label: s
       throw new PaymentEvidenceError(`${label} evidence requires ${key}`)
     }
   }
+}
+
+function requiredEvidenceString(evidence: JsonObject, key: string): string {
+  const value = evidence[key]
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new PaymentEvidenceError(`payment evidence requires ${key}`)
+  }
+  return value.trim()
 }
 
 function onePayment(

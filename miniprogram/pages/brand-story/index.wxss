@@ -1,0 +1,16 @@
+.story-article-page { min-height: 100vh; background: #f7f4ef; }
+.story-article-scroll { height: 100vh; }
+.story-article { padding: 56rpx 38rpx calc(72rpx + env(safe-area-inset-bottom)); color: #39342e; }
+.story-article__eyebrow,.story-article__title,.story-article__lead,.story-article__heading,.story-article__paragraph,.story-article__signoff text,.story-article__note { display: block; }
+.story-article__eyebrow { color: #8b765e; font-size: 19rpx; font-weight: 700; letter-spacing: 3rpx; }
+.story-article__title { margin-top: 18rpx; font-family: "Songti SC","STSong",serif; font-size: 48rpx; font-weight: 650; line-height: 1.34; }
+.story-article__lead { margin-top: 18rpx; color: #756c63; font-size: 25rpx; line-height: 1.65; }
+.story-article__section { margin-top: 54rpx; }
+.story-article__heading { margin-bottom: 18rpx; font-family: "Songti SC","STSong",serif; font-size: 33rpx; font-weight: 650; line-height: 1.35; }
+.story-article__paragraph { margin-top: 18rpx; color: #514b44; font-size: 28rpx; line-height: 1.9; text-align: justify; }
+.story-article__signoff { margin-top: 54rpx; padding: 28rpx; border: 1rpx solid #ddd5ca; border-radius: 18rpx; background: #eee8de; }
+.story-article__signoff text:first-child { color: #453e37; font-family: "Songti SC","STSong",serif; font-size: 31rpx; font-weight: 650; }
+.story-article__signoff text:last-child { margin-top: 8rpx; color: #7d746b; font-size: 21rpx; letter-spacing: .8rpx; }
+.story-article__note { margin-top: 30rpx; color: #8a8178; font-size: 21rpx; line-height: 1.65; }
+.story-article__close { width: 100%; min-height: 88rpx; margin-top: 42rpx; border: 1rpx solid #cfc5b9; border-radius: 44rpx; background: #fffdfa; color: #4b443d; font-size: 27rpx; line-height: 86rpx; }
+.story-article__close::after { border: 0; }

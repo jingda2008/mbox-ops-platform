@@ -2,7 +2,7 @@ import { createElement } from 'react'
 import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import { ActionList, StaffActionsPanel } from './StaffActionsPanel'
+import { ActionList, filterMemberBenefitTasks, memberBenefitTaskCount, normalizeMemberBenefitScanCode, prioritizeActionFact, StaffActionsPanel } from './StaffActionsPanel'
 import type { StaffActionsApiPort } from './staff-actions-api'
 import type { StaffFulfillmentData, StaffOperationsData, StaffReservation } from './types'
 
@@ -48,5 +48,49 @@ describe('StaffActionsPanel', () => {
 
     expect(html).toContain('当前没有需要制作或配送的出品')
     expect(html).toContain('staff-actions-empty')
+  })
+
+  it('keeps service and fulfillment cards focusable and targets an exact blocker fact', () => {
+    const source = readFileSync(new URL('./StaffActionsPanel.tsx', import.meta.url), 'utf8')
+
+    expect(source).toContain('data-action-fact-id={task.id}')
+    expect(source).toContain('data-action-fact-id={item.taskId}')
+    expect(source).toContain('initialFactId===null')
+    expect(source).toContain('scrollIntoView')
+    expect(source).toContain("closest('button,input,select,textarea,a')")
+    expect(source).toContain("['Enter',' '].includes(event.key)")
+  })
+
+  it('keeps a routed blocker fact visible even when it ranks below the first eight actions', () => {
+    const actions = Array.from({ length: 12 }, (_, index) => ({ id: `task-${index + 1}` }))
+
+    expect(prioritizeActionFact(actions, 'task-10', (item) => item.id).map((item) => item.id)).toEqual([
+      'task-10', 'task-1', 'task-2', 'task-3', 'task-4', 'task-5', 'task-6', 'task-7',
+    ])
+  })
+
+  it('keeps member benefit holds visible on tasks and table scope and supports member-code lookup', () => {
+    const tasks = {
+      annualGifts: [{
+        reservationId:'gift-1',benefitId:'benefit-1',customerId:'customer-1',tableSessionId:'session-1',
+        tableCode:'A01',memberNo:'MBX-1001',customerName:'王女士',ruleKind:'birthday' as const,title:'生日礼遇',
+        quantity:1,reservedAt:'2026-08-25T01:00:00Z',expiresAt:'2026-08-25T01:15:00Z',
+        originalProductId:'product-1',originalProductName:'无酒精特调',allowedProducts:[],
+      }],
+      dailySnacks: [{
+        id:'snack-1',claimCode:'DSN-ABCDEFGHIJ',benefitId:'benefit-2',benefitReservationId:'reservation-2',
+        quantity:1,status:'reserved' as const,expiresAt:'2026-08-25T01:15:00Z',redeemedByEmployeeName:null,
+        redeemedAt:null,fulfilledAt:null,title:'每日点心',tableCode:'B02',tableSessionId:'session-2',memberNo:'MBX-2002',
+      }],
+    }
+
+    expect(memberBenefitTaskCount(filterMemberBenefitTasks(tasks,'MBX-1001'))).toBe(1)
+    expect(normalizeMemberBenefitScanCode('MBOX_MEMBER_V1:MBX-1001')).toBe('MBX-1001')
+    expect(filterMemberBenefitTasks(tasks,'MBOX_CLAIM_V1:DSN-ABCDEFGHIJ').dailySnacks).toHaveLength(1)
+    expect(filterMemberBenefitTasks(tasks,'', 'session-2').dailySnacks[0]?.claimCode).toBe('DSN-ABCDEFGHIJ')
+    const source = readFileSync(new URL('./StaffActionsPanel.tsx', import.meta.url), 'utf8')
+    expect(source).toContain('扫描会员码或点心核销码')
+    expect(source).toContain('会员权益待办')
+    expect(source).toContain('selectedTable.activeSession.id')
   })
 })

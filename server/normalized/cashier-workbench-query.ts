@@ -4,6 +4,7 @@ import type {
   CashierPaymentStatus as PaymentStatus,
   CashierRefundStatus as RefundStatus,
   CashierWorkbenchItem,
+  CashierWorkbenchActivityRegistration,
   CashierWorkbenchKdsStatus,
   CashierWorkbenchKdsTask,
   CashierWorkbenchOrder,
@@ -102,6 +103,57 @@ interface SettlementExceptionRow extends Record<string, unknown> {
   occurred_at: string
 }
 
+interface RecollectionAuthorizationRow extends Record<string, unknown> {
+  id: string
+  order_id: string
+  amount_minor: string | number
+  expires_at: string
+}
+
+interface ActivityRegistrationRow extends Record<string, unknown> {
+  id: string
+  public_id: string
+  activity_public_id: string
+  activity_title: string
+  starts_at: string
+  party_size: number
+  status: string
+  payment_status: string
+  amount_due_minor: string | number
+  paid_amount_minor: string | number
+  currency: string
+  payment_id: string | null
+  payment_public_id: string | null
+  payment_provider: PaymentProvider | null
+  payment_method: PaymentMethod | null
+  payment_provider_transaction_id: string | null
+  payment_provider_action_state: CashierWorkbenchPayment['providerActionState']
+  payment_amount_minor: string | number | null
+  payment_currency: string | null
+  payment_status_value: PaymentStatus | null
+  payment_succeeded_at: string | null
+  payment_created_at: string | null
+  refund_id: string | null
+  refund_public_id: string | null
+  refund_provider_refund_id: string | null
+  refund_amount_minor: string | number | null
+  refund_currency: string | null
+  refund_status: RefundStatus | null
+  refund_provider_submission_state: CashierWorkbenchRefund['providerSubmissionState'] | null
+  refund_reason: string | null
+  refund_requested_by_employee_id: string | null
+  refund_requested_by_employee_name: string | null
+  refund_approved_by_employee_id: string | null
+  refund_approved_by_employee_name: string | null
+  refund_decision_reason: string | null
+  refund_receipt_reference: string | null
+  refund_completed_at: string | null
+  refund_created_at: string | null
+  recollection_authorization_id: string | null
+  recollection_authorization_amount_minor: string | number | null
+  recollection_authorization_expires_at: string | null
+}
+
 const CAPTURED_PAYMENT_STATUSES: readonly PaymentStatus[] = [
   'succeeded',
   'partially_refunded',
@@ -119,7 +171,20 @@ const WORKBENCH_CAPABILITIES = [
   'payment.settlement.view',
   'payment.manual.cash.record',
   'payment.manual.pos.record',
+  'payment.manual.external.record',
   'refund.request',
+  'refund.approve',
+  'refund.execute',
+  'payment.recollect.authorize',
+  'community.activity.cashier',
+  'business_day.close',
+] as const
+
+const STORE_WIDE_WORKBENCH_CAPABILITIES = [
+  'reconciliation.view',
+  'reconciliation.manage',
+  'payment.settlement.view',
+  'payment.collect.all_tables',
   'refund.approve',
   'refund.execute',
   'business_day.close',
@@ -131,6 +196,10 @@ export class PostgresCashierWorkbenchQuery {
   get(input: Readonly<CashierWorkbenchQueryInput>): Promise<CashierWorkbenchView> {
     validateInput(input)
     const normalizedQuery = input.query?.trim() ?? ''
+    const canViewStoreWide = STORE_WIDE_WORKBENCH_CAPABILITIES.some((capability) =>
+      input.capabilities.includes(capability),
+    )
+    const canUseActivityCashier = input.capabilities.includes('community.activity.cashier')
     return this.transactions.run(input.scope, async (transaction) => {
       const orderResult = await transaction.query<OrderRow>(`
         SELECT orders.id, orders.public_id, table_row.code AS table_code,
@@ -180,6 +249,27 @@ export class PostgresCashierWorkbenchQuery {
             ))
           )
           AND orders.status <> 'draft'
+          AND EXISTS (
+            SELECT 1 FROM mbox.employees AS workbench_employee
+            WHERE workbench_employee.tenant_id=orders.tenant_id
+              AND workbench_employee.store_id=orders.store_id
+              AND workbench_employee.id=$6::uuid
+              AND workbench_employee.status='active'
+              AND (
+                $7::boolean
+                OR EXISTS (
+                  SELECT 1 FROM mbox.table_assignments AS workbench_assignment
+                  WHERE workbench_assignment.tenant_id=session.tenant_id
+                    AND workbench_assignment.store_id=session.store_id
+                    AND workbench_assignment.table_id=session.table_id
+                    AND workbench_assignment.employee_id=workbench_employee.id
+                    AND workbench_assignment.assignment_type IN ('primary','backup')
+                    AND workbench_assignment.starts_at<=clock_timestamp()
+                    AND (workbench_assignment.ends_at IS NULL
+                      OR workbench_assignment.ends_at>clock_timestamp())
+                )
+              )
+          )
           AND (
             $4::text = ''
             OR orders.public_id ILIKE '%' || $4 || '%'
@@ -219,9 +309,112 @@ export class PostgresCashierWorkbenchQuery {
         input.businessDate,
         normalizedQuery,
         input.limit,
+        input.employeeId,
+        canViewStoreWide,
       ])
+      const activityResult = canUseActivityCashier
+        ? await transaction.query<ActivityRegistrationRow>(`
+            SELECT registration.id,registration.public_id,
+              activity.public_id AS activity_public_id,activity.title AS activity_title,
+              activity.starts_at::text,registration.party_size,registration.status,registration.payment_status,
+              registration.amount_due_minor,registration.paid_amount_minor,registration.currency,
+              payment.id AS payment_id,payment.public_id AS payment_public_id,
+              payment.provider AS payment_provider,payment.method AS payment_method,
+              payment.provider_transaction_id AS payment_provider_transaction_id,
+              provider_action.state AS payment_provider_action_state,
+              payment.amount_minor AS payment_amount_minor,payment.currency AS payment_currency,
+              payment.status AS payment_status_value,payment.succeeded_at::text AS payment_succeeded_at,
+              payment.created_at::text AS payment_created_at,
+              refund.id AS refund_id,refund.public_id AS refund_public_id,
+              refund.provider_refund_id AS refund_provider_refund_id,refund.amount_minor AS refund_amount_minor,
+              refund.currency AS refund_currency,refund.status AS refund_status,
+              refund.provider_submission_state AS refund_provider_submission_state,refund.reason AS refund_reason,
+              refund.requested_by_employee_id AS refund_requested_by_employee_id,
+              requester.display_name AS refund_requested_by_employee_name,
+              refund.approved_by_employee_id AS refund_approved_by_employee_id,
+              approver.display_name AS refund_approved_by_employee_name,
+              refund.decision_reason AS refund_decision_reason,
+              NULLIF(refund.provider_snapshot ->> 'receiptReference','') AS refund_receipt_reference,
+              refund.completed_at::text AS refund_completed_at,refund.created_at::text AS refund_created_at,
+              recollection.id AS recollection_authorization_id,
+              recollection.amount_minor AS recollection_authorization_amount_minor,
+              recollection.expires_at::text AS recollection_authorization_expires_at
+            FROM mbox.community_activity_registrations registration
+            JOIN mbox.community_activities activity
+              ON activity.tenant_id=registration.tenant_id AND activity.store_id=registration.store_id
+             AND activity.id=registration.activity_id
+            LEFT JOIN mbox.payments payment
+              ON payment.tenant_id=registration.tenant_id AND payment.store_id=registration.store_id
+             AND payment.id=registration.payment_id
+            LEFT JOIN mbox.payment_provider_actions provider_action
+              ON provider_action.tenant_id=payment.tenant_id AND provider_action.store_id=payment.store_id
+             AND provider_action.payment_id=payment.id
+            LEFT JOIN LATERAL (
+              SELECT candidate.* FROM mbox.refunds candidate
+              WHERE candidate.tenant_id=registration.tenant_id AND candidate.store_id=registration.store_id
+                AND candidate.payment_id=registration.payment_id
+              ORDER BY candidate.created_at DESC,candidate.id DESC LIMIT 1
+            ) refund ON true
+            LEFT JOIN mbox.employees requester
+              ON requester.tenant_id=refund.tenant_id AND requester.store_id=refund.store_id
+             AND requester.id=refund.requested_by_employee_id
+            LEFT JOIN mbox.employees approver
+              ON approver.tenant_id=refund.tenant_id AND approver.store_id=refund.store_id
+             AND approver.id=refund.approved_by_employee_id
+            LEFT JOIN LATERAL (
+              SELECT recollection_authorization.*
+              FROM mbox.activity_registration_recollection_authorizations recollection_authorization
+              WHERE recollection_authorization.tenant_id=registration.tenant_id
+                AND recollection_authorization.store_id=registration.store_id
+                AND recollection_authorization.activity_registration_id=registration.id
+                AND recollection_authorization.status='active'
+                AND recollection_authorization.expires_at>clock_timestamp()
+              ORDER BY recollection_authorization.created_at DESC,recollection_authorization.id DESC LIMIT 1
+            ) recollection ON true
+            WHERE registration.tenant_id=$1::uuid AND registration.store_id=$2::uuid
+              AND (
+                EXISTS (
+                  SELECT 1 FROM mbox.reconciliation_entries activity_reconciliation
+                  WHERE activity_reconciliation.tenant_id=registration.tenant_id
+                    AND activity_reconciliation.store_id=registration.store_id
+                    AND activity_reconciliation.payment_id=registration.payment_id
+                    AND activity_reconciliation.business_date=$3::date
+                )
+                OR registration.status='payment_pending'
+                OR registration.payment_status IN ('pending','refunded')
+                OR refund.status IN ('requested','approved','processing')
+                OR recollection.id IS NOT NULL
+                -- A deliberate cashier lookup may retrieve an older completed
+                -- activity payment for refund handling; routine loads remain
+                -- constrained to daily reconciliation and unresolved facts.
+                OR $4::text <> ''
+              )
+              AND (
+                $4::text=''
+                OR registration.public_id ILIKE '%' || $4 || '%'
+                OR activity.public_id ILIKE '%' || $4 || '%'
+                OR activity.title ILIKE '%' || $4 || '%'
+                OR payment.public_id ILIKE '%' || $4 || '%'
+                OR refund.public_id ILIKE '%' || $4 || '%'
+                OR refund.provider_refund_id ILIKE '%' || $4 || '%'
+              )
+            ORDER BY (registration.status='payment_pending') DESC,
+              COALESCE(payment.succeeded_at,registration.created_at) DESC,registration.id DESC
+            LIMIT $5
+          `, [
+            input.scope.tenantId,
+            input.scope.storeId,
+            input.businessDate,
+            normalizedQuery,
+            input.limit,
+          ])
+        : { rows: [] as ActivityRegistrationRow[] }
       const orderIds = orderResult.rows.map((row) => row.id)
-      if (orderIds.length === 0) return emptyView(input, normalizedQuery)
+      if (orderIds.length === 0) {
+        return assembleView(
+          input, normalizedQuery, [], [], [], [], [], [], [], [], activityResult.rows,
+        )
+      }
 
       const itemResult = await transaction.query<ItemRow>(`
           SELECT item.id, item.order_id,
@@ -314,6 +507,13 @@ export class PostgresCashierWorkbenchQuery {
           WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND order_id=ANY($3::uuid[])
           ORDER BY occurred_at,id
         `, [input.scope.tenantId, input.scope.storeId, orderIds])
+      const recollectionResult = await transaction.query<RecollectionAuthorizationRow>(`
+          SELECT id,order_id,amount_minor,expires_at::text
+          FROM mbox.order_recollection_authorizations
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND order_id=ANY($3::uuid[])
+            AND status='active' AND expires_at>clock_timestamp()
+          ORDER BY created_at DESC,id DESC
+        `, [input.scope.tenantId, input.scope.storeId, orderIds])
 
       return assembleView(
         input,
@@ -325,6 +525,8 @@ export class PostgresCashierWorkbenchQuery {
         allocationResult.rows,
         kdsResult.rows,
         settlementExceptionResult.rows,
+        recollectionResult.rows,
+        activityResult.rows,
       )
     }, { readOnly: true })
   }
@@ -340,6 +542,8 @@ function assembleView(
   allocationRows: readonly RefundAllocationRow[],
   kdsTaskRows: readonly KdsTaskRow[],
   settlementExceptionRows: readonly SettlementExceptionRow[],
+  recollectionRows: readonly RecollectionAuthorizationRow[],
+  activityRows: readonly ActivityRegistrationRow[],
 ): CashierWorkbenchView {
   const orderById = new Map(orderRows.map((order) => [order.id, order]))
   const itemsByOrder = group(itemRows, (row) => row.order_id)
@@ -348,6 +552,7 @@ function assembleView(
   const allocationsByRefund = group(allocationRows, (row) => row.refund_id)
   const kdsByOrderItem = group(kdsTaskRows, (row) => row.refundable_order_item_id)
   const settlementExceptionByOrder = new Map(settlementExceptionRows.map((row) => [row.order_id, row]))
+  const recollectionByOrder = new Map(recollectionRows.map((row) => [row.order_id, row]))
   const succeededRefundAmountByItem = new Map<string, number>()
   const succeededRefundIds = new Set(refundRows.filter((refund) => refund.status === 'succeeded').map((refund) => refund.id))
   for (const allocation of allocationRows) {
@@ -437,6 +642,13 @@ function assembleView(
             occurredAt: settlementExceptionByOrder.get(order.id)!.occurred_at,
           }
         : null,
+      recollectionAuthorization: recollectionByOrder.has(order.id)
+        ? {
+            id: recollectionByOrder.get(order.id)!.id,
+            amountMinor: asSafeMinor(recollectionByOrder.get(order.id)!.amount_minor, 'recollection authorization amount'),
+            expiresAt: recollectionByOrder.get(order.id)!.expires_at,
+          }
+        : null,
       items,
       kdsTasks: items.flatMap((item): CashierWorkbenchKdsTask[] => (
         (kdsByOrderItem.get(item.id) ?? []).map((task) => ({
@@ -451,6 +663,7 @@ function assembleView(
       payments,
     }
   })
+  const activityRegistrations = activityRows.map(mapActivityRegistration)
   return {
     businessDate: input.businessDate,
     query,
@@ -464,36 +677,37 @@ function assembleView(
       carryoverPendingPaymentCount: paymentRows.filter((payment) => (
         payment.status === 'created' || payment.status === 'pending'
       ) && (orderById.get(payment.order_id)?.business_date ?? input.businessDate) < input.businessDate).length,
+      activityPendingPaymentCount: activityRegistrations.filter((registration) => (
+        registration.status === 'payment_pending' || registration.paymentStatus === 'pending'
+      )).length,
+      activityRequestedRefundCount: activityRegistrations.filter((registration) => (
+        registration.payment?.refunds.some((refund) => refund.status === 'requested')
+      )).length,
+      activityProcessingRefundCount: activityRegistrations.filter((registration) => (
+        registration.payment?.refunds.some((refund) => (
+          refund.status === 'approved' || refund.status === 'processing'
+        ))
+      )).length,
     },
     orders,
-  }
-}
-
-function emptyView(input: Readonly<CashierWorkbenchQueryInput>, query: string): CashierWorkbenchView {
-  return {
-    businessDate: input.businessDate,
-    query,
-    actions: actions(input.capabilities),
-    summary: {
-      orderCount: 0,
-      capturedPaymentCount: 0,
-      requestedRefundCount: 0,
-      processingRefundCount: 0,
-      carryoverOrderCount: 0,
-      carryoverPendingPaymentCount: 0,
-    },
-    orders: [],
+    activityRegistrations,
   }
 }
 
 function actions(capabilities: readonly string[]) {
   const set = new Set(capabilities)
   return {
+    canInitiateOnlinePayment: set.has('payment.initiate.staff'),
+    canQueryOnlinePayment: set.has('payment.query'),
+    onlinePaymentProvider: null,
     canRecordManualCash: set.has('payment.manual.cash.record'),
     canRecordManualPos: set.has('payment.manual.pos.record'),
+    canRecordManualExternal: set.has('payment.manual.external.record'),
     canRequestRefund: set.has('refund.request'),
     canApproveRefund: set.has('refund.approve'),
     canExecuteRefund: set.has('refund.execute'),
+    canAuthorizeRecollection: set.has('payment.recollect.authorize'),
+    canUseActivityCashier: set.has('community.activity.cashier'),
     canViewReconciliation: set.has('reconciliation.view'),
     canManageKdsException: set.has('kds.exception.manage'),
   }
@@ -536,6 +750,101 @@ function mapRefund(
       amountMinor: asSafeMinor(allocation.amount_minor, 'refund allocation amount'),
     })),
   }
+}
+
+function mapActivityRegistration(row: ActivityRegistrationRow): CashierWorkbenchActivityRegistration {
+  return {
+    id: row.id,
+    publicId: row.public_id,
+    activityPublicId: row.activity_public_id,
+    activityTitle: row.activity_title,
+    startsAt: row.starts_at,
+    partySize: row.party_size,
+    status: row.status,
+    paymentStatus: row.payment_status,
+    amountDueMinor: asSafeMinor(row.amount_due_minor, 'activity amount due'),
+    paidAmountMinor: asSafeMinor(row.paid_amount_minor, 'activity paid amount'),
+    currency: row.currency,
+    payment: row.payment_id === null ? null : mapActivityPayment(row),
+    recollectionAuthorization: row.recollection_authorization_id === null
+      ? null
+      : {
+          id: row.recollection_authorization_id,
+          amountMinor: asSafeMinor(
+            requireMinor(row.recollection_authorization_amount_minor, 'activity recollection authorization amount'),
+            'activity recollection authorization amount',
+          ),
+          expiresAt: requireText(row.recollection_authorization_expires_at, 'activity recollection authorization expiry'),
+        },
+  }
+}
+
+function mapActivityPayment(row: ActivityRegistrationRow): CashierWorkbenchPayment {
+  const id = requireText(row.payment_id, 'activity payment id')
+  const amountMinor = asSafeMinor(requireMinor(row.payment_amount_minor, 'activity payment amount'), 'activity payment amount')
+  const status = requireValue(row.payment_status_value, 'activity payment status')
+  const refunds: CashierWorkbenchRefund[] = row.refund_id === null
+    ? []
+    : [{
+        id: row.refund_id,
+        publicId: requireText(row.refund_public_id, 'activity refund public id'),
+        paymentId: id,
+        providerRefundId: row.refund_provider_refund_id,
+        amountMinor: asSafeMinor(requireMinor(row.refund_amount_minor, 'activity refund amount'), 'activity refund amount'),
+        currency: requireText(row.refund_currency, 'activity refund currency'),
+        status: requireValue(row.refund_status, 'activity refund status'),
+        providerSubmissionState: requireValue(
+          row.refund_provider_submission_state,
+          'activity refund provider submission state',
+        ),
+        reason: requireText(row.refund_reason, 'activity refund reason'),
+        requestedByEmployeeId: requireText(row.refund_requested_by_employee_id, 'activity refund requester'),
+        requestedByEmployeeName: row.refund_requested_by_employee_name ?? '已离职员工',
+        approvedByEmployeeId: row.refund_approved_by_employee_id,
+        approvedByEmployeeName: row.refund_approved_by_employee_name,
+        decisionReason: row.refund_decision_reason,
+        receiptReference: row.refund_receipt_reference,
+        completedAt: row.refund_completed_at,
+        createdAt: requireText(row.refund_created_at, 'activity refund created time'),
+        allocations: [],
+      }]
+  const reservedRefundAmountMinor = sumMinor(refunds
+    .filter((refund) => RESERVING_REFUND_STATUSES.includes(refund.status))
+    .map((refund) => refund.amountMinor))
+  return {
+    id,
+    publicId: requireText(row.payment_public_id, 'activity payment public id'),
+    provider: requireValue(row.payment_provider, 'activity payment provider'),
+    method: requireValue(row.payment_method, 'activity payment method'),
+    providerTransactionId: row.payment_provider_transaction_id,
+    providerActionState: row.payment_provider_action_state,
+    amountMinor,
+    currency: requireText(row.payment_currency, 'activity payment currency'),
+    status,
+    succeededAt: row.payment_succeeded_at,
+    createdAt: requireText(row.payment_created_at, 'activity payment created time'),
+    reservedRefundAmountMinor,
+    remainingRefundableMinor: CAPTURED_PAYMENT_STATUSES.includes(status)
+      ? Math.max(0, amountMinor - reservedRefundAmountMinor)
+      : 0,
+    refundableItems: [],
+    refunds,
+  }
+}
+
+function requireText(value: string | null, label: string): string {
+  if (value === null || value.length === 0) throw new RangeError(`${label} is missing`)
+  return value
+}
+
+function requireMinor(value: string | number | null, label: string): string | number {
+  if (value === null) throw new RangeError(`${label} is missing`)
+  return value
+}
+
+function requireValue<T>(value: T | null, label: string): T {
+  if (value === null) throw new RangeError(`${label} is missing`)
+  return value
 }
 
 function group<Row>(rows: readonly Row[], key: (row: Row) => string): Map<string, Row[]> {

@@ -132,6 +132,10 @@ Page({
         scheduledAtText: dateTime(item.arrivalAt),
         partySize: item.guestCount,
         seatName: (this.data.seatOptions.find((option) => option.code === item.seatPreference) || this.data.seatOptions[0]).name,
+        priorityBooking: item.priorityBooking || null,
+        priorityText: item.priorityBooking
+          ? '已按会员优先订座规则进入安排队列；以现场可用座位为准，不承诺固定桌位。'
+          : '',
         active: true,
         performanceImpact: pendingByReservation.get(item.publicId) || null,
         performanceNotificationOption: notificationByReservation.get(item.publicId) || null,

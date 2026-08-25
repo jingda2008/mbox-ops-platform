@@ -4,8 +4,10 @@ export type StaffActionPermission =
   | 'table.transfer'
   | 'table.participation.manage'
   | 'table.assignment.manage'
+  | 'guest.cart.freeze'
   | 'order.create'
   | 'order.gift'
+  | 'payment.initiate.staff'
   | 'service.execute'
   | 'observation.record'
   | 'recommendation.staff.modify'
@@ -25,6 +27,7 @@ export interface StaffActionTableSession {
   guestCount: number
   capacityAtOpen: number
   guestProfileSnapshot?: Record<string, unknown>
+  guestCartWritesFrozen: boolean
   status: 'open' | 'closing'
   openedAt: string
   latestMood: null | {
@@ -169,7 +172,7 @@ export interface StaffParticipantMovementPreview {
 }
 
 export type FulfillmentStation = 'bar' | 'kitchen' | 'cashier'
-export type FulfillmentStatus = 'pending' | 'accepted' | 'preparing' | 'ready'
+export type FulfillmentStatus = 'pending' | 'accepted' | 'preparing' | 'ready' | 'failed'
 
 export interface StaffFulfillmentItem {
   taskId: string
@@ -182,6 +185,7 @@ export interface StaffFulfillmentItem {
   readyForDelivery: boolean
   canPrepare: boolean
   canDeliver: boolean
+  canRemake: boolean
   dueAt: string | null
   nextActionAt: string
   createdAt: string
@@ -213,6 +217,52 @@ export interface StaffFulfillmentData {
   workItems: StaffFulfillmentItem[]
 }
 
+export interface StaffAnnualGiftReservation {
+  reservationId: string
+  benefitId: string
+  customerId: string
+  tableSessionId: string
+  tableCode: string
+  memberNo: string | null
+  customerName: string | null
+  ruleKind: 'birthday' | 'festival'
+  title: string
+  quantity: number
+  reservedAt: string
+  expiresAt: string
+  originalProductId: string
+  originalProductName: string
+  allowedProducts: Array<{
+    productId: string
+    name: string
+    isOriginal: boolean
+    configuredReason: string | null
+  }>
+}
+
+export interface StaffDailySnackClaim {
+  id: string
+  claimCode: string
+  benefitId: string | null
+  benefitReservationId: string | null
+  quantity: number
+  status: 'reserved' | 'redeemed' | 'fulfilled' | 'cancelled' | 'expired' | 'cancelled_after_redemption' | 'compensated'
+  expiresAt: string | null
+  redeemedByEmployeeName: string | null
+  redeemedAt: string | null
+  fulfilledAt: string | null
+  title: string
+  tableCode?: string
+  tableSessionId?: string
+  memberNo?: string | null
+  customerName?: string | null
+}
+
+export interface StaffMemberBenefitTasks {
+  annualGifts: StaffAnnualGiftReservation[]
+  dailySnacks: StaffDailySnackClaim[]
+}
+
 export type StaffReservationStatus =
   | 'pending'
   | 'confirmed'
@@ -240,6 +290,19 @@ export interface StaffReservation {
     tableDisplayName: string
     status: 'held' | 'confirmed' | 'released' | 'expired' | 'cancelled'
   }>
+}
+
+export interface StaffReservationIntakeEntry {
+  kind: 'reservation' | 'waitlist'
+  publicId: string
+  customerName: string
+  maskedContact: string
+  guestCount: number
+  arrivalAt: string
+  status: string
+  tableCodes: string[]
+  priorityBooking: { requestHoldMinutes: number } | null
+  queueOverride: { mode: 'promote' | 'demote' | 'clear'; reason: string; createdAt: string } | null
 }
 
 export type StaffActionNotice = {

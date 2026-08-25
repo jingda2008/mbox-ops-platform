@@ -15,6 +15,7 @@ import {
   ShieldCheck,
 } from 'lucide-react'
 import { NormalizedApiClient, NormalizedApiError, type StaffAuthView } from '../normalized-api'
+import type { BusinessDayBlockerFact, BusinessDayNavigationContext } from '../shared/business-day-closure-contracts'
 import { CashierAfterSalesWorkbench } from './CashierAfterSalesWorkbench'
 import { CatalogManagementPanel } from './CatalogManagementPanel'
 import { VenueManagementPanel } from './VenueManagementPanel'
@@ -30,7 +31,10 @@ import { PerformanceRevisionPanel } from './PerformanceRevisionPanel'
 import { InventoryBarcodeScanner } from './InventoryBarcodeScanner'
 import './staff-module-panel.css'
 
-export type StaffModule = 'payments' | 'performance' | 'inventory' | 'operations' | 'experience' | 'devices' | 'settings'
+export type StaffModule = 'payments' | 'performance' | 'inventory' | 'operations' | 'experience'
+  | 'member-fulfillment' | 'member-exceptions' | 'member-overview' | 'member-rule-drafts'
+  | 'member-rule-approvals' | 'member-rule-publish' | 'member-accounts' | 'member-management'
+  | 'devices' | 'settings'
 
 interface ScheduleEntry extends Record<string, unknown> {
   id: string
@@ -115,6 +119,45 @@ interface PurchaseReceiptCommandView {
   receivedAt: string | null
 }
 
+interface InventoryPublishProduct {
+  id: string
+  name: string
+  code: string
+  status: string
+  inventoryControlMode: string
+  productKind: string
+  salesSpecificationType: InventorySalesSpecificationType
+}
+
+type InventorySalesSpecificationType = 'whole_bottle' | 'glass' | 'shot' | 'cocktail' | 'custom'
+
+interface InventoryPublishPreview {
+  receiptId: string
+  productId: string
+  productName: string
+  salesSpecificationType: InventorySalesSpecificationType
+  recipeId: string
+  recipeVersion: number
+  yieldQuantity: number
+  costAmountMinor: number
+  standardPriceMinor: number
+  grossProfitMinor: number
+  marginBasisPoints: number
+  sellableServings: number
+  guestVisible: boolean
+  allowedChannels: string[]
+  components: Array<{
+    inventoryItemId: string
+    itemName: string
+    baseUnit: string
+    totalAvailableAfterReceipt: string
+    incomingQuantity: string
+    perServingDeduction: string
+    sourceUnitCostMinor: string
+    perServingCostMinor: string
+  }>
+}
+
 interface InventoryView {
   items: InventoryItemView[]
   lowStockCount: number
@@ -174,9 +217,11 @@ interface PrintJobView {
   id: string
   printerName: string
   stationCode: string
+  sourceReference: string
   status: string
   attempts: number
   maxAttempts: number
+  createdAt: string
 }
 
 interface EmployeeSalesView {
@@ -234,11 +279,13 @@ const emptyData: ModuleData = {
   customerExperience: null,
 }
 
-export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
+export function StaffModulePanel({ api, auth, module, initialBlockerFact = null, onLoginRequired, onNavigate }: {
   api: NormalizedApiClient
   auth: StaffAuthView
   module: StaffModule
+  initialBlockerFact?: BusinessDayBlockerFact | null
   onLoginRequired(): void
+  onNavigate?(route: string, context?: BusinessDayNavigationContext): void
 }) {
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading')
   const [message, setMessage] = useState<string | null>(null)
@@ -299,13 +346,25 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
         } else {
           setData(emptyData)
         }
+      } else if (module === 'member-fulfillment'
+        || module === 'member-exceptions'
+        || module === 'member-overview'
+        || module === 'member-rule-drafts'
+        || module === 'member-rule-approvals'
+        || module === 'member-rule-publish'
+        || module === 'member-accounts'
+        || module === 'member-management') {
+        setData(emptyData)
       } else if (module === 'devices') {
         const canManagePrinters = auth.permissions.includes('printer.manage') || auth.permissions.includes('hardware.manage')
         const canViewPrintJobs = canManagePrinters || auth.permissions.includes('print.view') || auth.permissions.includes('print.view_all')
+          || auth.permissions.includes('print.reprint')
+        const canViewDevices = canManagePrinters || auth.permissions.includes('hardware.view')
+          || auth.permissions.includes('hardware.view_all') || auth.permissions.includes('hardware.command')
         const canViewRoutes = canManagePrinters || auth.permissions.includes('hardware.view_all')
         const [devices, jobs, bridges, routes] = await Promise.all([
-          api.getEndpoint<{ data: unknown }>('/api/hardware/devices'),
-          canViewPrintJobs ? api.getEndpoint<{ data: unknown }>('/api/hardware/print-jobs?status=pending,printing,failed,dead&limit=50') : Promise.resolve({ data: [] }),
+          canViewDevices ? api.getEndpoint<{ data: unknown }>('/api/hardware/devices') : Promise.resolve({ data: [] }),
+          canViewPrintJobs ? api.getEndpoint<{ data: unknown }>(`/api/hardware/print-jobs?status=${auth.permissions.includes('print.reprint') ? 'pending,printing,printed,failed,dead' : 'pending,printing,failed,dead'}&limit=50`) : Promise.resolve({ data: [] }),
           canManagePrinters ? api.getEndpoint<{ data: unknown }>('/api/hardware/print-bridges') : Promise.resolve({ data: [] }),
           canViewRoutes ? api.getEndpoint<{ data: unknown }>('/api/hardware/printer-routes') : Promise.resolve({ data: [] }),
         ])
@@ -347,16 +406,25 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
         api={api}
         auth={auth}
         onLoginRequired={onLoginRequired}
+        onNavigate={onNavigate}
         refreshToken={paymentRefreshToken}
       />
     }
     if (module === 'performance') return <PerformanceModule api={api} auth={auth} view={data.performance} performers={data.performers} requests={data.songRequests} phases={data.performancePhases} onChanged={refresh} />
     if (module === 'inventory') return <InventoryModule api={api} auth={auth} view={data.inventory} onChanged={refresh} />
     if (module === 'operations') return <OperationsModule view={data.profit} sales={data.employeeSales} canViewProfit={auth.permissions.includes('commercial.profit.view')} />
-    if (module === 'experience') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={data.customerExperience} />
+    if (module === 'experience') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={data.customerExperience} mode="experience" />
+    if (module === 'member-fulfillment') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={null} mode="member-fulfillment" />
+    if (module === 'member-exceptions') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={null} mode="member-exceptions" />
+    if (module === 'member-overview') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={null} mode="member-overview" />
+    if (module === 'member-rule-drafts') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={null} mode="member-rule-drafts" />
+    if (module === 'member-rule-approvals') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={null} mode="member-rule-approvals" />
+    if (module === 'member-rule-publish') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={null} mode="member-rule-publish" />
+    if (module === 'member-accounts') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={null} mode="member-accounts" />
+    if (module === 'member-management') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={null} mode="member-management" />
     if (module === 'devices') return <DevicesModule api={api} auth={auth} devices={data.devices} jobs={data.printJobs} bridges={data.printBridges} routes={data.printerRoutes} onChanged={refresh} />
     return <SettingsModule api={api} auth={auth} policy={data.commercePolicy} onChanged={refresh} />
-  }, [api, auth, data, module, onLoginRequired, paymentRefreshToken, refresh])
+  }, [api, auth, data, module, onLoginRequired, onNavigate, paymentRefreshToken, refresh])
 
   const modulePresentation = {
     payments: { title: '收银与退款', icon: CircleDollarSign },
@@ -364,6 +432,14 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
     inventory: { title: '库存与酒水上架', icon: PackageSearch },
     operations: { title: '经营数据', icon: BarChart3 },
     experience: { title: '客户体验与活动', icon: CalendarClock },
+    'member-fulfillment': { title: '会员权益待办', icon: CheckCircle2 },
+    'member-exceptions': { title: '会员权益异常', icon: ShieldCheck },
+    'member-overview': { title: '会员等级与权益', icon: ShieldCheck },
+    'member-rule-drafts': { title: '会员规则草稿', icon: ShieldCheck },
+    'member-rule-approvals': { title: '待审批会员规则', icon: ShieldCheck },
+    'member-rule-publish': { title: '会员规则发布', icon: ShieldCheck },
+    'member-accounts': { title: '会员账户查询', icon: ShieldCheck },
+    'member-management': { title: '其他会员经营配置', icon: ShieldCheck },
     devices: { title: '设备与打印', icon: Printer },
     settings: { title: '系统配置状态', icon: Settings2 },
   } satisfies Record<StaffModule, { title: string; icon: typeof Settings2 }>
@@ -382,6 +458,13 @@ export function StaffModulePanel({ api, auth, module, onLoginRequired }: {
         <RefreshCw size={18} className={phase === 'loading' ? 'is-spinning' : ''} />
       </button>
     </header>
+    {initialBlockerFact !== null && <aside className="staff-module-blocker-fact" data-blocker-fact-id={initialBlockerFact.id}>
+      <small>上一营业日阻断的具体事实</small>
+      <strong>{initialBlockerFact.title}</strong>
+      <p>{initialBlockerFact.orderPublicId ? `订单 ${initialBlockerFact.orderPublicId} · ` : ''}{initialBlockerFact.reference}</p>
+      <span>{initialBlockerFact.statusLabel}{initialBlockerFact.quantityText ? ` · ${initialBlockerFact.quantityText}` : ''}{initialBlockerFact.amountMinor !== null ? ` · ¥${formatAmount(initialBlockerFact.amountMinor)}` : ''}</span>
+      <em>下方是对应业务模块的实时数据；任何处理仍按当前权限和服务端状态复验。</em>
+    </aside>}
     {phase === 'loading' && <div className="staff-module-state" role="status"><LoaderCircle className="is-spinning" /><strong>正在读取最新状态</strong></div>}
     {phase === 'error' && <div className="staff-module-state is-error" role="alert"><strong>暂时没有接上</strong><p>{message}</p><button type="button" onClick={() => void load()}>重试</button></div>}
     {phase === 'ready' && content}
@@ -638,6 +721,9 @@ function PerformanceModule({ api, auth, view, performers, requests, phases, onCh
 }
 
 function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiClient; auth: StaffAuthView; view: InventoryView | null; onChanged(): Promise<void> }) {
+  const canManageCatalog = auth.permissions.includes('catalog.product.manage')
+  const canViewInventoryCost = auth.permissions.includes('inventory.cost.view')
+  const canPublishBeverage = canManageCatalog && canViewInventoryCost
   const [mode, setMode] = useState<'create' | 'count' | 'waste' | 'receive' | 'bind' | null>(null)
   const [itemId, setItemId] = useState('')
   const [quantity, setQuantity] = useState('')
@@ -658,7 +744,36 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const [catalogOpenRequest, setCatalogOpenRequest] = useState(0)
-  const canManageCatalog = auth.permissions.includes('catalog.product.manage')
+  const [publishProducts, setPublishProducts] = useState<InventoryPublishProduct[]>([])
+  const [publishProductId, setPublishProductId] = useState('')
+  const [publishPreview, setPublishPreview] = useState<InventoryPublishPreview | null>(null)
+  const loadPublishProducts = useCallback(async () => {
+    if (!canPublishBeverage) { setPublishProducts([]); setPublishProductId(''); return }
+    try {
+      const response = await api.getEndpoint<{ data: unknown }>('/api/catalog/products?status=all&limit=100')
+      const products = isRecord(response.data) && Array.isArray(response.data.data)
+        ? response.data.data : Array.isArray(response.data) ? response.data : []
+      const candidates = products.flatMap((product): InventoryPublishProduct[] => (
+        isRecord(product) && typeof product.id === 'string' && typeof product.name === 'string'
+          && typeof product.code === 'string' && typeof product.status === 'string'
+          && product.inventoryControlMode === 'tracked' && product.productKind === 'single'
+          ? [{
+            id: product.id,
+            name: product.name,
+            code: product.code,
+            status: product.status,
+            inventoryControlMode: 'tracked',
+            productKind: 'single',
+            salesSpecificationType: inventorySalesSpecificationType(isRecord(product.productSnapshot)
+              ? product.productSnapshot.salesSpecificationType : null),
+          }]
+          : []
+      ))
+      setPublishProducts(candidates)
+      setPublishProductId((current) => candidates.some((product) => product.id === current) ? current : '')
+    } catch { setPublishProducts([]); setPublishProductId('') }
+  }, [api, canPublishBeverage])
+  useEffect(() => { void loadPublishProducts() }, [loadPublishProducts])
   if (view === null) return <div className="staff-module-body"><EmptyState text="库存数据暂时为空" />{canManageCatalog && <CatalogManagementPanel api={api} auth={auth} placement="inventory" openRequest={catalogOpenRequest} />}</div>
   const lowStock = view.items.filter((item) => item.lowStock)
   const visibleItems = [...lowStock, ...view.items.filter((item) => !item.lowStock)].slice(0, 20)
@@ -797,6 +912,7 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
         idempotencyKey: operationIdempotency('inventory-receipt-confirm'),
       })
       setNotice('实物已确认入库，库存数量已更新')
+      setPublishPreview(null)
       if (pendingReceipt?.id === receipt.id) {
         setPendingReceipt(null)
         setScanCode('')
@@ -811,6 +927,50 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
     } finally {
       setBusy(false)
     }
+  }
+
+  async function previewReceiptAndPublish(receipt: { id: string }) {
+    if (busy) return
+    if (!publishProductId) { setNotice('请先选择这次入库要关联发布的酒水商品和销售规格'); return }
+    setBusy(true)
+    setNotice('')
+    try {
+      const result = await api.postEndpoint<InventoryPublishPreview>(`/api/inventory/receipts/${receipt.id}/receive-and-publish-preview`, {
+        productId: publishProductId,
+      }, { idempotencyKey: operationIdempotency('inventory-receipt-publish-preview') })
+      setPublishPreview(result)
+      setNotice('发布预览已按本次收货成本、正式配方、实时库存和渠道生成；请逐项核对后再确认。')
+    } catch (error) {
+      setPublishPreview(null)
+      setNotice(inventoryActionMessage(error, '发布预览未生成；入库与商品状态均未改变'))
+    } finally { setBusy(false) }
+  }
+
+  async function confirmReceiptAndPublish(receipt: { id: string }) {
+    if (busy) return
+    if (!publishProductId) { setNotice('请先选择这次入库要关联发布的酒水商品'); return }
+    if (publishPreview?.receiptId !== receipt.id || publishPreview.productId !== publishProductId) {
+      setNotice('请先为当前收货单和商品生成发布预览，再确认入库发布')
+      return
+    }
+    if (!window.confirm(`确认按预览入库并发布“${publishPreview.productName}”？\n成本 ¥${formatInventoryMinor(publishPreview.costAmountMinor)} / 份，售价 ¥${formatInventoryMinor(publishPreview.standardPriceMinor)}，可售 ${publishPreview.sellableServings} 份。`)) return
+    setBusy(true)
+    setNotice('')
+    try {
+      const result = await api.postEndpoint<{ productName: string; costAmountMinor: number; standardPriceMinor: number; grossProfitMinor: number }>(`/api/inventory/receipts/${receipt.id}/receive-and-publish`, {
+        productId: publishProductId,
+      }, { idempotencyKey: operationIdempotency('inventory-receipt-publish') })
+      setNotice(`${result.productName} 已按本次收货成本 ¥${formatInventoryMinor(result.costAmountMinor)}/份完成入库发布；售价 ¥${formatInventoryMinor(result.standardPriceMinor)}，单份毛利 ¥${formatInventoryMinor(result.grossProfitMinor)}。`)
+      if (pendingReceipt?.id === receipt.id) {
+        setPendingReceipt(null); setScanCode(''); setBatchCode(''); setPackages('1'); setTotalCostYuan(''); setSupplierName('')
+      }
+      setPublishProductId('')
+      setPublishPreview(null)
+      await onChanged()
+      await loadPublishProducts()
+    } catch (error) {
+      setNotice(inventoryActionMessage(error, '确认入库并发布上架未完成；库存和商品状态已整体回滚'))
+    } finally { setBusy(false) }
   }
 
   async function bindCode(event: React.FormEvent) {
@@ -837,7 +997,7 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
 
   return <div className="staff-module-body">
     <div className={`staff-module-summary${view.lowStockCount > 0 ? ' has-attention' : ''}`}><span><PackageSearch size={18} /></span><div><strong>{view.lowStockCount} 项低库存 · {view.items.length} 项物料</strong><small>{view.receipts.length} 笔进货记录 · {view.storedBottles.length} 笔存酒</small></div></div>
-    <section className="inventory-selling-flow" aria-label="酒水从建档到小程序可售流程"><header><div><strong>酒水从建档到小程序可售</strong><small>只按下面顺序操作；每一步都保留库存、售价与权限校验，不会因为集中操作而绕过实际库存。</small></div><em>5 步</em></header><ol><li><b>01</b><span><strong>建立物料</strong><small>新酒款先建立库存物料。</small></span>{canManage && <button type="button" onClick={() => chooseMode('create')}>开始</button>}</li><li><b>02</b><span><strong>绑定并扫码收货</strong><small>首次绑定条码；每次收货都需实物确认。</small></span>{canReceive && <button type="button" onClick={() => chooseMode('receive')}>扫码入库</button>}</li><li><b>03</b><span><strong>确认实际库存</strong><small>核对待收货单；差异走盘点，不手工放行。</small></span>{draftReceipts.length > 0 && <em>待确认 {draftReceipts.length}</em>}</li><li><b>04</b><span><strong>建立商品与售价</strong><small>默认先保存为停用，避免未配方就上架。</small></span>{canManageCatalog && <button type="button" onClick={() => setCatalogOpenRequest((current) => current + 1)}>继续</button>}</li><li><b>05</b><span><strong>配置配方并小程序上架</strong><small>系统会明确列出仍未满足的小程序可售条件。</small></span>{canManageCatalog && <button type="button" onClick={() => setCatalogOpenRequest((current) => current + 1)}>检查</button>}</li></ol></section>
+    <section className="inventory-selling-flow" aria-label="酒水从建档到小程序可售流程"><header><div><strong>酒水四步入库发布</strong><small>同一物料可被整瓶、单杯、Shot 和鸡尾酒共同引用；发布必须先展示本次收货形成的真实成本与可售结果。</small></div><em>4 步</em></header><ol><li><b>01</b><span><strong>扫码或建立物料</strong><small>登记净含量、瓶数、采购总额、批次和供应商。</small></span>{canReceive && <button type="button" onClick={() => chooseMode('receive')}>扫码入库</button>}</li><li><b>02</b><span><strong>选择销售规格</strong><small>整瓶、单杯、Shot、鸡尾酒或自定义，均引用正式配方。</small></span>{canManageCatalog && <button type="button" onClick={() => setCatalogOpenRequest((current) => current + 1)}>配置</button>}</li><li><b>03</b><span><strong>生成完整预览</strong><small>核对容量、单位/单份成本、扣减、可售份数、毛利和渠道。</small></span>{draftReceipts.length > 0 && <em>待预览 {draftReceipts.length}</em>}</li><li><b>04</b><span><strong>确认入库并发布</strong><small>服务端在同一事务重算成本；任一门禁失败则整体回滚。</small></span>{canManageCatalog && <button type="button" onClick={() => setCatalogOpenRequest((current) => current + 1)}>检查商品</button>}</li></ol></section>
     {notice !== '' && <p className="staff-module-notice" role="status">{notice}</p>}
     {(canCount || canWaste || canReceive || canManage || canBindBarcode) && <div className="staff-module-actions" aria-label="库存操作">
       {canManage && <button type="button" className={mode === 'create' ? 'is-active' : ''} aria-pressed={mode === 'create'} onClick={() => chooseMode('create')}>新建酒水物料</button>}
@@ -846,6 +1006,9 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
       {canCount && <button type="button" className={mode === 'count' ? 'is-active' : ''} aria-pressed={mode === 'count'} onClick={() => chooseMode('count')}>单项盘点</button>}
       {canWaste && <button type="button" className={mode === 'waste' ? 'is-active' : ''} aria-pressed={mode === 'waste'} onClick={() => chooseMode('waste')}>登记损耗</button>}
     </div>}
+    {canReceive && canPublishBeverage && (pendingReceipt !== null || draftReceipts.length > 0) && <label className="inventory-publish-product">关联销售商品与规格<select value={publishProductId} onChange={(event) => { setPublishProductId(event.target.value); setPublishPreview(null) }}><option value="">选择已配置商品</option>{publishProducts.map((product) => <option key={product.id} value={product.id}>{product.name} · {inventorySalesSpecificationLabel(product.salesSpecificationType)} · {product.code} · {product.status === 'active' ? '当前在售' : '待发布'}</option>)}</select><small>这里选择销售规格对应的正式商品；多个规格可以共同引用同一库存物料。确认前必须生成成本与可售预览。</small></label>}
+    {canReceive && canManageCatalog && !canViewInventoryCost && (pendingReceipt !== null || draftReceipts.length > 0) && <p className="staff-module-footnote">当前账号可以确认收货，但无“查看采购成本”权限，因此不能读取毛利预览或执行一键发布；可先仅入库，再由酒水上架管理员处理。</p>}
+    {publishPreview !== null && <section className="inventory-publish-preview" aria-label="入库发布预览"><header><div><strong>{publishPreview.productName} · {inventorySalesSpecificationLabel(publishPreview.salesSpecificationType)}</strong><small>配方第 {publishPreview.recipeVersion} 版 · 每批产出 {publishPreview.yieldQuantity} 份 · 收货单 {publishPreview.receiptId}</small></div><em>{publishPreview.sellableServings} 份可售</em></header><div className="inventory-publish-metrics"><span><small>单份成本</small><strong>¥{formatInventoryMinor(publishPreview.costAmountMinor)}</strong></span><span><small>标准售价</small><strong>¥{formatInventoryMinor(publishPreview.standardPriceMinor)}</strong></span><span><small>单份毛利</small><strong>¥{formatInventoryMinor(publishPreview.grossProfitMinor)}</strong></span><span><small>毛利率</small><strong>{(publishPreview.marginBasisPoints / 100).toFixed(2)}%</strong></span></div><div className="inventory-publish-components">{publishPreview.components.map((component) => <article key={component.inventoryItemId}><strong>{component.itemName}</strong><span>本次增加 {component.incomingQuantity}{component.baseUnit} · 入库后可用 {component.totalAvailableAfterReceipt}{component.baseUnit}</span><span>库存单位成本 ¥{formatInventoryMinorDecimal(component.sourceUnitCostMinor)}/{component.baseUnit}</span><span>每份扣减 {component.perServingDeduction}{component.baseUnit} · 成本 ¥{formatInventoryMinorDecimal(component.perServingCostMinor)}</span></article>)}</div><p>渠道：顾客扫码 {publishPreview.guestVisible && publishPreview.allowedChannels.includes('guest_qr') ? '可售' : '未开放'}；员工协助 {publishPreview.allowedChannels.includes('staff_assisted') ? '可售' : '未开放'}。确认时服务端会锁定并重新计算，预览不是绕过门禁的承诺。</p></section>}
     {mode === 'create' && <form className="staff-module-form inventory-create-form" onSubmit={(event) => void createInventoryItem(event)}>
       <header><strong>新建酒水物料</strong><small>用于新酒款、瓶装酒或配方原料。建立物料本身不增加库存；成本和数量请在后续收货单中如实登记并确认。</small></header>
       <label>物料编号<input required maxLength={64} pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" value={newItemSku} onChange={(event) => setNewItemSku(event.target.value)} placeholder="例如 WHISKY-SIM-700ML" /></label>
@@ -856,7 +1019,7 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
     </form>}
     {canReceive && draftReceipts.length > 0 && <section className="inventory-draft-receipts" aria-label="待确认收货单">
       <header><strong>待确认收货</strong><small>刷新或退出页面后仍可在这里继续。确认实物前不会增加库存。</small></header>
-      {draftReceipts.map((receipt) => <article key={receipt.id}><div><strong>{receipt.publicId}</strong><small>{receipt.lineCount} 项 · {formatDateTime(receipt.createdAt)}</small>{receipt.lines.map((line) => <span key={`${line.inventoryItemId}:${line.batchCode}`}>{line.itemName} · 批次 {line.batchCode} · {line.quantity}{line.baseUnit}</span>)}</div><button type="button" disabled={busy} onClick={() => void confirmReceipt(receipt)}>{busy ? '正在确认' : '核对并确认入库'}</button></article>)}
+      {draftReceipts.map((receipt) => <article key={receipt.id}><div><strong>{receipt.publicId}</strong><small>{receipt.lineCount} 项 · {formatDateTime(receipt.createdAt)}</small>{receipt.lines.map((line) => <span key={`${line.inventoryItemId}:${line.batchCode}`}>{line.itemName} · 批次 {line.batchCode} · {line.quantity}{line.baseUnit}</span>)}</div><div><button type="button" disabled={busy} onClick={() => void confirmReceipt(receipt)}>{busy ? '正在处理' : '仅确认入库'}</button>{canPublishBeverage && <><button type="button" disabled={busy || !publishProductId} onClick={() => void previewReceiptAndPublish(receipt)}>生成发布预览</button><button type="button" disabled={busy || publishPreview?.receiptId !== receipt.id || publishPreview.productId !== publishProductId} onClick={() => void confirmReceiptAndPublish(receipt)}>按预览确认发布</button></>}</div></article>)}
     </section>}
     {(mode === 'count' || mode === 'waste') && <form className="staff-module-form" onSubmit={(event) => void submitInventoryAction(event)}><header><strong>{mode === 'count' ? '单项盘点' : '登记损耗'}</strong><small>{mode === 'count' ? '提交后由有审批权限的岗位复核差异。' : '提交后立即形成库存流水，请如实填写原因。'}</small></header><label>物料<select required value={itemId} onChange={(event) => setItemId(event.target.value)}><option value="">请选择</option>{view.items.map((item) => <option value={item.id} key={item.id}>{item.name} · 当前{item.availableQuantity}{item.baseUnit}</option>)}</select></label><label>{mode === 'count' ? '实盘数量' : '损耗数量'}<input required inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></label><label>{mode === 'count' ? '差异说明（选填）' : '损耗原因'}<input required={mode === 'waste'} maxLength={500} value={reason} onChange={(event) => setReason(event.target.value)} /></label><button type="submit" disabled={busy}>{busy ? '提交中' : mode === 'count' ? '提交盘点复核' : '确认登记损耗'}</button></form>}
     {mode === 'receive' && pendingReceipt === null && <form className="staff-module-form inventory-receipt-form" onSubmit={(event) => void createReceipt(event)}>
@@ -868,7 +1031,7 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
       <label>供应商（选填）<input maxLength={200} value={supplierName} onChange={(event) => setSupplierName(event.target.value)} /></label>
       <button type="submit" disabled={busy}>{busy ? '正在建立' : '第一步：建立待收货单'}</button>
     </form>}
-    {mode === 'receive' && pendingReceipt !== null && <section className="inventory-receipt-confirm"><header><strong>待实物确认</strong><small>{pendingReceipt.publicId} · {pendingReceipt.lineCount} 项</small></header><p>条码 {scanCode} · 批次 {batchCode} · {packages} 个包装 · 总额 ¥{totalCostYuan}。请核对酒水、数量和送货单；点击确认后才会正式增加库存。</p><button type="button" disabled={busy} onClick={() => void confirmReceipt(pendingReceipt)}>{busy ? '正在确认' : '第二步：确认实物无误并入库'}</button></section>}
+    {mode === 'receive' && pendingReceipt !== null && <section className="inventory-receipt-confirm"><header><strong>待实物确认</strong><small>{pendingReceipt.publicId} · {pendingReceipt.lineCount} 项</small></header><p>条码 {scanCode} · 批次 {batchCode} · {packages} 个包装 · 总额 ¥{totalCostYuan}。请核对净含量、瓶数、采购总额和送货单；发布前系统会按这张收货单重新核算单位成本。</p><div><button type="button" disabled={busy} onClick={() => void confirmReceipt(pendingReceipt)}>{busy ? '正在处理' : '仅确认实物入库'}</button>{canPublishBeverage && <><button type="button" disabled={busy || !publishProductId} onClick={() => void previewReceiptAndPublish(pendingReceipt)}>第三步：生成完整预览</button><button type="button" disabled={busy || publishPreview?.receiptId !== pendingReceipt.id || publishPreview.productId !== publishProductId} onClick={() => void confirmReceiptAndPublish(pendingReceipt)}>第四步：按预览入库发布</button></>}</div></section>}
     {mode === 'bind' && <form className="staff-module-form inventory-bind-form" onSubmit={(event) => void bindCode(event)}>
       <header><strong>首次绑定酒水条码</strong><small>只在新酒款或新包装首次出现时操作。条码只能绑定一个物料，绑定后普通收货岗位可直接扫码。</small></header>
       <label>酒水原料或瓶装酒<select required value={itemId} onChange={(event) => setItemId(event.target.value)}><option value="">请选择</option>{bindableItems.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.sku} · 单位 {item.baseUnit}</option>)}</select></label>
@@ -933,6 +1096,7 @@ function DevicesModule({ api, auth, devices, jobs, bridges, routes, onChanged }:
     || auth.permissions.includes('hardware.manage')
   const canCommand = auth.permissions.includes('hardware.command') || canManagePrinter
   const canRetry = auth.permissions.includes('print.retry') || canManagePrinter
+  const canReprint = auth.permissions.includes('print.reprint') || canManagePrinter
   const attention = devices.filter((device) => device.connectivityStatus === 'offline' || device.connectivityStatus === 'degraded').length
     + jobs.filter((job) => job.status === 'failed' || job.status === 'dead').length
   const reportedPrinterQueues = bridges.find((bridge) => bridge.id === printBridgeId)?.queues ?? []
@@ -966,6 +1130,13 @@ function DevicesModule({ api, auth, devices, jobs, bridges, routes, onChanged }:
     void run(`job-${job.id}`, () => api.postEndpoint(`/api/hardware/print-jobs/${job.id}/retry`, { reason: reason.trim() }, {
       idempotencyKey: operationIdempotency('print-retry'),
     }), '打印任务已进入重试队列')
+  }
+
+  function reprint(job: PrintJobView) {
+    if (!window.confirm(`确认补打这张已完成小票？原票不会重试或修改，新票会标注“补打”。`)) return
+    void run(`job-reprint-${job.id}`, () => api.postEndpoint(`/api/hardware/print-jobs/${job.id}/reprint`, { reason: reason.trim() }, {
+      idempotencyKey: operationIdempotency('print-reprint'),
+    }), '补打任务已进入队列；请在原打印机领取')
   }
 
   function createPairingCode() {
@@ -1109,6 +1280,7 @@ function DevicesModule({ api, auth, devices, jobs, bridges, routes, onChanged }:
     {routes.length > 0 && <section className="staff-song-requests"><h3>当前打印分流</h3>{routes.map((route) => <article key={route.id}><div><strong>{hardwareStationLabel(route.stationCode)} · {route.name}</strong><span>{devices.find((device) => device.id === route.printerDeviceId)?.name ?? '打印机已移除'} · {route.copies}份</span></div><div className="staff-inline-actions"><em>{route.status === 'active' ? '启用' : '暂停'}</em>{canManagePrinter && <button type="button" onClick={() => openRoute(route)}>编辑</button>}{canManagePrinter && route.status !== 'retired' && <button type="button" onClick={() => setRouteStatus(route, route.status === 'active' ? 'paused' : 'active')}>{route.status === 'active' ? '暂停' : '启用'}</button>}</div></article>)}</section>}
     {devices.length === 0 ? <EmptyState text="尚未配置真实打印或硬件设备" /> : <div className="staff-module-list">{devices.map((device) => <article key={device.id} className={device.connectivityStatus === 'offline' ? 'has-attention' : ''}><div><strong>{device.name}</strong><small>{device.stationCode ?? '全店'} · {hardwareType(device.deviceType)} · {device.status === 'active' ? '启用' : device.status === 'paused' ? '暂停' : '退役'}</small></div><div className="staff-inline-actions"><em>{connectivityLabel(device.connectivityStatus)}</em>{canManagePrinter && device.deviceType === 'printer' && <button type="button" disabled={busyKey !== null} onClick={() => openPrinter(device)}>编辑</button>}{canManagePrinter && device.deviceType === 'printer' && device.status !== 'retired' && <button type="button" disabled={busyKey !== null} onClick={() => setPrinterStatus(device, device.status === 'active' ? 'paused' : 'active')}>{device.status === 'active' ? '暂停' : '启用'}</button>}{canCommand && <button type="button" disabled={busyKey !== null || device.status !== 'active'} onClick={() => command(device, 'ping')}>检测</button>}{canCommand && device.connectivityStatus !== 'online' && <button type="button" disabled={busyKey !== null || device.status !== 'active'} onClick={() => command(device, 'reconnect')}>重连</button>}{canCommand && device.deviceType === 'printer' && <button type="button" disabled={busyKey !== null || device.status !== 'active'} onClick={() => command(device, 'test_print')}>测试打印</button>}</div></article>)}</div>}
     {jobs.some((job) => job.status === 'failed' || job.status === 'dead') && <section className="staff-song-requests"><h3>打印失败待办</h3>{jobs.filter((job) => job.status === 'failed' || job.status === 'dead').map((job) => <article key={job.id}><div><strong>{job.printerName}</strong><span>{job.stationCode} · 已尝试{job.attempts}/{job.maxAttempts}次</span></div>{canRetry ? <button type="button" disabled={busyKey !== null || job.status === 'dead'} onClick={() => retry(job)}>{job.status === 'dead' ? '已停止自动重试' : '检查后重试'}</button> : <span>需打印重试权限</span>}</article>)}</section>}
+    {canReprint && jobs.some((job) => job.status === 'printed') && <section className="staff-song-requests"><h3>收工补打</h3><p className="staff-module-footnote">仅从已完成的原始快照生成一张标有“补打”的新票；请填写原因，避免把失败任务当作补打。</p>{jobs.filter((job) => job.status === 'printed').slice(0, 20).map((job) => <article key={job.id}><div><strong>{job.sourceReference}</strong><span>{hardwareStationLabel(job.stationCode)} · {job.printerName} · {formatDateTime(job.createdAt)}</span></div><button type="button" disabled={busyKey !== null} onClick={() => reprint(job)}>补打</button></article>)}</section>}
     {jobs.some((job) => job.status === 'failed' || job.status === 'dead') && <p className="staff-module-footnote">重试前必须确认设备在线并检查是否已实际出单；已停止自动重试的任务需管理员排查，不能直接重复发送。</p>}
   </div>
 }
@@ -1349,8 +1521,8 @@ function hardwareDevices(value: unknown): HardwareDeviceView[] {
 function printJobs(value: unknown): PrintJobView[] {
   if (!Array.isArray(value)) return []
   return value.flatMap((item) => isRecord(item) && typeof item.id === 'string' && typeof item.printerName === 'string'
-    && typeof item.stationCode === 'string' && typeof item.status === 'string'
-    && typeof item.attempts === 'number' && typeof item.maxAttempts === 'number'
+    && typeof item.stationCode === 'string' && typeof item.sourceReference === 'string' && typeof item.status === 'string'
+    && typeof item.attempts === 'number' && typeof item.maxAttempts === 'number' && typeof item.createdAt === 'string'
     ? [item as unknown as PrintJobView] : [])
 }
 
@@ -1404,6 +1576,29 @@ function commercePolicyView(value: unknown): CommercePolicyView | null {
 }
 
 function formatAmount(value: number): string { return (Math.abs(value) / 100).toFixed(2) }
+
+function inventorySalesSpecificationType(value: unknown): InventorySalesSpecificationType {
+  return value === 'whole_bottle' || value === 'glass' || value === 'shot' || value === 'cocktail'
+    ? value
+    : 'custom'
+}
+
+function inventorySalesSpecificationLabel(value: InventorySalesSpecificationType): string {
+  return ({
+    whole_bottle: '整瓶', glass: '单杯', shot: 'Shot', cocktail: '鸡尾酒', custom: '自定义',
+  } as const)[value]
+}
+
+function formatInventoryMinor(value: number): string {
+  if (!Number.isFinite(value)) return '待确认'
+  return (value / 100).toFixed(2)
+}
+
+function formatInventoryMinorDecimal(value: string): string {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return '待确认'
+  return (parsed / 100).toFixed(4).replace(/0+$/, '').replace(/\.$/, '')
+}
 
 function yuanInputToMinor(value: string): string | null {
   const normalized = value.trim()

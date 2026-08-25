@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from 'node:crypto'
 import type { PaymentMethod, PaymentProvider } from './payment-repository.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 import { lockBoundGuestTablePosition } from './guest-table-authority.js'
@@ -324,15 +324,19 @@ export class PaymentProviderActionRepository {
     expiresAt: string,
     principal: Readonly<PaymentPrincipal>,
     idempotencyKey?: string,
+    sensitiveRequestBinding?: string,
   ): Promise<{ claimed: true } | { claimed: false; payload: ProviderActionPayload; expiresAt: string }> {
     if (idempotencyKey !== undefined && (idempotencyKey.length < 8 || idempotencyKey.length > 128)) {
       throw new TypeError('payment action idempotency key must contain between 8 and 128 characters')
     }
+    const sensitiveBindingHash = sensitiveRequestBinding === undefined ? null : createHmac('sha256', this.key)
+      .update('provider-sensitive-binding:v1:').update(sensitiveRequestBinding).digest('hex')
     const requestFingerprint = idempotencyKey === undefined ? null : createHash('sha256').update(JSON.stringify({
       paymentId,
       presentation,
       principalType: principal.type,
       principalRef: principalReference(principal),
+      sensitiveBindingHash,
     })).digest('hex')
     const inserted = await this.transaction.query(`
       INSERT INTO mbox.payment_provider_actions (

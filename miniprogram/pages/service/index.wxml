@@ -1,5 +1,5 @@
 <view class="page service-page">
-  <view class="service-head"><text class="eyebrow">{{tableCode}} · TABLE SERVICE</text><text class="service-title">需要我们做什么？</text><text class="service-copy">高频需求一键送达；相同请求会自动合并，不必重复点击。</text></view>
+  <view class="service-head"><text class="eyebrow">{{tableCode}} · 桌台服务</text><text class="service-title">需要我们做什么？</text><text class="service-copy">高频需求一键送达；相同请求会自动合并，不必重复点击。</text></view>
   <view wx:if="{{error}}" class="error-banner">{{error}}</view><view wx:if="{{success}}" class="success-banner">{{success}}</view>
   <view class="service-grid">
     <button wx:for="{{serviceTypes}}" wx:key="id" data-id="{{item.id}}" disabled="{{submittingId}}" bindtap="requestService"><text class="service-mark">{{item.mark}}</text><text class="service-item__name">{{submittingId === item.id ? '正在通知' : item.name}}</text></button>

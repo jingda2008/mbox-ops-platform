@@ -1,4 +1,6 @@
-const { getCustomerProfile, updatePreferences } = require('../../utils/api')
+const {
+  getCustomerProfile, updatePreferences, recordBirthdayBenefitConsent, withdrawBirthdayBenefitConsent,
+} = require('../../utils/api')
 const { customerErrorMessage } = require('../../utils/customer-error')
 
 const AVATAR_KEY = 'mbox.member.avatarUrl'
@@ -110,11 +112,11 @@ Page({
     if (displayName.length > 80) return this.setData({ error: '昵称请控制在80个字以内' })
     const selectedAlcohol = this.data.alcohol.filter((item) => item.selected).map((item) => item.value)
     const preferredAlcohol = selectedAlcohol.length === 1 ? selectedAlcohol[0] : 'mixed'
+    const birthdayMonthDay = this.data.birthdays[this.data.birthdayIndex].value
     const preferences = {
       seatPreference: this.data.seatValue,
       serviceIntensity: this.data.serviceValue,
       preferredAlcohol,
-      birthdayMonthDay: this.data.birthdays[this.data.birthdayIndex].value,
       tasteNotes: String(this.data.tasteNotes || '').trim(),
       musicStyles: String(this.data.musicStyles || '').trim(),
       dietaryNotes: String(this.data.dietaryNotes || '').trim(),
@@ -122,6 +124,14 @@ Page({
     this.setData({ saving: true, error: '' })
     try {
       await updatePreferences(preferences, displayName || null)
+      const priorBirthday = this.data.profile && this.data.profile.preferences
+        ? this.data.profile.preferences.birthdayMonthDay : ''
+      if (birthdayMonthDay) {
+        await recordBirthdayBenefitConsent(birthdayMonthDay)
+      } else if (priorBirthday) {
+        try { await withdrawBirthdayBenefitConsent('顾客本人移除生日月日并撤回生日礼遇授权') }
+        catch (error) { if (!error || error.code !== 'BIRTHDAY_CONSENT_NOT_GRANTED') throw error }
+      }
       wx.setStorageSync('mbox.member.displayName', displayName || '')
       wx.showToast({ title: '已保存', icon: 'success' })
       setTimeout(() => wx.navigateBack(), 550)

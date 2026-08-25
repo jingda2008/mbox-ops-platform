@@ -13,7 +13,7 @@ const integration = databaseUrl ? describe : describe.skip
 const tenantId = randomUUID()
 const storeId = randomUUID()
 const employeeId = randomUUID()
-const customerIds = Array.from({ length: 6 }, () => randomUUID())
+const customerIds = Array.from({ length: 7 }, () => randomUUID())
 const draftActivityId = randomUUID()
 const publishedActivityId = randomUUID()
 const freeRegistrationId = randomUUID()
@@ -21,6 +21,11 @@ const noShowRegistrationId = randomUUID()
 const paidRegistrationId = randomUUID()
 const pendingRegistrationId = randomUUID()
 const concurrentRegistrationId = randomUUID()
+const packageRegistrationId = randomUUID()
+const packageReleaseRegistrationId = randomUUID()
+const packageId = randomUUID()
+const packageComponentId = randomUUID()
+const packageInventoryItemId = randomUUID()
 const paidPaymentId = randomUUID()
 const pendingPaymentId = randomUUID()
 const suffix = tenantId.replaceAll('-', '').slice(0, 12)
@@ -41,11 +46,11 @@ integration('activity operations PostgreSQL integration', () => {
   it('reads operational counts without exposing protected contact and updates draft-only promises', async () => {
     const listed = await run((repository) => repository.list())
     expect(listed).toEqual(expect.arrayContaining([
-      expect.objectContaining({ publicId: 'activity-ops-published', occupiedSeats: 7, waitlistedSeats: 0 }),
+      expect.objectContaining({ publicId: 'activity-ops-published', occupiedSeats: 9, waitlistedSeats: 0 }),
       expect.objectContaining({ publicId: 'activity-ops-draft', occupiedSeats: 0 }),
     ]))
     const detail = await run((repository) => repository.detail('activity-ops-published'))
-    expect(detail.registrations).toHaveLength(5)
+    expect(detail.registrations).toHaveLength(7)
     expect(JSON.stringify(detail)).not.toContain('encryptedContact')
     expect(JSON.stringify(detail)).not.toContain('13800138000')
 
@@ -77,6 +82,63 @@ integration('activity operations PostgreSQL integration', () => {
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
     `, [tenantId, storeId, paidRegistrationId])
     expect(paid.rows[0]).toEqual({ status: 'confirmed', payment_status: 'paid' })
+  })
+
+  it('keeps selected package stock reserved at check-in, consumes only on explicit delivery, and releases a pending intent on refund', async () => {
+    const checkedIn = await run((repository) => repository.transitionRegistration(
+      'activity-ops-registration-package', 'check_in', '现场确认套餐顾客到场', employeeId,
+    ))
+    expect(checkedIn).toMatchObject({ status: 'checked_in', packageFulfillmentStatus: 'pending' })
+    const afterCheckIn = await pool.query<{ on_hand_quantity: number; reserved_quantity: number; movements: string; intent: string }>(`
+      SELECT balance.on_hand_quantity::float8,balance.reserved_quantity::float8,
+        (SELECT count(*)::text FROM mbox.inventory_movements movement
+          WHERE movement.tenant_id=$1::uuid AND movement.store_id=$2::uuid
+            AND movement.inventory_item_id=$3::uuid) AS movements,
+        (SELECT status FROM mbox.community_activity_package_fulfillment_intents intent
+          WHERE intent.tenant_id=$1::uuid AND intent.store_id=$2::uuid
+            AND intent.registration_id=$4::uuid AND intent.registration_cycle=1) AS intent
+      FROM mbox.inventory_balances balance
+      WHERE balance.tenant_id=$1::uuid AND balance.store_id=$2::uuid AND balance.inventory_item_id=$3::uuid
+    `, [tenantId, storeId, packageInventoryItemId, packageRegistrationId])
+    expect(afterCheckIn.rows[0]).toEqual({ on_hand_quantity: 5, reserved_quantity: 2, movements: '0', intent: 'pending' })
+
+    const delivered = await run((repository) => repository.transitionRegistration(
+      'activity-ops-registration-package', 'fulfill_package', '吧台已实际交付限定饮品', employeeId,
+    ))
+    expect(delivered).toMatchObject({ status: 'checked_in', packageFulfillmentStatus: 'delivered' })
+    const afterDelivery = await pool.query<{ on_hand_quantity: number; reserved_quantity: number; reservation_status: string; movement_type: string }>(`
+      SELECT balance.on_hand_quantity::float8,balance.reserved_quantity::float8,
+        reservation.status AS reservation_status,movement.movement_type
+      FROM mbox.inventory_balances balance
+      JOIN mbox.community_activity_package_inventory_reservations reservation
+        ON reservation.tenant_id=balance.tenant_id AND reservation.store_id=balance.store_id
+       AND reservation.inventory_item_id=balance.inventory_item_id AND reservation.registration_id=$4::uuid
+      JOIN mbox.inventory_movements movement
+        ON movement.tenant_id=reservation.tenant_id AND movement.store_id=reservation.store_id
+       AND movement.id=reservation.movement_id
+      WHERE balance.tenant_id=$1::uuid AND balance.store_id=$2::uuid AND balance.inventory_item_id=$3::uuid
+    `, [tenantId, storeId, packageInventoryItemId, packageRegistrationId])
+    expect(afterDelivery.rows[0]).toEqual({ on_hand_quantity: 4, reserved_quantity: 1, reservation_status: 'consumed', movement_type: 'sale' })
+
+    await run((repository) => repository.transitionRegistration(
+      'activity-ops-registration-package-release', 'check_in', '现场签到等待交付', employeeId,
+    ))
+    await pool.query(`UPDATE mbox.community_activity_registrations
+      SET status='refunded',updated_at=clock_timestamp()
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid`, [tenantId, storeId, packageReleaseRegistrationId])
+    const released = await pool.query<{ on_hand_quantity: number; reserved_quantity: number; reservation_status: string; intent_status: string }>(`
+      SELECT balance.on_hand_quantity::float8,balance.reserved_quantity::float8,
+        reservation.status AS reservation_status,intent.status AS intent_status
+      FROM mbox.inventory_balances balance
+      JOIN mbox.community_activity_package_inventory_reservations reservation
+        ON reservation.tenant_id=balance.tenant_id AND reservation.store_id=balance.store_id
+       AND reservation.inventory_item_id=balance.inventory_item_id AND reservation.registration_id=$4::uuid
+      JOIN mbox.community_activity_package_fulfillment_intents intent
+        ON intent.tenant_id=reservation.tenant_id AND intent.store_id=reservation.store_id
+       AND intent.registration_id=reservation.registration_id AND intent.registration_cycle=reservation.registration_cycle
+      WHERE balance.tenant_id=$1::uuid AND balance.store_id=$2::uuid AND balance.inventory_item_id=$3::uuid
+    `, [tenantId, storeId, packageInventoryItemId, packageReleaseRegistrationId])
+    expect(released.rows[0]).toEqual({ on_hand_quantity: 4, reserved_quantity: 0, reservation_status: 'released', intent_status: 'cancelled' })
   })
 
   it('requires a provider query after any payment-channel action and does not release the seat', async () => {
@@ -128,7 +190,7 @@ const draftInput: ActivityDraftInput = {
   refundPolicyVersion: 'activity-refund-v1', refundPolicySummary: '免费活动可在开始前取消',
   activityDetails: '现场音乐、交流与限定饮品体验。', includedItems: ['欢迎饮品'],
   participationRequirements: ['请提前15分钟到场'], contactInstructions: '报名成功后在小程序查看集合通知',
-  memberBenefitText: null,
+  memberBenefitText: null, packageSelectionRequired: false, packages: [],
 }
 
 async function seed(pool: Pool) {
@@ -158,6 +220,7 @@ async function seed(pool: Pool) {
   await insertRegistration(pool, paidRegistrationId, 'activity-ops-registration-paid', customerIds[2]!, 'confirmed', 'paid', 2)
   await insertRegistration(pool, pendingRegistrationId, 'activity-ops-registration-pending', customerIds[3]!, 'payment_pending', 'pending', 1)
   await insertRegistration(pool, concurrentRegistrationId, 'activity-ops-registration-concurrent', customerIds[4]!, 'confirmed', 'not_required', 2)
+  await seedPackageFulfillment(pool)
   await pool.query(`
     INSERT INTO mbox.payments(
       id,tenant_id,store_id,payable_kind,activity_registration_id,public_id,
@@ -195,6 +258,39 @@ async function seed(pool: Pool) {
       clock_timestamp()+interval '15 minutes'
     )
   `, [tenantId, storeId, pendingPaymentId, customerIds[3]])
+}
+
+async function seedPackageFulfillment(pool: Pool) {
+  await pool.query(`INSERT INTO mbox.inventory_items(id,tenant_id,store_id,sku,name,item_type,base_unit)
+    VALUES($1::uuid,$2::uuid,$3::uuid,'ACTIVITY-PACKAGE-INGREDIENT','活动套餐限定饮品','consumable','portion')`,
+  [packageInventoryItemId,tenantId,storeId])
+  await pool.query(`INSERT INTO mbox.inventory_balances(tenant_id,store_id,inventory_item_id,on_hand_quantity,reserved_quantity)
+    VALUES($1::uuid,$2::uuid,$3::uuid,5,2)`, [tenantId,storeId,packageInventoryItemId])
+  await pool.query(`INSERT INTO mbox.community_activity_packages(
+    id,tenant_id,store_id,activity_id,public_id,name,capacity,member_purchase_limit,
+    fee_amount_minor,deposit_amount_minor,fee_basis,payment_mode,payment_deadline_minutes,payment_rule_text,status
+  ) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,'activity-ops-package','限定饮品加购',20,1,0,0,'per_registration','none',15,'免费限定饮品','draft')`,
+  [packageId,tenantId,storeId,publishedActivityId])
+  await pool.query(`INSERT INTO mbox.community_activity_package_components(
+    id,tenant_id,store_id,activity_package_id,inventory_item_id,quantity,per_participant
+  ) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,1,true)`,
+  [packageComponentId,tenantId,storeId,packageId,packageInventoryItemId])
+  await pool.query(`UPDATE mbox.community_activity_packages
+    SET status='published' WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid`,
+  [tenantId,storeId,packageId])
+  await insertRegistration(pool,packageRegistrationId,'activity-ops-registration-package',customerIds[5]!,'confirmed','not_required',1)
+  await insertRegistration(pool,packageReleaseRegistrationId,'activity-ops-registration-package-release',customerIds[6]!,'confirmed','not_required',1)
+  for (const registrationId of [packageRegistrationId,packageReleaseRegistrationId]) {
+    await pool.query(`UPDATE mbox.community_activity_registrations
+      SET activity_package_id=$4::uuid,activity_package_snapshot=jsonb_build_object(
+        'publicId','activity-ops-package','name','限定饮品加购','feeAmountMinor',0,'paymentMode','none','feeBasis','per_registration'
+      )
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid`, [tenantId,storeId,registrationId,packageId])
+    await pool.query(`INSERT INTO mbox.community_activity_package_inventory_reservations(
+      tenant_id,store_id,registration_id,registration_cycle,package_component_id,inventory_item_id,quantity,status,expires_at
+    ) VALUES($1::uuid,$2::uuid,$3::uuid,1,$4::uuid,$5::uuid,1,'reserved',clock_timestamp()+interval '1 day')`,
+    [tenantId,storeId,registrationId,packageComponentId,packageInventoryItemId])
+  }
 }
 
 async function insertActivity(pool: Pool, id: string, publicId: string, status: 'draft' | 'published', title: string) {

@@ -61,6 +61,7 @@ function validCommandKey(value) {
 const REGISTRATION_CLEARABLE_CODES = Object.freeze([
   'ACTIVITY_CONTACT_INVALID',
   'ACTIVITY_CONTACT_PROTECTION_FAILED',
+  'ACTIVITY_CONTACT_PROTECTION_UNAVAILABLE',
   'ACTIVITY_MEMBERSHIP_REQUIRED',
   'ACTIVITY_TERMS_ACKNOWLEDGEMENT_REQUIRED',
   'ACTIVITY_TERMS_NOT_CONFIGURED',
@@ -69,10 +70,24 @@ const REGISTRATION_CLEARABLE_CODES = Object.freeze([
   'ACTIVITY_NOT_FOUND',
   'ACTIVITY_PAYMENT_AUTHORITY_NOT_CONFIGURED',
   'ACTIVITY_ALREADY_REGISTERED',
+  'ACTIVITY_PACKAGE_SELECTION_REQUIRED',
+  'ACTIVITY_PACKAGE_UNAVAILABLE',
+  'ACTIVITY_PACKAGE_INVENTORY_UNAVAILABLE',
+  'ACTIVITY_PACKAGE_INVENTORY_INSUFFICIENT',
+  'ACTIVITY_PACKAGE_PURCHASE_LIMIT',
 ])
+
+function registrationContact(value) {
+  const contact = String(value || '').trim()
+  if (/^1\d{10}$/.test(contact)) return contact
+  // 微信号由字母开头，允许字母、数字、下划线和连字符；纯数字不能被误当成微信号。
+  if (/^[A-Za-z][A-Za-z0-9_-]{2,19}$/.test(contact)) return contact
+  return ''
+}
 
 function registrationFailureMessage(error) {
   const code = error && error.code ? String(error.code) : ''
+  const status = Number(error && error.statusCode)
   if (code === 'ACTIVITY_PAYMENT_AUTHORITY_NOT_CONFIGURED') {
     return '线上付款条件未就绪，本次没有建立收费报名，也没有占用名额。'
   }
@@ -80,7 +95,10 @@ function registrationFailureMessage(error) {
     return '加入 M-BOX 会员并授权手机号后，才可报名超嗨活动。'
   }
   if (code === 'ACTIVITY_CONTACT_INVALID') {
-    return '联系方式格式不正确。手机号请填 11 位（1 开头），或填写至少 3 个字的微信号。'
+    return '联系方式格式不正确。请填写 11 位手机号（1 开头）或 3–20 位、以字母开头的微信号。'
+  }
+  if (code === 'ACTIVITY_CONTACT_PROTECTION_UNAVAILABLE' || code === 'ACTIVITY_CONTACT_PROTECTION_FAILED') {
+    return '报名服务配置异常，请稍后再试。'
   }
   if (code === 'ACTIVITY_TERMS_ACKNOWLEDGEMENT_REQUIRED') {
     return '请勾选确认当前版本的安全与退款规则后再报名。'
@@ -97,7 +115,21 @@ function registrationFailureMessage(error) {
   if (code === 'ACTIVITY_ALREADY_REGISTERED') {
     return '您已有这个活动的有效报名，请下拉刷新后查看状态。'
   }
-  return customerErrorMessage(error, '报名没有成功，请检查网络后重试。')
+  if (code === 'ACTIVITY_PACKAGE_SELECTION_REQUIRED') return '请先选择一档活动套餐后再报名。'
+  if (code === 'ACTIVITY_PACKAGE_UNAVAILABLE' || code === 'ACTIVITY_PACKAGE_INVENTORY_UNAVAILABLE' || code === 'ACTIVITY_PACKAGE_INVENTORY_INSUFFICIENT') {
+    return '所选套餐当前不可报名，请刷新后选择其他可订套餐。'
+  }
+  if (code === 'ACTIVITY_PACKAGE_PURCHASE_LIMIT') return '所选套餐已超过每会员限购数量，请调整报名人数或更换套餐。'
+  if (status === 401 || code === 'AUTH_REQUIRED') {
+    return '会员登录状态已失效，请返回“我的”重新进入会员后再报名。'
+  }
+  if (code === 'ACTIVITY_REGISTRATION_RESULT_UNCONFIRMED' || status >= 500) {
+    return '报名服务暂时繁忙，结果尚未确认；请稍后在“我的活动”查看后再试。'
+  }
+  if (code === 'HTTP_ERROR') {
+    return '报名结果暂时无法确认；请先刷新“我的活动”查看状态，再决定是否重试。'
+  }
+  return customerErrorMessage(error, '报名结果尚未确认；请先刷新“我的活动”查看状态，再决定是否重试。')
 }
 
 function shouldClearRegistrationAttempt(error) {
@@ -125,12 +157,70 @@ function paymentText(item) {
   return `需全额预付，${item.paymentDeadlineMinutes}分钟内完成`
 }
 
+function packageView(raw) {
+  const availability = String(raw && raw.availability || 'temporarily_unavailable')
+  const feeAmountMinor = Number(raw && raw.feeAmountMinor || 0)
+  return Object.assign({}, raw, {
+    imageUrl: publicImageUrl(raw && raw.imageUrl),
+    availability,
+    availabilityText: raw && raw.availabilityText || (availability === 'available' ? '可报名' : availability === 'sold_out' ? '已售罄' : '暂不可订'),
+    feeText: feeAmountMinor > 0 ? `加购 ${money(feeAmountMinor)}${raw.feeBasis === 'per_person' ? '/人' : '/次'}` : '免费加购',
+    includedItems: list(raw && raw.includedItems),
+  })
+}
+
+function stricterPaymentMode(modes) {
+  if (modes.includes('full_required')) return 'full_required'
+  if (modes.includes('deposit_required')) return 'deposit_required'
+  if (modes.includes('deposit_optional')) return 'deposit_optional'
+  return 'none'
+}
+
+function selectedPackage(activity, publicId) {
+  const packages = activity && Array.isArray(activity.packages) ? activity.packages : []
+  return packages.find((item) => item && item.publicId === publicId) || null
+}
+
+function pricingFor(activity, activityPackage, partySize) {
+  const packageSelected = activityPackage || null
+  const activityMultiplier = activity.feeBasis === 'per_person' ? partySize : 1
+  const packageMultiplier = packageSelected && packageSelected.feeBasis === 'per_person' ? partySize : 1
+  const totalFeeAmountMinor = Number(activity.feeAmountMinor || 0) * activityMultiplier
+    + (packageSelected ? Number(packageSelected.feeAmountMinor || 0) * packageMultiplier : 0)
+  const depositAmountMinor = Number(activity.depositAmountMinor || 0) * activityMultiplier
+    + (packageSelected ? Number(packageSelected.depositAmountMinor || 0) * packageMultiplier : 0)
+  const paymentMode = stricterPaymentMode([activity.paymentMode, packageSelected && packageSelected.paymentMode].filter(Boolean))
+  const paymentSources = [activity, packageSelected].filter((item) => item && item.paymentMode !== 'none')
+  const deadline = paymentSources.length ? Math.min(...paymentSources.map((item) => Number(item.paymentDeadlineMinutes || 15))) : 0
+  const authorityAvailable = paymentSources.every((item) => item.paymentAvailability === 'available')
+  const availablePaymentChoices = paymentMode === 'none' ? ['none']
+    : !authorityAvailable ? (paymentMode === 'deposit_optional' ? ['none'] : [])
+      : paymentMode === 'deposit_optional' ? ['none', 'deposit']
+        : paymentMode === 'deposit_required' ? ['deposit'] : ['full']
+  return {
+    feeAmountMinor: totalFeeAmountMinor,
+    depositAmountMinor,
+    paymentMode,
+    paymentDeadlineMinutes: deadline,
+    paymentAvailability: authorityAvailable || paymentMode === 'deposit_optional' ? 'available' : 'blocked',
+    availablePaymentChoices,
+    availablePaymentMethods: authorityAvailable ? activity.availablePaymentMethods : [],
+    paymentRuleText: packageSelected
+      ? `活动票：${activity.paymentRuleText}；套餐：${packageSelected.paymentRuleText}`
+      : activity.paymentRuleText,
+    requiresPaymentOnSubmit: totalFeeAmountMinor > 0 && !availablePaymentChoices.includes('none'),
+    feeText: totalFeeAmountMinor > 0 ? money(totalFeeAmountMinor) : '免费',
+    depositText: depositAmountMinor > 0 ? money(depositAmountMinor) : '无需订金',
+  }
+}
+
 function viewActivity(raw) {
   const sales = raw.salesCopy && typeof raw.salesCopy === 'object' ? raw.salesCopy : {}
   const safety = raw.safety && typeof raw.safety === 'object' ? raw.safety : {}
   const refund = raw.refundPolicy && typeof raw.refundPolicy === 'object' ? raw.refundPolicy : {}
   const safetyPolicyVersion = String(safety.policyVersion || '').trim()
   const refundPolicyVersion = String(refund.policyVersion || '').trim()
+  const packages = Array.isArray(raw.packages) ? raw.packages.map(packageView) : []
   const availablePaymentChoices = list(raw.availablePaymentChoices)
   const availablePaymentMethods = list(raw.availablePaymentMethods)
   const requiresOnlinePayment = raw.feeAmountMinor > 0 && !availablePaymentChoices.includes('none')
@@ -166,6 +256,8 @@ function viewActivity(raw) {
     safetyPolicyText: safetyPolicyVersion ? `安全规则版本 ${safetyPolicyVersion}` : '安全规则版本缺失',
     availablePaymentChoices,
     availablePaymentMethods,
+    packages,
+    packageSelectionRequired: Boolean(raw.packageSelectionRequired),
     requiresPaymentOnSubmit: raw.feeAmountMinor > 0 && !availablePaymentChoices.includes('none'),
     safetyFacts,
     registrationBlocked,
@@ -244,6 +336,7 @@ Page({
   data: {
     id: '', loading: true, busy: false, error: '', success: '', activity: null,
     partySize: 1, contact: '', ruleAcknowledged: false, registration: null, loyaltyBenefits: [],
+    selectedPackagePublicId: '', selectedPackage: null, selectedPricing: null,
     membership: null, membershipTerms: null,
     membershipInviteVisible: false, membershipInviteAgreed: false, membershipInviteBusy: false,
   },
@@ -300,7 +393,16 @@ Page({
       if (authoritative && !sameCancelledRegistration) this.clearRegistrationAttempt(raw.publicId)
       const registration = viewRegistration(registrationRaw)
       if (registration) this.rememberRegistration(registration, raw.publicId)
-      this.setData({ loading: false, activity: viewActivity(raw), loyaltyBenefits, registration, error: paymentReadError || registrationReadError })
+      const activity = viewActivity(raw)
+      const selectedPackagePublicId = selectedPackage(activity, this.data.selectedPackagePublicId)
+        ? this.data.selectedPackagePublicId : ''
+      const currentPackage = selectedPackage(activity, selectedPackagePublicId)
+      this.setData({
+        loading: false, activity, loyaltyBenefits, registration, error: paymentReadError || registrationReadError,
+        selectedPackagePublicId,
+        selectedPackage: currentPackage,
+        selectedPricing: pricingFor(activity, currentPackage, this.data.partySize),
+      })
     } catch (error) {
       if (error && error.code === 'ACTIVITY_MEMBERSHIP_REQUIRED') {
         this.setData({
@@ -374,7 +476,31 @@ Page({
   changePartySize(event) {
     const delta = Number(event.currentTarget.dataset.delta)
     const maximum = Math.max(1, this.data.activity.remainingCapacity || 1)
-    this.setData({ partySize: Math.max(1, Math.min(maximum, this.data.partySize + delta)) })
+    const partySize = Math.max(1, Math.min(maximum, this.data.partySize + delta))
+    this.setData({ partySize, selectedPricing: pricingFor(this.data.activity, this.data.selectedPackage, partySize) })
+  },
+  choosePackage(event) {
+    const activity = this.data.activity
+    if (!activity || this.data.busy) return
+    const publicId = String(event.currentTarget.dataset.packageId || '')
+    const next = selectedPackage(activity, publicId)
+    if (!next || next.availability !== 'available') return
+    this.clearRegistrationAttempt(activity.publicId)
+    this.setData({
+      selectedPackagePublicId: publicId,
+      selectedPackage: next,
+      selectedPricing: pricingFor(activity, next, this.data.partySize),
+      error: '', success: '',
+    })
+  },
+  clearPackageSelection() {
+    const activity = this.data.activity
+    if (!activity || activity.packageSelectionRequired || this.data.busy) return
+    this.clearRegistrationAttempt(activity.publicId)
+    this.setData({
+      selectedPackagePublicId: '', selectedPackage: null,
+      selectedPricing: pricingFor(activity, null, this.data.partySize), error: '', success: '',
+    })
   },
   onContactInput(event) { this.setData({ contact: event.detail.value }) },
   onAcknowledgementChange(event) { this.setData({ ruleAcknowledged: Boolean(event.detail.value && event.detail.value.length) }) },
@@ -386,7 +512,17 @@ Page({
       this.setData({ membershipInviteVisible: true, membershipInviteAgreed: false, error: '' })
       return
     }
-    if (activity.registrationBlocked) return this.setData({ error: activity.paymentBlockedText })
+    const chosenPackage = this.data.selectedPackage
+    if (activity.packageSelectionRequired && !chosenPackage) {
+      return this.setData({ error: '请先选择一个活动套餐后再报名。' })
+    }
+    if (chosenPackage && chosenPackage.availability !== 'available') {
+      return this.setData({ error: '所选套餐当前不可报名，请换一档后再试。' })
+    }
+    const pricing = pricingFor(activity, chosenPackage, this.data.partySize)
+    if (activity.registrationBlocked || pricing.paymentAvailability === 'blocked') {
+      return this.setData({ error: activity.paymentBlockedText || '所选套餐的线上付款条件尚未完整配置，本次不会提交报名。' })
+    }
     if (this.data.registration && !this.data.registration.canReRegister) {
       await this.showRegistrationOutcome(this.data.registration)
       return
@@ -406,20 +542,26 @@ Page({
       return
     }
     let attempt = previous && previous.payload ? previous : null
+    if (attempt && (attempt.payload.activityPackagePublicId || '') !== (chosenPackage?.publicId || '')) {
+      this.clearRegistrationAttempt(activity.publicId)
+      attempt = null
+    }
     if (attempt) {
       const confirmed = await this.confirmPayment('上次报名结果尚未确认。可原样重试同一请求；若仍失败，将清除本机卡住的请求以便重新填写。')
       if (!confirmed) return
     } else {
-      if (this.data.contact.trim().length < 3) return this.setData({ error: '请填写本次活动可联系的手机号或微信' })
+      const contact = registrationContact(this.data.contact)
+      if (!contact) return this.setData({ error: '请填写 11 位手机号（1 开头）或 3–20 位、以字母开头的微信号。' })
       if (!this.data.ruleAcknowledged) return this.setData({ error: '请先阅读并确认报名、退款与安全规则版本' })
       if (!activity.safetyPolicyVersion || !activity.refundPolicyVersion) {
         return this.setData({ error: '活动安全或退款规则缺少可核验版本，本活动暂不接受报名。' })
       }
-      const payment = await this.choosePayment(activity)
+      const payment = await this.choosePayment(pricing)
       if (!payment) return
       const payload = {
+        activityPackagePublicId: chosenPackage?.publicId || null,
         partySize: this.data.partySize,
-        contactSnapshot: { channel: 'miniprogram', contact: this.data.contact.trim() },
+        contactSnapshot: { channel: 'miniprogram', contact },
         termsAcknowledged: true,
         acknowledgedSafetyPolicyVersion: activity.safetyPolicyVersion,
         acknowledgedRefundPolicyVersion: activity.refundPolicyVersion,
@@ -427,7 +569,7 @@ Page({
         ...(payment.method ? { paymentMethod: payment.method } : {}),
       }
       attempt = {
-        idempotencyKey: commandKey('activity-register', activity.publicId),
+        idempotencyKey: commandKey('activity-register', `${activity.publicId}-${chosenPackage?.publicId || 'ticket'}`),
         payload,
         previousRegistrationPublicId: this.data.registration && this.data.registration.publicId,
         createdAt: new Date().toISOString(),
@@ -440,6 +582,7 @@ Page({
       const payload = attempt.payload
       const result = await registerActivity(
         activity.publicId,
+        payload.activityPackagePublicId,
         payload.partySize,
         payload.contactSnapshot,
         payload.termsAcknowledged,

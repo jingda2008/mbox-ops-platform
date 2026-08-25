@@ -43,7 +43,7 @@ import { guestGatePresentation, type GuestGateReason } from './guest-gate-model'
 import { guestMenuProductToMenuProduct } from './menu-product-adapter'
 import './guest-app.css'
 
-type GuestApiPort = Pick<GuestApiClient, 'scanTable' | 'loadSession' | 'searchMenu' | 'submitOrder' | 'loadSharedCart' | 'adjustSharedCart' | 'checkoutSharedCart' | 'loadTableOrders' | 'loadTodayPerformance' | 'payTableOrder' | 'requestService' | 'recordMood'>
+type GuestApiPort = Pick<GuestApiClient, 'scanTable' | 'loadSession' | 'searchMenu' | 'submitOrder' | 'loadSharedCart' | 'adjustSharedCart' | 'removeSharedCartLine' | 'checkoutSharedCart' | 'loadTableOrders' | 'loadTodayPerformance' | 'payTableOrder' | 'requestService' | 'recordMood'>
 type ServiceType = 'call_staff' | 'complaint' | 'custom'
 type Panel = 'orders' | 'complaint' | 'custom' | 'checkout' | null
 export type { GuestGateReason } from './guest-gate-model'
@@ -108,6 +108,9 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const tableCodeRef = useRef<string | null>(null)
   const qrCredentialRef = useRef<string | null>(null)
   const menuRequest = useRef(0)
+  const sharedCartInFlight = useRef<Promise<GuestSharedCart | null> | null>(null)
+  const sharedCartPollFailures = useRef(0)
+  const sharedCartNextPollAt = useRef(0)
   const orderSubmittingRef = useRef(false)
   const serviceSubmittingRef = useRef(false)
   const paymentSubmittingRef = useRef(new Set<string>())
@@ -177,18 +180,34 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const loadSharedCart = useCallback(async (quiet = false) => {
     const api = apiRef.current
     if (api === null) return null
-    try {
-      const cart = await api.loadSharedCart()
-      setSharedCart(cart)
-      setSharedCartError(null)
-      return cart
-    } catch (error) {
-      if (!blockForSession(error)) {
-        const message = errorMessage(error, '同桌购物车暂时没有同步，请稍后再试。')
-        setSharedCartError(message)
-        if (!quiet) notify(message, 'error')
+    if (sharedCartInFlight.current !== null) return sharedCartInFlight.current
+    const request = (async () => {
+      try {
+        const cart = await api.loadSharedCart()
+        sharedCartPollFailures.current = 0
+        sharedCartNextPollAt.current = 0
+        setSharedCart(cart)
+        setSharedCartError(null)
+        return cart
+      } catch (error) {
+        if (!blockForSession(error)) {
+          sharedCartPollFailures.current += 1
+          sharedCartNextPollAt.current = Date.now() + Math.min(
+            30_000,
+            2_500 * (2 ** Math.min(sharedCartPollFailures.current, 4)),
+          )
+          const message = errorMessage(error, '同桌购物车暂时没有同步，请稍后再试。')
+          setSharedCartError(message)
+          if (!quiet) notify(message, 'error')
+        }
+        return null
       }
-      return null
+    })()
+    sharedCartInFlight.current = request
+    try {
+      return await request
+    } finally {
+      if (sharedCartInFlight.current === request) sharedCartInFlight.current = null
     }
   }, [blockForSession, notify])
 
@@ -331,7 +350,11 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
 
   useEffect(() => {
     if (phase !== 'ready' || cartProtocolVersion !== 2) return
-    const refresh = () => { if (document.visibilityState === 'visible') void loadSharedCart(true) }
+    const refresh = () => {
+      if (document.visibilityState === 'visible' && Date.now() >= sharedCartNextPollAt.current) {
+        void loadSharedCart(true)
+      }
+    }
     const timer = window.setInterval(refresh, 2_500)
     document.addEventListener('visibilitychange', refresh)
     return () => {
@@ -410,10 +433,13 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const adjustSharedCart = useCallback(async (productId: string, delta: number) => {
     const api = apiRef.current
     if (api === null || sharedCart === null) throw new Error('同桌购物车正在同步，请稍后再试。')
+    if (sharedCart.guestWritesFrozen) throw new Error('服务人员正在核对本桌点单，暂时只能查看购物车。')
+    if (!sharedCart.allowedActions.includes('adjust')) throw new Error('本桌购物车当前不能修改，请刷新后再试。')
     try {
       const cart = await api.adjustSharedCart({
         productId,
         delta,
+        expectedGeneration: sharedCart.generation,
         expectedVersion: sharedCart.version,
       }, { idempotencyKey: safeIdempotencyKey('guest-shared-cart-adjust') })
       setSharedCart(cart)
@@ -427,6 +453,26 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       throw new Error(errorMessage(error, '同桌购物车暂时没有更新，请稍后再试。'))
     }
   }, [blockForSession, loadSharedCart, sharedCart])
+
+  const removeSharedCartLine=useCallback(async (productId:string) => {
+    const api=apiRef.current
+    if (api===null||sharedCart===null) throw new Error('同桌购物车正在同步，请稍后再试。')
+    if (sharedCart.guestWritesFrozen) throw new Error('服务人员正在核对本桌点单，暂时只能查看购物车。')
+    if (!sharedCart.allowedActions.includes('remove')) throw new Error('这件商品当前不能移除，请刷新后再试。')
+    try {
+      const cart=await api.removeSharedCartLine({
+        productId,expectedGeneration:sharedCart.generation,expectedVersion:sharedCart.version,
+      },{ idempotencyKey:safeIdempotencyKey('guest-shared-cart-remove') })
+      setSharedCart(cart);setSharedCartError(null)
+    } catch (error) {
+      if (error instanceof GuestApiError&&error.code==='SHARED_CART_VERSION_CONFLICT') {
+        await loadSharedCart(true)
+        throw new Error('同桌购物车已经更新，已为您刷新，请确认后再操作。')
+      }
+      if (blockForSession(error)) throw new Error('桌次已失效，请重新扫码后继续。')
+      throw new Error(errorMessage(error,'这件商品暂时没有移除，请稍后再试。'))
+    }
+  },[blockForSession,loadSharedCart,sharedCart])
 
   const submitOrder = useCallback(async (
     items: Array<{ productId: string; quantity: number }>,
@@ -452,7 +498,11 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       const result = cartProtocolVersion === 2
         ? await (() => {
           if (sharedCart === null) throw new Error('同桌购物车正在同步，请稍后再试。')
+          if (!sharedCart.allowedActions.includes('checkout')) {
+            throw new Error('购物车中有暂不可结算的商品，请处理或刷新后再结账。')
+          }
           return api.checkoutSharedCart({
+            expectedGeneration: sharedCart.generation,
             expectedVersion: sharedCart.version,
             note: options.fulfillmentNote || null,
             ...(options.confirmedDuplicateOrderId
@@ -579,8 +629,14 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
             cart: sharedCartItems,
             cartUnitAmountMinors: sharedCartUnitAmountMinors,
             cartTotalAmountMinor: sharedCart?.totalAmountMinor,
+            cartReadOnly: sharedCart?.guestWritesFrozen ?? false,
+            cartReadOnlyMessage: '服务人员正在核对本桌点单，暂时只能查看购物车；完成后会恢复修改。',
             onCartAdjust: adjustSharedCart,
+            onCartRemove:removeSharedCartLine,
           } : {})}
+          submitDisabled={cartProtocolVersion === 2 && (
+            sharedCart === null || !sharedCart.allowedActions.includes('checkout')
+          )}
           onSubmit={submitOrder}
         />
       )}
@@ -771,11 +827,7 @@ function orderStatusCopy(order: GuestTableOrder): string {
 }
 
 function orderSourceCopy(order: GuestTableOrder): string {
-  if (order.channel === 'staff_assisted') return '服务员协助点单'
-  if (order.channel === 'guest_qr') return order.isMine ? '我提交的' : '同桌客人提交'
-  if (order.channel === 'cashier') return '收银台录入'
-  if (order.channel === 'reservation') return '预约订单'
-  return '门店订单'
+  return order.sourceText.trim() || '点单来源待确认'
 }
 
 function paymentAccessCopy(access: GuestTableOrder['paymentAccess']): string {

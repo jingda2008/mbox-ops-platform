@@ -58,16 +58,18 @@
   <block wx:else>
     <view wx:if="{{error}}" class="error-banner">{{error}}</view>
     <view wx:if="{{success}}" class="success-banner">{{success}}</view>
+    <view wx:if="{{cartWritesFrozen}}" class="error-banner">服务人员正在核对本桌点单，暂时只能查看；完成后会恢复修改。</view>
 
     <view class="table-strip">
       <view><text class="table-strip__label">当前桌位</text><text class="table-strip__value">{{table.displayName}}</text></view>
+      <view class="service-name"><text>本桌服务</text><text>{{serviceStaffName}}</text></view>
       <view wx:if="{{performance}}" class="show-brief"><text>{{performance.state}}</text><text>{{performance.name}} · {{performance.time}}</text></view>
       <button bindtap="openStatus">进度</button>
     </view>
 
     <view wx:if="{{pendingPayment}}" class="payment-recovery">
       <view><text>{{pendingPayment.statusText}}</text><text>应付 {{pendingPayment.amountText}}</text></view>
-      <button bindtap="continuePayment" loading="{{busy}}">继续付款</button>
+      <button wx:if="{{pendingPayment.canContinue}}" bindtap="continuePayment" loading="{{busy}}">继续付款</button>
       <button bindtap="openAccount">查看本桌账单</button>
     </view>
 
@@ -122,11 +124,14 @@
       </view>
       <state-panel wx:else type="empty" title="没有找到符合条件的商品" message="可清空搜索或切换分类" />
     </view>
+    <view wx:if="{{!cart.length}}" class="shared-cart-empty">
+      <text>本桌共享购物车</text><text>还没有商品；同桌每位顾客加入的商品都会在这里同步显示。</text>
+    </view>
   </block>
 
   <view wx:if="{{connectionState === 'active' && cart.length}}" class="cart-dock">
-    <view class="cart-summary"><view><text>本桌共享购物车 · {{cartCount}}件 · {{cartTotal}}</text><text>{{cartSyncing ? '正在同步同桌选择' : '同桌顾客可共同查看和调整'}}</text></view><button class="checkout-button" bindtap="openCheckout" loading="{{busy}}" disabled="{{cartSyncing}}">确认并付款</button></view>
-    <scroll-view scroll-y class="cart-lines"><view wx:for="{{cart}}" wx:key="productId"><view><text>{{item.name}}</text><text>{{item.priceText}} × {{item.quantity}} · 小计 {{item.subtotalText}}</text></view><view><button data-id="{{item.productId}}" data-delta="-1" bindtap="changeQuantity" disabled="{{cartSyncing}}">−</button><text>{{item.quantity}}</text><button data-id="{{item.productId}}" data-delta="1" bindtap="changeQuantity" disabled="{{cartSyncing || !item.available}}">＋</button></view></view></scroll-view>
+      <view class="cart-summary"><view><text>本桌共享购物车 · {{cartCount}}件 · {{cartTotal}}</text><text>{{cartWritesFrozen ? '服务人员核对中 · 当前只读' : cartSyncing ? '正在同步同桌选择' : '同桌顾客可共同查看和调整'}}</text></view><view class="cart-summary__actions"><button class="cart-clear" bindtap="clearCart" loading="{{clearingCart}}" disabled="{{cartSyncing || checkoutLocked || pendingPayment || cartWritesFrozen}}">清空</button><button class="checkout-button" bindtap="openCheckout" loading="{{busy}}" disabled="{{cartSyncing || cartWritesFrozen}}">确认并付款</button></view></view>
+    <scroll-view scroll-y class="cart-lines"><view wx:for="{{cart}}" wx:key="productId"><view><text>{{item.name}}</text><text>{{item.priceText}} × {{item.quantity}} · 小计 {{item.subtotalText}}</text><text wx:if="{{!item.available}}" class="cart-line__unavailable">{{item.unavailableReason}}</text></view><view><button aria-label="移除{{item.name}}" data-id="{{item.productId}}" bindtap="removeCartLine" disabled="{{cartSyncing || cartWritesFrozen}}">移除</button><button data-id="{{item.productId}}" data-delta="-1" bindtap="changeQuantity" disabled="{{cartSyncing || cartWritesFrozen}}">−</button><text>{{item.quantity}}</text><button data-id="{{item.productId}}" data-delta="1" bindtap="changeQuantity" disabled="{{cartSyncing || cartWritesFrozen || !item.available}}">＋</button></view></view></scroll-view>
   </view>
 
   <view wx:if="{{upgradeOffer}}" class="sheet-mask"><view class="upgrade-sheet">

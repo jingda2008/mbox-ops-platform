@@ -11,6 +11,7 @@ export interface GuestTableOrderView {
   publicId: string
   round: number
   channel: 'guest_qr' | 'staff_assisted' | 'cashier' | 'reservation' | 'integration'
+  sourceText: string
   status: 'submitted' | 'confirmed' | 'fulfilling' | 'completed'
   visibility: 'shared'
   isMine: boolean
@@ -78,7 +79,19 @@ export async function loadGuestTableOrders(
                 AND refund.status = 'succeeded'
             ), 0),
           0
-        ) AS payable_amount_minor
+        ) AS payable_amount_minor,
+        COALESCE((
+          SELECT SUM(refund.amount_minor)
+          FROM mbox.refunds refund
+          JOIN mbox.payments paid
+            ON paid.tenant_id = refund.tenant_id
+           AND paid.store_id = refund.store_id
+           AND paid.id = refund.payment_id
+          WHERE paid.tenant_id = ordering.tenant_id
+            AND paid.store_id = ordering.store_id
+            AND paid.order_id = ordering.id
+            AND refund.status = 'succeeded'
+        ), 0) AS refunded_amount_minor
       FROM mbox.orders AS ordering
       LEFT JOIN mbox.pricing_authorizations AS pricing_authorization
         ON pricing_authorization.tenant_id = ordering.tenant_id
@@ -93,12 +106,15 @@ export async function loadGuestTableOrders(
       SELECT ordering.*,
         CASE
           WHEN ordering.payable_amount_minor = 0 THEN 'not_required'
+          -- A completed refund is not a public invitation to charge again.
+          -- Only a live, cashier-issued recollection authorization may expose
+          -- this amount to the table payment flow.
+          WHEN ordering.refunded_amount_minor > 0 AND NOT recollection.active THEN 'status_review'
           WHEN active_payment.method = 'auth_code' THEN 'staff_collecting'
-          WHEN provider_action.state = 'unknown' THEN 'status_review'
-          WHEN provider_action.state = 'creating' THEN 'payment_in_progress'
-          WHEN active_payment.method = 'jsapi'
-            AND provider_action.initiated_by_type = 'guest'
-            AND provider_action.initiated_by_ref <> $4::uuid THEN 'payment_in_progress'
+          WHEN active_payment.id IS NOT NULL AND (
+            provider_action.payment_id IS NULL OR provider_action.state IN ('unknown','failed','consumed')
+          ) THEN 'status_review'
+          WHEN active_payment.id IS NOT NULL THEN 'payment_in_progress'
           ELSE 'available'
         END AS payment_access
       FROM order_balances AS ordering
@@ -116,6 +132,14 @@ export async function loadGuestTableOrders(
         ON provider_action.tenant_id = ordering.tenant_id
        AND provider_action.store_id = ordering.store_id
        AND provider_action.payment_id = active_payment.id
+      LEFT JOIN LATERAL (
+        SELECT EXISTS(
+          SELECT 1 FROM mbox.order_recollection_authorizations recollection_authorization
+          WHERE recollection_authorization.tenant_id=ordering.tenant_id AND recollection_authorization.store_id=ordering.store_id
+            AND recollection_authorization.order_id=ordering.id AND recollection_authorization.status='active'
+            AND recollection_authorization.expires_at>clock_timestamp()
+        ) AS active
+      ) recollection ON true
     ), visible_orders_unbounded AS (
       SELECT ordering.*,
         row_number() OVER (ORDER BY ordering.created_at, ordering.id)::integer AS round_number
@@ -156,6 +180,7 @@ export async function loadGuestTableOrders(
         publicId: row.public_id,
         round: Number(row.round_number),
         channel: row.channel,
+        sourceText: orderSourceText(row.channel),
         status: row.order_status,
         visibility: row.visibility,
         isMine: row.is_mine,
@@ -190,4 +215,14 @@ function safeMinor(value: string | number): number {
 
 function timestamp(value: unknown): string {
   return value instanceof Date ? value.toISOString() : String(value)
+}
+
+function orderSourceText(channel: GuestTableOrderView['channel'] | string): string {
+  return ({
+    guest_qr: '顾客扫码点单',
+    staff_assisted: '服务员协助点单',
+    cashier: '门店收银下单',
+    reservation: '预约订单',
+    integration: '第三方订单',
+  } as Record<string, string>)[channel] || '点单来源待确认'
 }

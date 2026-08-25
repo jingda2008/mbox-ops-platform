@@ -144,6 +144,24 @@ describe('PaymentProviderActionRepository', () => {
       type: 'guest', tableSessionId: null, customerId: customerTwoId,
     }, idempotencyKey)).rejects.toBeInstanceOf(ProviderPaymentMethodConflictError)
   })
+
+  it('replays the same scanned payment code but rejects the same key with a different code', async () => {
+    const transaction = new ActionTransaction()
+    const repository = new PaymentProviderActionRepository(transaction, secret)
+    const idempotencyKey = 'barcode-action-key-0001'
+    const principal = { type: 'employee' as const, employeeId }
+    await repository.claim(paymentId, 'barcode', expiresAt, principal, idempotencyKey, '134567890123456789')
+    const payload = { status: 'submitted' }
+    await repository.complete(paymentId, 'barcode', payload, expiresAt, null)
+
+    await expect(repository.claim(
+      paymentId,'barcode',expiresAt,principal,idempotencyKey,'134567890123456789',
+    )).resolves.toEqual({ claimed: false, payload, expiresAt })
+    await expect(repository.claim(
+      paymentId,'barcode',expiresAt,principal,idempotencyKey,'998765432109876543',
+    )).rejects.toBeInstanceOf(ProviderPaymentMethodConflictError)
+    expect(transaction.persisted?.request_fingerprint).not.toContain('134567890123456789')
+  })
 })
 
 class ActionTransaction implements ScopedTransaction {

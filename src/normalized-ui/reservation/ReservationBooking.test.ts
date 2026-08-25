@@ -130,6 +130,19 @@ describe('ReservationBookingView', () => {
     expect(html).not.toContain('刷新确认状态')
   })
 
+  it('explains membership priority as queue order rather than a promised table', () => {
+    const html = render(base({
+      step: 'complete',
+      waitlist: {
+        publicId: 'waitlist-own-001', customerName: '王女士', maskedContact: '138****8000', guestCount: 2,
+        desiredArrivalAt: '2026-08-12T20:30:00+08:00', status: 'waiting', arrivalState: 'not_arrived', note: null,
+        priorityBooking: { requestHoldMinutes: 15 },
+      },
+    }))
+    expect(html).toContain('会员优先安排')
+    expect(html).toContain('已进入优先安排队列，以现场可用座位为准，不承诺固定桌位。')
+  })
+
   it('shows the ten-minute arrival retention only after confirmed arrival time is reached', () => {
     const reservation = {
       publicId: 'reservation-confirmed-002', customerName: '王女士', maskedContact: '138****8000', guestCount: 2,

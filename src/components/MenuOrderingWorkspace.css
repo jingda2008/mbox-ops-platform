@@ -390,3 +390,11 @@
 @media (max-width: 760px) {
   .guest-shell .menu-workspace-header { display: none; }
 }
+.menu-ordering-workspace.is-cart-read-only .menu-add-button,
+.menu-ordering-workspace.is-cart-read-only .menu-stepper button,
+.menu-ordering-workspace.is-cart-read-only .menu-stepper input,
+.menu-ordering-workspace.is-cart-read-only .menu-recommendation-quick-add,
+.menu-ordering-workspace.is-cart-read-only .menu-recommendation-choose {
+  pointer-events: none;
+  opacity: .45;
+}

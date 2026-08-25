@@ -1,10 +1,12 @@
 import type {
   StaffFulfillmentData,
+  StaffMemberBenefitTasks,
   StaffOperationsData,
   RecommendationStaffModificationReason,
   StaffRecommendationModification,
   StaffRecommendationSession,
   StaffReservation,
+  StaffReservationIntakeEntry,
   StaffTableAssignment,
   StaffTableAssignmentOptions,
   StaffTableAssignmentType,
@@ -38,13 +40,29 @@ export class StaffActionsApiError extends Error {
 export interface AssistedOrderAccess {
   canCreateOrder: boolean
   canInitiatePayment: boolean
+  paymentInitiationBlockReason: 'permission_required' | 'provider_not_configured' | 'online_payment_unavailable' | null
   canQueryOnlinePayment: boolean
   onlinePaymentProvider: 'postar' | 'simulation' | null
+  manualCollection: {
+    canRecordCash: boolean
+    canRecordPos: boolean
+    canRecordExternal: boolean
+  }
   gift: null | {
     enabled: boolean
     maximumAmountMinor: number | null
     currency: string
   }
+}
+
+/** A deliberately small read model for a server to collect only on one owned table. */
+export interface StaffTablePaymentOrder {
+  id: string
+  publicId: string
+  currency: string
+  paymentStatus: string
+  outstandingAmountMinor: number
+  hasOnlinePaymentInProgress: boolean
 }
 
 export interface AssistedOrderCatalogProduct {
@@ -218,7 +236,19 @@ export interface VoiceTranscriptionResult {
 export interface StaffActionsApiPort {
   loadOperations(signal?: AbortSignal): Promise<StaffOperationsData>
   loadFulfillment(signal?: AbortSignal): Promise<StaffFulfillmentData>
+  loadMemberBenefitTasks?(tableSessionId?: string | null, signal?: AbortSignal): Promise<StaffMemberBenefitTasks>
+  redeemAnnualGift?(input: Readonly<{
+    reservationId: string; benefitId: string; customerId: string; tableSessionId: string
+    selectedProductId: string; substitutionReason: string | null
+  }>): Promise<void>
+  cancelAnnualGift?(input: Readonly<{
+    reservationId:string;customerId:string;tableSessionId:string;reason:string
+  }>):Promise<void>
+  redeemDailySnack?(claimCode: string): Promise<void>
+  cancelDailySnack?(claimCode: string, reason: string): Promise<void>
   loadReservations(options?: StaffReservationListOptions, signal?: AbortSignal): Promise<StaffReservation[]>
+  loadReservationIntake?(signal?: AbortSignal): Promise<StaffReservationIntakeEntry[]>
+  overrideReservationPriority?(input: Readonly<{ kind: 'reservation' | 'waitlist'; publicId: string; mode: 'promote' | 'demote' | 'clear'; reason: string }>): Promise<void>
   loadTableAssignments(signal?: AbortSignal): Promise<StaffTableAssignment[]>
   loadTableAssignmentOptions(signal?: AbortSignal): Promise<StaffTableAssignmentOptions>
   assignTables(input: Readonly<{
@@ -237,6 +267,7 @@ export interface StaffActionsApiPort {
     capacityOverrideReason?: string
   }>): Promise<void>
   closeTable(sessionId: string, sessionStatus?: 'open' | 'closing'): Promise<void>
+  setGuestCartFreeze(sessionId: string, frozen: boolean, reason?: string): Promise<void>
   transferTable(input: Readonly<{
     tableSessionId: string
     targetTableId: string
@@ -263,10 +294,11 @@ export interface StaffActionsApiPort {
     capacityOverrideReason?:string
   }>):Promise<void>
   completeServiceTask(taskId: string, note?: string): Promise<void>
-  runKdsAction(taskId: string, action: 'complete' | 'deliver'): Promise<void>
+  runKdsAction(taskId: string, action: 'complete' | 'deliver' | 'remake'): Promise<void>
   cancelKdsTask(taskId: string, reasonNote: string): Promise<void>
   actOnReservation(reservationId: string, action: 'confirm' | 'arrive' | 'complete'): Promise<void>
   loadAssistedOrderAccess(signal?: AbortSignal): Promise<AssistedOrderAccess>
+  loadTablePaymentOrders?(tableSessionId: string, signal?: AbortSignal): Promise<StaffTablePaymentOrder[]>
   loadAssistedOrderCatalog(signal?: AbortSignal): Promise<AssistedOrderCatalogProduct[]>
   issueAssistedOrderContext(input: Readonly<{
     tableSessionId: string
@@ -286,6 +318,14 @@ export interface StaffActionsApiPort {
     method: 'native_qr' | 'auth_code'
     customerAuthCode?: string
   }>): Promise<OnlinePaymentAction>
+  recordManualPayment(input: Readonly<{
+    orderId: string
+    provider: 'cash' | 'physical_pos' | 'external_manual'
+    receiptReference: string
+    terminalId?: string
+    externalMethodCode?: 'bank_transfer' | 'mobile_wallet' | 'stored_value_voucher' | 'corporate_account' | 'other'
+    collectionNote?: string
+  }>): Promise<void>
   loadOnlinePaymentStatus(
     paymentId: string,
     signal?: AbortSignal,
@@ -358,6 +398,41 @@ export class StaffActionsApi implements StaffActionsApiPort {
     return this.getData('/api/commerce/fulfillment', signal)
   }
 
+  async loadMemberBenefitTasks(tableSessionId: string | null = null, signal?: AbortSignal): Promise<StaffMemberBenefitTasks> {
+    const suffix = tableSessionId === null ? '' : `?tableSessionId=${encodeURIComponent(tableSessionId)}`
+    const [annualGifts, dailySnacks] = await Promise.all([
+      this.getData<StaffMemberBenefitTasks['annualGifts']>(`/api/staff/annual-benefit-reservations${suffix}`, signal),
+      this.getData<StaffMemberBenefitTasks['dailySnacks']>(`/api/staff/annual-daily-snack-claims${suffix}`, signal),
+    ])
+    return { annualGifts, dailySnacks }
+  }
+
+  async redeemAnnualGift(input: Readonly<{
+    reservationId: string; benefitId: string; customerId: string; tableSessionId: string
+    selectedProductId: string; substitutionReason: string | null
+  }>): Promise<void> {
+    await this.command(`/api/benefit-reservations/${encodeURIComponent(input.reservationId)}/redeem`, {
+      benefitId: input.benefitId, customerId: input.customerId, tableSessionId: input.tableSessionId,
+      selectedProductId: input.selectedProductId, substitutionReason: input.substitutionReason,
+    }, 'idempotency-key')
+  }
+
+  async cancelAnnualGift(input:Readonly<{
+    reservationId:string;customerId:string;tableSessionId:string;reason:string
+  }>):Promise<void> {
+    await this.command(`/api/staff/annual-benefit-reservations/${encodeURIComponent(input.reservationId)}/cancel`,{
+      customerId:input.customerId,tableSessionId:input.tableSessionId,reason:input.reason,
+    },'idempotency-key')
+  }
+
+  async redeemDailySnack(claimCode: string): Promise<void> {
+    await this.command(`/api/staff/annual-daily-snack-claims/${encodeURIComponent(claimCode)}/redeem`, {}, 'idempotency-key')
+  }
+
+  async cancelDailySnack(claimCode: string, reason: string): Promise<void> {
+    await this.command(`/api/staff/annual-daily-snack-claims/${encodeURIComponent(claimCode)}/cancel`, { reason }, 'idempotency-key')
+  }
+
   loadReservations(options: StaffReservationListOptions = {}, signal?: AbortSignal): Promise<StaffReservation[]> {
     const query = new URLSearchParams()
     if (options.range !== undefined && options.range !== 'current') query.set('range', options.range)
@@ -365,6 +440,17 @@ export class StaffActionsApi implements StaffActionsApiPort {
     if (options.to !== undefined) query.set('to', options.to)
     const suffix = query.size === 0 ? '' : `?${query.toString()}`
     return this.getData(`/api/staff/reservations${suffix}`, signal)
+  }
+
+  loadReservationIntake(signal?: AbortSignal): Promise<StaffReservationIntakeEntry[]> {
+    const window = shanghaiCalendarDay()
+    return this.getData(`/api/staff/reservation-intake?from=${encodeURIComponent(window.from)}&to=${encodeURIComponent(window.to)}`, signal)
+  }
+
+  async overrideReservationPriority(input: Readonly<{ kind: 'reservation' | 'waitlist'; publicId: string; mode: 'promote' | 'demote' | 'clear'; reason: string }>): Promise<void> {
+    await this.command(`/api/staff/reservation-intake/${input.kind}/${encodeURIComponent(input.publicId)}/priority-override`, {
+      mode: input.mode, reason: input.reason,
+    }, 'idempotency-key')
   }
 
   loadTableAssignments(signal?: AbortSignal): Promise<StaffTableAssignment[]> {
@@ -428,6 +514,14 @@ export class StaffActionsApi implements StaffActionsApiPort {
     }
   }
 
+  async setGuestCartFreeze(sessionId: string, frozen: boolean, reason?: string): Promise<void> {
+    await this.command(
+      `/api/table-sessions/${encodeURIComponent(sessionId)}/guest-cart-freeze`,
+      { frozen, ...(frozen ? { reason: reason?.trim() || '服务人员核对本桌点单' } : {}) },
+      'idempotency-key',
+    )
+  }
+
   async transferTable(input: Readonly<{
     tableSessionId: string
     targetTableId: string
@@ -485,7 +579,15 @@ export class StaffActionsApi implements StaffActionsApiPort {
     )
   }
 
-  async runKdsAction(taskId: string, action: 'complete' | 'deliver'): Promise<void> {
+  async runKdsAction(taskId: string, action: 'complete' | 'deliver' | 'remake'): Promise<void> {
+    if (action === 'remake') {
+      await this.command(
+        `/api/commerce/kds/${encodeURIComponent(taskId)}/remake`,
+        { reasonCode: 'production_remake', reasonNote: '现场确认后重新制作' },
+        'idempotency-key',
+      )
+      return
+    }
     await this.command(`/api/commerce/kds/${encodeURIComponent(taskId)}/actions`, { action }, 'idempotency-key')
   }
 
@@ -508,6 +610,10 @@ export class StaffActionsApi implements StaffActionsApiPort {
 
   loadAssistedOrderAccess(signal?: AbortSignal): Promise<AssistedOrderAccess> {
     return this.getData('/api/commerce/assisted-order-access', signal)
+  }
+
+  loadTablePaymentOrders(tableSessionId: string, signal?: AbortSignal): Promise<StaffTablePaymentOrder[]> {
+    return this.getData(`/api/commerce/table-sessions/${encodeURIComponent(tableSessionId)}/payment-orders`, signal)
   }
 
   loadAssistedOrderCatalog(signal?: AbortSignal): Promise<AssistedOrderCatalogProduct[]> {
@@ -578,6 +684,36 @@ export class StaffActionsApi implements StaffActionsApiPort {
       throw new StaffActionsApiError('支付结果无法识别，请到收银页面核对', 'INVALID_PAYMENT_RESPONSE', response.status)
     }
     return body.data.providerAction
+  }
+
+  async recordManualPayment(input: Readonly<{
+    orderId: string
+    provider: 'cash' | 'physical_pos' | 'external_manual'
+    receiptReference: string
+    terminalId?: string
+    externalMethodCode?: 'bank_transfer' | 'mobile_wallet' | 'stored_value_voucher' | 'corporate_account' | 'other'
+    collectionNote?: string
+  }>): Promise<void> {
+    const headers = new Headers({
+      accept: 'application/json',
+      'content-type': 'application/json',
+      'idempotency-key': `staff-manual-payment-${this.createIdempotencyKey()}`,
+    })
+    await this.request('/api/payments/manual', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        orderId: input.orderId,
+        provider: input.provider,
+        method: input.provider === 'cash' ? 'cash' : input.provider === 'physical_pos' ? 'card' : 'manual',
+        receiptReference: input.receiptReference.trim(),
+        ...(input.terminalId?.trim() ? { terminalId: input.terminalId.trim() } : {}),
+        ...(input.provider === 'external_manual' ? {
+          externalMethodCode: input.externalMethodCode,
+          collectionNote: input.collectionNote?.trim(),
+        } : {}),
+      }),
+    })
   }
 
   async queryOnlinePayment(paymentId: string): Promise<'pending' | 'succeeded' | 'failed' | 'closed'> {
@@ -1031,4 +1167,14 @@ function isOnlinePaymentAction(value: unknown): value is OnlinePaymentAction {
     && (value.presentation === 'jsapi' || value.presentation === 'qr' || value.presentation === 'barcode')
     && typeof value.expiresAt === 'string'
     && (value.payload === null || isObject(value.payload))
+}
+
+function shanghaiCalendarDay(): { from: string; to: string } {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' })
+    .formatToParts(new Date())
+  const value = Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]))
+  const date = `${value.year}-${value.month}-${value.day}`
+  const from = new Date(`${date}T00:00:00.000+08:00`)
+  const to = new Date(from); to.setUTCDate(to.getUTCDate() + 1)
+  return { from: from.toISOString(), to: to.toISOString() }
 }

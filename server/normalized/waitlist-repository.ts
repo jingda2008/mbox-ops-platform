@@ -30,6 +30,8 @@ export interface WaitlistEntry {
   status: WaitlistStatus
   ownerEmployeeId: string | null
   note: string | null
+  annualPriorityRuleId: string | null
+  annualPriorityHoldMinutes: number | null
   aggregateVersion: number
   createdAt: string
   updatedAt: string
@@ -45,6 +47,8 @@ export interface CreateWaitlistInput {
   source: WaitlistSource
   ownerEmployeeId?: string | null
   note?: string | null
+  annualPriorityRuleId?: string | null
+  annualPriorityHoldMinutes?: number | null
 }
 
 interface WaitlistRow extends Record<string, unknown> {
@@ -59,6 +63,8 @@ interface WaitlistRow extends Record<string, unknown> {
   status: WaitlistStatus
   owner_employee_id: string | null
   note: string | null
+  annual_priority_rule_id: string | null
+  annual_priority_hold_minutes: number | null
   aggregate_version: string | number
   created_at: string
   updated_at: string
@@ -83,18 +89,19 @@ export class WaitlistRepository {
 
   async create(input: Readonly<CreateWaitlistInput>): Promise<WaitlistEntry> {
     validateCreate(input)
+    await this.assertAnnualPriority(input)
     const result = await this.transaction.query<WaitlistRow>(`
       INSERT INTO mbox.waitlist_entries (
         tenant_id, store_id, public_id, customer_id, customer_name,
         contact_hash, encrypted_contact, encryption_key_id, masked_contact,
-        guest_count, desired_arrival_at, source, owner_employee_id, note
+        guest_count, desired_arrival_at, source, owner_employee_id, note, annual_priority_rule_id, annual_priority_hold_minutes
       ) VALUES (
         $1::uuid, $2::uuid, $3, $4::uuid, $5, $6, decode($7, 'base64'), $8, $9,
-        $10, $11::timestamptz, $12, $13::uuid, $14
+        $10, $11::timestamptz, $12, $13::uuid, $14, $15::uuid, $16::smallint
       )
       RETURNING id, public_id, customer_id, customer_name, masked_contact,
         guest_count, desired_arrival_at::text, source, status, owner_employee_id,
-        note, aggregate_version, created_at::text, updated_at::text
+        note, annual_priority_rule_id, annual_priority_hold_minutes, aggregate_version, created_at::text, updated_at::text
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -110,6 +117,8 @@ export class WaitlistRepository {
       input.source,
       input.ownerEmployeeId ?? null,
       input.note?.trim() || null,
+      input.annualPriorityRuleId ?? null,
+      input.annualPriorityHoldMinutes ?? null,
     ])
     const entry = mapRow(requiredRow(result.rows[0], 'waitlist create'))
     await this.appendEvent(entry.id, null, entry.status, 'waitlist.created', 'guest', null, null)
@@ -120,7 +129,7 @@ export class WaitlistRepository {
     const result = await this.transaction.query<WaitlistRow>(`
       SELECT id, public_id, customer_id, customer_name, masked_contact,
         guest_count, desired_arrival_at::text, source, status, owner_employee_id,
-        note, aggregate_version, created_at::text, updated_at::text
+        note, annual_priority_rule_id, annual_priority_hold_minutes, aggregate_version, created_at::text, updated_at::text
       FROM mbox.waitlist_entries
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND public_id = $3 AND customer_id = $4::uuid
@@ -138,15 +147,29 @@ export class WaitlistRepository {
     const result = await this.transaction.query<WaitlistRow>(`
       SELECT id, public_id, customer_id, customer_name, masked_contact,
         guest_count, desired_arrival_at::text, source, status, owner_employee_id,
-        note, aggregate_version, created_at::text, updated_at::text
+        note, annual_priority_rule_id, annual_priority_hold_minutes, aggregate_version, created_at::text, updated_at::text
       FROM mbox.waitlist_entries
+      LEFT JOIN LATERAL (
+        SELECT override.mode
+        FROM mbox.reservation_priority_queue_overrides AS override
+        WHERE override.tenant_id=mbox.waitlist_entries.tenant_id AND override.store_id=mbox.waitlist_entries.store_id
+          AND override.waitlist_entry_id=mbox.waitlist_entries.id
+        ORDER BY override.created_at DESC,override.id DESC
+        LIMIT 1
+      ) AS queue_override ON true
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND desired_arrival_at >= $3::timestamptz AND desired_arrival_at < $4::timestamptz
         AND ($5::text IS NULL OR status = $5)
         AND ($6::boolean OR owner_employee_id = ANY($7::uuid[]))
       ORDER BY
         CASE status WHEN 'arrived' THEN 0 WHEN 'waiting' THEN 1 WHEN 'notified' THEN 2 ELSE 3 END,
-        desired_arrival_at, created_at, id
+        desired_arrival_at,
+        CASE queue_override.mode
+          WHEN 'promote' THEN 0
+          WHEN 'demote' THEN 3
+          ELSE CASE WHEN annual_priority_rule_id IS NULL THEN 2 ELSE 1 END
+        END,
+        created_at, id
       LIMIT 500
     `, [
       this.transaction.scope.tenantId,
@@ -170,7 +193,7 @@ export class WaitlistRepository {
     const selected = await this.transaction.query<WaitlistRow>(`
       SELECT id, public_id, customer_id, customer_name, masked_contact,
         guest_count, desired_arrival_at::text, source, status, owner_employee_id,
-        note, aggregate_version, created_at::text, updated_at::text
+        note, annual_priority_rule_id, annual_priority_hold_minutes, aggregate_version, created_at::text, updated_at::text
       FROM mbox.waitlist_entries
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
       FOR UPDATE
@@ -187,7 +210,7 @@ export class WaitlistRepository {
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
       RETURNING id, public_id, customer_id, customer_name, masked_contact,
         guest_count, desired_arrival_at::text, source, status, owner_employee_id,
-        note, aggregate_version, created_at::text, updated_at::text
+        note, annual_priority_rule_id, annual_priority_hold_minutes, aggregate_version, created_at::text, updated_at::text
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.id, input.to])
     const entry = mapRow(requiredRow(updated.rows[0], 'waitlist transition'))
     await this.appendEvent(
@@ -227,6 +250,39 @@ export class WaitlistRepository {
       actorRefHash,
       reason,
     ])
+  }
+
+  private async assertAnnualPriority(input: Readonly<CreateWaitlistInput>): Promise<void> {
+    if (input.annualPriorityRuleId === undefined || input.annualPriorityRuleId === null) {
+      if (input.annualPriorityHoldMinutes !== undefined && input.annualPriorityHoldMinutes !== null) {
+        throw new TypeError('Waitlist priority hold requires a priority rule')
+      }
+      return
+    }
+    if (input.customerId === undefined || input.customerId === null || !Number.isSafeInteger(input.annualPriorityHoldMinutes)
+      || input.annualPriorityHoldMinutes! < 5 || input.annualPriorityHoldMinutes! > 30) {
+      throw new TypeError('Waitlist priority eligibility is incomplete')
+    }
+    const result = await this.transaction.query(`
+      SELECT 1 FROM mbox.loyalty_annual_benefit_policy_versions policy
+      JOIN mbox.loyalty_annual_benefit_rules rule
+        ON rule.tenant_id=policy.tenant_id AND rule.store_id=policy.store_id AND rule.policy_version_id=policy.id
+      JOIN mbox.customer_memberships membership
+        ON membership.tenant_id=policy.tenant_id AND membership.store_id=policy.store_id
+       AND membership.customer_id=$4::uuid AND membership.status='active'
+      JOIN mbox.loyalty_accounts account
+        ON account.tenant_id=membership.tenant_id AND account.store_id=membership.store_id
+       AND account.membership_id=membership.id AND account.customer_id=membership.customer_id
+      WHERE policy.tenant_id=$1::uuid AND policy.store_id=$2::uuid AND policy.status='published'
+        AND policy.effective_from<=clock_timestamp() AND (policy.effective_until IS NULL OR policy.effective_until>clock_timestamp())
+        AND rule.id=$3::uuid AND rule.enabled AND rule.rule_kind='priority_seating'
+        AND rule.reservation_hold_minutes=$5::smallint
+        AND (account.current_tier=rule.eligible_tier
+          OR (rule.inherit_to_higher_tiers AND (account.current_tier,rule.eligible_tier) IN (('silver','member'),('gold','member'),('gold','silver'))))
+      FOR SHARE OF policy,rule,membership,account
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.annualPriorityRuleId,
+      input.customerId, input.annualPriorityHoldMinutes])
+    if (result.rowCount !== 1) throw new TypeError('Waitlist priority eligibility is no longer active')
   }
 }
 
@@ -293,6 +349,8 @@ const waitlistCodec: JsonCodec<WaitlistEntry> = {
     status: entry.status,
     ownerEmployeeId: entry.ownerEmployeeId,
     note: entry.note,
+    annualPriorityRuleId: entry.annualPriorityRuleId,
+    annualPriorityHoldMinutes: entry.annualPriorityHoldMinutes,
     aggregateVersion: entry.aggregateVersion,
     createdAt: entry.createdAt,
     updatedAt: entry.updatedAt,
@@ -368,6 +426,8 @@ function mapRow(row: WaitlistRow): WaitlistEntry {
     status: row.status,
     ownerEmployeeId: row.owner_employee_id,
     note: row.note,
+    annualPriorityRuleId: row.annual_priority_rule_id,
+    annualPriorityHoldMinutes: row.annual_priority_hold_minutes === null ? null : Number(row.annual_priority_hold_minutes),
     aggregateVersion: Number(row.aggregate_version),
     createdAt: row.created_at,
     updatedAt: row.updated_at,

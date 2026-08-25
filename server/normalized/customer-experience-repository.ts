@@ -60,10 +60,21 @@ export interface PublicMembership {
   lifecycleStage: 'new' | 'active' | 'high_value' | 'at_risk' | 'dormant'
   pointsBalance: number
   growthValue: number
+  lifetimeGrowth: number
+  qualificationGrowth: number | null
+  tierQualificationGrowth: number | null
   pendingRecoveryPoints: number
   redemptionStatus: 'active' | 'suspended' | 'closed'
   visitCount: number
   joinedAt: string
+  estimatedSpendToNextTierMinor: number | null
+  annualBenefitCounts: {
+    preview: number
+    granted: number
+    available: number
+  }
+  updatedAt: string
+  responseVersion: string
   tierProgress: {
     evaluationWindowMonths: number
     rollingGrowth: number
@@ -169,6 +180,37 @@ export interface PublicActivity {
   availablePaymentChoices: ActivityPaymentChoice[]
   blockedPaymentChoices: ActivityPaymentChoice[]
   availablePaymentMethods: Array<'jsapi' | 'native_qr'>
+  packageSelectionRequired: boolean
+  packages: PublicActivityPackage[]
+}
+
+/** One selectable ticket/plan inside an activity.  A registration can choose
+ * exactly one package; it is not a customer table order. */
+export interface PublicActivityPackage {
+  publicId: string
+  name: string
+  description: string
+  imageUrl: string | null
+  includedItems: string[]
+  capacity: number
+  remainingCapacity: number
+  availability: 'available' | 'sold_out' | 'temporarily_unavailable'
+  availabilityText: string
+  memberPurchaseLimit: number
+  feeAmountMinor: number
+  depositAmountMinor: number
+  feeBasis: ActivityFeeBasis
+  paymentMode: ActivityPaymentMode
+  paymentDeadlineMinutes: number
+  paymentRuleText: string
+  redemptionPolicyVersion: string | null
+  refundPolicyVersion: string | null
+  currency: string
+  paymentAvailability: 'available' | 'blocked'
+  paymentBlockedReason: string | null
+  availablePaymentChoices: ActivityPaymentChoice[]
+  blockedPaymentChoices: ActivityPaymentChoice[]
+  availablePaymentMethods: Array<'jsapi' | 'native_qr'>
 }
 
 export interface PublicBenefit {
@@ -184,6 +226,49 @@ export interface PublicBenefit {
   validUntil: string | null
   status: string
   display: JsonObject
+}
+
+// `preview` is deliberately not backed by an mbox.benefits row.  It cannot be
+// reserved, redeemed or used as an inventory claim.
+export type PublicAnnualBenefitStatus = 'pending' | 'available' | 'reserved' | 'redeemed'
+  | 'cancelled' | 'expired' | 'tier_invalid' | 'confirming' | 'renewal_unlock'
+
+export type AnnualBenefitFactState = 'preview' | 'pending_issue' | 'claimable' | 'issued'
+  | 'reserved' | 'awaiting_fulfillment' | 'fulfilled' | 'cancelled' | 'expired' | 'revoked'
+  | 'confirming' | 'tier_invalid' | 'renewal_unlock' | 'continuous_qualification'
+
+export interface PublicAnnualBenefitCalendarItem {
+  id: string
+  ruleCode: string
+  kind: 'birthday' | 'festival' | 'priority_seating' | 'daily_snack'
+  title: string
+  date: string
+  windowStartsOn: string
+  windowEndsOn: string
+  status: PublicAnnualBenefitStatus
+  factState: AnnualBenefitFactState
+  benefitId: string | null
+  redeemable: boolean
+  claimable: boolean
+  policyVersion: number
+  cycleKey: string
+  timezone: string
+  dateParser: 'confirmed_gregorian_occurrence' | 'birthday_month_day' | 'store_business_date' | 'continuous_qualification'
+  store: { code: string; name: string }
+  applicableTier: PublicMembership['level']
+  inheritToHigherTiers: boolean
+  stackGroup: string
+  priority: number
+  imageUrl: string | null
+  gift: { code: string; name: string } | null
+  substitutes: Array<{ code: string; name: string; reason: string }>
+  inventoryRequirement: 'not_applicable' | 'strict_recipe'
+  revocationPolicy: 'cancel_before_redeem' | 'expire_only' | 'manual_compensation'
+  requiresTableSession: boolean
+  canApply: boolean
+  canApplyReason: string | null
+  conditions: string[]
+  updatedAt: string
 }
 
 export interface PublicActivityRegistration {
@@ -204,18 +289,24 @@ export interface PublicActivityRegistration {
   paymentAvailability: 'available' | 'blocked' | 'not_required'
   paymentBlockedReason: string | null
   maskedContact: string
+  activityPackage: Pick<PublicActivityPackage, 'publicId' | 'name'> | null
 }
 
 export interface PublicPortalSnapshot {
   features: PublicFeature[]
   membership: PublicMembership | null
   points: PublicPointEntry[]
+  growth: PublicGrowthEntry[]
+  processing: PublicLoyaltyProcessingItem[]
   preferences: JsonObject
   content: PublicContentCard[]
   activities: PublicActivity[]
   benefits: PublicBenefit[]
+  annualBenefitCalendar: PublicAnnualBenefitCalendarItem[]
   membershipTerms: PublicMembershipTerms | null
   supportContact: PublicSupportContact | null
+  updatedAt: string
+  responseVersion: string
 }
 
 export interface RecommendationAnswer {
@@ -378,6 +469,7 @@ export interface SelectedCheckoutUpgrade {
 
 interface MembershipRow extends Record<string, unknown> {
   id: string
+  customer_id: string
   member_no: string
   level: PublicMembership['level']
   lifecycle_stage: PublicMembership['lifecycleStage']
@@ -398,6 +490,61 @@ interface MembershipRow extends Record<string, unknown> {
   grace_ends_at: string | null
   expiring_points_30_days: string | number | null
   next_expiry_at: string | null
+  tier_qualification_growth: string | number | null
+  growth_numerator: number | null
+  growth_denominator_minor: number | null
+  growth_rounding_mode: 'floor' | 'nearest' | null
+  growth_carry_denominator: string | number | null
+  growth_carry_remainder: string | number | null
+  updated_at: string
+}
+
+interface AnnualBenefitCalendarRow extends Record<string, unknown> {
+  policy_id: string
+  policy_version: number
+  timezone: string
+  rule_id: string
+  rule_code: string
+  title: string
+  rule_kind: 'birthday' | 'festival' | 'priority_seating' | 'daily_snack'
+  eligible_tier: PublicMembership['level']
+  inherit_to_higher_tiers: boolean
+  window_before_days: number
+  window_after_days: number
+  requires_birthday_consent: boolean
+  on_site_only: boolean
+  requires_table_session: boolean
+  alcohol_handling: 'not_applicable' | 'non_alcoholic_only' | 'staff_compliance_required'
+  cycle_year: number
+  stack_group: string
+  priority: number
+  inventory_requirement: 'not_applicable' | 'strict_recipe'
+  revocation_policy: 'cancel_before_redeem' | 'expire_only' | 'manual_compensation'
+  feb29_policy: 'feb28' | 'mar01' | 'leap_year_only' | null
+  store_code: string
+  store_name: string
+  definition_code: string
+  definition_name: string
+  definition_display_snapshot: JsonObject
+  product_code: string | null
+  product_name: string | null
+  substitutes: unknown
+  starts_on: string | null
+  ends_on: string | null
+  consent_status: 'granted' | 'withdrawn' | null
+  grant_id: string | null
+  grant_cycle_key: string | null
+  grant_window_starts_on: string | null
+  grant_window_ends_on: string | null
+  grant_status: string | null
+  benefit_id: string | null
+  benefit_status: string | null
+  fulfillment_intent_status: 'pending' | 'retry' | 'dispatched' | 'failed' | 'cancelled' | 'compensated' | null
+  daily_snack_claim_status: 'reserved' | 'redeemed' | 'fulfilled' | 'cancelled' | 'expired'
+    | 'cancelled_after_redemption' | 'compensated' | null
+  benefit_valid_from: string | null
+  benefit_valid_until: string | null
+  source_updated_at: string
 }
 
 interface FeatureRow extends Record<string, unknown> {
@@ -494,8 +641,31 @@ interface ActivityRow extends Record<string, unknown> {
   participation_requirements: string[]
   contact_instructions: string
   member_benefit_text: string | null
+  package_selection_required: boolean
   registration_status: string | null
   activity_payment_authorized: boolean
+  activity_packages: JsonObject[]
+}
+
+interface ActivityPackageRow extends Record<string, unknown> {
+  id: string
+  public_id: string
+  name: string
+  description: string
+  image_url: string | null
+  included_items: string[]
+  capacity: number
+  member_purchase_limit: number
+  registered_count: string | number
+  fee_amount_minor: string | number
+  deposit_amount_minor: string | number
+  fee_basis: ActivityFeeBasis
+  payment_mode: ActivityPaymentMode
+  payment_deadline_minutes: number
+  payment_rule_text: string
+  redemption_policy_version: string | null
+  refund_policy_version: string | null
+  currency: string
 }
 
 interface BenefitPortalRow extends Record<string, unknown> {
@@ -662,22 +832,28 @@ export class CustomerExperienceRepository {
   ) {}
 
   async publicPortal(customerId: string): Promise<PublicPortalSnapshot> {
-    const [features, membership, preferences, cards, activities, benefits, membershipTerms, supportContact] = await Promise.all([
-      this.listFeatures(),
-      this.findMembership(customerId),
-      this.publicOwnedPreferences(customerId),
-      this.listContentCards(),
-      this.listActivities(customerId),
-      this.listBenefits(customerId),
-      this.currentMembershipTerms(),
-      this.publicSupportContact(),
-    ])
+    // ScopedTransaction owns one PostgreSQL client. Keep reads sequential so
+    // one logical snapshot never relies on deprecated concurrent client.query queuing.
+    const features = await this.listFeatures()
+    const membership = await this.findMembership(customerId)
+    const preferences = await this.publicOwnedPreferences(customerId)
+    const cards = await this.listContentCards()
+    const activities = await this.listActivities(customerId)
+    const benefits = await this.listBenefits(customerId)
+    const membershipTerms = await this.currentMembershipTerms()
+    const supportContact = await this.publicSupportContact()
+    const annualBenefitCalendar = membership === null
+      ? [] : await this.listAnnualBenefitCalendar(membership, preferences)
     const points = membership === null ? [] : await this.listPointLedger(membership.id)
-    const publicMembership = membership === null ? null : membershipView(membership)
-    return {
+    const growth = membership === null ? [] : await this.listGrowthLedger(membership.id)
+    const processing = membership === null ? [] : await this.listLoyaltyProcessing(customerId, membership.id)
+    const publicMembership = membership === null ? null : membershipView(membership, annualBenefitCalendar)
+    const snapshot = {
       features: features.map(featureView),
       membership: publicMembership,
       points,
+      growth,
+      processing,
       preferences,
       content: cards.filter((card) => audienceAllows(
         card.audience_visibility,
@@ -694,9 +870,138 @@ export class CustomerExperienceRepository {
         ))
         .map((activity) => activityView(activity, this.activityPaymentProviderConfigured)),
       benefits: benefits.map(benefitPortalView),
+      annualBenefitCalendar,
       membershipTerms,
       supportContact,
     }
+    const updatedAt = latestTimestamp([
+      publicMembership?.updatedAt,
+      membershipTerms?.effectiveFrom,
+      ...annualBenefitCalendar.map((item) => item.updatedAt),
+      ...points.map((item) => item.occurredAt),
+      ...growth.map((item) => item.occurredAt),
+      ...processing.map((item) => item.updatedAt),
+    ])
+    return {
+      ...snapshot,
+      updatedAt,
+      responseVersion: publicSnapshotVersion(snapshot),
+    }
+  }
+
+  private async listAnnualBenefitCalendar(
+    membership: MembershipRow,
+    preferences: JsonObject,
+  ): Promise<PublicAnnualBenefitCalendarItem[]> {
+    const rows = await this.transaction.query<AnnualBenefitCalendarRow>(`
+      SELECT policy.id AS policy_id,policy.version AS policy_version,policy.timezone,
+        cycle.cycle_year,store.code AS store_code,store.name AS store_name,
+        rule.id AS rule_id,rule.rule_code,rule.title,rule.rule_kind,rule.eligible_tier,
+        rule.inherit_to_higher_tiers,rule.window_before_days,rule.window_after_days,
+        rule.requires_birthday_consent,rule.on_site_only,rule.requires_table_session,
+        rule.alcohol_handling,rule.stack_group,rule.priority,rule.inventory_requirement,
+        rule.revocation_policy,rule.feb29_policy,
+        definition.benefit_code AS definition_code,definition.name AS definition_name,
+        definition.display_snapshot AS definition_display_snapshot,
+        product.code AS product_code,product.name AS product_name,
+        COALESCE(substitute_rows.items,'[]'::jsonb) AS substitutes,
+        occurrence.starts_on::text,occurrence.ends_on::text,
+        consent.status AS consent_status,
+        grant_row.id AS grant_id,grant_row.cycle_key AS grant_cycle_key,
+        grant_row.window_starts_on::text AS grant_window_starts_on,
+        grant_row.window_ends_on::text AS grant_window_ends_on,
+        grant_row.status AS grant_status,grant_row.benefit_id,
+        benefit.status AS benefit_status,benefit.valid_from::text AS benefit_valid_from,
+        benefit.valid_until::text AS benefit_valid_until,
+        daily_snack_claim.status AS daily_snack_claim_status,
+        fulfillment_intent.status AS fulfillment_intent_status,
+        GREATEST(policy.updated_at,rule.updated_at,definition.updated_at,
+          COALESCE(product.updated_at,'epoch'::timestamptz),
+          COALESCE(occurrence.created_at,'epoch'::timestamptz),
+          COALESCE(grant_row.updated_at,'epoch'::timestamptz),
+          COALESCE(benefit.updated_at,'epoch'::timestamptz),
+          COALESCE(daily_snack_claim.updated_at,'epoch'::timestamptz),
+          COALESCE(fulfillment_intent.updated_at,'epoch'::timestamptz))::text AS source_updated_at
+      FROM mbox.loyalty_annual_benefit_policy_versions policy
+      JOIN mbox.stores store
+        ON store.tenant_id=policy.tenant_id AND store.id=policy.store_id
+      JOIN mbox.loyalty_annual_benefit_rules rule
+        ON rule.tenant_id=policy.tenant_id AND rule.store_id=policy.store_id
+       AND rule.policy_version_id=policy.id AND rule.enabled
+      JOIN mbox.loyalty_benefit_definitions definition
+        ON definition.tenant_id=rule.tenant_id AND definition.store_id=rule.store_id
+       AND definition.id=rule.benefit_definition_id
+      LEFT JOIN mbox.products product
+        ON product.tenant_id=definition.tenant_id AND product.store_id=definition.store_id
+       AND product.id=definition.product_id
+      LEFT JOIN LATERAL (
+        SELECT jsonb_agg(jsonb_build_object(
+          'code',substitute_product.code,'name',substitute_product.name,'reason',substitute.reason
+        ) ORDER BY substitute.priority,substitute.id) AS items
+        FROM mbox.loyalty_annual_benefit_rule_substitutes substitute
+        JOIN mbox.products substitute_product
+          ON substitute_product.tenant_id=substitute.tenant_id
+         AND substitute_product.store_id=substitute.store_id
+         AND substitute_product.id=substitute.product_id
+        WHERE substitute.tenant_id=rule.tenant_id AND substitute.store_id=rule.store_id
+          AND substitute.rule_id=rule.id
+      ) substitute_rows ON true
+      CROSS JOIN LATERAL generate_series(
+        extract(year FROM (clock_timestamp() AT TIME ZONE policy.timezone))::integer-1,
+        extract(year FROM (clock_timestamp() AT TIME ZONE policy.timezone))::integer+1
+      ) cycle(cycle_year)
+      LEFT JOIN mbox.loyalty_annual_benefit_occurrences occurrence
+        ON occurrence.tenant_id=rule.tenant_id AND occurrence.store_id=rule.store_id
+       AND occurrence.rule_id=rule.id AND occurrence.cycle_year=cycle.cycle_year
+      LEFT JOIN LATERAL (
+        SELECT status FROM mbox.customer_annual_benefit_consents consent_value
+        WHERE consent_value.tenant_id=policy.tenant_id AND consent_value.store_id=policy.store_id
+          AND consent_value.customer_id=$3::uuid AND consent_value.consent_type='birthday_month_day'
+        ORDER BY consent_value.consented_at DESC,consent_value.id DESC LIMIT 1
+      ) consent ON true
+      LEFT JOIN LATERAL (
+        SELECT grant_value.id,grant_value.cycle_key,grant_value.window_starts_on,
+          grant_value.window_ends_on,grant_value.status,grant_value.benefit_id,grant_value.updated_at
+        FROM mbox.membership_annual_benefit_grants grant_value
+        WHERE grant_value.tenant_id=policy.tenant_id AND grant_value.store_id=policy.store_id
+          AND grant_value.membership_id=$4::uuid AND grant_value.rule_id=rule.id
+          AND (CASE
+            WHEN rule.rule_kind='daily_snack'
+              THEN grant_value.cycle_key=(clock_timestamp() AT TIME ZONE policy.timezone)::date::text
+            ELSE split_part(grant_value.cycle_key,'-',1)::integer=cycle.cycle_year
+          END)
+        ORDER BY grant_value.granted_at DESC,grant_value.id DESC LIMIT 1
+      ) grant_row ON true
+      LEFT JOIN mbox.benefits benefit
+        ON benefit.tenant_id=policy.tenant_id AND benefit.store_id=policy.store_id
+       AND benefit.id=grant_row.benefit_id
+      LEFT JOIN LATERAL (
+        SELECT claim.status,claim.updated_at
+        FROM mbox.annual_daily_snack_claims claim
+        WHERE rule.rule_kind='daily_snack' AND claim.tenant_id=policy.tenant_id AND claim.store_id=policy.store_id
+          AND claim.benefit_id=grant_row.benefit_id
+        ORDER BY claim.created_at DESC,claim.id DESC LIMIT 1
+      ) daily_snack_claim ON true
+      LEFT JOIN LATERAL (
+        SELECT intent.status,intent.updated_at
+        FROM mbox.complimentary_fulfillment_intents AS intent
+        WHERE intent.tenant_id=policy.tenant_id AND intent.store_id=policy.store_id
+          AND intent.benefit_id=grant_row.benefit_id
+        ORDER BY intent.created_at DESC,intent.id DESC LIMIT 1
+      ) fulfillment_intent ON true
+      WHERE policy.tenant_id=$1::uuid AND policy.store_id=$2::uuid
+        AND ((policy.status='published' AND policy.effective_from<=clock_timestamp()
+          AND (policy.effective_until IS NULL OR policy.effective_until>clock_timestamp()))
+          OR grant_row.id IS NOT NULL)
+        AND rule.rule_kind IN ('birthday','festival','priority_seating','daily_snack')
+        AND (rule.rule_kind NOT IN ('daily_snack','priority_seating')
+          OR cycle.cycle_year=extract(year FROM (clock_timestamp() AT TIME ZONE policy.timezone))::integer)
+      ORDER BY cycle.cycle_year,rule.rule_kind,rule.priority,rule.rule_code,rule.id
+    `, [
+      this.transaction.scope.tenantId, this.transaction.scope.storeId, membership.customer_id, membership.id,
+    ])
+    return rows.rows.flatMap((row) => annualBenefitCalendarView(row, membership, preferences))
+      .toSorted((left, right) => left.date.localeCompare(right.date) || left.ruleCode.localeCompare(right.ruleCode))
   }
 
   private async publicSupportContact(): Promise<PublicSupportContact | null> {
@@ -809,6 +1114,7 @@ export class CustomerExperienceRepository {
       registration_payment_mode: ActivityPaymentMode
       activity_payment_authorized: boolean
       masked_contact: string
+      activity_package_snapshot: JsonObject
     }>(`
       WITH RECURSIVE ancestry AS (
         SELECT id, merged_into_customer_id FROM mbox.customers
@@ -833,6 +1139,7 @@ export class CustomerExperienceRepository {
         registration.amount_due_minor, registration.paid_amount_minor,
         registration.currency, registration.payment_due_at::text,
         registration.seat_hold_expires_at::text, activity.registration_payment_mode,
+        registration.activity_package_snapshot,
         COALESCE(current_contact.masked_contact,'已清除') AS masked_contact,
         COALESCE((SELECT policy.online_payment_enabled
           FROM mbox.store_commerce_policies policy
@@ -885,6 +1192,10 @@ export class CustomerExperienceRepository {
         paymentAvailability: paymentAvailability.availability,
         paymentBlockedReason: paymentAvailability.blockedReason,
         maskedContact: row.masked_contact,
+        activityPackage: text(row.activity_package_snapshot.publicId) === null ? null : {
+          publicId: requiredText(row.activity_package_snapshot.publicId, 'activity package public id'),
+          name: requiredText(row.activity_package_snapshot.name, 'activity package name'),
+        },
       }
     })
   }
@@ -906,15 +1217,20 @@ export class CustomerExperienceRepository {
         SELECT child.id FROM mbox.customers child JOIN family parent ON child.merged_into_customer_id=parent.id
         WHERE child.tenant_id=$1::uuid AND child.store_id=$2::uuid
       )
-      SELECT membership.id, membership.member_no, account.current_tier AS level,
+      SELECT membership.id, membership.customer_id, membership.member_no, account.current_tier AS level,
         membership.lifecycle_stage, account.available_points AS points_balance,
         account.growth_value, account.pending_recovery_points, account.redemption_status,
-        membership.visit_count, membership.joined_at::text,
+        membership.visit_count, membership.joined_at::text,account.updated_at::text AS updated_at,
         policy.evaluation_window_months, policy.silver_upgrade_growth,
         policy.silver_retain_growth, policy.gold_upgrade_growth, policy.gold_retain_growth,
+        reward_policy.growth_numerator,reward_policy.growth_denominator_minor,
+        reward_policy.rounding_mode AS growth_rounding_mode,
+        growth_carry.denominator AS growth_carry_denominator,
+        growth_carry.remainder_numerator AS growth_carry_remainder,
         CASE WHEN policy.id IS NULL THEN NULL ELSE COALESCE(rolling.rolling_growth,0)::bigint END AS rolling_growth,
         period.status AS period_status, period.ends_at::text AS period_ends_at,
         period.grace_ends_at::text AS grace_ends_at,
+        period.qualification_growth AS tier_qualification_growth,
         expiry.expiring_points_30_days, expiry.next_expiry_at::text
       FROM mbox.customer_memberships membership
       JOIN mbox.loyalty_accounts account
@@ -931,6 +1247,23 @@ export class CustomerExperienceRepository {
         ORDER BY tier_policy.effective_from DESC,tier_policy.version DESC,tier_policy.id DESC LIMIT 1
       ) policy ON true
       LEFT JOIN LATERAL (
+        SELECT reward.id,reward.growth_numerator,reward.growth_denominator_minor,reward.rounding_mode
+        FROM mbox.loyalty_policy_versions reward
+        WHERE reward.tenant_id=membership.tenant_id AND reward.store_id=membership.store_id
+          AND reward.status='published' AND reward.effective_from<=clock_timestamp()
+          AND (reward.effective_until IS NULL OR reward.effective_until>clock_timestamp())
+        ORDER BY reward.effective_from DESC,reward.version DESC,reward.id DESC LIMIT 1
+      ) reward_policy ON true
+      LEFT JOIN LATERAL (
+        SELECT carry.denominator,carry.remainder_numerator
+        FROM mbox.loyalty_reward_carry_balances carry
+        WHERE reward_policy.id IS NOT NULL
+          AND carry.tenant_id=membership.tenant_id AND carry.store_id=membership.store_id
+          AND carry.membership_id=membership.id AND carry.policy_version_id=reward_policy.id
+          AND carry.currency='CNY' AND carry.reward_kind='growth'
+        LIMIT 1
+      ) growth_carry ON true
+      LEFT JOIN LATERAL (
         SELECT SUM(ledger.growth_delta)::bigint AS rolling_growth
         FROM mbox.loyalty_growth_ledger ledger
         WHERE policy.id IS NOT NULL
@@ -940,7 +1273,8 @@ export class CustomerExperienceRepository {
           AND ledger.occurred_at<=clock_timestamp()
       ) rolling ON true
       LEFT JOIN LATERAL (
-        SELECT tier_period.status,tier_period.ends_at,tier_period.grace_ends_at
+        SELECT tier_period.status,tier_period.ends_at,tier_period.grace_ends_at,
+          tier_period.qualification_growth
         FROM mbox.membership_tier_periods tier_period
         WHERE tier_period.tenant_id=membership.tenant_id AND tier_period.store_id=membership.store_id
           AND tier_period.membership_id=membership.id AND tier_period.status IN ('active','grace')
@@ -1032,7 +1366,7 @@ export class CustomerExperienceRepository {
           tenant_id, store_id, membership_id, customer_id
         ) SELECT tenant_id, store_id, id, customer_id FROM membership
         RETURNING membership_id, available_points, growth_value,
-          pending_recovery_points, current_tier, redemption_status
+          pending_recovery_points, current_tier, redemption_status,updated_at
       )
       SELECT membership.id, membership.member_no, account.current_tier AS level,
         membership.lifecycle_stage, account.available_points AS points_balance,
@@ -1047,8 +1381,15 @@ export class CustomerExperienceRepository {
         NULL::text AS period_status,
         NULL::text AS period_ends_at,
         NULL::text AS grace_ends_at,
+        NULL::integer AS tier_qualification_growth,
         NULL::bigint AS expiring_points_30_days,
-        NULL::text AS next_expiry_at
+        NULL::text AS next_expiry_at,
+        NULL::integer AS growth_numerator,
+        NULL::integer AS growth_denominator_minor,
+        NULL::text AS growth_rounding_mode,
+        NULL::bigint AS growth_carry_denominator,
+        NULL::bigint AS growth_carry_remainder,
+        account.updated_at::text AS updated_at
       FROM membership JOIN account ON account.membership_id=membership.id
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, customerId, memberNo])
     const row = requiredRow(inserted.rows[0], 'membership')
@@ -1067,6 +1408,7 @@ export class CustomerExperienceRepository {
 
   async registerActivity(input: Readonly<{
     activityPublicId: string
+    activityPackagePublicId: string | null
     customerId: string
     partySize: number
     protectedContact: ProtectedActivityRegistrationContact
@@ -1115,7 +1457,8 @@ export class CustomerExperienceRepository {
         activity.safety_acknowledgement_text, activity.safety_requirements,
         activity.sales_copy, activity.activity_details, activity.included_items,
         activity.participation_requirements, activity.contact_instructions,
-        activity.member_benefit_text, NULL::text AS registration_status,
+        activity.member_benefit_text, activity.package_selection_required,
+        NULL::text AS registration_status,
         COALESCE((SELECT policy.online_payment_enabled
           FROM mbox.store_commerce_policies policy
           WHERE policy.tenant_id=activity.tenant_id AND policy.store_id=activity.store_id), false)
@@ -1152,6 +1495,64 @@ export class CustomerExperienceRepository {
     )) {
       throw new CustomerExperienceRequestError('这个活动当前不在您的可报名范围内', 'ACTIVITY_AUDIENCE_DENIED', 403)
     }
+    const selectablePackages = await this.transaction.query<ActivityPackageRow>(`
+      SELECT activity_package.id,activity_package.public_id,activity_package.name,
+        activity_package.description,activity_package.image_url,activity_package.included_items,
+        activity_package.capacity,activity_package.member_purchase_limit,
+        activity_package.fee_amount_minor,activity_package.deposit_amount_minor,
+        activity_package.fee_basis,activity_package.payment_mode,
+        activity_package.payment_deadline_minutes,activity_package.payment_rule_text,
+        activity_package.redemption_policy_version,activity_package.refund_policy_version,
+        $4::char(3) AS currency,
+        COALESCE((
+          SELECT sum(package_registration.party_size)
+          FROM mbox.community_activity_registrations package_registration
+          WHERE package_registration.tenant_id=activity_package.tenant_id
+            AND package_registration.store_id=activity_package.store_id
+            AND package_registration.activity_package_id=activity_package.id
+            AND package_registration.status IN ('reserved','payment_pending','confirmed','checked_in')
+        ),0)::text AS registered_count
+      FROM mbox.community_activity_packages activity_package
+      WHERE activity_package.tenant_id=$1::uuid AND activity_package.store_id=$2::uuid
+        AND activity_package.activity_id=$3::uuid AND activity_package.status='published'
+        AND (activity_package.available_from IS NULL OR activity_package.available_from<=clock_timestamp())
+        AND (activity_package.available_until IS NULL OR activity_package.available_until>clock_timestamp())
+      ORDER BY activity_package.sort_order,activity_package.id
+      FOR UPDATE OF activity_package
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, row.id, row.currency])
+    const selectedPackage = resolveActivityPackage(
+      selectablePackages.rows,
+      input.activityPackagePublicId ?? null,
+      row.package_selection_required,
+    )
+    // A registration deliberately has one selectable add-on. A per-person
+    // package consumes one member-purchase unit per attendee; a package priced
+    // per registration consumes one. Check this before seats, payment and
+    // stock can be held.
+    if (selectedPackage !== null) {
+      const requestedPackageUnits = selectedPackage.fee_basis === 'per_person' ? input.partySize : 1
+      const priorUnits = await this.transaction.query<{ units: string | number }>(`
+        SELECT COALESCE(sum(
+          CASE WHEN registration.activity_package_snapshot->>'feeBasis'='per_person'
+            THEN registration.party_size ELSE 1 END
+        ),0)::text AS units
+        FROM mbox.community_activity_registrations registration
+        WHERE registration.tenant_id=$1::uuid AND registration.store_id=$2::uuid
+          AND registration.activity_package_id=$3::uuid AND registration.customer_id=$4::uuid
+          AND registration.status IN ('reserved','payment_pending','confirmed','checked_in')
+      `, [
+        this.transaction.scope.tenantId,this.transaction.scope.storeId,
+        selectedPackage.id,registrationCustomerId,
+      ])
+      const committedPackageUnits = integer(priorUnits.rows[0]?.units ?? 0, 'activity package committed units')
+      if (committedPackageUnits + requestedPackageUnits > selectedPackage.member_purchase_limit) {
+        throw new CustomerExperienceRequestError(
+          `该套餐每会员限购${selectedPackage.member_purchase_limit}份，当前报名会超出可购买数量`,
+          'ACTIVITY_PACKAGE_PURCHASE_LIMIT',
+          409,
+        )
+      }
+    }
     const termsAcknowledgement = serverActivityTermsAcknowledgement(
       row.safety_policy_version,
       row.refund_policy_version,
@@ -1160,15 +1561,31 @@ export class CustomerExperienceRepository {
       input.termsAcknowledged,
     )
     const registered = integer(row.registered_count, 'registered count')
-    const hasCapacity = row.status !== 'full' && registered + input.partySize <= row.capacity
-    const feeUnitAmountMinor = money(row.fee_amount_minor, 'activity fee')
-    const depositUnitAmountMinor = money(row.deposit_amount_minor, 'activity deposit')
-    const multiplier = row.fee_basis === 'per_person' ? input.partySize : 1
-    const totalFeeAmountMinor = feeUnitAmountMinor * multiplier
-    const depositAmountMinor = depositUnitAmountMinor * multiplier
-    const payment = resolveActivityRegistrationPayment(row.registration_payment_mode, input.paymentChoice, {
+    const hasActivityCapacity = row.status !== 'full' && registered + input.partySize <= row.capacity
+    const hasPackageCapacity = selectedPackage === null
+      || integer(selectedPackage.registered_count, 'activity package registered count') + input.partySize <= selectedPackage.capacity
+    const hasCapacity = hasActivityCapacity && hasPackageCapacity
+    const activityCharge = activityChargePart({
+      feeAmountMinor: money(row.fee_amount_minor, 'activity fee'),
+      depositAmountMinor: money(row.deposit_amount_minor, 'activity deposit'),
+      feeBasis: row.fee_basis,
+      paymentMode: row.registration_payment_mode,
+      paymentDeadlineMinutes: row.payment_deadline_minutes,
+      paymentRuleText: row.payment_rule_text,
+    }, input.partySize)
+    const packageCharge = selectedPackage === null ? null : activityChargePart({
+      feeAmountMinor: money(selectedPackage.fee_amount_minor, 'activity package add-on fee'),
+      depositAmountMinor: money(selectedPackage.deposit_amount_minor, 'activity package deposit'),
+      feeBasis: selectedPackage.fee_basis,
+      paymentMode: selectedPackage.payment_mode,
+      paymentDeadlineMinutes: selectedPackage.payment_deadline_minutes,
+      paymentRuleText: selectedPackage.payment_rule_text,
+    }, input.partySize)
+    const charge = combinedActivityCharge(activityCharge, packageCharge)
+    const totalFeeAmountMinor = charge.totalFeeAmountMinor
+    const payment = resolveActivityRegistrationPayment(charge.paymentMode, input.paymentChoice, {
       totalFeeAmountMinor,
-      depositAmountMinor,
+      depositAmountMinor: charge.depositAmountMinor,
     })
     if (hasCapacity && payment.amountDueMinor > 0
       && (!this.activityPaymentProviderConfigured || !row.activity_payment_authorized)) {
@@ -1225,13 +1642,15 @@ export class CustomerExperienceRepository {
         policyVersion: row.refund_policy_version,
         summary: row.refund_policy_summary,
       }),
-      row.payment_deadline_minutes,
+      charge.paymentDeadlineMinutes,
       termsAcknowledgement.safetyPolicyVersion,
       termsAcknowledgement.refundPolicyVersion,
       termsAcknowledgement.source,
       payment.choice,
       payment.amountDueMinor > 0 ? input.paymentMethod : null,
       payment.amountDueMinor,
+      selectedPackage?.id ?? null,
+      selectedPackage === null ? '{}' : JSON.stringify(activityPackageSnapshot(selectedPackage)),
     ]
     const inserted = previous
       ? await this.transaction.query<{
@@ -1259,6 +1678,7 @@ export class CustomerExperienceRepository {
           terms_acknowledgement_source=$19,
           requested_payment_choice=$20,requested_payment_method=$21,
           requested_amount_due_minor=$22::bigint,
+          activity_package_id=$23::uuid,activity_package_snapshot=$24::jsonb,
           checked_in_at=NULL, cancelled_at=NULL
         WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
           AND customer_id=$4::uuid AND status='cancelled'
@@ -1282,20 +1702,30 @@ export class CustomerExperienceRepository {
           seat_hold_expires_at, refund_policy_snapshot,
           acknowledged_safety_policy_version, acknowledged_refund_policy_version,
           terms_acknowledged_at, terms_acknowledgement_source,
-          requested_payment_choice,requested_payment_method,requested_amount_due_minor
+          requested_payment_choice,requested_payment_method,requested_amount_due_minor,
+          activity_package_id,activity_package_snapshot
         ) VALUES (
-          $1::uuid, $2::uuid, $3, $23::uuid, $4::uuid, $5::uuid,
+          $1::uuid, $2::uuid, $3, $25::uuid, $4::uuid, $5::uuid,
           $6, $7, $8, $9, $10::bigint, $11::bigint, 0, $12,
           $13::jsonb, $14,
           CASE WHEN $11::bigint > 0 THEN clock_timestamp()+make_interval(mins=>$16) ELSE NULL END,
           CASE WHEN $11::bigint > 0 THEN clock_timestamp()+make_interval(mins=>$16) ELSE NULL END,
           $15::jsonb, $17, $18, clock_timestamp(), $19,
-          $20,$21,$22::bigint
+          $20,$21,$22::bigint,$23::uuid,$24::jsonb
         )
         RETURNING id, public_id, status, registration_cycle,
           payment_due_at::text, seat_hold_expires_at::text
       `, [...registrationValues, row.id])
     const registration = requiredRow(inserted.rows[0], 'activity registration')
+    if (selectedPackage !== null && status !== 'waitlisted') {
+      await this.reserveActivityPackageInventory({
+        registrationId: registration.id,
+        registrationCycle: registration.registration_cycle,
+        packageId: selectedPackage.id,
+        partySize: input.partySize,
+        expiresAt: registration.seat_hold_expires_at ?? row.ends_at,
+      })
+    }
     const inactivatedContact = await this.transaction.query<{ id: string }>(`
       UPDATE mbox.community_activity_registration_contact_versions
       SET status='inactive',inactivated_at=clock_timestamp()
@@ -1355,8 +1785,94 @@ export class CustomerExperienceRepository {
       paymentDueAt: registration.payment_due_at,
       seatHoldExpiresAt: registration.seat_hold_expires_at,
       currency: row.currency,
-      paymentRuleText: row.payment_rule_text,
+      paymentRuleText: charge.paymentRuleText,
       paymentPublicId: authoritativePayment?.publicId ?? null,
+    }
+  }
+
+  /**
+   * Activity packages reserve real stock against the registration itself.  They
+   * never create orders or order items: attendance is not a table sale.  The
+   * paired migration releases these rows if the registration leaves an active
+   * state; ActivityOperationsRepository consumes them only at check-in.
+   */
+  private async reserveActivityPackageInventory(input: Readonly<{
+    registrationId: string
+    registrationCycle: number
+    packageId: string
+    partySize: number
+    expiresAt: string
+  }>): Promise<void> {
+    const components = await this.transaction.query<{
+      id: string
+      inventory_item_id: string
+      item_name: string
+      item_status: string
+      required_quantity: string
+    }>(`
+      SELECT component.id,component.inventory_item_id,item.name AS item_name,item.status AS item_status,
+        (component.quantity * CASE WHEN component.per_participant THEN $4::numeric ELSE 1::numeric END)::text
+          AS required_quantity
+      FROM mbox.community_activity_package_components component
+      JOIN mbox.inventory_items item
+        ON item.tenant_id=component.tenant_id AND item.store_id=component.store_id
+       AND item.id=component.inventory_item_id
+      WHERE component.tenant_id=$1::uuid AND component.store_id=$2::uuid
+        AND component.activity_package_id=$3::uuid
+      ORDER BY component.inventory_item_id,component.id
+      FOR KEY SHARE OF component,item
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      input.packageId,
+      input.partySize,
+    ])
+    for (const component of components.rows) {
+      if (component.item_status !== 'active') {
+        throw new CustomerExperienceRequestError(
+          `套餐物料“${component.item_name}”当前不可用，本次没有建立报名或占用名额`,
+          'ACTIVITY_PACKAGE_INVENTORY_UNAVAILABLE',
+          409,
+        )
+      }
+      await this.transaction.query(`
+        INSERT INTO mbox.inventory_balances(tenant_id,store_id,inventory_item_id)
+        VALUES($1::uuid,$2::uuid,$3::uuid)
+        ON CONFLICT(tenant_id,store_id,inventory_item_id) DO NOTHING
+      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, component.inventory_item_id])
+      const held = await this.transaction.query(`
+        UPDATE mbox.inventory_balances
+        SET reserved_quantity=reserved_quantity+$4::numeric,updated_at=clock_timestamp()
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND inventory_item_id=$3::uuid
+          AND on_hand_quantity-reserved_quantity>=$4::numeric
+      `, [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        component.inventory_item_id,
+        component.required_quantity,
+      ])
+      if (held.rowCount !== 1) {
+        throw new CustomerExperienceRequestError(
+          `套餐物料“${component.item_name}”库存不足，本次没有建立报名或占用名额`,
+          'ACTIVITY_PACKAGE_INVENTORY_INSUFFICIENT',
+          409,
+        )
+      }
+      await this.transaction.query(`
+        INSERT INTO mbox.community_activity_package_inventory_reservations(
+          tenant_id,store_id,registration_id,registration_cycle,package_component_id,
+          inventory_item_id,quantity,status,expires_at
+        ) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,$6::uuid,$7::numeric,'reserved',$8::timestamptz)
+      `, [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        input.registrationId,
+        input.registrationCycle,
+        component.id,
+        component.inventory_item_id,
+        component.required_quantity,
+        input.expiresAt,
+      ])
     }
   }
 
@@ -3362,7 +3878,55 @@ export class CustomerExperienceRepository {
         activity.safety_acknowledgement_text, activity.safety_requirements,
         activity.sales_copy, activity.activity_details, activity.included_items,
         activity.participation_requirements, activity.contact_instructions,
-        activity.member_benefit_text,
+        activity.member_benefit_text, activity.package_selection_required,
+        COALESCE((
+          SELECT jsonb_agg(jsonb_build_object(
+            'publicId',activity_package.public_id,
+            'name',activity_package.name,
+            'description',activity_package.description,
+            'imageUrl',activity_package.image_url,
+            'includedItems',activity_package.included_items,
+            'capacity',activity_package.capacity,
+            'memberPurchaseLimit',activity_package.member_purchase_limit,
+            'registeredCount',COALESCE((
+              SELECT sum(package_registration.party_size)
+              FROM mbox.community_activity_registrations package_registration
+              WHERE package_registration.tenant_id=activity_package.tenant_id
+                AND package_registration.store_id=activity_package.store_id
+                AND package_registration.activity_package_id=activity_package.id
+                AND package_registration.status IN ('reserved','payment_pending','confirmed','checked_in')
+            ),0),
+            'feeAmountMinor',activity_package.fee_amount_minor,
+            'depositAmountMinor',activity_package.deposit_amount_minor,
+            'feeBasis',activity_package.fee_basis,
+            'paymentMode',activity_package.payment_mode,
+            'paymentDeadlineMinutes',activity_package.payment_deadline_minutes,
+            'paymentRuleText',activity_package.payment_rule_text,
+            'redemptionPolicyVersion',activity_package.redemption_policy_version,
+            'refundPolicyVersion',activity_package.refund_policy_version,
+            'status',activity_package.status,
+            'availableFrom',activity_package.available_from,
+            'availableUntil',activity_package.available_until,
+            'inventoryAvailable',NOT EXISTS (
+              SELECT 1
+              FROM mbox.community_activity_package_components component
+              JOIN mbox.inventory_items inventory_item
+                ON inventory_item.tenant_id=component.tenant_id AND inventory_item.store_id=component.store_id
+               AND inventory_item.id=component.inventory_item_id
+              LEFT JOIN mbox.inventory_balances balance
+                ON balance.tenant_id=component.tenant_id AND balance.store_id=component.store_id
+               AND balance.inventory_item_id=component.inventory_item_id
+              WHERE component.tenant_id=activity_package.tenant_id AND component.store_id=activity_package.store_id
+                AND component.activity_package_id=activity_package.id
+                AND (inventory_item.status<>'active'
+                  OR COALESCE(balance.on_hand_quantity,0)-COALESCE(balance.reserved_quantity,0)<component.quantity)
+            ),
+            'currency',activity.currency
+          ) ORDER BY activity_package.sort_order,activity_package.id)
+          FROM mbox.community_activity_packages activity_package
+          WHERE activity_package.tenant_id=activity.tenant_id AND activity_package.store_id=activity.store_id
+            AND activity_package.activity_id=activity.id AND activity_package.status IN ('published','paused')
+        ),'[]'::jsonb) AS activity_packages,
         registration.status AS registration_status,
         COALESCE((SELECT policy.online_payment_enabled
           FROM mbox.store_commerce_policies policy
@@ -4156,7 +4720,10 @@ function planView(plan: PlanRow, cues: CueRow[]): ExperiencePlanView {
   }
 }
 
-function membershipView(row: MembershipRow): PublicMembership {
+function membershipView(
+  row: MembershipRow,
+  annualCalendar: readonly PublicAnnualBenefitCalendarItem[] = [],
+): PublicMembership {
   const rollingGrowth = row.rolling_growth === null ? null : integer(row.rolling_growth, 'rolling membership growth')
   const tierProgress = row.evaluation_window_months === null || rollingGrowth === null
     ? null
@@ -4164,21 +4731,126 @@ function membershipView(row: MembershipRow): PublicMembership {
   const expiringPoints = row.expiring_points_30_days === null
     ? 0
     : integer(row.expiring_points_30_days, 'expiring membership points')
+  const tierQualificationGrowth = row.tier_qualification_growth == null
+    ? null : integer(row.tier_qualification_growth, 'tier qualification growth')
+  const upgradeRemaining = tierProgress?.upgradeRemaining ?? null
+  const estimatedSpendToNextTierMinor = upgradeRemaining === null
+    || row.growth_numerator == null || row.growth_numerator <= 0
+    || row.growth_denominator_minor == null
+    || row.growth_rounding_mode == null
+    ? null
+    : minimumEligibleSpendMinorForGrowth({
+      remainingGrowth: upgradeRemaining,
+      numeratorPerMinor: row.growth_numerator,
+      denominator: row.growth_denominator_minor,
+      roundingMode: row.growth_rounding_mode,
+      carryDenominator: row.growth_carry_denominator,
+      carryRemainder: row.growth_carry_remainder,
+    })
+  const updatedAt = row.updated_at ?? row.joined_at
+  const annualBenefitCounts = {
+    preview: annualCalendar.filter((item) => item.status === 'pending' || item.status === 'renewal_unlock').length,
+    granted: annualCalendar.filter((item) => item.benefitId !== null).length,
+    available: annualCalendar.filter((item) => item.status === 'available').length,
+  }
   return {
     memberNo: row.member_no,
     level: row.level,
     lifecycleStage: row.lifecycle_stage,
     pointsBalance: row.points_balance,
     growthValue: row.growth_value,
+    lifetimeGrowth: row.growth_value,
+    qualificationGrowth: rollingGrowth,
+    tierQualificationGrowth,
     pendingRecoveryPoints: row.pending_recovery_points,
     redemptionStatus: row.redemption_status,
     visitCount: row.visit_count,
     joinedAt: row.joined_at,
+    estimatedSpendToNextTierMinor,
+    annualBenefitCounts,
+    updatedAt,
+    responseVersion: createHash('sha256').update(JSON.stringify({
+      membershipId: row.id,
+      memberNo: row.member_no,
+      level: row.level,
+      lifecycleStage: row.lifecycle_stage,
+      points: row.points_balance,
+      lifetimeGrowth: row.growth_value,
+      qualificationGrowth: rollingGrowth,
+      tierQualificationGrowth,
+      pendingRecoveryPoints: row.pending_recovery_points,
+      redemptionStatus: row.redemption_status,
+      visitCount: row.visit_count,
+      joinedAt: row.joined_at,
+      estimatedSpendToNextTierMinor,
+      annualBenefitCounts,
+      tierProgress,
+      pointsExpiry: expiringPoints > 0 && row.next_expiry_at !== null
+        ? { expiringWithin30Days: expiringPoints, nextExpiryAt: row.next_expiry_at }
+        : null,
+      updatedAt,
+    })).digest('hex').slice(0,24),
     tierProgress,
     pointsExpiry: expiringPoints > 0 && row.next_expiry_at !== null
       ? { expiringWithin30Days: expiringPoints, nextExpiryAt: row.next_expiry_at }
       : null,
   }
+}
+
+export function minimumEligibleSpendMinorForGrowth(input: Readonly<{
+  remainingGrowth: number
+  numeratorPerMinor: number
+  denominator: number
+  roundingMode: 'floor' | 'nearest'
+  carryDenominator: string | number | null
+  carryRemainder: string | number | null
+}>): number {
+  if (!Number.isSafeInteger(input.remainingGrowth) || input.remainingGrowth < 0
+    || !Number.isSafeInteger(input.numeratorPerMinor) || input.numeratorPerMinor <= 0
+    || !Number.isSafeInteger(input.denominator) || input.denominator <= 0) {
+    throw new RangeError('Membership spend estimate policy is invalid')
+  }
+  const policyDenominator = BigInt(input.denominator)
+  const carryDenominator = input.carryDenominator == null
+    ? policyDenominator : BigInt(input.carryDenominator)
+  if (carryDenominator <= 0n) throw new RangeError('Membership spend estimate carry is invalid')
+  const commonDenominator = bigintLeastCommonMultiple(policyDenominator, carryDenominator)
+  const scaledNumerator = BigInt(input.numeratorPerMinor) * (commonDenominator / policyDenominator)
+  const scaledRemainder = (input.carryRemainder == null ? 0n : BigInt(input.carryRemainder))
+    * (commonDenominator / carryDenominator)
+  const roundingOffset = input.roundingMode === 'nearest' ? commonDenominator / 2n : 0n
+  const requiredNumerator = BigInt(input.remainingGrowth) * commonDenominator
+    - roundingOffset - scaledRemainder
+  if (requiredNumerator <= 0n) return 0
+  const amount = (requiredNumerator + scaledNumerator - 1n) / scaledNumerator
+  const numeric = Number(amount)
+  if (!Number.isSafeInteger(numeric) || numeric < 0) {
+    throw new RangeError('Membership spend estimate is outside the supported range')
+  }
+  return numeric
+}
+
+function bigintLeastCommonMultiple(left: bigint, right: bigint): bigint {
+  let dividend = left < 0n ? -left : left
+  let divisor = right < 0n ? -right : right
+  while (divisor !== 0n) [dividend, divisor] = [divisor, dividend % divisor]
+  return (left / dividend) * right
+}
+
+function latestTimestamp(values: ReadonlyArray<string | null | undefined>): string {
+  const timestamps = values.flatMap((value) => {
+    if (value === null || value === undefined || value.trim() === '') return []
+    const timestamp = Date.parse(value)
+    return Number.isFinite(timestamp) ? [{ timestamp, value }] : []
+  })
+  if (timestamps.length === 0) return new Date(0).toISOString()
+  return timestamps.reduce((latest, candidate) => (
+    candidate.timestamp > latest.timestamp ? candidate : latest
+  )).value
+}
+
+function publicSnapshotVersion(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0,24)
 }
 
 function publicTierProgress(row: MembershipRow, rollingGrowth: number): NonNullable<PublicMembership['tierProgress']> {
@@ -4255,6 +4927,10 @@ function activityView(row: ActivityRow, providerConfigured: boolean): PublicActi
     depositAmountMinor,
     providerConfigured && row.activity_payment_authorized,
   )
+  const packages = publicActivityPackages(
+    row.activity_packages,
+    providerConfigured && row.activity_payment_authorized,
+  )
   return {
     publicId: row.public_id,
     kind: row.activity_kind,
@@ -4302,7 +4978,67 @@ function activityView(row: ActivityRow, providerConfigured: boolean): PublicActi
     availablePaymentMethods: providerConfigured && row.activity_payment_authorized
       && payment.availableChoices.some((choice) => choice !== 'none')
       ? ['jsapi', 'native_qr'] : [],
+    packageSelectionRequired: row.package_selection_required,
+    packages,
   }
+}
+
+function publicActivityPackages(
+  packages: readonly JsonObject[],
+  paymentAuthorityAvailable: boolean,
+): PublicActivityPackage[] {
+  const now = Date.now()
+  return packages.map((value) => {
+    const capacity = integer(value.capacity, 'activity package capacity')
+    const registered = integer(value.registeredCount, 'activity package registered count')
+    const remainingCapacity = Math.max(0, capacity - registered)
+    const status = text(value.status) ?? 'paused'
+    const availableFrom = text(value.availableFrom)
+    const availableUntil = text(value.availableUntil)
+    const inWindow = (availableFrom === null || Date.parse(availableFrom) <= now)
+      && (availableUntil === null || Date.parse(availableUntil) > now)
+    const inventoryAvailable = value.inventoryAvailable === true
+    const availability: PublicActivityPackage['availability'] = remainingCapacity === 0 ? 'sold_out'
+      : status !== 'published' || !inWindow || !inventoryAvailable ? 'temporarily_unavailable'
+        : 'available'
+    const feeAmountMinor = money(value.feeAmountMinor, 'activity package add-on fee')
+    const depositAmountMinor = money(value.depositAmountMinor, 'activity package deposit')
+    const paymentMode = activityPaymentMode(value.paymentMode)
+    const payment = publicActivityPaymentAvailability(
+      paymentMode,
+      feeAmountMinor,
+      depositAmountMinor,
+      paymentAuthorityAvailable,
+    )
+    return {
+      publicId: requiredText(value.publicId, 'activity package public id'),
+      name: requiredText(value.name, 'activity package name'),
+      description: text(value.description) ?? '',
+      imageUrl: publicMediaAssetUrl(text(value.imageUrl)),
+      includedItems: stringArray(value.includedItems),
+      capacity,
+      remainingCapacity,
+      availability,
+      availabilityText: availability === 'available' ? '可报名'
+        : availability === 'sold_out' ? '已售罄' : '暂不可订',
+      memberPurchaseLimit: integer(value.memberPurchaseLimit, 'activity package member purchase limit'),
+      feeAmountMinor,
+      depositAmountMinor,
+      feeBasis: activityFeeBasis(value.feeBasis),
+      paymentMode,
+      paymentDeadlineMinutes: integer(value.paymentDeadlineMinutes, 'activity package payment deadline'),
+      paymentRuleText: requiredText(value.paymentRuleText, 'activity package payment rule'),
+      redemptionPolicyVersion: text(value.redemptionPolicyVersion),
+      refundPolicyVersion: text(value.refundPolicyVersion),
+      currency: requiredText(value.currency, 'activity package currency'),
+      paymentAvailability: payment.availability,
+      paymentBlockedReason: payment.blockedReason,
+      availablePaymentChoices: payment.availableChoices,
+      blockedPaymentChoices: payment.blockedChoices,
+      availablePaymentMethods: paymentAuthorityAvailable && payment.availableChoices.some((choice) => choice !== 'none')
+        ? ['jsapi', 'native_qr'] : [],
+    }
+  })
 }
 
 export function publicActivitySalesCopy(value: JsonObject): JsonObject {
@@ -4408,6 +5144,240 @@ function benefitPortalView(row: BenefitPortalRow): PublicBenefit {
   }
 }
 
+function annualBenefitCalendarView(
+  row: AnnualBenefitCalendarRow,
+  membership: MembershipRow,
+  preferences: JsonObject,
+): PublicAnnualBenefitCalendarItem[] {
+  const claimStatus=dailySnackClaimStatus(row.daily_snack_claim_status)
+  const annualStatus=annualBenefitGrantStatus(row.grant_status,row.benefit_status)
+  const terminalStatus=[claimStatus,annualStatus].find((status) => (
+    status!==null&&['fulfilled','cancelled','expired','revoked'].includes(status)
+  ))??null
+  const grantStatus = terminalStatus
+    ?? fulfillmentIntentStatus(row.fulfillment_intent_status)
+    ?? claimStatus
+    ?? annualStatus
+  const today = calendarDateInTimezone(row.timezone)
+  const grantedDate = row.grant_cycle_key !== null && /^\d{4}-\d{2}-\d{2}$/.test(row.grant_cycle_key)
+    ? row.grant_cycle_key : null
+  const date = grantedDate ?? (row.rule_kind === 'birthday'
+    ? birthdayDate(preferences.birthdayMonthDay, row.cycle_year, row.feb29_policy)
+    : row.rule_kind === 'daily_snack' || row.rule_kind === 'priority_seating' ? today : row.starts_on)
+  // A missing birthday consent or an unconfirmed festival must not leak an
+  // inferred date to the customer. An already-issued benefit remains visible
+  // so that a member can finish a benefit granted before a later withdrawal.
+  if ((row.requires_birthday_consent && row.consent_status !== 'granted' && row.grant_id === null)
+    || date === null) return []
+  const window = row.grant_window_starts_on !== null && row.grant_window_ends_on !== null
+    ? { startsOn: row.grant_window_starts_on, endsOn: row.grant_window_ends_on }
+    : annualBenefitWindowRange(
+      date,
+      row.rule_kind === 'festival' ? row.ends_on : date,
+      row.window_before_days,
+      row.window_after_days,
+    )
+  if (window === null) return []
+  const qualified = annualTierAllows(membership.level, row.eligible_tier, row.inherit_to_higher_tiers)
+  const periodCoverageEnd = membership.period_status === 'grace'
+    ? membership.grace_ends_at : membership.period_ends_at
+  const conditions = [
+    row.on_site_only ? '仅限到店使用' : '使用地点以权益详情为准',
+    row.requires_table_session ? '需关联当次桌台' : '无需预先关联桌台',
+    ...(row.alcohol_handling === 'non_alcoholic_only' ? ['仅提供无酒精礼遇'] : []),
+    ...(row.alcohol_handling === 'staff_compliance_required' ? ['含酒精内容须由现场按合规规则确认'] : []),
+  ]
+  const factState: AnnualBenefitFactState = grantStatus ?? (!qualified
+    ? 'tier_invalid'
+    : periodCoverageEnd !== null && window.endsOn >= periodCoverageEnd.slice(0,10)
+      ? 'renewal_unlock'
+      : row.rule_kind === 'priority_seating'
+        ? 'continuous_qualification'
+        : row.rule_kind === 'daily_snack'
+          ? 'claimable'
+          : today > window.endsOn ? 'expired'
+            : today < window.startsOn ? 'preview' : 'pending_issue')
+  const status = annualBenefitPublicStatus(factState)
+  const redeemable = row.benefit_id !== null && ['issued','reserved'].includes(factState)
+    && !(row.rule_kind === 'daily_snack' && factState === 'reserved')
+  const claimable = row.rule_kind === 'daily_snack' && factState === 'claimable'
+  const canApply = redeemable || claimable
+  const canApplyReason = canApply ? null
+    : factState === 'continuous_qualification' ? '根据现场可用座位优先安排，不承诺固定桌位；无需一次性核销'
+      : factState === 'preview' ? '尚未进入使用窗口，不会提前生成权益或占用库存'
+        : factState === 'renewal_unlock' ? '当前等级周期未覆盖该窗口，续级后才可解锁'
+          : factState === 'tier_invalid' ? `当前等级不符合${tierName(row.eligible_tier)}适用条件`
+            : factState === 'pending_issue' ? '已进入使用窗口，系统正在按已发布规则生成权益'
+              : factState === 'confirming' ? '系统正在确认履约结果，请勿重复申请'
+                : factState === 'reserved' ? '权益已经暂留，请按现场流程继续'
+                : '当前状态不能再次申请'
+  const display = row.definition_display_snapshot
+  const imageCandidate = text(display.imageUrl) ?? text(display.coverUrl)
+  const substitutes = annualBenefitSubstitutes(row.substitutes)
+  return [{
+    id: row.grant_id ?? annualBenefitProjectionId(row, date),
+    ruleCode: row.rule_code,
+    kind: row.rule_kind,
+    title: row.title,
+    date,
+    windowStartsOn: window.startsOn,
+    windowEndsOn: window.endsOn,
+    status,
+    factState,
+    benefitId: row.benefit_id,
+    redeemable,
+    claimable,
+    policyVersion: Number(row.policy_version),
+    cycleKey: row.grant_cycle_key ?? `${row.cycle_year}:${date}`,
+    timezone: row.timezone,
+    dateParser: row.rule_kind === 'festival' ? 'confirmed_gregorian_occurrence'
+      : row.rule_kind === 'birthday' ? 'birthday_month_day'
+        : row.rule_kind === 'daily_snack' ? 'store_business_date' : 'continuous_qualification',
+    store: { code: row.store_code, name: row.store_name },
+    applicableTier: row.eligible_tier,
+    inheritToHigherTiers: row.inherit_to_higher_tiers,
+    stackGroup: row.stack_group,
+    priority: Number(row.priority),
+    imageUrl: publicMiniProgramImageUrl(imageCandidate),
+    gift: row.product_code === null || row.product_name === null
+      ? null : { code: row.product_code, name: row.product_name },
+    substitutes,
+    inventoryRequirement: row.inventory_requirement,
+    revocationPolicy: row.revocation_policy,
+    requiresTableSession: row.requires_table_session,
+    canApply,
+    canApplyReason,
+    conditions,
+    updatedAt: row.source_updated_at,
+  }]
+}
+
+function annualBenefitGrantStatus(
+  grantStatus: string | null,
+  benefitStatus: string | null,
+): AnnualBenefitFactState | null {
+  if (grantStatus === null && benefitStatus === null) return null
+  if (grantStatus === 'fulfilled') return 'fulfilled'
+  if (grantStatus === 'expired' || benefitStatus === 'expired') return 'expired'
+  if (grantStatus === 'revoked' || benefitStatus === 'revoked') return 'revoked'
+  if (grantStatus === 'active' && benefitStatus === 'issued') return 'issued'
+  if (grantStatus === 'active' && benefitStatus === 'reserved') return 'reserved'
+  if (grantStatus === 'active' && benefitStatus === 'redeemed') return 'awaiting_fulfillment'
+  return 'confirming'
+}
+
+function dailySnackClaimStatus(
+  value: AnnualBenefitCalendarRow['daily_snack_claim_status'],
+): AnnualBenefitFactState | null {
+  if (value === null) return null
+  if (value === 'reserved') return 'reserved'
+  if (value === 'redeemed') return 'awaiting_fulfillment'
+  if (value === 'fulfilled') return 'fulfilled'
+  if (value === 'compensated') return 'fulfilled'
+  if (value === 'cancelled_after_redemption') return 'cancelled'
+  if (value === 'cancelled') return 'cancelled'
+  if (value === 'expired') return 'expired'
+  return 'confirming'
+}
+
+function fulfillmentIntentStatus(
+  value: AnnualBenefitCalendarRow['fulfillment_intent_status'],
+): AnnualBenefitFactState | null {
+  if (value === null) return null
+  if (value === 'retry' || value === 'failed') return 'confirming'
+  if (value === 'pending' || value === 'dispatched') return 'awaiting_fulfillment'
+  if (value === 'cancelled') return 'cancelled'
+  if (value === 'compensated') return 'fulfilled'
+  return 'confirming'
+}
+
+function annualBenefitPublicStatus(factState: AnnualBenefitFactState): PublicAnnualBenefitStatus {
+  if (factState === 'preview' || factState === 'pending_issue') return 'pending'
+  if (factState === 'claimable' || factState === 'issued' || factState === 'continuous_qualification') return 'available'
+  if (factState === 'awaiting_fulfillment' || factState === 'fulfilled') return 'redeemed'
+  if (factState === 'revoked') return 'tier_invalid'
+  return factState
+}
+
+function annualTierAllows(
+  actual: PublicMembership['level'],
+  required: PublicMembership['level'],
+  inheritToHigherTiers: boolean,
+): boolean {
+  const rank = { member: 0, silver: 1, gold: 2 } as const
+  return actual === required || (inheritToHigherTiers && rank[actual] > rank[required])
+}
+
+function birthdayDate(
+  value: unknown,
+  year: number,
+  feb29Policy: AnnualBenefitCalendarRow['feb29_policy'],
+): string | null {
+  const monthDay = typeof value === 'string' ? value.trim() : ''
+  const match = /^(\d{2})-(\d{2})$/.exec(monthDay)
+  if (match === null) return null
+  const month = Number(match[1])
+  const day = Number(match[2])
+  if (month === 2 && day === 29 && dateOnly(year,month,day) === null) {
+    if (feb29Policy === 'feb28') return dateOnly(year,2,28)
+    if (feb29Policy === 'mar01') return dateOnly(year,3,1)
+    return null
+  }
+  const candidate = dateOnly(year, month, day)
+  return candidate === null ? null : candidate
+}
+
+function annualBenefitWindowRange(
+  startsOn: string,
+  endsOn: string | null,
+  beforeDays: number,
+  afterDays: number,
+): { startsOn: string; endsOn: string } | null {
+  const startBase = new Date(`${startsOn}T00:00:00.000Z`)
+  const endBase = new Date(`${endsOn ?? startsOn}T00:00:00.000Z`)
+  if (!Number.isFinite(startBase.getTime()) || !Number.isFinite(endBase.getTime())) return null
+  const starts = new Date(startBase); starts.setUTCDate(starts.getUTCDate()-Number(beforeDays))
+  const ends = new Date(endBase); ends.setUTCDate(ends.getUTCDate()+Number(afterDays))
+  return { startsOn: starts.toISOString().slice(0, 10), endsOn: ends.toISOString().slice(0, 10) }
+}
+
+function annualBenefitSubstitutes(value: unknown): Array<{ code: string; name: string; reason: string }> {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((candidate) => isObject(candidate)
+    && typeof candidate.code === 'string' && typeof candidate.name === 'string'
+    && typeof candidate.reason === 'string'
+    ? [{ code: candidate.code, name: candidate.name, reason: candidate.reason }] : [])
+}
+
+function tierName(tier: PublicMembership['level']): string {
+  return tier === 'gold' ? '金卡' : tier === 'silver' ? '银卡' : '普卡'
+}
+
+function dateOnly(year: number, month: number, day: number): string | null {
+  const value = new Date(Date.UTC(year, month-1, day))
+  return value.getUTCFullYear() === year && value.getUTCMonth() === month-1 && value.getUTCDate() === day
+    ? value.toISOString().slice(0, 10) : null
+}
+
+function calendarDateInTimezone(timezone: string, now = new Date()): string {
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(now)
+    const field = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value
+    const year = field('year'); const month = field('month'); const day = field('day')
+    if (year && month && day) return `${year}-${month}-${day}`
+  } catch (_error) {
+    // Invalid time zones are rejected by policy management. This fallback keeps
+    // a bad historical row from making the entire customer portal unavailable.
+  }
+  return now.toISOString().slice(0, 10)
+}
+
+function annualBenefitProjectionId(row: AnnualBenefitCalendarRow, date: string): string {
+  return `annual-preview:${row.policy_id}:${row.rule_id}:${date}`
+}
+
 function checkoutUpgradeOfferView(row: CheckoutUpgradeOfferRow): CheckoutUpgradeOfferView {
   return {
     publicId: row.public_id,
@@ -4481,6 +5451,107 @@ export function resolveActivityRegistrationPayment(
     throw new CustomerExperienceRequestError('本活动需全额预付后保留名额', 'ACTIVITY_FULL_PAYMENT_REQUIRED', 409)
   }
   return { choice: 'full', amountDueMinor: amounts.totalFeeAmountMinor }
+}
+
+function resolveActivityPackage(
+  packages: readonly ActivityPackageRow[],
+  requestedPublicId: string | null,
+  selectionRequired: boolean,
+): ActivityPackageRow | null {
+  if (packages.length === 0) {
+    if (requestedPublicId !== null) throw new CustomerExperienceRequestError(
+      '所选套餐已下架或不可报名，请刷新活动后重试', 'ACTIVITY_PACKAGE_UNAVAILABLE', 409,
+    )
+    if (selectionRequired) throw new CustomerExperienceRequestError(
+      '本活动当前没有可订套餐，不能跳过套餐直接报名', 'ACTIVITY_PACKAGE_SELECTION_REQUIRED', 409,
+    )
+    return null
+  }
+  if (requestedPublicId === null) {
+    if (selectionRequired) throw new CustomerExperienceRequestError(
+      '本活动需要选择一个套餐后再报名', 'ACTIVITY_PACKAGE_SELECTION_REQUIRED', 409,
+    )
+    return null
+  }
+  const selected = packages.find((item) => item.public_id === requestedPublicId)
+  if (selected === undefined) throw new CustomerExperienceRequestError(
+    '所选套餐已下架、售罄或不可报名，请刷新活动后重试', 'ACTIVITY_PACKAGE_UNAVAILABLE', 409,
+  )
+  return selected
+}
+
+function activityPackageSnapshot(value: ActivityPackageRow): JsonObject {
+  return {
+    publicId: value.public_id,
+    name: value.name,
+    description: value.description,
+    imageUrl: value.image_url,
+    includedItems: value.included_items,
+    capacity: value.capacity,
+    memberPurchaseLimit: value.member_purchase_limit,
+    feeAmountMinor: money(value.fee_amount_minor, 'activity package fee'),
+    depositAmountMinor: money(value.deposit_amount_minor, 'activity package deposit'),
+    feeBasis: value.fee_basis,
+    paymentMode: value.payment_mode,
+    paymentDeadlineMinutes: value.payment_deadline_minutes,
+    paymentRuleText: value.payment_rule_text,
+    redemptionPolicyVersion: value.redemption_policy_version,
+    refundPolicyVersion: value.refund_policy_version,
+    currency: value.currency,
+  }
+}
+
+type ActivityChargePart = Readonly<{
+  totalFeeAmountMinor: number
+  depositAmountMinor: number
+  paymentMode: ActivityPaymentMode
+  paymentDeadlineMinutes: number
+  paymentRuleText: string
+}>
+
+function activityChargePart(input: Readonly<{
+  feeAmountMinor: number
+  depositAmountMinor: number
+  feeBasis: ActivityFeeBasis
+  paymentMode: ActivityPaymentMode
+  paymentDeadlineMinutes: number
+  paymentRuleText: string
+}>, partySize: number): ActivityChargePart {
+  const multiplier = input.feeBasis === 'per_person' ? partySize : 1
+  return {
+    totalFeeAmountMinor: input.feeAmountMinor * multiplier,
+    depositAmountMinor: input.depositAmountMinor * multiplier,
+    paymentMode: input.paymentMode,
+    paymentDeadlineMinutes: input.paymentDeadlineMinutes,
+    paymentRuleText: input.paymentRuleText,
+  }
+}
+
+/** Combines the ticket and one optional add-on.  A required full payment is
+ * stricter than a required deposit, which is stricter than an optional deposit.
+ * This keeps the server authoritative even when their rules differ. */
+function combinedActivityCharge(
+  activity: ActivityChargePart,
+  activityPackage: ActivityChargePart | null,
+): ActivityChargePart {
+  if (activityPackage === null) return activity
+  const modes = [activity.paymentMode, activityPackage.paymentMode]
+  const paymentMode: ActivityPaymentMode = modes.includes('full_required') ? 'full_required'
+    : modes.includes('deposit_required') ? 'deposit_required'
+      : modes.includes('deposit_optional') ? 'deposit_optional' : 'none'
+  const paidParts = [activity, activityPackage].filter((part) => part.paymentMode !== 'none')
+  return {
+    totalFeeAmountMinor: activity.totalFeeAmountMinor + activityPackage.totalFeeAmountMinor,
+    depositAmountMinor: activity.depositAmountMinor + activityPackage.depositAmountMinor,
+    paymentMode,
+    // PostgreSQL still binds the deadline parameter even when the INSERT CASE
+    // leaves both deadline columns NULL.  Two free parts therefore need a
+    // finite, validated placeholder rather than Math.min(...[]) = Infinity.
+    paymentDeadlineMinutes: paidParts.length === 0
+      ? Math.min(activity.paymentDeadlineMinutes, activityPackage.paymentDeadlineMinutes)
+      : Math.min(...paidParts.map((part) => part.paymentDeadlineMinutes)),
+    paymentRuleText: `活动票：${activity.paymentRuleText}；套餐：${activityPackage.paymentRuleText}`.slice(0, 240),
+  }
 }
 
 function checkoutBasketFingerprint(
@@ -4787,6 +5858,23 @@ function integer(value: unknown, name: string): number {
 
 function text(value: unknown): string | null {
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : null
+}
+
+function requiredText(value: unknown, name: string): string {
+  const output = text(value)
+  if (output === null) throw new TypeError(`${name} is invalid`)
+  return output
+}
+
+function activityPaymentMode(value: unknown): ActivityPaymentMode {
+  if (value === 'none' || value === 'deposit_optional'
+    || value === 'deposit_required' || value === 'full_required') return value
+  throw new TypeError('activity payment mode is invalid')
+}
+
+function activityFeeBasis(value: unknown): ActivityFeeBasis {
+  if (value === 'per_person' || value === 'per_registration') return value
+  throw new TypeError('activity fee basis is invalid')
 }
 
 function stringArray(value: unknown): string[] {

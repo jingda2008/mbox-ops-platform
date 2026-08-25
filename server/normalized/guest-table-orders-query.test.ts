@@ -32,7 +32,7 @@ describe('loadGuestTableOrders', () => {
     } as unknown as ScopedTransaction
 
     await expect(loadGuestTableOrders(transaction, tableSessionId, customerId)).resolves.toEqual([{
-      publicId: 'order-shared-0001', round: 2, channel: 'guest_qr', status: 'submitted',
+      publicId: 'order-shared-0001', round: 2, channel: 'guest_qr', sourceText: '顾客扫码点单', status: 'submitted',
       visibility: 'shared', isMine: false, createdAt: '2026-08-12T12:00:00.000Z',
       paymentStatus: 'unpaid', paymentAccess: 'available', payableAmountMinor: 6800, currency: 'CNY',
       pricingKind: 'gift', pricingLabel: '门店赠送',
@@ -45,6 +45,7 @@ describe('loadGuestTableOrders', () => {
     expect(capturedSql).toContain("COALESCE(ordering.created_by_customer_id = $4::uuid, false)")
     expect(capturedSql).toContain("payment.status IN ('succeeded', 'partially_refunded', 'refunded')")
     expect(capturedSql).toContain("WHEN active_payment.method = 'auth_code' THEN 'staff_collecting'")
+    expect(capturedSql).toContain("WHEN active_payment.id IS NOT NULL THEN 'payment_in_progress'")
     expect(capturedSql).toContain("pricing_authorization.status = 'consumed'")
     expect(capturedSql).not.toContain("pricing_authorization.authorization_snapshot")
     expect(capturedSql.indexOf('row_number() OVER')).toBeGreaterThan(capturedSql.indexOf('visible_orders_unbounded'))
@@ -108,31 +109,11 @@ integration('loadGuestTableOrders PostgreSQL privacy and turnover isolation', ()
     ])
     expect(customerTwo.map((order) => order.round)).toEqual([1, 2, 3, 4])
     expect(customerTwo.at(-1)).toMatchObject({
-      channel: 'staff_assisted', paymentAccess: 'available', payableAmountMinor: 6800,
+      channel: 'staff_assisted', sourceText: '服务员协助点单', paymentAccess: 'staff_collecting', payableAmountMinor: 6800,
     })
   })
 
   it('shows an employee barcode collection as busy instead of allowing a second guest payment', async () => {
-    await pool.query(`
-      INSERT INTO mbox.payments(
-        id, tenant_id, store_id, order_id, public_id, provider, method,
-        amount_minor, currency, status, provider_snapshot
-      ) VALUES (
-        '74000000-0000-4000-8000-000000000030', $1, $2,
-        '74000000-0000-4000-8000-000000000013', 'PSTAFFBARCODE0001',
-        'postar', 'auth_code', 6800, 'CNY', 'pending', '{}'::jsonb
-      )
-    `, [integrationTenantId, integrationStoreId])
-    await pool.query(`
-      INSERT INTO mbox.payment_provider_actions(
-        payment_id, tenant_id, store_id, presentation, initiated_by_type,
-        initiated_by_ref, state, expires_at
-      ) VALUES (
-        '74000000-0000-4000-8000-000000000030', $1, $2, 'barcode', 'employee',
-        '74000000-0000-4000-8000-000000000031', 'creating', clock_timestamp() + interval '5 minutes'
-      )
-    `, [integrationTenantId, integrationStoreId])
-
     const scope = { tenantId: integrationTenantId, storeId: integrationStoreId }
     const [customerOne, customerTwo] = await Promise.all([
       transactions.run(scope, (transaction) => loadGuestTableOrders(transaction, firstSessionId, customerOneId), { readOnly: true }),
@@ -143,6 +124,47 @@ integration('loadGuestTableOrders PostgreSQL privacy and turnover isolation', ()
       .toBe('staff_collecting')
     expect(customerTwo.find((order) => order.publicId === 'staff-assisted-unpaid')?.paymentAccess)
       .toBe('staff_collecting')
+  })
+
+  it('keeps a pending QR payment under review when the provider action is missing and in progress when it is ready',async()=>{
+    const paymentId='74000000-0000-4000-8000-000000000032'
+    const orderId='74000000-0000-4000-8000-000000000033'
+    const orderItemId='74000000-0000-4000-8000-000000000034'
+    await pool.query(`INSERT INTO mbox.orders(
+      id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,
+      subtotal_amount_minor,total_amount_minor,created_by_customer_id,submitted_at
+    ) VALUES($1,$2,$3,$4,'shared-payment-window','guest_qr','submitted','unpaid',
+      6800,6800,$5,clock_timestamp())`,
+    [orderId,integrationTenantId,integrationStoreId,secondSessionId,customerOneId])
+    await pool.query(`INSERT INTO mbox.order_items(
+      id,tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,total_amount_minor,
+      fulfillment_station,product_snapshot,status
+    ) VALUES($1,$2,$3,$4,$5,1,6800,6800,'bar','{"name":"精酿啤酒"}'::jsonb,'submitted')`,
+    [orderItemId,integrationTenantId,integrationStoreId,orderId,productId])
+    await pool.query(`INSERT INTO mbox.payments(
+      id,tenant_id,store_id,order_id,public_id,provider,method,amount_minor,currency,status,provider_snapshot
+    ) VALUES($1,$2,$3,$4,'PQRFAILWINDOW001','postar','native_qr',6800,'CNY','pending','{}'::jsonb)`,
+    [paymentId,integrationTenantId,integrationStoreId,orderId])
+    const scope={tenantId:integrationTenantId,storeId:integrationStoreId}
+    const missingAction=await transactions.run(scope,(transaction)=>(
+      loadGuestTableOrders(transaction,secondSessionId,customerOneId)
+    ),{readOnly:true})
+    expect(missingAction.find((order)=>order.publicId==='shared-payment-window')?.paymentAccess).toBe('status_review')
+
+    await pool.query(`INSERT INTO mbox.payment_provider_actions(
+      payment_id,tenant_id,store_id,presentation,initiated_by_type,initiated_by_ref,state,
+      ciphertext,nonce,auth_tag,expires_at
+    ) VALUES($1,$2,$3,'qr','guest',$4,'ready',decode('aa','hex'),
+      decode(repeat('aa',12),'hex'),decode(repeat('bb',16),'hex'),clock_timestamp()+interval '5 minutes')`,
+    [paymentId,integrationTenantId,integrationStoreId,customerOneId])
+    const readyAction=await transactions.run(scope,(transaction)=>(
+      loadGuestTableOrders(transaction,secondSessionId,customerTwoId)
+    ),{readOnly:true})
+    expect(readyAction.find((order)=>order.publicId==='shared-payment-window')?.paymentAccess).toBe('payment_in_progress')
+    await pool.query('DELETE FROM mbox.payment_provider_actions WHERE payment_id=$1::uuid',[paymentId])
+    await pool.query('DELETE FROM mbox.payments WHERE id=$1::uuid',[paymentId])
+    await pool.query('DELETE FROM mbox.order_items WHERE id=$1::uuid',[orderItemId])
+    await pool.query('DELETE FROM mbox.orders WHERE id=$1::uuid',[orderId])
   })
 
   it('does not expose a prior table session after turnover', async () => {
@@ -176,10 +198,9 @@ async function seedSharedOrderFixture(pool: Pool, id: SharedOrderFixtureIds): Pr
     INSERT INTO mbox.table_sessions(
       id, tenant_id, store_id, table_id, public_id, business_date, guest_count, status, opened_at, closed_at
     ) VALUES
-      ($1, $3, $4, $5, 'shared-session-old', CURRENT_DATE - 1, 2, 'closed',
-        clock_timestamp() - interval '1 day', clock_timestamp() - interval '12 hours'),
-      ($2, $3, $4, $5, 'shared-session-new', CURRENT_DATE, 2, 'open', clock_timestamp(), NULL)
-  `, [id.firstSessionId, id.secondSessionId, id.tenantId, id.storeId, id.tableId])
+      ($1, $2, $3, $4, 'shared-session-old', CURRENT_DATE - 1, 2, 'open',
+        clock_timestamp() - interval '1 day', NULL)
+  `, [id.firstSessionId, id.tenantId, id.storeId, id.tableId])
   await pool.query(`
     INSERT INTO mbox.customers(id, tenant_id, store_id, public_id) VALUES
       ($1, $3, $4, 'shared-customer-one'),
@@ -207,4 +228,25 @@ async function seedSharedOrderFixture(pool: Pool, id: SharedOrderFixtureIds): Pr
       ('74000000-0000-4000-8000-000000000022', $1, $2, '74000000-0000-4000-8000-000000000012', $3, 2, 6800, 13600, 'bar', '{"name":"精酿啤酒"}', 'preparing')
       ,('74000000-0000-4000-8000-000000000023', $1, $2, '74000000-0000-4000-8000-000000000013', $3, 1, 6800, 6800, 'bar', '{"name":"精酿啤酒"}', 'submitted')
   `, [id.tenantId, id.storeId, id.productId])
+  await pool.query(`INSERT INTO mbox.payments(
+      id,tenant_id,store_id,order_id,public_id,provider,method,
+      amount_minor,currency,status,provider_snapshot
+    ) VALUES(
+      '74000000-0000-4000-8000-000000000030',$1,$2,
+      '74000000-0000-4000-8000-000000000013','PSTAFFBARCODE0001',
+      'postar','auth_code',6800,'CNY','pending','{}'::jsonb
+    )`,[id.tenantId,id.storeId])
+  await pool.query(`INSERT INTO mbox.payment_provider_actions(
+      payment_id,tenant_id,store_id,presentation,initiated_by_type,
+      initiated_by_ref,state,expires_at
+    ) VALUES(
+      '74000000-0000-4000-8000-000000000030',$1,$2,'barcode','employee',
+      '74000000-0000-4000-8000-000000000031','creating',clock_timestamp()+interval '5 minutes'
+    )`,[id.tenantId,id.storeId])
+  await pool.query(`UPDATE mbox.table_sessions SET status='closed',closed_at=clock_timestamp()
+    WHERE id=$1`,[id.firstSessionId])
+  await pool.query(`INSERT INTO mbox.table_sessions(
+      id,tenant_id,store_id,table_id,public_id,business_date,guest_count,status,opened_at
+    ) VALUES($1,$2,$3,$4,'shared-session-new',CURRENT_DATE,2,'open',clock_timestamp())`,
+  [id.secondSessionId,id.tenantId,id.storeId,id.tableId])
 }

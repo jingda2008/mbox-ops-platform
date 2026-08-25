@@ -136,7 +136,10 @@ interface MenuOrderingWorkspaceProps {
   cart?: Readonly<Record<string, number>>
   cartUnitAmountMinors?: Readonly<Record<string, number>>
   cartTotalAmountMinor?: number | null
+  cartReadOnly?: boolean
+  cartReadOnlyMessage?: string
   onCartAdjust?: (productId: string, delta: number) => Promise<void>
+  onCartRemove?: (productId:string) => Promise<void>
   onSubmit: (items: MenuCartItem[], options: MenuSubmitOptions) => Promise<void>
   onInteraction?: (interaction: MenuInteraction) => void
   onCartCountChange?: (itemCount: number) => void
@@ -165,7 +168,10 @@ export function MenuOrderingWorkspace({
   cart: controlledCart,
   cartUnitAmountMinors,
   cartTotalAmountMinor,
+  cartReadOnly = false,
+  cartReadOnlyMessage = '当前购物车只能查看',
   onCartAdjust,
+  onCartRemove,
   onCartCountChange,
 }: MenuOrderingWorkspaceProps) {
   const [persistedCart, setPersistedCart] = useState<Record<string, number>>(() => readPersistedCart(cartStorageKey))
@@ -478,6 +484,7 @@ export function MenuOrderingWorkspace({
   }
 
   function changeQuantity(productId: string, delta: number) {
+    if (cartReadOnly) return
     const continuationSeconds = orderSafety?.requireContinuationConfirmationSeconds ?? 120
     if (
       delta > 0
@@ -499,6 +506,7 @@ export function MenuOrderingWorkspace({
   }
 
   async function setProductQuantity(productId: string, requestedQuantity: number, interactionType: 'product_added' | 'product_removed' = 'product_added') {
+    if (cartReadOnly) return
     const product = products.find((item) => item.id === productId)
     const nextQuantity = Math.max(0, Math.min(product?.maxOrderQuantity ?? 50, Math.round(requestedQuantity)))
     const currentQuantity = cart[productId] ?? 0
@@ -547,7 +555,18 @@ export function MenuOrderingWorkspace({
   }
 
   function removeProduct(productId: string) {
-    void setProductQuantity(productId, 0, 'product_removed')
+    if (cartReadOnly||cartMutating) return
+    if (onCartRemove===undefined) {
+      void setProductQuantity(productId,0,'product_removed')
+      return
+    }
+    setCartMutating(true)
+    setCartAdjustmentError('')
+    void onCartRemove(productId).then(() => {
+      onInteraction?.({ type:'product_removed',productId,quantity:0 })
+    }).catch((error:unknown) => {
+      setCartAdjustmentError(error instanceof Error?error.message:'购物车暂时没有更新，请稍后再试。')
+    }).finally(() => setCartMutating(false))
   }
 
   async function submit() {
@@ -654,7 +673,7 @@ export function MenuOrderingWorkspace({
   const upgradeSourceProduct = orderedProducts.find((product) => product.id === upgradeSourceProductId) ?? null
 
   return (
-    <section className={`menu-ordering-workspace${compactCart ? ' has-compact-cart' : ''}${deemphasizeCollapsedTotal ? ' has-gentle-cart-summary' : ''}${guestSalesMode ? ' is-guest-sales' : ''}`}>
+    <section className={`menu-ordering-workspace${compactCart ? ' has-compact-cart' : ''}${deemphasizeCollapsedTotal ? ' has-gentle-cart-summary' : ''}${guestSalesMode ? ' is-guest-sales' : ''}${cartReadOnly ? ' is-cart-read-only' : ''}`}>
       <header className="menu-workspace-header">
         <div>
           <span>当前桌台</span>
@@ -664,6 +683,7 @@ export function MenuOrderingWorkspace({
       </header>
 
       {cartAdjustmentError && <div className="menu-confirm-error" role="alert">{cartAdjustmentError}</div>}
+      {cartReadOnly && <div className="menu-confirm-error" role="status">{cartReadOnlyMessage}</div>}
 
       {guestSalesMode && <GuestRecommendationTools
         context={recommendationContext}

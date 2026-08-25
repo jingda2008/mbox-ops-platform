@@ -27,7 +27,7 @@
           <button wx:if="{{item.status === 'active'}}" data-public-id="{{item.publicId}}" bindtap="revokePhone" loading="{{contactBusy === item.publicId}}">停用</button>
         </view>
         <text wx:if="{{!verifiedPhones.length}}" class="privacy-contact-note">当前没有可用的验证手机号。</text>
-        <button class="privacy-phone-replace wx-phone-button" open-type="getPhoneNumber|agreePrivacyAuthorization" bindgetphonenumber="replacePhone" bindagreeprivacyauthorization="onAgreePrivacyAuthorization" hover-class="none" loading="{{contactBusy === 'phone-replace'}}">授权并更换微信手机号</button>
+        <button class="privacy-phone-replace wx-phone-button" open-type="getPhoneNumber" bindgetphonenumber="replacePhone" hover-class="none" loading="{{contactBusy === 'phone-replace'}}">授权并更换微信手机号</button>
       </view>
       <view class="privacy-contact-group">
         <text class="privacy-contact-heading">活动报名联系</text>

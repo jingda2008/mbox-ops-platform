@@ -3,6 +3,7 @@ import type { ActivityPaymentService } from './activity-payment-service.js'
 import {
   ActivityOperationsError,
   type ActivityDraftInput,
+  type ActivityPackageDraftInput,
   type ActivityRegistrationOperation,
 } from './activity-operations-repository.js'
 import {
@@ -50,6 +51,11 @@ export const activityOperationsApiPlugin: FastifyPluginAsync<ActivityOperationsA
     return reply.send({ data: await options.service.list(context) })
   }))
 
+  app.get('/staff/activity-operations/component-catalog', async (request, reply) => handle(reply, async () => {
+    const context = await authorized(options, request, ['community.activity.manage'])
+    return reply.send({ data: await options.service.componentCatalog(context) })
+  }))
+
   app.get<{ Params: { publicId: string } }>(
     '/staff/activity-operations/:publicId',
     async (request, reply) => handle(reply, async () => {
@@ -79,6 +85,23 @@ export const activityOperationsApiPlugin: FastifyPluginAsync<ActivityOperationsA
       const context = await authorized(options, request, ['community.activity.publish'])
       const result = await options.activityPublisher.publishActivity(context, {
         publicId: publicId(request.params.publicId),
+        idempotencyKey: idempotencyKey(request),
+      })
+      return reply.send({ data: result.value, meta: { replayed: result.replayed } })
+    }),
+  )
+
+  app.post<{ Params: { publicId: string; packagePublicId: string; action: string } }>(
+    '/staff/activity-operations/:publicId/packages/:packagePublicId/:action',
+    async (request, reply) => handle(reply, async () => {
+      const context = await authorized(options, request, ['community.activity.manage'])
+      const body = object(request.body, '套餐上下架操作')
+      const action = packageAvailabilityOperation(request.params.action)
+      const result = await options.service.setPackageAvailability(context, {
+        activityPublicId: publicId(request.params.publicId),
+        packagePublicId: publicId(request.params.packagePublicId),
+        operation: action,
+        reason: text(body.reason, '操作原因', 2, 500),
         idempotencyKey: idempotencyKey(request),
       })
       return reply.send({ data: result.value, meta: { replayed: result.replayed } })
@@ -203,6 +226,10 @@ function draft(value: Record<string, unknown>): ActivityDraftInput {
   }
   const coverUrl = optionalText(value.coverUrl, '封面地址', 1_000)
   if (coverUrl !== null && !isPublicMediaAssetUrl(coverUrl)) throw invalid('封面必须从站内图片库选择，单张不超过200KB')
+  const capacity = integer(value.capacity, '人数上限', 1, 1_000)
+  const packageSelectionRequired = optionalBoolean(value.packageSelectionRequired, false, '套餐是否必选')
+  const packages = activityPackages(value.packages, capacity, endsAt)
+  if (packageSelectionRequired && packages.length === 0) throw invalid('套餐必选活动至少需要一档套餐')
   return {
     kind: enumeration(value.kind, '活动类型', ['member_night','hike','camping','city_walk','music_picnic','proposal','other'] as const),
     title: text(value.title, '活动名称', 2, 120),
@@ -211,7 +238,7 @@ function draft(value: Record<string, unknown>): ActivityDraftInput {
     startsAt,
     endsAt,
     assemblyLocation: text(value.assemblyLocation, '集合地点', 2, 240),
-    capacity: integer(value.capacity, '人数上限', 1, 1_000),
+    capacity,
     feeAmountMinor,
     depositAmountMinor,
     feeBasis: enumeration(value.feeBasis, '计价方式', ['per_person','per_registration'] as const),
@@ -232,6 +259,78 @@ function draft(value: Record<string, unknown>): ActivityDraftInput {
     participationRequirements: textList(value.participationRequirements, '参与条件', 0, 100, 500),
     contactInstructions: text(value.contactInstructions, '联系与集合说明', 2, 1_200),
     memberBenefitText: optionalText(value.memberBenefitText, '会员权益与赠送', 1_000),
+    packageSelectionRequired,
+    packages,
+  }
+}
+
+function activityPackages(
+  value: unknown,
+  activityCapacity: number,
+  endsAt: string,
+): ActivityPackageDraftInput[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length > 20) throw invalid('活动套餐最多20档')
+  const packages = value.map((entry, index) => activityPackage(object(entry, `第${index + 1}档套餐`), activityCapacity, endsAt, index))
+  if (new Set(packages.map((activityPackage) => activityPackage.name)).size !== packages.length) {
+    throw invalid('活动套餐名称不能重复')
+  }
+  return packages
+}
+
+function activityPackage(
+  value: Record<string, unknown>,
+  activityCapacity: number,
+  endsAt: string,
+  index: number,
+): ActivityPackageDraftInput {
+  const feeAmountMinor = integer(value.feeAmountMinor, '套餐加购价', 0, 100_000_000)
+  const depositAmountMinor = integer(value.depositAmountMinor, '套餐订金', 0, 100_000_000)
+  const paymentMode = enumeration(value.paymentMode, '套餐预付方式', ['none','deposit_optional','deposit_required','full_required'] as const)
+  if (depositAmountMinor > feeAmountMinor) throw invalid('套餐订金不能超过加购价')
+  if (paymentMode === 'none' && depositAmountMinor !== 0) throw invalid('无需预付的套餐订金必须为0')
+  if ((paymentMode === 'deposit_optional' || paymentMode === 'deposit_required')
+    && (feeAmountMinor <= 0 || depositAmountMinor <= 0)) throw invalid('套餐订金模式必须配置正数加购价和订金')
+  if (paymentMode === 'full_required' && (feeAmountMinor <= 0 || depositAmountMinor !== 0)) {
+    throw invalid('套餐全额预付必须配置正数加购价且订金为0')
+  }
+  const imageUrl = optionalText(value.imageUrl, '套餐图片地址', 1_000)
+  if (imageUrl !== null && !isPublicMediaAssetUrl(imageUrl)) throw invalid('套餐图片必须从站内图片库选择，单张不超过200KB')
+  const availableFrom = optionalTimestamp(value.availableFrom, '套餐开售时间')
+  const availableUntil = optionalTimestamp(value.availableUntil, '套餐停售时间')
+  if (availableFrom !== null && Date.parse(availableFrom) >= Date.parse(endsAt)) {
+    throw invalid('套餐开售时间必须早于活动结束时间')
+  }
+  if (availableUntil !== null && Date.parse(availableUntil) > Date.parse(endsAt)) {
+    throw invalid('套餐停售时间不能晚于活动结束时间')
+  }
+  if (availableFrom !== null && availableUntil !== null && Date.parse(availableUntil) <= Date.parse(availableFrom)) {
+    throw invalid('套餐停售时间必须晚于开售时间')
+  }
+  const componentsValue = value.components === undefined ? [] : value.components
+  if (!Array.isArray(componentsValue) || componentsValue.length > 100) throw invalid('套餐物料最多100项')
+  const components = componentsValue.map((entry, componentIndex) => {
+    const component = object(entry, `套餐物料第${componentIndex + 1}项`)
+    return {
+      inventoryItemId: uuid(component.inventoryItemId, '套餐物料编号'),
+      quantity: decimal(component.quantity, '套餐物料数量'),
+      perParticipant: optionalBoolean(component.perParticipant, true, '是否按报名人数占用'),
+    }
+  })
+  if (new Set(components.map((component) => component.inventoryItemId)).size !== components.length) {
+    throw invalid('同一套餐不能重复选择同一物料')
+  }
+  return {
+    name: text(value.name, '套餐名称', 2, 120), description: optionalText(value.description, '套餐说明', 1_000) ?? '', imageUrl,
+    includedItems: textList(value.includedItems ?? [], '套餐包含内容', 0, 100, 500),
+    capacity: integer(value.capacity, '套餐名额', 1, activityCapacity),
+    memberPurchaseLimit: integer(value.memberPurchaseLimit ?? 1, '每会员限购', 1, 20),
+    feeAmountMinor,depositAmountMinor,feeBasis: enumeration(value.feeBasis, '套餐计价方式', ['per_person','per_registration'] as const),
+    paymentMode,paymentDeadlineMinutes: integer(value.paymentDeadlineMinutes, '套餐付款时限', 5, 1_440),
+    paymentRuleText: text(value.paymentRuleText, '套餐付款说明', 2, 240),
+    redemptionPolicyVersion: optionalText(value.redemptionPolicyVersion, '套餐取用规则版本', 64),
+    refundPolicyVersion: optionalText(value.refundPolicyVersion, '套餐退款规则版本', 64),
+    sortOrder: integer(value.sortOrder ?? index, '套餐排序', 0, 10_000),availableFrom,availableUntil,components,
   }
 }
 
@@ -283,9 +382,15 @@ function idempotencyKey(request: FastifyRequest): string {
 
 function registrationOperation(value: string): ActivityRegistrationOperation {
   if (value === 'check-in') return 'check_in'
+  if (value === 'fulfill-package') return 'fulfill_package'
   if (value === 'no-show') return 'no_show'
   if (value === 'cancel') return 'cancel'
   throw invalid('不支持的报名操作')
+}
+
+function packageAvailabilityOperation(value: string): 'pause' | 'resume' {
+  if (value === 'pause' || value === 'resume') return value
+  throw invalid('不支持的套餐上下架操作')
 }
 
 function text(value: unknown, label: string, minimum: number, maximum: number): string {
@@ -298,6 +403,34 @@ function text(value: unknown, label: string, minimum: number, maximum: number): 
 function optionalText(value: unknown, label: string, maximum: number): string | null {
   if (value === undefined || value === null || value === '') return null
   return text(value, label, 1, maximum)
+}
+
+function optionalBoolean(value: unknown, fallback: boolean, label: string): boolean {
+  if (value === undefined) return fallback
+  if (typeof value !== 'boolean') throw invalid(`${label}格式不正确`)
+  return value
+}
+
+function optionalTimestamp(value: unknown, label: string): string | null {
+  if (value === undefined || value === null || value === '') return null
+  return timestamp(value, label)
+}
+
+function uuid(value: unknown, label: string): string {
+  const normalized = text(value, label, 36, 36)
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(normalized)) {
+    throw invalid(`${label}格式不正确`)
+  }
+  return normalized
+}
+
+function decimal(value: unknown, label: string): string {
+  if (typeof value !== 'string' && typeof value !== 'number') throw invalid(`${label}格式不正确`)
+  const normalized = String(value).trim()
+  if (!/^\d+(?:\.\d{1,6})?$/.test(normalized) || Number(normalized) <= 0 || Number(normalized) > 1_000_000) {
+    throw invalid(`${label}格式不正确`)
+  }
+  return normalized
 }
 
 function timestamp(value: unknown, label: string): string {

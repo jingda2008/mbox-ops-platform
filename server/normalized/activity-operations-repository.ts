@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { ScopedTransaction } from './transaction-runner.js'
 
 export type ActivityStatus = 'draft' | 'published' | 'full' | 'cancelled' | 'completed'
@@ -8,7 +9,8 @@ export type ActivityPaymentMode = 'none' | 'deposit_optional' | 'deposit_require
 export type ActivityFeeBasis = 'per_person' | 'per_registration'
 export type ActivityVisibility = 'public' | 'member' | 'segment'
 export type ActivityKind = 'member_night' | 'hike' | 'camping' | 'city_walk' | 'music_picnic' | 'proposal' | 'other'
-export type ActivityRegistrationOperation = 'check_in' | 'no_show' | 'cancel'
+export type ActivityRegistrationOperation = 'check_in' | 'fulfill_package' | 'no_show' | 'cancel'
+export type ActivityPackageAvailabilityOperation = 'pause' | 'resume'
 
 export interface ActivityOperationsSummary {
   publicId: string
@@ -48,10 +50,45 @@ export interface ActivityOperationsActivity extends ActivityOperationsSummary {
   participationRequirements: string[]
   contactInstructions: string | null
   memberBenefitText: string | null
+  packageSelectionRequired: boolean
+  packages: ActivityOperationsPackage[]
   createdByEmployeeId: string
   approvedByEmployeeId: string | null
   publishedAt: string | null
   updatedAt: string
+}
+
+export interface ActivityOperationsPackage {
+  publicId: string
+  name: string
+  description: string
+  imageUrl: string | null
+  includedItems: string[]
+  capacity: number
+  memberPurchaseLimit: number
+  feeAmountMinor: number
+  depositAmountMinor: number
+  feeBasis: ActivityFeeBasis
+  paymentMode: ActivityPaymentMode
+  paymentDeadlineMinutes: number
+  paymentRuleText: string
+  redemptionPolicyVersion: string | null
+  refundPolicyVersion: string | null
+  status: 'draft' | 'published' | 'paused'
+  sortOrder: number
+  availableFrom: string | null
+  availableUntil: string | null
+  components: Array<{ inventoryItemId: string; quantity: string; perParticipant: boolean }>
+}
+
+/** A deliberately small projection for configuring activity-package components.
+ * It must not become an inventory dashboard: quantities, cost and supplier
+ * information remain behind their respective inventory permissions. */
+export interface ActivityPackageComponentCatalogItem {
+  id: string
+  sku: string
+  name: string
+  baseUnit: string
 }
 
 export interface ActivityOperationsRegistration {
@@ -81,6 +118,7 @@ export interface ActivityOperationsRegistration {
   paymentPublicId: string | null
   authoritativePaymentStatus: string | null
   providerActionState: string | null
+  packageFulfillmentStatus: 'not_required' | 'pending' | 'delivered'
   refund: null | {
     id: string
     publicId: string
@@ -133,6 +171,35 @@ export interface ActivityDraftInput {
   participationRequirements: readonly string[]
   contactInstructions: string
   memberBenefitText: string | null
+  packageSelectionRequired: boolean
+  packages: readonly ActivityPackageDraftInput[]
+}
+
+export interface ActivityPackageDraftInput {
+  name: string
+  description: string
+  imageUrl: string | null
+  includedItems: readonly string[]
+  capacity: number
+  memberPurchaseLimit: number
+  feeAmountMinor: number
+  depositAmountMinor: number
+  feeBasis: ActivityFeeBasis
+  paymentMode: ActivityPaymentMode
+  paymentDeadlineMinutes: number
+  paymentRuleText: string
+  redemptionPolicyVersion: string | null
+  refundPolicyVersion: string | null
+  sortOrder: number
+  availableFrom: string | null
+  availableUntil: string | null
+  components: readonly ActivityPackageComponentDraftInput[]
+}
+
+export interface ActivityPackageComponentDraftInput {
+  inventoryItemId: string
+  quantity: string
+  perParticipant: boolean
 }
 
 interface ActivitySummaryRow extends Record<string, unknown> {
@@ -173,10 +240,41 @@ interface ActivityDetailRow extends ActivitySummaryRow {
   participation_requirements: string[]
   contact_instructions: string | null
   member_benefit_text: string | null
+  package_selection_required: boolean
   created_by_employee_id: string
   approved_by_employee_id: string | null
   published_at: string | null
   updated_at: string
+}
+
+interface PackageRow extends Record<string, unknown> {
+  public_id: string
+  name: string
+  description: string
+  image_url: string | null
+  included_items: string[]
+  capacity: number
+  member_purchase_limit: number
+  fee_amount_minor: string | number
+  deposit_amount_minor: string | number
+  fee_basis: ActivityFeeBasis
+  payment_mode: ActivityPaymentMode
+  payment_deadline_minutes: number
+  payment_rule_text: string
+  redemption_policy_version: string | null
+  refund_policy_version: string | null
+  status: 'draft' | 'published' | 'paused'
+  sort_order: number
+  available_from: string | null
+  available_until: string | null
+  components: unknown
+}
+
+interface ActivityPackageComponentCatalogRow extends Record<string, unknown> {
+  id: string
+  sku: string
+  name: string
+  base_unit: string
 }
 
 interface RegistrationRow extends Record<string, unknown> {
@@ -206,6 +304,7 @@ interface RegistrationRow extends Record<string, unknown> {
   payment_public_id: string | null
   authoritative_payment_status: string | null
   provider_action_state: string | null
+  package_fulfillment_status: 'not_required' | 'pending' | 'delivered'
   refund_id: string | null
   refund_public_id: string | null
   refund_status: string | null
@@ -219,6 +318,7 @@ interface RegistrationRow extends Record<string, unknown> {
 interface LockedRegistrationRow extends Record<string, unknown> {
   id: string
   public_id: string
+  registration_cycle: number
   status: ActivityRegistrationStatus
   payment_status: ActivityOperationsRegistration['paymentStatus']
   payment_id: string | null
@@ -260,7 +360,7 @@ export class ActivityOperationsRepository {
           refund_policy_summary,activity_details,included_items,
           participation_requirements,contact_instructions,member_benefit_text,
           audience_rule,safety_snapshot,refund_policy_snapshot,sales_copy,
-          status,created_by_employee_id
+          status,created_by_employee_id,package_selection_required
         ) VALUES (
           $1::uuid,$2::uuid,$3,$4,$5,$6,$7,$8::timestamptz,$9::timestamptz,
           $10,$11,$12::bigint,$13::bigint,$14,$15,$16,$17,$18,$19,
@@ -276,7 +376,7 @@ export class ActivityOperationsRepository {
             'participationRequirements',$29::text[],'contactInstructions',$30::text,
             'memberBenefitText',$31::text
           ),
-          'draft',$32::uuid
+          'draft',$32::uuid,$33::boolean
         )
         RETURNING *
       )
@@ -293,7 +393,7 @@ export class ActivityOperationsRepository {
         inserted.refund_policy_version,inserted.refund_policy_summary,
         inserted.activity_details,inserted.included_items,
         inserted.participation_requirements,inserted.contact_instructions,
-        inserted.member_benefit_text,inserted.created_by_employee_id,
+        inserted.member_benefit_text,inserted.package_selection_required,inserted.created_by_employee_id,
         inserted.approved_by_employee_id,inserted.published_at::text,
         inserted.updated_at::text
       FROM inserted
@@ -307,11 +407,12 @@ export class ActivityOperationsRepository {
       input.safetyAcknowledgementText,input.safetyRequirements,input.refundPolicyVersion,
       input.refundPolicySummary,input.activityDetails,input.includedItems,
       input.participationRequirements,input.contactInstructions,input.memberBenefitText,
-      employeeId,
+      employeeId,input.packageSelectionRequired ?? false,
     ])
     const row = result.rows[0]
     if (!row) throw new ActivityOperationsError('活动草稿未能建立', 'ACTIVITY_DRAFT_CREATE_FAILED', 503)
-    return detailView(row)
+    await this.replaceDraftPackages(publicId, input.packages)
+    return (await this.detail(publicId)).activity
   }
 
   async list(): Promise<ActivityOperationsSummary[]> {
@@ -319,6 +420,22 @@ export class ActivityOperationsRepository {
       ORDER BY activity.starts_at DESC, activity.id DESC
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId])
     return result.rows.map(summaryView)
+  }
+
+  async componentCatalog(): Promise<ActivityPackageComponentCatalogItem[]> {
+    const result = await this.transaction.query<ActivityPackageComponentCatalogRow>(`
+      SELECT item.id,item.sku,item.name,item.base_unit
+      FROM mbox.inventory_items item
+      WHERE item.tenant_id=$1::uuid AND item.store_id=$2::uuid
+        AND item.status='active'
+      ORDER BY item.category_code,item.name,item.sku,item.id
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId])
+    return result.rows.map((item) => ({
+      id: item.id,
+      sku: item.sku,
+      name: item.name,
+      baseUnit: item.base_unit,
+    }))
   }
 
   async detail(publicId: string): Promise<ActivityOperationsDetail> {
@@ -352,7 +469,14 @@ export class ActivityOperationsRepository {
         latest_refund.requested_by_employee_id AS refund_requested_by_employee_id,
         latest_refund.approved_by_employee_id AS refund_approved_by_employee_id,
         latest_refund.created_at::text AS refund_created_at,
-        latest_refund.updated_at::text AS refund_updated_at
+        latest_refund.updated_at::text AS refund_updated_at,
+        COALESCE(fulfillment_intent.status,
+          CASE WHEN registration.activity_package_id IS NULL OR NOT EXISTS (
+            SELECT 1 FROM mbox.community_activity_package_components component
+            WHERE component.tenant_id=registration.tenant_id AND component.store_id=registration.store_id
+              AND component.activity_package_id=registration.activity_package_id
+          ) THEN 'not_required' ELSE 'pending' END
+        ) AS package_fulfillment_status
       FROM mbox.community_activity_registrations registration
       JOIN mbox.community_activities activity
         ON activity.tenant_id=registration.tenant_id AND activity.store_id=registration.store_id
@@ -394,12 +518,20 @@ export class ActivityOperationsRepository {
           AND refund.payment_id=payment.id
         ORDER BY refund.created_at DESC, refund.id DESC LIMIT 1
       ) latest_refund ON true
+      LEFT JOIN mbox.community_activity_package_fulfillment_intents fulfillment_intent
+        ON fulfillment_intent.tenant_id=registration.tenant_id
+       AND fulfillment_intent.store_id=registration.store_id
+       AND fulfillment_intent.registration_id=registration.id
+       AND fulfillment_intent.registration_cycle=registration.registration_cycle
       WHERE registration.tenant_id=$1::uuid AND registration.store_id=$2::uuid
         AND activity.public_id=$3
       ORDER BY CASE registration.status WHEN 'waitlisted' THEN 1 ELSE 0 END,
         registration.registered_at, registration.id
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, publicId])
-    return { activity: detailView(activityRow), registrations: registrations.rows.map(registrationView) }
+    return {
+      activity: { ...detailView(activityRow), packages: await this.packages(publicId) },
+      registrations: registrations.rows.map(registrationView),
+    }
   }
 
   async updateDraft(publicId: string, input: Readonly<ActivityDraftInput>): Promise<ActivityOperationsActivity> {
@@ -417,7 +549,7 @@ export class ActivityOperationsRepository {
           safety_requirements=$24::text[], refund_policy_version=$25,
           refund_policy_summary=$26, activity_details=$27,
           included_items=$28::text[], participation_requirements=$29::text[],
-          contact_instructions=$30, member_benefit_text=$31,
+          contact_instructions=$30, member_benefit_text=$31,package_selection_required=$32::boolean,
           audience_rule=jsonb_build_object('memberLevels',$20::text[],'lifecycleStages',$21::text[]),
           safety_snapshot=jsonb_build_object(
             'policyVersion',$22::text,'acknowledgementText',$23::text,'requirements',$24::text[]
@@ -446,7 +578,7 @@ export class ActivityOperationsRepository {
         updated.refund_policy_version, updated.refund_policy_summary,
         updated.activity_details, updated.included_items,
         updated.participation_requirements, updated.contact_instructions,
-        updated.member_benefit_text, updated.created_by_employee_id,
+        updated.member_benefit_text,updated.package_selection_required, updated.created_by_employee_id,
         updated.approved_by_employee_id, updated.published_at::text,
         updated.updated_at::text
       FROM updated
@@ -460,9 +592,13 @@ export class ActivityOperationsRepository {
       input.safetyAcknowledgementText, input.safetyRequirements, input.refundPolicyVersion,
       input.refundPolicySummary, input.activityDetails, input.includedItems,
       input.participationRequirements, input.contactInstructions, input.memberBenefitText,
+      input.packageSelectionRequired ?? false,
     ])
     const row = result.rows[0]
-    if (row) return detailView(row)
+    if (row) {
+      await this.replaceDraftPackages(publicId, input.packages)
+      return (await this.detail(publicId)).activity
+    }
     const existing = await this.transaction.query<{ status: ActivityStatus }>(`
       SELECT status FROM mbox.community_activities
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND public_id=$3
@@ -474,13 +610,128 @@ export class ActivityOperationsRepository {
     )
   }
 
+  async setPackageAvailability(
+    activityPublicId: string,
+    packagePublicId: string,
+    operation: ActivityPackageAvailabilityOperation,
+  ): Promise<ActivityOperationsActivity> {
+    const nextStatus = operation === 'pause' ? 'paused' : 'published'
+    const expectedStatus = operation === 'pause' ? 'published' : 'paused'
+    const updated = await this.transaction.query<{ id: string }>(`
+      UPDATE mbox.community_activity_packages package
+      SET status=$5,updated_at=clock_timestamp()
+      FROM mbox.community_activities activity
+      WHERE package.tenant_id=$1::uuid AND package.store_id=$2::uuid
+        AND package.public_id=$3 AND package.status=$4
+        AND activity.tenant_id=package.tenant_id AND activity.store_id=package.store_id
+        AND activity.id=package.activity_id AND activity.public_id=$6
+        AND activity.status IN ('published','full')
+      RETURNING package.id
+    `, [
+      this.transaction.scope.tenantId,this.transaction.scope.storeId,
+      packagePublicId,expectedStatus,nextStatus,activityPublicId,
+    ])
+    if (updated.rows[0] === undefined) throw new ActivityOperationsError(
+      operation === 'pause' ? '套餐不存在、已暂停或活动不可操作' : '套餐不存在、尚未暂停或活动不可操作',
+      'ACTIVITY_PACKAGE_AVAILABILITY_CONFLICT',
+      409,
+    )
+    return (await this.detail(activityPublicId)).activity
+  }
+
+  private async replaceDraftPackages(
+    activityPublicId: string,
+    packages: readonly ActivityPackageDraftInput[],
+  ): Promise<void> {
+    const activity = await this.transaction.query<{ id: string; capacity: number; status: ActivityStatus }>(`
+      SELECT id,capacity,status
+      FROM mbox.community_activities
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND public_id=$3
+      FOR UPDATE
+    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,activityPublicId])
+    const current = activity.rows[0]
+    if (!current || current.status !== 'draft') throw new ActivityOperationsError(
+      '只有未发布活动可以编辑套餐', 'PUBLISHED_ACTIVITY_IMMUTABLE', 409,
+    )
+    if (packages.some((activityPackage) => activityPackage.capacity > current.capacity)) {
+      throw new ActivityOperationsError('套餐名额不能超过活动总名额', 'ACTIVITY_PACKAGE_CAPACITY_INVALID', 409)
+    }
+    await this.transaction.query(`
+      DELETE FROM mbox.community_activity_packages
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND activity_id=$3::uuid
+    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,current.id])
+    for (const [index, activityPackage] of packages.entries()) {
+      const packagePublicId = `activity-package-${createHash('sha256')
+        .update(`${activityPublicId}:${index}:${activityPackage.name}`)
+        .digest('hex').slice(0, 24)}`
+      const inserted = await this.transaction.query<{ id: string }>(`
+        INSERT INTO mbox.community_activity_packages(
+          tenant_id,store_id,activity_id,public_id,name,description,image_url,included_items,
+          capacity,member_purchase_limit,fee_amount_minor,deposit_amount_minor,fee_basis,
+          payment_mode,payment_deadline_minutes,payment_rule_text,redemption_policy_version,
+          refund_policy_version,status,sort_order,available_from,available_until
+        ) VALUES(
+          $1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,$8::text[],
+          $9,$10,$11::bigint,$12::bigint,$13,$14,$15,$16,$17,$18,'draft',$19,$20::timestamptz,$21::timestamptz
+        ) RETURNING id
+      `, [
+        this.transaction.scope.tenantId,this.transaction.scope.storeId,current.id,packagePublicId,
+        activityPackage.name,activityPackage.description,activityPackage.imageUrl,activityPackage.includedItems,
+        activityPackage.capacity,activityPackage.memberPurchaseLimit,activityPackage.feeAmountMinor,
+        activityPackage.depositAmountMinor,activityPackage.feeBasis,activityPackage.paymentMode,
+        activityPackage.paymentDeadlineMinutes,activityPackage.paymentRuleText,
+        activityPackage.redemptionPolicyVersion,activityPackage.refundPolicyVersion,activityPackage.sortOrder,
+        activityPackage.availableFrom,activityPackage.availableUntil,
+      ])
+      const packageId = inserted.rows[0]?.id
+      if (packageId === undefined) throw new ActivityOperationsError('活动套餐未能保存', 'ACTIVITY_PACKAGE_SAVE_FAILED', 503)
+      for (const component of activityPackage.components) {
+        await this.transaction.query(`
+          INSERT INTO mbox.community_activity_package_components(
+            tenant_id,store_id,activity_package_id,inventory_item_id,quantity,per_participant,sort_order
+          ) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::numeric,$6,$7)
+        `, [
+          this.transaction.scope.tenantId,this.transaction.scope.storeId,packageId,
+          component.inventoryItemId,component.quantity,component.perParticipant,
+          activityPackage.components.indexOf(component),
+        ])
+      }
+    }
+  }
+
+  private async packages(activityPublicId: string): Promise<ActivityOperationsPackage[]> {
+    const result = await this.transaction.query<PackageRow>(`
+      SELECT package.public_id,package.name,package.description,package.image_url,package.included_items,
+        package.capacity,package.member_purchase_limit,package.fee_amount_minor,package.deposit_amount_minor,
+        package.fee_basis,package.payment_mode,package.payment_deadline_minutes,package.payment_rule_text,
+        package.redemption_policy_version,package.refund_policy_version,package.status,package.sort_order,
+        package.available_from::text,package.available_until::text,
+        COALESCE(jsonb_agg(jsonb_build_object(
+          'inventoryItemId',component.inventory_item_id,
+          'quantity',component.quantity::text,'perParticipant',component.per_participant
+        ) ORDER BY component.sort_order,component.id) FILTER (WHERE component.id IS NOT NULL),'[]'::jsonb) AS components
+      FROM mbox.community_activity_packages package
+      JOIN mbox.community_activities activity
+        ON activity.tenant_id=package.tenant_id AND activity.store_id=package.store_id
+       AND activity.id=package.activity_id
+      LEFT JOIN mbox.community_activity_package_components component
+        ON component.tenant_id=package.tenant_id AND component.store_id=package.store_id
+       AND component.activity_package_id=package.id
+      WHERE package.tenant_id=$1::uuid AND package.store_id=$2::uuid AND activity.public_id=$3
+      GROUP BY package.id
+      ORDER BY package.sort_order,package.id
+    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,activityPublicId])
+    return result.rows.map(packageView)
+  }
+
   async transitionRegistration(
     publicId: string,
     operation: ActivityRegistrationOperation,
     reason: string,
+    employeeId: string | null = null,
   ): Promise<ActivityOperationsRegistration> {
     const lockedResult = await this.transaction.query<LockedRegistrationRow>(`
-      SELECT registration.id, registration.public_id, registration.status,
+      SELECT registration.id, registration.public_id, registration.registration_cycle, registration.status,
         registration.payment_status, registration.payment_id,
         payment.status AS payment_authoritative_status,
         provider_action.state AS provider_action_state,
@@ -512,6 +763,15 @@ export class ActivityOperationsRepository {
         throw invalidTransition(current.status, '签到')
       }
       await this.updateRegistrationStatus(current.id, 'checked_in', reason)
+      await this.createActivityPackageFulfillmentIntent(current.id, current.registration_cycle)
+    } else if (operation === 'fulfill_package') {
+      if (current.status !== 'checked_in') throw invalidTransition(current.status, '登记套餐交付')
+      await this.fulfillActivityPackageInventory({
+        registrationId: current.id,
+        registrationCycle: current.registration_cycle,
+        registrationPublicId: current.public_id,
+        employeeId,
+      })
     } else if (operation === 'no_show') {
       if (current.status !== 'confirmed') throw invalidTransition(current.status, '标记未到')
       if (Date.parse(current.activity_starts_at) > Date.now()) {
@@ -637,6 +897,125 @@ export class ActivityOperationsRepository {
     void reason
   }
 
+  private async createActivityPackageFulfillmentIntent(
+    registrationId: string,
+    registrationCycle: number,
+  ): Promise<void> {
+    const held = await this.transaction.query<{ id: string }>(`
+      SELECT id FROM mbox.community_activity_package_inventory_reservations
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        AND registration_id=$3::uuid AND registration_cycle=$4 AND status='reserved'
+      LIMIT 1
+    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,registrationId,registrationCycle])
+    if (held.rows[0] === undefined) return
+    await this.transaction.query(`
+      INSERT INTO mbox.community_activity_package_fulfillment_intents(
+        tenant_id,store_id,registration_id,registration_cycle,status
+      ) VALUES($1::uuid,$2::uuid,$3::uuid,$4,'pending')
+      ON CONFLICT(tenant_id,store_id,registration_id,registration_cycle) DO NOTHING
+    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,registrationId,registrationCycle])
+  }
+
+  /** Activity packages never create an order.  This explicit delivery action,
+   * not check-in, converts the protected stock hold to a sale movement. */
+  private async fulfillActivityPackageInventory(input: Readonly<{
+    registrationId: string
+    registrationCycle: number
+    registrationPublicId: string
+    employeeId: string | null
+  }>): Promise<void> {
+    const intent = await this.transaction.query<{ id: string }>(`
+      SELECT id FROM mbox.community_activity_package_fulfillment_intents
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND registration_id=$3::uuid
+        AND registration_cycle=$4 AND status='pending'
+      FOR UPDATE
+    `, [
+      this.transaction.scope.tenantId,this.transaction.scope.storeId,
+      input.registrationId,input.registrationCycle,
+    ])
+    if (intent.rows[0] === undefined) throw new ActivityOperationsError(
+      '没有待交付的套餐，或该套餐已登记交付', 'ACTIVITY_PACKAGE_FULFILLMENT_NOT_PENDING', 409,
+    )
+    const reservations = await this.transaction.query<{
+      id: string
+      inventory_item_id: string
+      quantity: string
+    }>(`
+      SELECT id,inventory_item_id,quantity::text
+      FROM mbox.community_activity_package_inventory_reservations
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        AND registration_id=$3::uuid AND registration_cycle=$4
+        AND status='reserved'
+      ORDER BY inventory_item_id,id
+      FOR UPDATE
+    `, [
+      this.transaction.scope.tenantId,this.transaction.scope.storeId,
+      input.registrationId,input.registrationCycle,
+    ])
+    for (const reservation of reservations.rows) {
+      if (input.employeeId === null) throw new ActivityOperationsError(
+        '套餐签到需要可追溯的现场员工身份，签到没有完成',
+        'ACTIVITY_PACKAGE_EMPLOYEE_REQUIRED',
+        409,
+      )
+      const movement = await this.transaction.query<{ id: string }>(`
+        INSERT INTO mbox.inventory_movements(
+          tenant_id,store_id,inventory_item_id,movement_type,quantity_delta,
+          currency,reference_type,reference_id,order_item_id,reason,metadata,created_by_employee_id
+        ) VALUES(
+          $1::uuid,$2::uuid,$3::uuid,'sale',-$4::numeric,
+          'CNY','community_activity_package_reservation',$5::uuid,NULL,
+          'activity_package_delivered',jsonb_build_object(
+            'registrationPublicId',$6::text,'registrationCycle',$7::integer
+          ),$8::uuid
+        ) RETURNING id
+      `, [
+        this.transaction.scope.tenantId,this.transaction.scope.storeId,reservation.inventory_item_id,
+        reservation.quantity,reservation.id,input.registrationPublicId,input.registrationCycle,input.employeeId,
+      ])
+      const movementId = movement.rows[0]?.id
+      if (movementId === undefined) throw new ActivityOperationsError(
+        '套餐库存流水未创建，交付没有完成', 'ACTIVITY_PACKAGE_INVENTORY_CONSUME_FAILED', 409,
+      )
+      const balance = await this.transaction.query(`
+        UPDATE mbox.inventory_balances
+        SET on_hand_quantity=on_hand_quantity-$4::numeric,
+          reserved_quantity=reserved_quantity-$4::numeric,
+          last_movement_id=$5::uuid,updated_at=clock_timestamp()
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND inventory_item_id=$3::uuid
+          AND on_hand_quantity>=$4::numeric AND reserved_quantity>=$4::numeric
+      `, [
+        this.transaction.scope.tenantId,this.transaction.scope.storeId,reservation.inventory_item_id,
+        reservation.quantity,movementId,
+      ])
+      if (balance.rowCount !== 1) throw new ActivityOperationsError(
+        '套餐库存暂留与现存余额不一致，交付没有完成', 'ACTIVITY_PACKAGE_INVENTORY_CONFLICT', 409,
+      )
+      const consumed = await this.transaction.query(`
+        UPDATE mbox.community_activity_package_inventory_reservations
+        SET status='consumed',expires_at=NULL,movement_id=$4::uuid,
+          consumed_at=clock_timestamp(),updated_at=clock_timestamp()
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND status='reserved'
+      `, [
+        this.transaction.scope.tenantId,this.transaction.scope.storeId,reservation.id,movementId,
+      ])
+      if (consumed.rowCount !== 1) throw new ActivityOperationsError(
+        '套餐库存状态刚刚变化，交付没有完成', 'ACTIVITY_PACKAGE_INVENTORY_CONFLICT', 409,
+      )
+    }
+    const delivered = await this.transaction.query(`
+      UPDATE mbox.community_activity_package_fulfillment_intents
+      SET status='delivered',delivered_at=clock_timestamp(),delivered_by_employee_id=$4::uuid,updated_at=clock_timestamp()
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND status='pending'
+    `, [
+      this.transaction.scope.tenantId,this.transaction.scope.storeId,
+      intent.rows[0].id,input.employeeId,
+    ])
+    if (delivered.rowCount !== 1) throw new ActivityOperationsError(
+      '套餐交付状态刚刚变化，请刷新后核对', 'ACTIVITY_PACKAGE_FULFILLMENT_CONFLICT', 409,
+    )
+  }
+
   private async registrationById(id: string): Promise<ActivityOperationsRegistration> {
     const result = await this.transaction.query<RegistrationRow>(`
       SELECT registration.public_id, customer.public_id AS customer_public_id,
@@ -661,7 +1040,14 @@ export class ActivityOperationsRepository {
         latest_refund.requested_by_employee_id AS refund_requested_by_employee_id,
         latest_refund.approved_by_employee_id AS refund_approved_by_employee_id,
         latest_refund.created_at::text AS refund_created_at,
-        latest_refund.updated_at::text AS refund_updated_at
+        latest_refund.updated_at::text AS refund_updated_at,
+        COALESCE(fulfillment_intent.status,
+          CASE WHEN registration.activity_package_id IS NULL OR NOT EXISTS (
+            SELECT 1 FROM mbox.community_activity_package_components component
+            WHERE component.tenant_id=registration.tenant_id AND component.store_id=registration.store_id
+              AND component.activity_package_id=registration.activity_package_id
+          ) THEN 'not_required' ELSE 'pending' END
+        ) AS package_fulfillment_status
       FROM mbox.community_activity_registrations registration
       JOIN mbox.customers customer
         ON customer.tenant_id=registration.tenant_id AND customer.store_id=registration.store_id
@@ -698,6 +1084,11 @@ export class ActivityOperationsRepository {
           AND refund.payment_id=payment.id
         ORDER BY refund.created_at DESC, refund.id DESC LIMIT 1
       ) latest_refund ON true
+      LEFT JOIN mbox.community_activity_package_fulfillment_intents fulfillment_intent
+        ON fulfillment_intent.tenant_id=registration.tenant_id
+       AND fulfillment_intent.store_id=registration.store_id
+       AND fulfillment_intent.registration_id=registration.id
+       AND fulfillment_intent.registration_cycle=registration.registration_cycle
       WHERE registration.tenant_id=$1::uuid AND registration.store_id=$2::uuid
         AND registration.id=$3::uuid
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, id])
@@ -739,7 +1130,7 @@ const ACTIVITY_DETAIL_QUERY = `
     activity.safety_requirements, activity.refund_policy_version,
     activity.refund_policy_summary, activity.activity_details, activity.included_items,
     activity.participation_requirements, activity.contact_instructions,
-    activity.member_benefit_text, activity.created_by_employee_id,
+    activity.member_benefit_text,activity.package_selection_required, activity.created_by_employee_id,
     activity.approved_by_employee_id, activity.published_at::text,
     activity.updated_at::text,
     COALESCE(sum(registration.party_size) FILTER (
@@ -797,10 +1188,49 @@ function detailView(row: ActivityDetailRow): ActivityOperationsActivity {
     participationRequirements: textArray(row.participation_requirements),
     contactInstructions: row.contact_instructions,
     memberBenefitText: row.member_benefit_text,
+    packageSelectionRequired: row.package_selection_required,
+    packages: [],
     createdByEmployeeId: row.created_by_employee_id,
     approvedByEmployeeId: row.approved_by_employee_id,
     publishedAt: row.published_at,
     updatedAt: row.updated_at,
+  }
+}
+
+function packageView(row: PackageRow): ActivityOperationsPackage {
+  const components = Array.isArray(row.components) ? row.components.map((value) => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new TypeError('activity package component is invalid')
+    }
+    const component = value as Record<string, unknown>
+    const inventoryItemId = typeof component.inventoryItemId === 'string' ? component.inventoryItemId : ''
+    const quantity = typeof component.quantity === 'string' ? component.quantity : ''
+    if (inventoryItemId === '' || !/^\d+(?:\.\d{1,6})?$/.test(quantity) || Number(quantity) <= 0) {
+      throw new TypeError('activity package component is invalid')
+    }
+    return { inventoryItemId, quantity, perParticipant: component.perParticipant === true }
+  }) : []
+  return {
+    publicId: row.public_id,
+    name: row.name,
+    description: row.description,
+    imageUrl: row.image_url,
+    includedItems: textArray(row.included_items),
+    capacity: integer(row.capacity, 'activity package capacity'),
+    memberPurchaseLimit: integer(row.member_purchase_limit, 'activity package member purchase limit'),
+    feeAmountMinor: money(row.fee_amount_minor, 'activity package fee'),
+    depositAmountMinor: money(row.deposit_amount_minor, 'activity package deposit'),
+    feeBasis: row.fee_basis,
+    paymentMode: row.payment_mode,
+    paymentDeadlineMinutes: integer(row.payment_deadline_minutes, 'activity package payment deadline'),
+    paymentRuleText: row.payment_rule_text,
+    redemptionPolicyVersion: row.redemption_policy_version,
+    refundPolicyVersion: row.refund_policy_version,
+    status: row.status,
+    sortOrder: integer(row.sort_order, 'activity package sort order'),
+    availableFrom: row.available_from,
+    availableUntil: row.available_until,
+    components,
   }
 }
 
@@ -842,6 +1272,7 @@ function registrationView(row: RegistrationRow): ActivityOperationsRegistration 
     paymentPublicId: row.payment_public_id,
     authoritativePaymentStatus: row.authoritative_payment_status,
     providerActionState: row.provider_action_state,
+    packageFulfillmentStatus: row.package_fulfillment_status,
     refund,
   }
 }

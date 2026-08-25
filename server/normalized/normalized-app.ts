@@ -21,8 +21,9 @@ import { ActivityPaymentService } from './activity-payment-service.js'
 import { activityOperationsApiPlugin } from './activity-operations-api.js'
 import { ActivityOperationsService } from './activity-operations-service.js'
 import { BenefitCommandService } from './benefit-repository.js'
+import { AnnualDailySnackClaimService } from './annual-daily-snack-claim-service.js'
 import { catalogApiPlugin } from './catalog-api.js'
-import { NormalizedCommandExecutor, type JsonObject } from './command-executor.js'
+import { appendAuditEvent, appendOutboxMessage, NormalizedCommandExecutor, type JsonObject } from './command-executor.js'
 import { CommerceCommandService } from './commerce-command-service.js'
 import { commerceKdsApiPlugin } from './commerce-kds-api.js'
 import { commercialOpsApiPlugin } from './commercial-ops-api.js'
@@ -51,6 +52,8 @@ import { InventoryQueryService } from './inventory-query-service.js'
 import { KdsRepository } from './kds-repository.js'
 import { loyaltyTierBenefitManagementApiPlugin } from './loyalty-tier-benefit-management-api.js'
 import { LoyaltyTierBenefitManagementService } from './loyalty-tier-benefit-management-service.js'
+import { loyaltyAnnualBenefitApiPlugin } from './loyalty-annual-benefit-api.js'
+import { LoyaltyAnnualBenefitService } from './loyalty-annual-benefit-service.js'
 import { loyaltyOperationalControlApiPlugin } from './loyalty-operational-control-api.js'
 import { LoyaltyOperationalControlService } from './loyalty-operational-control-service.js'
 import { membershipConfigurationApiPlugin } from './membership-configuration-api.js'
@@ -78,6 +81,7 @@ import { PostgresOrderCancellationRepository } from './order-cancellation-reposi
 import { PostgresOrderSettlementExceptionRepository } from './order-settlement-exception-repository.js'
 import { paymentApiPlugin, PaymentProviderVerificationError, type PaymentProviderVerifier } from './payment-api.js'
 import { PaymentCommandService } from './payment-command-service.js'
+import { PaymentFulfillmentRepository } from './payment-fulfillment-repository.js'
 import { OnlinePaymentService } from './online-payment-service.js'
 import { NormalizedPaymentCapabilityAuthorization } from './payment-security-policy.js'
 import { PostgresCashierWorkbenchQuery } from './cashier-workbench-query.js'
@@ -173,7 +177,7 @@ export const NORMALIZED_LOG_REDACTION_PATHS = Object.freeze([
   'payment.publicKey',
 ])
 
-export const NORMALIZED_MIN_SCHEMA_VERSION = '101'
+export const NORMALIZED_MIN_SCHEMA_VERSION = '114'
 export const NORMALIZED_INJECTABLE_PLUGIN_PORTS = Object.freeze([
   'customer-table-side',
 ] as const)
@@ -524,6 +528,94 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
         guestOrderSafetyPolicy: options.config.guestOrderSafetyPolicy,
       },
     )
+    const benefitCommands = new BenefitCommandService(commandExecutor, {
+      createGiftOrder: async (transaction, input) => {
+        if (input.redeemedByEmployeeId === null || !/^\d{4}-\d{2}-\d{2}$/.test(input.businessDate)) {
+          throw new Error('Gift benefit fulfillment requires an authenticated employee and business date')
+        }
+        const products = await transaction.query<{
+          product_id: string; original_product_id: string | null; configured_reason: string | null
+        }>(`
+          SELECT allowed.product_id,definition.product_id AS original_product_id,
+            substitute.reason AS configured_reason
+          FROM mbox.benefit_allowed_products allowed
+          LEFT JOIN mbox.membership_annual_benefit_grants grant_row
+            ON grant_row.tenant_id=allowed.tenant_id AND grant_row.store_id=allowed.store_id
+           AND grant_row.benefit_id=allowed.benefit_id
+          LEFT JOIN mbox.loyalty_annual_benefit_rules rule
+            ON rule.tenant_id=grant_row.tenant_id AND rule.store_id=grant_row.store_id AND rule.id=grant_row.rule_id
+          LEFT JOIN mbox.loyalty_benefit_definitions definition
+            ON definition.tenant_id=rule.tenant_id AND definition.store_id=rule.store_id
+           AND definition.id=rule.benefit_definition_id
+          LEFT JOIN mbox.loyalty_annual_benefit_rule_substitutes substitute
+            ON substitute.tenant_id=rule.tenant_id AND substitute.store_id=rule.store_id
+           AND substitute.rule_id=rule.id AND substitute.product_id=allowed.product_id
+          WHERE allowed.tenant_id=$1::uuid AND allowed.store_id=$2::uuid AND allowed.benefit_id=$3::uuid
+          ORDER BY (allowed.product_id=definition.product_id) DESC,substitute.priority,allowed.product_id
+          FOR KEY SHARE OF allowed
+        `, [transaction.scope.tenantId, transaction.scope.storeId, input.benefitId])
+        const selected = input.selectedProductId === null
+          ? (products.rows.length === 1 ? products.rows[0] : undefined)
+          : products.rows.find((row) => row.product_id === input.selectedProductId)
+        if (!selected) {
+          throw new Error(products.rows.length > 1
+            ? 'Gift benefit fulfillment requires an explicit allowed product selection'
+            : 'Gift benefit fulfillment has no authoritative allowed product')
+        }
+        const substituted = selected.original_product_id !== null && selected.product_id !== selected.original_product_id
+        const substitutionReason = input.substitutionReason?.trim() || selected.configured_reason
+        if (substituted && (!substitutionReason || substitutionReason.length < 2)) {
+          throw new Error('Gift benefit substitute selection requires a reason')
+        }
+        // A daily-snack claim already owns a short recipe hold. Release that
+        // hold inside this same transaction immediately before the zero-value
+        // order reserves the identical recipe, so no competing request can
+        // take the inventory between the two authoritative states.
+        await transaction.query(
+          'SELECT mbox.convert_annual_daily_snack_inventory_hold($1::uuid)',
+          [input.benefitId],
+        )
+        const publicId = `benefit-gift-${createHash('sha256')
+          .update(`${input.benefitId}:${input.benefitReservationId}`).digest('hex').slice(0, 40)}`
+        const orderOutcome = await commerce.submitOrderInTransaction(transaction, {
+          scope: transaction.scope,
+          actor: { type: 'employee', employeeId: input.redeemedByEmployeeId },
+          businessDate: input.businessDate,
+          idempotencyKey: `benefit-gift-order:${input.benefitReservationId}`,
+          tableSessionId: input.tableSessionId,
+          publicId,
+          channel: 'cashier',
+          settlementMode: 'immediate_payment',
+          lines: [{ productId: selected.product_id, quantity: input.quantity }],
+          note: substituted
+            ? `会员权益核销：${input.benefitId}；替代商品：${selected.original_product_id} → ${selected.product_id}；原因：${substitutionReason}`
+            : `会员权益核销：${input.benefitId}`,
+          createdByEmployeeId: input.redeemedByEmployeeId,
+          pricingAuthorization: { sourceType: 'benefit', sourceId: input.benefitId },
+        })
+        await new PaymentFulfillmentRepository(transaction)
+          .activateComplimentaryBenefitOrder(orderOutcome.result.order.id,input.benefitId)
+        for (const audit of orderOutcome.auditEvents) await appendAuditEvent(transaction, audit)
+        for (const outbox of orderOutcome.outboxMessages) await appendOutboxMessage(transaction, outbox)
+        await appendAuditEvent(transaction, {
+          actor:{ type:'employee',employeeId:input.redeemedByEmployeeId },
+          action:substituted ? 'benefit.gift_substitute_selected' : 'benefit.gift_product_selected',
+          objectType:'order',objectId:orderOutcome.result.order.id,businessDate:input.businessDate,
+          afterData:{ benefitId:input.benefitId,originalProductId:selected.original_product_id,
+            selectedProductId:selected.product_id,substituted,substitutionReason:substitutionReason ?? null,
+            inventoryState:'reserved_until_production_start' },
+          reason:substitutionReason ?? undefined,
+        })
+        await appendOutboxMessage(transaction, {
+          businessEventKey:`benefit-gift-fulfillment-requested:${orderOutcome.result.order.id}`,
+          aggregateType:'order',aggregateId:orderOutcome.result.order.id,aggregateVersion:1,
+          eventType:'benefit.gift.fulfillment-requested.v1',
+          payload:{ orderId:orderOutcome.result.order.id,benefitId:input.benefitId,
+            status:'pending',source:'benefit_gift' },
+        })
+        return { reference: orderOutcome.result.order.publicId }
+      },
+    })
     const customerExperience = new CustomerExperienceService(
       transactions,
       commandExecutor,
@@ -536,6 +628,8 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     )
     const customerPreferences = new CustomerPreferenceService(transactions, commandExecutor)
     const tierBenefitManagement = new LoyaltyTierBenefitManagementService(transactions, commandExecutor)
+    const annualBenefitManagement = new LoyaltyAnnualBenefitService(transactions, commandExecutor)
+    const annualDailySnackClaims = new AnnualDailySnackClaimService(transactions, commandExecutor)
     const loyaltyOperationalControl = new LoyaltyOperationalControlService(transactions, commandExecutor)
     const promotionalLoyalty = new PromotionalLoyaltyService(transactions, commandExecutor)
     const membershipTerms = new MembershipTermsService(transactions, commandExecutor)
@@ -594,6 +688,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       orderCancellation: new PostgresOrderCancellationRepository(transactions),
       orderSettlementException: new PostgresOrderSettlementExceptionRepository(transactions),
       onlinePayments,
+      onlinePaymentProvider,
       resolveOnlinePaymentAvailable: async (currentScope) => (await paymentPolicy(currentScope)).onlinePaymentEnabled,
       resolveActorContext: async (request) => {
         if (isGuestRequest(request)) {
@@ -645,7 +740,8 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       prefix: '/api',
       transactions,
       customers: new CustomerCommandService(commandExecutor),
-      benefits: new BenefitCommandService(commandExecutor),
+      benefits: benefitCommands,
+      dailySnackClaims: annualDailySnackClaims,
       resolveSelfContext: async (request) => {
         const session = await authenticateReservationGuest(request)
         const businessDate = (await businessClock.current(scope)).businessDate
@@ -736,6 +832,12 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       prefix: '/api',
       transactions,
       service: tierBenefitManagement,
+      resolveStaffContext: staffReservationContext,
+    })
+    instance.register(loyaltyAnnualBenefitApiPlugin, {
+      prefix: '/api',
+      transactions,
+      service: annualBenefitManagement,
       resolveStaffContext: staffReservationContext,
     })
     instance.register(loyaltyOperationalControlApiPlugin, {

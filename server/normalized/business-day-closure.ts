@@ -1,50 +1,26 @@
 import type { AuditActor, AuditEvent, JsonCodec, JsonObject, OutboxMessage } from './command-executor.js'
 import type { ScopedTransaction } from './transaction-runner.js'
+import { assertEmployeeEffectivePermission } from './employee-table-access.js'
+import type {
+  BusinessDayBlockerCode,
+  BusinessDayBlockerTarget,
+  BusinessDayClosureItem,
+  BusinessDayClosureResult,
+  BusinessDayTableBlocker,
+} from '../../src/shared/business-day-closure-contracts.js'
+import { readBusinessDayBlockerFacts } from './business-day-blocker-facts.js'
+import {
+  readTableSessionClosureState,
+} from './table-session-closure-blockers.js'
 
-export type BusinessDayBlockerCode =
-  | 'ORDER_UNSETTLED'
-  | 'ORDER_ITEM_UNRESOLVED'
-  | 'KDS_ACTIVE'
-  | 'PAYMENT_PENDING'
-  | 'REFUND_PENDING'
-  | 'SERVICE_ACTIVE'
-  | 'PRICING_RESERVED'
-  | 'SONG_ACTIVE'
-  | 'BENEFIT_RESERVED'
-  | 'EXPERIENCE_ACTIVE'
-  | 'REDEMPTION_PENDING'
-  | 'CHECKOUT_OFFER_ACTIVE'
-
-export interface BusinessDayTableBlocker {
-  tableSessionId: string
-  tableCode: string
-  code: BusinessDayBlockerCode
-  count: number
-  label: string
-  resolution: string
-}
-
-export interface ClosedBusinessDayTable {
-  tableSessionId: string
-  tableCode: string
-  previousStatus: 'open' | 'closing'
-  closedAt: string
-}
-
-export interface BusinessDayClosureItem {
-  businessDayId: string
-  businessDate: string
-  status: 'closed' | 'awaiting_close'
-  closedTableSessions: ClosedBusinessDayTable[]
-  blockers: BusinessDayTableBlocker[]
-}
-
-export interface BusinessDayClosureResult {
-  businessDays: BusinessDayClosureItem[]
-  closedBusinessDayCount: number
-  closedTableSessionCount: number
-  blockedTableSessionCount: number
-}
+export type {
+  BusinessDayBlockerCode,
+  BusinessDayBlockerTarget,
+  BusinessDayClosureItem,
+  BusinessDayClosureResult,
+  BusinessDayTableBlocker,
+  ClosedBusinessDayTable,
+} from '../../src/shared/business-day-closure-contracts.js'
 
 export interface BusinessDayClosureOutcome {
   result: BusinessDayClosureResult
@@ -68,41 +44,14 @@ interface ClosedSessionRow extends Record<string, unknown> {
   closed_at: string
 }
 
-interface BlockerCountRow extends Record<string, unknown> {
-  order_unsettled: string
-  order_item_unresolved: string
-  kds_active: string
-  payment_pending: string
-  refund_pending: string
-  service_active: string
-  pricing_reserved: string
-  song_active: string
-  benefit_reserved: string
-  experience_active: string
-  redemption_pending: string
-  checkout_offer_active: string
-}
-
-const blockerDefinitions = [
-  ['ORDER_UNSETTLED', 'order_unsettled', '仍有未结订单', '请先完成付款、退款或取消订单'],
-  ['ORDER_ITEM_UNRESOLVED', 'order_item_unresolved', '仍有未完成出品', '请先完成或取消相关订单行'],
-  ['KDS_ACTIVE', 'kds_active', '仍有进行中的出品任务', '请先完成或取消相关出品任务'],
-  ['PAYMENT_PENDING', 'payment_pending', '仍有待确认付款', '请先确认付款终态'],
-  ['REFUND_PENDING', 'refund_pending', '仍有处理中退款', '请先完成退款流程'],
-  ['SERVICE_ACTIVE', 'service_active', '仍有进行中的服务任务', '请先完成或取消服务任务'],
-  ['PRICING_RESERVED', 'pricing_reserved', '仍有占用中的定价授权', '请先完成或释放定价授权'],
-  ['SONG_ACTIVE', 'song_active', '仍有进行中的点歌请求', '请先完成或取消点歌请求'],
-  ['BENEFIT_RESERVED', 'benefit_reserved', '仍有占用中的权益', '请先完成或释放权益'],
-  ['EXPERIENCE_ACTIVE', 'experience_active', '仍有进行中的体验计划', '请先完成或结束体验计划'],
-  ['REDEMPTION_PENDING', 'redemption_pending', '仍有待履约兑换', '请先完成或取消兑换'],
-  ['CHECKOUT_OFFER_ACTIVE', 'checkout_offer_active', '仍有待处理加单报价', '请先接受、拒绝或失效报价'],
-] as const satisfies ReadonlyArray<readonly [BusinessDayBlockerCode, keyof BlockerCountRow, string, string]>
-
 export async function closeAwaitingBusinessDays(
   transaction: ScopedTransaction,
   actor: AuditActor,
   closeReason: string,
 ): Promise<BusinessDayClosureOutcome> {
+  if (actor.type === 'employee') {
+    await assertEmployeeEffectivePermission(transaction, actor.employeeId, 'business_day.close')
+  }
   const businessDays = await lockAwaitingBusinessDays(transaction)
   const items: BusinessDayClosureItem[] = []
   const auditEvents: AuditEvent[] = []
@@ -236,90 +185,45 @@ async function readSessionBlockers(
   transaction: ScopedTransaction,
   session: ActiveSessionRow,
 ): Promise<BusinessDayTableBlocker[]> {
-  const result = await transaction.query<BlockerCountRow>(`
-    WITH scoped_orders AS (
-      SELECT id,status,payment_status
-      FROM mbox.orders
-      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND table_session_id=$3::uuid
-    ) SELECT
-      (SELECT count(*)::text FROM scoped_orders order_row
-        WHERE NOT ((order_row.status='completed'
-            AND order_row.payment_status IN ('paid','partially_refunded','refunded'))
-          OR (order_row.status='cancelled' AND order_row.payment_status='refunded')
-          OR (order_row.status='cancelled' AND order_row.payment_status='unpaid'
-            AND NOT EXISTS (
-              SELECT 1 FROM mbox.order_items delivered_item
-              WHERE delivered_item.tenant_id=$1::uuid AND delivered_item.store_id=$2::uuid
-                AND delivered_item.order_id=order_row.id AND delivered_item.status='delivered'
-            ))
-          OR (order_row.status='cancelled' AND order_row.payment_status='unpaid'
-            AND EXISTS (
-              SELECT 1 FROM mbox.order_settlement_exception_events settlement_exception
-              WHERE settlement_exception.tenant_id=$1::uuid AND settlement_exception.store_id=$2::uuid
-                AND settlement_exception.order_id=order_row.id
-            )))) AS order_unsettled,
-      (SELECT count(*)::text FROM mbox.order_items item
-        WHERE item.tenant_id=$1::uuid AND item.store_id=$2::uuid
-          AND item.order_id=ANY(SELECT id FROM scoped_orders)
-          AND item.status NOT IN ('delivered','cancelled')) AS order_item_unresolved,
-      (SELECT count(*)::text FROM mbox.kds_tasks task
-        JOIN mbox.order_items item ON item.tenant_id=task.tenant_id
-          AND item.store_id=task.store_id AND item.id=task.order_item_id
-        WHERE task.tenant_id=$1::uuid AND task.store_id=$2::uuid
-          AND item.order_id=ANY(SELECT id FROM scoped_orders)
-          AND (task.status IN ('pending','accepted','preparing')
-            OR (task.status='ready' AND item.status<>'delivered')
-            OR (task.status='failed' AND item.status<>'cancelled'))) AS kds_active,
-      (SELECT count(*)::text FROM mbox.payments payment
-        WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid
-          AND payment.order_id=ANY(SELECT id FROM scoped_orders)
-          AND payment.status IN ('created','pending')) AS payment_pending,
-      (SELECT count(*)::text FROM mbox.refunds refund
-        JOIN mbox.payments payment ON payment.tenant_id=refund.tenant_id
-          AND payment.store_id=refund.store_id AND payment.id=refund.payment_id
-        WHERE refund.tenant_id=$1::uuid AND refund.store_id=$2::uuid
-          AND payment.order_id=ANY(SELECT id FROM scoped_orders)
-          AND refund.status IN ('requested','approved','processing')) AS refund_pending,
-      (SELECT count(*)::text FROM mbox.service_tasks task
-        WHERE task.tenant_id=$1::uuid AND task.store_id=$2::uuid
-          AND task.table_session_id=$3::uuid
-          AND task.status IN ('pending','acknowledged','in_progress')) AS service_active,
-      (SELECT count(*)::text FROM mbox.pricing_authorizations pricing_auth
-        WHERE pricing_auth.tenant_id=$1::uuid AND pricing_auth.store_id=$2::uuid
-          AND pricing_auth.table_session_id=$3::uuid AND pricing_auth.status='reserved') AS pricing_reserved,
-      (SELECT count(*)::text FROM mbox.song_requests song
-        WHERE song.tenant_id=$1::uuid AND song.store_id=$2::uuid
-          AND song.table_session_id=$3::uuid
-          AND song.status IN ('requested','confirming','accepted','paid')) AS song_active,
-      (SELECT count(*)::text FROM mbox.benefit_reservations reservation
-        WHERE reservation.tenant_id=$1::uuid AND reservation.store_id=$2::uuid
-          AND reservation.table_session_id=$3::uuid AND reservation.status='reserved') AS benefit_reserved,
-      (SELECT count(*)::text FROM mbox.customer_experience_plans plan
-        WHERE plan.tenant_id=$1::uuid AND plan.store_id=$2::uuid
-          AND plan.table_session_id=$3::uuid
-          AND plan.plan_state IN ('planned','active','paused')) AS experience_active,
-      (SELECT count(*)::text FROM mbox.member_redemptions redemption
-        WHERE redemption.tenant_id=$1::uuid AND redemption.store_id=$2::uuid
-          AND redemption.table_session_id=$3::uuid
-          AND redemption.status IN ('authorizing','awaiting_fulfillment')) AS redemption_pending,
-      (SELECT count(*)::text FROM mbox.checkout_upgrade_offers offer
-        WHERE offer.tenant_id=$1::uuid AND offer.store_id=$2::uuid
-          AND offer.table_session_id=$3::uuid AND offer.status IN ('offered','selected')) AS checkout_offer_active
-  `, [transaction.scope.tenantId, transaction.scope.storeId, session.id])
-  const row = result.rows[0]
-  if (!row) throw new Error('营业日关台校验未返回结果')
-  return blockerDefinitions.flatMap(([code, key, label, resolution]) => {
-    const count = Number(row[key])
-    if (!Number.isSafeInteger(count) || count < 0) throw new Error('营业日关台校验返回无效计数')
-    return count === 0 ? [] : [{
+  const state = await readTableSessionClosureState(transaction, session.id)
+  const blockers: BusinessDayTableBlocker[] = []
+  for (const { code, count, label, resolution } of state.blockers) {
+    blockers.push({
       tableSessionId: session.id,
       tableCode: session.table_code,
       code,
       count,
       label,
       resolution,
-    }]
-  })
+      target: businessDayBlockerTarget(code, session),
+      facts: await readBusinessDayBlockerFacts(transaction, session.id, code),
+    })
+  }
+  return blockers
+}
+
+function businessDayBlockerTarget(
+  code: BusinessDayBlockerCode,
+  session: ActiveSessionRow,
+): BusinessDayBlockerTarget {
+  const focus = code === 'ORDER_ITEM_UNRESOLVED' || code === 'KDS_ACTIVE'
+    ? 'fulfillment'
+    : code === 'PAYMENT_PENDING'
+      ? 'payments'
+      : code === 'REFUND_PENDING'
+        ? 'refunds'
+        : code === 'INVENTORY_RESERVED'
+          ? 'inventory'
+          : code === 'ORDER_UNSETTLED'
+            ? 'orders'
+            : 'table_exception'
+  return {
+    route: focus === 'table_exception' ? '/staff/live' : '/staff/payments',
+    focus,
+    tableSessionId: session.id,
+    tableCode: session.table_code,
+    query: session.table_code,
+  }
 }
 
 async function closeSafeSessions(

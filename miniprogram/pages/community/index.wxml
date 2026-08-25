@@ -63,7 +63,7 @@
           <view><text>我已阅读并同意</text><text class="community-member-terms" catchtap="showMembershipTerms">《{{membershipTerms.title}}》</text></view>
         </label>
       </checkbox-group>
-      <button wx:if="{{membershipInviteAgreed}}" class="community-member-authorize wx-phone-button" open-type="getPhoneNumber|agreePrivacyAuthorization" bindgetphonenumber="acceptMembershipInvite" bindagreeprivacyauthorization="onAgreePrivacyAuthorization" loading="{{membershipInviteBusy}}">授权手机号并加入</button>
+      <button wx:if="{{membershipInviteAgreed}}" class="community-member-authorize wx-phone-button" open-type="getPhoneNumber" bindgetphonenumber="acceptMembershipInvite" loading="{{membershipInviteBusy}}">授权手机号并加入</button>
       <button wx:else class="community-member-authorize community-member-authorize--disabled" bindtap="remindMembershipInviteAgreement">授权手机号并加入</button>
       <text class="community-member-note">授权仅用于建立会员身份和活动服务联系。</text>
     </view>

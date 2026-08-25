@@ -115,10 +115,10 @@ describe('GuestApiClient', () => {
 
     await expect(client.loadSharedCart()).resolves.toMatchObject({ version: 2, lines: [{ quantity: 1 }] })
     await expect(client.adjustSharedCart({
-      productId: '55555555-5555-4555-8555-555555555555', delta: 1, expectedVersion: 2,
+      productId: '55555555-5555-4555-8555-555555555555', delta: 1, expectedGeneration: 1, expectedVersion: 2,
     }, { idempotencyKey: 'shared-cart-adjust-test-0001' })).resolves.toMatchObject({ version: 3, lines: [{ quantity: 2 }] })
     await expect(client.checkoutSharedCart({
-      expectedVersion: 3, note: '酒水和小食一起上', confirmedDuplicateOrderId: 'guest-order-existing-0001',
+      expectedGeneration: 1, expectedVersion: 3, note: '酒水和小食一起上', confirmedDuplicateOrderId: 'guest-order-existing-0001',
     }, { idempotencyKey: 'shared-cart-checkout-test-0001' })).resolves.toMatchObject({
       order: { publicId: 'guest-order-public-0001' }, sharedCart: { status: 'submitted' },
     })
@@ -129,10 +129,10 @@ describe('GuestApiClient', () => {
       '/api/guest/shared-cart/checkout',
     ])
     expect(JSON.parse(String(send.mock.calls[1]?.[1]?.body))).toEqual({
-      productId: '55555555-5555-4555-8555-555555555555', delta: 1, expectedVersion: 2,
+      productId: '55555555-5555-4555-8555-555555555555', delta: 1, expectedGeneration: 1, expectedVersion: 2,
     })
     expect(JSON.parse(String(send.mock.calls[2]?.[1]?.body))).toEqual({
-      expectedVersion: 3, note: '酒水和小食一起上', confirmedDuplicateOrderId: 'guest-order-existing-0001',
+      expectedGeneration: 1, expectedVersion: 3, note: '酒水和小食一起上', confirmedDuplicateOrderId: 'guest-order-existing-0001',
     })
     expect(new Headers(send.mock.calls[2]?.[1]?.headers).get('idempotency-key')).toBe('shared-cart-checkout-test-0001')
   })
@@ -157,7 +157,7 @@ describe('GuestApiClient', () => {
 
   it('loads the shared table order view without requiring an idempotency key', async () => {
     const send = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => jsonResponse({ data: [{
-      publicId: 'shared-order-0001', round: 1, channel: 'guest_qr', status: 'submitted',
+      publicId: 'shared-order-0001', round: 1, channel: 'guest_qr', sourceText: '顾客扫码点单', status: 'submitted',
       visibility: 'shared', isMine: false, createdAt: '2026-08-11T12:00:00.000Z',
       paymentStatus: 'unpaid', paymentAccess: 'available', payableAmountMinor: 13_600, currency: 'CNY',
       items: [{ productId: '55555555-5555-4555-8555-555555555555', name: '青岛啤酒', quantity: 2, status: 'preparing' }],
@@ -248,6 +248,7 @@ function sharedCart(overrides: Partial<{ version: number; status: string; quanti
     generation: 1,
     version: overrides.version ?? 2,
     status: overrides.status ?? 'open',
+    guestWritesFrozen: false,
     lines: [{
       productId: '55555555-5555-4555-8555-555555555555',
       name: '青岛啤酒',
@@ -256,11 +257,12 @@ function sharedCart(overrides: Partial<{ version: number; status: string; quanti
       subtotalAmountMinor: 6_800 * (overrides.quantity ?? 1),
       currency: 'CNY',
       available: true,
+      unavailableReason: null,
     }],
     totalAmountMinor: 6_800 * (overrides.quantity ?? 1),
     currency: 'CNY',
     updatedAt: '2026-08-11T12:00:00.000Z',
-    allowedActions: overrides.status === 'submitted' ? [] : ['adjust', 'checkout'],
+    allowedActions: overrides.status === 'submitted' ? [] : ['adjust', 'clear', 'checkout'],
   }
 }
 

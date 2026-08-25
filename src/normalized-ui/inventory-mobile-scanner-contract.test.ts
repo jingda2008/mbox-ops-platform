@@ -18,7 +18,7 @@ describe('staff mobile inventory scanning contract', () => {
   it('keeps receipt creation and physical receipt confirmation as separate actions', async () => {
     const source = await readFile(new URL('./StaffModulePanel.tsx', import.meta.url), 'utf8')
     expect(source).toContain('第一步：建立待收货单')
-    expect(source).toContain('第二步：确认实物无误并入库')
+    expect(source).toContain('仅确认实物入库')
     expect(source).toContain("'/api/inventory/receipts'")
     expect(source).toMatch(/\/api\/inventory\/receipts\/\$\{receipt\.id\}\/receive/)
     expect(source).toContain("entryMethod: 'staff_mobile_camera'")
@@ -27,6 +27,27 @@ describe('staff mobile inventory scanning contract', () => {
     expect(source).not.toContain('单件成本（元）')
     expect(source).not.toContain('unitCostMinor,')
     expect(source).toContain("item.categoryCode !== 'food'")
+  })
+
+  it('can confirm a related receipt and publish a fully validated beverage atomically', async () => {
+    const source = await readFile(new URL('./StaffModulePanel.tsx', import.meta.url), 'utf8')
+    expect(source).toContain('第四步：按预览入库发布')
+    expect(source).toMatch(/\/api\/inventory\/receipts\/\$\{receipt\.id\}\/receive-and-publish-preview/)
+    expect(source).toMatch(/\/api\/inventory\/receipts\/\$\{receipt\.id\}\/receive-and-publish/)
+    expect(source).toContain("publishPreview?.receiptId !== receipt.id")
+    expect(source).toContain('成本与可售预览')
+    expect(source).toContain('单份成本')
+    expect(source).toContain('每份扣减')
+    expect(source).toContain('可售份数')
+    expect(source).toContain('毛利率')
+    expect(source).toContain('顾客扫码')
+    expect(source).toContain('员工协助')
+    const apiSource = await readFile(new URL('../../server/normalized/inventory-api.ts', import.meta.url), 'utf8')
+    const receiptReceive = apiSource.indexOf('receivePurchaseReceipt(receiptId')
+    const receiptCostApply = apiSource.indexOf('const appliedCost = await inventory.applyRecipeCost')
+    expect(receiptReceive).toBeGreaterThan(-1)
+    expect(receiptCostApply).toBeGreaterThan(receiptReceive)
+    expect(apiSource).toContain('本次收货成本未能成为当前商品成本')
   })
 
   it('lets an authorized employee establish the first alcohol inventory item and exposes the active operation', async () => {

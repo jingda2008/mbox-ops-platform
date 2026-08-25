@@ -33,6 +33,11 @@ type ApprovalDraft = Pick<StaffAccessApprovalLimitView, 'amountMinor' | 'currenc
 type ScopeDraft = Pick<StaffAccessDataScopeView, 'effect' | 'value' | 'enabled'>
 type NavigationDraft = Omit<StaffAccessNavigationView, 'code'>
 
+const beverageLaunchPermissionPackage = Object.freeze([
+  'inventory.view', 'inventory.manage', 'inventory.receive', 'inventory.barcode.bind',
+  'inventory.cost.view', 'catalog.product.manage', 'catalog.price.manage', 'media.asset.menu.manage',
+])
+
 export function StaffAccessManagementPanel({ api }: { api: NormalizedApiClient }) {
   const [overview, setOverview] = useState<StaffAccessManagementOverview | null>(null)
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -91,6 +96,30 @@ export function StaffAccessManagementPanel({ api }: { api: NormalizedApiClient }
   }
   const resetDrafts = () => {
     setPermissionDraft({}); setApprovalDraft({}); setScopeDraft({}); setNavigationDraft({})
+  }
+
+  const applyBeverageLaunchPackage = () => {
+    if (selectedEmployee === null) return
+    const rolePermissions = new Set(roles
+      .filter((role) => selectedEmployee.roleCodes.includes(role.code))
+      .flatMap((role) => role.permissionCodes))
+    const denied = new Set(selectedEmployee.overrides
+      .filter((override) => override.effect === 'deny')
+      .map((override) => override.permissionCode))
+    setPermissionDraft((current) => ({
+      ...current,
+      ...Object.fromEntries(beverageLaunchPermissionPackage.flatMap((permissionCode) => (
+        denied.has(permissionCode) || rolePermissions.has(permissionCode)
+          || selectedEmployee.overrides.some((override) => override.permissionCode === permissionCode && override.effect === 'grant')
+          ? [] : [[permissionCode, 'grant' as const]]
+      ))),
+    }))
+    const blocked = beverageLaunchPermissionPackage.filter((permissionCode) => denied.has(permissionCode)).length
+    setNotice({
+      tone: 'success',
+      title: '已预览“酒水上架管理员”权限包',
+      detail: `已组合扫码入库、库存成本、商品、配方、定价、渠道、图片和发布能力；${blocked > 0 ? `${blocked}项个人明确拒绝保持不变，` : ''}点击下方发布后才会生效。高风险盘点审批、异常增库和自批权限未包含。`,
+    })
   }
 
   const deploy = async () => {
@@ -153,6 +182,7 @@ export function StaffAccessManagementPanel({ api }: { api: NormalizedApiClient }
       </select></label>
 
       {selectedTarget !== null && <>
+        {mode === 'employee' && selectedEmployee !== null && <div className="staff-access-advisory"><ShieldCheck /><div><strong>中文权限包：酒水上架管理员</strong><span>批量预览扫码入库、商品、配方、定价、渠道、受控图片和发布；个人明确拒绝优先，高风险审批不打包。</span></div><button type="button" onClick={applyBeverageLaunchPackage}>套用并预览</button></div>}
         {(mode === 'role' || mode === 'employee') && <PermissionEditor
           mode={mode} role={selectedRole} employee={selectedEmployee}
           draft={permissionDraft} setDraft={setPermissionDraft} query={query} setQuery={setQuery}
@@ -425,7 +455,7 @@ const permissionLabels: Record<string, string> = {
   'inventory.cost.view': '查看库存成本', 'inventory.manage': '管理库存', 'inventory.view': '查看库存', 'kds.deliver': '配送并确认送达',
   'kds.exception.manage': '处理出品异常', 'kds.prepare': '制作并完成出品', 'order.create': '创建订单', 'order.discount': '订单折扣',
   'order.gift': '赠送商品', 'order.view': '查看订单', 'payment.initiate.staff': '发起员工协助收款', 'payment.manual.cash.record': '登记现金收款',
-  'payment.manual.pos.record': '登记POS收款', 'print.view_all': '查看全部打印任务', 'reconciliation.view': '查看对账', 'refund.approve': '审批退款',
+  'payment.manual.pos.record': '登记POS收款', 'payment.manual.external.record': '登记其他线下收款', 'print.view_all': '查看全部打印任务', 'reconciliation.view': '查看对账', 'refund.approve': '审批退款',
   'refund.execute': '执行退款', 'refund.request': '发起退款', 'reservation.config.manage': '管理预约规则', 'reservation.manage': '处理预约',
   'reservation.view': '查看本人预约', 'reservation.view.all': '查看全部预约', 'service.execute': '处理服务需求', 'service.manage': '调度服务任务',
   'service.view': '查看服务需求', 'song.manage': '管理演出与点歌', 'song.view': '查看演出与点歌', 'staff.access.configure': '配置员工权限',
@@ -436,11 +466,13 @@ const permissionLabels: Record<string, string> = {
   'commercial.sales.attribute': '归因销售业绩', 'commercial.sales.rule.manage': '管理销售归因规则', 'commercial.voucher.redeem': '核销经营券', 'commercial.voucher.view': '查看经营券',
   'inventory.approve': '审批库存操作', 'inventory.barcode.bind': '绑定库存条码', 'inventory.count': '盘点库存', 'inventory.receive': '确认入库',
   'inventory.recipe.cost.apply': '应用配方成本', 'inventory.recipe.publish': '发布库存配方', 'inventory.recipe.replace': '调整库存配方', 'inventory.waste': '登记库存损耗',
+  'media.asset.menu.manage': '管理商品图片素材',
   'checkout.upgrade.rule.view': '查看结账推荐规则', 'checkout.upgrade.rule.draft': '起草结账推荐规则', 'checkout.upgrade.rule.approve': '审批结账推荐规则', 'checkout.upgrade.rule.publish': '发布结账推荐规则',
   'fulfillment.capacity.view': '查看出品容量', 'fulfillment.capacity.draft': '起草出品容量', 'fulfillment.capacity.approve': '审批出品容量', 'fulfillment.capacity.publish': '发布出品容量',
   'recommendation.rule.view': '查看智能推荐规则', 'recommendation.rule.draft': '起草智能推荐规则', 'recommendation.rule.approve': '审批智能推荐规则', 'recommendation.rule.publish': '发布智能推荐规则',
   'recommendation.staff.modify': '调整桌台推荐', 'observation.record': '记录桌台情况', 'loyalty.operations.view': '查看会员运营', 'loyalty.operations.control': '管理会员运营',
   'loyalty.promotion.view': '查看会员促销', 'loyalty.promotion.manage': '管理会员促销', 'loyalty.promotion.approve': '审批会员促销', 'loyalty.promotion.publish': '发布会员促销',
+  'loyalty.annual-benefit.view': '查看年度会员礼遇', 'loyalty.annual-benefit.manage': '起草年度会员礼遇', 'loyalty.annual-benefit.approve': '审批年度会员礼遇', 'loyalty.annual-benefit.publish': '发布年度会员礼遇', 'loyalty.annual-benefit.occurrence.confirm': '确认节日礼遇日期',
   'membership.terms.view': '查看会员条款', 'membership.terms.manage': '管理会员条款', 'membership.terms.approve': '审批会员条款', 'membership.terms.publish': '发布会员条款',
   'customer.membership.recovery.verify': '核验会员找回', 'customer.membership.merge.approve': '审批会员合并',
 }

@@ -26,7 +26,9 @@ export const loyaltyTierBenefitManagementApiPlugin: FastifyPluginAsync<
   LoyaltyTierBenefitManagementApiOptions
 > = async (app, options) => {
   app.get('/staff/loyalty/tier-benefits', async (request, reply) => handle(reply, async () => {
-    const context = await authorized(options, request, 'loyalty.policy.view')
+    const context = await authorizedAny(options, request, [
+      'loyalty.policy.view','loyalty.policy.manage','loyalty.policy.approve','loyalty.policy.publish',
+    ])
     return reply.send({ data: await options.service.configuration(context) })
   }))
 
@@ -82,6 +84,29 @@ async function authorized(
     (options.createStaffAccessRepository?.(transaction) ?? new StaffAccessRepository(transaction))
       .assertPermission(context.employeeId, permission)
   ), { readOnly: true })
+  return context
+}
+
+async function authorizedAny(
+  options: LoyaltyTierBenefitManagementApiOptions,
+  request: FastifyRequest,
+  permissions: readonly string[],
+) {
+  const context = await options.resolveStaffContext(request)
+  await options.transactions.run(context.scope, async (transaction) => {
+    const access=options.createStaffAccessRepository?.(transaction) ?? new StaffAccessRepository(transaction)
+    let lastError:unknown=null
+    for (const permission of permissions) {
+      try {
+        await access.assertPermission(context.employeeId,permission)
+        return
+      } catch (error) {
+        if (!(error instanceof StaffAccessDeniedError)) throw error
+        lastError=error
+      }
+    }
+    throw lastError ?? new StaffAccessDeniedError('Staff permission is required')
+  },{readOnly:true})
   return context
 }
 

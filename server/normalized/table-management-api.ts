@@ -279,7 +279,7 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
       const closesSource=movementKind==='participant_merge' && movedGuestCount===row.source_guest_count
       const blockerResult=await transaction.query<{
         order_item_unresolved:string;kds_active:string;payment_pending:string
-        refund_pending:string;service_active:string
+        refund_pending:string;service_active:string;inventory_reserved:string
         order_unsettled:string;pricing_reserved:string;song_active:string
         benefit_reserved:string;experience_active:string;redemption_pending:string
         checkout_offer_active:string
@@ -302,13 +302,25 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
             )=ANY(SELECT customer_id FROM selected_customers))
       ) SELECT
         (SELECT count(*)::text FROM scoped_orders order_row
-          WHERE NOT ((order_row.status='completed'
+          WHERE NOT ((order_row.status<>'cancelled'
               AND order_row.payment_status IN ('paid','partially_refunded','refunded'))
-            OR (order_row.status='cancelled'
-              AND order_row.payment_status IN ('unpaid','refunded')))) AS order_unsettled,
+            OR (order_row.status='cancelled' AND order_row.payment_status='refunded')
+            OR (order_row.status='cancelled' AND order_row.payment_status='unpaid'
+              AND NOT EXISTS (
+                SELECT 1 FROM mbox.order_items delivered_item
+                WHERE delivered_item.tenant_id=$1::uuid AND delivered_item.store_id=$2::uuid
+                  AND delivered_item.order_id=order_row.id AND delivered_item.status='delivered'
+              ))
+            OR (order_row.status='cancelled' AND order_row.payment_status='unpaid'
+              AND EXISTS (
+                SELECT 1 FROM mbox.order_settlement_exception_events settlement_exception
+                WHERE settlement_exception.tenant_id=$1::uuid AND settlement_exception.store_id=$2::uuid
+                  AND settlement_exception.order_id=order_row.id
+              )))) AS order_unsettled,
         (SELECT count(*)::text FROM mbox.order_items item
           WHERE item.tenant_id=$1::uuid AND item.store_id=$2::uuid
             AND item.order_id=ANY(SELECT id FROM scoped_orders)
+            AND item.fulfillment_station IN ('bar','kitchen')
             AND item.status NOT IN ('delivered','cancelled')) AS order_item_unresolved,
         (SELECT count(*)::text FROM mbox.kds_tasks task
           JOIN mbox.order_items item ON item.tenant_id=task.tenant_id
@@ -322,6 +334,10 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
           WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid
             AND payment.order_id=ANY(SELECT id FROM scoped_orders)
             AND payment.status IN ('created','pending')) AS payment_pending,
+        (SELECT count(*)::text FROM mbox.inventory_order_reservations reservation
+          WHERE reservation.tenant_id=$1::uuid AND reservation.store_id=$2::uuid
+            AND reservation.order_id=ANY(SELECT id FROM scoped_orders)
+            AND reservation.status='reserved') AS inventory_reserved,
         (SELECT count(*)::text FROM mbox.refunds refund
           JOIN mbox.payments payment ON payment.tenant_id=refund.tenant_id
             AND payment.store_id=refund.store_id AND payment.id=refund.payment_id
@@ -372,7 +388,7 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
       `,[context.scope.tenantId,context.scope.storeId,tableSessionId,participantPublicIds,closesSource])
       const blockerCounts=blockerResult.rows[0] ?? {
         order_item_unresolved:'0',kds_active:'0',payment_pending:'0',refund_pending:'0',service_active:'0',
-        order_unsettled:'0',pricing_reserved:'0',song_active:'0',benefit_reserved:'0',
+        order_unsettled:'0',inventory_reserved:'0',pricing_reserved:'0',song_active:'0',benefit_reserved:'0',
         experience_active:'0',redemption_pending:'0',checkout_offer_active:'0',
       }
       return { ...row,activeParticipantCount:active.length,activeParticipants:active,blockerCounts }
@@ -418,6 +434,7 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
       ['ORDER_ITEM_UNRESOLVED','order_item_unresolved','仍有未完成出品','请先完成或取消相关订单行'],
       ['KDS_ACTIVE','kds_active','仍有进行中的出品任务','请先完成或取消相关KDS任务'],
       ['PAYMENT_PENDING','payment_pending','仍有待确认付款','请先确认付款终态'],
+      ['INVENTORY_RESERVED','inventory_reserved','仍有占用中库存','请先完成出品或取消并释放库存'],
       ['REFUND_PENDING','refund_pending','仍有处理中退款','请先完成退款流程'],
       ['SERVICE_ACTIVE','service_active','仍有进行中的服务任务','请先完成或取消服务任务'],
       ['PRICING_RESERVED','pricing_reserved','仍有占用中的定价授权','请先完成或释放定价授权'],

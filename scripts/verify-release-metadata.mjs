@@ -6,6 +6,10 @@ const changelog = await readFile('CHANGELOG.md', 'utf8')
 const version = packageDocument.version
 const releaseTag = `v${version}`
 const releaseDocumentPath = `docs/release-${version}.md`
+const qualityRegisters = [
+  { path: `docs/tc-execution-register-${version}.csv`, identifiesVersion: true },
+  { path: `docs/tc-release-blockers-${version}.csv`, identifiesVersion: false },
+]
 const failures = []
 
 if (!/^\d+\.\d+\.\d+-rc\.\d+$/.test(version)) {
@@ -23,6 +27,21 @@ try {
   }
 } catch {
   failures.push(`${releaseDocumentPath} is missing`)
+}
+
+for (const qualityRegisterDefinition of qualityRegisters) {
+  const { path: qualityRegisterPath, identifiesVersion } = qualityRegisterDefinition
+  try {
+    await access(qualityRegisterPath)
+    const qualityRegister = await readFile(qualityRegisterPath, 'utf8')
+    if (qualityRegister.trim().length === 0) {
+      failures.push(`${qualityRegisterPath} is empty`)
+    } else if (identifiesVersion && !qualityRegister.includes(version)) {
+      failures.push(`${qualityRegisterPath} does not identify ${version}`)
+    }
+  } catch {
+    failures.push(`${qualityRegisterPath} is missing`)
+  }
 }
 
 const escapedVersion = version.replaceAll('.', '\\.')
@@ -50,7 +69,8 @@ if (failures.length > 0) {
 
 process.stdout.write(
   `Release metadata verified: ${releaseTag}, ${releaseDocumentPath}, `
-    + `${migrationFiles.length} legacy migrations, ${normalizedMigrationFiles.length} normalized migrations.\n`,
+    + `${qualityRegisters.length} quality registers, ${migrationFiles.length} legacy migrations, `
+    + `${normalizedMigrationFiles.length} normalized migrations.\n`,
 )
 
 async function validateMigrationDirectory(directory, label, targetFailures) {

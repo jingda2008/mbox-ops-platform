@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.0-rc.130 - 2026-08-25
+
+- Adds the complete version-bound release quality register to the metadata
+  gate, preventing a tag from being created without either required register.
+
 ## 1.0.0-rc.129 - 2026-08-25
 
 - Uses the external OSS evidence relay for a longer, explicit handoff window

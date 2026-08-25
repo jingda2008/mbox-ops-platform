@@ -226,15 +226,16 @@
 }
 .table-strip {
   display: flex;
-  min-height: 112rpx;
-  padding: 18rpx 22rpx;
+  min-height: 104rpx;
+  padding: 16rpx 20rpx;
   align-items: center;
   border: 1rpx solid #ddd7cf;
   border-radius: 18rpx;
   background: #fff;
-  gap: 18rpx;
+  box-shadow: 0 8rpx 22rpx rgba(42, 34, 26, .035);
+  gap: 14rpx;
 }
-.table-strip > view:first-child {
+.table-strip__table {
   flex: 0 0 auto;
 }
 .table-strip__label,
@@ -251,10 +252,30 @@
   font-size: 27rpx;
   font-weight: 750;
 }
+.table-strip__service {
+  display: grid;
+  min-width: 0;
+  min-height: 88rpx;
+  margin: 0;
+  padding: 7rpx 12rpx;
+  flex: 1;
+  align-content: center;
+  border: 0;
+  border-left: 1rpx solid #e2ddd6;
+  border-radius: 0;
+  background: transparent;
+  color: #292621;
+  text-align: left;
+}
+.table-strip__service::after { border: 0; }
+.table-strip__service-value, .table-strip__service-copy { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.table-strip__service-value { margin-top: 4rpx; color: #315d46; font-size: 22rpx; font-weight: 700; }
+.table-strip__service-copy { margin-top: 4rpx; color: #837a70; font-size: 18rpx; }
 .show-brief {
   min-width: 0;
-  padding-left: 18rpx;
-  flex: 1;
+  max-width: 270rpx;
+  padding-left: 14rpx;
+  flex: 0 1 270rpx;
   border-left: 1rpx solid #e2ddd6;
 }
 .show-brief text:first-child {
@@ -268,17 +289,13 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.table-strip > button {
-  width: 96rpx;
-  min-height: 72rpx;
-  margin: 0;
-  border: 0;
-  border-radius: 36rpx;
-  background: #eee8df;
-  color: #604a31;
-  font-size: 22rpx;
-  line-height: 72rpx;
-}
+.quick-service { display: grid; margin-top: 14rpx; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10rpx; }
+.quick-service button { display: flex; min-width: 0; min-height: 88rpx; margin: 0; padding: 10rpx 12rpx; align-items: center; justify-content: center; border: 1rpx solid #ded7cd; border-radius: 16rpx; background: #fff; color: #37312b; font-size: 19rpx; font-weight: 650; line-height: 1.35; text-align: center; gap: 8rpx; }
+.quick-service button::after { border: 0; }
+.quick-service button:nth-child(2) { border-color: #d9c7a8; background: #fffdf8; color: #624a2e; }
+.quick-service button:nth-child(3) { border-color: #ead2cc; background: #fffaf8; color: #873f35; }
+.quick-service__icon { display: inline-flex; width: 30rpx; height: 30rpx; align-items: center; justify-content: center; border-radius: 50%; background: #efe9df; color: #715a3a; font-size: 17rpx; font-weight: 750; }
+.quick-service button:nth-child(3) .quick-service__icon { background: #f6e3de; color: #963d31; }
 .payment-recovery,
 .checkout-recovery {
   display: grid;
@@ -379,6 +396,8 @@
   font-size: 23rpx;
   line-height: 88rpx;
 }
+.shake-recommendation { width: 100%; min-height: 78rpx; margin: 12rpx 0 0; border: 1rpx solid #54705f; border-radius: 14rpx; background: rgba(10, 20, 15, .24); color: #ead9ba; font-size: 22rpx; line-height: 76rpx; }
+.shake-recommendation::after { border: 0; }
 .recommend-scroll {
   width: 100%;
 }
@@ -396,6 +415,7 @@
   border-radius: 20rpx;
   background: #fff;
 }
+.recommend-card--priority { border-color: #c8a56e; box-shadow: 0 10rpx 28rpx rgba(137, 98, 48, .12); }
 .recommend-card > image {
   width: 100%;
   height: 180rpx;
@@ -429,10 +449,11 @@
 }
 .saving {
   display: block;
-  margin-top: 8rpx;
   color: #28704d;
   font-size: 20rpx;
+  font-weight: 650;
 }
+.recommend-value { display: grid; margin-top: 10rpx; color: #8b8177; font-size: 19rpx; gap: 4rpx; }
 .recommend-foot {
   display: flex;
   margin-top: auto;
@@ -443,16 +464,10 @@
   font-size: 31rpx;
   font-weight: 750;
 }
-.recommend-foot button {
-  width: 100rpx;
-  min-height: 72rpx;
-  margin: 0;
-  border-radius: 36rpx;
-  background: #315d46;
-  color: #fff;
-  font-size: 22rpx;
-  line-height: 72rpx;
-}
+.recommend-actions { display: flex; align-items: center; gap: 8rpx; }
+.recommend-foot button { display: flex; width: auto; min-width: 112rpx; min-height: 88rpx; margin: 0; padding: 0 14rpx; align-items: center; justify-content: center; border-radius: 44rpx; font-size: 20rpx; line-height: 1; }
+.recommend-foot .recommend-reject { border: 1rpx solid #d2cbc1; background: transparent; color: #756d64; }
+.recommend-foot .recommend-select { min-width: 132rpx; border: 0; background: #315d46; color: #fff; }
 .menu-tools {
   position: sticky;
   z-index: 6;

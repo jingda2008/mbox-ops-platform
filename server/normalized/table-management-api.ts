@@ -188,7 +188,7 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
       publicId: optionalString(body.publicId, 'publicId', 128) ?? `table-session-${randomUUID()}`,
       guestCount: readInteger(body.guestCount, 'guestCount', 1, 200),
       capacityOverrideReason: optionalString(body.capacityOverrideReason, 'capacityOverrideReason', 1000),
-      guestProfileSnapshot: optionalObject(body.guestProfileSnapshot, 'guestProfileSnapshot'),
+      guestProfileSnapshot: readOpenTableGuestProfileSnapshot(body),
     }))
     return reply.code(201).send(commandResponse(execution))
   }))
@@ -561,6 +561,22 @@ function optionalObject(value: unknown, field: string): JsonObject | undefined {
   if (value === undefined || value === null) return undefined
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new TableManagementRequestError(`${field}必须是对象`)
   return value as JsonObject
+}
+
+function readOpenTableGuestProfileSnapshot(body: Record<string, unknown>): JsonObject | undefined {
+  const snapshot = optionalObject(body.guestProfileSnapshot, 'guestProfileSnapshot')
+  if (snapshot === undefined) return undefined
+  const keys = Object.keys(snapshot)
+  if (keys.length !== 1 || keys[0] !== 'recommendationScene') {
+    throw new TableManagementRequestError('guestProfileSnapshot仅支持recommendationScene')
+  }
+  return {
+    recommendationScene: readEnum(
+      snapshot.recommendationScene,
+      'guestProfileSnapshot.recommendationScene',
+      ['friends', 'business', 'date', 'other'] as const,
+    ),
+  }
 }
 
 function readParams(request: FastifyRequest): Record<string, unknown> {

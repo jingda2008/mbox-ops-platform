@@ -239,7 +239,10 @@ integration('FulfillmentQueryService PostgreSQL authorization and ordering', () 
 
   it('enforces station, delivery-table and explicit all-store visibility with deterministic priority', async () => {
     const scope = { tenantId, storeId }
-    const businessDate = new Date().toISOString().slice(0, 10)
+    // This fixture deliberately uses a fixed venue business date.  UTC's
+    // calendar date can differ from the store's date around midnight and made
+    // this authorization/counts assertion intermittently report zero work.
+    const businessDate = '2026-08-11'
     const bartender = await service.getStaffWorkQueue(scope, bartenderId, businessDate)
     const server = await service.getStaffWorkQueue(scope, serverId, businessDate)
     const manager = await service.getStaffWorkQueue(scope, managerId, businessDate)
@@ -272,7 +275,7 @@ integration('FulfillmentQueryService PostgreSQL authorization and ordering', () 
 
   it('keeps bootstrap fulfillment counts identical to each employee action scope', async () => {
     const query = new StaffBootstrapQuery(new ScopedPostgresTransactionRunner(asPool(pool)))
-    const businessDate = new Date().toISOString().slice(0, 10)
+    const businessDate = '2026-08-11'
     const [bartender, server, manager] = await Promise.all([
       query.get({ tenantId, storeId }, bartenderId, businessDate),
       query.get({ tenantId, storeId }, serverId, businessDate),
@@ -419,8 +422,8 @@ async function seedIntegrationData(pool: Pool, id: IntegrationIds): Promise<void
   `, [id.tableOneId, id.tableTwoId, tenantId, storeId, id.areaId])
   await pool.query(`
     INSERT INTO mbox.table_sessions(id, tenant_id, store_id, table_id, public_id, business_date, guest_count) VALUES
-      ($1, $3, $4, $5, 'fulfillment-session-vip1', CURRENT_DATE, 4),
-      ($2, $3, $4, $6, 'fulfillment-session-l01', CURRENT_DATE, 2)
+      ($1, $3, $4, $5, 'fulfillment-session-vip1', '2026-08-11', 4),
+      ($2, $3, $4, $6, 'fulfillment-session-l01', '2026-08-11', 2)
   `, [id.sessionOneId, id.sessionTwoId, tenantId, storeId, id.tableOneId, id.tableTwoId])
   await pool.query(`
     INSERT INTO mbox.employees(id, tenant_id, store_id, employee_code, display_name) VALUES

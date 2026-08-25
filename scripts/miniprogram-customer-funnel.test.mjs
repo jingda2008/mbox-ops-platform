@@ -146,6 +146,68 @@ test('activity registration distinguishes confirmed, payment-pending, and waitli
   assert.match(operationsApi, /\/staff\/activity-operations\/:publicId\/waitlist-retry/)
 })
 
+test('activity registration asks only for a phone number and guides a missed field into view', async () => {
+  const [detailLogic, detailView, detailStyle, api] = await Promise.all([
+    read('miniprogram/pages/community-detail/index.js'),
+    read('miniprogram/pages/community-detail/index.wxml'),
+    read('miniprogram/pages/community-detail/index.wxss'),
+    read('server/normalized/customer-experience-api.ts'),
+  ])
+
+  assert.match(detailLogic, /function registrationContact\(value\)[\s\S]*?\^1\\d\{10\}\$/)
+  assert.match(detailLogic, /focusRegistrationField\('contact'/)
+  assert.match(detailLogic, /wx\.pageScrollTo\(\{[\s\S]*?selector: contact \? '#activity-registration-contact' : '#activity-registration-acknowledgement',[\s\S]*?duration: 280/)
+  assert.match(detailLogic, /partySizeLimit\(activity, activityPackage\)/)
+  assert.match(detailView, /id="activity-registration-contact"/)
+  assert.match(detailView, /type="number"[\s\S]*?maxlength="11"[\s\S]*?focus="\{\{contactFocused\}\}"/)
+  assert.match(detailView, /仅用于本次活动联系/)
+  assert.match(detailView, /id="activity-registration-acknowledgement"/)
+  assert.match(detailStyle, /\.registration-contact--attention/)
+  assert.match(detailLogic, /REGISTRATION_ATTEMPT_MAX_AGE_MS = 15 \* 60 \* 1000/)
+  assert.match(detailLogic, /function registrationAttemptPayload\(value\)[\s\S]*?Phone numbers are never persisted/)
+  assert.match(detailLogic, /payload: registrationAttemptPayload\(payload\)/)
+  assert.match(detailLogic, /Object\.assign\(\{\}, attempt\.payload, \{ contactSnapshot:/)
+  assert.match(api, /function miniActivityRegistrationPhone\(value: unknown\)/)
+  assert.match(api, /ACTIVITY_CONTACT_INVALID/)
+  assert.doesNotMatch(api.slice(api.indexOf('function miniActivityRegistrationPhone'), api.indexOf('export async function protectActivityRegistrationContact')), /wechat/)
+})
+
+test('tonight ordering keeps live service separate from recommendation and delegates ranking to the server', async () => {
+  const [orderLogic, orderView, orderStyle, servicePage, statusPage, recommendationService] = await Promise.all([
+    read('miniprogram/pages/order/index.js'),
+    read('miniprogram/pages/order/index.wxml'),
+    read('miniprogram/pages/order/index.wxss'),
+    read('miniprogram/pages/service/index.js'),
+    read('miniprogram/pages/status/index.js'),
+    read('server/normalized/customer-experience-service.ts'),
+  ])
+
+  assert.match(orderView, /本桌服务\{\{serviceSummary\.live \? ' · 自动更新' : ''\}\}/)
+  assert.match(orderView, /呼叫服务员/)
+  assert.match(orderView, /生日\/个性化需求/)
+  assert.match(orderView, /投诉\/不满意/)
+  assert.match(orderView, /帮我选/)
+  assert.match(orderView, /摇一摇 · 换一组推荐/)
+  assert.match(orderView, /单点约 \{\{item\.separatePriceText\}\}/)
+  assert.match(orderLogic, /getServiceRequests/)
+  assert.match(orderLogic, /scheduleServicePoll\(request\)[\s\S]*?\}, 6000\)/)
+  assert.match(orderLogic, /async requestQuickService/)
+  assert.match(orderLogic, /createTableRequestGuard/)
+  assert.match(orderLogic, /beginTableRequest\(session\)/)
+  assert.match(orderLogic, /if \(request && !this\.isCurrentTableRequest\(request\)\) return false/)
+  assert.match(statusPage, /createTableRequestGuard/)
+  assert.match(statusPage, /localRequestsKey\(request\.scope\)/)
+  assert.match(servicePage, /createTableRequestGuard/)
+  assert.match(servicePage, /localRequestsKey\(request\.scope\)/)
+  assert.match(orderLogic, /wx\.startAccelerometer/)
+  assert.match(orderLogic, /recommendationIntent/)
+  assert.match(orderLogic, /marketingLabel/)
+  assert.match(recommendationService, /recommendationIntent: RecommendationIntent/)
+  assert.match(orderStyle, /\.quick-service button[\s\S]*?min-height:\s*88rpx/)
+  assert.match(servicePage, /tableSessionCacheScope/)
+  assert.match(statusPage, /tableSessionCacheScope/)
+})
+
 test('Superhigh activity access invites non-members to join with native WeChat phone authorization', async () => {
   const [homeLogic, communityLogic, communityView, detailLogic, detailView, profileLogic, termsLogic, repository] = await Promise.all([
     read('miniprogram/pages/home/index.js'),
@@ -313,7 +375,7 @@ test('customers can browse a read-only menu before scanning, but the browse view
   assert.match(orderLogic, /const \{ publicImageUrl \} = require\('\.\.\/\.\.\/utils\/media'\)/)
   assert.match(orderLogic, /imageUrl: publicImageUrl\(item\.imageUrl\)/)
   assert.match(orderLogic, /function menuProducts\(items\)/)
-  assert.match(orderLogic, /if \(connected\.status === 'waiting_for_table'\)[\s\S]*?await this\.loadBrowseData\('', waitingView\)/)
+  assert.match(orderLogic, /if \(connected\.status === 'waiting_for_table'\)[\s\S]*?await this\.loadBrowseData\('', waitingView, request\)/)
   assert.match(orderLogic, /connectionMessage: '请联系服务人员开台。开台后可直接下单。'/)
   assert.doesNotMatch(orderLogic, /includeUnavailable/)
   assert.match(orderLogic, /const products = menuProducts\(results\[0\]\)/)
@@ -341,7 +403,7 @@ test('customer pages use Chinese release copy and the table cart is server-autho
   }
   assert.match(orderView, /本桌共享购物车/)
   assert.match(orderView, /同桌每位顾客加入的商品都会在这里同步显示/)
-  assert.match(orderView, /serviceStaffName/)
+  assert.match(orderLogic, /serviceStaffName/)
   assert.match(orderView, /小计 \{\{item\.subtotalText\}\}/)
   assert.match(orderView, /item\.unavailableReason/)
   assert.match(orderLogic, /getSharedCart,\s*adjustSharedCart/)

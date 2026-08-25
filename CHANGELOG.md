@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.0-rc.132 - 2026-08-26
+
+- Refines the mini-program’s customer order surface into compact table/show,
+  service and server-ranked recommendation areas, while preserving explicit
+  service progress and in-page ordering.
+- Adds optional, non-identifying table-opening recommendation scenes and
+  server-authored recommendation labels, savings and exposure facts.
+- Restricts activity registration and public contact correction to phone
+  numbers, guides a missing phone field into view, and keeps only short-lived,
+  phone-free local retry metadata.
+- Prevents stale requests from a previous scanned table from writing cart,
+  payment or service state into the newly scanned table.
+- Makes the local PostgreSQL suite deterministic for date-only assertions by
+  running the test process in UTC.
+
 ## 1.0.0-rc.131 - 2026-08-25
 
 - Fixes free activity re-registration after a cancelled cycle by versioning

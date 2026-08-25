@@ -1,7 +1,6 @@
 <view class="page order-page">
   <view class="order-head">
     <view><text class="eyebrow">M-BOX · 今晚点单</text><text class="order-title">今晚点单</text></view>
-    <button wx:if="{{connectionState === 'active'}}" class="service-entry" bindtap="openService">需要服务</button>
   </view>
 
   <state-panel wx:if="{{loading}}" type="loading" title="正在确认桌次与菜单" />
@@ -61,10 +60,14 @@
     <view wx:if="{{cartWritesFrozen}}" class="error-banner">服务人员正在核对本桌点单，暂时只能查看；完成后会恢复修改。</view>
 
     <view class="table-strip">
-      <view><text class="table-strip__label">当前桌位</text><text class="table-strip__value">{{table.displayName}}</text></view>
-      <view class="service-name"><text>本桌服务</text><text>{{serviceStaffName}}</text></view>
+      <view class="table-strip__table"><text class="table-strip__label">当前桌位</text><text class="table-strip__value">{{table.displayName}}</text></view>
+      <button class="table-strip__service" bindtap="openStatus"><text class="table-strip__label">本桌服务{{serviceSummary.live ? ' · 自动更新' : ''}}</text><text class="table-strip__service-value">{{serviceSummary.label}}</text><text class="table-strip__service-copy">{{serviceSummary.detail}}</text></button>
       <view wx:if="{{performance}}" class="show-brief"><text>{{performance.state}}</text><text>{{performance.name}} · {{performance.time}}</text></view>
-      <button bindtap="openStatus">进度</button>
+    </view>
+    <view class="quick-service" aria-label="本桌快捷服务">
+      <button data-code="call" disabled="{{quickServiceBusy}}" bindtap="requestQuickService"><text class="quick-service__icon">铃</text><text>{{quickServiceBusy === 'call' ? '正在通知' : '呼叫服务员'}}</text></button>
+      <button data-code="celebration" disabled="{{quickServiceBusy}}" bindtap="requestQuickService"><text class="quick-service__icon">礼</text><text>{{quickServiceBusy === 'celebration' ? '正在安排' : '生日/个性化需求'}}</text></button>
+      <button data-code="complaint" disabled="{{quickServiceBusy}}" bindtap="requestQuickService"><text class="quick-service__icon">！</text><text>{{quickServiceBusy === 'complaint' ? '正在通知' : '投诉/不满意'}}</text></button>
     </view>
 
     <view wx:if="{{pendingPayment}}" class="payment-recovery">
@@ -87,20 +90,21 @@
     </view>
 
     <view class="recommend-entry">
-      <view class="recommend-entry__copy"><text>需要一点灵感？</text><text>选个场景，给你几组适合今晚的搭配。</text></view>
+      <view class="recommend-entry__copy"><text>今夜推荐</text><text>先给你三组舒服的选择；想换一种感觉，随时重新挑。</text></view>
       <view class="decision-row">
         <picker mode="selector" range="{{occasionOptions}}" range-key="name" value="{{occasionIndex}}" bindchange="onOccasionChange"><view><text>今晚</text><text>{{occasionOptions[occasionIndex].name}}</text></view></picker>
         <picker mode="selector" range="{{alcoholOptions}}" range-key="name" value="{{alcoholIndex}}" bindchange="onAlcoholChange"><view><text>偏好</text><text>{{alcoholOptions[alcoholIndex].name}}</text></view></picker>
-        <button bindtap="recommend" loading="{{busy}}">帮我选</button>
+        <button bindtap="onRecommend" loading="{{recommendationBusy}}">帮我选</button>
       </view>
+      <button class="shake-recommendation" bindtap="onShakeRecommendation" loading="{{recommendationBusy}}" disabled="{{shakeArmed}}">{{shakeArmed ? '摇一摇，换一组' : '摇一摇 · 换一组推荐'}}</button>
     </view>
 
     <view wx:if="{{recommendations.length}}" class="section recommendation-section">
-      <view class="section-title"><text>今晚推荐</text><text class="section-link">按你的选择</text></view>
+      <view class="section-title"><text>今晚推荐</text><text class="section-link">由当晚菜单与本桌选择生成</text></view>
       <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="recommend-scroll"><view class="recommend-row">
-        <view wx:for="{{recommendations}}" wx:key="productId" class="recommend-card">
+        <view wx:for="{{recommendations}}" wx:key="productId" class="recommend-card {{index === 0 ? 'recommend-card--priority' : ''}}">
           <image wx:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" />
-          <view class="recommend-body"><text class="recommend-tier">{{item.tierText}}</text><text class="recommend-name">{{item.name}}</text><text class="recommend-reason">{{item.reason}}</text><text wx:if="{{item.savingsText}}" class="saving">{{item.savingsText}}</text><view class="recommend-foot"><text class="recommend-price">{{item.priceText}}</text><view class="recommend-actions" style="display:flex;align-items:center;gap:8rpx"><button class="recommend-reject" style="display:flex;width:auto;min-width:112rpx;min-height:88rpx;margin:0;padding:0 14rpx;align-items:center;justify-content:center;border:1rpx solid #d2cbc1;border-radius:44rpx;background:transparent;color:#756d64;font-size:21rpx;line-height:1" data-id="{{item.productId}}" bindtap="rejectRecommendation" loading="{{item.rejecting}}" disabled="{{item.rejecting}}">不合适</button><button class="recommend-select" style="display:flex;width:auto;min-width:100rpx;min-height:88rpx;margin:0;padding:0 16rpx;align-items:center;justify-content:center;border-radius:44rpx;background:#315d46;color:#fff;font-size:21rpx;line-height:1" data-id="{{item.productId}}" data-source="recommendation" bindtap="addProduct">选择</button></view></view></view>
+          <view class="recommend-body"><text class="recommend-tier">{{item.tierText}}</text><text class="recommend-name">{{item.name}}</text><text class="recommend-reason">{{item.reason}}</text><view wx:if="{{item.savingsText || item.separatePriceText}}" class="recommend-value"><text wx:if="{{item.separatePriceText}}">单点约 {{item.separatePriceText}}</text><text wx:if="{{item.savingsText}}" class="saving">{{item.savingsText}}</text></view><view class="recommend-foot"><text class="recommend-price">{{item.priceText}}</text><view class="recommend-actions"><button class="recommend-reject" data-id="{{item.productId}}" bindtap="rejectRecommendation" loading="{{item.rejecting}}" disabled="{{item.rejecting}}">不合适</button><button class="recommend-select" data-id="{{item.productId}}" data-source="recommendation" bindtap="addProduct">加入本桌</button></view></view></view>
         </view>
       </view></scroll-view>
     </view>

@@ -106,9 +106,15 @@
 .stepper button::after { border: 0; }
 .stepper text { width: 54rpx; text-align: center; font-size: 24rpx; }
 .registration-panel .field__input { min-height: 44px; }
+.registration-contact { display: block; margin-top: 4rpx; padding: 16rpx; border: 1rpx solid transparent; border-radius: 16rpx; transition: background .2s ease, border-color .2s ease; }
+.registration-contact--attention { border-color: #b67a42; background: #fff8ef; box-shadow: 0 0 0 4rpx rgba(182, 122, 66, .12); }
+.registration-contact__note, .registration-contact__hint { display: block; }
+.registration-contact__note { margin-top: 9rpx; color: #8a8178; font-size: 19rpx; line-height: 1.45; }
+.registration-contact__hint { margin-top: 8rpx; color: #8a4b25; font-size: 20rpx; font-weight: 650; }
 .ack-row { display: flex; min-height: 44px; padding: 12rpx 0; align-items: center; gap: 14rpx; }
 .ack-row checkbox { flex: 0 0 auto; }
 .ack-row text { color: #605a53; font-size: 21rpx; line-height: 1.55; }
+.ack-row--attention { margin-top: 12rpx; padding: 16rpx; border: 1rpx solid #b67a42; border-radius: 16rpx; background: #fff8ef; box-shadow: 0 0 0 4rpx rgba(182, 122, 66, .12); }
 
 .registration-status { display: grid; margin-top: 28rpx; padding: 24rpx; border-left: 6rpx solid #8b693e; border-radius: 0 16rpx 16rpx 0; background: #f5eee3; gap: 10rpx; }
 .registration-status__head { display: flex; align-items: baseline; justify-content: space-between; gap: 18rpx; }

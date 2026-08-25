@@ -49,6 +49,46 @@ describe('table management API', () => {
     }))
   })
 
+  it('accepts only the existing recommendation occasion vocabulary for an open-table profile', async () => {
+    const commands = commandPort()
+    commands.open.mockResolvedValue({ replayed: false, value: { id: 'session-id', tableId, tableCode: 'W01', guestCount: 2 } })
+    const app = await build(commands)
+    const accepted = await app.inject({
+      method: 'POST',
+      url: '/table-management/sessions/open',
+      headers: { 'x-idempotency-key': 'open-scene-request-001' },
+      payload: { tableId, guestCount: 2, guestProfileSnapshot: { recommendationScene: 'friends' } },
+    })
+    const rejected = await app.inject({
+      method: 'POST',
+      url: '/table-management/sessions/open',
+      headers: { 'x-idempotency-key': 'open-scene-request-002' },
+      payload: { tableId, guestCount: 2, guestProfileSnapshot: { recommendationScene: 'solo' } },
+    })
+
+    expect(accepted.statusCode).toBe(201)
+    expect(commands.open).toHaveBeenCalledWith(expect.objectContaining({
+      guestProfileSnapshot: { recommendationScene: 'friends' },
+    }))
+    expect(rejected.statusCode).toBe(400)
+    expect(rejected.json().error).toEqual({
+      code: 'TABLE_REQUEST_INVALID',
+      message: 'guestProfileSnapshot.recommendationScene无效',
+    })
+
+    const untrustedExtra = await app.inject({
+      method: 'POST',
+      url: '/table-management/sessions/open',
+      headers: { 'x-idempotency-key': 'open-scene-request-003' },
+      payload: { tableId, guestCount: 2, guestProfileSnapshot: { recommendationScene: 'friends', phone: '13800138000' } },
+    })
+    expect(untrustedExtra.statusCode).toBe(400)
+    expect(untrustedExtra.json().error).toEqual({
+      code: 'TABLE_REQUEST_INVALID',
+      message: 'guestProfileSnapshot仅支持recommendationScene',
+    })
+  })
+
   it('returns a specific capacity override instruction instead of a generic failure', async () => {
     const commands = commandPort()
     commands.open.mockRejectedValue(new CapacityOverrideReasonRequiredError(4, 6))

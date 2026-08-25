@@ -12,6 +12,7 @@ export type CustomerOccasion = 'business' | 'friends' | 'date' | 'birthday' | 'm
 export type AlcoholPreference = 'cocktail' | 'wine' | 'sparkling' | 'beer' | 'whisky' | 'baijiu' | 'non_alcoholic' | 'mixed' | 'undecided'
 export type ExperienceLevel = 'comfortable' | 'enhanced' | 'signature'
 export type ServiceIntensity = 'quiet' | 'balanced' | 'hosted'
+export type RecommendationIntent = 'initial' | 'guided' | 'shake'
 export type ActivityFeeBasis = 'per_person' | 'per_registration'
 export type ActivityPaymentMode = 'none' | 'deposit_optional' | 'deposit_required' | 'full_required'
 export type ActivityPaymentChoice = 'none' | 'deposit' | 'full'
@@ -34,6 +35,7 @@ export interface CustomerExperienceContext {
 export interface TableExperienceContext extends CustomerExperienceContext {
   tableSessionId: string
   partySize: number
+  recommendationScene?: CustomerOccasion | null
 }
 
 export interface PublicFeature {
@@ -330,6 +332,7 @@ export interface RecommendedProduct {
   currency: string
   grossMarginBasisPoints: number
   tier: ExperienceLevel
+  marketingLabel: string
   reason: string
   included: Array<{ name: string; quantity: number }>
 }
@@ -2045,6 +2048,7 @@ export class CustomerExperienceRepository {
     context: TableExperienceContext
     answers: RecommendationAnswer
     publicId: string
+    recommendationIntent?: RecommendationIntent
   }>): Promise<RecommendationResult> {
     if (!await this.featureEnabled('recommendation.engine')) {
       throw new CustomerExperienceRequestError(
@@ -2056,7 +2060,11 @@ export class CustomerExperienceRepository {
     const policy = await this.currentRecommendationPolicy()
     await new CustomerPreferenceRepository(this.transaction).recompute(input.context.customerId)
     const products = await this.recommendationProducts(input.answers, input.context.customerId)
-    const recommendations = rankProducts(products, input.answers, policy)
+    const recommendationIntent = input.recommendationIntent || 'guided'
+    const recommendations = rankProducts(products, input.answers, policy, {
+      intent: recommendationIntent,
+      variationSeed: recommendationIntent === 'shake' ? input.publicId : null,
+    })
     const missingTiers = (['comfortable', 'enhanced', 'signature'] as const)
       .filter((tier) => !recommendations.some((product) => product.tier === tier))
     const inserted = await this.transaction.query<{ id: string }>(`
@@ -2125,6 +2133,7 @@ export class CustomerExperienceRepository {
           description: recommendation.description,
           imageUrl: recommendation.imageUrl,
           included: recommendation.included,
+          marketingLabel: recommendation.marketingLabel,
         }),
       ])
     }
@@ -2141,7 +2150,11 @@ export class CustomerExperienceRepository {
       sessionId,
       input.context.customerId,
       input.context.tableSessionId,
-      JSON.stringify({ policyPublicId: policy.public_id, policyVersion: policy.version }),
+      JSON.stringify({
+        policyPublicId: policy.public_id,
+        policyVersion: policy.version,
+        recommendationIntent,
+      }),
     ])
     return { publicId: input.publicId, answers: input.answers, recommendations, missingTiers }
   }
@@ -4534,6 +4547,7 @@ function rankProducts(
   rows: RecommendationProductRow[],
   answers: RecommendationAnswer,
   policy: RecommendationPolicyRow,
+  input: Readonly<{ intent: RecommendationIntent; variationSeed: string | null }>,
 ): RecommendedProduct[] {
   const ranked = rows.map((row) => {
     const amount = money(row.amount_minor, 'product amount')
@@ -4551,9 +4565,39 @@ function rankProducts(
   }).filter((entry) => entry.grossMarginBasisPoints >= policy.minimum_gross_margin_basis_points)
     .toSorted((left, right) => right.score - left.score || left.amount - right.amount || left.row.id.localeCompare(right.row.id))
   if (ranked.length === 0) return []
-  const candidates = distinctByAmount(ranked.slice(0, 12))
+  const candidates = recommendationCandidates(distinctByAmount(ranked.slice(0, 12)), input.variationSeed)
   const selected = tierSelections(candidates, answers.experienceLevel)
-  return selected.map(({ item, tier }) => productView(item.row, tier, answers, item.amount, item.cost, item.separate))
+  return selected.map(({ item, tier }, index) => productView(
+    item.row, tier, answers, item.amount, item.cost, item.separate,
+    recommendationMarketingLabel(input.intent, index, tier),
+  ))
+}
+
+function recommendationCandidates<T>(items: T[], variationSeed: string | null): T[] {
+  if (!variationSeed || items.length < 2) return items
+  // A shake asks the server for another controlled option.  Rotate only the
+  // already policy-ranked candidate set; no client-selected product or price
+  // is ever trusted, and availability/price were checked before this point.
+  let value = 0
+  for (const character of variationSeed) value = ((value * 31) + character.charCodeAt(0)) >>> 0
+  const windowSize = Math.min(items.length, 6)
+  const offset = value % windowSize
+  if (offset === 0) return items
+  return items.slice(offset, windowSize).concat(items.slice(0, offset), items.slice(windowSize))
+}
+
+function recommendationMarketingLabel(
+  intent: RecommendationIntent,
+  index: number,
+  tier: ExperienceLevel,
+): string {
+  if (index === 0) {
+    if (intent === 'initial') return '今晚优先推荐'
+    if (intent === 'shake') return '换一组看看'
+    return '为你们挑的'
+  }
+  if (tier === 'signature') return '完整搭配'
+  return tier === 'comfortable' ? '轻松开始' : '今晚搭配'
 }
 
 function recommendationScore(
@@ -4631,7 +4675,7 @@ function distinctByAmount<T extends { amount: number }>(items: T[]): T[] {
     if (seen.has(item.amount)) return false
     seen.add(item.amount)
     return true
-  }).toSorted((left, right) => left.amount - right.amount)
+  })
 }
 
 function productView(
@@ -4641,6 +4685,7 @@ function productView(
   amount: number,
   cost: number,
   separate: number | null,
+  marketingLabel: string,
 ): RecommendedProduct {
   const included = componentList(row.component_list)
   return {
@@ -4656,6 +4701,7 @@ function productView(
     currency: row.currency,
     grossMarginBasisPoints: Math.floor((amount - cost) * 10_000 / amount),
     tier,
+    marketingLabel,
     reason: recommendationReason(answers, tier, row.beverage_family),
     included,
   }

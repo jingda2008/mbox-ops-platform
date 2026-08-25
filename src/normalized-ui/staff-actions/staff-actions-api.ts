@@ -265,6 +265,9 @@ export interface StaffActionsApiPort {
     tableId: string
     guestCount: number
     capacityOverrideReason?: string
+    guestProfileSnapshot?: Readonly<{
+      recommendationScene: 'friends' | 'business' | 'date' | 'other'
+    }>
   }>): Promise<void>
   closeTable(sessionId: string, sessionStatus?: 'open' | 'closing'): Promise<void>
   setGuestCartFreeze(sessionId: string, frozen: boolean, reason?: string): Promise<void>
@@ -485,6 +488,9 @@ export class StaffActionsApi implements StaffActionsApiPort {
     tableId: string
     guestCount: number
     capacityOverrideReason?: string
+    guestProfileSnapshot?: Readonly<{
+      recommendationScene: 'friends' | 'business' | 'date' | 'other'
+    }>
   }>): Promise<void> {
     await this.command('/api/table-management/sessions/open', input, 'x-idempotency-key')
   }

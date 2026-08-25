@@ -14,7 +14,9 @@ import {
   type CustomerOccasion,
   type ExperienceLevel,
   type RecommendationAnswer,
+  type RecommendationIntent,
   type ServiceIntensity,
+  type TableExperienceContext,
 } from './customer-experience-repository.js'
 import type { ObservationEventInput } from './customer-experience-observation-repository.js'
 import type { ProtectedContact } from './waitlist-repository.js'
@@ -682,7 +684,7 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
         ? null : publicId(text(body.activityPackagePublicId, '套餐编号', 8, 128)),
       partySize: integer(body.partySize, '报名人数', 1, 20),
       protectedContact: await protectActivityRegistrationContact(
-        object(body.contactSnapshot, '联系信息'),
+        miniActivityRegistrationPhone(body.contactSnapshot),
         options.protectContact,
       ),
       termsAcknowledged: booleanValue(body.termsAcknowledged, '条款确认'),
@@ -723,8 +725,11 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
   app.post('/guest/experience/recommendations', async (request, reply) => handle(reply, async () => {
     const context = await tableContext(options, request)
     const body = objectBody(request.body)
-    const answers = recommendationAnswers(body, context.partySize)
-    const result = await options.service.recommend(context, answers, idempotencyKey(request))
+    const recommendationIntent = enumValue(
+      body.recommendationIntent ?? 'guided', '推荐入口', ['initial', 'guided', 'shake'] as const,
+    ) as RecommendationIntent
+    const answers = recommendationAnswers(body, context, recommendationIntent)
+    const result = await options.service.recommend(context, answers, idempotencyKey(request), recommendationIntent)
     return reply.code(result.replayed ? 200 : 201).send({ data: result.value, meta: { replayed: result.replayed } })
   }))
 
@@ -1707,10 +1712,20 @@ function safeActivityRegistrationFailure(error: unknown) {
   return { kind: 'unexpected' as const }
 }
 
-function recommendationAnswers(body: JsonObject, partySize: number): RecommendationAnswer {
+function recommendationAnswers(
+  body: JsonObject,
+  context: Pick<TableExperienceContext, 'partySize' | 'recommendationScene'>,
+  recommendationIntent: RecommendationIntent,
+): RecommendationAnswer {
+  const storedOccasion = context.recommendationScene || 'other'
   return {
-    partySize,
-    occasion: enumValue(body.occasion, '聚会目的', OCCASIONS) as CustomerOccasion,
+    partySize: context.partySize,
+    // The customer can actively choose a scene.  For an initial visit, an
+    // optional staff open-table scene is a useful low-friction default; no
+    // sensitive profile data is used and "不确定" remains neutral.
+    occasion: recommendationIntent === 'initial' && context.recommendationScene
+      ? storedOccasion
+      : enumValue(body.occasion ?? storedOccasion, '聚会目的', OCCASIONS) as CustomerOccasion,
     alcoholPreference: enumValue(body.alcoholPreference, '酒水偏好', ALCOHOL) as AlcoholPreference,
     experienceLevel: enumValue(body.experienceLevel, '体验档位', LEVELS) as ExperienceLevel,
     serviceIntensity: enumValue(body.serviceIntensity, '服务方式', INTENSITIES) as ServiceIntensity,
@@ -1818,6 +1833,30 @@ function objectBody(value: unknown): JsonObject { return object(value, '请求�
 function object(value: unknown, label: string): JsonObject {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new CustomerExperienceRequestError(`${label}格式不正确`)
   return value as JsonObject
+}
+
+export function miniActivityRegistrationPhone(value: unknown): JsonObject {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new CustomerExperienceRequestError('联系信息格式不正确', 'ACTIVITY_CONTACT_INVALID')
+  }
+  const snapshot = value as JsonObject
+  const keys = Object.keys(snapshot).toSorted()
+  const submittedFromRegistration = keys.length === 2
+    && keys[0] === 'channel' && keys[1] === 'contact' && snapshot.channel === 'miniprogram'
+  const submittedFromCorrection = keys.length === 2
+    && keys[0] === 'contactType' && keys[1] === 'contactValue' && snapshot.contactType === 'phone'
+  if (!submittedFromRegistration && !submittedFromCorrection) {
+    throw new CustomerExperienceRequestError('联系信息格式不正确', 'ACTIVITY_CONTACT_INVALID')
+  }
+  // Do not delegate this to the generic text() validator: its generic error
+  // code would turn an obvious phone-format correction into an opaque request
+  // error for the mini-program.
+  const rawContact = submittedFromRegistration ? snapshot.contact : snapshot.contactValue
+  const contact = typeof rawContact === 'string' ? rawContact.trim() : ''
+  if (!/^1\d{10}$/.test(contact)) {
+    throw new CustomerExperienceRequestError('手机号格式不正确', 'ACTIVITY_CONTACT_INVALID')
+  }
+  return { channel: 'miniprogram', contact }
 }
 
 export async function protectActivityRegistrationContact(

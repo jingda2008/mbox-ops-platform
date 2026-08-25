@@ -26,12 +26,25 @@ function money(amount) {
   return `¥${(Number(amount || 0) / 100).toFixed(2)}`
 }
 
+function dateInput(value) {
+  const source = String(value || '').trim()
+  if (!source) return ''
+  // PostgreSQL's common `YYYY-MM-DD HH:mm:ss+08` presentation is accepted by
+  // Chromium but not consistently by iOS WebKit.  Normalize it to ISO-8601
+  // before passing it to Date so the same activity/service time is shown on
+  // both platforms.  Values already using `T` or an explicit minute offset
+  // are left intact.
+  const compactOffset = source.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)([+-]\d{2})$/)
+  if (compactOffset) return `${compactOffset[1]}T${compactOffset[2]}${compactOffset[3]}:00`
+  return source.replace(/^(\d{4}-\d{2}-\d{2})\s+/, '$1T')
+}
+
 function dateTime(value) {
   if (!value) return '--'
-  const date = new Date(value)
+  const date = new Date(dateInput(value))
   if (Number.isNaN(date.getTime())) return '--'
   const pad = (number) => String(number).padStart(2, '0')
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
-module.exports = { TASK_STATUS, SONG_STATUS, money, dateTime }
+module.exports = { TASK_STATUS, SONG_STATUS, money, dateInput, dateTime }

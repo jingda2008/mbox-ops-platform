@@ -1,10 +1,11 @@
 const { getServiceRequests, actOnServiceTask } = require('../../utils/api')
 const { getRuntimeConfig } = require('../../config/index')
-const { getTableSession } = require('../../utils/session')
+const { getTableSession, tableSessionCacheScope } = require('../../utils/session')
+const { createTableRequestGuard, tableRequestScope } = require('../../utils/table-request-scope')
 const { TASK_STATUS, dateTime } = require('../../utils/format')
 const { customerErrorMessage } = require('../../utils/customer-error')
 
-const LOCAL_REQUESTS_KEY = 'mbox.guest.service.requests.v2'
+const LOCAL_REQUESTS_KEY = 'mbox.guest.service.requests.v3'
 const REQUEST_TYPE_NAMES = {
   call_staff: '呼叫服务人员',
   complaint: '值班负责人协助',
@@ -19,6 +20,17 @@ const SERVICE_STATUS_NAMES = {
   expired: '已失效',
 }
 const ACTIVE_SERVICE_STATUSES = ['pending', 'acknowledged', 'in_progress']
+
+function localRequestsKey(scope) {
+  return `${LOCAL_REQUESTS_KEY}.${scope || tableSessionCacheScope()}`
+}
+
+function cachedRequests(scope) {
+  const stored = wx.getStorageSync(localRequestsKey(scope))
+  if (Array.isArray(stored)) return { tasks: stored, savedAt: null }
+  if (stored && typeof stored === 'object' && Array.isArray(stored.tasks)) return stored
+  return { tasks: [], savedAt: null }
+}
 
 function normalizeTask(task) {
   const status = task.status || task.taskStatus || 'pending'
@@ -39,37 +51,53 @@ function normalizeTask(task) {
 }
 
 Page({
-  data: { loading: true, feedbackTaskId: '', error: '', success: '', isDevelopment: false, tableCode: '', tasks: [], live: true },
+  data: { loading: true, feedbackTaskId: '', error: '', success: '', isDevelopment: false, tableCode: '', tasks: [], live: true, cachedAtText: '' },
 
   onLoad() {
+    this.ensureTableRequestGuard()
     this.setData({ tableCode: getTableSession().tableCode, isDevelopment: getRuntimeConfig().isDevelopment })
   },
   onShow() { this.loadData(); this.startPolling() },
-  onHide() { this.stopPolling() },
-  onUnload() { this.stopPolling() },
+  onHide() { this.invalidateTableRequests(); this.stopPolling() },
+  onUnload() { this.invalidateTableRequests(); this.stopPolling() },
   onPullDownRefresh() { this.loadData().finally(() => wx.stopPullDownRefresh()) },
 
   startPolling() { this.stopPolling(); this.pollTimer = setInterval(() => this.loadData(true), 6000) },
   stopPolling() { if (this.pollTimer) clearInterval(this.pollTimer); this.pollTimer = null },
 
+  ensureTableRequestGuard() {
+    if (!this.tableRequestGuard) {
+      this.tableRequestGuard = createTableRequestGuard(() => tableRequestScope(getTableSession()))
+    }
+    return this.tableRequestGuard
+  },
+  beginTableRequest() { return this.ensureTableRequestGuard().begin(tableRequestScope(getTableSession())) },
+  isCurrentTableRequest(request) { return this.ensureTableRequestGuard().isCurrent(request) },
+  invalidateTableRequests() { this.ensureTableRequestGuard().invalidate() },
+
   async loadData(silent) {
+    const request = this.beginTableRequest()
     if (!silent) this.setData({ loading: true, error: '' })
     try {
       const response = await getServiceRequests()
+      if (!this.isCurrentTableRequest(request)) return
       const raw = Array.isArray(response) ? response : response.tasks || []
-      const stored = wx.getStorageSync(LOCAL_REQUESTS_KEY) || []
-      const localById = new Map(stored.map((item) => [item.publicId || item.taskPublicId || item.id, item]))
+      const stored = cachedRequests(request.scope)
+      const localById = new Map(stored.tasks.map((item) => [item.publicId || item.taskPublicId || item.id, item]))
       const hydrated = raw.map((item) => Object.assign({}, localById.get(item.publicId) || {}, item))
       const tasks = hydrated.map(normalizeTask)
-      wx.setStorageSync(LOCAL_REQUESTS_KEY, hydrated)
-      this.setData({ loading: false, tasks, live: true, error: '' })
+      wx.setStorageSync(localRequestsKey(request.scope), { savedAt: new Date().toISOString(), tasks: hydrated })
+      this.setData({ loading: false, tableCode: getTableSession().tableCode, tasks, live: true, cachedAtText: '', error: '' })
     } catch (error) {
-      const stored = wx.getStorageSync(LOCAL_REQUESTS_KEY) || []
+      if (!this.isCurrentTableRequest(request)) return
+      const stored = cachedRequests(request.scope)
       this.setData({
         loading: false,
-        tasks: stored.map(normalizeTask),
+        tableCode: getTableSession().tableCode,
+        tasks: stored.tasks.map(normalizeTask),
         live: false,
-        error: stored.length ? '实时状态暂时未连接，以下为本机最近提交记录。请勿重复呼叫。' : customerErrorMessage(error, '服务进度暂时无法读取'),
+        cachedAtText: stored.savedAt ? `本机记录于 ${dateTime(stored.savedAt)}` : '',
+        error: stored.tasks.length ? '实时状态暂时未连接，以下为本桌最近提交记录。请勿重复呼叫。' : customerErrorMessage(error, '服务进度暂时无法读取'),
       })
     }
   },
@@ -77,13 +105,19 @@ Page({
   async submitFeedback(event) {
     const taskPublicId = event.currentTarget.dataset.id
     const action = event.currentTarget.dataset.action
+    const request = this.beginTableRequest()
     this.setData({ feedbackTaskId: taskPublicId, error: '', success: '' })
     try {
       await actOnServiceTask(taskPublicId, action)
-      this.setData({ success: action === 'confirm' ? '感谢确认，本次服务已经解决。' : '已继续升级处理，值班负责人会跟进。' })
+      if (!this.isCurrentTableRequest(request)) return
+      this.setData({
+        feedbackTaskId: '',
+        success: action === 'confirm' ? '感谢确认，本次服务已经解决。' : '已继续升级处理，值班负责人会跟进。',
+      })
       await this.loadData()
-    } catch (error) { this.setData({ error: customerErrorMessage(error, '反馈没有送达，请稍后重试') }) }
-    finally { this.setData({ feedbackTaskId: '' }) }
+    } catch (error) {
+      if (this.isCurrentTableRequest(request)) this.setData({ error: customerErrorMessage(error, '反馈没有送达，请稍后重试') })
+    } finally { if (this.isCurrentTableRequest(request)) this.setData({ feedbackTaskId: '' }) }
   },
 
   openService() { wx.navigateTo({ url: '/pages/service/index' }) },

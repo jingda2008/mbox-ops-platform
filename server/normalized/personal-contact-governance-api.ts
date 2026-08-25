@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type { PublicCustomerExperienceContext, StaffCustomerExperienceContext } from './customer-experience-service.js'
-import { protectActivityRegistrationContact } from './customer-experience-api.js'
+import { miniActivityRegistrationPhone, protectActivityRegistrationContact } from './customer-experience-api.js'
 import { CustomerExperienceRequestError } from './customer-experience-repository.js'
 import {
   PersonalContactGovernanceError,
@@ -31,7 +31,7 @@ export const personalContactGovernanceApiPlugin: FastifyPluginAsync<Options> = a
     async (request,reply) => handle(reply,async () => {
       const context=await options.resolvePublicContext(request)
       const body=object(request.body)
-      const protectedValue=await protectActivityRegistrationContact(body,(
+      const protectedValue=await protectActivityRegistrationContact(miniActivityRegistrationPhone(body),(
         value => options.protection.protect(value)
       ))
       const result=await options.service.updateMyActivityContact(context,{

@@ -18,6 +18,25 @@ describe('StaffActionsApi', () => {
     expect(headers.get('x-idempotency-key')).toBe('staff-action-open-key-0001')
   })
 
+  it('sends only the normalized recommendation occasion with an open-table command', async () => {
+    const send = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ data: {} }), { status: 201 }))
+    const api = new StaffActionsApi({ fetch: send, createIdempotencyKey: () => 'open-scene-key-0001' })
+
+    await api.openTable({
+      tableId: 'table-1',
+      guestCount: 2,
+      guestProfileSnapshot: { recommendationScene: 'friends' },
+    })
+
+    expect(send).toHaveBeenCalledWith('/api/table-management/sessions/open', expect.objectContaining({
+      body: JSON.stringify({
+        tableId: 'table-1',
+        guestCount: 2,
+        guestProfileSnapshot: { recommendationScene: 'friends' },
+      }),
+    }))
+  })
+
   it('keeps the server reference on an unexpected order failure for staff escalation', async () => {
     const send = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
       error: {

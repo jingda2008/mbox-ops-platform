@@ -211,6 +211,28 @@ describe('customer experience activity contact API', () => {
     expect(registerActivity).not.toHaveBeenCalled()
   })
 
+  it('accepts only an 11-digit phone number for a mini-program activity registration', async () => {
+    const registerActivity = vi.fn()
+    const app = fixture(registerActivity, '13800138000')
+    const response = await app.inject({
+      method: 'POST',
+      url: '/public/mini/activities/community-activity-api-test/registrations',
+      headers: { 'idempotency-key': 'activity-registration-api-phone-only' },
+      payload: {
+        partySize: 1,
+        contactSnapshot: { channel: 'miniprogram', contact: 'mbox_wechat_contact' },
+        termsAcknowledged: true,
+        acknowledgedSafetyPolicyVersion: 'safety-v1',
+        acknowledgedRefundPolicyVersion: 'refund-v1',
+        paymentChoice: 'none',
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toMatchObject({ error: { code: 'ACTIVITY_CONTACT_INVALID' } })
+    expect(registerActivity).not.toHaveBeenCalled()
+  })
+
   it('reports a contact-protection provider failure safely without creating a registration', async () => {
     const registerActivity = vi.fn()
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)

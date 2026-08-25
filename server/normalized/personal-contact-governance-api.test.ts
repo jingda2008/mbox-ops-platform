@@ -43,6 +43,14 @@ describe('personal contact governance API',()=>{
     expect(forged.statusCode).toBe(400)
     expect(updateMyActivityContact).not.toHaveBeenCalled()
 
+    const nonPhone = await app.inject({
+      method:'PUT',url:'/public/mini/activity-registrations/activity-registration-1234567890abcdef12345678/contact',
+      headers:{'idempotency-key':'contact-correction-non-phone'},
+      payload:{contactType:'wechat',contactValue:'mbox_guest'},
+    })
+    expect(nonPhone.statusCode).toBe(400)
+    expect(updateMyActivityContact).not.toHaveBeenCalled()
+
     const response=await app.inject({
       method:'PUT',url:'/public/mini/activity-registrations/activity-registration-1234567890abcdef12345678/contact',
       headers:{'idempotency-key':'contact-correction-valid'},

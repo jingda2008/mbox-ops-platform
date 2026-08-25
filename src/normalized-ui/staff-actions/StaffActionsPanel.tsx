@@ -35,6 +35,8 @@ import {
   actionableServiceTasks,
   guidanceForPermission,
   hasPermission,
+  OPEN_TABLE_RECOMMENDATION_SCENES,
+  recommendationSceneSnapshot,
   requiresCapacityReason,
   tableMoodPresentation,
   tableGroups,
@@ -42,6 +44,7 @@ import {
   visibleFulfillmentItems,
   visibleStaffTables,
   type StaffTableScope,
+  type OpenTableRecommendationScene,
 } from './staff-actions-model'
 import type {
   StaffActionNotice,
@@ -94,6 +97,7 @@ export function StaffActionsPanel({
   const [selectedTableId, setSelectedTableId] = useState<string | null>(null)
   const [focusedActionId,setFocusedActionId]=useState<string|null>(initialFactId)
   const [guestCount, setGuestCount] = useState('')
+  const [openTableRecommendationScene, setOpenTableRecommendationScene] = useState<OpenTableRecommendationScene>('unsure')
   const [capacityReason, setCapacityReason] = useState('')
   const [transferTargetId, setTransferTargetId] = useState<string | null>(null)
   const [transferReason, setTransferReason] = useState('')
@@ -337,6 +341,7 @@ export function StaffActionsPanel({
   const selectTable = (table: StaffActionTable) => {
     setSelectedTableId(table.id)
     setGuestCount('')
+    setOpenTableRecommendationScene('unsure')
     setCapacityReason('')
     setTransferTargetId(null)
     setTransferReason('')
@@ -362,12 +367,17 @@ export function StaffActionsPanel({
       status: 'open' as const,
       openedAt: new Date().toISOString(),
       latestMood: null,
+      guestProfileSnapshot: recommendationSceneSnapshot(openTableRecommendationScene),
       guestCartWritesFrozen: false,
     }
     setPendingAction(`table:${selectedTable.id}`)
     setOperations(replaceTableSession(snapshot, selectedTable.id, optimisticSession))
     try {
-      await api.openTable({ tableId: selectedTable.id, ...validated })
+      await api.openTable({
+        tableId: selectedTable.id,
+        ...validated,
+        guestProfileSnapshot: recommendationSceneSnapshot(openTableRecommendationScene),
+      })
       showNotice({ kind: 'success', message: `${selectedTable.code} 已开台，${validated.guestCount}人` })
       await load(true)
     } catch (error) {
@@ -754,6 +764,7 @@ export function StaffActionsPanel({
               allTables={operations.tables}
               permissions={permissions}
               guestCount={guestCount}
+              openTableRecommendationScene={openTableRecommendationScene}
               capacityReason={capacityReason}
               transferTargetId={transferTargetId}
               transferReason={transferReason}
@@ -761,6 +772,7 @@ export function StaffActionsPanel({
               closeIssue={closeIssue}
               pending={pendingAction === `table:${selectedTable.id}`}
               onGuestCount={setGuestCount}
+              onOpenTableRecommendationScene={setOpenTableRecommendationScene}
               onCapacityReason={setCapacityReason}
               onTransferTarget={setTransferTargetId}
               onTransferReason={setTransferReason}
@@ -1262,6 +1274,7 @@ interface TableActionSheetProps {
   allTables: StaffActionTable[]
   permissions: readonly string[]
   guestCount: string
+  openTableRecommendationScene: OpenTableRecommendationScene
   capacityReason: string
   transferTargetId: string | null
   transferReason: string
@@ -1269,6 +1282,7 @@ interface TableActionSheetProps {
   closeIssue: string | null
   pending: boolean
   onGuestCount(value: string): void
+  onOpenTableRecommendationScene(value: OpenTableRecommendationScene): void
   onCapacityReason(value: string): void
   onTransferTarget(value: string | null): void
   onTransferReason(value: string): void
@@ -1322,6 +1336,20 @@ function TableActionSheet(props: TableActionSheetProps) {
               onChange={(event) => props.onGuestCount(event.target.value.replace(/\D/g, '').slice(0, 3))}
             />
           </div>
+          {hasPermission(props.permissions, 'table.open') && (
+            <label className="staff-open-table-scene">
+              客群场景（可选）
+              <select
+                value={props.openTableRecommendationScene}
+                aria-label="客群场景（可选）"
+                onChange={(event) => props.onOpenTableRecommendationScene(event.target.value as OpenTableRecommendationScene)}
+              >
+                {OPEN_TABLE_RECOMMENDATION_SCENES.map((scene) => (
+                  <option key={scene.value} value={scene.value}>{scene.label}</option>
+                ))}
+              </select>
+            </label>
+          )}
           {requiresCapacityReason(table, guestNumber) && (
             <label className="staff-capacity-reason" data-action-reveal>
               加座说明

@@ -3,6 +3,7 @@ import {
   actionableFulfillmentItems,
   actionableServiceTasks,
   fulfillmentAction,
+  recommendationSceneSnapshot,
   requiresCapacityReason,
   tableMoodPresentation,
   unifiedActionQueue,
@@ -27,6 +28,15 @@ describe('staff actions model', () => {
     })
     expect(requiresCapacityReason(table, 4)).toBe(false)
     expect(requiresCapacityReason(table, 5)).toBe(true)
+  })
+
+  it('maps optional open-table scenes to the existing recommendation occasion vocabulary', () => {
+    expect(recommendationSceneSnapshot('brothers')).toEqual({ recommendationScene: 'friends' })
+    expect(recommendationSceneSnapshot('friends')).toEqual({ recommendationScene: 'friends' })
+    expect(recommendationSceneSnapshot('business')).toEqual({ recommendationScene: 'business' })
+    expect(recommendationSceneSnapshot('date')).toEqual({ recommendationScene: 'date' })
+    expect(recommendationSceneSnapshot('solo')).toEqual({ recommendationScene: 'other' })
+    expect(recommendationSceneSnapshot('unsure')).toEqual({ recommendationScene: 'other' })
   })
 
   it('puts assigned and urgent service work first while hiding terminal work', () => {

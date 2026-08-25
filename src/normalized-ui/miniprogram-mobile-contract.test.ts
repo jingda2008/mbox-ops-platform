@@ -23,7 +23,7 @@ describe('mini-program mobile business flow contract', () => {
     const session = read('miniprogram/utils/session.js')
     expect(order).toContain("connectionState: 'needs_scan'")
     expect(order).toContain("connected.status === 'waiting_for_table'")
-    expect(order).toContain('this.scheduleWaitingPoll()')
+    expect(order).toContain('this.scheduleWaitingPoll(request)')
     expect(order).toContain("['active', 'already_active'].includes(connected.status)")
     expect(order).toContain('onlyFromCamera: true')
     expect(orderView).toContain('到店扫码点单')

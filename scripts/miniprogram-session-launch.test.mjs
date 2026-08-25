@@ -23,6 +23,13 @@ async function loadSessionModule() {
   return { session: context.module.exports, storage }
 }
 
+async function loadTableRequestScopeModule() {
+  const source = await readFile(new URL('../miniprogram/utils/table-request-scope.js', import.meta.url), 'utf8')
+  const context = { module: { exports: {} }, exports: {} }
+  vm.runInNewContext(source, context, { filename: 'miniprogram/utils/table-request-scope.js' })
+  return context.module.exports
+}
+
 const production = Object.freeze({
   isDevelopment: false, defaultTableCode: '', defaultTableToken: '',
 })
@@ -42,6 +49,30 @@ test('reads encoded scene parameters and accepts matching explicit aliases', asy
   const result = session.applyLaunchSession({ query: { scene, tableCode: 'L01', tableToken: token } }, production)
   assert.equal(result.tableToken, token)
   assert.equal(result.tableCode, 'L01')
+})
+
+test('scopes local table records to the scanned credential, not a reusable table code', async () => {
+  const { session } = await loadSessionModule()
+  const first = session.tableSessionCacheScope({ tableCode: 'A01', tableToken: 'E'.repeat(32) })
+  const repeated = session.tableSessionCacheScope({ tableCode: 'A01', tableToken: 'E'.repeat(32) })
+  const nextTurnover = session.tableSessionCacheScope({ tableCode: 'A01', tableToken: 'F'.repeat(32) })
+  assert.equal(first, repeated)
+  assert.notEqual(first, nextTurnover)
+  assert.match(first, /^A01\.[a-z0-9]+$/)
+  assert.doesNotMatch(first, /E{8}/)
+})
+
+test('drops delayed table responses after a new scan changes the active scope', async () => {
+  const { createTableRequestGuard, tableRequestScope } = await loadTableRequestScopeModule()
+  let current = tableRequestScope({ tableCode: 'A01', tableToken: 'token-a' })
+  const guard = createTableRequestGuard(() => current)
+  const first = guard.begin(current)
+  current = tableRequestScope({ tableCode: 'B02', tableToken: 'token-b' })
+  const second = guard.begin(current)
+  assert.equal(guard.isCurrent(first), false)
+  assert.equal(guard.isCurrent(second), true)
+  guard.invalidate()
+  assert.equal(guard.isCurrent(second), false)
 })
 
 test('rejects conflicting, malformed or unknown scene values instead of choosing one credential', async () => {

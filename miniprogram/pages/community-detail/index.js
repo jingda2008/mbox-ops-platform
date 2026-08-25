@@ -22,6 +22,7 @@ const REGISTRATION_ATTEMPTS_KEY = 'mbox.community.registration.attempts.v1'
 const PAYMENT_ACTION_ATTEMPTS_KEY = 'mbox.community.payment.actions.v1'
 const PAYMENT_QUERY_ATTEMPTS_KEY = 'mbox.community.payment.queries.v1'
 const CANCELLATION_ATTEMPTS_KEY = 'mbox.community.registration.cancellations.v1'
+const REGISTRATION_ATTEMPT_MAX_AGE_MS = 15 * 60 * 1000
 const ALLOWED_PAYMENT_ACTIONS = ['start_payment', 'query_payment', 'cancel_registration']
 const REGISTRATION_STATUS_NAMES = {
   reserved: '待付款', payment_pending: '待付款', confirmed: '已报名',
@@ -80,9 +81,28 @@ const REGISTRATION_CLEARABLE_CODES = Object.freeze([
 function registrationContact(value) {
   const contact = String(value || '').trim()
   if (/^1\d{10}$/.test(contact)) return contact
-  // 微信号由字母开头，允许字母、数字、下划线和连字符；纯数字不能被误当成微信号。
-  if (/^[A-Za-z][A-Za-z0-9_-]{2,19}$/.test(contact)) return contact
   return ''
+}
+
+function registrationAttemptPayload(value) {
+  const payload = value && typeof value === 'object' ? value : {}
+  // Phone numbers are never persisted in the local retry record. The same
+  // idempotency key is retained briefly, but a customer must re-enter the
+  // contact phone before an unconfirmed request is retried.
+  return {
+    activityPackagePublicId: payload.activityPackagePublicId || null,
+    partySize: Number(payload.partySize || 1),
+    termsAcknowledged: payload.termsAcknowledged === true,
+    acknowledgedSafetyPolicyVersion: String(payload.acknowledgedSafetyPolicyVersion || ''),
+    acknowledgedRefundPolicyVersion: String(payload.acknowledgedRefundPolicyVersion || ''),
+    paymentChoice: String(payload.paymentChoice || 'none'),
+    ...(payload.paymentMethod ? { paymentMethod: String(payload.paymentMethod) } : {}),
+  }
+}
+
+function registrationAttemptExpired(attempt) {
+  const createdAt = attempt && typeof attempt.createdAt === 'string' ? Date.parse(attempt.createdAt) : Number.NaN
+  return !Number.isFinite(createdAt) || Date.now() - createdAt > REGISTRATION_ATTEMPT_MAX_AGE_MS
 }
 
 function registrationFailureMessage(error) {
@@ -95,7 +115,7 @@ function registrationFailureMessage(error) {
     return '加入 M-BOX 会员并授权手机号后，才可报名超嗨活动。'
   }
   if (code === 'ACTIVITY_CONTACT_INVALID') {
-    return '联系方式格式不正确。请填写 11 位手机号（1 开头）或 3–20 位、以字母开头的微信号。'
+    return '手机号格式不正确，请填写本人可联系的 11 位手机号。'
   }
   if (code === 'ACTIVITY_CONTACT_PROTECTION_UNAVAILABLE' || code === 'ACTIVITY_CONTACT_PROTECTION_FAILED') {
     return '报名服务配置异常，请稍后再试。'
@@ -208,10 +228,18 @@ function pricingFor(activity, activityPackage, partySize) {
     paymentRuleText: packageSelected
       ? `活动票：${activity.paymentRuleText}；套餐：${packageSelected.paymentRuleText}`
       : activity.paymentRuleText,
+    deadlineText: paymentMode === 'none' || !totalFeeAmountMinor ? '无需在线付款' : `${deadline} 分钟`,
     requiresPaymentOnSubmit: totalFeeAmountMinor > 0 && !availablePaymentChoices.includes('none'),
     feeText: totalFeeAmountMinor > 0 ? money(totalFeeAmountMinor) : '免费',
     depositText: depositAmountMinor > 0 ? money(depositAmountMinor) : '无需订金',
   }
+}
+
+function partySizeLimit(activity, activityPackage) {
+  const limits = [Number(activity && activity.remainingCapacity || 0)]
+  if (activityPackage) limits.push(Number(activityPackage.remainingCapacity || 0))
+  const valid = limits.filter((value) => Number.isFinite(value) && value > 0)
+  return valid.length ? Math.max(1, Math.min(...valid)) : 1
 }
 
 function viewActivity(raw) {
@@ -335,13 +363,15 @@ function jsapiPayload(value) {
 Page({
   data: {
     id: '', loading: true, busy: false, error: '', success: '', activity: null,
-    partySize: 1, contact: '', ruleAcknowledged: false, registration: null, loyaltyBenefits: [],
+    partySize: 1, partySizeLimit: 1, contact: '', contactFocused: false, contactAttention: false,
+    acknowledgementAttention: false, ruleAcknowledged: false, registration: null, loyaltyBenefits: [],
     selectedPackagePublicId: '', selectedPackage: null, selectedPricing: null,
     membership: null, membershipTerms: null,
     membershipInviteVisible: false, membershipInviteAgreed: false, membershipInviteBusy: false,
   },
 
   onLoad(options) { this.setData({ id: options.id || '' }) },
+  onUnload() { if (this.registrationFocusTimer) clearTimeout(this.registrationFocusTimer) },
   onShow() { this.load() },
 
   async load() {
@@ -397,11 +427,15 @@ Page({
       const selectedPackagePublicId = selectedPackage(activity, this.data.selectedPackagePublicId)
         ? this.data.selectedPackagePublicId : ''
       const currentPackage = selectedPackage(activity, selectedPackagePublicId)
+      const maximumPartySize = partySizeLimit(activity, currentPackage)
+      const partySize = Math.min(this.data.partySize, maximumPartySize)
       this.setData({
         loading: false, activity, loyaltyBenefits, registration, error: paymentReadError || registrationReadError,
         selectedPackagePublicId,
         selectedPackage: currentPackage,
-        selectedPricing: pricingFor(activity, currentPackage, this.data.partySize),
+        partySize,
+        partySizeLimit: maximumPartySize,
+        selectedPricing: pricingFor(activity, currentPackage, partySize),
       })
     } catch (error) {
       if (error && error.code === 'ACTIVITY_MEMBERSHIP_REQUIRED') {
@@ -475,7 +509,7 @@ Page({
 
   changePartySize(event) {
     const delta = Number(event.currentTarget.dataset.delta)
-    const maximum = Math.max(1, this.data.activity.remainingCapacity || 1)
+    const maximum = this.data.partySizeLimit || 1
     const partySize = Math.max(1, Math.min(maximum, this.data.partySize + delta))
     this.setData({ partySize, selectedPricing: pricingFor(this.data.activity, this.data.selectedPackage, partySize) })
   },
@@ -486,10 +520,14 @@ Page({
     const next = selectedPackage(activity, publicId)
     if (!next || next.availability !== 'available') return
     this.clearRegistrationAttempt(activity.publicId)
+    const limit = partySizeLimit(activity, next)
+    const partySize = Math.min(this.data.partySize, limit)
     this.setData({
       selectedPackagePublicId: publicId,
       selectedPackage: next,
-      selectedPricing: pricingFor(activity, next, this.data.partySize),
+      partySize,
+      partySizeLimit: limit,
+      selectedPricing: pricingFor(activity, next, partySize),
       error: '', success: '',
     })
   },
@@ -497,13 +535,43 @@ Page({
     const activity = this.data.activity
     if (!activity || activity.packageSelectionRequired || this.data.busy) return
     this.clearRegistrationAttempt(activity.publicId)
+    const limit = partySizeLimit(activity, null)
+    const partySize = Math.min(this.data.partySize, limit)
     this.setData({
       selectedPackagePublicId: '', selectedPackage: null,
-      selectedPricing: pricingFor(activity, null, this.data.partySize), error: '', success: '',
+      partySize, partySizeLimit: limit,
+      selectedPricing: pricingFor(activity, null, partySize), error: '', success: '',
     })
   },
-  onContactInput(event) { this.setData({ contact: event.detail.value }) },
-  onAcknowledgementChange(event) { this.setData({ ruleAcknowledged: Boolean(event.detail.value && event.detail.value.length) }) },
+  onContactInput(event) {
+    const contact = String(event && event.detail && event.detail.value || '').replace(/\D/g, '').slice(0, 11)
+    this.setData({ contact, contactAttention: false })
+  },
+  onAcknowledgementChange(event) {
+    this.setData({
+      ruleAcknowledged: Boolean(event.detail.value && event.detail.value.length),
+      acknowledgementAttention: false,
+    })
+  },
+
+  focusRegistrationField(field, error) {
+    if (this.registrationFocusTimer) clearTimeout(this.registrationFocusTimer)
+    const contact = field === 'contact'
+    this.setData({
+      error: error || '',
+      contactFocused: contact,
+      contactAttention: contact,
+      acknowledgementAttention: !contact,
+    }, () => {
+      wx.pageScrollTo({
+        selector: contact ? '#activity-registration-contact' : '#activity-registration-acknowledgement',
+        duration: 280,
+      })
+      this.registrationFocusTimer = setTimeout(() => {
+        this.setData({ contactFocused: false, contactAttention: false, acknowledgementAttention: false })
+      }, 1100)
+    })
+  },
 
   async register() {
     const activity = this.data.activity
@@ -546,13 +614,34 @@ Page({
       this.clearRegistrationAttempt(activity.publicId)
       attempt = null
     }
+    if (attempt && registrationAttemptExpired(attempt)) {
+      const recovered = await this.recoverRegistration(activity.publicId, attempt)
+      if (recovered) return
+      this.clearRegistrationAttempt(activity.publicId)
+      this.setData({ error: '上次待核对报名已超过 15 分钟，已清除本机记录。请重新填写手机号后报名。' })
+      return
+    }
+    if (attempt && attempt.payload.contactSnapshot) {
+      attempt = Object.assign({}, attempt, { payload: registrationAttemptPayload(attempt.payload) })
+      attempts[activity.publicId] = attempt
+      wx.setStorageSync(REGISTRATION_ATTEMPTS_KEY, attempts)
+    }
+    let contact = ''
     if (attempt) {
-      const confirmed = await this.confirmPayment('上次报名结果尚未确认。可原样重试同一请求；若仍失败，将清除本机卡住的请求以便重新填写。')
+      contact = registrationContact(this.data.contact)
+      if (!contact) {
+        return this.focusRegistrationField('contact', '请重新填写本次活动联系手机号，再核对上次报名结果。')
+      }
+      const confirmed = await this.confirmPayment('上次报名结果尚未确认。请确认手机号与上次一致；系统会保留同一请求编号核对，不会重复报名。')
       if (!confirmed) return
     } else {
-      const contact = registrationContact(this.data.contact)
-      if (!contact) return this.setData({ error: '请填写 11 位手机号（1 开头）或 3–20 位、以字母开头的微信号。' })
-      if (!this.data.ruleAcknowledged) return this.setData({ error: '请先阅读并确认报名、退款与安全规则版本' })
+      contact = registrationContact(this.data.contact)
+      if (!contact) {
+        return this.focusRegistrationField('contact', '请填写本次活动联系手机号，再继续报名。')
+      }
+      if (!this.data.ruleAcknowledged) {
+        return this.focusRegistrationField('acknowledgement', '请先阅读并确认报名、退款与安全规则版本。')
+      }
       if (!activity.safetyPolicyVersion || !activity.refundPolicyVersion) {
         return this.setData({ error: '活动安全或退款规则缺少可核验版本，本活动暂不接受报名。' })
       }
@@ -561,7 +650,6 @@ Page({
       const payload = {
         activityPackagePublicId: chosenPackage?.publicId || null,
         partySize: this.data.partySize,
-        contactSnapshot: { channel: 'miniprogram', contact },
         termsAcknowledged: true,
         acknowledgedSafetyPolicyVersion: activity.safetyPolicyVersion,
         acknowledgedRefundPolicyVersion: activity.refundPolicyVersion,
@@ -570,7 +658,7 @@ Page({
       }
       attempt = {
         idempotencyKey: commandKey('activity-register', `${activity.publicId}-${chosenPackage?.publicId || 'ticket'}`),
-        payload,
+        payload: registrationAttemptPayload(payload),
         previousRegistrationPublicId: this.data.registration && this.data.registration.publicId,
         createdAt: new Date().toISOString(),
       }
@@ -579,7 +667,7 @@ Page({
     }
     this.setData({ busy: true, error: '', success: '' })
     try {
-      const payload = attempt.payload
+      const payload = Object.assign({}, attempt.payload, { contactSnapshot: { channel: 'miniprogram', contact } })
       const result = await registerActivity(
         activity.publicId,
         payload.activityPackagePublicId,
@@ -618,7 +706,7 @@ Page({
         return
       }
       // 未知/网络类错误：保留幂等键重试，但展示真实原因，避免永远只看到笼统文案。
-      this.setData({ error: `${detail} 再次点击会原样重试同一请求；若持续失败，可退出小程序后重进再试。` })
+      this.setData({ error: `${detail} 请在 15 分钟内重新填写相同手机号后重试；系统会保留同一请求编号核对。` })
     } finally { this.setData({ busy: false }) }
   },
 

@@ -69,6 +69,21 @@ function getTableSession() {
   return app.globalData.tableSession || wx.getStorageSync('mbox.table.session') || {}
 }
 
+function tableSessionCacheScope(value) {
+  const session = value && typeof value === 'object' ? value : getTableSession()
+  const tableCode = normalizeTableCode(session.tableCode) || 'unbound'
+  const token = String(session.tableToken || '')
+  // A table code can be reused after turnover. Keep local-only service records
+  // scoped to the scanned credential without exposing that credential itself
+  // in a storage key.
+  let hash = 2166136261
+  for (const character of token) {
+    hash ^= character.charCodeAt(0)
+    hash = Math.imul(hash, 16777619)
+  }
+  return `${tableCode}.${(hash >>> 0).toString(36)}`
+}
+
 function updateTableToken(tableToken) {
   const current = getTableSession()
   const session = Object.assign({}, current, { tableToken: String(tableToken || '') })
@@ -104,6 +119,7 @@ function clearTableConnection() {
 module.exports = {
   applyLaunchSession,
   getTableSession,
+  tableSessionCacheScope,
   normalizeTableCode,
   updateTableToken,
   rememberTableConnection,

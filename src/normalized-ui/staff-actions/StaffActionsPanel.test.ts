@@ -23,6 +23,16 @@ describe('StaffActionsPanel', () => {
     expect(css).toMatch(/\.staff-member-benefit-tools input \{[^}]*min-height:\s*44px;/)
   })
 
+  it('keeps the optional open-table scene scoped to table.open and touch-sized', () => {
+    const source = readFileSync(new URL('./StaffActionsPanel.tsx', import.meta.url), 'utf8')
+    const css = readFileSync(new URL('./staff-actions-panel.css', import.meta.url), 'utf8')
+
+    expect(source).toContain("hasPermission(props.permissions, 'table.open')")
+    expect(source).toContain('客群场景（可选）')
+    expect(source).toContain('guestProfileSnapshot: recommendationSceneSnapshot(openTableRecommendationScene)')
+    expect(css).toMatch(/\.staff-open-table-scene select \{[^}]*min-height:\s*42px;/)
+  })
+
   it('renders a compact honest loading state before authoritative data arrives', () => {
     const api: StaffActionsApiPort = {
       loadOperations: vi.fn(() => new Promise<StaffOperationsData>(() => undefined)),

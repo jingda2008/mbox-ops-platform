@@ -13,6 +13,7 @@ import {
   type ProtectedActivityRegistrationContact,
   type PublicPortalSnapshot,
   type RecommendationAnswer,
+  type RecommendationIntent,
   type RecommendationResult,
   type TableExperienceContext,
   type ExperiencePlanView,
@@ -2344,13 +2345,14 @@ export class CustomerExperienceService {
     context: TableExperienceContext & { scope: Readonly<StoreScope> },
     answers: RecommendationAnswer,
     idempotencyKey: string,
+    recommendationIntent: RecommendationIntent = 'guided',
   ): Promise<CommandExecution<RecommendationResult>> {
     const publicId = deterministicPublicId('recommendation', context.scope.storeId, idempotencyKey)
     return this.commands.execute({
       scope: context.scope,
       operationScope: 'customer.experience.recommend',
       idempotencyKey,
-      requestFingerprint: fingerprint({ context, answers }),
+      requestFingerprint: fingerprint({ context, answers, recommendationIntent }),
       resultCodec: objectCodec<RecommendationResult>(),
     }, async (transaction) => {
       await assertBoundGuestTableMutation(transaction,context)
@@ -2358,6 +2360,7 @@ export class CustomerExperienceService {
         context,
         answers,
         publicId,
+        recommendationIntent,
       })
       return commandOutcome(
         result,
@@ -2374,6 +2377,7 @@ export class CustomerExperienceService {
             experienceLevel: answers.experienceLevel,
             serviceIntensity: answers.serviceIntensity,
           },
+          recommendationIntent,
           recommendationCount: result.recommendations.length,
         },
       )
@@ -3661,8 +3665,8 @@ export async function resolveTableExperienceContext(
     actorRef: string
   }>,
 ): Promise<TableExperienceContext> {
-  const result = await transaction.query<{ guest_count: number }>(`
-    SELECT session.guest_count
+  const result = await transaction.query<{ guest_count: number; guest_profile_snapshot: JsonObject }>(`
+    SELECT session.guest_count, COALESCE(session.guest_profile_snapshot, '{}'::jsonb) AS guest_profile_snapshot
     FROM mbox.table_sessions AS session
     WHERE session.tenant_id = $1::uuid AND session.store_id = $2::uuid
       AND session.id = $3::uuid AND session.status = 'open'
@@ -3684,7 +3688,14 @@ export async function resolveTableExperienceContext(
     businessDate: input.businessDate,
     actorRef: input.actorRef,
     partySize: row.guest_count,
+    recommendationScene: tableRecommendationScene(row.guest_profile_snapshot),
   }
+}
+
+function tableRecommendationScene(value: JsonObject): TableExperienceContext['recommendationScene'] {
+  const scene = typeof value.recommendationScene === 'string' ? value.recommendationScene : ''
+  return ['business', 'friends', 'date', 'birthday', 'music', 'relax', 'other'].includes(scene)
+    ? scene as NonNullable<TableExperienceContext['recommendationScene']> : null
 }
 
 async function assertBoundGuestTableMutation(

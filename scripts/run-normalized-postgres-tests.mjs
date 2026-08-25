@@ -60,7 +60,15 @@ function runVitest(databaseUrl) {
       ],
       {
         cwd: process.cwd(),
-        env: { ...process.env, TEST_NORMALIZED_DATABASE_URL: databaseUrl },
+        // PostgreSQL renders timestamptz through each connection's session
+        // timezone.  Normalized integration assertions use canonical UTC text,
+        // so force that session setting instead of inheriting the developer
+        // machine's database default (for example Asia/Shanghai).
+        env: {
+          ...process.env,
+          PGOPTIONS: normalizedTestPgOptions(process.env.PGOPTIONS),
+          TEST_NORMALIZED_DATABASE_URL: databaseUrl,
+        },
         stdio: 'inherit',
       },
     )
@@ -75,4 +83,8 @@ function runVitest(databaseUrl) {
 function quoteIdentifier(value) {
   if (!/^[a-z][a-z0-9_]{1,62}$/.test(value)) throw new Error('临时数据库名称无效')
   return `"${value.replaceAll('"', '""')}"`
+}
+
+function normalizedTestPgOptions(existing) {
+  return `${existing ?? ''} -c TimeZone=UTC`.trim()
 }

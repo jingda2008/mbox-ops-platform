@@ -16,6 +16,41 @@ export type StaffUnifiedAction =
   | { kind: 'service'; key: string; task: StaffServiceTask }
   | { kind: 'fulfillment'; key: string; item: StaffFulfillmentItem }
 
+/**
+ * These are deliberately broad, non-identifying staff observations.  The
+ * persisted value is mapped to the smaller occasion vocabulary accepted by
+ * the existing recommendation service.
+ */
+export const OPEN_TABLE_RECOMMENDATION_SCENES = [
+  { value: 'unsure', label: '不确定（按常规服务）' },
+  { value: 'brothers', label: '兄弟' },
+  { value: 'business', label: '商务' },
+  { value: 'date', label: '情侣' },
+  { value: 'friends', label: '闺蜜' },
+  { value: 'solo', label: '单人' },
+] as const
+
+export type OpenTableRecommendationScene = (typeof OPEN_TABLE_RECOMMENDATION_SCENES)[number]['value']
+export type RecommendationOccasion = 'friends' | 'business' | 'date' | 'other'
+
+const RECOMMENDATION_OCCASION_BY_OPEN_TABLE_SCENE: Readonly<Record<
+  OpenTableRecommendationScene,
+  RecommendationOccasion
+>> = {
+  brothers: 'friends',
+  business: 'business',
+  date: 'date',
+  friends: 'friends',
+  solo: 'other',
+  unsure: 'other',
+}
+
+export function recommendationSceneSnapshot(
+  scene: OpenTableRecommendationScene,
+): Readonly<{ recommendationScene: RecommendationOccasion }> {
+  return { recommendationScene: RECOMMENDATION_OCCASION_BY_OPEN_TABLE_SCENE[scene] }
+}
+
 export function hasPermission(permissions: readonly string[], permission: StaffActionPermission): boolean {
   return permissions.includes(permission)
 }

@@ -33,8 +33,8 @@
       <view class="payment-rule-grid">
         <view><text>本次费用</text><text>{{selectedPricing ? selectedPricing.feeText : activity.feeText}}</text></view>
         <view><text>订金</text><text>{{selectedPricing ? selectedPricing.depositText : activity.depositText}}</text></view>
-        <view><text>付款时限</text><text>{{activity.deadlineText}}</text></view>
-        <view><text>支付说明</text><text>{{activity.paymentText}}</text></view>
+        <view><text>付款时限</text><text>{{selectedPricing ? selectedPricing.deadlineText : activity.deadlineText}}</text></view>
+        <view><text>支付说明</text><text>{{selectedPricing ? selectedPricing.paymentRuleText : activity.paymentText}}</text></view>
         <view><text>取消退款</text><text>{{activity.refundText}}</text></view>
         <view><text>安全规则</text><text>{{activity.safetyPolicyText}}</text></view>
       </view>
@@ -57,9 +57,9 @@
     <view wx:if="{{activity.contactInstructions}}" class="section detail-section"><text class="detail-heading">报名后联系与集合</text><text class="detail-summary">{{activity.contactInstructions}}</text></view>
 
     <view wx:if="{{!registration || registration.canReRegister}}" class="registration-panel">
-      <view class="party-row"><view><text>报名人数</text><text>按实际参加人数选择</text></view><view class="stepper"><button data-delta="-1" disabled="{{partySize <= 1}}" bindtap="changePartySize">−</button><text>{{partySize}}</text><button data-delta="1" disabled="{{partySize >= activity.remainingCapacity}}" bindtap="changePartySize">＋</button></view></view>
-      <label class="field"><text class="field__label">本次活动联系方式</text><input class="field__input" value="{{contact}}" maxlength="100" placeholder="手机号或微信，仅用于本次活动" bindinput="onContactInput" /></label>
-      <checkbox-group bindchange="onAcknowledgementChange"><label class="ack-row"><checkbox value="ack" checked="{{ruleAcknowledged}}" color="#7b5a35" /><text>{{activity.acknowledgementText}}</text></label></checkbox-group>
+      <view class="party-row"><view><text>报名人数</text><text>按实际参加人数选择</text></view><view class="stepper"><button data-delta="-1" disabled="{{partySize <= 1}}" bindtap="changePartySize">−</button><text>{{partySize}}</text><button data-delta="1" disabled="{{partySize >= partySizeLimit}}" bindtap="changePartySize">＋</button></view></view>
+      <label id="activity-registration-contact" class="field registration-contact {{contactAttention ? 'registration-contact--attention' : ''}}"><text class="field__label">本次活动联系手机号</text><input class="field__input" type="number" value="{{contact}}" maxlength="11" focus="{{contactFocused}}" placeholder="请输入 11 位手机号，仅用于本次活动联系" bindinput="onContactInput" /><text class="registration-contact__note">仅用于活动通知、集合与必要的报名确认。</text><text wx:if="{{contactAttention}}" class="registration-contact__hint">请在这里填写后继续报名</text></label>
+      <checkbox-group id="activity-registration-acknowledgement" bindchange="onAcknowledgementChange"><label class="ack-row {{acknowledgementAttention ? 'ack-row--attention' : ''}}"><checkbox value="ack" checked="{{ruleAcknowledged}}" color="#7b5a35" /><text>{{activity.acknowledgementText}}</text></label></checkbox-group>
     </view>
 
     <view wx:if="{{registration}}" class="registration-status">

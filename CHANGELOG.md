@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.0-rc.128 - 2026-08-25
+
+- Safely reconciles an active runtime schema that is ahead of an older release
+  manifest only after the candidate verifies every applied migration filename
+  and checksum in a read-only preflight.
+- Records both the prior manifest schema and the verified runtime schema in
+  deployment evidence, so backup, rollback and cutover use the actual proven
+  database baseline rather than an unverified release-note assumption.
+- Keeps the prior release running and blocks before any database write when
+  the runtime schema is stale, non-numeric or inconsistent with the immutable
+  migration sequence.
+
 ## 1.0.0-rc.127 - 2026-08-25
 
 - Adds the normalized migrations through `138`, including controlled shared

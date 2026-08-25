@@ -66,6 +66,7 @@ test('configuration and migration checks precede every database write and applic
   const deploy = await read('../deploy/aliyun/deploy-release.sh')
   const config = activate.indexOf('verify-normalized-runtime-config.js')
   const migrationCompatibility = activate.indexOf('verify-normalized-migration-compatibility.js')
+  const runtimeSchemaReconciliation = activate.indexOf('reconcile_previous_runtime_schema', migrationCompatibility)
   const candidateDatabaseIdentity = activate.indexOf('candidate_database_identity=$(jq', migrationCompatibility)
   const databaseIdentityGate = activate.indexOf('assert_backup_targets_application_database', candidateDatabaseIdentity)
   const writerDrain = activate.indexOf('migration_compatible writer_drained')
@@ -74,7 +75,8 @@ test('configuration and migration checks precede every database write and applic
   const provision = activate.indexOf('provision-normalized-release.js')
   const candidate = activate.indexOf('docker "${candidate_docker_args[@]}"', provision)
   assert.ok(config > 0 && config < migrationCompatibility)
-  assert.ok(migrationCompatibility < candidateDatabaseIdentity
+  assert.ok(migrationCompatibility < runtimeSchemaReconciliation
+    && runtimeSchemaReconciliation < candidateDatabaseIdentity
     && candidateDatabaseIdentity < databaseIdentityGate && databaseIdentityGate < writerDrain
     && writerDrain < backup
     && backup < migrate && migrate < provision && provision < candidate)
@@ -97,6 +99,8 @@ test('configuration and migration checks precede every database write and applic
   assert.ok(maintenanceReady > migrationCompatibility && maintenanceReady < writerDrain)
   assert.match(activate.slice(activeRetry, previousReady), /docker exec "\$\{active_container\}"[\s\S]*127\.0\.0\.1:8787\/api\/ready[\s\S]*runtimeRole == "normal"[\s\S]*writeEnabled == true[\s\S]*workers\.status == "healthy"/)
   assert.doesNotMatch(activate.slice(previousReady, migrationCompatibility), /fetch_public_ready_response 200/)
+  assert.match(activate.slice(previousReady, migrationCompatibility), /"" "\$\{previous_deployment_tier\}"/)
+  assert.match(activate.slice(migrationCompatibility, candidateDatabaseIdentity), /previous_manifest_schema_version[\s\S]*previous_ready_file[\s\S]*migration-preflight\.json/)
   assert.match(activate.slice(publicRetry, maintenanceReady), /connect-timeout 3[\s\S]*max-time 8[\s\S]*sleep 2/)
   const externalPublicReady = deploy.indexOf('pre_activation_ready=')
   const remoteActivation = deploy.indexOf("'${remote_release_dir}/activate-release.sh'", externalPublicReady)

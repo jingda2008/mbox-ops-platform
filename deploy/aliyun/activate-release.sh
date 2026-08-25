@@ -224,7 +224,9 @@ fetch_active_ready_response() {
   local attempt response temporary
   [[ "${expected_sha}" =~ ^[0-9a-f]{40}$ ]]
   [[ "${expected_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
-  [[ "${expected_schema}" =~ ^[0-9]+$ ]]
+  if [ -n "${expected_schema}" ]; then
+    [[ "${expected_schema}" =~ ^[0-9]+$ ]]
+  fi
   case "${expected_tier}" in validation|production) ;; *) return 1 ;; esac
   [[ "${attempts}" =~ ^[0-9]+$ ]]
   [ "${attempts}" -ge 1 ] && [ "${attempts}" -le 30 ]
@@ -235,12 +237,14 @@ fetch_active_ready_response() {
     if printf '%s' "${response}" | jq -e \
       --arg sha "${expected_sha}" \
       --arg digest "${expected_digest}" \
-      --argjson schema "${expected_schema}" \
+      --arg schema "${expected_schema}" \
       --arg tier "${expected_tier}" \
       '.status == "ready"
         and .commitSha == $sha
         and .releaseImageDigest == $digest
-        and (.schemaVersion | tonumber) == $schema
+        and ((.schemaVersion | tostring) | test("^[0-9]+$"))
+        and (if $schema == "" then true
+          else (.schemaVersion | tonumber) == ($schema | tonumber) end)
         and .deploymentTier == $tier
         and .runtimeRole == "normal"
         and .writeEnabled == true
@@ -253,6 +257,32 @@ fetch_active_ready_response() {
   done
   rm -f "${temporary}"
   return 1
+}
+
+# A release manifest records the schema available when its immutable archive
+# was built. A previously interrupted deployment can legitimately leave the
+# live database ahead of that record. Do not trust that newer runtime schema
+# by itself: accept it only after the candidate's read-only compatibility
+# preflight has verified every applied migration filename and checksum.
+reconcile_previous_runtime_schema() {
+  local manifest_schema=$1 ready_file=$2 migration_preflight_file=$3
+  local runtime_schema applied_count
+  [[ "${manifest_schema}" =~ ^[0-9]+$ ]]
+  runtime_schema=$(jq -er '
+    if ((.schemaVersion | tostring) | test("^[0-9]+$"))
+      then (.schemaVersion | tonumber)
+      else error("active ready response has no numeric schemaVersion")
+    end' "${ready_file}")
+  applied_count=$(jq -er '
+    if (.status == "pass" and (.appliedCount | tostring | test("^[0-9]+$")))
+      then (.appliedCount | tonumber)
+      else error("migration compatibility preflight has no numeric appliedCount")
+    end' "${migration_preflight_file}")
+  [[ "${runtime_schema}" =~ ^[0-9]+$ ]]
+  [[ "${applied_count}" =~ ^[0-9]+$ ]]
+  [ "${runtime_schema}" -ge "${manifest_schema}" ]
+  [ "${applied_count}" -eq "${runtime_schema}" ]
+  printf '%s\n' "${runtime_schema}"
 }
 
 write_release_failure() {
@@ -351,7 +381,8 @@ test -f "${previous_release_dir}/release-manifest.json"
 previous_release_sha=$(jq -er '.releaseSha' "${previous_release_dir}/release-manifest.json")
 previous_release_digest=$(jq -er '.imageDigest' "${previous_release_dir}/release-manifest.json")
 previous_platform_image_digest=$(jq -r '.platformImageDigest // empty' "${previous_release_dir}/release-manifest.json")
-previous_schema_version=$(jq -er '.migration.count' "${previous_release_dir}/release-manifest.json")
+previous_manifest_schema_version=$(jq -er '.migration.count' "${previous_release_dir}/release-manifest.json")
+previous_schema_version=${previous_manifest_schema_version}
 previous_deployment_tier=$(jq -r '.tier // empty' "${previous_release_dir}/deployment-manifest.json" 2>/dev/null || true)
 if [ -z "${previous_deployment_tier}" ]; then
   previous_deployment_tier=$(docker inspect "${active_container}" --format '{{range .Config.Env}}{{println .}}{{end}}' \
@@ -360,7 +391,7 @@ fi
 previous_deployment_tier=${previous_deployment_tier:-validation}
 [[ "${previous_release_sha}" =~ ^[0-9a-f]{40}$ ]]
 [[ "${previous_release_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
-[[ "${previous_schema_version}" =~ ^[0-9]+$ ]]
+[[ "${previous_manifest_schema_version}" =~ ^[0-9]+$ ]]
 case "${previous_deployment_tier}" in validation|production) ;; *) exit 1 ;; esac
 test "$(docker inspect "${active_container}" \
   --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "${previous_release_sha}"
@@ -375,9 +406,7 @@ fi
 test "${active_platform_image_digest}" = "${previous_platform_image_digest}"
 previous_ready_file=$(mktemp "${release_dir}/.previous-ready.XXXXXX")
 fetch_active_ready_response "${previous_release_sha}" "${previous_release_digest}" \
-  "${previous_schema_version}" "${previous_deployment_tier}" "${previous_ready_file}" 12
-previous_ready=$(cat "${previous_ready_file}")
-rm -f "${previous_ready_file}"
+  "" "${previous_deployment_tier}" "${previous_ready_file}" 12
 previous_public_extended_identity=1
 
 current_migration_digest=
@@ -389,9 +418,6 @@ if [ "${current_migration_digest}" != "${migration_digest}" ]; then
   migration_changed=1
 fi
 contract_migration=0
-if [ "${previous_schema_version}" -lt 96 ] && [ "${expected_schema_version}" -ge 96 ]; then
-  contract_migration=1
-fi
 candidate="mbox-candidate-${short_sha}"
 candidate_volume="mbox-data-${short_sha}-candidate"
 maintenance_container="mbox-maintenance-${short_sha}"
@@ -708,6 +734,13 @@ docker run --rm \
   "${image_tag}" \
   node dist-normalized/server/verify-normalized-migration-compatibility.js \
   > "${release_dir}/migration-preflight.json"
+previous_schema_version=$(reconcile_previous_runtime_schema \
+  "${previous_manifest_schema_version}" "${previous_ready_file}" \
+  "${release_dir}/migration-preflight.json")
+rm -f "${previous_ready_file}"
+if [ "${previous_schema_version}" -lt 96 ] && [ "${expected_schema_version}" -ge 96 ]; then
+  contract_migration=1
+fi
 candidate_database_identity=$(jq -er \
   '.databaseIdentity | [.database,.serverAddress,.serverPort] | join("|")' \
   "${release_dir}/migration-preflight.json")
@@ -1174,6 +1207,8 @@ jq -n \
   --arg storeConfigSha256 "${store_config_sha}" \
   --arg catalogConfigSha256 "${catalog_config_sha}" \
   --argjson previousIdentityComplete "${previous_public_extended_identity}" \
+  --argjson previousManifestSchemaVersion "${previous_manifest_schema_version}" \
+  --argjson previousRuntimeSchemaVersion "${previous_schema_version}" \
   --argjson previousSchemaVersion "${previous_schema_version}" \
   --argjson targetSchemaVersion "${expected_schema_version}" \
   --argjson contractMigration "${contract_migration}" \
@@ -1199,6 +1234,8 @@ jq -n \
     previousReleaseSha: (if $previousReleaseSha == "" then null else $previousReleaseSha end),
     previousPlatformImageDigest: $previousPlatformImageDigest,
     previousDeploymentTier: $previousDeploymentTier,
+    previousManifestSchemaVersion: $previousManifestSchemaVersion,
+    previousRuntimeSchemaVersion: $previousRuntimeSchemaVersion,
     previousSchemaVersion: $previousSchemaVersion,
     targetSchemaVersion: $targetSchemaVersion,
     rollbackMode: (if $contractMigration == 1

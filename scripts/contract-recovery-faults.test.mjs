@@ -19,7 +19,7 @@ const activeReadyEnd = activate.indexOf('\nwrite_release_failure() {', activeRea
 assert.ok(activeReadyStart > 0 && activeReadyEnd > activeReadyStart)
 const activeReadyFunction = activate.slice(activeReadyStart, activeReadyEnd)
 
-function runActiveReadyScenario(name, payload) {
+function runActiveReadyScenario(name, payload, expectedSchema = '98') {
   const root = mkdtempSync(join(tmpdir(), `mbox-active-ready-${name}-`))
   const output = join(root, 'ready.json')
   const harness = join(root, 'harness.sh')
@@ -33,7 +33,7 @@ docker() {
 }
 sleep() { :; }
 ${activeReadyFunction}
-fetch_active_ready_response ${'a'.repeat(40)} sha256:${'b'.repeat(64)} 98 production ${JSON.stringify(output)} 1
+fetch_active_ready_response ${'a'.repeat(40)} sha256:${'b'.repeat(64)} ${JSON.stringify(expectedSchema)} production ${JSON.stringify(output)} 1
 `)
   chmodSync(harness, 0o700)
   let status = 0
@@ -68,6 +68,55 @@ test('active release preflight rejects an unhealthy worker before database work'
     workers: { status: 'degraded' },
   })
   assert.notEqual(result.status, 0)
+})
+
+test('active release preflight permits a numeric runtime schema to be reconciled after migration checks', () => {
+  const result = runActiveReadyScenario('runtime-schema', {
+    status: 'ready',
+    commitSha: 'a'.repeat(40),
+    releaseImageDigest: `sha256:${'b'.repeat(64)}`,
+    schemaVersion: '108',
+    deploymentTier: 'production',
+    runtimeRole: 'normal',
+    writeEnabled: true,
+    workers: { status: 'healthy' },
+  }, '')
+  assert.equal(result.status, 0)
+  assert.equal(JSON.parse(readFileSync(result.output, 'utf8')).schemaVersion, '108')
+})
+
+function runRuntimeSchemaReconciliation(name, ready, preflight, manifestSchema = 105) {
+  const root = mkdtempSync(join(tmpdir(), `mbox-runtime-schema-${name}-`))
+  const readyFile = join(root, 'ready.json')
+  const preflightFile = join(root, 'migration-preflight.json')
+  const output = join(root, 'schema.txt')
+  const harness = join(root, 'harness.sh')
+  writeFileSync(readyFile, JSON.stringify(ready))
+  writeFileSync(preflightFile, JSON.stringify(preflight))
+  writeFileSync(harness, `#!/usr/bin/env bash
+set -Eeuo pipefail
+${activeReadyFunction}
+reconcile_previous_runtime_schema ${JSON.stringify(String(manifestSchema))} ${JSON.stringify(readyFile)} ${JSON.stringify(preflightFile)} > ${JSON.stringify(output)}
+`)
+  chmodSync(harness, 0o700)
+  let status = 0
+  try { execFileSync('bash', [harness], { stdio: 'pipe' }) } catch (error) { status = error.status }
+  return { status, output }
+}
+
+test('runtime schema reconciliation only accepts a manifest-compatible applied migration sequence', () => {
+  const pass = runRuntimeSchemaReconciliation('pass',
+    { schemaVersion: '108' }, { status: 'pass', appliedCount: 108 })
+  assert.equal(pass.status, 0)
+  assert.equal(readFileSync(pass.output, 'utf8'), '108\n')
+
+  const mismatchedAppliedCount = runRuntimeSchemaReconciliation('applied-mismatch',
+    { schemaVersion: '108' }, { status: 'pass', appliedCount: 107 })
+  assert.notEqual(mismatchedAppliedCount.status, 0)
+
+  const staleRuntime = runRuntimeSchemaReconciliation('stale-runtime',
+    { schemaVersion: '104' }, { status: 'pass', appliedCount: 104 })
+  assert.notEqual(staleRuntime.status, 0)
 })
 
 function runIdentityScenario(name, identities) {

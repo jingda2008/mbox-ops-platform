@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0-rc.135 - 2026-08-26
+
+- Restores 44 px touch targets and explicit accessible labels for the
+  quantity controls on mobile recommendation cards. The prior candidate
+  compressed these controls to 28 × 36 px on compact phones and was rejected
+  by the mobile-browser gate.
+
 ## 1.0.0-rc.134 - 2026-08-26
 
 - Makes the customer-left turnover procedure portable across PostgreSQL

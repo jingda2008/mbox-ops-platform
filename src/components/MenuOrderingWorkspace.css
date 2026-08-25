@@ -66,8 +66,8 @@
 .menu-recommendation-option.is-primary .menu-recommendation-choose { border-color: #7d3038; background: #7d3038; color: #fff; box-shadow: 0 4px 10px rgba(92, 31, 39, .2); }
 .menu-recommendation-option.is-primary .menu-recommendation-choose:active { background: #67262d; box-shadow: 0 2px 5px rgba(92, 31, 39, .18); transform: translateY(1px); }
 .menu-recommendation-choose:disabled { color: var(--ink-soft); background: #eceee9; }
-.menu-recommendation-selected { display: grid; grid-template-columns: 36px minmax(0, 1fr) 36px; align-items: center; overflow: hidden; }
-.menu-recommendation-selected button { height: 36px; min-height: 0; display: grid; place-items: center; border: 0; background: transparent; color: var(--ink); }
+.menu-recommendation-selected { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: center; overflow: hidden; }
+.menu-recommendation-selected button { width: 44px; height: 44px; min-height: 44px; display: grid; place-items: center; border: 0; background: transparent; color: var(--ink); }
 .menu-recommendation-selected span { overflow: hidden; font-size: 10px; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
 .menu-recommendation-browse { min-height: 54px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 7px; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--menu-surface); }
 .menu-recommendation-browse > div { min-width: 0; display: grid; gap: 1px; }
@@ -360,7 +360,7 @@
   .menu-recommendation-option-value > strong { font-size: 21px; }
   .menu-recommendation-option-value > span { text-align: right; }
   .menu-recommendation-choose, .menu-recommendation-selected { min-height: 44px; }
-  .menu-recommendation-selected { grid-template-columns: 28px minmax(0, 1fr) 28px; }
+  .menu-recommendation-selected { grid-template-columns: 44px minmax(0, 1fr) 44px; }
   .menu-recommendation-browse { min-height: 50px; padding: 7px 9px; }
   .menu-recommendation-browse > div span { max-width: 150px; }
   .menu-detail-drawer { max-height: 92vh; grid-template-rows: auto minmax(160px, 30vh) minmax(0, 1fr) auto; }

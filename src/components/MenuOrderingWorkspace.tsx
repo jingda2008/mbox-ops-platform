@@ -806,9 +806,9 @@ export function MenuOrderingWorkspace({
                     {!status.orderable ? <button className="menu-recommendation-choose" disabled><Clock3 size={16} />{status.label}</button>
                       : quantity === 0 ? <button className="menu-recommendation-choose" onClick={() => changeQuantity(product.id, 1)}><Plus size={16} />{chooseLabel}</button>
                         : <div className="menu-recommendation-selected">
-                          <button title={`减少${product.name}`} onClick={() => changeQuantity(product.id, -1)}><Minus size={16} /></button>
+                          <button aria-label={`减少${product.name}`} title={`减少${product.name}`} onClick={() => changeQuantity(product.id, -1)}><Minus size={16} /></button>
                           <span>已选 {quantity}</span>
-                          <button title={`增加${product.name}`} onClick={() => changeQuantity(product.id, 1)}><Plus size={16} /></button>
+                          <button aria-label={`增加${product.name}`} title={`增加${product.name}`} onClick={() => changeQuantity(product.id, 1)}><Plus size={16} /></button>
                         </div>}
                   </div>
                 </article>

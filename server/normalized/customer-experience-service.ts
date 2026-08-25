@@ -2136,7 +2136,7 @@ export class CustomerExperienceService {
         publicId: registrationPublicId,
         idempotencyKey: input.idempotencyKey,
       })
-      const { id, ...result } = registered
+      const { id, registrationCycle, ...result } = registered
       return commandOutcome(
         result,
         guestActor(context),
@@ -2145,6 +2145,8 @@ export class CustomerExperienceService {
         id,
         context.businessDate,
         { activityPublicId: input.activityPublicId, status: result.status, partySize: input.partySize },
+        registrationCycle,
+        registrationCycle > 1 ? `community.activity.registered:${id}:${registrationCycle}` : undefined,
       )
     })
   }
@@ -2169,7 +2171,7 @@ export class CustomerExperienceService {
         customerId: context.customerId,
         reason: input.reason,
       })
-      const { id, ...result } = cancelled
+      const { id, registrationCycle, ...result } = cancelled
       return commandOutcome(
         result,
         guestActor(context),
@@ -2178,6 +2180,8 @@ export class CustomerExperienceService {
         id,
         context.businessDate,
         { reason: input.reason },
+        registrationCycle,
+        registrationCycle > 1 ? `community.activity.registration.cancelled:${id}:${registrationCycle}` : undefined,
       )
     })
   }
@@ -3710,15 +3714,17 @@ function commandOutcome<Result>(
   objectId: string,
   businessDate: string,
   afterData: JsonObject,
+  aggregateVersion = 1,
+  businessEventKey = `${action}:${objectId}`,
 ) {
   return {
     result,
     auditEvents: [{ actor, action, objectType, objectId, businessDate, afterData }],
     outboxMessages: [{
-      businessEventKey: `${action}:${objectId}`,
+      businessEventKey,
       aggregateType: objectType,
       aggregateId: objectId,
-      aggregateVersion: 1,
+      aggregateVersion,
       eventType: `${action}.v1`,
       payload: afterData,
     }],

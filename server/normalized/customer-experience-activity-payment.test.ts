@@ -21,6 +21,7 @@ import { protectActivityRegistrationContact } from './customer-experience-api.js
 import { PaymentRepository } from './payment-repository.js'
 import { RefundRepository } from './refund-repository.js'
 import { ActivityRecollectionAuthorizationRepository } from './activity-recollection-authorization-repository.js'
+import { NormalizedCommandExecutor } from './command-executor.js'
 import {
   ScopedPostgresTransactionRunner,
   type PostgresPool,
@@ -821,6 +822,83 @@ integration('activity registration state and contact privacy with PostgreSQL', (
       WHERE tenant_id=$1 AND store_id=$2 AND activity_id=$3 AND customer_id=$4
     `, [tenantId, storeId, freeActivityId, customerId])
     expect(count.rows[0]?.count).toBe('1')
+  })
+
+  it('keeps outbox events distinct when a cancelled free registration is opened for a new cycle', async () => {
+    const cycleCustomerId = randomUUID()
+    await pool.query(`
+      WITH customer AS (
+        INSERT INTO mbox.customers(id,tenant_id,store_id,public_id)
+        VALUES($1::uuid,$2::uuid,$3::uuid,$4)
+        RETURNING id,tenant_id,store_id
+      ), membership AS (
+        INSERT INTO mbox.customer_memberships(tenant_id,store_id,customer_id,member_no)
+        SELECT tenant_id,store_id,id,$5 FROM customer
+        RETURNING id,tenant_id,store_id,customer_id
+      )
+      INSERT INTO mbox.loyalty_accounts(tenant_id,store_id,membership_id,customer_id)
+      SELECT tenant_id,store_id,id,customer_id FROM membership
+    `, [cycleCustomerId, tenantId, storeId, `customer-${cycleCustomerId}`, `MBX-CYC-${cycleCustomerId.slice(0, 8).toUpperCase()}`])
+
+    const service = new CustomerExperienceService(
+      transactions,
+      new NormalizedCommandExecutor(transactions),
+      { updateProfile: async () => { throw new Error('not used') } },
+      false,
+    )
+    const context = {
+      scope: dbScope,
+      customerId: cycleCustomerId,
+      actorRef: `activity-cycle-test-${cycleCustomerId}`,
+      businessDate: '2026-08-25',
+    }
+    const registrationInput = {
+      activityPublicId: 'community-free-db-test',
+      activityPackagePublicId: null,
+      partySize: 1,
+      protectedContact: dbContact,
+      termsAcknowledged: true,
+      acknowledgedSafetyPolicyVersion: 'safety-v1',
+      acknowledgedRefundPolicyVersion: 'refund-v1',
+      paymentChoice: 'none' as const,
+      paymentMethod: 'native_qr' as const,
+    }
+    const first = await service.registerActivity(context, {
+      ...registrationInput,
+      idempotencyKey: `activity-cycle-register-${cycleCustomerId}-1`,
+    })
+    expect(first.value.status).toBe('confirmed')
+
+    const cancelled = await service.cancelActivity(context, {
+      registrationPublicId: first.value.publicId,
+      reason: '周期事件测试取消',
+      idempotencyKey: `activity-cycle-cancel-${cycleCustomerId}-1`,
+    })
+    expect(cancelled.value.status).toBe('cancelled')
+
+    const second = await service.registerActivity(context, {
+      ...registrationInput,
+      idempotencyKey: `activity-cycle-register-${cycleCustomerId}-2`,
+    })
+    expect(second.value).toMatchObject({ publicId: first.value.publicId, status: 'confirmed' })
+
+    const outbox = await pool.query<{
+      message_key: string
+      aggregate_version: string
+      message_type: string
+    }>(`
+      SELECT message_key,aggregate_version::text,message_type
+      FROM mbox.outbox_messages
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        AND aggregate_id=(SELECT id FROM mbox.community_activity_registrations
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND public_id=$3)
+      ORDER BY created_at,id
+    `, [tenantId, storeId, first.value.publicId])
+    expect(outbox.rows).toEqual([
+      { message_key: expect.stringContaining('community.activity.registered:'), aggregate_version: '1', message_type: 'community.activity.registered.v1' },
+      { message_key: expect.stringContaining('community.activity.registration.cancelled:'), aggregate_version: '1', message_type: 'community.activity.registration.cancelled.v1' },
+      { message_key: expect.stringMatching(/community\.activity\.registered:[^:]+:2$/), aggregate_version: '2', message_type: 'community.activity.registered.v1' },
+    ])
   })
 
   it('allows a legacy optional-deposit activity to register without selecting prepayment', async () => {

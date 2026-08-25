@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-rc.131 - 2026-08-25
+
+- Fixes free activity re-registration after a cancelled cycle by versioning
+  registration outbox events with the registration cycle, preventing the
+  second registration from being rolled back as an outbox conflict.
+- Adds a PostgreSQL command-path regression covering register, cancel and
+  re-register with the same registration row and distinct outbox events.
+
 ## 1.0.0-rc.130 - 2026-08-25
 
 - Adds the complete version-bound release quality register to the metadata

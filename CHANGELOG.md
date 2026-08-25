@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0-rc.134 - 2026-08-26
+
+- Makes the customer-left turnover procedure portable across PostgreSQL
+  extension schemas. It now uses the existing M-BOX SHA-256 boundary rather
+  than assuming that `pgcrypto.digest` is installed in `public`.
+
 ## 1.0.0-rc.133 - 2026-08-26
 
 - Fixes Superhigh activity create and publish outbox writes by using the

@@ -281,6 +281,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
         payment_status: string
         outstanding_amount_minor: string | number
         has_online_payment_in_progress: boolean
+        unresolved_online_payment_id: string | null
       }>(`
         SELECT order_header.id,order_header.public_id,order_header.currency,order_header.payment_status,
           GREATEST(0,order_header.total_amount_minor-paid.captured_amount_minor-refund.refunded_amount_minor)
@@ -305,12 +306,15 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
             AND payment.order_id=order_header.id
         ) refund ON true
         LEFT JOIN LATERAL (
-          SELECT EXISTS(
-            SELECT 1 FROM mbox.payments payment
+          SELECT payment.id AS unresolved_online_payment_id,
+            true AS has_online_payment_in_progress
+          FROM mbox.payments payment
             WHERE payment.tenant_id=order_header.tenant_id AND payment.store_id=order_header.store_id
               AND payment.order_id=order_header.id AND payment.status='pending'
               AND payment.provider IN ('wechat','postar','simulation')
-          ) AS has_online_payment_in_progress
+              AND payment.retry_released_at IS NULL
+          ORDER BY payment.created_at DESC, payment.id DESC
+          LIMIT 1
         ) pending ON true
         LEFT JOIN LATERAL (
           SELECT EXISTS(
@@ -336,6 +340,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
         paymentStatus: row.payment_status,
         outstandingAmountMinor: Number(row.outstanding_amount_minor),
         hasOnlinePaymentInProgress: row.has_online_payment_in_progress === true,
+        unresolvedOnlinePaymentId: row.unresolved_online_payment_id,
       }))
     })
     return reply.send({ data })

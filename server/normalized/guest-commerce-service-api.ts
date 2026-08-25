@@ -1640,6 +1640,8 @@ function paymentFromContext(value: Awaited<ReturnType<PaymentProviderActionRepos
     currency: value.currency,
     status: value.status as Payment['status'],
     providerSnapshot: {},
+    retryReleasedAt: null,
+    retryReleaseReason: null,
     succeededAt: null,
     createdAt: value.createdAt,
     updatedAt: value.createdAt,

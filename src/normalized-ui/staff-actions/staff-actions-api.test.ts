@@ -92,6 +92,21 @@ describe('StaffActionsApi', () => {
     expect(headers.get('idempotency-key')).toBe('staff-close-session-1-complete')
   })
 
+  it('uses the explicit customer-left turnover command instead of pretending the table was paid', async () => {
+    const send = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      data: { eventId: 'turnover-1' }, meta: { replayed: false },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const api = new StaffActionsApi({ fetch: send, createIdempotencyKey: () => 'turnover-key-0001' })
+
+    await api.closeTableAfterCustomerLeft('session-1', '顾客已离店，收款没有明确成功结果')
+
+    const [url, request] = send.mock.calls[0]!
+    expect(url).toBe('/api/table-sessions/session-1/close-after-customer-left')
+    expect(request?.method).toBe('POST')
+    expect(new Headers(request?.headers).get('idempotency-key')).toBe('staff-customer-left-turnover-session-1-turnover-key-0001')
+    expect(request?.body).toBe(JSON.stringify({ reasonNote: '顾客已离店，收款没有明确成功结果' }))
+  })
+
   it('loads and updates staff reservations through normalized routes', async () => {
     const send = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: [] }), { status: 200 }))
@@ -246,6 +261,23 @@ describe('StaffActionsApi', () => {
     expect(url).toBe(`/api/payments/${paymentId}/provider-query`)
     expect(new Headers(request?.headers).get('idempotency-key')).toBe('staff-payment-query-query-key-0001')
     expect(request?.method).toBe('POST')
+  })
+
+  it('records an explicit unresolved-payment release before a waiter retries collection', async () => {
+    const paymentId = '11111111-1111-4111-8111-111111111111'
+    const send = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      data: { id: paymentId, status: 'pending', retryReleasedAt: '2026-08-26T10:00:00.000Z' },
+      meta: { replayed: false },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const api = new StaffActionsApi({ fetch: send, createIdempotencyKey: () => 'retry-release-key-0001' })
+
+    await api.releaseUnresolvedPaymentForRetry(paymentId, '顾客未确认到账，重新出示二维码')
+
+    const [url, request] = send.mock.calls[0]!
+    expect(url).toBe(`/api/payments/${paymentId}/retry-release`)
+    expect(request?.method).toBe('POST')
+    expect(new Headers(request?.headers).get('idempotency-key')).toBe(`staff-payment-retry-release-${paymentId}-retry-release-key-0001`)
+    expect(request?.body).toBe(JSON.stringify({ reason: '顾客未确认到账，重新出示二维码' }))
   })
 
   it('only reads the persisted payment outcome for the assisted order auto-refresh', async () => {

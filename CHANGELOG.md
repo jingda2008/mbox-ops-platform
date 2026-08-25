@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.0.0-rc.133 - 2026-08-26
+
+- Fixes Superhigh activity create and publish outbox writes by using the
+  immutable internal activity UUID while retaining the public activity number
+  in the audit view; the previous public-ID-to-UUID cast could roll a valid
+  publish transaction back as a 500.
+- Adds a permissioned, auditable release for an online order payment that has
+  not returned an explicit success. Staff can then issue a fresh QR, scan a
+  new payment code, or record another collection method without deleting the
+  original attempt; a late provider success remains visible for reconciliation
+  and refund.
+- Restores a database-level one-active-intent boundary that excludes only an
+  explicitly released retry, preventing parallel unresolved QR attempts from
+  over-collecting the same order.
+- Adds an auditable customer-left table-turnover operation: it closes only an
+  unpaid, non-committed table, cancels unfulfilled work and keeps any late
+  payment fact for after-shift handling. Confirmed payments, refunds and other
+  customer commitments remain hard stops.
+
 ## 1.0.0-rc.132 - 2026-08-26
 
 - Refines the mini-program’s customer order surface into compact table/show,

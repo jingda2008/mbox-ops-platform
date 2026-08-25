@@ -105,6 +105,7 @@ type PaymentCommandPort = Pick<
   | 'recordManualRefundResult'
   | 'authorizeRecollection'
   | 'authorizeActivityRecollection'
+  | 'releaseUnresolvedForRetry'
 >
 
 type OnlinePaymentProvider = Extract<PaymentProvider, 'wechat' | 'postar' | 'simulation'>
@@ -473,6 +474,25 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
         reason,
       })
       return reply.code(execution.replayed ? 200 : 201).send(executionResponse(execution))
+    }),
+  )
+
+  app.post<{ Params: { paymentId: string } }>(
+    '/payments/:paymentId/retry-release',
+    async (request, reply) => handleRoute(reply, async () => {
+      const context = await resolveStaffContext(options, request)
+      const body = readOptionalObject(request.body)
+      assertActorBinding(body, context.actor)
+      const paymentId = readUuid(request.params.paymentId, 'paymentId')
+      const reason = readOptionalString(body.reason, 'reason', 500, 4)
+        ?? '未收到明确成功结果，改用或再次发起收款'
+      const idempotencyKey = readIdempotencyKey(request)
+      const execution = await options.commands.releaseUnresolvedForRetry({
+        ...metadata(request, context, idempotencyKey, { paymentId, reason }),
+        paymentId,
+        reason,
+      })
+      return reply.send(executionResponse(execution))
     }),
   )
 
@@ -976,6 +996,8 @@ function paymentFromProviderContext(value: ProviderPaymentContext): Payment {
     currency: value.currency,
     status: value.status as Payment['status'],
     providerSnapshot: {},
+    retryReleasedAt: null,
+    retryReleaseReason: null,
     succeededAt: null,
     createdAt: value.createdAt,
     updatedAt: value.createdAt,

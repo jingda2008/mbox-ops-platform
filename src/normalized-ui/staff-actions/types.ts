@@ -1,6 +1,7 @@
 export type StaffActionPermission =
   | 'table.open'
   | 'table.close'
+  | 'table.turnover_unsettled'
   | 'table.transfer'
   | 'table.participation.manage'
   | 'table.assignment.manage'

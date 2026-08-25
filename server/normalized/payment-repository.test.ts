@@ -65,6 +65,37 @@ describe('PaymentRepository', () => {
     expect(transaction.calls).toHaveLength(2)
   })
 
+  it('keeps an unresolved online payment auditable while explicitly releasing it for one replacement collection', async () => {
+    const releasedAt = '2026-08-11T12:02:00.000Z'
+    const transaction = new ScriptedTransaction([
+      rows([paymentRow('pending', 8800)]),
+      rows([orderRow(8800)]),
+      rows([{ id: tableSessionId }]),
+      rows([{ ...paymentRow('pending', 8800), retry_released_at: releasedAt, retry_release_reason: '顾客未确认到账，改用另一种方式收款' }]),
+      rows([orderRow(8800)]),
+      rows([{ gross_paid_minor: '0', refunded_minor: '0', has_pending: false }]),
+      rows([{ payment_status: 'pending' }]),
+    ])
+
+    const released = await new PaymentRepository(transaction).releaseUnresolvedForRetry({
+      paymentId,
+      employeeId,
+      reason: '顾客未确认到账，改用另一种方式收款',
+      idempotencyKey: 'payment-retry-release-0001',
+    })
+
+    expect(released).toMatchObject({
+      id: paymentId, status: 'pending', retryReleasedAt: releasedAt,
+      retryReleaseReason: '顾客未确认到账，改用另一种方式收款',
+    })
+    expect(transaction.calls[2]?.sql).toContain('FROM mbox.table_sessions')
+    expect(transaction.calls[3]?.sql).toContain('SET retry_released_at=clock_timestamp()')
+    expect(transaction.calls[3]?.values.slice(3)).toEqual([
+      employeeId, '顾客未确认到账，改用另一种方式收款', 'payment-retry-release-0001',
+    ])
+    expect(transaction.calls[5]?.sql).toContain('p.retry_released_at IS NULL')
+  })
+
   it('derives the payment amount only from the locked order and existing database settlement', async () => {
     const transaction = new ScriptedTransaction([
       rows([orderRow(12800)]),
@@ -492,6 +523,8 @@ function paymentRow(
     currency: 'CNY',
     status,
     provider_snapshot: snapshot,
+    retry_released_at: null,
+    retry_release_reason: null,
     succeeded_at: status === 'succeeded' ? '2026-08-11T12:00:00.000Z' : null,
     created_at: '2026-08-11T11:59:00.000Z',
     updated_at: '2026-08-11T12:00:00.000Z',

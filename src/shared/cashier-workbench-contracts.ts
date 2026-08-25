@@ -96,6 +96,13 @@ export interface CashierWorkbenchPayment {
    * safely superseded by an in-person collection inside one transaction.
    */
   providerActionState: 'creating' | 'ready' | 'unknown' | 'failed' | 'consumed' | null
+  /**
+   * A staff member explicitly opened a replacement collection because the
+   * provider had not returned a success. The original attempt stays visible
+   * for a late result and after-shift duplicate-refund review.
+   */
+  retryReleasedAt: string | null
+  retryReleaseReason: string | null
   amountMinor: number
   currency: string
   status: CashierPaymentStatus
@@ -140,6 +147,8 @@ export interface CashierWorkbenchOrder {
   paymentStatus: string
   totalAmountMinor: number
   outstandingAmountMinor: number
+  /** Confirmed net receipts above the order total; resolve from this order's refund controls. */
+  overCollectedAmountMinor: number
   currency: string
   submittedAt: string | null
   createdAt: string

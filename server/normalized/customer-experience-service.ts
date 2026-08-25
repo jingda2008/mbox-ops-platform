@@ -3014,7 +3014,7 @@ export class CustomerExperienceService {
       requestFingerprint: fingerprint({ ...input, audienceRule }),
       resultCodec: objectCodec<{ publicId: string; status: 'draft' }>(),
     }, async (transaction) => {
-      const result = await transaction.query<{ public_id: string; status: 'draft' }>(`
+      const result = await transaction.query<{ id: string; public_id: string; status: 'draft' }>(`
         INSERT INTO mbox.community_activities (
           tenant_id, store_id, public_id, activity_kind, title, summary,
           cover_url, starts_at, ends_at, assembly_location, capacity,
@@ -3034,7 +3034,7 @@ export class CustomerExperienceService {
           $23::jsonb, $24, $25, $26::text[], $27, $28, $29,
           $30::text[], $31::text[], $32, $33,
           'draft', $34::uuid
-        ) RETURNING public_id, status
+        ) RETURNING id, public_id, status
       `, [
         transaction.scope.tenantId,
         transaction.scope.storeId,
@@ -3078,9 +3078,12 @@ export class CustomerExperienceService {
         staffActor(context),
         'community.activity.created',
         'community_activity',
-        publicId,
+        value.id,
         context.businessDate,
         { title: input.title, status: 'draft' },
+        1,
+        undefined,
+        publicId,
       )
     })
   }
@@ -3096,7 +3099,7 @@ export class CustomerExperienceService {
       requestFingerprint: fingerprint(input),
       resultCodec: objectCodec<{ publicId: string; status: 'published' }>(),
     }, async (transaction) => {
-      const result = await transaction.query<{ public_id: string; status: 'published' }>(`
+      const result = await transaction.query<{ id: string; public_id: string; status: 'published' }>(`
         UPDATE mbox.community_activities
         SET status = 'published', approved_by_employee_id = $4::uuid,
           published_at = clock_timestamp()
@@ -3200,7 +3203,7 @@ export class CustomerExperienceService {
               )
             )
           )
-        RETURNING public_id, status
+        RETURNING id, public_id, status
       `, [
         transaction.scope.tenantId,
         transaction.scope.storeId,
@@ -3220,9 +3223,12 @@ export class CustomerExperienceService {
         staffActor(context),
         'community.activity.published',
         'community_activity',
-        input.publicId,
+        row.id,
         context.businessDate,
         { approvedByEmployeeId: context.employeeId },
+        1,
+        undefined,
+        input.publicId,
       )
     })
   }
@@ -3722,19 +3728,20 @@ function commandOutcome<Result>(
   actor: AuditActor,
   action: string,
   objectType: string,
-  objectId: string,
+  aggregateId: string,
   businessDate: string,
   afterData: JsonObject,
   aggregateVersion = 1,
-  businessEventKey = `${action}:${objectId}`,
+  businessEventKey = `${action}:${aggregateId}`,
+  auditObjectId = aggregateId,
 ) {
   return {
     result,
-    auditEvents: [{ actor, action, objectType, objectId, businessDate, afterData }],
+    auditEvents: [{ actor, action, objectType, objectId: auditObjectId, businessDate, afterData }],
     outboxMessages: [{
       businessEventKey,
       aggregateType: objectType,
-      aggregateId: objectId,
+      aggregateId,
       aggregateVersion,
       eventType: `${action}.v1`,
       payload: afterData,

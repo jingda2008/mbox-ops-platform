@@ -130,6 +130,7 @@ import { resolveEffectiveOnlinePayment, storeCommercePolicyApiPlugin } from './s
 import { tableManagementApiPlugin } from './table-management-api.js'
 import { TableManagementCommandService, TableManagementRepository } from './table-management-repository.js'
 import { TableSessionCommandService, TableSessionRepository } from './table-session-repository.js'
+import { PostgresTableCustomerLeftTurnoverRepository } from './table-customer-left-turnover-repository.js'
 import { WaitlistCommandService } from './waitlist-repository.js'
 import { OfficialWechatPhoneAuthorizationProvider } from './wechat-phone-authorization.js'
 import { wechatLoyaltyNotificationApiPlugin } from './wechat-loyalty-notification-api.js'
@@ -511,6 +512,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       commandExecutor,
       resolveContext: operationsContext,
       createTableSessionRepository: (transaction) => new TableSessionRepository(transaction),
+      createCustomerLeftTableTurnoverRepository: (transaction) => new PostgresTableCustomerLeftTurnoverRepository(transaction),
       createServiceTaskRepository: (transaction) => new ServiceTaskRepository(transaction),
     })
     instance.register(catalogApiPlugin, {

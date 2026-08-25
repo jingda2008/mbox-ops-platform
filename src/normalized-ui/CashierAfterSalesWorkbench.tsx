@@ -537,6 +537,7 @@ export function CashierAfterSalesWorkbenchView({
               </button>
               {expanded && <div className="cashier-order-detail">
                 {order.carryover && <p className="cashier-guidance">这是前一营业日尚未闭环的收款或退款事项；处理结果继续记在原订单，不会并入今日营业额。</p>}
+                {order.overCollectedAmountMinor > 0 && <p className="cashier-workflow-guidance" role="alert">本单已确认多收 ¥{formatAmount(order.overCollectedAmountMinor)}。请在下方对应收款记录发起退款；不要用新订单或手工改金额冲抵。</p>}
                 {orderWorkflowGuidance(order, view.actions) && <p className="cashier-workflow-guidance">{orderWorkflowGuidance(order, view.actions)}</p>}
                 <section>
                   <h3>原订单商品</h3>
@@ -751,12 +752,14 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOn
   const activeOnlinePayment = order.payments.find((payment) => (
     (payment.provider === 'postar' || payment.provider === 'wechat')
     && (payment.status === 'created' || payment.status === 'pending')
+    && (payment.retryReleasedAt === null || payment.retryReleasedAt === undefined)
     && (payment.providerTransactionId !== null
       || (payment.providerActionState !== null && payment.providerActionState !== 'failed'))
   ))
   const unpresentedOnlinePayment = order.payments.find((payment) => (
     (payment.provider === 'postar' || payment.provider === 'wechat')
     && (payment.status === 'created' || payment.status === 'pending')
+    && (payment.retryReleasedAt === null || payment.retryReleasedAt === undefined)
     && payment.providerTransactionId === null
     && (payment.providerActionState === null || payment.providerActionState === 'failed')
   ))
@@ -798,6 +801,16 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOn
   if (!canCollect) return null
   const blocked = activeOnlinePayment !== undefined
   const mutationKey = provider === null ? '' : `manual-payment-${provider}-${order.id}`
+
+  async function releaseUnresolvedPayment(): Promise<void> {
+    if (activeOnlinePayment === undefined) return
+    await onMutation(
+      `payment-retry-release-${activeOnlinePayment.id}`,
+      `/api/payments/${encodeURIComponent(activeOnlinePayment.id)}/retry-release`,
+      { reason: '未收到明确成功结果，改用或再次发起收款' },
+      '已按未到账释放原收款尝试。现在可以重新出示二维码、扫描付款码或登记实际收到的现场款；若旧渠道稍后到账，会保留到收工退款/对账。',
+    )
+  }
 
   async function createPayment(method: 'native_qr' | 'auth_code', customerAuthCode?: string) {
     if (!canCreateOnline || actions.onlinePaymentProvider === null || blocked) return false
@@ -856,7 +869,7 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOn
       {qrValue !== null ? <><CashierPaymentQr value={qrValue} /><strong>请顾客扫码付款</strong><p>到账前不要重复收款；本页下方会保留这笔付款的渠道查单入口。</p></>
         : <><strong>顾客付款码已受理</strong><p>请勿重复扫码，实际到账以支付渠道回传和下方查单结果为准。</p></>}
       <button type="button" className="cashier-quiet-action" onClick={() => setOnlineAction(null)}>暂时收起</button>
-    </div> : blocked ? <p className="cashier-channel-pending">已有线上支付“{shortReference(activeOnlinePayment.publicId)}”已经向渠道发起，客人仍可能完成付款。所有新收款入口已锁定；请先在下方查询渠道结果，确认失败或关闭后再重新收款。</p> : <>
+    </div> : blocked ? <div className="cashier-channel-pending"><p>已有线上支付“{shortReference(activeOnlinePayment.publicId)}”正在等待明确结果。若现场确认未收到款，可直接按未到账重新收款；旧渠道若随后到账，会自动保留在收工退款/对账待办。</p><div className="cashier-action-row"><button type="button" className="cashier-primary-action" disabled={busyKey !== null} onClick={() => void releaseUnresolvedPayment()}><RefreshCcw size={16} />按未到账重新收款</button></div></div> : <>
       {unpresentedOnlinePayment !== undefined && <p className="cashier-guidance">系统发现一笔尚未向支付渠道发起的线上记录。登记现场收款时会在同一笔操作中安全关闭该记录，不需要客人继续线上待支付。</p>}
       {provider === null ? <div className="cashier-action-row">
         {canCreateOnline && <button type="button" className="cashier-primary-action" disabled={busyKey !== null} onClick={() => void createPayment('native_qr')}><QrCode size={17} />出示付款二维码</button>}

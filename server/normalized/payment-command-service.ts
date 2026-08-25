@@ -162,6 +162,11 @@ export interface AuthorizeActivityRecollectionCommand extends CommandMetadata {
   reason: string
 }
 
+export interface ReleaseUnresolvedPaymentForRetryCommand extends CommandMetadata {
+  paymentId: string
+  reason: string
+}
+
 export class PaymentCommandService {
   constructor(
     private readonly commands: Pick<NormalizedCommandExecutor, 'execute'>,
@@ -213,6 +218,48 @@ export class PaymentCommandService {
       if (payment.orderId === null) throw new Error('Order payment lost its order target')
       await payments.syncOrderPaymentStatus(payment.orderId)
       return paymentOutcome(transaction, input, payment, 'payment.initiated', 1, undefined, undefined, this.options.printTicketSources === true)
+  }
+
+  releaseUnresolvedForRetry(
+    input: Readonly<ReleaseUnresolvedPaymentForRetryCommand>,
+  ): Promise<CommandExecution<Payment>> {
+    const employeeId = requireEmployee(input.actor, 'Unresolved payment retry release')
+    return this.commands.execute(command(input, 'payment.unresolved-retry-release', paymentCodec), async (transaction) => {
+      await this.authorization.assertEmployeeCapability({
+        transaction,
+        employeeId,
+        capability: 'payment.initiate.staff',
+      })
+      const payments = new PaymentRepository(transaction)
+      const orderId = await payments.findOrderIdForRetry(input.paymentId)
+      await this.authorization.assertEmployeeOrderAccess({ transaction, employeeId, orderId })
+      const payment = await payments.releaseUnresolvedForRetry({
+        paymentId: input.paymentId,
+        employeeId,
+        reason: input.reason,
+        idempotencyKey: input.idempotencyKey,
+      })
+      return {
+        result: payment,
+        auditEvents: [{
+          actor: input.actor,
+          action: 'payment.unresolved_retry_released',
+          objectType: 'payment',
+          objectId: payment.id,
+          businessDate: input.businessDate,
+          afterData: paymentToJson(payment),
+          reason: payment.retryReleaseReason ?? input.reason,
+        }],
+        outboxMessages: [{
+          businessEventKey: `payment:unresolved-retry-release:${payment.id}:${input.idempotencyKey}`,
+          aggregateType: 'payment',
+          aggregateId: payment.id,
+          aggregateVersion: 2,
+          eventType: 'payment.unresolved_retry_released.v1',
+          payload: paymentToJson(payment),
+        }],
+      }
+    })
   }
 
   recordManual(input: Readonly<RecordManualPaymentCommand>): Promise<CommandExecution<Payment>> {

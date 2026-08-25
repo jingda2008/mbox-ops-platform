@@ -54,6 +54,8 @@ interface PaymentRow extends Record<string, unknown> {
   method: PaymentMethod
   provider_transaction_id: string | null
   provider_action_state: CashierWorkbenchPayment['providerActionState']
+  retry_released_at: string | null
+  retry_release_reason: string | null
   amount_minor: string | number
   currency: string
   status: PaymentStatus
@@ -128,6 +130,8 @@ interface ActivityRegistrationRow extends Record<string, unknown> {
   payment_method: PaymentMethod | null
   payment_provider_transaction_id: string | null
   payment_provider_action_state: CashierWorkbenchPayment['providerActionState']
+  payment_retry_released_at: string | null
+  payment_retry_release_reason: string | null
   payment_amount_minor: string | number | null
   payment_currency: string | null
   payment_status_value: PaymentStatus | null
@@ -322,6 +326,8 @@ export class PostgresCashierWorkbenchQuery {
               payment.provider AS payment_provider,payment.method AS payment_method,
               payment.provider_transaction_id AS payment_provider_transaction_id,
               provider_action.state AS payment_provider_action_state,
+              payment.retry_released_at::text AS payment_retry_released_at,
+              payment.retry_release_reason AS payment_retry_release_reason,
               payment.amount_minor AS payment_amount_minor,payment.currency AS payment_currency,
               payment.status AS payment_status_value,payment.succeeded_at::text AS payment_succeeded_at,
               payment.created_at::text AS payment_created_at,
@@ -435,6 +441,8 @@ export class PostgresCashierWorkbenchQuery {
           SELECT payment.id, payment.order_id, payment.public_id, payment.provider,
             payment.method, payment.provider_transaction_id,
             provider_action.state AS provider_action_state,
+            payment.retry_released_at::text AS retry_released_at,
+            payment.retry_release_reason,
             payment.amount_minor, payment.currency, payment.status,
             payment.succeeded_at::text, payment.created_at::text
           FROM mbox.payments payment
@@ -591,6 +599,8 @@ function assembleView(
         method: payment.method,
         providerTransactionId: payment.provider_transaction_id,
         providerActionState: payment.provider_action_state,
+        retryReleasedAt: payment.retry_released_at,
+        retryReleaseReason: payment.retry_release_reason,
         amountMinor: asSafeMinor(payment.amount_minor, 'payment amount'),
         currency: payment.currency,
         status: payment.status,
@@ -618,6 +628,7 @@ function assembleView(
       .filter((refund) => refund.status === 'succeeded')
       .reduce((refundSum, refund) => refundSum + refund.amountMinor, 0), 0)
     const totalAmountMinor = asSafeMinor(order.total_amount_minor, 'order total')
+    const netCollectedMinor = grossPaidMinor - refundedMinor
     return {
       id: order.id,
       publicId: order.public_id,
@@ -626,7 +637,8 @@ function assembleView(
       status: order.status,
       paymentStatus: order.payment_status,
       totalAmountMinor,
-      outstandingAmountMinor: Math.max(0, totalAmountMinor - (grossPaidMinor - refundedMinor)),
+      outstandingAmountMinor: Math.max(0, totalAmountMinor - netCollectedMinor),
+      overCollectedAmountMinor: Math.max(0, netCollectedMinor - totalAmountMinor),
       currency: order.currency,
       submittedAt: order.submitted_at,
       createdAt: order.created_at,
@@ -818,6 +830,8 @@ function mapActivityPayment(row: ActivityRegistrationRow): CashierWorkbenchPayme
     method: requireValue(row.payment_method, 'activity payment method'),
     providerTransactionId: row.payment_provider_transaction_id,
     providerActionState: row.payment_provider_action_state,
+    retryReleasedAt: row.payment_retry_released_at,
+    retryReleaseReason: row.payment_retry_release_reason,
     amountMinor,
     currency: requireText(row.payment_currency, 'activity payment currency'),
     status,

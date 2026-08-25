@@ -63,6 +63,8 @@ export interface StaffTablePaymentOrder {
   paymentStatus: string
   outstandingAmountMinor: number
   hasOnlinePaymentInProgress: boolean
+  /** A presented online attempt that staff may explicitly release after no clear success. */
+  unresolvedOnlinePaymentId: string | null
 }
 
 export interface AssistedOrderCatalogProduct {
@@ -270,6 +272,7 @@ export interface StaffActionsApiPort {
     }>
   }>): Promise<void>
   closeTable(sessionId: string, sessionStatus?: 'open' | 'closing'): Promise<void>
+  closeTableAfterCustomerLeft(sessionId: string, reasonNote: string): Promise<void>
   setGuestCartFreeze(sessionId: string, frozen: boolean, reason?: string): Promise<void>
   transferTable(input: Readonly<{
     tableSessionId: string
@@ -334,6 +337,7 @@ export interface StaffActionsApiPort {
     signal?: AbortSignal,
   ): Promise<'pending' | 'succeeded' | 'failed' | 'closed'>
   queryOnlinePayment(paymentId: string): Promise<'pending' | 'succeeded' | 'failed' | 'closed'>
+  releaseUnresolvedPaymentForRetry(paymentId: string, reason: string): Promise<void>
   transcribeObservationAudio(input: Readonly<{
     audioBase64: string
     mimeType: 'audio/webm' | 'audio/webm;codecs=opus' | 'audio/ogg' | 'audio/ogg;codecs=opus'
@@ -518,6 +522,15 @@ export class StaffActionsApi implements StaffActionsApiPort {
       const message = error instanceof Error ? error.message : '关台结果无法确认'
       throw new StaffActionsApiError(message, 'TABLE_CLOSE_PARTIAL', null, true)
     }
+  }
+
+  async closeTableAfterCustomerLeft(sessionId: string, reasonNote: string): Promise<void> {
+    await this.command(
+      `/api/table-sessions/${encodeURIComponent(sessionId)}/close-after-customer-left`,
+      { reasonNote },
+      'idempotency-key',
+      `staff-customer-left-turnover-${sessionId}-${this.createIdempotencyKey()}`,
+    )
   }
 
   async setGuestCartFreeze(sessionId: string, frozen: boolean, reason?: string): Promise<void> {
@@ -737,6 +750,15 @@ export class StaffActionsApi implements StaffActionsApiPort {
       throw new StaffActionsApiError('查单结果无法识别，请到收银页面核对', 'INVALID_PAYMENT_QUERY_RESPONSE', response.status)
     }
     return status
+  }
+
+  async releaseUnresolvedPaymentForRetry(paymentId: string, reason: string): Promise<void> {
+    await this.command(
+      `/api/payments/${encodeURIComponent(paymentId)}/retry-release`,
+      { reason },
+      'idempotency-key',
+      `staff-payment-retry-release-${paymentId}-${this.createIdempotencyKey()}`,
+    )
   }
 
   async loadOnlinePaymentStatus(

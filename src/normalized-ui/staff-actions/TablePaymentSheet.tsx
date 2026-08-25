@@ -144,6 +144,26 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
     }
   }
 
+  const releaseUnresolvedPaymentForRetry = async () => {
+    if (selected?.unresolvedOnlinePaymentId === null || selected?.unresolvedOnlinePaymentId === undefined || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      await api.releaseUnresolvedPaymentForRetry(
+        selected.unresolvedOnlinePaymentId,
+        '未收到明确成功结果，服务人员改用或再次发起收款',
+      )
+      setAction(null)
+      setPaymentStatus('pending')
+      await refresh()
+      onUpdated(`${table.code} 已按未到账释放原收款尝试；现在可再次出示二维码或扫描付款码。若旧渠道稍后到账，会在收银与退款页保留待核对事实。`)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '暂时无法释放本次收款尝试，请由收银核对')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const qrValue = action?.presentation === 'qr' && typeof action.payload?.qrCodeUrl === 'string'
     ? action.payload.qrCodeUrl
     : null
@@ -154,7 +174,7 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
         <div><small>{table.code} · 仅本桌未结订单</small><h2><QrCode size={21} /> 本桌收款</h2></div>
         <button type="button" aria-label="关闭本桌收款" onClick={onClose}><X size={21} /></button>
       </header>
-      <p className="staff-order-payment-note">普通未结订单可直接收款；退款后的订单须由收银先授权才会出现。每次只处理一笔；渠道处理中请查单，不要重复扣款。</p>
+      <p className="staff-order-payment-note">普通未结订单可直接收款；退款后的订单须由收银先授权才会出现。渠道未明确成功时，可由现场人员按未到账释放后重新收款；旧渠道迟到到账会交给收银核对退款。</p>
       {error !== null && <p className="staff-order-error" role="alert">{error}</p>}
       {loading ? <p className="staff-order-loading"><LoaderCircle className="is-spinning" /> 正在读取本桌未结订单</p> : orders.length === 0 ? <p className="staff-actions-empty">本桌没有需要再次收款的订单。</p> : <>
         <div className="staff-payment-order-list" aria-label="本桌未结订单">
@@ -166,10 +186,15 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
           </button>)}
         </div>
         {selected !== null && <section className="staff-payment-choice" aria-label="再次发起本桌收款">
-          <div className="staff-payment-summary"><small>{selected.publicId}</small><strong>{money(selected.outstandingAmountMinor, selected.currency)}</strong><span>{selected.hasOnlinePaymentInProgress ? '已有渠道动作时将安全复用或返回处理中，不会生成第二笔扣款。' : '选择顾客扫码，或扫描顾客付款码。'}</span></div>
+          <div className="staff-payment-summary"><small>{selected.publicId}</small><strong>{money(selected.outstandingAmountMinor, selected.currency)}</strong><span>{selected.hasOnlinePaymentInProgress ? '已有渠道动作。确认未收到明确成功结果后，可按未到账释放并再次收款。' : '选择顾客扫码，或扫描顾客付款码。'}</span></div>
           {paymentStatus === 'succeeded' ? <span className="staff-payment-result is-succeeded"><Check /><strong>支付成功，订单余额已刷新</strong></span> : paymentStatus === 'failed' || paymentStatus === 'closed' ? <>
             <span className="staff-payment-result"><X /><strong>本次付款未成功</strong></span>
             <PaymentButtons busy={busy} disabled={access?.canInitiatePayment !== true} onQr={() => void createPayment('native_qr')} onScan={() => setScannerOpen(true)} />
+          </> : selected.unresolvedOnlinePaymentId !== null ? <>
+            <span className="staff-payment-result"><LoaderCircle className="is-spinning" /><strong>已有一笔线上收款尚未明确结果</strong></span>
+            {access?.canQueryOnlinePayment === true && <button type="button" className="staff-payment-query" disabled={busy} onClick={() => void queryPayment()}><RefreshCcw size={18} />先查询渠道结果</button>}
+            <button type="button" className="staff-payment-query" disabled={busy} onClick={() => void releaseUnresolvedPaymentForRetry()}><RefreshCcw size={18} />未到账，重新收款</button>
+            <p>仅在现场未收到明确成功提示时使用。原渠道不会被伪造为失败；若稍后到账，收银页会提示核对并可退款。</p>
           </> : qrValue !== null ? <>
             <TablePaymentQr value={qrValue} />
             <h3>请顾客扫码付款</h3><p>到账前不要重复收款；支付结果会自动刷新。</p>

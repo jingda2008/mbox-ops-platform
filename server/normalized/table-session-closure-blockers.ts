@@ -95,7 +95,14 @@ export async function readTableSessionClosureState(
           WHERE settlement_exception.tenant_id=ordering.tenant_id
             AND settlement_exception.store_id=ordering.store_id
             AND settlement_exception.order_id=ordering.id
-        ) AS has_settlement_exception
+        ) AS has_settlement_exception,
+        EXISTS (
+          SELECT 1 FROM mbox.order_settlement_exception_events settlement_exception
+          WHERE settlement_exception.tenant_id=ordering.tenant_id
+            AND settlement_exception.store_id=ordering.store_id
+            AND settlement_exception.order_id=ordering.id
+            AND settlement_exception.reason_code='customer_left'
+        ) AS has_customer_left_settlement_exception
       FROM mbox.orders ordering
       WHERE ordering.tenant_id=$1::uuid AND ordering.store_id=$2::uuid
         AND ordering.table_session_id=$3::uuid
@@ -130,8 +137,10 @@ export async function readTableSessionClosureState(
               WHERE delivered_item.tenant_id=$1::uuid AND delivered_item.store_id=$2::uuid
                 AND delivered_item.order_id=ordering.id AND delivered_item.status='delivered'
             ))
-          OR (ordering.status='cancelled' AND ordering.payment_status='unpaid'
-            AND ordering.has_settlement_exception))) AS order_unsettled,
+          OR (ordering.status='cancelled' AND ordering.payment_status IN ('unpaid','pending')
+            AND ordering.has_settlement_exception)
+          OR (ordering.status='completed' AND ordering.payment_status IN ('unpaid','pending')
+            AND ordering.has_customer_left_settlement_exception))) AS order_unsettled,
       (SELECT count(*)::text FROM mbox.order_items item
         WHERE item.tenant_id=$1::uuid AND item.store_id=$2::uuid
           AND item.order_id=ANY(SELECT id FROM scoped_orders)
@@ -148,7 +157,18 @@ export async function readTableSessionClosureState(
       (SELECT count(*)::text FROM mbox.payments payment
         WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid
           AND payment.order_id=ANY(SELECT id FROM scoped_orders)
-          AND payment.status IN ('created','pending')) AS payment_pending,
+          AND payment.status IN ('created','pending')
+          AND NOT EXISTS (
+            SELECT 1 FROM mbox.table_customer_left_turnover_events turnover
+            JOIN mbox.order_settlement_exception_events settlement_exception
+              ON settlement_exception.tenant_id=turnover.tenant_id
+             AND settlement_exception.store_id=turnover.store_id
+             AND settlement_exception.order_id=payment.order_id
+             AND settlement_exception.reason_code='customer_left'
+            WHERE turnover.tenant_id=payment.tenant_id
+              AND turnover.store_id=payment.store_id
+              AND turnover.table_session_id=$3::uuid
+          )) AS payment_pending,
       (SELECT count(*)::text FROM mbox.inventory_order_reservations reservation
         WHERE reservation.tenant_id=$1::uuid AND reservation.store_id=$2::uuid
           AND reservation.order_id=ANY(SELECT id FROM scoped_orders)

@@ -117,6 +117,13 @@ export class PaymentFulfillmentRepository {
     if (state.settlement_mode !== 'immediate_payment') {
       return { activated: false, orderId, inventoryConsumptions: [], kdsTasks: [], experiencePlan: absentPlan() }
     }
+    // A customer-left turnover intentionally preserves an unresolved provider
+    // attempt for a possible late financial result, but it has already
+    // cancelled fulfillment and closed the table.  Record that late result;
+    // never recreate KDS or inventory work for a departed table.
+    if (state.fulfillment_state === 'cancelled') {
+      return { activated: false, orderId, inventoryConsumptions: [], kdsTasks: [], experiencePlan: absentPlan() }
+    }
     if (state.fulfillment_state === 'active') {
       const experiencePlan = await new ExperiencePlanActivationRepository(this.transaction)
         .activatePaidNonCritical(orderId, options.paymentId ?? null)

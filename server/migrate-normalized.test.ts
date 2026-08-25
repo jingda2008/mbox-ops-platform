@@ -37,7 +37,7 @@ describe('normalized migration baseline', () => {
       '037', '038', '039', '040', '041', '042', '043', '044', '045', '046', '047', '048',
       '049', '050', '051', '052', '053', '054', '055', '056', '057', '058', '059', '060',
       '061', '062', '063', '064', '065', '066', '067', '068', '069', '070', '071', '072',
-      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099', '100', '101', '102', '103', '104', '105', '106', '107', '108', '109', '110', '111', '112', '113', '114', '115', '116', '117', '118', '119', '120', '121', '122', '123', '124', '125', '126', '127', '128', '129', '130', '131', '132', '133', '134', '135', '136', '137', '138',
+      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099', '100', '101', '102', '103', '104', '105', '106', '107', '108', '109', '110', '111', '112', '113', '114', '115', '116', '117', '118', '119', '120', '121', '122', '123', '124', '125', '126', '127', '128', '129', '130', '131', '132', '133', '134', '135', '136', '137', '138', '139', '140',
     ])
     for (const migration of migrations) {
       expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/)
@@ -1001,6 +1001,25 @@ describe('normalized migration baseline', () => {
     expect(sql).toMatch(/benefit_redemptions[\s\S]*authorization_source/)
     expect(sql).toMatch(/'order\.create'[\s\S]*'kds\.prepare'[\s\S]*'payment\.initiate\.staff'/)
     expect(sql).not.toMatch(/\b(?:real|double precision)\b/i)
+  })
+
+  it('keeps an explicitly released online payment auditable while permitting a staff replacement attempt', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '139')
+    expect(migration?.sql).toMatch(/ADD COLUMN retry_released_at timestamptz/)
+    expect(migration?.sql).toMatch(/retry_released_by_employee_id uuid/)
+    expect(migration?.sql).toMatch(/payments_retry_release_idempotency_uq/)
+    expect(migration?.sql).toMatch(/schema_version='139'/)
+  })
+
+  it('records customer-left turnover as an append-only exception rather than fabricating payment success', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '140')
+    expect(migration?.sql).toMatch(/CREATE TABLE mbox\.table_customer_left_turnover_events/)
+    expect(migration?.sql).toMatch(/customer_left/)
+    expect(migration?.sql).toMatch(/close_table_after_customer_left/)
+    expect(migration?.sql).toMatch(/table\.turnover_unsettled/)
+    expect(migration?.sql).toMatch(/DROP INDEX IF EXISTS mbox\.payments_one_active_intent_per_order_uq/)
+    expect(migration?.sql).toMatch(/CREATE UNIQUE INDEX payments_one_active_intent_per_order_uq[\s\S]*retry_released_at IS NULL/)
+    expect(migration?.sql).toMatch(/schema_version='140'/)
   })
 
   it('accepts only an empty database or the same normalized schema flavor', () => {

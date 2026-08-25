@@ -145,11 +145,10 @@ describe('CashierAfterSalesWorkbenchView', () => {
     view.orders[0]!.paymentStatus = 'unpaid'
     view.orders[0]!.outstandingAmountMinor = 6_800
     const html = render(view)
-    expect(html).toContain('尚未向支付渠道发起')
     expect(html).toContain('登记现金收款')
   })
 
-  it('locks cash only after the provider action started or its result became unknown', () => {
+  it('keeps a presented online attempt visible until staff explicitly releases it after no clear success', () => {
     const pending = payment('postar', [])
     pending.status = 'pending'
     pending.succeededAt = null
@@ -158,8 +157,9 @@ describe('CashierAfterSalesWorkbenchView', () => {
     view.orders[0]!.paymentStatus = 'unpaid'
     view.orders[0]!.outstandingAmountMinor = 6_800
     const html = render(view)
-    expect(html).toContain('已经向渠道发起')
-    expect(html).toContain('入口已锁定')
+    expect(html).toContain('已有线上支付')
+    expect(html).toContain('按未到账重新收款')
+    expect(html).toContain('旧渠道若随后到账')
     expect(html).toContain('查询渠道结果')
     expect(html).not.toContain('登记现金收款</button>')
   })

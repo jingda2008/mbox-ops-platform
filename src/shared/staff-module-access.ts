@@ -14,7 +14,7 @@ export const staffModuleAccessDefinitions: readonly StaffModuleAccessDefinition[
   {
     code: 'live', label: '现场', route: '/staff/live', sortOrder: 210,
     permissionCodes: [
-      'dashboard.view', 'table.view_all', 'table.open', 'table.close', 'table.transfer',
+      'dashboard.view', 'table.view_all', 'table.open', 'table.close', 'table.turnover_unsettled', 'table.transfer',
       'table.assignment.manage', 'table.participation.manage',
       'recommendation.staff.modify', 'observation.record',
     ],

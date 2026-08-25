@@ -181,7 +181,7 @@ describe('activity payment configuration', () => {
       scope,
       async query<Row extends Record<string, unknown>>(sql: string) {
         publishSql = sql
-        return rows<Row>([{ public_id: 'community-activity-test-0001', status: 'published' }])
+        return rows<Row>([{ id: '82000000-0000-4000-8000-000000000004', public_id: 'community-activity-test-0001', status: 'published' }])
       },
     } as unknown as ScopedTransaction
     const commands = {
@@ -553,6 +553,84 @@ integration('activity registration state and contact privacy with PostgreSQL', (
 
   afterAll(async () => {
     await pool?.end()
+  })
+
+  it('publishes a public activity id while writing only the internal UUID to its outbox aggregate', async () => {
+    const service = new CustomerExperienceService(
+      transactions,
+      new NormalizedCommandExecutor(transactions),
+      { updateProfile: async () => { throw new Error('not used') } },
+      false,
+    )
+    const created = await service.createActivity({
+      scope: dbScope, employeeId, businessDate: '2026-08-26',
+    }, {
+      kind: 'member_night',
+      title: '出站 UUID 发布回归',
+      summary: '验证公开活动编号不会写入 UUID 出站聚合键。',
+      coverUrl: null,
+      startsAt: '2099-08-30T12:00:00.000Z',
+      endsAt: '2099-08-30T15:00:00.000Z',
+      assemblyLocation: 'M-BOX',
+      capacity: 8,
+      feeAmountMinor: 0,
+      depositAmountMinor: 0,
+      feeBasis: 'per_registration',
+      paymentMode: 'none',
+      paymentDeadlineMinutes: 15,
+      paymentRuleText: '本活动无需预付。',
+      refundPolicySnapshot: { policyVersion: 'refund-v1', summary: '免费活动无退款' },
+      pointsReward: 0,
+      visibility: 'public',
+      audienceRule: {},
+      safetySnapshot: {
+        policyVersion: 'safety-v1', acknowledgementText: '我已阅读并同意安全要求', requirements: ['遵守现场安全要求'],
+      },
+      salesCopy: {
+        details: '用于验证活动发布出站记录的完整活动详情。', includedItems: [],
+        participationRequirements: [], contactInstructions: '报名后将由活动负责人联系。',
+      },
+      idempotencyKey: `activity-outbox-uuid-create-${randomUUID()}`,
+    })
+    expect(created.value.publicId).toMatch(/^community-activity-/)
+
+    const published = await service.publishActivity({
+      scope: dbScope, employeeId: approverEmployeeId, businessDate: '2026-08-26',
+    }, {
+      publicId: created.value.publicId,
+      idempotencyKey: `activity-outbox-uuid-publish-${randomUUID()}`,
+    })
+    expect(published.value).toEqual({ publicId: created.value.publicId, status: 'published' })
+
+    const evidence = await pool.query<{
+      activity_id: string
+      activity_public_id: string
+      aggregate_id: string
+      message_type: string
+      audit_object_id: string
+    }>(`
+      SELECT activity.id AS activity_id,activity.public_id AS activity_public_id,
+        outbox.aggregate_id,outbox.message_type,audit.object_id AS audit_object_id
+      FROM mbox.community_activities activity
+      JOIN mbox.outbox_messages outbox
+        ON outbox.tenant_id=activity.tenant_id AND outbox.store_id=activity.store_id
+       AND outbox.aggregate_type='community_activity' AND outbox.aggregate_id=activity.id
+      JOIN mbox.audit_events audit
+        ON audit.tenant_id=activity.tenant_id AND audit.store_id=activity.store_id
+       AND audit.object_type='community_activity' AND audit.object_id=activity.public_id
+       AND audit.action=replace(outbox.message_type,'.v1','')
+      WHERE activity.tenant_id=$1::uuid AND activity.store_id=$2::uuid
+        AND activity.public_id=$3
+      ORDER BY outbox.message_type
+    `, [tenantId, storeId, created.value.publicId])
+    expect(evidence.rows.map((row) => row.message_type)).toEqual([
+      'community.activity.created.v1', 'community.activity.published.v1',
+    ])
+    for (const row of evidence.rows) {
+      expect(row.aggregate_id).toBe(row.activity_id)
+      expect(row.aggregate_id).not.toBe(row.activity_public_id)
+      expect(row.audit_object_id).toBe(row.activity_public_id)
+    }
   })
 
   async function seedPackageRegistrationScenarios() {

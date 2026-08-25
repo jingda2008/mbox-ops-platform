@@ -167,6 +167,44 @@ function fixture(overrides: Partial<NormalizedOperationsApiOptions> = {}) {
 }
 
 describe('normalizedOperationsApiPlugin', () => {
+  it('uses a distinct, permissioned command for customer-left turnover without calling normal close', async () => {
+    const customerLeftRepository = {
+      close: vi.fn(async () => ({
+        eventId: '77777777-7777-4777-8777-777777777777', tableSessionId: sessionId, tableCode: 'VIP1',
+        sourceBusinessDate: '2026-08-11', actionBusinessDate: '2026-08-11',
+        cancelledOrderCount: 1, pendingPaymentCount: 1, deliveredUnpaidAmountMinor: 8800,
+        cancelledServiceTaskCount: 2, occurredAt: '2026-08-11T12:40:00.000Z', replayed: false,
+      })),
+    }
+    const value = fixture({
+      createCustomerLeftTableTurnoverRepository: () => customerLeftRepository,
+      resolveContext: () => ({
+        scope: { tenantId, storeId }, employeeId, businessDate: '2026-08-11',
+        capabilities: ['table.close', 'table.turnover_unsettled'],
+      }),
+    })
+
+    const response = await value.app.inject({
+      method: 'POST',
+      url: `/api/table-sessions/${sessionId}/close-after-customer-left`,
+      headers: { 'idempotency-key': 'customer-left-turnover-api-0001' },
+      payload: { reasonNote: '顾客离店，现场未收到明确成功收款' },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({ data: {
+      tableSessionId: sessionId, pendingPaymentCount: 1, deliveredUnpaidAmountMinor: 8800,
+    } })
+    expect(customerLeftRepository.close).toHaveBeenCalledWith(expect.objectContaining({
+      tableSessionId: sessionId, employeeId, businessDate: '2026-08-11',
+      idempotencyKey: 'customer-left-turnover-api-0001',
+    }))
+    expect(value.tableRepository.completeClosing).not.toHaveBeenCalled()
+    expect(value.executions[0]?.outcome.auditEvents[0]).toMatchObject({
+      action: 'table_session.closed_after_customer_left', objectId: sessionId,
+    })
+  })
+
   it('returns the normalized employee view and ignores client attempts to widen table scope', async () => {
     const value = fixture()
     const response = await value.app.inject({

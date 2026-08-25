@@ -49,6 +49,15 @@ import {
   type TableSessionClosureBlocker,
 } from './table-session-closure-blockers.js'
 import type { ScopedTransaction, StoreScope } from './transaction-runner.js'
+import type {
+  CloseTableAfterCustomerLeftInput,
+  CloseTableAfterCustomerLeftResult,
+} from './table-customer-left-turnover-repository.js'
+import {
+  CustomerLeftTableTurnoverConflictError,
+  CustomerLeftTableTurnoverForbiddenError,
+  CustomerLeftTableTurnoverNotFoundError,
+} from './table-customer-left-turnover-repository.js'
 import {
   EmployeeTableAccessDeniedError,
   assertEmployeeTableSessionAccess,
@@ -65,6 +74,10 @@ type OperationsQueryPort = Pick<OperationsQueryService, 'getStaffView'>
 type TableSessionCommandPort = Pick<TableSessionCommandService, 'open'>
 type CommandExecutorPort = Pick<NormalizedCommandExecutor, 'execute'>
 type TableSessionRepositoryPort = Pick<TableSessionRepository, 'beginClosing' | 'completeClosing'>
+type CustomerLeftTableTurnoverRepositoryPort = Pick<
+  { close(input: Readonly<CloseTableAfterCustomerLeftInput>): Promise<CloseTableAfterCustomerLeftResult> },
+  'close'
+>
 type ServiceTaskRepositoryPort = Pick<
   ServiceTaskRepository,
   'create' | 'findById' | 'acknowledge' | 'start' | 'complete' | 'cancel'
@@ -77,6 +90,9 @@ export interface NormalizedOperationsApiOptions {
   resolveContext(request: FastifyRequest): Promise<NormalizedOperationsRequestContext>
     | NormalizedOperationsRequestContext
   createTableSessionRepository(transaction: ScopedTransaction): TableSessionRepositoryPort
+  createCustomerLeftTableTurnoverRepository?: (
+    transaction: ScopedTransaction,
+  ) => CustomerLeftTableTurnoverRepositoryPort
   createServiceTaskRepository(transaction: ScopedTransaction): ServiceTaskRepositoryPort
   createPublicId?: (kind: 'table-session' | 'service-task') => string
 }
@@ -237,6 +253,30 @@ export const normalizedOperationsApiPlugin: FastifyPluginAsync<NormalizedOperati
         'close',
         idempotencyKey,
         fingerprint(request, context, { sessionId }),
+      )
+      return reply.send(executionResponse(execution))
+    }),
+  )
+
+  app.post<{ Params: { sessionId: string } }>(
+    '/table-sessions/:sessionId/close-after-customer-left',
+    async (request, reply) => handleRoute(reply, async () => {
+      const context = await resolveAndValidateContext(options, request)
+      requireCapability(context, 'table.close')
+      requireCapability(context, 'table.turnover_unsettled')
+      const body = readOptionalObject(request.body)
+      assertActorBinding(body, context.employeeId)
+      const sessionId = readUuid(request.params.sessionId, 'sessionId')
+      const reasonNote = readOptionalString(body.reasonNote, 'reasonNote', 500)
+        ?? '顾客已离店，收款未明确确认，按未收款处理'
+      const idempotencyKey = readIdempotencyKey(request)
+      const execution = await executeCustomerLeftTableTurnover(
+        options,
+        context,
+        sessionId,
+        reasonNote,
+        idempotencyKey,
+        fingerprint(request, context, { sessionId, reasonNote }),
       )
       return reply.send(executionResponse(execution))
     }),
@@ -493,6 +533,61 @@ async function assertTableSessionSettled(transaction: ScopedTransaction, session
       state.outstandingAmountMinor,
     )
   }
+}
+
+async function executeCustomerLeftTableTurnover(
+  options: NormalizedOperationsApiOptions,
+  context: NormalizedOperationsRequestContext,
+  sessionId: string,
+  reasonNote: string,
+  idempotencyKey: string,
+  requestFingerprint: string,
+): Promise<CommandExecution<CloseTableAfterCustomerLeftResult>> {
+  if (options.createCustomerLeftTableTurnoverRepository === undefined) {
+    throw new Error('Customer-left table turnover is not configured')
+  }
+  return options.commandExecutor.execute({
+    scope: context.scope,
+    operationScope: 'table-session.close-after-customer-left',
+    idempotencyKey,
+    requestFingerprint,
+    resultCodec: customerLeftTableTurnoverCodec,
+  }, async (transaction) => {
+    await assertEmployeeTableSessionAccess(transaction, {
+      employeeId: context.employeeId,
+      tableSessionId: sessionId,
+      requiredPermissionCodes: ['table.close', 'table.turnover_unsettled'],
+      lockTableSession: true,
+    })
+    const result = await options.createCustomerLeftTableTurnoverRepository!(transaction).close({
+      scope: context.scope,
+      tableSessionId: sessionId,
+      employeeId: context.employeeId,
+      businessDate: context.businessDate,
+      reasonNote,
+      idempotencyKey,
+    })
+    return {
+      result,
+      auditEvents: [{
+        actor: employeeActor(context.employeeId),
+        action: 'table_session.closed_after_customer_left',
+        objectType: 'table_session',
+        objectId: result.tableSessionId,
+        businessDate: context.businessDate,
+        afterData: customerLeftTableTurnoverToJson(result),
+        reason: reasonNote,
+      }],
+      outboxMessages: [{
+        businessEventKey: `table-session-customer-left:${result.eventId}`,
+        aggregateType: 'table_session',
+        aggregateId: result.tableSessionId,
+        aggregateVersion: 3,
+        eventType: 'table_session.closed_after_customer_left.v1',
+        payload: customerLeftTableTurnoverToJson(result),
+      }],
+    }
+  })
 }
 
 async function executeTaskTransition(
@@ -779,6 +874,13 @@ const serviceTaskCodec: JsonCodec<ServiceTask> = {
   decode: (value) => decodeRecord<ServiceTask>(value, ['id', 'tableId', 'tableSessionId', 'status']),
 }
 
+const customerLeftTableTurnoverCodec: JsonCodec<CloseTableAfterCustomerLeftResult> = {
+  encode: customerLeftTableTurnoverToJson,
+  decode: (value) => decodeRecord<CloseTableAfterCustomerLeftResult>(value, [
+    'eventId', 'tableSessionId', 'tableCode', 'sourceBusinessDate', 'actionBusinessDate', 'occurredAt',
+  ]),
+}
+
 const guestCartFreezeCodec: JsonCodec<GuestCartFreezeResult> = {
   encode: guestCartFreezeToJson,
   decode: (value) => {
@@ -859,6 +961,22 @@ function serviceTaskToJson(task: ServiceTask): JsonObject {
   }
 }
 
+function customerLeftTableTurnoverToJson(result: CloseTableAfterCustomerLeftResult): JsonObject {
+  return {
+    eventId: result.eventId,
+    tableSessionId: result.tableSessionId,
+    tableCode: result.tableCode,
+    sourceBusinessDate: result.sourceBusinessDate,
+    actionBusinessDate: result.actionBusinessDate,
+    cancelledOrderCount: result.cancelledOrderCount,
+    pendingPaymentCount: result.pendingPaymentCount,
+    deliveredUnpaidAmountMinor: result.deliveredUnpaidAmountMinor,
+    cancelledServiceTaskCount: result.cancelledServiceTaskCount,
+    occurredAt: result.occurredAt,
+    replayed: result.replayed,
+  }
+}
+
 async function handleRoute(
   reply: FastifyReply,
   operation: () => Promise<FastifyReply>,
@@ -922,6 +1040,15 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   }
   if (error instanceof UnsettledTableSessionError) {
     return apiError(409, 'TABLE_SESSION_UNSETTLED', error.message)
+  }
+  if (error instanceof CustomerLeftTableTurnoverNotFoundError) {
+    return apiError(404, 'TABLE_SESSION_NOT_FOUND', error.message)
+  }
+  if (error instanceof CustomerLeftTableTurnoverForbiddenError) {
+    return apiError(403, 'CAPABILITY_FORBIDDEN', '当前员工无权执行顾客离店异常翻台')
+  }
+  if (error instanceof CustomerLeftTableTurnoverConflictError) {
+    return apiError(409, 'TABLE_CUSTOMER_LEFT_TURNOVER_CONFLICT', error.message)
   }
   if (error instanceof ServiceTaskTransitionError) {
     return apiError(409, 'SERVICE_TASK_TRANSITION_CONFLICT', error.message)

@@ -102,6 +102,7 @@ export function StaffActionsPanel({
   const [transferTargetId, setTransferTargetId] = useState<string | null>(null)
   const [transferReason, setTransferReason] = useState('')
   const [closeConfirm, setCloseConfirm] = useState(false)
+  const [customerLeftConfirm, setCustomerLeftConfirm] = useState(false)
   const [closeIssue, setCloseIssue] = useState<string | null>(null)
   const [resolutionNotes, setResolutionNotes] = useState<Record<string, string>>({})
   const [carryoverCancelNotes, setCarryoverCancelNotes] = useState<Record<string, string>>({})
@@ -414,6 +415,42 @@ export function StaffActionsPanel({
       else setOperations(snapshot)
       const issue = actionError(error, '关台未完成，已恢复真实桌台状态')
       setCloseConfirm(false)
+      setCloseIssue(issue)
+      showNotice({ kind: 'error', message: issue })
+    } finally {
+      actionLocksRef.current.delete(actionKey)
+      setPendingAction(null)
+    }
+  }
+
+  const closeAfterCustomerLeft = async () => {
+    if (operations === null || selectedTable?.activeSession === null || selectedTable === null) return
+    if (!hasPermission(permissions, 'table.close') || !hasPermission(permissions, 'table.turnover_unsettled')) {
+      return revealPermissionGuidance('table.close')
+    }
+    if (!customerLeftConfirm) {
+      setCustomerLeftConfirm(true)
+      showNotice({ kind: 'guidance', message: '请再次确认：顾客已离店且未收到明确成功结果。系统会取消未履约部分、保留原支付记录和已送达欠款，再释放本桌。' })
+      return
+    }
+    const snapshot = operations
+    const sessionId = selectedTable.activeSession.id
+    const actionKey = `table-customer-left:${sessionId}`
+    if (actionLocksRef.current.has(actionKey)) return
+    actionLocksRef.current.add(actionKey)
+    setPendingAction(`table:${selectedTable.id}`)
+    setOperations(replaceTableSession(snapshot, selectedTable.id, null))
+    try {
+      await api.closeTableAfterCustomerLeft(sessionId, '顾客已离店，收款未明确确认，按未收款处理')
+      showNotice({ kind: 'success', message: `${selectedTable.code} 已按顾客离店处理并释放桌台；原支付若迟到到账，会进入收银退款与对账。` })
+      setCustomerLeftConfirm(false)
+      setCloseConfirm(false)
+      setCloseIssue(null)
+      await load(true)
+    } catch (error) {
+      setOperations(snapshot)
+      const issue = actionError(error, '顾客离店翻台未完成，已恢复真实桌台状态')
+      setCustomerLeftConfirm(false)
       setCloseIssue(issue)
       showNotice({ kind: 'error', message: issue })
     } finally {
@@ -769,6 +806,7 @@ export function StaffActionsPanel({
               transferTargetId={transferTargetId}
               transferReason={transferReason}
               closeConfirm={closeConfirm}
+              customerLeftConfirm={customerLeftConfirm}
               closeIssue={closeIssue}
               pending={pendingAction === `table:${selectedTable.id}`}
               onGuestCount={setGuestCount}
@@ -778,9 +816,10 @@ export function StaffActionsPanel({
               onTransferReason={setTransferReason}
               onOpen={() => void openTable()}
               onClose={() => void closeTable()}
+              onCloseAfterCustomerLeft={() => void closeAfterCustomerLeft()}
               onTransfer={() => void transferTable()}
               onPermissionGuidance={revealPermissionGuidance}
-              onCancelClose={() => setCloseConfirm(false)}
+              onCancelClose={() => { setCloseConfirm(false); setCustomerLeftConfirm(false) }}
               onOrder={() => setOrderSheetMode('paid')}
               onPayment={() => setTablePaymentOpen(true)}
               onGift={() => setOrderSheetMode('gift')}
@@ -1279,6 +1318,7 @@ interface TableActionSheetProps {
   transferTargetId: string | null
   transferReason: string
   closeConfirm: boolean
+  customerLeftConfirm: boolean
   closeIssue: string | null
   pending: boolean
   onGuestCount(value: string): void
@@ -1288,6 +1328,7 @@ interface TableActionSheetProps {
   onTransferReason(value: string): void
   onOpen(): void
   onClose(): void
+  onCloseAfterCustomerLeft(): void
   onTransfer(): void
   onPermissionGuidance(permission: 'table.open' | 'table.close' | 'table.transfer'): void
   onCancelClose(): void
@@ -1409,8 +1450,13 @@ function TableActionSheet(props: TableActionSheetProps) {
             ) : (
               <button type="button" onClick={() => props.onPermissionGuidance('table.close')}>关台说明</button>
             )}
+            {hasPermission(props.permissions, 'table.close') && hasPermission(props.permissions, 'table.turnover_unsettled') && (
+              <button type="button" className="is-danger" onClick={props.onCloseAfterCustomerLeft} disabled={props.pending}>
+                {props.pending ? '正在处理…' : props.customerLeftConfirm ? '确认按未到账翻台' : '顾客离店，按未到账翻台'}
+              </button>
+            )}
           </div>
-          {props.closeConfirm && <button type="button" className="staff-cancel-confirm" data-action-reveal onClick={props.onCancelClose}>取消关台</button>}
+          {(props.closeConfirm || props.customerLeftConfirm) && <button type="button" className="staff-cancel-confirm" data-action-reveal onClick={props.onCancelClose}>取消关台</button>}
           {props.transferTargetId !== null && (
             <div className="staff-transfer-targets" data-action-reveal>
               <strong>选择空闲目标桌台</strong>

@@ -51,6 +51,8 @@ const payment: Payment = {
   currency: 'CNY',
   status: 'pending',
   providerSnapshot: {},
+  retryReleasedAt: null,
+  retryReleaseReason: null,
   succeededAt: null,
   createdAt: '2026-08-11T12:00:00.000Z',
   updatedAt: '2026-08-11T12:00:00.000Z',
@@ -192,6 +194,14 @@ function fixture(overrides: Partial<PaymentApiOptions> = {}) {
         authorizedByEmployeeId: employeeId, expiresAt: '2026-08-11T13:00:00.000Z', createdAt: '2026-08-11T12:30:00.000Z',
       }, replayed: false,
     })),
+    releaseUnresolvedForRetry: vi.fn(async () => ({
+      value: {
+        ...payment,
+        retryReleasedAt: '2026-08-11T12:10:00.000Z',
+        retryReleaseReason: '顾客未确认到账，重新发起收款',
+      },
+      replayed: false,
+    })),
   }
   const providerVerifier = {
     verifyPaymentCallback: vi.fn(async () => ({
@@ -296,6 +306,27 @@ function fixture(overrides: Partial<PaymentApiOptions> = {}) {
 }
 
 describe('paymentApiPlugin', () => {
+  it('records a staff decision before an unresolved online payment can be retried', async () => {
+    const value = fixture()
+    const response = await value.app.inject({
+      method: 'POST',
+      url: `/api/payments/${paymentId}/retry-release`,
+      headers: { 'idempotency-key': 'payment-retry-release-api-0001' },
+      payload: { reason: '顾客未确认到账，重新发起收款' },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({
+      data: { id: paymentId, retryReleasedAt: '2026-08-11T12:10:00.000Z' },
+      meta: { replayed: false },
+    })
+    expect(value.commands.releaseUnresolvedForRetry).toHaveBeenCalledWith(expect.objectContaining({
+      paymentId,
+      reason: '顾客未确认到账，重新发起收款',
+      idempotencyKey: 'payment-retry-release-api-0001',
+    }))
+  })
+
   it('initiates an online payment with a server-resolved actor and idempotency boundary', async () => {
     const value = fixture()
     const response = await value.app.inject({

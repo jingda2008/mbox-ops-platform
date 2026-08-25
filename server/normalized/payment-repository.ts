@@ -36,6 +36,8 @@ export interface Payment {
   currency: string
   status: PaymentStatus
   providerSnapshot: JsonObject
+  retryReleasedAt: string | null
+  retryReleaseReason: string | null
   succeededAt: string | null
   createdAt: string
   updatedAt: string
@@ -91,6 +93,13 @@ export interface ApplyPaymentQueryResultInput extends ApplyPaymentCallbackInput 
   status: ChannelPaymentStatus
 }
 
+export interface ReleaseUnresolvedPaymentForRetryInput {
+  paymentId: string
+  employeeId: string
+  reason: string
+  idempotencyKey: string
+}
+
 interface PaymentRow extends Record<string, unknown> {
   id: string
   payable_kind: Payment['payableKind']
@@ -105,6 +114,8 @@ interface PaymentRow extends Record<string, unknown> {
   currency: string
   status: PaymentStatus
   provider_snapshot: JsonObject
+  retry_released_at: string | null
+  retry_release_reason: string | null
   succeeded_at: string | null
   created_at: string
   updated_at: string
@@ -187,6 +198,21 @@ export class PaymentTransitionError extends Error {
 export class PaymentRepository {
   constructor(private readonly transaction: ScopedTransaction) {}
 
+  async findOrderIdForRetry(paymentId: string): Promise<string> {
+    const selected = await this.transaction.query<{ order_id: string | null }>(`
+      SELECT order_id
+      FROM mbox.payments
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+      FOR UPDATE
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId])
+    const row = selected.rows[0]
+    if (row === undefined) throw new PaymentNotFoundError(paymentId)
+    if (row.order_id === null) {
+      throw new OrderNotPayableError(paymentId, 'only a table-order payment can be released for retry')
+    }
+    return row.order_id
+  }
+
   /**
    * Closes only payment rows that never left M-BOX. Once a provider action was
    * started, or a provider order/reference exists, the remote rail may still
@@ -217,6 +243,7 @@ export class PaymentRepository {
         AND payment.order_id = $3::uuid
         AND payment.provider IN ('wechat', 'postar')
         AND payment.status IN ('created', 'pending')
+        AND payment.retry_released_at IS NULL
       ORDER BY payment.created_at, payment.id
       FOR UPDATE OF payment
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
@@ -257,6 +284,76 @@ export class PaymentRepository {
       publicId: payment.public_id,
       provider: payment.provider,
     }))
+  }
+
+  /**
+   * Leaves an already-presented online attempt in place for late provider
+   * callbacks, but releases it as the active collection attempt.  This is the
+   * low-friction staff action used when the venue has no explicit success and
+   * needs to switch method or try again.  It is deliberately not a failure,
+   * cancellation, refund, or success assertion.
+   */
+  async releaseUnresolvedForRetry(
+    input: Readonly<ReleaseUnresolvedPaymentForRetryInput>,
+  ): Promise<Payment> {
+    const reason = input.reason.trim()
+    if (reason.length < 4 || reason.length > 500) {
+      throw new TypeError('retry release reason must contain between 4 and 500 characters')
+    }
+    const selected = await this.transaction.query<PaymentRow>(`
+      SELECT ${PAYMENT_COLUMNS}
+      FROM mbox.payments
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+      FOR UPDATE
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.paymentId])
+    const payment = selected.rows[0]
+    if (payment === undefined) throw new PaymentNotFoundError(input.paymentId)
+    if (payment.order_id === null) {
+      throw new OrderNotPayableError(payment.id, 'only a table-order payment can be released for retry')
+    }
+    const order = await this.lockOrder(payment.order_id)
+    const session = await this.transaction.query<{ id: string }>(`
+      SELECT id
+      FROM mbox.table_sessions
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+      FOR SHARE
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, order.table_session_id])
+    if (session.rowCount !== 1) throw new OrderNotPayableError(order.id, 'table session is unavailable')
+    if (order.status === 'draft' || order.status === 'cancelled') {
+      throw new OrderNotPayableError(order.id, `status is ${order.status}`)
+    }
+    if (!['wechat', 'postar', 'simulation'].includes(payment.provider)
+      || !['created', 'pending'].includes(payment.status)) {
+      throw new OrderNotPayableError(order.id, 'payment is already final or is not an online payment')
+    }
+    if (payment.retry_released_at !== null) {
+      throw new OrderNotPayableError(order.id, 'payment was already released for a replacement collection')
+    }
+    const updated = await this.transaction.query<PaymentRow>(`
+      UPDATE mbox.payments
+      SET retry_released_at=clock_timestamp(),
+          retry_released_by_employee_id=$4::uuid,
+          retry_release_reason=$5::text,
+          retry_release_idempotency_key=$6::text,
+          provider_snapshot=provider_snapshot || jsonb_build_object(
+            'retryReleasedAt',clock_timestamp()::text,
+            'retryReleaseReason',$5::text
+          ),
+          updated_at=clock_timestamp()
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+        AND retry_released_at IS NULL AND status IN ('created','pending')
+      RETURNING ${PAYMENT_COLUMNS}
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      payment.id,
+      input.employeeId,
+      reason,
+      input.idempotencyKey,
+    ])
+    const released = onePayment(updated, `Payment ${payment.id} changed while releasing it for retry`)
+    await this.syncOrderPaymentStatus(order.id)
+    return released
   }
 
   async createForOrder(input: Readonly<CreatePaymentForOrderInput>): Promise<Payment> {
@@ -1121,7 +1218,9 @@ export class PaymentRepository {
             AND paid.order_id = $3::uuid
             AND r.status = 'succeeded'
         ), 0)::text AS refunded_minor,
-        COALESCE(BOOL_OR(p.status IN ('created', 'pending')), false) AS has_pending
+        COALESCE(BOOL_OR(
+          p.status IN ('created', 'pending') AND p.retry_released_at IS NULL
+        ), false) AS has_pending
       FROM mbox.payments AS p
       WHERE p.tenant_id = $1::uuid
         AND p.store_id = $2::uuid
@@ -1135,6 +1234,7 @@ const PAYMENT_COLUMNS = `
   id, payable_kind, order_id, activity_registration_id, public_id,
   provider, provider_transaction_id, settlement_channel, method,
   amount_minor, currency, status, provider_snapshot,
+  retry_released_at::text, retry_release_reason,
   succeeded_at::text, created_at::text, updated_at::text
 `
 
@@ -1292,6 +1392,8 @@ function mapPayment(row: PaymentRow): Payment {
     currency: row.currency,
     status: row.status,
     providerSnapshot: sanitizeProviderSnapshot(row.provider_snapshot),
+    retryReleasedAt: row.retry_released_at ?? null,
+    retryReleaseReason: row.retry_release_reason ?? null,
     succeededAt: row.succeeded_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

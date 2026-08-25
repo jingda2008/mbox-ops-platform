@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0-rc.129 - 2026-08-25
+
+- Uses the external OSS evidence relay for a longer, explicit handoff window
+  before treating a release as failed.
+- Records the release as complete only after both evidence archives are
+  independently verified and the new application is the canonical release.
+
 ## 1.0.0-rc.128 - 2026-08-25
 
 - Safely reconciles an active runtime schema that is ahead of an older release

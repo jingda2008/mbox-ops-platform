@@ -26,6 +26,7 @@ database_restorer=${release_dir}/restore-postgres.sh
 state_file=${release_dir}/release-state.json
 database_maintenance_env=${install_root}/secrets/database-maintenance.env
 external_evidence_relay=0
+evidence_relay_wait_seconds=${MBOX_EVIDENCE_RELAY_WAIT_SECONDS:-300}
 
 case "${release_dir}" in
   /opt/mbox/releases/*) ;;
@@ -36,6 +37,8 @@ case "${deployment_tier}" in
   *) echo "unsupported deployment tier" >&2; exit 1 ;;
 esac
 [[ "${backup_max_age_minutes}" =~ ^[0-9]+$ ]]
+[[ "${evidence_relay_wait_seconds}" =~ ^[0-9]+$ ]]
+test "${evidence_relay_wait_seconds}" -gt 0
 test -f "${manifest}"
 test -f "${secrets_env}"
 test -x "${uploader}"
@@ -1290,7 +1293,7 @@ archive_release_evidence() {
   chmod 0600 "${relay_marker}.next"
   mv "${relay_marker}.next" "${relay_marker}"
 
-  for _ in $(seq 1 180); do
+  for _ in $(seq 1 "${evidence_relay_wait_seconds}"); do
     [ -f "${verification_report}" ] && break
     sleep 1
   done
@@ -1330,7 +1333,6 @@ archive_release_evidence \
   "${release_dir}/oss-deployment-verification.json" \
   "${release_dir}/.deployment-evidence-relay-ready.json"
 release_state_transition "${state_file}" cutover_verified evidence_archived
-release_state_transition "${state_file}" evidence_archived completed
 completion_evidence=${release_dir}/oss-completion
 rm -rf "${completion_evidence}"
 install -d -m 0700 "${completion_evidence}"
@@ -1357,6 +1359,7 @@ emit_release_audit deployment_succeeded info immutable-release-active
 if ! MBOX_OSS_PRUNE_APPLY=1 "${release_dir}/prune-oss-images.sh" >/dev/null; then
   emit_release_audit critical_audit warning rollback-image-prune-deferred
 fi
+release_state_transition "${state_file}" evidence_archived completed
 complete=1
 trap - ERR INT TERM
 printf 'release=%s\nsha=%s\nimage_digest=%s\nrollback=%s\nbackup=%s\n' \

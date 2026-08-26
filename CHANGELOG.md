@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0-rc.138 - 2026-08-26
+
+- Fixes the explicit “顾客离店，按未到账翻台” operation for tables that
+  contain settled or refunded historical orders. The operation now preserves
+  those order, payment and refund facts for reconciliation and after-sales
+  work, while cancelling only outstanding, unfulfilled work before closing
+  the physical table. This prevents old settled history from trapping an
+  empty table in the closing state.
+
 ## 1.0.0-rc.137 - 2026-08-26
 
 - Fixes the staff “unresolved payment retry release” transaction. The outbox

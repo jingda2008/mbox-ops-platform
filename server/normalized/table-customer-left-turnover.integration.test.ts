@@ -16,6 +16,7 @@ integration('customer-left table turnover', () => {
   const areaId = randomUUID()
   const tableId = randomUUID()
   const employeeId = randomUUID()
+  const approverId = randomUUID()
   const roleId = randomUUID()
   let pool: Pool
   let businessDate: string
@@ -35,6 +36,8 @@ integration('customer-left table turnover', () => {
       VALUES($1,$2,$3,$4,'L01','L01',4)`, [tableId, tenantId, storeId, areaId])
     await pool.query(`INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name)
       VALUES($1,$2,$3,'manager','店长')`, [employeeId, tenantId, storeId])
+    await pool.query(`INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name)
+      VALUES($1,$2,$3,'approver','复核人')`, [approverId, tenantId, storeId])
     await pool.query(`INSERT INTO mbox.roles(id,tenant_id,store_id,code,name)
       VALUES($1,$2,$3,'MANAGER','店长')`, [roleId, tenantId, storeId])
     await pool.query(`INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id)
@@ -90,6 +93,91 @@ integration('customer-left table turnover', () => {
       WHERE order_id=$1`, [fixture.orderId]))
       .resolves.toMatchObject({ rows: [{ reason_code: 'customer_left', settled_amount_minor: '100' }] })
   })
+
+  it('closes the physical table while preserving settled and refunded history', async () => {
+    const fixture = await createFixture()
+    const settled = await createSettledHistory(fixture.sessionId)
+    const runner = new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool)
+    const input = {
+      scope: { tenantId, storeId }, tableSessionId: fixture.sessionId, employeeId, businessDate,
+      reasonNote: '顾客离店，保留已结算账务并取消未交付的旧桌任务',
+      idempotencyKey: `customer-left-settled-history:${randomUUID()}`,
+    }
+
+    const result = await runner.run(input.scope, async (transaction) =>
+      new PostgresTableCustomerLeftTurnoverRepository(transaction).close(input))
+
+    expect(result).toMatchObject({
+      tableSessionId: fixture.sessionId,
+      cancelledOrderCount: 1,
+      pendingPaymentCount: 1,
+    })
+    await expect(pool.query(`SELECT status FROM mbox.table_sessions WHERE id=$1`, [fixture.sessionId]))
+      .resolves.toMatchObject({ rows: [{ status: 'closed' }] })
+    await expect(pool.query(`SELECT status,payment_status FROM mbox.orders WHERE id=$1`, [settled.orderId]))
+      .resolves.toMatchObject({ rows: [{ status: 'submitted', payment_status: 'refunded' }] })
+    await expect(pool.query(`SELECT status FROM mbox.payments WHERE id=$1`, [settled.paymentId]))
+      .resolves.toMatchObject({ rows: [{ status: 'refunded' }] })
+    await expect(pool.query(`SELECT status FROM mbox.refunds WHERE id=$1`, [settled.refundId]))
+      .resolves.toMatchObject({ rows: [{ status: 'succeeded' }] })
+    await expect(pool.query(`SELECT status FROM mbox.order_items WHERE id=$1`, [settled.deliveredItemId]))
+      .resolves.toMatchObject({ rows: [{ status: 'delivered' }] })
+    await expect(pool.query(`SELECT status FROM mbox.order_items WHERE id=$1`, [settled.unfulfilledItemId]))
+      .resolves.toMatchObject({ rows: [{ status: 'cancelled' }] })
+    await expect(pool.query(`SELECT status FROM mbox.kds_tasks WHERE id=$1`, [settled.taskId]))
+      .resolves.toMatchObject({ rows: [{ status: 'cancelled' }] })
+    await expect(pool.query(`SELECT count(*)::integer AS count FROM mbox.order_cancellation_events WHERE order_id=$1`, [settled.orderId]))
+      .resolves.toMatchObject({ rows: [{ count: 0 }] })
+  })
+
+  async function createSettledHistory(sessionId: string) {
+    const orderId = randomUUID()
+    const paymentId = randomUUID()
+    const refundId = randomUUID()
+    const deliveredItemId = randomUUID()
+    const unfulfilledItemId = randomUUID()
+    const taskId = randomUUID()
+    const productId = randomUUID()
+    await pool.query(`INSERT INTO mbox.products(
+      id,tenant_id,store_id,code,name,category_code,fulfillment_station,product_snapshot
+    ) VALUES($1,$2,$3,$4,'已退款的旧桌酒水','drink','bar','{}')`, [
+      productId, tenantId, storeId, `SETTLED-${randomUUID().slice(0, 8)}`,
+    ])
+    await pool.query(`INSERT INTO mbox.orders(
+      id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,
+      subtotal_amount_minor,discount_amount_minor,total_amount_minor,created_by_employee_id,submitted_at
+    ) VALUES($1,$2,$3,$4,$5,'staff_assisted','submitted','refunded',200,0,200,$6,clock_timestamp())`, [
+      orderId, tenantId, storeId, sessionId, `settled-history-order-${randomUUID()}`, employeeId,
+    ])
+    await pool.query(`INSERT INTO mbox.order_items(
+      id,tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,discount_amount_minor,total_amount_minor,
+      currency,fulfillment_station,product_snapshot,status
+    ) VALUES
+      ($1,$3,$4,$5,$6,1,100,0,100,'CNY','bar','{}','delivered'),
+      ($2,$3,$4,$5,$6,1,100,0,100,'CNY','bar','{}','submitted')`, [
+      deliveredItemId, unfulfilledItemId, tenantId, storeId, orderId, productId,
+    ])
+    await pool.query(`INSERT INTO mbox.kds_tasks(
+      id,tenant_id,store_id,order_item_id,station_code,status,quantity,ready_at
+    ) VALUES($1,$2,$3,$4,'bar','ready',1,clock_timestamp())`, [
+      taskId, tenantId, storeId, unfulfilledItemId,
+    ])
+    await pool.query(`INSERT INTO mbox.payments(
+      id,tenant_id,store_id,order_id,public_id,provider,provider_transaction_id,
+      method,amount_minor,currency,status,succeeded_at
+    ) VALUES($1,$2,$3,$4,$5,'cash',$6,'cash',200,'CNY','refunded',clock_timestamp())`, [
+      paymentId, tenantId, storeId, orderId, `settled-history-payment-${randomUUID()}`,
+      `settled-history-transaction-${randomUUID()}`,
+    ])
+    await pool.query(`INSERT INTO mbox.refunds(
+      id,tenant_id,store_id,payment_id,public_id,provider_refund_id,amount_minor,currency,status,reason,
+      requested_by_employee_id,approved_by_employee_id,decision_reason,completed_at
+    ) VALUES($1,$2,$3,$4,$5,$6,200,'CNY','succeeded','顾客离店后的已完成退款',$7,$8,'现场复核已完成',clock_timestamp())`, [
+      refundId, tenantId, storeId, paymentId, `settled-history-refund-${randomUUID()}`,
+      `settled-history-provider-refund-${randomUUID()}`, employeeId, approverId,
+    ])
+    return { orderId, paymentId, refundId, deliveredItemId, unfulfilledItemId, taskId }
+  }
 
   async function createFixture() {
     const sessionId = randomUUID()

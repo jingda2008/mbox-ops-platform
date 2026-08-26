@@ -37,7 +37,7 @@ describe('normalized migration baseline', () => {
       '037', '038', '039', '040', '041', '042', '043', '044', '045', '046', '047', '048',
       '049', '050', '051', '052', '053', '054', '055', '056', '057', '058', '059', '060',
       '061', '062', '063', '064', '065', '066', '067', '068', '069', '070', '071', '072',
-      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099', '100', '101', '102', '103', '104', '105', '106', '107', '108', '109', '110', '111', '112', '113', '114', '115', '116', '117', '118', '119', '120', '121', '122', '123', '124', '125', '126', '127', '128', '129', '130', '131', '132', '133', '134', '135', '136', '137', '138', '139', '140', '141', '142',
+      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099', '100', '101', '102', '103', '104', '105', '106', '107', '108', '109', '110', '111', '112', '113', '114', '115', '116', '117', '118', '119', '120', '121', '122', '123', '124', '125', '126', '127', '128', '129', '130', '131', '132', '133', '134', '135', '136', '137', '138', '139', '140', '141', '142', '143',
     ])
     for (const migration of migrations) {
       expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/)
@@ -1037,6 +1037,14 @@ describe('normalized migration baseline', () => {
     expect(migration?.sql).toMatch(/table\.turnover_unsettled/)
     expect(migration?.sql).toMatch(/role_permission_assignments/)
     expect(migration?.sql).toMatch(/schema_version='142'/)
+  })
+
+  it('allows physical turnover without rewriting settled customer history', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '143')
+    expect(migration?.filename).toBe('143_customer_left_turnover_preserve_settled_history.sql')
+    expect(migration?.sql).toMatch(/pg_get_functiondef/)
+    expect(migration?.sql).toMatch(/settled order, payment or refund/)
+    expect(migration?.sql).toMatch(/schema_version='143'/)
   })
 
   it('accepts only an empty database or the same normalized schema flavor', () => {

@@ -65,6 +65,11 @@ import {
   NormalizedStoreUnavailableError,
   TrustedStoreScopeError,
 } from './normalized-request-context.js'
+import {
+  GuestAuthenticationRequiredError,
+  GuestDeviceBindingError,
+  GuestStoreScopeError,
+} from './guest-request-context.js'
 import { StaffSessionNotFoundError } from './staff-session-repository.js'
 import type {
   ScopedPostgresTransactionRunner,
@@ -1413,6 +1418,9 @@ async function handleRoute(
     return await operation()
   } catch (error) {
     const mapped = mapError(error)
+    if (mapped.statusCode >= 500) {
+      reply.request.log.error({ errorCode: safeErrorCode(error) }, 'reservation performance API failed')
+    }
     return reply.code(mapped.statusCode).send(mapped.body)
   }
 }
@@ -1423,8 +1431,13 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
     || error instanceof StaffSessionNotFoundError
   ) return apiError(401, 'AUTH_REQUIRED', '登录信息无效或已过期，请重新登录')
   if (
+    error instanceof GuestAuthenticationRequiredError
+    || error instanceof GuestDeviceBindingError
+  ) return apiError(401, 'AUTH_REQUIRED', '桌边会话已失效，请重新扫描桌面二维码')
+  if (
     error instanceof TrustedStoreScopeError
     || error instanceof NormalizedStoreUnavailableError
+    || error instanceof GuestStoreScopeError
   ) return apiError(403, 'STORE_ACCESS_FORBIDDEN', '当前设备无权访问该门店')
   if (error instanceof StaffAccessDeniedError) return apiError(403, 'STAFF_ACCESS_FORBIDDEN', '当前员工无权执行此操作')
   if (error instanceof StaffNotFoundError) return apiError(403, 'STAFF_ACCESS_FORBIDDEN', '当前员工无权执行此操作')
@@ -1457,6 +1470,13 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   if (error instanceof ApiRequestError || error instanceof TypeError) return apiError(400, 'REQUEST_INVALID', error.message)
   if (error instanceof IdempotencyRecordError) return apiError(503, 'COMMAND_TEMPORARILY_UNAVAILABLE', '操作暂时不可用，请稍后重试')
   return apiError(500, 'INTERNAL_ERROR', '服务暂时不可用，请稍后重试')
+}
+
+function safeErrorCode(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string') {
+    return error.code.slice(0, 64)
+  }
+  return error instanceof Error ? error.name.slice(0, 64) : 'UNKNOWN_ERROR'
 }
 
 function isPostgresConstraintError(error: unknown): boolean {

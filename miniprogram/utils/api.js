@@ -654,7 +654,11 @@ async function submitSongRequest(input) {
   })
 }
 async function getTodayPerformances() {
-  return (await request('/api/guest/performances/today', { requireTableSession: false })).data
+  return getReservationPerformances(shanghaiDate())
+}
+
+function shanghaiDate() {
+  return new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10)
 }
 
 async function logoutWechatIdentity() {

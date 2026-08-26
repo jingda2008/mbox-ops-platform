@@ -6,13 +6,13 @@
   </view>
   <view class="date-picker-card">
     <text>切换月份</text>
-    <picker mode="date" fields="month" value="{{selectedDate}}" start="{{minimumDate}}" bindchange="onDateChange">
+    <picker mode="date" fields="month" value="{{monthValue}}" start="{{minimumMonth}}" bindchange="onDateChange">
       <view><text>{{title}}</text><text>选择 ›</text></view>
     </picker>
   </view>
-  <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="day-scroll">
+  <scroll-view scroll-x enhanced scroll-with-animation show-scrollbar="{{false}}" scroll-into-view="{{calendarScrollTarget}}" class="day-scroll">
     <view class="day-row">
-      <button wx:for="{{days}}" wx:key="value" class="day-chip {{item.isSelected ? 'is-on' : ''}} {{item.isToday ? 'is-today' : ''}}" data-date="{{item.value}}" bindtap="selectDay">{{item.label}}</button>
+      <button wx:for="{{days}}" wx:key="value" id="calendar-day-{{item.value}}" class="day-chip {{item.isSelected ? 'is-on' : ''}} {{item.isToday ? 'is-today' : ''}}" data-date="{{item.value}}" bindtap="selectDay">{{item.label}}</button>
     </view>
   </scroll-view>
   <state-panel wx:if="{{loading}}" type="loading" title="正在读取已发布演出" />

@@ -22,6 +22,10 @@ import {
 } from './staff-access-repository.js'
 import { StaffSessionNotFoundError } from './staff-session-repository.js'
 import {
+  GuestAuthenticationRequiredError,
+  GuestDeviceBindingError,
+} from './guest-request-context.js'
+import {
   ScopedPostgresTransactionRunner,
   type PostgresPool,
   type ScopedTransaction,
@@ -573,6 +577,23 @@ describe('reservationPerformanceApiPlugin staff reservation permissions', () => 
 })
 
 describe('reservationPerformanceApiPlugin performance and song requests', () => {
+  it.each([
+    ['missing guest session', new GuestAuthenticationRequiredError()],
+    ['mismatched guest device', new GuestDeviceBindingError()],
+  ])('returns a stable 401 for %s instead of a 500', async (_caseName, error) => {
+    const value = fixture({
+      resolveGuestContext: vi.fn(async () => { throw error }),
+    })
+
+    const response = await value.app.inject({ method: 'GET', url: '/api/guest/performances/today' })
+
+    expect(response.statusCode).toBe(401)
+    expect(response.json()).toEqual({
+      error: { code: 'AUTH_REQUIRED', message: '桌边会话已失效，请重新扫描桌面二维码' },
+    })
+    expect(value.scheduleRepository.getDailyView).not.toHaveBeenCalled()
+  })
+
   it('returns today performance and binds a guest song request to the trusted table session', async () => {
     const value = fixture()
     const current = await value.app.inject({ method: 'GET', url: '/api/guest/performances/today' })

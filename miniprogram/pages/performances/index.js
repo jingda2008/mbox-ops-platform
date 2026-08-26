@@ -6,6 +6,18 @@ function shanghaiDate(offsetDays) {
   return new Date(Date.now() + (offsetDays || 0) * 86400000 + 8 * 60 * 60 * 1000).toISOString().slice(0, 10)
 }
 function monthText(date) { return `${date.slice(0, 4)}年${Number(date.slice(5, 7))}月` }
+function dayTargetId(date) { return `calendar-day-${date}` }
+function selectedDateForMonth(value, previousDate) {
+  const month = String(value || '').trim().slice(0, 7)
+  if (!/^\d{4}-\d{2}$/.test(month)) return previousDate
+  const previousDay = /^\d{4}-\d{2}-\d{2}$/.test(previousDate)
+    ? Number(previousDate.slice(8, 10))
+    : Number(shanghaiDate(0).slice(8, 10))
+  const year = Number(month.slice(0, 4))
+  const monthNumber = Number(month.slice(5, 7))
+  const lastDay = new Date(year, monthNumber, 0).getDate()
+  return `${month}-${String(Math.min(previousDay, lastDay)).padStart(2, '0')}`
+}
 function monthDays(date) {
   const year = Number(date.slice(0, 4))
   const month = Number(date.slice(5, 7))
@@ -25,25 +37,29 @@ function monthDays(date) {
 
 Page({
   data: {
-    loading: true, error: '', selectedDate: '', minimumDate: '', title: '',
-    schedules: [], phase: '', days: [],
+    loading: true, error: '', selectedDate: '', monthValue: '', minimumMonth: '', title: '',
+    schedules: [], phase: '', days: [], calendarScrollTarget: '',
   },
   onLoad() {
     const date = shanghaiDate(0)
     this.setData({
       selectedDate: date,
-      minimumDate: date,
+      monthValue: date.slice(0, 7),
+      minimumMonth: date.slice(0, 7),
       title: monthText(date),
       days: monthDays(date).map((item) => Object.assign({}, item, { isSelected: item.value === date })),
+      calendarScrollTarget: dayTargetId(date),
     })
     this.load()
   },
   onDateChange(event) {
-    const selectedDate = event.detail.value
+    const selectedDate = selectedDateForMonth(event.detail.value, this.data.selectedDate)
     this.setData({
       selectedDate,
+      monthValue: selectedDate.slice(0, 7),
       title: monthText(selectedDate),
       days: monthDays(selectedDate).map((item) => Object.assign({}, item, { isSelected: item.value === selectedDate })),
+      calendarScrollTarget: dayTargetId(selectedDate),
     })
     this.load()
   },
@@ -54,6 +70,7 @@ Page({
       selectedDate,
       title: monthText(selectedDate),
       days: this.data.days.map((item) => Object.assign({}, item, { isSelected: item.value === selectedDate })),
+      calendarScrollTarget: dayTargetId(selectedDate),
     })
     this.load()
   },

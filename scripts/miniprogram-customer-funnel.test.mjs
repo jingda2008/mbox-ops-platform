@@ -468,12 +468,31 @@ test('customer-facing primary controls keep a comfortable touch target and check
   assert.match(narrowLayout, /\.menu-tools\s*\{[\s\S]*?margin-right:\s*-22rpx;[\s\S]*?margin-left:\s*-22rpx/)
 })
 
+test('monthly performance calendar starts at today and keeps date choices compact', async () => {
+  const [logic, view, style] = await Promise.all([
+    read('miniprogram/pages/performances/index.js'),
+    read('miniprogram/pages/performances/index.wxml'),
+    read('miniprogram/pages/performances/index.wxss'),
+  ])
+
+  assert.match(logic, /function selectedDateForMonth\(value, previousDate\)/)
+  assert.match(logic, /monthValue: date\.slice\(0, 7\)/)
+  assert.match(logic, /calendarScrollTarget: dayTargetId\(date\)/)
+  assert.match(logic, /calendarScrollTarget: dayTargetId\(selectedDate\)/)
+  assert.match(view, /fields="month" value="\{\{monthValue\}\}" start="\{\{minimumMonth\}\}"/)
+  assert.match(view, /scroll-into-view="\{\{calendarScrollTarget\}\}"/)
+  assert.match(view, /id="calendar-day-\{\{item\.value\}\}"/)
+  assert.match(style, /\.day-chip\{width:64rpx;min-height:64rpx/)
+  assert.match(style, /font-size:20rpx/)
+})
+
 test('customer-only reservations stay executable, performances use the public schedule, and store contact is opt-in configured', async () => {
-  const [reservationLogic, reservationView, orderLogic, homeLogic, profileLogic, profileView, contactLogic, contactView, supportService, supportApi] = await Promise.all([
+  const [reservationLogic, reservationView, orderLogic, homeLogic, miniApi, profileLogic, profileView, contactLogic, contactView, supportService, supportApi] = await Promise.all([
     read('miniprogram/pages/reservations/index.js'),
     read('miniprogram/pages/reservations/index.wxml'),
     read('miniprogram/pages/order/index.js'),
     read('miniprogram/pages/home/index.js'),
+    read('miniprogram/utils/api.js'),
     read('miniprogram/pages/profile/index.js'),
     read('miniprogram/pages/profile/index.wxml'),
     read('miniprogram/pages/profile-contact/index.js'),
@@ -490,6 +509,8 @@ test('customer-only reservations stay executable, performances use the public sc
   assert.match(reservationView, /bindchange="onOccasionChange"/)
   assert.match(reservationView, /maxlength="80"/)
   assert.match(homeLogic, /getReservationPerformances\(shanghaiDate\(\)\)/)
+  assert.match(miniApi, /async function getTodayPerformances\(\)\s*\{\s*return getReservationPerformances\(shanghaiDate\(\)\)\s*\}/)
+  assert.doesNotMatch(miniApi, /async function getTodayPerformances\(\)[\s\S]*?request\('\/api\/guest\/performances\/today'/)
   assert.match(homeLogic, /pages\/performances\/index/)
   assert.match(homeLogic, /hasTarget/)
   assert.match(homeLogic, /softNetworkError/)

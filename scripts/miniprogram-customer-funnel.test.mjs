@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readdir, readFile } from 'node:fs/promises'
 import test from 'node:test'
+import vm from 'node:vm'
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), 'utf8')
 
@@ -100,6 +101,20 @@ test('activity cards are horizontal brand-green surfaces and profile actions exp
   assert.match(profileStyle, /\.member-content-card\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*row[^}]*background:\s*linear-gradient\(145deg, #315d46, #214635/)
 })
 
+test('activity-list dates use the shared iOS-safe time parser', async () => {
+  const [communityLogic, formatLogic] = await Promise.all([
+    read('miniprogram/pages/community/index.js'),
+    read('miniprogram/utils/format.js'),
+  ])
+  const formatModule = { exports: {} }
+  vm.runInNewContext(formatLogic, { module: formatModule, exports: formatModule.exports })
+  const { dateInput } = formatModule.exports
+
+  assert.equal(dateInput('2026-08-30 19:30:00+08'), '2026-08-30T19:30:00+08:00')
+  assert.match(communityLogic, /const \{ money, dateInput \} = require\('\.\.\/\.\.\/utils\/format'\)/)
+  assert.match(communityLogic, /new Date\(dateInput\(value\)\)/)
+})
+
 test('activity registration distinguishes confirmed, payment-pending, and waitlist states', async () => {
   const [detailLogic, detailView, communityLogic, communityView, operationsPanel, operationsApi] = await Promise.all([
     read('miniprogram/pages/community-detail/index.js'),
@@ -184,7 +199,8 @@ test('tonight ordering keeps live service separate from recommendation and deleg
 
   assert.match(orderView, /本桌服务\{\{serviceSummary\.live \? ' · 自动更新' : ''\}\}/)
   assert.match(orderView, /呼叫服务员/)
-  assert.match(orderView, /生日\/个性化需求/)
+  assert.match(orderView, /生日\/需求/)
+  assert.match(orderView, /data-code="celebration" aria-label="生日或个性化需求"/)
   assert.match(orderView, /投诉\/不满意/)
   assert.match(orderView, /帮我选/)
   assert.match(orderView, /摇一摇 · 换一组推荐/)
@@ -235,12 +251,12 @@ test('Superhigh activity access invites non-members to join with native WeChat p
   assert.match(communityView, /查看和报名活动需要先加入会员并授权手机号。/)
   assert.match(communityView, /wx:if="\{\{membershipInviteAgreed\}\}"[^>]*open-type="getPhoneNumber"[^>]*bindgetphonenumber="acceptMembershipInvite"/)
   assert.match(detailLogic, /const bootstrap = await getMiniBootstrap\(\)/)
-  assert.match(detailLogic, /membershipInviteVisible: true/)
-  assert.match(detailLogic, /if \(!membership\)\s*\{[\s\S]*?membershipInviteVisible: true/)
+  assert.match(detailLogic, /getActivityPreview\(this\.data\.id\)/)
+  assert.match(detailLogic, /if \(!membership\)\s*\{[\s\S]*?previewOnly: true/)
   assert.match(detailLogic, /if \(!this\.data\.membership\)/)
   assert.match(detailLogic, /enrollMembership\(terms\.version, 'mini_community', authorization\.code\)/)
   assert.match(detailView, /加入会员，解锁超嗨活动/)
-  assert.match(detailView, /查看和报名活动需要先加入会员并授权手机号。/)
+  assert.match(detailView, /报名活动需要先加入会员并授权手机号。/)
   assert.match(detailView, /open-type="getPhoneNumber"/)
   assert.match(termsLogic, /'mini_community'/)
   assert.match(repository, /ACTIVITY_MEMBERSHIP_REQUIRED/)
@@ -482,8 +498,36 @@ test('monthly performance calendar starts at today and keeps date choices compac
   assert.match(view, /fields="month" value="\{\{monthValue\}\}" start="\{\{minimumMonth\}\}"/)
   assert.match(view, /scroll-into-view="\{\{calendarScrollTarget\}\}"/)
   assert.match(view, /id="calendar-day-\{\{item\.value\}\}"/)
-  assert.match(style, /\.day-chip\{width:64rpx;min-height:64rpx/)
+  assert.match(view, /class="day-chip__label"/)
+  assert.match(style, /\.day-chip\{display:inline-flex;width:88rpx;min-height:88rpx/)
+  assert.match(style, /\.day-chip__label\{display:inline-flex;min-width:24rpx;height:24rpx/)
+  assert.match(style, /\.day-chip\.is-on \.day-chip__label\{min-width:36rpx;height:36rpx/)
   assert.match(style, /font-size:20rpx/)
+})
+
+test('customer surfaces keep neutral browsing, meaningful activity labels, and reachable membership controls', async () => {
+  const [communityLogic, communityView, homeConfig, memberCenterLogic, orderLogic, orderStyle, profileLogic, profileStyle] = await Promise.all([
+    read('miniprogram/pages/community/index.js'),
+    read('miniprogram/pages/community/index.wxml'),
+    read('miniprogram/pages/home/index.json'),
+    read('miniprogram/pages/member-center/index.js'),
+    read('miniprogram/pages/order/index.js'),
+    read('miniprogram/pages/order/index.wxss'),
+    read('miniprogram/pages/profile/index.js'),
+    read('miniprogram/pages/profile/index.wxss'),
+  ])
+
+  assert.doesNotMatch(communityView, /<text>\{\{activities\.length\}\}<\/text>/)
+  assert.match(communityView, /wx:if="\{\{item\.sequenceText\}\}" class="activity-sequence"/)
+  assert.match(communityLogic, /Number\.isInteger\(Number\(item\.sortOrder\)\) && Number\(item\.sortOrder\) > 0/)
+  assert.equal(JSON.parse(homeConfig).navigationBarTitleText, 'M-BOX')
+  assert.doesNotMatch(profileLogic, /成长值待核验/)
+  assert.doesNotMatch(memberCenterLogic, /成长值待核验/)
+  assert.match(profileLogic, /成长进度暂不可显示/)
+  assert.match(profileStyle, /\.profile-member-card__top button, \.profile-member-card__foot button \{[^}]*min-height: 88rpx/)
+  assert.match(profileStyle, /\.profile-member-card__foot \{ min-height: 88rpx/)
+  assert.match(orderLogic, /const connectionError = session\.tableToken[\s\S]*?customerErrorMessage\(error, '桌台连接已失效，请重新扫描桌面二维码'\) : ''/)
+  assert.match(orderStyle, /\.quick-service button \{[^}]*min-height: 88rpx[^}]*border-radius: 999rpx[^}]*box-shadow: none/)
 })
 
 test('customer-only reservations stay executable, performances use the public schedule, and store contact is opt-in configured', async () => {

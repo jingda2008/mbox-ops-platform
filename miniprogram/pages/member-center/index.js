@@ -66,7 +66,7 @@ function memberCardProgress(level, progress, previewLevel) {
     cardProgressAvailable: hasProgress,
     cardGrowthText: threshold
       ? `成长值 ${formatMemberNumber(growth)} / ${formatMemberNumber(threshold)}`
-      : hasProgress ? `成长值 ${formatMemberNumber(growth)}` : '成长值待核验',
+      : hasProgress ? `成长值 ${formatMemberNumber(growth)}` : '成长进度暂不可显示',
     cardDifferenceText: nextTier && upgradeRemaining !== null
       ? upgradeRemaining > 0
         ? `距${nextTierName}还差 ${formatMemberNumber(upgradeRemaining)}`

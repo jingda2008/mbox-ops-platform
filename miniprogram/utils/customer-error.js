@@ -3,6 +3,7 @@
 const CODE_MESSAGES = Object.freeze({
   NETWORK_ERROR: '网络暂时不可用，请检查网络后重试',
   GUEST_SESSION_INVALID: '桌台连接已失效，请重新扫描桌面二维码',
+  GUEST_ORDER_ACCESS_FORBIDDEN: '这笔订单不属于当前桌位，请重新扫描当前桌面的二维码',
   TABLE_SESSION_ENDED: '本桌服务已结束，请重新扫描当前桌面的二维码',
   CUSTOMER_AT_OTHER_TABLE: '当前设备已连接到另一桌，请先联系服务人员处理',
   GUEST_AUTH_RATE_LIMITED: '操作有点快，请稍后再试',

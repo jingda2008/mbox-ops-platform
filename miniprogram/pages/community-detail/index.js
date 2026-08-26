@@ -1,5 +1,6 @@
 const {
   getActivity,
+  getActivityPreview,
   getActivityLoyaltyBenefits,
   getActivityRegistrations,
   registerActivity,
@@ -43,6 +44,21 @@ const REFUND_STATUS_NAMES = {
 function list(value) {
   if (!Array.isArray(value)) return []
   return value.map((item) => String(item || '').trim()).filter(Boolean)
+}
+
+function shareActivityId(value) {
+  const publicId = String(value || '').trim()
+  return publicId && publicId.length <= 128 ? publicId : ''
+}
+
+function activityShareQuery(publicId) {
+  const activityId = shareActivityId(publicId)
+  return activityId ? `id=${encodeURIComponent(activityId)}&source=share` : ''
+}
+
+function activitySharePath(publicId) {
+  const query = activityShareQuery(publicId)
+  return query ? `/pages/community-detail/index?${query}` : '/pages/community/index'
 }
 
 function storageObject(key) {
@@ -242,8 +258,27 @@ function partySizeLimit(activity, activityPackage) {
   return valid.length ? Math.max(1, Math.min(...valid)) : 1
 }
 
+function activitySelection(activity, requestedPackagePublicId, requestedPartySize) {
+  const selectedPackagePublicId = selectedPackage(activity, requestedPackagePublicId)
+    ? requestedPackagePublicId : ''
+  const currentPackage = selectedPackage(activity, selectedPackagePublicId)
+  const maximumPartySize = partySizeLimit(activity, currentPackage)
+  const requested = Number(requestedPartySize)
+  const partySize = Math.max(1, Math.min(maximumPartySize, Number.isFinite(requested) ? Math.floor(requested) : 1))
+  return {
+    selectedPackagePublicId,
+    selectedPackage: currentPackage,
+    partySize,
+    partySizeLimit: maximumPartySize,
+    selectedPricing: pricingFor(activity, currentPackage, partySize),
+  }
+}
+
 function viewActivity(raw) {
-  const sales = raw.salesCopy && typeof raw.salesCopy === 'object' ? raw.salesCopy : {}
+  const isSharePreview = raw && raw.registrationRequiresMembership === true
+  const sales = isSharePreview
+    ? (raw.marketingCopy && typeof raw.marketingCopy === 'object' ? raw.marketingCopy : {})
+    : (raw.salesCopy && typeof raw.salesCopy === 'object' ? raw.salesCopy : {})
   const safety = raw.safety && typeof raw.safety === 'object' ? raw.safety : {}
   const refund = raw.refundPolicy && typeof raw.refundPolicy === 'object' ? raw.refundPolicy : {}
   const safetyPolicyVersion = String(safety.policyVersion || '').trim()
@@ -254,7 +289,7 @@ function viewActivity(raw) {
   const requiresOnlinePayment = raw.feeAmountMinor > 0 && !availablePaymentChoices.includes('none')
   const providerBlocked = raw.feeAmountMinor > 0 && raw.paymentAvailability !== 'available'
   const clientPaymentBlocked = requiresOnlinePayment && !availablePaymentMethods.includes('jsapi')
-  const registrationBlocked = providerBlocked || clientPaymentBlocked || !safetyPolicyVersion || !refundPolicyVersion
+  const registrationBlocked = !isSharePreview && (providerBlocked || clientPaymentBlocked || !safetyPolicyVersion || !refundPolicyVersion)
   const safetyFacts = []
   if (safety.difficulty) safetyFacts.push(`难度：${safety.difficulty}`)
   if (safety.ageRequirement) safetyFacts.push(`年龄：${safety.ageRequirement}`)
@@ -271,25 +306,27 @@ function viewActivity(raw) {
     feeText: raw.feeAmountMinor > 0 ? `${money(raw.feeAmountMinor)}${raw.feeBasis === 'per_person' ? '/人' : '/次'}` : '免费',
     depositText: raw.depositAmountMinor > 0 ? money(raw.depositAmountMinor) : '无需订金',
     deadlineText: raw.paymentDeadlineMinutes > 0 ? `${raw.paymentDeadlineMinutes} 分钟` : '无需在线付款',
-    paymentText: paymentText(raw),
+    paymentText: isSharePreview ? '加入会员后查看报名与付款安排' : paymentText(raw),
     refundText: publicText(raw.refundPolicy, '取消与退款以本页报名时展示的规则快照为准'),
     details: String(sales.details || raw.summary || '').trim(),
     includedItems: list(sales.includedItems),
     participationRequirements: list(sales.participationRequirements),
     memberBenefitText: String(sales.memberBenefitText || '').trim(),
     contactInstructions: String(sales.contactInstructions || '').trim(),
-    safetyRequirements: list(safety.requirements),
+    safetyRequirements: isSharePreview ? list(raw.safetyRequirements) : list(safety.requirements),
     safetyPolicyVersion,
     refundPolicyVersion,
     safetyPolicyText: safetyPolicyVersion ? `安全规则版本 ${safetyPolicyVersion}` : '安全规则版本缺失',
     availablePaymentChoices,
     availablePaymentMethods,
     packages,
+    isSharePreview,
+    availabilityText: String(raw.availabilityText || (raw.remainingCapacity > 0 ? '可报名' : '暂不可订')),
     packageSelectionRequired: Boolean(raw.packageSelectionRequired),
     requiresPaymentOnSubmit: raw.feeAmountMinor > 0 && !availablePaymentChoices.includes('none'),
     safetyFacts,
     registrationBlocked,
-    paymentBlockedText,
+    paymentBlockedText: isSharePreview ? '' : paymentBlockedText,
     acknowledgementText: safetyPolicyVersion && refundPolicyVersion
       ? `我已阅读并确认安全规则 ${safetyPolicyVersion} 与退款规则 ${refundPolicyVersion}`
       : '当前安全或退款规则缺少版本，暂不能确认报名',
@@ -362,30 +399,75 @@ function jsapiPayload(value) {
 
 Page({
   data: {
-    id: '', loading: true, busy: false, error: '', success: '', activity: null,
+    id: '', shareSource: '', loading: true, busy: false, error: '', success: '', activity: null,
     partySize: 1, partySizeLimit: 1, contact: '', contactFocused: false, contactAttention: false,
     acknowledgementAttention: false, ruleAcknowledged: false, registration: null, loyaltyBenefits: [],
     selectedPackagePublicId: '', selectedPackage: null, selectedPricing: null,
+    previewOnly: false, memberAccessRequested: false,
     membership: null, membershipTerms: null,
     membershipInviteVisible: false, membershipInviteAgreed: false, membershipInviteBusy: false,
   },
 
-  onLoad(options) { this.setData({ id: options.id || '' }) },
+  onLoad(options) {
+    const source = options && options.source === 'share' ? 'share' : ''
+    this.setData({ id: shareActivityId(options && options.id), shareSource: source, memberAccessRequested: false })
+  },
   onUnload() { if (this.registrationFocusTimer) clearTimeout(this.registrationFocusTimer) },
   onShow() { this.load() },
+
+  activitySharePayload() {
+    const activity = this.data.activity
+    const activityId = shareActivityId(activity && activity.publicId || this.data.id)
+    const title = activity && activity.title ? `邀请你参加 · ${activity.title}` : 'M-BOX 超嗨活动'
+    return {
+      title,
+      path: activitySharePath(activityId),
+      query: activityShareQuery(activityId),
+      ...(activity && activity.coverUrl ? { imageUrl: activity.coverUrl } : {}),
+    }
+  },
+
+  onShareAppMessage() {
+    const payload = this.activitySharePayload()
+    return {
+      title: payload.title,
+      path: payload.path,
+      ...(payload.imageUrl ? { imageUrl: payload.imageUrl } : {}),
+    }
+  },
+
+  onShareTimeline() {
+    const payload = this.activitySharePayload()
+    return {
+      title: payload.title,
+      ...(payload.query ? { query: payload.query } : {}),
+      ...(payload.imageUrl ? { imageUrl: payload.imageUrl } : {}),
+    }
+  },
 
   async load() {
     this.setData({ loading: true, error: '', success: '' })
     try {
+      if (this.data.shareSource === 'share' && !this.data.memberAccessRequested) {
+        await this.loadAnonymousSharePreview(false)
+        return
+      }
       const bootstrap = await getMiniBootstrap()
       const membership = bootstrap.membership || null
       const membershipTerms = bootstrap.membershipTerms || null
       this.setData({ membership, membershipTerms })
       if (!membership) {
+        if (this.data.shareSource === 'share') {
+          await this.loadAnonymousSharePreview(Boolean(membershipTerms))
+          if (!membershipTerms) this.setData({ error: '当前会员协议暂时无法读取，请稍后再试。' })
+          return
+        }
         this.setData({
           loading: false,
           activity: null,
           registration: null,
+          loyaltyBenefits: [],
+          previewOnly: false,
           membershipInviteVisible: true,
           membershipInviteAgreed: false,
           error: '',
@@ -424,18 +506,11 @@ Page({
       const registration = viewRegistration(registrationRaw)
       if (registration) this.rememberRegistration(registration, raw.publicId)
       const activity = viewActivity(raw)
-      const selectedPackagePublicId = selectedPackage(activity, this.data.selectedPackagePublicId)
-        ? this.data.selectedPackagePublicId : ''
-      const currentPackage = selectedPackage(activity, selectedPackagePublicId)
-      const maximumPartySize = partySizeLimit(activity, currentPackage)
-      const partySize = Math.min(this.data.partySize, maximumPartySize)
       this.setData({
         loading: false, activity, loyaltyBenefits, registration, error: paymentReadError || registrationReadError,
-        selectedPackagePublicId,
-        selectedPackage: currentPackage,
-        partySize,
-        partySizeLimit: maximumPartySize,
-        selectedPricing: pricingFor(activity, currentPackage, partySize),
+        previewOnly: false,
+        membershipInviteVisible: false,
+        ...activitySelection(activity, this.data.selectedPackagePublicId, this.data.partySize),
       })
     } catch (error) {
       if (error && error.code === 'ACTIVITY_MEMBERSHIP_REQUIRED') {
@@ -454,9 +529,38 @@ Page({
     }
   },
 
+  async loadAnonymousSharePreview(showMembershipInvite) {
+    const raw = await getActivityPreview(this.data.id)
+    if (!raw) throw new Error('活动已结束、暂停或当前不可分享')
+    const activity = viewActivity(raw)
+    this.setData({
+      loading: false,
+      activity,
+      registration: null,
+      loyaltyBenefits: [],
+      previewOnly: true,
+      membershipInviteVisible: Boolean(showMembershipInvite),
+      membershipInviteAgreed: false,
+      error: '',
+      ...activitySelection(activity, this.data.selectedPackagePublicId, this.data.partySize),
+    })
+  },
+
   dismissMembershipInvite() {
     this.setData({ membershipInviteVisible: false, membershipInviteAgreed: false })
+    if (this.data.previewOnly) return
     wx.navigateBack({ fail: () => wx.switchTab({ url: '/pages/community/index' }) })
+  },
+
+  async openMembershipInvite() {
+    if (this.data.membership) return
+    if (this.data.memberAccessRequested) {
+      if (!this.data.membershipTerms) wx.showToast({ title: '当前会员协议暂时无法读取', icon: 'none' })
+      else this.setData({ membershipInviteVisible: true, membershipInviteAgreed: false, error: '' })
+      return
+    }
+    this.setData({ memberAccessRequested: true, error: '' })
+    await this.load()
   },
 
   onMembershipInviteAgreementChange(event) {

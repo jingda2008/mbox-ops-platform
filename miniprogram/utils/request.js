@@ -1,5 +1,6 @@
 const { getRuntimeConfig } = require('../config/index')
 const { getTableSession } = require('./session')
+const { tableRequestScope } = require('./table-request-scope')
 
 const LEGACY_COOKIE_KEY = 'mbox.http.cookie.v1'
 const RESERVATION_COOKIE_NAME = 'mbox_reservation_session'
@@ -69,23 +70,35 @@ function isCreateRedemptionRequest(path, settings) {
 
 function buildHeaders(path, extraHeaders, settings) {
   const config = getRuntimeConfig()
-  const session = getTableSession()
+  const requestedDomain = settings && settings.credentialDomain
+  const anonymous = requestedDomain === 'none'
+  const session = anonymous ? {} : getTableSession()
   const headers = Object.assign({
     'content-type': 'application/json',
     accept: 'application/json',
     'x-mbox-store-id': config.storeId,
-    'x-mbox-guest-device': deviceKey(),
-    'x-mbox-table-code': session.tableCode || '',
+    ...(anonymous ? {} : {
+      'x-mbox-guest-device': deviceKey(),
+      'x-mbox-table-code': session.tableCode || '',
+    }),
   }, extraHeaders || {})
   removeHeader(headers, 'cookie')
-  const requestedDomain = settings && settings.credentialDomain
-  if (requestedDomain && !['wechat_identity', 'reservation+guest'].includes(requestedDomain)) {
+  if (requestedDomain && !['none', 'wechat_identity', 'reservation+guest'].includes(requestedDomain)) {
     throw new Error('请求凭证域无效')
   }
   if (requestedDomain === 'reservation+guest' && !isCreateRedemptionRequest(path, settings)) {
     throw new Error('双会话凭证仅限创建会员兑换')
   }
-  const domain = requestedDomain === 'reservation+guest' ? 'reservation+guest' : requestCredentialDomain(path)
+  const domain = requestedDomain === 'reservation+guest'
+    ? 'reservation+guest'
+    : requestedDomain === 'none' ? 'none' : requestCredentialDomain(path)
+  if (anonymous) {
+    // A shared acquisition preview is public copy, not a continuation of an
+    // existing member or table context.  Do not let caller headers reattach it.
+    removeHeader(headers, 'authorization')
+    removeHeader(headers, 'x-mbox-guest-device')
+    removeHeader(headers, 'x-mbox-table-code')
+  }
   if (domain !== 'none') removeHeader(headers, 'authorization')
   const cookies = []
   if (domain === 'reservation' || domain === 'reservation+guest') {
@@ -147,10 +160,15 @@ function cookieWasCleared(setCookieValue, parsed) {
   return false
 }
 
-function rememberCookies(headers, responseCookies) {
+function rememberCookies(headers, responseCookies, options) {
+  const allowGuest = !options || options.allowGuest !== false
   allSetCookieValues(headers, responseCookies).forEach((setCookieValue) => {
     const parsed = parseCookiePair(setCookieValue)
     if (!parsed) return
+    // A delayed response from a previous table must not replace (or clear)
+    // the current table's guest session.  Reservation and identity domains
+    // deliberately remain outside this table-scope guard.
+    if (parsed.name === GUEST_COOKIE_NAME && !allowGuest) return
     const storageKey = COOKIE_STORAGE_KEYS[parsed.name]
     if (cookieWasCleared(setCookieValue, parsed)) wx.removeStorageSync(storageKey)
     else wx.setStorageSync(storageKey, parsed.pair)
@@ -161,6 +179,14 @@ function request(path, options) {
   const config = getRuntimeConfig()
   const session = getTableSession()
   const settings = options || {}
+  // Every credentialed request captures the current table identity.  A guest
+  // Set-Cookie can be returned by any authenticated route, not just the scan
+  // endpoint, so protecting only callers that remembered to opt in leaves a
+  // cross-table race on orders, carts and payment recovery.
+  const guardGuestCookiePersistence = settings.credentialDomain !== 'none'
+  const expectedTableScope = guardGuestCookiePersistence
+    ? String(settings.expectedTableScope || tableRequestScope(session))
+    : null
   if (!config.apiBaseUrl || !config.storeId) return Promise.reject(new Error('尚未配置 API 地址或门店编号'))
   if (settings.requireTableSession !== false && !session.tableCode) return Promise.reject(new Error('请先扫描桌码进入当前桌次'))
   return new Promise((resolve, reject) => {
@@ -171,7 +197,13 @@ function request(path, options) {
       header: buildHeaders(path, settings.headers, settings),
       timeout: config.requestTimeoutMs,
       success(response) {
-        rememberCookies(response.header, response.cookies)
+        // An anonymous public preview must not turn a server misconfiguration
+        // into a newly persisted member or guest session on the device.
+        if (settings.credentialDomain !== 'none') {
+          const guestCookieScopeMatches = expectedTableScope === null
+            || tableRequestScope(getTableSession()) === expectedTableScope
+          rememberCookies(response.header, response.cookies, { allowGuest: guestCookieScopeMatches })
+        }
         if (response.statusCode >= 200 && response.statusCode < 300) return resolve(response.data)
         const body = response.data || {}
         const detail = body.error || body

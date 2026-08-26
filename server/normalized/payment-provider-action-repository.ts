@@ -85,6 +85,18 @@ export class ProviderPaymentUnknownError extends Error {
   }
 }
 
+// The public order id alone is never enough to resume a guest payment.  Keep
+// these two failures explicit so the HTTP boundary can fail closed without
+// logging an expected cross-table race as an internal error.
+export class GuestOrderPaymentAccessError extends Error {
+  constructor(readonly reason: 'order_not_in_current_table' | 'guest_not_at_current_table') {
+    super(reason === 'order_not_in_current_table'
+      ? '这笔订单不属于当前桌位，请重新扫描桌面二维码后核对'
+      : '当前客人未关联到这桌，请重新扫描桌面二维码')
+    this.name = 'GuestOrderPaymentAccessError'
+  }
+}
+
 /**
  * A passive status read is deliberately narrower than a provider query. The
  * employee who created a presentation may observe its result, but cannot use
@@ -244,7 +256,9 @@ export class PaymentProviderActionRepository {
     orderPublicId: string,
     principal: Extract<PaymentPrincipal, { type: 'guest' }>,
   ): Promise<{ orderId: string; activePaymentId: string | null }> {
-    if (principal.tableSessionId === null) throw new Error('当前入口没有关联桌次')
+    if (principal.tableSessionId === null) {
+      throw new GuestOrderPaymentAccessError('guest_not_at_current_table')
+    }
     const linked = await this.transaction.query<{ order_id: string; payment_id: string | null }>(`
       SELECT ordering.id AS order_id,
         (
@@ -270,11 +284,11 @@ export class PaymentProviderActionRepository {
       principal.tableSessionId,
     ])
     const row = linked.rows[0]
-    if (row === undefined) throw new Error('当前桌次没有找到这笔订单')
+    if (row === undefined) throw new GuestOrderPaymentAccessError('order_not_in_current_table')
     if (principal.guestSessionId===undefined || !await lockBoundGuestTablePosition(this.transaction,{
       tableSessionId:principal.tableSessionId,customerId:principal.customerId,
       actorRef:`guest-session:${principal.guestSessionId}`,
-    })) throw new Error('当前客人未关联到这桌')
+    })) throw new GuestOrderPaymentAccessError('guest_not_at_current_table')
     return { orderId: row.order_id, activePaymentId: row.payment_id }
   }
 
@@ -541,12 +555,12 @@ export class PaymentProviderActionRepository {
       return
     }
     if (row.table_session_id === null || principal.tableSessionId !== row.table_session_id) {
-      throw new Error('订单不属于当前桌次')
+      throw new GuestOrderPaymentAccessError('order_not_in_current_table')
     }
     if (principal.guestSessionId===undefined || !await lockBoundGuestTablePosition(this.transaction,{
       tableSessionId:row.table_session_id,customerId:principal.customerId,
       actorRef:`guest-session:${principal.guestSessionId}`,
-    })) throw new Error('当前客人未关联到这桌')
+    })) throw new GuestOrderPaymentAccessError('guest_not_at_current_table')
   }
 
   private encrypt(paymentId: string, presentation: ProviderPresentation, payload: ProviderActionPayload) {

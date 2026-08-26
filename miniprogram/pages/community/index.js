@@ -1,5 +1,5 @@
 const { getActivities, getActivityRegistrations, getMiniBootstrap, enrollMembership } = require('../../utils/api')
-const { money } = require('../../utils/format')
+const { money, dateInput } = require('../../utils/format')
 const { publicImageUrl } = require('../../utils/media')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 const { customerErrorMessage } = require('../../utils/customer-error')
@@ -19,7 +19,9 @@ const PAYMENT_RESOLUTION_NAMES = {
 }
 
 function dateText(value) {
-  return new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', weekday: 'short', hour: '2-digit', minute: '2-digit' })
+  const date = new Date(dateInput(value))
+  if (Number.isNaN(date.getTime())) return '时间待定'
+  return date.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', weekday: 'short', hour: '2-digit', minute: '2-digit' })
 }
 
 Page({
@@ -48,7 +50,8 @@ Page({
           dateText: dateText(item.startsAt),
           feeText: item.feeAmountMinor > 0 ? `${money(item.feeAmountMinor)}${item.feeBasis === 'per_person' ? '/人' : '/次'}` : '免费',
           availabilityText: item.remainingCapacity > 0 ? `余 ${item.remainingCapacity} 位` : '已满',
-          sequenceText: `SUPERHIGH · ${String(item.sortOrder || 0).toString().padStart(2, '0')}`,
+          sequenceText: Number.isInteger(Number(item.sortOrder)) && Number(item.sortOrder) > 0
+            ? `SUPERHIGH · ${String(Number(item.sortOrder)).padStart(2, '0')}` : '',
           registrationText: registration
             ? (REGISTRATION_STATUS_NAMES[registration.status] || '状态待确认')
             : item.registrationStatus ? (REGISTRATION_STATUS_NAMES[item.registrationStatus] || '状态待确认') : '',

@@ -25,6 +25,9 @@ async function loadRequestModule() {
         }) }
       }
       if (specifier === './session') return { getTableSession: () => ({ tableCode: 'L01' }) }
+      if (specifier === './table-request-scope') {
+        return { tableRequestScope: (session) => `${String(session?.tableToken || '')}:${String(session?.tableCode || '').trim().toUpperCase()}` }
+      }
       throw new Error(`unexpected require: ${specifier}`)
     },
     wx: {
@@ -65,6 +68,9 @@ async function loadApiModule() {
           getTableSession: () => ({}), rememberTableConnection: () => undefined,
           clearTableConnection: () => undefined,
         }
+      }
+      if (specifier === './table-request-scope') {
+        return { tableRequestScope: (session) => `${String(session?.tableToken || '')}:${String(session?.tableCode || '').trim().toUpperCase()}` }
       }
       if (specifier === './auth') return { ensureCustomerSession: async () => true }
       if (specifier === './recommendation-attribution') {
@@ -240,6 +246,45 @@ test('only redemption creation can explicitly combine reservation and guest sess
     /双会话凭证仅限创建会员兑换/,
   )
   assert.equal(fixture.calls.length, 3)
+})
+
+test('an anonymous shared activity preview does not initialize a member session before its public read', async () => {
+  const fixture = await loadApiModule()
+  await fixture.api.getActivityPreview('ACT-SHARE-001')
+  assert.equal(fixture.calls.length, 1)
+  assert.equal(fixture.calls[0].path, '/api/public/mini/activity-previews/ACT-SHARE-001')
+  assert.equal(fixture.calls[0].options.requireTableSession, false)
+  assert.equal(fixture.calls[0].options.credentialDomain, 'none')
+})
+
+test('an anonymous share preview sends and stores no member, guest, device, or table credential', async () => {
+  const fixture = await loadRequestModule()
+  fixture.storage.set(RESERVATION_KEY, 'mbox_reservation_session=reservation-a')
+  fixture.storage.set(GUEST_KEY, '__Host-mbox_guest_session=guest-a')
+  fixture.storage.set(IDENTITY_KEY, 'identity-token-abcdefghijklmnopqrstuvwxyz')
+  fixture.responses.push(responseWith('mbox_reservation_session=should-not-persist; Path=/api/public'))
+
+  await fixture.requestModule.request('/api/public/mini/activity-previews/ACT-SHARE-001', {
+    requireTableSession: false,
+    credentialDomain: 'none',
+    headers: {
+      Cookie: 'mbox_reservation_session=forged',
+      Authorization: 'Bearer should-not-leak',
+      'x-mbox-table-code': 'FORGED-TABLE',
+      'x-mbox-guest-device': 'forged-device',
+    },
+  })
+
+  const headers = fixture.calls[0].header
+  assert.equal(headers.cookie, undefined)
+  assert.equal(headers.Cookie, undefined)
+  assert.equal(headers.authorization, undefined)
+  assert.equal(headers.Authorization, undefined)
+  assert.equal(headers['x-mbox-table-code'], undefined)
+  assert.equal(headers['x-mbox-guest-device'], undefined)
+  assert.equal(headers['x-mbox-store-id'], 'mbox-lujiazui')
+  assert.equal([...fixture.storage.values()].some((value) => String(value).includes('should-not-persist')), false)
+  assert.equal(fixture.storage.get(RESERVATION_KEY), 'mbox_reservation_session=reservation-a')
 })
 
 test('the mini-program API opts into the combined credential only for redemption creation', async () => {

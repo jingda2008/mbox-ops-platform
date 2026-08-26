@@ -1,17 +1,35 @@
 const { request, deviceKey } = require('./request')
 const { randomId } = require('./id')
 const { getTableSession, rememberTableConnection, clearTableConnection } = require('./session')
+const { tableRequestScope } = require('./table-request-scope')
 const { ensureCustomerSession, renewReservationSessionOnly, isCustomerSessionInvalid, isWechatIdentityUnavailable } = require('./auth')
 const { checkoutRecommendationAttribution } = require('./recommendation-attribution')
 
 async function loadGuestSession() {
   const session = getTableSession()
-  if (session.tableToken && wx.getStorageSync('mbox.connected.table.token') !== session.tableToken) {
+  const expectedTableScope = tableRequestScope(session)
+  const isCurrentScope = () => tableRequestScope(getTableSession()) === expectedTableScope
+  const scopeChanged = () => {
+    const error = new Error('桌台已经切换，已忽略上一桌的连接结果')
+    error.code = 'TABLE_SESSION_SCOPE_CHANGED'
+    error.statusCode = 409
+    return error
+  }
+  const requestOptions = { expectedTableScope, guardCookiePersistence: true }
+  const rememberedConnection = wx.getStorageSync('mbox.table.connection.state') || {}
+  const needsScan = Boolean(session.tableToken) && (
+    wx.getStorageSync('mbox.connected.table.token') !== session.tableToken
+    || String(rememberedConnection.scanNonce || '') !== String(session.scanNonce || '')
+    || !session.cartScope
+  )
+  if (needsScan) {
     const connected = await request('/api/guest/session/scan', {
       method: 'POST',
       requireTableSession: false,
       data: { tableQrToken: session.tableToken, deviceKey: deviceKey() },
+      ...requestOptions,
     })
+    if (!isCurrentScope()) throw scopeChanged()
     const data = connected.data
     rememberTableConnection(data)
     if (data && (data.status === 'active' || data.status === 'already_active')) {
@@ -22,10 +40,12 @@ async function loadGuestSession() {
     return data
   }
   try {
-    const response = await request('/api/guest/session', { requireTableSession: false })
+    const response = await request('/api/guest/session', { requireTableSession: false, ...requestOptions })
+    if (!isCurrentScope()) throw scopeChanged()
     rememberTableConnection(response.data)
     return response.data
   } catch (error) {
+    if (!isCurrentScope()) throw scopeChanged()
     if (error && (error.statusCode === 401 || error.code === 'GUEST_SESSION_INVALID' || error.code === 'TABLE_SESSION_ENDED')) {
       clearTableConnection()
     }
@@ -212,6 +232,16 @@ async function cancelRedemption(redemptionPublicId, reason) {
 async function getActivities() { return (await publicRequest('/api/public/mini/activities')).data }
 async function getActivity(activityPublicId) {
   return (await publicRequest(`/api/public/mini/activities/${encodeURIComponent(activityPublicId)}`)).data
+}
+// A share recipient may not be a member yet.  This route is intentionally a
+// narrower public preview, not the member detail or a registration lookup.
+// Do not call publicRequest: a shared preview must not first create or refresh
+// a customer/WeChat session just to read public activity copy.
+async function getActivityPreview(activityPublicId) {
+  return (await request(`/api/public/mini/activity-previews/${encodeURIComponent(activityPublicId)}`, {
+    requireTableSession: false,
+    credentialDomain: 'none',
+  })).data
 }
 async function getActivityLoyaltyBenefits(activityPublicId) {
   return (await publicRequest(`/api/public/community-activities/${encodeURIComponent(activityPublicId)}/loyalty-benefits`)).data
@@ -692,7 +722,7 @@ module.exports = {
   getProductRestrictions, withdrawProductRestriction,
   getCustomerPreferenceFacts, declareCustomerPreference, withdrawCustomerPreferenceSource,
   getRedemptionCatalog, getRedemptions, createRedemption, cancelRedemption,
-  getActivities, getActivity, getActivityLoyaltyBenefits, getActivityRegistrations,
+  getActivities, getActivity, getActivityPreview, getActivityLoyaltyBenefits, getActivityRegistrations,
   updateActivityRegistrationContact, getVerifiedPhones, replaceVerifiedPhone, revokeVerifiedPhone,
   enrollMembership,
   startMembershipRecovery, verifyMembershipRecovery, updatePreferences,

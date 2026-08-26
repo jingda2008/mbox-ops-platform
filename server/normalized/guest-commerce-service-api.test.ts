@@ -490,6 +490,143 @@ describe('guest commerce/service API trust boundaries', () => {
     expect(paymentContextSql).not.toContain('FOR SHARE')
   })
 
+  it('fails closed if a guest loses the table position after order resolution but before active-payment replay', async () => {
+    let positionChecks = 0
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('SELECT ordering.id AS order_id')) {
+        return { rows: [{ order_id: orderId, payment_id: paymentId }], rowCount: 1 }
+      }
+      if (sql.includes('lock_active_table_guest_session_position')) {
+        positionChecks += 1
+        return { rows: [{ participation_id: positionChecks === 1 ? 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' : null }], rowCount: 1 }
+      }
+      if (sql.includes('SELECT payment.id, payment.payable_kind, payment.order_id')) {
+        return { rows: [{
+          id: paymentId, payable_kind: 'order', order_id: orderId,
+          activity_registration_id: null, activity_registration_public_id: null,
+          order_public_id: 'staff-order-public-0001', public_id: 'staff-payment-public-0001',
+          provider: 'postar', method: 'native_qr', amount_minor: '13600', currency: 'CNY', status: 'pending',
+          table_session_id: tableSessionId, table_code: 'VIP1', created_at: '2026-08-14T12:00:00.000Z',
+        }], rowCount: 1 }
+      }
+      throw new Error(`Unexpected query: ${sql}`)
+    })
+    const create = vi.fn(async () => paymentAction('qr'))
+    const value = fixture({
+      transactions: { run: vi.fn(async (_scope, operation) => operation({ scope: context.scope, query } as unknown as ScopedTransaction)) },
+      onlinePayments: {
+        assertAvailable: vi.fn(), resolveGuestMethod: vi.fn(async () => 'native_qr' as const),
+        resolveActivePayment: vi.fn(async () => null), create,
+      },
+    })
+
+    const response = await value.app.inject({
+      method: 'POST', url: '/api/guest/orders/staff-order-public-0001/payment',
+      headers: { 'idempotency-key': 'guest-revoked-before-active-replay-0001' }, payload: {},
+    })
+
+    expect(response.statusCode).toBe(401)
+    expect(response.json()).toMatchObject({ error: { code: 'GUEST_SESSION_INVALID' } })
+    expect(value.payments.initiate).not.toHaveBeenCalled()
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('returns the stable cross-table conflict before any provider action when active payment context changes', async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('SELECT ordering.id AS order_id')) {
+        return { rows: [{ order_id: orderId, payment_id: paymentId }], rowCount: 1 }
+      }
+      if (sql.includes('lock_active_table_guest_session_position')) {
+        return { rows: [{ participation_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }], rowCount: 1 }
+      }
+      if (sql.includes('SELECT payment.id, payment.payable_kind, payment.order_id')) {
+        return { rows: [{
+          id: paymentId, payable_kind: 'order', order_id: orderId,
+          activity_registration_id: null, activity_registration_public_id: null,
+          order_public_id: 'staff-order-public-0001', public_id: 'staff-payment-public-0001',
+          provider: 'postar', method: 'native_qr', amount_minor: '13600', currency: 'CNY', status: 'pending',
+          table_session_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', table_code: 'VIP2', created_at: '2026-08-14T12:00:00.000Z',
+        }], rowCount: 1 }
+      }
+      throw new Error(`Unexpected query: ${sql}`)
+    })
+    const create = vi.fn(async () => paymentAction('qr'))
+    const value = fixture({
+      transactions: { run: vi.fn(async (_scope, operation) => operation({ scope: context.scope, query } as unknown as ScopedTransaction)) },
+      onlinePayments: {
+        assertAvailable: vi.fn(), resolveGuestMethod: vi.fn(async () => 'native_qr' as const),
+        resolveActivePayment: vi.fn(async () => null), create,
+      },
+    })
+
+    const response = await value.app.inject({
+      method: 'POST', url: '/api/guest/orders/staff-order-public-0001/payment',
+      headers: { 'idempotency-key': 'guest-changed-before-provider-action-0001' }, payload: {},
+    })
+
+    expect(response.statusCode).toBe(409)
+    expect(response.json()).toMatchObject({ error: { code: 'GUEST_ORDER_ACCESS_FORBIDDEN' } })
+    expect(value.payments.initiate).not.toHaveBeenCalled()
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when a guest tries to resume an order from another table', async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('SELECT ordering.id AS order_id')) return { rows: [], rowCount: 0 }
+      throw new Error(`Unexpected query: ${sql}`)
+    })
+    const create = vi.fn(async () => paymentAction('jsapi'))
+    const value = fixture({
+      transactions: { run: vi.fn(async (_scope, operation) => operation({
+        scope: context.scope, query,
+      } as unknown as ScopedTransaction)) },
+      onlinePayments: {
+        assertAvailable: vi.fn(), resolveGuestMethod: vi.fn(async () => 'jsapi' as const),
+        resolveActivePayment: vi.fn(async () => null), create,
+      },
+    })
+
+    const response = await value.app.inject({
+      method: 'POST', url: '/api/guest/orders/other-table-order-public-0001/payment',
+      headers: { 'idempotency-key': 'guest-other-table-payment-0001' }, payload: {},
+    })
+
+    expect(response.statusCode).toBe(409)
+    expect(response.json()).toMatchObject({ error: { code: 'GUEST_ORDER_ACCESS_FORBIDDEN' } })
+    expect(value.options.payments.initiate).not.toHaveBeenCalled()
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('returns an authentication response when the guest is no longer at the current table', async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('SELECT ordering.id AS order_id')) {
+        return { rows: [{ order_id: orderId, payment_id: null }], rowCount: 1 }
+      }
+      if (sql.includes('lock_active_table_guest_session_position')) return { rows: [{ participation_id: null }], rowCount: 1 }
+      throw new Error(`Unexpected query: ${sql}`)
+    })
+    const create = vi.fn(async () => paymentAction('jsapi'))
+    const value = fixture({
+      transactions: { run: vi.fn(async (_scope, operation) => operation({
+        scope: context.scope, query,
+      } as unknown as ScopedTransaction)) },
+      onlinePayments: {
+        assertAvailable: vi.fn(), resolveGuestMethod: vi.fn(async () => 'jsapi' as const),
+        resolveActivePayment: vi.fn(async () => null), create,
+      },
+    })
+
+    const response = await value.app.inject({
+      method: 'POST', url: '/api/guest/orders/current-table-order-public-0001/payment',
+      headers: { 'idempotency-key': 'guest-revoked-table-payment-0001' }, payload: {},
+    })
+
+    expect(response.statusCode).toBe(401)
+    expect(response.json()).toMatchObject({ error: { code: 'GUEST_SESSION_INVALID' } })
+    expect(value.options.payments.initiate).not.toHaveBeenCalled()
+    expect(create).not.toHaveBeenCalled()
+  })
+
   it('labels simulation as pending test confirmation instead of pretending it is paid', async () => {
     const value = fixture({ paymentMode: 'simulation' })
     const response = await value.app.inject({

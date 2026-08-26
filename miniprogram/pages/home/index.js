@@ -7,6 +7,8 @@ const {
   enrollMembership,
 } = require('../../utils/api')
 const { getRuntimeConfig } = require('../../config/index')
+const { getTableSession } = require('../../utils/session')
+const { createTableRequestGuard, tableRequestScope } = require('../../utils/table-request-scope')
 const { dateTime } = require('../../utils/format')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 const { publicImageUrl } = require('../../utils/media')
@@ -178,11 +180,12 @@ Page({
       // 仅有桌码、没有桌台令牌时不强制拉取会话，避免开发态出现 request:fail 红条。
       hasTableSession: Boolean(session.tableToken),
     })
+    this.ensureTableRequestGuard()
   },
 
   onShow() { this.loadData() },
-  onHide() { this.stopWaitingPoll() },
-  onUnload() { this.stopWaitingPoll() },
+  onHide() { this.stopWaitingPoll(); this.invalidateTableRequests() },
+  onUnload() { this.stopWaitingPoll(); this.invalidateTableRequests() },
 
   onPullDownRefresh() {
     this.loadData().finally(() => wx.stopPullDownRefresh())
@@ -193,20 +196,61 @@ Page({
     this.waitingTimer = null
   },
 
-  scheduleWaitingPoll() {
+  scheduleWaitingPoll(request) {
     this.stopWaitingPoll()
-    this.waitingTimer = setTimeout(() => this.loadTableState(true), 6000)
+    this.waitingTimer = setTimeout(() => {
+      if (!this.isCurrentTableRequest(request)) return
+      this.loadTableState(true, request)
+    }, 6000)
+  },
+
+  ensureTableRequestGuard() {
+    if (!this.tableRequestGuard) {
+      this.tableRequestGuard = createTableRequestGuard(() => tableRequestScope(getTableSession()))
+    }
+    return this.tableRequestGuard
+  },
+  beginTableRequest(session) {
+    return this.ensureTableRequestGuard().begin(tableRequestScope(session || getTableSession()))
+  },
+  rebaseTableRequest(request) {
+    const rebased = this.ensureTableRequestGuard().rebase(request, tableRequestScope(getTableSession()))
+    if (rebased) this.visibleTableScope = request.scope
+    return rebased
+  },
+  isCurrentTableRequest(request) { return this.ensureTableRequestGuard().isCurrent(request) },
+  invalidateTableRequests() { this.ensureTableRequestGuard().invalidate() },
+
+  resetTableScope(session) {
+    this.stopWaitingPoll()
+    this.setData({
+      tableCode: session.tableCode || '',
+      hasTableSession: Boolean(session.tableToken),
+      table: null,
+      warning: '',
+      visitState: 'prearrival',
+      canEnter: false,
+      connectionMessage: '',
+      serviceOwner: '服务人员处理中',
+      guestCountText: '人数待确认',
+    })
   },
 
   async loadData() {
     this.stopWaitingPoll()
-    this.setData({ loading: true, error: '' })
+    const session = getTableSession()
+    const request = this.beginTableRequest(session)
+    const scopeChanged = this.visibleTableScope !== request.scope
+    this.visibleTableScope = request.scope
+    if (scopeChanged) this.resetTableScope(session)
+    this.setData({ loading: true, error: '', tableCode: session.tableCode || '', hasTableSession: Boolean(session.tableToken) })
     const [bootstrap, reservations, performances, benefits] = await Promise.all([
       settled(() => getMiniBootstrap(), { membership: null, activities: [] }),
       settled(() => getReservations(), { reservations: [] }),
       settled(() => getReservationPerformances(shanghaiDate()), null),
       settled(() => getCustomerBenefits(), []),
     ])
+    if (!this.isCurrentTableRequest(request)) return
     const app = getApp()
     const homepageCards = homepageContentCards(bootstrap.content)
     this.setData({
@@ -223,17 +267,24 @@ Page({
       upcomingReservation: reservationView(reservations.reservations),
       performance: performanceView(performances),
     })
-    if (!this.data.hasTableSession) {
+    if (!session.tableToken) {
       this.setData({ loading: false, visitState: 'prearrival', canEnter: false, table: null })
       return
     }
-    await this.loadTableState(false)
+    await this.loadTableState(false, request)
   },
 
-  async loadTableState(silent) {
+  async loadTableState(silent, request) {
+    const tableRequest = request || this.beginTableRequest()
+    if (!this.isCurrentTableRequest(tableRequest)) return
     if (!silent) this.setData({ loading: true })
     try {
       const result = await getGuestSession()
+      // The scan starts with a fixed-QR scope. A verified response upgrades it
+      // to cartScope; keep this same request current while rejecting any older
+      // scan generation that arrived in the meantime.
+      if (!this.rebaseTableRequest(tableRequest)) return
+      if (!this.isCurrentTableRequest(tableRequest)) return
       const session = result.data || {}
       const active = session.status === 'active' || session.status === 'already_active'
       const waiting = session.status === 'waiting_for_table'
@@ -248,8 +299,9 @@ Page({
         guestCountText: Number(session.guestCount) > 0 ? `${Number(session.guestCount)}位` : '人数待确认',
         error: '',
       })
-      if (waiting) this.scheduleWaitingPoll()
+      if (waiting) this.scheduleWaitingPoll(tableRequest)
     } catch (error) {
+      if (!this.isCurrentTableRequest(tableRequest)) return
       this.setData({
         loading: false,
         visitState: 'prearrival',

@@ -18,6 +18,7 @@ import type { PostgresPool as WechatPostgresPool } from '../postgres-repository.
 import { AiCapabilityCenter, createCoreAiCapabilities } from './ai-capability-center.js'
 import { aiExecutionApiPlugin } from './ai-execution-api.js'
 import { ActivityPaymentService } from './activity-payment-service.js'
+import { activitySharePreviewApiPlugin } from './activity-share-preview-api.js'
 import { activityOperationsApiPlugin } from './activity-operations-api.js'
 import { ActivityOperationsService } from './activity-operations-service.js'
 import { BenefitCommandService } from './benefit-repository.js'
@@ -904,6 +905,12 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       await reservationApp.register(promotionalLoyaltyPublicApiPlugin, {
         query: new PromotionalLoyaltyPublicQuery(transactions),
         resolveScope: () => scope,
+      })
+      await reservationApp.register(activitySharePreviewApiPlugin, {
+        service: customerExperience,
+        // A share preview is public marketing content. It must not depend on
+        // or create a reservation/WeChat guest session.
+        resolveShareScope: () => scope,
       })
       await reservationApp.register(reservationPerformanceRevisionApiPlugin, {
         transactions,

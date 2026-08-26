@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import Fastify from 'fastify'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
@@ -18,6 +19,7 @@ import {
   validateActivityPaymentConfiguration,
 } from './customer-experience-service.js'
 import { protectActivityRegistrationContact } from './customer-experience-api.js'
+import { activitySharePreviewApiPlugin } from './activity-share-preview-api.js'
 import { PaymentRepository } from './payment-repository.js'
 import { RefundRepository } from './refund-repository.js'
 import { ActivityRecollectionAuthorizationRepository } from './activity-recollection-authorization-repository.js'
@@ -254,6 +256,36 @@ describe('activity payment configuration', () => {
     expect(transaction.lastActivityRegistrationValues).toBeUndefined()
   })
 
+  it('returns a deliberately narrow public share preview without weakening member detail', async () => {
+    const transaction = activityTransaction('deposit_required', 'per_person', 10_000, 2_000)
+    const preview = await new CustomerExperienceRepository(transaction).publicActivitySharePreview(
+      'community-activity-test-0001',
+    )
+
+    expect(preview).toMatchObject({
+      publicId: 'community-activity-test-0001',
+      availability: 'available',
+      registrationRequiresMembership: true,
+      marketingCopy: {
+        details: '这是完整活动详情说明',
+        includedItems: [], participationRequirements: [], memberBenefitText: null,
+      },
+      packages: [{ publicId: 'activity-package-preview-0001', availability: 'available' }],
+    })
+    const serialized = JSON.stringify(preview)
+    for (const forbidden of [
+      'remainingCapacity', 'registeredCount', 'memberPurchaseLimit',
+      'registrationStatus', 'paymentAvailability', 'availablePaymentMethods',
+      'contactInstructions', 'refundPolicy', 'acknowledgementText',
+    ]) expect(serialized).not.toContain(forbidden)
+
+    await expect(new CustomerExperienceRepository(
+      activityTransaction('none', 'per_registration', 0, 0, false, false, 'member'),
+    ).publicActivitySharePreview('community-activity-test-0001')).rejects.toMatchObject({
+      code: 'ACTIVITY_NOT_FOUND', statusCode: 404,
+    })
+  })
+
   it('allows a paid-mode waitlist without creating payment while preserving the requested payment intent', async () => {
     const transaction = activityTransaction('deposit_required', 'per_person', 10_000, 2_000, true)
     await expect(new CustomerExperienceRepository(transaction).registerActivity({
@@ -344,6 +376,7 @@ function activityTransaction(
   depositAmountMinor = 2_000,
   full = false,
   withMembership = true,
+  visibility: 'public' | 'member' | 'segment' = 'public',
 ): ScopedTransaction & { lastActivityRegistrationValues?: readonly unknown[] } {
   const transaction: ScopedTransaction & { lastActivityRegistrationValues?: readonly unknown[] } = {
     scope,
@@ -358,7 +391,7 @@ function activityTransaction(
           fee_basis: basis, registration_payment_mode: mode, payment_deadline_minutes: 15,
           payment_rule_text: '报名后15分钟内支付订金', refund_policy_snapshot: { summary: '按活动规则退款' },
           refund_policy_version: 'refund-v1', refund_policy_summary: '按活动规则退款',
-          currency: 'CNY', points_reward: 0, status: full ? 'full' : 'published', visibility: 'public',
+          currency: 'CNY', points_reward: 0, status: full ? 'full' : 'published', visibility,
           audience_member_levels: [], audience_lifecycle_stages: [],
           safety_snapshot: {
             policyVersion: 'safety-2026-08',
@@ -368,6 +401,17 @@ function activityTransaction(
           safety_acknowledgement_text: '我已阅读并同意安全要求', safety_requirements: ['年满18岁'],
           sales_copy: {}, activity_details: '这是完整活动详情说明', included_items: [],
           participation_requirements: [], contact_instructions: '报名后联系负责人', member_benefit_text: null,
+          package_selection_required: false,
+          activity_payment_authorized: false,
+          activity_packages: [{
+            publicId: 'activity-package-preview-0001', name: '双人酒水组合', description: '活动专属组合',
+            imageUrl: null, includedItems: ['招牌鸡尾酒'], capacity: 8, registeredCount: 0,
+            memberPurchaseLimit: 1, feeAmountMinor: 5_000, depositAmountMinor: 1_000,
+            feeBasis: 'per_registration', paymentMode: 'deposit_required',
+            paymentDeadlineMinutes: 15, paymentRuleText: '报名后15分钟内支付订金',
+            redemptionPolicyVersion: 'redeem-v1', refundPolicyVersion: 'refund-v1', status: 'published',
+            availableFrom: null, availableUntil: null, inventoryAvailable: true, currency: 'CNY',
+          }],
           registration_status: null, registered_count: full ? '20' : '0',
         }])
       }
@@ -430,6 +474,8 @@ integration('activity registration state and contact privacy with PostgreSQL', (
   const capacityWaitlistCustomerId = randomUUID()
   const freeActivityId = randomUUID()
   const paidActivityId = randomUUID()
+  const memberOnlyShareActivityId = randomUUID()
+  const segmentShareActivityId = randomUUID()
   const packageRequiredActivityId = randomUUID()
   const packageLimitActivityId = randomUUID()
   const packageIsolationActivityId = randomUUID()
@@ -441,6 +487,35 @@ integration('activity registration state and contact privacy with PostgreSQL', (
     contactType: 'phone', contactHash: 'c'.repeat(64),
     encryptedContact: 'AQcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=',
     encryptionKeyId: 'activity-test-v1', maskedContact: '138****8000', source: 'mini_program',
+  }
+
+  async function sharePreviewWriteCounts() {
+    const result = await pool.query<{
+      customers: string
+      reservation_sessions: string
+      registrations: string
+      contact_versions: string
+      payments: string
+      outbox_messages: string
+      inventory_reservations: string
+    }>(`
+      SELECT
+        (SELECT count(*)::text FROM mbox.customers
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid) AS customers,
+        (SELECT count(*)::text FROM mbox.reservation_guest_sessions
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid) AS reservation_sessions,
+        (SELECT count(*)::text FROM mbox.community_activity_registrations
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid) AS registrations,
+        (SELECT count(*)::text FROM mbox.community_activity_registration_contact_versions
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid) AS contact_versions,
+        (SELECT count(*)::text FROM mbox.payments
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid) AS payments,
+        (SELECT count(*)::text FROM mbox.outbox_messages
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid) AS outbox_messages,
+        (SELECT count(*)::text FROM mbox.community_activity_package_inventory_reservations
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid) AS inventory_reservations
+    `, [tenantId, storeId])
+    return result.rows[0]!
   }
 
   beforeAll(async () => {
@@ -548,11 +623,111 @@ integration('activity registration state and contact privacy with PostgreSQL', (
       )
     `, [...common, freeActivityId, 'community-free-db-test', paidActivityId, 'community-paid-db-test'])
 
+    // Publish restricted activities in their final state.  Published activity
+    // promises are intentionally immutable, so this proves non-enumerability
+    // without weakening that production guard in the test fixture.
+    await pool.query(`
+      INSERT INTO mbox.community_activities (
+        id, tenant_id, store_id, public_id, activity_kind, title, summary,
+        starts_at, ends_at, assembly_location, capacity, fee_amount_minor,
+        deposit_amount_minor, registration_payment_mode, refund_policy_snapshot,
+        safety_snapshot, sales_copy, safety_policy_version,
+        safety_acknowledgement_text, safety_requirements,
+        refund_policy_version, refund_policy_summary, activity_details,
+        included_items, participation_requirements, contact_instructions,
+        visibility, audience_member_levels, status, published_at, created_by_employee_id
+      ) VALUES (
+        $7::uuid, $1::uuid, $2::uuid, $8, 'member_night', '仅会员预览阻断测试', '仅会员活动不应被分享预览枚举',
+        clock_timestamp() + interval '3 days', clock_timestamp() + interval '3 days 2 hours',
+        'M-BOX', 8, 0, 0, 'none', $5::jsonb, $4::jsonb, $6::jsonb,
+        'safety-v1', '我已阅读并同意安全要求', ARRAY['遵守现场安全要求']::text[],
+        'refund-v1', '免费活动无退款', '这是用于测试匿名预览可见范围的完整活动详情。',
+        '{}'::text[], '{}'::text[], '报名后将由活动负责人联系',
+        'member', '{}'::text[], 'published', clock_timestamp(), $3::uuid
+      ), (
+        $9::uuid, $1::uuid, $2::uuid, $10, 'member_night', '定向预览阻断测试', '定向活动不应被分享预览枚举',
+        clock_timestamp() + interval '4 days', clock_timestamp() + interval '4 days 2 hours',
+        'M-BOX', 8, 0, 0, 'none', $5::jsonb, $4::jsonb, $6::jsonb,
+        'safety-v1', '我已阅读并同意安全要求', ARRAY['遵守现场安全要求']::text[],
+        'refund-v1', '免费活动无退款', '这是用于测试匿名预览可见范围的完整活动详情。',
+        '{}'::text[], '{}'::text[], '报名后将由活动负责人联系',
+        'segment', ARRAY['member']::text[], 'published', clock_timestamp(), $3::uuid
+      )
+    `, [
+      ...common,
+      memberOnlyShareActivityId, 'community-share-member-db-test',
+      segmentShareActivityId, 'community-share-segment-db-test',
+    ])
+
     await seedPackageRegistrationScenarios()
   })
 
   afterAll(async () => {
     await pool?.end()
+  })
+
+  it('serves a no-cookie public share preview without writing customer or commercial facts', async () => {
+    const service = new CustomerExperienceService(
+      transactions,
+      new NormalizedCommandExecutor(transactions),
+      { updateProfile: async () => { throw new Error('not used') } },
+      false,
+    )
+    const app = Fastify({ logger: false })
+    await app.register(activitySharePreviewApiPlugin, { service, resolveShareScope: () => dbScope })
+    const before = await sharePreviewWriteCounts()
+    try {
+      const response = await app.inject({
+        method: 'GET', url: '/public/mini/activity-previews/community-free-db-test',
+      })
+      expect(response.statusCode).toBe(200)
+      expect(response.headers['set-cookie']).toBeUndefined()
+      expect(response.headers['cache-control']).toContain('no-store')
+      expect(response.json()).toMatchObject({ data: {
+        publicId: 'community-free-db-test', registrationRequiresMembership: true,
+      } })
+      const serialized = response.body
+      for (const forbidden of [
+        'customerId', 'registrationStatus', 'remainingCapacity', 'registeredCount',
+        'memberPurchaseLimit', 'contactInstructions', 'paymentAvailability',
+        'providerAction', 'refundPolicy',
+      ]) expect(serialized).not.toContain(forbidden)
+      expect(await sharePreviewWriteCounts()).toEqual(before)
+
+      const missing = await app.inject({
+        method: 'GET', url: '/public/mini/activity-previews/community-missing-db-test',
+      })
+      expect(missing.statusCode).toBe(404)
+      expect(missing.json()).toEqual({ error: { code: 'ACTIVITY_NOT_FOUND', message: '活动暂不可查看' } })
+      expect(await sharePreviewWriteCounts()).toEqual(before)
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('does not reveal member-only or segment activities through the anonymous share route', async () => {
+    const service = new CustomerExperienceService(
+      transactions,
+      new NormalizedCommandExecutor(transactions),
+      { updateProfile: async () => { throw new Error('not used') } },
+      false,
+    )
+    const app = Fastify({ logger: false })
+    await app.register(activitySharePreviewApiPlugin, { service, resolveShareScope: () => dbScope })
+    try {
+      for (const publicId of [
+        'community-share-member-db-test',
+        'community-share-segment-db-test',
+      ]) {
+        const response = await app.inject({
+          method: 'GET', url: `/public/mini/activity-previews/${publicId}`,
+        })
+        expect(response.statusCode).toBe(404)
+        expect(response.json()).toEqual({ error: { code: 'ACTIVITY_NOT_FOUND', message: '活动暂不可查看' } })
+      }
+    } finally {
+      await app.close()
+    }
   })
 
   it('publishes a public activity id while writing only the internal UUID to its outbox aggregate', async () => {

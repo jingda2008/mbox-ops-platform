@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  GuestOrderPaymentAccessError,
   PaymentProviderActionRepository,
   ProviderPaymentStatusAccessError,
   ProviderPaymentMethodConflictError,
@@ -90,6 +91,59 @@ describe('PaymentProviderActionRepository', () => {
     )).rejects.toBeInstanceOf(ProviderPaymentStatusAccessError)
   })
 
+  it('fails closed with a guest payment access error when a guest is moved after order resolution', async () => {
+    let positionChecks = 0
+    const transaction = {
+      scope: { tenantId, storeId },
+      query: async (text: string) => {
+        if (text.includes('SELECT ordering.id AS order_id')) {
+          return { rows: [{ order_id: '88888888-8888-4888-8888-888888888888', payment_id: paymentId }], rowCount: 1 }
+        }
+        if (text.includes('lock_active_table_guest_session_position')) {
+          positionChecks += 1
+          return { rows: [{ participation_id: positionChecks === 1 ? '99999999-9999-4999-8999-999999999999' : null }], rowCount: 1 }
+        }
+        if (text.includes('SELECT payment.id, payment.payable_kind, payment.order_id')) {
+          return { rows: [orderPaymentContextRow()], rowCount: 1 }
+        }
+        throw new Error(`Unexpected query: ${text}`)
+      },
+    } as unknown as ScopedTransaction
+    const repository = new PaymentProviderActionRepository(transaction, secret)
+    const principal = {
+      type: 'guest' as const, tableSessionId, customerId: customerOneId,
+      guestSessionId: '99999999-9999-4999-8999-999999999999',
+    }
+
+    await expect(repository.resolveOrderForGuest('order-shared-payment-0001', principal))
+      .resolves.toMatchObject({ activePaymentId: paymentId })
+    await expect(repository.resolvePaymentContext(paymentId, principal, { lock: false }))
+      .rejects.toMatchObject<Partial<GuestOrderPaymentAccessError>>({
+        name: 'GuestOrderPaymentAccessError', reason: 'guest_not_at_current_table',
+      })
+    expect(positionChecks).toBe(2)
+  })
+
+  it('uses the same closed error when an active payment no longer belongs to the current table', async () => {
+    const transaction = {
+      scope: { tenantId, storeId },
+      query: async (text: string) => {
+        if (text.includes('SELECT payment.id, payment.payable_kind, payment.order_id')) {
+          return { rows: [{ ...orderPaymentContextRow(), table_session_id: '99999999-9999-4999-8999-999999999998' }], rowCount: 1 }
+        }
+        throw new Error(`Unexpected query: ${text}`)
+      },
+    } as unknown as ScopedTransaction
+    const repository = new PaymentProviderActionRepository(transaction, secret)
+
+    await expect(repository.resolvePaymentContext(paymentId, {
+      type: 'guest', tableSessionId, customerId: customerOneId,
+      guestSessionId: '99999999-9999-4999-8999-999999999999',
+    }, { lock: false })).rejects.toMatchObject<Partial<GuestOrderPaymentAccessError>>({
+      name: 'GuestOrderPaymentAccessError', reason: 'order_not_in_current_table',
+    })
+  })
+
   it('encrypts and reuses one QR action across staff and guests at the same table', async () => {
     const transaction = new ActionTransaction()
     const repository = new PaymentProviderActionRepository(transaction, secret)
@@ -163,6 +217,28 @@ describe('PaymentProviderActionRepository', () => {
     expect(transaction.persisted?.request_fingerprint).not.toContain('134567890123456789')
   })
 })
+
+function orderPaymentContextRow() {
+  return {
+    id: paymentId,
+    payable_kind: 'order' as const,
+    order_id: '88888888-8888-4888-8888-888888888888',
+    order_public_id: 'order-shared-payment-0001',
+    activity_registration_id: null,
+    activity_registration_public_id: null,
+    public_id: 'payment-shared-0001',
+    provider: 'postar' as const,
+    provider_transaction_id: null,
+    method: 'native_qr' as const,
+    amount_minor: '8800',
+    currency: 'CNY',
+    status: 'pending',
+    table_session_id: tableSessionId,
+    customer_id: null,
+    table_code: 'W01',
+    created_at: '2026-08-14T00:00:00.000Z',
+  }
+}
 
 class ActionTransaction implements ScopedTransaction {
   readonly scope = { tenantId, storeId }

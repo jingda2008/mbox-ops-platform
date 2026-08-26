@@ -101,12 +101,6 @@
   color: #718176;
   font-size: 19rpx;
 }
-.activity-section-head > text {
-  color: #315d46;
-  font-size: 28rpx;
-  font-weight: 750;
-}
-
 .activity-list { display: grid; gap: 22rpx; }
 .activity-card {
   display: flex;

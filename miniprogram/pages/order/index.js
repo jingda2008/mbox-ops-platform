@@ -289,6 +289,11 @@ Page({
   beginTableRequest(session) {
     return this.ensureTableRequestGuard().begin(tableRequestScope(session || getTableSession()))
   },
+  rebaseTableRequest(request) {
+    const rebased = this.ensureTableRequestGuard().rebase(request, tableRequestScope(getTableSession()))
+    if (rebased) this.visibleTableScope = request.scope
+    return rebased
+  },
   currentTableRequest() { return this.ensureTableRequestGuard().current() },
   isCurrentTableRequest(request) { return this.ensureTableRequestGuard().isCurrent(request) },
   invalidateTableRequests() { this.ensureTableRequestGuard().invalidate() },
@@ -392,6 +397,9 @@ Page({
     }
     try {
       const result = await getGuestSession()
+      // A fixed QR is resolved to cartScope only by the verified session
+      // response. Rebase this live request, but never revive an older scan.
+      if (!this.rebaseTableRequest(request)) return
       if (!this.isCurrentTableRequest(request)) return
       const connected = result.data || {}
       if (connected.status === 'waiting_for_table') {
@@ -427,7 +435,12 @@ Page({
       await this.loadActiveData(request)
     } catch (error) {
       if (this.isCurrentTableRequest(request)) {
-        await this.loadBrowseData(customerErrorMessage(error, '桌台连接已失效，请重新扫描桌面二维码'), undefined, request)
+        // A remembered table code alone is not proof that this visitor scanned a
+        // current table QR. Only a scanned credential should produce an
+        // "expired" instruction; otherwise preserve the neutral browse entry.
+        const connectionError = session.tableToken
+          ? customerErrorMessage(error, '桌台连接已失效，请重新扫描桌面二维码') : ''
+        await this.loadBrowseData(connectionError, undefined, request)
       }
     }
   },
@@ -506,7 +519,13 @@ Page({
     const tableOrders = tableOrdersAvailable ? results[3] : []
     const paymentScope = tableSessionCacheScope()
     let storedPending = wx.getStorageSync(PENDING_PAYMENT_KEY) || null
-    if (storedPending && storedPending.tableScope && storedPending.tableScope !== paymentScope) storedPending = null
+    // Pending-payment records created before table scopes existed cannot be
+    // safely attributed after a new scan. Clear them before a weak-network
+    // order refresh can render the previous table's payment state.
+    if (storedPending && (!storedPending.tableScope || storedPending.tableScope !== paymentScope)) {
+      wx.removeStorageSync(PENDING_PAYMENT_KEY)
+      storedPending = null
+    }
     const storedOrder = storedPending && tableOrders.find((item) => item.publicId === storedPending.orderPublicId)
     if (storedPending && tableOrdersAvailable
       && (!storedOrder || Number(storedOrder.payableAmountMinor || 0) === 0)) {
@@ -600,7 +619,10 @@ Page({
       scanType: ['qrCode', 'wxCode'],
       success: (result) => {
         const query = parseScanValue(result.path || result.result)
-        getApp().refreshRuntime({ query })
+        // A physical QR is fixed across turnovers. Mark this as an explicit
+        // rescan so its new server table-session generation cannot reuse a
+        // previous table's guest cookie, cart or pending payment.
+        getApp().refreshRuntime({ query, forceTableScan: true })
         this.preparePage()
       },
       fail: (error) => {
@@ -1235,7 +1257,16 @@ Page({
       if (!this.isCurrentTableRequest(tableRequest)) return
       await this.handlePaymentAction(action, tableRequest)
     } catch (error) {
-      if (this.isCurrentTableRequest(tableRequest)) this.setData({ error: customerErrorMessage(error, '暂时无法恢复付款，请在桌账确认状态或联系服务人员') })
+      if (!this.isCurrentTableRequest(tableRequest)) return
+      if (['GUEST_ORDER_ACCESS_FORBIDDEN', 'GUEST_SESSION_INVALID', 'TABLE_SESSION_ENDED'].includes(error && error.code)) {
+        wx.removeStorageSync(PENDING_PAYMENT_KEY)
+        this.setData({
+          pendingPayment: null,
+          error: customerErrorMessage(error, '桌台连接已失效，请重新扫描当前桌面的二维码'),
+        })
+        return
+      }
+      this.setData({ error: customerErrorMessage(error, '暂时无法恢复付款，请在桌账确认状态或联系服务人员') })
     } finally { if (this.isCurrentTableRequest(tableRequest)) this.setData({ busy: false }) }
   },
 })

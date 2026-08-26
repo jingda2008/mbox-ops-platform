@@ -12,6 +12,7 @@ import {
   CustomerExperienceRequestError,
   type ProtectedActivityRegistrationContact,
   type PublicPortalSnapshot,
+  type PublicActivitySharePreview,
   type RecommendationAnswer,
   type RecommendationIntent,
   type RecommendationResult,
@@ -2032,6 +2033,12 @@ export class CustomerExperienceService {
   activity(context: PublicCustomerExperienceContext, publicId: string) {
     return this.transactions.run(context.scope, (transaction) => (
       new CustomerExperienceRepository(transaction, this.activityPaymentProviderConfigured).publicActivity(context.customerId, publicId)
+    ), { readOnly: true })
+  }
+
+  activitySharePreview(scope: Readonly<StoreScope>, publicId: string): Promise<PublicActivitySharePreview> {
+    return this.transactions.run(scope, (transaction) => (
+      new CustomerExperienceRepository(transaction).publicActivitySharePreview(publicId)
     ), { readOnly: true })
   }
 

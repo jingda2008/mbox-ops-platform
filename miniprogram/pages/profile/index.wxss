@@ -173,7 +173,7 @@
 .profile-member-card__identity text:first-child { overflow: hidden; color: #fff; font-size: 29rpx; font-weight: 750; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
 .profile-member-card__identity text:nth-child(2) { margin-top: 5rpx; overflow: hidden; color: rgba(238, 244, 239, .82); font-size: 17rpx; letter-spacing: 1.6rpx; text-overflow: ellipsis; white-space: nowrap; }
 .profile-member-card__identity text:last-child { margin-top: 4rpx; overflow: hidden; color: rgba(255,255,255,.78); font-size: 18rpx; letter-spacing: 1rpx; text-overflow: ellipsis; white-space: nowrap; }
-.profile-member-card__top button, .profile-member-card__foot button { width: auto; min-height: 48rpx; margin: 0; padding: 0 15rpx; flex: 0 0 auto; border: 1rpx solid rgba(255,255,255,.38); border-radius: 999rpx; background: rgba(7, 30, 22, .18); color: #fff; font-size: 18rpx; font-weight: 650; line-height: 46rpx; }
+.profile-member-card__top button, .profile-member-card__foot button { display: inline-flex; width: auto; min-height: 88rpx; margin: 0; padding: 0 18rpx; align-items: center; justify-content: center; flex: 0 0 auto; border: 1rpx solid rgba(255,255,255,.38); border-radius: 999rpx; background: rgba(7, 30, 22, .18); color: #fff; font-size: 18rpx; font-weight: 650; line-height: 1.25; }
 .profile-member-card__top button::after, .profile-member-card__foot button::after { border: 0; }
 .profile-member-card--gold .profile-member-card__identity text:first-child, .profile-member-card--gold .profile-member-card__progress-copy text:last-child, .profile-member-card--gold .profile-member-card__foot button { color: #f5d991; }
 .profile-member-card--gold .profile-member-card__top button { border-color: rgba(246, 216, 145, .6); }
@@ -185,11 +185,11 @@
 .profile-member-card__track view { height: 100%; min-width: 4rpx; border-radius: inherit; background: linear-gradient(90deg, #b6cf98, #e6d5a1); }
 .profile-member-card--silver .profile-member-card__track view { background: linear-gradient(90deg, #d8ddd9, #fafaf6); }
 .profile-member-card--gold .profile-member-card__track view { background: linear-gradient(90deg, #f8df8f, #c78e33); }
-.profile-member-card__foot { min-height: 26rpx; justify-content: space-between; }
+.profile-member-card__foot { min-height: 88rpx; justify-content: space-between; }
 .profile-member-card__foot > view { display: flex; min-width: 0; flex: 1; justify-content: space-between; gap: 12rpx; }
 .profile-member-card__foot > view text { color: rgba(238, 243, 235, .76); font-size: 18rpx; }
 .profile-member-card__foot > view text:last-child { text-align: right; }
-.profile-member-card__foot button { min-height: 28rpx; padding: 0; border: 0; background: transparent; color: #e4d3a2; font-size: 18rpx; line-height: 28rpx; }
+.profile-member-card__foot button { padding: 0 10rpx; border: 0; background: transparent; color: #e4d3a2; }
 
 .metric-card {
   display: flex;

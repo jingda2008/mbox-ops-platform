@@ -63,6 +63,7 @@ import {
 } from './online-payment-service.js'
 import {
   PaymentProviderActionRepository,
+  GuestOrderPaymentAccessError,
   ProviderPaymentInProgressError,
   ProviderPaymentMethodConflictError,
   ProviderPaymentUnknownError,
@@ -1673,6 +1674,12 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<unknown
     }
     if (error instanceof GuestStoreScopeError) {
       return reply.code(403).send({ error: { code: 'STORE_ACCESS_FORBIDDEN', message: error.message } })
+    }
+    if (error instanceof GuestOrderPaymentAccessError) {
+      if (error.reason === 'guest_not_at_current_table') {
+        return reply.code(401).send({ error: { code: 'GUEST_SESSION_INVALID', message: error.message } })
+      }
+      return reply.code(409).send({ error: { code: 'GUEST_ORDER_ACCESS_FORBIDDEN', message: error.message } })
     }
     if (error instanceof GuestCapabilityDeniedError) {
       return reply.code(403).send({ error: { code: 'GUEST_CAPABILITY_DENIED', message: '当前入口不能执行这项操作' } })

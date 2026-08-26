@@ -186,6 +186,57 @@ export interface PublicActivity {
   packages: PublicActivityPackage[]
 }
 
+/**
+ * A deliberately narrow, anonymous-safe view used when an activity is opened
+ * from a WeChat share.  It is not the member activity detail: in particular it
+ * carries no registration, payment, contact, or per-member purchase facts.
+ */
+export interface PublicActivitySharePreview {
+  publicId: string
+  kind: string
+  title: string
+  summary: string
+  coverUrl: string | null
+  startsAt: string
+  endsAt: string
+  assemblyLocation: string
+  feeAmountMinor: number
+  depositAmountMinor: number
+  feeBasis: ActivityFeeBasis
+  paymentMode: ActivityPaymentMode
+  paymentRuleText: string
+  currency: string
+  availability: 'available' | 'waitlist'
+  availabilityText: string
+  /** Explicit public editorial fields only. Do not turn this into a generic JSON bag. */
+  marketingCopy: Readonly<{
+    details: string
+    includedItems: string[]
+    participationRequirements: string[]
+    memberBenefitText: string | null
+  }>
+  safetyRequirements: string[]
+  packageSelectionRequired: boolean
+  packages: PublicActivitySharePackage[]
+  registrationRequiresMembership: true
+}
+
+export interface PublicActivitySharePackage {
+  publicId: string
+  name: string
+  description: string
+  imageUrl: string | null
+  includedItems: string[]
+  feeAmountMinor: number
+  depositAmountMinor: number
+  feeBasis: ActivityFeeBasis
+  paymentMode: ActivityPaymentMode
+  paymentRuleText: string
+  currency: string
+  availability: PublicActivityPackage['availability']
+  availabilityText: string
+}
+
 /** One selectable ticket/plan inside an activity.  A registration can choose
  * exactly one package; it is not a customer table order. */
 export interface PublicActivityPackage {
@@ -1096,6 +1147,17 @@ export class CustomerExperienceRepository {
       publicMembership,
     )) throw new CustomerExperienceRequestError('活动不存在或当前不可见', 'ACTIVITY_NOT_FOUND', 404)
     return activityView(activity, this.activityPaymentProviderConfigured)
+  }
+
+  async publicActivitySharePreview(publicId: string): Promise<PublicActivitySharePreview> {
+    // Do not reuse the member detail response here.  A share recipient can be
+    // anonymous, and the public preview must never contain a registration
+    // state, payment state, contact data, or a member-specific purchase limit.
+    const activity = (await this.listActivities(null, publicId))[0]
+    if (!activity || activity.visibility !== 'public') {
+      throw new CustomerExperienceRequestError('活动不存在或当前不可分享', 'ACTIVITY_NOT_FOUND', 404)
+    }
+    return activitySharePreviewView(activity)
   }
 
   async publicActivityRegistrations(customerId: string): Promise<PublicActivityRegistration[]> {
@@ -5045,6 +5107,75 @@ function activityView(row: ActivityRow, providerConfigured: boolean): PublicActi
     packageSelectionRequired: row.package_selection_required,
     packages,
   }
+}
+
+function activitySharePreviewView(row: ActivityRow): PublicActivitySharePreview {
+  const registered = integer(row.registered_count, 'registered count')
+  const activityAvailability: PublicActivitySharePreview['availability'] = row.status === 'full'
+    || registered >= row.capacity ? 'waitlist' : 'available'
+  return {
+    publicId: row.public_id,
+    kind: row.activity_kind,
+    title: row.title,
+    summary: row.summary,
+    coverUrl: publicMediaAssetUrl(row.cover_url),
+    startsAt: row.starts_at,
+    endsAt: row.ends_at,
+    assemblyLocation: row.assembly_location,
+    feeAmountMinor: money(row.fee_amount_minor, 'activity fee'),
+    depositAmountMinor: money(row.deposit_amount_minor, 'activity deposit'),
+    feeBasis: row.fee_basis,
+    paymentMode: row.registration_payment_mode,
+    paymentRuleText: row.payment_rule_text,
+    currency: row.currency,
+    availability: activityAvailability,
+    availabilityText: activityAvailability === 'available' ? '开放报名' : '可登记候补',
+    // These are named, public-facing editorial fields. In particular, do not
+    // pass through contactInstructions or an arbitrary sales_copy extension.
+    marketingCopy: {
+      details: row.activity_details,
+      includedItems: [...row.included_items],
+      participationRequirements: [...row.participation_requirements],
+      memberBenefitText: row.member_benefit_text,
+    },
+    safetyRequirements: [...row.safety_requirements],
+    packageSelectionRequired: row.package_selection_required,
+    packages: publicActivitySharePackages(row.activity_packages),
+    registrationRequiresMembership: true,
+  }
+}
+
+function publicActivitySharePackages(packages: readonly JsonObject[]): PublicActivitySharePackage[] {
+  const now = Date.now()
+  return packages.map((value) => {
+    const capacity = integer(value.capacity, 'activity package capacity')
+    const registered = integer(value.registeredCount, 'activity package registered count')
+    const status = text(value.status) ?? 'paused'
+    const availableFrom = text(value.availableFrom)
+    const availableUntil = text(value.availableUntil)
+    const inWindow = (availableFrom === null || Date.parse(availableFrom) <= now)
+      && (availableUntil === null || Date.parse(availableUntil) > now)
+    const availability: PublicActivitySharePackage['availability'] = registered >= capacity ? 'sold_out'
+      : status !== 'published' || !inWindow || value.inventoryAvailable !== true
+        ? 'temporarily_unavailable' : 'available'
+    return {
+      // A package public id is an opaque selection reference, never an
+      // authorization credential. Registration revalidates it under lock.
+      publicId: requiredText(value.publicId, 'activity package public id'),
+      name: requiredText(value.name, 'activity package name'),
+      description: text(value.description) ?? '',
+      imageUrl: publicMediaAssetUrl(text(value.imageUrl)),
+      includedItems: stringArray(value.includedItems),
+      feeAmountMinor: money(value.feeAmountMinor, 'activity package add-on fee'),
+      depositAmountMinor: money(value.depositAmountMinor, 'activity package deposit'),
+      feeBasis: activityFeeBasis(value.feeBasis),
+      paymentMode: activityPaymentMode(value.paymentMode),
+      paymentRuleText: requiredText(value.paymentRuleText, 'activity package payment rule'),
+      currency: requiredText(value.currency, 'activity package currency'),
+      availability,
+      availabilityText: availability === 'available' ? '可选' : availability === 'sold_out' ? '已售罄' : '暂不可选',
+    }
+  })
 }
 
 function publicActivityPackages(

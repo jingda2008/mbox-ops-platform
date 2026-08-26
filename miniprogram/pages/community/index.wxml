@@ -18,7 +18,6 @@
     <view wx:if="{{error}}" class="error-banner">{{error}}</view>
     <view wx:if="{{activities.length}}" class="activity-section-head">
       <view><text>正在发生</text><text>报名与安排以活动详情为准</text></view>
-      <text>{{activities.length}}</text>
     </view>
     <view wx:if="{{activities.length}}" class="activity-list">
       <view wx:for="{{activities}}" wx:key="publicId" class="activity-card" data-id="{{item.publicId}}" bindtap="openDetail" hover-class="activity-card--hover" role="button" aria-role="button">
@@ -35,7 +34,7 @@
           </view>
         </view>
         <view class="activity-card__body">
-          <text class="activity-sequence">{{item.sequenceText}}</text>
+          <text wx:if="{{item.sequenceText}}" class="activity-sequence">{{item.sequenceText}}</text>
           <text class="activity-title">{{item.title}}</text>
           <text wx:if="{{item.summary}}" class="activity-summary">{{item.summary}}</text>
           <text class="activity-date">{{item.dateText}} · {{item.assemblyLocation}}</text>

@@ -307,13 +307,12 @@
 .show-brief--retry::after { border: 0; }
 .show-brief--retry text:first-child { color: #873f35; }
 .show-brief--retry text:last-child { color: #837a70; font-size: 18rpx; }
-.quick-service { display: grid; margin-top: 14rpx; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10rpx; }
-.quick-service button { display: flex; min-width: 0; min-height: 88rpx; margin: 0; padding: 10rpx 12rpx; align-items: center; justify-content: center; border: 1rpx solid #ded7cd; border-radius: 16rpx; background: #fff; color: #37312b; font-size: 19rpx; font-weight: 650; line-height: 1.35; text-align: center; gap: 8rpx; }
+.quick-service { display: grid; margin-top: 18rpx; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16rpx; }
+.quick-service button { display: flex; min-width: 0; min-height: 88rpx; margin: 0; padding: 0 10rpx; align-items: center; justify-content: center; border: 1rpx solid rgba(88, 105, 94, .36); border-radius: 999rpx; background: rgba(255,255,255,.34); color: #3c4a40; font-size: 18rpx; font-weight: 650; line-height: 1.3; text-align: center; white-space: nowrap; gap: 6rpx; box-shadow: none; }
 .quick-service button::after { border: 0; }
-.quick-service button:nth-child(2) { border-color: #d9c7a8; background: #fffdf8; color: #624a2e; }
-.quick-service button:nth-child(3) { border-color: #ead2cc; background: #fffaf8; color: #873f35; }
-.quick-service__icon { display: inline-flex; width: 30rpx; height: 30rpx; align-items: center; justify-content: center; border-radius: 50%; background: #efe9df; color: #715a3a; font-size: 17rpx; font-weight: 750; }
-.quick-service button:nth-child(3) .quick-service__icon { background: #f6e3de; color: #963d31; }
+.quick-service button:nth-child(2) { border-color: rgba(157, 119, 65, .46); background: rgba(255,252,246,.42); color: #624a2e; }
+.quick-service button:nth-child(3) { border-color: rgba(165, 87, 74, .42); background: rgba(255,249,247,.42); color: #873f35; }
+.quick-service__icon { display: inline-flex; width: 28rpx; height: 28rpx; align-items: center; justify-content: center; border: 1rpx solid currentColor; border-radius: 50%; color: inherit; font-size: 16rpx; font-weight: 750; }
 .payment-recovery,
 .checkout-recovery {
   display: grid;

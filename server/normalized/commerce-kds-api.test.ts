@@ -26,6 +26,7 @@ const employeeId = '33333333-3333-4333-8333-333333333333'
 const tableId = '44444444-4444-4444-8444-444444444444'
 const tableSessionId = '55555555-5555-4555-8555-555555555555'
 const orderId = '66666666-6666-4666-8666-666666666666'
+const paymentId = '67676767-6767-4767-8767-676767676767'
 const orderItemId = '77777777-7777-4777-8777-777777777777'
 const productId = '88888888-8888-4888-8888-888888888888'
 const taskId = '99999999-9999-4999-8999-999999999999'
@@ -158,8 +159,27 @@ function fixture(input: {
           override_denied: false,
         }))) as PostgresQueryResult<Row>
       }
+      if (sql.includes('session.status AS session_status')) {
+        return rows([{
+          employee_status: 'active',
+          session_status: 'open',
+          allowed: true,
+          permissions_allowed: true,
+        }]) as PostgresQueryResult<Row>
+      }
       if (sql.includes('table_allowed')) {
         return rows([{ table_allowed: true }]) as PostgresQueryResult<Row>
+      }
+      if (sql.includes('FROM mbox.orders order_header')) {
+        return rows([{
+          id: orderId,
+          public_id: 'ORDER-VIP1-001',
+          currency: 'CNY',
+          payment_status: 'unpaid',
+          outstanding_amount_minor: '13600',
+          has_online_payment_in_progress: true,
+          unresolved_online_payment_id: paymentId,
+        }]) as PostgresQueryResult<Row>
       }
       if (sql.includes('INSERT INTO mbox.assisted_order_contexts')) {
         return rows([{
@@ -436,6 +456,40 @@ describe('commerceKdsApiPlugin', () => {
       canCreateOrder: true,
       manualCollection: { canRecordCash: true, canRecordPos: true, canRecordExternal: true },
     } })
+  })
+
+  it('returns the unresolved payment id so an assigned employee can query or release the stalled attempt', async () => {
+    const value = fixture({ permissions: ['payment.manual.cash.record'] })
+    const response = await value.app.inject({
+      method: 'GET',
+      url: `/api/commerce/table-sessions/${tableSessionId}/payment-orders`,
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toEqual({ data: [{
+      id: orderId,
+      publicId: 'ORDER-VIP1-001',
+      currency: 'CNY',
+      paymentStatus: 'unpaid',
+      outstandingAmountMinor: 13_600,
+      hasOnlinePaymentInProgress: true,
+      unresolvedOnlinePaymentId: paymentId,
+    }] })
+    expect(value.staffQueries.some((sql) => sql.includes('pending.unresolved_online_payment_id'))).toBe(true)
+  })
+
+  it('keeps the table payment order list hidden from staff without any collection capability', async () => {
+    const value = fixture({ permissions: ['order.view'] })
+    const response = await value.app.inject({
+      method: 'GET',
+      url: `/api/commerce/table-sessions/${tableSessionId}/payment-orders`,
+    })
+
+    expect(response.statusCode).toBe(403)
+    expect(response.json()).toEqual({
+      error: { code: 'STAFF_ACCESS_FORBIDDEN', message: '当前员工无权执行此操作' },
+    })
+    expect(value.staffQueries.some((sql) => sql.includes('FROM mbox.orders order_header'))).toBe(false)
   })
 
   it('uses the current store policy instead of the startup payment flag', async () => {

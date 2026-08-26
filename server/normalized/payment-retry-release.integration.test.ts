@@ -3,6 +3,7 @@ import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
 import { NormalizedCommandExecutor } from './command-executor.js'
+import { listTablePaymentOrdersForSession } from './commerce-kds-api.js'
 import { PaymentCommandService } from './payment-command-service.js'
 import { PaymentRepository } from './payment-repository.js'
 import type { PaymentCapabilityAuthorizationPort } from './payment-security-policy.js'
@@ -102,6 +103,113 @@ integration('unresolved payment retry release', () => {
       expect.objectContaining({ id: firstPaymentId, status: 'pending', retry_released_at: expect.any(String) }),
       expect.objectContaining({ id: replacement.id, status: 'created', retry_released_at: null }),
     ]))
+  })
+
+  it('returns the exact unresolved payment id used by the table collection sheet', async () => {
+    const sessionId = randomUUID()
+    const routeTableId = randomUUID()
+    const orderId = randomUUID()
+    const paymentId = randomUUID()
+    await pool.query(`INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity)
+      VALUES($1,$2,$3,$4,$5,$5,4)`, [
+      routeTableId, tenantId, storeId, areaId, `PV${randomUUID().slice(0, 6)}`,
+    ])
+    await pool.query(`INSERT INTO mbox.table_sessions(
+      id,tenant_id,store_id,table_id,public_id,business_date,guest_count,capacity_at_open,status,opened_by_employee_id
+    ) SELECT $1,$2,$3,$4,$5,
+      ((clock_timestamp() AT TIME ZONE timezone)-business_day_cutoff)::date,
+      2,4,'open',$6 FROM mbox.stores WHERE tenant_id=$2 AND id=$3`, [
+      sessionId, tenantId, storeId, routeTableId, `payment-view-session-${randomUUID()}`, employeeId,
+    ])
+    await pool.query(`INSERT INTO mbox.orders(
+      id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,
+      subtotal_amount_minor,discount_amount_minor,total_amount_minor,currency,created_by_employee_id,submitted_at
+    ) VALUES($1,$2,$3,$4,$5,'staff_assisted','submitted','pending',2000,0,2000,'CNY',$6,clock_timestamp())`, [
+      orderId, tenantId, storeId, sessionId, `payment-view-order-${randomUUID()}`, employeeId,
+    ])
+    await pool.query(`INSERT INTO mbox.payments(
+      id,tenant_id,store_id,order_id,public_id,provider,method,amount_minor,currency,status
+    ) VALUES($1,$2,$3,$4,$5,'postar','native_qr',2000,'CNY','pending')`, [
+      paymentId, tenantId, storeId, orderId, `payment-view-attempt-${randomUUID()}`,
+    ])
+
+    const result = await runner.run({ tenantId, storeId }, (transaction) => (
+      listTablePaymentOrdersForSession(transaction, sessionId)
+    ), { readOnly: true })
+
+    expect(result).toEqual([expect.objectContaining({
+      id: orderId,
+      outstandingAmountMinor: 2_000,
+      hasOnlinePaymentInProgress: true,
+      unresolvedOnlinePaymentId: paymentId,
+    })])
+  })
+
+  it('shows a fully refunded order only after an explicit recollection authorization', async () => {
+    const sessionId = randomUUID()
+    const routeTableId = randomUUID()
+    const orderId = randomUUID()
+    const paymentId = randomUUID()
+    const refundId = randomUUID()
+    const approverId = randomUUID()
+    await pool.query(`INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name)
+      VALUES($1,$2,$3,$4,'退款复核员')`, [
+      approverId, tenantId, storeId, `refund-approver-${randomUUID().slice(0, 8)}`,
+    ])
+    await pool.query(`INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity)
+      VALUES($1,$2,$3,$4,$5,$5,4)`, [
+      routeTableId, tenantId, storeId, areaId, `RV${randomUUID().slice(0, 6)}`,
+    ])
+    await pool.query(`INSERT INTO mbox.table_sessions(
+      id,tenant_id,store_id,table_id,public_id,business_date,guest_count,capacity_at_open,status,opened_by_employee_id
+    ) SELECT $1,$2,$3,$4,$5,
+      ((clock_timestamp() AT TIME ZONE timezone)-business_day_cutoff)::date,
+      2,4,'open',$6 FROM mbox.stores WHERE tenant_id=$2 AND id=$3`, [
+      sessionId, tenantId, storeId, routeTableId, `recollect-view-session-${randomUUID()}`, employeeId,
+    ])
+    await pool.query(`INSERT INTO mbox.orders(
+      id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,
+      subtotal_amount_minor,discount_amount_minor,total_amount_minor,currency,created_by_employee_id,submitted_at
+    ) VALUES($1,$2,$3,$4,$5,'staff_assisted','submitted','refunded',2000,0,2000,'CNY',$6,clock_timestamp())`, [
+      orderId, tenantId, storeId, sessionId, `recollect-view-order-${randomUUID()}`, employeeId,
+    ])
+    await pool.query(`INSERT INTO mbox.payments(
+      id,tenant_id,store_id,order_id,public_id,provider,provider_transaction_id,method,
+      amount_minor,currency,status,succeeded_at
+    ) VALUES($1,$2,$3,$4,$5,'postar',$6,'native_qr',2000,'CNY','refunded',clock_timestamp())`, [
+      paymentId, tenantId, storeId, orderId, `recollect-view-payment-${randomUUID()}`,
+      `provider-payment-${randomUUID()}`,
+    ])
+    await pool.query(`INSERT INTO mbox.refunds(
+      id,tenant_id,store_id,payment_id,public_id,provider_refund_id,amount_minor,currency,status,
+      reason,requested_by_employee_id,approved_by_employee_id,decision_reason,completed_at
+    ) VALUES($1,$2,$3,$4,$5,$6,2000,'CNY','succeeded','顾客更换支付方式',$7,$8,'同意退款',clock_timestamp())`, [
+      refundId, tenantId, storeId, paymentId, `recollect-view-refund-${randomUUID()}`,
+      `provider-refund-${randomUUID()}`, employeeId, approverId,
+    ])
+
+    const beforeAuthorization = await runner.run({ tenantId, storeId }, (transaction) => (
+      listTablePaymentOrdersForSession(transaction, sessionId)
+    ), { readOnly: true })
+    expect(beforeAuthorization).toEqual([])
+
+    await pool.query(`INSERT INTO mbox.order_recollection_authorizations(
+      tenant_id,store_id,public_id,order_id,amount_minor,currency,status,reason,
+      authorized_by_employee_id,expires_at
+    ) VALUES($1,$2,$3,$4,2000,'CNY','active','退款后仍需重新收款',$5,clock_timestamp()+interval '15 minutes')`, [
+      tenantId, storeId, `recollect-view-auth-${randomUUID()}`, orderId, employeeId,
+    ])
+    const afterAuthorization = await runner.run({ tenantId, storeId }, (transaction) => (
+      listTablePaymentOrdersForSession(transaction, sessionId)
+    ), { readOnly: true })
+
+    expect(afterAuthorization).toEqual([expect.objectContaining({
+      id: orderId,
+      paymentStatus: 'refunded',
+      outstandingAmountMinor: 2_000,
+      hasOnlinePaymentInProgress: false,
+      unresolvedOnlinePaymentId: null,
+    })])
   })
 
   it('commits a bounded outbox key when a maximum-length idempotency key releases an unresolved payment', async () => {

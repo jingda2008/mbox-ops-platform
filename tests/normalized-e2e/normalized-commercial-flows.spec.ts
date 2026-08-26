@@ -708,6 +708,17 @@ test('mobile manager payment choices stay synchronized with two guests at the sa
   await paidSheet.getByRole('dialog', { name: '确认上单' }).getByRole('button', { name: '确认上单' }).click()
   await expect(page.getByRole('status')).toContainText('W01 订单已挂桌并发送出品')
 
+  await page.getByRole('button', { name: 'W01直接收款' }).click()
+  const tablePayment = page.getByRole('dialog', { name: 'W01本桌收款' })
+  await expect(tablePayment.getByRole('button', { name: /调出付款二维码/ })).toBeVisible()
+  await expect(tablePayment.getByRole('button', { name: /扫描顾客付款码/ })).toBeVisible()
+  await expect(tablePayment.getByRole('button', { name: /现金已收/ })).toBeVisible()
+  await tablePayment.getByRole('button', { name: /现金已收/ }).click()
+  const cashConfirmation = page.getByRole('alertdialog', { name: '确认 W01 已收到现金' })
+  await expect(cashConfirmation).toContainText('已经实际收到')
+  await cashConfirmation.getByRole('button', { name: '暂未收到' }).click()
+  await tablePayment.getByRole('button', { name: '关闭本桌收款' }).click()
+
   await page.getByRole('button', { name: '协助点单' }).click()
   const immediateSheet = page.getByRole('dialog', { name: 'W01协助点单' })
   await immediateSheet.getByRole('button', { name: '立即结算' }).click()
@@ -731,6 +742,12 @@ test('mobile manager payment choices stay synchronized with two guests at the sa
   }
   await expect(immediateSheet.getByText('测试付款动作已建立')).toBeVisible()
   await immediateSheet.getByRole('button', { name: '完成演练' }).click()
+
+  await page.getByRole('button', { name: 'W01直接收款' }).click()
+  const reopenedTablePayment = page.getByRole('dialog', { name: 'W01本桌收款' })
+  await expect(reopenedTablePayment.getByText('已有一笔线上收款尚未明确结果')).toBeVisible()
+  await expect(reopenedTablePayment.getByRole('button', { name: '未到账，重新收款' })).toBeEnabled()
+  await reopenedTablePayment.getByRole('button', { name: '关闭本桌收款' }).click()
 
   await page.getByRole('button', { name: '协助点单' }).click()
   const barcodeSheet = page.getByRole('dialog', { name: 'W01协助点单' })

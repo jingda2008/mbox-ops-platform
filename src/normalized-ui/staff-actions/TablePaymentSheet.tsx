@@ -1,12 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
-import { Check, LoaderCircle, QrCode, RefreshCcw, ScanLine, X } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Banknote, Check, LoaderCircle, QrCode, RefreshCcw, ScanLine, X } from 'lucide-react'
 import { CustomerPaymentCodeScanner } from '../../components/CustomerPaymentCodeScanner'
 import type { OnlinePaymentAction } from '../../shared/online-payment-contracts'
+import { useConfirmationDialog } from '../ConfirmationDialog'
 import type {
   AssistedOrderAccess,
   StaffActionsApiPort,
   StaffTablePaymentOrder,
 } from './staff-actions-api'
+import { createCashReceiptReference, shortPaymentOrderLabel } from './table-payment-model'
 
 export interface TablePaymentSheetProps {
   api: StaffActionsApiPort
@@ -22,6 +24,7 @@ export interface TablePaymentSheetProps {
  * operation on the table page without turning the page into a cashier ledger.
  */
 export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePaymentSheetProps) {
+  const { confirmAction } = useConfirmationDialog()
   const [access, setAccess] = useState<AssistedOrderAccess | null>(null)
   const [orders, setOrders] = useState<StaffTablePaymentOrder[]>([])
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
@@ -31,11 +34,13 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
   const [busy, setBusy] = useState(false)
   const [scannerOpen, setScannerOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const announcedPaymentId = useRef<string | null>(null)
 
   const selected = orders.find((order) => order.id === selectedOrderId) ?? null
+  const activePaymentId = action?.paymentId ?? selected?.unresolvedOnlinePaymentId ?? null
 
-  const refresh = async (signal?: AbortSignal) => {
+  const refresh = useCallback(async (signal?: AbortSignal) => {
     if (api.loadTablePaymentOrders === undefined) {
       throw new Error('本桌收款入口暂时不可用，请到收银页面处理')
     }
@@ -50,33 +55,35 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
         ? current
         : nextOrders[0]?.id ?? null
     ))
-  }
+  }, [api, table.activeSession.id])
 
   useEffect(() => {
     const controller = new AbortController()
+    setLoading(true)
+    setError(null)
     void refresh(controller.signal).catch((reason: unknown) => {
       if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : '本桌未结订单暂时无法读取')
     }).finally(() => {
       if (!controller.signal.aborted) setLoading(false)
     })
     return () => controller.abort()
-    // The sheet is intentionally remounted for every table entry.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api, table.activeSession.id])
+  }, [loadAttempt, refresh])
 
   useEffect(() => {
-    if (action === null || paymentStatus !== 'pending') return
+    if (activePaymentId === null || paymentStatus !== 'pending') return
     const controller = new AbortController()
     let active = true
     const synchronize = async () => {
       try {
-        const status = await api.loadOnlinePaymentStatus(action.paymentId, controller.signal)
+        const status = await api.loadOnlinePaymentStatus(activePaymentId, controller.signal)
         if (!active || status === 'pending') return
         setPaymentStatus(status)
-        if (status === 'succeeded' && announcedPaymentId.current !== action.paymentId) {
-          announcedPaymentId.current = action.paymentId
+        if (status === 'succeeded' && announcedPaymentId.current !== activePaymentId) {
+          announcedPaymentId.current = activePaymentId
           onUpdated(`${table.code} 已确认到账；如需继续核对，请在收银页查看本单与小票。`)
           await refresh(controller.signal)
+          setAction(null)
+          setPaymentStatus('pending')
         }
         if (status === 'failed' || status === 'closed') setError('支付渠道已确认本次未成功，可以重新发起收款。')
       } catch {
@@ -90,7 +97,7 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
       controller.abort()
       window.clearInterval(interval)
     }
-  }, [action, api, onUpdated, paymentStatus, table.code])
+  }, [activePaymentId, api, onUpdated, paymentStatus, refresh, table.code])
 
   const createPayment = async (method: 'native_qr' | 'auth_code', customerAuthCode?: string) => {
     if (selected === null || busy) return false
@@ -123,15 +130,17 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
   }
 
   const queryPayment = async () => {
-    if (action === null || busy) return
+    if (activePaymentId === null || busy) return
     setBusy(true)
     setError(null)
     try {
-      const status = await api.queryOnlinePayment(action.paymentId)
+      const status = await api.queryOnlinePayment(activePaymentId)
       setPaymentStatus(status)
       if (status === 'succeeded') {
         onUpdated(`${table.code} 已确认到账。`)
         await refresh()
+        setAction(null)
+        setPaymentStatus('pending')
       } else if (status === 'failed' || status === 'closed') {
         setError('支付渠道已确认本次未成功，可以重新发起收款。')
       } else {
@@ -139,6 +148,32 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '暂时无法核对支付状态，请由收银处理')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const recordCashPayment = async () => {
+    if (selected === null || access?.manualCollection.canRecordCash !== true || busy) return
+    const confirmed = await confirmAction({
+      title: `确认 ${table.code} 已收到现金`,
+      description: `请确认已经实际收到 ${money(selected.outstandingAmountMinor, selected.currency)} 现金。确认后会立即计入收款、日结和小票，不可把“准备收钱”提前登记成到账。`,
+      confirmLabel: '确认已收到现金',
+      cancelLabel: '暂未收到',
+    })
+    if (!confirmed) return
+    setBusy(true)
+    setError(null)
+    try {
+      await api.recordManualPayment({
+        orderId: selected.id,
+        provider: 'cash',
+        receiptReference: createCashReceiptReference(table.code),
+      })
+      onUpdated(`${table.code} 现金收款已登记并进入日结对账。`)
+      onClose()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '现金收款未完成，请核对后重试')
     } finally {
       setBusy(false)
     }
@@ -176,20 +211,21 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
       </header>
       <p className="staff-order-payment-note">普通未结订单可直接收款；退款后的订单须由收银先授权才会出现。渠道未明确成功时，可由现场人员按未到账释放后重新收款；旧渠道迟到到账会交给收银核对退款。</p>
       {error !== null && <p className="staff-order-error" role="alert">{error}</p>}
-      {loading ? <p className="staff-order-loading"><LoaderCircle className="is-spinning" /> 正在读取本桌未结订单</p> : orders.length === 0 ? <p className="staff-actions-empty">本桌没有需要再次收款的订单。</p> : <>
+      {!loading && error !== null && orders.length === 0 && <button type="button" className="staff-payment-reload" onClick={() => setLoadAttempt((current) => current + 1)}><RefreshCcw size={18} />重新读取本桌收款</button>}
+      {loading ? <p className="staff-order-loading"><LoaderCircle className="is-spinning" /> 正在读取本桌未结订单</p> : orders.length === 0 ? error === null && <p className="staff-actions-empty">本桌没有需要再次收款的订单。</p> : <>
         <div className="staff-payment-order-list" aria-label="本桌未结订单">
           {orders.map((order) => <button type="button" key={order.id}
             className={order.id === selectedOrderId ? 'is-active' : ''}
-            onClick={() => { setSelectedOrderId(order.id); setAction(null); setError(null) }}>
-            <span><strong>{order.publicId}</strong><small>{order.hasOnlinePaymentInProgress ? '支付渠道处理中，点击可查单' : order.paymentStatus === 'partially_refunded' ? '退款后待补收' : '待收款'}</small></span>
+            onClick={() => { setSelectedOrderId(order.id); setAction(null); setPaymentStatus('pending'); setError(null) }}>
+            <span><strong title={order.publicId}>{shortPaymentOrderLabel(order.publicId)}</strong><small>{order.hasOnlinePaymentInProgress ? '支付渠道处理中，点击可核对' : order.paymentStatus === 'partially_refunded' ? '退款后待补收' : '待收款'}</small></span>
             <b>{money(order.outstandingAmountMinor, order.currency)}</b>
           </button>)}
         </div>
         {selected !== null && <section className="staff-payment-choice" aria-label="再次发起本桌收款">
-          <div className="staff-payment-summary"><small>{selected.publicId}</small><strong>{money(selected.outstandingAmountMinor, selected.currency)}</strong><span>{selected.hasOnlinePaymentInProgress ? '已有渠道动作。确认未收到明确成功结果后，可按未到账释放并再次收款。' : '选择顾客扫码，或扫描顾客付款码。'}</span></div>
+          <div className="staff-payment-summary"><small title={selected.publicId}>{shortPaymentOrderLabel(selected.publicId)}</small><strong>{money(selected.outstandingAmountMinor, selected.currency)}</strong><span>{selected.hasOnlinePaymentInProgress ? '已有渠道动作。确认未收到明确成功结果后，可按未到账释放并再次收款。' : '选择顾客扫码、扫描付款码，或确认现金已收。'}</span></div>
           {paymentStatus === 'succeeded' ? <span className="staff-payment-result is-succeeded"><Check /><strong>支付成功，订单余额已刷新</strong></span> : paymentStatus === 'failed' || paymentStatus === 'closed' ? <>
             <span className="staff-payment-result"><X /><strong>本次付款未成功</strong></span>
-            <PaymentButtons busy={busy} disabled={access?.canInitiatePayment !== true} onQr={() => void createPayment('native_qr')} onScan={() => setScannerOpen(true)} />
+            <PaymentButtons busy={busy} onlineDisabled={access?.canInitiatePayment !== true} canRecordCash={access?.manualCollection.canRecordCash === true} onQr={() => void createPayment('native_qr')} onScan={() => setScannerOpen(true)} onCash={() => void recordCashPayment()} />
           </> : selected.unresolvedOnlinePaymentId !== null ? <>
             <span className="staff-payment-result"><LoaderCircle className="is-spinning" /><strong>已有一笔线上收款尚未明确结果</strong></span>
             {access?.canQueryOnlinePayment === true && <button type="button" className="staff-payment-query" disabled={busy} onClick={() => void queryPayment()}><RefreshCcw size={18} />先查询渠道结果</button>}
@@ -202,7 +238,7 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
           </> : action?.presentation === 'barcode' ? <>
             <span className="staff-payment-result"><LoaderCircle className="is-spinning" /><strong>付款码已提交，正在确认到账</strong></span>
             {access?.canQueryOnlinePayment === true && <button type="button" className="staff-payment-query" disabled={busy} onClick={() => void queryPayment()}><RefreshCcw size={18} />查询渠道结果</button>}
-          </> : <PaymentButtons busy={busy} disabled={access?.canInitiatePayment !== true} onQr={() => void createPayment('native_qr')} onScan={() => setScannerOpen(true)} />}
+          </> : <PaymentButtons busy={busy} onlineDisabled={access?.canInitiatePayment !== true} canRecordCash={access?.manualCollection.canRecordCash === true} onQr={() => void createPayment('native_qr')} onScan={() => setScannerOpen(true)} onCash={() => void recordCashPayment()} />}
           {paymentEntryMessage(access) !== null && <p className="staff-order-payment-note">{paymentEntryMessage(access)}</p>}
           {busy && <span className="staff-payment-busy"><LoaderCircle className="is-spinning" />正在安全发起，请勿重复操作</span>}
         </section>}
@@ -214,12 +250,18 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
   </div>
 }
 
-function PaymentButtons({ busy, disabled, onQr, onScan }: {
-  busy: boolean; disabled: boolean; onQr(): void; onScan(): void
+function PaymentButtons({ busy, onlineDisabled, canRecordCash, onQr, onScan, onCash }: {
+  busy: boolean
+  onlineDisabled: boolean
+  canRecordCash: boolean
+  onQr(): void
+  onScan(): void
+  onCash(): void
 }) {
   return <div className="staff-payment-methods">
-    <button type="button" disabled={busy || disabled} onClick={onQr}><QrCode /><strong>调出付款二维码</strong><small>顾客扫码付款</small></button>
-    <button type="button" disabled={busy || disabled} onClick={onScan}><ScanLine /><strong>扫描顾客付款码</strong><small>摄像头或扫码枪</small></button>
+    <button type="button" disabled={busy || onlineDisabled} onClick={onQr}><QrCode /><strong>调出付款二维码</strong><small>顾客扫码付款</small></button>
+    <button type="button" disabled={busy || onlineDisabled} onClick={onScan}><ScanLine /><strong>扫描顾客付款码</strong><small>摄像头或扫码枪</small></button>
+    {canRecordCash && <button type="button" disabled={busy} onClick={onCash}><Banknote /><strong>现金已收</strong><small>确认后直接登记</small></button>}
   </div>
 }
 

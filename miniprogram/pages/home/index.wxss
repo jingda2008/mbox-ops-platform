@@ -143,9 +143,12 @@
 .primary-experience {
   display: flex;
   width: 100%;
+  min-width: 100%;
+  max-width: 100%;
   min-height: 136rpx;
   margin: 26rpx 0 0;
   padding: 20rpx 22rpx 20rpx 26rpx;
+  box-sizing: border-box;
   align-items: center;
   justify-content: space-between;
   border: 0;
@@ -155,9 +158,6 @@
   text-align: left;
   box-shadow: 0 10rpx 24rpx rgba(25, 70, 49, 0.12);
   gap: 22rpx;
-}
-.primary-experience::after {
-  border: 0;
 }
 .primary-experience text {
   display: block;

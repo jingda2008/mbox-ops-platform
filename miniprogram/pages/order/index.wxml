@@ -73,6 +73,10 @@
       <button data-code="celebration" aria-label="生日或个性化需求" disabled="{{quickServiceBusy}}" bindtap="requestQuickService"><view class="quick-service__surface"><text class="quick-service__dot"></text><text>{{quickServiceBusy === 'celebration' ? '正在安排' : '生日/需求'}}</text></view></button>
       <button data-code="complaint" disabled="{{quickServiceBusy}}" bindtap="requestQuickService"><view class="quick-service__surface"><text class="quick-service__dot"></text><text>{{quickServiceBusy === 'complaint' ? '正在通知' : '投诉/不满意'}}</text></view></button>
     </view>
+    <view class="recommend-entry__actions recommend-entry__actions--primary" aria-label="智能推荐">
+      <button bindtap="onRecommend" loading="{{recommendationBusy}}"><text class="recommend-entry__action-icon">✦</text><view><text>帮我快速选</text><text>根据本桌情况推荐</text></view></button>
+      <button class="shake-recommendation" bindtap="onShakeRecommendation" loading="{{recommendationBusy}}" disabled="{{shakeArmed}}"><text class="recommend-entry__action-icon">↻</text><view><text>{{shakeArmed ? '请摇动手机' : '摇一摇换一组'}}</text><text>给今晚一点灵感</text></view></button>
+    </view>
 
     <view wx:if="{{pendingPayment}}" class="payment-recovery">
       <view><text>{{pendingPayment.statusText}}</text><text>应付 {{pendingPayment.amountText}}</text></view>
@@ -101,10 +105,6 @@
 
     <view wx:if="{{selectedCategory === 'recommendation' && !searchText}}" class="recommend-entry">
       <view class="recommend-entry__head"><text>今夜推荐</text><text>按这一桌的感觉，先给三组轻松选择</text></view>
-      <view class="recommend-entry__actions">
-        <button bindtap="onRecommend" loading="{{recommendationBusy}}"><text class="recommend-entry__action-icon">✦</text><view><text>帮我快速选</text><text>根据本桌情况推荐</text></view></button>
-        <button class="shake-recommendation" bindtap="onShakeRecommendation" loading="{{recommendationBusy}}" disabled="{{shakeArmed}}"><text class="recommend-entry__action-icon">↻</text><view><text>{{shakeArmed ? '请摇动手机' : '摇一摇换一组'}}</text><text>给今晚一点灵感</text></view></button>
-      </view>
       <view wx:if="{{recommendationError}}" class="recommendation-note">{{recommendationError}}，可切换“全部”继续点单。</view>
       <scroll-view wx:if="{{recommendations.length}}" scroll-x enhanced show-scrollbar="{{false}}" class="recommend-scroll"><view class="recommend-row">
         <view wx:for="{{recommendations}}" wx:key="productId" class="recommend-card {{index === 0 ? 'recommend-card--priority' : ''}}">

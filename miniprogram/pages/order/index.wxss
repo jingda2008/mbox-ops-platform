@@ -393,6 +393,7 @@
   text-align: right;
 }
 .recommend-entry__actions { display: grid; margin-top: 12rpx; grid-template-columns: 1.2fr 1fr; gap: 12rpx; }
+.recommend-entry__actions--primary { margin-top: 4rpx; margin-bottom: 14rpx; }
 .recommend-entry__actions button {
   display: flex;
   width: 100%;

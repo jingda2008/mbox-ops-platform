@@ -28,10 +28,10 @@
         <view><text class="summary-value">{{serviceOwner}}</text><text class="summary-label">本桌服务</text></view>
       </view>
 
-      <button class="primary-experience" data-url="/pages/order/index" bindtap="openTab" hover-class="button-hover">
+      <view class="primary-experience" data-url="/pages/order/index" bindtap="openTab" hover-class="button-hover" role="button" aria-role="button" aria-label="打开今晚菜单与点单">
         <view class="primary-experience__body"><text class="primary-experience__kicker">今晚从这里开始</text><text class="primary-experience__title">今晚菜单与点单</text><text class="primary-experience__copy">清晰价格，轻松选择</text></view>
         <view class="primary-experience__arrow" aria-hidden="true">→</view>
-      </button>
+      </view>
 
       <view class="section live-section">
         <view class="section-title"><text>今晚现场</text></view>

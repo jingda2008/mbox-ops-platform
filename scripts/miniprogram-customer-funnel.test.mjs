@@ -43,9 +43,9 @@ test('home menu entry stays a compact full-width horizontal control', async () =
     read('miniprogram/pages/home/index.wxss'),
   ])
 
-  assert.match(homeView, /class="primary-experience"[^>]*hover-class="button-hover"/)
+  assert.match(homeView, /<view class="primary-experience"[^>]*hover-class="button-hover"[^>]*aria-role="button"/)
   assert.match(homeView, /class="primary-experience__body"/)
-  assert.match(homeStyle, /\.primary-experience\s*\{[^}]*width:\s*100%[^}]*min-height:\s*136rpx[^}]*border-radius:\s*22rpx/)
+  assert.match(homeStyle, /\.primary-experience\s*\{[^}]*width:\s*100%[^}]*min-width:\s*100%[^}]*max-width:\s*100%[^}]*min-height:\s*136rpx[^}]*box-sizing:\s*border-box[^}]*border-radius:\s*22rpx/)
   assert.match(homeStyle, /\.primary-experience__body\s*\{[^}]*flex:\s*1/)
   assert.match(homeStyle, /\.primary-experience__title\s*\{[^}]*white-space:\s*nowrap/)
   assert.doesNotMatch(homeStyle, /\.primary-experience\s*\{[^}]*min-height:\s*218rpx/)
@@ -248,7 +248,10 @@ test('tonight ordering keeps live service separate from recommendation and deleg
   assert.ok(orderView.lastIndexOf('<view class="menu-tools">') < orderView.indexOf('class="recommend-entry"'), 'recommendation appears as selected menu content beneath the active menu categories')
   assert.match(orderView, /selectedCategory === 'recommendation'[^>]*class="recommend-entry"/)
   assert.match(orderView, /selectedCategory !== 'recommendation' \|\| searchText[^>]*class="section product-section"/)
-  assert.match(orderView, /class="recommend-entry__actions"[\s\S]*?bindtap="onRecommend"[\s\S]*?bindtap="onShakeRecommendation"/)
+  assert.match(orderView, /class="recommend-entry__actions recommend-entry__actions--primary"[\s\S]*?bindtap="onRecommend"[\s\S]*?bindtap="onShakeRecommendation"/)
+  assert.ok(orderView.indexOf('class="quick-service"') < orderView.indexOf('class="recommend-entry__actions recommend-entry__actions--primary"'))
+  assert.ok(orderView.indexOf('class="recommend-entry__actions recommend-entry__actions--primary"') < orderView.indexOf('class="menu-tools"'))
+  assert.match(orderLogic, /showRecommendationSurface\(onReady\)[\s\S]*?selectedCategory === 'recommendation'[\s\S]*?onRecommend\(\) \{ return this\.showRecommendationSurface/)
   assert.doesNotMatch(orderView, /记录今晚偏好|recommend-preference/)
   assert.match(orderView, /根据本桌情况推荐/)
   assert.ok(orderView.indexOf('class="category-scroll"') < orderView.indexOf('class="search-box"'), 'editable categories appear before search like the approved reference layout')

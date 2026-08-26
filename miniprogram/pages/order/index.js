@@ -793,7 +793,16 @@ Page({
     void this.recommend('initial', request)
   },
 
-  onRecommend() { return this.recommend('guided') },
+  showRecommendationSurface(onReady) {
+    if (this.data.selectedCategory === 'recommendation' && !this.data.searchText) return onReady()
+    const categoryState = menuCategoryState(this.data.products, 'recommendation', 'all', !this.data.browseOnly)
+    this.setData(Object.assign({}, categoryState, { searchText: '' }), () => {
+      this.applyFilters()
+      onReady()
+    })
+  },
+
+  onRecommend() { return this.showRecommendationSurface(() => this.recommend('guided')) },
 
   async recommend(intent, request) {
     const expected = request || this.currentTableRequest()
@@ -836,6 +845,9 @@ Page({
   },
 
   onShakeRecommendation() {
+    if (this.data.selectedCategory !== 'recommendation' || this.data.searchText) {
+      return this.showRecommendationSurface(() => this.onShakeRecommendation())
+    }
     if (this.data.recommendationBusy || this.data.shakeArmed) return
     const tableRequest = this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return

@@ -211,6 +211,7 @@ export function MenuOrderingWorkspace({
   const [upgradePromptProductId, setUpgradePromptProductId] = useState('')
   const [upgradeSourceProductId, setUpgradeSourceProductId] = useState('')
   const [cartMutating, setCartMutating] = useState(false)
+  const checkoutBusy = busy || cartMutating
   const [cartAdjustmentError, setCartAdjustmentError] = useState('')
   const lastRecommendationImpressionRef = useRef('')
   const handledRecommendationUpdateRef = useRef(0)
@@ -584,7 +585,7 @@ export function MenuOrderingWorkspace({
   }
 
   async function submit() {
-    if (cartProducts.length === 0 || busy || submitDisabled) return
+    if (cartProducts.length === 0 || checkoutBusy || submitDisabled) return
     if (orderSafety?.requireSubmitConfirmation !== false) {
       setConfirmationError('')
       setConfirmation('submit')
@@ -594,7 +595,7 @@ export function MenuOrderingWorkspace({
   }
 
   async function executeSubmit(duplicateOrderId?: string) {
-    if (cartProducts.length === 0 || busy || submitDisabled) return
+    if (cartProducts.length === 0 || checkoutBusy || submitDisabled) return
     try {
       await onSubmit(
         cartProducts.map((product) => ({ productId: product.id, quantity: cart[product.id]! })),
@@ -652,11 +653,11 @@ export function MenuOrderingWorkspace({
     <div className="menu-cart-line" key={product.id}>
       <div><strong>{product.name}</strong><span>¥{(cartUnitAmount(product) / 100).toFixed(0)} × {cart[product.id]}</span></div>
       <div className={`menu-stepper${(product.maxOrderQuantity ?? 50) > 50 ? ' has-direct-input' : ''}`}>
-        <button type="button" title={`移除${product.name}`} onClick={() => removeProduct(product.id)}><Trash2 size={15} /></button>
+        <button type="button" title={`移除${product.name}`} disabled={cartReadOnly || cartMutating} onClick={() => removeProduct(product.id)}><Trash2 size={15} /></button>
         {(product.maxOrderQuantity ?? 50) > 50
-          ? <input aria-label={`${product.name}数量`} type="number" inputMode="numeric" min={1} max={product.maxOrderQuantity} value={cart[product.id]} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setProductQuantity(product.id, Number(event.target.value))} />
+          ? <input aria-label={`${product.name}数量`} type="number" inputMode="numeric" min={1} max={product.maxOrderQuantity} value={cart[product.id]} disabled={cartReadOnly || cartMutating} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setProductQuantity(product.id, Number(event.target.value))} />
           : <strong>{cart[product.id]}</strong>}
-        <button type="button" title={`增加${product.name}`} onClick={() => changeQuantity(product.id, 1)}><Plus size={15} /></button>
+        <button type="button" title={`增加${product.name}`} disabled={cartReadOnly || cartMutating} onClick={() => changeQuantity(product.id, 1)}><Plus size={15} /></button>
       </div>
     </div>
   ))
@@ -789,6 +790,7 @@ export function MenuOrderingWorkspace({
                     type="button"
                     className="menu-recommendation-quick-add"
                     aria-label={`快速加入${product.name}`}
+                    disabled={cartMutating}
                     onClick={() => changeQuantity(product.id, 1)}
                   ><Plus size={19} strokeWidth={2.5} /></button>}
                   <div className="menu-recommendation-option-copy">
@@ -804,11 +806,11 @@ export function MenuOrderingWorkspace({
                         : <span><b>组合已配齐</b></span>}
                     </div>
                     {!status.orderable ? <button className="menu-recommendation-choose" disabled><Clock3 size={16} />{status.label}</button>
-                      : quantity === 0 ? <button className="menu-recommendation-choose" onClick={() => changeQuantity(product.id, 1)}><Plus size={16} />{chooseLabel}</button>
+                      : quantity === 0 ? <button className="menu-recommendation-choose" disabled={cartMutating} onClick={() => changeQuantity(product.id, 1)}><Plus size={16} />{chooseLabel}</button>
                         : <div className="menu-recommendation-selected">
-                          <button aria-label={`减少${product.name}`} title={`减少${product.name}`} onClick={() => changeQuantity(product.id, -1)}><Minus size={16} /></button>
+                          <button aria-label={`减少${product.name}`} title={`减少${product.name}`} disabled={cartMutating} onClick={() => changeQuantity(product.id, -1)}><Minus size={16} /></button>
                           <span>已选 {quantity}</span>
-                          <button aria-label={`增加${product.name}`} title={`增加${product.name}`} onClick={() => changeQuantity(product.id, 1)}><Plus size={16} /></button>
+                          <button aria-label={`增加${product.name}`} title={`增加${product.name}`} disabled={cartMutating} onClick={() => changeQuantity(product.id, 1)}><Plus size={16} /></button>
                         </div>}
                   </div>
                 </article>
@@ -891,14 +893,14 @@ export function MenuOrderingWorkspace({
                       {!status.orderable ? (
                         <button className="menu-unavailable-button" title={status.label} aria-label={`${product.name}暂不可点，${status.label}`} disabled><Clock3 size={18} /></button>
                       ) : quantity === 0 ? (
-                        <button type="button" className="menu-add-button" title={`加入${product.name}`} aria-label={`加入${product.name}`} onClick={() => changeQuantity(product.id, 1)}><Plus size={20} strokeWidth={2.5} /></button>
+                        <button type="button" className="menu-add-button" title={`加入${product.name}`} aria-label={`加入${product.name}`} disabled={cartMutating} onClick={() => changeQuantity(product.id, 1)}><Plus size={20} strokeWidth={2.5} /></button>
                       ) : (
                         <div className={`menu-stepper${(product.maxOrderQuantity ?? 50) > 50 ? ' has-direct-input' : ''}`}>
-                          <button type="button" title={`减少${product.name}`} onClick={() => changeQuantity(product.id, -1)}><Minus size={17} /></button>
+                          <button type="button" title={`减少${product.name}`} disabled={cartMutating} onClick={() => changeQuantity(product.id, -1)}><Minus size={17} /></button>
                           {(product.maxOrderQuantity ?? 50) > 50
-                            ? <input aria-label={`${product.name}数量`} type="number" inputMode="numeric" min={1} max={product.maxOrderQuantity} value={quantity} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setProductQuantity(product.id, Number(event.target.value))} />
+                            ? <input aria-label={`${product.name}数量`} type="number" inputMode="numeric" min={1} max={product.maxOrderQuantity} value={quantity} disabled={cartMutating} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setProductQuantity(product.id, Number(event.target.value))} />
                             : <strong>{quantity}</strong>}
-                          <button type="button" title={`增加${product.name}`} onClick={() => changeQuantity(product.id, 1)}><Plus size={17} /></button>
+                          <button type="button" title={`增加${product.name}`} disabled={cartMutating} onClick={() => changeQuantity(product.id, 1)}><Plus size={17} /></button>
                         </div>
                       )}
                     </footer>
@@ -918,8 +920,8 @@ export function MenuOrderingWorkspace({
               {fulfillmentNoteField}
               <footer className="menu-cart-drawer-footer">
                 <div><span>{deemphasizeCollapsedTotal ? '核对后收款' : '合计'}</span><strong>¥{formatMenuAmount(total)}</strong></div>
-                <button className="menu-submit-button" disabled={cartProducts.length === 0 || busy || submitDisabled} onClick={() => void submit()}>
-                  <Check size={18} />{busy ? '正在提交' : submitLabel}
+                <button className="menu-submit-button" disabled={cartProducts.length === 0 || checkoutBusy || submitDisabled} onClick={() => void submit()}>
+                  <Check size={18} />{cartMutating ? '正在同步选择' : busy ? '正在提交' : submitLabel}
                 </button>
               </footer>
             </aside>
@@ -939,8 +941,8 @@ export function MenuOrderingWorkspace({
                 <small>{itemCount > 0 ? (deemphasizeCollapsedTotal ? `打开核对 · 合计 ¥${formatMenuAmount(total)}` : `查看明细 · 合计 ¥${formatMenuAmount(total)}`) : '与右上角历史订单相互独立'}</small>
               </span>
             </button>
-            <button className="menu-submit-button" disabled={cartProducts.length === 0 || busy || submitDisabled} onClick={() => setCartOpen(true)}>
-              {submitDisabled ? submitLabel : '查看已选'}<ChevronRight size={18} />
+            <button className="menu-submit-button" disabled={cartProducts.length === 0 || checkoutBusy || submitDisabled} onClick={() => setCartOpen(true)}>
+              {cartMutating ? '正在同步' : submitDisabled ? submitLabel : '查看已选'}<ChevronRight size={18} />
             </button>
           </aside>
         </> : (
@@ -949,8 +951,8 @@ export function MenuOrderingWorkspace({
             <div className="menu-cart-lines">{cartLines}</div>
             {fulfillmentNoteField}
             <div className="menu-cart-total"><span><ShoppingCart size={16} /><b>{itemCount}</b>件 · 合计</span><strong>¥{(total / 100).toFixed(2)}</strong></div>
-            <button className="menu-submit-button" disabled={cartProducts.length === 0 || busy || submitDisabled} onClick={() => void submit()}>
-              <Check size={19} />{busy ? '正在提交' : submitLabel}
+            <button className="menu-submit-button" disabled={cartProducts.length === 0 || checkoutBusy || submitDisabled} onClick={() => void submit()}>
+              <Check size={19} />{cartMutating ? '正在同步选择' : busy ? '正在提交' : submitLabel}
             </button>
             <p className="menu-submit-hint">{submitHint}</p>
           </aside>
@@ -1000,12 +1002,12 @@ export function MenuOrderingWorkspace({
             {detailQuantity === 0 ? <button
               className="menu-submit-button"
               data-haptic="action"
-              disabled={availability.get(detailProduct.id)?.orderable !== true}
+              disabled={availability.get(detailProduct.id)?.orderable !== true || cartMutating}
               onClick={() => changeQuantity(detailProduct.id, 1)}
             ><Plus size={18} />加入购物车</button> : <div className="menu-detail-stepper" aria-label={`${detailProduct.name}已选${detailQuantity}件`}>
-              <button type="button" aria-label={`减少${detailProduct.name}`} onClick={() => changeQuantity(detailProduct.id, -1)}><Minus size={18} /></button>
+              <button type="button" aria-label={`减少${detailProduct.name}`} disabled={cartMutating} onClick={() => changeQuantity(detailProduct.id, -1)}><Minus size={18} /></button>
               <span><small>已加入购物车</small><strong>{detailQuantity} 件</strong></span>
-              <button type="button" aria-label={`增加${detailProduct.name}`} onClick={() => changeQuantity(detailProduct.id, 1)}><Plus size={18} /></button>
+              <button type="button" aria-label={`增加${detailProduct.name}`} disabled={cartMutating} onClick={() => changeQuantity(detailProduct.id, 1)}><Plus size={18} /></button>
             </div>}
           </footer>
         </aside>
@@ -1053,16 +1055,16 @@ export function MenuOrderingWorkspace({
           </>}
           {confirmationError && <div className="menu-confirm-error" role="alert">{confirmationError}</div>}
           <footer>
-            <button className="secondary-button" disabled={busy} onClick={() => setConfirmation(null)}>再看看</button>
+            <button className="secondary-button" disabled={checkoutBusy} onClick={() => setConfirmation(null)}>再看看</button>
             <button className="primary-button" data-haptic="action" disabled={isMenuConfirmationDisabled({
-              busy,
+              busy: checkoutBusy,
               submitDisabled,
               confirmation,
               confirmedDuplicateOrderId,
             })} onClick={() => {
               if (confirmation === 'continue') confirmContinuation()
               else void executeSubmit(confirmation === 'duplicate' ? confirmedDuplicateOrderId : undefined)
-            }}><Check size={17} />{busy ? '正在提交' : confirmation === 'duplicate' ? '确认继续加单' : confirmation === 'continue' ? '继续选商品' : complimentaryMode ? '确认赠送' : '确认上单'}</button>
+            }}><Check size={17} />{cartMutating ? '正在同步选择' : busy ? '正在提交' : confirmation === 'duplicate' ? '确认继续加单' : confirmation === 'continue' ? '继续选商品' : complimentaryMode ? '确认赠送' : '确认上单'}</button>
           </footer>
         </section>
       </div>}

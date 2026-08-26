@@ -93,6 +93,10 @@ async function guestCartItemCount(cartDock: import('@playwright/test').Locator):
 test('mobile guest scans a fixed table QR, searches, orders and sees payment result', async ({ page }) => {
   const data = await fixture()
   await page.goto(data.guestUrl)
+  await page.route('**/api/guest/shared-cart/lines', async (route) => {
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 400))
+    await route.continue()
+  })
   await expect(page.getByTestId('normalized-guest-app')).toBeVisible()
   await expect(page.getByRole('button', { name: /历史已下单.*W01/ })).toBeVisible()
   await expectNoHorizontalOverflow(page)

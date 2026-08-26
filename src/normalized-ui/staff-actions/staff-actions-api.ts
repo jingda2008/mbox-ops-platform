@@ -631,8 +631,15 @@ export class StaffActionsApi implements StaffActionsApiPort {
     return this.getData('/api/commerce/assisted-order-access', signal)
   }
 
-  loadTablePaymentOrders(tableSessionId: string, signal?: AbortSignal): Promise<StaffTablePaymentOrder[]> {
-    return this.getData(`/api/commerce/table-sessions/${encodeURIComponent(tableSessionId)}/payment-orders`, signal)
+  async loadTablePaymentOrders(tableSessionId: string, signal?: AbortSignal): Promise<StaffTablePaymentOrder[]> {
+    const data = await this.getData<unknown>(
+      `/api/commerce/table-sessions/${encodeURIComponent(tableSessionId)}/payment-orders`,
+      signal,
+    )
+    if (!Array.isArray(data)) {
+      throw new StaffActionsApiError('本桌收款数据无法识别，请刷新后重试', 'INVALID_TABLE_PAYMENT_RESPONSE', null)
+    }
+    return data.map((value) => tablePaymentOrder(value))
   }
 
   loadAssistedOrderCatalog(signal?: AbortSignal): Promise<AssistedOrderCatalogProduct[]> {
@@ -1184,6 +1191,29 @@ async function readJson(response: Response): Promise<unknown> {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function tablePaymentOrder(value: unknown): StaffTablePaymentOrder {
+  if (!isObject(value)
+    || typeof value.id !== 'string'
+    || typeof value.publicId !== 'string'
+    || typeof value.currency !== 'string'
+    || typeof value.paymentStatus !== 'string'
+    || typeof value.outstandingAmountMinor !== 'number'
+    || !Number.isFinite(value.outstandingAmountMinor)
+    || typeof value.hasOnlinePaymentInProgress !== 'boolean'
+    || (value.unresolvedOnlinePaymentId !== null && typeof value.unresolvedOnlinePaymentId !== 'string')) {
+    throw new StaffActionsApiError('本桌收款数据无法识别，请刷新后重试', 'INVALID_TABLE_PAYMENT_RESPONSE', null)
+  }
+  return {
+    id: value.id,
+    publicId: value.publicId,
+    currency: value.currency,
+    paymentStatus: value.paymentStatus,
+    outstandingAmountMinor: value.outstandingAmountMinor,
+    hasOnlinePaymentInProgress: value.hasOnlinePaymentInProgress,
+    unresolvedOnlinePaymentId: value.unresolvedOnlinePaymentId,
+  }
 }
 
 function isOnlinePaymentAction(value: unknown): value is OnlinePaymentAction {

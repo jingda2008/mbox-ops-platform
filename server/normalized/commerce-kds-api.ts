@@ -210,6 +210,95 @@ class KdsTaskNotFoundError extends Error {
   }
 }
 
+export interface StaffTablePaymentOrderView {
+  id: string
+  publicId: string
+  currency: string
+  paymentStatus: string
+  outstandingAmountMinor: number
+  hasOnlinePaymentInProgress: boolean
+  unresolvedOnlinePaymentId: string | null
+}
+
+export async function listTablePaymentOrdersForSession(
+  transaction: ScopedTransaction,
+  tableSessionId: string,
+): Promise<StaffTablePaymentOrderView[]> {
+  const result = await transaction.query<{
+    id: string
+    public_id: string
+    currency: string
+    payment_status: string
+    outstanding_amount_minor: string | number
+    has_online_payment_in_progress: boolean | null
+    unresolved_online_payment_id: string | null
+  }>(`
+    SELECT order_header.id,order_header.public_id,order_header.currency,order_header.payment_status,
+      GREATEST(0,order_header.total_amount_minor-paid.captured_amount_minor+refund.refunded_amount_minor)
+        AS outstanding_amount_minor,
+      pending.has_online_payment_in_progress,
+      pending.unresolved_online_payment_id
+    FROM mbox.orders order_header
+    LEFT JOIN LATERAL (
+      SELECT COALESCE(SUM(payment.amount_minor) FILTER (
+        WHERE payment.status IN ('succeeded','partially_refunded','refunded')
+      ),0)::bigint
+        AS captured_amount_minor
+      FROM mbox.payments payment
+      WHERE payment.tenant_id=order_header.tenant_id AND payment.store_id=order_header.store_id
+        AND payment.order_id=order_header.id
+    ) paid ON true
+    LEFT JOIN LATERAL (
+      SELECT COALESCE(SUM(refund_row.amount_minor) FILTER (WHERE refund_row.status='succeeded'),0)::bigint
+        AS refunded_amount_minor
+      FROM mbox.refunds refund_row
+      JOIN mbox.payments payment
+        ON payment.tenant_id=refund_row.tenant_id AND payment.store_id=refund_row.store_id
+       AND payment.id=refund_row.payment_id
+      WHERE refund_row.tenant_id=order_header.tenant_id AND refund_row.store_id=order_header.store_id
+        AND payment.order_id=order_header.id
+    ) refund ON true
+    LEFT JOIN LATERAL (
+      SELECT payment.id AS unresolved_online_payment_id,
+        true AS has_online_payment_in_progress
+      FROM mbox.payments payment
+      WHERE payment.tenant_id=order_header.tenant_id AND payment.store_id=order_header.store_id
+        AND payment.order_id=order_header.id AND payment.status='pending'
+        AND payment.provider IN ('wechat','postar','simulation')
+        AND payment.retry_released_at IS NULL
+      ORDER BY payment.created_at DESC,payment.id DESC
+      LIMIT 1
+    ) pending ON true
+    LEFT JOIN LATERAL (
+      SELECT EXISTS(
+        SELECT 1 FROM mbox.order_recollection_authorizations recollection_authorization
+        WHERE recollection_authorization.tenant_id=order_header.tenant_id
+          AND recollection_authorization.store_id=order_header.store_id
+          AND recollection_authorization.order_id=order_header.id
+          AND recollection_authorization.status='active'
+          AND recollection_authorization.expires_at>clock_timestamp()
+      ) AS active
+    ) recollection ON true
+    WHERE order_header.tenant_id=$1::uuid AND order_header.store_id=$2::uuid
+      AND order_header.table_session_id=$3::uuid AND order_header.status<>'cancelled'
+      AND GREATEST(0,order_header.total_amount_minor-paid.captured_amount_minor+refund.refunded_amount_minor)>0
+      -- A server can collect only an ordinary unpaid balance, or a balance
+      -- that a cashier explicitly reopened after a completed refund.
+      AND (refund.refunded_amount_minor=0 OR recollection.active)
+    ORDER BY order_header.created_at DESC,order_header.id DESC
+    LIMIT 20
+  `, [transaction.scope.tenantId, transaction.scope.storeId, tableSessionId])
+  return result.rows.map((row) => ({
+    id: row.id,
+    publicId: row.public_id,
+    currency: row.currency,
+    paymentStatus: row.payment_status,
+    outstandingAmountMinor: Number(row.outstanding_amount_minor),
+    hasOnlinePaymentInProgress: row.has_online_payment_in_progress === true,
+    unresolvedOnlinePaymentId: row.unresolved_online_payment_id,
+  }))
+}
+
 export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = async (
   app,
   options,
@@ -261,7 +350,13 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
   // to select from the table page.
   app.get('/commerce/table-sessions/:tableSessionId/payment-orders', async (request, reply) => handleRoute(reply, async () => {
     const context = await resolveContext(options, request)
-    await requirePermission(options, context, 'payment.initiate.staff')
+    const collectionPermissions = [
+      'payment.initiate.staff',
+      'payment.manual.cash.record',
+      'payment.manual.pos.record',
+      'payment.manual.external.record',
+    ] as const
+    await requireAnyPermission(options, context, collectionPermissions)
     const tableSessionId = readUuid(
       readRequiredString(readObject(request.params, '路由参数').tableSessionId, 'tableSessionId', 64),
       'tableSessionId',
@@ -270,78 +365,10 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
       await assertEmployeeTableSessionAccess(transaction, {
         employeeId: context.employeeId,
         tableSessionId,
-        requiredPermissionCodes: ['payment.initiate.staff'],
         includeTableViewAll: false,
         allTablePermissionCodes: ['payment.collect.all_tables'],
       })
-      const result = await transaction.query<{
-        id: string
-        public_id: string
-        currency: string
-        payment_status: string
-        outstanding_amount_minor: string | number
-        has_online_payment_in_progress: boolean
-        unresolved_online_payment_id: string | null
-      }>(`
-        SELECT order_header.id,order_header.public_id,order_header.currency,order_header.payment_status,
-          GREATEST(0,order_header.total_amount_minor-paid.captured_amount_minor-refund.refunded_amount_minor)
-            AS outstanding_amount_minor,
-          pending.has_online_payment_in_progress
-        FROM mbox.orders order_header
-        LEFT JOIN LATERAL (
-          SELECT COALESCE(SUM(payment.amount_minor) FILTER (WHERE payment.status='succeeded'),0)::bigint
-            AS captured_amount_minor
-          FROM mbox.payments payment
-          WHERE payment.tenant_id=order_header.tenant_id AND payment.store_id=order_header.store_id
-            AND payment.order_id=order_header.id
-        ) paid ON true
-        LEFT JOIN LATERAL (
-          SELECT COALESCE(SUM(refund_row.amount_minor) FILTER (WHERE refund_row.status='succeeded'),0)::bigint
-            AS refunded_amount_minor
-          FROM mbox.refunds refund_row
-          JOIN mbox.payments payment
-            ON payment.tenant_id=refund_row.tenant_id AND payment.store_id=refund_row.store_id
-           AND payment.id=refund_row.payment_id
-          WHERE refund_row.tenant_id=order_header.tenant_id AND refund_row.store_id=order_header.store_id
-            AND payment.order_id=order_header.id
-        ) refund ON true
-        LEFT JOIN LATERAL (
-          SELECT payment.id AS unresolved_online_payment_id,
-            true AS has_online_payment_in_progress
-          FROM mbox.payments payment
-            WHERE payment.tenant_id=order_header.tenant_id AND payment.store_id=order_header.store_id
-              AND payment.order_id=order_header.id AND payment.status='pending'
-              AND payment.provider IN ('wechat','postar','simulation')
-              AND payment.retry_released_at IS NULL
-          ORDER BY payment.created_at DESC, payment.id DESC
-          LIMIT 1
-        ) pending ON true
-        LEFT JOIN LATERAL (
-          SELECT EXISTS(
-            SELECT 1 FROM mbox.order_recollection_authorizations recollection_authorization
-            WHERE recollection_authorization.tenant_id=order_header.tenant_id AND recollection_authorization.store_id=order_header.store_id
-              AND recollection_authorization.order_id=order_header.id AND recollection_authorization.status='active'
-              AND recollection_authorization.expires_at>clock_timestamp()
-          ) AS active
-        ) recollection ON true
-        WHERE order_header.tenant_id=$1::uuid AND order_header.store_id=$2::uuid
-          AND order_header.table_session_id=$3::uuid AND order_header.status<>'cancelled'
-          AND GREATEST(0,order_header.total_amount_minor-paid.captured_amount_minor-refund.refunded_amount_minor)>0
-          -- A server can collect only an ordinary unpaid balance, or a balance
-          -- that a cashier explicitly reopened after a completed refund.
-          AND (refund.refunded_amount_minor=0 OR recollection.active)
-        ORDER BY order_header.created_at DESC,order_header.id DESC
-        LIMIT 20
-      `, [context.scope.tenantId, context.scope.storeId, tableSessionId])
-      return result.rows.map((row) => ({
-        id: row.id,
-        publicId: row.public_id,
-        currency: row.currency,
-        paymentStatus: row.payment_status,
-        outstandingAmountMinor: Number(row.outstanding_amount_minor),
-        hasOnlinePaymentInProgress: row.has_online_payment_in_progress === true,
-        unresolvedOnlinePaymentId: row.unresolved_online_payment_id,
-      }))
+      return listTablePaymentOrdersForSession(transaction, tableSessionId)
     })
     return reply.send({ data })
   }))

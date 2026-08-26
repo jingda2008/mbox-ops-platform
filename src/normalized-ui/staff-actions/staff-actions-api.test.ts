@@ -249,6 +249,56 @@ describe('StaffActionsApi', () => {
     })
   })
 
+  it('requires an explicit nullable unresolved payment id in the table collection response', async () => {
+    const paymentId = '11111111-1111-4111-8111-111111111111'
+    const valid = {
+      id: '22222222-2222-4222-8222-222222222222',
+      publicId: 'ORDER-A01-0001',
+      currency: 'CNY',
+      paymentStatus: 'unpaid',
+      outstandingAmountMinor: 2_000,
+      hasOnlinePaymentInProgress: true,
+      unresolvedOnlinePaymentId: paymentId,
+    }
+    const send = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [valid] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{
+        ...valid,
+        unresolvedOnlinePaymentId: undefined,
+      }] }), { status: 200 }))
+    const api = new StaffActionsApi({ fetch: send })
+
+    await expect(api.loadTablePaymentOrders?.('33333333-3333-4333-8333-333333333333')).resolves.toEqual([valid])
+    await expect(api.loadTablePaymentOrders?.('33333333-3333-4333-8333-333333333333')).rejects.toMatchObject({
+      code: 'INVALID_TABLE_PAYMENT_RESPONSE',
+    })
+  })
+
+  it('records confirmed table cash collection through the existing audited manual-payment command', async () => {
+    const send = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      data: { id: '11111111-1111-4111-8111-111111111111', status: 'succeeded' },
+      meta: { replayed: false },
+    }), { status: 201, headers: { 'content-type': 'application/json' } }))
+    const api = new StaffActionsApi({ fetch: send, createIdempotencyKey: () => 'cash-key-0001' })
+
+    await api.recordManualPayment({
+      orderId: '22222222-2222-4222-8222-222222222222',
+      provider: 'cash',
+      receiptReference: 'CASH-A01-20260827203000-1234abcd',
+    })
+
+    const [url, request] = send.mock.calls[0]!
+    expect(url).toBe('/api/payments/manual')
+    expect(request?.method).toBe('POST')
+    expect(new Headers(request?.headers).get('idempotency-key')).toBe('staff-manual-payment-cash-key-0001')
+    expect(JSON.parse(String(request?.body))).toEqual({
+      orderId: '22222222-2222-4222-8222-222222222222',
+      provider: 'cash',
+      method: 'cash',
+      receiptReference: 'CASH-A01-20260827203000-1234abcd',
+    })
+  })
+
   it('queries the original provider payment instead of creating another charge', async () => {
     const paymentId = '11111111-1111-4111-8111-111111111111'
     const send = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({

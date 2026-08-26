@@ -34,6 +34,17 @@ describe('StaffActionsPanel', () => {
     expect(css).toMatch(/\.staff-open-table-scene select \{[^}]*min-height:\s*42px;/)
   })
 
+  it('keeps a one-tap table collection entry while preserving the full table action sheet', () => {
+    const source = readFileSync(new URL('./StaffActionsPanel.tsx', import.meta.url), 'utf8')
+    const css = readFileSync(new URL('./staff-actions-panel.css', import.meta.url), 'utf8')
+
+    expect(source).toContain('staff-table-quick-payment')
+    expect(source).toContain('setTablePaymentOpen(true)')
+    expect(source).toContain("'payment.manual.cash.record'")
+    expect(css).toMatch(/\.staff-table-quick-payment \{[^}]*min-height:\s*44px/)
+    expect(css).toMatch(/\.staff-session-actions \.is-payment \{[^}]*grid-column:\s*1 \/ -1/)
+  })
+
   it('keeps physical turnover separate from financial follow-up', () => {
     const source = readFileSync(new URL('./StaffActionsPanel.tsx', import.meta.url), 'utf8')
 

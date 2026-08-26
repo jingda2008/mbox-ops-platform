@@ -71,6 +71,15 @@ export interface StaffActionsPanelProps {
   onLoginRequired?: () => void
 }
 
+const TABLE_COLLECTION_PERMISSIONS = [
+  'payment.initiate.staff',
+  'payment.manual.cash.record',
+] as const
+
+function hasTableCollectionPermission(permissions: readonly string[]): boolean {
+  return TABLE_COLLECTION_PERMISSIONS.some((permission) => permissions.includes(permission))
+}
+
 export function StaffActionsPanel({
   api: suppliedApi,
   initialTab = 'tasks',
@@ -788,23 +797,33 @@ export function StaffActionsPanel({
                   const mood = table.activeSession?.latestMood === null || table.activeSession === null
                     ? null
                     : tableMoodPresentation(table.activeSession.latestMood.code)
+                  const canCollect = table.activeSession !== null
+                    && hasTableCollectionPermission(permissions)
+                    && (table.assignedToActor || permissions.includes('payment.collect.all_tables'))
                   return (
-                  <button
-                    type="button"
-                    className={`staff-table-tile ${table.activeSession === null ? '' : 'is-open'} ${selectedTableId === table.id ? 'is-selected' : ''}`}
-                    key={table.id}
-                    onClick={() => selectTable(table)}
-                    disabled={pendingAction === `table:${table.id}`}
-                  >
-                    <strong>{table.code}</strong>
-                    <span>{table.activeSession === null ? `${table.capacity}人` : `${table.activeSession.guestCount}人 · ${table.activeSession.status === 'closing' ? '结台中' : '已开台'}`}</span>
-                    {table.assignedToActor && <small>负责桌</small>}
-                    {mood !== null && (
-                      <span className="staff-table-mood" title={`客人状态：${mood.label}`} aria-label={`客人状态：${mood.label}`}>
-                        {mood.symbol}
-                      </span>
-                    )}
-                  </button>
+                  <div className="staff-table-tile-shell" key={table.id}>
+                    <button
+                      type="button"
+                      className={`staff-table-tile ${table.activeSession === null ? '' : 'is-open'} ${selectedTableId === table.id ? 'is-selected' : ''}`}
+                      onClick={() => selectTable(table)}
+                      disabled={pendingAction === `table:${table.id}`}
+                    >
+                      <strong>{table.code}</strong>
+                      <span>{table.activeSession === null ? `${table.capacity}人` : `${table.activeSession.guestCount}人 · ${table.activeSession.status === 'closing' ? '结台中' : '已开台'}`}</span>
+                      {table.assignedToActor && <small>负责桌</small>}
+                      {mood !== null && (
+                        <span className="staff-table-mood" title={`客人状态：${mood.label}`} aria-label={`客人状态：${mood.label}`}>
+                          {mood.symbol}
+                        </span>
+                      )}
+                    </button>
+                    {canCollect && <button type="button" className="staff-table-quick-payment"
+                      aria-label={`${table.code}直接收款`}
+                      disabled={pendingAction === `table:${table.id}`}
+                      onClick={() => { selectTable(table); setTablePaymentOpen(true) }}>
+                      <QrCode size={15} />收款
+                    </button>}
+                  </div>
                   )
                 })}
               </div>
@@ -1426,6 +1445,9 @@ function TableActionSheet(props: TableActionSheetProps) {
           {table.activeSession.guestCartWritesFrozen && <p className="staff-close-issue" role="status"><strong>顾客购物车已锁定：</strong>顾客仍可查看，服务人员核对完成后请恢复修改。</p>}
           {props.closeIssue !== null && <p className="staff-close-issue" role="alert"><strong>暂不能结台：</strong>{props.closeIssue}</p>}
           <div className="staff-session-actions">
+            {hasTableCollectionPermission(props.permissions) && (
+              <button type="button" className="is-payment" onClick={props.onPayment}><QrCode size={17} /> 本桌收款</button>
+            )}
             {hasPermission(props.permissions, 'observation.record') && (
               <button type="button" className="is-observation" onClick={props.onObservation}><MessageSquareText size={17} /> 记录桌台情况</button>
             )}
@@ -1436,9 +1458,6 @@ function TableActionSheet(props: TableActionSheetProps) {
             )}
             {hasPermission(props.permissions, 'order.create') && (
               <button type="button" className="is-commerce" onClick={props.onOrder}><ShoppingCart size={17} /> 协助点单</button>
-            )}
-            {hasPermission(props.permissions, 'payment.initiate.staff') && (
-              <button type="button" className="is-commerce" onClick={props.onPayment}><QrCode size={17} /> 本桌收款</button>
             )}
             {hasPermission(props.permissions, 'order.create') && hasPermission(props.permissions, 'order.gift') && (
               <button type="button" className="is-gift" onClick={props.onGift}><Gift size={17} /> 赠送商品</button>

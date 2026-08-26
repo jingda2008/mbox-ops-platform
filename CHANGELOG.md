@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.0-rc.140 - 2026-08-26
+
+- Replaces browser-native confirmation and short text prompts throughout the
+  Web staff application with a fixed, accessible M-BOX dialog. Destructive
+  actions remain explicit; normal choice sheets in the mini-program stay
+  native so multi-option actions do not become modal confirmation flows.
+- Makes the mini-program order surface distinguish an unavailable show feed
+  from an empty schedule, offering a local retry without blocking ordering.
+- Reads the public performance schedule by date rather than through a table
+  session and makes the customer calendar keep the selected date in view.
+
 ## 1.0.0-rc.139 - 2026-08-26
 
 - Makes the employee physical-turnover action explicit: when a guest has left,

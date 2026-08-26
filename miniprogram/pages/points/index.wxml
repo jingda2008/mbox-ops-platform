@@ -17,7 +17,7 @@
     <view wx:else class="empty-member"><text>当前身份还没有会员账户</text><button bindtap="openMembership">返回“我的”查看入会说明</button></view>
 
     <view wx:if="{{membership && processing.length}}" class="progress-card">
-      <view class="progress-head"><text>处理进度</text><text>仅显示本人订单</text></view>
+      <view class="progress-head"><text>积分与成长值进展</text><text>仅显示你的记录</text></view>
       <view wx:for="{{processing}}" wx:key="key" class="progress-row">
         <view class="progress-marker {{item.active ? 'is-active' : ''}}"></view>
         <view><text>{{item.title}}</text><text>{{item.message}}</text><text wx:if="{{item.referenceText}}">{{item.referenceText}} · {{item.updatedAt}}</text><text wx:else>{{item.updatedAt}}</text></view>
@@ -39,6 +39,6 @@
       <state-panel wx:if="{{!growth.length}}" type="empty" title="还没有成长值记录" message="成长值与可用积分分开计算" />
     </view>
 
-    <view class="ledger-note"><text>记录说明</text><text>退款冲回、积分到期、审核补发、人工调整和兑换返还会使用不同名称，不会混成“消费积分”。如发现异常，请由店长发起核对，顾客不能自行填写补分金额。</text></view>
+    <view class="ledger-note"><text>记录说明</text><text>退款、到期、补发、调整和兑换返还会分别显示。如对积分有疑问，请联系门店协助核对。</text></view>
   </block>
 </view>

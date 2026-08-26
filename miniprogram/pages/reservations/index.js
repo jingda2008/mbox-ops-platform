@@ -134,7 +134,7 @@ Page({
         seatName: (this.data.seatOptions.find((option) => option.code === item.seatPreference) || this.data.seatOptions[0]).name,
         priorityBooking: item.priorityBooking || null,
         priorityText: item.priorityBooking
-          ? '已按会员优先订座规则进入安排队列；以现场可用座位为准，不承诺固定桌位。'
+          ? '门店会优先安排；具体座位以到店时现场安排为准。'
           : '',
         active: true,
         performanceImpact: pendingByReservation.get(item.publicId) || null,
@@ -194,7 +194,7 @@ Page({
       }))
       const platformResult = platform[option.templateId]
       if (!['accept','reject','ban'].includes(platformResult)) {
-        this.setData({ notificationNotice: '微信没有返回明确授权结果，未保存提醒授权。' })
+        this.setData({ notificationNotice: '未完成提醒选择，可稍后再试。' })
         return
       }
       await recordReservationPerformanceNotificationAuthorization({

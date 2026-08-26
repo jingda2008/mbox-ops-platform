@@ -35,10 +35,11 @@
     <view wx:if="{{error}}" class="error-banner gate-error">{{error}}</view>
 
     <view class="browse-menu">
-      <view class="browse-menu__heading"><view><text>今晚菜单</text><text>价格透明 · {{connectionState === 'waiting' ? '开台后按实时库存下单' : '到店后按实时库存下单'}}</text></view><text>{{visibleProducts.length}} 款</text></view>
+      <view class="browse-menu__heading"><view><text>今晚菜单</text><text>价格透明 · {{connectionState === 'waiting' ? '开台后即可下单' : '到店后即可下单'}}</text></view><text>{{visibleProducts.length}} 款</text></view>
       <view class="menu-tools menu-tools--browse">
-        <view class="search-box"><text>⌕</text><input value="{{searchText}}" placeholder="搜索酒水、套餐或口味" bindinput="onSearchInput" /></view>
         <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="category-scroll"><view class="category-row"><button wx:for="{{categories}}" wx:key="code" class="{{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectCategory">{{item.name}}</button></view></scroll-view>
+        <scroll-view wx:if="{{subcategories.length}}" scroll-x enhanced show-scrollbar="{{false}}" class="category-scroll category-scroll--sub"><view class="category-row category-row--sub"><button wx:for="{{subcategories}}" wx:key="code" class="{{selectedSubcategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectSubcategory">{{item.name}}</button></view></scroll-view>
+        <view class="search-box"><text>⌕</text><input value="{{searchText}}" placeholder="搜索酒水、套餐或口味" bindinput="onSearchInput" /></view>
       </view>
       <view wx:if="{{visibleProducts.length}}" class="product-list product-list--browse">
         <view wx:for="{{visibleProducts}}" wx:key="productId" class="product-row {{item.available ? '' : 'is-unavailable'}}">
@@ -47,7 +48,7 @@
             <view wx:else class="product-media__placeholder"><text>M-BOX</text></view>
           </view>
           <view class="product-main"><text class="product-kind">{{item.productKind === 'bundle' ? '体验组合' : item.categoryName}}</text><text class="product-name">{{item.name}}</text><text class="product-copy">{{item.description || item.includedText || '详情以当晚正式菜单为准'}}</text></view>
-          <view class="product-action"><text class="product-price">{{item.priceText}}</text><text class="product-availability {{item.available ? 'is-available' : 'is-unavailable'}}">{{item.availabilityText}}</text><text class="product-availability-copy">{{item.available ? (connectionState === 'waiting' ? '服务人员开台后可下单' : '到店扫码后可下单') : item.availabilityDetail}}</text></view>
+          <view class="product-action"><view class="product-action__meta"><text class="product-price">{{item.priceText}}</text><text class="product-availability {{item.available ? 'is-available' : 'is-unavailable'}}">{{item.availabilityText}}</text><text class="product-availability-copy">{{item.available ? (connectionState === 'waiting' ? '服务人员开台后可下单' : '到店扫码后可下单') : item.availabilityDetail}}</text></view></view>
         </view>
       </view>
       <state-panel wx:else type="empty" title="没有找到符合条件的商品" message="可清空搜索或切换分类" />
@@ -57,18 +58,20 @@
   <block wx:else>
     <view wx:if="{{error}}" class="error-banner">{{error}}</view>
     <view wx:if="{{success}}" class="success-banner">{{success}}</view>
-    <view wx:if="{{cartWritesFrozen}}" class="error-banner">服务人员正在核对本桌点单，暂时只能查看；完成后会恢复修改。</view>
+    <view wx:if="{{cartWritesFrozen}}" class="error-banner">正在确认本桌点单，暂时只能查看；确认后可继续修改。</view>
 
     <view class="table-strip">
-      <view class="table-strip__table"><text class="table-strip__label">当前桌位</text><text class="table-strip__value">{{table.displayName}}</text></view>
-      <button class="table-strip__service" bindtap="openStatus"><text class="table-strip__label">本桌服务{{serviceSummary.live ? ' · 自动更新' : ''}}</text><text class="table-strip__service-value">{{serviceSummary.label}}</text><text class="table-strip__service-copy">{{serviceSummary.detail}}</text></button>
-      <view wx:if="{{performance}}" class="show-brief"><text>{{performance.state}}</text><text>{{performance.name}} · {{performance.time}}</text></view>
-      <button wx:elif="{{performanceError}}" class="show-brief show-brief--retry" bindtap="retryPerformance"><text>演出信息暂未更新</text><text>{{performanceError}}</text></button>
+      <view class="table-strip__table"><text class="table-strip__label">本桌</text><text class="table-strip__value">{{table.displayName}}</text></view>
+      <view class="table-strip__content">
+        <button class="table-strip__service" bindtap="openStatus"><text class="table-strip__service-value">{{serviceSummary.label}}</text><text class="table-strip__service-link">查看进展 ›</text></button>
+        <view wx:if="{{performance}}" class="show-brief"><text>{{performance.state}}</text><text>{{performance.name}} · {{performance.time}}</text></view>
+        <button wx:elif="{{performanceError}}" class="show-brief show-brief--retry" bindtap="retryPerformance"><text>演出待更新</text><text>点此重试</text></button>
+      </view>
     </view>
     <view class="quick-service" aria-label="本桌快捷服务">
-      <button data-code="call" disabled="{{quickServiceBusy}}" bindtap="requestQuickService"><text class="quick-service__icon">铃</text><text>{{quickServiceBusy === 'call' ? '正在通知' : '呼叫服务员'}}</text></button>
-      <button data-code="celebration" aria-label="生日或个性化需求" disabled="{{quickServiceBusy}}" bindtap="requestQuickService"><text class="quick-service__icon">礼</text><text>{{quickServiceBusy === 'celebration' ? '正在安排' : '生日/需求'}}</text></button>
-      <button data-code="complaint" disabled="{{quickServiceBusy}}" bindtap="requestQuickService"><text class="quick-service__icon">！</text><text>{{quickServiceBusy === 'complaint' ? '正在通知' : '投诉/不满意'}}</text></button>
+      <button data-code="call" disabled="{{quickServiceBusy}}" bindtap="requestQuickService"><view class="quick-service__surface"><text class="quick-service__dot"></text><text>{{quickServiceBusy === 'call' ? '正在通知' : '呼叫服务员'}}</text></view></button>
+      <button data-code="celebration" aria-label="生日或个性化需求" disabled="{{quickServiceBusy}}" bindtap="requestQuickService"><view class="quick-service__surface"><text class="quick-service__dot"></text><text>{{quickServiceBusy === 'celebration' ? '正在安排' : '生日/需求'}}</text></view></button>
+      <button data-code="complaint" disabled="{{quickServiceBusy}}" bindtap="requestQuickService"><view class="quick-service__surface"><text class="quick-service__dot"></text><text>{{quickServiceBusy === 'complaint' ? '正在通知' : '投诉/不满意'}}</text></view></button>
     </view>
 
     <view wx:if="{{pendingPayment}}" class="payment-recovery">
@@ -90,19 +93,20 @@
       <button class="membership-invite__privacy" bindtap="showMembershipTerms">查看会员权益说明</button>
     </view>
 
-    <view class="recommend-entry">
-      <view class="recommend-entry__copy"><text>今夜推荐</text><text>先给你三组舒服的选择；想换一种感觉，随时重新挑。</text></view>
-      <view class="decision-row">
-        <picker mode="selector" range="{{occasionOptions}}" range-key="name" value="{{occasionIndex}}" bindchange="onOccasionChange"><view><text>今晚</text><text>{{occasionOptions[occasionIndex].name}}</text></view></picker>
-        <picker mode="selector" range="{{alcoholOptions}}" range-key="name" value="{{alcoholIndex}}" bindchange="onAlcoholChange"><view><text>偏好</text><text>{{alcoholOptions[alcoholIndex].name}}</text></view></picker>
-        <button bindtap="onRecommend" loading="{{recommendationBusy}}">帮我选</button>
-      </view>
-      <button class="shake-recommendation" bindtap="onShakeRecommendation" loading="{{recommendationBusy}}" disabled="{{shakeArmed}}">{{shakeArmed ? '摇一摇，换一组' : '摇一摇 · 换一组推荐'}}</button>
+    <view class="menu-tools">
+      <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="category-scroll"><view class="category-row"><button wx:for="{{categories}}" wx:key="code" class="{{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectCategory">{{item.name}}</button></view></scroll-view>
+      <scroll-view wx:if="{{subcategories.length}}" scroll-x enhanced show-scrollbar="{{false}}" class="category-scroll category-scroll--sub"><view class="category-row category-row--sub"><button wx:for="{{subcategories}}" wx:key="code" class="{{selectedSubcategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectSubcategory">{{item.name}}</button></view></scroll-view>
+      <view class="search-box"><text>⌕</text><input value="{{searchText}}" placeholder="搜索酒水、套餐或口味" bindinput="onSearchInput" /></view>
     </view>
 
-    <view wx:if="{{recommendations.length}}" class="section recommendation-section">
-      <view class="section-title"><text>今晚推荐</text><text class="section-link">由当晚菜单与本桌选择生成</text></view>
-      <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="recommend-scroll"><view class="recommend-row">
+    <view wx:if="{{selectedCategory === 'recommendation' && !searchText}}" class="recommend-entry">
+      <view class="recommend-entry__head"><text>今夜推荐</text><text>按这一桌的感觉，先给三组轻松选择</text></view>
+      <view class="recommend-entry__actions">
+        <button bindtap="onRecommend" loading="{{recommendationBusy}}"><text class="recommend-entry__action-icon">✦</text><view><text>帮我快速选</text><text>根据本桌情况推荐</text></view></button>
+        <button class="shake-recommendation" bindtap="onShakeRecommendation" loading="{{recommendationBusy}}" disabled="{{shakeArmed}}"><text class="recommend-entry__action-icon">↻</text><view><text>{{shakeArmed ? '请摇动手机' : '摇一摇换一组'}}</text><text>给今晚一点灵感</text></view></button>
+      </view>
+      <view wx:if="{{recommendationError}}" class="recommendation-note">{{recommendationError}}，可切换“全部”继续点单。</view>
+      <scroll-view wx:if="{{recommendations.length}}" scroll-x enhanced show-scrollbar="{{false}}" class="recommend-scroll"><view class="recommend-row">
         <view wx:for="{{recommendations}}" wx:key="productId" class="recommend-card {{index === 0 ? 'recommend-card--priority' : ''}}">
           <image wx:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" />
           <view class="recommend-body"><text class="recommend-tier">{{item.tierText}}</text><text class="recommend-name">{{item.name}}</text><text class="recommend-reason">{{item.reason}}</text><view wx:if="{{item.savingsText || item.separatePriceText}}" class="recommend-value"><text wx:if="{{item.separatePriceText}}">单点约 {{item.separatePriceText}}</text><text wx:if="{{item.savingsText}}" class="saving">{{item.savingsText}}</text></view><view class="recommend-foot"><text class="recommend-price">{{item.priceText}}</text><view class="recommend-actions"><button class="recommend-reject" data-id="{{item.productId}}" bindtap="rejectRecommendation" loading="{{item.rejecting}}" disabled="{{item.rejecting}}">不合适</button><button class="recommend-select" data-id="{{item.productId}}" data-source="recommendation" bindtap="addProduct">加入本桌</button></view></view></view>
@@ -110,12 +114,7 @@
       </view></scroll-view>
     </view>
 
-    <view class="menu-tools">
-      <view class="search-box"><text>⌕</text><input value="{{searchText}}" placeholder="搜索酒水、套餐或口味" bindinput="onSearchInput" /></view>
-      <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="category-scroll"><view class="category-row"><button wx:for="{{categories}}" wx:key="code" class="{{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectCategory">{{item.name}}</button></view></scroll-view>
-    </view>
-
-    <view class="section product-section">
+    <view wx:if="{{selectedCategory !== 'recommendation' || searchText}}" class="section product-section">
       <view class="section-title"><text>菜单</text><text wx:if="{{benefitCount}}" class="section-link" bindtap="openBenefits">{{benefitCount}}项权益可用</text></view>
       <view wx:if="{{visibleProducts.length}}" class="product-list">
         <view wx:for="{{visibleProducts}}" wx:key="productId" class="product-row {{item.available ? '' : 'is-unavailable'}}">
@@ -124,7 +123,7 @@
             <view wx:else class="product-media__placeholder"><text>M-BOX</text></view>
           </view>
           <view class="product-main"><text class="product-kind">{{item.productKind === 'bundle' ? '体验组合' : item.categoryName}}</text><text class="product-name">{{item.name}}</text><text class="product-copy">{{item.description || item.includedText || '详情以当晚正式菜单为准'}}</text></view>
-          <view class="product-action"><text class="product-price">{{item.priceText}}</text><text class="product-availability {{item.available ? 'is-available' : 'is-unavailable'}}">{{item.availabilityText}}</text><button wx:if="{{item.available}}" aria-label="添加{{item.name}}" data-id="{{item.productId}}" bindtap="addProduct">＋</button><button wx:else class="product-unavailable" disabled="{{true}}">{{item.availabilityDetail}}</button></view>
+          <view class="product-action"><view class="product-action__meta"><text class="product-price">{{item.priceText}}</text><text class="product-availability {{item.available ? 'is-available' : 'is-unavailable'}}">{{item.availabilityText}}</text></view><button wx:if="{{item.available}}" aria-label="添加{{item.name}}" data-id="{{item.productId}}" bindtap="addProduct">＋</button><button wx:else class="product-unavailable" disabled="{{true}}">{{item.availabilityDetail}}</button></view>
         </view>
       </view>
       <state-panel wx:else type="empty" title="没有找到符合条件的商品" message="可清空搜索或切换分类" />
@@ -135,7 +134,7 @@
   </block>
 
   <view wx:if="{{connectionState === 'active' && cart.length}}" class="cart-dock">
-      <view class="cart-summary"><view><text>本桌共享购物车 · {{cartCount}}件 · {{cartTotal}}</text><text>{{cartWritesFrozen ? '服务人员核对中 · 当前只读' : cartSyncing ? '正在同步同桌选择' : '同桌顾客可共同查看和调整'}}</text></view><view class="cart-summary__actions"><button class="cart-clear" bindtap="clearCart" loading="{{clearingCart}}" disabled="{{cartSyncing || checkoutLocked || pendingPayment || cartWritesFrozen}}">清空</button><button class="checkout-button" bindtap="openCheckout" loading="{{busy}}" disabled="{{cartSyncing || cartWritesFrozen}}">确认并付款</button></view></view>
+      <view class="cart-summary"><view><text>本桌共享购物车 · {{cartCount}}件 · {{cartTotal}}</text><text>{{cartWritesFrozen ? '正在确认本桌点单，暂时不能修改' : cartSyncing ? '正在更新同桌选择' : '同桌顾客可共同查看和调整'}}</text></view><view class="cart-summary__actions"><button class="cart-clear" bindtap="clearCart" loading="{{clearingCart}}" disabled="{{cartSyncing || checkoutLocked || pendingPayment || cartWritesFrozen}}">清空</button><button class="checkout-button" bindtap="openCheckout" loading="{{busy}}" disabled="{{cartSyncing || cartWritesFrozen}}">确认并付款</button></view></view>
     <scroll-view scroll-y class="cart-lines"><view wx:for="{{cart}}" wx:key="productId"><view><text>{{item.name}}</text><text>{{item.priceText}} × {{item.quantity}} · 小计 {{item.subtotalText}}</text><text wx:if="{{!item.available}}" class="cart-line__unavailable">{{item.unavailableReason}}</text></view><view><button aria-label="移除{{item.name}}" data-id="{{item.productId}}" bindtap="removeCartLine" disabled="{{cartSyncing || cartWritesFrozen}}">移除</button><button data-id="{{item.productId}}" data-delta="-1" bindtap="changeQuantity" disabled="{{cartSyncing || cartWritesFrozen}}">−</button><text>{{item.quantity}}</text><button data-id="{{item.productId}}" data-delta="1" bindtap="changeQuantity" disabled="{{cartSyncing || cartWritesFrozen || !item.available}}">＋</button></view></view></scroll-view>
   </view>
 

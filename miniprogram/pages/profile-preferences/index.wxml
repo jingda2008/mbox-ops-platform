@@ -2,7 +2,7 @@
   <view class="preferences-hero">
     <text class="preferences-kicker">M-BOX · 今晚偏好</text>
     <text class="preferences-title">我的偏好</text>
-    <text class="preferences-copy">昵称、生日与到店偏好；生日仅保存月日。保存生日即授权用于已发布的生日礼遇；清空后会撤回授权。</text>
+    <text class="preferences-copy">昵称、生日与到店偏好；生日只保存月日，用于为你准备生日礼遇。</text>
   </view>
   <state-panel wx:if="{{loading}}" type="loading" title="正在读取偏好" />
   <block wx:else>
@@ -17,7 +17,7 @@
         <view class="avatar-copy">
           <text class="field-label">昵称与头像</text>
           <input type="nickname" value="{{displayName}}" maxlength="80" placeholder="点此填写昵称" bindinput="onNameInput" bindblur="onNameInput" />
-          <text class="field-note">头像保存在本机，方便你识别自己的会员页。</text>
+          <text class="field-note">头像只保存在这台设备上，方便你识别自己的会员页。</text>
         </view>
       </view>
     </view>
@@ -27,7 +27,7 @@
       <picker mode="selector" range="{{birthdays}}" range-key="label" value="{{birthdayIndex}}" bindchange="onBirthdayChange">
         <view class="picker-line"><text>{{birthdays[birthdayIndex].label}}</text><text>选择 ›</text></view>
       </picker>
-      <text class="field-note">只保存月日，不保存出生年份。生日礼遇以已发布规则和实际可用窗口为准。</text>
+      <text class="field-note">只保存月日，不保存出生年份。生日礼遇以当期说明与实际可用时间为准。</text>
     </view>
 
     <view class="preference-card">

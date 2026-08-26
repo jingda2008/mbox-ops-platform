@@ -31,14 +31,14 @@ const REGISTRATION_STATUS_NAMES = {
   cancelled: '报名已取消', refunded: '已退款', expired: '报名已失效',
 }
 const RESOLUTION_STATE_NAMES = {
-  not_required: '无需在线付款', action_required: '等待您完成付款', pending: '支付通道处理中',
-  unknown: '付款结果待核对', confirmed: '付款已经确认', failed: '付款明确失败',
-  expired: '付款已超时，名额已释放', refund_requested: '退款申请待审核',
+  not_required: '无需在线付款', action_required: '等待您完成付款', pending: '付款确认中',
+  unknown: '付款结果待确认', confirmed: '付款已经确认', failed: '付款明确失败',
+  expired: '付款已超时，名额已释放', refund_requested: '退款申请确认中',
   refunding: '退款处理中', refunded: '退款已经完成',
 }
 const REFUND_STATUS_NAMES = {
-  requested: '店长已发起退款，等待复核', approved: '退款已复核通过', processing: '退款处理中',
-  succeeded: '退款已经到账', failed: '退款处理失败，门店正在核对', rejected: '退款申请未通过',
+  requested: '退款申请已提交，等待确认', approved: '退款申请已确认', processing: '退款处理中',
+  succeeded: '退款已经到账', failed: '退款暂未完成，门店正在确认', rejected: '退款申请未通过',
 }
 
 function list(value) {
@@ -125,7 +125,7 @@ function registrationFailureMessage(error) {
   const code = error && error.code ? String(error.code) : ''
   const status = Number(error && error.statusCode)
   if (code === 'ACTIVITY_PAYMENT_AUTHORITY_NOT_CONFIGURED') {
-    return '线上付款条件未就绪，本次没有建立收费报名，也没有占用名额。'
+    return '线上付款暂时不可用，本次报名尚未提交，也不会占用名额。'
   }
   if (code === 'ACTIVITY_MEMBERSHIP_REQUIRED') {
     return '加入 M-BOX 会员并授权手机号后，才可报名超嗨活动。'
@@ -134,13 +134,13 @@ function registrationFailureMessage(error) {
     return '手机号格式不正确，请填写本人可联系的 11 位手机号。'
   }
   if (code === 'ACTIVITY_CONTACT_PROTECTION_UNAVAILABLE' || code === 'ACTIVITY_CONTACT_PROTECTION_FAILED') {
-    return '报名服务配置异常，请稍后再试。'
+    return '报名服务暂时不可用，请稍后再试。'
   }
   if (code === 'ACTIVITY_TERMS_ACKNOWLEDGEMENT_REQUIRED') {
-    return '请勾选确认当前版本的安全与退款规则后再报名。'
+    return '请阅读并确认报名说明后再报名。'
   }
   if (code === 'ACTIVITY_TERMS_NOT_CONFIGURED') {
-    return '活动安全或退款条款缺少有效版本，当前不能报名。'
+    return '活动报名说明暂未准备好，暂时不能报名。'
   }
   if (code === 'ACTIVITY_AUDIENCE_DENIED') {
     return '这个活动当前不在您的可报名范围内。'
@@ -149,7 +149,7 @@ function registrationFailureMessage(error) {
     return '这个活动已结束、暂停或不在您的可见范围内。'
   }
   if (code === 'ACTIVITY_ALREADY_REGISTERED') {
-    return '您已有这个活动的有效报名，请下拉刷新后查看状态。'
+    return '你已报名这个活动，请下拉刷新后查看进展。'
   }
   if (code === 'ACTIVITY_PACKAGE_SELECTION_REQUIRED') return '请先选择一档活动套餐后再报名。'
   if (code === 'ACTIVITY_PACKAGE_UNAVAILABLE' || code === 'ACTIVITY_PACKAGE_INVENTORY_UNAVAILABLE' || code === 'ACTIVITY_PACKAGE_INVENTORY_INSUFFICIENT') {
@@ -163,9 +163,9 @@ function registrationFailureMessage(error) {
     return '报名服务暂时繁忙，结果尚未确认；请稍后在“我的活动”查看后再试。'
   }
   if (code === 'HTTP_ERROR') {
-    return '报名结果暂时无法确认；请先刷新“我的活动”查看状态，再决定是否重试。'
+    return '报名结果暂时无法确认；请先刷新“我的活动”查看进展，再决定是否重试。'
   }
-  return customerErrorMessage(error, '报名结果尚未确认；请先刷新“我的活动”查看状态，再决定是否重试。')
+  return customerErrorMessage(error, '报名结果尚未确认；请先刷新“我的活动”查看进展，再决定是否重试。')
 }
 
 function shouldClearRegistrationAttempt(error) {
@@ -295,9 +295,9 @@ function viewActivity(raw) {
   if (safety.ageRequirement) safetyFacts.push(`年龄：${safety.ageRequirement}`)
   if (safety.insuranceIncluded !== undefined) safetyFacts.push(safety.insuranceIncluded ? '活动包含保险' : '活动不包含保险')
   let paymentBlockedText = ''
-  if (providerBlocked) paymentBlockedText = raw.paymentBlockedReason || '线上付款条件尚未完整配置，本活动暂不接受报名，也不会提前占用名额。'
-  else if (clientPaymentBlocked) paymentBlockedText = '本活动当前没有可供小程序使用的微信支付方式，暂不接受收费报名。'
-  else if (!safetyPolicyVersion || !refundPolicyVersion) paymentBlockedText = '活动安全或退款规则缺少可核验版本，本活动暂不接受报名。'
+  if (providerBlocked) paymentBlockedText = '线上付款暂时不可用，暂时不能报名。'
+  else if (clientPaymentBlocked) paymentBlockedText = '线上付款暂时不可用，暂时不能提交收费报名。'
+  else if (!safetyPolicyVersion || !refundPolicyVersion) paymentBlockedText = '报名说明暂未准备好，暂时不能报名。'
   return Object.assign({}, raw, {
     coverUrl: publicImageUrl(raw.coverUrl),
     kindText: KIND_NAMES[raw.kind] || '超嗨活动',
@@ -316,7 +316,7 @@ function viewActivity(raw) {
     safetyRequirements: isSharePreview ? list(raw.safetyRequirements) : list(safety.requirements),
     safetyPolicyVersion,
     refundPolicyVersion,
-    safetyPolicyText: safetyPolicyVersion ? `安全规则版本 ${safetyPolicyVersion}` : '安全规则版本缺失',
+    safetyPolicyText: safetyPolicyVersion ? '报名规则已确认' : '报名说明暂未准备好',
     availablePaymentChoices,
     availablePaymentMethods,
     packages,
@@ -329,7 +329,7 @@ function viewActivity(raw) {
     paymentBlockedText: isSharePreview ? '' : paymentBlockedText,
     acknowledgementText: safetyPolicyVersion && refundPolicyVersion
       ? `我已阅读并确认安全规则 ${safetyPolicyVersion} 与退款规则 ${refundPolicyVersion}`
-      : '当前安全或退款规则缺少版本，暂不能确认报名',
+      : '报名说明暂未准备好，暂时不能确认报名',
   })
 }
 
@@ -349,7 +349,7 @@ function viewRegistration(raw) {
     : ['reserved', 'payment_pending'].includes(status)
       ? '名额已暂留，完成付款后才算报名成功。'
       : status === 'waitlisted'
-        ? '候补中，按报名顺序自动递补；现在无需付款。'
+        ? '候补中，会按报名顺序依次安排；现在无需付款。'
         : ''
   return Object.assign({}, raw, {
     status,
@@ -693,7 +693,7 @@ Page({
     }
     const pricing = pricingFor(activity, chosenPackage, this.data.partySize)
     if (activity.registrationBlocked || pricing.paymentAvailability === 'blocked') {
-      return this.setData({ error: activity.paymentBlockedText || '所选套餐的线上付款条件尚未完整配置，本次不会提交报名。' })
+      return this.setData({ error: activity.paymentBlockedText || '线上付款暂时不可用，本次报名尚未提交。' })
     }
     if (this.data.registration && !this.data.registration.canReRegister) {
       await this.showRegistrationOutcome(this.data.registration)
@@ -705,12 +705,12 @@ Page({
       const recovered = await this.recoverRegistration(activity.publicId, null)
       if (recovered) return
       this.clearRegistrationAttempt(activity.publicId)
-      this.setData({ error: '本机旧版待核对请求已清除（服务端没有对应报名）。请重新填写联系方式后报名。' })
+      this.setData({ error: '上一次报名记录已失效，请重新填写手机号后报名。' })
       return
     }
     if (previous && typeof previous === 'object' && previous.payload && !validCommandKey(previous.idempotencyKey)) {
       this.clearRegistrationAttempt(activity.publicId)
-      this.setData({ error: '本机待核对请求编号异常，已清除。请重新填写后报名。' })
+      this.setData({ error: '本次报名记录已过期，请重新填写后报名。' })
       return
     }
     let attempt = previous && previous.payload ? previous : null
@@ -722,7 +722,7 @@ Page({
       const recovered = await this.recoverRegistration(activity.publicId, attempt)
       if (recovered) return
       this.clearRegistrationAttempt(activity.publicId)
-      this.setData({ error: '上次待核对报名已超过 15 分钟，已清除本机记录。请重新填写手机号后报名。' })
+      this.setData({ error: '上次未完成报名已超过 15 分钟，请重新填写手机号后报名。' })
       return
     }
     if (attempt && attempt.payload.contactSnapshot) {
@@ -736,7 +736,7 @@ Page({
       if (!contact) {
         return this.focusRegistrationField('contact', '请重新填写本次活动联系手机号，再核对上次报名结果。')
       }
-      const confirmed = await this.confirmPayment('上次报名结果尚未确认。请确认手机号与上次一致；系统会保留同一请求编号核对，不会重复报名。')
+      const confirmed = await this.confirmPayment('上次报名结果尚未确认。请确认手机号与上次一致；我们会避免重复报名。')
       if (!confirmed) return
     } else {
       contact = registrationContact(this.data.contact)
@@ -744,10 +744,10 @@ Page({
         return this.focusRegistrationField('contact', '请填写本次活动联系手机号，再继续报名。')
       }
       if (!this.data.ruleAcknowledged) {
-        return this.focusRegistrationField('acknowledgement', '请先阅读并确认报名、退款与安全规则版本。')
+        return this.focusRegistrationField('acknowledgement', '请先阅读并确认报名、退款与安全说明。')
       }
       if (!activity.safetyPolicyVersion || !activity.refundPolicyVersion) {
-        return this.setData({ error: '活动安全或退款规则缺少可核验版本，本活动暂不接受报名。' })
+        return this.setData({ error: '活动报名说明暂未准备好，本场暂不开放报名。' })
       }
       const payment = await this.choosePayment(pricing)
       if (!payment) return
@@ -794,10 +794,10 @@ Page({
       const success = registration && registration.canStartPayment
         ? `名额已暂留至 ${registration.seatHoldText || '页面所示时限'}；完成付款后才算报名成功。`
         : result.status === 'waitlisted'
-          ? '已加入候补，按报名顺序自动递补；现在无需付款。'
+          ? '已加入候补名单，会按报名顺序依次安排；现在无需付款。'
           : result.status === 'confirmed'
             ? '报名成功，名额已为您确认。'
-            : '报名已提交，请在“我的”中查看当前状态。'
+            : '报名已提交，请在“我的”活动中查看进展。'
       this.setData({ success })
       await this.showRegistrationOutcome(registration)
     } catch (error) {
@@ -806,11 +806,11 @@ Page({
       const detail = registrationFailureMessage(error)
       if (shouldClearRegistrationAttempt(error)) {
         this.clearRegistrationAttempt(activity.publicId)
-        this.setData({ error: `${detail} 本机待核对请求已清除，请按提示修改后重新报名。` })
+        this.setData({ error: `${detail} 请按提示调整后重新报名。` })
         return
       }
       // 未知/网络类错误：保留幂等键重试，但展示真实原因，避免永远只看到笼统文案。
-      this.setData({ error: `${detail} 请在 15 分钟内重新填写相同手机号后重试；系统会保留同一请求编号核对。` })
+      this.setData({ error: `${detail} 请在 15 分钟内重新填写相同手机号后再试；我们会避免重复报名。` })
     } finally { this.setData({ busy: false }) }
   },
 
@@ -823,7 +823,7 @@ Page({
     if (choices.includes('full') && canUseJsapi) options.push({ choice: 'full', method: 'jsapi', label: `微信支付全款 ${money(item.feeAmountMinor * multiplier)}` })
     if (choices.includes('none') || item.paymentMode === 'none' || !item.feeAmountMinor) options.push({ choice: 'none', method: null, label: item.feeAmountMinor ? '不预付，按活动规则报名' : '免费报名' })
     if (!options.length) {
-      this.setData({ error: '当前没有可供小程序使用的付款选择，本次不会提交报名。' })
+      this.setData({ error: '线上付款暂时不可用，本次报名尚未提交。' })
       return null
     }
     if (options.length === 1 && options[0].choice === 'none' && !item.feeAmountMinor) return options[0]
@@ -845,7 +845,7 @@ Page({
       : ['reserved', 'payment_pending'].includes(status)
         ? `名额已暂留${registration.seatHoldText ? `至 ${registration.seatHoldText}` : ''}。完成付款后才算报名成功。`
         : status === 'waitlisted'
-          ? '您已进入候补队列。系统会按报名时间自动递补；当前无需付款。'
+          ? '你已进入候补名单。我们会按报名时间依次安排；当前无需付款。'
           : registration.stateGuide || '报名状态已更新，可在“我的活动”中查看。'
     const title = status === 'confirmed' ? '报名成功' : status === 'waitlisted' ? '已加入候补' : '报名状态已更新'
     return new Promise((resolve) => wx.showModal({
@@ -968,8 +968,8 @@ Page({
       if (next.resolutionState === 'confirmed') this.setData({ success: '付款已经由支付通道确认，报名正式生效。', error: '' })
       else if (next.resolutionState === 'unknown') this.setData({ error: '支付通道暂未给出确定结果，名额继续保留；稍后只能继续查单。' })
       else if (next.resolutionState === 'failed') this.setData({ error: '支付通道已明确返回失败，可按页面允许的动作取消报名。' })
-      else if (next.resolutionState === 'refunded') this.setData({ success: '退款状态已由系统确认。', error: '' })
-      else this.setData({ success: '已刷新权威付款状态。', error: '' })
+      else if (next.resolutionState === 'refunded') this.setData({ success: '退款状态已确认。', error: '' })
+      else this.setData({ success: '付款状态已更新。', error: '' })
     } catch (error) { this.setData({ error: customerErrorMessage(error, '查单结果暂时无法确认；本页不会重建报名或重复付款。') }) }
   },
 
@@ -988,7 +988,7 @@ Page({
     const registration = this.data.registration
     if (!registration || this.data.busy) return
     if (!registration.canCancelDirectly) return this.showCancellationHelp()
-    const confirmed = await new Promise((resolve) => wx.showModal({ title: '取消报名', content: '仅未付款且后台允许取消时才会释放名额。确认取消吗？', confirmColor: '#873e30', success: (result) => resolve(result.confirm), fail: () => resolve(false) }))
+    const confirmed = await new Promise((resolve) => wx.showModal({ title: '取消报名', content: '仅未付款且仍可取消的报名会释放名额。确认取消吗？', confirmColor: '#873e30', success: (result) => resolve(result.confirm), fail: () => resolve(false) }))
     if (!confirmed) return
     const reason = '顾客在小程序主动取消未付款报名'
     const stored = storageObject(CANCELLATION_ATTEMPTS_KEY)
@@ -1012,14 +1012,14 @@ Page({
       this.setData({ error: ['PAYMENT_RESULT_UNKNOWN', 'ACTIVITY_PAYMENT_RESULT_UNKNOWN'].includes(error.code)
         ? '付款结果未知，当前不能取消；请先查单。'
         : error.code === 'ACTIVITY_PAID_CANCELLATION_REQUIRES_REFUND_WORKFLOW'
-          ? '该报名已经付款，顾客端不能直接取消。退款需由店长发起、收银复核。'
+          ? '该报名已经付款，暂不能直接取消；如需退款，请联系门店协助。'
           : customerErrorMessage(error, '当前报名无法取消，请稍后重试或联系活动负责人。') })
     } finally { this.setData({ busy: false }) }
   },
 
   showCancellationHelp() {
     const contact = this.data.activity.contactInstructions || '请联系活动负责人核对。'
-    wx.showModal({ title: '取消与退款说明', content: `已付款报名不能由顾客端直接退款。需要退款时由店长发起、收银复核；顾客端只显示处理进度。${contact}`, showCancel: false })
+    wx.showModal({ title: '取消与退款说明', content: `已付款报名如需退款，请联系门店；退款进展会显示在这里。${contact}`, showCancel: false })
   },
 
   clearRegistrationAttempt(activityPublicId) {

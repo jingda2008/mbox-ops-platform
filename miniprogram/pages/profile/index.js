@@ -45,12 +45,12 @@ const REGISTRATION_STATUS_NAMES = {
   cancelled: '已取消', refunded: '已退款', expired: '已失效',
 }
 const PAYMENT_RESOLUTION_NAMES = {
-  not_required: '无需在线付款', action_required: '等待付款', pending: '支付处理中',
-  unknown: '付款结果待核对', confirmed: '付款已确认', failed: '付款失败', expired: '付款已超时',
-  refund_requested: '退款待审核', refunding: '退款处理中', refunded: '已退款',
+  not_required: '无需在线付款', action_required: '等待付款', pending: '付款确认中',
+  unknown: '付款结果待确认', confirmed: '付款已确认', failed: '付款失败', expired: '付款已超时',
+  refund_requested: '退款申请确认中', refunding: '退款处理中', refunded: '已退款',
 }
 const REFUND_STATUS_NAMES = {
-  requested: '退款待复核', approved: '退款已复核', processing: '退款处理中',
+  requested: '退款申请已提交', approved: '退款申请已确认', processing: '退款处理中',
   succeeded: '已退款', failed: '退款处理失败', rejected: '退款未通过',
 }
 const REDEMPTION_STATUS_NAMES = {
@@ -155,12 +155,12 @@ function memberCardProgress(level, progress, previewLevel) {
     cardProgressAvailable: hasProgress,
     cardGrowthText: threshold
       ? `成长值 ${formatMemberNumber(growth)} / ${formatMemberNumber(threshold)}`
-      : hasProgress ? `成长值 ${formatMemberNumber(growth)}` : '成长进度暂不可显示',
+      : hasProgress ? `成长值 ${formatMemberNumber(growth)}` : '成长值持续累积',
     cardDifferenceText: nextTier && upgradeRemaining !== null
       ? upgradeRemaining > 0
         ? `距${nextTierName}还差 ${formatMemberNumber(upgradeRemaining)}`
         : `${nextTierName}等级已达成`
-      : level === 'gold' ? '金卡等级已达成' : '等级以已发布规则为准',
+      : level === 'gold' ? '金卡等级已达成' : '下一等级权益，敬请期待',
     cardProgressPercent: progressPercent,
     cardCurrentTierText: CARD_LEVEL_NAMES[level] || '普卡',
     cardNextTierText: nextTier ? (CARD_LEVEL_NAMES[nextTier] || '') : '',
@@ -199,10 +199,10 @@ function membershipView(item) {
     levelEnglish: LEVEL_ENGLISH[displayLevel] || 'MEMBER',
     qualificationGrowth,
     qualificationText: qualificationGrowth === null
-      ? '资格成长值以已发布规则和权威交易记录为准'
-      : `近${progress.evaluationWindowMonths}个月资格成长值 ${qualificationGrowth}`,
+      ? '成长记录会在这里持续更新'
+      : `近${progress.evaluationWindowMonths}个月成长值 ${qualificationGrowth}`,
     upgradeText,
-    cardDifferenceText: upgradeText || '当前等级权益以已发布规则为准',
+    cardDifferenceText: upgradeText || '下一等级权益，敬请期待',
     retainText,
     periodText,
     expiryText: expiry
@@ -522,13 +522,13 @@ Page({
     const url = String(config.wecomCustomerServiceUrl || '').trim()
     const corpId = String(config.wecomCorpId || '').trim()
     if (!url) {
-      wx.showToast({ title: '客服链接未配置', icon: 'none' })
+      wx.showToast({ title: '客服暂时无法连接', icon: 'none' })
       return
     }
     if (!corpId) {
       wx.showModal({
         title: '客服暂未开通',
-        content: '已配置客服链接，但仍需填写企业微信企业ID，并在小程序后台「功能 → 客服 → 微信客服」完成绑定后才能打开会话。',
+        content: '客服暂时无法连接。你可以稍后再试，或使用门店公布的联系方式。',
         showCancel: false,
         confirmText: '知道了',
       })
@@ -961,7 +961,7 @@ Page({
     if (!this.requireMembership('member-center')) return
     wx.showModal({
       title: '储值余额暂未开通',
-      content: '当前系统没有会员储值账户，因此不会把桌账或读取失败显示成余额 0。桌账请在“我的订单”查看。',
+      content: '暂未开通会员储值。桌账请在“我的订单”查看。',
       showCancel: false,
       confirmText: '知道了',
     })

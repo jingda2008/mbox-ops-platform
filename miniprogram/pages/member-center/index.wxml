@@ -1,7 +1,7 @@
 <view class="page member-center-page">
   <view class="member-center-head">
     <text class="eyebrow">M-BOX 会员</text><text class="member-center-title">会员中心</text>
-    <text>等级、积分、成长值、处理进度与已授予权益均来自同一次会员资料读取。</text>
+    <text>等级、成长值与可用权益，都在这里查看。</text>
   </view>
 
   <state-panel wx:if="{{loading}}" type="loading" title="正在读取会员中心" />
@@ -14,43 +14,43 @@
       <view class="member-card__progress"><view class="member-card__progress-copy"><text>{{membership.cardGrowthText}}</text><text>{{membership.cardDifferenceText}}</text></view><view wx:if="{{membership.cardProgressAvailable}}" class="member-card__track"><view style="width: {{membership.cardProgressPercent}}%;"></view></view><view class="member-card__foot"><view wx:if="{{membership.cardProgressAvailable}}"><text>{{membership.cardCurrentTierText}}</text><text>{{membership.cardNextTierText}}</text></view><text>{{membership.cardBenefitText}}</text></view></view>
     </view>
     <view class="member-code-panel panel">
-      <view><text>我的会员码</text><text>服务人员扫码后，仅能看到其负责桌台内与你相关的待办；扫码本身不能核销或越权。</text></view>
+      <view><text>我的会员码</text><text>向服务人员出示此码，便于确认会员身份。</text></view>
       <image wx:if="{{membership.memberCodeQrDataUrl}}" class="member-code-qr" src="{{membership.memberCodeQrDataUrl}}" mode="aspectFit" show-menu-by-longpress="{{true}}" />
       <text wx:else class="member-code-unavailable">会员码暂时无法生成，请向服务人员出示会员号 {{membership.memberNo}}</text>
     </view>
     <view class="member-status panel">
-      <view class="member-status__title"><text>资格成长值</text><text>最近连续评估窗口</text></view>
+      <view class="member-status__title"><text>成长进度</text><text>下一等级</text></view>
       <text>{{membership.qualificationText}}</text><text>{{membership.periodText}}</text><text>{{membership.nextText}}</text>
       <text wx:if="{{membership.estimatedSpendText}}">{{membership.estimatedSpendText}}</text>
-      <text wx:if="{{membership.tierQualificationGrowth !== null}}">本等级资格快照 {{membership.tierQualificationGrowth}} · 累计成长值 {{membership.lifetimeGrowth}}</text>
-      <text>年度预览 {{membership.annualBenefitCounts.preview}} · 已授予 {{membership.annualBenefitCounts.granted}} · 当前可用 {{membership.annualBenefitCounts.available}}</text>
+      <text wx:if="{{membership.lifetimeGrowth !== null}}">累计成长值 {{membership.lifetimeGrowth}}</text>
+      <text>即将到来的礼遇 {{membership.annualBenefitCounts.preview}} 项 · 可使用 {{membership.annualBenefitCounts.available}} 项</text>
       <text wx:if="{{membership.updatedText}}">{{membership.updatedText}}</text>
       <view wx:if="{{membership.qualificationProgressText}}" class="qualification-progress"><view><view style="width: {{membership.progressPercent}}%;"></view></view><text>{{membership.qualificationProgressText}}</text></view>
     </view>
     <view class="member-actions"><button bindtap="openPoints"><text>积分与成长值</text><text>{{membership.pointsBalance}} 积分 ›</text></button><button bindtap="openCoupons"><text>优惠券与权益</text><text>{{benefits.length}} 项 ›</text></button></view>
     <view class="rights-section">
-      <view class="section-head"><text>已授予权益</text><text>到店使用</text></view>
+      <view class="section-head"><text>我的权益</text><text>到店使用</text></view>
       <view wx:if="{{benefits.length}}" class="rights-list"><view wx:for="{{benefits}}" wx:key="id" class="right-row"><view><text>{{item.title}}</text><text>{{item.description}}</text></view><view><text>{{item.statusText}}</text><text wx:if="{{item.valueText}}">{{item.valueText}}</text><text>{{item.quantityText}} · {{item.validText}}</text></view></view></view>
-      <state-panel wx:else type="empty" title="当前没有已授予权益" message="权益在满足已发布规则后才会显示，不会提前占用库存。" />
+      <state-panel wx:else type="empty" title="暂时没有可使用的权益" message="有新的会员权益时，会显示在这里。" />
     </view>
 
     <view class="annual-section">
-      <view class="section-head"><view><text>年度礼遇状态</text><text>年度礼遇日历 · 政策与节日日期均已发布/确认后展示</text></view><picker mode="selector" range="{{calendarFilters}}" range-key="name" value="{{calendarFilterIndex}}" bindchange="onCalendarFilter"><view class="calendar-filter">{{calendarFilters[calendarFilterIndex].name}}⌄</view></picker></view>
-      <text class="annual-note">“未来预览”不是可使用权益，不会提前生成权益或占用库存，也不会提供兑换编号。生日礼遇仅在你保存月日并明确授权后出现。</text>
+      <view class="section-head"><view><text>年度礼遇</text><text>看看接下来可以期待什么</text></view><picker mode="selector" range="{{calendarFilters}}" range-key="name" value="{{calendarFilterIndex}}" bindchange="onCalendarFilter"><view class="calendar-filter">{{calendarFilters[calendarFilterIndex].name}}⌄</view></picker></view>
+      <text class="annual-note">即将到来的礼遇仅作提醒，达到条件后才可使用。生日礼遇会在你保存月日并同意后显示。</text>
       <view wx:if="{{calendarItems.length}}" class="calendar-list"><view wx:for="{{calendarItems}}" wx:key="id" class="calendar-row"><view><text>{{item.title}}</text><text>{{item.periodText}}</text><text wx:if="{{item.ruleText}}">{{item.ruleText}}</text><text wx:if="{{item.giftText}}">{{item.giftText}}</text><text wx:if="{{item.substituteText}}">{{item.substituteText}}</text><text wx:if="{{item.conditionsText}}">{{item.conditionsText}}</text></view><view><text>{{item.statusText}}</text><text>{{item.quantityText}}</text><text wx:if="{{item.canApplyReason}}">{{item.canApplyReason}}</text><button wx:if="{{item.claimable}}" size="mini" loading="{{dailySnackBusy}}" bindtap="claimDailySnack">申请</button></view></view></view>
-      <state-panel wx:else type="empty" title="暂无年度礼遇日历" message="门店尚未发布适用规则、节日日期尚未确认，或当前筛选没有匹配项目。" />
+      <state-panel wx:else type="empty" title="暂时没有年度礼遇" message="新的礼遇准备好后，会显示在这里。" />
     </view>
 
     <view wx:if="{{dailySnackClaim}}" class="daily-snack-code panel">
       <view class="section-head"><view><text>每日点心核销码</text><text>已为当前桌台暂留至 {{dailySnackClaim.expiresText}}</text></view><button bindtap="closeDailySnackClaim">关闭</button></view>
       <image wx:if="{{dailySnackClaim.claimCodeQrDataUrl}}" src="{{dailySnackClaim.claimCodeQrDataUrl}}" mode="aspectFit" show-menu-by-longpress="{{true}}" />
       <text class="daily-snack-code__value">{{dailySnackClaim.claimCode}}</text>
-      <text>请向服务人员出示此码。员工确认后才会进入正式出品；二维码不是付款码。</text>
+      <text>请向服务人员出示此码。确认后即可为你准备点心；这不是付款码。</text>
     </view>
 
     <view wx:if="{{points.length}}" class="ledger-section"><view class="section-head"><text>最近积分流水</text><button bindtap="openPoints">查看全部 ›</button></view><view class="ledger-list"><view wx:for="{{points}}" wx:key="id" class="ledger-row"><view><text>{{item.title}}</text><text>{{item.timeText}}</text></view><text class="{{item.positive ? 'positive' : ''}}">{{item.amountText}}</text></view></view></view>
     <view wx:if="{{growth.length}}" class="ledger-section"><view class="section-head"><text>最近成长值流水</text><button bindtap="openPoints">查看全部 ›</button></view><view class="ledger-list"><view wx:for="{{growth}}" wx:key="id" class="ledger-row"><view><text>{{item.title}}</text><text>{{item.timeText}}</text></view><text class="{{item.positive ? 'positive' : ''}}">{{item.amountText}}</text></view></view></view>
-    <view wx:if="{{processing.length}}" class="ledger-section"><view class="section-head"><text>会员处理进度</text><text>以系统状态为准</text></view><view class="processing-list"><view wx:for="{{processing}}" wx:key="key" class="processing-row"><view><text>{{item.title}}</text><text>{{item.message}}</text></view><text>{{item.active ? '处理中' : '已完成'}}</text></view></view></view>
+    <view wx:if="{{processing.length}}" class="ledger-section"><view class="section-head"><text>会员进展</text><text>有新进展会显示在这里</text></view><view class="processing-list"><view wx:for="{{processing}}" wx:key="key" class="processing-row"><view><text>{{item.title}}</text><text>{{item.message}}</text></view><text>{{item.active ? '处理中' : '已完成'}}</text></view></view></view>
     </block>
     <state-panel wx:else type="empty" title="当前身份还没有会员账户" message="请返回“我的”查看入会或找回会员说明。" />
   </block>

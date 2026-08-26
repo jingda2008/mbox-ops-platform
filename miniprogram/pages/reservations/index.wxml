@@ -21,7 +21,7 @@
           <view class="performance-impact-head"><view><text class="performance-impact-kicker">需要您确认</text><text class="performance-impact-title">{{item.performanceImpact.title}}</text></view><text class="performance-impact-status">预约仍有效</text></view>
           <view class="performance-impact-change"><text>{{item.performanceImpact.previousText}}</text><text wx:if="{{item.performanceImpact.resultingText}}">调整为 {{item.performanceImpact.resultingText}}</text><text wx:else>本次调整后不再指定该演出</text></view>
           <text class="performance-impact-reason">原因：{{item.performanceImpact.revision.reason}}</text>
-          <text class="performance-impact-note">演出偏好不是座位或场次保证；无论如何选择，系统都不会自动取消到店预约。</text>
+          <text class="performance-impact-note">演出偏好不代表预留座位或场次；无论怎样选择，到店预约都会保留。</text>
           <view class="performance-impact-actions">
             <button class="impact-primary" loading="{{impactBusyId === item.performanceImpact.publicId}}" disabled="{{impactBusyId}}" data-impact="{{item.performanceImpact.publicId}}" data-decision="keep" bindtap="acknowledgeImpact">{{item.performanceImpact.acceptLabel}}</button>
             <button wx:if="{{item.performanceImpact.eligibleSchedules.length}}" disabled="{{impactBusyId}}" data-impact="{{item.performanceImpact.publicId}}" bindtap="toggleImpactSchedules">{{expandedImpactId === item.performanceImpact.publicId ? '收起其他演出' : '改选演出'}}</button>

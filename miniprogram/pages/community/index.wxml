@@ -17,7 +17,7 @@
   <block wx:else>
     <view wx:if="{{error}}" class="error-banner">{{error}}</view>
     <view wx:if="{{activities.length}}" class="activity-section-head">
-      <view><text>正在发生</text><text>报名与安排以活动详情为准</text></view>
+      <view><text>本期活动</text></view>
     </view>
     <view wx:if="{{activities.length}}" class="activity-list">
       <view wx:for="{{activities}}" wx:key="publicId" class="activity-card" data-id="{{item.publicId}}" bindtap="openDetail" hover-class="activity-card--hover" role="button" aria-role="button">
@@ -46,7 +46,7 @@
         </view>
       </view>
     </view>
-    <state-panel wx:else type="empty" title="下一场正在准备" message="通过发布审批的活动会第一时间出现在这里" />
+    <state-panel wx:else type="empty" title="下一场正在准备" message="新活动会第一时间出现在这里" />
   </block>
 
   <view wx:if="{{membershipInviteVisible}}" class="community-member-mask" catchtouchmove="noop">
@@ -54,7 +54,7 @@
       <button class="community-member-close" aria-label="关闭会员邀请" bindtap="dismissMembershipInvite">×</button>
       <text class="community-member-kicker">M-BOX 会员</text>
       <text class="community-member-title">加入会员，解锁超嗨活动</text>
-      <text class="community-member-copy">查看和报名活动需要先加入会员并授权手机号。</text>
+      <text class="community-member-copy">加入会员后即可查看活动详情并报名。</text>
       <image class="community-member-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX 标志" />
       <checkbox-group bindchange="onMembershipInviteAgreementChange">
         <label class="community-member-agreement">

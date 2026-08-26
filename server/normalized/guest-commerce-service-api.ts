@@ -108,6 +108,11 @@ interface CatalogMenuRow extends Record<string, unknown> {
   code: string
   name: string
   category_code: string
+  category_name: string | null
+  category_parent_code: string | null
+  category_parent_name: string | null
+  category_sort_order: number | null
+  top_category_sort_order: number | null
   fulfillment_station: string
   product_kind: 'single' | 'bundle'
   bundle_components: unknown
@@ -734,6 +739,11 @@ async function searchGuestCatalog(
   const searchPattern = `%${escapeLike(query.search)}%`
   const result = await transaction.query<CatalogMenuRow>(`
     SELECT product.id, product.code, product.name, product.category_code,
+      menu_category.display_name AS category_name,
+      menu_category.parent_code AS category_parent_code,
+      parent_menu_category.display_name AS category_parent_name,
+      menu_category.sort_order AS category_sort_order,
+      COALESCE(parent_menu_category.sort_order,menu_category.sort_order) AS top_category_sort_order,
       product.fulfillment_station, product.product_kind,
       COALESCE(component_list.items, '[]'::jsonb) AS bundle_components,
       product.product_snapshot, product.guest_visible, product.search_text,
@@ -769,6 +779,14 @@ async function searchGuestCatalog(
       AND current_session.status = 'open'
     JOIN mbox.stores AS store
       ON store.tenant_id=product.tenant_id AND store.id=product.store_id AND store.status='active'
+    LEFT JOIN mbox.menu_categories AS menu_category
+      ON menu_category.tenant_id=product.tenant_id
+     AND menu_category.store_id=product.store_id
+     AND menu_category.code=product.category_code
+    LEFT JOIN mbox.menu_categories AS parent_menu_category
+      ON parent_menu_category.tenant_id=menu_category.tenant_id
+     AND parent_menu_category.store_id=menu_category.store_id
+     AND parent_menu_category.code=menu_category.parent_code
     LEFT JOIN LATERAL (
       SELECT amount_minor, currency
       FROM mbox.product_prices
@@ -898,6 +916,13 @@ async function searchGuestCatalog(
       AND ($3::uuid IS NULL OR current_session.id IS NOT NULL)
       AND product.status = 'active'
       AND product.guest_visible
+      -- Unconfigured legacy codes stay visible until staff explicitly map
+      -- them.  Once configured, parent and child visibility is authoritative
+      -- for the customer menu without altering the product itself.
+      AND (menu_category.id IS NULL OR (
+        menu_category.guest_visible
+        AND (parent_menu_category.id IS NULL OR parent_menu_category.guest_visible)
+      ))
       AND 'guest_qr'=ANY(product.allowed_channels)
       AND price.amount_minor IS NOT NULL
       AND (
@@ -967,14 +992,28 @@ function publicCatalogProduct(row: CatalogMenuRow) {
   const source = jsonObject(row.product_snapshot.source)
   const amountMinor = row.amount_minor === null ? null : Number(row.amount_minor)
   const availabilityStatus = publicCatalogAvailabilityStatus(row)
+  const configuredCategoryName = publicString(row.category_name)
+  const categoryName = configuredCategoryName
+    ?? publicCatalogCategoryFallbackName(row.category_code, row.product_snapshot, source)
+  const unconfiguredCategory = configuredCategoryName === null
   return {
     productId: row.id,
     code: row.code,
     name: row.name,
     categoryCode: row.category_code,
-    categoryName: publicString(row.product_snapshot.categoryName)
-      ?? publicString(source.categoryName)
-      ?? row.category_code,
+    // The editable catalog hierarchy is the primary display source.  A
+    // legacy snapshot is only a compatibility fallback; never show a raw
+    // operational category code such as "cocktail" to a customer.
+    categoryName,
+    // A current product import can briefly contain an unknown operational
+    // code.  Keep it in one safe "其他" top-level bucket until staff maps it;
+    // never turn the code itself into a customer-facing label.
+    categoryParentCode: unconfiguredCategory ? 'other' : row.category_parent_code,
+    categoryParentName: unconfiguredCategory ? '其他' : publicString(row.category_parent_name),
+    categorySortOrder: row.category_sort_order === null ? 9000 : Number(row.category_sort_order),
+    topCategorySortOrder: row.top_category_sort_order === null
+      ? (row.category_sort_order === null ? 9000 : Number(row.category_sort_order))
+      : Number(row.top_category_sort_order),
     beverageFamily: publicBeverageFamily(row.recommendation_beverage_family),
     specification: publicString(row.product_snapshot.specification)
       ?? publicString(source.specification),
@@ -998,6 +1037,19 @@ function publicCatalogProduct(row: CatalogMenuRow) {
     availabilityStatus,
     available: availabilityStatus === 'available',
   }
+}
+
+function publicCatalogCategoryFallbackName(
+  categoryCode: string,
+  snapshot: JsonObject,
+  source: JsonObject,
+): string {
+  const normalizedCode = categoryCode.trim().toLowerCase()
+  for (const candidate of [snapshot.categoryName, source.categoryName]) {
+    const name = publicString(candidate)
+    if (name !== null && name.trim().toLowerCase() !== normalizedCode) return name
+  }
+  return '其他'
 }
 
 function publicCatalogAvailabilityStatus(row: CatalogMenuRow): 'available' | 'configuration_incomplete' | 'inventory_unavailable' | 'scheduled' | 'unavailable' {

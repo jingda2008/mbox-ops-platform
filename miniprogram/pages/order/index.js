@@ -45,6 +45,18 @@ const ALCOHOL = [
   { code: 'beer', name: '啤酒' }, { code: 'non_alcoholic', name: '无酒精' },
   { code: 'undecided', name: '请帮我选' },
 ]
+const LEGACY_MENU_CATEGORY_HIERARCHY = Object.freeze({
+  cocktail: { name: '鸡尾酒', parentCode: 'drinks', parentName: '酒水', parentSortOrder: 20, sortOrder: 10 },
+  beer: { name: '啤酒', parentCode: 'drinks', parentName: '酒水', parentSortOrder: 20, sortOrder: 20 },
+  wine: { name: '葡萄酒', parentCode: 'drinks', parentName: '酒水', parentSortOrder: 20, sortOrder: 30 },
+  sparkling: { name: '起泡酒', parentCode: 'drinks', parentName: '酒水', parentSortOrder: 20, sortOrder: 40 },
+  whisky: { name: '威士忌', parentCode: 'drinks', parentName: '酒水', parentSortOrder: 20, sortOrder: 50 },
+  spirits: { name: '烈酒', parentCode: 'drinks', parentName: '酒水', parentSortOrder: 20, sortOrder: 60 },
+  non_alcoholic: { name: '无酒精', parentCode: 'drinks', parentName: '酒水', parentSortOrder: 20, sortOrder: 70 },
+  fruit: { name: '鲜果', parentCode: 'food', parentName: '鲜果与冷食', parentSortOrder: 30, sortOrder: 10 },
+  cold_food: { name: '冷食', parentCode: 'food', parentName: '鲜果与冷食', parentSortOrder: 30, sortOrder: 20 },
+  snack: { name: '小食', parentCode: 'food', parentName: '鲜果与冷食', parentSortOrder: 30, sortOrder: 30 },
+})
 const SERVICE_STATUS_NAMES = {
   pending: '等待接单', accepted: '服务人员已接单', arrived: '服务人员已到桌',
   in_progress: '正在处理', completed: '等待您确认', confirmed: '已解决',
@@ -97,10 +109,10 @@ function parseScanValue(value) {
 function menuAvailability(item) {
   if (item.available) return { text: '可下单', detail: '当前桌可直接加入购物车' }
   if (item.availabilityStatus === 'configuration_incomplete') {
-    return { text: '暂不可点', detail: '库存或配方配置未完成' }
+    return { text: '暂不可点', detail: '这款暂未开放' }
   }
   if (item.availabilityStatus === 'inventory_unavailable') {
-    return { text: '暂不可点', detail: '当前可售库存不足' }
+    return { text: '暂不可点', detail: '这款暂时售罄' }
   }
   if (item.availabilityStatus === 'scheduled') {
     const range = item.availableFrom && item.availableUntil ? `供应时间 ${item.availableFrom}-${item.availableUntil}` : '当前不在供应时段'
@@ -116,6 +128,7 @@ function menuProducts(items) {
   }).map((item) => {
     const availability = menuAvailability(item)
     return Object.assign({}, item, {
+      categoryName: customerCategoryName(item),
       priceText: money(item.amountMinor),
       includedText: (item.bundleComponents || []).map((line) => `${line.name || '组合内容'}×${line.quantity || 1}`).join(' · '),
       imageUrl: publicImageUrl(item.imageUrl),
@@ -148,7 +161,7 @@ function menuRecommendations(items, products) {
 
 function serviceSummaryView(response, serviceStaffName) {
   if (!response) return {
-    status: 'unavailable', label: '服务状态待刷新', detail: '点击查看处理进度', live: false,
+    status: 'unavailable', label: '服务进展暂时不可用', detail: '点击查看服务进展', live: false,
   }
   const items = Array.isArray(response) ? response : (response.tasks || [])
   const active = items.filter((item) => ACTIVE_SERVICE_STATUSES.includes(String(item.status || item.taskStatus || 'pending')))
@@ -165,18 +178,113 @@ function serviceSummaryView(response, serviceStaffName) {
   }
   return {
     status: 'ready', label: serviceStaffName ? '本桌服务已安排' : '需要时随时呼叫',
-    detail: serviceStaffName || '服务状态会自动刷新', live: true,
+    detail: serviceStaffName || '有新进展会显示在这里', live: true,
   }
 }
 
-function menuCategories(products) {
-  const categories = [{ code: 'all', name: '全部' }]
-  products.forEach((item) => {
-    if (!categories.some((category) => category.code === item.categoryCode)) {
-      categories.push({ code: item.categoryCode, name: item.categoryName || item.categoryCode })
+function categoryText(value, fallback) {
+  const text = typeof value === 'string' ? value.trim() : ''
+  return text || fallback
+}
+
+function customerCategoryName(item) {
+  const categoryCode = categoryText(item && item.categoryCode, 'other').toLowerCase()
+  const categoryName = categoryText(item && item.categoryName, '')
+  const legacyCategory = LEGACY_MENU_CATEGORY_HIERARCHY[categoryCode]
+  // Old servers may echo an operational category code as its display name.
+  // Do not expose that code to customers while the server is being upgraded;
+  // the category configuration becomes authoritative as soon as it is present.
+  if (!categoryName || categoryName.toLowerCase() === categoryCode) return legacyCategory ? legacyCategory.name : '其他'
+  return categoryName
+}
+
+function menuCategoryIdentity(item) {
+  const categoryCode = categoryText(item && item.categoryCode, 'other')
+  const normalizedCategoryCode = categoryCode.toLowerCase()
+  const rawCategoryName = categoryText(item && item.categoryName, '')
+  const categoryName = customerCategoryName(item)
+  const parentCode = categoryText(item && item.categoryParentCode, '')
+  const parentName = categoryText(item && item.categoryParentName, '')
+  const categorySortOrder = Number.isFinite(Number(item && item.categorySortOrder))
+    ? Number(item.categorySortOrder) : 9000
+  const topCategorySortOrder = Number.isFinite(Number(item && item.topCategorySortOrder))
+    ? Number(item.topCategorySortOrder) : categorySortOrder
+  const legacyCategory = LEGACY_MENU_CATEGORY_HIERARCHY[normalizedCategoryCode]
+  const legacyUnparentedCategory = parentCode === '' && legacyCategory
+    && (!rawCategoryName || rawCategoryName.toLowerCase() === normalizedCategoryCode || rawCategoryName === legacyCategory.name)
+  if (legacyUnparentedCategory) {
+    return {
+      topCode: legacyCategory.parentCode,
+      topName: legacyCategory.parentName,
+      topSortOrder: legacyCategory.parentSortOrder,
+      childCode: normalizedCategoryCode,
+      childName: legacyCategory.name,
+      childSortOrder: Number.isFinite(Number(item && item.categorySortOrder))
+        ? Number(item.categorySortOrder) : legacyCategory.sortOrder,
+    }
+  }
+  const legacyUnconfigured = parentCode === '' && categoryName === '其他'
+  if (legacyUnconfigured) {
+    return {
+      topCode: 'other',
+      topName: '其他',
+      topSortOrder: 9000,
+      childCode: '',
+      childName: '',
+      childSortOrder: 9000,
+    }
+  }
+  return {
+    topCode: parentCode || categoryCode,
+    topName: parentName || categoryName,
+    topSortOrder: topCategorySortOrder,
+    childCode: parentCode ? categoryCode : '',
+    childName: parentCode ? categoryName : '',
+    childSortOrder: categorySortOrder,
+  }
+}
+
+function menuCategoryState(products, selectedTopCategory, selectedSubcategory, includeRecommendations = false) {
+  const roots = new Map()
+  const childrenByRoot = new Map()
+  ;(products || []).forEach((item) => {
+    const category = menuCategoryIdentity(item)
+    const existingRoot = roots.get(category.topCode)
+    if (!existingRoot || category.topSortOrder < existingRoot.sortOrder) {
+      roots.set(category.topCode, { code: category.topCode, name: category.topName, sortOrder: category.topSortOrder })
+    }
+    if (category.childCode) {
+      const children = childrenByRoot.get(category.topCode) || new Map()
+      const existingChild = children.get(category.childCode)
+      if (!existingChild || category.childSortOrder < existingChild.sortOrder) {
+        children.set(category.childCode, { code: category.childCode, name: category.childName, sortOrder: category.childSortOrder })
+      }
+      childrenByRoot.set(category.topCode, children)
     }
   })
-  return categories
+  const leadingCategories = includeRecommendations
+    ? [{ code: 'recommendation', name: '今夜推荐', sortOrder: -2 }, { code: 'all', name: '全部', sortOrder: -1 }]
+    : [{ code: 'all', name: '全部', sortOrder: -1 }]
+  const categories = leadingCategories.concat(
+    Array.from(roots.values()).sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name, 'zh-CN')),
+  )
+  const fallbackTopCode = includeRecommendations ? 'recommendation' : 'all'
+  const topCode = categories.some((item) => item.code === selectedTopCategory) ? selectedTopCategory : fallbackTopCode
+  const children = topCode === 'all' || topCode === 'recommendation'
+    ? []
+    : Array.from((childrenByRoot.get(topCode) || new Map()).values())
+      .sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name, 'zh-CN'))
+  const subcategories = children.length === 0
+    ? []
+    : [{ code: 'all', name: '全部', sortOrder: -1 }].concat(children)
+  const subcategoryCode = subcategories.some((item) => item.code === selectedSubcategory)
+    ? selectedSubcategory : 'all'
+  return {
+    categories,
+    selectedCategory: topCode,
+    subcategories,
+    selectedSubcategory: subcategoryCode,
+  }
 }
 
 function publicServiceName(value) {
@@ -230,17 +338,20 @@ Page({
     connectionMessage: '',
     table: null,
     serviceStaffName: '',
-    serviceSummary: { status: 'ready', label: '需要时随时呼叫', detail: '服务状态会自动刷新', live: false },
+    serviceSummary: { status: 'ready', label: '需要时随时呼叫', detail: '有新进展会显示在这里', live: false },
     quickServiceBusy: '',
     performance: null,
     performanceError: '',
     products: [],
     visibleProducts: [],
-    categories: [{ code: 'all', name: '全部' }],
-    selectedCategory: 'all',
+    categories: [{ code: 'recommendation', name: '今夜推荐' }, { code: 'all', name: '全部' }],
+    selectedCategory: 'recommendation',
+    subcategories: [],
+    selectedSubcategory: 'all',
     searchText: '',
     recommendations: [],
     recommendationBusy: false,
+    recommendationError: '',
     shakeArmed: false,
     recommendationPublicId: '',
     recommendationAttribution: null,
@@ -380,7 +491,7 @@ Page({
         busy: false, cartSyncing: false, clearingCart: false, quickServiceBusy: '',
         checkoutLocked: false, pendingPayment: null, cart: [], cartVersion: 0, cartGeneration: 0,
         cartTotal: '¥0.00', cartCount: 0, cartWritesFrozen: false,
-        recommendations: [], recommendationPublicId: '', recommendationAttribution: null, performance: null, performanceError: '',
+        recommendations: [], recommendationPublicId: '', recommendationAttribution: null, recommendationError: '', performance: null, performanceError: '',
       })
     }
     if (!silent) this.setData({ loading: true, error: '', success: '' })
@@ -388,7 +499,7 @@ Page({
     if (this.recommendationScopeKey !== recommendationScopeKey) {
       this.recommendationScopeKey = recommendationScopeKey
       this.initialRecommendationRequested = false
-      this.setData({ recommendations: [], recommendationPublicId: '', recommendationAttribution: null })
+      this.setData({ recommendations: [], recommendationPublicId: '', recommendationAttribution: null, recommendationError: '' })
     }
     const config = getRuntimeConfig()
     if (!session.tableToken && !session.tableCode && !config.isDevelopment) {
@@ -458,6 +569,11 @@ Page({
       ])
       if (request && !this.isCurrentTableRequest(request)) return false
       const products = menuProducts(menu)
+      const categoryState = menuCategoryState(
+        products,
+        this.data.selectedCategory,
+        this.data.selectedSubcategory,
+      )
       this.setData({
         loading: false,
         browseOnly: true,
@@ -468,7 +584,7 @@ Page({
         serviceStaffName: '',
         serviceSummary: { status: 'ready', label: '到店后可呼叫服务', detail: '扫码开台后显示本桌服务进度', live: false },
         products,
-        categories: menuCategories(products),
+        ...categoryState,
         performance: performanceResult.performance,
         performanceError: performanceResult.error,
         error: connectionError || '',
@@ -507,7 +623,13 @@ Page({
     ])
     if (request && !this.isCurrentTableRequest(request)) return false
     const products = menuProducts(results[0])
-    const categories = menuCategories(products)
+    const categoryState = menuCategoryState(
+      products,
+      this.data.browseOnly && this.data.selectedCategory === 'all'
+        ? 'recommendation' : this.data.selectedCategory,
+      this.data.selectedSubcategory,
+      true,
+    )
     const sharedCart = results[4]
     const cart = sharedCartView(sharedCart, products)
     const recommendations = menuRecommendations(this.data.recommendations, products)
@@ -561,7 +683,7 @@ Page({
       loading: false,
       browseOnly: false,
       products,
-      categories,
+      ...categoryState,
       recommendations,
       recommendationAttribution,
       performance: results[1].performance,
@@ -607,7 +729,7 @@ Page({
 
   enrollFromMenu() {
     if (!this.data.membershipTerms) {
-      this.setData({ error: '当前入会条款尚未发布，点单不受影响' })
+      this.setData({ error: '暂时无法查看入会说明，点单不受影响' })
       return
     }
     wx.navigateTo({ url: '/pages/membership-terms/index?source=mini_menu&action=enroll' })
@@ -639,13 +761,24 @@ Page({
     this.setData({ performance: result.performance, performanceError: result.error })
   },
   onSearchInput(event) { this.setData({ searchText: event.detail.value }, () => this.applyFilters()) },
-  selectCategory(event) { this.setData({ selectedCategory: event.currentTarget.dataset.code }, () => this.applyFilters()) },
+  selectCategory(event) {
+    const selectedCategory = event.currentTarget.dataset.code
+    const categoryState = menuCategoryState(this.data.products, selectedCategory, 'all', !this.data.browseOnly)
+    this.setData(categoryState, () => this.applyFilters())
+  },
+  selectSubcategory(event) { this.setData({ selectedSubcategory: event.currentTarget.dataset.code }, () => this.applyFilters()) },
   applyFilters() {
     const search = this.data.searchText.trim().toLowerCase()
+    const recommendationView = this.data.selectedCategory === 'recommendation' && !search
     const visibleProducts = this.data.products.filter((item) => {
-      const categoryMatches = this.data.selectedCategory === 'all' || item.categoryCode === this.data.selectedCategory
+      const category = menuCategoryIdentity(item)
+      const topCategoryMatches = this.data.selectedCategory === 'all'
+        || this.data.selectedCategory === 'recommendation'
+        || category.topCode === this.data.selectedCategory
+      const subcategoryMatches = this.data.selectedSubcategory === 'all'
+        || category.childCode === this.data.selectedSubcategory
       const searchable = [item.name, item.description, item.includedText].concat(item.aliases || []).join(' ').toLowerCase()
-      return categoryMatches && (!search || searchable.includes(search))
+      return !recommendationView && topCategoryMatches && subcategoryMatches && (!search || searchable.includes(search))
     })
     this.setData({ visibleProducts })
   },
@@ -667,7 +800,7 @@ Page({
     if (!expected || !this.isCurrentTableRequest(expected)) return
     if (this.data.recommendationBusy) return
     const recommendationIntent = ['initial', 'guided', 'shake'].includes(intent) ? intent : 'guided'
-    this.setData({ recommendationBusy: true, error: '' })
+    this.setData({ recommendationBusy: true, recommendationError: '' })
     try {
       const occasion = this.data.occasionOptions[this.data.occasionIndex].code
       const alcoholPreference = this.data.alcoholOptions[this.data.alcoholIndex].code
@@ -684,6 +817,7 @@ Page({
         recommendations,
         recommendationPublicId: recommendations.length ? result.publicId || '' : '',
         recommendationAttribution: null,
+        recommendationError: '',
       })
       if (result.publicId && recommendations.length) {
         recordRecommendationEvent(result.publicId, 'exposed', null, {
@@ -696,7 +830,7 @@ Page({
       // broken when the recommendation service briefly reconnects. Permit a
       // later refresh rather than treating one transient failure as final.
       if (recommendationIntent === 'initial') this.initialRecommendationRequested = false
-      this.setData({ error: customerErrorMessage(error, '暂时无法生成推荐') })
+      this.setData({ recommendationError: customerErrorMessage(error, '今夜推荐正在更新') })
     }
     finally { if (this.isCurrentTableRequest(expected)) this.setData({ recommendationBusy: false }) }
   },
@@ -706,7 +840,7 @@ Page({
     const tableRequest = this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
     if (!wx.startAccelerometer || !wx.onAccelerometerChange) return this.recommend('shake', tableRequest)
-    this.setData({ shakeArmed: true, error: '' })
+    this.setData({ shakeArmed: true, recommendationError: '' })
     let completed = false
     const refresh = () => {
       if (completed) return

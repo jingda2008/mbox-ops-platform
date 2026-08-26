@@ -35,7 +35,7 @@ Page({
       this.setData({
         loading: false,
         error: code === 'ROUTE_NOT_FOUND'
-          ? '会员服务暂时连不上，请稍后重试或确认小程序已指向最新服务端'
+          ? '会员服务暂时连不上，请稍后重试'
           : customerErrorMessage(error, '当前入会条款暂时无法读取'),
       })
     }

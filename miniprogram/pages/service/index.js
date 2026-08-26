@@ -99,7 +99,7 @@ Page({
       const record = {
         publicId: task.taskPublicId || `local-${Date.now()}`,
         requestType,
-        name: id === 'manager' ? '值班经理协助' : (this.data.serviceTypes.find((item) => item.id === id) || {}).name || '个性化需求',
+        name: id === 'manager' ? '门店协助' : (this.data.serviceTypes.find((item) => item.id === id) || {}).name || '个性化需求',
         detail,
         status: task.taskStatus || 'pending',
         statusText: '等待接单',

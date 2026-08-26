@@ -6,14 +6,14 @@ const POINT_TYPE_NAMES = {
   redeem: '积分兑换',
   expire: '积分到期',
   reverse: '退款积分冲回',
-  supplement: '审核补发',
+  supplement: '补发积分',
   adjust: '人工调整',
   restore: '积分返还',
 }
 const GROWTH_TYPE_NAMES = {
   earn: '消费成长值到账',
   reverse: '退款成长值冲回',
-  supplement: '审核补发成长值',
+  supplement: '补发成长值',
   adjust: '人工调整成长值',
 }
 
@@ -78,7 +78,7 @@ Page({
         points: (ledger.points || []).map((item) => ({
           id: item.id,
           title: POINT_TYPE_NAMES[item.entryType] || '积分变动',
-          description: item.description || '以门店权威交易记录为准',
+          description: item.description || '以门店记录为准',
           metaText: ledgerMeta(item),
           amountText: signed(item.pointsDelta),
           balanceText: `余额 ${item.balanceAfter}`,
@@ -88,7 +88,7 @@ Page({
         growth: (ledger.growth || []).map((item) => ({
           id: item.id,
           title: GROWTH_TYPE_NAMES[item.entryType] || '成长值变动',
-          description: item.description || '以门店权威交易记录为准',
+          description: item.description || '以门店记录为准',
           metaText: ledgerMeta(item),
           amountText: signed(item.growthDelta),
           balanceText: `成长值 ${item.balanceAfter}`,
@@ -97,8 +97,8 @@ Page({
         })),
         processing: (ledger.processing || []).slice(0, 5).map((item) => ({
           key: item.key,
-          title: item.title || '积分处理进度',
-          message: item.message || '门店正在核对权威交易记录。',
+          title: item.title || '积分确认进展',
+          message: item.message || '门店正在确认本次记录。',
           referenceText: shortReference(item.sourceReference)
             ? `关联单号 ${shortReference(item.sourceReference)}`
             : '',

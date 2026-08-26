@@ -155,6 +155,28 @@ describe('guest commerce/service API trust boundaries', () => {
     expect(response.body).not.toMatch(/internalCost|costAmount|grossMargin|contributionAmount|catalogContributionScore|contributionPositive/)
   })
 
+  it('returns the configurable customer category hierarchy instead of exposing an internal category code', async () => {
+    const value = fixture()
+    const response = await value.app.inject({ method: 'GET', url: '/api/guest/menu/products' })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({
+      data: [{
+        categoryCode: 'beer',
+        categoryName: '啤酒',
+        categoryParentCode: 'drinks',
+        categoryParentName: '酒水',
+        categorySortOrder: 20,
+        topCategorySortOrder: 20,
+      }],
+    })
+    const catalogSql = value.query.mock.calls.find(([sql]) => sql.includes('FROM mbox.products AS product'))?.[0]
+    expect(catalogSql).toContain('LEFT JOIN mbox.menu_categories AS menu_category')
+    expect(catalogSql).toContain('LEFT JOIN mbox.menu_categories AS parent_menu_category')
+    expect(catalogSql).toContain('menu_category.guest_visible')
+    expect(response.body).not.toContain('categoryName":"beer')
+  })
+
   it('does not read table-scoped menu context after the exact guest position is revoked', async () => {
     const query = vi.fn(async () => ({ rows: [{ participation_id: null }], rowCount: 1 }))
     const value = fixture({
@@ -1136,6 +1158,11 @@ function fixture(overrides: Partial<GuestCommerceServiceApiOptions> = {}) {
       code: 'BEER-QD-330',
       name: '青岛啤酒',
       category_code: 'beer',
+      category_name: '啤酒',
+      category_parent_code: 'drinks',
+      category_parent_name: '酒水',
+      category_sort_order: 20,
+      top_category_sort_order: 20,
       fulfillment_station: 'bar',
       product_kind: 'single',
       bundle_components: [],

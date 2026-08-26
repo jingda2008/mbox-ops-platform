@@ -189,6 +189,69 @@ integration("normalized catalog PostgreSQL integration", () => {
     expect(conflictingReplay.json().error.code).toBe("IDEMPOTENCY_CONFLICT");
   });
 
+  it("provisions editable two-level customer menu categories for a new store", async () => {
+    await setPermission(pool, CATALOG_PRODUCT_MANAGE_PERMISSION, true);
+
+    const seeded = await app.inject({ method: "GET", url: "/api/catalog/menu-categories" });
+    expect(seeded.statusCode).toBe(200);
+    expect(seeded.json().data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "drinks", displayName: "酒水", parentCode: null }),
+      expect.objectContaining({ code: "cocktail", displayName: "鸡尾酒", parentCode: "drinks" }),
+    ]));
+
+    const rootCode = `menu-root-${integrationRunToken}`;
+    const childCode = `menu-child-${integrationRunToken}`;
+    const root = await app.inject({
+      method: "POST",
+      url: "/api/catalog/menu-categories",
+      headers: { "idempotency-key": integrationKey("menu-root") },
+      payload: { code: rootCode, displayName: "本店甄选", parentCode: null, sortOrder: 45, guestVisible: true },
+    });
+    expect(root.statusCode).toBe(201);
+    expect(root.json().data).toMatchObject({ code: rootCode, displayName: "本店甄选", parentCode: null });
+
+    const child = await app.inject({
+      method: "POST",
+      url: "/api/catalog/menu-categories",
+      headers: { "idempotency-key": integrationKey("menu-child") },
+      payload: { code: childCode, displayName: "清爽特调", parentCode: rootCode, sortOrder: 10, guestVisible: true },
+    });
+    expect(child.statusCode).toBe(201);
+    expect(child.json().data).toMatchObject({ code: childCode, displayName: "清爽特调", parentCode: rootCode });
+
+    const renamed = await app.inject({
+      method: "PATCH",
+      url: `/api/catalog/menu-categories/${childCode}`,
+      headers: { "idempotency-key": integrationKey("menu-child-rename") },
+      payload: { displayName: "轻盈特调", sortOrder: 12 },
+    });
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json().data).toMatchObject({ code: childCode, displayName: "轻盈特调", parentCode: rootCode, sortOrder: 12 });
+
+    const invalidHide = await app.inject({
+      method: "PATCH",
+      url: `/api/catalog/menu-categories/${rootCode}`,
+      headers: { "idempotency-key": integrationKey("menu-root-hide") },
+      payload: { guestVisible: false },
+    });
+    expect(invalidHide.statusCode).toBe(409);
+    expect(invalidHide.json().error.code).toBe("MENU_CATEGORY_CONFLICT");
+
+    const evidence = await pool.query<{ audits: string; outbox: string }>(`
+      SELECT
+        (SELECT count(*)::text FROM mbox.audit_events
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND object_type='menu_category'
+            AND object_id IN ($3::text,$4::text)) AS audits,
+        (SELECT count(*)::text FROM mbox.outbox_messages
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND aggregate_type='menu_category'
+            AND aggregate_id IN ($5::uuid,$6::uuid)) AS outbox
+    `, [
+      tenantId, storeId, root.json().data.id, child.json().data.id,
+      root.json().data.id, child.json().data.id,
+    ]);
+    expect(evidence.rows[0]).toEqual({ audits: "3", outbox: "3" });
+  });
+
   it("accepts only a controlled menu image or a bounded image-library asset", async () => {
     await setPermission(pool, CATALOG_PRODUCT_MANAGE_PERMISSION, true);
     const invalid = await app.inject({
@@ -450,6 +513,28 @@ describe("normalized catalog HTTP API", () => {
     const costResponse = await costAuthorized.app.inject({ method: "GET", url: "/api/catalog/products?status=all" });
     expect(costResponse.statusCode).toBe(200);
     expect(costResponse.json().data[0].costAmountMinor).toBe(1050);
+  });
+
+  it("lists customer menu categories only to employees who can manage the catalog", async () => {
+    const denied = await createFixture({ grantedPermissions: [] });
+    const deniedResponse = await denied.app.inject({ method: "GET", url: "/api/catalog/menu-categories" });
+    expect(deniedResponse.statusCode).toBe(403);
+
+    const allowed = await createFixture({ grantedPermissions: [CATALOG_PRODUCT_MANAGE_PERMISSION] });
+    const response = await allowed.app.inject({ method: "GET", url: "/api/catalog/menu-categories" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      data: [{
+        code: "cocktail",
+        displayName: "鸡尾酒",
+        parentCode: "drinks",
+        sortOrder: 10,
+        guestVisible: true,
+      }],
+    });
+    const query = allowed.calls.find((call) => call.sql.includes("FROM mbox.menu_categories AS category"));
+    expect(query?.sql).toContain("count(product.id)::text AS product_count");
+    expect(query?.sql).toContain("ORDER BY CASE WHEN category.parent_code IS NULL THEN 0 ELSE 1 END");
   });
 
   it("requires an idempotency key and emits audit and outbox data from the command outcome", async () => {
@@ -874,6 +959,9 @@ function fakeQuery(
   if (sql.includes("FROM mbox.role_data_scopes")) return result([]);
   if (sql.includes("FROM mbox.role_approval_limits")) return result([]);
   if (sql.includes("FROM mbox.role_navigation_items")) return result([]);
+  if (sql.includes("FROM mbox.menu_categories AS category")) {
+    return result([menuCategoryRow()]);
+  }
   if (sql.includes("GROUP BY product.category_code"))
     return result(options.categoryRows ?? []);
   if (sql.includes("SELECT clock_timestamp()::text AS effective_at")) {
@@ -962,6 +1050,20 @@ function productRow(withPrice: boolean): Record<string, unknown> {
     currency: withPrice ? "CNY" : null,
     price_valid_from: withPrice ? "2026-08-11T10:00:00.000Z" : null,
     price_valid_until: null,
+    created_at: "2026-08-11T09:00:00.000Z",
+    updated_at: "2026-08-11T09:00:00.000Z",
+  };
+}
+
+function menuCategoryRow(): Record<string, unknown> {
+  return {
+    id: "77777777-7777-4777-8777-777777777777",
+    code: "cocktail",
+    display_name: "鸡尾酒",
+    parent_code: "drinks",
+    sort_order: 10,
+    guest_visible: true,
+    product_count: "2",
     created_at: "2026-08-11T09:00:00.000Z",
     updated_at: "2026-08-11T09:00:00.000Z",
   };

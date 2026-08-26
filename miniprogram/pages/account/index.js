@@ -26,7 +26,7 @@ const ITEM_STATUS = {
 
 const PAYMENT_STATUS = {
   unpaid: '待付款',
-  pending: '付款处理中',
+  pending: '付款确认中',
   partially_paid: '部分付款',
   paid: '已付款',
   partially_refunded: '部分退款',
@@ -167,12 +167,12 @@ Page({
       if (!this.isCurrentTableRequest(tableRequest)) return
       if (!action || action.status !== 'ready' || action.presentation !== 'jsapi' || !action.payload) {
         const statusText = action && action.status === 'unknown'
-          ? '付款结果待核对'
+          ? '付款结果待确认'
           : action && action.presentation === 'qr'
-            ? '已生成通道二维码，请由工作人员协助完成'
+            ? '已生成付款二维码，请由工作人员协助完成'
             : '付款尚未完成'
         wx.setStorageSync(PENDING_PAYMENT_KEY, Object.assign({}, pendingPayment, { statusText }))
-        this.setData({ error: `${statusText}，系统不会把它显示为支付成功。` })
+        this.setData({ error: `${statusText}，暂不会显示为支付成功。` })
         return
       }
       await new Promise((resolve, reject) => wx.requestPayment(Object.assign({}, action.payload, { success: resolve, fail: reject })))

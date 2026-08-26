@@ -143,17 +143,18 @@
 .primary-experience {
   display: flex;
   width: 100%;
-  min-height: 218rpx;
+  min-height: 136rpx;
   margin: 26rpx 0 0;
-  padding: 32rpx;
+  padding: 20rpx 22rpx 20rpx 26rpx;
   align-items: center;
   justify-content: space-between;
   border: 0;
-  border-radius: 26rpx;
-  background: linear-gradient(145deg, #315d46, #172a21);
+  border-radius: 22rpx;
+  background: linear-gradient(135deg, #315d46, #214735 72%, #1a3528);
   color: #fff;
   text-align: left;
-  box-shadow: 0 18rpx 44rpx rgba(25, 70, 49, 0.18);
+  box-shadow: 0 10rpx 24rpx rgba(25, 70, 49, 0.12);
+  gap: 22rpx;
 }
 .primary-experience::after {
   border: 0;
@@ -161,25 +162,44 @@
 .primary-experience text {
   display: block;
 }
+.primary-experience__body {
+  min-width: 0;
+  flex: 1;
+}
 .primary-experience__kicker {
   color: #caaa77;
-  font-size: 21rpx;
-  letter-spacing: 2rpx;
+  font-size: 18rpx;
+  font-weight: 600;
+  letter-spacing: 1.5rpx;
 }
 .primary-experience__title {
-  margin-top: 8rpx;
+  overflow: hidden;
+  margin-top: 4rpx;
   font-family: "Songti SC", "STSong", serif;
-  font-size: 40rpx;
+  font-size: 33rpx;
   font-weight: 600;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .primary-experience__copy {
-  margin-top: 12rpx;
-  color: #cbc5bd;
-  font-size: 23rpx;
+  margin-top: 5rpx;
+  color: rgba(255, 255, 255, .74);
+  font-size: 19rpx;
 }
 .primary-experience__arrow {
-  font-size: 44rpx;
-  color: #d4b27d;
+  display: flex;
+  width: 62rpx;
+  height: 62rpx;
+  flex: 0 0 62rpx;
+  align-items: center;
+  justify-content: center;
+  border: 1rpx solid rgba(212, 178, 125, .48);
+  border-radius: 50%;
+  background: rgba(13, 38, 26, .28);
+  color: #ddb978;
+  font-size: 36rpx;
+  line-height: 1;
 }
 .reservation-experience {
   margin-top: 0;

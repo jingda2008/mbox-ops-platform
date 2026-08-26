@@ -66,12 +66,12 @@ function memberCardProgress(level, progress, previewLevel) {
     cardProgressAvailable: hasProgress,
     cardGrowthText: threshold
       ? `成长值 ${formatMemberNumber(growth)} / ${formatMemberNumber(threshold)}`
-      : hasProgress ? `成长值 ${formatMemberNumber(growth)}` : '成长进度暂不可显示',
+      : hasProgress ? `成长值 ${formatMemberNumber(growth)}` : '成长值持续累积',
     cardDifferenceText: nextTier && upgradeRemaining !== null
       ? upgradeRemaining > 0
         ? `距${nextTierName}还差 ${formatMemberNumber(upgradeRemaining)}`
         : `${nextTierName}等级已达成`
-      : level === 'gold' ? '金卡等级已达成' : '等级以已发布规则为准',
+      : level === 'gold' ? '金卡等级已达成' : '下一等级权益，敬请期待',
     cardProgressPercent: progressPercent,
     cardCurrentTierText: CARD_LEVEL_NAMES[level] || '普卡',
     cardNextTierText: nextTier ? (CARD_LEVEL_NAMES[nextTier] || '') : '',
@@ -88,10 +88,10 @@ function membershipView(item) {
     ? Number(item.qualificationGrowth) : progress ? number(progress.rollingGrowth) : null
   const nextLevel = progress && progress.nextTier ? LEVEL_NAMES[progress.nextTier] : ''
   const nextText = !progress || !nextLevel || progress.upgradeRemaining === null
-    ? '当前等级权益以已发布规则为准'
+    ? '当前等级权益以页面说明为准'
     : progress.upgradeRemaining > 0
       ? `距离${nextLevel}还差 ${progress.upgradeRemaining} 成长值`
-      : `已达到${nextLevel}成长值条件，等待系统按已发布规则确认`
+      : `已达到${nextLevel}成长值条件，升级结果会在这里更新`
   const periodAt = progress && (progress.periodStatus === 'grace' ? progress.graceEndsAt : progress.periodEndsAt)
   const threshold = progress && number(progress.upgradeThreshold)
   const progressPercent = threshold && qualificationGrowth !== null
@@ -108,19 +108,19 @@ function membershipView(item) {
     tierQualificationGrowth: item.tierQualificationGrowth === null || item.tierQualificationGrowth === undefined
       ? null : number(item.tierQualificationGrowth),
     qualificationGrowth,
-    qualificationGrowthText: qualificationGrowth === null ? '待核验' : String(qualificationGrowth),
+    qualificationGrowthText: qualificationGrowth === null ? '暂未统计' : String(qualificationGrowth),
     qualificationText: progress
-      ? `近${progress.evaluationWindowMonths}个月资格成长值 ${qualificationGrowth}`
-      : '资格成长值以已发布规则和权威交易记录为准',
+      ? `近${progress.evaluationWindowMonths}个月成长值 ${qualificationGrowth}`
+      : '成长记录会在这里持续更新',
     qualificationProgressText: threshold && qualificationGrowth !== null
-      ? `升级资格进度 ${qualificationGrowth} / ${threshold}` : '',
+      ? `升级进度 ${qualificationGrowth} / ${threshold}` : '',
     progressPercent,
-    periodText: periodAt ? `当前等级有效期至 ${String(periodAt).slice(0, 10)}` : '当前等级有效期以已发布规则为准',
+    periodText: periodAt ? `当前等级有效期至 ${String(periodAt).slice(0, 10)}` : '等级有效期以会员说明为准',
     nextText,
     estimatedSpendText: item.estimatedSpendToNextTierMinor !== null
       && item.estimatedSpendToNextTierMinor !== undefined
       && Number.isFinite(Number(item.estimatedSpendToNextTierMinor))
-      ? `按当前已发布规则估算还需消费合格商品 ${money(Number(item.estimatedSpendToNextTierMinor))}` : '',
+      ? `按当前会员规则估算还需消费 ${money(Number(item.estimatedSpendToNextTierMinor))}` : '',
     annualBenefitCounts: item.annualBenefitCounts || { preview: 0, granted: 0, available: 0 },
     updatedText: item.updatedAt ? `数据更新于 ${dateTime(item.updatedAt)}` : '',
   }, memberCardProgress(displayLevel, progress, previewLevel))
@@ -167,7 +167,7 @@ function annualBenefitView(item) {
   return {
     id: item.id,
     title: item.title || '年度会员礼遇',
-    periodText: starts && ends ? (starts === ends ? starts : `${starts} 至 ${ends}`) : '时间以门店已发布规则为准',
+    periodText: starts && ends ? (starts === ends ? starts : `${starts} 至 ${ends}`) : '时间以礼遇说明为准',
     status: item.status || 'pending',
     factState: item.factState || 'preview',
     statusText: ANNUAL_STATUS_NAMES[item.status] || '状态待确认',

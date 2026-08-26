@@ -75,7 +75,7 @@ Page({
     this.setData({ contactBusy: 'phone-replace', contactMessage: '' })
     try {
       await replaceVerifiedPhone(authorization.code)
-      this.setData({ contactMessage: '已记录新的验证手机号，旧版本保留为不可用历史证据。' })
+      this.setData({ contactMessage: '手机号已更新，原手机号不会再用于联系。' })
       await this.loadContactTools()
     } catch (error) { this.setData({ contactMessage: customerErrorMessage(error, '手机号未能更换') }) }
     finally { this.setData({ contactBusy: '' }) }
@@ -113,7 +113,7 @@ Page({
     this.setData({ contactBusy: registrationPublicId, contactMessage: '' })
     try {
       await updateActivityRegistrationContact(registrationPublicId, contactValue)
-      this.setData({ contactMessage: '本次报名联系方式已更正，旧版本不再用于联系。', editingRegistrationPublicId: '', editingContactValue: '' })
+      this.setData({ contactMessage: '本次报名手机号已更正，原手机号不再用于联系。', editingRegistrationPublicId: '', editingContactValue: '' })
       await this.loadContactTools()
     } catch (error) { this.setData({ contactMessage: customerErrorMessage(error, '报名联系方式未能更正') }) }
     finally { this.setData({ contactBusy: '' }) }

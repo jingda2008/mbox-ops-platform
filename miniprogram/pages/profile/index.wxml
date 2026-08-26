@@ -15,7 +15,7 @@
   <view wx:elif="{{error}}" class="profile-load-error">
     <state-panel type="error" title="会员资料读取失败" message="{{error}}" />
     <button bindtap="load">重新读取</button>
-    <text>当前状态无法判断是否为会员，因此不会显示访客卡或零值数据。</text>
+    <text>暂时无法确认会员身份，请稍后再试。</text>
   </view>
   <block wx:else>
     <view wx:if="{{membership}}" class="profile-member-card profile-member-card--{{membership.level}}">
@@ -54,7 +54,7 @@
       </button>
       <button class="metric-item" bindtap="openCoupons" hover-class="metric-item--hover">
         <text class="metric-icon">券</text>
-        <text class="metric-value">{{benefitError ? '待刷新' : (benefitCount || 0)}}</text>
+        <text class="metric-value">{{benefitError ? '—' : (benefitCount || 0)}}</text>
         <view class="metric-label-row"><text class="metric-label">优惠券</text><text class="metric-chevron">›</text></view>
       </button>
       <button class="metric-item" bindtap="openPoints" hover-class="metric-item--hover">
@@ -78,7 +78,7 @@
     </view>
 
     <view wx:if="{{membership && (membership.upgradeText || membership.retainText || membership.expiryText || membership.pendingRecoveryPoints > 0)}}" class="module-card">
-      <text class="module-eyebrow">服务状态</text>
+      <text class="module-eyebrow">会员</text>
       <text class="module-title">会员进度</text>
       <text wx:if="{{membership.upgradeText}}" class="progress-line">{{membership.upgradeText}}</text>
       <text wx:if="{{membership.retainText}}" class="progress-line">{{membership.retainText}}</text>
@@ -101,7 +101,7 @@
           <view class="service-chip__face"><image class="service-chip__icon" src="/assets/tabbar/reservations-active.png" mode="aspectFit" /><view class="service-chip__copy"><text>我的预约</text><text>到店安排</text></view><text class="service-chip__arrow">›</text></view>
         </view>
         <view class="service-chip" bindtap="openSuperhighService" hover-class="service-chip--hover" role="button">
-          <view class="service-chip__face"><image class="service-chip__icon" src="/assets/tabbar/community-active.png" mode="aspectFit" /><view class="service-chip__copy"><text>超嗨活动</text><text>{{registrationError ? '记录待刷新' : (registrations.length ? '已报名 ' + registrations.length + ' 场' : '发现最新活动')}}</text></view><text class="service-chip__arrow">›</text></view>
+          <view class="service-chip__face"><image class="service-chip__icon" src="/assets/tabbar/community-active.png" mode="aspectFit" /><view class="service-chip__copy"><text>超嗨活动</text><text>{{registrationError ? '暂时无法读取活动记录' : (registrations.length ? '已报名 ' + registrations.length + ' 场' : '发现最新活动')}}</text></view><text class="service-chip__arrow">›</text></view>
         </view>
         <view class="service-chip" bindtap="openPreferenceSettings" hover-class="service-chip--hover" role="button">
           <view class="service-chip__face"><image class="service-chip__icon" src="/assets/tabbar/profile-active.png" mode="aspectFit" /><view class="service-chip__copy"><text>我的偏好</text><text>口味与服务</text></view><text class="service-chip__arrow">›</text></view>

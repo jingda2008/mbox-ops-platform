@@ -15,7 +15,7 @@ describe('reservation performance revision mobile contract', () => {
     expect(page).toContain('保留预约，不选演出')
     expect(page).toContain('选择已保留，可直接重试')
     expect(view).toContain('预约仍有效')
-    expect(view).toContain('系统都不会自动取消到店预约')
+    expect(view).toContain('无论怎样选择，到店预约都会保留')
     expect(view).toContain('data-decision="keep"')
     expect(view).toContain('data-decision="reselect"')
     expect(view).toContain('data-decision="clear"')

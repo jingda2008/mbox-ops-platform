@@ -37,7 +37,7 @@ describe('normalized migration baseline', () => {
       '037', '038', '039', '040', '041', '042', '043', '044', '045', '046', '047', '048',
       '049', '050', '051', '052', '053', '054', '055', '056', '057', '058', '059', '060',
       '061', '062', '063', '064', '065', '066', '067', '068', '069', '070', '071', '072',
-      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099', '100', '101', '102', '103', '104', '105', '106', '107', '108', '109', '110', '111', '112', '113', '114', '115', '116', '117', '118', '119', '120', '121', '122', '123', '124', '125', '126', '127', '128', '129', '130', '131', '132', '133', '134', '135', '136', '137', '138', '139', '140', '141', '142', '143',
+      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099', '100', '101', '102', '103', '104', '105', '106', '107', '108', '109', '110', '111', '112', '113', '114', '115', '116', '117', '118', '119', '120', '121', '122', '123', '124', '125', '126', '127', '128', '129', '130', '131', '132', '133', '134', '135', '136', '137', '138', '139', '140', '141', '142', '143', '144',
     ])
     for (const migration of migrations) {
       expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/)
@@ -1045,6 +1045,23 @@ describe('normalized migration baseline', () => {
     expect(migration?.sql).toMatch(/pg_get_functiondef/)
     expect(migration?.sql).toMatch(/settled order, payment or refund/)
     expect(migration?.sql).toMatch(/schema_version='143'/)
+  })
+
+  it('adds a store-configured, two-level customer menu hierarchy without rewriting product categories', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '144')
+    expect(migration?.filename).toBe('144_menu_category_hierarchy.sql')
+    expect(migration?.sql).toMatch(/CREATE TABLE mbox\.menu_categories/)
+    expect(migration?.sql).toMatch(/parent_code text/)
+    expect(migration?.sql).toMatch(/menu_categories_two_levels/)
+    expect(migration?.sql).toMatch(/seed_default_menu_categories_for_store/)
+    expect(migration?.sql).toMatch(/stores_seed_default_menu_categories/)
+    expect(migration?.sql).toMatch(/'cocktail','鸡尾酒','drinks',10,true/)
+    expect(migration?.sql).toMatch(/INSERT INTO mbox\.menu_categories[\s\S]*?FROM mbox\.products AS product/)
+    expect(migration?.sql).toMatch(/ALTER TABLE mbox\.menu_categories ENABLE ROW LEVEL SECURITY/)
+    expect(migration?.sql).toMatch(/ALTER TABLE mbox\.menu_categories FORCE ROW LEVEL SECURITY/)
+    expect(migration?.sql).toMatch(/GRANT SELECT,INSERT,UPDATE ON TABLE mbox\.menu_categories TO mbox_runtime/)
+    expect(migration?.sql).toMatch(/schema_version='144'/)
+    expect(migration?.sql).not.toMatch(/UPDATE mbox\.products\s+SET category_code/)
   })
 
   it('accepts only an empty database or the same normalized schema flavor', () => {

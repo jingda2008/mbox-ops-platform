@@ -96,8 +96,8 @@ Page({
         tableCode: getTableSession().tableCode,
         tasks: stored.tasks.map(normalizeTask),
         live: false,
-        cachedAtText: stored.savedAt ? `本机记录于 ${dateTime(stored.savedAt)}` : '',
-        error: stored.tasks.length ? '实时状态暂时未连接，以下为本桌最近提交记录。请勿重复呼叫。' : customerErrorMessage(error, '服务进度暂时无法读取'),
+        cachedAtText: stored.savedAt ? `上次更新于 ${dateTime(stored.savedAt)}` : '',
+        error: stored.tasks.length ? '服务进展暂时无法更新，以下为本桌最近提交的需求。请勿重复呼叫。' : customerErrorMessage(error, '服务进展暂时无法读取'),
       })
     }
   },

@@ -37,6 +37,20 @@ test('home offers menu browsing and an explicit opt-in membership invitation', a
   assert.match(configSource, /membershipInviteCooldownHours:\s*24/)
 })
 
+test('home menu entry stays a compact full-width horizontal control', async () => {
+  const [homeView, homeStyle] = await Promise.all([
+    read('miniprogram/pages/home/index.wxml'),
+    read('miniprogram/pages/home/index.wxss'),
+  ])
+
+  assert.match(homeView, /class="primary-experience"[^>]*hover-class="button-hover"/)
+  assert.match(homeView, /class="primary-experience__body"/)
+  assert.match(homeStyle, /\.primary-experience\s*\{[^}]*width:\s*100%[^}]*min-height:\s*136rpx[^}]*border-radius:\s*22rpx/)
+  assert.match(homeStyle, /\.primary-experience__body\s*\{[^}]*flex:\s*1/)
+  assert.match(homeStyle, /\.primary-experience__title\s*\{[^}]*white-space:\s*nowrap/)
+  assert.doesNotMatch(homeStyle, /\.primary-experience\s*\{[^}]*min-height:\s*218rpx/)
+})
+
 test('membership consent stays unchecked and phone authorization appears only after the customer checks it', async () => {
   const [termsView, termsLogic] = await Promise.all([
     read('miniprogram/pages/membership-terms/index.wxml'),
@@ -46,6 +60,32 @@ test('membership consent stays unchecked and phone authorization appears only af
   assert.match(termsLogic, /agreedToPolicies: false/)
   assert.match(termsView, /checked="\{\{agreedToPolicies\}\}"/)
   assert.match(termsView, /wx:if="\{\{agreedToPolicies\}\}"[^>]*class="accept-button wx-phone-button"[^>]*open-type="getPhoneNumber"/)
+})
+
+test('customer pages avoid duplicate status labels and backstage implementation copy', async () => {
+  const [homeView, orderView, accountView, communityView, detailView, detailLogic, complaintView, memberCenterView, serviceView] = await Promise.all([
+    read('miniprogram/pages/home/index.wxml'),
+    read('miniprogram/pages/order/index.wxml'),
+    read('miniprogram/pages/account/index.wxml'),
+    read('miniprogram/pages/community/index.wxml'),
+    read('miniprogram/pages/community-detail/index.wxml'),
+    read('miniprogram/pages/community-detail/index.js'),
+    read('miniprogram/pages/complaint/index.wxml'),
+    read('miniprogram/pages/member-center/index.wxml'),
+    read('miniprogram/pages/service/index.wxml'),
+  ])
+
+  assert.doesNotMatch(homeView, /<view class="section-title"><text>今晚现场<\/text><text class="section-link">/)
+  assert.doesNotMatch(homeView, /状态实时同步/)
+  assert.match(homeView, /<text class="performance-compact__state">/)
+  assert.doesNotMatch(orderView, /自动更新|后端/)
+  assert.match(accountView, /付款结果尚未确认时，请先查看结果，避免重复付款。/)
+  assert.doesNotMatch(communityView, /报名与安排以活动详情为准/)
+  assert.doesNotMatch(detailView, /安全规则版本|由店长发起|收银复核|请求编号/)
+  assert.doesNotMatch(detailLogic, /安全规则版本|可核验版本|由店长发起|收银复核|请求编号/)
+  assert.match(complaintView, /由值班负责人跟进/)
+  assert.doesNotMatch(memberCenterView, /以系统状态为准|已授予权益/)
+  assert.doesNotMatch(serviceView, /需要值班经理/)
 })
 
 test('only the payment initiator can continue an active table payment', async () => {
@@ -141,14 +181,14 @@ test('activity registration distinguishes confirmed, payment-pending, and waitli
   assert.match(detailLogic, /ACTIVITY_PACKAGE_PURCHASE_LIMIT/)
   assert.match(detailView, /selectedPricing && selectedPricing\.requiresPaymentOnSubmit/)
   assert.match(detailView, /每会员限购/)
-  assert.match(detailLogic, /已加入候补，按报名顺序自动递补；现在无需付款。/)
+  assert.match(detailLogic, /已加入候补名单，会按报名顺序依次安排；现在无需付款。/)
   assert.match(detailLogic, /ACTIVITY_CONTACT_INVALID/)
   assert.match(detailLogic, /ACTIVITY_CONTACT_PROTECTION_UNAVAILABLE/)
   assert.match(detailLogic, /ACTIVITY_CONTACT_PROTECTION_FAILED/)
-  assert.match(detailLogic, /报名服务配置异常，请稍后再试/)
+  assert.match(detailLogic, /报名服务暂时不可用，请稍后再试/)
   assert.match(detailLogic, /ACTIVITY_REGISTRATION_RESULT_UNCONFIRMED/)
   assert.match(detailLogic, /报名服务暂时繁忙，结果尚未确认/)
-  assert.match(detailLogic, /本机待核对请求已清除/)
+  assert.match(detailLogic, /请按提示调整后重新报名。/)
   assert.match(detailLogic, /shouldClearRegistrationAttempt/)
   assert.match(communityLogic, /REGISTRATION_STATUS_NAMES\[registration\.status\]/)
   assert.match(communityLogic, /paymentStateText/)
@@ -197,13 +237,23 @@ test('tonight ordering keeps live service separate from recommendation and deleg
     read('server/normalized/customer-experience-service.ts'),
   ])
 
-  assert.match(orderView, /本桌服务\{\{serviceSummary\.live \? ' · 自动更新' : ''\}\}/)
+  assert.match(orderView, /<button class="table-strip__service" bindtap="openStatus"><text class="table-strip__service-value">\{\{serviceSummary\.label\}\}<\/text><text class="table-strip__service-link">查看进展 ›<\/text><\/button>/)
+  assert.doesNotMatch(orderView, /自动更新/)
   assert.match(orderView, /呼叫服务员/)
   assert.match(orderView, /生日\/需求/)
   assert.match(orderView, /data-code="celebration" aria-label="生日或个性化需求"/)
   assert.match(orderView, /投诉\/不满意/)
-  assert.match(orderView, /帮我选/)
-  assert.match(orderView, /摇一摇 · 换一组推荐/)
+  assert.match(orderView, /帮我快速选/)
+  assert.match(orderView, /摇一摇换一组/)
+  assert.ok(orderView.lastIndexOf('<view class="menu-tools">') < orderView.indexOf('class="recommend-entry"'), 'recommendation appears as selected menu content beneath the active menu categories')
+  assert.match(orderView, /selectedCategory === 'recommendation'[^>]*class="recommend-entry"/)
+  assert.match(orderView, /selectedCategory !== 'recommendation' \|\| searchText[^>]*class="section product-section"/)
+  assert.match(orderView, /class="recommend-entry__actions"[\s\S]*?bindtap="onRecommend"[\s\S]*?bindtap="onShakeRecommendation"/)
+  assert.doesNotMatch(orderView, /记录今晚偏好|recommend-preference/)
+  assert.match(orderView, /根据本桌情况推荐/)
+  assert.ok(orderView.indexOf('class="category-scroll"') < orderView.indexOf('class="search-box"'), 'editable categories appear before search like the approved reference layout')
+  assert.match(orderLogic, /recommendationError: customerErrorMessage\(error, '今夜推荐正在更新'\)/)
+  assert.match(orderView, /wx:if="\{\{recommendationError\}\}" class="recommendation-note"/)
   assert.match(orderView, /单点约 \{\{item\.separatePriceText\}\}/)
   assert.match(orderLogic, /getServiceRequests/)
   assert.match(orderLogic, /async function loadPerformanceView\(\)[\s\S]*?演出信息暂时未更新，请点一下重试/)
@@ -224,6 +274,11 @@ test('tonight ordering keeps live service separate from recommendation and deleg
   assert.match(orderLogic, /marketingLabel/)
   assert.match(recommendationService, /recommendationIntent: RecommendationIntent/)
   assert.match(orderStyle, /\.quick-service button[\s\S]*?min-height:\s*88rpx/)
+  assert.match(orderStyle, /\.quick-service__surface \{[^}]*min-height: 64rpx[^}]*border-radius: 32rpx/)
+  assert.match(orderStyle, /\.recommend-entry__actions \{[^}]*grid-template-columns: 1\.2fr 1fr/)
+  assert.match(orderStyle, /\.recommend-card \{[^}]*width: 296rpx[^}]*min-height: 330rpx/)
+  assert.match(orderStyle, /\.product-list \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/)
+  assert.match(orderStyle, /\.product-row \{[^}]*flex-direction: column/)
   assert.match(servicePage, /tableSessionCacheScope/)
   assert.match(statusPage, /tableSessionCacheScope/)
 })
@@ -248,7 +303,7 @@ test('Superhigh activity access invites non-members to join with native WeChat p
   assert.match(communityLogic, /membershipInviteVisible: false/)
   assert.match(communityLogic, /enrollMembership\(terms\.version, 'mini_community', authorization\.code\)/)
   assert.match(communityView, /加入会员，解锁超嗨活动/)
-  assert.match(communityView, /查看和报名活动需要先加入会员并授权手机号。/)
+  assert.match(communityView, /加入会员后即可查看活动详情并报名。/)
   assert.match(communityView, /wx:if="\{\{membershipInviteAgreed\}\}"[^>]*open-type="getPhoneNumber"[^>]*bindgetphonenumber="acceptMembershipInvite"/)
   assert.match(detailLogic, /const bootstrap = await getMiniBootstrap\(\)/)
   assert.match(detailLogic, /getActivityPreview\(this\.data\.id\)/)
@@ -256,7 +311,7 @@ test('Superhigh activity access invites non-members to join with native WeChat p
   assert.match(detailLogic, /if \(!this\.data\.membership\)/)
   assert.match(detailLogic, /enrollMembership\(terms\.version, 'mini_community', authorization\.code\)/)
   assert.match(detailView, /加入会员，解锁超嗨活动/)
-  assert.match(detailView, /报名活动需要先加入会员并授权手机号。/)
+  assert.match(detailView, /加入会员后即可查看活动详情并报名。/)
   assert.match(detailView, /open-type="getPhoneNumber"/)
   assert.match(termsLogic, /'mini_community'/)
   assert.match(repository, /ACTIVITY_MEMBERSHIP_REQUIRED/)
@@ -406,6 +461,48 @@ test('customers can browse a read-only menu before scanning, but the browse view
   assert.match(apiSource, /publicRequest\(`\/api\/public\/mini\/menu\/products/)
 })
 
+test('customer menu categories come from the editable backend hierarchy and reveal a configured second level only when needed', async () => {
+  const [orderLogic, orderView, guestMenuApi, catalogPanel] = await Promise.all([
+    read('miniprogram/pages/order/index.js'),
+    read('miniprogram/pages/order/index.wxml'),
+    read('server/normalized/guest-commerce-service-api.ts'),
+    read('src/normalized-ui/CatalogManagementPanel.tsx'),
+  ])
+
+  assert.match(orderLogic, /function menuCategoryIdentity\(item\)/)
+  assert.match(orderLogic, /function customerCategoryName\(item\)/)
+  assert.match(orderLogic, /categoryName: customerCategoryName\(item\)/)
+  assert.match(orderLogic, /LEGACY_MENU_CATEGORY_HIERARCHY/)
+  assert.match(orderLogic, /cocktail: \{ name: '鸡尾酒', parentCode: 'drinks', parentName: '酒水'/)
+  assert.match(orderLogic, /legacyUnparentedCategory/)
+  assert.match(orderLogic, /return legacyCategory \? legacyCategory\.name : '其他'/)
+  assert.match(orderLogic, /const legacyUnconfigured = parentCode === '' && categoryName === '其他'/)
+  assert.match(orderLogic, /categoryParentCode/)
+  assert.match(orderLogic, /categoryParentName/)
+  assert.match(orderLogic, /topCategorySortOrder/)
+  assert.match(orderLogic, /function menuCategoryState\(products, selectedTopCategory, selectedSubcategory, includeRecommendations = false\)/)
+  assert.match(orderLogic, /code: 'recommendation', name: '今夜推荐'/)
+  assert.match(orderLogic, /includeRecommendations \? 'recommendation' : 'all'/)
+  assert.match(orderLogic, /selectSubcategory\(event\)/)
+  assert.match(orderLogic, /category\.topCode === this\.data\.selectedCategory/)
+  assert.match(orderLogic, /category\.childCode === this\.data\.selectedSubcategory/)
+  assert.doesNotMatch(orderLogic, /function menuCategories\(items\)/)
+  assert.match(orderView, /wx:if="\{\{subcategories\.length\}\}"[\s\S]*?bindtap="selectSubcategory"/)
+  assert.doesNotMatch(orderView, />cocktail</)
+
+  assert.match(guestMenuApi, /LEFT JOIN mbox\.menu_categories AS menu_category/)
+  assert.match(guestMenuApi, /LEFT JOIN mbox\.menu_categories AS parent_menu_category/)
+  assert.match(guestMenuApi, /const categoryName = configuredCategoryName[\s\S]*?publicCatalogCategoryFallbackName/)
+  assert.match(guestMenuApi, /function publicCatalogCategoryFallbackName\([\s\S]*?return '其他'/)
+  assert.match(guestMenuApi, /categoryParentCode: unconfiguredCategory \? 'other' : row\.category_parent_code/)
+  assert.match(guestMenuApi, /menu_category\.guest_visible/)
+
+  assert.match(catalogPanel, /\/api\/catalog\/menu-categories/)
+  assert.match(catalogPanel, /顾客菜单分类/)
+  assert.match(catalogPanel, /一级入口和二级分类都在这里配置/)
+  assert.match(catalogPanel, /<label>顾客菜单分类<select/)
+})
+
 test('customer pages use Chinese release copy and the table cart is server-authoritative', async () => {
   const [orderView, orderLogic, apiSource, errorSource, sessionApi, cartRepository] = await Promise.all([
     read('miniprogram/pages/order/index.wxml'),
@@ -498,10 +595,11 @@ test('monthly performance calendar starts at today and keeps date choices compac
   assert.match(view, /fields="month" value="\{\{monthValue\}\}" start="\{\{minimumMonth\}\}"/)
   assert.match(view, /scroll-into-view="\{\{calendarScrollTarget\}\}"/)
   assert.match(view, /id="calendar-day-\{\{item\.value\}\}"/)
+  assert.match(view, /hover-class="day-chip--pressed"/)
   assert.match(view, /class="day-chip__label"/)
-  assert.match(style, /\.day-chip\{display:inline-flex;width:88rpx;min-height:88rpx/)
-  assert.match(style, /\.day-chip__label\{display:inline-flex;min-width:24rpx;height:24rpx/)
-  assert.match(style, /\.day-chip\.is-on \.day-chip__label\{min-width:36rpx;height:36rpx/)
+  assert.match(style, /\.day-chip\{display:inline-flex;flex:0 0 112rpx;width:112rpx;min-width:112rpx;min-height:88rpx/)
+  assert.match(style, /\.day-chip__label\{box-sizing:border-box;display:inline-flex;width:36rpx;height:36rpx/)
+  assert.match(style, /\.day-chip--pressed \.day-chip__label\{transform:scale\(\.88\)/)
   assert.match(style, /font-size:20rpx/)
 })
 
@@ -523,11 +621,14 @@ test('customer surfaces keep neutral browsing, meaningful activity labels, and r
   assert.equal(JSON.parse(homeConfig).navigationBarTitleText, 'M-BOX')
   assert.doesNotMatch(profileLogic, /成长值待核验/)
   assert.doesNotMatch(memberCenterLogic, /成长值待核验/)
-  assert.match(profileLogic, /成长进度暂不可显示/)
+  assert.match(profileLogic, /成长值持续累积/)
+  assert.doesNotMatch(profileLogic, /成长进度暂不可显示/)
   assert.match(profileStyle, /\.profile-member-card__top button, \.profile-member-card__foot button \{[^}]*min-height: 88rpx/)
   assert.match(profileStyle, /\.profile-member-card__foot \{ min-height: 88rpx/)
   assert.match(orderLogic, /const connectionError = session\.tableToken[\s\S]*?customerErrorMessage\(error, '桌台连接已失效，请重新扫描桌面二维码'\) : ''/)
-  assert.match(orderStyle, /\.quick-service button \{[^}]*min-height: 88rpx[^}]*border-radius: 999rpx[^}]*box-shadow: none/)
+  assert.match(orderStyle, /\.quick-service \{[^}]*display: grid[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)[^}]*gap: 12rpx/)
+  assert.match(orderStyle, /\.quick-service button \{[^}]*width: 100%[^}]*min-height: 88rpx[^}]*background: transparent/)
+  assert.match(orderStyle, /\.quick-service__surface \{[^}]*width: 100%[^}]*min-height: 64rpx[^}]*border-radius: 32rpx[^}]*background: #eef6f1/)
 })
 
 test('customer-only reservations stay executable, performances use the public schedule, and store contact is opt-in configured', async () => {

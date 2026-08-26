@@ -14,8 +14,8 @@ const REGISTRATION_STATUS_NAMES = {
   cancelled: '已取消', refunded: '已退款', expired: '已失效',
 }
 const PAYMENT_RESOLUTION_NAMES = {
-  action_required: '等待付款', pending: '支付处理中', unknown: '付款待核对', confirmed: '付款已确认',
-  failed: '付款失败', expired: '付款已超时', refund_requested: '退款待审核', refunding: '退款处理中', refunded: '已退款',
+  action_required: '等待付款', pending: '付款确认中', unknown: '付款结果待确认', confirmed: '付款已确认',
+  failed: '付款失败', expired: '付款已超时', refund_requested: '退款申请确认中', refunding: '退款处理中', refunded: '已退款',
 }
 
 function dateText(value) {

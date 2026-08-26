@@ -16,6 +16,6 @@
       <image src="{{contact.wecomQrImageUrl}}" mode="aspectFit" bindtap="previewWecomQr" />
       <view><text>{{contact.wecomName}}</text><text>点二维码可放大保存，再用企业微信扫码添加好友。</text></view>
     </view>
-    <text class="contact-boundary">企业微信需在小程序后台完成官方绑定后才可发起会话。</text>
+    <text class="contact-boundary">若暂时打不开客服，可稍后再试或直接拨打预约电话。</text>
   </block>
 </view>

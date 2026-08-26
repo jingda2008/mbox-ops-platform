@@ -40,7 +40,7 @@ function performanceView(view) {
   if (!schedule) return {
     hasSchedule: false,
     stateText: '今晚安排',
-    summary: '当晚暂无已发布场次',
+    summary: '当晚暂无演出安排',
     schedules,
   }
   return {
@@ -166,7 +166,7 @@ Page({
     canEnter: false,
     hasTableSession: false,
     connectionMessage: '',
-    serviceOwner: '服务人员处理中',
+    serviceOwner: '随时为你服务',
     guestCountText: '人数待确认',
   },
 
@@ -231,7 +231,7 @@ Page({
       visitState: 'prearrival',
       canEnter: false,
       connectionMessage: '',
-      serviceOwner: '服务人员处理中',
+      serviceOwner: '随时为你服务',
       guestCountText: '人数待确认',
     })
   },
@@ -262,7 +262,7 @@ Page({
       brandStoryCard: homepageCards.find((item) => item.isMboxStory) || MBOX_STORY_CARD,
       editorialCards: homepageCards.filter((item) => !item.isMboxStory),
       monthlyPerformanceCard: contentCardView((bootstrap.content || []).find((item) => item && item.type === 'show') || {
-        code: 'published-performance-calendar', type: 'show', title: '本月演出安排', summary: '按日期查看门店已发布的演出与舞台阵容', ctaLabel: '查看安排', targetPath: '/pages/performances/index',
+        code: 'published-performance-calendar', type: 'show', title: '本月演出安排', summary: '按日期查看演出与舞台阵容', ctaLabel: '查看安排', targetPath: '/pages/performances/index',
       }),
       upcomingReservation: reservationView(reservations.reservations),
       performance: performanceView(performances),
@@ -295,7 +295,7 @@ Page({
         canEnter: active,
         visitState: active ? 'active' : waiting ? 'waiting' : 'prearrival',
         connectionMessage: session.message || (waiting ? '桌位已识别，等待工作人员开台。' : ''),
-        serviceOwner: session.primaryServiceName || '服务人员处理中',
+        serviceOwner: session.primaryServiceName || '随时为你服务',
         guestCountText: Number(session.guestCount) > 0 ? `${Number(session.guestCount)}位` : '人数待确认',
         error: '',
       })
@@ -319,7 +319,7 @@ Page({
   openTonightSchedule() {
     const performance = this.data.performance
     if (!performance || !(performance.schedules && performance.schedules.length)) {
-      wx.showToast({ title: '今晚暂无已发布演出', icon: 'none' })
+      wx.showToast({ title: '今晚暂无演出安排', icon: 'none' })
       return
     }
     this.setData({ performancePanel: 'tonight' })

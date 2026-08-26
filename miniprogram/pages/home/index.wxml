@@ -6,7 +6,7 @@
     <view class="hero-content">
       <text class="hero-kicker">现场音乐 · 城市夜晚</text>
       <text class="hero-title">{{visitState === 'active' ? table.displayName : visitState === 'waiting' ? table.displayName : '今晚，刚刚好'}}</text>
-      <text class="hero-copy">{{visitState === 'active' ? ('本桌已连接 · ' + serviceOwner) : visitState === 'waiting' ? '桌码已识别，开台后菜单会自动出现' : '现场音乐、精心酒水与刚好的相遇'}}</text>
+      <text class="hero-copy">{{visitState === 'active' ? '今晚的菜单与服务，都在这里。' : visitState === 'waiting' ? '桌码已识别，开台后菜单会自动出现' : '现场音乐、精心酒水与刚好的相遇'}}</text>
     </view>
   </view>
 
@@ -23,18 +23,18 @@
 
     <block wx:elif="{{visitState === 'active'}}">
       <view class="onsite-summary">
-        <view><text class="summary-value">{{table.displayName}}</text><text class="summary-label">当前桌位</text></view>
+        <view><text class="summary-value">{{table.displayName}}</text><text class="summary-label">本桌</text></view>
         <view><text class="summary-value">{{guestCountText}}</text><text class="summary-label">本桌人数</text></view>
-        <view><text class="summary-value">{{serviceOwner}}</text><text class="summary-label">服务负责</text></view>
+        <view><text class="summary-value">{{serviceOwner}}</text><text class="summary-label">本桌服务</text></view>
       </view>
 
-      <button class="primary-experience" data-url="/pages/order/index" bindtap="openTab">
-        <view><text class="primary-experience__kicker">今晚从这里开始</text><text class="primary-experience__title">今晚菜单与点单</text><text class="primary-experience__copy">实时库存、清晰价格与舒适选择</text></view>
-        <text class="primary-experience__arrow">→</text>
+      <button class="primary-experience" data-url="/pages/order/index" bindtap="openTab" hover-class="button-hover">
+        <view class="primary-experience__body"><text class="primary-experience__kicker">今晚从这里开始</text><text class="primary-experience__title">今晚菜单与点单</text><text class="primary-experience__copy">清晰价格，轻松选择</text></view>
+        <view class="primary-experience__arrow" aria-hidden="true">→</view>
       </button>
 
       <view class="section live-section">
-        <view class="section-title"><text>今晚现场</text><text class="section-link">{{performance ? performance.stateText : '当晚动态'}}</text></view>
+        <view class="section-title"><text>今晚现场</text></view>
         <view class="performance-compact {{performance && performance.stateText === '正在演出' ? 'is-live' : ''}}" bindtap="openTonightSchedule" hover-class="button-hover" role="button" aria-role="button">
           <image wx:if="{{performance && performance.imageUrl}}" src="{{performance.imageUrl}}" mode="aspectFill" />
           <view class="performance-compact__shade"></view>
@@ -42,7 +42,7 @@
             <text class="performance-compact__state">{{performance ? performance.summary : '今晚'}}</text>
             <text class="performance-compact__name">{{performance && performance.hasSchedule ? performance.performer : '今晚演出安排'}}</text>
             <view class="performance-compact__footer">
-              <text class="performance-compact__time">{{performance && performance.hasSchedule ? performance.timeText : '当晚暂无已发布场次'}}</text>
+              <text class="performance-compact__time">{{performance && performance.hasSchedule ? performance.timeText : '当晚暂无演出安排'}}</text>
               <text class="performance-compact__action">整晚安排 →</text>
             </view>
           </view>
@@ -62,10 +62,10 @@
       </view>
 
       <view class="section compact-section">
-        <view class="section-title"><text>本桌快捷服务</text><text class="section-link">状态实时同步</text></view>
+        <view class="section-title"><text>本桌快捷服务</text></view>
         <view class="action-grid">
           <button data-url="/pages/service/index" bindtap="openPage"><text class="action-icon">水</text><text>桌边服务</text></button>
-          <button data-url="/pages/status/index" bindtap="openPage"><text class="action-icon">进</text><text>处理进度</text></button>
+          <button data-url="/pages/status/index" bindtap="openPage"><text class="action-icon">进</text><text>服务进展</text></button>
           <button data-url="/pages/songs/index" bindtap="openPage"><text class="action-icon">歌</text><text>现场点歌</text></button>
           <button data-url="/pages/account/index" bindtap="openPage"><text class="action-icon">账</text><text>订单桌账</text></button>
         </view>
@@ -74,7 +74,7 @@
 
     <block wx:else>
       <view class="section live-section">
-        <view class="section-title"><text>今晚现场</text><text class="section-link">{{performance ? performance.stateText : '当晚动态'}}</text></view>
+        <view class="section-title"><text>今晚现场</text></view>
         <view class="performance-compact {{performance && performance.stateText === '正在演出' ? 'is-live' : ''}}" bindtap="openTonightSchedule" hover-class="button-hover" role="button" aria-role="button">
           <image wx:if="{{performance && performance.imageUrl}}" src="{{performance.imageUrl}}" mode="aspectFill" />
           <view class="performance-compact__shade"></view>
@@ -82,7 +82,7 @@
             <text class="performance-compact__state">{{performance ? performance.summary : '今晚'}}</text>
             <text class="performance-compact__name">{{performance && performance.hasSchedule ? performance.performer : '今晚演出安排'}}</text>
             <view class="performance-compact__footer">
-              <text class="performance-compact__time">{{performance && performance.hasSchedule ? performance.timeText : '当晚暂无已发布场次'}}</text>
+              <text class="performance-compact__time">{{performance && performance.hasSchedule ? performance.timeText : '当晚暂无演出安排'}}</text>
               <text class="performance-compact__action">整晚安排 →</text>
             </view>
           </view>
@@ -107,7 +107,7 @@
       </view>
       <view wx:else class="state-card current-state">
         <view class="state-card__icon">⌁</view>
-        <view class="state-card__body"><text class="state-card__eyebrow">当前状态</text><text class="state-card__title">尚未连接桌位</text><text class="state-card__copy">到店后从“点单”页扫描桌码，即可进入实时菜单和桌边服务。</text></view>
+        <view class="state-card__body"><text class="state-card__eyebrow">到店点单</text><text class="state-card__title">尚未连接桌位</text><text class="state-card__copy">到店后从“点单”页扫描桌码，即可查看菜单并使用桌边服务。</text></view>
       </view>
 
       <view wx:if="{{!membership && membershipTerms}}" class="membership-inline-card" bindtap="openMembershipInvite" hover-class="button-hover" role="button" aria-role="button">
@@ -157,7 +157,7 @@
         <view wx:for="{{performance.schedules}}" wx:key="id" class="performance-schedule-row {{item.stateText === '正在演出' ? 'is-current' : ''}}"><view><text>{{item.stateText}}</text><text>{{item.timeText}}</text></view><view><text>{{item.performer}}</text><text>{{item.tags || '现场演出'}}</text></view></view>
       </view>
       <view wx:else class="performance-panel__artist"><image wx:if="{{performance.imageUrl}}" src="{{performance.imageUrl}}" mode="aspectFill" /><view><text>{{performance.performer}}</text><text>{{performance.tags || 'M-BOX 当晚舞台阵容'}}</text><text>{{performance.bio || '更多介绍由门店发布后展示。'}}</text></view></view>
-      <text class="performance-panel__note">演出时间与阵容以门店当日已发布安排为准。</text>
+      <text class="performance-panel__note">演出时间与阵容以当晚安排为准。</text>
     </view>
   </view>
 

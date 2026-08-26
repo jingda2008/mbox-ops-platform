@@ -30,7 +30,7 @@ Page({
           templateId: item.templateId,
           authorizationVersion: item.authorizationVersion,
           title: TITLE_NAMES[item.notificationType] || '服务提醒',
-          statusText: banned ? '系统已限制' : usable ? '本周期已开启' : item.decision === 'granted' ? '可再次开启' : '尚未开启',
+          statusText: banned ? '暂时无法开启' : usable ? '已开启' : item.decision === 'granted' ? '可再次开启' : '尚未开启',
           actionText: banned ? '不可用' : usable ? '已开启' : '开启提醒',
           disabled: banned || usable,
           raw: item,
@@ -47,7 +47,7 @@ Page({
     const option = this.data.options.find((item) => item.policyId === policyId)
     if (!option || option.disabled || this.data.busyId) return
     if (typeof wx.requestSubscribeMessage !== 'function') {
-      return this.setData({ error: '当前基础库暂不支持订阅消息' })
+      return this.setData({ error: '当前微信版本暂不支持提醒，请升级微信后再试' })
     }
     this.setData({ busyId: policyId, error: '', notice: '' })
     try {

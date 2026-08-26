@@ -55,7 +55,7 @@ Page({
     if (!url || !corpId) {
       wx.showModal({
         title: '客服暂未开通',
-        content: '请确认已配置企业微信客服链接与企业ID，并在小程序后台完成绑定。也可先拨打预约电话。',
+        content: '客服暂时无法连接。你可以稍后再试，或先拨打预约电话。',
         showCancel: false,
       })
       return
@@ -72,7 +72,7 @@ Page({
         wx.showModal({
           title: '暂时无法打开客服',
           content: /not\s*bind|未绑定/i.test(raw)
-          ? '微信客服尚未完成平台绑定。也可先拨打预约电话。'
+          ? '微信客服暂时无法连接。也可先拨打预约电话。'
             : '微信客服暂时无法打开，请稍后重试或拨打预约电话。',
           showCancel: false,
         })

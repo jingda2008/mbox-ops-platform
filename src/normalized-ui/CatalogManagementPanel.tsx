@@ -67,6 +67,27 @@ interface CatalogProduct {
   updatedAt: string
 }
 
+interface MenuCategory {
+  id: string
+  code: string
+  displayName: string
+  parentCode: string | null
+  sortOrder: number
+  guestVisible: boolean
+  productCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+interface MenuCategoryDraft {
+  id: string | null
+  code: string
+  displayName: string
+  parentCode: string
+  sortOrder: string
+  guestVisible: boolean
+}
+
 interface ProductDraft {
   id: string | null
   code: string
@@ -158,11 +179,14 @@ export function CatalogManagementPanel({
   const canConfigurePerformancePhase = auth.permissions.includes('recommendation.phase.configure')
   const [expanded, setExpanded] = useState(false)
   const [products, setProducts] = useState<CatalogProduct[]>([])
+  const [menuCategories, setMenuCategories] = useState<MenuCategory[]>([])
   const [phase, setPhase] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [query, setQuery] = useState('')
   const [draft, setDraft] = useState<ProductDraft | null>(null)
+  const [categoryDraft, setCategoryDraft] = useState<MenuCategoryDraft | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [categoryBusy, setCategoryBusy] = useState(false)
   const [performancePhaseState, setPerformancePhaseState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [performancePhaseCodes, setPerformancePhaseCodes] = useState<PerformancePhaseCode[]>([])
   const [savedPerformancePhaseCodes, setSavedPerformancePhaseCodes] = useState<PerformancePhaseCode[]>([])
@@ -182,11 +206,15 @@ export function CatalogManagementPanel({
   const load = useCallback(async () => {
     setPhase('loading')
     try {
-      const response = await api.getEndpoint<{ data: unknown }>('/api/catalog/products?status=all&limit=100')
+      const [response, categoryResponse] = await Promise.all([
+        api.getEndpoint<{ data: unknown }>('/api/catalog/products?status=all&limit=100'),
+        api.getEndpoint<{ data: unknown }>('/api/catalog/menu-categories'),
+      ])
       setProducts(readProducts(response.data))
+      setMenuCategories(readMenuCategories(categoryResponse.data))
       setPhase('ready')
     } catch (error) {
-      setNotice({ kind: 'error', text: error instanceof Error ? error.message : '商品资料读取失败' })
+      setNotice({ kind: 'error', text: error instanceof Error ? error.message : '商品或菜单分类读取失败' })
       setPhase('error')
     }
   }, [api])
@@ -205,6 +233,8 @@ export function CatalogManagementPanel({
     return products.filter((product) => [product.code, product.name, product.categoryCode]
       .some((value) => value.toLocaleLowerCase('zh-CN').includes(normalized)))
   }, [products, query])
+
+  const menuCategoryOptions = useMemo(() => categorySelectOptions(menuCategories), [menuCategories])
 
   const singleProducts = useMemo(() => products.filter((product) => (
     product.productKind === 'single' && product.id !== draft?.id
@@ -293,9 +323,60 @@ export function CatalogManagementPanel({
   const startCreate = () => {
     resetPerformancePhaseEditor()
     resetRecipeEditor()
-    setDraft(emptyDraft())
+    setDraft(emptyDraft(menuCategories))
     setShowAdvanced(false)
     setNotice(null)
+  }
+
+  const startCreateCategory = () => {
+    setCategoryDraft(emptyMenuCategoryDraft(menuCategories))
+    setNotice(null)
+  }
+
+  const startEditCategory = (category: MenuCategory) => {
+    setCategoryDraft({
+      id: category.id,
+      code: category.code,
+      displayName: category.displayName,
+      parentCode: category.parentCode ?? '',
+      sortOrder: String(category.sortOrder),
+      guestVisible: category.guestVisible,
+    })
+    setNotice(null)
+  }
+
+  const saveMenuCategory = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (categoryDraft === null || categoryBusy) return
+    const code = categoryDraft.code.trim()
+    const displayName = categoryDraft.displayName.trim()
+    const sortOrder = readInteger(categoryDraft.sortOrder, 0, 100000)
+    if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(code) || displayName.length === 0 || displayName.length > 32 || sortOrder === null) {
+      setNotice({ kind: 'error', text: '请填写分类编号、顾客显示名称和0至100000的排序数字' })
+      return
+    }
+    setCategoryBusy(true)
+    setNotice(null)
+    try {
+      const payload = {
+        ...(categoryDraft.id === null ? { code } : {}),
+        displayName,
+        parentCode: categoryDraft.parentCode || null,
+        sortOrder,
+        guestVisible: categoryDraft.guestVisible,
+      }
+      const saved = categoryDraft.id === null
+        ? await api.postEndpoint<MenuCategory>('/api/catalog/menu-categories', payload, { idempotencyKey: operationKey('menu-category-create') })
+        : await api.patchEndpoint<MenuCategory>(`/api/catalog/menu-categories/${encodeURIComponent(categoryDraft.code)}`, payload, { idempotencyKey: operationKey('menu-category-update') })
+      await load()
+      setCategoryDraft(null)
+      setNotice({ kind: 'success', text: `${saved.displayName} 已保存；顾客菜单会按新层级显示` })
+    } catch (error) {
+      setNotice({ kind: 'error', text: error instanceof Error ? error.message : '菜单分类未保存' })
+      await load().catch(() => undefined)
+    } finally {
+      setCategoryBusy(false)
+    }
   }
 
   const startEdit = (product: CatalogProduct) => {
@@ -362,9 +443,6 @@ export function CatalogManagementPanel({
     setDraft((current) => current === null ? null : {
       ...current,
       categoryCode,
-      inventoryControlMode: categoryCode.trim() === 'food'
-        ? 'not_managed'
-        : current.categoryCode.trim() === 'food' ? 'tracked' : current.inventoryControlMode,
     })
   }
 
@@ -629,13 +707,28 @@ export function CatalogManagementPanel({
       {phase === 'error' && <button type="button" onClick={() => void load()}>重新读取商品</button>}
       {phase === 'ready' && <>
         {isInventoryFlow && <section className="catalog-selling-flow" aria-label="酒水上架步骤说明"><header><strong>第 2–4 步：销售规格、配方成本与发布</strong><small>选择整瓶、单杯、Shot、鸡尾酒或自定义规格，保存售价与真实扣减配方，再回到入库卡生成发布预览。</small></header><ol><li><b>2</b><span><strong>销售规格</strong><small>同一库存物料可被多个销售规格共同引用。</small></span></li><li><b>3</b><span><strong>配方与预览</strong><small>配置每份用量、损耗、售价和渠道。</small></span></li><li><b>4</b><span><strong>确认发布</strong><small>按本次收货成本重新核算后原子发布。</small></span></li></ol><p>“在售”仅是商品状态；顾客可点还要通过配方和实时库存校验，系统不会因方便操作而跳过。</p></section>}
+        <section className="catalog-menu-categories" aria-label="顾客菜单分类">
+          <header><div><strong>顾客菜单分类</strong><small>一级入口和二级分类都在这里配置；小程序只显示名称、顺序和可见性，不再把内部分类编号给顾客看。</small></div><button type="button" onClick={startCreateCategory}><CirclePlus size={16} /> 新增分类</button></header>
+          {categoryDraft !== null && <form className="catalog-menu-category-form" onSubmit={(event) => void saveMenuCategory(event)}>
+            <strong>{categoryDraft.id === null ? '新增菜单分类' : `编辑 ${categoryDraft.displayName}`}</strong>
+            <label>分类编号<input required disabled={categoryDraft.id !== null} pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" value={categoryDraft.code} placeholder="例如 cocktail" onChange={(event) => setCategoryDraft((current) => current === null ? null : { ...current, code: event.target.value })} /></label>
+            <label>顾客显示名称<input required maxLength={32} value={categoryDraft.displayName} placeholder="例如 鸡尾酒" onChange={(event) => setCategoryDraft((current) => current === null ? null : { ...current, displayName: event.target.value })} /></label>
+            <label>上级分类<select value={categoryDraft.parentCode} onChange={(event) => setCategoryDraft((current) => current === null ? null : { ...current, parentCode: event.target.value })}><option value="">作为一级分类</option>{menuCategories.filter((item) => item.parentCode === null && item.code !== categoryDraft.code).map((item) => <option key={item.code} value={item.code}>{item.displayName}</option>)}</select></label>
+            <label>菜单排序<input type="number" min={0} max={100000} value={categoryDraft.sortOrder} onChange={(event) => setCategoryDraft((current) => current === null ? null : { ...current, sortOrder: event.target.value })} /></label>
+            <label className="catalog-check"><input type="checkbox" checked={categoryDraft.guestVisible} onChange={(event) => setCategoryDraft((current) => current === null ? null : { ...current, guestVisible: event.target.checked })} />顾客菜单可见</label>
+            <div className="catalog-menu-category-form__actions"><button type="button" onClick={() => setCategoryDraft(null)}>取消</button><button type="submit" disabled={categoryBusy}>{categoryBusy ? '保存中' : '保存分类'}</button></div>
+          </form>}
+          {menuCategories.length === 0
+            ? <p>还没有菜单分类。请先创建一级分类，再为“酒水”等一级分类添加二级分类。</p>
+            : <div className="catalog-menu-category-list">{menuCategories.map((category) => <article key={category.id} className={category.parentCode === null ? 'is-root' : 'is-child'}><div><strong>{category.parentCode === null ? category.displayName : `└ ${category.displayName}`}</strong><small>{category.code} · 排序 {category.sortOrder} · {category.productCount} 个商品 · {category.guestVisible ? '顾客可见' : '顾客隐藏'}</small></div><button type="button" onClick={() => startEditCategory(category)}><Pencil size={15} /> 编辑</button></article>)}</div>}
+        </section>
         <div className="catalog-management-tools"><input aria-label="搜索配置商品" placeholder="搜索商品名、编号或分类" value={query} onChange={(event) => setQuery(event.target.value)} /><button type="button" onClick={startCreate}><CirclePlus size={17} /> 新增商品</button><button type="button" onClick={() => void load()}>刷新可售状态</button></div>
         {draft !== null && <form className="catalog-management-form" onSubmit={(event) => void save(event)}>
           <header><strong>{draft.id === null ? '新增商品' : `编辑 ${draft.name}`}</strong><button type="button" onClick={closeDraft}>取消</button></header>
           <div className="catalog-form-grid">
             <label>商品编号<input required disabled={draft.id !== null} pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" value={draft.code} onChange={(event) => updateDraft('code', event.target.value)} /></label>
             <label>商品名称<input required maxLength={160} value={draft.name} onChange={(event) => updateDraft('name', event.target.value)} /></label>
-            <label>分类编号<input required pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" value={draft.categoryCode} onChange={(event) => updateCategory(event.target.value)} /></label>
+            <label>顾客菜单分类<select required value={draft.categoryCode} onChange={(event) => updateCategory(event.target.value)}>{!menuCategoryOptions.some((option) => option.code === draft.categoryCode) && <option value={draft.categoryCode}>当前分类（{draft.categoryCode}）</option>}{menuCategoryOptions.map((option) => <option key={option.code} value={option.code}>{option.label}</option>)}</select><small>分类名称、层级、顺序和顾客可见性在上方统一配置。</small></label>
             <label>商品类型<select value={draft.productKind} onChange={(event) => updateDraft('productKind', event.target.value as ProductKind)}><option value="single">单品</option><option value="bundle">组合商品</option></select></label>
             <label>销售规格<select disabled={draft.productKind === 'bundle'} value={draft.salesSpecificationType} onChange={(event) => updateDraft('salesSpecificationType', event.target.value as SalesSpecificationType)}>{salesSpecificationOptions.map((option) => <option key={option.code} value={option.code}>{option.label}</option>)}</select><small>规格只描述销售形态；真实库存始终由下方配方引用，不重复建立库存。</small></label>
             <label>出品岗位<select disabled={draft.productKind === 'bundle'} value={draft.productKind === 'bundle' ? 'none' : draft.fulfillmentStation} onChange={(event) => updateDraft('fulfillmentStation', event.target.value as FulfillmentStation)}><option value="bar">吧台</option><option value="kitchen">后厨</option><option value="cashier">收银</option><option value="none">无需出品</option></select></label>
@@ -726,9 +819,12 @@ export function CatalogManagementPanel({
   </section>
 }
 
-function emptyDraft(): ProductDraft {
+function emptyDraft(categories: readonly MenuCategory[]): ProductDraft {
+  const preferred = categories.find((category) => category.code === 'drinks')
+    ?? categories.find((category) => category.parentCode === null)
+    ?? categories[0]
   return {
-    id: null, code: '', name: '', categoryCode: 'drinks', fulfillmentStation: 'bar', productKind: 'single', inventoryControlMode: 'tracked',
+    id: null, code: '', name: '', categoryCode: preferred?.code ?? '', fulfillmentStation: 'bar', productKind: 'single', inventoryControlMode: 'tracked',
     salesSpecificationType: 'custom',
     status: 'inactive', guestVisible: true, searchText: '', recommendationEnabled: false,
     recommendationMinGuests: '1', recommendationMaxGuests: '100', recommendationPriority: '100',
@@ -740,6 +836,39 @@ function emptyDraft(): ProductDraft {
     maxOrderQuantity: '50', kdsPriority: '100', fulfillmentSlaSeconds: '',
     costYuan: '', priceYuan: '', priceReason: '新增商品标准售价', description: '', imageUrl: '', snapshot: {}, componentQuantities: {},
   }
+}
+
+function emptyMenuCategoryDraft(categories: readonly MenuCategory[]): MenuCategoryDraft {
+  const sortOrder = categories.length === 0
+    ? 100
+    : Math.min(100000, Math.max(...categories.map((category) => category.sortOrder)) + 10)
+  return {
+    id: null,
+    code: '',
+    displayName: '',
+    parentCode: '',
+    sortOrder: String(sortOrder),
+    guestVisible: true,
+  }
+}
+
+function categorySelectOptions(categories: readonly MenuCategory[]): Array<{ code: string; label: string }> {
+  const roots = categories.filter((category) => category.parentCode === null)
+  const childrenByParent = new Map<string, MenuCategory[]>()
+  categories.filter((category) => category.parentCode !== null).forEach((category) => {
+    const parent = category.parentCode!
+    childrenByParent.set(parent, [...(childrenByParent.get(parent) ?? []), category])
+  })
+  const options: Array<{ code: string; label: string }> = []
+  roots.forEach((root) => {
+    options.push({ code: root.code, label: root.displayName })
+    ;(childrenByParent.get(root.code) ?? []).forEach((child) => {
+      options.push({ code: child.code, label: `— ${child.displayName}` })
+    })
+  })
+  categories.filter((category) => category.parentCode !== null && !roots.some((root) => root.code === category.parentCode))
+    .forEach((category) => options.push({ code: category.code, label: category.displayName }))
+  return options
 }
 
 function readSalesSpecificationType(value: unknown): SalesSpecificationType {
@@ -781,6 +910,29 @@ function readProducts(value: unknown): CatalogProduct[] {
     && Array.isArray(item.allowedChannels)
     && Array.isArray(item.bundleComponents) && typeof item.updatedAt === 'string'
     ? [item as unknown as CatalogProduct] : [])
+}
+
+function readMenuCategories(value: unknown): MenuCategory[] {
+  if (!Array.isArray(value)) return []
+  const categories = value.flatMap((item): MenuCategory[] => (
+    isRecord(item)
+      && typeof item.id === 'string'
+      && typeof item.code === 'string'
+      && typeof item.displayName === 'string'
+      && (item.parentCode === null || typeof item.parentCode === 'string')
+      && Number.isSafeInteger(item.sortOrder)
+      && typeof item.guestVisible === 'boolean'
+      && Number.isSafeInteger(item.productCount)
+      && typeof item.createdAt === 'string'
+      && typeof item.updatedAt === 'string'
+      ? [item as unknown as MenuCategory]
+      : []
+  ))
+  return categories.sort((left, right) => (
+    (left.parentCode === null ? 0 : 1) - (right.parentCode === null ? 0 : 1)
+    || left.sortOrder - right.sortOrder
+    || left.displayName.localeCompare(right.displayName, 'zh-CN')
+  ))
 }
 
 function readInventoryItems(value: unknown): InventoryItemOption[] {

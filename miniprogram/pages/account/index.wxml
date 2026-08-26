@@ -2,16 +2,16 @@
   <view class="top-band">
     <view class="brand-row"><view><text class="eyebrow">当前桌台</text><text class="account-table">{{tableCode}} 桌账摘要</text></view></view>
   </view>
-  <state-panel wx:if="{{loading}}" type="loading" title="正在核对桌账" />
+  <state-panel wx:if="{{loading}}" type="loading" title="正在查看桌账" />
   <block wx:else>
     <view wx:if="{{error}}" class="error-banner">{{error}}</view>
     <view wx:if="{{success}}" class="success-banner">{{success}}</view>
     <view class="account-total panel">
       <text class="eyebrow">当前未结余额</text>
       <text class="account-total__amount">{{outstandingText}}</text>
-      <text class="account-note">同桌订单共同可见，但不会展示付款人身份或支付凭证。</text>
+      <text class="account-note">同桌订单可共同查看，不显示付款人信息。</text>
     </view>
-    <view class="warning payment-boundary">金额来自后端按成功付款和成功退款计算的实时未结余额。遇到“处理中”或“待核对”时不会再次发起支付。</view>
+    <view class="warning payment-boundary">金额会在付款或退款确认后更新。付款结果尚未确认时，请先查看结果，避免重复付款。</view>
     <view class="section">
       <view class="section-title"><text>本桌订单</text><text class="section-link">下拉刷新</text></view>
       <view wx:if="{{orders.length}}" class="order-list">

@@ -285,6 +285,25 @@
 .catalog-management-notice { min-height: 44px; margin: 0; padding: 9px 10px; border: 1px solid; display: flex; align-items: center; gap: 7px; line-height: 1.45; }
 .catalog-management-notice.is-success { color: #155e43; border-color: #9fcbb7; background: #edf8f2; }
 .catalog-management-notice.is-error { color: #8f3036; border-color: #e0adaf; background: #fff3f3; }
+.catalog-menu-categories { padding: 11px; border: 1px solid #b9d1c2; border-radius: 7px; background: #f1f8f4; display: grid; gap: 9px; }
+.catalog-menu-categories > header { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
+.catalog-menu-categories > header > div { min-width: 0; display: grid; gap: 3px; }
+.catalog-menu-categories > header small { color: #557162; font-size: 10px; line-height: 1.45; }
+.catalog-menu-categories > header button, .catalog-menu-category-list button, .catalog-menu-category-form button { min-height: 40px; padding: 0 10px; border: 1px solid #176b4c; border-radius: 5px; background: #fff; color: #175d42; display: flex; align-items: center; justify-content: center; gap: 5px; font: inherit; font-size: 11px; font-weight: 750; }
+.catalog-menu-categories > p { margin: 0; color: #5c6f63; font-size: 11px; line-height: 1.5; }
+.catalog-menu-category-form { padding: 10px; border: 1px solid #b2ccbd; border-radius: 6px; background: #fff; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.catalog-menu-category-form > strong, .catalog-menu-category-form__actions { grid-column: 1 / -1; }
+.catalog-menu-category-form label { min-width: 0; display: grid; gap: 5px; color: #40574b; font-size: 11px; font-weight: 750; }
+.catalog-menu-category-form input, .catalog-menu-category-form select { width: 100%; min-width: 0; min-height: 42px; padding: 0 9px; border: 1px solid #b9c9bf; border-radius: 5px; background: #fff; color: #202621; }
+.catalog-menu-category-form .catalog-check { min-height: 42px; grid-template-columns: auto minmax(0, 1fr); align-items: center; padding: 0 9px; border: 1px solid #c8d6cd; border-radius: 5px; background: #f7fbf8; }
+.catalog-menu-category-form .catalog-check input { width: 18px; min-height: 18px; height: 18px; padding: 0; accent-color: #176b4c; }
+.catalog-menu-category-form__actions { display: flex; justify-content: flex-end; gap: 7px; }
+.catalog-menu-category-form__actions button:last-child { border-color: #176b4c; background: #176b4c; color: #fff; }
+.catalog-menu-category-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.catalog-menu-category-list article { min-width: 0; min-height: 60px; padding: 8px 9px; border: 1px solid #cfdbd3; border-radius: 5px; background: #fff; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.catalog-menu-category-list article.is-child { border-left: 3px solid #9ac3ab; }
+.catalog-menu-category-list article > div { min-width: 0; display: grid; gap: 3px; }
+.catalog-menu-category-list article small { color: #687068; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .catalog-management-tools { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
 .catalog-management-tools input { min-width: 0; min-height: 44px; padding: 0 10px; border: 1px solid #bdc5bd; border-radius: 5px; }
 .catalog-management-tools button, .catalog-management-list button, .catalog-management-form header button { min-height: 44px; padding: 0 11px; border: 1px solid #17704d; border-radius: 5px; background: #eef7f2; color: #175d42; display: flex; align-items: center; justify-content: center; gap: 6px; font-weight: 750; }
@@ -431,7 +450,7 @@
   .venue-management-form, .venue-management-list { grid-template-columns: 1fr; }
   .venue-management-form > header { grid-column: auto; }
   .venue-management-trigger > span:last-child { font-size: 0; }
-  .catalog-form-grid, .catalog-management-list, .catalog-recipe-items { grid-template-columns: 1fr; }
+  .catalog-form-grid, .catalog-management-list, .catalog-recipe-items, .catalog-menu-category-list, .catalog-menu-category-form { grid-template-columns: 1fr; }
   .catalog-form-grid .catalog-wide { grid-column: auto; }
   .catalog-image-preview { grid-template-columns: 1fr; }
   .catalog-performance-phase > header { align-items: stretch; flex-direction: column; }

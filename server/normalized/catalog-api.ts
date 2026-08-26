@@ -179,6 +179,30 @@ interface CatalogProduct {
   updatedAt: string;
 }
 
+interface MenuCategoryRow extends Record<string, unknown> {
+  id: string;
+  code: string;
+  display_name: string;
+  parent_code: string | null;
+  sort_order: number;
+  guest_visible: boolean;
+  product_count: string | number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface MenuCategory {
+  id: string;
+  code: string;
+  displayName: string;
+  parentCode: string | null;
+  sortOrder: number;
+  guestVisible: boolean;
+  productCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface CategoryRow extends Record<string, unknown> {
   category_code: string;
   product_count: string;
@@ -226,6 +250,20 @@ class CatalogProductNotFoundError extends Error {
   }
 }
 
+class MenuCategoryNotFoundError extends Error {
+  constructor() {
+    super("菜单分类不存在或不属于当前门店");
+    this.name = "MenuCategoryNotFoundError";
+  }
+}
+
+class MenuCategoryConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MenuCategoryConflictError";
+  }
+}
+
 class CatalogConflictError extends Error {
   constructor(message: string) {
     super(message);
@@ -260,6 +298,154 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
       const context = await resolveStaffContext(options, request);
       return sendCategoryList(reply, options.transactions, context.scope, false, context.employeeId);
     }),
+  );
+
+  // A menu category is presentation/configuration data, not a product rewrite.
+  // Keep this separate from the legacy count-only endpoint above so existing
+  // staff integrations continue to receive their original contract.
+  app.get("/catalog/menu-categories", async (request, reply) =>
+    handleRoute(reply, async () => {
+      const context = await resolveStaffContext(options, request);
+      return sendMenuCategoryList(
+        reply,
+        options.transactions,
+        context.scope,
+        context.employeeId,
+      );
+    }),
+  );
+
+  app.post("/catalog/menu-categories", async (request, reply) =>
+    handleRoute(reply, async () => {
+      const context = await resolveStaffContext(options, request);
+      const input = readCreateMenuCategory(request.body);
+      const idempotencyKey = readIdempotencyKey(request);
+      const command = menuCategoryCommand(
+        request,
+        context,
+        "catalog.menu-category.create",
+        idempotencyKey,
+        input,
+      );
+      const execution = await options.commandExecutor.execute(
+        command,
+        async (transaction) => {
+          await assertLivePermission(
+            transaction,
+            context.employeeId,
+            CATALOG_PRODUCT_MANAGE_PERMISSION,
+          );
+          await assertMenuCategoryParent(
+            transaction,
+            input.parentCode,
+            input.code,
+          );
+          const inserted = await transaction.query<{ id: string }>(`
+            INSERT INTO mbox.menu_categories (
+              tenant_id,store_id,code,display_name,parent_code,sort_order,guest_visible
+            ) VALUES ($1::uuid,$2::uuid,$3::text,$4::text,$5::text,$6::integer,$7::boolean)
+            RETURNING id
+          `, [
+            transaction.scope.tenantId,
+            transaction.scope.storeId,
+            input.code,
+            input.displayName,
+            input.parentCode,
+            input.sortOrder,
+            input.guestVisible,
+          ]);
+          const id = inserted.rows[0]?.id;
+          if (id === undefined) throw new Error("Menu category insert did not return an id");
+          const category = await getMenuCategory(transaction, id);
+          return menuCategoryOutcome(
+            request,
+            context,
+            idempotencyKey,
+            "catalog.menu-category.created",
+            "catalog.menu-category.created.v1",
+            category,
+            null,
+          );
+        },
+      );
+      return reply
+        .code(execution.replayed ? 200 : 201)
+        .send(executionResponse(execution));
+    }),
+  );
+
+  app.patch<{ Params: { categoryCode: string } }>(
+    "/catalog/menu-categories/:categoryCode",
+    async (request, reply) =>
+      handleRoute(reply, async () => {
+        const context = await resolveStaffContext(options, request);
+        const categoryCode = requiredCode(request.params.categoryCode, "categoryCode");
+        const patch = readUpdateMenuCategory(request.body);
+        const idempotencyKey = readIdempotencyKey(request);
+        const command = menuCategoryCommand(
+          request,
+          context,
+          "catalog.menu-category.update",
+          idempotencyKey,
+          { categoryCode, ...patch },
+        );
+        const execution = await options.commandExecutor.execute(
+          command,
+          async (transaction) => {
+            await assertLivePermission(
+              transaction,
+              context.employeeId,
+              CATALOG_PRODUCT_MANAGE_PERMISSION,
+            );
+            const before = await getMenuCategoryByCode(transaction, categoryCode, true);
+            const afterInput = {
+              displayName: patch.displayName ?? before.displayName,
+              parentCode: patch.parentCode === undefined ? before.parentCode : patch.parentCode,
+              sortOrder: patch.sortOrder ?? before.sortOrder,
+              guestVisible: patch.guestVisible ?? before.guestVisible,
+            };
+            await assertMenuCategoryParent(
+              transaction,
+              afterInput.parentCode,
+              before.code,
+            );
+            await assertMenuCategoryStructure(
+              transaction,
+              before,
+              afterInput.parentCode,
+              afterInput.guestVisible,
+            );
+            await transaction.query(`
+              UPDATE mbox.menu_categories
+              SET display_name=$4::text,
+                  parent_code=$5::text,
+                  sort_order=$6::integer,
+                  guest_visible=$7::boolean,
+                  updated_at=clock_timestamp()
+              WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+            `, [
+              transaction.scope.tenantId,
+              transaction.scope.storeId,
+              before.id,
+              afterInput.displayName,
+              afterInput.parentCode,
+              afterInput.sortOrder,
+              afterInput.guestVisible,
+            ]);
+            const category = await getMenuCategory(transaction, before.id);
+            return menuCategoryOutcome(
+              request,
+              context,
+              idempotencyKey,
+              "catalog.menu-category.updated",
+              "catalog.menu-category.updated.v1",
+              category,
+              before,
+            );
+          },
+        );
+        return reply.send(executionResponse(execution));
+      }),
   );
 
   app.get("/guest/catalog/products", async (request, reply) =>
@@ -655,6 +841,170 @@ async function sendCategoryList(
       availableCount: Number(row.available_count),
     })),
   });
+}
+
+async function sendMenuCategoryList(
+  reply: FastifyReply,
+  transactions: TransactionRunnerPort,
+  scope: Readonly<StoreScope>,
+  employeeId: string,
+): Promise<FastifyReply> {
+  const categories = await transactions.run(scope, async (transaction) => {
+    await assertLivePermission(transaction, employeeId, CATALOG_PRODUCT_MANAGE_PERMISSION);
+    return listMenuCategories(transaction);
+  }, { readOnly: true });
+  return reply.send({ data: categories.map(mapMenuCategory) });
+}
+
+async function listMenuCategories(transaction: ScopedTransaction): Promise<MenuCategoryRow[]> {
+  const result = await transaction.query<MenuCategoryRow>(`
+    SELECT category.id,category.code,category.display_name,category.parent_code,
+      category.sort_order,category.guest_visible,
+      count(product.id)::text AS product_count,
+      category.created_at::text,category.updated_at::text
+    FROM mbox.menu_categories AS category
+    LEFT JOIN mbox.products AS product
+      ON product.tenant_id=category.tenant_id
+     AND product.store_id=category.store_id
+     AND product.category_code=category.code
+    WHERE category.tenant_id=$1::uuid AND category.store_id=$2::uuid
+    GROUP BY category.id,category.code,category.display_name,category.parent_code,
+      category.sort_order,category.guest_visible,category.created_at,category.updated_at
+    ORDER BY CASE WHEN category.parent_code IS NULL THEN 0 ELSE 1 END,
+      category.sort_order,category.display_name,category.code
+  `, [transaction.scope.tenantId, transaction.scope.storeId]);
+  return result.rows;
+}
+
+async function getMenuCategory(
+  transaction: ScopedTransaction,
+  id: string,
+): Promise<MenuCategory> {
+  const result = await transaction.query<MenuCategoryRow>(`
+    SELECT category.id,category.code,category.display_name,category.parent_code,
+      category.sort_order,category.guest_visible,
+      count(product.id)::text AS product_count,
+      category.created_at::text,category.updated_at::text
+    FROM mbox.menu_categories AS category
+    LEFT JOIN mbox.products AS product
+      ON product.tenant_id=category.tenant_id
+     AND product.store_id=category.store_id
+     AND product.category_code=category.code
+    WHERE category.tenant_id=$1::uuid AND category.store_id=$2::uuid
+      AND category.id=$3::uuid
+    GROUP BY category.id,category.code,category.display_name,category.parent_code,
+      category.sort_order,category.guest_visible,category.created_at,category.updated_at
+  `, [transaction.scope.tenantId, transaction.scope.storeId, id]);
+  const row = result.rows[0];
+  if (row === undefined) throw new MenuCategoryNotFoundError();
+  return mapMenuCategory(row);
+}
+
+async function getMenuCategoryByCode(
+  transaction: ScopedTransaction,
+  code: string,
+  lock = false,
+): Promise<MenuCategory> {
+  if (lock) {
+    const locked = await transaction.query<{ id: string }>(`
+      SELECT id
+      FROM mbox.menu_categories
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND code=$3::text
+      FOR UPDATE
+    `, [transaction.scope.tenantId, transaction.scope.storeId, code]);
+    const id = locked.rows[0]?.id;
+    if (id === undefined) throw new MenuCategoryNotFoundError();
+    return getMenuCategory(transaction, id);
+  }
+  const result = await transaction.query<MenuCategoryRow>(`
+    SELECT category.id,category.code,category.display_name,category.parent_code,
+      category.sort_order,category.guest_visible,
+      count(product.id)::text AS product_count,
+      category.created_at::text,category.updated_at::text
+    FROM mbox.menu_categories AS category
+    LEFT JOIN mbox.products AS product
+      ON product.tenant_id=category.tenant_id
+     AND product.store_id=category.store_id
+     AND product.category_code=category.code
+    WHERE category.tenant_id=$1::uuid AND category.store_id=$2::uuid
+      AND category.code=$3::text
+    GROUP BY category.id,category.code,category.display_name,category.parent_code,
+      category.sort_order,category.guest_visible,category.created_at,category.updated_at
+  `, [transaction.scope.tenantId, transaction.scope.storeId, code]);
+  const row = result.rows[0];
+  if (row === undefined) throw new MenuCategoryNotFoundError();
+  return mapMenuCategory(row);
+}
+
+async function assertMenuCategoryParent(
+  transaction: ScopedTransaction,
+  parentCode: string | null,
+  categoryCode: string,
+): Promise<void> {
+  if (parentCode === null) return;
+  if (parentCode === categoryCode) {
+    throw new MenuCategoryConflictError("分类不能设为自己的上级分类");
+  }
+  const parent = await transaction.query<Pick<MenuCategoryRow, "parent_code">>(`
+    SELECT parent_code
+    FROM mbox.menu_categories
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND code=$3::text
+    FOR KEY SHARE
+  `, [transaction.scope.tenantId, transaction.scope.storeId, parentCode]);
+  const row = parent.rows[0];
+  if (row === undefined) {
+    throw new MenuCategoryConflictError("上级分类不存在，请先创建一级分类");
+  }
+  if (row.parent_code !== null) {
+    throw new MenuCategoryConflictError("顾客菜单目前只支持一级和二级分类");
+  }
+}
+
+async function assertMenuCategoryStructure(
+  transaction: ScopedTransaction,
+  before: Readonly<MenuCategory>,
+  nextParentCode: string | null,
+  nextGuestVisible: boolean,
+): Promise<void> {
+  if (before.parentCode === null && nextParentCode !== null) {
+    const children = await transaction.query<{ id: string }>(`
+      SELECT id
+      FROM mbox.menu_categories
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND parent_code=$3::text
+      LIMIT 1
+      FOR KEY SHARE
+    `, [transaction.scope.tenantId, transaction.scope.storeId, before.code]);
+    if (children.rows[0] !== undefined) {
+      throw new MenuCategoryConflictError("已有二级分类的一级分类不能再移动到其他分类下");
+    }
+  }
+  if (before.parentCode === null && !nextGuestVisible) {
+    const visibleChildren = await transaction.query<{ id: string }>(`
+      SELECT id
+      FROM mbox.menu_categories
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND parent_code=$3::text
+        AND guest_visible=true
+      LIMIT 1
+      FOR KEY SHARE
+    `, [transaction.scope.tenantId, transaction.scope.storeId, before.code]);
+    if (visibleChildren.rows[0] !== undefined) {
+      throw new MenuCategoryConflictError("请先隐藏或移动该一级分类下的顾客可见二级分类");
+    }
+  }
+}
+
+function mapMenuCategory(row: MenuCategoryRow): MenuCategory {
+  return {
+    id: row.id,
+    code: row.code,
+    displayName: row.display_name,
+    parentCode: row.parent_code,
+    sortOrder: Number(row.sort_order),
+    guestVisible: row.guest_visible,
+    productCount: Number(row.product_count),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
 }
 
 async function listProducts(
@@ -1370,6 +1720,42 @@ function catalogOutcome(
   };
 }
 
+function menuCategoryOutcome(
+  request: FastifyRequest,
+  context: NormalizedOperationsRequestContext,
+  idempotencyKey: string,
+  action: string,
+  eventType: string,
+  category: MenuCategory,
+  before: MenuCategory | null,
+): CommandOutcome<MenuCategory> {
+  return {
+    result: category,
+    auditEvents: [
+      {
+        actor: { type: "employee", employeeId: context.employeeId },
+        action,
+        objectType: "menu_category",
+        objectId: category.id,
+        businessDate: context.businessDate,
+        beforeData: before === null ? null : menuCategoryToJson(before),
+        afterData: menuCategoryToJson(category),
+        requestId: request.id,
+      },
+    ],
+    outboxMessages: [
+      {
+        businessEventKey: catalogEventKey(action, idempotencyKey),
+        aggregateType: "menu_category",
+        aggregateId: category.id,
+        aggregateVersion: 1,
+        eventType,
+        payload: { menuCategory: menuCategoryToJson(category) },
+      },
+    ],
+  };
+}
+
 function catalogEventKey(action: string, idempotencyKey: string): string {
   const digest = createHash("sha256")
     .update(`${action}:${idempotencyKey}`, "utf8")
@@ -1398,6 +1784,29 @@ function catalogCommand(
       payload: jsonFingerprintValue(payload),
     }),
     resultCodec: catalogProductCodec,
+  };
+}
+
+function menuCategoryCommand(
+  request: FastifyRequest,
+  context: NormalizedOperationsRequestContext,
+  operationScope: string,
+  idempotencyKey: string,
+  payload: unknown,
+): IdempotentCommand<MenuCategory> {
+  return {
+    scope: context.scope,
+    operationScope,
+    idempotencyKey,
+    requestFingerprint: stableStringify({
+      method: request.method,
+      path: request.routeOptions.url ?? request.url.split("?")[0] ?? request.url,
+      tenantId: context.scope.tenantId,
+      storeId: context.scope.storeId,
+      employeeId: context.employeeId,
+      payload: jsonFingerprintValue(payload),
+    }),
+    resultCodec: menuCategoryCodec,
   };
 }
 
@@ -1568,6 +1977,54 @@ function readUpdateProduct(value: unknown): {
   if ([patch.name, patch.categoryCode, patch.fulfillmentStation, patch.productKind, patch.inventoryControlMode,
     patch.bundleComponents, patch.productSnapshot, patch.status, patch.standardPrice].every((item) => item === null)
     && !PRODUCT_OPERATIONAL_INPUT_KEYS.some((key) => body[key] !== undefined)) {
+    throw new CatalogRequestError("至少提供一个可修改字段");
+  }
+  return patch;
+}
+
+function readCreateMenuCategory(value: unknown): {
+  code: string;
+  displayName: string;
+  parentCode: string | null;
+  sortOrder: number;
+  guestVisible: boolean;
+} {
+  const body = readJsonObject(value, "请求正文");
+  return {
+    code: requiredCode(body.code, "code"),
+    displayName: requiredText(body.displayName, "displayName", 32),
+    parentCode: optionalCode(body.parentCode, "parentCode"),
+    sortOrder: body.sortOrder === undefined
+      ? 100
+      : readInteger(body.sortOrder, "sortOrder", 0, 100_000),
+    guestVisible: body.guestVisible === undefined
+      ? true
+      : readBoolean(body.guestVisible, "guestVisible"),
+  };
+}
+
+function readUpdateMenuCategory(value: unknown): {
+  displayName?: string;
+  parentCode?: string | null;
+  sortOrder?: number;
+  guestVisible?: boolean;
+} {
+  const body = readJsonObject(value, "请求正文");
+  const patch = {
+    displayName: body.displayName === undefined
+      ? undefined
+      : requiredText(body.displayName, "displayName", 32),
+    parentCode: body.parentCode === undefined
+      ? undefined
+      : optionalCode(body.parentCode, "parentCode"),
+    sortOrder: body.sortOrder === undefined
+      ? undefined
+      : readInteger(body.sortOrder, "sortOrder", 0, 100_000),
+    guestVisible: body.guestVisible === undefined
+      ? undefined
+      : readBoolean(body.guestVisible, "guestVisible"),
+  };
+  if (Object.values(patch).every((item) => item === undefined)) {
     throw new CatalogRequestError("至少提供一个可修改字段");
   }
   return patch;
@@ -1790,6 +2247,13 @@ function requiredText(value: unknown, label: string, maximum: number): string {
   return normalized;
 }
 
+function readBoolean(value: unknown, label: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new CatalogRequestError(`${label}必须是布尔值`);
+  }
+  return value;
+}
+
 function optionalText(
   value: unknown,
   label: string,
@@ -1960,6 +2424,20 @@ function catalogProductToJson(product: CatalogProduct): JsonObject {
   };
 }
 
+function menuCategoryToJson(category: MenuCategory): JsonObject {
+  return {
+    id: category.id,
+    code: category.code,
+    displayName: category.displayName,
+    parentCode: category.parentCode,
+    sortOrder: category.sortOrder,
+    guestVisible: category.guestVisible,
+    productCount: category.productCount,
+    createdAt: category.createdAt,
+    updatedAt: category.updatedAt,
+  };
+}
+
 const catalogProductCodec: JsonCodec<CatalogProduct> = {
   encode: catalogProductToJson,
   decode(value: unknown): CatalogProduct {
@@ -2017,6 +2495,25 @@ const catalogProductCodec: JsonCodec<CatalogProduct> = {
   },
 };
 
+const menuCategoryCodec: JsonCodec<MenuCategory> = {
+  encode: menuCategoryToJson,
+  decode(value: unknown): MenuCategory {
+    if (!isJsonObject(value)
+      || typeof value.id !== "string"
+      || typeof value.code !== "string"
+      || typeof value.displayName !== "string"
+      || !nullableString(value.parentCode)
+      || !Number.isSafeInteger(value.sortOrder)
+      || typeof value.guestVisible !== "boolean"
+      || !Number.isSafeInteger(value.productCount)
+      || typeof value.createdAt !== "string"
+      || typeof value.updatedAt !== "string") {
+      throw new TypeError("Stored menu category is invalid");
+    }
+    return value as unknown as MenuCategory;
+  },
+};
+
 function nullableString(value: JsonValue | undefined): boolean {
   return value === null || typeof value === "string";
 }
@@ -2025,7 +2522,7 @@ function nullableSafeInteger(value: JsonValue | undefined): boolean {
   return value === null || Number.isSafeInteger(value);
 }
 
-function executionResponse(execution: CommandExecution<CatalogProduct>) {
+function executionResponse<Result>(execution: CommandExecution<Result>) {
   return { data: execution.value, meta: { replayed: execution.replayed } };
 }
 
@@ -2077,6 +2574,9 @@ function sendError(reply: FastifyReply, error: unknown): FastifyReply {
   if (error instanceof CatalogProductNotFoundError) {
     return apiError(reply, 404, "CATALOG_PRODUCT_NOT_FOUND", error.message);
   }
+  if (error instanceof MenuCategoryNotFoundError) {
+    return apiError(reply, 404, "MENU_CATEGORY_NOT_FOUND", error.message);
+  }
   if (error instanceof IdempotencyConflictError) {
     return apiError(
       reply,
@@ -2124,6 +2624,9 @@ function sendError(reply: FastifyReply, error: unknown): FastifyReply {
       "CATALOG_PRICE_OVERLAP",
       "商品价格有效期发生重叠",
     );
+  }
+  if (error instanceof MenuCategoryConflictError) {
+    return apiError(reply, 409, "MENU_CATEGORY_CONFLICT", error.message);
   }
   if (error instanceof CatalogConflictError || isUniqueViolation(error)) {
     return apiError(

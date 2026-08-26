@@ -51,8 +51,8 @@ describe('mini-program home editorial content',()=>{
   it('keeps the customer journey primary, leaves menu access in the tab bar, and hides unpublished editorial content',()=>{
     const view=read('miniprogram/pages/home/index.wxml')
     const app=read('miniprogram/app.json')
-    expect(view.indexOf('今晚现场')).toBeLessThan(view.indexOf('当前状态'))
-    expect(view.indexOf('当前状态')).toBeLessThan(view.indexOf('发现 M-BOX'))
+    expect(view.indexOf('今晚现场')).toBeLessThan(view.indexOf('发现 M-BOX'))
+    expect(view).not.toContain('当前状态')
     expect(view).not.toContain('home-menu-entry')
     expect(app).toContain('"pagePath": "pages/order/index"')
     expect(app).toContain('"text": "点单"')

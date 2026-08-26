@@ -70,7 +70,7 @@ Page({
       const request = result.request || {}
       this.setData({
         songTitle: '', note: '', requestExtension: false,
-        success: '点歌意向已提交，舞台确认后会显示处理进度。',
+        success: '点歌意向已提交，舞台确认后会显示最新进展。',
       })
     } catch (error) {
       this.setData({ error: customerErrorMessage(error, '点歌意向未提交') })

@@ -223,11 +223,11 @@ async function seed(pool: Pool) {
   await seedPackageFulfillment(pool)
   await pool.query(`
     INSERT INTO mbox.payments(
-      id,tenant_id,store_id,payable_kind,activity_registration_id,public_id,
+      id,tenant_id,store_id,payable_kind,activity_registration_id,activity_registration_cycle,public_id,
       provider,provider_transaction_id,method,amount_minor,currency,status,
       provider_snapshot,succeeded_at
     ) VALUES (
-      $1::uuid,$2::uuid,$3::uuid,'activity_registration',$4::uuid,'activity-ops-payment-paid',
+      $1::uuid,$2::uuid,$3::uuid,'activity_registration',$4::uuid,1,'activity-ops-payment-paid',
       'postar','ACTIVITY-OPS-PROVIDER-TRANSACTION-PAID','jsapi',5000,'CNY',
       'succeeded','{}'::jsonb,clock_timestamp()
     )
@@ -238,10 +238,10 @@ async function seed(pool: Pool) {
   `, [tenantId, storeId, paidRegistrationId, paidPaymentId])
   await pool.query(`
     INSERT INTO mbox.payments(
-      id,tenant_id,store_id,payable_kind,activity_registration_id,public_id,
+      id,tenant_id,store_id,payable_kind,activity_registration_id,activity_registration_cycle,public_id,
       provider,method,amount_minor,currency,status,provider_snapshot
     ) VALUES (
-      $1::uuid,$2::uuid,$3::uuid,'activity_registration',$4::uuid,'activity-ops-payment-pending',
+      $1::uuid,$2::uuid,$3::uuid,'activity_registration',$4::uuid,1,'activity-ops-payment-pending',
       'postar','jsapi',2000,'CNY','pending','{}'::jsonb
     )
   `, [pendingPaymentId, tenantId, storeId, pendingRegistrationId])

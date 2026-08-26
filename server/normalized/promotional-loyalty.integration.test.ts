@@ -359,15 +359,18 @@ async function insertRegistration(pool:Pool,registrationId:string,customerId:str
 
 async function insertSucceededActivityPayment(pool:Pool,paymentId:string,registrationId:string,label:string){
   const occurred=new Date(Date.now()+120_000).toISOString()
-  await pool.query(`INSERT INTO mbox.payments(
-    id,tenant_id,store_id,payable_kind,activity_registration_id,public_id,
+  const inserted=await pool.query(`INSERT INTO mbox.payments(
+    id,tenant_id,store_id,payable_kind,activity_registration_id,activity_registration_cycle,public_id,
     provider,provider_transaction_id,method,amount_minor,currency,status,
     provider_snapshot,succeeded_at
-  ) VALUES($1,$2,$3,'activity_registration',$4,$5,'postar',$6,'jsapi',5000,'CNY',
-    'succeeded','{}'::jsonb,$7::timestamptz)`,[
+  ) SELECT $1,$2,$3,'activity_registration',$4,registration.registration_cycle,$5,'postar',$6,'jsapi',5000,'CNY',
+    'succeeded','{}'::jsonb,$7::timestamptz
+  FROM mbox.community_activity_registrations registration
+  WHERE registration.tenant_id=$2 AND registration.store_id=$3 AND registration.id=$4`,[
     paymentId,id.tenant,id.store,registrationId,`promotion-payment-${label}`,
     `promotion-provider-${label}`,occurred,
   ])
+  if(inserted.rowCount!==1) throw new Error(`Promotion payment registration ${registrationId} was not found`)
   await pool.query(`UPDATE mbox.community_activity_registrations SET payment_id=$4
     WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[id.tenant,id.store,registrationId,paymentId])
 }

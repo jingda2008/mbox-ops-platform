@@ -750,7 +750,8 @@ test('mobile manager payment choices stay synchronized with two guests at the sa
   await page.getByRole('button', { name: 'W01直接收款' }).click()
   const reopenedTablePayment = page.getByRole('dialog', { name: 'W01本桌收款' })
   await expect(reopenedTablePayment.getByText('已有一笔线上收款尚未明确结果')).toBeVisible()
-  await expect(reopenedTablePayment.getByRole('button', { name: '未到账，重新收款' })).toBeEnabled()
+  await expect(reopenedTablePayment.getByRole('button', { name: '查单并关闭后改收款' })).toBeEnabled()
+  await expect(reopenedTablePayment.getByRole('button', { name: '未到账，重新收款' })).toHaveCount(0)
   await reopenedTablePayment.getByRole('button', { name: '关闭本桌收款' }).click()
 
   await page.getByRole('button', { name: '协助点单' }).click()

@@ -1119,6 +1119,14 @@ Page({
       wx.showToast({ title: '已清空本桌购物车', icon: 'none' })
     } catch (error) {
       if (!this.isCurrentTableRequest(tableRequest)) return
+      if (error && error.code === 'WECHAT_IDENTITY_REQUIRED') {
+        wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
+        this.setData({
+          error: '微信支付身份需要刷新。本次没有创建订单或占用商品；请重新扫描当前桌面的二维码后再提交。',
+          checkoutLocked: false,
+        })
+        return
+      }
       if (error && error.code === 'SHARED_CART_VERSION_CONFLICT') {
         await this.refreshSharedCart(true, tableRequest)
         this.setData({ error: '同桌购物车已经更新，未执行清空，已为你刷新。' })
@@ -1409,6 +1417,13 @@ Page({
         this.setData({
           pendingPayment: null,
           error: customerErrorMessage(error, '桌台连接已失效，请重新扫描当前桌面的二维码'),
+        })
+        return
+      }
+      if (error && error.code === 'WECHAT_IDENTITY_REQUIRED') {
+        this.setData({
+          error: '订单已保留，但尚未发起收款。请重新扫描当前桌面的二维码后继续付款，不要重新下单。',
+          success: '',
         })
         return
       }

@@ -66,6 +66,9 @@ async function loadDetailPage(state) {
       if (specifier === '../../utils/format') return { money: (value) => `¥${Number(value || 0) / 100}`, dateTime: (value) => String(value || '') }
       if (specifier === '../../utils/media') return { publicImageUrl: (value) => value || '' }
       if (specifier === '../../utils/wechat-phone') return { readWechatPhoneAuthorization: () => ({ code: 'wechat-phone-authorization-code' }) }
+      if (specifier === '../../utils/auth') return {
+        ensureCustomerSession: async (force) => { (state.identityRefreshCalls || (state.identityRefreshCalls = [])).push(force) },
+      }
       if (specifier === '../../utils/customer-error') return { customerErrorMessage: (error, fallback) => error?.message || fallback, isWechatCancellation: () => false }
       throw new Error(`unexpected require: ${specifier}`)
     },
@@ -148,6 +151,27 @@ test('WeChat friend and timeline shares contain only the public activity identif
   }
 })
 
+test('activity payment identity recovery forces a new identity and resumes the preserved next action', async () => {
+  const state = { membership: null, previewCalls: [], detailCalls: [], bootstrapCalls: [], identityRefreshCalls: [] }
+  const page = await loadDetailPage(state)
+  page.data.registration = { publicId: 'REG-001', canStartPayment: true }
+  page.data.wechatIdentityRefreshRequired = true
+  let resumedPayment = 0
+  page.startPayment = async () => { resumedPayment += 1 }
+  await page.refreshWechatIdentityAndRetry()
+  assert.deepEqual(state.identityRefreshCalls, [true])
+  assert.equal(resumedPayment, 1)
+  assert.equal(page.data.wechatIdentityRefreshRequired, false)
+
+  page.data.registration = null
+  page.data.wechatIdentityRefreshRequired = true
+  let resumedRegistration = 0
+  page.register = async () => { resumedRegistration += 1 }
+  await page.refreshWechatIdentityAndRetry()
+  assert.deepEqual(state.identityRefreshCalls, [true, true])
+  assert.equal(resumedRegistration, 1)
+})
+
 test('a share launch reaches the preview without creating a reservation session until the recipient requests member access', async () => {
   const shared = await loadMiniProgramApp()
   shared.app.onLaunch({ path: 'pages/community-detail/index', query: { id: 'ACT-SHARE-001', source: 'share' } })
@@ -188,9 +212,14 @@ test('the activity detail exposes the standard friend share control and the publ
   assert.match(logic, /if \(this\.data\.previewOnly\) return/)
   assert.match(logic, /shareSource === 'share' && !this\.data\.memberAccessRequested/)
   assert.match(logic, /await this\.load\(\)/)
+  assert.match(logic, /await ensureCustomerSession\(true\)/)
+  assert.match(logic, /refreshWechatIdentityAndRetry\(\)/)
   assert.match(view, /open-type="share"/)
   assert.match(view, /wx:if="\{\{previewOnly\}\}"/)
   assert.match(view, /bindtap="openMembershipInvite"/)
+  assert.match(view, /bindtap="refreshWechatIdentityAndRetry"/)
+  assert.match(view, /刷新身份后付款/)
+  assert.match(view, />继续付款<\/button>/)
   assert.match(style, /\.detail-share\s*\{[^}]*min-height:\s*88rpx/)
   const config = JSON.parse(pageConfig)
   assert.equal(Object.hasOwn(config, 'enableShareAppMessage'), false)

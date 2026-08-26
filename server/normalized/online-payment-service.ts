@@ -13,6 +13,7 @@ import {
   type PaymentPrincipal,
   type ProviderPaymentContext,
   type ProviderPresentation,
+  WechatPaymentIdentityRequiredError,
 } from './payment-provider-action-repository.js'
 import type { ScopedPostgresTransactionRunner, StoreScope } from './transaction-runner.js'
 import {
@@ -52,11 +53,20 @@ export interface QueryOnlinePaymentInput {
   principal: Readonly<PaymentPrincipal>
 }
 
+export interface CloseOnlinePaymentInput {
+  scope: Readonly<StoreScope>
+  paymentId: string
+  closeBindingId: string
+  principal: Readonly<PaymentPrincipal>
+}
+
 export interface OnlinePaymentQueryResult {
   context: ProviderPaymentContext
   observation: ProviderPaymentObservation
   verifiedObservationId: string
 }
+
+export interface OnlinePaymentCloseResult extends OnlinePaymentQueryResult {}
 
 export interface OnlineRefundResult {
   refundId: string
@@ -92,8 +102,17 @@ interface RefundExecutionRow extends Record<string, unknown> {
 
 type OnlinePaymentAdapter = Pick<
   PostarPaymentProviderAdapter,
-  'createPayment' | 'queryPayment' | 'requestRefund' | 'queryRefund'
+  'createPayment' | 'queryPayment' | 'closePayment' | 'requestRefund' | 'queryRefund'
 >
+
+/**
+ * Narrow server-side bridge from the authoritative encrypted WeChat identity
+ * store to the payment provider.  It intentionally returns only a payer ID
+ * in process memory; callers must never expose or persist it in snapshots.
+ */
+export interface WechatPayerIdentityResolver {
+  resolveMiniProgramPaymentPayer(customerId: string, appId: string): Promise<string | null>
+}
 
 export class OnlinePaymentUnavailableError extends Error {
   constructor(message = '线上支付尚未配置，请改用其他收款方式') {
@@ -133,6 +152,7 @@ export class OnlinePaymentService {
     private readonly config: Readonly<NormalizedPaymentRuntimeConfig> | null,
     adapterOverride?: OnlinePaymentAdapter,
     providerObservations?: ProviderObservationRecorderPort,
+    private readonly wechatPayers: WechatPayerIdentityResolver | null = null,
   ) {
     this.providerObservations = providerObservations
       ?? new VerifiedProviderObservationService(this.transactions)
@@ -174,23 +194,27 @@ export class OnlinePaymentService {
     ), { readOnly: true })
   }
 
-  async resolveGuestMethod(
+  async isGuestJsapiReady(
     scope: Readonly<StoreScope>,
     customerId: string,
-  ): Promise<'jsapi' | 'native_qr'> {
-    if (this.config?.wechat === null || this.config?.wechat === undefined) return 'native_qr'
-    try {
-      await this.transactions.run(scope, async (transaction) => {
-        await new PaymentProviderActionRepository(transaction, this.secret).resolveWechatPayerId(
-          customerId,
-          this.config!.wechat!.appId,
-          this.config!.wechat!.tradeType === '8' ? 'mini_program' : 'official_account',
-        )
-      }, { readOnly: true })
-      return 'jsapi'
-    } catch {
-      return 'native_qr'
+  ): Promise<boolean> {
+    void scope
+    if (this.config?.wechat === null || this.config?.wechat === undefined
+      || this.config.wechat.tradeType !== '8' || this.wechatPayers === null) return false
+    return (await this.wechatPayers.resolveMiniProgramPaymentPayer(
+      customerId,
+      this.config.wechat.appId,
+    )) !== null
+  }
+
+  async assertGuestJsapiReady(
+    scope: Readonly<StoreScope>,
+    customerId: string,
+  ): Promise<'jsapi'> {
+    if (!await this.isGuestJsapiReady(scope, customerId)) {
+      throw new WechatPaymentIdentityRequiredError()
     }
+    return 'jsapi'
   }
 
   async query(input: Readonly<QueryOnlinePaymentInput>): Promise<OnlinePaymentQueryResult> {
@@ -237,6 +261,70 @@ export class OnlinePaymentService {
         occurredAt: observation.occurredAt,
         evidence,
       })
+    return { context, observation, verifiedObservationId }
+  }
+
+  /**
+   * Closes an unpaid provider order only after an authoritative query still
+   * reports it as pending/processing.  A success, failure or unknown result is
+   * returned for normal state application; none of those states is silently
+   * replaced with a new payment attempt.
+   */
+  async close(input: Readonly<CloseOnlinePaymentInput>): Promise<OnlinePaymentCloseResult> {
+    if (this.adapter === null || this.secrets === null || this.config === null) {
+      throw new OnlinePaymentUnavailableError()
+    }
+    const context = await this.transactions.run(input.scope, async (transaction) => (
+      new PaymentProviderActionRepository(transaction, this.secret)
+        .resolvePaymentContext(input.paymentId, input.principal, { lock: false })
+    ), { readOnly: true })
+    if (context.provider !== 'postar' || !['created', 'pending'].includes(context.status)) {
+      throw new OnlinePaymentUnavailableError('这笔付款已有明确结果，无需关闭')
+    }
+    const queried = await this.adapter.queryPayment({
+      paymentIntentId: context.publicId,
+      merchantId: this.config.merchantId,
+      amount: context.amountMinor,
+      currency: context.currency,
+      providerTransactionId: context.providerTransactionId,
+      orderDate: postarOrderDate(context.createdAt),
+    }, { secrets: this.secrets })
+    if (queried.amount !== context.amountMinor || queried.currency !== context.currency) {
+      throw new OnlinePaymentUnknownError()
+    }
+    let observation = queried
+    if (queried.status === 'pending' || queried.status === 'processing') {
+      if (this.adapter.closePayment === undefined) {
+        throw new OnlinePaymentUnavailableError('当前支付通道不支持安全关单，请由收银核对后处理')
+      }
+      const close = await this.adapter.closePayment({
+        paymentIntentId: context.publicId,
+        merchantId: this.config.merchantId,
+      }, { secrets: this.secrets })
+      if (!close.closed || close.paymentIntentId !== context.publicId) throw new OnlinePaymentUnknownError()
+      observation = { ...queried, status: 'closed', occurredAt: close.occurredAt }
+    }
+    const verifiedObservationId = await this.providerObservations.recordPayment({
+      scope: input.scope,
+      provider: 'postar',
+      // A close is accepted only after a bound provider query.  It belongs to
+      // the existing verified-query authority, rather than inventing a new
+      // database verification kind that the observation schema cannot audit.
+      verificationKind: 'active_query_binding',
+      providerEventId: providerObservationEventId([
+        'payment-close', input.closeBindingId, context.publicId, observation.providerTransactionId,
+        observation.status, observation.amount, observation.currency, observation.occurredAt,
+      ]),
+      integrationRef: 'postar-close-payment',
+      paymentPublicId: context.publicId,
+      providerTransactionId: observation.providerTransactionId,
+      reportedAmountMinor: observation.amount,
+      reportedCurrency: observation.currency,
+      status: observation.status,
+      settlementChannel: observation.settlementChannel,
+      occurredAt: observation.occurredAt,
+      evidence: paymentQueryEvidence(observation),
+    })
     return { context, observation, verifiedObservationId }
   }
 
@@ -427,9 +515,16 @@ export class OnlinePaymentService {
       if (!claim.claimed) {
         return { context, payerId: null, cached: claim, simulated: false as const }
       }
-      const payerId = presentation === 'jsapi'
-        ? await this.resolvePayerId(repository, input)
-        : null
+      let payerId: string | null = null
+      try {
+        payerId = presentation === 'jsapi' ? await this.resolvePayerId(input) : null
+      } catch (error) {
+        // No provider request has been made at this point.  Do not leave an
+        // unusable `creating` action merely because the identity preflight
+        // failed; that would turn a recoverable refresh into a stuck payment.
+        await repository.abandonUnsubmittedClaim(input.paymentId)
+        throw error
+      }
       return { context, payerId, cached: null, simulated: false as const }
     })
     const presentation = providerPresentation(prepared.context.method)
@@ -515,18 +610,17 @@ export class OnlinePaymentService {
     }
   }
 
-  private async resolvePayerId(
-    repository: PaymentProviderActionRepository,
-    input: Readonly<CreateOnlinePaymentInput>,
-  ): Promise<string> {
-    if (input.principal.type !== 'guest' || this.config?.wechat === null || this.config?.wechat === undefined) {
-      throw new OnlinePaymentUnavailableError('当前入口不能发起微信内支付，请改用客人扫码支付')
+  private async resolvePayerId(input: Readonly<CreateOnlinePaymentInput>): Promise<string> {
+    if (input.principal.type !== 'guest' || this.config?.wechat === null || this.config?.wechat === undefined
+      || this.config.wechat.tradeType !== '8' || this.wechatPayers === null) {
+      throw new WechatPaymentIdentityRequiredError()
     }
-    return repository.resolveWechatPayerId(
+    const payer = await this.wechatPayers.resolveMiniProgramPaymentPayer(
       input.principal.customerId,
       this.config.wechat.appId,
-      this.config.wechat.tradeType === '8' ? 'mini_program' : 'official_account',
     )
+    if (payer === null) throw new WechatPaymentIdentityRequiredError()
+    return payer
   }
 
   private requireRefundAdapter(): OnlinePaymentAdapter {

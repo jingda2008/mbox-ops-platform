@@ -552,6 +552,67 @@ export interface WechatCleanupResult {
 export class PostgresWechatIdentityRepository
   extends ScopedWechatPostgresRepository
   implements WechatApiIdentityRepository, WechatNotificationRecipientResolver {
+  /**
+   * Resolves the encrypted mini-program OpenID used by a payment provider.
+   *
+   * This is deliberately narrower than a general identity lookup: the caller
+   * supplies only a server-derived customer id and the configured AppID, and
+   * receives no identity metadata.  Merged customer records are resolved as a
+   * family so a legitimate member merge cannot make an existing WeChat payer
+   * disappear.  The plaintext value must stay in the provider call path and
+   * must never be logged or returned to a client.
+   */
+  async resolveMiniProgramPaymentPayer(
+    customerId: string,
+    appId: string,
+  ): Promise<string | null> {
+    assertUuid(customerId, 'customerId')
+    if (appId !== this.appId) return null
+    return this.transaction(true, async (client) => {
+      const result = await client.query<IdentityRow>(`
+        WITH RECURSIVE ancestry AS (
+          SELECT id, merged_into_customer_id
+          FROM mbox.customers
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+          UNION ALL
+          SELECT parent.id,parent.merged_into_customer_id
+          FROM mbox.customers parent
+          JOIN ancestry child ON child.merged_into_customer_id=parent.id
+          WHERE parent.tenant_id=$1::uuid AND parent.store_id=$2::uuid
+        ), canonical AS (
+          SELECT id FROM ancestry WHERE merged_into_customer_id IS NULL LIMIT 1
+        ), family AS (
+          SELECT id FROM canonical
+          UNION ALL
+          SELECT child.id
+          FROM mbox.customers child
+          JOIN family parent ON child.merged_into_customer_id=parent.id
+          WHERE child.tenant_id=$1::uuid AND child.store_id=$2::uuid
+        )
+        SELECT identity.id,identity.external_identity_id,identity.principal_id,
+          identity.tenant_id,identity.store_id,identity.app_id,
+          identity.openid_sha256,identity.openid_ciphertext,identity.openid_key_version,
+          identity.unionid_sha256,identity.unionid_ciphertext,identity.unionid_key_version,
+          identity.member_id,identity.created_at,identity.updated_at,identity.last_authenticated_at
+        FROM mbox.wechat_identities identity
+        JOIN mbox.customer_identities customer_identity
+          ON customer_identity.tenant_id=identity.tenant_id
+         AND customer_identity.store_id=identity.store_id
+         AND customer_identity.identity_kind='wechat'
+         AND customer_identity.identity_hash=encode(digest('wechat:'||identity.principal_id,'sha256'),'hex')
+         AND customer_identity.status='active'
+        WHERE identity.tenant_id=$1::uuid AND identity.store_id=$2::uuid
+          AND identity.app_id=$4 AND identity.channel='mini_program'
+          AND identity.revoked_at IS NULL
+          AND customer_identity.customer_id IN (SELECT id FROM family)
+        ORDER BY identity.last_authenticated_at DESC,identity.id DESC
+        LIMIT 1
+      `, [this.tenantId, this.storeId, customerId, appId])
+      const row = result.rows[0]
+      return row === undefined ? null : this.decodeIdentity(row).openId
+    })
+  }
+
   async resolveMiniProgramNotificationRecipient(
     customerId: string,
     identityExternalId: string,

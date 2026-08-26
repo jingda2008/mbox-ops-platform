@@ -169,7 +169,7 @@ test('activity registration distinguishes confirmed, payment-pending, and waitli
   assert.match(detailView, /'提交报名并支付'/)
   assert.match(detailView, /'提交报名'/)
   assert.match(detailView, /'加入候补'/)
-  assert.match(detailView, />完成支付<\/button>/)
+  assert.match(detailView, />继续付款<\/button>/)
   assert.doesNotMatch(detailView, /确认报名/)
   assert.match(detailLogic, /报名成功，名额已为您确认。/)
   assert.match(detailLogic, /showRegistrationOutcome/)

@@ -131,6 +131,20 @@ export interface CashierWorkbenchActivityRegistration {
   paidAmountMinor: number
   currency: string
   payment: CashierWorkbenchPayment | null
+  /**
+   * Every provider-confirmed collection from an older, closed registration
+   * cycle that still has money to return. They never change the newer
+   * registration and block any replacement collection until each old fact is
+   * refunded through the maker-checker path.
+   */
+  lateSuccessPayments?: readonly {
+    publicId: string
+    amountMinor: number
+    remainingRefundableMinor: number
+    currency: string
+    succeededAt: string | null
+    refundStatus: CashierRefundStatus | null
+  }[]
   recollectionAuthorization?: {
     id: string
     amountMinor: number

@@ -47,7 +47,7 @@ integration('unresolved payment retry release', () => {
 
   afterAll(async () => { await pool?.end() })
 
-  it('keeps the first unresolved online attempt, then permits exactly one replacement attempt', async () => {
+  it('keeps a legacy unresolved online attempt auditable but does not let it unlock a replacement payment', async () => {
     const sessionId = randomUUID()
     const orderId = randomUUID()
     const firstPaymentId = randomUUID()
@@ -77,14 +77,14 @@ integration('unresolved payment retry release', () => {
         reason: '顾客未确认到账，重新出示付款二维码',
         idempotencyKey: `retry-release:${randomUUID()}`,
       }))
-    const replacement = await runner.run({ tenantId, storeId }, (transaction) =>
+    await expect(runner.run({ tenantId, storeId }, (transaction) =>
       new PaymentRepository(transaction).createForOrder({
         orderId,
         publicId: `retry-replacement-${randomUUID()}`,
         provider: 'postar',
         method: 'native_qr',
         principal: { type: 'employee', employeeId },
-      }))
+      }))).rejects.toThrow('another payment is already pending')
     await expect(runner.run({ tenantId, storeId }, (transaction) =>
       new PaymentRepository(transaction).releaseUnresolvedForRetry({
         paymentId: firstPaymentId,
@@ -95,13 +95,11 @@ integration('unresolved payment retry release', () => {
 
     expect(released.retryReleasedAt).toBeTruthy()
     expect(released.status).toBe('pending')
-    expect(replacement.status).toBe('created')
     const payments = await pool.query<{
       id: string; status: string; retry_released_at: string | null
     }>(`SELECT id,status,retry_released_at::text FROM mbox.payments WHERE order_id=$1 ORDER BY created_at,id`, [orderId])
     expect(payments.rows).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: firstPaymentId, status: 'pending', retry_released_at: expect.any(String) }),
-      expect.objectContaining({ id: replacement.id, status: 'created', retry_released_at: null }),
+      { id: firstPaymentId, status: 'pending', retry_released_at: expect.any(String) },
     ]))
   })
 

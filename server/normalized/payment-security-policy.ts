@@ -8,6 +8,7 @@ import {
 
 export type PaymentCapability =
   | 'payment.initiate.staff'
+  | 'reconciliation.view'
   | 'payment.manual.cash.record'
   | 'payment.manual.pos.record'
   | 'payment.manual.external.record'
@@ -353,6 +354,7 @@ const PROVIDER_EVIDENCE_FIELDS = new Set([
   'collectedByEmployeeId',
   'errorCode',
   'eventId',
+  'lateSuccessAfterClose',
   'merchantOrderId',
   'merchantRefundId',
   'occurredAt',

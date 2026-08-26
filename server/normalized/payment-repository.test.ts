@@ -65,7 +65,7 @@ describe('PaymentRepository', () => {
     expect(transaction.calls).toHaveLength(2)
   })
 
-  it('keeps an unresolved online payment auditable while explicitly releasing it for one replacement collection', async () => {
+  it('keeps a legacy unresolved-payment release auditable without treating it as a safe replacement collection', async () => {
     const releasedAt = '2026-08-11T12:02:00.000Z'
     const transaction = new ScriptedTransaction([
       rows([paymentRow('pending', 8800)]),
@@ -93,7 +93,7 @@ describe('PaymentRepository', () => {
     expect(transaction.calls[3]?.values.slice(3)).toEqual([
       employeeId, '顾客未确认到账，改用另一种方式收款', 'payment-retry-release-0001',
     ])
-    expect(transaction.calls[5]?.sql).toContain('p.retry_released_at IS NULL')
+    expect(transaction.calls[5]?.sql).not.toContain('p.retry_released_at IS NULL')
   })
 
   it('derives the payment amount only from the locked order and existing database settlement', async () => {
@@ -206,6 +206,30 @@ describe('PaymentRepository', () => {
     expect(application.payment.status).toBe('succeeded')
     expect(application.applied).toBe(false)
     expect(transaction.calls).toHaveLength(3)
+  })
+
+  it('records a signed late success after a previously accepted close instead of losing the collection', async () => {
+    const transaction = new ScriptedTransaction([
+      rows([paymentTargetRow()]),
+      rows([{ id: orderId }]),
+      rows([paymentRow('closed', 8800)]),
+      rows([paymentRow('succeeded', 8800, 'provider-payment-late-closed-001')]),
+    ])
+
+    const application = await new PaymentRepository(transaction).applySucceededCallback({
+      paymentPublicId: 'payment-order-0001',
+      provider: 'postar',
+      providerTransactionId: 'provider-payment-late-closed-001',
+      reportedAmountMinor: 8800,
+      reportedCurrency: 'CNY',
+      providerSnapshot: { signatureVerified: true },
+    })
+
+    expect(application).toMatchObject({ applied: true, payment: { status: 'succeeded' } })
+    expect(transaction.calls[3]?.sql).toContain("status IN ('created', 'pending', 'closed')")
+    expect(JSON.parse(String(transaction.calls[3]?.values[4]))).toMatchObject({
+      lateSuccessAfterClose: true,
+    })
   })
 
   it('enriches a captured payment only when a later authoritative result supplies the missing channel', async () => {

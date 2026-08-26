@@ -63,7 +63,7 @@ export interface StaffTablePaymentOrder {
   paymentStatus: string
   outstandingAmountMinor: number
   hasOnlinePaymentInProgress: boolean
-  /** A presented online attempt that staff may explicitly release after no clear success. */
+  /** A presented online attempt that staff may query and safely close before changing collection method. */
   unresolvedOnlinePaymentId: string | null
 }
 
@@ -337,7 +337,7 @@ export interface StaffActionsApiPort {
     signal?: AbortSignal,
   ): Promise<'pending' | 'succeeded' | 'failed' | 'closed'>
   queryOnlinePayment(paymentId: string): Promise<'pending' | 'succeeded' | 'failed' | 'closed'>
-  releaseUnresolvedPaymentForRetry(paymentId: string, reason: string): Promise<void>
+  closeUnresolvedPaymentBeforeReplacement(paymentId: string, reason: string): Promise<void>
   transcribeObservationAudio(input: Readonly<{
     audioBase64: string
     mimeType: 'audio/webm' | 'audio/webm;codecs=opus' | 'audio/ogg' | 'audio/ogg;codecs=opus'
@@ -759,12 +759,12 @@ export class StaffActionsApi implements StaffActionsApiPort {
     return status
   }
 
-  async releaseUnresolvedPaymentForRetry(paymentId: string, reason: string): Promise<void> {
+  async closeUnresolvedPaymentBeforeReplacement(paymentId: string, reason: string): Promise<void> {
     await this.command(
       `/api/payments/${encodeURIComponent(paymentId)}/retry-release`,
       { reason },
       'idempotency-key',
-      `staff-payment-retry-release-${paymentId}-${this.createIdempotencyKey()}`,
+      `staff-payment-query-close-${paymentId}-${this.createIdempotencyKey()}`,
     )
   }
 

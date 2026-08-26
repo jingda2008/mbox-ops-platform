@@ -91,7 +91,7 @@ export interface GuestCommerceServiceApiOptions {
     & Partial<Pick<CommerceCommandService, 'submitOrderInTransaction'>>
   payments: Pick<PaymentCommandService, 'initiate'>
     & Partial<Pick<PaymentCommandService, 'initiateInTransaction'>>
-  onlinePayments: Pick<OnlinePaymentService, 'create' | 'resolveGuestMethod' | 'assertAvailable' | 'resolveActivePayment'>
+  onlinePayments: Pick<OnlinePaymentService, 'create' | 'assertGuestJsapiReady' | 'assertAvailable' | 'resolveActivePayment'>
   resolveGuestContext(request: FastifyRequest): Promise<GuestRequestContext> | GuestRequestContext
   resolvePublicContext(request: FastifyRequest): Promise<{ scope: Readonly<StoreScope> }> | { scope: Readonly<StoreScope> }
   resolveDeviceFingerprint(request: FastifyRequest): string
@@ -219,7 +219,13 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
       await requireGuestCartProtocol(transaction, context.tableSessionId, 1)
     })
     const paymentMode = await effectivePaymentMode(options, context.scope)
+    assertGuestSelfPaymentMode(paymentMode)
     options.onlinePayments.assertAvailable(paymentMode === 'simulation' ? 'simulation' : 'postar')
+    // Resolve the server-side WeChat payer before creating an order.  This is
+    // the same safety boundary used by the shared-cart checkout: a missing
+    // identity is recoverable by the customer and must not leave an unpaid
+    // order behind.
+    const paymentMethod = await guestCheckoutPaymentMethod(options, context, paymentMode)
     const input = readGuestOrder(request.body)
     const idempotencyKey = readIdempotencyKey(request)
     const actor = guestActor(context)
@@ -244,7 +250,9 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
         },
       }),
     })
-    const payment = await initiateGuestPayment(options, context, orderExecution.value, idempotencyKey, createPublicId, paymentMode)
+    const payment = await initiateGuestPayment(
+      options, context, orderExecution.value, idempotencyKey, createPublicId, paymentMode, paymentMethod,
+    )
     const providerAction = await createGuestProviderAction(
       options,
       context,
@@ -338,11 +346,15 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
   app.post('/guest/shared-cart/checkout', async (request, reply) => handleRoute(reply, async () => {
     const context = await requireTableContext(options, request, 'guest.order.create')
     const paymentMode = await effectivePaymentMode(options, context.scope)
+    assertGuestSelfPaymentMode(paymentMode)
     options.onlinePayments.assertAvailable(paymentMode === 'simulation' ? 'simulation' : 'postar')
     const input = readSharedCartCheckout(request.body)
     const idempotencyKey = readIdempotencyKey(request)
     await recordSharedCartWriteAttempt(options,context,idempotencyKey,'checkout')
-    const paymentCommand = await guestPaymentCommand(options, context, idempotencyKey, createPublicId, paymentMode)
+    const paymentMethod = await guestCheckoutPaymentMethod(options, context, paymentMode)
+    const paymentCommand = await guestPaymentCommand(
+      context, idempotencyKey, createPublicId, paymentMode, paymentMethod,
+    )
     if (!options.commerce.submitOrderInTransaction || !options.payments.initiateInTransaction) {
       throw new Error('Shared cart checkout service is unavailable')
     }
@@ -436,6 +448,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
     async (request, reply) => handleRoute(reply, async () => {
       const context = await requireTableContext(options, request, 'guest.order.create')
       const paymentMode = await effectivePaymentMode(options, context.scope)
+      assertGuestSelfPaymentMode(paymentMode)
       options.onlinePayments.assertAvailable(paymentMode === 'simulation' ? 'simulation' : 'postar')
       const orderPublicId = readPublicId(request.params.orderPublicId, 'orderPublicId')
       const resolved = await options.transactions.run(context.scope, async (transaction) => (
@@ -444,7 +457,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
       ))
       let payment: CommandExecution<Payment>
       if (resolved.activePaymentId === null) {
-        const method = await options.onlinePayments.resolveGuestMethod(context.scope, context.customerId)
+        const method = await options.onlinePayments.assertGuestJsapiReady(context.scope, context.customerId)
         const idempotencyKey = readIdempotencyKey(request)
         try {
           payment = await options.payments.initiate({
@@ -475,6 +488,11 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
           new PaymentProviderActionRepository(transaction, options.paymentActionSecret)
             .resolvePaymentContext(resolved.activePaymentId!,guestPaymentPrincipal(context),{ lock:false })
         ))
+        if (value.provider !== 'simulation' && value.method !== 'jsapi') {
+          throw new OnlinePaymentUnavailableError(
+            '这笔订单的微信付款无法在小程序中打开，请刷新微信身份或呼叫员工协助核对',
+          )
+        }
         payment = { value: paymentFromContext(value), replayed: true }
       }
       const action = await createGuestProviderAction(options, context, payment.value, orderPublicId, request.ip)
@@ -1114,26 +1132,36 @@ async function initiateGuestPayment(
   orderIdempotencyKey: string,
   createPublicId: NonNullable<GuestCommerceServiceApiOptions['createPublicId']>,
   paymentMode: GuestCheckoutPaymentMode,
+  paymentMethod: GuestCheckoutPaymentMethod,
 ): Promise<CommandExecution<Payment>> {
   return options.payments.initiate(await guestPaymentCommand(
-    options, context, orderIdempotencyKey, createPublicId, paymentMode, commerce.order.id,
+    context, orderIdempotencyKey, createPublicId, paymentMode, paymentMethod, commerce.order.id,
   ))
 }
 
-async function guestPaymentCommand(
+type GuestCheckoutPaymentMethod = Extract<Payment['method'], 'jsapi' | 'native_qr'>
+
+async function guestCheckoutPaymentMethod(
   options: GuestCommerceServiceApiOptions,
+  context: GuestRequestContext & { tableSessionId: string; businessDate: string },
+  paymentMode: GuestCheckoutPaymentMode,
+): Promise<GuestCheckoutPaymentMethod> {
+  return paymentMode === 'simulation'
+    ? 'native_qr'
+    : options.onlinePayments.assertGuestJsapiReady(context.scope, context.customerId)
+}
+
+async function guestPaymentCommand(
   context: GuestRequestContext & { tableSessionId: string; businessDate: string },
   orderIdempotencyKey: string,
   createPublicId: NonNullable<GuestCommerceServiceApiOptions['createPublicId']>,
   paymentMode: GuestCheckoutPaymentMode,
+  method: GuestCheckoutPaymentMethod,
   orderId = 'shared-cart-order-pending',
 ): Promise<InitiatePaymentCommand> {
   // WeChat is the customer-facing channel; Postar is the acquiring provider
   // whose order and callback identities must match the persisted payment.
   const provider = paymentMode === 'simulation' ? 'simulation' : 'postar'
-  const method = paymentMode === 'simulation'
-    ? 'native_qr'
-    : await options.onlinePayments.resolveGuestMethod(context.scope, context.customerId)
   const idempotencyKey = `guest-pay-${createHash('sha256').update(orderIdempotencyKey).digest('hex').slice(0, 48)}`
   const publicId = createPublicId('payment', `${context.scope.storeId}:${idempotencyKey}`)
   return {
@@ -1155,6 +1183,14 @@ async function guestPaymentCommand(
     method,
     principal: guestPaymentPrincipal(context),
     providerSnapshot: { source: 'guest_checkout', configuredMode: paymentMode },
+  }
+}
+
+function assertGuestSelfPaymentMode(mode: GuestCheckoutPaymentMode): void {
+  if (mode === 'wechat_native_qr') {
+    throw new OnlinePaymentUnavailableError(
+      '顾客小程序仅支持微信内支付；收银二维码请由员工在收银设备上发起',
+    )
   }
 }
 
@@ -1283,6 +1319,11 @@ async function createGuestProviderAction(
 ): Promise<OnlinePaymentAction> {
   if (payment.method === 'auth_code') {
     throw new ProviderPaymentMethodConflictError('本笔正在由员工扫描付款码收款，请勿从桌码重复支付')
+  }
+  if (payment.provider !== 'simulation' && payment.method !== 'jsapi') {
+    throw new OnlinePaymentUnavailableError(
+      '顾客小程序仅支持微信内支付；收银二维码请由员工在收银设备上发起',
+    )
   }
   try {
     return await options.onlinePayments.create({
@@ -1684,6 +1725,7 @@ function paymentFromContext(value: Awaited<ReturnType<PaymentProviderActionRepos
     payableKind: 'order',
     orderId: value.orderId,
     activityRegistrationId: null,
+    activityRegistrationCycle: null,
     publicId: value.publicId,
     provider: value.provider,
     providerTransactionId: value.providerTransactionId,

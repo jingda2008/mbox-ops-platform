@@ -1481,7 +1481,8 @@ export class CustomerExperienceRepository {
     acknowledgedSafetyPolicyVersion: string
     acknowledgedRefundPolicyVersion: string
     paymentChoice: ActivityPaymentChoice
-    paymentMethod: Extract<PaymentMethod, 'jsapi' | 'native_qr'>
+    paymentMethod: Extract<PaymentMethod, 'jsapi'>
+    jsapiReady: boolean
     paymentPublicId: string
     publicId: string
     idempotencyKey: string
@@ -1661,6 +1662,13 @@ export class CustomerExperienceRepository {
         503,
       )
     }
+    if (hasCapacity && payment.amountDueMinor > 0 && !input.jsapiReady) {
+      throw new CustomerExperienceRequestError(
+        '微信支付身份需要刷新，请重新进入小程序后再试。本次没有创建报名或占用名额。',
+        'WECHAT_IDENTITY_REQUIRED',
+        409,
+      )
+    }
     const status = hasCapacity ? (payment.amountDueMinor > 0 ? 'payment_pending' : 'confirmed') : 'waitlisted'
     const effectiveChoice: ActivityPaymentChoice = hasCapacity ? payment.choice : 'none'
     const amountDueMinor = hasCapacity ? payment.amountDueMinor : 0
@@ -1671,12 +1679,60 @@ export class CustomerExperienceRepository {
       status: string
       paid_amount_minor: string | number
       payment_id: string | null
+      payment_status: string | null
+      payment_succeeded_at: string | null
+      reconciliation_recorded: boolean
+      success_observed: boolean
+      prior_late_success_unrefunded: boolean
     }>(`
-      SELECT id, public_id, status, paid_amount_minor, payment_id
-      FROM mbox.community_activity_registrations
-      WHERE tenant_id=$1::uuid AND store_id=$2::uuid
-        AND activity_id=$3::uuid AND customer_id=$4::uuid
-      FOR UPDATE
+      SELECT registration.id,registration.public_id,registration.status,
+        registration.paid_amount_minor,registration.payment_id,
+        payment.status AS payment_status,payment.succeeded_at::text AS payment_succeeded_at,
+        EXISTS(
+          SELECT 1 FROM mbox.reconciliation_entries reconciliation
+          WHERE reconciliation.tenant_id=registration.tenant_id
+            AND reconciliation.store_id=registration.store_id
+            AND reconciliation.payment_id=payment.id
+            AND reconciliation.entry_type='payment'
+        ) AS reconciliation_recorded,
+        EXISTS(
+          SELECT 1 FROM mbox.verified_provider_observations observation
+          WHERE observation.tenant_id=registration.tenant_id
+            AND observation.store_id=registration.store_id
+            AND observation.payment_id=payment.id
+            AND observation.observed_status='payment_succeeded'
+        ) AS success_observed
+        ,EXISTS(
+          SELECT 1
+          FROM mbox.payments historical_payment
+          WHERE historical_payment.tenant_id=registration.tenant_id
+            AND historical_payment.store_id=registration.store_id
+            AND historical_payment.activity_registration_id=registration.id
+            AND (
+              historical_payment.activity_registration_cycle IS NULL
+              OR historical_payment.activity_registration_cycle<registration.registration_cycle
+            )
+            AND historical_payment.status IN ('succeeded','partially_refunded')
+            AND COALESCE((
+              SELECT SUM(historical_refund.amount_minor)
+              FROM mbox.refunds historical_refund
+              WHERE historical_refund.tenant_id=historical_payment.tenant_id
+                AND historical_refund.store_id=historical_payment.store_id
+                AND historical_refund.payment_id=historical_payment.id
+                AND historical_refund.status='succeeded'
+            ), 0) < historical_payment.amount_minor
+        ) AS prior_late_success_unrefunded
+      FROM mbox.community_activity_registrations registration
+      LEFT JOIN mbox.payments payment
+        ON payment.tenant_id=registration.tenant_id AND payment.store_id=registration.store_id
+       AND payment.id=registration.payment_id
+      WHERE registration.tenant_id=$1::uuid AND registration.store_id=$2::uuid
+        AND registration.activity_id=$3::uuid AND registration.customer_id=$4::uuid
+      -- The payment row is optional for a free or previously cancelled
+      -- registration. PostgreSQL cannot lock the nullable side of this left
+      -- join; the registration row is the lifecycle lock and serializes both
+      -- reuse and creation of the next authoritative payment.
+      FOR UPDATE OF registration
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -1684,9 +1740,17 @@ export class CustomerExperienceRepository {
       registrationCustomerId,
     ])
     const previous = existing.rows[0]
-    if (previous && (previous.status !== 'cancelled'
-      || money(previous.paid_amount_minor, 'registration paid amount') !== 0
-      || previous.payment_id !== null)) {
+    const canReuseCancelledRegistration = previous !== undefined
+      && previous.status === 'cancelled'
+      && money(previous.paid_amount_minor, 'registration paid amount') === 0
+      && !previous.prior_late_success_unrefunded
+      && (previous.payment_id === null || (
+        (previous.payment_status === 'closed' || previous.payment_status === 'failed')
+        && previous.payment_succeeded_at === null
+        && !previous.reconciliation_recorded
+        && !previous.success_observed
+      ))
+    if (previous && !canReuseCancelledRegistration) {
       throw new CustomerExperienceRequestError('您已有这个活动的有效报名', 'ACTIVITY_ALREADY_REGISTERED', 409)
     }
     const registrationValues = [
@@ -1748,7 +1812,7 @@ export class CustomerExperienceRepository {
           checked_in_at=NULL, cancelled_at=NULL
         WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
           AND customer_id=$4::uuid AND status='cancelled'
-          AND paid_amount_minor=0 AND payment_id IS NULL
+          AND paid_amount_minor=0
         RETURNING id, public_id, status, registration_cycle,
           payment_due_at::text, seat_hold_expires_at::text
       `, registrationValues)
@@ -1983,12 +2047,34 @@ export class CustomerExperienceRepository {
             SELECT 1 FROM mbox.payments payment
             WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid
               AND payment.id=community_activity_registrations.payment_id
-              AND payment.status IN ('created','pending')
-              AND NOT EXISTS (
-                SELECT 1 FROM mbox.payment_provider_actions provider_action
-                WHERE provider_action.tenant_id=payment.tenant_id
-                  AND provider_action.store_id=payment.store_id
-                  AND provider_action.payment_id=payment.id
+              AND (
+                (
+                  payment.status IN ('created','pending')
+                  AND NOT EXISTS (
+                    SELECT 1 FROM mbox.payment_provider_actions provider_action
+                    WHERE provider_action.tenant_id=payment.tenant_id
+                      AND provider_action.store_id=payment.store_id
+                      AND provider_action.payment_id=payment.id
+                  )
+                )
+                OR (
+                  payment.status IN ('closed','failed')
+                  AND payment.succeeded_at IS NULL
+                  AND NOT EXISTS (
+                    SELECT 1 FROM mbox.reconciliation_entries reconciliation
+                    WHERE reconciliation.tenant_id=payment.tenant_id
+                      AND reconciliation.store_id=payment.store_id
+                      AND reconciliation.payment_id=payment.id
+                      AND reconciliation.entry_type='payment'
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM mbox.verified_provider_observations observation
+                    WHERE observation.tenant_id=payment.tenant_id
+                      AND observation.store_id=payment.store_id
+                      AND observation.payment_id=payment.id
+                      AND observation.observed_status='payment_succeeded'
+                  )
+                )
               )
           )
         )
@@ -2003,16 +2089,31 @@ export class CustomerExperienceRepository {
     if (row?.payment_id !== null && row?.payment_id !== undefined) {
       const closed = await this.transaction.query(`
         UPDATE mbox.payments payment
-        SET status='closed', provider_snapshot=provider_snapshot ||
-          jsonb_build_object('providerStatus','closed_before_provider_action'),
+        SET status=CASE WHEN payment.status IN ('created','pending') THEN 'closed' ELSE payment.status END,
+          provider_snapshot=provider_snapshot || jsonb_build_object(
+            'providerStatus',CASE WHEN payment.status IN ('created','pending')
+              THEN 'closed_before_provider_action' ELSE payment.status END
+          ),
           updated_at=clock_timestamp()
         WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid AND payment.id=$3::uuid
-          AND payment.status IN ('created','pending')
-          AND NOT EXISTS (
-            SELECT 1 FROM mbox.payment_provider_actions provider_action
-            WHERE provider_action.tenant_id=payment.tenant_id
-              AND provider_action.store_id=payment.store_id
-              AND provider_action.payment_id=payment.id
+          AND (
+            (payment.status IN ('created','pending') AND NOT EXISTS (
+              SELECT 1 FROM mbox.payment_provider_actions provider_action
+              WHERE provider_action.tenant_id=payment.tenant_id
+                AND provider_action.store_id=payment.store_id
+                AND provider_action.payment_id=payment.id
+            ))
+            OR (
+              payment.status IN ('closed','failed')
+              AND payment.succeeded_at IS NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM mbox.reconciliation_entries reconciliation
+                WHERE reconciliation.tenant_id=payment.tenant_id
+                  AND reconciliation.store_id=payment.store_id
+                  AND reconciliation.payment_id=payment.id
+                  AND reconciliation.entry_type='payment'
+              )
+            )
           )
       `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, row.payment_id])
       if (closed.rowCount !== 1) throw new CustomerExperienceRequestError(

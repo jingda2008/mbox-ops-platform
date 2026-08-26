@@ -12,6 +12,8 @@ import type {
   ProviderBillEntry,
   ProviderCreatePaymentRequest,
   ProviderCreatePaymentResult,
+  ProviderPaymentCloseRequest,
+  ProviderPaymentCloseResult,
   ProviderPaymentObservation,
   ProviderPaymentQueryRequest,
   ProviderRefundObservation,
@@ -755,6 +757,40 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
       url: `${this.baseUrl}${POSTAR_ENDPOINTS.queryPayment}`,
     })
     return parsePaymentObservation(parseSynchronousResponse(response, publicKey), request, agencyId)
+  }
+
+  async closePayment(
+    request: ProviderPaymentCloseRequest,
+    context: PaymentProviderContext,
+  ): Promise<ProviderPaymentCloseResult> {
+    if (!ALPHANUMERIC_ORDER_ID.test(request.paymentIntentId)) {
+      throw new Error('星驿关单三方订单号必须为1至40位大小写字母或数字')
+    }
+    if (!request.merchantId.trim()) throw new Error('星驿关单商户号不能为空')
+    const { agencyId, publicKey } = await getCredentials(
+      context,
+      this.agencyIdSecretName,
+      this.publicKeySecretName,
+    )
+    const response = parseSynchronousResponse(await this.options.httpClient.post({
+      body: signedRequestBody({
+        agetId: agencyId,
+        custId: request.merchantId,
+        threeOrderNO: request.paymentIntentId,
+        timeStamp: formatPostarTimestamp(this.now()),
+        version: VERSION,
+      }, publicKey),
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+      url: `${this.baseUrl}${POSTAR_ENDPOINTS.closePayment}`,
+    }), publicKey)
+    if (response.code !== '000000') {
+      throw new PostarPaymentRejectedError(`星驿关单失败: ${response.code} ${response.msg}`)
+    }
+    const data = requireDataObject(response)
+    if (String(data.closeFlag ?? '') !== '1') {
+      throw new PostarPaymentRejectedError('星驿未确认订单已关闭')
+    }
+    return { paymentIntentId: request.paymentIntentId, closed: true, occurredAt: this.now().toISOString() }
   }
 
   async requestRefund(

@@ -68,6 +68,11 @@ function isCreateRedemptionRequest(path, settings) {
     && String((settings && settings.method) || 'GET').toUpperCase() === 'POST'
 }
 
+function isWechatGuestScanRequest(path, settings) {
+  return String(path || '').split('?', 1)[0] === '/api/guest/session/scan'
+    && String((settings && settings.method) || 'GET').toUpperCase() === 'POST'
+}
+
 function buildHeaders(path, extraHeaders, settings) {
   const config = getRuntimeConfig()
   const requestedDomain = settings && settings.credentialDomain
@@ -83,14 +88,18 @@ function buildHeaders(path, extraHeaders, settings) {
     }),
   }, extraHeaders || {})
   removeHeader(headers, 'cookie')
-  if (requestedDomain && !['none', 'wechat_identity', 'reservation+guest'].includes(requestedDomain)) {
+  if (requestedDomain && !['none', 'wechat_identity', 'reservation+guest', 'guest+wechat_identity'].includes(requestedDomain)) {
     throw new Error('请求凭证域无效')
   }
   if (requestedDomain === 'reservation+guest' && !isCreateRedemptionRequest(path, settings)) {
     throw new Error('双会话凭证仅限创建会员兑换')
   }
+  if (requestedDomain === 'guest+wechat_identity' && !isWechatGuestScanRequest(path, settings)) {
+    throw new Error('微信身份仅可随桌码扫描请求发送')
+  }
   const domain = requestedDomain === 'reservation+guest'
     ? 'reservation+guest'
+    : requestedDomain === 'guest+wechat_identity' ? 'guest'
     : requestedDomain === 'none' ? 'none' : requestCredentialDomain(path)
   if (anonymous) {
     // A shared acquisition preview is public copy, not a continuation of an
@@ -119,6 +128,15 @@ function buildHeaders(path, extraHeaders, settings) {
       if (typeof identityToken !== 'string' || identityToken.length < 32 || identityToken.includes(' ')) {
         throw new Error('微信身份会话无效')
       }
+      headers.authorization = `Bearer ${identityToken}`
+    }
+  }
+  if (settings && settings.credentialDomain === 'guest+wechat_identity') {
+    const identityToken = wx.getStorageSync(WECHAT_TOKEN_KEY)
+    // A table scan may still create a browse-only guest session if WeChat
+    // login is temporarily unavailable.  It must never fabricate a bearer or
+    // send it to another guest endpoint.
+    if (typeof identityToken === 'string' && identityToken.length >= 32 && !identityToken.includes(' ')) {
       headers.authorization = `Bearer ${identityToken}`
     }
   }

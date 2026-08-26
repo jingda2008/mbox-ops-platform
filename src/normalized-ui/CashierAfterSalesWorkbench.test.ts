@@ -7,7 +7,11 @@ import type {
   CashierWorkbenchRefund,
   CashierWorkbenchView,
 } from '../shared/cashier-workbench-contracts'
-import { businessDayFactNavigation, CashierAfterSalesWorkbenchView } from './CashierAfterSalesWorkbench'
+import {
+  businessDayFactNavigation,
+  CashierAfterSalesWorkbenchView,
+  mayRequestLateSuccessRefund,
+} from './CashierAfterSalesWorkbench'
 import { CashierMutationCoordinator, createIdempotencyKey, mutationSignature } from './cashier-mutation'
 
 const employeeId = '33333333-3333-4333-8333-333333333333'
@@ -169,10 +173,27 @@ describe('CashierAfterSalesWorkbenchView', () => {
     view.orders[0]!.outstandingAmountMinor = 6_800
     const html = render(view)
     expect(html).toContain('已有线上支付')
-    expect(html).toContain('按未到账重新收款')
-    expect(html).toContain('旧渠道若随后到账')
+    expect(html).toContain('查单并关闭后改收款')
+    expect(html).toContain('渠道结果未知、已成功或关单失败时')
     expect(html).toContain('查询渠道结果')
     expect(html).not.toContain('登记现金收款</button>')
+  })
+
+  it('keeps every remaining late activity payment visible as a collection blocker and lets terminal refund attempts be requested again', () => {
+    const view = workbench([])
+    view.actions.canUseActivityCashier = true
+    view.activityRegistrations = [activityRegistration([
+      lateSuccessPayment('PAYMENT-LATE-FAILED', 'failed'),
+      lateSuccessPayment('PAYMENT-LATE-REJECTED', 'rejected'),
+      lateSuccessPayment('PAYMENT-LATE-PENDING', 'requested'),
+    ])]
+    const html = render(view)
+
+    expect(html).toContain('旧款待退款 3 笔')
+    expect(mayRequestLateSuccessRefund(view.activityRegistrations[0]!.lateSuccessPayments![0]!, true)).toBe(true)
+    expect(mayRequestLateSuccessRefund(view.activityRegistrations[0]!.lateSuccessPayments![1]!, true)).toBe(true)
+    expect(mayRequestLateSuccessRefund(view.activityRegistrations[0]!.lateSuccessPayments![2]!, true)).toBe(false)
+    expect(mayRequestLateSuccessRefund(view.activityRegistrations[0]!.lateSuccessPayments![0]!, false)).toBe(false)
   })
 
   it('offers a controlled unpaid-order cancellation without pretending delivered facts disappear', () => {
@@ -460,6 +481,41 @@ function payment(
       remainingRefundableMinor: 6_800,
     }],
     refunds,
+  }
+}
+
+function activityRegistration(
+  lateSuccessPayments: NonNullable<CashierWorkbenchView['activityRegistrations']>[number]['lateSuccessPayments'],
+): NonNullable<CashierWorkbenchView['activityRegistrations']>[number] {
+  return {
+    id: 'activity-registration-1',
+    publicId: 'ACTIVITY-REGISTRATION-0001',
+    activityPublicId: 'ACTIVITY-0001',
+    activityTitle: '超嗨会员之夜',
+    startsAt: '2026-08-13T20:00:00.000Z',
+    partySize: 2,
+    status: 'payment_pending',
+    paymentStatus: 'pending',
+    amountDueMinor: 6_800,
+    paidAmountMinor: 0,
+    currency: 'CNY',
+    payment: null,
+    lateSuccessPayments,
+    recollectionAuthorization: null,
+  }
+}
+
+function lateSuccessPayment(
+  publicId: string,
+  refundStatus: 'requested' | 'rejected' | 'failed' | 'cancelled' | 'succeeded' | null,
+) {
+  return {
+    publicId,
+    amountMinor: 6_800,
+    remainingRefundableMinor: 6_800,
+    currency: 'CNY',
+    succeededAt: '2026-08-12T23:58:00.000Z',
+    refundStatus,
   }
 }
 

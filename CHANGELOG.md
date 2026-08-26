@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.0.0-rc.144 - 2026-08-27
+
+- Unifies mini-program WeChat payment identity for paid Superhigh registration
+  and scanned-table ordering. A missing verified identity now fails before a
+  paid registration or immediate-payment order is created; guest flows no
+  longer silently create an unusable customer-facing QR payment.
+- Keeps one activity registration through a safe payment retry. Provider
+  results are queried before an online order is closed or a collection method
+  is changed; unknown or successful results remain blocked rather than being
+  treated as unpaid.
+- Adds immutable activity-payment cycle attribution. A signed late success
+  from an earlier closed registration cycle is kept for reconciliation and
+  refund, cannot be credited to a reopened cycle, cannot earn that newer
+  cycle's promotion rewards, and blocks another collection until refunded.
+- Makes unpaid guest departure an explicit table-turnover exception while
+  preserving payment, refund and reconciliation facts for follow-up.
+
 ## 1.0.0-rc.143 - 2026-08-26
 
 - Removes deprecated overlapping `pg` client queries from the customer-experience

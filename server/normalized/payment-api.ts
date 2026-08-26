@@ -43,7 +43,11 @@ import {
 import { StaffAccessDeniedError, StaffNotFoundError } from './staff-access-repository.js'
 import { StaffSessionNotFoundError } from './staff-session-repository.js'
 import type { StoreScope } from './transaction-runner.js'
-import type { OnlinePaymentAction, OnlinePaymentService } from './online-payment-service.js'
+import type {
+  OnlinePaymentAction,
+  OnlinePaymentQueryResult,
+  OnlinePaymentService,
+} from './online-payment-service.js'
 import type { OnlineRefundResult } from './online-payment-service.js'
 import {
   OnlinePaymentUnavailableError,
@@ -105,7 +109,7 @@ type PaymentCommandPort = Pick<
   | 'recordManualRefundResult'
   | 'authorizeRecollection'
   | 'authorizeActivityRecollection'
-  | 'releaseUnresolvedForRetry'
+  | 'authorizeProviderCloseForReplacement'
 >
 
 type OnlinePaymentProvider = Extract<PaymentProvider, 'wechat' | 'postar' | 'simulation'>
@@ -213,7 +217,7 @@ export interface PaymentApiOptions {
   onlinePayments?: Pick<
     OnlinePaymentService,
     'create' | 'query' | 'querySystem' | 'assertAvailable' | 'resolveActivePayment'
-    | 'requestRefund' | 'queryRefund' | 'listStalePendingPostarPaymentIds'
+    | 'requestRefund' | 'queryRefund' | 'listStalePendingPostarPaymentIds' | 'close'
   > & Partial<Pick<OnlinePaymentService, 'readInitiatedPaymentStatus'>>
   resolveOnlinePaymentAvailable?: (scope: Readonly<StoreScope>) => Promise<boolean>
   onlinePaymentProvider?: 'postar' | 'simulation' | null
@@ -278,7 +282,6 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
     const provider = readOnlineProvider(body.provider)
     const method = readOnlineMethod(body.method)
     assertOnlineMethod(provider, method)
-    assertActorPaymentMethod(context.actor, method)
     if (options.resolveOnlinePaymentAvailable !== undefined
       && !(await options.resolveOnlinePaymentAvailable(context.scope))) {
       throw new OnlinePaymentUnavailableError('门店已暂停线上支付，请改用现场收款')
@@ -291,6 +294,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       readOptionalJsonObject(body.providerSnapshot, 'providerSnapshot'),
     )
     const orderId = readUuid(body.orderId, 'orderId')
+    assertActorPaymentMethod(context.actor, method)
     const customerAuthCode = method === 'auth_code'
       ? readString(body.customerAuthCode, 'customerAuthCode', 32, 16)
       : undefined
@@ -480,18 +484,34 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
   app.post<{ Params: { paymentId: string } }>(
     '/payments/:paymentId/retry-release',
     async (request, reply) => handleRoute(reply, async () => {
+      if (options.onlinePayments?.close === undefined) throw new OnlinePaymentUnavailableError()
       const context = await resolveStaffContext(options, request)
+      requireStaffCapability(context, 'reconciliation.view')
       const body = readOptionalObject(request.body)
       assertActorBinding(body, context.actor)
       const paymentId = readUuid(request.params.paymentId, 'paymentId')
       const reason = readOptionalString(body.reason, 'reason', 500, 4)
-        ?? '未收到明确成功结果，改用或再次发起收款'
+        ?? '未收到明确成功结果，查询并关闭原线上收款后改用其他方式'
       const idempotencyKey = readIdempotencyKey(request)
-      const execution = await options.commands.releaseUnresolvedForRetry({
+      await options.commands.authorizeProviderCloseForReplacement({
         ...metadata(request, context, idempotencyKey, { paymentId, reason }),
         paymentId,
         reason,
       })
+      const closed = await options.onlinePayments.close({
+        scope: context.scope,
+        paymentId,
+        closeBindingId: `staff-close-${createHash('sha256').update(idempotencyKey).digest('hex')}`,
+        principal: paymentInitiationPrincipal(context),
+      })
+      const execution = await recordOnlinePaymentObservation(
+        options,
+        request,
+        context,
+        closed,
+        `provider-close-${createHash('sha256').update(idempotencyKey).digest('hex')}`,
+        'postar-close-payment',
+      )
       return reply.send(executionResponse(execution))
     }),
   )
@@ -518,36 +538,14 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
         queryBindingId: idempotencyKey,
         principal,
       })
-      const observed = queried.observation
-      const actor: AuditActor = { type: 'integration', ref: 'postar-active-query' }
-      const providerSnapshot = sanitizeProviderSnapshot({
-        providerStatus: observed.status,
-        providerReportedAmountMinor: observed.providerReportedAmount ?? observed.amount,
-        occurredAt: observed.occurredAt,
-        receivedAt: new Date().toISOString(),
-        ...(observed.settlementChannel === undefined ? {} : { channel: observed.settlementChannel }),
-      })
-      const execution = await options.commands.recordProviderQueryResult({
-        ...metadata(request, { ...context, actor }, idempotencyKey, {
-          paymentPublicId: queried.context.publicId,
-          provider: 'postar',
-          providerTransactionId: observed.providerTransactionId,
-          status: observed.status,
-          amountMinor: observed.amount,
-          currency: observed.currency,
-          settlementChannel: observed.settlementChannel ?? null,
-        }),
-        paymentPublicId: queried.context.publicId,
-        verifiedObservationId: queried.verifiedObservationId,
-        provider: 'postar',
-        providerTransactionId: readString(observed.providerTransactionId, 'providerTransactionId', 256),
-        reportedAmountMinor: readPositiveMinor(observed.amount, 'amountMinor'),
-        reportedCurrency: readCurrency(observed.currency),
-        settlementChannel: observed.settlementChannel,
-        status: observed.status,
-        providerSnapshot,
-        occurredAt: readTimestamp(observed.occurredAt, 'occurredAt'),
-      })
+      const execution = await recordOnlinePaymentObservation(
+        options,
+        request,
+        context,
+        queried,
+        idempotencyKey,
+        'postar-active-query',
+      )
       return reply.send(executionResponse(execution))
     }),
   )
@@ -987,6 +985,7 @@ function paymentFromProviderContext(value: ProviderPaymentContext): Payment {
     payableKind: 'order',
     orderId: value.orderId,
     activityRegistrationId: null,
+    activityRegistrationCycle: null,
     publicId: value.publicId,
     provider: value.provider,
     providerTransactionId: value.providerTransactionId,
@@ -1183,6 +1182,48 @@ function metadata(
   }
 }
 
+/** Applies a provider observation through the same verified command path for
+ * both a normal query and the query-and-close-before-replacement action. */
+async function recordOnlinePaymentObservation(
+  options: PaymentApiOptions,
+  request: FastifyRequest,
+  context: PaymentApiActorContext,
+  result: Pick<OnlinePaymentQueryResult, 'context' | 'observation' | 'verifiedObservationId'>,
+  idempotencyKey: string,
+  integrationRef: string,
+): Promise<CommandExecution<Payment>> {
+  const observed = result.observation
+  const actor: AuditActor = { type: 'integration', ref: integrationRef }
+  const providerSnapshot = sanitizeProviderSnapshot({
+    providerStatus: observed.status,
+    providerReportedAmountMinor: observed.providerReportedAmount ?? observed.amount,
+    occurredAt: observed.occurredAt,
+    receivedAt: new Date().toISOString(),
+    ...(observed.settlementChannel === undefined ? {} : { channel: observed.settlementChannel }),
+  })
+  return options.commands.recordProviderQueryResult({
+    ...metadata(request, { ...context, actor }, idempotencyKey, {
+      paymentPublicId: result.context.publicId,
+      provider: 'postar',
+      providerTransactionId: observed.providerTransactionId,
+      status: observed.status,
+      amountMinor: observed.amount,
+      currency: observed.currency,
+      settlementChannel: observed.settlementChannel ?? null,
+    }),
+    paymentPublicId: result.context.publicId,
+    verifiedObservationId: result.verifiedObservationId,
+    provider: 'postar',
+    providerTransactionId: readString(observed.providerTransactionId, 'providerTransactionId', 256),
+    reportedAmountMinor: readPositiveMinor(observed.amount, 'amountMinor'),
+    reportedCurrency: readCurrency(observed.currency),
+    settlementChannel: observed.settlementChannel,
+    status: observed.status,
+    providerSnapshot,
+    occurredAt: readTimestamp(observed.occurredAt, 'occurredAt'),
+  })
+}
+
 function actorToJson(actor: AuditActor): JsonObject {
   return actor.type === 'employee'
     ? {
@@ -1345,6 +1386,11 @@ function assertActorPaymentMethod(actor: Readonly<AuditActor>, method: Payment['
   }
   if (actor.type === 'guest' && method === 'auth_code') {
     throw new PaymentAuthorizationError('客人端不能发起扫描付款码收款')
+  }
+  if (actor.type === 'guest' && method === 'native_qr') {
+    throw new OnlinePaymentUnavailableError(
+      '顾客小程序仅支持微信内支付；收银二维码请由员工在收银设备上发起',
+    )
   }
 }
 

@@ -761,14 +761,12 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOn
   const activeOnlinePayment = order.payments.find((payment) => (
     (payment.provider === 'postar' || payment.provider === 'wechat')
     && (payment.status === 'created' || payment.status === 'pending')
-    && (payment.retryReleasedAt === null || payment.retryReleasedAt === undefined)
     && (payment.providerTransactionId !== null
       || (payment.providerActionState !== null && payment.providerActionState !== 'failed'))
   ))
   const unpresentedOnlinePayment = order.payments.find((payment) => (
     (payment.provider === 'postar' || payment.provider === 'wechat')
     && (payment.status === 'created' || payment.status === 'pending')
-    && (payment.retryReleasedAt === null || payment.retryReleasedAt === undefined)
     && payment.providerTransactionId === null
     && (payment.providerActionState === null || payment.providerActionState === 'failed')
   ))
@@ -811,13 +809,13 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOn
   const blocked = activeOnlinePayment !== undefined
   const mutationKey = provider === null ? '' : `manual-payment-${provider}-${order.id}`
 
-  async function releaseUnresolvedPayment(): Promise<void> {
+  async function closeUnresolvedPaymentBeforeReplacement(): Promise<void> {
     if (activeOnlinePayment === undefined) return
     await onMutation(
-      `payment-retry-release-${activeOnlinePayment.id}`,
+      `payment-query-close-${activeOnlinePayment.id}`,
       `/api/payments/${encodeURIComponent(activeOnlinePayment.id)}/retry-release`,
-      { reason: '未收到明确成功结果，改用或再次发起收款' },
-      '已按未到账释放原收款尝试。现在可以重新出示二维码、扫描付款码或登记实际收到的现场款；若旧渠道稍后到账，会保留到收工退款/对账。',
+      { reason: '未收到明确成功结果，查询并关闭原线上收款后改用其他方式' },
+      '已确认关闭原线上收款。现在可以重新出示二维码、扫描付款码或登记实际收到的现场款。',
     )
   }
 
@@ -878,7 +876,7 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOn
       {qrValue !== null ? <><CashierPaymentQr value={qrValue} /><strong>请顾客扫码付款</strong><p>到账前不要重复收款；本页下方会保留这笔付款的渠道查单入口。</p></>
         : <><strong>顾客付款码已受理</strong><p>请勿重复扫码，实际到账以支付渠道回传和下方查单结果为准。</p></>}
       <button type="button" className="cashier-quiet-action" onClick={() => setOnlineAction(null)}>暂时收起</button>
-    </div> : blocked ? <div className="cashier-channel-pending"><p>已有线上支付“{shortReference(activeOnlinePayment.publicId)}”正在等待明确结果。若现场确认未收到款，可直接按未到账重新收款；旧渠道若随后到账，会自动保留在收工退款/对账待办。</p><div className="cashier-action-row"><button type="button" className="cashier-primary-action" disabled={busyKey !== null} onClick={() => void releaseUnresolvedPayment()}><RefreshCcw size={16} />按未到账重新收款</button></div></div> : <>
+    </div> : blocked ? <div className="cashier-channel-pending"><p>已有线上支付“{shortReference(activeOnlinePayment.publicId)}”正在等待明确结果。改用现金、POS或再次线上收款前，必须先查单并关闭原线上单。</p><div className="cashier-action-row"><button type="button" className="cashier-primary-action" disabled={busyKey !== null} onClick={() => void closeUnresolvedPaymentBeforeReplacement()}><RefreshCcw size={16} />查单并关闭后改收款</button></div><p>渠道结果未知、已成功或关单失败时，系统会继续阻止其他收款方式。</p></div> : <>
       {unpresentedOnlinePayment !== undefined && <p className="cashier-guidance">系统发现一笔尚未向支付渠道发起的线上记录。登记现场收款时会在同一笔操作中安全关闭该记录，不需要客人继续线上待支付。</p>}
       {provider === null ? <div className="cashier-action-row">
         {canCreateOnline && <button type="button" className="cashier-primary-action" disabled={busyKey !== null} onClick={() => void createPayment('native_qr')}><QrCode size={17} />出示付款二维码</button>}
@@ -966,6 +964,8 @@ function ActivityCashierRegistrationCard({ registration, auth, actions, busyKey,
   const [recollectionReason, setRecollectionReason] = useState('')
   const [refundReason, setRefundReason] = useState('')
   const payment = registration.payment
+  const lateSuccessPayments = registration.lateSuccessPayments ?? []
+  const hasUnrefundedLateSuccess = lateSuccessPayments.length > 0
   const refund = payment?.refunds[0] ?? null
   const recollectionAuthorization = registration.recollectionAuthorization ?? null
   const isRefunded = registration.paymentStatus === 'refunded' || registration.status === 'refunded'
@@ -980,7 +980,7 @@ function ActivityCashierRegistrationCard({ registration, auth, actions, busyKey,
       || (provider === 'physical_pos' && actions.canRecordManualPos)
       || (provider === 'external_manual' && actions.canRecordManualExternal))
   const needsAuthorization = isRefunded && dueMinor > 0 && recollectionAuthorization === null
-  const canCollect = dueMinor > 0 && refund === null && !onlineActionPending
+  const canCollect = dueMinor > 0 && refund === null && !onlineActionPending && !hasUnrefundedLateSuccess
     && (!needsAuthorization)
     && (actions.canRecordManualCash || actions.canRecordManualPos || actions.canRecordManualExternal)
   const canRequestRefund = payment !== null && payment.remainingRefundableMinor > 0
@@ -1011,7 +1011,7 @@ function ActivityCashierRegistrationCard({ registration, auth, actions, busyKey,
   return <article className="cashier-order cashier-activity-registration" data-cashier-activity-registration-id={registration.id}>
     <button type="button" className="cashier-order-toggle" aria-expanded={expanded} onClick={onToggle}>
       <span><b>{registration.activityTitle}</b><small>{shortReference(registration.publicId)} · {registration.partySize} 人 · {formatTime(registration.startsAt)}</small></span>
-      <span><strong>¥{formatAmount(isRefunded ? registration.paidAmountMinor : dueMinor)}</strong><em>{paymentStatusLabel(registration.paymentStatus)}</em></span>
+      <span><strong>¥{formatAmount(isRefunded ? registration.paidAmountMinor : dueMinor)}</strong><em>{hasUnrefundedLateSuccess ? `旧款待退款 ${lateSuccessPayments.length} 笔` : paymentStatusLabel(registration.paymentStatus)}</em></span>
       <ChevronDown size={18} className={expanded ? 'is-open' : ''} />
     </button>
     {expanded && <div className="cashier-order-detail">
@@ -1022,6 +1022,30 @@ function ActivityCashierRegistrationCard({ registration, auth, actions, busyKey,
       </section>
       <section>
         <h3>收款、退款与受控重收</h3>
+        {hasUnrefundedLateSuccess && <div className="cashier-channel-pending">
+          <strong>旧报名付款晚到成功，需先退款处理</strong>
+          <p>以下旧周期收款不会记入当前报名，也不能被忽略。所有仍有可退余额的旧款完成退款前，系统会阻止当前报名继续收款。</p>
+          <label className="cashier-field"><span>旧款退款原因</span><textarea value={refundReason} maxLength={1000} placeholder="至少2个字；说明旧付款晚到成功，需要原路退款" onChange={(event) => setRefundReason(event.target.value)} /></label>
+          {lateSuccessPayments.map((lateSuccessPayment) => {
+            const canRequestLateRefund = mayRequestLateSuccessRefund(
+              lateSuccessPayment,
+              actions.canRequestRefund,
+            )
+            return <div className="cashier-line" key={lateSuccessPayment.publicId}>
+              <span><b>旧款 {shortReference(lateSuccessPayment.publicId)}</b><small>到账 ¥{formatAmount(lateSuccessPayment.amountMinor)} · 仍需原路退 ¥{formatAmount(lateSuccessPayment.remainingRefundableMinor)}</small></span>
+              <span>
+                {lateSuccessPayment.refundStatus !== null && <small>最近退款：{refundStatusLabel(lateSuccessPayment.refundStatus)}</small>}
+                {canRequestLateRefund && <button type="button" className="cashier-danger-action" disabled={busyKey !== null || refundReason.trim().length < 2} onClick={() => void onMutation(
+                  `activity-late-success-refund-${registration.id}-${lateSuccessPayment.publicId}`,
+                  `/api/staff/community-activity-registrations/${encodeURIComponent(registration.publicId)}/refunds`,
+                  { paymentPublicId: lateSuccessPayment.publicId, reason: refundReason.trim() },
+                  '旧报名的延迟到账退款申请已提交，等待非申请人复核。',
+                )}>{lateSuccessRefundActionLabel(lateSuccessPayment.refundStatus)}</button>}
+              </span>
+            </div>
+          })}
+          {!actions.canRequestRefund && <p className="cashier-guidance">当前账号不能发起退款，请交给有退款申请权限的收银或管理人员。</p>}
+        </div>}
         {onlineActionPending && <p className="cashier-channel-pending">这笔活动付款已经向线上渠道发起，系统已锁定其他收款入口。请先等待或查询渠道结果，避免重复收款。</p>}
         {needsAuthorization && <div className="cashier-manual-collection is-blocked">
           <div><strong>退款后重新收款</strong><small>退款已释放活动名额和套餐库存；重新收款前会重新校验活动名额、套餐名额和物料库存。</small></div>
@@ -1506,6 +1530,28 @@ function manualCollectionAmountLabel(provider: 'cash' | 'physical_pos' | 'extern
 function paymentStatusLabel(value: string): string {
   return ({ created: '待提交', pending: '待支付', succeeded: '已收款', failed: '支付失败', closed: '已关闭', partially_refunded: '部分已退', refunded: '已全退', unpaid: '未支付', partially_paid: '部分支付', paid: '已支付' } as Record<string, string>)[value] ?? value
 }
+
+type LateSuccessPayment = NonNullable<CashierWorkbenchActivityRegistration['lateSuccessPayments']>[number]
+
+/** A failed, rejected, or cancelled refund no longer reserves money. */
+export function mayRequestLateSuccessRefund(
+  payment: Readonly<LateSuccessPayment>,
+  canRequestRefund: boolean,
+): boolean {
+  if (!canRequestRefund || payment.remainingRefundableMinor <= 0) return false
+  return payment.refundStatus === null
+    || payment.refundStatus === 'rejected'
+    || payment.refundStatus === 'failed'
+    || payment.refundStatus === 'cancelled'
+    || payment.refundStatus === 'succeeded'
+}
+
+function lateSuccessRefundActionLabel(status: LateSuccessPayment['refundStatus']): string {
+  if (status === 'rejected' || status === 'failed' || status === 'cancelled') return '重新发起原款退款'
+  if (status === 'succeeded') return '发起剩余退款'
+  return '发起旧款退款'
+}
+
 function refundStatusLabel(value: string): string {
   return ({ requested: '待收银复核', approved: '复核通过待执行', rejected: '复核驳回', processing: '处理中', succeeded: '已退款', failed: '退款失败', cancelled: '已取消' } as Record<string, string>)[value] ?? value
 }

@@ -167,6 +167,17 @@ export interface ReleaseUnresolvedPaymentForRetryCommand extends CommandMetadata
   reason: string
 }
 
+/**
+ * Authorizes the staff-side, provider-backed close operation.  The command is
+ * intentionally only an audited permission and table-scope decision: a
+ * remote provider query/close must happen outside the database transaction,
+ * and only its verified result may change the payment status.
+ */
+export interface AuthorizeProviderCloseForReplacementCommand extends CommandMetadata {
+  paymentId: string
+  reason: string
+}
+
 export class PaymentCommandService {
   constructor(
     private readonly commands: Pick<NormalizedCommandExecutor, 'execute'>,
@@ -262,6 +273,45 @@ export class PaymentCommandService {
           eventType: 'payment.unresolved_retry_released.v1',
           payload: paymentToJson(payment),
         }],
+      }
+    })
+  }
+
+  authorizeProviderCloseForReplacement(
+    input: Readonly<AuthorizeProviderCloseForReplacementCommand>,
+  ): Promise<CommandExecution<Payment>> {
+    const employeeId = requireEmployee(input.actor, 'Provider close before replacement collection')
+    return this.commands.execute(command(input, 'payment.provider-close-authorize', paymentCodec), async (transaction) => {
+      await this.authorization.assertEmployeeCapability({
+        transaction,
+        employeeId,
+        capability: 'payment.initiate.staff',
+      })
+      await this.authorization.assertEmployeeCapability({
+        transaction,
+        employeeId,
+        capability: 'reconciliation.view',
+      })
+      const payments = new PaymentRepository(transaction)
+      const payment = await payments.prepareOrderPaymentForProviderClose(input.paymentId)
+      if (payment.orderId === null) throw new Error('order payment lost its order target')
+      await this.authorization.assertEmployeeOrderAccess({
+        transaction,
+        employeeId,
+        orderId: payment.orderId,
+      })
+      return {
+        result: payment,
+        auditEvents: [{
+          actor: input.actor,
+          action: 'payment.provider_close_authorized',
+          objectType: 'payment',
+          objectId: payment.id,
+          businessDate: input.businessDate,
+          afterData: paymentToJson(payment),
+          reason: input.reason,
+        }],
+        outboxMessages: [],
       }
     })
   }

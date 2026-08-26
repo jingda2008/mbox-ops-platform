@@ -16,7 +16,7 @@ describe('ActivityPaymentService', () => {
     const cases = [
       { overrides: { payment_status: 'not_required', authoritative_payment_status: null }, state: 'not_required', actions: ['cancel_registration'] },
       { overrides: {}, state: 'action_required', actions: ['start_payment', 'cancel_registration'] },
-      { overrides: { provider_action_state: 'ready' }, state: 'pending', actions: ['query_payment'] },
+      { overrides: { provider_action_state: 'ready' }, state: 'pending', actions: ['start_payment', 'query_payment', 'cancel_registration'] },
       { overrides: { provider_action_state: 'unknown' }, state: 'unknown', actions: ['query_payment'] },
       { overrides: { payment_status: 'paid', authoritative_payment_status: 'succeeded' }, state: 'confirmed', actions: [] },
       { overrides: { authoritative_payment_status: 'failed' }, state: 'failed', actions: ['cancel_registration'] },
@@ -58,6 +58,16 @@ describe('ActivityPaymentService', () => {
     expect(result.providerAction?.payload).toEqual({
       timeStamp: '1', nonceStr: 'nonce', package: 'prepay_id=1', signType: 'RSA', paySign: 'signature',
     })
+  })
+
+  it('does not create an invisible QR action for a historical non-JSAPI activity payment', async () => {
+    const create = vi.fn()
+    const service = serviceFor({ ...paymentRow(), payment_method: 'native_qr' }, { create })
+
+    await expect(service.createAction(publicContext(), {
+      registrationPublicId, clientIp: '127.0.0.1', idempotencyKey: 'activity-legacy-qr-key-0001',
+    })).rejects.toMatchObject({ code: 'ACTIVITY_PAYMENT_METHOD_UNSUPPORTED', statusCode: 409 })
+    expect(create).not.toHaveBeenCalled()
   })
 
   it('preserves an unknown provider result and never records it as success', async () => {
@@ -106,6 +116,52 @@ describe('ActivityPaymentService', () => {
     }))
   })
 
+  it('queries and closes the one unpaid activity payment before cancellation can release a seat', async () => {
+    const recordProviderQueryResult = vi.fn(async () => ({ value: {}, replayed: false }))
+    const close = vi.fn(async () => ({
+      context: { publicId: 'activity-payment-service-test' },
+      verifiedObservationId: '91000000-0000-4000-8000-000000000008',
+      observation: {
+        providerTransactionId: 'POSTAR-ACTIVITY-CLOSE-0001',
+        status: 'closed' as const, amount: 2000, currency: 'CNY',
+        settlementChannel: 'wechat' as const, occurredAt: '2026-08-16T12:02:00.000Z',
+      },
+    }))
+    const service = serviceFor(
+      { ...paymentRow(), provider_action_state: 'ready' },
+      { close },
+      { recordProviderQueryResult },
+    )
+
+    await service.prepareCancellation(publicContext(), {
+      registrationPublicId, idempotencyKey: 'activity-cancel-close-service-key-0001',
+    })
+
+    expect(close).toHaveBeenCalledWith(expect.objectContaining({
+      paymentId,
+      principal: { type: 'guest', tableSessionId: null, customerId },
+      closeBindingId: expect.stringMatching(/^activity-close-[a-f0-9]{64}$/),
+    }))
+    expect(recordProviderQueryResult).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'closed',
+      verifiedObservationId: '91000000-0000-4000-8000-000000000008',
+    }))
+  })
+
+  it('does not release a registration when the provider close cannot determine the outcome', async () => {
+    const recordProviderQueryResult = vi.fn()
+    const service = serviceFor(
+      { ...paymentRow(), provider_action_state: 'ready' },
+      { close: vi.fn(async () => { throw new OnlinePaymentUnknownError() }) },
+      { recordProviderQueryResult },
+    )
+
+    await expect(service.prepareCancellation(publicContext(), {
+      registrationPublicId, idempotencyKey: 'activity-cancel-unknown-service-key-0001',
+    })).rejects.toMatchObject({ code: 'ACTIVITY_PAYMENT_RESULT_UNKNOWN', statusCode: 409 })
+    expect(recordProviderQueryResult).not.toHaveBeenCalled()
+  })
+
   it('starts a paid activity refund through the existing maker-checker command', async () => {
     const requestActivityRefund = vi.fn(async () => ({ value: { status: 'requested' }, replayed: false }))
     const service = serviceFor(
@@ -127,7 +183,7 @@ describe('ActivityPaymentService', () => {
 
 function serviceFor(
   source: Record<string, unknown> | (() => Record<string, unknown>),
-  onlineOverrides: Partial<{ create: (...args: never[]) => unknown; query: (...args: never[]) => unknown }> = {},
+  onlineOverrides: Partial<{ create: (...args: never[]) => unknown; query: (...args: never[]) => unknown; close: (...args: never[]) => unknown }> = {},
   commandOverrides: Partial<{ recordProviderQueryResult: (...args: never[]) => unknown; requestActivityRefund: (...args: never[]) => unknown }> = {},
 ) {
   const transactions = {
@@ -147,6 +203,7 @@ function serviceFor(
     {
       create: vi.fn(async () => { throw new Error('unexpected create') }),
       query: vi.fn(async () => { throw new Error('unexpected query') }),
+      close: vi.fn(async () => { throw new Error('unexpected close') }),
       ...onlineOverrides,
     } as never,
   )
@@ -160,11 +217,12 @@ function paymentRow(): Record<string, unknown> {
   return {
     registration_id: '91000000-0000-4000-8000-000000000006',
     registration_public_id: registrationPublicId,
-    registration_status: 'payment_pending', payment_status: 'pending',
+    registration_status: 'payment_pending', registration_cycle: 1, payment_status: 'pending',
     amount_due_minor: '2000', paid_amount_minor: '0', currency: 'CNY',
     seat_hold_expires_at: '2026-08-16T12:15:00.000Z',
     activity_starts_at: '2099-08-18T12:00:00.000Z',
     payment_id: paymentId, payment_public_id: 'activity-payment-service-test',
+    payment_method: 'jsapi',
     authoritative_payment_status: 'pending', provider_action_state: null, refund_status: null,
   }
 }

@@ -55,6 +55,12 @@ export interface TableScanInput {
   tableQrToken: string
   deviceFingerprint: string
   businessDate: string
+  /**
+   * Optional server-resolved WeChat customer.  This is never accepted from the
+   * request body; it lets a mini-program table session use the same canonical
+   * customer identity as its JSAPI payer.
+   */
+  customerId?: string
 }
 
 export type TableScanResult =
@@ -329,6 +335,7 @@ export class GuestSessionRepository {
     ])
     const current = existing.rows[0]
     if (current
+      && current.customer_id === input.customerId
       && new Date(input.issuedAt).getTime() - new Date(current.issued_at).getTime() < 5_000
       && new Date(current.expires_at).getTime() > new Date(input.issuedAt).getTime()) {
       await this.recordEvent({
@@ -707,17 +714,17 @@ export class GuestSessionService {
         }
       }
 
-      const identity = await this.identities.resolveAnonymous({
+      const customerId = input.customerId ?? (await this.identities.resolveAnonymous({
         transaction,
         identityHash: deviceHash,
         publicId: this.randomPublicId(),
         businessDate: input.businessDate,
-      })
+      })).customerId
       let issuance: Awaited<ReturnType<GuestSessionRepository['issueTableSession']>>
       try {
         issuance = await repository.issueTableSession({
           credential,
-          customerId: identity.customerId,
+          customerId,
           tokenHash,
           deviceHash,
           issuedAt: issuedAt.toISOString(),

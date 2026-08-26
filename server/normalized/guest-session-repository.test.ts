@@ -208,6 +208,48 @@ integration('normalized guest sessions with PostgreSQL', () => {
     expect(authentication.filter((result) => result.status === 'rejected')).toHaveLength(0)
   })
 
+  it('does not coalesce an anonymous table scan with a later WeChat customer scan on the same device', async () => {
+    const resolvedWechatCustomer = await transactions.run({ tenantId, storeId }, async (transaction) => {
+      const created = await new CustomerRepository(transaction).createAnonymous({
+        publicId: `wechat-table-scan-${randomUUID()}`,
+        identityHash: randomUUID().replaceAll('-', '').repeat(2),
+        profile: {},
+      })
+      return created.customer.id
+    })
+    const deviceFingerprint = 'wechat-identity-rescan-device-001'
+    const anonymous = await service.scanTable({
+      scope: { tenantId, storeId },
+      tableQrToken: fixedQr,
+      deviceFingerprint,
+      businessDate: '2026-08-11',
+    })
+    expect(anonymous.status).toBe('active')
+    if (anonymous.status !== 'active') throw new Error('anonymous scan did not create a table session')
+
+    const wechat = await service.scanTable({
+      scope: { tenantId, storeId },
+      tableQrToken: fixedQr,
+      deviceFingerprint,
+      businessDate: '2026-08-11',
+      customerId: resolvedWechatCustomer,
+    })
+    expect(wechat.status).toBe('active')
+    if (wechat.status !== 'active') throw new Error('WeChat scan was incorrectly coalesced')
+    expect(wechat.session.customerId).toBe(resolvedWechatCustomer)
+
+    await expect(service.authenticate({
+      scope: { tenantId, storeId },
+      sessionToken: anonymous.sessionToken,
+      deviceFingerprint,
+    })).rejects.toBeInstanceOf(GuestTableSessionEndedError)
+    await expect(service.authenticate({
+      scope: { tenantId, storeId },
+      sessionToken: wechat.sessionToken,
+      deviceFingerprint,
+    })).resolves.toMatchObject({ customerId: resolvedWechatCustomer })
+  })
+
   it('enforces the per-device fixed-table scan limit in PostgreSQL', async () => {
     const scan = () => service.scanTable({
       scope: { tenantId, storeId },

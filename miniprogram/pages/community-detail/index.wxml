@@ -84,8 +84,9 @@
     <view class="detail-dock">
       <view><text>{{previewOnly ? '活动公开预览' : (registration ? registration.statusText : (activity.registrationBlocked ? '暂不开放' : (selectedPricing ? selectedPricing.feeText : activity.feeText)))}}</text><text>{{previewOnly ? '加入会员后查看真实名额与付款' : (registration ? (registration.stateGuide || registration.resolutionText || '请在“我的活动”中查看状态') : (activity.registrationBlocked ? '报名条件暂未开放' : activity.remainingCapacity > 0 ? ('剩余 ' + activity.remainingCapacity + ' 位') : '名额已满，可加入候补'))}}</text></view>
       <button wx:if="{{previewOnly}}" disabled="{{busy}}" loading="{{busy}}" bindtap="openMembershipInvite">查看报名与入会</button>
+      <button wx:elif="{{wechatIdentityRefreshRequired}}" class="payment-button" loading="{{busy}}" bindtap="refreshWechatIdentityAndRetry">{{registration && registration.canStartPayment ? '刷新身份后付款' : '刷新身份后提交'}}</button>
       <button wx:elif="{{!registration || registration.canReRegister}}" disabled="{{busy}}" loading="{{busy}}" bindtap="register">{{activity.registrationBlocked || (selectedPricing && selectedPricing.paymentAvailability === 'blocked') ? '暂不开放' : registration && registration.canReRegister ? '重新报名' : activity.remainingCapacity <= 0 ? '加入候补' : selectedPricing && selectedPricing.requiresPaymentOnSubmit ? '提交报名并支付' : selectedPricing && selectedPricing.feeAmountMinor > 0 ? '提交报名' : '免费报名'}}</button>
-      <button wx:elif="{{registration.canStartPayment}}" class="payment-button" loading="{{busy}}" bindtap="startPayment">完成支付</button>
+      <button wx:elif="{{registration.canStartPayment}}" class="payment-button" loading="{{busy}}" bindtap="startPayment">继续付款</button>
       <button wx:elif="{{registration.canQueryPayment}}" loading="{{busy}}" bindtap="queryPayment">查询付款结果</button>
       <button wx:elif="{{registration.canCancelDirectly}}" class="cancel-button" loading="{{busy}}" bindtap="cancelRegistration">取消报名</button>
       <button wx:elif="{{registration.requiresManualCancellation}}" class="cancel-button" bindtap="showCancellationHelp">退款与联系</button>

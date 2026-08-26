@@ -17,6 +17,7 @@ export const POSTAR_ENDPOINTS = {
   createJsapiPayment: '/yyfsevr/order/pay',
   createQrPayment: '/yyfsevr/order/getCodeUrl',
   createBarcodePayment: '/yyfsevr/order/scanByMerchant',
+  closePayment: '/yyfsevr/order/closePay',
   queryPayment: '/yyfsevr/order/orderQuery',
   queryRefund: '/yyfsevr/order/refundQuery',
   refund: '/yyfsevr/order/refund',

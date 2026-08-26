@@ -295,6 +295,9 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     transactions,
     options.config.secret,
     options.config.payment,
+    undefined,
+    undefined,
+    wechatIdentity,
   )
   const businessClock = new PostgresNormalizedBusinessClock(transactions)
   const trustedScope = fixedStoreScopeResolver(scope)
@@ -459,6 +462,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       sessions: guestSessions,
       requestContext: guestContext,
       businessClock,
+      resolveWechatCustomer: resolveWechatTableScanCustomer,
       loadTableOverview: (currentScope, tableSessionId) => transactions.run(
         currentScope,
         async (transaction) => {
@@ -960,8 +964,8 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
         resolveStaffContext: staffReservationContext,
         protectContact: (value) => activityContactProtection.protect(value),
         activityPayments,
-        resolveActivityPaymentMethod: (currentScope, customerId) => (
-          onlinePayments.resolveGuestMethod(currentScope, customerId)
+        resolveActivityPaymentReady: (currentScope, customerId) => (
+          onlinePayments.isGuestJsapiReady(currentScope, customerId)
         ),
         notificationConsentPolicy: options.config.wechatNotification,
         membershipRecovery,
@@ -1076,6 +1080,39 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
         return { customerId: created.customer.id, actorRef: `customer:${created.customer.id}` }
       },
     }
+  }
+
+  /**
+   * A table scan may optionally carry the mini-program identity bearer.  It is
+   * parsed only by the scan route (never by ordinary guest-cookie endpoints),
+   * verified against the configured WeChat app and then resolved to the same
+   * canonical customer used by JSAPI.  A missing/expired bearer remains a
+   * browse-only anonymous table session; it is not treated as a caller-supplied
+   * customer id.
+   */
+  async function resolveWechatTableScanCustomer(
+    request: FastifyRequest,
+    currentScope: Readonly<StoreScope>,
+  ): Promise<string | null> {
+    if (wechatIdentity === null || options.config.wechatIdentity === null) return null
+    const authorization = request.headers.authorization
+    if (typeof authorization !== 'string') return null
+    const matched = /^Bearer ([A-Za-z0-9_-]{32,256})$/.exec(authorization.trim())
+    if (!matched?.[1]) return null
+    const tokenHash = createHash('sha256').update(matched[1]).digest('base64url')
+    const session = await wechatIdentity.findSession(tokenHash)
+    if (session === null || session.revokedAt !== null || session.expiresAt <= Date.now()) return null
+    const principal = session.principal
+    if (principal.tenantId !== currentScope.tenantId || principal.storeId !== currentScope.storeId
+      || principal.appId !== options.config.wechatIdentity.appId) return null
+    const principalHash = createHash('sha256').update(`wechat:${principal.principalId}`).digest('hex')
+    return transactions.run(currentScope, async (transaction) => {
+      const customers = new CustomerRepository(transaction)
+      const existing = await customers.findByIdentity('wechat', principalHash)
+      if (existing !== null) return existing.id
+      const created = await customers.createAnonymous({ publicId: `wechat-${principalHash.slice(0, 40)}` })
+      return (await customers.linkIdentity(created.customer.id, 'wechat', principalHash)).id
+    })
   }
 
   async function authenticateReservationGuest(request: FastifyRequest) {

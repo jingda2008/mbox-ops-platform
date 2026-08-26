@@ -42,6 +42,7 @@ const payment: Payment = {
   payableKind: 'order',
   orderId,
   activityRegistrationId: null,
+  activityRegistrationCycle: null,
   publicId: 'payment-public-0001',
   provider: 'postar',
   providerTransactionId: null,
@@ -142,11 +143,11 @@ function fixture(overrides: Partial<PaymentApiOptions> = {}) {
       },
       replayed: false,
     })),
-    recordProviderQueryResult: vi.fn(async () => ({
+    recordProviderQueryResult: vi.fn(async (input: { status: Payment['status']; providerTransactionId: string }) => ({
       value: {
         ...payment,
-        providerTransactionId: 'POSTAR-TX-0001',
-        status: 'succeeded' as const,
+        providerTransactionId: input.providerTransactionId,
+        status: input.status,
       },
       replayed: false,
     })),
@@ -194,14 +195,7 @@ function fixture(overrides: Partial<PaymentApiOptions> = {}) {
         authorizedByEmployeeId: employeeId, expiresAt: '2026-08-11T13:00:00.000Z', createdAt: '2026-08-11T12:30:00.000Z',
       }, replayed: false,
     })),
-    releaseUnresolvedForRetry: vi.fn(async () => ({
-      value: {
-        ...payment,
-        retryReleasedAt: '2026-08-11T12:10:00.000Z',
-        retryReleaseReason: '顾客未确认到账，重新发起收款',
-      },
-      replayed: false,
-    })),
+    authorizeProviderCloseForReplacement: vi.fn(async () => ({ value: payment, replayed: false })),
   }
   const providerVerifier = {
     verifyPaymentCallback: vi.fn(async () => ({
@@ -306,8 +300,28 @@ function fixture(overrides: Partial<PaymentApiOptions> = {}) {
 }
 
 describe('paymentApiPlugin', () => {
-  it('records a staff decision before an unresolved online payment can be retried', async () => {
-    const value = fixture()
+  it('queries and closes an unresolved online payment before a staff member may change collection method', async () => {
+    const close = vi.fn(async () => ({
+      context: {
+        id: payment.id, orderId: payment.orderId, orderPublicId: 'OORDER0001',
+        publicId: payment.publicId, provider: payment.provider, providerTransactionId: null,
+        method: payment.method, amountMinor: payment.amountMinor, currency: payment.currency,
+        status: payment.status, tableSessionId, tableCode: 'W01', createdAt: payment.createdAt,
+      },
+      observation: {
+        paymentIntentId: payment.publicId, providerTransactionId: 'POSTAR-TX-CLOSED-0001',
+        status: 'closed' as const, amount: payment.amountMinor,
+        providerReportedAmount: payment.amountMinor, currency: payment.currency,
+        settlementChannel: 'wechat' as const, merchantId: trustedMerchant.merchantId,
+        occurredAt: '2026-08-11T12:10:00.000Z',
+      },
+      verifiedObservationId: verifiedPaymentObservationId,
+    }))
+    const value = fixture({
+      onlinePayments: {
+        assertAvailable: vi.fn(), resolveActivePayment: vi.fn(), create: vi.fn(), query: vi.fn(), close,
+      },
+    })
     const response = await value.app.inject({
       method: 'POST',
       url: `/api/payments/${paymentId}/retry-release`,
@@ -317,13 +331,22 @@ describe('paymentApiPlugin', () => {
 
     expect(response.statusCode).toBe(200)
     expect(response.json()).toMatchObject({
-      data: { id: paymentId, retryReleasedAt: '2026-08-11T12:10:00.000Z' },
+      data: { id: paymentId, status: 'closed' },
       meta: { replayed: false },
     })
-    expect(value.commands.releaseUnresolvedForRetry).toHaveBeenCalledWith(expect.objectContaining({
+    expect(value.commands.authorizeProviderCloseForReplacement).toHaveBeenCalledWith(expect.objectContaining({
       paymentId,
       reason: '顾客未确认到账，重新发起收款',
       idempotencyKey: 'payment-retry-release-api-0001',
+    }))
+    expect(close).toHaveBeenCalledWith(expect.objectContaining({
+      paymentId,
+      principal: { type: 'employee', employeeId },
+    }))
+    expect(value.commands.recordProviderQueryResult).toHaveBeenCalledWith(expect.objectContaining({
+      actor: { type: 'integration', ref: 'postar-close-payment' },
+      status: 'closed',
+      providerTransactionId: 'POSTAR-TX-CLOSED-0001',
     }))
   })
 
@@ -336,7 +359,7 @@ describe('paymentApiPlugin', () => {
       payload: {
         orderId,
         provider: 'postar',
-        method: 'native_qr',
+        method: 'jsapi',
       providerSnapshot: { channel: 'QR' },
       },
     })
@@ -351,7 +374,7 @@ describe('paymentApiPlugin', () => {
       orderId,
       publicId: 'payment-generated-0001',
       provider: 'postar',
-      method: 'native_qr',
+      method: 'jsapi',
       principal: { type: 'guest', tableSessionId, customerId, guestSessionId },
       providerSnapshot: { channel: 'QR' },
     }))
@@ -589,6 +612,15 @@ describe('paymentApiPlugin', () => {
     expect(guestResponse.statusCode).toBe(403)
     expect(guest.commands.initiate).not.toHaveBeenCalled()
 
+    const guestQr = await guest.app.inject({
+      method: 'POST', url: '/api/payments',
+      headers: { 'idempotency-key': 'guest-forged-native-qr-0001' },
+      payload: { orderId, provider: 'postar', method: 'native_qr' },
+    })
+    expect(guestQr.statusCode).toBe(503)
+    expect(guestQr.json()).toMatchObject({ error: { code: 'ONLINE_PAYMENT_UNAVAILABLE' } })
+    expect(guest.commands.initiate).not.toHaveBeenCalled()
+
     const employee = fixture({ resolveActorContext: () => ({
       scope: { tenantId, storeId }, actor: { type: 'employee', employeeId }, businessDate: '2026-08-11',
     }) })
@@ -599,6 +631,16 @@ describe('paymentApiPlugin', () => {
     })
     expect(employeeResponse.statusCode).toBe(400)
     expect(employee.commands.initiate).not.toHaveBeenCalled()
+
+    const employeeQr = await employee.app.inject({
+      method: 'POST', url: '/api/payments',
+      headers: { 'idempotency-key': 'staff-native-qr-0001' },
+      payload: { orderId, provider: 'postar', method: 'native_qr' },
+    })
+    expect(employeeQr.statusCode).toBe(201)
+    expect(employee.commands.initiate).toHaveBeenCalledWith(expect.objectContaining({
+      principal: { type: 'employee', employeeId }, method: 'native_qr',
+    }))
   })
 
   it('actively queries a signed provider result and applies it through the command boundary', async () => {
@@ -1414,7 +1456,7 @@ describe('paymentApiPlugin', () => {
       payload: {
         orderId,
         provider: 'postar',
-        method: 'native_qr',
+        method: 'jsapi',
         providerSnapshot: {
           channel: 'QR',
           signatureVerified: true,
@@ -1500,5 +1542,6 @@ function fixtureCommands(): PaymentApiOptions['commands'] {
         authorizedByEmployeeId: employeeId, expiresAt: '2026-08-11T13:00:00.000Z', createdAt: '2026-08-11T12:30:00.000Z',
       }, replayed: false,
     })),
+    authorizeProviderCloseForReplacement: vi.fn(async () => ({ value: payment, replayed: false })),
   }
 }

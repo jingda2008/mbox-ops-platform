@@ -11,6 +11,7 @@ const {
   getMiniBootstrap,
   enrollMembership,
 } = require('../../utils/api')
+const { ensureCustomerSession } = require('../../utils/auth')
 const { randomId } = require('../../utils/id')
 const { money, dateTime } = require('../../utils/format')
 const { publicImageUrl } = require('../../utils/media')
@@ -406,6 +407,10 @@ Page({
     previewOnly: false, memberAccessRequested: false,
     membership: null, membershipTerms: null,
     membershipInviteVisible: false, membershipInviteAgreed: false, membershipInviteBusy: false,
+    // A paid-activity preflight can refuse before it creates a registration.
+    // Keep the next action explicit so the customer can force a fresh wx.login
+    // rather than merely being told to re-enter an app that may reuse a cache.
+    wechatIdentityRefreshRequired: false,
   },
 
   onLoad(options) {
@@ -769,7 +774,7 @@ Page({
       attempts[activity.publicId] = attempt
       wx.setStorageSync(REGISTRATION_ATTEMPTS_KEY, attempts)
     }
-    this.setData({ busy: true, error: '', success: '' })
+    this.setData({ busy: true, error: '', success: '', wechatIdentityRefreshRequired: false })
     try {
       const payload = Object.assign({}, attempt.payload, { contactSnapshot: { channel: 'miniprogram', contact } })
       const result = await registerActivity(
@@ -803,6 +808,16 @@ Page({
     } catch (error) {
       const recovered = await this.recoverRegistration(activity.publicId, attempt)
       if (recovered) return
+      if (error && error.code === 'WECHAT_IDENTITY_REQUIRED') {
+        // Paid-activity identity is checked before any registration, capacity,
+        // inventory, or payment write. Do not leave a misleading retry record.
+        this.clearRegistrationAttempt(activity.publicId)
+        this.setData({
+          wechatIdentityRefreshRequired: true,
+          error: '微信支付身份需要刷新。本次报名尚未创建，也没有占用名额；请点击下方按钮刷新身份后重新提交。',
+        })
+        return
+      }
       const detail = registrationFailureMessage(error)
       if (shouldClearRegistrationAttempt(error)) {
         this.clearRegistrationAttempt(activity.publicId)
@@ -908,7 +923,7 @@ Page({
       : { idempotencyKey: commandKey('activity-payment', registration.publicId), paymentPublicId: paymentPublicId || '', createdAt: new Date().toISOString() }
     stored[registration.publicId] = attempt
     wx.setStorageSync(PAYMENT_ACTION_ATTEMPTS_KEY, stored)
-    this.setData({ busy: true, error: '', success: '' })
+    this.setData({ busy: true, error: '', success: '', wechatIdentityRefreshRequired: false })
     try {
       const result = await startActivityRegistrationPayment(registration.publicId, attempt.idempotencyKey)
       const action = result && (result.providerAction || result)
@@ -938,8 +953,33 @@ Page({
       }
     } catch (error) {
       await this.refreshPaymentState(false)
-      this.setData({ error: customerErrorMessage(error, '支付动作结果暂时无法确认，请先查单，不要重复付款。') })
+      const identityRefreshRequired = Boolean(error && error.code === 'WECHAT_IDENTITY_REQUIRED')
+      this.setData({
+        wechatIdentityRefreshRequired: identityRefreshRequired,
+        error: identityRefreshRequired
+          ? '报名已保留，付款尚未发起。请点击下方按钮刷新微信身份并继续付款，不要重复报名。'
+          : customerErrorMessage(error, '支付动作结果暂时无法确认，请先查单，不要重复付款。'),
+      })
     } finally { this.setData({ busy: false }) }
+  },
+
+  async refreshWechatIdentityAndRetry() {
+    if (this.data.busy || !this.data.wechatIdentityRefreshRequired) return
+    const resumePayment = Boolean(this.data.registration && this.data.registration.canStartPayment)
+    this.setData({ busy: true, error: '', success: '' })
+    try {
+      // `true` deliberately bypasses the locally cached identity expiry, which
+      // makes this a real wx.login recovery step instead of a cosmetic retry.
+      await ensureCustomerSession(true)
+    } catch (error) {
+      this.setData({ error: customerErrorMessage(error, '微信身份暂时无法刷新，请稍后再试。') })
+      return
+    } finally {
+      this.setData({ busy: false })
+    }
+    this.setData({ wechatIdentityRefreshRequired: false })
+    if (resumePayment) return this.startPayment()
+    return this.register()
   },
 
   async queryPayment() {

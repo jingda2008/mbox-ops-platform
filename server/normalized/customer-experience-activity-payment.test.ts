@@ -20,9 +20,13 @@ import {
 } from './customer-experience-service.js'
 import { protectActivityRegistrationContact } from './customer-experience-api.js'
 import { activitySharePreviewApiPlugin } from './activity-share-preview-api.js'
-import { PaymentRepository } from './payment-repository.js'
+import {
+  ActivityPaymentLateSuccessRefundRequiredError,
+  PaymentRepository,
+} from './payment-repository.js'
 import { RefundRepository } from './refund-repository.js'
 import { ActivityRecollectionAuthorizationRepository } from './activity-recollection-authorization-repository.js'
+import { PostgresCashierWorkbenchQuery } from './cashier-workbench-query.js'
 import { NormalizedCommandExecutor } from './command-executor.js'
 import {
   ScopedPostgresTransactionRunner,
@@ -228,7 +232,7 @@ describe('activity payment configuration', () => {
       acknowledgedSafetyPolicyVersion: 'safety-2026-08',
       acknowledgedRefundPolicyVersion: 'refund-v1',
       paymentChoice: 'deposit',
-      paymentMethod: 'native_qr',
+      paymentMethod: 'jsapi', jsapiReady: true,
       paymentPublicId: 'activity-payment-test-public-0001',
       publicId: 'activity-registration-test-0001',
       idempotencyKey: 'activity-payment-test-0001',
@@ -236,6 +240,21 @@ describe('activity payment configuration', () => {
       code: 'ACTIVITY_PAYMENT_AUTHORITY_NOT_CONFIGURED',
       statusCode: 503,
     })
+  })
+
+  it('preflights the WeChat JSAPI identity before a paid registration creates a seat or payment', async () => {
+    const transaction = activityTransaction('deposit_required', 'per_person', 10_000, 2_000, false, true, 'public', true)
+    await expect(new CustomerExperienceRepository(transaction, true).registerActivity({
+      activityPublicId: 'community-activity-test-0001', customerId, partySize: 1,
+      protectedContact, termsAcknowledged: true,
+      acknowledgedSafetyPolicyVersion: 'safety-2026-08',
+      acknowledgedRefundPolicyVersion: 'refund-v1', paymentChoice: 'deposit',
+      paymentMethod: 'jsapi', jsapiReady: false,
+      paymentPublicId: 'activity-payment-identity-required-0001',
+      publicId: 'activity-registration-identity-required-0001',
+      idempotencyKey: 'activity-payment-identity-required-key-0001',
+    })).rejects.toMatchObject({ code: 'WECHAT_IDENTITY_REQUIRED', statusCode: 409 })
+    expect(transaction.lastActivityRegistrationValues).toBeUndefined()
   })
 
   it('requires an M-BOX membership before an activity can be viewed or registered', async () => {
@@ -249,7 +268,7 @@ describe('activity payment configuration', () => {
       protectedContact, termsAcknowledged: true,
       acknowledgedSafetyPolicyVersion: 'safety-2026-08',
       acknowledgedRefundPolicyVersion: 'refund-v1', paymentChoice: 'none',
-      paymentMethod: 'native_qr', paymentPublicId: 'activity-payment-nonmember-0001',
+      paymentMethod: 'jsapi', jsapiReady: true, paymentPublicId: 'activity-payment-nonmember-0001',
       publicId: 'activity-registration-nonmember-0001',
       idempotencyKey: 'activity-registration-nonmember-key-0001',
     })).rejects.toMatchObject({ code: 'ACTIVITY_MEMBERSHIP_REQUIRED', statusCode: 403 })
@@ -293,14 +312,14 @@ describe('activity payment configuration', () => {
       protectedContact, termsAcknowledged: true,
       acknowledgedSafetyPolicyVersion: 'safety-2026-08',
       acknowledgedRefundPolicyVersion: 'refund-v1', paymentChoice: 'deposit',
-      paymentMethod: 'native_qr', paymentPublicId: 'activity-payment-waitlist-0001',
+      paymentMethod: 'jsapi', jsapiReady: true, paymentPublicId: 'activity-payment-waitlist-0001',
       publicId: 'activity-registration-waitlist-0001',
       idempotencyKey: 'activity-payment-waitlist-key-0001',
     })).resolves.toMatchObject({
       status: 'waitlisted', paymentRequired: false, paymentChoice: 'none',
       amountDueMinor: 0, paymentPublicId: null,
     })
-    expect(transaction.lastActivityRegistrationValues?.slice(19,22)).toEqual(['deposit','native_qr',4_000])
+    expect(transaction.lastActivityRegistrationValues?.slice(19,22)).toEqual(['deposit','jsapi',4_000])
   })
 
   it('confirms a genuinely free activity immediately', async () => {
@@ -314,7 +333,7 @@ describe('activity payment configuration', () => {
       acknowledgedSafetyPolicyVersion: 'safety-2026-08',
       acknowledgedRefundPolicyVersion: 'refund-v1',
       paymentChoice: 'none',
-      paymentMethod: 'native_qr',
+      paymentMethod: 'jsapi', jsapiReady: true,
       paymentPublicId: 'activity-payment-test-public-0002',
       publicId: 'activity-registration-test-0002',
       idempotencyKey: 'activity-payment-test-0002',
@@ -339,7 +358,7 @@ describe('activity payment configuration', () => {
       acknowledgedSafetyPolicyVersion: 'safety-2026-08',
       acknowledgedRefundPolicyVersion: 'refund-v1',
       paymentChoice: 'none',
-      paymentMethod: 'native_qr',
+      paymentMethod: 'jsapi', jsapiReady: true,
       paymentPublicId: 'activity-payment-test-public-0003',
       publicId: 'activity-registration-test-0003',
       idempotencyKey: 'activity-payment-test-0003',
@@ -377,6 +396,7 @@ function activityTransaction(
   full = false,
   withMembership = true,
   visibility: 'public' | 'member' | 'segment' = 'public',
+  activityPaymentAuthorized = false,
 ): ScopedTransaction & { lastActivityRegistrationValues?: readonly unknown[] } {
   const transaction: ScopedTransaction & { lastActivityRegistrationValues?: readonly unknown[] } = {
     scope,
@@ -402,7 +422,7 @@ function activityTransaction(
           sales_copy: {}, activity_details: '这是完整活动详情说明', included_items: [],
           participation_requirements: [], contact_instructions: '报名后联系负责人', member_benefit_text: null,
           package_selection_required: false,
-          activity_payment_authorized: false,
+          activity_payment_authorized: activityPaymentAuthorized,
           activity_packages: [{
             publicId: 'activity-package-preview-0001', name: '双人酒水组合', description: '活动专属组合',
             imageUrl: null, includedItems: ['招牌鸡尾酒'], capacity: 8, registeredCount: 0,
@@ -977,7 +997,7 @@ integration('activity registration state and contact privacy with PostgreSQL', (
         acknowledgedSafetyPolicyVersion: 'safety-v1',
         acknowledgedRefundPolicyVersion: 'refund-v1',
         paymentChoice: 'none',
-        paymentMethod: 'native_qr',
+        paymentMethod: 'jsapi', jsapiReady: true,
         publicId: `registration-package-${input.suffix}`,
         paymentPublicId: `payment-package-${input.suffix}`,
         idempotencyKey: `registration-package-key-${input.suffix}`,
@@ -1015,7 +1035,7 @@ integration('activity registration state and contact privacy with PostgreSQL', (
         acknowledgedSafetyPolicyVersion: 'safety-v1',
         acknowledgedRefundPolicyVersion: 'refund-v1',
         paymentChoice: 'none', publicId: 'registration-free-db-test',
-        paymentMethod: 'native_qr', paymentPublicId: 'payment-free-db-test-0001',
+        paymentMethod: 'jsapi', jsapiReady: true, paymentPublicId: 'payment-free-db-test-0001',
         idempotencyKey: 'registration-free-db-key-0001',
       })
     ))
@@ -1065,7 +1085,7 @@ integration('activity registration state and contact privacy with PostgreSQL', (
         acknowledgedSafetyPolicyVersion: 'safety-v1',
         acknowledgedRefundPolicyVersion: 'refund-v1',
         paymentChoice: 'none', publicId: 'registration-free-db-again',
-        paymentMethod: 'native_qr', paymentPublicId: 'payment-free-db-test-0002',
+        paymentMethod: 'jsapi', jsapiReady: true, paymentPublicId: 'payment-free-db-test-0002',
         idempotencyKey: 'registration-free-db-key-0002',
       })
     ))
@@ -1114,7 +1134,7 @@ integration('activity registration state and contact privacy with PostgreSQL', (
       acknowledgedSafetyPolicyVersion: 'safety-v1',
       acknowledgedRefundPolicyVersion: 'refund-v1',
       paymentChoice: 'none' as const,
-      paymentMethod: 'native_qr' as const,
+      paymentMethod: 'jsapi' as const, jsapiReady: true,
     }
     const first = await service.registerActivity(context, {
       ...registrationInput,
@@ -1163,7 +1183,7 @@ integration('activity registration state and contact privacy with PostgreSQL', (
         acknowledgedSafetyPolicyVersion: 'safety-v1',
         acknowledgedRefundPolicyVersion: 'refund-v1',
         paymentChoice: 'none', publicId: 'registration-paid-db-test',
-        paymentMethod: 'native_qr', paymentPublicId: 'payment-paid-db-test-0001',
+        paymentMethod: 'jsapi', jsapiReady: true, paymentPublicId: 'payment-paid-db-test-0001',
         idempotencyKey: 'registration-paid-db-key-0001',
       })
     ))).resolves.toMatchObject({ status: 'confirmed', paymentRequired: false, paymentPublicId: null })
@@ -1172,6 +1192,173 @@ integration('activity registration state and contact privacy with PostgreSQL', (
       WHERE tenant_id=$1 AND store_id=$2 AND activity_id=$3
     `, [tenantId, storeId, paidActivityId])
     expect(count.rows[0]?.count).toBe('1')
+  })
+
+  it('closes an unpaid provider action before cancellation, then reuses the registration with a new payment history row', async () => {
+    const retryCustomerId = randomUUID()
+    await pool.query(`
+      WITH customer AS (
+        INSERT INTO mbox.customers(id,tenant_id,store_id,public_id)
+        VALUES($1::uuid,$2::uuid,$3::uuid,$4)
+        RETURNING id,tenant_id,store_id
+      ), membership AS (
+        INSERT INTO mbox.customer_memberships(tenant_id,store_id,customer_id,member_no)
+        SELECT tenant_id,store_id,id,$5 FROM customer
+        RETURNING id,tenant_id,store_id,customer_id
+      )
+      INSERT INTO mbox.loyalty_accounts(tenant_id,store_id,membership_id,customer_id)
+      SELECT tenant_id,store_id,id,customer_id FROM membership
+    `, [
+      retryCustomerId, tenantId, storeId, `customer-${retryCustomerId}`,
+      `MBX-ACTIVITY-RETRY-${retryCustomerId.slice(0, 8).toUpperCase()}`,
+    ])
+    await pool.query(`
+      INSERT INTO mbox.store_commerce_policies(
+        tenant_id,store_id,online_payment_enabled,reason,updated_by_employee_id
+      ) VALUES($1::uuid,$2::uuid,true,'活动关单后重新报名数据库回归',$3::uuid)
+      ON CONFLICT(tenant_id,store_id) DO UPDATE SET
+        online_payment_enabled=true,reason=EXCLUDED.reason,updated_by_employee_id=EXCLUDED.updated_by_employee_id
+    `, [tenantId, storeId, employeeId])
+    await pool.query(`
+      UPDATE mbox.customer_experience_features
+      SET rollout_state='pilot',reason='活动关单后重新报名数据库回归',updated_at=clock_timestamp()
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND feature_code='community.activity.payment'
+    `, [tenantId, storeId])
+
+    const first = await transactions.run(dbScope, (transaction) => (
+      new CustomerExperienceRepository(transaction, true).registerActivity({
+        activityPublicId: 'community-paid-db-test', activityPackagePublicId: 'package-paid-hold-expiry',
+        customerId: retryCustomerId, partySize: 1, protectedContact: dbContact,
+        termsAcknowledged: true, acknowledgedSafetyPolicyVersion: 'safety-v1',
+        acknowledgedRefundPolicyVersion: 'refund-v1', paymentChoice: 'deposit',
+        paymentMethod: 'jsapi', jsapiReady: true,
+        publicId: 'registration-closed-payment-retry-db-test',
+        paymentPublicId: 'payment-closed-payment-retry-old-db-test',
+        idempotencyKey: 'registration-closed-payment-retry-old-key',
+      })
+    ))
+    const firstPayment = await pool.query<{ id: string }>(`
+      SELECT payment.id
+      FROM mbox.payments payment
+      WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid
+        AND payment.public_id='payment-closed-payment-retry-old-db-test'
+    `, [tenantId, storeId])
+    const oldPaymentId = firstPayment.rows[0]!.id
+    await pool.query(`
+      UPDATE mbox.payments SET status='closed',provider_snapshot='{"providerStatus":"closed"}'::jsonb
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+    `, [tenantId, storeId, oldPaymentId])
+    await pool.query(`
+      INSERT INTO mbox.payment_provider_actions(
+        payment_id,tenant_id,store_id,presentation,initiated_by_type,initiated_by_ref,state,expires_at
+      ) VALUES($1::uuid,$2::uuid,$3::uuid,'jsapi','guest',$4::uuid,'creating',clock_timestamp()+interval '10 minutes')
+    `, [oldPaymentId, tenantId, storeId, retryCustomerId])
+
+    const cancelled = await transactions.run(dbScope, (transaction) => (
+      new CustomerExperienceRepository(transaction, true).cancelActivityRegistration({
+        registrationPublicId: first.publicId, customerId: retryCustomerId, reason: '用户关闭支付后取消报名',
+      })
+    ))
+    expect(cancelled).toMatchObject({ publicId: first.publicId, status: 'cancelled', registrationCycle: 1 })
+
+    const reopened = await transactions.run(dbScope, (transaction) => (
+      new CustomerExperienceRepository(transaction, true).registerActivity({
+        activityPublicId: 'community-paid-db-test', activityPackagePublicId: 'package-paid-hold-expiry',
+        customerId: retryCustomerId, partySize: 1, protectedContact: dbContact,
+        termsAcknowledged: true, acknowledgedSafetyPolicyVersion: 'safety-v1',
+        acknowledgedRefundPolicyVersion: 'refund-v1', paymentChoice: 'deposit',
+        paymentMethod: 'jsapi', jsapiReady: true,
+        publicId: 'registration-closed-payment-retry-new-db-test',
+        paymentPublicId: 'payment-closed-payment-retry-new-db-test',
+        idempotencyKey: 'registration-closed-payment-retry-new-key',
+      })
+    ))
+    expect(reopened).toMatchObject({
+      publicId: first.publicId, registrationCycle: 2, status: 'payment_pending',
+      paymentPublicId: 'payment-closed-payment-retry-new-db-test',
+    })
+    const paymentHistory = await pool.query<{
+      registration_cycle: number; status: string; payment_public_id: string
+    }>(`
+      SELECT payment.activity_registration_cycle AS registration_cycle,payment.status,payment.public_id AS payment_public_id
+      FROM mbox.community_activity_registrations registration
+      JOIN mbox.payments payment
+        ON payment.tenant_id=registration.tenant_id AND payment.store_id=registration.store_id
+       AND payment.activity_registration_id=registration.id
+      WHERE registration.tenant_id=$1::uuid AND registration.store_id=$2::uuid
+        AND registration.public_id=$3
+      ORDER BY payment.created_at,payment.id
+    `, [tenantId, storeId, first.publicId])
+    expect(paymentHistory.rows).toEqual([
+      { registration_cycle: 1, status: 'closed', payment_public_id: 'payment-closed-payment-retry-old-db-test' },
+      { registration_cycle: 2, status: 'pending', payment_public_id: 'payment-closed-payment-retry-new-db-test' },
+    ])
+
+    // A signed provider success may exceptionally arrive after a remote close
+    // and after the registration has been reopened. It must remain attached
+    // to cycle 1, never confirm cycle 2, and be visible to the activity
+    // cashier as a refund-required old collection.
+    const lateSuccess = await transactions.run(dbScope, async (transaction) => {
+      const payments = new PaymentRepository(transaction)
+      const applied = await payments.applySucceededCallback({
+        paymentPublicId: 'payment-closed-payment-retry-old-db-test',
+        provider: 'postar', providerTransactionId: 'late-provider-tx-db-test',
+        reportedAmountMinor: first.amountDueMinor, reportedCurrency: 'CNY',
+        providerSnapshot: { providerStatus: 'succeeded_late' },
+        settlementChannel: 'wechat', succeededAt: '2026-08-27T00:00:00.000Z',
+      })
+      await payments.syncActivityRegistrationPaymentStatus(applied.payment)
+      return applied.payment
+    })
+    expect(lateSuccess).toMatchObject({ status: 'succeeded', activityRegistrationCycle: 1 })
+    const cashier = await new PostgresCashierWorkbenchQuery(transactions).get({
+      scope: dbScope, employeeId, businessDate: '2026-08-26',
+      capabilities: ['community.activity.cashier', 'refund.request'], limit: 20,
+    })
+    const lateRegistration = cashier.activityRegistrations?.find((value) => value.publicId === first.publicId)
+    expect(lateRegistration?.payment?.publicId).toBe('payment-closed-payment-retry-new-db-test')
+    expect(lateRegistration?.lateSuccessPayments).toEqual([
+      expect.objectContaining({
+        publicId: 'payment-closed-payment-retry-old-db-test', amountMinor: first.amountDueMinor,
+      }),
+    ])
+
+    // The cashier warning is not the authority: the command itself must
+    // refuse cash/POS/other collection until the late old collection has
+    // completed its own refund.
+    await expect(transactions.run(dbScope, (transaction) => (
+      new PaymentRepository(transaction).recordManualForActivityRegistration({
+        registrationPublicId: first.publicId,
+        publicId: 'payment-late-success-manual-collection-db-test',
+        provider: 'cash',
+        method: 'cash',
+        collectedByEmployeeId: employeeId,
+        evidence: { collectedByEmployeeId: employeeId, receiptReference: 'cash-blocked-by-late-success' },
+      })
+    ))).rejects.toBeInstanceOf(ActivityPaymentLateSuccessRefundRequiredError)
+
+    await pool.query(`
+      UPDATE mbox.payments SET status='closed',provider_snapshot='{"providerStatus":"closed"}'::jsonb
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        AND public_id='payment-closed-payment-retry-new-db-test'
+    `, [tenantId, storeId])
+    await transactions.run(dbScope, (transaction) => (
+      new CustomerExperienceRepository(transaction, true).cancelActivityRegistration({
+        registrationPublicId: first.publicId, customerId: retryCustomerId, reason: '当前周期也已安全关单',
+      })
+    ))
+    await expect(transactions.run(dbScope, (transaction) => (
+      new CustomerExperienceRepository(transaction, true).registerActivity({
+        activityPublicId: 'community-paid-db-test', activityPackagePublicId: 'package-paid-hold-expiry',
+        customerId: retryCustomerId, partySize: 1, protectedContact: dbContact,
+        termsAcknowledged: true, acknowledgedSafetyPolicyVersion: 'safety-v1',
+        acknowledgedRefundPolicyVersion: 'refund-v1', paymentChoice: 'deposit',
+        paymentMethod: 'jsapi', jsapiReady: true,
+        publicId: 'registration-late-success-blocked-db-test',
+        paymentPublicId: 'payment-late-success-blocked-db-test',
+        idempotencyKey: 'registration-late-success-blocked-key',
+      })
+    ))).rejects.toMatchObject({ code: 'ACTIVITY_ALREADY_REGISTERED', statusCode: 409 })
   })
 
   it('rejects a package-required activity when every package is paused instead of silently accepting a ticket-only registration', async () => {
@@ -1337,7 +1524,7 @@ integration('activity registration state and contact privacy with PostgreSQL', (
         acknowledgedSafetyPolicyVersion: 'safety-v1',
         acknowledgedRefundPolicyVersion: 'refund-v1',
         paymentChoice: 'deposit', publicId: 'registration-paid-authority-db-test',
-        paymentMethod: 'native_qr', paymentPublicId: 'payment-paid-authority-db-test',
+        paymentMethod: 'jsapi', jsapiReady: true, paymentPublicId: 'payment-paid-authority-db-test',
         idempotencyKey: 'registration-paid-authority-key-0001',
       })
     ))
@@ -1463,7 +1650,7 @@ integration('activity registration state and contact privacy with PostgreSQL', (
         customerId: manualCollectionCustomerId, partySize: 1, protectedContact: dbContact,
         termsAcknowledged: true, acknowledgedSafetyPolicyVersion: 'safety-v1',
         acknowledgedRefundPolicyVersion: 'refund-v1', paymentChoice: 'deposit',
-        paymentMethod: 'native_qr', publicId: 'registration-paid-manual-hold-db-test',
+        paymentMethod: 'jsapi', jsapiReady: true, publicId: 'registration-paid-manual-hold-db-test',
         paymentPublicId: 'payment-paid-manual-hold-db-test',
         idempotencyKey: 'registration-paid-manual-hold-key-0001',
       })
@@ -1575,6 +1762,7 @@ integration('activity registration state and contact privacy with PostgreSQL', (
       JOIN mbox.community_activity_registration_contact_versions contact
         ON contact.tenant_id=registration.tenant_id AND contact.store_id=registration.store_id
        AND contact.registration_id=registration.id AND contact.registration_cycle=registration.registration_cycle
+       AND contact.status='active'
       WHERE registration.tenant_id=$1 AND registration.store_id=$2 AND registration.public_id=$3
     `, [tenantId, storeId, registered.publicId, authorization.id])
     expect(recovered.rows[0]).toEqual({
@@ -1602,7 +1790,7 @@ integration('activity registration state and contact privacy with PostgreSQL', (
         acknowledgedSafetyPolicyVersion: 'safety-v1',
         acknowledgedRefundPolicyVersion: 'refund-v1',
         paymentChoice: 'deposit', publicId: `registration-paid-concurrent-${suffix}`,
-        paymentMethod: 'native_qr', paymentPublicId: `payment-paid-concurrent-${suffix}`,
+        paymentMethod: 'jsapi', jsapiReady: true, paymentPublicId: `payment-paid-concurrent-${suffix}`,
         idempotencyKey: `registration-paid-concurrent-key-${suffix}`,
       })
     ))

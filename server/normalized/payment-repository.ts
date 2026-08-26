@@ -27,6 +27,8 @@ export interface Payment {
   payableKind: 'order' | 'activity_registration'
   orderId: string | null
   activityRegistrationId: string | null
+  /** Immutable activity-registration cycle; null for table orders. */
+  activityRegistrationCycle: number | null
   publicId: string
   provider: PaymentProvider
   providerTransactionId: string | null
@@ -105,6 +107,7 @@ interface PaymentRow extends Record<string, unknown> {
   payable_kind: Payment['payableKind']
   order_id: string | null
   activity_registration_id: string | null
+  activity_registration_cycle: number | null
   public_id: string
   provider: PaymentProvider
   provider_transaction_id: string | null
@@ -195,6 +198,19 @@ export class PaymentTransitionError extends Error {
   }
 }
 
+/**
+ * A provider may confirm an older activity payment after the registration was
+ * reopened.  That money is real, but it must be refunded before the newer
+ * cycle can collect another payment.  Treating it as merely a UI warning
+ * would allow a cashier to create a second collection fact.
+ */
+export class ActivityPaymentLateSuccessRefundRequiredError extends Error {
+  constructor(registrationId: string) {
+    super(`Activity registration ${registrationId} has an earlier successful payment awaiting refund`)
+    this.name = 'ActivityPaymentLateSuccessRefundRequiredError'
+  }
+}
+
 export class PaymentRepository {
   constructor(private readonly transaction: ScopedTransaction) {}
 
@@ -211,6 +227,30 @@ export class PaymentRepository {
       throw new OrderNotPayableError(paymentId, 'only a table-order payment can be released for retry')
     }
     return row.order_id
+  }
+
+  /**
+   * Locks the one online order payment that a staff member intends to query
+   * and close before changing collection method.  This does not itself mark
+   * the payment failed or make the order collectable: the provider result is
+   * still the authority for that transition.
+   */
+  async prepareOrderPaymentForProviderClose(paymentId: string): Promise<Payment> {
+    const selected = await this.transaction.query<PaymentRow>(`
+      SELECT ${PAYMENT_COLUMNS}
+      FROM mbox.payments
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+      FOR UPDATE
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId])
+    const row = selected.rows[0]
+    if (row === undefined) throw new PaymentNotFoundError(paymentId)
+    if (row.order_id === null) {
+      throw new OrderNotPayableError(paymentId, 'only a table-order payment can be closed before changing collection method')
+    }
+    if (!['postar', 'wechat'].includes(row.provider) || !['created', 'pending'].includes(row.status)) {
+      throw new OrderNotPayableError(paymentId, 'payment already has a final result or is not an online payment')
+    }
+    return mapPayment(row)
   }
 
   /**
@@ -243,7 +283,6 @@ export class PaymentRepository {
         AND payment.order_id = $3::uuid
         AND payment.provider IN ('wechat', 'postar')
         AND payment.status IN ('created', 'pending')
-        AND payment.retry_released_at IS NULL
       ORDER BY payment.created_at, payment.id
       FOR UPDATE OF payment
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
@@ -457,6 +496,11 @@ export class PaymentRepository {
       throw new OrderNotPayableError(registration.id, 'activity registration is not awaiting payment')
     }
 
+    await this.assertNoUnrefundedHistoricalActivityPayment(
+      registration.id,
+      registration.registration_cycle,
+    )
+
     const recollection = await new ActivityRecollectionAuthorizationRepository(this.transaction).prepareForPayment({
       activityRegistrationId: registration.id,
       amountMinor,
@@ -479,17 +523,18 @@ export class PaymentRepository {
     const reference = requiredEvidenceString(input.evidence, 'receiptReference')
     const inserted = await this.transaction.query<PaymentRow>(`
       INSERT INTO mbox.payments(
-        tenant_id,store_id,payable_kind,order_id,activity_registration_id,public_id,
+        tenant_id,store_id,payable_kind,order_id,activity_registration_id,activity_registration_cycle,public_id,
         provider,provider_transaction_id,method,amount_minor,currency,status,provider_snapshot,succeeded_at
       ) VALUES (
-        $1::uuid,$2::uuid,'activity_registration',NULL,$3::uuid,$4,$5,$6,$7,$8::bigint,$9,
-        'succeeded',$10::jsonb,clock_timestamp()
+        $1::uuid,$2::uuid,'activity_registration',NULL,$3::uuid,$4,$5,$6,$7,$8,$9::bigint,$10,
+        'succeeded',$11::jsonb,clock_timestamp()
       )
       RETURNING ${PAYMENT_COLUMNS}
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
       registration.id,
+      registration.registration_cycle,
       input.publicId,
       input.provider,
       reference,
@@ -771,9 +816,9 @@ export class PaymentRepository {
     }
     if (!/^[A-Z]{3}$/.test(input.currency)) throw new TypeError('activity payment currency is invalid')
     const registration = await this.transaction.query<{
-      id: string; amount_due_minor: string | number; currency: string; status: string; payment_id: string | null
+      id: string; amount_due_minor: string | number; currency: string; status: string; payment_id: string | null; registration_cycle: number
     }>(`
-      SELECT id, amount_due_minor, currency, status, payment_id
+      SELECT id, amount_due_minor, currency, status, payment_id, registration_cycle
       FROM mbox.community_activity_registrations
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
       FOR UPDATE
@@ -786,13 +831,14 @@ export class PaymentRepository {
       || row.currency !== input.currency) {
       throw new OrderNotPayableError(input.activityRegistrationId, 'activity amount or currency changed')
     }
+    await this.assertNoUnrefundedHistoricalActivityPayment(row.id, row.registration_cycle)
     const inserted = await this.transaction.query<PaymentRow>(`
       INSERT INTO mbox.payments (
-        tenant_id, store_id, payable_kind, order_id, activity_registration_id,
+        tenant_id, store_id, payable_kind, order_id, activity_registration_id, activity_registration_cycle,
         public_id, provider, method, amount_minor, currency, status, provider_snapshot
       ) VALUES (
-        $1::uuid, $2::uuid, 'activity_registration', NULL, $3::uuid,
-        $4, 'postar', $5, $6::bigint, $7, 'pending',
+        $1::uuid, $2::uuid, 'activity_registration', NULL, $3::uuid, $4,
+        $5, 'postar', $6, $7::bigint, $8, 'pending',
         jsonb_build_object('source', 'community_activity_registration')
       )
       RETURNING ${PAYMENT_COLUMNS}
@@ -800,6 +846,7 @@ export class PaymentRepository {
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
       input.activityRegistrationId,
+      row.registration_cycle,
       input.publicId,
       input.method,
       input.amountMinor,
@@ -814,6 +861,50 @@ export class PaymentRepository {
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.activityRegistrationId, payment.id])
     if (linked.rowCount !== 1) throw new Error('Activity registration lost its payment link transition')
     return payment
+  }
+
+  /**
+   * Do not infer that an older cycle is harmless just because the current
+   * registration points at a newer payment.  A late signed success is a real
+   * collection until its refund has completed; legacy rows whose cycle cannot
+   * be proven during migration are deliberately handled the same way.
+   */
+  async assertNoUnrefundedHistoricalActivityPayment(
+    registrationId: string,
+    currentRegistrationCycle: number,
+  ): Promise<void> {
+    // Cycle one cannot have a prior collection for this registration.  Apart
+    // from avoiding an unnecessary lock, this keeps the guard focused on the
+    // only lifecycle in which an older payment can be mistaken for a current
+    // one: a reopened registration.
+    if (currentRegistrationCycle <= 1) return
+    const unresolved = await this.transaction.query<{ id: string }>(`
+      SELECT payment.id
+      FROM mbox.payments payment
+      WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid
+        AND payment.activity_registration_id=$3::uuid
+        AND payment.status IN ('succeeded','partially_refunded')
+        AND (
+          payment.activity_registration_cycle IS NULL
+          OR payment.activity_registration_cycle<$4::integer
+        )
+        AND COALESCE((
+          SELECT SUM(refund.amount_minor)
+          FROM mbox.refunds refund
+          WHERE refund.tenant_id=payment.tenant_id AND refund.store_id=payment.store_id
+            AND refund.payment_id=payment.id AND refund.status='succeeded'
+        ), 0) < payment.amount_minor
+      LIMIT 1
+      FOR UPDATE OF payment
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      registrationId,
+      currentRegistrationCycle,
+    ])
+    if (unresolved.rows[0] !== undefined) {
+      throw new ActivityPaymentLateSuccessRefundRequiredError(registrationId)
+    }
   }
 
   async applySucceededCallback(
@@ -855,7 +946,7 @@ export class PaymentRepository {
     if (CAPTURED_PAYMENT_STATUSES.includes(payment.status)) {
       return { payment: await this.enrichSettlementChannel(payment, input.settlementChannel), applied: false }
     }
-    if (payment.status === 'failed' || payment.status === 'closed') {
+    if (payment.status === 'failed') {
       throw new PaymentTransitionError(payment.id, payment.status)
     }
 
@@ -870,14 +961,21 @@ export class PaymentRepository {
       WHERE tenant_id = $1::uuid
         AND store_id = $2::uuid
         AND id = $3::uuid
-        AND status IN ('created', 'pending')
+        -- A signed callback received after a successful remote close is an
+        -- exceptional late capture, but it is still a real financial fact.
+        -- Never throw it away: record it, reconcile it, and let the normal
+        -- refund/over-collection workflow handle any replacement collection.
+        AND status IN ('created', 'pending', 'closed')
       RETURNING ${PAYMENT_COLUMNS}
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
       payment.id,
       input.providerTransactionId,
-      JSON.stringify(sanitizeProviderSnapshot(input.providerSnapshot)),
+      JSON.stringify(sanitizeProviderSnapshot({
+        ...input.providerSnapshot,
+        ...(payment.status === 'closed' ? { lateSuccessAfterClose: true } : {}),
+      })),
       input.succeededAt ?? null,
       input.settlementChannel ?? null,
     ])
@@ -931,13 +1029,23 @@ export class PaymentRepository {
           ? 'closed'
           : 'pending'
     if (stored.status === 'failed' || stored.status === 'closed') {
-      if (stored.status !== nextStatus) throw new PaymentTransitionError(stored.id, stored.status)
-      return { payment: mapPayment(stored), applied: false }
+      if (stored.status === 'closed' && nextStatus === 'succeeded') {
+        // A bound provider result wins over a previously accepted close. This
+        // is rare, but rejecting it would lose a confirmed collection and can
+        // leave a re-opened registration/order with an invisible overpayment.
+      } else if (stored.status !== nextStatus) {
+        throw new PaymentTransitionError(stored.id, stored.status)
+      } else {
+        return { payment: mapPayment(stored), applied: false }
+      }
     }
     const snapshot = sanitizeProviderSnapshot({
       ...input.providerSnapshot,
       providerStatus: input.status,
       queryObservedAt: input.succeededAt ?? null,
+      ...(stored.status === 'closed' && nextStatus === 'succeeded'
+        ? { lateSuccessAfterClose: true }
+        : {}),
     })
     const updated = await this.transaction.query<PaymentRow>(`
       UPDATE mbox.payments
@@ -951,7 +1059,7 @@ export class PaymentRepository {
           settlement_channel = COALESCE(settlement_channel, $8),
           updated_at = clock_timestamp()
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
-        AND status IN ('created', 'pending')
+        AND status IN ('created', 'pending', 'closed')
       RETURNING ${PAYMENT_COLUMNS}
     `, [
       this.transaction.scope.tenantId,
@@ -992,7 +1100,7 @@ export class PaymentRepository {
       WHERE tenant_id = $1::uuid
         AND store_id = $2::uuid
         AND payment_id = $3::uuid
-        AND state IN ('creating', 'ready', 'unknown', 'consumed')
+        AND state IN ('creating', 'ready', 'unknown', 'failed', 'consumed')
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId])
   }
 
@@ -1070,10 +1178,21 @@ export class PaymentRepository {
         payment.id,
       ])
       if (updated.rowCount !== 1) {
-        const current = await this.transaction.query<{ payment_status: string }>(`
-          SELECT payment_status FROM mbox.community_activity_registrations
-          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND payment_id=$4::uuid
-        `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, payment.activityRegistrationId, payment.id])
+        const current = await this.transaction.query<{
+          status: string
+          payment_status: string
+          payment_id: string | null
+        }>(`
+          SELECT status,payment_status,payment_id::text
+          FROM mbox.community_activity_registrations
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+        `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, payment.activityRegistrationId])
+        // A provider can exceptionally deliver a signed success after M-BOX
+        // accepted a remote close and the customer reopened the same
+        // registration.  The old collection must be reconciled, but it must
+        // not overwrite the newer registration/payment link.  The payment
+        // outcome makes that fact visible for refund/over-collection review.
+        if (current.rows[0]?.payment_id !== payment.id || current.rows[0]?.status !== 'payment_pending') return
         if (current.rows[0]?.payment_status !== 'paid') {
           throw new Error('Activity registration lost its payment confirmation transition')
         }
@@ -1219,7 +1338,7 @@ export class PaymentRepository {
             AND r.status = 'succeeded'
         ), 0)::text AS refunded_minor,
         COALESCE(BOOL_OR(
-          p.status IN ('created', 'pending') AND p.retry_released_at IS NULL
+          p.status IN ('created', 'pending')
         ), false) AS has_pending
       FROM mbox.payments AS p
       WHERE p.tenant_id = $1::uuid
@@ -1231,7 +1350,7 @@ export class PaymentRepository {
 }
 
 const PAYMENT_COLUMNS = `
-  id, payable_kind, order_id, activity_registration_id, public_id,
+  id, payable_kind, order_id, activity_registration_id, activity_registration_cycle, public_id,
   provider, provider_transaction_id, settlement_channel, method,
   amount_minor, currency, status, provider_snapshot,
   retry_released_at::text, retry_release_reason,
@@ -1383,6 +1502,9 @@ function mapPayment(row: PaymentRow): Payment {
     payableKind: row.payable_kind,
     orderId: row.order_id,
     activityRegistrationId: row.activity_registration_id,
+    activityRegistrationCycle: row.activity_registration_cycle === null
+      ? null
+      : Number(row.activity_registration_cycle),
     publicId: row.public_id,
     provider: row.provider,
     providerTransactionId: row.provider_transaction_id,

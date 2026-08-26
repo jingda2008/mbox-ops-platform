@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import type { FastifyPluginAsync, FastifyReply } from 'fastify'
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import {
   GuestSessionInvalidError,
   GuestCustomerAtAnotherTableError,
@@ -30,6 +30,11 @@ export interface GuestSessionApiOptions {
     scope: Readonly<StoreScope>,
     tableSessionId: string,
   ): Promise<{ guestCount: number; primaryServiceName: string | null; cartProtocolVersion: 1 | 2 }>
+  /** Resolves an optional, trusted WeChat identity only for table scanning. */
+  resolveWechatCustomer?(
+    request: FastifyRequest,
+    scope: Readonly<StoreScope>,
+  ): Promise<string | null>
 }
 
 interface ApiErrorBody {
@@ -48,6 +53,7 @@ export const guestSessionApiPlugin: FastifyPluginAsync<GuestSessionApiOptions> =
     const body = readObject(request.body)
     const scope = await options.requestContext.resolveTrustedScope(request)
     const businessClock = await options.businessClock.current(scope)
+    const customerId = await options.resolveWechatCustomer?.(request, scope) ?? null
     const result = await options.sessions.scanTable({
       scope,
       tableQrToken: readString(body.tableQrToken, '桌面二维码', 256, 32),
@@ -56,6 +62,7 @@ export const guestSessionApiPlugin: FastifyPluginAsync<GuestSessionApiOptions> =
         readString(body.deviceKey, '设备标识', 256, 8),
       ),
       businessDate: businessClock.businessDate,
+      ...(customerId === null ? {} : { customerId }),
     })
     reply.header('cache-control', 'no-store')
 

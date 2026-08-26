@@ -21,6 +21,7 @@ const CODE_MESSAGES = Object.freeze({
   CHECKOUT_UPGRADE_UNAVAILABLE: '升级内容已经变化，请重新确认后再结账',
   PAYMENT_IN_PROGRESS: '付款正在处理中，请稍后刷新确认结果',
   PAYMENT_STATUS_REVIEW: '付款结果确认中，请勿重复付款',
+  WECHAT_IDENTITY_REQUIRED: '微信支付身份需要刷新，请重新扫描当前桌面的二维码或重新进入小程序后再试',
   MEMBERSHIP_SERVICE_UNAVAILABLE: '会员服务暂时无法连接，请稍后重试',
   DAILY_SNACK_TABLE_REQUIRED: '请入座并连接当前桌台后再申请每日点心',
   DAILY_SNACK_TABLE_AUTH_REQUIRED: '当前桌边连接已失效，请重新扫描桌面二维码',

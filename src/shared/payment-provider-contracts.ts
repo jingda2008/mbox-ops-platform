@@ -77,6 +77,18 @@ export interface ProviderPaymentQueryRequest {
   orderDate?: string
 }
 
+/** A provider-recognised close of an unpaid online order. */
+export interface ProviderPaymentCloseRequest {
+  paymentIntentId: string
+  merchantId: string
+}
+
+export interface ProviderPaymentCloseResult {
+  paymentIntentId: string
+  closed: boolean
+  occurredAt: string
+}
+
 export type ProviderRefundStatus = 'processing' | 'succeeded' | 'failed'
 
 export interface ProviderRefundRequest {
@@ -143,6 +155,10 @@ export interface PaymentProviderAdapter {
     request: ProviderPaymentQueryRequest,
     context: PaymentProviderContext,
   ): Promise<ProviderPaymentObservation>
+  closePayment?(
+    request: ProviderPaymentCloseRequest,
+    context: PaymentProviderContext,
+  ): Promise<ProviderPaymentCloseResult>
   requestRefund(
     request: ProviderRefundRequest,
     context: PaymentProviderContext,

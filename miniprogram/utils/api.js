@@ -23,9 +23,15 @@ async function loadGuestSession() {
     || !session.cartScope
   )
   if (needsScan) {
+    // Keep the normal customer identity and table session distinct.  The scan
+    // route receives the identity bearer only to bind this new table session
+    // to the canonical WeChat customer for JSAPI; all later guest calls use
+    // the HttpOnly guest credential alone.
+    await ensureCustomerSession(false).catch(() => undefined)
     const connected = await request('/api/guest/session/scan', {
       method: 'POST',
       requireTableSession: false,
+      credentialDomain: 'guest+wechat_identity',
       data: { tableQrToken: session.tableToken, deviceKey: deviceKey() },
       ...requestOptions,
     })

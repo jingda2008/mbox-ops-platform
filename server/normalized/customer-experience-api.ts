@@ -49,6 +49,12 @@ import type { MembershipTermsService } from './membership-terms-service.js'
 import type { MembershipEnrollmentService } from './membership-enrollment-service.js'
 import { EmployeeTableAccessDeniedError } from './employee-table-access.js'
 import { createMemberIdentificationQrDataUrl } from './member-code-qr.js'
+import { ActivityPaymentLateSuccessRefundRequiredError } from './payment-repository.js'
+import {
+  RefundApprovalRequiredError,
+  RefundLimitError,
+  RefundTransitionError,
+} from './refund-repository.js'
 
 interface GuestExperienceContext {
   scope: Readonly<StoreScope>
@@ -66,9 +72,9 @@ interface CustomerExperienceApiOptions {
   resolveStaffContext(request: FastifyRequest): Promise<StaffCustomerExperienceContext> | StaffCustomerExperienceContext
   protectContact(value: string): Promise<ProtectedContact> | ProtectedContact
   activityPayments?: ActivityPaymentService
-  resolveActivityPaymentMethod?: (
+  resolveActivityPaymentReady?: (
     scope: Readonly<StoreScope>, customerId: string,
-  ) => Promise<'jsapi' | 'native_qr'>
+  ) => Promise<boolean>
   notificationConsentPolicy?: Readonly<{ serviceTemplateId: string; policyVersion: string }> | null
   membershipRecovery?: MembershipRecoveryService
   recoveryPhoneAuthorization?: MembershipRecoveryPhoneAuthorizationPort
@@ -691,9 +697,12 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
       acknowledgedSafetyPolicyVersion: text(body.acknowledgedSafetyPolicyVersion, '安全规则版本', 1, 64),
       acknowledgedRefundPolicyVersion: text(body.acknowledgedRefundPolicyVersion, '退款规则版本', 3, 64),
       paymentChoice: enumValue(body.paymentChoice ?? 'none', '付款选择', ['none', 'deposit', 'full'] as const),
-      paymentMethod: body.paymentMethod === undefined
-        ? await options.resolveActivityPaymentMethod?.(context.scope, context.customerId) ?? 'native_qr'
-        : enumValue(body.paymentMethod, '付款方式', ['jsapi', 'native_qr'] as const),
+      // Customer-facing activity collection is always WeChat JSAPI.  A native
+      // QR returned to the same phone is neither usable nor a safe fallback.
+      // The readiness bit is server-derived from the encrypted WeChat identity
+      // and is checked before any seat, stock or registration write.
+      paymentMethod: 'jsapi',
+      jsapiReady: await options.resolveActivityPaymentReady?.(context.scope, context.customerId) ?? false,
       idempotencyKey: idempotencyKey(request),
     })
     const registration = result.value
@@ -714,10 +723,16 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
   app.post<{ Params: { registrationPublicId: string } }>('/public/mini/activity-registrations/:registrationPublicId/cancel', async (request, reply) => handle(reply, async () => {
     const context = await options.resolvePublicContext(request)
     const body = objectBody(request.body)
+    const registrationPublicId = publicId(request.params.registrationPublicId)
+    const cancellationIdempotencyKey = idempotencyKey(request)
+    await options.activityPayments?.prepareCancellation(context, {
+      registrationPublicId,
+      idempotencyKey: cancellationIdempotencyKey,
+    })
     const result = await options.service.cancelActivity(context, {
-      registrationPublicId: publicId(request.params.registrationPublicId),
+      registrationPublicId,
       reason: text(body.reason, '取消原因', 2, 240),
-      idempotencyKey: idempotencyKey(request),
+      idempotencyKey: cancellationIdempotencyKey,
     })
     return reply.send({ data: result.value, meta: { replayed: result.replayed } })
   }))
@@ -1125,6 +1140,7 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
       const body = objectBody(request.body)
       const result = await options.activityPayments.requestRefund(context, {
         registrationPublicId: publicId(request.params.registrationPublicId),
+        paymentPublicId: optionalText(body.paymentPublicId, '付款编号', 128),
         reason: text(body.reason, '退款原因', 2, 1000),
         idempotencyKey: idempotencyKey(request),
       })
@@ -1665,6 +1681,17 @@ function knownErrorResponse(error: unknown): { statusCode: number; code: string;
   if (error instanceof StaffAccessDeniedError) return { statusCode: 403, code: 'PERMISSION_DENIED', message: '当前岗位没有这项权限' }
   if (error instanceof EmployeeTableAccessDeniedError) return {
     statusCode: 403, code: 'TABLE_ACCESS_DENIED', message: '当前员工不是该桌负责人，无权处理该桌会员权益',
+  }
+  if (error instanceof ActivityPaymentLateSuccessRefundRequiredError) return {
+    statusCode: 409,
+    code: 'ACTIVITY_LATE_PAYMENT_REFUND_REQUIRED',
+    message: '旧报名付款已到账且退款未完成，请先完成原款退款后再收款',
+  }
+  if (error instanceof RefundLimitError) return {
+    statusCode: 409, code: 'ACTIVITY_REFUND_LIMIT_CONFLICT', message: '退款余额或状态已变化，请刷新后重试',
+  }
+  if (error instanceof RefundTransitionError || error instanceof RefundApprovalRequiredError) return {
+    statusCode: 409, code: 'ACTIVITY_REFUND_TRANSITION_CONFLICT', message: '退款状态已变化，请刷新后再处理',
   }
   if (error instanceof GuestDeviceBindingError || error instanceof GuestStoreScopeError
     || error instanceof NormalizedStoreUnavailableError || error instanceof TrustedStoreScopeError) {

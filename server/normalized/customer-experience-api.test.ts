@@ -12,6 +12,7 @@ import {
   IdempotencyInProgressError,
   IdempotencyRecordError,
 } from './command-executor.js'
+import { RefundLimitError, RefundTransitionError } from './refund-repository.js'
 
 const apps: FastifyInstance[] = []
 
@@ -359,6 +360,48 @@ describe('customer experience activity contact API', () => {
     })
     expect(queried.statusCode).toBe(200)
     expect(queried.json().data).toMatchObject({ resolutionState: 'confirmed', allowedActions: [] })
+  })
+
+  it('returns a stable 409 when activity late-payment refund is already reserved or settled', async () => {
+    vi.spyOn(StaffAccessRepository.prototype, 'assertPermission').mockResolvedValue({} as never)
+    const scope = {
+      tenantId: '82000000-0000-4000-8000-000000000001',
+      storeId: '82000000-0000-4000-8000-000000000002',
+    }
+    const app = Fastify()
+    apps.push(app)
+    const requestRefund = vi.fn(async () => { throw new RefundLimitError('payment has no refundable balance') })
+    await app.register(customerExperienceApiPlugin, {
+      transactions: { run: async (_scope, action) => action({ scope, query: vi.fn() } as never) },
+      service: {} as CustomerExperienceService,
+      resolvePublicContext: () => { throw new Error('not used') },
+      resolveGuestContext: async () => { throw new Error('not used') },
+      resolveStaffContext: () => ({
+        scope, employeeId: '82000000-0000-4000-8000-000000000003', businessDate: '2026-08-16',
+      }),
+      protectContact: () => { throw new Error('not used') },
+      activityPayments: { requestRefund } as never,
+    })
+    const response = await app.inject({
+      method: 'POST',
+      url: '/staff/community-activity-registrations/activity-registration-refund-test/refunds',
+      headers: { 'idempotency-key': 'activity-refund-conflict-0001' },
+      payload: { paymentPublicId: 'late-activity-payment-refund-test', reason: '旧款已经没有可退款余额' },
+    })
+    expect(response.statusCode).toBe(409)
+    expect(response.json()).toEqual({
+      error: { code: 'ACTIVITY_REFUND_LIMIT_CONFLICT', message: '退款余额或状态已变化，请刷新后重试' },
+    })
+
+    requestRefund.mockRejectedValueOnce(new RefundTransitionError('refund-id', 'requested', 'requested'))
+    const repeated = await app.inject({
+      method: 'POST',
+      url: '/staff/community-activity-registrations/activity-registration-refund-test/refunds',
+      headers: { 'idempotency-key': 'activity-refund-conflict-0002' },
+      payload: { paymentPublicId: 'late-activity-payment-refund-test', reason: '重复操作退款状态已变化' },
+    })
+    expect(repeated.statusCode).toBe(409)
+    expect(repeated.json().error.code).toBe('ACTIVITY_REFUND_TRANSITION_CONFLICT')
   })
 
   it('exposes recent confirmed observations through the table-scoped read contract', async () => {

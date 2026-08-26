@@ -111,7 +111,7 @@ export class ProviderPaymentStatusAccessError extends Error {
 
 export class WechatPaymentIdentityRequiredError extends Error {
   constructor() {
-    super('当前微信身份尚未完成安全绑定，请改用客人扫码支付')
+    super('微信支付身份需要刷新，请重新进入小程序后再试')
     this.name = 'WechatPaymentIdentityRequiredError'
   }
 }
@@ -451,6 +451,19 @@ export class PaymentProviderActionRepository {
     if (updated.rowCount !== 1) throw new Error('支付渠道结果没有安全写回')
   }
 
+  /**
+   * Removes only the caller's just-created, provider-free claim.  This is
+   * deliberately narrower than a general action delete: a ready/unknown
+   * action may have reached the channel and must instead be queried.
+   */
+  async abandonUnsubmittedClaim(paymentId: string): Promise<void> {
+    await this.transaction.query(`
+      DELETE FROM mbox.payment_provider_actions
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND payment_id=$3::uuid
+        AND state='creating' AND ciphertext IS NULL AND nonce IS NULL AND auth_tag IS NULL
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId])
+  }
+
   async markUnknown(paymentId: string, errorCode: string): Promise<void> {
     await this.transaction.query(`
       UPDATE mbox.payment_provider_actions
@@ -502,32 +515,6 @@ export class PaymentProviderActionRepository {
         AND registration.id=payment.activity_registration_id
         AND registration.status='payment_pending' AND registration.payment_status='pending'
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId])
-  }
-
-  async resolveWechatPayerId(
-    customerId: string,
-    appId: string,
-    channel: 'official_account' | 'mini_program',
-  ): Promise<string> {
-    const result = await this.transaction.query<{
-      ciphertext: Buffer; nonce: Buffer; auth_tag: Buffer
-    }>(`
-      SELECT ciphertext, nonce, auth_tag
-      FROM mbox.wechat_payment_identities
-      WHERE tenant_id = $1::uuid AND store_id = $2::uuid
-        AND customer_id = $3::uuid AND app_id = $4 AND channel = $5 AND status = 'active'
-    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, customerId, appId, channel])
-    const row = result.rows[0]
-    if (row === undefined) throw new WechatPaymentIdentityRequiredError()
-    const aad = Buffer.from(`${this.transaction.scope.tenantId}:${this.transaction.scope.storeId}:${customerId}:${appId}:${channel}`)
-    try {
-      const decipher = createDecipheriv('aes-256-gcm', this.key, row.nonce)
-      decipher.setAAD(aad)
-      decipher.setAuthTag(row.auth_tag)
-      return Buffer.concat([decipher.update(row.ciphertext), decipher.final()]).toString('utf8')
-    } catch {
-      throw new WechatPaymentIdentityRequiredError()
-    }
   }
 
   private async assertAccess(row: Readonly<ContextRow>, principal: Readonly<PaymentPrincipal>): Promise<void> {

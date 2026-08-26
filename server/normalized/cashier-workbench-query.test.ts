@@ -150,6 +150,39 @@ describe('PostgresCashierWorkbenchQuery', () => {
     ]))
   })
 
+  it('projects every historical late success that still has refundable value instead of allowing a newer fully-refunded row to hide it', async () => {
+    const runner = new QueryRunner([
+      [],
+      [activityRow({
+        late_success_payments: [
+          {
+            publicId: 'PAYMENT-LATE-FAILED-0001', amountMinor: 6_800, remainingRefundableMinor: 6_800,
+            currency: 'CNY', succeededAt: '2026-08-12T23:58:00.000Z', refundStatus: 'failed',
+          },
+          {
+            publicId: 'PAYMENT-LATE-PENDING-0001', amountMinor: 1_200, remainingRefundableMinor: 1_200,
+            currency: 'CNY', succeededAt: '2026-08-12T23:55:00.000Z', refundStatus: 'requested',
+          },
+        ],
+      })],
+    ])
+    const query = new PostgresCashierWorkbenchQuery(runner as unknown as ScopedPostgresTransactionRunner)
+
+    const view = await query.get({
+      scope: { tenantId, storeId }, employeeId, businessDate: '2026-08-13',
+      capabilities: ['community.activity.cashier', 'refund.request'], limit: 20,
+    })
+
+    expect(view.activityRegistrations?.[0]?.lateSuccessPayments).toEqual([
+      expect.objectContaining({ publicId: 'PAYMENT-LATE-FAILED-0001', remainingRefundableMinor: 6_800, refundStatus: 'failed' }),
+      expect.objectContaining({ publicId: 'PAYMENT-LATE-PENDING-0001', remainingRefundableMinor: 1_200, refundStatus: 'requested' }),
+    ])
+    const activitySql = runner.calls[1]?.sql ?? ''
+    expect(activitySql).toContain('jsonb_agg')
+    expect(activitySql).toContain("succeeded_refund.status='succeeded'")
+    expect(activitySql).toContain('candidate.amount_minor>COALESCE')
+  })
+
   it('returns an empty workbench without running detail queries', async () => {
     const runner = new QueryRunner([[]])
     const query = new PostgresCashierWorkbenchQuery(
@@ -324,6 +357,16 @@ integration('PostgresCashierWorkbenchQuery PostgreSQL integration', () => {
   const integrationCarryoverOrderId = randomUUID()
   const integrationCarryoverItemId = randomUUID()
   const integrationCarryoverPaymentId = randomUUID()
+  const integrationActivityCustomerId = randomUUID()
+  const integrationActivityId = randomUUID()
+  const integrationActivityRegistrationId = randomUUID()
+  const integrationActivityCurrentPaymentId = randomUUID()
+  const integrationLateFullyRefundedPaymentId = randomUUID()
+  const integrationLateFailedPaymentId = randomUUID()
+  const integrationLateRejectedPaymentId = randomUUID()
+  const integrationLateFullyRefundedRefundId = randomUUID()
+  const integrationLateFailedRefundId = randomUUID()
+  const integrationLateRejectedRefundId = randomUUID()
   let pool: Pool
   let query: PostgresCashierWorkbenchQuery
 
@@ -476,6 +519,89 @@ integration('PostgresCashierWorkbenchQuery PostgreSQL integration', () => {
       integrationCarryoverOrderId,
       `cw-carryover-payment-${suffix}`,
     ])
+    await pool.query(`INSERT INTO mbox.customers(id,tenant_id,store_id,public_id)
+      VALUES($1,$2,$3,$4)`, [
+      integrationActivityCustomerId, integrationTenantId, integrationStoreId, `cw-activity-customer-${suffix}`,
+    ])
+    await pool.query(`INSERT INTO mbox.community_activities(
+      id,tenant_id,store_id,public_id,activity_kind,title,summary,starts_at,ends_at,
+      assembly_location,capacity,fee_amount_minor,deposit_amount_minor,fee_basis,
+      registration_payment_mode,payment_deadline_minutes,payment_rule_text,currency,
+      points_reward,visibility,audience_member_levels,audience_lifecycle_stages,
+      safety_policy_version,safety_acknowledgement_text,safety_requirements,
+      refund_policy_version,refund_policy_summary,activity_details,included_items,
+      participation_requirements,contact_instructions,status,published_at,
+      created_by_employee_id,approved_by_employee_id
+    ) VALUES($1,$2,$3,$4,'member_night','活动晚到付款收银测试','确保旧周期付款不会漏退',
+      clock_timestamp()+interval '1 day',clock_timestamp()+interval '1 day 3 hours',
+      'M-BOX',20,6800,0,'per_registration','full_required',15,'须全额预付','CNY',
+      0,'public','{}'::text[],'{}'::text[],'cashier-activity-safety-v1','我已阅读安全要求',ARRAY['遵守安全要求']::text[],
+      'cashier-activity-refund-v1','原路退款','活动晚到付款收银测试',ARRAY['欢迎饮品']::text[],
+      ARRAY['准时到场']::text[],'店内收银处理','published',clock_timestamp(),$5,$5)`, [
+      integrationActivityId, integrationTenantId, integrationStoreId, `cw-activity-${suffix}`, integrationEmployeeId,
+    ])
+    await pool.query(`INSERT INTO mbox.community_activity_registrations(
+      id,tenant_id,store_id,public_id,activity_id,customer_id,party_size,status,
+      payment_choice,payment_status,fee_amount_minor,amount_due_minor,paid_amount_minor,currency,
+      contact_snapshot,safety_acknowledgement,idempotency_key,refund_policy_snapshot,
+      payment_due_at,seat_hold_expires_at,registration_cycle,requested_payment_choice,
+      requested_payment_method,requested_amount_due_minor,acknowledged_safety_policy_version,
+      acknowledged_refund_policy_version,terms_acknowledged_at,terms_acknowledgement_source
+    ) VALUES($1,$2,$3,$4,$5,$6,2,'payment_pending',
+      'full','pending',6800,6800,0,'CNY',NULL,
+      '{"acknowledged":true,"policyVersion":"cashier-activity-safety-v1"}'::jsonb,
+      $7,'{"policyVersion":"cashier-activity-refund-v1","summary":"原路退款"}'::jsonb,
+      clock_timestamp()+interval '15 minutes',clock_timestamp()+interval '15 minutes',4,'full',
+      'jsapi',6800,'cashier-activity-safety-v1','cashier-activity-refund-v1',clock_timestamp(),'mini_program')`, [
+      integrationActivityRegistrationId, integrationTenantId, integrationStoreId,
+      `cw-activity-registration-${suffix}`, integrationActivityId, integrationActivityCustomerId,
+      `cw-activity-registration-key-${suffix}`,
+    ])
+    await pool.query(`INSERT INTO mbox.payments(
+      id,tenant_id,store_id,payable_kind,order_id,activity_registration_id,activity_registration_cycle,
+      public_id,provider,method,amount_minor,currency,status,provider_snapshot,provider_transaction_id,succeeded_at
+    ) VALUES
+      ($1,$5,$6,'activity_registration',NULL,$7,4,$8,'postar','jsapi',6800,'CNY','pending','{}'::jsonb,NULL,NULL),
+      ($2,$5,$6,'activity_registration',NULL,$7,3,$9,'postar','jsapi',6800,'CNY','succeeded','{"lateSuccessAfterClose":true}'::jsonb,'late-refunded-provider-transaction','2026-08-12T23:59:00Z'),
+      ($3,$5,$6,'activity_registration',NULL,$7,2,$10,'postar','jsapi',6800,'CNY','succeeded','{"lateSuccessAfterClose":true}'::jsonb,'late-failed-provider-transaction','2026-08-12T23:58:00Z'),
+      ($4,$5,$6,'activity_registration',NULL,$7,1,$11,'postar','jsapi',1200,'CNY','succeeded','{"lateSuccessAfterClose":true}'::jsonb,'late-rejected-provider-transaction','2026-08-12T23:57:00Z')`, [
+      integrationActivityCurrentPaymentId,
+      integrationLateFullyRefundedPaymentId,
+      integrationLateFailedPaymentId,
+      integrationLateRejectedPaymentId,
+      integrationTenantId,
+      integrationStoreId,
+      integrationActivityRegistrationId,
+      `cw-activity-current-payment-${suffix}`,
+      `cw-activity-late-fully-refunded-${suffix}`,
+      `cw-activity-late-failed-${suffix}`,
+      `cw-activity-late-rejected-${suffix}`,
+    ])
+    await pool.query(`UPDATE mbox.community_activity_registrations
+      SET payment_id=$4 WHERE tenant_id=$1 AND store_id=$2 AND id=$3`, [
+      integrationTenantId, integrationStoreId, integrationActivityRegistrationId, integrationActivityCurrentPaymentId,
+    ])
+    await pool.query(`INSERT INTO mbox.refunds(
+      id,tenant_id,store_id,payment_id,public_id,amount_minor,currency,status,reason,
+      provider_refund_id,decision_reason,requested_by_employee_id,approved_by_employee_id,completed_at
+    ) VALUES
+      ($1,$4,$5,$6,$7,6800,'CNY','succeeded','旧款已全额退回','late-refunded-provider-refund','退款执行完成',$8,$9,'2026-08-13T00:10:00Z'),
+      ($2,$4,$5,$10,$11,6800,'CNY','failed','渠道退款失败','late-failed-provider-refund','渠道退款失败',$8,$9,'2026-08-13T00:11:00Z'),
+      ($3,$4,$5,$12,$13,1200,'CNY','rejected','复核驳回后可重新申请',NULL,'复核驳回',$8,$9,NULL)`, [
+      integrationLateFullyRefundedRefundId,
+      integrationLateFailedRefundId,
+      integrationLateRejectedRefundId,
+      integrationTenantId,
+      integrationStoreId,
+      integrationLateFullyRefundedPaymentId,
+      `cw-activity-late-refunded-refund-${suffix}`,
+      integrationEmployeeId,
+      integrationApproverId,
+      integrationLateFailedPaymentId,
+      `cw-activity-late-failed-refund-${suffix}`,
+      integrationLateRejectedPaymentId,
+      `cw-activity-late-rejected-refund-${suffix}`,
+    ])
   })
 
   afterAll(async () => pool?.end())
@@ -514,6 +640,36 @@ integration('PostgresCashierWorkbenchQuery PostgreSQL integration', () => {
     expect(stale.orders).toHaveLength(1)
     expect(stale.orders[0]).toMatchObject({ id: integrationCarryoverOrderId, carryover: false })
     expect(stale.summary.carryoverPendingPaymentCount).toBe(0)
+  })
+
+  it('keeps every historical late success with refundable money in the activity queue while excluding a newer fully-refunded payment', async () => {
+    const view = await query.get({
+      scope: { tenantId: integrationTenantId, storeId: integrationStoreId },
+      employeeId: integrationApproverId,
+      businessDate: '2026-08-13',
+      capabilities: ['community.activity.cashier', 'refund.request'],
+      query: `cw-activity-registration-${suffix}`,
+      limit: 20,
+    })
+
+    const registration = view.activityRegistrations?.find((entry) => entry.id === integrationActivityRegistrationId)
+    expect(registration?.lateSuccessPayments).toEqual([
+      expect.objectContaining({
+        publicId: `cw-activity-late-failed-${suffix}`,
+        amountMinor: 6_800,
+        remainingRefundableMinor: 6_800,
+        refundStatus: 'failed',
+      }),
+      expect.objectContaining({
+        publicId: `cw-activity-late-rejected-${suffix}`,
+        amountMinor: 1_200,
+        remainingRefundableMinor: 1_200,
+        refundStatus: 'rejected',
+      }),
+    ])
+    expect(registration?.lateSuccessPayments?.some((payment) => (
+      payment.publicId === `cw-activity-late-fully-refunded-${suffix}`
+    ))).toBe(false)
   })
 
   it('limits a manual-collection or refund-request employee to assigned tables unless a dedicated store-wide capability exists', async () => {
@@ -609,6 +765,56 @@ function paymentRow(): Record<string, unknown> {
     status: 'succeeded',
     succeeded_at: '2026-08-13T12:02:00.000Z',
     created_at: '2026-08-13T12:01:00.000Z',
+  }
+}
+
+function activityRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    public_id: 'ACTIVITY-REGISTRATION-0001',
+    activity_public_id: 'ACTIVITY-0001',
+    activity_title: '超嗨会员之夜',
+    starts_at: '2026-08-13T20:00:00.000Z',
+    party_size: 2,
+    status: 'payment_pending',
+    payment_status: 'pending',
+    amount_due_minor: '6800',
+    paid_amount_minor: '0',
+    currency: 'CNY',
+    payment_id: null,
+    payment_public_id: null,
+    payment_provider: null,
+    payment_method: null,
+    payment_provider_transaction_id: null,
+    payment_provider_action_state: null,
+    payment_retry_released_at: null,
+    payment_retry_release_reason: null,
+    payment_amount_minor: null,
+    payment_currency: null,
+    payment_status_value: null,
+    payment_succeeded_at: null,
+    payment_created_at: null,
+    refund_id: null,
+    refund_public_id: null,
+    refund_provider_refund_id: null,
+    refund_amount_minor: null,
+    refund_currency: null,
+    refund_status: null,
+    refund_provider_submission_state: null,
+    refund_reason: null,
+    refund_requested_by_employee_id: null,
+    refund_requested_by_employee_name: null,
+    refund_approved_by_employee_id: null,
+    refund_approved_by_employee_name: null,
+    refund_decision_reason: null,
+    refund_receipt_reference: null,
+    refund_completed_at: null,
+    refund_created_at: null,
+    recollection_authorization_id: null,
+    recollection_authorization_amount_minor: null,
+    recollection_authorization_expires_at: null,
+    late_success_payments: [],
+    ...overrides,
   }
 }
 

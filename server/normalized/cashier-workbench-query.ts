@@ -158,6 +158,7 @@ interface ActivityRegistrationRow extends Record<string, unknown> {
   recollection_authorization_id: string | null
   recollection_authorization_amount_minor: string | number | null
   recollection_authorization_expires_at: string | null
+  late_success_payments: unknown
 }
 
 const CAPTURED_PAYMENT_STATUSES: readonly PaymentStatus[] = [
@@ -347,7 +348,8 @@ export class PostgresCashierWorkbenchQuery {
               refund.completed_at::text AS refund_completed_at,refund.created_at::text AS refund_created_at,
               recollection.id AS recollection_authorization_id,
               recollection.amount_minor AS recollection_authorization_amount_minor,
-              recollection.expires_at::text AS recollection_authorization_expires_at
+              recollection.expires_at::text AS recollection_authorization_expires_at,
+              late_payments.payments AS late_success_payments
             FROM mbox.community_activity_registrations registration
             JOIN mbox.community_activities activity
               ON activity.tenant_id=registration.tenant_id AND activity.store_id=registration.store_id
@@ -371,6 +373,54 @@ export class PostgresCashierWorkbenchQuery {
               ON approver.tenant_id=refund.tenant_id AND approver.store_id=refund.store_id
              AND approver.id=refund.approved_by_employee_id
             LEFT JOIN LATERAL (
+              SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                'publicId',candidate.public_id,
+                'amountMinor',candidate.amount_minor,
+                'remainingRefundableMinor',candidate.remaining_refundable_minor,
+                'currency',candidate.currency,
+                'succeededAt',candidate.succeeded_at,
+                'refundStatus',candidate.refund_status
+              ) ORDER BY candidate.succeeded_at DESC,candidate.created_at DESC,candidate.id DESC),'[]'::jsonb) AS payments
+              FROM (
+                SELECT candidate.id,candidate.public_id,candidate.amount_minor,candidate.currency,
+                  candidate.succeeded_at::text AS succeeded_at,candidate.created_at,
+                  candidate.amount_minor-COALESCE((
+                    SELECT SUM(succeeded_refund.amount_minor)
+                    FROM mbox.refunds succeeded_refund
+                    WHERE succeeded_refund.tenant_id=candidate.tenant_id
+                      AND succeeded_refund.store_id=candidate.store_id
+                      AND succeeded_refund.payment_id=candidate.id
+                      AND succeeded_refund.status='succeeded'
+                  ),0) AS remaining_refundable_minor,
+                  (
+                    SELECT latest_refund.status
+                    FROM mbox.refunds latest_refund
+                    WHERE latest_refund.tenant_id=candidate.tenant_id
+                      AND latest_refund.store_id=candidate.store_id
+                      AND latest_refund.payment_id=candidate.id
+                    ORDER BY latest_refund.created_at DESC,latest_refund.id DESC
+                    LIMIT 1
+                  ) AS refund_status
+                FROM mbox.payments candidate
+                WHERE candidate.tenant_id=registration.tenant_id AND candidate.store_id=registration.store_id
+                  AND candidate.activity_registration_id=registration.id
+                  AND (
+                    candidate.activity_registration_cycle IS NULL
+                    OR candidate.activity_registration_cycle<registration.registration_cycle
+                  )
+                  AND candidate.status IN ('succeeded','partially_refunded')
+                  AND candidate.provider_snapshot @> '{"lateSuccessAfterClose":true}'::jsonb
+                  AND candidate.amount_minor>COALESCE((
+                    SELECT SUM(succeeded_refund.amount_minor)
+                    FROM mbox.refunds succeeded_refund
+                    WHERE succeeded_refund.tenant_id=candidate.tenant_id
+                      AND succeeded_refund.store_id=candidate.store_id
+                      AND succeeded_refund.payment_id=candidate.id
+                      AND succeeded_refund.status='succeeded'
+                  ),0)
+              ) candidate
+            ) late_payments ON true
+            LEFT JOIN LATERAL (
               SELECT recollection_authorization.*
               FROM mbox.activity_registration_recollection_authorizations recollection_authorization
               WHERE recollection_authorization.tenant_id=registration.tenant_id
@@ -392,6 +442,7 @@ export class PostgresCashierWorkbenchQuery {
                 OR registration.status='payment_pending'
                 OR registration.payment_status IN ('pending','refunded')
                 OR refund.status IN ('requested','approved','processing')
+                OR jsonb_array_length(late_payments.payments)>0
                 OR recollection.id IS NOT NULL
                 -- A deliberate cashier lookup may retrieve an older completed
                 -- activity payment for refund handling; routine loads remain
@@ -404,6 +455,7 @@ export class PostgresCashierWorkbenchQuery {
                 OR activity.public_id ILIKE '%' || $4 || '%'
                 OR activity.title ILIKE '%' || $4 || '%'
                 OR payment.public_id ILIKE '%' || $4 || '%'
+                OR late_payments.payments::text ILIKE '%' || $4 || '%'
                 OR refund.public_id ILIKE '%' || $4 || '%'
                 OR refund.provider_refund_id ILIKE '%' || $4 || '%'
               )
@@ -783,6 +835,7 @@ function mapActivityRegistration(row: ActivityRegistrationRow): CashierWorkbench
     paidAmountMinor: asSafeMinor(row.paid_amount_minor, 'activity paid amount'),
     currency: row.currency,
     payment: row.payment_id === null ? null : mapActivityPayment(row),
+    lateSuccessPayments: parseLateSuccessPayments(row.late_success_payments),
     recollectionAuthorization: row.recollection_authorization_id === null
       ? null
       : {
@@ -864,6 +917,57 @@ function requireMinor(value: string | number | null, label: string): string | nu
 function requireValue<T>(value: T | null, label: string): T {
   if (value === null) throw new RangeError(`${label} is missing`)
   return value
+}
+
+function parseLateSuccessPayments(
+  value: unknown,
+): NonNullable<CashierWorkbenchActivityRegistration['lateSuccessPayments']> {
+  const entries = Array.isArray(value) ? value : []
+  return entries.map((entry) => {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      throw new RangeError('late activity payment entry is invalid')
+    }
+    const source = entry as Record<string, unknown>
+    const publicId = source.publicId
+    const currency = source.currency
+    const succeededAt = source.succeededAt
+    if (typeof publicId !== 'string' || publicId.length === 0) {
+      throw new RangeError('late activity payment public id is missing')
+    }
+    if (typeof currency !== 'string' || currency.length !== 3) {
+      throw new RangeError('late activity payment currency is invalid')
+    }
+    if (succeededAt !== null && typeof succeededAt !== 'string') {
+      throw new RangeError('late activity payment success time is invalid')
+    }
+    return {
+      publicId,
+      amountMinor: asUnknownSafeMinor(source.amountMinor, 'late activity payment amount'),
+      remainingRefundableMinor: asUnknownSafeMinor(
+        source.remainingRefundableMinor,
+        'late activity payment remaining refundable amount',
+      ),
+      currency,
+      succeededAt,
+      refundStatus: asRefundStatus(source.refundStatus),
+    }
+  })
+}
+
+function asUnknownSafeMinor(value: unknown, label: string): number {
+  if (typeof value !== 'number' && typeof value !== 'string') {
+    throw new RangeError(`${label} is missing`)
+  }
+  return asSafeMinor(value, label)
+}
+
+function asRefundStatus(value: unknown): RefundStatus | null {
+  if (value === null) return null
+  if (value === 'requested' || value === 'approved' || value === 'rejected'
+    || value === 'processing' || value === 'succeeded' || value === 'failed' || value === 'cancelled') {
+    return value
+  }
+  throw new RangeError('late activity payment refund status is invalid')
 }
 
 function group<Row>(rows: readonly Row[], key: (row: Row) => string): Map<string, Row[]> {

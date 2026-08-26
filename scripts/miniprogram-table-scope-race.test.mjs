@@ -378,6 +378,9 @@ test('a delayed A guest-session response cannot overwrite B connection state or 
   const state = { session: { tableCode: 'A01', tableToken: 'token-a', scanNonce: 'scan-a' }, storage: new Map(), cleared: 0 }
   const fixture = await loadApiRaceModule(state)
   const pending = fixture.api.getGuestSession()
+  // A scanned session first refreshes the WeChat identity before issuing its
+  // guarded scan request; let that intentional async boundary schedule it.
+  await new Promise((resolve) => setTimeout(resolve, 0))
   assert.equal(fixture.calls[0].options.expectedTableScope, 'scan:scan-a:token-a')
   assert.equal(fixture.calls[0].options.guardCookiePersistence, true)
 
@@ -395,8 +398,10 @@ test('a fixed QR rescan keeps B when B resolves before the prior A turnover resp
   }
   const fixture = await loadApiRaceModule(state)
   const pendingA = fixture.api.getGuestSession()
+  await new Promise((resolve) => setTimeout(resolve, 0))
   state.session = { tableCode: '', tableToken: 'fixed-token', scanNonce: 'scan-turn-b' }
   const pendingB = fixture.api.getGuestSession()
+  await new Promise((resolve) => setTimeout(resolve, 0))
 
   fixture.calls[1].pending.resolve({ data: {
     status: 'active', table: { code: 'VIP1' }, cartScope: 'cart-scope-for-turn-b-000000002',

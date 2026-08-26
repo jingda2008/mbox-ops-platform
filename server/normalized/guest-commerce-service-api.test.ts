@@ -20,6 +20,7 @@ import {
 } from './guest-request-context.js'
 import type { Payment } from './payment-repository.js'
 import { OnlinePaymentUnknownError } from './online-payment-service.js'
+import { WechatPaymentIdentityRequiredError } from './payment-provider-action-repository.js'
 import { PostarPaymentRejectedError } from '../postar-adapter.js'
 import { FulfillmentCapacityUnavailableError } from './fulfillment-capacity-repository.js'
 import { ServiceTaskRepository } from './service-task-repository.js'
@@ -333,6 +334,31 @@ describe('guest commerce/service API trust boundaries', () => {
     expect(value.payments.initiate).not.toHaveBeenCalled()
   })
 
+  it('requires a WeChat payment identity before submitting a regular guest order', async () => {
+    const value = fixture({
+      onlinePayments: {
+        assertAvailable: vi.fn(),
+        assertGuestJsapiReady: vi.fn(async () => {
+          throw new WechatPaymentIdentityRequiredError()
+        }),
+        resolveActivePayment: vi.fn(async () => null),
+        create: vi.fn(),
+      },
+    })
+    const response = await value.app.inject({
+      method: 'POST',
+      url: '/api/guest/orders',
+      headers: { 'idempotency-key': 'guest-order-identity-required-0001' },
+      payload: { items: [{ productId, quantity: 1 }] },
+    })
+
+    expect(response.statusCode).toBe(409)
+    expect(response.json()).toMatchObject({ error: { code: 'WECHAT_IDENTITY_REQUIRED' } })
+    expect(value.onlinePayments.assertGuestJsapiReady).toHaveBeenCalledWith(context.scope, customerId)
+    expect(value.commerce.submitOrder).not.toHaveBeenCalled()
+    expect(value.payments.initiate).not.toHaveBeenCalled()
+  })
+
   it('forwards only the public conflicting order confirmation to server-authoritative validation', async () => {
     const value = fixture()
     const response = await value.app.inject({
@@ -439,7 +465,7 @@ describe('guest commerce/service API trust boundaries', () => {
     expect(response.json().meta).not.toHaveProperty('tableSessionId')
   })
 
-  it('continues the employee-created QR payment on a guest phone without creating a second payment', async () => {
+  it('does not return an employee-created QR to the same guest phone', async () => {
     const query = vi.fn(async (sql: string) => {
       if (sql.includes('lock_active_table_guest_session_position')) {
         return { rows: [{ participation_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }], rowCount:1 }
@@ -493,21 +519,10 @@ describe('guest commerce/service API trust boundaries', () => {
       payload: {},
     })
 
-    expect(response.statusCode).toBe(200)
-    expect(response.json()).toMatchObject({ data: {
-      paymentId,
-      paymentPublicId: 'staff-payment-public-0001',
-      orderPublicId: 'staff-order-public-0001',
-      presentation: 'qr',
-    } })
+    expect(response.statusCode).toBe(503)
+    expect(response.json()).toMatchObject({ error: { code: 'ONLINE_PAYMENT_UNAVAILABLE' } })
     expect(value.options.payments.initiate).not.toHaveBeenCalled()
-    expect(create).toHaveBeenCalledWith(expect.objectContaining({
-      paymentId,
-      principal: {
-        type: 'guest',tableSessionId,customerId,
-        guestSessionId:'99999999-9999-4999-8999-999999999999',
-      },
-    }))
+    expect(create).not.toHaveBeenCalled()
     const paymentContextSql = query.mock.calls.find(([sql]) => String(sql).includes('SELECT payment.id, payment.payable_kind, payment.order_id'))?.[0]
     expect(paymentContextSql).not.toContain('FOR SHARE')
   })
@@ -703,7 +718,7 @@ describe('guest commerce/service API trust boundaries', () => {
     } })
   })
 
-  it('keeps an uncertain payment attached to the created order without issuing another action', async () => {
+  it('refuses a native-QR store policy before it creates a guest self-payment order', async () => {
     const value = fixture({
       onlinePayments: {
         assertAvailable: vi.fn(),
@@ -720,20 +735,9 @@ describe('guest commerce/service API trust boundaries', () => {
       payload: { items: [{ productId, quantity: 1 }] },
     })
 
-    expect(response.statusCode).toBe(201)
-    expect(value.commerce.submitOrder).toHaveBeenCalledOnce()
-    expect(response.json()).toMatchObject({ data: {
-      order: { publicId: 'guest-order-public-0001' },
-      payment: {
-        status: 'pending',
-        providerAction: {
-          orderPublicId: 'guest-order-public-0001',
-          status: 'unknown',
-          presentation: 'qr',
-          payload: null,
-        },
-      },
-    } })
+    expect(response.statusCode).toBe(503)
+    expect(response.json()).toMatchObject({ error: { code: 'ONLINE_PAYMENT_UNAVAILABLE' } })
+    expect(value.commerce.submitOrder).not.toHaveBeenCalled()
   })
 })
 
@@ -1139,6 +1143,7 @@ integration('guest service and mood API with PostgreSQL', () => {
 })
 
 function fixture(overrides: Partial<GuestCommerceServiceApiOptions> = {}) {
+  const { onlinePayments: onlinePaymentOverrides, ...optionOverrides } = overrides
   const paymentMode = overrides.paymentMode ?? 'wechat_jsapi'
   const query = vi.fn(async (sql: string) => sql.includes('lock_active_table_guest_session_position') ? ({
     rows:[{ participation_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }],rowCount:1,
@@ -1214,11 +1219,12 @@ function fixture(overrides: Partial<GuestCommerceServiceApiOptions> = {}) {
       replayed: false,
     })),
   }
-  const onlinePayments = overrides.onlinePayments ?? {
+  const onlinePayments = {
     assertAvailable: vi.fn(),
-    resolveGuestMethod: vi.fn(async () => 'jsapi' as const),
+    assertGuestJsapiReady: vi.fn(async () => 'jsapi' as const),
     resolveActivePayment: vi.fn(async () => null),
     create: vi.fn(async () => paymentAction(paymentMode === 'simulation' ? 'qr' : 'jsapi')),
+    ...(onlinePaymentOverrides ?? {}),
   }
   const options: GuestCommerceServiceApiOptions = {
     transactions,
@@ -1232,12 +1238,13 @@ function fixture(overrides: Partial<GuestCommerceServiceApiOptions> = {}) {
     paymentMode,
     paymentActionSecret: 'unit-payment-action-secret-at-least-32-bytes',
     createPublicId: (kind) => `guest-${kind}-public-0001`,
-    ...overrides,
+    ...optionOverrides,
+    onlinePayments,
   }
   const app = Fastify()
   apps.push(app)
   app.register(guestCommerceServiceApiPlugin, { prefix: '/api', ...options })
-  return { app, options, transactions, query, commerce, payments }
+  return { app, options, transactions, query, commerce, payments, onlinePayments }
 }
 
 function paymentAction(presentation: 'jsapi' | 'qr' | 'barcode') {

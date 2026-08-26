@@ -187,6 +187,13 @@ Page({
         this.setData({ error: customerErrorMessage(error, '桌台连接已失效，请重新扫描当前桌面的二维码'), success: '' })
         return
       }
+      if (error && error.code === 'WECHAT_IDENTITY_REQUIRED') {
+        this.setData({
+          error: '订单已保留，但尚未发起收款。请重新扫描当前桌面的二维码后继续付款，不要重新下单。',
+          success: '',
+        })
+        return
+      }
       const cancelled = isWechatCancellation(error)
       const statusText = cancelled ? '订单已保留，付款已取消' : '付款未完成，可稍后继续'
       wx.setStorageSync(PENDING_PAYMENT_KEY, Object.assign({}, pendingPayment, { statusText }))

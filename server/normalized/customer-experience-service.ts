@@ -2087,7 +2087,8 @@ export class CustomerExperienceService {
       acknowledgedSafetyPolicyVersion: string
       acknowledgedRefundPolicyVersion: string
       paymentChoice: ActivityPaymentChoice
-      paymentMethod: Extract<PaymentMethod, 'jsapi' | 'native_qr'>
+      paymentMethod: Extract<PaymentMethod, 'jsapi'>
+      jsapiReady: boolean
       idempotencyKey: string
     }>,
   ) {
@@ -2140,6 +2141,7 @@ export class CustomerExperienceService {
         acknowledgedRefundPolicyVersion: input.acknowledgedRefundPolicyVersion,
         paymentChoice: input.paymentChoice,
         paymentMethod: input.paymentMethod,
+        jsapiReady: input.jsapiReady,
         paymentPublicId,
         publicId: registrationPublicId,
         idempotencyKey: input.idempotencyKey,

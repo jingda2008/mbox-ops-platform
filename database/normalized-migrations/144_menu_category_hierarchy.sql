@@ -170,6 +170,19 @@ SELECT DISTINCT
   true
 FROM mbox.products AS product
 WHERE btrim(product.category_code) <> ''
+  -- A seeded top-level category may share a legacy product category code
+  -- (for example, "drinks").  PostgreSQL runs BEFORE INSERT triggers before
+  -- it evaluates ON CONFLICT DO NOTHING, so attempting that duplicate insert
+  -- would otherwise try to re-parent the populated top-level category and
+  -- abort the whole upgrade.  Existing rows are already the source of truth;
+  -- only materialize product categories that the store does not yet have.
+  AND NOT EXISTS (
+    SELECT 1
+    FROM mbox.menu_categories AS existing_category
+    WHERE existing_category.tenant_id=product.tenant_id
+      AND existing_category.store_id=product.store_id
+      AND existing_category.code=product.category_code
+  )
 ON CONFLICT (tenant_id,store_id,code) DO NOTHING;
 
 ALTER TABLE mbox.menu_categories ENABLE ROW LEVEL SECURITY;

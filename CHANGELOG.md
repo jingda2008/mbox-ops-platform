@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-rc.145 - 2026-08-27
+
+- Repairs the schema-144 customer menu-category upgrade for stores whose
+  existing product category code is already one of the seeded top-level menu
+  categories. The upgrade now keeps that existing category unchanged instead
+  of attempting a duplicate insert that triggers a hierarchy constraint.
+  Product category codes and existing menu hierarchy are not rewritten.
+
 ## 1.0.0-rc.144 - 2026-08-27
 
 - Unifies mini-program WeChat payment identity for paid Superhigh registration

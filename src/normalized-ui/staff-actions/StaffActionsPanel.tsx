@@ -164,7 +164,7 @@ export function StaffActionsPanel({
         throw fulfillmentResult.reason
       } else {
         setFulfillment(null)
-        if (!(fulfillmentResult.reason instanceof StaffActionsApiError
+        if (!quiet && !(fulfillmentResult.reason instanceof StaffActionsApiError
           && fulfillmentResult.reason.status === 403)) {
           showNotice({ kind: 'error', message: '桌台与服务已更新，出品待办暂时无法读取' })
         }
@@ -176,7 +176,7 @@ export function StaffActionsPanel({
         } catch (error) {
           if (error instanceof StaffActionsApiError && error.status===401) throw error
           setMemberBenefits(null)
-          if (!(error instanceof StaffActionsApiError && error.status===403)) {
+          if (!quiet && !(error instanceof StaffActionsApiError && error.status===403)) {
             showNotice({kind:'error',message:'桌台与服务已更新，会员权益待办暂时无法读取'})
           }
         }

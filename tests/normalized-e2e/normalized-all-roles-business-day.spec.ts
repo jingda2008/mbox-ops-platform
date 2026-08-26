@@ -258,8 +258,19 @@ test('one business-day order and guest requests flow through bartender, kitchen,
   await server.page.getByRole('button', { name: '任务', exact: true }).first().click()
   const callTask = server.page.locator('.staff-action-card').filter({ hasText: '客人正在等您' }).first()
   await expect(callTask).toBeVisible()
+  for (const endpoint of [
+    '**/api/staff/annual-benefit-reservations*',
+    '**/api/staff/annual-daily-snack-claims*',
+  ]) {
+    await server.page.route(endpoint, (route) => route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: { code: 'OPTIONAL_MEMBER_QUEUE_UNAVAILABLE', message: 'temporary test outage' } }),
+    }))
+  }
   await callTask.getByRole('button', { name: '完成' }).click()
   await expect(server.page.getByRole('status')).toContainText('已完成')
+  await expect(callTask).toHaveCount(0)
   await expect(server.page.getByText(/心情.*开心|开心.*心情/)).toHaveCount(0)
   await server.context.close()
 

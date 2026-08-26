@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.0-rc.141 - 2026-08-26
+
+- Repairs the release-browser exercise for the fixed M-BOX confirmation dialog: the test now deliberately confirms each safety-sensitive payment-policy action through the rendered dialog. No payment-policy production rule changed.
+
 ## 1.0.0-rc.140 - 2026-08-26
 
 - Replaces browser-native confirmation and short text prompts throughout the

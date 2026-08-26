@@ -1193,20 +1193,20 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
       if (row === undefined) {
         throw new CustomerExperienceRequestError('未找到该会员账户', 'MEMBER_ACCOUNT_NOT_FOUND', 404)
       }
-      const [pointEntries, growthEntries] = await Promise.all([
-        transaction.query<StaffMemberLedgerRow>(`
+      // The transaction owns one pg client; execute ledger reads in order instead of relying on
+      // node-postgres's deprecated concurrent-query queue.
+      const pointEntries = await transaction.query<StaffMemberLedgerRow>(`
           SELECT entry_type,points_delta AS delta,balance_after,reason,occurred_at::text
           FROM mbox.loyalty_point_ledger
           WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND membership_id=$3::uuid
           ORDER BY occurred_at DESC,id DESC LIMIT 20
-        `, [context.scope.tenantId, context.scope.storeId, row.membership_id]),
-        transaction.query<StaffMemberLedgerRow>(`
+        `, [context.scope.tenantId, context.scope.storeId, row.membership_id])
+      const growthEntries = await transaction.query<StaffMemberLedgerRow>(`
           SELECT entry_type,growth_delta AS delta,balance_after,reason,occurred_at::text
           FROM mbox.loyalty_growth_ledger
           WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND membership_id=$3::uuid
           ORDER BY occurred_at DESC,id DESC LIMIT 20
-        `, [context.scope.tenantId, context.scope.storeId, row.membership_id]),
-      ])
+        `, [context.scope.tenantId, context.scope.storeId, row.membership_id])
       return {
         memberNo: row.member_no,
         membershipStatus: row.membership_status,

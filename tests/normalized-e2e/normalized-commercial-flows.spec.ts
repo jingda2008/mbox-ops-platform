@@ -68,6 +68,20 @@ async function fixture(): Promise<Fixture> {
   )) as Fixture
 }
 
+async function verifyStaffDevice(page: import('@playwright/test').Page, credential: string) {
+  await page.getByLabel('门店口令').fill(credential)
+  const [response] = await Promise.all([
+    page.waitForResponse((candidate) => (
+      candidate.request().method() === 'POST'
+      && new URL(candidate.url()).pathname === '/api/auth/device-access'
+    ), { timeout: 12_000 }),
+    page.getByRole('button', { name: /验证设备/ }).click(),
+  ])
+  expect(response.status(), '设备验证必须由服务端明确成功，不能只等待下一个表单').toBe(200)
+  await expect(page.getByRole('heading', { name: '员工登录' })).toBeVisible({ timeout: 12_000 })
+  await expect(page.getByLabel('员工账号')).toBeVisible({ timeout: 12_000 })
+}
+
 async function guestCartItemCount(cartDock: import('@playwright/test').Locator): Promise<number> {
   const copy = await cartDock.locator('.menu-cart-summary-copy strong').textContent()
   if (copy?.includes('本次还未选择')) return 0
@@ -233,8 +247,7 @@ test('mobile guest, reservation and staff work surfaces have no serious accessib
   expect(reservationDetails.violations.filter((violation) => violation.impact === 'serious' || violation.impact === 'critical')).toEqual([])
 
   await page.goto(data.staffUrl)
-  await page.getByLabel('门店口令').fill(data.dailyCredential)
-  await page.getByRole('button', { name: /验证设备/ }).click()
+  await verifyStaffDevice(page, data.dailyCredential)
   await page.getByLabel('员工账号').fill(data.employeeCode)
   await page.getByLabel('四位 PIN').fill(data.employeePin)
   await page.getByRole('button', { name: /进入工作台/ }).click()
@@ -519,8 +532,7 @@ test('reservation status polling stops after one session renewal is still reject
 test('mobile manager completes device verification and reaches role-scoped workspace', async ({ page }) => {
   const data = await fixture()
   await page.goto(data.staffUrl)
-  await page.getByLabel('门店口令').fill(data.dailyCredential)
-  await page.getByRole('button', { name: /验证设备/ }).click()
+  await verifyStaffDevice(page, data.dailyCredential)
   await page.getByLabel('员工账号').fill(data.employeeCode)
   await page.getByLabel('四位 PIN').fill(data.employeePin)
   await page.getByRole('button', { name: /进入工作台/ }).click()
@@ -559,8 +571,7 @@ test('mobile manager can initiate but cannot review cashier refund work', async 
     body: JSON.stringify({ data: cashierWorkbenchFixture() }),
   }))
   await page.goto(data.staffUrl)
-  await page.getByLabel('门店口令').fill(data.dailyCredential)
-  await page.getByRole('button', { name: /验证设备/ }).click()
+  await verifyStaffDevice(page, data.dailyCredential)
   await page.getByLabel('员工账号').fill(data.employeeCode)
   await page.getByLabel('四位 PIN').fill(data.employeePin)
   await page.getByRole('button', { name: /进入工作台/ }).click()
@@ -595,8 +606,7 @@ test('mobile cashier can review but cannot initiate manager refund work', async 
     }) }),
   }))
   await page.goto(data.staffUrl)
-  await page.getByLabel('门店口令').fill(data.dailyCredential)
-  await page.getByRole('button', { name: /验证设备/ }).click()
+  await verifyStaffDevice(page, data.dailyCredential)
   await page.getByLabel('员工账号').fill('sanmu')
   await page.getByLabel('四位 PIN').fill(data.employeePin)
   await page.getByRole('button', { name: /进入工作台/ }).click()
@@ -623,8 +633,7 @@ test('mobile cashier can review but cannot initiate manager refund work', async 
 test('mobile administrator publishes a permission and sees server-verified feedback in view', async ({ page }) => {
   const data = await fixture()
   await page.goto(data.staffUrl)
-  await page.getByLabel('门店口令').fill(data.dailyCredential)
-  await page.getByRole('button', { name: /验证设备/ }).click()
+  await verifyStaffDevice(page, data.dailyCredential)
   await page.getByLabel('员工账号').fill(data.adminEmployeeCode)
   await page.getByLabel('四位 PIN').fill(data.adminEmployeePin)
   await page.getByRole('button', { name: /进入工作台/ }).click()
@@ -676,8 +685,7 @@ test('mobile administrator publishes a permission and sees server-verified feedb
 test('mobile manager payment choices stay synchronized with two guests at the same table', async ({ page, browser }) => {
   const data = await fixture()
   await page.goto(data.staffUrl)
-  await page.getByLabel('门店口令').fill(data.dailyCredential)
-  await page.getByRole('button', { name: /验证设备/ }).click()
+  await verifyStaffDevice(page, data.dailyCredential)
   await page.getByLabel('员工账号').fill(data.employeeCode)
   await page.getByLabel('四位 PIN').fill(data.employeePin)
   await page.getByRole('button', { name: /进入工作台/ }).click()

@@ -3345,8 +3345,9 @@ export class CustomerExperienceRepository {
   }
 
   async recommendationPolicyConfiguration(code = 'DEFAULT'): Promise<RecommendationPolicyConfigurationView> {
-    const [policyResult, featureResult] = await Promise.all([
-      this.transaction.query<RecommendationPolicyVersionRow>(`
+    // ScopedTransaction is backed by one pg client. Keep these reads sequential: node-postgres
+    // queues concurrent client.query calls today, but will reject that pattern in pg v9.
+    const policyResult = await this.transaction.query<RecommendationPolicyVersionRow>(`
         SELECT policy.id,policy.public_id,policy.policy_code,policy.version,policy.status,
           policy.preference_weight,policy.scene_weight,policy.margin_weight,policy.priority_weight,
           policy.performance_weight,policy.inventory_weight,policy.capacity_weight,
@@ -3370,8 +3371,8 @@ export class CustomerExperienceRepository {
          AND publisher.id=policy.published_by_employee_id
         WHERE policy.tenant_id=$1::uuid AND policy.store_id=$2::uuid AND policy.policy_code=$3
         ORDER BY policy.version DESC,policy.id DESC
-      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, code]),
-      this.transaction.query<{
+      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, code])
+    const featureResult = await this.transaction.query<{
         rollout_state: RecommendationPolicyConfigurationView['feature']['rolloutState']
         reason: string
         effective_from: string | null
@@ -3380,8 +3381,7 @@ export class CustomerExperienceRepository {
         SELECT rollout_state,reason,effective_from::text,updated_at::text
         FROM mbox.customer_experience_features
         WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND feature_code='recommendation.engine'
-      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId]),
-    ])
+      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId])
     const feature = requiredRow(featureResult.rows[0], 'recommendation feature')
     return {
       feature: {
@@ -3534,13 +3534,13 @@ export class CustomerExperienceRepository {
   }
 
   async staffDashboard(): Promise<JsonObject> {
-    const [plans, cues, followups, activities] = await Promise.all([
-      this.transaction.query<{ count: string }>(`
+    // Do not issue concurrent queries through this single scoped connection.
+    const plans = await this.transaction.query<{ count: string }>(`
         SELECT count(*)::text AS count FROM mbox.customer_experience_plans
         WHERE tenant_id = $1::uuid AND store_id = $2::uuid
           AND plan_state IN ('planned', 'active', 'paused')
-      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId]),
-      this.transaction.query<CueRow & { table_code: string; plan_public_id: string }>(`
+      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId])
+    const cues = await this.transaction.query<CueRow & { table_code: string; plan_public_id: string }>(`
         SELECT cue.id, cue.cue_code, cue.sequence_no, cue.trigger_kind,
           cue.trigger_offset_minutes, cue.performance_phase, cue.action_kind,
           cue.station, cue.action_payload, cue.due_at::text, cue.status,
@@ -3559,8 +3559,8 @@ export class CustomerExperienceRepository {
           AND cue.status IN ('pending', 'ready', 'dispatched')
         ORDER BY COALESCE(cue.due_at, 'infinity'::timestamptz), cue.sequence_no
         LIMIT 100
-      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId]),
-      this.transaction.query<{
+      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId])
+    const followups = await this.transaction.query<{
         public_id: string
         customer_id: string
         owner_employee_id: string
@@ -3578,8 +3578,8 @@ export class CustomerExperienceRepository {
         ORDER BY CASE priority WHEN 'urgent' THEN 4 WHEN 'high' THEN 3 WHEN 'normal' THEN 2 ELSE 1 END DESC,
           due_at, id
         LIMIT 100
-      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId]),
-      this.transaction.query<{
+      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId])
+    const activities = await this.transaction.query<{
         public_id: string
         title: string
         status: string
@@ -3607,8 +3607,7 @@ export class CustomerExperienceRepository {
         GROUP BY activity.id
         ORDER BY activity.starts_at
         LIMIT 50
-      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId]),
-    ])
+      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId])
     return {
       activePlanCount: integer(plans.rows[0]?.count ?? 0, 'active plan count'),
       cueQueue: cues.rows.map((cue) => ({

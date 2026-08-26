@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0-rc.137 - 2026-08-26
+
+- Fixes the staff “unresolved payment retry release” transaction. The outbox
+  event key now uses the payment UUID only, rather than appending a valid but
+  long client idempotency key beyond the database event-key boundary. An
+  authorized employee can again release an online attempt without an explicit
+  success, then issue a fresh QR, scan a new payment code, or record a
+  confirmed in-store payment; the original attempt remains auditable for
+  reconciliation if a late result arrives.
+
 ## 1.0.0-rc.136 - 2026-08-26
 
 - Restores the configurable “顾客离店异常翻台” capability to the authoritative

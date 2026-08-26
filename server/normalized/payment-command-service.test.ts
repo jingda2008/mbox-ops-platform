@@ -153,6 +153,27 @@ describe('PaymentCommandService', () => {
     expect(transactions.get('init-order-two-0001')?.lockedOrderIds).toEqual([orderTwoId, orderTwoId, orderTwoId])
   })
 
+  it('keeps an unresolved-payment release event key within the outbox limit for a maximum-length idempotency key', async () => {
+    const transaction = new PaymentFlowTransaction(orderOneId, paymentOneId, 'release')
+    const executor = new MemoryIdempotentExecutor(() => transaction)
+    const service = new PaymentCommandService(executor, allowAllAuthorization)
+    const idempotencyKey = `retry-${'x'.repeat(122)}`
+
+    await service.releaseUnresolvedForRetry({
+      scope: { tenantId, storeId },
+      actor: { type: 'employee', employeeId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
+      businessDate: '2026-08-11',
+      idempotencyKey,
+      requestFingerprint: JSON.stringify({ paymentId: paymentOneId, reason: '顾客未确认到账，重新发起收款' }),
+      paymentId: paymentOneId,
+      reason: '顾客未确认到账，重新发起收款',
+    })
+
+    const message = executor.outcomes[0]?.outboxMessages[0]
+    expect(message?.businessEventKey).toBe(`payment:unresolved-retry-release:${paymentOneId}`)
+    expect(message?.businessEventKey).toHaveLength(69)
+  })
+
   it('rolls the payment mutation back when audit insertion fails', async () => {
     const client = new RollbackClient()
     const pool: PostgresPool = {
@@ -738,7 +759,7 @@ class PaymentFlowTransaction implements ScopedTransaction {
   constructor(
     private readonly orderId: string,
     private readonly paymentId: string,
-    private readonly mode: 'initiate' | 'callback',
+    private readonly mode: 'initiate' | 'callback' | 'release',
   ) {
     this.paymentStatus = mode === 'callback' ? 'pending' : 'pending'
   }
@@ -771,6 +792,9 @@ class PaymentFlowTransaction implements ScopedTransaction {
         id: this.paymentId, payable_kind: 'order', order_id: this.orderId, activity_registration_id: null,
       }])
     }
+    if (sql.includes('FROM mbox.table_sessions') && sql.includes('FOR SHARE')) {
+      return result([{ id: '99999999-9999-4999-8999-999999999999' }])
+    }
     if (sql.includes('AS gross_paid_minor')) {
       return result([this.mode === 'callback'
         ? { gross_paid_minor: '8800', refunded_minor: '0', has_pending: false }
@@ -781,9 +805,27 @@ class PaymentFlowTransaction implements ScopedTransaction {
       return result([paymentRow(this.orderId, this.paymentId, 'pending')])
     }
     if (sql.includes('FROM mbox.payments') && sql.includes('FOR UPDATE')) {
-      return result([paymentRow(this.orderId, this.paymentId, this.paymentStatus)])
+      const payment = paymentRow(this.orderId, this.paymentId, this.paymentStatus)
+      return result([this.mode === 'release'
+        ? {
+            ...payment,
+            retry_released_at: null,
+            retry_released_by_employee_id: null,
+            retry_release_reason: null,
+            retry_release_idempotency_key: null,
+          }
+        : payment])
     }
     if (sql.includes('UPDATE mbox.payments')) {
+      if (this.mode === 'release') {
+        return result([{
+          ...paymentRow(this.orderId, this.paymentId, 'pending'),
+          retry_released_at: '2026-08-11T12:01:00.000Z',
+          retry_released_by_employee_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          retry_release_reason: '顾客未确认到账，重新发起收款',
+          retry_release_idempotency_key: 'retry-release-command-0001',
+        }])
+      }
       return result([paymentRow(this.orderId, this.paymentId, 'succeeded', 'provider-payment-001')])
     }
     if (sql.includes('UPDATE mbox.payment_provider_actions')) return result([])

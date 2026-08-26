@@ -2,11 +2,20 @@ import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
+import { NormalizedCommandExecutor } from './command-executor.js'
+import { PaymentCommandService } from './payment-command-service.js'
 import { PaymentRepository } from './payment-repository.js'
+import type { PaymentCapabilityAuthorizationPort } from './payment-security-policy.js'
 import { ScopedPostgresTransactionRunner, type PostgresPool } from './transaction-runner.js'
 
 const databaseUrl = process.env.TEST_NORMALIZED_DATABASE_URL
 const integration = databaseUrl ? describe : describe.skip
+const allowRetryRelease: PaymentCapabilityAuthorizationPort = {
+  assertEmployeeCapability: async () => undefined,
+  assertEmployeeOrderAccess: async () => undefined,
+  assertRefundRequestLimit: async () => undefined,
+  assertRefundApproval: async () => undefined,
+}
 
 integration('unresolved payment retry release', () => {
   const tenantId = randomUUID()
@@ -93,5 +102,63 @@ integration('unresolved payment retry release', () => {
       expect.objectContaining({ id: firstPaymentId, status: 'pending', retry_released_at: expect.any(String) }),
       expect.objectContaining({ id: replacement.id, status: 'created', retry_released_at: null }),
     ]))
+  })
+
+  it('commits a bounded outbox key when a maximum-length idempotency key releases an unresolved payment', async () => {
+    const sessionId = randomUUID()
+    const retryTableId = randomUUID()
+    const orderId = randomUUID()
+    const paymentId = randomUUID()
+    await pool.query(`INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity)
+      VALUES($1,$2,$3,$4,$5,$5,4)`, [
+      retryTableId, tenantId, storeId, areaId, `PR${randomUUID().slice(0, 6)}`,
+    ])
+    await pool.query(`INSERT INTO mbox.table_sessions(
+      id,tenant_id,store_id,table_id,public_id,business_date,guest_count,capacity_at_open,status,opened_by_employee_id
+    ) SELECT $1,$2,$3,$4,$5,
+      ((clock_timestamp() AT TIME ZONE timezone)-business_day_cutoff)::date,
+      2,4,'open',$6 FROM mbox.stores WHERE tenant_id=$2 AND id=$3`, [
+      sessionId, tenantId, storeId, retryTableId, `retry-command-session-${randomUUID()}`, employeeId,
+    ])
+    await pool.query(`INSERT INTO mbox.orders(
+      id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,
+      subtotal_amount_minor,discount_amount_minor,total_amount_minor,currency,created_by_employee_id,submitted_at
+    ) VALUES($1,$2,$3,$4,$5,'staff_assisted','submitted','pending',8800,0,8800,'CNY',$6,clock_timestamp())`, [
+      orderId, tenantId, storeId, sessionId, `retry-command-order-${randomUUID()}`, employeeId,
+    ])
+    await pool.query(`INSERT INTO mbox.payments(
+      id,tenant_id,store_id,order_id,public_id,provider,method,amount_minor,currency,status
+    ) VALUES($1,$2,$3,$4,$5,'postar','native_qr',8800,'CNY','pending')`, [
+      paymentId, tenantId, storeId, orderId, `retry-command-payment-${randomUUID()}`,
+    ])
+
+    const service = new PaymentCommandService(
+      new NormalizedCommandExecutor(runner),
+      allowRetryRelease,
+    )
+    const idempotencyKey = `retry-${'x'.repeat(122)}`
+    const execution = await service.releaseUnresolvedForRetry({
+      scope: { tenantId, storeId },
+      actor: { type: 'employee', employeeId },
+      businessDate: '2026-08-26',
+      idempotencyKey,
+      requestFingerprint: JSON.stringify({ paymentId, reason: '顾客未确认到账，重新发起收款' }),
+      paymentId,
+      reason: '顾客未确认到账，重新发起收款',
+    })
+
+    expect(execution.replayed).toBe(false)
+    const outbox = await pool.query<{ message_key: string; aggregate_id: string; message_type: string }>(`
+      SELECT message_key, aggregate_id, message_type
+      FROM mbox.outbox_messages
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND aggregate_id=$3::uuid
+        AND message_type='payment.unresolved_retry_released.v1'
+    `, [tenantId, storeId, paymentId])
+    expect(outbox.rows).toEqual([{
+      message_key: `payment:unresolved-retry-release:${paymentId}`,
+      aggregate_id: paymentId,
+      message_type: 'payment.unresolved_retry_released.v1',
+    }])
+    expect(outbox.rows[0]?.message_key.length).toBeLessThanOrEqual(160)
   })
 })

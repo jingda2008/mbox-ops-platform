@@ -251,7 +251,11 @@ export class PaymentCommandService {
           reason: payment.retryReleaseReason ?? input.reason,
         }],
         outboxMessages: [{
-          businessEventKey: `payment:unresolved-retry-release:${payment.id}:${input.idempotencyKey}`,
+          // A client idempotency key may be 128 characters.  It is already
+          // enforced by the command executor, and this transition can happen
+          // at most once for one payment, so it must not be appended to the
+          // bounded outbox business key.
+          businessEventKey: `payment:unresolved-retry-release:${payment.id}`,
           aggregateType: 'payment',
           aggregateId: payment.id,
           aggregateVersion: 2,

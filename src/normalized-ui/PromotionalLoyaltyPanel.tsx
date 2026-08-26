@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { BadgePercent, CheckCircle2, ChevronDown, Plus, Rocket, Trash2 } from 'lucide-react'
 import type { NormalizedApiClient, StaffAuthView } from '../normalized-api'
+import { useConfirmationDialog } from './ConfirmationDialog'
 import './promotional-loyalty-panel.css'
 
 type TriggerKind = 'activity_payment'|'activity_check_in'|'activity_completion'
@@ -48,6 +49,7 @@ const stackingLabels:Record<StackingMode,string>={
 const statusLabels={ draft:'待审批',approved:'待发布',published:'运行中',retired:'已结束' } as const
 
 export function PromotionalLoyaltyPanel({api,auth}:{api:NormalizedApiClient;auth:StaffAuthView}) {
+  const { confirmAction, promptAction } = useConfirmationDialog()
   const canView=auth.permissions.includes('loyalty.promotion.view')
   const canManage=auth.permissions.includes('loyalty.promotion.manage')
   const canApprove=auth.permissions.includes('loyalty.promotion.approve')
@@ -71,7 +73,7 @@ export function PromotionalLoyaltyPanel({api,auth}:{api:NormalizedApiClient;auth
   async function submitDraft(event:FormEvent){
     event.preventDefault();if(!draft||busy)return
     const payload=draftPayload(draft)
-    if(!window.confirm(`建立“${draft.name}”草稿？这不会立即发积分，仍需他人审批和最高管理人员发布。`))return
+    if(!(await confirmAction({title:'确认建立促销积分草稿',description:`建立“${draft.name}”草稿不会立即发积分，仍需他人审批和最高管理人员发布。`,confirmLabel:'建立草稿'})))return
     setBusy('draft');setNotice('')
     try{
       await api.postEndpoint('/api/staff/loyalty/promotion-policies',payload,{
@@ -87,15 +89,15 @@ export function PromotionalLoyaltyPanel({api,auth}:{api:NormalizedApiClient;auth
   }
 
   async function publish(policy:PromotionPolicy){
-    const start=window.prompt('生效时间（例如 2026-08-20 18:00）','')?.trim()
+    const start=(await promptAction({title:'填写促销积分生效时间',description:'例如 2026-08-20 18:00。',label:'生效时间',confirmLabel:'继续',multiline:false}))?.trim()
     if(!start)return
     const parsedStart=Date.parse(start)
     if(!Number.isFinite(parsedStart))return setNotice('生效时间格式无效。')
-    const until=window.prompt('可选失效时间；留空表示由下一版本准确接替','')?.trim()??''
+    const until=(await promptAction({title:'填写失效时间（可选）',description:'留空表示由下一版本准确接替。',label:'失效时间',confirmLabel:'继续',multiline:false}))?.trim()??''
     const parsedUntil=until?Date.parse(until):null
     if(parsedUntil!==null&&(!Number.isFinite(parsedUntil)||parsedUntil<=parsedStart))return setNotice('失效时间必须晚于生效时间。')
-    const reason=window.prompt('发布说明','已确认预算、叠加、触发证据和退款冲回策略')?.trim()
-    if(!reason||!window.confirm(`发布“${policy.name}”第${policy.version}版？发布后业务规则不可直接修改。`))return
+    const reason=(await promptAction({title:'填写发布说明',description:'说明会保留在规则审计中。',label:'发布说明',defaultValue:'已确认预算、叠加、触发证据和退款冲回策略',confirmLabel:'继续'}))?.trim()
+    if(!reason||!(await confirmAction({title:'确认发布促销积分规则',description:`发布“${policy.name}”第${policy.version}版后，业务规则不可直接修改。`,confirmLabel:'确认发布'})))return
     setBusy(policy.id);setNotice('')
     try{
       await api.postEndpoint(`/api/staff/loyalty/promotion-policies/${encodeURIComponent(policy.id)}/publish`,{

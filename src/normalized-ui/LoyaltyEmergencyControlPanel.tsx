@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { PauseCircle, PlayCircle, ShieldCheck } from 'lucide-react'
 import type { NormalizedApiClient, StaffAuthView } from '../normalized-api'
+import { useConfirmationDialog } from './ConfirmationDialog'
 import './loyalty-emergency-control-panel.css'
 
 type Capability = 'points_accrual'|'points_redemption'|'wechat_notification'
@@ -20,6 +21,7 @@ const LABELS:Record<Capability,{ title:string;detail:string }> = {
 }
 
 export function LoyaltyEmergencyControlPanel({ api,auth }:{ api:NormalizedApiClient;auth:StaffAuthView }) {
+  const { confirmAction, promptAction } = useConfirmationDialog()
   const canView=auth.permissions.includes('loyalty.operations.view')
   const canControl=auth.permissions.includes('loyalty.operations.control')
   const [items,setItems]=useState<OperationalControl[]>([])
@@ -38,18 +40,23 @@ export function LoyaltyEmergencyControlPanel({ api,auth }:{ api:NormalizedApiCli
   async function change(item:OperationalControl) {
     if (!canControl||busy!==null) return
     const operation=item.state==='active'?'pause':'resume'
-    const reason=window.prompt(operation==='pause'?'请填写暂停原因（必填）':'请填写恢复原因（必填）','')?.trim()
+    const reason=(await promptAction({title:operation==='pause'?'填写暂停原因':'填写恢复原因',description:'该说明会写入运行审计。',label:'原因',confirmLabel:'继续'}))?.trim()
     if (!reason) return
     let reviewAt:string|null=null
     if (operation==='pause') {
-      const value=window.prompt('可选：填写复核时间，例如 2026-08-17 10:00；不需要可留空','')?.trim() ?? ''
+      const value=(await promptAction({title:'填写复核时间（可选）',description:'例如 2026-08-17 10:00；不需要可留空。',label:'复核时间',confirmLabel:'继续',multiline:false}))?.trim() ?? ''
       if (value) {
         const parsed=Date.parse(value)
         if (!Number.isFinite(parsed)||parsed<=Date.now()) return setNotice('复核时间必须晚于当前时间。')
         reviewAt=new Date(parsed).toISOString()
       }
     }
-    if (!window.confirm(`${operation==='pause'?'暂停':'恢复'}“${LABELS[item.capability].title}”？\n${LABELS[item.capability].detail}`)) return
+    if (!(await confirmAction({
+      title: `${operation==='pause'?'暂停':'恢复'}会员运行能力`,
+      description: `${operation==='pause'?'暂停':'恢复'}“${LABELS[item.capability].title}”？\n${LABELS[item.capability].detail}`,
+      confirmLabel: operation === 'pause' ? '确认暂停' : '确认恢复',
+      tone: operation === 'pause' ? 'danger' : 'default',
+    }))) return
     setBusy(item.capability);setNotice('')
     try {
       await api.putEndpoint(`/api/staff/loyalty/operational-controls/${item.capability}`,{

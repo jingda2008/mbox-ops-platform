@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Clock3, UsersRound } from 'lucide-react'
 import type { NormalizedApiClient, StaffAuthView } from '../normalized-api'
+import { useConfirmationDialog } from './ConfirmationDialog'
 import { ActivityOperationsPanel } from './ActivityOperationsPanel'
 import { CustomerExperienceAnalyticsPanel } from './CustomerExperienceAnalyticsPanel'
 import { LoyaltyEmergencyControlPanel } from './LoyaltyEmergencyControlPanel'
@@ -314,6 +315,7 @@ function MemberAccountLookupPanel({ api, auth }: { api: NormalizedApiClient; aut
 }
 
 function TierBenefitPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth: StaffAuthView }) {
+  const { promptAction } = useConfirmationDialog()
   const canView = auth.permissions.includes('loyalty.policy.view')
   const canManage = auth.permissions.includes('loyalty.policy.manage')
   const canApprove = auth.permissions.includes('loyalty.policy.approve')
@@ -391,9 +393,20 @@ function TierBenefitPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth:
   }
 
   async function publish(policy: TierBenefitConfigurationView['policies'][number]) {
-    const effectiveFrom = window.prompt('请输入生效时间（ISO格式）')?.trim()
+    const effectiveFrom = (await promptAction({
+      title: '排期发布等级权益',
+      description: '请输入 ISO 格式的生效时间。',
+      label: '生效时间',
+      confirmLabel: '继续',
+      multiline: false,
+    }))?.trim()
     if (!effectiveFrom || !Number.isFinite(Date.parse(effectiveFrom))) return setNotice('生效时间格式不正确，未发布。')
-    const reason = window.prompt('请输入发布说明（至少2个字）')?.trim() ?? ''
+    const reason = (await promptAction({
+      title: '填写发布说明',
+      description: '至少填写 2 个字，便于后续审计。',
+      label: '发布说明',
+      confirmLabel: '确认发布',
+    }))?.trim() ?? ''
     if (reason.length < 2) return setNotice('发布说明不足，未发布。')
     setBusy(`publish-${policy.id}`); setNotice('')
     try {
@@ -432,6 +445,7 @@ function TierBenefitPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth:
 }
 
 function MembershipTermsManagementPanel({ api, auth }: { api: NormalizedApiClient; auth: StaffAuthView }) {
+  const { promptAction } = useConfirmationDialog()
   const canView = auth.permissions.includes('membership.terms.view')
   const canManage = auth.permissions.includes('membership.terms.manage')
   const canApprove = auth.permissions.includes('membership.terms.approve')
@@ -474,10 +488,22 @@ function MembershipTermsManagementPanel({ api, auth }: { api: NormalizedApiClien
   }
 
   async function publish(version: MembershipTermsVersionView) {
-    const requestedTime = window.prompt('请输入生效时间（ISO格式）；留空表示立即生效。')?.trim()
-    if (requestedTime === undefined) return
+    const requestedTimeValue = await promptAction({
+      title: '发布入会条款',
+      description: '填写 ISO 格式生效时间；留空表示立即生效。',
+      label: '生效时间（可留空）',
+      confirmLabel: '继续',
+      multiline: false,
+    })
+    if (requestedTimeValue === null) return
+    const requestedTime = requestedTimeValue.trim()
     if (requestedTime && !Number.isFinite(Date.parse(requestedTime))) return setNotice('生效时间格式不正确，未发布。')
-    const reason = window.prompt('请输入发布说明（至少2个字）')?.trim() ?? ''
+    const reason = (await promptAction({
+      title: '填写发布说明',
+      description: '至少填写 2 个字，便于后续审计。',
+      label: '发布说明',
+      confirmLabel: '确认发布',
+    }))?.trim() ?? ''
     if (reason.length < 2) return setNotice('发布说明不足，未发布。')
     setBusy(`publish-${version.version}`); setNotice('')
     try {
@@ -516,6 +542,7 @@ function MembershipTermsManagementPanel({ api, auth }: { api: NormalizedApiClien
 }
 
 function MembershipRecoveryPanel({ api, auth }: { api: NormalizedApiClient; auth: StaffAuthView }) {
+  const { promptAction } = useConfirmationDialog()
   const canVerify = auth.permissions.includes('customer.membership.recovery.verify')
   const canApprove = auth.permissions.includes('customer.membership.merge.approve')
   const [cases, setCases] = useState<MembershipRecoveryCaseView[]>([])
@@ -561,7 +588,12 @@ function MembershipRecoveryPanel({ api, auth }: { api: NormalizedApiClient; auth
   }
 
   async function selectCandidate(item: MembershipRecoveryCaseView, candidate: MembershipRecoveryCandidateView) {
-    const reason = window.prompt(`核验 ${candidate.maskedMemberNo} 的依据（至少2个字）`)?.trim() ?? ''
+    const reason = (await promptAction({
+      title: '选择核验候选',
+      description: `请填写核验 ${candidate.maskedMemberNo} 的依据，至少 2 个字。`,
+      label: '核验依据',
+      confirmLabel: '确认选择',
+    }))?.trim() ?? ''
     if (reason.length < 2) return setNotice('核验依据不足，未选择候选。')
     setBusy(`select-${item.casePublicId}`); setNotice('')
     try {
@@ -576,7 +608,12 @@ function MembershipRecoveryPanel({ api, auth }: { api: NormalizedApiClient; auth
 
   async function decide(item: MembershipRecoveryCaseView, decision: 'approve' | 'reject') {
     const label = decision === 'approve' ? '合并复核说明' : '驳回说明'
-    const reason = window.prompt(`${label}（至少2个字）`)?.trim() ?? ''
+    const reason = (await promptAction({
+      title: decision === 'approve' ? '复核合并' : '驳回找回申请',
+      description: `${label}至少填写 2 个字。`,
+      label,
+      confirmLabel: decision === 'approve' ? '确认合并' : '确认驳回',
+    }))?.trim() ?? ''
     if (reason.length < 2) return setNotice(`${label}不足，未处理。`)
     setBusy(`${decision}-${item.casePublicId}`); setNotice('')
     try {
@@ -618,6 +655,7 @@ function MembershipRecoveryPanel({ api, auth }: { api: NormalizedApiClient; auth
 }
 
 function LoyaltyTierAndRedemptionPanel({ api, auth }: { api: NormalizedApiClient; auth: StaffAuthView }) {
+  const { confirmAction, promptAction } = useConfirmationDialog()
   const canView = auth.permissions.includes('loyalty.policy.view')
   const canManage = auth.permissions.includes('loyalty.policy.manage')
   const canApprove = auth.permissions.includes('loyalty.policy.approve')
@@ -706,8 +744,19 @@ function LoyaltyTierAndRedemptionPanel({ api, auth }: { api: NormalizedApiClient
   }
 
   async function publishTier(policy: LoyaltyTierPolicyView) {
-    const effectiveFrom = window.prompt('请输入生效时间（ISO格式）')?.trim() ?? ''
-    const reason = window.prompt('请输入复核说明（至少2个字）')?.trim() ?? ''
+    const effectiveFrom = (await promptAction({
+      title: '排期发布等级规则',
+      description: '请输入 ISO 格式的生效时间。',
+      label: '生效时间',
+      confirmLabel: '继续',
+      multiline: false,
+    }))?.trim() ?? ''
+    const reason = (await promptAction({
+      title: '填写复核说明',
+      description: '至少填写 2 个字，便于后续审计。',
+      label: '复核说明',
+      confirmLabel: '确认发布',
+    }))?.trim() ?? ''
     if (!Number.isFinite(Date.parse(effectiveFrom)) || reason.length < 2) return setNotice('生效时间或复核说明不正确。')
     setBusy(`tier-${policy.id}`); setNotice('')
     try {
@@ -761,8 +810,19 @@ function LoyaltyTierAndRedemptionPanel({ api, auth }: { api: NormalizedApiClient
   }
 
   async function publishCatalog(version: RedemptionConfigurationView['versions'][number]) {
-    const effectiveFrom = window.prompt('请输入兑换目录生效时间（ISO格式）')?.trim() ?? ''
-    const reason = window.prompt('确认已复核积分、成本、库存和履约，填写说明')?.trim() ?? ''
+    const effectiveFrom = (await promptAction({
+      title: '排期发布兑换目录',
+      description: '请输入 ISO 格式的目录生效时间。',
+      label: '生效时间',
+      confirmLabel: '继续',
+      multiline: false,
+    }))?.trim() ?? ''
+    const reason = (await promptAction({
+      title: '填写复核说明',
+      description: '请确认已复核积分、成本、库存和履约，并填写说明。',
+      label: '复核说明',
+      confirmLabel: '确认发布',
+    }))?.trim() ?? ''
     if (!Number.isFinite(Date.parse(effectiveFrom)) || reason.length < 2) return setNotice('生效时间或复核说明不正确。')
     setBusy(`catalog-${version.id}`); setNotice('')
     try {
@@ -776,10 +836,20 @@ function LoyaltyTierAndRedemptionPanel({ api, auth }: { api: NormalizedApiClient
   }
 
   async function setControl(state: 'disabled' | 'pilot' | 'enabled' | 'paused') {
-    const reason = window.prompt(`请输入${state === 'enabled' ? '正式开放' : state === 'pilot' ? '试点开放' : '暂停/关闭'}原因`)?.trim() ?? ''
+    const stateLabel = state === 'enabled' ? '正式开放' : state === 'pilot' ? '试点开放' : '暂停/关闭'
+    const reason = (await promptAction({
+      title: `变更为${stateLabel}`,
+      description: '请填写变更原因，至少 2 个字。',
+      label: '变更原因',
+      confirmLabel: '继续',
+    }))?.trim() ?? ''
     if (reason.length < 2) return setNotice('变更原因不足。')
-    const pilotStartsAt = state === 'pilot' ? window.prompt('试点开始时间（ISO格式）')?.trim() ?? '' : null
-    const pilotEndsAt = state === 'pilot' ? window.prompt('试点结束时间（ISO格式）')?.trim() ?? '' : null
+    const pilotStartsAt = state === 'pilot' ? (await promptAction({
+      title: '设置试点开始时间', description: '请输入 ISO 格式的时间。', label: '开始时间', confirmLabel: '继续', multiline: false,
+    }))?.trim() ?? '' : null
+    const pilotEndsAt = state === 'pilot' ? (await promptAction({
+      title: '设置试点结束时间', description: '请输入 ISO 格式的时间。', label: '结束时间', confirmLabel: '确认变更', multiline: false,
+    }))?.trim() ?? '' : null
     if (state === 'pilot' && (!Number.isFinite(Date.parse(pilotStartsAt!)) || !Number.isFinite(Date.parse(pilotEndsAt!)))) return setNotice('试点时间不正确。')
     setBusy(`control-${state}`); setNotice('')
     try {
@@ -793,7 +863,12 @@ function LoyaltyTierAndRedemptionPanel({ api, auth }: { api: NormalizedApiClient
   }
 
   async function fulfill(publicId: string) {
-    const reason = window.prompt('请输入实际交付说明（至少2个字）')?.trim() ?? ''
+    const reason = (await promptAction({
+      title: '确认实际交付',
+      description: '请填写实际交付说明，至少 2 个字。',
+      label: '交付说明',
+      confirmLabel: '确认交付',
+    }))?.trim() ?? ''
     if (reason.length < 2) return setNotice('交付说明不足。')
     setBusy(`fulfill-${publicId}`); setNotice('')
     try {
@@ -811,11 +886,14 @@ function LoyaltyTierAndRedemptionPanel({ api, auth }: { api: NormalizedApiClient
       product: 'product_unavailable', benefit: 'benefit_unavailable',
       activity: 'activity_unavailable', service: 'service_unavailable',
     } as Record<string,string>)[item.fulfillmentKind] ?? 'technical_failure'
-    const reason = window.prompt(
-      `仅当“${item.itemName}”确认尚未制作、发放或交付时才能返还积分。请填写无法履约的具体原因：`,
-    )?.trim() ?? ''
+    const reason = (await promptAction({
+      title: '处理未履约兑换',
+      description: `仅当“${item.itemName}”确认尚未制作、发放或交付时才能返还积分。`,
+      label: '无法履约的具体原因',
+      confirmLabel: '继续',
+    }))?.trim() ?? ''
     if (reason.length<2) return setNotice('失败说明不足，未处理。')
-    if (!window.confirm(`再次确认：${item.memberNo} 的“${item.itemName}”尚未履约，系统可以按原批次返还积分。`)) return
+    if (!(await confirmAction({title:'确认按原批次返还积分',description:`${item.memberNo} 的“${item.itemName}”尚未履约，系统将按原批次返还积分。`,confirmLabel:'确认返还',tone:'danger'}))) return
     setBusy(`fail-${item.publicId}`); setNotice('')
     try {
       await api.postEndpoint(`/api/staff/loyalty/redemptions/${encodeURIComponent(item.publicId)}/fail`, {
@@ -867,6 +945,7 @@ function LoyaltyTierAndRedemptionPanel({ api, auth }: { api: NormalizedApiClient
 }
 
 function LoyaltyPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth: StaffAuthView }) {
+  const { promptAction } = useConfirmationDialog()
   const canView = auth.permissions.includes('loyalty.policy.view')
   const canManage = auth.permissions.includes('loyalty.policy.manage')
   const canApprove = auth.permissions.includes('loyalty.policy.approve')
@@ -935,9 +1014,20 @@ function LoyaltyPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth: Sta
   }
 
   async function publish(policy: LoyaltyPolicyView) {
-    const effectiveFrom = window.prompt('请输入生效时间（ISO格式，例如 2026-08-20T12:00:00+08:00）')?.trim()
+    const effectiveFrom = (await promptAction({
+      title: '排期发布积分规则',
+      description: '请输入 ISO 格式的生效时间，例如 2026-08-20T12:00:00+08:00。',
+      label: '生效时间',
+      confirmLabel: '继续',
+      multiline: false,
+    }))?.trim()
     if (!effectiveFrom || !Number.isFinite(Date.parse(effectiveFrom))) return setNotice('生效时间格式不正确，未发布。')
-    const reason = window.prompt('请输入发布说明（至少2个字）')?.trim() ?? ''
+    const reason = (await promptAction({
+      title: '填写发布说明',
+      description: '至少填写 2 个字，便于后续审计。',
+      label: '发布说明',
+      confirmLabel: '确认发布',
+    }))?.trim() ?? ''
     if (reason.length < 2) return setNotice('发布说明不足，未发布。')
     setBusy(policy.id); setNotice('')
     try {
@@ -951,7 +1041,12 @@ function LoyaltyPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth: Sta
   }
 
   async function requestSupplement(item: LoyaltyReconciliationView) {
-    const reason = window.prompt(`为订单 ${item.orderPublicId} 申请补发的原因（至少2个字）`)?.trim() ?? ''
+    const reason = (await promptAction({
+      title: '申请积分补发',
+      description: `请填写订单 ${item.orderPublicId} 的补发原因，至少 2 个字。`,
+      label: '申请原因',
+      confirmLabel: '提交申请',
+    }))?.trim() ?? ''
     if (reason.length < 2) return setNotice('申请原因不足，未提交。')
     setBusy(`request-${item.orderPublicId}`); setNotice('')
     try {
@@ -966,7 +1061,12 @@ function LoyaltyPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth: Sta
 
   async function decideSupplement(item: LoyaltySupplementView, decision: 'approve' | 'reject') {
     const label = decision === 'approve' ? '复核说明' : '驳回原因'
-    const reason = window.prompt(`${label}（至少2个字）`)?.trim() ?? ''
+    const reason = (await promptAction({
+      title: decision === 'approve' ? '复核补发申请' : '驳回补发申请',
+      description: `${label}至少填写 2 个字。`,
+      label,
+      confirmLabel: decision === 'approve' ? '确认复核' : '确认驳回',
+    }))?.trim() ?? ''
     if (reason.length < 2) return setNotice(`${label}不足，未处理。`)
     setBusy(`${decision}-${item.publicId}`); setNotice('')
     try {

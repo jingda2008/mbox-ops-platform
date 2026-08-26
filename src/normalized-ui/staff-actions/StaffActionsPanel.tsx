@@ -29,6 +29,7 @@ import { TableObservationSheet } from './TableObservationSheet'
 import { TableRecommendationSheet } from './TableRecommendationSheet'
 import { ParticipantMovementSheet } from './ParticipantMovementSheet'
 import { InventoryBarcodeScanner } from '../InventoryBarcodeScanner'
+import { useConfirmationDialog } from '../ConfirmationDialog'
 import {
   fulfillmentAction,
   actionableFulfillmentItems,
@@ -79,6 +80,7 @@ export function StaffActionsPanel({
   onLoginRequired,
 }: StaffActionsPanelProps) {
   const api = useMemo(() => suppliedApi ?? new StaffActionsApi(), [suppliedApi])
+  const { confirmAction, promptAction } = useConfirmationDialog()
   const [tab, setTab] = useState<StaffActionsTab>(initialTab)
   const [operations, setOperations] = useState<StaffOperationsData | null>(null)
   const [fulfillment, setFulfillment] = useState<StaffFulfillmentData | null>(null)
@@ -522,7 +524,12 @@ export function StaffActionsPanel({
 
   const overridePriority = async (entry: StaffReservationIntakeEntry, mode: 'promote' | 'demote' | 'clear') => {
     if (api.overrideReservationPriority === undefined) return
-    const reason = window.prompt(`${mode === 'promote' ? '上调' : mode === 'demote' ? '下调' : '恢复默认'}“${entry.customerName}”的安排顺序，请填写原因：`)?.trim() ?? ''
+    const reason = (await promptAction({
+      title: '填写优先安排调整原因',
+      description: `${mode === 'promote' ? '上调' : mode === 'demote' ? '下调' : '恢复默认'}“${entry.customerName}”的安排顺序。`,
+      label: '调整原因',
+      confirmLabel: '继续',
+    }))?.trim() ?? ''
     if (reason.length < 2) return showNotice({ kind: 'guidance', message: '请填写至少2个字的队列调整原因。' })
     const actionKey = `priority:${entry.kind}:${entry.publicId}`
     if (actionLocksRef.current.has(actionKey)) return
@@ -665,7 +672,11 @@ export function StaffActionsPanel({
     if (!product.isOriginal&&(reason===null||reason.length<2)) {
       return showNotice({kind:'guidance',message:'使用替代品必须填写至少2个字的替换原因'})
     }
-    if (!window.confirm(`二次确认：为${item.tableCode}的${item.memberNo||'会员'}核销“${item.title}”吗？\n实际出品：${product.name} × ${item.quantity}${reason?`\n替换原因：${reason}`:''}`)) return
+    if (!(await confirmAction({
+      title: '确认核销会员礼遇',
+      description: `为${item.tableCode}的${item.memberNo||'会员'}核销“${item.title}”？\n实际出品：${product.name} × ${item.quantity}${reason?`\n替换原因：${reason}`:''}`,
+      confirmLabel: '确认核销',
+    }))) return
     setPendingAction(`member-gift:${item.reservationId}`)
     try {
       await api.redeemAnnualGift({reservationId:item.reservationId,benefitId:item.benefitId,
@@ -679,7 +690,11 @@ export function StaffActionsPanel({
 
   const redeemDailySnack = async (item:StaffDailySnackClaim) => {
     if (api.redeemDailySnack===undefined||pendingAction!==null||item.status!=='reserved') return
-    if (!window.confirm(`确认核销“${item.title}”吗？核销后将进入正式出品流程。`)) return
+    if (!(await confirmAction({
+      title: '确认核销每日点心',
+      description: `核销“${item.title}”后将进入正式出品流程。`,
+      confirmLabel: '确认核销',
+    }))) return
     setPendingAction(`member-snack:${item.id}`)
     try {
       await api.redeemDailySnack(item.claimCode)
@@ -691,7 +706,7 @@ export function StaffActionsPanel({
 
   const cancelAnnualGift = async (item:StaffAnnualGiftReservation) => {
     if (api.cancelAnnualGift===undefined||pendingAction!==null) return
-    const reason=window.prompt(`取消${item.tableCode}的“${item.title}”暂留，请填写至少2个字的现场原因：`)?.trim()??''
+    const reason=(await promptAction({title:'填写取消暂留现场原因',description:`取消${item.tableCode}的“${item.title}”暂留。`,label:'现场原因',confirmLabel:'继续'}))?.trim()??''
     if (reason.length<2) return showNotice({kind:'guidance',message:'必须填写取消原因，礼遇暂留未释放'})
     setPendingAction(`member-gift-cancel:${item.reservationId}`)
     try {
@@ -705,7 +720,7 @@ export function StaffActionsPanel({
 
   const cancelDailySnack = async (item:StaffDailySnackClaim) => {
     if (api.cancelDailySnack===undefined||pendingAction!==null||item.status!=='reserved') return
-    const reason=window.prompt('取消暂留，请填写至少2个字的现场原因：')?.trim()??''
+    const reason=(await promptAction({title:'填写取消暂留现场原因',description:'取消暂留前，请填写至少2个字的现场原因。',label:'现场原因',confirmLabel:'继续'}))?.trim()??''
     if (reason.length<2) return showNotice({kind:'guidance',message:'必须填写取消原因，暂留未释放'})
     setPendingAction(`member-snack-cancel:${item.id}`)
     try {

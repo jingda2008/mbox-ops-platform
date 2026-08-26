@@ -67,6 +67,17 @@ function performanceView(view) {
   }
 }
 
+async function loadPerformanceView() {
+  try {
+    return { performance: performanceView(await getTodayPerformances()), error: '' }
+  } catch (error) {
+    return {
+      performance: null,
+      error: customerErrorMessage(error, '演出信息暂时未更新，请点一下重试'),
+    }
+  }
+}
+
 function parseScanValue(value) {
   const raw = String(value || '').trim()
   if (!raw) return {}
@@ -222,6 +233,7 @@ Page({
     serviceSummary: { status: 'ready', label: '需要时随时呼叫', detail: '服务状态会自动刷新', live: false },
     quickServiceBusy: '',
     performance: null,
+    performanceError: '',
     products: [],
     visibleProducts: [],
     categories: [{ code: 'all', name: '全部' }],
@@ -363,7 +375,7 @@ Page({
         busy: false, cartSyncing: false, clearingCart: false, quickServiceBusy: '',
         checkoutLocked: false, pendingPayment: null, cart: [], cartVersion: 0, cartGeneration: 0,
         cartTotal: '¥0.00', cartCount: 0, cartWritesFrozen: false,
-        recommendations: [], recommendationPublicId: '', recommendationAttribution: null,
+        recommendations: [], recommendationPublicId: '', recommendationAttribution: null, performance: null, performanceError: '',
       })
     }
     if (!silent) this.setData({ loading: true, error: '', success: '' })
@@ -427,9 +439,9 @@ Page({
       table: null,
     }, view || {})
     try {
-      const [menu, performance] = await Promise.all([
+      const [menu, performanceResult] = await Promise.all([
         getPublicMenu({}),
-        getTodayPerformances().catch(() => null),
+        loadPerformanceView(),
       ])
       if (request && !this.isCurrentTableRequest(request)) return false
       const products = menuProducts(menu)
@@ -444,7 +456,8 @@ Page({
         serviceSummary: { status: 'ready', label: '到店后可呼叫服务', detail: '扫码开台后显示本桌服务进度', live: false },
         products,
         categories: menuCategories(products),
-        performance: performanceView(performance),
+        performance: performanceResult.performance,
+        performanceError: performanceResult.error,
         error: connectionError || '',
       })
       this.applyFilters()
@@ -471,7 +484,7 @@ Page({
   async loadActiveData(request) {
     const results = await Promise.all([
       getMenu({}),
-      getTodayPerformances().catch(() => null),
+      loadPerformanceView(),
       getCustomerBenefits().catch(() => []),
       getTableOrders().catch(() => null),
       getSharedCart(),
@@ -532,7 +545,8 @@ Page({
       categories,
       recommendations,
       recommendationAttribution,
-      performance: performanceView(results[1]),
+      performance: results[1].performance,
+      performanceError: results[1].error,
       serviceSummary: serviceSummaryView(results[7], this.data.serviceStaffName),
       benefitCount: (results[2] || []).reduce((sum, item) => sum + Number(item.quantityAvailable || 0), 0),
       pendingPayment,
@@ -596,6 +610,12 @@ Page({
   },
 
   retryTable() { this.preparePage() },
+  async retryPerformance() {
+    const request = this.currentTableRequest()
+    const result = await loadPerformanceView()
+    if (request && !this.isCurrentTableRequest(request)) return
+    this.setData({ performance: result.performance, performanceError: result.error })
+  },
   onSearchInput(event) { this.setData({ searchText: event.detail.value }, () => this.applyFilters()) },
   selectCategory(event) { this.setData({ selectedCategory: event.currentTarget.dataset.code }, () => this.applyFilters()) },
   applyFilters() {

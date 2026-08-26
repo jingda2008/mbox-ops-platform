@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { CheckCircle2, ChevronDown, RefreshCw, UserCheck, XCircle } from 'lucide-react'
 import type { NormalizedApiClient, StaffAuthView } from '../normalized-api'
+import { useConfirmationDialog } from './ConfirmationDialog'
 import { MediaAssetPicker } from './MediaAssetPicker'
 import './activity-operations-panel.css'
 
@@ -76,6 +77,7 @@ const memberLevels = [['member','普通会员'],['silver','银卡'],['gold','金
 const lifecycleStages = [['new','新会员'],['active','活跃'],['high_value','高价值'],['at_risk','有流失风险'],['dormant','沉睡']] as const
 
 export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClient; auth: StaffAuthView }) {
+  const { confirmAction } = useConfirmationDialog()
   const canManage = auth.permissions.includes('community.activity.manage')
   const canPublish = auth.permissions.includes('community.activity.publish')
   const canView = auth.permissions.includes('community.activity.view') || canManage || canPublish
@@ -216,7 +218,11 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
     const operation = activityPackage.status === 'published' ? 'pause' : 'resume'
     const normalizedReason = reason.trim()
     if (normalizedReason.length < 2) return setNotice('请先填写套餐上下架原因（至少2个字）')
-    if (busy || !window.confirm(`${operation === 'pause' ? '暂停' : '恢复'}“${activityPackage.name}”？不会修改已报名顾客的套餐承诺。`)) return
+    if (busy || !(await confirmAction({
+      title: `${operation === 'pause' ? '暂停' : '恢复'}活动套餐`,
+      description: `${operation === 'pause' ? '暂停' : '恢复'}“${activityPackage.name}”？不会修改已报名顾客的套餐承诺。`,
+      confirmLabel: operation === 'pause' ? '确认暂停' : '确认恢复',
+    }))) return
     setBusy(`package:${activityPackage.publicId}:${operation}`); setNotice('')
     try {
       await api.postEndpoint(
@@ -300,9 +306,11 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
   }
 
   async function publishActivity(activity: ActivityDetail) {
-    if (busy || activity.publicId === '' || !window.confirm(
-      `确认发布“${activity.title}”？发布后时间、费用、权益、安全和退款承诺不可静默修改。`,
-    )) return
+    if (busy || activity.publicId === '' || !(await confirmAction({
+      title: '确认发布活动',
+      description: `发布“${activity.title}”后，时间、费用、权益、安全和退款承诺不可静默修改。`,
+      confirmLabel: '确认发布',
+    }))) return
     setBusy('publish'); setNotice('')
     try {
       await api.postEndpoint(`/api/staff/activity-operations/${encodeURIComponent(activity.publicId)}/publish`, {}, {
@@ -319,7 +327,11 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
   async function retryWaitlistPromotion(activity: ActivityDetail) {
     const normalizedReason = reason.trim()
     if (normalizedReason.length < 2) return setNotice('请先填写候补任务重试原因（至少2个字）')
-    if (busy || !window.confirm('只会把已有候补任务提前交给系统按报名顺序处理，不会人工确认任何报名或改变候补顺序。是否继续？')) return
+    if (busy || !(await confirmAction({
+      title: '确认重试候补处理',
+      description: '只会把已有候补任务提前交给系统按报名顺序处理，不会人工确认任何报名或改变候补顺序。',
+      confirmLabel: '进入重试队列',
+    }))) return
     setBusy('waitlist-retry'); setNotice('')
     try {
       const result = await api.postEndpoint<{ activityPublicId: string; state: 'queued' | 'not_required' }>(

@@ -1,6 +1,7 @@
 import { useCallback,useEffect,useMemo,useState } from 'react'
 import { ChevronDown,FileCheck2,RefreshCw,Save,ShieldCheck } from 'lucide-react'
 import type { NormalizedApiClient,StaffAuthView } from '../normalized-api'
+import { useConfirmationDialog } from './ConfirmationDialog'
 import './membership-configuration-center-panel.css'
 
 type Domain='base_points'|'tier_policy'|'tier_benefits'|'redemption_catalog'|'promotion_points'|'membership_terms'|'wechat_notifications'
@@ -15,6 +16,7 @@ const warningLabels:Record<string,string>={inventory_shortage:'库存可能不�
 const fieldLabels:Record<string,string>={pointsNumerator:'积分倍率分子',pointsDenominatorMinor:'每多少分金额',growthNumerator:'成长值倍率分子',growthDenominatorMinor:'成长值金额分母',roundingMode:'取整方式',pointsValidityMonths:'积分有效月数',evaluationWindowMonths:'评估周期（月）',tierPeriodMonths:'等级周期（月）',downgradeGraceDays:'降级宽限天数',silverUpgradeGrowth:'银卡升级值',silverRetainGrowth:'银卡保级值',goldUpgradeGrowth:'金卡升级值',goldRetainGrowth:'金卡保级值',silverPointsMultiplierNumerator:'银卡积分倍率分子',silverPointsMultiplierDenominator:'银卡积分倍率分母',goldPointsMultiplierNumerator:'金卡积分倍率分子',goldPointsMultiplierDenominator:'金卡积分倍率分母',tierPolicyVersionId:'等级策略版本ID',rules:'规则',items:'兑换项',ruleCode:'规则编号',eligibleTier:'适用等级',inheritToHigherTiers:'向更高等级继承',grantOnEntry:'入级发放',grantOnRetention:'保级发放',benefitDefinitionId:'权益定义ID',quantity:'数量',validityDays:'有效天数',revocationPolicy:'降级处理',enabled:'启用',publicId:'公开编号',itemCode:'兑换项编号',name:'名称',fulfillmentKind:'履约类型',productId:'商品ID',activityId:'活动ID',pointsRequired:'所需积分',costAmountMinor:'成本（分）',currency:'币种',totalInventory:'总库存',dailyInventory:'日库存',memberDailyLimit:'每人每日上限',memberRolling30DayLimit:'每人30日上限',memberLifetimeLimit:'每人终身上限',minimumTier:'最低等级',requiresTableSession:'需要桌台会话',requiresEmployeeFulfillment:'需要员工履约',cancellationAllowedBeforeFulfillment:'履约前允许取消',restoreExpiredPointsDays:'退回过期积分天数',availableFrom:'可用开始时间',availableUntil:'可用结束时间',fulfillmentTimeoutMinutes:'履约时限（分钟）',status:'状态',campaignCode:'活动积分编号',stackingGroup:'叠加组',stackingMode:'叠加方式',priority:'优先级',storeBudgetPoints:'门店总预算积分',perMemberPointsLimit:'每会员上限',pointValidityDays:'积分有效天数',refundPolicy:'退款冲回规则',budgetReuseAfterRefund:'退款后释放预算',memberLimitReuseAfterRefund:'退款后释放个人限额',eligibleMemberLevels:'适用会员等级',triggerKind:'触发事实',points:'奖励积分',perMemberAwardLimit:'每人奖励次数',minimumPaidAmountMinor:'最低付款金额（分）',title:'标题',summary:'摘要',content:'正文',notificationType:'通知类型',authorizationPurpose:'授权用途',authorizationContext:'授权场景',templateId:'微信模板ID',pagePath:'到达页面',pointsDataKey:'积分字段',balanceDataKey:'余额字段',occurredAtDataKey:'发生时间字段',expiresAtDataKey:'到期时间字段',expiryLeadDays:'提前提醒天数',maxPerCustomerPer24h:'每人24小时上限',minimumIntervalMinutes:'最短发送间隔',quietHoursStart:'静默开始',quietHoursEnd:'静默结束'}
 
 export function MembershipConfigurationCenterPanel({api,auth}:{api:NormalizedApiClient;auth:StaffAuthView}){
+  const { confirmAction } = useConfirmationDialog()
   const canView=auth.permissions.includes('loyalty.configuration.view')
   const canEdit=auth.permissions.includes('loyalty.configuration.edit')
   const canPreview=auth.permissions.includes('loyalty.configuration.preview')
@@ -55,7 +57,7 @@ export function MembershipConfigurationCenterPanel({api,auth}:{api:NormalizedApi
     catch(error){setNotice(message(error,'影响预览生成失败'))}finally{setBusy('')}
   }
   async function approve(){if(!selected||!preview||busy)return;if(reason.trim().length<2)return setNotice('请填写独立审批说明。')
-    if(!window.confirm('确认依据当前服务端影响预览审批？审批后内容不可直接修改，仍需第三人发布。'))return
+    if(!(await confirmAction({title:'确认独立审批',description:'将依据当前服务端影响预览审批。审批后内容不可直接修改，仍需第三人发布。',confirmLabel:'确认审批'})))return
     setBusy('approve');setNotice('')
     try{const result=await api.postEndpoint<Draft>(`${path(selected)}/approve`,{expectedRevision:selected.revision,impactPreviewPublicId:preview.publicId,reason:reason.trim()});setSelected(result);setEditing(clone(result.content));setPreview(null);setNotice('独立审批已记录；配置尚未生效，等待第三位授权人员发布。');await load()}
     catch(error){setNotice(message(error,'审批未完成，请重新生成影响预览'))}finally{setBusy('')}

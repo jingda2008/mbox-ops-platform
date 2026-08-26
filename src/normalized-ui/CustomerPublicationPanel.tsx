@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { CheckCircle2, CircleAlert, LoaderCircle, RefreshCw, ShieldCheck } from 'lucide-react'
 import { NormalizedApiClient } from '../normalized-api'
+import { useConfirmationDialog } from './ConfirmationDialog'
 
 interface PublicationEmployee {
   id: string
@@ -52,6 +53,7 @@ export function CustomerPublicationPanel({ api, permissions }: {
   api: NormalizedApiClient
   permissions: readonly string[]
 }) {
+  const { confirmAction, promptAction } = useConfirmationDialog()
   const canManageProfile = permissions.includes('customer.public-profile.manage')
   const canPublishProfile = permissions.includes('customer.public-profile.publish')
   const canViewPrivacy = permissions.includes('privacy.policy.view')
@@ -132,7 +134,7 @@ export function CustomerPublicationPanel({ api, permissions }: {
       setNotice({ tone: 'error', text: '请先填写不少于8位的门店或人事确认编号' })
       return
     }
-    if (!window.confirm(`确认发布“${profile.publicDisplayName}”作为顾客可见服务名？发布后内容不可直接改写。`)) return
+    if (!(await confirmAction({title:'确认发布顾客服务名',description:`发布“${profile.publicDisplayName}”作为顾客可见服务名后，内容不可直接改写。`,confirmLabel:'确认发布'}))) return
     await mutate(async () => {
       await api.postEndpoint(`/api/staff/customer-publication/profiles/${profile.id}/publish`, {
         approvalReference: profileApprovalReference.trim(), effectiveAt: new Date().toISOString(), reason: '依据人事或门店确认正式发布',
@@ -144,10 +146,10 @@ export function CustomerPublicationPanel({ api, permissions }: {
 
   async function withdrawProfile(profile: CustomerPublicProfile) {
     if (!canPublishProfile || busy) return
-    const reason = window.prompt('请填写撤下原因（至少2个字）：', '员工服务范围调整')
+    const reason = await promptAction({title:'填写撤下原因',description:'至少2个字；会保留在审计记录中。',label:'撤下原因',defaultValue:'员工服务范围调整',confirmLabel:'继续'})
     if (reason === null) return
     if (reason.trim().length < 2) { setNotice({ tone: 'error', text: '撤下原因至少需要2个字' }); return }
-    if (!window.confirm(`确认撤下顾客可见服务名“${profile.publicDisplayName}”？顾客端将不再显示。`)) return
+    if (!(await confirmAction({title:'确认撤下顾客服务名',description:`撤下顾客可见服务名“${profile.publicDisplayName}”后，顾客端将不再显示。`,confirmLabel:'确认撤下',tone:'danger'}))) return
     await mutate(async () => {
       await api.postEndpoint(`/api/staff/customer-publication/profiles/${profile.id}/withdraw`, { reason: reason.trim() }, {
         idempotencyKey: operationIdempotency('customer-public-profile-withdraw'),
@@ -183,7 +185,7 @@ export function CustomerPublicationPanel({ api, permissions }: {
       setNotice({ tone: 'error', text: '请填写法务或运营批准人，以及不少于8位的批准材料编号' })
       return
     }
-    if (!window.confirm(`确认发布隐私政策 ${policy.policyVersion}？当前已发布版本会被保留为撤下记录。`)) return
+    if (!(await confirmAction({title:'确认发布隐私政策',description:`发布隐私政策 ${policy.policyVersion} 后，当前已发布版本会保留为撤下记录。`,confirmLabel:'确认发布'}))) return
     await mutate(async () => {
       await api.postEndpoint(`/api/staff/customer-publication/privacy-policies/${encodeURIComponent(policy.policyVersion)}/publish`, {
         approvedBy: approvedBy.trim(), approvalReference: policyApprovalReference.trim(),
@@ -196,10 +198,10 @@ export function CustomerPublicationPanel({ api, permissions }: {
 
   async function withdrawPolicy(policy: PrivacyPolicyRelease) {
     if (!canPublishPrivacy || busy) return
-    const reason = window.prompt('请填写撤下原因（至少2个字）：', '等待更新后的正式政策版本')
+    const reason = await promptAction({title:'填写撤下原因',description:'至少2个字；会保留在审计记录中。',label:'撤下原因',defaultValue:'等待更新后的正式政策版本',confirmLabel:'继续'})
     if (reason === null) return
     if (reason.trim().length < 2) { setNotice({ tone: 'error', text: '撤下原因至少需要2个字' }); return }
-    if (!window.confirm(`确认撤下当前隐私政策 ${policy.policyVersion}？撤下后顾客将无法查看政策，发布门禁会阻止上线。`)) return
+    if (!(await confirmAction({title:'确认撤下隐私政策',description:`撤下当前隐私政策 ${policy.policyVersion} 后，顾客将无法查看政策，发布门禁会阻止上线。`,confirmLabel:'确认撤下',tone:'danger'}))) return
     await mutate(async () => {
       await api.postEndpoint(`/api/staff/customer-publication/privacy-policies/${encodeURIComponent(policy.policyVersion)}/withdraw`, {
         reason: reason.trim(),

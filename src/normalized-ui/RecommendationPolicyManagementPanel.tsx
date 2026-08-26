@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { ChevronDown, Copy, FileCheck2, Plus, Rocket, ShieldCheck } from 'lucide-react'
 import type { NormalizedApiClient, StaffAuthView } from '../normalized-api'
+import { useConfirmationDialog } from './ConfirmationDialog'
 import './recommendation-policy-management-panel.css'
 
 type PolicyStatus = 'draft'|'approved'|'published'|'retired'
@@ -32,6 +33,7 @@ const statusLabel:Record<PolicyStatus,string>={draft:'待审批',approved:'待�
 const rolloutLabel:Record<RolloutState,string>={disabled:'关闭',shadow:'影子验证',pilot:'小范围试点',enabled:'正式开放'}
 
 export function RecommendationPolicyManagementPanel({api,auth}:{api:NormalizedApiClient;auth:StaffAuthView}) {
+  const { confirmAction, promptAction } = useConfirmationDialog()
   const canView=auth.permissions.includes('recommendation.rule.view')
   const canDraft=auth.permissions.includes('recommendation.rule.draft')
   const canApprove=auth.permissions.includes('recommendation.rule.approve')
@@ -56,7 +58,7 @@ export function RecommendationPolicyManagementPanel({api,auth}:{api:NormalizedAp
 
   async function create(event:FormEvent){
     event.preventDefault();if(!draft||busy)return
-    if(!window.confirm('保存推荐规则草稿？草稿不会改变顾客页面，仍需另外两名授权人员审批和发布。'))return
+    if(!(await confirmAction({title:'确认保存推荐规则草稿',description:'草稿不会改变顾客页面，仍需另外两名授权人员审批和发布。',confirmLabel:'保存草稿'})))return
     setBusy('create');setNotice('')
     try{
       await api.postEndpoint('/api/staff/customer-experience/recommendation-policies',{
@@ -77,7 +79,7 @@ export function RecommendationPolicyManagementPanel({api,auth}:{api:NormalizedAp
   }
 
   async function approve(policy:PolicyView){
-    const reason=window.prompt('填写独立审批依据（请核对偏好衰减、毛利底线和解释文案）','关键参数已复核')?.trim()??''
+    const reason=(await promptAction({title:'填写独立审批依据',description:'请核对偏好衰减、毛利底线和解释文案。',label:'审批依据',defaultValue:'关键参数已复核',confirmLabel:'继续'}))?.trim()??''
     if(reason.length<2||busy)return
     setBusy(policy.publicId);setNotice('')
     try{
@@ -87,12 +89,12 @@ export function RecommendationPolicyManagementPanel({api,auth}:{api:NormalizedAp
   }
 
   async function publish(policy:PolicyView){
-    const entered=window.prompt('填写生效时间（例如 2026-08-20 18:00）',localStart())?.trim()??''
+    const entered=(await promptAction({title:'填写规则生效时间',description:'例如 2026-08-20 18:00。',label:'生效时间',defaultValue:localStart(),confirmLabel:'继续',multiline:false}))?.trim()??''
     const parsed=Date.parse(entered)
     if(!Number.isFinite(parsed))return setNotice('生效时间格式无效。')
-    const reason=window.prompt('填写发布依据（发布后业务参数不可直接修改）','已核对版本、试点边界和回退方案')?.trim()??''
+    const reason=(await promptAction({title:'填写发布依据',description:'发布后业务参数不可直接修改。',label:'发布依据',defaultValue:'已核对版本、试点边界和回退方案',confirmLabel:'继续'}))?.trim()??''
     if(reason.length<2||busy)return
-    if(!window.confirm(`安排第 ${policy.version} 版在 ${new Date(parsed).toLocaleString('zh-CN')} 生效？发布不会自动开启顾客推荐。`))return
+    if(!(await confirmAction({title:'确认安排推荐规则生效',description:`安排第 ${policy.version} 版在 ${new Date(parsed).toLocaleString('zh-CN')} 生效。发布不会自动开启顾客推荐。`,confirmLabel:'确认排期'})))return
     setBusy(policy.publicId);setNotice('')
     try{
       await api.postEndpoint(`/api/staff/customer-experience/recommendation-policies/${encodeURIComponent(policy.publicId)}/publish`,{
@@ -103,7 +105,7 @@ export function RecommendationPolicyManagementPanel({api,auth}:{api:NormalizedAp
   }
 
   async function clone(policy:PolicyView){
-    const reason=window.prompt('填写复制原因；系统会建立新草稿，不会修改历史版本','基于历史稳定版本调整')?.trim()??''
+    const reason=(await promptAction({title:'填写复制原因',description:'系统会建立新草稿，不会修改历史版本。',label:'复制原因',defaultValue:'基于历史稳定版本调整',confirmLabel:'继续'}))?.trim()??''
     if(reason.length<2||busy)return
     setBusy(policy.publicId);setNotice('')
     try{
@@ -113,9 +115,9 @@ export function RecommendationPolicyManagementPanel({api,auth}:{api:NormalizedAp
   }
 
   async function setRollout(rolloutState:RolloutState){
-    const reason=window.prompt(`将顾客推荐调整为“${rolloutLabel[rolloutState]}”的原因`,rolloutState==='disabled'?'停止顾客曝光，保留原点单流程':'已完成规则、岗位和样本复核')?.trim()??''
+    const reason=(await promptAction({title:'填写推荐开放调整原因',description:`将顾客推荐调整为“${rolloutLabel[rolloutState]}”。`,label:'调整原因',defaultValue:rolloutState==='disabled'?'停止顾客曝光，保留原点单流程':'已完成规则、岗位和样本复核',confirmLabel:'继续'}))?.trim()??''
     if(reason.length<2||busy)return
-    if((rolloutState==='pilot'||rolloutState==='enabled')&&!window.confirm('只有当前生效的三人分离版本可以开放。确认继续？'))return
+    if((rolloutState==='pilot'||rolloutState==='enabled')&&!(await confirmAction({title:'确认开放顾客推荐',description:'只有当前生效的三人分离版本可以开放。',confirmLabel:'确认开放'})))return
     setBusy('rollout');setNotice('')
     try{
       await api.putEndpoint('/api/staff/customer-experience/features/recommendation.engine',{

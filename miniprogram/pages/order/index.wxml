@@ -63,6 +63,7 @@
       <view class="table-strip__table"><text class="table-strip__label">当前桌位</text><text class="table-strip__value">{{table.displayName}}</text></view>
       <button class="table-strip__service" bindtap="openStatus"><text class="table-strip__label">本桌服务{{serviceSummary.live ? ' · 自动更新' : ''}}</text><text class="table-strip__service-value">{{serviceSummary.label}}</text><text class="table-strip__service-copy">{{serviceSummary.detail}}</text></button>
       <view wx:if="{{performance}}" class="show-brief"><text>{{performance.state}}</text><text>{{performance.name}} · {{performance.time}}</text></view>
+      <button wx:elif="{{performanceError}}" class="show-brief show-brief--retry" bindtap="retryPerformance"><text>演出信息暂未更新</text><text>{{performanceError}}</text></button>
     </view>
     <view class="quick-service" aria-label="本桌快捷服务">
       <button data-code="call" disabled="{{quickServiceBusy}}" bindtap="requestQuickService"><text class="quick-service__icon">铃</text><text>{{quickServiceBusy === 'call' ? '正在通知' : '呼叫服务员'}}</text></button>

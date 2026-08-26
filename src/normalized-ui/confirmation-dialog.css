@@ -1,0 +1,113 @@
+.normalized-confirmation-mask {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  padding: 20px;
+  place-items: center;
+  background: rgba(12, 18, 14, .56);
+}
+
+.normalized-confirmation-dialog {
+  display: grid;
+  width: min(100%, 440px);
+  max-height: calc(100dvh - 40px);
+  overflow: hidden;
+  border: 1px solid rgba(120, 101, 72, .28);
+  border-radius: 18px;
+  background: #fffdfa;
+  box-shadow: 0 24px 72px rgba(11, 19, 14, .28);
+}
+
+.normalized-confirmation-dialog header {
+  padding: 22px 24px 0;
+}
+
+.normalized-confirmation-dialog header strong {
+  color: #1e2922;
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+.normalized-confirmation-dialog p {
+  margin: 12px 0 0;
+  padding: 0 24px 22px;
+  overflow-y: auto;
+  color: #5d625e;
+  font-size: 14px;
+  line-height: 1.65;
+  white-space: pre-line;
+}
+
+.normalized-input-dialog > label {
+  display: grid;
+  padding: 0 24px 22px;
+  gap: 8px;
+  color: #454c47;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.normalized-input-dialog input,
+.normalized-input-dialog textarea {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid #cfc7bb;
+  border-radius: 10px;
+  background: #fff;
+  color: #202720;
+  font: inherit;
+  font-weight: 400;
+  box-sizing: border-box;
+}
+
+.normalized-input-dialog textarea {
+  min-height: 88px;
+  max-height: min(220px, 32dvh);
+  resize: vertical;
+}
+
+.normalized-confirmation-dialog footer {
+  display: grid;
+  padding: 14px 20px 20px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  border-top: 1px solid #ece7de;
+  background: rgba(255, 253, 250, .98);
+}
+
+.normalized-confirmation-dialog button {
+  min-height: 44px;
+  margin: 0;
+  border-radius: 10px;
+  font: inherit;
+  font-weight: 700;
+}
+
+.normalized-confirmation-cancel {
+  border: 1px solid #d8d2c9;
+  background: #fff;
+  color: #4e5550;
+}
+
+.normalized-confirmation-primary {
+  border: 1px solid #28593e;
+  background: #28593e;
+  color: #fff;
+}
+
+.normalized-confirmation-danger {
+  border: 1px solid #9e3b35;
+  background: #9e3b35;
+  color: #fff;
+}
+
+@media (max-width: 480px) {
+  .normalized-confirmation-mask { padding: 14px; }
+  .normalized-confirmation-dialog { border-radius: 16px; }
+  .normalized-confirmation-dialog header { padding: 20px 20px 0; }
+  .normalized-confirmation-dialog p { padding: 0 20px 18px; }
+  .normalized-input-dialog > label { padding: 0 20px 18px; }
+  .normalized-confirmation-dialog footer { padding: 12px 16px 16px; }
+}

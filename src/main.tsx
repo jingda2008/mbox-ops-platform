@@ -2,11 +2,14 @@ import { StrictMode, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './normalized-base.css'
 import { installGlobalActionReveal } from './global-action-reveal'
+import { ConfirmationDialogProvider } from './normalized-ui/ConfirmationDialog'
 
 const element = document.getElementById('root')
 if (element === null) throw new Error('M-BOX application root is missing')
 const root = createRoot(element)
-const render = (content: ReactNode) => root.render(<StrictMode>{content}</StrictMode>)
+const render = (content: ReactNode) => root.render(
+  <StrictMode><ConfirmationDialogProvider>{content}</ConfirmationDialogProvider></StrictMode>,
+)
 
 installGlobalActionReveal()
 

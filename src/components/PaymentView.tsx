@@ -20,6 +20,7 @@ import {
   WalletCards,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useConfirmationDialog } from '../normalized-ui/ConfirmationDialog'
 import * as coreApi from '../api'
 import * as paymentApi from '../payment-api'
 import type { PaymentAllocationInput } from '../shared/payment-api'
@@ -117,6 +118,7 @@ const refundStatusLabels: Record<RefundStatus, string> = {
 }
 
 export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentViewProps) {
+  const { confirmAction } = useConfirmationDialog()
   const paymentDomain = (data as BootstrapWithPayments).paymentDomain ?? emptyPaymentDomain
   const currentActorId = coreApi.getCurrentActorId()
   const currentEmployee = data.employees.find((employee) => employee.id === currentActorId && employee.status === 'active')
@@ -378,8 +380,12 @@ export function PaymentView({ data, onRefresh, focusRequest = null }: PaymentVie
     )
   }
 
-  function closeTable(tableId: string, tableCode: string) {
-    if (!window.confirm(`确认${tableCode}所有商品已送达、服务已完成且款项已核实？`)) return
+  async function closeTable(tableId: string, tableCode: string) {
+    if (!(await confirmAction({
+      title: '确认收银结台',
+      description: `请确认${tableCode}所有商品已送达、服务已完成且款项已核实。`,
+      confirmLabel: '确认结台',
+    }))) return
     void execute(`close:${tableId}`, `${tableCode}已结台，可以接待下一桌客人`, () =>
       coreApi.closeTableSession(tableId, '收银核对完成并结台'),
     )

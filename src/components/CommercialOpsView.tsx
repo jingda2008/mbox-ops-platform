@@ -21,6 +21,7 @@ import type {
 import { formatChinaDateTime } from '../shared/china-time'
 import { useRevealPanelScroll } from './use-reveal-panel-scroll'
 import { publishStaffCollaborationGuidance } from '../staff-action-guidance'
+import { useConfirmationDialog } from '../normalized-ui/ConfirmationDialog'
 import './CommercialOpsView.css'
 
 type Tab = 'overview' | 'profit' | 'stock' | 'print-jobs' | 'printing' | 'vouchers' | 'customers' | 'sales' | 'rules'
@@ -28,6 +29,7 @@ type PrintJobFilter = 'all' | 'queued' | 'failed' | 'printed'
 type Notice = { tone: 'success' | 'error'; message: string }
 
 export function CommercialOpsView({ data, onRefresh }: { data: BootstrapResponse; onRefresh: () => Promise<void> }) {
+  const { confirmAction } = useConfirmationDialog()
   const [workspace, setWorkspace] = useState<CommercialOpsWorkspace | null>(null)
   const [tab, setTab] = useState<Tab>('overview')
   const [loading, setLoading] = useState(true)
@@ -482,7 +484,15 @@ function ProfitCenterTools({
             <em>{entry.status === 'actual' ? '实际' : entry.status === 'estimated' ? '预估' : '已作废'}</em>
             {canManage && entry.status === 'estimated' && <button type="button" className="secondary-button" onClick={() => prepareActual(entry)}>录入实际</button>}
             {canManage && entry.status !== 'voided' && <button type="button" className="icon-button" title="作废费用记录" disabled={Boolean(busy)} onClick={() => {
-              if (window.confirm(`确认作废“${entry.name}”？历史审计记录仍会保留。`)) void run(`profit-cost-void:${entry.id}`, '费用记录已作废，损益已重新计算', () => commercialApi.voidOperatingCostEntry(entry.id, '录入错误，作废后重新登记'))
+              void (async () => {
+                if (!(await confirmAction({
+                  title: '确认作废费用记录',
+                  description: `作废“${entry.name}”后，历史审计记录仍会保留，损益将重新计算。`,
+                  confirmLabel: '确认作废',
+                  tone: 'danger',
+                }))) return
+                await run(`profit-cost-void:${entry.id}`, '费用记录已作废，损益已重新计算', () => commercialApi.voidOperatingCostEntry(entry.id, '录入错误，作废后重新登记'))
+              })()
             }}><XCircle size={16} /></button>}
           </article>)}
         </div>

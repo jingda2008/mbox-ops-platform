@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { ChevronDown, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import type { NormalizedApiClient, StaffAuthView } from '../normalized-api'
+import { useConfirmationDialog } from './ConfirmationDialog'
 import './checkout-upgrade-management-panel.css'
 
 type RuleStatus = 'draft' | 'approved' | 'active' | 'retired'
@@ -27,6 +28,7 @@ interface CapacityView {
 interface CapacityWindowDraft { key: string; startsAt: string; endsAt: string; capacityLimitUnits: string }
 
 export function CheckoutUpgradeManagementPanel({ api, auth }: { api: NormalizedApiClient; auth: StaffAuthView }) {
+  const { promptAction } = useConfirmationDialog()
   const canViewRules = auth.permissions.includes('checkout.upgrade.rule.view')
   const canViewCapacity = auth.permissions.includes('fulfillment.capacity.view')
   const canView = canViewRules || canViewCapacity
@@ -103,7 +105,12 @@ export function CheckoutUpgradeManagementPanel({ api, auth }: { api: NormalizedA
   }
 
   async function ruleAction(item: RuleView, action:'approve'|'publish'|'rollback-draft') {
-    const reason = window.prompt(action==='approve'?'填写审批依据':action==='publish'?'填写发布依据':'填写回滚原因')?.trim() || ''
+    const reason = (await promptAction({
+      title: action==='approve' ? '审批升级规则' : action==='publish' ? '发布升级规则' : '复制回滚草稿',
+      description: action==='approve' ? '填写审批依据后继续。' : action==='publish' ? '填写发布依据后继续。' : '填写回滚原因后继续。',
+      label: action==='approve' ? '审批依据' : action==='publish' ? '发布依据' : '回滚原因',
+      confirmLabel: action==='approve' ? '确认审批' : action==='publish' ? '确认发布' : '创建草稿',
+    }))?.trim() || ''
     if (reason.length<2 || busy) return
     setBusy(`${item.id}:${action}`); setNotice('')
     try {
@@ -133,7 +140,12 @@ export function CheckoutUpgradeManagementPanel({ api, auth }: { api: NormalizedA
   }
 
   async function capacityAction(item:CapacityView, action:'approve'|'publish') {
-    const reason = window.prompt(action==='approve'?'填写产能审批依据':'填写产能发布依据')?.trim() || ''
+    const reason = (await promptAction({
+      title: action==='approve' ? '审批产能版本' : '发布产能版本',
+      description: action==='approve' ? '填写产能审批依据后继续。' : '填写产能发布依据后继续。',
+      label: action==='approve' ? '审批依据' : '发布依据',
+      confirmLabel: action==='approve' ? '确认审批' : '确认发布',
+    }))?.trim() || ''
     if (reason.length<2 || busy) return
     setBusy(`${item.id}:${action}`); setNotice('')
     try {

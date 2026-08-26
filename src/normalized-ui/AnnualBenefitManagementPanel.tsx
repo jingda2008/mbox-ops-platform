@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import type { NormalizedApiClient, StaffAuthView } from '../normalized-api'
+import { useConfirmationDialog } from './ConfirmationDialog'
 
 type RuleKind = 'birthday' | 'festival' | 'priority_seating' | 'daily_snack'
 type Tier = 'member' | 'silver' | 'gold'
@@ -75,6 +76,7 @@ const ruleLabels: Record<RuleKind, string> = { birthday: '生日礼遇', festiva
 const statusLabels: Record<Policy['status'], string> = { draft: '草稿', approved: '待发布', published: '已发布', paused: '已暂停', retired: '已停用' }
 
 export function AnnualBenefitManagementPanel({ api, auth }: { api: NormalizedApiClient; auth: StaffAuthView }) {
+  const { confirmAction, promptAction } = useConfirmationDialog()
   const canView = auth.permissions.includes('loyalty.annual-benefit.view')
   const canManage = auth.permissions.includes('loyalty.annual-benefit.manage')
   const canApprove = auth.permissions.includes('loyalty.annual-benefit.approve')
@@ -152,7 +154,7 @@ export function AnnualBenefitManagementPanel({ api, auth }: { api: NormalizedApi
     finally { setBusy('') }
   }
   async function approve(policy: Policy) {
-    const approvalReason = window.prompt('请输入审批说明（至少2个字）')?.trim() ?? ''
+    const approvalReason = (await promptAction({title:'填写审批说明',description:'至少2个字，会保留在审批审计中。',label:'审批说明',confirmLabel:'继续'}))?.trim() ?? ''
     if (approvalReason.length < 2) return setNotice('审批说明不足，未审批。')
     setBusy(`approve-${policy.id}`); setNotice('')
     try {
@@ -162,8 +164,8 @@ export function AnnualBenefitManagementPanel({ api, auth }: { api: NormalizedApi
     finally { setBusy('') }
   }
   async function publish(policy: Policy) {
-    const effectiveFrom = window.prompt('请输入未来生效时间（ISO 格式）')?.trim() ?? ''
-    const publicationReason = window.prompt('请输入发布说明（至少2个字）')?.trim() ?? ''
+    const effectiveFrom = (await promptAction({title:'填写未来生效时间',description:'使用 ISO 格式。',label:'生效时间',confirmLabel:'继续',multiline:false}))?.trim() ?? ''
+    const publicationReason = (await promptAction({title:'填写发布说明',description:'至少2个字，会保留在发布审计中。',label:'发布说明',confirmLabel:'继续'}))?.trim() ?? ''
     if (!Number.isFinite(Date.parse(effectiveFrom)) || Date.parse(effectiveFrom) <= Date.now() || publicationReason.length < 2) {
       return setNotice('必须填写未来生效时间和发布说明，未发布。')
     }
@@ -194,7 +196,7 @@ export function AnnualBenefitManagementPanel({ api, auth }: { api: NormalizedApi
   }
   async function redeemDailySnack(claim: DailySnackClaim) {
     if (!canFulfill || busy || claim.status !== 'reserved') return
-    if (!window.confirm(`确认核销“${claim.title}”吗？\n核销后将提交零元订单与后厨制作任务，不能撤销。`)) return
+    if (!(await confirmAction({title:'确认核销会员礼遇',description:`核销“${claim.title}”后将提交零元订单与后厨制作任务，不能撤销。`,confirmLabel:'确认核销'}))) return
     setBusy(`daily-snack-${claim.id}`); setNotice('')
     try {
       await api.postEndpoint(`/api/staff/annual-daily-snack-claims/${encodeURIComponent(claim.claimCode)}/redeem`, {}, {
@@ -213,7 +215,11 @@ export function AnnualBenefitManagementPanel({ api, auth }: { api: NormalizedApi
     if (!product) return setNotice('请选择这项礼遇已发布的原商品或合规替代品。')
     const reason = product.isOriginal ? null : selection.reason.trim()
     if (!product.isOriginal && (reason === null || reason.length < 2)) return setNotice('使用替代品必须填写至少2个字的替换原因。')
-    if (!window.confirm(`二次确认：为${reservation.tableCode}的${reservation.memberNo || '会员'}核销“${reservation.title}”吗？\n实际出品：${product.name} × ${reservation.quantity}${reason ? `\n替换原因：${reason}` : ''}\n确认后将预留库存并进入出品任务。`)) return
+    if (!(await confirmAction({
+      title:'确认核销会员礼遇',
+      description:`为${reservation.tableCode}的${reservation.memberNo || '会员'}核销“${reservation.title}”？\n实际出品：${product.name} × ${reservation.quantity}${reason ? `\n替换原因：${reason}` : ''}\n确认后将预留库存并进入出品任务。`,
+      confirmLabel:'确认核销',
+    }))) return
     setBusy(`annual-gift-${reservation.reservationId}`); setNotice('')
     try {
       await api.postEndpoint(`/api/benefit-reservations/${reservation.reservationId}/redeem`, {
@@ -227,7 +233,7 @@ export function AnnualBenefitManagementPanel({ api, auth }: { api: NormalizedApi
   }
   async function cancelAnnualGift(reservation:AnnualGiftReservation) {
     if (!canFulfill||busy) return
-    const cancelReason=window.prompt(`取消${reservation.tableCode}的“${reservation.title}”暂留，请填写原因（至少2个字）：`)?.trim()??''
+    const cancelReason=(await promptAction({title:'填写取消暂留原因',description:`取消${reservation.tableCode}的“${reservation.title}”暂留。`,label:'取消原因',confirmLabel:'继续'}))?.trim()??''
     if (cancelReason.length<2) return setNotice('必须填写取消原因，礼遇暂留未释放。')
     setBusy(`annual-gift-cancel-${reservation.reservationId}`);setNotice('')
     try {
@@ -241,7 +247,7 @@ export function AnnualBenefitManagementPanel({ api, auth }: { api: NormalizedApi
   }
   async function cancelDailySnack(claim: DailySnackClaim) {
     if (!canFulfill || busy || claim.status !== 'reserved') return
-    const reason = window.prompt(`取消“${claim.title}”的暂留，请填写原因（至少2个字）：`)?.trim() ?? ''
+    const reason = (await promptAction({title:'填写取消暂留原因',description:`取消“${claim.title}”的暂留。`,label:'取消原因',confirmLabel:'继续'}))?.trim() ?? ''
     if (reason.length < 2) return setNotice('取消原因不足，未释放每日点心暂留。')
     setBusy(`daily-snack-cancel-${claim.id}`); setNotice('')
     try {
@@ -256,7 +262,7 @@ export function AnnualBenefitManagementPanel({ api, auth }: { api: NormalizedApi
 
   async function retryComplimentaryFulfillment(item:ComplimentaryFulfillmentException) {
     if (!canHandleException||busy) return
-    const retryReason=window.prompt(`重新派发 ${item.tableCode} 的“${item.title||'会员礼遇'}”，请填写复核原因（至少2个字）：`)?.trim()??''
+    const retryReason=(await promptAction({title:'填写重新派发复核原因',description:`重新派发 ${item.tableCode} 的“${item.title||'会员礼遇'}”。`,label:'复核原因',confirmLabel:'继续'}))?.trim()??''
     if (retryReason.length<2) return setNotice('必须填写复核原因，未重新派发。')
     setBusy(`fulfillment-retry-${item.id}`);setNotice('')
     try {
@@ -271,9 +277,9 @@ export function AnnualBenefitManagementPanel({ api, auth }: { api: NormalizedApi
 
   async function resolveComplimentaryCancellation(item:ComplimentaryFulfillmentException) {
     if (!canHandleException||busy||item.status!=='failed') return
-    const reason=window.prompt(`取消 ${item.tableCode} 的“${item.title||'会员礼遇'}”系统出品并释放库存，请填写核对原因（至少2个字）：`)?.trim()??''
+    const reason=(await promptAction({title:'填写取消系统出品核对原因',description:`取消 ${item.tableCode} 的“${item.title||'会员礼遇'}”系统出品并释放库存。`,label:'核对原因',confirmLabel:'继续'}))?.trim()??''
     if (reason.length<2) return setNotice('必须填写核对原因，未取消礼遇出品。')
-    if (!window.confirm('高风险确认：系统会取消这张零元礼遇订单、释放库存和制作容量，并将顾客礼遇显示为已取消。只有确认尚未制作、尚未交付时才可继续。')) return
+    if (!(await confirmAction({title:'确认取消零元礼遇订单',description:'系统会取消这张零元礼遇订单、释放库存和制作容量，并将顾客礼遇显示为已取消。只有确认尚未制作、尚未交付时才可继续。',confirmLabel:'确认取消',tone:'danger'}))) return
     setBusy(`fulfillment-cancel-${item.id}`);setNotice('')
     try {
       await api.postEndpoint(`/api/staff/complimentary-fulfillment-exceptions/${item.id}/resolve`,{
@@ -287,11 +293,11 @@ export function AnnualBenefitManagementPanel({ api, auth }: { api: NormalizedApi
 
   async function resolveComplimentaryCompensation(item:ComplimentaryFulfillmentException) {
     if (!canHandleException||busy||item.status!=='failed') return
-    const compensationReference=window.prompt('请输入已经完成的线下补偿凭证、事件编号或交接单号（至少2个字）：')?.trim()??''
+    const compensationReference=(await promptAction({title:'填写线下补偿凭证',description:'填写已完成的线下补偿凭证、事件编号或交接单号，至少2个字。',label:'补偿凭证',confirmLabel:'继续',multiline:false}))?.trim()??''
     if (compensationReference.length<2) return setNotice('必须填写可追溯的补偿凭证，未结案。')
-    const reason=window.prompt(`请说明 ${item.tableCode} 的线下补偿内容和核对结果（至少2个字）：`)?.trim()??''
+    const reason=(await promptAction({title:'填写线下补偿核对结果',description:`说明 ${item.tableCode} 的线下补偿内容和核对结果。`,label:'核对结果',confirmLabel:'继续'}))?.trim()??''
     if (reason.length<2) return setNotice('必须填写补偿说明，未结案。')
-    if (!window.confirm(`确认线下补偿已经真实完成？\n凭证：${compensationReference}\n系统将取消原零元出品订单、释放预留，并把会员礼遇记为已补偿完成。`)) return
+    if (!(await confirmAction({title:'确认线下补偿已完成',description:`凭证：${compensationReference}\n系统将取消原零元出品订单、释放预留，并把会员礼遇记为已补偿完成。`,confirmLabel:'确认已补偿'}))) return
     setBusy(`fulfillment-compensate-${item.id}`);setNotice('')
     try {
       await api.postEndpoint(`/api/staff/complimentary-fulfillment-exceptions/${item.id}/resolve`,{

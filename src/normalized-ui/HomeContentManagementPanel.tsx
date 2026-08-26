@@ -1,5 +1,6 @@
 import { useCallback,useEffect,useState,type FormEvent } from 'react'
 import type { NormalizedApiClient,StaffAuthView } from '../normalized-api'
+import { useConfirmationDialog } from './ConfirmationDialog'
 import { MediaAssetPicker } from './MediaAssetPicker'
 import './activity-operations-panel.css'
 
@@ -20,6 +21,7 @@ interface SupportContactView { rolloutState:'disabled'|'pilot'|'enabled'|'shadow
 interface SupportDraft { rolloutState:'disabled'|'pilot'|'enabled'; phone:string; phoneLabel:string; wecomName:string; wecomQrImageUrl:string; reason:string }
 
 export function HomeContentManagementPanel({api,auth}:{api:NormalizedApiClient;auth:StaffAuthView}){
+  const { confirmAction } = useConfirmationDialog()
   const canManage=auth.permissions.includes('community.activity.manage')
   const canPublish=auth.permissions.includes('community.activity.publish')
   const canView=auth.permissions.includes('community.activity.view')||canManage||canPublish
@@ -67,8 +69,13 @@ export function HomeContentManagementPanel({api,auth}:{api:NormalizedApiClient;a
   }
   async function action(card:CardView,operation:'publish'|'pause'){
     if(busy)return
-    const prompt=operation==='publish'?`确认发布“${card.title}”？到达展示时间后小程序会自动出现。`:`确认从首页撤下“${card.title}”？小程序会立即停止展示。`
-    if(!window.confirm(prompt))return
+    const prompt=operation==='publish'?`发布“${card.title}”后，到达展示时间小程序会自动出现。`:`从首页撤下“${card.title}”后，小程序会立即停止展示。`
+    if(!(await confirmAction({
+      title: operation === 'publish' ? '确认发布首页内容' : '确认撤下首页内容',
+      description: prompt,
+      confirmLabel: operation === 'publish' ? '确认发布' : '确认撤下',
+      tone: operation === 'pause' ? 'danger' : 'default',
+    })))return
     setBusy(`${operation}:${card.code}`);setNotice('')
     try{
       await api.postEndpoint(`/api/staff/home-content-cards/${encodeURIComponent(card.code)}/${operation}`,{

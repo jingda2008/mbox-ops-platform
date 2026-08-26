@@ -29,6 +29,7 @@ import {
 import { paymentPolicyPresentation } from './payment-policy-presentation'
 import { PerformanceRevisionPanel } from './PerformanceRevisionPanel'
 import { InventoryBarcodeScanner } from './InventoryBarcodeScanner'
+import { useConfirmationDialog } from './ConfirmationDialog'
 import './staff-module-panel.css'
 
 export type StaffModule = 'payments' | 'performance' | 'inventory' | 'operations' | 'experience'
@@ -480,6 +481,7 @@ function PerformanceModule({ api, auth, view, performers, requests, phases, onCh
   phases: PerformancePhaseEvent[]
   onChanged(): Promise<void>
 }) {
+  const { confirmAction } = useConfirmationDialog()
   const schedules = view?.schedules ?? []
   const stalePhases = phases.filter((phase) => (
     schedules.find((schedule) => schedule.id === phase.scheduleId)?.status !== 'performing'
@@ -592,7 +594,7 @@ function PerformanceModule({ api, auth, view, performers, requests, phases, onCh
       return
     }
     if (songs.length === 0 && catalogMode !== 'replace') { setNotice('追加导入至少需要一首歌曲'); return }
-    if (catalogMode === 'replace' && !window.confirm(`确认用当前${songs.length}首歌曲替换该演员的可用歌单？未列出的歌曲将停用。`)) return
+    if (catalogMode === 'replace' && !(await confirmAction({title:'确认替换演员歌单',description:`用当前${songs.length}首歌曲替换该演员的可用歌单后，未列出的歌曲将停用。`,confirmLabel:'确认替换',tone:'danger'}))) return
     await run(`song-import-${catalogPerformerId}`, () => api.postEndpoint(`/api/staff/performers/${catalogPerformerId}/songs/import`, {
       sourceName: '员工端批量维护', mode: catalogMode, songs,
     }, { idempotencyKey: operationIdempotency('song-import') }), `已导入${songs.length}首歌曲`)
@@ -620,7 +622,7 @@ function PerformanceModule({ api, auth, view, performers, requests, phases, onCh
   }
 
   async function deactivateSong(song: PerformerSongEntry) {
-    if (!window.confirm(`确认停用“${song.title}”？停用后顾客不能再从该演员歌单点选。`)) return
+    if (!(await confirmAction({title:'确认停用歌曲',description:`停用“${song.title}”后，顾客不能再从该演员歌单点选。`,confirmLabel:'确认停用',tone:'danger'}))) return
     await run(`song-disable-${song.id}`, () => api.patchEndpoint(`/api/staff/songs/${song.id}`, { status: 'inactive' }, {
       idempotencyKey: operationIdempotency('song-disable'),
     }), '歌曲已停用')
@@ -663,8 +665,8 @@ function PerformanceModule({ api, auth, view, performers, requests, phases, onCh
     ), `已开始“${performancePhaseCodeLabel(phaseCode)}”，受阶段限制的推荐将立即按此筛选`)
   }
 
-  function transitionPhase(event: PerformancePhaseEvent, action: 'end' | 'cancel') {
-    if (action === 'cancel' && !window.confirm('确认取消这条现场阶段记录？取消后受阶段限制的商品将停止推荐。')) return
+  async function transitionPhase(event: PerformancePhaseEvent, action: 'end' | 'cancel') {
+    if (action === 'cancel' && !(await confirmAction({title:'确认取消现场阶段记录',description:'取消后受阶段限制的商品将停止推荐。',confirmLabel:'确认取消',tone:'danger'}))) return
     void run(`phase-${event.publicId}-${action}`, () => api.postEndpoint(
       `/api/staff/customer-experience/performance-phases/${event.publicId}/${action}`,
       { reason: action === 'end' ? '舞台授权人员确认本阶段结束' : '舞台授权人员确认阶段记录取消' },
@@ -721,6 +723,7 @@ function PerformanceModule({ api, auth, view, performers, requests, phases, onCh
 }
 
 function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiClient; auth: StaffAuthView; view: InventoryView | null; onChanged(): Promise<void> }) {
+  const { confirmAction } = useConfirmationDialog()
   const canManageCatalog = auth.permissions.includes('catalog.product.manage')
   const canViewInventoryCost = auth.permissions.includes('inventory.cost.view')
   const canPublishBeverage = canManageCatalog && canViewInventoryCost
@@ -953,7 +956,7 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
       setNotice('请先为当前收货单和商品生成发布预览，再确认入库发布')
       return
     }
-    if (!window.confirm(`确认按预览入库并发布“${publishPreview.productName}”？\n成本 ¥${formatInventoryMinor(publishPreview.costAmountMinor)} / 份，售价 ¥${formatInventoryMinor(publishPreview.standardPriceMinor)}，可售 ${publishPreview.sellableServings} 份。`)) return
+    if (!(await confirmAction({title:'确认入库并发布',description:`按预览入库并发布“${publishPreview.productName}”？\n成本 ¥${formatInventoryMinor(publishPreview.costAmountMinor)} / 份，售价 ¥${formatInventoryMinor(publishPreview.standardPriceMinor)}，可售 ${publishPreview.sellableServings} 份。`,confirmLabel:'确认入库发布'}))) return
     setBusy(true)
     setNotice('')
     try {
@@ -1074,6 +1077,7 @@ function DevicesModule({ api, auth, devices, jobs, bridges, routes, onChanged }:
   routes: PrinterRouteView[]
   onChanged(): Promise<void>
 }) {
+  const { confirmAction } = useConfirmationDialog()
   const [reason, setReason] = useState('现场人工检查后操作')
   const [busyKey, setBusyKey] = useState<string | null>(null)
   const [notice, setNotice] = useState('')
@@ -1125,15 +1129,15 @@ function DevicesModule({ api, auth, devices, jobs, bridges, routes, onChanged }:
     }, { idempotencyKey: operationIdempotency(`hardware-${commandType}`) }), commandType === 'ping' ? '连通检测已提交' : commandType === 'reconnect' ? '重连指令已提交' : '测试打印已提交')
   }
 
-  function retry(job: PrintJobView) {
-    if (!window.confirm(`确认重试“${job.printerName}”的失败任务？请先检查打印机，避免重复出单。`)) return
+  async function retry(job: PrintJobView) {
+    if (!(await confirmAction({title:'确认重试打印任务',description:`重试“${job.printerName}”的失败任务前，请先检查打印机，避免重复出单。`,confirmLabel:'确认重试'}))) return
     void run(`job-${job.id}`, () => api.postEndpoint(`/api/hardware/print-jobs/${job.id}/retry`, { reason: reason.trim() }, {
       idempotencyKey: operationIdempotency('print-retry'),
     }), '打印任务已进入重试队列')
   }
 
-  function reprint(job: PrintJobView) {
-    if (!window.confirm(`确认补打这张已完成小票？原票不会重试或修改，新票会标注“补打”。`)) return
+  async function reprint(job: PrintJobView) {
+    if (!(await confirmAction({title:'确认补打小票',description:'原票不会重试或修改，新票会标注“补打”。',confirmLabel:'确认补打'}))) return
     void run(`job-reprint-${job.id}`, () => api.postEndpoint(`/api/hardware/print-jobs/${job.id}/reprint`, { reason: reason.trim() }, {
       idempotencyKey: operationIdempotency('print-reprint'),
     }), '补打任务已进入队列；请在原打印机领取')
@@ -1190,9 +1194,9 @@ function DevicesModule({ api, auth, devices, jobs, bridges, routes, onChanged }:
       : '打印机配置已更新；请重新执行检测和测试打印')
   }
 
-  function setPrinterStatus(device: HardwareDeviceView, status: 'active' | 'paused') {
+  async function setPrinterStatus(device: HardwareDeviceView, status: 'active' | 'paused') {
     const verb = status === 'active' ? '启用' : '暂停'
-    if (!window.confirm(`确认${verb}“${device.name}”？${status === 'paused' ? '暂停后新任务不会再分流到这台打印机。' : '启用前请确认驱动、队列和实体测试页正常。'}`)) return
+    if (!(await confirmAction({title:`确认${verb}打印机`,description:`${verb}“${device.name}”？${status === 'paused' ? '暂停后新任务不会再分流到这台打印机。' : '启用前请确认驱动、队列和实体测试页正常。'}`,confirmLabel:`确认${verb}`,tone:status === 'paused'?'danger':'default'}))) return
     void run(`printer-status-${device.id}-${status}`, () => api.patchEndpoint(`/api/hardware/devices/${device.id}`, {
       status, reason: reason.trim(),
     }, { idempotencyKey: operationIdempotency(`printer-${status}`) }), `打印机已${verb}`)
@@ -1222,9 +1226,9 @@ function DevicesModule({ api, auth, devices, jobs, bridges, routes, onChanged }:
     setMode('route')
   }
 
-  function setRouteStatus(route: PrinterRouteView, status: 'active' | 'paused') {
+  async function setRouteStatus(route: PrinterRouteView, status: 'active' | 'paused') {
     const verb = status === 'active' ? '启用' : '暂停'
-    if (!window.confirm(`确认${verb}“${route.name}”打印分流？`)) return
+    if (!(await confirmAction({title:`确认${verb}打印分流`,description:`${verb}“${route.name}”打印分流？`,confirmLabel:`确认${verb}`,tone:status === 'paused'?'danger':'default'}))) return
     void run(`route-status-${route.id}-${status}`, () => api.putEndpoint(`/api/hardware/printer-routes/${encodeURIComponent(route.code)}`, {
       name: route.name, stationCode: route.stationCode, productCategoryCode: route.productCategoryCode,
       printerDeviceId: route.printerDeviceId, copies: route.copies, priority: route.priority,
@@ -1232,8 +1236,8 @@ function DevicesModule({ api, auth, devices, jobs, bridges, routes, onChanged }:
     }, { idempotencyKey: operationIdempotency(`printer-route-${status}`) }), `打印分流已${verb}`)
   }
 
-  function revokeBridge(bridge: PrintBridgeView) {
-    if (!window.confirm(`确认撤销“${bridge.name}”的打印桥凭据？该电脑将立即不能领取新任务。`)) return
+  async function revokeBridge(bridge: PrintBridgeView) {
+    if (!(await confirmAction({title:'确认撤销打印桥凭据',description:`撤销“${bridge.name}”后，该电脑将立即不能领取新任务。`,confirmLabel:'确认撤销',tone:'danger'}))) return
     void run(`bridge-revoke-${bridge.id}`, () => api.postEndpoint(`/api/hardware/print-bridges/${bridge.id}/revoke`, {
       reason: reason.trim(),
     }), '打印桥凭据已撤销，关联打印机已标记离线')
@@ -1286,6 +1290,7 @@ function DevicesModule({ api, auth, devices, jobs, bridges, routes, onChanged }:
 }
 
 function SettingsModule({ api, auth, policy, onChanged }: { api: NormalizedApiClient; auth: StaffAuthView; policy: CommercePolicyView | null; onChanged(): Promise<void> }) {
+  const { confirmAction } = useConfirmationDialog()
   const [reason, setReason] = useState('')
   const [reservationMinutes, setReservationMinutes] = useState('10')
   const [busy, setBusy] = useState(false)
@@ -1301,7 +1306,7 @@ function SettingsModule({ api, auth, policy, onChanged }: { api: NormalizedApiCl
     if (policy === null || busy) return
     const target = !policy.policyOnlinePaymentEnabled
     if (reason.trim().length < 3) { setNotice('请填写至少3个字的调整原因'); return }
-    if (!window.confirm(`确认${target ? '开放' : '关闭'}线上支付？顾客点单和员工协助收款将立即按新策略执行。`)) return
+    if (!(await confirmAction({title:`确认${target ? '开放' : '关闭'}线上支付`,description:`顾客点单和员工协助收款将立即按新策略执行。`,confirmLabel:`确认${target ? '开放' : '关闭'}`,tone:target?'default':'danger'}))) return
     setBusy(true)
     setNotice('')
     try {
@@ -1328,7 +1333,7 @@ function SettingsModule({ api, auth, policy, onChanged }: { api: NormalizedApiCl
       return
     }
     if (reason.trim().length < 3) { setNotice('请填写至少3个字的调整原因'); return }
-    if (!window.confirm(`确认将待付款库存保留时间调整为${minutes}分钟？新订单将立即按新策略执行。`)) return
+    if (!(await confirmAction({title:'确认调整待付款库存保留',description:`将待付款库存保留时间调整为${minutes}分钟后，新订单将立即按新策略执行。`,confirmLabel:'确认调整'}))) return
     setBusy(true)
     setNotice('')
     try {

@@ -43,6 +43,7 @@ import {
   UserPlus,
 } from 'lucide-react'
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { useConfirmationDialog } from '../normalized-ui/ConfirmationDialog'
 import {
   actOnTaskAsManager,
   actOnTask,
@@ -221,6 +222,7 @@ function tableOperationsConfig(config?: TableOperationsConfig): TableOperationsC
 }
 
 export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigationRequest = null }: OperationsConsoleProps) {
+  const { confirmAction } = useConfirmationDialog()
   const fulfillmentAccess = getFulfillmentAccess(data, getCurrentActorId())
   const roleHomeModel = buildRoleHomeModel(data, fulfillmentAccess.employee?.id ?? '')
   const roleHomeAccess = roleHomeModel.access
@@ -804,7 +806,11 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
       setNotice(`结台前发现${selectedOpenKds.length}项商品尚未送达，请先核对出品；系统不会自动改账`)
       return
     }
-    if (!window.confirm(`确认${selectedTable.code}客人已经离店并结台翻台？`)) return
+    if (!(await confirmAction({
+      title: '确认立即翻台',
+      description: `${selectedTable.code} 的客人已离店。确认后释放物理桌台；付款、退款和对账记录会保留给收银后续处理。`,
+      confirmLabel: '确认翻台',
+    }))) return
     setBusy(true)
     try {
       await closeTableSession(selectedTable.id, '服务员工确认客人离店并完成结台翻台')

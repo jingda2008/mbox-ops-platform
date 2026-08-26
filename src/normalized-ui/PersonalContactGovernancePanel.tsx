@@ -1,6 +1,7 @@
 import { useCallback,useEffect,useState,type FormEvent } from 'react'
 import { ChevronDown,RefreshCw,ShieldCheck } from 'lucide-react'
 import type { NormalizedApiClient,StaffAuthView } from '../normalized-api'
+import { useConfirmationDialog } from './ConfirmationDialog'
 import './personal-contact-governance-panel.css'
 
 type ResourceKind='activity_registration_contact'|'verified_membership_phone'
@@ -10,6 +11,7 @@ interface Disposition {resourcePublicId:string;resourceKind:ResourceKind;maskedC
 interface EligibleResource {publicId:string;resourceKind:ResourceKind;maskedContact:string;businessLabel:string;status:string}
 
 export function PersonalContactGovernancePanel({api,auth}:{api:NormalizedApiClient;auth:StaffAuthView}){
+  const { promptAction }=useConfirmationDialog()
   const canView=auth.permissions.includes('privacy.contact.retention.view')
   const canDraft=auth.permissions.includes('privacy.contact.retention.draft')
   const canApprove=auth.permissions.includes('privacy.contact.retention.approve')
@@ -55,7 +57,12 @@ export function PersonalContactGovernancePanel({api,auth}:{api:NormalizedApiClie
   }
 
   async function transition(policy:Policy,action:'approve'|'publish'){
-    const reason=window.prompt(action==='approve'?'请输入独立审批意见':'请输入发布说明')?.trim()
+    const reason=(await promptAction({
+      title:action==='approve'?'独立审批':'发布策略',
+      description:action==='approve'?'填写独立审批意见后继续。':'填写发布说明后继续。',
+      label:action==='approve'?'审批意见':'发布说明',
+      confirmLabel:action==='approve'?'确认审批':'确认发布',
+    }))?.trim()
     if(!reason||reason.length<2)return
     setBusy(`${policy.publicId}:${action}`);setNotice('')
     try{
@@ -78,7 +85,12 @@ export function PersonalContactGovernancePanel({api,auth}:{api:NormalizedApiClie
   }
 
   async function release(hold:Hold){
-    const reason=window.prompt('请输入释放法定保留的依据或说明')?.trim()
+    const reason=(await promptAction({
+      title:'释放法定保留',
+      description:'请记录释放依据或说明；该记录会进入审计。',
+      label:'释放依据',
+      confirmLabel:'确认释放',
+    }))?.trim()
     if(!reason||reason.length<2)return
     setBusy(`${hold.publicId}:release`);setNotice('')
     try{

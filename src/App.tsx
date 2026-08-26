@@ -54,6 +54,7 @@ import {
   type StaffCollaborationGuidance,
 } from './staff-action-guidance'
 import { runSingleFlight } from './single-flight'
+import { useConfirmationDialog, type ConfirmationRequest } from './normalized-ui/ConfirmationDialog'
 import './system-ui.css'
 import './premium-theme.css'
 
@@ -216,6 +217,7 @@ function clearStoredStaffSession() {
 }
 
 export default function App() {
+  const { confirmAction } = useConfirmationDialog()
   const isGuest = window.location.pathname.startsWith('/guest')
   const isMember = window.location.pathname.startsWith('/member')
   const isPublicReservation = window.location.pathname.startsWith('/reserve')
@@ -372,9 +374,12 @@ export default function App() {
 
   async function switchEmployee() {
     if (switchingEmployee) return
-    if (offlineStatus.pendingCount > 0 && !window.confirm(
-      `本机还有${offlineStatus.pendingCount}项未同步服务动作。切换员工会清除这些动作，请确认现场已人工交接。`,
-    )) return
+    if (offlineStatus.pendingCount > 0 && !(await confirmAction({
+      title: '确认切换员工',
+      description: `本机还有${offlineStatus.pendingCount}项未同步服务动作。切换员工会清除这些动作，请确认现场已人工交接。`,
+      confirmLabel: '确认切换',
+      tone: 'danger',
+    }))) return
     setSwitchingEmployee(true)
     try {
       if (offlineStatus.online && window.localStorage.getItem('mbox.auth.token')) {
@@ -415,7 +420,7 @@ export default function App() {
   if (snapshot && !offlineStatus.online) {
     return (
       <>
-        <ConnectivityBanner status={offlineStatus} onRetry={refreshWorkspace} />
+        <ConnectivityBanner status={offlineStatus} onRetry={refreshWorkspace} confirmAction={confirmAction} />
         <OfflineSnapshotView snapshot={snapshot} onSnapshotChange={setSnapshot} />
       </>
     )
@@ -461,7 +466,7 @@ export default function App() {
       data-voice-scope="staff"
       onClickCapture={blockRestrictedOfflineAction}
     >
-      <ConnectivityBanner status={offlineStatus} onRetry={refreshWorkspace} />
+      <ConnectivityBanner status={offlineStatus} onRetry={refreshWorkspace} confirmAction={confirmAction} />
       {hasStaffIdentity && (
         <div className="pilot-session-bar">
           <span>当前员工：<strong>{currentActorName}</strong></span>
@@ -629,7 +634,11 @@ function PilotLogin({ onAuthenticated }: { onAuthenticated: () => void }) {
   )
 }
 
-function ConnectivityBanner({ status, onRetry }: { status: OfflineStatus; onRetry: () => Promise<void> }) {
+function ConnectivityBanner({ status, onRetry, confirmAction }: {
+  status: OfflineStatus
+  onRetry: () => Promise<void>
+  confirmAction: (request: ConfirmationRequest) => Promise<boolean>
+}) {
   if (status.conflict) {
     return (
       <div className="connectivity-banner is-conflict" role="alert">
@@ -640,11 +649,14 @@ function ConnectivityBanner({ status, onRetry }: { status: OfflineStatus; onRetr
         </div>
         <button
           className="secondary-button"
-          onClick={() => {
-            if (window.confirm('请确认该任务已由领班人工核对。移除冲突动作后，后续队列将继续同步。')) {
-              void discardConflictedTaskAction(status.conflict!.queueId)
-            }
-          }}
+          onClick={() => void (async () => {
+            if (await confirmAction({
+              title: '确认移除同步冲突动作',
+              description: '请确认该任务已由领班人工核对。移除冲突动作后，后续队列将继续同步。',
+              confirmLabel: '确认移除',
+              tone: 'danger',
+            })) void discardConflictedTaskAction(status.conflict!.queueId)
+          })()}
         >人工核对后移除</button>
       </div>
     )

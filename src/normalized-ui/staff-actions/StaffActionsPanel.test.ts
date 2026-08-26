@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { ActionList, filterMemberBenefitTasks, memberBenefitTaskCount, normalizeMemberBenefitScanCode, prioritizeActionFact, splitReservationLoadResults, StaffActionsPanel } from './StaffActionsPanel'
+import { ConfirmationDialogProvider } from '../ConfirmationDialog'
 import type { StaffActionsApiPort } from './staff-actions-api'
 import type { StaffFulfillmentData, StaffOperationsData, StaffReservation } from './types'
 
@@ -55,7 +56,11 @@ describe('StaffActionsPanel', () => {
       issueAssistedOrderContext: vi.fn(), submitAssistedOrder: vi.fn(), createOnlinePayment: vi.fn(),
       loadOnlinePaymentStatus: vi.fn(), queryOnlinePayment: vi.fn(),
     }
-    const html = renderToStaticMarkup(createElement(StaffActionsPanel, { api }))
+    const html = renderToStaticMarkup(createElement(
+      ConfirmationDialogProvider,
+      null,
+      createElement(StaffActionsPanel, { api }),
+    ))
 
     expect(html).toContain('正在读取现场')
     expect(html).not.toContain('操作成功')

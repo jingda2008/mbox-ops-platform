@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0-rc.143 - 2026-08-26
+
+- Removes deprecated overlapping `pg` client queries from the customer-experience
+  dashboard, recommendation-policy configuration and staff loyalty-account read
+  paths. Each scoped transaction now reads sequentially and has a regression
+  guard against reintroducing overlap.
+- Makes the browser device-verification checks wait for the authoritative
+  `/api/auth/device-access` success response before asserting the employee
+  login form, producing a direct diagnostic instead of an ambiguous timeout.
+
 ## 1.0.0-rc.142 - 2026-08-26
 
 - Makes the staff membership and customer-experience workspaces responsive at

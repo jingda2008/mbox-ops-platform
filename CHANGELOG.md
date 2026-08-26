@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.0-rc.136 - 2026-08-26
+
+- Restores the configurable “顾客离店异常翻台” capability to the authoritative
+  store configuration and backfills it to the operating roles seeded by the
+  original customer-left workflow. This prevents a provisioning replay from
+  hiding the action and rejecting a valid historical unpaid-table turnover.
+- Lets an authorized cashier open a prior-business-day order and go directly
+  to its still-open or closing table for the explicit customer-left turnover
+  decision. Confirmed payments and active refund commitments remain protected
+  by the server-side close guard.
+
 ## 1.0.0-rc.135 - 2026-08-26
 
 - Restores 44 px touch targets and explicit accessible labels for the

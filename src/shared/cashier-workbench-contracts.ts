@@ -142,6 +142,9 @@ export interface CashierWorkbenchOrder {
   id: string
   publicId: string
   tableCode: string
+  /** Present while the source table can still be selected in staff operations. */
+  tableSessionId?: string
+  tableSessionStatus?: 'open' | 'closing' | 'closed' | 'cancelled'
   channel: string
   status: string
   paymentStatus: string

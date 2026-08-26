@@ -56,6 +56,17 @@ describe('CashierAfterSalesWorkbenchView', () => {
     expect(html).toContain('不会并入今日营业额')
   })
 
+  it('takes an authorized cashier from a carryover order to the exact open table for customer-left turnover', () => {
+    const view = workbench([payment('postar', [])])
+    view.orders[0]!.businessDate = '2026-08-12'
+    view.orders[0]!.carryover = true
+    view.orders[0]!.tableSessionId = 'table-session-carryover'
+    view.orders[0]!.tableSessionStatus = 'closing'
+    const html = render(view, ['reconciliation.view', 'table.close', 'table.turnover_unsettled'])
+
+    expect(html).toContain('顾客已离店，去翻台')
+  })
+
   it('shows a controlled KDS disposition only after a linked refund has succeeded and the task has not started', () => {
     const view = workbench([payment('postar', [refund('refund-kds', 'succeeded', otherEmployeeId)])])
     view.orders[0]!.kdsTasks = [{

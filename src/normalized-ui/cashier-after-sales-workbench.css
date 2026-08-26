@@ -57,6 +57,7 @@
 .cashier-order-toggle svg { color: #70766f; transition: transform .16s ease; }
 .cashier-order-toggle svg.is-open { transform: rotate(180deg); }
 .cashier-order-detail { display: grid; gap: 10px; padding: 10px; border-top: 1px solid #d8dcd5; background: #f2f3ef; }
+.cashier-order-turnover-link { min-height: 44px; justify-self: start; padding: 8px 12px; border: 1px solid #9a6d28; border-radius: 6px; background: #fffaf0; color: #6d4b12; font-weight: 800; }
 .cashier-order-detail section { display: grid; gap: 7px; }
 .cashier-order-detail h3 { margin: 0; color: #676e67; font-size: 10px; }
 .cashier-line { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 9px; padding: 8px 10px; border: 1px solid #d7dbd4; border-radius: 5px; background: #fbfaf6; }

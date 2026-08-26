@@ -27,6 +27,8 @@ interface OrderRow extends Record<string, unknown> {
   id: string
   public_id: string
   table_code: string
+  table_session_id: string
+  table_session_status: CashierWorkbenchOrder['tableSessionStatus']
   channel: string
   status: string
   payment_status: string
@@ -207,6 +209,7 @@ export class PostgresCashierWorkbenchQuery {
     return this.transactions.run(input.scope, async (transaction) => {
       const orderResult = await transaction.query<OrderRow>(`
         SELECT orders.id, orders.public_id, table_row.code AS table_code,
+          session.id AS table_session_id, session.status AS table_session_status,
           orders.channel, orders.status, orders.payment_status,
           orders.total_amount_minor, orders.currency,
           orders.submitted_at::text, orders.created_at::text,
@@ -633,6 +636,8 @@ function assembleView(
       id: order.id,
       publicId: order.public_id,
       tableCode: order.table_code,
+      tableSessionId: order.table_session_id,
+      tableSessionStatus: order.table_session_status,
       channel: order.channel,
       status: order.status,
       paymentStatus: order.payment_status,

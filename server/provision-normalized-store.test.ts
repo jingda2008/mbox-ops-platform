@@ -88,7 +88,7 @@ describe('normalized store provisioning config', () => {
       'utf8',
     )) as unknown
     const config = parseStoreProvisionConfig(source)
-    expect(config.version).toBe('2026.08.24-v16')
+    expect(config.version).toBe('2026.08.26-v17')
     const role = (code: string) => config.roles.find((candidate) => candidate.code === code)
 
     expect(role('MANAGER')?.permissions.filter((code) => code.startsWith('refund.')))
@@ -128,6 +128,10 @@ describe('normalized store provisioning config', () => {
     const permissions = (code: string) => new Set(
       config.roles.find((candidate) => candidate.code === code)?.permissions ?? [],
     )
+
+    for (const roleCode of ['OWNER', 'OPS_LEAD', 'MANAGER', 'DEPUT_MANAGER', 'SERVER']) {
+      expect(permissions(roleCode).has('table.turnover_unsettled')).toBe(true)
+    }
 
     const owner = permissions('OWNER')
     expect([...owner]).toEqual(expect.arrayContaining([

@@ -68,7 +68,10 @@ describe('PostgresCashierWorkbenchQuery', () => {
       activityRequestedRefundCount: 0,
       activityProcessingRefundCount: 0,
     })
-    expect(view.orders[0]).toMatchObject({ publicId: 'ORDER-VIP1-0001', tableCode: 'VIP1', outstandingAmountMinor: 0 })
+    expect(view.orders[0]).toMatchObject({
+      publicId: 'ORDER-VIP1-0001', tableCode: 'VIP1', tableSessionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      tableSessionStatus: 'open', outstandingAmountMinor: 0,
+    })
     expect(view.orders[0]?.payments[0]).toMatchObject({
       id: paymentId,
       reservedRefundAmountMinor: 1_000,
@@ -568,6 +571,8 @@ function orderRow(): Record<string, unknown> {
     id: orderId,
     public_id: 'ORDER-VIP1-0001',
     table_code: 'VIP1',
+    table_session_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    table_session_status: 'open',
     channel: 'staff_assisted',
     status: 'submitted',
     payment_status: 'paid',

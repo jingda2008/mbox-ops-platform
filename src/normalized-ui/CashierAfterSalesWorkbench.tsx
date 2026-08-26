@@ -537,6 +537,15 @@ export function CashierAfterSalesWorkbenchView({
               </button>
               {expanded && <div className="cashier-order-detail">
                 {order.carryover && <p className="cashier-guidance">这是前一营业日尚未闭环的收款或退款事项；处理结果继续记在原订单，不会并入今日营业额。</p>}
+                {order.carryover
+                  && (order.tableSessionStatus === 'open' || order.tableSessionStatus === 'closing')
+                  && auth.permissions.includes('table.close')
+                  && auth.permissions.includes('table.turnover_unsettled')
+                  && <button
+                    type="button"
+                    className="cashier-order-turnover-link"
+                    onClick={() => onNavigate?.(`/staff/live?tableSessionId=${encodeURIComponent(order.tableSessionId ?? '')}`)}
+                  >顾客已离店，去翻台</button>}
                 {order.overCollectedAmountMinor > 0 && <p className="cashier-workflow-guidance" role="alert">本单已确认多收 ¥{formatAmount(order.overCollectedAmountMinor)}。请在下方对应收款记录发起退款；不要用新订单或手工改金额冲抵。</p>}
                 {orderWorkflowGuidance(order, view.actions) && <p className="cashier-workflow-guidance">{orderWorkflowGuidance(order, view.actions)}</p>}
                 <section>

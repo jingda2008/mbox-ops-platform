@@ -1,0 +1,251 @@
+/* Membership workspaces contain the densest staff forms. Keep their reflow
+ * scoped here so inventory, cashier and venue forms retain their own layouts. */
+.customer-experience-management,
+.customer-experience-management > *,
+.customer-experience-management .staff-module-summary,
+.customer-experience-management .staff-module-summary > div,
+.customer-experience-management .staff-module-form,
+.customer-experience-management .staff-module-form > *,
+.customer-experience-management .activity-admin-list,
+.customer-experience-management .activity-admin-list article,
+.customer-experience-management .activity-admin-list article > div {
+  min-width: 0;
+}
+
+.customer-experience-management .staff-module-form > fieldset {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+  margin: 0;
+  padding: 11px;
+  border: 1px solid #d8ddd6;
+  border-radius: 8px;
+}
+
+/* These panels use the summary surface but have no leading icon. The generic
+ * summary grid reserves a 38px icon column, which would otherwise squeeze the
+ * entire membership workspace into that first track. */
+.customer-experience-management :is(
+  .annual-benefit-panel,
+  .member-account-panel,
+  .tier-benefit-panel,
+  .membership-terms-panel,
+  .membership-recovery-panel,
+  .loyalty-policy-panel
+) {
+  display: block;
+  min-height: 0;
+}
+
+.customer-experience-management :is(
+  .annual-benefit-panel,
+  .member-account-panel,
+  .tier-benefit-panel,
+  .membership-terms-panel,
+  .membership-recovery-panel,
+  .loyalty-policy-panel
+) > div {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+}
+
+.customer-experience-management .staff-module-form > fieldset > legend {
+  padding: 0 5px;
+  color: #536057;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.customer-experience-management .staff-module-form > fieldset > label,
+.customer-experience-management .activity-admin-list article label {
+  min-width: 0;
+}
+
+.customer-experience-management .staff-module-form,
+.customer-experience-management .staff-module-form > fieldset {
+  box-sizing: border-box;
+  max-width: 100%;
+}
+
+/* Chromium gives date/time and select controls an intrinsic minimum width on
+ * Linux. Keep those native controls inside the form track instead of clipping
+ * the membership workspace horizontally on a 320px staff screen. */
+.customer-experience-management .staff-module-form :is(
+  input:not([type='checkbox']):not([type='radio']),
+  select,
+  textarea
+) {
+  box-sizing: border-box;
+  min-width: 0;
+  inline-size: 100%;
+  max-width: 100%;
+}
+
+.customer-experience-management :is(
+  .staff-module-form,
+  .activity-admin-list,
+  .staff-module-notice
+) :is(strong, small, em, p, label, legend, button) {
+  overflow-wrap: anywhere;
+}
+
+.customer-experience-management .activity-admin-list > header,
+.customer-experience-management .activity-admin-list article > div:first-child {
+  min-width: 0;
+}
+
+.customer-experience-management .activity-admin-list article > div:first-child > label {
+  display: grid;
+  gap: 5px;
+  margin-top: 7px;
+  color: #535b54;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.customer-experience-management .activity-admin-list article label :is(input, select) {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid #c4cbc3;
+  border-radius: 6px;
+  background: #fff;
+  color: #202621;
+  font: inherit;
+}
+
+.customer-experience-management .membership-recovery-candidate,
+.customer-experience-management .tier-benefit-draft-list > span {
+  min-width: 0;
+}
+
+.customer-experience-management .tier-benefit-draft-list > span {
+  flex-wrap: wrap;
+}
+
+.customer-experience-management .tier-benefit-draft-list > span > button {
+  min-height: 44px;
+  margin-left: auto;
+}
+
+.customer-experience-management .promotion-draft fieldset {
+  flex-wrap: wrap;
+}
+
+.customer-experience-management .promotion-draft fieldset label {
+  min-height: 44px;
+}
+
+@media (max-width: 1023px) {
+  .customer-experience-management .staff-module-form > fieldset {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .customer-experience-management .membership-configuration-layout > nav {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .customer-experience-management .staff-module-form > fieldset {
+    grid-column: auto;
+    grid-template-columns: 1fr;
+    padding: 10px;
+  }
+
+  .customer-experience-management .staff-module-form > fieldset > .activity-wide,
+  .customer-experience-management .staff-module-form > fieldset > .catalog-check {
+    grid-column: auto;
+  }
+
+  .customer-experience-management .activity-admin-list > header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .customer-experience-management .activity-admin-list article > div:last-child,
+  .customer-experience-management .staff-inline-actions {
+    width: 100%;
+    max-width: none;
+    justify-content: stretch;
+  }
+
+  .customer-experience-management .staff-inline-actions button {
+    flex: 1 1 132px;
+  }
+
+  .customer-experience-management .membership-recovery-candidate {
+    grid-template-columns: 1fr !important;
+    align-items: start;
+  }
+
+  .customer-experience-management .membership-recovery-candidate > button,
+  .customer-experience-management .tier-benefit-draft-list > span > button {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .customer-experience-management .membership-configuration-layout > nav {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow: visible;
+  }
+
+  .customer-experience-management .membership-configuration-layout > nav > header {
+    display: flex;
+    grid-column: 1 / -1;
+  }
+
+  .customer-experience-management .membership-configuration-layout > nav > button {
+    min-width: 0;
+    min-height: 52px;
+  }
+
+  .customer-experience-management .membership-configuration-center :is(input, select, textarea),
+  .customer-experience-management .promotion-loyalty-panel :is(input, select, textarea),
+  .customer-experience-management .staff-module-form :is(input, select, textarea),
+  .customer-experience-management .activity-admin-list article label :is(input, select) {
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 390px) {
+  .staff-module-body.customer-experience-management {
+    padding-inline: 8px;
+  }
+
+  .customer-experience-management .membership-configuration-layout > nav,
+  .customer-experience-management .promotion-rule-row {
+    grid-template-columns: 1fr;
+  }
+
+  .customer-experience-management .membership-configuration-workspace > header,
+  .customer-experience-management .promotion-draft > header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .customer-experience-management .membership-configuration-workspace > header em {
+    align-self: flex-start;
+  }
+
+  .customer-experience-management .promotion-policy-grid dl,
+  .customer-experience-management .membership-impact-preview dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 320px) {
+  .customer-experience-management .staff-metric-grid,
+  .customer-experience-management .promotion-policy-grid dl,
+  .customer-experience-management .membership-impact-preview dl {
+    grid-template-columns: 1fr;
+  }
+
+  .customer-experience-management .staff-inline-actions button {
+    flex-basis: 100%;
+  }
+}

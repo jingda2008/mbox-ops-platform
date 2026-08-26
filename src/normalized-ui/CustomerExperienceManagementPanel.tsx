@@ -12,6 +12,7 @@ import { MembershipConfigurationCenterPanel } from './MembershipConfigurationCen
 import { PersonalContactGovernancePanel } from './PersonalContactGovernancePanel'
 import { HomeContentManagementPanel } from './HomeContentManagementPanel'
 import { AnnualBenefitManagementPanel } from './AnnualBenefitManagementPanel'
+import './customer-experience-management-panel.css'
 
 interface ActivitySummary {
   publicId: string
@@ -291,7 +292,7 @@ function MemberAccountLookupPanel({ api, auth }: { api: NormalizedApiClient; aut
     } finally { setBusy(false) }
   }
 
-  return <section className="staff-module-summary"><div>
+  return <section className="staff-module-summary member-account-panel"><div>
     <strong>会员账户查询</strong><small>按完整会员号查询积分、三种成长值口径和最近流水；本入口不显示手机号或微信身份。</small>
     <form className="staff-module-form" onSubmit={(event) => void submit(event)}>
       <label>会员号<input minLength={3} maxLength={64} value={memberNo} placeholder="请输入完整会员号" onChange={(event) => setMemberNo(event.target.value)} /></label>

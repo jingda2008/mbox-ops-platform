@@ -9,6 +9,7 @@ const emergencySource = readFileSync(new URL('./LoyaltyEmergencyControlPanel.tsx
 const emergencyCss = readFileSync(new URL('./loyalty-emergency-control-panel.css', import.meta.url), 'utf8')
 const contactGovernanceSource=readFileSync(new URL('./PersonalContactGovernancePanel.tsx',import.meta.url),'utf8')
 const contactGovernanceCss=readFileSync(new URL('./personal-contact-governance-panel.css',import.meta.url),'utf8')
+const responsiveCss=readFileSync(new URL('./customer-experience-management-panel.css',import.meta.url),'utf8')
 
 describe('customer experience management reachability contract', () => {
   it('exposes membership recovery verification and independent approval without raw identity data', () => {
@@ -111,5 +112,21 @@ describe('customer experience management reachability contract', () => {
     expect(contactGovernanceSource).not.toMatch(/contactHash|encryptedContact|encryptionKeyId|employeeId/)
     expect(contactGovernanceCss).toContain('min-height:44px')
     expect(contactGovernanceCss).toContain('@media(max-width:390px)')
+  })
+
+  it('keeps every membership workspace operable without horizontal scrolling on staff tablets and phones', () => {
+    expect(source).toContain("import './customer-experience-management-panel.css'")
+    expect(source).toContain('staff-module-summary member-account-panel')
+    expect(responsiveCss).toContain('.customer-experience-management .staff-module-form > fieldset')
+    expect(responsiveCss).toContain("input:not([type='checkbox']):not([type='radio'])")
+    expect(responsiveCss).toMatch(/inline-size:\s*100%/)
+    expect(responsiveCss).toContain('.member-account-panel')
+    expect(responsiveCss).toContain('@media (max-width: 1023px)')
+    expect(responsiveCss).toContain('@media (max-width: 640px)')
+    expect(responsiveCss).toContain('@media (max-width: 390px)')
+    expect(responsiveCss).toContain('@media (max-width: 320px)')
+    expect(responsiveCss).toMatch(/membership-configuration-layout > nav[\s\S]*overflow: visible/)
+    expect(responsiveCss).toMatch(/staff-inline-actions[\s\S]*max-width: none/)
+    expect(responsiveCss).toMatch(/font-size: 16px/)
   })
 })

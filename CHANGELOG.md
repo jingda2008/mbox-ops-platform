@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-rc.142 - 2026-08-26
+
+- Makes the staff membership and customer-experience workspaces responsive at
+  tablet and compact-phone widths. Dense forms, membership configuration,
+  account lookup, benefit, recovery and promotion actions now reflow without
+  relying on horizontal scrolling; the release does not alter membership data,
+  permissions, pricing or business rules.
+
 ## 1.0.0-rc.141 - 2026-08-26
 
 - Repairs the release-browser exercise for the fixed M-BOX confirmation dialog: the test now deliberately confirms each safety-sensitive payment-policy action through the rendered dialog. No payment-policy production rule changed.

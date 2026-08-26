@@ -430,7 +430,7 @@ export function StaffActionsPanel({
     }
     if (!customerLeftConfirm) {
       setCustomerLeftConfirm(true)
-      showNotice({ kind: 'guidance', message: '请再次确认：顾客已离店且未收到明确成功结果。系统会取消未履约部分、保留原支付记录和已送达欠款，再释放本桌。' })
+      showNotice({ kind: 'guidance', message: '请再次确认：顾客已离店。系统会释放物理桌台，取消未履约部分；付款、退款和对账后续会原样保留给收银处理。' })
       return
     }
     const snapshot = operations
@@ -441,8 +441,8 @@ export function StaffActionsPanel({
     setPendingAction(`table:${selectedTable.id}`)
     setOperations(replaceTableSession(snapshot, selectedTable.id, null))
     try {
-      await api.closeTableAfterCustomerLeft(sessionId, '顾客已离店，收款未明确确认，按未收款处理')
-      showNotice({ kind: 'success', message: `${selectedTable.code} 已按顾客离店处理并释放桌台；原支付若迟到到账，会进入收银退款与对账。` })
+      await api.closeTableAfterCustomerLeft(sessionId, '顾客已离店，财务后续处理不阻断物理翻台')
+      showNotice({ kind: 'success', message: `${selectedTable.code} 已释放桌台；付款、退款和对账后续已保留到收银处理。` })
       setCustomerLeftConfirm(false)
       setCloseConfirm(false)
       setCloseIssue(null)
@@ -1452,7 +1452,7 @@ function TableActionSheet(props: TableActionSheetProps) {
             )}
             {hasPermission(props.permissions, 'table.close') && hasPermission(props.permissions, 'table.turnover_unsettled') && (
               <button type="button" className="is-danger" onClick={props.onCloseAfterCustomerLeft} disabled={props.pending}>
-                {props.pending ? '正在处理…' : props.customerLeftConfirm ? '确认按未到账翻台' : '顾客离店，按未到账翻台'}
+                {props.pending ? '正在处理…' : props.customerLeftConfirm ? '确认立即翻台' : '顾客离店，立即翻台'}
               </button>
             )}
           </div>

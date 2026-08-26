@@ -211,7 +211,7 @@ export function visibleStaffTables(
 export function guidanceForPermission(permission: StaffActionPermission): string {
   if (permission === 'table.open') return '当前账号只能查看桌台，请联系店长或有开台权限的同事处理。'
   if (permission === 'table.close') return '关台会结束本桌服务，请联系店长或有翻台权限的同事处理。'
-  if (permission === 'table.turnover_unsettled') return '顾客离店异常翻台会保留未到账与欠款事实，请联系具备该权限的同事处理。'
+  if (permission === 'table.turnover_unsettled') return '顾客离店立即翻台会保留付款、退款与对账后续，请联系具备该权限的同事处理。'
   if (permission === 'table.transfer') return '转桌需要有转桌权限的同事处理，系统会保留原桌次和责任记录。'
   if (permission === 'guest.cart.freeze') return '锁定共享购物车需要负责本桌的服务人员或值班经理处理。'
   if (permission === 'service.execute') return '这项服务需要负责服务的同事或值班经理处理。'

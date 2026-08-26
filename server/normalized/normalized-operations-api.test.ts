@@ -188,7 +188,7 @@ describe('normalizedOperationsApiPlugin', () => {
       method: 'POST',
       url: `/api/table-sessions/${sessionId}/close-after-customer-left`,
       headers: { 'idempotency-key': 'customer-left-turnover-api-0001' },
-      payload: { reasonNote: '顾客离店，现场未收到明确成功收款' },
+      payload: {},
     })
 
     expect(response.statusCode).toBe(200)
@@ -198,6 +198,7 @@ describe('normalizedOperationsApiPlugin', () => {
     expect(customerLeftRepository.close).toHaveBeenCalledWith(expect.objectContaining({
       tableSessionId: sessionId, employeeId, businessDate: '2026-08-11',
       idempotencyKey: 'customer-left-turnover-api-0001',
+      reasonNote: '顾客已离店，财务后续处理不阻断物理翻台',
     }))
     expect(value.tableRepository.completeClosing).not.toHaveBeenCalled()
     expect(value.executions[0]?.outcome.auditEvents[0]).toMatchObject({

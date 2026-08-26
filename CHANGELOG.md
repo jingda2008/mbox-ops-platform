@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0-rc.139 - 2026-08-26
+
+- Makes the employee physical-turnover action explicit: when a guest has left,
+  staff can immediately release the table while payment, refund and
+  reconciliation follow-up remains in the cashier queue. The action no longer
+  mislabels an approved or processing refund as an “unreceived payment”.
+- Adds a real PostgreSQL regression for a paid, delivered order with an
+  approved refund: the table must close while the order, payment and refund
+  states remain unchanged.
+
 ## 1.0.0-rc.138 - 2026-08-26
 
 - Fixes the explicit “顾客离店，按未到账翻台” operation for tables that

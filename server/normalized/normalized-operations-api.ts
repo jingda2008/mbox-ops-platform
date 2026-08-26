@@ -268,7 +268,7 @@ export const normalizedOperationsApiPlugin: FastifyPluginAsync<NormalizedOperati
       assertActorBinding(body, context.employeeId)
       const sessionId = readUuid(request.params.sessionId, 'sessionId')
       const reasonNote = readOptionalString(body.reasonNote, 'reasonNote', 500)
-        ?? '顾客已离店，收款未明确确认，按未收款处理'
+        ?? '顾客已离店，财务后续处理不阻断物理翻台'
       const idempotencyKey = readIdempotencyKey(request)
       const execution = await executeCustomerLeftTableTurnover(
         options,
@@ -1045,7 +1045,7 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
     return apiError(404, 'TABLE_SESSION_NOT_FOUND', error.message)
   }
   if (error instanceof CustomerLeftTableTurnoverForbiddenError) {
-    return apiError(403, 'CAPABILITY_FORBIDDEN', '当前员工无权执行顾客离店异常翻台')
+    return apiError(403, 'CAPABILITY_FORBIDDEN', '当前员工无权执行顾客离店立即翻台')
   }
   if (error instanceof CustomerLeftTableTurnoverConflictError) {
     return apiError(409, 'TABLE_CUSTOMER_LEFT_TURNOVER_CONFLICT', error.message)

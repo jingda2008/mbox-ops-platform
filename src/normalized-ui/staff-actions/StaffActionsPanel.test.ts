@@ -33,6 +33,15 @@ describe('StaffActionsPanel', () => {
     expect(css).toMatch(/\.staff-open-table-scene select \{[^}]*min-height:\s*42px;/)
   })
 
+  it('keeps physical turnover separate from financial follow-up', () => {
+    const source = readFileSync(new URL('./StaffActionsPanel.tsx', import.meta.url), 'utf8')
+
+    expect(source).toContain('顾客离店，立即翻台')
+    expect(source).toContain('确认立即翻台')
+    expect(source).toContain('财务后续处理不阻断物理翻台')
+    expect(source).toContain('付款、退款和对账后续会原样保留给收银处理')
+  })
+
   it('renders a compact honest loading state before authoritative data arrives', () => {
     const api: StaffActionsApiPort = {
       loadOperations: vi.fn(() => new Promise<StaffOperationsData>(() => undefined)),

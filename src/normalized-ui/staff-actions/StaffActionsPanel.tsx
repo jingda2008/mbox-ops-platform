@@ -27,6 +27,7 @@ import { TablePaymentSheet } from './TablePaymentSheet'
 import { ResponsibilityAssignmentPanel } from './ResponsibilityAssignmentPanel'
 import { TableObservationSheet } from './TableObservationSheet'
 import { TableRecommendationSheet } from './TableRecommendationSheet'
+import { TableOrderStatusPanel } from './TableOrderStatusPanel'
 import { ParticipantMovementSheet } from './ParticipantMovementSheet'
 import { InventoryBarcodeScanner } from '../InventoryBarcodeScanner'
 import { useConfirmationDialog } from '../ConfirmationDialog'
@@ -861,6 +862,10 @@ export function StaffActionsPanel({
               onRecommendation={() => setRecommendationOpen(true)}
               onParticipantMovement={() => setParticipantMovementOpen(true)}
               onGuestCartFreeze={() => void setGuestCartFreeze()}
+              orderStatusPanel={selectedTable.activeSession !== null
+                && (hasPermission(permissions, 'service.execute') || hasPermission(permissions, 'order.view'))
+                ? <TableOrderStatusPanel api={api} table={{ code: selectedTable.code, activeSession: selectedTable.activeSession }} />
+                : null}
             />
             {selectedTable.activeSession!==null&&memberBenefits!==null&&<MemberBenefitTaskCards
               title={`${selectedTable.code}会员权益`}
@@ -1373,6 +1378,7 @@ interface TableActionSheetProps {
   onRecommendation(): void
   onParticipantMovement():void
   onGuestCartFreeze(): void
+  orderStatusPanel: React.ReactNode
 }
 
 function TableActionSheet(props: TableActionSheetProps) {
@@ -1442,6 +1448,7 @@ function TableActionSheet(props: TableActionSheetProps) {
       ) : (
         <div className="staff-open-session">
           <p><strong>{table.activeSession.guestCount}人</strong><span>{table.activeSession.status === 'closing' ? '结台待完成，请先处理下方提示' : '本桌服务进行中'}</span></p>
+          {props.orderStatusPanel}
           {table.activeSession.guestCartWritesFrozen && <p className="staff-close-issue" role="status"><strong>顾客购物车已锁定：</strong>顾客仍可查看，服务人员核对完成后请恢复修改。</p>}
           {props.closeIssue !== null && <p className="staff-close-issue" role="alert"><strong>暂不能结台：</strong>{props.closeIssue}</p>}
           <div className="staff-session-actions">

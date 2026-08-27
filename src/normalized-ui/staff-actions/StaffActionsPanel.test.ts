@@ -45,6 +45,16 @@ describe('StaffActionsPanel', () => {
     expect(css).toMatch(/\.staff-session-actions \.is-payment \{[^}]*grid-column:\s*1 \/ -1/)
   })
 
+  it('shows read-only served and unserved item detail directly after selecting an active table', () => {
+    const source = readFileSync(new URL('./StaffActionsPanel.tsx', import.meta.url), 'utf8')
+    const css = readFileSync(new URL('./staff-actions-panel.css', import.meta.url), 'utf8')
+
+    expect(source).toContain("hasPermission(permissions, 'service.execute')")
+    expect(source).toContain('<TableOrderStatusPanel')
+    expect(source).toContain('{props.orderStatusPanel}')
+    expect(css).toMatch(/\.staff-table-order-status-item \{[^}]*grid-template-columns:\s*minmax\(0,1fr\) auto auto/)
+  })
+
   it('keeps physical turnover separate from financial follow-up', () => {
     const source = readFileSync(new URL('./StaffActionsPanel.tsx', import.meta.url), 'utf8')
 

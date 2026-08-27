@@ -274,6 +274,32 @@ describe('StaffActionsApi', () => {
     })
   })
 
+  it('reads only product delivery progress from the active table order-details endpoint', async () => {
+    const valid = {
+      publicId: 'ORDER-A01-0001',
+      items: [{
+        id: '22222222-2222-4222-8222-222222222222',
+        productName: '金汤力',
+        quantity: 2,
+        fulfillmentStation: 'bar',
+        fulfillmentStatus: 'ready_for_delivery',
+      }],
+    }
+    const send = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [valid] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{
+        ...valid,
+        items: [{ ...valid.items[0], fulfillmentStatus: 'made_up' }],
+      }] }), { status: 200 }))
+    const api = new StaffActionsApi({ fetch: send })
+
+    await expect(api.loadTableOrderDetails?.('33333333-3333-4333-8333-333333333333')).resolves.toEqual([valid])
+    await expect(api.loadTableOrderDetails?.('33333333-3333-4333-8333-333333333333')).rejects.toMatchObject({
+      code: 'INVALID_TABLE_ORDER_DETAILS_RESPONSE',
+    })
+    expect(send.mock.calls[0]?.[0]).toBe('/api/commerce/table-sessions/33333333-3333-4333-8333-333333333333/order-details')
+  })
+
   it('records confirmed table cash collection through the existing audited manual-payment command', async () => {
     const send = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
       data: { id: '11111111-1111-4111-8111-111111111111', status: 'succeeded' },
@@ -379,36 +405,6 @@ describe('StaffActionsApi', () => {
       expressionKind: 'customer_quote', scopeKind: 'product', eventType: 'too_sweet', degree: 'most', reasonCode: null,
       candidateId: 'candidate-1', confidence: 0.96, rawExcerpt: draft.rawContent,
     }] })
-  })
-
-  it('transcribes observation audio through the protected voice route and marks the accepted input as a voice transcript', async () => {
-    const transcript = {
-      transcript: '客人说红色那杯太甜', confidence: 0.91,
-      alternatives: [{ transcript: '客人说红色那杯太甜', confidence: 0.91 }],
-    }
-    const draft = {
-      publicId: 'observation-voice-0001', status: 'draft', inputKind: 'voice_transcript',
-      rawContent: transcript.transcript, parseConfidence: 0.85, needsImmediateAction: false,
-      serviceTaskId: null, candidates: [], clarificationRequired: true, clarificationPrompt: '请选择商品',
-    }
-    const send = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(JSON.stringify(transcript), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ data: draft }), { status: 201 }))
-    const api = new StaffActionsApi({ fetch: send, createIdempotencyKey: () => 'voice-key-0001' })
-
-    await expect(api.transcribeObservationAudio({
-      audioBase64: 'YXVkaW8=', mimeType: 'audio/webm', phrases: ['A2', '太甜'],
-    })).resolves.toEqual(transcript)
-    await expect(api.parseObservation({
-      tableSessionId: 'session-1', rawContent: transcript.transcript,
-      needsImmediateAction: false, inputKind: 'voice_transcript',
-    })).resolves.toEqual(draft)
-
-    expect(send.mock.calls[0]?.[0]).toBe('/api/voice/transcribe')
-    expect(JSON.parse(String(send.mock.calls[0]?.[1]?.body))).toEqual({
-      audioBase64: 'YXVkaW8=', mimeType: 'audio/webm', phrases: ['A2', '太甜'],
-    })
-    expect(JSON.parse(String(send.mock.calls[1]?.[1]?.body))).toMatchObject({ inputKind: 'voice_transcript' })
   })
 
   it('loads authoritative recent observations and sends an append-only correction with a reason', async () => {

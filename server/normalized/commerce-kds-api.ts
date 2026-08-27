@@ -63,7 +63,10 @@ import {
   StaffAccessRepository,
   StaffNotFoundError,
 } from './staff-access-repository.js'
-import { assertEmployeeTableSessionAccess } from './employee-table-access.js'
+import {
+  assertEmployeeTableSessionAccess,
+  EmployeeTableAccessDeniedError,
+} from './employee-table-access.js'
 import { StaffSessionNotFoundError } from './staff-session-repository.js'
 import type {
   ScopedPostgresTransactionRunner,
@@ -220,6 +223,111 @@ export interface StaffTablePaymentOrderView {
   unresolvedOnlinePaymentId: string | null
 }
 
+export type StaffTableOrderItemFulfillmentStatus =
+  | 'delivered'
+  | 'ready_for_delivery'
+  | 'preparing'
+  | 'pending'
+  | 'awaiting_payment'
+  | 'not_required'
+  | 'cancelled'
+  | 'attention'
+
+export interface StaffTableOrderDetailView {
+  publicId: string
+  items: Array<{
+    id: string
+    productName: string
+    quantity: number
+    fulfillmentStation: 'bar' | 'kitchen' | 'cashier' | 'none'
+    fulfillmentStatus: StaffTableOrderItemFulfillmentStatus
+  }>
+}
+
+interface StaffTableOrderDetailRow extends Record<string, unknown> {
+  order_id: string
+  order_public_id: string
+  order_status: string
+  order_fulfillment_state: string
+  item_id: string
+  product_name: string
+  quantity: string | number
+  fulfillment_station: 'bar' | 'kitchen' | 'cashier' | 'none'
+  item_status: 'submitted' | 'accepted' | 'preparing' | 'ready' | 'delivered' | 'cancelled'
+  kds_status: KdsStatus | null
+}
+
+/**
+ * Read-only item progress for one active table session.  Item delivery is
+ * authoritative: a ready KDS task is explicitly still waiting to be served.
+ */
+export async function listTableOrderDetailsForSession(
+  transaction: ScopedTransaction,
+  tableSessionId: string,
+): Promise<StaffTableOrderDetailView[]> {
+  const result = await transaction.query<StaffTableOrderDetailRow>(`
+    SELECT order_header.id AS order_id,order_header.public_id AS order_public_id,
+      order_header.status AS order_status,order_header.fulfillment_state AS order_fulfillment_state,
+      item.id AS item_id,
+      COALESCE(NULLIF(item.product_snapshot->>'name',''),product.name,'商品') AS product_name,
+      item.quantity,item.fulfillment_station,item.status AS item_status,kds.status AS kds_status
+    FROM mbox.orders order_header
+    JOIN mbox.order_items item
+      ON item.tenant_id=order_header.tenant_id AND item.store_id=order_header.store_id
+     AND item.order_id=order_header.id
+    LEFT JOIN mbox.products product
+      ON product.tenant_id=item.tenant_id AND product.store_id=item.store_id
+     AND product.id=item.product_id
+    LEFT JOIN LATERAL (
+      SELECT task.status
+      FROM mbox.kds_tasks task
+      WHERE task.tenant_id=item.tenant_id AND task.store_id=item.store_id
+        AND task.order_item_id=item.id
+      ORDER BY CASE task.status
+        WHEN 'ready' THEN 0
+        WHEN 'preparing' THEN 1
+        WHEN 'accepted' THEN 2
+        WHEN 'pending' THEN 3
+        WHEN 'failed' THEN 4
+        WHEN 'cancelled' THEN 5
+        ELSE 6
+      END,task.created_at DESC,task.id DESC
+      LIMIT 1
+    ) kds ON true
+    WHERE order_header.tenant_id=$1::uuid AND order_header.store_id=$2::uuid
+      AND order_header.table_session_id=$3::uuid AND order_header.status<>'draft'
+    ORDER BY order_header.created_at DESC,order_header.id DESC,item.created_at,item.id
+  `, [transaction.scope.tenantId, transaction.scope.storeId, tableSessionId])
+  const orders = new Map<string, StaffTableOrderDetailView>()
+  for (const row of result.rows) {
+    const order = orders.get(row.order_id) ?? {
+      publicId: row.order_public_id,
+      items: [],
+    }
+    order.items.push({
+      id: row.item_id,
+      productName: row.product_name,
+      quantity: Number(row.quantity),
+      fulfillmentStation: row.fulfillment_station,
+      fulfillmentStatus: tableOrderItemFulfillmentStatus(row),
+    })
+    orders.set(row.order_id, order)
+  }
+  return [...orders.values()]
+}
+
+function tableOrderItemFulfillmentStatus(row: StaffTableOrderDetailRow): StaffTableOrderItemFulfillmentStatus {
+  if (row.item_status === 'delivered') return 'delivered'
+  if (row.item_status === 'cancelled' || row.order_status === 'cancelled') return 'cancelled'
+  if (row.fulfillment_station === 'none') return 'not_required'
+  if (row.order_fulfillment_state === 'awaiting_payment') return 'awaiting_payment'
+  if (row.order_fulfillment_state !== 'active') return 'attention'
+  if (row.kds_status === 'ready') return 'ready_for_delivery'
+  if (row.kds_status === 'preparing' || row.kds_status === 'accepted') return 'preparing'
+  if (row.kds_status === 'pending' || row.kds_status === null) return 'pending'
+  return 'attention'
+}
+
 export async function listTablePaymentOrdersForSession(
   transaction: ScopedTransaction,
   tableSessionId: string,
@@ -370,6 +478,29 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
       })
       return listTablePaymentOrdersForSession(transaction, tableSessionId)
     })
+    return reply.send({ data })
+  }))
+
+  // This is a deliberately read-only, low-sensitivity view: no price, payment
+  // or guest identity is returned.  Any employee allowed to execute service
+  // may inspect an active table's delivery progress; mutations keep their
+  // stricter table responsibility checks.
+  app.get('/commerce/table-sessions/:tableSessionId/order-details', async (request, reply) => handleRoute(reply, async () => {
+    const context = await resolveContext(options, request)
+    await requireAnyPermission(options, context, ['service.execute', 'order.view'])
+    const tableSessionId = readUuid(
+      readRequiredString(readObject(request.params, '路由参数').tableSessionId, 'tableSessionId', 64),
+      'tableSessionId',
+    )
+    const data = await options.staffAccessTransactions.run(context.scope, async (transaction) => {
+      await assertEmployeeTableSessionAccess(transaction, {
+        employeeId: context.employeeId,
+        tableSessionId,
+        includeTableViewAll: false,
+        allTablePermissionCodes: ['service.execute', 'order.view'],
+      })
+      return listTableOrderDetailsForSession(transaction, tableSessionId)
+    }, { readOnly: true })
     return reply.send({ data })
   }))
 
@@ -1604,6 +1735,9 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   }
   if (error instanceof CommerceKdsCapabilityError || error instanceof StaffAccessDeniedError) {
     return apiError(403, 'STAFF_ACCESS_FORBIDDEN', '当前员工无权执行此操作')
+  }
+  if (error instanceof EmployeeTableAccessDeniedError) {
+    return apiError(403, 'TABLE_ACCESS_FORBIDDEN', error.message)
   }
   if (error instanceof StaffNotFoundError) {
     return apiError(403, 'STAFF_ACCESS_FORBIDDEN', '当前员工无权执行此操作')

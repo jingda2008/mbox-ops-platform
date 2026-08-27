@@ -10,6 +10,7 @@ import type {
   StaffTableAssignment,
   StaffTableAssignmentOptions,
   StaffTableAssignmentType,
+  StaffTableOrderDetail,
   StaffTableParticipant,
   StaffParticipantMovementPreview,
 } from './types'
@@ -229,12 +230,6 @@ export interface ObservationEventReplacement {
   rawExcerpt: string
 }
 
-export interface VoiceTranscriptionResult {
-  transcript: string
-  confidence: number | null
-  alternatives: Array<{ transcript: string; confidence: number | null }>
-}
-
 export interface StaffActionsApiPort {
   loadOperations(signal?: AbortSignal): Promise<StaffOperationsData>
   loadFulfillment(signal?: AbortSignal): Promise<StaffFulfillmentData>
@@ -304,6 +299,7 @@ export interface StaffActionsApiPort {
   cancelKdsTask(taskId: string, reasonNote: string): Promise<void>
   actOnReservation(reservationId: string, action: 'confirm' | 'arrive' | 'complete'): Promise<void>
   loadAssistedOrderAccess(signal?: AbortSignal): Promise<AssistedOrderAccess>
+  loadTableOrderDetails?(tableSessionId: string, signal?: AbortSignal): Promise<StaffTableOrderDetail[]>
   loadTablePaymentOrders?(tableSessionId: string, signal?: AbortSignal): Promise<StaffTablePaymentOrder[]>
   loadAssistedOrderCatalog(signal?: AbortSignal): Promise<AssistedOrderCatalogProduct[]>
   issueAssistedOrderContext(input: Readonly<{
@@ -338,16 +334,10 @@ export interface StaffActionsApiPort {
   ): Promise<'pending' | 'succeeded' | 'failed' | 'closed'>
   queryOnlinePayment(paymentId: string): Promise<'pending' | 'succeeded' | 'failed' | 'closed'>
   closeUnresolvedPaymentBeforeReplacement(paymentId: string, reason: string): Promise<void>
-  transcribeObservationAudio(input: Readonly<{
-    audioBase64: string
-    mimeType: 'audio/webm' | 'audio/webm;codecs=opus' | 'audio/ogg' | 'audio/ogg;codecs=opus'
-    phrases: string[]
-  }>): Promise<VoiceTranscriptionResult>
   parseObservation(input: Readonly<{
     tableSessionId: string
     rawContent: string
     needsImmediateAction: boolean
-    inputKind?: 'text' | 'voice_transcript'
   }>): Promise<ObservationDraft>
   confirmObservation(input: Readonly<{
     observationPublicId: string
@@ -631,6 +621,17 @@ export class StaffActionsApi implements StaffActionsApiPort {
     return this.getData('/api/commerce/assisted-order-access', signal)
   }
 
+  async loadTableOrderDetails(tableSessionId: string, signal?: AbortSignal): Promise<StaffTableOrderDetail[]> {
+    const data = await this.getData<unknown>(
+      `/api/commerce/table-sessions/${encodeURIComponent(tableSessionId)}/order-details`,
+      signal,
+    )
+    if (!Array.isArray(data)) {
+      throw new StaffActionsApiError('本桌点单详情无法识别，请刷新后重试', 'INVALID_TABLE_ORDER_DETAILS_RESPONSE', null)
+    }
+    return data.map((value) => tableOrderDetail(value))
+  }
+
   async loadTablePaymentOrders(tableSessionId: string, signal?: AbortSignal): Promise<StaffTablePaymentOrder[]> {
     const data = await this.getData<unknown>(
       `/api/commerce/table-sessions/${encodeURIComponent(tableSessionId)}/payment-orders`,
@@ -787,7 +788,6 @@ export class StaffActionsApi implements StaffActionsApiPort {
     tableSessionId: string
     rawContent: string
     needsImmediateAction: boolean
-    inputKind?: 'text' | 'voice_transcript'
   }>): Promise<ObservationDraft> {
     const response = await this.request(
       `/api/staff/table-sessions/${encodeURIComponent(input.tableSessionId)}/observations/parse`,
@@ -799,7 +799,7 @@ export class StaffActionsApi implements StaffActionsApiPort {
           'idempotency-key': `staff-observation-parse-${this.createIdempotencyKey()}`,
         }),
         body: JSON.stringify({
-          inputKind: input.inputKind ?? 'text',
+          inputKind: 'text',
           rawContent: input.rawContent,
           needsImmediateAction: input.needsImmediateAction,
         }),
@@ -810,36 +810,6 @@ export class StaffActionsApi implements StaffActionsApiPort {
       throw new StaffActionsApiError('桌台记录解析结果无法识别，请保留原话后重试', 'INVALID_OBSERVATION_RESPONSE', response.status)
     }
     return observationDraft(body.data, response.status)
-  }
-
-  async transcribeObservationAudio(input: Readonly<{
-    audioBase64: string
-    mimeType: 'audio/webm' | 'audio/webm;codecs=opus' | 'audio/ogg' | 'audio/ogg;codecs=opus'
-    phrases: string[]
-  }>): Promise<VoiceTranscriptionResult> {
-    const response = await this.request('/api/voice/transcribe', {
-      method: 'POST',
-      headers: new Headers({ accept: 'application/json', 'content-type': 'application/json' }),
-      body: JSON.stringify(input),
-    })
-    const body = await readJson(response)
-    if (!isObject(body) || typeof body.transcript !== 'string'
-      || (body.confidence !== null && typeof body.confidence !== 'number')
-      || (body.alternatives !== undefined && !Array.isArray(body.alternatives))) {
-      throw new StaffActionsApiError('语音转写结果无法识别，可以直接输入文字', 'INVALID_VOICE_TRANSCRIPTION', response.status)
-    }
-    const alternatives = (body.alternatives ?? []).map((item) => {
-      if (!isObject(item) || typeof item.transcript !== 'string'
-        || (item.confidence !== null && typeof item.confidence !== 'number')) {
-        throw new StaffActionsApiError('语音候选结果无法识别，可以直接输入文字', 'INVALID_VOICE_TRANSCRIPTION', response.status)
-      }
-      return { transcript: item.transcript, confidence: item.confidence as number | null }
-    })
-    return {
-      transcript: body.transcript,
-      confidence: body.confidence as number | null,
-      alternatives,
-    }
   }
 
   async confirmObservation(input: Readonly<{
@@ -1214,6 +1184,39 @@ function tablePaymentOrder(value: unknown): StaffTablePaymentOrder {
     hasOnlinePaymentInProgress: value.hasOnlinePaymentInProgress,
     unresolvedOnlinePaymentId: value.unresolvedOnlinePaymentId,
   }
+}
+
+function tableOrderDetail(value: unknown): StaffTableOrderDetail {
+  const statuses = new Set([
+    'delivered', 'ready_for_delivery', 'preparing', 'pending',
+    'awaiting_payment', 'not_required', 'cancelled', 'attention',
+  ])
+  const stations = new Set(['bar', 'kitchen', 'cashier', 'none'])
+  if (!isObject(value) || typeof value.publicId !== 'string' || !Array.isArray(value.items)) {
+    throw new StaffActionsApiError('本桌点单详情无法识别，请刷新后重试', 'INVALID_TABLE_ORDER_DETAILS_RESPONSE', null)
+  }
+  const items = value.items.map((item) => {
+    if (!isObject(item)
+      || typeof item.id !== 'string'
+      || typeof item.productName !== 'string'
+      || typeof item.quantity !== 'number'
+      || !Number.isSafeInteger(item.quantity)
+      || item.quantity < 1
+      || typeof item.fulfillmentStation !== 'string'
+      || !stations.has(item.fulfillmentStation)
+      || typeof item.fulfillmentStatus !== 'string'
+      || !statuses.has(item.fulfillmentStatus)) {
+      throw new StaffActionsApiError('本桌点单详情无法识别，请刷新后重试', 'INVALID_TABLE_ORDER_DETAILS_RESPONSE', null)
+    }
+    return {
+      id: item.id,
+      productName: item.productName,
+      quantity: item.quantity,
+      fulfillmentStation: item.fulfillmentStation as StaffTableOrderDetail['items'][number]['fulfillmentStation'],
+      fulfillmentStatus: item.fulfillmentStatus as StaffTableOrderDetail['items'][number]['fulfillmentStatus'],
+    }
+  })
+  return { publicId: value.publicId, items }
 }
 
 function isOnlinePaymentAction(value: unknown): value is OnlinePaymentAction {

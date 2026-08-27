@@ -130,6 +130,7 @@ function fixture(input: {
   onlinePaymentAvailable?: boolean
   onlinePaymentProvider?: 'postar' | 'simulation' | null
   resolveOnlinePaymentAvailable?: (scope: Readonly<{ tenantId: string; storeId: string }>) => Promise<boolean>
+  tableAccessAllowed?: boolean
 } = {}) {
   const permissions = input.permissions ?? [
     'order.create', 'order.view', 'kds.prepare', 'kds.deliver', 'kds.exception.manage',
@@ -163,9 +164,49 @@ function fixture(input: {
         return rows([{
           employee_status: 'active',
           session_status: 'open',
-          allowed: true,
+          allowed: input.tableAccessAllowed ?? true,
           permissions_allowed: true,
         }]) as PostgresQueryResult<Row>
+      }
+      if (sql.includes('order_header.public_id AS order_public_id')) {
+        return rows([
+          {
+            order_id: orderId,
+            order_public_id: 'ORDER-VIP1-001',
+            order_status: 'fulfilling',
+            order_fulfillment_state: 'active',
+            item_id: orderItemId,
+            product_name: '精酿啤酒',
+            quantity: '2',
+            fulfillment_station: 'bar',
+            item_status: 'delivered',
+            kds_status: 'ready',
+          },
+          {
+            order_id: orderId,
+            order_public_id: 'ORDER-VIP1-001',
+            order_status: 'fulfilling',
+            order_fulfillment_state: 'active',
+            item_id: '78787878-7878-4787-8787-787878787878',
+            product_name: '威士忌酸',
+            quantity: '1',
+            fulfillment_station: 'bar',
+            item_status: 'ready',
+            kds_status: 'ready',
+          },
+          {
+            order_id: '68686868-6868-4686-8686-686868686868',
+            order_public_id: 'ORDER-VIP1-002',
+            order_status: 'submitted',
+            order_fulfillment_state: 'awaiting_payment',
+            item_id: '79797979-7979-4797-8979-797979797979',
+            product_name: '组合套餐',
+            quantity: '1',
+            fulfillment_station: 'kitchen',
+            item_status: 'submitted',
+            kds_status: null,
+          },
+        ]) as PostgresQueryResult<Row>
       }
       if (sql.includes('table_allowed')) {
         return rows([{ table_allowed: true }]) as PostgresQueryResult<Row>
@@ -490,6 +531,65 @@ describe('commerceKdsApiPlugin', () => {
       error: { code: 'STAFF_ACCESS_FORBIDDEN', message: '当前员工无权执行此操作' },
     })
     expect(value.staffQueries.some((sql) => sql.includes('FROM mbox.orders order_header'))).toBe(false)
+  })
+
+  it('lets any service employee inspect active-table delivery progress without payment data', async () => {
+    const value = fixture({ permissions: ['service.execute'] })
+    const response = await value.app.inject({
+      method: 'GET',
+      url: `/api/commerce/table-sessions/${tableSessionId}/order-details`,
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toEqual({ data: [
+      {
+        publicId: 'ORDER-VIP1-001',
+        items: [
+          {
+            id: orderItemId,
+            productName: '精酿啤酒',
+            quantity: 2,
+            fulfillmentStation: 'bar',
+            fulfillmentStatus: 'delivered',
+          },
+          {
+            id: '78787878-7878-4787-8787-787878787878',
+            productName: '威士忌酸',
+            quantity: 1,
+            fulfillmentStation: 'bar',
+            fulfillmentStatus: 'ready_for_delivery',
+          },
+        ],
+      },
+      {
+        publicId: 'ORDER-VIP1-002',
+        items: [{
+          id: '79797979-7979-4797-8979-797979797979',
+          productName: '组合套餐',
+          quantity: 1,
+          fulfillmentStation: 'kitchen',
+          fulfillmentStatus: 'awaiting_payment',
+        }],
+      },
+    ] })
+    const detailQuery = value.staffQueries.find((sql) => sql.includes('order_header.public_id AS order_public_id'))
+    expect(detailQuery).toContain('item.status AS item_status')
+    expect(detailQuery).toContain("WHEN 'ready' THEN 0")
+    expect(detailQuery).not.toContain('total_amount_minor')
+    expect(detailQuery).not.toContain('mbox.payments')
+  })
+
+  it('returns a clear 403 rather than a 500 when a table order detail read loses its active-table scope', async () => {
+    const value = fixture({ permissions: ['service.execute'], tableAccessAllowed: false })
+    const response = await value.app.inject({
+      method: 'GET',
+      url: `/api/commerce/table-sessions/${tableSessionId}/order-details`,
+    })
+
+    expect(response.statusCode).toBe(403)
+    expect(response.json()).toEqual({
+      error: { code: 'TABLE_ACCESS_FORBIDDEN', message: '当前员工不是该桌负责人，无权操作此桌' },
+    })
   })
 
   it('uses the current store policy instead of the startup payment flag', async () => {

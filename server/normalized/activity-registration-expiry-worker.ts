@@ -129,11 +129,11 @@ async function recordReview(
       tenant_id, store_id, actor_type, actor_ref, action,
       object_type, object_id, business_date, metadata
     )
-    SELECT $1::uuid, $2::uuid, 'system', $4, 'community.activity.payment_review_required',
+    SELECT $1::uuid, $2::uuid, 'system', $4::text, 'community.activity.payment_review_required',
       'community_activity_registration', $3::uuid::text,
       ((clock_timestamp() AT TIME ZONE store.timezone)
         - make_interval(secs => extract(epoch FROM store.business_day_cutoff)))::date,
-      jsonb_build_object('workerId', $4, 'reason', $5)
+      jsonb_build_object('workerId', $4::text, 'reason', $5::text)
     FROM mbox.stores AS store
     WHERE store.tenant_id = $1::uuid AND store.id = $2::uuid
   `, [transaction.scope.tenantId, transaction.scope.storeId, registration.id, workerId, reason])
@@ -144,7 +144,11 @@ async function recordReview(
     ) VALUES (
       $1::uuid, $2::uuid, $3, 'community_activity_registration', $4::uuid,
       1, 'community.activity.payment_review_required.v1',
-      jsonb_build_object('registrationPublicId', $5, 'workerId', $6, 'reason', $7)
+      jsonb_build_object(
+        'registrationPublicId', $5::text,
+        'workerId', $6::text,
+        'reason', $7::text
+      )
     ) ON CONFLICT (tenant_id, store_id, message_key) DO NOTHING
   `, [
     transaction.scope.tenantId,
@@ -171,11 +175,11 @@ async function recordResolution(
       tenant_id, store_id, actor_type, actor_ref, action,
       object_type, object_id, business_date, metadata
     )
-    SELECT $1::uuid, $2::uuid, 'system', $4, $5,
+    SELECT $1::uuid, $2::uuid, 'system', $4::text, $5::text,
       'community_activity_registration', $3::uuid::text,
       ((clock_timestamp() AT TIME ZONE store.timezone)
         - make_interval(secs => extract(epoch FROM store.business_day_cutoff)))::date,
-      jsonb_build_object('workerId', $4, 'resolution', $6)
+      jsonb_build_object('workerId', $4::text, 'resolution', $6::text)
     FROM mbox.stores AS store
     WHERE store.tenant_id = $1::uuid AND store.id = $2::uuid
   `, [transaction.scope.tenantId, transaction.scope.storeId, registration.id, workerId, action, resolution])
@@ -185,7 +189,11 @@ async function recordResolution(
       aggregate_version, message_type, payload
     ) VALUES (
       $1::uuid, $2::uuid, $3, 'community_activity_registration', $4::uuid,
-      1, $5, jsonb_build_object('registrationPublicId', $6, 'workerId', $7, 'resolution', $8)
+      1, $5, jsonb_build_object(
+        'registrationPublicId', $6::text,
+        'workerId', $7::text,
+        'resolution', $8::text
+      )
     ) ON CONFLICT (tenant_id, store_id, message_key) DO NOTHING
   `, [
     transaction.scope.tenantId,

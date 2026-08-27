@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0-rc.151 - 2026-08-27
+
+- Repairs the activity-registration expiry worker's audit and outbox SQL: all
+  text values used in PostgreSQL polymorphic JSON construction are now typed
+  explicitly. An expired paid registration that needs payment review no longer
+  makes the worker unhealthy with `42P08`.
+- Retains the rc.150 single-action native flow for a required paid Superhigh
+  registration: submit once, then immediately present WeChat payment.
+
 ## 1.0.0-rc.150 - 2026-08-27
 
 - Makes a required paid Superhigh registration a single customer action:

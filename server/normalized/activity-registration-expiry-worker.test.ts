@@ -50,6 +50,8 @@ describe('ActivityRegistrationExpiryWorker', () => {
       expect.stringContaining("SET status = 'cancelled', payment_status = 'expired'"),
       expect.stringContaining('INSERT INTO mbox.audit_events'),
       expect.stringContaining('INSERT INTO mbox.outbox_messages'),
+      expect.stringContaining("'system', $4::text"),
+      expect.stringContaining("'resolution', $8::text"),
     ]))
   })
 
@@ -60,6 +62,8 @@ describe('ActivityRegistrationExpiryWorker', () => {
     expect(client.calls).toEqual(expect.arrayContaining([
       expect.stringContaining("SET seat_hold_expires_at = clock_timestamp() + interval '15 minutes'"),
       expect.stringContaining('community.activity.payment_review_required'),
+      expect.stringContaining("'reason', $5::text"),
+      expect.stringContaining("'reason', $7::text"),
     ]))
   })
 

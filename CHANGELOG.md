@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.0-rc.152 - 2026-08-28
+
+- Adds a context-aware WeChat subscription-notification decision path for
+  activity registration, issued member benefits and membership-level changes.
+  The notification is optional: a declined, unavailable or failed subscription
+  request never blocks the original member action.
+- Adds server-authoritative notification records, consent-aware dispatch and
+  retry handling. Native mini-program prompts are bounded, deduplicated and
+  tied to the action the customer is currently taking rather than shown as a
+  generic permission interruption.
+- Adds normalized schema migration 146 for the member-service notification
+  delivery ledger. Actual WeChat delivery still requires the production
+  template configuration and a real-device acceptance check.
+
 ## 1.0.0-rc.151 - 2026-08-27
 
 - Repairs the activity-registration expiry worker's audit and outbox SQL: all

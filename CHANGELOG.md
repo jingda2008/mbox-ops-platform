@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0-rc.147 - 2026-08-27
+
+- Lets an authorized service employee open any active table and see the current
+  order line status without exposing payment or customer data. The view keeps
+  served, ready, preparing, pending, cancelled and attention states distinct
+  and refreshes while the table remains selected.
+- Removes microphone recording and browser transcription only from the table
+  observation workflow. Existing text and historical observation records stay
+  readable; unrelated voice capabilities are not removed.
+
 ## 1.0.0-rc.146 - 2026-08-27
 
 - Preserves the real customer address across the single production Caddy hop

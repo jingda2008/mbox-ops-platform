@@ -318,7 +318,7 @@ Page({
     preferenceBusyId: '', showPreferenceEvidence: false, showPreferenceEditor: false,
     preferenceTypeOptions: PREFERENCE_TYPE_OPTIONS,
     ...preferenceEditorState(0),
-    benefitCount: 0, balanceText: '未开通', hasTableContext: false,
+    benefitCount: 0, hasTableContext: false,
     avatarUrl: '', displayName: '',
     loginSheetVisible: false,
     wechatNotificationAuthorizations: [],
@@ -416,7 +416,6 @@ Page({
         benefitCount: benefitsAvailable
           ? benefits.reduce((sum, item) => sum + Number(item.quantityAvailable || 0), 0)
           : null,
-        balanceText: '未开通',
         reservations,
         registrations,
         redemptionItems,
@@ -956,15 +955,6 @@ Page({
   openOrders() {
     if (!this.requireMembership('orders')) return
     wx.navigateTo({ url: '/pages/account/index' })
-  },
-  openBalance() {
-    if (!this.requireMembership('member-center')) return
-    wx.showModal({
-      title: '储值余额暂未开通',
-      content: '暂未开通会员储值。桌账请在“我的订单”查看。',
-      showCancel: false,
-      confirmText: '知道了',
-    })
   },
   openPreferenceSettings() {
     if (!this.requireMembership('preferences')) return

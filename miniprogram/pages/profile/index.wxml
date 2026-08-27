@@ -62,11 +62,6 @@
         <text class="metric-value">{{membership ? membership.growthValue : 0}}</text>
         <view class="metric-label-row"><text class="metric-label">成长值</text><text class="metric-chevron">›</text></view>
       </button>
-      <button class="metric-item" bindtap="openBalance" hover-class="metric-item--hover">
-        <text class="metric-icon">¥</text>
-        <text class="metric-value">{{balanceText}}</text>
-        <view class="metric-label-row"><text class="metric-label">储值余额</text><text class="metric-chevron">›</text></view>
-      </button>
     </view>
 
     <view wx:if="{{membership && benefitCount}}" class="benefit-tip" bindtap="openCoupons">

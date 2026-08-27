@@ -193,6 +193,7 @@ describe('loadNormalizedRuntimeConfig', () => {
       MBOX_DEPLOYMENT_TIER: 'production',
       MBOX_RUNTIME_CONFIG_VERSION: NORMALIZED_RUNTIME_CONFIG_VERSION,
       MBOX_PAYMENT_MODE: 'production',
+      MBOX_TRUST_PROXY_HOPS: '1',
       MBOX_AI_MODE: 'disabled',
       MBOX_PRINT_MODE: 'disabled',
       MBOX_HEADSET_MODE: 'disabled',
@@ -214,6 +215,7 @@ describe('loadNormalizedRuntimeConfig', () => {
       MBOX_WORKER_ADAPTER_MODULE: '/opt/mbox/worker-adapters.mjs',
     }
     expect(loadNormalizedRuntimeConfig(production).payment).toMatchObject({ provider: 'postar' })
+    expect(loadNormalizedRuntimeConfig(production).trustProxyHops).toBe(1)
     expect(loadNormalizedRuntimeConfig(production).inventoryEnforcementMode).toBe('strict')
     expect(loadNormalizedRuntimeConfig({
       ...production,MBOX_RUNTIME_ROLE:'contract_candidate',MBOX_START_WORKERS:'false',
@@ -225,6 +227,10 @@ describe('loadNormalizedRuntimeConfig', () => {
     expect(() => loadNormalizedRuntimeConfig({
       ...production,
       MBOX_GUEST_PAYMENT_MODE: 'simulation',
+    })).toThrowError(NormalizedRuntimeConfigurationError)
+    expect(() => loadNormalizedRuntimeConfig({
+      ...production,
+      MBOX_TRUST_PROXY_HOPS: '0',
     })).toThrowError(NormalizedRuntimeConfigurationError)
   })
 

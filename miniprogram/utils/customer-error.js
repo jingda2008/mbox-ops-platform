@@ -34,6 +34,11 @@ const CODE_MESSAGES = Object.freeze({
   ACTIVITY_CONTACT_PROTECTION_FAILED: '报名服务配置异常，请稍后再试',
   ACTIVITY_CONTACT_PROTECTION_UNAVAILABLE: '报名服务配置异常，请稍后再试',
   ACTIVITY_REGISTRATION_RESULT_UNCONFIRMED: '报名结果确认中，请稍后在“我的活动”查看',
+  ACTIVITY_PAYMENT_WECHAT_IDENTITY_REJECTED: '微信付款身份需要刷新，本次没有扣款，请刷新后重新报名',
+  ACTIVITY_PAYMENT_NETWORK_REJECTED: '当前网络未通过支付安全验证，本次没有扣款，请切换网络后重新报名',
+  ACTIVITY_PAYMENT_CONFIGURATION_UNAVAILABLE: '活动付款服务配置异常，本次没有扣款，请联系门店处理',
+  ACTIVITY_PAYMENT_PROVIDER_REJECTED: '支付通道未能受理本次付款，本次没有扣款，请稍后重新报名或联系门店',
+  ACTIVITY_PAYMENT_RESULT_UNKNOWN: '付款结果确认中，请先查询付款状态，不要重复报名或重复付款',
   AUTH_REQUIRED: '登录状态已失效，请重新进入后重试',
   HTTP_ERROR: '服务暂时未能确认，请稍后重试',
 })

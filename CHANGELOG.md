@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.0-rc.146 - 2026-08-27
+
+- Preserves the real customer address across the single production Caddy hop
+  so risk-sensitive payment requests no longer identify the reverse-proxy
+  container as the payer. Production configuration now rejects any other
+  proxy-hop count.
+- Classifies rejected Xingyi/Postar activity-payment requests into safe,
+  actionable customer outcomes for WeChat identity, network risk, merchant
+  configuration and provider rejection without exposing provider diagnostics.
+- Keeps unknown payment results in the query-first state, while a confirmed
+  identity rejection lets the mini-program refresh WeChat identity and start a
+  new registration without presenting the failed attempt as a successful or
+  indeterminate charge.
+
 ## 1.0.0-rc.145 - 2026-08-27
 
 - Repairs the schema-144 customer menu-category upgrade for stores whose

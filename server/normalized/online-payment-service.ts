@@ -941,6 +941,7 @@ function safeOperator(value: string): string {
 }
 
 function safeErrorCode(error: unknown): string {
+  if (error instanceof PostarPaymentRejectedError) return error.diagnosticCode
   const name = error instanceof Error ? error.name : 'UnknownError'
   return name.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 128) || 'UnknownError'
 }

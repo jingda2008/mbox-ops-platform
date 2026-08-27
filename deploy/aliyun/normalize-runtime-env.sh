@@ -29,6 +29,10 @@ delete_env() {
 
 set_env MBOX_RUNTIME_CONFIG_VERSION normalized-runtime-config/v1
 set_env MBOX_DEPLOYMENT_TIER "${deployment_tier}"
+# The managed release topology has exactly one reverse-proxy hop: Caddy -> app.
+# Trusting zero hops sends Caddy's container address to risk-sensitive payment
+# providers; trusting more than one would let an untrusted forwarded value win.
+set_env MBOX_TRUST_PROXY_HOPS 1
 
 legacy_payment_enabled=$(get_env MBOX_POSTAR_ENABLED)
 payment_provider=$(get_env MBOX_PAYMENT_PROVIDER)

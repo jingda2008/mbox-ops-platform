@@ -20,6 +20,7 @@ import {
 import {
   canonicalizePostarPayload,
   hashPostarPayload,
+  PostarPaymentRejectedError,
   PostarPaymentProviderAdapter,
 } from './postar-adapter.js'
 
@@ -205,6 +206,41 @@ describe('Postar JSAPI payment creation', () => {
     await expect(incomplete.createPayment(request, context)).rejects.toThrow('同步响应缺少data')
     const declined = new PostarPaymentProviderAdapter(testOptions(async () => response({ code: 'E100', msg: 'merchant disabled' })))
     await expect(declined.createPayment(request, context)).rejects.toThrow('星驿下单失败: E100 merchant disabled')
+  })
+
+  it.each([
+    ['FM6', '商户和APPID未关联', 'MERCHANT_APPID_NOT_LINKED'],
+    ['FMZ', '当前商户需补齐相关资料后才可交易', 'MERCHANT_VERIFICATION_REQUIRED'],
+    ['WX01', 'appid与openid不匹配', 'APPID_OPENID_MISMATCH'],
+    ['WX02', '无效的openid', 'OPENID_INVALID'],
+    ['RISK01', 'IP 地址异常，拒绝交易', 'IP_RISK_REJECTED'],
+    ['WX03', '小程序违规，已关闭支付权限', 'MINIPROGRAM_PAYMENT_RESTRICTED'],
+  ] as const)('keeps safe diagnostic detail for a rejected JSAPI order: %s', async (
+    code,
+    message,
+    reason,
+  ) => {
+    const adapter = new PostarPaymentProviderAdapter(testOptions(async () => response({ code, msg: message })))
+    const request = {
+      paymentIntentId: 'PaymentABC123', merchantId: 'MERCHANT001', amount: 3000, currency: 'CNY',
+      expiresAt: '2026-07-14T04:20:00.000Z', presentation: 'jsapi' as const,
+      payWay: 'wechat' as const, payerId: 'openid-1', wxAppid: 'wx-app-1', wechatTradeType: '8' as const,
+      clientIp: '203.0.113.10', callbackUrl: 'https://pay.example.test/postar/callback',
+      operatorId: 'cashier-1', remark: 'MBOX activity',
+    }
+
+    try {
+      await adapter.createPayment(request, context)
+      throw new Error('expected provider rejection')
+    } catch (error) {
+      expect(error).toBeInstanceOf(PostarPaymentRejectedError)
+      expect(error).toMatchObject({
+        providerCode: code,
+        reason,
+        diagnosticCode: `POSTAR_CREATE_JSAPI_${reason}_${code}`,
+      })
+      expect((error as PostarPaymentRejectedError).diagnosticCode).not.toContain(message)
+    }
   })
 
   it('verifies an optional synchronous response signature when the provider supplies one', async () => {

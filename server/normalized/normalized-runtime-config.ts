@@ -167,6 +167,7 @@ export function loadNormalizedRuntimeConfig(
   const poolMax = readInteger(environment.MBOX_DATABASE_POOL_MAX, 'MBOX_DATABASE_POOL_MAX', 12, 2, 100, errors)
   const workerPoolMax = readInteger(environment.MBOX_WORKER_DATABASE_POOL_MAX, 'MBOX_WORKER_DATABASE_POOL_MAX', 4, 2, 12, errors)
   const trustProxyHops = readInteger(environment.MBOX_TRUST_PROXY_HOPS, 'MBOX_TRUST_PROXY_HOPS', 0, 0, 2, errors)
+  if (commercialProduction && trustProxyHops !== 1) errors.push('MBOX_TRUST_PROXY_HOPS')
   const commitSha = readCommitSha(environment.APP_COMMIT_SHA ?? environment.GITHUB_SHA)
   const releaseImageDigest = readImageDigest(environment.MBOX_RELEASE_IMAGE_DIGEST, errors)
   const staticDir = optional(environment.MBOX_STATIC_DIR)

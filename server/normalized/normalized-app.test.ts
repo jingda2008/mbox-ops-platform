@@ -45,6 +45,7 @@ const config: NormalizedRuntimeConfig = {
   port: 3_000,
   poolMax: 4,
   workerPoolMax: 2,
+  trustProxyHops: 0,
   staticDir: null,
   startWorkers: false,
 }
@@ -54,6 +55,31 @@ describe('createNormalizedApp', () => {
     expect(NORMALIZED_LOG_REDACTION_PATHS).toEqual(expect.arrayContaining([
       'body.contactValue', 'body.phoneAuthorizationCode',
     ]))
+  })
+
+  it('uses only the configured direct reverse-proxy hop to resolve the customer IP', async () => {
+    const clientIpProbe: FastifyPluginAsync<Record<string, unknown>> = async (app) => {
+      app.get('/client-ip', async (request) => ({ clientIp: request.ip }))
+    }
+    const direct = await createNormalizedApp({
+      config: { ...config, trustProxyHops: 0 }, pool: fakePool(), logger: false,
+      injectedPlugins: [{ name: 'direct-ip-probe', plugin: clientIpProbe, prefix: '/api' }],
+    })
+    const proxied = await createNormalizedApp({
+      config: { ...config, trustProxyHops: 1 }, pool: fakePool(), logger: false,
+      injectedPlugins: [{ name: 'proxied-ip-probe', plugin: clientIpProbe, prefix: '/api' }],
+    })
+
+    const forged = await direct.app.inject({
+      method: 'GET', url: '/api/client-ip', headers: { 'x-forwarded-for': '203.0.113.42' },
+    })
+    const forwarded = await proxied.app.inject({
+      method: 'GET', url: '/api/client-ip', headers: { 'x-forwarded-for': '203.0.113.42' },
+    })
+
+    expect(forged.json().clientIp).not.toBe('203.0.113.42')
+    expect(forwarded.json()).toEqual({ clientIp: '203.0.113.42' })
+    await Promise.all([direct.app.close(), proxied.app.close()])
   })
 
   it('keeps a contract migration candidate read-only and visibly non-writable',async()=>{

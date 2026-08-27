@@ -116,9 +116,22 @@ export class ActivityPaymentService {
       if (error instanceof WechatPaymentIdentityRequiredError) {
         throw new CustomerExperienceRequestError(error.message, 'WECHAT_IDENTITY_REQUIRED', 409)
       }
-      if (!(error instanceof OnlinePaymentUnknownError) && !(error instanceof OnlinePaymentUnavailableError)
-        && !(error instanceof Error && error.name === 'PostarPaymentRejectedError')) throw error
-      return { payment: await this.get(context, input.registrationPublicId), providerAction: null }
+      if (error instanceof PostarPaymentRejectedError) throw publicActivityPaymentRejection(error)
+      if (error instanceof OnlinePaymentUnavailableError) {
+        throw new CustomerExperienceRequestError(
+          '活动付款服务配置异常，本次没有发起扣款。请联系门店处理。',
+          'ACTIVITY_PAYMENT_CONFIGURATION_UNAVAILABLE',
+          503,
+        )
+      }
+      if (error instanceof OnlinePaymentUnknownError) {
+        throw new CustomerExperienceRequestError(
+          '付款结果确认中，请先查询付款状态，不要重复报名或重复付款。',
+          'ACTIVITY_PAYMENT_RESULT_UNKNOWN',
+          409,
+        )
+      }
+      throw error
     }
   }
 
@@ -468,6 +481,37 @@ function closeBinding(idempotencyKey: string) {
 
 function invalidActivityPayment(message: string) {
   return new CustomerExperienceRequestError(message, 'ACTIVITY_PAYMENT_INVALID_STATE', 409)
+}
+
+function publicActivityPaymentRejection(error: Readonly<PostarPaymentRejectedError>) {
+  if (error.reason === 'APPID_OPENID_MISMATCH' || error.reason === 'OPENID_INVALID') {
+    return new CustomerExperienceRequestError(
+      '微信付款身份未通过验证，本次没有发起扣款。请刷新微信身份后重新报名。',
+      'ACTIVITY_PAYMENT_WECHAT_IDENTITY_REJECTED',
+      409,
+    )
+  }
+  if (error.reason === 'IP_RISK_REJECTED') {
+    return new CustomerExperienceRequestError(
+      '当前网络未通过支付安全验证，本次没有发起扣款。请切换本地网络后重新报名。',
+      'ACTIVITY_PAYMENT_NETWORK_REJECTED',
+      409,
+    )
+  }
+  if (error.reason === 'MERCHANT_APPID_NOT_LINKED'
+    || error.reason === 'MERCHANT_VERIFICATION_REQUIRED'
+    || error.reason === 'MINIPROGRAM_PAYMENT_RESTRICTED') {
+    return new CustomerExperienceRequestError(
+      '活动付款服务配置异常，本次没有发起扣款。请联系门店处理。',
+      'ACTIVITY_PAYMENT_CONFIGURATION_UNAVAILABLE',
+      409,
+    )
+  }
+  return new CustomerExperienceRequestError(
+    '支付通道未能受理本次付款，本次没有发起扣款。请稍后重新报名或联系门店。',
+    'ACTIVITY_PAYMENT_PROVIDER_REJECTED',
+    409,
+  )
 }
 
 function minor(value: string | number): number {

@@ -21,6 +21,7 @@ MBOX_POSTAR_MERCHANT_ID=inactive
 MBOX_ASSISTANT_PROVIDER=disabled
 MBOX_QWEN_API_KEY=old-unused-key
 MBOX_GUEST_PAYMENT_MODE=simulation
+MBOX_TRUST_PROXY_HOPS=0
 MBOX_WECHAT_ENABLED=false
 MBOX_INVENTORY_ENFORCEMENT_MODE=audit_only
 MBOX_START_WORKERS=false
@@ -33,6 +34,7 @@ ENV
 chmod 0600 "${env_file}"
 "${root}/deploy/aliyun/normalize-runtime-env.sh" "${env_file}" validation
 grep -qx 'MBOX_RUNTIME_CONFIG_VERSION=normalized-runtime-config/v1' "${env_file}"
+grep -qx 'MBOX_TRUST_PROXY_HOPS=1' "${env_file}"
 grep -qx 'MBOX_PAYMENT_MODE=disabled' "${env_file}"
 grep -qx 'MBOX_AI_MODE=disabled' "${env_file}"
 grep -qx 'MBOX_WECHAT_ENABLED=false' "${env_file}"
@@ -72,6 +74,7 @@ POSTAR_MERCHANT_ID=merchant
 POSTAR_PUBLIC_KEY=public-key
 POSTAR_CALLBACK_URL=https://example.test/api/payments/providers/postar/callback
 MBOX_GUEST_PAYMENT_MODE=wechat_native_qr
+MBOX_TRUST_PROXY_HOPS=0
 MBOX_WECHAT_ENABLED=true
 MBOX_WECHAT_APP_ID=wxMboxCommercial01
 MBOX_WECHAT_APP_SECRET=wechat-secret-value
@@ -90,6 +93,7 @@ chmod 0600 "${postar_env_file}"
 grep -qx 'MBOX_PAYMENT_MODE=test' "${postar_env_file}"
 grep -qx 'MBOX_PAYMENT_PROVIDER=postar' "${postar_env_file}"
 grep -qx 'MBOX_GUEST_PAYMENT_MODE=wechat_native_qr' "${postar_env_file}"
+grep -qx 'MBOX_TRUST_PROXY_HOPS=1' "${postar_env_file}"
 grep -qx 'POSTAR_MERCHANT_ID=merchant' "${postar_env_file}"
 grep -qx 'MBOX_WECHAT_ENABLED=true' "${postar_env_file}"
 grep -qx 'MBOX_WECHAT_APP_ID=wxMboxCommercial01' "${postar_env_file}"

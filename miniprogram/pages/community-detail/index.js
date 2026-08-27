@@ -953,12 +953,17 @@ Page({
       }
     } catch (error) {
       await this.refreshPaymentState(false)
-      const identityRefreshRequired = Boolean(error && error.code === 'WECHAT_IDENTITY_REQUIRED')
+      const preflightIdentityRequired = Boolean(error && error.code === 'WECHAT_IDENTITY_REQUIRED')
+      const rejectedIdentity = Boolean(error && error.code === 'ACTIVITY_PAYMENT_WECHAT_IDENTITY_REJECTED')
+      const identityRefreshRequired = preflightIdentityRequired || rejectedIdentity
+      const message = preflightIdentityRequired
+        ? '报名已保留，付款尚未发起。请点击下方按钮刷新微信身份并继续付款，不要重复报名。'
+        : rejectedIdentity
+          ? '微信付款身份未通过验证，本次没有扣款。请点击下方按钮刷新身份后重新报名。'
+          : customerErrorMessage(error, '支付动作结果暂时无法确认，请先查单，不要重复付款。')
       this.setData({
         wechatIdentityRefreshRequired: identityRefreshRequired,
-        error: identityRefreshRequired
-          ? '报名已保留，付款尚未发起。请点击下方按钮刷新微信身份并继续付款，不要重复报名。'
-          : customerErrorMessage(error, '支付动作结果暂时无法确认，请先查单，不要重复付款。'),
+        error: message,
       })
     } finally { this.setData({ busy: false }) }
   },

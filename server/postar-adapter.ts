@@ -40,11 +40,74 @@ const DATE = /^\d{8}$/
 const DATE_TIME = /^\d{14}$/
 const ALPHANUMERIC_ORDER_ID = /^[A-Za-z0-9]{1,40}$/
 
+export type PostarPaymentRejectionReason =
+  | 'MERCHANT_APPID_NOT_LINKED'
+  | 'MERCHANT_VERIFICATION_REQUIRED'
+  | 'APPID_OPENID_MISMATCH'
+  | 'OPENID_INVALID'
+  | 'IP_RISK_REJECTED'
+  | 'MINIPROGRAM_PAYMENT_RESTRICTED'
+  | 'PROVIDER_REJECTED'
+
+type PostarPaymentOperation = 'CREATE_QR' | 'CREATE_BARCODE' | 'CREATE_JSAPI' | 'CLOSE' | 'UNKNOWN'
+
+interface PostarPaymentRejectionDetails {
+  operation?: PostarPaymentOperation
+  providerCode?: string
+  providerMessage?: string
+}
+
 export class PostarPaymentRejectedError extends Error {
-  constructor(message: string) {
+  readonly diagnosticCode: string
+  readonly providerCode: string
+  readonly reason: PostarPaymentRejectionReason
+
+  constructor(message: string, details: Readonly<PostarPaymentRejectionDetails> = {}) {
     super(message)
     this.name = 'PostarPaymentRejectedError'
+    const operation = details.operation ?? 'UNKNOWN'
+    this.providerCode = safeProviderCode(details.providerCode)
+    this.reason = classifyPaymentRejection(details.providerCode, details.providerMessage)
+    this.diagnosticCode = `POSTAR_${operation}_${this.reason}_${this.providerCode}`.slice(0, 128)
   }
+}
+
+function safeProviderCode(value: string | undefined): string {
+  const normalized = String(value ?? '').trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '_').slice(0, 32)
+  return normalized || 'UNKNOWN'
+}
+
+function classifyPaymentRejection(
+  providerCode: string | undefined,
+  providerMessage: string | undefined,
+): PostarPaymentRejectionReason {
+  const value = `${providerCode ?? ''} ${providerMessage ?? ''}`.toLowerCase().replace(/\s+/g, ' ')
+  if (value.includes('appid与openid不匹配') || value.includes('sub_appid和sub_openid不匹配')
+    || value.includes('sub_appid与sub_openid不匹配')) return 'APPID_OPENID_MISMATCH'
+  if (value.includes('无效的openid') || value.includes('openid不存在')) return 'OPENID_INVALID'
+  if (value.includes('ip 地址异常') || value.includes('ip地址异常') || value.includes('异地交易')) return 'IP_RISK_REJECTED'
+  if (value.includes('小程序违规') || value.includes('关闭支付权限') || value.includes('支付权限关闭')) {
+    return 'MINIPROGRAM_PAYMENT_RESTRICTED'
+  }
+  if (value.includes('fmz') || value.includes('法人认证') || value.includes('实名认证')
+    || value.includes('补齐相关资料')) return 'MERCHANT_VERIFICATION_REQUIRED'
+  if (value.includes('fm6') || value.includes('商户和appid未关联') || value.includes('商户和 appid 未关联')
+    || value.includes('sub_mch_id与sub_appid不匹配') || value.includes('微信参数未配置')) {
+    return 'MERCHANT_APPID_NOT_LINKED'
+  }
+  return 'PROVIDER_REJECTED'
+}
+
+function paymentRejected(
+  operation: PostarPaymentOperation,
+  label: string,
+  response: Readonly<{ code: string; msg: string }>,
+) {
+  return new PostarPaymentRejectedError(`${label}: ${response.code} ${response.msg}`, {
+    operation,
+    providerCode: response.code,
+    providerMessage: response.msg,
+  })
 }
 
 type JsonObject = Record<string, PostarJsonValue | undefined>
@@ -598,7 +661,7 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
         headers: { 'content-type': 'application/json; charset=utf-8' },
         url: `${this.baseUrl}${POSTAR_ENDPOINTS.createQrPayment}`,
       }), publicKey)
-      if (response.code !== '000000') throw new PostarPaymentRejectedError(`星驿聚合支付码下单失败: ${response.code} ${response.msg}`)
+      if (response.code !== '000000') throw paymentRejected('CREATE_QR', '星驿聚合支付码下单失败', response)
       const qrCodeUrl = requireDataString(response)
       if (new URL(qrCodeUrl).protocol !== 'https:') throw new Error('星驿聚合支付码链接必须使用HTTPS')
       return {
@@ -627,7 +690,7 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
         url: `${this.baseUrl}${POSTAR_ENDPOINTS.createBarcodePayment}`,
       }), publicKey)
       if (!['000000', '222222'].includes(response.code)) {
-        throw new PostarPaymentRejectedError(`星驿付款码支付失败: ${response.code} ${response.msg}`)
+        throw paymentRejected('CREATE_BARCODE', '星驿付款码支付失败', response)
       }
       const data = requireDataObject(response)
       assertAgency(data, agencyId)
@@ -667,7 +730,7 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
       headers: { 'content-type': 'application/json; charset=utf-8' },
       url: `${this.baseUrl}${POSTAR_ENDPOINTS.createJsapiPayment}`,
     }), publicKey)
-    if (response.code !== '000000') throw new PostarPaymentRejectedError(`星驿下单失败: ${response.code} ${response.msg}`)
+    if (response.code !== '000000') throw paymentRejected('CREATE_JSAPI', '星驿下单失败', response)
     const data = requireDataObject(response)
     assertAgency(data, agencyId)
     const returnedIntentId = requiredString(data, 'threeOrderNo')
@@ -784,11 +847,13 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
       url: `${this.baseUrl}${POSTAR_ENDPOINTS.closePayment}`,
     }), publicKey)
     if (response.code !== '000000') {
-      throw new PostarPaymentRejectedError(`星驿关单失败: ${response.code} ${response.msg}`)
+      throw paymentRejected('CLOSE', '星驿关单失败', response)
     }
     const data = requireDataObject(response)
     if (String(data.closeFlag ?? '') !== '1') {
-      throw new PostarPaymentRejectedError('星驿未确认订单已关闭')
+      throw new PostarPaymentRejectedError('星驿未确认订单已关闭', {
+        operation: 'CLOSE', providerCode: 'INVALID_CLOSE_CONFIRMATION',
+      })
     }
     return { paymentIntentId: request.paymentIntentId, closed: true, occurredAt: this.now().toISOString() }
   }

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
+import { PostarPaymentRejectedError } from '../postar-adapter.js'
 import { ActivityPaymentService } from './activity-payment-service.js'
-import { OnlinePaymentUnknownError } from './online-payment-service.js'
+import { OnlinePaymentUnavailableError, OnlinePaymentUnknownError } from './online-payment-service.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
 const scope = {
@@ -68,6 +69,44 @@ describe('ActivityPaymentService', () => {
       registrationPublicId, clientIp: '127.0.0.1', idempotencyKey: 'activity-legacy-qr-key-0001',
     })).rejects.toMatchObject({ code: 'ACTIVITY_PAYMENT_METHOD_UNSUPPORTED', statusCode: 409 })
     expect(create).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['FM6', '商户和APPID未关联', 'ACTIVITY_PAYMENT_CONFIGURATION_UNAVAILABLE'],
+    ['WX01', 'appid与openid不匹配', 'ACTIVITY_PAYMENT_WECHAT_IDENTITY_REJECTED'],
+    ['RISK01', 'IP 地址异常，拒绝交易', 'ACTIVITY_PAYMENT_NETWORK_REJECTED'],
+    ['E100', 'merchant disabled', 'ACTIVITY_PAYMENT_PROVIDER_REJECTED'],
+  ] as const)('maps a rejected activity payment to a safe customer error: %s', async (
+    providerCode,
+    providerMessage,
+    publicCode,
+  ) => {
+    const create = vi.fn(async () => {
+      throw new PostarPaymentRejectedError(`星驿下单失败: ${providerCode} ${providerMessage}`, {
+        operation: 'CREATE_JSAPI', providerCode, providerMessage,
+      })
+    })
+    const service = serviceFor(paymentRow(), { create })
+
+    await expect(service.createAction(publicContext(), {
+      registrationPublicId, clientIp: '203.0.113.10', idempotencyKey: `activity-rejected-${providerCode}`,
+    })).rejects.toMatchObject({ code: publicCode, statusCode: 409 })
+  })
+
+  it('distinguishes a disabled payment authority from an unknown provider outcome', async () => {
+    const unavailable = serviceFor(paymentRow(), {
+      create: vi.fn(async () => { throw new OnlinePaymentUnavailableError() }),
+    })
+    await expect(unavailable.createAction(publicContext(), {
+      registrationPublicId, clientIp: '203.0.113.10', idempotencyKey: 'activity-unavailable-0001',
+    })).rejects.toMatchObject({ code: 'ACTIVITY_PAYMENT_CONFIGURATION_UNAVAILABLE', statusCode: 503 })
+
+    const unknown = serviceFor(paymentRow(), {
+      create: vi.fn(async () => { throw new OnlinePaymentUnknownError() }),
+    })
+    await expect(unknown.createAction(publicContext(), {
+      registrationPublicId, clientIp: '203.0.113.10', idempotencyKey: 'activity-unknown-0001',
+    })).rejects.toMatchObject({ code: 'ACTIVITY_PAYMENT_RESULT_UNKNOWN', statusCode: 409 })
   })
 
   it('preserves an unknown provider result and never records it as success', async () => {

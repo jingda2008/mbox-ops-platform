@@ -211,6 +211,102 @@ test('activity registration distinguishes confirmed, payment-pending, and waitli
   assert.match(operationsApi, /\/staff\/activity-operations\/:publicId\/waitlist-retry/)
 })
 
+test('a required paid activity opens WeChat payment as part of one registration action', async () => {
+  const detailLogic = await read('miniprogram/pages/community-detail/index.js')
+  const storage = new Map()
+  const calls = { register: 0, paymentAction: 0, paymentQuery: 0, requestPayment: 0, outcome: 0, modal: 0 }
+  let pageDefinition
+  const api = {
+    getActivity: async () => null,
+    getActivityPreview: async () => null,
+    getActivityLoyaltyBenefits: async () => [],
+    getActivityRegistrations: async () => [],
+    registerActivity: async () => {
+      calls.register += 1
+      return {
+        publicId: 'registration-direct-payment-001', status: 'payment_pending',
+        payment: { publicId: 'activity-payment-direct-001', amountMinor: 2000, method: 'jsapi' },
+      }
+    },
+    getActivityRegistrationPayment: async () => ({
+      registrationStatus: 'payment_pending', allowedActions: ['start_payment', 'query_payment', 'cancel_registration'],
+      payment: { publicId: 'activity-payment-direct-001', amountMinor: 2000, method: 'jsapi' },
+    }),
+    startActivityRegistrationPayment: async () => {
+      calls.paymentAction += 1
+      return {
+        providerAction: {
+          status: 'pending', presentation: 'jsapi',
+          payload: { timeStamp: '1', nonceStr: 'nonce', package: 'prepay_id=demo', signType: 'RSA', paySign: 'signature' },
+        },
+      }
+    },
+    queryActivityRegistrationPayment: async () => {
+      calls.paymentQuery += 1
+      return {
+        registrationStatus: 'confirmed', resolutionState: 'confirmed', allowedActions: [],
+        payment: { publicId: 'activity-payment-direct-001', amountMinor: 2000, method: 'jsapi' },
+      }
+    },
+    cancelActivityRegistration: async () => ({}),
+    getMiniBootstrap: async () => ({}),
+    enrollMembership: async () => ({}),
+  }
+  const require = (path) => {
+    if (path === '../../utils/api') return api
+    if (path === '../../utils/auth') return { ensureCustomerSession: async () => ({}) }
+    if (path === '../../utils/id') return { randomId: (prefix) => `${prefix}-unit-test-key-0001` }
+    if (path === '../../utils/format') return { money: (minor) => `¥${(Number(minor) / 100).toFixed(2)}`, dateTime: (value) => String(value || '') }
+    if (path === '../../utils/media') return { publicImageUrl: (value) => value || '' }
+    if (path === '../../utils/wechat-phone') return { readWechatPhoneAuthorization: () => ({ code: '' }) }
+    if (path === '../../utils/customer-error') return { customerErrorMessage: (_error, fallback) => fallback, isWechatCancellation: () => false }
+    throw new Error(`unexpected mini-program dependency: ${path}`)
+  }
+  const wx = {
+    getStorageSync: (key) => storage.get(key),
+    setStorageSync: (key, value) => storage.set(key, value),
+    removeStorageSync: (key) => storage.delete(key),
+    requestPayment: (options) => { calls.requestPayment += 1; options.success({}) },
+    showModal: () => { calls.modal += 1; throw new Error('the required-payment path must not add a modal before WeChat payment') },
+    showActionSheet: () => { throw new Error('a required payment has no alternate payment choice') },
+    pageScrollTo: () => {},
+    switchTab: () => {},
+    navigateBack: () => {},
+    navigateTo: () => {},
+    showToast: () => {},
+  }
+  vm.runInNewContext(detailLogic, { Page: (definition) => { pageDefinition = definition }, require, wx, setTimeout, clearTimeout, Date, Promise, Object, Array, Number, String, Boolean, RegExp, Math })
+  assert.ok(pageDefinition)
+
+  const page = Object.assign({}, pageDefinition)
+  const instance = Object.assign(page, {
+    data: Object.assign({}, pageDefinition.data, {
+      busy: false, membership: { publicId: 'member-direct-payment' }, partySize: 1, contact: '13800138000',
+      ruleAcknowledged: true, registration: null, selectedPackage: null, selectedPackagePublicId: '',
+      activity: {
+        publicId: 'activity-direct-payment', registrationBlocked: false, packageSelectionRequired: false,
+        remainingCapacity: 8, feeAmountMinor: 2000, feeBasis: 'per_registration', depositAmountMinor: 0,
+        paymentMode: 'full_required', paymentAvailability: 'available', availablePaymentMethods: ['jsapi'],
+        paymentDeadlineMinutes: 15, paymentRuleText: '报名后立即支付', safetyPolicyVersion: 'safety-v1', refundPolicyVersion: 'refund-v1',
+      },
+    }),
+    setData(next, callback) { this.data = Object.assign({}, this.data, next); if (callback) callback() },
+    async refreshActivityAvailability() {},
+    rememberRegistration() {},
+    async showRegistrationOutcome() { calls.outcome += 1 },
+  })
+
+  await instance.register()
+
+  assert.equal(calls.register, 1)
+  assert.equal(calls.paymentAction, 1)
+  assert.equal(calls.requestPayment, 1)
+  assert.equal(calls.paymentQuery, 1)
+  assert.equal(calls.outcome, 0)
+  assert.equal(calls.modal, 0)
+  assert.equal(instance.data.registration.resolutionState, 'confirmed')
+})
+
 test('activity registration asks only for a phone number and guides a missed field into view', async () => {
   const [detailLogic, detailView, detailStyle, api] = await Promise.all([
     read('miniprogram/pages/community-detail/index.js'),

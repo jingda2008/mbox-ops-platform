@@ -774,6 +774,7 @@ Page({
       attempts[activity.publicId] = attempt
       wx.setStorageSync(REGISTRATION_ATTEMPTS_KEY, attempts)
     }
+    let shouldAutoStartPayment = false
     this.setData({ busy: true, error: '', success: '', wechatIdentityRefreshRequired: false })
     try {
       const payload = Object.assign({}, attempt.payload, { contactSnapshot: { channel: 'miniprogram', contact } })
@@ -796,15 +797,22 @@ Page({
       this.rememberRegistration(registration, activity.publicId)
       this.setData({ registration })
       await this.refreshActivityAvailability()
-      const success = registration && registration.canStartPayment
-        ? `名额已暂留至 ${registration.seatHoldText || '页面所示时限'}；完成付款后才算报名成功。`
-        : result.status === 'waitlisted'
+      // A required online-payment choice is made before the registration is
+      // created. Once the service returns its idempotent registration record,
+      // immediately present the matching WeChat payment sheet instead of
+      // making the customer tap a second “continue payment” button.
+      shouldAutoStartPayment = Boolean(registration && registration.canStartPayment && payload.paymentChoice !== 'none')
+      if (shouldAutoStartPayment) {
+        this.setData({ success: '名额已暂留，正在打开微信支付。' })
+      } else {
+        const success = result.status === 'waitlisted'
           ? '已加入候补名单，会按报名顺序依次安排；现在无需付款。'
           : result.status === 'confirmed'
             ? '报名成功，名额已为您确认。'
             : '报名已提交，请在“我的”活动中查看进展。'
-      this.setData({ success })
-      await this.showRegistrationOutcome(registration)
+        this.setData({ success })
+        await this.showRegistrationOutcome(registration)
+      }
     } catch (error) {
       const recovered = await this.recoverRegistration(activity.publicId, attempt)
       if (recovered) return
@@ -827,6 +835,7 @@ Page({
       // 未知/网络类错误：保留幂等键重试，但展示真实原因，避免永远只看到笼统文案。
       this.setData({ error: `${detail} 请在 15 分钟内重新填写相同手机号后再试；我们会避免重复报名。` })
     } finally { this.setData({ busy: false }) }
+    if (shouldAutoStartPayment) await this.startPayment()
   },
 
   async choosePayment(item) {
@@ -841,8 +850,12 @@ Page({
       this.setData({ error: '线上付款暂时不可用，本次报名尚未提交。' })
       return null
     }
-    if (options.length === 1 && options[0].choice === 'none' && !item.feeAmountMinor) return options[0]
-    if (options.length === 1) return await this.confirmPayment(`本次选择：${options[0].label}。提交后将按页面展示的退款与安全规则处理。`) ? options[0] : null
+    // The primary CTA already states “提交报名并支付”, and the customer has
+    // explicitly acknowledged the activity and refund rules. For one required
+    // payment option, go straight to the platform payment sheet after the
+    // server creates the registration; only show a chooser when there is a
+    // genuine payment decision such as optional deposit versus no prepayment.
+    if (options.length === 1) return options[0]
     return new Promise((resolve) => wx.showActionSheet({
       itemList: options.map((option) => option.label), success: (result) => resolve(options[result.tapIndex] || null), fail: () => resolve(null),
     }))

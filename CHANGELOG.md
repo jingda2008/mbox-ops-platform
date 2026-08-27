@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-rc.150 - 2026-08-27
+
+- Makes a required paid Superhigh registration a single customer action:
+  create the idempotent registration, immediately present WeChat payment, and
+  query the final payment state without an extra “continue payment” tap.
+- Keeps free, waitlist and explicit no-prepayment registrations outside the
+  payment path, and retains the platform's own customer payment confirmation.
+
 ## 1.0.0-rc.149 - 2026-08-27
 
 - Aligns the real browser acceptance path with the approved text-only table

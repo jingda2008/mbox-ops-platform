@@ -73,6 +73,17 @@ describe('mini-program mobile business flow contract', () => {
     expect(detailView).toContain('安全与参加要求')
   })
 
+  it('starts WeChat payment immediately after a paid Superhigh registration is created', () => {
+    const detail = read('miniprogram/pages/community-detail/index.js')
+    const detailView = read('miniprogram/pages/community-detail/index.wxml')
+    expect(detailView).toContain("'提交报名并支付'")
+    expect(detail).toContain('shouldAutoStartPayment = Boolean(registration && registration.canStartPayment && payload.paymentChoice !== \'none\')')
+    expect(detail).toContain("this.setData({ success: '名额已暂留，正在打开微信支付。' })")
+    expect(detail).toContain('if (shouldAutoStartPayment) await this.startPayment()')
+    expect(detail).toContain('if (options.length === 1) return options[0]')
+    expect(detail).not.toContain('if (options.length === 1) return await this.confirmPayment')
+  })
+
   it('shows real benefit inventory and known reservation/activity states without exposing customer voice entry', () => {
     const profile = read('miniprogram/pages/profile/index.js')
     const profileView = read('miniprogram/pages/profile/index.wxml')

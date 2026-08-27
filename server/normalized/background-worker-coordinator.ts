@@ -18,6 +18,7 @@ import type { LoyaltyAnnualBenefitGrantBatch } from './loyalty-annual-benefit-gr
 import type { AnnualDailySnackExpiryBatch } from './annual-daily-snack-expiry-worker.js'
 import type { LoyaltyTierReviewBatch } from './loyalty-tier-review-worker.js'
 import type { WechatLoyaltyNotificationBatch } from './wechat-loyalty-notification-worker.js'
+import type { WechatMemberServiceNotificationBatch } from './wechat-member-service-notification-worker.js'
 import type { ReservationPerformanceNotificationBatch } from './reservation-performance-notification-worker.js'
 import type {
   PromotionalLoyaltyBatchResult,
@@ -68,6 +69,9 @@ type AnnualDailySnackExpiryPort = {
 }
 type WechatLoyaltyNotificationPort = {
   runBatch(scope: Readonly<StoreScope>, workerId: string): Promise<WechatLoyaltyNotificationBatch>
+}
+type WechatMemberServiceNotificationPort = {
+  runBatch(scope: Readonly<StoreScope>, workerId: string): Promise<WechatMemberServiceNotificationBatch>
 }
 type ReservationPerformanceNotificationPort = {
   runBatch(scope: Readonly<StoreScope>, workerId: string): Promise<ReservationPerformanceNotificationBatch>
@@ -148,6 +152,7 @@ export type NormalizedWorkerName =
   | 'loyalty-tier-benefit-expiry'
   | 'loyalty-tier-review'
   | 'wechat-loyalty-notification'
+  | 'wechat-member-service-notification'
   | 'reservation-performance-notification'
   | 'idempotency-cleanup'
   | 'staff-login-rate-limit-cleanup'
@@ -182,6 +187,7 @@ export interface NormalizedWorkerCycleResult {
     loyaltyTierBenefitExpiry: LoyaltyTierBenefitExpiryBatch | null
     loyaltyTierReview: LoyaltyTierReviewBatch | null
     wechatLoyaltyNotification: WechatLoyaltyNotificationBatch | null
+    wechatMemberServiceNotification: WechatMemberServiceNotificationBatch | null
     reservationPerformanceNotification: ReservationPerformanceNotificationBatch | null
     idempotencyCleanup: IdempotencyCleanupResult | null
     staffLoginRateLimitCleanup: number | null
@@ -223,6 +229,7 @@ export class NormalizedBackgroundWorkerCoordinator {
       loyaltyTierBenefitExpiry?: LoyaltyTierBenefitExpiryPort
       loyaltyTierReview: LoyaltyTierReviewPort
       wechatLoyaltyNotification?: WechatLoyaltyNotificationPort
+      wechatMemberServiceNotification?: WechatMemberServiceNotificationPort
       reservationPerformanceNotification?: ReservationPerformanceNotificationPort
       idempotencyCleanup: IdempotencyCleanupPort
       staffLoginRateLimitCleanup: StaffLoginRateLimitCleanupPort
@@ -302,6 +309,7 @@ export class NormalizedBackgroundWorkerCoordinator {
       'notification',
       'personal-contact-disposition',
       'complimentary-benefit-fulfillment',
+      'wechat-member-service-notification',
     ]
     const executions = await Promise.allSettled([
       this.runWhenDue('service-sla', () => this.workers.serviceSla.runBatch(this.scope, `${this.options.workerId}:service-sla`)),
@@ -417,6 +425,13 @@ export class NormalizedBackgroundWorkerCoordinator {
             this.scope,`${this.options.workerId}:complimentary-benefit-fulfillment`,
           )
         )),
+      this.workers.wechatMemberServiceNotification===undefined
+        ? Promise.resolve(null)
+        : this.runWhenDue('wechat-member-service-notification', () => (
+          this.workers.wechatMemberServiceNotification!.runBatch(
+            this.scope,`${this.options.workerId}:wechat-member-service-notification`,
+          )
+        )),
     ] as const)
 
     const failures: NormalizedWorkerName[] = []
@@ -466,6 +481,7 @@ export class NormalizedBackgroundWorkerCoordinator {
         notification: fulfilledValue(executions[23]),
         personalContactDisposition: fulfilledValue(executions[24]),
         complimentaryBenefitFulfillment: fulfilledValue(executions[25]),
+        wechatMemberServiceNotification: fulfilledValue(executions[26]),
       },
       failures,
     }
@@ -517,6 +533,7 @@ const DEFAULT_WORKER_CADENCES: Readonly<Record<NormalizedWorkerName, number>> = 
   'loyalty-tier-benefit-expiry': 60_000,
   'loyalty-tier-review': 60_000,
   'wechat-loyalty-notification': 30_000,
+  'wechat-member-service-notification': 30_000,
   'reservation-performance-notification': 30_000,
   'idempotency-cleanup': 60_000,
   'staff-login-rate-limit-cleanup': 60_000,

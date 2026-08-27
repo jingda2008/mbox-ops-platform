@@ -16,8 +16,7 @@ const {
   getTodayPerformances,
   getCustomerBenefits,
   getMiniBootstrap,
-  getWechatNotificationAuthorizations,
-  recordWechatNotificationAuthorization,
+  getWechatNotificationPrompt,
   createServiceTask,
   getServiceRequests,
 } = require('../../utils/api')
@@ -29,6 +28,7 @@ const { money, dateTime } = require('../../utils/format')
 const { checkoutRecommendationAttribution } = require('../../utils/recommendation-attribution')
 const { publicImageUrl } = require('../../utils/media')
 const { customerErrorMessage, isWechatCancellation } = require('../../utils/customer-error')
+const { requestWechatSubscription } = require('../../utils/wechat-subscription')
 
 const PENDING_PAYMENT_KEY = 'mbox.pending.guest.payment.v1'
 const CHECKOUT_ATTEMPT_KEY = 'mbox.pending.guest.checkout.v1'
@@ -88,6 +88,22 @@ async function loadPerformanceView() {
       error: customerErrorMessage(error, '演出信息暂时未更新，请点一下重试'),
     }
   }
+}
+
+// Both order-stage plans are preloaded so that their native permission sheet
+// can open directly from the customer's tap.  When the first stage is accepted,
+// mirror that outcome into both in-memory plans: a later stage must never
+// re-offer the same template within this table session.
+function applyWechatSubscriptionOutcomes(options, outcomes) {
+  const resultByPolicy = new Map((outcomes || []).map((item) => [item.option.policyId, item.platformResult]))
+  return (options || []).map((item) => {
+    const platformResult = resultByPolicy.get(item.policyId)
+    if (!platformResult) return item
+    return Object.assign({}, item, {
+      platformResult,
+      usesRemaining: platformResult === 'accept' ? 1 : 0,
+    })
+  })
 }
 
 function parseScanValue(value) {
@@ -376,7 +392,8 @@ Page({
     membershipInviteVisible: false,
     membershipBusy: false,
     membershipTerms: null,
-    wechatNotificationAuthorizations: [],
+    wechatNotificationPromptOptions: [],
+    wechatOrderSelectionPromptOptions: [],
   },
 
   onLoad() { this.ensureTableRequestGuard() },
@@ -618,7 +635,8 @@ Page({
       getTableOrders().catch(() => null),
       getSharedCart(),
       getMiniBootstrap().catch(() => null),
-      getWechatNotificationAuthorizations().catch(() => ({ available: false, authorizations: [] })),
+      getWechatNotificationPrompt('order_checkout').catch(() => ({ available: false, authorizations: [] })),
+      getWechatNotificationPrompt('order_selection').catch(() => ({ available: false, authorizations: [] })),
       getServiceRequests().catch(() => null),
     ])
     if (request && !this.isCurrentTableRequest(request)) return false
@@ -688,7 +706,7 @@ Page({
       recommendationAttribution,
       performance: results[1].performance,
       performanceError: results[1].error,
-      serviceSummary: serviceSummaryView(results[7], this.data.serviceStaffName),
+      serviceSummary: serviceSummaryView(results[8], this.data.serviceStaffName),
       benefitCount: (results[2] || []).reduce((sum, item) => sum + Number(item.quantityAvailable || 0), 0),
       pendingPayment,
       checkoutLocked: Boolean((() => {
@@ -701,7 +719,8 @@ Page({
       })()),
       membershipTerms: bootstrap && bootstrap.membershipTerms ? bootstrap.membershipTerms : null,
       membershipInviteVisible: false,
-      wechatNotificationAuthorizations: (results[6] && results[6].authorizations) || [],
+      wechatNotificationPromptOptions: (results[6] && results[6].authorizations) || [],
+      wechatOrderSelectionPromptOptions: (results[7] && results[7].authorizations) || [],
     })
     this.updateCart(cart, sharedCart)
     this.applyFilters()
@@ -924,6 +943,12 @@ Page({
       wx.showToast({ title: '这款商品当前暂不可点', icon: 'none' })
       return
     }
+    const tableRequest = this.currentTableRequest()
+    if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
+    // The first concrete order action is the natural place for the benefit
+    // bundle.  It is separate from the later payment-result bundle.
+    await this.offerOrderNotifications('order_selection', tableRequest)
+    if (!this.isCurrentTableRequest(tableRequest)) return
     if (!await this.adjustSharedCart(productId, 1)) return
     // 推荐只影响当前购物车。体验承诺必须在有效订单且付款门禁通过后由服务端建立，
     // 这里不能提前派发服务节点或把“选择推荐”误当作已购买权益。
@@ -1180,6 +1205,10 @@ Page({
       this.setData({ error: '购物车中有暂不可用商品，请先移除后再结账。' })
       return
     }
+    // Request optional notices from this original “确认下单” tap, before the
+    // recommendation request can introduce another asynchronous step.
+    await this.offerOrderNotifications('order_checkout', tableRequest)
+    if (!this.isCurrentTableRequest(tableRequest)) return
     this.setData({ busy: true, error: '', upgradeOffer: null })
     const items = this.data.cart.map((item) => ({ productId: item.productId, quantity: item.quantity }))
     try {
@@ -1212,15 +1241,21 @@ Page({
       // 埋点失败不能阻断顾客按原购物车下单。
       try { await recordCheckoutUpgradeEvent(offer.publicId, 'declined', 'kept_original') } catch {}
     }
-    if (this.isCurrentTableRequest(tableRequest)) await this.submitOrder(null, false, null, tableRequest)
+    if (this.isCurrentTableRequest(tableRequest)) {
+      await this.offerOrderNotifications('order_checkout', tableRequest)
+      if (!this.isCurrentTableRequest(tableRequest)) return
+      await this.submitOrder(null, false, null, tableRequest)
+    }
   },
-  acceptUpgrade() {
+  async acceptUpgrade() {
     const tableRequest = this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
     const offer = this.data.upgradeOffer
     if (!offer) return
     this.setData({ upgradeOffer: null })
-    this.submitOrder(offer.publicId, false, null, tableRequest)
+    await this.offerOrderNotifications('order_checkout', tableRequest)
+    if (!this.isCurrentTableRequest(tableRequest)) return
+    await this.submitOrder(offer.publicId, false, null, tableRequest)
   },
 
   async retryCheckout(request) {
@@ -1234,6 +1269,11 @@ Page({
       this.setData({ checkoutLocked: false })
       return
     }
+    // “重新确认下单” is also a direct customer action.  This covers an order
+    // restored after reopening the mini-program without showing a duplicate
+    // prompt for the same page instance.
+    await this.offerOrderNotifications('order_checkout', tableRequest)
+    if (!this.isCurrentTableRequest(tableRequest)) return
     await this.submitOrder(attempt.offerPublicId || null, false, attempt, tableRequest)
   },
 
@@ -1331,7 +1371,6 @@ Page({
       const pendingPayment = Object.assign({}, this.data.pendingPayment, { statusText: '付款已提交，到账确认中' })
       wx.setStorageSync(PENDING_PAYMENT_KEY, pendingPayment)
       this.setData({ pendingPayment, success: '付款已提交，到账结果可在本桌账单查看。' })
-      this.offerOrderNotifications(tableRequest)
       wx.showToast({ title: '付款已提交', icon: 'none' })
     } catch (error) {
       if (!this.isCurrentTableRequest(tableRequest)) return
@@ -1344,55 +1383,34 @@ Page({
     }
   },
 
-  offerOrderNotifications(request) {
+  async offerOrderNotifications(context, request) {
     if (request && !this.isCurrentTableRequest(request)) return
-    if (this._notificationPromptShown) return
-    this._notificationPromptShown = true
-    // 直接唤起微信原生订阅消息弹窗，由顾客点「允许/取消」。
-    this.ensureBalanceNotificationAuthorizations(request)
+    const promptKey = `${tableSessionCacheScope()}:${context}`
+    if (!this._notificationPromptContexts) this._notificationPromptContexts = new Set()
+    if (this._notificationPromptContexts.has(promptKey)) return
+    this._notificationPromptContexts.add(promptKey)
+    // A customer may opt into one benefit-oriented bundle while choosing, and
+    // a different payment-oriented bundle when committing the order.  Neither
+    // creates a second sheet for the same customer action.
+    await this.ensureBalanceNotificationAuthorizations(context, request)
   },
 
-  async ensureBalanceNotificationAuthorizations(request) {
+  async ensureBalanceNotificationAuthorizations(context, request) {
     const tableRequest = request || this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
-    const options = (this.data.wechatNotificationAuthorizations || []).filter((item) => (
-      ['loyalty_points_credited', 'loyalty_points_reversed'].includes(item.notificationType)
-      && item.usesRemaining <= 0 && item.platformResult !== 'ban'
-    ))
-    if (!options.length || typeof wx.requestSubscribeMessage !== 'function') return
-    try {
-      const result = await new Promise((resolve, reject) => wx.requestSubscribeMessage({
-        tmplIds: Array.from(new Set(options.map((item) => item.templateId))),
-        success: resolve,
-        fail: reject,
-      }))
-      if (!this.isCurrentTableRequest(tableRequest)) return
-      for (const option of options) {
-        const platformResult = result[option.templateId]
-        if (!['accept', 'reject', 'ban'].includes(platformResult)) continue
-        const recorded = await recordWechatNotificationAuthorization({
-          notificationType: option.notificationType,
-          policyId: option.policyId,
-          policyVersion: option.policyVersion,
-          templateId: option.templateId,
-          expectedVersion: option.authorizationVersion,
-          platformResult,
-        })
-        if (!this.isCurrentTableRequest(tableRequest)) return
-        this.setData({
-          wechatNotificationAuthorizations: this.data.wechatNotificationAuthorizations.map((item) => (
-            item.policyId === option.policyId ? Object.assign({}, item, {
-              decision: recorded.decision,
-              authorizationVersion: recorded.authorizationVersion,
-              platformResult,
-              usesRemaining: platformResult === 'accept' ? 1 : 0,
-            }) : item
-          )),
-        })
-      }
-    } catch {
-      // Notification permission is optional and must never block payment.
-    }
+    const options = context === 'order_selection'
+      ? this.data.wechatOrderSelectionPromptOptions
+      : this.data.wechatNotificationPromptOptions
+    const result = await requestWechatSubscription(options || [])
+    if (!this.isCurrentTableRequest(tableRequest) || !result.outcomes.length) return
+    this.setData({
+      wechatNotificationPromptOptions: applyWechatSubscriptionOutcomes(
+        this.data.wechatNotificationPromptOptions, result.outcomes,
+      ),
+      wechatOrderSelectionPromptOptions: applyWechatSubscriptionOutcomes(
+        this.data.wechatOrderSelectionPromptOptions, result.outcomes,
+      ),
+    })
   },
 
   async continuePayment() {
@@ -1401,6 +1419,10 @@ Page({
     const tableRequest = this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)
       || pending.tableScope !== tableSessionCacheScope()) return
+    // A retained order can be paid later.  Ask here, before the retry API,
+    // only if this page instance has not already offered the optional notices.
+    await this.offerOrderNotifications('order_checkout', tableRequest)
+    if (!this.isCurrentTableRequest(tableRequest)) return
     this.setData({ busy: true, error: '' })
     try {
       const retryIdempotencyKey = pending.retryIdempotencyKey || randomId(`guest-payment-${pending.orderPublicId}`)

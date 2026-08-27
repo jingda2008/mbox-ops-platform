@@ -141,6 +141,46 @@ async function recordWechatNotificationAuthorization(input) {
     throw error
   }
 }
+async function getWechatMemberServiceNotificationAuthorizations() {
+  return (await publicRequest('/api/public/mini/wechat-member-service-notification-authorizations')).data
+}
+async function getWechatNotificationPrompt(context) {
+  const value = String(context || '').trim()
+  return (await publicRequest(`/api/public/mini/wechat-notification-prompt?context=${encodeURIComponent(value)}`)).data
+}
+async function recordWechatMemberServiceNotificationAuthorization(input) {
+  const storageKey = `mbox.wechat.member-service-notification.authorization.${input.notificationType}.${input.policyId}`
+  const stored = wx.getStorageSync(storageKey)
+  const samePayload = stored && typeof stored === 'object'
+    && stored.policyId === input.policyId
+    && stored.policyVersion === input.policyVersion
+    && stored.templateId === input.templateId
+    && stored.expectedVersion === input.expectedVersion
+    && stored.platformResult === input.platformResult
+  const attempt = samePayload ? stored : Object.assign({}, input, {
+    platformEventReference: input.platformEventReference || randomId(`wx-member-service-subscribe-${input.notificationType}`),
+    idempotencyKey: randomId(`wechat-member-service-notification-${input.notificationType}`),
+  })
+  wx.setStorageSync(storageKey, attempt)
+  try {
+    const result = (await publicRequest('/api/public/mini/wechat-member-service-notification-authorizations', {
+      method: 'POST', headers: { 'idempotency-key': attempt.idempotencyKey }, data: {
+        notificationType: attempt.notificationType,
+        policyId: attempt.policyId,
+        policyVersion: attempt.policyVersion,
+        templateId: attempt.templateId,
+        expectedVersion: attempt.expectedVersion,
+        platformResult: attempt.platformResult,
+        platformEventReference: attempt.platformEventReference,
+      },
+    })).data
+    wx.removeStorageSync(storageKey)
+    return result
+  } catch (error) {
+    if (error && error.code !== 'NETWORK_ERROR') wx.removeStorageSync(storageKey)
+    throw error
+  }
+}
 async function getProductRestrictions() {
   return (await publicRequest('/api/public/mini/product-restrictions')).data
 }
@@ -725,6 +765,8 @@ module.exports = {
   recordBirthdayBenefitConsent, withdrawBirthdayBenefitConsent,
   getNotificationConsent, recordNotificationConsent,
   getWechatNotificationAuthorizations, recordWechatNotificationAuthorization,
+  getWechatMemberServiceNotificationAuthorizations, recordWechatMemberServiceNotificationAuthorization,
+  getWechatNotificationPrompt,
   getProductRestrictions, withdrawProductRestriction,
   getCustomerPreferenceFacts, declareCustomerPreference, withdrawCustomerPreferenceSource,
   getRedemptionCatalog, getRedemptions, createRedemption, cancelRedemption,

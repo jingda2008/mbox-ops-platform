@@ -135,6 +135,8 @@ import { PostgresTableCustomerLeftTurnoverRepository } from './table-customer-le
 import { WaitlistCommandService } from './waitlist-repository.js'
 import { OfficialWechatPhoneAuthorizationProvider } from './wechat-phone-authorization.js'
 import { wechatLoyaltyNotificationApiPlugin } from './wechat-loyalty-notification-api.js'
+import { wechatMemberServiceNotificationApiPlugin } from './wechat-member-service-notification-api.js'
+import { wechatNotificationPromptApiPlugin } from './wechat-notification-prompt-api.js'
 import { MembershipTermsService } from './membership-terms-service.js'
 import { memberContentCardApiPlugin } from './member-content-card-api.js'
 import { MemberContentCardService } from './member-content-card-service.js'
@@ -1031,6 +1033,37 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       await reservationApp.register(wechatLoyaltyNotificationApiPlugin, {
         transactions,
         commands: commandExecutor,
+        channelConfigured: options.config.wechatIdentity !== null
+          && options.config.wechatNotification !== null,
+        resolvePublicContext: async (request) => {
+          const session = await authenticateReservationGuest(request)
+          const day = await businessClock.current(scope)
+          return {
+            scope,
+            customerId: session.customerId,
+            actorRef: session.actorRef,
+            businessDate: day.businessDate,
+          }
+        },
+      })
+      await reservationApp.register(wechatMemberServiceNotificationApiPlugin, {
+        transactions,
+        commands: commandExecutor,
+        channelConfigured: options.config.wechatIdentity !== null
+          && options.config.wechatNotification !== null,
+        resolvePublicContext: async (request) => {
+          const session = await authenticateReservationGuest(request)
+          const day = await businessClock.current(scope)
+          return {
+            scope,
+            customerId: session.customerId,
+            actorRef: session.actorRef,
+            businessDate: day.businessDate,
+          }
+        },
+      })
+      await reservationApp.register(wechatNotificationPromptApiPlugin, {
+        transactions,
         channelConfigured: options.config.wechatIdentity !== null
           && options.config.wechatNotification !== null,
         resolvePublicContext: async (request) => {

@@ -3,24 +3,19 @@
   <state-panel wx:if="{{loading}}" type="loading" title="正在读取提醒设置" />
   <block wx:else>
     <view wx:if="{{error}}" class="error-banner">{{error}}</view>
-    <view wx:if="{{notice}}" class="success-banner">{{notice}}</view>
-
     <view class="notice-card">
-      <text class="notice-title">可申请的提醒</text>
-      <text class="notice-copy">优惠券发放与到期、订单与积分变动，会在微信服务通知中送达。每次需你确认是否接收。</text>
+      <text class="notice-title">微信会在需要时发起确认</text>
+      <text class="notice-copy">报名、付款或查看优惠券时，微信会展示相应模板。你当场选择即可；不影响报名、点单或会员权益。</text>
     </view>
 
     <view wx:if="{{options.length}}" class="option-list">
-      <view wx:for="{{options}}" wx:key="policyId" class="option-row">
+      <view wx:for="{{options}}" wx:key="policyKey" class="option-row">
         <view>
           <text>{{item.title}}</text>
           <text>{{item.statusText}}</text>
         </view>
-        <button loading="{{busyId === item.policyId}}" disabled="{{busyId}}" data-id="{{item.policyId}}" bindtap="enableOption">{{item.actionText}}</button>
       </view>
     </view>
-    <state-panel wx:else type="empty" title="暂无可申请的提醒" message="门店发布通知策略后，可在这里一键申请。" />
-
-    <button class="secondary-button" bindtap="declineAll">我暂时不接收提醒</button>
+    <state-panel wx:else type="empty" title="暂未配置消息模板" message="门店发布模板后，会在相关操作中由微信自动发起确认。" />
   </block>
 </view>

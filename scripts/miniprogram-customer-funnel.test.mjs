@@ -250,6 +250,7 @@ test('a required paid activity opens WeChat payment as part of one registration 
     },
     cancelActivityRegistration: async () => ({}),
     getMiniBootstrap: async () => ({}),
+    getWechatNotificationPrompt: async () => ({ authorizations: [] }),
     enrollMembership: async () => ({}),
   }
   const require = (path) => {
@@ -260,6 +261,7 @@ test('a required paid activity opens WeChat payment as part of one registration 
     if (path === '../../utils/media') return { publicImageUrl: (value) => value || '' }
     if (path === '../../utils/wechat-phone') return { readWechatPhoneAuthorization: () => ({ code: '' }) }
     if (path === '../../utils/customer-error') return { customerErrorMessage: (_error, fallback) => fallback, isWechatCancellation: () => false }
+    if (path === '../../utils/wechat-subscription') return { requestWechatSubscription: async () => ({ presented: false, outcomes: [] }) }
     throw new Error(`unexpected mini-program dependency: ${path}`)
   }
   const wx = {
@@ -799,14 +801,18 @@ test('customer-only reservations stay executable, performances use the public sc
   assert.match(profileLogic, /restartAnonymousCustomerSession/)
   assert.match(profileView, /访客/)
   assert.match(profileView, /profile-member-card/)
-  assert.doesNotMatch(profileView, /消息提醒/)
+  assert.match(profileView, /消息提醒/)
+  assert.match(profileView, /活动、权益与等级/)
   assert.doesNotMatch(profileView, /我的资料/)
   assert.doesNotMatch(profileView, /了解个人信息处理范围/)
   assert.doesNotMatch(profileView, /personal-entry-section/)
   assert.doesNotMatch(profileView, /bindtap="openPoints">我的积分/)
   assert.doesNotMatch(profileView, /bindtap="openCoupons">我的优惠券/)
   assert.doesNotMatch(profileView, /bindtap="openBalance">我的余额/)
-  assert.doesNotMatch(profileView, /openNotificationSettings/)
+  assert.match(profileView, /openNotificationSettings/)
+  assert.match(profileLogic, /openNotificationSettings\(\)\s*\{[\s\S]*?pages\/profile-notifications\/index/)
+  assert.match(miniApi, /getWechatMemberServiceNotificationAuthorizations/)
+  assert.match(miniApi, /recordWechatMemberServiceNotificationAuthorization/)
   assert.match(contactLogic, /wx\.makePhoneCall/)
   assert.match(contactLogic, /17621392152/)
   assert.match(contactLogic, /openCustomerServiceChat/)
@@ -814,4 +820,62 @@ test('customer-only reservations stay executable, performances use the public sc
   assert.match(contactView, /拨打/)
   assert.match(supportService, /customer\.support\.contact/)
   assert.match(supportApi, /\/staff\/customer-experience\/support-contact/)
+})
+
+test('subscription messages are requested from customer actions, not a settings-page application flow', async () => {
+  const [subscriptionSource, notificationLogic, notificationView, activityLogic, orderLogic, profileLogic] = await Promise.all([
+    read('miniprogram/utils/wechat-subscription.js'),
+    read('miniprogram/pages/profile-notifications/index.js'),
+    read('miniprogram/pages/profile-notifications/index.wxml'),
+    read('miniprogram/pages/community-detail/index.js'),
+    read('miniprogram/pages/order/index.js'),
+    read('miniprogram/pages/profile/index.js'),
+  ])
+  const recorded = []
+  const presented = []
+  const helperModule = { exports: {} }
+  vm.runInNewContext(subscriptionSource, {
+    module: helperModule,
+    require: () => ({
+      recordWechatNotificationAuthorization: async (input) => recorded.push({ kind: 'loyalty', ...input }),
+      recordWechatMemberServiceNotificationAuthorization: async (input) => recorded.push({ kind: 'member_service', ...input }),
+    }),
+    wx: {
+      requestSubscribeMessage: ({ tmplIds, success }) => {
+        presented.push(tmplIds)
+        success(Object.fromEntries(tmplIds.map((templateId) => [templateId, 'accept'])))
+      },
+    },
+    // The immediate successful recordings win the race; no real timer is
+    // needed in this isolated helper contract test.
+    setTimeout: () => 0,
+  })
+  const options = ['activity_registration_confirmed', 'member_benefit_issued', 'loyalty_points_credited', 'membership_tier_changed']
+    .map((notificationType, index) => ({
+      apiKind: index === 2 ? 'loyalty' : 'member_service', notificationType,
+      policyId: `policy-${index}`, policyVersion: 1, templateId: `template-${index}`,
+      authorizationVersion: 0, usesRemaining: 0, platformResult: null,
+    }))
+  const result = await helperModule.exports.requestWechatSubscription(options, options.map((item) => item.notificationType))
+  assert.equal(result.presented, true)
+  assert.equal(presented[0].length, 3)
+  assert.equal(recorded.length, 3)
+  assert.match(subscriptionSource, /MAX_TEMPLATE_IDS_PER_REQUEST = 3/)
+  assert.match(subscriptionSource, /AUTHORIZATION_RECORDING_WAIT_MS = 1500/)
+  assert.doesNotMatch(notificationLogic, /enableOption|requestSubscribeMessage/)
+  assert.doesNotMatch(notificationView, /可申请的提醒|开启提醒/)
+  assert.match(activityLogic, /getWechatNotificationPrompt\('activity_registration'\)/)
+  assert.match(activityLogic, /await this\.offerActivityRegistrationNotifications\(\)[\s\S]{0,700}?choosePayment\(pricing\)/)
+  assert.doesNotMatch(activityLogic, /offerActivityPaymentNotifications/)
+  assert.match(orderLogic, /getWechatNotificationPrompt\('order_checkout'\)/)
+  assert.match(orderLogic, /getWechatNotificationPrompt\('order_selection'\)/)
+  assert.match(orderLogic, /async addProduct\(event\)[\s\S]{0,900}?offerOrderNotifications\('order_selection', tableRequest\)/)
+  assert.match(orderLogic, /async openCheckout\(\)[\s\S]{0,1300}?await this\.offerOrderNotifications\('order_checkout', tableRequest\)[\s\S]{0,700}?prepareCheckoutUpgrade/)
+  assert.match(orderLogic, /applyWechatSubscriptionOutcomes\(\s*this\.data\.wechatNotificationPromptOptions, result\.outcomes,?\s*\)/)
+  assert.match(orderLogic, /applyWechatSubscriptionOutcomes\(\s*this\.data\.wechatOrderSelectionPromptOptions, result\.outcomes,?\s*\)/)
+  const paymentActionStart = orderLogic.indexOf('async handlePaymentAction')
+  const paymentActionEnd = orderLogic.indexOf('async offerOrderNotifications')
+  assert.doesNotMatch(orderLogic.slice(paymentActionStart, paymentActionEnd), /offerOrderNotifications/)
+  assert.match(profileLogic, /getWechatNotificationPrompt\('coupon_open'\)/)
+  assert.match(profileLogic, /async openCoupons\(\)[\s\S]{0,500}?requestWechatSubscription/)
 })

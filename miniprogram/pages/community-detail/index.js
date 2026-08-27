@@ -9,6 +9,7 @@ const {
   queryActivityRegistrationPayment,
   cancelActivityRegistration,
   getMiniBootstrap,
+  getWechatNotificationPrompt,
   enrollMembership,
 } = require('../../utils/api')
 const { ensureCustomerSession } = require('../../utils/auth')
@@ -17,6 +18,7 @@ const { money, dateTime } = require('../../utils/format')
 const { publicImageUrl } = require('../../utils/media')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 const { customerErrorMessage, isWechatCancellation } = require('../../utils/customer-error')
+const { requestWechatSubscription } = require('../../utils/wechat-subscription')
 
 const KIND_NAMES = { member_night: '会员之夜', hike: '城市轻徒步', camping: '露营计划', city_walk: '城市漫游', music_picnic: '音乐野餐', proposal: '特别企划', other: '超嗨活动' }
 const LOCAL_REGISTRATIONS_KEY = 'mbox.community.registrations.v1'
@@ -411,6 +413,7 @@ Page({
     // Keep the next action explicit so the customer can force a fresh wx.login
     // rather than merely being told to re-enter an app that may reuse a cache.
     wechatIdentityRefreshRequired: false,
+    wechatNotificationPromptOptions: [],
   },
 
   onLoad(options) {
@@ -479,7 +482,10 @@ Page({
         })
         return
       }
-      const raw = await getActivity(this.data.id)
+      const [raw, notificationPrompt] = await Promise.all([
+        getActivity(this.data.id),
+        getWechatNotificationPrompt('activity_registration').catch(() => ({ authorizations: [] })),
+      ])
       if (!raw) throw new Error('活动已结束、暂停或不在您的可见范围内')
       let loyaltyBenefits = []
       try {
@@ -515,6 +521,7 @@ Page({
         loading: false, activity, loyaltyBenefits, registration, error: paymentReadError || registrationReadError,
         previewOnly: false,
         membershipInviteVisible: false,
+        wechatNotificationPromptOptions: notificationPrompt.authorizations || [],
         ...activitySelection(activity, this.data.selectedPackagePublicId, this.data.partySize),
       })
     } catch (error) {
@@ -530,7 +537,10 @@ Page({
         })
         return
       }
-      this.setData({ loading: false, error: customerErrorMessage(error, '活动详情暂时无法读取') })
+      this.setData({
+        loading: false, error: customerErrorMessage(error, '活动详情暂时无法读取'),
+        wechatNotificationPromptOptions: [],
+      })
     }
   },
 
@@ -682,6 +692,12 @@ Page({
     })
   },
 
+  async offerActivityRegistrationNotifications() {
+    // The server-side decision engine always places the activity reminder
+    // first, then fills the remaining two eligible template positions.
+    await requestWechatSubscription(this.data.wechatNotificationPromptOptions || [])
+  },
+
   async register() {
     const activity = this.data.activity
     if (!activity || this.data.busy) return
@@ -741,6 +757,9 @@ Page({
       if (!contact) {
         return this.focusRegistrationField('contact', '请重新填写本次活动联系手机号，再核对上次报名结果。')
       }
+      // Keep the native subscription sheet in this direct customer tap.  Do
+      // not wait for the confirmation dialog or a payment/network callback.
+      await this.offerActivityRegistrationNotifications()
       const confirmed = await this.confirmPayment('上次报名结果尚未确认。请确认手机号与上次一致；我们会避免重复报名。')
       if (!confirmed) return
     } else {
@@ -754,6 +773,9 @@ Page({
       if (!activity.safetyPolicyVersion || !activity.refundPolicyVersion) {
         return this.setData({ error: '活动报名说明暂未准备好，本场暂不开放报名。' })
       }
+      // This precedes the payment-choice sheet so it remains a request from
+      // the customer's original registration action, as required by WeChat.
+      await this.offerActivityRegistrationNotifications()
       const payment = await this.choosePayment(pricing)
       if (!payment) return
       const payload = {

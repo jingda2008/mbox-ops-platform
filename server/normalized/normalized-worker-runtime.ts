@@ -31,6 +31,7 @@ import {
   type WechatSubscriptionMessageDelivery,
 } from './wechat-loyalty-notification-worker.js'
 import { ReservationPerformanceNotificationWorker } from './reservation-performance-notification-worker.js'
+import { WechatMemberServiceNotificationWorker } from './wechat-member-service-notification-worker.js'
 import { PromotionalLoyaltyWorker } from './promotional-loyalty-worker.js'
 import { PersonalContactDispositionWorker } from './personal-contact-disposition-worker.js'
 import { ComplimentaryBenefitFulfillmentWorker } from './complimentary-benefit-fulfillment-worker.js'
@@ -77,6 +78,10 @@ export interface NormalizedWorkerRuntimeOptions {
     delivery: WechatSubscriptionMessageDelivery
   }> | null
   reservationPerformanceNotification?: Readonly<{
+    recipients: WechatMiniProgramNotificationRecipientResolver
+    delivery: WechatTemplateMessageDelivery
+  }> | null
+  wechatMemberServiceNotification?: Readonly<{
     recipients: WechatMiniProgramNotificationRecipientResolver
     delivery: WechatTemplateMessageDelivery
   }> | null
@@ -148,6 +153,13 @@ export function createNormalizedWorkerRuntime(
         transactions,
         options.reservationPerformanceNotification.recipients,
         options.reservationPerformanceNotification.delivery,
+      ),
+    }),
+    ...(options.wechatMemberServiceNotification == null ? {} : {
+      wechatMemberServiceNotification: new WechatMemberServiceNotificationWorker(
+        transactions,
+        options.wechatMemberServiceNotification.recipients,
+        options.wechatMemberServiceNotification.delivery,
       ),
     }),
     idempotencyCleanup: new IdempotencyCleanupWorker(transactions),

@@ -91,6 +91,7 @@ async function main(): Promise<void> {
         aiExecutions: runtime.services.ai,
         adapters,
         wechatLoyaltyNotification,
+        wechatMemberServiceNotification: wechatLoyaltyNotification,
         reservationPerformanceNotification: wechatLoyaltyNotification,
         onError: (worker, error) => {
           runtime.app.log.error({ worker, errorCode: safeErrorCode(error) }, 'normalized worker failed')

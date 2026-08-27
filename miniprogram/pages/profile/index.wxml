@@ -104,9 +104,6 @@
         <view class="service-chip" bindtap="openContact" hover-class="service-chip--hover" role="button">
           <view class="service-chip__face"><image class="service-chip__icon service-chip__icon--badge" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" /><view class="service-chip__copy"><text>联系我们</text><text>门店客服</text></view><text class="service-chip__arrow">›</text></view>
         </view>
-        <view wx:if="{{membership}}" class="service-chip" bindtap="openNotificationSettings" hover-class="service-chip--hover" role="button">
-          <view class="service-chip__face"><image class="service-chip__icon" src="/assets/tabbar/profile-active.png" mode="aspectFit" /><view class="service-chip__copy"><text>消息提醒</text><text>活动、权益与等级</text></view><text class="service-chip__arrow">›</text></view>
-        </view>
         <view wx:if="{{membershipTerms}}" class="service-chip" bindtap="openMembershipBenefits" hover-class="service-chip--hover" role="button">
           <view class="service-chip__face"><image class="service-chip__icon service-chip__icon--badge" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" /><view class="service-chip__copy"><text>会员权益</text><text>等级与规则</text></view><text class="service-chip__arrow">›</text></view>
         </view>

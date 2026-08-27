@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-rc.153 - 2026-08-28
+
+- Completes the contextual WeChat subscription-message regression coverage for
+  activity sharing and table-scope payment recovery. Test-only mini-program
+  runtimes now provide the optional notification prompt and subscription
+  utility explicitly, so the checks continue to exercise their original
+  customer flows rather than rejecting a valid new dependency.
+
 ## 1.0.0-rc.152 - 2026-08-28
 
 - Adds a context-aware WeChat subscription-notification decision path for

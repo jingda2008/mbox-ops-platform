@@ -50,6 +50,7 @@ async function loadDetailPage(state) {
     getActivityPreview: async (publicId) => { state.previewCalls.push(publicId); return anonymousPreview() },
     getActivity: async (publicId) => { state.detailCalls.push(publicId); return memberDetail() },
     getActivityLoyaltyBenefits: async () => [], getActivityRegistrations: async () => [],
+    getWechatNotificationPrompt: async () => ({ available: false, authorizations: [] }),
     registerActivity: async () => { throw new Error('not used') }, getActivityRegistrationPayment: async () => null,
     startActivityRegistrationPayment: async () => null, queryActivityRegistrationPayment: async () => null,
     cancelActivityRegistration: async () => null,
@@ -70,6 +71,9 @@ async function loadDetailPage(state) {
         ensureCustomerSession: async (force) => { (state.identityRefreshCalls || (state.identityRefreshCalls = [])).push(force) },
       }
       if (specifier === '../../utils/customer-error') return { customerErrorMessage: (error, fallback) => error?.message || fallback, isWechatCancellation: () => false }
+      if (specifier === '../../utils/wechat-subscription') return {
+        requestWechatSubscription: async () => ({ presented: false, outcomes: [] }),
+      }
       throw new Error(`unexpected require: ${specifier}`)
     },
     Page: (page) => { definition = page },

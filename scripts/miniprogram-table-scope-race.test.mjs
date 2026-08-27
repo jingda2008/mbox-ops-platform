@@ -221,6 +221,7 @@ async function loadOrderPage(state) {
           return state.retryPaymentAction || null
         },
         getTodayPerformances: async () => null, getCustomerBenefits: async () => [], getMiniBootstrap: async () => null,
+        getWechatNotificationPrompt: async () => ({ available: false, authorizations: [] }),
         getWechatNotificationAuthorizations: async () => ({ available: false, authorizations: [] }),
         recordWechatNotificationAuthorization: async () => undefined, createServiceTask: async () => null,
         getServiceRequests: async () => null,
@@ -248,6 +249,9 @@ async function loadOrderPage(state) {
         customerErrorMessage: (error, fallback) => error && error.code === 'GUEST_ORDER_ACCESS_FORBIDDEN'
           ? '这笔订单不属于当前桌位，请重新扫描当前桌面的二维码' : fallback,
         isWechatCancellation: () => false,
+      }
+      if (specifier === '../../utils/wechat-subscription') return {
+        requestWechatSubscription: async () => ({ presented: false, outcomes: [] }),
       }
       throw new Error(`unexpected require: ${specifier}`)
     },

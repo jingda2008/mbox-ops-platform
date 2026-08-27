@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-rc.154 - 2026-08-28
+
+- Aligns the immutable normalized-migration baseline test with schema migration
+  146, so the release suite verifies the complete contiguous migration chain.
+- Removes the generic “消息提醒” entry from the member profile. Subscription
+  notices remain optional and are offered only from related customer actions;
+  customers are not sent to a separate generic notification-application page.
+
 ## 1.0.0-rc.153 - 2026-08-28
 
 - Completes the contextual WeChat subscription-message regression coverage for

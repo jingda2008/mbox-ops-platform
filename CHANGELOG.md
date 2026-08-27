@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0-rc.148 - 2026-08-27
+
+- Corrects the cross-surface regression contract for table observations: it now
+  verifies that the removed table voice-recording entry cannot return, instead
+  of requiring the retired entry to remain present.
+
 ## 1.0.0-rc.147 - 2026-08-27
 
 - Lets an authorized service employee open any active table and see the current

@@ -112,7 +112,7 @@ describe('mini-program mobile business flow contract', () => {
     const customerPages = collectFiles(new URL('miniprogram/pages/', projectRoot).pathname, /\.(js|wxml)$/)
       .map((path) => readFileSync(path, 'utf8')).join('\n')
     expect(customerPages).not.toMatch(/语音记录|开始录音|voice\/transcribe|wx\.getRecorderManager|wx\.startRecord/)
-    expect(read('src/normalized-ui/staff-actions/TableObservationSheet.tsx')).toContain('语音记录')
+    expect(read('src/normalized-ui/staff-actions/TableObservationSheet.tsx')).not.toMatch(/语音记录|开始录音|voice\/transcribe|MediaRecorder|webkitSpeechRecognition/)
   })
 
   it('provides a compact points and growth ledger with distinct business event names', () => {

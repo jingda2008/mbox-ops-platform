@@ -191,7 +191,7 @@ test('waiting_for_table resumes the same trusted QR into the real menu without a
   await expectNoHorizontalOverflow(page, 'waiting_for_table recovery')
 })
 
-test('employee observation voice stays inside the staff table action and customer surfaces have no voice entry', async ({ page }) => {
+test('employee table observation is text-only and customer surfaces have no voice entry', async ({ page }) => {
   const data = await fixture()
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto(data.staffUrl)
@@ -207,11 +207,11 @@ test('employee observation voice stays inside the staff table action and custome
   await page.getByRole('button', { name: '记录桌台情况' }).click()
   const observation = page.getByRole('dialog', { name: 'W01记录桌台情况' })
   await expect(observation).toBeVisible()
-  await expect(observation.getByRole('button', { name: '语音记录' })).toBeVisible()
-  await expect(observation.getByText('点击后才会申请麦克风；原始录音不保存')).toBeVisible()
+  await expect(observation.getByLabel('一句话记录')).toBeVisible()
+  await expect(observation.getByText(/语音记录|麦克风/)).toHaveCount(0)
   await expectTouchTargets(page, '.staff-observation-sheet', 'staff observation')
   await expectNoHorizontalOverflow(page, 'staff observation')
-  await page.screenshot({ path: `${previewDir}/staff-observation-voice-390.png`, fullPage: true, animations: 'disabled' })
+  await page.screenshot({ path: `${previewDir}/staff-observation-text-390.png`, fullPage: true, animations: 'disabled' })
 
   await page.goto('/mini-preview')
   await expect(page.getByText(/语音记录|麦克风/)).toHaveCount(0)

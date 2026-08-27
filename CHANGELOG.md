@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0-rc.149 - 2026-08-27
+
+- Aligns the real browser acceptance path with the approved text-only table
+  observation workflow. It now requires the one-line text record and rejects
+  any table voice-recording or microphone entry.
+
 ## 1.0.0-rc.148 - 2026-08-27
 
 - Corrects the cross-surface regression contract for table observations: it now

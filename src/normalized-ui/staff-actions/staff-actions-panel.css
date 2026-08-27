@@ -375,12 +375,6 @@
 .staff-observation-entry > p { margin: 0 0 12px; color: var(--staff-muted); font-size: 13px; line-height: 1.55; }
 .staff-observation-input { display: grid; gap: 7px; font-weight: 800; }
 .staff-observation-input textarea { width: 100%; min-height: 118px; resize: vertical; padding: 12px; border: 1px solid #aeb7ad; border-radius: 8px; background: #fff; color: var(--staff-ink); font: inherit; line-height: 1.55; }
-.staff-observation-voice { display: grid; grid-template-columns: minmax(132px, auto) minmax(0, 1fr); align-items: center; gap: 9px; margin-top: 8px; }
-.staff-observation-voice button { min-height: 46px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 13px; border: 1px solid #8ea194; border-radius: 7px; background: #fff; color: var(--staff-green); font-weight: 800; }
-.staff-observation-voice button.is-recording { border-color: #aa333c; background: #fff4f4; color: #a12831; }
-.staff-observation-voice button:disabled { cursor: not-allowed; opacity: .58; }
-.staff-observation-voice button svg { width: 18px; height: 18px; }
-.staff-observation-voice span { color: var(--staff-muted); font-size: 11px; line-height: 1.45; }
 .staff-observation-urgent { min-height: 60px; display: flex; margin: 10px 0; padding: 10px; align-items: center; gap: 10px; border: 1px solid #d5c48f; border-radius: 8px; background: #fffaf0; }
 .staff-observation-urgent input { width: 22px; height: 22px; flex: none; accent-color: var(--staff-green); }
 .staff-observation-urgent span { display: grid; gap: 3px; }
@@ -440,6 +434,34 @@
 .staff-observation-revisions p { margin: 4px 0 0; color: var(--staff-muted); line-height: 1.45; overflow-wrap: anywhere; }
 
 .staff-session-actions .is-recommendation { border-color: #b59a51; background: #fffaf0; color: #6a5318; }
+.staff-table-order-status { display: grid; gap: 8px; margin: 10px 0; padding: 10px; border: 1px solid #cbd7cf; border-radius: 8px; background: #f5faf6; }
+.staff-table-order-status > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.staff-table-order-status > header > div { display: flex; min-width: 0; align-items: center; gap: 7px; color: #214c3d; }
+.staff-table-order-status > header span { min-width: 0; display: grid; gap: 1px; }
+.staff-table-order-status > header small { color: #68746c; font-size: 11px; font-weight: 500; }
+.staff-table-order-status > header button { min-height: 36px; padding: 0 9px; display: flex; flex: none; align-items: center; gap: 4px; border-radius: 6px; color: #24624b; background: #fff; font-size: 12px; }
+.staff-table-order-status-summary { display: flex; flex-wrap: wrap; gap: 6px; }
+.staff-table-order-status-summary span { display: inline-flex; min-height: 29px; align-items: center; gap: 4px; padding: 0 8px; border-radius: 999px; color: #71632b; background: #fff8e4; font-size: 12px; font-weight: 800; }
+.staff-table-order-status-summary span.is-delivered { color: #176647; background: #e7f5ed; }
+.staff-table-order-status-summary span.is-attention { color: #98343a; background: #fff0f1; }
+.staff-table-order-status-list { display: grid; gap: 7px; }
+.staff-table-order-status-list > article { display: grid; gap: 1px; overflow: hidden; border: 1px solid #d4ddd6; border-radius: 7px; background: #fff; }
+.staff-table-order-status-list > article > header { min-height: 34px; padding: 0 9px; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #516159; background: #f8faf8; font-size: 12px; }
+.staff-table-order-status-list > article > header small { color: #758078; }
+.staff-table-order-status-item { min-height: 51px; display: grid; grid-template-columns: minmax(0,1fr) auto auto; align-items: center; gap: 7px; padding: 7px 9px; border-top: 1px solid #edf0ed; }
+.staff-table-order-status-item > span { min-width: 0; display: grid; gap: 2px; }
+.staff-table-order-status-item strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.staff-table-order-status-item small { color: #6b756e; font-size: 11px; }
+.staff-table-order-status-item > b { font-size: 13px; }
+.staff-table-order-status-item > em { min-width: 57px; padding: 5px 6px; border-radius: 999px; text-align: center; font-size: 11px; font-style: normal; font-weight: 800; }
+.staff-table-order-status-item > em.is-delivered { color: #176647; background: #e7f5ed; }
+.staff-table-order-status-item > em.is-ready { color: #765b18; background: #fff3d4; }
+.staff-table-order-status-item > em.is-preparing { color: #1f6284; background: #eaf4f8; }
+.staff-table-order-status-item > em.is-pending { color: #71632b; background: #fff8e4; }
+.staff-table-order-status-item > em.is-neutral { color: #647068; background: #edf1ee; }
+.staff-table-order-status-item > em.is-attention { color: #98343a; background: #fff0f1; }
+.staff-table-order-status-loading,.staff-table-order-status-empty,.staff-table-order-status-error { min-height: 52px; margin: 0; display: flex; align-items: center; justify-content: center; gap: 7px; color: #68746c; font-size: 13px; text-align: center; }
+.staff-table-order-status-error { padding: 8px; color: #96333a; border: 1px solid #e0afb2; border-radius: 6px; background: #fff2f3; }
 .staff-recommendation-overlay { position: fixed; inset: 0; z-index: 86; display: flex; align-items: flex-end; justify-content: center; background: rgb(8 13 10 / 72%); }
 .staff-recommendation-sheet { width: min(100%, 620px); max-height: 92dvh; overflow: hidden; border-radius: 18px 18px 0 0; background: #f5f6f2; box-shadow: 0 -12px 34px rgb(0 0 0 / 24%); }
 .staff-recommendation-sheet > header { min-height: 66px; padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; color: #f8f4e8; background: #101712; border-bottom: 3px solid var(--staff-gold); }
@@ -625,8 +647,6 @@
   .staff-order-submit-row { grid-template-columns: minmax(0, .8fr) minmax(180px, 1.2fr); }
   .staff-payment-order-list { grid-template-columns: 1fr; max-height: 154px; }
   .staff-payment-methods { grid-template-columns: 1fr; }
-  .staff-observation-voice { grid-template-columns: 1fr; gap: 5px; }
-  .staff-observation-voice button { width: 100%; }
   .staff-observation-classification { grid-template-columns: 1fr; }
   .staff-observation-sheet { max-height: 96dvh; }
   .staff-observation-body { max-height: calc(96dvh - 68px); padding-inline: 10px; }

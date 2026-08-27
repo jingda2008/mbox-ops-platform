@@ -6,6 +6,7 @@ export type StaffActionPermission =
   | 'table.participation.manage'
   | 'table.assignment.manage'
   | 'guest.cart.freeze'
+  | 'order.view'
   | 'order.create'
   | 'order.gift'
   | 'payment.initiate.staff'
@@ -216,6 +217,31 @@ export interface StaffFulfillmentData {
   }
   generatedAt: string
   workItems: StaffFulfillmentItem[]
+}
+
+/**
+ * Read-only table order progress.  These are deliberately not payment states:
+ * a KDS item that is ready still needs to be delivered to the guest.
+ */
+export type StaffTableOrderItemFulfillmentStatus =
+  | 'delivered'
+  | 'ready_for_delivery'
+  | 'preparing'
+  | 'pending'
+  | 'awaiting_payment'
+  | 'not_required'
+  | 'cancelled'
+  | 'attention'
+
+export interface StaffTableOrderDetail {
+  publicId: string
+  items: Array<{
+    id: string
+    productName: string
+    quantity: number
+    fulfillmentStation: FulfillmentStation | 'none'
+    fulfillmentStatus: StaffTableOrderItemFulfillmentStatus
+  }>
 }
 
 export interface StaffAnnualGiftReservation {

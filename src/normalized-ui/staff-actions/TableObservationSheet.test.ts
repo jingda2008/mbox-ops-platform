@@ -19,13 +19,12 @@ describe('TableObservationSheet mobile interaction contract', () => {
     expect(css).toContain('width: min(100%, 680px)')
   })
 
-  it('offers user-initiated short voice transcription without retaining the original recording', () => {
-    expect(source).toContain("'语音记录'")
-    expect(source).toContain('navigator.mediaDevices.getUserMedia')
-    expect(source).toContain('MAX_OBSERVATION_RECORDING_MS = 20_000')
-    expect(source).toContain("setInputKind('voice_transcript')")
-    expect(source).toContain('原始录音不保存')
-    expect(css).toMatch(/\.staff-observation-voice button \{[^}]*min-height: 46px;/)
-    expect(css).toMatch(/@media \(max-width: 560px\)[\s\S]*\.staff-observation-voice \{ grid-template-columns: 1fr;/)
+  it('keeps table observations text-only without requesting a microphone or transcription', () => {
+    expect(source).toContain('一句话记录')
+    expect(source).not.toContain('navigator.mediaDevices.getUserMedia')
+    expect(source).not.toContain('MediaRecorder')
+    expect(source).not.toContain('transcribeObservationAudio')
+    expect(source).not.toContain('语音记录')
+    expect(css).not.toContain('.staff-observation-voice')
   })
 })

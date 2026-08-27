@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertTriangle, Check, ChevronDown, History, LoaderCircle, MessageSquareText, Mic, Pencil, Square, X } from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
+import { AlertTriangle, Check, ChevronDown, History, LoaderCircle, MessageSquareText, Pencil, X } from 'lucide-react'
 import type {
   ObservationCandidate,
   ObservationDegree,
@@ -18,31 +18,6 @@ type Confirmation = Readonly<{
   degree: ObservationDegree | null
 }>
 
-type ObservationAudioMimeType = 'audio/webm' | 'audio/webm;codecs=opus' | 'audio/ogg' | 'audio/ogg;codecs=opus'
-
-const MAX_OBSERVATION_RECORDING_MS = 20_000
-
-function observationAudioMimeType(): ObservationAudioMimeType | null {
-  if (typeof MediaRecorder === 'undefined') return null
-  const candidates: ObservationAudioMimeType[] = [
-    'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/ogg',
-  ]
-  return candidates.find((mimeType) => MediaRecorder.isTypeSupported(mimeType)) ?? null
-}
-
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onerror = () => reject(new Error('录音读取失败，可以直接输入文字'))
-    reader.onload = () => {
-      const content = typeof reader.result === 'string' ? reader.result.split(',')[1] : ''
-      if (!content) reject(new Error('没有录到声音，请重试或直接输入文字'))
-      else resolve(content)
-    }
-    reader.readAsDataURL(blob)
-  })
-}
-
 export function TableObservationSheet({ api, tableCode, tableSessionId, onClose, onSaved }: {
   api: StaffActionsApiPort
   tableCode: string
@@ -58,22 +33,6 @@ export function TableObservationSheet({ api, tableCode, tableSessionId, onClose,
   const [historyLoading, setHistoryLoading] = useState(true)
   const [error, setError] = useState('')
   const [historyError, setHistoryError] = useState('')
-  const [inputKind, setInputKind] = useState<'text' | 'voice_transcript'>('text')
-  const [voiceState, setVoiceState] = useState<'idle' | 'recording' | 'transcribing'>('idle')
-  const [voiceMessage, setVoiceMessage] = useState('')
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
-  const mediaStreamRef = useRef<MediaStream | null>(null)
-  const recordingTimerRef = useRef<number | null>(null)
-  const recorderMimeType = observationAudioMimeType()
-
-  const stopRecordingResources = useCallback(() => {
-    mediaStreamRef.current?.getTracks().forEach((track) => track.stop())
-    mediaStreamRef.current = null
-    mediaRecorderRef.current = null
-    if (recordingTimerRef.current !== null) window.clearTimeout(recordingTimerRef.current)
-    recordingTimerRef.current = null
-  }, [])
-
   const loadHistory = useCallback(async (signal?: AbortSignal) => {
     setHistoryLoading(true); setHistoryError('')
     try {
@@ -92,83 +51,6 @@ export function TableObservationSheet({ api, tableCode, tableSessionId, onClose,
     return () => controller.abort()
   }, [loadHistory])
 
-  useEffect(() => () => {
-    const recorder = mediaRecorderRef.current
-    if (recorder?.state === 'recording') recorder.stop()
-    stopRecordingResources()
-  }, [stopRecordingResources])
-
-  async function transcribeRecording(blob: Blob, mimeType: ObservationAudioMimeType) {
-    setVoiceState('transcribing'); setVoiceMessage('正在转成文字，请稍等')
-    try {
-      const result = await api.transcribeObservationAudio({
-        audioBase64: await blobToBase64(blob),
-        mimeType,
-        phrases: [tableCode, '剩了一半', '基本没动', '客人说', '太甜', '上得太晚', '需要马上处理'],
-      })
-      const transcript = result.transcript.trim()
-      if (!transcript) throw new Error('这次没有听清，请重试或直接输入文字')
-      setRawContent(transcript)
-      setInputKind('voice_transcript')
-      setDraft(null)
-      setVoiceMessage('已转成文字，请核对后再保存；系统不保存本次原始录音')
-    } catch (cause) {
-      setVoiceMessage(cause instanceof Error ? cause.message : '语音暂时不可用，可以直接输入文字')
-    } finally {
-      setVoiceState('idle')
-    }
-  }
-
-  async function startRecording() {
-    if (voiceState !== 'idle' || recorderMimeType === null
-      || typeof navigator.mediaDevices?.getUserMedia !== 'function') return
-    setVoiceMessage('')
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      })
-      const chunks: BlobPart[] = []
-      const recorder = new MediaRecorder(stream, { mimeType: recorderMimeType })
-      mediaStreamRef.current = stream
-      mediaRecorderRef.current = recorder
-      recorder.ondataavailable = (event) => { if (event.data.size > 0) chunks.push(event.data) }
-      recorder.onerror = () => {
-        stopRecordingResources()
-        setVoiceState('idle')
-        setVoiceMessage('录音启动失败，请检查麦克风权限或直接输入文字')
-      }
-      recorder.onstop = () => {
-        const blob = new Blob(chunks, { type: recorderMimeType })
-        stopRecordingResources()
-        if (blob.size === 0) {
-          setVoiceState('idle')
-          setVoiceMessage('没有录到声音，请重试或直接输入文字')
-          return
-        }
-        void transcribeRecording(blob, recorderMimeType)
-      }
-      recorder.start(250)
-      setVoiceState('recording')
-      setVoiceMessage('正在录音，说完后再点一次；最长20秒')
-      recordingTimerRef.current = window.setTimeout(() => {
-        if (recorder.state === 'recording') recorder.stop()
-      }, MAX_OBSERVATION_RECORDING_MS)
-    } catch (cause) {
-      stopRecordingResources()
-      setVoiceState('idle')
-      const denied = cause instanceof DOMException && ['NotAllowedError', 'SecurityError'].includes(cause.name)
-      setVoiceMessage(denied ? '麦克风没有授权，请在浏览器中允许，或直接输入文字' : '麦克风暂时不可用，可以直接输入文字')
-    }
-  }
-
-  function toggleRecording() {
-    if (voiceState === 'recording') {
-      mediaRecorderRef.current?.stop()
-      return
-    }
-    void startRecording()
-  }
-
   async function parse() {
     if (rawContent.trim().length < 2 || busy !== null) return
     setBusy('parse'); setError('')
@@ -177,7 +59,6 @@ export function TableObservationSheet({ api, tableCode, tableSessionId, onClose,
         tableSessionId,
         rawContent: rawContent.trim(),
         needsImmediateAction,
-        inputKind,
       }))
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '记录暂时无法解析，请稍后重试')
@@ -200,7 +81,7 @@ export function TableObservationSheet({ api, tableCode, tableSessionId, onClose,
         degree: input.degree,
       })
       onSaved(result.serviceTaskId === null ? `${tableCode}桌台情况已记录` : `${tableCode}已记录，并生成现场处理任务`)
-      setRawContent(''); setInputKind('text'); setNeedsImmediateAction(false); setDraft(null)
+      setRawContent(''); setNeedsImmediateAction(false); setDraft(null)
       await loadHistory()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '记录尚未确认，请重试')
@@ -247,16 +128,6 @@ export function TableObservationSheet({ api, tableCode, tableSessionId, onClose,
         <section className="staff-observation-entry" aria-label="新增桌台记录">
           <p>直接写看到的事实、客人原话或你的判断。系统只从本桌真实订单寻找商品，不确定时会保留“不确定”。</p>
           <label className="staff-observation-input"><span>一句话记录</span><textarea autoFocus maxLength={500} value={rawContent} onChange={(event) => { setRawContent(event.target.value); setDraft(null) }} placeholder="例如：客人说红色那杯太甜，薯条剩了一大半，我感觉可能上晚了。" /></label>
-          <div className="staff-observation-voice">
-            <button type="button" className={voiceState === 'recording' ? 'is-recording' : ''}
-              disabled={voiceState === 'transcribing' || recorderMimeType === null}
-              onClick={toggleRecording}>
-              {voiceState === 'transcribing' ? <LoaderCircle className="is-spinning" />
-                : voiceState === 'recording' ? <Square /> : <Mic />}
-              {voiceState === 'transcribing' ? '正在转文字' : voiceState === 'recording' ? '停止并转文字' : '语音记录'}
-            </button>
-            <span>{recorderMimeType === null ? '此设备不支持网页录音，请直接输入文字' : voiceMessage || '点击后才会申请麦克风；原始录音不保存'}</span>
-          </div>
           <label className="staff-observation-urgent"><input type="checkbox" checked={needsImmediateAction} onChange={(event) => { setNeedsImmediateAction(event.target.checked); setDraft(null) }} /><span><strong>需要马上处理</strong><small>确认后同时生成现场服务任务；退款、赠送、换酒仍需有权限人员审批。</small></span></label>
           {error !== '' && <div className="staff-observation-error" role="alert"><AlertTriangle size={17} />{error}</div>}
           {draft === null ? <button type="button" className="staff-observation-primary" disabled={rawContent.trim().length < 2 || busy !== null} onClick={() => void parse()}>{busy === 'parse' ? <LoaderCircle className="is-spinning" /> : <MessageSquareText />}识别并核对</button> : <ObservationReview draft={draft} busy={busy !== null} onConfirm={(input) => void confirm(input)} onRevise={() => setDraft(null)} />}

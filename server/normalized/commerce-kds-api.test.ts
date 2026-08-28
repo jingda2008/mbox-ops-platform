@@ -256,11 +256,16 @@ function fixture(input: {
       return rows([]) as PostgresQueryResult<Row>
     },
   }
+  const staffAccessRunOptions: Array<{ readOnly?: boolean } | undefined> = []
   const staffAccessTransactions = {
     run: async <Result>(
       _scope: Readonly<{ tenantId: string; storeId: string }>,
       operation: (transaction: ScopedTransaction) => Promise<Result>,
-    ) => operation(staffTransaction),
+      transactionOptions?: { readOnly?: boolean },
+    ) => {
+      staffAccessRunOptions.push(transactionOptions)
+      return operation(staffTransaction)
+    },
   } as CommerceKdsApiOptions['staffAccessTransactions']
 
   const currentTask = { ...baseTask, status: input.kdsStatus ?? baseTask.status }
@@ -436,6 +441,7 @@ function fixture(input: {
     kdsRepository,
     orderRepository,
     staffQueries,
+    staffAccessRunOptions,
     commandQueries,
     executions,
   }
@@ -517,6 +523,7 @@ describe('commerceKdsApiPlugin', () => {
       unresolvedOnlinePaymentId: paymentId,
     }] })
     expect(value.staffQueries.some((sql) => sql.includes('pending.unresolved_online_payment_id'))).toBe(true)
+    expect(value.staffAccessRunOptions).toEqual([{ readOnly: true }, { readOnly: true }])
   })
 
   it('keeps the table payment order list hidden from staff without any collection capability', async () => {
@@ -577,6 +584,7 @@ describe('commerceKdsApiPlugin', () => {
     expect(detailQuery).toContain("WHEN 'ready' THEN 0")
     expect(detailQuery).not.toContain('total_amount_minor')
     expect(detailQuery).not.toContain('mbox.payments')
+    expect(value.staffAccessRunOptions).toEqual([{ readOnly: true }, { readOnly: true }])
   })
 
   it('returns a clear 403 rather than a 500 when a table order detail read loses its active-table scope', async () => {

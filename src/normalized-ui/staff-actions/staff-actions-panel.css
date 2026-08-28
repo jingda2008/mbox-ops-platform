@@ -461,7 +461,9 @@
 .staff-table-order-status-item > em.is-neutral { color: #647068; background: #edf1ee; }
 .staff-table-order-status-item > em.is-attention { color: #98343a; background: #fff0f1; }
 .staff-table-order-status-loading,.staff-table-order-status-empty,.staff-table-order-status-error { min-height: 52px; margin: 0; display: flex; align-items: center; justify-content: center; gap: 7px; color: #68746c; font-size: 13px; text-align: center; }
-.staff-table-order-status-error { padding: 8px; color: #96333a; border: 1px solid #e0afb2; border-radius: 6px; background: #fff2f3; }
+.staff-table-order-status-error { justify-content: flex-start; padding: 8px; color: #96333a; border: 1px solid #e0afb2; border-radius: 6px; background: #fff2f3; }
+.staff-table-order-status-error > span { min-width: 0; flex: 1; text-align: left; }
+.staff-table-order-status-error > button { flex: none; min-height: 30px; padding: 0 8px; border: 1px solid #c77f85; border-radius: 5px; background: #fff; color: #8e3038; font-size: 12px; font-weight: 800; }
 .staff-recommendation-overlay { position: fixed; inset: 0; z-index: 86; display: flex; align-items: flex-end; justify-content: center; background: rgb(8 13 10 / 72%); }
 .staff-recommendation-sheet { width: min(100%, 620px); max-height: 92dvh; overflow: hidden; border-radius: 18px 18px 0 0; background: #f5f6f2; box-shadow: 0 -12px 34px rgb(0 0 0 / 24%); }
 .staff-recommendation-sheet > header { min-height: 66px; padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; color: #f8f4e8; background: #101712; border-bottom: 3px solid var(--staff-gold); }

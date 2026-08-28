@@ -57,7 +57,7 @@ describe('StaffActionsApi', () => {
       code: 'INTERNAL_ERROR',
       status: 500,
       referenceId: 'req-order-17',
-      message: '服务暂时不可用，请稍后重试（编号：req-order-17）',
+      message: '服务暂时不可用，请稍后重试',
     })
   })
 

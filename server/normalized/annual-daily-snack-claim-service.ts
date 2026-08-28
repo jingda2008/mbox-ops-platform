@@ -4,7 +4,7 @@ import { BenefitRepository } from './benefit-repository.js'
 import { CustomerRepository } from './customer-repository.js'
 import { lockBoundGuestTablePosition } from './guest-table-authority.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction, StoreScope } from './transaction-runner.js'
-import { assertEmployeeTableSessionAccess } from './employee-table-access.js'
+import { assertEmployeeTableSessionReadAccess } from './employee-table-access.js'
 
 export interface AnnualDailySnackGuestContext {
   scope: Readonly<StoreScope>
@@ -277,7 +277,7 @@ export class AnnualDailySnackClaimService {
       if (!claim || claim.benefit_id === null || claim.benefit_reservation_id === null) {
         throw failure('该每日点心暂留不存在、已过期或已处理', 'DAILY_SNACK_CLAIM_UNAVAILABLE')
       }
-      await assertEmployeeTableSessionAccess(transaction, {
+      await assertEmployeeTableSessionReadAccess(transaction, {
         employeeId: context.employeeId, tableSessionId: claim.table_session_id,
       })
       return { claim: mapClaim(claim)!, customerId: claim.customer_id, tableSessionId: claim.table_session_id }
@@ -305,7 +305,7 @@ export class AnnualDailySnackClaimService {
       if (!claim || claim.benefit_id === null || claim.benefit_reservation_id === null) {
         throw failure('该每日点心暂留不存在或已处理', 'DAILY_SNACK_CLAIM_UNAVAILABLE')
       }
-      await assertEmployeeTableSessionAccess(transaction, {
+      await assertEmployeeTableSessionReadAccess(transaction, {
         employeeId: context.employeeId, tableSessionId: claim.table_session_id,
       })
       return { claim: mapClaim(claim)!, customerId: claim.customer_id, tableSessionId: claim.table_session_id }

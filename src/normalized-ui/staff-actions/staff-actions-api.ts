@@ -999,7 +999,7 @@ async function apiError(response: Response): Promise<StaffActionsApiError> {
       : null
     const message = typeof body.error.message === 'string' ? body.error.message : '操作未完成'
     return new StaffActionsApiError(
-      referenceId === null ? message : `${message}（编号：${referenceId}）`,
+      message,
       typeof body.error.code === 'string' ? body.error.code : 'HTTP_ERROR',
       response.status,
       false,

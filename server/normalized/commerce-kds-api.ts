@@ -64,7 +64,7 @@ import {
   StaffNotFoundError,
 } from './staff-access-repository.js'
 import {
-  assertEmployeeTableSessionAccess,
+  assertEmployeeTableSessionReadAccess,
   EmployeeTableAccessDeniedError,
 } from './employee-table-access.js'
 import { StaffSessionNotFoundError } from './staff-session-repository.js'
@@ -470,14 +470,14 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
       'tableSessionId',
     )
     const data = await options.staffAccessTransactions.run(context.scope, async (transaction) => {
-      await assertEmployeeTableSessionAccess(transaction, {
+      await assertEmployeeTableSessionReadAccess(transaction, {
         employeeId: context.employeeId,
         tableSessionId,
         includeTableViewAll: false,
         allTablePermissionCodes: ['payment.collect.all_tables'],
       })
       return listTablePaymentOrdersForSession(transaction, tableSessionId)
-    })
+    }, { readOnly: true })
     return reply.send({ data })
   }))
 
@@ -493,7 +493,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
       'tableSessionId',
     )
     const data = await options.staffAccessTransactions.run(context.scope, async (transaction) => {
-      await assertEmployeeTableSessionAccess(transaction, {
+      await assertEmployeeTableSessionReadAccess(transaction, {
         employeeId: context.employeeId,
         tableSessionId,
         includeTableViewAll: false,

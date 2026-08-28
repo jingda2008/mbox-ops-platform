@@ -51,6 +51,7 @@ describe('StaffActionsPanel', () => {
 
     expect(source).toContain("hasPermission(permissions, 'service.execute')")
     expect(source).toContain('<TableOrderStatusPanel')
+    expect(source).toContain("!selectedTable.activeSession.id.startsWith('optimistic-')")
     expect(source).toContain('{props.orderStatusPanel}')
     expect(css).toMatch(/\.staff-table-order-status-item \{[^}]*grid-template-columns:\s*minmax\(0,1fr\) auto auto/)
   })

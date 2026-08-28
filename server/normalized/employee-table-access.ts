@@ -8,6 +8,15 @@ interface EmployeeTableAccessRow extends Record<string, unknown> {
   permissions_allowed: boolean
 }
 
+export interface EmployeeTableSessionAccessInput {
+  employeeId: string
+  tableSessionId: string
+  allTablePermissionCodes?: readonly string[]
+  includeTableViewAll?: boolean
+  requiredPermissionCodes?: readonly string[]
+  lockTableSession?: boolean
+}
+
 export class EmployeeTableAccessDeniedError extends Error {
   constructor(message = '当前员工不是该桌负责人，无权操作此桌') {
     super(message)
@@ -41,14 +50,31 @@ export async function assertEmployeeEffectivePermission(
  */
 export async function assertEmployeeTableSessionAccess(
   transaction: ScopedTransaction,
-  input: Readonly<{
-    employeeId: string
-    tableSessionId: string
-    allTablePermissionCodes?: readonly string[]
-    includeTableViewAll?: boolean
-    requiredPermissionCodes?: readonly string[]
-    lockTableSession?: boolean
-  }>,
+  input: Readonly<EmployeeTableSessionAccessInput>,
+): Promise<void> {
+  await assertEmployeeTableSessionAccessWithLock(transaction, input,
+    input.lockTableSession === true
+      ? 'FOR SHARE OF employee FOR UPDATE OF session'
+      : 'FOR SHARE OF employee,session')
+}
+
+/**
+ * Table-scope check for a view endpoint that deliberately runs in a PostgreSQL
+ * READ ONLY transaction.  Command handlers must keep using
+ * assertEmployeeTableSessionAccess so their employee/session locks remain in
+ * place across the mutation.
+ */
+export async function assertEmployeeTableSessionReadAccess(
+  transaction: ScopedTransaction,
+  input: Readonly<Omit<EmployeeTableSessionAccessInput, 'lockTableSession'>>,
+): Promise<void> {
+  await assertEmployeeTableSessionAccessWithLock(transaction, input, '')
+}
+
+async function assertEmployeeTableSessionAccessWithLock(
+  transaction: ScopedTransaction,
+  input: Readonly<Omit<EmployeeTableSessionAccessInput, 'lockTableSession'>>,
+  lockClause: string,
 ): Promise<void> {
   const allTablePermissionCodes = Array.from(new Set([
     ...(input.includeTableViewAll === false ? [] : ['table.view_all']),
@@ -89,9 +115,7 @@ export async function assertEmployeeTableSessionAccess(
      AND session.id=$4::uuid
     WHERE employee.tenant_id=$1::uuid AND employee.store_id=$2::uuid
       AND employee.id=$3::uuid
-    ${input.lockTableSession === true
-      ? 'FOR SHARE OF employee FOR UPDATE OF session'
-      : 'FOR SHARE OF employee,session'}
+    ${lockClause}
   `, [
     transaction.scope.tenantId,
     transaction.scope.storeId,

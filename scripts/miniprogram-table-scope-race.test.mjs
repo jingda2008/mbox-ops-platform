@@ -210,8 +210,7 @@ async function loadOrderPage(state) {
           }, warning: '' }
         },
         getMenu: async () => [], getPublicMenu: async () => [], recommendExperience: async () => ({ recommendations: [] }),
-        recordRecommendationEvent: async () => undefined, prepareCheckoutUpgrade: async () => null,
-        recordCheckoutUpgradeEvent: async () => undefined, checkoutSharedCart: async () => null,
+        recordRecommendationEvent: async () => undefined, checkoutSharedCart: async () => null,
         getSharedCart: async () => ({ lines: [], version: 0, generation: 0 }),
         adjustSharedCart: async () => null, removeSharedCartLine: async () => null, clearSharedCart: async () => null,
         getTableOrders: async () => { throw new Error('weak network') },
@@ -617,4 +616,36 @@ test('Account also drops the pending record when the guest table session has exp
   assert.equal(page.data.busyOrderId, '')
   assert.match(page.data.error, /重新扫描当前桌面/)
   assert.doesNotMatch(String(state.storage.get(PENDING_PAYMENT_KEY) || ''), new RegExp(paymentScope))
+})
+
+test('guest cart opens a review sheet before it creates an order or starts payment', async () => {
+  const state = {
+    session: { tableCode: 'A01', tableToken: 'token-a', cartScope: 'cart-scope-for-turn-a-000000001' },
+    storage: new Map(),
+  }
+  const { page } = await loadOrderPage(state)
+  const request = { scope: scope(state.session), generation: 1 }
+  let noticeCalls = 0
+  let submitCalls = 0
+  page.currentTableRequest = () => request
+  page.isCurrentTableRequest = (value) => value === request
+  page.offerOrderNotifications = async () => { noticeCalls += 1 }
+  page.submitOrder = async () => { submitCalls += 1 }
+  page.setData({
+    cart: [{ productId: 'product-001', name: '测试酒水', quantity: 2, available: true }],
+    busy: false, pendingPayment: null, checkoutLocked: false, cartWritesFrozen: false,
+    checkoutConfirmVisible: false,
+  })
+
+  await page.openCheckout()
+
+  assert.equal(page.data.checkoutConfirmVisible, true)
+  assert.equal(noticeCalls, 0)
+  assert.equal(submitCalls, 0)
+
+  await page.confirmCheckout()
+
+  assert.equal(page.data.checkoutConfirmVisible, false)
+  assert.equal(noticeCalls, 1)
+  assert.equal(submitCalls, 1)
 })

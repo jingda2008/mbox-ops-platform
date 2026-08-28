@@ -2,11 +2,14 @@ const { getReservationPerformances } = require('../../utils/api')
 const { dateTime } = require('../../utils/format')
 const { customerErrorMessage } = require('../../utils/customer-error')
 
+const DAYS_PER_PAGE = 5
+const SWIPE_THRESHOLD = 48
+const WEEKDAY_LABELS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+
 function shanghaiDate(offsetDays) {
   return new Date(Date.now() + (offsetDays || 0) * 86400000 + 8 * 60 * 60 * 1000).toISOString().slice(0, 10)
 }
 function monthText(date) { return `${date.slice(0, 4)}年${Number(date.slice(5, 7))}月` }
-function dayTargetId(date) { return `calendar-day-${date}` }
 function selectedDateForMonth(value, previousDate) {
   const month = String(value || '').trim().slice(0, 7)
   if (!/^\d{4}-\d{2}$/.test(month)) return previousDate
@@ -18,27 +21,44 @@ function selectedDateForMonth(value, previousDate) {
   const lastDay = new Date(year, monthNumber, 0).getDate()
   return `${month}-${String(Math.min(previousDay, lastDay)).padStart(2, '0')}`
 }
-function monthDays(date) {
+function dateAt(date, offsetDays) {
   const year = Number(date.slice(0, 4))
   const month = Number(date.slice(5, 7))
-  const total = new Date(year, month, 0).getDate()
+  const day = Number(date.slice(8, 10))
+  return new Date(Date.UTC(year, month - 1, day + offsetDays)).toISOString().slice(0, 10)
+}
+
+function weekdayText(date) {
+  const year = Number(date.slice(0, 4))
+  const month = Number(date.slice(5, 7))
+  const day = Number(date.slice(8, 10))
+  return WEEKDAY_LABELS[new Date(Date.UTC(year, month - 1, day)).getUTCDay()]
+}
+
+function calendarData(selectedDate, windowStartDate) {
   const today = shanghaiDate(0)
-  return Array.from({ length: total }, (_, index) => {
-    const day = String(index + 1).padStart(2, '0')
-    const value = `${date.slice(0, 7)}-${day}`
-    return {
-      value,
-      label: `${index + 1}`,
-      isToday: value === today,
-      isSelected: false,
-    }
-  })
+  const start = windowStartDate < today ? today : windowStartDate
+  return {
+    days: Array.from({ length: DAYS_PER_PAGE }, (_, index) => {
+      const value = dateAt(start, index)
+      return {
+        value,
+        day: String(Number(value.slice(8, 10))),
+        weekday: weekdayText(value),
+        marker: value === today ? '今天' : value.slice(8, 10) === '01' ? `${Number(value.slice(5, 7))}月` : '',
+        isToday: value === today,
+        isSelected: value === selectedDate,
+      }
+    }),
+    calendarStartDate: start,
+    canShowPrevious: start > today,
+  }
 }
 
 Page({
   data: {
     loading: true, error: '', selectedDate: '', monthValue: '', minimumMonth: '', title: '',
-    schedules: [], phase: '', days: [], calendarScrollTarget: '',
+    schedules: [], phase: '', days: [], calendarStartDate: '', canShowPrevious: false,
   },
   onLoad() {
     const date = shanghaiDate(0)
@@ -47,8 +67,7 @@ Page({
       monthValue: date.slice(0, 7),
       minimumMonth: date.slice(0, 7),
       title: monthText(date),
-      days: monthDays(date).map((item) => Object.assign({}, item, { isSelected: item.value === date })),
-      calendarScrollTarget: dayTargetId(date),
+      ...calendarData(date, date),
     })
     this.load()
   },
@@ -58,27 +77,59 @@ Page({
       selectedDate,
       monthValue: selectedDate.slice(0, 7),
       title: monthText(selectedDate),
-      days: monthDays(selectedDate).map((item) => Object.assign({}, item, { isSelected: item.value === selectedDate })),
-      calendarScrollTarget: dayTargetId(selectedDate),
+      ...calendarData(selectedDate, selectedDate),
     })
     this.load()
   },
   selectDay(event) {
     const selectedDate = event.currentTarget.dataset.date
-    if (!selectedDate) return
+    if (!selectedDate || selectedDate < shanghaiDate(0)) return
     this.setData({
       selectedDate,
       title: monthText(selectedDate),
-      days: this.data.days.map((item) => Object.assign({}, item, { isSelected: item.value === selectedDate })),
-      calendarScrollTarget: dayTargetId(selectedDate),
+      ...calendarData(selectedDate, this.data.calendarStartDate),
     })
     this.load()
   },
+  changeDayPage(event) {
+    const direction = Number(event.currentTarget.dataset.direction)
+    if (!direction) return
+    const start = this.data.calendarStartDate || this.data.selectedDate
+    const today = shanghaiDate(0)
+    const shifted = dateAt(start, direction * DAYS_PER_PAGE)
+    const nextStart = shifted < today ? today : shifted
+    if (nextStart === start) return
+    this.setData({
+      selectedDate: nextStart,
+      monthValue: nextStart.slice(0, 7),
+      title: monthText(nextStart),
+      ...calendarData(nextStart, nextStart),
+    })
+    this.load()
+  },
+  onCalendarTouchStart(event) {
+    const touch = event.touches && event.touches[0]
+    if (!touch) return
+    this.calendarTouchStart = { x: touch.pageX, y: touch.pageY }
+  },
+  onCalendarTouchEnd(event) {
+    const touch = event.changedTouches && event.changedTouches[0]
+    const start = this.calendarTouchStart
+    this.calendarTouchStart = null
+    if (!touch || !start) return
+    const deltaX = touch.pageX - start.x
+    const deltaY = touch.pageY - start.y
+    if (Math.abs(deltaX) < SWIPE_THRESHOLD || Math.abs(deltaX) <= Math.abs(deltaY)) return
+    this.changeDayPage({ currentTarget: { dataset: { direction: deltaX < 0 ? 1 : -1 } } })
+  },
   async load() {
     const date = this.data.selectedDate
+    const requestId = (this.performanceRequestId || 0) + 1
+    this.performanceRequestId = requestId
     this.setData({ loading: true, error: '' })
     try {
       const data = await getReservationPerformances(date)
+      if (requestId !== this.performanceRequestId || date !== this.data.selectedDate) return
       const schedules = (data.schedules || []).filter((item) => item.status !== 'cancelled').map((item) => ({
         id: item.id,
         performer: item.performerStageName,
@@ -89,6 +140,7 @@ Page({
       }))
       this.setData({ loading: false, schedules, phase: data.phase || '' })
     } catch (error) {
+      if (requestId !== this.performanceRequestId || date !== this.data.selectedDate) return
       this.setData({ loading: false, schedules: [], error: customerErrorMessage(error, '演出安排暂时无法读取') })
     }
   },

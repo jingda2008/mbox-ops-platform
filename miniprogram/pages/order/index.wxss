@@ -440,7 +440,7 @@
   background: #fff;
 }
 .recommend-card--priority { border-color: #c8a56e; box-shadow: 0 10rpx 28rpx rgba(137, 98, 48, .12); }
-.recommend-card > image {
+.recommend-card__image {
   width: 100%;
   height: 108rpx;
   background: #29251f;
@@ -994,6 +994,30 @@
 .checkout-guard__actions { display: grid; margin-top: 24rpx; grid-template-columns: 1fr 1fr; gap: 12rpx; }
 .checkout-guard__actions button { min-width: 0; min-height: 88rpx; margin: 0; border: 1rpx solid #315d46; border-radius: 44rpx; background: #315d46; color: #fff; font-size: 22rpx; line-height: 86rpx; }
 .checkout-guard__actions button:last-child { border-color: #c9b895; background: #fffaf2; color: #655036; }
+.cart-overview{grid-template-columns:54rpx minmax(0,1fr);cursor:default}.cart-overview__mark{position:relative}.cart-overview__mark-icon{font-size:20rpx!important;font-weight:750}.cart-overview__badge{position:absolute;top:-8rpx;right:-8rpx;display:flex!important;min-width:28rpx;height:28rpx;margin:0!important;padding:0 5rpx;align-items:center;justify-content:center;border:2rpx solid #fffcf7;border-radius:16rpx;background:#9a3f3f;color:#fff!important;font-size:15rpx!important;font-weight:750;line-height:28rpx}.cart-overview__copy{min-width:0}.cart-overview__copy>text{display:block}.cart-overview__copy>text:first-child{overflow:hidden;color:#29251f;font-size:27rpx;font-weight:750;text-overflow:ellipsis;white-space:nowrap}.cart-overview__copy>text:last-child{margin-top:5rpx;color:#8a8279;font-size:17rpx}.checkout-confirm{z-index:54}.checkout-confirm__sheet{width:100%;max-height:86vh;padding:18rpx 26rpx calc(26rpx + env(safe-area-inset-bottom));border-radius:28rpx 28rpx 0 0;background:#fffcf7;box-shadow:0 18rpx 56rpx rgba(22,18,14,.22)}.checkout-confirm__head{display:flex;min-height:84rpx;align-items:center;justify-content:space-between;gap:16rpx}.checkout-confirm__eyebrow,.checkout-confirm__title{display:block}.checkout-confirm__eyebrow{color:#8f6b40;font-size:18rpx;font-weight:700;letter-spacing:2rpx}.checkout-confirm__title{margin-top:5rpx;color:#2e2924;font-family:"Songti SC","STSong",serif;font-size:34rpx;font-weight:650}.checkout-confirm__close{width:auto;min-width:128rpx;min-height:64rpx;margin:0;padding:0 14rpx;border:1rpx solid #d6cec4;border-radius:32rpx;background:#fff;color:#62594f;font-size:19rpx;line-height:62rpx}.checkout-confirm__lines{max-height:42vh;margin-top:16rpx;border-top:1rpx solid #ebe4db;border-bottom:1rpx solid #ebe4db}.checkout-confirm__line{display:grid;min-height:106rpx;padding:14rpx 0;align-items:center;border-top:1rpx solid #eee8e0;grid-template-columns:minmax(0,1fr) auto;gap:12rpx}.checkout-confirm__line:first-child{border-top:0}.checkout-confirm__copy{min-width:0}.checkout-confirm__copy>text{display:block}.checkout-confirm__copy>text:first-child{overflow:hidden;color:#342f2a;font-size:23rpx;font-weight:650;text-overflow:ellipsis;white-space:nowrap}.checkout-confirm__copy>text:nth-child(2){margin-top:5rpx;color:#827a71;font-size:18rpx}.checkout-confirm__actions{display:flex;align-items:center;gap:6rpx;color:#3c352e;font-size:20rpx;font-weight:650}.checkout-confirm__actions button{width:60rpx;height:60rpx;margin:0;padding:0;border:0;border-radius:30rpx;background:#eee9e2;color:#332f29;font-size:27rpx;line-height:60rpx}.checkout-confirm__actions .checkout-confirm__remove{width:auto;min-width:68rpx;padding:0 8rpx;background:transparent;color:#8a7163;font-size:18rpx}.checkout-confirm__total{display:flex;margin-top:18rpx;padding:18rpx 2rpx;align-items:center;justify-content:space-between}.checkout-confirm__total view text{display:block}.checkout-confirm__total view text:first-child{color:#3b342e;font-size:23rpx;font-weight:700}.checkout-confirm__total view text:last-child{margin-top:5rpx;color:#83796e;font-size:18rpx}.checkout-confirm__total>text{color:#26211d;font-size:38rpx;font-weight:750}.checkout-confirm__footer{display:grid;grid-template-columns:1fr 1.25fr;gap:12rpx}.checkout-confirm__footer button{min-width:0;min-height:88rpx;margin:0;border-radius:44rpx;font-size:22rpx;line-height:86rpx}.checkout-confirm__footer .secondary-button{border-color:#d1c8be;background:#fff;color:#62594f}
+.table-strip__content { align-items: center; grid-template-columns: minmax(0, 1fr) 174rpx; }
+.table-strip__service { min-height: 88rpx; padding: 8rpx 0 8rpx 14rpx; align-items: flex-start; justify-content: center; flex-direction: column; border-top: 0; border-right: 0; border-bottom: 0; border-left: 1rpx solid #eee8df; }
+.table-strip__service-value { width: 100%; font-size: 19rpx; font-weight: 650; }
+.table-strip__service-link { margin-top: 5rpx; margin-left: 0; padding-left: 0; font-size: 17rpx; }
+.show-brief { min-height: 88rpx; padding-right: 12rpx; align-items: center; border-top: 0; }
+.show-brief--retry { min-height: 88rpx; padding-top: 0; }
+.show-brief--quiet text:first-child { background: #f1eee8; color: #766f67; }
+.show-brief--quiet text:last-child { color: #8b847c; }
+.quick-service { margin-top: 6rpx; gap: 8rpx; }
+.quick-service__surface { min-height: 62rpx; padding: 0 8rpx; border-color: #c9d6ce; border-radius: 31rpx; background: #f2f7f4; gap: 6rpx; }
+.recommend-labels { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 10rpx; }
+.recommend-tier { min-width: 0; overflow: hidden; flex: 1; font-size: 19rpx; text-overflow: ellipsis; white-space: nowrap; }
+.recommend-fit { padding: 5rpx 10rpx; flex: 0 0 auto; border-radius: 999rpx; background: #e8f1ec; color: #315d46; font-size: 17rpx; font-weight: 650; white-space: nowrap; }
+.recommend-card { width: 520rpx; min-height: 390rpx; border-color: #ded6ca; border-radius: 20rpx; background: #fffcf7; box-shadow: 0 8rpx 22rpx rgba(42, 34, 26, .045); }
+.recommend-card--priority { border-color: #c6a164; box-shadow: 0 10rpx 28rpx rgba(137, 98, 48, .13); }
+.recommend-card__image { height: 184rpx; }
+.recommend-body { min-height: 206rpx; padding: 16rpx 18rpx 18rpx; }
+.recommend-name { margin-top: 7rpx; font-size: 29rpx; }
+.recommend-reason { font-size: 19rpx; line-height: 1.45; }
+.recommend-value { display: flex; margin-top: 8rpx; align-items: center; font-size: 18rpx; gap: 12rpx; }
+.recommend-foot button { min-width: 104rpx; min-height: 76rpx; border-radius: 38rpx; }
+.recommend-foot .recommend-select { min-width: 122rpx; }
+@media (max-width: 390px) { .recommend-card { width: 500rpx; } }
 .membership-invite {
   display: grid;
   margin-top: 18rpx;

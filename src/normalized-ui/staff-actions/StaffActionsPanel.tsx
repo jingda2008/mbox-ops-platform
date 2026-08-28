@@ -863,6 +863,7 @@ export function StaffActionsPanel({
               onParticipantMovement={() => setParticipantMovementOpen(true)}
               onGuestCartFreeze={() => void setGuestCartFreeze()}
               orderStatusPanel={selectedTable.activeSession !== null
+                && !selectedTable.activeSession.id.startsWith('optimistic-')
                 && (hasPermission(permissions, 'service.execute') || hasPermission(permissions, 'order.view'))
                 ? <TableOrderStatusPanel api={api} table={{ code: selectedTable.code, activeSession: selectedTable.activeSession }} />
                 : null}

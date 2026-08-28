@@ -125,3 +125,10 @@
   color: #8a4030;
   font-size: 21rpx;
 }
+@media (max-width: 360px) {
+  .terms-page { padding: 20rpx 18rpx 330rpx; }
+  .terms-head, .terms-content { padding: 22rpx; }
+  .terms-title { font-size: 32rpx; }
+  .terms-dock { padding-right: 18rpx; padding-left: 18rpx; }
+  .accept-button { min-height: 44px; line-height: 44px; }
+}

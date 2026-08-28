@@ -96,7 +96,8 @@ test('only the payment initiator can continue an active table payment', async ()
   ])
 
   assert.match(orderLogic, /canContinue: pendingFromOrders\.paymentAccess === 'available'/)
-  assert.match(orderLogic, /canContinue: Boolean\(tableOrdersAvailable && storedOrder[\s\S]*?\['available', 'payment_in_progress'\]\.includes\(storedOrder\.paymentAccess\)\)/)
+  assert.match(orderLogic, /canContinue: Boolean\(!storedPending\.wechatAcceptedAt && tableOrdersAvailable && storedOrder[\s\S]*?\['available', 'payment_in_progress'\]\.includes\(storedOrder\.paymentAccess\)\)/)
+  assert.match(orderLogic, /storedPending\.wechatAcceptedAt[\s\S]*?微信支付已完成，到账确认中，请勿重复支付/)
   assert.match(orderLogic, /storedPending && tableOrdersAvailable[\s\S]*?!storedOrder/)
   assert.match(orderLogic, /桌账暂时无法核对，请稍后刷新/)
   assert.match(orderLogic, /if \(!pending \|\| !pending\.canContinue \|\| this\.data\.busy\) return/)
@@ -395,7 +396,16 @@ test('tonight ordering keeps live service separate from recommendation and deleg
   assert.match(orderStyle, /\.product-row \{[^}]*flex-direction: column/)
   assert.match(orderView, /class="checkout-guard"/)
   assert.doesNotMatch(orderView, /class="checkout-recovery"/)
-  assert.match(orderView, /class="cart-overview" aria-label="本桌已选\{\{cartCount\}\}件商品"/)
+  assert.match(orderView, /class="cart-overview"[^>]*aria-label="查看本桌购物车，已选\{\{cartCount\}\}件商品"[^>]*hover-class="cart-overview--pressed"[^>]*bindtap="openCartDetails"/)
+  assert.match(orderView, /class="cart-overview__mark-icon"><\/view>/)
+  assert.doesNotMatch(orderView, /cart-overview__mark-icon">购/)
+  assert.match(orderStyle, /\.cart-overview__mark-icon\{[^}]*border:3rpx solid #315d46/)
+  assert.match(orderView, /class="checkout-guard__close"[^>]*bindtap="closeCheckoutGuard"/)
+  assert.match(orderLogic, /closeCheckoutGuard\(\)[\s\S]*?checkoutGuardVisible: false/)
+  assert.match(orderLogic, /openCartDetails\(\)[\s\S]*?checkoutConfirmVisible:\s*true/)
+  assert.match(orderLogic, /closeCheckoutConfirm\(\)\s*\{\s*if \(this\.data\.busy\) return/)
+  assert.doesNotMatch(orderLogic, /closeCheckoutConfirm\(\)\s*\{\s*if \([^)]*checkoutLocked/)
+  assert.match(orderView, /disabled="\{\{cartSyncing \|\| pendingPayment \|\| cartWritesFrozen\}\}">\{\{checkoutLocked \? '继续确认' : '提交订单'\}\}/)
   assert.doesNotMatch(orderView, /wx:if="\{\{cartExpanded\}\}"/)
   assert.match(orderStyle, /\.checkout-guard \{[^}]*position: fixed/)
   assert.match(servicePage, /tableSessionCacheScope/)
@@ -834,13 +844,14 @@ test('customer-only reservations stay executable, performances use the public sc
 })
 
 test('subscription messages are requested from customer actions, not a settings-page application flow', async () => {
-  const [subscriptionSource, notificationLogic, notificationView, activityLogic, orderLogic, orderView, profileLogic] = await Promise.all([
+  const [subscriptionSource, notificationLogic, notificationView, activityLogic, orderLogic, orderView, orderStyle, profileLogic] = await Promise.all([
     read('miniprogram/utils/wechat-subscription.js'),
     read('miniprogram/pages/profile-notifications/index.js'),
     read('miniprogram/pages/profile-notifications/index.wxml'),
     read('miniprogram/pages/community-detail/index.js'),
     read('miniprogram/pages/order/index.js'),
     read('miniprogram/pages/order/index.wxml'),
+    read('miniprogram/pages/order/index.wxss'),
     read('miniprogram/pages/profile/index.js'),
   ])
   const recorded = []
@@ -892,16 +903,30 @@ test('subscription messages are requested from customer actions, not a settings-
   const confirmCheckoutSource = orderLogic.slice(checkoutConfirmStart, checkoutConfirmEnd)
   assert.match(openCheckoutSource, /checkoutConfirmVisible:\s*true/)
   assert.doesNotMatch(openCheckoutSource, /checkoutSharedCart|submitOrder|prepareCheckoutUpgrade|offerOrderNotifications/)
-  assert.match(confirmCheckoutSource, /await this\.offerOrderNotifications\('order_checkout', tableRequest\)[\s\S]{0,500}?await this\.submitOrder\(null, true, null, tableRequest\)/)
+  assert.match(confirmCheckoutSource, /await this\.submitOrder\(null, true, null, tableRequest\)/)
+  assert.doesNotMatch(confirmCheckoutSource, /offerOrderNotifications|requestWechatSubscription/)
   assert.doesNotMatch(confirmCheckoutSource, /prepareCheckoutUpgrade|upgradeOffer/)
-  assert.match(orderView, /已选 \{\{cartCount\}\} 件/)
-  assert.match(orderView, /wx:if="\{\{checkoutConfirmVisible\}\}"[\s\S]*?确认并支付/)
+  assert.match(orderView, /购物车 · \{\{cartCount\}\} 件/)
+  assert.match(orderView, /wx:if="\{\{checkoutConfirmVisible\}\}"[\s\S]*?继续加购[\s\S]*?确认支付/)
+  assert.match(orderView, /class="checkout-confirm__close"[\s\S]{0,220}?bindtap="closeCheckoutConfirm"[\s\S]{0,80}?>取消<\/button>/)
   assert.match(orderView, /确认后调起微信支付/)
+  assert.match(orderStyle, /\.checkout-confirm__sheet\s*\{[\s\S]*?display:\s*flex;[\s\S]*?max-height:\s*calc\(100vh - 8px\);[\s\S]*?overflow:\s*hidden;/)
+  assert.match(orderStyle, /\.checkout-confirm__close-slot\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?top:\s*18rpx;[\s\S]*?right:\s*22rpx;[\s\S]*?width:\s*200rpx;[\s\S]*?height:\s*76rpx;/)
+  assert.match(orderStyle, /\.checkout-confirm__close\s*\{[\s\S]*?width:\s*100%;[\s\S]*?height:\s*100%;[\s\S]*?border:\s*1rpx solid #d6cec4;[\s\S]*?background:\s*#f5f1eb;/)
+  assert.match(orderStyle, /@media \(max-width: 360px\)[\s\S]*?\.cart-summary\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) 164rpx;/)
+  assert.match(orderStyle, /@media \(max-width: 360px\)[\s\S]*?\.checkout-button\s*\{[\s\S]*?width:\s*156rpx;[\s\S]*?min-height:\s*40px;/)
+  assert.match(orderStyle, /@media \(max-width: 360px\)[\s\S]*?\.checkout-confirm__line\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\);/)
+  assert.match(orderStyle, /\.checkout-button\s*\{[\s\S]*?white-space:\s*nowrap;/)
+  assert.match(orderStyle, /\.checkout-confirm__footer\s*\{[\s\S]*?justify-content:\s*flex-end;/)
+  assert.match(orderStyle, /\.checkout-confirm__footer button\s*\{[\s\S]*?width:\s*176rpx;[\s\S]*?min-height:\s*76rpx;/)
+  assert.match(orderView, /wx:if="\{\{paymentResult\}\}"[\s\S]*?查看本桌账单[\s\S]*?继续付款/)
+  assert.match(orderLogic, /async confirmPaymentOutcome\([\s\S]*?paymentStatus[\s\S]*?title: '付款成功'/)
   assert.match(orderLogic, /applyWechatSubscriptionOutcomes\(\s*this\.data\.wechatNotificationPromptOptions, result\.outcomes,?\s*\)/)
   assert.match(orderLogic, /applyWechatSubscriptionOutcomes\(\s*this\.data\.wechatOrderSelectionPromptOptions, result\.outcomes,?\s*\)/)
   const paymentActionStart = orderLogic.indexOf('async handlePaymentAction')
   const paymentActionEnd = orderLogic.indexOf('async offerOrderNotifications')
-  assert.doesNotMatch(orderLogic.slice(paymentActionStart, paymentActionEnd), /offerOrderNotifications/)
+  const paymentActionSource = orderLogic.slice(paymentActionStart, paymentActionEnd)
+  assert.match(paymentActionSource, /wx\.requestPayment[\s\S]*?offerOrderNotifications\('order_checkout', tableRequest\)[\s\S]*?confirmPaymentOutcome/)
   assert.match(profileLogic, /getWechatNotificationPrompt\('coupon_open'\)/)
   assert.match(profileLogic, /async openCoupons\(\)[\s\S]{0,500}?requestWechatSubscription/)
 })

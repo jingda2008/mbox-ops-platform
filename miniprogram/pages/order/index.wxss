@@ -986,7 +986,9 @@
 .cart-line__actions button { width: 64rpx; height: 64rpx; margin: 0; padding: 0; border: 0; border-radius: 32rpx; background: #eee9e2; line-height: 64rpx; }
 .cart-line__actions .cart-line__remove { width: auto; min-width: 72rpx; padding: 0 8rpx; background: transparent; color: #8a7163; font-size: 18rpx; }
 .checkout-guard { position: fixed; z-index: 48; inset: 0; display: flex; padding: 28rpx; align-items: flex-end; background: rgba(24, 21, 18, .42); }
-.checkout-guard__sheet { width: 100%; padding: 30rpx 26rpx calc(26rpx + env(safe-area-inset-bottom)); border: 1rpx solid #e0d4c2; border-radius: 26rpx; background: #fffcf7; box-shadow: 0 18rpx 56rpx rgba(22, 18, 14, .22); text-align: center; }
+.checkout-guard__sheet { position: relative; width: 100%; padding: 30rpx 26rpx calc(26rpx + env(safe-area-inset-bottom)); border: 1rpx solid #e0d4c2; border-radius: 26rpx; background: #fffcf7; box-shadow: 0 18rpx 56rpx rgba(22, 18, 14, .22); text-align: center; }
+.checkout-guard__close { position: absolute; top: 16rpx; right: 16rpx; width: 64rpx; min-width: 64rpx; height: 64rpx; min-height: 64rpx; margin: 0; padding: 0; border: 0; border-radius: 32rpx; background: #f2eee8; color: #62594f; font-size: 36rpx; font-weight: 400; line-height: 60rpx; }
+.checkout-guard__close::after { border: 0; }
 .checkout-guard__mark { display: flex; width: 64rpx; height: 64rpx; margin: 0 auto 14rpx; align-items: center; justify-content: center; border-radius: 50%; background: #e8f1eb; color: #315d46; font-size: 28rpx; font-weight: 750; }
 .checkout-guard__title, .checkout-guard__copy { display: block; }
 .checkout-guard__title { color: #2f2a25; font-family: "Songti SC", "STSong", serif; font-size: 32rpx; font-weight: 650; }
@@ -994,7 +996,7 @@
 .checkout-guard__actions { display: grid; margin-top: 24rpx; grid-template-columns: 1fr 1fr; gap: 12rpx; }
 .checkout-guard__actions button { min-width: 0; min-height: 88rpx; margin: 0; border: 1rpx solid #315d46; border-radius: 44rpx; background: #315d46; color: #fff; font-size: 22rpx; line-height: 86rpx; }
 .checkout-guard__actions button:last-child { border-color: #c9b895; background: #fffaf2; color: #655036; }
-.cart-overview{grid-template-columns:54rpx minmax(0,1fr);cursor:default}.cart-overview__mark{position:relative}.cart-overview__mark-icon{font-size:20rpx!important;font-weight:750}.cart-overview__badge{position:absolute;top:-8rpx;right:-8rpx;display:flex!important;min-width:28rpx;height:28rpx;margin:0!important;padding:0 5rpx;align-items:center;justify-content:center;border:2rpx solid #fffcf7;border-radius:16rpx;background:#9a3f3f;color:#fff!important;font-size:15rpx!important;font-weight:750;line-height:28rpx}.cart-overview__copy{min-width:0}.cart-overview__copy>text{display:block}.cart-overview__copy>text:first-child{overflow:hidden;color:#29251f;font-size:27rpx;font-weight:750;text-overflow:ellipsis;white-space:nowrap}.cart-overview__copy>text:last-child{margin-top:5rpx;color:#8a8279;font-size:17rpx}.checkout-confirm{z-index:54}.checkout-confirm__sheet{width:100%;max-height:86vh;padding:18rpx 26rpx calc(26rpx + env(safe-area-inset-bottom));border-radius:28rpx 28rpx 0 0;background:#fffcf7;box-shadow:0 18rpx 56rpx rgba(22,18,14,.22)}.checkout-confirm__head{display:flex;min-height:84rpx;align-items:center;justify-content:space-between;gap:16rpx}.checkout-confirm__eyebrow,.checkout-confirm__title{display:block}.checkout-confirm__eyebrow{color:#8f6b40;font-size:18rpx;font-weight:700;letter-spacing:2rpx}.checkout-confirm__title{margin-top:5rpx;color:#2e2924;font-family:"Songti SC","STSong",serif;font-size:34rpx;font-weight:650}.checkout-confirm__close{width:auto;min-width:128rpx;min-height:64rpx;margin:0;padding:0 14rpx;border:1rpx solid #d6cec4;border-radius:32rpx;background:#fff;color:#62594f;font-size:19rpx;line-height:62rpx}.checkout-confirm__lines{max-height:42vh;margin-top:16rpx;border-top:1rpx solid #ebe4db;border-bottom:1rpx solid #ebe4db}.checkout-confirm__line{display:grid;min-height:106rpx;padding:14rpx 0;align-items:center;border-top:1rpx solid #eee8e0;grid-template-columns:minmax(0,1fr) auto;gap:12rpx}.checkout-confirm__line:first-child{border-top:0}.checkout-confirm__copy{min-width:0}.checkout-confirm__copy>text{display:block}.checkout-confirm__copy>text:first-child{overflow:hidden;color:#342f2a;font-size:23rpx;font-weight:650;text-overflow:ellipsis;white-space:nowrap}.checkout-confirm__copy>text:nth-child(2){margin-top:5rpx;color:#827a71;font-size:18rpx}.checkout-confirm__actions{display:flex;align-items:center;gap:6rpx;color:#3c352e;font-size:20rpx;font-weight:650}.checkout-confirm__actions button{width:60rpx;height:60rpx;margin:0;padding:0;border:0;border-radius:30rpx;background:#eee9e2;color:#332f29;font-size:27rpx;line-height:60rpx}.checkout-confirm__actions .checkout-confirm__remove{width:auto;min-width:68rpx;padding:0 8rpx;background:transparent;color:#8a7163;font-size:18rpx}.checkout-confirm__total{display:flex;margin-top:18rpx;padding:18rpx 2rpx;align-items:center;justify-content:space-between}.checkout-confirm__total view text{display:block}.checkout-confirm__total view text:first-child{color:#3b342e;font-size:23rpx;font-weight:700}.checkout-confirm__total view text:last-child{margin-top:5rpx;color:#83796e;font-size:18rpx}.checkout-confirm__total>text{color:#26211d;font-size:38rpx;font-weight:750}.checkout-confirm__footer{display:grid;grid-template-columns:1fr 1.25fr;gap:12rpx}.checkout-confirm__footer button{min-width:0;min-height:88rpx;margin:0;border-radius:44rpx;font-size:22rpx;line-height:86rpx}.checkout-confirm__footer .secondary-button{border-color:#d1c8be;background:#fff;color:#62594f}
+.cart-overview{grid-template-columns:54rpx minmax(0,1fr);cursor:default}.cart-overview__mark{position:relative}.cart-overview__mark-icon{position:relative;width:29rpx;height:21rpx;margin-top:-4rpx;margin-left:4rpx;border:3rpx solid #315d46;border-top:0;border-radius:2rpx 2rpx 5rpx 5rpx;transform:skew(-7deg)}.cart-overview__mark-icon::before{position:absolute;top:-10rpx;left:-9rpx;width:11rpx;height:9rpx;border-top:3rpx solid #315d46;border-left:3rpx solid #315d46;border-radius:5rpx 0 0;content:""}.cart-overview__mark-icon::after{position:absolute;right:16rpx;bottom:-10rpx;width:6rpx;height:6rpx;border-radius:50%;background:#315d46;box-shadow:18rpx 0 0 #315d46;content:""}.cart-overview__badge{position:absolute;top:-8rpx;right:-8rpx;display:flex!important;min-width:28rpx;height:28rpx;margin:0!important;padding:0 5rpx;align-items:center;justify-content:center;border:2rpx solid #fffcf7;border-radius:16rpx;background:#9a3f3f;color:#fff!important;font-size:15rpx!important;font-weight:750;line-height:28rpx}.cart-overview__copy{min-width:0}.cart-overview__copy>text{display:block}.cart-overview__copy>text:first-child{overflow:hidden;color:#29251f;font-size:27rpx;font-weight:750;text-overflow:ellipsis;white-space:nowrap}.cart-overview__copy>text:last-child{margin-top:5rpx;color:#8a8279;font-size:17rpx}.checkout-confirm{z-index:54}.checkout-confirm__sheet{width:100%;max-height:86vh;padding:18rpx 26rpx calc(26rpx + env(safe-area-inset-bottom));border-radius:28rpx 28rpx 0 0;background:#fffcf7;box-shadow:0 18rpx 56rpx rgba(22,18,14,.22)}.checkout-confirm__head{display:flex;min-height:84rpx;align-items:center;justify-content:space-between;gap:16rpx}.checkout-confirm__eyebrow,.checkout-confirm__title{display:block}.checkout-confirm__eyebrow{color:#8f6b40;font-size:18rpx;font-weight:700;letter-spacing:2rpx}.checkout-confirm__title{margin-top:5rpx;color:#2e2924;font-family:"Songti SC","STSong",serif;font-size:34rpx;font-weight:650}.checkout-confirm__close{width:auto;min-width:128rpx;min-height:64rpx;margin:0;padding:0 14rpx;border:1rpx solid #d6cec4;border-radius:32rpx;background:#fff;color:#62594f;font-size:19rpx;line-height:62rpx}.checkout-confirm__lines{max-height:42vh;margin-top:16rpx;border-top:1rpx solid #ebe4db;border-bottom:1rpx solid #ebe4db}.checkout-confirm__line{display:grid;min-height:106rpx;padding:14rpx 0;align-items:center;border-top:1rpx solid #eee8e0;grid-template-columns:minmax(0,1fr) auto;gap:12rpx}.checkout-confirm__line:first-child{border-top:0}.checkout-confirm__copy{min-width:0}.checkout-confirm__copy>text{display:block}.checkout-confirm__copy>text:first-child{overflow:hidden;color:#342f2a;font-size:23rpx;font-weight:650;text-overflow:ellipsis;white-space:nowrap}.checkout-confirm__copy>text:nth-child(2){margin-top:5rpx;color:#827a71;font-size:18rpx}.checkout-confirm__actions{display:flex;align-items:center;gap:6rpx;color:#3c352e;font-size:20rpx;font-weight:650}.checkout-confirm__actions button{width:60rpx;height:60rpx;margin:0;padding:0;border:0;border-radius:30rpx;background:#eee9e2;color:#332f29;font-size:27rpx;line-height:60rpx}.checkout-confirm__actions .checkout-confirm__remove{width:auto;min-width:68rpx;padding:0 8rpx;background:transparent;color:#8a7163;font-size:18rpx}.checkout-confirm__total{display:flex;margin-top:18rpx;padding:18rpx 2rpx;align-items:center;justify-content:space-between}.checkout-confirm__total view text{display:block}.checkout-confirm__total view text:first-child{color:#3b342e;font-size:23rpx;font-weight:700}.checkout-confirm__total view text:last-child{margin-top:5rpx;color:#83796e;font-size:18rpx}.checkout-confirm__total>text{color:#26211d;font-size:38rpx;font-weight:750}.checkout-confirm__footer{display:grid;grid-template-columns:1fr 1.25fr;gap:12rpx}.checkout-confirm__footer button{min-width:0;min-height:88rpx;margin:0;border-radius:44rpx;font-size:22rpx;line-height:86rpx}.checkout-confirm__footer .secondary-button{border-color:#d1c8be;background:#fff;color:#62594f}
 .table-strip__content { align-items: center; grid-template-columns: minmax(0, 1fr) 174rpx; }
 .table-strip__service { min-height: 88rpx; padding: 8rpx 0 8rpx 14rpx; align-items: flex-start; justify-content: center; flex-direction: column; border-top: 0; border-right: 0; border-bottom: 0; border-left: 1rpx solid #eee8df; }
 .table-strip__service-value { width: 100%; font-size: 19rpx; font-weight: 650; }
@@ -1106,5 +1108,277 @@
   }
   .membership-invite__actions button {
     flex: 1;
+  }
+}
+
+/* Checkout outcome is explicit: WeChat acceptance is not labelled as store
+   settlement until the table ledger confirms it. */
+.payment-result { z-index: 60; align-items: flex-end; }
+.payment-result__sheet { position: relative; width: 100%; padding: 38rpx 28rpx calc(28rpx + env(safe-area-inset-bottom)); border-radius: 28rpx 28rpx 0 0; background: #fffcf7; box-shadow: 0 -18rpx 58rpx rgba(25, 20, 16, .24); text-align: center; }
+.payment-result__close { position: absolute; top: 14rpx; right: 16rpx; width: 44px; min-width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; border: 0; border-radius: 50%; background: transparent; color: #756b61; font-size: 34rpx; line-height: 44px; }
+.payment-result__close::after { border: 0; }
+.payment-result__mark { display: flex; width: 76rpx; height: 76rpx; margin: 10rpx auto 18rpx; align-items: center; justify-content: center; border-radius: 50%; background: #eef0ec; color: #615b53; font-size: 38rpx; font-weight: 750; }
+.payment-result__mark--success { background: #e4f0e8; color: #315d46; }
+.payment-result__mark--pending { background: #f4ecd9; color: #856430; }
+.payment-result__mark--failed, .payment-result__mark--cancelled { background: #f4e6e3; color: #8a493e; }
+.payment-result__title, .payment-result__copy { display: block; }
+.payment-result__title { color: #2f2924; font-family: "Songti SC", "STSong", serif; font-size: 34rpx; font-weight: 650; }
+.payment-result__copy { max-width: 610rpx; margin: 12rpx auto 0; color: #746b62; font-size: 22rpx; line-height: 1.6; }
+.payment-result__actions { display: grid; margin-top: 26rpx; grid-template-columns: 1fr 1fr; gap: 12rpx; }
+.payment-result__actions button { min-width: 0; min-height: 44px; margin: 0; padding: 0 14rpx; font-size: 22rpx; line-height: 44px; }
+
+@media (max-width: 360px) {
+  .order-page { padding-top: 12rpx; }
+  .table-strip { padding: 16rpx 18rpx; }
+  .table-strip__content { grid-template-columns: minmax(0, 1fr) 150rpx; }
+  .table-strip__service { min-height: 76rpx; padding-left: 10rpx; }
+  .table-strip__service-value { font-size: 18rpx; }
+  .show-brief, .show-brief--retry { min-height: 76rpx; }
+  .quick-service__surface { min-height: 40px; padding: 0 6rpx; }
+  .quick-service__surface > text:last-child { font-size: 18rpx; }
+  .recommend-entry { padding-top: 18rpx; }
+  .recommend-entry__head > text { display: none; }
+  .recommend-entry__actions button { min-height: 40px; }
+  .recommend-card { width: 470rpx; }
+  .recommend-foot button { min-height: 40px; }
+  .product-action button { width: 44px; height: 44px; border-radius: 22px; line-height: 44px; }
+  .cart-dock { padding-right: 18rpx; padding-left: 18rpx; }
+  .cart-summary { grid-template-columns: minmax(0, 1fr) 172rpx; gap: 8rpx; }
+  .cart-overview { min-height: 44px; grid-template-columns: 48rpx minmax(0, 1fr); gap: 8rpx; }
+  .cart-overview__copy > text:last-child { display: none; }
+  .checkout-button { min-height: 44px; font-size: 22rpx; line-height: 44px; }
+  .checkout-confirm__sheet { max-height: 90vh; padding-right: 18rpx; padding-left: 18rpx; }
+  .checkout-confirm__head { min-height: 70rpx; }
+  .checkout-confirm__title { font-size: 30rpx; }
+  .checkout-confirm__close { width: 44px; min-width: 44px; height: 44px; min-height: 44px; padding: 0; border: 0; background: transparent; font-size: 32rpx; line-height: 44px; }
+  .checkout-confirm__lines { max-height: 46vh; }
+  .checkout-confirm__line { min-height: 96rpx; gap: 8rpx; }
+  .checkout-confirm__actions { gap: 4rpx; }
+  .checkout-confirm__actions button { width: 36px; height: 36px; border-radius: 18px; line-height: 36px; }
+  .checkout-confirm__actions .checkout-confirm__remove { min-width: 36px; }
+  .checkout-confirm__footer { gap: 8rpx; }
+  .checkout-confirm__footer button { min-height: 44px; line-height: 44px; }
+  .checkout-guard { padding: 18rpx; }
+  .checkout-guard__actions button { min-height: 44px; line-height: 44px; }
+  .payment-result__sheet { padding-right: 20rpx; padding-left: 20rpx; }
+  .payment-result__actions { gap: 8rpx; }
+}
+
+/* Cart and checkout must stay operable on foldable outer screens. */
+.cart-dock,
+.cart-summary,
+.checkout-confirm,
+.checkout-confirm__sheet,
+.checkout-guard,
+.checkout-guard__sheet,
+.payment-result,
+.payment-result__sheet {
+  box-sizing: border-box;
+  max-width: 100vw;
+}
+
+.cart-dock {
+  width: 100%;
+  overflow: hidden;
+}
+
+.cart-summary {
+  width: 100%;
+  min-width: 0;
+}
+
+.cart-overview {
+  min-width: 0;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.cart-overview--pressed {
+  opacity: .72;
+}
+
+.checkout-button {
+  box-sizing: border-box;
+  display: flex;
+  min-width: 0;
+  width: calc(100% - 8rpx);
+  min-height: 76rpx;
+  overflow: hidden;
+  padding: 0 10rpx;
+  align-items: center;
+  justify-content: center;
+  justify-self: end;
+  border-radius: 38rpx;
+  font-size: 21rpx;
+  line-height: 1.2;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.checkout-confirm {
+  width: 100vw;
+  overflow: hidden;
+}
+
+.checkout-confirm__sheet {
+  position: relative;
+  display: flex;
+  width: 100%;
+  max-height: calc(100vh - 8px);
+  overflow: hidden;
+  flex-direction: column;
+}
+
+.checkout-confirm__head,
+.checkout-confirm__total,
+.checkout-confirm__footer {
+  flex: 0 0 auto;
+}
+
+.checkout-confirm__head {
+  padding-right: 224rpx;
+}
+
+.checkout-confirm__close-slot {
+  position: absolute;
+  z-index: 2;
+  top: 18rpx;
+  right: 22rpx;
+  width: 200rpx;
+  height: 76rpx;
+}
+
+.checkout-confirm__close {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border: 1rpx solid #d6cec4;
+  border-radius: 38rpx;
+  background: #f5f1eb;
+  box-shadow: 0 4rpx 12rpx rgba(45, 38, 31, .08);
+  color: #62594f;
+  font-size: 20rpx;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.checkout-confirm__close::after {
+  border: 0;
+}
+
+.checkout-confirm__close--pressed {
+  background: #eae4dc;
+  transform: scale(.97);
+}
+
+.checkout-confirm__lines {
+  min-height: 0;
+  overflow: hidden;
+  flex: 1 1 42vh;
+}
+
+.checkout-confirm__copy,
+.checkout-confirm__total > view {
+  min-width: 0;
+}
+
+.checkout-confirm__total {
+  gap: 12rpx;
+}
+
+.checkout-confirm__total > text,
+.checkout-confirm__footer button {
+  white-space: nowrap;
+}
+
+.checkout-confirm__footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10rpx;
+}
+
+.checkout-confirm__footer button {
+  width: 176rpx;
+  min-height: 76rpx;
+  padding: 0 8rpx;
+  flex: 0 0 176rpx;
+  border-radius: 38rpx;
+  font-size: 20rpx;
+  line-height: 76rpx;
+}
+
+.checkout-confirm__footer .primary-button {
+  width: 200rpx;
+  flex-basis: 200rpx;
+}
+
+.checkout-guard__sheet,
+.payment-result__sheet {
+  overflow: hidden;
+}
+
+@media (max-width: 360px) {
+  .cart-summary {
+    grid-template-columns: minmax(0, 1fr) 164rpx;
+  }
+
+  .cart-overview {
+    padding-right: 2rpx;
+    padding-left: 2rpx;
+  }
+
+  .cart-overview__copy > text:first-child {
+    font-size: 24rpx;
+  }
+
+  .checkout-button {
+    width: 156rpx;
+    max-width: 100%;
+    min-height: 40px;
+    padding-right: 6rpx;
+    padding-left: 6rpx;
+    border-radius: 20px;
+    font-size: 21rpx;
+    line-height: 1.2;
+  }
+
+  .checkout-confirm__sheet {
+    max-height: calc(100vh - 4px);
+  }
+
+  .checkout-confirm__lines {
+    max-height: none;
+    flex-basis: 46vh;
+  }
+
+  .checkout-confirm__line {
+    padding-top: 16rpx;
+    padding-bottom: 16rpx;
+    align-items: stretch;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .checkout-confirm__actions {
+    justify-content: flex-end;
+  }
+
+  .checkout-confirm__total > text {
+    font-size: 32rpx;
+  }
+
+  .checkout-confirm__footer button {
+    min-height: 40px;
+    padding-right: 6rpx;
+    padding-left: 6rpx;
+    font-size: 20rpx;
+    line-height: 40px;
   }
 }

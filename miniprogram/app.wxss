@@ -55,6 +55,24 @@ button[disabled] { transform: none; filter: grayscale(.2); }
   .top-band { margin-right: -22rpx; margin-left: -22rpx; padding-right: 22rpx; padding-left: 22rpx; }
   .panel { padding: 24rpx; }
 }
+
+/* Mate X5 outer display and other narrow phones. Keep decisive actions at a
+   reliable touch size while reducing decorative spacing and secondary bulk. */
+@media (max-width: 360px) {
+  .page { padding-right: 18rpx; padding-left: 18rpx; }
+  .top-band { margin-right: -18rpx; margin-left: -18rpx; padding: 30rpx 18rpx 28rpx; }
+  .panel { padding: 20rpx; border-radius: 18rpx; }
+  .section { margin-top: 28rpx; }
+  .section-title { margin-bottom: 14rpx; }
+  .section-title text:first-child { font-size: 28rpx; }
+  .primary-button, .danger-button { min-height: 44px; font-size: 25rpx; line-height: 44px; }
+  .secondary-button { min-height: 40px; font-size: 24rpx; line-height: 40px; }
+  .field { margin-bottom: 20rpx; }
+  .field__input { min-height: 44px; height: 44px; }
+  .list-row { padding: 20rpx 0; gap: 16rpx; }
+  .warning, .error-banner, .success-banner { padding: 15rpx 17rpx; font-size: 22rpx; }
+  .footer-link { min-height: 44px; margin-top: 32rpx; padding: 14rpx; }
+}
 .bullet-list { display: grid; margin-top: 16rpx; gap: 14rpx; }
 .bullet-list > view { display: flex; align-items: flex-start; gap: 14rpx; color: #655f58; font-size: 23rpx; line-height: 1.65; }
 .bullet-list > view > text:first-child { flex: 0 0 28rpx; color: #8d683c; font-weight: 700; }

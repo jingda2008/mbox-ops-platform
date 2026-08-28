@@ -6,6 +6,7 @@ import vm from 'node:vm'
 const GUEST_COOKIE_KEY = 'mbox.http.cookie.guest.v2'
 const RESERVATION_COOKIE_KEY = 'mbox.http.cookie.reservation.v2'
 const PENDING_PAYMENT_KEY = 'mbox.pending.guest.payment.v1'
+const CHECKOUT_ATTEMPT_KEY = 'mbox.pending.guest.checkout.v1'
 
 function scope(session) {
   const token = String(session.tableToken || '').trim()
@@ -193,7 +194,7 @@ async function loadOrderPage(state) {
   const source = await readFile(new URL('../miniprogram/pages/order/index.js', import.meta.url), 'utf8')
   let definition = null
   const guard = requestGuard()
-  const calls = { retryOrderPayment: 0 }
+  const calls = { retryOrderPayment: 0, checkoutSharedCart: [], requestPayment: [] }
   const context = {
     module: { exports: {} }, exports: {}, Page: (value) => { definition = value },
     getApp: () => ({ refreshRuntime: () => state.session }),
@@ -210,10 +211,18 @@ async function loadOrderPage(state) {
           }, warning: '' }
         },
         getMenu: async () => [], getPublicMenu: async () => [], recommendExperience: async () => ({ recommendations: [] }),
-        recordRecommendationEvent: async () => undefined, checkoutSharedCart: async () => null,
+        recordRecommendationEvent: async () => undefined,
+        checkoutSharedCart: async (input, idempotencyKey) => {
+          calls.checkoutSharedCart.push({ input, idempotencyKey })
+          if (state.checkoutError) throw state.checkoutError
+          return state.checkoutResult || null
+        },
         getSharedCart: async () => ({ lines: [], version: 0, generation: 0 }),
         adjustSharedCart: async () => null, removeSharedCartLine: async () => null, clearSharedCart: async () => null,
-        getTableOrders: async () => { throw new Error('weak network') },
+        getTableOrders: async () => {
+          if (Array.isArray(state.tableOrders)) return state.tableOrders
+          throw new Error('weak network')
+        },
         retryOrderPayment: async () => {
           calls.retryOrderPayment += 1
           if (state.retryPaymentError) throw state.retryPaymentError
@@ -245,9 +254,13 @@ async function loadOrderPage(state) {
       if (specifier === '../../utils/recommendation-attribution') return { checkoutRecommendationAttribution: () => null }
       if (specifier === '../../utils/media') return { publicImageUrl: (value) => value || '' }
       if (specifier === '../../utils/customer-error') return {
-        customerErrorMessage: (error, fallback) => error && error.code === 'GUEST_ORDER_ACCESS_FORBIDDEN'
-          ? '这笔订单不属于当前桌位，请重新扫描当前桌面的二维码' : fallback,
-        isWechatCancellation: () => false,
+        customerErrorMessage: (error, fallback) => ({
+          GUEST_ORDER_ACCESS_FORBIDDEN: '这笔订单不属于当前桌位，请重新扫描当前桌面的二维码',
+          GUEST_CHECKOUT_CONFIGURATION_UNAVAILABLE: '暂时无法发起微信支付，本次没有创建订单，请联系服务员',
+          ONLINE_PAYMENT_UNAVAILABLE: '暂时无法发起在线支付，本次没有创建订单，请联系服务员',
+          WECHAT_IDENTITY_REQUIRED: '微信支付身份需要刷新，请重新扫描当前桌面的二维码或重新进入小程序后再试',
+        })[error && error.code] || fallback,
+        isWechatCancellation: (error) => /cancel/i.test(String(error && error.errMsg || '')),
       }
       if (specifier === '../../utils/wechat-subscription') return {
         requestWechatSubscription: async () => ({ presented: false, outcomes: [] }),
@@ -257,6 +270,12 @@ async function loadOrderPage(state) {
     wx: {
       getStorageSync: (key) => state.storage.get(key), setStorageSync: (key, value) => state.storage.set(key, value),
       removeStorageSync: (key) => state.storage.delete(key),
+      requestPayment: (options) => {
+        calls.requestPayment.push(options)
+        if (state.requestPaymentError) options.fail(state.requestPaymentError)
+        else options.success({ errMsg: 'requestPayment:ok' })
+      },
+      showToast: () => undefined,
     },
     setTimeout, clearTimeout,
   }
@@ -512,6 +531,37 @@ test('Order keeps a token-only scan active and clears an unscoped A pending paym
   assert.equal(calls.retryOrderPayment, 0)
 })
 
+test('Order does not reopen payment after WeChat accepted it while the server is still confirming', async () => {
+  const session = { tableCode: 'A01', tableToken: 'token-a', cartScope: 'cart-scope-for-turn-a-000000001' }
+  const paymentScope = `cache.${scope(session)}`
+  const state = {
+    session,
+    resolvedTableCode: 'A01',
+    resolvedCartScope: 'cart-scope-for-turn-a-000000001',
+    storage: new Map([[PENDING_PAYMENT_KEY, {
+      orderPublicId: 'order-awaiting-callback',
+      retryIdempotencyKey: 'retry-awaiting-callback',
+      amountText: '¥68',
+      tableScope: paymentScope,
+      statusText: '微信支付已完成，正在确认到账',
+      canContinue: false,
+      wechatAcceptedAt: '2026-08-28T00:00:00.000Z',
+    }]]),
+    tableOrders: [{
+      publicId: 'order-awaiting-callback', paymentStatus: 'unpaid', payableAmountMinor: 6800,
+      paymentAccess: 'available',
+    }],
+  }
+  const { page, calls } = await loadOrderPage(state)
+
+  await page.preparePage()
+
+  assert.equal(page.data.pendingPayment.canContinue, false)
+  assert.match(page.data.pendingPayment.statusText, /到账确认中/)
+  await page.continuePayment()
+  assert.equal(calls.retryOrderPayment, 0)
+})
+
 test('Order drops the pending record instead of retrying a wrong-table payment', async () => {
   const paymentScope = 'cache.session:fixed-token:cart-scope-for-turn-b-000000002'
   const wrongTable = Object.assign(new Error('wrong table'), { code: 'GUEST_ORDER_ACCESS_FORBIDDEN', statusCode: 409 })
@@ -646,6 +696,156 @@ test('guest cart opens a review sheet before it creates an order or starts payme
   await page.confirmCheckout()
 
   assert.equal(page.data.checkoutConfirmVisible, false)
-  assert.equal(noticeCalls, 1)
+  assert.equal(noticeCalls, 0)
   assert.equal(submitCalls, 1)
+})
+
+test('shared cart checkout launches WeChat payment immediately after the single confirmation', async () => {
+  const state = {
+    session: { tableCode: 'A01', tableToken: 'token-a', cartScope: 'cart-scope-for-turn-a-000000001' },
+    storage: new Map(),
+    checkoutResult: {
+      data: {
+        order: { publicId: 'guest-order-direct-pay-0001' },
+        settlement: { payableAmountMinor: 6800 },
+        sharedCart: { lines: [], generation: 2, version: 0 },
+        payment: {
+          publicId: 'guest-payment-direct-pay-0001',
+          providerAction: {
+            status: 'ready',
+            presentation: 'jsapi',
+            payload: { timeStamp: '1', nonceStr: 'nonce', package: 'prepay_id=test', signType: 'RSA', paySign: 'sign' },
+          },
+        },
+      },
+    },
+    tableOrders: [{
+      publicId: 'guest-order-direct-pay-0001', paymentStatus: 'paid', payableAmountMinor: 0,
+    }],
+  }
+  const { page, calls } = await loadOrderPage(state)
+  let notificationPromptCalls = 0
+  const request = { scope: scope(state.session), generation: 1 }
+  page.currentTableRequest = () => request
+  page.isCurrentTableRequest = (value) => value === request
+  page.offerOrderNotifications = async (context) => {
+    assert.equal(calls.requestPayment.length, 1)
+    assert.equal(context, 'order_checkout')
+    notificationPromptCalls += 1
+  }
+  page.setData({
+    cart: [{ productId: 'product-001', name: '测试酒水', quantity: 1, available: true }],
+    cartGeneration: 1,
+    cartVersion: 1,
+    busy: false,
+    pendingPayment: null,
+    checkoutLocked: false,
+  })
+
+  await page.submitOrder(null, false, null, request)
+
+  assert.equal(calls.checkoutSharedCart.length, 1)
+  assert.equal(calls.requestPayment.length, 1)
+  assert.equal(notificationPromptCalls, 1)
+  assert.equal(page.data.checkoutLocked, false)
+  assert.equal(page.data.checkoutGuardVisible, false)
+  assert.equal(page.data.pendingPayment, null)
+  assert.equal(page.data.paymentResult.title, '付款成功')
+  assert.equal(state.storage.get(CHECKOUT_ATTEMPT_KEY), undefined)
+})
+
+test('definite pre-order checkout rejection unlocks the cart and explains that no order was created', async () => {
+  const configurationError = Object.assign(new Error('wrong guest payment mode'), {
+    code: 'GUEST_CHECKOUT_CONFIGURATION_UNAVAILABLE',
+    statusCode: 503,
+  })
+  const state = {
+    session: { tableCode: 'A01', tableToken: 'token-a', cartScope: 'cart-scope-for-turn-a-000000001' },
+    storage: new Map(),
+    checkoutError: configurationError,
+  }
+  const { page, calls } = await loadOrderPage(state)
+  const request = { scope: scope(state.session), generation: 1 }
+  page.currentTableRequest = () => request
+  page.isCurrentTableRequest = (value) => value === request
+  page.setData({ cart: [{ productId: 'product-001', quantity: 1, available: true }], cartGeneration: 1, cartVersion: 1 })
+
+  await page.submitOrder(null, false, null, request)
+
+  assert.equal(calls.checkoutSharedCart.length, 1)
+  assert.equal(calls.requestPayment.length, 0)
+  assert.equal(page.data.checkoutLocked, false)
+  assert.equal(page.data.checkoutGuardVisible, false)
+  assert.equal(state.storage.get(CHECKOUT_ATTEMPT_KEY), undefined)
+  assert.match(page.data.error, /没有创建订单/)
+})
+
+test('the previous online-payment-unavailable response also unlocks without creating a second attempt', async () => {
+  const state = {
+    session: { tableCode: 'A01', tableToken: 'token-a', cartScope: 'cart-scope-for-turn-a-000000001' },
+    storage: new Map(),
+    checkoutError: Object.assign(new Error('online payment unavailable'), {
+      code: 'ONLINE_PAYMENT_UNAVAILABLE',
+      statusCode: 503,
+    }),
+  }
+  const { page, calls } = await loadOrderPage(state)
+  const request = { scope: scope(state.session), generation: 1 }
+  page.currentTableRequest = () => request
+  page.isCurrentTableRequest = (value) => value === request
+  page.setData({ cart: [{ productId: 'product-001', quantity: 1, available: true }], cartGeneration: 1, cartVersion: 1 })
+
+  await page.submitOrder(null, false, null, request)
+
+  assert.equal(calls.checkoutSharedCart.length, 1)
+  assert.equal(page.data.checkoutLocked, false)
+  assert.equal(page.data.checkoutGuardVisible, false)
+  assert.equal(state.storage.get(CHECKOUT_ATTEMPT_KEY), undefined)
+  assert.match(page.data.error, /没有创建订单/)
+})
+
+test('unknown checkout result can be dismissed and retries the same idempotent attempt', async () => {
+  const networkError = Object.assign(new Error('connection reset'), { code: 'NETWORK_ERROR' })
+  const state = {
+    session: { tableCode: 'A01', tableToken: 'token-a', cartScope: 'cart-scope-for-turn-a-000000001' },
+    storage: new Map(),
+    checkoutError: networkError,
+  }
+  const { page, calls } = await loadOrderPage(state)
+  const request = { scope: scope(state.session), generation: 1 }
+  page.currentTableRequest = () => request
+  page.isCurrentTableRequest = (value) => value === request
+  page.setData({ cart: [{ productId: 'product-001', quantity: 1, available: true }], cartGeneration: 1, cartVersion: 1 })
+
+  await page.submitOrder(null, false, null, request)
+  const retainedAttempt = state.storage.get(CHECKOUT_ATTEMPT_KEY)
+  assert.ok(retainedAttempt)
+  assert.equal(page.data.checkoutLocked, true)
+  assert.equal(page.data.checkoutGuardVisible, true)
+
+  page.closeCheckoutGuard()
+  assert.equal(page.data.checkoutGuardVisible, false)
+  assert.equal(page.data.checkoutLocked, true)
+
+  state.checkoutError = null
+  state.checkoutResult = {
+    data: {
+      order: { publicId: 'guest-order-recovered-0001' },
+      settlement: { payableAmountMinor: 6800 },
+      sharedCart: { lines: [], generation: 2, version: 0 },
+      payment: {
+        publicId: 'guest-payment-recovered-0001',
+        providerAction: {
+          status: 'ready', presentation: 'jsapi',
+          payload: { timeStamp: '1', nonceStr: 'nonce', package: 'prepay_id=test', signType: 'RSA', paySign: 'sign' },
+        },
+      },
+    },
+  }
+  await page.openCheckout()
+
+  assert.equal(calls.checkoutSharedCart.length, 2)
+  assert.equal(calls.checkoutSharedCart[1].idempotencyKey, calls.checkoutSharedCart[0].idempotencyKey)
+  assert.equal(calls.requestPayment.length, 1)
+  assert.equal(state.storage.get(CHECKOUT_ATTEMPT_KEY), undefined)
 })

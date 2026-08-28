@@ -19,6 +19,8 @@ const CODE_MESSAGES = Object.freeze({
   SHARED_CART_WRITES_FROZEN: '服务人员正在核对本桌点单，暂时只能查看购物车',
   CART_PROTOCOL_UPGRADE_REQUIRED: '本桌正在完成旧版点单，请在结台后更新小程序再继续点单',
   CHECKOUT_UPGRADE_UNAVAILABLE: '升级内容已经变化，请重新确认后再结账',
+  GUEST_CHECKOUT_CONFIGURATION_UNAVAILABLE: '暂时无法发起微信支付，本次没有创建订单，请联系服务员',
+  ONLINE_PAYMENT_UNAVAILABLE: '暂时无法发起在线支付，本次没有创建订单，请联系服务员',
   PAYMENT_IN_PROGRESS: '付款正在处理中，请稍后刷新确认结果',
   PAYMENT_STATUS_REVIEW: '付款结果确认中，请勿重复付款',
   WECHAT_IDENTITY_REQUIRED: '微信支付身份需要刷新，请重新扫描当前桌面的二维码或重新进入小程序后再试',

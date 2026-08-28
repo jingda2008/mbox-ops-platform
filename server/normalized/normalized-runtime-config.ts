@@ -483,6 +483,7 @@ function readGuestPaymentMode(
   const normalized = optional(value)
   if (normalized === 'wechat_jsapi' || normalized === 'wechat_native_qr' || normalized === 'simulation') {
     if (commercialProduction && normalized === 'simulation') errors.push('MBOX_GUEST_PAYMENT_MODE')
+    if (commercialProduction && normalized === 'wechat_native_qr') errors.push('MBOX_GUEST_PAYMENT_MODE')
     return normalized
   }
   if (normalized !== null) errors.push('MBOX_GUEST_PAYMENT_MODE')

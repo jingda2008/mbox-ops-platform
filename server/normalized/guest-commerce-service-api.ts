@@ -1188,8 +1188,10 @@ async function guestPaymentCommand(
 
 function assertGuestSelfPaymentMode(mode: GuestCheckoutPaymentMode): void {
   if (mode === 'wechat_native_qr') {
-    throw new OnlinePaymentUnavailableError(
-      '顾客小程序仅支持微信内支付；收银二维码请由员工在收银设备上发起',
+    throw new GuestApiRequestError(
+      'GUEST_CHECKOUT_CONFIGURATION_UNAVAILABLE',
+      '顾客小程序支付配置异常；本次没有创建订单，请联系服务员',
+      503,
     )
   }
 }

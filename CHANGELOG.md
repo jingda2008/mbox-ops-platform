@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0-rc.156 - 2026-08-28
+
+- Fixes staff table-order and table-payment reads that could issue PostgreSQL row
+  locks inside a `READ ONLY` transaction, causing `25006` and preventing the
+  table detail panel from loading.
+- Preserves row locks for table commands, while moving pure reads and daily
+  snack prechecks to an explicit no-lock table-scope guard.
+- Stops repeated staff-panel retries after a failed table-detail request and
+  presents a compact, copyable support reference instead of a long raw ID.
+
 ## 1.0.0-rc.155 - 2026-08-28
 
 - Adds the normalized schema migration 147 for inventory classification,

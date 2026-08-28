@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.0-rc.155 - 2026-08-28
+
+- Adds the normalized schema migration 147 for inventory classification,
+  package net-content reference data and safe edits of existing inventory
+  items. Historical stock movements, SKU codes and base units remain protected.
+- Makes catalog selection paginate on the server and makes recipe configuration
+  reachable after a product is created, with cost fields kept unavailable to
+  staff who lack the separate cost permission.
+- Improves the staff inventory interface with category filtering and a mobile
+  touch target that meets the project minimum.
+- Reworks the customer order cart so it stays compact until expanded, and an
+  uncertain checkout result stays in a fixed confirmation layer with order
+  lookup and retry rather than presenting a duplicate-order-prone menu state.
+
 ## 1.0.0-rc.154 - 2026-08-28
 
 - Aligns the immutable normalized-migration baseline test with schema migration

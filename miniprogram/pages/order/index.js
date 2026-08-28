@@ -27,6 +27,7 @@ const { checkoutRecommendationAttribution } = require('../../utils/recommendatio
 const { publicImageUrl } = require('../../utils/media')
 const { customerErrorMessage, isWechatCancellation } = require('../../utils/customer-error')
 const { requestWechatSubscription } = require('../../utils/wechat-subscription')
+const { isPresentableWechatJsapiAction } = require('../../utils/wechat-payment')
 
 const PENDING_PAYMENT_KEY = 'mbox.pending.guest.payment.v1'
 const CHECKOUT_ATTEMPT_KEY = 'mbox.pending.guest.checkout.v1'
@@ -1410,8 +1411,10 @@ Page({
   async handlePaymentAction(action, request) {
     const tableRequest = request || this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
-    if (!action || action.status !== 'ready' || action.presentation !== 'jsapi' || !action.payload) {
-      const waitingForResult = Boolean(action && action.status === 'unknown')
+    if (!isPresentableWechatJsapiAction(action)) {
+      const waitingForResult = Boolean(action && (
+        action.status === 'unknown' || (action.status === 'pending' && !action.payload)
+      ))
       const pendingPayment = Object.assign({}, this.data.pendingPayment, {
         statusText: waitingForResult ? '付款结果确认中' : '付款未完成',
       })
@@ -1425,7 +1428,7 @@ Page({
           title: waitingForResult ? '付款结果确认中' : '未能发起微信支付',
           copy: waitingForResult
             ? '系统正在核对通道结果，请勿重复付款。'
-            : '订单已保留，本次没有进入微信密码支付。',
+            : '订单已保留，本次没有进入微信支付。',
           canRetry: !waitingForResult,
         },
       })

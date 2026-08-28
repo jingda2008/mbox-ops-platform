@@ -5,6 +5,7 @@ const { createTableRequestGuard, tableRequestScope } = require('../../utils/tabl
 const { randomId } = require('../../utils/id')
 const { money, dateTime } = require('../../utils/format')
 const { customerErrorMessage, isWechatCancellation } = require('../../utils/customer-error')
+const { isPresentableWechatJsapiAction } = require('../../utils/wechat-payment')
 
 const PENDING_PAYMENT_KEY = 'mbox.pending.guest.payment.v1'
 
@@ -165,7 +166,7 @@ Page({
     try {
       const action = await retryOrderPayment(orderPublicId, retryIdempotencyKey)
       if (!this.isCurrentTableRequest(tableRequest)) return
-      if (!action || action.status !== 'ready' || action.presentation !== 'jsapi' || !action.payload) {
+      if (!isPresentableWechatJsapiAction(action)) {
         const statusText = action && action.status === 'unknown'
           ? '付款结果待确认'
           : action && action.presentation === 'qr'

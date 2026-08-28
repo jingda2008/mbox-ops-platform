@@ -138,7 +138,7 @@
   </view>
 
   <view wx:if="{{paymentResult}}" class="payment-result sheet-mask">
-    <view class="payment-result__sheet"><button class="payment-result__close" aria-label="关闭付款结果" bindtap="closePaymentResult">×</button><view class="payment-result__mark payment-result__mark--{{paymentResult.kind}}">{{paymentResult.mark}}</view><text class="payment-result__title">{{paymentResult.title}}</text><text class="payment-result__copy">{{paymentResult.copy}}</text><view class="payment-result__actions"><button class="secondary-button" bindtap="openPaymentResultAccount">查看本桌账单</button><button wx:if="{{paymentResult.canRetry}}" class="primary-button" bindtap="retryPaymentFromResult" loading="{{busy}}">继续付款</button><button wx:else class="primary-button" bindtap="closePaymentResult">完成</button></view></view>
+    <view class="payment-result__sheet"><button class="payment-result__close" aria-label="取消并关闭付款提示" hover-class="payment-result__close--pressed" bindtap="closePaymentResult">取消</button><view class="payment-result__mark payment-result__mark--{{paymentResult.kind}}">{{paymentResult.mark}}</view><text class="payment-result__title">{{paymentResult.title}}</text><text class="payment-result__copy">{{paymentResult.copy}}</text><view class="payment-result__actions"><button class="secondary-button" bindtap="openPaymentResultAccount">查看本桌账单</button><button wx:if="{{paymentResult.canRetry}}" class="primary-button" bindtap="retryPaymentFromResult" loading="{{busy}}">继续付款</button><button wx:else class="primary-button" bindtap="closePaymentResult">完成</button></view></view>
   </view>
 
   <view wx:if="{{checkoutLocked && checkoutGuardVisible && !pendingPayment}}" class="checkout-guard">

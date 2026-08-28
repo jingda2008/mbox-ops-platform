@@ -1115,8 +1115,9 @@
    settlement until the table ledger confirms it. */
 .payment-result { z-index: 60; align-items: flex-end; }
 .payment-result__sheet { position: relative; width: 100%; padding: 38rpx 28rpx calc(28rpx + env(safe-area-inset-bottom)); border-radius: 28rpx 28rpx 0 0; background: #fffcf7; box-shadow: 0 -18rpx 58rpx rgba(25, 20, 16, .24); text-align: center; }
-.payment-result__close { position: absolute; top: 14rpx; right: 16rpx; width: 44px; min-width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; border: 0; border-radius: 50%; background: transparent; color: #756b61; font-size: 34rpx; line-height: 44px; }
+.payment-result__close { position: absolute; top: 18rpx; right: 22rpx; display: flex; width: 138rpx; min-width: 138rpx; height: 76rpx; min-height: 76rpx; margin: 0; padding: 0; align-items: center; justify-content: center; border: 1rpx solid #d6cec4; border-radius: 38rpx; background: #f5f1eb; box-shadow: 0 4rpx 12rpx rgba(45, 38, 31, .08); color: #62594f; font-size: 20rpx; font-weight: 650; line-height: 1; }
 .payment-result__close::after { border: 0; }
+.payment-result__close--pressed { background: #eae4dc; transform: scale(.97); }
 .payment-result__mark { display: flex; width: 76rpx; height: 76rpx; margin: 10rpx auto 18rpx; align-items: center; justify-content: center; border-radius: 50%; background: #eef0ec; color: #615b53; font-size: 38rpx; font-weight: 750; }
 .payment-result__mark--success { background: #e4f0e8; color: #315d46; }
 .payment-result__mark--pending { background: #f4ecd9; color: #856430; }
@@ -1124,8 +1125,9 @@
 .payment-result__title, .payment-result__copy { display: block; }
 .payment-result__title { color: #2f2924; font-family: "Songti SC", "STSong", serif; font-size: 34rpx; font-weight: 650; }
 .payment-result__copy { max-width: 610rpx; margin: 12rpx auto 0; color: #746b62; font-size: 22rpx; line-height: 1.6; }
-.payment-result__actions { display: grid; margin-top: 26rpx; grid-template-columns: 1fr 1fr; gap: 12rpx; }
-.payment-result__actions button { min-width: 0; min-height: 44px; margin: 0; padding: 0 14rpx; font-size: 22rpx; line-height: 44px; }
+.payment-result__actions { display: flex; margin-top: 26rpx; align-items: center; justify-content: flex-end; gap: 10rpx; }
+.payment-result__actions button { width: 220rpx; min-width: 0; min-height: 76rpx; margin: 0; padding: 0 8rpx; flex: 0 0 220rpx; border-radius: 38rpx; font-size: 20rpx; line-height: 76rpx; white-space: nowrap; }
+.payment-result__actions .primary-button { width: 250rpx; flex-basis: 250rpx; }
 
 @media (max-width: 360px) {
   .order-page { padding-top: 12rpx; }
@@ -1161,7 +1163,10 @@
   .checkout-guard { padding: 18rpx; }
   .checkout-guard__actions button { min-height: 44px; line-height: 44px; }
   .payment-result__sheet { padding-right: 20rpx; padding-left: 20rpx; }
+  .payment-result__close { top: 14rpx; right: 18rpx; width: 126rpx; min-width: 126rpx; min-height: 40px; height: 40px; border-radius: 20px; font-size: 19rpx; }
   .payment-result__actions { gap: 8rpx; }
+  .payment-result__actions button { width: 204rpx; min-height: 40px; flex-basis: 204rpx; border-radius: 20px; font-size: 20rpx; line-height: 40px; }
+  .payment-result__actions .primary-button { width: 232rpx; flex-basis: 232rpx; }
 }
 
 /* Cart and checkout must stay operable on foldable outer screens. */

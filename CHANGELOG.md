@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.0-rc.157 - 2026-08-28
+
+- Makes the native mini-program cart itself a compact, visible entry to an
+  editable order review with product price, quantity, line subtotal and total.
+- Uses one final customer confirmation to create the idempotent order and open
+  WeChat payment directly, then distinguishes success, cancellation, failure
+  and delayed server confirmation without creating a duplicate order.
+- Allows an unknown checkout-result sheet to close while retaining the same
+  idempotency key for safe status lookup or retry, and prevents payment from
+  reopening after WeChat has accepted it.
+- Narrows checkout controls and bottom sheets for the Huawei X5 outer screen
+  and other widths at or below 360px without weakening primary touch targets.
+- Requires `wechat_jsapi` for guest payment in commercial production and rejects
+  a staff-style native QR configuration before the guest order is created.
+
 ## 1.0.0-rc.156 - 2026-08-28
 
 - Fixes staff table-order and table-payment reads that could issue PostgreSQL row

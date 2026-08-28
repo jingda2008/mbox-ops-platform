@@ -21,6 +21,7 @@ export interface InventoryItemView {
   lowStock: boolean;
   wholeUnitCount: boolean;
   reasonableWasteQuantity: string;
+  packageVolumeMl: string | null;
   latestUnitCostMinor?: string | null;
 }
 
@@ -96,6 +97,7 @@ interface ItemRow extends Record<string, unknown> {
   low_stock: boolean;
   whole_unit_count: boolean;
   reasonable_waste_quantity: string;
+  package_volume_ml: string | null;
   latest_unit_cost_minor: string | null;
 }
 
@@ -164,6 +166,7 @@ export class InventoryQueryService {
           (item.low_stock_threshold IS NOT NULL
             AND balance.on_hand_quantity - balance.reserved_quantity <= item.low_stock_threshold) AS low_stock,
           item.whole_unit_count, item.reasonable_waste_quantity::text,
+          item.package_volume_ml::text,
           CASE WHEN $3::boolean THEN (
             SELECT line.unit_cost_minor::text
             FROM mbox.purchase_receipt_lines AS line
@@ -269,6 +272,7 @@ export class InventoryQueryService {
           lowStock: row.low_stock,
           wholeUnitCount: row.whole_unit_count,
           reasonableWasteQuantity: row.reasonable_waste_quantity,
+          packageVolumeMl: row.package_volume_ml,
           ...(canViewCosts
             ? { latestUnitCostMinor: row.latest_unit_cost_minor }
             : {}),

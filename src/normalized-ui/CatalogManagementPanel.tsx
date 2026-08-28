@@ -27,6 +27,26 @@ const salesSpecificationOptions: ReadonlyArray<{ code: SalesSpecificationType; l
   { code: 'custom', label: '自定义' },
 ]
 
+const inventoryCategoryLabels: Readonly<Record<string, string>> = {
+  'spirits.whisky': '威士忌',
+  'spirits.american_whisky': '美国威士忌',
+  'spirits.japanese_whisky': '日本威士忌',
+  'spirits.cognac_brandy': '干邑白兰地',
+  'wine.sparkling_champagne': '起泡酒/香槟',
+  'wine.red': '红酒',
+  'wine.white': '干白',
+  'spirits.vodka': '伏特加',
+  'spirits.gin': '金酒',
+  'spirits.rum': '朗姆酒',
+  'spirits.tequila': '龙舌兰',
+  'spirits.liqueur_absinthe': '力娇酒/苦艾',
+  'mixer.syrup_beverage': '糖浆饮料',
+  beer: '啤酒',
+  'food.snack': '食品零食',
+  'mixer.juice': '果汁',
+  'ingredient.seasoning': '调料配料',
+}
+
 interface CatalogProduct {
   id: string
   code: string
@@ -58,7 +78,7 @@ interface CatalogProduct {
   maxOrderQuantity: number
   kdsPriority: number
   fulfillmentSlaSeconds: number | null
-  costAmountMinor: number | null
+  costAmountMinor?: number | null
   status: ProductStatus
   isAvailable: boolean
   inventoryConfigurationComplete: boolean
@@ -120,6 +140,7 @@ interface ProductDraft {
   kdsPriority: string
   fulfillmentSlaSeconds: string
   costYuan: string
+  costChangeReason: string
   priceYuan: string
   priceReason: string
   description: string
@@ -133,6 +154,7 @@ interface InventoryItemOption {
   sku: string
   name: string
   baseUnit: string
+  categoryCode: string
 }
 
 interface RecipeComponentDraft {
@@ -197,6 +219,7 @@ export function CatalogManagementPanel({
   const [recipeVersion, setRecipeVersion] = useState<number | null>(null)
   const [recipeYield, setRecipeYield] = useState('1')
   const [recipeComponents, setRecipeComponents] = useState<Record<string, RecipeComponentDraft>>({})
+  const [recipeCategoryFilter, setRecipeCategoryFilter] = useState('')
   const [recipeBusy, setRecipeBusy] = useState(false)
   const [recipeCost, setRecipeCost] = useState<RecipeCostPreview | null>(null)
   const [recipeCostReason, setRecipeCostReason] = useState('按最新已收货物料成本核算配方成本')
@@ -206,11 +229,11 @@ export function CatalogManagementPanel({
   const load = useCallback(async () => {
     setPhase('loading')
     try {
-      const [response, categoryResponse] = await Promise.all([
-        api.getEndpoint<{ data: unknown }>('/api/catalog/products?status=all&limit=100'),
+      const [loadedProducts, categoryResponse] = await Promise.all([
+        loadAllProducts(api),
         api.getEndpoint<{ data: unknown }>('/api/catalog/menu-categories'),
       ])
-      setProducts(readProducts(response.data))
+      setProducts(loadedProducts)
       setMenuCategories(readMenuCategories(categoryResponse.data))
       setPhase('ready')
     } catch (error) {
@@ -239,6 +262,11 @@ export function CatalogManagementPanel({
   const singleProducts = useMemo(() => products.filter((product) => (
     product.productKind === 'single' && product.id !== draft?.id
   )), [draft?.id, products])
+  const recipeCategories = useMemo(() => [...new Set(inventoryItems.map((item) => item.categoryCode))]
+    .sort((left, right) => inventoryCategoryLabel(left).localeCompare(inventoryCategoryLabel(right), 'zh-CN')), [inventoryItems])
+  const visibleRecipeItems = recipeCategoryFilter === ''
+    ? inventoryItems
+    : inventoryItems.filter((item) => item.categoryCode === recipeCategoryFilter)
   const performancePhaseDirty = performancePhaseState === 'ready'
     && !samePerformancePhases(performancePhaseCodes, savedPerformancePhaseCodes)
   const isInventoryFlow = placement === 'inventory'
@@ -264,6 +292,7 @@ export function CatalogManagementPanel({
     setRecipeVersion(null)
     setRecipeYield('1')
     setRecipeComponents({})
+    setRecipeCategoryFilter('')
     setRecipeBusy(false)
     setRecipeCost(null)
     setRecipeCostReason('按最新已收货物料成本核算配方成本')
@@ -414,6 +443,7 @@ export function CatalogManagementPanel({
       kdsPriority: integerText(product.kdsPriority, '100'),
       fulfillmentSlaSeconds: integerText(product.fulfillmentSlaSeconds, ''),
       costYuan: minorToYuan(product.costAmountMinor),
+      costChangeReason: '',
       priceYuan: minorToYuan(product.standardPrice?.amountMinor ?? null),
       priceReason: '商品配置同步调整标准售价',
       description: typeof product.productSnapshot.description === 'string' ? product.productSnapshot.description : '',
@@ -427,6 +457,29 @@ export function CatalogManagementPanel({
     if (canManageInventory && product.productKind === 'single' && product.inventoryControlMode === 'tracked') {
       void loadRecipeEditor(product.id)
     }
+  }
+
+  const startSalesCompanion = (salesSpecificationType: SalesSpecificationType) => {
+    if (draft === null || draft.id === null) return
+    const label = salesSpecificationLabel(salesSpecificationType)
+    setDraft({
+      ...draft,
+      id: null,
+      code: companionProductCode(draft.code, salesSpecificationType, products),
+      name: `${draft.name}（${label}）`,
+      salesSpecificationType,
+      status: 'inactive',
+      // A whole bottle and a glass have distinct recipes and yields. Never
+      // carry a manual whole-bottle cost into the companion product.
+      costYuan: '',
+      priceYuan: '',
+      priceReason: `新增${label}销售规格`,
+      costChangeReason: '',
+      componentQuantities: {},
+    })
+    resetPerformancePhaseEditor()
+    resetRecipeEditor()
+    setNotice({ kind: 'success', text: `已预填${label}销售商品。商品编号已使用内部编号，避免与库存条码冲突；保存后为它配置售价，并在配方中引用同一库存物料。` })
   }
 
   const closeDraft = () => {
@@ -587,7 +640,7 @@ export function CatalogManagementPanel({
     const intentTags = readEnumList(draft.recommendationIntentTags, ['relaxed', 'energetic', 'ritual', 'unsure'])
     const tasteTags = readEnumList(draft.recommendationTasteTags, ['refreshing', 'layered', 'strong', 'any'])
     const dwellTags = readEnumList(draft.recommendationDwellTags, ['one_set', 'stay_longer', 'no_rush'])
-    const costAmount = moneyToMinor(draft.costYuan, true)
+    const costAmount = canViewInventoryCost ? moneyToMinor(draft.costYuan, true) : undefined
     const priceAmount = moneyToMinor(draft.priceYuan, false)
     if (minimum === null || maximum === null || minimum > maximum || priority === null
       || prepMinutes === null || holdMinutes === null || sortOrder === null || maxOrderQuantity === null
@@ -595,8 +648,12 @@ export function CatalogManagementPanel({
       || sceneTags === null || intentTags === null || tasteTags === null || dwellTags === null
       || draft.allowedChannels.length === 0 || Boolean(draft.availableFrom) !== Boolean(draft.availableUntil)
       || (draft.availableFrom !== '' && draft.availableFrom === draft.availableUntil)
-      || costAmount === undefined || (draft.status === 'active' && costAmount === null)) {
+      || (canViewInventoryCost && (costAmount === undefined || (draft.status === 'active' && costAmount === null)))) {
       setNotice({ kind: 'error', text: '请核对推荐、供应时段、渠道、限购和出品时限；在售商品必须填写成本' })
+      return
+    }
+    if (draft.id === null && draft.status === 'active' && !canViewInventoryCost) {
+      setNotice({ kind: 'error', text: '当前岗位不能查看或填写成本，不能直接创建在售商品；请先保存为停用，或由具备成本权限的员工完成上架。' })
       return
     }
     if (draft.productKind === 'single' && draft.inventoryControlMode === 'tracked' && draft.status === 'active') {
@@ -640,6 +697,15 @@ export function CatalogManagementPanel({
     const currentPrice = draft.id === null
       ? null
       : products.find((product) => product.id === draft.id)?.standardPrice?.amountMinor ?? null
+    const currentCost = draft.id === null
+      ? null
+      : products.find((product) => product.id === draft.id)?.costAmountMinor
+    const costChanged = canViewInventoryCost && costAmount !== undefined
+      && (draft.id === null || currentCost === null || currentCost === undefined || currentCost !== costAmount)
+    if (costChanged && draft.id !== null && draft.costChangeReason.trim().length < 2) {
+      setNotice({ kind: 'error', text: '修改成本时请填写至少2个字的成本变更原因' })
+      return
+    }
     const standardPrice = canManagePrice && priceAmount !== null
       && (draft.id === null || currentPrice === null || Number(currentPrice) !== priceAmount)
       ? { amountMinor: priceAmount, currency: 'CNY', reason: draft.priceReason.trim() || '商品配置调整标准售价' }
@@ -674,7 +740,10 @@ export function CatalogManagementPanel({
       maxOrderQuantity,
       kdsPriority,
       fulfillmentSlaSeconds,
-      costAmountMinor: costAmount,
+      ...(costChanged ? {
+        costAmountMinor: costAmount,
+        ...(draft.id === null ? {} : { costChangeReason: draft.costChangeReason.trim() }),
+      } : {}),
       status: draft.status,
       ...(standardPrice === undefined ? {} : { standardPrice }),
     }
@@ -724,19 +793,22 @@ export function CatalogManagementPanel({
         </section>
         <div className="catalog-management-tools"><input aria-label="搜索配置商品" placeholder="搜索商品名、编号或分类" value={query} onChange={(event) => setQuery(event.target.value)} /><button type="button" onClick={startCreate}><CirclePlus size={17} /> 新增商品</button><button type="button" onClick={() => void load()}>刷新可售状态</button></div>
         {draft !== null && <form className="catalog-management-form" onSubmit={(event) => void save(event)}>
-          <header><strong>{draft.id === null ? '新增商品' : `编辑 ${draft.name}`}</strong><button type="button" onClick={closeDraft}>取消</button></header>
+          <header><strong>{draft.id === null ? '新增商品' : `编辑 ${draft.name}`}</strong><span>{draft.id !== null && draft.productKind === 'bundle' && draft.status !== 'inactive' && <button type="button" onClick={() => { updateDraft('status', 'inactive'); setNotice({ kind: 'success', text: '套餐已标记为停用；点击下方保存后将从顾客菜单下架，历史订单和对账会保留。' }) }}>停用套餐</button>}<button type="button" onClick={closeDraft}>取消</button></span></header>
           <div className="catalog-form-grid">
             <label>商品编号<input required disabled={draft.id !== null} pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" value={draft.code} onChange={(event) => updateDraft('code', event.target.value)} /></label>
             <label>商品名称<input required maxLength={160} value={draft.name} onChange={(event) => updateDraft('name', event.target.value)} /></label>
             <label>顾客菜单分类<select required value={draft.categoryCode} onChange={(event) => updateCategory(event.target.value)}>{!menuCategoryOptions.some((option) => option.code === draft.categoryCode) && <option value={draft.categoryCode}>当前分类（{draft.categoryCode}）</option>}{menuCategoryOptions.map((option) => <option key={option.code} value={option.code}>{option.label}</option>)}</select><small>分类名称、层级、顺序和顾客可见性在上方统一配置。</small></label>
             <label>商品类型<select value={draft.productKind} onChange={(event) => updateDraft('productKind', event.target.value as ProductKind)}><option value="single">单品</option><option value="bundle">组合商品</option></select></label>
             <label>销售规格<select disabled={draft.productKind === 'bundle'} value={draft.salesSpecificationType} onChange={(event) => updateDraft('salesSpecificationType', event.target.value as SalesSpecificationType)}>{salesSpecificationOptions.map((option) => <option key={option.code} value={option.code}>{option.label}</option>)}</select><small>规格只描述销售形态；真实库存始终由下方配方引用，不重复建立库存。</small></label>
+            {draft.id !== null && draft.productKind === 'single' && draft.inventoryControlMode === 'tracked' && (draft.salesSpecificationType === 'whole_bottle' || draft.salesSpecificationType === 'glass') && <div className="catalog-wide catalog-sales-companion"><strong>整瓶与单杯共用库存</strong><small>两种销售形态必须各自有商品、售价和配方，才能按不同用量正确扣减同一物料。</small><button type="button" onClick={() => startSalesCompanion(draft.salesSpecificationType === 'whole_bottle' ? 'glass' : 'whole_bottle')}>新建{draft.salesSpecificationType === 'whole_bottle' ? '单杯' : '整瓶'}版本</button></div>}
             <label>出品岗位<select disabled={draft.productKind === 'bundle'} value={draft.productKind === 'bundle' ? 'none' : draft.fulfillmentStation} onChange={(event) => updateDraft('fulfillmentStation', event.target.value as FulfillmentStation)}><option value="bar">吧台</option><option value="kitchen">后厨</option><option value="cashier">收银</option><option value="none">无需出品</option></select></label>
             <label>销售状态<select value={draft.status} onChange={(event) => updateDraft('status', event.target.value as ProductStatus)}><option value="active">在售</option><option value="sold_out">售罄</option><option value="inactive">停用</option></select></label>
             <label>库存方式<select disabled={draft.productKind === 'bundle'} value={draft.productKind === 'bundle' ? 'tracked' : draft.inventoryControlMode} onChange={(event) => updateDraft('inventoryControlMode', event.target.value as InventoryControlMode)}><option value="tracked">跟踪库存（酒水等）</option><option value="not_managed">暂不管理数量（小吃水果）</option></select></label>
             <label>搜索文本<input maxLength={4000} value={draft.searchText} onChange={(event) => updateDraft('searchText', event.target.value)} /></label>
             <label>标准售价（元）<input disabled={!canManagePrice} inputMode="decimal" value={draft.priceYuan} onChange={(event) => updateDraft('priceYuan', event.target.value)} />{!canManagePrice && <small>当前岗位不能定价；不会在保存后尝试补写售价。</small>}</label>
-            <label>成本金额（元）<input inputMode="decimal" value={draft.costYuan} onChange={(event) => updateDraft('costYuan', event.target.value)} /></label>
+            {canViewInventoryCost
+              ? <label>成本金额（元）<input inputMode="decimal" value={draft.costYuan} onChange={(event) => updateDraft('costYuan', event.target.value)} /><small>保存其他商品资料不会改动成本；修改成本需单独填写原因。</small></label>
+              : <p className="catalog-permission-note">成本已受权限保护。你可以保存商品资料，但系统不会读取、显示或改写成本。</p>}
             <label>推荐最少人数<input inputMode="numeric" value={draft.recommendationMinGuests} onChange={(event) => updateDraft('recommendationMinGuests', event.target.value)} /></label>
             <label>推荐最多人数<input inputMode="numeric" value={draft.recommendationMaxGuests} onChange={(event) => updateDraft('recommendationMaxGuests', event.target.value)} /></label>
             <label>推荐优先级<input inputMode="numeric" value={draft.recommendationPriority} onChange={(event) => updateDraft('recommendationPriority', event.target.value)} /></label>
@@ -744,6 +816,9 @@ export function CatalogManagementPanel({
             <label className="catalog-check"><input type="checkbox" checked={draft.recommendationEnabled} onChange={(event) => updateDraft('recommendationEnabled', event.target.checked)} />参与商品推荐</label>
             {isInventoryFlow && <section className={`catalog-sale-readiness catalog-wide${currentSaleBlockers.length === 0 && currentProduct !== null ? ' is-ready' : ''}`} aria-label="酒水小程序可售检查"><header><div><strong>第 5 步：小程序可售检查</strong><small>{draft.id === null ? '新酒水先保存为停用；保存后可配置配方并读取真实可售状态。' : currentSaleBlockers.length === 0 ? '该商品已通过当前的售价、配方、库存和小程序菜单校验。' : '请按以下提示完成；保存商品状态不等于顾客已经可以下单。'}</small></div><em>{draft.id === null ? '待建档' : currentSaleBlockers.length === 0 ? '小程序可售' : '待完成'}</em></header>{currentProduct !== null && currentSaleBlockers.length > 0 && <ul>{currentSaleBlockers.map((item) => <li key={item}>{item}</li>)}</ul>}</section>}
             {canManagePrice && <label className="catalog-wide">调价原因<input maxLength={500} value={draft.priceReason} onChange={(event) => updateDraft('priceReason', event.target.value)} /></label>}
+            {canViewInventoryCost && draft.id !== null && currentProduct !== null
+              && moneyToMinor(draft.costYuan, true) !== currentProduct.costAmountMinor
+              && <label className="catalog-wide">成本变更原因<input required minLength={2} maxLength={500} value={draft.costChangeReason} placeholder="例如：供应商进价调整，按本次采购单更新" onChange={(event) => updateDraft('costChangeReason', event.target.value)} /></label>}
             <button type="button" className="catalog-advanced-toggle catalog-wide" aria-expanded={showAdvanced} onClick={() => setShowAdvanced((value) => !value)}>{showAdvanced ? '收起高级字段' : '显示高级字段（供应、标签与渠道）'}<ChevronDown size={17} /></button>
             {showAdvanced && <>
               <label>菜单排序<input type="number" min={0} max={100000} value={draft.sortOrder} onChange={(event) => updateDraft('sortOrder', event.target.value)} /></label>
@@ -788,13 +863,13 @@ export function CatalogManagementPanel({
                 <label>每份配方产出数量<input type="number" min={1} max={1000} value={recipeYield} onChange={(event) => setRecipeYield(event.target.value)} /></label>
                 {inventoryItems.length === 0
                   ? <p>当前还没有库存物料。请先在“库存与瓶存”中扫码或手工建立物料，再回来配置配方。</p>
-                  : <div className="catalog-recipe-items">{inventoryItems.map((item) => {
+                  : <><label>先按原料品类筛选<select value={recipeCategoryFilter} onChange={(event) => setRecipeCategoryFilter(event.target.value)}><option value="">全部原料</option>{recipeCategories.map((category) => <option key={category} value={category}>{inventoryCategoryLabel(category)}</option>)}</select><small>已选原料不会因筛选而丢失；可切换品类继续添加。</small></label><div className="catalog-recipe-items">{visibleRecipeItems.map((item) => {
                     const component = recipeComponents[item.id]
                     return <article key={item.id} className={component === undefined ? '' : 'is-selected'}>
-                      <label><input type="checkbox" checked={component !== undefined} onChange={() => toggleRecipeComponent(item.id)} /><span><strong>{item.name}</strong><small>{item.sku} · {item.baseUnit}</small></span></label>
+                      <label><input type="checkbox" checked={component !== undefined} onChange={() => toggleRecipeComponent(item.id)} /><span><strong>{item.name}</strong><small>{inventoryCategoryLabel(item.categoryCode)} · {item.sku} · {item.baseUnit}</small></span></label>
                       {component !== undefined && <div><label>每份用量<input inputMode="decimal" value={component.quantity} onChange={(event) => updateRecipeComponent(item.id, 'quantity', event.target.value)} /></label><label>预计损耗<input inputMode="decimal" value={component.expectedWasteQuantity} onChange={(event) => updateRecipeComponent(item.id, 'expectedWasteQuantity', event.target.value)} /></label></div>}
                     </article>
-                  })}</div>}
+                  })}</div>{visibleRecipeItems.length === 0 && <p>该品类暂未录入物料。可在“库存与瓶存”先建立或补齐分类。</p>}</>}
                 <button type="button" disabled={recipeBusy || inventoryItems.length === 0} onClick={() => void saveRecipe()}>{recipeBusy ? '保存中' : '保存配方并刷新可售检查'}</button>
                 {canViewInventoryCost && recipeCost !== null && <section className="catalog-recipe-cost" aria-label="配方成本核算">
                   <header><div><strong>配方成本核算</strong><small>只读取已收货的采购成本。保存配方不会自动改售价或成本，必须由有成本权限的员工明确应用。</small></div><em>{recipeCost.costAmountMinor === null ? '待补成本' : `¥${minorToYuan(recipeCost.costAmountMinor)}/份`}</em></header>
@@ -805,6 +880,10 @@ export function CatalogManagementPanel({
                       <button type="button" disabled={recipeBusy} onClick={() => void applyRecipeCost()}>{recipeBusy ? '应用中' : '按当前收货成本应用到商品'}</button></>}
                 </section>}
               </>}
+            </section>}
+            {!canManageInventory && draft.productKind === 'single' && draft.inventoryControlMode === 'tracked' && <section className="catalog-recipe catalog-wide" aria-label="商品库存配方权限说明">
+              <header><div><strong>库存扣减配方</strong><small>该商品需要配方才能按真实物料扣减和通过小程序可售校验。</small></div><em>需要授权</em></header>
+              <p>当前账号没有“库存管理”权限，因此不能查看或调整配方。请由管理员分配库存管理权限，或请有该权限的同事完成配置；商品资料入口仍可正常使用。</p>
             </section>}
           </div>
           {draft.productKind === 'bundle' && <section className="catalog-components"><strong>组合内容</strong><div>{singleProducts.map((product) => <label key={product.id} className={product.id in draft.componentQuantities ? 'is-selected' : ''}><input type="checkbox" checked={product.id in draft.componentQuantities} onChange={() => toggleComponent(product.id)} /><span>{product.name}</span>{product.id in draft.componentQuantities && <input aria-label={`${product.name}数量`} inputMode="numeric" value={draft.componentQuantities[product.id]} onChange={(event) => updateDraft('componentQuantities', { ...draft.componentQuantities, [product.id]: event.target.value })} />}</label>)}</div></section>}
@@ -817,6 +896,20 @@ export function CatalogManagementPanel({
       </>}
     </div>}
   </section>
+}
+
+async function loadAllProducts(api: NormalizedApiClient): Promise<CatalogProduct[]> {
+  const products: CatalogProduct[] = []
+  const pageSize = 100
+  for (let offset = 0; offset < 10_000; offset += pageSize) {
+    const response = await api.getEndpoint<{ data: unknown }>(
+      `/api/catalog/products?status=all&limit=${pageSize}&offset=${offset}`,
+    )
+    const page = readProducts(response.data)
+    products.push(...page)
+    if (page.length < pageSize) return products
+  }
+  throw new Error('商品数量超过当前可读取范围，请缩小检索范围后重试')
 }
 
 function emptyDraft(categories: readonly MenuCategory[]): ProductDraft {
@@ -834,7 +927,7 @@ function emptyDraft(categories: readonly MenuCategory[]): ProductDraft {
     recommendationUpgradeProductId: '', sortOrder: '999', availableFrom: '', availableUntil: '',
     allowedChannels: ['guest_qr', 'staff_assisted', 'cashier', 'reservation', 'integration'],
     maxOrderQuantity: '50', kdsPriority: '100', fulfillmentSlaSeconds: '',
-    costYuan: '', priceYuan: '', priceReason: '新增商品标准售价', description: '', imageUrl: '', snapshot: {}, componentQuantities: {},
+    costYuan: '', costChangeReason: '', priceYuan: '', priceReason: '新增商品标准售价', description: '', imageUrl: '', snapshot: {}, componentQuantities: {},
   }
 }
 
@@ -875,6 +968,26 @@ function readSalesSpecificationType(value: unknown): SalesSpecificationType {
   return salesSpecificationOptions.some((option) => option.code === value)
     ? value as SalesSpecificationType
     : 'custom'
+}
+
+function salesSpecificationLabel(value: SalesSpecificationType): string {
+  return salesSpecificationOptions.find((option) => option.code === value)?.label ?? '自定义'
+}
+
+function companionProductCode(
+  sourceCode: string,
+  specification: SalesSpecificationType,
+  products: readonly CatalogProduct[],
+): string {
+  const suffix = specification === 'glass' ? 'GLASS' : 'BOTTLE'
+  const base = `${sourceCode.replace(/-(?:GLASS|BOTTLE)(?:-\d+)?$/i, '')}-${suffix}`.slice(0, 60)
+  const existing = new Set(products.map((product) => product.code.toUpperCase()))
+  if (!existing.has(base.toUpperCase())) return base
+  for (let index = 2; index < 10_000; index += 1) {
+    const candidate = `${base.slice(0, 59 - String(index).length)}-${index}`
+    if (!existing.has(candidate.toUpperCase())) return candidate
+  }
+  return `${base.slice(0, 54)}-${Date.now().toString().slice(-5)}`
 }
 
 function performancePhaseConfiguration(value: unknown, productId: string): {
@@ -939,10 +1052,14 @@ function readInventoryItems(value: unknown): InventoryItemOption[] {
   if (!isRecord(value) || !Array.isArray(value.items)) return []
   return value.items.flatMap((item): InventoryItemOption[] => (
     isRecord(item) && typeof item.id === 'string' && typeof item.sku === 'string'
-      && typeof item.name === 'string' && typeof item.baseUnit === 'string'
-      ? [{ id: item.id, sku: item.sku, name: item.name, baseUnit: item.baseUnit }]
+      && typeof item.name === 'string' && typeof item.baseUnit === 'string' && typeof item.categoryCode === 'string'
+      ? [{ id: item.id, sku: item.sku, name: item.name, baseUnit: item.baseUnit, categoryCode: item.categoryCode }]
       : []
   ))
+}
+
+function inventoryCategoryLabel(categoryCode: string): string {
+  return inventoryCategoryLabels[categoryCode] ?? categoryCode
 }
 
 function sellingBlockers(product: CatalogProduct): string[] {

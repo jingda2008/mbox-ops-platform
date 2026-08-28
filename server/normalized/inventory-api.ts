@@ -199,6 +199,26 @@ export const inventoryApiPlugin: FastifyPluginAsync<
     }),
   );
 
+  app.patch<{ Params: { itemId: string } }>(
+    "/inventory/items/:itemId",
+    async (request, reply) =>
+      handleRoute(reply, async () => {
+        const context = await options.resolveContext(request);
+        const itemId = readUuid(request.params.itemId, "itemId");
+        const input = readInventoryItemUpdate(readObject(request.body));
+        const execution = await execute(
+          options,
+          context,
+          request,
+          "inventory.item.update",
+          "inventory.manage",
+          inventoryItemCodec,
+          async (transaction) => createInventory(transaction).updateItem(itemId, input),
+        );
+        return reply.send(response(execution));
+      }),
+  );
+
   app.post<{ Params: { itemId: string } }>(
     "/inventory/items/:itemId/barcodes",
     async (request, reply) =>
@@ -1083,6 +1103,22 @@ function readInventoryItem(body: JsonObject): CreateInventoryItemInput {
       "reasonableWasteQuantity",
       true,
     ),
+    packageVolumeMl: body.packageVolumeMl === undefined || body.packageVolumeMl === null
+      ? null
+      : readDecimal(body.packageVolumeMl, "packageVolumeMl", false),
+  };
+}
+
+function readInventoryItemUpdate(body: JsonObject) {
+  return {
+    name: readString(body.name, "name", 200),
+    categoryCode: readCode(body.categoryCode, "categoryCode"),
+    lowStockThreshold: body.lowStockThreshold === undefined || body.lowStockThreshold === null
+      ? null
+      : readDecimal(body.lowStockThreshold, "lowStockThreshold", true),
+    packageVolumeMl: body.packageVolumeMl === undefined || body.packageVolumeMl === null
+      ? null
+      : readDecimal(body.packageVolumeMl, "packageVolumeMl", false),
   };
 }
 

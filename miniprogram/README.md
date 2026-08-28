@@ -37,15 +37,15 @@ miniprogram/
 
 ```js
 {
-  apiBaseUrl: 'http://127.0.0.1:8787',
+  apiBaseUrl: 'https://mbox.shmbox.com',
   storeId: 'mbox-lujiazui',
   defaultTableCode: 'L01',
-  defaultTableToken: 'dev-table-token-L01',
+  defaultTableToken: '',
   developmentActorId: 'emp-chen'
 }
 ```
 
-`developmentActorId` 只用于本地员工接口调试，不参与顾客桌码接口，且不得用于预发布或生产。
+`developmentActorId` 只用于本地员工接口调试，不参与顾客桌码接口，且不得用于预发布或生产。开发源码不再内置可用桌码令牌；验证“已开台”流程时，须将运行时 API 临时指向隔离本机服务，并使用该服务为测试桌签发的短期桌码。不得把线上桌码、历史测试令牌或伪造令牌写入项目配置。
 
 ## 桌码参数
 
@@ -128,7 +128,7 @@ miniprogram-release-evidence-<commit>.tar.gz
 
 ## 开发者工具验收
 
-1. 不带桌码进入首页，确认仍可进入“预约到店”，但现场服务入口保持禁用；再使用编译条件 `table=L01&token=dev-table-token-L01` 确认显示 `休闲01`、服务专员和“开发模式”。
+1. 不带桌码进入首页，确认仍可进入“预约到店”，但现场服务入口保持禁用；“已开台”流程只使用隔离本机服务现场签发的测试桌码，确认显示本桌、服务专员和“开发模式”。
 2. 关闭 API 后刷新，确认出现“开发占位数据”警告，服务、投诉和点歌写操作不可提交。
 3. 启动 API 后点击“加水”，确认收到后端 `customerReply`；管理/员工 Web 应出现同一桌台任务。
 4. 员工端将任务依次改为接单、到桌、完成；小程序状态页下拉刷新后确认状态一致。

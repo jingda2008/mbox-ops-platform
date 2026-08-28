@@ -12,3 +12,4 @@
 .coupon-title{display:block;margin-top:10rpx;font-size:28rpx;font-weight:700}
 .coupon-copy{display:block;margin-top:8rpx;color:#746c63;font-size:21rpx;line-height:1.45}
 .coupon-foot{display:flex;margin-top:14rpx;padding-top:12rpx;align-items:center;justify-content:space-between;border-top:1rpx solid #eee7df;color:#7a7269;font-size:18rpx;gap:12rpx}
+@media(max-width:360px){.coupons-hero{margin-right:-18rpx;margin-left:-18rpx;padding-right:18rpx;padding-left:18rpx}.coupons-hero text:nth-child(2){font-size:38rpx}.coupon-card{padding:18rpx}.coupon-foot{align-items:flex-start;flex-direction:column;gap:6rpx}}

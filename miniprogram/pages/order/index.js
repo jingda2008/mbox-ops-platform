@@ -30,6 +30,28 @@ const { requestWechatSubscription } = require('../../utils/wechat-subscription')
 
 const PENDING_PAYMENT_KEY = 'mbox.pending.guest.payment.v1'
 const CHECKOUT_ATTEMPT_KEY = 'mbox.pending.guest.checkout.v1'
+
+// These failures are returned before the checkout transaction can create an
+// order or payment. They must release the local checkout guard so a customer
+// is not trapped by a deterministic validation or configuration rejection.
+const CHECKOUT_REJECTED_BEFORE_ORDER = new Set([
+  'GUEST_CHECKOUT_CONFIGURATION_UNAVAILABLE',
+  'ONLINE_PAYMENT_UNAVAILABLE',
+  'WECHAT_IDENTITY_REQUIRED',
+  'GUEST_SESSION_INVALID',
+  'TABLE_SESSION_ENDED',
+  'STORE_ACCESS_FORBIDDEN',
+  'GUEST_CAPABILITY_DENIED',
+  'PRODUCT_UNAVAILABLE',
+  'SHARED_CART_EMPTY',
+  'SHARED_CART_OPERATION_CONFLICT',
+  'SHARED_CART_LIMIT_EXCEEDED',
+  'SHARED_CART_RATE_LIMITED',
+  'SHARED_CART_WRITES_FROZEN',
+  'CART_PROTOCOL_UPGRADE_REQUIRED',
+  'GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED',
+  'GUEST_ORDER_RATE_LIMITED',
+])
 const MEMBERSHIP_INVITE_DISMISSED_KEY = 'mbox.membership.invite.dismissed.until.v1'
 
 function compactMoney(amount) {
@@ -396,6 +418,8 @@ Page({
     checkoutConfirmVisible: false,
     pendingPayment: null,
     checkoutLocked: false,
+    checkoutGuardVisible: false,
+    paymentResult: null,
     benefitCount: 0,
     membershipInviteVisible: false,
     membershipBusy: false,
@@ -514,7 +538,7 @@ Page({
       this.initialRecommendationRequested = false
       this.setData({
         busy: false, cartSyncing: false, clearingCart: false, quickServiceBusy: '',
-        checkoutLocked: false, pendingPayment: null, cart: [], cartVersion: 0, cartGeneration: 0,
+        checkoutLocked: false, checkoutGuardVisible: false, pendingPayment: null, paymentResult: null, cart: [], cartVersion: 0, cartGeneration: 0,
         cartTotal: '¥0.00', cartTotalCompact: '¥0', cartCount: 0, cartExpanded: false, checkoutConfirmVisible: false, cartWritesFrozen: false,
         recommendations: [], recommendationPublicId: '', recommendationAttribution: null, recommendationError: '', performance: null, performanceError: '',
       })
@@ -667,6 +691,7 @@ Page({
     const tableOrders = tableOrdersAvailable ? results[3] : []
     const paymentScope = tableSessionCacheScope()
     let storedPending = wx.getStorageSync(PENDING_PAYMENT_KEY) || null
+    let completedPayment = null
     // Pending-payment records created before table scopes existed cannot be
     // safely attributed after a new scan. Clear them before a weak-network
     // order refresh can render the previous table's payment state.
@@ -675,8 +700,19 @@ Page({
       storedPending = null
     }
     const storedOrder = storedPending && tableOrders.find((item) => item.publicId === storedPending.orderPublicId)
-    if (storedPending && tableOrdersAvailable
-      && (!storedOrder || Number(storedOrder.payableAmountMinor || 0) === 0)) {
+    if (storedPending && tableOrdersAvailable && storedOrder
+      && (Number(storedOrder.payableAmountMinor || 0) === 0
+        || ['paid', 'partially_refunded', 'refunded'].includes(storedOrder.paymentStatus))) {
+      completedPayment = {
+        kind: 'success',
+        mark: '✓',
+        title: '付款成功',
+        copy: `已收到 ${storedPending.amountText || '本次款项'}，订单已进入本桌出品流程。`,
+        canRetry: false,
+      }
+      wx.removeStorageSync(PENDING_PAYMENT_KEY)
+      storedPending = null
+    } else if (storedPending && tableOrdersAvailable && !storedOrder) {
       wx.removeStorageSync(PENDING_PAYMENT_KEY)
       storedPending = null
     }
@@ -684,12 +720,14 @@ Page({
       && ['available', 'payment_in_progress', 'status_review'].includes(item.paymentAccess))
     const pendingPayment = storedPending
       ? Object.assign({}, storedPending, {
-          canContinue: Boolean(tableOrdersAvailable && storedOrder
+          canContinue: Boolean(!storedPending.wechatAcceptedAt && tableOrdersAvailable && storedOrder
             && ['available', 'payment_in_progress'].includes(storedOrder.paymentAccess)),
           statusText: tableOrdersAvailable && storedOrder
             ? storedOrder.paymentAccess === 'status_review'
               ? '付款结果确认中，请勿重复支付'
-              : storedPending.statusText
+              : storedPending.wechatAcceptedAt
+                ? '微信支付已完成，到账确认中，请勿重复支付'
+                : storedPending.statusText
             : '桌账暂时无法核对，请稍后刷新',
         })
       : (pendingFromOrders ? {
@@ -705,6 +743,15 @@ Page({
           canContinue: pendingFromOrders.paymentAccess === 'available',
         } : null)
     const bootstrap = results[5]
+    const pendingCheckout = (() => {
+      const stored = wx.getStorageSync(CHECKOUT_ATTEMPT_KEY)
+      if (stored && stored.tableScope !== paymentScope) {
+        wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
+        return null
+      }
+      return stored || null
+    })()
+    const checkoutLocked = Boolean(pendingCheckout)
     this.setData({
       loading: false,
       browseOnly: false,
@@ -717,14 +764,10 @@ Page({
       serviceSummary: serviceSummaryView(results[8], this.data.serviceStaffName),
       benefitCount: (results[2] || []).reduce((sum, item) => sum + Number(item.quantityAvailable || 0), 0),
       pendingPayment,
-      checkoutLocked: Boolean((() => {
-        const pendingCheckout = wx.getStorageSync(CHECKOUT_ATTEMPT_KEY)
-        if (pendingCheckout && pendingCheckout.tableScope !== paymentScope) {
-          wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
-          return false
-        }
-        return Boolean(pendingCheckout)
-      })()),
+      paymentResult: completedPayment || this.data.paymentResult,
+      success: completedPayment ? completedPayment.title : this.data.success,
+      checkoutLocked,
+      checkoutGuardVisible: checkoutLocked && !this.data.checkoutLocked,
       membershipTerms: bootstrap && bootstrap.membershipTerms ? bootstrap.membershipTerms : null,
       membershipInviteVisible: false,
       wechatNotificationPromptOptions: (results[6] && results[6].authorizations) || [],
@@ -1202,7 +1245,12 @@ Page({
   openStatus() { wx.navigateTo({ url: '/pages/status/index' }) },
   openAccount() { wx.navigateTo({ url: '/pages/account/index' }) },
   openBenefits() { wx.switchTab({ url: '/pages/profile/index' }) },
-  toggleCart() { this.openCheckout() },
+  toggleCart() { this.openCartDetails() },
+
+  openCartDetails() {
+    if (!this.data.cart.length) return
+    this.setData({ checkoutConfirmVisible: true, cartExpanded: false, error: '' })
+  },
 
   async openCheckout() {
     if (!this.data.cart.length || this.data.busy || this.data.pendingPayment) return
@@ -1221,8 +1269,14 @@ Page({
   },
 
   closeCheckoutConfirm() {
-    if (this.data.busy || this.data.checkoutLocked) return
+    if (this.data.busy) return
     this.setData({ checkoutConfirmVisible: false })
+  },
+
+  closeCheckoutGuard() {
+    // Dismiss only the blocking sheet. Keep the idempotent attempt and cart
+    // freeze until the server gives a definite result.
+    this.setData({ checkoutGuardVisible: false })
   },
 
   async confirmCheckout() {
@@ -1238,12 +1292,10 @@ Page({
       return
     }
     // The final confirmation must lead straight to the order and WeChat
-    // payment. Smart combinations stay in the browsing recommendation area,
-    // rather than inserting another decision after the customer has confirmed.
+    // payment. Subscription prompts belong to the earlier selection action;
+    // putting one here would create an unexpected third checkout step.
     this.setData({ busy: true, error: '', checkoutConfirmVisible: false })
     try {
-      await this.offerOrderNotifications('order_checkout', tableRequest)
-      if (!this.isCurrentTableRequest(tableRequest)) return
       await this.submitOrder(null, true, null, tableRequest)
     } catch (error) { if (this.isCurrentTableRequest(tableRequest)) this.setData({ error: customerErrorMessage(error, '订单暂时无法提交，请稍后重试。') }) }
     finally { if (this.isCurrentTableRequest(tableRequest)) this.setData({ busy: false }) }
@@ -1257,14 +1309,9 @@ Page({
       || !Number.isSafeInteger(attempt.expectedVersion)
       || attempt.tableScope !== tableSessionCacheScope()) {
       wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
-      this.setData({ checkoutLocked: false })
+      this.setData({ checkoutLocked: false, checkoutGuardVisible: false })
       return
     }
-    // “重新确认下单” is also a direct customer action.  This covers an order
-    // restored after reopening the mini-program without showing a duplicate
-    // prompt for the same page instance.
-    await this.offerOrderNotifications('order_checkout', tableRequest)
-    if (!this.isCurrentTableRequest(tableRequest)) return
     await this.submitOrder(attempt.offerPublicId || null, false, attempt, tableRequest)
   },
 
@@ -1288,7 +1335,13 @@ Page({
     }
     if (attempt.tableScope !== tableSessionCacheScope()) return
     wx.setStorageSync(CHECKOUT_ATTEMPT_KEY, attempt)
-    this.setData({ busy: true, checkoutLocked: true, error: '', success: '' })
+    this.setData({
+      busy: true,
+      checkoutLocked: true,
+      checkoutGuardVisible: false,
+      error: '',
+      success: '',
+    })
     try {
       const attemptAttribution = checkoutRecommendationAttribution(attempt.offerPublicId, {
         recommendationPublicId: attempt.recommendationPublicId,
@@ -1314,7 +1367,7 @@ Page({
       wx.setStorageSync(PENDING_PAYMENT_KEY, pendingPayment)
       wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
       this.updateCart([], data.sharedCart || null)
-      this.setData({ pendingPayment, checkoutLocked: false })
+      this.setData({ pendingPayment, checkoutLocked: false, checkoutGuardVisible: false })
       await this.handlePaymentAction(data.payment && data.payment.providerAction, tableRequest)
     } catch (error) {
       if (!this.isCurrentTableRequest(tableRequest)) return
@@ -1324,6 +1377,7 @@ Page({
         this.setData({
           error: '同桌购物车已经更新，原结账请求没有提交。请确认最新商品后再结账。',
           checkoutLocked: false,
+          checkoutGuardVisible: false,
         })
         return
       }
@@ -1332,12 +1386,23 @@ Page({
         this.setData({
           error: customerErrorMessage(error, '升级内容已经变化，请重新确认后再结账。'),
           checkoutLocked: false,
+          checkoutGuardVisible: false,
+        })
+        return
+      }
+      if (CHECKOUT_REJECTED_BEFORE_ORDER.has(String(error && error.code || ''))) {
+        wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
+        this.setData({
+          error: customerErrorMessage(error, '本次没有创建订单，请确认后重新提交。'),
+          checkoutLocked: false,
+          checkoutGuardVisible: false,
         })
         return
       }
       this.setData({
         error: '提交结果暂时无法确认。为避免重复订单，请先重试确认或查看桌账，不要重新选商品。',
         checkoutLocked: true,
+        checkoutGuardVisible: true,
       })
     } finally { if (this.isCurrentTableRequest(tableRequest)) this.setData({ busy: false }) }
   },
@@ -1346,30 +1411,127 @@ Page({
     const tableRequest = request || this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
     if (!action || action.status !== 'ready' || action.presentation !== 'jsapi' || !action.payload) {
+      const waitingForResult = Boolean(action && action.status === 'unknown')
       const pendingPayment = Object.assign({}, this.data.pendingPayment, {
-        statusText: action && action.status === 'unknown' ? '付款结果确认中' : '付款未完成',
+        statusText: waitingForResult ? '付款结果确认中' : '付款未完成',
       })
       if (!this.isCurrentTableRequest(tableRequest)) return
       wx.setStorageSync(PENDING_PAYMENT_KEY, pendingPayment)
-      this.setData({ pendingPayment })
+      this.setData({
+        pendingPayment,
+        paymentResult: {
+          kind: waitingForResult ? 'pending' : 'failed',
+          mark: waitingForResult ? '…' : '!',
+          title: waitingForResult ? '付款结果确认中' : '未能发起微信支付',
+          copy: waitingForResult
+            ? '系统正在核对通道结果，请勿重复付款。'
+            : '订单已保留，本次没有进入微信密码支付。',
+          canRetry: !waitingForResult,
+        },
+      })
       return
     }
     try {
       await new Promise((resolve, reject) => wx.requestPayment(Object.assign({}, action.payload, { success: resolve, fail: reject })))
       if (!this.isCurrentTableRequest(tableRequest)) return
-      const pendingPayment = Object.assign({}, this.data.pendingPayment, { statusText: '付款已提交，到账确认中' })
+      const pendingPayment = Object.assign({}, this.data.pendingPayment, {
+        statusText: '微信支付已完成，正在确认到账',
+        canContinue: false,
+        wechatAcceptedAt: new Date().toISOString(),
+      })
       wx.setStorageSync(PENDING_PAYMENT_KEY, pendingPayment)
-      this.setData({ pendingPayment, success: '付款已提交，到账结果可在本桌账单查看。' })
-      wx.showToast({ title: '付款已提交', icon: 'none' })
+      this.setData({ pendingPayment, success: '' })
+      // WeChat explicitly allows the subscription panel after a payment
+      // callback. Keep it after payment so checkout remains one uninterrupted
+      // confirm -> password flow. Authorization failure must never rewrite a
+      // successful WeChat payment as a payment failure.
+      await this.offerOrderNotifications('order_checkout', tableRequest).catch(() => {})
+      if (!this.isCurrentTableRequest(tableRequest)) return
+      await this.confirmPaymentOutcome(pendingPayment, tableRequest)
     } catch (error) {
       if (!this.isCurrentTableRequest(tableRequest)) return
       const cancelled = isWechatCancellation(error)
       const pendingPayment = Object.assign({}, this.data.pendingPayment, {
-        statusText: cancelled ? '订单已保留，可稍后再付' : '付款未完成，可继续支付',
+        statusText: cancelled ? '付款已取消，订单已保留' : '付款未完成，可继续支付',
+        canContinue: true,
       })
       wx.setStorageSync(PENDING_PAYMENT_KEY, pendingPayment)
-      this.setData({ pendingPayment, error: cancelled ? '' : '付款未完成，可继续支付，无需重新下单。' })
+      this.setData({
+        pendingPayment,
+        error: '',
+        paymentResult: {
+          kind: cancelled ? 'cancelled' : 'failed',
+          mark: cancelled ? '×' : '!',
+          title: cancelled ? '付款已取消' : '付款未完成',
+          copy: cancelled
+            ? '本次没有扣款，订单已保留，可以稍后继续付款。'
+            : '未收到支付成功结果，订单已保留，无需重新下单。',
+          canRetry: true,
+        },
+      })
     }
+  },
+
+  async confirmPaymentOutcome(pendingPayment, request) {
+    const tableRequest = request || this.currentTableRequest()
+    if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
+    let order = null
+    for (const waitMs of [0, 600, 1200]) {
+      if (waitMs) await new Promise((resolve) => setTimeout(resolve, waitMs))
+      if (!this.isCurrentTableRequest(tableRequest)) return
+      try {
+        const orders = await getTableOrders()
+        order = Array.isArray(orders)
+          ? orders.find((item) => item.publicId === pendingPayment.orderPublicId) || null
+          : null
+      } catch (error) {
+        order = null
+      }
+      if (order && (Number(order.payableAmountMinor || 0) === 0
+        || ['paid', 'partially_refunded', 'refunded'].includes(order.paymentStatus))) break
+    }
+    if (!this.isCurrentTableRequest(tableRequest)) return
+    const confirmed = Boolean(order && (Number(order.payableAmountMinor || 0) === 0
+      || ['paid', 'partially_refunded', 'refunded'].includes(order.paymentStatus)))
+    if (confirmed) {
+      wx.removeStorageSync(PENDING_PAYMENT_KEY)
+      const paymentResult = {
+        kind: 'success',
+        mark: '✓',
+        title: '付款成功',
+        copy: `已收到 ${pendingPayment.amountText}，订单已进入本桌出品流程。`,
+        canRetry: false,
+      }
+      this.setData({ pendingPayment: null, paymentResult, success: paymentResult.title })
+      return
+    }
+    const waitingPayment = Object.assign({}, pendingPayment, {
+      statusText: '微信支付已完成，到账确认中',
+      canContinue: false,
+    })
+    wx.setStorageSync(PENDING_PAYMENT_KEY, waitingPayment)
+    this.setData({
+      pendingPayment: waitingPayment,
+      paymentResult: {
+        kind: 'pending',
+        mark: '…',
+        title: '微信支付已完成',
+        copy: '还在确认门店到账结果，此时不会让你重复付款。',
+        canRetry: false,
+      },
+    })
+  },
+
+  closePaymentResult() { this.setData({ paymentResult: null }) },
+
+  openPaymentResultAccount() {
+    this.setData({ paymentResult: null })
+    this.openAccount()
+  },
+
+  async retryPaymentFromResult() {
+    this.setData({ paymentResult: null })
+    await this.continuePayment()
   },
 
   async offerOrderNotifications(context, request) {
@@ -1408,10 +1570,6 @@ Page({
     const tableRequest = this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)
       || pending.tableScope !== tableSessionCacheScope()) return
-    // A retained order can be paid later.  Ask here, before the retry API,
-    // only if this page instance has not already offered the optional notices.
-    await this.offerOrderNotifications('order_checkout', tableRequest)
-    if (!this.isCurrentTableRequest(tableRequest)) return
     this.setData({ busy: true, error: '' })
     try {
       const retryIdempotencyKey = pending.retryIdempotencyKey || randomId(`guest-payment-${pending.orderPublicId}`)

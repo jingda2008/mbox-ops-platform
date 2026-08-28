@@ -14,3 +14,10 @@
 .story-article__note { margin-top: 30rpx; color: #8a8178; font-size: 21rpx; line-height: 1.65; }
 .story-article__close { width: 100%; min-height: 88rpx; margin-top: 42rpx; border: 1rpx solid #cfc5b9; border-radius: 44rpx; background: #fffdfa; color: #4b443d; font-size: 27rpx; line-height: 86rpx; }
 .story-article__close::after { border: 0; }
+@media (max-width: 360px) {
+  .story-article { padding: 40rpx 26rpx calc(54rpx + env(safe-area-inset-bottom)); }
+  .story-article__title { font-size: 42rpx; }
+  .story-article__section { margin-top: 42rpx; }
+  .story-article__paragraph { font-size: 26rpx; line-height: 1.78; }
+  .story-article__close { min-height: 44px; line-height: 44px; }
+}

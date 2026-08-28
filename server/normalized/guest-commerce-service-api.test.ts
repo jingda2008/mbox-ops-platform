@@ -736,7 +736,24 @@ describe('guest commerce/service API trust boundaries', () => {
     })
 
     expect(response.statusCode).toBe(503)
-    expect(response.json()).toMatchObject({ error: { code: 'ONLINE_PAYMENT_UNAVAILABLE' } })
+    expect(response.json()).toMatchObject({ error: { code: 'GUEST_CHECKOUT_CONFIGURATION_UNAVAILABLE' } })
+    expect(value.commerce.submitOrder).not.toHaveBeenCalled()
+  })
+
+  it('refuses a native-QR store policy before a shared cart can create an order', async () => {
+    const value = fixture({ paymentMode: 'wechat_native_qr' })
+    const response = await value.app.inject({
+      method: 'POST',
+      url: '/api/guest/shared-cart/checkout',
+      headers: { 'idempotency-key': 'guest-shared-cart-native-qr-0001' },
+      payload: { expectedGeneration: 1, expectedVersion: 1 },
+    })
+
+    expect(response.statusCode).toBe(503)
+    expect(response.json()).toMatchObject({
+      error: { code: 'GUEST_CHECKOUT_CONFIGURATION_UNAVAILABLE' },
+    })
+    expect(value.options.commandExecutor.execute).not.toHaveBeenCalled()
     expect(value.commerce.submitOrder).not.toHaveBeenCalled()
   })
 })

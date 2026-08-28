@@ -209,12 +209,21 @@ describe('loadNormalizedRuntimeConfig', () => {
       POSTAR_MERCHANT_ID: 'merchant-1',
       POSTAR_PUBLIC_KEY: '-----BEGIN PUBLIC KEY-----\nZmFrZQ==\n-----END PUBLIC KEY-----',
       POSTAR_CALLBACK_URL: 'https://pay.shmbox.com/api/payments/providers/postar/callback',
-      MBOX_GUEST_PAYMENT_MODE: 'wechat_native_qr',
+      MBOX_GUEST_PAYMENT_MODE: 'wechat_jsapi',
+      MBOX_WECHAT_ENABLED: 'true',
+      MBOX_WECHAT_APP_ID: 'wxMboxCommercial01',
+      MBOX_WECHAT_APP_SECRET: 'wechat-app-secret-value',
+      MBOX_WECHAT_STATE_SECRET: 'wechat-state-secret-0123456789abcdef',
+      MBOX_WECHAT_ENCRYPTION_KEY_VERSION: '1',
+      MBOX_WECHAT_ENCRYPTION_KEY_BASE64: Buffer.alloc(32, 7).toString('base64'),
+      POSTAR_WECHAT_APP_ID: 'wxMboxCommercial01',
+      POSTAR_WECHAT_TRADE_TYPE: '8',
       MBOX_START_WORKERS: 'true',
       MBOX_WORKER_ID: 'mbox-worker-production-01',
       MBOX_WORKER_ADAPTER_MODULE: '/opt/mbox/worker-adapters.mjs',
     }
     expect(loadNormalizedRuntimeConfig(production).payment).toMatchObject({ provider: 'postar' })
+    expect(loadNormalizedRuntimeConfig(production).guestPaymentMode).toBe('wechat_jsapi')
     expect(loadNormalizedRuntimeConfig(production).trustProxyHops).toBe(1)
     expect(loadNormalizedRuntimeConfig(production).inventoryEnforcementMode).toBe('strict')
     expect(loadNormalizedRuntimeConfig({
@@ -227,6 +236,10 @@ describe('loadNormalizedRuntimeConfig', () => {
     expect(() => loadNormalizedRuntimeConfig({
       ...production,
       MBOX_GUEST_PAYMENT_MODE: 'simulation',
+    })).toThrowError(NormalizedRuntimeConfigurationError)
+    expect(() => loadNormalizedRuntimeConfig({
+      ...production,
+      MBOX_GUEST_PAYMENT_MODE: 'wechat_native_qr',
     })).toThrowError(NormalizedRuntimeConfigurationError)
     expect(() => loadNormalizedRuntimeConfig({
       ...production,

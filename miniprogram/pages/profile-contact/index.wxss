@@ -122,3 +122,12 @@
   color: #a14545;
   font-size: 22rpx;
 }
+@media (max-width: 360px) {
+  .profile-contact-page { padding-right: 18rpx; padding-left: 18rpx; }
+  .contact-hero { margin-right: -18rpx; margin-left: -18rpx; padding-right: 18rpx; padding-left: 18rpx; }
+  .contact-hero text:nth-child(2) { font-size: 40rpx; }
+  .contact-action { height: 44px; min-height: 44px; max-height: 44px; font-size: 25rpx; line-height: 44px; }
+  .wecom-card { padding: 20rpx; gap: 18rpx; }
+  .wecom-card image { width: 148rpx; height: 148rpx; }
+  .wecom-card text:first-child { font-size: 25rpx; }
+}

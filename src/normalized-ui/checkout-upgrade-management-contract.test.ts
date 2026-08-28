@@ -33,13 +33,14 @@ describe('checkout upgrade operational management contract', () => {
     expect(css).toMatch(/min-height:40px/)
   })
 
-  it('records optional checkout display telemetry without blocking the original order', () => {
+  it('keeps the customer final confirmation direct while upgrade management remains separately available', () => {
     const order = read('../../miniprogram/pages/order/index.js')
     const api = read('../../miniprogram/utils/api.js')
     expect(api).toContain('recordCheckoutUpgradeEvent')
     expect(api).toContain('/events`')
-    expect(order).toContain("recordCheckoutUpgradeEvent(offer.publicId, 'viewed', null).catch")
-    expect(order).toContain("recordCheckoutUpgradeEvent(offer.publicId, 'declined', 'kept_original')")
-    expect(order).toContain('await this.submitOrder(null,')
+    expect(order).toContain('async confirmCheckout()')
+    expect(order).toContain('await this.submitOrder(null, true, null, tableRequest)')
+    expect(order).not.toContain('prepareCheckoutUpgrade')
+    expect(order).not.toContain('recordCheckoutUpgradeEvent(offer.publicId')
   })
 })

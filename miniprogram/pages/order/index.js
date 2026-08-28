@@ -4,8 +4,6 @@ const {
   getPublicMenu,
   recommendExperience,
   recordRecommendationEvent,
-  prepareCheckoutUpgrade,
-  recordCheckoutUpgradeEvent,
   checkoutSharedCart,
   getSharedCart,
   adjustSharedCart,
@@ -395,9 +393,7 @@ Page({
     cartTotalCompact: '¥0',
     cartCount: 0,
     cartExpanded: false,
-    upgradeOffer: null,
-    upgradeAdd: '',
-    targetTotal: '',
+    checkoutConfirmVisible: false,
     pendingPayment: null,
     checkoutLocked: false,
     benefitCount: 0,
@@ -519,7 +515,7 @@ Page({
       this.setData({
         busy: false, cartSyncing: false, clearingCart: false, quickServiceBusy: '',
         checkoutLocked: false, pendingPayment: null, cart: [], cartVersion: 0, cartGeneration: 0,
-        cartTotal: '¥0.00', cartTotalCompact: '¥0', cartCount: 0, cartExpanded: false, cartWritesFrozen: false,
+        cartTotal: '¥0.00', cartTotalCompact: '¥0', cartCount: 0, cartExpanded: false, checkoutConfirmVisible: false, cartWritesFrozen: false,
         recommendations: [], recommendationPublicId: '', recommendationAttribution: null, recommendationError: '', performance: null, performanceError: '',
       })
     }
@@ -1081,7 +1077,8 @@ Page({
       cartTotal: money(total),
       cartTotalCompact: compactMoney(total),
       cartCount: cart.reduce((sum, item) => sum + item.quantity, 0),
-      cartExpanded: cart.length ? this.data.cartExpanded : false,
+      cartExpanded: false,
+      checkoutConfirmVisible: cart.length ? this.data.checkoutConfirmVisible : false,
       cartVersion: sharedCart ? Number(sharedCart.version || 0) : this.data.cartVersion,
       cartGeneration: sharedCart ? Number(sharedCart.generation || 0) : this.data.cartGeneration,
       cartWritesFrozen: Boolean(sharedCart && sharedCart.guestWritesFrozen),
@@ -1205,7 +1202,7 @@ Page({
   openStatus() { wx.navigateTo({ url: '/pages/status/index' }) },
   openAccount() { wx.navigateTo({ url: '/pages/account/index' }) },
   openBenefits() { wx.switchTab({ url: '/pages/profile/index' }) },
-  toggleCart() { this.setData({ cartExpanded: !this.data.cartExpanded }) },
+  toggleCart() { this.openCheckout() },
 
   async openCheckout() {
     if (!this.data.cart.length || this.data.busy || this.data.pendingPayment) return
@@ -1220,57 +1217,36 @@ Page({
       this.setData({ error: '购物车中有暂不可用商品，请先移除后再结账。' })
       return
     }
-    // Request optional notices from this original “确认下单” tap, before the
-    // recommendation request can introduce another asynchronous step.
-    await this.offerOrderNotifications('order_checkout', tableRequest)
-    if (!this.isCurrentTableRequest(tableRequest)) return
-    this.setData({ busy: true, error: '', upgradeOffer: null })
-    const items = this.data.cart.map((item) => ({ productId: item.productId, quantity: item.quantity }))
-    try {
-      const offer = await prepareCheckoutUpgrade(items, this.data.occasionOptions[this.data.occasionIndex].code, this.data.alcoholOptions[this.data.alcoholIndex].code)
-      if (!this.isCurrentTableRequest(tableRequest)) return
-      if (offer) {
-        this.setData({ upgradeOffer: offer, upgradeAdd: money(offer.amountToAddMinor), targetTotal: money(offer.targetExperience.totalAmountMinor) })
-        recordCheckoutUpgradeEvent(offer.publicId, 'viewed', null).catch(() => {})
-      } else await this.submitOrder(null, true, null, tableRequest)
-    } catch (error) {
-      if (!this.isCurrentTableRequest(tableRequest)) return
-      const blockingCodes = ['GUEST_SESSION_INVALID', 'TABLE_SESSION_ENDED', 'GUEST_CAPABILITY_DENIED', 'STORE_ACCESS_FORBIDDEN']
-      if (blockingCodes.includes(error && error.code)) {
-        this.setData({ error: customerErrorMessage(error, '当前桌次已失效，请重新扫码') })
-      } else {
-        // 付款前升级是可选建议。建议生成失败不能阻断原购物车结账；
-        // 真正的桌次、商品、库存和支付校验仍由同一个下单命令失败关闭。
-        await this.submitOrder(null, true, null, tableRequest)
-      }
-    }
-    finally { if (this.isCurrentTableRequest(tableRequest)) this.setData({ busy: false }) }
+    this.setData({ checkoutConfirmVisible: true, cartExpanded: false, error: '' })
   },
 
-  async declineUpgrade() {
+  closeCheckoutConfirm() {
+    if (this.data.busy || this.data.checkoutLocked) return
+    this.setData({ checkoutConfirmVisible: false })
+  },
+
+  async confirmCheckout() {
+    if (!this.data.checkoutConfirmVisible || !this.data.cart.length || this.data.busy || this.data.pendingPayment) return
     const tableRequest = this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
-    const offer = this.data.upgradeOffer
-    this.setData({ upgradeOffer: null })
-    if (offer) {
-      // 埋点失败不能阻断顾客按原购物车下单。
-      try { await recordCheckoutUpgradeEvent(offer.publicId, 'declined', 'kept_original') } catch {}
+    if (this.data.cartWritesFrozen) {
+      this.setData({ checkoutConfirmVisible: false, error: '服务人员正在核对本桌点单，完成后才能付款。' })
+      return
     }
-    if (this.isCurrentTableRequest(tableRequest)) {
+    if (this.data.cart.some((item) => !item.available)) {
+      this.setData({ error: '购物车中有暂不可用商品，请先移除后再结账。' })
+      return
+    }
+    // The final confirmation must lead straight to the order and WeChat
+    // payment. Smart combinations stay in the browsing recommendation area,
+    // rather than inserting another decision after the customer has confirmed.
+    this.setData({ busy: true, error: '', checkoutConfirmVisible: false })
+    try {
       await this.offerOrderNotifications('order_checkout', tableRequest)
       if (!this.isCurrentTableRequest(tableRequest)) return
-      await this.submitOrder(null, false, null, tableRequest)
-    }
-  },
-  async acceptUpgrade() {
-    const tableRequest = this.currentTableRequest()
-    if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
-    const offer = this.data.upgradeOffer
-    if (!offer) return
-    this.setData({ upgradeOffer: null })
-    await this.offerOrderNotifications('order_checkout', tableRequest)
-    if (!this.isCurrentTableRequest(tableRequest)) return
-    await this.submitOrder(offer.publicId, false, null, tableRequest)
+      await this.submitOrder(null, true, null, tableRequest)
+    } catch (error) { if (this.isCurrentTableRequest(tableRequest)) this.setData({ error: customerErrorMessage(error, '订单暂时无法提交，请稍后重试。') }) }
+    finally { if (this.isCurrentTableRequest(tableRequest)) this.setData({ busy: false }) }
   },
 
   async retryCheckout(request) {
@@ -1348,7 +1324,6 @@ Page({
         this.setData({
           error: '同桌购物车已经更新，原结账请求没有提交。请确认最新商品后再结账。',
           checkoutLocked: false,
-          upgradeOffer: null,
         })
         return
       }
@@ -1357,7 +1332,6 @@ Page({
         this.setData({
           error: customerErrorMessage(error, '升级内容已经变化，请重新确认后再结账。'),
           checkoutLocked: false,
-          upgradeOffer: null,
         })
         return
       }

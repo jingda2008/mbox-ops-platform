@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0-rc.158 - 2026-08-29
+
+- Repairs native mini-program WeChat JSAPI launch: the service's normal
+  `pending` action with complete JSAPI parameters is now passed directly to
+  `wx.requestPayment` for both the first checkout and a later payment retry.
+- Keeps unknown or incomplete payment actions in the safe confirmation path;
+  they cannot be treated as paid or cause a duplicate order.
+- Makes the payment-result sheet more compact on narrow screens, with smaller
+  action buttons and a top-right pill-style cancel control.
+
 ## 1.0.0-rc.157 - 2026-08-28
 
 - Makes the native mini-program cart itself a compact, visible entry to an

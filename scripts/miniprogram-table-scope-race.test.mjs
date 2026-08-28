@@ -262,6 +262,13 @@ async function loadOrderPage(state) {
         })[error && error.code] || fallback,
         isWechatCancellation: (error) => /cancel/i.test(String(error && error.errMsg || '')),
       }
+      if (specifier === '../../utils/wechat-payment') return {
+        isPresentableWechatJsapiAction: (action) => Boolean(action && action.status === 'pending'
+          && action.presentation === 'jsapi' && action.payload
+          && ['timeStamp', 'nonceStr', 'package', 'signType', 'paySign'].every((key) => (
+            typeof action.payload[key] === 'string' && action.payload[key].trim().length > 0
+          ))),
+      }
       if (specifier === '../../utils/wechat-subscription') return {
         requestWechatSubscription: async () => ({ presented: false, outcomes: [] }),
       }
@@ -325,11 +332,24 @@ async function loadAccountPage(state) {
           ? '这笔订单不属于当前桌位，请重新扫描当前桌面的二维码' : fallback,
         isWechatCancellation: () => false,
       }
+      if (specifier === '../../utils/wechat-payment') return {
+        isPresentableWechatJsapiAction: (action) => Boolean(action && action.status === 'pending'
+          && action.presentation === 'jsapi' && action.payload
+          && ['timeStamp', 'nonceStr', 'package', 'signType', 'paySign'].every((key) => (
+            typeof action.payload[key] === 'string' && action.payload[key].trim().length > 0
+          ))),
+      }
       throw new Error(`unexpected require: ${specifier}`)
     },
     wx: {
       getStorageSync: (key) => state.storage.get(key), setStorageSync: (key, value) => state.storage.set(key, value),
-      removeStorageSync: (key) => state.storage.delete(key), requestPayment: () => undefined, stopPullDownRefresh: () => undefined,
+      removeStorageSync: (key) => state.storage.delete(key),
+      requestPayment: (options) => {
+        state.requestPaymentCalls = Number(state.requestPaymentCalls || 0) + 1
+        if (state.requestPaymentError) options.fail(state.requestPaymentError)
+        else options.success({})
+      },
+      stopPullDownRefresh: () => undefined,
     },
   }
   vm.runInNewContext(source, context, { filename: 'miniprogram/pages/account/index.js' })
@@ -668,6 +688,27 @@ test('Account also drops the pending record when the guest table session has exp
   assert.doesNotMatch(String(state.storage.get(PENDING_PAYMENT_KEY) || ''), new RegExp(paymentScope))
 })
 
+test('Account continues an order with the server pending JSAPI action', async () => {
+  const state = {
+    session: { tableCode: 'VIP1', tableToken: 'fixed-token', cartScope: 'cart-scope-for-turn-b-000000002' },
+    storage: new Map(),
+    orderReads: [{ promise: Promise.resolve([]) }],
+    retryPaymentAction: {
+      status: 'pending', presentation: 'jsapi',
+      payload: { timeStamp: '1', nonceStr: 'nonce', package: 'prepay_id=test', signType: 'RSA', paySign: 'sign' },
+    },
+  }
+  const page = await loadAccountPage(state)
+  page.onLoad()
+  page.setData({ orders: [{ publicId: 'order-c', payableText: '¥88.00', canPay: true }] })
+
+  await page.continuePayment({ currentTarget: { dataset: { id: 'order-c' } } })
+
+  assert.equal(state.retryPaymentCalls, 1)
+  assert.equal(state.requestPaymentCalls, 1)
+  assert.equal(page.data.busyOrderId, '')
+})
+
 test('guest cart opens a review sheet before it creates an order or starts payment', async () => {
   const state = {
     session: { tableCode: 'A01', tableToken: 'token-a', cartScope: 'cart-scope-for-turn-a-000000001' },
@@ -712,7 +753,7 @@ test('shared cart checkout launches WeChat payment immediately after the single 
         payment: {
           publicId: 'guest-payment-direct-pay-0001',
           providerAction: {
-            status: 'ready',
+            status: 'pending',
             presentation: 'jsapi',
             payload: { timeStamp: '1', nonceStr: 'nonce', package: 'prepay_id=test', signType: 'RSA', paySign: 'sign' },
           },
@@ -834,9 +875,9 @@ test('unknown checkout result can be dismissed and retries the same idempotent a
       settlement: { payableAmountMinor: 6800 },
       sharedCart: { lines: [], generation: 2, version: 0 },
       payment: {
-        publicId: 'guest-payment-recovered-0001',
-        providerAction: {
-          status: 'ready', presentation: 'jsapi',
+          publicId: 'guest-payment-recovered-0001',
+          providerAction: {
+            status: 'pending', presentation: 'jsapi',
           payload: { timeStamp: '1', nonceStr: 'nonce', package: 'prepay_id=test', signType: 'RSA', paySign: 'sign' },
         },
       },

@@ -82,6 +82,7 @@ integration("normalized inventory API PostgreSQL integration", () => {
         categoryCode: "spirits",
         lowStockThreshold: "200",
         reasonableWasteQuantity: "10",
+        packageVolumeMl: "750",
       },
     };
     const first = await app.inject(request);
@@ -105,6 +106,65 @@ integration("normalized inventory API PostgreSQL integration", () => {
       [tenantId, storeId, spiritItemId],
     );
     expect(evidence.rows[0]).toEqual({ audit_count: "1", outbox_count: "1" });
+    expect(first.json().data.packageVolumeMl).toBe("750.000000");
+  });
+
+  it("updates historical inventory metadata without rewriting SKU or base unit", async () => {
+    const update = {
+      method: "PATCH" as const,
+      url: `/api/inventory/items/${spiritItemId}`,
+      headers: headers(managerId, "inventory-item-update-0001"),
+      payload: {
+        name: "金酒原液（750ml）",
+        categoryCode: "spirits.gin",
+        lowStockThreshold: "180",
+        packageVolumeMl: "750",
+      },
+    };
+    const first = await app.inject(update);
+    const replay = await app.inject(update);
+    expect(first.statusCode).toBe(200);
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json().meta.replayed).toBe(true);
+    expect(first.json().data).toMatchObject({
+      id: spiritItemId,
+      sku: "GIN-ML",
+      baseUnit: "ml",
+      name: "金酒原液（750ml）",
+      categoryCode: "spirits.gin",
+      lowStockThreshold: "180.000000",
+      packageVolumeMl: "750.000000",
+    });
+
+    const denied = await app.inject({
+      ...update,
+      headers: headers(viewerId, "inventory-item-update-denied-0002"),
+    });
+    expect(denied.statusCode).toBe(403);
+
+    const invalidVolume = await app.inject({
+      ...update,
+      headers: headers(managerId, "inventory-item-update-invalid-volume-0003"),
+      payload: { ...update.payload, packageVolumeMl: "0" },
+    });
+    expect(invalidVolume.statusCode).toBe(400);
+
+    const persisted = await pool.query<{
+      sku: string;
+      base_unit: string;
+      category_code: string;
+      package_volume_ml: string;
+    }>(`
+      SELECT sku, base_unit, category_code, package_volume_ml::text
+      FROM mbox.inventory_items
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+    `, [tenantId, storeId, spiritItemId]);
+    expect(persisted.rows[0]).toEqual({
+      sku: "GIN-ML",
+      base_unit: "ml",
+      category_code: "spirits.gin",
+      package_volume_ml: "750.000000",
+    });
   });
 
   it("binds duplicate scans to the same item but rejects one code bound to another item", async () => {
@@ -204,7 +264,7 @@ integration("normalized inventory API PostgreSQL integration", () => {
       components: [{
         inventoryItemId: spiritItemId,
         sku: "GIN-ML",
-        name: "金酒原液",
+        name: "金酒原液（750ml）",
         baseUnit: "ml",
         quantity: "45.500000",
         expectedWasteQuantity: "1.250000",

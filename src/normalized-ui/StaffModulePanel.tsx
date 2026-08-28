@@ -98,6 +98,8 @@ interface InventoryItemView {
   itemType: string
   baseUnit: string
   categoryCode: string
+  packageVolumeMl: string | null
+  lowStockThreshold: string | null
   availableQuantity: string
   lowStock: boolean
 }
@@ -131,6 +133,16 @@ interface InventoryPublishProduct {
 }
 
 type InventorySalesSpecificationType = 'whole_bottle' | 'glass' | 'shot' | 'cocktail' | 'custom'
+
+const inventoryCategoryOptions = [
+  ['spirits.whisky', '威士忌'], ['spirits.american_whisky', '美国威士忌'],
+  ['spirits.japanese_whisky', '日本威士忌'], ['spirits.cognac_brandy', '干邑白兰地'],
+  ['wine.sparkling_champagne', '起泡酒/香槟'], ['wine.red', '红酒'], ['wine.white', '干白'],
+  ['spirits.vodka', '伏特加'], ['spirits.gin', '金酒'], ['spirits.rum', '朗姆酒'],
+  ['spirits.tequila', '龙舌兰'], ['spirits.liqueur_absinthe', '力娇酒/苦艾'],
+  ['mixer.syrup_beverage', '糖浆饮料'], ['beer', '啤酒'], ['food.snack', '食品零食'],
+  ['mixer.juice', '果汁'], ['ingredient.seasoning', '调料配料'],
+] as const
 
 interface InventoryPublishPreview {
   receiptId: string
@@ -727,7 +739,7 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
   const canManageCatalog = auth.permissions.includes('catalog.product.manage')
   const canViewInventoryCost = auth.permissions.includes('inventory.cost.view')
   const canPublishBeverage = canManageCatalog && canViewInventoryCost
-  const [mode, setMode] = useState<'create' | 'count' | 'waste' | 'receive' | 'bind' | null>(null)
+  const [mode, setMode] = useState<'create' | 'edit' | 'count' | 'waste' | 'receive' | 'bind' | null>(null)
   const [itemId, setItemId] = useState('')
   const [quantity, setQuantity] = useState('')
   const [reason, setReason] = useState('')
@@ -742,7 +754,10 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
   const [newItemSku, setNewItemSku] = useState('')
   const [newItemName, setNewItemName] = useState('')
   const [newItemBaseUnit, setNewItemBaseUnit] = useState<'ml' | 'bottle' | 'piece'>('bottle')
+  const [newItemCategoryCode, setNewItemCategoryCode] = useState('spirits.whisky')
+  const [newItemPackageVolumeMl, setNewItemPackageVolumeMl] = useState('')
   const [newItemLowStockThreshold, setNewItemLowStockThreshold] = useState('')
+  const [categoryFilter, setCategoryFilter] = useState('all')
   const [pendingReceipt, setPendingReceipt] = useState<PurchaseReceiptCommandView | null>(null)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
@@ -753,9 +768,7 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
   const loadPublishProducts = useCallback(async () => {
     if (!canPublishBeverage) { setPublishProducts([]); setPublishProductId(''); return }
     try {
-      const response = await api.getEndpoint<{ data: unknown }>('/api/catalog/products?status=all&limit=100')
-      const products = isRecord(response.data) && Array.isArray(response.data.data)
-        ? response.data.data : Array.isArray(response.data) ? response.data : []
+      const products = await loadAllCatalogProductsForInventory(api)
       const candidates = products.flatMap((product): InventoryPublishProduct[] => (
         isRecord(product) && typeof product.id === 'string' && typeof product.name === 'string'
           && typeof product.code === 'string' && typeof product.status === 'string'
@@ -779,7 +792,8 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
   useEffect(() => { void loadPublishProducts() }, [loadPublishProducts])
   if (view === null) return <div className="staff-module-body"><EmptyState text="库存数据暂时为空" />{canManageCatalog && <CatalogManagementPanel api={api} auth={auth} placement="inventory" openRequest={catalogOpenRequest} />}</div>
   const lowStock = view.items.filter((item) => item.lowStock)
-  const visibleItems = [...lowStock, ...view.items.filter((item) => !item.lowStock)].slice(0, 20)
+  const visibleItems = [...lowStock, ...view.items.filter((item) => !item.lowStock)]
+    .filter((item) => categoryFilter === 'all' || item.categoryCode === categoryFilter)
   const canCount = auth.permissions.includes('inventory.count')
   const canWaste = auth.permissions.includes('inventory.waste')
   const canReceive = auth.permissions.includes('inventory.receive')
@@ -790,7 +804,7 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
   const selectedBindableItem = bindableItems.find((item) => item.id === itemId) ?? null
 
   const modeLabel: Record<Exclude<typeof mode, null>, string> = {
-    create: '新建酒水物料', receive: '手机扫码入库', bind: '首次绑定条码', count: '单项盘点', waste: '登记损耗',
+    create: '新建酒水物料', edit: '编辑物料资料', receive: '手机扫码入库', bind: '首次绑定条码', count: '单项盘点', waste: '登记损耗',
   }
 
   function chooseMode(nextMode: Exclude<typeof mode, null>) {
@@ -812,9 +826,11 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
     const sku = newItemSku.trim()
     const name = newItemName.trim()
     const threshold = newItemLowStockThreshold.trim()
+    const packageVolumeMl = newItemPackageVolumeMl.trim()
     if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(sku)) { setNotice('物料编号需为1至64位字母、数字、点、下划线或连字符'); return }
     if (name.length < 2 || name.length > 200) { setNotice('请填写2至200字的酒水物料名称'); return }
     if (threshold !== '' && !/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(threshold)) { setNotice('安全库存必须是非负数字'); return }
+    if (packageVolumeMl !== '' && !isPositiveInventoryDecimal(packageVolumeMl)) { setNotice('净含量必须是大于0的毫升数'); return }
     setBusy(true)
     setNotice('')
     try {
@@ -823,20 +839,63 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
         name,
         itemType: 'bottle',
         baseUnit: newItemBaseUnit,
-        categoryCode: 'drinks',
+        categoryCode: newItemCategoryCode,
         lowStockThreshold: threshold === '' ? null : threshold,
+        packageVolumeMl: packageVolumeMl === '' ? null : packageVolumeMl,
         wholeUnitCount: newItemBaseUnit === 'bottle' || newItemBaseUnit === 'piece',
         reasonableWasteQuantity: '0',
       }, { idempotencyKey: operationIdempotency('inventory-item-create') })
       setItemId(item.id)
       setNewItemSku('')
       setNewItemName('')
+      setNewItemPackageVolumeMl('')
       setNewItemLowStockThreshold('')
       setMode('bind')
       setNotice(`${item.name} 已建立。下一步请绑定条码，随后即可扫码建立待收货单。`)
       await onChanged()
     } catch (error) {
       setNotice(inventoryActionMessage(error, '酒水物料未建立'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function startEditInventoryItem(item: InventoryItemView) {
+    setItemId(item.id)
+    setNewItemName(item.name)
+    setNewItemCategoryCode(item.categoryCode)
+    setNewItemPackageVolumeMl(item.packageVolumeMl ?? '')
+    setNewItemLowStockThreshold(item.lowStockThreshold ?? '')
+    setMode('edit')
+    setNotice(`正在编辑“${item.name}”；物料编号和库存单位在已有流水后不允许直接改写。`)
+  }
+
+  async function updateInventoryItem(event: React.FormEvent) {
+    event.preventDefault()
+    if (busy) return
+    if (view === null) { setNotice('库存数据暂时不可用，请刷新后重试'); return }
+    const item = view.items.find((candidate) => candidate.id === itemId)
+    const name = newItemName.trim()
+    const threshold = newItemLowStockThreshold.trim()
+    const packageVolumeMl = newItemPackageVolumeMl.trim()
+    if (item === undefined) { setNotice('请选择要编辑的库存物料'); return }
+    if (name.length < 2 || name.length > 200) { setNotice('请填写2至200字的物料名称'); return }
+    if (threshold !== '' && !/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(threshold)) { setNotice('安全库存必须是非负数字'); return }
+    if (packageVolumeMl !== '' && !isPositiveInventoryDecimal(packageVolumeMl)) { setNotice('净含量必须是大于0的毫升数'); return }
+    setBusy(true)
+    setNotice('')
+    try {
+      const saved = await api.patchEndpoint<InventoryItemView>(`/api/inventory/items/${item.id}`, {
+        name,
+        categoryCode: newItemCategoryCode,
+        lowStockThreshold: threshold === '' ? null : threshold,
+        packageVolumeMl: packageVolumeMl === '' ? null : packageVolumeMl,
+      }, { idempotencyKey: operationIdempotency('inventory-item-update') })
+      setMode(null)
+      setNotice(`${saved.name} 的品类、净含量和安全库存已保存并从服务端读回。`)
+      await onChanged()
+    } catch (error) {
+      setNotice(inventoryActionMessage(error, '物料资料未保存'))
     } finally {
       setBusy(false)
     }
@@ -1017,8 +1076,18 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
       <label>物料编号<input required maxLength={64} pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" value={newItemSku} onChange={(event) => setNewItemSku(event.target.value)} placeholder="例如 WHISKY-SIM-700ML" /></label>
       <label>物料名称<input required maxLength={200} value={newItemName} onChange={(event) => setNewItemName(event.target.value)} placeholder="例如 演练用威士忌 700ml" /></label>
       <label>库存单位<select value={newItemBaseUnit} onChange={(event) => setNewItemBaseUnit(event.target.value as 'ml' | 'bottle' | 'piece')}><option value="bottle">瓶</option><option value="ml">毫升（ml）</option><option value="piece">件</option></select></label>
+      <label>库存品类<select value={newItemCategoryCode} onChange={(event) => setNewItemCategoryCode(event.target.value)}>{inventoryCategoryOptions.map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select></label>
+      <label>单瓶净含量（ml，选填）<input inputMode="decimal" value={newItemPackageVolumeMl} onChange={(event) => setNewItemPackageVolumeMl(event.target.value)} placeholder="例如 700" /><small>仅作包装资料和入库核对；实际扣减仍以库存单位与配方用量为准。</small></label>
       <label>安全库存（选填）<input inputMode="decimal" value={newItemLowStockThreshold} onChange={(event) => setNewItemLowStockThreshold(event.target.value)} placeholder={newItemBaseUnit === 'ml' ? '例如 1500' : '例如 3'} /></label>
       <button type="submit" disabled={busy}>{busy ? '正在建立' : '建立物料并继续绑定条码'}</button>
+    </form>}
+    {mode === 'edit' && <form className="staff-module-form inventory-create-form" onSubmit={(event) => void updateInventoryItem(event)}>
+      <header><strong>编辑库存物料</strong><small>可修正名称、品类、净含量和安全库存；已有收货、盘点或配方记录的物料不直接改编号或库存单位，避免历史流水失真。</small></header>
+      <label>物料名称<input required maxLength={200} value={newItemName} onChange={(event) => setNewItemName(event.target.value)} /></label>
+      <label>库存品类<select value={newItemCategoryCode} onChange={(event) => setNewItemCategoryCode(event.target.value)}>{!inventoryCategoryOptions.some(([code]) => code === newItemCategoryCode) && <option value={newItemCategoryCode}>当前品类（{newItemCategoryCode}）</option>}{inventoryCategoryOptions.map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select></label>
+      <label>单瓶净含量（ml，选填）<input inputMode="decimal" value={newItemPackageVolumeMl} onChange={(event) => setNewItemPackageVolumeMl(event.target.value)} placeholder="例如 700" /></label>
+      <label>安全库存（选填）<input inputMode="decimal" value={newItemLowStockThreshold} onChange={(event) => setNewItemLowStockThreshold(event.target.value)} /></label>
+      <button type="submit" disabled={busy}>{busy ? '正在保存' : '保存物料资料'}</button>
     </form>}
     {canReceive && draftReceipts.length > 0 && <section className="inventory-draft-receipts" aria-label="待确认收货单">
       <header><strong>待确认收货</strong><small>刷新或退出页面后仍可在这里继续。确认实物前不会增加库存。</small></header>
@@ -1043,7 +1112,8 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
       <label>每个条码包装计入数量（{selectedBindableItem?.baseUnit ?? '库存单位'}）<input required inputMode="decimal" value={packageQuantity} onChange={(event) => setPackageQuantity(event.target.value)} /><small>例如750ml酒瓶填750；按整瓶计数的物料填1。</small></label>
       <button type="submit" disabled={busy}>{busy ? '正在绑定' : '确认绑定条码'}</button>
     </form>}
-    {visibleItems.length === 0 ? <EmptyState text="当前没有库存物料" /> : <div className="staff-module-list">{visibleItems.map((item) => <article key={item.id} className={item.lowStock ? 'has-attention' : ''}><div><strong>{item.name}</strong><small>{item.sku} · 可用 {item.availableQuantity} {item.baseUnit}</small></div><em>{item.lowStock ? '需补货' : '正常'}</em></article>)}</div>}
+    <label className="inventory-category-filter">查看库存<select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}><option value="all">全部库存（{view.items.length}）</option>{[...new Set(view.items.map((item) => item.categoryCode))].sort().map((code) => <option value={code} key={code}>{inventoryCategoryLabel(code)}（{view.items.filter((item) => item.categoryCode === code).length}）</option>)}</select></label>
+    {visibleItems.length === 0 ? <EmptyState text="当前分类没有库存物料" /> : <div className="staff-module-list">{visibleItems.map((item) => <article key={item.id} className={item.lowStock ? 'has-attention' : ''}><div><strong>{item.name}</strong><small>{item.sku} · {inventoryCategoryLabel(item.categoryCode)} · 可用 {item.availableQuantity} {item.baseUnit}{item.packageVolumeMl === null ? '' : ` · ${item.packageVolumeMl}ml/瓶`}</small></div><div className="staff-inline-actions"><em>{item.lowStock ? '需补货' : '正常'}</em>{canManage && <button type="button" onClick={() => startEditInventoryItem(item)}>编辑资料</button>}</div></article>)}</div>}
     <p className="staff-module-footnote">酒水按配方扣减库存；小吃和水果标记为暂不管理库存时不拦截下单。盘点须复核后生效，扫码进货必须经过建立收货单和实物确认两步。</p>
     {canManageCatalog && <CatalogManagementPanel api={api} auth={auth} placement="inventory" openRequest={catalogOpenRequest} />}
     {scannerOpen && <InventoryBarcodeScanner onClose={() => setScannerOpen(false)} onDetected={acceptScan} />}
@@ -1482,8 +1552,9 @@ function inventoryView(value: unknown): InventoryView | null {
     items: value.items.flatMap((item) => isRecord(item)
       && typeof item.id === 'string' && typeof item.sku === 'string' && typeof item.name === 'string'
       && typeof item.itemType === 'string' && typeof item.baseUnit === 'string'
-      && typeof item.categoryCode === 'string' && typeof item.availableQuantity === 'string' && typeof item.lowStock === 'boolean'
-      ? [item as unknown as InventoryItemView] : []),
+      && typeof item.categoryCode === 'string'
+      && typeof item.availableQuantity === 'string' && typeof item.lowStock === 'boolean'
+      ? [{ ...item, packageVolumeMl: typeof item.packageVolumeMl === 'string' ? item.packageVolumeMl : null } as InventoryItemView] : []),
     lowStockCount: typeof value.lowStockCount === 'number' ? value.lowStockCount : 0,
     receipts: purchaseReceiptViews(value.receipts),
     storedBottles: Array.isArray(value.storedBottles) ? value.storedBottles : [],
@@ -1592,6 +1663,29 @@ function inventorySalesSpecificationLabel(value: InventorySalesSpecificationType
   return ({
     whole_bottle: '整瓶', glass: '单杯', shot: 'Shot', cocktail: '鸡尾酒', custom: '自定义',
   } as const)[value]
+}
+
+function inventoryCategoryLabel(code: string): string {
+  return inventoryCategoryOptions.find(([value]) => value === code)?.[1] ?? code
+}
+
+function isPositiveInventoryDecimal(value: string): boolean {
+  return /^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(value) && Number(value) > 0
+}
+
+async function loadAllCatalogProductsForInventory(api: NormalizedApiClient): Promise<unknown[]> {
+  const products: unknown[] = []
+  const pageSize = 100
+  for (let offset = 0; offset < 10_000; offset += pageSize) {
+    const response = await api.getEndpoint<{ data: unknown }>(
+      `/api/catalog/products?status=all&limit=${pageSize}&offset=${offset}`,
+    )
+    const page = isRecord(response.data) && Array.isArray(response.data.data)
+      ? response.data.data : Array.isArray(response.data) ? response.data : []
+    products.push(...page)
+    if (page.length < pageSize) return products
+  }
+  throw new Error('商品数量超过当前可读取范围，请先缩小商品目录后重试')
 }
 
 function formatInventoryMinor(value: number): string {

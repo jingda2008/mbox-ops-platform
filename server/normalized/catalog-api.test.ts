@@ -66,6 +66,9 @@ integration("normalized catalog PostgreSQL integration", () => {
     await runNormalizedMigrations(databaseUrl!);
     pool = new Pool({ connectionString: databaseUrl, max: 4 });
     await seedIdentity(pool);
+    // The integration fixture creates products with source costs.  Product
+    // administration alone intentionally cannot write that field.
+    await setPermission(pool, INVENTORY_COST_VIEW_PERMISSION, true);
     app = await createPostgresApp(pool);
   });
 
@@ -739,6 +742,21 @@ describe("normalized catalog HTTP API", () => {
       payload: { status: "sold_out" },
     });
     expect(productWrite.statusCode).toBe(200);
+    expect(productWrite.json().data.costAmountMinor).toBeUndefined();
+
+    const deniedCostOverwrite = await productOnly.app.inject({
+      method: "PATCH",
+      url: `/api/catalog/products/${productId}`,
+      headers: { "idempotency-key": "catalog-cost-overwrite-denied-unit-001" },
+      payload: { costAmountMinor: null },
+    });
+    expect(deniedCostOverwrite.statusCode).toBe(403);
+    expect(deniedCostOverwrite.json()).toEqual({
+      error: {
+        code: "CATALOG_COST_PERMISSION_DENIED",
+        message: "当前员工没有查看或修改成本的权限",
+      },
+    });
 
     const deniedPrice = await productOnly.app.inject({
       method: "PUT",
@@ -766,6 +784,54 @@ describe("normalized catalog HTTP API", () => {
       payload: createPayload(),
     });
     expect(deniedProduct.statusCode).toBe(403);
+  });
+
+  it("never accepts or returns a cost field for a product manager without cost access", async () => {
+    const fixture = await createFixture({
+      grantedPermissions: [CATALOG_PRODUCT_MANAGE_PERMISSION],
+    });
+    const deniedCreate = await fixture.app.inject({
+      method: "POST",
+      url: "/api/catalog/products",
+      headers: { "idempotency-key": "catalog-cost-create-denied-unit-001" },
+      payload: createPayload(),
+    });
+    expect(deniedCreate.statusCode).toBe(403);
+    expect(deniedCreate.json().error.code).toBe("CATALOG_COST_PERMISSION_DENIED");
+    expect(fixture.calls.some((call) => call.sql.includes("INSERT INTO mbox.products"))).toBe(false);
+
+    const createdWithoutCost = await fixture.app.inject({
+      method: "POST",
+      url: "/api/catalog/products",
+      headers: { "idempotency-key": "catalog-cost-redacted-unit-001" },
+      payload: { ...createPayload(), status: "inactive", costAmountMinor: undefined },
+    });
+    expect(createdWithoutCost.statusCode).toBe(201);
+    expect(createdWithoutCost.json().data.costAmountMinor).toBeUndefined();
+  });
+
+  it("requires a reason for an authorized material cost change", async () => {
+    const fixture = await createFixture();
+    const missingReason = await fixture.app.inject({
+      method: "PATCH",
+      url: `/api/catalog/products/${productId}`,
+      headers: { "idempotency-key": "catalog-cost-reason-required-unit-001" },
+      payload: { costAmountMinor: 1150 },
+    });
+    expect(missingReason.statusCode).toBe(400);
+    expect(missingReason.json().error.message).toContain("成本变更原因");
+
+    const updated = await fixture.app.inject({
+      method: "PATCH",
+      url: `/api/catalog/products/${productId}`,
+      headers: { "idempotency-key": "catalog-cost-reason-unit-001" },
+      payload: { costAmountMinor: 1150, costChangeReason: "供应商进价调整" },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(fixture.outcomes.at(-1)?.auditEvents[0]).toMatchObject({
+      action: "catalog.product.updated",
+      reason: "供应商进价调整",
+    });
   });
 
   it("configures price commands for serializable conflict retry and maps exhausted conflicts to 409", async () => {

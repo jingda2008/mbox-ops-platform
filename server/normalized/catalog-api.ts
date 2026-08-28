@@ -271,6 +271,13 @@ class CatalogConflictError extends Error {
   }
 }
 
+class CatalogCostPermissionError extends Error {
+  constructor() {
+    super("当前员工没有查看或修改成本的权限");
+    this.name = "CatalogCostPermissionError";
+  }
+}
+
 export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
   app,
   options,
@@ -489,6 +496,14 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
             context.employeeId,
             CATALOG_PRODUCT_MANAGE_PERMISSION,
           );
+          const canViewCost = await hasLivePermission(
+            transaction,
+            context.employeeId,
+            INVENTORY_COST_VIEW_PERMISSION,
+          );
+          if (input.costAmountProvided) {
+            await assertCostPermission(transaction, context.employeeId);
+          }
           if (input.standardPrice !== null) {
             await assertLivePermission(
               transaction,
@@ -570,6 +585,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
             null,
             product,
             input.standardPrice?.reason ?? null,
+            canViewCost,
           );
         },
       );
@@ -602,6 +618,14 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
               context.employeeId,
               CATALOG_PRODUCT_MANAGE_PERMISSION,
             );
+            const canViewCost = await hasLivePermission(
+              transaction,
+              context.employeeId,
+              INVENTORY_COST_VIEW_PERMISSION,
+            );
+            if (patch.costAmountProvided) {
+              await assertCostPermission(transaction, context.employeeId);
+            }
             if (patch.standardPrice !== null) {
               await assertLivePermission(
                 transaction,
@@ -618,6 +642,10 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
               displaySnapshot,
               before,
             );
+            const costChanged = operational.costAmountMinor !== before.costAmountMinor;
+            if (costChanged && patch.costChangeReason === null) {
+              throw new CatalogRequestError("修改成本时必须填写成本变更原因");
+            }
             assertActiveProductCost(patch.status ?? before.status, operational.costAmountMinor);
             const targetKind = patch.productKind ?? before.productKind;
             const targetStation = patch.fulfillmentStation ?? before.fulfillmentStation;
@@ -730,7 +758,11 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
               product,
               before,
               product,
-              patch.standardPrice?.reason ?? null,
+              catalogChangeReason(
+                patch.standardPrice?.reason ?? null,
+                costChanged ? patch.costChangeReason : null,
+              ),
+              canViewCost,
             );
           },
         );
@@ -761,6 +793,11 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
               context.employeeId,
               CATALOG_PRICE_MANAGE_PERMISSION,
             );
+            const canViewCost = await hasLivePermission(
+              transaction,
+              context.employeeId,
+              INVENTORY_COST_VIEW_PERMISSION,
+            );
             await lockProduct(transaction, productId);
             const before = mapProduct(await getProduct(transaction, productId));
             await replaceCurrentStandardPrice(transaction, productId, price);
@@ -777,6 +814,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
               before,
               product,
               price.reason,
+              canViewCost,
             );
           },
         );
@@ -1342,6 +1380,38 @@ async function assertLivePermission(
   );
 }
 
+async function hasLivePermission(
+  transaction: ScopedTransaction,
+  employeeId: string,
+  permission: string,
+): Promise<boolean> {
+  try {
+    await assertLivePermission(transaction, employeeId, permission);
+    return true;
+  } catch (error) {
+    if (error instanceof StaffAccessDeniedError) return false;
+    throw error;
+  }
+}
+
+async function assertCostPermission(
+  transaction: ScopedTransaction,
+  employeeId: string,
+): Promise<void> {
+  try {
+    await assertLivePermission(
+      transaction,
+      employeeId,
+      INVENTORY_COST_VIEW_PERMISSION,
+    );
+  } catch (error) {
+    if (error instanceof StaffAccessDeniedError) {
+      throw new CatalogCostPermissionError();
+    }
+    throw error;
+  }
+}
+
 async function lockProduct(
   transaction: ScopedTransaction,
   productId: string,
@@ -1688,9 +1758,10 @@ function catalogOutcome(
   before: CatalogProduct | null,
   after: CatalogProduct,
   reason: string | null,
+  includeCostInResult = true,
 ): CommandOutcome<CatalogProduct> {
   return {
-    result: product,
+    result: redactProductCost(product, includeCostInResult),
     auditEvents: [
       {
         actor: { type: "employee", employeeId: context.employeeId },
@@ -1718,6 +1789,24 @@ function catalogOutcome(
       },
     ],
   };
+}
+
+function redactProductCost(
+  product: CatalogProduct,
+  includeCost: boolean,
+): CatalogProduct {
+  if (includeCost) return product;
+  const { costAmountMinor: _costAmountMinor, ...redacted } = product;
+  return redacted;
+}
+
+function catalogChangeReason(
+  priceReason: string | null,
+  costReason: string | null,
+): string | null {
+  if (priceReason === null) return costReason;
+  if (costReason === null) return priceReason;
+  return `售价：${priceReason}；成本：${costReason}`;
 }
 
 function menuCategoryOutcome(
@@ -1901,6 +1990,7 @@ function readCreateProduct(value: unknown): {
   bundleComponents: BundleComponentInput[];
   productSnapshot: JsonObject;
   operationalFields: ProductOperationalFields;
+  costAmountProvided: boolean;
   status: ProductStatus;
   standardPrice: StandardPriceInput | null;
 } {
@@ -1930,6 +2020,7 @@ function readCreateProduct(value: unknown): {
     bundleComponents,
     productSnapshot,
     operationalFields,
+    costAmountProvided: body.costAmountMinor !== undefined,
     status,
     standardPrice,
   };
@@ -1944,6 +2035,8 @@ function readUpdateProduct(value: unknown): {
   bundleComponents: BundleComponentInput[] | null;
   productSnapshot: JsonObject | null;
   operationalInput: JsonObject;
+  costAmountProvided: boolean;
+  costChangeReason: string | null;
   status: ProductStatus | null;
   standardPrice: StandardPriceInput | null;
 } {
@@ -1971,6 +2064,10 @@ function readUpdateProduct(value: unknown): {
         : readBundleComponents(body.bundleComponents, false),
     productSnapshot,
     operationalInput: body,
+    costAmountProvided: body.costAmountMinor !== undefined,
+    costChangeReason: body.costChangeReason === undefined
+      ? null
+      : requiredText(body.costChangeReason, "costChangeReason", 500),
     status: body.status === undefined ? null : readStatus(body.status, false),
     standardPrice: body.standardPrice === undefined ? null : readStandardPrice(body.standardPrice),
   };
@@ -2412,7 +2509,9 @@ function catalogProductToJson(product: CatalogProduct): JsonObject {
     maxOrderQuantity: product.maxOrderQuantity,
     kdsPriority: product.kdsPriority,
     fulfillmentSlaSeconds: product.fulfillmentSlaSeconds,
-    costAmountMinor: product.costAmountMinor ?? null,
+    ...(product.costAmountMinor === undefined
+      ? {}
+      : { costAmountMinor: product.costAmountMinor }),
     status: product.status,
     isAvailable: product.isAvailable,
     inventoryConfigurationComplete: product.inventoryConfigurationComplete,
@@ -2488,7 +2587,7 @@ const catalogProductCodec: JsonCodec<CatalogProduct> = {
       || !nullableString(value.availableFrom)
       || !nullableString(value.availableUntil)
       || !nullableSafeInteger(value.fulfillmentSlaSeconds)
-      || !nullableSafeInteger(value.costAmountMinor)) {
+      || !nullableOptionalSafeInteger(value.costAmountMinor)) {
       throw new TypeError("Stored catalog product is invalid");
     }
     return value as unknown as CatalogProduct;
@@ -2522,6 +2621,10 @@ function nullableSafeInteger(value: JsonValue | undefined): boolean {
   return value === null || Number.isSafeInteger(value);
 }
 
+function nullableOptionalSafeInteger(value: JsonValue | undefined): boolean {
+  return value === undefined || nullableSafeInteger(value);
+}
+
 function executionResponse<Result>(execution: CommandExecution<Result>) {
   return { data: execution.value, meta: { replayed: execution.replayed } };
 }
@@ -2547,6 +2650,14 @@ function sendError(reply: FastifyReply, error: unknown): FastifyReply {
       401,
       "AUTH_REQUIRED",
       "登录信息无效或已过期，请重新登录",
+    );
+  }
+  if (error instanceof CatalogCostPermissionError) {
+    return apiError(
+      reply,
+      403,
+      "CATALOG_COST_PERMISSION_DENIED",
+      error.message,
     );
   }
   if (

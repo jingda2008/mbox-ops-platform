@@ -34,6 +34,16 @@ const PENDING_PAYMENT_KEY = 'mbox.pending.guest.payment.v1'
 const CHECKOUT_ATTEMPT_KEY = 'mbox.pending.guest.checkout.v1'
 const MEMBERSHIP_INVITE_DISMISSED_KEY = 'mbox.membership.invite.dismissed.until.v1'
 
+function compactMoney(amount) {
+  const minor = Number(amount || 0)
+  if (!Number.isSafeInteger(minor)) return money(amount)
+  const absolute = Math.abs(minor)
+  const yuan = Math.floor(absolute / 100)
+  const cents = absolute % 100
+  const grouped = String(yuan).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  return `${minor < 0 ? '-' : ''}¥${grouped}${cents ? `.${String(cents).padStart(2, '0')}` : ''}`
+}
+
 const OCCASIONS = [
   { code: 'date', name: '约会' }, { code: 'friends', name: '朋友聚会' },
   { code: 'business', name: '商务聊天' }, { code: 'birthday', name: '生日庆祝' },
@@ -382,7 +392,9 @@ Page({
     cartSyncing: false,
     clearingCart: false,
     cartTotal: '¥0.00',
+    cartTotalCompact: '¥0',
     cartCount: 0,
+    cartExpanded: false,
     upgradeOffer: null,
     upgradeAdd: '',
     targetTotal: '',
@@ -507,7 +519,7 @@ Page({
       this.setData({
         busy: false, cartSyncing: false, clearingCart: false, quickServiceBusy: '',
         checkoutLocked: false, pendingPayment: null, cart: [], cartVersion: 0, cartGeneration: 0,
-        cartTotal: '¥0.00', cartCount: 0, cartWritesFrozen: false,
+        cartTotal: '¥0.00', cartTotalCompact: '¥0', cartCount: 0, cartExpanded: false, cartWritesFrozen: false,
         recommendations: [], recommendationPublicId: '', recommendationAttribution: null, recommendationError: '', performance: null, performanceError: '',
       })
     }
@@ -1067,7 +1079,9 @@ Page({
     this.setData({
       cart,
       cartTotal: money(total),
+      cartTotalCompact: compactMoney(total),
       cartCount: cart.reduce((sum, item) => sum + item.quantity, 0),
+      cartExpanded: cart.length ? this.data.cartExpanded : false,
       cartVersion: sharedCart ? Number(sharedCart.version || 0) : this.data.cartVersion,
       cartGeneration: sharedCart ? Number(sharedCart.generation || 0) : this.data.cartGeneration,
       cartWritesFrozen: Boolean(sharedCart && sharedCart.guestWritesFrozen),
@@ -1191,6 +1205,7 @@ Page({
   openStatus() { wx.navigateTo({ url: '/pages/status/index' }) },
   openAccount() { wx.navigateTo({ url: '/pages/account/index' }) },
   openBenefits() { wx.switchTab({ url: '/pages/profile/index' }) },
+  toggleCart() { this.setData({ cartExpanded: !this.data.cartExpanded }) },
 
   async openCheckout() {
     if (!this.data.cart.length || this.data.busy || this.data.pendingPayment) return

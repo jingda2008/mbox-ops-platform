@@ -1,8 +1,4 @@
 <view class="page order-page">
-  <view class="order-head">
-    <view><text class="eyebrow">M-BOX · 今晚点单</text><text class="order-title">今晚点单</text></view>
-  </view>
-
   <state-panel wx:if="{{loading}}" type="loading" title="正在确认桌次与菜单" />
 
   <view wx:elif="{{connectionState === 'needs_scan' || connectionState === 'waiting' || connectionState === 'upgrade_required'}}" class="gate-wrap">
@@ -56,9 +52,9 @@
   </view>
 
   <block wx:else>
-    <view wx:if="{{error}}" class="error-banner">{{error}}</view>
+    <view wx:if="{{error && !checkoutLocked}}" class="error-banner">{{error}}</view>
     <view wx:if="{{success}}" class="success-banner">{{success}}</view>
-    <view wx:if="{{cartWritesFrozen}}" class="error-banner">正在确认本桌点单，暂时只能查看；确认后可继续修改。</view>
+    <view wx:if="{{cartWritesFrozen}}" class="status-banner status-banner--waiting">本桌点单正在确认，当前选择已保留，稍后即可继续调整。</view>
 
     <view class="table-strip">
       <view class="table-strip__table"><text class="table-strip__label">本桌</text><text class="table-strip__value">{{table.displayName}}</text></view>
@@ -73,21 +69,11 @@
       <button data-code="celebration" aria-label="生日或个性化需求" disabled="{{quickServiceBusy}}" bindtap="requestQuickService"><view class="quick-service__surface"><text class="quick-service__dot"></text><text>{{quickServiceBusy === 'celebration' ? '正在安排' : '生日/需求'}}</text></view></button>
       <button data-code="complaint" disabled="{{quickServiceBusy}}" bindtap="requestQuickService"><view class="quick-service__surface"><text class="quick-service__dot"></text><text>{{quickServiceBusy === 'complaint' ? '正在通知' : '投诉/不满意'}}</text></view></button>
     </view>
-    <view class="recommend-entry__actions recommend-entry__actions--primary" aria-label="智能推荐">
-      <button bindtap="onRecommend" loading="{{recommendationBusy}}"><text class="recommend-entry__action-icon">✦</text><view><text>帮我快速选</text><text>根据本桌情况推荐</text></view></button>
-      <button class="shake-recommendation" bindtap="onShakeRecommendation" loading="{{recommendationBusy}}" disabled="{{shakeArmed}}"><text class="recommend-entry__action-icon">↻</text><view><text>{{shakeArmed ? '请摇动手机' : '摇一摇换一组'}}</text><text>给今晚一点灵感</text></view></button>
-    </view>
 
     <view wx:if="{{pendingPayment}}" class="payment-recovery">
       <view><text>{{pendingPayment.statusText}}</text><text>应付 {{pendingPayment.amountText}}</text></view>
       <button wx:if="{{pendingPayment.canContinue}}" bindtap="continuePayment" loading="{{busy}}">继续付款</button>
       <button bindtap="openAccount">查看本桌账单</button>
-    </view>
-
-    <view wx:if="{{checkoutLocked && !pendingPayment}}" class="checkout-recovery">
-      <view><text>正在确认你的选择</text><text>稍等片刻，或再试一次</text></view>
-      <button bindtap="retryCheckout" loading="{{busy}}">再试一次</button>
-      <button bindtap="openAccount">先看账单</button>
     </view>
 
     <view wx:if="{{membershipInviteVisible}}" class="membership-invite">
@@ -104,7 +90,11 @@
     </view>
 
     <view wx:if="{{selectedCategory === 'recommendation' && !searchText}}" class="recommend-entry">
-      <view class="recommend-entry__head"><text>今夜推荐</text><text>按这一桌的感觉，先给三组轻松选择</text></view>
+      <view class="recommend-entry__head"><view><text>今晚先看这三款</text><text>按本桌情况与当晚菜单实时推荐</text></view><text>不合适就换一组</text></view>
+      <view class="recommend-entry__actions" aria-label="智能推荐">
+        <button bindtap="onRecommend" loading="{{recommendationBusy}}"><text class="recommend-entry__action-icon">✦</text><view><text>帮我选</text><text>更贴合这一桌</text></view></button>
+        <button class="shake-recommendation" bindtap="onShakeRecommendation" loading="{{recommendationBusy}}" disabled="{{shakeArmed}}"><text class="recommend-entry__action-icon">↻</text><view><text>{{shakeArmed ? '请摇动手机' : '摇一摇'}}</text><text>换一组新感觉</text></view></button>
+      </view>
       <view wx:if="{{recommendationError}}" class="recommendation-note">{{recommendationError}}，可切换“全部”继续点单。</view>
       <scroll-view wx:if="{{recommendations.length}}" scroll-x enhanced show-scrollbar="{{false}}" class="recommend-scroll"><view class="recommend-row">
         <view wx:for="{{recommendations}}" wx:key="productId" class="recommend-card {{index === 0 ? 'recommend-card--priority' : ''}}">
@@ -112,6 +102,7 @@
           <view class="recommend-body"><text class="recommend-tier">{{item.tierText}}</text><text class="recommend-name">{{item.name}}</text><text class="recommend-reason">{{item.reason}}</text><view wx:if="{{item.savingsText || item.separatePriceText}}" class="recommend-value"><text wx:if="{{item.separatePriceText}}">单点约 {{item.separatePriceText}}</text><text wx:if="{{item.savingsText}}" class="saving">{{item.savingsText}}</text></view><view class="recommend-foot"><text class="recommend-price">{{item.priceText}}</text><view class="recommend-actions"><button class="recommend-reject" data-id="{{item.productId}}" bindtap="rejectRecommendation" loading="{{item.rejecting}}" disabled="{{item.rejecting}}">不合适</button><button class="recommend-select" data-id="{{item.productId}}" data-source="recommendation" bindtap="addProduct">加入本桌</button></view></view></view>
         </view>
       </view></scroll-view>
+      <view wx:elif="{{recommendationBusy}}" class="recommend-loading"><text>正在从今晚可点商品里挑选</text><text>会同时考虑库存与本桌偏好</text></view>
     </view>
 
     <view wx:if="{{selectedCategory !== 'recommendation' || searchText}}" class="section product-section">
@@ -134,8 +125,13 @@
   </block>
 
   <view wx:if="{{connectionState === 'active' && cart.length}}" class="cart-dock">
-      <view class="cart-summary"><view><text>本桌共享购物车 · {{cartCount}}件 · {{cartTotal}}</text><text>{{cartWritesFrozen ? '正在确认本桌点单，暂时不能修改' : cartSyncing ? '正在更新同桌选择' : '同桌顾客可共同查看和调整'}}</text></view><view class="cart-summary__actions"><button class="cart-clear" bindtap="clearCart" loading="{{clearingCart}}" disabled="{{cartSyncing || checkoutLocked || pendingPayment || cartWritesFrozen}}">清空</button><button class="checkout-button" bindtap="openCheckout" loading="{{busy}}" disabled="{{cartSyncing || cartWritesFrozen}}">确认并付款</button></view></view>
-    <scroll-view scroll-y class="cart-lines"><view wx:for="{{cart}}" wx:key="productId"><view><text>{{item.name}}</text><text>{{item.priceText}} × {{item.quantity}} · 小计 {{item.subtotalText}}</text><text wx:if="{{!item.available}}" class="cart-line__unavailable">{{item.unavailableReason}}</text></view><view><button aria-label="移除{{item.name}}" data-id="{{item.productId}}" bindtap="removeCartLine" disabled="{{cartSyncing || cartWritesFrozen}}">移除</button><button data-id="{{item.productId}}" data-delta="-1" bindtap="changeQuantity" disabled="{{cartSyncing || cartWritesFrozen}}">−</button><text>{{item.quantity}}</text><button data-id="{{item.productId}}" data-delta="1" bindtap="changeQuantity" disabled="{{cartSyncing || cartWritesFrozen || !item.available}}">＋</button></view></view></scroll-view>
+    <view wx:if="{{cartExpanded}}" class="cart-detail-head"><text>本桌已选</text><button bindtap="clearCart" loading="{{clearingCart}}" disabled="{{cartSyncing || checkoutLocked || pendingPayment || cartWritesFrozen}}">清空</button></view>
+    <scroll-view wx:if="{{cartExpanded}}" scroll-y class="cart-lines"><view wx:for="{{cart}}" wx:key="productId" class="cart-line"><view class="cart-line__copy"><text>{{item.name}}</text><text>{{item.priceText}} × {{item.quantity}} · 小计 {{item.subtotalText}}</text><text wx:if="{{!item.available}}" class="cart-line__unavailable">{{item.unavailableReason}}</text></view><view class="cart-line__actions"><button class="cart-line__remove" aria-label="移除{{item.name}}" data-id="{{item.productId}}" bindtap="removeCartLine" disabled="{{cartSyncing || cartWritesFrozen}}">移除</button><button data-id="{{item.productId}}" data-delta="-1" bindtap="changeQuantity" disabled="{{cartSyncing || cartWritesFrozen}}">−</button><text>{{item.quantity}}</text><button data-id="{{item.productId}}" data-delta="1" bindtap="changeQuantity" disabled="{{cartSyncing || cartWritesFrozen || !item.available}}">＋</button></view></view></scroll-view>
+    <view class="cart-summary"><button class="cart-overview" bindtap="toggleCart" aria-label="{{cartExpanded ? '收起本桌已选商品' : '展开本桌已选商品'}}"><text class="cart-overview__mark">选</text><view><text>{{cartCount}}件 · 合计 {{cartTotalCompact}}</text><text>{{cartWritesFrozen ? '当前选择已保留' : cartSyncing ? '正在同步同桌选择' : (cartExpanded ? '点此收起明细' : '点此查看和调整')}}</text></view><text class="cart-overview__chevron">{{cartExpanded ? '⌄' : '⌃'}}</text></button><button class="checkout-button" bindtap="openCheckout" loading="{{busy}}" disabled="{{cartSyncing || checkoutLocked || pendingPayment || cartWritesFrozen}}">去付款</button></view>
+  </view>
+
+  <view wx:if="{{checkoutLocked && !pendingPayment}}" class="checkout-guard">
+    <view class="checkout-guard__sheet"><view class="checkout-guard__mark">…</view><text class="checkout-guard__title">订单正在确认</text><text class="checkout-guard__copy">当前选择已经保留，请先不用重复提交。</text><view class="checkout-guard__actions"><button bindtap="openAccount">查看订单状态</button><button bindtap="retryCheckout" loading="{{busy}}">重新确认</button></view></view>
   </view>
 
   <view wx:if="{{upgradeOffer}}" class="sheet-mask"><view class="upgrade-sheet">

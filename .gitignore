@@ -46,6 +46,7 @@ android/validation-twa/signing.env
 !.vscode/extensions.json
 .idea
 .DS_Store
+miniprogram/project.private.config.json
 gha-creds-*.json
 *.suo
 *.ntvs*

@@ -50,6 +50,7 @@ export interface InventoryItemRecord {
   lowStockThreshold: string | null;
   wholeUnitCount: boolean;
   reasonableWasteQuantity: string;
+  packageVolumeMl: string | null;
   status: string;
 }
 
@@ -88,6 +89,14 @@ export interface CreateInventoryItemInput {
   lowStockThreshold?: string | null;
   wholeUnitCount?: boolean;
   reasonableWasteQuantity?: string;
+  packageVolumeMl?: string | null;
+}
+
+export interface UpdateInventoryItemInput {
+  name: string;
+  categoryCode: string;
+  lowStockThreshold: string | null;
+  packageVolumeMl: string | null;
 }
 
 export interface BindBarcodeInput {
@@ -215,6 +224,7 @@ interface InventoryItemRow extends Record<string, unknown> {
   low_stock_threshold: string | null;
   whole_unit_count: boolean;
   reasonable_waste_quantity: string;
+  package_volume_ml: string | null;
   status: string;
 }
 
@@ -326,10 +336,11 @@ export class InventoryRepository {
         `
       INSERT INTO mbox.inventory_items (
         tenant_id, store_id, sku, name, item_type, base_unit, category_code,
-        low_stock_threshold, whole_unit_count, reasonable_waste_quantity
-      ) VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8::numeric, $9, $10::numeric)
+        low_stock_threshold, whole_unit_count, reasonable_waste_quantity, package_volume_ml
+      ) VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8::numeric, $9, $10::numeric, $11::numeric)
       RETURNING id, sku, name, item_type, base_unit, category_code,
-        low_stock_threshold::text, whole_unit_count, reasonable_waste_quantity::text, status
+        low_stock_threshold::text, whole_unit_count, reasonable_waste_quantity::text,
+        package_volume_ml::text, status
     `,
         [
           this.transaction.scope.tenantId,
@@ -342,6 +353,7 @@ export class InventoryRepository {
           input.lowStockThreshold ?? null,
           input.wholeUnitCount ?? false,
           input.reasonableWasteQuantity ?? "0",
+          input.packageVolumeMl ?? null,
         ],
       ),
       "inventory item insert",
@@ -352,6 +364,36 @@ export class InventoryRepository {
       VALUES ($1::uuid, $2::uuid, $3::uuid)
     `,
       [this.transaction.scope.tenantId, this.transaction.scope.storeId, row.id],
+    );
+    return mapItem(row);
+  }
+
+  async updateItem(
+    itemId: string,
+    input: Readonly<UpdateInventoryItemInput>,
+  ): Promise<InventoryItemRecord> {
+    const row = requireOne(
+      await this.transaction.query<InventoryItemRow>(`
+        UPDATE mbox.inventory_items
+        SET name=$4::text,
+            category_code=$5::text,
+            low_stock_threshold=$6::numeric,
+            package_volume_ml=$7::numeric,
+            updated_at=clock_timestamp()
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+        RETURNING id, sku, name, item_type, base_unit, category_code,
+          low_stock_threshold::text, whole_unit_count, reasonable_waste_quantity::text,
+          package_volume_ml::text, status
+      `, [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        itemId,
+        input.name,
+        input.categoryCode,
+        input.lowStockThreshold,
+        input.packageVolumeMl,
+      ]),
+      "inventory item update",
     );
     return mapItem(row);
   }
@@ -2134,6 +2176,7 @@ function mapItem(row: InventoryItemRow): InventoryItemRecord {
     lowStockThreshold: row.low_stock_threshold,
     wholeUnitCount: row.whole_unit_count,
     reasonableWasteQuantity: row.reasonable_waste_quantity,
+    packageVolumeMl: row.package_volume_ml,
     status: row.status,
   };
 }

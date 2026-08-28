@@ -107,6 +107,8 @@
 .staff-module-form input, .staff-module-form select, .staff-module-form textarea, .staff-device-reason input { width: 100%; min-height: 44px; padding: 8px 10px; border: 1px solid #c4cbc3; border-radius: 6px; background: #fff; color: #202621; font: inherit; }
 .staff-module-form textarea { resize: vertical; line-height: 1.55; }
 .staff-module-form > button { min-height: 44px; align-self: end; padding: 0 14px; border: 1px solid #105f3f; border-radius: 6px; background: #176f4c; color: #fff; font-size: 12px; font-weight: 800; }
+.inventory-category-filter { min-width: 0; min-height: 44px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; padding: 0 10px; border: 1px solid #c4cbc3; border-radius: 6px; background: #fff; color: #535b54; font-size: 11px; font-weight: 750; }
+.inventory-category-filter select { min-width: 0; min-height: 42px; padding: 8px 0; border: 0; border-radius: 0; background: transparent; color: #202621; font: inherit; font-weight: 700; }
 .inventory-code-field { grid-column: 1 / -1; }
 .inventory-code-field > div { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
 .inventory-code-field > div > button { min-width: 86px; min-height: 44px; padding: 0 12px; border: 1px solid #176b4c; border-radius: 6px; background: #eef7f2; color: #175d42; display: flex; align-items: center; justify-content: center; gap: 5px; font-weight: 800; }

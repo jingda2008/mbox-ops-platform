@@ -415,6 +415,7 @@ Page({
     searchText: '',
     recommendations: [],
     recommendationBusy: false,
+    recommendationEmpty: false,
     recommendationError: '',
     shakeArmed: false,
     recommendationPublicId: '',
@@ -558,7 +559,7 @@ Page({
         busy: false, cartSyncing: false, clearingCart: false, quickServiceBusy: '',
         checkoutLocked: false, pendingPayment: null, paymentResult: null, cart: [], cartVersion: 0, cartGeneration: 0,
         cartTotal: '¥0.00', cartTotalCompact: '¥0', cartCount: 0, cartExpanded: false, checkoutConfirmVisible: false, cartWritesFrozen: false,
-        recommendations: [], recommendationPublicId: '', recommendationAttribution: null, recommendationError: '', performance: null, performanceError: '',
+        recommendations: [], recommendationPublicId: '', recommendationAttribution: null, recommendationEmpty: false, recommendationError: '', performance: null, performanceError: '',
         recommendationConfiguration: EMPTY_RECOMMENDATION_CONFIGURATION, recommendationQuestionVisible: false, recommendationQuestionIndex: 0, recommendationQuestion: null, recommendationAnswers: {},
       })
     }
@@ -567,7 +568,7 @@ Page({
     if (this.recommendationScopeKey !== recommendationScopeKey) {
       this.recommendationScopeKey = recommendationScopeKey
       this.initialRecommendationRequested = false
-      this.setData({ recommendations: [], recommendationPublicId: '', recommendationAttribution: null, recommendationError: '', recommendationConfiguration: EMPTY_RECOMMENDATION_CONFIGURATION, recommendationQuestionVisible: false, recommendationQuestionIndex: 0, recommendationQuestion: null, recommendationAnswers: {} })
+      this.setData({ recommendations: [], recommendationPublicId: '', recommendationAttribution: null, recommendationEmpty: false, recommendationError: '', recommendationConfiguration: EMPTY_RECOMMENDATION_CONFIGURATION, recommendationQuestionVisible: false, recommendationQuestionIndex: 0, recommendationQuestion: null, recommendationAnswers: {} })
     }
     const config = getRuntimeConfig()
     if (!session.tableToken && !session.tableCode && !config.isDevelopment) {
@@ -928,10 +929,19 @@ Page({
         savingsText: item.savingsAmountMinor > 0 ? `比单点省 ${money(item.savingsAmountMinor)}` : '',
         tierText: item.marketingLabel || (index === 0 ? '今晚优先推荐' : item.tier === 'signature' ? '完整体验' : item.tier === 'enhanced' ? '今晚推荐' : '轻松开始'),
       }))
+      // A later recommendation request may legitimately have no *new* safe
+      // group after excluding exposed, cart, ordered, and rejected choices.
+      // Keep the first layer on screen in that case instead of making the
+      // page look unresponsive or quietly falling back to unavailable goods.
+      const keepCurrentRecommendations = recommendationIntent !== 'initial'
+        && !recommendations.length
+        && this.data.recommendations.length > 0
+      const visibleRecommendations = keepCurrentRecommendations ? this.data.recommendations : recommendations
       this.setData({
-        recommendations,
-        recommendationPublicId: recommendations.length ? result.publicId || '' : '',
-        recommendationAttribution: null,
+        recommendations: visibleRecommendations,
+        recommendationEmpty: !visibleRecommendations.length,
+        recommendationPublicId: recommendations.length ? result.publicId || '' : (keepCurrentRecommendations ? this.data.recommendationPublicId : ''),
+        recommendationAttribution: keepCurrentRecommendations ? this.data.recommendationAttribution : null,
         recommendationError: '',
         recommendationConfiguration: recommendationConfiguration(result),
       })
@@ -940,13 +950,22 @@ Page({
           surface: 'guest_order_recommendations', recommendationIntent,
         }).catch(() => {})
       }
+      if (!recommendations.length && recommendationIntent !== 'initial') {
+        wx.showToast({
+          title: keepCurrentRecommendations ? '这桌合适的组合已看过' : '暂时没有合适的组合',
+          icon: 'none',
+        })
+      }
     } catch (error) {
       if (!this.isCurrentTableRequest(expected)) return
       // The first exposure is helpful, but not worth making the page look
       // broken when the recommendation service briefly reconnects. Permit a
       // later refresh rather than treating one transient failure as final.
       if (recommendationIntent === 'initial') this.initialRecommendationRequested = false
-      this.setData({ recommendationError: customerErrorMessage(error, '今夜推荐正在更新') })
+      this.setData({
+        recommendationEmpty: recommendationIntent === 'initial' && !this.data.recommendations.length,
+        recommendationError: customerErrorMessage(error, '今夜推荐正在更新'),
+      })
     }
     finally { if (this.isCurrentTableRequest(expected)) this.setData({ recommendationBusy: false }) }
   },
@@ -962,6 +981,7 @@ Page({
       if (completed) return
       completed = true
       this.stopShakeRecommendation()
+      if (wx.vibrateShort) wx.vibrateShort({ type: 'light', fail: () => {} })
       void this.recommend('shake', tableRequest)
     }
     this.shakeListener = (reading) => {

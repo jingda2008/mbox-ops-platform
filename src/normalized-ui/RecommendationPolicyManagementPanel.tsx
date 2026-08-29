@@ -115,9 +115,9 @@ export function RecommendationPolicyManagementPanel({api,auth}:{api:NormalizedAp
   }
 
   async function setRollout(rolloutState:RolloutState){
-    const reason=(await promptAction({title:'填写推荐开放调整原因',description:`将顾客推荐调整为“${rolloutLabel[rolloutState]}”。`,label:'调整原因',defaultValue:rolloutState==='disabled'?'停止顾客曝光，保留原点单流程':'已完成规则、岗位和样本复核',confirmLabel:'继续'}))?.trim()??''
+    const reason=(await promptAction({title:'填写推荐开放调整原因',description:`将顾客推荐调整为“${rolloutLabel[rolloutState]}”。`,label:'调整原因',defaultValue:rolloutState==='disabled'?'停止顾客曝光，保留原点单流程':rolloutState==='pilot'?'当前已发布规则用于可随时关闭的门店试运行':'已完成规则、岗位和样本复核',confirmLabel:'继续'}))?.trim()??''
     if(reason.length<2||busy)return
-    if((rolloutState==='pilot'||rolloutState==='enabled')&&!(await confirmAction({title:'确认开放顾客推荐',description:'只有当前生效的三人分离版本可以开放。',confirmLabel:'确认开放'})))return
+    if((rolloutState==='pilot'||rolloutState==='enabled')&&!(await confirmAction({title:'确认开放顾客推荐',description:rolloutState==='pilot'?'试运行可使用当前已发布规则，随时可关闭；可售、库存、产能与支付门禁不变。':'正式启用仍需要当前生效的三人分离版本。',confirmLabel:'确认开放'})))return
     setBusy('rollout');setNotice('')
     try{
       await api.putEndpoint('/api/staff/customer-experience/features/recommendation.engine',{
@@ -130,12 +130,12 @@ export function RecommendationPolicyManagementPanel({api,auth}:{api:NormalizedAp
   const active=configuration?.policies.find((policy)=>policy.status==='published'&&isCurrent(policy))??null
   return <section className="recommendation-policy-panel" aria-label="推荐规则版本与试点">
     <button className="recommendation-policy-summary" type="button" aria-expanded={expanded} onClick={()=>setExpanded((value)=>!value)}>
-      <span><ShieldCheck size={18}/></span><div><strong>推荐规则与顾客开放</strong><small>经营参数三人分离发布；规则版本和顾客试点为两个独立动作。</small></div>
+      <span><ShieldCheck size={18}/></span><div><strong>推荐规则与顾客开放</strong><small>规则版本与顾客试运行分开管理；正式启用仍保留三人分离发布。</small></div>
       <em>{configuration?rolloutLabel[configuration.feature.rolloutState]:'读取中'}</em><ChevronDown size={17}/>
     </button>
     {expanded&&<div className="recommendation-policy-body">
       {notice&&<p role="status">{notice}</p>}
-      <div className="recommendation-rollout-card"><div><strong>顾客开放状态：{configuration?rolloutLabel[configuration.feature.rolloutState]:'—'}</strong><small>{configuration?.feature.reason??'正在读取门店状态'}{active?` · 当前第 ${active.version} 版`:' · 当前没有已生效的三人发布版本'}</small></div>
+      <div className="recommendation-rollout-card"><div><strong>顾客开放状态：{configuration?rolloutLabel[configuration.feature.rolloutState]:'—'}</strong><small>{configuration?.feature.reason??'正在读取门店状态'}{active?` · 当前第 ${active.version} 版`:' · 当前没有已生效的发布版本'}</small></div>
         {canPublish&&<div>{(['disabled','shadow','pilot','enabled'] as const).map((state)=><button type="button" key={state} disabled={busy!==''||configuration?.feature.rolloutState===state} onClick={()=>void setRollout(state)}>{rolloutLabel[state]}</button>)}</div>}
       </div>
       <p className="recommendation-policy-boundary">演出、库存、产能已作为硬性可售门禁，但尚未成为可调评分项，因此对应权重固定为 0；不得用虚假分值影响排序。</p>

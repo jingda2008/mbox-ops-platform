@@ -106,6 +106,22 @@ describe('recommendation policy operational API',()=>{
       occasion:'friends',alcoholPreference:'mixed',experienceLevel:'enhanced',serviceIntensity:'balanced',
     }), 'recommendation-three-question-api-001','guided')
   })
+
+  it('uses neutral server defaults for the automatic first recommendation before a customer answers',async()=>{
+    const recommend=vi.fn(async()=>({
+      value:{publicId:'recommendation-initial-v1',answers:{},recommendations:[],missingTiers:[],
+        policyPublicId:'recommendation-policy-input-v1',policyVersion:1,inputConfiguration:{}},replayed:false,
+    }))
+    const app=guestConfigurationFixture({recommend})
+    const response=await app.inject({
+      method:'POST',url:'/guest/experience/recommendations',headers:{'idempotency-key':'recommendation-initial-api-001'},
+      payload:{recommendationIntent:'initial'},
+    })
+    expect(response.statusCode).toBe(201)
+    expect(recommend).toHaveBeenCalledWith(expect.anything(),expect.objectContaining({
+      occasion:'other',alcoholPreference:'undecided',experienceLevel:'enhanced',serviceIntensity:'balanced',
+    }), 'recommendation-initial-api-001','initial')
+  })
 })
 
 function fixture(service:Record<string,ReturnType<typeof vi.fn>>){

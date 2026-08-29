@@ -64,10 +64,10 @@
       <view class="section compact-section">
         <view class="section-title"><text>本桌快捷服务</text></view>
         <view class="action-grid">
-          <button data-url="/pages/service/index" bindtap="openPage"><text class="action-icon">水</text><text>桌边服务</text></button>
-          <button data-url="/pages/status/index" bindtap="openPage"><text class="action-icon">进</text><text>服务进展</text></button>
-          <button data-url="/pages/songs/index" bindtap="openPage"><text class="action-icon">歌</text><text>现场点歌</text></button>
-          <button data-url="/pages/account/index" bindtap="openPage"><text class="action-icon">账</text><text>订单桌账</text></button>
+          <button class="action-grid__button" data-url="/pages/service/index" bindtap="openPage"><text class="action-icon">水</text><text>桌边服务</text></button>
+          <button class="action-grid__button" data-url="/pages/status/index" bindtap="openPage"><text class="action-icon">进</text><text>服务进展</text></button>
+          <button class="action-grid__button" data-url="/pages/songs/index" bindtap="openPage"><text class="action-icon">歌</text><text>现场点歌</text></button>
+          <button class="action-grid__button" data-url="/pages/account/index" bindtap="openPage"><text class="action-icon">账</text><text>订单桌账</text></button>
         </view>
       </view>
     </block>
@@ -129,7 +129,7 @@
           <view class="featured-activity-card__shade"></view>
           <text class="featured-activity-card__badge">SUPERHIGH</text>
         </view>
-        <view class="featured-activity-card__copy"><text>超嗨 · 本期精选</text><text>{{upcomingActivity.title}}</text><text>{{upcomingActivity.dateText}} · {{upcomingActivity.availabilityText}}</text><text>查看活动详情</text></view>
+        <view class="featured-activity-card__copy"><text class="featured-activity-card__eyebrow">超嗨 · 本期精选</text><text class="featured-activity-card__title">{{upcomingActivity.title}}</text><text class="featured-activity-card__meta">{{upcomingActivity.dateText}} · {{upcomingActivity.availabilityText}}</text><text class="featured-activity-card__link">查看活动详情</text></view>
         <text class="featured-activity-card__arrow">›</text>
       </view>
       <scroll-view wx:if="{{editorialCards.length}}" class="published-content-scroll" scroll-x enhanced show-scrollbar="{{false}}">
@@ -176,8 +176,8 @@
     </view>
   </view>
 
-  <view wx:if="{{membershipInviteVisible}}" class="member-invite-mask" catchtouchmove="noop">
-    <view class="member-invite-sheet">
+  <view wx:if="{{membershipInviteVisible}}" class="member-invite-mask">
+    <scroll-view scroll-y="true" class="member-invite-sheet">
       <button class="member-invite-close" aria-label="关闭会员邀请" bindtap="dismissMembershipInvite">×</button>
       <text class="member-invite-kicker">M-BOX 会员</text>
       <text class="member-invite-title">欢迎加入 M-BOX</text>
@@ -185,7 +185,7 @@
       <image class="member-invite-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX 标志" />
       <checkbox-group bindchange="onMembershipInviteAgreementChange">
         <label class="member-invite-agreement">
-          <checkbox value="agree" checked="{{membershipInviteAgreed}}" color="#315d46" />
+          <checkbox class="member-invite-agreement__checkbox" value="agree" checked="{{membershipInviteAgreed}}" color="#315d46" />
           <view class="member-invite-agreement-copy">
             <text>我已阅读并同意</text>
             <view class="member-invite-links">
@@ -199,6 +199,6 @@
         <button wx:if="{{membershipInviteAgreed}}" class="member-invite-agree wx-phone-button" open-type="getPhoneNumber" bindgetphonenumber="acceptMembershipInvite" hover-class="none" loading="{{membershipInviteBusy}}">同意入会</button>
         <button wx:else class="member-invite-agree member-invite-agree--pending" bindtap="remindMembershipInviteAgreement" hover-class="none">同意入会</button>
       </view>
-    </view>
+    </scroll-view>
   </view>
 </view>

@@ -26,6 +26,7 @@ import { FulfillmentCapacityUnavailableError } from './fulfillment-capacity-repo
 import { ServiceTaskRepository } from './service-task-repository.js'
 import { seedActiveGuestTableAuthority } from './guest-table-authority.test-helper.js'
 import { ReservationGuestSessionInvalidError } from './reservation-guest-session.js'
+import { GuestSessionInvalidError, GuestTableSessionEndedError } from './guest-session-repository.js'
 import {
   ScopedPostgresTransactionRunner,
   type PostgresPool,
@@ -108,6 +109,20 @@ describe('guest commerce/service API trust boundaries', () => {
     })
     expect(response.statusCode).toBe(401)
     expect(response.json()).toMatchObject({ error: { code: 'GUEST_SESSION_INVALID' } })
+    expect(value.query).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['/api/guest/shared-cart', new GuestSessionInvalidError(), 401, 'GUEST_SESSION_INVALID'],
+    ['/api/guest/service-requests', new GuestSessionInvalidError(), 401, 'GUEST_SESSION_INVALID'],
+    ['/api/guest/shared-cart', new GuestTableSessionEndedError(), 409, 'TABLE_SESSION_ENDED'],
+    ['/api/guest/service-requests', new GuestTableSessionEndedError(), 409, 'TABLE_SESSION_ENDED'],
+  ])('maps a stale table guest session from %s instead of leaking a 500', async (url, error, statusCode, code) => {
+    const value = fixture({ resolveGuestContext: async () => { throw error } })
+    const response = await value.app.inject({ method: 'GET', url })
+
+    expect(response.statusCode).toBe(statusCode)
+    expect(response.json()).toMatchObject({ error: { code } })
     expect(value.query).not.toHaveBeenCalled()
   })
 

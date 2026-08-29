@@ -30,6 +30,7 @@
 .menu-recommendation-heading small { color: #7b6935; font-size: 9px; font-weight: 850; }
 .menu-recommendation-heading strong { font-size: 18px; }
 .menu-recommendation-heading > span { color: var(--ink-soft); font-size: 10px; }
+.menu-recommendation-heading-meta-compact { display: none; }
 .menu-recommendation-feedback { min-height: 36px; display: flex; align-items: center; gap: 7px; padding: 6px 16px; border-bottom: 1px solid #d7e3d5; background: #f4faf3; color: #2e6639; font-size: 11px; font-weight: 750; }
 .menu-recommendation-feedback svg { flex: 0 0 auto; }
 .menu-recommendation-feedback span { overflow: hidden; color: inherit; text-overflow: ellipsis; white-space: nowrap; }
@@ -368,6 +369,11 @@
 }
 
 @media (max-width: 340px) {
+  .menu-recommendation-heading { gap: 8px; }
+  .menu-recommendation-heading > span { max-width: 48%; white-space: nowrap; }
+  .menu-recommendation-heading-meta-full { display: none; }
+  .menu-recommendation-heading-meta-compact { display: inline; }
+
   .menu-recommendation-quick-add {
     width: 44px;
     height: 44px;

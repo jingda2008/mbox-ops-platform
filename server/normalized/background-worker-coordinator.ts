@@ -1,5 +1,6 @@
 import type { IdempotencyCleanupResult } from './idempotency-cleanup-worker.js'
 import type { BusinessDayRolloverResult } from './business-day-worker.js'
+import type { AutomaticTableTurnoverBatch } from './automatic-table-turnover-worker.js'
 import type { NotificationBatchResult, NotificationDelivery } from './notification-worker.js'
 import type { OutboxBatchResult, OutboxDelivery } from './outbox-dispatcher.js'
 import type { PrintAdapter, PrintBatchResult } from './print-worker.js'
@@ -109,6 +110,9 @@ type NotificationPort = {
 type BusinessDayPort = {
   run(scope: Readonly<StoreScope>, workerId: string): Promise<BusinessDayRolloverResult>
 }
+type AutomaticTableTurnoverPort = {
+  runBatch(scope: Readonly<StoreScope>, workerId: string): Promise<AutomaticTableTurnoverBatch>
+}
 type SopPort = {
   runBatch(scope: Readonly<StoreScope>, workerId: string): Promise<SopWorkerBatchResult>
 }
@@ -157,6 +161,7 @@ export type NormalizedWorkerName =
   | 'idempotency-cleanup'
   | 'staff-login-rate-limit-cleanup'
   | 'business-day'
+  | 'automatic-table-turnover'
   | 'sop'
   | 'ai-scheduled'
   | 'print'
@@ -192,6 +197,7 @@ export interface NormalizedWorkerCycleResult {
     idempotencyCleanup: IdempotencyCleanupResult | null
     staffLoginRateLimitCleanup: number | null
     businessDay: BusinessDayRolloverResult | null
+    automaticTableTurnover: AutomaticTableTurnoverBatch | null
     sop: SopWorkerBatchResult | null
     aiScheduled: { workerId: string; claimed: number; statuses: readonly string[] } | null
     print: PrintBatchResult | null
@@ -234,6 +240,7 @@ export class NormalizedBackgroundWorkerCoordinator {
       idempotencyCleanup: IdempotencyCleanupPort
       staffLoginRateLimitCleanup: StaffLoginRateLimitCleanupPort
       businessDay: BusinessDayPort
+      automaticTableTurnover?: AutomaticTableTurnoverPort
       sop?: SopPort
       aiScheduled: AiScheduledPort
       print?: PrintPort
@@ -302,6 +309,7 @@ export class NormalizedBackgroundWorkerCoordinator {
       'idempotency-cleanup',
       'staff-login-rate-limit-cleanup',
       'business-day',
+      'automatic-table-turnover',
       'sop',
       'ai-scheduled',
       'print',
@@ -398,6 +406,11 @@ export class NormalizedBackgroundWorkerCoordinator {
       this.runWhenDue('idempotency-cleanup', () => this.workers.idempotencyCleanup.runBatch(this.scope)),
       this.runWhenDue('staff-login-rate-limit-cleanup', () => this.workers.staffLoginRateLimitCleanup.cleanupExpired(this.scope)),
       this.runWhenDue('business-day', () => this.workers.businessDay.run(this.scope, `${this.options.workerId}:business-day`)),
+      this.workers.automaticTableTurnover === undefined
+        ? Promise.resolve(null)
+        : this.runWhenDue('automatic-table-turnover', () => this.workers.automaticTableTurnover!.runBatch(
+          this.scope, `${this.options.workerId}:automatic-table-turnover`,
+        )),
       this.workers.sop === undefined
         ? Promise.resolve(null)
         : this.runWhenDue('sop', () => this.workers.sop!.runBatch(this.scope, `${this.options.workerId}:sop`)),
@@ -442,7 +455,15 @@ export class NormalizedBackgroundWorkerCoordinator {
       failures.push(worker)
       this.options.onError?.(worker, execution.reason)
     })
-    const personalContactDisposition = fulfilledValue(executions[24])
+    const automaticTableTurnover = fulfilledValue(executions[19])
+    if (automaticTableTurnover !== null && automaticTableTurnover.failedSessionIds.length > 0) {
+      failures.push('automatic-table-turnover')
+      this.options.onError?.(
+        'automatic-table-turnover',
+        new Error('automatic_table_turnover_items_failed'),
+      )
+    }
+    const personalContactDisposition = fulfilledValue(executions[25])
     if (personalContactDisposition !== null && personalContactDisposition.failed>0) {
       failures.push('personal-contact-disposition')
       this.options.onError?.(
@@ -474,14 +495,15 @@ export class NormalizedBackgroundWorkerCoordinator {
         idempotencyCleanup: fulfilledValue(executions[16]),
         staffLoginRateLimitCleanup: fulfilledValue(executions[17]),
         businessDay: fulfilledValue(executions[18]),
-        sop: fulfilledValue(executions[19]),
-        aiScheduled: fulfilledValue(executions[20]),
-        print: fulfilledValue(executions[21]),
-        outbox: fulfilledValue(executions[22]),
-        notification: fulfilledValue(executions[23]),
-        personalContactDisposition: fulfilledValue(executions[24]),
-        complimentaryBenefitFulfillment: fulfilledValue(executions[25]),
-        wechatMemberServiceNotification: fulfilledValue(executions[26]),
+        automaticTableTurnover,
+        sop: fulfilledValue(executions[20]),
+        aiScheduled: fulfilledValue(executions[21]),
+        print: fulfilledValue(executions[22]),
+        outbox: fulfilledValue(executions[23]),
+        notification: fulfilledValue(executions[24]),
+        personalContactDisposition: fulfilledValue(executions[25]),
+        complimentaryBenefitFulfillment: fulfilledValue(executions[26]),
+        wechatMemberServiceNotification: fulfilledValue(executions[27]),
       },
       failures,
     }
@@ -538,6 +560,7 @@ const DEFAULT_WORKER_CADENCES: Readonly<Record<NormalizedWorkerName, number>> = 
   'idempotency-cleanup': 60_000,
   'staff-login-rate-limit-cleanup': 60_000,
   'business-day': 30_000,
+  'automatic-table-turnover': 30_000,
   sop: 2_000,
   'ai-scheduled': 2_000,
   print: 500,

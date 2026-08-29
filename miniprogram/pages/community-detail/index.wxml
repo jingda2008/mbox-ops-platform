@@ -95,8 +95,8 @@
   </block>
   <state-panel wx:else type="error" title="活动不可用" message="{{error}}" />
 
-  <view wx:if="{{membershipInviteVisible}}" class="detail-member-mask" catchtouchmove="noop">
-    <view class="detail-member-sheet">
+  <view wx:if="{{membershipInviteVisible}}" class="detail-member-mask">
+    <scroll-view scroll-y class="detail-member-sheet">
       <button class="detail-member-close" aria-label="关闭会员邀请" bindtap="dismissMembershipInvite">×</button>
       <text class="detail-member-kicker">M-BOX 会员</text>
       <text class="detail-member-title">加入会员，解锁超嗨活动</text>
@@ -111,6 +111,6 @@
       <button wx:if="{{membershipInviteAgreed}}" class="detail-member-authorize wx-phone-button" open-type="getPhoneNumber" bindgetphonenumber="acceptMembershipInvite" loading="{{membershipInviteBusy}}">授权手机号并加入</button>
       <button wx:else class="detail-member-authorize detail-member-authorize--disabled" bindtap="remindMembershipInviteAgreement">授权手机号并加入</button>
       <text class="detail-member-note">授权仅用于建立会员身份和活动服务联系。</text>
-    </view>
+    </scroll-view>
   </view>
 </view>

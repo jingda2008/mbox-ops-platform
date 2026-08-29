@@ -16,7 +16,10 @@ export async function buildMiniProgramReleaseCandidate(input) {
   const uploadExtensions = new Set(['.js', '.json', '.wxml', '.wxss', '.png', '.jpg', '.jpeg', '.svg', '.webp'])
   await cp(sourceRoot, packageRoot, {
     recursive: true, errorOnExist: true, force: false,
-    filter: (source) => source === sourceRoot || extname(source) === '' || uploadExtensions.has(extname(source).toLowerCase()),
+    filter: (source) => source === sourceRoot || (
+      basename(source).toLowerCase() !== 'project.private.config.json'
+      && (extname(source) === '' || uploadExtensions.has(extname(source).toLowerCase()))
+    ),
   })
 
   const sourceProject = object(JSON.parse(await readFile(resolve(sourceRoot, 'project.config.json'), 'utf8')), 'project config')

@@ -49,8 +49,9 @@
 .ledger-note text:first-child { margin-bottom: 7rpx; color: #2e2924; font-weight: 650; }
 .empty-member button, .error-banner button { min-height: 88rpx; margin-top: 18rpx; font-size: 23rpx; }
 @media (max-width: 390px) {
-  .points-head { padding-bottom: 34rpx; }
+  .points-head { margin-right: -22rpx; margin-left: -22rpx; padding-right: 22rpx; padding-bottom: 34rpx; padding-left: 22rpx; }
   .points-title { font-size: 40rpx; }
   .ledger-row { align-items: flex-start; }
   .progress-head { align-items: flex-start; }
 }
+@media (max-width: 360px) { .points-head { margin-right: -18rpx; margin-left: -18rpx; padding-right: 18rpx; padding-left: 18rpx; } }

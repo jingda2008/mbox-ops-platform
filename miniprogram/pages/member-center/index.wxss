@@ -94,3 +94,5 @@
 .ledger-row > text.positive, .processing-row > text { color: #315d46; }
 .processing-row > text { flex: 0 0 auto; font-size: 19rpx; }
 @media (max-width: 390px) { .member-card__bottom { margin-top: 45rpx; } .member-actions { gap: 10rpx; } .member-actions button { padding: 16rpx; } .member-code-panel { align-items: flex-start; } .member-code-qr { width: 164rpx; height: 164rpx; flex-basis: 164rpx; } .right-row, .calendar-row { align-items: flex-start; } .calendar-filter { min-width: 116rpx; } }
+@media (max-width: 390px) { .member-center-head { margin-right: -22rpx; margin-left: -22rpx; padding-right: 22rpx; padding-left: 22rpx; } }
+@media (max-width: 360px) { .member-center-head { margin-right: -18rpx; margin-left: -18rpx; padding-right: 18rpx; padding-left: 18rpx; } .member-code-panel { gap: 14rpx; } .member-code-qr { width: 144rpx; height: 144rpx; flex-basis: 144rpx; } }

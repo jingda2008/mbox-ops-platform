@@ -39,6 +39,7 @@ describe('normalized store provisioning config', () => {
     const config = parseStoreProvisionConfig(base)
     expect(config.store.timezone).toBe('Asia/Shanghai')
     expect(config.store.businessDayCutoff).toBe('06:00')
+    expect(config.automaticTableTurnover).toEqual({ enabled: false, operatingStartsAt: '12:00' })
     expect(config.reservationPolicy).toMatchObject({ holdMinutes: 20, depositMode: 'disabled' })
     expect(config.roles[0]?.navigation?.[0]).toMatchObject({ highFrequency: true })
     expect(config.roles[0]?.dataScopes?.[0]).toEqual({
@@ -66,6 +67,21 @@ describe('normalized store provisioning config', () => {
     })).toThrow(/inconsistent/)
   })
 
+  it('accepts only a cross-midnight automatic turnover window', () => {
+    expect(parseStoreProvisionConfig({
+      ...base,
+      automaticTableTurnover: { enabled: true, operatingStartsAt: '12:00' },
+    }).automaticTableTurnover).toEqual({ enabled: true, operatingStartsAt: '12:00' })
+    expect(() => parseStoreProvisionConfig({
+      ...base,
+      automaticTableTurnover: { enabled: 'true', operatingStartsAt: '12:00' },
+    })).toThrow(/enabled/)
+    expect(() => parseStoreProvisionConfig({
+      ...base,
+      automaticTableTurnover: { enabled: true, operatingStartsAt: '06:00' },
+    })).toThrow(/operatingStartsAt/)
+  })
+
   it('rejects duplicate or non-JSON role policy configuration', () => {
     expect(() => parseStoreProvisionConfig({
       ...base,
@@ -88,7 +104,8 @@ describe('normalized store provisioning config', () => {
       'utf8',
     )) as unknown
     const config = parseStoreProvisionConfig(source)
-    expect(config.version).toBe('2026.08.26-v17')
+    expect(config.version).toBe('2026.08.29-v18')
+    expect(config.automaticTableTurnover).toEqual({ enabled: true, operatingStartsAt: '12:00' })
     const role = (code: string) => config.roles.find((candidate) => candidate.code === code)
 
     expect(role('MANAGER')?.permissions.filter((code) => code.startsWith('refund.')))

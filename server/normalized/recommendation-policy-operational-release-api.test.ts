@@ -66,6 +66,46 @@ describe('recommendation policy operational API',()=>{
     expect(response.json()).toEqual({error:{code:'PERMISSION_DENIED',message:'当前岗位没有这项权限'}})
     expect(approveRecommendationPolicy).not.toHaveBeenCalled()
   })
+
+  it('serves the versioned three-question configuration only after table-session authority resolves',async()=>{
+    const recommendationInputConfiguration=vi.fn(async()=>({
+      policyPublicId:'recommendation-policy-input-v1',policyVersion:3,
+      inputConfiguration:{version:1,questions:[
+        {code:'occasion',title:'今晚想怎么坐坐？',options:[]},
+        {code:'alcoholPreference',title:'更想喝点什么？',options:[]},
+        {code:'experienceLevel',title:'今晚想要什么节奏？',options:[]},
+      ],strategy:{paidOrderHistoryWeight:100,multiGuestHistoryConfidenceBasisPoints:2500,
+        shakeExcludes:['exposed','cart','ordered','rejected']},
+      },
+    }))
+    const app=guestConfigurationFixture({recommendationInputConfiguration})
+    const response=await app.inject({method:'GET',url:'/guest/experience/recommendations/configuration'})
+    expect(response.statusCode).toBe(200)
+    expect(response.headers['cache-control']).toBe('private, no-store')
+    expect(response.json()).toMatchObject({data:{
+      policyPublicId:'recommendation-policy-input-v1',policyVersion:3,
+      inputConfiguration:{questions:[{code:'occasion'},{code:'alcoholPreference'},{code:'experienceLevel'}]},
+    }})
+    expect(recommendationInputConfiguration).toHaveBeenCalledWith(expect.objectContaining({
+      tableSessionId:'82000000-0000-4000-8000-000000000004',partySize:2,
+    }))
+  })
+
+  it('accepts the server-owned three answers and defaults service intensity to balanced',async()=>{
+    const recommend=vi.fn(async()=>({
+      value:{publicId:'recommendation-three-question-v1',answers:{},recommendations:[],missingTiers:[],
+        policyPublicId:'recommendation-policy-input-v1',policyVersion:1,inputConfiguration:{}},replayed:false,
+    }))
+    const app=guestConfigurationFixture({recommend})
+    const response=await app.inject({
+      method:'POST',url:'/guest/experience/recommendations',headers:{'idempotency-key':'recommendation-three-question-api-001'},
+      payload:{recommendationIntent:'guided',occasion:'friends',alcoholPreference:'mixed',experienceLevel:'enhanced'},
+    })
+    expect(response.statusCode).toBe(201)
+    expect(recommend).toHaveBeenCalledWith(expect.anything(),expect.objectContaining({
+      occasion:'friends',alcoholPreference:'mixed',experienceLevel:'enhanced',serviceIntensity:'balanced',
+    }), 'recommendation-three-question-api-001','guided')
+  })
 })
 
 function fixture(service:Record<string,ReturnType<typeof vi.fn>>){
@@ -77,6 +117,24 @@ function fixture(service:Record<string,ReturnType<typeof vi.fn>>){
     service:service as unknown as CustomerExperienceService,
     resolvePublicContext:()=>{throw new Error('not used')},resolveGuestContext:async()=>{throw new Error('not used')},
     resolveStaffContext:()=>({scope,employeeId:'82000000-0000-4000-8000-000000000003',businessDate:'2026-08-16'}),
+    protectContact:()=>{throw new Error('not used')},
+  })
+  return app
+}
+
+function guestConfigurationFixture(service:Record<string,ReturnType<typeof vi.fn>>){
+  const app=Fastify();apps.push(app)
+  const scope={tenantId:'82000000-0000-4000-8000-000000000001',storeId:'82000000-0000-4000-8000-000000000002'}
+  const transaction={scope,query:vi.fn(async()=>({rows:[{guest_count:2,guest_profile_snapshot:{}}],rowCount:1}))}
+  void app.register(customerExperienceApiPlugin,{
+    transactions:{run:async(_scope,operation)=>operation(transaction as never)},
+    service:service as unknown as CustomerExperienceService,
+    resolvePublicContext:()=>{throw new Error('not used')},
+    resolveGuestContext:()=>({
+      scope,customerId:'82000000-0000-4000-8000-000000000003',
+      tableSessionId:'82000000-0000-4000-8000-000000000004',businessDate:'2026-08-16',actorRef:'guest:test',
+    }),
+    resolveStaffContext:()=>{throw new Error('not used')},
     protectContact:()=>{throw new Error('not used')},
   })
   return app

@@ -502,12 +502,17 @@
 }
 .action-grid {
   display: grid;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   grid-template-columns: repeat(4, 1fr);
   gap: 12rpx;
 }
-.action-grid button {
+.action-grid__button {
   display: flex;
   min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
   min-height: 122rpx;
   margin: 0;
   padding: 18rpx 8rpx;
@@ -520,7 +525,7 @@
   color: #302d29;
   font-size: 21rpx;
 }
-.action-grid button::after {
+.action-grid__button::after {
   border: 0;
 }
 .action-icon {
@@ -726,7 +731,7 @@
   text-align: left;
   gap: 10rpx;
 }
-.member-invite-agreement checkbox {
+.member-invite-agreement__checkbox {
   flex: 0 0 auto;
   margin-top: 1rpx;
   transform: scale(0.86);
@@ -821,6 +826,7 @@
   font-weight: 700;
 }
 @media (max-width: 390px) {
+  .home-hero { margin-right: -22rpx; margin-left: -22rpx; padding-right: 22rpx; padding-left: 22rpx; }
   .hero-content {
     margin-top: 28rpx;
   }
@@ -831,7 +837,7 @@
     grid-template-columns: 1fr 1fr;
     gap: 10rpx;
   }
-  .action-grid button {
+  .action-grid__button {
     min-height: 112rpx;
     padding: 16rpx 6rpx;
   }
@@ -850,7 +856,7 @@
     min-height: 208rpx;
     padding: 20rpx 44rpx 20rpx 20rpx;
   }
-  .featured-activity-card__copy text:nth-child(2) {
+  .featured-activity-card__title {
     font-size: 29rpx;
   }
   .published-content-card {
@@ -868,9 +874,22 @@
   }
 }
 
+@media (max-width: 360px) {
+  .home-hero { margin-right: -18rpx; margin-left: -18rpx; padding-right: 18rpx; padding-left: 18rpx; }
+  .action-grid { gap: 8rpx; }
+  .action-grid__button { min-height: 104rpx; padding: 14rpx 6rpx; }
+}
+
 @media (min-width: 700px) {
   .published-content-card {
     width: 100%;
     flex-basis: 100%;
   }
 }
+
+/* Keep the membership invitation operable on a narrow foldable outer screen. */
+.member-invite-mask { padding: 0; }
+.member-invite-sheet { max-height: calc(100vh - 8px); box-sizing: border-box; }
+.member-invite-close { top: 16rpx; right: 18rpx; min-width: 96rpx; min-height: 88rpx; padding: 0 16rpx; border-radius: 44rpx; line-height: 86rpx; }
+@media (max-width: 390px) { .member-invite-sheet { padding-right: 22rpx; padding-left: 22rpx; } }
+@media (max-width: 360px) { .member-invite-sheet { padding-right: 18rpx; padding-left: 18rpx; } }

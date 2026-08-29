@@ -6,6 +6,7 @@ import {
   type NormalizedWorkerName,
 } from './background-worker-coordinator.js'
 import { BusinessDayRolloverWorker } from './business-day-worker.js'
+import { AutomaticTableTurnoverWorker } from './automatic-table-turnover-worker.js'
 import { IdempotencyCleanupWorker } from './idempotency-cleanup-worker.js'
 import { NotificationWorker, type NotificationDelivery } from './notification-worker.js'
 import { OutboxDispatcher, type OutboxDelivery } from './outbox-dispatcher.js'
@@ -165,6 +166,7 @@ export function createNormalizedWorkerRuntime(
     idempotencyCleanup: new IdempotencyCleanupWorker(transactions),
     staffLoginRateLimitCleanup: new PostgresStaffLoginRateLimiter(transactions, options.hashSecret),
     businessDay: new BusinessDayRolloverWorker(transactions),
+    automaticTableTurnover: new AutomaticTableTurnoverWorker(transactions),
     ...(adapters === null ? {} : { sop: new SopWorker(transactions, adapters.sop) }),
     aiScheduled: new AiScheduledExecutionWorker(transactions, options.aiExecutions),
     personalContactDisposition:new PersonalContactDispositionWorker(transactions),

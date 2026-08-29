@@ -5,6 +5,10 @@ import { runNormalizedMigrations } from '../migrate-normalized.js'
 import {
   PostgresTableCustomerLeftTurnoverRepository,
 } from './table-customer-left-turnover-repository.js'
+import {
+  PostgresAutomaticTableTurnoverRepository,
+} from './automatic-table-turnover-repository.js'
+import { AutomaticTableTurnoverWorker } from './automatic-table-turnover-worker.js'
 import { ScopedPostgresTransactionRunner, type PostgresPool } from './transaction-runner.js'
 
 const databaseUrl = process.env.TEST_NORMALIZED_DATABASE_URL
@@ -55,6 +59,9 @@ integration('customer-left table turnover', () => {
       SELECT ((clock_timestamp() AT TIME ZONE timezone)-business_day_cutoff)::date::text AS business_date
       FROM mbox.stores WHERE tenant_id=$1 AND id=$2`, [tenantId, storeId])
     businessDate = date.rows[0]!.business_date
+    await pool.query(`INSERT INTO mbox.store_automatic_table_turnover_policies(
+      tenant_id,store_id,enabled,operating_starts_at)
+      VALUES($1,$2,true,TIME '12:00')`, [tenantId, storeId])
   })
 
   afterAll(async () => { await pool?.end() })
@@ -128,6 +135,92 @@ integration('customer-left table turnover', () => {
       .resolves.toMatchObject({ rows: [{ status: 'cancelled' }] })
     await expect(pool.query(`SELECT count(*)::integer AS count FROM mbox.order_cancellation_events WHERE order_id=$1`, [settled.orderId]))
       .resolves.toMatchObject({ rows: [{ count: 0 }] })
+  })
+
+  it('automatically releases a prior business-day table without inventing a financial actor', async () => {
+    const fixture = await createFixture()
+    const settled = await createSettledHistory(fixture.sessionId)
+    await pool.query(`UPDATE mbox.table_sessions
+      SET business_date=$2::date-1 WHERE id=$1`, [fixture.sessionId, businessDate])
+    const runner = new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool)
+    const input = {
+      scope: { tenantId, storeId }, tableSessionId: fixture.sessionId, businessDate,
+      reasonNote: '营业日截止自动收工翻台；财务、退款与晚到支付事实保留待核对',
+      idempotencyKey: `automatic-cutoff:${fixture.sessionId}`,
+    }
+    const first = await runner.run(input.scope, async (transaction) => (
+      new PostgresAutomaticTableTurnoverRepository(transaction).close(input)
+    ))
+    const replay = await runner.run(input.scope, async (transaction) => (
+      new PostgresAutomaticTableTurnoverRepository(transaction).close(input)
+    ))
+
+    expect(first).toMatchObject({
+      tableSessionId: fixture.sessionId, cancelledOrderCount: 1,
+      pendingPaymentCount: 1, deliveredUnpaidAmountMinor: 100,
+      cancelledServiceTaskCount: 1, replayed: false,
+    })
+    expect(replay).toEqual({ ...first, replayed: true })
+    await expect(pool.query(`SELECT status,closed_by_employee_id FROM mbox.table_sessions WHERE id=$1`, [fixture.sessionId]))
+      .resolves.toMatchObject({ rows: [{ status: 'closed', closed_by_employee_id: null }] })
+    await expect(pool.query(`SELECT actor_type,actor_employee_id,reason_code
+      FROM mbox.table_customer_left_turnover_events WHERE table_session_id=$1`, [fixture.sessionId]))
+      .resolves.toMatchObject({ rows: [{ actor_type: 'system', actor_employee_id: null, reason_code: 'automatic_cutoff' }] })
+    await expect(pool.query(`SELECT actor_type,actor_employee_id,reason_code
+      FROM mbox.order_cancellation_events WHERE order_id=$1`, [fixture.orderId]))
+      .resolves.toMatchObject({ rows: [{ actor_type: 'system', actor_employee_id: null, reason_code: 'automatic_cutoff' }] })
+    await expect(pool.query(`SELECT actor_type,actor_employee_id,reason_code,settled_amount_minor::text
+      FROM mbox.order_settlement_exception_events WHERE order_id=$1`, [fixture.orderId]))
+      .resolves.toMatchObject({ rows: [{
+        actor_type: 'system', actor_employee_id: null, reason_code: 'automatic_cutoff', settled_amount_minor: '100',
+      }] })
+    await expect(pool.query(`SELECT status FROM mbox.payments WHERE id=$1`, [fixture.paymentId]))
+      .resolves.toMatchObject({ rows: [{ status: 'pending' }] })
+    await expect(pool.query(`SELECT status,payment_status FROM mbox.orders WHERE id=$1`, [settled.orderId]))
+      .resolves.toMatchObject({ rows: [{ status: 'submitted', payment_status: 'paid' }] })
+    await expect(pool.query(`SELECT status FROM mbox.refunds WHERE id=$1`, [settled.refundId]))
+      .resolves.toMatchObject({ rows: [{ status: 'approved' }] })
+  })
+
+  it('automatically closes a stale session which contains only an abandoned cart', async () => {
+    const sessionId = randomUUID()
+    await pool.query(`INSERT INTO mbox.table_sessions(
+      id,tenant_id,store_id,table_id,public_id,business_date,guest_count,capacity_at_open,status,opened_by_employee_id
+    ) VALUES($1,$2,$3,$4,$5,$6::date-1,2,4,'open',$7)`, [
+      sessionId, tenantId, storeId, tableId, `automatic-empty-session-${randomUUID()}`, businessDate, employeeId,
+    ])
+    const runner = new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool)
+    const result = await runner.run({ tenantId, storeId }, async (transaction) => (
+      new PostgresAutomaticTableTurnoverRepository(transaction).close({
+        scope: { tenantId, storeId }, tableSessionId: sessionId, businessDate,
+        reasonNote: '营业日截止自动收工翻台；财务、退款与晚到支付事实保留待核对',
+        idempotencyKey: `automatic-cutoff:${sessionId}`,
+      })
+    ))
+    expect(result).toMatchObject({ cancelledOrderCount: 0, pendingPaymentCount: 0, replayed: false })
+    await expect(pool.query(`SELECT status FROM mbox.table_sessions WHERE id=$1`, [sessionId]))
+      .resolves.toMatchObject({ rows: [{ status: 'closed' }] })
+  })
+
+  it('retries stale sessions independently and emits one system audit and outbox fact', async () => {
+    const fixture = await createFixture()
+    await pool.query(`UPDATE mbox.table_sessions
+      SET business_date=$2::date-1 WHERE id=$1`, [fixture.sessionId, businessDate])
+    const runner = new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool)
+    const batch = await new AutomaticTableTurnoverWorker(runner).runBatch(
+      { tenantId, storeId }, 'automatic-cutoff-test',
+    )
+    expect(batch).toMatchObject({
+      enabled: true, businessDate, claimed: 1,
+      closedSessionIds: [fixture.sessionId], replayedSessionIds: [], skippedSessionIds: [], failedSessionIds: [],
+    })
+    await expect(pool.query(`SELECT count(*)::integer AS count FROM mbox.audit_events
+      WHERE action='table_session.automatic_cutoff_turnover' AND object_id=$1`, [fixture.sessionId]))
+      .resolves.toMatchObject({ rows: [{ count: 1 }] })
+    await expect(pool.query(`SELECT count(*)::integer AS count FROM mbox.outbox_messages
+      WHERE message_type='table_session.automatic_cutoff_turnover.v1'
+        AND payload->>'tableSessionId'=$1`, [fixture.sessionId]))
+      .resolves.toMatchObject({ rows: [{ count: 1 }] })
   })
 
   async function createSettledHistory(sessionId: string) {

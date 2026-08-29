@@ -75,6 +75,10 @@ export interface StoreProvisionConfig {
     depositRatioBps?: number | null
     depositRuleText?: string | null
   }
+  automaticTableTurnover: {
+    enabled: boolean
+    operatingStartsAt: string
+  }
   dailyCredentialEnv?: string
   bootstrapAdminEmployeeCode?: string
 }
@@ -223,6 +227,8 @@ export function parseStoreProvisionConfig(value: unknown): StoreProvisionConfig 
     }
   })
   const policy = object(root.reservationPolicy, 'reservationPolicy')
+  const automaticPolicy = root.automaticTableTurnover === undefined
+    ? {} : object(root.automaticTableTurnover, 'automaticTableTurnover')
   const holdMinutes = integer(policy.holdMinutes, 'reservationPolicy.holdMinutes')
   if (holdMinutes !== 20) throw new TypeError('reservationPolicy.holdMinutes must be 20')
   const arrivalGraceMinutes = rangedInteger(policy.arrivalGraceMinutes, 'reservationPolicy.arrivalGraceMinutes', 1, 120)
@@ -242,6 +248,17 @@ export function parseStoreProvisionConfig(value: unknown): StoreProvisionConfig 
     || (depositMode === 'minimum_spend_ratio' && (depositMinor != null || depositRatioBps == null))) {
     throw new TypeError('reservationPolicy deposit configuration is inconsistent')
   }
+  const businessDayCutoff = timeOfDay(
+    optionalText(store.businessDayCutoff, 'store.businessDayCutoff') ?? '06:00',
+    'store.businessDayCutoff',
+  )
+  const operatingStartsAt = timeOfDay(
+    optionalText(automaticPolicy.operatingStartsAt, 'automaticTableTurnover.operatingStartsAt') ?? '12:00',
+    'automaticTableTurnover.operatingStartsAt',
+  )
+  if (minutesOfDay(operatingStartsAt) <= minutesOfDay(businessDayCutoff)) {
+    throw new TypeError('automaticTableTurnover.operatingStartsAt must be after store.businessDayCutoff')
+  }
   const result: StoreProvisionConfig = {
     version,
     tenant: {
@@ -250,7 +267,7 @@ export function parseStoreProvisionConfig(value: unknown): StoreProvisionConfig 
     store: {
       id: uuid(store.id, 'store.id'), code: code(store.code, 'store.code'), name: text(store.name, 'store.name'),
       timezone: optionalText(store.timezone, 'store.timezone') ?? 'Asia/Shanghai',
-      businessDayCutoff: optionalText(store.businessDayCutoff, 'store.businessDayCutoff') ?? '06:00',
+      businessDayCutoff,
       currency: optionalText(store.currency, 'store.currency') ?? 'CNY',
     },
     areas, tables, roles, employees,
@@ -264,6 +281,10 @@ export function parseStoreProvisionConfig(value: unknown): StoreProvisionConfig 
       depositMinor: depositMinor ?? null,
       depositRatioBps: depositRatioBps ?? null,
       depositRuleText: optionalText(policy.depositRuleText, 'reservationPolicy.depositRuleText'),
+    },
+    automaticTableTurnover: {
+      enabled: optionalBoolean(automaticPolicy.enabled, 'automaticTableTurnover.enabled') ?? false,
+      operatingStartsAt,
     },
     dailyCredentialEnv: optionalText(root.dailyCredentialEnv, 'dailyCredentialEnv') ?? undefined,
     bootstrapAdminEmployeeCode: optionalText(root.bootstrapAdminEmployeeCode, 'bootstrapAdminEmployeeCode') ?? undefined,
@@ -426,6 +447,24 @@ export async function provisionNormalizedStore(input: {
       }
     }
 
+    const automaticTurnover = input.config.automaticTableTurnover
+    await client.query(`INSERT INTO mbox.store_automatic_table_turnover_policies(
+        tenant_id,store_id,enabled,operating_starts_at,reason)
+      VALUES ($1,$2,$3,$4::time,
+        '营业日截止自动收工翻台；财务、退款与晚到支付事实保留待核对')
+      ON CONFLICT (tenant_id,store_id) DO UPDATE SET
+        enabled=EXCLUDED.enabled,
+        operating_starts_at=EXCLUDED.operating_starts_at,
+        policy_version=CASE
+          WHEN mbox.store_automatic_table_turnover_policies.enabled IS DISTINCT FROM EXCLUDED.enabled
+            OR mbox.store_automatic_table_turnover_policies.operating_starts_at IS DISTINCT FROM EXCLUDED.operating_starts_at
+          THEN mbox.store_automatic_table_turnover_policies.policy_version+1
+          ELSE mbox.store_automatic_table_turnover_policies.policy_version
+        END,
+        updated_at=clock_timestamp()`, [
+      tenant.id, store.id, automaticTurnover.enabled, automaticTurnover.operatingStartsAt,
+    ])
+
     if (dailyCredentialHash) {
       const now = input.now ?? new Date()
       const businessDate = shanghaiBusinessDate(now)
@@ -447,7 +486,8 @@ export async function provisionNormalizedStore(input: {
         $3,$4::jsonb,'Versioned normalized store configuration applied')`, [tenant.id, store.id,
       shanghaiBusinessDate(input.now ?? new Date()), JSON.stringify({ areaCount: input.config.areas.length,
         tableCount: input.config.tables.length, roleCount: input.config.roles.length,
-        employeeCount: input.config.employees.length })])
+        employeeCount: input.config.employees.length,
+        automaticTableTurnover: input.config.automaticTableTurnover })])
     const configSha256 = createHash('sha256').update(stableJson(input.config), 'utf8').digest('hex')
     const sourceCommitSha = input.sourceCommitSha ?? process.env.APP_COMMIT_SHA ?? process.env.GITHUB_SHA
     if (!sourceCommitSha || !/^[0-9a-f]{7,64}$/i.test(sourceCommitSha)) {
@@ -799,6 +839,19 @@ function optionalObject(value: unknown, field: string) { return value === undefi
 function array(value: unknown, field: string): unknown[] { if (!Array.isArray(value)) throw new TypeError(`${field} must be an array`); return value }
 function text(value: unknown, field: string): string { if (typeof value !== 'string' || value.trim() === '') throw new TypeError(`${field} must not be blank`); return value.trim() }
 function optionalText(value: unknown, field: string): string | undefined | null { if (value === undefined) return undefined; if (value === null) return null; return text(value, field) }
+function optionalBoolean(value: unknown, field: string): boolean | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'boolean') throw new TypeError(`${field} must be a boolean`)
+  return value
+}
+function timeOfDay(value: string, field: string): string {
+  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value)) throw new TypeError(`${field} is invalid`)
+  return value
+}
+function minutesOfDay(value: string): number {
+  const [hours, minutes] = value.split(':').map(Number)
+  return (hours ?? 0) * 60 + (minutes ?? 0)
+}
 function integer(value: unknown, field: string): number { if (!Number.isSafeInteger(value)) throw new TypeError(`${field} must be an integer`); return value as number }
 function optionalInteger(value: unknown, field: string): number | undefined { return value === undefined ? undefined : integer(value, field) }
 function jsonValue(value: unknown, field: string): unknown {

@@ -370,6 +370,29 @@ export interface RecommendationAnswer {
   serviceIntensity: ServiceIntensity
 }
 
+/**
+ * The customer-facing questions are deliberately a narrow, typed contract.
+ * Policy versions may change their order/copy and strategy, but cannot invent
+ * an answer field that the recommendation command does not validate.
+ */
+export type RecommendationQuestionCode = 'occasion' | 'alcoholPreference' | 'experienceLevel'
+
+export interface RecommendationInputQuestion {
+  code: RecommendationQuestionCode
+  title: string
+  options: Array<{ value: string; label: string }>
+}
+
+export interface RecommendationInputConfiguration {
+  version: 1
+  questions: RecommendationInputQuestion[]
+  strategy: {
+    paidOrderHistoryWeight: number
+    multiGuestHistoryConfidenceBasisPoints: number
+    shakeExcludes: Array<'exposed' | 'cart' | 'ordered' | 'rejected'>
+  }
+}
+
 export interface RecommendedProduct {
   productId: string
   code: string
@@ -393,6 +416,9 @@ export interface RecommendationResult {
   answers: RecommendationAnswer
   recommendations: RecommendedProduct[]
   missingTiers: ExperienceLevel[]
+  policyPublicId: string
+  policyVersion: number
+  inputConfiguration: RecommendationInputConfiguration
 }
 
 export type RecommendationPolicyStatus = 'draft' | 'approved' | 'published' | 'retired'
@@ -416,6 +442,7 @@ export interface RecommendationPolicyVersionView {
   preferenceMinEffectiveScore: number
   preferenceMinConfidenceBasisPoints: number
   explanationTemplate: string
+  inputConfiguration: RecommendationInputConfiguration
   draftReason: string
   approvalReason: string | null
   publicationReason: string | null
@@ -753,6 +780,8 @@ interface RecommendationProductRow extends Record<string, unknown> {
   component_list: unknown
   separate_amount_minor: string | number | null
   learned_preference_score: number
+  paid_order_history_single_party_score: number
+  paid_order_history_multi_party_score: number
   performance_signal_basis_points: number
   inventory_signal_basis_points: number
   capacity_signal_basis_points: number
@@ -800,6 +829,7 @@ interface RecommendationPolicyRow extends Record<string, unknown> {
   inventory_weight: number
   capacity_weight: number
   minimum_gross_margin_basis_points: number
+  display_configuration: JsonObject
 }
 
 interface RecommendationPolicyVersionRow extends RecommendationPolicyRow {
@@ -2207,6 +2237,26 @@ export class CustomerExperienceRepository {
     }
   }
 
+  async recommendationInputConfiguration(): Promise<{
+    policyPublicId: string
+    policyVersion: number
+    inputConfiguration: RecommendationInputConfiguration
+  }> {
+    if (!await this.featureEnabled('recommendation.engine')) {
+      throw new CustomerExperienceRequestError(
+        '门店推荐功能尚未开放试点，原点单流程不受影响',
+        'RECOMMENDATION_FEATURE_NOT_ENABLED',
+        503,
+      )
+    }
+    const policy = await this.currentRecommendationPolicy()
+    return {
+      policyPublicId: policy.public_id,
+      policyVersion: policy.version,
+      inputConfiguration: recommendationInputConfiguration(policy.display_configuration),
+    }
+  }
+
   async createRecommendationSession(input: Readonly<{
     context: TableExperienceContext
     answers: RecommendationAnswer
@@ -2221,10 +2271,16 @@ export class CustomerExperienceRepository {
       )
     }
     const policy = await this.currentRecommendationPolicy()
+    const inputConfiguration = recommendationInputConfiguration(policy.display_configuration)
     await new CustomerPreferenceRepository(this.transaction).recompute(input.context.customerId)
-    const products = await this.recommendationProducts(input.answers, input.context.customerId)
     const recommendationIntent = input.recommendationIntent || 'guided'
-    const recommendations = rankProducts(products, input.answers, policy, {
+    const excludedProductIds = recommendationIntent === 'shake'
+      ? await this.shakeExcludedProductIds(input.context)
+      : []
+    const products = await this.recommendationProducts(
+      input.answers, input.context.customerId, excludedProductIds,
+    )
+    const recommendations = rankProducts(products, input.answers, policy, inputConfiguration, {
       intent: recommendationIntent,
       variationSeed: recommendationIntent === 'shake' ? input.publicId : null,
     })
@@ -2258,7 +2314,7 @@ export class CustomerExperienceRepository {
     for (const [index, recommendation] of recommendations.entries()) {
       const product = products.find((entry) => entry.id === recommendation.productId)
       if (!product) throw new Error('ranked recommendation product was not found')
-      const score = recommendationScore(product, input.answers, policy)
+      const score = recommendationScore(product, input.answers, policy, inputConfiguration)
       await this.transaction.query(`
         INSERT INTO mbox.recommendation_options (
           tenant_id, store_id, recommendation_session_id, policy_version_id,
@@ -2316,10 +2372,19 @@ export class CustomerExperienceRepository {
       JSON.stringify({
         policyPublicId: policy.public_id,
         policyVersion: policy.version,
+        inputConfigurationVersion: inputConfiguration.version,
         recommendationIntent,
       }),
     ])
-    return { publicId: input.publicId, answers: input.answers, recommendations, missingTiers }
+    return {
+      publicId: input.publicId,
+      answers: input.answers,
+      recommendations,
+      missingTiers,
+      policyPublicId: policy.public_id,
+      policyVersion: policy.version,
+      inputConfiguration,
+    }
   }
 
   async createExperiencePlan(input: Readonly<{
@@ -3499,7 +3564,7 @@ export class CustomerExperienceRepository {
       input.preferenceMinEffectiveScore,
       input.preferenceMinConfidenceBasisPoints,
       input.explanationTemplate,
-      JSON.stringify(input.displayConfiguration),
+      JSON.stringify(normalizeRecommendationDisplayConfiguration(input.displayConfiguration)),
       input.employeeId,
       input.draftReason,
     ])
@@ -3517,6 +3582,7 @@ export class CustomerExperienceRepository {
           policy.minimum_gross_margin_basis_points,policy.preference_half_life_days,
           policy.preference_max_age_days,policy.preference_min_effective_score,
           policy.preference_min_confidence_basis_points,policy.explanation_template,
+          policy.display_configuration,
           policy.draft_reason,policy.approval_reason,policy.publication_reason,
           policy.publication_mode,creator.display_name AS created_by,
           approver.display_name AS approved_by,publisher.display_name AS published_by,
@@ -3826,7 +3892,7 @@ export class CustomerExperienceRepository {
     const result = await this.transaction.query<RecommendationPolicyRow>(`
       SELECT id, public_id, policy_code, version, preference_weight, scene_weight,
         margin_weight, priority_weight, performance_weight, inventory_weight,
-        capacity_weight, minimum_gross_margin_basis_points
+        capacity_weight, minimum_gross_margin_basis_points, display_configuration
       FROM mbox.recommendation_policy_versions
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid
         AND policy_code='DEFAULT' AND status='published'
@@ -4160,12 +4226,95 @@ export class CustomerExperienceRepository {
     return result.rows
   }
 
+  private async shakeExcludedProductIds(context: Pick<TableExperienceContext, 'customerId' | 'tableSessionId'>): Promise<string[]> {
+    const result = await this.transaction.query<{ product_id: string }>(`
+      WITH RECURSIVE ancestry AS (
+        SELECT id,merged_into_customer_id FROM mbox.customers
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+        UNION ALL
+        SELECT parent.id,parent.merged_into_customer_id
+        FROM mbox.customers parent JOIN ancestry child ON child.merged_into_customer_id=parent.id
+        WHERE parent.tenant_id=$1::uuid AND parent.store_id=$2::uuid
+      ), canonical AS (
+        SELECT id FROM ancestry WHERE merged_into_customer_id IS NULL LIMIT 1
+      ), family AS (
+        SELECT id FROM canonical
+        UNION ALL
+        SELECT child.id FROM mbox.customers child JOIN family parent
+          ON child.merged_into_customer_id=parent.id
+        WHERE child.tenant_id=$1::uuid AND child.store_id=$2::uuid
+      ), excluded AS (
+        -- A prior recommendation generated for this customer at this table is
+        -- exposure for the current round, even if the device did not manage to
+        -- send a separate exposed telemetry event.
+        SELECT option.product_id
+        FROM mbox.recommendation_sessions session
+        JOIN mbox.recommendation_options option
+          ON option.tenant_id=session.tenant_id AND option.store_id=session.store_id
+         AND option.recommendation_session_id=session.id
+        WHERE session.tenant_id=$1::uuid AND session.store_id=$2::uuid
+          AND session.table_session_id=$4::uuid
+          AND session.customer_id IN (SELECT id FROM family)
+        UNION
+        -- A shared cart belongs to the table rather than one device, so its
+        -- contents are excluded for every customer at the current table.
+        SELECT line.product_id
+        FROM mbox.guest_shared_carts cart
+        JOIN mbox.guest_shared_cart_lines line
+          ON line.tenant_id=cart.tenant_id AND line.store_id=cart.store_id AND line.cart_id=cart.id
+        WHERE cart.tenant_id=$1::uuid AND cart.store_id=$2::uuid
+          AND cart.table_session_id=$4::uuid AND cart.status IN ('open','submitting')
+        UNION
+        SELECT item.product_id
+        FROM mbox.orders ordering
+        JOIN mbox.order_items item
+          ON item.tenant_id=ordering.tenant_id AND item.store_id=ordering.store_id AND item.order_id=ordering.id
+        WHERE ordering.tenant_id=$1::uuid AND ordering.store_id=$2::uuid
+          AND ordering.table_session_id=$4::uuid AND ordering.status<>'cancelled'
+          AND item.status<>'cancelled'
+        UNION
+        SELECT option.product_id
+        FROM mbox.recommendation_behavior_events event
+        JOIN mbox.recommendation_options option
+          ON option.tenant_id=event.tenant_id AND option.store_id=event.store_id
+         AND option.id=event.recommendation_option_id
+        WHERE event.tenant_id=$1::uuid AND event.store_id=$2::uuid
+          AND event.table_session_id=$4::uuid AND event.customer_id IN (SELECT id FROM family)
+          AND event.event_type='rejected'
+      )
+      SELECT product_id FROM excluded ORDER BY product_id
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      context.customerId,
+      context.tableSessionId,
+    ])
+    return result.rows.map((row) => row.product_id)
+  }
+
   private async recommendationProducts(
     answers: RecommendationAnswer,
     customerId: string,
+    excludedProductIds: readonly string[],
   ): Promise<RecommendationProductRow[]> {
     const families = preferenceFamilies(answers.alcoholPreference)
     const result = await this.transaction.query<RecommendationProductRow>(`
+      WITH RECURSIVE ancestry AS (
+        SELECT id,merged_into_customer_id FROM mbox.customers
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$5::uuid
+        UNION ALL
+        SELECT parent.id,parent.merged_into_customer_id
+        FROM mbox.customers parent JOIN ancestry child ON child.merged_into_customer_id=parent.id
+        WHERE parent.tenant_id=$1::uuid AND parent.store_id=$2::uuid
+      ), canonical AS (
+        SELECT id FROM ancestry WHERE merged_into_customer_id IS NULL LIMIT 1
+      ), family AS (
+        SELECT id FROM canonical
+        UNION ALL
+        SELECT child.id FROM mbox.customers child JOIN family parent
+          ON child.merged_into_customer_id=parent.id
+        WHERE child.tenant_id=$1::uuid AND child.store_id=$2::uuid
+      )
       SELECT product.id, product.code, product.name,
         product.recommendation_beverage_family AS beverage_family,
         product.product_snapshot->>'description' AS description,
@@ -4176,6 +4325,8 @@ export class CustomerExperienceRepository {
         COALESCE(component_data.items, '[]'::jsonb) AS component_list,
         component_data.separate_amount_minor,
         COALESCE(learned_preference.net_score,0)::integer AS learned_preference_score,
+        COALESCE(paid_order_history.single_party_score,0)::integer AS paid_order_history_single_party_score,
+        COALESCE(paid_order_history.multi_party_score,0)::integer AS paid_order_history_multi_party_score,
         CASE WHEN EXISTS (
           SELECT 1 FROM mbox.product_performance_phase_eligibilities configured_phase
           WHERE configured_phase.tenant_id=product.tenant_id
@@ -4251,6 +4402,52 @@ export class CustomerExperienceRepository {
           AND fact.status='active'
           AND (fact.valid_until IS NULL OR fact.valid_until>clock_timestamp())
       ) AS learned_preference ON true
+      LEFT JOIN LATERAL (
+        SELECT
+          least(10_000,COALESCE(sum(CASE WHEN historical_session.guest_count<=1
+            THEN least(10_000,history_item.quantity*2_500) ELSE 0 END),0))::integer
+            AS single_party_score,
+          least(10_000,COALESCE(sum(CASE WHEN historical_session.guest_count>1
+            THEN least(10_000,history_item.quantity*2_500) ELSE 0 END),0))::integer
+            AS multi_party_score
+        FROM mbox.orders ordering
+        JOIN mbox.order_items history_item
+          ON history_item.tenant_id=ordering.tenant_id AND history_item.store_id=ordering.store_id
+         AND history_item.order_id=ordering.id
+        JOIN mbox.products history_product
+          ON history_product.tenant_id=history_item.tenant_id AND history_product.store_id=history_item.store_id
+         AND history_product.id=history_item.product_id
+        JOIN mbox.table_sessions historical_session
+          ON historical_session.tenant_id=ordering.tenant_id AND historical_session.store_id=ordering.store_id
+         AND historical_session.id=ordering.table_session_id
+        WHERE ordering.tenant_id=product.tenant_id AND ordering.store_id=product.store_id
+          -- Paid history is a member feature: use every identity in a merged
+          -- family, but never borrow a companion's table spend.
+          AND ordering.created_by_customer_id IN (SELECT id FROM family)
+          AND EXISTS (
+            SELECT 1 FROM mbox.customer_memberships membership
+            WHERE membership.tenant_id=ordering.tenant_id AND membership.store_id=ordering.store_id
+              AND membership.customer_id IN (SELECT id FROM family) AND membership.status='active'
+          )
+          AND ordering.status<>'cancelled' AND ordering.payment_status='paid'
+          AND history_item.status<>'cancelled'
+          AND product.recommendation_beverage_family<>'none'
+          AND history_product.recommendation_beverage_family=product.recommendation_beverage_family
+          AND EXISTS (
+            SELECT 1 FROM mbox.payments payment
+            WHERE payment.tenant_id=ordering.tenant_id AND payment.store_id=ordering.store_id
+              AND payment.order_id=ordering.id AND payment.status='succeeded'
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM mbox.payments payment
+            JOIN mbox.refunds refund
+              ON refund.tenant_id=payment.tenant_id AND refund.store_id=payment.store_id
+             AND refund.payment_id=payment.id
+            WHERE payment.tenant_id=ordering.tenant_id AND payment.store_id=ordering.store_id
+              AND payment.order_id=ordering.id
+              AND refund.status IN ('requested','approved','processing','succeeded')
+          )
+      ) AS paid_order_history ON true
       LEFT JOIN LATERAL (
         SELECT CASE WHEN count(*)=0 THEN 0 ELSE floor(
           least(1::numeric,greatest(0::numeric,min(
@@ -4339,6 +4536,7 @@ export class CustomerExperienceRepository {
         AND product.product_kind = 'bundle' AND product.recommendation_enabled = true
         AND product.recommendation_min_guests <= $3
         AND product.recommendation_max_guests >= $3
+        AND NOT (product.id=ANY($6::uuid[]))
         AND product.cost_amount_minor IS NOT NULL
         AND price.amount_minor > product.cost_amount_minor
         AND (cardinality($4::text[]) = 0
@@ -4495,6 +4693,7 @@ export class CustomerExperienceRepository {
       answers.partySize,
       families,
       customerId,
+      excludedProductIds,
     ])
     return result.rows
   }
@@ -4705,17 +4904,152 @@ function occasionInstruction(occasion: string): string {
   return '给出一个低压力的共同选择，例如交换品鉴或选择下一段音乐氛围。'
 }
 
+const RECOMMENDATION_INPUT_QUESTION_OPTIONS: Record<RecommendationQuestionCode, Array<{ value: string; label: string }>> = {
+  occasion: [
+    { value: 'business', label: '商务小聚' },
+    { value: 'friends', label: '朋友聚会' },
+    { value: 'date', label: '约会' },
+    { value: 'birthday', label: '庆祝一下' },
+    { value: 'music', label: '听演出' },
+    { value: 'relax', label: '放松坐坐' },
+    { value: 'other', label: '随意看看' },
+  ],
+  alcoholPreference: [
+    { value: 'cocktail', label: '鸡尾酒' },
+    { value: 'wine', label: '葡萄酒' },
+    { value: 'sparkling', label: '起泡酒' },
+    { value: 'beer', label: '啤酒' },
+    { value: 'whisky', label: '威士忌' },
+    { value: 'baijiu', label: '白酒' },
+    { value: 'non_alcoholic', label: '无酒精' },
+    { value: 'mixed', label: '都可以' },
+    { value: 'undecided', label: '还没想好' },
+  ],
+  experienceLevel: [
+    { value: 'comfortable', label: '轻松一点' },
+    { value: 'enhanced', label: '搭配刚好' },
+    { value: 'signature', label: '来点特别的' },
+  ],
+}
+
+const RECOMMENDATION_INPUT_DEFAULTS: RecommendationInputConfiguration = {
+  version: 1,
+  questions: [
+    { code: 'occasion', title: '今晚想怎么坐坐？', options: RECOMMENDATION_INPUT_QUESTION_OPTIONS.occasion },
+    { code: 'alcoholPreference', title: '更想喝点什么？', options: RECOMMENDATION_INPUT_QUESTION_OPTIONS.alcoholPreference },
+    { code: 'experienceLevel', title: '今晚想要什么节奏？', options: RECOMMENDATION_INPUT_QUESTION_OPTIONS.experienceLevel },
+  ],
+  strategy: {
+    paidOrderHistoryWeight: 100,
+    multiGuestHistoryConfidenceBasisPoints: 2500,
+    shakeExcludes: ['exposed', 'cart', 'ordered', 'rejected'],
+  },
+}
+
+/**
+ * A policy version owns the questionnaire order/copy and the bounded ranking
+ * strategy.  The answer taxonomy stays server-owned so a policy cannot cause
+ * the public API to accept arbitrary, unvalidated preference fields.
+ */
+export function recommendationInputConfiguration(displayConfiguration: JsonObject): RecommendationInputConfiguration {
+  const configured = displayConfiguration.recommendationInput
+  if (configured === undefined) return cloneRecommendationInputConfiguration(RECOMMENDATION_INPUT_DEFAULTS)
+  if (!isJsonObject(configured) || configured.version !== 1 || !Array.isArray(configured.questions)
+    || !isJsonObject(configured.strategy)) {
+    throw new CustomerExperienceRequestError(
+      '推荐规则的顾客输入配置无效', 'RECOMMENDATION_INPUT_CONFIGURATION_INVALID', 503,
+    )
+  }
+  const questions = configured.questions.map((question) => {
+    if (!isJsonObject(question) || !isRecommendationQuestionCode(question.code)
+      || typeof question.title !== 'string' || question.title.trim().length < 2 || question.title.trim().length > 80) {
+      throw new CustomerExperienceRequestError(
+        '推荐规则的顾客问题无效', 'RECOMMENDATION_INPUT_CONFIGURATION_INVALID', 503,
+      )
+    }
+    return {
+      code: question.code,
+      title: question.title.trim(),
+      options: RECOMMENDATION_INPUT_QUESTION_OPTIONS[question.code],
+    }
+  })
+  const expected = Object.keys(RECOMMENDATION_INPUT_QUESTION_OPTIONS) as RecommendationQuestionCode[]
+  if (questions.length !== expected.length || new Set(questions.map((question) => question.code)).size !== expected.length
+    || expected.some((code) => !questions.some((question) => question.code === code))) {
+    throw new CustomerExperienceRequestError(
+      '推荐规则必须包含三项顾客问题', 'RECOMMENDATION_INPUT_CONFIGURATION_INVALID', 503,
+    )
+  }
+  const paidOrderHistoryWeight = configured.strategy.paidOrderHistoryWeight
+  const multiGuestHistoryConfidenceBasisPoints = configured.strategy.multiGuestHistoryConfidenceBasisPoints
+  if (typeof paidOrderHistoryWeight !== 'number' || !Number.isSafeInteger(paidOrderHistoryWeight)
+    || paidOrderHistoryWeight < 0 || paidOrderHistoryWeight > 1000
+    || typeof multiGuestHistoryConfidenceBasisPoints !== 'number'
+    || !Number.isSafeInteger(multiGuestHistoryConfidenceBasisPoints)
+    || multiGuestHistoryConfidenceBasisPoints < 0 || multiGuestHistoryConfidenceBasisPoints > 10_000) {
+    throw new CustomerExperienceRequestError(
+      '推荐规则的历史偏好策略无效', 'RECOMMENDATION_INPUT_CONFIGURATION_INVALID', 503,
+    )
+  }
+  return {
+    version: 1,
+    questions,
+    strategy: {
+      paidOrderHistoryWeight,
+      multiGuestHistoryConfidenceBasisPoints,
+      // These exclusions are data integrity rules, not merchandising knobs.
+      shakeExcludes: ['exposed', 'cart', 'ordered', 'rejected'],
+    },
+  }
+}
+
+function normalizeRecommendationDisplayConfiguration(displayConfiguration: JsonObject): JsonObject {
+  const configuration = recommendationInputConfiguration(displayConfiguration)
+  return {
+    ...displayConfiguration,
+    recommendationInput: {
+      version: configuration.version,
+      questions: configuration.questions.map((question) => ({ code: question.code, title: question.title })),
+      strategy: {
+        paidOrderHistoryWeight: configuration.strategy.paidOrderHistoryWeight,
+        multiGuestHistoryConfidenceBasisPoints: configuration.strategy.multiGuestHistoryConfidenceBasisPoints,
+      },
+    },
+  }
+}
+
+function cloneRecommendationInputConfiguration(configuration: RecommendationInputConfiguration): RecommendationInputConfiguration {
+  return {
+    version: configuration.version,
+    questions: configuration.questions.map((question) => ({
+      code: question.code,
+      title: question.title,
+      options: question.options.map((option) => ({ ...option })),
+    })),
+    strategy: { ...configuration.strategy, shakeExcludes: [...configuration.strategy.shakeExcludes] },
+  }
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isRecommendationQuestionCode(value: unknown): value is RecommendationQuestionCode {
+  return value === 'occasion' || value === 'alcoholPreference' || value === 'experienceLevel'
+}
+
 function rankProducts(
   rows: RecommendationProductRow[],
   answers: RecommendationAnswer,
   policy: RecommendationPolicyRow,
+  inputConfiguration: RecommendationInputConfiguration,
   input: Readonly<{ intent: RecommendationIntent; variationSeed: string | null }>,
 ): RecommendedProduct[] {
   const ranked = rows.map((row) => {
     const amount = money(row.amount_minor, 'product amount')
     const cost = money(row.cost_amount_minor, 'product cost')
     const separate = row.separate_amount_minor === null ? null : money(row.separate_amount_minor, 'separate amount')
-    const contributions = recommendationScore(row, answers, policy)
+    const contributions = recommendationScore(row, answers, policy, inputConfiguration)
     return {
       row,
       amount,
@@ -4766,6 +5100,7 @@ function recommendationScore(
   row: RecommendationProductRow,
   answers: RecommendationAnswer,
   policy: RecommendationPolicyRow,
+  inputConfiguration: RecommendationInputConfiguration,
 ): Readonly<{
   total: number
   preference: number
@@ -4784,7 +5119,12 @@ function recommendationScore(
   const learnedPreference = Math.floor(
     policy.preference_weight*Math.min(10_000,Math.max(0,row.learned_preference_score))/10_000,
   )
-  const preference = statedPreference+learnedPreference
+  const paidHistoryPreference = recommendationPaidOrderHistoryContribution(
+    row.paid_order_history_single_party_score,
+    row.paid_order_history_multi_party_score,
+    inputConfiguration,
+  )
+  const preference = statedPreference+learnedPreference+paidHistoryPreference
   const scene = row.recommendation_scene_tags.includes(sceneTag(answers.occasion))
     ? policy.scene_weight : 0
   const margin = Math.floor(policy.margin_weight * grossMarginBasisPoints / 10_000)
@@ -4815,6 +5155,22 @@ export function recommendationOperationalSignalContribution(weight: number,basis
     throw new Error('recommendation operational signal must be a safe integer')
   }
   return Math.floor(weight*Math.min(10_000,Math.max(0,basisPoints))/10_000)
+}
+
+export function recommendationPaidOrderHistoryContribution(
+  singlePartyScore: number,
+  multiPartyScore: number,
+  inputConfiguration: RecommendationInputConfiguration,
+): number {
+  if (!Number.isSafeInteger(singlePartyScore) || !Number.isSafeInteger(multiPartyScore)) {
+    throw new Error('recommendation paid order history score must be a safe integer')
+  }
+  const paidHistoryScore = Math.min(10_000, Math.max(0,
+    singlePartyScore + Math.floor(
+      multiPartyScore*inputConfiguration.strategy.multiGuestHistoryConfidenceBasisPoints/10_000,
+    ),
+  ))
+  return Math.floor(inputConfiguration.strategy.paidOrderHistoryWeight*paidHistoryScore/10_000)
 }
 
 function tierSelections<T extends { amount: number }>(items: T[], preferred: ExperienceLevel): Array<{ item: T; tier: ExperienceLevel }> {
@@ -6066,6 +6422,7 @@ function recommendationPolicyVersionView(row: RecommendationPolicyVersionRow): R
     preferenceMinEffectiveScore: row.preference_min_effective_score,
     preferenceMinConfidenceBasisPoints: row.preference_min_confidence_basis_points,
     explanationTemplate: row.explanation_template,
+    inputConfiguration: recommendationInputConfiguration(row.display_configuration),
     draftReason: row.draft_reason,
     approvalReason: row.approval_reason,
     publicationReason: row.publication_reason,

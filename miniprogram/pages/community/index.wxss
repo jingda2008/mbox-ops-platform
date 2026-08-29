@@ -289,7 +289,7 @@
 }
 
 @media (max-width: 390px) {
-  .community-hero { padding: 28rpx 22rpx 30rpx; }
+  .community-hero { margin-right: -22rpx; margin-left: -22rpx; padding: 28rpx 22rpx 30rpx; }
   .community-hero__logo { width: 78%; }
   .community-hero__title { font-size: 42rpx; }
   .activity-card { min-height: 216rpx; flex-direction: row; }
@@ -300,3 +300,13 @@
   .activity-date { font-size: 17rpx; }
   .activity-fee { font-size: 22rpx; }
 }
+@media (max-width: 360px) {
+  .community-hero { margin-right: -18rpx; margin-left: -18rpx; padding-right: 18rpx; padding-left: 18rpx; }
+}
+
+/* Every membership sheet must remain dismissible and usable on the narrow outer screen. */
+.community-member-mask { padding: 0; }
+.community-member-sheet { max-height: calc(100vh - 8px); box-sizing: border-box; }
+.community-member-close { top: 16rpx; right: 18rpx; min-width: 96rpx; min-height: 88rpx; padding: 0 16rpx; border-radius: 44rpx; line-height: 86rpx; }
+@media (max-width: 390px) { .community-member-sheet { padding-right: 22rpx; padding-left: 22rpx; } }
+@media (max-width: 360px) { .community-member-sheet { padding-right: 18rpx; padding-left: 18rpx; } }

@@ -122,6 +122,7 @@
   color: #a14545;
   font-size: 22rpx;
 }
+@media (max-width: 390px) { .profile-contact-page { padding-right: 22rpx; padding-left: 22rpx; } .contact-hero { margin-right: -22rpx; margin-left: -22rpx; padding-right: 22rpx; padding-left: 22rpx; } }
 @media (max-width: 360px) {
   .profile-contact-page { padding-right: 18rpx; padding-left: 18rpx; }
   .contact-hero { margin-right: -18rpx; margin-left: -18rpx; padding-right: 18rpx; padding-left: 18rpx; }

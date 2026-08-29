@@ -2393,6 +2393,12 @@ export class CustomerExperienceService {
     })
   }
 
+  recommendationInputConfiguration(context: TableExperienceContext & { scope: Readonly<StoreScope> }) {
+    return this.transactions.run(context.scope, (transaction) => (
+      new CustomerExperienceRepository(transaction).recommendationInputConfiguration()
+    ), { readOnly: true })
+  }
+
   recordRecommendationBehavior(
     context: TableExperienceContext & { scope: Readonly<StoreScope> },
     input: Readonly<{

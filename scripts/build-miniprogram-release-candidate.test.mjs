@@ -82,13 +82,15 @@ test('rejects empty identity, IP origins, development fallback and output overwr
   }), /禁止覆盖/)
 })
 
-test('rejects developer-private files or secret-like content from the upload package', async () => {
+test('omits developer-private files from the upload package', async () => {
   const root = await mkdtemp(resolve(tmpdir(), 'mbox-mini-candidate-secret-'))
   const source = resolve(root, 'source')
+  const outputRoot = resolve(root, 'output')
   await cp(resolve('miniprogram'), source, { recursive: true })
   await writeFile(resolve(source, 'project.private.config.json'), '{}')
-  await assert.rejects(buildMiniProgramReleaseCandidate({
-    sourceRoot: source, outputRoot: resolve(root, 'output'), runtime,
-    sourceCommitSha: 'b'.repeat(40),
-  }), /包含禁止文件/)
+  const result = await buildMiniProgramReleaseCandidate({
+    sourceRoot: source, outputRoot, runtime, sourceCommitSha: 'b'.repeat(40),
+  })
+  assert.equal(result.manifest.files.some((entry) => entry.path === 'project.private.config.json'), false)
+  await assert.rejects(readFile(resolve(result.packageRoot, 'project.private.config.json')), /ENOENT/)
 })

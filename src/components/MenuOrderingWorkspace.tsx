@@ -74,7 +74,7 @@ function customerFacingProductTag(product: MenuProduct) {
 }
 
 const guestMenuViews = [
-  { id: 'recommend', name: '今夜推荐' },
+  { id: 'recommend', name: '今夜甄选' },
   { id: 'bundles', name: '组合甄选' },
   { id: 'drinks', name: '酒水' },
   { id: 'food', name: '小食' },
@@ -746,8 +746,11 @@ export function MenuOrderingWorkspace({
             >{family.name}</button>)}
           </nav>}
           {guestSalesMode && guestMenuView === 'recommend' && !searchQuery.trim() && <header className="menu-recommendation-heading">
-            <div><small>FOR TONIGHT</small><strong>今夜特别推荐</strong></div>
-            <span>已按 {Math.max(1, partySize)} 位{recommendationScene && recommendationScene !== 'unsure' ? ` · ${recommendationSceneLabels[recommendationScene] ?? '同行'}` : ''}筛选 · 直接比较</span>
+            <div><strong>今夜甄选</strong></div>
+            <span className="menu-recommendation-heading-meta">
+              <span className="menu-recommendation-heading-meta-full">已按 {Math.max(1, partySize)} 位{recommendationScene && recommendationScene !== 'unsure' ? ` · ${recommendationSceneLabels[recommendationScene] ?? '同行'}` : ''}筛选 · 直接比较</span>
+              <span className="menu-recommendation-heading-meta-compact">{Math.max(1, partySize)} 位{recommendationScene && recommendationScene !== 'unsure' ? ` · ${recommendationSceneLabels[recommendationScene] ?? '同行'}` : ''}已筛选</span>
+            </span>
           </header>}
           {guestSalesMode && guestMenuView === 'recommend' && !searchQuery.trim() && recommendationFeedback && <div className="menu-recommendation-feedback" role="status" aria-live="polite" data-testid="recommendation-updated-feedback">
             <CheckCircle2 size={15} aria-hidden="true" />

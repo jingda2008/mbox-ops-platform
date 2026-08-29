@@ -1150,3 +1150,12 @@
   line-height: 72rpx;
 }
 .logout-button::after { border: 0; }
+@media (max-width: 390px) { .profile-hero { margin-right: -22rpx; margin-left: -22rpx; padding-right: 22rpx; padding-left: 22rpx; } }
+@media (max-width: 360px) { .profile-hero { margin-right: -18rpx; margin-left: -18rpx; padding-right: 18rpx; padding-left: 18rpx; } }
+/* Override the historical duplicate sheet block: compact screens keep a
+   touchable close action and scroll the sheet instead of trapping its footer. */
+.login-sheet-mask { padding: 0; }
+.login-sheet { max-height: calc(100vh - env(safe-area-inset-bottom)); overflow-y: auto; }
+.login-sheet__close { z-index: 1; width: 96rpx; min-width: 96rpx; height: 96rpx; min-height: 96rpx; font-size: 38rpx; line-height: 94rpx; }
+@media (max-width: 390px) { .login-sheet { padding-right: 22rpx; padding-left: 22rpx; } }
+@media (max-width: 360px) { .login-sheet { max-height: calc(100vh - 4px); padding-right: 18rpx; padding-left: 18rpx; } .login-sheet__close { top: 14rpx; right: 18rpx; } }

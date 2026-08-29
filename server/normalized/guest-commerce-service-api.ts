@@ -75,6 +75,7 @@ import {
   requireGuestSessionIdFromActorRef,
 } from './guest-table-authority.js'
 import { ReservationGuestSessionInvalidError } from './reservation-guest-session.js'
+import { GuestSessionInvalidError, GuestTableSessionEndedError } from './guest-session-repository.js'
 import { publicMiniProgramImageUrl } from './media-asset-url.js'
 import type {
   ScopedPostgresTransactionRunner,
@@ -1765,7 +1766,8 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<unknown
     }
     if (error instanceof GuestAuthenticationRequiredError
       || error instanceof GuestDeviceBindingError
-      || error instanceof ReservationGuestSessionInvalidError) {
+      || error instanceof ReservationGuestSessionInvalidError
+      || error instanceof GuestSessionInvalidError) {
       return reply.code(401).send({ error: { code: 'GUEST_SESSION_INVALID', message: error.message } })
     }
     if (error instanceof GuestStoreScopeError) {
@@ -1783,6 +1785,7 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<unknown
     if (error instanceof GuestBehaviorSessionUnavailableError
       || error instanceof GuestServiceSessionUnavailableError
       || error instanceof TableSessionUnavailableForOrderError
+      || error instanceof GuestTableSessionEndedError
       || error instanceof GuestTablePositionChangedError) {
       return reply.code(409).send({ error: { code: 'TABLE_SESSION_ENDED', message: '这桌已经结束服务，请重新扫描桌面二维码' } })
     }

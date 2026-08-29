@@ -603,6 +603,9 @@ async function recommendExperience(input) {
     method: 'POST', headers: { 'idempotency-key': randomId('experience-recommend') }, data: input,
   })).data
 }
+async function getRecommendationConfiguration() {
+  return (await request('/api/guest/experience/recommendations/configuration')).data
+}
 async function recordRecommendationEvent(recommendationPublicId, eventType, productId, evidence, reasonCode) {
   return (await request(`/api/guest/experience/recommendations/${encodeURIComponent(recommendationPublicId)}/events`, {
     method: 'POST', headers: { 'idempotency-key': randomId(`experience-${eventType}-${recommendationPublicId}`) },
@@ -780,7 +783,7 @@ module.exports = {
   getReservationPerformanceImpacts, acknowledgeReservationPerformanceImpact,
   getReservationPerformanceNotificationAuthorizations,
   recordReservationPerformanceNotificationAuthorization,
-  getMenu, getPublicMenu, recommendExperience, recordRecommendationEvent, prepareCheckoutUpgrade, recordCheckoutUpgradeEvent,
+  getMenu, getPublicMenu, recommendExperience, getRecommendationConfiguration, recordRecommendationEvent, prepareCheckoutUpgrade, recordCheckoutUpgradeEvent,
   checkout, getSharedCart, adjustSharedCart, removeSharedCartLine, clearSharedCart, checkoutSharedCart, getTableOrders, retryOrderPayment,
   createServiceTask, getServiceRequests, actOnServiceTask,
   getCustomerBenefits, getCustomerProfile, reserveCustomerBenefit, claimAnnualDailySnack, submitSongRequest, getTodayPerformances,

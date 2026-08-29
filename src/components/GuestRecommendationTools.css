@@ -401,6 +401,25 @@
   }
 }
 
+@media (max-width: 359px) {
+  .guest-recommendation-entries {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding-inline: 8px;
+  }
+
+  .guest-recommendation-entry,
+  .guest-recommendation-entry.is-shake {
+    grid-template-columns: 26px minmax(0, 1fr);
+    gap: 5px;
+    padding-inline: 6px;
+  }
+
+  .guest-recommendation-entry-icon {
+    width: 26px;
+    height: 26px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .guest-recommendation-entry,
   .guest-recommendation-icon-button,

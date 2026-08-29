@@ -325,51 +325,6 @@
 .quick-service button:nth-child(3) { color: #87483f; }
 .quick-service button:nth-child(3) .quick-service__surface { border-color: #e1c4bf; background: #fcf3f1; }
 .quick-service__dot { width: 8rpx; height: 8rpx; flex: 0 0 auto; border-radius: 50%; background: currentColor; opacity: .82; }
-.payment-recovery,
-.checkout-recovery {
-  display: grid;
-  margin-top: 18rpx;
-  padding: 22rpx;
-  border: 1rpx solid #d6b06f;
-  border-radius: 18rpx;
-  background: #fffaf0;
-  grid-template-columns: 1fr auto auto;
-  align-items: center;
-  gap: 12rpx;
-}
-.payment-recovery view text,
-.checkout-recovery view text {
-  display: block;
-}
-.payment-recovery view text:first-child,
-.checkout-recovery view text:first-child {
-  font-size: 24rpx;
-  font-weight: 700;
-}
-.payment-recovery view text:last-child,
-.checkout-recovery view text:last-child {
-  margin-top: 6rpx;
-  color: #806f58;
-  font-size: 19rpx;
-}
-.payment-recovery button,
-.checkout-recovery button {
-  min-width: 120rpx;
-  min-height: 72rpx;
-  margin: 0;
-  padding: 0 18rpx;
-  border-radius: 36rpx;
-  background: #315d46;
-  color: #fff;
-  font-size: 21rpx;
-  line-height: 72rpx;
-}
-.payment-recovery button:last-child,
-.checkout-recovery button:last-child {
-  border: 1rpx solid #b9a47f;
-  background: transparent;
-  color: #604c31;
-}
 .recommend-entry {
   margin-top: 18rpx;
   padding: 4rpx 0 0;
@@ -921,14 +876,6 @@
     padding-right: 22rpx;
     padding-left: 22rpx;
   }
-  .payment-recovery,
-  .checkout-recovery {
-    grid-template-columns: 1fr 1fr;
-  }
-  .payment-recovery view,
-  .checkout-recovery view {
-    grid-column: 1/3;
-  }
   .recommend-card {
     width: 290rpx;
   }
@@ -953,13 +900,25 @@
 .recommend-entry__head view { min-width: 0; }
 .recommend-entry__head view text { display: block; }
 .recommend-entry__head view text:first-child { font-family: "Songti SC", "STSong", serif; font-size: 31rpx; font-weight: 600; }
-.recommend-entry__head view text:last-child { margin-top: 5rpx; color: #6c766f; font-size: 18rpx; line-height: 1.35; }
 .recommend-entry__head > text { flex: 0 0 auto; color: #8a7150; font-size: 18rpx; }
 .recommend-entry__actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10rpx; }
 .recommend-entry__actions button { min-height: 88rpx; padding: 10rpx 14rpx; border-radius: 18rpx; }
 .recommend-loading { display: grid; min-height: 150rpx; margin-top: 14rpx; padding: 28rpx; align-content: center; border: 1rpx dashed #c8b998; border-radius: 18rpx; background: #fbf7ef; text-align: center; gap: 8rpx; }
 .recommend-loading text:first-child { color: #4f4436; font-size: 23rpx; font-weight: 650; }
 .recommend-loading text:last-child { color: #887b6b; font-size: 19rpx; }
+.recommend-question { z-index: 62; display: flex; padding: 28rpx; align-items: flex-end; box-sizing: border-box; }
+.recommend-question__sheet { position: relative; width: 100%; max-height: calc(100vh - 8px); padding: 32rpx 26rpx calc(28rpx + env(safe-area-inset-bottom)); border-radius: 28rpx 28rpx 0 0; background: #fffcf7; box-shadow: 0 -18rpx 56rpx rgba(22, 18, 14, .22); box-sizing: border-box; }
+.recommend-question__close { position: absolute; top: 18rpx; right: 22rpx; min-width: 112rpx; min-height: 64rpx; margin: 0; padding: 0 16rpx; border: 1rpx solid #d6cec4; border-radius: 32rpx; background: #f5f1eb; color: #62594f; font-size: 20rpx; line-height: 62rpx; }
+.recommend-question__close::after { border: 0; }
+.recommend-question__head text { display: block; }
+.recommend-question__head text:first-child { color: #8f6b40; font-size: 18rpx; font-weight: 700; letter-spacing: 2rpx; }
+.recommend-question__head text:last-child { margin-top: 8rpx; padding-right: 132rpx; color: #2e2924; font-family: "Songti SC", "STSong", serif; font-size: 34rpx; font-weight: 650; line-height: 1.35; }
+.recommend-question__progress { display: grid; margin-top: 22rpx; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8rpx; }
+.recommend-question__progress text { height: 6rpx; border-radius: 3rpx; background: #e5e0d8; }
+.recommend-question__progress text.is-active { background: #b5904f; }
+.recommend-question__options { display: grid; margin-top: 22rpx; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12rpx; }
+.recommend-question__options button { min-width: 0; min-height: 88rpx; margin: 0; padding: 10rpx 14rpx; border: 1rpx solid #d6cec4; border-radius: 18rpx; background: #fff; color: #322d28; font-size: 22rpx; font-weight: 650; line-height: 1.3; }
+.recommend-question__options button::after { border: 0; }
 .cart-dock { padding: 12rpx 22rpx calc(14rpx + env(safe-area-inset-bottom)); border-top-color: #ddd6cd; background: rgba(255, 252, 247, 0.98); box-shadow: 0 -10rpx 30rpx rgba(24, 20, 17, 0.11); }
 .cart-summary { display: grid; grid-template-columns: minmax(0, 1fr) 190rpx; gap: 12rpx; }
 .cart-overview { display: grid; width: 100%; min-width: 0; min-height: 88rpx; margin: 0; padding: 0 4rpx; align-items: center; border: 0; background: transparent; color: #29251f; line-height: 1.2; text-align: left; grid-template-columns: 54rpx minmax(0, 1fr) 30rpx; gap: 10rpx; }
@@ -985,17 +944,6 @@
 .cart-line__actions { display: flex; align-items: center; gap: 6rpx; }
 .cart-line__actions button { width: 64rpx; height: 64rpx; margin: 0; padding: 0; border: 0; border-radius: 32rpx; background: #eee9e2; line-height: 64rpx; }
 .cart-line__actions .cart-line__remove { width: auto; min-width: 72rpx; padding: 0 8rpx; background: transparent; color: #8a7163; font-size: 18rpx; }
-.checkout-guard { position: fixed; z-index: 48; inset: 0; display: flex; padding: 28rpx; align-items: flex-end; background: rgba(24, 21, 18, .42); }
-.checkout-guard__sheet { position: relative; width: 100%; padding: 30rpx 26rpx calc(26rpx + env(safe-area-inset-bottom)); border: 1rpx solid #e0d4c2; border-radius: 26rpx; background: #fffcf7; box-shadow: 0 18rpx 56rpx rgba(22, 18, 14, .22); text-align: center; }
-.checkout-guard__close { position: absolute; top: 16rpx; right: 16rpx; width: 64rpx; min-width: 64rpx; height: 64rpx; min-height: 64rpx; margin: 0; padding: 0; border: 0; border-radius: 32rpx; background: #f2eee8; color: #62594f; font-size: 36rpx; font-weight: 400; line-height: 60rpx; }
-.checkout-guard__close::after { border: 0; }
-.checkout-guard__mark { display: flex; width: 64rpx; height: 64rpx; margin: 0 auto 14rpx; align-items: center; justify-content: center; border-radius: 50%; background: #e8f1eb; color: #315d46; font-size: 28rpx; font-weight: 750; }
-.checkout-guard__title, .checkout-guard__copy { display: block; }
-.checkout-guard__title { color: #2f2a25; font-family: "Songti SC", "STSong", serif; font-size: 32rpx; font-weight: 650; }
-.checkout-guard__copy { margin-top: 9rpx; color: #746b61; font-size: 22rpx; line-height: 1.55; }
-.checkout-guard__actions { display: grid; margin-top: 24rpx; grid-template-columns: 1fr 1fr; gap: 12rpx; }
-.checkout-guard__actions button { min-width: 0; min-height: 88rpx; margin: 0; border: 1rpx solid #315d46; border-radius: 44rpx; background: #315d46; color: #fff; font-size: 22rpx; line-height: 86rpx; }
-.checkout-guard__actions button:last-child { border-color: #c9b895; background: #fffaf2; color: #655036; }
 .cart-overview{grid-template-columns:54rpx minmax(0,1fr);cursor:default}.cart-overview__mark{position:relative}.cart-overview__mark-icon{position:relative;width:29rpx;height:21rpx;margin-top:-4rpx;margin-left:4rpx;border:3rpx solid #315d46;border-top:0;border-radius:2rpx 2rpx 5rpx 5rpx;transform:skew(-7deg)}.cart-overview__mark-icon::before{position:absolute;top:-10rpx;left:-9rpx;width:11rpx;height:9rpx;border-top:3rpx solid #315d46;border-left:3rpx solid #315d46;border-radius:5rpx 0 0;content:""}.cart-overview__mark-icon::after{position:absolute;right:16rpx;bottom:-10rpx;width:6rpx;height:6rpx;border-radius:50%;background:#315d46;box-shadow:18rpx 0 0 #315d46;content:""}.cart-overview__badge{position:absolute;top:-8rpx;right:-8rpx;display:flex!important;min-width:28rpx;height:28rpx;margin:0!important;padding:0 5rpx;align-items:center;justify-content:center;border:2rpx solid #fffcf7;border-radius:16rpx;background:#9a3f3f;color:#fff!important;font-size:15rpx!important;font-weight:750;line-height:28rpx}.cart-overview__copy{min-width:0}.cart-overview__copy>text{display:block}.cart-overview__copy>text:first-child{overflow:hidden;color:#29251f;font-size:27rpx;font-weight:750;text-overflow:ellipsis;white-space:nowrap}.cart-overview__copy>text:last-child{margin-top:5rpx;color:#8a8279;font-size:17rpx}.checkout-confirm{z-index:54}.checkout-confirm__sheet{width:100%;max-height:86vh;padding:18rpx 26rpx calc(26rpx + env(safe-area-inset-bottom));border-radius:28rpx 28rpx 0 0;background:#fffcf7;box-shadow:0 18rpx 56rpx rgba(22,18,14,.22)}.checkout-confirm__head{display:flex;min-height:84rpx;align-items:center;justify-content:space-between;gap:16rpx}.checkout-confirm__eyebrow,.checkout-confirm__title{display:block}.checkout-confirm__eyebrow{color:#8f6b40;font-size:18rpx;font-weight:700;letter-spacing:2rpx}.checkout-confirm__title{margin-top:5rpx;color:#2e2924;font-family:"Songti SC","STSong",serif;font-size:34rpx;font-weight:650}.checkout-confirm__close{width:auto;min-width:128rpx;min-height:64rpx;margin:0;padding:0 14rpx;border:1rpx solid #d6cec4;border-radius:32rpx;background:#fff;color:#62594f;font-size:19rpx;line-height:62rpx}.checkout-confirm__lines{max-height:42vh;margin-top:16rpx;border-top:1rpx solid #ebe4db;border-bottom:1rpx solid #ebe4db}.checkout-confirm__line{display:grid;min-height:106rpx;padding:14rpx 0;align-items:center;border-top:1rpx solid #eee8e0;grid-template-columns:minmax(0,1fr) auto;gap:12rpx}.checkout-confirm__line:first-child{border-top:0}.checkout-confirm__copy{min-width:0}.checkout-confirm__copy>text{display:block}.checkout-confirm__copy>text:first-child{overflow:hidden;color:#342f2a;font-size:23rpx;font-weight:650;text-overflow:ellipsis;white-space:nowrap}.checkout-confirm__copy>text:nth-child(2){margin-top:5rpx;color:#827a71;font-size:18rpx}.checkout-confirm__actions{display:flex;align-items:center;gap:6rpx;color:#3c352e;font-size:20rpx;font-weight:650}.checkout-confirm__actions button{width:60rpx;height:60rpx;margin:0;padding:0;border:0;border-radius:30rpx;background:#eee9e2;color:#332f29;font-size:27rpx;line-height:60rpx}.checkout-confirm__actions .checkout-confirm__remove{width:auto;min-width:68rpx;padding:0 8rpx;background:transparent;color:#8a7163;font-size:18rpx}.checkout-confirm__total{display:flex;margin-top:18rpx;padding:18rpx 2rpx;align-items:center;justify-content:space-between}.checkout-confirm__total view text{display:block}.checkout-confirm__total view text:first-child{color:#3b342e;font-size:23rpx;font-weight:700}.checkout-confirm__total view text:last-child{margin-top:5rpx;color:#83796e;font-size:18rpx}.checkout-confirm__total>text{color:#26211d;font-size:38rpx;font-weight:750}.checkout-confirm__footer{display:grid;grid-template-columns:1fr 1.25fr;gap:12rpx}.checkout-confirm__footer button{min-width:0;min-height:88rpx;margin:0;border-radius:44rpx;font-size:22rpx;line-height:86rpx}.checkout-confirm__footer .secondary-button{border-color:#d1c8be;background:#fff;color:#62594f}
 .table-strip__content { align-items: center; grid-template-columns: minmax(0, 1fr) 174rpx; }
 .table-strip__service { min-height: 88rpx; padding: 8rpx 0 8rpx 14rpx; align-items: flex-start; justify-content: center; flex-direction: column; border-top: 0; border-right: 0; border-bottom: 0; border-left: 1rpx solid #eee8df; }
@@ -1131,6 +1079,7 @@
 
 @media (max-width: 360px) {
   .order-page { padding-top: 12rpx; }
+  .order-head { margin-right: -18rpx; margin-left: -18rpx; padding-right: 18rpx; padding-left: 18rpx; }
   .table-strip { padding: 16rpx 18rpx; }
   .table-strip__content { grid-template-columns: minmax(0, 1fr) 150rpx; }
   .table-strip__service { min-height: 76rpx; padding-left: 10rpx; }
@@ -1141,6 +1090,12 @@
   .recommend-entry { padding-top: 18rpx; }
   .recommend-entry__head > text { display: none; }
   .recommend-entry__actions button { min-height: 40px; }
+  .recommend-question { padding-right: 18rpx; padding-left: 18rpx; }
+  .recommend-question__sheet { padding-right: 18rpx; padding-left: 18rpx; }
+  .recommend-question__close { min-width: 96rpx; min-height: 88rpx; line-height: 86rpx; }
+  .recommend-question__head text:last-child { padding-right: 110rpx; font-size: 30rpx; }
+  .recommend-question__options { gap: 8rpx; }
+  .recommend-question__options button { min-height: 88rpx; padding: 8rpx; font-size: 20rpx; }
   .recommend-card { width: 470rpx; }
   .recommend-foot button { min-height: 40px; }
   .product-action button { width: 44px; height: 44px; border-radius: 22px; line-height: 44px; }
@@ -1159,9 +1114,7 @@
   .checkout-confirm__actions button { width: 36px; height: 36px; border-radius: 18px; line-height: 36px; }
   .checkout-confirm__actions .checkout-confirm__remove { min-width: 36px; }
   .checkout-confirm__footer { gap: 8rpx; }
-  .checkout-confirm__footer button { min-height: 44px; line-height: 44px; }
-  .checkout-guard { padding: 18rpx; }
-  .checkout-guard__actions button { min-height: 44px; line-height: 44px; }
+  .checkout-confirm__footer-button { min-height: 44px; line-height: 44px; }
   .payment-result__sheet { padding-right: 20rpx; padding-left: 20rpx; }
   .payment-result__close { top: 14rpx; right: 18rpx; width: 126rpx; min-width: 126rpx; min-height: 40px; height: 40px; border-radius: 20px; font-size: 19rpx; }
   .payment-result__actions { gap: 8rpx; }
@@ -1174,8 +1127,6 @@
 .cart-summary,
 .checkout-confirm,
 .checkout-confirm__sheet,
-.checkout-guard,
-.checkout-guard__sheet,
 .payment-result,
 .payment-result__sheet {
   box-sizing: border-box;
@@ -1299,7 +1250,7 @@
 }
 
 .checkout-confirm__total > text,
-.checkout-confirm__footer button {
+.checkout-confirm__footer-button {
   white-space: nowrap;
 }
 
@@ -1310,7 +1261,7 @@
   gap: 10rpx;
 }
 
-.checkout-confirm__footer button {
+.checkout-confirm__footer-button {
   width: 176rpx;
   min-height: 76rpx;
   padding: 0 8rpx;
@@ -1325,7 +1276,6 @@
   flex-basis: 200rpx;
 }
 
-.checkout-guard__sheet,
 .payment-result__sheet {
   overflow: hidden;
 }
@@ -1375,11 +1325,11 @@
     justify-content: flex-end;
   }
 
-  .checkout-confirm__total > text {
+  .checkout-confirm__total-price {
     font-size: 32rpx;
   }
 
-  .checkout-confirm__footer button {
+  .checkout-confirm__footer-button {
     min-height: 40px;
     padding-right: 6rpx;
     padding-left: 6rpx;

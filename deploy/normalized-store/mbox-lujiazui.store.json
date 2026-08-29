@@ -1,5 +1,5 @@
 {
-  "version": "2026.08.26-v17",
+  "version": "2026.08.29-v18",
   "tenant": {
     "id": "10000000-0000-4000-8000-000000000001",
     "code": "superhigh",
@@ -15,6 +15,10 @@
   },
   "dailyCredentialEnv": "MBOX_STORE_DAILY_CREDENTIAL",
   "bootstrapAdminEmployeeCode": "chenfangyu",
+  "automaticTableTurnover": {
+    "enabled": true,
+    "operatingStartsAt": "12:00"
+  },
   "reservationPolicy": {
     "holdMinutes": 20,
     "arrivalGraceMinutes": 10,

@@ -1,5 +1,5 @@
 const { getRuntimeConfig } = require('../config/index')
-const { getTableSession } = require('./session')
+const { getTableSession, clearTableConnection } = require('./session')
 const { tableRequestScope } = require('./table-request-scope')
 
 const LEGACY_COOKIE_KEY = 'mbox.http.cookie.v1'
@@ -228,6 +228,16 @@ function request(path, options) {
         const error = new Error(detail.message || `请求失败（${response.statusCode}）`)
         error.code = detail.code || 'HTTP_ERROR'
         error.statusCode = response.statusCode
+        // A rejected guest call is the first reliable evidence that this
+        // device's table credential has ended. Do not leave a stale local
+        // table binding to keep polling carts and service tasks as 5xx/401.
+        // Scope-check first so an old A response can never clear a newer B.
+        if (requestCredentialDomain(path) === 'guest'
+          && ['GUEST_SESSION_INVALID', 'TABLE_SESSION_ENDED'].includes(error.code)
+          && expectedTableScope !== null
+          && tableRequestScope(getTableSession()) === expectedTableScope) {
+          clearTableConnection()
+        }
         reject(error)
       },
       fail(error) {

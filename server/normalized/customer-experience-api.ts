@@ -737,6 +737,13 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
     return reply.send({ data: result.value, meta: { replayed: result.replayed } })
   }))
 
+  app.get('/guest/experience/recommendations/configuration', async (request, reply) => handle(reply, async () => {
+    const context = await tableContext(options, request)
+    const configuration = await options.service.recommendationInputConfiguration(context)
+    reply.header('cache-control', 'private, no-store')
+    return reply.send({ data: configuration })
+  }))
+
   app.post('/guest/experience/recommendations', async (request, reply) => handle(reply, async () => {
     const context = await tableContext(options, request)
     const body = objectBody(request.body)
@@ -1755,7 +1762,9 @@ function recommendationAnswers(
       : enumValue(body.occasion ?? storedOccasion, '聚会目的', OCCASIONS) as CustomerOccasion,
     alcoholPreference: enumValue(body.alcoholPreference, '酒水偏好', ALCOHOL) as AlcoholPreference,
     experienceLevel: enumValue(body.experienceLevel, '体验档位', LEVELS) as ExperienceLevel,
-    serviceIntensity: enumValue(body.serviceIntensity, '服务方式', INTENSITIES) as ServiceIntensity,
+    // 服务强度是门店执行节奏，不是顾客需要完成的第四道题。旧客户端仍可
+    // 传入它；三题版没有传入时统一使用平衡服务，避免扩展 API 表面。
+    serviceIntensity: enumValue(body.serviceIntensity ?? 'balanced', '服务方式', INTENSITIES) as ServiceIntensity,
   }
 }
 

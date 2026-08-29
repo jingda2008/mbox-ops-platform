@@ -49,8 +49,8 @@
     <state-panel wx:else type="empty" title="下一场正在准备" message="新活动会第一时间出现在这里" />
   </block>
 
-  <view wx:if="{{membershipInviteVisible}}" class="community-member-mask" catchtouchmove="noop">
-    <view class="community-member-sheet">
+  <view wx:if="{{membershipInviteVisible}}" class="community-member-mask">
+    <scroll-view scroll-y="true" class="community-member-sheet">
       <button class="community-member-close" aria-label="关闭会员邀请" bindtap="dismissMembershipInvite">×</button>
       <text class="community-member-kicker">M-BOX 会员</text>
       <text class="community-member-title">加入会员，解锁超嗨活动</text>
@@ -65,6 +65,6 @@
       <button wx:if="{{membershipInviteAgreed}}" class="community-member-authorize wx-phone-button" open-type="getPhoneNumber" bindgetphonenumber="acceptMembershipInvite" loading="{{membershipInviteBusy}}">授权手机号并加入</button>
       <button wx:else class="community-member-authorize community-member-authorize--disabled" bindtap="remindMembershipInviteAgreement">授权手机号并加入</button>
       <text class="community-member-note">授权仅用于建立会员身份和活动服务联系。</text>
-    </view>
+    </scroll-view>
   </view>
 </view>

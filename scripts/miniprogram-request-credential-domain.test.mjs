@@ -13,6 +13,8 @@ async function loadRequestModule() {
   const storage = new Map()
   const calls = []
   const responses = []
+  const tableSession = { tableCode: 'L01', tableToken: 'table-token-a', cartScope: 'cart-scope-a' }
+  let tableClearCount = 0
   const context = {
     module: { exports: {} },
     exports: {},
@@ -24,7 +26,10 @@ async function loadRequestModule() {
           requestTimeoutMs: 10_000,
         }) }
       }
-      if (specifier === './session') return { getTableSession: () => ({ tableCode: 'L01' }) }
+      if (specifier === './session') return {
+        getTableSession: () => tableSession,
+        clearTableConnection: () => { tableClearCount += 1 },
+      }
       if (specifier === './table-request-scope') {
         return { tableRequestScope: (session) => `${String(session?.tableToken || '')}:${String(session?.tableCode || '').trim().toUpperCase()}` }
       }
@@ -42,7 +47,7 @@ async function loadRequestModule() {
     },
   }
   vm.runInNewContext(source, context, { filename: 'miniprogram/utils/request.js' })
-  return { requestModule: context.module.exports, storage, calls, responses }
+  return { requestModule: context.module.exports, storage, calls, responses, tableSession, tableClearCount: () => tableClearCount }
 }
 
 async function loadApiModule() {
@@ -96,6 +101,23 @@ function responseWith(setCookie, cookies) {
     ...(cookies === undefined ? {} : { cookies }),
   }
 }
+
+test('an ended guest table session clears only the current local table binding', async () => {
+  const fixture = await loadRequestModule()
+  fixture.responses.push({ statusCode: 401, data: { error: { code: 'GUEST_SESSION_INVALID', message: '已失效' } }, header: {} })
+  await assert.rejects(
+    fixture.requestModule.request('/api/guest/shared-cart', { requireTableSession: false }),
+    (error) => error && error.code === 'GUEST_SESSION_INVALID',
+  )
+  assert.equal(fixture.tableClearCount(), 1)
+
+  fixture.responses.push({ statusCode: 401, data: { error: { code: 'GUEST_SESSION_INVALID', message: '会员会话失效' } }, header: {} })
+  await assert.rejects(
+    fixture.requestModule.request('/api/public/mini/bootstrap', { requireTableSession: false }),
+    (error) => error && error.code === 'GUEST_SESSION_INVALID',
+  )
+  assert.equal(fixture.tableClearCount(), 1)
+})
 
 test('public requests send only the reservation session and never inherit WeChat bearer or caller cookies', async () => {
   const fixture = await loadRequestModule()

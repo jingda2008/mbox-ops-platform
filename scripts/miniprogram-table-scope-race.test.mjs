@@ -194,7 +194,7 @@ async function loadOrderPage(state) {
   const source = await readFile(new URL('../miniprogram/pages/order/index.js', import.meta.url), 'utf8')
   let definition = null
   const guard = requestGuard()
-  const calls = { retryOrderPayment: 0, checkoutSharedCart: [], requestPayment: [] }
+  const calls = { retryOrderPayment: 0, checkoutSharedCart: [], requestPayment: [], recommendExperience: [] }
   const context = {
     module: { exports: {} }, exports: {}, Page: (value) => { definition = value },
     getApp: () => ({ refreshRuntime: () => state.session }),
@@ -210,7 +210,11 @@ async function loadOrderPage(state) {
             table: { code: state.session.tableCode, displayName: state.session.tableCode },
           }, warning: '' }
         },
-        getMenu: async () => [], getPublicMenu: async () => [], recommendExperience: async () => ({ recommendations: [] }),
+        getMenu: async () => [], getPublicMenu: async () => [], recommendExperience: async (input) => {
+          calls.recommendExperience.push(input)
+          return { recommendations: [], inputConfiguration: state.recommendationConfiguration && state.recommendationConfiguration.inputConfiguration }
+        },
+        getRecommendationConfiguration: async () => state.recommendationConfiguration || { inputConfiguration: { version: 1, questions: [] } },
         recordRecommendationEvent: async () => undefined,
         checkoutSharedCart: async (input, idempotencyKey) => {
           calls.checkoutSharedCart.push({ input, idempotencyKey })
@@ -282,7 +286,15 @@ async function loadOrderPage(state) {
         if (state.requestPaymentError) options.fail(state.requestPaymentError)
         else options.success({ errMsg: 'requestPayment:ok' })
       },
-      showToast: () => undefined,
+      showToast: (input) => {
+        if (!state.toasts) state.toasts = []
+        state.toasts.push(input)
+      },
+      showModal: (input) => {
+        if (!state.modals) state.modals = []
+        state.modals.push(input)
+        if (input.success) input.success({ confirm: state.modalConfirm === true })
+      },
     },
     setTimeout, clearTimeout,
   }
@@ -582,6 +594,31 @@ test('Order does not reopen payment after WeChat accepted it while the server is
   assert.equal(calls.retryOrderPayment, 0)
 })
 
+test('Order renders only the server-owned three questions and sends exactly those answers for guided recommendations', async () => {
+  const state = {
+    session: { tableCode: 'A01', tableToken: 'token-a', cartScope: 'cart-scope-for-turn-a-000000001' },
+    resolvedTableCode: 'A01', resolvedCartScope: 'cart-scope-for-turn-a-000000001', storage: new Map(),
+    recommendationConfiguration: { inputConfiguration: { version: 7, questions: [
+      { code: 'occasion', title: '今晚想怎么喝？', options: [{ value: 'friends', label: '朋友聚一聚' }, { value: 'other', label: '随便看看' }] },
+      { code: 'alcoholPreference', title: '更喜欢哪种感觉？', options: [{ value: 'cocktail', label: '清爽好入口' }, { value: 'undecided', label: '都可以' }] },
+      { code: 'experienceLevel', title: '今晚想从哪种开始？', options: [{ value: 'comfortable', label: '轻松尝尝' }, { value: 'enhanced', label: '来一组刚好' }] },
+    ] } },
+  }
+  const { page, calls } = await loadOrderPage(state)
+  await page.preparePage()
+  page.onRecommend()
+  assert.equal(page.data.recommendationQuestionVisible, true)
+  assert.equal(page.data.recommendationQuestion.title, '今晚想怎么喝？')
+  page.selectRecommendationAnswer({ currentTarget: { dataset: { value: 'friends' } } })
+  page.selectRecommendationAnswer({ currentTarget: { dataset: { value: 'cocktail' } } })
+  page.selectRecommendationAnswer({ currentTarget: { dataset: { value: 'enhanced' } } })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.equal(page.data.recommendationQuestionVisible, false)
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.recommendExperience)), [{
+    recommendationIntent: 'guided', occasion: 'friends', alcoholPreference: 'cocktail', experienceLevel: 'enhanced',
+  }])
+})
+
 test('Order drops the pending record instead of retrying a wrong-table payment', async () => {
   const paymentScope = 'cache.session:fixed-token:cart-scope-for-turn-b-000000002'
   const wrongTable = Object.assign(new Error('wrong table'), { code: 'GUEST_ORDER_ACCESS_FORBIDDEN', statusCode: 409 })
@@ -741,6 +778,36 @@ test('guest cart opens a review sheet before it creates an order or starts payme
   assert.equal(submitCalls, 1)
 })
 
+test('payment confirmation does not freeze shared-cart edits or occupy the menu', async () => {
+  const state = {
+    session: { tableCode: 'A01', tableToken: 'token-a', cartScope: 'cart-scope-for-turn-a-000000001' },
+    storage: new Map(),
+  }
+  const { page } = await loadOrderPage(state)
+  const request = { scope: scope(state.session), generation: 1 }
+  let cartAdjustments = 0
+  page.currentTableRequest = () => request
+  page.isCurrentTableRequest = (value) => value === request
+  page.adjustSharedCart = async () => { cartAdjustments += 1; return true }
+  page.setData({
+    products: [{ productId: 'product-001', available: true }],
+    cart: [{ productId: 'product-001', quantity: 1, available: true }],
+    pendingPayment: { orderPublicId: 'order-pending', amountText: '¥88.00', canContinue: false },
+    checkoutLocked: false,
+    cartWritesFrozen: false,
+    cartSyncing: false,
+    busy: false,
+    checkoutConfirmVisible: false,
+  })
+
+  await page.changeQuantity({ currentTarget: { dataset: { id: 'product-001', delta: '1' } } })
+  assert.equal(cartAdjustments, 1)
+
+  await page.openCheckout()
+  assert.equal(page.data.checkoutConfirmVisible, false)
+  assert.equal(state.toasts.at(-1).title, '本桌付款确认中，可继续加购')
+})
+
 test('shared cart checkout launches WeChat payment immediately after the single confirmation', async () => {
   const state = {
     session: { tableCode: 'A01', tableToken: 'token-a', cartScope: 'cart-scope-for-turn-a-000000001' },
@@ -789,7 +856,7 @@ test('shared cart checkout launches WeChat payment immediately after the single 
   assert.equal(calls.requestPayment.length, 1)
   assert.equal(notificationPromptCalls, 1)
   assert.equal(page.data.checkoutLocked, false)
-  assert.equal(page.data.checkoutGuardVisible, false)
+  assert.equal('checkoutGuardVisible' in page.data, false)
   assert.equal(page.data.pendingPayment, null)
   assert.equal(page.data.paymentResult.title, '付款成功')
   assert.equal(state.storage.get(CHECKOUT_ATTEMPT_KEY), undefined)
@@ -816,7 +883,7 @@ test('definite pre-order checkout rejection unlocks the cart and explains that n
   assert.equal(calls.checkoutSharedCart.length, 1)
   assert.equal(calls.requestPayment.length, 0)
   assert.equal(page.data.checkoutLocked, false)
-  assert.equal(page.data.checkoutGuardVisible, false)
+  assert.equal('checkoutGuardVisible' in page.data, false)
   assert.equal(state.storage.get(CHECKOUT_ATTEMPT_KEY), undefined)
   assert.match(page.data.error, /没有创建订单/)
 })
@@ -840,12 +907,12 @@ test('the previous online-payment-unavailable response also unlocks without crea
 
   assert.equal(calls.checkoutSharedCart.length, 1)
   assert.equal(page.data.checkoutLocked, false)
-  assert.equal(page.data.checkoutGuardVisible, false)
+  assert.equal('checkoutGuardVisible' in page.data, false)
   assert.equal(state.storage.get(CHECKOUT_ATTEMPT_KEY), undefined)
   assert.match(page.data.error, /没有创建订单/)
 })
 
-test('unknown checkout result can be dismissed and retries the same idempotent attempt', async () => {
+test('unknown checkout result preserves and retries the same idempotent attempt without a blocking sheet', async () => {
   const networkError = Object.assign(new Error('connection reset'), { code: 'NETWORK_ERROR' })
   const state = {
     session: { tableCode: 'A01', tableToken: 'token-a', cartScope: 'cart-scope-for-turn-a-000000001' },
@@ -861,11 +928,6 @@ test('unknown checkout result can be dismissed and retries the same idempotent a
   await page.submitOrder(null, false, null, request)
   const retainedAttempt = state.storage.get(CHECKOUT_ATTEMPT_KEY)
   assert.ok(retainedAttempt)
-  assert.equal(page.data.checkoutLocked, true)
-  assert.equal(page.data.checkoutGuardVisible, true)
-
-  page.closeCheckoutGuard()
-  assert.equal(page.data.checkoutGuardVisible, false)
   assert.equal(page.data.checkoutLocked, true)
 
   state.checkoutError = null

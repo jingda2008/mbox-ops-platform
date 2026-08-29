@@ -215,8 +215,8 @@
       </scroll-view>
     </view>
   </block>
-  <view wx:if="{{loginSheetVisible}}" class="login-sheet-mask" catchtouchmove="noop" bindtap="closeLoginSheet">
-    <view class="login-sheet" catchtap="noop">
+  <view wx:if="{{loginSheetVisible}}" class="login-sheet-mask" bindtap="closeLoginSheet">
+    <scroll-view scroll-y class="login-sheet" catchtap="noop">
       <button class="login-sheet__close" aria-label="关闭登录" bindtap="closeLoginSheet">×</button>
       <text class="login-sheet__kicker">M-BOX 会员</text>
       <text class="login-sheet__title">邀请加入 M-BOX 会员</text>
@@ -253,6 +253,6 @@
       </view>
       <text wx:if="{{recoveryMessage}}" class="login-recovery-note">{{recoveryMessage}}</text>
       <text wx:if="{{error}}" class="login-recovery-note login-recovery-note--error">{{error}}</text>
-    </view>
+    </scroll-view>
   </view>
 </view>

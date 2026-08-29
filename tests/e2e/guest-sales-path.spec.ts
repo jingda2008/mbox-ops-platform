@@ -7,7 +7,7 @@ test.describe('客人推荐销售路径', () => {
     await page.goto('/guest?table=W01')
 
     await expect(page.getByTestId('guest-recommendation-tools')).toBeVisible()
-    await expect(page.getByText('今夜特别推荐')).toBeVisible()
+    await expect(page.getByText('今夜甄选')).toBeVisible()
     const comparison = page.getByRole('region', { name: '今夜推荐方案对比' })
     await expect(comparison.locator('.menu-recommendation-option')).toHaveCount(3)
     await expect(comparison.locator('.menu-recommendation-option.is-primary').getByText('人气优选')).toBeVisible()
@@ -34,6 +34,24 @@ test.describe('客人推荐销售路径', () => {
     const detail = page.getByRole('dialog', { name: /商品详情/ })
     await expect(detail).toContainText('这份组合包含')
     await expect(detail).toContainText('按一轮集中准备')
+    await expectNoHorizontalOverflow(page)
+  })
+
+  test('320px 顾客页使用紧凑推荐文案，摇一摇入口不截断', async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 800 })
+    await page.goto('/guest?table=W01')
+
+    const shakePick = page.getByTestId('guest-shake-pick')
+    await expect(shakePick).toBeVisible()
+    await expect(shakePick.getByText('摇一摇喝什么')).toBeVisible()
+    await expect(shakePick.getByText('给今晚一点灵感')).toBeVisible()
+    await expect(page.locator('.menu-recommendation-heading-meta-compact')).toContainText(/位.*已筛选/)
+
+    const copyWidths = await shakePick.locator('strong, small').evaluateAll((elements) => elements.map((element) => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+    })))
+    expect(copyWidths.every(({ clientWidth, scrollWidth }) => scrollWidth <= clientWidth)).toBe(true)
     await expectNoHorizontalOverflow(page)
   })
 

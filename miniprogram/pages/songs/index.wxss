@@ -12,3 +12,5 @@
 .extension-row text { display: block; color: #3e444d; font-size: 24rpx; line-height: 1.45; }
 .extension-row text:last-child { margin-top: 6rpx; color: #7a818b; font-size: 21rpx; }
 .payment-boundary { margin-top: 24rpx; }
+@media (max-width: 390px) { .song-form, .picker-field { min-width: 0; box-sizing: border-box; } }
+@media (max-width: 360px) { .song-title { font-size: 36rpx; } .song-subtitle { font-size: 21rpx; } .picker-field { min-height: 88rpx; padding-right: 18rpx; padding-left: 18rpx; gap: 10rpx; font-size: 24rpx; } .picker-field view text:last-child { font-size: 19rpx; } .extension-row { gap: 12rpx; } }

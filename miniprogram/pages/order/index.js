@@ -3,6 +3,7 @@ const {
   getMenu,
   getPublicMenu,
   recommendExperience,
+  getRecommendationConfiguration,
   recordRecommendationEvent,
   checkoutSharedCart,
   getSharedCart,
@@ -65,17 +66,31 @@ function compactMoney(amount) {
   return `${minor < 0 ? '-' : ''}¥${grouped}${cents ? `.${String(cents).padStart(2, '0')}` : ''}`
 }
 
-const OCCASIONS = [
-  { code: 'date', name: '约会' }, { code: 'friends', name: '朋友聚会' },
-  { code: 'business', name: '商务聊天' }, { code: 'birthday', name: '生日庆祝' },
-  { code: 'music', name: '专心听歌' }, { code: 'relax', name: '轻松坐坐' },
-]
-const ALCOHOL = [
-  { code: 'cocktail', name: '鸡尾酒' }, { code: 'wine', name: '红酒' },
-  { code: 'sparkling', name: '气泡酒' }, { code: 'whisky', name: '威士忌' },
-  { code: 'beer', name: '啤酒' }, { code: 'non_alcoholic', name: '无酒精' },
-  { code: 'undecided', name: '请帮我选' },
-]
+// The app never owns the question wording, answer taxonomy, or the scoring
+// policy. This empty state is intentionally a non-decision: when the policy
+// endpoint is unavailable, customers can still order normally and can request
+// a server-side guided recommendation without seeing stale local questions.
+const EMPTY_RECOMMENDATION_CONFIGURATION = Object.freeze({ version: 0, questions: [] })
+const RECOMMENDATION_QUESTION_CODES = new Set(['occasion', 'alcoholPreference', 'experienceLevel'])
+
+function recommendationConfiguration(value) {
+  const configuration = value && value.inputConfiguration
+  const questions = configuration && Array.isArray(configuration.questions) ? configuration.questions : []
+  const valid = questions.length === 3 && questions.every((question) => (
+    question && RECOMMENDATION_QUESTION_CODES.has(question.code)
+      && typeof question.title === 'string'
+      && Array.isArray(question.options)
+      && question.options.length > 1
+      && question.options.every((option) => option && typeof option.value === 'string' && typeof option.label === 'string')
+  ))
+  return valid
+    ? { version: Number(configuration.version) || 1, questions }
+    : EMPTY_RECOMMENDATION_CONFIGURATION
+}
+
+function recommendationRequest(intent, answers) {
+  return Object.assign({ recommendationIntent: intent }, answers || {})
+}
 const LEGACY_MENU_CATEGORY_HIERARCHY = Object.freeze({
   cocktail: { name: '鸡尾酒', parentCode: 'drinks', parentName: '酒水', parentSortOrder: 20, sortOrder: 10 },
   beer: { name: '啤酒', parentCode: 'drinks', parentName: '酒水', parentSortOrder: 20, sortOrder: 20 },
@@ -291,7 +306,7 @@ function menuCategoryIdentity(item) {
   }
 }
 
-function menuCategoryState(products, selectedTopCategory, selectedSubcategory, includeRecommendations = false) {
+function menuCategoryState(products, selectedTopCategory, selectedSubcategory) {
   const roots = new Map()
   const childrenByRoot = new Map()
   ;(products || []).forEach((item) => {
@@ -309,15 +324,17 @@ function menuCategoryState(products, selectedTopCategory, selectedSubcategory, i
       childrenByRoot.set(category.topCode, children)
     }
   })
-  const leadingCategories = includeRecommendations
-    ? [{ code: 'recommendation', name: '今夜推荐', sortOrder: -2 }, { code: 'all', name: '全部', sortOrder: -1 }]
-    : [{ code: 'all', name: '全部', sortOrder: -1 }]
+  // Recommendations are an always-visible merchandising module, not a menu
+  // category. Keeping the category state strictly about the catalogue means a
+  // customer can browse any menu family without making the recommendation
+  // surface disappear or resetting their selection.
+  const leadingCategories = [{ code: 'all', name: '全部', sortOrder: -1 }]
   const categories = leadingCategories.concat(
     Array.from(roots.values()).sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name, 'zh-CN')),
   )
-  const fallbackTopCode = includeRecommendations ? 'recommendation' : 'all'
+  const fallbackTopCode = 'all'
   const topCode = categories.some((item) => item.code === selectedTopCategory) ? selectedTopCategory : fallbackTopCode
-  const children = topCode === 'all' || topCode === 'recommendation'
+  const children = topCode === 'all'
     ? []
     : Array.from((childrenByRoot.get(topCode) || new Map()).values())
       .sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name, 'zh-CN'))
@@ -391,8 +408,8 @@ Page({
     performanceError: '',
     products: [],
     visibleProducts: [],
-    categories: [{ code: 'recommendation', name: '今夜推荐' }, { code: 'all', name: '全部' }],
-    selectedCategory: 'recommendation',
+    categories: [{ code: 'all', name: '全部' }],
+    selectedCategory: 'all',
     subcategories: [],
     selectedSubcategory: 'all',
     searchText: '',
@@ -402,10 +419,11 @@ Page({
     shakeArmed: false,
     recommendationPublicId: '',
     recommendationAttribution: null,
-    occasionOptions: OCCASIONS,
-    occasionIndex: 1,
-    alcoholOptions: ALCOHOL,
-    alcoholIndex: 6,
+    recommendationConfiguration: EMPTY_RECOMMENDATION_CONFIGURATION,
+    recommendationQuestionVisible: false,
+    recommendationQuestionIndex: 0,
+    recommendationQuestion: null,
+    recommendationAnswers: {},
     cart: [],
     cartVersion: 0,
     cartGeneration: 0,
@@ -419,7 +437,6 @@ Page({
     checkoutConfirmVisible: false,
     pendingPayment: null,
     checkoutLocked: false,
-    checkoutGuardVisible: false,
     paymentResult: null,
     benefitCount: 0,
     membershipInviteVisible: false,
@@ -539,9 +556,10 @@ Page({
       this.initialRecommendationRequested = false
       this.setData({
         busy: false, cartSyncing: false, clearingCart: false, quickServiceBusy: '',
-        checkoutLocked: false, checkoutGuardVisible: false, pendingPayment: null, paymentResult: null, cart: [], cartVersion: 0, cartGeneration: 0,
+        checkoutLocked: false, pendingPayment: null, paymentResult: null, cart: [], cartVersion: 0, cartGeneration: 0,
         cartTotal: '¥0.00', cartTotalCompact: '¥0', cartCount: 0, cartExpanded: false, checkoutConfirmVisible: false, cartWritesFrozen: false,
         recommendations: [], recommendationPublicId: '', recommendationAttribution: null, recommendationError: '', performance: null, performanceError: '',
+        recommendationConfiguration: EMPTY_RECOMMENDATION_CONFIGURATION, recommendationQuestionVisible: false, recommendationQuestionIndex: 0, recommendationQuestion: null, recommendationAnswers: {},
       })
     }
     if (!silent) this.setData({ loading: true, error: '', success: '' })
@@ -549,7 +567,7 @@ Page({
     if (this.recommendationScopeKey !== recommendationScopeKey) {
       this.recommendationScopeKey = recommendationScopeKey
       this.initialRecommendationRequested = false
-      this.setData({ recommendations: [], recommendationPublicId: '', recommendationAttribution: null, recommendationError: '' })
+      this.setData({ recommendations: [], recommendationPublicId: '', recommendationAttribution: null, recommendationError: '', recommendationConfiguration: EMPTY_RECOMMENDATION_CONFIGURATION, recommendationQuestionVisible: false, recommendationQuestionIndex: 0, recommendationQuestion: null, recommendationAnswers: {} })
     }
     const config = getRuntimeConfig()
     if (!session.tableToken && !session.tableCode && !config.isDevelopment) {
@@ -671,15 +689,14 @@ Page({
       getWechatNotificationPrompt('order_checkout').catch(() => ({ available: false, authorizations: [] })),
       getWechatNotificationPrompt('order_selection').catch(() => ({ available: false, authorizations: [] })),
       getServiceRequests().catch(() => null),
+      getRecommendationConfiguration().catch(() => null),
     ])
     if (request && !this.isCurrentTableRequest(request)) return false
     const products = menuProducts(results[0])
     const categoryState = menuCategoryState(
       products,
-      this.data.browseOnly && this.data.selectedCategory === 'all'
-        ? 'recommendation' : this.data.selectedCategory,
-      this.data.selectedSubcategory,
-      true,
+        this.data.selectedCategory,
+        this.data.selectedSubcategory,
     )
     const sharedCart = results[4]
     const cart = sharedCartView(sharedCart, products)
@@ -753,6 +770,7 @@ Page({
       return stored || null
     })()
     const checkoutLocked = Boolean(pendingCheckout)
+    const configuredRecommendations = recommendationConfiguration(results[9])
     this.setData({
       loading: false,
       browseOnly: false,
@@ -768,11 +786,12 @@ Page({
       paymentResult: completedPayment || this.data.paymentResult,
       success: completedPayment ? completedPayment.title : this.data.success,
       checkoutLocked,
-      checkoutGuardVisible: checkoutLocked && !this.data.checkoutLocked,
       membershipTerms: bootstrap && bootstrap.membershipTerms ? bootstrap.membershipTerms : null,
       membershipInviteVisible: false,
       wechatNotificationPromptOptions: (results[6] && results[6].authorizations) || [],
       wechatOrderSelectionPromptOptions: (results[7] && results[7].authorizations) || [],
+      recommendationConfiguration: configuredRecommendations,
+      recommendationQuestion: configuredRecommendations.questions[0] || null,
     })
     this.updateCart(cart, sharedCart)
     this.applyFilters()
@@ -834,28 +853,23 @@ Page({
   onSearchInput(event) { this.setData({ searchText: event.detail.value }, () => this.applyFilters()) },
   selectCategory(event) {
     const selectedCategory = event.currentTarget.dataset.code
-    const categoryState = menuCategoryState(this.data.products, selectedCategory, 'all', !this.data.browseOnly)
+    const categoryState = menuCategoryState(this.data.products, selectedCategory, 'all')
     this.setData(categoryState, () => this.applyFilters())
   },
   selectSubcategory(event) { this.setData({ selectedSubcategory: event.currentTarget.dataset.code }, () => this.applyFilters()) },
   applyFilters() {
     const search = this.data.searchText.trim().toLowerCase()
-    const recommendationView = this.data.selectedCategory === 'recommendation' && !search
     const visibleProducts = this.data.products.filter((item) => {
       const category = menuCategoryIdentity(item)
       const topCategoryMatches = this.data.selectedCategory === 'all'
-        || this.data.selectedCategory === 'recommendation'
         || category.topCode === this.data.selectedCategory
       const subcategoryMatches = this.data.selectedSubcategory === 'all'
         || category.childCode === this.data.selectedSubcategory
       const searchable = [item.name, item.description, item.includedText].concat(item.aliases || []).join(' ').toLowerCase()
-      return !recommendationView && topCategoryMatches && subcategoryMatches && (!search || searchable.includes(search))
+      return topCategoryMatches && subcategoryMatches && (!search || searchable.includes(search))
     })
     this.setData({ visibleProducts })
   },
-
-  onOccasionChange(event) { this.setData({ occasionIndex: Number(event.detail.value) }) },
-  onAlcoholChange(event) { this.setData({ alcoholIndex: Number(event.detail.value) }) },
 
   ensureInitialRecommendations(request) {
     if (request && !this.isCurrentTableRequest(request)) return
@@ -864,16 +878,41 @@ Page({
     void this.recommend('initial', request)
   },
 
-  showRecommendationSurface(onReady) {
-    if (this.data.selectedCategory === 'recommendation' && !this.data.searchText) return onReady()
-    const categoryState = menuCategoryState(this.data.products, 'recommendation', 'all', !this.data.browseOnly)
-    this.setData(Object.assign({}, categoryState, { searchText: '' }), () => {
-      this.applyFilters()
-      onReady()
+  // Recommendation tools must not navigate away from the catalogue. They use
+  // the current table context and simply refresh the fixed, in-page module.
+  showRecommendationSurface(onReady) { return onReady() },
+
+  onRecommend() {
+    if (this.data.recommendationBusy) return
+    const configuration = this.data.recommendationConfiguration
+    if (!configuration.questions.length) return this.recommend('guided')
+    this.setData({
+      recommendationQuestionVisible: true,
+      recommendationQuestionIndex: 0,
+      recommendationQuestion: configuration.questions[0],
+      recommendationError: '',
     })
   },
 
-  onRecommend() { return this.showRecommendationSurface(() => this.recommend('guided')) },
+  closeRecommendationQuestions() { this.setData({ recommendationQuestionVisible: false }) },
+
+  selectRecommendationAnswer(event) {
+    const question = (this.data.recommendationConfiguration.questions || [])[this.data.recommendationQuestionIndex]
+    const value = String(event.currentTarget.dataset.value || '')
+    if (!question || !RECOMMENDATION_QUESTION_CODES.has(question.code)
+      || !question.options.some((option) => option.value === value)) return
+    const answers = Object.assign({}, this.data.recommendationAnswers, { [question.code]: value })
+    const nextIndex = this.data.recommendationQuestionIndex + 1
+    if (nextIndex < this.data.recommendationConfiguration.questions.length) {
+      this.setData({
+        recommendationAnswers: answers,
+        recommendationQuestionIndex: nextIndex,
+        recommendationQuestion: this.data.recommendationConfiguration.questions[nextIndex],
+      })
+      return
+    }
+    this.setData({ recommendationAnswers: answers, recommendationQuestionVisible: false }, () => this.recommend('guided'))
+  },
 
   async recommend(intent, request) {
     const expected = request || this.currentTableRequest()
@@ -882,11 +921,7 @@ Page({
     const recommendationIntent = ['initial', 'guided', 'shake'].includes(intent) ? intent : 'guided'
     this.setData({ recommendationBusy: true, recommendationError: '' })
     try {
-      const occasion = this.data.occasionOptions[this.data.occasionIndex].code
-      const alcoholPreference = this.data.alcoholOptions[this.data.alcoholIndex].code
-      const result = await recommendExperience({
-        occasion, alcoholPreference, experienceLevel: 'enhanced', serviceIntensity: 'balanced', recommendationIntent,
-      })
+      const result = await recommendExperience(recommendationRequest(recommendationIntent, this.data.recommendationAnswers))
       if (!this.isCurrentTableRequest(expected)) return
       const recommendations = menuRecommendations(result.recommendations, this.data.products).slice(0, 3).map((item, index) => Object.assign({}, item, {
         priceText: money(item.amountMinor),
@@ -898,6 +933,7 @@ Page({
         recommendationPublicId: recommendations.length ? result.publicId || '' : '',
         recommendationAttribution: null,
         recommendationError: '',
+        recommendationConfiguration: recommendationConfiguration(result),
       })
       if (result.publicId && recommendations.length) {
         recordRecommendationEvent(result.publicId, 'exposed', null, {
@@ -916,9 +952,6 @@ Page({
   },
 
   onShakeRecommendation() {
-    if (this.data.selectedCategory !== 'recommendation' || this.data.searchText) {
-      return this.showRecommendationSurface(() => this.onShakeRecommendation())
-    }
     if (this.data.recommendationBusy || this.data.shakeArmed) return
     const tableRequest = this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
@@ -988,7 +1021,7 @@ Page({
   },
 
   async addProduct(event) {
-    if (this.data.checkoutLocked || this.data.pendingPayment) return
+    if (this.data.checkoutLocked) return
     const productId = event.currentTarget.dataset.id
     const product = this.data.products.find((item) => item.productId === productId)
     if (!product || !product.available) {
@@ -1018,7 +1051,7 @@ Page({
   },
 
   async rejectRecommendation(event) {
-    if (this.data.checkoutLocked || this.data.pendingPayment) return
+    if (this.data.checkoutLocked) return
     const tableRequest = this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
     const productId = event.currentTarget.dataset.id
@@ -1083,7 +1116,7 @@ Page({
   },
 
   async changeQuantity(event) {
-    if (this.data.checkoutLocked || this.data.pendingPayment) return
+    if (this.data.checkoutLocked) return
     const productId = event.currentTarget.dataset.id
     const delta = Number(event.currentTarget.dataset.delta)
     const product = this.data.products.find((item) => item.productId === productId)
@@ -1177,7 +1210,7 @@ Page({
 
   async clearCart() {
     if (!this.data.cart.length || this.data.cartSyncing || this.data.clearingCart
-      || this.data.checkoutLocked || this.data.pendingPayment || this.data.cartWritesFrozen) return
+      || this.data.checkoutLocked || this.data.cartWritesFrozen) return
     const confirmed = await new Promise((resolve) => wx.showModal({
       title: '清空本桌购物车？',
       content: '同桌顾客当前加入的商品都会被移除；已提交的订单不会受影响。',
@@ -1217,7 +1250,7 @@ Page({
   },
 
   async removeCartLine(event) {
-    if (this.data.cartSyncing || this.data.checkoutLocked || this.data.pendingPayment || this.data.cartWritesFrozen) return
+    if (this.data.cartSyncing || this.data.checkoutLocked || this.data.cartWritesFrozen) return
     const productId=event.currentTarget.dataset.id
     const item=this.data.cart.find((line)=>line.productId===productId)
     if (!item) return
@@ -1253,10 +1286,34 @@ Page({
     this.setData({ checkoutConfirmVisible: true, cartExpanded: false, error: '' })
   },
 
+  async handlePendingPaymentBeforeCheckout() {
+    const pending = this.data.pendingPayment
+    if (!pending) return false
+    if (!pending.canContinue) {
+      wx.showToast({ title: '本桌付款确认中，可继续加购', icon: 'none', duration: 2200 })
+      return true
+    }
+    const shouldContinue = await new Promise((resolve) => wx.showModal({
+      title: '有一笔待付款',
+      content: `上一笔订单待支付 ${pending.amountText || ''}。本次选择会保留，完成上一笔后再提交。`,
+      cancelText: '继续加购',
+      confirmText: '继续付款',
+      confirmColor: '#315d46',
+      success: (result) => resolve(Boolean(result.confirm)),
+      fail: () => resolve(false),
+    }))
+    if (shouldContinue) {
+      this.setData({ checkoutConfirmVisible: false })
+      await this.continuePayment()
+    }
+    return true
+  },
+
   async openCheckout() {
-    if (!this.data.cart.length || this.data.busy || this.data.pendingPayment) return
+    if (!this.data.cart.length || this.data.busy) return
     const tableRequest = this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
+    if (await this.handlePendingPaymentBeforeCheckout()) return
     if (this.data.cartWritesFrozen) {
       this.setData({ error: '服务人员正在核对本桌点单，完成后才能付款。' })
       return
@@ -1274,16 +1331,11 @@ Page({
     this.setData({ checkoutConfirmVisible: false })
   },
 
-  closeCheckoutGuard() {
-    // Dismiss only the blocking sheet. Keep the idempotent attempt and cart
-    // freeze until the server gives a definite result.
-    this.setData({ checkoutGuardVisible: false })
-  },
-
   async confirmCheckout() {
-    if (!this.data.checkoutConfirmVisible || !this.data.cart.length || this.data.busy || this.data.pendingPayment) return
+    if (!this.data.checkoutConfirmVisible || !this.data.cart.length || this.data.busy) return
     const tableRequest = this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
+    if (await this.handlePendingPaymentBeforeCheckout()) return
     if (this.data.cartWritesFrozen) {
       this.setData({ checkoutConfirmVisible: false, error: '服务人员正在核对本桌点单，完成后才能付款。' })
       return
@@ -1310,7 +1362,7 @@ Page({
       || !Number.isSafeInteger(attempt.expectedVersion)
       || attempt.tableScope !== tableSessionCacheScope()) {
       wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
-      this.setData({ checkoutLocked: false, checkoutGuardVisible: false })
+      this.setData({ checkoutLocked: false })
       return
     }
     await this.submitOrder(attempt.offerPublicId || null, false, attempt, tableRequest)
@@ -1339,7 +1391,6 @@ Page({
     this.setData({
       busy: true,
       checkoutLocked: true,
-      checkoutGuardVisible: false,
       error: '',
       success: '',
     })
@@ -1368,7 +1419,7 @@ Page({
       wx.setStorageSync(PENDING_PAYMENT_KEY, pendingPayment)
       wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
       this.updateCart([], data.sharedCart || null)
-      this.setData({ pendingPayment, checkoutLocked: false, checkoutGuardVisible: false })
+      this.setData({ pendingPayment, checkoutLocked: false })
       await this.handlePaymentAction(data.payment && data.payment.providerAction, tableRequest)
     } catch (error) {
       if (!this.isCurrentTableRequest(tableRequest)) return
@@ -1378,7 +1429,6 @@ Page({
         this.setData({
           error: '同桌购物车已经更新，原结账请求没有提交。请确认最新商品后再结账。',
           checkoutLocked: false,
-          checkoutGuardVisible: false,
         })
         return
       }
@@ -1387,7 +1437,6 @@ Page({
         this.setData({
           error: customerErrorMessage(error, '升级内容已经变化，请重新确认后再结账。'),
           checkoutLocked: false,
-          checkoutGuardVisible: false,
         })
         return
       }
@@ -1396,14 +1445,12 @@ Page({
         this.setData({
           error: customerErrorMessage(error, '本次没有创建订单，请确认后重新提交。'),
           checkoutLocked: false,
-          checkoutGuardVisible: false,
         })
         return
       }
       this.setData({
         error: '提交结果暂时无法确认。为避免重复订单，请先重试确认或查看桌账，不要重新选商品。',
         checkoutLocked: true,
-        checkoutGuardVisible: true,
       })
     } finally { if (this.isCurrentTableRequest(tableRequest)) this.setData({ busy: false }) }
   },

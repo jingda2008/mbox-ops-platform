@@ -90,6 +90,7 @@ integration("normalized catalog PostgreSQL integration", () => {
         name: "真实数据库鸡尾酒",
         categoryCode: "cocktail",
         fulfillmentStation: "bar",
+        inventoryControlMode: "not_managed",
         costAmountMinor: 3200,
         productSnapshot: {
           aliases: ["青柠特调", "清爽特调"],
@@ -266,6 +267,7 @@ integration("normalized catalog PostgreSQL integration", () => {
         name: "图片地址校验商品",
         categoryCode: "cocktail",
         fulfillmentStation: "bar",
+        inventoryControlMode: "not_managed",
         costAmountMinor: 3200,
         productSnapshot: { imageUrl: "https://example.com/unbounded-menu.jpg" },
       },
@@ -282,6 +284,7 @@ integration("normalized catalog PostgreSQL integration", () => {
         name: "受控菜单图片商品",
         categoryCode: "cocktail",
         fulfillmentStation: "bar",
+        inventoryControlMode: "not_managed",
         costAmountMinor: 3200,
         productSnapshot: { imageUrl: "/menu/2026-08/items/classic-01.jpg" },
       },
@@ -299,8 +302,8 @@ integration("normalized catalog PostgreSQL integration", () => {
     expect(response.json().data).toEqual([
       expect.objectContaining({
         code: integrationProductCode,
-        isAvailable: false,
-        inventoryConfigurationComplete: false,
+        isAvailable: true,
+        inventoryConfigurationComplete: true,
       }),
     ]);
     const hiddenCode = `HIDDEN-${integrationRunToken}`;
@@ -345,7 +348,6 @@ integration("normalized catalog PostgreSQL integration", () => {
         categoryCode: "combo",
         fulfillmentStation: "none",
         productKind: "bundle",
-        costAmountMinor: 6400,
         bundleComponents: [{ productId: componentId, quantity: 2 }],
         productSnapshot: { description: "两杯今晚精选" },
       },
@@ -372,8 +374,8 @@ integration("normalized catalog PostgreSQL integration", () => {
     expect(guest.json().data).toEqual([
       expect.objectContaining({
         productKind: "bundle",
-        isAvailable: false,
-        inventoryConfigurationComplete: false,
+        isAvailable: true,
+        inventoryConfigurationComplete: true,
         standardPrice: expect.objectContaining({ amountMinor: "22800" }),
         bundleComponents: [expect.objectContaining({ productId: componentId, quantity: 2 })],
       }),
@@ -675,7 +677,8 @@ describe("normalized catalog HTTP API", () => {
       30,
       420,
       3200,
-      "tracked",
+      "not_managed",
+      "manual",
     ]);
     expect(fixture.commandCalls[0]?.requestFingerprint).toContain('"costAmountMinor":3200');
   });
@@ -716,19 +719,18 @@ describe("normalized catalog HTTP API", () => {
     expect(fixture.commandCalls).toHaveLength(0);
   });
 
-  it("fails closed when an active product has no strong cost", async () => {
+  it("allows an active product with incomplete cost so sales can proceed while profit remains explicit", async () => {
     const fixture = await createFixture();
-    const payload = createPayload();
+    const { costAmountMinor: _manualCost, ...payload } = createPayload();
     const response = await fixture.app.inject({
       method: "POST",
       url: "/api/catalog/products",
       headers: { "idempotency-key": "catalog-cost-required-001" },
-      payload: { ...payload, costAmountMinor: null },
+      payload,
     });
 
-    expect(response.statusCode).toBe(400);
-    expect(response.json().error.message).toContain("在售商品必须配置成本金额");
-    expect(fixture.commandCalls).toHaveLength(0);
+    expect(response.statusCode).toBe(201);
+    expect(fixture.commandCalls).toHaveLength(1);
   });
 
   it("checks separate live permissions and requires a nonempty price-change reason", async () => {
@@ -834,6 +836,46 @@ describe("normalized catalog HTTP API", () => {
     });
   });
 
+  it("rejects direct manual costs for tracked and bundle products", async () => {
+    const tracked = await createFixture();
+    const trackedCreate = await tracked.app.inject({
+      method: "POST",
+      url: "/api/catalog/products",
+      headers: { "idempotency-key": "catalog-tracked-auto-cost-001" },
+      payload: { ...createPayload(), inventoryControlMode: "tracked" },
+    });
+    expect(trackedCreate.statusCode).toBe(400);
+    expect(trackedCreate.json().error.message).toContain("自动计算");
+    expect(tracked.commandCalls).toHaveLength(0);
+
+    const bundle = await createFixture();
+    const bundleCreate = await bundle.app.inject({
+      method: "POST",
+      url: "/api/catalog/products",
+      headers: { "idempotency-key": "catalog-bundle-auto-cost-001" },
+      payload: {
+        ...createPayload(),
+        productKind: "bundle",
+        fulfillmentStation: "none",
+        bundleComponents: [{ productId, quantity: 1 }],
+      },
+    });
+    expect(bundleCreate.statusCode).toBe(400);
+    expect(bundleCreate.json().error.message).toContain("自动计算");
+    expect(bundle.commandCalls).toHaveLength(0);
+
+    const trackedUpdate = await createFixture({ inventoryControlMode: "tracked" });
+    const update = await trackedUpdate.app.inject({
+      method: "PATCH",
+      url: `/api/catalog/products/${productId}`,
+      headers: { "idempotency-key": "catalog-tracked-auto-cost-002" },
+      payload: { costAmountMinor: 1150, costChangeReason: "不能绕过入库成本" },
+    });
+    expect(update.statusCode).toBe(400);
+    expect(update.json().error.message).toContain("自动计算");
+    expect(trackedUpdate.calls.some((call) => call.sql.includes("UPDATE mbox.products"))).toBe(false);
+  });
+
   it("configures price commands for serializable conflict retry and maps exhausted conflicts to 409", async () => {
     const exhausted = await createFixture({ serializationFailures: 1 });
     const conflict = await exhausted.app.inject({
@@ -893,6 +935,7 @@ interface FixtureOptions {
   categoryRows?: Array<Record<string, unknown>>;
   serializationFailures?: number;
   failStaffContext?: boolean;
+  inventoryControlMode?: "tracked" | "not_managed";
 }
 
 async function createFixture(options: FixtureOptions = {}) {
@@ -1049,10 +1092,10 @@ function fakeQuery(
     return result([]);
   }
   if (sql.includes("INSERT INTO mbox.products"))
-    return result([productRow(false)]);
+    return result([productRow(false, options.inventoryControlMode)]);
   if (sql.includes("UPDATE mbox.products")) return result([{ id: productId }]);
   if (sql.includes("FROM mbox.products AS product"))
-    return result([productRow(true)]);
+    return result([productRow(true, options.inventoryControlMode)]);
   return result([]);
 }
 
@@ -1062,6 +1105,7 @@ function createPayload() {
     name: "招牌鸡尾酒",
     categoryCode: "wine",
     fulfillmentStation: "bar",
+    inventoryControlMode: "not_managed",
     costAmountMinor: 1050,
     productSnapshot: {
       aliases: ["清爽特调"],
@@ -1071,7 +1115,10 @@ function createPayload() {
   };
 }
 
-function productRow(withPrice: boolean): Record<string, unknown> {
+function productRow(
+  withPrice: boolean,
+  inventoryControlMode: "tracked" | "not_managed" = "not_managed",
+): Record<string, unknown> {
   return {
     id: productId,
     code: "COCKTAIL-01",
@@ -1079,7 +1126,7 @@ function productRow(withPrice: boolean): Record<string, unknown> {
     category_code: "wine",
     fulfillment_station: "bar",
     product_kind: "single",
-    inventory_control_mode: "tracked",
+    inventory_control_mode: inventoryControlMode,
     bundle_components: [],
     bundle_components_available: false,
     inventory_configuration_complete: true,

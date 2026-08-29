@@ -3,10 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
 import { CommercialOpsRepository } from './commercial-ops-repository.js'
-import {
-  OrderProductCostUnavailableError,
-  OrderRepository,
-} from './order-repository.js'
+import { OrderRepository } from './order-repository.js'
 import {
   ScopedPostgresTransactionRunner,
   type PostgresPool,
@@ -118,20 +115,41 @@ integration('order submission cost authority PostgreSQL integration', () => {
     expect(stored.rows[0]?.reference_version).toBeTruthy()
   })
 
-  it('does not create an order when the active product cost is unavailable', async () => {
-    await expect(transactions.run({ tenantId, storeId }, async (transaction) => (
+  it('records an incomplete cost snapshot without blocking an otherwise sellable order', async () => {
+    const order = await transactions.run({ tenantId, storeId }, async (transaction) => (
       new OrderRepository(transaction).createSubmitted({
         tableSessionId,
         publicId: 'missing-cost-order-0001',
         channel: 'guest_qr',
         lines: [{ productId: missingCostProductId, quantity: 1 }],
       })
-    ))).rejects.toBeInstanceOf(OrderProductCostUnavailableError)
-    const count = await pool.query<{ value: string }>(`
-      SELECT count(*)::text AS value FROM mbox.orders
-      WHERE tenant_id=$1 AND store_id=$2 AND public_id='missing-cost-order-0001'
-    `, [tenantId, storeId])
-    expect(count.rows[0]?.value).toBe('0')
+    ))
+    expect(order.items[0]).toMatchObject({
+      unitCostMinorAtSubmission: null,
+      totalCostMinorAtSubmission: null,
+      costSource: 'unavailable',
+      costReferenceProductId: null,
+      costSnapshot: {
+        source: 'unavailable',
+        authority: 'strong_order_item_columns',
+      },
+    })
+    const stored = await pool.query<{
+      unit_cost: string | null
+      total_cost: string | null
+      cost_source: string
+    }>(`
+      SELECT unit_cost_minor_at_submission::text AS unit_cost,
+        total_cost_minor_at_submission::text AS total_cost,
+        cost_source
+      FROM mbox.order_items
+      WHERE tenant_id=$1 AND store_id=$2 AND order_id=$3::uuid
+    `, [tenantId, storeId, order.id])
+    expect(stored.rows[0]).toEqual({
+      unit_cost: null,
+      total_cost: null,
+      cost_source: 'unavailable',
+    })
   })
 
   it('holds the catalog product lock until the order cost is committed', async () => {

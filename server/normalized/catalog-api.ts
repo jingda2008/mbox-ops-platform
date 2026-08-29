@@ -36,6 +36,7 @@ import {
   extractProductOperationalFields,
   type ProductOperationalFields,
 } from "./product-operational-fields.js";
+import { InventoryRepository } from "./inventory-repository.js";
 import { isPublicMiniProgramImageUrl } from './media-asset-url.js';
 
 export const CATALOG_PRODUCT_MANAGE_PERMISSION = "catalog.product.manage";
@@ -476,10 +477,19 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
   );
 
   app.post("/catalog/products", async (request, reply) =>
-    handleRoute(reply, async () => {
-      const context = await resolveStaffContext(options, request);
-      const input = readCreateProduct(request.body);
-      const operational = input.operationalFields;
+      handleRoute(reply, async () => {
+        const context = await resolveStaffContext(options, request);
+        const input = readCreateProduct(request.body);
+        assertAutomaticProductCostInput(
+          input.productKind,
+          input.inventoryControlMode,
+          input.costAmountProvided,
+        );
+        const operational = input.operationalFields;
+        const automaticCost = hasAutomaticProductCost(
+          input.productKind,
+          input.inventoryControlMode,
+        );
       const idempotencyKey = readIdempotencyKey(request);
       const command = catalogCommand(
         request,
@@ -524,13 +534,13 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
           recommendation_hold_minutes, recommendation_upgrade_product_id,
           menu_sort_order, available_from, available_until, allowed_channels,
           max_order_quantity, kds_priority, fulfillment_sla_seconds, cost_amount_minor,
-          inventory_control_mode
+          inventory_control_mode, cost_source
         ) VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8::jsonb, $9,
           $10::boolean, $11::text, $12::boolean, $13::smallint, $14::smallint,
           $15::smallint, $16::text[], $17::text[], $18::text[], $19::text[],
           $20::boolean, $21::smallint, $22::smallint, $23::uuid,
           $24::integer, $25::time, $26::time, $27::text[],
-          $28::smallint, $29::smallint, $30::integer, $31::bigint, $32::text)
+          $28::smallint, $29::smallint, $30::integer, $31::bigint, $32::text, $33::text)
         RETURNING id
       `,
             [
@@ -564,13 +574,21 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
               operational.maxOrderQuantity,
               operational.kdsPriority,
               operational.fulfillmentSlaSeconds,
-              operational.costAmountMinor,
+              automaticCost ? null : operational.costAmountMinor,
               input.inventoryControlMode,
+              automaticCost || operational.costAmountMinor === null
+                ? "incomplete"
+                : "manual",
             ],
           );
           const productId = result.rows[0]?.id;
           if (productId === undefined) throw new Error("Product insert did not return an id");
           await replaceBundleComponents(transaction, productId, input.bundleComponents);
+          if (input.productKind === "bundle") {
+            await new InventoryRepository(transaction).synchronizeBundleCostsForComponentProducts(
+              input.bundleComponents.map((component) => component.productId),
+            );
+          }
           if (input.standardPrice !== null) {
             await replaceCurrentStandardPrice(transaction, productId, input.standardPrice);
           }
@@ -623,9 +641,6 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
               context.employeeId,
               INVENTORY_COST_VIEW_PERMISSION,
             );
-            if (patch.costAmountProvided) {
-              await assertCostPermission(transaction, context.employeeId);
-            }
             if (patch.standardPrice !== null) {
               await assertLivePermission(
                 transaction,
@@ -635,6 +650,17 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
             }
             await lockProduct(transaction, productId);
             const before = mapProduct(await getProduct(transaction, productId));
+            const targetKind = patch.productKind ?? before.productKind;
+            const targetInventoryControlMode =
+              patch.inventoryControlMode ?? before.inventoryControlMode;
+            assertAutomaticProductCostInput(
+              targetKind,
+              targetInventoryControlMode,
+              patch.costAmountProvided,
+            );
+            if (patch.costAmountProvided) {
+              await assertCostPermission(transaction, context.employeeId);
+            }
             const displaySnapshot = patch.productSnapshot ?? before.productSnapshot;
             const operational = strongProductOperationalFields(
               patch.operationalInput,
@@ -642,12 +668,26 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
               displaySnapshot,
               before,
             );
-            const costChanged = operational.costAmountMinor !== before.costAmountMinor;
-            if (costChanged && patch.costChangeReason === null) {
+            const costBasisChanged = targetKind !== before.productKind
+              || targetInventoryControlMode !== before.inventoryControlMode;
+            const targetUsesAutomaticCost = hasAutomaticProductCost(
+              targetKind,
+              targetInventoryControlMode,
+            );
+            // Switching between a managed recipe/bundle and a non-managed
+            // product must never re-label the old cost as the new product's
+            // current cost.  It remains incomplete until its new basis is
+            // confirmed by a receipt, recipe or bundle calculation.
+            const storedCostAmountMinor = costBasisChanged
+              ? null
+              : operational.costAmountMinor;
+            const costChanged = storedCostAmountMinor !== before.costAmountMinor;
+            const manualCostChanged = !targetUsesAutomaticCost
+              && patch.costAmountProvided
+              && costChanged;
+            if (manualCostChanged && patch.costChangeReason === null) {
               throw new CatalogRequestError("修改成本时必须填写成本变更原因");
             }
-            assertActiveProductCost(patch.status ?? before.status, operational.costAmountMinor);
-            const targetKind = patch.productKind ?? before.productKind;
             const targetStation = patch.fulfillmentStation ?? before.fulfillmentStation;
             const targetComponents = patch.bundleComponents ?? before.bundleComponents.map(componentInput);
             assertProductShape(targetKind, targetStation, targetComponents);
@@ -689,10 +729,20 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
               fulfillment_sla_seconds = $30::integer,
               cost_amount_minor = $31::bigint,
               cost_source = CASE
+                WHEN $33::boolean THEN 'incomplete'
+                WHEN (COALESCE($7::text, product_kind) = 'bundle'
+                  OR COALESCE($32::text, inventory_control_mode) = 'tracked')
+                  AND $31::bigint IS NULL
+                  AND $31::bigint IS DISTINCT FROM cost_amount_minor THEN 'incomplete'
                 WHEN $31::bigint IS DISTINCT FROM cost_amount_minor THEN 'manual'
                 ELSE cost_source
               END,
               recipe_cost_version_id = CASE
+                WHEN $33::boolean THEN NULL
+                WHEN (COALESCE($7::text, product_kind) = 'bundle'
+                  OR COALESCE($32::text, inventory_control_mode) = 'tracked')
+                  AND $31::bigint IS NULL
+                  AND $31::bigint IS DISTINCT FROM cost_amount_minor THEN NULL
                 WHEN $31::bigint IS DISTINCT FROM cost_amount_minor THEN NULL
                 ELSE recipe_cost_version_id
               END,
@@ -732,8 +782,9 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
                 operational.maxOrderQuantity,
                 operational.kdsPriority,
                 operational.fulfillmentSlaSeconds,
-                operational.costAmountMinor,
+                storedCostAmountMinor,
                 patch.inventoryControlMode,
+                costBasisChanged,
               ],
             );
             if (result.rowCount !== 1) throw new CatalogProductNotFoundError();
@@ -742,6 +793,11 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
               (patch.bundleComponents !== null || before.productKind !== targetKind)
             ) {
               await replaceBundleComponents(transaction, productId, targetComponents);
+              await new InventoryRepository(transaction).synchronizeBundleCostsForComponentProducts(
+                targetComponents.map((component) => component.productId),
+              );
+            } else if (costChanged && targetKind === "single") {
+              await new InventoryRepository(transaction).synchronizeBundleCostsForComponentProducts([productId]);
             }
             if (patch.standardPrice !== null) {
               await replaceCurrentStandardPrice(transaction, productId, patch.standardPrice);
@@ -760,7 +816,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
               product,
               catalogChangeReason(
                 patch.standardPrice?.reason ?? null,
-                costChanged ? patch.costChangeReason : null,
+                manualCostChanged ? patch.costChangeReason : null,
               ),
               canViewCost,
             );
@@ -1294,6 +1350,26 @@ function assertProductShape(
   if (components.length > 0) {
     throw new CatalogRequestError("普通单品不能配置组合组成清单");
   }
+}
+
+function hasAutomaticProductCost(
+  productKind: ProductKind,
+  inventoryControlMode: InventoryControlMode,
+): boolean {
+  return productKind === "bundle" || inventoryControlMode === "tracked";
+}
+
+function assertAutomaticProductCostInput(
+  productKind: ProductKind,
+  inventoryControlMode: InventoryControlMode,
+  costAmountProvided: boolean,
+): void {
+  if (!costAmountProvided || !hasAutomaticProductCost(productKind, inventoryControlMode)) {
+    return;
+  }
+  throw new CatalogRequestError(
+    "跟踪库存商品和组合商品的成本由确认收货、配方或组成商品自动计算，不能手工填写商品成本",
+  );
 }
 
 async function assertProductIsNotAComponent(
@@ -2009,7 +2085,6 @@ function readCreateProduct(value: unknown): {
   const inventoryControlMode = body.inventoryControlMode === undefined
     ? (requiredCode(body.categoryCode, "categoryCode") === "food" ? "not_managed" : "tracked")
     : readInventoryControlMode(body.inventoryControlMode);
-  assertActiveProductCost(status, operationalFields.costAmountMinor);
   return {
     code,
     name,
@@ -2206,12 +2281,6 @@ function assertDisplayOnlyProductSnapshot(snapshot: Readonly<JsonObject>): void 
       && Object.keys(nested).some((entry) => nestedKeys.has(entry) || topLevel.has(entry))) {
       throw new CatalogRequestError('productSnapshot中的经营字段已停用，请改用强类型字段');
     }
-  }
-}
-
-function assertActiveProductCost(status: ProductStatus, costAmountMinor: number | null): void {
-  if (status === "active" && costAmountMinor === null) {
-    throw new CatalogRequestError("在售商品必须配置成本金额；未知成本请先保存为停用，避免错误经营归因");
   }
 }
 

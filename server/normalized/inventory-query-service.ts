@@ -22,7 +22,11 @@ export interface InventoryItemView {
   wholeUnitCount: boolean;
   reasonableWasteQuantity: string;
   packageVolumeMl: string | null;
-  latestUnitCostMinor?: string | null;
+  costStatus: "complete" | "pending" | "needs_review";
+  costBasis?: "moving_weighted_average" | "manual_correction" | "none";
+  weightedUnitCostMinor?: string | null;
+  latestPurchaseUnitCostMinor?: string | null;
+  latestReceivedAt: string | null;
 }
 
 export interface PurchaseReceiptView {
@@ -40,6 +44,11 @@ export interface PurchaseReceiptView {
     batchCode: string;
     quantity: string;
     baseUnit: string;
+    packageCount?: string;
+    packageVolumeMl?: string | null;
+    unitCostMinor?: string;
+    perPackageCostMinor?: string;
+    totalCostMinor?: string;
   }>;
   createdAt: string;
   receivedAt: string | null;
@@ -98,7 +107,11 @@ interface ItemRow extends Record<string, unknown> {
   whole_unit_count: boolean;
   reasonable_waste_quantity: string;
   package_volume_ml: string | null;
-  latest_unit_cost_minor: string | null;
+  cost_status: "complete" | "pending" | "needs_review";
+  cost_basis: "moving_weighted_average" | "manual_correction" | "none";
+  weighted_unit_cost_minor: string | null;
+  latest_purchase_unit_cost_minor: string | null;
+  latest_received_at: string | null;
 }
 
 interface ReceiptRow extends Record<string, unknown> {
@@ -116,6 +129,11 @@ interface ReceiptRow extends Record<string, unknown> {
     batchCode: string;
     quantity: string;
     baseUnit: string;
+    packageCount?: string;
+    packageVolumeMl?: string | null;
+    unitCostMinor?: string;
+    perPackageCostMinor?: string;
+    totalCostMinor?: string;
   }>;
   created_at: string;
   received_at: string | null;
@@ -166,21 +184,27 @@ export class InventoryQueryService {
           (item.low_stock_threshold IS NOT NULL
             AND balance.on_hand_quantity - balance.reserved_quantity <= item.low_stock_threshold) AS low_stock,
           item.whole_unit_count, item.reasonable_waste_quantity::text,
-          item.package_volume_ml::text,
-          CASE WHEN $3::boolean THEN (
-            SELECT line.unit_cost_minor::text
-            FROM mbox.purchase_receipt_lines AS line
-            JOIN mbox.purchase_receipts AS receipt
-              ON receipt.tenant_id = line.tenant_id AND receipt.store_id = line.store_id
-             AND receipt.id = line.receipt_id AND receipt.status = 'received'
-            WHERE line.tenant_id = item.tenant_id AND line.store_id = item.store_id
-              AND line.inventory_item_id = item.id
-            ORDER BY receipt.received_at DESC, line.id DESC LIMIT 1
-          ) ELSE NULL END AS latest_unit_cost_minor
+          item.package_volume_ml::text, balance.cost_status, balance.cost_basis,
+          CASE WHEN $3::boolean THEN balance.weighted_unit_cost_minor::text ELSE NULL END
+            AS weighted_unit_cost_minor,
+          CASE WHEN $3::boolean THEN balance.latest_purchase_unit_cost_minor::text ELSE NULL END
+            AS latest_purchase_unit_cost_minor,
+          latest_receipt.received_at::text AS latest_received_at
         FROM mbox.inventory_items AS item
         JOIN mbox.inventory_balances AS balance
           ON balance.tenant_id = item.tenant_id AND balance.store_id = item.store_id
          AND balance.inventory_item_id = item.id
+        LEFT JOIN LATERAL (
+          SELECT receipt.received_at
+          FROM mbox.purchase_receipt_lines AS line
+          JOIN mbox.purchase_receipts AS receipt
+            ON receipt.tenant_id=line.tenant_id AND receipt.store_id=line.store_id
+           AND receipt.id=line.receipt_id
+          WHERE line.tenant_id=item.tenant_id AND line.store_id=item.store_id
+            AND line.inventory_item_id=item.id AND receipt.status='received'
+          ORDER BY receipt.received_at DESC NULLS LAST,receipt.id DESC
+          LIMIT 1
+        ) AS latest_receipt ON true
         WHERE item.tenant_id = $1::uuid AND item.store_id = $2::uuid AND item.status = 'active'
         ORDER BY low_stock DESC, item.category_code, item.name, item.id
       `,
@@ -194,13 +218,24 @@ export class InventoryQueryService {
           CASE WHEN $3::boolean THEN receipt.supplier_ref ELSE NULL END AS supplier_ref,
           CASE WHEN $3::boolean THEN receipt.supplier_snapshot ELSE '{}'::jsonb END AS supplier_snapshot,
           count(line.id)::text AS line_count,
-          COALESCE(jsonb_agg(jsonb_build_object(
+          COALESCE(jsonb_agg(jsonb_strip_nulls(jsonb_build_object(
             'inventoryItemId', item.id,
             'itemName', item.name,
             'batchCode', line.batch_code,
             'quantity', line.quantity::text,
-            'baseUnit', item.base_unit
-          ) ORDER BY line.id) FILTER (WHERE line.id IS NOT NULL), '[]'::jsonb) AS lines,
+            'baseUnit', item.base_unit,
+            'packageCount', NULLIF(line.metadata->>'packageCount',''),
+            'packageVolumeMl', item.package_volume_ml::text,
+            'unitCostMinor', CASE WHEN $3::boolean THEN line.unit_cost_minor::text ELSE NULL END,
+            'perPackageCostMinor', CASE
+              WHEN $3::boolean
+                AND (line.metadata->>'packageCount') ~ '^(0|[1-9][0-9]*)([.][0-9]{1,6})?$'
+                AND (line.metadata->>'packageCount')::numeric > 0
+              THEN (line.total_cost_minor::numeric / (line.metadata->>'packageCount')::numeric)::numeric(18,6)::text
+              ELSE NULL
+            END,
+            'totalCostMinor', CASE WHEN $3::boolean THEN line.total_cost_minor::text ELSE NULL END
+          )) ORDER BY line.id) FILTER (WHERE line.id IS NOT NULL), '[]'::jsonb) AS lines,
           receipt.created_at::text, receipt.received_at::text
         FROM mbox.purchase_receipts AS receipt
         LEFT JOIN mbox.purchase_receipt_lines AS line
@@ -273,8 +308,14 @@ export class InventoryQueryService {
           wholeUnitCount: row.whole_unit_count,
           reasonableWasteQuantity: row.reasonable_waste_quantity,
           packageVolumeMl: row.package_volume_ml,
+          costStatus: row.cost_status,
+          latestReceivedAt: row.latest_received_at,
           ...(canViewCosts
-            ? { latestUnitCostMinor: row.latest_unit_cost_minor }
+            ? {
+                weightedUnitCostMinor: row.weighted_unit_cost_minor,
+                latestPurchaseUnitCostMinor: row.latest_purchase_unit_cost_minor,
+                costBasis: row.cost_basis,
+              }
             : {}),
         }));
         return {
@@ -421,7 +462,7 @@ export function assertInventoryPermission(
 export function assertInventoryDashboardAccess(permissions: readonly string[]): void {
   const dashboardPermissions = [
     'inventory.view', 'inventory.manage', 'inventory.cost.view', 'inventory.receive',
-    'inventory.count', 'inventory.waste', 'inventory.barcode.bind',
+    'inventory.count', 'inventory.waste', 'inventory.barcode.bind', 'inventory.cost.correct',
   ]
   if (!dashboardPermissions.some((permission) => permissions.includes(permission))) {
     throw new StaffAccessDeniedError('Employee does not have inventory dashboard access')

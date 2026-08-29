@@ -37,7 +37,7 @@ describe('normalized migration baseline', () => {
       '037', '038', '039', '040', '041', '042', '043', '044', '045', '046', '047', '048',
       '049', '050', '051', '052', '053', '054', '055', '056', '057', '058', '059', '060',
       '061', '062', '063', '064', '065', '066', '067', '068', '069', '070', '071', '072',
-      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099', '100', '101', '102', '103', '104', '105', '106', '107', '108', '109', '110', '111', '112', '113', '114', '115', '116', '117', '118', '119', '120', '121', '122', '123', '124', '125', '126', '127', '128', '129', '130', '131', '132', '133', '134', '135', '136', '137', '138', '139', '140', '141', '142', '143', '144', '145', '146', '147', '148', '149', '150', '151',
+      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099', '100', '101', '102', '103', '104', '105', '106', '107', '108', '109', '110', '111', '112', '113', '114', '115', '116', '117', '118', '119', '120', '121', '122', '123', '124', '125', '126', '127', '128', '129', '130', '131', '132', '133', '134', '135', '136', '137', '138', '139', '140', '141', '142', '143', '144', '145', '146', '147', '148', '149', '150', '151', '152', '153', '154',
     ])
     for (const migration of migrations) {
       expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/)
@@ -422,6 +422,34 @@ describe('normalized migration baseline', () => {
     expect(migration?.sql).toMatch(/CREATE TABLE mbox\.recipe_cost_components/)
     expect(migration?.sql).toMatch(/cost_source IN \('manual','recipe'\)/)
     expect(migration?.sql).toMatch(/schema_version='100'/)
+  })
+
+  it('keeps moving inventory valuation distinct from unverifiable historical stock', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '152')
+    expect(migration?.sql).toMatch(/weighted_unit_cost_minor numeric\(18,6\)/)
+    expect(migration?.sql).toMatch(/cost_status IN \('complete','pending','needs_review'\)/)
+    expect(migration?.sql).toMatch(/cost_basis IN \('moving_weighted_average','manual_correction','none'\)/)
+    expect(migration?.sql).toMatch(/cannot be[\s\S]*silently converted to millilitres/)
+    expect(migration?.sql).toMatch(/inventory_cost_corrections/)
+    expect(migration?.sql).toMatch(/inventory\.cost\.correct/)
+    expect(migration?.sql).toMatch(/schema_version='152'/)
+  })
+
+  it('derives combination-package costs from their component products', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '153')
+    expect(migration?.sql).toMatch(/cost_source IN \('manual','recipe','bundle','incomplete'\)/)
+    expect(migration?.sql).toMatch(/A bundle is not a second manually priced stock input/)
+    expect(migration?.sql).toMatch(/schema_version='153'/)
+  })
+
+  it('does not carry an old tracked-product amount into new cost snapshots when its stock is unverified', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '154')
+    expect(migration?.sql).toMatch(/Historic order snapshots are intentionally untouched/)
+    expect(migration?.sql).toMatch(/product\.inventory_control_mode='tracked'/)
+    expect(migration?.sql).toMatch(/balance\.cost_status<>'complete'/)
+    expect(migration?.sql).toMatch(/cost_source='incomplete'/)
+    expect(migration?.sql).toMatch(/Rebuild every bundle after the stale tracked-product values/)
+    expect(migration?.sql).toMatch(/schema_version='154'/)
   })
 
   it('gives homepage content an explicit pinned or rotating display mode', async () => {

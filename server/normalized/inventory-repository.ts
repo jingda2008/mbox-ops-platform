@@ -128,6 +128,7 @@ export interface RecipeCostComponent {
   componentQuantity: string;
   expectedWasteQuantity: string;
   sourceReceiptLineId: string | null;
+  costBasis: "receipt_line" | "moving_weighted_average" | "manual_correction";
   sourceUnitCostMinor: string | null;
   componentCostMinor: string | null;
 }
@@ -151,7 +152,6 @@ export interface PurchaseReceiptLineInput {
   inventoryItemId: string;
   batchCode: string;
   quantity: string;
-  unitCostMinor?: string | null;
   totalCostMinor: string;
   expiresOn?: string | null;
   metadata?: JsonObject;
@@ -239,6 +239,7 @@ interface RecipeCostRow extends Record<string, unknown> {
   component_quantity: string;
   expected_waste_quantity: string;
   source_receipt_line_id: string | null;
+  cost_basis: "receipt_line" | "moving_weighted_average" | "manual_correction";
   source_unit_cost_minor: string | null;
   component_cost_minor: string | null;
 }
@@ -258,6 +259,23 @@ interface ReceiptLineRow extends Record<string, unknown> {
   inventory_item_id: string;
   quantity: string;
   unit_cost_minor: string;
+}
+
+type InventoryCostStatus = "complete" | "pending" | "needs_review";
+type InventoryCostBasis = "moving_weighted_average" | "manual_correction" | "none";
+
+interface BalanceStateRow extends Record<string, unknown> {
+  on_hand_quantity: string;
+  weighted_unit_cost_minor: string | null;
+  latest_purchase_unit_cost_minor: string | null;
+  cost_status: InventoryCostStatus;
+}
+
+interface LockedBalanceState {
+  onHandQuantity: string;
+  weightedUnitCostMinor: string | null;
+  latestPurchaseUnitCostMinor: string | null;
+  costStatus: InventoryCostStatus;
 }
 
 interface StockCountRow extends Record<string, unknown> {
@@ -372,6 +390,24 @@ export class InventoryRepository {
     itemId: string,
     input: Readonly<UpdateInventoryItemInput>,
   ): Promise<InventoryItemRecord> {
+    const current = requireOne(await this.transaction.query<{
+      base_unit: string;
+    }>(`
+      SELECT base_unit
+      FROM mbox.inventory_items
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+      FOR UPDATE
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      itemId,
+    ]), 'inventory item update target');
+    assertInventoryItemUnitPolicy({
+      baseUnit: current.base_unit,
+      categoryCode: input.categoryCode,
+      packageVolumeMl: input.packageVolumeMl,
+      changingExistingItem: true,
+    });
     const row = requireOne(
       await this.transaction.query<InventoryItemRow>(`
         UPDATE mbox.inventory_items
@@ -401,6 +437,31 @@ export class InventoryRepository {
   async bindBarcode(
     input: Readonly<BindBarcodeInput>,
   ): Promise<{ id: string; replayed: boolean }> {
+    const item = requireOne(
+      await this.transaction.query<{
+        base_unit: string;
+        package_volume_ml: string | null;
+      }>(`
+        SELECT base_unit,package_volume_ml::text
+        FROM mbox.inventory_items
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+        FOR SHARE
+      `, [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        input.inventoryItemId,
+      ]),
+      'inventory item for barcode binding',
+    );
+    const packageQuantity = normalizeDecimal(input.packageQuantity ?? '1');
+    if (item.base_unit === 'ml') {
+      if (item.package_volume_ml === null) {
+        throw new InventoryConflictError('按毫升管理的酒水必须先填写单瓶净含量，才能绑定收货条码');
+      }
+      if (packageQuantity !== normalizeDecimal(item.package_volume_ml)) {
+        throw new InventoryConflictError('毫升库存的条码包装量必须等于单瓶净含量，避免把整瓶成本或扣减误记为1毫升');
+      }
+    }
     const inserted = await this.transaction.query<{ id: string }>(
       `
       INSERT INTO mbox.inventory_barcodes (
@@ -416,7 +477,7 @@ export class InventoryRepository {
         input.inventoryItemId,
         input.code,
         input.codeType ?? "barcode",
-        input.packageQuantity ?? "1",
+        packageQuantity,
         input.employeeId,
       ],
     );
@@ -447,7 +508,7 @@ export class InventoryRepository {
       existing.inventory_item_id !== input.inventoryItemId ||
       existing.code_type !== (input.codeType ?? "barcode") ||
       existing.package_quantity !==
-        normalizeDecimal(input.packageQuantity ?? "1")
+        packageQuantity
     ) {
       throw new InventoryConflictError(
         "Barcode is already bound to a different inventory package",
@@ -476,6 +537,38 @@ export class InventoryRepository {
       inventoryItemId: result.rows[0].inventory_item_id,
       packageQuantity: result.rows[0].package_quantity,
     };
+  }
+
+  async resolveReceiptPackageQuantity(
+    inventoryItemId: string,
+  ): Promise<{ inventoryItemId: string; packageQuantity: string }> {
+    const item = requireOne(
+      await this.transaction.query<{
+        id: string;
+        base_unit: string;
+        package_volume_ml: string | null;
+      }>(`
+        SELECT id,base_unit,package_volume_ml::text
+        FROM mbox.inventory_items
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+          AND status='active'
+        FOR SHARE
+      `, [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        inventoryItemId,
+      ]),
+      'active inventory item for receipt package',
+    );
+    if (item.base_unit === 'ml') {
+      if (item.package_volume_ml === null) {
+        throw new InventoryConflictError(
+          '按毫升管理的酒水必须先填写单瓶净含量，才能按包装数量入库',
+        );
+      }
+      return { inventoryItemId: item.id, packageQuantity: item.package_volume_ml };
+    }
+    return { inventoryItemId: item.id, packageQuantity: '1' };
   }
 
   async replaceActiveRecipe(
@@ -575,9 +668,176 @@ export class InventoryRepository {
   ): Promise<AppliedRecipeCost> {
     if (reason.trim().length < 2 || reason.trim().length > 500)
       throw new TypeError('Recipe cost calculation reason must be 2 to 500 characters');
-    const preview = await this.recipeCostSnapshot(productId, true);
-    if (preview.costAmountMinor === null)
+    const applied = await this.synchronizeTrackedProductRecipeCost(productId, employeeId, reason.trim());
+    if (applied === null)
       throw new InventoryConflictError('所有配方物料都必须有已收货的单位成本，才能计算并应用商品成本');
+    return applied;
+  }
+
+  async synchronizeTrackedProductRecipeCost(
+    productId: string,
+    employeeId: string,
+    reason: string,
+  ): Promise<AppliedRecipeCost | null> {
+    const preview = await this.recipeCostSnapshot(productId, true);
+    if (preview.costAmountMinor === null) {
+      const product = await this.transaction.query<{ id: string }>(`
+        UPDATE mbox.products
+        SET cost_amount_minor=NULL,cost_source='incomplete',recipe_cost_version_id=NULL,
+          updated_at=clock_timestamp()
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+          AND inventory_control_mode='tracked'
+        RETURNING id
+      `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,productId]);
+      if (product.rowCount !== 1) throw new InventoryNotFoundError('tracked product', productId);
+      return null;
+    }
+    return this.persistRecipeCost(preview, employeeId, reason);
+  }
+
+  async synchronizeTrackedRecipeCostsForInventoryItems(
+    inventoryItemIds: readonly string[],
+    employeeId: string,
+    reason: string,
+  ): Promise<AppliedRecipeCost[]> {
+    const uniqueIds = [...new Set(inventoryItemIds)].toSorted();
+    if (uniqueIds.length === 0) return [];
+    const products = await this.transaction.query<{ product_id: string }>(`
+      SELECT DISTINCT recipe.product_id
+      FROM mbox.recipes AS recipe
+      JOIN mbox.recipe_items AS component
+        ON component.tenant_id=recipe.tenant_id AND component.store_id=recipe.store_id
+       AND component.recipe_id=recipe.id
+      JOIN mbox.products AS product
+        ON product.tenant_id=recipe.tenant_id AND product.store_id=recipe.store_id
+       AND product.id=recipe.product_id
+      WHERE recipe.tenant_id=$1::uuid AND recipe.store_id=$2::uuid
+        AND recipe.status='active' AND product.inventory_control_mode='tracked'
+        AND component.inventory_item_id=ANY($3::uuid[])
+      ORDER BY recipe.product_id
+    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,uniqueIds]);
+    const applied: AppliedRecipeCost[] = [];
+    for (const product of products.rows) {
+      const result = await this.synchronizeTrackedProductRecipeCost(
+        product.product_id,
+        employeeId,
+        reason,
+      );
+      if (result !== null) applied.push(result);
+    }
+    // A package's cost is the sum of its component products.  Recalculate it
+    // in the same transaction as the receipt/recipe update so the next order
+    // snapshots the same cost basis rather than a stale manual field.
+    await this.synchronizeBundleCostsForComponentProducts(
+      products.rows.map((product) => product.product_id),
+    );
+    return applied;
+  }
+
+  async synchronizeBundleCostsForComponentProducts(
+    componentProductIds: readonly string[],
+  ): Promise<string[]> {
+    const productIds = [...new Set(componentProductIds)].toSorted();
+    if (productIds.length === 0) return [];
+    const result = await this.transaction.query<{ id: string }>(`
+      WITH affected_bundle AS (
+        SELECT DISTINCT component.bundle_product_id
+        FROM mbox.product_bundle_components AS component
+        WHERE component.tenant_id=$1::uuid AND component.store_id=$2::uuid
+          AND component.component_product_id=ANY($3::uuid[])
+      ), calculated AS (
+        SELECT component.bundle_product_id,
+          CASE
+            WHEN bool_and(component_product.cost_amount_minor IS NOT NULL)
+              AND sum(component_product.cost_amount_minor::numeric * component.quantity::numeric) <= 9007199254740991
+            THEN sum(component_product.cost_amount_minor::numeric * component.quantity::numeric)::bigint
+            ELSE NULL
+          END AS cost_amount_minor
+        FROM mbox.product_bundle_components AS component
+        JOIN affected_bundle AS affected
+          ON affected.bundle_product_id=component.bundle_product_id
+        JOIN mbox.products AS component_product
+          ON component_product.tenant_id=component.tenant_id
+         AND component_product.store_id=component.store_id
+         AND component_product.id=component.component_product_id
+        WHERE component.tenant_id=$1::uuid AND component.store_id=$2::uuid
+        GROUP BY component.bundle_product_id
+      )
+      UPDATE mbox.products AS bundle
+      SET cost_amount_minor=calculated.cost_amount_minor,
+          cost_source=CASE
+            WHEN calculated.cost_amount_minor IS NULL THEN 'incomplete'
+            ELSE 'bundle'
+          END,
+          recipe_cost_version_id=NULL,
+          updated_at=clock_timestamp()
+      FROM calculated
+      WHERE bundle.tenant_id=$1::uuid AND bundle.store_id=$2::uuid
+        AND bundle.id=calculated.bundle_product_id
+        AND bundle.product_kind='bundle'
+      RETURNING bundle.id
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      productIds,
+    ]);
+    return result.rows.map((row) => row.id);
+  }
+
+  async correctInventoryCost(
+    inventoryItemId: string,
+    weightedUnitCostMinor: string,
+    employeeId: string,
+    reason: string,
+  ): Promise<{
+    id: string;
+    inventoryItemId: string;
+    previousWeightedUnitCostMinor: string | null;
+    weightedUnitCostMinor: string;
+    differenceWeightedUnitCostMinor: string | null;
+  }> {
+    if (!/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(weightedUnitCostMinor))
+      throw new TypeError('Corrected inventory unit cost must be a non-negative decimal');
+    if (reason.trim().length < 2 || reason.trim().length > 500)
+      throw new TypeError('Inventory cost correction reason must be 2 to 500 characters');
+    const balance = await this.lockOrCreateBalance(inventoryItemId);
+    const correction = requireOne(await this.transaction.query<{ id: string }>(`
+      INSERT INTO mbox.inventory_cost_corrections(
+        tenant_id,store_id,inventory_item_id,previous_weighted_unit_cost_minor,
+        resulting_weighted_unit_cost_minor,reason,created_by_employee_id
+      ) VALUES($1::uuid,$2::uuid,$3::uuid,$4::numeric,$5::numeric,$6,$7::uuid)
+      RETURNING id
+    `, [
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      inventoryItemId,
+      balance.weightedUnitCostMinor,
+      weightedUnitCostMinor,
+      reason.trim(),
+      employeeId,
+    ]), 'inventory cost correction insert');
+    await this.updateBalanceCostState(inventoryItemId, weightedUnitCostMinor, 'complete', 'manual_correction');
+    await this.synchronizeTrackedRecipeCostsForInventoryItems(
+      [inventoryItemId],
+      employeeId,
+      `库存成本更正后自动重算：${reason.trim()}`,
+    );
+    return {
+      id: correction.id,
+      inventoryItemId,
+      previousWeightedUnitCostMinor: balance.weightedUnitCostMinor,
+      weightedUnitCostMinor: normalizeDecimal(weightedUnitCostMinor),
+      differenceWeightedUnitCostMinor: balance.weightedUnitCostMinor === null
+        ? null
+        : subtractDecimal(weightedUnitCostMinor, balance.weightedUnitCostMinor),
+    };
+  }
+
+  private async persistRecipeCost(
+    preview: RecipeCostPreview,
+    employeeId: string,
+    reason: string,
+  ): Promise<AppliedRecipeCost> {
     const inserted = requireOne(await this.transaction.query<{ id: string; calculated_at: string }>(`
       INSERT INTO mbox.recipe_cost_versions(
         tenant_id,store_id,product_id,recipe_id,recipe_version,cost_amount_minor,currency,
@@ -585,20 +845,20 @@ export class InventoryRepository {
       ) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6::bigint,$7,$8::uuid,$9)
       RETURNING id,calculated_at::text
     `, [
-      this.transaction.scope.tenantId,this.transaction.scope.storeId,productId,preview.recipeId,
+      this.transaction.scope.tenantId,this.transaction.scope.storeId,preview.productId,preview.recipeId,
       preview.recipeVersion,preview.costAmountMinor,preview.currency,employeeId,reason.trim(),
     ]), 'recipe cost version insert');
     for (const component of preview.components) {
-      if (component.sourceReceiptLineId === null || component.sourceUnitCostMinor === null || component.componentCostMinor === null)
+      if (component.sourceUnitCostMinor === null || component.componentCostMinor === null)
         throw new InventoryConflictError('配方成本来源不完整，不能应用');
       await this.transaction.query(`
         INSERT INTO mbox.recipe_cost_components(
           tenant_id,store_id,recipe_cost_version_id,recipe_item_id,inventory_item_id,source_receipt_line_id,
-          component_quantity,expected_waste_quantity,yield_quantity,source_unit_cost_minor,component_cost_minor
-        ) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,$7::numeric,$8::numeric,$9,$10::numeric,$11::numeric)
+          cost_basis,component_quantity,expected_waste_quantity,yield_quantity,source_unit_cost_minor,component_cost_minor
+        ) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,$7,$8::numeric,$9::numeric,$10,$11::numeric,$12::numeric)
       `, [
         this.transaction.scope.tenantId,this.transaction.scope.storeId,inserted.id,component.recipeItemId,
-        component.inventoryItemId,component.sourceReceiptLineId,component.componentQuantity,
+        component.inventoryItemId,component.sourceReceiptLineId,component.costBasis,component.componentQuantity,
         component.expectedWasteQuantity,preview.yieldQuantity,component.sourceUnitCostMinor,component.componentCostMinor,
       ]);
     }
@@ -608,8 +868,8 @@ export class InventoryRepository {
         updated_at=clock_timestamp()
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
       RETURNING id
-    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,productId,preview.costAmountMinor,inserted.id]);
-    if (product.rows[0] === undefined) throw new InventoryNotFoundError('product', productId);
+    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,preview.productId,preview.costAmountMinor,inserted.id]);
+    if (product.rows[0] === undefined) throw new InventoryNotFoundError('product', preview.productId);
     return { ...preview, id: inserted.id, appliedAt: inserted.calculated_at };
   }
 
@@ -619,10 +879,56 @@ export class InventoryRepository {
         component.id AS recipe_item_id,item.id AS inventory_item_id,item.name AS item_name,item.base_unit,
         component.quantity::text AS component_quantity,
         component.expected_waste_quantity::text AS expected_waste_quantity,
-        latest.id AS source_receipt_line_id,latest.unit_cost_minor::text AS source_unit_cost_minor,
-        CASE WHEN latest.id IS NULL THEN NULL
-          ELSE ((component.quantity+component.expected_waste_quantity)*latest.unit_cost_minor/recipe.yield_quantity)::numeric(18,6)::text
-        END AS component_cost_minor
+        NULL::uuid AS source_receipt_line_id,
+        CASE
+          WHEN incoming.id IS NOT NULL AND incoming.receipt_status='draft' THEN 'moving_weighted_average'
+          WHEN balance.cost_basis='manual_correction' THEN 'manual_correction'
+          ELSE 'moving_weighted_average'
+        END::text AS cost_basis,
+        CASE
+          WHEN incoming.id IS NOT NULL AND incoming.receipt_status='draft' THEN
+            CASE
+              WHEN balance.on_hand_quantity=0 THEN incoming.unit_cost_minor
+              WHEN balance.cost_status='complete' AND balance.weighted_unit_cost_minor IS NOT NULL THEN
+                ROUND(((balance.on_hand_quantity*balance.weighted_unit_cost_minor)
+                  +(incoming.quantity*incoming.unit_cost_minor))
+                  /(balance.on_hand_quantity+incoming.quantity),6)
+              ELSE NULL
+            END
+          WHEN balance.cost_status='complete' THEN balance.weighted_unit_cost_minor
+          ELSE NULL
+        END::numeric(18,6)::text AS source_unit_cost_minor,
+        CASE WHEN (
+          CASE
+            WHEN incoming.id IS NOT NULL AND incoming.receipt_status='draft' THEN
+              CASE
+                WHEN balance.on_hand_quantity=0 THEN incoming.unit_cost_minor
+                WHEN balance.cost_status='complete' AND balance.weighted_unit_cost_minor IS NOT NULL THEN
+                  ROUND(((balance.on_hand_quantity*balance.weighted_unit_cost_minor)
+                    +(incoming.quantity*incoming.unit_cost_minor))
+                    /(balance.on_hand_quantity+incoming.quantity),6)
+                ELSE NULL
+              END
+            WHEN balance.cost_status='complete' THEN balance.weighted_unit_cost_minor
+            ELSE NULL
+          END
+        ) IS NULL THEN NULL ELSE (
+          (component.quantity+component.expected_waste_quantity)*(
+            CASE
+              WHEN incoming.id IS NOT NULL AND incoming.receipt_status='draft' THEN
+                CASE
+                  WHEN balance.on_hand_quantity=0 THEN incoming.unit_cost_minor
+                  WHEN balance.cost_status='complete' AND balance.weighted_unit_cost_minor IS NOT NULL THEN
+                    ROUND(((balance.on_hand_quantity*balance.weighted_unit_cost_minor)
+                      +(incoming.quantity*incoming.unit_cost_minor))
+                      /(balance.on_hand_quantity+incoming.quantity),6)
+                  ELSE NULL
+                END
+              WHEN balance.cost_status='complete' THEN balance.weighted_unit_cost_minor
+              ELSE NULL
+            END
+          )/recipe.yield_quantity
+        )::numeric(18,6)::text END AS component_cost_minor
       FROM mbox.recipes AS recipe
       JOIN mbox.recipe_items AS component
         ON component.tenant_id=recipe.tenant_id AND component.store_id=recipe.store_id
@@ -630,22 +936,24 @@ export class InventoryRepository {
       JOIN mbox.inventory_items AS item
         ON item.tenant_id=component.tenant_id AND item.store_id=component.store_id
        AND item.id=component.inventory_item_id
+      JOIN mbox.inventory_balances AS balance
+        ON balance.tenant_id=component.tenant_id AND balance.store_id=component.store_id
+       AND balance.inventory_item_id=component.inventory_item_id
       LEFT JOIN LATERAL (
-        SELECT line.id,line.unit_cost_minor
+        SELECT line.id,line.quantity,line.unit_cost_minor,receipt.status AS receipt_status
         FROM mbox.purchase_receipt_lines AS line
         JOIN mbox.purchase_receipts AS receipt
           ON receipt.tenant_id=line.tenant_id AND receipt.store_id=line.store_id
          AND receipt.id=line.receipt_id
         WHERE line.tenant_id=component.tenant_id AND line.store_id=component.store_id
           AND line.inventory_item_id=component.inventory_item_id
-          AND (receipt.status='received' OR receipt.id=$4::uuid)
-        ORDER BY (receipt.id=$4::uuid) DESC,receipt.received_at DESC,line.id DESC
-        LIMIT 1
-      ) AS latest ON true
+          AND receipt.id=$4::uuid
+        ORDER BY line.id DESC LIMIT 1
+      ) AS incoming ON true
       WHERE recipe.tenant_id=$1::uuid AND recipe.store_id=$2::uuid
         AND recipe.product_id=$3::uuid AND recipe.status='active'
       ORDER BY component.id
-      ${lock ? 'FOR UPDATE OF recipe,component' : ''}
+      ${lock ? 'FOR UPDATE OF recipe,component,balance' : ''}
     `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,productId,preferredReceiptId ?? null]);
     if (result.rows.length === 0) throw new InventoryNotFoundError('active inventory recipe', productId);
     const first = result.rows[0]!;
@@ -653,10 +961,10 @@ export class InventoryRepository {
       recipeItemId: row.recipe_item_id,inventoryItemId: row.inventory_item_id,itemName: row.item_name,
       baseUnit: row.base_unit,componentQuantity: row.component_quantity,
       expectedWasteQuantity: row.expected_waste_quantity,sourceReceiptLineId: row.source_receipt_line_id,
-      sourceUnitCostMinor: row.source_unit_cost_minor,componentCostMinor: row.component_cost_minor,
+      costBasis: row.cost_basis,sourceUnitCostMinor: row.source_unit_cost_minor,componentCostMinor: row.component_cost_minor,
     }));
     const total = components.every((component) => component.componentCostMinor !== null)
-      ? Math.ceil(components.reduce((sum, component) => sum + Number(component.componentCostMinor), 0))
+      ? roundMinorDecimalTotal(components.map((component) => component.componentCostMinor!))
       : null;
     if (total !== null && (!Number.isSafeInteger(total) || total < 0)) throw new InventoryConflictError('配方成本超出允许范围');
     return { productId,recipeId: first.recipe_id,recipeVersion: first.recipe_version,yieldQuantity: first.yield_quantity,
@@ -668,6 +976,14 @@ export class InventoryRepository {
   ): Promise<PurchaseReceiptRecord> {
     if (input.lines.length === 0 || input.lines.length > 200)
       throw new TypeError("Receipt must contain 1 to 200 lines");
+    const lineTotalMinor = input.lines.reduce(
+      (total, line) => total + requireMinorAmount(line.totalCostMinor, 'receipt line total'),
+      0n,
+    );
+    if (input.invoiceTotalMinor !== undefined && input.invoiceTotalMinor !== null
+      && requireMinorAmount(input.invoiceTotalMinor, 'receipt total') !== lineTotalMinor) {
+      throw new InventoryConflictError('收货单总额必须等于各物料本批实际总额之和');
+    }
     const receipt = requireOne(
       await this.transaction.query<{ id: string }>(
         `
@@ -699,8 +1015,8 @@ export class InventoryRepository {
           quantity, unit_cost_minor, total_cost_minor, expires_on, metadata
         ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5,
           $6::numeric,
-          COALESCE($7::numeric, $8::numeric / NULLIF($6::numeric, 0)),
-          $8::bigint, $9::date, $10::jsonb)
+          $7::numeric / NULLIF($6::numeric, 0),
+          $7::bigint, $8::date, $9::jsonb)
       `,
         [
           this.transaction.scope.tenantId,
@@ -709,7 +1025,6 @@ export class InventoryRepository {
           line.inventoryItemId,
           line.batchCode,
           line.quantity,
-          line.unitCostMinor ?? null,
           line.totalCostMinor,
           line.expiresOn ?? null,
           JSON.stringify(line.metadata ?? {}),
@@ -771,7 +1086,7 @@ export class InventoryRepository {
     if (lines.rowCount === 0)
       throw new InventoryConflictError("Receipt has no lines");
     for (const line of lines.rows) {
-      const balance = await this.lockOrCreateBalance(line.inventory_item_id);
+      await this.lockOrCreateBalance(line.inventory_item_id);
       const movement = await this.insertMovement({
         inventoryItemId: line.inventory_item_id,
         movementType: "purchase",
@@ -782,9 +1097,10 @@ export class InventoryRepository {
         reason: "purchase receipt received",
         employeeId,
       });
-      await this.updateBalance(
+      await this.receivePurchasedBalance(
         line.inventory_item_id,
-        addDecimal(balance, line.quantity),
+        line.quantity,
+        line.unit_cost_minor,
         movement,
       );
     }
@@ -807,6 +1123,11 @@ export class InventoryRepository {
         ],
       ),
       "purchase receipt receive",
+    );
+    await this.synchronizeTrackedRecipeCostsForInventoryItems(
+      lines.rows.map((line) => line.inventory_item_id),
+      employeeId,
+      "采购收货确认后按移动加权库存成本自动重算",
     );
     return mapReceipt(updated);
   }
@@ -854,7 +1175,7 @@ export class InventoryRepository {
           count.id,
           line.inventoryItemId,
           line.countedQuantity,
-          balance,
+          balance.onHandQuantity,
           line.reason ?? null,
         ],
       );
@@ -899,7 +1220,7 @@ export class InventoryRepository {
     );
     for (const line of lines.rows) {
       const current = await this.lockOrCreateBalance(line.inventory_item_id);
-      const delta = subtractDecimal(line.counted_quantity, current);
+      const delta = subtractDecimal(line.counted_quantity, current.onHandQuantity);
       if (isZeroDecimal(delta)) continue;
       const movement = await this.insertMovement({
         inventoryItemId: line.inventory_item_id,
@@ -916,6 +1237,11 @@ export class InventoryRepository {
         line.counted_quantity,
         movement,
       );
+      if (compareDecimal(delta, "0") > 0) {
+        await this.updateBalanceCostState(line.inventory_item_id, null, "needs_review", "none");
+      } else if (isZeroDecimal(line.counted_quantity)) {
+        await this.updateBalanceCostState(line.inventory_item_id, null, "pending", "none");
+      }
     }
     const updated = requireOne(
       await this.transaction.query<StockCountRow>(
@@ -983,14 +1309,23 @@ export class InventoryRepository {
     employeeId: string,
     reason: string,
     approvedOverride = false,
-  ): Promise<{ movementId: string; remainingQuantity: string }> {
+    wasteType = "other",
+  ): Promise<{
+    movementId: string;
+    remainingQuantity: string;
+    baseUnit: string;
+    wasteType: string;
+    unitCostMinor: string | null;
+    wasteCostMinor: string | null;
+  }> {
     const item = requireOne(
       await this.transaction.query<{
         sku: string;
+        base_unit: string;
         reasonable_waste_quantity: string;
       }>(
         `
-      SELECT sku, reasonable_waste_quantity::text
+      SELECT sku, base_unit, reasonable_waste_quantity::text
       FROM mbox.inventory_items
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid AND status = 'active'
       FOR SHARE
@@ -1012,20 +1347,33 @@ export class InventoryRepository {
       );
     }
     const balance = await this.lockOrCreateBalance(inventoryItemId);
-    if (compareDecimal(balance, quantity) < 0)
-      throw new InsufficientInventoryError(item.sku, balance, quantity);
+    if (compareDecimal(balance.onHandQuantity, quantity) < 0)
+      throw new InsufficientInventoryError(item.sku, balance.onHandQuantity, quantity);
     const movement = await this.insertMovement({
       inventoryItemId,
       movementType: "waste",
       quantityDelta: `-${normalizeDecimal(quantity)}`,
+      unitCostMinor: balance.weightedUnitCostMinor,
       referenceType: "manual_waste",
       reason,
       employeeId,
-      metadata: { approvedOverride },
+      metadata: { approvedOverride, wasteType },
     });
-    const remaining = subtractDecimal(balance, quantity);
+    const remaining = subtractDecimal(balance.onHandQuantity, quantity);
     await this.updateBalance(inventoryItemId, remaining, movement);
-    return { movementId: movement, remainingQuantity: remaining };
+    if (isZeroDecimal(remaining)) {
+      await this.updateBalanceCostState(inventoryItemId, null, "pending", "none");
+    }
+    return {
+      movementId: movement,
+      remainingQuantity: remaining,
+      baseUnit: item.base_unit,
+      wasteType,
+      unitCostMinor: balance.weightedUnitCostMinor,
+      wasteCostMinor: balance.weightedUnitCostMinor === null
+        ? null
+        : roundDecimalProductToMinor(quantity, balance.weightedUnitCostMinor),
+    };
   }
 
   async storeBottle(input: {
@@ -1940,7 +2288,7 @@ export class InventoryRepository {
       throw new InventoryNotFoundError("open table session", tableSessionId);
   }
 
-  private async lockOrCreateBalance(inventoryItemId: string): Promise<string> {
+  private async lockOrCreateBalance(inventoryItemId: string): Promise<LockedBalanceState> {
     await this.transaction.query(
       `
       INSERT INTO mbox.inventory_balances (tenant_id, store_id, inventory_item_id)
@@ -1953,9 +2301,10 @@ export class InventoryRepository {
         inventoryItemId,
       ],
     );
-    const result = await this.transaction.query<{ on_hand_quantity: string }>(
+    const result = await this.transaction.query<BalanceStateRow>(
       `
-      SELECT on_hand_quantity::text
+      SELECT on_hand_quantity::text,weighted_unit_cost_minor::text,
+        latest_purchase_unit_cost_minor::text,cost_status,cost_basis
       FROM mbox.inventory_balances
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND inventory_item_id = $3::uuid
       FOR UPDATE
@@ -1968,7 +2317,13 @@ export class InventoryRepository {
     );
     if (!result.rows[0])
       throw new InventoryBalanceMissingError(inventoryItemId);
-    return result.rows[0].on_hand_quantity;
+    const row = result.rows[0];
+    return {
+      onHandQuantity: row.on_hand_quantity,
+      weightedUnitCostMinor: row.weighted_unit_cost_minor,
+      latestPurchaseUnitCostMinor: row.latest_purchase_unit_cost_minor,
+      costStatus: row.cost_status,
+    };
   }
 
   private async updateBalance(
@@ -1995,6 +2350,75 @@ export class InventoryRepository {
       throw new InventoryConflictError(
         "Inventory balance update would violate reserved stock",
       );
+  }
+
+  private async receivePurchasedBalance(
+    inventoryItemId: string,
+    quantity: string,
+    unitCostMinor: string,
+    movementId: string,
+  ): Promise<void> {
+    const result = await this.transaction.query(
+      `
+      UPDATE mbox.inventory_balances
+      SET on_hand_quantity=on_hand_quantity+$4::numeric,
+          weighted_unit_cost_minor=CASE
+            WHEN on_hand_quantity=0 THEN $5::numeric
+            WHEN cost_status='complete' AND weighted_unit_cost_minor IS NOT NULL
+              THEN ROUND(((on_hand_quantity*weighted_unit_cost_minor)+($4::numeric*$5::numeric))
+                /(on_hand_quantity+$4::numeric),6)
+            ELSE NULL
+          END,
+          latest_purchase_unit_cost_minor=$5::numeric,
+          cost_status=CASE
+            WHEN on_hand_quantity=0 THEN 'complete'
+            WHEN cost_status='complete' AND weighted_unit_cost_minor IS NOT NULL THEN 'complete'
+            ELSE 'needs_review'
+          END,
+          cost_basis=CASE
+            WHEN on_hand_quantity=0 THEN 'moving_weighted_average'
+            WHEN cost_status='complete' AND weighted_unit_cost_minor IS NOT NULL THEN 'moving_weighted_average'
+            ELSE 'none'
+          END,
+          last_movement_id=$6::uuid,updated_at=clock_timestamp()
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND inventory_item_id=$3::uuid
+      `,
+      [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        inventoryItemId,
+        quantity,
+        unitCostMinor,
+        movementId,
+      ],
+    );
+    if (result.rowCount !== 1)
+      throw new InventoryBalanceMissingError(inventoryItemId);
+  }
+
+  private async updateBalanceCostState(
+    inventoryItemId: string,
+    weightedUnitCostMinor: string | null,
+    costStatus: InventoryCostStatus,
+    costBasis: InventoryCostBasis,
+  ): Promise<void> {
+    const result = await this.transaction.query(
+      `
+      UPDATE mbox.inventory_balances
+      SET weighted_unit_cost_minor=$4::numeric,cost_status=$5,cost_basis=$6,updated_at=clock_timestamp()
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND inventory_item_id=$3::uuid
+      `,
+      [
+        this.transaction.scope.tenantId,
+        this.transaction.scope.storeId,
+        inventoryItemId,
+        weightedUnitCostMinor,
+        costStatus,
+        costBasis,
+      ],
+    );
+    if (result.rowCount !== 1)
+      throw new InventoryBalanceMissingError(inventoryItemId);
   }
 
   private async insertMovement(input: {
@@ -2165,6 +2589,32 @@ export class InventoryRepository {
   }
 }
 
+function assertInventoryItemUnitPolicy(input: {
+  baseUnit: string;
+  categoryCode: string;
+  packageVolumeMl: string | null;
+  changingExistingItem: boolean;
+}): void {
+  if (!isLiquidInventoryCategory(input.categoryCode)) return;
+  if (input.baseUnit !== 'ml') {
+    throw new InventoryConflictError(input.changingExistingItem
+      ? '历史瓶装或件装物料不能直接改成酒水品类；请新建按毫升管理的替代物料，再按盘点/迁移流程衔接库存'
+      : '酒水、葡萄酒、啤酒、糖浆和果汁必须按毫升（ml）建库存');
+  }
+  if (input.packageVolumeMl === null) {
+    throw new InventoryConflictError('按毫升管理的酒水必须填写单瓶净含量（ml/瓶），否则无法安全换算入库量和单位成本');
+  }
+}
+
+function isLiquidInventoryCategory(categoryCode: string): boolean {
+  return categoryCode === 'spirits' || categoryCode.startsWith('spirits.')
+    || categoryCode === 'wine' || categoryCode.startsWith('wine.')
+    || categoryCode === 'mixer' || categoryCode.startsWith('mixer.')
+    || categoryCode === 'beer' || categoryCode.startsWith('beer.')
+    || categoryCode === 'bottled_spirits' || categoryCode.startsWith('bottled_spirits.')
+    || categoryCode === 'alcohol' || categoryCode.startsWith('alcohol.');
+}
+
 function mapItem(row: InventoryItemRow): InventoryItemRecord {
   return {
     id: row.id,
@@ -2241,6 +2691,11 @@ function normalizeDecimal(value: string): string {
   return `${integer}.${fraction.padEnd(6, "0")}`;
 }
 
+function requireMinorAmount(value: string, label: string): bigint {
+  if (!/^\d+$/.test(value)) throw new TypeError(`${label} must be a non-negative integer minor amount`);
+  return BigInt(value);
+}
+
 function decimalToBigInt(value: string): bigint {
   const normalized = normalizeDecimal(value);
   const negative = normalized.startsWith("-");
@@ -2255,10 +2710,6 @@ function bigIntToDecimal(value: bigint): string {
   return `${sign}${absolute / 1_000_000n}.${(absolute % 1_000_000n).toString().padStart(6, "0")}`;
 }
 
-function addDecimal(left: string, right: string): string {
-  return bigIntToDecimal(decimalToBigInt(left) + decimalToBigInt(right));
-}
-
 function subtractDecimal(left: string, right: string): string {
   return bigIntToDecimal(decimalToBigInt(left) - decimalToBigInt(right));
 }
@@ -2270,6 +2721,25 @@ function compareDecimal(left: string, right: string): number {
 
 function isZeroDecimal(value: string): boolean {
   return decimalToBigInt(value) === 0n;
+}
+
+function roundMinorDecimalTotal(values: readonly string[]): number {
+  const micros = values.reduce((total, value) => total + decimalToBigInt(value), 0n);
+  if (micros < 0n) throw new InventoryConflictError('配方成本不能为负数');
+  // Recipe components remain precise to six decimal places. Round only once,
+  // after their exact sum, to the integer minor currency unit stored on a sale.
+  const rounded = (micros + 500_000n) / 1_000_000n;
+  if (rounded > BigInt(Number.MAX_SAFE_INTEGER))
+    throw new InventoryConflictError('配方成本超出允许范围');
+  return Number(rounded);
+}
+
+function roundDecimalProductToMinor(left: string, right: string): string {
+  const product = decimalToBigInt(left) * decimalToBigInt(right);
+  if (product < 0n) throw new InventoryConflictError('成本不能为负数');
+  // Both operands retain six decimal places.  Round the final total once to
+  // the currency minor unit, matching recipe and order-cost rounding.
+  return ((product + 500_000_000_000n) / 1_000_000_000_000n).toString();
 }
 
 function requireUuid(name: string, value: string): void {

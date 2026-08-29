@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.0.0-rc.161 - 2026-08-29
+
+- Completes the guest self-checkout exit path: leaving the last native WeChat
+  payment step records an idempotent abandonment, immediately releases the
+  unpaid order from customer and staff operational views, and makes the table
+  available for turnover or a fresh checkout.
+- Adds server-side reconciliation for abandoned guest checkout attempts. It
+  queries and closes stale payment intents, keeps an append-only audit trail,
+  and turns a later confirmed collection into a controlled refund follow-up
+  without reviving fulfillment, stock consumption, KDS work or loyalty.
+- Moves the actual staff table actions used in production into a closeable,
+  keyboard-safe dialog. Collection, assisted ordering, gifting, recommendation,
+  service notes, transfer and turnover now use that dialog rather than a panel
+  inserted below the table grid.
+- Adds normalized migration 151 for guest checkout reconciliation facts and
+  regression coverage that exercises the dialog's own order and payment
+  controls, rather than hidden background controls.
+
 ## 1.0.0-rc.160 - 2026-08-29
 
 - Keeps the three sellable “今夜甄选” recommendations visible before a guest

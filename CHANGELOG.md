@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.0-rc.160 - 2026-08-29
+
+- Keeps the three sellable “今夜甄选” recommendations visible before a guest
+  chooses either guided selection or shaking, while preserving server-owned
+  ranking and current-table sellability gates.
+- Treats a guest's explicit exit from the final WeChat payment step as an
+  abandoned self-checkout: the unpaid order, payment attempt, temporary stock
+  reservation and unstarted fulfillment are cancelled, so it cannot block
+  re-ordering, staff views, table turnover or business-day close.
+- Retains a late provider capture as a reviewable financial exception that may
+  be refunded, without reviving order fulfillment, stock consumption, KDS work
+  or loyalty/recommendation attribution.
+- Opens staff table actions in a closeable dialog instead of scrolling away from
+  the selected table, and keeps recommendation-rule versioning separate from
+  customer rollout controls.
+
 ## 1.0.0-rc.159 - 2026-08-29
 
 - Moves the native mini-program recommendation questions and recommendation

@@ -55,6 +55,7 @@ import {
 import { OrderProductUnavailableError, TableSessionUnavailableForOrderError } from './order-repository.js'
 import type { InitiatePaymentCommand, PaymentCommandService } from './payment-command-service.js'
 import { OrderNotPayableError, type Payment } from './payment-repository.js'
+import { PaymentFulfillmentRepository } from './payment-fulfillment-repository.js'
 import { FulfillmentCapacityUnavailableError } from './fulfillment-capacity-repository.js'
 import type { OnlinePaymentAction, OnlinePaymentService } from './online-payment-service.js'
 import {
@@ -91,8 +92,9 @@ export interface GuestCommerceServiceApiOptions {
   commerce: Pick<CommerceCommandService, 'submitOrder'>
     & Partial<Pick<CommerceCommandService, 'submitOrderInTransaction'>>
   payments: Pick<PaymentCommandService, 'initiate'>
-    & Partial<Pick<PaymentCommandService, 'initiateInTransaction'>>
+    & Partial<Pick<PaymentCommandService, 'initiateInTransaction' | 'recordProviderQueryResult'>>
   onlinePayments: Pick<OnlinePaymentService, 'create' | 'assertGuestJsapiReady' | 'assertAvailable' | 'resolveActivePayment'>
+    & Partial<Pick<OnlinePaymentService, 'close'>>
   resolveGuestContext(request: FastifyRequest): Promise<GuestRequestContext> | GuestRequestContext
   resolvePublicContext(request: FastifyRequest): Promise<{ scope: Readonly<StoreScope> }> | { scope: Readonly<StoreScope> }
   resolveDeviceFingerprint(request: FastifyRequest): string
@@ -498,6 +500,79 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
       }
       const action = await createGuestProviderAction(options, context, payment.value, orderPublicId, request.ip)
       return reply.send({ data: action, meta: { replayed: payment.replayed } })
+    }),
+  )
+
+  // A customer leaving the final WeChat sheet is not a staff-held order.  End
+  // its operational life immediately so it cannot lock stock, a table or the
+  // next checkout.  The provider rail is reconciled afterwards: a late
+  // capture remains an auditable refund case, never a revived order.
+  app.post<{ Params: { orderPublicId: string } }>(
+    '/guest/orders/:orderPublicId/abandon-checkout',
+    async (request, reply) => handleRoute(reply, async () => {
+      const context = await requireTableContext(options, request, 'guest.order.create')
+      const orderPublicId = readPublicId(request.params.orderPublicId, 'orderPublicId')
+      const idempotencyKey = readIdempotencyKey(request)
+      const execution = await options.commandExecutor.execute({
+        scope: context.scope,
+        operationScope: 'guest.self_checkout.abandon',
+        idempotencyKey,
+        requestFingerprint: stableJson({
+          orderPublicId,
+          tableSessionId: context.tableSessionId,
+          customerId: context.customerId,
+        }),
+        resultCodec: guestCheckoutAbandonmentCodec,
+      }, async (transaction) => {
+        if (!await lockBoundGuestTablePosition(transaction, context)) {
+          throw new GuestAuthenticationRequiredError()
+        }
+        const result = await abandonGuestSelfCheckout(transaction, context, orderPublicId)
+        return {
+          result,
+          auditEvents: [{
+            actor: guestActor(context),
+            action: 'guest.self_checkout.abandoned',
+            objectType: 'order',
+            objectId: result.orderId,
+            businessDate: context.businessDate,
+            afterData: {
+              orderPublicId: result.orderPublicId,
+              paymentPublicId: result.paymentPublicId,
+              alreadyCancelled: result.alreadyCancelled,
+              cancelledItemCount: result.cancelledItemCount,
+              releasedInventoryReservationCount: result.releasedInventoryReservationCount,
+              invalidatedCheckoutUpgradeCount: result.invalidatedCheckoutUpgradeCount,
+            },
+            reason: '顾客退出小程序微信支付；订单不再作为现场待处理事项',
+          }],
+          outboxMessages: [{
+            businessEventKey: `guest-self-checkout-abandoned:${result.orderId}`,
+            aggregateType: 'order',
+            aggregateId: result.orderId,
+            aggregateVersion: 3,
+            eventType: 'guest.self_checkout.abandoned.v1',
+            payload: {
+              orderId: result.orderId,
+              orderPublicId: result.orderPublicId,
+              paymentId: result.paymentId,
+              alreadyCancelled: result.alreadyCancelled,
+              source: 'guest_wechat_payment_exit',
+            },
+          }],
+        }
+      })
+      const paymentRail = await reconcileAbandonedGuestCheckoutPayment(
+        options, context, execution.value, idempotencyKey,
+      )
+      return reply.send({
+        data: {
+          orderPublicId: execution.value.orderPublicId,
+          operationalState: 'cancelled',
+          paymentState: paymentRail,
+        },
+        meta: { replayed: execution.replayed },
+      })
     }),
   )
 
@@ -1194,6 +1269,241 @@ function assertGuestSelfPaymentMode(mode: GuestCheckoutPaymentMode): void {
       '顾客小程序支付配置异常；本次没有创建订单，请联系服务员',
       503,
     )
+  }
+}
+
+interface GuestCheckoutAbandonmentResult {
+  orderId: string
+  orderPublicId: string
+  paymentId: string | null
+  paymentPublicId: string | null
+  alreadyCancelled: boolean
+  cancelledItemCount: number
+  releasedInventoryReservationCount: number
+  invalidatedCheckoutUpgradeCount: number
+}
+
+const guestCheckoutAbandonmentCodec: JsonCodec<GuestCheckoutAbandonmentResult> = {
+  encode: (value) => ({ ...value }),
+  decode: (value) => {
+    const row = jsonObject(value)
+    if (typeof row.orderId !== 'string' || typeof row.orderPublicId !== 'string'
+      || !(typeof row.paymentId === 'string' || row.paymentId === null)
+      || !(typeof row.paymentPublicId === 'string' || row.paymentPublicId === null)
+      || typeof row.alreadyCancelled !== 'boolean'
+      || typeof row.cancelledItemCount !== 'number'
+      || typeof row.releasedInventoryReservationCount !== 'number'
+      || typeof row.invalidatedCheckoutUpgradeCount !== 'number') {
+      throw new TypeError('Stored guest checkout abandonment result is invalid')
+    }
+    return row as unknown as GuestCheckoutAbandonmentResult
+  },
+}
+
+async function abandonGuestSelfCheckout(
+  transaction: ScopedTransaction,
+  context: GuestRequestContext & { tableSessionId: string },
+  orderPublicId: string,
+): Promise<GuestCheckoutAbandonmentResult> {
+  const locked = await transaction.query<{
+    id: string
+    public_id: string
+    status: string
+    channel: string
+    settlement_mode: string
+    created_by_customer_id: string | null
+    fulfillment_state: string
+  }>(`
+    SELECT ordering.id,ordering.public_id,ordering.status,ordering.channel,
+      ordering.settlement_mode,ordering.created_by_customer_id,ordering.fulfillment_state
+    FROM mbox.orders ordering
+    JOIN mbox.table_sessions session
+      ON session.tenant_id=ordering.tenant_id AND session.store_id=ordering.store_id
+     AND session.id=ordering.table_session_id
+    WHERE ordering.tenant_id=$1::uuid AND ordering.store_id=$2::uuid
+      AND ordering.table_session_id=$3::uuid AND ordering.public_id=$4
+    FOR UPDATE OF ordering,session
+  `, [transaction.scope.tenantId, transaction.scope.storeId, context.tableSessionId, orderPublicId])
+  const order = locked.rows[0]
+  if (order === undefined) {
+    throw new GuestApiRequestError('GUEST_CHECKOUT_NOT_FOUND', '本次付款已结束，请重新选购后再支付', 404)
+  }
+  if (order.channel !== 'guest_qr' || order.settlement_mode !== 'immediate_payment'
+    || order.created_by_customer_id !== context.customerId) {
+    throw new GuestApiRequestError('GUEST_CHECKOUT_CANNOT_BE_CANCELLED', '这笔订单需要由工作人员按实际情况处理', 409)
+  }
+
+  const payments = await transaction.query<{
+    id: string
+    public_id: string
+    status: Payment['status']
+  }>(`
+    SELECT id,public_id,status
+    FROM mbox.payments
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND order_id=$3::uuid
+    ORDER BY created_at DESC,id DESC
+    FOR UPDATE
+  `, [transaction.scope.tenantId, transaction.scope.storeId, order.id])
+  const payment = payments.rows[0] ?? null
+  if (payment !== null && ['succeeded', 'partially_refunded', 'refunded'].includes(payment.status)) {
+    throw new GuestApiRequestError(
+      'GUEST_CHECKOUT_ALREADY_PAID',
+      '付款已成功，本桌会按实际支付状态处理，请查看本桌账单',
+      409,
+    )
+  }
+  if (order.status === 'cancelled') {
+    return {
+      orderId: order.id,
+      orderPublicId: order.public_id,
+      paymentId: payment?.id ?? null,
+      paymentPublicId: payment?.public_id ?? null,
+      alreadyCancelled: true,
+      cancelledItemCount: 0,
+      releasedInventoryReservationCount: 0,
+      invalidatedCheckoutUpgradeCount: 0,
+    }
+  }
+  if (order.status !== 'submitted' || order.fulfillment_state === 'active') {
+    throw new GuestApiRequestError('GUEST_CHECKOUT_CANNOT_BE_CANCELLED', '订单已进入服务流程，请联系工作人员处理', 409)
+  }
+  const operationalWork = await transaction.query<{ id: string }>(`
+    SELECT item.id
+    FROM mbox.order_items item
+    LEFT JOIN mbox.kds_tasks task
+      ON task.tenant_id=item.tenant_id AND task.store_id=item.store_id AND task.order_item_id=item.id
+    WHERE item.tenant_id=$1::uuid AND item.store_id=$2::uuid AND item.order_id=$3::uuid
+      AND (item.status='delivered' OR task.status IN ('accepted','preparing','ready'))
+    LIMIT 1
+    FOR UPDATE OF item
+  `, [transaction.scope.tenantId, transaction.scope.storeId, order.id])
+  if (operationalWork.rowCount !== 0) {
+    throw new GuestApiRequestError('GUEST_CHECKOUT_CANNOT_BE_CANCELLED', '订单已开始出品，请联系工作人员处理', 409)
+  }
+
+  if (payment !== null) {
+    await transaction.query(`
+      UPDATE mbox.payment_provider_actions
+      SET state='failed',ciphertext=NULL,nonce=NULL,auth_tag=NULL,
+          expires_at=clock_timestamp(),last_error_code='guest_checkout_abandoned',updated_at=clock_timestamp()
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND payment_id=$3::uuid
+        AND state IN ('creating','ready','unknown')
+    `, [transaction.scope.tenantId, transaction.scope.storeId, payment.id])
+  }
+  const fulfillment = await new PaymentFulfillmentRepository(transaction).abandonGuestSelfCheckout(
+    order.id,
+    'guest left the final WeChat payment sheet',
+  )
+  const cancelledItems = await transaction.query(`
+    UPDATE mbox.order_items
+    SET status='cancelled',updated_at=clock_timestamp()
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND order_id=$3::uuid
+      AND status<>'cancelled'
+  `, [transaction.scope.tenantId, transaction.scope.storeId, order.id])
+  const invalidatedUpgrade = await transaction.query<{ id: string }>(`
+    WITH invalidated AS (
+      UPDATE mbox.checkout_upgrade_offers
+      SET status='cancelled',selected_at=NULL,converted_order_id=NULL,converted_order_item_id=NULL,
+          converted_at=NULL,updated_at=clock_timestamp()
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        AND converted_order_id=$3::uuid AND status='converted'
+      RETURNING id
+    ), events AS (
+      INSERT INTO mbox.checkout_upgrade_offer_events(
+        tenant_id,store_id,public_id,offer_id,event_type,actor_type,actor_customer_id,
+        reason_code,order_id,order_item_id,idempotency_key
+      )
+      SELECT $1::uuid,$2::uuid,'guest-checkout-abandon-'||$3::text,id,
+        'invalidated','system',NULL,'order_failed',NULL,NULL,'guest-checkout-abandon:'||$3::text
+      FROM invalidated
+      ON CONFLICT (tenant_id,store_id,offer_id,idempotency_key) DO NOTHING
+    )
+    SELECT id FROM invalidated
+  `, [transaction.scope.tenantId, transaction.scope.storeId, order.id])
+  const cancelledOrder = await transaction.query(`
+    UPDATE mbox.orders
+    SET status='cancelled',cancelled_at=clock_timestamp(),completed_at=NULL,updated_at=clock_timestamp()
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND status='submitted'
+  `, [transaction.scope.tenantId, transaction.scope.storeId, order.id])
+  if (cancelledOrder.rowCount !== 1) {
+    throw new GuestApiRequestError('GUEST_CHECKOUT_CANNOT_BE_CANCELLED', '订单状态刚刚变化，请查看本桌账单', 409)
+  }
+  return {
+    orderId: order.id,
+    orderPublicId: order.public_id,
+    paymentId: payment?.id ?? null,
+    paymentPublicId: payment?.public_id ?? null,
+    alreadyCancelled: false,
+    cancelledItemCount: cancelledItems.rowCount ?? 0,
+    releasedInventoryReservationCount: fulfillment.reservationCount,
+    invalidatedCheckoutUpgradeCount: invalidatedUpgrade.rowCount ?? 0,
+  }
+}
+
+type GuestCheckoutPaymentRailState = 'not_required' | 'closed' | 'reconciliation_pending' | 'late_payment_refund_required'
+
+async function reconcileAbandonedGuestCheckoutPayment(
+  options: GuestCommerceServiceApiOptions,
+  context: GuestRequestContext & { tableSessionId: string; businessDate: string },
+  result: GuestCheckoutAbandonmentResult,
+  idempotencyKey: string,
+): Promise<GuestCheckoutPaymentRailState> {
+  if (result.paymentId === null || result.paymentPublicId === null) return 'not_required'
+  if (options.onlinePayments.close === undefined || options.payments.recordProviderQueryResult === undefined) {
+    return 'reconciliation_pending'
+  }
+  try {
+    const closed = await options.onlinePayments.close({
+      scope: context.scope,
+      paymentId: result.paymentId,
+      closeBindingId: `guest-checkout-close-${createHash('sha256')
+        .update(`${idempotencyKey}:${result.paymentPublicId}`).digest('hex').slice(0, 48)}`,
+      principal: guestPaymentPrincipal(context),
+    })
+    const observation = closed.observation
+    await options.payments.recordProviderQueryResult({
+      scope: context.scope,
+      actor: { type: 'integration', ref: 'postar-close-payment' },
+      businessDate: context.businessDate,
+      idempotencyKey: `guest-checkout-close-result-${createHash('sha256')
+        .update(`${idempotencyKey}:${closed.context.publicId}`).digest('hex').slice(0, 48)}`,
+      requestFingerprint: stableJson({
+        orderPublicId: result.orderPublicId,
+        paymentPublicId: closed.context.publicId,
+        status: observation.status,
+        providerTransactionId: observation.providerTransactionId,
+      }),
+      verifiedObservationId: closed.verifiedObservationId,
+      paymentPublicId: closed.context.publicId,
+      provider: 'postar',
+      providerTransactionId: observation.providerTransactionId,
+      reportedAmountMinor: observation.amount,
+      reportedCurrency: observation.currency,
+      settlementChannel: observation.settlementChannel,
+      providerSnapshot: {
+        source: 'guest_checkout_abandonment',
+        guestCheckoutAbandoned: true,
+        providerStatus: observation.status,
+        observedAt: observation.occurredAt,
+      },
+      occurredAt: observation.occurredAt,
+      status: observation.status,
+    })
+    return observation.status === 'succeeded' ? 'late_payment_refund_required'
+      : observation.status === 'closed' || observation.status === 'failed' ? 'closed'
+        : 'reconciliation_pending'
+  } catch (error) {
+    // A provider timeout or an in-flight rail must never re-lock a bar table.
+    // The pending-payment reconciler keeps the protected payment fact and will
+    // turn a later capture into a finance/refund case.
+    if (error instanceof OnlinePaymentUnknownError
+      || error instanceof OnlinePaymentUnavailableError
+      || error instanceof PostarPaymentRejectedError
+      || error instanceof ProviderPaymentUnknownError
+      || error instanceof ProviderPaymentInProgressError) {
+      return 'reconciliation_pending'
+    }
+    throw error
   }
 }
 

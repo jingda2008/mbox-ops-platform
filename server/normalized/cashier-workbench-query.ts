@@ -61,6 +61,7 @@ interface PaymentRow extends Record<string, unknown> {
   amount_minor: string | number
   currency: string
   status: PaymentStatus
+  provider_snapshot: Readonly<Record<string, unknown>>
   succeeded_at: string | null
   created_at: string
 }
@@ -257,6 +258,19 @@ export class PostgresCashierWorkbenchQuery {
             ))
           )
           AND orders.status <> 'draft'
+          -- Cancelled guest self-checkouts never become a cashier work item
+          -- unless the provider later proves money was captured.  That rare
+          -- late capture is intentionally retained here for refund handling.
+          AND (
+            orders.status <> 'cancelled'
+            OR EXISTS (
+              SELECT 1 FROM mbox.payments abandoned_payment
+              WHERE abandoned_payment.tenant_id=orders.tenant_id
+                AND abandoned_payment.store_id=orders.store_id
+                AND abandoned_payment.order_id=orders.id
+                AND abandoned_payment.status IN ('succeeded','partially_refunded','refunded')
+            )
+          )
           AND EXISTS (
             SELECT 1 FROM mbox.employees AS workbench_employee
             WHERE workbench_employee.tenant_id=orders.tenant_id
@@ -498,7 +512,7 @@ export class PostgresCashierWorkbenchQuery {
             provider_action.state AS provider_action_state,
             payment.retry_released_at::text AS retry_released_at,
             payment.retry_release_reason,
-            payment.amount_minor, payment.currency, payment.status,
+            payment.amount_minor, payment.currency, payment.status,payment.provider_snapshot,
             payment.succeeded_at::text, payment.created_at::text
           FROM mbox.payments payment
           LEFT JOIN mbox.payment_provider_actions provider_action
@@ -668,7 +682,8 @@ function assembleView(
           return {
             ...item,
             reservedRefundAmountMinor: reserved,
-            remainingRefundableMinor: captured && item.status !== 'cancelled'
+            remainingRefundableMinor: captured && (item.status !== 'cancelled'
+              || payment.provider_snapshot.guestCheckoutAbandoned === true)
               ? Math.min(Math.max(0, item.totalAmountMinor - reserved), paymentRemaining)
               : 0,
           }

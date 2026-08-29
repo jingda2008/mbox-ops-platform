@@ -115,6 +115,7 @@ interface PaymentForRefundRow extends Record<string, unknown> {
   amount_minor: string | number
   currency: string
   status: string
+  provider_snapshot: JsonObject
 }
 
 interface OrderItemRow extends Record<string, unknown> {
@@ -196,7 +197,13 @@ export class RefundRepository {
     const allocations = normalizeAllocations(input.allocations)
     const amountMinor = allocations.reduce((sum, allocation) => sum + allocation.amountMinor, 0)
     const items = await this.lockOrderItems(payment.order_id, allocations.map((item) => item.orderItemId))
-    validateItems(items, allocations, payment.currency)
+    validateItems(items, allocations, payment.currency, {
+      // An abandoned guest checkout can receive a late provider capture after
+      // all its lines were correctly cancelled.  It remains refundable, but
+      // only when the payment command has explicitly marked that protected
+      // reconciliation path; normal cancelled order lines are still barred.
+      allowCancelledItems: payment.provider_snapshot?.guestCheckoutAbandoned === true,
+    })
 
     const existingTotal = await this.transaction.query<ExistingRefundTotalRow>(`
       SELECT COALESCE(SUM(amount_minor), 0)::text AS reserved_total_minor
@@ -514,7 +521,7 @@ export class RefundRepository {
     await this.lockPaymentTarget(target)
     const result = await this.transaction.query<PaymentForRefundRow>(`
       SELECT id, payable_kind, order_id, activity_registration_id,
-        provider, provider_transaction_id, amount_minor, currency, status
+        provider, provider_transaction_id, amount_minor, currency, status,provider_snapshot
       FROM mbox.payments
       WHERE tenant_id = $1::uuid
         AND store_id = $2::uuid
@@ -742,6 +749,7 @@ function validateItems(
   items: readonly OrderItemRow[],
   allocations: readonly RefundAllocation[],
   currency: string,
+  options: Readonly<{ allowCancelledItems: boolean }> = { allowCancelledItems: false },
 ): void {
   if (items.length !== allocations.length) {
     throw new RefundLimitError('One or more refund allocations do not belong to the payment order')
@@ -750,7 +758,9 @@ function validateItems(
   for (const allocation of allocations) {
     const item = byId.get(allocation.orderItemId)
     if (item === undefined) throw new RefundLimitError(`Order item ${allocation.orderItemId} was not found`)
-    if (item.status === 'cancelled') throw new RefundLimitError(`Order item ${item.id} is cancelled`)
+    if (item.status === 'cancelled' && !options.allowCancelledItems) {
+      throw new RefundLimitError(`Order item ${item.id} is cancelled`)
+    }
     if (item.currency !== currency) throw new RefundLimitError(`Order item ${item.id} has a currency mismatch`)
   }
 }

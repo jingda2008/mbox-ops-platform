@@ -194,7 +194,7 @@ async function loadOrderPage(state) {
   const source = await readFile(new URL('../miniprogram/pages/order/index.js', import.meta.url), 'utf8')
   let definition = null
   const guard = requestGuard()
-  const calls = { retryOrderPayment: 0, checkoutSharedCart: [], requestPayment: [], recommendExperience: [] }
+  const calls = { abandonGuestCheckout: [], checkoutSharedCart: [], requestPayment: [], recommendExperience: [] }
   const context = {
     module: { exports: {} }, exports: {}, Page: (value) => { definition = value },
     getApp: () => ({ refreshRuntime: () => state.session }),
@@ -227,10 +227,10 @@ async function loadOrderPage(state) {
           if (Array.isArray(state.tableOrders)) return state.tableOrders
           throw new Error('weak network')
         },
-        retryOrderPayment: async () => {
-          calls.retryOrderPayment += 1
-          if (state.retryPaymentError) throw state.retryPaymentError
-          return state.retryPaymentAction || null
+        abandonGuestCheckout: async (orderPublicId, idempotencyKey) => {
+          calls.abandonGuestCheckout.push({ orderPublicId, idempotencyKey })
+          if (state.abandonCheckoutError) throw state.abandonCheckoutError
+          return state.abandonCheckoutResult || { paymentState: 'closed' }
         },
         getTodayPerformances: async () => null, getCustomerBenefits: async () => [], getMiniBootstrap: async () => null,
         getWechatNotificationPrompt: async () => ({ available: false, authorizations: [] }),
@@ -560,7 +560,7 @@ test('Order keeps a token-only scan active and clears an unscoped A pending paym
   assert.equal(page.data.pendingPayment, null)
   assert.equal(state.storage.get(PENDING_PAYMENT_KEY), undefined)
   await page.continuePayment()
-  assert.equal(calls.retryOrderPayment, 0)
+  assert.equal(calls.abandonGuestCheckout.length, 0)
 })
 
 test('Order does not reopen payment after WeChat accepted it while the server is still confirming', async () => {
@@ -591,7 +591,7 @@ test('Order does not reopen payment after WeChat accepted it while the server is
   assert.equal(page.data.pendingPayment.canContinue, false)
   assert.match(page.data.pendingPayment.statusText, /到账确认中/)
   await page.continuePayment()
-  assert.equal(calls.retryOrderPayment, 0)
+  assert.equal(calls.abandonGuestCheckout.length, 0)
 })
 
 test('Order renders only the server-owned three questions and sends exactly those answers for guided recommendations', async () => {
@@ -619,13 +619,13 @@ test('Order renders only the server-owned three questions and sends exactly thos
   }])
 })
 
-test('Order drops the pending record instead of retrying a wrong-table payment', async () => {
+test('Order cancels a legacy pending checkout instead of retrying its old payment', async () => {
   const paymentScope = 'cache.session:fixed-token:cart-scope-for-turn-b-000000002'
   const wrongTable = Object.assign(new Error('wrong table'), { code: 'GUEST_ORDER_ACCESS_FORBIDDEN', statusCode: 409 })
   const state = {
     session: { tableCode: '', tableToken: 'fixed-token', scanNonce: 'scan-b' },
     resolvedTableCode: 'VIP1', resolvedCartScope: 'cart-scope-for-turn-b-000000002',
-    retryPaymentError: wrongTable,
+    abandonCheckoutError: wrongTable,
     storage: new Map(),
   }
   const { page, calls } = await loadOrderPage(state)
@@ -635,10 +635,11 @@ test('Order drops the pending record instead of retrying a wrong-table payment',
   page.setData({ pendingPayment: pending })
   await page.continuePayment()
 
-  assert.equal(calls.retryOrderPayment, 1)
+  assert.equal(calls.abandonGuestCheckout.length, 1)
+  assert.equal(calls.abandonGuestCheckout[0].orderPublicId, 'order-a')
   assert.equal(state.storage.get(PENDING_PAYMENT_KEY), undefined)
   assert.equal(page.data.pendingPayment, null)
-  assert.match(page.data.error, /重新扫描当前桌面/)
+  assert.equal(page.data.error, '')
 })
 
 test('Account drops an A pending-payment record and late A orders after a B table switch', async () => {
@@ -687,63 +688,22 @@ test('Account clears an unscoped legacy pending-payment record before showing a 
   await load
 })
 
-test('Account drops the pending record when payment recovery is rejected for another table', async () => {
-  const paymentScope = 'cache.session:fixed-token:cart-scope-for-turn-b-000000002'
-  const wrongTable = Object.assign(new Error('wrong table'), { code: 'GUEST_ORDER_ACCESS_FORBIDDEN', statusCode: 409 })
-  const state = {
-    session: { tableCode: 'VIP1', tableToken: 'fixed-token', cartScope: 'cart-scope-for-turn-b-000000002' },
-    storage: new Map(), orderReads: [], retryPaymentError: wrongTable,
-  }
-  const page = await loadAccountPage(state)
-  page.onLoad()
-  page.setData({ orders: [{ publicId: 'order-a', payableText: '¥88.00', canPay: true }] })
-  await page.continuePayment({ currentTarget: { dataset: { id: 'order-a' } } })
-
-  assert.equal(state.retryPaymentCalls, 1)
-  assert.equal(state.storage.get(PENDING_PAYMENT_KEY), undefined)
-  assert.equal(page.data.busyOrderId, '')
-  assert.match(page.data.error, /重新扫描当前桌面/)
-  assert.doesNotMatch(String(state.storage.get(PENDING_PAYMENT_KEY) || ''), new RegExp(paymentScope))
-})
-
-test('Account also drops the pending record when the guest table session has expired', async () => {
-  const paymentScope = 'cache.session:fixed-token:cart-scope-for-turn-b-000000002'
-  const expired = Object.assign(new Error('guest session expired'), { code: 'GUEST_SESSION_INVALID', statusCode: 401 })
-  const state = {
-    session: { tableCode: 'VIP1', tableToken: 'fixed-token', cartScope: 'cart-scope-for-turn-b-000000002' },
-    storage: new Map(), orderReads: [], retryPaymentError: expired,
-  }
-  const page = await loadAccountPage(state)
-  page.onLoad()
-  page.setData({ orders: [{ publicId: 'order-b', payableText: '¥88.00', canPay: true }] })
-  await page.continuePayment({ currentTarget: { dataset: { id: 'order-b' } } })
-
-  assert.equal(state.retryPaymentCalls, 1)
-  assert.equal(state.storage.get(PENDING_PAYMENT_KEY), undefined)
-  assert.equal(page.data.busyOrderId, '')
-  assert.match(page.data.error, /重新扫描当前桌面/)
-  assert.doesNotMatch(String(state.storage.get(PENDING_PAYMENT_KEY) || ''), new RegExp(paymentScope))
-})
-
-test('Account continues an order with the server pending JSAPI action', async () => {
+test('Account shows a historical unpaid guest order without a payment revival action', async () => {
   const state = {
     session: { tableCode: 'VIP1', tableToken: 'fixed-token', cartScope: 'cart-scope-for-turn-b-000000002' },
     storage: new Map(),
-    orderReads: [{ promise: Promise.resolve([]) }],
-    retryPaymentAction: {
-      status: 'pending', presentation: 'jsapi',
-      payload: { timeStamp: '1', nonceStr: 'nonce', package: 'prepay_id=test', signType: 'RSA', paySign: 'sign' },
-    },
+    orderReads: [{ promise: Promise.resolve([{
+      publicId: 'order-c', round: 1, status: 'submitted', paymentStatus: 'unpaid',
+      payableAmountMinor: 8800, paymentAccess: 'available', items: [],
+    }]) }],
   }
   const page = await loadAccountPage(state)
   page.onLoad()
-  page.setData({ orders: [{ publicId: 'order-c', payableText: '¥88.00', canPay: true }] })
+  await page.loadData()
 
-  await page.continuePayment({ currentTarget: { dataset: { id: 'order-c' } } })
-
-  assert.equal(state.retryPaymentCalls, 1)
-  assert.equal(state.requestPaymentCalls, 1)
-  assert.equal(page.data.busyOrderId, '')
+  assert.equal(page.data.orders[0].canPay, false)
+  assert.match(page.data.orders[0].paymentHint, /返回点单重新选购/)
+  assert.equal(typeof page.continuePayment, 'undefined')
 })
 
 test('guest cart opens a review sheet before it creates an order or starts payment', async () => {
@@ -778,7 +738,7 @@ test('guest cart opens a review sheet before it creates an order or starts payme
   assert.equal(submitCalls, 1)
 })
 
-test('payment confirmation does not freeze shared-cart edits or occupy the menu', async () => {
+test('a prior payment confirmation never freezes cart edits and a new cart still opens its review sheet', async () => {
   const state = {
     session: { tableCode: 'A01', tableToken: 'token-a', cartScope: 'cart-scope-for-turn-a-000000001' },
     storage: new Map(),
@@ -804,8 +764,8 @@ test('payment confirmation does not freeze shared-cart edits or occupy the menu'
   assert.equal(cartAdjustments, 1)
 
   await page.openCheckout()
-  assert.equal(page.data.checkoutConfirmVisible, false)
-  assert.equal(state.toasts.at(-1).title, '本桌付款确认中，可继续加购')
+  assert.equal(page.data.checkoutConfirmVisible, true)
+  assert.equal(state.toasts, undefined)
 })
 
 test('shared cart checkout launches WeChat payment immediately after the single confirmation', async () => {

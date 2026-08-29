@@ -686,6 +686,13 @@ async function retryOrderPayment(orderPublicId, idempotencyKey) {
     method: 'POST', headers: { 'idempotency-key': idempotencyKey || randomId(`guest-payment-${orderPublicId}`) }, data: {},
   })).data
 }
+async function abandonGuestCheckout(orderPublicId, idempotencyKey) {
+  return (await request(`/api/guest/orders/${encodeURIComponent(orderPublicId)}/abandon-checkout`, {
+    method: 'POST',
+    headers: { 'idempotency-key': idempotencyKey || randomId(`guest-checkout-abandon-${orderPublicId}`) },
+    data: {},
+  })).data
+}
 async function createServiceTask(input) {
   return request('/api/guest/service-requests', {
     method: 'POST', headers: { 'idempotency-key': randomId('guest-service') },
@@ -784,7 +791,7 @@ module.exports = {
   getReservationPerformanceNotificationAuthorizations,
   recordReservationPerformanceNotificationAuthorization,
   getMenu, getPublicMenu, recommendExperience, getRecommendationConfiguration, recordRecommendationEvent, prepareCheckoutUpgrade, recordCheckoutUpgradeEvent,
-  checkout, getSharedCart, adjustSharedCart, removeSharedCartLine, clearSharedCart, checkoutSharedCart, getTableOrders, retryOrderPayment,
+  checkout, getSharedCart, adjustSharedCart, removeSharedCartLine, clearSharedCart, checkoutSharedCart, getTableOrders, retryOrderPayment, abandonGuestCheckout,
   createServiceTask, getServiceRequests, actOnServiceTask,
   getCustomerBenefits, getCustomerProfile, reserveCustomerBenefit, claimAnnualDailySnack, submitSongRequest, getTodayPerformances,
   logoutWechatIdentity,

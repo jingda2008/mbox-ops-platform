@@ -305,8 +305,7 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
           WHERE NOT ((order_row.status<>'cancelled'
               AND order_row.payment_status IN ('paid','partially_refunded','refunded'))
             OR (order_row.status='cancelled' AND order_row.payment_status='refunded')
-            OR (order_row.status='cancelled' AND order_row.payment_status='unpaid'
-              AND NOT EXISTS (
+            OR (order_row.status='cancelled' AND NOT EXISTS (
                 SELECT 1 FROM mbox.order_items delivered_item
                 WHERE delivered_item.tenant_id=$1::uuid AND delivered_item.store_id=$2::uuid
                   AND delivered_item.order_id=order_row.id AND delivered_item.status='delivered'
@@ -333,7 +332,16 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
         (SELECT count(*)::text FROM mbox.payments payment
           WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid
             AND payment.order_id=ANY(SELECT id FROM scoped_orders)
-            AND payment.status IN ('created','pending')) AS payment_pending,
+            AND payment.status IN ('created','pending')
+            AND NOT EXISTS (
+              SELECT 1 FROM scoped_orders cancelled_order
+              WHERE cancelled_order.id=payment.order_id AND cancelled_order.status='cancelled'
+                AND NOT EXISTS (
+                  SELECT 1 FROM mbox.order_items delivered_item
+                  WHERE delivered_item.tenant_id=$1::uuid AND delivered_item.store_id=$2::uuid
+                    AND delivered_item.order_id=cancelled_order.id AND delivered_item.status='delivered'
+                )
+            )) AS payment_pending,
         (SELECT count(*)::text FROM mbox.inventory_order_reservations reservation
           WHERE reservation.tenant_id=$1::uuid AND reservation.store_id=$2::uuid
             AND reservation.order_id=ANY(SELECT id FROM scoped_orders)

@@ -1,11 +1,9 @@
-const { getTableOrders, retryOrderPayment } = require('../../utils/api')
+const { getTableOrders } = require('../../utils/api')
 const { getRuntimeConfig } = require('../../config/index')
 const { getTableSession, tableSessionCacheScope } = require('../../utils/session')
 const { createTableRequestGuard, tableRequestScope } = require('../../utils/table-request-scope')
-const { randomId } = require('../../utils/id')
 const { money, dateTime } = require('../../utils/format')
-const { customerErrorMessage, isWechatCancellation } = require('../../utils/customer-error')
-const { isPresentableWechatJsapiAction } = require('../../utils/wechat-payment')
+const { customerErrorMessage } = require('../../utils/customer-error')
 
 const PENDING_PAYMENT_KEY = 'mbox.pending.guest.payment.v1'
 
@@ -114,7 +112,10 @@ Page({
         pricingKind: order.pricingKind || 'none',
         pricingLabel: order.pricingLabel || '',
         paymentAccess: order.paymentAccess,
-        canPay: order.paymentAccess === 'available' && Number(order.payableAmountMinor || 0) > 0,
+        // Customer self-orders always pay inside the one-shot checkout flow.
+        // A historical unpaid row is never an invitation to resurrect its old
+        // payment; the customer can return to the cart and create a new one.
+        canPay: false,
         paymentHint: this.paymentHint(order.paymentAccess, Number(order.payableAmountMinor || 0)),
         sourceText: typeof order.sourceText === 'string' && order.sourceText.trim()
           ? order.sourceText.trim() : '点单来源待确认',
@@ -139,68 +140,6 @@ Page({
     if (access === 'staff_collecting') return '工作人员正在收款，请勿重复支付'
     if (access === 'payment_in_progress') return '同桌已有支付进行中，请稍候刷新'
     if (access === 'status_review') return '支付结果待通道核对，请勿再次支付'
-    return '可继续线上支付'
-  },
-
-  async continuePayment(event) {
-    const orderPublicId = event.currentTarget.dataset.id
-    const order = this.data.orders.find((item) => item.publicId === orderPublicId)
-    if (!order || !order.canPay || this.data.busyOrderId) return
-    const session = getTableSession()
-    const tableRequest = this.beginTableRequest(session)
-    const paymentScope = tableSessionCacheScope(session)
-    const stored = this.clearForeignPendingPayment(paymentScope) || {}
-    const retryIdempotencyKey = stored.orderPublicId === orderPublicId && stored.retryIdempotencyKey
-      ? stored.retryIdempotencyKey
-      : randomId(`guest-payment-${orderPublicId}`)
-    const pendingPayment = {
-      orderPublicId,
-      retryIdempotencyKey,
-      amountText: order.payableText,
-      statusText: '订单等待付款',
-      canContinue: true,
-      tableScope: paymentScope,
-    }
-    wx.setStorageSync(PENDING_PAYMENT_KEY, pendingPayment)
-    this.setData({ busyOrderId: orderPublicId, error: '', success: '' })
-    try {
-      const action = await retryOrderPayment(orderPublicId, retryIdempotencyKey)
-      if (!this.isCurrentTableRequest(tableRequest)) return
-      if (!isPresentableWechatJsapiAction(action)) {
-        const statusText = action && action.status === 'unknown'
-          ? '付款结果待确认'
-          : action && action.presentation === 'qr'
-            ? '已生成付款二维码，请由工作人员协助完成'
-            : '付款尚未完成'
-        wx.setStorageSync(PENDING_PAYMENT_KEY, Object.assign({}, pendingPayment, { statusText }))
-        this.setData({ error: `${statusText}，暂不会显示为支付成功。` })
-        return
-      }
-      await new Promise((resolve, reject) => wx.requestPayment(Object.assign({}, action.payload, { success: resolve, fail: reject })))
-      if (!this.isCurrentTableRequest(tableRequest)) return
-      wx.setStorageSync(PENDING_PAYMENT_KEY, Object.assign({}, pendingPayment, { statusText: '支付请求已提交，等待到账确认' }))
-      this.setData({ success: '支付请求已提交，最终结果正在以支付回调和桌账核对。' })
-      await this.loadData(true)
-    } catch (error) {
-      if (!this.isCurrentTableRequest(tableRequest)) return
-      if (['GUEST_ORDER_ACCESS_FORBIDDEN', 'GUEST_SESSION_INVALID', 'TABLE_SESSION_ENDED'].includes(error && error.code)) {
-        wx.removeStorageSync(PENDING_PAYMENT_KEY)
-        this.setData({ error: customerErrorMessage(error, '桌台连接已失效，请重新扫描当前桌面的二维码'), success: '' })
-        return
-      }
-      if (error && error.code === 'WECHAT_IDENTITY_REQUIRED') {
-        this.setData({
-          error: '订单已保留，但尚未发起收款。请重新扫描当前桌面的二维码后继续付款，不要重新下单。',
-          success: '',
-        })
-        return
-      }
-      const cancelled = isWechatCancellation(error)
-      const statusText = cancelled ? '订单已保留，付款已取消' : '付款未完成，可稍后继续'
-      wx.setStorageSync(PENDING_PAYMENT_KEY, Object.assign({}, pendingPayment, { statusText }))
-      this.setData({ error: cancelled ? '' : '付款未完成，请勿重新下单。', success: cancelled ? statusText : '' })
-    } finally {
-      if (this.isCurrentTableRequest(tableRequest)) this.setData({ busyOrderId: '' })
-    }
+    return '如需付款，请返回点单重新选购'
   },
 })

@@ -19,11 +19,15 @@ import {
   type GuestRequestContext,
 } from './guest-request-context.js'
 import type { Payment } from './payment-repository.js'
-import { OnlinePaymentUnknownError } from './online-payment-service.js'
+import {
+  OnlinePaymentUnavailableError,
+  OnlinePaymentUnknownError,
+} from './online-payment-service.js'
 import { WechatPaymentIdentityRequiredError } from './payment-provider-action-repository.js'
 import { PostarPaymentRejectedError } from '../postar-adapter.js'
 import { FulfillmentCapacityUnavailableError } from './fulfillment-capacity-repository.js'
 import { ServiceTaskRepository } from './service-task-repository.js'
+import { readTableSessionClosureState } from './table-session-closure-blockers.js'
 import { seedActiveGuestTableAuthority } from './guest-table-authority.test-helper.js'
 import { ReservationGuestSessionInvalidError } from './reservation-guest-session.js'
 import { GuestSessionInvalidError, GuestTableSessionEndedError } from './guest-session-repository.js'
@@ -733,6 +737,62 @@ describe('guest commerce/service API trust boundaries', () => {
     } })
   })
 
+  it('returns a cancellable failed payment action when provider availability is lost after checkout commits', async () => {
+    const value = fixture({
+      onlinePayments: {
+        assertAvailable: vi.fn(),
+        resolveGuestMethod: vi.fn(async () => 'jsapi' as const),
+        resolveActivePayment: vi.fn(async () => null),
+        create: vi.fn(async () => { throw new OnlinePaymentUnavailableError('provider unavailable') }),
+      },
+    })
+    const response = await value.app.inject({
+      method: 'POST',
+      url: '/api/guest/orders',
+      headers: { 'idempotency-key': 'guest-order-provider-unavailable-0001' },
+      payload: { items: [{ productId, quantity: 1 }] },
+    })
+
+    expect(response.statusCode).toBe(201)
+    expect(value.commerce.submitOrder).toHaveBeenCalledOnce()
+    expect(response.json()).toMatchObject({ data: {
+      order: { publicId: 'guest-order-public-0001' },
+      payment: {
+        status: 'failed',
+        providerAction: {
+          orderPublicId: 'guest-order-public-0001',
+          status: 'failed',
+          presentation: 'jsapi',
+          payload: null,
+        },
+      },
+    } })
+  })
+
+  it('returns a cancellable failed payment action when the WeChat identity expires after checkout commits', async () => {
+    const value = fixture({
+      onlinePayments: {
+        assertAvailable: vi.fn(),
+        assertGuestJsapiReady: vi.fn(async () => 'jsapi' as const),
+        resolveActivePayment: vi.fn(async () => null),
+        create: vi.fn(async () => { throw new WechatPaymentIdentityRequiredError() }),
+      },
+    })
+    const response = await value.app.inject({
+      method: 'POST',
+      url: '/api/guest/orders',
+      headers: { 'idempotency-key': 'guest-order-identity-expired-0001' },
+      payload: { items: [{ productId, quantity: 1 }] },
+    })
+
+    expect(response.statusCode).toBe(201)
+    expect(value.commerce.submitOrder).toHaveBeenCalledOnce()
+    expect(response.json()).toMatchObject({ data: {
+      order: { publicId: 'guest-order-public-0001' },
+      payment: { status: 'failed', providerAction: { status: 'failed', payload: null } },
+    } })
+  })
+
   it('refuses a native-QR store policy before it creates a guest self-payment order', async () => {
     const value = fixture({
       onlinePayments: {
@@ -1018,6 +1078,91 @@ integration('guest service and mood API with PostgreSQL', () => {
     expect(state.rows).toEqual([{
       order_status: 'cancelled', fulfillment_state: 'cancelled', item_status: 'cancelled',
       active_kds_count: '0', reserved_inventory_count: '0',
+    }])
+  })
+
+  it('releases a customer JSAPI checkout before channel reconciliation and makes a late capture a refund follow-up', async () => {
+    const abandonedOrderId = randomUUID()
+    const abandonedItemId = randomUUID()
+    const abandonedPaymentId = randomUUID()
+    const orderPublicId = `guest-jsapi-abandon-${abandonedOrderId.slice(0, 12)}`
+    const paymentPublicId = `payment-jsapi-abandon-${abandonedPaymentId.slice(0, 12)}`
+    await pool.query(`
+      INSERT INTO mbox.orders(
+        id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,
+        settlement_mode,subtotal_amount_minor,discount_amount_minor,total_amount_minor,currency,
+        created_by_customer_id,submitted_at
+      ) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,'guest_qr','submitted','pending',
+        'immediate_payment',25600,0,25600,'CNY',$6::uuid,clock_timestamp())
+    `, [
+      abandonedOrderId, integrationTenantId, integrationStoreId, integrationSessionId, orderPublicId,
+      integrationCustomerId,
+    ])
+    await pool.query(`
+      INSERT INTO mbox.order_items(
+        id,tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,discount_amount_minor,
+        total_amount_minor,currency,fulfillment_station,product_snapshot,status
+      ) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,1,25600,0,25600,'CNY','bar','{}'::jsonb,'submitted')
+    `, [
+      abandonedItemId, integrationTenantId, integrationStoreId, abandonedOrderId, integrationNotManagedProductId,
+    ])
+    await pool.query(`
+      INSERT INTO mbox.payments(
+        id,tenant_id,store_id,order_id,public_id,provider,method,amount_minor,currency,status,provider_snapshot
+      ) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,'postar','jsapi',25600,'CNY','pending',
+        '{"source":"guest_checkout"}'::jsonb)
+    `, [abandonedPaymentId, integrationTenantId, integrationStoreId, abandonedOrderId, paymentPublicId])
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/guest/orders/${orderPublicId}/abandon-checkout`,
+      headers: { 'idempotency-key': `guest-jsapi-abandon-${abandonedOrderId.slice(0, 16)}` },
+    })
+    expect(response.statusCode, response.body).toBe(200)
+    expect(response.json()).toMatchObject({
+      data: {
+        orderPublicId,
+        operationalState: 'cancelled',
+        paymentState: 'reconciliation_pending',
+      },
+    })
+    const released = await transactions.run(integrationContext.scope, (transaction) => (
+      readTableSessionClosureState(transaction, integrationSessionId)
+    ), { readOnly: true })
+    expect(released.blockers.filter((item) => [
+      'ORDER_UNSETTLED', 'ORDER_ITEM_UNRESOLVED', 'KDS_ACTIVE', 'PAYMENT_PENDING', 'INVENTORY_RESERVED',
+    ].includes(item.code))).toEqual([])
+
+    await pool.query(`
+      UPDATE mbox.payments
+      SET status='succeeded',provider_transaction_id=$4,succeeded_at=clock_timestamp(),updated_at=clock_timestamp()
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+    `, [
+      integrationTenantId, integrationStoreId, abandonedPaymentId,
+      `late-capture-${abandonedPaymentId.slice(0, 12)}`,
+    ])
+    const safety = await pool.query<{
+      abandonment_events: string
+      refund_followups: string
+      order_status: string
+      fulfillment_state: string
+      refund_eligible: string | null
+    }>(`
+      SELECT
+        (SELECT count(*)::text FROM mbox.guest_immediate_checkout_abandonment_events event
+          WHERE event.tenant_id=$1::uuid AND event.store_id=$2::uuid AND event.payment_id=$3::uuid) AS abandonment_events,
+        (SELECT count(*)::text FROM mbox.guest_immediate_checkout_late_capture_refund_followups followup
+          WHERE followup.tenant_id=$1::uuid AND followup.store_id=$2::uuid AND followup.payment_id=$3::uuid) AS refund_followups,
+        ordering.status AS order_status,ordering.fulfillment_state,
+        payment.provider_snapshot ->> 'guestCheckoutAbandoned' AS refund_eligible
+      FROM mbox.orders ordering
+      JOIN mbox.payments payment ON payment.tenant_id=ordering.tenant_id AND payment.store_id=ordering.store_id
+        AND payment.id=$3::uuid
+      WHERE ordering.tenant_id=$1::uuid AND ordering.store_id=$2::uuid AND ordering.id=$4::uuid
+    `, [integrationTenantId, integrationStoreId, abandonedPaymentId, abandonedOrderId])
+    expect(safety.rows).toEqual([{
+      abandonment_events: '1', refund_followups: '1', order_status: 'cancelled', fulfillment_state: 'cancelled',
+      refund_eligible: 'true',
     }])
   })
 

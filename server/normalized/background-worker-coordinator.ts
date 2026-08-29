@@ -28,6 +28,7 @@ import type {
 import type { StoreScope } from './transaction-runner.js'
 import type { PersonalContactDispositionBatch } from './personal-contact-disposition-worker.js'
 import type { ComplimentaryBenefitFulfillmentBatch } from './complimentary-benefit-fulfillment-worker.js'
+import type { StaleGuestImmediatePaymentBatch } from './stale-guest-immediate-payment-worker.js'
 
 type ServiceSlaPort = {
   runBatch(scope: Readonly<StoreScope>, workerId: string): Promise<ServiceTaskSlaBatch>
@@ -86,6 +87,9 @@ type PersonalContactDispositionPort = {
 }
 type ComplimentaryBenefitFulfillmentPort = {
   runBatch(scope:Readonly<StoreScope>,workerId:string):Promise<ComplimentaryBenefitFulfillmentBatch>
+}
+type StaleGuestImmediatePaymentPort = {
+  runBatch(scope: Readonly<StoreScope>, workerId: string): Promise<StaleGuestImmediatePaymentBatch>
 }
 type IdempotencyCleanupPort = {
   runBatch(scope: Readonly<StoreScope>): Promise<IdempotencyCleanupResult>
@@ -169,6 +173,7 @@ export type NormalizedWorkerName =
   | 'notification'
   | 'personal-contact-disposition'
   | 'complimentary-benefit-fulfillment'
+  | 'stale-guest-immediate-payment-reconciliation'
 
 export interface NormalizedWorkerCycleResult {
   startedAt: string
@@ -205,6 +210,7 @@ export interface NormalizedWorkerCycleResult {
     notification: NotificationBatchResult | null
     personalContactDisposition: PersonalContactDispositionBatch | null
     complimentaryBenefitFulfillment: ComplimentaryBenefitFulfillmentBatch | null
+    staleGuestImmediatePaymentReconciliation: StaleGuestImmediatePaymentBatch | null
   }
   failures: NormalizedWorkerName[]
 }
@@ -248,6 +254,7 @@ export class NormalizedBackgroundWorkerCoordinator {
       notification?: NotificationPort
       personalContactDisposition: PersonalContactDispositionPort
       complimentaryBenefitFulfillment?: ComplimentaryBenefitFulfillmentPort
+      staleGuestImmediatePaymentReconciliation?: StaleGuestImmediatePaymentPort
     }>,
     private readonly delivery: Readonly<{
       outbox?: OutboxDelivery
@@ -318,6 +325,7 @@ export class NormalizedBackgroundWorkerCoordinator {
       'personal-contact-disposition',
       'complimentary-benefit-fulfillment',
       'wechat-member-service-notification',
+      'stale-guest-immediate-payment-reconciliation',
     ]
     const executions = await Promise.allSettled([
       this.runWhenDue('service-sla', () => this.workers.serviceSla.runBatch(this.scope, `${this.options.workerId}:service-sla`)),
@@ -445,6 +453,13 @@ export class NormalizedBackgroundWorkerCoordinator {
             this.scope,`${this.options.workerId}:wechat-member-service-notification`,
           )
         )),
+      this.workers.staleGuestImmediatePaymentReconciliation===undefined
+        ? Promise.resolve(null)
+        : this.runWhenDue('stale-guest-immediate-payment-reconciliation', () => (
+          this.workers.staleGuestImmediatePaymentReconciliation!.runBatch(
+            this.scope, `${this.options.workerId}:stale-guest-immediate-payment-reconciliation`,
+          )
+        )),
     ] as const)
 
     const failures: NormalizedWorkerName[] = []
@@ -469,6 +484,15 @@ export class NormalizedBackgroundWorkerCoordinator {
       this.options.onError?.(
         'personal-contact-disposition',
         new Error('personal_contact_disposition_items_failed'),
+      )
+    }
+    const staleGuestImmediatePaymentReconciliation = fulfilledValue(executions[28])
+    if (staleGuestImmediatePaymentReconciliation !== null
+      && staleGuestImmediatePaymentReconciliation.failedPaymentIds.length > 0) {
+      failures.push('stale-guest-immediate-payment-reconciliation')
+      this.options.onError?.(
+        'stale-guest-immediate-payment-reconciliation',
+        new Error('stale_guest_immediate_payment_reconciliation_items_failed'),
       )
     }
 
@@ -504,6 +528,7 @@ export class NormalizedBackgroundWorkerCoordinator {
         personalContactDisposition: fulfilledValue(executions[25]),
         complimentaryBenefitFulfillment: fulfilledValue(executions[26]),
         wechatMemberServiceNotification: fulfilledValue(executions[27]),
+        staleGuestImmediatePaymentReconciliation,
       },
       failures,
     }
@@ -568,6 +593,7 @@ const DEFAULT_WORKER_CADENCES: Readonly<Record<NormalizedWorkerName, number>> = 
   notification: 500,
   'personal-contact-disposition': 60_000,
   'complimentary-benefit-fulfillment': 500,
+  'stale-guest-immediate-payment-reconciliation': 30_000,
 })
 
 function workerCadences(

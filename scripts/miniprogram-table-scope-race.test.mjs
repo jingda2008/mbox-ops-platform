@@ -8,6 +8,30 @@ const RESERVATION_COOKIE_KEY = 'mbox.http.cookie.reservation.v2'
 const PENDING_PAYMENT_KEY = 'mbox.pending.guest.payment.v1'
 const CHECKOUT_ATTEMPT_KEY = 'mbox.pending.guest.checkout.v1'
 
+function guestPaymentAbandonmentModule() {
+  const PENDING_GUEST_PAYMENT_ABANDONMENT_KEY = 'mbox.pending.guest.payment.abandon.v1'
+  return {
+    PENDING_GUEST_PAYMENT_ABANDONMENT_KEY,
+    createGuestPaymentAbandonmentRecord(pending, tableScope, createIdempotencyKey) {
+      const legacy = pending && pending.checkoutKind === undefined
+        && typeof pending.retryIdempotencyKey === 'string'
+      const state = pending && (pending.paymentPresentationState || 'ready_not_presented')
+      if (!pending || !(pending.checkoutKind === 'guest_immediate_payment' || legacy)
+        || pending.tableScope !== tableScope || pending.wechatAcceptedAt !== undefined
+        || pending.paymentPresentationInFlight === true
+        || !['ready_not_presented', 'action_failed', 'cancelled', 'result_unknown'].includes(state)) return null
+      return {
+        version: 1, orderPublicId: pending.orderPublicId, tableScope,
+        idempotencyKey: pending.abandonmentIdempotencyKey || createIdempotencyKey(pending.orderPublicId),
+      }
+    },
+    isRetryableGuestPaymentAbandonment(record, tableScope, order) {
+      return Boolean(record && record.tableScope === tableScope && order
+        && order.publicId === record.orderPublicId && order.paymentStatus !== 'paid')
+    },
+  }
+}
+
 function scope(session) {
   const token = String(session.tableToken || '').trim()
   const cartScope = String(session.cartScope || '').trim()
@@ -230,7 +254,7 @@ async function loadOrderPage(state) {
         abandonGuestCheckout: async (orderPublicId, idempotencyKey) => {
           calls.abandonGuestCheckout.push({ orderPublicId, idempotencyKey })
           if (state.abandonCheckoutError) throw state.abandonCheckoutError
-          return state.abandonCheckoutResult || { paymentState: 'closed' }
+          return state.abandonCheckoutResult || { operationalState: 'cancelled', paymentState: 'reconciliation_pending' }
         },
         getTodayPerformances: async () => null, getCustomerBenefits: async () => [], getMiniBootstrap: async () => null,
         getWechatNotificationPrompt: async () => ({ available: false, authorizations: [] }),
@@ -254,6 +278,7 @@ async function loadOrderPage(state) {
         }),
       }
       if (specifier === '../../utils/id') return { randomId: (prefix) => `${prefix}-scope-test` }
+      if (specifier === '../../utils/guest-payment-abandonment') return guestPaymentAbandonmentModule()
       if (specifier === '../../utils/format') return { money: (value) => `¥${Number(value || 0) / 100}`, dateTime: (value) => String(value || '') }
       if (specifier === '../../utils/recommendation-attribution') return { checkoutRecommendationAttribution: () => null }
       if (specifier === '../../utils/media') return { publicImageUrl: (value) => value || '' }
@@ -338,6 +363,7 @@ async function loadAccountPage(state) {
         }),
       }
       if (specifier === '../../utils/id') return { randomId: (prefix) => `${prefix}-scope-test` }
+      if (specifier === '../../utils/guest-payment-abandonment') return guestPaymentAbandonmentModule()
       if (specifier === '../../utils/format') return { money: (value) => `¥${Number(value || 0) / 100}`, dateTime: (value) => String(value || '') }
       if (specifier === '../../utils/customer-error') return {
         customerErrorMessage: (error, fallback) => error && error.code === 'GUEST_ORDER_ACCESS_FORBIDDEN'
@@ -559,7 +585,7 @@ test('Order keeps a token-only scan active and clears an unscoped A pending paym
   assert.equal(page.visibleTableScope, scope(state.session))
   assert.equal(page.data.pendingPayment, null)
   assert.equal(state.storage.get(PENDING_PAYMENT_KEY), undefined)
-  await page.continuePayment()
+  assert.equal(typeof page.continuePayment, 'undefined')
   assert.equal(calls.abandonGuestCheckout.length, 0)
 })
 
@@ -590,7 +616,7 @@ test('Order does not reopen payment after WeChat accepted it while the server is
 
   assert.equal(page.data.pendingPayment.canContinue, false)
   assert.match(page.data.pendingPayment.statusText, /到账确认中/)
-  await page.continuePayment()
+  assert.equal(typeof page.continuePayment, 'undefined')
   assert.equal(calls.abandonGuestCheckout.length, 0)
 })
 
@@ -630,13 +656,16 @@ test('Order cancels a legacy pending checkout instead of retrying its old paymen
   }
   const { page, calls } = await loadOrderPage(state)
   await page.preparePage()
-  const pending = { orderPublicId: 'order-a', retryIdempotencyKey: 'retry-a', tableScope: paymentScope, canContinue: true }
+  const pending = {
+    orderPublicId: 'order-abandon-0001', retryIdempotencyKey: 'retry-abandon-0001',
+    tableScope: paymentScope, canContinue: true,
+  }
   state.storage.set(PENDING_PAYMENT_KEY, pending)
   page.setData({ pendingPayment: pending })
-  await page.continuePayment()
+  await page.handlePendingPaymentBeforeCheckout()
 
   assert.equal(calls.abandonGuestCheckout.length, 1)
-  assert.equal(calls.abandonGuestCheckout[0].orderPublicId, 'order-a')
+  assert.equal(calls.abandonGuestCheckout[0].orderPublicId, 'order-abandon-0001')
   assert.equal(state.storage.get(PENDING_PAYMENT_KEY), undefined)
   assert.equal(page.data.pendingPayment, null)
   assert.equal(page.data.error, '')

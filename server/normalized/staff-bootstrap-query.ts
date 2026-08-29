@@ -482,10 +482,23 @@ async function readSummaries(
       (SELECT count(*) FROM mbox.reservations WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND arrival_at >= business_window.starts_at AND arrival_at < business_window.ends_at
         AND status = 'pending')::text AS reservation_attention,
-      (SELECT count(*) FROM mbox.payments WHERE tenant_id = $1::uuid AND store_id = $2::uuid
-        AND status IN ('created', 'pending'))::text AS pending_payments,
-      (SELECT count(*) FROM mbox.payments WHERE tenant_id = $1::uuid AND store_id = $2::uuid
-        AND status = 'failed')::text AS failed_payments,
+      -- A customer-left self checkout remains in the financial audit trail for
+      -- a possible late capture/refund, but is not a live payment for staff
+      -- to chase.  Real late money returns through the refund workflow.
+      (SELECT count(*) FROM mbox.payments payment WHERE payment.tenant_id = $1::uuid
+        AND payment.store_id = $2::uuid AND payment.status IN ('created', 'pending')
+        AND NOT EXISTS (
+          SELECT 1 FROM mbox.guest_immediate_checkout_abandonment_events abandonment
+          WHERE abandonment.tenant_id=payment.tenant_id AND abandonment.store_id=payment.store_id
+            AND abandonment.payment_id=payment.id
+        ))::text AS pending_payments,
+      (SELECT count(*) FROM mbox.payments payment WHERE payment.tenant_id = $1::uuid
+        AND payment.store_id = $2::uuid AND payment.status = 'failed'
+        AND NOT EXISTS (
+          SELECT 1 FROM mbox.guest_immediate_checkout_abandonment_events abandonment
+          WHERE abandonment.tenant_id=payment.tenant_id AND abandonment.store_id=payment.store_id
+            AND abandonment.payment_id=payment.id
+        ))::text AS failed_payments,
       (SELECT count(*) FROM mbox.refunds WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND status = 'requested')::text AS refund_approvals,
       (SELECT count(*) FROM mbox.refunds AS refund

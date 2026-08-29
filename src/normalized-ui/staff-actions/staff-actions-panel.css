@@ -296,6 +296,16 @@
 .staff-table-sheet > header > div { flex: 1; display: flex; flex-direction: column; }
 .staff-table-sheet > header small { color: var(--staff-muted); }
 .staff-table-sheet-icon { width: 36px; height: 36px; display: grid; place-items: center; background: #f3ecd9; border-radius: 5px; }
+.staff-table-action-overlay { position: fixed; inset: 0; z-index: 70; display: grid; align-items: end; justify-items: center; padding: 12px; background: rgb(8 13 10 / 58%); }
+.staff-table-action-dialog { width: min(100%, 680px); max-height: min(92dvh, 760px); margin: 0; padding: 0 12px max(12px, env(safe-area-inset-bottom)); overflow-y: auto; overscroll-behavior: contain; border-radius: 14px; box-shadow: 0 18px 54px rgb(0 0 0 / 30%); }
+.staff-table-action-dialog > header { position: sticky; z-index: 1; top: 0; min-height: 68px; margin: 0 -12px; padding: 10px 12px; color: #f8f4e8; background: #101712; border-bottom: 3px solid var(--staff-gold); }
+.staff-table-action-dialog > header > div { min-width: 0; }
+.staff-table-action-dialog > header strong,
+.staff-table-action-dialog > header small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.staff-table-action-dialog > header small { color: #c7ccbf; }
+.staff-table-action-dialog .staff-table-sheet-icon { flex: 0 0 auto; color: var(--staff-ink); }
+.staff-table-sheet-close { flex: 0 0 auto; width: 44px; min-width: 44px; height: 44px; min-height: 44px; padding: 0; border: 1px solid #596159; border-radius: 9px; color: #fff; background: #172019; display: grid; place-items: center; }
+.staff-table-sheet-close:hover { background: #284133; }
 .status-free, .status-open, .status-closing { font-size: 12px; padding: 4px 7px; border-radius: 4px; }
 .status-free { color: #666; background: #edf0ec; }
 .status-open { color: var(--staff-green); background: #e1f1e9; }
@@ -317,6 +327,15 @@
 .staff-open-session > p span { color: var(--staff-muted); }
 .staff-close-issue { margin: 0 0 9px !important; padding: 8px 9px; border: 1px solid #e1b2a6; border-radius: 5px; color: #8d3429; background: #fff4f1; font-size: 12px; line-height: 1.5; }
 .staff-close-issue strong { margin-right: 4px; }
+.staff-turnover-exception { display: grid; gap: 9px; margin: 0 0 10px; padding: 10px; border: 1px solid #d8b46a; border-left: 4px solid #b98522; border-radius: 7px; background: #fff9e9; }
+.staff-turnover-exception > div:first-child { display: grid; gap: 3px; }
+.staff-turnover-exception strong { color: #68480d; font-size: 14px; }
+.staff-turnover-exception span { color: #745b2c; font-size: 12px; line-height: 1.45; }
+.staff-turnover-exception-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.staff-turnover-exception-actions button { min-width: 0; min-height: 44px; padding: 7px 9px; border-radius: 6px; display: flex; align-items: center; justify-content: center; gap: 5px; font-weight: 800; line-height: 1.25; }
+.staff-turnover-exception-actions .is-account { color: #155c46; border-color: #81ad9d; background: #eef8f4; }
+.staff-turnover-exception-actions .is-turnover { color: #fff; border-color: #966817; background: #9c6c17; }
+.staff-turnover-exception-cancel { justify-self: start; min-height: 36px; padding: 0 9px; border: 0; border-radius: 5px; color: #745b2c; background: transparent; font-weight: 700; }
 .staff-session-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .staff-session-actions button { border-radius: 6px; display: flex; align-items: center; justify-content: center; gap: 6px; font-weight: 700; }
 .staff-session-actions .is-payment { grid-column: 1 / -1; color: #fff; border-color: #176c4d; background: #176c4d; }
@@ -631,6 +650,14 @@
 }
 
 @media (max-width: 560px) {
+  .staff-table-action-overlay { padding: 0; }
+  .staff-table-action-dialog { width: 100%; max-height: 96dvh; padding: 0 10px max(12px, env(safe-area-inset-bottom)); border-radius: 14px 14px 0 0; }
+  .staff-table-action-dialog > header { min-height: 64px; margin: 0 -10px; padding: 10px; gap: 7px; }
+  .staff-table-action-dialog .status-free,
+  .staff-table-action-dialog .status-open,
+  .staff-table-action-dialog .status-closing { padding: 4px 5px; font-size: 11px; }
+  .staff-turnover-exception { padding: 9px; }
+  .staff-turnover-exception-actions button { padding-inline: 6px; font-size: 12px; }
   .staff-participant-mask { padding: 0; align-items: end; }
   .staff-participant-sheet { width: 100%; max-height: 96dvh; border-radius: 14px 14px 0 0; padding: 12px 10px max(12px,env(safe-area-inset-bottom)); }
   .staff-assignment-fields { grid-template-columns: 1fr; }

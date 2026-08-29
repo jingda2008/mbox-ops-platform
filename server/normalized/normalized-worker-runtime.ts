@@ -36,6 +36,10 @@ import { WechatMemberServiceNotificationWorker } from './wechat-member-service-n
 import { PromotionalLoyaltyWorker } from './promotional-loyalty-worker.js'
 import { PersonalContactDispositionWorker } from './personal-contact-disposition-worker.js'
 import { ComplimentaryBenefitFulfillmentWorker } from './complimentary-benefit-fulfillment-worker.js'
+import {
+  StaleGuestImmediatePaymentWorker,
+  type StaleGuestImmediatePaymentWorkerDeps,
+} from './stale-guest-immediate-payment-worker.js'
 import type { WechatTemplateMessageDelivery } from './wechat-subscription-message-adapter.js'
 import type { ScopedPostgresTransactionRunner, StoreScope } from './transaction-runner.js'
 
@@ -86,6 +90,7 @@ export interface NormalizedWorkerRuntimeOptions {
     recipients: WechatMiniProgramNotificationRecipientResolver
     delivery: WechatTemplateMessageDelivery
   }> | null
+  staleGuestImmediatePaymentReconciliation?: Readonly<StaleGuestImmediatePaymentWorkerDeps> | null
   onError?: (worker: NormalizedWorkerName, error: unknown) => void
   onCycle?: (result: Readonly<NormalizedWorkerCycleResult>) => void
 }
@@ -167,6 +172,12 @@ export function createNormalizedWorkerRuntime(
     staffLoginRateLimitCleanup: new PostgresStaffLoginRateLimiter(transactions, options.hashSecret),
     businessDay: new BusinessDayRolloverWorker(transactions),
     automaticTableTurnover: new AutomaticTableTurnoverWorker(transactions),
+    ...(options.staleGuestImmediatePaymentReconciliation == null ? {} : {
+      staleGuestImmediatePaymentReconciliation: new StaleGuestImmediatePaymentWorker(
+        options.staleGuestImmediatePaymentReconciliation,
+        transactions,
+      ),
+    }),
     ...(adapters === null ? {} : { sop: new SopWorker(transactions, adapters.sop) }),
     aiScheduled: new AiScheduledExecutionWorker(transactions, options.aiExecutions),
     personalContactDisposition:new PersonalContactDispositionWorker(transactions),

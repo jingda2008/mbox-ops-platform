@@ -29,6 +29,11 @@ const { publicImageUrl } = require('../../utils/media')
 const { customerErrorMessage, isWechatCancellation } = require('../../utils/customer-error')
 const { requestWechatSubscription } = require('../../utils/wechat-subscription')
 const { isPresentableWechatJsapiAction } = require('../../utils/wechat-payment')
+const {
+  PENDING_GUEST_PAYMENT_ABANDONMENT_KEY,
+  createGuestPaymentAbandonmentRecord,
+  isRetryableGuestPaymentAbandonment,
+} = require('../../utils/guest-payment-abandonment')
 
 const PENDING_PAYMENT_KEY = 'mbox.pending.guest.payment.v1'
 const CHECKOUT_ATTEMPT_KEY = 'mbox.pending.guest.checkout.v1'
@@ -450,10 +455,14 @@ Page({
   onLoad() { this.ensureTableRequestGuard() },
   onShow() { this.preparePage() },
   onHide() {
+    const record = this.queuePendingGuestPaymentAbandonment()
+    if (record) void this.executePendingGuestPaymentAbandonment(record)
     this.invalidateTableRequests()
     this.stopWaitingPoll(); this.stopSharedCartPolling(); this.stopServicePolling(); this.stopShakeRecommendation()
   },
   onUnload() {
+    const record = this.queuePendingGuestPaymentAbandonment()
+    if (record) void this.executePendingGuestPaymentAbandonment(record)
     this.invalidateTableRequests()
     this.stopWaitingPoll(); this.stopSharedCartPolling(); this.stopServicePolling(); this.stopShakeRecommendation()
   },
@@ -476,6 +485,74 @@ Page({
   currentTableRequest() { return this.ensureTableRequestGuard().current() },
   isCurrentTableRequest(request) { return this.ensureTableRequestGuard().isCurrent(request) },
   invalidateTableRequests() { this.ensureTableRequestGuard().invalidate() },
+
+  queuePendingGuestPaymentAbandonment(pendingOverride) {
+    const paymentScope = tableSessionCacheScope()
+    const pendingPayment = pendingOverride || this.data.pendingPayment || wx.getStorageSync(PENDING_PAYMENT_KEY) || null
+    const record = createGuestPaymentAbandonmentRecord(
+      pendingPayment,
+      paymentScope,
+      (orderPublicId) => randomId(`guest-checkout-abandon-${orderPublicId}`),
+    )
+    if (!record) return null
+    const retained = Object.assign({}, pendingPayment, { abandonmentIdempotencyKey: record.idempotencyKey })
+    wx.setStorageSync(PENDING_PAYMENT_KEY, retained)
+    wx.setStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY, record)
+    // Lifecycle callbacks must not wait on network.  They persist this exact
+    // idempotency key first; the caller starts the request (or a later fresh
+    // table-order read retries it) without creating a second cancellation.
+    return record
+  },
+
+  async executePendingGuestPaymentAbandonment(record) {
+    if (this._guestPaymentAbandonmentInFlight === record.idempotencyKey) {
+      return this._guestPaymentAbandonmentPromise || null
+    }
+    this._guestPaymentAbandonmentInFlight = record.idempotencyKey
+    const execution = (async () => {
+      const result = await abandonGuestCheckout(record.orderPublicId, record.idempotencyKey)
+      const operationallyCancelled = result && result.operationalState === 'cancelled'
+      if (operationallyCancelled) {
+        const currentRecord = wx.getStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
+        if (currentRecord && currentRecord.idempotencyKey === record.idempotencyKey) {
+          wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
+        }
+        const pendingPayment = wx.getStorageSync(PENDING_PAYMENT_KEY)
+        if (pendingPayment && pendingPayment.tableScope === record.tableScope
+          && pendingPayment.orderPublicId === record.orderPublicId) {
+          wx.removeStorageSync(PENDING_PAYMENT_KEY)
+          if (this.data.pendingPayment && this.data.pendingPayment.orderPublicId === record.orderPublicId) {
+            this.setData({ pendingPayment: null, checkoutLocked: false })
+          }
+        }
+      }
+      return result || null
+    })().catch((error) => {
+      // Known successful/terminal states are no longer a customer checkout.
+      // Network/unknown outcomes retain the exact same key for a later retry;
+      // the server worker separately reconciles the financial rail.
+      if (error && ['GUEST_CHECKOUT_ALREADY_PAID', 'GUEST_CHECKOUT_NOT_FOUND', 'GUEST_ORDER_ACCESS_FORBIDDEN'].includes(error.code)) {
+        wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
+        const pendingPayment = wx.getStorageSync(PENDING_PAYMENT_KEY)
+        if (pendingPayment && pendingPayment.tableScope === record.tableScope
+          && pendingPayment.orderPublicId === record.orderPublicId) {
+          wx.removeStorageSync(PENDING_PAYMENT_KEY)
+          if (this.data.pendingPayment && this.data.pendingPayment.orderPublicId === record.orderPublicId) {
+            this.setData({ pendingPayment: null, checkoutLocked: false })
+          }
+        }
+      }
+      return null
+    })
+    this._guestPaymentAbandonmentPromise = execution
+    try { return await execution }
+    finally {
+      if (this._guestPaymentAbandonmentInFlight === record.idempotencyKey) {
+        this._guestPaymentAbandonmentInFlight = null
+        this._guestPaymentAbandonmentPromise = null
+      }
+    }
+  },
 
   stopWaitingPoll() {
     if (this.waitingTimer) clearTimeout(this.waitingTimer)
@@ -709,6 +786,11 @@ Page({
     const tableOrdersAvailable = Array.isArray(results[3])
     const tableOrders = tableOrdersAvailable ? results[3] : []
     const paymentScope = tableSessionCacheScope()
+    let storedAbandonment = wx.getStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY) || null
+    if (storedAbandonment && storedAbandonment.tableScope !== paymentScope) {
+      wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
+      storedAbandonment = null
+    }
     let storedPending = wx.getStorageSync(PENDING_PAYMENT_KEY) || null
     let completedPayment = null
     // Pending-payment records created before table scopes existed cannot be
@@ -730,16 +812,29 @@ Page({
         canRetry: false,
       }
       wx.removeStorageSync(PENDING_PAYMENT_KEY)
+      wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
+      storedAbandonment = null
       storedPending = null
     } else if (storedPending && tableOrdersAvailable && !storedOrder) {
       wx.removeStorageSync(PENDING_PAYMENT_KEY)
+      wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
+      storedAbandonment = null
       storedPending = null
     }
-    const pendingFromOrders = tableOrders.find((item) => Number(item.payableAmountMinor || 0) > 0
+    // The table bill is shared, but an unpaid payment rail is not.  Only the
+    // current customer's own QR order can become a local recovery candidate;
+    // a neighbor's or a waiter-held order must never lock this customer's
+    // cart, nor be eligible for this page to abandon.
+    const pendingFromOrders = tableOrders.find((item) => item.isMine === true
+      && item.channel === 'guest_qr'
+      && Number(item.payableAmountMinor || 0) > 0
       && ['available', 'payment_in_progress', 'status_review'].includes(item.paymentAccess))
     const pendingPayment = storedPending
       ? Object.assign({}, storedPending, {
-          canContinue: Boolean(!storedPending.wechatAcceptedAt && tableOrdersAvailable && storedOrder
+          canContinue: Boolean(!storedPending.wechatAcceptedAt
+            && storedPending.paymentPresentationState !== 'result_unknown'
+            && storedPending.paymentPresentationInFlight !== true
+            && tableOrdersAvailable && storedOrder
             && ['available', 'payment_in_progress'].includes(storedOrder.paymentAccess)),
           statusText: tableOrdersAvailable && storedOrder
             ? storedOrder.paymentAccess === 'status_review'
@@ -752,6 +847,9 @@ Page({
       : (pendingFromOrders ? {
           orderPublicId: pendingFromOrders.publicId,
           retryIdempotencyKey: randomId(`guest-payment-${pendingFromOrders.publicId}`),
+          checkoutKind: 'guest_immediate_payment',
+          paymentPresentationState: 'ready_not_presented',
+          paymentPresentationInFlight: false,
           tableScope: paymentScope,
           amountText: money(pendingFromOrders.payableAmountMinor),
           statusText: pendingFromOrders.paymentAccess === 'status_review'
@@ -799,6 +897,12 @@ Page({
     this.startSharedCartPolling(request)
     this.startServicePolling(request)
     this.ensureInitialRecommendations(request)
+    const abandonmentOrder = storedAbandonment && tableOrders.find((item) => item.publicId === storedAbandonment.orderPublicId)
+    if (isRetryableGuestPaymentAbandonment(storedAbandonment, paymentScope, abandonmentOrder)) {
+      void this.executePendingGuestPaymentAbandonment(storedAbandonment)
+    } else if (storedAbandonment && tableOrdersAvailable) {
+      wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
+    }
     return true
   },
 
@@ -1314,45 +1418,21 @@ Page({
     // abandoned on the server and never blocks a fresh cart.  A WeChat
     // success callback remains a protected reconciliation case, but it still
     // does not stop the customer from adding a later, separate order.
-    if (pending.canContinue && pending.orderPublicId) {
-      await this.abandonPendingGuestCheckout(pending, '开始新的点单')
+    if (pending.orderPublicId) {
+      const record = this.queuePendingGuestPaymentAbandonment(pending)
+      if (record) {
+        const result = await this.executePendingGuestPaymentAbandonment(record)
+        if ((result && result.operationalState === 'cancelled')
+          || (!this.data.pendingPayment && !wx.getStorageSync(PENDING_PAYMENT_KEY))) return false
+        // A fresh order must never race an unverified earlier WeChat rail.
+        // This is a short recovery state, not a retained payable order: the
+        // customer can keep browsing, and retrying here reuses the same safe
+        // cancellation key rather than starting a second charge.
+        this.setData({ error: '正在结束上一笔付款，请稍后再确认支付。' })
+        return true
+      }
     }
     return false
-  },
-
-  async abandonPendingGuestCheckout(pending, source, request) {
-    const tableRequest = request || this.currentTableRequest()
-    if (!pending || !pending.orderPublicId || !tableRequest || !this.isCurrentTableRequest(tableRequest)) return null
-    const idempotencyKey = pending.abandonIdempotencyKey || randomId(`guest-checkout-abandon-${pending.orderPublicId}`)
-    try {
-      const result = await abandonGuestCheckout(pending.orderPublicId, idempotencyKey)
-      if (!this.isCurrentTableRequest(tableRequest)) return null
-      wx.removeStorageSync(PENDING_PAYMENT_KEY)
-      wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
-      this.setData({ pendingPayment: null, checkoutLocked: false })
-      return result
-    } catch (error) {
-      if (!this.isCurrentTableRequest(tableRequest)) return null
-      if (error && error.code === 'GUEST_CHECKOUT_ALREADY_PAID') {
-        wx.removeStorageSync(PENDING_PAYMENT_KEY)
-        this.setData({
-          pendingPayment: null,
-          checkoutLocked: false,
-          paymentResult: {
-            kind: 'pending', mark: '…', title: '付款状态已确认',
-            copy: '本笔已进入到账核对，不会重复出品或再次扣款。', canRetry: false,
-          },
-        })
-        return null
-      }
-      // Do not let an unavailable cancellation request trap a customer in an
-      // old local modal.  The protected payment record is still reconciled by
-      // the server, while a later retry can repeat this idempotent abandon.
-      wx.removeStorageSync(PENDING_PAYMENT_KEY)
-      wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
-      this.setData({ pendingPayment: null, checkoutLocked: false })
-      return { paymentState: 'reconciliation_pending', source }
-    }
   },
 
   async openCheckout() {
@@ -1457,6 +1537,9 @@ Page({
         orderPublicId: data.order.publicId,
         paymentPublicId: data.payment && data.payment.publicId,
         retryIdempotencyKey: randomId(`guest-payment-${data.order.publicId}`),
+        checkoutKind: 'guest_immediate_payment',
+        paymentPresentationState: 'ready_not_presented',
+        paymentPresentationInFlight: false,
         amountText: money(data.settlement && data.settlement.payableAmountMinor),
         tableScope: attempt.tableScope,
         statusText: '订单已备好，请完成付款',
@@ -1508,28 +1591,49 @@ Page({
       const waitingForResult = Boolean(action && (
         action.status === 'unknown' || (action.status === 'pending' && !action.payload)
       ))
-      const outcome = await this.abandonPendingGuestCheckout(this.data.pendingPayment, '未能拉起微信支付', tableRequest)
+      const pendingPayment = Object.assign({}, this.data.pendingPayment, {
+        statusText: waitingForResult ? '付款结果确认中' : '付款未完成',
+        paymentPresentationState: waitingForResult ? 'result_unknown' : 'action_failed',
+        paymentPresentationInFlight: false,
+        canContinue: false,
+      })
+      wx.setStorageSync(PENDING_PAYMENT_KEY, pendingPayment)
+      this.setData({ pendingPayment })
+      const abandonment = this.queuePendingGuestPaymentAbandonment(pendingPayment)
+      if (abandonment) void this.executePendingGuestPaymentAbandonment(abandonment)
       if (!this.isCurrentTableRequest(tableRequest)) return
       this.setData({
         paymentResult: {
           kind: waitingForResult ? 'pending' : 'failed',
           mark: waitingForResult ? '…' : '!',
-          title: outcome && outcome.paymentState === 'late_payment_refund_required'
-            ? '付款已转门店核对' : waitingForResult ? '本次付款已取消' : '未能发起微信支付',
+          title: waitingForResult ? '正在核对付款结果' : '未能发起微信支付',
           copy: waitingForResult
-            ? '本桌已恢复可继续点单，支付通道仍会自行核对，不会重复出品。'
-            : '本次订单已取消，你可以继续选购后重新付款。',
+            ? '本次不会进入出品；核对完成后可重新选购付款。'
+            : '本次订单正在释放，你可以继续选购后重新付款。',
           canRetry: false,
         },
       })
       return
     }
     try {
+      // The native sheet can hide this page. Persist the in-flight marker
+      // before calling WeChat so onHide/onUnload never mistake that sheet for
+      // a customer abandoning the order.
+      const presentingPayment = Object.assign({}, this.data.pendingPayment, {
+        paymentPresentationState: 'presenting',
+        paymentPresentationInFlight: true,
+        canContinue: false,
+        paymentPresentationStartedAt: new Date().toISOString(),
+      })
+      wx.setStorageSync(PENDING_PAYMENT_KEY, presentingPayment)
+      this.setData({ pendingPayment: presentingPayment })
       await new Promise((resolve, reject) => wx.requestPayment(Object.assign({}, action.payload, { success: resolve, fail: reject })))
-      if (!this.isCurrentTableRequest(tableRequest)) return
+      if (!this.data.pendingPayment || this.data.pendingPayment.tableScope !== tableSessionCacheScope()) return
       const pendingPayment = Object.assign({}, this.data.pendingPayment, {
         statusText: '微信支付已完成，正在确认到账',
         canContinue: false,
+        paymentPresentationState: 'wechat_accepted',
+        paymentPresentationInFlight: false,
         wechatAcceptedAt: new Date().toISOString(),
       })
       wx.setStorageSync(PENDING_PAYMENT_KEY, pendingPayment)
@@ -1538,28 +1642,31 @@ Page({
       // callback. Keep it after payment so checkout remains one uninterrupted
       // confirm -> password flow. Authorization failure must never rewrite a
       // successful WeChat payment as a payment failure.
-      await this.offerOrderNotifications('order_checkout', tableRequest).catch(() => {})
-      if (!this.isCurrentTableRequest(tableRequest)) return
-      await this.confirmPaymentOutcome(pendingPayment, tableRequest)
+      const activeRequest = this.currentTableRequest()
+      await this.offerOrderNotifications('order_checkout', activeRequest).catch(() => {})
+      await this.confirmPaymentOutcome(pendingPayment, activeRequest)
     } catch (error) {
-      if (!this.isCurrentTableRequest(tableRequest)) return
+      if (!this.data.pendingPayment || this.data.pendingPayment.tableScope !== tableSessionCacheScope()) return
       const cancelled = isWechatCancellation(error)
-      const outcome = await this.abandonPendingGuestCheckout(
-        this.data.pendingPayment,
-        cancelled ? '顾客取消微信支付' : '微信支付未返回成功',
-        tableRequest,
-      )
-      if (!this.isCurrentTableRequest(tableRequest)) return
+      const pendingPayment = Object.assign({}, this.data.pendingPayment, {
+        statusText: cancelled ? '付款已取消，正在释放本次付款' : '付款结果确认中，请勿重复付款',
+        canContinue: false,
+        paymentPresentationState: cancelled ? 'cancelled' : 'result_unknown',
+        paymentPresentationInFlight: false,
+      })
+      wx.setStorageSync(PENDING_PAYMENT_KEY, pendingPayment)
+      this.setData({ pendingPayment })
+      const abandonment = this.queuePendingGuestPaymentAbandonment(pendingPayment)
+      if (abandonment) void this.executePendingGuestPaymentAbandonment(abandonment)
       this.setData({
         error: '',
         paymentResult: {
           kind: cancelled ? 'cancelled' : 'failed',
           mark: cancelled ? '×' : '!',
-          title: outcome && outcome.paymentState === 'late_payment_refund_required'
-            ? '付款已转门店核对' : cancelled ? '付款已取消' : '付款未完成',
-          copy: outcome && outcome.paymentState === 'late_payment_refund_required'
-            ? '本桌已恢复可继续点单；若通道晚到扣款，门店会按实际到账处理退款。'
-            : '本次订单已取消，你可以继续选购后重新付款。',
+          title: cancelled ? '付款已取消' : '正在核对付款结果',
+          copy: cancelled
+            ? '本次订单正在释放，你可以继续选购后重新付款。'
+            : '本次不会进入出品；核对完成后可重新选购付款。',
           canRetry: false,
         },
       })
@@ -1658,19 +1765,4 @@ Page({
     })
   },
 
-  async continuePayment() {
-    const pending = this.data.pendingPayment
-    if (!pending || !pending.canContinue || this.data.busy) return
-    const tableRequest = this.currentTableRequest()
-    if (!tableRequest || !this.isCurrentTableRequest(tableRequest)
-      || pending.tableScope !== tableSessionCacheScope()) return
-    this.setData({ busy: true, error: '' })
-    try {
-      await this.abandonPendingGuestCheckout(pending, '处理旧版待付款订单', tableRequest)
-      if (this.isCurrentTableRequest(tableRequest)) this.openCheckout()
-    } catch (error) {
-      if (!this.isCurrentTableRequest(tableRequest)) return
-      this.setData({ error: customerErrorMessage(error, '本次付款已结束，请重新选购后再支付') })
-    } finally { if (this.isCurrentTableRequest(tableRequest)) this.setData({ busy: false }) }
-  },
 })

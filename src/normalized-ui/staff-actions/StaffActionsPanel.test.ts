@@ -65,6 +65,45 @@ describe('StaffActionsPanel', () => {
     expect(source).toContain('付款、退款和对账后续会原样保留给收银处理')
   })
 
+  it('uses a dismissible table dialog on the actual staff-app route and keeps its narrow-screen bounds', () => {
+    const source = readFileSync(new URL('./StaffActionsPanel.tsx', import.meta.url), 'utf8')
+    const css = readFileSync(new URL('./staff-actions-panel.css', import.meta.url), 'utf8')
+    const app = readFileSync(new URL('../NormalizedStaffApp.tsx', import.meta.url), 'utf8')
+
+    expect(app).toContain("isStaffActionsTab(staffRoute)")
+    expect(app).toContain('<StaffActionsPanel')
+    expect(app).toContain('initialTab={staffRoute}')
+    expect(source).toContain('tableActionDialogOpen')
+    expect(source).toContain('className="staff-table-action-overlay"')
+    expect(source).toContain('aria-modal="true"')
+    expect(source).toContain('aria-label="关闭桌台操作"')
+    expect(source).toContain("event.target === event.currentTarget")
+    expect(source).toContain("event.key === 'Escape'")
+    expect(source).toContain("window.removeEventListener('keydown', onKeyDown)")
+    expect(source).toContain("event.key !== 'Tab'")
+    expect(source).toContain('last.focus()')
+    expect(source).toContain('resetTableActionState(true)')
+    expect(css).toMatch(/\.staff-table-action-overlay \{[^}]*z-index:\s*70;/)
+    expect(css).toMatch(/\.staff-table-action-dialog \{[^}]*max-height:\s*min\(92dvh, 760px\);[^}]*overflow-y:\s*auto;/)
+    expect(css).toMatch(/@media \(max-width: 560px\) \{[\s\S]*?\.staff-table-action-dialog \{[^}]*max-height:\s*96dvh;/)
+  })
+
+  it('restores the same table dialog after a layered action closes and frontloads the protected customer-left route', () => {
+    const source = readFileSync(new URL('./StaffActionsPanel.tsx', import.meta.url), 'utf8')
+
+    expect(source).toContain('secondaryTableSessionIdRef')
+    expect(source).toContain('const returnToTableActionDialog')
+    expect(source).toContain('selectedTable?.activeSession?.id === sessionId')
+    expect(source).toContain('onClose={() => returnToTableActionDialog(() => setTablePaymentOpen(false))}')
+    expect(source).toContain('onClose={() => returnToTableActionDialog(() => setOrderSheetMode(null))}')
+    expect(source).toContain("hasPermission(props.permissions, 'table.turnover_unsettled')")
+    expect(source).toContain('查看桌账/收款')
+    expect(source).toContain('财务待跟进不阻断翻台')
+    expect(source.indexOf('staff-turnover-exception')).toBeLessThan(source.indexOf('{props.orderStatusPanel}'))
+    expect(source).toContain("props.closeIssue === null && hasPermission(props.permissions, 'table.close')")
+    expect(source).toContain('memberBenefitsPanel')
+  })
+
   it('renders a compact honest loading state before authoritative data arrives', () => {
     const api: StaffActionsApiPort = {
       loadOperations: vi.fn(() => new Promise<StaffOperationsData>(() => undefined)),

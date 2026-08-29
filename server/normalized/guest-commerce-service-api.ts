@@ -56,6 +56,7 @@ import { OrderProductUnavailableError, TableSessionUnavailableForOrderError } fr
 import type { InitiatePaymentCommand, PaymentCommandService } from './payment-command-service.js'
 import { OrderNotPayableError, type Payment } from './payment-repository.js'
 import { PaymentFulfillmentRepository } from './payment-fulfillment-repository.js'
+import { GuestImmediateCheckoutReconciliationRepository } from './guest-immediate-checkout-reconciliation-repository.js'
 import { FulfillmentCapacityUnavailableError } from './fulfillment-capacity-repository.js'
 import type { OnlinePaymentAction, OnlinePaymentService } from './online-payment-service.js'
 import {
@@ -528,6 +529,21 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
           throw new GuestAuthenticationRequiredError()
         }
         const result = await abandonGuestSelfCheckout(transaction, context, orderPublicId)
+        if (result.paymentId !== null && result.paymentPublicId !== null) {
+          await new GuestImmediateCheckoutReconciliationRepository(transaction).recordCustomerExit({
+            paymentId: result.paymentId,
+            orderId: result.orderId,
+            orderPublicId: result.orderPublicId,
+            paymentPublicId: result.paymentPublicId,
+            releasedInventoryReservationCount: result.releasedInventoryReservationCount,
+            cancelledItemCount: result.cancelledItemCount,
+            cancelledKdsTaskCount: result.cancelledKdsTaskCount,
+            // A customer-owned exit is a durable operational event, not an
+            // employee action. The fixed integration reference is only the
+            // audit source required by the append-only record.
+            workerRef: 'guest-payment-exit',
+          })
+        }
         return {
           result,
           auditEvents: [{
@@ -541,6 +557,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
               paymentPublicId: result.paymentPublicId,
               alreadyCancelled: result.alreadyCancelled,
               cancelledItemCount: result.cancelledItemCount,
+              cancelledKdsTaskCount: result.cancelledKdsTaskCount,
               releasedInventoryReservationCount: result.releasedInventoryReservationCount,
               invalidatedCheckoutUpgradeCount: result.invalidatedCheckoutUpgradeCount,
             },
@@ -562,14 +579,16 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
           }],
         }
       })
-      const paymentRail = await reconcileAbandonedGuestCheckoutPayment(
-        options, context, execution.value, idempotencyKey,
-      )
       return reply.send({
         data: {
           orderPublicId: execution.value.orderPublicId,
           operationalState: 'cancelled',
-          paymentState: paymentRail,
+          // The table/order release is the customer-facing outcome.  Do not
+          // make this response wait for a remote provider query or close:
+          // a slow rail used to leave the Mini Program looking locked even
+          // after the transaction had already released the order.  The
+          // dedicated worker queries/settles this durable payment fact next.
+          paymentState: execution.value.paymentId === null ? 'not_required' : 'reconciliation_pending',
         },
         meta: { replayed: execution.replayed },
       })
@@ -1279,6 +1298,7 @@ interface GuestCheckoutAbandonmentResult {
   paymentPublicId: string | null
   alreadyCancelled: boolean
   cancelledItemCount: number
+  cancelledKdsTaskCount: number
   releasedInventoryReservationCount: number
   invalidatedCheckoutUpgradeCount: number
 }
@@ -1287,16 +1307,22 @@ const guestCheckoutAbandonmentCodec: JsonCodec<GuestCheckoutAbandonmentResult> =
   encode: (value) => ({ ...value }),
   decode: (value) => {
     const row = jsonObject(value)
+    // `abandon-checkout` shipped before KDS task cancellation was counted.
+    // Command idempotency may legitimately replay that durable old result
+    // after this deployment, so absence means the historical safe value zero;
+    // it must not turn a customer retry into an opaque 500.
+    const cancelledKdsTaskCount = row.cancelledKdsTaskCount === undefined ? 0 : row.cancelledKdsTaskCount
     if (typeof row.orderId !== 'string' || typeof row.orderPublicId !== 'string'
       || !(typeof row.paymentId === 'string' || row.paymentId === null)
       || !(typeof row.paymentPublicId === 'string' || row.paymentPublicId === null)
       || typeof row.alreadyCancelled !== 'boolean'
       || typeof row.cancelledItemCount !== 'number'
+      || typeof cancelledKdsTaskCount !== 'number'
       || typeof row.releasedInventoryReservationCount !== 'number'
       || typeof row.invalidatedCheckoutUpgradeCount !== 'number') {
       throw new TypeError('Stored guest checkout abandonment result is invalid')
     }
-    return row as unknown as GuestCheckoutAbandonmentResult
+    return { ...row, cancelledKdsTaskCount } as unknown as GuestCheckoutAbandonmentResult
   },
 }
 
@@ -1337,8 +1363,11 @@ async function abandonGuestSelfCheckout(
     id: string
     public_id: string
     status: Payment['status']
+    provider: string
+    method: string
+    provider_snapshot: unknown
   }>(`
-    SELECT id,public_id,status
+    SELECT id,public_id,status,provider,method,provider_snapshot
     FROM mbox.payments
     WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND order_id=$3::uuid
     ORDER BY created_at DESC,id DESC
@@ -1352,6 +1381,14 @@ async function abandonGuestSelfCheckout(
       409,
     )
   }
+  if (payment !== null && (payment.provider !== 'postar' || payment.method !== 'jsapi'
+    || !isGuestImmediateCheckoutPaymentSnapshot(payment.provider_snapshot))) {
+    throw new GuestApiRequestError(
+      'GUEST_CHECKOUT_CANNOT_BE_CANCELLED',
+      '这笔订单正在由工作人员处理，请由工作人员按实际情况完成收款或核对',
+      409,
+    )
+  }
   if (order.status === 'cancelled') {
     return {
       orderId: order.id,
@@ -1360,6 +1397,7 @@ async function abandonGuestSelfCheckout(
       paymentPublicId: payment?.public_id ?? null,
       alreadyCancelled: true,
       cancelledItemCount: 0,
+      cancelledKdsTaskCount: 0,
       releasedInventoryReservationCount: 0,
       invalidatedCheckoutUpgradeCount: 0,
     }
@@ -1394,6 +1432,19 @@ async function abandonGuestSelfCheckout(
     order.id,
     'guest left the final WeChat payment sheet',
   )
+  // Immediate-payment orders normally create KDS work only after payment.
+  // Cancel an impossible legacy/corrupt pending task too, so a customer exit
+  // can never leave hidden work that later blocks the table from turning over.
+  const cancelledKdsTasks = await transaction.query(`
+    UPDATE mbox.kds_tasks AS task
+    SET status='cancelled',cancelled_at=clock_timestamp(),updated_at=clock_timestamp()
+    FROM mbox.order_items AS item
+    WHERE item.tenant_id=task.tenant_id AND item.store_id=task.store_id
+      AND item.id=task.order_item_id
+      AND task.tenant_id=$1::uuid AND task.store_id=$2::uuid AND item.order_id=$3::uuid
+      AND task.status NOT IN ('cancelled','failed','completed')
+    RETURNING task.id
+  `, [transaction.scope.tenantId, transaction.scope.storeId, order.id])
   const cancelledItems = await transaction.query(`
     UPDATE mbox.order_items
     SET status='cancelled',updated_at=clock_timestamp()
@@ -1435,76 +1486,14 @@ async function abandonGuestSelfCheckout(
     paymentPublicId: payment?.public_id ?? null,
     alreadyCancelled: false,
     cancelledItemCount: cancelledItems.rowCount ?? 0,
+    cancelledKdsTaskCount: cancelledKdsTasks.rowCount ?? 0,
     releasedInventoryReservationCount: fulfillment.reservationCount,
     invalidatedCheckoutUpgradeCount: invalidatedUpgrade.rowCount ?? 0,
   }
 }
 
-type GuestCheckoutPaymentRailState = 'not_required' | 'closed' | 'reconciliation_pending' | 'late_payment_refund_required'
-
-async function reconcileAbandonedGuestCheckoutPayment(
-  options: GuestCommerceServiceApiOptions,
-  context: GuestRequestContext & { tableSessionId: string; businessDate: string },
-  result: GuestCheckoutAbandonmentResult,
-  idempotencyKey: string,
-): Promise<GuestCheckoutPaymentRailState> {
-  if (result.paymentId === null || result.paymentPublicId === null) return 'not_required'
-  if (options.onlinePayments.close === undefined || options.payments.recordProviderQueryResult === undefined) {
-    return 'reconciliation_pending'
-  }
-  try {
-    const closed = await options.onlinePayments.close({
-      scope: context.scope,
-      paymentId: result.paymentId,
-      closeBindingId: `guest-checkout-close-${createHash('sha256')
-        .update(`${idempotencyKey}:${result.paymentPublicId}`).digest('hex').slice(0, 48)}`,
-      principal: guestPaymentPrincipal(context),
-    })
-    const observation = closed.observation
-    await options.payments.recordProviderQueryResult({
-      scope: context.scope,
-      actor: { type: 'integration', ref: 'postar-close-payment' },
-      businessDate: context.businessDate,
-      idempotencyKey: `guest-checkout-close-result-${createHash('sha256')
-        .update(`${idempotencyKey}:${closed.context.publicId}`).digest('hex').slice(0, 48)}`,
-      requestFingerprint: stableJson({
-        orderPublicId: result.orderPublicId,
-        paymentPublicId: closed.context.publicId,
-        status: observation.status,
-        providerTransactionId: observation.providerTransactionId,
-      }),
-      verifiedObservationId: closed.verifiedObservationId,
-      paymentPublicId: closed.context.publicId,
-      provider: 'postar',
-      providerTransactionId: observation.providerTransactionId,
-      reportedAmountMinor: observation.amount,
-      reportedCurrency: observation.currency,
-      settlementChannel: observation.settlementChannel,
-      providerSnapshot: {
-        source: 'guest_checkout_abandonment',
-        guestCheckoutAbandoned: true,
-        providerStatus: observation.status,
-        observedAt: observation.occurredAt,
-      },
-      occurredAt: observation.occurredAt,
-      status: observation.status,
-    })
-    return observation.status === 'succeeded' ? 'late_payment_refund_required'
-      : observation.status === 'closed' || observation.status === 'failed' ? 'closed'
-        : 'reconciliation_pending'
-  } catch (error) {
-    // A provider timeout or an in-flight rail must never re-lock a bar table.
-    // The pending-payment reconciler keeps the protected payment fact and will
-    // turn a later capture into a finance/refund case.
-    if (error instanceof OnlinePaymentUnknownError
-      || error instanceof OnlinePaymentUnavailableError
-      || error instanceof PostarPaymentRejectedError
-      || error instanceof ProviderPaymentUnknownError
-      || error instanceof ProviderPaymentInProgressError) {
-      return 'reconciliation_pending'
-    }
-    throw error
-  }
+function isGuestImmediateCheckoutPaymentSnapshot(value: unknown): boolean {
+  return isRecord(value) && value.source === 'guest_checkout'
 }
 
 interface SharedCartCheckoutResult {
@@ -1648,6 +1637,20 @@ async function createGuestProviderAction(
     })
   } catch (error) {
     if (error instanceof PostarPaymentRejectedError) return unavailablePaymentAction(payment, orderPublicId, 'failed')
+    // The order/payment command already committed before this external call.
+    // Return a typed failed presentation, rather than an opaque 5xx that
+    // hides the order identifier and prevents the Mini Program from releasing
+    // its own cancelled checkout.
+    if (error instanceof OnlinePaymentUnavailableError) {
+      return unavailablePaymentAction(payment, orderPublicId, 'failed')
+    }
+    // The identity is preflighted before checkout, but it can still be
+    // revoked between the committed order and the provider action request.
+    // No provider charge has been created in this branch, so preserve the
+    // public order id and let the normal abandonment path release it.
+    if (error instanceof WechatPaymentIdentityRequiredError) {
+      return unavailablePaymentAction(payment, orderPublicId, 'failed')
+    }
     if (error instanceof ProviderPaymentInProgressError) return unavailablePaymentAction(payment, orderPublicId, 'pending')
     if (error instanceof ProviderPaymentUnknownError || error instanceof OnlinePaymentUnknownError) {
       return unavailablePaymentAction(payment, orderPublicId, 'unknown')

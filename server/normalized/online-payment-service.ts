@@ -60,6 +60,12 @@ export interface CloseOnlinePaymentInput {
   principal: Readonly<PaymentPrincipal>
 }
 
+export interface CloseSystemOnlinePaymentInput {
+  scope: Readonly<StoreScope>
+  paymentId: string
+  closeBindingId: string
+}
+
 export interface OnlinePaymentQueryResult {
   context: ProviderPaymentContext
   observation: ProviderPaymentObservation
@@ -278,41 +284,70 @@ export class OnlinePaymentService {
       new PaymentProviderActionRepository(transaction, this.secret)
         .resolvePaymentContext(input.paymentId, input.principal, { lock: false })
     ), { readOnly: true })
+    return this.closeResolvedContext(input.scope, context, input.closeBindingId)
+  }
+
+  /**
+   * Background reconciliation deliberately has no guest or employee identity
+   * to impersonate. It uses the exact same query-before-close path as the
+   * caller-authorised flow, but resolves the payment under the store worker's
+   * system authority.
+   */
+  async closeSystem(input: Readonly<CloseSystemOnlinePaymentInput>): Promise<OnlinePaymentCloseResult> {
+    if (this.adapter === null || this.secrets === null || this.config === null) {
+      throw new OnlinePaymentUnavailableError()
+    }
+    const context = await this.transactions.run(input.scope, async (transaction) => (
+      new PaymentProviderActionRepository(transaction, this.secret)
+        .resolvePaymentContextForSystem(input.paymentId, { lock: false })
+    ), { readOnly: true })
+    return this.closeResolvedContext(input.scope, context, input.closeBindingId)
+  }
+
+  private async closeResolvedContext(
+    scope: Readonly<StoreScope>,
+    context: Readonly<ProviderPaymentContext>,
+    closeBindingId: string,
+  ): Promise<OnlinePaymentCloseResult> {
+    const adapter = this.adapter
+    const secrets = this.secrets
+    const config = this.config
+    if (adapter === null || secrets === null || config === null) throw new OnlinePaymentUnavailableError()
     if (context.provider !== 'postar' || !['created', 'pending'].includes(context.status)) {
       throw new OnlinePaymentUnavailableError('这笔付款已有明确结果，无需关闭')
     }
-    const queried = await this.adapter.queryPayment({
+    const queried = await adapter.queryPayment({
       paymentIntentId: context.publicId,
-      merchantId: this.config.merchantId,
+      merchantId: config.merchantId,
       amount: context.amountMinor,
       currency: context.currency,
       providerTransactionId: context.providerTransactionId,
       orderDate: postarOrderDate(context.createdAt),
-    }, { secrets: this.secrets })
+    }, { secrets })
     if (queried.amount !== context.amountMinor || queried.currency !== context.currency) {
       throw new OnlinePaymentUnknownError()
     }
     let observation = queried
     if (queried.status === 'pending' || queried.status === 'processing') {
-      if (this.adapter.closePayment === undefined) {
+      if (adapter.closePayment === undefined) {
         throw new OnlinePaymentUnavailableError('当前支付通道不支持安全关单，请由收银核对后处理')
       }
-      const close = await this.adapter.closePayment({
+      const close = await adapter.closePayment({
         paymentIntentId: context.publicId,
-        merchantId: this.config.merchantId,
-      }, { secrets: this.secrets })
+        merchantId: config.merchantId,
+      }, { secrets })
       if (!close.closed || close.paymentIntentId !== context.publicId) throw new OnlinePaymentUnknownError()
       observation = { ...queried, status: 'closed', occurredAt: close.occurredAt }
     }
     const verifiedObservationId = await this.providerObservations.recordPayment({
-      scope: input.scope,
+      scope,
       provider: 'postar',
       // A close is accepted only after a bound provider query.  It belongs to
       // the existing verified-query authority, rather than inventing a new
       // database verification kind that the observation schema cannot audit.
       verificationKind: 'active_query_binding',
       providerEventId: providerObservationEventId([
-        'payment-close', input.closeBindingId, context.publicId, observation.providerTransactionId,
+        'payment-close', closeBindingId, context.publicId, observation.providerTransactionId,
         observation.status, observation.amount, observation.currency, observation.occurredAt,
       ]),
       integrationRef: 'postar-close-payment',
@@ -387,6 +422,17 @@ export class OnlinePaymentService {
     return this.transactions.run(scope, async (transaction) => (
       new PaymentProviderActionRepository(transaction, this.secret)
         .listStalePendingPostarPaymentIds(minAgeSeconds, limit)
+    ), { readOnly: true })
+  }
+
+  listStaleGuestImmediateCheckoutPaymentCandidates(
+    scope: Readonly<StoreScope>,
+    minAgeSeconds: number,
+    limit: number,
+  ): Promise<Array<{ id: string; createdAt: string; operationallyAbandoned: boolean }>> {
+    return this.transactions.run(scope, async (transaction) => (
+      new PaymentProviderActionRepository(transaction, this.secret)
+        .listStaleGuestImmediateCheckoutPaymentCandidates(minAgeSeconds, limit)
     ), { readOnly: true })
   }
 

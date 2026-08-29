@@ -1,9 +1,15 @@
-const { getTableOrders } = require('../../utils/api')
+const { getTableOrders, abandonGuestCheckout } = require('../../utils/api')
 const { getRuntimeConfig } = require('../../config/index')
 const { getTableSession, tableSessionCacheScope } = require('../../utils/session')
 const { createTableRequestGuard, tableRequestScope } = require('../../utils/table-request-scope')
+const { randomId } = require('../../utils/id')
 const { money, dateTime } = require('../../utils/format')
 const { customerErrorMessage } = require('../../utils/customer-error')
+const {
+  PENDING_GUEST_PAYMENT_ABANDONMENT_KEY,
+  createGuestPaymentAbandonmentRecord,
+  isRetryableGuestPaymentAbandonment,
+} = require('../../utils/guest-payment-abandonment')
 
 const PENDING_PAYMENT_KEY = 'mbox.pending.guest.payment.v1'
 
@@ -50,8 +56,16 @@ Page({
   },
 
   onShow() { this.loadData() },
-  onHide() { this.invalidateTableRequests() },
-  onUnload() { this.invalidateTableRequests() },
+  onHide() {
+    const record = this.queuePendingGuestPaymentAbandonment()
+    if (record) void this.executePendingGuestPaymentAbandonment(record)
+    this.invalidateTableRequests()
+  },
+  onUnload() {
+    const record = this.queuePendingGuestPaymentAbandonment()
+    if (record) void this.executePendingGuestPaymentAbandonment(record)
+    this.invalidateTableRequests()
+  },
 
   onPullDownRefresh() {
     this.loadData().finally(() => wx.stopPullDownRefresh())
@@ -71,6 +85,10 @@ Page({
 
   clearForeignPendingPayment(paymentScope) {
     const stored = wx.getStorageSync(PENDING_PAYMENT_KEY) || null
+    const abandonment = wx.getStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY) || null
+    if (abandonment && abandonment.tableScope !== paymentScope) {
+      wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
+    }
     // Older records predate table scoping and are unsafe to recover.  A
     // different scanned credential is equally unsafe, even if the table code
     // was reused after turnover.
@@ -79,6 +97,57 @@ Page({
       return null
     }
     return stored
+  },
+
+  queuePendingGuestPaymentAbandonment() {
+    const paymentScope = tableSessionCacheScope()
+    const pending = this.clearForeignPendingPayment(paymentScope)
+    const record = createGuestPaymentAbandonmentRecord(
+      pending,
+      paymentScope,
+      (orderPublicId) => randomId(`guest-checkout-abandon-${orderPublicId}`),
+    )
+    if (!record) return null
+    wx.setStorageSync(PENDING_PAYMENT_KEY, Object.assign({}, pending, {
+      abandonmentIdempotencyKey: record.idempotencyKey,
+    }))
+    wx.setStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY, record)
+    return record
+  },
+
+  async executePendingGuestPaymentAbandonment(record) {
+    if (this._guestPaymentAbandonmentInFlight === record.idempotencyKey) {
+      return this._guestPaymentAbandonmentPromise || null
+    }
+    this._guestPaymentAbandonmentInFlight = record.idempotencyKey
+    const execution = abandonGuestCheckout(record.orderPublicId, record.idempotencyKey)
+      .then((result) => {
+        if (result && result.operationalState === 'cancelled') {
+          const stored = wx.getStorageSync(PENDING_PAYMENT_KEY)
+          if (stored && stored.orderPublicId === record.orderPublicId
+            && stored.tableScope === record.tableScope) wx.removeStorageSync(PENDING_PAYMENT_KEY)
+          const persisted = wx.getStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
+          if (persisted && persisted.idempotencyKey === record.idempotencyKey) {
+            wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
+          }
+        }
+        return result || null
+      })
+      .catch((error) => {
+        if (error && ['GUEST_CHECKOUT_ALREADY_PAID', 'GUEST_CHECKOUT_NOT_FOUND', 'GUEST_ORDER_ACCESS_FORBIDDEN'].includes(error.code)) {
+          wx.removeStorageSync(PENDING_PAYMENT_KEY)
+          wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
+        }
+        return null
+      })
+    this._guestPaymentAbandonmentPromise = execution
+    try { return await execution }
+    finally {
+      if (this._guestPaymentAbandonmentInFlight === record.idempotencyKey) {
+        this._guestPaymentAbandonmentInFlight = null
+        this._guestPaymentAbandonmentPromise = null
+      }
+    }
   },
 
   async loadData(preserveMessage) {
@@ -96,6 +165,7 @@ Page({
     try {
       const rawOrders = await getTableOrders()
       if (!this.isCurrentTableRequest(request)) return
+      const storedAbandonment = wx.getStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY) || null
       const storedPending = this.clearForeignPendingPayment(paymentScope)
       const storedOrder = storedPending && (rawOrders || []).find((item) => item.publicId === storedPending.orderPublicId)
       if (storedPending && (!storedOrder || Number(storedOrder.payableAmountMinor || 0) === 0)) {
@@ -128,6 +198,14 @@ Page({
       }))
       const outstanding = orders.reduce((sum, order) => sum + order.payableAmountMinor, 0)
       this.setData({ loading: false, orders, outstandingText: money(outstanding) })
+      const abandonmentOrder = storedAbandonment
+        && storedAbandonment.tableScope === paymentScope
+        && (rawOrders || []).find((item) => item.publicId === storedAbandonment.orderPublicId)
+      if (isRetryableGuestPaymentAbandonment(storedAbandonment, paymentScope, abandonmentOrder)) {
+        void this.executePendingGuestPaymentAbandonment(storedAbandonment)
+      } else if (storedAbandonment) {
+        wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
+      }
     } catch (error) {
       if (this.isCurrentTableRequest(request)) {
         this.setData({ loading: false, error: customerErrorMessage(error, '桌账载入失败') })

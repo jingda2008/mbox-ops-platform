@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.0-rc.162 - 2026-08-30
+
+- Replaces manual per-unit cost entry in normal receiving with packaging or
+  quantity plus the actual receipt total. The service calculates each base-unit
+  cost and the current moving weighted cost.
+- Recalculates tracked single-drink, recipe and bundle costs from current
+  inventory cost automatically. Unknown source cost stays explicitly unknown;
+  it never becomes a fabricated zero or blocks a sale.
+- Adds an auditable, permissioned cost-correction path with reason, before/after
+  values and automatic downstream recipe/bundle recalculation. Historical order
+  cost snapshots remain immutable.
+- Adds normalized migrations 152–154 to store weighted-cost state, preserve
+  historical-cost uncertainty, and keep bundle rollups consistent. Existing
+  unverified inventory is marked for review rather than silently converted.
+
 ## 1.0.0-rc.161 - 2026-08-29
 
 - Completes the guest self-checkout exit path: leaving the last native WeChat

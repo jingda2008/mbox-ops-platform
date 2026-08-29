@@ -46,7 +46,7 @@ integration('recommendation policy operational release PostgreSQL authority',()=
     await expect(pool.query(`UPDATE mbox.customer_experience_features
       SET rollout_state='pilot',reason='没有受控规则时不得开放'
       WHERE tenant_id=$1 AND store_id=$2 AND feature_code='recommendation.engine'`,[id.tenant,id.store]))
-      .rejects.toThrow(/current managed three-person policy/)
+      .rejects.toThrow(/current published policy/)
   })
 
   it('requires three employees, freezes approved facts and separates publication from rollout',async()=>{

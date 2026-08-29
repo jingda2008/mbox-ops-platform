@@ -31,6 +31,13 @@ interface PlannedItemRow extends Record<string, unknown> {
 
 export interface PaymentFulfillmentActivation {
   activated: boolean
+  /**
+   * Financial attribution is allowed for normal table-tab/active orders even
+   * when no new KDS work is created. It is deliberately false only for an
+   * operationally cancelled self-checkout that later receives a provider
+   * success result.
+   */
+  financialAttributionEligible: boolean
   orderId: string
   inventoryConsumptions: readonly InventoryConsumption[]
   kdsTasks: readonly KdsTask[]
@@ -115,19 +122,28 @@ export class PaymentFulfillmentRepository {
   ): Promise<PaymentFulfillmentActivation> {
     const state = await this.lockOrder(orderId)
     if (state.settlement_mode !== 'immediate_payment') {
-      return { activated: false, orderId, inventoryConsumptions: [], kdsTasks: [], experiencePlan: absentPlan() }
+      return {
+        activated: false, financialAttributionEligible: true, orderId,
+        inventoryConsumptions: [], kdsTasks: [], experiencePlan: absentPlan(),
+      }
     }
     // A customer-left turnover intentionally preserves an unresolved provider
     // attempt for a possible late financial result, but it has already
     // cancelled fulfillment and closed the table.  Record that late result;
     // never recreate KDS or inventory work for a departed table.
     if (state.fulfillment_state === 'cancelled') {
-      return { activated: false, orderId, inventoryConsumptions: [], kdsTasks: [], experiencePlan: absentPlan() }
+      return {
+        activated: false, financialAttributionEligible: false, orderId,
+        inventoryConsumptions: [], kdsTasks: [], experiencePlan: absentPlan(),
+      }
     }
     if (state.fulfillment_state === 'active') {
       const experiencePlan = await new ExperiencePlanActivationRepository(this.transaction)
         .activatePaidNonCritical(orderId, options.paymentId ?? null)
-      return { activated: false, orderId, inventoryConsumptions: [], kdsTasks: [], experiencePlan }
+      return {
+        activated: false, financialAttributionEligible: true, orderId,
+        inventoryConsumptions: [], kdsTasks: [], experiencePlan,
+      }
     }
     if (state.fulfillment_state !== 'awaiting_payment' || state.payment_status !== 'paid') {
       throw new OrderNotPayableError(orderId, 'trusted full payment is required before fulfillment')
@@ -167,7 +183,10 @@ export class PaymentFulfillmentRepository {
     }
     const experiencePlan = await new ExperiencePlanActivationRepository(this.transaction)
       .activatePaidNonCritical(orderId, options.paymentId ?? null)
-    return { activated: true, orderId, inventoryConsumptions, kdsTasks, experiencePlan }
+    return {
+      activated: true, financialAttributionEligible: true, orderId,
+      inventoryConsumptions, kdsTasks, experiencePlan,
+    }
   }
 
   /**
@@ -209,7 +228,7 @@ export class PaymentFulfillmentRepository {
       throw new Error(`Complimentary fulfillment intent conflicts with benefit for order ${orderId}`)
     }
     return {
-      activated:true,orderId,inventoryConsumptions:[],kdsTasks:[],
+      activated:true,financialAttributionEligible:true,orderId,inventoryConsumptions:[],kdsTasks:[],
       experiencePlan:absentPlan(),
     }
   }
@@ -220,6 +239,43 @@ export class PaymentFulfillmentRepository {
       return { released: false, orderId, reservationCount: 0 }
     }
     return this.release(orderId, reason)
+  }
+
+  /**
+   * A guest can leave the final JSAPI sheet before the provider has returned a
+   * definitive answer.  The operational order must then stop reserving a
+   * table, capacity or stock immediately, while the payment record remains
+   * available for provider reconciliation.  A later captured payment is
+   * deliberately unable to re-create fulfilment (activatePaidOrder guards the
+   * cancelled state above).
+   */
+  async abandonGuestSelfCheckout(orderId: string, reason: string): Promise<PaymentFulfillmentRelease> {
+    const order = await this.lockOrder(orderId)
+    if (order.settlement_mode !== 'immediate_payment') {
+      throw new OrderNotPayableError(orderId, 'guest checkout abandonment requires immediate payment')
+    }
+    if (order.fulfillment_state === 'active') {
+      throw new OrderNotPayableError(orderId, 'active fulfilment cannot be abandoned by the guest')
+    }
+    if (order.fulfillment_state === 'cancelled') {
+      return { released: false, orderId, reservationCount: 0 }
+    }
+
+    const released = order.fulfillment_state === 'awaiting_payment'
+      ? await this.release(orderId, reason)
+      : { released: false, orderId, reservationCount: 0 }
+    const cancelled = await this.transaction.query(`
+      UPDATE mbox.orders
+      SET fulfillment_state='cancelled', fulfillment_expires_at=NULL,
+          fulfillment_activated_at=NULL, fulfillment_released_at=COALESCE(fulfillment_released_at,clock_timestamp()),
+          updated_at=clock_timestamp()
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+        AND fulfillment_state='released'
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
+    if (cancelled.rowCount !== 1) {
+      throw new OrderNotPayableError(orderId, 'guest checkout abandonment lost a concurrent fulfilment transition')
+    }
+    return released
   }
 
   private async release(orderId: string, reason: string): Promise<PaymentFulfillmentRelease> {

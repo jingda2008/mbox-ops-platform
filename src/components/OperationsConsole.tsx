@@ -42,7 +42,7 @@ import {
   Unlink,
   UserPlus,
 } from 'lucide-react'
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, type ReactNode, useEffect, useRef, useState } from 'react'
 import { useConfirmationDialog } from '../normalized-ui/ConfirmationDialog'
 import {
   actOnTaskAsManager,
@@ -89,7 +89,6 @@ import { getFulfillmentAccess, kdsTaskOperationallyActive, taskVisibleToAccess }
 import { RoleHomeView } from './RoleHomeView'
 import { buildRoleHomeModel, type RoleHomeNavigationId } from './role-access'
 import { salesAttributionEmployees } from './sales-attribution'
-import { useRevealPanelScroll } from './use-reveal-panel-scroll'
 import { SopVerificationInbox } from './SopVerificationInbox'
 import { BeijingClock } from './live-time'
 import { runOptimisticAction } from '../optimistic-action'
@@ -280,6 +279,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
     .slice(0, 4)
   const [view, setView] = useState<View>('home')
   const [selectedTableId, setSelectedTableId] = useState<string | null>(null)
+  const [tableActionDialogOpen, setTableActionDialogOpen] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [secondaryNavigationOpen, setSecondaryNavigationOpen] = useState(false)
   const [showAvailableTables, setShowAvailableTables] = useState(false)
@@ -315,8 +315,6 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
   const handledNavigationRequestId = useRef<number | null>(null)
   const internalNavigationRequestId = useRef(0)
   const [activeNavigationRequest, setActiveNavigationRequest] = useState<OperationsConsoleNavigationRequest | null>(null)
-  const tablePanelRef = useRevealPanelScroll<HTMLDivElement>(view === 'live' ? selectedTableId : '')
-
   useEffect(() => {
     if (!notice) return
     publishStaffCollaborationGuidance(notice)
@@ -337,6 +335,9 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
   }
 
   function navigateTo(target: View, focus?: OperationsConsoleFocus) {
+    // Table controls are an ephemeral on-floor dialog.  Navigation must never
+    // carry it into another workspace or revive it when the user comes back.
+    setTableActionDialogOpen(false)
     setView(target)
     setMobileNavOpen(false)
     if (target === 'home' || roleHomeAccess.primaryNavigationIds.includes(target)) {
@@ -360,6 +361,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
     if (!navigationRequest || handledNavigationRequestId.current === navigationRequest.id) return
     handledNavigationRequestId.current = navigationRequest.id
     if (navigationRequest.target !== 'home' && !allowedNavigationKey.split(',').includes(navigationRequest.target)) return
+    setTableActionDialogOpen(false)
     setView(navigationRequest.target)
     setActiveNavigationRequest(navigationRequest)
     if (['live', 'tasks'].includes(navigationRequest.target)) {
@@ -429,7 +431,7 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
   const selectedTableHasOrder = selectedTable
     ? data.orderDomain.orders.some((order) => {
         const session = data.songState.tableSessions.find((item) => item.tableId === selectedTable.id && item.status === 'open')
-        return session && order.tableSessionId === session.id && order.status !== 'draft'
+        return session && order.tableSessionId === session.id && !['draft', 'cancelled'].includes(order.status)
       })
     : false
   const effectivePermissions = new Set(data.viewer?.permissionIds ?? [])
@@ -1192,7 +1194,11 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
                       )}
                     </div>
                   </div>
-                  {selectedTable?.status === 'occupied' && <div className="reveal-panel-target" ref={tablePanelRef} aria-hidden="true" />}
+                  {selectedTable && selectedTable.status === 'occupied' && tableActionDialogOpen && (
+                    <TableActionDialog
+                      tableCode={selectedTable.code}
+                      onClose={() => setTableActionDialogOpen(false)}
+                    >
                   {selectedTable && selectedTable.status === 'occupied' && (
                     <div className="table-service-toolbar">
                       <div className="table-service-context">
@@ -1309,6 +1315,8 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
                       {selectedCombinationLinks.length > 0 && <div className="active-table-links">{selectedCombinationLinks.map((record) => <div key={record.linkId}><span><strong>{record.primaryTableCode}</strong><Link2 size={13} /><strong>{record.relatedTableCode}</strong><small>{record.kind === 'merge' ? '合台' : '加桌'}</small></span><button className="secondary-button" disabled={busy} onClick={() => void handleSplitBack(record.linkId)}><Unlink size={14} />拆回</button></div>)}</div>}
                     </div>
                   )}
+                    </TableActionDialog>
+                  )}
                   <div className="area-list">
                     {data.areas
                       .filter((area) => displayedOperationalTables.some((table) => table.areaId === area.id))
@@ -1343,7 +1351,14 @@ export function OperationsConsole({ data, onRefresh, onOptimisticUpdate, navigat
                                 <button
                                   aria-label={table.status === 'available' ? `开台桌台 ${table.code}` : undefined}
                                   className={`table-tile status-${table.status} ${awaitingOrder ? 'is-awaiting-order' : ''} ${selectedTableId === table.id ? 'is-selected' : ''}`}
-                                  onClick={() => setSelectedTableId(selectedTableId === table.id ? null : table.id)}
+                                  onClick={() => {
+                                    if (table.status === 'occupied') {
+                                      setSelectedTableId(table.id)
+                                      setTableActionDialogOpen(true)
+                                      return
+                                    }
+                                    setSelectedTableId(selectedTableId === table.id ? null : table.id)
+                                  }}
                                 >
                                   <span className="table-code">{table.code}</span>
                                   <strong>{table.displayName}</strong>
@@ -1739,6 +1754,34 @@ function Metric({ icon: Icon, label, value, tone, onClick }: { icon: typeof Layo
   return onClick
     ? <button type="button" className={`metric metric-${tone} is-actionable`} onClick={onClick} aria-label={`查看${label}${value}项`}>{content}</button>
     : <div className={`metric metric-${tone}`}>{content}</div>
+}
+
+function TableActionDialog({ tableCode, children, onClose }: { tableCode: string; children: ReactNode; onClose: () => void }) {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
+
+  return (
+    <div className="table-action-dialog-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="table-action-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${tableCode}桌台操作`}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header>
+          <div><span>现场桌台操作</span><strong>{tableCode}</strong></div>
+          <button className="icon-button" type="button" onClick={onClose} aria-label="关闭桌台操作"><X size={18} /></button>
+        </header>
+        <div className="table-action-dialog__body">{children}</div>
+      </section>
+    </div>
+  )
 }
 
 function elapsedMinutes(startedAt: string) {

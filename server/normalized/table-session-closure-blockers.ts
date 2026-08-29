@@ -131,8 +131,7 @@ export async function readTableSessionClosureState(
         WHERE NOT ((ordering.status<>'cancelled'
             AND ordering.payment_status IN ('paid','partially_refunded','refunded'))
           OR (ordering.status='cancelled' AND ordering.payment_status='refunded')
-          OR (ordering.status='cancelled' AND ordering.payment_status='unpaid'
-            AND NOT EXISTS (
+          OR (ordering.status='cancelled' AND NOT EXISTS (
               SELECT 1 FROM mbox.order_items delivered_item
               WHERE delivered_item.tenant_id=$1::uuid AND delivered_item.store_id=$2::uuid
                 AND delivered_item.order_id=ordering.id AND delivered_item.status='delivered'
@@ -158,6 +157,15 @@ export async function readTableSessionClosureState(
         WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid
           AND payment.order_id=ANY(SELECT id FROM scoped_orders)
           AND payment.status IN ('created','pending')
+          AND NOT EXISTS (
+            SELECT 1 FROM scoped_orders cancelled_order
+            WHERE cancelled_order.id=payment.order_id AND cancelled_order.status='cancelled'
+              AND NOT EXISTS (
+                SELECT 1 FROM mbox.order_items delivered_item
+                WHERE delivered_item.tenant_id=$1::uuid AND delivered_item.store_id=$2::uuid
+                  AND delivered_item.order_id=cancelled_order.id AND delivered_item.status='delivered'
+              )
+          )
           AND NOT EXISTS (
             SELECT 1 FROM mbox.table_customer_left_turnover_events turnover
             JOIN mbox.order_settlement_exception_events settlement_exception

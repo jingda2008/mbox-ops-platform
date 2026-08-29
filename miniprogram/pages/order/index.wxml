@@ -79,18 +79,19 @@
     </view>
 
     <view class="recommend-entry">
-      <view class="recommend-entry__head"><view><text>今夜甄选</text></view></view>
-      <view class="recommend-entry__actions" aria-label="智能推荐">
-        <button bindtap="onRecommend" loading="{{recommendationBusy}}"><text class="recommend-entry__action-icon">✦</text><view><text>帮我选</text></view></button>
-        <button class="shake-recommendation" bindtap="onShakeRecommendation" loading="{{recommendationBusy}}" disabled="{{shakeArmed}}"><text class="recommend-entry__action-icon">↻</text><view><text>{{shakeArmed ? '请摇动手机' : '摇一摇'}}</text></view></button>
-      </view>
+      <view class="recommend-entry__head"><view><text>今夜甄选</text><text>先为这桌挑三款</text></view></view>
       <scroll-view wx:if="{{recommendations.length}}" scroll-x enhanced show-scrollbar="{{false}}" class="recommend-scroll"><view class="recommend-row">
         <view wx:for="{{recommendations}}" wx:key="productId" class="recommend-card {{index === 0 ? 'recommend-card--priority' : ''}}">
           <image wx:if="{{item.imageUrl}}" class="recommend-card__image" src="{{item.imageUrl}}" mode="aspectFill" />
           <view class="recommend-body"><view class="recommend-labels"><text class="recommend-tier">{{item.tierText}}</text><text wx:if="{{index === 0}}" class="recommend-fit">更适合这一桌</text></view><text class="recommend-name">{{item.name}}</text><text class="recommend-reason">{{item.reason}}</text><view wx:if="{{item.savingsText || item.separatePriceText}}" class="recommend-value"><text wx:if="{{item.separatePriceText}}">单点约 {{item.separatePriceText}}</text><text wx:if="{{item.savingsText}}" class="saving">{{item.savingsText}}</text></view><view class="recommend-foot"><text class="recommend-price">{{item.priceText}}</text><view class="recommend-actions"><button class="recommend-reject" data-id="{{item.productId}}" bindtap="rejectRecommendation" loading="{{item.rejecting}}" disabled="{{item.rejecting}}">不合适</button><button class="recommend-select" data-id="{{item.productId}}" data-source="recommendation" bindtap="addProduct">选这款</button></view></view></view>
         </view>
       </view></scroll-view>
-      <view wx:elif="{{recommendationBusy}}" class="recommend-loading"><text>正在准备今夜甄选</text></view>
+      <view wx:elif="{{recommendationBusy}}" class="recommend-loading"><text>正在为这桌挑选</text><text>稍等片刻</text></view>
+      <view wx:elif="{{recommendationEmpty}}" class="recommend-empty"><text>今夜的三款正在准备</text><text>先看看菜单，稍后再来看看</text></view>
+      <view class="recommend-entry__actions" aria-label="智能推荐">
+        <button bindtap="onRecommend" loading="{{recommendationBusy}}"><view class="recommend-entry__action-icon recommend-entry__action-icon--guided"><text>✦</text></view><view><text>帮我选</text><text>三题，挑得更准</text></view></button>
+        <button class="shake-recommendation" bindtap="onShakeRecommendation" loading="{{recommendationBusy}}" disabled="{{shakeArmed}}"><view class="recommend-entry__action-icon recommend-entry__action-icon--shake"><text>↻</text></view><view><text>{{shakeArmed ? '请摇动手机' : '摇一摇'}}</text><text>换一组，再看看</text></view></button>
+      </view>
     </view>
 
     <view wx:if="{{recommendationQuestionVisible && recommendationQuestion}}" class="recommend-question sheet-mask">

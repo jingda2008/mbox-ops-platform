@@ -11,7 +11,7 @@ const {
   removeSharedCartLine,
   clearSharedCart,
   getTableOrders,
-  retryOrderPayment,
+  abandonGuestCheckout,
   getTodayPerformances,
   getCustomerBenefits,
   getMiniBootstrap,
@@ -415,6 +415,7 @@ Page({
     searchText: '',
     recommendations: [],
     recommendationBusy: false,
+    recommendationEmpty: false,
     recommendationError: '',
     shakeArmed: false,
     recommendationPublicId: '',
@@ -558,7 +559,7 @@ Page({
         busy: false, cartSyncing: false, clearingCart: false, quickServiceBusy: '',
         checkoutLocked: false, pendingPayment: null, paymentResult: null, cart: [], cartVersion: 0, cartGeneration: 0,
         cartTotal: '¥0.00', cartTotalCompact: '¥0', cartCount: 0, cartExpanded: false, checkoutConfirmVisible: false, cartWritesFrozen: false,
-        recommendations: [], recommendationPublicId: '', recommendationAttribution: null, recommendationError: '', performance: null, performanceError: '',
+        recommendations: [], recommendationPublicId: '', recommendationAttribution: null, recommendationEmpty: false, recommendationError: '', performance: null, performanceError: '',
         recommendationConfiguration: EMPTY_RECOMMENDATION_CONFIGURATION, recommendationQuestionVisible: false, recommendationQuestionIndex: 0, recommendationQuestion: null, recommendationAnswers: {},
       })
     }
@@ -567,7 +568,7 @@ Page({
     if (this.recommendationScopeKey !== recommendationScopeKey) {
       this.recommendationScopeKey = recommendationScopeKey
       this.initialRecommendationRequested = false
-      this.setData({ recommendations: [], recommendationPublicId: '', recommendationAttribution: null, recommendationError: '', recommendationConfiguration: EMPTY_RECOMMENDATION_CONFIGURATION, recommendationQuestionVisible: false, recommendationQuestionIndex: 0, recommendationQuestion: null, recommendationAnswers: {} })
+      this.setData({ recommendations: [], recommendationPublicId: '', recommendationAttribution: null, recommendationEmpty: false, recommendationError: '', recommendationConfiguration: EMPTY_RECOMMENDATION_CONFIGURATION, recommendationQuestionVisible: false, recommendationQuestionIndex: 0, recommendationQuestion: null, recommendationAnswers: {} })
     }
     const config = getRuntimeConfig()
     if (!session.tableToken && !session.tableCode && !config.isDevelopment) {
@@ -928,10 +929,19 @@ Page({
         savingsText: item.savingsAmountMinor > 0 ? `比单点省 ${money(item.savingsAmountMinor)}` : '',
         tierText: item.marketingLabel || (index === 0 ? '今晚优先推荐' : item.tier === 'signature' ? '完整体验' : item.tier === 'enhanced' ? '今晚推荐' : '轻松开始'),
       }))
+      // A later recommendation request may legitimately have no *new* safe
+      // group after excluding exposed, cart, ordered, and rejected choices.
+      // Keep the first layer on screen in that case instead of making the
+      // page look unresponsive or quietly falling back to unavailable goods.
+      const keepCurrentRecommendations = recommendationIntent !== 'initial'
+        && !recommendations.length
+        && this.data.recommendations.length > 0
+      const visibleRecommendations = keepCurrentRecommendations ? this.data.recommendations : recommendations
       this.setData({
-        recommendations,
-        recommendationPublicId: recommendations.length ? result.publicId || '' : '',
-        recommendationAttribution: null,
+        recommendations: visibleRecommendations,
+        recommendationEmpty: !visibleRecommendations.length,
+        recommendationPublicId: recommendations.length ? result.publicId || '' : (keepCurrentRecommendations ? this.data.recommendationPublicId : ''),
+        recommendationAttribution: keepCurrentRecommendations ? this.data.recommendationAttribution : null,
         recommendationError: '',
         recommendationConfiguration: recommendationConfiguration(result),
       })
@@ -940,13 +950,22 @@ Page({
           surface: 'guest_order_recommendations', recommendationIntent,
         }).catch(() => {})
       }
+      if (!recommendations.length && recommendationIntent !== 'initial') {
+        wx.showToast({
+          title: keepCurrentRecommendations ? '这桌合适的组合已看过' : '暂时没有合适的组合',
+          icon: 'none',
+        })
+      }
     } catch (error) {
       if (!this.isCurrentTableRequest(expected)) return
       // The first exposure is helpful, but not worth making the page look
       // broken when the recommendation service briefly reconnects. Permit a
       // later refresh rather than treating one transient failure as final.
       if (recommendationIntent === 'initial') this.initialRecommendationRequested = false
-      this.setData({ recommendationError: customerErrorMessage(error, '今夜推荐正在更新') })
+      this.setData({
+        recommendationEmpty: recommendationIntent === 'initial' && !this.data.recommendations.length,
+        recommendationError: customerErrorMessage(error, '今夜推荐正在更新'),
+      })
     }
     finally { if (this.isCurrentTableRequest(expected)) this.setData({ recommendationBusy: false }) }
   },
@@ -962,6 +981,7 @@ Page({
       if (completed) return
       completed = true
       this.stopShakeRecommendation()
+      if (wx.vibrateShort) wx.vibrateShort({ type: 'light', fail: () => {} })
       void this.recommend('shake', tableRequest)
     }
     this.shakeListener = (reading) => {
@@ -1289,24 +1309,50 @@ Page({
   async handlePendingPaymentBeforeCheckout() {
     const pending = this.data.pendingPayment
     if (!pending) return false
-    if (!pending.canContinue) {
-      wx.showToast({ title: '本桌付款确认中，可继续加购', icon: 'none', duration: 2200 })
-      return true
+    // Legacy versions kept a cancelled JSAPI attempt in local storage and
+    // blocked every following checkout.  A pending final-sheet exit now gets
+    // abandoned on the server and never blocks a fresh cart.  A WeChat
+    // success callback remains a protected reconciliation case, but it still
+    // does not stop the customer from adding a later, separate order.
+    if (pending.canContinue && pending.orderPublicId) {
+      await this.abandonPendingGuestCheckout(pending, '开始新的点单')
     }
-    const shouldContinue = await new Promise((resolve) => wx.showModal({
-      title: '有一笔待付款',
-      content: `上一笔订单待支付 ${pending.amountText || ''}。本次选择会保留，完成上一笔后再提交。`,
-      cancelText: '继续加购',
-      confirmText: '继续付款',
-      confirmColor: '#315d46',
-      success: (result) => resolve(Boolean(result.confirm)),
-      fail: () => resolve(false),
-    }))
-    if (shouldContinue) {
-      this.setData({ checkoutConfirmVisible: false })
-      await this.continuePayment()
+    return false
+  },
+
+  async abandonPendingGuestCheckout(pending, source, request) {
+    const tableRequest = request || this.currentTableRequest()
+    if (!pending || !pending.orderPublicId || !tableRequest || !this.isCurrentTableRequest(tableRequest)) return null
+    const idempotencyKey = pending.abandonIdempotencyKey || randomId(`guest-checkout-abandon-${pending.orderPublicId}`)
+    try {
+      const result = await abandonGuestCheckout(pending.orderPublicId, idempotencyKey)
+      if (!this.isCurrentTableRequest(tableRequest)) return null
+      wx.removeStorageSync(PENDING_PAYMENT_KEY)
+      wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
+      this.setData({ pendingPayment: null, checkoutLocked: false })
+      return result
+    } catch (error) {
+      if (!this.isCurrentTableRequest(tableRequest)) return null
+      if (error && error.code === 'GUEST_CHECKOUT_ALREADY_PAID') {
+        wx.removeStorageSync(PENDING_PAYMENT_KEY)
+        this.setData({
+          pendingPayment: null,
+          checkoutLocked: false,
+          paymentResult: {
+            kind: 'pending', mark: '…', title: '付款状态已确认',
+            copy: '本笔已进入到账核对，不会重复出品或再次扣款。', canRetry: false,
+          },
+        })
+        return null
+      }
+      // Do not let an unavailable cancellation request trap a customer in an
+      // old local modal.  The protected payment record is still reconciled by
+      // the server, while a later retry can repeat this idempotent abandon.
+      wx.removeStorageSync(PENDING_PAYMENT_KEY)
+      wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
+      this.setData({ pendingPayment: null, checkoutLocked: false })
+      return { paymentState: 'reconciliation_pending', source }
     }
-    return true
   },
 
   async openCheckout() {
@@ -1462,21 +1508,18 @@ Page({
       const waitingForResult = Boolean(action && (
         action.status === 'unknown' || (action.status === 'pending' && !action.payload)
       ))
-      const pendingPayment = Object.assign({}, this.data.pendingPayment, {
-        statusText: waitingForResult ? '付款结果确认中' : '付款未完成',
-      })
+      const outcome = await this.abandonPendingGuestCheckout(this.data.pendingPayment, '未能拉起微信支付', tableRequest)
       if (!this.isCurrentTableRequest(tableRequest)) return
-      wx.setStorageSync(PENDING_PAYMENT_KEY, pendingPayment)
       this.setData({
-        pendingPayment,
         paymentResult: {
           kind: waitingForResult ? 'pending' : 'failed',
           mark: waitingForResult ? '…' : '!',
-          title: waitingForResult ? '付款结果确认中' : '未能发起微信支付',
+          title: outcome && outcome.paymentState === 'late_payment_refund_required'
+            ? '付款已转门店核对' : waitingForResult ? '本次付款已取消' : '未能发起微信支付',
           copy: waitingForResult
-            ? '系统正在核对通道结果，请勿重复付款。'
-            : '订单已保留，本次没有进入微信支付。',
-          canRetry: !waitingForResult,
+            ? '本桌已恢复可继续点单，支付通道仍会自行核对，不会重复出品。'
+            : '本次订单已取消，你可以继续选购后重新付款。',
+          canRetry: false,
         },
       })
       return
@@ -1501,22 +1544,23 @@ Page({
     } catch (error) {
       if (!this.isCurrentTableRequest(tableRequest)) return
       const cancelled = isWechatCancellation(error)
-      const pendingPayment = Object.assign({}, this.data.pendingPayment, {
-        statusText: cancelled ? '付款已取消，订单已保留' : '付款未完成，可继续支付',
-        canContinue: true,
-      })
-      wx.setStorageSync(PENDING_PAYMENT_KEY, pendingPayment)
+      const outcome = await this.abandonPendingGuestCheckout(
+        this.data.pendingPayment,
+        cancelled ? '顾客取消微信支付' : '微信支付未返回成功',
+        tableRequest,
+      )
+      if (!this.isCurrentTableRequest(tableRequest)) return
       this.setData({
-        pendingPayment,
         error: '',
         paymentResult: {
           kind: cancelled ? 'cancelled' : 'failed',
           mark: cancelled ? '×' : '!',
-          title: cancelled ? '付款已取消' : '付款未完成',
-          copy: cancelled
-            ? '本次没有扣款，订单已保留，可以稍后继续付款。'
-            : '未收到支付成功结果，订单已保留，无需重新下单。',
-          canRetry: true,
+          title: outcome && outcome.paymentState === 'late_payment_refund_required'
+            ? '付款已转门店核对' : cancelled ? '付款已取消' : '付款未完成',
+          copy: outcome && outcome.paymentState === 'late_payment_refund_required'
+            ? '本桌已恢复可继续点单；若通道晚到扣款，门店会按实际到账处理退款。'
+            : '本次订单已取消，你可以继续选购后重新付款。',
+          canRetry: false,
         },
       })
     }
@@ -1581,7 +1625,7 @@ Page({
 
   async retryPaymentFromResult() {
     this.setData({ paymentResult: null })
-    await this.continuePayment()
+    this.openCheckout()
   },
 
   async offerOrderNotifications(context, request) {
@@ -1622,31 +1666,11 @@ Page({
       || pending.tableScope !== tableSessionCacheScope()) return
     this.setData({ busy: true, error: '' })
     try {
-      const retryIdempotencyKey = pending.retryIdempotencyKey || randomId(`guest-payment-${pending.orderPublicId}`)
-      const normalizedPending = Object.assign({}, pending, { retryIdempotencyKey })
-      wx.setStorageSync(PENDING_PAYMENT_KEY, normalizedPending)
-      this.setData({ pendingPayment: normalizedPending })
-      const action = await retryOrderPayment(pending.orderPublicId, retryIdempotencyKey)
-      if (!this.isCurrentTableRequest(tableRequest)) return
-      await this.handlePaymentAction(action, tableRequest)
+      await this.abandonPendingGuestCheckout(pending, '处理旧版待付款订单', tableRequest)
+      if (this.isCurrentTableRequest(tableRequest)) this.openCheckout()
     } catch (error) {
       if (!this.isCurrentTableRequest(tableRequest)) return
-      if (['GUEST_ORDER_ACCESS_FORBIDDEN', 'GUEST_SESSION_INVALID', 'TABLE_SESSION_ENDED'].includes(error && error.code)) {
-        wx.removeStorageSync(PENDING_PAYMENT_KEY)
-        this.setData({
-          pendingPayment: null,
-          error: customerErrorMessage(error, '桌台连接已失效，请重新扫描当前桌面的二维码'),
-        })
-        return
-      }
-      if (error && error.code === 'WECHAT_IDENTITY_REQUIRED') {
-        this.setData({
-          error: '订单已保留，但尚未发起收款。请重新扫描当前桌面的二维码后继续付款，不要重新下单。',
-          success: '',
-        })
-        return
-      }
-      this.setData({ error: customerErrorMessage(error, '暂时无法恢复付款，请在桌账确认状态或联系服务人员') })
+      this.setData({ error: customerErrorMessage(error, '本次付款已结束，请重新选购后再支付') })
     } finally { if (this.isCurrentTableRequest(tableRequest)) this.setData({ busy: false }) }
   },
 })

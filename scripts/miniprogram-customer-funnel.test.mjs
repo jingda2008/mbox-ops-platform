@@ -88,26 +88,22 @@ test('customer pages avoid duplicate status labels and backstage implementation 
   assert.doesNotMatch(serviceView, /需要值班经理/)
 })
 
-test('only the payment initiator can continue an active table payment', async () => {
+test('customer self-checkout never revives an unpaid order after the final payment sheet ends', async () => {
   const [orderLogic, orderView, accountLogic] = await Promise.all([
     read('miniprogram/pages/order/index.js'),
     read('miniprogram/pages/order/index.wxml'),
     read('miniprogram/pages/account/index.js'),
   ])
 
-  assert.match(orderLogic, /canContinue: pendingFromOrders\.paymentAccess === 'available'/)
-  assert.match(orderLogic, /canContinue: Boolean\(!storedPending\.wechatAcceptedAt && tableOrdersAvailable && storedOrder[\s\S]*?\['available', 'payment_in_progress'\]\.includes\(storedOrder\.paymentAccess\)\)/)
-  assert.match(orderLogic, /storedPending\.wechatAcceptedAt[\s\S]*?微信支付已完成，到账确认中，请勿重复支付/)
-  assert.match(orderLogic, /storedPending && tableOrdersAvailable[\s\S]*?!storedOrder/)
-  assert.match(orderLogic, /桌账暂时无法核对，请稍后刷新/)
-  assert.match(orderLogic, /if \(!pending \|\| !pending\.canContinue \|\| this\.data\.busy\) return/)
   assert.match(orderLogic, /async handlePendingPaymentBeforeCheckout\(\)/)
-  assert.match(orderLogic, /本桌付款确认中，可继续加购/)
-  assert.match(orderLogic, /confirmText: '继续付款'/)
+  assert.match(orderLogic, /abandonGuestCheckout/)
+  assert.match(orderLogic, /处理旧版待付款订单/)
+  assert.doesNotMatch(orderLogic, /本桌付款确认中，可继续加购/)
+  assert.doesNotMatch(orderLogic, /confirmText: '继续付款'/)
   assert.doesNotMatch(orderView, /class="payment-recovery"/)
-  assert.match(accountLogic, /canPay: order\.paymentAccess === 'available'/)
-  assert.match(accountLogic, /canContinue: true/)
-  assert.match(accountLogic, /storedPending && \(!storedOrder \|\| Number\(storedOrder\.payableAmountMinor \|\| 0\) === 0\)/)
+  assert.match(accountLogic, /canPay: false/)
+  assert.match(accountLogic, /如需付款，请返回点单重新选购/)
+  assert.doesNotMatch(accountLogic, /async continuePayment\(/)
 })
 
 test('activity cards are horizontal brand-green surfaces and profile actions expose their destinations', async () => {
@@ -364,6 +360,7 @@ test('tonight ordering keeps live service separate from recommendation and deleg
   assert.match(orderView, /class="recommend-question sheet-mask"[\s\S]*?bindtap="selectRecommendationAnswer"/)
   assert.match(orderView, /class="recommend-entry__actions"[^>]*aria-label="智能推荐"[\s\S]*?bindtap="onRecommend"[\s\S]*?bindtap="onShakeRecommendation"/)
   assert.ok(orderView.indexOf('class="quick-service"') < orderView.indexOf('class="recommend-entry__actions"'))
+  assert.ok(orderView.indexOf('class="recommend-scroll"') < orderView.indexOf('class="recommend-entry__actions"'), 'the initial three picks appear before optional recommendation tools')
   assert.ok(orderView.indexOf('class="recommend-entry__actions"') < orderView.indexOf('class="menu-tools"'))
   assert.match(orderLogic, /showRecommendationSurface\(onReady\) \{ return onReady\(\) \}/)
   assert.match(orderLogic, /onRecommend\(\)[\s\S]*?recommendationQuestionVisible: true/)
@@ -393,6 +390,8 @@ test('tonight ordering keeps live service separate from recommendation and deleg
   assert.match(servicePage, /createTableRequestGuard/)
   assert.match(servicePage, /localRequestsKey\(request\.scope\)/)
   assert.match(orderLogic, /wx\.startAccelerometer/)
+  assert.match(orderLogic, /wx\.vibrateShort/)
+  assert.match(orderLogic, /keepCurrentRecommendations/)
   assert.match(orderLogic, /recommendationIntent/)
   assert.match(orderLogic, /marketingLabel/)
   assert.match(recommendationService, /recommendationIntent: RecommendationIntent/)

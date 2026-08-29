@@ -925,7 +925,7 @@ integration('guest service and mood API with PostgreSQL', () => {
       tableDisplayName: 'VIP 3',
       businessDate: '2026-08-11',
       expiresAt: '2026-08-11T15:00:00.000Z',
-      capabilities: ['guest.session.read', 'guest.service.create'],
+      capabilities: ['guest.session.read', 'guest.service.create', 'guest.order.create'],
       actorRef: integrationActorRef,
     }
     app = Fastify()
@@ -955,6 +955,70 @@ integration('guest service and mood API with PostgreSQL', () => {
   afterAll(async () => {
     await app?.close()
     await pool?.end()
+  })
+
+  it('cancels an abandoned guest self-checkout without leaving service work or a later checkout blocker', async () => {
+    const abandonedOrderId = randomUUID()
+    const abandonedItemId = randomUUID()
+    const publicId = `guest-abandon-${abandonedOrderId.slice(0, 12)}`
+    await pool.query(`
+      INSERT INTO mbox.orders(
+        id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,
+        settlement_mode,subtotal_amount_minor,discount_amount_minor,total_amount_minor,currency,
+        created_by_customer_id,submitted_at
+      ) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,'guest_qr','submitted','unpaid',
+        'immediate_payment',6800,0,6800,'CNY',$6::uuid,clock_timestamp())
+    `, [
+      abandonedOrderId, integrationTenantId, integrationStoreId, integrationSessionId, publicId,
+      integrationCustomerId,
+    ])
+    await pool.query(`
+      INSERT INTO mbox.order_items(
+        id,tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,discount_amount_minor,
+        total_amount_minor,currency,fulfillment_station,product_snapshot,status
+      ) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,1,6800,0,6800,'CNY','bar','{}'::jsonb,'submitted')
+    `, [
+      abandonedItemId, integrationTenantId, integrationStoreId, abandonedOrderId, integrationNotManagedProductId,
+    ])
+
+    const abandon = () => app.inject({
+      method: 'POST',
+      url: `/api/guest/orders/${publicId}/abandon-checkout`,
+      headers: { 'idempotency-key': `guest-abandon-checkout-${abandonedOrderId.slice(0, 12)}` },
+    })
+    const first = await abandon()
+    expect(first.statusCode, first.body).toBe(200)
+    expect(first.json()).toMatchObject({
+      data: { orderPublicId: publicId, operationalState: 'cancelled', paymentState: 'not_required' },
+      meta: { replayed: false },
+    })
+    const replay = await abandon()
+    expect(replay.statusCode).toBe(200)
+    expect(replay.json()).toMatchObject({ meta: { replayed: true } })
+
+    const state = await pool.query<{
+      order_status: string
+      fulfillment_state: string
+      item_status: string
+      active_kds_count: string
+      reserved_inventory_count: string
+    }>(`
+      SELECT ordering.status AS order_status,ordering.fulfillment_state,item.status AS item_status,
+        (SELECT count(*)::text FROM mbox.kds_tasks task
+          WHERE task.tenant_id=ordering.tenant_id AND task.store_id=ordering.store_id
+            AND task.order_item_id=item.id AND task.status IN ('pending','accepted','preparing','ready')) AS active_kds_count,
+        (SELECT count(*)::text FROM mbox.inventory_order_reservations reservation
+          WHERE reservation.tenant_id=ordering.tenant_id AND reservation.store_id=ordering.store_id
+            AND reservation.order_id=ordering.id AND reservation.status='reserved') AS reserved_inventory_count
+      FROM mbox.orders ordering
+      JOIN mbox.order_items item ON item.tenant_id=ordering.tenant_id AND item.store_id=ordering.store_id
+        AND item.order_id=ordering.id
+      WHERE ordering.tenant_id=$1::uuid AND ordering.store_id=$2::uuid AND ordering.id=$3::uuid
+    `, [integrationTenantId, integrationStoreId, abandonedOrderId])
+    expect(state.rows).toEqual([{
+      order_status: 'cancelled', fulfillment_state: 'cancelled', item_status: 'cancelled',
+      active_kds_count: '0', reserved_inventory_count: '0',
+    }])
   })
 
   it('loads a public read-only menu without a table session and fails closed when inventory setup is incomplete', async () => {
@@ -1263,7 +1327,6 @@ function fixture(overrides: Partial<GuestCommerceServiceApiOptions> = {}) {
     commandExecutor: { execute: vi.fn() } as never,
     commerce,
     payments,
-    onlinePayments,
     resolveGuestContext: async () => context,
     resolvePublicContext: async () => ({ scope: context.scope }),
     resolveDeviceFingerprint: () => 'wechat-device-api-unit-test-0001',

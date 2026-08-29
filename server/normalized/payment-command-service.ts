@@ -662,7 +662,16 @@ export class PaymentCommandService {
         await payments.syncActivityRegistrationPaymentStatus(payment)
       } else {
         const orderPaymentStatus = await payments.syncOrderPaymentStatus(payment.orderId)
-        if (orderPaymentStatus === 'paid') {
+        activation = await new PaymentFulfillmentRepository(transaction).activatePaidOrder(payment.orderId, {
+          metadata: { paymentId: payment.id, paymentProvider: payment.provider },
+          paymentId: payment.id,
+        })
+        // A late provider success after a guest abandons checkout is still a
+        // real financial fact, but it must not create loyalty, recommendation
+        // attribution or a fulfilment task for an operationally cancelled
+        // order. Table-tab orders remain financially attributable even though
+        // no immediate-payment fulfilment transition is required.
+        if (orderPaymentStatus === 'paid' && activation.financialAttributionEligible) {
           await new RecommendationFinancialAttributionRepository(transaction).recordPaidForOrder({
             paymentId: payment.id,
             orderId: payment.orderId,
@@ -674,10 +683,6 @@ export class PaymentCommandService {
             occurredAt: input.occurredAt,
           })
         }
-        activation = await new PaymentFulfillmentRepository(transaction).activatePaidOrder(payment.orderId, {
-          metadata: { paymentId: payment.id, paymentProvider: payment.provider },
-          paymentId: payment.id,
-        })
       }
       return await paymentOutcome(
         transaction,
@@ -754,18 +759,6 @@ export class PaymentCommandService {
         await payments.syncActivityRegistrationPaymentStatus(payment)
       } else {
         const orderPaymentStatus = await payments.syncOrderPaymentStatus(payment.orderId)
-        if (input.status === 'succeeded' && orderPaymentStatus === 'paid') {
-          await new RecommendationFinancialAttributionRepository(transaction).recordPaidForOrder({
-            paymentId: payment.id,
-            orderId: payment.orderId,
-            actorRef: `payment:${payment.id}`,
-          })
-          await new LoyaltyAccrualRepository(transaction).recordPaidOrder({
-            paymentId: payment.id,
-            orderId: payment.orderId,
-            occurredAt: input.occurredAt,
-          })
-        }
         const fulfillment = new PaymentFulfillmentRepository(transaction)
         fulfillmentResult = input.status === 'succeeded'
           ? await fulfillment.activatePaidOrder(payment.orderId, {
@@ -778,6 +771,21 @@ export class PaymentCommandService {
                 `verified provider result: ${input.status}`,
               )
             : undefined
+        if (input.status === 'succeeded' && orderPaymentStatus === 'paid'
+          && fulfillmentResult !== undefined
+          && 'financialAttributionEligible' in fulfillmentResult
+          && fulfillmentResult.financialAttributionEligible) {
+          await new RecommendationFinancialAttributionRepository(transaction).recordPaidForOrder({
+            paymentId: payment.id,
+            orderId: payment.orderId,
+            actorRef: `payment:${payment.id}`,
+          })
+          await new LoyaltyAccrualRepository(transaction).recordPaidOrder({
+            paymentId: payment.id,
+            orderId: payment.orderId,
+            occurredAt: input.occurredAt,
+          })
+        }
       }
       const action = input.status === 'succeeded'
         ? 'payment.succeeded'

@@ -81,7 +81,7 @@ function factQuery(code: TableSessionClosureBlockerCode): string {
       AND employee.store_id=ordering.store_id AND employee.id=ordering.created_by_employee_id
     WHERE NOT ((ordering.status<>'cancelled' AND ordering.payment_status IN ('paid','partially_refunded','refunded'))
       OR (ordering.status='cancelled' AND ordering.payment_status='refunded')
-      OR (ordering.status='cancelled' AND ordering.payment_status='unpaid' AND NOT EXISTS (
+      OR (ordering.status='cancelled' AND NOT EXISTS (
         SELECT 1 FROM mbox.order_items item WHERE item.tenant_id=ordering.tenant_id
           AND item.store_id=ordering.store_id AND item.order_id=ordering.id AND item.status='delivered'))
       OR (ordering.status='cancelled' AND ordering.payment_status='unpaid' AND ordering.has_settlement_exception))
@@ -133,7 +133,12 @@ function factQuery(code: TableSessionClosureBlockerCode): string {
         CASE WHEN action.initiated_by_type='employee' THEN action.initiated_by_ref::text END,
         payment.provider_snapshot->>'collectedByEmployeeId'
       )
-    WHERE payment.status IN ('created','pending') ORDER BY payment.created_at,payment.id LIMIT 25`
+    WHERE payment.status IN ('created','pending')
+      AND NOT (ordering.status='cancelled' AND NOT EXISTS (
+        SELECT 1 FROM mbox.order_items item WHERE item.tenant_id=ordering.tenant_id
+          AND item.store_id=ordering.store_id AND item.order_id=ordering.id AND item.status='delivered'
+      ))
+    ORDER BY payment.created_at,payment.id LIMIT 25`
   if (code === 'INVENTORY_RESERVED') return `${prefix}
     SELECT 'inventory_reservation'::text AS entity_type,reservation.id AS entity_id,
       ordering.public_id AS reference,inventory.name AS title,reservation.status,

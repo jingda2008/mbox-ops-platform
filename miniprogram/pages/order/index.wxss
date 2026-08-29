@@ -906,6 +906,15 @@
 .recommend-loading { display: grid; min-height: 150rpx; margin-top: 14rpx; padding: 28rpx; align-content: center; border: 1rpx dashed #c8b998; border-radius: 18rpx; background: #fbf7ef; text-align: center; gap: 8rpx; }
 .recommend-loading text:first-child { color: #4f4436; font-size: 23rpx; font-weight: 650; }
 .recommend-loading text:last-child { color: #887b6b; font-size: 19rpx; }
+.recommend-empty { display: grid; min-height: 124rpx; margin-top: 14rpx; padding: 24rpx; align-content: center; border: 1rpx solid #e4d7c3; border-radius: 18rpx; background: #fffcf7; text-align: center; gap: 8rpx; }
+.recommend-empty text:first-child { color: #4f4436; font-size: 22rpx; font-weight: 650; }
+.recommend-empty text:last-child { color: #887b6b; font-size: 18rpx; }
+.recommend-entry__head view text:last-child { margin-top: 5rpx; color: #887b6b; font-size: 18rpx; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; font-weight: 400; }
+.recommend-entry__action-icon { position: relative; width: 54rpx; height: 54rpx; border-radius: 18rpx; background: linear-gradient(145deg, #f7edd9, #fffaf0); box-shadow: inset 0 0 0 1rpx rgba(185, 152, 95, .18); }
+.recommend-entry__action-icon text { position: relative; z-index: 1; font-size: 29rpx; line-height: 1; }
+.recommend-entry__action-icon--guided::after { position: absolute; top: 7rpx; right: 8rpx; width: 7rpx; height: 7rpx; border-radius: 50%; background: #b78b4e; box-shadow: -28rpx 29rpx 0 -2rpx #d4b57c; content: ""; }
+.recommend-entry__action-icon--shake { border-radius: 50%; background: linear-gradient(145deg, #f8f0df, #fffdf8); }
+.recommend-entry__action-icon--shake text { transform: rotate(-18deg); }
 .recommend-question { z-index: 62; display: flex; padding: 28rpx; align-items: flex-end; box-sizing: border-box; }
 .recommend-question__sheet { position: relative; width: 100%; max-height: calc(100vh - 8px); padding: 32rpx 26rpx calc(28rpx + env(safe-area-inset-bottom)); border-radius: 28rpx 28rpx 0 0; background: #fffcf7; box-shadow: 0 -18rpx 56rpx rgba(22, 18, 14, .22); box-sizing: border-box; }
 .recommend-question__close { position: absolute; top: 18rpx; right: 22rpx; min-width: 112rpx; min-height: 64rpx; margin: 0; padding: 0 16rpx; border: 1rpx solid #d6cec4; border-radius: 32rpx; background: #f5f1eb; color: #62594f; font-size: 20rpx; line-height: 62rpx; }

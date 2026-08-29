@@ -295,7 +295,7 @@ export async function listTableOrderDetailsForSession(
       LIMIT 1
     ) kds ON true
     WHERE order_header.tenant_id=$1::uuid AND order_header.store_id=$2::uuid
-      AND order_header.table_session_id=$3::uuid AND order_header.status<>'draft'
+      AND order_header.table_session_id=$3::uuid AND order_header.status NOT IN ('draft','cancelled')
     ORDER BY order_header.created_at DESC,order_header.id DESC,item.created_at,item.id
   `, [transaction.scope.tenantId, transaction.scope.storeId, tableSessionId])
   const orders = new Map<string, StaffTableOrderDetailView>()

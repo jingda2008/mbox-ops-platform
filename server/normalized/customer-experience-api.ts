@@ -1760,8 +1760,17 @@ function recommendationAnswers(
     occasion: recommendationIntent === 'initial' && context.recommendationScene
       ? storedOccasion
       : enumValue(body.occasion ?? storedOccasion, '聚会目的', OCCASIONS) as CustomerOccasion,
-    alcoholPreference: enumValue(body.alcoholPreference, '酒水偏好', ALCOHOL) as AlcoholPreference,
-    experienceLevel: enumValue(body.experienceLevel, '体验档位', LEVELS) as ExperienceLevel,
+    // First exposure happens before the customer has answered anything. Keep
+    // it neutral and server-owned; a guided request still requires the three
+    // configured answers and re-ranks from the customer's explicit choices.
+    alcoholPreference: enumValue(
+      body.alcoholPreference ?? (recommendationIntent === 'initial' ? 'undecided' : undefined),
+      '酒水偏好', ALCOHOL,
+    ) as AlcoholPreference,
+    experienceLevel: enumValue(
+      body.experienceLevel ?? (recommendationIntent === 'initial' ? 'enhanced' : undefined),
+      '体验档位', LEVELS,
+    ) as ExperienceLevel,
     // 服务强度是门店执行节奏，不是顾客需要完成的第四道题。旧客户端仍可
     // 传入它；三题版没有传入时统一使用平衡服务，避免扩展 API 表面。
     serviceIntensity: enumValue(body.serviceIntensity ?? 'balanced', '服务方式', INTENSITIES) as ServiceIntensity,

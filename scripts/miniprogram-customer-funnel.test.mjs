@@ -97,7 +97,8 @@ test('customer self-checkout never revives an unpaid order after the final payme
 
   assert.match(orderLogic, /async handlePendingPaymentBeforeCheckout\(\)/)
   assert.match(orderLogic, /abandonGuestCheckout/)
-  assert.match(orderLogic, /处理旧版待付款订单/)
+  assert.match(orderLogic, /queuePendingGuestPaymentAbandonment/)
+  assert.match(orderLogic, /paymentPresentationInFlight/)
   assert.doesNotMatch(orderLogic, /本桌付款确认中，可继续加购/)
   assert.doesNotMatch(orderLogic, /confirmText: '继续付款'/)
   assert.doesNotMatch(orderView, /class="payment-recovery"/)
@@ -934,7 +935,7 @@ test('subscription messages are requested from customer actions, not a settings-
   const paymentActionStart = orderLogic.indexOf('async handlePaymentAction')
   const paymentActionEnd = orderLogic.indexOf('async offerOrderNotifications')
   const paymentActionSource = orderLogic.slice(paymentActionStart, paymentActionEnd)
-  assert.match(paymentActionSource, /wx\.requestPayment[\s\S]*?offerOrderNotifications\('order_checkout', tableRequest\)[\s\S]*?confirmPaymentOutcome/)
+  assert.match(paymentActionSource, /wx\.requestPayment[\s\S]*?offerOrderNotifications\('order_checkout', activeRequest\)[\s\S]*?confirmPaymentOutcome/)
   assert.match(profileLogic, /getWechatNotificationPrompt\('coupon_open'\)/)
   assert.match(profileLogic, /async openCoupons\(\)[\s\S]{0,500}?requestWechatSubscription/)
 })

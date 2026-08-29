@@ -224,10 +224,80 @@ export class PaymentProviderActionRepository {
         AND payment.provider = 'postar'
         AND payment.status IN ('created', 'pending')
         AND payment.created_at <= clock_timestamp() - make_interval(secs => $3::integer)
+        -- Guest QR JSAPI checkout has a dedicated query/close worker. Keeping
+        -- it out of the generic reconciler prevents a race that can release
+        -- reservations without retiring the operational order.
+        AND NOT EXISTS (
+          SELECT 1
+          FROM mbox.orders AS ordering
+          WHERE ordering.tenant_id=payment.tenant_id AND ordering.store_id=payment.store_id
+            AND ordering.id=payment.order_id
+            AND ordering.channel='guest_qr' AND ordering.settlement_mode='immediate_payment'
+            AND payment.method='jsapi'
+            AND payment.provider_snapshot @> '{"source":"guest_checkout"}'::jsonb
+        )
       ORDER BY payment.created_at ASC, payment.id ASC
       LIMIT $4::integer
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, minAgeSeconds, limit])
     return result.rows.map((row) => row.id)
+  }
+
+  async listStaleGuestImmediateCheckoutPaymentCandidates(
+    minAgeSeconds: number,
+    limit: number,
+  ): Promise<Array<{ id: string; createdAt: string; operationallyAbandoned: boolean }>> {
+    const result = await this.transaction.query<{
+      id: string
+      created_at: string
+      operationally_abandoned: boolean
+    }>(`
+      SELECT payment.id,payment.created_at::text,
+        EXISTS (
+          SELECT 1 FROM mbox.guest_immediate_checkout_abandonment_events AS abandonment
+          WHERE abandonment.tenant_id=payment.tenant_id AND abandonment.store_id=payment.store_id
+            AND abandonment.payment_id=payment.id
+        ) AS operationally_abandoned
+      FROM mbox.payments AS payment
+      JOIN mbox.orders AS ordering
+        ON ordering.tenant_id=payment.tenant_id AND ordering.store_id=payment.store_id
+       AND ordering.id=payment.order_id
+      WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid
+        AND payment.provider='postar' AND payment.method='jsapi'
+        AND payment.status IN ('created','pending')
+        AND payment.provider_snapshot @> '{"source":"guest_checkout"}'::jsonb
+        AND ordering.channel='guest_qr' AND ordering.settlement_mode='immediate_payment'
+        -- An explicit customer exit already released the order.  Pick that
+        -- payment up on the next worker cycle rather than making a customer
+        -- wait for the general stale-age window before its rail is queried
+        -- and safely closed.  Other candidates must age first so a normal
+        -- native payment sheet is never interrupted.
+        AND (
+          payment.created_at<=clock_timestamp()-make_interval(secs=>$3::integer)
+          OR EXISTS (
+            SELECT 1 FROM mbox.guest_immediate_checkout_abandonment_events AS abandonment
+            WHERE abandonment.tenant_id=payment.tenant_id AND abandonment.store_id=payment.store_id
+              AND abandonment.payment_id=payment.id
+          )
+        )
+        -- Normal candidates need retirement. Event-backed candidates stay in
+        -- this loop so a late provider success is still detected and sent to
+        -- the controlled refund-review queue.
+        AND (
+          ordering.status<>'cancelled'
+          OR EXISTS (
+            SELECT 1 FROM mbox.guest_immediate_checkout_abandonment_events AS abandonment
+            WHERE abandonment.tenant_id=payment.tenant_id AND abandonment.store_id=payment.store_id
+              AND abandonment.payment_id=payment.id
+          )
+        )
+      ORDER BY payment.created_at,payment.id
+      LIMIT $4::integer
+    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,minAgeSeconds,limit])
+    return result.rows.map((row) => ({
+      id: row.id,
+      createdAt: row.created_at,
+      operationallyAbandoned: row.operationally_abandoned === true,
+    }))
   }
 
   async resolveInitiatedPaymentStatus(

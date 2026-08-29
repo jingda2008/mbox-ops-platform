@@ -153,6 +153,8 @@ describe('StaffBootstrapQuery', () => {
     expect(calls.filter((call) => call.sql.startsWith('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')))
       .toHaveLength(4)
     expect(calls.some((call) => /\bUPDATE\b/.test(call.sql))).toBe(false)
+    const summaryQuery = calls.find((call) => call.sql.includes('WITH business_window'))
+    expect(summaryQuery?.sql).toContain('guest_immediate_checkout_abandonment_events')
     expect(value.clients).toHaveLength(4)
     expect(value.clients.every((client) => client.released)).toBe(true)
   })

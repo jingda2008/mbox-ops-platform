@@ -99,3 +99,10 @@ export {
   PaymentReservationExpiryWorker,
   type PaymentReservationExpiryBatch,
 } from './payment-reservation-expiry-worker.js'
+export {
+  StaleGuestImmediatePaymentWorker,
+  STALE_GUEST_IMMEDIATE_PAYMENT_MIN_AGE_SECONDS,
+  STALE_GUEST_IMMEDIATE_PAYMENT_UNRESOLVED_ABANDON_AGE_SECONDS,
+  type StaleGuestImmediatePaymentBatch,
+  type StaleGuestImmediatePaymentWorkerDeps,
+} from './stale-guest-immediate-payment-worker.js'

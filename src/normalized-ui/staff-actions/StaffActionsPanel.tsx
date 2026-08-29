@@ -20,6 +20,7 @@ import {
   Sparkles,
   TableProperties,
   Users,
+  X,
 } from 'lucide-react'
 import { StaffActionsApi, StaffActionsApiError, type StaffActionsApiPort, type StaffReservationListOptions } from './staff-actions-api'
 import { AssistedOrderSheet } from './AssistedOrderSheet'
@@ -107,6 +108,7 @@ export function StaffActionsPanel({
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading')
   const [notice, setNotice] = useState<StaffActionNotice>(null)
   const [selectedTableId, setSelectedTableId] = useState<string | null>(null)
+  const [tableActionDialogOpen, setTableActionDialogOpen] = useState(false)
   const [focusedActionId,setFocusedActionId]=useState<string|null>(initialFactId)
   const [guestCount, setGuestCount] = useState('')
   const [openTableRecommendationScene, setOpenTableRecommendationScene] = useState<OpenTableRecommendationScene>('unsure')
@@ -135,6 +137,8 @@ export function StaffActionsPanel({
   const actionLocksRef = useRef(new Set<string>())
   const pendingActionRef = useRef<string | null>(null)
   const initialTableFocusAppliedRef = useRef(false)
+  const secondaryTableSessionIdRef = useRef<string | null>(null)
+  const selectedTable = operations?.tables.find((table) => table.id === selectedTableId) ?? null
 
   const showNotice = useCallback((nextNotice: Exclude<StaffActionNotice, null>) => {
     if (noticeTimerRef.current !== null) globalThis.clearTimeout(noticeTimerRef.current)
@@ -246,10 +250,52 @@ export function StaffActionsPanel({
       requestRef.current?.abort()
       reservationRequestRef.current?.abort()
       if (noticeTimerRef.current !== null) globalThis.clearTimeout(noticeTimerRef.current)
+      secondaryTableSessionIdRef.current = null
     }
   }, [load])
 
-  useEffect(() => setTab(initialTab), [initialTab])
+  const resetTableActionState = useCallback((clearSelection = false) => {
+    secondaryTableSessionIdRef.current = null
+    setTableActionDialogOpen(false)
+    setGuestCount('')
+    setOpenTableRecommendationScene('unsure')
+    setCapacityReason('')
+    setTransferTargetId(null)
+    setTransferReason('')
+    setCloseConfirm(false)
+    setCustomerLeftConfirm(false)
+    setCloseIssue(null)
+    setOrderSheetMode(null)
+    setTablePaymentOpen(false)
+    setObservationOpen(false)
+    setRecommendationOpen(false)
+    setParticipantMovementOpen(false)
+    if (clearSelection) setSelectedTableId(null)
+  }, [])
+
+  const dismissTableActionDialog = useCallback(() => {
+    resetTableActionState(true)
+  }, [resetTableActionState])
+
+  const openTableSecondary = useCallback((sessionId: string, open: () => void) => {
+    secondaryTableSessionIdRef.current = sessionId
+    setTableActionDialogOpen(false)
+    open()
+  }, [])
+
+  const returnToTableActionDialog = useCallback((close: () => void) => {
+    close()
+    const sessionId = secondaryTableSessionIdRef.current
+    secondaryTableSessionIdRef.current = null
+    if (sessionId !== null && selectedTable?.activeSession?.id === sessionId) {
+      setTableActionDialogOpen(true)
+    }
+  }, [selectedTable])
+
+  useEffect(() => {
+    setTab(initialTab)
+    resetTableActionState(true)
+  }, [initialTab, resetTableActionState])
 
   useEffect(() => {
     pendingActionRef.current = pendingAction
@@ -283,7 +329,6 @@ export function StaffActionsPanel({
     showNotice({ kind: 'guidance', message: guidanceForPermission(permission) })
   }, [showNotice])
 
-  const selectedTable = operations?.tables.find((table) => table.id === selectedTableId) ?? null
   const permissions = operations?.actor.capabilities ?? []
   const serviceActions = useMemo(() => operations === null
     ? []
@@ -319,6 +364,7 @@ export function StaffActionsPanel({
     setTableScope('all')
     setTableQuery(table.code)
     setSelectedTableId(table.id)
+    setTableActionDialogOpen(true)
   }, [initialTableSessionId, operations])
 
   useEffect(()=>{
@@ -351,20 +397,24 @@ export function StaffActionsPanel({
     if (hasNewAttention && typeof navigator.vibrate === 'function') navigator.vibrate([18, 45, 18])
   }, [currentActionKeys, fulfillmentActions, pendingAction, serviceActions])
 
-  const selectTable = (table: StaffActionTable) => {
+  const selectTable = (table: StaffActionTable, openDialog = true) => {
+    secondaryTableSessionIdRef.current = null
     setSelectedTableId(table.id)
+    setTableActionDialogOpen(openDialog)
     setGuestCount('')
     setOpenTableRecommendationScene('unsure')
     setCapacityReason('')
     setTransferTargetId(null)
     setTransferReason('')
     setCloseConfirm(false)
+    setCustomerLeftConfirm(false)
     setCloseIssue(null)
     setNotice(null)
     setOrderSheetMode(null)
     setTablePaymentOpen(false)
     setObservationOpen(false)
     setRecommendationOpen(false)
+    setParticipantMovementOpen(false)
   }
 
   const openTable = async () => {
@@ -821,7 +871,11 @@ export function StaffActionsPanel({
                     {canCollect && <button type="button" className="staff-table-quick-payment"
                       aria-label={`${table.code}直接收款`}
                       disabled={pendingAction === `table:${table.id}`}
-                      onClick={() => { selectTable(table); setTablePaymentOpen(true) }}>
+                      onClick={() => {
+                        selectTable(table, false)
+                        secondaryTableSessionIdRef.current = table.activeSession?.id ?? null
+                        setTablePaymentOpen(true)
+                      }}>
                       <QrCode size={15} />收款
                     </button>}
                   </div>
@@ -830,8 +884,8 @@ export function StaffActionsPanel({
               </div>
             </section>
           ))}
-          {selectedTable !== null && (
-            <><TableActionSheet
+          {selectedTable !== null && tableActionDialogOpen && (
+            <TableActionSheet
               table={selectedTable}
               allTables={operations.tables}
               permissions={permissions}
@@ -855,29 +909,45 @@ export function StaffActionsPanel({
               onTransfer={() => void transferTable()}
               onPermissionGuidance={revealPermissionGuidance}
               onCancelClose={() => { setCloseConfirm(false); setCustomerLeftConfirm(false) }}
-              onOrder={() => setOrderSheetMode('paid')}
-              onPayment={() => setTablePaymentOpen(true)}
-              onGift={() => setOrderSheetMode('gift')}
-              onObservation={() => setObservationOpen(true)}
-              onRecommendation={() => setRecommendationOpen(true)}
-              onParticipantMovement={() => setParticipantMovementOpen(true)}
+              onDismiss={dismissTableActionDialog}
+              onOrder={() => {
+                if (selectedTable.activeSession !== null) openTableSecondary(selectedTable.activeSession.id, () => setOrderSheetMode('paid'))
+              }}
+              onPayment={() => {
+                if (selectedTable.activeSession !== null) openTableSecondary(selectedTable.activeSession.id, () => setTablePaymentOpen(true))
+              }}
+              onGift={() => {
+                if (selectedTable.activeSession !== null) openTableSecondary(selectedTable.activeSession.id, () => setOrderSheetMode('gift'))
+              }}
+              onObservation={() => {
+                if (selectedTable.activeSession !== null) openTableSecondary(selectedTable.activeSession.id, () => setObservationOpen(true))
+              }}
+              onRecommendation={() => {
+                if (selectedTable.activeSession !== null) openTableSecondary(selectedTable.activeSession.id, () => setRecommendationOpen(true))
+              }}
+              onParticipantMovement={() => {
+                if (selectedTable.activeSession !== null) openTableSecondary(selectedTable.activeSession.id, () => setParticipantMovementOpen(true))
+              }}
               onGuestCartFreeze={() => void setGuestCartFreeze()}
               orderStatusPanel={selectedTable.activeSession !== null
                 && !selectedTable.activeSession.id.startsWith('optimistic-')
                 && (hasPermission(permissions, 'service.execute') || hasPermission(permissions, 'order.view'))
                 ? <TableOrderStatusPanel api={api} table={{ code: selectedTable.code, activeSession: selectedTable.activeSession }} />
                 : null}
+              memberBenefitsPanel={selectedTable.activeSession !== null && memberBenefits !== null
+                ? <MemberBenefitTaskCards
+                    title={`${selectedTable.code}会员权益`}
+                    tasks={filterMemberBenefitTasks(memberBenefits, '', selectedTable.activeSession.id)}
+                    giftSelections={giftSelections}
+                    pendingAction={pendingAction}
+                    onSelection={(reservationId, selection) => setGiftSelections((current) => ({ ...current, [reservationId]: selection }))}
+                    onRedeemGift={(item) => void redeemAnnualGift(item)}
+                    onCancelGift={(item) => void cancelAnnualGift(item)}
+                    onRedeemSnack={(item) => void redeemDailySnack(item)}
+                    onCancelSnack={(item) => void cancelDailySnack(item)}
+                  />
+                : null}
             />
-            {selectedTable.activeSession!==null&&memberBenefits!==null&&<MemberBenefitTaskCards
-              title={`${selectedTable.code}会员权益`}
-              tasks={filterMemberBenefitTasks(memberBenefits,'',selectedTable.activeSession.id)}
-              giftSelections={giftSelections} pendingAction={pendingAction}
-              onSelection={(reservationId,selection)=>setGiftSelections((current)=>({...current,[reservationId]:selection}))}
-              onRedeemGift={(item)=>void redeemAnnualGift(item)}
-              onCancelGift={(item)=>void cancelAnnualGift(item)}
-              onRedeemSnack={(item)=>void redeemDailySnack(item)}
-              onCancelSnack={(item)=>void cancelDailySnack(item)}
-            />}</>
           )}
         </div>
       )}
@@ -1045,7 +1115,7 @@ export function StaffActionsPanel({
           api={api}
           mode={orderSheetMode}
           table={{ code: selectedTable.code, activeSession: selectedTable.activeSession }}
-          onClose={() => setOrderSheetMode(null)}
+          onClose={() => returnToTableActionDialog(() => setOrderSheetMode(null))}
           onSubmitted={(message) => {
             showNotice({ kind: 'success', message })
             void load(true)
@@ -1054,7 +1124,7 @@ export function StaffActionsPanel({
       )}
       {tablePaymentOpen && selectedTable?.activeSession !== null && selectedTable !== null && (
         <TablePaymentSheet api={api} table={{ code: selectedTable.code, activeSession: selectedTable.activeSession }}
-          onClose={() => setTablePaymentOpen(false)} onUpdated={(message) => {
+          onClose={() => returnToTableActionDialog(() => setTablePaymentOpen(false))} onUpdated={(message) => {
             showNotice({ kind: 'success', message })
             void load(true)
           }} />
@@ -1064,7 +1134,7 @@ export function StaffActionsPanel({
           api={api}
           tableCode={selectedTable.code}
           tableSessionId={selectedTable.activeSession.id}
-          onClose={() => setObservationOpen(false)}
+          onClose={() => returnToTableActionDialog(() => setObservationOpen(false))}
           onSaved={(message) => {
             showNotice({ kind: 'success', message })
             void load(true)
@@ -1073,13 +1143,13 @@ export function StaffActionsPanel({
       )}
       {recommendationOpen && selectedTable?.activeSession !== null && selectedTable !== null && (
         <TableRecommendationSheet api={api} tableCode={selectedTable.code}
-          tableSessionId={selectedTable.activeSession.id} onClose={() => setRecommendationOpen(false)}
+          tableSessionId={selectedTable.activeSession.id} onClose={() => returnToTableActionDialog(() => setRecommendationOpen(false))}
           onSaved={(message) => { showNotice({ kind: 'success',message });void load(true) }} />
       )}
       {participantMovementOpen && selectedTable?.activeSession !== null && selectedTable !== null && (
         <ParticipantMovementSheet api={api} table={selectedTable} allTables={operations?.tables ?? []}
-          onClose={() => setParticipantMovementOpen(false)} onDone={(message) => {
-            setParticipantMovementOpen(false);showNotice({ kind:'success',message });void load(true)
+          onClose={() => returnToTableActionDialog(() => setParticipantMovementOpen(false))} onDone={(message) => {
+            returnToTableActionDialog(() => setParticipantMovementOpen(false));showNotice({ kind:'success',message });void load(true)
           }}/>
       )}
       {memberScannerOpen&&<InventoryBarcodeScanner title="扫描会员码或点心核销码" cameraLabel="会员码扫码摄像头画面"
@@ -1372,6 +1442,7 @@ interface TableActionSheetProps {
   onTransfer(): void
   onPermissionGuidance(permission: 'table.open' | 'table.close' | 'table.transfer'): void
   onCancelClose(): void
+  onDismiss(): void
   onOrder(): void
   onPayment(): void
   onGift(): void
@@ -1380,10 +1451,13 @@ interface TableActionSheetProps {
   onParticipantMovement():void
   onGuestCartFreeze(): void
   orderStatusPanel: React.ReactNode
+  memberBenefitsPanel: React.ReactNode
 }
 
 function TableActionSheet(props: TableActionSheetProps) {
-  const { table } = props
+  const { table, onDismiss } = props
+  const dialogRef = useRef<HTMLElement | null>(null)
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null)
   const guestNumber = /^\d+$/.test(props.guestCount) ? Number(props.guestCount) : null
   const transferTarget = props.allTables.find((candidate) => candidate.id === props.transferTargetId) ?? null
   const transferNeedsReason = transferTarget !== null && table.activeSession !== null
@@ -1392,12 +1466,49 @@ function TableActionSheet(props: TableActionSheetProps) {
     candidate.id !== table.id && candidate.status === 'available' && candidate.activeSession === null
   ))
 
+  useEffect(() => {
+    const focusTimer = globalThis.setTimeout(() => closeButtonRef.current?.focus(), 0)
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onDismiss()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href]',
+      ) ?? [])
+      if (focusable.length === 0) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      const active = document.activeElement
+      if (event.shiftKey && (active === first || !dialogRef.current?.contains(active))) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && (active === last || !dialogRef.current?.contains(active))) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      globalThis.clearTimeout(focusTimer)
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [onDismiss])
+
   return (
-    <section className="staff-table-sheet" aria-label={`${table.code}桌台操作`} data-action-reveal>
+    <div
+      className="staff-table-action-overlay"
+      role="presentation"
+      onClick={(event) => { if (event.target === event.currentTarget) onDismiss() }}
+    >
+    <section ref={dialogRef} className="staff-table-sheet staff-table-action-dialog" role="dialog" aria-modal="true" aria-label={`${table.code}桌台操作`} data-action-reveal>
       <header>
         <span className="staff-table-sheet-icon"><TableProperties size={20} /></span>
         <div><strong>{table.code} · {table.displayName}</strong><small>{table.areaName} · 容量{table.capacity}人</small></div>
         <span className={table.activeSession === null ? 'status-free' : table.activeSession.status === 'closing' ? 'status-closing' : 'status-open'}>{table.activeSession === null ? '空闲' : table.activeSession.status === 'closing' ? '结台中' : '已开台'}</span>
+        <button ref={closeButtonRef} className="staff-table-sheet-close" type="button" aria-label="关闭桌台操作" onClick={onDismiss}><X size={20} /></button>
       </header>
 
       {table.activeSession === null ? (
@@ -1449,9 +1560,27 @@ function TableActionSheet(props: TableActionSheetProps) {
       ) : (
         <div className="staff-open-session">
           <p><strong>{table.activeSession.guestCount}人</strong><span>{table.activeSession.status === 'closing' ? '结台待完成，请先处理下方提示' : '本桌服务进行中'}</span></p>
-          {props.orderStatusPanel}
           {table.activeSession.guestCartWritesFrozen && <p className="staff-close-issue" role="status"><strong>顾客购物车已锁定：</strong>顾客仍可查看，服务人员核对完成后请恢复修改。</p>}
           {props.closeIssue !== null && <p className="staff-close-issue" role="alert"><strong>暂不能结台：</strong>{props.closeIssue}</p>}
+          {props.closeIssue !== null && hasPermission(props.permissions, 'table.close') && hasPermission(props.permissions, 'table.turnover_unsettled') && (
+            <section className="staff-turnover-exception" aria-label="顾客离店翻台处理">
+              <div>
+                <strong>顾客已离店？财务待跟进不阻断翻台</strong>
+                <span>释放本桌并取消未履约部分；付款、退款和对账仍由收银继续处理。</span>
+              </div>
+              <div className="staff-turnover-exception-actions">
+                {hasTableCollectionPermission(props.permissions) && (
+                  <button type="button" className="is-account" onClick={props.onPayment}><QrCode size={17} /> 查看桌账/收款</button>
+                )}
+                <button type="button" className="is-turnover" onClick={props.onCloseAfterCustomerLeft} disabled={props.pending}>
+                  {props.pending ? '正在处理…' : props.customerLeftConfirm ? '再次确认，立即翻台' : '顾客离店，立即翻台'}
+                </button>
+              </div>
+              {props.customerLeftConfirm && <button type="button" className="staff-turnover-exception-cancel" onClick={props.onCancelClose}>暂不翻台</button>}
+            </section>
+          )}
+          {props.orderStatusPanel}
+          {props.memberBenefitsPanel}
           <div className="staff-session-actions">
             {hasTableCollectionPermission(props.permissions) && (
               <button type="button" className="is-payment" onClick={props.onPayment}><QrCode size={17} /> 本桌收款</button>
@@ -1492,13 +1621,13 @@ function TableActionSheet(props: TableActionSheetProps) {
             ) : (
               <button type="button" onClick={() => props.onPermissionGuidance('table.close')}>关台说明</button>
             )}
-            {hasPermission(props.permissions, 'table.close') && hasPermission(props.permissions, 'table.turnover_unsettled') && (
+            {props.closeIssue === null && hasPermission(props.permissions, 'table.close') && hasPermission(props.permissions, 'table.turnover_unsettled') && (
               <button type="button" className="is-danger" onClick={props.onCloseAfterCustomerLeft} disabled={props.pending}>
                 {props.pending ? '正在处理…' : props.customerLeftConfirm ? '确认立即翻台' : '顾客离店，立即翻台'}
               </button>
             )}
           </div>
-          {(props.closeConfirm || props.customerLeftConfirm) && <button type="button" className="staff-cancel-confirm" data-action-reveal onClick={props.onCancelClose}>取消关台</button>}
+          {(props.closeConfirm || (props.customerLeftConfirm && props.closeIssue === null)) && <button type="button" className="staff-cancel-confirm" data-action-reveal onClick={props.onCancelClose}>取消关台</button>}
           {props.transferTargetId !== null && (
             <div className="staff-transfer-targets" data-action-reveal>
               <strong>选择空闲目标桌台</strong>
@@ -1522,6 +1651,7 @@ function TableActionSheet(props: TableActionSheetProps) {
         </div>
       )}
     </section>
+    </div>
   )
 }
 

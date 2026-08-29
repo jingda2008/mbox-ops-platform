@@ -8,6 +8,12 @@ import {
   type NormalizedWorkerRuntime,
 } from './normalized/normalized-worker-runtime.js'
 import { ScopedPostgresTransactionRunner, type PostgresPool } from './normalized/transaction-runner.js'
+import { NormalizedCommandExecutor } from './normalized/command-executor.js'
+import { OnlinePaymentService } from './normalized/online-payment-service.js'
+import { PaymentCommandService } from './normalized/payment-command-service.js'
+import { NormalizedPaymentCapabilityAuthorization } from './normalized/payment-security-policy.js'
+import { NormalizedProviderObservationAuthority } from './normalized/provider-verification-observation.js'
+import { GuestImmediateCheckoutReconciliationService } from './normalized/guest-immediate-checkout-reconciliation-service.js'
 import { PostgresWechatIdentityRepository } from './wechat-production-adapters.js'
 import type { PostgresPool as WechatPostgresPool } from './postgres-repository.js'
 import { OfficialWechatSubscriptionMessageAdapter } from './normalized/wechat-subscription-message-adapter.js'
@@ -63,6 +69,25 @@ async function main(): Promise<void> {
         runtime.app.log.error({ errorCode: safeErrorCode(error) }, 'normalized worker database pool idle client failed')
       })
       workerPool = nativeWorkerPool as unknown as PostgresPool
+      const workerTransactions = new ScopedPostgresTransactionRunner(workerPool)
+      const workerPaymentCommands = new PaymentCommandService(
+        new NormalizedCommandExecutor(workerTransactions),
+        new NormalizedPaymentCapabilityAuthorization(),
+        new NormalizedProviderObservationAuthority(),
+      )
+      const workerOnlinePayments = new OnlinePaymentService(
+        workerTransactions,
+        config.secret,
+        config.payment,
+      )
+      const staleGuestImmediatePaymentReconciliation = {
+        onlinePayments: workerOnlinePayments,
+        payments: workerPaymentCommands,
+        reconciliation: new GuestImmediateCheckoutReconciliationService(
+          new NormalizedCommandExecutor(workerTransactions),
+          new NormalizedProviderObservationAuthority(),
+        ),
+      }
       const wechatLoyaltyNotification = config.wechatIdentity === null || config.wechatNotification === null
         ? null
         : {
@@ -87,12 +112,13 @@ async function main(): Promise<void> {
         workerId,
         intervalMs: config.workerIntervalMs,
         hashSecret: config.secret,
-        transactions: new ScopedPostgresTransactionRunner(workerPool),
+        transactions: workerTransactions,
         aiExecutions: runtime.services.ai,
         adapters,
         wechatLoyaltyNotification,
         wechatMemberServiceNotification: wechatLoyaltyNotification,
         reservationPerformanceNotification: wechatLoyaltyNotification,
+        staleGuestImmediatePaymentReconciliation,
         onError: (worker, error) => {
           runtime.app.log.error({ worker, errorCode: safeErrorCode(error) }, 'normalized worker failed')
         },

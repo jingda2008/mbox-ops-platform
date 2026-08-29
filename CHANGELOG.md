@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.0-rc.159 - 2026-08-29
+
+- Moves the native mini-program recommendation questions and recommendation
+  decisions to the server-owned, versioned policy configuration. Paid member
+  history is used only within the documented identity, payment and refund
+  boundaries; shaking excludes the current cart, orders and prior exposure.
+- Keeps “今夜甄选”, “帮我选” and “摇一摇” visible while menu categories change;
+  simplifies the customer path to cart review, one confirmation and direct
+  WeChat payment handoff, with compact Huawei Mate X5 outer-screen sheets.
+- Turns expired guest table sessions from an unhandled 500 into recognizable
+  401/409 responses and clears only the matching local table binding.
+- Adds 12:00–06:00 policy-driven automatic physical-table turnover. It closes
+  stale prior-business-day tables while retaining payment, refund, inventory
+  and late-provider facts for reconciliation.
+
 ## 1.0.0-rc.158 - 2026-08-29
 
 - Repairs native mini-program WeChat JSAPI launch: the service's normal

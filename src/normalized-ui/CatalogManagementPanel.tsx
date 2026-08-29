@@ -222,7 +222,6 @@ export function CatalogManagementPanel({
   const [recipeCategoryFilter, setRecipeCategoryFilter] = useState('')
   const [recipeBusy, setRecipeBusy] = useState(false)
   const [recipeCost, setRecipeCost] = useState<RecipeCostPreview | null>(null)
-  const [recipeCostReason, setRecipeCostReason] = useState('按最新已收货物料成本核算配方成本')
   const [notice, setNotice] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
   const performancePhaseRequest = useRef(0)
 
@@ -295,7 +294,6 @@ export function CatalogManagementPanel({
     setRecipeCategoryFilter('')
     setRecipeBusy(false)
     setRecipeCost(null)
-    setRecipeCostReason('按最新已收货物料成本核算配方成本')
   }
 
   const loadRecipeEditor = async (productId: string) => {
@@ -559,30 +557,6 @@ export function CatalogManagementPanel({
     }
   }
 
-  const applyRecipeCost = async () => {
-    if (draft?.id === null || draft === null || recipeBusy || recipeCost === null || recipeCost.costAmountMinor === null) return
-    const reason = recipeCostReason.trim()
-    if (reason.length < 2 || reason.length > 500) {
-      setNotice({ kind: 'error', text: '请填写2至500字的成本核算原因' })
-      return
-    }
-    setRecipeBusy(true)
-    setNotice(null)
-    try {
-      const result = await api.postEndpoint<unknown>(
-        `/api/inventory/products/${draft.id}/recipe-cost/apply`, { reason },
-        { idempotencyKey: operationKey('inventory-recipe-cost') },
-      )
-      setRecipeCost(readRecipeCostPreview(result, draft.id))
-      await load()
-      setNotice({ kind: 'success', text: `${draft.name} 的配方成本已按当前收货记录应用；历史订单成本不会被改写` })
-    } catch (error) {
-      setNotice({ kind: 'error', text: error instanceof Error ? error.message : '配方成本没有应用' })
-    } finally {
-      setRecipeBusy(false)
-    }
-  }
-
   const togglePerformancePhase = (phaseCode: PerformancePhaseCode) => {
     setPerformancePhaseCodes((current) => current.includes(phaseCode)
       ? current.filter((item) => item !== phaseCode)
@@ -640,7 +614,10 @@ export function CatalogManagementPanel({
     const intentTags = readEnumList(draft.recommendationIntentTags, ['relaxed', 'energetic', 'ritual', 'unsure'])
     const tasteTags = readEnumList(draft.recommendationTasteTags, ['refreshing', 'layered', 'strong', 'any'])
     const dwellTags = readEnumList(draft.recommendationDwellTags, ['one_set', 'stay_longer', 'no_rush'])
-    const costAmount = canViewInventoryCost ? moneyToMinor(draft.costYuan, true) : undefined
+    const inventoryCostIsAutomatic = draft.inventoryControlMode === 'tracked'
+      || draft.productKind === 'bundle'
+    const costAmount = canViewInventoryCost && !inventoryCostIsAutomatic
+      ? moneyToMinor(draft.costYuan, true) : undefined
     const priceAmount = moneyToMinor(draft.priceYuan, false)
     if (minimum === null || maximum === null || minimum > maximum || priority === null
       || prepMinutes === null || holdMinutes === null || sortOrder === null || maxOrderQuantity === null
@@ -648,11 +625,12 @@ export function CatalogManagementPanel({
       || sceneTags === null || intentTags === null || tasteTags === null || dwellTags === null
       || draft.allowedChannels.length === 0 || Boolean(draft.availableFrom) !== Boolean(draft.availableUntil)
       || (draft.availableFrom !== '' && draft.availableFrom === draft.availableUntil)
-      || (canViewInventoryCost && (costAmount === undefined || (draft.status === 'active' && costAmount === null)))) {
-      setNotice({ kind: 'error', text: '请核对推荐、供应时段、渠道、限购和出品时限；在售商品必须填写成本' })
+      || (!inventoryCostIsAutomatic && canViewInventoryCost
+        && (costAmount === undefined || (draft.status === 'active' && costAmount === null)))) {
+      setNotice({ kind: 'error', text: '请核对推荐、供应时段、渠道、限购和出品时限；非库存商品在售时必须填写成本' })
       return
     }
-    if (draft.id === null && draft.status === 'active' && !canViewInventoryCost) {
+    if (draft.id === null && draft.status === 'active' && !canViewInventoryCost && !inventoryCostIsAutomatic) {
       setNotice({ kind: 'error', text: '当前岗位不能查看或填写成本，不能直接创建在售商品；请先保存为停用，或由具备成本权限的员工完成上架。' })
       return
     }
@@ -700,7 +678,7 @@ export function CatalogManagementPanel({
     const currentCost = draft.id === null
       ? null
       : products.find((product) => product.id === draft.id)?.costAmountMinor
-    const costChanged = canViewInventoryCost && costAmount !== undefined
+    const costChanged = canViewInventoryCost && !inventoryCostIsAutomatic && costAmount !== undefined
       && (draft.id === null || currentCost === null || currentCost === undefined || currentCost !== costAmount)
     if (costChanged && draft.id !== null && draft.costChangeReason.trim().length < 2) {
       setNotice({ kind: 'error', text: '修改成本时请填写至少2个字的成本变更原因' })
@@ -806,8 +784,10 @@ export function CatalogManagementPanel({
             <label>库存方式<select disabled={draft.productKind === 'bundle'} value={draft.productKind === 'bundle' ? 'tracked' : draft.inventoryControlMode} onChange={(event) => updateDraft('inventoryControlMode', event.target.value as InventoryControlMode)}><option value="tracked">跟踪库存（酒水等）</option><option value="not_managed">暂不管理数量（小吃水果）</option></select></label>
             <label>搜索文本<input maxLength={4000} value={draft.searchText} onChange={(event) => updateDraft('searchText', event.target.value)} /></label>
             <label>标准售价（元）<input disabled={!canManagePrice} inputMode="decimal" value={draft.priceYuan} onChange={(event) => updateDraft('priceYuan', event.target.value)} />{!canManagePrice && <small>当前岗位不能定价；不会在保存后尝试补写售价。</small>}</label>
-            {canViewInventoryCost
-              ? <label>成本金额（元）<input inputMode="decimal" value={draft.costYuan} onChange={(event) => updateDraft('costYuan', event.target.value)} /><small>保存其他商品资料不会改动成本；修改成本需单独填写原因。</small></label>
+            {canViewInventoryCost && (draft.inventoryControlMode === 'tracked' || draft.productKind === 'bundle')
+              ? <p className="catalog-permission-note">{draft.productKind === 'bundle' ? '套餐成本由组成商品的当前成本自动汇总；' : '库存成本由已确认收货、库存加权成本和正式配方自动计算；'}日常不在商品页手填。当前状态：{currentProduct?.costAmountMinor == null ? '待补成本' : `¥${minorToYuan(currentProduct.costAmountMinor)}/份`}。</p>
+              : canViewInventoryCost
+              ? <label>成本金额（元）<input inputMode="decimal" value={draft.costYuan} onChange={(event) => updateDraft('costYuan', event.target.value)} /><small>非库存商品可由有权限人员更正成本；修改成本需单独填写原因。</small></label>
               : <p className="catalog-permission-note">成本已受权限保护。你可以保存商品资料，但系统不会读取、显示或改写成本。</p>}
             <label>推荐最少人数<input inputMode="numeric" value={draft.recommendationMinGuests} onChange={(event) => updateDraft('recommendationMinGuests', event.target.value)} /></label>
             <label>推荐最多人数<input inputMode="numeric" value={draft.recommendationMaxGuests} onChange={(event) => updateDraft('recommendationMaxGuests', event.target.value)} /></label>
@@ -816,7 +796,7 @@ export function CatalogManagementPanel({
             <label className="catalog-check"><input type="checkbox" checked={draft.recommendationEnabled} onChange={(event) => updateDraft('recommendationEnabled', event.target.checked)} />参与商品推荐</label>
             {isInventoryFlow && <section className={`catalog-sale-readiness catalog-wide${currentSaleBlockers.length === 0 && currentProduct !== null ? ' is-ready' : ''}`} aria-label="酒水小程序可售检查"><header><div><strong>第 5 步：小程序可售检查</strong><small>{draft.id === null ? '新酒水先保存为停用；保存后可配置配方并读取真实可售状态。' : currentSaleBlockers.length === 0 ? '该商品已通过当前的售价、配方、库存和小程序菜单校验。' : '请按以下提示完成；保存商品状态不等于顾客已经可以下单。'}</small></div><em>{draft.id === null ? '待建档' : currentSaleBlockers.length === 0 ? '小程序可售' : '待完成'}</em></header>{currentProduct !== null && currentSaleBlockers.length > 0 && <ul>{currentSaleBlockers.map((item) => <li key={item}>{item}</li>)}</ul>}</section>}
             {canManagePrice && <label className="catalog-wide">调价原因<input maxLength={500} value={draft.priceReason} onChange={(event) => updateDraft('priceReason', event.target.value)} /></label>}
-            {canViewInventoryCost && draft.id !== null && currentProduct !== null
+            {canViewInventoryCost && draft.inventoryControlMode !== 'tracked' && draft.productKind !== 'bundle' && draft.id !== null && currentProduct !== null
               && moneyToMinor(draft.costYuan, true) !== currentProduct.costAmountMinor
               && <label className="catalog-wide">成本变更原因<input required minLength={2} maxLength={500} value={draft.costChangeReason} placeholder="例如：供应商进价调整，按本次采购单更新" onChange={(event) => updateDraft('costChangeReason', event.target.value)} /></label>}
             <button type="button" className="catalog-advanced-toggle catalog-wide" aria-expanded={showAdvanced} onClick={() => setShowAdvanced((value) => !value)}>{showAdvanced ? '收起高级字段' : '显示高级字段（供应、标签与渠道）'}<ChevronDown size={17} /></button>
@@ -872,12 +852,10 @@ export function CatalogManagementPanel({
                   })}</div>{visibleRecipeItems.length === 0 && <p>该品类暂未录入物料。可在“库存与瓶存”先建立或补齐分类。</p>}</>}
                 <button type="button" disabled={recipeBusy || inventoryItems.length === 0} onClick={() => void saveRecipe()}>{recipeBusy ? '保存中' : '保存配方并刷新可售检查'}</button>
                 {canViewInventoryCost && recipeCost !== null && <section className="catalog-recipe-cost" aria-label="配方成本核算">
-                  <header><div><strong>配方成本核算</strong><small>只读取已收货的采购成本。保存配方不会自动改售价或成本，必须由有成本权限的员工明确应用。</small></div><em>{recipeCost.costAmountMinor === null ? '待补成本' : `¥${minorToYuan(recipeCost.costAmountMinor)}/份`}</em></header>
+                  <header><div><strong>配方成本核算</strong><small>只读取已确认收货形成的移动加权库存成本。保存配方或确认收货后，系统会自动更新当前成本；历史订单不会改写。</small></div><em>{recipeCost.costAmountMinor === null ? '待补成本' : `¥${minorToYuan(recipeCost.costAmountMinor)}/份`}</em></header>
                   {recipeCost.costAmountMinor === null
-                    ? <p>以下物料缺少已收货成本：{recipeCost.components.filter((component) => component.sourceReceiptLineId === null).map((component) => component.itemName).join('、')}。请先完成对应采购收货，再重新读取。</p>
-                    : <><div className="catalog-recipe-cost-lines">{recipeCost.components.map((component) => <span key={component.inventoryItemId}>{component.itemName} · {component.componentCostMinor === null ? '待补成本' : `¥${minorToYuan(component.componentCostMinor)}`}</span>)}</div>
-                      <label>本次核算原因<input minLength={2} maxLength={500} value={recipeCostReason} onChange={(event) => setRecipeCostReason(event.target.value)} /></label>
-                      <button type="button" disabled={recipeBusy} onClick={() => void applyRecipeCost()}>{recipeBusy ? '应用中' : '按当前收货成本应用到商品'}</button></>}
+                    ? <p>以下物料成本待补或待核对：{recipeCost.components.filter((component) => component.componentCostMinor === null).map((component) => component.itemName).join('、')}。销售仍可继续，但毛利会明确显示为不完整。</p>
+                    : <div className="catalog-recipe-cost-lines">{recipeCost.components.map((component) => <span key={component.inventoryItemId}>{component.itemName} · {component.componentCostMinor === null ? '待补成本' : `¥${minorToYuan(component.componentCostMinor)}`}</span>)}</div>}
                 </section>}
               </>}
             </section>}

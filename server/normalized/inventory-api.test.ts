@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance } from "fastify";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { runNormalizedMigrations } from "../migrate-normalized.js";
+import {
+  loadNormalizedMigrations,
+  runNormalizedMigrations,
+  unwrapNormalizedMigrationTransaction,
+} from "../migrate-normalized.js";
 import { NormalizedCommandExecutor } from "./command-executor.js";
 import { inventoryApiPlugin } from "./inventory-api.js";
 import { InventoryQueryService } from "./inventory-query-service.js";
@@ -167,6 +171,30 @@ integration("normalized inventory API PostgreSQL integration", () => {
     });
   });
 
+  it("does not silently relabel a historical bottle-count item as liquid inventory", async () => {
+    const legacy = await createItem(
+      "LEGACY-BOTTLE-COUNT",
+      "历史瓶数酒水",
+      false,
+      "inventory-item-create-legacy-bottle-0001",
+      "ingredient",
+      "bottle",
+      "legacy.inventory",
+    );
+    const relabel = await app.inject({
+      method: "PATCH",
+      url: `/api/inventory/items/${legacy.id}`,
+      headers: headers(managerId, "inventory-item-relabel-legacy-bottle-0002"),
+      payload: {
+        name: "历史瓶数酒水",
+        categoryCode: "spirits.whisky",
+        packageVolumeMl: "700",
+      },
+    });
+    expect(relabel.statusCode).toBe(409);
+    expect(relabel.json().error.message).toContain("不能直接改成酒水品类");
+  });
+
   it("binds duplicate scans to the same item but rejects one code bound to another item", async () => {
     const first = await app.inject({
       method: "POST",
@@ -201,6 +229,7 @@ integration("normalized inventory API PostgreSQL integration", () => {
         itemType: "bottle",
         baseUnit: "ml",
         categoryCode: "bottled_spirits",
+        packageVolumeMl: "750",
       },
     });
     expect(bottle.statusCode).toBe(201);
@@ -318,21 +347,21 @@ integration("normalized inventory API PostgreSQL integration", () => {
     expect(movements.rows[0]?.count).toBe('0');
   });
 
-  it("turns a mobile scan package count into a draft first and changes stock only after physical confirmation", async () => {
+  it("turns a mobile scan package count and total cost into ml stock without requiring a manual batch or unit cost", async () => {
     const mobileItem = await createItem(
-      "MOBILE-SCAN-BOTTLE",
+      "MOBILE-SCAN-ML",
       "手机扫码测试酒水",
-      true,
+      false,
       "inventory-mobile-item-0001",
       'bottle',
-      'bottle',
-      'alcohol',
+      'ml',
+      'spirits.whisky',
     );
     const bind = await app.inject({
       method: 'POST',
       url: `/api/inventory/items/${mobileItem.id}/barcodes`,
       headers: headers(managerId, 'inventory-mobile-bind-0001'),
-      payload: { code: 'MBOX-QR-CASE-0001', codeType: 'qr', packageQuantity: '6' },
+      payload: { code: 'MBOX-QR-CASE-0001', codeType: 'qr', packageQuantity: '750' },
     });
     expect(bind.statusCode).toBe(200);
     const rejectedOverride = await app.inject({
@@ -361,7 +390,6 @@ integration("normalized inventory API PostgreSQL integration", () => {
         invoiceTotalMinor: '18000',
         lines: [{
           scanCode: 'MBOX-QR-CASE-0001',
-          batchCode: 'MOBILE-BATCH-1',
           packages: '3',
           totalCostMinor: '18000',
           metadata: { entryMethod: 'staff_mobile_camera' },
@@ -381,7 +409,7 @@ integration("normalized inventory API PostgreSQL integration", () => {
        WHERE line.tenant_id=$1::uuid AND line.store_id=$2::uuid AND line.receipt_id=$3::uuid`,
       [tenantId, storeId, receiptId],
     );
-    expect(draft.rows[0]).toEqual({ quantity: '18.000000', unit_cost: '1000.000000', on_hand: '0.000000', entry_method: 'staff_mobile_camera' });
+    expect(draft.rows[0]).toEqual({ quantity: '2250.000000', unit_cost: '8.000000', on_hand: '0.000000', entry_method: 'staff_mobile_camera' });
     const dashboard = await app.inject({
       method: 'GET',
       url: '/api/inventory',
@@ -393,13 +421,19 @@ integration("normalized inventory API PostgreSQL integration", () => {
     expect(recoverableDraft).toEqual(expect.objectContaining({
       status: 'draft',
       lineCount: 1,
-      lines: [{
+      invoiceTotalMinor: '18000',
+      lines: [expect.objectContaining({
         inventoryItemId: mobileItem.id,
         itemName: '手机扫码测试酒水',
-        batchCode: 'MOBILE-BATCH-1',
-        quantity: '18.000000',
-        baseUnit: 'bottle',
-      }],
+        batchCode: 'AUTO-20260811-01',
+        quantity: '2250.000000',
+        baseUnit: 'ml',
+        packageCount: '3',
+        packageVolumeMl: '750.000000',
+        unitCostMinor: '8.000000',
+        perPackageCostMinor: '6000.000000',
+        totalCostMinor: '18000',
+      })],
     }));
     const received = await app.inject({
       method: 'POST',
@@ -412,10 +446,56 @@ integration("normalized inventory API PostgreSQL integration", () => {
        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND inventory_item_id=$3::uuid`,
       [tenantId, storeId, mobileItem.id],
     );
-    expect(balance.rows[0]?.on_hand).toBe('18.000000');
+    expect(balance.rows[0]?.on_hand).toBe('2250.000000');
+
+    const selectedItemReceipt = await app.inject({
+      method: 'POST',
+      url: '/api/inventory/receipts',
+      headers: headers(managerId, 'inventory-mobile-selected-item-0003'),
+      payload: {
+        lines: [{
+          inventoryItemId: mobileItem.id,
+          packages: '2',
+          totalCostMinor: '12000',
+          metadata: { entryMethod: 'staff_mobile_selection' },
+        }],
+      },
+    });
+    expect(selectedItemReceipt.statusCode).toBe(201);
+    const selectedLine = await pool.query<{
+      batch_code: string;
+      quantity: string;
+      unit_cost: string;
+    }>(`
+      SELECT batch_code,quantity::text,unit_cost_minor::text AS unit_cost
+      FROM mbox.purchase_receipt_lines
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND receipt_id=$3::uuid
+    `, [tenantId, storeId, selectedItemReceipt.json().data.id as string]);
+    expect(selectedLine.rows[0]).toEqual({
+      batch_code: 'AUTO-20260811-01',
+      quantity: '1500.000000',
+      unit_cost: '8.000000',
+    });
   });
 
   it("receives a purchase batch once, keeps decimal cost, and redacts supplier data without cost permission", async () => {
+    const rejectsManualUnitCost = await app.inject({
+      method: "POST",
+      url: "/api/inventory/receipts",
+      headers: headers(managerId, "receipt-create-reject-manual-unit-cost-0001"),
+      payload: {
+        lines: [{
+          inventoryItemId: spiritItemId,
+          batchCode: "REJECT-MANUAL-UNIT-COST",
+          quantity: "1",
+          unitCostMinor: "99",
+          totalCostMinor: "99",
+        }],
+      },
+    });
+    expect(rejectsManualUnitCost.statusCode).toBe(400);
+    expect(rejectsManualUnitCost.json().error.message).toContain("不再录入单位成本");
+
     const created = await app.inject({
       method: "POST",
       url: "/api/inventory/receipts",
@@ -423,14 +503,13 @@ integration("normalized inventory API PostgreSQL integration", () => {
       payload: {
         supplierRef: "SUP-SECRET",
         supplierSnapshot: { name: "敏感供应商", phone: "13800000000" },
-        invoiceTotalMinor: "10000",
+        invoiceTotalMinor: "123",
         lines: [
           {
             inventoryItemId: spiritItemId,
             batchCode: "BATCH-A",
             quantity: "10",
-            unitCostMinor: "12.345678",
-            totalCostMinor: "10000",
+            totalCostMinor: "123",
           },
         ],
       },
@@ -455,26 +534,37 @@ integration("normalized inventory API PostgreSQL integration", () => {
       url: "/api/inventory",
       headers: { "x-employee-id": viewerId },
     });
+    const managerReceipt = (managerView.json().data.receipts as Array<Record<string, unknown>>)
+      .find((receipt) => receipt.id === receiptId);
+    const viewerReceipt = (viewerView.json().data.receipts as Array<Record<string, unknown>>)
+      .find((receipt) => receipt.id === receiptId);
     expect(managerView.statusCode).toBe(200);
-    expect(managerView.json().data.receipts[0].supplier.name).toBe(
-      "敏感供应商",
-    );
-    expect(
-      managerView
-        .json()
-        .data.items.find((item: { id: string }) => item.id === spiritItemId)
-        .latestUnitCostMinor,
-    ).toBe("12.345678");
+    expect(managerReceipt?.supplier).toMatchObject({ name: "敏感供应商" });
+    expect(managerReceipt?.invoiceTotalMinor).toBe("123");
+    expect(managerReceipt?.lines).toEqual([
+      expect.objectContaining({
+        inventoryItemId: spiritItemId,
+        quantity: "10.000000",
+        totalCostMinor: "123",
+        unitCostMinor: "12.300000",
+      }),
+    ]);
+    const managerItem = managerView
+      .json()
+      .data.items.find((item: { id: string }) => item.id === spiritItemId);
+    expect(managerItem.weightedUnitCostMinor).toBe("12.300000");
+    expect(managerItem.latestPurchaseUnitCostMinor).toBe("12.300000");
+    expect(managerItem.latestReceivedAt).toEqual(expect.any(String));
     expect(viewerView.statusCode).toBe(200);
-    expect(viewerView.json().data.receipts[0]).not.toHaveProperty("supplier");
-    expect(viewerView.json().data.receipts[0]).not.toHaveProperty(
+    expect(viewerReceipt).not.toHaveProperty("supplier");
+    expect(viewerReceipt).not.toHaveProperty(
       "supplierRef",
     );
     expect(
       viewerView
         .json()
         .data.items.find((item: { id: string }) => item.id === spiritItemId),
-    ).not.toHaveProperty("latestUnitCostMinor");
+    ).not.toHaveProperty("weightedUnitCostMinor");
     const receiptLine = await pool.query<{ id: string }>(
       `
       SELECT id FROM mbox.purchase_receipt_lines
@@ -488,6 +578,183 @@ integration("normalized inventory API PostgreSQL integration", () => {
         [receiptLine.rows[0]!.id],
       ),
     ).rejects.toMatchObject({ code: "55000" });
+  });
+
+  it("uses moving weighted cost for later receipts and automatically refreshes tracked recipe cost", async () => {
+    const bundleProductId = randomUUID();
+    await pool.query(
+      `INSERT INTO mbox.products(
+        id,tenant_id,store_id,code,name,category_code,fulfillment_station,product_kind,
+        product_snapshot,status,cost_amount_minor,inventory_control_mode,cost_source
+      ) VALUES($1,$2,$3,'COST-ROLLUP-BUNDLE','成本联动组合','combo','none','bundle',
+        '{}'::jsonb,'inactive',0,'tracked','manual')`,
+      [bundleProductId, tenantId, storeId],
+    );
+    await pool.query(
+      `INSERT INTO mbox.product_bundle_components(
+        tenant_id,store_id,bundle_product_id,component_product_id,quantity,sort_order
+      ) VALUES($1,$2,$3,$4,2,10)`,
+      [tenantId, storeId, bundleProductId, productId],
+    );
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/inventory/receipts",
+      headers: headers(managerId, "receipt-create-weighted-average-0001"),
+      payload: {
+        invoiceTotalMinor: "900",
+        lines: [{
+          inventoryItemId: spiritItemId,
+          batchCode: "BATCH-B",
+          quantity: "30",
+          totalCostMinor: "900",
+        }],
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const receiptId = created.json().data.id as string;
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/inventory/receipts/${receiptId}/receive`,
+          headers: headers(managerId, "receipt-receive-weighted-average-0002"),
+        })
+      ).statusCode,
+    ).toBe(200);
+
+    const evidence = await pool.query<{
+      on_hand: string;
+      weighted_cost: string;
+      status: string;
+      product_cost: string;
+      product_cost_source: string;
+      bundle_cost: string;
+      bundle_cost_source: string;
+      versions: string;
+      basis: string;
+    }>(`
+      SELECT balance.on_hand_quantity::text AS on_hand,
+        balance.weighted_unit_cost_minor::text AS weighted_cost,
+        balance.cost_status AS status,
+        product.cost_amount_minor::text AS product_cost,
+        product.cost_source AS product_cost_source,
+        (SELECT bundle.cost_amount_minor::text FROM mbox.products bundle
+          WHERE bundle.tenant_id=$1::uuid AND bundle.store_id=$2::uuid AND bundle.id=$5::uuid) AS bundle_cost,
+        (SELECT bundle.cost_source FROM mbox.products bundle
+          WHERE bundle.tenant_id=$1::uuid AND bundle.store_id=$2::uuid AND bundle.id=$5::uuid) AS bundle_cost_source,
+        (SELECT count(*)::text FROM mbox.recipe_cost_versions version
+          WHERE version.tenant_id=$1::uuid AND version.store_id=$2::uuid AND version.product_id=$3::uuid) AS versions,
+        (SELECT component.cost_basis FROM mbox.recipe_cost_components component
+          JOIN mbox.recipe_cost_versions version
+            ON version.tenant_id=component.tenant_id AND version.store_id=component.store_id
+           AND version.id=component.recipe_cost_version_id
+          WHERE version.tenant_id=$1::uuid AND version.store_id=$2::uuid AND version.product_id=$3::uuid
+          ORDER BY version.calculated_at DESC,version.id DESC LIMIT 1) AS basis
+      FROM mbox.inventory_balances balance
+      JOIN mbox.products product
+        ON product.tenant_id=balance.tenant_id AND product.store_id=balance.store_id AND product.id=$3::uuid
+      WHERE balance.tenant_id=$1::uuid AND balance.store_id=$2::uuid AND balance.inventory_item_id=$4::uuid
+    `, [tenantId, storeId, productId, spiritItemId, bundleProductId]);
+    expect(evidence.rows[0]).toEqual({
+      on_hand: "40.000000",
+      weighted_cost: "25.575000",
+      status: "complete",
+      product_cost: "1196",
+      product_cost_source: "recipe",
+      bundle_cost: "2392",
+      bundle_cost_source: "bundle",
+      versions: "2",
+      basis: "moving_weighted_average",
+    });
+  });
+
+  it("allows only an auditable permissioned correction when a current inventory cost must be reviewed", async () => {
+    const denied = await app.inject({
+      method: "POST",
+      url: `/api/inventory/items/${spiritItemId}/cost-corrections`,
+      headers: headers(viewerId, "inventory-cost-correction-denied-0001"),
+      payload: { weightedUnitCostMinor: "26.125", reason: "复核进货单" },
+    });
+    expect(denied.statusCode).toBe(403);
+
+    // A correction changes a financial valuation and must display the old and
+    // new basis. Granting only the write capability cannot leak that cost
+    // data; the store administrator has to configure both permissions.
+    await grant(pool, viewerRoleId, ["inventory.cost.correct"]);
+    const cannotReviewCost = await app.inject({
+      method: "POST",
+      url: `/api/inventory/items/${spiritItemId}/cost-corrections`,
+      headers: headers(viewerId, "inventory-cost-correction-no-view-0002"),
+      payload: { weightedUnitCostMinor: "26.125", reason: "复核进货单" },
+    });
+    expect(cannotReviewCost.statusCode).toBe(403);
+
+    const corrected = await app.inject({
+      method: "POST",
+      url: `/api/inventory/items/${spiritItemId}/cost-corrections`,
+      headers: headers(managerId, "inventory-cost-correction-apply-0002"),
+      payload: { weightedUnitCostMinor: "26.125", reason: "盘点后核对到原始进货单" },
+    });
+    expect(corrected.statusCode).toBe(200);
+    expect(corrected.json().data).toMatchObject({
+      inventoryItemId: spiritItemId,
+      previousWeightedUnitCostMinor: "25.575000",
+      weightedUnitCostMinor: "26.125000",
+      differenceWeightedUnitCostMinor: "0.550000",
+    });
+    const correctionId = corrected.json().data.id as string;
+
+    const evidence = await pool.query<{
+      weighted_cost: string;
+      status: string;
+      basis: string;
+      correction_count: string;
+      audit_count: string;
+      outbox_count: string;
+      product_cost: string;
+      recipe_basis: string;
+      bundle_cost: string;
+      bundle_source: string;
+    }>(`
+      SELECT balance.weighted_unit_cost_minor::text AS weighted_cost,
+        balance.cost_status AS status,
+        balance.cost_basis AS basis,
+        (SELECT count(*)::text FROM mbox.inventory_cost_corrections correction
+          WHERE correction.tenant_id=$1::uuid AND correction.store_id=$2::uuid
+            AND correction.inventory_item_id=$3::uuid) AS correction_count,
+        (SELECT count(*)::text FROM mbox.audit_events audit
+          WHERE audit.tenant_id=$1::uuid AND audit.store_id=$2::uuid
+            AND audit.action='inventory.cost.correct' AND audit.object_id=$5::text) AS audit_count,
+        (SELECT count(*)::text FROM mbox.outbox_messages outbox
+          WHERE outbox.tenant_id=$1::uuid AND outbox.store_id=$2::uuid
+            AND outbox.aggregate_id=$5::uuid) AS outbox_count,
+        (SELECT product.cost_amount_minor::text FROM mbox.products product
+          WHERE product.tenant_id=$1::uuid AND product.store_id=$2::uuid AND product.id=$4::uuid) AS product_cost,
+        (SELECT component.cost_basis FROM mbox.recipe_cost_components component
+          JOIN mbox.recipe_cost_versions version
+            ON version.tenant_id=component.tenant_id AND version.store_id=component.store_id
+           AND version.id=component.recipe_cost_version_id
+          WHERE version.tenant_id=$1::uuid AND version.store_id=$2::uuid AND version.product_id=$4::uuid
+          ORDER BY version.calculated_at DESC,version.id DESC LIMIT 1) AS recipe_basis,
+        (SELECT bundle.cost_amount_minor::text FROM mbox.products bundle
+          WHERE bundle.tenant_id=$1::uuid AND bundle.store_id=$2::uuid AND bundle.code='COST-ROLLUP-BUNDLE') AS bundle_cost,
+        (SELECT bundle.cost_source FROM mbox.products bundle
+          WHERE bundle.tenant_id=$1::uuid AND bundle.store_id=$2::uuid AND bundle.code='COST-ROLLUP-BUNDLE') AS bundle_source
+      FROM mbox.inventory_balances balance
+      WHERE balance.tenant_id=$1::uuid AND balance.store_id=$2::uuid AND balance.inventory_item_id=$3::uuid
+    `, [tenantId, storeId, spiritItemId, productId, correctionId]);
+    expect(evidence.rows[0]).toEqual({
+      weighted_cost: "26.125000",
+      status: "complete",
+      basis: "manual_correction",
+      correction_count: "1",
+      audit_count: "1",
+      outbox_count: "1",
+      product_cost: "1221",
+      recipe_basis: "manual_correction",
+      bundle_cost: "2442",
+      bundle_source: "bundle",
+    });
   });
 
   it("previews the selected receipt cost, rolls back a blocked publication, then atomically applies the new cost and publishes", async () => {
@@ -581,7 +848,7 @@ integration("normalized inventory API PostgreSQL integration", () => {
        WHERE receipt.tenant_id=$1 AND receipt.store_id=$2 AND receipt.id=$3`,
       [tenantId, storeId, receiptId, launchProductId],
     );
-    expect(before.rows[0]).toEqual({ status: "draft", on_hand: "0.000000", cost: "100" });
+    expect(before.rows[0]).toEqual({ status: "draft", on_hand: "0.000000", cost: null });
 
     const blocked = await app.inject({
       method: "POST",
@@ -601,7 +868,7 @@ integration("normalized inventory API PostgreSQL integration", () => {
        WHERE receipt.tenant_id=$1 AND receipt.store_id=$2 AND receipt.id=$3`,
       [tenantId, storeId, receiptId, launchProductId],
     );
-    expect(rolledBack.rows[0]).toEqual({ status: "draft", on_hand: "0.000000", cost: "100", cost_versions: "0" });
+    expect(rolledBack.rows[0]).toEqual({ status: "draft", on_hand: "0.000000", cost: null, cost_versions: "0" });
 
     await pool.query(
       `UPDATE mbox.products SET allowed_channels=ARRAY['guest_qr','staff_assisted']::text[] WHERE id=$1`,
@@ -646,13 +913,24 @@ integration("normalized inventory API PostgreSQL integration", () => {
         method: "POST",
         url: `/api/inventory/items/${spiritItemId}/waste`,
         headers: headers(managerId, key),
-        payload: { quantity: "7", reason: "并发扣减验证" },
+        payload: {
+          quantity: "25",
+          wasteType: "mixing_failure",
+          reason: "并发扣减验证",
+        },
       }),
     );
     const responses = await Promise.all(requests);
     expect(responses.map((item) => item.statusCode).toSorted()).toEqual([
       200, 409,
     ]);
+    expect(responses.find((item) => item.statusCode === 200)?.json().data).toMatchObject({
+      remainingQuantity: "15.000000",
+      baseUnit: "ml",
+      wasteType: "mixing_failure",
+      unitCostMinor: "26.125000",
+      wasteCostMinor: "653",
+    });
     const balance = await pool.query<{ on_hand: string; waste_count: string }>(
       `
       SELECT balance.on_hand_quantity::text AS on_hand,
@@ -664,15 +942,17 @@ integration("normalized inventory API PostgreSQL integration", () => {
     `,
       [tenantId, storeId, spiritItemId],
     );
-    expect(balance.rows[0]).toEqual({ on_hand: "3.000000", waste_count: "1" });
-    const movement = await pool.query<{ id: string }>(
+    expect(balance.rows[0]).toEqual({ on_hand: "15.000000", waste_count: "1" });
+    const movement = await pool.query<{ id: string; unit_cost_minor: string; waste_type: string }>(
       `
-      SELECT id FROM mbox.inventory_movements
+      SELECT id, unit_cost_minor::text, metadata->>'wasteType' AS waste_type
+      FROM mbox.inventory_movements
       WHERE tenant_id = $1 AND store_id = $2 AND inventory_item_id = $3
       ORDER BY occurred_at DESC LIMIT 1
     `,
       [tenantId, storeId, spiritItemId],
     );
+    expect(movement.rows[0]).toMatchObject({ unit_cost_minor: "26.125000", waste_type: "mixing_failure" });
     await expect(
       pool.query(
         `UPDATE mbox.inventory_movements SET reason = '篡改' WHERE id = $1`,
@@ -773,7 +1053,6 @@ integration("normalized inventory API PostgreSQL integration", () => {
             inventoryItemId: spiritItemId,
             batchCode: "DENIED",
             quantity: "1",
-            unitCostMinor: "1",
             totalCostMinor: "1",
           },
         ],
@@ -847,6 +1126,114 @@ integration("normalized inventory API PostgreSQL integration", () => {
     expect(unassigned.statusCode).toBe(403);
   });
 
+  it("marks legacy tracked costs incomplete before they can be copied into new margin data", async () => {
+    const legacyItem = await createItem(
+      "MIGRATION-LEGACY-ML",
+      "待核对历史威士忌",
+      false,
+      "inventory-migration-legacy-item-0001",
+      "ingredient",
+      "ml",
+      "spirits.whisky",
+    );
+    const legacyProductId = randomUUID();
+    const legacyBundleId = randomUUID();
+    const legacyRecipeId = randomUUID();
+    const historicalOrderId = randomUUID();
+    const historicalOrderItemId = randomUUID();
+    await pool.query(
+      `UPDATE mbox.inventory_balances
+       SET on_hand_quantity=700,weighted_unit_cost_minor=NULL,
+         latest_purchase_unit_cost_minor=NULL,cost_status='needs_review',cost_basis='none'
+       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND inventory_item_id=$3::uuid`,
+      [tenantId, storeId, legacyItem.id],
+    );
+    await pool.query(
+      `INSERT INTO mbox.products(
+        id,tenant_id,store_id,code,name,category_code,fulfillment_station,product_kind,
+        status,cost_amount_minor,inventory_control_mode,cost_source
+      ) VALUES($1,$2,$3,'MIGRATION-LEGACY-GLASS','历史单杯','spirits','bar','single',
+        'active',4200,'tracked','manual'),
+        ($4,$2,$3,'MIGRATION-LEGACY-BUNDLE','历史组合','combo','none','bundle',
+        'active',8400,'tracked','bundle')`,
+      [legacyProductId, tenantId, storeId, legacyBundleId],
+    );
+    await pool.query(
+      `INSERT INTO mbox.recipes(
+        id,tenant_id,store_id,product_id,version,yield_quantity,status,effective_at
+      ) VALUES($1,$2,$3,$4,1,1,'active',clock_timestamp())`,
+      [legacyRecipeId, tenantId, storeId, legacyProductId],
+    );
+    await pool.query(
+      `INSERT INTO mbox.recipe_items(
+        tenant_id,store_id,recipe_id,inventory_item_id,quantity,expected_waste_quantity
+      ) VALUES($1,$2,$3,$4,45,0)`,
+      [tenantId, storeId, legacyRecipeId, legacyItem.id],
+    );
+    await pool.query(
+      `INSERT INTO mbox.product_bundle_components(
+        tenant_id,store_id,bundle_product_id,component_product_id,quantity,sort_order
+      ) VALUES($1,$2,$3,$4,2,1)`,
+      [tenantId, storeId, legacyBundleId, legacyProductId],
+    );
+    await pool.query(
+      `INSERT INTO mbox.orders(
+        id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,
+        subtotal_amount_minor,total_amount_minor
+      ) VALUES($1,$2,$3,$4,'migration-historical-order','cashier','submitted','unpaid',6800,6800)`,
+      [historicalOrderId, tenantId, storeId, tableOneSessionId],
+    );
+    await pool.query(
+      `INSERT INTO mbox.order_items(
+        id,tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,total_amount_minor,
+        fulfillment_station,product_snapshot,cost_snapshot,status
+      ) VALUES($1,$2,$3,$4,$5,1,6800,6800,'bar','{}'::jsonb,
+        '{"source":"legacy","unitCostMinor":4200}'::jsonb,'submitted')`,
+      [historicalOrderItemId, tenantId, storeId, historicalOrderId, legacyProductId],
+    );
+
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === "154");
+    expect(migration).toBeDefined();
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(unwrapNormalizedMigrationTransaction(migration!.sql));
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    const evidence = await pool.query<{
+      product_cost: string | null;
+      product_source: string;
+      bundle_cost: string | null;
+      bundle_source: string;
+      historical_cost: string | null;
+    }>(`
+      SELECT
+        (SELECT cost_amount_minor::text FROM mbox.products
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid) AS product_cost,
+        (SELECT cost_source FROM mbox.products
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid) AS product_source,
+        (SELECT cost_amount_minor::text FROM mbox.products
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$4::uuid) AS bundle_cost,
+        (SELECT cost_source FROM mbox.products
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$4::uuid) AS bundle_source,
+        (SELECT cost_snapshot->>'unitCostMinor' FROM mbox.order_items
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$5::uuid) AS historical_cost
+    `, [tenantId, storeId, legacyProductId, legacyBundleId, historicalOrderItemId]);
+    expect(evidence.rows[0]).toEqual({
+      product_cost: null,
+      product_source: "incomplete",
+      bundle_cost: null,
+      bundle_source: "incomplete",
+      historical_cost: "4200",
+    });
+  });
+
   async function createItem(
     sku: string,
     name: string,
@@ -868,6 +1255,7 @@ integration("normalized inventory API PostgreSQL integration", () => {
         categoryCode,
         wholeUnitCount,
         reasonableWasteQuantity: "1",
+        ...(baseUnit === "ml" ? { packageVolumeMl: "750" } : {}),
       },
     });
     expect(result.statusCode).toBe(201);
@@ -889,7 +1277,6 @@ integration("normalized inventory API PostgreSQL integration", () => {
             inventoryItemId: itemId,
             batchCode: keyPrefix,
             quantity,
-            unitCostMinor: "1",
             totalCostMinor: "1",
           },
         ],
@@ -963,6 +1350,7 @@ async function seed(pool: Pool) {
   const permissions = [
     "inventory.view",
     "inventory.cost.view",
+    "inventory.cost.correct",
     "inventory.manage",
     "inventory.receive",
     "inventory.count",

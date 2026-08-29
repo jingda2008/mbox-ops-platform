@@ -118,6 +118,7 @@ interface PublishProductRow extends Record<string, unknown> {
   guest_visible: boolean;
   allowed_channels: string[];
   cost_amount_minor: string | null;
+  recipe_cost_version_id: string | null;
   has_price: boolean;
   updated_at: string;
 }
@@ -184,6 +185,7 @@ export const inventoryApiPlugin: FastifyPluginAsync<
       const context = await options.resolveContext(request);
       const body = readObject(request.body);
       const input = readInventoryItem(body);
+      assertInventoryItemUnitPolicy(input);
       const execution = await execute(
         options,
         context,
@@ -255,6 +257,40 @@ export const inventoryApiPlugin: FastifyPluginAsync<
       }),
   );
 
+  app.post<{ Params: { itemId: string } }>(
+    "/inventory/items/:itemId/cost-corrections",
+    async (request, reply) =>
+      handleRoute(reply, async () => {
+        const context = await options.resolveContext(request);
+        const itemId = readUuid(request.params.itemId, "itemId");
+        const body = readObject(request.body);
+        const execution = await execute(
+          options,
+          context,
+          request,
+          "inventory.cost.correct",
+          "inventory.cost.correct",
+          codec<{
+            id: string;
+            inventoryItemId: string;
+            previousWeightedUnitCostMinor: string | null;
+            weightedUnitCostMinor: string;
+            differenceWeightedUnitCostMinor: string | null;
+          }>(),
+          async (transaction, permissions) => {
+            assertInventoryPermission(permissions, "inventory.cost.view");
+            return createInventory(transaction).correctInventoryCost(
+              itemId,
+              readDecimal(body.weightedUnitCostMinor, "weightedUnitCostMinor", true),
+              context.employeeId,
+              readString(body.reason, "reason", 500),
+            );
+          },
+        );
+        return reply.send(response(execution));
+      }),
+  );
+
   app.put<{ Params: { productId: string } }>(
     "/inventory/products/:productId/recipe",
     async (request, reply) =>
@@ -299,8 +335,16 @@ export const inventoryApiPlugin: FastifyPluginAsync<
           "inventory.recipe.replace",
           "inventory.manage",
           codec<{ id: string; version: number }>(),
-          async (transaction) =>
-            createInventory(transaction).replaceActiveRecipe(input),
+          async (transaction) => {
+            const inventory = createInventory(transaction);
+            const recipe = await inventory.replaceActiveRecipe(input);
+            await inventory.synchronizeTrackedRecipeCostsForInventoryItems(
+              components.map((component) => component.inventoryItemId),
+              context.employeeId,
+              "配方更新后按当前移动加权库存成本自动重算",
+            );
+            return recipe;
+          },
         );
         return reply.send(response(execution));
       }),
@@ -330,7 +374,7 @@ export const inventoryApiPlugin: FastifyPluginAsync<
     handleRoute(reply, async () => {
       const context = await options.resolveContext(request);
       const body = readObject(request.body);
-      const pendingLines = readArray(body.lines, "lines", 200).map((raw) => {
+      const pendingLines = readArray(body.lines, "lines", 200).map((raw, index) => {
         const line = readObject(raw);
         const inventoryItemId = readOptionalUuid(
           line.inventoryItemId,
@@ -347,38 +391,50 @@ export const inventoryApiPlugin: FastifyPluginAsync<
             "扫码收货数量必须由已绑定包装量和packages计算",
           );
         }
-        if (scanCode !== null && line.unitCostMinor !== undefined) {
+        if (line.unitCostMinor !== undefined) {
           throw new InventoryRequestError(
-            "扫码收货单位成本必须由totalCostMinor和实际数量计算",
+            "日常收货不再录入单位成本；请只填写实际数量和本批总额，由系统自动换算",
           );
         }
-        if (inventoryItemId !== null && line.quantity === undefined) {
+        const packages =
+          line.packages === undefined
+            ? (scanCode === null ? null : "1")
+            : readDecimal(line.packages, "packages", false);
+        if (inventoryItemId !== null && line.quantity === undefined && packages === null) {
           throw new InventoryRequestError(
-            "按物料收货必须提供quantity",
+            "按物料收货必须提供quantity或包装数量",
           );
         }
+        if (inventoryItemId !== null && line.quantity !== undefined && packages !== null) {
+          throw new InventoryRequestError(
+            "按物料收货请填写实际数量或包装数量其中一种，避免重复换算",
+          );
+        }
+        const batchCode = readOptionalString(line.batchCode, "batchCode", 128);
+        const metadata = readJsonObject(line.metadata ?? {}, "metadata");
         return {
           inventoryItemId,
           scanCode,
-          batchCode: readString(line.batchCode, "batchCode", 128),
+          // Batch/receipt numbers improve traceability when staff have one,
+          // but they must not block a normal scan + quantity + total-cost
+          // receipt. The generated value remains visible on the receipt.
+          batchCode:
+            batchCode ??
+            `AUTO-${context.businessDate.replaceAll("-", "")}-${String(index + 1).padStart(2, "0")}`,
           quantity:
             line.quantity === undefined
               ? null
               : readDecimal(line.quantity, "quantity", false),
-          packages:
-            line.packages === undefined
-              ? "1"
-              : readDecimal(line.packages, "packages", false),
-          unitCostMinor:
-            line.unitCostMinor === undefined
-              ? null
-              : readDecimal(line.unitCostMinor, "unitCostMinor", true),
+          packages,
           totalCostMinor: readIntegerString(
             line.totalCostMinor,
             "totalCostMinor",
           ),
           expiresOn: readOptionalDate(line.expiresOn, "expiresOn"),
-          metadata: readJsonObject(line.metadata ?? {}, "metadata"),
+          metadata: {
+            ...metadata,
+            ...(packages === null ? {} : { packageCount: packages }),
+          },
         };
       });
       const input: CreatePurchaseReceiptInput = {
@@ -408,17 +464,22 @@ export const inventoryApiPlugin: FastifyPluginAsync<
           const repository = createInventory(transaction);
           const lines: PurchaseReceiptLineInput[] = [];
           for (const line of pendingLines) {
-            const barcode =
-              line.scanCode === null
-                ? null
-                : await repository.resolveBarcode(line.scanCode);
+            const barcode = line.scanCode === null
+              ? null
+              : await repository.resolveBarcode(line.scanCode);
+            const selectedItemPackage = line.scanCode === null && line.quantity === null
+              ? await repository.resolveReceiptPackageQuantity(line.inventoryItemId!)
+              : null;
             lines.push({
-              inventoryItemId: line.inventoryItemId ?? barcode!.inventoryItemId,
+              inventoryItemId:
+                line.inventoryItemId ?? barcode?.inventoryItemId ?? selectedItemPackage!.inventoryItemId,
               batchCode: line.batchCode,
               quantity:
                 line.quantity ??
-                multiplyDecimal(barcode!.packageQuantity, line.packages),
-              unitCostMinor: line.unitCostMinor,
+                multiplyDecimal(
+                  barcode?.packageQuantity ?? selectedItemPackage!.packageQuantity,
+                  line.packages!,
+                ),
               totalCostMinor: line.totalCostMinor,
               expiresOn: line.expiresOn,
               metadata: line.metadata,
@@ -606,15 +667,40 @@ export const inventoryApiPlugin: FastifyPluginAsync<
           request,
           "inventory.waste.record",
           "inventory.waste",
-          codec<{ movementId: string; remainingQuantity: string }>(),
-          async (transaction, permissions) =>
-            createInventory(transaction).recordWaste(
+          codec<{
+            movementId: string;
+            remainingQuantity: string;
+            baseUnit: string;
+            wasteType: string;
+            unitCostMinor?: string | null;
+            wasteCostMinor?: string | null;
+          }>(),
+          async (transaction, permissions) => {
+            const result = await createInventory(transaction).recordWaste(
               itemId,
               readDecimal(body.quantity, "quantity", false),
               context.employeeId,
               readString(body.reason, "reason", 500),
               permissions.includes("inventory.count.approve"),
-            ),
+              readEnum(body.wasteType ?? "other", "wasteType", [
+                "mixing_failure",
+                "discarded",
+                "expired",
+                "tasting",
+                "complimentary",
+                "count_difference",
+                "other",
+              ]),
+            );
+            // A waste operator may record a real event without being allowed
+            // to see its financial valuation.  Do not leak either the unit
+            // cost or the calculated total through the response.
+            if (!permissions.includes("inventory.cost.view")) {
+              const { unitCostMinor: _unitCostMinor, wasteCostMinor: _wasteCostMinor, ...redacted } = result;
+              return redacted;
+            }
+            return result;
+          },
         );
         return reply.send(response(execution));
       }),
@@ -695,14 +781,14 @@ async function receiveAndPublishProduct(
   employeeId: string,
 ): Promise<ReceiveAndPublishProductResult> {
   const receipt = await inventory.receivePurchaseReceipt(receiptId, employeeId);
-  const appliedCost = await inventory.applyRecipeCost(
-    productId, employeeId, "确认入库并发布：按本次收货后最新正式配方成本重新核算",
-  );
+  const currentCost = await inventory.previewRecipeCost(productId);
+  if (currentCost.costAmountMinor === null)
+    throw new InventoryConflictError("当前配方存在待补成本物料；可先完成成本更正后再发布");
   const productResult = await transaction.query<PublishProductRow>(`
     SELECT product.id,product.name,product.status,product.product_kind,
       COALESCE(NULLIF(product.product_snapshot->>'salesSpecificationType',''),'custom') AS sales_specification_type,
       product.inventory_control_mode,product.guest_visible,product.allowed_channels,
-      product.cost_amount_minor::text,product.updated_at::text,
+      product.cost_amount_minor::text,product.recipe_cost_version_id::text,product.updated_at::text,
       EXISTS (
         SELECT 1 FROM mbox.product_prices price
         JOIN mbox.stores store
@@ -728,8 +814,11 @@ async function receiveAndPublishProduct(
     throw new InventoryConflictError("请先开放顾客扫码和员工协助点单渠道，并设为顾客菜单可见");
   }
   if (!product.has_price) throw new InventoryConflictError("请先设置当前有效且大于0的标准售价");
-  if (product.cost_amount_minor === null || Number(product.cost_amount_minor)!==appliedCost.costAmountMinor) {
+  if (product.cost_amount_minor === null || Number(product.cost_amount_minor)!==currentCost.costAmountMinor) {
     throw new InventoryConflictError("本次收货成本未能成为当前商品成本");
+  }
+  if (product.recipe_cost_version_id === null) {
+    throw new InventoryConflictError("当前商品成本缺少自动核算版本，不能发布");
   }
 
   const recipeResult = await transaction.query<PublishRecipeRow>(`
@@ -818,10 +907,10 @@ async function receiveAndPublishProduct(
     productStatus: "active",
     salesSpecificationType:product.sales_specification_type,
     publishedAt: updated.rows[0]?.updated_at ?? product.updated_at,
-    recipeCostVersionId:appliedCost.id,
-    costAmountMinor:appliedCost.costAmountMinor,
+    recipeCostVersionId:product.recipe_cost_version_id,
+    costAmountMinor:currentCost.costAmountMinor,
     standardPriceMinor,
-    grossProfitMinor:standardPriceMinor-appliedCost.costAmountMinor,
+    grossProfitMinor:standardPriceMinor-currentCost.costAmountMinor,
   };
 }
 
@@ -1122,6 +1211,29 @@ function readInventoryItemUpdate(body: JsonObject) {
   };
 }
 
+function assertInventoryItemUnitPolicy(input: CreateInventoryItemInput): void {
+  if (!isLiquidInventoryCategory(input.categoryCode)) return;
+  if (input.baseUnit !== 'ml') {
+    throw new InventoryRequestError(
+      '酒水、葡萄酒、啤酒、糖浆和果汁必须按毫升（ml）建库存；包装瓶数只在条码包装量中登记',
+    );
+  }
+  if (input.packageVolumeMl === null) {
+    throw new InventoryRequestError(
+      '按毫升管理的酒水必须填写单瓶净含量（ml/瓶）；否则无法安全换算入库量和单位成本',
+    );
+  }
+}
+
+function isLiquidInventoryCategory(categoryCode: string): boolean {
+  return categoryCode === 'spirits' || categoryCode.startsWith('spirits.')
+    || categoryCode === 'wine' || categoryCode.startsWith('wine.')
+    || categoryCode === 'mixer' || categoryCode.startsWith('mixer.')
+    || categoryCode === 'beer' || categoryCode.startsWith('beer.')
+    || categoryCode === 'bottled_spirits' || categoryCode.startsWith('bottled_spirits.')
+    || categoryCode === 'alcohol' || categoryCode.startsWith('alcohol.');
+}
+
 function response<Result>(execution: CommandExecution<Result>) {
   return { data: execution.value, meta: { replayed: execution.replayed } };
 }
@@ -1159,6 +1271,7 @@ function eventKey(operation: string, idempotencyKey: string): string {
 }
 
 function inventoryObjectType(operation: string): string {
+  if (operation.includes("cost.correct")) return "inventory_cost_correction";
   if (operation.includes("stock-count")) return "inventory_stock_count";
   if (operation.includes("receipt")) return "purchase_receipt";
   if (operation.includes("bottle")) return "stored_bottle";

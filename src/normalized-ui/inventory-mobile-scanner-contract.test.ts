@@ -21,12 +21,19 @@ describe('staff mobile inventory scanning contract', () => {
     expect(source).toContain('仅确认实物入库')
     expect(source).toContain("'/api/inventory/receipts'")
     expect(source).toMatch(/\/api\/inventory\/receipts\/\$\{receipt\.id\}\/receive/)
-    expect(source).toContain("entryMethod: 'staff_mobile_camera'")
+    expect(source).toContain("'staff_mobile_camera'")
+    expect(source).toContain("'staff_mobile_selection'")
     expect(source).toContain('待确认收货')
     expect(source).toContain("receipt.status === 'draft'")
     expect(source).not.toContain('单件成本（元）')
-    expect(source).not.toContain('unitCostMinor,')
-    expect(source).toContain("item.categoryCode !== 'food'")
+    const receiptPayload = source.slice(
+      source.indexOf("const receipt = await api.postEndpoint<PurchaseReceiptCommandView>('/api/inventory/receipts'"),
+      source.indexOf('setPendingReceipt(receipt)'),
+    )
+    expect(receiptPayload).toContain('totalCostMinor,')
+    expect(receiptPayload).not.toContain('unitCostMinor')
+    expect(receiptPayload).toContain("usesPackageQuantity ? { packages } : { quantity: packages }")
+    expect(source).toContain('const bindableItems = view.items')
   })
 
   it('can confirm a related receipt and publish a fully validated beverage atomically', async () => {
@@ -43,17 +50,20 @@ describe('staff mobile inventory scanning contract', () => {
     expect(source).toContain('顾客扫码')
     expect(source).toContain('员工协助')
     const apiSource = await readFile(new URL('../../server/normalized/inventory-api.ts', import.meta.url), 'utf8')
-    const receiptReceive = apiSource.indexOf('receivePurchaseReceipt(receiptId')
-    const receiptCostApply = apiSource.indexOf('const appliedCost = await inventory.applyRecipeCost')
-    expect(receiptReceive).toBeGreaterThan(-1)
-    expect(receiptCostApply).toBeGreaterThan(receiptReceive)
+    const receiveAndPublishSource = apiSource.slice(
+      apiSource.indexOf('async function receiveAndPublishProduct('),
+      apiSource.indexOf('async function previewReceiveAndPublishProduct('),
+    )
+    expect(receiveAndPublishSource).toContain('receivePurchaseReceipt(receiptId')
+    expect(receiveAndPublishSource).toContain('previewRecipeCost(productId)')
+    expect(receiveAndPublishSource).not.toContain('applyRecipeCost(')
     expect(apiSource).toContain('本次收货成本未能成为当前商品成本')
   })
 
   it('lets an authorized employee establish the first alcohol inventory item and exposes the active operation', async () => {
     const source = await readFile(new URL('./StaffModulePanel.tsx', import.meta.url), 'utf8')
     expect(source).toContain("'/api/inventory/items'")
-    expect(source).toContain('新建酒水物料')
+    expect(source).toContain('新建库存物料')
     expect(source).toContain('建立物料并继续绑定条码')
     expect(source).toContain("setMode('bind')")
     expect(source).toContain('aria-pressed={mode ===')

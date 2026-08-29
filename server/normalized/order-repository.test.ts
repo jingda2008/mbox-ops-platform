@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import type { ScopedTransaction } from './index.js'
 import {
   OrderDeliveryBlockedError,
-  OrderProductCostUnavailableError,
   OrderProductUnavailableError,
   OrderRepository,
 } from './order-repository.js'
@@ -132,18 +131,35 @@ describe('OrderRepository', () => {
     expect(tx.calls).toHaveLength(2)
   })
 
-  it('fails closed before order creation when the catalog has no authoritative cost', async () => {
+  it('submits an order with an explicit unavailable-cost snapshot when catalog cost is incomplete', async () => {
     const tx = new ScriptedTransaction([
       { rows: [{ id: sessionId }] },
       { rows: [{ ...priceRow(), cost_amount_minor: null }] },
+      { rows: [orderRow()] },
+      { rows: [{
+        ...itemRow(),
+        unit_cost_minor_at_submission: null,
+        total_cost_minor_at_submission: null,
+        cost_source: 'unavailable',
+        cost_reference_product_id: null,
+        cost_reference_product_updated_at: null,
+      }] },
     ])
-    await expect(new OrderRepository(tx).createSubmitted({
+    const order = await new OrderRepository(tx).createSubmitted({
       tableSessionId: sessionId,
       publicId: 'order-missing-cost-0001',
       channel: 'guest_qr',
       lines: [{ productId, quantity: 1 }],
-    })).rejects.toBeInstanceOf(OrderProductCostUnavailableError)
-    expect(tx.calls).toHaveLength(2)
+    })
+    expect(order.items[0]).toMatchObject({
+      costSource: 'unavailable',
+      unitCostMinorAtSubmission: null,
+      totalCostMinorAtSubmission: null,
+    })
+    expect(tx.calls).toHaveLength(4)
+    expect(tx.calls[3]?.values.slice(16, 22)).toEqual([
+      null, null, 'unavailable', null, null, null,
+    ])
   })
 
   it.each([

@@ -625,16 +625,19 @@ function buildItem(price: ProductPriceRow, requested: RequestedLineRecord) {
     throw new TypeError(`Invalid line total for product ${requested.productId}`)
   }
   const fulfillmentStation = price.product_kind === 'bundle' ? 'none' as const : price.fulfillment_station
-  const unitCostMinorAtSubmission = authoritativeCatalogCost(price.cost_amount_minor, requested.productId)
-  const totalCostMinorAtSubmission = multiplySafeMoney(
-    unitCostMinorAtSubmission,
-    requested.quantity,
-    `catalog cost total for product ${requested.productId}`,
-  )
-  const costReferenceProductUpdatedAt = authoritativeCatalogCostVersion(
-    price.product_updated_at,
-    requested.productId,
-  )
+  const unitCostMinorAtSubmission = authoritativeCatalogCostOrNull(price.cost_amount_minor)
+  const costKnown = unitCostMinorAtSubmission !== null
+  const totalCostMinorAtSubmission = costKnown
+    ? multiplySafeMoney(
+      unitCostMinorAtSubmission,
+      requested.quantity,
+      `catalog cost total for product ${requested.productId}`,
+    )
+    : null
+  const costReferenceProductUpdatedAt = costKnown
+    ? authoritativeCatalogCostVersion(price.product_updated_at, requested.productId)
+    : null
+  const costSource: OrderItemCostSource = costKnown ? 'catalog_product' : 'unavailable'
   return {
     id: randomUUID(),
     requestIndex: requested.requestIndex,
@@ -658,8 +661,8 @@ function buildItem(price: ProductPriceRow, requested: RequestedLineRecord) {
     },
     unitCostMinorAtSubmission,
     totalCostMinorAtSubmission,
-    costSource: 'catalog_product' as const,
-    costReferenceProductId: requested.productId,
+    costSource,
+    costReferenceProductId: costKnown ? requested.productId : null,
     costReferenceOrderItemId: null as string | null,
     costReferenceProductUpdatedAt,
     loyaltyEligibleAtSubmission: price.loyalty_eligible,
@@ -667,7 +670,7 @@ function buildItem(price: ProductPriceRow, requested: RequestedLineRecord) {
     costSnapshot: costSnapshot(
       unitCostMinorAtSubmission,
       totalCostMinorAtSubmission,
-      'catalog_product',
+      costSource,
     ),
     note: requested.note,
   }
@@ -722,12 +725,12 @@ function expandBundleItems<T extends ReturnType<typeof buildItem>>(
   return operational
 }
 
-function authoritativeCatalogCost(costAmountMinor: unknown, productId: string): number {
+function authoritativeCatalogCostOrNull(costAmountMinor: unknown): number | null {
   const unitCostMinor = typeof costAmountMinor === 'string' && /^\d+$/.test(costAmountMinor)
     ? Number(costAmountMinor)
     : costAmountMinor
   if (!Number.isSafeInteger(unitCostMinor) || Number(unitCostMinor) < 0) {
-    throw new OrderProductCostUnavailableError(productId)
+    return null
   }
   return Number(unitCostMinor)
 }
@@ -746,16 +749,14 @@ function authoritativeCatalogCostVersion(value: unknown, productId: string): str
 }
 
 function costSnapshot(
-  unitCostMinor: number,
-  totalCostMinor: number,
-  source: 'catalog_product' | 'included_in_parent',
+  unitCostMinor: number | null,
+  totalCostMinor: number | null,
+  source: 'catalog_product' | 'included_in_parent' | 'unavailable',
 ): JsonObject {
-  return {
-    unitCostMinor,
-    totalCostMinor,
-    source,
-    authority: 'strong_order_item_columns',
+  if (unitCostMinor === null || totalCostMinor === null) {
+    return { source, authority: 'strong_order_item_columns' }
   }
+  return { unitCostMinor, totalCostMinor, source, authority: 'strong_order_item_columns' }
 }
 
 function validatePricingAuthorization(

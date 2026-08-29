@@ -130,7 +130,7 @@ export function RecommendationPolicyManagementPanel({api,auth}:{api:NormalizedAp
   const active=configuration?.policies.find((policy)=>policy.status==='published'&&isCurrent(policy))??null
   return <section className="recommendation-policy-panel" aria-label="推荐规则版本与试点">
     <button className="recommendation-policy-summary" type="button" aria-expanded={expanded} onClick={()=>setExpanded((value)=>!value)}>
-      <span><ShieldCheck size={18}/></span><div><strong>推荐规则与顾客开放</strong><small>规则版本与顾客试运行分开管理；正式启用仍保留三人分离发布。</small></div>
+       <span><ShieldCheck size={18}/></span><div><strong>推荐规则与顾客开放</strong><small>规则版本和顾客试点为两个独立动作；正式启用仍保留三人分离发布。</small></div>
       <em>{configuration?rolloutLabel[configuration.feature.rolloutState]:'读取中'}</em><ChevronDown size={17}/>
     </button>
     {expanded&&<div className="recommendation-policy-body">

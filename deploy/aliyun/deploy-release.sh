@@ -21,6 +21,7 @@ evidence_ssh_port=${MBOX_EVIDENCE_SSH_PORT:-${ssh_port}}
 evidence_ssh_user=${MBOX_EVIDENCE_SSH_USER:-${ssh_user}}
 evidence_ssh_key=${MBOX_EVIDENCE_SSH_KEY_PATH:-${ssh_key}}
 public_url=${MBOX_PUBLIC_URL:-https://139.224.254.60}
+public_origin_ip=${MBOX_PUBLIC_ORIGIN_IP:-}
 backup_max_age_minutes=${MBOX_BACKUP_MAX_AGE_MINUTES:-720}
 bundle_dir=${MBOX_RELEASE_BUNDLE_DIR:-${repo_root}/.runtime/deploy/${MBOX_RELEASE_TAG}}
 dry_run=${MBOX_DEPLOY_DRY_RUN:-0}
@@ -44,6 +45,29 @@ public_host=$(node -e "
   if (!/^[A-Za-z0-9.-]+$/.test(url.hostname)) throw new Error('MBOX_PUBLIC_URL host is invalid');
   process.stdout.write(url.hostname);
 " "${public_url%/}/")
+
+# A local proxy in Fake-IP mode can resolve the public hostname to its synthetic
+# address. Operators may explicitly supply the verified public IPv4 for only
+# this external health check; normal deployments continue to use DNS.
+public_curl_resolve=()
+if [ -n "${public_origin_ip}" ]; then
+  node -e "
+    const net = require('node:net');
+    const value = process.argv[1];
+    const octets = value.split('.').map(Number);
+    const [a, b] = octets;
+    const nonPublic = a === 0 || a === 10 || a === 127 || a >= 224
+      || (a === 100 && b >= 64 && b <= 127)
+      || (a === 169 && b === 254)
+      || (a === 172 && b >= 16 && b <= 31)
+      || (a === 192 && b === 168)
+      || (a === 198 && (b === 18 || b === 19));
+    if (net.isIP(value) !== 4 || nonPublic) {
+      throw new Error('MBOX_PUBLIC_ORIGIN_IP must be a public IPv4 address, not a private or Fake-IP address');
+    }
+  " "${public_origin_ip}"
+  public_curl_resolve=(--resolve "${public_host}:443:${public_origin_ip}")
+fi
 
 mkdir -p "${bundle_dir}"
 if [ ! -f "${bundle_dir}/release-manifest.json" ]; then
@@ -298,7 +322,7 @@ pre_activation_ready=${bundle_dir}/pre-activation-public-ready.json
 pre_activation_temporary=$(mktemp "${bundle_dir}/.pre-activation-ready.XXXXXX")
 pre_activation_verified=0
 for _ in $(seq 1 12); do
-  pre_activation_status=$(curl -sS --connect-timeout 3 --max-time 8 \
+  pre_activation_status=$(curl "${public_curl_resolve[@]}" -sS --connect-timeout 3 --max-time 8 \
     -H 'Accept: application/json' -H 'User-Agent: mbox-release-operator/1.0' \
     -o "${pre_activation_temporary}" -w '%{http_code}' \
     "${public_url}/api/ready" 2>/dev/null || true)

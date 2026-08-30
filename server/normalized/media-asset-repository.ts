@@ -88,6 +88,30 @@ export class MediaAssetRepository {
             WHERE card.tenant_id=asset.tenant_id AND card.store_id=asset.store_id
               AND card.status='published'
               AND card.image_url=('/api/public/media-assets/'||asset.public_id)
+          ) OR EXISTS (
+            -- Menu images are visible to the mini program only when the
+            -- product itself is published to the customer menu.  Staff image
+            -- previews must not make inactive or hidden product assets public.
+            SELECT 1
+            FROM mbox.products AS product
+            LEFT JOIN mbox.menu_categories AS menu_category
+              ON menu_category.tenant_id=product.tenant_id
+             AND menu_category.store_id=product.store_id
+             AND menu_category.code=product.category_code
+            LEFT JOIN mbox.menu_categories AS parent_menu_category
+              ON parent_menu_category.tenant_id=menu_category.tenant_id
+             AND parent_menu_category.store_id=menu_category.store_id
+             AND parent_menu_category.code=menu_category.parent_code
+            WHERE product.tenant_id=asset.tenant_id
+              AND product.store_id=asset.store_id
+              AND product.product_snapshot->>'imageUrl'=('/api/public/media-assets/'||asset.public_id)
+              AND product.status='active'
+              AND product.guest_visible=true
+              AND 'guest_qr'=ANY(product.allowed_channels)
+              AND (menu_category.id IS NULL OR (
+                menu_category.guest_visible=true
+                AND (parent_menu_category.id IS NULL OR parent_menu_category.guest_visible=true)
+              ))
           )
         )
     `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,publicId])

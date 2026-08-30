@@ -24,12 +24,12 @@ export function registerNormalizedObservability(
   config: Readonly<NormalizedRuntimeConfig>,
   transactions: ScopedPostgresTransactionRunner,
 ): void {
-  app.addHook('onSend', async (_request, reply, payload) => {
+  app.addHook('onSend', async (request, reply, payload) => {
     reply.headers({
       'content-security-policy': CONTENT_SECURITY_POLICY,
       'cross-origin-embedder-policy': 'credentialless',
       'cross-origin-opener-policy': 'same-origin-allow-popups',
-      'cross-origin-resource-policy': 'same-site',
+      'cross-origin-resource-policy': crossOriginResourcePolicy(request),
       'permissions-policy': 'camera=(self), microphone=(self), geolocation=(), payment=(self), usb=()',
       'referrer-policy': 'strict-origin-when-cross-origin',
       'x-content-type-options': 'nosniff',
@@ -53,6 +53,14 @@ export function registerNormalizedObservability(
       .type('text/plain; version=0.0.4; charset=utf-8')
       .send(renderMetrics(config, transactions))
   })
+}
+
+function crossOriginResourcePolicy(request: FastifyRequest): 'cross-origin' | 'same-site' {
+  const pathname = request.url.split('?', 1)[0] ?? ''
+  if (pathname.startsWith('/menu/') || pathname.startsWith('/api/public/media-assets/')) {
+    return 'cross-origin'
+  }
+  return 'same-site'
 }
 
 function hasMetricsAccess(request: FastifyRequest, expected: string | null): boolean {

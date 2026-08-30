@@ -70,6 +70,20 @@ MBOX_EVIDENCE_SSH_PORT=6122 \
 ./deploy/aliyun/deploy-release.sh
 ```
 
+If the release operator is using a local proxy in Fake-IP mode and its DNS
+resolver returns a synthetic address for `mbox.shmbox.com`, retain the normal
+public URL and add a one-run override containing the currently verified public
+IPv4 address (not an internal, loopback, or `198.18.*` Fake-IP address):
+
+```bash
+MBOX_PUBLIC_ORIGIN_IP=<verified-public-ipv4> \
+./deploy/aliyun/deploy-release.sh
+```
+
+This override applies only to the operator-side HTTPS readiness check before
+activation. It does not alter production DNS, Caddy, payment callbacks, or the
+runtime's public URL.
+
 Dry-run artifact validation:
 
 ```bash

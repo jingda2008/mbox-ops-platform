@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.0-rc.163 - 2026-08-30
+
+- Normalizes staff-facing inventory quantities, units, categories and costs so
+  database precision and internal codes no longer appear as broken text.
+- Applies the same presentation contract to recipes, activity-package
+  materials, guest order results and reservation references while retaining
+  full identifiers in server, cashier and audit records.
+- Adds source-level and browser regression coverage for the shared display
+  contract, including the rule that public reservation pages show a compact
+  reference instead of a full internal identifier.
+- Includes the native activity-registration reference display change in source;
+  the mini-program remains a separate controlled upload and release stage.
+
 ## 1.0.0-rc.162 - 2026-08-30
 
 - Replaces manual per-unit cost entry in normal receiving with packaging or

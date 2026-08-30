@@ -26,6 +26,7 @@ const { randomId } = require('../../utils/id')
 const { money, dateTime } = require('../../utils/format')
 const { checkoutRecommendationAttribution } = require('../../utils/recommendation-attribution')
 const { publicImageUrl } = require('../../utils/media')
+const { enablePublicShareMenu, publicSharePayload, publicTimelinePayload } = require('../../utils/public-share')
 const { customerErrorMessage, isWechatCancellation } = require('../../utils/customer-error')
 const { requestWechatSubscription } = require('../../utils/wechat-subscription')
 const { isPresentableWechatJsapiAction } = require('../../utils/wechat-payment')
@@ -453,7 +454,22 @@ Page({
   },
 
   onLoad() { this.ensureTableRequestGuard() },
-  onShow() { this.preparePage() },
+  onShow() { enablePublicShareMenu(); this.preparePage() },
+
+  onShareAppMessage() {
+    return publicSharePayload({
+      title: 'M-BOX 今晚菜单 · 先看今晚，再决定怎么喝',
+      // Do not share the currently scanned table, cart or payment state.
+      path: '/pages/order/index',
+    })
+  },
+
+  onShareTimeline() {
+    return publicTimelinePayload({
+      title: 'M-BOX 今晚菜单 · 先看今晚，再决定怎么喝',
+      path: '/pages/order/index',
+    })
+  },
   onHide() {
     const record = this.queuePendingGuestPaymentAbandonment()
     if (record) void this.executePendingGuestPaymentAbandonment(record)

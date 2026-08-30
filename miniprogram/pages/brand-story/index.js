@@ -1,3 +1,5 @@
+const { enablePublicShareMenu, publicSharePayload, publicTimelinePayload } = require('../../utils/public-share')
+
 const SECTIONS = Object.freeze([
   {
     heading: '一座仍在演出的城市档案',
@@ -31,6 +33,22 @@ const SECTIONS = Object.freeze([
 
 Page({
   data: { sections: SECTIONS },
+
+  onShow() { enablePublicShareMenu() },
+
+  onShareAppMessage() {
+    return publicSharePayload({
+      title: 'M-BOX 故事 · 从1999开始，品味上海的现场',
+      path: '/pages/brand-story/index',
+    })
+  },
+
+  onShareTimeline() {
+    return publicTimelinePayload({
+      title: 'M-BOX 故事 · 从1999开始，品味上海的现场',
+      path: '/pages/brand-story/index',
+    })
+  },
 
   closeArticle() {
     if (getCurrentPages().length > 1) {

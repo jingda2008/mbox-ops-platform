@@ -5,6 +5,7 @@ import vm from 'node:vm'
 
 import './miniprogram-request-credential-domain.test.mjs'
 import './miniprogram-activity-share.test.mjs'
+import './miniprogram-public-share.test.mjs'
 import './miniprogram-table-scope-race.test.mjs'
 
 async function loadSessionModule() {

@@ -3,6 +3,7 @@ const { money, dateInput } = require('../../utils/format')
 const { publicImageUrl } = require('../../utils/media')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 const { customerErrorMessage } = require('../../utils/customer-error')
+const { enablePublicShareMenu, publicSharePayload, publicTimelinePayload } = require('../../utils/public-share')
 
 const KIND_NAMES = {
   member_night: '会员之夜', hike: '城市轻徒步', camping: '露营计划', city_walk: '城市漫游',
@@ -30,8 +31,22 @@ Page({
     membershipInviteVisible: false, membershipInviteAgreed: false, membershipInviteBusy: false,
     pendingActivityId: '',
   },
-  onShow() { this.load() },
+  onShow() { enablePublicShareMenu(); this.load() },
   onPullDownRefresh() { this.load().finally(() => wx.stopPullDownRefresh()) },
+
+  onShareAppMessage() {
+    return publicSharePayload({
+      title: 'M-BOX 超嗨部落 · 现场、朋友与城市',
+      path: '/pages/community/index',
+    })
+  },
+
+  onShareTimeline() {
+    return publicTimelinePayload({
+      title: 'M-BOX 超嗨部落 · 现场、朋友与城市',
+      path: '/pages/community/index',
+    })
+  },
 
   async load() {
     this.setData({ loading: true, error: '' })

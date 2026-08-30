@@ -19,6 +19,7 @@ const { publicImageUrl } = require('../../utils/media')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 const { customerErrorMessage, isWechatCancellation } = require('../../utils/customer-error')
 const { requestWechatSubscription } = require('../../utils/wechat-subscription')
+const { enablePublicShareMenu } = require('../../utils/public-share')
 
 const KIND_NAMES = { member_night: '会员之夜', hike: '城市轻徒步', camping: '露营计划', city_walk: '城市漫游', music_picnic: '音乐野餐', proposal: '特别企划', other: '超嗨活动' }
 const LOCAL_REGISTRATIONS_KEY = 'mbox.community.registrations.v1'
@@ -428,7 +429,7 @@ Page({
     this.setData({ id: shareActivityId(options && options.id), shareSource: source, memberAccessRequested: false })
   },
   onUnload() { if (this.registrationFocusTimer) clearTimeout(this.registrationFocusTimer) },
-  onShow() { this.load() },
+  onShow() { enablePublicShareMenu(); this.load() },
 
   activitySharePayload() {
     const activity = this.data.activity

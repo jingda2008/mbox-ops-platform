@@ -14,6 +14,7 @@ const { randomId } = require('../../utils/id')
 const { getRuntimeConfig } = require('../../config/index')
 const { money, dateTime } = require('../../utils/format')
 const { customerErrorCode, customerErrorMessage } = require('../../utils/customer-error')
+const { enablePublicShareMenu, publicSharePayload, publicTimelinePayload } = require('../../utils/public-share')
 
 const STATUS_NAMES = { pending: '等待门店确认', confirmed: '预约已确认', arrived: '已经到店', seated: '已经入座', cancelled: '已取消', no_show: '未到店', expired: '已失效' }
 // “我的预约”只保留顾客仍能执行或等待门店确认的记录。到店、入座、过期等
@@ -82,7 +83,21 @@ Page({
   onLoad() {
     this.setData({ isDevelopment: getRuntimeConfig().isDevelopment, minimumDate: shanghaiDate(0), reservationDate: shanghaiDate(1) })
   },
-  onShow() { this.loadData() },
+  onShow() { enablePublicShareMenu(); this.loadData() },
+
+  onShareAppMessage() {
+    return publicSharePayload({
+      title: '约一晚现场音乐 · M-BOX 到店预约',
+      path: '/pages/reservations/index',
+    })
+  },
+
+  onShareTimeline() {
+    return publicTimelinePayload({
+      title: '约一晚现场音乐 · M-BOX 到店预约',
+      path: '/pages/reservations/index',
+    })
+  },
   onPullDownRefresh() { this.loadData().finally(() => wx.stopPullDownRefresh()) },
 
   async loadData() {

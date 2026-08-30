@@ -263,6 +263,7 @@ test('a required paid activity opens WeChat payment as part of one registration 
     if (path === '../../utils/wechat-phone') return { readWechatPhoneAuthorization: () => ({ code: '' }) }
     if (path === '../../utils/customer-error') return { customerErrorMessage: (_error, fallback) => fallback, isWechatCancellation: () => false }
     if (path === '../../utils/wechat-subscription') return { requestWechatSubscription: async () => ({ presented: false, outcomes: [] }) }
+    if (path === '../../utils/public-share') return { enablePublicShareMenu: () => undefined, publicSharePayload: (value) => value, publicTimelinePayload: (value) => value }
     throw new Error(`unexpected mini-program dependency: ${path}`)
   }
   const wx = {

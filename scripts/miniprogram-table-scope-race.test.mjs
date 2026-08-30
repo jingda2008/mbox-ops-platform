@@ -200,6 +200,7 @@ async function loadHomePage(state) {
       if (specifier === '../../utils/wechat-phone') return { readWechatPhoneAuthorization: () => ({ code: '' }) }
       if (specifier === '../../utils/media') return { publicImageUrl: (value) => value || '' }
       if (specifier === '../../utils/customer-error') return { customerErrorMessage: (_error, fallback) => fallback }
+      if (specifier === '../../utils/public-share') return { enablePublicShareMenu: () => undefined, publicSharePayload: (value) => value, publicTimelinePayload: (value) => value }
       throw new Error(`unexpected require: ${specifier}`)
     },
     wx: {
@@ -282,6 +283,7 @@ async function loadOrderPage(state) {
       if (specifier === '../../utils/format') return { money: (value) => `¥${Number(value || 0) / 100}`, dateTime: (value) => String(value || '') }
       if (specifier === '../../utils/recommendation-attribution') return { checkoutRecommendationAttribution: () => null }
       if (specifier === '../../utils/media') return { publicImageUrl: (value) => value || '' }
+      if (specifier === '../../utils/public-share') return { enablePublicShareMenu: () => undefined, publicSharePayload: (value) => value, publicTimelinePayload: (value) => value }
       if (specifier === '../../utils/customer-error') return {
         customerErrorMessage: (error, fallback) => ({
           GUEST_ORDER_ACCESS_FORBIDDEN: '这笔订单不属于当前桌位，请重新扫描当前桌面的二维码',

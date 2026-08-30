@@ -13,6 +13,7 @@ const { dateTime } = require('../../utils/format')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 const { publicImageUrl } = require('../../utils/media')
 const { customerErrorMessage } = require('../../utils/customer-error')
+const { enablePublicShareMenu, publicSharePayload, publicTimelinePayload } = require('../../utils/public-share')
 const MEMBERSHIP_INVITE_DISMISSED_KEY = 'mbox.membership.invite.dismissed.until.v1'
 const CONTENT_ROTATION_WINDOW_MS = 6 * 60 * 60 * 1000
 
@@ -183,9 +184,23 @@ Page({
     this.ensureTableRequestGuard()
   },
 
-  onShow() { this.loadData() },
+  onShow() { enablePublicShareMenu(); this.loadData() },
   onHide() { this.stopWaitingPoll(); this.invalidateTableRequests() },
   onUnload() { this.stopWaitingPoll(); this.invalidateTableRequests() },
+
+  onShareAppMessage() {
+    return publicSharePayload({
+      title: 'M-BOX · 今晚，刚刚好',
+      path: '/pages/home/index',
+    })
+  },
+
+  onShareTimeline() {
+    return publicTimelinePayload({
+      title: 'M-BOX · 今晚，刚刚好',
+      path: '/pages/home/index',
+    })
+  },
 
   onPullDownRefresh() {
     this.loadData().finally(() => wx.stopPullDownRefresh())

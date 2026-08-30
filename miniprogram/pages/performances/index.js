@@ -1,6 +1,7 @@
 const { getReservationPerformances } = require('../../utils/api')
 const { dateTime } = require('../../utils/format')
 const { customerErrorMessage } = require('../../utils/customer-error')
+const { enablePublicShareMenu, publicSharePayload, publicTimelinePayload } = require('../../utils/public-share')
 
 const DAYS_PER_PAGE = 5
 const SWIPE_THRESHOLD = 48
@@ -35,6 +36,11 @@ function weekdayText(date) {
   return WEEKDAY_LABELS[new Date(Date.UTC(year, month - 1, day)).getUTCDay()]
 }
 
+function shareableDate(value) {
+  const date = String(value || '').trim()
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) && date >= shanghaiDate(0) ? date : shanghaiDate(0)
+}
+
 function calendarData(selectedDate, windowStartDate) {
   const today = shanghaiDate(0)
   const start = windowStartDate < today ? today : windowStartDate
@@ -60,8 +66,8 @@ Page({
     loading: true, error: '', selectedDate: '', monthValue: '', minimumMonth: '', title: '',
     schedules: [], phase: '', days: [], calendarStartDate: '', canShowPrevious: false,
   },
-  onLoad() {
-    const date = shanghaiDate(0)
+  onLoad(options) {
+    const date = shareableDate(options && options.date)
     this.setData({
       selectedDate: date,
       monthValue: date.slice(0, 7),
@@ -70,6 +76,21 @@ Page({
       ...calendarData(date, date),
     })
     this.load()
+  },
+  onShow() { enablePublicShareMenu() },
+
+  onShareAppMessage() {
+    return publicSharePayload({
+      title: `M-BOX · ${this.data.title || '近期'}演出安排`,
+      path: `/pages/performances/index?date=${encodeURIComponent(shareableDate(this.data.selectedDate))}`,
+    })
+  },
+
+  onShareTimeline() {
+    return publicTimelinePayload({
+      title: `M-BOX · ${this.data.title || '近期'}演出安排`,
+      path: `/pages/performances/index?date=${encodeURIComponent(shareableDate(this.data.selectedDate))}`,
+    })
   },
   onDateChange(event) {
     const selectedDate = selectedDateForMonth(event.detail.value, this.data.selectedDate)

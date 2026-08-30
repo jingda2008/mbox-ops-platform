@@ -74,6 +74,9 @@ async function loadDetailPage(state) {
       if (specifier === '../../utils/wechat-subscription') return {
         requestWechatSubscription: async () => ({ presented: false, outcomes: [] }),
       }
+      if (specifier === '../../utils/public-share') return {
+        enablePublicShareMenu: () => undefined,
+      }
       throw new Error(`unexpected require: ${specifier}`)
     },
     Page: (page) => { definition = page },

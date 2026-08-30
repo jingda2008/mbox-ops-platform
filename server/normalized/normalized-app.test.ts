@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import type { FastifyPluginAsync } from 'fastify'
@@ -491,6 +491,8 @@ describe('createNormalizedApp', () => {
   it('serves direct SPA routes from the normalized image without hiding unknown APIs', async () => {
     const staticDir = await mkdtemp(resolve(tmpdir(), 'mbox-normalized-static-'))
     await writeFile(resolve(staticDir, 'index.html'), '<!doctype html><title>normalized shell</title>')
+    await mkdir(resolve(staticDir, 'menu', 'items'), { recursive: true })
+    await writeFile(resolve(staticDir, 'menu', 'items', 'public.jpg'), Buffer.from([0xff, 0xd8, 0xff, 0xd9]))
     const runtime = await createNormalizedApp({
       config: { ...config, staticDir },
       pool: fakePool(),
@@ -512,6 +514,24 @@ describe('createNormalizedApp', () => {
       expect(api.json()).toEqual({
         error: { code: 'ROUTE_NOT_FOUND', message: '请求的页面或接口不存在' },
       })
+
+      const menuImage = await runtime.app.inject({
+        method: 'GET', url: '/menu/items/public.jpg?revision=1',
+      })
+      expect(menuImage.statusCode).toBe(200)
+      expect(menuImage.headers['content-type']).toBe('image/jpeg')
+      expect(menuImage.headers['cross-origin-resource-policy']).toBe('cross-origin')
+
+      const unpublishedPublicAsset = await runtime.app.inject({
+        method: 'GET', url: '/api/public/media-assets/MA00000000000000000000000000000000',
+      })
+      expect(unpublishedPublicAsset.statusCode).toBe(404)
+      expect(unpublishedPublicAsset.headers['cross-origin-resource-policy']).toBe('cross-origin')
+
+      const staffAsset = await runtime.app.inject({
+        method: 'GET', url: '/api/staff/media-assets/MA00000000000000000000000000000000',
+      })
+      expect(staffAsset.headers['cross-origin-resource-policy']).toBe('same-site')
     } finally {
       await runtime.app.close()
       await rm(staticDir, { recursive: true, force: true })

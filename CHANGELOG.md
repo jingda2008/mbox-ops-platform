@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0-rc.165 - 2026-08-30
+
+- Allows only published menu images and public media assets to be embedded by
+  the WeChat Mini Program's cross-site image renderer.
+- Keeps staff media, operational APIs and every other response under the
+  existing same-site resource policy.
+- Adds regression coverage for static menu images, public media errors and the
+  unchanged staff-media security boundary.
+
 ## 1.0.0-rc.164 - 2026-08-30
 
 - Makes menu images available to the Mini Program only when their products are

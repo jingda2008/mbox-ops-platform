@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown, CirclePlus, LoaderCircle, PackageOpen, Pencil } from 'lucide-react'
 import { NormalizedApiClient, type StaffAuthView } from '../normalized-api'
+import { inventoryCategoryLabel, inventoryUnitLabel } from './inventory-presentation'
 import { MediaAssetPicker } from './MediaAssetPicker'
 import { menuImageOptions } from './menu-image-library'
 
@@ -26,26 +27,6 @@ const salesSpecificationOptions: ReadonlyArray<{ code: SalesSpecificationType; l
   { code: 'cocktail', label: '鸡尾酒' },
   { code: 'custom', label: '自定义' },
 ]
-
-const inventoryCategoryLabels: Readonly<Record<string, string>> = {
-  'spirits.whisky': '威士忌',
-  'spirits.american_whisky': '美国威士忌',
-  'spirits.japanese_whisky': '日本威士忌',
-  'spirits.cognac_brandy': '干邑白兰地',
-  'wine.sparkling_champagne': '起泡酒/香槟',
-  'wine.red': '红酒',
-  'wine.white': '干白',
-  'spirits.vodka': '伏特加',
-  'spirits.gin': '金酒',
-  'spirits.rum': '朗姆酒',
-  'spirits.tequila': '龙舌兰',
-  'spirits.liqueur_absinthe': '力娇酒/苦艾',
-  'mixer.syrup_beverage': '糖浆饮料',
-  beer: '啤酒',
-  'food.snack': '食品零食',
-  'mixer.juice': '果汁',
-  'ingredient.seasoning': '调料配料',
-}
 
 interface CatalogProduct {
   id: string
@@ -775,7 +756,7 @@ export function CatalogManagementPanel({
           <div className="catalog-form-grid">
             <label>商品编号<input required disabled={draft.id !== null} pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" value={draft.code} onChange={(event) => updateDraft('code', event.target.value)} /></label>
             <label>商品名称<input required maxLength={160} value={draft.name} onChange={(event) => updateDraft('name', event.target.value)} /></label>
-            <label>顾客菜单分类<select required value={draft.categoryCode} onChange={(event) => updateCategory(event.target.value)}>{!menuCategoryOptions.some((option) => option.code === draft.categoryCode) && <option value={draft.categoryCode}>当前分类（{draft.categoryCode}）</option>}{menuCategoryOptions.map((option) => <option key={option.code} value={option.code}>{option.label}</option>)}</select><small>分类名称、层级、顺序和顾客可见性在上方统一配置。</small></label>
+            <label>顾客菜单分类<select required value={draft.categoryCode} onChange={(event) => updateCategory(event.target.value)}>{!menuCategoryOptions.some((option) => option.code === draft.categoryCode) && <option value={draft.categoryCode}>当前分类（其他分类）</option>}{menuCategoryOptions.map((option) => <option key={option.code} value={option.code}>{option.label}</option>)}</select><small>分类名称、层级、顺序和顾客可见性在上方统一配置。</small></label>
             <label>商品类型<select value={draft.productKind} onChange={(event) => updateDraft('productKind', event.target.value as ProductKind)}><option value="single">单品</option><option value="bundle">组合商品</option></select></label>
             <label>销售规格<select disabled={draft.productKind === 'bundle'} value={draft.salesSpecificationType} onChange={(event) => updateDraft('salesSpecificationType', event.target.value as SalesSpecificationType)}>{salesSpecificationOptions.map((option) => <option key={option.code} value={option.code}>{option.label}</option>)}</select><small>规格只描述销售形态；真实库存始终由下方配方引用，不重复建立库存。</small></label>
             {draft.id !== null && draft.productKind === 'single' && draft.inventoryControlMode === 'tracked' && (draft.salesSpecificationType === 'whole_bottle' || draft.salesSpecificationType === 'glass') && <div className="catalog-wide catalog-sales-companion"><strong>整瓶与单杯共用库存</strong><small>两种销售形态必须各自有商品、售价和配方，才能按不同用量正确扣减同一物料。</small><button type="button" onClick={() => startSalesCompanion(draft.salesSpecificationType === 'whole_bottle' ? 'glass' : 'whole_bottle')}>新建{draft.salesSpecificationType === 'whole_bottle' ? '单杯' : '整瓶'}版本</button></div>}
@@ -846,7 +827,7 @@ export function CatalogManagementPanel({
                   : <><label>先按原料品类筛选<select value={recipeCategoryFilter} onChange={(event) => setRecipeCategoryFilter(event.target.value)}><option value="">全部原料</option>{recipeCategories.map((category) => <option key={category} value={category}>{inventoryCategoryLabel(category)}</option>)}</select><small>已选原料不会因筛选而丢失；可切换品类继续添加。</small></label><div className="catalog-recipe-items">{visibleRecipeItems.map((item) => {
                     const component = recipeComponents[item.id]
                     return <article key={item.id} className={component === undefined ? '' : 'is-selected'}>
-                      <label><input type="checkbox" checked={component !== undefined} onChange={() => toggleRecipeComponent(item.id)} /><span><strong>{item.name}</strong><small>{inventoryCategoryLabel(item.categoryCode)} · {item.sku} · {item.baseUnit}</small></span></label>
+                      <label><input type="checkbox" checked={component !== undefined} onChange={() => toggleRecipeComponent(item.id)} /><span><strong>{item.name}</strong><small>{inventoryCategoryLabel(item.categoryCode)} · {item.sku} · {inventoryUnitLabel(item.baseUnit)}</small></span></label>
                       {component !== undefined && <div><label>每份用量<input inputMode="decimal" value={component.quantity} onChange={(event) => updateRecipeComponent(item.id, 'quantity', event.target.value)} /></label><label>预计损耗<input inputMode="decimal" value={component.expectedWasteQuantity} onChange={(event) => updateRecipeComponent(item.id, 'expectedWasteQuantity', event.target.value)} /></label></div>}
                     </article>
                   })}</div>{visibleRecipeItems.length === 0 && <p>该品类暂未录入物料。可在“库存与瓶存”先建立或补齐分类。</p>}</>}
@@ -869,7 +850,8 @@ export function CatalogManagementPanel({
         </form>}
         <div className="catalog-management-list">{visibleProducts.map((product) => {
           const blockers = sellingBlockers(product)
-          return <article key={product.id}><div><strong>{product.name}</strong><span>{product.code} · {product.categoryCode} · {product.productKind === 'bundle' ? '组合' : stationLabel(product.fulfillmentStation)}</span><small>{statusLabel(product.status)} · {product.inventoryControlMode === 'tracked' ? '跟踪库存' : '暂不管理数量'} · {product.guestVisible ? '顾客可见' : '顾客隐藏'} · {product.standardPrice?.amountMinor == null ? '未定价' : `¥${minorToYuan(product.standardPrice.amountMinor)}`}</small>{isInventoryFlow && <small className={blockers.length === 0 ? 'catalog-sale-state is-ready' : 'catalog-sale-state'}>{blockers.length === 0 ? '小程序可售' : `待完成：${blockers[0]}`}</small>}</div><button type="button" onClick={() => startEdit(product)}><Pencil size={16} /> 编辑</button></article>
+          const categoryLabel = menuCategoryOptions.find((option) => option.code === product.categoryCode)?.label ?? '其他分类'
+          return <article key={product.id}><div><strong>{product.name}</strong><span>{product.code} · {categoryLabel} · {product.productKind === 'bundle' ? '组合' : stationLabel(product.fulfillmentStation)}</span><small>{statusLabel(product.status)} · {product.inventoryControlMode === 'tracked' ? '跟踪库存' : '暂不管理数量'} · {product.guestVisible ? '顾客可见' : '顾客隐藏'} · {product.standardPrice?.amountMinor == null ? '未定价' : `¥${minorToYuan(product.standardPrice.amountMinor)}`}</small>{isInventoryFlow && <small className={blockers.length === 0 ? 'catalog-sale-state is-ready' : 'catalog-sale-state'}>{blockers.length === 0 ? '小程序可售' : `待完成：${blockers[0]}`}</small>}</div><button type="button" onClick={() => startEdit(product)}><Pencil size={16} /> 编辑</button></article>
         })}</div>
       </>}
     </div>}
@@ -1034,10 +1016,6 @@ function readInventoryItems(value: unknown): InventoryItemOption[] {
       ? [{ id: item.id, sku: item.sku, name: item.name, baseUnit: item.baseUnit, categoryCode: item.categoryCode }]
       : []
   ))
-}
-
-function inventoryCategoryLabel(categoryCode: string): string {
-  return inventoryCategoryLabels[categoryCode] ?? categoryCode
 }
 
 function sellingBlockers(product: CatalogProduct): string[] {

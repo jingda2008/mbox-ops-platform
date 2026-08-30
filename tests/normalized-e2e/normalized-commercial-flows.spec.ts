@@ -417,6 +417,9 @@ test('submitted reservation keeps its receipt and gives actionable guidance if s
   await page.getByRole('button', { name: '提交预约申请' }).click()
   await expect(page.getByRole('heading', { name: '等待门店确认' })).toBeVisible()
   await expect(page).toHaveURL(/reservation=reservation-/)
+  const reservationPublicId = new URL(page.url()).searchParams.get('reservation')
+  expect(reservationPublicId).not.toBeNull()
+  const reservationReference = `…${reservationPublicId!.slice(-8)}`
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
 
   await page.clock.fastForward(16_000)
@@ -435,7 +438,8 @@ test('submitted reservation keeps its receipt and gives actionable guidance if s
   await expect(page.getByRole('alert')).toContainText('请勿重复提交')
   await expect(page.getByRole('alert')).toContainText('预约编号')
   await expect(page.getByText('没有找到对应预约')).toHaveCount(0)
-  await expect(page.getByText(/reservation-[0-9a-f-]{36}/)).toBeVisible()
+  await expect(page.locator('.reservation-reference')).toHaveText(reservationReference)
+  await expect(page.getByText(reservationPublicId!, { exact: true })).toHaveCount(0)
   await page.clock.fastForward(60_000)
   expect(statusLookupAttempts).toBe(2)
 })

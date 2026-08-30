@@ -41,6 +41,7 @@ import {
 } from './guest-model'
 import { guestGatePresentation, type GuestGateReason } from './guest-gate-model'
 import { guestMenuProductToMenuProduct } from './menu-product-adapter'
+import { shortPublicReference } from '../public-reference'
 import './guest-app.css'
 
 type GuestApiPort = Pick<GuestApiClient, 'scanTable' | 'loadSession' | 'searchMenu' | 'submitOrder' | 'loadSharedCart' | 'adjustSharedCart' | 'removeSharedCartLine' | 'checkoutSharedCart' | 'loadTableOrders' | 'loadTodayPerformance' | 'payTableOrder' | 'requestService' | 'recordMood'>
@@ -870,7 +871,7 @@ function CheckoutPanel({ result, tableOrder, onRetryPayment, onClose }: {
 }) {
   const paymentCopy = paymentStatusCopy(result, tableOrder)
   return <div className="guest-checkout-result">
-    <span className="guest-checkout-icon"><Check /></span><small>订单 {result.order.publicId}</small><h3>{paymentCopy.title}</h3><p>{paymentCopy.detail}</p>
+    <span className="guest-checkout-icon"><Check /></span><small>订单 {shortPublicReference(result.order.publicId)}</small><h3>{paymentCopy.title}</h3><p>{paymentCopy.detail}</p>
     <small>付款状态每 2 秒自动核对，以支付通道和本桌账单为准</small>
     {result.order.attentionRequired && <div className="guest-attention">{result.order.kdsNotice ?? '备注已保存，付款成功后同步给出品和配送人员'}</div>}
     <div className="guest-checkout-amount"><span>本次应付</span><strong>{formatMoney(result.settlement.payableAmountMinor, result.settlement.currency)}</strong></div>

@@ -41,6 +41,7 @@ import type {
   ReservationStep,
   SeatPreference,
 } from './types'
+import { shortPublicReference } from '../public-reference'
 import './reservation-booking.css'
 
 const SEAT_PREFERENCES: ReadonlyArray<{
@@ -811,7 +812,7 @@ function CompleteStep(props: ReservationBookingViewProps & { busy: boolean }) {
         </div>
       )}
       <dl className="reservation-summary">
-        <div><dt>编号</dt><dd className="reservation-reference">{record.publicId}</dd></div>
+        <div><dt>编号</dt><dd className="reservation-reference">{shortPublicReference(record.publicId)}</dd></div>
         <div><dt>到店</dt><dd>{formatDateTime(isReservation ? props.reservation!.arrivalAt : props.waitlist!.desiredArrivalAt)}</dd></div>
         <div><dt>人数</dt><dd>{record.guestCount}位</dd></div>
         <div><dt>联系</dt><dd>{record.maskedContact}</dd></div>

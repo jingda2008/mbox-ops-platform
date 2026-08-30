@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { CheckCircle2, ChevronDown, RefreshCw, UserCheck, XCircle } from 'lucide-react'
 import type { NormalizedApiClient, StaffAuthView } from '../normalized-api'
 import { useConfirmationDialog } from './ConfirmationDialog'
+import { inventoryUnitLabel } from './inventory-presentation'
 import { MediaAssetPicker } from './MediaAssetPicker'
 import './activity-operations-panel.css'
 
@@ -615,8 +616,8 @@ function PackageComponentSelector({
       const selected = catalog.find((item) => item.id === component.inventoryItemId)
       return <div className="activity-package-component-row" key={`${component.inventoryItemId}:${index}`}>
         <label>物料<select value={component.inventoryItemId} onChange={(event) => update(index, { inventoryItemId: event.target.value })}>
-          {selected === undefined && <option value={component.inventoryItemId}>{component.inventoryItemId === '' ? '旧草稿物料无法识别，请重新选择' : `已选物料当前不可用：${component.inventoryItemId}`}</option>}
-          {catalog.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.sku} · {item.baseUnit}</option>)}
+          {selected === undefined && <option value={component.inventoryItemId}>{component.inventoryItemId === '' ? '旧草稿物料无法识别，请重新选择' : '已选物料当前不可用，请重新选择'}</option>}
+          {catalog.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.sku} · {inventoryUnitLabel(item.baseUnit)}</option>)}
         </select></label>
         <label>每份数量<input inputMode="decimal" value={component.quantity} onChange={(event) => update(index, { quantity: event.target.value })} /></label>
         <label>用量方式<select value={component.perParticipant ? 'per_person' : 'per_registration'} onChange={(event) => update(index, { perParticipant: event.target.value === 'per_person' })}><option value="per_person">每人</option><option value="per_registration">每次报名</option></select></label>

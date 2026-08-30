@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import type { NormalizedApiClient, StaffAuthView } from '../normalized-api'
+import { shortPublicReference } from './public-reference'
 import './performance-revision-panel.css'
 
 export interface PerformanceRevisionSchedule {
@@ -127,7 +128,7 @@ export function PerformanceRevisionPanel({ api, auth, schedules, onChanged }: {
     {latestImpacts.length > 0 && <div className="performance-revision-impacts">
       <strong>本次受影响预约</strong>
       {latestImpacts.map((impact) => <div key={impact.publicId}>
-        <span>{dateTime(impact.arrivalAt)} · {impact.reservationPublicId}</span>
+        <span>{dateTime(impact.arrivalAt)} · {shortPublicReference(impact.reservationPublicId)}</span>
         <small>{impact.acknowledgement === null ? '等待顾客确认' : decisionLabel(impact.acknowledgement.decision)}</small>
       </div>)}
     </div>}

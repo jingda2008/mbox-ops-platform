@@ -12,6 +12,7 @@ import { MembershipConfigurationCenterPanel } from './MembershipConfigurationCen
 import { PersonalContactGovernancePanel } from './PersonalContactGovernancePanel'
 import { HomeContentManagementPanel } from './HomeContentManagementPanel'
 import { AnnualBenefitManagementPanel } from './AnnualBenefitManagementPanel'
+import { shortPublicReference } from './public-reference'
 import './customer-experience-management-panel.css'
 
 interface ActivitySummary {
@@ -1044,7 +1045,7 @@ function LoyaltyPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth: Sta
   async function requestSupplement(item: LoyaltyReconciliationView) {
     const reason = (await promptAction({
       title: '申请积分补发',
-      description: `请填写订单 ${item.orderPublicId} 的补发原因，至少 2 个字。`,
+      description: `请填写订单 ${shortPublicReference(item.orderPublicId)} 的补发原因，至少 2 个字。`,
       label: '申请原因',
       confirmLabel: '提交申请',
     }))?.trim() ?? ''
@@ -1105,7 +1106,7 @@ function LoyaltyPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth: Sta
         <header><strong>自动积分对账</strong><small>只按已付款订单、冻结计分资格和原规则版本计算</small></header>
         {reconciliation.filter((item) => item.status !== 'matched').length === 0 && <p>当前没有待补发差异。</p>}
         {reconciliation.filter((item) => item.status !== 'matched').map((item) => <article key={item.orderPublicId}>
-          <div><strong>{item.memberNo} · {item.orderPublicId}</strong><small>应发 {item.expectedPoints} 积分 / {item.expectedGrowth} 成长值；已发 {item.existingPoints} / {item.existingGrowth}</small></div>
+          <div><strong>{item.memberNo} · {shortPublicReference(item.orderPublicId)}</strong><small>应发 {item.expectedPoints} 积分 / {item.expectedGrowth} 成长值；已发 {item.existingPoints} / {item.existingGrowth}</small></div>
           <div>{canRequestSupplement && <button type="button" disabled={busy === `request-${item.orderPublicId}`} onClick={() => void requestSupplement(item)}>申请补发</button>}</div>
         </article>)}
       </div>}

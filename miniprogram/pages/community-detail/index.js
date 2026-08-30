@@ -355,6 +355,7 @@ function viewRegistration(raw) {
         ? '候补中，会按报名顺序依次安排；现在无需付款。'
         : ''
   return Object.assign({}, raw, {
+    referenceText: shortReference(raw.publicId),
     status,
     statusText: REGISTRATION_STATUS_NAMES[status] || '状态待确认',
     resolutionState,
@@ -376,6 +377,12 @@ function viewRegistration(raw) {
     paymentMethodText: payment.method === 'jsapi' ? '微信支付' : payment.method === 'native_qr' ? '二维码支付' : '',
     stateGuide,
   })
+}
+
+function shortReference(value) {
+  const normalized = String(value || '').trim()
+  if (!normalized) return '待生成'
+  return normalized.length <= 12 ? normalized : `…${normalized.slice(-8)}`
 }
 
 function viewLoyaltyBenefit(raw) {

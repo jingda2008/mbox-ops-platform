@@ -71,7 +71,7 @@
     <view wx:if="{{registration}}" class="registration-status">
       <view class="registration-status__head"><text>{{registration.statusText}}</text><text wx:if="{{registration.resolutionText}}">付款：{{registration.resolutionText}}</text></view>
       <text wx:if="{{registration.stateGuide}}" class="registration-state-guide">{{registration.stateGuide}}</text>
-      <text>报名编号 {{registration.publicId}}</text>
+      <text>报名编号 {{registration.referenceText}}</text>
       <text wx:if="{{registration.paymentAmountMinor > 0}}">本次应付 {{registration.amountDueText}}<text wx:if="{{registration.paymentMethodText}}"> · {{registration.paymentMethodText}}</text></text>
       <text wx:if="{{registration.seatHoldText}}">名额保留至 {{registration.seatHoldText}}</text>
       <text wx:if="{{registration.paymentDueText}}">付款截止 {{registration.paymentDueText}}</text>

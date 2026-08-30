@@ -98,7 +98,8 @@ describe('ReservationBookingView', () => {
         preferredScheduleId: null, cancellationPolicy: {},
       },
     }))
-    expect(html).toContain('reservation-own-001')
+    expect(html).toContain('…-own-001')
+    expect(html).not.toContain('reservation-own-001')
     expect(html).toContain('138****8000')
     expect(html).toContain('等待门店确认')
     expect(html).toContain('门店确认后才正式生效')

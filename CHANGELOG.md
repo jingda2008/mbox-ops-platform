@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0-rc.164 - 2026-08-30
+
+- Makes menu images available to the Mini Program only when their products are
+  active, customer-visible, available through the guest QR channel and in a
+  visible menu category.
+- Keeps images of inactive or hidden menu products private even when staff can
+  preview them in the back office.
+- Adds safe public sharing for eligible customer-facing Mini Program content;
+  staff and private operational content remain outside the sharing surface.
+
 ## 1.0.0-rc.163 - 2026-08-30
 
 - Normalizes staff-facing inventory quantities, units, categories and costs so

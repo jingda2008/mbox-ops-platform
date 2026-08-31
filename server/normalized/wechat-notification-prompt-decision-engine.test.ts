@@ -50,14 +50,16 @@ describe('WeChat notification prompt decision engine', () => {
       ],
       memberServiceAuthorizations: [
         { ...base, notificationType: 'activity_registration_confirmed', templateId: 'activity-template', authorizationContext: 'activity_registration' },
+        { ...base, notificationType: 'activity_performance_starting', templateId: 'performance-start-template', authorizationContext: 'activity_performance' },
+        { ...base, notificationType: 'activity_schedule_changed', templateId: 'schedule-change-template', authorizationContext: 'activity_schedule' },
         { ...base, notificationType: 'member_benefit_issued', templateId: 'benefit-template' },
       ],
     }
     expect(decideWechatNotificationPrompt(input).map((item) => item.notificationType)).toEqual([
-      'activity_registration_confirmed', 'member_benefit_issued', 'loyalty_points_reversed',
+      'activity_registration_confirmed', 'activity_performance_starting', 'activity_schedule_changed',
     ])
     expect(decideWechatNotificationPresentation(input).map((item) => item.notificationType)).toEqual([
-      'activity_registration_confirmed', 'member_benefit_issued', 'loyalty_points_credited',
+      'activity_registration_confirmed', 'activity_performance_starting', 'activity_schedule_changed',
     ])
   })
 })

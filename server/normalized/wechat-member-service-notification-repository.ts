@@ -3,13 +3,16 @@ import type { ScopedTransaction } from './transaction-runner.js'
 
 export const WECHAT_MEMBER_SERVICE_NOTIFICATION_TYPES = Object.freeze([
   'activity_registration_confirmed',
+  'activity_performance_starting',
+  'activity_schedule_changed',
   'member_benefit_issued',
   'membership_tier_changed',
 ] as const)
 
 export type WechatMemberServiceNotificationType = (typeof WECHAT_MEMBER_SERVICE_NOTIFICATION_TYPES)[number]
 export type WechatMemberServiceAuthorizationContext =
-  | 'activity_registration' | 'member_benefit' | 'membership_tier'
+  | 'activity_registration' | 'activity_performance' | 'activity_schedule'
+  | 'member_benefit' | 'membership_tier'
 export type WechatMemberServiceAuthorizationPurpose = 'member_service_update'
 
 export interface WechatMemberServiceAuthorizationOption {
@@ -101,7 +104,10 @@ export class WechatMemberServiceNotificationRepository {
         AND (policy.effective_until IS NULL OR policy.effective_until>clock_timestamp())
       ORDER BY CASE policy.notification_type
         WHEN 'activity_registration_confirmed' THEN 1
-        WHEN 'member_benefit_issued' THEN 2 ELSE 3 END
+        WHEN 'activity_performance_starting' THEN 2
+        WHEN 'activity_schedule_changed' THEN 3
+        WHEN 'member_benefit_issued' THEN 4
+        ELSE 5 END
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, customerId])
     return result.rows.map(option)
   }

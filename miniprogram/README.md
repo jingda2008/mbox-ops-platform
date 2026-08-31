@@ -128,6 +128,7 @@ miniprogram-release-evidence-<commit>.tar.gz
 
 - 在用户点击手势内调用`wx.requestSubscribeMessage`，一次最多 3 个模板；底部多选由服务端`presentation`与本地排序共同决定。
 - 场景：`activity_registration`、`order_checkout`、`member_card`、`coupon_open`、`reservation_submit`、`reservation_performance`。
+- 超嗨活动报名弹窗固定优先：活动报名通知 → 演出即将开始提醒 → 活动时间变更。
 - 预约提交必须优先请求`reservation_submit`，以展示已发布的「预约到店提醒」模板；不能只依赖「已有预约的授权列表」（首次预约时该列表为空）。
 - 跨页可用`wechat-subscription-presentation-cache`缓存展示选项；拒绝授权不影响预约、报名、点单主流程。
 

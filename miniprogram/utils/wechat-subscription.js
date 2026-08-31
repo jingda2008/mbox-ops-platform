@@ -68,6 +68,7 @@ function buildWechatSubscriptionPresentationOptions(input, notificationTypes) {
 }
 
 function shouldRecordAuthorization(option) {
+  if (!option || !String(option.policyId || '').trim()) return false
   return Number(option.usesRemaining || 0) <= 0 && option.platformResult !== 'ban'
 }
 
@@ -163,11 +164,38 @@ async function requestWechatSubscription(options, notificationTypes) {
 
 const ACTIVITY_REGISTRATION_SUBSCRIBE_TYPES = Object.freeze([
   'activity_registration_confirmed',
+  'activity_performance_starting',
+  'activity_schedule_changed',
   'member_benefit_issued',
-  'loyalty_points_credited',
   'membership_tier_changed',
+  'loyalty_points_credited',
   'loyalty_points_expiring',
   'loyalty_points_reversed',
+])
+
+// WeChat shows titles from template IDs.  Keep these as hard fallbacks so the
+// Superhigh sheet stays correct even before the new policies are published.
+const ACTIVITY_SHEET_FALLBACK_OPTIONS = Object.freeze([
+  {
+    apiKind: 'member_service',
+    notificationType: 'activity_performance_starting',
+    templateId: '4l6FLtKAkhYAb2v45G0NxaGAXmDsyi2gsD0F7H0h2Ag',
+    policyId: '',
+    policyVersion: 0,
+    authorizationVersion: 0,
+    usesRemaining: 0,
+    platformResult: null,
+  },
+  {
+    apiKind: 'member_service',
+    notificationType: 'activity_schedule_changed',
+    templateId: 'GQl7s-_G7gsUMliU7o_g3bstB9yXO6B2pctz1rwJMkg',
+    policyId: '',
+    policyVersion: 0,
+    authorizationVersion: 0,
+    usesRemaining: 0,
+    platformResult: null,
+  },
 ])
 
 const RESERVATION_SUCCESS_SUBSCRIBE_TYPES = Object.freeze([
@@ -195,12 +223,36 @@ function buildReservationSubscriptionPresentation(...groups) {
   return mergeWechatNotificationPromptOptions(preferred, catalog)
 }
 
+function buildActivitySubscriptionPresentation(...groups) {
+  const catalog = []
+  const seen = new Set()
+  for (const group of groups) {
+    for (const item of group || []) {
+      if (!item || item.platformResult === 'ban') continue
+      const templateId = String(item.templateId || '').trim()
+      if (!templateId || seen.has(templateId)) continue
+      seen.add(templateId)
+      catalog.push(item)
+    }
+  }
+  for (const fallback of ACTIVITY_SHEET_FALLBACK_OPTIONS) {
+    if (seen.has(fallback.templateId)) continue
+    if (catalog.some((item) => item.notificationType === fallback.notificationType)) continue
+    catalog.push(fallback)
+    seen.add(fallback.templateId)
+  }
+  const preferred = prioritizeWechatNotificationOptions(catalog, ACTIVITY_REGISTRATION_SUBSCRIBE_TYPES)
+  if (preferred.length >= MAX_TEMPLATE_IDS_PER_REQUEST) return preferred
+  return mergeWechatNotificationPromptOptions(preferred, catalog)
+}
+
 module.exports = {
   requestWechatSubscription,
   requestWechatSubscriptionFromTap,
   mergeWechatNotificationPromptOptions,
   buildWechatSubscriptionPresentationOptions,
   buildReservationSubscriptionPresentation,
+  buildActivitySubscriptionPresentation,
   extractPromptPresentation,
   prioritizeWechatNotificationOptions,
   ACTIVITY_REGISTRATION_SUBSCRIBE_TYPES,

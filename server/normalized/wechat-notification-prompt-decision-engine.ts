@@ -46,8 +46,9 @@ const CONTEXTUAL_PRIORITY: Readonly<Record<WechatNotificationPromptContext, read
     'member_benefit_issued', 'membership_tier_changed', 'activity_registration_confirmed',
   ],
   activity_registration: [
-    'activity_registration_confirmed', 'member_benefit_issued', 'loyalty_points_credited',
-    'membership_tier_changed', 'loyalty_points_reversed', 'loyalty_points_expiring',
+    'activity_registration_confirmed', 'activity_performance_starting', 'activity_schedule_changed',
+    'member_benefit_issued', 'membership_tier_changed', 'loyalty_points_credited',
+    'loyalty_points_reversed', 'loyalty_points_expiring',
   ],
   coupon_open: [
     'member_benefit_issued', 'membership_tier_changed', 'loyalty_points_credited',

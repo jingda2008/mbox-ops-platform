@@ -22,6 +22,8 @@ const {
   requestWechatSubscription,
   mergeWechatNotificationPromptOptions,
   extractPromptPresentation,
+  buildActivitySubscriptionPresentation,
+  ACTIVITY_REGISTRATION_SUBSCRIBE_TYPES,
 } = require('../../utils/wechat-subscription')
 const { rememberPresentationOptions } = require('../../utils/wechat-subscription-presentation-cache')
 const { enablePublicShareMenu } = require('../../utils/public-share')
@@ -509,7 +511,11 @@ Page({
           memberPrompt.authorizations,
           couponPrompt.authorizations,
         ),
-        presentation: extractPromptPresentation(activityPrompt),
+        presentation: buildActivitySubscriptionPresentation(
+          extractPromptPresentation(activityPrompt),
+          extractPromptPresentation(memberPrompt),
+          extractPromptPresentation(couponPrompt),
+        ),
       }
       if (!raw) throw new Error('活动已结束、暂停或不在您的可见范围内')
       let loyaltyBenefits = []
@@ -721,8 +727,17 @@ Page({
 
   async preloadWechatSubscriptionPresentationOptions() {
     try {
-      const prompt = await getWechatNotificationPrompt('activity_registration')
-      const options = extractPromptPresentation(prompt)
+      const empty = { presentation: [], authorizations: [] }
+      const [activityPrompt, memberPrompt, couponPrompt] = await Promise.all([
+        getWechatNotificationPrompt('activity_registration').catch(() => empty),
+        getWechatNotificationPrompt('member_card').catch(() => empty),
+        getWechatNotificationPrompt('coupon_open').catch(() => empty),
+      ])
+      const options = buildActivitySubscriptionPresentation(
+        extractPromptPresentation(activityPrompt),
+        extractPromptPresentation(memberPrompt),
+        extractPromptPresentation(couponPrompt),
+      )
       this._presentationOptions = options
       rememberPresentationOptions('activity_registration', options)
       if (options.length) this.setData({ wechatSubscriptionPresentationOptions: options })
@@ -734,7 +749,7 @@ Page({
 
   async offerActivityRegistrationNotifications() {
     const options = this._presentationOptions || this.data.wechatSubscriptionPresentationOptions || []
-    await requestWechatSubscription(options)
+    await requestWechatSubscription(options, ACTIVITY_REGISTRATION_SUBSCRIBE_TYPES)
     this.preloadWechatSubscriptionPresentationOptions().catch(() => {})
   },
 

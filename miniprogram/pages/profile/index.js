@@ -30,7 +30,8 @@ const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 const { getRuntimeConfig } = require('../../config/index')
 const { publicImageUrl } = require('../../utils/media')
 const { customerErrorCode, customerErrorMessage } = require('../../utils/customer-error')
-const { requestWechatSubscription } = require('../../utils/wechat-subscription')
+const { requestWechatSubscription, mergeWechatNotificationPromptOptions, extractPromptPresentation } = require('../../utils/wechat-subscription')
+const { rememberPresentationOptions } = require('../../utils/wechat-subscription-presentation-cache')
 
 const LEVEL_NAMES = { member: '普卡会员', silver: '银卡会员', gold: '金卡会员' }
 const LEVEL_ENGLISH = { member: 'M-BOX MEMBER', silver: 'SILVER MEMBER', gold: 'GOLD MEMBER' }
@@ -325,6 +326,8 @@ Page({
     loginSheetVisible: false,
     wechatNotificationAuthorizations: [],
     wechatNotificationPromptOptions: [],
+    wechatSubscriptionPresentationOptions: [],
+    wechatMemberCardPresentationOptions: [],
   },
 
   onShow() {
@@ -360,6 +363,7 @@ Page({
         getProductRestrictions().catch(() => []),
         getWechatNotificationAuthorizations().catch(() => ({ authorizations: [] })),
         getWechatNotificationPrompt('coupon_open').catch(() => ({ authorizations: [] })),
+        getWechatNotificationPrompt('member_card').catch(() => ({ authorizations: [] })),
         getCustomerPreferenceFacts().catch((error) => {
           this.setData({ preferenceError: soft(error) || '' })
           return { facts: [], sources: [] }
@@ -405,7 +409,7 @@ Page({
         statusText: REDEMPTION_STATUS_NAMES[item.status] || '状态待确认',
         canCancel: item.status === 'awaiting_fulfillment',
       })).slice(0, 5)
-      const preferenceView = customerPreferenceView(results[9])
+      const preferenceView = customerPreferenceView(results[10])
       const contentCards = (data.content || [])
         .map(memberContentCardView)
         .sort((left, right) => left.priority - right.priority)
@@ -428,13 +432,20 @@ Page({
         contentCards,
         expiryNotificationOption,
         wechatNotificationAuthorizations: (results[7] && results[7].authorizations) || [],
-        wechatNotificationPromptOptions: (results[8] && results[8].authorizations) || [],
+        wechatNotificationPromptOptions: mergeWechatNotificationPromptOptions(
+          results[8] && results[8].authorizations,
+          results[9] && results[9].authorizations,
+        ),
+        wechatSubscriptionPresentationOptions: extractPromptPresentation(results[8]),
+        wechatMemberCardPresentationOptions: extractPromptPresentation(results[9]),
         showRedemptions: Boolean(membership && (redemptionItems.length || redemptions.length)),
         hasTableContext: ['active', 'already_active'].includes(tableConnection.status),
         displayName: wx.getStorageSync('mbox.member.displayName') || '',
         avatarUrl: wx.getStorageSync('mbox.member.avatarUrl') || '',
         ...preferenceView,
       })
+      rememberPresentationOptions('coupon_open', extractPromptPresentation(results[8]))
+      rememberPresentationOptions('member_card', extractPromptPresentation(results[9]))
     } catch (error) {
       const message = String((error && error.message) || '')
       const soft = /预约会话已失效|重新进入预约|登录状态已失效|登录或桌边会话已过期/.test(message)
@@ -682,19 +693,15 @@ Page({
     const option = this.data.expiryNotificationOption
     if (!option || typeof wx.requestSubscribeMessage !== 'function') return
     try {
-      const result = await new Promise((resolve, reject) => wx.requestSubscribeMessage({
-        tmplIds: [option.templateId], success: resolve, fail: reject,
-      }))
-      const platformResult = result[option.templateId]
+      const options = mergeWechatNotificationPromptOptions(
+        [Object.assign({}, option, { apiKind: 'loyalty' })],
+        this.data.wechatMemberCardPresentationOptions,
+        this.data.wechatSubscriptionPresentationOptions,
+      )
+      const result = await requestWechatSubscription(options)
+      const outcome = (result.outcomes || []).find((item) => item.option.templateId === option.templateId)
+      const platformResult = outcome && outcome.platformResult
       if (!['accept', 'reject', 'ban'].includes(platformResult)) return
-      await recordWechatNotificationAuthorization({
-        notificationType: option.notificationType,
-        policyId: option.policyId,
-        policyVersion: option.policyVersion,
-        templateId: option.templateId,
-        expectedVersion: option.authorizationVersion,
-        platformResult,
-      })
       this.setData({ expiryNotificationOption: null })
       wx.showToast({
         title: platformResult === 'accept' ? '到期提醒已申请' : '未开启到期提醒',
@@ -971,7 +978,7 @@ Page({
   },
   async openCoupons() {
     if (!this.requireMembership('coupons')) return
-    await requestWechatSubscription(this.data.wechatNotificationPromptOptions || [])
+    await requestWechatSubscription(this.data.wechatSubscriptionPresentationOptions || [])
     wx.navigateTo({ url: '/pages/profile-coupons/index' })
   },
   openNotificationSettings() {

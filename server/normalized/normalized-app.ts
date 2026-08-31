@@ -259,6 +259,25 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     requestIdHeader: false,
     genReqId: () => randomUUID(),
   })
+  // wx.request may send DELETE/PATCH with content-type application/json and no body.
+  // Accept an empty body instead of failing the whole public reservation flow.
+  app.removeContentTypeParser('application/json')
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (_request, body, done) => {
+    if (body === '' || body === undefined || body === null) {
+      done(null, undefined)
+      return
+    }
+    try {
+      const text = typeof body === 'string' ? body : Buffer.isBuffer(body) ? body.toString('utf8') : String(body)
+      if (!text) {
+        done(null, undefined)
+        return
+      }
+      done(null, JSON.parse(text) as unknown)
+    } catch (error) {
+      done(error as Error)
+    }
+  })
   if (options.config.runtimeRole==='contract_candidate') {
     app.addHook('onRequest',async(request,reply)=>{
       if (request.method==='GET' || request.method==='HEAD' || request.method==='OPTIONS') return
@@ -936,8 +955,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       await reservationApp.register(reservationPerformanceNotificationApiPlugin, {
         transactions,
         commands: commandExecutor,
-        channelConfigured: options.config.wechatIdentity !== null
-          && options.config.wechatNotification !== null,
+        channelConfigured: options.config.wechatIdentity !== null,
         resolveCustomerContext: async (request) => {
           const session = await authenticateReservationGuest(request)
           const day = await businessClock.current(scope)
@@ -1033,8 +1051,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       await reservationApp.register(wechatLoyaltyNotificationApiPlugin, {
         transactions,
         commands: commandExecutor,
-        channelConfigured: options.config.wechatIdentity !== null
-          && options.config.wechatNotification !== null,
+        channelConfigured: options.config.wechatIdentity !== null,
         resolvePublicContext: async (request) => {
           const session = await authenticateReservationGuest(request)
           const day = await businessClock.current(scope)
@@ -1049,8 +1066,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       await reservationApp.register(wechatMemberServiceNotificationApiPlugin, {
         transactions,
         commands: commandExecutor,
-        channelConfigured: options.config.wechatIdentity !== null
-          && options.config.wechatNotification !== null,
+        channelConfigured: options.config.wechatIdentity !== null,
         resolvePublicContext: async (request) => {
           const session = await authenticateReservationGuest(request)
           const day = await businessClock.current(scope)
@@ -1064,8 +1080,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       })
       await reservationApp.register(wechatNotificationPromptApiPlugin, {
         transactions,
-        channelConfigured: options.config.wechatIdentity !== null
-          && options.config.wechatNotification !== null,
+        channelConfigured: options.config.wechatIdentity !== null,
         resolvePublicContext: async (request) => {
           const session = await authenticateReservationGuest(request)
           const day = await businessClock.current(scope)

@@ -79,7 +79,6 @@ function buildHeaders(path, extraHeaders, settings) {
   const anonymous = requestedDomain === 'none'
   const session = anonymous ? {} : getTableSession()
   const headers = Object.assign({
-    'content-type': 'application/json',
     accept: 'application/json',
     'x-mbox-store-id': config.storeId,
     ...(anonymous ? {} : {
@@ -87,6 +86,9 @@ function buildHeaders(path, extraHeaders, settings) {
       'x-mbox-table-code': session.tableCode || '',
     }),
   }, extraHeaders || {})
+  if (settings.data !== undefined && settings.data !== null) {
+    headers['content-type'] = 'application/json'
+  }
   removeHeader(headers, 'cookie')
   if (requestedDomain && !['none', 'wechat_identity', 'reservation+guest', 'guest+wechat_identity'].includes(requestedDomain)) {
     throw new Error('请求凭证域无效')

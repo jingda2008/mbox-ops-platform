@@ -28,19 +28,20 @@ export const wechatMemberServiceNotificationApiPlugin: FastifyPluginAsync<Option
   })
   app.post('/public/mini/wechat-member-service-notification-authorizations',async(request,reply)=>{
     if(!options.channelConfigured)return reply.status(503).send({
-      code:'WECHAT_MEMBER_SERVICE_NOTIFICATION_NOT_CONFIGURED',message:'正式微信订阅消息配置尚未完整启用',
+      error:{code:'WECHAT_MEMBER_SERVICE_NOTIFICATION_NOT_CONFIGURED',message:'正式微信订阅消息配置尚未完整启用'},
     })
-    const context=await options.resolvePublicContext(request)
-    const body=object(request.body)
-    const input={
-      notificationType: enumValue(body.notificationType,WECHAT_MEMBER_SERVICE_NOTIFICATION_TYPES,'通知类型'),
-      policyId: uuid(body.policyId,'通知政策'),policyVersion: integer(body.policyVersion,'政策版本',1),
-      templateId: text(body.templateId,'微信模板',8,128),expectedVersion:integer(body.expectedVersion,'授权版本',0),
-      platformResult:enumValue(body.platformResult,['accept','reject','ban','revoke'] as const,'微信授权结果'),
-      platformEventReference:text(body.platformEventReference,'授权请求编号',8,200),
-    }
-    const idempotencyKey=text(request.headers['idempotency-key'],'幂等键',8,160)
     try {
+      const context=await options.resolvePublicContext(request)
+      const body=object(request.body)
+      const input={
+        notificationType: enumValue(body.notificationType,WECHAT_MEMBER_SERVICE_NOTIFICATION_TYPES,'通知类型'),
+        policyId: uuid(body.policyId,'通知政策'),policyVersion: integer(body.policyVersion,'政策版本',1),
+        templateId: text(body.templateId,'微信模板',8,128),expectedVersion:integer(body.expectedVersion,'授权版本',0),
+        platformResult:enumValue(body.platformResult,['accept','reject','ban','revoke'] as const,'微信授权结果'),
+        platformEventReference:text(body.platformEventReference,'授权请求编号',8,200),
+      }
+      const headerValue=request.headers['idempotency-key']
+      const idempotencyKey=text(Array.isArray(headerValue)?headerValue[0]:headerValue,'幂等键',8,160)
       const execution=await options.commands.execute({
         scope:context.scope,operationScope:'customer.wechat-member-service-notification-authorization.record',
         idempotencyKey,requestFingerprint:fingerprint({...input,customerId:context.customerId}),resultCodec,
@@ -60,11 +61,31 @@ export const wechatMemberServiceNotificationApiPlugin: FastifyPluginAsync<Option
       if(error instanceof WechatMemberServiceAuthorizationError){
         const status=error.code==='WECHAT_MEMBER_SERVICE_NOTIFICATION_MEMBERSHIP_REQUIRED'?409
           :error.code==='WECHAT_MEMBER_SERVICE_NOTIFICATION_IDENTITY_REQUIRED'?403:409
-        return reply.status(status).send({code:error.code,message:error.message})
+        return reply.status(status).send({error:{code:error.code,message:error.message}})
+      }
+      if(error instanceof TypeError){
+        return reply.status(400).send({
+          error:{code:'WECHAT_MEMBER_SERVICE_NOTIFICATION_INPUT_INVALID',message:error.message},
+        })
+      }
+      const message=postgresMessage(error)
+      if(message.includes('identity does not belong')){
+        return reply.status(403).send({
+          error:{
+            code:'WECHAT_MEMBER_SERVICE_NOTIFICATION_IDENTITY_REQUIRED',
+            message:'当前顾客没有可验证的本人微信身份',
+          },
+        })
       }
       throw error
     }
   })
+}
+
+function postgresMessage(error: unknown): string {
+  if(typeof error!=='object'||error===null) return ''
+  const row=error as { message?: unknown; detail?: unknown }
+  return `${String(row.message||'')} ${String(row.detail||'')}`.trim()
 }
 
 const resultCodec:JsonCodec<Result>={

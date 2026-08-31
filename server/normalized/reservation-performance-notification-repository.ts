@@ -106,6 +106,28 @@ export class ReservationPerformanceNotificationRepository {
     return result.rows.map(mapOption)
   }
 
+  async presentationPolicy(
+    channelConfigured: boolean,
+  ): Promise<ReservationPerformanceNotificationAuthorizationOption | null> {
+    if (!channelConfigured) return null
+    const result = await this.transaction.query<AuthorizationOptionRow>(`
+      SELECT '' AS reservation_public_id,
+        policy.id AS policy_id,policy.policy_version,policy.template_id,
+        NULL::text AS decision,NULL::text AS platform_result,0::integer AS authorization_version,
+        NULL::text AS authorized_at,0::integer AS uses_remaining
+      FROM mbox.reservation_performance_notification_policies policy
+      WHERE policy.tenant_id=$1::uuid AND policy.store_id=$2::uuid
+        AND policy.status='published' AND policy.effective_from<=clock_timestamp()
+        AND (policy.effective_until IS NULL OR policy.effective_until>clock_timestamp())
+        AND policy.notification_type='reservation_performance_revised'
+        AND policy.authorization_context='reservation'
+      ORDER BY policy.policy_version DESC,policy.id DESC
+      LIMIT 1
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId])
+    const row = result.rows[0]
+    return row ? mapOption(row) : null
+  }
+
   async recordAuthorization(input: Readonly<{
     customerId: string
     reservationPublicId: string

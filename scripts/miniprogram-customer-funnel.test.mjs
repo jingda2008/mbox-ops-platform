@@ -262,7 +262,16 @@ test('a required paid activity opens WeChat payment as part of one registration 
     if (path === '../../utils/media') return { publicImageUrl: (value) => value || '' }
     if (path === '../../utils/wechat-phone') return { readWechatPhoneAuthorization: () => ({ code: '' }) }
     if (path === '../../utils/customer-error') return { customerErrorMessage: (_error, fallback) => fallback, isWechatCancellation: () => false }
-    if (path === '../../utils/wechat-subscription') return { requestWechatSubscription: async () => ({ presented: false, outcomes: [] }) }
+    if (path === '../../utils/wechat-subscription') return {
+      requestWechatSubscription: async () => ({ presented: false, outcomes: [] }),
+      mergeWechatNotificationPromptOptions: (...groups) => [].concat(...groups.filter(Boolean)),
+      extractPromptPresentation: (prompt) => (prompt && prompt.presentation) || [],
+      ACTIVITY_REGISTRATION_SUBSCRIBE_TYPES: [],
+    }
+    if (path === '../../utils/wechat-subscription-presentation-cache') return {
+      rememberPresentationOptions: () => [],
+      resolvePresentationOptions: (...groups) => [].concat(...groups.filter(Boolean)),
+    }
     if (path === '../../utils/public-share') return { enablePublicShareMenu: () => undefined, publicSharePayload: (value) => value, publicTimelinePayload: (value) => value }
     throw new Error(`unexpected mini-program dependency: ${path}`)
   }
@@ -790,6 +799,11 @@ test('customer-only reservations stay executable, performances use the public sc
   ])
   assert.match(reservationLogic, /EXECUTABLE_RESERVATION_STATUSES/)
   assert.match(reservationLogic, /\['pending', 'confirmed'\]/)
+  assert.match(reservationLogic, /cancelCustomerReservation/)
+  assert.match(reservationLogic, /wx\.showModal/)
+  assert.match(reservationView, /bindtap="cancelReservation"/)
+  assert.match(reservationView, /取消预约/)
+  assert.match(miniApi, /async function cancelCustomerReservation/)
   assert.match(reservationView, /更想坐在哪里？/)
   assert.match(reservationView, /这次想怎样相聚？/)
   assert.match(reservationView, /choice-picker/)
@@ -824,6 +838,23 @@ test('customer-only reservations stay executable, performances use the public sc
   assert.doesNotMatch(orderLogic, /requireMembershipLogin/)
   assert.match(orderLogic, /wx\.scanCode\(\{/)
   assert.match(reservationLogic, /membershipRequired/)
+  assert.match(reservationLogic, /getWechatNotificationAuthorizations/)
+  assert.match(reservationLogic, /getWechatMemberServiceNotificationAuthorizations/)
+  assert.match(reservationLogic, /buildReservationSubscriptionPresentation/)
+  assert.match(reservationLogic, /getWechatNotificationPrompt\('reservation_submit'\)/)
+  assert.match(reservationLogic, /getWechatNotificationPrompt\('activity_registration'\)/)
+  assert.match(reservationLogic, /getWechatNotificationPrompt\('order_checkout'\)/)
+  assert.match(reservationLogic, /getWechatNotificationPrompt\('member_card'\)/)
+  assert.match(reservationLogic, /RESERVATION_SUCCESS_SUBSCRIBE_TYPES/)
+  assert.match(reservationLogic, /requestWechatSubscriptionFromTap/)
+  assert.match(reservationLogic, /resolvePresentationOptions/)
+  assert.match(reservationLogic, /completeReservationSubmit/)
+  assert.match(reservationLogic, /submitReservation\(\)[\s\S]{0,1200}?requestWechatSubscriptionFromTap/)
+  assert.match(reservationLogic, /completeReservationSubmit[\s\S]{0,900}?const customerName = this\.data\.customerName\.trim\(\)/)
+  assert.match(reservationLogic, /completeReservationSubmit[\s\S]{0,900}?const contact = this\.data\.contact\.trim\(\)/)
+  assert.match(reservationLogic, /completeReservationSubmit[\s\S]{0,1600}?createCustomerReservation/)
+  assert.match(reservationLogic, /enablePerformanceNotification[\s\S]{0,1400}?requestWechatSubscriptionFromTap/)
+  assert.doesNotMatch(reservationLogic, /enablePerformanceNotification[\s\S]{0,700}?tmplIds: \[option\.templateId\]/)
   assert.match(reservationView, /membership-gate/)
   assert.doesNotMatch(profileView, /class="login-dock"/)
   assert.match(profileView, /确定加入并授权手机号/)
@@ -872,6 +903,7 @@ test('subscription messages are requested from customer actions, not a settings-
     require: () => ({
       recordWechatNotificationAuthorization: async (input) => recorded.push({ kind: 'loyalty', ...input }),
       recordWechatMemberServiceNotificationAuthorization: async (input) => recorded.push({ kind: 'member_service', ...input }),
+      recordReservationPerformanceNotificationAuthorization: async (input) => recorded.push({ kind: 'reservation_performance', ...input }),
     }),
     wx: {
       requestSubscribeMessage: ({ tmplIds, success }) => {
@@ -893,15 +925,36 @@ test('subscription messages are requested from customer actions, not a settings-
   assert.equal(result.presented, true)
   assert.equal(presented[0].length, 3)
   assert.equal(recorded.length, 3)
+  const mixedOptions = [
+    { apiKind: 'member_service', notificationType: 'activity_registration_confirmed', policyId: 'policy-a', policyVersion: 1, templateId: 'template-a', authorizationVersion: 0, usesRemaining: 0, platformResult: null },
+    { apiKind: 'member_service', notificationType: 'member_benefit_issued', policyId: 'policy-b', policyVersion: 1, templateId: 'template-b', authorizationVersion: 1, usesRemaining: 1, platformResult: 'accept' },
+    { apiKind: 'loyalty', notificationType: 'loyalty_points_credited', policyId: 'policy-c', policyVersion: 1, templateId: 'template-c', authorizationVersion: 1, usesRemaining: 1, platformResult: 'accept' },
+  ]
+  presented.length = 0
+  recorded.length = 0
+  await helperModule.exports.requestWechatSubscription(mixedOptions, [
+    'activity_registration_confirmed', 'member_benefit_issued', 'loyalty_points_credited',
+  ])
+  assert.equal(presented[0].length, 3)
+  assert.equal(recorded.length, 1)
+  assert.match(subscriptionSource, /buildWechatSubscriptionPresentationOptions/)
   assert.match(subscriptionSource, /MAX_TEMPLATE_IDS_PER_REQUEST = 3/)
   assert.match(subscriptionSource, /AUTHORIZATION_RECORDING_WAIT_MS = 1500/)
   assert.doesNotMatch(notificationLogic, /enableOption|requestSubscribeMessage/)
   assert.doesNotMatch(notificationView, /可申请的提醒|开启提醒/)
+  assert.match(subscriptionSource, /extractPromptPresentation/)
+  assert.match(subscriptionSource, /subscriptionCandidates/)
+  assert.match(subscriptionSource, /requestWechatSubscriptionFromTap/)
+  assert.match(subscriptionSource, /buildReservationSubscriptionPresentation/)
   assert.match(activityLogic, /getWechatNotificationPrompt\('activity_registration'\)/)
+  assert.match(activityLogic, /extractPromptPresentation/)
+  assert.match(activityLogic, /wechatSubscriptionPresentationOptions/)
+  assert.doesNotMatch(activityLogic, /getWechatNotificationAuthorizations/)
+  assert.match(activityLogic, /async offerActivityRegistrationNotifications\(\)[\s\S]{0,320}?requestWechatSubscription/)
   assert.match(activityLogic, /await this\.offerActivityRegistrationNotifications\(\)[\s\S]{0,700}?choosePayment\(pricing\)/)
   assert.doesNotMatch(activityLogic, /offerActivityPaymentNotifications/)
-  assert.match(orderLogic, /getWechatNotificationPrompt\('order_checkout'\)/)
-  assert.match(orderLogic, /getWechatNotificationPrompt\('order_selection'\)/)
+  assert.match(orderLogic, /extractPromptPresentation\(results\[6\]\)/)
+  assert.match(orderLogic, /extractPromptPresentation\(results\[7\]\)/)
   assert.match(orderLogic, /async addProduct\(event\)[\s\S]{0,900}?offerOrderNotifications\('order_selection', tableRequest\)/)
   const checkoutOpenStart = orderLogic.indexOf('async openCheckout()')
   const checkoutOpenEnd = orderLogic.indexOf('  closeCheckoutConfirm()', checkoutOpenStart)
@@ -938,5 +991,5 @@ test('subscription messages are requested from customer actions, not a settings-
   const paymentActionSource = orderLogic.slice(paymentActionStart, paymentActionEnd)
   assert.match(paymentActionSource, /wx\.requestPayment[\s\S]*?offerOrderNotifications\('order_checkout', activeRequest\)[\s\S]*?confirmPaymentOutcome/)
   assert.match(profileLogic, /getWechatNotificationPrompt\('coupon_open'\)/)
-  assert.match(profileLogic, /async openCoupons\(\)[\s\S]{0,500}?requestWechatSubscription/)
+  assert.match(profileLogic, /async openCoupons\(\)[\s\S]{0,900}?requestWechatSubscription/)
 })

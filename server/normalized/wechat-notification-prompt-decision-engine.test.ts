@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { decideWechatNotificationPrompt } from './wechat-notification-prompt-decision-engine.js'
+import { decideWechatNotificationPresentation, decideWechatNotificationPrompt } from './wechat-notification-prompt-decision-engine.js'
 
 const base = {
   policyId: '83000000-0000-4000-8000-000000000004', purpose: 'member_service_update',
@@ -41,20 +41,23 @@ describe('WeChat notification prompt decision engine', () => {
     ])
   })
 
-  it('does not spend a slot on an unused authorization and promotes the next contextual candidate', () => {
-    const plan = decideWechatNotificationPrompt({
-      context: 'activity_registration',
+  it('keeps already-consumed authorizations in the presentation bundle so WeChat can render the bottom sheet', () => {
+    const input = {
+      context: 'activity_registration' as const,
       loyaltyAuthorizations: [
-        { ...base, notificationType: 'loyalty_points_credited', templateId: 'points-credit-template', purpose: 'loyalty_balance_change', authorizationContext: 'loyalty_accrual', usesRemaining: 1 },
+        { ...base, notificationType: 'loyalty_points_credited', templateId: 'points-credit-template', purpose: 'loyalty_balance_change', authorizationContext: 'loyalty_accrual', usesRemaining: 1, platformResult: 'accept' },
         { ...base, notificationType: 'loyalty_points_reversed', templateId: 'points-reversal-template', purpose: 'loyalty_balance_change', authorizationContext: 'loyalty_refund' },
       ],
       memberServiceAuthorizations: [
         { ...base, notificationType: 'activity_registration_confirmed', templateId: 'activity-template', authorizationContext: 'activity_registration' },
         { ...base, notificationType: 'member_benefit_issued', templateId: 'benefit-template' },
       ],
-    })
-    expect(plan.map((item) => item.notificationType)).toEqual([
+    }
+    expect(decideWechatNotificationPrompt(input).map((item) => item.notificationType)).toEqual([
       'activity_registration_confirmed', 'member_benefit_issued', 'loyalty_points_reversed',
+    ])
+    expect(decideWechatNotificationPresentation(input).map((item) => item.notificationType)).toEqual([
+      'activity_registration_confirmed', 'member_benefit_issued', 'loyalty_points_credited',
     ])
   })
 })

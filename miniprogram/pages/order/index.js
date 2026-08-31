@@ -28,7 +28,8 @@ const { checkoutRecommendationAttribution } = require('../../utils/recommendatio
 const { publicImageUrl } = require('../../utils/media')
 const { enablePublicShareMenu, publicSharePayload, publicTimelinePayload } = require('../../utils/public-share')
 const { customerErrorMessage, isWechatCancellation } = require('../../utils/customer-error')
-const { requestWechatSubscription } = require('../../utils/wechat-subscription')
+const { requestWechatSubscription, mergeWechatNotificationPromptOptions, extractPromptPresentation } = require('../../utils/wechat-subscription')
+const { rememberPresentationOptions } = require('../../utils/wechat-subscription-presentation-cache')
 const { isPresentableWechatJsapiAction } = require('../../utils/wechat-payment')
 const {
   PENDING_GUEST_PAYMENT_ABANDONMENT_KEY,
@@ -903,11 +904,13 @@ Page({
       checkoutLocked,
       membershipTerms: bootstrap && bootstrap.membershipTerms ? bootstrap.membershipTerms : null,
       membershipInviteVisible: false,
-      wechatNotificationPromptOptions: (results[6] && results[6].authorizations) || [],
-      wechatOrderSelectionPromptOptions: (results[7] && results[7].authorizations) || [],
+      wechatNotificationPromptOptions: extractPromptPresentation(results[6]),
+      wechatOrderSelectionPromptOptions: extractPromptPresentation(results[7]),
       recommendationConfiguration: configuredRecommendations,
       recommendationQuestion: configuredRecommendations.questions[0] || null,
     })
+    rememberPresentationOptions('order_checkout', extractPromptPresentation(results[6]))
+    rememberPresentationOptions('order_selection', extractPromptPresentation(results[7]))
     this.updateCart(cart, sharedCart)
     this.applyFilters()
     this.startSharedCartPolling(request)
@@ -1766,9 +1769,25 @@ Page({
   async ensureBalanceNotificationAuthorizations(context, request) {
     const tableRequest = request || this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
-    const options = context === 'order_selection'
+    let options = context === 'order_selection'
       ? this.data.wechatOrderSelectionPromptOptions
       : this.data.wechatNotificationPromptOptions
+    if (!options || !options.length) {
+      try {
+        const prompts = await Promise.all([
+          getWechatNotificationPrompt(context === 'order_selection' ? 'order_selection' : 'order_checkout'),
+          getWechatNotificationPrompt('coupon_open'),
+          getWechatNotificationPrompt('member_card'),
+        ])
+        options = mergeWechatNotificationPromptOptions(
+          prompts[0] && extractPromptPresentation(prompts[0]),
+          prompts[1] && extractPromptPresentation(prompts[1]),
+          prompts[2] && extractPromptPresentation(prompts[2]),
+        )
+      } catch (_error) {
+        options = []
+      }
+    }
     const result = await requestWechatSubscription(options || [])
     if (!this.isCurrentTableRequest(tableRequest) || !result.outcomes.length) return
     this.setData({

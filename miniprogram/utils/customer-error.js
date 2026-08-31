@@ -45,6 +45,11 @@ const CODE_MESSAGES = Object.freeze({
   ACTIVITY_PAYMENT_PROVIDER_REJECTED: '支付通道未能受理本次付款，本次没有扣款，请稍后重新报名或联系门店',
   ACTIVITY_PAYMENT_RESULT_UNKNOWN: '付款结果确认中，请先查询付款状态，不要重复报名或重复付款',
   AUTH_REQUIRED: '登录状态已失效，请重新进入后重试',
+  PUBLIC_RESERVATION_REQUEST_INVALID: '请求格式有误，请刷新页面后重试',
+  RESERVATION_NOT_FOUND: '找不到这条预约，请刷新后重试',
+  RESERVATION_CANCEL_REQUIRES_STAFF: '该预约需要联系门店协助取消',
+  RESERVATION_STATE_CONFLICT: '预约状态已变化，请刷新后重试',
+  RESERVATION_SESSION_INVALID: '登录状态已失效，请重新进入后重试',
   HTTP_ERROR: '服务暂时未能确认，请稍后重试',
 })
 

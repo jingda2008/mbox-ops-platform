@@ -4,10 +4,13 @@ const {
   getReservationAvailability,
   getReservationPerformances,
   createCustomerReservation,
+  cancelCustomerReservation,
   getReservationPerformanceImpacts,
   acknowledgeReservationPerformanceImpact,
   getReservationPerformanceNotificationAuthorizations,
-  recordReservationPerformanceNotificationAuthorization,
+  getWechatNotificationPrompt,
+  getWechatNotificationAuthorizations,
+  getWechatMemberServiceNotificationAuthorizations,
 } = require('../../utils/api')
 const { redirectToMembershipLogin } = require('../../utils/membership-gate')
 const { randomId } = require('../../utils/id')
@@ -15,6 +18,17 @@ const { getRuntimeConfig } = require('../../config/index')
 const { money, dateTime } = require('../../utils/format')
 const { customerErrorCode, customerErrorMessage } = require('../../utils/customer-error')
 const { enablePublicShareMenu, publicSharePayload, publicTimelinePayload } = require('../../utils/public-share')
+const {
+  requestWechatSubscriptionFromTap,
+  mergeWechatNotificationPromptOptions,
+  extractPromptPresentation,
+  buildReservationSubscriptionPresentation,
+  RESERVATION_SUCCESS_SUBSCRIBE_TYPES,
+} = require('../../utils/wechat-subscription')
+const {
+  rememberPresentationOptions,
+  resolvePresentationOptions,
+} = require('../../utils/wechat-subscription-presentation-cache')
 
 const STATUS_NAMES = { pending: '等待门店确认', confirmed: '预约已确认', arrived: '已经到店', seated: '已经入座', cancelled: '已取消', no_show: '未到店', expired: '已失效' }
 // “我的预约”只保留顾客仍能执行或等待门店确认的记录。到店、入座、过期等
@@ -70,7 +84,7 @@ Page({
   data: {
     loading: true, checking: false, submitting: false, loadingShows: false,
     error: '', success: '', isDevelopment: false, membershipRequired: false,
-    reservations: [], showForm: true, step: 1,
+    reservations: [], showForm: true, step: 1, cancelBusyId: '',
     performanceImpacts: [], impactsError: '', impactBusyId: '', impactNotice: '',
     expandedImpactId: '', impactAttempts: {},
     notificationBusyId: '', notificationNotice: '',
@@ -78,6 +92,7 @@ Page({
     seatOptions: DEFAULT_SEATS, seatIndex: 0, occasionOptions: DEFAULT_OCCASIONS, occasionIndex: 0, occasionNote: '',
     performances: [], selectedPerformanceId: '', selectedPerformance: null,
     availability: null, availabilityText: '选择时间和人数后确认容量', depositText: '', maxGuestCount: 200,
+    wechatSubscriptionPresentationOptions: [],
   },
 
   onLoad() {
@@ -116,10 +131,14 @@ Page({
         return
       }
       this.setData({ membershipRequired: false })
-      const [reservationResult, impactResult, notificationResult] = await Promise.allSettled([
+      const [reservationResult, impactResult, notificationResult, preloadResult] = await Promise.allSettled([
         getReservations(), getReservationPerformanceImpacts(),
         getReservationPerformanceNotificationAuthorizations(),
+        this.preloadWechatSubscriptionPresentationOptions(),
       ])
+      if (preloadResult.status === 'fulfilled' && preloadResult.value.length) {
+        this.setData({ wechatSubscriptionPresentationOptions: preloadResult.value })
+      }
       if (reservationResult.status === 'rejected') throw reservationResult.reason
       const data = reservationResult.value
       const performanceImpacts = impactResult.status === 'fulfilled'
@@ -152,6 +171,13 @@ Page({
           ? '门店会优先安排；具体座位以到店时现场安排为准。'
           : '',
         active: true,
+        canCancel: item.canCancelSelf !== false
+          && EXECUTABLE_RESERVATION_STATUSES.has(item.status)
+          && (
+            !item.customerCancelUntil
+            || (Number.isFinite(Date.parse(item.customerCancelUntil))
+              && Date.parse(item.customerCancelUntil) > now)
+          ),
         performanceImpact: pendingByReservation.get(item.publicId) || null,
         performanceNotificationOption: notificationByReservation.get(item.publicId) || null,
       })).sort((left, right) => String(right.arrivalAt).localeCompare(String(left.arrivalAt)))
@@ -204,22 +230,22 @@ Page({
     if (!option || this.data.notificationBusyId || typeof wx.requestSubscribeMessage !== 'function') return
     this.setData({ notificationBusyId: reservationPublicId, notificationNotice: '' })
     try {
-      const platform = await new Promise((resolve, reject) => wx.requestSubscribeMessage({
-        tmplIds: [option.templateId], success: resolve, fail: reject,
-      }))
-      const platformResult = platform[option.templateId]
-      if (!['accept','reject','ban'].includes(platformResult)) {
+      const performanceOption = Object.assign({}, option, {
+        apiKind: 'reservation_performance',
+        notificationType: 'reservation_performance_revised',
+        reservationPublicId,
+      })
+      const options = mergeWechatNotificationPromptOptions(
+        [performanceOption],
+        this.data.wechatSubscriptionPresentationOptions,
+      )
+      const result = await requestWechatSubscriptionFromTap(options, RESERVATION_SUCCESS_SUBSCRIBE_TYPES)
+      const outcome = (result.outcomes || []).find((item) => item.option.templateId === option.templateId)
+      const platformResult = outcome && outcome.platformResult
+      if (!['accept', 'reject', 'ban'].includes(platformResult)) {
         this.setData({ notificationNotice: '未完成提醒选择，可稍后再试。' })
         return
       }
-      await recordReservationPerformanceNotificationAuthorization({
-        reservationPublicId,
-        policyId: option.policyId,
-        policyVersion: option.policyVersion,
-        templateId: option.templateId,
-        expectedVersion: option.authorizationVersion,
-        platformResult,
-      })
       this.setData({
         notificationNotice: platformResult === 'accept'
           ? '本次预约的演出变更提醒已申请。' : '未开启提醒，不影响预约和到店。',
@@ -271,9 +297,44 @@ Page({
     finally { this.setData({ loadingShows: false }) }
   },
 
-  startNewReservation() { this.setData({ showForm: true, step: 1, error: '', success: '' }) },
+  startNewReservation() {
+    this.setData({ showForm: true, step: 1, error: '', success: '' }, () => {
+      this.preloadWechatSubscriptionPresentationOptions().catch(() => {})
+    })
+  },
   goMembershipLogin() { redirectToMembershipLogin() },
   closeForm() { if (this.data.reservations.length) this.setData({ showForm: false, error: '' }) },
+
+  async cancelReservation(event) {
+    const publicId = event.currentTarget.dataset.id
+    const reservation = this.data.reservations.find((item) => item.publicId === publicId)
+    if (!publicId || !reservation || !reservation.canCancel || this.data.cancelBusyId) return
+    const confirmed = await new Promise((resolve) => {
+      wx.showModal({
+        title: '取消预约',
+        content: `确认取消 ${reservation.scheduledAtText} · ${reservation.partySize}人 的预约吗？`,
+        confirmText: '确认取消',
+        cancelText: '再想想',
+        success: (result) => resolve(Boolean(result.confirm)),
+        fail: (error) => {
+          wx.showToast({ title: (error && error.errMsg) || '确认弹窗未能打开', icon: 'none' })
+          resolve(false)
+        },
+      })
+    })
+    if (!confirmed) return
+    this.setData({ cancelBusyId: publicId, error: '', success: '' })
+    try {
+      await cancelCustomerReservation(publicId)
+      this.setData({ success: '预约已取消。' })
+      await this.loadData()
+    } catch (error) {
+      this.setData({ error: customerErrorMessage(error, '取消预约失败，请稍后重试或联系门店') })
+    } finally {
+      this.setData({ cancelBusyId: '' })
+    }
+  },
+
   onNameInput(event) { this.setData({ customerName: event.detail.value }) },
   onContactInput(event) { this.setData({ contact: event.detail.value }) },
   onPartySizeInput(event) { this.setData({ partySize: Number(event.detail.value) || 0 }) },
@@ -305,20 +366,91 @@ Page({
         return this.setData({ error: '请先选择当前可接受预约的时间与人数' })
       }
     }
-    this.setData({ step: Math.min(3, this.data.step + 1), error: '' })
+    const step = Math.min(3, this.data.step + 1)
+    this.setData({ step, error: '' }, () => {
+      if (step === 3) this.preloadWechatSubscriptionPresentationOptions().catch(() => {})
+    })
   },
   previousStep() { this.setData({ step: Math.max(1, this.data.step - 1), error: '' }) },
 
-  async submitReservation() {
+  async preloadWechatSubscriptionPresentationOptions() {
+    try {
+      const empty = { presentation: [], authorizations: [] }
+      // reservation_submit presentationPolicy returns the published reservation
+      // template even when the guest has no existing reservation yet.  Without it,
+      // first-time submit falls back to member/loyalty fillers only.
+      const [loyalty, memberService, performance, reservationPrompt, activityPrompt, checkoutPrompt, memberPrompt, couponPrompt] = await Promise.all([
+        getWechatNotificationAuthorizations().catch(() => ({ authorizations: [] })),
+        getWechatMemberServiceNotificationAuthorizations().catch(() => ({ authorizations: [] })),
+        getReservationPerformanceNotificationAuthorizations().catch(() => ({ authorizations: [] })),
+        getWechatNotificationPrompt('reservation_submit').catch(() => empty),
+        getWechatNotificationPrompt('activity_registration').catch(() => empty),
+        getWechatNotificationPrompt('order_checkout').catch(() => empty),
+        getWechatNotificationPrompt('member_card').catch(() => empty),
+        getWechatNotificationPrompt('coupon_open').catch(() => empty),
+      ])
+      const performanceOptions = (performance.authorizations || []).map((item) => Object.assign({}, item, {
+        apiKind: 'reservation_performance',
+        notificationType: 'reservation_performance_revised',
+      }))
+      const options = buildReservationSubscriptionPresentation(
+        extractPromptPresentation(reservationPrompt),
+        performanceOptions,
+        (memberService.authorizations || []).map((item) => Object.assign({}, item, { apiKind: 'member_service' })),
+        (loyalty.authorizations || []).map((item) => Object.assign({}, item, { apiKind: 'loyalty' })),
+        extractPromptPresentation(activityPrompt),
+        extractPromptPresentation(checkoutPrompt),
+        extractPromptPresentation(memberPrompt),
+        extractPromptPresentation(couponPrompt),
+      )
+      this._presentationOptions = options
+      rememberPresentationOptions('reservation_submit', options)
+      rememberPresentationOptions('activity_registration', extractPromptPresentation(activityPrompt))
+      rememberPresentationOptions('order_checkout', extractPromptPresentation(checkoutPrompt))
+      rememberPresentationOptions('member_card', extractPromptPresentation(memberPrompt))
+      if (options.length) this.setData({ wechatSubscriptionPresentationOptions: options })
+      return options
+    } catch (_error) {
+      return this.data.wechatSubscriptionPresentationOptions || []
+    }
+  },
+
+  submitReservation() {
     if (this.data.membershipRequired) {
       redirectToMembershipLogin()
       return
     }
+    if (this.data.submitting || this._reservationSubmitPending) return
+    const customerName = this.data.customerName.trim()
+    const contact = this.data.contact.trim()
+    if (!customerName) {
+      this.setData({ error: '请填写预约称呼', success: '' })
+      return
+    }
+    if (contact.length < 3) {
+      this.setData({ error: '请填写可联系的手机号或微信', success: '' })
+      return
+    }
+    const options = resolvePresentationOptions(
+      'reservation_submit',
+      this._presentationOptions,
+      this.data.wechatSubscriptionPresentationOptions,
+    )
+    this._reservationSubmitPending = true
+    requestWechatSubscriptionFromTap(options, RESERVATION_SUCCESS_SUBSCRIBE_TYPES).finally(() => {
+      this._reservationSubmitPending = false
+      this.completeReservationSubmit()
+    })
+  },
+
+  async completeReservationSubmit() {
     if (this.data.submitting) return
     const customerName = this.data.customerName.trim()
     const contact = this.data.contact.trim()
-    if (!customerName) return this.setData({ error: '请填写预约称呼', success: '' })
-    if (contact.length < 3) return this.setData({ error: '请填写可联系的手机号或微信', success: '' })
+    if (!customerName || contact.length < 3) {
+      this.setData({ error: !customerName ? '请填写预约称呼' : '请填写可联系的手机号或微信', success: '' })
+      return
+    }
     this.setData({ submitting: true, error: '', success: '' })
     try {
       const availability = await getReservationAvailability(this.arrivalAt(), this.data.partySize)
@@ -335,6 +467,7 @@ Page({
         reservationPolicyVersion: Number((availability.depositRule || {}).policyVersion),
         preferredScheduleId: show ? show.id : null,
       })
+      this.preloadWechatSubscriptionPresentationOptions().catch(() => {})
       this.setData({ success: '预约已提交，门店确认后会更新状态。', occasionNote: '', showForm: false, step: 1 })
       await this.loadData()
     } catch (error) { this.setData({ error: customerErrorMessage(error, '预约提交失败') }) }

@@ -18,7 +18,7 @@ describe('WeChat notification prompt API', () => {
     })
     const response = await app.inject({ method: 'GET', url: '/public/mini/wechat-notification-prompt?context=order_checkout' })
     expect(response.statusCode).toBe(200)
-    expect(response.json()).toEqual({ data: { available: false, context: 'order_checkout', authorizations: [] } })
+    expect(response.json()).toEqual({ data: { available: false, context: 'order_checkout', authorizations: [], presentation: [] } })
     expect(query).not.toHaveBeenCalled()
     const malformed = await app.inject({ method: 'GET', url: '/public/mini/wechat-notification-prompt?context=anything_else' })
     expect(malformed.statusCode).toBe(400)

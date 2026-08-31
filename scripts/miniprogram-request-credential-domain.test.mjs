@@ -102,6 +102,36 @@ function responseWith(setCookie, cookies) {
   }
 }
 
+test('body-less DELETE requests do not send application/json content-type', async () => {
+  const fixture = await loadRequestModule()
+  fixture.storage.set(RESERVATION_KEY, 'mbox_reservation_session=reservation-a')
+
+  await fixture.requestModule.request('/api/public/reservations/reservation-test', {
+    method: 'DELETE',
+    requireTableSession: false,
+    headers: { 'idempotency-key': 'reservation-cancel-contract' },
+  })
+
+  const headers = fixture.calls[0].header
+  assert.equal(headers['content-type'], undefined)
+  assert.equal(headers['Content-Type'], undefined)
+  assert.equal(headers['idempotency-key'], 'reservation-cancel-contract')
+})
+
+test('POST requests still send application/json content-type', async () => {
+  const fixture = await loadRequestModule()
+  fixture.storage.set(RESERVATION_KEY, 'mbox_reservation_session=reservation-a')
+
+  await fixture.requestModule.request('/api/public/reservations', {
+    method: 'POST',
+    requireTableSession: false,
+    data: { customerName: '测试' },
+    headers: { 'idempotency-key': 'reservation-create-contract' },
+  })
+
+  assert.equal(fixture.calls[0].header['content-type'], 'application/json')
+})
+
 test('an ended guest table session clears only the current local table binding', async () => {
   const fixture = await loadRequestModule()
   fixture.responses.push({ statusCode: 401, data: { error: { code: 'GUEST_SESSION_INVALID', message: '已失效' } }, header: {} })

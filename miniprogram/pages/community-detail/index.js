@@ -18,7 +18,12 @@ const { money, dateTime } = require('../../utils/format')
 const { publicImageUrl } = require('../../utils/media')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 const { customerErrorMessage, isWechatCancellation } = require('../../utils/customer-error')
-const { requestWechatSubscription } = require('../../utils/wechat-subscription')
+const {
+  requestWechatSubscription,
+  mergeWechatNotificationPromptOptions,
+  extractPromptPresentation,
+} = require('../../utils/wechat-subscription')
+const { rememberPresentationOptions } = require('../../utils/wechat-subscription-presentation-cache')
 const { enablePublicShareMenu } = require('../../utils/public-share')
 
 const KIND_NAMES = { member_night: '会员之夜', hike: '城市轻徒步', camping: '露营计划', city_walk: '城市漫游', music_picnic: '音乐野餐', proposal: '特别企划', other: '超嗨活动' }
@@ -422,6 +427,7 @@ Page({
     // rather than merely being told to re-enter an app that may reuse a cache.
     wechatIdentityRefreshRequired: false,
     wechatNotificationPromptOptions: [],
+    wechatSubscriptionPresentationOptions: [],
   },
 
   onLoad(options) {
@@ -490,10 +496,21 @@ Page({
         })
         return
       }
-      const [raw, notificationPrompt] = await Promise.all([
+      const [raw, activityPrompt, memberPrompt, couponPrompt] = await Promise.all([
         getActivity(this.data.id),
         getWechatNotificationPrompt('activity_registration').catch(() => ({ authorizations: [] })),
+        getWechatNotificationPrompt('member_card').catch(() => ({ authorizations: [] })),
+        getWechatNotificationPrompt('coupon_open').catch(() => ({ authorizations: [] })),
+        this.preloadWechatSubscriptionPresentationOptions(),
       ])
+      const notificationPrompt = {
+        authorizations: mergeWechatNotificationPromptOptions(
+          activityPrompt.authorizations,
+          memberPrompt.authorizations,
+          couponPrompt.authorizations,
+        ),
+        presentation: extractPromptPresentation(activityPrompt),
+      }
       if (!raw) throw new Error('活动已结束、暂停或不在您的可见范围内')
       let loyaltyBenefits = []
       try {
@@ -530,8 +547,10 @@ Page({
         previewOnly: false,
         membershipInviteVisible: false,
         wechatNotificationPromptOptions: notificationPrompt.authorizations || [],
+        wechatSubscriptionPresentationOptions: notificationPrompt.presentation || [],
         ...activitySelection(activity, this.data.selectedPackagePublicId, this.data.partySize),
       })
+      rememberPresentationOptions('activity_registration', notificationPrompt.presentation || [])
     } catch (error) {
       if (error && error.code === 'ACTIVITY_MEMBERSHIP_REQUIRED') {
         this.setData({
@@ -700,10 +719,23 @@ Page({
     })
   },
 
+  async preloadWechatSubscriptionPresentationOptions() {
+    try {
+      const prompt = await getWechatNotificationPrompt('activity_registration')
+      const options = extractPromptPresentation(prompt)
+      this._presentationOptions = options
+      rememberPresentationOptions('activity_registration', options)
+      if (options.length) this.setData({ wechatSubscriptionPresentationOptions: options })
+      return options
+    } catch (_error) {
+      return this.data.wechatSubscriptionPresentationOptions || []
+    }
+  },
+
   async offerActivityRegistrationNotifications() {
-    // The server-side decision engine always places the activity reminder
-    // first, then fills the remaining two eligible template positions.
-    await requestWechatSubscription(this.data.wechatNotificationPromptOptions || [])
+    const options = this._presentationOptions || this.data.wechatSubscriptionPresentationOptions || []
+    await requestWechatSubscription(options)
+    this.preloadWechatSubscriptionPresentationOptions().catch(() => {})
   },
 
   async register() {

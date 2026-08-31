@@ -3,10 +3,13 @@ import type { PublicCustomerExperienceContext } from './customer-experience-serv
 import type { ScopedPostgresTransactionRunner } from './transaction-runner.js'
 import { WechatLoyaltyNotificationRepository } from './wechat-loyalty-notification-repository.js'
 import { WechatMemberServiceNotificationRepository } from './wechat-member-service-notification-repository.js'
+import { ReservationPerformanceNotificationRepository } from './reservation-performance-notification-repository.js'
 import {
+  decideWechatNotificationPresentation,
   decideWechatNotificationPrompt,
   WECHAT_NOTIFICATION_PROMPT_CONTEXTS,
   type WechatNotificationPromptContext,
+  type WechatNotificationPromptOption,
 } from './wechat-notification-prompt-decision-engine.js'
 
 interface Options {
@@ -24,18 +27,59 @@ export const wechatNotificationPromptApiPlugin: FastifyPluginAsync<Options> = as
       })
     }
     if (!options.channelConfigured) return reply.send({
-      data: { available: false, context, authorizations: [] },
+      data: { available: false, context, authorizations: [], presentation: [] },
     })
     const customer = await options.resolvePublicContext(request)
-    const authorizations = await options.transactions.run(customer.scope, async (transaction) => {
-      const [loyaltyAuthorizations, memberServiceAuthorizations] = await Promise.all([
+    const payload = await options.transactions.run(customer.scope, async (transaction) => {
+      const [loyaltyAuthorizations, memberServiceAuthorizations, performancePolicy] = await Promise.all([
         new WechatLoyaltyNotificationRepository(transaction).authorizationOptions(customer.customerId, true),
         new WechatMemberServiceNotificationRepository(transaction).authorizationOptions(customer.customerId, true),
+        reservationPerformancePresentation(context, transaction, options.channelConfigured),
       ])
-      return decideWechatNotificationPrompt({ context, loyaltyAuthorizations, memberServiceAuthorizations })
+      const input = {
+        context,
+        loyaltyAuthorizations,
+        memberServiceAuthorizations,
+        reservationPerformanceAuthorizations: performancePolicy ? [performancePolicy] : [],
+      }
+      return {
+        authorizations: decideWechatNotificationPrompt(input),
+        presentation: decideWechatNotificationPresentation(input),
+      }
     }, { readOnly: true })
-    return reply.send({ data: { available: authorizations.length > 0, context, authorizations } })
+    return reply.send({
+      data: {
+        available: payload.authorizations.length > 0,
+        context,
+        authorizations: payload.authorizations,
+        presentation: payload.presentation,
+      },
+    })
   })
+}
+
+async function reservationPerformancePresentation(
+  context: WechatNotificationPromptContext,
+  transaction: Parameters<Parameters<Options['transactions']['run']>[1]>[0],
+  channelConfigured: boolean,
+): Promise<WechatNotificationPromptOption | null> {
+  if (context !== 'reservation_submit' && context !== 'reservation_performance') return null
+  const policy = await new ReservationPerformanceNotificationRepository(transaction)
+    .presentationPolicy(channelConfigured)
+  if (!policy || !policy.templateId.trim()) return null
+  return {
+    apiKind: 'reservation_performance',
+    policyId: policy.policyId,
+    notificationType: 'reservation_performance_revised',
+    policyVersion: policy.policyVersion,
+    templateId: policy.templateId,
+    decision: policy.decision,
+    platformResult: policy.platformResult,
+    authorizationVersion: policy.authorizationVersion,
+    usesRemaining: policy.usesRemaining,
+    changedAt: policy.changedAt,
+    reservationPublicId: policy.reservationPublicId || undefined,
+  }
 }
 
 function promptContext(value: unknown): WechatNotificationPromptContext {

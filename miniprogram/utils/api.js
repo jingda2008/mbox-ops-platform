@@ -530,6 +530,14 @@ async function createCustomerReservation(input) {
   return data
 }
 
+async function cancelCustomerReservation(publicId, idempotencyKey) {
+  return (await publicRequest(`/api/public/reservations/${encodeURIComponent(publicId)}`, {
+    method: 'DELETE',
+    data: {},
+    headers: { 'idempotency-key': idempotencyKey || randomId(`reservation-cancel-${publicId}`) },
+  })).data
+}
+
 async function getReservationPerformanceImpacts() {
   return (await publicRequest('/api/public/reservation/performance-impacts')).data
 }
@@ -787,6 +795,7 @@ module.exports = {
   registerActivity, getActivityRegistrationPayment, startActivityRegistrationPayment,
   queryActivityRegistrationPayment, cancelActivityRegistration,
   getReservations, getReservationAvailability, getReservationPerformances, createCustomerReservation,
+  cancelCustomerReservation,
   getReservationPerformanceImpacts, acknowledgeReservationPerformanceImpact,
   getReservationPerformanceNotificationAuthorizations,
   recordReservationPerformanceNotificationAuthorization,

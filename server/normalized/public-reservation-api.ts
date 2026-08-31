@@ -1208,6 +1208,14 @@ function publicDepositRule(policy: ReservationPolicyRow, minimumSpendMinor: numb
 }
 
 function publicReservation(reservation: Reservation, maskedContact: string): JsonObject {
+  const customerCancelUntil = reservation.customerCancelUntil
+  const cancelUntilMs = customerCancelUntil === null || customerCancelUntil === undefined
+    ? null
+    : Date.parse(customerCancelUntil)
+  const withinCancelWindow = cancelUntilMs === null || (
+    Number.isFinite(cancelUntilMs) && cancelUntilMs > Date.now()
+  )
+  const canCancelSelf = ['pending', 'confirmed'].includes(reservation.status) && withinCancelWindow
   return {
     publicId: reservation.publicId,
     customerName: reservation.customerName,
@@ -1227,6 +1235,8 @@ function publicReservation(reservation: Reservation, maskedContact: string): Jso
     priorityBooking: reservation.annualPriorityRuleId === null || reservation.annualPriorityRuleId === undefined
       ? null : { requestHoldMinutes: reservation.annualPriorityHoldMinutes ?? null },
     cancellationPolicy: reservation.cancellationPolicySnapshot,
+    customerCancelUntil: customerCancelUntil ?? null,
+    canCancelSelf,
   }
 }
 

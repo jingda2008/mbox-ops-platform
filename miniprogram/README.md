@@ -124,6 +124,13 @@ miniprogram-release-evidence-<commit>.tar.gz
 - “舞台先确认、客户后付款”的点歌状态与微信支付接口。
 - 客户支付意图、回调查询、退款状态和订阅消息接口。
 
+## 微信订阅消息（顾客场景）
+
+- 在用户点击手势内调用`wx.requestSubscribeMessage`，一次最多 3 个模板；底部多选由服务端`presentation`与本地排序共同决定。
+- 场景：`activity_registration`、`order_checkout`、`member_card`、`coupon_open`、`reservation_submit`、`reservation_performance`。
+- 预约提交必须优先请求`reservation_submit`，以展示已发布的「预约到店提醒」模板；不能只依赖「已有预约的授权列表」（首次预约时该列表为空）。
+- 跨页可用`wechat-subscription-presentation-cache`缓存展示选项；拒绝授权不影响预约、报名、点单主流程。
+
 这些缺口不会由小程序本地数据掩盖。
 
 ## 开发者工具验收
@@ -141,3 +148,5 @@ miniprogram-release-evidence-<commit>.tar.gz
 11. 检查加载、网络错误、无订单、无权益、无歌单和无任务状态，确认页面均有可读反馈且无横向溢出。
 12. 查看隐私说明，确认正式发布前待补充项与实际接入能力一致。
 13. 在预约页提交称呼、人数、时间、区域和场景，确认列表只显示本人预约；重复同一网络请求不得生成第二条预约。
+14. 预约第 3 步点提交时，微信订阅弹窗应出现「预约到店提醒」（可与另外最多 2 条会员/积分模板同框）；拒绝不影响预约提交成功。
+15. 「我的预约」对 pending/confirmed 记录可取消，确认弹窗文案可读。

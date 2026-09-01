@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.0-rc.166 - 2026-09-01
+
+- Lets staff enter liquid recipe quantities, stock counts and waste in
+  millilitres with visible unit suffixes, while safely converting historical
+  bottle-based ledgers through each item's verified package volume.
+- Requires newly created liquid inventory items to use millilitres and retain a
+  package volume, without rewriting existing stock, costs or movement history.
+- Prioritizes the published WeChat subscription templates for reservation
+  arrival and Superhigh activity registration, performance start and schedule
+  changes; normalized migration 155 updates the corresponding policies.
+- Repairs stale release tests for migration 155, the September tier-policy
+  cutover, Mini Program subscription fixtures and current API response shapes.
+
 ## 1.0.0-rc.165 - 2026-08-30
 
 - Allows only published menu images and public media assets to be embedded by

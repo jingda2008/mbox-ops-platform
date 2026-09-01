@@ -531,12 +531,13 @@ export class TableManagementRepository {
     const result = await this.transaction.query<AreaRow>(`
       UPDATE mbox.areas
       SET name = $4, area_type = $5, sort_order = $6,
-          layout_snapshot = $7::jsonb, status = $8
+          layout_snapshot = COALESCE($7::jsonb, layout_snapshot), status = $8
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
       RETURNING id, code, name, area_type, sort_order, layout_snapshot, status,
         created_at::text, updated_at::text
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.areaId,
-      input.name, input.areaType, input.sortOrder, JSON.stringify(input.layoutSnapshot ?? {}), input.status])
+      input.name, input.areaType, input.sortOrder,
+      input.layoutSnapshot === undefined ? null : JSON.stringify(input.layoutSnapshot), input.status])
     return mapArea(requiredRow(result.rows[0], '区域'))
   }
 
@@ -573,7 +574,7 @@ export class TableManagementRepository {
         UPDATE mbox.tables
         SET area_id = $4::uuid, code = $5, display_name = $6, capacity = $7,
             minimum_spend_minor = $8::bigint, currency = $9,
-            layout_snapshot = $10::jsonb, status = $11
+            layout_snapshot = COALESCE($10::jsonb, layout_snapshot), status = $11
         WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
         RETURNING *
       )
@@ -593,7 +594,7 @@ export class TableManagementRepository {
        AND active_session.status IN ('open', 'closing')
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.tableId, input.areaId,
       input.code, input.displayName, input.capacity, input.minimumSpendMinor ?? null, input.currency ?? 'CNY',
-      JSON.stringify(input.layoutSnapshot ?? {}), input.status])
+      input.layoutSnapshot === undefined ? null : JSON.stringify(input.layoutSnapshot), input.status])
     return mapTable(requiredRow(result.rows[0], '桌台'))
   }
 

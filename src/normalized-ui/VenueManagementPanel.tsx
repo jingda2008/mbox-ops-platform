@@ -73,7 +73,7 @@ export function VenueManagementPanel({ api }: { api: NormalizedApiClient }) {
     const sortOrder = integer(areaDraft.sortOrder, -100_000, 100_000)
     if (sortOrder === null) return setNotice({ kind: 'error', text: '区域排序必须是有效整数' })
     const payload = { code: areaDraft.code.trim(), name: areaDraft.name.trim(), areaType: areaDraft.areaType,
-      sortOrder, layoutSnapshot: {}, status: areaDraft.status }
+      sortOrder, ...(areaDraft.id === null ? { layoutSnapshot: {} } : {}), status: areaDraft.status }
     setBusy(true)
     try {
       if (areaDraft.id === null) await api.postEndpoint('/api/table-management/areas', payload, { idempotencyKey: key('area-create') })
@@ -93,7 +93,7 @@ export function VenueManagementPanel({ api }: { api: NormalizedApiClient }) {
     const minimumSpendMinor = money(tableDraft.minimumSpendYuan)
     if (capacity === null || minimumSpendMinor === undefined) return setNotice({ kind: 'error', text: '请核对桌台容量和最低消费' })
     const payload = { code: tableDraft.code.trim(), displayName: tableDraft.displayName.trim(), areaId: tableDraft.areaId,
-      capacity, minimumSpendMinor, currency: 'CNY', layoutSnapshot: {}, status: tableDraft.status }
+      capacity, minimumSpendMinor, currency: 'CNY', ...(tableDraft.id === null ? { layoutSnapshot: {} } : {}), status: tableDraft.status }
     setBusy(true)
     try {
       if (tableDraft.id === null) await api.postEndpoint('/api/table-management/tables', payload, { idempotencyKey: key('table-create') })

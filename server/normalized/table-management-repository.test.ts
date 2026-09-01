@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
 import { NormalizedCommandExecutor } from './command-executor.js'
 import {
@@ -13,7 +13,7 @@ import {
   TableManagementRepository,
   canViewAllTables,
 } from './table-management-repository.js'
-import { ScopedPostgresTransactionRunner, type PostgresPool } from './transaction-runner.js'
+import { ScopedPostgresTransactionRunner, type PostgresPool, type ScopedTransaction } from './transaction-runner.js'
 
 const databaseUrl = process.env.TEST_NORMALIZED_DATABASE_URL
 const integration = databaseUrl ? describe : describe.skip
@@ -46,6 +46,31 @@ describe('table management authorization rules', () => {
       participantPublicIds:[participantPublicId],movedByEmployeeId:randomUUID(),
       reason:'顾客确认并桌',idempotencyKey:'permission-race-0001',requestFingerprint:'permission-race',
     })).rejects.toBeInstanceOf(StaffAccessDeniedError)
+  })
+
+  it('preserves an existing area layout when an ordinary edit omits layoutSnapshot', async () => {
+    const areaId = randomUUID()
+    const query = vi.fn(async <Row extends Record<string, unknown>>(_sql: string, _values: readonly unknown[] = []) => ({
+      rows: [{
+        id: areaId, code: 'OUTSIDE', name: '室外区', area_type: 'outdoor', sort_order: 10,
+        layout_snapshot: { mapVersion: 2, xPct: 12 }, status: 'active',
+        created_at: '2026-09-01T00:00:00.000Z', updated_at: '2026-09-02T00:00:00.000Z',
+      } as Row],
+      rowCount: 1,
+    }))
+    const transaction: ScopedTransaction = {
+      scope: { tenantId: randomUUID(), storeId: randomUUID() },
+      query,
+    }
+
+    const result = await new TableManagementRepository(transaction).updateArea({
+      areaId, name: '室外区', areaType: 'outdoor', sortOrder: 10, status: 'active',
+    })
+
+    expect(query).toHaveBeenCalledTimes(1)
+    expect(query.mock.calls[0]?.[0]).toContain('layout_snapshot = COALESCE($7::jsonb, layout_snapshot)')
+    expect(query.mock.calls[0]?.[1]?.[6]).toBeNull()
+    expect(result.layoutSnapshot).toEqual({ mapVersion: 2, xPct: 12 })
   })
 })
 

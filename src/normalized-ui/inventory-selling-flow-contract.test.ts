@@ -28,6 +28,9 @@ describe('inventory-to-sale workflow contract', () => {
     expect(catalog).toContain('历史瓶数自动换算')
     expect(catalog).toContain('inventoryQuantityForStorage(')
     expect(catalog).toContain('inventoryQuantityForEmployee(')
+    expect(catalog).toContain('setRecipeInstructionsSnapshot(recipe?.instructionsSnapshot ?? {})')
+    expect(catalog).toContain('instructionsSnapshot: recipeInstructionsSnapshot')
+    expect(catalog).toContain('sanitizeProductDisplaySnapshot(product.productSnapshot)')
     expect(catalog).toContain("unit={inventoryUnitLabel(inventoryEmployeeUnit(item.categoryCode, item.baseUnit))}")
     expect(staff).toContain('formatEmployeeInventoryQuantity(item)')
     expect(staff).toContain('inventoryQuantityForStorage(')
@@ -35,5 +38,13 @@ describe('inventory-to-sale workflow contract', () => {
     expect(staff).toContain('液体统一填写毫升')
     expect(css).toContain('.inventory-selling-flow')
     expect(css).toContain('.catalog-sale-readiness')
+  })
+
+  it('does not erase venue layout coordinates during a text or status edit', () => {
+    const venue = read('src/normalized-ui/VenueManagementPanel.tsx')
+    expect(venue).toContain("...(areaDraft.id === null ? { layoutSnapshot: {} } : {})")
+    expect(venue).toContain("...(tableDraft.id === null ? { layoutSnapshot: {} } : {})")
+    expect(venue).not.toContain('sortOrder, layoutSnapshot: {}, status: areaDraft.status')
+    expect(venue).not.toContain("currency: 'CNY', layoutSnapshot: {}, status: tableDraft.status")
   })
 })

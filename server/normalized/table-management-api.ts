@@ -526,28 +526,30 @@ function commandBase<Input extends Record<string, unknown>>(
   }
 }
 
-function readArea(body: Record<string, unknown>, includeCode: boolean): Omit<ManagedArea,
-  'id' | 'code' | 'createdAt' | 'updatedAt'> & { code?: string } {
+function readArea(body: Record<string, unknown>, includeCode: boolean): Pick<ManagedArea,
+  'name' | 'areaType' | 'sortOrder' | 'status'> & { code?: string; layoutSnapshot?: JsonObject } {
   return {
     ...(includeCode ? { code: requiredString(body.code, 'code', 32) } : {}),
     name: requiredString(body.name, 'name', 120),
     areaType: readEnum(body.areaType, 'areaType', ['indoor', 'outdoor', 'bar', 'stage', 'vip', 'other']),
     sortOrder: readInteger(body.sortOrder, 'sortOrder', -100_000, 100_000),
-    layoutSnapshot: optionalObject(body.layoutSnapshot, 'layoutSnapshot') ?? {},
+    ...(body.layoutSnapshot === undefined
+      ? {} : { layoutSnapshot: optionalObject(body.layoutSnapshot, 'layoutSnapshot') }),
     status: readEnum(body.status, 'status', ['active', 'paused', 'retired']) as AreaStatus,
   }
 }
 
-function readTable(body: Record<string, unknown>, includeCode: boolean): Omit<ManagedTable,
-  'id' | 'areaId' | 'areaCode' | 'areaName' | 'code' | 'assignedToActor' | 'activeSessionId' |
-  'activeGuestCount' | 'createdAt' | 'updatedAt'> & { code?: string } {
+function readTable(body: Record<string, unknown>, includeCode: boolean): Pick<ManagedTable,
+  'displayName' | 'capacity' | 'minimumSpendMinor' | 'currency' | 'status'>
+  & { code?: string; layoutSnapshot?: JsonObject } {
   return {
     ...(includeCode ? { code: requiredString(body.code, 'code', 32) } : {}),
     displayName: requiredString(body.displayName, 'displayName', 120),
     capacity: readInteger(body.capacity, 'capacity', 1, 200),
     minimumSpendMinor: optionalInteger(body.minimumSpendMinor, 'minimumSpendMinor', 0, Number.MAX_SAFE_INTEGER),
     currency: optionalString(body.currency, 'currency', 3) ?? 'CNY',
-    layoutSnapshot: optionalObject(body.layoutSnapshot, 'layoutSnapshot') ?? {},
+    ...(body.layoutSnapshot === undefined
+      ? {} : { layoutSnapshot: optionalObject(body.layoutSnapshot, 'layoutSnapshot') }),
     status: readEnum(body.status, 'status', ['available', 'paused', 'retired']) as TableStatus,
   }
 }

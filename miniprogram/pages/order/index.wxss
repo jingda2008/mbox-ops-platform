@@ -733,23 +733,11 @@
 .product-detail-close {
   position: absolute;
   z-index: 2;
-  top: 18rpx;
-  right: 18rpx;
-  display: flex;
-  width: 88rpx;
-  height: 88rpx;
-  margin: 0;
-  padding: 0;
-  align-items: center;
-  justify-content: center;
-  border: 1rpx solid rgba(255, 255, 255, .58);
-  border-radius: 44rpx;
-  background: rgba(18, 22, 19, .72);
+  top: 0;
+  right: 0;
   color: #fff;
-  font-size: 42rpx;
-  font-weight: 300;
-  line-height: 88rpx;
 }
+.product-detail-close::before { border-color: rgba(255, 255, 255, .58); background: rgba(18, 22, 19, .72); }
 .product-detail-close::after,
 .product-detail-footer button::after {
   border: 0;
@@ -1170,11 +1158,11 @@
 .recommend-entry__action-icon--shake text { transform: rotate(-18deg); }
 .recommend-question { z-index: 62; display: flex; padding: 28rpx; align-items: flex-end; box-sizing: border-box; }
 .recommend-question__sheet { position: relative; width: 100%; max-height: calc(100vh - 8px); padding: 32rpx 26rpx calc(28rpx + env(safe-area-inset-bottom)); border-radius: 28rpx 28rpx 0 0; background: #fffcf7; box-shadow: 0 -18rpx 56rpx rgba(22, 18, 14, .22); box-sizing: border-box; }
-.recommend-question__close { position: absolute; top: 18rpx; right: 22rpx; min-width: 112rpx; min-height: 64rpx; margin: 0; padding: 0 16rpx; border: 1rpx solid #d6cec4; border-radius: 32rpx; background: #f5f1eb; color: #62594f; font-size: 20rpx; line-height: 62rpx; }
+.recommend-question__close { position: absolute; top: -2rpx; right: 18rpx; color: #62594f; }
 .recommend-question__close::after { border: 0; }
 .recommend-question__head text { display: block; }
 .recommend-question__head text:first-child { color: #8f6b40; font-size: 18rpx; font-weight: 700; letter-spacing: 2rpx; }
-.recommend-question__head text:last-child { margin-top: 8rpx; padding-right: 132rpx; color: #2e2924; font-family: "Songti SC", "STSong", serif; font-size: 34rpx; font-weight: 650; line-height: 1.35; }
+.recommend-question__head text:last-child { margin-top: 8rpx; padding-right: 112rpx; color: #2e2924; font-family: "Songti SC", "STSong", serif; font-size: 34rpx; font-weight: 650; line-height: 1.35; }
 .recommend-question__progress { display: grid; margin-top: 22rpx; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8rpx; }
 .recommend-question__progress text { height: 6rpx; border-radius: 3rpx; background: #e5e0d8; }
 .recommend-question__progress text.is-active { background: #b5904f; }
@@ -1325,9 +1313,9 @@
    settlement until the table ledger confirms it. */
 .payment-result { z-index: 60; align-items: flex-end; }
 .payment-result__sheet { position: relative; width: 100%; padding: 38rpx 28rpx calc(28rpx + env(safe-area-inset-bottom)); border-radius: 28rpx 28rpx 0 0; background: #fffcf7; box-shadow: 0 -18rpx 58rpx rgba(25, 20, 16, .24); text-align: center; }
-.payment-result__close { position: absolute; top: 18rpx; right: 22rpx; display: flex; width: 138rpx; min-width: 138rpx; height: 76rpx; min-height: 76rpx; margin: 0; padding: 0; align-items: center; justify-content: center; border: 1rpx solid #d6cec4; border-radius: 38rpx; background: #f5f1eb; box-shadow: 0 4rpx 12rpx rgba(45, 38, 31, .08); color: #62594f; font-size: 20rpx; font-weight: 650; line-height: 1; }
+.payment-result__close { position: absolute; top: -2rpx; right: 18rpx; color: #62594f; }
 .payment-result__close::after { border: 0; }
-.payment-result__close--pressed { background: #eae4dc; transform: scale(.97); }
+.payment-result__close--pressed::before { background: #eae4dc; transform: translate(-50%, -50%) scale(.96); }
 .payment-result__mark { display: flex; width: 76rpx; height: 76rpx; margin: 10rpx auto 18rpx; align-items: center; justify-content: center; border-radius: 50%; background: #eef0ec; color: #615b53; font-size: 38rpx; font-weight: 750; }
 .payment-result__mark--success { background: #e4f0e8; color: #315d46; }
 .payment-result__mark--pending { background: #f4ecd9; color: #856430; }
@@ -1354,7 +1342,6 @@
   .recommend-entry__actions button { min-height: 40px; }
   .recommend-question { padding-right: 18rpx; padding-left: 18rpx; }
   .recommend-question__sheet { padding-right: 18rpx; padding-left: 18rpx; }
-  .recommend-question__close { min-width: 96rpx; min-height: 88rpx; line-height: 86rpx; }
   .recommend-question__head text:last-child { padding-right: 110rpx; font-size: 30rpx; }
   .recommend-question__options { gap: 8rpx; }
   .recommend-question__options button { min-height: 88rpx; padding: 8rpx; font-size: 20rpx; }
@@ -1369,7 +1356,6 @@
   .checkout-confirm__sheet { max-height: 90vh; padding-right: 18rpx; padding-left: 18rpx; }
   .checkout-confirm__head { min-height: 70rpx; }
   .checkout-confirm__title { font-size: 30rpx; }
-  .checkout-confirm__close { width: 44px; min-width: 44px; height: 44px; min-height: 44px; padding: 0; border: 0; background: transparent; font-size: 32rpx; line-height: 44px; }
   .checkout-confirm__lines { max-height: 46vh; }
   .checkout-confirm__line { min-height: 96rpx; gap: 8rpx; }
   .checkout-confirm__actions { gap: 4rpx; }
@@ -1378,7 +1364,7 @@
   .checkout-confirm__footer { gap: 8rpx; }
   .checkout-confirm__footer-button { min-height: 44px; line-height: 44px; }
   .payment-result__sheet { padding-right: 20rpx; padding-left: 20rpx; }
-  .payment-result__close { top: 14rpx; right: 18rpx; width: 126rpx; min-width: 126rpx; min-height: 40px; height: 40px; border-radius: 20px; font-size: 19rpx; }
+  .payment-result__close { right: 14rpx; }
   .payment-result__actions { gap: 8rpx; }
   .payment-result__actions button { width: 204rpx; min-height: 40px; flex-basis: 204rpx; border-radius: 20px; font-size: 20rpx; line-height: 40px; }
   .payment-result__actions .primary-button { width: 232rpx; flex-basis: 232rpx; }
@@ -1454,47 +1440,27 @@
 }
 
 .checkout-confirm__head {
-  padding-right: 224rpx;
+  padding-right: 112rpx;
 }
 
 .checkout-confirm__close-slot {
   position: absolute;
   z-index: 2;
-  top: 18rpx;
-  right: 22rpx;
-  width: 200rpx;
-  height: 76rpx;
+  top: -2rpx;
+  right: 18rpx;
+  width: 88rpx;
+  height: 88rpx;
 }
 
 .checkout-confirm__close {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  max-width: 100%;
-  height: 100%;
-  min-height: 0;
-  margin: 0;
-  padding: 0;
-  align-items: center;
-  justify-content: center;
-  border: 1rpx solid #d6cec4;
-  border-radius: 38rpx;
-  background: #f5f1eb;
-  box-shadow: 0 4rpx 12rpx rgba(45, 38, 31, .08);
   color: #62594f;
-  font-size: 20rpx;
-  font-weight: 650;
-  line-height: 1;
 }
 
 .checkout-confirm__close::after {
   border: 0;
 }
 
-.checkout-confirm__close--pressed {
-  background: #eae4dc;
-  transform: scale(.97);
-}
+.checkout-confirm__close--pressed::before { background: #eae4dc; transform: translate(-50%, -50%) scale(.96); }
 
 .checkout-confirm__lines {
   min-height: 0;

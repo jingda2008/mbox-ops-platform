@@ -6,7 +6,7 @@
       <view wx:else class="detail-placeholder">超嗨</view>
       <view class="detail-shade"></view>
       <view class="detail-title"><text>{{activity.kindText}}</text><text>{{activity.title}}</text><text>{{activity.startsText}} · {{activity.assemblyLocation}}</text></view>
-      <button class="detail-share" open-type="share" aria-label="分享活动">分享</button>
+      <button class="detail-share compact-text-action" open-type="share" aria-label="分享活动">分享</button>
     </view>
     <view wx:if="{{error}}" class="error-banner">{{error}}</view>
     <view wx:if="{{success}}" class="success-banner">{{success}}</view>
@@ -97,7 +97,7 @@
 
   <view wx:if="{{membershipInviteVisible}}" class="detail-member-mask">
     <scroll-view scroll-y class="detail-member-sheet">
-      <button class="detail-member-close" aria-label="关闭会员邀请" bindtap="dismissMembershipInvite">×</button>
+      <button class="detail-member-close compact-icon-action" aria-label="关闭会员邀请" bindtap="dismissMembershipInvite">×</button>
       <text class="detail-member-kicker">M-BOX 会员</text>
       <text class="detail-member-title">加入会员，解锁超嗨活动</text>
       <text class="detail-member-copy">加入会员后即可查看活动详情并报名。</text>

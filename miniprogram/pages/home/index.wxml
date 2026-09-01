@@ -152,7 +152,7 @@
   <view wx:if="{{performancePanel}}" class="performance-panel-mask" bindtap="closePerformancePanel" catchtouchmove="noop">
     <view class="performance-panel" catchtap="noop">
       <view class="performance-panel__handle"></view>
-      <view class="performance-panel__head"><view><text>{{performancePanel === 'tonight' ? 'M-BOX 今晚现场' : '艺人介绍'}}</text><text>{{performancePanel === 'tonight' ? '整晚演出安排' : performance.performer}}</text></view><button bindtap="closePerformancePanel">×</button></view>
+      <view class="performance-panel__head"><view><text>{{performancePanel === 'tonight' ? 'M-BOX 今晚现场' : '艺人介绍'}}</text><text>{{performancePanel === 'tonight' ? '整晚演出安排' : performance.performer}}</text></view><button class="compact-icon-action" aria-label="关闭演出详情" bindtap="closePerformancePanel">×</button></view>
       <view wx:if="{{performancePanel === 'tonight'}}" class="performance-panel__schedule">
         <view wx:for="{{performance.schedules}}" wx:key="id" class="performance-schedule-row {{item.stateText === '正在演出' ? 'is-current' : ''}}"><view><text>{{item.stateText}}</text><text>{{item.timeText}}</text></view><view><text>{{item.performer}}</text><text>{{item.tags || '现场演出'}}</text></view></view>
       </view>
@@ -163,7 +163,7 @@
 
   <view wx:if="{{editorialPanel}}" class="editorial-panel-mask" bindtap="closeEditorial" catchtouchmove="noop">
     <view class="editorial-panel" catchtap="noop">
-      <button class="editorial-panel__close" aria-label="关闭内容" bindtap="closeEditorial">×</button>
+      <button class="editorial-panel__close compact-icon-action" aria-label="关闭内容" bindtap="closeEditorial">×</button>
       <image wx:if="{{editorialPanel.imageUrl}}" class="editorial-panel__image" src="{{editorialPanel.imageUrl}}" mode="aspectFill" />
       <view wx:else class="editorial-panel__art"><image src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" /></view>
       <view class="editorial-panel__body">
@@ -178,7 +178,7 @@
 
   <view wx:if="{{membershipInviteVisible}}" class="member-invite-mask">
     <scroll-view scroll-y="true" class="member-invite-sheet">
-      <button class="member-invite-close" aria-label="关闭会员邀请" bindtap="dismissMembershipInvite">×</button>
+      <button class="member-invite-close compact-icon-action" aria-label="关闭会员邀请" bindtap="dismissMembershipInvite">×</button>
       <text class="member-invite-kicker">M-BOX 会员</text>
       <text class="member-invite-title">欢迎加入 M-BOX</text>
       <text class="member-invite-copy">加入后享积分、会员权益与活动资格。</text>

@@ -217,7 +217,7 @@
   </block>
   <view wx:if="{{loginSheetVisible}}" class="login-sheet-mask" bindtap="closeLoginSheet">
     <scroll-view scroll-y class="login-sheet" catchtap="noop">
-      <button class="login-sheet__close" aria-label="关闭登录" bindtap="closeLoginSheet">×</button>
+      <button class="login-sheet__close compact-icon-action" aria-label="关闭登录" bindtap="closeLoginSheet">×</button>
       <text class="login-sheet__kicker">M-BOX 会员</text>
       <text class="login-sheet__title">邀请加入 M-BOX 会员</text>
       <text class="login-sheet__copy">勾选协议后，授权微信手机号即可加入并享受积分、优惠券与活动资格。</text>

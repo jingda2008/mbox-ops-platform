@@ -46,3 +46,37 @@ recoverable until backup and restore metadata, candidate health, Caddy cutover,
 public readiness, worker health and the four browser routes are verified. This
 candidate adds no database migration; the expected normalized schema remains
 155.
+
+## Production deployment
+
+Production activation completed at `2026-09-01T05:53:13Z` from immutable tag
+`v1.0.0-rc.167` and commit
+`b828b68d0dc3f07bb4440c044498ed2ef610d775`. Feature pull-request CI run
+`33473100923`, release pull-request CI run `33473790787`, tag CI run
+`33474360099` and release run `33474360117` succeeded. The deployed image
+digest is
+`sha256:e25687c9209b2671890c375e43a961a50be815bab6477d0060efb83369e90a24`.
+
+The deployment created backup
+`/opt/mbox/backups/mbox-20260901T055136Z-bI1aVn.dump`, confirmed that no
+migration was required, verified a zero-traffic candidate, switched Caddy and
+archived predeployment, backup, deployment and completion evidence through the
+OSS relay. Production readiness reports schema 155, production tier, strict
+inventory, writes enabled and a healthy worker. The previous rc.166 image is
+retained as the stopped rollback container.
+
+The remote release transaction reached `completed` before the operator-side
+wrapper discovered that the clean tag worktree lacked `@playwright/test` for
+its final browser check. The running release was not replaced. After installing
+the lockfile dependencies, the same release identity and digest passed the Node
+and 430 px Playwright checks for `/`, `/guest?table=W01`, `/reserve` and
+`/staff/live`; production activation was not repeated.
+
+A before-and-after public-menu readback confirmed the reported issue. Before
+cutover, the first 100 production products contained ten bundles and none had
+the savings fields. After cutover, the complete public menu contained 247
+products and 27 bundles; all 27 returned a same-currency separate-sale total
+and positive savings. This proves that an unscanned menu can receive the
+discount. The already uploaded native package `1.2.0` still requires real-device
+visual acceptance, including 320 px behavior and confirmation of its WeChat
+experience-version identity.

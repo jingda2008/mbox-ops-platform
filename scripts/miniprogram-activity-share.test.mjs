@@ -73,6 +73,13 @@ async function loadDetailPage(state) {
       if (specifier === '../../utils/customer-error') return { customerErrorMessage: (error, fallback) => error?.message || fallback, isWechatCancellation: () => false }
       if (specifier === '../../utils/wechat-subscription') return {
         requestWechatSubscription: async () => ({ presented: false, outcomes: [] }),
+        mergeWechatNotificationPromptOptions: (...groups) => [].concat(...groups.filter(Boolean)),
+        extractPromptPresentation: (prompt) => (prompt && prompt.presentation) || [],
+        buildActivitySubscriptionPresentation: (...groups) => [].concat(...groups.filter(Boolean)),
+        ACTIVITY_REGISTRATION_SUBSCRIBE_TYPES: [],
+      }
+      if (specifier === '../../utils/wechat-subscription-presentation-cache') return {
+        rememberPresentationOptions: () => [],
       }
       if (specifier === '../../utils/public-share') return {
         enablePublicShareMenu: () => undefined,

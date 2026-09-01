@@ -19,7 +19,8 @@ describe('inventory and public-reference presentation contract', () => {
   it('does not expose raw inventory units or unavailable material ids in configuration pages', () => {
     const catalog = read('./CatalogManagementPanel.tsx')
     const activities = read('./ActivityOperationsPanel.tsx')
-    expect(catalog).toContain('inventoryUnitLabel(item.baseUnit)')
+    expect(catalog).toContain('inventoryUnitLabel(inventoryEmployeeUnit(item.categoryCode, item.baseUnit))')
+    expect(catalog).toContain('inventoryQuantityForEmployee(')
     expect(catalog).not.toContain('{item.baseUnit}</small>')
     expect(activities).toContain('inventoryUnitLabel(item.baseUnit)')
     expect(activities).not.toContain('已选物料当前不可用：${component.inventoryItemId}')

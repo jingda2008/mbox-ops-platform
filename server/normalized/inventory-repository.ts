@@ -1,6 +1,10 @@
 import type { JsonObject } from "./command-executor.js";
 import type { OrderItem } from "./order-repository.js";
 import type { ScopedTransaction } from "./transaction-runner.js";
+import {
+  isLiquidInventoryCategory,
+  requiresMillilitreInventoryMigration,
+} from '../../src/shared/inventory-unit-policy.js';
 
 export interface InventoryConsumption {
   movementId: string;
@@ -349,6 +353,12 @@ export class InventoryRepository {
   async createItem(
     input: Readonly<CreateInventoryItemInput>,
   ): Promise<InventoryItemRecord> {
+    assertInventoryItemUnitPolicy({
+      baseUnit: input.baseUnit,
+      categoryCode: input.categoryCode,
+      packageVolumeMl: input.packageVolumeMl ?? null,
+      changingExistingItem: false,
+    });
     const row = requireOne(
       await this.transaction.query<InventoryItemRow>(
         `
@@ -392,8 +402,9 @@ export class InventoryRepository {
   ): Promise<InventoryItemRecord> {
     const current = requireOne(await this.transaction.query<{
       base_unit: string;
+      category_code: string;
     }>(`
-      SELECT base_unit
+      SELECT base_unit,category_code
       FROM mbox.inventory_items
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
       FOR UPDATE
@@ -402,12 +413,21 @@ export class InventoryRepository {
       this.transaction.scope.storeId,
       itemId,
     ]), 'inventory item update target');
-    assertInventoryItemUnitPolicy({
-      baseUnit: current.base_unit,
-      categoryCode: input.categoryCode,
-      packageVolumeMl: input.packageVolumeMl,
-      changingExistingItem: true,
-    });
+    if (requiresMillilitreInventoryMigration(current.category_code, current.base_unit)) {
+      if (!isLiquidInventoryCategory(input.categoryCode)) {
+        throw new InventoryConflictError('历史瓶数酒水不能通过修改品类规避单位换算；请保持酒水品类并核对单瓶净含量');
+      }
+      if (input.packageVolumeMl === null) {
+        throw new InventoryConflictError('历史瓶数酒水必须保留单瓶净含量，员工端才能按毫升安全录入');
+      }
+    } else {
+      assertInventoryItemUnitPolicy({
+        baseUnit: current.base_unit,
+        categoryCode: input.categoryCode,
+        packageVolumeMl: input.packageVolumeMl,
+        changingExistingItem: true,
+      });
+    }
     const row = requireOne(
       await this.transaction.query<InventoryItemRow>(`
         UPDATE mbox.inventory_items
@@ -2604,15 +2624,6 @@ function assertInventoryItemUnitPolicy(input: {
   if (input.packageVolumeMl === null) {
     throw new InventoryConflictError('按毫升管理的酒水必须填写单瓶净含量（ml/瓶），否则无法安全换算入库量和单位成本');
   }
-}
-
-function isLiquidInventoryCategory(categoryCode: string): boolean {
-  return categoryCode === 'spirits' || categoryCode.startsWith('spirits.')
-    || categoryCode === 'wine' || categoryCode.startsWith('wine.')
-    || categoryCode === 'mixer' || categoryCode.startsWith('mixer.')
-    || categoryCode === 'beer' || categoryCode.startsWith('beer.')
-    || categoryCode === 'bottled_spirits' || categoryCode.startsWith('bottled_spirits.')
-    || categoryCode === 'alcohol' || categoryCode.startsWith('alcohol.');
 }
 
 function mapItem(row: InventoryItemRow): InventoryItemRecord {

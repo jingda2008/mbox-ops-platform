@@ -302,6 +302,11 @@ async function loadOrderPage(state) {
       }
       if (specifier === '../../utils/wechat-subscription') return {
         requestWechatSubscription: async () => ({ presented: false, outcomes: [] }),
+        mergeWechatNotificationPromptOptions: (...groups) => [].concat(...groups.filter(Boolean)),
+        extractPromptPresentation: (prompt) => (prompt && prompt.presentation) || [],
+      }
+      if (specifier === '../../utils/wechat-subscription-presentation-cache') return {
+        rememberPresentationOptions: () => [],
       }
       throw new Error(`unexpected require: ${specifier}`)
     },

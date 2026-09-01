@@ -21,7 +21,7 @@ describe('WeChat member-service notification API',()=>{
       templateId:'wechat-template-benefit-001',expectedVersion:0,platformResult:'accept',platformEventReference:'member-service-platform-event-001',
     }})
     expect(record.statusCode).toBe(503)
-    expect(record.json()).toMatchObject({code:'WECHAT_MEMBER_SERVICE_NOTIFICATION_NOT_CONFIGURED'})
+    expect(record.json()).toMatchObject({error:{code:'WECHAT_MEMBER_SERVICE_NOTIFICATION_NOT_CONFIGURED'}})
     expect(execute).not.toHaveBeenCalled()
   })
 })

@@ -16,6 +16,7 @@ const integration = databaseUrl ? describe : describe.skip
 const tierEventAt = new Date(Date.now() + 5 * 60_000).toISOString()
 const tierBenefitRedeemedAt = new Date(Date.parse(tierEventAt) + 60_000).toISOString()
 const tierBenefitExpirySweepAt = new Date(Date.parse(tierEventAt) + 31 * 24 * 60 * 60_000).toISOString()
+const workflowCutoverAt = new Date(Date.parse(tierEventAt) + 365 * 24 * 60 * 60_000).toISOString()
 
 const ids = {
   tenant: randomUUID(), store: randomUUID(), drafter: randomUUID(), approver: randomUUID(),
@@ -116,13 +117,13 @@ integration('loyalty tier benefit repository PostgreSQL integration', () => {
       '已核对权益定义、数量、有效期和降级处理')
     expect(approved).toMatchObject({ status: 'approved' })
     await expect(service.publish(context(ids.approver), {
-      policyId: draft.value.id, effectiveFrom: '2026-09-01T00:00:00Z', effectiveUntil: null,
+      policyId: draft.value.id, effectiveFrom: workflowCutoverAt, effectiveUntil: null,
       reason: '审批人不能发布', idempotencyKey: 'tier-benefit-management-self-publish-0001',
     })).rejects.toMatchObject<CustomerExperienceRequestError>({
       code: 'LOYALTY_TIER_BENEFIT_PUBLISHER_NOT_INDEPENDENT',
     })
     const published = await service.publish(context(ids.publisher), {
-      policyId: draft.value.id, effectiveFrom: '2026-09-01T00:00:00Z', effectiveUntil: null,
+      policyId: draft.value.id, effectiveFrom: workflowCutoverAt, effectiveUntil: null,
       reason: '最高授权人员确认排期发布', idempotencyKey: 'tier-benefit-management-publish-0001',
     })
     expect(published.value).toMatchObject({ status: 'published', ruleCount: 1 })
@@ -131,8 +132,9 @@ integration('loyalty tier benefit repository PostgreSQL integration', () => {
       status: 'published', publishedByEmployeeId: ids.publisher,
       rules: [expect.objectContaining({ ruleCode: 'SILVER_RETENTION', validityDays: 14 })],
     })
-    expect(policyConfiguration.policies.find((policy) => policy.id===ids.benefitPolicy)?.effectiveUntil)
-      .toBe('2026-09-01 00:00:00+00')
+    const currentPolicyEffectiveUntil = policyConfiguration.policies
+      .find((policy) => policy.id===ids.benefitPolicy)?.effectiveUntil
+    expect(new Date(currentPolicyEffectiveUntil!).toISOString()).toBe(workflowCutoverAt)
   })
 
   it('issues exact and inherited entry benefits in the same tier evaluation and replays idempotently', async () => {

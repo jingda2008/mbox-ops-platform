@@ -20,7 +20,11 @@ describe('reservation performance revision mobile contract', () => {
     expect(view).toContain('data-decision="reselect"')
     expect(view).toContain('data-decision="clear"')
     expect(api).toContain('/api/public/reservation/performance-impacts/')
-    expect(page).not.toContain('cancelCustomerReservation')
+    const impactHandler = page.slice(
+      page.indexOf('async acknowledgeImpact'),
+      page.indexOf('async enablePerformanceNotification'),
+    )
+    expect(impactHandler).not.toContain('cancelCustomerReservation')
   })
 
   it('keeps WeChat authorization inside the exact reservation context and optional to booking', async () => {
@@ -36,7 +40,8 @@ describe('reservation performance revision mobile contract', () => {
     expect(page).toContain('未开启提醒，不影响预约和到店')
     expect(api).toContain('/api/public/reservation/performance-notification-authorizations')
     expect(api).toContain('mbox.reservation.performance.notification.')
-    expect(page).not.toContain('getWechatNotificationAuthorizations')
+    expect(page).toContain('getReservationPerformanceNotificationAuthorizations')
+    expect(page).toContain("apiKind: 'reservation_performance'")
   })
 
   it('keeps touch controls at least 44px and stacks decisions at 390px', async () => {

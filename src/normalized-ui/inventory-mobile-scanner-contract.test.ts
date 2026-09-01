@@ -33,7 +33,12 @@ describe('staff mobile inventory scanning contract', () => {
     expect(receiptPayload).toContain('totalCostMinor,')
     expect(receiptPayload).not.toContain('unitCostMinor')
     expect(receiptPayload).toContain("usesPackageQuantity ? { packages } : { quantity: packages }")
+    expect(source).toContain('const operationalItems = view.items')
     expect(source).toContain('const bindableItems = view.items')
+    expect(source).toContain('requiresMillilitreInventoryMigration(item.categoryCode, item.baseUnit)')
+    expect(source).toContain('系统按已登记的单瓶净含量兼容换算')
+    expect(source).toContain("? '个包装' : inventoryUnitLabel")
+    expect(source).toContain('unit="元"')
   })
 
   it('can confirm a related receipt and publish a fully validated beverage atomically', async () => {

@@ -1,9 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown, CirclePlus, LoaderCircle, PackageOpen, Pencil } from 'lucide-react'
 import { NormalizedApiClient, type StaffAuthView } from '../normalized-api'
-import { inventoryCategoryLabel, inventoryUnitLabel } from './inventory-presentation'
+import {
+  inventoryEmployeeUnit,
+  inventoryCategoryLabel,
+  inventoryQuantityForEmployee,
+  inventoryQuantityForStorage,
+  inventoryUnitLabel,
+  requiresMillilitreInventoryMigration,
+} from './inventory-presentation'
 import { MediaAssetPicker } from './MediaAssetPicker'
 import { menuImageOptions } from './menu-image-library'
+import { NumberInputWithUnit } from './NumberInputWithUnit'
 
 type ProductStatus = 'active' | 'sold_out' | 'inactive'
 type ProductKind = 'single' | 'bundle'
@@ -136,6 +144,7 @@ interface InventoryItemOption {
   name: string
   baseUnit: string
   categoryCode: string
+  packageVolumeMl: string | null
 }
 
 interface RecipeComponentDraft {
@@ -287,13 +296,24 @@ export function CatalogManagementPanel({
       ])
       const items = readInventoryItems(dashboardResponse.data)
       const recipe = readActiveRecipe(recipeResponse.data)
+      const itemById = new Map(items.map((item) => [item.id, item]))
       setInventoryItems(items)
       setRecipeVersion(recipe?.version ?? null)
       setRecipeYield(recipe === null ? '1' : String(recipe.yieldQuantity))
-      setRecipeComponents(Object.fromEntries((recipe?.components ?? []).map((component) => [
-        component.inventoryItemId,
-        { quantity: component.quantity, expectedWasteQuantity: component.expectedWasteQuantity },
-      ])))
+      setRecipeComponents(Object.fromEntries((recipe?.components ?? []).map((component) => {
+        const item = itemById.get(component.inventoryItemId)
+        if (item === undefined) throw new Error('当前配方引用了已不可用的库存物料')
+        const quantity = inventoryQuantityForEmployee(
+          component.quantity, item.categoryCode, item.baseUnit, item.packageVolumeMl,
+        )
+        const expectedWasteQuantity = inventoryQuantityForEmployee(
+          component.expectedWasteQuantity, item.categoryCode, item.baseUnit, item.packageVolumeMl,
+        )
+        if (quantity === null || expectedWasteQuantity === null) {
+          throw new Error(`“${item.name}”缺少有效的单瓶净含量，无法换算为毫升`)
+        }
+        return [component.inventoryItemId, { quantity, expectedWasteQuantity }]
+      })))
       if (recipe !== null && canViewInventoryCost) {
         const costResponse = await api.getEndpoint<{ data: unknown }>(`/api/inventory/products/${productId}/recipe-cost`)
         setRecipeCost(readRecipeCostPreview(costResponse.data, productId))
@@ -520,12 +540,29 @@ export function CatalogManagementPanel({
       setNotice({ kind: 'error', text: '配方至少选择一项物料；产出量、用量和损耗必须是有效数字' })
       return
     }
+    const storedComponents = components.map((component) => {
+      const item = inventoryItems.find((candidate) => candidate.id === component.inventoryItemId)
+      if (item === undefined) return null
+      const quantity = inventoryQuantityForStorage(
+        component.quantity, item.categoryCode, item.baseUnit, item.packageVolumeMl,
+      )
+      const expectedWasteQuantity = inventoryQuantityForStorage(
+        component.expectedWasteQuantity, item.categoryCode, item.baseUnit, item.packageVolumeMl,
+      )
+      return quantity === null || expectedWasteQuantity === null
+        ? null
+        : { inventoryItemId: component.inventoryItemId, quantity, expectedWasteQuantity }
+    })
+    if (storedComponents.some((component) => component === null)) {
+      setNotice({ kind: 'error', text: '所选液体物料缺少有效的单瓶净含量，无法把毫升安全换算为历史库存数量；请先补全物料资料' })
+      return
+    }
     setRecipeBusy(true)
     setNotice(null)
     try {
       await api.putEndpoint(
         `/api/inventory/products/${draft.id}/recipe`,
-        { yieldQuantity, instructionsSnapshot: {}, components },
+        { yieldQuantity, instructionsSnapshot: {}, components: storedComponents },
         { idempotencyKey: operationKey('inventory-recipe') },
       )
       await loadRecipeEditor(draft.id)
@@ -742,7 +779,7 @@ export function CatalogManagementPanel({
             <label>分类编号<input required disabled={categoryDraft.id !== null} pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" value={categoryDraft.code} placeholder="例如 cocktail" onChange={(event) => setCategoryDraft((current) => current === null ? null : { ...current, code: event.target.value })} /></label>
             <label>顾客显示名称<input required maxLength={32} value={categoryDraft.displayName} placeholder="例如 鸡尾酒" onChange={(event) => setCategoryDraft((current) => current === null ? null : { ...current, displayName: event.target.value })} /></label>
             <label>上级分类<select value={categoryDraft.parentCode} onChange={(event) => setCategoryDraft((current) => current === null ? null : { ...current, parentCode: event.target.value })}><option value="">作为一级分类</option>{menuCategories.filter((item) => item.parentCode === null && item.code !== categoryDraft.code).map((item) => <option key={item.code} value={item.code}>{item.displayName}</option>)}</select></label>
-            <label>菜单排序<input type="number" min={0} max={100000} value={categoryDraft.sortOrder} onChange={(event) => setCategoryDraft((current) => current === null ? null : { ...current, sortOrder: event.target.value })} /></label>
+            <label>菜单排序<NumberInputWithUnit inputMode="numeric" min={0} max={100000} unit="序号" value={categoryDraft.sortOrder} onChange={(event) => setCategoryDraft((current) => current === null ? null : { ...current, sortOrder: event.target.value })} /></label>
             <label className="catalog-check"><input type="checkbox" checked={categoryDraft.guestVisible} onChange={(event) => setCategoryDraft((current) => current === null ? null : { ...current, guestVisible: event.target.checked })} />顾客菜单可见</label>
             <div className="catalog-menu-category-form__actions"><button type="button" onClick={() => setCategoryDraft(null)}>取消</button><button type="submit" disabled={categoryBusy}>{categoryBusy ? '保存中' : '保存分类'}</button></div>
           </form>}
@@ -764,15 +801,15 @@ export function CatalogManagementPanel({
             <label>销售状态<select value={draft.status} onChange={(event) => updateDraft('status', event.target.value as ProductStatus)}><option value="active">在售</option><option value="sold_out">售罄</option><option value="inactive">停用</option></select></label>
             <label>库存方式<select disabled={draft.productKind === 'bundle'} value={draft.productKind === 'bundle' ? 'tracked' : draft.inventoryControlMode} onChange={(event) => updateDraft('inventoryControlMode', event.target.value as InventoryControlMode)}><option value="tracked">跟踪库存（酒水等）</option><option value="not_managed">暂不管理数量（小吃水果）</option></select></label>
             <label>搜索文本<input maxLength={4000} value={draft.searchText} onChange={(event) => updateDraft('searchText', event.target.value)} /></label>
-            <label>标准售价（元）<input disabled={!canManagePrice} inputMode="decimal" value={draft.priceYuan} onChange={(event) => updateDraft('priceYuan', event.target.value)} />{!canManagePrice && <small>当前岗位不能定价；不会在保存后尝试补写售价。</small>}</label>
+            <label>标准售价<NumberInputWithUnit disabled={!canManagePrice} inputMode="decimal" unit="元" value={draft.priceYuan} onChange={(event) => updateDraft('priceYuan', event.target.value)} />{!canManagePrice && <small>当前岗位不能定价；不会在保存后尝试补写售价。</small>}</label>
             {canViewInventoryCost && (draft.inventoryControlMode === 'tracked' || draft.productKind === 'bundle')
               ? <p className="catalog-permission-note">{draft.productKind === 'bundle' ? '套餐成本由组成商品的当前成本自动汇总；' : '库存成本由已确认收货、库存加权成本和正式配方自动计算；'}日常不在商品页手填。当前状态：{currentProduct?.costAmountMinor == null ? '待补成本' : `¥${minorToYuan(currentProduct.costAmountMinor)}/份`}。</p>
               : canViewInventoryCost
-              ? <label>成本金额（元）<input inputMode="decimal" value={draft.costYuan} onChange={(event) => updateDraft('costYuan', event.target.value)} /><small>非库存商品可由有权限人员更正成本；修改成本需单独填写原因。</small></label>
+              ? <label>成本金额<NumberInputWithUnit inputMode="decimal" unit="元" value={draft.costYuan} onChange={(event) => updateDraft('costYuan', event.target.value)} /><small>非库存商品可由有权限人员更正成本；修改成本需单独填写原因。</small></label>
               : <p className="catalog-permission-note">成本已受权限保护。你可以保存商品资料，但系统不会读取、显示或改写成本。</p>}
-            <label>推荐最少人数<input inputMode="numeric" value={draft.recommendationMinGuests} onChange={(event) => updateDraft('recommendationMinGuests', event.target.value)} /></label>
-            <label>推荐最多人数<input inputMode="numeric" value={draft.recommendationMaxGuests} onChange={(event) => updateDraft('recommendationMaxGuests', event.target.value)} /></label>
-            <label>推荐优先级<input inputMode="numeric" value={draft.recommendationPriority} onChange={(event) => updateDraft('recommendationPriority', event.target.value)} /></label>
+            <label>推荐最少人数<NumberInputWithUnit inputMode="numeric" unit="人" value={draft.recommendationMinGuests} onChange={(event) => updateDraft('recommendationMinGuests', event.target.value)} /></label>
+            <label>推荐最多人数<NumberInputWithUnit inputMode="numeric" unit="人" value={draft.recommendationMaxGuests} onChange={(event) => updateDraft('recommendationMaxGuests', event.target.value)} /></label>
+            <label>推荐优先级<NumberInputWithUnit inputMode="numeric" unit="级" value={draft.recommendationPriority} onChange={(event) => updateDraft('recommendationPriority', event.target.value)} /></label>
             <label className="catalog-check"><input type="checkbox" checked={draft.guestVisible} onChange={(event) => updateDraft('guestVisible', event.target.checked)} />顾客菜单可见</label>
             <label className="catalog-check"><input type="checkbox" checked={draft.recommendationEnabled} onChange={(event) => updateDraft('recommendationEnabled', event.target.checked)} />参与商品推荐</label>
             {isInventoryFlow && <section className={`catalog-sale-readiness catalog-wide${currentSaleBlockers.length === 0 && currentProduct !== null ? ' is-ready' : ''}`} aria-label="酒水小程序可售检查"><header><div><strong>第 5 步：小程序可售检查</strong><small>{draft.id === null ? '新酒水先保存为停用；保存后可配置配方并读取真实可售状态。' : currentSaleBlockers.length === 0 ? '该商品已通过当前的售价、配方、库存和小程序菜单校验。' : '请按以下提示完成；保存商品状态不等于顾客已经可以下单。'}</small></div><em>{draft.id === null ? '待建档' : currentSaleBlockers.length === 0 ? '小程序可售' : '待完成'}</em></header>{currentProduct !== null && currentSaleBlockers.length > 0 && <ul>{currentSaleBlockers.map((item) => <li key={item}>{item}</li>)}</ul>}</section>}
@@ -782,14 +819,14 @@ export function CatalogManagementPanel({
               && <label className="catalog-wide">成本变更原因<input required minLength={2} maxLength={500} value={draft.costChangeReason} placeholder="例如：供应商进价调整，按本次采购单更新" onChange={(event) => updateDraft('costChangeReason', event.target.value)} /></label>}
             <button type="button" className="catalog-advanced-toggle catalog-wide" aria-expanded={showAdvanced} onClick={() => setShowAdvanced((value) => !value)}>{showAdvanced ? '收起高级字段' : '显示高级字段（供应、标签与渠道）'}<ChevronDown size={17} /></button>
             {showAdvanced && <>
-              <label>菜单排序<input type="number" min={0} max={100000} value={draft.sortOrder} onChange={(event) => updateDraft('sortOrder', event.target.value)} /></label>
-              <label>单笔最大数量<input type="number" min={1} max={9999} value={draft.maxOrderQuantity} onChange={(event) => updateDraft('maxOrderQuantity', event.target.value)} /></label>
+              <label>菜单排序<NumberInputWithUnit inputMode="numeric" min={0} max={100000} unit="序号" value={draft.sortOrder} onChange={(event) => updateDraft('sortOrder', event.target.value)} /></label>
+              <label>单笔最大数量<NumberInputWithUnit inputMode="numeric" min={1} max={9999} unit="份/单" value={draft.maxOrderQuantity} onChange={(event) => updateDraft('maxOrderQuantity', event.target.value)} /></label>
               <label>供应开始<input type="time" value={draft.availableFrom} onChange={(event) => updateDraft('availableFrom', event.target.value)} /></label>
               <label>供应结束<input type="time" value={draft.availableUntil} onChange={(event) => updateDraft('availableUntil', event.target.value)} /></label>
-              <label>KDS优先级<input type="number" min={0} max={1000} value={draft.kdsPriority} onChange={(event) => updateDraft('kdsPriority', event.target.value)} /></label>
-              <label>出品时限（秒）<input type="number" min={30} max={14400} placeholder="按岗位默认" value={draft.fulfillmentSlaSeconds} onChange={(event) => updateDraft('fulfillmentSlaSeconds', event.target.value)} /></label>
-              <label>预计准备（分钟）<input type="number" min={0} max={240} value={draft.recommendationExpectedPrepMinutes} onChange={(event) => updateDraft('recommendationExpectedPrepMinutes', event.target.value)} /></label>
-              <label>推荐保留（分钟）<input type="number" min={0} max={240} value={draft.recommendationHoldMinutes} onChange={(event) => updateDraft('recommendationHoldMinutes', event.target.value)} /></label>
+              <label>KDS优先级<NumberInputWithUnit inputMode="numeric" min={0} max={1000} unit="级" value={draft.kdsPriority} onChange={(event) => updateDraft('kdsPriority', event.target.value)} /></label>
+              <label>出品时限<NumberInputWithUnit inputMode="numeric" min={30} max={14400} unit="秒" placeholder="按岗位默认" value={draft.fulfillmentSlaSeconds} onChange={(event) => updateDraft('fulfillmentSlaSeconds', event.target.value)} /></label>
+              <label>预计准备<NumberInputWithUnit inputMode="numeric" min={0} max={240} unit="分钟" value={draft.recommendationExpectedPrepMinutes} onChange={(event) => updateDraft('recommendationExpectedPrepMinutes', event.target.value)} /></label>
+              <label>推荐保留<NumberInputWithUnit inputMode="numeric" min={0} max={240} unit="分钟" value={draft.recommendationHoldMinutes} onChange={(event) => updateDraft('recommendationHoldMinutes', event.target.value)} /></label>
               <label>升级推荐商品<select value={draft.recommendationUpgradeProductId} onChange={(event) => updateDraft('recommendationUpgradeProductId', event.target.value)}><option value="">无</option>{products.filter((product) => product.id !== draft.id).map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select></label>
               <label className="catalog-wide">场景标签（英文逗号分隔）<input value={draft.recommendationSceneTags} placeholder="date,friends,celebration" onChange={(event) => updateDraft('recommendationSceneTags', event.target.value)} /></label>
               <label>意图标签<input value={draft.recommendationIntentTags} placeholder="relaxed,energetic" onChange={(event) => updateDraft('recommendationIntentTags', event.target.value)} /></label>
@@ -821,14 +858,15 @@ export function CatalogManagementPanel({
               {draft.id !== null && recipeState === 'loading' && <p><LoaderCircle className="is-spinning" size={17} /> 正在读取库存物料与当前配方</p>}
               {draft.id !== null && recipeState === 'error' && <button type="button" onClick={() => void loadRecipeEditor(draft.id!)}>重新读取库存配方</button>}
               {draft.id !== null && recipeState === 'ready' && <>
-                <label>每份配方产出数量<input type="number" min={1} max={1000} value={recipeYield} onChange={(event) => setRecipeYield(event.target.value)} /></label>
+                <label>每份配方产出数量<NumberInputWithUnit inputMode="numeric" min={1} max={1000} unit="份" value={recipeYield} onChange={(event) => setRecipeYield(event.target.value)} /></label>
                 {inventoryItems.length === 0
                   ? <p>当前还没有库存物料。请先在“库存与瓶存”中扫码或手工建立物料，再回来配置配方。</p>
                   : <><label>先按原料品类筛选<select value={recipeCategoryFilter} onChange={(event) => setRecipeCategoryFilter(event.target.value)}><option value="">全部原料</option>{recipeCategories.map((category) => <option key={category} value={category}>{inventoryCategoryLabel(category)}</option>)}</select><small>已选原料不会因筛选而丢失；可切换品类继续添加。</small></label><div className="catalog-recipe-items">{visibleRecipeItems.map((item) => {
                     const component = recipeComponents[item.id]
+                    const requiresMigration = requiresMillilitreInventoryMigration(item.categoryCode, item.baseUnit)
                     return <article key={item.id} className={component === undefined ? '' : 'is-selected'}>
-                      <label><input type="checkbox" checked={component !== undefined} onChange={() => toggleRecipeComponent(item.id)} /><span><strong>{item.name}</strong><small>{inventoryCategoryLabel(item.categoryCode)} · {item.sku} · {inventoryUnitLabel(item.baseUnit)}</small></span></label>
-                      {component !== undefined && <div><label>每份用量<input inputMode="decimal" value={component.quantity} onChange={(event) => updateRecipeComponent(item.id, 'quantity', event.target.value)} /></label><label>预计损耗<input inputMode="decimal" value={component.expectedWasteQuantity} onChange={(event) => updateRecipeComponent(item.id, 'expectedWasteQuantity', event.target.value)} /></label></div>}
+                      <label><input type="checkbox" checked={component !== undefined} onChange={() => toggleRecipeComponent(item.id)} /><span><strong>{item.name}</strong><small>{inventoryCategoryLabel(item.categoryCode)} · {item.sku} · 员工录入 {inventoryUnitLabel(inventoryEmployeeUnit(item.categoryCode, item.baseUnit))}{requiresMigration ? '（历史瓶数自动换算）' : ''}</small></span></label>
+                      {component !== undefined && <div><label>每份用量<NumberInputWithUnit inputMode="decimal" unit={inventoryUnitLabel(inventoryEmployeeUnit(item.categoryCode, item.baseUnit))} value={component.quantity} onChange={(event) => updateRecipeComponent(item.id, 'quantity', event.target.value)} /></label><label>预计损耗<NumberInputWithUnit inputMode="decimal" unit={inventoryUnitLabel(inventoryEmployeeUnit(item.categoryCode, item.baseUnit))} value={component.expectedWasteQuantity} onChange={(event) => updateRecipeComponent(item.id, 'expectedWasteQuantity', event.target.value)} /></label></div>}
                     </article>
                   })}</div>{visibleRecipeItems.length === 0 && <p>该品类暂未录入物料。可在“库存与瓶存”先建立或补齐分类。</p>}</>}
                 <button type="button" disabled={recipeBusy || inventoryItems.length === 0} onClick={() => void saveRecipe()}>{recipeBusy ? '保存中' : '保存配方并刷新可售检查'}</button>
@@ -845,7 +883,7 @@ export function CatalogManagementPanel({
               <p>当前账号没有“库存管理”权限，因此不能查看或调整配方。请由管理员分配库存管理权限，或请有该权限的同事完成配置；商品资料入口仍可正常使用。</p>
             </section>}
           </div>
-          {draft.productKind === 'bundle' && <section className="catalog-components"><strong>组合内容</strong><div>{singleProducts.map((product) => <label key={product.id} className={product.id in draft.componentQuantities ? 'is-selected' : ''}><input type="checkbox" checked={product.id in draft.componentQuantities} onChange={() => toggleComponent(product.id)} /><span>{product.name}</span>{product.id in draft.componentQuantities && <input aria-label={`${product.name}数量`} inputMode="numeric" value={draft.componentQuantities[product.id]} onChange={(event) => updateDraft('componentQuantities', { ...draft.componentQuantities, [product.id]: event.target.value })} />}</label>)}</div></section>}
+          {draft.productKind === 'bundle' && <section className="catalog-components"><strong>组合内容</strong><div>{singleProducts.map((product) => <label key={product.id} className={product.id in draft.componentQuantities ? 'is-selected' : ''}><input type="checkbox" checked={product.id in draft.componentQuantities} onChange={() => toggleComponent(product.id)} /><span>{product.name}</span>{product.id in draft.componentQuantities && <NumberInputWithUnit aria-label={`${product.name}数量`} inputMode="numeric" unit="份" value={draft.componentQuantities[product.id]} onChange={(event) => updateDraft('componentQuantities', { ...draft.componentQuantities, [product.id]: event.target.value })} />}</label>)}</div></section>}
           <button type="submit" className="catalog-save" disabled={busy || performancePhaseDirty}>{busy ? <LoaderCircle className="is-spinning" size={18} /> : <Check size={18} />}{performancePhaseDirty ? '请先处理阶段配置' : '保存并读回验证'}</button>
         </form>}
         <div className="catalog-management-list">{visibleProducts.map((product) => {
@@ -1013,7 +1051,9 @@ function readInventoryItems(value: unknown): InventoryItemOption[] {
   return value.items.flatMap((item): InventoryItemOption[] => (
     isRecord(item) && typeof item.id === 'string' && typeof item.sku === 'string'
       && typeof item.name === 'string' && typeof item.baseUnit === 'string' && typeof item.categoryCode === 'string'
-      ? [{ id: item.id, sku: item.sku, name: item.name, baseUnit: item.baseUnit, categoryCode: item.categoryCode }]
+      && (item.packageVolumeMl === null || typeof item.packageVolumeMl === 'string')
+      ? [{ id: item.id, sku: item.sku, name: item.name, baseUnit: item.baseUnit, categoryCode: item.categoryCode,
+          packageVolumeMl: item.packageVolumeMl }]
       : []
   ))
 }

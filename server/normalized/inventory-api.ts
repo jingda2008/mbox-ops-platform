@@ -47,6 +47,7 @@ import {
   StaffNotFoundError,
 } from "./staff-access-repository.js";
 import type { ScopedTransaction } from "./transaction-runner.js";
+import { isLiquidInventoryCategory } from '../../src/shared/inventory-unit-policy.js';
 
 export interface InventoryApiOptions {
   commands: Pick<NormalizedCommandExecutor, "execute">;
@@ -1223,15 +1224,6 @@ function assertInventoryItemUnitPolicy(input: CreateInventoryItemInput): void {
       '按毫升管理的酒水必须填写单瓶净含量（ml/瓶）；否则无法安全换算入库量和单位成本',
     );
   }
-}
-
-function isLiquidInventoryCategory(categoryCode: string): boolean {
-  return categoryCode === 'spirits' || categoryCode.startsWith('spirits.')
-    || categoryCode === 'wine' || categoryCode.startsWith('wine.')
-    || categoryCode === 'mixer' || categoryCode.startsWith('mixer.')
-    || categoryCode === 'beer' || categoryCode.startsWith('beer.')
-    || categoryCode === 'bottled_spirits' || categoryCode.startsWith('bottled_spirits.')
-    || categoryCode === 'alcohol' || categoryCode.startsWith('alcohol.');
 }
 
 function response<Result>(execution: CommandExecution<Result>) {

@@ -38,6 +38,11 @@ import {
 } from "./product-operational-fields.js";
 import { InventoryRepository } from "./inventory-repository.js";
 import { isPublicMiniProgramImageUrl } from './media-asset-url.js';
+import {
+  PRODUCT_SNAPSHOT_NESTED_OPERATIONAL_KEYS,
+  PRODUCT_SNAPSHOT_TOP_LEVEL_OPERATIONAL_KEYS,
+  sanitizeProductDisplaySnapshot,
+} from '../../src/shared/product-display-snapshot.js';
 
 export const CATALOG_PRODUCT_MANAGE_PERMISSION = "catalog.product.manage";
 export const CATALOG_PRICE_MANAGE_PERMISSION = "catalog.price.manage";
@@ -1786,7 +1791,9 @@ function mapProduct(row: ProductRow, guest = false, includeCost = true): Catalog
     productKind: row.product_kind ?? "single",
     inventoryControlMode: row.inventory_control_mode,
     bundleComponents: readStoredBundleComponents(row.bundle_components ?? []),
-    productSnapshot: guest ? guestProductSnapshot(row.product_snapshot) : row.product_snapshot,
+    productSnapshot: guest
+      ? guestProductSnapshot(sanitizeProductDisplaySnapshot(row.product_snapshot) as JsonObject)
+      : sanitizeProductDisplaySnapshot(row.product_snapshot) as JsonObject,
     guestVisible: row.guest_visible,
     searchText: row.search_text,
     recommendationEnabled: row.recommendation_enabled,
@@ -1821,7 +1828,7 @@ function mapProduct(row: ProductRow, guest = false, includeCost = true): Catalog
 }
 
 function persistedDisplaySnapshot(fields: Readonly<ProductOperationalFields>): JsonObject {
-  return fields.displaySnapshot
+  return sanitizeProductDisplaySnapshot(fields.displaySnapshot) as JsonObject
 }
 
 function catalogOutcome(
@@ -2262,19 +2269,11 @@ function assertDisplayOnlyProductSnapshot(snapshot: Readonly<JsonObject>): void 
     && (typeof imageUrl !== 'string' || (imageUrl.trim() !== '' && !isPublicMiniProgramImageUrl(imageUrl)))) {
     throw new CatalogRequestError('商品图片必须从受控菜单素材或站内图片库选择，单张不超过200KB');
   }
-  const topLevel = new Set([
-    'guestVisible', 'searchText', 'sortOrder', 'availableFrom', 'availableUntil',
-    'allowedChannels', 'maxOrderQuantity', 'kdsPriority', 'fulfillmentSlaSeconds',
-    'costAmount', 'orderWindows',
-  ]);
+  const topLevel = new Set<string>(PRODUCT_SNAPSHOT_TOP_LEVEL_OPERATIONAL_KEYS);
   if (Object.keys(snapshot).some((key) => topLevel.has(key))) {
     throw new CatalogRequestError('productSnapshot只能保存图片、描述等展示信息，经营字段必须使用强类型字段');
   }
-  const nestedKeys = new Set([
-    'enabled', 'minimumPartySize', 'maximumPartySize', 'priority', 'sceneTags',
-    'intentTags', 'tasteTags', 'dwellTags', 'singleWaveEligible',
-    'expectedPrepMinutes', 'holdMinutes', 'upgradeProductId',
-  ]);
+  const nestedKeys = new Set<string>(PRODUCT_SNAPSHOT_NESTED_OPERATIONAL_KEYS);
   for (const key of ['recommendation', 'source']) {
     const nested = snapshot[key];
     if (typeof nested === 'object' && nested !== null && !Array.isArray(nested)
@@ -2815,6 +2814,8 @@ function sendError(reply: FastifyReply, error: unknown): FastifyReply {
       "CATALOG_CONFLICT",
       error instanceof CatalogConflictError
         ? error.message
+        : databaseConstraint(error) === "products_active_customer_name_spec_uq"
+          ? "已有同名且同售卖规格的在售商品；请先编辑或停用旧商品"
         : "商品编码或价格版本发生冲突",
     );
   }
@@ -2828,6 +2829,13 @@ function databaseErrorCode(error: unknown): string | null {
     "code" in error &&
     typeof error.code === "string"
     ? error.code
+    : null;
+}
+
+function databaseConstraint(error: unknown): string | null {
+  return typeof error === "object" && error !== null && "constraint" in error
+    && typeof error.constraint === "string"
+    ? error.constraint
     : null;
 }
 

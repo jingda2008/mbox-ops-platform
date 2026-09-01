@@ -12,6 +12,7 @@ import {
 import { MediaAssetPicker } from './MediaAssetPicker'
 import { menuImageOptions } from './menu-image-library'
 import { NumberInputWithUnit } from './NumberInputWithUnit'
+import { sanitizeProductDisplaySnapshot } from '../shared/product-display-snapshot'
 
 type ProductStatus = 'active' | 'sold_out' | 'inactive'
 type ProductKind = 'single' | 'bundle'
@@ -209,6 +210,7 @@ export function CatalogManagementPanel({
   const [recipeVersion, setRecipeVersion] = useState<number | null>(null)
   const [recipeYield, setRecipeYield] = useState('1')
   const [recipeComponents, setRecipeComponents] = useState<Record<string, RecipeComponentDraft>>({})
+  const [recipeInstructionsSnapshot, setRecipeInstructionsSnapshot] = useState<Record<string, unknown>>({})
   const [recipeCategoryFilter, setRecipeCategoryFilter] = useState('')
   const [recipeBusy, setRecipeBusy] = useState(false)
   const [recipeCost, setRecipeCost] = useState<RecipeCostPreview | null>(null)
@@ -281,6 +283,7 @@ export function CatalogManagementPanel({
     setRecipeVersion(null)
     setRecipeYield('1')
     setRecipeComponents({})
+    setRecipeInstructionsSnapshot({})
     setRecipeCategoryFilter('')
     setRecipeBusy(false)
     setRecipeCost(null)
@@ -300,6 +303,7 @@ export function CatalogManagementPanel({
       setInventoryItems(items)
       setRecipeVersion(recipe?.version ?? null)
       setRecipeYield(recipe === null ? '1' : String(recipe.yieldQuantity))
+      setRecipeInstructionsSnapshot(recipe?.instructionsSnapshot ?? {})
       setRecipeComponents(Object.fromEntries((recipe?.components ?? []).map((component) => {
         const item = itemById.get(component.inventoryItemId)
         if (item === undefined) throw new Error('当前配方引用了已不可用的库存物料')
@@ -447,7 +451,7 @@ export function CatalogManagementPanel({
       priceReason: '商品配置同步调整标准售价',
       description: typeof product.productSnapshot.description === 'string' ? product.productSnapshot.description : '',
       imageUrl: typeof product.productSnapshot.imageUrl === 'string' ? product.productSnapshot.imageUrl : '',
-      snapshot: product.productSnapshot,
+      snapshot: sanitizeProductDisplaySnapshot(product.productSnapshot),
       componentQuantities: Object.fromEntries(product.bundleComponents.map((component) => [component.productId, String(component.quantity)])),
     })
     setShowAdvanced(false)
@@ -562,7 +566,7 @@ export function CatalogManagementPanel({
     try {
       await api.putEndpoint(
         `/api/inventory/products/${draft.id}/recipe`,
-        { yieldQuantity, instructionsSnapshot: {}, components: storedComponents },
+        { yieldQuantity, instructionsSnapshot: recipeInstructionsSnapshot, components: storedComponents },
         { idempotencyKey: operationKey('inventory-recipe') },
       )
       await loadRecipeEditor(draft.id)
@@ -684,12 +688,12 @@ export function CatalogManagementPanel({
       setNotice({ kind: 'error', text: '组合商品数量必须为1至100' })
       return
     }
-    const productSnapshot = {
+    const productSnapshot = sanitizeProductDisplaySnapshot({
       ...draft.snapshot,
       description: draft.description.trim(),
       imageUrl: draft.imageUrl.trim(),
       salesSpecificationType: draft.salesSpecificationType,
-    }
+    })
     const currentPrice = draft.id === null
       ? null
       : products.find((product) => product.id === draft.id)?.standardPrice?.amountMinor ?? null
@@ -789,7 +793,7 @@ export function CatalogManagementPanel({
         </section>
         <div className="catalog-management-tools"><input aria-label="搜索配置商品" placeholder="搜索商品名、编号或分类" value={query} onChange={(event) => setQuery(event.target.value)} /><button type="button" onClick={startCreate}><CirclePlus size={17} /> 新增商品</button><button type="button" onClick={() => void load()}>刷新可售状态</button></div>
         {draft !== null && <form className="catalog-management-form" onSubmit={(event) => void save(event)}>
-          <header><strong>{draft.id === null ? '新增商品' : `编辑 ${draft.name}`}</strong><span>{draft.id !== null && draft.productKind === 'bundle' && draft.status !== 'inactive' && <button type="button" onClick={() => { updateDraft('status', 'inactive'); setNotice({ kind: 'success', text: '套餐已标记为停用；点击下方保存后将从顾客菜单下架，历史订单和对账会保留。' }) }}>停用套餐</button>}<button type="button" onClick={closeDraft}>取消</button></span></header>
+          <header><strong>{draft.id === null ? '新增商品' : `编辑 ${draft.name}`}</strong><span>{draft.id !== null && draft.productKind === 'bundle' && draft.status !== 'inactive' && <button type="button" onClick={() => { updateDraft('status', 'inactive'); setNotice(null) }}>标记停用（尚未保存）</button>}<button type="button" onClick={closeDraft}>取消</button></span></header>
           <div className="catalog-form-grid">
             <label>商品编号<input required disabled={draft.id !== null} pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" value={draft.code} onChange={(event) => updateDraft('code', event.target.value)} /></label>
             <label>商品名称<input required maxLength={160} value={draft.name} onChange={(event) => updateDraft('name', event.target.value)} /></label>
@@ -798,7 +802,7 @@ export function CatalogManagementPanel({
             <label>销售规格<select disabled={draft.productKind === 'bundle'} value={draft.salesSpecificationType} onChange={(event) => updateDraft('salesSpecificationType', event.target.value as SalesSpecificationType)}>{salesSpecificationOptions.map((option) => <option key={option.code} value={option.code}>{option.label}</option>)}</select><small>规格只描述销售形态；真实库存始终由下方配方引用，不重复建立库存。</small></label>
             {draft.id !== null && draft.productKind === 'single' && draft.inventoryControlMode === 'tracked' && (draft.salesSpecificationType === 'whole_bottle' || draft.salesSpecificationType === 'glass') && <div className="catalog-wide catalog-sales-companion"><strong>整瓶与单杯共用库存</strong><small>两种销售形态必须各自有商品、售价和配方，才能按不同用量正确扣减同一物料。</small><button type="button" onClick={() => startSalesCompanion(draft.salesSpecificationType === 'whole_bottle' ? 'glass' : 'whole_bottle')}>新建{draft.salesSpecificationType === 'whole_bottle' ? '单杯' : '整瓶'}版本</button></div>}
             <label>出品岗位<select disabled={draft.productKind === 'bundle'} value={draft.productKind === 'bundle' ? 'none' : draft.fulfillmentStation} onChange={(event) => updateDraft('fulfillmentStation', event.target.value as FulfillmentStation)}><option value="bar">吧台</option><option value="kitchen">后厨</option><option value="cashier">收银</option><option value="none">无需出品</option></select></label>
-            <label>销售状态<select value={draft.status} onChange={(event) => updateDraft('status', event.target.value as ProductStatus)}><option value="active">在售</option><option value="sold_out">售罄</option><option value="inactive">停用</option></select></label>
+            <label>销售状态<select value={draft.status} onChange={(event) => updateDraft('status', event.target.value as ProductStatus)}><option value="active">在售</option><option value="sold_out">售罄</option><option value="inactive">停用</option></select><small>状态更改需点击底部“保存并读回验证”；保存成功后才会影响小程序菜单。</small></label>
             <label>库存方式<select disabled={draft.productKind === 'bundle'} value={draft.productKind === 'bundle' ? 'tracked' : draft.inventoryControlMode} onChange={(event) => updateDraft('inventoryControlMode', event.target.value as InventoryControlMode)}><option value="tracked">跟踪库存（酒水等）</option><option value="not_managed">暂不管理数量（小吃水果）</option></select></label>
             <label>搜索文本<input maxLength={4000} value={draft.searchText} onChange={(event) => updateDraft('searchText', event.target.value)} /></label>
             <label>标准售价<NumberInputWithUnit disabled={!canManagePrice} inputMode="decimal" unit="元" value={draft.priceYuan} onChange={(event) => updateDraft('priceYuan', event.target.value)} />{!canManagePrice && <small>当前岗位不能定价；不会在保存后尝试补写售价。</small>}</label>
@@ -1073,11 +1077,12 @@ function sellingBlockers(product: CatalogProduct): string[] {
 function readActiveRecipe(value: unknown): {
   version: number
   yieldQuantity: number
+  instructionsSnapshot: Record<string, unknown>
   components: Array<RecipeComponentDraft & { inventoryItemId: string }>
 } | null {
   if (value === null) return null
   if (!isRecord(value) || !Number.isSafeInteger(value.version) || !Number.isSafeInteger(value.yieldQuantity)
-    || !Array.isArray(value.components)) throw new Error('库存配方返回格式无效')
+    || !isRecord(value.instructionsSnapshot) || !Array.isArray(value.components)) throw new Error('库存配方返回格式无效')
   const components = value.components.flatMap((component): Array<RecipeComponentDraft & { inventoryItemId: string }> => (
     isRecord(component) && typeof component.inventoryItemId === 'string'
       && typeof component.quantity === 'string' && typeof component.expectedWasteQuantity === 'string'
@@ -1089,7 +1094,12 @@ function readActiveRecipe(value: unknown): {
       : []
   ))
   if (components.length !== value.components.length) throw new Error('库存配方组成返回格式无效')
-  return { version: value.version as number, yieldQuantity: value.yieldQuantity as number, components }
+  return {
+    version: value.version as number,
+    yieldQuantity: value.yieldQuantity as number,
+    instructionsSnapshot: value.instructionsSnapshot,
+    components,
+  }
 }
 
 function readRecipeCostPreview(value: unknown, productId: string): RecipeCostPreview {

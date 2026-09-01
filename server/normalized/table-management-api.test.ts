@@ -122,6 +122,35 @@ describe('table management API', () => {
     expect(commands.open).not.toHaveBeenCalled()
   })
 
+  it('does not turn an omitted layout snapshot into an empty layout during edits', async () => {
+    const areaId = '55555555-5555-4555-8555-555555555555'
+    const commands = commandPort()
+    commands.updateArea.mockResolvedValue({ replayed: false, value: { id: areaId, name: '室外区' } })
+    commands.updateTable.mockResolvedValue({ replayed: false, value: { id: tableId, displayName: 'W01' } })
+    const app = await build(commands)
+
+    const areaResponse = await app.inject({
+      method: 'PATCH',
+      url: `/table-management/areas/${areaId}`,
+      headers: { 'x-idempotency-key': 'area-layout-preserve-001' },
+      payload: { name: '室外区', areaType: 'outdoor', sortOrder: 10, status: 'active' },
+    })
+    const tableResponse = await app.inject({
+      method: 'PATCH',
+      url: `/table-management/tables/${tableId}`,
+      headers: { 'x-idempotency-key': 'table-layout-preserve-001' },
+      payload: {
+        areaId, code: 'W01', displayName: 'W01', capacity: 4,
+        minimumSpendMinor: 0, currency: 'CNY', status: 'available',
+      },
+    })
+
+    expect(areaResponse.statusCode).toBe(200)
+    expect(tableResponse.statusCode).toBe(200)
+    expect(commands.updateArea).toHaveBeenCalledWith(expect.not.objectContaining({ layoutSnapshot: expect.anything() }))
+    expect(commands.updateTable).toHaveBeenCalledWith(expect.not.objectContaining({ layoutSnapshot: expect.anything() }))
+  })
+
   it('returns a scoped table list and marks responsibility separately from action permission', async () => {
     const commands = commandPort()
     const app = await build(commands, scriptedTransaction())

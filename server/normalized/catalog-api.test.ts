@@ -683,6 +683,36 @@ describe("normalized catalog HTTP API", () => {
     expect(fixture.commandCalls[0]?.requestFingerprint).toContain('"costAmountMinor":3200');
   });
 
+  it("sanitizes a legacy stored snapshot before a typed status update is returned and persisted", async () => {
+    const fixture = await createFixture({
+      productSnapshot: {
+        description: "保留的展示文案",
+        guestVisible: true,
+        recommendation: { enabled: true, priority: 1, badge: "推荐" },
+        source: { sortOrder: 20, importer: "legacy" },
+      },
+    });
+    const response = await fixture.app.inject({
+      method: "PATCH",
+      url: `/api/catalog/products/${productId}`,
+      headers: { "idempotency-key": "catalog-legacy-roundtrip-001" },
+      payload: { status: "sold_out" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.productSnapshot).toEqual({
+      description: "保留的展示文案",
+      recommendation: { badge: "推荐" },
+      source: { importer: "legacy" },
+    });
+    const update = fixture.calls.find((call) => call.sql.includes("UPDATE mbox.products"));
+    expect(update?.values[7]).toBe(JSON.stringify({
+      description: "保留的展示文案",
+      recommendation: { badge: "推荐" },
+      source: { importer: "legacy" },
+    }));
+  });
+
   it("rejects operational and amount fields hidden inside productSnapshot", async () => {
     const fixture = await createFixture();
     const legacyVisibility = await fixture.app.inject({
@@ -717,6 +747,26 @@ describe("normalized catalog HTTP API", () => {
     expect(legacyRecommendation.statusCode).toBe(400);
     expect(legacyCost.statusCode).toBe(400);
     expect(fixture.commandCalls).toHaveLength(0);
+  });
+
+  it("explains how to resolve a duplicate active product name and sales specification", async () => {
+    const fixture = await createFixture({
+      uniqueFailureConstraint: "products_active_customer_name_spec_uq",
+    });
+    const response = await fixture.app.inject({
+      method: "POST",
+      url: "/api/catalog/products",
+      headers: { "idempotency-key": "catalog-duplicate-name-001" },
+      payload: createPayload(),
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      error: {
+        code: "CATALOG_CONFLICT",
+        message: "已有同名且同售卖规格的在售商品；请先编辑或停用旧商品",
+      },
+    });
   });
 
   it("allows an active product with incomplete cost so sales can proceed while profit remains explicit", async () => {
@@ -936,6 +986,8 @@ interface FixtureOptions {
   serializationFailures?: number;
   failStaffContext?: boolean;
   inventoryControlMode?: "tracked" | "not_managed";
+  uniqueFailureConstraint?: string;
+  productSnapshot?: Record<string, unknown>;
 }
 
 async function createFixture(options: FixtureOptions = {}) {
@@ -1091,11 +1143,17 @@ function fakeQuery(
   ) {
     return result([]);
   }
+  if (sql.includes("INSERT INTO mbox.products") && options.uniqueFailureConstraint !== undefined) {
+    throw Object.assign(new Error("unique violation"), {
+      code: "23505",
+      constraint: options.uniqueFailureConstraint,
+    });
+  }
   if (sql.includes("INSERT INTO mbox.products"))
-    return result([productRow(false, options.inventoryControlMode)]);
+    return result([productRow(false, options.inventoryControlMode, options.productSnapshot)]);
   if (sql.includes("UPDATE mbox.products")) return result([{ id: productId }]);
   if (sql.includes("FROM mbox.products AS product"))
-    return result([productRow(true, options.inventoryControlMode)]);
+    return result([productRow(true, options.inventoryControlMode, options.productSnapshot)]);
   return result([]);
 }
 
@@ -1118,6 +1176,11 @@ function createPayload() {
 function productRow(
   withPrice: boolean,
   inventoryControlMode: "tracked" | "not_managed" = "not_managed",
+  productSnapshot: Record<string, unknown> = {
+    aliases: ["清爽特调"],
+    specification: "330ml",
+    pinyin: "qingshuang",
+  },
 ): Record<string, unknown> {
   return {
     id: productId,
@@ -1130,11 +1193,7 @@ function productRow(
     bundle_components: [],
     bundle_components_available: false,
     inventory_configuration_complete: true,
-    product_snapshot: {
-      aliases: ["清爽特调"],
-      specification: "330ml",
-      pinyin: "qingshuang",
-    },
+    product_snapshot: productSnapshot,
     guest_visible: true,
     search_text: "COCKTAIL-01 招牌鸡尾酒 清爽特调 qingshuang 330ml",
     recommendation_enabled: false,

@@ -1,3 +1,11 @@
+export {
+  inventoryEmployeeUnit,
+  inventoryQuantityForEmployee,
+  inventoryQuantityForStorage,
+  isLiquidInventoryCategory,
+  requiresMillilitreInventoryMigration,
+} from '../shared/inventory-unit-policy'
+
 const inventoryUnitLabels: Record<string, string> = {
   ml: '毫升',
   g: '克',

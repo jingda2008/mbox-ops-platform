@@ -82,6 +82,7 @@ describe('activity operations staff and customer contract', () => {
     expect(api).toContain("['community.activity.manage']")
     expect(repository).toContain('async componentCatalog()')
     expect(repository).toContain('SELECT item.id,item.sku,item.name,item.base_unit')
+    expect(panel).toContain("unit={inventoryUnitLabel(selected?.baseUnit ?? '')}")
     expect(repository).not.toContain('latest_unit_cost_minor')
     expect(repository).not.toContain('supplier_snapshot')
   })

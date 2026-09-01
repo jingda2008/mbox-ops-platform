@@ -174,6 +174,23 @@ integration('activity operations PostgreSQL integration', () => {
     expect(stored.rows[0]?.status).toBe('cancelled')
   })
 
+  it('keeps historical bottle-unit items visible in the activity component catalog', async () => {
+    const legacyLiquidItemId = randomUUID()
+    await pool.query(`
+      INSERT INTO mbox.inventory_items(
+        id,tenant_id,store_id,sku,name,item_type,base_unit,category_code,package_volume_ml,status
+      ) VALUES($1::uuid,$2::uuid,$3::uuid,'ACTIVITY-LEGACY-BOTTLE','活动历史瓶装威士忌',
+        'bottle','bottle','spirits.whisky',750,'active')
+    `, [legacyLiquidItemId, tenantId, storeId])
+    const catalog = await run((repository) => repository.componentCatalog())
+    expect(catalog).toContainEqual({
+      id: legacyLiquidItemId,
+      sku: 'ACTIVITY-LEGACY-BOTTLE',
+      name: '活动历史瓶装威士忌',
+      baseUnit: 'bottle',
+    })
+  })
+
   async function run<Result>(operation: (repository: ActivityOperationsRepository) => Promise<Result>) {
     return runner.run({ tenantId, storeId }, (transaction) => operation(new ActivityOperationsRepository(transaction)))
   }

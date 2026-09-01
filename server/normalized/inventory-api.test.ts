@@ -308,6 +308,156 @@ integration("normalized inventory API PostgreSQL integration", () => {
     expect(denied.statusCode).toBe(403);
   });
 
+  it("keeps historical liquid bottle units operational behind the employee millilitre compatibility layer", async () => {
+    const legacyLiquidItemId = randomUUID();
+    await pool.query(`
+      INSERT INTO mbox.inventory_items(
+        tenant_id,store_id,id,sku,name,item_type,base_unit,category_code,
+        reasonable_waste_quantity,package_volume_ml,status
+      ) VALUES($1::uuid,$2::uuid,$3::uuid,'LEGACY-WHISKY-BOTTLE','历史瓶装威士忌',
+        'bottle','bottle','spirits.whisky',10,750,'active')
+    `, [tenantId, storeId, legacyLiquidItemId]);
+    await pool.query(`
+      INSERT INTO mbox.inventory_balances(
+        tenant_id,store_id,inventory_item_id,on_hand_quantity,reserved_quantity
+      ) VALUES($1::uuid,$2::uuid,$3::uuid,5,0)
+    `, [tenantId, storeId, legacyLiquidItemId]);
+    const legacyProductId = randomUUID();
+    const legacyRecipeId = randomUUID();
+    await pool.query(`
+      INSERT INTO mbox.products(
+        tenant_id,store_id,id,code,name,category_code,fulfillment_station,
+        product_snapshot,status,inventory_control_mode
+      ) VALUES($1::uuid,$2::uuid,$3::uuid,'LEGACY-WHISKY-GLASS','历史瓶单位单杯',
+        'cocktail','bar','{}'::jsonb,'active','tracked')
+    `, [tenantId, storeId, legacyProductId]);
+    await pool.query(`
+      INSERT INTO mbox.recipes(
+        tenant_id,store_id,id,product_id,version,yield_quantity,instructions_snapshot,status,effective_at
+      ) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,1,1,'{}'::jsonb,'active',clock_timestamp())
+    `, [tenantId, storeId, legacyRecipeId, legacyProductId]);
+    await pool.query(`
+      INSERT INTO mbox.recipe_items(
+        tenant_id,store_id,recipe_id,inventory_item_id,quantity,expected_waste_quantity
+      ) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,1,0)
+    `, [tenantId, storeId, legacyRecipeId, legacyLiquidItemId]);
+    const before = await pool.query<{ recipe_id: string; recipe_count: string; count_count: string; movement_count: string; receipt_count: string }>(`
+      SELECT
+        (SELECT id::text FROM mbox.recipes WHERE tenant_id=$1 AND store_id=$2 AND product_id=$3 AND status='active') AS recipe_id,
+        (SELECT count(*)::text FROM mbox.recipes WHERE tenant_id=$1 AND store_id=$2 AND product_id=$3) AS recipe_count,
+        (SELECT count(*)::text FROM mbox.inventory_stock_counts WHERE tenant_id=$1 AND store_id=$2) AS count_count,
+        (SELECT count(*)::text FROM mbox.inventory_movements WHERE tenant_id=$1 AND store_id=$2 AND inventory_item_id=$4) AS movement_count,
+        (SELECT count(*)::text FROM mbox.purchase_receipts WHERE tenant_id=$1 AND store_id=$2) AS receipt_count
+    `, [tenantId, storeId, legacyProductId, legacyLiquidItemId]);
+
+    const recipe = await app.inject({
+      method: 'PUT',
+      url: `/api/inventory/products/${legacyProductId}/recipe`,
+      headers: headers(managerId, 'legacy-liquid-recipe-compatible-0001'),
+      payload: { yieldQuantity: 1, components: [{ inventoryItemId: legacyLiquidItemId, quantity: '0.064286' }] },
+    });
+    const count = await app.inject({
+      method: 'POST',
+      url: '/api/inventory/stock-counts',
+      headers: headers(managerId, 'legacy-liquid-count-compatible-0002'),
+      payload: { lines: [{ inventoryItemId: legacyLiquidItemId, countedQuantity: '4.5' }] },
+    });
+    const waste = await app.inject({
+      method: 'POST',
+      url: `/api/inventory/items/${legacyLiquidItemId}/waste`,
+      headers: headers(managerId, 'legacy-liquid-waste-compatible-0003'),
+      payload: { quantity: '0.1', wasteType: 'other', reason: '验证毫升兼容换算后的底层数量' },
+    });
+    const receipt = await app.inject({
+      method: 'POST',
+      url: '/api/inventory/receipts',
+      headers: headers(managerId, 'legacy-liquid-receipt-compatible-0004'),
+      payload: {
+        lines: [{ inventoryItemId: legacyLiquidItemId, quantity: '1', totalCostMinor: '100' }],
+        invoiceTotalMinor: '100',
+      },
+    });
+    const barcode = await app.inject({
+      method: 'POST',
+      url: `/api/inventory/items/${legacyLiquidItemId}/barcodes`,
+      headers: headers(managerId, 'legacy-liquid-barcode-compatible-0005'),
+      payload: { code: 'LEGACY-WHISKY-BOTTLE-CODE', packageQuantity: '1' },
+    });
+    const compatibleEdit = await app.inject({
+      method: 'PATCH',
+      url: `/api/inventory/items/${legacyLiquidItemId}`,
+      headers: headers(managerId, 'legacy-liquid-edit-compatible-0006'),
+      payload: {
+        name: '历史瓶装威士忌（容量已核对）',
+        categoryCode: 'spirits.whisky',
+        packageVolumeMl: '750',
+      },
+    });
+    const edit = await app.inject({
+      method: 'PATCH',
+      url: `/api/inventory/items/${legacyLiquidItemId}`,
+      headers: headers(managerId, 'legacy-liquid-edit-category-escape-denied-0007'),
+      payload: {
+        name: '历史瓶装威士忌',
+        categoryCode: 'food.snack',
+        packageVolumeMl: '750',
+      },
+    });
+    expect(recipe.statusCode).toBe(200);
+    expect(count.statusCode).toBe(201);
+    expect(waste.statusCode).toBe(200);
+    expect(receipt.statusCode).toBe(201);
+    expect(barcode.statusCode).toBe(200);
+    expect(compatibleEdit.statusCode).toBe(200);
+    expect(edit.statusCode).toBe(409);
+    expect(edit.json().error.message).toContain('规避单位换算');
+    const legacyOrderId = randomUUID();
+    const legacyOrderItemId = randomUUID();
+    await pool.query(`
+      INSERT INTO mbox.orders(
+        id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,
+        subtotal_amount_minor,total_amount_minor
+      ) VALUES($1,$2,$3,$4,'legacy-liquid-compatible-order','cashier','submitted','unpaid',6800,6800)
+    `, [legacyOrderId, tenantId, storeId, tableOneSessionId]);
+    await pool.query(`
+      INSERT INTO mbox.order_items(
+        id,tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,total_amount_minor,
+        fulfillment_station,product_snapshot,cost_snapshot,status
+      ) VALUES($1,$2,$3,$4,$5,1,6800,6800,'bar','{}'::jsonb,'{}'::jsonb,'submitted')
+    `, [legacyOrderItemId, tenantId, storeId, legacyOrderId, legacyProductId]);
+    const runner = new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool);
+    const consumption = await runner.run({ tenantId, storeId }, (transaction) => (
+      new InventoryRepository(transaction).consumeForOrderItems([{
+        id: legacyOrderItemId,
+        orderId: legacyOrderId,
+        productId: legacyProductId,
+        quantity: 1,
+        unitPriceMinor: 6800,
+        discountAmountMinor: 0,
+        totalAmountMinor: 6800,
+        currency: 'CNY',
+        fulfillmentStation: 'bar',
+        productSnapshot: {},
+        costSnapshot: {},
+        status: 'submitted',
+        note: null,
+      }])
+    ));
+    expect(consumption).toHaveLength(1);
+    const after = await pool.query<{ recipe_id: string; recipe_count: string; count_count: string; movement_count: string; receipt_count: string }>(`
+      SELECT
+        (SELECT id::text FROM mbox.recipes WHERE tenant_id=$1 AND store_id=$2 AND product_id=$3 AND status='active') AS recipe_id,
+        (SELECT count(*)::text FROM mbox.recipes WHERE tenant_id=$1 AND store_id=$2 AND product_id=$3) AS recipe_count,
+        (SELECT count(*)::text FROM mbox.inventory_stock_counts WHERE tenant_id=$1 AND store_id=$2) AS count_count,
+        (SELECT count(*)::text FROM mbox.inventory_movements WHERE tenant_id=$1 AND store_id=$2 AND inventory_item_id=$4) AS movement_count,
+        (SELECT count(*)::text FROM mbox.purchase_receipts WHERE tenant_id=$1 AND store_id=$2) AS receipt_count
+    `, [tenantId, storeId, legacyProductId, legacyLiquidItemId]);
+    expect(Number(after.rows[0].recipe_count)).toBe(Number(before.rows[0].recipe_count) + 1);
+    expect(Number(after.rows[0].count_count)).toBe(Number(before.rows[0].count_count) + 1);
+    expect(Number(after.rows[0].movement_count)).toBe(Number(before.rows[0].movement_count) + 2);
+    expect(Number(after.rows[0].receipt_count)).toBe(Number(before.rows[0].receipt_count) + 1);
+  });
+
   it("allows an explicitly not-managed food product without a recipe or fake stock", async () => {
     const foodProductId = randomUUID();
     await pool.query(
@@ -319,6 +469,11 @@ integration("normalized inventory API PostgreSQL integration", () => {
         '{}'::jsonb, 'active', 1800, 'not_managed')
       `,
       [tenantId, storeId, foodProductId],
+    );
+    const movementsBefore = await pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM mbox.inventory_movements
+       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND reference_type='order_item'`,
+      [tenantId, storeId],
     );
     const runner = new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool);
     const result = await runner.run({ tenantId, storeId }, (transaction) => (
@@ -344,7 +499,7 @@ integration("normalized inventory API PostgreSQL integration", () => {
        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND reference_type='order_item'`,
       [tenantId, storeId],
     );
-    expect(movements.rows[0]?.count).toBe('0');
+    expect(movements.rows[0]?.count).toBe(movementsBefore.rows[0]?.count);
   });
 
   it("turns a mobile scan package count and total cost into ml stock without requiring a manual batch or unit cost", async () => {

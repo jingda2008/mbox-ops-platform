@@ -35,8 +35,14 @@ import {
   formatReceiptReference,
   inventoryCategoryLabel,
   inventoryCategoryOptions,
+  inventoryEmployeeUnit,
+  inventoryQuantityForEmployee,
+  inventoryQuantityForStorage,
   inventoryUnitLabel,
+  isLiquidInventoryCategory,
+  requiresMillilitreInventoryMigration,
 } from './inventory-presentation'
+import { NumberInputWithUnit } from './NumberInputWithUnit'
 import { PerformanceRevisionPanel } from './PerformanceRevisionPanel'
 import { InventoryBarcodeScanner } from './InventoryBarcodeScanner'
 import { useConfirmationDialog } from './ConfirmationDialog'
@@ -747,7 +753,7 @@ function PerformanceModule({ api, auth, view, performers, requests, phases, onCh
       })}
     </div>}
     <PerformanceRevisionPanel api={api} auth={auth} schedules={schedules} onChanged={onChanged} />
-    {requests.length > 0 && <section className="staff-song-requests"><h3>点歌待办</h3>{requests.slice(0, 8).map((request) => <article key={request.id}><div><strong>{request.songTitle}</strong><span>{songStatus(request.status)}</span></div>{canManage && request.status === 'requested' && <div className="staff-song-actions"><label>报价（元）<input inputMode="decimal" value={quotes[request.id] ?? ''} onChange={(event) => setQuotes((current) => ({ ...current, [request.id]: event.target.value }))} placeholder="0" /></label><button type="button" disabled={busyKey !== null} onClick={() => transitionSong(request, 'confirm')}>接受</button><button type="button" className="is-danger" disabled={busyKey !== null} onClick={() => transitionSong(request, 'reject')}>拒绝</button></div>}{canManage && request.status === 'paid' && <button type="button" disabled={busyKey !== null} onClick={() => transitionSong(request, 'performed')}>已演唱</button>}{canManage && request.status === 'accepted' && <button type="button" className="is-danger" disabled={busyKey !== null} onClick={() => transitionSong(request, 'cancel')}>取消</button>}</article>)}</section>}
+    {requests.length > 0 && <section className="staff-song-requests"><h3>点歌待办</h3>{requests.slice(0, 8).map((request) => <article key={request.id}><div><strong>{request.songTitle}</strong><span>{songStatus(request.status)}</span></div>{canManage && request.status === 'requested' && <div className="staff-song-actions"><label>报价<NumberInputWithUnit inputMode="decimal" unit="元" value={quotes[request.id] ?? ''} onChange={(event) => setQuotes((current) => ({ ...current, [request.id]: event.target.value }))} placeholder="0" /></label><button type="button" disabled={busyKey !== null} onClick={() => transitionSong(request, 'confirm')}>接受</button><button type="button" className="is-danger" disabled={busyKey !== null} onClick={() => transitionSong(request, 'reject')}>拒绝</button></div>}{canManage && request.status === 'paid' && <button type="button" disabled={busyKey !== null} onClick={() => transitionSong(request, 'performed')}>已演唱</button>}{canManage && request.status === 'accepted' && <button type="button" className="is-danger" disabled={busyKey !== null} onClick={() => transitionSong(request, 'cancel')}>取消</button>}</article>)}</section>}
   </div>
 }
 
@@ -823,9 +829,13 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
   const canCorrectInventoryCost = canViewInventoryCost && auth.permissions.includes('inventory.cost.correct')
   const draftReceipts = view.receipts.filter((receipt) => receipt.status === 'draft' && receipt.id !== pendingReceipt?.id)
   const receivedReceipts = view.receipts.filter((receipt) => receipt.status === 'received').slice(0, 8)
+  const operationalItems = view.items
+  const legacyLiquidItems = view.items.filter((item) => requiresMillilitreInventoryMigration(item.categoryCode, item.baseUnit))
   const bindableItems = view.items
   const selectedBindableItem = bindableItems.find((item) => item.id === itemId) ?? null
   const selectedReceiptItem = bindableItems.find((item) => item.id === receiptInventoryItemId) ?? null
+  const selectedOperationalItem = operationalItems.find((item) => item.id === itemId) ?? null
+  const selectedEditItem = view.items.find((item) => item.id === itemId) ?? null
   const selectedCostCorrectionItem = view.items.find((item) => item.id === itemId) ?? null
   const newItemUsesMillilitres = isLiquidInventoryCategory(newItemCategoryCode)
 
@@ -938,13 +948,25 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
     event.preventDefault()
     if (mode === null || busy) return
     if (!itemId || !/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(quantity)) { setNotice('请选择物料并填写有效数量'); return }
+    const selectedItem = view?.items.find((item) => item.id === itemId)
+    if (selectedItem === undefined) { setNotice('所选物料已不可用，请重新选择'); return }
+    const storedQuantity = inventoryQuantityForStorage(
+      quantity,
+      selectedItem.categoryCode,
+      selectedItem.baseUnit,
+      selectedItem.packageVolumeMl,
+    )
+    if (storedQuantity === null) {
+      setNotice(`“${selectedItem.name}”缺少有效的单瓶净含量，无法把毫升安全换算为历史库存数量；请先补全物料资料`)
+      return
+    }
     if (mode === 'waste' && reason.trim().length < 1) { setNotice('损耗必须填写原因'); return }
     setBusy(true)
     setNotice('')
     try {
       if (mode === 'count') {
         const count = await api.postEndpoint<{ id: string }>('/api/inventory/stock-counts', {
-          lines: [{ inventoryItemId: itemId, countedQuantity: quantity, reason: reason.trim() || null }],
+          lines: [{ inventoryItemId: itemId, countedQuantity: storedQuantity, reason: reason.trim() || null }],
           note: '员工端单项盘点',
         }, { idempotencyKey: operationIdempotency('inventory-count-create') })
         await api.postEndpoint(`/api/inventory/stock-counts/${count.id}/submit`, {}, { idempotencyKey: operationIdempotency('inventory-count-submit') })
@@ -955,11 +977,22 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
           baseUnit: string
           wasteCostMinor?: string | null
         }>(`/api/inventory/items/${itemId}/waste`, {
-          quantity,
+          quantity: storedQuantity,
           wasteType,
           reason: reason.trim(),
         }, { idempotencyKey: operationIdempotency('inventory-waste') })
-        const remaining = formatInventoryQuantityWithUnit(result.remainingQuantity, result.baseUnit)
+        const employeeRemaining = inventoryQuantityForEmployee(
+          result.remainingQuantity,
+          selectedItem.categoryCode,
+          result.baseUnit,
+          selectedItem.packageVolumeMl,
+        )
+        const remaining = employeeRemaining === null
+          ? formatInventoryQuantityWithUnit(result.remainingQuantity, result.baseUnit)
+          : formatInventoryQuantityWithUnit(
+              employeeRemaining,
+              inventoryEmployeeUnit(selectedItem.categoryCode, result.baseUnit),
+            )
         setNotice(result.wasteCostMinor === undefined
           ? `损耗已登记，库存余量已更新为 ${remaining}`
           : result.wasteCostMinor === null
@@ -1158,6 +1191,7 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
       {canWaste && <button type="button" className={mode === 'waste' ? 'is-active' : ''} aria-pressed={mode === 'waste'} onClick={() => chooseMode('waste')}>登记损耗</button>}
       {canCorrectInventoryCost && <button type="button" className={mode === 'cost-correct' ? 'is-active' : ''} aria-pressed={mode === 'cost-correct'} onClick={() => chooseMode('cost-correct')}>核对后更正成本</button>}
     </div>}
+    {legacyLiquidItems.length > 0 && <p className="staff-module-footnote" role="status">有 {legacyLiquidItems.length} 项在用酒水仍保留历史“瓶”底账。员工在配方、盘点和损耗中统一填写毫升，系统按已登记的单瓶净含量兼容换算；收货包装数和单位成本仍按底账单位显示，避免改写历史流水。</p>}
     {canReceive && canPublishBeverage && (pendingReceipt !== null || draftReceipts.length > 0) && <label className="inventory-publish-product">关联销售商品与规格<select value={publishProductId} onChange={(event) => { setPublishProductId(event.target.value); setPublishPreview(null) }}><option value="">选择已配置商品</option>{publishProducts.map((product) => <option key={product.id} value={product.id}>{product.name} · {inventorySalesSpecificationLabel(product.salesSpecificationType)} · {product.code} · {product.status === 'active' ? '当前在售' : '待发布'}</option>)}</select><small>这里选择销售规格对应的正式商品；多个规格可以共同引用同一库存物料。确认前必须生成成本与可售预览。</small></label>}
     {canReceive && canManageCatalog && !canViewInventoryCost && (pendingReceipt !== null || draftReceipts.length > 0) && <p className="staff-module-footnote">当前账号可以确认收货，但无“查看采购成本”权限，因此不能读取毛利预览或执行一键发布；可先仅入库，再由酒水上架管理员处理。</p>}
     {publishPreview !== null && <section className="inventory-publish-preview" aria-label="入库发布预览"><header><div><strong>{publishPreview.productName} · {inventorySalesSpecificationLabel(publishPreview.salesSpecificationType)}</strong><small>配方第 {publishPreview.recipeVersion} 版 · 每批产出 {formatInventoryQuantity(publishPreview.yieldQuantity)} 份 · {formatReceiptReference(publishPreview.receiptId)}</small></div><em>{formatInventoryQuantity(publishPreview.sellableServings)} 份可售</em></header><div className="inventory-publish-metrics"><span><small>单份成本</small><strong>¥{formatInventoryMinor(publishPreview.costAmountMinor)}</strong></span><span><small>标准售价</small><strong>¥{formatInventoryMinor(publishPreview.standardPriceMinor)}</strong></span><span><small>单份毛利</small><strong>¥{formatInventoryMinor(publishPreview.grossProfitMinor)}</strong></span><span><small>毛利率</small><strong>{(publishPreview.marginBasisPoints / 100).toFixed(2)}%</strong></span></div><div className="inventory-publish-components">{publishPreview.components.map((component) => <article key={component.inventoryItemId}><strong>{component.itemName}</strong><span>本次增加 {formatInventoryQuantityWithUnit(component.incomingQuantity, component.baseUnit)} · 入库后可用 {formatInventoryQuantityWithUnit(component.totalAvailableAfterReceipt, component.baseUnit)}</span><span>库存单位成本 ¥{formatInventoryUnitCostMinor(component.sourceUnitCostMinor, component.baseUnit)}/{inventoryUnitLabel(component.baseUnit)}</span><span>每份扣减 {formatInventoryQuantityWithUnit(component.perServingDeduction, component.baseUnit)} · 成本 ¥{formatInventoryMinorDecimal(component.perServingCostMinor)}</span></article>)}</div><p>渠道：顾客扫码 {publishPreview.guestVisible && publishPreview.allowedChannels.includes('guest_qr') ? '可售' : '未开放'}；员工协助 {publishPreview.allowedChannels.includes('staff_assisted') ? '可售' : '未开放'}。确认时服务端会锁定并重新计算，预览不是绕过门禁的承诺。</p></section>}
@@ -1167,16 +1201,17 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
       <label>物料名称<input required maxLength={200} value={newItemName} onChange={(event) => setNewItemName(event.target.value)} placeholder="例如 演练用威士忌 700ml" /></label>
       <label>库存品类<select value={newItemCategoryCode} onChange={(event) => { const categoryCode = event.target.value; setNewItemCategoryCode(categoryCode); setNewItemBaseUnit(preferredInventoryBaseUnit(categoryCode)) }}>{inventoryCategoryOptions.map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select></label>
       <label>库存单位<select disabled={newItemUsesMillilitres} value={newItemBaseUnit} onChange={(event) => setNewItemBaseUnit(event.target.value as 'ml' | 'g' | 'piece')}><option value="ml">毫升（ml）</option><option value="g">克（g）</option><option value="piece">件</option></select><small>{newItemUsesMillilitres ? '该品类按毫升入库和扣减；瓶数仅作为条码包装量。' : '非液体物料按克或件管理；瓶、包等只作为包装描述。'}</small></label>
-      <label>单瓶净含量（ml）<input required={newItemUsesMillilitres} inputMode="decimal" value={newItemPackageVolumeMl} onChange={(event) => setNewItemPackageVolumeMl(event.target.value)} placeholder="例如 700" /><small>按毫升库存的酒水必须填写；条码包装量会自动要求与此一致。</small></label>
-      <label>安全库存（选填）<input inputMode="decimal" value={newItemLowStockThreshold} onChange={(event) => setNewItemLowStockThreshold(event.target.value)} placeholder={newItemBaseUnit === 'ml' ? '例如 1500' : '例如 3'} /></label>
+      <label>单瓶净含量<NumberInputWithUnit required={newItemUsesMillilitres} inputMode="decimal" unit="毫升/瓶" value={newItemPackageVolumeMl} onChange={(event) => setNewItemPackageVolumeMl(event.target.value)} placeholder="例如 700" /><small>按毫升库存的酒水必须填写；条码包装量会自动要求与此一致。</small></label>
+      <label>安全库存（选填）<NumberInputWithUnit inputMode="decimal" unit={inventoryUnitLabel(newItemBaseUnit)} value={newItemLowStockThreshold} onChange={(event) => setNewItemLowStockThreshold(event.target.value)} placeholder={newItemBaseUnit === 'ml' ? '例如 1500' : '例如 3'} /></label>
       <button type="submit" disabled={busy}>{busy ? '正在建立' : '建立物料并继续绑定条码'}</button>
     </form>}
     {mode === 'edit' && <form className="staff-module-form inventory-create-form" onSubmit={(event) => void updateInventoryItem(event)}>
       <header><strong>编辑库存物料</strong><small>可修正名称、品类、净含量和安全库存；已有收货、盘点或配方记录的物料不直接改编号或库存单位，避免历史流水失真。</small></header>
       <label>物料名称<input required maxLength={200} value={newItemName} onChange={(event) => setNewItemName(event.target.value)} /></label>
       <label>库存品类<select value={newItemCategoryCode} onChange={(event) => setNewItemCategoryCode(event.target.value)}>{!inventoryCategoryOptions.some(([code]) => code === newItemCategoryCode) && <option value={newItemCategoryCode}>当前品类（{inventoryCategoryLabel(newItemCategoryCode)}）</option>}{inventoryCategoryOptions.map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select></label>
-      <label>单瓶净含量（ml，选填）<input inputMode="decimal" value={newItemPackageVolumeMl} onChange={(event) => setNewItemPackageVolumeMl(event.target.value)} placeholder="例如 700" /></label>
-      <label>安全库存（选填）<input inputMode="decimal" value={newItemLowStockThreshold} onChange={(event) => setNewItemLowStockThreshold(event.target.value)} /></label>
+      <label>当前库存单位<input readOnly value={inventoryUnitLabel(selectedEditItem?.baseUnit ?? '')} /><small>{selectedEditItem !== null && requiresMillilitreInventoryMigration(selectedEditItem.categoryCode, selectedEditItem.baseUnit) ? '历史底账继续保留瓶单位；配方、盘点和损耗会按这里登记的单瓶净含量换算成毫升供员工录入。' : '已有流水后不直接改库存单位。'}</small></label>
+      <label>单瓶净含量（选填）<NumberInputWithUnit inputMode="decimal" unit="毫升/瓶" value={newItemPackageVolumeMl} onChange={(event) => setNewItemPackageVolumeMl(event.target.value)} placeholder="例如 700" /></label>
+      <label>安全库存（选填）<NumberInputWithUnit inputMode="decimal" unit={inventoryUnitLabel(selectedEditItem?.baseUnit ?? '')} value={newItemLowStockThreshold} onChange={(event) => setNewItemLowStockThreshold(event.target.value)} /></label>
       <button type="submit" disabled={busy}>{busy ? '正在保存' : '保存物料资料'}</button>
     </form>}
     {canReceive && draftReceipts.length > 0 && <section className="inventory-draft-receipts" aria-label="待确认收货单">
@@ -1187,15 +1222,15 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
       <header><strong>最近已确认收货</strong><small>金额和自动换算的单位成本会从服务端重新读取；刷新页面后仍可核对。</small></header>
       {receivedReceipts.map((receipt) => <article key={receipt.id}><div><strong>{formatReceiptReference(receipt.publicId)}</strong><small>{receipt.lineCount} 项 · 已确认 {receipt.receivedAt === null ? formatDateTime(receipt.createdAt) : formatDateTime(receipt.receivedAt)}</small>{canViewInventoryCost && receipt.invoiceTotalMinor !== undefined && <small>本单采购总额 ¥{formatInventoryMinorString(receipt.invoiceTotalMinor)}</small>}{receipt.lines.map((line) => <span key={`${line.inventoryItemId}:${line.batchCode}`}>{receiptLineSummary(line, canViewInventoryCost)}</span>)}</div></article>)}
     </section>}
-    {(mode === 'count' || mode === 'waste') && <form className="staff-module-form" onSubmit={(event) => void submitInventoryAction(event)}><header><strong>{mode === 'count' ? '单项盘点' : '登记损耗'}</strong><small>{mode === 'count' ? '提交后由有审批权限的岗位复核差异。' : '提交后立即形成库存流水；有成本权限时会自动显示对应成本。'}</small></header><label>物料<select required value={itemId} onChange={(event) => setItemId(event.target.value)}><option value="">请选择</option>{view.items.map((item) => <option value={item.id} key={item.id}>{item.name} · 当前 {formatInventoryQuantityWithUnit(item.availableQuantity, item.baseUnit)}</option>)}</select></label><label>{mode === 'count' ? '实盘数量' : '损耗数量'}<input required inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></label>{mode === 'waste' && <label>损耗类型<select value={wasteType} onChange={(event) => setWasteType(event.target.value as typeof wasteType)}><option value="mixing_failure">调酒失败</option><option value="discarded">报废</option><option value="expired">过期</option><option value="tasting">试饮</option><option value="complimentary">赠送</option><option value="count_difference">盘点差异</option><option value="other">其他</option></select></label>}<label>{mode === 'count' ? '差异说明（选填）' : '损耗原因'}<input required={mode === 'waste'} maxLength={500} value={reason} onChange={(event) => setReason(event.target.value)} /></label><button type="submit" disabled={busy}>{busy ? '提交中' : mode === 'count' ? '提交盘点复核' : '确认登记损耗'}</button></form>}
-    {mode === 'cost-correct' && <form className="staff-module-form" onSubmit={(event) => void submitCostCorrection(event)}><header><strong>核对后更正当前成本</strong><small>仅用于历史库存、盘点差异等无法由收货单自动恢复成本的情况。日常采购请继续只填数量和本批总额。</small></header><label>物料<select required value={itemId} onChange={(event) => setItemId(event.target.value)}><option value="">请选择</option>{view.items.map((item) => <option value={item.id} key={item.id}>{item.name} · 当前 {formatInventoryQuantityWithUnit(item.availableQuantity, item.baseUnit)}{item.costStatus === 'needs_review' ? ' · 成本待核对' : ''}</option>)}</select></label><label>核对后的当前单位成本（元 / 库存单位）<input required inputMode="decimal" value={costCorrectionYuan} onChange={(event) => setCostCorrectionYuan(event.target.value)} placeholder="例如 0.1286" /><small>{selectedCostCorrectionItem?.weightedUnitCostMinor === null || selectedCostCorrectionItem?.weightedUnitCostMinor === undefined ? '当前为待补成本；保存后会建立可追溯的当前成本。' : `当前为 ¥${formatInventoryUnitCostMinor(selectedCostCorrectionItem.weightedUnitCostMinor, selectedCostCorrectionItem.baseUnit)}/${inventoryUnitLabel(selectedCostCorrectionItem.baseUnit)}，请按凭证核对后填写新值。`} 按毫升管理的酒水填写每毫升成本；系统会保存精确值，并自动更新后续配方和组合成本。</small></label><label>更正原因<input required minLength={2} maxLength={500} value={costCorrectionReason} onChange={(event) => setCostCorrectionReason(event.target.value)} placeholder="例如：盘点后核对到原始进货单" /></label><button type="submit" disabled={busy}>{busy ? '正在保存' : '保存更正并自动重算'}</button></form>}
+    {(mode === 'count' || mode === 'waste') && <form className="staff-module-form" onSubmit={(event) => void submitInventoryAction(event)}><header><strong>{mode === 'count' ? '单项盘点' : '登记损耗'}</strong><small>{mode === 'count' ? '提交后由有审批权限的岗位复核差异。液体统一填写毫升。' : '提交后立即形成库存流水；液体统一填写毫升。'}</small></header><label>物料<select required value={itemId} onChange={(event) => setItemId(event.target.value)}><option value="">请选择</option>{operationalItems.map((item) => <option value={item.id} key={item.id}>{item.name} · 当前 {formatEmployeeInventoryQuantity(item)}</option>)}</select></label><label>{mode === 'count' ? '实盘数量' : '损耗数量'}<NumberInputWithUnit required inputMode="decimal" unit={inventoryUnitLabel(inventoryEmployeeUnit(selectedOperationalItem?.categoryCode ?? '', selectedOperationalItem?.baseUnit ?? ''))} value={quantity} onChange={(event) => setQuantity(event.target.value)} /></label>{mode === 'waste' && <label>损耗类型<select value={wasteType} onChange={(event) => setWasteType(event.target.value as typeof wasteType)}><option value="mixing_failure">调酒失败</option><option value="discarded">报废</option><option value="expired">过期</option><option value="tasting">试饮</option><option value="complimentary">赠送</option><option value="count_difference">盘点差异</option><option value="other">其他</option></select></label>}<label>{mode === 'count' ? '差异说明（选填）' : '损耗原因'}<input required={mode === 'waste'} maxLength={500} value={reason} onChange={(event) => setReason(event.target.value)} /></label><button type="submit" disabled={busy}>{busy ? '提交中' : mode === 'count' ? '提交盘点复核' : '确认登记损耗'}</button></form>}
+    {mode === 'cost-correct' && <form className="staff-module-form" onSubmit={(event) => void submitCostCorrection(event)}><header><strong>核对后更正当前成本</strong><small>仅用于历史库存、盘点差异等无法由收货单自动恢复成本的情况。日常采购请继续只填数量和本批总额。</small></header><label>物料<select required value={itemId} onChange={(event) => setItemId(event.target.value)}><option value="">请选择</option>{view.items.map((item) => <option value={item.id} key={item.id}>{item.name} · 当前 {formatInventoryQuantityWithUnit(item.availableQuantity, item.baseUnit)}{item.costStatus === 'needs_review' ? ' · 成本待核对' : ''}</option>)}</select></label><label>核对后的当前单位成本<NumberInputWithUnit required inputMode="decimal" unit={`元/${inventoryUnitLabel(selectedCostCorrectionItem?.baseUnit ?? '')}`} value={costCorrectionYuan} onChange={(event) => setCostCorrectionYuan(event.target.value)} placeholder="例如 0.1286" /><small>{selectedCostCorrectionItem?.weightedUnitCostMinor === null || selectedCostCorrectionItem?.weightedUnitCostMinor === undefined ? '当前为待补成本；保存后会建立可追溯的当前成本。' : `当前为 ¥${formatInventoryUnitCostMinor(selectedCostCorrectionItem.weightedUnitCostMinor, selectedCostCorrectionItem.baseUnit)}/${inventoryUnitLabel(selectedCostCorrectionItem.baseUnit)}，请按凭证核对后填写新值。`} 按毫升管理的酒水填写每毫升成本；系统会保存精确值，并自动更新后续配方和组合成本。</small></label><label>更正原因<input required minLength={2} maxLength={500} value={costCorrectionReason} onChange={(event) => setCostCorrectionReason(event.target.value)} placeholder="例如：盘点后核对到原始进货单" /></label><button type="submit" disabled={busy}>{busy ? '正在保存' : '保存更正并自动重算'}</button></form>}
     {mode === 'receive' && pendingReceipt === null && <form className="staff-module-form inventory-receipt-form" onSubmit={(event) => void createReceipt(event)}>
       <header><strong>手机扫码建立收货单</strong><small>常规操作只需扫码或选择物料、填写数量和本批实际采购成本；第一步不会改变库存。</small></header>
       <label className="inventory-code-field">商品包装条形码或二维码<div><input autoComplete="off" maxLength={128} value={scanCode} onChange={(event) => { const code = event.target.value.replace(/\s/g, ''); setScanCode(code); if (code !== '') setReceiptInventoryItemId('') }} placeholder="扫码优先；也可在下方选择物料" /><button type="button" onClick={() => setScannerOpen(true)}><ScanLine size={17} />扫码</button></div></label>
       <label>已建档物料（扫码不可用时）<select value={receiptInventoryItemId} onChange={(event) => { const next = event.target.value; setReceiptInventoryItemId(next); if (next !== '') setScanCode('') }}><option value="">不选，使用扫码</option>{bindableItems.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.packageVolumeMl === null ? inventoryUnitLabel(item.baseUnit) : `每瓶 ${formatInventoryQuantity(item.packageVolumeMl)} 毫升`}</option>)}</select></label>
       <label>采购凭证号（选填）<input maxLength={128} value={batchCode} onChange={(event) => setBatchCode(event.target.value)} placeholder="送货单号；不填则由系统自动编号" /></label>
-      <label>{scanCode !== '' || selectedReceiptItem?.baseUnit === 'ml' ? '包装数量（瓶/听/包）' : `实际入库数量（${inventoryUnitLabel(selectedReceiptItem?.baseUnit ?? '')}）`}<input required inputMode="decimal" value={packages} onChange={(event) => setPackages(event.target.value)} placeholder="1" /></label>
-      <label>本批实际采购成本（元）<input required inputMode="decimal" value={totalCostYuan} onChange={(event) => setTotalCostYuan(event.target.value)} placeholder="0.00" /><small>系统会按条码包装量和实际数量自动计算每瓶与库存单位成本，不需要填写 ¥/ml。</small></label>
+      <label>{scanCode !== '' || selectedReceiptItem?.baseUnit === 'ml' ? '包装数量' : '实际入库数量'}<NumberInputWithUnit required inputMode="decimal" unit={scanCode !== '' || selectedReceiptItem?.baseUnit === 'ml' ? '个包装' : inventoryUnitLabel(selectedReceiptItem?.baseUnit ?? '')} value={packages} onChange={(event) => setPackages(event.target.value)} placeholder="1" /></label>
+      <label>本批实际采购成本<NumberInputWithUnit required inputMode="decimal" unit="元" value={totalCostYuan} onChange={(event) => setTotalCostYuan(event.target.value)} placeholder="0.00" /><small>系统会按条码包装量和实际数量自动计算每瓶与库存单位成本，不需要填写 ¥/ml。</small></label>
       <label>供应商（选填）<input maxLength={200} value={supplierName} onChange={(event) => setSupplierName(event.target.value)} /></label>
       <button type="submit" disabled={busy}>{busy ? '正在建立' : '第一步：建立待收货单'}</button>
     </form>}
@@ -1205,7 +1240,7 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
       <label>库存物料<select required value={itemId} onChange={(event) => setItemId(event.target.value)}><option value="">请选择</option>{bindableItems.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.sku} · 单位 {inventoryUnitLabel(item.baseUnit)}</option>)}</select></label>
       <label className="inventory-code-field">条形码或二维码<div><input required autoComplete="off" maxLength={128} value={scanCode} onChange={(event) => setScanCode(event.target.value.replace(/\s/g, ''))} /><button type="button" onClick={() => setScannerOpen(true)}><ScanLine size={17} />扫码</button></div></label>
       <label>码类型<select value={codeType} onChange={(event) => setCodeType(event.target.value as 'barcode' | 'qr')}><option value="barcode">商品条形码</option><option value="qr">二维码</option></select></label>
-      <label>每个条码包装计入数量（{inventoryUnitLabel(selectedBindableItem?.baseUnit ?? '')}）<input required inputMode="decimal" value={packageQuantity} onChange={(event) => setPackageQuantity(event.target.value)} /><small>例如750毫升酒瓶填750；按整瓶计数的物料填1。</small></label>
+      <label>每个条码包装计入数量<NumberInputWithUnit required inputMode="decimal" unit={`${inventoryUnitLabel(selectedBindableItem?.baseUnit ?? '')}/包装`} value={packageQuantity} onChange={(event) => setPackageQuantity(event.target.value)} /><small>例如750毫升酒瓶填750；按整件计数的物料填1。</small></label>
       <button type="submit" disabled={busy}>{busy ? '正在绑定' : '确认绑定条码'}</button>
     </form>}
     <label className="inventory-category-filter">查看库存<select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}><option value="all">全部库存（{view.items.length}）</option>{[...new Set(view.items.map((item) => item.categoryCode))].sort().map((code) => <option value={code} key={code}>{inventoryCategoryLabel(code)}（{view.items.filter((item) => item.categoryCode === code).length}）</option>)}</select></label>
@@ -1214,6 +1249,20 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
     {canManageCatalog && <CatalogManagementPanel api={api} auth={auth} placement="inventory" openRequest={catalogOpenRequest} />}
     {scannerOpen && <InventoryBarcodeScanner onClose={() => setScannerOpen(false)} onDetected={acceptScan} />}
   </div>
+}
+
+function formatEmployeeInventoryQuantity(item: InventoryItemView): string {
+  const quantity = inventoryQuantityForEmployee(
+    item.availableQuantity,
+    item.categoryCode,
+    item.baseUnit,
+    item.packageVolumeMl,
+  )
+  if (quantity === null) return '净含量待补，暂不能换算'
+  return formatInventoryQuantityWithUnit(
+    quantity,
+    inventoryEmployeeUnit(item.categoryCode, item.baseUnit),
+  )
 }
 
 function OperationsModule({ view, sales, canViewProfit }: { view: ProfitView | null; sales: EmployeeSalesView[]; canViewProfit: boolean }) {
@@ -1444,7 +1493,7 @@ function DevicesModule({ api, auth, devices, jobs, bridges, routes, onChanged }:
       <label>分流名称<input required maxLength={120} value={routeName} onChange={(event) => setRouteName(event.target.value)} placeholder="例如 收银付款凭条" /></label>
       <label>业务内容<select value={routeStation} onChange={(event) => setRouteStation(event.target.value as typeof routeStation)}><option value="bar">酒水/调酒制作单</option><option value="kitchen">小吃/食品制作单</option><option value="cashier">付款凭条</option></select></label>
       <label>目标打印机<select required value={routePrinterId} onChange={(event) => setRoutePrinterId(event.target.value)}><option value="">请选择</option>{devices.filter((device) => device.deviceType === 'printer' && device.status === 'active').map((device) => <option key={device.id} value={device.id}>{device.name}（{device.windowsQueueName ?? '未配置队列'}）</option>)}</select></label>
-      <label>打印份数<input required type="number" min={1} max={5} value={routeCopies} onChange={(event) => setRouteCopies(event.target.value)} /></label>
+      <label>打印份数<NumberInputWithUnit required inputMode="numeric" min={1} max={5} unit="份" value={routeCopies} onChange={(event) => setRouteCopies(event.target.value)} /></label>
       <button type="submit" disabled={busyKey !== null}>保存打印分流</button>
     </form>}
     {routes.length > 0 && <section className="staff-song-requests"><h3>当前打印分流</h3>{routes.map((route) => <article key={route.id}><div><strong>{hardwareStationLabel(route.stationCode)} · {route.name}</strong><span>{devices.find((device) => device.id === route.printerDeviceId)?.name ?? '打印机已移除'} · {route.copies}份</span></div><div className="staff-inline-actions"><em>{route.status === 'active' ? '启用' : '暂停'}</em>{canManagePrinter && <button type="button" onClick={() => openRoute(route)}>编辑</button>}{canManagePrinter && route.status !== 'retired' && <button type="button" onClick={() => setRouteStatus(route, route.status === 'active' ? 'paused' : 'active')}>{route.status === 'active' ? '暂停' : '启用'}</button>}</div></article>)}</section>}
@@ -1768,15 +1817,6 @@ function inventorySalesSpecificationLabel(value: InventorySalesSpecificationType
   return ({
     whole_bottle: '整瓶', glass: '单杯', shot: 'Shot', cocktail: '鸡尾酒', custom: '自定义',
   } as const)[value]
-}
-
-function isLiquidInventoryCategory(code: string): boolean {
-  return code === 'spirits' || code.startsWith('spirits.')
-    || code === 'wine' || code.startsWith('wine.')
-    || code === 'mixer' || code.startsWith('mixer.')
-    || code === 'beer' || code.startsWith('beer.')
-    || code === 'bottled_spirits' || code.startsWith('bottled_spirits.')
-    || code === 'alcohol' || code.startsWith('alcohol.')
 }
 
 function preferredInventoryBaseUnit(code: string): 'ml' | 'g' | 'piece' {

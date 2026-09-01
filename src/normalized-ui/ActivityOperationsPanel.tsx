@@ -4,6 +4,7 @@ import type { NormalizedApiClient, StaffAuthView } from '../normalized-api'
 import { useConfirmationDialog } from './ConfirmationDialog'
 import { inventoryUnitLabel } from './inventory-presentation'
 import { MediaAssetPicker } from './MediaAssetPicker'
+import { NumberInputWithUnit } from './NumberInputWithUnit'
 import './activity-operations-panel.css'
 
 type ActivityStatus = 'draft' | 'published' | 'full' | 'cancelled' | 'completed'
@@ -396,16 +397,16 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
             <label>开始时间<input type="datetime-local" required value={draft.startsAt} onChange={(event) => updateDraft('startsAt', event.target.value)} /></label>
             <label>结束时间<input type="datetime-local" required value={draft.endsAt} onChange={(event) => updateDraft('endsAt', event.target.value)} /></label>
             <label>集合地点<input value={draft.assemblyLocation} onChange={(event) => updateDraft('assemblyLocation', event.target.value)} /></label>
-            <label>人数上限<input type="number" min={1} max={1000} value={draft.capacity} onChange={(event) => updateDraft('capacity', event.target.value)} /></label>
+            <label>人数上限<NumberInputWithUnit inputMode="numeric" min={1} max={1000} unit="人" value={draft.capacity} onChange={(event) => updateDraft('capacity', event.target.value)} /></label>
             <label className="wide">封面图片（可选）<input readOnly value={draft.coverUrl} placeholder="请通过下方图片库上传或选择（单张不超过 200KB）" /></label>
             <div className="wide"><MediaAssetPicker api={api} purpose="community_activity" value={draft.coverUrl} onChange={(coverUrl)=>updateDraft('coverUrl',coverUrl)} label="上传活动封面" /></div>
           </fieldset>
           <fieldset><legend>费用、权益和客群</legend>
             <label>计价方式<select value={draft.feeBasis} onChange={(event) => updateDraft('feeBasis', event.target.value)}><option value="per_registration">每次报名/每组</option><option value="per_person">每人</option></select></label>
             <label>预付方式<select value={draft.paymentMode} onChange={(event) => updateDraft('paymentMode', event.target.value as ActivityPaymentMode)}><option value="none">无需预付</option><option value="deposit_optional">订金可选</option><option value="deposit_required">必须付订金</option><option value="full_required">必须全额预付</option></select></label>
-            <label>活动费用（元）<input inputMode="decimal" value={draft.feeYuan} onChange={(event) => updateDraft('feeYuan', event.target.value)} /></label>
-            <label>订金（元）<input inputMode="decimal" value={draft.depositYuan} onChange={(event) => updateDraft('depositYuan', event.target.value)} /></label>
-            <label>付款时限（分钟）<input type="number" min={5} max={1440} value={draft.paymentDeadlineMinutes} onChange={(event) => updateDraft('paymentDeadlineMinutes', event.target.value)} /></label>
+            <label>活动费用<NumberInputWithUnit inputMode="decimal" unit="元" value={draft.feeYuan} onChange={(event) => updateDraft('feeYuan', event.target.value)} /></label>
+            <label>订金<NumberInputWithUnit inputMode="decimal" unit="元" value={draft.depositYuan} onChange={(event) => updateDraft('depositYuan', event.target.value)} /></label>
+            <label>付款时限<NumberInputWithUnit inputMode="numeric" min={5} max={1440} unit="分钟" value={draft.paymentDeadlineMinutes} onChange={(event) => updateDraft('paymentDeadlineMinutes', event.target.value)} /></label>
             <label className="wide">付款说明<input value={draft.paymentRuleText} onChange={(event) => updateDraft('paymentRuleText', event.target.value)} /></label>
             <label>可见范围<select value={draft.visibility} onChange={(event) => updateDraft('visibility', event.target.value)}><option value="public">所有顾客</option><option value="member">所有会员</option><option value="segment">指定客群</option></select></label>
             <div className="activity-audience-options wide"><span>指定会员等级</span>{memberLevels.map(([code,label]) => <label key={code}><input type="checkbox" disabled={draft.visibility !== 'segment'} checked={draft.audienceMemberLevels.includes(code)} onChange={() => updateDraft('audienceMemberLevels', toggle(draft.audienceMemberLevels,code))} />{label}</label>)}</div>
@@ -419,13 +420,13 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
             <div className="wide activity-package-editor-list">{draft.packages.map((activityPackage,index)=><article key={index} className="activity-package-editor">
               <header><strong>套餐 {index+1}</strong><button type="button" onClick={()=>removePackage(index)}>删除</button></header>
               <label>套餐名称<input required minLength={2} maxLength={120} value={activityPackage.name} onChange={(event)=>updatePackage(index,'name',event.target.value)} /></label>
-              <label>名额<input type="number" min={1} max={draft.capacity || 1000} value={activityPackage.capacity} onChange={(event)=>updatePackage(index,'capacity',event.target.value)} /></label>
-              <label>加购价（元）<input inputMode="decimal" value={activityPackage.feeYuan} onChange={(event)=>updatePackage(index,'feeYuan',event.target.value)} /></label>
-              <label>订金（元）<input inputMode="decimal" value={activityPackage.depositYuan} onChange={(event)=>updatePackage(index,'depositYuan',event.target.value)} /></label>
+              <label>名额<NumberInputWithUnit inputMode="numeric" min={1} max={draft.capacity || 1000} unit="人" value={activityPackage.capacity} onChange={(event)=>updatePackage(index,'capacity',event.target.value)} /></label>
+              <label>加购价<NumberInputWithUnit inputMode="decimal" unit="元" value={activityPackage.feeYuan} onChange={(event)=>updatePackage(index,'feeYuan',event.target.value)} /></label>
+              <label>订金<NumberInputWithUnit inputMode="decimal" unit="元" value={activityPackage.depositYuan} onChange={(event)=>updatePackage(index,'depositYuan',event.target.value)} /></label>
               <label>计价方式<select value={activityPackage.feeBasis} onChange={(event)=>updatePackage(index,'feeBasis',event.target.value as PackageForm['feeBasis'])}><option value="per_registration">每次报名</option><option value="per_person">每人</option></select></label>
               <label>预付方式<select value={activityPackage.paymentMode} onChange={(event)=>updatePackage(index,'paymentMode',event.target.value as ActivityPaymentMode)}><option value="none">无需预付</option><option value="deposit_optional">订金可选</option><option value="deposit_required">必须付订金</option><option value="full_required">必须全额预付</option></select></label>
-              <label>付款时限（分钟）<input type="number" min={5} max={1440} value={activityPackage.paymentDeadlineMinutes} onChange={(event)=>updatePackage(index,'paymentDeadlineMinutes',event.target.value)} /></label>
-              <label>每会员限购<input type="number" min={1} max={20} value={activityPackage.memberPurchaseLimit} onChange={(event)=>updatePackage(index,'memberPurchaseLimit',event.target.value)} /></label>
+              <label>付款时限<NumberInputWithUnit inputMode="numeric" min={5} max={1440} unit="分钟" value={activityPackage.paymentDeadlineMinutes} onChange={(event)=>updatePackage(index,'paymentDeadlineMinutes',event.target.value)} /></label>
+              <label>每会员限购<NumberInputWithUnit inputMode="numeric" min={1} max={20} unit="份/会员" value={activityPackage.memberPurchaseLimit} onChange={(event)=>updatePackage(index,'memberPurchaseLimit',event.target.value)} /></label>
               <label>开售时间（可空）<input type="datetime-local" value={activityPackage.availableFrom} onChange={(event)=>updatePackage(index,'availableFrom',event.target.value)} /></label>
               <label>停售时间（可空）<input type="datetime-local" value={activityPackage.availableUntil} onChange={(event)=>updatePackage(index,'availableUntil',event.target.value)} /></label>
               <label className="wide">付款说明<input required value={activityPackage.paymentRuleText} onChange={(event)=>updatePackage(index,'paymentRuleText',event.target.value)} /></label>
@@ -619,7 +620,7 @@ function PackageComponentSelector({
           {selected === undefined && <option value={component.inventoryItemId}>{component.inventoryItemId === '' ? '旧草稿物料无法识别，请重新选择' : '已选物料当前不可用，请重新选择'}</option>}
           {catalog.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.sku} · {inventoryUnitLabel(item.baseUnit)}</option>)}
         </select></label>
-        <label>每份数量<input inputMode="decimal" value={component.quantity} onChange={(event) => update(index, { quantity: event.target.value })} /></label>
+        <label>每份数量<NumberInputWithUnit inputMode="decimal" unit={inventoryUnitLabel(selected?.baseUnit ?? '')} value={component.quantity} onChange={(event) => update(index, { quantity: event.target.value })} /></label>
         <label>用量方式<select value={component.perParticipant ? 'per_person' : 'per_registration'} onChange={(event) => update(index, { perParticipant: event.target.value === 'per_person' })}><option value="per_person">每人</option><option value="per_registration">每次报名</option></select></label>
         <button type="button" onClick={() => onChange(componentEditorText(components.filter((_, currentIndex) => currentIndex !== index)))}>移除</button>
       </div>

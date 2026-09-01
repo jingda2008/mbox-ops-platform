@@ -5,7 +5,12 @@ import {
   formatInventoryUnitCostMinor,
   formatReceiptReference,
   inventoryCategoryLabel,
+  inventoryEmployeeUnit,
+  inventoryQuantityForEmployee,
+  inventoryQuantityForStorage,
   inventoryUnitLabel,
+  isLiquidInventoryCategory,
+  requiresMillilitreInventoryMigration,
 } from './inventory-presentation'
 
 describe('inventory presentation', () => {
@@ -34,5 +39,17 @@ describe('inventory presentation', () => {
 
   it('shows a short traceable receipt reference instead of a raw UUID', () => {
     expect(formatReceiptReference('receipt-aa20e721-4822-43ad-9df2-ffd1d8e1b8f5')).toBe('收货单 E1B8F5')
+  })
+
+  it('presents liquid employee operations in millilitres while preserving compatible historical storage', () => {
+    expect(isLiquidInventoryCategory('spirits.whisky')).toBe(true)
+    expect(isLiquidInventoryCategory('mixer.juice')).toBe(true)
+    expect(isLiquidInventoryCategory('food.snack')).toBe(false)
+    expect(requiresMillilitreInventoryMigration('spirits.whisky', 'bottle')).toBe(true)
+    expect(requiresMillilitreInventoryMigration('spirits.whisky', 'ml')).toBe(false)
+    expect(requiresMillilitreInventoryMigration('food.snack', 'piece')).toBe(false)
+    expect(inventoryEmployeeUnit('spirits.whisky', 'bottle')).toBe('ml')
+    expect(inventoryQuantityForEmployee('0.3', 'mixer.juice', 'bottle', '330')).toBe('99')
+    expect(inventoryQuantityForStorage('99', 'mixer.juice', 'bottle', '330')).toBe('0.3')
   })
 })

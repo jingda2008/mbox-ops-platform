@@ -36,7 +36,7 @@ describe('mini-program mobile business flow contract', () => {
     const reservation = read('miniprogram/pages/reservations/index.js')
     const view = read('miniprogram/pages/reservations/index.wxml')
     expect(reservation).toContain('step: 1')
-    expect(reservation).toContain('step: Math.min(3, this.data.step + 1)')
+    expect(reservation).toContain('const step = Math.min(3, this.data.step + 1)')
     expect(reservation).toContain('getReservationPerformances(this.data.reservationDate)')
     expect(reservation).toContain('preferredScheduleId: show ? show.id : null')
     expect(view).toContain('第一步')

@@ -4371,14 +4371,21 @@ export class CustomerExperienceRepository {
           'name', component_product.name,
           'quantity', component.quantity
         ) ORDER BY component.sort_order, component.id) AS items,
-        sum(component.quantity * component_price.amount_minor)::bigint AS separate_amount_minor
+        CASE
+          WHEN count(*) > 0 AND bool_and(
+            component_price.amount_minor IS NOT NULL
+            AND component_price.currency = price.currency
+          )
+          THEN sum(component.quantity * component_price.amount_minor)::bigint
+          ELSE NULL
+        END AS separate_amount_minor
         FROM mbox.product_bundle_components AS component
         JOIN mbox.products AS component_product
           ON component_product.tenant_id = component.tenant_id
          AND component_product.store_id = component.store_id
          AND component_product.id = component.component_product_id
-        JOIN LATERAL (
-          SELECT candidate.amount_minor
+        LEFT JOIN LATERAL (
+          SELECT candidate.amount_minor, candidate.currency
           FROM mbox.product_prices AS candidate
           WHERE candidate.tenant_id = component_product.tenant_id
             AND candidate.store_id = component_product.store_id

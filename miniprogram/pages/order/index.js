@@ -73,6 +73,21 @@ function compactMoney(amount) {
   return `${minor < 0 ? '-' : ''}¥${grouped}${cents ? `.${String(cents).padStart(2, '0')}` : ''}`
 }
 
+function bundleValuePresentation(item) {
+  const amountMinor = Number(item.amountMinor)
+  const separateAmountMinor = Number(item.separateAmountMinor)
+  const savingsAmountMinor = Number(item.savingsAmountMinor)
+  const discountVisible = item.productKind === 'bundle'
+    && Number.isSafeInteger(amountMinor) && amountMinor >= 0
+    && Number.isSafeInteger(separateAmountMinor) && separateAmountMinor > amountMinor
+    && Number.isSafeInteger(savingsAmountMinor) && savingsAmountMinor === separateAmountMinor - amountMinor
+  return {
+    discountVisible,
+    separatePriceText: discountVisible ? compactMoney(separateAmountMinor) : '',
+    savingsText: discountVisible ? `组合省 ${compactMoney(savingsAmountMinor)}` : '',
+  }
+}
+
 // The app never owns the question wording, answer taxonomy, or the scoring
 // policy. This empty state is intentionally a non-decision: when the policy
 // endpoint is unavailable, customers can still order normally and can request
@@ -196,7 +211,7 @@ function menuProducts(items) {
     return (left.sortOrder || 0) - (right.sortOrder || 0)
   }).map((item) => {
     const availability = menuAvailability(item)
-    return Object.assign({}, item, {
+    return Object.assign({}, item, bundleValuePresentation(item), {
       categoryName: customerCategoryName(item),
       priceText: money(item.amountMinor),
       includedText: (item.bundleComponents || []).map((line) => `${line.name || '组合内容'}×${line.quantity || 1}`).join(' · '),
@@ -415,6 +430,7 @@ Page({
     performanceError: '',
     products: [],
     visibleProducts: [],
+    detailProduct: null,
     categories: [{ code: 'all', name: '全部' }],
     selectedCategory: 'all',
     subcategories: [],
@@ -653,6 +669,7 @@ Page({
         busy: false, cartSyncing: false, clearingCart: false, quickServiceBusy: '',
         checkoutLocked: false, pendingPayment: null, paymentResult: null, cart: [], cartVersion: 0, cartGeneration: 0,
         cartTotal: '¥0.00', cartTotalCompact: '¥0', cartCount: 0, cartExpanded: false, checkoutConfirmVisible: false, cartWritesFrozen: false,
+        detailProduct: null,
         recommendations: [], recommendationPublicId: '', recommendationAttribution: null, recommendationEmpty: false, recommendationError: '', performance: null, performanceError: '',
         recommendationConfiguration: EMPTY_RECOMMENDATION_CONFIGURATION, recommendationQuestionVisible: false, recommendationQuestionIndex: 0, recommendationQuestion: null, recommendationAnswers: {},
       })
@@ -981,6 +998,18 @@ Page({
     this.setData(categoryState, () => this.applyFilters())
   },
   selectSubcategory(event) { this.setData({ selectedSubcategory: event.currentTarget.dataset.code }, () => this.applyFilters()) },
+  openProductDetail(event) {
+    const productId = String(event.currentTarget.dataset.id || '')
+    const detailProduct = this.data.products.find((item) => item.productId === productId) || null
+    if (detailProduct) this.setData({ detailProduct })
+  },
+  closeProductDetail() { this.setData({ detailProduct: null }) },
+  keepProductDetailOpen() {},
+  previewProductImage() {
+    const imageUrl = this.data.detailProduct && this.data.detailProduct.imageUrl
+    if (!imageUrl) return
+    wx.previewImage({ current: imageUrl, urls: [imageUrl] })
+  },
   applyFilters() {
     const search = this.data.searchText.trim().toLowerCase()
     const visibleProducts = this.data.products.filter((item) => {

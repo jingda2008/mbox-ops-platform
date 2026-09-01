@@ -534,7 +534,9 @@
   gap: 16rpx;
 }
 .product-row {
+  box-sizing: border-box;
   display: flex;
+  height: 520rpx;
   min-width: 0;
   min-height: 520rpx;
   overflow: hidden;
@@ -546,6 +548,9 @@
   background: #fff;
   box-shadow: 0 8rpx 26rpx rgba(42, 34, 26, 0.045);
 }
+.product-row--pressed {
+  opacity: .9;
+}
 .product-row.is-unavailable {
   border-color: #e2d7cc;
   background: #fbf8f4;
@@ -554,9 +559,10 @@
   opacity: .62;
 }
 .product-media {
+  position: relative;
   display: flex;
   width: 100%;
-  height: 236rpx;
+  height: 274rpx;
   overflow: hidden;
   align-items: center;
   flex: 0 0 auto;
@@ -578,9 +584,34 @@
   font-family: "Songti SC", serif;
   font-size: 42rpx;
 }
+.product-media__detail-hint {
+  position: absolute;
+  right: 10rpx;
+  bottom: 10rpx;
+  padding: 5rpx 10rpx;
+  border: 1rpx solid rgba(255, 255, 255, .46);
+  border-radius: 999rpx;
+  background: rgba(14, 20, 17, .66);
+  color: #fff;
+  font-size: 16rpx;
+  line-height: 1.25;
+}
+.product-media__saving {
+  position: absolute;
+  top: 10rpx;
+  left: 10rpx;
+  padding: 6rpx 10rpx;
+  border: 1rpx solid rgba(255, 238, 204, .7);
+  border-radius: 9rpx;
+  background: rgba(139, 87, 26, .88);
+  color: #fff7e8;
+  font-size: 17rpx;
+  font-weight: 800;
+  line-height: 1.25;
+}
 .product-main {
   min-width: 0;
-  padding: 18rpx 18rpx 8rpx;
+  padding: 12rpx 14rpx 4rpx;
   flex: 1;
 }
 .product-main text {
@@ -592,25 +623,35 @@
   font-weight: 700;
 }
 .product-name {
-  margin-top: 6rpx;
+  margin-top: 4rpx;
   font-family: "Songti SC", "STSong", serif;
   font-size: 27rpx;
   font-weight: 650;
 }
 .product-copy {
   display: -webkit-box;
-  margin-top: 8rpx;
+  margin-top: 5rpx;
   overflow: hidden;
   color: #7a736b;
   font-size: 20rpx;
-  line-height: 1.5;
+  line-height: 1.35;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
+}
+.product-saving {
+  margin-top: 7rpx;
+  overflow: hidden;
+  color: #958c83;
+  font-size: 17rpx;
+  line-height: 1.3;
+  text-decoration: line-through;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .product-action {
   display: flex;
-  min-height: 110rpx;
-  padding: 4rpx 18rpx 18rpx;
+  min-height: 96rpx;
+  padding: 0 14rpx 12rpx;
   align-items: flex-end;
   justify-content: space-between;
   flex: 0 0 auto;
@@ -672,6 +713,217 @@
   color: #806b5e;
   font-size: 18rpx;
   line-height: 1.35;
+}
+.product-detail-mask {
+  z-index: 70;
+  padding-top: 56rpx;
+}
+.product-detail-sheet {
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  max-height: 92vh;
+  overflow: hidden;
+  border-radius: 30rpx 30rpx 0 0;
+  background: #faf8f4;
+}
+.product-detail-scroll {
+  max-height: 92vh;
+}
+.product-detail-close {
+  position: absolute;
+  z-index: 2;
+  top: 18rpx;
+  right: 18rpx;
+  display: flex;
+  width: 88rpx;
+  height: 88rpx;
+  margin: 0;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border: 1rpx solid rgba(255, 255, 255, .58);
+  border-radius: 44rpx;
+  background: rgba(18, 22, 19, .72);
+  color: #fff;
+  font-size: 42rpx;
+  font-weight: 300;
+  line-height: 88rpx;
+}
+.product-detail-close::after,
+.product-detail-footer button::after {
+  border: 0;
+}
+.product-detail-hero {
+  position: relative;
+  display: flex;
+  width: 100%;
+  height: 500rpx;
+  overflow: hidden;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(145deg, #284536, #101713);
+}
+.product-detail-hero image,
+.product-detail-placeholder {
+  width: 100%;
+  height: 100%;
+}
+.product-detail-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #d7bd93;
+  font-family: "Songti SC", serif;
+  font-size: 64rpx;
+}
+.product-detail-preview-hint {
+  position: absolute;
+  right: 20rpx;
+  bottom: 20rpx;
+  padding: 7rpx 14rpx;
+  border: 1rpx solid rgba(255, 255, 255, .48);
+  border-radius: 999rpx;
+  background: rgba(13, 18, 15, .68);
+  color: #fff;
+  font-size: 19rpx;
+}
+.product-detail-content {
+  padding: 24rpx 28rpx calc(30rpx + env(safe-area-inset-bottom));
+}
+.product-detail-kind,
+.product-detail-name,
+.product-detail-specification,
+.product-detail-description,
+.product-detail-section-title {
+  display: block;
+}
+.product-detail-kind {
+  color: #9b6a31;
+  font-size: 20rpx;
+  font-weight: 750;
+}
+.product-detail-name {
+  margin-top: 6rpx;
+  color: #28231f;
+  font-family: "Songti SC", "STSong", serif;
+  font-size: 40rpx;
+  font-weight: 650;
+  line-height: 1.25;
+}
+.product-detail-specification {
+  margin-top: 10rpx;
+  color: #80776e;
+  font-size: 21rpx;
+}
+.product-detail-description {
+  margin-top: 18rpx;
+  color: #625b54;
+  font-size: 23rpx;
+  line-height: 1.65;
+}
+.product-detail-components {
+  margin-top: 22rpx;
+  padding: 18rpx 20rpx;
+  border-radius: 16rpx;
+  background: #f0ede7;
+}
+.product-detail-section-title {
+  margin-bottom: 8rpx;
+  color: #6e655d;
+  font-size: 20rpx;
+  font-weight: 750;
+}
+.product-detail-component {
+  display: flex;
+  min-height: 44rpx;
+  align-items: center;
+  justify-content: space-between;
+  color: #3c3732;
+  font-size: 22rpx;
+  gap: 18rpx;
+}
+.product-detail-component text:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.product-detail-component text:last-child {
+  flex: 0 0 auto;
+}
+.product-detail-saving {
+  display: flex;
+  margin-top: 20rpx;
+  padding: 16rpx 18rpx;
+  align-items: center;
+  justify-content: space-between;
+  border: 1rpx solid #e0c99f;
+  border-radius: 15rpx;
+  background: #fbf3e4;
+  gap: 16rpx;
+}
+.product-detail-saving view text {
+  display: block;
+}
+.product-detail-saving view text:first-child {
+  color: #877d72;
+  font-size: 19rpx;
+}
+.product-detail-saving view text:last-child {
+  margin-top: 3rpx;
+  color: #877d72;
+  font-size: 23rpx;
+  text-decoration: line-through;
+}
+.product-detail-saving > text {
+  color: #875b22;
+  font-size: 24rpx;
+  font-weight: 800;
+}
+.product-detail-footer {
+  display: grid;
+  margin-top: 24rpx;
+  align-items: center;
+  grid-template-columns: minmax(0, 1fr) 260rpx;
+  gap: 18rpx;
+}
+.product-detail-footer > view text {
+  display: block;
+}
+.product-detail-footer > view text:first-child {
+  color: #81786f;
+  font-size: 19rpx;
+}
+.product-detail-footer > view text:last-child {
+  margin-top: 3rpx;
+  color: #27231f;
+  font-size: 36rpx;
+  font-weight: 800;
+}
+.product-detail-footer button {
+  width: 100%;
+  min-height: 88rpx;
+  margin: 0;
+  padding: 0 18rpx;
+  border: 0;
+  border-radius: 44rpx;
+  background: #315d46;
+  color: #fff;
+  font-size: 23rpx;
+  font-weight: 750;
+  line-height: 88rpx;
+}
+.product-detail-footer .product-detail-unavailable {
+  background: #eee7df;
+  color: #806b5e;
+}
+.product-detail-browse-note {
+  color: #315d46;
+  font-size: 21rpx;
+  font-weight: 700;
+  line-height: 1.45;
+  text-align: right;
 }
 .cart-dock {
   position: fixed;
@@ -884,9 +1136,10 @@
   .recommend-entry__action-icon { width: 44rpx; height: 44rpx; }
   .recommend-entry__actions button > view text:first-child { font-size: 19rpx; }
   .recommend-entry__actions button > view text:last-child { font-size: 15rpx; }
-  .product-media { height: 218rpx; }
+  .product-media { height: 268rpx; }
   .product-main { padding-right: 15rpx; padding-left: 15rpx; }
   .product-action { padding-right: 15rpx; padding-left: 15rpx; }
+  .product-detail-hero { height: 470rpx; }
   .checkout-button {
     width: 220rpx;
   }

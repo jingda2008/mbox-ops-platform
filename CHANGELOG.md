@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.0-rc.167 - 2026-09-01
+
+- Gives menu photography more visual weight inside the existing Mini Program
+  product-card frame and removes excess spacing between price and details.
+- Adds a product-detail dialog and full-image preview without turning the whole
+  card into an accidental add-to-cart action.
+- Returns server-authoritative bundle separate-sale totals and savings to both
+  public and table-scanned menus, and shows the savings beside qualifying
+  bundles in the native Mini Program.
+- Suppresses a savings claim when any component lacks a current standard price,
+  currencies differ, or the separate-sale total does not exceed the bundle
+  price.
+
 ## 1.0.0-rc.166 - 2026-09-01
 
 - Lets staff enter liquid recipe quantities, stock counts and waste in

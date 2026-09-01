@@ -98,7 +98,7 @@
 
     <view wx:if="{{recommendationQuestionVisible && recommendationQuestion}}" class="recommend-question sheet-mask">
       <scroll-view scroll-y="true" class="recommend-question__sheet">
-        <button class="recommend-question__close" aria-label="关闭帮我选" bindtap="closeRecommendationQuestions">取消</button>
+        <button class="recommend-question__close compact-text-action" aria-label="关闭帮我选" bindtap="closeRecommendationQuestions">取消</button>
         <view class="recommend-question__head"><text>帮我选</text><text>{{recommendationQuestion.title}}</text></view>
         <view class="recommend-question__progress"><text wx:for="{{recommendationConfiguration.questions}}" wx:key="code" class="{{index <= recommendationQuestionIndex ? 'is-active' : ''}}"></text></view>
         <view class="recommend-question__options"><button wx:for="{{recommendationQuestion.options}}" wx:key="value" data-value="{{item.value}}" bindtap="selectRecommendationAnswer">{{item.label}}</button></view>
@@ -134,7 +134,7 @@
 
   <view wx:if="{{detailProduct}}" class="product-detail-mask sheet-mask" bindtap="closeProductDetail">
     <view class="product-detail-sheet" catchtap="keepProductDetailOpen">
-      <button class="product-detail-close" aria-label="关闭商品详情" catchtap="closeProductDetail">×</button>
+      <button class="product-detail-close compact-icon-action" aria-label="关闭商品详情" catchtap="closeProductDetail">×</button>
       <scroll-view scroll-y class="product-detail-scroll">
         <view class="product-detail-hero" catchtap="previewProductImage">
           <image wx:if="{{detailProduct.imageUrl}}" src="{{detailProduct.imageUrl}}" mode="aspectFill" />
@@ -170,7 +170,7 @@
   </view>
 
   <view wx:if="{{checkoutConfirmVisible}}" class="checkout-confirm sheet-mask">
-    <view class="checkout-confirm__sheet"><view class="sheet-handle"></view><view class="checkout-confirm__head"><view><text class="checkout-confirm__eyebrow">本桌订单</text><text class="checkout-confirm__title">核对商品与金额</text></view><view class="checkout-confirm__close-slot"><button class="checkout-confirm__close" aria-label="取消并关闭订单明细" hover-class="checkout-confirm__close--pressed" bindtap="closeCheckoutConfirm" disabled="{{busy}}">取消</button></view></view>
+    <view class="checkout-confirm__sheet"><view class="sheet-handle"></view><view class="checkout-confirm__head"><view><text class="checkout-confirm__eyebrow">本桌订单</text><text class="checkout-confirm__title">核对商品与金额</text></view><view class="checkout-confirm__close-slot"><button class="checkout-confirm__close compact-text-action" aria-label="关闭订单明细" hover-class="checkout-confirm__close--pressed" bindtap="closeCheckoutConfirm" disabled="{{busy}}">关闭</button></view></view>
       <scroll-view scroll-y class="checkout-confirm__lines"><view wx:for="{{cart}}" wx:key="productId" class="checkout-confirm__line"><view class="checkout-confirm__copy"><text>{{item.name}}</text><text>{{item.priceText}} × {{item.quantity}} · 小计 {{item.subtotalText}}</text><text wx:if="{{!item.available}}" class="cart-line__unavailable">{{item.unavailableReason}}</text></view><view class="checkout-confirm__actions"><button class="checkout-confirm__remove" aria-label="移除{{item.name}}" data-id="{{item.productId}}" bindtap="removeCartLine" disabled="{{busy || cartSyncing || cartWritesFrozen}}">移除</button><button data-id="{{item.productId}}" data-delta="-1" bindtap="changeQuantity" disabled="{{busy || cartSyncing || cartWritesFrozen}}">−</button><text>{{item.quantity}}</text><button data-id="{{item.productId}}" data-delta="1" bindtap="changeQuantity" disabled="{{busy || cartSyncing || cartWritesFrozen || !item.available}}">＋</button></view></view></scroll-view>
       <view class="checkout-confirm__total"><view><text class="checkout-confirm__total-label">本次应付</text><text class="checkout-confirm__total-note">确认后调起微信支付</text></view><text class="checkout-confirm__total-price">{{cartTotal}}</text></view>
       <view class="checkout-confirm__footer"><button class="checkout-confirm__footer-button secondary-button" bindtap="closeCheckoutConfirm" disabled="{{busy}}">继续加购</button><button class="checkout-confirm__footer-button primary-button" bindtap="confirmCheckout" loading="{{busy}}" disabled="{{busy || cartSyncing || cartWritesFrozen || checkoutLocked}}">{{checkoutLocked ? '订单确认中' : '确认支付'}}</button></view>
@@ -178,7 +178,7 @@
   </view>
 
   <view wx:if="{{paymentResult}}" class="payment-result sheet-mask">
-    <view class="payment-result__sheet"><button class="payment-result__close" aria-label="取消并关闭付款提示" hover-class="payment-result__close--pressed" bindtap="closePaymentResult">取消</button><view class="payment-result__mark payment-result__mark--{{paymentResult.kind}}">{{paymentResult.mark}}</view><text class="payment-result__title">{{paymentResult.title}}</text><text class="payment-result__copy">{{paymentResult.copy}}</text><view class="payment-result__actions"><button class="secondary-button" bindtap="openPaymentResultAccount">查看本桌账单</button><button wx:if="{{paymentResult.canRetry}}" class="primary-button" bindtap="retryPaymentFromResult" loading="{{busy}}">继续付款</button><button wx:else class="primary-button" bindtap="closePaymentResult">完成</button></view></view>
+    <view class="payment-result__sheet"><button class="payment-result__close compact-text-action" aria-label="关闭付款提示" hover-class="payment-result__close--pressed" bindtap="closePaymentResult">关闭</button><view class="payment-result__mark payment-result__mark--{{paymentResult.kind}}">{{paymentResult.mark}}</view><text class="payment-result__title">{{paymentResult.title}}</text><text class="payment-result__copy">{{paymentResult.copy}}</text><view class="payment-result__actions"><button class="secondary-button" bindtap="openPaymentResultAccount">查看本桌账单</button><button wx:if="{{paymentResult.canRetry}}" class="primary-button" bindtap="retryPaymentFromResult" loading="{{busy}}">继续付款</button><button wx:else class="primary-button" bindtap="closePaymentResult">完成</button></view></view>
   </view>
 
 </view>

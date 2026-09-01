@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.0-rc.168 - 2026-09-02
+
+- Makes legacy product snapshots safe to load and save by retaining only
+  display metadata while keeping operational fields in typed catalog columns.
+- Preserves table-map layouts and recipe instruction snapshots when staff edit
+  unrelated fields instead of silently replacing omitted values with empty
+  objects.
+- Rebinds bundle components away from 16 verified duplicate seed products,
+  retires only those legacy duplicates and prevents new active products from
+  sharing both a normalized customer name and sales specification.
+- Rewords the product deactivation control to make its draft state explicit and
+  tells staff that the change takes effect only after the catalog save succeeds.
+
 ## 1.0.0-rc.167 - 2026-09-01
 
 - Gives menu photography more visual weight inside the existing Mini Program

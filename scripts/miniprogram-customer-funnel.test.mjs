@@ -347,13 +347,15 @@ test('activity registration asks only for a phone number and guides a missed fie
 })
 
 test('tonight ordering keeps live service separate from recommendation and delegates ranking to the server', async () => {
-  const [orderLogic, orderView, orderStyle, servicePage, statusPage, recommendationService] = await Promise.all([
+  const [orderLogic, orderView, orderStyle, servicePage, statusPage, recommendationService, guestMenuApi, recommendationRepository] = await Promise.all([
     read('miniprogram/pages/order/index.js'),
     read('miniprogram/pages/order/index.wxml'),
     read('miniprogram/pages/order/index.wxss'),
     read('miniprogram/pages/service/index.js'),
     read('miniprogram/pages/status/index.js'),
     read('server/normalized/customer-experience-service.ts'),
+    read('server/normalized/guest-commerce-service-api.ts'),
+    read('server/normalized/customer-experience-repository.ts'),
   ])
 
   assert.match(orderView, /<button class="table-strip__service" bindtap="openStatus"><text class="table-strip__service-value">\{\{serviceSummary\.label\}\}<\/text><text class="table-strip__service-link">查看进展 ›<\/text><\/button>/)
@@ -385,6 +387,17 @@ test('tonight ordering keeps live service separate from recommendation and deleg
   assert.doesNotMatch(orderView, /class="recommendation-note"/)
   assert.match(orderView, /单点约 \{\{item\.separatePriceText\}\}/)
   assert.match(orderView, /\{\{item\.savingsText\}\}/)
+  assert.match(orderView, /aria-label="查看\{\{item\.name\}\}大图和详情"[^>]*bindtap="openProductDetail"/)
+  assert.match(orderView, /class="product-detail-mask sheet-mask"[\s\S]*?catchtap="previewProductImage"/)
+  assert.match(orderView, /class="product-media__saving">\{\{item\.savingsText\}\}/)
+  assert.match(orderView, /class="product-saving">单点合计 \{\{item\.separatePriceText\}\}/)
+  assert.match(orderView, /class="product-detail-saving"[\s\S]*?单点合计[\s\S]*?\{\{detailProduct\.savingsText\}\}/)
+  assert.match(orderLogic, /function bundleValuePresentation\(item\)[\s\S]*?savingsAmountMinor === separateAmountMinor - amountMinor/)
+  assert.match(orderLogic, /previewProductImage\(\)[\s\S]*?wx\.previewImage\(\{ current: imageUrl, urls: \[imageUrl\] \}\)/)
+  assert.match(guestMenuApi, /component_list\.separate_amount_minor/)
+  assert.match(guestMenuApi, /component_price\.amount_minor IS NOT NULL[\s\S]*?component_price\.currency = price\.currency/)
+  assert.match(guestMenuApi, /savingsAmountMinor/)
+  assert.match(recommendationRepository, /component_price\.amount_minor IS NOT NULL[\s\S]*?component_price\.currency = price\.currency/)
   assert.match(orderView, /class="recommend-fit">更适合这一桌/)
   assert.match(orderLogic, /getServiceRequests/)
   assert.match(orderLogic, /async function loadPerformanceView\(\)[\s\S]*?演出信息暂时未更新，请点一下重试/)
@@ -408,6 +421,9 @@ test('tonight ordering keeps live service separate from recommendation and deleg
   assert.match(recommendationService, /recommendationIntent: RecommendationIntent/)
   assert.match(orderStyle, /\.quick-service button[\s\S]*?min-height:\s*88rpx/)
   assert.match(orderStyle, /\.table-strip__service \{ min-height: 88rpx/)
+  assert.match(orderStyle, /\.product-row \{[\s\S]*?height:\s*520rpx/)
+  assert.match(orderStyle, /\.product-media \{[\s\S]*?height:\s*274rpx/)
+  assert.match(orderStyle, /\.product-detail-hero \{[\s\S]*?height:\s*500rpx/)
   assert.match(orderStyle, /\.quick-service__surface \{ min-height: 62rpx/)
   assert.match(orderStyle, /\.recommend-entry__actions \{ display: grid; grid-template-columns: 1fr 1fr/)
   assert.match(orderStyle, /\.recommend-question__options \{ display: grid;[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/)

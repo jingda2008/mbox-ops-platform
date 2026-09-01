@@ -38,12 +38,14 @@
         <view class="search-box"><text>⌕</text><input value="{{searchText}}" placeholder="搜索酒水、套餐或口味" bindinput="onSearchInput" /></view>
       </view>
       <view wx:if="{{visibleProducts.length}}" class="product-list product-list--browse">
-        <view wx:for="{{visibleProducts}}" wx:key="productId" class="product-row {{item.available ? '' : 'is-unavailable'}}">
+        <view wx:for="{{visibleProducts}}" wx:key="productId" class="product-row {{item.available ? '' : 'is-unavailable'}}" data-id="{{item.productId}}" role="button" aria-label="查看{{item.name}}大图和详情" hover-class="product-row--pressed" bindtap="openProductDetail">
           <view class="product-media">
             <image wx:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" />
             <view wx:else class="product-media__placeholder"><text>M-BOX</text></view>
+            <text wx:if="{{item.discountVisible}}" class="product-media__saving">{{item.savingsText}}</text>
+            <text class="product-media__detail-hint">查看详情</text>
           </view>
-          <view class="product-main"><text class="product-kind">{{item.productKind === 'bundle' ? '体验组合' : item.categoryName}}</text><text class="product-name">{{item.name}}</text><text class="product-copy">{{item.description || item.includedText || '详情以当晚正式菜单为准'}}</text></view>
+          <view class="product-main"><text class="product-kind">{{item.productKind === 'bundle' ? '体验组合' : item.categoryName}}</text><text class="product-name">{{item.name}}</text><text class="product-copy">{{item.description || item.includedText || '详情以当晚正式菜单为准'}}</text><text wx:if="{{item.discountVisible}}" class="product-saving">单点合计 {{item.separatePriceText}}</text></view>
           <view class="product-action"><view class="product-action__meta"><text class="product-price">{{item.priceText}}</text><text class="product-availability {{item.available ? 'is-available' : 'is-unavailable'}}">{{item.availabilityText}}</text><text class="product-availability-copy">{{item.available ? (connectionState === 'waiting' ? '服务人员开台后可下单' : '到店扫码后可下单') : item.availabilityDetail}}</text></view></view>
         </view>
       </view>
@@ -112,13 +114,15 @@
     <view class="section product-section">
       <view class="section-title"><text>菜单</text><text wx:if="{{benefitCount}}" class="section-link" bindtap="openBenefits">{{benefitCount}}项权益可用</text></view>
       <view wx:if="{{visibleProducts.length}}" class="product-list">
-        <view wx:for="{{visibleProducts}}" wx:key="productId" class="product-row {{item.available ? '' : 'is-unavailable'}}">
+        <view wx:for="{{visibleProducts}}" wx:key="productId" class="product-row {{item.available ? '' : 'is-unavailable'}}" data-id="{{item.productId}}" role="button" aria-label="查看{{item.name}}大图和详情" hover-class="product-row--pressed" bindtap="openProductDetail">
           <view class="product-media">
             <image wx:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" />
             <view wx:else class="product-media__placeholder"><text>M-BOX</text></view>
+            <text wx:if="{{item.discountVisible}}" class="product-media__saving">{{item.savingsText}}</text>
+            <text class="product-media__detail-hint">查看详情</text>
           </view>
-          <view class="product-main"><text class="product-kind">{{item.productKind === 'bundle' ? '体验组合' : item.categoryName}}</text><text class="product-name">{{item.name}}</text><text class="product-copy">{{item.description || item.includedText || '详情以当晚正式菜单为准'}}</text></view>
-          <view class="product-action"><view class="product-action__meta"><text class="product-price">{{item.priceText}}</text><text class="product-availability {{item.available ? 'is-available' : 'is-unavailable'}}">{{item.availabilityText}}</text></view><button wx:if="{{item.available}}" aria-label="添加{{item.name}}" data-id="{{item.productId}}" bindtap="addProduct">＋</button><button wx:else class="product-unavailable" disabled="{{true}}">{{item.availabilityDetail}}</button></view>
+          <view class="product-main"><text class="product-kind">{{item.productKind === 'bundle' ? '体验组合' : item.categoryName}}</text><text class="product-name">{{item.name}}</text><text class="product-copy">{{item.description || item.includedText || '详情以当晚正式菜单为准'}}</text><text wx:if="{{item.discountVisible}}" class="product-saving">单点合计 {{item.separatePriceText}}</text></view>
+          <view class="product-action"><view class="product-action__meta"><text class="product-price">{{item.priceText}}</text><text class="product-availability {{item.available ? 'is-available' : 'is-unavailable'}}">{{item.availabilityText}}</text></view><button wx:if="{{item.available}}" aria-label="添加{{item.name}}" data-id="{{item.productId}}" catchtap="addProduct">＋</button><button wx:else class="product-unavailable" disabled="{{true}}">{{item.availabilityDetail}}</button></view>
         </view>
       </view>
       <state-panel wx:else type="empty" title="没有找到符合条件的商品" message="可清空搜索或切换分类" />
@@ -127,6 +131,39 @@
       <text>本桌共享购物车</text><text>还没有商品；同桌每位顾客加入的商品都会在这里同步显示。</text>
     </view>
   </block>
+
+  <view wx:if="{{detailProduct}}" class="product-detail-mask sheet-mask" bindtap="closeProductDetail">
+    <view class="product-detail-sheet" catchtap="keepProductDetailOpen">
+      <button class="product-detail-close" aria-label="关闭商品详情" catchtap="closeProductDetail">×</button>
+      <scroll-view scroll-y class="product-detail-scroll">
+        <view class="product-detail-hero" catchtap="previewProductImage">
+          <image wx:if="{{detailProduct.imageUrl}}" src="{{detailProduct.imageUrl}}" mode="aspectFill" />
+          <view wx:else class="product-detail-placeholder"><text>M-BOX</text></view>
+          <text wx:if="{{detailProduct.imageUrl}}" class="product-detail-preview-hint">点击查看全屏大图</text>
+        </view>
+        <view class="product-detail-content">
+          <text class="product-detail-kind">{{detailProduct.productKind === 'bundle' ? '体验组合' : detailProduct.categoryName}}</text>
+          <text class="product-detail-name">{{detailProduct.name}}</text>
+          <text wx:if="{{detailProduct.specification}}" class="product-detail-specification">规格：{{detailProduct.specification}}</text>
+          <text class="product-detail-description">{{detailProduct.description || '详情以当晚正式菜单为准'}}</text>
+          <view wx:if="{{detailProduct.productKind === 'bundle' && detailProduct.bundleComponents.length}}" class="product-detail-components">
+            <text class="product-detail-section-title">组合内容</text>
+            <view wx:for="{{detailProduct.bundleComponents}}" wx:key="productId" class="product-detail-component"><text>{{item.name}}</text><text>× {{item.quantity}}</text></view>
+          </view>
+          <view wx:if="{{detailProduct.discountVisible}}" class="product-detail-saving">
+            <view><text>单点合计</text><text>{{detailProduct.separatePriceText}}</text></view>
+            <text>{{detailProduct.savingsText}}</text>
+          </view>
+          <view class="product-detail-footer">
+            <view><text>当前售价</text><text>{{detailProduct.priceText}}</text></view>
+            <button wx:if="{{connectionState === 'active' && detailProduct.available}}" data-id="{{detailProduct.productId}}" catchtap="addProduct">加入购物车</button>
+            <button wx:elif="{{connectionState === 'active'}}" class="product-detail-unavailable" disabled="{{true}}">{{detailProduct.availabilityDetail}}</button>
+            <text wx:else class="product-detail-browse-note">{{connectionState === 'waiting' ? '服务人员开台后可下单' : '到店扫码后可下单'}}</text>
+          </view>
+        </view>
+      </scroll-view>
+    </view>
+  </view>
 
   <view wx:if="{{connectionState === 'active' && cart.length}}" class="cart-dock">
     <view class="cart-summary"><button class="cart-overview" aria-label="查看本桌购物车，已选{{cartCount}}件商品" hover-class="cart-overview--pressed" bindtap="openCartDetails"><view class="cart-overview__mark"><view class="cart-overview__mark-icon"></view><text class="cart-overview__badge">{{cartCount}}</text></view><view class="cart-overview__copy"><text>购物车 · {{cartCount}} 件</text><text>{{cartWritesFrozen ? '当前选择已保留' : checkoutLocked ? '上次提交待确认，可继续确认或查看桌账' : cartSyncing ? '正在同步同桌选择' : '点击查看商品与金额'}}</text></view></button><button class="checkout-button" bindtap="openCheckout" loading="{{busy}}" disabled="{{cartSyncing || cartWritesFrozen}}">{{checkoutLocked ? '继续确认' : '提交订单'}}</button></view>

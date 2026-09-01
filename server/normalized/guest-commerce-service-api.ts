@@ -120,6 +120,7 @@ interface CatalogMenuRow extends Record<string, unknown> {
   fulfillment_station: string
   product_kind: 'single' | 'bundle'
   bundle_components: unknown
+  separate_amount_minor: string | null
   product_snapshot: JsonObject
   guest_visible: boolean
   search_text: string
@@ -859,6 +860,7 @@ async function searchGuestCatalog(
       COALESCE(parent_menu_category.sort_order,menu_category.sort_order) AS top_category_sort_order,
       product.fulfillment_station, product.product_kind,
       COALESCE(component_list.items, '[]'::jsonb) AS bundle_components,
+      component_list.separate_amount_minor,
       product.product_snapshot, product.guest_visible, product.search_text,
       product.recommendation_beverage_family,
       product.recommendation_enabled, product.recommendation_min_guests,
@@ -914,17 +916,37 @@ async function searchGuestCatalog(
     ) AS price ON true
     LEFT JOIN LATERAL (
       SELECT jsonb_agg(
-        jsonb_build_object(
-          'productId', component_product.id,
-          'name', component_product.name,
-          'quantity', component.quantity
-        ) ORDER BY component.sort_order, component.id
-      ) AS items
+          jsonb_build_object(
+            'productId', component_product.id,
+            'name', component_product.name,
+            'quantity', component.quantity
+          ) ORDER BY component.sort_order, component.id
+        ) AS items,
+        CASE
+          WHEN count(*) > 0 AND bool_and(
+            component_price.amount_minor IS NOT NULL
+            AND component_price.currency = price.currency
+          )
+          THEN sum(component.quantity * component_price.amount_minor)::bigint::text
+          ELSE NULL
+        END AS separate_amount_minor
       FROM mbox.product_bundle_components AS component
       JOIN mbox.products AS component_product
         ON component_product.tenant_id = component.tenant_id
         AND component_product.store_id = component.store_id
         AND component_product.id = component.component_product_id
+      LEFT JOIN LATERAL (
+        SELECT candidate.amount_minor, candidate.currency
+        FROM mbox.product_prices AS candidate
+        WHERE candidate.tenant_id = component_product.tenant_id
+          AND candidate.store_id = component_product.store_id
+          AND candidate.product_id = component_product.id
+          AND candidate.price_type = 'standard'
+          AND candidate.valid_from <= clock_timestamp()
+          AND (candidate.valid_until IS NULL OR candidate.valid_until > clock_timestamp())
+        ORDER BY candidate.valid_from DESC, candidate.id DESC
+        LIMIT 1
+      ) AS component_price ON true
       WHERE component.tenant_id = product.tenant_id
         AND component.store_id = product.store_id
         AND component.bundle_product_id = product.id
@@ -1103,7 +1125,15 @@ async function searchGuestCatalog(
 
 function publicCatalogProduct(row: CatalogMenuRow) {
   const source = jsonObject(row.product_snapshot.source)
-  const amountMinor = row.amount_minor === null ? null : Number(row.amount_minor)
+  const amountMinor = publicMinorAmount(row.amount_minor)
+  const separateAmountMinor = row.product_kind === 'bundle'
+    ? publicMinorAmount(row.separate_amount_minor)
+    : null
+  const savingsAmountMinor = amountMinor !== null
+    && separateAmountMinor !== null
+    && separateAmountMinor > amountMinor
+    ? separateAmountMinor - amountMinor
+    : null
   const availabilityStatus = publicCatalogAvailabilityStatus(row)
   const configuredCategoryName = publicString(row.category_name)
   const categoryName = configuredCategoryName
@@ -1146,10 +1176,18 @@ function publicCatalogProduct(row: CatalogMenuRow) {
     fulfillmentStation: row.fulfillment_station,
     productKind: row.product_kind,
     bundleComponents: publicBundleComponents(row.bundle_components),
+    separateAmountMinor,
+    savingsAmountMinor,
     recommendation: publicRecommendation(row, amountMinor),
     availabilityStatus,
     available: availabilityStatus === 'available',
   }
+}
+
+function publicMinorAmount(value: string | null): number | null {
+  if (value === null) return null
+  const amount = Number(value)
+  return Number.isSafeInteger(amount) && amount >= 0 ? amount : null
 }
 
 function publicCatalogCategoryFallbackName(

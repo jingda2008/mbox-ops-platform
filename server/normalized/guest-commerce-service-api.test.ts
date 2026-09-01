@@ -85,11 +85,44 @@ describe('guest commerce/service API trust boundaries', () => {
     expect(response.statusCode).toBe(200)
     expect(resolvePublicContext).toHaveBeenCalledOnce()
     expect(response.json()).toMatchObject({
-      data: [{ productId, name: '青岛啤酒', amountMinor: 6800, availabilityStatus: 'available', available: true }],
+      data: [{
+        productId, name: '青岛啤酒', amountMinor: 6800,
+        separateAmountMinor: null, savingsAmountMinor: null,
+        availabilityStatus: 'available', available: true,
+      }],
       meta: { partySize: null, recommendationScene: null, orderingRequiresTableScan: true },
     })
     expect(value.query).toHaveBeenCalledOnce()
     expect(value.query.mock.calls[0]?.[1]).toEqual(expect.arrayContaining([null, 'qingdao']))
+  })
+
+  it('returns bundle savings from complete current component prices instead of asking the client to estimate', async () => {
+    const value = fixture({}, {
+      name: '双杯鸡尾酒组合',
+      product_kind: 'bundle',
+      bundle_components: [
+        { productId: '55555555-5555-4555-8555-555555555556', name: '鸡尾酒 A', quantity: 1 },
+        { productId: '55555555-5555-4555-8555-555555555557', name: '鸡尾酒 B', quantity: 1 },
+      ],
+      amount_minor: '14800',
+      separate_amount_minor: '16800',
+    })
+    const response = await value.app.inject({ method: 'GET', url: '/api/public/mini/menu/products' })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({
+      data: [{
+        productId,
+        productKind: 'bundle',
+        amountMinor: 14800,
+        separateAmountMinor: 16800,
+        savingsAmountMinor: 2000,
+      }],
+    })
+    const catalogSql = value.query.mock.calls[0]?.[0]
+    expect(catalogSql).toContain('bool_and(')
+    expect(catalogSql).toContain('component_price.amount_minor IS NOT NULL')
+    expect(catalogSql).toContain('component_price.currency = price.currency')
   })
 
   it('returns an authentication response when the public mini-program session has expired', async () => {
@@ -1383,7 +1416,10 @@ integration('guest service and mood API with PostgreSQL', () => {
   })
 })
 
-function fixture(overrides: Partial<GuestCommerceServiceApiOptions> = {}) {
+function fixture(
+  overrides: Partial<GuestCommerceServiceApiOptions> = {},
+  catalogRowOverrides: Record<string, unknown> = {},
+) {
   const { onlinePayments: onlinePaymentOverrides, ...optionOverrides } = overrides
   const paymentMode = overrides.paymentMode ?? 'wechat_jsapi'
   const query = vi.fn(async (sql: string) => sql.includes('lock_active_table_guest_session_position') ? ({
@@ -1399,7 +1435,7 @@ function fixture(overrides: Partial<GuestCommerceServiceApiOptions> = {}) {
     }],
     rowCount: 1,
   }) : ({
-    rows: [{
+    rows: [Object.assign({
       id: productId,
       code: 'BEER-QD-330',
       name: '青岛啤酒',
@@ -1412,6 +1448,7 @@ function fixture(overrides: Partial<GuestCommerceServiceApiOptions> = {}) {
       fulfillment_station: 'bar',
       product_kind: 'single',
       bundle_components: [],
+      separate_amount_minor: null,
       product_snapshot: {
         specification: '330ml', aliases: ['青啤'], pinyin: 'qingdao pijiu', beverageFamily: 'wine',
         internalCost: 1234,
@@ -1444,7 +1481,7 @@ function fixture(overrides: Partial<GuestCommerceServiceApiOptions> = {}) {
       guest_profile_snapshot: { recommendationScene: 'date' },
       inventory_configuration_complete: true,
       inventory_available: true,
-    }],
+    }, catalogRowOverrides)],
     rowCount: 1,
   }))
   const transaction = { scope: context.scope, query } as unknown as ScopedTransaction

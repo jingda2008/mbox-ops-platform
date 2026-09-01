@@ -592,19 +592,184 @@ async function recordReservationPerformanceNotificationAuthorization(input) {
   }
 }
 
-async function getMenu(query) {
+const MENU_PAGE_SIZE = 100
+// The API currently accepts offsets up to 10,000.  An extra full page at that
+// boundary is treated as incomplete instead of being silently truncated.
+const MENU_MAX_PAGES = 101
+const MENU_RETRY_DELAYS_MS = [200, 600]
+
+function menuCatalogError(code, message, details) {
+  const error = new Error(message)
+  error.code = code
+  Object.assign(error, details || {})
+  return error
+}
+
+function assertMenuTableScope(expectedTableScope) {
+  if (tableRequestScope(getTableSession()) === expectedTableScope) return
+  throw menuCatalogError('TABLE_SESSION_SCOPE_CHANGED', '桌台已经切换，已停止加载上一桌的菜单', {
+    statusCode: 409,
+  })
+}
+
+function menuPagePath(basePath, query, offset) {
   const params = []
   if (query && query.categoryCode) params.push(`categoryCode=${encodeURIComponent(query.categoryCode)}`)
   if (query && query.search) params.push(`search=${encodeURIComponent(query.search)}`)
-  params.push('limit=100')
-  return (await request(`/api/guest/menu/products?${params.join('&')}`)).data
+  params.push(`limit=${MENU_PAGE_SIZE}`)
+  params.push(`offset=${offset}`)
+  return `${basePath}?${params.join('&')}`
+}
+
+function retryableMenuPageError(error) {
+  const statusCode = Number(error && error.statusCode)
+  return Boolean(error && error.code === 'NETWORK_ERROR')
+    || statusCode === 408
+    || statusCode === 425
+    || statusCode === 429
+    || statusCode >= 500
+}
+
+function waitForMenuRetry(delayMs) {
+  return new Promise((resolve) => setTimeout(resolve, delayMs))
+}
+
+async function requestMenuPage(fetchPage, path, expectedTableScope, offset) {
+  let lastError = null
+  for (let attempt = 0; attempt <= MENU_RETRY_DELAYS_MS.length; attempt += 1) {
+    assertMenuTableScope(expectedTableScope)
+    try {
+      const response = await fetchPage(path, expectedTableScope)
+      assertMenuTableScope(expectedTableScope)
+      return response
+    } catch (error) {
+      if (error && error.code === 'TABLE_SESSION_SCOPE_CHANGED') throw error
+      lastError = error
+      if (!retryableMenuPageError(error) || attempt >= MENU_RETRY_DELAYS_MS.length) break
+      await waitForMenuRetry(MENU_RETRY_DELAYS_MS[attempt])
+    }
+  }
+  throw menuCatalogError('MENU_CATALOG_INCOMPLETE', '菜单没有完整加载，请检查网络后重试', {
+    statusCode: lastError && lastError.statusCode,
+    causeCode: lastError && lastError.code,
+    failedOffset: offset,
+  })
+}
+
+function menuPageItems(response, offset) {
+  if (!response || !Array.isArray(response.data)) {
+    throw menuCatalogError('MENU_CATALOG_RESPONSE_INVALID', '菜单数据格式异常，请稍后重试', {
+      failedOffset: offset,
+    })
+  }
+  return response.data
+}
+
+async function loadCompleteMenu(basePath, query, fetchPage) {
+  const expectedTableScope = tableRequestScope(getTableSession())
+  const productsById = new Map()
+  let offset = 0
+  let reportedTotalCount = null
+  let catalogRevision = null
+
+  for (let pageNumber = 0; pageNumber < MENU_MAX_PAGES; pageNumber += 1) {
+    const path = menuPagePath(basePath, query, offset)
+    let response
+    try {
+      response = await requestMenuPage(fetchPage, path, expectedTableScope, offset)
+    } catch (error) {
+      if (error && typeof error === 'object') error.partialCount = productsById.size
+      throw error
+    }
+    const items = menuPageItems(response, offset)
+    for (const item of items) {
+      const productId = String(item && (item.productId || item.id) || '').trim()
+      if (!productId) {
+        throw menuCatalogError('MENU_CATALOG_RESPONSE_INVALID', '菜单商品缺少有效编号，请稍后重试', {
+          failedOffset: offset,
+          partialCount: productsById.size,
+        })
+      }
+      if (!productsById.has(productId)) productsById.set(productId, item)
+    }
+
+    const meta = response.meta && typeof response.meta === 'object' ? response.meta : {}
+    if (meta.totalCount !== undefined && meta.totalCount !== null) {
+      const totalCount = Number(meta.totalCount)
+      if (!Number.isInteger(totalCount) || totalCount < 0
+        || (reportedTotalCount !== null && reportedTotalCount !== totalCount)) {
+        throw menuCatalogError('MENU_CATALOG_RESPONSE_INVALID', '菜单总数信息不一致，请稍后重试', {
+          failedOffset: offset,
+          partialCount: productsById.size,
+        })
+      }
+      reportedTotalCount = totalCount
+    }
+    if (meta.catalogRevision !== undefined && meta.catalogRevision !== null) {
+      const revision = String(meta.catalogRevision).trim()
+      if (!revision || (catalogRevision !== null && catalogRevision !== revision)) {
+        throw menuCatalogError('MENU_CATALOG_CHANGED', '菜单正在更新，请稍后重新加载', {
+          failedOffset: offset,
+          partialCount: productsById.size,
+        })
+      }
+      catalogRevision = revision
+    }
+
+    if (reportedTotalCount !== null && productsById.size === reportedTotalCount) {
+      return Array.from(productsById.values())
+    }
+
+    const hasExplicitNextOffset = Object.prototype.hasOwnProperty.call(meta, 'nextOffset')
+    if (hasExplicitNextOffset && meta.nextOffset === null) {
+      if (reportedTotalCount !== null && productsById.size !== reportedTotalCount) {
+        throw menuCatalogError('MENU_CATALOG_INCOMPLETE', '菜单数量不完整，请稍后重新加载', {
+          failedOffset: offset,
+          partialCount: productsById.size,
+          expectedCount: reportedTotalCount,
+        })
+      }
+      return Array.from(productsById.values())
+    }
+    if (hasExplicitNextOffset) {
+      const nextOffset = Number(meta.nextOffset)
+      if (!Number.isInteger(nextOffset) || nextOffset <= offset || nextOffset > 10_000) {
+        throw menuCatalogError('MENU_CATALOG_RESPONSE_INVALID', '菜单分页信息异常，请稍后重试', {
+          failedOffset: offset,
+          partialCount: productsById.size,
+        })
+      }
+      offset = nextOffset
+      continue
+    }
+    if (items.length < MENU_PAGE_SIZE) {
+      if (reportedTotalCount !== null && productsById.size !== reportedTotalCount) {
+        throw menuCatalogError('MENU_CATALOG_INCOMPLETE', '菜单数量不完整，请稍后重新加载', {
+          failedOffset: offset,
+          partialCount: productsById.size,
+          expectedCount: reportedTotalCount,
+        })
+      }
+      return Array.from(productsById.values())
+    }
+    offset += MENU_PAGE_SIZE
+  }
+
+  throw menuCatalogError('MENU_CATALOG_INCOMPLETE', '菜单商品超过当前安全加载范围，请联系门店处理', {
+    failedOffset: offset,
+    partialCount: productsById.size,
+  })
+}
+
+async function getMenu(query) {
+  return loadCompleteMenu('/api/guest/menu/products', query, (path, expectedTableScope) => (
+    request(path, { expectedTableScope, guardCookiePersistence: true })
+  ))
 }
 async function getPublicMenu(query) {
-  const params = []
-  if (query && query.categoryCode) params.push(`categoryCode=${encodeURIComponent(query.categoryCode)}`)
-  if (query && query.search) params.push(`search=${encodeURIComponent(query.search)}`)
-  params.push('limit=100')
-  return (await publicRequest(`/api/public/mini/menu/products?${params.join('&')}`)).data
+  return loadCompleteMenu('/api/public/mini/menu/products', query, (path, expectedTableScope) => (
+    publicRequest(path, { expectedTableScope, guardCookiePersistence: true })
+  ))
 }
 async function recommendExperience(input) {
   return (await request('/api/guest/experience/recommendations', {

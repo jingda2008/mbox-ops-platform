@@ -622,7 +622,9 @@ test('customers can browse a read-only menu before scanning, but the browse view
   assert.match(orderLogic, /const recommendations = menuRecommendations\(result\.recommendations, this\.data\.products\)/)
   assert.match(orderView, /wx:else class="product-unavailable" disabled="\{\{true\}\}"/)
   assert.match(mediaSource, /trimmed\.startsWith\('\/menu\/'\)/)
-  assert.match(apiSource, /publicRequest\(`\/api\/public\/mini\/menu\/products/)
+  assert.match(apiSource, /async function getPublicMenu\(query\) \{[\s\S]*?loadCompleteMenu\('\/api\/public\/mini\/menu\/products'/)
+  assert.match(apiSource, /publicRequest\(path, \{ expectedTableScope, guardCookiePersistence: true \}\)/)
+  assert.match(apiSource, /params\.push\(`limit=\$\{MENU_PAGE_SIZE\}`\)[\s\S]*?params\.push\(`offset=\$\{offset\}`\)/)
 })
 
 test('customer menu categories come from the editable backend hierarchy and reveal a configured second level only when needed', async () => {

@@ -48,3 +48,46 @@ commit, image digest, release manifest and checksummed evidence. Keep rc.167
 recoverable until backup and restore metadata, candidate health, Caddy cutover,
 public readiness, worker health and the four browser routes are verified. The
 expected normalized schema after deployment is 156.
+
+## Production result
+
+Production deployment completed on 2026-09-02 (Asia/Shanghai) from immutable
+tag `v1.0.0-rc.168`. The deployed commit is
+`a825ae913cf2ef38080534a271ef38b207cc7b31`, the release image digest is
+`sha256:70c8777c57d0e551f64cfd7b799565089ed4b1b629c9bee3a8078d9ebae44c65`,
+and the public readiness response reports production tier with normalized
+schema 156 and healthy workers. Public smoke and browser checks passed for
+`/`, `/guest?table=W01`, `/reserve` and `/staff/live`.
+
+The pre-cutover PostgreSQL backup is
+`/opt/mbox/backups/mbox-20260901T200947Z-bf8TgZ.dump`. Its four-object OSS
+upload/readback verification passed. Release evidence, image evidence,
+deployment evidence and completion evidence also passed OSS readback. The
+previous rc.167 application remains recoverable as
+`mbox-app-rollback-a825ae9-20260902-041058`.
+
+Post-cutover production readback confirmed:
+
+- legacy forbidden product-snapshot rows decreased from 81 to 0;
+- active normalized-name/specification duplicate groups decreased from 16 to
+  0, and the partial uniqueness index is present;
+- all 16 verified legacy products are inactive and hidden, all 16 canonical
+  products remain active, and legacy bundle-component references are 0;
+- all 65 available tables retain non-empty layout snapshots;
+- all four Patron/培恩龙舌兰 bottle and glass products are active, guest
+  visible, priced and backed by controlled menu images;
+- all 30 active guest-visible bundles have a positive server-calculated saving;
+- the reported Martell legacy product `P041B` is inactive, while the canonical
+  `MB20260009` product remains active. Both public menu selection and order
+  price locking require `status='active'`, so the inactive record cannot be
+  displayed or ordered even though its historical visibility flag is retained
+  for a later deliberate reactivation;
+- the 156 active recipes still have their pre-existing empty instruction
+  snapshots. This release does not invent missing instructions; it prevents
+  future edits that do not include an instruction change from overwriting any
+  stored instruction snapshot.
+
+Tag CI run 33552421378 passed quality, clean migration, normalized database and
+RLS tests, real HTTP workflows, mobile-browser flows, sustained 5 RPS checks,
+immutable image construction and final evidence verification. Release workflow
+33552421369 published the verified pre-release and transfer bundle.

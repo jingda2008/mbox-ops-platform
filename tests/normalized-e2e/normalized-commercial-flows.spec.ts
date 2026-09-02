@@ -700,7 +700,7 @@ test('mobile manager payment choices stay synchronized with two guests at the sa
 
   await page.getByRole('button', { name: '现场', exact: true }).first().click()
   await expect(page.getByRole('heading', { name: '找到桌台，直接处理' })).toBeVisible()
-  await page.getByRole('button', { name: /W01.*已开台/ }).click()
+  await page.getByRole('button', { name: /^W01 \d+人 · / }).click()
   const tableActions = page.getByRole('dialog', { name: 'W01桌台操作' })
   await expect(tableActions).toBeVisible()
   await expect(tableActions.getByRole('button', { name: '协助点单' })).toBeVisible()

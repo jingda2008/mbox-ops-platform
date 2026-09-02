@@ -35,7 +35,7 @@ import { CashierMutationCoordinator } from './cashier-mutation'
 import './cashier-after-sales-workbench.css'
 
 interface WorkbenchNotice {
-  kind: 'success' | 'error'
+  kind: 'success' | 'error' | 'attention'
   text: string
 }
 
@@ -83,34 +83,76 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
   const [message, setMessage] = useState<string | null>(null)
   const [view, setView] = useState<CashierWorkbenchView | null>(null)
   const [query, setQuery] = useState('')
+  const [areaId, setAreaId] = useState('all')
+  const [paymentState, setPaymentState] = useState<'all' | 'unpaid' | 'processing' | 'completed' | 'refunded'>('all')
+  const [areaOptions, setAreaOptions] = useState<Array<{ id: string; name: string }>>([])
   const [busyKey, setBusyKey] = useState<string | null>(null)
   const [notice, setNotice] = useState<WorkbenchNotice | null>(null)
   const [businessDayClosure, setBusinessDayClosure] = useState<BusinessDayClosureResult | null>(null)
   const noticeRef = useRef<HTMLDivElement | null>(null)
   const mutationCoordinator = useRef(new CashierMutationCoordinator())
+  const attentionCountRef = useRef<number | null>(null)
 
-  const load = useCallback(async (searchQuery: string) => {
-    setPhase('loading')
-    setMessage(null)
+  const load = useCallback(async (searchQuery: string, quiet = false) => {
+    if (!quiet) {
+      setPhase('loading')
+      setMessage(null)
+    }
     try {
       const search = new URLSearchParams({ limit: '50' })
       if (searchQuery.trim()) search.set('query', searchQuery.trim())
+      if (areaId !== 'all') search.set('areaId', areaId)
+      if (paymentState !== 'all') search.set('paymentState', paymentState)
       const response = await api.getEndpoint<{ data: CashierWorkbenchView }>(
         `/api/payments/workbench?${search.toString()}`,
       )
       setView(response.data)
+      setAreaOptions((current) => {
+        const next = new Map(current.map((area) => [area.id, area.name]))
+        for (const order of response.data.orders) {
+          if (order.areaId && order.areaName) next.set(order.areaId, order.areaName)
+        }
+        return [...next.entries()].map(([id, name]) => ({ id, name }))
+      })
+      const attentionCount = response.data.summary.requestedRefundCount
+        + response.data.summary.processingRefundCount
+        + (response.data.summary.activityRequestedRefundCount ?? 0)
+        + (response.data.summary.activityProcessingRefundCount ?? 0)
+      const isGlobalView = searchQuery.trim() === '' && areaId === 'all' && paymentState === 'all'
+      const previousAttentionCount = attentionCountRef.current
+      if (isGlobalView && quiet && previousAttentionCount !== null && attentionCount > previousAttentionCount) {
+        setNotice({
+          kind: 'attention',
+          text: `新增 ${attentionCount - previousAttentionCount} 项退款待办，请及时复核或执行。`,
+        })
+      }
+      if (isGlobalView) attentionCountRef.current = attentionCount
       setPhase('ready')
     } catch (error) {
       if (error instanceof NormalizedApiError && error.recovery === 'login') {
         onLoginRequired()
         return
       }
-      setMessage(error instanceof Error ? error.message : '收银售后数据暂时无法读取')
-      setPhase('error')
+      if (!quiet) {
+        setMessage(error instanceof Error ? error.message : '收银售后数据暂时无法读取')
+        setPhase('error')
+      }
     }
-  }, [api, onLoginRequired])
+  }, [api, areaId, onLoginRequired, paymentState])
 
   useEffect(() => { void load(query) }, [load, query, refreshToken])
+  useEffect(() => {
+    if (phase !== 'ready') return
+    const refresh = () => {
+      if (document.visibilityState === 'visible' && busyKey === null) void load(query, true)
+    }
+    const timer = globalThis.setInterval(refresh, 15_000)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      globalThis.clearInterval(timer)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [busyKey, load, phase, query])
   useEffect(() => {
     if (notice === null) return
     noticeRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
@@ -235,7 +277,12 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
     notice={notice}
     noticeRef={noticeRef}
     businessDayClosure={businessDayClosure}
+    areaId={areaId}
+    paymentState={paymentState}
+    areaOptions={areaOptions}
     onSearch={setQuery}
+    onAreaId={setAreaId}
+    onPaymentState={setPaymentState}
     onReload={() => void load(query)}
     onMutation={mutate}
     onCreateOnlinePayment={createOnlinePayment}
@@ -253,8 +300,13 @@ export function CashierAfterSalesWorkbenchView({
   notice,
   noticeRef,
   businessDayClosure = null,
+  areaId = 'all',
+  paymentState = 'all',
+  areaOptions = [],
   initialExpandedOrderId = null,
   onSearch,
+  onAreaId,
+  onPaymentState,
   onReload,
   onMutation,
   onCreateOnlinePayment,
@@ -269,8 +321,13 @@ export function CashierAfterSalesWorkbenchView({
   notice: WorkbenchNotice | null
   noticeRef?: RefObject<HTMLDivElement | null>
   businessDayClosure?: BusinessDayClosureResult | null
+  areaId?: string
+  paymentState?: 'all' | 'unpaid' | 'processing' | 'completed' | 'refunded'
+  areaOptions?: readonly { id: string; name: string }[]
   initialExpandedOrderId?: string | null
   onSearch(query: string): void
+  onAreaId?: (areaId: string) => void
+  onPaymentState?: (state: 'all' | 'unpaid' | 'processing' | 'completed' | 'refunded') => void
   onReload(): void
   onMutation(key: string, endpoint: string, body: unknown, successMessage: string): Promise<boolean>
   onCreateOnlinePayment?: (input: Readonly<CashierOnlinePaymentInput>) => Promise<OnlinePaymentAction | null>
@@ -479,11 +536,25 @@ export function CashierAfterSalesWorkbenchView({
         type="search"
         value={searchDraft}
         onChange={(event) => setSearchDraft(event.target.value)}
-        placeholder="桌号、订单号、支付或退款单号"
+        placeholder="单号、桌号或金额（如 136）"
         aria-label="查找收银订单"
       />
       <button type="submit">查找</button>
     </form>
+
+    <div className="cashier-workbench-filters" aria-label="订单筛选">
+      <label><span>区域</span><select value={areaId} onChange={(event) => onAreaId?.(event.target.value)}>
+        <option value="all">全部区域</option>
+        {areaOptions.map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}
+      </select></label>
+      <label><span>支付状态</span><select value={paymentState} onChange={(event) => onPaymentState?.(event.target.value as typeof paymentState)}>
+        <option value="all">全部状态</option>
+        <option value="unpaid">待支付</option>
+        <option value="processing">支付中</option>
+        <option value="completed">已完成</option>
+        <option value="refunded">已退款</option>
+      </select></label>
+    </div>
 
     <div className="cashier-workbench-summary" aria-label="本营业日售后摘要">
       <span><b>{view.summary.orderCount}</b><small>订单</small></span>
@@ -520,7 +591,7 @@ export function CashierAfterSalesWorkbenchView({
     />}
 
     {filteredOrders.length === 0
-      ? <div className="cashier-workbench-state"><ReceiptText /><strong>{view.query || summaryFilter !== 'all' ? '没有找到对应订单' : '本营业日暂无可处理订单'}</strong><p>可按桌号、订单号、支付单号或退款单号查找，或切换上方筛选。</p></div>
+      ? <div className="cashier-workbench-state"><ReceiptText /><strong>{view.query || summaryFilter !== 'all' || areaId !== 'all' || paymentState !== 'all' ? '没有找到对应订单' : '本营业日暂无可处理订单'}</strong><p>可按桌号、订单号、金额、区域或支付状态查找，或切换上方筛选。</p></div>
       : <div className="cashier-order-list">
           {filteredOrders.map((order) => {
             const expanded = expandedOrderId === order.id

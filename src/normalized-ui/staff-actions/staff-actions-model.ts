@@ -189,7 +189,7 @@ export function tableGroups(tables: readonly StaffActionTable[]): Array<{ area: 
   }))
 }
 
-export type StaffTableScope = 'attention' | 'mine' | 'all'
+export type StaffTableScope = 'attention' | 'unpaid' | 'mine' | 'all'
 
 export function visibleStaffTables(
   tables: readonly StaffActionTable[],
@@ -203,6 +203,8 @@ export function visibleStaffTables(
       || `${table.code} ${table.displayName} ${table.areaName}`.toLocaleLowerCase('zh-CN').includes(normalizedQuery)
     if (!matchesQuery) return false
     if (scope === 'all') return true
+    if (scope === 'unpaid') return table.activeSession !== null
+      && ['unpaid', 'payment_pending', 'payment_exception'].includes(table.activeSession.financialState)
     if (scope === 'mine') return table.assignedToActor
     return table.activeSession !== null || table.assignedToActor || attentionTableIds.has(table.id)
   })

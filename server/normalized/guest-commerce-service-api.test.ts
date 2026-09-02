@@ -1143,7 +1143,7 @@ integration('guest service and mood API with PostgreSQL', () => {
       INSERT INTO mbox.payments(
         id,tenant_id,store_id,order_id,public_id,provider,method,amount_minor,currency,status,provider_snapshot
       ) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,'postar','jsapi',25600,'CNY','pending',
-        '{"source":"guest_checkout"}'::jsonb)
+        '{}'::jsonb)
     `, [abandonedPaymentId, integrationTenantId, integrationStoreId, abandonedOrderId, paymentPublicId])
 
     const response = await app.inject({

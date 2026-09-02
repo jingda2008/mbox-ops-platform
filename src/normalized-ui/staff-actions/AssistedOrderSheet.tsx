@@ -82,7 +82,7 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
       }
     }
     void synchronize()
-    const interval = window.setInterval(() => { void synchronize() }, 2_000)
+    const interval = window.setInterval(() => { void synchronize() }, 10_000)
     return () => {
       active = false
       controller.abort()

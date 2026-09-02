@@ -45,6 +45,19 @@ describe('StaffActionsPanel', () => {
     expect(css).toMatch(/\.staff-session-actions \.is-payment \{[^}]*grid-column:\s*1 \/ -1/)
   })
 
+  it('shows financial table states, a pending-payment filter and an all-tables alert badge', () => {
+    const source = readFileSync(new URL('./StaffActionsPanel.tsx', import.meta.url), 'utf8')
+    const css = readFileSync(new URL('./staff-actions-panel.css', import.meta.url), 'utf8')
+
+    expect(source).toContain("tableScope === 'unpaid'")
+    expect(source).toContain('按区域筛选桌台')
+    expect(source).toContain('tableFinancialLabel(table.activeSession.financialState)')
+    expect(source).toContain('staff-table-attention-badge')
+    expect(source).toContain('桌有支付或退款异常')
+    expect(css).toContain('.staff-table-tile.is-financial-unpaid')
+    expect(css).toContain('.staff-table-tile.is-financial-payment_exception')
+  })
+
   it('shows read-only served and unserved item detail directly after selecting an active table', () => {
     const source = readFileSync(new URL('./StaffActionsPanel.tsx', import.meta.url), 'utf8')
     const css = readFileSync(new URL('./staff-actions-panel.css', import.meta.url), 'utf8')

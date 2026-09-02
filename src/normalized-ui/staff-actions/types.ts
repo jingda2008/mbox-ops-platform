@@ -36,7 +36,14 @@ export interface StaffActionTableSession {
     code: string
     occurredAt: string
   }
+  financialState: StaffTableFinancialState
+  orderCount: number
+  unpaidOrderCount: number
+  pendingPaymentCount: number
+  refundAttentionCount: number
 }
+
+export type StaffTableFinancialState = 'no_order' | 'unpaid' | 'payment_pending' | 'paid' | 'refund_pending' | 'payment_exception'
 
 export interface StaffActionTable {
   id: string

@@ -1346,10 +1346,17 @@ describe('paymentApiPlugin', () => {
   })
 
   it('returns the current business day cashier workbench from trusted staff scope', async () => {
-    const value = fixture()
+    const querySystem = vi.fn()
+    const value = fixture({
+      onlinePayments: {
+        assertAvailable: vi.fn(), resolveActivePayment: vi.fn(), create: vi.fn(), query: vi.fn(),
+        querySystem, requestRefund: vi.fn(), queryRefund: vi.fn(),
+        listStalePendingPostarPaymentIds: vi.fn(), close: vi.fn(),
+      } as never,
+    })
     const response = await value.app.inject({
       method: 'GET',
-      url: '/api/payments/workbench?query=VIP1&limit=25&businessDate=2020-01-01',
+      url: `/api/payments/workbench?query=VIP1&areaId=${tableSessionId}&paymentState=processing&limit=25&businessDate=2020-01-01`,
     })
 
     expect(response.statusCode).toBe(200)
@@ -1360,8 +1367,11 @@ describe('paymentApiPlugin', () => {
       businessDate: '2026-08-11',
       capabilities: ['reconciliation.view'],
       query: 'VIP1',
+      areaId: tableSessionId,
+      paymentState: 'processing',
       limit: 25,
     })
+    expect(querySystem).not.toHaveBeenCalled()
   })
 
   it('does not expose the cashier workbench without a financial capability', async () => {

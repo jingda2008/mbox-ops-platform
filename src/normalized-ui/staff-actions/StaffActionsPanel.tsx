@@ -53,6 +53,7 @@ import type {
   StaffActionNotice,
   StaffActionsTab,
   StaffActionTable,
+  StaffTableFinancialState,
   StaffFulfillmentData,
   StaffAnnualGiftReservation,
   StaffDailySnackClaim,
@@ -80,6 +81,15 @@ const TABLE_COLLECTION_PERMISSIONS = [
 
 function hasTableCollectionPermission(permissions: readonly string[]): boolean {
   return TABLE_COLLECTION_PERMISSIONS.some((permission) => permissions.includes(permission))
+}
+
+function tableFinancialLabel(state: StaffTableFinancialState): string {
+  if (state === 'payment_exception') return '支付异常'
+  if (state === 'refund_pending') return '退款待办'
+  if (state === 'payment_pending') return '支付确认中'
+  if (state === 'unpaid') return '待支付'
+  if (state === 'paid') return '已结清'
+  return '已开台'
 }
 
 export function StaffActionsPanel({
@@ -129,6 +139,7 @@ export function StaffActionsPanel({
   const [participantMovementOpen,setParticipantMovementOpen]=useState(false)
   const [tableScope, setTableScope] = useState<StaffTableScope>('attention')
   const [tableQuery, setTableQuery] = useState('')
+  const [tableAreaId, setTableAreaId] = useState('all')
   const noticeRef = useRef<HTMLDivElement | null>(null)
   const noticeTimerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null)
   const requestRef = useRef<AbortController | null>(null)
@@ -348,9 +359,18 @@ export function StaffActionsPanel({
     ...serviceActions.map((task) => task.tableId),
     ...fulfillmentActions.map((item) => item.table.id),
   ]), [fulfillmentActions, serviceActions])
+  const tableAreas = useMemo(() => [...new Map((operations?.tables ?? []).map((table) => (
+    [table.areaId, table.areaName] as const
+  ))).entries()], [operations?.tables])
   const visibleTables = useMemo(() => visibleStaffTables(
     operations?.tables ?? [], tableScope, tableQuery, attentionTableIds,
-  ), [attentionTableIds, operations?.tables, tableQuery, tableScope])
+  ).filter((table) => tableAreaId === 'all' || table.areaId === tableAreaId), [
+    attentionTableIds, operations?.tables, tableAreaId, tableQuery, tableScope,
+  ])
+  const tableAttentionCount = useMemo(() => (operations?.tables ?? []).filter((table) => (
+    table.activeSession !== null
+      && ['refund_pending', 'payment_exception'].includes(table.activeSession.financialState)
+  )).length, [operations?.tables])
   const currentActionKeys = useMemo(() => [
     ...serviceActions.map((task) => `service:${task.id}`),
     ...fulfillmentActions.map((item) => `fulfillment:${item.taskId}`),
@@ -432,6 +452,11 @@ export function StaffActionsPanel({
       latestMood: null,
       guestProfileSnapshot: recommendationSceneSnapshot(openTableRecommendationScene),
       guestCartWritesFrozen: false,
+      financialState: 'no_order' as const,
+      orderCount: 0,
+      unpaidOrderCount: 0,
+      pendingPaymentCount: 0,
+      refundAttentionCount: 0,
     }
     setPendingAction(`table:${selectedTable.id}`)
     setOperations(replaceTableSession(snapshot, selectedTable.id, optimisticSession))
@@ -833,10 +858,15 @@ export function StaffActionsPanel({
           )}
           <div className="staff-table-tools">
             <label><Search size={17} /><input value={tableQuery} onChange={(event) => setTableQuery(event.target.value)} placeholder="搜索桌号或区域" aria-label="搜索桌号或区域" /></label>
+            <label className="staff-table-area-filter"><span>区域</span><select aria-label="按区域筛选桌台" value={tableAreaId} onChange={(event) => setTableAreaId(event.target.value)}>
+              <option value="all">全部区域</option>
+              {tableAreas.map(([areaId, areaName]) => <option key={areaId} value={areaId}>{areaName}</option>)}
+            </select></label>
             <div role="group" aria-label="桌台显示范围">
               <button type="button" className={tableScope === 'attention' ? 'is-active' : ''} onClick={() => setTableScope('attention')}>营业中</button>
+              <button type="button" className={tableScope === 'unpaid' ? 'is-active' : ''} onClick={() => setTableScope('unpaid')}>待支付</button>
               <button type="button" className={tableScope === 'mine' ? 'is-active' : ''} onClick={() => setTableScope('mine')}>负责桌</button>
-              <button type="button" className={tableScope === 'all' ? 'is-active' : ''} onClick={() => setTableScope('all')}>全部</button>
+              <button type="button" className={`${tableScope === 'all' ? 'is-active' : ''}${tableAttentionCount > 0 ? ' has-attention' : ''}`} onClick={() => setTableScope('all')}>全部{tableAttentionCount > 0 && <i aria-label={`${tableAttentionCount}桌有支付或退款异常`}>{tableAttentionCount}</i>}</button>
             </div>
           </div>
           {visibleTables.length === 0 && <div className="staff-table-empty"><strong>当前范围没有桌台</strong><span>可搜索桌号，或切换到“全部”查看完整桌图。</span><button type="button" onClick={() => setTableScope('all')}>查看全部桌台</button></div>}
@@ -855,12 +885,13 @@ export function StaffActionsPanel({
                   <div className="staff-table-tile-shell" key={table.id}>
                     <button
                       type="button"
-                      className={`staff-table-tile ${table.activeSession === null ? '' : 'is-open'} ${selectedTableId === table.id ? 'is-selected' : ''}`}
+                      className={`staff-table-tile ${table.activeSession === null ? '' : `is-open is-financial-${table.activeSession.financialState}`} ${selectedTableId === table.id ? 'is-selected' : ''}`}
                       onClick={() => selectTable(table)}
                       disabled={pendingAction === `table:${table.id}`}
                     >
                       <strong>{table.code}</strong>
-                      <span>{table.activeSession === null ? `${table.capacity}人` : `${table.activeSession.guestCount}人 · ${table.activeSession.status === 'closing' ? '结台中' : '已开台'}`}</span>
+                      <span>{table.activeSession === null ? `${table.capacity}人 · 空台` : `${table.activeSession.guestCount}人 · ${table.activeSession.status === 'closing' ? '结台中' : tableFinancialLabel(table.activeSession.financialState)}`}</span>
+                      {table.activeSession !== null && (table.activeSession.refundAttentionCount > 0 || table.activeSession.financialState === 'payment_exception') && <b className="staff-table-attention-badge" aria-label="支付或退款待办">!</b>}
                       {table.assignedToActor && <small>负责桌</small>}
                       {mood !== null && (
                         <span className="staff-table-mood" title={`客人状态：${mood.label}`} aria-label={`客人状态：${mood.label}`}>

@@ -53,6 +53,8 @@ describe('OperationsQueryService', () => {
         session_id: '66666666-6666-4666-8666-666666666666', session_public_id: 'session-vip1-20260811',
         business_date: '2026-08-11', guest_count: 10, guest_profile_snapshot: { extraSeatCount: 2 },
         mood_code: 'happy', mood_occurred_at: '2026-08-11T12:02:00.000Z',
+        financial_state: 'refund_pending', order_count: 2, unpaid_order_count: 0,
+        pending_payment_count: 0, refund_attention_count: 1,
         session_status: 'open', opened_at: '2026-08-11T12:00:00.000Z',
       }], rowCount: 1 },
       { rows: [{
@@ -75,6 +77,9 @@ describe('OperationsQueryService', () => {
       guestCount: 10,
       guestProfileSnapshot: { extraSeatCount: 2 },
       latestMood: { code: 'happy', occurredAt: '2026-08-11T12:02:00.000Z' },
+      financialState: 'refund_pending',
+      orderCount: 2,
+      refundAttentionCount: 1,
     })
     expect(view.tasks[0]).toMatchObject({
       tableCode: 'VIP1', title: '加水', assignedToActor: true, interactionMode: 'quick_complete',

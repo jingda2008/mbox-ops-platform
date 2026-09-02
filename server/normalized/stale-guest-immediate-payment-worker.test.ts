@@ -20,6 +20,28 @@ function observed(id: string, status: 'closed' | 'failed' | 'succeeded') {
 }
 
 describe('stale guest immediate payment worker', () => {
+  it('reconciles general pending payments in the worker instead of a page read', async () => {
+    const listGeneral = vi.fn(async () => ['payment-general'])
+    const querySystem = vi.fn(async () => observed('general', 'succeeded'))
+    const recordProviderQueryResult = vi.fn(async () => ({ replayed: false, value: {} }))
+    const worker = new StaleGuestImmediatePaymentWorker({
+      onlinePayments: {
+        listStalePendingPostarPaymentIds: listGeneral,
+        querySystem,
+        listStaleGuestImmediateCheckoutPaymentCandidates: vi.fn(async () => []),
+        closeSystem: vi.fn(),
+      } as never,
+      payments: { recordProviderQueryResult } as never,
+      reconciliation: { commitTerminal: vi.fn(), abandonUnresolved: vi.fn() } as never,
+    })
+
+    await worker.runBatch(scope, 'worker-test', businessDate, { now: () => 90_000 })
+
+    expect(listGeneral).toHaveBeenCalledWith(scope, 15, 20)
+    expect(querySystem).toHaveBeenCalledWith(expect.objectContaining({ paymentId: 'payment-general' }))
+    expect(recordProviderQueryResult).toHaveBeenCalledWith(expect.objectContaining({ paymentPublicId: 'PAY-general' }))
+  })
+
   it('queries then retires only an unpaid terminal guest checkout', async () => {
     const list = vi.fn(async () => [{
       id: 'payment-terminal', createdAt: '2026-08-29T03:00:00.000Z', operationallyAbandoned: false,

@@ -40,6 +40,11 @@ export interface OperationsTableView {
       code: string
       occurredAt: string
     }
+    financialState: 'no_order' | 'unpaid' | 'payment_pending' | 'paid' | 'refund_pending' | 'payment_exception'
+    orderCount: number
+    unpaidOrderCount: number
+    pendingPaymentCount: number
+    refundAttentionCount: number
     status: 'open' | 'closing'
     openedAt: string
   }
@@ -106,6 +111,11 @@ interface TableRow extends Record<string, unknown> {
   guest_cart_writes_frozen: boolean | null
   mood_code: string | null
   mood_occurred_at: string | null
+  financial_state: 'no_order' | 'unpaid' | 'payment_pending' | 'paid' | 'refund_pending' | 'payment_exception'
+  order_count: number | null
+  unpaid_order_count: number | null
+  pending_payment_count: number | null
+  refund_attention_count: number | null
   session_status: 'open' | 'closing' | null
   opened_at: string | null
 }
@@ -223,6 +233,16 @@ async function readTables(
       session.business_date::text, session.guest_count, session.capacity_at_open,
       session.guest_profile_snapshot, session.guest_cart_writes_frozen,
       latest_mood.mood_code, latest_mood.mood_occurred_at,
+      CASE
+        WHEN COALESCE(finance.payment_exception_count,0)>0 THEN 'payment_exception'
+        WHEN COALESCE(finance.refund_attention_count,0)>0 THEN 'refund_pending'
+        WHEN COALESCE(finance.pending_payment_count,0)>0 THEN 'payment_pending'
+        WHEN COALESCE(finance.unpaid_order_count,0)>0 THEN 'unpaid'
+        WHEN COALESCE(finance.order_count,0)>0 THEN 'paid'
+        ELSE 'no_order'
+      END AS financial_state,
+      finance.order_count,finance.unpaid_order_count,finance.pending_payment_count,
+      finance.refund_attention_count,
       session.status AS session_status, session.opened_at::text
     FROM mbox.tables venue_table
     JOIN mbox.areas area
@@ -246,6 +266,54 @@ async function readTables(
       ORDER BY behavior.occurred_at DESC, behavior.id DESC
       LIMIT 1
     ) latest_mood ON session.id IS NOT NULL
+    LEFT JOIN LATERAL (
+      SELECT
+        (SELECT count(*)::integer FROM mbox.orders ordering
+          WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
+            AND ordering.table_session_id=session.id AND ordering.status NOT IN ('draft','cancelled')) AS order_count,
+        (SELECT count(*)::integer FROM mbox.orders ordering
+          WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
+            AND ordering.table_session_id=session.id AND ordering.status<>'cancelled'
+            AND ordering.payment_status IN ('unpaid','pending','partially_paid')) AS unpaid_order_count,
+        (SELECT count(*)::integer FROM mbox.payments payment
+          JOIN mbox.orders ordering ON ordering.tenant_id=payment.tenant_id
+            AND ordering.store_id=payment.store_id AND ordering.id=payment.order_id
+          WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
+            AND ordering.table_session_id=session.id AND payment.status IN ('created','pending')
+            AND payment.retry_released_at IS NULL
+            AND NOT EXISTS (SELECT 1 FROM mbox.guest_immediate_checkout_abandonment_events abandonment
+              WHERE abandonment.tenant_id=payment.tenant_id AND abandonment.store_id=payment.store_id
+                AND abandonment.payment_id=payment.id)) AS pending_payment_count,
+        (SELECT count(*)::integer FROM mbox.refunds refund
+          JOIN mbox.payments payment ON payment.tenant_id=refund.tenant_id
+            AND payment.store_id=refund.store_id AND payment.id=refund.payment_id
+          JOIN mbox.orders ordering ON ordering.tenant_id=payment.tenant_id
+            AND ordering.store_id=payment.store_id AND ordering.id=payment.order_id
+          WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
+            AND ordering.table_session_id=session.id
+            AND refund.status IN ('requested','approved','processing'))
+          + (SELECT count(*)::integer FROM mbox.guest_immediate_checkout_late_capture_refund_followups followup
+            JOIN mbox.orders ordering ON ordering.tenant_id=followup.tenant_id
+              AND ordering.store_id=followup.store_id AND ordering.id=followup.order_id
+            WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
+              AND ordering.table_session_id=session.id
+              AND followup.amount_minor>COALESCE((SELECT sum(completed_refund.amount_minor)
+                FROM mbox.refunds completed_refund
+                WHERE completed_refund.tenant_id=followup.tenant_id
+                  AND completed_refund.store_id=followup.store_id
+                  AND completed_refund.payment_id=followup.payment_id
+                  AND completed_refund.status='succeeded'),0)) AS refund_attention_count,
+        (SELECT count(*)::integer FROM mbox.payments payment
+          JOIN mbox.orders ordering ON ordering.tenant_id=payment.tenant_id
+            AND ordering.store_id=payment.store_id AND ordering.id=payment.order_id
+          WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
+            AND ordering.table_session_id=session.id AND payment.status IN ('created','pending')
+            AND payment.retry_released_at IS NULL
+            AND payment.created_at<=clock_timestamp()-interval '5 minutes'
+            AND NOT EXISTS (SELECT 1 FROM mbox.guest_immediate_checkout_abandonment_events abandonment
+              WHERE abandonment.tenant_id=payment.tenant_id AND abandonment.store_id=payment.store_id
+                AND abandonment.payment_id=payment.id)) AS payment_exception_count
+    ) finance ON session.id IS NOT NULL
     WHERE venue_table.tenant_id = $1::uuid
       AND venue_table.store_id = $2::uuid
       AND venue_table.status <> 'retired'
@@ -376,6 +444,11 @@ function mapTable(row: TableRow): OperationsTableView {
       latestMood: row.mood_code === null || row.mood_occurred_at === null
         ? null
         : { code: row.mood_code, occurredAt: row.mood_occurred_at },
+      financialState: row.financial_state ?? 'no_order',
+      orderCount: row.order_count ?? 0,
+      unpaidOrderCount: row.unpaid_order_count ?? 0,
+      pendingPaymentCount: row.pending_payment_count ?? 0,
+      refundAttentionCount: row.refund_attention_count ?? 0,
       status: row.session_status!,
       openedAt: row.opened_at!,
     },

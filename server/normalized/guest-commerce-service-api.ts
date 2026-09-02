@@ -1419,8 +1419,11 @@ async function abandonGuestSelfCheckout(
       409,
     )
   }
-  if (payment !== null && (payment.provider !== 'postar' || payment.method !== 'jsapi'
-    || !isGuestImmediateCheckoutPaymentSnapshot(payment.provider_snapshot))) {
+  // Order ownership, guest-QR channel, immediate settlement and JSAPI method
+  // are server-owned facts. Do not depend on a provider snapshot marker here:
+  // snapshots are intentionally sanitised and older valid rows may not carry
+  // the former `source` hint.
+  if (payment !== null && (payment.provider !== 'postar' || payment.method !== 'jsapi')) {
     throw new GuestApiRequestError(
       'GUEST_CHECKOUT_CANNOT_BE_CANCELLED',
       '这笔订单正在由工作人员处理，请由工作人员按实际情况完成收款或核对',
@@ -1530,9 +1533,6 @@ async function abandonGuestSelfCheckout(
   }
 }
 
-function isGuestImmediateCheckoutPaymentSnapshot(value: unknown): boolean {
-  return isRecord(value) && value.source === 'guest_checkout'
-}
 
 interface SharedCartCheckoutResult {
   cart: GuestSharedCart

@@ -175,6 +175,12 @@ export interface GuestServiceResult {
   retryAt?: string | null
 }
 
+export interface GuestCheckoutAbandonmentView {
+  orderPublicId: string
+  operationalState: 'cancelled'
+  paymentState: 'not_required' | 'reconciliation_pending'
+}
+
 export interface GuestApiClientOptions {
   fetch?: typeof fetch
   defaultTimeoutMs?: number
@@ -339,6 +345,24 @@ export class GuestApiClient {
     const data = responseData(body)
     if (!isOnlinePaymentAction(data)) throw invalidResponse()
     return data
+  }
+
+  async abandonCheckout(
+    orderPublicId: string,
+    options: Readonly<RequestOptions> & { idempotencyKey: string },
+  ): Promise<GuestCheckoutAbandonmentView> {
+    const body = await this.request<unknown>(
+      `/api/guest/orders/${encodeURIComponent(orderPublicId)}/abandon-checkout`,
+      { method: 'POST', body: {}, signal: options.signal, idempotencyKey: options.idempotencyKey },
+    )
+    const data = responseData(body)
+    if (!isObject(data)
+      || typeof data.orderPublicId !== 'string'
+      || data.operationalState !== 'cancelled'
+      || !['not_required', 'reconciliation_pending'].includes(String(data.paymentState))) {
+      throw invalidResponse()
+    }
+    return data as unknown as GuestCheckoutAbandonmentView
   }
 
   async requestService(

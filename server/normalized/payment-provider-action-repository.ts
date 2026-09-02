@@ -234,7 +234,6 @@ export class PaymentProviderActionRepository {
             AND ordering.id=payment.order_id
             AND ordering.channel='guest_qr' AND ordering.settlement_mode='immediate_payment'
             AND payment.method='jsapi'
-            AND payment.provider_snapshot @> '{"source":"guest_checkout"}'::jsonb
         )
       ORDER BY payment.created_at ASC, payment.id ASC
       LIMIT $4::integer
@@ -264,7 +263,6 @@ export class PaymentProviderActionRepository {
       WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid
         AND payment.provider='postar' AND payment.method='jsapi'
         AND payment.status IN ('created','pending')
-        AND payment.provider_snapshot @> '{"source":"guest_checkout"}'::jsonb
         AND ordering.channel='guest_qr' AND ordering.settlement_mode='immediate_payment'
         -- An explicit customer exit already released the order.  Pick that
         -- payment up on the next worker cycle rather than making a customer

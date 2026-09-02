@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
-import { PostgresCashierWorkbenchQuery } from './cashier-workbench-query.js'
+import { parseAmountSearchMinor, PostgresCashierWorkbenchQuery } from './cashier-workbench-query.js'
 import {
   ScopedPostgresTransactionRunner,
   type PostgresPool,
@@ -98,9 +98,31 @@ describe('PostgresCashierWorkbenchQuery', () => {
       20,
       employeeId,
       true,
+      null,
+      null,
+      null,
     ])
     expect(runner.calls[0]?.sql).toContain("workbench_assignment.assignment_type IN ('primary','backup')")
     expect(runner.readOnly).toBe(true)
+  })
+
+  it('supports exact yuan amount search plus area and payment-state filters', async () => {
+    expect(parseAmountSearchMinor('136')).toBe(13_600)
+    expect(parseAmountSearchMinor('￥136.50元')).toBe(13_650)
+    expect(parseAmountSearchMinor('ORDER-136')).toBeNull()
+    const runner = new QueryRunner([[]])
+    const query = new PostgresCashierWorkbenchQuery(runner as unknown as ScopedPostgresTransactionRunner)
+    const areaId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    await query.get({
+      scope: { tenantId, storeId }, employeeId, businessDate: '2026-08-13',
+      capabilities: ['reconciliation.view'], query: '136', areaId, paymentState: 'processing', limit: 20,
+    })
+    expect(runner.calls[0]?.values).toEqual([
+      tenantId, storeId, '2026-08-13', '136', 20, employeeId, true, areaId, 'processing', 13_600,
+    ])
+    expect(runner.calls[0]?.sql).toContain('orders.total_amount_minor=$10::bigint')
+    expect(runner.calls[0]?.sql).toContain('area.id=$8::uuid')
+    expect(runner.calls[0]?.sql).toContain("$9='processing'")
   })
 
   it('keeps per-item and payment-level remaining capacity after a succeeded partial refund', async () => {
@@ -727,6 +749,8 @@ function orderRow(): Record<string, unknown> {
     id: orderId,
     public_id: 'ORDER-VIP1-0001',
     table_code: 'VIP1',
+    area_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    area_name: '大厅',
     table_session_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     table_session_status: 'open',
     channel: 'staff_assisted',

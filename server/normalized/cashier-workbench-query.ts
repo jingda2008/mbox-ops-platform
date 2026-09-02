@@ -20,6 +20,8 @@ export interface CashierWorkbenchQueryInput {
   businessDate: string
   capabilities: readonly string[]
   query?: string
+  areaId?: string
+  paymentState?: 'unpaid' | 'processing' | 'completed' | 'refunded'
   limit: number
 }
 
@@ -27,6 +29,8 @@ interface OrderRow extends Record<string, unknown> {
   id: string
   public_id: string
   table_code: string
+  area_id: string
+  area_name: string
   table_session_id: string
   table_session_status: CashierWorkbenchOrder['tableSessionStatus']
   channel: string
@@ -204,6 +208,7 @@ export class PostgresCashierWorkbenchQuery {
   get(input: Readonly<CashierWorkbenchQueryInput>): Promise<CashierWorkbenchView> {
     validateInput(input)
     const normalizedQuery = input.query?.trim() ?? ''
+    const searchedAmountMinor = parseAmountSearchMinor(normalizedQuery)
     const canViewStoreWide = STORE_WIDE_WORKBENCH_CAPABILITIES.some((capability) =>
       input.capabilities.includes(capability),
     )
@@ -211,6 +216,7 @@ export class PostgresCashierWorkbenchQuery {
     return this.transactions.run(input.scope, async (transaction) => {
       const orderResult = await transaction.query<OrderRow>(`
         SELECT orders.id, orders.public_id, table_row.code AS table_code,
+          area.id AS area_id,area.name AS area_name,
           session.id AS table_session_id, session.status AS table_session_status,
           orders.channel, orders.status, orders.payment_status,
           orders.total_amount_minor, orders.currency,
@@ -225,6 +231,9 @@ export class PostgresCashierWorkbenchQuery {
           ON table_row.tenant_id = session.tenant_id
          AND table_row.store_id = session.store_id
          AND table_row.id = session.table_id
+        JOIN mbox.areas AS area
+          ON area.tenant_id=table_row.tenant_id AND area.store_id=table_row.store_id
+         AND area.id=table_row.area_id
         WHERE orders.tenant_id = $1::uuid
           AND orders.store_id = $2::uuid
           AND (
@@ -296,6 +305,8 @@ export class PostgresCashierWorkbenchQuery {
             $4::text = ''
             OR orders.public_id ILIKE '%' || $4 || '%'
             OR table_row.code ILIKE '%' || $4 || '%'
+            OR area.name ILIKE '%' || $4 || '%'
+            OR ($10::bigint IS NOT NULL AND orders.total_amount_minor=$10::bigint)
             OR EXISTS (
               SELECT 1 FROM mbox.payments AS searched_payment
               WHERE searched_payment.tenant_id = orders.tenant_id
@@ -322,6 +333,21 @@ export class PostgresCashierWorkbenchQuery {
                 )
             )
           )
+          AND ($8::uuid IS NULL OR area.id=$8::uuid)
+          AND (
+            $9::text IS NULL
+            OR ($9='unpaid' AND orders.payment_status IN ('unpaid','partially_paid')
+              AND NOT EXISTS (SELECT 1 FROM mbox.payments filter_payment
+                WHERE filter_payment.tenant_id=orders.tenant_id AND filter_payment.store_id=orders.store_id
+                  AND filter_payment.order_id=orders.id AND filter_payment.status IN ('created','pending')
+                  AND filter_payment.retry_released_at IS NULL))
+            OR ($9='processing' AND EXISTS (SELECT 1 FROM mbox.payments filter_payment
+                WHERE filter_payment.tenant_id=orders.tenant_id AND filter_payment.store_id=orders.store_id
+                  AND filter_payment.order_id=orders.id AND filter_payment.status IN ('created','pending')
+                  AND filter_payment.retry_released_at IS NULL))
+            OR ($9='completed' AND orders.payment_status='paid')
+            OR ($9='refunded' AND orders.payment_status IN ('partially_refunded','refunded'))
+          )
         ORDER BY (session.business_date < $3::date) DESC,
           COALESCE(orders.submitted_at, orders.created_at) DESC, orders.id DESC
         LIMIT $5
@@ -333,6 +359,9 @@ export class PostgresCashierWorkbenchQuery {
         input.limit,
         input.employeeId,
         canViewStoreWide,
+        input.areaId ?? null,
+        input.paymentState ?? null,
+        searchedAmountMinor,
       ])
       const activityResult = canUseActivityCashier
         ? await transaction.query<ActivityRegistrationRow>(`
@@ -703,6 +732,8 @@ function assembleView(
       id: order.id,
       publicId: order.public_id,
       tableCode: order.table_code,
+      areaId: order.area_id,
+      areaName: order.area_name,
       tableSessionId: order.table_session_id,
       tableSessionStatus: order.table_session_status,
       channel: order.channel,
@@ -1003,11 +1034,27 @@ function validateInput(input: Readonly<CashierWorkbenchQueryInput>): void {
     throw new TypeError('cashier workbench limit must be between 1 and 100')
   }
   if ((input.query?.trim().length ?? 0) > 64) throw new TypeError('cashier workbench query is too long')
+  if (input.areaId !== undefined && !uuid.test(input.areaId)) {
+    throw new TypeError('cashier workbench areaId is invalid')
+  }
+  if (input.paymentState !== undefined
+    && !['unpaid', 'processing', 'completed', 'refunded'].includes(input.paymentState)) {
+    throw new TypeError('cashier workbench paymentState is invalid')
+  }
   if (!input.capabilities.some((capability) => WORKBENCH_CAPABILITIES.includes(
     capability as typeof WORKBENCH_CAPABILITIES[number],
   ))) {
     throw new TypeError('cashier workbench requires a financial capability')
   }
+}
+
+export function parseAmountSearchMinor(value: string): number | null {
+  const matched = value.trim().match(/^(?:¥|￥)?\s*(\d{1,10})(?:\.(\d{1,2}))?\s*(?:元)?$/)
+  if (matched === null) return null
+  const yuan = Number(matched[1])
+  const cents = Number((matched[2] ?? '').padEnd(2, '0'))
+  const amount = yuan * 100 + cents
+  return Number.isSafeInteger(amount) ? amount : null
 }
 
 function asSafeMinor(value: string | number, label: string): number {

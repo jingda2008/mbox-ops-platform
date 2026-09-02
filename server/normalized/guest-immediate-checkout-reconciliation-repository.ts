@@ -35,7 +35,6 @@ interface PaymentRow extends Record<string, unknown> {
   payment_status: PaymentStatus
   payment_provider: string
   payment_method: string
-  payment_source: string | null
   order_id: string
   order_public_id: string
   order_status: string
@@ -228,7 +227,6 @@ export class GuestImmediateCheckoutReconciliationRepository {
     const result = await this.transaction.query<PaymentRow>(`
       SELECT payment.id AS payment_id,payment.public_id AS payment_public_id,
         payment.status AS payment_status,payment.provider AS payment_provider,payment.method AS payment_method,
-        NULLIF(payment.provider_snapshot ->> 'source','') AS payment_source,
         ordering.id AS order_id,ordering.public_id AS order_public_id,
         ordering.status AS order_status,ordering.payment_status AS order_payment_status,
         ordering.channel AS order_channel,ordering.settlement_mode,ordering.fulfillment_state
@@ -306,7 +304,6 @@ function assertEligible(row: Readonly<PaymentRow>, outcome: 'terminal' | 'unreso
     ? row.order_payment_status === 'unpaid'
     : ['unpaid','pending'].includes(row.order_payment_status)
   if (row.payment_provider !== 'postar' || row.payment_method !== 'jsapi'
-    || row.payment_source !== 'guest_checkout'
     || !providerStatusValid
     || row.order_channel !== 'guest_qr' || row.settlement_mode !== 'immediate_payment'
     || row.order_status === 'cancelled' || !orderPaymentStatusValid

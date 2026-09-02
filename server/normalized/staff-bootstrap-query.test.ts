@@ -107,6 +107,7 @@ function responses(): Array<PostgresQueryResult> {
         reservation_attention: '2',
         pending_payments: '1',
         failed_payments: '0',
+        carryover_payment_tasks: '0',
         refund_approvals: '0',
         current_refund_approval_tasks: '0',
         current_refund_execution_tasks: '0',
@@ -207,6 +208,26 @@ describe('StaffBootstrapQuery', () => {
     })
     expect(result.view.domainSummaries.find((item) => item.key === 'payments')).toMatchObject({
       activeCount: 0, attentionCount: 0, carryoverCount: 0,
+    })
+  })
+
+  it('surfaces current and carryover payment exceptions only to reconciliation-capable staff', async () => {
+    const scripted = responses()
+    const identity = structuredClone(scripted[0]!.rows[0]!) as Record<string, unknown>
+    identity.permissions = ['reconciliation.view']
+    identity.navigation = [
+      { code: 'payments', label: '收银待办', route: '/staff/payments', icon: null, sortOrder: 1, displayConfig: {} },
+    ]
+    const summary = structuredClone(scripted[1]!.rows[0]!) as Record<string, unknown>
+    summary.pending_payments = '2'
+    summary.failed_payments = '1'
+    summary.carryover_payment_tasks = '3'
+    const value = fixture([{ rows: [identity], rowCount: 1 }, { rows: [summary], rowCount: 1 }])
+
+    const result = await value.query.get({ tenantId, storeId }, employeeId, '2026-08-11')
+
+    expect(result.view.domainSummaries.find((item) => item.key === 'payments')).toMatchObject({
+      activeCount: 3, attentionCount: 3, carryoverCount: 3,
     })
   })
 

@@ -73,6 +73,7 @@ interface SummaryRow extends Record<string, unknown> {
   reservation_attention: string
   pending_payments: string
   failed_payments: string
+  carryover_payment_tasks: string
   refund_approvals: string
   current_refund_approval_tasks: string
   current_refund_execution_tasks: string
@@ -146,11 +147,17 @@ const DOMAIN_DEFINITIONS: readonly DomainDefinition[] = [
       const currentExecution = permissions.has('refund.execute') ? row.current_refund_execution_tasks : '0'
       const carryoverApproval = permissions.has('refund.approve') ? row.carryover_refund_approval_tasks : '0'
       const carryoverExecution = permissions.has('refund.execute') ? row.carryover_refund_execution_tasks : '0'
+      const canReviewPayments = permissions.has('reconciliation.view')
+        || permissions.has('reconciliation.manage')
+        || permissions.has('payment.settlement.view')
+      const paymentAttention = canReviewPayments ? addCounts(row.pending_payments, row.failed_payments) : '0'
+      const carryoverPaymentAttention = canReviewPayments ? row.carryover_payment_tasks : '0'
+      const currentRefundAttention = addCounts(currentApproval, currentExecution)
       return counts(
-        addCounts(currentApproval, currentExecution),
-        addCounts(currentApproval, currentExecution),
+        addCounts(currentRefundAttention, paymentAttention),
+        addCounts(currentRefundAttention, paymentAttention),
         '0',
-        addCounts(carryoverApproval, carryoverExecution),
+        addCounts(addCounts(carryoverApproval, carryoverExecution), carryoverPaymentAttention),
       )
     },
   },
@@ -485,20 +492,50 @@ async function readSummaries(
       -- A customer-left self checkout remains in the financial audit trail for
       -- a possible late capture/refund, but is not a live payment for staff
       -- to chase.  Real late money returns through the refund workflow.
-      (SELECT count(*) FROM mbox.payments payment WHERE payment.tenant_id = $1::uuid
-        AND payment.store_id = $2::uuid AND payment.status IN ('created', 'pending')
+      (SELECT count(DISTINCT payment.order_id) FROM mbox.payments payment
+        JOIN mbox.orders payment_order ON payment_order.tenant_id=payment.tenant_id
+          AND payment_order.store_id=payment.store_id AND payment_order.id=payment.order_id
+        JOIN mbox.table_sessions payment_session ON payment_session.tenant_id=payment_order.tenant_id
+          AND payment_session.store_id=payment_order.store_id AND payment_session.id=payment_order.table_session_id
+        WHERE payment.tenant_id = $1::uuid AND payment.store_id = $2::uuid
+        AND payment.status IN ('created', 'pending') AND payment.retry_released_at IS NULL
+        AND payment_order.status<>'cancelled' AND payment_order.payment_status IN ('unpaid','pending','partially_paid')
+        AND payment_session.business_date=$3::date
         AND NOT EXISTS (
           SELECT 1 FROM mbox.guest_immediate_checkout_abandonment_events abandonment
           WHERE abandonment.tenant_id=payment.tenant_id AND abandonment.store_id=payment.store_id
             AND abandonment.payment_id=payment.id
         ))::text AS pending_payments,
-      (SELECT count(*) FROM mbox.payments payment WHERE payment.tenant_id = $1::uuid
-        AND payment.store_id = $2::uuid AND payment.status = 'failed'
+      (SELECT count(DISTINCT payment.order_id) FROM mbox.payments payment
+        JOIN mbox.orders payment_order ON payment_order.tenant_id=payment.tenant_id
+          AND payment_order.store_id=payment.store_id AND payment_order.id=payment.order_id
+        JOIN mbox.table_sessions payment_session ON payment_session.tenant_id=payment_order.tenant_id
+          AND payment_session.store_id=payment_order.store_id AND payment_session.id=payment_order.table_session_id
+        WHERE payment.tenant_id = $1::uuid AND payment.store_id = $2::uuid
+        AND payment.status = 'failed'
+        AND payment_order.status<>'cancelled' AND payment_order.payment_status IN ('unpaid','pending','partially_paid')
+        AND payment_session.business_date=$3::date
         AND NOT EXISTS (
           SELECT 1 FROM mbox.guest_immediate_checkout_abandonment_events abandonment
           WHERE abandonment.tenant_id=payment.tenant_id AND abandonment.store_id=payment.store_id
             AND abandonment.payment_id=payment.id
         ))::text AS failed_payments,
+      (SELECT count(DISTINCT payment.order_id) FROM mbox.payments payment
+        JOIN mbox.orders payment_order ON payment_order.tenant_id=payment.tenant_id
+          AND payment_order.store_id=payment.store_id AND payment_order.id=payment.order_id
+        JOIN mbox.table_sessions payment_session ON payment_session.tenant_id=payment_order.tenant_id
+          AND payment_session.store_id=payment_order.store_id AND payment_session.id=payment_order.table_session_id
+        WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid
+          AND payment.status IN ('created','pending','failed')
+          AND (payment.status='failed' OR payment.retry_released_at IS NULL)
+          AND payment_order.status<>'cancelled'
+          AND payment_order.payment_status IN ('unpaid','pending','partially_paid')
+          AND payment_session.business_date<$3::date
+          AND NOT EXISTS (
+            SELECT 1 FROM mbox.guest_immediate_checkout_abandonment_events abandonment
+            WHERE abandonment.tenant_id=payment.tenant_id AND abandonment.store_id=payment.store_id
+              AND abandonment.payment_id=payment.id
+          ))::text AS carryover_payment_tasks,
       (SELECT count(*) FROM mbox.refunds WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND status = 'requested')::text AS refund_approvals,
       (SELECT count(*) FROM mbox.refunds AS refund

@@ -1,4 +1,5 @@
 import { createElement } from 'react'
+import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { StaffAuthView } from '../normalized-api'
@@ -139,6 +140,28 @@ describe('CashierAfterSalesWorkbenchView', () => {
     expect(html).toContain('待查渠道')
     expect(html).toContain('查询渠道结果')
     expect(html).toContain('不会再次扣款')
+  })
+
+  it('supports global order, table and amount search plus region and payment-state filters', () => {
+    const html = renderToStaticMarkup(createElement(CashierAfterSalesWorkbenchView, {
+      auth: auth(), view: workbench([]), phase: 'ready' as const, message: null,
+      busyKey: null, notice: null, areaId: 'area-indoor', paymentState: 'processing' as const,
+      areaOptions: [{ id: 'area-indoor', name: '室内区' }, { id: 'area-outdoor', name: '外摆区' }],
+      onSearch: vi.fn(), onAreaId: vi.fn(), onPaymentState: vi.fn(), onReload: vi.fn(),
+      onMutation: vi.fn(async () => true),
+    }))
+
+    expect(html).toContain('单号、桌号或金额（如 136）')
+    expect(html).toContain('全部区域')
+    expect(html).toContain('室内区')
+    expect(html).toContain('外摆区')
+    expect(html).toContain('支付中')
+    expect(html).toContain('已退款')
+    const css = readFileSync(new URL('./cashier-after-sales-workbench.css', import.meta.url), 'utf8')
+    const source = readFileSync(new URL('./CashierAfterSalesWorkbench.tsx', import.meta.url), 'utf8')
+    expect(css).toMatch(/\.cashier-workbench-filters select \{[^}]*min-height:\s*44px/)
+    expect(source).toContain("const isGlobalView = searchQuery.trim() === '' && areaId === 'all' && paymentState === 'all'")
+    expect(source).toContain('attentionCount - previousAttentionCount')
   })
 
   it('allows direct cash for an ordinary unpaid order and an unpresented online record', () => {
@@ -438,6 +461,8 @@ function workbench(payments: CashierWorkbenchPayment[]): CashierWorkbenchView {
       id: 'order-1',
       publicId: 'ORDER-VIP1-0001',
       tableCode: 'VIP1',
+      areaId: 'area-1',
+      areaName: '大厅',
       channel: 'staff_assisted',
       status: 'submitted',
       paymentStatus: 'paid',

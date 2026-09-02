@@ -206,7 +206,7 @@ test('one business-day order and guest requests flow through bartender, kitchen,
 
   const orderManager = await staffPage(browser, data, 'liyan')
   await orderManager.page.getByRole('button', { name: '现场', exact: true }).first().click()
-  await orderManager.page.getByRole('button', { name: /W01.*已开台/ }).click()
+  await orderManager.page.getByRole('button', { name: /^W01 \d+人 · / }).click()
   await orderManager.page.getByRole('button', { name: '协助点单' }).click()
   const assistedOrder = orderManager.page.getByRole('dialog', { name: 'W01协助点单' })
   for (const productName of [data.orderableProductName, data.kitchenProductName]) {

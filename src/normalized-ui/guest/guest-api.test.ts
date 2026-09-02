@@ -169,6 +169,23 @@ describe('GuestApiClient', () => {
     expect(new Headers(send.mock.calls[0]?.[1]?.headers).has('idempotency-key')).toBe(false)
   })
 
+  it('records an explicit payment-sheet exit with one idempotent abandonment request', async () => {
+    const send = vi.fn(async () => jsonResponse({ data: {
+      orderPublicId: 'guest-order-public-0001',
+      operationalState: 'cancelled',
+      paymentState: 'reconciliation_pending',
+    } }))
+    const client = new GuestApiClient(deviceKey, { fetch: send })
+
+    await expect(client.abandonCheckout('guest-order-public-0001', {
+      idempotencyKey: 'guest-abandon-test-0001',
+    })).resolves.toMatchObject({ operationalState: 'cancelled', paymentState: 'reconciliation_pending' })
+    expect(send.mock.calls[0]?.[0]).toBe('/api/guest/orders/guest-order-public-0001/abandon-checkout')
+    expect(JSON.parse(String(send.mock.calls[0]?.[1]?.body))).toEqual({})
+    expect(new Headers(send.mock.calls[0]?.[1]?.headers).get('idempotency-key'))
+      .toBe('guest-abandon-test-0001')
+  })
+
   it('loads the published performance timeline as a read-only guest view', async () => {
     const schedule = {
       id: 'schedule-0001', performerStageName: '李艳', performerProfile: { genres: ['流行'] },

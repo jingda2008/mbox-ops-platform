@@ -55,12 +55,6 @@ import {
   OnlineRefundStatusUnknownError,
 } from './online-payment-service.js'
 import {
-  reconcileStalePendingOnlinePayment,
-  reconcileStalePendingOnlinePaymentsForStore,
-  reconciliationQueryBinding,
-  shouldReconcilePaymentContext,
-} from './pending-online-payment-reconciliation.js'
-import {
   ProviderPaymentInProgressError,
   ProviderPaymentMethodConflictError,
   ProviderPaymentStatusAccessError,
@@ -559,30 +553,10 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       const context = await resolveActorContext(options, request)
       const paymentId = readUuid(request.params.paymentId, 'paymentId')
       const principal = paymentInitiationPrincipal(context)
-      if (options.onlinePayments.query !== undefined) {
-        try {
-          const current = await options.onlinePayments.readInitiatedPaymentStatus({
-            scope: context.scope,
-            paymentId,
-            principal,
-          })
-          if (shouldReconcilePaymentContext(current)) {
-            await reconcileStalePendingOnlinePayment(
-              { onlinePayments: options.onlinePayments, commands: options.commands },
-              {
-                scope: context.scope,
-                businessDate: context.businessDate,
-                actor: { type: 'integration', ref: 'postar-active-query' },
-              },
-              paymentId,
-              reconciliationQueryBinding('payment-status-reconcile'),
-              principal,
-            )
-          }
-        } catch {
-          // Status reads must stay available even when provider reconciliation fails transiently.
-        }
-      }
+      // Polling is a passive local read. Provider queries are deliberately
+      // limited to explicit staff/guest query actions and the reconciliation
+      // worker, so a busy client cannot amplify channel traffic or keep the
+      // payment sheet/table hostage to a slow external response.
       const payment = await options.onlinePayments.readInitiatedPaymentStatus({
         scope: context.scope,
         paymentId,
@@ -883,27 +857,16 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       'business_day.close',
     ])
     const query = readObject(request.query, '查询参数')
-    if (options.onlinePayments?.querySystem !== undefined) {
-      try {
-        await reconcileStalePendingOnlinePaymentsForStore(
-          { onlinePayments: options.onlinePayments, commands: options.commands },
-          {
-            scope: context.scope,
-            businessDate: context.businessDate,
-            actor: { type: 'integration', ref: 'cashier-workbench-reconcile' },
-          },
-          reconciliationQueryBinding('workbench-reconcile'),
-        )
-      } catch {
-        // Workbench reads must not fail when provider reconciliation is temporarily unavailable.
-      }
-    }
+    // Workbench refresh is read-only. Reconciliation runs out of band; opening
+    // or filtering the cashier page must never wait for a payment provider.
     const result = await options.cashierWorkbenchQuery.get({
       scope: context.scope,
       employeeId: context.employeeId,
       businessDate: context.businessDate,
       capabilities: context.capabilities,
       query: readOptionalString(query.query, 'query', 64) ?? undefined,
+      areaId: query.areaId === undefined ? undefined : readUuid(query.areaId, 'areaId'),
+      paymentState: readOptionalPaymentState(query.paymentState),
       limit: query.limit === undefined ? 50 : readInteger(query.limit, 'limit', 1, 100),
     })
     const onlinePaymentEnabled = options.onlinePaymentProvider !== null
@@ -1479,6 +1442,14 @@ function readOptionalEntryType(
     return value
   }
   throw new PaymentApiRequestError('entryType无效')
+}
+
+function readOptionalPaymentState(
+  value: JsonValue | undefined,
+): CashierWorkbenchQueryInput['paymentState'] {
+  if (value === undefined || value === null || value === '') return undefined
+  if (value === 'unpaid' || value === 'processing' || value === 'completed' || value === 'refunded') return value
+  throw new PaymentApiRequestError('paymentState 必须是 unpaid、processing、completed 或 refunded')
 }
 
 function readObject(value: unknown, label: string): JsonObject {

@@ -1,4 +1,5 @@
 import { createElement } from 'react'
+import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { rankMenuRecommendations } from '../../shared/menu-recommendation'
@@ -139,5 +140,14 @@ describe('GuestApp', () => {
 
     expect(paymentStatusCopy(result, paidOrder).title).toBe('支付已经完成')
     expect(paymentStatusCopy(result, reviewingOrder).title).toBe('订单已建立，付款状态待核对')
+  })
+
+  it('turns a WeChat payment cancellation into a durable safe-release request', () => {
+    const source = readFileSync(new URL('./GuestApp.tsx', import.meta.url), 'utf8')
+
+    expect(source).toContain("error.code === 'PAYMENT_CANCELLED'")
+    expect(source).toContain('await api.abandonCheckout(orderPublicId')
+    expect(source).toContain('await api.abandonCheckout(result.order.publicId')
+    expect(source).toContain('订单和占用已安全释放')
   })
 })

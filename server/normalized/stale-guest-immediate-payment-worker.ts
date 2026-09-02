@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { PaymentCommandService } from './payment-command-service.js'
 import {
   applyProviderQueryObservation,
+  reconcileStalePendingOnlinePaymentsForStore,
   type PendingOnlinePaymentReconciliationContext,
 } from './pending-online-payment-reconciliation.js'
 import {
@@ -28,7 +29,7 @@ export const STALE_GUEST_IMMEDIATE_PAYMENT_BATCH_LIMIT = 20
 type OnlinePaymentPort = Pick<
   OnlinePaymentService,
   'closeSystem' | 'listStaleGuestImmediateCheckoutPaymentCandidates'
->
+> & Partial<Pick<OnlinePaymentService, 'query' | 'querySystem' | 'listStalePendingPostarPaymentIds'>>
 type PaymentCommandPort = Pick<PaymentCommandService, 'recordProviderQueryResult'>
 
 export interface StaleGuestImmediatePaymentWorkerDeps {
@@ -100,6 +101,27 @@ export class StaleGuestImmediatePaymentWorker {
       scope,
       businessDate: resolvedBusinessDate,
       actor: { type: 'integration', ref: 'postar-stale-guest-checkout' },
+    }
+
+    // General staff-started Postar payments used to be reconciled as a side
+    // effect of opening the workbench/status page. Keep provider I/O in this
+    // bounded worker instead, so page refresh and table operation remain
+    // independent from channel latency or outage.
+    if (this.deps.onlinePayments.querySystem !== undefined
+      && this.deps.onlinePayments.listStalePendingPostarPaymentIds !== undefined) {
+      try {
+        await reconcileStalePendingOnlinePaymentsForStore(
+          {
+            onlinePayments: this.deps.onlinePayments as Pick<OnlinePaymentService, 'query' | 'querySystem' | 'listStalePendingPostarPaymentIds'>,
+            commands: this.deps.payments,
+          },
+          context,
+          `pending-payment-worker:${workerId}:${Math.floor(now() / 30_000)}`,
+        )
+      } catch {
+        // A provider/list failure is financial follow-up only. Guest checkout
+        // retirement below must still run and the physical table stays usable.
+      }
     }
 
     for (const candidate of candidates) {

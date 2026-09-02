@@ -44,7 +44,7 @@ import { guestMenuProductToMenuProduct } from './menu-product-adapter'
 import { shortPublicReference } from '../public-reference'
 import './guest-app.css'
 
-type GuestApiPort = Pick<GuestApiClient, 'scanTable' | 'loadSession' | 'searchMenu' | 'submitOrder' | 'loadSharedCart' | 'adjustSharedCart' | 'removeSharedCartLine' | 'checkoutSharedCart' | 'loadTableOrders' | 'loadTodayPerformance' | 'payTableOrder' | 'requestService' | 'recordMood'>
+type GuestApiPort = Pick<GuestApiClient, 'scanTable' | 'loadSession' | 'searchMenu' | 'submitOrder' | 'loadSharedCart' | 'adjustSharedCart' | 'removeSharedCartLine' | 'checkoutSharedCart' | 'loadTableOrders' | 'loadTodayPerformance' | 'payTableOrder' | 'abandonCheckout' | 'requestService' | 'recordMood'>
 type ServiceType = 'call_staff' | 'complaint' | 'custom'
 type Panel = 'orders' | 'complaint' | 'custom' | 'checkout' | null
 export type { GuestGateReason } from './guest-gate-model'
@@ -259,11 +259,27 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       await presentOnlinePayment(action)
       notify(action.presentation === 'qr' ? '正在打开微信收银台。' : '付款已发起，请按微信页面完成。', 'success')
     } catch (error) {
-      if (!blockForSession(error)) notify(errorMessage(error, '付款暂时没有发起，请稍后再试。'), 'error')
+      if (error instanceof GuestApiError && error.code === 'PAYMENT_CANCELLED') {
+        try {
+          await api.abandonCheckout(orderPublicId, {
+            idempotencyKey: safeIdempotencyKey(`guest-abandon-${orderPublicId}`),
+          })
+          setPanel(null)
+          setOrderResult(null)
+          await Promise.all([loadTableOrders(true), cartProtocolVersion === 2 ? loadSharedCart(true) : Promise.resolve()])
+          notify('本次付款已取消，订单和占用已安全释放；如仍需要可重新选择商品下单。', 'info')
+        } catch (abandonError) {
+          if (!blockForSession(abandonError)) {
+            notify(errorMessage(abandonError, '付款已取消，但释放状态尚未确认，请让收银核对后再付款。'), 'error')
+          }
+        }
+      } else if (!blockForSession(error)) {
+        notify(errorMessage(error, '付款暂时没有发起，请稍后再试。'), 'error')
+      }
     } finally {
       paymentSubmittingRef.current.delete(orderPublicId)
     }
-  }, [blockForSession, loadTableOrders, notify])
+  }, [blockForSession, cartProtocolVersion, loadSharedCart, loadTableOrders, notify])
 
   const acceptSession = useCallback((session: GuestSessionView, expectedTable: string) => {
     if (session.table.code.toUpperCase() !== expectedTable.toUpperCase()) {
@@ -533,7 +549,21 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
         try {
           await presentOnlinePayment(result.payment.providerAction)
         } catch (paymentError) {
-          notify(errorMessage(paymentError, '订单已建立，付款暂未拉起，可在“本桌历史订单”继续支付。'), 'info')
+          if (paymentError instanceof GuestApiError && paymentError.code === 'PAYMENT_CANCELLED') {
+            try {
+              await api.abandonCheckout(result.order.publicId, {
+                idempotencyKey: safeIdempotencyKey(`guest-abandon-${result.order.publicId}`),
+              })
+              setPanel(null)
+              setOrderResult(null)
+              await Promise.all([loadTableOrders(true), cartProtocolVersion === 2 ? loadSharedCart(true) : Promise.resolve()])
+              notify('本次付款已取消，订单和占用已安全释放；需要时可重新下单。', 'info')
+            } catch (abandonError) {
+              notify(errorMessage(abandonError, '付款已取消，但释放状态尚未确认，请让收银核对。'), 'error')
+            }
+          } else {
+            notify(errorMessage(paymentError, '订单已建立，付款暂未拉起，可在“本桌历史订单”继续支付。'), 'info')
+          }
         }
       }
     } catch (error) {

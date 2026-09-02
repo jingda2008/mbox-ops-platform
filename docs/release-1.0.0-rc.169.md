@@ -60,6 +60,32 @@ candidate adds no database migration; the expected normalized schema remains
 
 ## Production result
 
-Not deployed yet. Record the immutable commit, image digest, database backup,
-rollback container, public readiness and evidence readback only after the
-controlled deployment completes.
+Production deployment completed at `2026-09-03 01:26 CST`
+(`2026-09-02T17:26:00Z`) from immutable tag `v1.0.0-rc.169`. The deployed
+commit is `63910fd7dd7b6803c5669f4ca4a548ff73582f2b`; the runtime image digest is
+`sha256:c7c5aadfb2dd37c070a3055f450009534f3d775dbe1aba46c71f0fc63f835fad`.
+GitHub tag CI run `33659039080` and Release run `33659038997` both completed
+successfully before deployment.
+
+The controlled release created and verified database backup
+`/opt/mbox/backups/mbox-20260902T172424Z-u0QU6p.dump` (37,935,808 bytes),
+verified pre-deployment, backup, deployment and completion objects through the
+OSS evidence relay, then passed candidate health and deep verification before
+Caddy cutover. The remote state reached `completed`; schema remains 156. The
+previous rc.168 application is retained, stopped, as rollback container
+`mbox-app-rollback-63910fd-20260903-012536`.
+
+Post-cutover `/api/ready` independently returned `ready`, production tier,
+strict inventory enforcement, write enabled and healthy workers with the exact
+commit and image digest above. Browser-style HTTP requests, a 430 px Chromium
+run and checks from the independent evidence relay all passed `/`,
+`/guest?table=W01`, `/reserve` and `/staff/live`. One additional local Node
+probe using a three-second timeout saw a transient timeout after the successful
+cutover; the ten-second bounded rerun, Chromium, direct readiness checks and 12
+independent relay route checks passed, so no sustained production fault was
+observed.
+
+This deployment does not upload or select a native WeChat Mini Program build.
+It also does not count as real WeChat/Postar payment, refund settlement,
+Android-device or staff operating acceptance; those external gates remain
+open.

@@ -15,6 +15,10 @@
   customers start a new order after safe release, while authorised staff can
   explicitly query and close an unresolved payment before changing collection
   method.
+- Refreshes the production dependency lock to patched Fastify and `fast-uri`
+  releases after the release gate detected newly published security advisories.
+- Replaces unsafe numeric proxy-hop trust with explicit loopback/private-network
+  peer validation for the Caddy-to-application boundary.
 
 ## 1.0.0-rc.168 - 2026-09-02
 

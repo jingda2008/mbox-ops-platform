@@ -25,6 +25,14 @@ pending payment. The cashier workbench refreshes local refund attention while
 visible and idle, warns when new work appears, and supports search by order
 reference, table or exact amount plus area and payment-state filters.
 
+The production dependency lock also advances Fastify and both resolved
+`fast-uri` lines to patched releases. The release pull request initially
+stopped on newly published high/moderate npm advisories; the refreshed lock must
+pass a clean production dependency audit and the complete compatibility suite
+before the candidate can be tagged. Because patched Fastify rejects numeric
+hop-only proxy trust, the application now validates the immediate Caddy peer as
+loopback or private-network traffic and stops at the first public client hop.
+
 ## Acceptance boundary
 
 Feature pull request 170 and its final evidence check passed repository quality,

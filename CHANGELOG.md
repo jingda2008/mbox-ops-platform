@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.0.0-rc.169 - 2026-09-03
+
+- Decouples passive payment-status and cashier-workbench reads from external
+  provider queries so provider latency or outages cannot hold the cashier page
+  or table operations open.
+- Releases an explicitly abandoned guest immediate-payment order without
+  waiting for the payment rail, while retaining payment facts for bounded
+  background query/close and routing any late capture to refund follow-up.
+- Adds persistent refund attention, table financial-state colours and badges,
+  area and payment-state filters, and cashier search by order, table or exact
+  amount.
+- Keeps customer cancellation and staff recovery deliberately separate:
+  customers start a new order after safe release, while authorised staff can
+  explicitly query and close an unresolved payment before changing collection
+  method.
+- Refreshes the production dependency lock to patched Fastify and `fast-uri`
+  releases after the release gate detected newly published security advisories.
+- Replaces unsafe numeric proxy-hop trust with explicit loopback/private-network
+  peer validation for the Caddy-to-application boundary.
+
 ## 1.0.0-rc.168 - 2026-09-02
 
 - Makes legacy product snapshots safe to load and save by retaining only

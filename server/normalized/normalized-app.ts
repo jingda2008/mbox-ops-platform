@@ -255,7 +255,12 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
   const app = Fastify({
     logger: options.logger ?? loggerConfiguration(options.config),
     logController: new LogController({ disableRequestLogging: true }),
-    trustProxy: options.config.trustProxyHops === 0 ? false : options.config.trustProxyHops,
+    // Fastify 5.12.1 deliberately fails closed for numeric hop-count trust:
+    // a hop count cannot prove that the immediate peer is our proxy. The app
+    // is reachable only from the host's Caddy container on the private Docker
+    // network (or loopback in local validation), so validate that peer network
+    // explicitly and let proxy-addr stop at the first public client address.
+    trustProxy: options.config.trustProxyHops === 0 ? false : ['loopback', 'uniquelocal'],
     requestIdHeader: false,
     genReqId: () => randomUUID(),
   })

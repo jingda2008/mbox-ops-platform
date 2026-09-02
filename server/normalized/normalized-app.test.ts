@@ -76,9 +76,14 @@ describe('createNormalizedApp', () => {
     const forwarded = await proxied.app.inject({
       method: 'GET', url: '/api/client-ip', headers: { 'x-forwarded-for': '203.0.113.42' },
     })
+    const forgedOuterHop = await proxied.app.inject({
+      method: 'GET', url: '/api/client-ip',
+      headers: { 'x-forwarded-for': '198.51.100.90, 203.0.113.42' },
+    })
 
     expect(forged.json().clientIp).not.toBe('203.0.113.42')
     expect(forwarded.json()).toEqual({ clientIp: '203.0.113.42' })
+    expect(forgedOuterHop.json()).toEqual({ clientIp: '203.0.113.42' })
     await Promise.all([direct.app.close(), proxied.app.close()])
   })
 

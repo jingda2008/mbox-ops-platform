@@ -1,8 +1,8 @@
 # M-BOX 商业化待处理清单
 
-版本：陆家嘴公网后端已切 `1.0.0-rc.170` 服务器按 SHA 构建镜像 `mbox-normalized:1.0.0-rc.170-02c24af`（提交 `02c24af3343b92d0b0e22462936137955acfed66`），schema `156`。这不是标签 CI 不可变发布摘要。原生微信小程序与支付宝上传/体验版是独立平台状态；支付宝自助支付与桌码仍未开。真实资金与门店岗位验收未完成，商业发布继续为`DENY`
+版本：陆家嘴公网后端已切 `1.0.0-rc.170-634ffca`（提交 `634ffca8936df8438f0a4a00c539b8b69939245d`，服务器 SHA 构建，非标签 CI）。schema `156`。支付宝 tradeNO 已接线但 `alipayPaymentEnabled` 仍强制 false；支付宝桌码渲染脚本已入库待运营生成。真实资金与门店岗位验收未完成，商业发布继续为`DENY`
 形成日期：`2026-07-27`
-最后更新：`2026-09-04 15:00 CST`（SYS-081/082：rc.170 已按 SHA 切流。支付宝 tradeNO 预下单已接线（星驿 payWay=alipay → `alipay_jsapi`+tradeNO；顾客请求头 `x-mbox-client-platform: alipay` 选 `alipay_jsapi`）。`alipayPaymentEnabled` 仍强制 false：缺支付宝付款人身份绑定与真机小额证据。已新增支付宝桌码渲染 `qr:render:alipay-mini`（scheme 入场码，不复用微信码）。商业发布继续`DENY`。）
+最后更新：`2026-09-04 15:10 CST`（现网已切 `mbox-normalized:1.0.0-rc.170-634ffca`；tradeNO 接线在镜像内；支付开关仍关；桌码 CLI 可用。商业发布继续`DENY`。）
 适用范围：上海 M-BOX 陆家嘴店验证环境、门店试运行和商业生产发布
 清单负责人：乌鸦（系统管理员）
 经营批准：陈方宇、护古、李艳
@@ -473,6 +473,7 @@ ID：
 
 | 北京时间 | 版本/提交 | 变更 | 证据 | 更新人 |
 |---|---|---|---|---|
+| 2026-09-04 15:10 | 现网 `1.0.0-rc.170-634ffca` | 密码跳板构建并切流含 tradeNO 接线的 SHA；公网 ready 对齐 `634ffca`；回滚 `mbox-app-rollback-rc170-02c24af-pre-pay`。支付开关仍强制关闭。桌码生成走本地/运维机 `npm run qr:render:alipay-mini`，不复用微信码。商业发布继续 DENY。 | 容器 `mbox-normalized:1.0.0-rc.170-634ffca` healthy；公网 commitSha 对齐；镜像含 `alipay_jsapi`。 | Cursor Agent |
 | 2026-09-04 15:00 | 现网 rc.170；支付仍关 | 后端星驿支付宝预下单改为返回 `presentation:alipay_jsapi`+`tradeNO`；顾客结账按 `x-mbox-client-platform:alipay` 走 `alipay_jsapi`；查单/abandon/本地 status 语义未改。前端支付开关仍强制关闭（缺 buyerId 身份与真机资金证据）。新增 `render-alipay-table-mini-codes` / `qr:render:alipay-mini`，与微信桌码分开输出。商业发布继续 DENY。 | postar-adapter 与桌码单测通过；`config/index.js` 仍 `alipayPaymentEnabled=false`。 | Cursor Agent |
 | 2026-09-04 14:45 | 现网 `1.0.0-rc.170-02c24af`（服务器 SHA 构建） | 密码跳板将 `main` 提交 `02c24af` 在小程序机构建镜像并切流替换支付宝入会热修；保留 `MBOX_ALIPAY_*`；回滚容器 `mbox-app-rollback-rc169-alipay-pre-rc170`。探针：公网 ready 对齐 SHA；匿名会话含 sessionToken；伪密文入会 `ALIPAY_PHONE_AUTHORIZATION_INVALID`。明确不是标签 CI 摘要。支付开关与桌码仍未开。商业发布继续 DENY。 | 镜像 `mbox-normalized:1.0.0-rc.170-02c24af`；公网 ready commitSha=`02c24af...`；入会探针业务码支付宝无效授权。 | Cursor Agent |
 | 2026-09-04 14:30 | 本地 `1.0.0-rc.170` 元数据与分支 | 按计划将支付宝入会后端、会话 Bearer、`alipay-miniprogram/`、运行时 env 与发布元数据收成 `release/rc170-alipay-phone-20260904`；默认切流路径为密码跳板在小程序机按 SHA docker build（非标签 CI 摘要）。支付开关与桌码仍未开。商业发布继续 DENY。 | `verify-release-metadata.mjs` 通过；未提交 `miniprogram-alipay/`；无关微信 reservations 未混入。 | Cursor Agent |

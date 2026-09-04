@@ -26,6 +26,7 @@
     "test:e2e:normalized": "playwright test --config playwright.normalized.config.ts",
     "qr:generate:normalized": "tsx server/normalized/generate-table-qrs.ts",
     "qr:render:wechat-mini": "tsx server/normalized/render-wechat-table-mini-codes.ts",
+    "qr:render:alipay-mini": "tsx server/normalized/render-alipay-table-mini-codes.ts",
     "qr:render:normalized": "node scripts/render-normalized-table-qr-pdfs.mjs",
     "pilot:access": "node scripts/print-pilot-access.mjs",
     "check": "npm run release:metadata && npm run architecture:normalized:test && npm run architecture:normalized:verify && npm run architecture:normalized:new && npm run architecture:normalized:zero && npm run ci:classifier:test && npm run quality:evidence:test && npm run quality:model:verify && npm run tc:verify && npm run check:miniprogram && npm run check:alipay-miniprogram && npm run release:miniprogram:test && npm run typecheck:web && npm run lint && npm test && npm run build",

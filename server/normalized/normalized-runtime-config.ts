@@ -512,9 +512,12 @@ function readGuestPaymentMode(
   errors: string[],
 ): GuestCheckoutPaymentMode {
   const normalized = optional(value)
-  if (normalized === 'wechat_jsapi' || normalized === 'wechat_native_qr' || normalized === 'simulation') {
+  if (normalized === 'wechat_jsapi' || normalized === 'alipay_jsapi'
+    || normalized === 'wechat_native_qr' || normalized === 'simulation') {
     if (commercialProduction && normalized === 'simulation') errors.push('MBOX_GUEST_PAYMENT_MODE')
     if (commercialProduction && normalized === 'wechat_native_qr') errors.push('MBOX_GUEST_PAYMENT_MODE')
+    // Production may keep wechat_jsapi as the default store mode; Alipay clients
+    // select alipay_jsapi per-request via x-mbox-client-platform.
     return normalized
   }
   if (normalized !== null) errors.push('MBOX_GUEST_PAYMENT_MODE')

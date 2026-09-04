@@ -32,6 +32,8 @@ export interface CreateOnlinePaymentInput {
   operatorId: string
   customerAuthCode?: string
   idempotencyKey?: string
+  /** Acquiring JSAPI channel. Defaults to WeChat; Alipay must be explicit. */
+  jsapiPayWay?: 'wechat' | 'alipay'
 }
 
 export interface ActiveOnlinePaymentInput {
@@ -120,6 +122,21 @@ export interface WechatPayerIdentityResolver {
   resolveMiniProgramPaymentPayer(customerId: string, appId: string): Promise<string | null>
 }
 
+/**
+ * Symmetric Alipay buyerId resolver. Without a bound Alipay identity the guest
+ * checkout must fail closed before any Postar createPayment call.
+ */
+export interface AlipayPayerIdentityResolver {
+  resolveMiniProgramPaymentPayer(customerId: string, appId: string): Promise<string | null>
+}
+
+export class AlipayPaymentIdentityRequiredError extends Error {
+  constructor(message = '请先完成支付宝授权后再发起支付') {
+    super(message)
+    this.name = 'AlipayPaymentIdentityRequiredError'
+  }
+}
+
 export class OnlinePaymentUnavailableError extends Error {
   constructor(message = '线上支付尚未配置，请改用其他收款方式') {
     super(message)
@@ -159,6 +176,8 @@ export class OnlinePaymentService {
     adapterOverride?: OnlinePaymentAdapter,
     providerObservations?: ProviderObservationRecorderPort,
     private readonly wechatPayers: WechatPayerIdentityResolver | null = null,
+    private readonly alipayPayers: AlipayPayerIdentityResolver | null = null,
+    private readonly alipayAppId: string | null = null,
   ) {
     this.providerObservations = providerObservations
       ?? new VerifiedProviderObservationService(this.transactions)
@@ -219,6 +238,26 @@ export class OnlinePaymentService {
   ): Promise<'jsapi'> {
     if (!await this.isGuestJsapiReady(scope, customerId)) {
       throw new WechatPaymentIdentityRequiredError()
+    }
+    return 'jsapi'
+  }
+
+  async isGuestAlipayJsapiReady(
+    scope: Readonly<StoreScope>,
+    customerId: string,
+  ): Promise<boolean> {
+    void scope
+    const appId = this.alipayAppId?.trim()
+    if (!appId || this.alipayPayers === null) return false
+    return (await this.alipayPayers.resolveMiniProgramPaymentPayer(customerId, appId)) !== null
+  }
+
+  async assertGuestAlipayJsapiReady(
+    scope: Readonly<StoreScope>,
+    customerId: string,
+  ): Promise<'jsapi'> {
+    if (!await this.isGuestAlipayJsapiReady(scope, customerId)) {
+      throw new AlipayPaymentIdentityRequiredError()
     }
     return 'jsapi'
   }
@@ -589,6 +628,7 @@ export class OnlinePaymentService {
     }
     if (this.adapter === null || this.secrets === null || this.config === null) throw new OnlinePaymentUnavailableError()
     if (prepared.cached !== null) {
+      const cachedPresentation = clientPaymentPresentation(presentation, prepared.cached.payload)
       return {
         paymentId: prepared.context.id,
         paymentPublicId: prepared.context.publicId,
@@ -596,13 +636,14 @@ export class OnlinePaymentService {
         orderPublicId: prepared.context.orderPublicId,
         activityRegistrationPublicId: prepared.context.activityRegistrationPublicId,
         status: 'pending',
-        presentation,
+        presentation: cachedPresentation,
         expiresAt: prepared.cached.expiresAt,
-        payload: prepared.cached.payload,
+        payload: clientPaymentPayload(prepared.cached.payload),
       }
     }
 
     try {
+      const jsapiPayWay = presentation === 'jsapi' ? (input.jsapiPayWay ?? 'wechat') : undefined
       const result = await this.adapter.createPayment({
         paymentIntentId: prepared.context.publicId,
         merchantId: this.config.merchantId,
@@ -610,21 +651,23 @@ export class OnlinePaymentService {
         currency: prepared.context.currency,
         expiresAt,
         presentation,
-        payWay: presentation === 'jsapi' ? 'wechat' : undefined,
+        payWay: jsapiPayWay,
         payerId: prepared.payerId ?? undefined,
         customerAuthCode: presentation === 'barcode' ? input.customerAuthCode : undefined,
         clientIp: trustedIp(input.clientIp),
         callbackUrl: this.config.callbackUrl,
         operatorId: safeOperator(input.operatorId),
         remark: providerRemark(prepared.context),
-        wxAppid: presentation === 'jsapi' ? this.config.wechat?.appId : undefined,
-        wechatTradeType: presentation === 'jsapi' ? this.config.wechat?.tradeType : undefined,
+        wxAppid: jsapiPayWay === 'wechat' ? this.config.wechat?.appId : undefined,
+        wechatTradeType: jsapiPayWay === 'wechat' ? this.config.wechat?.tradeType : undefined,
       }, { secrets: this.secrets })
+      const clientPresentation = clientPaymentPresentation(presentation, result.paymentPayload)
+      const clientPayload = clientPaymentPayload(result.paymentPayload)
       await this.transactions.run(input.scope, async (transaction) => {
         await new PaymentProviderActionRepository(transaction, this.secret).complete(
           prepared.context.id,
           presentation,
-          result.paymentPayload,
+          clientPayload,
           expiresAt,
           result.providerTransactionId,
         )
@@ -636,9 +679,9 @@ export class OnlinePaymentService {
         orderPublicId: prepared.context.orderPublicId,
         activityRegistrationPublicId: prepared.context.activityRegistrationPublicId,
         status: 'pending',
-        presentation,
+        presentation: clientPresentation,
         expiresAt,
-        payload: result.paymentPayload,
+        payload: clientPayload,
       }
     } catch (error) {
       const code = safeErrorCode(error)
@@ -657,7 +700,21 @@ export class OnlinePaymentService {
   }
 
   private async resolvePayerId(input: Readonly<CreateOnlinePaymentInput>): Promise<string> {
-    if (input.principal.type !== 'guest' || this.config?.wechat === null || this.config?.wechat === undefined
+    if (input.principal.type !== 'guest') {
+      throw new WechatPaymentIdentityRequiredError()
+    }
+    const jsapiPayWay = input.jsapiPayWay ?? 'wechat'
+    if (jsapiPayWay === 'alipay') {
+      const appId = this.alipayAppId?.trim()
+      if (!appId || this.alipayPayers === null) throw new AlipayPaymentIdentityRequiredError()
+      const payer = await this.alipayPayers.resolveMiniProgramPaymentPayer(
+        input.principal.customerId,
+        appId,
+      )
+      if (payer === null) throw new AlipayPaymentIdentityRequiredError()
+      return payer
+    }
+    if (this.config?.wechat === null || this.config?.wechat === undefined
       || this.config.wechat.tradeType !== '8' || this.wechatPayers === null) {
       throw new WechatPaymentIdentityRequiredError()
     }
@@ -811,6 +868,29 @@ function providerPresentation(method: string): ProviderPresentation {
   if (method === 'native_qr') return 'qr'
   if (method === 'auth_code') return 'barcode'
   throw new OnlinePaymentUnavailableError('当前付款方式不是线上支付')
+}
+
+function clientPaymentPresentation(
+  presentation: ProviderPresentation,
+  payload: Readonly<Record<string, unknown>> | null | undefined,
+): OnlinePaymentAction['presentation'] {
+  if (payload && typeof payload.tradeNO === 'string' && payload.tradeNO.trim().length > 0
+    && typeof payload.paySign !== 'string') {
+    return 'alipay_jsapi'
+  }
+  if (payload?.presentation === 'alipay_jsapi') return 'alipay_jsapi'
+  return presentation
+}
+
+function clientPaymentPayload(
+  payload: Readonly<Record<string, unknown>> | null | undefined,
+): Readonly<Record<string, unknown>> | null {
+  if (payload === null || payload === undefined) return null
+  if (typeof payload.tradeNO === 'string' && payload.tradeNO.trim().length > 0
+    && typeof payload.paySign !== 'string') {
+    return { presentation: 'alipay_jsapi', tradeNO: payload.tradeNO.trim() }
+  }
+  return payload
 }
 
 function providerRemark(context: Readonly<ProviderPaymentContext>): string {

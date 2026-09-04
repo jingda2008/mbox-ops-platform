@@ -1,4 +1,4 @@
-export type OnlinePaymentPresentation = 'jsapi' | 'qr' | 'barcode'
+export type OnlinePaymentPresentation = 'jsapi' | 'alipay_jsapi' | 'qr' | 'barcode'
 
 export interface OnlinePaymentAction {
   paymentId: string

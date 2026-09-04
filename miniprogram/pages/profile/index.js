@@ -513,7 +513,6 @@ Page({
     if (!this.data.membership) return
     const destinations = {
       'member-center': ['/pages/member-center/index', 'navigateTo'],
-      reservations: ['/pages/reservations/index', 'switchTab'],
       points: ['/pages/points/index', 'navigateTo'],
       orders: ['/pages/account/index', 'navigateTo'],
       preferences: ['/pages/profile-preferences/index', 'navigateTo'],
@@ -934,7 +933,6 @@ Page({
   },
 
   openReservations() {
-    if (!this.requireMembership('reservations')) return
     wx.switchTab({ url: '/pages/reservations/index' })
   },
   async openSuperhighService() {

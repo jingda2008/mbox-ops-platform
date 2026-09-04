@@ -1,0 +1,116 @@
+<view class="page detail-page">
+  <state-panel a:if="{{loading}}" type="loading" title="正在读取活动详情" />
+  <block a:elif="{{activity}}">
+    <view class="detail-hero">
+      <image a:if="{{activity.coverUrl}}" src="{{activity.coverUrl}}" mode="aspectFill" />
+      <view a:else class="detail-placeholder">超嗨</view>
+      <view class="detail-shade"></view>
+      <view class="detail-title"><text>{{activity.kindText}}</text><text>{{activity.title}}</text><text>{{activity.startsText}} · {{activity.assemblyLocation}}</text></view>
+      <button class="detail-share compact-text-action" open-type="share" aria-label="分享活动">分享</button>
+    </view>
+    <view a:if="{{error}}" class="error-banner">{{error}}</view>
+    <view a:if="{{success}}" class="success-banner">{{success}}</view>
+
+    <view class="detail-facts">
+      <view><text>{{activity.feeText}}</text><text>活动费用</text></view>
+      <view><text>{{activity.isSharePreview ? activity.availabilityText : activity.remainingCapacity}}</text><text>{{activity.isSharePreview ? '报名状态' : '剩余名额'}}</text></view>
+    </view>
+
+    <view a:if="{{previewOnly}}" class="detail-preview-note"><text>活动公开预览</text><text>加入会员后才能报名；名额、付款与最终可订状态以会员页面为准。</text></view>
+
+    <view class="section detail-section"><text class="detail-heading">关于这次活动</text><text class="detail-summary">{{activity.details}}</text></view>
+    <view a:if="{{activity.includedItems.length}}" class="section detail-section"><text class="detail-heading">费用包含</text><view class="bullet-list"><view a:for="{{activity.includedItems}}" a:key="*this"><text>✓</text><text>{{item}}</text></view></view></view>
+    <view a:if="{{activity.memberBenefitText}}" class="section detail-section benefit-highlight"><text class="detail-heading">会员权益与赠送</text><text class="detail-summary">{{activity.memberBenefitText}}</text></view>
+    <view a:if="{{loyaltyBenefits.length}}" class="section detail-section loyalty-benefits">
+      <text class="detail-heading">本次活动会员积分</text>
+      <text class="loyalty-benefits__note">仅对已入会且符合等级的会员生效，不会因参加活动自动入会。</text>
+      <view a:for="{{loyaltyBenefits}}" a:key="ruleCode" class="loyalty-benefit-card">
+        <view><text>+{{item.points}}</text><text>积分</text></view>
+        <view><text>{{item.name}}</text><text>{{item.triggerText}}<text a:if="{{item.minimumPaidText}}"> · {{item.minimumPaidText}}</text></text><text>{{item.levelText}} · {{item.pointValidityDays}}天有效 · {{item.refundText}}</text></view>
+      </view>
+    </view>
+    <view class="section detail-section"><text class="detail-heading">时间与集合</text><view class="info-list"><view><text>开始</text><text>{{activity.startsText}}</text></view><view><text>结束</text><text>{{activity.endsText}}</text></view><view><text>地点</text><text>{{activity.assemblyLocation}}</text></view></view></view>
+
+    <view a:if="{{previewOnly}}" class="section detail-section">
+      <text class="detail-heading">报名说明</text>
+      <text class="detail-summary">加入 M-BOX 会员后可查看完整的报名、付款与退款安排，并提交本次活动报名。</text>
+    </view>
+    <view a:else class="section detail-section">
+      <text class="detail-heading">报名、付款与退款</text>
+      <view class="payment-rule-grid">
+        <view><text>本次费用</text><text>{{selectedPricing ? selectedPricing.feeText : activity.feeText}}</text></view>
+        <view><text>订金</text><text>{{selectedPricing ? selectedPricing.depositText : activity.depositText}}</text></view>
+        <view><text>付款时限</text><text>{{selectedPricing ? selectedPricing.deadlineText : activity.deadlineText}}</text></view>
+        <view><text>支付说明</text><text>{{selectedPricing ? selectedPricing.paymentRuleText : activity.paymentText}}</text></view>
+        <view><text>取消退款</text><text>{{activity.refundText}}</text></view>
+      </view>
+      <view a:if="{{activity.paymentBlockedText}}" class="rule-card"><text class="blocked-copy">{{activity.paymentBlockedText}}</text></view>
+    </view>
+    <view a:if="{{activity.packages.length}}" class="section detail-section">
+      <text class="detail-heading">可选活动套餐<text a:if="{{activity.packageSelectionRequired}}">（需选择一档）</text></text>
+      <text class="detail-summary">活动票可{{activity.packageSelectionRequired ? '搭配下列其中一档套餐' : '单独报名，也可加购下列其中一档套餐'}}；价格与内容会在报名时固定。</text>
+      <view a:if="{{!activity.packageSelectionRequired}}" class="activity-package {{!selectedPackagePublicId ? 'activity-package--selected' : ''}}" onTap="clearPackageSelection">
+        <view><text>不加购套餐</text><text>仅报名活动票</text></view><text>已选</text>
+      </view>
+      <view a:for="{{activity.packages}}" a:key="publicId" class="activity-package {{selectedPackagePublicId === item.publicId ? 'activity-package--selected' : ''}} {{item.availability !== 'available' ? 'activity-package--disabled' : ''}}" data-package-id="{{item.publicId}}" onTap="choosePackage">
+        <image a:if="{{item.imageUrl}}" class="activity-package__image" src="{{item.imageUrl}}" mode="aspectFill" />
+        <view class="activity-package__main"><view><text>{{item.name}}</text><text>{{item.feeText}}</text></view><text a:if="{{item.description}}">{{item.description}}</text><text a:if="{{item.includedItems.length}}">含：<text a:for="{{item.includedItems}}" a:for-item="included" a:key="*this">{{included}} </text></text><text a:if="{{previewOnly}}">{{item.availabilityText}}；限购与名额以入会后页面为准</text><text a:else>每会员限购 {{item.memberPurchaseLimit}} 份 · 剩余 {{item.remainingCapacity}} 位 · {{item.availabilityText}}</text></view>
+        <text a:if="{{selectedPackagePublicId === item.publicId}}">已选</text>
+      </view>
+    </view>
+    <view a:if="{{activity.participationRequirements.length}}" class="section detail-section"><text class="detail-heading">参加条件</text><view class="bullet-list"><view a:for="{{activity.participationRequirements}}" a:key="*this"><text>•</text><text>{{item}}</text></view></view></view>
+    <view class="section detail-section"><text class="detail-heading">安全与参加要求</text><view a:if="{{activity.safetyFacts.length}}" class="safety-facts"><text a:for="{{activity.safetyFacts}}" a:key="*this">{{item}}</text></view><view a:if="{{activity.safetyRequirements.length}}" class="bullet-list"><view a:for="{{activity.safetyRequirements}}" a:key="*this"><text>!</text><text>{{item}}</text></view></view><text a:else class="detail-summary">请根据自身健康和出行情况决定是否参加，并遵守现场指引。</text></view>
+    <view a:if="{{activity.contactInstructions}}" class="section detail-section"><text class="detail-heading">报名后联系与集合</text><text class="detail-summary">{{activity.contactInstructions}}</text></view>
+
+    <view a:if="{{!registration || registration.canReRegister}}" class="registration-panel">
+      <view class="party-row"><view><text>报名人数</text><text>{{previewOnly ? '加入会员后可按实际人数调整' : '按实际参加人数选择'}}</text></view><view a:if="{{previewOnly}}" class="preview-party-size"><text>{{partySize}} 人</text><text>暂按 1 人预览</text></view><view a:else class="stepper"><button data-delta="-1" disabled="{{partySize <= 1}}" onTap="changePartySize">−</button><text>{{partySize}}</text><button data-delta="1" disabled="{{partySize >= partySizeLimit}}" onTap="changePartySize">＋</button></view></view>
+      <block a:if="{{!previewOnly}}"><label id="activity-registration-contact" class="field registration-contact {{contactAttention ? 'registration-contact--attention' : ''}}"><text class="field__label">本次活动联系手机号</text><input class="field__input" type="number" value="{{contact}}" maxlength="11" focus="{{contactFocused}}" placeholder="请输入 11 位手机号，仅用于本次活动联系" onInput="onContactInput" /><text class="registration-contact__note">仅用于活动通知、集合与必要的报名确认。</text><text a:if="{{contactAttention}}" class="registration-contact__hint">请在这里填写后继续报名</text></label>
+      <checkbox-group id="activity-registration-acknowledgement" onChange="onAcknowledgementChange"><label class="ack-row {{acknowledgementAttention ? 'ack-row--attention' : ''}}"><checkbox value="ack" checked="{{ruleAcknowledged}}" color="#7b5a35" /><text>{{activity.acknowledgementText}}</text></label></checkbox-group></block>
+    </view>
+
+    <view a:if="{{registration}}" class="registration-status">
+      <view class="registration-status__head"><text>{{registration.statusText}}</text><text a:if="{{registration.resolutionText}}">付款：{{registration.resolutionText}}</text></view>
+      <text a:if="{{registration.stateGuide}}" class="registration-state-guide">{{registration.stateGuide}}</text>
+      <text>报名编号 {{registration.referenceText}}</text>
+      <text a:if="{{registration.paymentAmountMinor > 0}}">本次应付 {{registration.amountDueText}}<text a:if="{{registration.paymentMethodText}}"> · {{registration.paymentMethodText}}</text></text>
+      <text a:if="{{registration.seatHoldText}}">名额保留至 {{registration.seatHoldText}}</text>
+      <text a:if="{{registration.paymentDueText}}">付款截止 {{registration.paymentDueText}}</text>
+      <text a:if="{{registration.refundStatusText}}" class="refund-state">{{registration.refundStatusText}}</text>
+      <text a:if="{{registration.requiresManualCancellation}}">如需退款，请联系门店；退款进展会显示在这里。</text>
+      <button a:if="{{registration.canCancelDirectly && registration.canStartPayment}}" class="status-secondary" loading="{{busy}}" onTap="cancelRegistration">不再参加，取消未付报名</button>
+    </view>
+
+    <view class="detail-bottom-space"></view>
+    <view class="detail-dock">
+      <view><text>{{previewOnly ? '活动公开预览' : (registration ? registration.statusText : (activity.registrationBlocked ? '暂不开放' : (selectedPricing ? selectedPricing.feeText : activity.feeText)))}}</text><text>{{previewOnly ? '加入会员后查看真实名额与付款' : (registration ? (registration.stateGuide || registration.resolutionText || '请在“我的活动”中查看状态') : (activity.registrationBlocked ? '报名条件暂未开放' : activity.remainingCapacity > 0 ? ('剩余 ' + activity.remainingCapacity + ' 位') : '名额已满，可加入候补'))}}</text></view>
+      <button a:if="{{previewOnly}}" disabled="{{busy}}" loading="{{busy}}" onTap="openMembershipInvite">查看报名与入会</button>
+      <button a:elif="{{alipayIdentityRefreshRequired}}" class="payment-button" loading="{{busy}}" onTap="refreshAlipayIdentityAndRetry">{{registration && registration.canStartPayment ? '刷新身份后付款' : '刷新身份后提交'}}</button>
+      <button a:elif="{{!registration || registration.canReRegister}}" disabled="{{busy}}" loading="{{busy}}" onTap="register">{{activity.registrationBlocked || (selectedPricing && selectedPricing.paymentAvailability === 'blocked') ? '暂不开放' : registration && registration.canReRegister ? '重新报名' : activity.remainingCapacity <= 0 ? '加入候补' : selectedPricing && selectedPricing.requiresPaymentOnSubmit ? '提交报名并支付' : selectedPricing && selectedPricing.feeAmountMinor > 0 ? '提交报名' : '免费报名'}}</button>
+      <button a:elif="{{registration.canStartPayment}}" class="payment-button" loading="{{busy}}" onTap="startPayment">继续付款</button>
+      <button a:elif="{{registration.canQueryPayment}}" loading="{{busy}}" onTap="queryPayment">查询付款结果</button>
+      <button a:elif="{{registration.canCancelDirectly}}" class="cancel-button" loading="{{busy}}" onTap="cancelRegistration">取消报名</button>
+      <button a:elif="{{registration.requiresManualCancellation}}" class="cancel-button" onTap="showCancellationHelp">退款与联系</button>
+      <button a:else disabled>{{registration.statusText}}</button>
+    </view>
+  </block>
+  <state-panel a:else type="error" title="活动不可用" message="{{error}}" />
+
+  <view a:if="{{membershipInviteVisible}}" class="detail-member-mask">
+    <scroll-view scroll-y class="detail-member-sheet">
+      <button class="detail-member-close compact-icon-action" aria-label="关闭会员邀请" onTap="dismissMembershipInvite">×</button>
+      <text class="detail-member-kicker">M-BOX 会员</text>
+      <text class="detail-member-title">加入会员，解锁超嗨活动</text>
+      <text class="detail-member-copy">加入会员后即可查看活动详情并报名。</text>
+      <image class="detail-member-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX 标志" />
+      <checkbox-group onChange="onMembershipInviteAgreementChange">
+        <label class="detail-member-agreement">
+          <checkbox value="agree" checked="{{membershipInviteAgreed}}" color="#315d46" />
+          <view><text>我已阅读并同意</text><text class="detail-member-terms" catchTap="showMembershipTerms">《{{membershipTerms.title}}》</text></view>
+        </label>
+      </checkbox-group>
+      <button a:if="{{membershipInviteAgreed}}" class="detail-member-authorize alipay-phone-button" onTap="acceptMembershipInvite" loading="{{membershipInviteBusy}}">支付宝手机号入会暂未开通</button>
+      <button a:else class="detail-member-authorize detail-member-authorize--disabled" onTap="remindMembershipInviteAgreement">授权手机号并加入</button>
+      <text class="detail-member-note">支付宝手机号后端验签尚未接通；点击可查看说明，不会发起授权。</text>
+    </scroll-view>
+  </view>
+</view>

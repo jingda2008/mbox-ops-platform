@@ -1,0 +1,16 @@
+<view class="page status-page">
+  <view class="status-head"><text class="eyebrow">{{tableCode}} · 桌台服务</text><text class="status-title">服务进展</text><text class="status-copy">{{live ? '接单、到桌和完成情况会显示在这里' : '暂时显示上一次服务记录'}}</text></view>
+  <state-panel a:if="{{loading}}" type="loading" title="正在查看服务进展" />
+  <block a:else>
+    <view a:if="{{error}}" class="warning">{{error}}</view><text a:if="{{cachedAtText}}" class="status-cache-time">{{cachedAtText}}</text><view a:if="{{success}}" class="success-banner">{{success}}</view>
+    <view a:if="{{tasks.length}}" class="status-list">
+      <view a:for="{{tasks}}" a:key="publicId" class="status-card">
+        <view class="status-card__head"><view><text class="status-card__name">{{item.name}}</text><text class="status-card__time">{{item.createdAtText}}</text></view><text class="status-chip status-chip--{{item.status}}">{{item.statusText}}</text></view>
+        <text a:if="{{item.detail}}" class="status-detail">{{item.detail}}</text><text class="status-owner">{{item.ownerText}}</text><text a:if="{{item.requestCountText}}" class="status-owner">{{item.requestCountText}}</text>
+        <view a:if="{{live && (item.canConfirm || item.canEscalate)}}" class="feedback-actions" style="grid-template-columns:1fr"><button a:if="{{item.canConfirm}}" data-id="{{item.publicId}}" data-action="confirm" disabled="{{feedbackTaskId}}" onTap="submitFeedback">已经解决</button><button a:if="{{item.canEscalate}}" data-id="{{item.publicId}}" data-action="escalate" disabled="{{feedbackTaskId}}" onTap="submitFeedback">仍未解决，催办</button></view>
+      </view>
+    </view>
+    <state-panel a:else type="empty" title="暂无服务记录" message="提交桌边服务后，进展会显示在这里" />
+    <button class="primary-button new-service" onTap="openService">发起桌边服务</button>
+  </block>
+</view>

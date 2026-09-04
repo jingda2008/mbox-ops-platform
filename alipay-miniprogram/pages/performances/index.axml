@@ -1,0 +1,41 @@
+<view class="page performances-page">
+  <view class="performance-hero">
+    <text class="performance-hero__eyebrow">M-BOX · 演出日历</text>
+    <text class="performance-hero__title">{{title}}演出</text>
+    <text class="performance-hero__description">点选日期查看当晚的歌手、乐队与场次。</text>
+  </view>
+  <view class="date-picker-card">
+    <text class="date-picker-card__label">切换月份</text>
+    <picker mode="date" fields="month" value="{{monthValue}}" start="{{minimumMonth}}" onChange="onDateChange">
+      <view class="date-picker-card__value"><text class="date-picker-card__month">{{title}}</text><text class="date-picker-card__action">选择 ›</text></view>
+    </picker>
+  </view>
+  <view class="day-pager" aria-label="未来五日演出日期">
+    <button class="day-pager__nav {{canShowPrevious ? '' : 'is-disabled'}}" disabled="{{!canShowPrevious}}" data-direction="-1" onTap="changeDayPage" aria-label="查看前五天"><text class="day-pager__nav-label">‹</text></button>
+    <view class="day-window" onTouchStart="onCalendarTouchStart" onTouchEnd="onCalendarTouchEnd">
+      <button a:for="{{days}}" a:key="value" class="day-chip {{item.isSelected ? 'is-on' : ''}} {{item.isToday ? 'is-today' : ''}}" hover-class="day-chip--pressed" hover-stay-time="65" data-date="{{item.value}}" onTap="selectDay" aria-label="{{item.weekday}} {{item.value}} {{item.isToday ? '今天' : ''}}">
+        <text class="day-chip__weekday">{{item.weekday}}</text>
+        <text class="day-chip__date">{{item.day}}</text>
+        <text class="day-chip__marker {{item.marker ? '' : 'is-empty'}}">{{item.marker}}</text>
+      </button>
+    </view>
+    <button class="day-pager__nav is-next" data-direction="1" onTap="changeDayPage" aria-label="查看后五天"><text class="day-pager__nav-label">›</text></button>
+  </view>
+  <state-panel a:if="{{loading}}" type="loading" title="正在读取演出安排" />
+  <block a:else>
+    <view a:if="{{error}}" class="error-banner">{{error}}</view>
+    <view a:if="{{schedules.length}}" class="schedule-list">
+      <view a:for="{{schedules}}" a:key="id" class="schedule-card">
+        <image a:if="{{item.imageUrl}}" class="schedule-card__image" src="{{item.imageUrl}}" mode="aspectFill" />
+        <view class="schedule-avatar" a:else>现场</view>
+        <view class="schedule-card__body">
+          <text class="schedule-card__time">{{item.timeText}}</text>
+          <text class="schedule-card__performer">{{item.performer}}</text>
+          <text class="schedule-card__description">{{item.tags || item.bio || 'M-BOX 当晚舞台阵容'}}</text>
+        </view>
+      </view>
+    </view>
+    <state-panel a:else type="empty" title="这天暂未安排演出" message="可以继续看看其他日期。" />
+  </block>
+  <text class="schedule-note">演出安排可能调整，以当晚现场为准。</text>
+</view>

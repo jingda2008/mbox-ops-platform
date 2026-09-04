@@ -1,0 +1,6 @@
+<view class="state state--{{type}}" role="status">
+  <view class="state__mark" aria-hidden="true">{{type === 'loading' ? '···' : type === 'error' ? '!' : '—'}}</view>
+  <text class="state__title">{{title}}</text>
+  <text a:if="{{message}}" class="state__message">{{message}}</text>
+  <button a:if="{{actionText}}" class="state__action" onTap="handleAction">{{actionText}}</button>
+</view>

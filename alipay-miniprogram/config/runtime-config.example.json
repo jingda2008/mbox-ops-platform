@@ -1,0 +1,19 @@
+{
+  "mbox": {
+    "mode": "production",
+    "apiBaseUrl": "https://api.example.com",
+    "storeId": "your-store-id",
+    "alipayIdentityEnabled": false,
+    "alipayPaymentEnabled": false,
+    "alipayPhoneEnabled": false,
+    "alipayNotificationEnabled": false,
+    "membershipInviteCooldownHours": 24,
+    "identityTenantId": "your-tenant-uuid",
+    "identityStoreId": "your-store-uuid",
+    "alipayAppId": "your-alipay-mini-program-app-id",
+    "defaultTableCode": "",
+    "defaultTableToken": "",
+    "allowDevDataFallback": false,
+    "requestTimeoutMs": 10000
+  }
+}

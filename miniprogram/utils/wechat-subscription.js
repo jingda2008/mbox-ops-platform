@@ -200,10 +200,6 @@ const ACTIVITY_SHEET_FALLBACK_OPTIONS = Object.freeze([
 
 const RESERVATION_SUCCESS_SUBSCRIBE_TYPES = Object.freeze([
   'reservation_performance_revised',
-  'loyalty_points_expiring',
-  'membership_tier_changed',
-  'member_benefit_issued',
-  'loyalty_points_credited',
 ])
 
 function buildReservationSubscriptionPresentation(...groups) {
@@ -218,9 +214,7 @@ function buildReservationSubscriptionPresentation(...groups) {
       catalog.push(item)
     }
   }
-  const preferred = prioritizeWechatNotificationOptions(catalog, RESERVATION_SUCCESS_SUBSCRIBE_TYPES)
-  if (preferred.length >= MAX_TEMPLATE_IDS_PER_REQUEST) return preferred
-  return mergeWechatNotificationPromptOptions(preferred, catalog)
+  return prioritizeWechatNotificationOptions(catalog, RESERVATION_SUCCESS_SUBSCRIBE_TYPES)
 }
 
 function buildActivitySubscriptionPresentation(...groups) {

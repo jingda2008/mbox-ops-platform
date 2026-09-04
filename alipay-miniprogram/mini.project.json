@@ -1,0 +1,12 @@
+{
+  "format": 2,
+  "compileType": "mini",
+  "miniprogramRoot": "./",
+  "compileOptions": {
+    "component2": true,
+    "treeShaking": true
+  },
+  "developOptions": {
+    "hotReload": true
+  }
+}

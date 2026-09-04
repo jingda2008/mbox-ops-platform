@@ -1,0 +1,57 @@
+<view class="page member-center-page">
+  <view class="member-center-head">
+    <text class="eyebrow">M-BOX 会员</text><text class="member-center-title">会员中心</text>
+    <text>等级、成长值与可用权益，都在这里查看。</text>
+  </view>
+
+  <state-panel a:if="{{loading}}" type="loading" title="正在读取会员中心" />
+  <view a:elif="{{error}}" class="error-banner"><text>{{error}}</text><button onTap="load">重新读取</button></view>
+  <block a:else>
+    <block a:if="{{membership}}">
+    <view class="member-card member-card--{{membership.level}}">
+      <view class="member-card__glow"></view><view class="member-card__corner"></view>
+      <view class="member-card__top"><image src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" /><view class="member-card__identity"><text>{{membership.levelText}}</text><text>{{membership.levelEnglish}}</text><text>{{membership.memberNo}}</text></view><text class="member-card__brand">M-BOX</text></view>
+      <view class="member-card__progress"><view class="member-card__progress-copy"><text>{{membership.cardGrowthText}}</text><text>{{membership.cardDifferenceText}}</text></view><view a:if="{{membership.cardProgressAvailable}}" class="member-card__track"><view style="width: {{membership.cardProgressPercent}}%;"></view></view><view class="member-card__foot"><view a:if="{{membership.cardProgressAvailable}}"><text>{{membership.cardCurrentTierText}}</text><text>{{membership.cardNextTierText}}</text></view><text>{{membership.cardBenefitText}}</text></view></view>
+    </view>
+    <view class="member-code-panel panel">
+      <view><text>我的会员码</text><text>向服务人员出示此码，便于确认会员身份。</text></view>
+      <image a:if="{{membership.memberCodeQrDataUrl}}" class="member-code-qr" src="{{membership.memberCodeQrDataUrl}}" mode="aspectFit" show-menu-by-longpress="{{true}}" />
+      <text a:else class="member-code-unavailable">会员码暂时无法生成，请向服务人员出示会员号 {{membership.memberNo}}</text>
+    </view>
+    <view class="member-status panel">
+      <view class="member-status__title"><text>成长进度</text><text>下一等级</text></view>
+      <text>{{membership.qualificationText}}</text><text>{{membership.periodText}}</text><text>{{membership.nextText}}</text>
+      <text a:if="{{membership.estimatedSpendText}}">{{membership.estimatedSpendText}}</text>
+      <text a:if="{{membership.lifetimeGrowth !== null}}">累计成长值 {{membership.lifetimeGrowth}}</text>
+      <text>即将到来的礼遇 {{membership.annualBenefitCounts.preview}} 项 · 可使用 {{membership.annualBenefitCounts.available}} 项</text>
+      <text a:if="{{membership.updatedText}}">{{membership.updatedText}}</text>
+      <view a:if="{{membership.qualificationProgressText}}" class="qualification-progress"><view><view style="width: {{membership.progressPercent}}%;"></view></view><text>{{membership.qualificationProgressText}}</text></view>
+    </view>
+    <view class="member-actions"><button onTap="openPoints"><text>积分与成长值</text><text>{{membership.pointsBalance}} 积分 ›</text></button><button onTap="openCoupons"><text>优惠券与权益</text><text>{{benefits.length}} 项 ›</text></button></view>
+    <view class="rights-section">
+      <view class="section-head"><text>我的权益</text><text>到店使用</text></view>
+      <view a:if="{{benefits.length}}" class="rights-list"><view a:for="{{benefits}}" a:key="id" class="right-row"><view><text>{{item.title}}</text><text>{{item.description}}</text></view><view><text>{{item.statusText}}</text><text a:if="{{item.valueText}}">{{item.valueText}}</text><text>{{item.quantityText}} · {{item.validText}}</text></view></view></view>
+      <state-panel a:else type="empty" title="暂时没有可使用的权益" message="有新的会员权益时，会显示在这里。" />
+    </view>
+
+    <view class="annual-section">
+      <view class="section-head"><view><text>年度礼遇</text><text>看看接下来可以期待什么</text></view><picker mode="selector" range="{{calendarFilters}}" range-key="name" value="{{calendarFilterIndex}}" onChange="onCalendarFilter"><view class="calendar-filter">{{calendarFilters[calendarFilterIndex].name}}⌄</view></picker></view>
+      <text class="annual-note">即将到来的礼遇仅作提醒，达到条件后才可使用。生日礼遇会在你保存月日并同意后显示。</text>
+      <view a:if="{{calendarItems.length}}" class="calendar-list"><view a:for="{{calendarItems}}" a:key="id" class="calendar-row"><view><text>{{item.title}}</text><text>{{item.periodText}}</text><text a:if="{{item.ruleText}}">{{item.ruleText}}</text><text a:if="{{item.giftText}}">{{item.giftText}}</text><text a:if="{{item.substituteText}}">{{item.substituteText}}</text><text a:if="{{item.conditionsText}}">{{item.conditionsText}}</text></view><view><text>{{item.statusText}}</text><text>{{item.quantityText}}</text><text a:if="{{item.canApplyReason}}">{{item.canApplyReason}}</text><button a:if="{{item.claimable}}" size="mini" loading="{{dailySnackBusy}}" onTap="claimDailySnack">申请</button></view></view></view>
+      <state-panel a:else type="empty" title="暂时没有年度礼遇" message="新的礼遇准备好后，会显示在这里。" />
+    </view>
+
+    <view a:if="{{dailySnackClaim}}" class="daily-snack-code panel">
+      <view class="section-head"><view><text>每日点心核销码</text><text>已为当前桌台暂留至 {{dailySnackClaim.expiresText}}</text></view><button onTap="closeDailySnackClaim">关闭</button></view>
+      <image a:if="{{dailySnackClaim.claimCodeQrDataUrl}}" src="{{dailySnackClaim.claimCodeQrDataUrl}}" mode="aspectFit" show-menu-by-longpress="{{true}}" />
+      <text class="daily-snack-code__value">{{dailySnackClaim.claimCode}}</text>
+      <text>请向服务人员出示此码。确认后即可为你准备点心；这不是付款码。</text>
+    </view>
+
+    <view a:if="{{points.length}}" class="ledger-section"><view class="section-head"><text>最近积分流水</text><button onTap="openPoints">查看全部 ›</button></view><view class="ledger-list"><view a:for="{{points}}" a:key="id" class="ledger-row"><view><text>{{item.title}}</text><text>{{item.timeText}}</text></view><text class="{{item.positive ? 'positive' : ''}}">{{item.amountText}}</text></view></view></view>
+    <view a:if="{{growth.length}}" class="ledger-section"><view class="section-head"><text>最近成长值流水</text><button onTap="openPoints">查看全部 ›</button></view><view class="ledger-list"><view a:for="{{growth}}" a:key="id" class="ledger-row"><view><text>{{item.title}}</text><text>{{item.timeText}}</text></view><text class="{{item.positive ? 'positive' : ''}}">{{item.amountText}}</text></view></view></view>
+    <view a:if="{{processing.length}}" class="ledger-section"><view class="section-head"><text>会员进展</text><text>有新进展会显示在这里</text></view><view class="processing-list"><view a:for="{{processing}}" a:key="key" class="processing-row"><view><text>{{item.title}}</text><text>{{item.message}}</text></view><text>{{item.active ? '处理中' : '已完成'}}</text></view></view></view>
+    </block>
+    <state-panel a:else type="empty" title="当前身份还没有会员账户" message="请返回“我的”查看入会或找回会员说明。" />
+  </block>
+</view>

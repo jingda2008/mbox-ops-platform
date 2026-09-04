@@ -1,5 +1,4 @@
 const {
-  getMiniBootstrap,
   getReservations,
   getReservationAvailability,
   getReservationPerformances,
@@ -9,10 +8,7 @@ const {
   acknowledgeReservationPerformanceImpact,
   getReservationPerformanceNotificationAuthorizations,
   getWechatNotificationPrompt,
-  getWechatNotificationAuthorizations,
-  getWechatMemberServiceNotificationAuthorizations,
 } = require('../../utils/api')
-const { redirectToMembershipLogin } = require('../../utils/membership-gate')
 const { randomId } = require('../../utils/id')
 const { getRuntimeConfig } = require('../../config/index')
 const { money, dateTime } = require('../../utils/format')
@@ -83,7 +79,7 @@ function impactView(impact) {
 Page({
   data: {
     loading: true, checking: false, submitting: false, loadingShows: false,
-    error: '', success: '', isDevelopment: false, membershipRequired: false,
+    error: '', success: '', isDevelopment: false,
     reservations: [], showForm: true, step: 1, cancelBusyId: '',
     performanceImpacts: [], impactsError: '', impactBusyId: '', impactNotice: '',
     expandedImpactId: '', impactAttempts: {},
@@ -118,19 +114,6 @@ Page({
   async loadData() {
     this.setData({ loading: true, error: '' })
     try {
-      const bootstrap = await getMiniBootstrap()
-      if (!bootstrap.membership) {
-        this.setData({
-          loading: false,
-          membershipRequired: true,
-          reservations: [],
-          showForm: false,
-          performanceImpacts: [],
-          impactsError: '',
-        })
-        return
-      }
-      this.setData({ membershipRequired: false })
       const [reservationResult, impactResult, notificationResult, preloadResult] = await Promise.allSettled([
         getReservations(), getReservationPerformanceImpacts(),
         getReservationPerformanceNotificationAuthorizations(),
@@ -302,7 +285,6 @@ Page({
       this.preloadWechatSubscriptionPresentationOptions().catch(() => {})
     })
   },
-  goMembershipLogin() { redirectToMembershipLogin() },
   closeForm() { if (this.data.reservations.length) this.setData({ showForm: false, error: '' }) },
 
   async cancelReservation(event) {
@@ -376,18 +358,11 @@ Page({
   async preloadWechatSubscriptionPresentationOptions() {
     try {
       const empty = { presentation: [], authorizations: [] }
-      // reservation_submit presentationPolicy returns the published reservation
-      // template even when the guest has no existing reservation yet.  Without it,
-      // first-time submit falls back to member/loyalty fillers only.
-      const [loyalty, memberService, performance, reservationPrompt, activityPrompt, checkoutPrompt, memberPrompt, couponPrompt] = await Promise.all([
-        getWechatNotificationAuthorizations().catch(() => ({ authorizations: [] })),
-        getWechatMemberServiceNotificationAuthorizations().catch(() => ({ authorizations: [] })),
+      // 预约是访客服务，只读取预约本身所需的模板和演出变更提醒；
+      // 不得用积分、等级、权益或优惠券模板填充授权选择。
+      const [performance, reservationPrompt] = await Promise.all([
         getReservationPerformanceNotificationAuthorizations().catch(() => ({ authorizations: [] })),
         getWechatNotificationPrompt('reservation_submit').catch(() => empty),
-        getWechatNotificationPrompt('activity_registration').catch(() => empty),
-        getWechatNotificationPrompt('order_checkout').catch(() => empty),
-        getWechatNotificationPrompt('member_card').catch(() => empty),
-        getWechatNotificationPrompt('coupon_open').catch(() => empty),
       ])
       const performanceOptions = (performance.authorizations || []).map((item) => Object.assign({}, item, {
         apiKind: 'reservation_performance',
@@ -396,18 +371,9 @@ Page({
       const options = buildReservationSubscriptionPresentation(
         extractPromptPresentation(reservationPrompt),
         performanceOptions,
-        (memberService.authorizations || []).map((item) => Object.assign({}, item, { apiKind: 'member_service' })),
-        (loyalty.authorizations || []).map((item) => Object.assign({}, item, { apiKind: 'loyalty' })),
-        extractPromptPresentation(activityPrompt),
-        extractPromptPresentation(checkoutPrompt),
-        extractPromptPresentation(memberPrompt),
-        extractPromptPresentation(couponPrompt),
       )
       this._presentationOptions = options
       rememberPresentationOptions('reservation_submit', options)
-      rememberPresentationOptions('activity_registration', extractPromptPresentation(activityPrompt))
-      rememberPresentationOptions('order_checkout', extractPromptPresentation(checkoutPrompt))
-      rememberPresentationOptions('member_card', extractPromptPresentation(memberPrompt))
       if (options.length) this.setData({ wechatSubscriptionPresentationOptions: options })
       return options
     } catch (_error) {
@@ -416,10 +382,6 @@ Page({
   },
 
   submitReservation() {
-    if (this.data.membershipRequired) {
-      redirectToMembershipLogin()
-      return
-    }
     if (this.data.submitting || this._reservationSubmitPending) return
     const customerName = this.data.customerName.trim()
     const contact = this.data.contact.trim()

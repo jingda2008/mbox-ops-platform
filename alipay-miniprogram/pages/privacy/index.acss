@@ -1,0 +1,25 @@
+.privacy-page { background: #ffffff; }
+.privacy-title { display: block; color: #ffffff; font-size: 44rpx; font-weight: 750; }
+.privacy-version { display: block; margin-top: 12rpx; color: #abb2bc; font-size: 22rpx; }
+.privacy-section { padding: 28rpx 0; border-bottom: 1rpx solid #e5e7eb; }
+.privacy-section text { display: block; }
+.privacy-section text:first-child { color: #25282e; font-size: 28rpx; font-weight: 700; }
+.privacy-section text:last-child { margin-top: 14rpx; color: #5f6772; font-size: 25rpx; line-height: 1.75; }
+.privacy-release-note { margin-top: 18rpx; padding: 24rpx; border: 1rpx solid #d9b978; border-radius: 16rpx; background: #fff8e8; }
+.privacy-contact-tools { margin: 28rpx 0 40rpx; border: 1rpx solid #d8d5ca; border-radius: 18rpx; background: #faf9f5; overflow: hidden; }
+.privacy-contact-toggle { min-height: 88rpx; width: 100%; border: 0; border-radius: 0; background: #2f332f; color: #fff; font-size: 27rpx; font-weight: 700; }
+.privacy-contact-body { padding: 24rpx; }
+.privacy-contact-note { display: block; color: #6e726d; font-size: 23rpx; line-height: 1.65; }
+.privacy-contact-message { display: block; margin: 16rpx 0; padding: 16rpx; border-radius: 12rpx; background: #f1ead8; color: #5e522f; font-size: 24rpx; }
+.privacy-contact-group { margin-top: 24rpx; display: grid; gap: 14rpx; }
+.privacy-contact-heading { color: #282c28; font-size: 28rpx; font-weight: 750; }
+.privacy-contact-row { padding: 18rpx; border: 1rpx solid #dfddd5; border-radius: 14rpx; background: #fff; display: flex; align-items: center; gap: 14rpx; }
+.privacy-contact-row > view:first-child { min-width: 0; flex: 1; display: grid; gap: 6rpx; }
+.privacy-contact-row > view:first-child text:first-child { color: #2f332f; font-size: 26rpx; font-weight: 700; }
+.privacy-contact-row > view:first-child text:last-child { color: #747870; font-size: 22rpx; }
+.privacy-contact-row button,.privacy-phone-replace { min-height: 88rpx; padding: 0 24rpx; border: 1rpx solid #b8aa78; border-radius: 12rpx; background: #fff; color: #574d2d; font-size: 24rpx; }
+.privacy-phone-replace { width: 100%; }
+.activity-contact-row { flex-wrap: wrap; }
+.privacy-contact-editor { width: 100%; display: grid; grid-template-columns: 1fr auto auto; gap: 10rpx; }
+.privacy-contact-editor input { min-height: 88rpx; padding: 0 18rpx; border: 1rpx solid #cfcbbd; border-radius: 12rpx; background: #fff; font-size: 26rpx; }
+@media (max-width: 390px) { .privacy-contact-row { align-items: stretch; flex-direction: column; } .privacy-contact-row button { width: 100%; } .privacy-contact-editor { grid-template-columns: 1fr; } }

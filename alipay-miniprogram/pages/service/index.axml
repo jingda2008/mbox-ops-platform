@@ -1,0 +1,17 @@
+<view class="page service-page">
+  <view class="service-head"><text class="eyebrow">{{tableCode}} · 桌台服务</text><text class="service-title">需要我们做什么？</text><text class="service-copy">常用需求一点即达；已经提交的相同需求无需重复发送。</text></view>
+  <view a:if="{{error}}" class="error-banner">{{error}}</view><view a:if="{{success}}" class="success-banner">{{success}}</view>
+  <view class="service-grid">
+    <button a:for="{{serviceTypes}}" a:key="id" data-id="{{item.id}}" disabled="{{submittingId}}" onTap="requestService"><text class="service-mark">{{item.mark}}</text><text class="service-item__name">{{submittingId === item.id ? '正在通知' : item.name}}</text></button>
+  </view>
+  <view class="section custom-panel">
+    <view class="section-title"><text>其他需要</text><text class="section-link">300字以内</text></view>
+    <textarea maxlength="300" value="{{note}}" placeholder="例如：需要两杯温水、想调整上桌节奏" onInput="onNoteInput" />
+    <button class="primary-button" disabled="{{!note || submittingId}}" onTap="submitCustomRequest">提交需求</button>
+  </view>
+  <view class="manager-panel">
+    <view class="manager-order"><text>涉及哪笔订单</text><picker range="{{complaintOrders}}" range-key="label" value="{{complaintOrderIndex}}" onChange="onComplaintOrderChange"><view>{{complaintOrders[complaintOrderIndex].label}}⌄</view></picker></view>
+    <button class="manager-entry" disabled="{{submittingId}}" onTap="requestManager"><view><text>需要进一步协助</text><text>投诉、不满意或需要进一步协调</text></view><text>→</text></button>
+  </view>
+  <button class="secondary-button status-link" onTap="openStatus">查看服务进展</button>
+</view>

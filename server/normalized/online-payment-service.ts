@@ -662,7 +662,7 @@ export class OnlinePaymentService {
         wechatTradeType: jsapiPayWay === 'wechat' ? this.config.wechat?.tradeType : undefined,
       }, { secrets: this.secrets })
       const clientPresentation = clientPaymentPresentation(presentation, result.paymentPayload)
-      const clientPayload = clientPaymentPayload(result.paymentPayload)
+      const clientPayload = clientPaymentPayload(result.paymentPayload) ?? result.paymentPayload
       await this.transactions.run(input.scope, async (transaction) => {
         await new PaymentProviderActionRepository(transaction, this.secret).complete(
           prepared.context.id,

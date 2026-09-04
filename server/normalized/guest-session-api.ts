@@ -73,6 +73,7 @@ export const guestSessionApiPlugin: FastifyPluginAsync<GuestSessionApiOptions> =
         data: {
           status: 'active',
           message: '已经找到您的桌位，今晚由我们继续照顾您。',
+          sessionToken: result.sessionToken,
           table: {
             code: result.session.tableCode,
             displayName: result.session.tableDisplayName,

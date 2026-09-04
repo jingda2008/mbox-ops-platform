@@ -620,6 +620,23 @@ describe('customer experience activity contact API', () => {
       phoneAuthorizationCode: 'wechat-phone-code-enroll-0001',
       idempotencyKey: 'membership-enroll-typed-terms-0001',
     })
+    const alipay = await app.inject({
+      method: 'POST', url: '/public/mini/membership/enroll-with-phone',
+      headers: { 'idempotency-key': 'membership-enroll-alipay-0001' },
+      payload: {
+        termsVersion: 3,
+        acknowledgementSource: 'mini_profile',
+        phoneAuthorizationCode: '{"response":"alipay-phone-cipher"}',
+        phoneAuthorizationProvider: 'alipay',
+      },
+    })
+    expect(alipay.statusCode).toBe(201)
+    expect(enrollMembership).toHaveBeenLastCalledWith(expect.anything(), {
+      termsVersion: 3, acknowledgementSource: 'mini_profile',
+      phoneAuthorizationCode: '{"response":"alipay-phone-cipher"}',
+      phoneAuthorizationProvider: 'alipay',
+      idempotencyKey: 'membership-enroll-alipay-0001',
+    })
     const community = await app.inject({
       method: 'POST', url: '/public/mini/membership/enroll-with-phone',
       headers: { 'idempotency-key': 'membership-enroll-community-0001' },

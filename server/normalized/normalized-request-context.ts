@@ -13,6 +13,8 @@ import type {
 
 export const STAFF_SESSION_COOKIE = '__Host-mbox_staff_session'
 export const DEVICE_ACCESS_COOKIE = '__Host-mbox_device_lease'
+export const RESERVATION_SESSION_HEADER = 'x-mbox-reservation-session'
+export const GUEST_SESSION_HEADER = 'x-mbox-guest-session'
 
 export interface CurrentBusinessDay {
   businessDate: string
@@ -112,13 +114,19 @@ export function fixedStoreScopeResolver(scope: Readonly<StoreScope>): TrustedSto
   return { resolve: () => trusted }
 }
 
-export function readRequestToken(request: FastifyRequest, cookieName: string): string {
+export function readRequestToken(
+  request: FastifyRequest,
+  cookieName: string,
+  headerName?: string,
+): string {
   const bearer = readBearer(request.headers.authorization)
+  const headerToken = headerName ? readOpaqueHeader(request.headers[headerName]) : null
   const cookie = readCookie(request.headers.cookie, cookieName)
-  if (bearer !== null && cookie !== null && bearer !== cookie) {
+  const present = [bearer, headerToken, cookie].filter((value): value is string => value !== null)
+  if (new Set(present).size > 1) {
     throw new NormalizedAuthenticationRequiredError('登录凭证冲突，请重新登录')
   }
-  const token = bearer ?? cookie
+  const token = bearer ?? headerToken ?? cookie
   if (token === null || token.length < 32 || token.length > 256) {
     throw new NormalizedAuthenticationRequiredError()
   }
@@ -143,6 +151,21 @@ function readBearer(authorization: string | undefined): string | null {
   const match = /^Bearer ([A-Za-z0-9_-]+)$/.exec(authorization)
   if (!match?.[1]) throw new NormalizedAuthenticationRequiredError('登录凭证格式无效')
   return match[1]
+}
+
+function readOpaqueHeader(value: string | string[] | undefined): string | null {
+  if (value === undefined) return null
+  if (Array.isArray(value)) {
+    if (value.length === 0) return null
+    if (value.length > 1) throw new NormalizedAuthenticationRequiredError('登录凭证重复，请重新登录')
+    return readOpaqueHeader(value[0])
+  }
+  const token = value.trim()
+  if (!token) return null
+  if (!/^[A-Za-z0-9_-]{32,256}$/.test(token)) {
+    throw new NormalizedAuthenticationRequiredError('登录凭证格式无效')
+  }
+  return token
 }
 
 function readCookie(header: string | undefined, name: string): string | null {

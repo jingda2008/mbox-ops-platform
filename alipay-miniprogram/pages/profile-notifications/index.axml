@@ -1,0 +1,21 @@
+<view class="page notifications-page">
+  <view class="notifications-hero"><text>M-BOX · 消息提醒</text><text>消息提醒</text><text>由你决定是否接收；关闭后不影响点单与预约。</text></view>
+  <state-panel a:if="{{loading}}" type="loading" title="正在读取提醒设置" />
+  <block a:else>
+    <view a:if="{{error}}" class="error-banner">{{error}}</view>
+    <view class="notice-card">
+      <text class="notice-title">支付宝会在需要时发起确认</text>
+      <text class="notice-copy">消息服务接通后，报名、付款或查看优惠券时会展示相应模板；不影响浏览、预约和点单。</text>
+    </view>
+
+    <view a:if="{{options.length}}" class="option-list">
+      <view a:for="{{options}}" a:key="policyKey" class="option-row">
+        <view>
+          <text>{{item.title}}</text>
+          <text>{{item.statusText}}</text>
+        </view>
+      </view>
+    </view>
+    <state-panel a:else type="empty" title="支付宝消息尚未接通" message="当前不会申请消息授权；后端适配完成后再开放。" />
+  </block>
+</view>

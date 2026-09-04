@@ -1,0 +1,12 @@
+.complaint-band { border-bottom: 8rpx solid #b53d2e; }
+.complaint-title { display: block; color: #ffffff; font-size: 38rpx; font-weight: 750; }
+.complaint-subtitle { display: block; margin-top: 20rpx; color: #cfd3d9; font-size: 23rpx; line-height: 1.5; }
+.complaint-form { margin-top: 10rpx; }
+.picker-field { display: flex; height: 82rpx; padding: 0 22rpx; align-items: center; justify-content: space-between; border: 1rpx solid #ccd1d9; border-radius: 8rpx; color: #24272c; font-size: 27rpx; }
+.picker-field text { color: #315f9a; font-size: 23rpx; }
+.complaint-policy { margin-top: 28rpx; padding: 24rpx 4rpx; border-top: 1rpx solid #dfe2e7; }
+.complaint-policy text:first-child { display: block; color: #3e444d; font-size: 24rpx; font-weight: 700; }
+.complaint-policy text:last-child { display: block; margin-top: 10rpx; color: #737b86; font-size: 23rpx; line-height: 1.55; }
+.status-link { display: block; margin-top: 12rpx; text-align: center; }
+@media (max-width: 390px) { .complaint-form { min-width: 0; } .picker-field { min-width: 0; box-sizing: border-box; } }
+@media (max-width: 360px) { .complaint-title { font-size: 34rpx; } .complaint-subtitle { font-size: 21rpx; } .picker-field { height: 88rpx; padding-right: 18rpx; padding-left: 18rpx; font-size: 24rpx; } .complaint-policy { margin-top: 22rpx; } }

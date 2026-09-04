@@ -1,0 +1,16 @@
+.song-band { border-bottom: 8rpx solid #9a7130; }
+.song-title { display: block; color: #ffffff; font-size: 42rpx; font-weight: 750; }
+.song-subtitle { display: block; margin-top: 18rpx; color: #cfd3d9; font-size: 23rpx; line-height: 1.5; }
+.song-form { margin-top: 10rpx; }
+.picker-field { display: flex; min-height: 82rpx; padding: 14rpx 22rpx; align-items: center; justify-content: space-between; gap: 18rpx; border: 1rpx solid #ccd1d9; border-radius: 8rpx; color: #24272c; font-size: 27rpx; }
+.picker-field view { min-width: 0; flex: 1; }
+.picker-field view text { display: block; }
+.picker-field view text:last-child { margin-top: 8rpx; color: #737b86; font-size: 21rpx; }
+.picker-field > text { flex: 0 0 auto; color: #315f9a; font-size: 23rpx; }
+.extension-row { display: flex; margin: 4rpx 0 28rpx; align-items: flex-start; gap: 18rpx; }
+.extension-row view { min-width: 0; flex: 1; }
+.extension-row text { display: block; color: #3e444d; font-size: 24rpx; line-height: 1.45; }
+.extension-row text:last-child { margin-top: 6rpx; color: #7a818b; font-size: 21rpx; }
+.payment-boundary { margin-top: 24rpx; }
+@media (max-width: 390px) { .song-form, .picker-field { min-width: 0; box-sizing: border-box; } }
+@media (max-width: 360px) { .song-title { font-size: 36rpx; } .song-subtitle { font-size: 21rpx; } .picker-field { min-height: 88rpx; padding-right: 18rpx; padding-left: 18rpx; gap: 10rpx; font-size: 24rpx; } .picker-field view text:last-child { font-size: 19rpx; } .extension-row { gap: 12rpx; } }

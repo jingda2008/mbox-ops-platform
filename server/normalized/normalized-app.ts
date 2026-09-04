@@ -68,6 +68,7 @@ import {
   DEVICE_ACCESS_COOKIE,
   PostgresNormalizedBusinessClock,
   STAFF_SESSION_COOKIE,
+  RESERVATION_SESSION_HEADER,
   NormalizedRequestContextResolver,
   fixedStoreScopeResolver,
   readRequestToken,
@@ -134,6 +135,10 @@ import { TableSessionCommandService, TableSessionRepository } from './table-sess
 import { PostgresTableCustomerLeftTurnoverRepository } from './table-customer-left-turnover-repository.js'
 import { WaitlistCommandService } from './waitlist-repository.js'
 import { OfficialWechatPhoneAuthorizationProvider } from './wechat-phone-authorization.js'
+import {
+  MiniProgramPhoneAuthorizationRouter,
+  OfficialAlipayPhoneAuthorizationProvider,
+} from './alipay-phone-authorization.js'
 import { wechatLoyaltyNotificationApiPlugin } from './wechat-loyalty-notification-api.js'
 import { wechatMemberServiceNotificationApiPlugin } from './wechat-member-service-notification-api.js'
 import { wechatNotificationPromptApiPlugin } from './wechat-notification-prompt-api.js'
@@ -666,11 +671,26 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     const loyaltyOperationalControl = new LoyaltyOperationalControlService(transactions, commandExecutor)
     const promotionalLoyalty = new PromotionalLoyaltyService(transactions, commandExecutor)
     const membershipTerms = new MembershipTermsService(transactions, commandExecutor)
-    const recoveryPhoneAuthorization = options.recoveryPhoneAuthorization
-      ?? (options.config.wechatIdentity === null ? undefined : new OfficialWechatPhoneAuthorizationProvider({
+    const wechatPhoneAuthorization = options.config.wechatIdentity === null
+      ? undefined
+      : new OfficialWechatPhoneAuthorizationProvider({
           appId: options.config.wechatIdentity.appId,
           appSecret: options.config.wechatIdentity.appSecret,
-        }))
+        })
+    const alipayPhoneAuthorization = options.config.alipayPhone === null
+      || options.config.alipayPhone === undefined
+      ? undefined
+      : new OfficialAlipayPhoneAuthorizationProvider({
+          appId: options.config.alipayPhone.appId,
+          aesKey: options.config.alipayPhone.aesKey,
+        })
+    const recoveryPhoneAuthorization = options.recoveryPhoneAuthorization
+      ?? ((wechatPhoneAuthorization === undefined && alipayPhoneAuthorization === undefined)
+        ? undefined
+        : new MiniProgramPhoneAuthorizationRouter({
+            wechat: wechatPhoneAuthorization,
+            alipay: alipayPhoneAuthorization,
+          }))
     const membershipPhoneProtection = createMembershipRecoveryPhoneProtector(activityContactProtection)
     const membershipRecovery = new MembershipRecoveryService(
       transactions,
@@ -1172,7 +1192,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     let token: string
     let deviceFingerprint: string
     try {
-      token = readRequestToken(request, RESERVATION_GUEST_SESSION_COOKIE)
+      token = readRequestToken(request, RESERVATION_GUEST_SESSION_COOKIE, RESERVATION_SESSION_HEADER)
       deviceFingerprint = guestDevices.resolve(request)
     } catch {
       throw new ReservationGuestSessionInvalidError()

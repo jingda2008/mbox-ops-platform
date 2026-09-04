@@ -14,6 +14,7 @@ import {
   replaceVerifiedPhoneInTransaction,
   type MembershipRecoveryPhoneAuthorizationPort,
   type MembershipRecoveryPhoneProtector,
+  type MiniProgramPhoneAuthorizationProvider,
   type PublicVerifiedPhone,
 } from './membership-recovery-service.js'
 
@@ -36,6 +37,7 @@ export class MembershipEnrollmentService {
       termsVersion: number
       acknowledgementSource: MembershipTermsAcknowledgementSource
       phoneAuthorizationCode: string
+      phoneAuthorizationProvider?: MiniProgramPhoneAuthorizationProvider
       idempotencyKey: string
     }>,
   ) {
@@ -60,6 +62,9 @@ export class MembershipEnrollmentService {
       const verifiedAuthorization = await this.phoneAuthorization.verify({
         authorizationCode: input.phoneAuthorizationCode,
         customerId: context.customerId,
+        ...(input.phoneAuthorizationProvider
+          ? { provider: input.phoneAuthorizationProvider }
+          : {}),
       })
       const verifiedPhone = await replaceVerifiedPhoneInTransaction(transaction, {
         customerId: context.customerId,

@@ -1,0 +1,72 @@
+{
+  "pages": [
+    "pages/home/index",
+    "pages/brand-story/index",
+    "pages/reservations/index",
+    "pages/order/index",
+    "pages/community/index",
+    "pages/community-detail/index",
+    "pages/profile/index",
+    "pages/profile-preferences/index",
+    "pages/profile-contact/index",
+    "pages/profile-coupons/index",
+    "pages/profile-notifications/index",
+    "pages/performances/index",
+    "pages/points/index",
+    "pages/member-center/index",
+    "pages/membership-terms/index",
+    "pages/account/index",
+    "pages/service/index",
+    "pages/status/index",
+    "pages/complaint/index",
+    "pages/songs/index",
+    "pages/privacy/index"
+  ],
+  "window": {
+    "defaultTitle": "M-Box 桌台服务",
+    "titleBarColor": "#211e1a",
+    "backgroundColor": "#f7f4ef",
+    "pullRefresh": false
+  },
+  "tabBar": {
+    "textColor": "#817a72",
+    "selectedColor": "#315d46",
+    "backgroundColor": "#fffdfa",
+    "items": [
+      {
+        "pagePath": "pages/home/index",
+        "name": "首页",
+        "icon": "assets/tabbar/home.png",
+        "activeIcon": "assets/tabbar/home-active.png"
+      },
+      {
+        "pagePath": "pages/reservations/index",
+        "name": "预约",
+        "icon": "assets/tabbar/reservations.png",
+        "activeIcon": "assets/tabbar/reservations-active.png"
+      },
+      {
+        "pagePath": "pages/order/index",
+        "name": "点单",
+        "icon": "assets/tabbar/order.png",
+        "activeIcon": "assets/tabbar/order-active.png"
+      },
+      {
+        "pagePath": "pages/community/index",
+        "name": "超嗨",
+        "icon": "assets/tabbar/community.png",
+        "activeIcon": "assets/tabbar/community-active.png"
+      },
+      {
+        "pagePath": "pages/profile/index",
+        "name": "我的",
+        "icon": "assets/tabbar/profile.png",
+        "activeIcon": "assets/tabbar/profile-active.png"
+      }
+    ]
+  },
+  "usingComponents": {
+    "state-panel": "/components/state-panel/index"
+  },
+  "lazyCodeLoading": "requiredComponents"
+}

@@ -1,0 +1,19 @@
+{
+  "mbox": {
+    "mode": "production",
+    "apiBaseUrl": "https://mbox.shmbox.com",
+    "storeId": "mbox-lujiazui",
+    "alipayIdentityEnabled": false,
+    "alipayPaymentEnabled": false,
+    "alipayPhoneEnabled": false,
+    "alipayNotificationEnabled": false,
+    "membershipInviteCooldownHours": 24,
+    "identityTenantId": "10000000-0000-4000-8000-000000000001",
+    "identityStoreId": "20000000-0000-4000-8000-000000000001",
+    "alipayAppId": "2021006196615276",
+    "defaultTableCode": "",
+    "defaultTableToken": "",
+    "allowDevDataFallback": false,
+    "requestTimeoutMs": 10000
+  }
+}

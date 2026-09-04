@@ -22,6 +22,7 @@ describe('loadNormalizedRuntimeConfig', () => {
       deploymentTier: 'validation',
       payment: null,
       wechatIdentity: null,
+      alipayPhone: null,
       metricsToken: null,
       guestPaymentMode: 'simulation',
       inventoryEnforcementMode: 'audit_only',
@@ -40,6 +41,44 @@ describe('loadNormalizedRuntimeConfig', () => {
       workerIntervalMs: 2_000,
       workerAdapterModule: null,
     })
+  })
+
+  it('loads an Alipay phone AES adapter without exposing the key', () => {
+    const aesKey = 'alipay-aes-key16'
+    const config = loadNormalizedRuntimeConfig({
+      ...base,
+      MBOX_ALIPAY_APP_ID: '2021006196615276',
+      MBOX_ALIPAY_AES_KEY: aesKey,
+    })
+    expect(config.alipayPhone).toEqual({
+      appId: '2021006196615276',
+      aesKey,
+    })
+    expect(config.wechatIdentity).toBeNull()
+  })
+
+  it('loads a canonical 16-byte Base64 Alipay AES key', () => {
+    const aesKey = Buffer.alloc(16, 9).toString('base64')
+    const config = loadNormalizedRuntimeConfig({
+      ...base,
+      MBOX_ALIPAY_APP_ID: '2021006196615276',
+      MBOX_ALIPAY_AES_KEY: aesKey,
+    })
+    expect(config.alipayPhone).toEqual({
+      appId: '2021006196615276',
+      aesKey,
+    })
+  })
+
+  it('rejects a partial Alipay phone adapter', () => {
+    expect(() => loadNormalizedRuntimeConfig({
+      ...base,
+      MBOX_ALIPAY_APP_ID: '2021006196615276',
+    })).toThrowError(NormalizedRuntimeConfigurationError)
+    expect(() => loadNormalizedRuntimeConfig({
+      ...base,
+      MBOX_ALIPAY_AES_KEY: Buffer.alloc(16, 9).toString('base64'),
+    })).toThrowError(NormalizedRuntimeConfigurationError)
   })
 
   it('loads a complete WeChat identity adapter without exposing its secrets', () => {

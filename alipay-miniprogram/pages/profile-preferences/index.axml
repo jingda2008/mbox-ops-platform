@@ -1,0 +1,62 @@
+<view class="page preferences-page">
+  <view class="preferences-hero">
+    <text class="preferences-kicker">M-BOX · 今晚偏好</text>
+    <text class="preferences-title">我的偏好</text>
+    <text class="preferences-copy">昵称、生日与到店偏好；生日只保存月日，用于为你准备生日礼遇。</text>
+  </view>
+  <state-panel a:if="{{loading}}" type="loading" title="正在读取偏好" />
+  <block a:else>
+    <view a:if="{{error}}" class="error-banner">{{error}}</view>
+
+    <view class="preference-card identity-card">
+      <view class="avatar-row">
+        <button class="avatar-button" onTap="onChooseAvatar">
+          <image a:if="{{avatarUrl}}" src="{{avatarUrl}}" mode="aspectFill" />
+          <text a:else>选头像</text>
+        </button>
+        <view class="avatar-copy">
+          <text class="field-label">昵称与头像</text>
+          <input type="text" value="{{displayName}}" maxlength="80" placeholder="点此填写昵称" onInput="onNameInput" onBlur="onNameInput" />
+          <text class="field-note">头像只保存在这台设备上，方便你识别自己的会员页。</text>
+        </view>
+      </view>
+    </view>
+
+    <view class="preference-card">
+      <text class="field-label">生日 <text>可选 · 生日赠礼</text></text>
+      <picker mode="selector" range="{{birthdays}}" range-key="label" value="{{birthdayIndex}}" onChange="onBirthdayChange">
+        <view class="picker-line"><text>{{birthdays[birthdayIndex].label}}</text><text>选择 ›</text></view>
+      </picker>
+      <text class="field-note">只保存月日，不保存出生年份。生日礼遇以当期说明与实际可用时间为准。</text>
+    </view>
+
+    <view class="preference-card">
+      <text class="field-label">位置偏好 <text>点选一项</text></text>
+      <view class="chip-grid">
+        <button a:for="{{seats}}" a:key="value" class="chip {{seatValue === item.value ? 'is-on' : ''}}" data-value="{{item.value}}" onTap="toggleSeat">{{item.label}}</button>
+      </view>
+    </view>
+
+    <view class="preference-card">
+      <text class="field-label">服务节奏 <text>点选一项</text></text>
+      <view class="chip-grid">
+        <button a:for="{{service}}" a:key="value" class="chip {{serviceValue === item.value ? 'is-on' : ''}}" data-value="{{item.value}}" onTap="toggleService">{{item.label}}</button>
+      </view>
+    </view>
+
+    <view class="preference-card">
+      <text class="field-label">酒水偏好 <text>可多选</text></text>
+      <view class="chip-grid">
+        <button a:for="{{alcohol}}" a:key="value" class="chip {{item.selected ? 'is-on' : ''}}" data-value="{{item.value}}" onTap="toggleAlcohol">{{item.label}}</button>
+      </view>
+    </view>
+
+    <view class="preference-card compact-fields">
+      <label><text>口味偏好</text><input value="{{tasteNotes}}" maxlength="80" placeholder="如：清爽、少甜" onInput="onTasteInput" /></label>
+      <label><text>音乐偏好</text><input value="{{musicStyles}}" maxlength="80" placeholder="如：流行、爵士、摇滚" onInput="onMusicInput" /></label>
+      <label><text>饮食说明</text><input value="{{dietaryNotes}}" maxlength="80" placeholder="与点单推荐有关即可" onInput="onDietaryInput" /></label>
+    </view>
+
+    <button class="save-button" loading="{{saving}}" disabled="{{saving}}" onTap="save">确定保存</button>
+  </block>
+</view>

@@ -154,7 +154,12 @@ integration('public reservation API with PostgreSQL', () => {
     expect(response.headers['set-cookie']).toContain('Path=/api/public')
     expect(response.headers['set-cookie']).toContain('HttpOnly')
     expect(response.headers['set-cookie']).toContain('Secure')
-    expect(JSON.stringify(response.json())).not.toContain('reservation-test-session-token')
+    expect(response.json()).toMatchObject({
+      data: {
+        status: 'active',
+        sessionToken: 'reservation-test-session-token'.padEnd(48, 's'),
+      },
+    })
   })
 
   it('publishes only area, table, capacity and minimum-spend availability fields', async () => {

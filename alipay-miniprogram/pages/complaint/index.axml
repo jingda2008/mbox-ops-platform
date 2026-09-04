@@ -1,0 +1,22 @@
+<view class="page">
+  <view class="top-band complaint-band">
+    <view class="brand-row"><view><text class="eyebrow">{{tableCode}} · 认真听你说</text><text class="complaint-title">由值班负责人跟进</text></view></view>
+    <text class="complaint-subtitle">你的反馈会直接通知值班负责人，由门店跟进处理。</text>
+  </view>
+  <view a:if="{{error}}" class="error-banner">{{error}}</view>
+  <view a:if="{{success}}" class="success-banner">{{success}}</view>
+  <view class="panel complaint-form">
+    <label class="field">
+      <text class="field__label">问题类型</text>
+      <picker mode="selector" range="{{categories}}" value="{{categoryIndex}}" onChange="onCategoryChange">
+        <view class="picker-field">{{categories[categoryIndex]}}<text>选择</text></view>
+      </picker>
+    </label>
+    <label class="field">
+      <text class="field__label">发生了什么</text>
+      <textarea class="field__textarea" maxlength="300" value="{{details}}" placeholder="请描述事实和您希望如何解决" onInput="onDetailsInput" />
+    </label>
+    <button class="danger-button" disabled="{{submitting}}" onTap="submitComplaint">{{submitting ? '正在提交' : '提交给值班经理'}}</button>
+  </view>
+  <view class="complaint-policy"><text>我们会跟进</text><text>值班负责人会尽快到桌沟通；为保护每位员工隐私，本页不展示内部处理记录。</text></view>
+</view>

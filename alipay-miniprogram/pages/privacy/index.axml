@@ -1,0 +1,46 @@
+<view class="page privacy-page">
+  <view class="top-band">
+    <text class="eyebrow">M-BOX 客户桌码服务</text>
+    <text class="privacy-title">隐私政策</text>
+    <text class="privacy-version">{{policy ? ('政策版本 · ' + policy.version) : '隐私政策'}}</text>
+  </view>
+  <view a:if="{{policyLoading}}" class="privacy-section"><text>正在加载隐私政策…</text></view>
+  <block a:elif="{{policy}}">
+    <view class="privacy-section"><text>运营主体</text><text>{{policy.operatorName}}</text></view>
+    <view class="privacy-section"><text>联系渠道</text><text>{{policy.contact}}</text></view>
+    <view class="privacy-section"><text>数据保留规则版本</text><text>{{policy.dataRetentionPolicyVersion}}</text></view>
+    <view class="privacy-section"><text>第三方服务清单版本</text><text>{{policy.thirdPartyRegisterVersion}}</text></view>
+    <view class="privacy-section"><text>生效时间</text><text>{{policy.effectiveAt}}</text></view>
+    <view class="privacy-section"><text>政策全文</text><text>{{policy.content}}</text></view>
+  </block>
+  <view a:else class="privacy-section privacy-release-note"><text>隐私政策暂时无法读取</text><text>{{policyMessage}}</text></view>
+  <view class="privacy-contact-tools">
+    <button class="privacy-contact-toggle" onTap="toggleContactTools">{{contactToolsOpen ? '收起我的联系方式' : '管理我的联系方式'}}</button>
+    <view a:if="{{contactToolsOpen}}" class="privacy-contact-body">
+      <text class="privacy-contact-note">仅显示掩码。更换或停用不会删除订单、退款、会员合并等必要审计事实。</text>
+      <text a:if="{{contactMessage}}" class="privacy-contact-message">{{contactMessage}}</text>
+      <text a:if="{{loadingContacts}}" class="privacy-contact-note">正在读取…</text>
+      <view class="privacy-contact-group">
+        <text class="privacy-contact-heading">已验证手机号</text>
+        <view a:for="{{verifiedPhones}}" a:key="publicId" class="privacy-contact-row">
+          <view><text>{{item.maskedPhone}}</text><text>{{item.status === 'active' ? '当前可用' : '已停用'}}</text></view>
+          <button a:if="{{item.status === 'active'}}" data-public-id="{{item.publicId}}" onTap="revokePhone" loading="{{contactBusy === item.publicId}}">停用</button>
+        </view>
+        <text a:if="{{!verifiedPhones.length}}" class="privacy-contact-note">当前没有可用的验证手机号。</text>
+        <button class="privacy-phone-replace alipay-phone-button" open-type="getAuthorize" scope="phoneNumber" onGetAuthorize="replacePhone" hover-class="none" loading="{{contactBusy === 'phone-replace'}}">授权并更换支付宝手机号</button>
+      </view>
+      <view class="privacy-contact-group">
+        <text class="privacy-contact-heading">活动报名联系</text>
+        <view a:for="{{activityRegistrations}}" a:key="publicId" class="privacy-contact-row activity-contact-row">
+          <view><text>{{item.activityTitle}}</text><text>{{item.maskedContact || '已清除'}} · {{item.statusText}}</text></view>
+          <button a:if="{{item.canUpdateContact}}" data-public-id="{{item.publicId}}" onTap="startActivityContactEdit">更正</button>
+          <view a:if="{{editingRegistrationPublicId === item.publicId}}" class="privacy-contact-editor">
+            <input type="number" maxlength="11" placeholder="新的11位手机号" value="{{editingContactValue}}" onInput="onActivityContactInput" />
+            <button onTap="saveActivityContact" loading="{{contactBusy === item.publicId}}">保存</button><button onTap="cancelActivityContactEdit">取消</button>
+          </view>
+        </view>
+        <text a:if="{{!activityRegistrations.length}}" class="privacy-contact-note">当前没有活动报名联系方式。</text>
+      </view>
+    </view>
+  </view>
+</view>

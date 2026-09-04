@@ -1,0 +1,204 @@
+<view class="page home-page">
+  <view class="home-hero">
+    <view class="brand-row">
+      <view class="brand"><image class="brand-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX 标志" /><text>M-BOX</text></view>
+    </view>
+    <view class="hero-content">
+      <text class="hero-kicker">现场音乐 · 城市夜晚</text>
+      <text class="hero-title">{{visitState === 'active' ? table.displayName : visitState === 'waiting' ? table.displayName : '今晚，刚刚好'}}</text>
+      <text class="hero-copy">{{visitState === 'active' ? '今晚的菜单与服务，都在这里。' : visitState === 'waiting' ? '桌码已识别，开台后菜单会自动出现' : '现场音乐、精心酒水与刚好的相遇'}}</text>
+    </view>
+  </view>
+
+  <state-panel a:if="{{loading}}" type="loading" title="正在准备今晚" />
+  <block a:else>
+    <view a:if="{{warning}}" class="warning">{{warning}}</view>
+    <view a:if="{{error}}" class="error-banner">{{error}}</view>
+
+    <view a:if="{{visitState === 'waiting'}}" class="state-card state-card--waiting">
+      <view class="state-card__icon">···</view>
+      <view class="state-card__body"><text class="state-card__eyebrow">等待开台</text><text class="state-card__title">{{table.displayName}}</text><text class="state-card__copy">{{connectionMessage}}</text></view>
+      <button class="state-card__action" onTap="retryTable">刷新</button>
+    </view>
+
+    <block a:elif="{{visitState === 'active'}}">
+      <view class="onsite-summary">
+        <view><text class="summary-value">{{table.displayName}}</text><text class="summary-label">本桌</text></view>
+        <view><text class="summary-value">{{guestCountText}}</text><text class="summary-label">本桌人数</text></view>
+        <view><text class="summary-value">{{serviceOwner}}</text><text class="summary-label">本桌服务</text></view>
+      </view>
+
+      <view class="primary-experience" data-url="/pages/order/index" onTap="openTab" hover-class="button-hover" role="button" aria-role="button" aria-label="打开今晚菜单与点单">
+        <view class="primary-experience__body"><text class="primary-experience__kicker">今晚从这里开始</text><text class="primary-experience__title">今晚菜单与点单</text><text class="primary-experience__copy">清晰价格，轻松选择</text></view>
+        <view class="primary-experience__arrow" aria-hidden="true">→</view>
+      </view>
+
+      <view class="section live-section">
+        <view class="section-title"><text>今晚现场</text></view>
+        <view class="performance-compact {{performance && performance.stateText === '正在演出' ? 'is-live' : ''}}" onTap="openTonightSchedule" hover-class="button-hover" role="button" aria-role="button">
+          <image a:if="{{performance && performance.imageUrl}}" src="{{performance.imageUrl}}" mode="aspectFill" />
+          <view class="performance-compact__shade"></view>
+          <view class="performance-compact__content">
+            <text class="performance-compact__state">{{performance ? performance.summary : '今晚'}}</text>
+            <text class="performance-compact__name">{{performance && performance.hasSchedule ? performance.performer : '今晚演出安排'}}</text>
+            <view class="performance-compact__footer">
+              <text class="performance-compact__time">{{performance && performance.hasSchedule ? performance.timeText : '当晚暂无演出安排'}}</text>
+              <text class="performance-compact__action">整晚安排 →</text>
+            </view>
+          </view>
+        </view>
+        <view class="performance-shortcuts">
+          <view class="performance-shortcut" onTap="openPerformerProfile" hover-class="button-hover" role="button" aria-role="button">
+            <text class="performance-shortcut__kicker">艺人</text>
+            <text class="performance-shortcut__title">{{performance && performance.hasSchedule ? performance.performer : '乐队与歌手'}}</text>
+            <text class="performance-shortcut__copy">{{performance && performance.tags ? performance.tags : '认识今晚舞台阵容'}}</text>
+          </view>
+          <view class="performance-shortcut" onTap="openMonthlyPerformance" hover-class="button-hover" role="button" aria-role="button">
+            <text class="performance-shortcut__kicker">月度</text>
+            <text class="performance-shortcut__title">{{monthlyPerformanceCard.title || '当月演出'}}</text>
+            <text class="performance-shortcut__copy">{{monthlyPerformanceCard.summary || '按日期查看演出场次'}}</text>
+          </view>
+        </view>
+      </view>
+
+      <view class="section compact-section">
+        <view class="section-title"><text>本桌快捷服务</text></view>
+        <view class="action-grid">
+          <button class="action-grid__button" data-url="/pages/service/index" onTap="openPage"><text class="action-icon">水</text><text>桌边服务</text></button>
+          <button class="action-grid__button" data-url="/pages/status/index" onTap="openPage"><text class="action-icon">进</text><text>服务进展</text></button>
+          <button class="action-grid__button" data-url="/pages/songs/index" onTap="openPage"><text class="action-icon">歌</text><text>现场点歌</text></button>
+          <button class="action-grid__button" data-url="/pages/account/index" onTap="openPage"><text class="action-icon">账</text><text>订单桌账</text></button>
+        </view>
+      </view>
+    </block>
+
+    <block a:else>
+      <view class="section live-section">
+        <view class="section-title"><text>今晚现场</text></view>
+        <view class="performance-compact {{performance && performance.stateText === '正在演出' ? 'is-live' : ''}}" onTap="openTonightSchedule" hover-class="button-hover" role="button" aria-role="button">
+          <image a:if="{{performance && performance.imageUrl}}" src="{{performance.imageUrl}}" mode="aspectFill" />
+          <view class="performance-compact__shade"></view>
+          <view class="performance-compact__content">
+            <text class="performance-compact__state">{{performance ? performance.summary : '今晚'}}</text>
+            <text class="performance-compact__name">{{performance && performance.hasSchedule ? performance.performer : '今晚演出安排'}}</text>
+            <view class="performance-compact__footer">
+              <text class="performance-compact__time">{{performance && performance.hasSchedule ? performance.timeText : '当晚暂无演出安排'}}</text>
+              <text class="performance-compact__action">整晚安排 →</text>
+            </view>
+          </view>
+        </view>
+        <view class="performance-shortcuts">
+          <view class="performance-shortcut" onTap="openPerformerProfile" hover-class="button-hover" role="button" aria-role="button">
+            <text class="performance-shortcut__kicker">艺人</text>
+            <text class="performance-shortcut__title">{{performance && performance.hasSchedule ? performance.performer : '乐队与歌手'}}</text>
+            <text class="performance-shortcut__copy">{{performance && performance.tags ? performance.tags : '认识今晚舞台阵容'}}</text>
+          </view>
+          <view class="performance-shortcut" onTap="openMonthlyPerformance" hover-class="button-hover" role="button" aria-role="button">
+            <text class="performance-shortcut__kicker">月度</text>
+            <text class="performance-shortcut__title">{{monthlyPerformanceCard.title || '当月演出'}}</text>
+            <text class="performance-shortcut__copy">{{monthlyPerformanceCard.summary || '按日期查看演出场次'}}</text>
+          </view>
+        </view>
+      </view>
+
+      <view a:if="{{upcomingReservation}}" class="state-card reservation-state">
+        <view class="state-card__body"><text class="state-card__eyebrow">我的预约</text><text class="state-card__title">{{upcomingReservation.title}}</text><text class="state-card__copy">{{upcomingReservation.statusText}}</text></view>
+        <button class="state-card__action" data-url="/pages/reservations/index" onTap="openTab">查看</button>
+      </view>
+      <view a:else class="state-card current-state">
+        <view class="state-card__icon">⌁</view>
+        <view class="state-card__body"><text class="state-card__eyebrow">到店点单</text><text class="state-card__title">尚未连接桌位</text><text class="state-card__copy">到店后从“点单”页扫描桌码，即可查看菜单并使用桌边服务。</text></view>
+      </view>
+
+      <view a:if="{{!membership && membershipTerms}}" class="membership-inline-card" onTap="openMembershipInvite" hover-class="button-hover" role="button" aria-role="button">
+        <view><text class="membership-inline-card__kicker">M-BOX 会员</text><text class="membership-inline-card__title">加入会员，享积分与活动</text><text class="membership-inline-card__copy">可先浏览首页和菜单，参与超嗨活动时再加入</text></view>
+        <text class="membership-inline-card__action">了解 ›</text>
+      </view>
+    </block>
+
+    <view a:if="{{brandStoryCard || upcomingActivity || editorialCards.length}}" class="section home-editorial-section">
+      <view class="section-title"><text>发现 M-BOX</text><text class="section-link">精选内容</text></view>
+      <view a:if="{{brandStoryCard}}" class="brand-story-card" data-code="{{brandStoryCard.code}}" onTap="openEditorial" hover-class="brand-story-card--hover" role="button" aria-role="button">
+        <view class="brand-story-card__copy"><text>{{brandStoryCard.eyebrow}}</text><text>{{brandStoryCard.title}}</text><text>{{brandStoryCard.summary}}</text></view>
+        <text class="brand-story-card__action">阅读全文 ›</text>
+      </view>
+      <view a:if="{{upcomingActivity}}" class="featured-activity-card" onTap="openFeaturedActivity" hover-class="featured-activity-card--hover" role="button" aria-role="button">
+        <view class="featured-activity-card__art">
+          <image a:if="{{upcomingActivity.coverUrl}}" src="{{upcomingActivity.coverUrl}}" mode="aspectFill" />
+          <image a:else class="featured-activity-card__mark" src="/assets/brand/superhigh-mark.png" mode="aspectFit" aria-hidden="true" />
+          <view class="featured-activity-card__shade"></view>
+          <text class="featured-activity-card__badge">SUPERHIGH</text>
+        </view>
+        <view class="featured-activity-card__copy"><text class="featured-activity-card__eyebrow">超嗨 · 本期精选</text><text class="featured-activity-card__title">{{upcomingActivity.title}}</text><text class="featured-activity-card__meta">{{upcomingActivity.dateText}} · {{upcomingActivity.availabilityText}}</text><text class="featured-activity-card__link">查看活动详情</text></view>
+        <text class="featured-activity-card__arrow">›</text>
+      </view>
+      <scroll-view a:if="{{editorialCards.length}}" class="published-content-scroll" scroll-x enhanced show-scrollbar="{{false}}">
+        <view class="published-content-track">
+          <view a:for="{{editorialCards}}" a:key="code" class="published-content-card {{editorialCards.length === 1 ? 'is-single' : ''}}" data-code="{{item.code}}" onTap="openEditorial" hover-class="published-content-card--hover" role="button" aria-role="button">
+            <view class="published-content-card__art">
+              <image a:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" />
+              <image a:else class="published-content-card__logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" />
+              <view class="published-content-card__shade"></view>
+              <text class="published-content-card__badge">{{item.eyebrow}}</text>
+            </view>
+            <view class="published-content-card__copy"><text>{{item.title}}</text><text>{{item.summary}}</text><text>{{item.ctaLabel}}</text></view>
+            <text a:if="{{item.canOpen}}" class="published-content-card__arrow">›</text>
+          </view>
+        </view>
+      </scroll-view>
+    </view>
+  </block>
+
+  <view a:if="{{performancePanel}}" class="performance-panel-mask" onTap="closePerformancePanel" catchTouchMove="noop">
+    <view class="performance-panel" catchTap="noop">
+      <view class="performance-panel__handle"></view>
+      <view class="performance-panel__head"><view><text>{{performancePanel === 'tonight' ? 'M-BOX 今晚现场' : '艺人介绍'}}</text><text>{{performancePanel === 'tonight' ? '整晚演出安排' : performance.performer}}</text></view><button class="compact-icon-action" aria-label="关闭演出详情" onTap="closePerformancePanel">×</button></view>
+      <view a:if="{{performancePanel === 'tonight'}}" class="performance-panel__schedule">
+        <view a:for="{{performance.schedules}}" a:key="id" class="performance-schedule-row {{item.stateText === '正在演出' ? 'is-current' : ''}}"><view><text>{{item.stateText}}</text><text>{{item.timeText}}</text></view><view><text>{{item.performer}}</text><text>{{item.tags || '现场演出'}}</text></view></view>
+      </view>
+      <view a:else class="performance-panel__artist"><image a:if="{{performance.imageUrl}}" src="{{performance.imageUrl}}" mode="aspectFill" /><view><text>{{performance.performer}}</text><text>{{performance.tags || 'M-BOX 当晚舞台阵容'}}</text><text>{{performance.bio || '更多介绍由门店发布后展示。'}}</text></view></view>
+      <text class="performance-panel__note">演出时间与阵容以当晚安排为准。</text>
+    </view>
+  </view>
+
+  <view a:if="{{editorialPanel}}" class="editorial-panel-mask" onTap="closeEditorial" catchTouchMove="noop">
+    <view class="editorial-panel" catchTap="noop">
+      <button class="editorial-panel__close compact-icon-action" aria-label="关闭内容" onTap="closeEditorial">×</button>
+      <image a:if="{{editorialPanel.imageUrl}}" class="editorial-panel__image" src="{{editorialPanel.imageUrl}}" mode="aspectFill" />
+      <view a:else class="editorial-panel__art"><image src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" /></view>
+      <view class="editorial-panel__body">
+        <text class="editorial-panel__eyebrow">{{editorialPanel.eyebrow}}</text>
+        <text class="editorial-panel__title">{{editorialPanel.title}}</text>
+        <text class="editorial-panel__summary">{{editorialPanel.summary}}</text>
+        <button a:if="{{editorialPanel.hasTarget}}" class="editorial-panel__action" onTap="openEditorialTarget">{{editorialPanel.ctaLabel}}</button>
+        <button a:else class="editorial-panel__action" onTap="closeEditorial">知道了</button>
+      </view>
+    </view>
+  </view>
+
+  <view a:if="{{membershipInviteVisible}}" class="member-invite-mask">
+    <scroll-view scroll-y="true" class="member-invite-sheet">
+      <button class="member-invite-close compact-icon-action" aria-label="关闭会员邀请" onTap="dismissMembershipInvite">×</button>
+      <text class="member-invite-kicker">M-BOX 会员</text>
+      <text class="member-invite-title">欢迎加入 M-BOX</text>
+      <text class="member-invite-copy">加入后享积分、会员权益与活动资格。</text>
+      <image class="member-invite-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX 标志" />
+      <checkbox-group onChange="onMembershipInviteAgreementChange">
+        <label class="member-invite-agreement">
+          <checkbox class="member-invite-agreement__checkbox" value="agree" checked="{{membershipInviteAgreed}}" color="#315d46" />
+          <view class="member-invite-agreement-copy">
+            <text>我已阅读并同意</text>
+            <view class="member-invite-links">
+              <text catchTap="showMembershipTerms">《{{membershipTerms.title}}》</text>
+            </view>
+          </view>
+        </label>
+      </checkbox-group>
+      <view class="member-invite-actions">
+        <button class="member-invite-refuse" onTap="declineMembershipInvite">暂不加入</button>
+        <button a:if="{{membershipInviteAgreed}}" class="member-invite-agree alipay-phone-button" open-type="getAuthorize" scope="phoneNumber" onGetAuthorize="acceptMembershipInvite" hover-class="none" loading="{{membershipInviteBusy}}">同意入会</button>
+        <button a:else class="member-invite-agree member-invite-agree--pending" onTap="remindMembershipInviteAgreement" hover-class="none">同意入会</button>
+      </view>
+    </scroll-view>
+  </view>
+</view>

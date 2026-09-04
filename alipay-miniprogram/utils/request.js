@@ -134,6 +134,7 @@ function buildHeaders(path, extraHeaders, settings) {
   const headers = Object.assign({
     accept: 'application/json',
     'x-mbox-store-id': config.storeId,
+    'x-mbox-client-platform': 'alipay',
     ...(anonymous ? {} : {
       'x-mbox-guest-device': deviceKey(),
       'x-mbox-table-code': session.tableCode || '',

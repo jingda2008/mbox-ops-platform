@@ -393,6 +393,7 @@ describe('guest commerce/service API trust boundaries', () => {
         assertGuestJsapiReady: vi.fn(async () => {
           throw new WechatPaymentIdentityRequiredError()
         }),
+        assertGuestAlipayJsapiReady: vi.fn(async () => 'jsapi' as const),
         resolveActivePayment: vi.fn(async () => null),
         create: vi.fn(),
       },
@@ -807,6 +808,7 @@ describe('guest commerce/service API trust boundaries', () => {
       onlinePayments: {
         assertAvailable: vi.fn(),
         assertGuestJsapiReady: vi.fn(async () => 'jsapi' as const),
+        assertGuestAlipayJsapiReady: vi.fn(async () => 'jsapi' as const),
         resolveActivePayment: vi.fn(async () => null),
         create: vi.fn(async () => { throw new WechatPaymentIdentityRequiredError() }),
       },
@@ -1500,6 +1502,7 @@ function fixture(
   const onlinePayments = {
     assertAvailable: vi.fn(),
     assertGuestJsapiReady: vi.fn(async () => 'jsapi' as const),
+    assertGuestAlipayJsapiReady: vi.fn(async () => 'jsapi' as const),
     resolveActivePayment: vi.fn(async () => null),
     create: vi.fn(async () => paymentAction(paymentMode === 'simulation' ? 'qr' : 'jsapi')),
     ...(onlinePaymentOverrides ?? {}),

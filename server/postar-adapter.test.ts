@@ -193,6 +193,39 @@ describe('Postar JSAPI payment creation', () => {
     })
   })
 
+  it('returns alipay_jsapi tradeNO for Alipay JSAPI precreate without WeChat pay fields', async () => {
+    const post = vi.fn(async (_request: PostarHttpRequest) => response({
+      code: '000000',
+      data: {
+        actualPayAmt: '3000', agetId: 'AGENCY001', getprepayid: '1', prepayid: '2026090411223344556',
+        orderNo: 'POSTAR202609040001', orderTime: '20260904143000', threeOrderNo: 'PaymentALI123',
+      },
+      msg: 'success',
+    }))
+    const adapter = new PostarPaymentProviderAdapter(testOptions(post))
+    const result = await adapter.createPayment({
+      paymentIntentId: 'PaymentALI123', merchantId: 'MERCHANT001', amount: 3000, currency: 'CNY',
+      expiresAt: '2026-07-14T04:20:00.000Z', presentation: 'jsapi', payWay: 'alipay', payerId: '2088000000000000',
+      clientIp: '203.0.113.10', callbackUrl: 'https://pay.example.test/postar/callback',
+      operatorId: 'cashier-1', remark: 'L01 table',
+    }, context)
+
+    expect(result).toMatchObject({
+      paymentIntentId: 'PaymentALI123',
+      providerTransactionId: 'POSTAR202609040001',
+      status: 'processing',
+      paymentPayload: { presentation: 'alipay_jsapi', tradeNO: '2026090411223344556' },
+    })
+    expect(result.paymentPayload).not.toHaveProperty('paySign')
+    expect(result.paymentPayload).not.toHaveProperty('appId')
+    const sent = post.mock.calls[0]![0]
+    expect(decodeRequest(sent).payload).toMatchObject({
+      openid: '2088000000000000', payWay: '2', orderNo: 'PaymentALI123',
+    })
+    expect(decodeRequest(sent).payload).not.toHaveProperty('wxAppid')
+    expect(decodeRequest(sent).payload).not.toHaveProperty('traType')
+  })
+
   it('accepts the official unsigned response contract but rejects incomplete or provider-declined creation responses', async () => {
     const incomplete = new PostarPaymentProviderAdapter(testOptions(async () => ({
       body: new TextEncoder().encode('{"code":"000000","msg":"success"}'), headers: {}, status: 200,

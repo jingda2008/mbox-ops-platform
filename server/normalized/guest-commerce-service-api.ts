@@ -59,6 +59,7 @@ import { PaymentFulfillmentRepository } from './payment-fulfillment-repository.j
 import { GuestImmediateCheckoutReconciliationRepository } from './guest-immediate-checkout-reconciliation-repository.js'
 import { FulfillmentCapacityUnavailableError } from './fulfillment-capacity-repository.js'
 import type { OnlinePaymentAction, OnlinePaymentService } from './online-payment-service.js'
+import { AlipayPaymentIdentityRequiredError } from './online-payment-service.js'
 import {
   OnlinePaymentUnavailableError,
   OnlinePaymentUnknownError,
@@ -85,7 +86,7 @@ import type {
   StoreScope,
 } from './transaction-runner.js'
 
-export type GuestCheckoutPaymentMode = 'wechat_jsapi' | 'wechat_native_qr' | 'simulation'
+export type GuestCheckoutPaymentMode = 'wechat_jsapi' | 'alipay_jsapi' | 'wechat_native_qr' | 'simulation'
 
 export interface GuestCommerceServiceApiOptions {
   transactions: Pick<ScopedPostgresTransactionRunner, 'run'>
@@ -94,13 +95,16 @@ export interface GuestCommerceServiceApiOptions {
     & Partial<Pick<CommerceCommandService, 'submitOrderInTransaction'>>
   payments: Pick<PaymentCommandService, 'initiate'>
     & Partial<Pick<PaymentCommandService, 'initiateInTransaction' | 'recordProviderQueryResult'>>
-  onlinePayments: Pick<OnlinePaymentService, 'create' | 'assertGuestJsapiReady' | 'assertAvailable' | 'resolveActivePayment'>
+  onlinePayments: Pick<OnlinePaymentService, 'create' | 'assertGuestJsapiReady' | 'assertGuestAlipayJsapiReady' | 'assertAvailable' | 'resolveActivePayment'>
     & Partial<Pick<OnlinePaymentService, 'close'>>
   resolveGuestContext(request: FastifyRequest): Promise<GuestRequestContext> | GuestRequestContext
   resolvePublicContext(request: FastifyRequest): Promise<{ scope: Readonly<StoreScope> }> | { scope: Readonly<StoreScope> }
   resolveDeviceFingerprint(request: FastifyRequest): string
   paymentMode: GuestCheckoutPaymentMode
-  resolvePaymentMode?: (scope: Readonly<StoreScope>) => Promise<GuestCheckoutPaymentMode | null>
+  resolvePaymentMode?: (
+    scope: Readonly<StoreScope>,
+    request?: FastifyRequest,
+  ) => Promise<GuestCheckoutPaymentMode | null>
   paymentActionSecret: string
   deviceServiceLimitPerMinute?: number
   tableServiceLimitPerMinute?: number
@@ -223,7 +227,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
       if (!await lockBoundGuestTablePosition(transaction, context)) throw new GuestAuthenticationRequiredError()
       await requireGuestCartProtocol(transaction, context.tableSessionId, 1)
     })
-    const paymentMode = await effectivePaymentMode(options, context.scope)
+    const paymentMode = await effectivePaymentMode(options, context.scope, request)
     assertGuestSelfPaymentMode(paymentMode)
     options.onlinePayments.assertAvailable(paymentMode === 'simulation' ? 'simulation' : 'postar')
     // Resolve the server-side WeChat payer before creating an order.  This is
@@ -264,6 +268,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
       payment.value,
       orderExecution.value.order.publicId,
       request.ip,
+      paymentMode,
     )
     return reply.code(orderExecution.replayed ? 200 : 201).send(
       checkoutResponse(orderExecution, payment, paymentMode, providerAction),
@@ -350,7 +355,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
 
   app.post('/guest/shared-cart/checkout', async (request, reply) => handleRoute(reply, async () => {
     const context = await requireTableContext(options, request, 'guest.order.create')
-    const paymentMode = await effectivePaymentMode(options, context.scope)
+    const paymentMode = await effectivePaymentMode(options, context.scope, request)
     assertGuestSelfPaymentMode(paymentMode)
     options.onlinePayments.assertAvailable(paymentMode === 'simulation' ? 'simulation' : 'postar')
     const input = readSharedCartCheckout(request.body)
@@ -434,7 +439,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
       return combineSharedCartCheckoutOutcomes(completedCart, orderOutcome, paymentOutcome, context)
     })
     const providerAction = await createGuestProviderAction(
-        options, context, execution.value.payment, execution.value.order.order.publicId, request.ip,
+        options, context, execution.value.payment, execution.value.order.order.publicId, request.ip, paymentMode,
     )
     const response = checkoutResponse(
       { value: execution.value.order, replayed: execution.replayed },
@@ -452,7 +457,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
     '/guest/orders/:orderPublicId/payment',
     async (request, reply) => handleRoute(reply, async () => {
       const context = await requireTableContext(options, request, 'guest.order.create')
-      const paymentMode = await effectivePaymentMode(options, context.scope)
+      const paymentMode = await effectivePaymentMode(options, context.scope, request)
       assertGuestSelfPaymentMode(paymentMode)
       options.onlinePayments.assertAvailable(paymentMode === 'simulation' ? 'simulation' : 'postar')
       const orderPublicId = readPublicId(request.params.orderPublicId, 'orderPublicId')
@@ -495,12 +500,16 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
         ))
         if (value.provider !== 'simulation' && value.method !== 'jsapi') {
           throw new OnlinePaymentUnavailableError(
-            '这笔订单的微信付款无法在小程序中打开，请刷新微信身份或呼叫员工协助核对',
+            paymentMode === 'alipay_jsapi'
+              ? '这笔订单的支付宝付款无法在小程序中打开，请刷新支付宝身份或呼叫员工协助核对'
+              : '这笔订单的微信付款无法在小程序中打开，请刷新微信身份或呼叫员工协助核对',
           )
         }
         payment = { value: paymentFromContext(value), replayed: true }
       }
-      const action = await createGuestProviderAction(options, context, payment.value, orderPublicId, request.ip)
+      const action = await createGuestProviderAction(
+        options, context, payment.value, orderPublicId, request.ip, paymentMode,
+      )
       return reply.send({ data: action, meta: { replayed: payment.replayed } })
     }),
   )
@@ -1279,9 +1288,11 @@ async function guestCheckoutPaymentMethod(
   context: GuestRequestContext & { tableSessionId: string; businessDate: string },
   paymentMode: GuestCheckoutPaymentMode,
 ): Promise<GuestCheckoutPaymentMethod> {
-  return paymentMode === 'simulation'
-    ? 'native_qr'
-    : options.onlinePayments.assertGuestJsapiReady(context.scope, context.customerId)
+  if (paymentMode === 'simulation') return 'native_qr'
+  if (paymentMode === 'alipay_jsapi') {
+    return options.onlinePayments.assertGuestAlipayJsapiReady(context.scope, context.customerId)
+  }
+  return options.onlinePayments.assertGuestJsapiReady(context.scope, context.customerId)
 }
 
 async function guestPaymentCommand(
@@ -1644,8 +1655,11 @@ function createSharedCartPublicId(): string {
 async function effectivePaymentMode(
   options: GuestCommerceServiceApiOptions,
   scope: Readonly<StoreScope>,
+  request?: FastifyRequest,
 ): Promise<GuestCheckoutPaymentMode> {
-  const mode = options.resolvePaymentMode === undefined ? options.paymentMode : await options.resolvePaymentMode(scope)
+  const mode = options.resolvePaymentMode === undefined
+    ? options.paymentMode
+    : await options.resolvePaymentMode(scope, request)
   if (mode === null) throw new OnlinePaymentUnavailableError('门店已暂停线上支付，请联系服务员')
   return mode
 }
@@ -1656,13 +1670,16 @@ async function createGuestProviderAction(
   payment: Payment,
   orderPublicId: string,
   clientIp: string,
+  paymentMode: GuestCheckoutPaymentMode,
 ): Promise<OnlinePaymentAction> {
   if (payment.method === 'auth_code') {
     throw new ProviderPaymentMethodConflictError('本笔正在由员工扫描付款码收款，请勿从桌码重复支付')
   }
   if (payment.provider !== 'simulation' && payment.method !== 'jsapi') {
     throw new OnlinePaymentUnavailableError(
-      '顾客小程序仅支持微信内支付；收银二维码请由员工在收银设备上发起',
+      paymentMode === 'alipay_jsapi'
+        ? '顾客小程序仅支持支付宝内支付；收银二维码请由员工在收银设备上发起'
+        : '顾客小程序仅支持微信内支付；收银二维码请由员工在收银设备上发起',
     )
   }
   try {
@@ -1672,6 +1689,7 @@ async function createGuestProviderAction(
       principal: guestPaymentPrincipal(context),
       clientIp,
       operatorId: 'MBOXGUEST',
+      jsapiPayWay: paymentMode === 'alipay_jsapi' ? 'alipay' : 'wechat',
     })
   } catch (error) {
     if (error instanceof PostarPaymentRejectedError) return unavailablePaymentAction(payment, orderPublicId, 'failed')
@@ -1686,7 +1704,8 @@ async function createGuestProviderAction(
     // revoked between the committed order and the provider action request.
     // No provider charge has been created in this branch, so preserve the
     // public order id and let the normal abandonment path release it.
-    if (error instanceof WechatPaymentIdentityRequiredError) {
+    if (error instanceof WechatPaymentIdentityRequiredError
+      || error instanceof AlipayPaymentIdentityRequiredError) {
       return unavailablePaymentAction(payment, orderPublicId, 'failed')
     }
     if (error instanceof ProviderPaymentInProgressError) return unavailablePaymentAction(payment, orderPublicId, 'pending')
@@ -1757,9 +1776,11 @@ function checkoutResponse(
       },
       payment: {
         publicId: payment.publicId,
-        mode: providerAction.presentation === 'jsapi'
-          ? 'wechat_jsapi'
-          : mode === 'simulation' ? 'simulation' : 'wechat_native_qr',
+        mode: providerAction.presentation === 'alipay_jsapi'
+          ? 'alipay_jsapi'
+          : providerAction.presentation === 'jsapi'
+            ? 'wechat_jsapi'
+            : mode === 'simulation' ? 'simulation' : 'wechat_native_qr',
         provider: payment.provider,
         method: payment.method,
         status: providerAction.status === 'failed' ? 'failed' : payment.status,

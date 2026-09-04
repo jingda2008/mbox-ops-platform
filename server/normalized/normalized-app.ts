@@ -329,6 +329,8 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     undefined,
     undefined,
     wechatIdentity,
+    null,
+    options.config.alipayPhone?.appId ?? null,
   )
   const businessClock = new PostgresNormalizedBusinessClock(transactions)
   const trustedScope = fixedStoreScopeResolver(scope)
@@ -854,9 +856,12 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       },
       resolveDeviceFingerprint: (request) => guestDevices.resolve(request),
       paymentMode: options.config.guestPaymentMode,
-      resolvePaymentMode: async (currentScope) => (await paymentPolicy(currentScope)).onlinePaymentEnabled
-        ? options.config.guestPaymentMode
-        : null,
+      resolvePaymentMode: async (currentScope, request) => {
+        if (!(await paymentPolicy(currentScope)).onlinePaymentEnabled) return null
+        const platform = String(request?.headers?.['x-mbox-client-platform'] ?? '').trim().toLowerCase()
+        if (platform === 'alipay') return 'alipay_jsapi'
+        return options.config.guestPaymentMode
+      },
       paymentActionSecret: options.config.secret,
     })
     instance.register(hardwareApiPlugin, {

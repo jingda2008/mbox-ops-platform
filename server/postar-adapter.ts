@@ -754,7 +754,12 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
       }
     } else {
       if (requiredString(data, 'getprepayid') !== '1') throw new Error('星驿支付宝预下单未返回可支付状态')
-      paymentPayload = { presentation: 'jsapi', tradeNO: requiredString(data, 'prepayid') }
+      // Alipay my.tradePay only accepts a trade number. Never emit WeChat JSAPI
+      // fields or a bare presentation:'jsapi' that the Alipay client would reject.
+      paymentPayload = {
+        presentation: 'alipay_jsapi',
+        tradeNO: requiredString(data, 'prepayid'),
+      }
     }
 
     return {

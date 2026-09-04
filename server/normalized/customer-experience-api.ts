@@ -573,15 +573,17 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
     reply.header('Cache-Control','private, no-store, max-age=0').header('Pragma','no-cache')
     const context = await options.resolvePublicContext(request)
     if (options.membershipEnrollment === undefined) throw new CustomerExperienceRequestError(
-      '微信手机号入会尚未接通', 'MEMBERSHIP_ENROLLMENT_PHONE_NOT_CONFIGURED', 503,
+      '手机号入会尚未接通', 'MEMBERSHIP_ENROLLMENT_PHONE_NOT_CONFIGURED', 503,
     )
     const body = objectBody(request.body)
+    const phoneAuthorization = readPhoneAuthorization(body)
     const result = await options.membershipEnrollment.enroll(context, {
       termsVersion: integer(body.termsVersion, '入会条款版本', 1, 2_000_000_000),
       acknowledgementSource: enumValue(
         body.acknowledgementSource, '入会确认入口', ['mini_menu','mini_profile','mini_community'] as const,
       ),
-      phoneAuthorizationCode: text(body.phoneAuthorizationCode, '微信手机号授权凭证', 8, 512),
+      phoneAuthorizationCode: phoneAuthorization.authorizationCode,
+      ...(phoneAuthorization.provider ? { phoneAuthorizationProvider: phoneAuthorization.provider } : {}),
       idempotencyKey: idempotencyKey(request),
     })
     return reply.code(result.replayed ? 200 : 201).send({ data: result.value, meta: { replayed: result.replayed } })
@@ -612,9 +614,9 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
       idempotencyKey: recoveryIdempotencyKey,
     })
     if (replay !== null) return reply.send({ data: replay, meta: { replayed: true } })
-    const authorizationCode = text(body.phoneAuthorizationCode, '微信手机号授权凭证', 8, 512)
+    const phoneAuthorization = readPhoneAuthorization(body)
     const verifiedPhone = await options.recoveryPhoneAuthorization.verify({
-      authorizationCode,
+      ...phoneAuthorization,
       customerId: context.customerId,
     })
     return reply.send({
@@ -644,9 +646,9 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
       )
     }
     const body = objectBody(request.body)
-    const authorizationCode = text(body.phoneAuthorizationCode, '微信手机号授权凭证', 8, 512)
+    const phoneAuthorization = readPhoneAuthorization(body)
     const verifiedPhone = await options.recoveryPhoneAuthorization.verify({
-      authorizationCode,
+      ...phoneAuthorization,
       customerId: context.customerId,
     })
     return reply.send({ data: await options.membershipRecovery.replaceMyVerifiedPhone(context, {
@@ -2061,6 +2063,17 @@ function timestamp(value: unknown, label: string): string {
 function enumValue<const Values extends readonly string[]>(value: unknown, label: string, values: Values): Values[number] {
   if (typeof value !== 'string' || !values.includes(value)) throw new CustomerExperienceRequestError(`${label}不正确`)
   return value as Values[number]
+}
+function optionalPhoneAuthorizationProvider(value: unknown): 'alipay' | 'wechat' | undefined {
+  if (value === undefined || value === null || value === '') return undefined
+  return enumValue(value, '手机号授权平台', ['alipay', 'wechat'] as const)
+}
+function readPhoneAuthorization(body: Readonly<Record<string, unknown>>) {
+  const authorizationCode = text(body.phoneAuthorizationCode, '手机号授权凭证', 8, 8192)
+  const provider = optionalPhoneAuthorizationProvider(body.phoneAuthorizationProvider)
+  return provider
+    ? { authorizationCode, provider }
+    : { authorizationCode }
 }
 function stringList<const Values extends readonly string[]>(value: unknown, label: string, values: Values): Values[number][] {
   if (!Array.isArray(value) || value.length > values.length) throw new CustomerExperienceRequestError(`${label}不正确`)

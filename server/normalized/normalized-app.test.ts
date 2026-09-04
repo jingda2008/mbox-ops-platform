@@ -31,6 +31,7 @@ const config: NormalizedRuntimeConfig = {
   metricsToken: 'normalized-metrics-token-0123456789abcdef',
   payment: null,
   wechatIdentity: null,
+  alipayPhone: null,
   guestPaymentMode: 'simulation',
   inventoryEnforcementMode: 'audit_only',
   guestOrderSafetyPolicy: {

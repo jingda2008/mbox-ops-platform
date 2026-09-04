@@ -1,0 +1,23 @@
+.account-table { display: block; color: #fffdf8; font-size: 40rpx; font-weight: 700; letter-spacing: 1rpx; }
+.account-total { background: linear-gradient(145deg, #fffdf8, #f4eee4); border-color: #e5dac8; }
+.account-total__amount { display: block; margin: 8rpx 0 28rpx; color: #72522f; font-size: 60rpx; font-weight: 700; }
+.account-note { display: block; padding-top: 22rpx; border-top: 1rpx solid #e9e0d4; color: #716b63; font-size: 24rpx; line-height: 1.6; }
+.payment-boundary { margin-top: 22rpx; }
+.order-card { margin-bottom: 16rpx; }
+.order-card__head { display: flex; padding-bottom: 18rpx; align-items: flex-start; justify-content: space-between; border-bottom: 1rpx solid #eee7dc; gap: 20rpx; }
+.order-title-row { display: flex; align-items: center; flex-wrap: wrap; gap: 12rpx; }
+.pricing-badge { display: inline-flex; min-height: 40rpx; padding: 2rpx 14rpx; align-items: center; border-radius: 999rpx; background: #f5ecd4; color: #765d28; font-size: 22rpx; font-weight: 700; line-height: 1.4; }
+.pricing-badge--gift { background: #f3e4df; color: #7c4a38; }
+.order-card__amount { flex: 0 0 auto; text-align: right; }
+.order-card__amount text { display: block; }
+.order-card__amount text:last-child { margin-top: 8rpx; color: #7a746c; font-size: 22rpx; }
+.payment-line { display: flex; min-height: 88rpx; align-items: center; justify-content: space-between; border-bottom: 1rpx solid #eee7dc; gap: 18rpx; }
+.payment-line__hint { flex: 1; color: #746d64; font-size: 23rpx; line-height: 1.5; }
+.payment-line__button { width: 184rpx; min-height: 72rpx; margin: 8rpx 0; padding: 0 18rpx; border: 1rpx solid #315d46; border-radius: 999rpx; background: #315d46; color: #fff; font-size: 24rpx; font-weight: 700; line-height: 70rpx; box-shadow: 0 8rpx 20rpx rgba(49, 93, 70, .16); }
+.payment-line__button::after { border: 0; }
+@media (max-width: 390px) {
+  .order-card__head { display: block; }
+  .order-card__amount { margin-top: 14rpx; text-align: left; }
+  .payment-line { align-items: flex-start; flex-direction: column; padding: 14rpx 0; }
+  .payment-line__button { width: 100%; margin: 0; }
+}

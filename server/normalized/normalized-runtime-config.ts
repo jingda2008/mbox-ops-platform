@@ -31,6 +31,11 @@ export interface NormalizedWechatIdentityRuntimeConfig {
   encryptionKey: Buffer
 }
 
+export interface NormalizedAlipayPhoneRuntimeConfig {
+  appId: string
+  aesKey: string
+}
+
 export interface NormalizedWechatNotificationRuntimeConfig {
   serviceTemplateId: string
   policyVersion: string
@@ -58,6 +63,7 @@ export interface NormalizedRuntimeConfig {
   payment: NormalizedPaymentRuntimeConfig | null
   wechatIdentity: NormalizedWechatIdentityRuntimeConfig | null
   wechatNotification: NormalizedWechatNotificationRuntimeConfig | null
+  alipayPhone: NormalizedAlipayPhoneRuntimeConfig | null
   personalContactProtection?: NormalizedPersonalContactRuntimeConfig | null
   guestPaymentMode: GuestCheckoutPaymentMode
   inventoryEnforcementMode: 'strict' | 'audit_only'
@@ -113,6 +119,7 @@ export function loadNormalizedRuntimeConfig(
   const payment = readPayment(environment, integrations.modes.payment, errors)
   const wechatIdentity = readWechatIdentity(environment, errors)
   const wechatNotification = readWechatNotification(environment, errors)
+  const alipayPhone = readAlipayPhone(environment, errors)
   const personalContactProtection = readPersonalContactProtection(
     environment,commercialProduction,errors,
   )
@@ -209,6 +216,7 @@ export function loadNormalizedRuntimeConfig(
     payment,
     wechatIdentity,
     wechatNotification,
+    alipayPhone,
     personalContactProtection,
     guestPaymentMode,
     inventoryEnforcementMode,
@@ -294,6 +302,29 @@ function decodeContactKey(value: string | null, field: string, errors: string[])
     return null
   }
   return key
+}
+
+function readAlipayPhone(
+  environment: Readonly<Record<string, string | undefined>>,
+  errors: string[],
+): NormalizedAlipayPhoneRuntimeConfig | null {
+  const appId = optional(environment.MBOX_ALIPAY_APP_ID)
+  const aesKey = optional(environment.MBOX_ALIPAY_AES_KEY)
+  if (appId === null && aesKey === null) return null
+  const validAppId = appId !== null && /^20\d{14,18}$/.test(appId)
+  const validAesKey = aesKey !== null && isAlipayAesKey(aesKey)
+  if (!validAppId) errors.push('MBOX_ALIPAY_APP_ID')
+  if (!validAesKey) errors.push('MBOX_ALIPAY_AES_KEY')
+  if (!validAppId || !validAesKey) return null
+  return Object.freeze({ appId: appId!, aesKey: aesKey! })
+}
+
+function isAlipayAesKey(value: string): boolean {
+  const trimmed = value.trim()
+  if (Buffer.byteLength(trimmed, 'utf8') === 16) return true
+  if (/^[0-9a-fA-F]{32}$/.test(trimmed)) return true
+  const decoded = Buffer.from(trimmed, 'base64')
+  return decoded.length === 16 && decoded.toString('base64') === trimmed
 }
 
 function readWechatNotification(

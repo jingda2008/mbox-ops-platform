@@ -1,0 +1,184 @@
+<view class="page order-page">
+  <state-panel a:if="{{loading}}" type="loading" title="正在确认桌次与菜单" />
+
+  <view a:elif="{{connectionState === 'needs_scan' || connectionState === 'waiting' || connectionState === 'upgrade_required'}}" class="gate-wrap">
+    <view a:if="{{connectionState === 'waiting'}}" class="browse-intro">
+      <view class="waiting-pulse"><view></view></view>
+      <view class="browse-intro__copy">
+        <text class="gate-kicker">{{table.displayName}}</text><text class="gate-title">请联系服务人员开台</text>
+        <text class="gate-copy">{{connectionMessage}}</text>
+      </view>
+      <button class="secondary-button gate-button" onTap="retryTable">刷新开台状态</button>
+      <text class="gate-note">等待期间可以先查看今晚真实菜单</text>
+    </view>
+    <view a:elif="{{connectionState === 'upgrade_required'}}" class="browse-intro">
+      <view class="browse-intro__copy">
+        <text class="gate-kicker">{{table.displayName}}</text><text class="gate-title">本桌正在完成旧版点单</text>
+        <text class="gate-copy">{{connectionMessage}}</text>
+      </view>
+      <button class="secondary-button gate-button" onTap="retryTable">结台后重新扫码</button>
+      <text class="gate-note">你可以先查看今晚菜单</text>
+    </view>
+    <view a:else class="browse-intro">
+      <image class="gate-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX 标志" />
+      <view class="browse-intro__copy">
+        <text class="gate-kicker">M-BOX · 今晚菜单</text><text class="gate-title">先看今晚，再决定怎么喝</text>
+        <text class="gate-copy">先慢慢看；到店扫码后就能下单付款。</text>
+      </view>
+      <button class="primary-button gate-button" onTap="scanTable">到店扫码点单</button>
+      <text class="gate-note">随便看看也完全可以</text>
+    </view>
+    <view a:if="{{error}}" class="error-banner gate-error">{{error}}</view>
+
+    <view class="browse-menu">
+      <view class="browse-menu__heading"><view><text>今晚菜单</text><text>价格透明 · {{connectionState === 'waiting' ? '开台后即可下单' : '到店后即可下单'}}</text></view><text>{{visibleProducts.length}} 款</text></view>
+      <view class="menu-tools menu-tools--browse">
+        <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="category-scroll"><view class="category-row"><button a:for="{{categories}}" a:key="code" class="{{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" onTap="selectCategory">{{item.name}}</button></view></scroll-view>
+        <scroll-view a:if="{{subcategories.length}}" scroll-x enhanced show-scrollbar="{{false}}" class="category-scroll category-scroll--sub"><view class="category-row category-row--sub"><button a:for="{{subcategories}}" a:key="code" class="{{selectedSubcategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" onTap="selectSubcategory">{{item.name}}</button></view></scroll-view>
+        <view class="search-box"><text>⌕</text><input value="{{searchText}}" placeholder="搜索酒水、套餐或口味" onInput="onSearchInput" /></view>
+      </view>
+      <view a:if="{{visibleProducts.length}}" class="product-list product-list--browse">
+        <view a:for="{{visibleProducts}}" a:key="productId" class="product-row {{item.available ? '' : 'is-unavailable'}}" data-id="{{item.productId}}" role="button" aria-label="查看{{item.name}}大图和详情" hover-class="product-row--pressed" onTap="openProductDetail">
+          <view class="product-media">
+            <image a:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" />
+            <view a:else class="product-media__placeholder"><text>M-BOX</text></view>
+            <text a:if="{{item.discountVisible}}" class="product-media__saving">{{item.savingsText}}</text>
+            <text class="product-media__detail-hint">查看详情</text>
+          </view>
+          <view class="product-main"><text class="product-kind">{{item.productKind === 'bundle' ? '体验组合' : item.categoryName}}</text><text class="product-name">{{item.name}}</text><text class="product-copy">{{item.description || item.includedText || '详情以当晚正式菜单为准'}}</text><text a:if="{{item.discountVisible}}" class="product-saving">单点合计 {{item.separatePriceText}}</text></view>
+          <view class="product-action"><view class="product-action__meta"><text class="product-price">{{item.priceText}}</text><text class="product-availability {{item.available ? 'is-available' : 'is-unavailable'}}">{{item.availabilityText}}</text><text class="product-availability-copy">{{item.available ? (connectionState === 'waiting' ? '服务人员开台后可下单' : '到店扫码后可下单') : item.availabilityDetail}}</text></view></view>
+        </view>
+      </view>
+      <state-panel a:else type="empty" title="没有找到符合条件的商品" message="可清空搜索或切换分类" />
+    </view>
+  </view>
+
+  <block a:else>
+    <view a:if="{{error && !checkoutLocked}}" class="error-banner">{{error}}</view>
+    <view a:if="{{success}}" class="success-banner">{{success}}</view>
+    <view a:if="{{cartWritesFrozen}}" class="status-banner status-banner--waiting">本桌点单正在确认，当前选择已保留，稍后即可继续调整。</view>
+
+    <view class="table-strip">
+      <view class="table-strip__table"><text class="table-strip__label">本桌</text><text class="table-strip__value">{{table.displayName}}</text></view>
+      <view class="table-strip__content">
+        <view a:if="{{performance}}" class="show-brief"><text>{{performance.state}}</text><text>{{performance.name}} · {{performance.time}}</text></view>
+        <button a:elif="{{performanceError}}" class="show-brief show-brief--retry" onTap="retryPerformance"><text>演出待更新</text><text>点此重试</text></button>
+        <view a:else class="show-brief show-brief--quiet"><text>今晚现场</text><text>演出安排更新后显示</text></view>
+        <button class="table-strip__service" onTap="openStatus"><text class="table-strip__service-value">{{serviceSummary.label}}</text><text class="table-strip__service-link">查看进展 ›</text></button>
+      </view>
+    </view>
+    <view class="quick-service" aria-label="本桌快捷服务">
+      <button data-code="call" disabled="{{quickServiceBusy}}" onTap="requestQuickService"><view class="quick-service__surface"><text class="quick-service__dot"></text><text>{{quickServiceBusy === 'call' ? '正在通知' : '呼叫服务员'}}</text></view></button>
+      <button data-code="celebration" aria-label="生日或个性化需求" disabled="{{quickServiceBusy}}" onTap="requestQuickService"><view class="quick-service__surface"><text class="quick-service__dot"></text><text>{{quickServiceBusy === 'celebration' ? '正在安排' : '生日/需求'}}</text></view></button>
+      <button data-code="complaint" disabled="{{quickServiceBusy}}" onTap="requestQuickService"><view class="quick-service__surface"><text class="quick-service__dot"></text><text>{{quickServiceBusy === 'complaint' ? '正在通知' : '投诉/不满意'}}</text></view></button>
+    </view>
+
+    <view a:if="{{membershipInviteVisible}}" class="membership-invite">
+      <view class="membership-invite__copy"><text>加入 M-BOX 会员</text><text>{{membershipTerms.summary}}</text></view>
+      <view class="membership-invite__actions"><button onTap="enrollFromMenu" loading="{{membershipBusy}}">加入会员</button><button onTap="dismissMembershipInvite">稍后再说</button></view>
+      <button class="membership-invite__recovery" onTap="openMembershipRecovery">我已是会员</button>
+      <button class="membership-invite__privacy" onTap="showMembershipTerms">查看会员权益说明</button>
+    </view>
+
+    <view class="recommend-entry">
+      <view class="recommend-entry__head"><view><text>今夜甄选</text><text>先为这桌挑三款</text></view></view>
+      <scroll-view a:if="{{recommendations.length}}" scroll-x enhanced show-scrollbar="{{false}}" class="recommend-scroll"><view class="recommend-row">
+        <view a:for="{{recommendations}}" a:key="productId" class="recommend-card {{index === 0 ? 'recommend-card--priority' : ''}}">
+          <image a:if="{{item.imageUrl}}" class="recommend-card__image" src="{{item.imageUrl}}" mode="aspectFill" />
+          <view class="recommend-body"><view class="recommend-labels"><text class="recommend-tier">{{item.tierText}}</text><text a:if="{{index === 0}}" class="recommend-fit">更适合这一桌</text></view><text class="recommend-name">{{item.name}}</text><text class="recommend-reason">{{item.reason}}</text><view a:if="{{item.savingsText || item.separatePriceText}}" class="recommend-value"><text a:if="{{item.separatePriceText}}">单点约 {{item.separatePriceText}}</text><text a:if="{{item.savingsText}}" class="saving">{{item.savingsText}}</text></view><view class="recommend-foot"><text class="recommend-price">{{item.priceText}}</text><view class="recommend-actions"><button class="recommend-reject" data-id="{{item.productId}}" onTap="rejectRecommendation" loading="{{item.rejecting}}" disabled="{{item.rejecting}}">不合适</button><button class="recommend-select" data-id="{{item.productId}}" data-source="recommendation" onTap="addProduct">选这款</button></view></view></view>
+        </view>
+      </view></scroll-view>
+      <view a:elif="{{recommendationBusy}}" class="recommend-loading"><text>正在为这桌挑选</text><text>稍等片刻</text></view>
+      <view a:elif="{{recommendationEmpty}}" class="recommend-empty"><text>今夜的三款正在准备</text><text>先看看菜单，稍后再来看看</text></view>
+      <view class="recommend-entry__actions" aria-label="智能推荐">
+        <button onTap="onRecommend" loading="{{recommendationBusy}}"><view class="recommend-entry__action-icon recommend-entry__action-icon--guided"><text>✦</text></view><view><text>帮我选</text><text>三题，挑得更准</text></view></button>
+        <button class="shake-recommendation" onTap="onShakeRecommendation" loading="{{recommendationBusy}}" disabled="{{shakeArmed}}"><view class="recommend-entry__action-icon recommend-entry__action-icon--shake"><text>↻</text></view><view><text>{{shakeArmed ? '请摇动手机' : '摇一摇'}}</text><text>换一组，再看看</text></view></button>
+      </view>
+    </view>
+
+    <view a:if="{{recommendationQuestionVisible && recommendationQuestion}}" class="recommend-question sheet-mask">
+      <scroll-view scroll-y="true" class="recommend-question__sheet">
+        <button class="recommend-question__close compact-text-action" aria-label="关闭帮我选" onTap="closeRecommendationQuestions">取消</button>
+        <view class="recommend-question__head"><text>帮我选</text><text>{{recommendationQuestion.title}}</text></view>
+        <view class="recommend-question__progress"><text a:for="{{recommendationConfiguration.questions}}" a:key="code" class="{{index <= recommendationQuestionIndex ? 'is-active' : ''}}"></text></view>
+        <view class="recommend-question__options"><button a:for="{{recommendationQuestion.options}}" a:key="value" data-value="{{item.value}}" onTap="selectRecommendationAnswer">{{item.label}}</button></view>
+      </scroll-view>
+    </view>
+
+    <view class="menu-tools">
+      <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="category-scroll"><view class="category-row"><button a:for="{{categories}}" a:key="code" class="{{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" onTap="selectCategory">{{item.name}}</button></view></scroll-view>
+      <scroll-view a:if="{{subcategories.length}}" scroll-x enhanced show-scrollbar="{{false}}" class="category-scroll category-scroll--sub"><view class="category-row category-row--sub"><button a:for="{{subcategories}}" a:key="code" class="{{selectedSubcategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" onTap="selectSubcategory">{{item.name}}</button></view></scroll-view>
+      <view class="search-box"><text>⌕</text><input value="{{searchText}}" placeholder="搜索酒水、套餐或口味" onInput="onSearchInput" /></view>
+    </view>
+
+    <view class="section product-section">
+      <view class="section-title"><text>菜单</text><text a:if="{{benefitCount}}" class="section-link" onTap="openBenefits">{{benefitCount}}项权益可用</text></view>
+      <view a:if="{{visibleProducts.length}}" class="product-list">
+        <view a:for="{{visibleProducts}}" a:key="productId" class="product-row {{item.available ? '' : 'is-unavailable'}}" data-id="{{item.productId}}" role="button" aria-label="查看{{item.name}}大图和详情" hover-class="product-row--pressed" onTap="openProductDetail">
+          <view class="product-media">
+            <image a:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" />
+            <view a:else class="product-media__placeholder"><text>M-BOX</text></view>
+            <text a:if="{{item.discountVisible}}" class="product-media__saving">{{item.savingsText}}</text>
+            <text class="product-media__detail-hint">查看详情</text>
+          </view>
+          <view class="product-main"><text class="product-kind">{{item.productKind === 'bundle' ? '体验组合' : item.categoryName}}</text><text class="product-name">{{item.name}}</text><text class="product-copy">{{item.description || item.includedText || '详情以当晚正式菜单为准'}}</text><text a:if="{{item.discountVisible}}" class="product-saving">单点合计 {{item.separatePriceText}}</text></view>
+          <view class="product-action"><view class="product-action__meta"><text class="product-price">{{item.priceText}}</text><text class="product-availability {{item.available ? 'is-available' : 'is-unavailable'}}">{{item.availabilityText}}</text></view><button a:if="{{item.available}}" aria-label="添加{{item.name}}" data-id="{{item.productId}}" catchTap="addProduct">＋</button><button a:else class="product-unavailable" disabled="{{true}}">{{item.availabilityDetail}}</button></view>
+        </view>
+      </view>
+      <state-panel a:else type="empty" title="没有找到符合条件的商品" message="可清空搜索或切换分类" />
+    </view>
+    <view a:if="{{!cart.length}}" class="shared-cart-empty">
+      <text>本桌共享购物车</text><text>还没有商品；同桌每位顾客加入的商品都会在这里同步显示。</text>
+    </view>
+  </block>
+
+  <view a:if="{{detailProduct}}" class="product-detail-mask sheet-mask" onTap="closeProductDetail">
+    <view class="product-detail-sheet" catchTap="keepProductDetailOpen">
+      <button class="product-detail-close compact-icon-action" aria-label="关闭商品详情" catchTap="closeProductDetail">×</button>
+      <scroll-view scroll-y class="product-detail-scroll">
+        <view class="product-detail-hero" catchTap="previewProductImage">
+          <image a:if="{{detailProduct.imageUrl}}" src="{{detailProduct.imageUrl}}" mode="aspectFill" />
+          <view a:else class="product-detail-placeholder"><text>M-BOX</text></view>
+          <text a:if="{{detailProduct.imageUrl}}" class="product-detail-preview-hint">点击查看全屏大图</text>
+        </view>
+        <view class="product-detail-content">
+          <text class="product-detail-kind">{{detailProduct.productKind === 'bundle' ? '体验组合' : detailProduct.categoryName}}</text>
+          <text class="product-detail-name">{{detailProduct.name}}</text>
+          <text a:if="{{detailProduct.specification}}" class="product-detail-specification">规格：{{detailProduct.specification}}</text>
+          <text class="product-detail-description">{{detailProduct.description || '详情以当晚正式菜单为准'}}</text>
+          <view a:if="{{detailProduct.productKind === 'bundle' && detailProduct.bundleComponents.length}}" class="product-detail-components">
+            <text class="product-detail-section-title">组合内容</text>
+            <view a:for="{{detailProduct.bundleComponents}}" a:key="productId" class="product-detail-component"><text>{{item.name}}</text><text>× {{item.quantity}}</text></view>
+          </view>
+          <view a:if="{{detailProduct.discountVisible}}" class="product-detail-saving">
+            <view><text>单点合计</text><text>{{detailProduct.separatePriceText}}</text></view>
+            <text>{{detailProduct.savingsText}}</text>
+          </view>
+          <view class="product-detail-footer">
+            <view><text>当前售价</text><text>{{detailProduct.priceText}}</text></view>
+            <button a:if="{{connectionState === 'active' && detailProduct.available}}" data-id="{{detailProduct.productId}}" catchTap="addProduct">加入购物车</button>
+            <button a:elif="{{connectionState === 'active'}}" class="product-detail-unavailable" disabled="{{true}}">{{detailProduct.availabilityDetail}}</button>
+            <text a:else class="product-detail-browse-note">{{connectionState === 'waiting' ? '服务人员开台后可下单' : '到店扫码后可下单'}}</text>
+          </view>
+        </view>
+      </scroll-view>
+    </view>
+  </view>
+
+  <view a:if="{{connectionState === 'active' && cart.length}}" class="cart-dock">
+    <view class="cart-summary"><button class="cart-overview" aria-label="查看本桌购物车，已选{{cartCount}}件商品" hover-class="cart-overview--pressed" onTap="openCartDetails"><view class="cart-overview__mark"><view class="cart-overview__mark-icon"></view><text class="cart-overview__badge">{{cartCount}}</text></view><view class="cart-overview__copy"><text>购物车 · {{cartCount}} 件</text><text>{{cartWritesFrozen ? '当前选择已保留' : checkoutLocked ? '上次提交待确认，可继续确认或查看桌账' : cartSyncing ? '正在同步同桌选择' : '点击查看商品与金额'}}</text></view></button><button class="checkout-button" onTap="openCheckout" loading="{{busy}}" disabled="{{cartSyncing || cartWritesFrozen}}">{{checkoutLocked ? '继续确认' : '提交订单'}}</button></view>
+  </view>
+
+  <view a:if="{{checkoutConfirmVisible}}" class="checkout-confirm sheet-mask">
+    <view class="checkout-confirm__sheet"><view class="sheet-handle"></view><view class="checkout-confirm__head"><view><text class="checkout-confirm__eyebrow">本桌订单</text><text class="checkout-confirm__title">核对商品与金额</text></view><view class="checkout-confirm__close-slot"><button class="checkout-confirm__close compact-text-action" aria-label="关闭订单明细" hover-class="checkout-confirm__close--pressed" onTap="closeCheckoutConfirm" disabled="{{busy}}">关闭</button></view></view>
+      <scroll-view scroll-y class="checkout-confirm__lines"><view a:for="{{cart}}" a:key="productId" class="checkout-confirm__line"><view class="checkout-confirm__copy"><text>{{item.name}}</text><text>{{item.priceText}} × {{item.quantity}} · 小计 {{item.subtotalText}}</text><text a:if="{{!item.available}}" class="cart-line__unavailable">{{item.unavailableReason}}</text></view><view class="checkout-confirm__actions"><button class="checkout-confirm__remove" aria-label="移除{{item.name}}" data-id="{{item.productId}}" onTap="removeCartLine" disabled="{{busy || cartSyncing || cartWritesFrozen}}">移除</button><button data-id="{{item.productId}}" data-delta="-1" onTap="changeQuantity" disabled="{{busy || cartSyncing || cartWritesFrozen}}">−</button><text>{{item.quantity}}</text><button data-id="{{item.productId}}" data-delta="1" onTap="changeQuantity" disabled="{{busy || cartSyncing || cartWritesFrozen || !item.available}}">＋</button></view></view></scroll-view>
+      <view class="checkout-confirm__total"><view><text class="checkout-confirm__total-label">本次应付</text><text class="checkout-confirm__total-note">确认后调起支付宝支付</text></view><text class="checkout-confirm__total-price">{{cartTotal}}</text></view>
+      <view class="checkout-confirm__footer"><button class="checkout-confirm__footer-button secondary-button" onTap="closeCheckoutConfirm" disabled="{{busy}}">继续加购</button><button class="checkout-confirm__footer-button primary-button" onTap="confirmCheckout" loading="{{busy}}" disabled="{{busy || cartSyncing || cartWritesFrozen || checkoutLocked}}">{{checkoutLocked ? '订单确认中' : '确认支付'}}</button></view>
+    </view>
+  </view>
+
+  <view a:if="{{paymentResult}}" class="payment-result sheet-mask">
+    <view class="payment-result__sheet"><button class="payment-result__close compact-text-action" aria-label="关闭付款提示" hover-class="payment-result__close--pressed" onTap="closePaymentResult">关闭</button><view class="payment-result__mark payment-result__mark--{{paymentResult.kind}}">{{paymentResult.mark}}</view><text class="payment-result__title">{{paymentResult.title}}</text><text class="payment-result__copy">{{paymentResult.copy}}</text><view class="payment-result__actions"><button class="secondary-button" onTap="openPaymentResultAccount">查看本桌账单</button><button a:if="{{paymentResult.canRetry}}" class="primary-button" onTap="retryPaymentFromResult" loading="{{busy}}">继续付款</button><button a:else class="primary-button" onTap="closePaymentResult">完成</button></view></view>
+  </view>
+
+</view>

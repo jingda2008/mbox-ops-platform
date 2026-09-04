@@ -1,0 +1,25 @@
+<view class="page">
+  <view class="top-band song-band">
+    <view class="brand-row"><view><text class="eyebrow">{{tableCode}} · 当晚真实排班</text><text class="song-title">现场点歌</text></view></view>
+    <text class="song-subtitle">{{phaseText}}。提交的是点歌意向，舞台确认后才会安排。</text>
+  </view>
+  <state-panel a:if="{{loading}}" type="loading" title="正在读取当晚排班" />
+  <block a:else>
+    <view a:if="{{error}}" class="error-banner">{{error}}</view>
+    <view a:if="{{success}}" class="success-banner">{{success}}</view>
+    <view a:if="{{schedules.length}}" class="panel song-form">
+      <label class="field">
+        <text class="field__label">希望哪一场安排</text>
+        <picker mode="selector" range="{{schedules}}" range-key="performerStageName" value="{{scheduleIndex}}" onChange="onScheduleChange">
+          <view class="picker-field"><view><text>{{schedules[scheduleIndex].performerStageName}}</text><text>{{schedules[scheduleIndex].statusText}} · {{schedules[scheduleIndex].timeText}}</text></view><text>选择</text></view>
+        </picker>
+      </label>
+      <label class="field"><text class="field__label">想听的歌</text><input class="field__input" maxlength="200" value="{{songTitle}}" placeholder="输入歌曲名称" onInput="onSongInput" /></label>
+      <label class="field"><text class="field__label">祝福语或说明（选填）</text><textarea class="field__textarea" maxlength="300" value="{{note}}" placeholder="例如生日祝福、纪念日；不要填写敏感隐私" onInput="onNoteInput" /></label>
+      <label class="extension-row"><switch checked="{{requestExtension}}" onChange="onExtensionChange" color="#9a7130" /><view><text>场次时间不足时，允许工作人员沟通延长方案</text><text>只表达意愿，不代表加时或收费已经确认</text></view></label>
+      <button class="primary-button" disabled="{{submitting}}" onTap="submitIntent">{{submitting ? '正在提交' : '提交点歌意向'}}</button>
+    </view>
+    <state-panel a:else type="empty" title="当前没有可选演出场次" message="排班未发布或今晚演出已经结束" />
+    <view class="warning payment-boundary">本页不收取或模拟点歌费用。是否能唱、是否收费及金额，必须由舞台和现场人员确认。</view>
+  </block>
+</view>

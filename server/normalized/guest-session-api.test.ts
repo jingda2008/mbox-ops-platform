@@ -109,6 +109,7 @@ describe('guestSessionApiPlugin', () => {
       data: {
         status: 'active',
         message: '已经找到您的桌位，今晚由我们继续照顾您。',
+        sessionToken,
         table: { code: 'VIP1', displayName: 'VIP 1' },
         businessDate: '2026-08-11',
         expiresAt: '2026-08-11T13:00:00.000Z',
@@ -123,7 +124,6 @@ describe('guestSessionApiPlugin', () => {
     expect(serialized).not.toContain(customerId)
     expect(serialized).not.toContain(tableSessionId)
     expect(serialized).not.toContain(guestSessionId)
-    expect(serialized).not.toContain(sessionToken)
     expect(serialized).not.toMatch(/[0-9a-f]{64}/)
     expect(value.scanTable).toHaveBeenCalledWith({
       scope: { tenantId, storeId },

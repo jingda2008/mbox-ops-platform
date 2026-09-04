@@ -1,0 +1,18 @@
+<view class="page story-article-page">
+  <scroll-view class="story-article-scroll" scroll-y>
+    <view class="story-article">
+      <text class="story-article__eyebrow">M-BOX · SINCE 1999</text>
+      <text class="story-article__title">从1999开始，<text style="display:block"></text>品味上海的现场</text>
+      <text class="story-article__lead">一座仍在演出的城市档案</text>
+
+      <view a:for="{{sections}}" a:key="heading" class="story-article__section">
+        <text class="story-article__heading">{{item.heading}}</text>
+        <text a:for="{{item.paragraphs}}" a:for-item="paragraph" a:key="*this" class="story-article__paragraph">{{paragraph}}</text>
+      </view>
+
+      <view class="story-article__signoff"><text>M-BOX Livehouse</text><text>Live with heart. Drink with love.</text></view>
+      <text class="story-article__note">文中历史活动仅依据公开报道概述；长期展示的演出档案将在核验来源与取得必要授权后持续补充。</text>
+      <button class="story-article__close" onTap="closeArticle">关闭文章</button>
+    </view>
+  </scroll-view>
+</view>

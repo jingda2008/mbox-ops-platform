@@ -1,0 +1,89 @@
+<view class="page reservations-page">
+  <view class="reservation-head"><view class="brand-row"><view><text class="eyebrow">M-BOX · 到店预约</text><text class="reservation-title">预约到店</text></view></view><text class="reservation-copy">分三步完成，只在最后确认联系信息与费用规则。</text></view>
+  <state-panel a:if="{{loading}}" type="loading" title="正在读取本人预约" />
+  <block a:else>
+    <view a:if="{{error}}" class="error-banner">{{error}}</view><view a:if="{{success}}" class="success-banner">{{success}}</view>
+
+    <view a:if="{{reservations.length}}" class="section reservation-history">
+      <view class="section-title"><text>我的预约</text><button a:if="{{!showForm}}" onTap="startNewReservation">＋ 新预约</button></view>
+      <view a:if="{{impactsError}}" class="impact-load-error"><text>{{impactsError}}</text><button onTap="retryImpacts">重试</button></view>
+      <view a:if="{{impactNotice}}" class="impact-global-notice" role="status">{{impactNotice}}</view>
+      <view a:if="{{notificationNotice}}" class="impact-global-notice" role="status">{{notificationNotice}}</view>
+      <view class="reservation-list"><view a:for="{{reservations}}" a:key="publicId" class="reservation-record">
+        <view class="reservation-card {{item.active ? 'is-active' : ''}}"><view><text class="reservation-date">{{item.scheduledAtText}} · {{item.partySize}}人</text><text class="reservation-meta">{{item.seatName}}{{item.note ? ' · ' + item.note : ''}}</text><text a:if="{{item.priorityText}}" class="reservation-priority">{{item.priorityText}}</text></view><view class="reservation-card__side"><text class="reservation-status">{{item.statusText}}</text><button a:if="{{item.canCancel}}" class="reservation-cancel" data-id="{{item.publicId}}" loading="{{cancelBusyId === item.publicId}}" disabled="{{cancelBusyId}}" onTap="cancelReservation">取消预约</button></view></view>
+        <view a:if="{{item.performanceImpact}}" class="performance-impact-card">
+          <view class="performance-impact-head"><view><text class="performance-impact-kicker">需要您确认</text><text class="performance-impact-title">{{item.performanceImpact.title}}</text></view><text class="performance-impact-status">预约仍有效</text></view>
+          <view class="performance-impact-change"><text>{{item.performanceImpact.previousText}}</text><text a:if="{{item.performanceImpact.resultingText}}">调整为 {{item.performanceImpact.resultingText}}</text><text a:else>本次调整后不再指定该演出</text></view>
+          <text class="performance-impact-reason">原因：{{item.performanceImpact.revision.reason}}</text>
+          <text class="performance-impact-note">演出偏好不代表预留座位或场次；无论怎样选择，到店预约都会保留。</text>
+          <view class="performance-impact-actions">
+            <button class="impact-primary" loading="{{impactBusyId === item.performanceImpact.publicId}}" disabled="{{impactBusyId}}" data-impact="{{item.performanceImpact.publicId}}" data-decision="keep" onTap="acknowledgeImpact">{{item.performanceImpact.acceptLabel}}</button>
+            <button a:if="{{item.performanceImpact.eligibleSchedules.length}}" disabled="{{impactBusyId}}" data-impact="{{item.performanceImpact.publicId}}" onTap="toggleImpactSchedules">{{expandedImpactId === item.performanceImpact.publicId ? '收起其他演出' : '改选演出'}}</button>
+            <button disabled="{{impactBusyId}}" data-impact="{{item.performanceImpact.publicId}}" data-decision="clear" onTap="acknowledgeImpact">不指定演出</button>
+          </view>
+          <view a:if="{{expandedImpactId === item.performanceImpact.publicId}}" class="performance-impact-options">
+            <button a:for="{{item.performanceImpact.eligibleSchedules}}" a:for-item="show" a:key="id" disabled="{{impactBusyId}}" data-impact="{{item.performanceImpact.publicId}}" data-decision="reselect" data-schedule="{{show.id}}" onTap="acknowledgeImpact"><text>{{show.performerStageName}}</text><text>{{show.timeText}}</text></button>
+          </view>
+        </view>
+        <view a:if="{{item.performanceNotificationOption}}" class="reservation-notification-row">
+          <text a:if="{{item.performanceNotificationOption.usesRemaining > 0}}">本次预约的演出变更提醒已申请</text>
+          <block a:else><text>需要时，可只为这次预约申请一次演出变更提醒</text><button loading="{{notificationBusyId === item.publicId}}" disabled="{{notificationBusyId}}" data-reservation="{{item.publicId}}" onTap="enablePerformanceNotification">{{item.performanceNotificationOption.decision === 'granted' ? '再次开启' : '开启提醒'}}</button></block>
+        </view>
+      </view></view>
+    </view>
+
+    <view a:if="{{showForm}}" class="booking-flow">
+      <view class="step-head"><view class="step-progress"><view class="{{step >= 1 ? 'is-active' : ''}}"><text>1</text><text>时间人数</text></view><view class="step-line {{step >= 2 ? 'is-active' : ''}}"></view><view class="{{step >= 2 ? 'is-active' : ''}}"><text>2</text><text>演出位置</text></view><view class="step-line {{step >= 3 ? 'is-active' : ''}}"></view><view class="{{step >= 3 ? 'is-active' : ''}}"><text>3</text><text>确认提交</text></view></view></view>
+
+      <view a:if="{{step === 1}}" class="flow-panel">
+        <text class="flow-kicker">第一步</text><text class="flow-title">什么时候来，几位？</text>
+        <view class="field-row"><label class="field"><text class="field__label">日期</text><picker mode="date" value="{{reservationDate}}" start="{{minimumDate}}" onChange="onDateChange"><view class="picker-field">{{reservationDate}}</view></picker></label><label class="field"><text class="field__label">时间</text><picker mode="time" value="{{reservationTime}}" onChange="onTimeChange"><view class="picker-field">{{reservationTime}}</view></picker></label></view>
+        <label class="field"><text class="field__label">到店人数</text><input class="field__input" type="number" value="{{partySize}}" onInput="onPartySizeInput" onBlur="onPartySizeConfirm" /></label>
+        <view class="availability {{availability && availability.acceptingReservations ? 'is-available' : ''}}"><text>{{checking ? '正在确认容量…' : availabilityText}}</text><text a:if="{{depositText}}">{{depositText}}</text></view>
+      </view>
+
+      <view a:elif="{{step === 2}}" class="flow-panel flow-panel--experience">
+        <text class="flow-kicker">第二步</text><text class="flow-title">演出与位置偏好</text>
+        <view class="show-selection show-selection--mini">
+          <view class="field-title"><text>今晚演出提醒</text><text>可选 · 点选即可</text></view>
+          <state-panel a:if="{{loadingShows}}" type="loading" title="读取演出" />
+          <scroll-view a:elif="{{performances.length}}" scroll-x enhanced show-scrollbar="{{false}}">
+            <view class="show-row show-row--mini">
+              <button a:for="{{performances}}" a:key="id" class="show-chip {{selectedPerformanceId === item.id ? 'is-selected' : ''}}" data-id="{{item.id}}" onTap="selectPerformance">
+                <text>{{item.name}}</text><text>{{item.timeText}}</text>
+              </button>
+            </view>
+          </scroll-view>
+          <text a:else class="empty-inline">这天暂未发布演出，可直接选位置。</text>
+        </view>
+        <label class="field choice-picker">
+          <text class="field__label">更想坐在哪里？ <text>下拉选择</text></text>
+          <picker mode="selector" range="{{seatOptions}}" range-key="name" value="{{seatIndex}}" onChange="onSeatChange">
+            <view class="picker-field picker-field--select">{{seatOptions[seatIndex].name}} · 点击展开</view>
+          </picker>
+        </label>
+        <label class="field choice-picker">
+          <text class="field__label">这次想怎样相聚？ <text>下拉选择</text></text>
+          <picker mode="selector" range="{{occasionOptions}}" range-key="name" value="{{occasionIndex}}" onChange="onOccasionChange">
+            <view class="picker-field picker-field--select">{{occasionOptions[occasionIndex].name}} · 点击展开</view>
+          </picker>
+        </label>
+        <label class="field reservation-note reservation-note--compact">
+          <text class="field__label">备注 <text>选填</text></text>
+          <input class="field__input" maxlength="80" value="{{occasionNote}}" placeholder="如生日称呼、希望安静" onInput="onNoteInput" />
+        </label>
+      </view>
+
+      <view a:else class="flow-panel">
+        <text class="flow-kicker">第三步</text><text class="flow-title">最后核对</text>
+        <view class="booking-summary"><view><text>到店</text><text>{{reservationDate}} {{reservationTime}} · {{partySize}}人</text></view><view><text>位置</text><text>{{seatOptions[seatIndex].name}}</text></view><view><text>场景</text><text>{{occasionOptions[occasionIndex].name}}</text></view><view a:if="{{selectedPerformance}}"><text>演出</text><text>{{selectedPerformance.name}} · {{selectedPerformance.timeText}}</text></view></view>
+        <label class="field"><text class="field__label">预约称呼</text><input class="field__input" maxlength="100" value="{{customerName}}" placeholder="如：林女士" onInput="onNameInput" /></label>
+        <label class="field"><text class="field__label">手机号或微信</text><input class="field__input" maxlength="100" value="{{contact}}" placeholder="仅用于本次预约联系" onInput="onContactInput" /></label>
+        <view class="rule-confirm"><text>预约与费用规则</text><text>{{depositText}}</text><text>具体桌位由门店结合人数、位置倾向和现场情况确认；提交不代表锁定某张桌。</text></view>
+      </view>
+
+      <view class="flow-actions"><button a:if="{{step > 1}}" class="secondary-button" onTap="previousStep">上一步</button><button a:if="{{step < 3}}" class="primary-button" disabled="{{checking}}" onTap="nextStep">下一步</button><button a:else class="primary-button" loading="{{submitting}}" disabled="{{submitting}}" onTap="submitReservation">确认提交</button></view>
+      <button a:if="{{reservations.length}}" class="close-flow" onTap="closeForm">暂不新建预约</button>
+    </view>
+  </block>
+</view>

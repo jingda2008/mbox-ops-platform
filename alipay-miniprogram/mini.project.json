@@ -1,0 +1,13 @@
+{
+  "format": 2,
+  "compileType": "mini",
+  "miniprogramRoot": "./",
+  "appid": "2021006196615276",
+  "compileOptions": {
+    "component2": true,
+    "treeShaking": true
+  },
+  "developOptions": {
+    "hotReload": true
+  }
+}

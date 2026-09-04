@@ -1,0 +1,61 @@
+const runtime = require('../../utils/platform')
+const { enablePublicShareMenu, publicSharePayload, publicTimelinePayload } = require('../../utils/public-share')
+
+const SECTIONS = Object.freeze([
+  {
+    heading: '一座仍在演出的城市档案',
+    paragraphs: [
+      '1999 年，M-BOX 开始做现场音乐。作为上海较早一批以现场演出为核心的音乐酒吧之一，它留下的不只是营业年限，更是一座城市在不同年代如何听歌、相聚、举杯与告别的切片。',
+      '二十多年过去，上海换了许多街区、舞台和夜晚的打开方式；但一段真正被人记住的现场，会留在一首被点过的歌里，也会留在演出结束后还不愿离开的那桌人里。',
+    ],
+  },
+  {
+    heading: '1999 是起点，不是被封存的年份',
+    paragraphs: [
+      'M-BOX 的价值，不是把“老”做成一个标签。它是一份仍在继续的现场档案：每一场演出、每一张节目单、每一次合唱，都是这份档案的新一页。',
+      '公开报道记载：王力宏、羽泉与五月天曾分别在这里举办歌迷见面、签售或小型演出。它们不是为了替代 M-BOX 的故事，而是这间音乐酒吧确实参与过上海现场音乐记忆的片段。',
+    ],
+  },
+  {
+    heading: '品味上海，也回到自己',
+    paragraphs: [
+      '所谓“品味上海”，不只是看一眼天际线。它也意味着热闹但不喧哗，讲究但不摆姿态，人与人可以靠近，也可以各自保有空间。',
+      '今天，M-BOX 在陆家嘴的夜色里继续演出。有人从办公室出来，有人带着一场约会，有人与久别的朋友相聚，也有人一个人来听歌。音乐让人短暂地回到自己。',
+    ],
+  },
+  {
+    heading: '把今晚留进故事里',
+    paragraphs: [
+      '我们希望被留下的，不是一面没有内容的背景墙，而是一条可追溯的现场记忆：真实的演出日期、歌单、票券、照片和观众文字，在取得必要授权后被持续整理。',
+      '下一次，不必等一个特别的理由。来 M-BOX 坐坐，把这一晚留给音乐，也把你的这一晚留进上海的现场故事里。',
+    ],
+  },
+])
+
+Page({
+  data: { sections: SECTIONS },
+
+  onShow() { enablePublicShareMenu() },
+
+  onShareAppMessage() {
+    return publicSharePayload({
+      title: 'M-BOX 故事 · 从1999开始，品味上海的现场',
+      path: '/pages/brand-story/index',
+    })
+  },
+
+  onShareTimeline() {
+    return publicTimelinePayload({
+      title: 'M-BOX 故事 · 从1999开始，品味上海的现场',
+      path: '/pages/brand-story/index',
+    })
+  },
+
+  closeArticle() {
+    if (getCurrentPages().length > 1) {
+      runtime.navigateBack()
+      return
+    }
+    runtime.switchTab({ url: '/pages/home/index' })
+  },
+})

@@ -54,6 +54,22 @@ describe('official WeChat phone authorization provider', () => {
     expect(request).toHaveBeenCalledTimes(3)
   })
 
+  it('does not send Alipay ciphertext to WeChat', async () => {
+    const request = vi.fn()
+    const provider = new OfficialWechatPhoneAuthorizationProvider({
+      appId: 'wxMboxRecovery01', appSecret: 'test-secret-not-production', fetch: request,
+      now: () => now,
+    })
+    await expect(provider.verify({
+      authorizationCode: JSON.stringify({ response: 'alipay-encrypted-phone-payload' }),
+      customerId,
+    })).rejects.toMatchObject({ code: 'ALIPAY_PHONE_AUTHORIZATION_INVALID', statusCode: 400 })
+    await expect(provider.verify({
+      authorizationCode: 'short-code', customerId, provider: 'alipay',
+    })).rejects.toMatchObject({ code: 'ALIPAY_PHONE_AUTHORIZATION_INVALID', statusCode: 400 })
+    expect(request).not.toHaveBeenCalled()
+  })
+
   it('fails closed on provider timeout or malformed phone data', async () => {
     const unavailable = new OfficialWechatPhoneAuthorizationProvider({
       appId: 'wxMboxRecovery01', appSecret: 'test-secret-not-production',

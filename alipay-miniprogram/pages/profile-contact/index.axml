@@ -1,0 +1,21 @@
+<view class="page profile-contact-page">
+  <view class="contact-hero">
+    <text>M-BOX · 联系我们</text>
+    <text>联系我们</text>
+    <text>可直接拨打预约电话；如页面提供二维码，也可保存后用企业微信扫码。</text>
+  </view>
+  <state-panel a:if="{{loading}}" type="loading" title="正在读取联系信息" />
+  <block a:else>
+    <view a:if="{{error}}" class="error-banner">{{error}}</view>
+    <view class="contact-actions">
+      <button class="contact-action" onTap="callStore" hover-class="contact-action--hover">拨打预约电话</button>
+      <button class="contact-action" onTap="openCustomerService" hover-class="contact-action--hover">支付宝暂不支持直达企业微信</button>
+    </view>
+    <text class="contact-phone-hint">预约电话 {{contact.phone}}</text>
+    <view a:if="{{contact.wecomQrImageUrl}}" class="wecom-card">
+      <image src="{{contact.wecomQrImageUrl}}" mode="aspectFit" onTap="previewWecomQr" />
+      <view><text>{{contact.wecomName}}</text><text>点二维码可放大保存，再用企业微信扫码添加好友。</text></view>
+    </view>
+    <text class="contact-boundary">支付宝内不会伪装成已打开客服；请拨打电话或使用页面二维码。</text>
+  </block>
+</view>

@@ -7,6 +7,7 @@ import type { StoreScope } from './transaction-runner.js'
 
 export const GUEST_SESSION_COOKIE = '__Host-mbox_guest_session'
 export const GUEST_DEVICE_HEADER = 'x-mbox-guest-device'
+export const GUEST_SESSION_HEADER = 'x-mbox-guest-session'
 
 export interface TrustedGuestStoreScopeResolver {
   resolve(request: FastifyRequest): Promise<Readonly<StoreScope>> | Readonly<StoreScope>
@@ -126,11 +127,13 @@ export function requireGuestCapability(
 
 export function readGuestSessionToken(request: FastifyRequest): string {
   const bearer = readBearer(request.headers.authorization)
+  const headerToken = readOpaqueHeader(request.headers[GUEST_SESSION_HEADER])
   const cookie = readCookie(request.headers.cookie, GUEST_SESSION_COOKIE)
-  if (bearer !== null && cookie !== null && bearer !== cookie) {
+  const present = [bearer, headerToken, cookie].filter((value): value is string => value !== null)
+  if (new Set(present).size > 1) {
     throw new GuestAuthenticationRequiredError('访客凭证不一致，请重新扫描桌面二维码')
   }
-  const token = bearer ?? cookie
+  const token = bearer ?? headerToken ?? cookie
   if (token === null || !/^[A-Za-z0-9_-]{32,256}$/.test(token)) {
     throw new GuestAuthenticationRequiredError()
   }
@@ -142,6 +145,23 @@ function readBearer(authorization: string | undefined): string | null {
   const match = /^Bearer ([A-Za-z0-9_-]+)$/.exec(authorization)
   if (!match?.[1]) throw new GuestAuthenticationRequiredError('访客凭证格式无效')
   return match[1]
+}
+
+function readOpaqueHeader(value: string | string[] | undefined): string | null {
+  if (value === undefined) return null
+  if (Array.isArray(value)) {
+    if (value.length === 0) return null
+    if (value.length > 1) {
+      throw new GuestAuthenticationRequiredError('访客凭证重复，请重新扫描桌面二维码')
+    }
+    return readOpaqueHeader(value[0])
+  }
+  const token = value.trim()
+  if (!token) return null
+  if (!/^[A-Za-z0-9_-]{32,256}$/.test(token)) {
+    throw new GuestAuthenticationRequiredError('访客凭证格式无效')
+  }
+  return token
 }
 
 function readCookie(header: string | undefined, name: string): string | null {

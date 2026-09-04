@@ -1,0 +1,57 @@
+.points-page { padding-top: 0; }
+.points-head {
+  margin: 0 -28rpx 26rpx;
+  padding: 38rpx 28rpx 42rpx;
+  background:
+    radial-gradient(circle at 90% 5%, rgba(198, 163, 105, 0.26), transparent 34%),
+    linear-gradient(145deg, #0d1712, #234031 66%, #101512);
+  color: #fff;
+}
+.points-head text { display: block; }
+.points-title { margin-top: 28rpx; font-family: "Songti SC", "STSong", serif; font-size: 46rpx; font-weight: 600; }
+.points-copy { margin-top: 12rpx; color: #d2cec8; font-size: 23rpx; line-height: 1.55; }
+.balance-card { display: grid; grid-template-columns: 1fr 1fr; gap: 16rpx; padding: 26rpx; border-radius: 22rpx; background: linear-gradient(145deg, #1a2f24, #315d46); color: #fff; }
+.balance-card view text { display: block; }
+.balance-card view text:first-child { color: #e0c18e; font-size: 44rpx; font-weight: 650; }
+.balance-card view text:last-child { margin-top: 6rpx; color: #c5d4cb; font-size: 21rpx; }
+.balance-card > text { grid-column: 1 / -1; padding-top: 16rpx; border-top: 1rpx solid rgba(255,255,255,.12); color: #e5d2aa; font-size: 21rpx; }
+.balance-card > text.balance-debt { margin-top: -8rpx; padding: 0; border: 0; color: #f0c9bd; line-height: 1.5; }
+.progress-card { margin-top: 20rpx; padding: 22rpx; border: 1rpx solid #e4ddd2; border-radius: 20rpx; background: #fffaf3; }
+.progress-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16rpx; }
+.progress-head text:first-child { color: #2e2924; font-size: 25rpx; font-weight: 650; }
+.progress-head text:last-child { color: #91877d; font-size: 19rpx; }
+.progress-row { display: grid; grid-template-columns: 14rpx minmax(0, 1fr); gap: 14rpx; padding-top: 18rpx; }
+.progress-marker { width: 12rpx; height: 12rpx; margin-top: 9rpx; border-radius: 50%; background: #b4aaa0; }
+.progress-marker.is-active { background: #9a6b42; box-shadow: 0 0 0 7rpx rgba(154,107,66,.12); }
+.progress-row text { display: block; overflow-wrap: anywhere; }
+.progress-row text:first-child { color: #342e29; font-size: 23rpx; font-weight: 650; }
+.progress-row text:nth-child(2) { margin-top: 5rpx; color: #6f675e; font-size: 21rpx; line-height: 1.5; }
+.progress-row text:last-child { margin-top: 5rpx; color: #9b9288; font-size: 19rpx; }
+.ledger-tabs { display: grid; margin-top: 24rpx; padding: 6rpx; grid-template-columns: 1fr 1fr; border-radius: 18rpx; background: #ebe6de; }
+.ledger-tabs button { min-height: 88rpx; margin: 0; border-radius: 14rpx; background: transparent; color: #6c645b; font-size: 24rpx; line-height: 88rpx; }
+.ledger-tabs button::after { border: 0; }
+.ledger-tabs button.is-active { background: #fff; color: #211e1a; box-shadow: 0 4rpx 14rpx rgba(36,29,22,.08); }
+.ledger-list { display: grid; gap: 14rpx; margin-top: 18rpx; }
+.ledger-row { display: flex; min-height: 108rpx; padding: 20rpx 22rpx; align-items: center; justify-content: space-between; gap: 16rpx; border: 1rpx solid #ebe5dc; border-radius: 18rpx; background: #fffdfa; }
+.ledger-row > view { min-width: 0; }
+.ledger-row > view:first-child { flex: 1; }
+.ledger-row text { display: block; }
+.ledger-row > view:first-child text:first-child { color: #27231f; font-size: 25rpx; font-weight: 650; }
+.ledger-row > view:first-child text:nth-child(2) { margin-top: 5rpx; color: #6f675e; font-size: 21rpx; line-height: 1.4; }
+.ledger-row > view:first-child text:nth-child(n+3) { margin-top: 5rpx; color: #9b9288; font-size: 19rpx; overflow-wrap: anywhere; }
+.ledger-row > view:first-child text:last-child, .ledger-row > view:last-child text:last-child { margin-top: 5rpx; color: #9b9288; font-size: 19rpx; }
+.ledger-row > view:last-child { flex: 0 0 auto; text-align: right; }
+.ledger-row > view:last-child text:first-child { font-size: 28rpx; font-weight: 700; }
+.positive { color: #52715b; }
+.negative { color: #994e41; }
+.ledger-note, .empty-member { margin-top: 24rpx; padding: 22rpx; border-radius: 18rpx; background: #f1ece5; color: #625b53; }
+.ledger-note text, .empty-member text { display: block; font-size: 22rpx; line-height: 1.6; }
+.ledger-note text:first-child { margin-bottom: 7rpx; color: #2e2924; font-weight: 650; }
+.empty-member button, .error-banner button { min-height: 88rpx; margin-top: 18rpx; font-size: 23rpx; }
+@media (max-width: 390px) {
+  .points-head { margin-right: -22rpx; margin-left: -22rpx; padding-right: 22rpx; padding-bottom: 34rpx; padding-left: 22rpx; }
+  .points-title { font-size: 40rpx; }
+  .ledger-row { align-items: flex-start; }
+  .progress-head { align-items: flex-start; }
+}
+@media (max-width: 360px) { .points-head { margin-right: -18rpx; margin-left: -18rpx; padding-right: 18rpx; padding-left: 18rpx; } }

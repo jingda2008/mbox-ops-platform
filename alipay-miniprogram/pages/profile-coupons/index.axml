@@ -1,0 +1,19 @@
+<view class="page coupons-page">
+  <view class="coupons-hero"><text>M-BOX · 优惠券</text><text>我的优惠券</text><text>门店发放的券与可用权益都在这里。</text></view>
+  <state-panel a:if="{{loading}}" type="loading" title="正在读取优惠券" />
+  <block a:else>
+    <view a:if="{{error}}" class="error-banner">{{error}}</view>
+    <view a:if="{{coupons.length}}" class="coupon-list">
+      <view a:for="{{coupons}}" a:key="id" class="coupon-card">
+        <view class="coupon-card__head"><text>{{item.typeText}}</text><text>{{item.quantityText}}</text></view>
+        <text class="coupon-title">{{item.title}}</text>
+        <text class="coupon-copy">{{item.description}}</text>
+        <view class="coupon-foot">
+          <text a:if="{{item.valueText}}">{{item.valueText}}</text>
+          <text>有效至 {{item.validText}}</text>
+        </view>
+      </view>
+    </view>
+    <state-panel a:else type="empty" title="暂无可用优惠券" message="门店发放后会出现在这里；也可在会员卡查看权益。" />
+  </block>
+</view>

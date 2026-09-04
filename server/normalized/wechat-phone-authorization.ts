@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto'
+import { looksLikeAlipayPhonePayload } from './alipay-phone-authorization.js'
 import { CustomerExperienceRequestError } from './customer-experience-repository.js'
 import type {
   MembershipRecoveryPhoneAuthorizationPort,
+  MiniProgramPhoneAuthorizationProvider,
   VerifiedRecoveryPhoneAuthorization,
 } from './membership-recovery-service.js'
 
@@ -53,8 +55,16 @@ implements MembershipRecoveryPhoneAuthorizationPort {
   async verify(input: Readonly<{
     authorizationCode: string
     customerId: string
+    provider?: MiniProgramPhoneAuthorizationProvider
   }>): Promise<VerifiedRecoveryPhoneAuthorization> {
     const code = input.authorizationCode.trim()
+    if (input.provider === 'alipay' || looksLikeAlipayPhonePayload(code)) {
+      throw new CustomerExperienceRequestError(
+        '支付宝手机号授权不能按微信凭证校验',
+        'ALIPAY_PHONE_AUTHORIZATION_INVALID',
+        400,
+      )
+    }
     if (code.length < 8 || code.length > 512) throw invalidAuthorization()
     if (!/^[0-9a-f-]{36}$/i.test(input.customerId)) throw invalidAuthorization()
     const accessToken = await this.accessToken()

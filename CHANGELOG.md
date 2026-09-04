@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.0-rc.170 - 2026-09-04
+
+- Adds Alipay AES phone-number authorization routing for membership enroll,
+  recovery and verified-phone replace, including explicit provider selection and
+  refusal of Alipay ciphertext on the WeChat adapter.
+- Returns reservation/guest `sessionToken` in JSON and accepts
+  `x-mbox-reservation-session` / `x-mbox-guest-session` so Alipay clients can
+  authenticate without readable HttpOnly cookies.
+- Allowlists `MBOX_ALIPAY_APP_ID` / `MBOX_ALIPAY_AES_KEY` in runtime config and
+  Aliyun env normalization; surfaces open-platform `40001` config gaps clearly.
+- Adds the native `alipay-miniprogram/` customer client and parity gate while
+  keeping Alipay self-checkout payment force-disabled until `tradeNO` exists.
+
 ## 1.0.0-rc.169 - 2026-09-03
 
 - Decouples passive payment-status and cashier-workbench reads from external

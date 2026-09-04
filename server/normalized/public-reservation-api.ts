@@ -229,6 +229,10 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
     return reply.code(execution.replayed ? 200 : 201).send({
       data: {
         status: 'active',
+        // Mini-program runtimes (especially Alipay) often cannot read HttpOnly
+        // Set-Cookie. Returning the opaque token lets clients persist it and
+        // send it back via Cookie or x-mbox-reservation-session.
+        sessionToken: execution.value.sessionToken,
         expiresAt: execution.value.session.expiresAt,
         capabilities: execution.value.session.scopes,
       },

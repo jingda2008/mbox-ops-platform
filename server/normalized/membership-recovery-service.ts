@@ -17,10 +17,13 @@ export interface VerifiedRecoveryPhoneAuthorization {
   verifiedAt: string
 }
 
+export type MiniProgramPhoneAuthorizationProvider = 'alipay' | 'wechat'
+
 export interface MembershipRecoveryPhoneAuthorizationPort {
   verify(input: Readonly<{
     authorizationCode: string
     customerId: string
+    provider?: MiniProgramPhoneAuthorizationProvider
   }>): Promise<VerifiedRecoveryPhoneAuthorization>
 }
 

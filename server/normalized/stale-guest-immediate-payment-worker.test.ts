@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  STALE_GUEST_IMMEDIATE_PAYMENT_DEFERRED_RETRY_SECONDS,
   STALE_GUEST_IMMEDIATE_PAYMENT_MIN_AGE_SECONDS,
   StaleGuestImmediatePaymentWorker,
 } from './stale-guest-immediate-payment-worker.js'
-import { OnlinePaymentUnavailableError } from './online-payment-service.js'
+import { OnlinePaymentUnavailableError, OnlinePaymentUnknownError } from './online-payment-service.js'
 
 const scope = { tenantId: 'tenant', storeId: 'store' }
 const businessDate = '2026-08-29'
@@ -129,5 +130,33 @@ describe('stale guest immediate payment worker', () => {
     expect(abandonUnresolved).toHaveBeenCalledWith(expect.objectContaining({ paymentId: 'payment-old' }))
     expect(result.deferredPaymentIds).toEqual(['payment-fresh'])
     expect(result.unresolvedAbandonedPaymentIds).toEqual(['payment-old'])
+  })
+
+  it('backs off an abandoned unknown payment without failing readiness or repeatedly querying the channel', async () => {
+    let now = Date.parse('2026-08-29T06:00:00.000Z')
+    const closeSystem = vi.fn(async () => { throw new OnlinePaymentUnknownError() })
+    const worker = new StaleGuestImmediatePaymentWorker({
+      onlinePayments: {
+        listStaleGuestImmediateCheckoutPaymentCandidates: vi.fn(async () => [{
+          id: 'payment-abandoned', createdAt: '2026-08-29T05:00:00.000Z', operationallyAbandoned: true,
+        }]),
+        closeSystem,
+      } as never,
+      payments: { recordProviderQueryResult: vi.fn() } as never,
+      reconciliation: { commitTerminal: vi.fn(), abandonUnresolved: vi.fn() } as never,
+    })
+
+    const first = await worker.runBatch(scope, 'worker-test', businessDate, { now: () => now })
+    now += 30_000
+    const second = await worker.runBatch(scope, 'worker-test', businessDate, { now: () => now })
+    now += STALE_GUEST_IMMEDIATE_PAYMENT_DEFERRED_RETRY_SECONDS * 1_000
+    const third = await worker.runBatch(scope, 'worker-test', businessDate, { now: () => now })
+
+    expect(first.failedPaymentIds).toEqual([])
+    expect(second.failedPaymentIds).toEqual([])
+    expect(third.failedPaymentIds).toEqual([])
+    expect(first.deferredPaymentIds).toEqual(['payment-abandoned'])
+    expect(second.deferredPaymentIds).toEqual(['payment-abandoned'])
+    expect(closeSystem).toHaveBeenCalledTimes(2)
   })
 })

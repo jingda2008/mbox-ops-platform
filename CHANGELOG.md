@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.0-rc.175 - 2026-09-07
+
+- Keeps the provider-close binding and normalized payment idempotency key below
+  the audited 128-character limit even when the production coordinator appends
+  its full task name to the worker identifier.
+- Retains payment UUID plus a fresh UUID in the close binding, preserving
+  per-attempt uniqueness and the strict one-observation/one-command financial
+  authority without including an unbounded worker label.
+- Stops provider-confirmed failed guest payments from rolling back before the
+  observation can be consumed, so abandoned orders become unpaid and do not
+  re-enter fulfilment while physical table sessions remain staff-controlled.
+- Adds a regression using the production-length worker identifier and a UUID
+  payment id; the old 157-character binding fails that test.
+
 ## 1.0.0-rc.174 - 2026-09-07
 
 - Preserves the `postar-close-payment` authority from a verified provider

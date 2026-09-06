@@ -63,6 +63,34 @@ describe('OnlinePaymentService payment query uncertainty boundary', () => {
       expect(queryPayment).toHaveBeenCalledTimes(1)
     },
   )
+
+  it('maps an unmappable provider close response to unknown after a pending query', async () => {
+    const queryPayment = vi.fn(async () => ({
+      paymentIntentId: paymentContext.public_id,
+      providerTransactionId: 'POSTAR-PENDING-001',
+      status: 'pending' as const,
+      amount: Number(paymentContext.amount_minor),
+      currency: paymentContext.currency,
+      merchantId: config.merchantId,
+      occurredAt: '2026-09-06T15:41:00.000Z',
+    }))
+    const closePayment = vi.fn(async () => {
+      throw new Error('provider returned an unmappable close response')
+    })
+    const recordPayment = vi.fn()
+    const service = new OnlinePaymentService(
+      runner(), 'test-secret-at-least-thirty-two-bytes', config,
+      { createPayment: vi.fn(), queryPayment, closePayment, requestRefund: vi.fn(), queryRefund: vi.fn() },
+      { recordPayment, recordRefund: vi.fn() },
+    )
+
+    await expect(service.closeSystem({
+      scope, paymentId, closeBindingId: 'close-response-boundary-test',
+    })).rejects.toBeInstanceOf(OnlinePaymentUnknownError)
+    expect(queryPayment).toHaveBeenCalledTimes(1)
+    expect(closePayment).toHaveBeenCalledTimes(1)
+    expect(recordPayment).not.toHaveBeenCalled()
+  })
 })
 
 function runner() {

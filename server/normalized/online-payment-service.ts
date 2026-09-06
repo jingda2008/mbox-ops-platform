@@ -368,13 +368,18 @@ export class OnlinePaymentService {
     }
     let observation = queried
     if (queried.status === 'pending' || queried.status === 'processing') {
-      if (adapter.closePayment === undefined) {
+      const closePayment = adapter.closePayment
+      if (closePayment === undefined) {
         throw new OnlinePaymentUnavailableError('当前支付通道不支持安全关单，请由收银核对后处理')
       }
-      const close = await adapter.closePayment({
-        paymentIntentId: context.publicId,
-        merchantId: config.merchantId,
-      }, { secrets })
+      const close = await providerOperationWithUnknownBoundary(() => closePayment.call(
+        adapter,
+        {
+          paymentIntentId: context.publicId,
+          merchantId: config.merchantId,
+        },
+        { secrets },
+      ))
       if (!close.closed || close.paymentIntentId !== context.publicId) throw new OnlinePaymentUnknownError()
       observation = { ...queried, status: 'closed', occurredAt: close.occurredAt }
     }
@@ -1034,12 +1039,19 @@ async function queryPaymentWithUnknownBoundary(
   request: Parameters<OnlinePaymentAdapter['queryPayment']>[0],
   secrets: PaymentProviderSecretSource,
 ): Promise<ProviderPaymentObservation> {
+  return providerOperationWithUnknownBoundary(() => adapter.queryPayment(request, { secrets }))
+}
+
+async function providerOperationWithUnknownBoundary<Result>(
+  operation: () => Promise<Result>,
+): Promise<Result> {
   try {
-    return await adapter.queryPayment(request, { secrets })
+    return await operation()
   } catch (error) {
-    // A rejected, malformed or unreachable query response is not evidence of
-    // success or failure. Keep the financial fact unknown so callers and the
-    // background worker can release operations without inventing a result.
+    // A rejected, malformed or unreachable provider query/close response is
+    // not evidence of success or failure. Keep the financial fact unknown so
+    // callers and the background worker can release operations without
+    // inventing a result.
     if (error instanceof OnlinePaymentUnknownError) throw error
     throw new OnlinePaymentUnknownError()
   }

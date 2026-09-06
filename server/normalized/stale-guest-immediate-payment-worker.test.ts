@@ -140,6 +140,42 @@ describe('stale guest immediate payment worker', () => {
     expect(result.failedPaymentIds).toEqual([])
   })
 
+  it('keeps the close binding within the command idempotency limit for a production worker id', async () => {
+    const paymentId = '1055bfcb-2711-45d5-a88a-3cc1cc07e10e'
+    const productionWorkerId = 'mbox-mini-d25b3a4:stale-guest-immediate-payment-reconciliation'
+    let providerBinding = ''
+    const recordProviderQueryResult = vi.fn(async (input: {
+      actor: { ref: string }
+      idempotencyKey: string
+    }) => {
+      expect(input.actor.ref).toBe('postar-close-payment')
+      expect(input.idempotencyKey).toBe(providerBinding)
+      expect(input.idempotencyKey.length).toBeLessThanOrEqual(128)
+      return { replayed: false, value: {} }
+    })
+    const worker = new StaleGuestImmediatePaymentWorker({
+      onlinePayments: {
+        listStaleGuestImmediateCheckoutPaymentCandidates: vi.fn(async () => [{
+          id: paymentId,
+          createdAt: '2026-08-29T03:00:00.000Z',
+          operationallyAbandoned: true,
+        }]),
+        closeSystem: vi.fn(async (input: { closeBindingId: string }) => {
+          providerBinding = input.closeBindingId
+          expect(providerBinding.length).toBeLessThanOrEqual(128)
+          return observed('production-binding', 'failed')
+        }),
+      } as never,
+      payments: { recordProviderQueryResult } as never,
+      reconciliation: { commitTerminal: vi.fn(), abandonUnresolved: vi.fn() } as never,
+    })
+
+    const result = await worker.runBatch(scope, productionWorkerId, businessDate)
+
+    expect(providerBinding).toMatch(new RegExp(`^stale-guest-checkout:${paymentId}:[0-9a-f-]{36}$`))
+    expect(result.failedPaymentIds).toEqual([])
+  })
+
   it('defers fresh channel unavailability but operationally retires only an older unresolved checkout', async () => {
     const now = Date.parse('2026-08-29T06:00:00.000Z')
     const abandonUnresolved = vi.fn(async () => ({ replayed: false, value: {} }))

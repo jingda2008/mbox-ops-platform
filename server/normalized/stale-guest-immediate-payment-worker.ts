@@ -138,7 +138,12 @@ export class StaleGuestImmediatePaymentWorker {
         deferredPaymentIds.push(candidate.id)
         continue
       }
-      const binding = `stale-guest-checkout:${workerId}:${candidate.id}:${randomUUID()}`
+      // This value is both the provider close binding and the normalized
+      // command idempotency key, whose audited maximum is 128 characters.
+      // The coordinator appends the full worker name to workerId, so including
+      // it here made production bindings exceed that limit. Payment UUID plus
+      // a fresh UUID remains unique while keeping the binding below the cap.
+      const binding = `stale-guest-checkout:${candidate.id}:${randomUUID()}`
       try {
         const closed = await this.deps.onlinePayments.closeSystem({
           scope, paymentId: candidate.id, closeBindingId: binding,

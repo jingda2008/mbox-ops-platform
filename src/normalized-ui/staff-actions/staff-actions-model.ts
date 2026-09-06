@@ -191,6 +191,27 @@ export function tableGroups(tables: readonly StaffActionTable[]): Array<{ area: 
 
 export type StaffTableScope = 'attention' | 'unpaid' | 'mine' | 'all'
 
+export interface StaffTableFinancialSummary {
+  paymentDue: number
+  refunds: number
+  exceptions: number
+}
+
+export function staffTableFinancialSummary(
+  tables: readonly StaffActionTable[],
+): StaffTableFinancialSummary {
+  return tables.reduce<StaffTableFinancialSummary>((summary, table) => {
+    const session = table.activeSession
+    if (session === null) return summary
+    if (session.unpaidOrderCount > 0 || session.pendingPaymentCount > 0
+      || session.financialState === 'payment_exception') summary.paymentDue += 1
+    if (session.refundAttentionCount > 0) summary.refunds += 1
+    if (session.financialState === 'refund_pending'
+      || session.financialState === 'payment_exception') summary.exceptions += 1
+    return summary
+  }, { paymentDue: 0, refunds: 0, exceptions: 0 })
+}
+
 export function visibleStaffTables(
   tables: readonly StaffActionTable[],
   scope: StaffTableScope,

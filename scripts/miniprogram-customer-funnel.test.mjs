@@ -347,10 +347,11 @@ test('activity registration asks only for a phone number and guides a missed fie
 })
 
 test('tonight ordering keeps live service separate from recommendation and delegates ranking to the server', async () => {
-  const [orderLogic, orderView, orderStyle, servicePage, statusPage, recommendationService, guestMenuApi, recommendationRepository] = await Promise.all([
+  const [orderLogic, orderView, orderStyle, alipayOrderStyle, servicePage, statusPage, recommendationService, guestMenuApi, recommendationRepository] = await Promise.all([
     read('miniprogram/pages/order/index.js'),
     read('miniprogram/pages/order/index.wxml'),
     read('miniprogram/pages/order/index.wxss'),
+    read('alipay-miniprogram/pages/order/index.acss'),
     read('miniprogram/pages/service/index.js'),
     read('miniprogram/pages/status/index.js'),
     read('server/normalized/customer-experience-service.ts'),
@@ -422,14 +423,19 @@ test('tonight ordering keeps live service separate from recommendation and deleg
   assert.match(orderStyle, /\.quick-service button[\s\S]*?min-height:\s*88rpx/)
   assert.match(orderStyle, /\.table-strip__service \{ min-height: 88rpx/)
   assert.match(orderStyle, /\.product-row \{[\s\S]*?height:\s*520rpx/)
-  assert.match(orderStyle, /\.product-media \{[\s\S]*?height:\s*274rpx/)
+  assert.match(orderStyle, /\.product-row \{[^}]*display:\s*grid[^}]*grid-template-rows:\s*274rpx minmax\(0, 1fr\) 110rpx/)
+  assert.match(orderStyle, /\.product-media \{[\s\S]*?height:\s*100%/)
+  assert.match(orderStyle, /\.product-main \{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/)
+  assert.match(orderStyle, /\.product-copy \{[^}]*height:\s*27rpx[^}]*text-overflow:\s*ellipsis[^}]*white-space:\s*nowrap/)
+  assert.match(orderStyle, /\.product-action \{[^}]*height:\s*110rpx[^}]*min-height:\s*0/)
+  assert.match(alipayOrderStyle, /\.product-row \{[^}]*display:\s*grid[^}]*grid-template-rows:\s*274rpx minmax\(0, 1fr\) 110rpx/)
+  assert.match(alipayOrderStyle, /\.product-main \{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/)
   assert.match(orderStyle, /\.product-detail-hero \{[\s\S]*?height:\s*500rpx/)
   assert.match(orderStyle, /\.quick-service__surface \{ min-height: 62rpx/)
   assert.match(orderStyle, /\.recommend-entry__actions \{ display: grid; grid-template-columns: 1fr 1fr/)
   assert.match(orderStyle, /\.recommend-question__options \{ display: grid;[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/)
   assert.match(orderStyle, /\.recommend-card \{ width: 520rpx; min-height: 390rpx/)
   assert.match(orderStyle, /\.product-list \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/)
-  assert.match(orderStyle, /\.product-row \{[^}]*flex-direction: column/)
   assert.doesNotMatch(orderView, /class="checkout-guard"/)
   assert.doesNotMatch(orderView, /订单正在确认/)
   assert.doesNotMatch(orderView, /class="checkout-recovery"/)
@@ -852,10 +858,10 @@ test('customer-only reservations stay executable, performances use the public sc
   assert.match(profileLogic, /requireMembership/)
   assert.match(profileLogic, /openLoginSheet/)
   assert.match(profileView, /login-action-link/)
-  assert.match(profileLogic, /openReservations\(\)\s*\{[^}]*requireMembership/)
+  assert.match(profileLogic, /openReservations\(\)\s*\{\s*wx\.switchTab\(\{ url: '\/pages\/reservations\/index' \}\)/)
   assert.doesNotMatch(orderLogic, /requireMembershipLogin/)
   assert.match(orderLogic, /wx\.scanCode\(\{/)
-  assert.match(reservationLogic, /membershipRequired/)
+  assert.doesNotMatch(reservationLogic, /membershipRequired|redirectToMembershipLogin/)
   assert.match(reservationLogic, /getWechatNotificationAuthorizations/)
   assert.match(reservationLogic, /getWechatMemberServiceNotificationAuthorizations/)
   assert.match(reservationLogic, /buildReservationSubscriptionPresentation/)
@@ -873,7 +879,7 @@ test('customer-only reservations stay executable, performances use the public sc
   assert.match(reservationLogic, /completeReservationSubmit[\s\S]{0,1600}?createCustomerReservation/)
   assert.match(reservationLogic, /enablePerformanceNotification[\s\S]{0,1400}?requestWechatSubscriptionFromTap/)
   assert.doesNotMatch(reservationLogic, /enablePerformanceNotification[\s\S]{0,700}?tmplIds: \[option\.templateId\]/)
-  assert.match(reservationView, /membership-gate/)
+  assert.doesNotMatch(reservationView, /membership-gate|请先登录会员/)
   assert.doesNotMatch(profileView, /class="login-dock"/)
   assert.match(profileView, /确定加入并授权手机号/)
   assert.match(profileLogic, /quickLoginAndEnroll/)

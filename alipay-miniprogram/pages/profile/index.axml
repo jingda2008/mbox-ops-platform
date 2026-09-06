@@ -215,9 +215,8 @@
       </scroll-view>
     </view>
   </block>
-  <view a:if="{{loginSheetVisible}}" class="login-sheet-mask">
-    <view class="login-sheet-mask__backdrop" onTap="closeLoginSheet"></view>
-    <view class="login-sheet" catchTap="noop">
+  <view a:if="{{loginSheetVisible}}" class="login-sheet-mask" onTap="closeLoginSheet">
+    <scroll-view scroll-y class="login-sheet" catchTap="noop">
       <button class="login-sheet__close compact-icon-action" aria-label="关闭登录" onTap="closeLoginSheet">×</button>
       <text class="login-sheet__kicker">M-BOX 会员</text>
       <text class="login-sheet__title">邀请加入 M-BOX 会员</text>
@@ -256,6 +255,6 @@
       </view>
       <text a:if="{{recoveryMessage}}" class="login-recovery-note">{{recoveryMessage}}</text>
       <text a:if="{{error}}" class="login-recovery-note login-recovery-note--error">{{error}}</text>
-    </view>
+    </scroll-view>
   </view>
 </view>

@@ -5,6 +5,7 @@ import {
   fulfillmentAction,
   recommendationSceneSnapshot,
   requiresCapacityReason,
+  staffTableFinancialSummary,
   tableMoodPresentation,
   unifiedActionQueue,
   validateOpenTableInput,
@@ -101,6 +102,27 @@ describe('staff actions model', () => {
       activeSession: { ...active.activeSession, financialState: 'refund_pending' as const },
     }
     expect(visibleStaffTables([refundOnly], 'unpaid', '', attention)).toEqual([])
+  })
+
+  it('counts each financially affected table once without treating a provider query as table state', () => {
+    const withSession = (id: string, financialState: NonNullable<StaffActionTable['activeSession']>['financialState'],
+      unpaidOrderCount: number, pendingPaymentCount: number, refundAttentionCount: number): StaffActionTable => ({
+      ...table,
+      id,
+      activeSession: {
+        id: `session-${id}`, guestCount: 2, capacityAtOpen: 4, status: 'open',
+        openedAt: '2026-09-07T12:00:00.000Z', latestMood: null, guestCartWritesFrozen: false,
+        financialState, orderCount: 1, unpaidOrderCount, pendingPaymentCount, refundAttentionCount,
+      },
+    })
+    expect(staffTableFinancialSummary([
+      withSession('unpaid', 'unpaid', 1, 0, 0),
+      withSession('processing', 'payment_pending', 0, 2, 0),
+      withSession('payment-error', 'payment_exception', 0, 0, 0),
+      withSession('refund', 'refund_pending', 0, 0, 2),
+      withSession('paid', 'paid', 0, 0, 0),
+      table,
+    ])).toEqual({ paymentDue: 3, refunds: 1, exceptions: 2 })
   })
 
   it('builds one busy-time queue: complaint, overdue, delivery, assigned service, production', () => {

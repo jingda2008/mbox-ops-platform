@@ -1,5 +1,5 @@
 {
-  "version": "2026.08.29-v18",
+  "version": "2026.09.07-v19",
   "tenant": {
     "id": "10000000-0000-4000-8000-000000000001",
     "code": "superhigh",
@@ -1863,7 +1863,11 @@
       "name": "收银员",
       "permissions": [
         "dashboard.view",
+        "table.view_all",
+        "table.close",
+        "table.turnover_unsettled",
         "order.view",
+        "order.create",
         "order.cancel_unpaid",
         "payment.initiate.staff",
         "payment.collect.all_tables",

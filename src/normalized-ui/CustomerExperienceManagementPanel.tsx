@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { Clock3, UsersRound } from 'lucide-react'
 import type { NormalizedApiClient, StaffAuthView } from '../normalized-api'
 import { useConfirmationDialog } from './ConfirmationDialog'
+import { loadCompleteActiveCatalog } from './complete-catalog'
 import { ActivityOperationsPanel } from './ActivityOperationsPanel'
 import { CustomerExperienceAnalyticsPanel } from './CustomerExperienceAnalyticsPanel'
 import { LoyaltyEmergencyControlPanel } from './LoyaltyEmergencyControlPanel'
@@ -698,7 +699,7 @@ function LoyaltyTierAndRedemptionPanel({ api, auth }: { api: NormalizedApiClient
           ? api.getEndpoint<{ data: RedemptionConfigurationView }>('/api/staff/loyalty/redemption-configuration')
           : Promise.resolve({ data: null })),
         (canManageCatalog
-          ? api.getEndpoint<{ data: unknown }>('/api/catalog/products?status=active&limit=100')
+          ? loadCompleteActiveCatalog(api).then((data) => ({ data }))
           : Promise.resolve({ data: [] })),
         (canReadPending
           ? api.getEndpoint<{ data: PendingRedemptionView[] }>('/api/staff/loyalty/redemptions/pending')

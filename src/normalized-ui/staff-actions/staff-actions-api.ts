@@ -102,7 +102,7 @@ export interface AssistedOrderCatalogProduct {
   availableFrom: string | null
   availableUntil: string | null
   maxOrderQuantity: number
-  costAmountMinor: number | null
+  costAmountMinor?: number | null
   status: 'active' | 'sold_out' | 'inactive'
   isAvailable: boolean
   inventoryConfigurationComplete: boolean
@@ -644,7 +644,7 @@ export class StaffActionsApi implements StaffActionsApiPort {
   }
 
   loadAssistedOrderCatalog(signal?: AbortSignal): Promise<AssistedOrderCatalogProduct[]> {
-    return this.getData('/api/catalog/products?status=active&limit=100', signal)
+    return this.getData('/api/catalog/assisted-order-products', signal)
   }
 
   async issueAssistedOrderContext(input: Readonly<{ tableSessionId: string }>): Promise<string> {

@@ -12,6 +12,7 @@ import {
 } from "vitest";
 import { runNormalizedMigrations } from "../migrate-normalized.js";
 import {
+  ASSISTED_ORDER_CATALOG_VIEW_PERMISSION,
   CATALOG_PRICE_MANAGE_PERMISSION,
   CATALOG_PRODUCT_MANAGE_PERMISSION,
   INVENTORY_COST_VIEW_PERMISSION,
@@ -471,6 +472,50 @@ integration("normalized catalog PostgreSQL integration", () => {
 });
 
 describe("normalized catalog HTTP API", () => {
+  it("loads every assisted-order product for order creators without granting catalog management", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      ...productRow(true),
+      id: `10000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+      code: `ASSISTED-${String(index).padStart(3, "0")}`,
+      name: `协助商品${index}`,
+    }));
+    const secondPage = [{
+      ...productRow(true),
+      id: "20000000-0000-4000-8000-000000000100",
+      code: "ASSISTED-100",
+      name: "小食与酒水第101项",
+    }];
+    const fixture = await createFixture({
+      grantedPermissions: [ASSISTED_ORDER_CATALOG_VIEW_PERMISSION],
+      productPages: new Map([[0, firstPage], [100, secondPage]]),
+    });
+
+    const response = await fixture.app.inject({
+      method: "GET",
+      url: "/api/catalog/assisted-order-products",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toHaveLength(101);
+    expect(response.json().data[100]).toMatchObject({ name: "小食与酒水第101项" });
+    expect(response.json().data[0]).not.toHaveProperty("costAmountMinor");
+    expect(response.json().data[0].productSnapshot).not.toHaveProperty("costAmount");
+    expect(fixture.runs).toContainEqual({ isolation: "repeatable-read", readOnly: true });
+    const productQueries = fixture.calls.filter((call) => call.sql.includes("FROM mbox.products AS product"));
+    expect(productQueries.map((call) => call.values[6])).toEqual([0, 100]);
+  });
+
+  it("denies the assisted-order catalog when order.create is absent", async () => {
+    const fixture = await createFixture({ grantedPermissions: [CATALOG_PRODUCT_MANAGE_PERMISSION] });
+    const response = await fixture.app.inject({
+      method: "GET",
+      url: "/api/catalog/assisted-order-products",
+    });
+    expect(response.statusCode).toBe(403);
+    expect(response.json().error.code).toBe("ASSISTED_ORDER_PERMISSION_DENIED");
+    expect(fixture.calls.some((call) => call.sql.includes("FROM mbox.products AS product"))).toBe(false);
+  });
+
   it("uses a separately injected guest context and the normalized search field for customer search", async () => {
     const fixture = await createFixture({
       failStaffContext: true,
@@ -988,6 +1033,7 @@ interface FixtureOptions {
   inventoryControlMode?: "tracked" | "not_managed";
   uniqueFailureConstraint?: string;
   productSnapshot?: Record<string, unknown>;
+  productPages?: ReadonlyMap<number, Array<Record<string, unknown>>>;
 }
 
 async function createFixture(options: FixtureOptions = {}) {
@@ -1004,7 +1050,7 @@ async function createFixture(options: FixtureOptions = {}) {
     scope,
     query: vi.fn(async (sql: string, values: readonly unknown[] = []) => {
       calls.push({ sql, values });
-      return fakeQuery(sql, options);
+      return fakeQuery(sql, options, values);
     }),
   };
   const transactions = {
@@ -1086,6 +1132,7 @@ async function createFixture(options: FixtureOptions = {}) {
 function fakeQuery(
   sql: string,
   options: FixtureOptions,
+  values: readonly unknown[] = [],
 ): PostgresQueryResult<Record<string, unknown>> {
   if (sql.includes("FROM mbox.employees")) {
     return result([
@@ -1152,8 +1199,10 @@ function fakeQuery(
   if (sql.includes("INSERT INTO mbox.products"))
     return result([productRow(false, options.inventoryControlMode, options.productSnapshot)]);
   if (sql.includes("UPDATE mbox.products")) return result([{ id: productId }]);
-  if (sql.includes("FROM mbox.products AS product"))
-    return result([productRow(true, options.inventoryControlMode, options.productSnapshot)]);
+  if (sql.includes("FROM mbox.products AS product")) {
+    const page = options.productPages?.get(Number(values[6] ?? 0));
+    return result(page ?? [productRow(true, options.inventoryControlMode, options.productSnapshot)]);
+  }
   return result([]);
 }
 

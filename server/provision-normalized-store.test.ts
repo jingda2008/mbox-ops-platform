@@ -104,7 +104,7 @@ describe('normalized store provisioning config', () => {
       'utf8',
     )) as unknown
     const config = parseStoreProvisionConfig(source)
-    expect(config.version).toBe('2026.08.29-v18')
+    expect(config.version).toBe('2026.09.07-v19')
     expect(config.automaticTableTurnover).toEqual({ enabled: true, operatingStartsAt: '12:00' })
     const role = (code: string) => config.roles.find((candidate) => candidate.code === code)
 
@@ -121,6 +121,12 @@ describe('normalized store provisioning config', () => {
     const cashierPermissions = new Set(role('CASHIER')?.permissions)
     expect(cashierPermissions.has('printer.manage')).toBe(true)
     expect(cashierPermissions.has('payment.collect.all_tables')).toBe(true)
+    expect(cashierPermissions.has('order.create')).toBe(true)
+    expect(cashierPermissions.has('table.view_all')).toBe(true)
+    expect(cashierPermissions.has('table.close')).toBe(true)
+    expect(cashierPermissions.has('table.turnover_unsettled')).toBe(true)
+    expect(cashierPermissions.has('catalog.product.manage')).toBe(false)
+    expect(cashierPermissions.has('order.gift')).toBe(false)
     expect(new Set(role('SERVER')?.permissions).has('payment.collect.all_tables')).toBe(false)
     for (const roleCode of ['OWNER', 'OPS_LEAD', 'MANAGER']) {
       expect(new Set(role(roleCode)?.permissions).has('payment.collect.all_tables')).toBe(true)

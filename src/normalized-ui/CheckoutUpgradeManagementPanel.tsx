@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import { ChevronDown, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import type { NormalizedApiClient, StaffAuthView } from '../normalized-api'
 import { useConfirmationDialog } from './ConfirmationDialog'
+import { loadCompleteActiveCatalog } from './complete-catalog'
 import './checkout-upgrade-management-panel.css'
 
 type RuleStatus = 'draft' | 'approved' | 'active' | 'retired'
@@ -62,7 +63,7 @@ export function CheckoutUpgradeManagementPanel({ api, auth }: { api: NormalizedA
         canViewRules ? api.getEndpoint<{ data:RuleView[] }>('/api/staff/customer-experience/checkout-upgrade-rules') : Promise.resolve({data:[]}),
         canViewRules ? api.getEndpoint<{ data:OutcomeView[] }>('/api/staff/customer-experience/checkout-upgrade-outcomes') : Promise.resolve({data:[]}),
         canViewCapacity ? api.getEndpoint<{ data:CapacityView[] }>('/api/staff/customer-experience/fulfillment-capacity-policies') : Promise.resolve({data:[]}),
-        canDraftRule ? api.getEndpoint<{ data:unknown }>('/api/catalog/products?status=active&limit=100') : Promise.resolve({data:[]}),
+        canDraftRule ? loadCompleteActiveCatalog(api).then((data) => ({data})) : Promise.resolve({data:[]}),
       ])
       const loadedProducts = productOptions(productResponse.data)
       setRules(ruleResponse.data); setOutcomes(outcomeResponse.data); setCapacities(capacityResponse.data); setProducts(loadedProducts)

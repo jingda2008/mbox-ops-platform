@@ -1155,8 +1155,7 @@
 /* Override the historical duplicate sheet block: compact screens keep a
    touchable close action and scroll the sheet instead of trapping its footer. */
 .login-sheet-mask { padding: 0; }
-.login-sheet-mask__backdrop { position: absolute; inset: 0; }
-.login-sheet { z-index: 1; max-height: calc(100vh - env(safe-area-inset-bottom)); overflow-y: auto; }
+.login-sheet { max-height: calc(100vh - env(safe-area-inset-bottom)); overflow-y: auto; }
 .login-sheet__close { z-index: 1; top: 0; right: 0; }
 @media (max-width: 390px) { .login-sheet { padding-right: 22rpx; padding-left: 22rpx; } }
 @media (max-width: 360px) { .login-sheet { max-height: calc(100vh - 4px); padding-right: 18rpx; padding-left: 18rpx; } .login-sheet__close { top: 0; right: 0; } }

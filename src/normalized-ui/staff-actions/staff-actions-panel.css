@@ -187,6 +187,7 @@
 .staff-actions-notice.is-success { border-color: #9fcbb7; color: #155e43; background: #edf8f2; }
 .staff-actions-notice.is-error { border-color: #e5afb2; color: #942f35; background: #fff3f3; }
 .staff-actions-notice.is-guidance { border-color: #dec98e; color: #72591c; background: #fff9e9; }
+.staff-actions-notice.is-attention { border-color: #cc7379; color: #7d2027; background: #ffe7e8; box-shadow: 0 5px 15px rgb(125 32 39 / 13%); }
 .staff-actions-notice span { flex: 1; line-height: 1.45; }
 .staff-actions-notice button { min-width: 44px; min-height: 44px; padding: 0; border: 0; background: transparent; font-size: 22px; }
 
@@ -198,6 +199,13 @@
 .staff-table-area-filter select { min-width: 0; border: 0; outline: 0; background: transparent; color: var(--staff-ink); }
 .staff-table-tools > div button { position: relative; }
 .staff-table-tools > div button.has-attention i { position: absolute; top: -6px; right: -5px; min-width: 18px; height: 18px; padding: 0 5px; display: grid; place-items: center; border: 2px solid #fff; border-radius: 999px; color: #fff; background: #b52f37; font-size: 10px; font-style: normal; line-height: 1; }
+.staff-table-tools > div button.has-payment-due i { position: absolute; top: -6px; right: -5px; min-width: 18px; height: 18px; padding: 0 5px; display: grid; place-items: center; border: 2px solid #fff; border-radius: 999px; color: #2f2107; background: #f0b643; font-size: 10px; font-style: normal; line-height: 1; }
+.staff-table-financial-alert { margin-top: 9px; padding: 10px; display: flex; align-items: center; gap: 8px; border: 1px solid #d5a34a; border-left: 5px solid #c17a00; border-radius: 7px; background: #fff2c8; color: #563b0b; }
+.staff-table-financial-alert > div { min-width: 0; flex: 1; display: grid; gap: 2px; }
+.staff-table-financial-alert strong { font-size: 13px; }
+.staff-table-financial-alert span { font-size: 11px; line-height: 1.4; }
+.staff-table-financial-alert button { min-height: 44px; padding: 0 12px; flex: 0 0 auto; border-color: #9c6200; background: #fffaf0; color: #684000; font-weight: 800; }
+.staff-table-financial-alert button.is-danger { border-color: #a72c35; background: #a72c35; color: #fff; }
 
 .staff-assignment-panel { margin-bottom: 10px; border: 1px solid #c9d2ca; border-radius: 8px; background: #fff; overflow: hidden; }
 .staff-assignment-trigger { width: 100%; min-height: 56px !important; padding: 9px 12px; border: 0 !important; display: flex; align-items: center; justify-content: space-between; gap: 12px; text-align: left; }
@@ -270,18 +278,22 @@
 .staff-table-area { margin-top: 12px; }
 .staff-table-area h3 { margin: 0 0 7px; font-size: 13px; color: var(--staff-muted); }
 .staff-table-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
-.staff-table-tile-shell { min-width: 0; display: grid; grid-template-rows: minmax(65px, 1fr) auto; gap: 4px; }
-.staff-table-tile { min-height: 65px !important; padding: 7px 4px; border-radius: 6px; display: flex; flex-direction: column; justify-content: center; gap: 2px; position: relative; }
+.staff-table-tile-shell { min-width: 0; display: grid; grid-template-rows: minmax(76px, 1fr) auto; gap: 4px; }
+.staff-table-tile { min-height: 76px !important; padding: 7px 4px; border-width: 2px; border-radius: 6px; display: flex; flex-direction: column; justify-content: center; gap: 2px; position: relative; }
 .staff-table-tile-shell .staff-table-tile { width: 100%; }
 .staff-table-quick-payment { min-height: 44px !important; padding: 4px; border-radius: 6px; color: #fff; border-color: #176c4d; background: #176c4d; display: flex; align-items: center; justify-content: center; gap: 4px; font-size: 12px; font-weight: 800; }
 .staff-table-tile strong { font-size: 16px; }
 .staff-table-tile span, .staff-table-tile small { font-size: 11px; color: var(--staff-muted); }
-.staff-table-tile.is-open { background: #edf7f1; border-color: #82b89e; }
-.staff-table-tile.is-financial-paid { border-color: #72aa8b; background: #e8f6ee; }
-.staff-table-tile.is-financial-unpaid { border-color: #d4a846; background: #fff8df; }
-.staff-table-tile.is-financial-payment_pending { border-color: #d58c2c; background: #fff2d9; }
+.staff-table-tile.is-open { background: #edf3f7; border-color: #8a9fac; }
+.staff-table-tile.is-financial-no_order { border-color: #8a9fac; background: #edf3f7; }
+.staff-table-tile.is-financial-paid { border-color: #4c956f; background: #dff1e6; }
+.staff-table-tile.is-financial-unpaid { border-color: #ad6900; background: #ffe3a1; box-shadow: inset 0 0 0 1px rgb(173 105 0 / 16%); }
+.staff-table-tile.is-financial-payment_pending { border-color: #b35300; background: #ffd3a6; box-shadow: inset 0 0 0 1px rgb(179 83 0 / 16%); }
 .staff-table-tile.is-financial-refund_pending,
-.staff-table-tile.is-financial-payment_exception { border-color: #c65b62; background: #fff0f1; }
+.staff-table-tile.is-financial-payment_exception { border-color: #a62630; background: #ffd2d5; box-shadow: inset 0 0 0 1px rgb(166 38 48 / 18%); }
+.staff-table-financial-detail { max-width: 100%; overflow: hidden; color: #6b3e00; font-size: 10px; font-style: normal; font-weight: 800; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.staff-table-tile.is-financial-refund_pending .staff-table-financial-detail,
+.staff-table-tile.is-financial-payment_exception .staff-table-financial-detail { color: #84232b; }
 .staff-table-attention-badge { position: absolute; top: 5px; right: 5px; width: 18px; height: 18px; display: grid; place-items: center; border-radius: 999px; color: #fff; background: #b52f37; font-size: 11px !important; }
 .staff-table-tile.is-selected { outline: 2px solid var(--staff-gold); outline-offset: 1px; }
 .staff-table-tile small { color: var(--staff-green); font-weight: 700; }
@@ -301,6 +313,7 @@
   font-weight: 800;
   line-height: 1;
 }
+.staff-table-tile .staff-table-mood.has-attention { right: 28px; }
 
 .staff-table-sheet { margin-top: 12px; padding: 12px; background: var(--staff-surface); border: 1px solid var(--staff-line); border-top: 3px solid var(--staff-gold); border-radius: 6px; }
 .staff-table-sheet > header { display: flex; align-items: center; gap: 9px; }
@@ -681,6 +694,9 @@
   .staff-assignment-active article button { width: 100%; }
   .staff-table-tools { grid-template-columns: 1fr; }
   .staff-table-tools > div { display: grid; grid-template-columns: repeat(4, 1fr); }
+  .staff-table-financial-alert { flex-wrap: wrap; }
+  .staff-table-financial-alert > div { flex-basis: 100%; }
+  .staff-table-financial-alert button { flex: 1 1 140px; }
   .staff-order-products { grid-template-columns: 1fr; }
   .staff-gift-boundary { grid-template-columns: 1fr; gap: 2px; }
   .staff-order-sheet > footer label { grid-template-columns: 1fr; gap: 4px; }

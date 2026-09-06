@@ -41,6 +41,7 @@ import {
   OPEN_TABLE_RECOMMENDATION_SCENES,
   recommendationSceneSnapshot,
   requiresCapacityReason,
+  staffTableFinancialSummary,
   tableMoodPresentation,
   tableGroups,
   validateOpenTableInput,
@@ -72,11 +73,14 @@ export interface StaffActionsPanelProps {
   initialFactId?: string | null
   initialFocus?: string | null
   onLoginRequired?: () => void
+  onNavigate?: (route: string) => void
 }
 
 const TABLE_COLLECTION_PERMISSIONS = [
   'payment.initiate.staff',
   'payment.manual.cash.record',
+  'payment.manual.pos.record',
+  'payment.manual.external.record',
 ] as const
 
 function hasTableCollectionPermission(permissions: readonly string[]): boolean {
@@ -99,6 +103,7 @@ export function StaffActionsPanel({
   initialFactId = null,
   initialFocus = null,
   onLoginRequired,
+  onNavigate,
 }: StaffActionsPanelProps) {
   const api = useMemo(() => suppliedApi ?? new StaffActionsApi(), [suppliedApi])
   const { confirmAction, promptAction } = useConfirmationDialog()
@@ -147,6 +152,7 @@ export function StaffActionsPanel({
   const knownActionKeysRef = useRef<Set<string> | null>(null)
   const actionLocksRef = useRef(new Set<string>())
   const pendingActionRef = useRef<string | null>(null)
+  const financialAttentionRef = useRef<{ paymentDue: number; refunds: number } | null>(null)
   const initialTableFocusAppliedRef = useRef(false)
   const secondaryTableSessionIdRef = useRef<string | null>(null)
   const selectedTable = operations?.tables.find((table) => table.id === selectedTableId) ?? null
@@ -158,7 +164,7 @@ export function StaffActionsPanel({
     noticeTimerRef.current = globalThis.setTimeout(() => {
       setNotice(null)
       noticeTimerRef.current = null
-    }, nextNotice.kind === 'guidance' ? 6_000 : 3_200)
+    }, nextNotice.kind === 'attention' ? 12_000 : nextNotice.kind === 'guidance' ? 6_000 : 3_200)
   }, [])
 
   const load = useCallback(async (quiet = false) => {
@@ -173,6 +179,18 @@ export function StaffActionsPanel({
       ])
       if (operationsResult.status === 'rejected') throw operationsResult.reason
       setOperations(operationsResult.value)
+      const { paymentDue, refunds } = staffTableFinancialSummary(operationsResult.value.tables)
+      const previousFinancialAttention = financialAttentionRef.current
+      financialAttentionRef.current = { paymentDue, refunds }
+      if (quiet && previousFinancialAttention !== null) {
+        const newRefunds = Math.max(0, refunds - previousFinancialAttention.refunds)
+        const newPaymentDue = Math.max(0, paymentDue - previousFinancialAttention.paymentDue)
+        if (newRefunds > 0) {
+          showNotice({ kind: 'attention', message: `新增 ${newRefunds} 张桌有退款待办，请立即进入收银与退款处理。` })
+        } else if (newPaymentDue > 0) {
+          showNotice({ kind: 'attention', message: `新增 ${newPaymentDue} 张桌待收款，请核对桌台付款状态。` })
+        }
+      }
       if (fulfillmentResult.status === 'fulfilled') {
         setFulfillment(fulfillmentResult.value)
       } else if (fulfillmentResult.reason instanceof StaffActionsApiError
@@ -367,10 +385,12 @@ export function StaffActionsPanel({
   ).filter((table) => tableAreaId === 'all' || table.areaId === tableAreaId), [
     attentionTableIds, operations?.tables, tableAreaId, tableQuery, tableScope,
   ])
-  const tableAttentionCount = useMemo(() => (operations?.tables ?? []).filter((table) => (
-    table.activeSession !== null
-      && ['refund_pending', 'payment_exception'].includes(table.activeSession.financialState)
-  )).length, [operations?.tables])
+  const tableFinancialSummary = useMemo(() => staffTableFinancialSummary(
+    operations?.tables ?? [],
+  ), [operations?.tables])
+  const tableExceptionCount = tableFinancialSummary.exceptions
+  const tablePaymentDueCount = tableFinancialSummary.paymentDue
+  const tableRefundCount = tableFinancialSummary.refunds
   const currentActionKeys = useMemo(() => [
     ...serviceActions.map((task) => `service:${task.id}`),
     ...fulfillmentActions.map((item) => `fulfillment:${item.taskId}`),
@@ -844,7 +864,7 @@ export function StaffActionsPanel({
       </header>
 
       <div ref={noticeRef} className={`staff-actions-notice ${notice === null ? 'is-hidden' : `is-${notice.kind}`}`} role="status">
-        {notice?.kind === 'error' ? <CircleAlert size={18} /> : notice?.kind === 'guidance' ? <AlertTriangle size={18} /> : <Check size={18} />}
+        {notice?.kind === 'error' || notice?.kind === 'attention' ? <CircleAlert size={18} /> : notice?.kind === 'guidance' ? <AlertTriangle size={18} /> : <Check size={18} />}
         <span>{notice?.message}</span>
         {notice !== null && <button type="button" aria-label="关闭提示" onClick={() => setNotice(null)}>×</button>}
       </div>
@@ -864,11 +884,16 @@ export function StaffActionsPanel({
             </select></label>
             <div role="group" aria-label="桌台显示范围">
               <button type="button" className={tableScope === 'attention' ? 'is-active' : ''} onClick={() => setTableScope('attention')}>营业中</button>
-              <button type="button" className={tableScope === 'unpaid' ? 'is-active' : ''} onClick={() => setTableScope('unpaid')}>待支付</button>
+              <button type="button" className={`${tableScope === 'unpaid' ? 'is-active' : ''}${tablePaymentDueCount > 0 ? ' has-payment-due' : ''}`} onClick={() => setTableScope('unpaid')}>待支付{tablePaymentDueCount > 0 && <i aria-label={`${tablePaymentDueCount}桌待支付`}>{tablePaymentDueCount}</i>}</button>
               <button type="button" className={tableScope === 'mine' ? 'is-active' : ''} onClick={() => setTableScope('mine')}>负责桌</button>
-              <button type="button" className={`${tableScope === 'all' ? 'is-active' : ''}${tableAttentionCount > 0 ? ' has-attention' : ''}`} onClick={() => setTableScope('all')}>全部{tableAttentionCount > 0 && <i aria-label={`${tableAttentionCount}桌有支付或退款异常`}>{tableAttentionCount}</i>}</button>
+              <button type="button" className={`${tableScope === 'all' ? 'is-active' : ''}${tableExceptionCount > 0 ? ' has-attention' : ''}`} onClick={() => setTableScope('all')}>全部{tableExceptionCount > 0 && <i aria-label={`${tableExceptionCount}桌有支付或退款异常`}>{tableExceptionCount}</i>}</button>
             </div>
           </div>
+          {(tablePaymentDueCount > 0 || tableRefundCount > 0) && <div className="staff-table-financial-alert" role="alert">
+            <div><strong>{tablePaymentDueCount > 0 ? `${tablePaymentDueCount} 张桌待收款` : '当前没有待收款桌台'}{tableRefundCount > 0 ? ` · ${tableRefundCount} 张桌退款待办` : ''}</strong><span>桌台颜色和角标来自本地账务状态，支付渠道查询不会阻塞桌台列表。</span></div>
+            {tablePaymentDueCount > 0 && <button type="button" onClick={() => setTableScope('unpaid')}>查看待支付</button>}
+            {tableRefundCount > 0 && onNavigate !== undefined && <button type="button" className="is-danger" onClick={() => onNavigate('/staff/payments')}>处理退款</button>}
+          </div>}
           {visibleTables.length === 0 && <div className="staff-table-empty"><strong>当前范围没有桌台</strong><span>可搜索桌号，或切换到“全部”查看完整桌图。</span><button type="button" onClick={() => setTableScope('all')}>查看全部桌台</button></div>}
           {tableGroups(visibleTables).map((group) => (
             <section className="staff-table-area" key={group.area}>
@@ -881,6 +906,9 @@ export function StaffActionsPanel({
                   const canCollect = table.activeSession !== null
                     && hasTableCollectionPermission(permissions)
                     && (table.assignedToActor || permissions.includes('payment.collect.all_tables'))
+                  const hasFinancialAttention = table.activeSession !== null
+                    && (table.activeSession.refundAttentionCount > 0
+                      || table.activeSession.financialState === 'payment_exception')
                   return (
                   <div className="staff-table-tile-shell" key={table.id}>
                     <button
@@ -891,10 +919,11 @@ export function StaffActionsPanel({
                     >
                       <strong>{table.code}</strong>
                       <span>{table.activeSession === null ? `${table.capacity}人 · 空台` : `${table.activeSession.guestCount}人 · ${table.activeSession.status === 'closing' ? '结台中' : tableFinancialLabel(table.activeSession.financialState)}`}</span>
-                      {table.activeSession !== null && (table.activeSession.refundAttentionCount > 0 || table.activeSession.financialState === 'payment_exception') && <b className="staff-table-attention-badge" aria-label="支付或退款待办">!</b>}
+                      {table.activeSession !== null && (table.activeSession.unpaidOrderCount > 0 || table.activeSession.pendingPaymentCount > 0 || table.activeSession.refundAttentionCount > 0) && <em className="staff-table-financial-detail">{table.activeSession.unpaidOrderCount > 0 ? `${table.activeSession.unpaidOrderCount}笔未收` : ''}{table.activeSession.pendingPaymentCount > 0 ? `${table.activeSession.unpaidOrderCount > 0 ? ' · ' : ''}${table.activeSession.pendingPaymentCount}笔确认中` : ''}{table.activeSession.refundAttentionCount > 0 ? `${table.activeSession.unpaidOrderCount > 0 || table.activeSession.pendingPaymentCount > 0 ? ' · ' : ''}${table.activeSession.refundAttentionCount}笔退款` : ''}</em>}
+                      {hasFinancialAttention && <b className="staff-table-attention-badge" aria-label="支付或退款待办">!</b>}
                       {table.assignedToActor && <small>负责桌</small>}
                       {mood !== null && (
-                        <span className="staff-table-mood" title={`客人状态：${mood.label}`} aria-label={`客人状态：${mood.label}`}>
+                        <span className={`staff-table-mood ${hasFinancialAttention ? 'has-attention' : ''}`} title={`客人状态：${mood.label}`} aria-label={`客人状态：${mood.label}`}>
                           {mood.symbol}
                         </span>
                       )}

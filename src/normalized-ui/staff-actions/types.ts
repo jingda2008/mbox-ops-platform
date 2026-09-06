@@ -340,7 +340,7 @@ export interface StaffReservationIntakeEntry {
 }
 
 export type StaffActionNotice = {
-  kind: 'success' | 'error' | 'guidance'
+  kind: 'success' | 'error' | 'guidance' | 'attention'
   message: string
 } | null
 

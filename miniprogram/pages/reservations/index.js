@@ -1,5 +1,4 @@
 const {
-  getMiniBootstrap,
   getReservations,
   getReservationAvailability,
   getReservationPerformances,
@@ -12,7 +11,6 @@ const {
   getWechatNotificationAuthorizations,
   getWechatMemberServiceNotificationAuthorizations,
 } = require('../../utils/api')
-const { redirectToMembershipLogin } = require('../../utils/membership-gate')
 const { randomId } = require('../../utils/id')
 const { getRuntimeConfig } = require('../../config/index')
 const { money, dateTime } = require('../../utils/format')
@@ -83,7 +81,7 @@ function impactView(impact) {
 Page({
   data: {
     loading: true, checking: false, submitting: false, loadingShows: false,
-    error: '', success: '', isDevelopment: false, membershipRequired: false,
+    error: '', success: '', isDevelopment: false,
     reservations: [], showForm: true, step: 1, cancelBusyId: '',
     performanceImpacts: [], impactsError: '', impactBusyId: '', impactNotice: '',
     expandedImpactId: '', impactAttempts: {},
@@ -118,19 +116,6 @@ Page({
   async loadData() {
     this.setData({ loading: true, error: '' })
     try {
-      const bootstrap = await getMiniBootstrap()
-      if (!bootstrap.membership) {
-        this.setData({
-          loading: false,
-          membershipRequired: true,
-          reservations: [],
-          showForm: false,
-          performanceImpacts: [],
-          impactsError: '',
-        })
-        return
-      }
-      this.setData({ membershipRequired: false })
       const [reservationResult, impactResult, notificationResult, preloadResult] = await Promise.allSettled([
         getReservations(), getReservationPerformanceImpacts(),
         getReservationPerformanceNotificationAuthorizations(),
@@ -302,7 +287,6 @@ Page({
       this.preloadWechatSubscriptionPresentationOptions().catch(() => {})
     })
   },
-  goMembershipLogin() { redirectToMembershipLogin() },
   closeForm() { if (this.data.reservations.length) this.setData({ showForm: false, error: '' }) },
 
   async cancelReservation(event) {
@@ -416,10 +400,6 @@ Page({
   },
 
   submitReservation() {
-    if (this.data.membershipRequired) {
-      redirectToMembershipLogin()
-      return
-    }
     if (this.data.submitting || this._reservationSubmitPending) return
     const customerName = this.data.customerName.trim()
     const contact = this.data.contact.trim()

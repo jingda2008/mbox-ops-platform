@@ -2,6 +2,17 @@ import { describe, expect, it, vi } from 'vitest'
 import { StaffActionsApi, StaffActionsApiError } from './staff-actions-api'
 
 describe('StaffActionsApi', () => {
+  it('loads the complete read-only assisted catalog instead of the management first page', async () => {
+    const send = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ data: [] }), { status: 200 }))
+    const api = new StaffActionsApi({ fetch: send })
+
+    await expect(api.loadAssistedOrderCatalog()).resolves.toEqual([])
+
+    expect(send).toHaveBeenCalledWith('/api/catalog/assisted-order-products', expect.objectContaining({
+      method: 'GET', credentials: 'include',
+    }))
+  })
+
   it('uses the normalized table command contract and never reports success from a failed response', async () => {
     const send = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
       error: { code: 'CAPACITY_OVERRIDE_REASON_REQUIRED', message: '请填写加座说明' },

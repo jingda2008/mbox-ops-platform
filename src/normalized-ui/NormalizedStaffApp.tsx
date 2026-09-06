@@ -170,6 +170,7 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
             initialFactId={new URLSearchParams(window.location.search).get('factId')}
             initialFocus={new URLSearchParams(window.location.search).get('focus')}
             onLoginRequired={loginRequired}
+            onNavigate={navigate}
           />
         : <StaffModulePanel key={staffWorkspaceIdentityKey(auth)} api={api} auth={auth} module={staffRoute}
             initialBlockerFact={businessDayBlockerFactFromHistory(window.history.state)}

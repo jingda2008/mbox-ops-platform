@@ -47,6 +47,7 @@ import {
 export const CATALOG_PRODUCT_MANAGE_PERMISSION = "catalog.product.manage";
 export const CATALOG_PRICE_MANAGE_PERMISSION = "catalog.price.manage";
 export const INVENTORY_COST_VIEW_PERMISSION = "inventory.cost.view";
+export const ASSISTED_ORDER_CATALOG_VIEW_PERMISSION = "order.create";
 
 type TransactionRunnerPort = Pick<ScopedPostgresTransactionRunner, "run">;
 type CommandExecutorPort = Pick<NormalizedCommandExecutor, "execute">;
@@ -284,6 +285,13 @@ class CatalogCostPermissionError extends Error {
   }
 }
 
+class AssistedOrderCatalogPermissionError extends Error {
+  constructor() {
+    super("当前员工没有协助点单权限");
+    this.name = "AssistedOrderCatalogPermissionError";
+  }
+}
+
 export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
   app,
   options,
@@ -291,6 +299,34 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
   const priceCommandExecutor = (
     options.createCommandExecutor ?? createConfiguredCommandExecutor
   )(options.transactions, { isolation: "serializable", retryOnConflict: 3 });
+
+  // Assisted ordering needs a complete, read-only sellable catalog. It must
+  // not inherit product-management authority merely to place an order.
+  app.get("/catalog/assisted-order-products", async (request, reply) =>
+    handleRoute(reply, async () => {
+      const context = await resolveStaffContext(options, request);
+      const products = await options.transactions.run(
+        context.scope,
+        async (transaction) => {
+          try {
+            await assertLivePermission(
+              transaction,
+              context.employeeId,
+              ASSISTED_ORDER_CATALOG_VIEW_PERMISSION,
+            );
+          } catch (error) {
+            if (error instanceof StaffAccessDeniedError || error instanceof StaffNotFoundError) {
+              throw new AssistedOrderCatalogPermissionError();
+            }
+            throw error;
+          }
+          return listCompleteAssistedOrderCatalog(transaction);
+        },
+        { isolation: "repeatable-read", readOnly: true },
+      );
+      return reply.send({ data: products });
+    }),
+  );
 
   app.get("/catalog/products", async (request, reply) =>
     handleRoute(reply, async () => {
@@ -1293,6 +1329,71 @@ async function listProducts(
     ],
   );
   return result.rows;
+}
+
+async function listCompleteAssistedOrderCatalog(
+  transaction: ScopedTransaction,
+): Promise<Array<ReturnType<typeof assistedOrderCatalogProduct>>> {
+  const pageSize = 100;
+  const maximumProducts = 10_000;
+  const products = new Map<string, ReturnType<typeof assistedOrderCatalogProduct>>();
+  for (let offset = 0; offset <= maximumProducts; offset += pageSize) {
+    const rows = await listProducts(transaction, {
+      search: "",
+      categoryCode: null,
+      status: "active",
+      guest: false,
+      limit: pageSize,
+      offset,
+    });
+    for (const row of rows) {
+      const product = mapProduct(row, true, false);
+      const amountMinor = Number(product.standardPrice?.amountMinor);
+      if (product.allowedChannels.includes("staff_assisted")
+        && Number.isSafeInteger(amountMinor)
+        && amountMinor > 0) {
+        products.set(product.id, assistedOrderCatalogProduct(product));
+      }
+    }
+    if (rows.length < pageSize) return [...products.values()];
+  }
+  throw new Error("协助点单商品数量超过安全读取范围，未返回不完整菜单");
+}
+
+function assistedOrderCatalogProduct(product: CatalogProduct) {
+  return {
+    id: product.id,
+    code: product.code,
+    name: product.name,
+    categoryCode: product.categoryCode,
+    fulfillmentStation: product.fulfillmentStation,
+    productKind: product.productKind,
+    bundleComponents: product.bundleComponents,
+    productSnapshot: product.productSnapshot,
+    guestVisible: product.guestVisible,
+    recommendationEnabled: product.recommendationEnabled,
+    recommendationMinGuests: product.recommendationMinGuests,
+    recommendationMaxGuests: product.recommendationMaxGuests,
+    recommendationPriority: product.recommendationPriority,
+    recommendationSceneTags: product.recommendationSceneTags,
+    recommendationIntentTags: product.recommendationIntentTags,
+    recommendationTasteTags: product.recommendationTasteTags,
+    recommendationDwellTags: product.recommendationDwellTags,
+    recommendationSingleWaveEligible: product.recommendationSingleWaveEligible,
+    recommendationExpectedPrepMinutes: product.recommendationExpectedPrepMinutes,
+    recommendationHoldMinutes: product.recommendationHoldMinutes,
+    recommendationUpgradeProductId: product.recommendationUpgradeProductId,
+    menuSortOrder: product.menuSortOrder,
+    availableFrom: product.availableFrom,
+    availableUntil: product.availableUntil,
+    allowedChannels: product.allowedChannels,
+    maxOrderQuantity: product.maxOrderQuantity,
+    status: product.status,
+    isAvailable: product.isAvailable,
+    inventoryConfigurationComplete: product.inventoryConfigurationComplete,
+    inventoryAvailable: product.inventoryAvailable,
+    standardPrice: product.standardPrice,
+  };
 }
 
 async function listCategories(
@@ -2725,6 +2826,14 @@ function sendError(reply: FastifyReply, error: unknown): FastifyReply {
       reply,
       403,
       "CATALOG_COST_PERMISSION_DENIED",
+      error.message,
+    );
+  }
+  if (error instanceof AssistedOrderCatalogPermissionError) {
+    return apiError(
+      reply,
+      403,
+      "ASSISTED_ORDER_PERMISSION_DENIED",
       error.message,
     );
   }

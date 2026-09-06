@@ -934,7 +934,6 @@ Page({
   },
 
   openReservations() {
-    if (!this.requireMembership('reservations')) return
     wx.switchTab({ url: '/pages/reservations/index' })
   },
   async openSuperhighService() {

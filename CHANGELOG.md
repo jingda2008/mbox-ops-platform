@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.0-rc.173 - 2026-09-07
+
+- Extends the financially-unknown boundary from provider queries to the
+  provider close call that follows a pending query, so a non-standard StarPay
+  close error cannot degrade application readiness every 30 seconds.
+- Keeps the five-minute retry backoff for an abandoned pending payment and
+  records no success, failure or verified observation when the close result is
+  unknown.
+- Adds regression coverage for the production sequence where a query succeeds
+  as pending and the subsequent close response cannot be mapped.
+- Clarifies the operating boundary: guest abandonment releases the order,
+  inventory and fulfilment; the physical table session remains staff-controlled
+  so an unrelated paid order at the same table is never closed automatically.
+
 ## 1.0.0-rc.172 - 2026-09-07
 
 - Classifies rejected, malformed and unreachable payment-query responses as

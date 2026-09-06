@@ -25,6 +25,7 @@ import type {
 export const STALE_GUEST_IMMEDIATE_PAYMENT_MIN_AGE_SECONDS = 90
 export const STALE_GUEST_IMMEDIATE_PAYMENT_UNRESOLVED_ABANDON_AGE_SECONDS = 5 * 60
 export const STALE_GUEST_IMMEDIATE_PAYMENT_BATCH_LIMIT = 20
+export const STALE_GUEST_IMMEDIATE_PAYMENT_DEFERRED_RETRY_SECONDS = 5 * 60
 
 type OnlinePaymentPort = Pick<
   OnlinePaymentService,
@@ -59,6 +60,8 @@ export interface StaleGuestImmediatePaymentBatch {
  * abandonment remains a finance/refund case rather than renewed fulfilment.
  */
 export class StaleGuestImmediatePaymentWorker {
+  private readonly deferredUntilByPaymentId = new Map<string, number>()
+
   constructor(
     private readonly deps: Readonly<StaleGuestImmediatePaymentWorkerDeps>,
     private readonly transactions?: Pick<ScopedPostgresTransactionRunner, 'run'>,
@@ -91,6 +94,10 @@ export class StaleGuestImmediatePaymentWorker {
     const candidates = await this.deps.onlinePayments.listStaleGuestImmediateCheckoutPaymentCandidates(
       scope, minAgeSeconds, limit,
     )
+    const candidateIds = new Set(candidates.map((candidate) => candidate.id))
+    for (const paymentId of this.deferredUntilByPaymentId.keys()) {
+      if (!candidateIds.has(paymentId)) this.deferredUntilByPaymentId.delete(paymentId)
+    }
     const queriedPaymentIds: string[] = []
     const paidPaymentIds: string[] = []
     const terminalAbandonedPaymentIds: string[] = []
@@ -125,6 +132,12 @@ export class StaleGuestImmediatePaymentWorker {
     }
 
     for (const candidate of candidates) {
+      const candidateNow = now()
+      const deferredUntil = this.deferredUntilByPaymentId.get(candidate.id) ?? 0
+      if (deferredUntil > candidateNow) {
+        deferredPaymentIds.push(candidate.id)
+        continue
+      }
       const binding = `stale-guest-checkout:${workerId}:${candidate.id}:${randomUUID()}`
       try {
         const closed = await this.deps.onlinePayments.closeSystem({
@@ -133,6 +146,7 @@ export class StaleGuestImmediatePaymentWorker {
         queriedPaymentIds.push(candidate.id)
         const observation = closed.observation
         if (observation.status === 'closed' || observation.status === 'failed') {
+          this.deferredUntilByPaymentId.delete(candidate.id)
           if (candidate.operationallyAbandoned) {
             // The order was already cancelled. Apply the verified financial
             // terminal fact only; never attempt to re-open or re-retire it.
@@ -171,6 +185,11 @@ export class StaleGuestImmediatePaymentWorker {
         await applyProviderQueryObservation(this.deps.payments, context, closed, binding)
         if (observation.status === 'succeeded') paidPaymentIds.push(candidate.id)
         else deferredPaymentIds.push(candidate.id)
+        if (observation.status === 'processing' || observation.status === 'pending') {
+          this.deferProviderRetry(candidate.id, now())
+        } else {
+          this.deferredUntilByPaymentId.delete(candidate.id)
+        }
       } catch (error) {
         if (!candidate.operationallyAbandoned
           && isProviderOutcomeUnknown(error)
@@ -188,11 +207,13 @@ export class StaleGuestImmediatePaymentWorker {
               workerId,
             })
             unresolvedAbandonedPaymentIds.push(candidate.id)
+            this.deferredUntilByPaymentId.delete(candidate.id)
           } catch {
             failedPaymentIds.push(candidate.id)
           }
         } else if (isProviderOutcomeUnknown(error)) {
           deferredPaymentIds.push(candidate.id)
+          this.deferProviderRetry(candidate.id, now())
         } else {
           failedPaymentIds.push(candidate.id)
         }
@@ -202,6 +223,13 @@ export class StaleGuestImmediatePaymentWorker {
       workerId, claimed: candidates.length, queriedPaymentIds, paidPaymentIds,
       terminalAbandonedPaymentIds, unresolvedAbandonedPaymentIds, deferredPaymentIds, failedPaymentIds,
     }
+  }
+
+  private deferProviderRetry(paymentId: string, nowMs: number): void {
+    this.deferredUntilByPaymentId.set(
+      paymentId,
+      nowMs + STALE_GUEST_IMMEDIATE_PAYMENT_DEFERRED_RETRY_SECONDS * 1_000,
+    )
   }
 
   private async readBusinessDate(scope: Readonly<StoreScope>): Promise<string> {

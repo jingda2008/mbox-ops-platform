@@ -276,14 +276,14 @@ export class OnlinePaymentService {
     if (!['created', 'pending'].includes(context.status)) {
       throw new OnlinePaymentUnavailableError('这笔付款已有明确结果，无需重复查单')
     }
-    const observation = await this.adapter.queryPayment({
+    const observation = await queryPaymentWithUnknownBoundary(this.adapter, {
       paymentIntentId: context.publicId,
       merchantId: this.config.merchantId,
       amount: context.amountMinor,
       currency: context.currency,
       providerTransactionId: context.providerTransactionId,
       orderDate: postarOrderDate(context.createdAt),
-    }, { secrets: this.secrets })
+    }, this.secrets)
     if (observation.amount !== context.amountMinor || observation.currency !== context.currency) {
       throw new OnlinePaymentUnknownError()
     }
@@ -355,14 +355,14 @@ export class OnlinePaymentService {
     if (context.provider !== 'postar' || !['created', 'pending'].includes(context.status)) {
       throw new OnlinePaymentUnavailableError('这笔付款已有明确结果，无需关闭')
     }
-    const queried = await adapter.queryPayment({
+    const queried = await queryPaymentWithUnknownBoundary(adapter, {
       paymentIntentId: context.publicId,
       merchantId: config.merchantId,
       amount: context.amountMinor,
       currency: context.currency,
       providerTransactionId: context.providerTransactionId,
       orderDate: postarOrderDate(context.createdAt),
-    }, { secrets })
+    }, secrets)
     if (queried.amount !== context.amountMinor || queried.currency !== context.currency) {
       throw new OnlinePaymentUnknownError()
     }
@@ -420,14 +420,14 @@ export class OnlinePaymentService {
     if (!['created', 'pending'].includes(context.status)) {
       throw new OnlinePaymentUnavailableError('这笔付款已有明确结果，无需重复查单')
     }
-    const observation = await this.adapter.queryPayment({
+    const observation = await queryPaymentWithUnknownBoundary(this.adapter, {
       paymentIntentId: context.publicId,
       merchantId: this.config.merchantId,
       amount: context.amountMinor,
       currency: context.currency,
       providerTransactionId: context.providerTransactionId,
       orderDate: postarOrderDate(context.createdAt),
-    }, { secrets: this.secrets })
+    }, this.secrets)
     if (observation.amount !== context.amountMinor || observation.currency !== context.currency) {
       throw new OnlinePaymentUnknownError()
     }
@@ -1026,6 +1026,22 @@ function paymentQueryEvidence(observation: Readonly<ProviderPaymentObservation>)
     ...(observation.settlementChannel === undefined
       ? {}
       : { channel: observation.settlementChannel }),
+  }
+}
+
+async function queryPaymentWithUnknownBoundary(
+  adapter: Pick<OnlinePaymentAdapter, 'queryPayment'>,
+  request: Parameters<OnlinePaymentAdapter['queryPayment']>[0],
+  secrets: PaymentProviderSecretSource,
+): Promise<ProviderPaymentObservation> {
+  try {
+    return await adapter.queryPayment(request, { secrets })
+  } catch (error) {
+    // A rejected, malformed or unreachable query response is not evidence of
+    // success or failure. Keep the financial fact unknown so callers and the
+    // background worker can release operations without inventing a result.
+    if (error instanceof OnlinePaymentUnknownError) throw error
+    throw new OnlinePaymentUnknownError()
   }
 }
 

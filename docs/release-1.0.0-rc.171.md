@@ -5,10 +5,11 @@
 This candidate repairs the staff-assisted ordering and table-finance attention
 paths. A dedicated read-only endpoint now paginates the complete active catalog,
 filters it to `staff_assisted`, verifies a positive current price, applies
-inventory availability and removes cost data. The cashier role gains only the
+inventory availability and removes cost data. The migration adds only the
 table visibility, order creation and audited close/turnover permissions needed
-for its operating duty; catalog management, gifting and refund initiation stay
-outside that role.
+for its operating duty. It does not grant catalog management or gifting;
+the cashier role's pre-existing, separately controlled refund-request authority
+is unchanged and remains subject to the established separation-of-duties flow.
 
 The live table map now distinguishes unpaid, provider-confirming, payment-error,
 refund-pending and settled sessions using local authoritative financial facts.

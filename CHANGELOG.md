@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.0-rc.172 - 2026-09-07
+
+- Classifies rejected, malformed and unreachable payment-query responses as
+  financially unknown instead of allowing a provider protocol exception to
+  make the application readiness endpoint flap.
+- Keeps an already abandoned guest checkout and its table operationally
+  released while retaining the pending payment fact for callback, query and
+  refund review; no uncertain result is rewritten as paid or failed.
+- Backs off repeated queries for an abandoned unknown payment from every 30
+  seconds to every five minutes, without weakening late-capture detection.
+- Corrects the rc.171 release note: the cashier assistance migration did not
+  add refund authority, but the existing cashier role intentionally retains
+  its separately controlled refund-request workflow.
+
 ## 1.0.0-rc.171 - 2026-09-07
 
 - Gives staff-assisted ordering a complete, read-only sellable catalog instead

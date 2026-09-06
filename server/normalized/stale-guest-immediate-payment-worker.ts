@@ -150,11 +150,13 @@ export class StaleGuestImmediatePaymentWorker {
           if (candidate.operationallyAbandoned) {
             // The order was already cancelled. Apply the verified financial
             // terminal fact only; never attempt to re-open or re-retire it.
-            await applyProviderQueryObservation(this.deps.payments, context, closed, binding)
+            await applyProviderQueryObservation(
+              this.deps.payments, context, closed, binding, 'postar-close-payment',
+            )
           } else {
             await this.deps.reconciliation.commitTerminal({
               scope,
-              actor: { type: 'integration', ref: 'postar-stale-guest-checkout' },
+              actor: { type: 'integration', ref: 'postar-close-payment' },
               businessDate: resolvedBusinessDate,
               idempotencyKey: `stale-guest-terminal:${candidate.id}:${observation.status}`,
               requestFingerprint: JSON.stringify({
@@ -182,7 +184,9 @@ export class StaleGuestImmediatePaymentWorker {
           }
           continue
         }
-        await applyProviderQueryObservation(this.deps.payments, context, closed, binding)
+        await applyProviderQueryObservation(
+          this.deps.payments, context, closed, binding, 'postar-close-payment',
+        )
         if (observation.status === 'succeeded') paidPaymentIds.push(candidate.id)
         else deferredPaymentIds.push(candidate.id)
         if (observation.status === 'processing' || observation.status === 'pending') {

@@ -61,6 +61,7 @@ describe('stale guest immediate payment worker', () => {
     expect(closeSystem).toHaveBeenCalledWith(expect.objectContaining({ paymentId: 'payment-terminal' }))
     expect(commitTerminal).toHaveBeenCalledWith(expect.objectContaining({
       paymentPublicId: 'PAY-terminal', status: 'closed', workerId: 'worker-test',
+      actor: { type: 'integration', ref: 'postar-close-payment' },
     }))
     expect(result.terminalAbandonedPaymentIds).toEqual(['payment-terminal'])
   })
@@ -82,6 +83,7 @@ describe('stale guest immediate payment worker', () => {
 
     expect(recordProviderQueryResult).toHaveBeenCalledWith(expect.objectContaining({
       paymentPublicId: 'PAY-paid', status: 'succeeded',
+      actor: { type: 'integration', ref: 'postar-close-payment' },
     }))
     expect(result.paidPaymentIds).toEqual(['payment-paid'])
   })
@@ -103,8 +105,39 @@ describe('stale guest immediate payment worker', () => {
     const result = await worker.runBatch(scope, 'worker-test', businessDate)
 
     expect(recordProviderQueryResult).toHaveBeenCalledTimes(1)
+    expect(recordProviderQueryResult).toHaveBeenCalledWith(expect.objectContaining({
+      actor: { type: 'integration', ref: 'postar-close-payment' },
+    }))
     expect(commitTerminal).not.toHaveBeenCalled()
     expect(result.paidPaymentIds).toEqual(['payment-late'])
+  })
+
+  it('consumes an abandoned terminal result with the close observation authority', async () => {
+    const recordProviderQueryResult = vi.fn(async (input: { actor: { ref: string } }) => {
+      if (input.actor.ref !== 'postar-close-payment') throw new Error('observation integration mismatch')
+      return { replayed: false, value: {} }
+    })
+    const worker = new StaleGuestImmediatePaymentWorker({
+      onlinePayments: {
+        listStaleGuestImmediateCheckoutPaymentCandidates: vi.fn(async () => [{
+          id: 'payment-abandoned-failed',
+          createdAt: '2026-08-29T03:00:00.000Z',
+          operationallyAbandoned: true,
+        }]),
+        closeSystem: vi.fn(async () => observed('abandoned-failed', 'failed')),
+      } as never,
+      payments: { recordProviderQueryResult } as never,
+      reconciliation: { commitTerminal: vi.fn(), abandonUnresolved: vi.fn() } as never,
+    })
+
+    const result = await worker.runBatch(scope, 'worker-test', businessDate)
+
+    expect(recordProviderQueryResult).toHaveBeenCalledWith(expect.objectContaining({
+      paymentPublicId: 'PAY-abandoned-failed',
+      status: 'failed',
+      actor: { type: 'integration', ref: 'postar-close-payment' },
+    }))
+    expect(result.failedPaymentIds).toEqual([])
   })
 
   it('defers fresh channel unavailability but operationally retires only an older unresolved checkout', async () => {

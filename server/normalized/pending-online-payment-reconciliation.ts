@@ -98,9 +98,10 @@ export async function applyProviderQueryObservation(
   context: Readonly<PendingOnlinePaymentReconciliationContext>,
   queried: Awaited<ReturnType<OnlinePaymentService['query']>>,
   idempotencyKey: string,
+  integrationRef = 'postar-active-query',
 ): Promise<void> {
   const observed = queried.observation
-  const actor: AuditActor = { type: 'integration', ref: 'postar-active-query' }
+  const actor: AuditActor = { type: 'integration', ref: integrationRef }
   const providerSnapshot = sanitizeProviderSnapshot({
     providerStatus: observed.status,
     providerReportedAmountMinor: observed.providerReportedAmount ?? observed.amount,

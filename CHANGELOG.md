@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.0-rc.174 - 2026-09-07
+
+- Preserves the `postar-close-payment` authority from a verified provider
+  close workflow through payment-result consumption, instead of relabelling
+  that evidence as an active query or stale-checkout integration.
+- Lets an already abandoned guest checkout consume a provider-confirmed failed,
+  closed or late-success result without weakening the immutable observation
+  binding or editing financial facts by hand.
+- Stops the same terminal guest payments from failing background reconciliation
+  every 30 seconds and leaves physical table closure under explicit staff
+  control.
+- Adds regression coverage for the production sequence where the customer has
+  exited, the order is operationally cancelled and StarPay reports failure.
+
 ## 1.0.0-rc.173 - 2026-09-07
 
 - Extends the financially-unknown boundary from provider queries to the

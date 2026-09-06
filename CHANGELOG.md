@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.0.0-rc.171 - 2026-09-07
+
+- Gives staff-assisted ordering a complete, read-only sellable catalog instead
+  of the first 100 catalog-management rows; cashiers can see every eligible
+  drink and snack without receiving product-management or gift authority.
+- Gives the cashier role the read-only table visibility and audited table-close
+  capabilities required to assist orders and release a physical table while
+  unresolved payment, refund and reconciliation facts remain open.
+- Makes unpaid, payment-confirming, payment-exception and refund-pending tables
+  visually distinct, with per-table counts, persistent alerts and direct
+  payment/refund workbench actions driven by local financial state.
+- Loads all active products in the checkout-upgrade and loyalty-redemption
+  selectors instead of silently truncating those management lists at 100.
+- Keeps Mini Program product cards inside their fixed frame, enlarges the image
+  area without hiding price actions, and restores guest reservation access on
+  both customer platforms.
+
 ## 1.0.0-rc.170 - 2026-09-04
 
 - Adds Alipay AES phone-number authorization routing for membership enroll,

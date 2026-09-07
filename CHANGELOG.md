@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.0-rc.177 - 2026-09-07
+
+- Advances the immutable LuJiazui store configuration from
+  `2026.09.07-v19` to `2026.09.07-v20` after the rc.176 production gate
+  correctly rejected changed role permissions under an existing version.
+- Adds an append-only configuration-version checksum ledger to the release
+  metadata gate so a changed store document cannot accidentally reuse a
+  previously published version again.
+- Retains the rc.176 payment recovery, overcollection, authorization and
+  responsive-page repairs without changing their financial authority rules.
+
 ## 1.0.0-rc.176 - 2026-09-07
 
 - Lets staff explicitly retain an unresolved online attempt for reconciliation

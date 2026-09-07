@@ -1,4 +1,5 @@
 import { access, readFile, readdir } from 'node:fs/promises'
+import { verifyStoreConfigurationVersion } from './store-configuration-version-ledger.mjs'
 
 const packageDocument = JSON.parse(await readFile('package.json', 'utf8'))
 const lockDocument = JSON.parse(await readFile('package-lock.json', 'utf8'))
@@ -11,6 +12,8 @@ const qualityRegisters = [
   { path: `docs/tc-release-blockers-${version}.csv`, identifiesVersion: false },
 ]
 const failures = []
+
+await validateStoreConfigurationLedger(failures)
 
 if (!/^\d+\.\d+\.\d+-rc\.\d+$/.test(version)) {
   failures.push(`package version ${version} is not a release-candidate version`)
@@ -88,4 +91,16 @@ async function validateMigrationDirectory(directory, label, targetFailures) {
     }
   }
   return files
+}
+
+async function validateStoreConfigurationLedger(targetFailures) {
+  const configPath = 'deploy/normalized-store/mbox-lujiazui.store.json'
+  const ledgerPath = 'deploy/normalized-store/store-configuration-versions.json'
+  try {
+    const configBuffer = await readFile(configPath)
+    const ledger = JSON.parse(await readFile(ledgerPath, 'utf8'))
+    targetFailures.push(...verifyStoreConfigurationVersion({ configBuffer, ledger, configPath, ledgerPath }))
+  } catch (error) {
+    targetFailures.push(`store configuration ledger verification failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
 }

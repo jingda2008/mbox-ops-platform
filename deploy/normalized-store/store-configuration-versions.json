@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "versions": [
+    {
+      "version": "2026.09.07-v19",
+      "sha256": "fc3c4bc69a1ac02018193093a87f296c9c89911a38102fba3122785dec6e370b"
+    },
+    {
+      "version": "2026.09.07-v20",
+      "sha256": "e6595f2ae249338f772b4b3b7665878a3de6e67d952d229499b2c55aeb8c592b"
+    }
+  ]
+}

@@ -231,8 +231,9 @@ const evidenceByDomain = {
 }
 
 const exactEvidence = {
-  'ORD-002': 'normalized browser及commerce-kds-api测试：已开台桌次锁定、商品搜索、员工协助下单、库存消耗和KDS创建完整回归',
+  'ORD-002': 'normalized browser、catalog-api、MenuOrderingWorkspace及commerce-kds-api测试：已开台桌次锁定、小食子分类、员工专属商品、搜索、协助下单、库存消耗和KDS创建完整回归',
   'PAY-013': 'commerce-kds-api及PostgresPricingAuthority测试：赠送原因必填、客户端不可伪造授权源、岗位单笔额度、重复员工授权与会员权益隔离回归',
+  'PAY-017': 'refund、online-payment-refund及stale-payment-worker测试：提交不冒充成功、验签终态幂等落账、处理中自动复查、失败保留待办且渠道故障不阻塞桌台',
   'PER-026': 'presence.test.ts：主责离线后任务重新打开并进入责任链，恢复登录不会自动夺回任务',
   'GST-024': 'proactive-service.test.ts：员工显式标记后按配置时间生成一次主动关怀任务，下单后自动关闭',
   'GST-025': 'proactive-service.test.ts：延后15/30/60分钟期间不生成任务，到期只恢复一次提醒并留审计',

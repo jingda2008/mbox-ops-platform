@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { guestDrinkMatchesFamily, isDrinkMenuProduct, resolveMenuBeverageFamily } from './menu-product-classification.js'
+import { guestDrinkMatchesFamily, isDrinkMenuProduct, isEligibleForGuestStyleMenu, isFoodMenuProduct, resolveMenuBeverageFamily } from './menu-product-classification.js'
 
 describe('menu product classification', () => {
   it('keeps an incompletely classified drink visible in the all-drinks view', () => {
@@ -34,5 +34,23 @@ describe('menu product classification', () => {
       categoryName: '小食',
       beverageFamily: 'none',
     })).toBe(false)
+  })
+
+  it('uses the editable category hierarchy for food child categories', () => {
+    expect(isFoodMenuProduct({
+      name: '炸薯条', categoryId: 'snack', categoryName: '小食',
+      categoryParentId: 'food', categoryParentName: '鲜果与冷食', beverageFamily: 'none',
+    })).toBe(true)
+    expect(isFoodMenuProduct({
+      name: '泥煤威士忌', categoryId: 'fruit', categoryName: '艾雷岛烟熏泥煤威士忌',
+      categoryParentId: 'weishiji', categoryParentName: '威士忌', beverageFamily: 'spirits',
+    })).toBe(false)
+  })
+
+  it('lets a server-approved staff catalog use the guest-style menu without applying guest visibility', () => {
+    const product = { guestVisible: false }
+
+    expect(isEligibleForGuestStyleMenu(product)).toBe(false)
+    expect(isEligibleForGuestStyleMenu(product, true)).toBe(true)
   })
 })

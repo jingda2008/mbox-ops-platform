@@ -106,13 +106,16 @@ describe('staff actions model', () => {
 
   it('counts each financially affected table once without treating a provider query as table state', () => {
     const withSession = (id: string, financialState: NonNullable<StaffActionTable['activeSession']>['financialState'],
-      unpaidOrderCount: number, pendingPaymentCount: number, refundAttentionCount: number): StaffActionTable => ({
+      unpaidOrderCount: number, pendingPaymentCount: number, refundAttentionCount: number,
+      refundActionCount?: number, refundProcessingCount?: number): StaffActionTable => ({
       ...table,
       id,
       activeSession: {
         id: `session-${id}`, guestCount: 2, capacityAtOpen: 4, status: 'open',
         openedAt: '2026-09-07T12:00:00.000Z', latestMood: null, guestCartWritesFrozen: false,
         financialState, orderCount: 1, unpaidOrderCount, pendingPaymentCount, refundAttentionCount,
+        ...(refundActionCount === undefined ? {} : { refundActionCount }),
+        ...(refundProcessingCount === undefined ? {} : { refundProcessingCount }),
       },
     })
     expect(staffTableFinancialSummary([
@@ -120,9 +123,10 @@ describe('staff actions model', () => {
       withSession('processing', 'payment_pending', 0, 2, 0),
       withSession('payment-error', 'payment_exception', 0, 0, 0),
       withSession('refund', 'refund_pending', 0, 0, 2),
+      withSession('refund-processing', 'refund_pending', 0, 0, 1, 0, 1),
       withSession('paid', 'paid', 0, 0, 0),
       table,
-    ])).toEqual({ paymentDue: 3, refunds: 1, exceptions: 2 })
+    ])).toEqual({ paymentDue: 3, refunds: 2, refundActions: 1, refundsProcessing: 1, exceptions: 3 })
   })
 
   it('builds one busy-time queue: complaint, overdue, delivery, assigned service, production', () => {

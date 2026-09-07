@@ -325,6 +325,7 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
             compactCart
             deemphasizeCollapsedTotal
             guestSalesMode
+            includeNonGuestProducts
             partySize={table.activeSession.guestCount}
             recommendationScene={recommendationScene(table.activeSession.guestProfileSnapshot ?? {})}
             onSubmit={submitPaidOrder}
@@ -603,7 +604,9 @@ function assistedProductToMenuProduct(product: AssistedOrderCatalogProduct): Men
     substitutionProductIds: [],
     recommendation: menuRecommendation(recommendation, product),
     categoryId: product.categoryCode,
-    categoryName: text(snapshot.categoryName) || categoryLabel(product.categoryCode),
+    categoryName: product.categoryName || text(snapshot.categoryName) || categoryLabel(product.categoryCode),
+    categoryParentId: product.categoryParentCode,
+    categoryParentName: product.categoryParentName,
     description: text(snapshot.description) || undefined,
     imageUrl: text(snapshot.imageUrl) || undefined,
     tags: stringArray(snapshot.tags),

@@ -469,6 +469,17 @@ export class OnlinePaymentService {
     ), { readOnly: true })
   }
 
+  listStaleProcessingPostarRefundIds(
+    scope: Readonly<StoreScope>,
+    minAgeSeconds: number,
+    limit: number,
+  ): Promise<string[]> {
+    return this.transactions.run(scope, async (transaction) => (
+      new PaymentProviderActionRepository(transaction, this.secret)
+        .listStaleProcessingPostarRefundIds(minAgeSeconds, limit)
+    ), { readOnly: true })
+  }
+
   listStaleGuestImmediateCheckoutPaymentCandidates(
     scope: Readonly<StoreScope>,
     minAgeSeconds: number,

@@ -488,7 +488,8 @@ export class NormalizedBackgroundWorkerCoordinator {
     }
     const staleGuestImmediatePaymentReconciliation = fulfilledValue(executions[28])
     if (staleGuestImmediatePaymentReconciliation !== null
-      && staleGuestImmediatePaymentReconciliation.failedPaymentIds.length > 0) {
+      && (staleGuestImmediatePaymentReconciliation.failedPaymentIds.length > 0
+        || (staleGuestImmediatePaymentReconciliation.failedRefundIds?.length ?? 0) > 0)) {
       failures.push('stale-guest-immediate-payment-reconciliation')
       this.options.onError?.(
         'stale-guest-immediate-payment-reconciliation',

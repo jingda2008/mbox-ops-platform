@@ -1336,6 +1336,22 @@ async function listCompleteAssistedOrderCatalog(
 ): Promise<Array<ReturnType<typeof assistedOrderCatalogProduct>>> {
   const pageSize = 100;
   const maximumProducts = 10_000;
+  const categoryRows = await transaction.query<{
+    code: string;
+    display_name: string;
+    parent_code: string | null;
+    parent_name: string | null;
+  }>(`
+    SELECT category.code,category.display_name,category.parent_code,
+      parent.display_name AS parent_name
+    FROM mbox.menu_categories AS category
+    LEFT JOIN mbox.menu_categories AS parent
+      ON parent.tenant_id=category.tenant_id
+      AND parent.store_id=category.store_id
+      AND parent.code=category.parent_code
+    WHERE category.tenant_id=$1::uuid AND category.store_id=$2::uuid
+  `, [transaction.scope.tenantId, transaction.scope.storeId]);
+  const categories = new Map(categoryRows.rows.map((category) => [category.code, category]));
   const products = new Map<string, ReturnType<typeof assistedOrderCatalogProduct>>();
   for (let offset = 0; offset <= maximumProducts; offset += pageSize) {
     const rows = await listProducts(transaction, {
@@ -1352,7 +1368,7 @@ async function listCompleteAssistedOrderCatalog(
       if (product.allowedChannels.includes("staff_assisted")
         && Number.isSafeInteger(amountMinor)
         && amountMinor > 0) {
-        products.set(product.id, assistedOrderCatalogProduct(product));
+        products.set(product.id, assistedOrderCatalogProduct(product, categories.get(product.categoryCode)));
       }
     }
     if (rows.length < pageSize) return [...products.values()];
@@ -1360,12 +1376,22 @@ async function listCompleteAssistedOrderCatalog(
   throw new Error("协助点单商品数量超过安全读取范围，未返回不完整菜单");
 }
 
-function assistedOrderCatalogProduct(product: CatalogProduct) {
+function assistedOrderCatalogProduct(
+  product: CatalogProduct,
+  category?: Readonly<{
+    display_name: string;
+    parent_code: string | null;
+    parent_name: string | null;
+  }>,
+) {
   return {
     id: product.id,
     code: product.code,
     name: product.name,
     categoryCode: product.categoryCode,
+    categoryName: category?.display_name ?? product.categoryCode,
+    categoryParentCode: category?.parent_code ?? null,
+    categoryParentName: category?.parent_name ?? null,
     fulfillmentStation: product.fulfillmentStation,
     productKind: product.productKind,
     bundleComponents: product.bundleComponents,

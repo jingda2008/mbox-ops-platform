@@ -399,6 +399,8 @@ export function StaffActionsPanel({
   const tableExceptionCount = tableFinancialSummary.exceptions
   const tablePaymentDueCount = tableFinancialSummary.paymentDue
   const tableRefundCount = tableFinancialSummary.refunds
+  const tableRefundActionCount = tableFinancialSummary.refundActions
+  const tableRefundProcessingCount = tableFinancialSummary.refundsProcessing
   const currentActionKeys = useMemo(() => [
     ...serviceActions.map((task) => `service:${task.id}`),
     ...fulfillmentActions.map((item) => `fulfillment:${item.taskId}`),
@@ -898,9 +900,15 @@ export function StaffActionsPanel({
             </div>
           </div>
           {(tablePaymentDueCount > 0 || tableRefundCount > 0) && <div className="staff-table-financial-alert" role="alert">
-            <div><strong>{tablePaymentDueCount > 0 ? `${tablePaymentDueCount} 张桌待收款` : '当前没有待收款桌台'}{tableRefundCount > 0 ? ` · ${tableRefundCount} 张桌退款待办` : ''}</strong><span>桌台颜色和角标来自本地账务状态，支付渠道查询不会阻塞桌台列表。</span></div>
+            <div><strong>{[
+              tablePaymentDueCount > 0 ? `${tablePaymentDueCount} 张桌待收款` : '',
+              tableRefundActionCount > 0 ? `${tableRefundActionCount} 张桌退款待处理` : '',
+              tableRefundProcessingCount > 0 ? `${tableRefundProcessingCount} 张桌退款由系统核对中` : '',
+            ].filter(Boolean).join(' · ')}</strong><span>{tableRefundProcessingCount > 0
+              ? '退款提交不等于成功；系统会自动查渠道终态，期间不阻塞桌台列表。'
+              : '桌台颜色和角标来自本地账务状态，支付渠道查询不会阻塞桌台列表。'}</span></div>
             {tablePaymentDueCount > 0 && <button type="button" onClick={() => setTableScope('unpaid')}>查看待支付</button>}
-            {tableRefundCount > 0 && onNavigate !== undefined && <button type="button" className="is-danger" onClick={() => onNavigate('/staff/payments')}>处理退款</button>}
+            {tableRefundCount > 0 && onNavigate !== undefined && <button type="button" className={tableRefundActionCount > 0 ? 'is-danger' : ''} onClick={() => onNavigate('/staff/payments')}>{tableRefundActionCount > 0 ? '处理退款' : '查看退款进度'}</button>}
           </div>}
           {visibleTables.length === 0 && <div className="staff-table-empty"><strong>当前范围没有桌台</strong><span>可搜索桌号，或切换到“全部”查看完整桌图。</span><button type="button" onClick={() => setTableScope('all')}>查看全部桌台</button></div>}
           {tableGroups(visibleTables).map((group) => (
@@ -927,7 +935,7 @@ export function StaffActionsPanel({
                     >
                       <strong>{table.code}</strong>
                       <span>{table.activeSession === null ? `${table.capacity}人 · 空台` : `${table.activeSession.guestCount}人 · ${table.activeSession.status === 'closing' ? '结台中' : tableFinancialLabel(table.activeSession.financialState)}`}</span>
-                      {table.activeSession !== null && (table.activeSession.unpaidOrderCount > 0 || table.activeSession.pendingPaymentCount > 0 || table.activeSession.refundAttentionCount > 0) && <em className="staff-table-financial-detail">{table.activeSession.unpaidOrderCount > 0 ? `${table.activeSession.unpaidOrderCount}笔未收` : ''}{table.activeSession.pendingPaymentCount > 0 ? `${table.activeSession.unpaidOrderCount > 0 ? ' · ' : ''}${table.activeSession.pendingPaymentCount}笔确认中` : ''}{table.activeSession.refundAttentionCount > 0 ? `${table.activeSession.unpaidOrderCount > 0 || table.activeSession.pendingPaymentCount > 0 ? ' · ' : ''}${table.activeSession.refundAttentionCount}笔退款` : ''}</em>}
+                      {table.activeSession !== null && (table.activeSession.unpaidOrderCount > 0 || table.activeSession.pendingPaymentCount > 0 || table.activeSession.refundAttentionCount > 0) && <em className="staff-table-financial-detail">{table.activeSession.unpaidOrderCount > 0 ? `${table.activeSession.unpaidOrderCount}笔未收` : ''}{table.activeSession.pendingPaymentCount > 0 ? `${table.activeSession.unpaidOrderCount > 0 ? ' · ' : ''}${table.activeSession.pendingPaymentCount}笔确认中` : ''}{table.activeSession.refundAttentionCount > 0 ? `${table.activeSession.unpaidOrderCount > 0 || table.activeSession.pendingPaymentCount > 0 ? ' · ' : ''}${table.activeSession.refundAttentionCount}笔${(table.activeSession.refundActionCount ?? table.activeSession.refundAttentionCount) > 0 ? '退款待办' : '退款核对中'}` : ''}</em>}
                       {hasFinancialAttention && <b className="staff-table-attention-badge" aria-label="支付或退款待办">!</b>}
                       {table.assignedToActor && <small>负责桌</small>}
                       {mood !== null && (

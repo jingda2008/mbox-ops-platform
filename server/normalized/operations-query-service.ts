@@ -45,6 +45,8 @@ export interface OperationsTableView {
     unpaidOrderCount: number
     pendingPaymentCount: number
     refundAttentionCount: number
+    refundActionCount: number
+    refundProcessingCount: number
     status: 'open' | 'closing'
     openedAt: string
   }
@@ -116,6 +118,8 @@ interface TableRow extends Record<string, unknown> {
   unpaid_order_count: number | null
   pending_payment_count: number | null
   refund_attention_count: number | null
+  refund_action_count: number | null
+  refund_processing_count: number | null
   session_status: 'open' | 'closing' | null
   opened_at: string | null
 }
@@ -242,7 +246,7 @@ async function readTables(
         ELSE 'no_order'
       END AS financial_state,
       finance.order_count,finance.unpaid_order_count,finance.pending_payment_count,
-      finance.refund_attention_count,
+      finance.refund_attention_count,finance.refund_action_count,finance.refund_processing_count,
       session.status AS session_status, session.opened_at::text
     FROM mbox.tables venue_table
     JOIN mbox.areas area
@@ -291,7 +295,7 @@ async function readTables(
             AND ordering.store_id=payment.store_id AND ordering.id=payment.order_id
           WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
             AND ordering.table_session_id=session.id
-            AND refund.status IN ('requested','approved','processing'))
+            AND refund.status IN ('requested','approved','processing','failed'))
           + (SELECT count(*)::integer FROM mbox.guest_immediate_checkout_late_capture_refund_followups followup
             JOIN mbox.orders ordering ON ordering.tenant_id=followup.tenant_id
               AND ordering.store_id=followup.store_id AND ordering.id=followup.order_id
@@ -303,6 +307,33 @@ async function readTables(
                   AND completed_refund.store_id=followup.store_id
                   AND completed_refund.payment_id=followup.payment_id
                   AND completed_refund.status='succeeded'),0)) AS refund_attention_count,
+        (SELECT count(*)::integer FROM mbox.refunds refund
+          JOIN mbox.payments payment ON payment.tenant_id=refund.tenant_id
+            AND payment.store_id=refund.store_id AND payment.id=refund.payment_id
+          JOIN mbox.orders ordering ON ordering.tenant_id=payment.tenant_id
+            AND ordering.store_id=payment.store_id AND ordering.id=payment.order_id
+          WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
+            AND ordering.table_session_id=session.id
+            AND refund.status IN ('requested','approved','failed'))
+          + (SELECT count(*)::integer FROM mbox.guest_immediate_checkout_late_capture_refund_followups followup
+            JOIN mbox.orders ordering ON ordering.tenant_id=followup.tenant_id
+              AND ordering.store_id=followup.store_id AND ordering.id=followup.order_id
+            WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
+              AND ordering.table_session_id=session.id
+              AND followup.amount_minor>COALESCE((SELECT sum(completed_refund.amount_minor)
+                FROM mbox.refunds completed_refund
+                WHERE completed_refund.tenant_id=followup.tenant_id
+                  AND completed_refund.store_id=followup.store_id
+                  AND completed_refund.payment_id=followup.payment_id
+                  AND completed_refund.status='succeeded'),0)) AS refund_action_count,
+        (SELECT count(*)::integer FROM mbox.refunds refund
+          JOIN mbox.payments payment ON payment.tenant_id=refund.tenant_id
+            AND payment.store_id=refund.store_id AND payment.id=refund.payment_id
+          JOIN mbox.orders ordering ON ordering.tenant_id=payment.tenant_id
+            AND ordering.store_id=payment.store_id AND ordering.id=payment.order_id
+          WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
+            AND ordering.table_session_id=session.id
+            AND refund.status='processing') AS refund_processing_count,
         (SELECT count(*)::integer FROM mbox.payments payment
           JOIN mbox.orders ordering ON ordering.tenant_id=payment.tenant_id
             AND ordering.store_id=payment.store_id AND ordering.id=payment.order_id
@@ -449,6 +480,8 @@ function mapTable(row: TableRow): OperationsTableView {
       unpaidOrderCount: row.unpaid_order_count ?? 0,
       pendingPaymentCount: row.pending_payment_count ?? 0,
       refundAttentionCount: row.refund_attention_count ?? 0,
+      refundActionCount: row.refund_action_count ?? 0,
+      refundProcessingCount: row.refund_processing_count ?? 0,
       status: row.session_status!,
       openedAt: row.opened_at!,
     },

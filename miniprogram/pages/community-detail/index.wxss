@@ -1,6 +1,6 @@
 .detail-page {
   padding-top: 0;
-  padding-bottom: 200rpx;
+  padding-bottom: 0;
 }
 
 .detail-hero {
@@ -137,17 +137,19 @@
 
 .detail-bottom-space { height: 40rpx; }
 .detail-dock {
-  position: fixed;
+  position: relative;
   z-index: 20;
-  right: 0;
-  bottom: 0;
-  left: 0;
+  width: 100%;
+  max-width: 100%;
   display: flex;
+  padding: 16rpx 24rpx calc(16rpx + constant(safe-area-inset-bottom));
   padding: 16rpx 24rpx calc(16rpx + env(safe-area-inset-bottom));
+  flex: 0 0 auto;
   align-items: center;
   border-top: 1rpx solid #d7d1c8;
   background: #fff;
   box-shadow: 0 -10rpx 30rpx rgba(20, 17, 14, .1);
+  box-sizing: border-box;
   gap: 18rpx;
 }
 .detail-dock > view { min-width: 0; flex: 1; }
@@ -189,3 +191,60 @@
   .detail-member-sheet { padding-right: 22rpx; padding-left: 22rpx; }
 }
 @media (max-width: 360px) { .detail-hero { margin-right: -18rpx; margin-left: -18rpx; } .detail-title { right: 18rpx; left: 18rpx; } .detail-member-sheet { max-height: calc(100vh - 4px); padding-right: 18rpx; padding-left: 18rpx; } .detail-member-close { top: 0; right: 0; } }
+
+/* Reserve real space for the persistent registration action. */
+.detail-page {
+  display: flex;
+  width: 100%;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+  flex-direction: column;
+}
+.detail-scroll {
+  width: 100%;
+  height: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+.detail-scroll__content {
+  width: 100%;
+  min-height: 100%;
+  overflow-x: hidden;
+  padding: 0 28rpx 48rpx;
+}
+.detail-dock {
+  position: relative;
+  right: auto;
+  bottom: auto;
+  left: auto;
+  width: 100%;
+  max-width: 100%;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  transform: none;
+}
+.detail-dock > button {
+  min-width: 0;
+  max-width: 46%;
+  flex: 0 1 280rpx;
+  white-space: normal;
+  line-height: 1.25;
+}
+
+@media (max-width: 390px) {
+  .detail-scroll__content { padding-right: 22rpx; padding-left: 22rpx; }
+}
+@media (max-width: 360px) {
+  .detail-scroll__content { padding-right: 18rpx; padding-left: 18rpx; }
+  .detail-dock > button { max-width: 48%; flex-basis: 230rpx; }
+}
+@media (min-width: 700px) {
+  .detail-scroll__content { padding-right: 32px; padding-left: 32px; }
+  .detail-dock {
+    left: 50%;
+    width: 720px;
+    transform: translateX(-50%);
+  }
+}

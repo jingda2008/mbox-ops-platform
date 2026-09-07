@@ -1,9 +1,11 @@
 .order-page {
+  display: flex;
   width: 100%;
-  overflow-x: hidden;
-  padding-top: 0;
-  padding-bottom: calc(230rpx + constant(safe-area-inset-bottom));
-  padding-bottom: calc(230rpx + env(safe-area-inset-bottom));
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+  flex-direction: column;
 }
 .order-head {
   display: flex;
@@ -784,7 +786,7 @@
   font-size: 19rpx;
 }
 .product-detail-content {
-  padding: 24rpx 28rpx calc(30rpx + env(safe-area-inset-bottom));
+  padding: 24rpx 28rpx 30rpx;
 }
 .product-detail-kind,
 .product-detail-name,
@@ -921,12 +923,12 @@
   text-align: right;
 }
 .cart-dock {
-  position: fixed;
+  position: relative;
   z-index: 20;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  padding: 16rpx 24rpx calc(18rpx + env(safe-area-inset-bottom));
+  width: 100%;
+  max-width: 100%;
+  padding: 10rpx 22rpx;
+  flex: 0 0 auto;
   border-top: 1rpx solid #d8d2c9;
   background: rgba(248, 247, 242, 0.98);
   box-shadow: 0 -14rpx 38rpx rgba(24, 20, 17, 0.12);
@@ -1036,7 +1038,7 @@
   width: 100%;
   max-height: 88vh;
   overflow: auto;
-  padding: 18rpx 30rpx calc(30rpx + env(safe-area-inset-bottom));
+  padding: 18rpx 30rpx 30rpx;
   border-radius: 28rpx 28rpx 0 0;
   background: #f9f7f3;
 }
@@ -1140,8 +1142,7 @@
   }
 }
 
-/* Checkout recovery stays a fixed bottom sheet: it must never compete with menu flow. */
-.order-page { padding-top: 18rpx; padding-bottom: calc(164rpx + env(safe-area-inset-bottom)); }
+/* Checkout recovery stays above the independently scrolling menu. */
 .status-banner { margin-bottom: 16rpx; padding: 15rpx 18rpx; border-left: 4rpx solid #b78b4e; border-radius: 12rpx; background: #fbf5e9; color: #6f5938; font-size: 21rpx; line-height: 1.5; }
 .recommend-entry { margin-top: 14rpx; padding: 22rpx 0 18rpx; border-top: 1rpx solid #e4d7c3; border-bottom: 1rpx solid #e4d7c3; }
 .recommend-entry__head { display: flex; padding: 0 4rpx 14rpx; align-items: flex-end; justify-content: space-between; gap: 18rpx; }
@@ -1163,8 +1164,8 @@
 .recommend-entry__action-icon--guided::after { position: absolute; top: 7rpx; right: 8rpx; width: 7rpx; height: 7rpx; border-radius: 50%; background: #b78b4e; box-shadow: -28rpx 29rpx 0 -2rpx #d4b57c; content: ""; }
 .recommend-entry__action-icon--shake { border-radius: 50%; background: linear-gradient(145deg, #f8f0df, #fffdf8); }
 .recommend-entry__action-icon--shake text { transform: rotate(-18deg); }
-.recommend-question { z-index: 62; display: flex; padding: 28rpx; align-items: flex-end; box-sizing: border-box; }
-.recommend-question__sheet { position: relative; width: 100%; max-height: calc(100vh - 8px); padding: 32rpx 26rpx calc(28rpx + env(safe-area-inset-bottom)); border-radius: 28rpx 28rpx 0 0; background: #fffcf7; box-shadow: 0 -18rpx 56rpx rgba(22, 18, 14, .22); box-sizing: border-box; }
+.recommend-question { z-index: 62; display: flex; padding: 28rpx 28rpx 0; align-items: flex-end; box-sizing: border-box; }
+.recommend-question__sheet { position: relative; width: 100%; max-height: calc(100vh - 28rpx); padding: 32rpx 26rpx 28rpx; border-radius: 28rpx 28rpx 0 0; background: #fffcf7; box-shadow: 0 -18rpx 56rpx rgba(22, 18, 14, .22); box-sizing: border-box; }
 .recommend-question__close { position: absolute; top: -2rpx; right: 18rpx; color: #62594f; }
 .recommend-question__close::after { border: 0; }
 .recommend-question__head text { display: block; }
@@ -1176,7 +1177,7 @@
 .recommend-question__options { display: grid; margin-top: 22rpx; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12rpx; }
 .recommend-question__options button { min-width: 0; min-height: 88rpx; margin: 0; padding: 10rpx 14rpx; border: 1rpx solid #d6cec4; border-radius: 18rpx; background: #fff; color: #322d28; font-size: 22rpx; font-weight: 650; line-height: 1.3; }
 .recommend-question__options button::after { border: 0; }
-.cart-dock { padding: 12rpx 22rpx calc(14rpx + env(safe-area-inset-bottom)); border-top-color: #ddd6cd; background: rgba(255, 252, 247, 0.98); box-shadow: 0 -10rpx 30rpx rgba(24, 20, 17, 0.11); }
+.cart-dock { padding: 10rpx 22rpx; border-top-color: #ddd6cd; background: rgba(255, 252, 247, 0.98); box-shadow: 0 -10rpx 30rpx rgba(24, 20, 17, 0.11); }
 .cart-summary { display: grid; grid-template-columns: minmax(0, 1fr) 190rpx; gap: 12rpx; }
 .cart-overview { display: grid; width: 100%; min-width: 0; min-height: 88rpx; margin: 0; padding: 0 4rpx; align-items: center; border: 0; background: transparent; color: #29251f; line-height: 1.2; text-align: left; grid-template-columns: 54rpx minmax(0, 1fr) 30rpx; gap: 10rpx; }
 .cart-overview::after { border: 0; }
@@ -1319,7 +1320,7 @@
 /* Checkout outcome is explicit: Alipay acceptance is not labelled as store
    settlement until the table ledger confirms it. */
 .payment-result { z-index: 60; align-items: flex-end; }
-.payment-result__sheet { position: relative; width: 100%; padding: 38rpx 28rpx calc(28rpx + env(safe-area-inset-bottom)); border-radius: 28rpx 28rpx 0 0; background: #fffcf7; box-shadow: 0 -18rpx 58rpx rgba(25, 20, 16, .24); text-align: center; }
+.payment-result__sheet { position: relative; width: 100%; padding: 38rpx 28rpx 28rpx; border-radius: 28rpx 28rpx 0 0; background: #fffcf7; box-shadow: 0 -18rpx 58rpx rgba(25, 20, 16, .24); text-align: center; }
 .payment-result__close { position: absolute; top: -2rpx; right: 18rpx; color: #62594f; }
 .payment-result__close::after { border: 0; }
 .payment-result__close--pressed::before { background: #eae4dc; transform: translate(-50%, -50%) scale(.96); }
@@ -1385,7 +1386,7 @@
 .payment-result,
 .payment-result__sheet {
   box-sizing: border-box;
-  max-width: 100vw;
+  max-width: 100%;
 }
 
 .cart-dock {
@@ -1427,7 +1428,7 @@
 }
 
 .checkout-confirm {
-  width: 100vw;
+  width: 100%;
   overflow: hidden;
 }
 
@@ -1570,5 +1571,99 @@
     padding-left: 6rpx;
     font-size: 20rpx;
     line-height: 40px;
+  }
+}
+
+/* Keep the native tab bar and the cart action row in separate layout tracks.
+   The content scrolls above the cart instead of continuing behind it. */
+.order-page {
+  display: flex;
+  width: 100%;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+  flex-direction: column;
+}
+
+.order-scroll {
+  width: 100%;
+  height: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.order-scroll__content {
+  width: 100%;
+  min-height: 100%;
+  overflow-x: hidden;
+  padding: 18rpx 28rpx 48rpx;
+}
+
+.cart-dock {
+  position: relative;
+  right: auto;
+  bottom: auto;
+  left: auto;
+  width: 100%;
+  max-width: 100%;
+  padding: 10rpx 22rpx;
+  flex: 0 0 auto;
+  transform: none;
+}
+.checkout-button {
+  width: auto;
+  max-width: 100%;
+  justify-self: stretch;
+}
+
+/* Tab pages already sit above Alipay's native tab bar, which owns the device
+   safe area. Adding it again makes bottom sheets too tall on iPhone. */
+.product-detail-content { padding-bottom: 30rpx; }
+.upgrade-sheet { padding-bottom: 30rpx; }
+.recommend-question { padding: 28rpx 28rpx 0; }
+.recommend-question__sheet {
+  max-height: calc(100vh - 28rpx);
+  padding-bottom: 28rpx;
+}
+.checkout-confirm {
+  width: 100%;
+  max-width: 100%;
+}
+.checkout-confirm__sheet {
+  max-height: 100%;
+  padding-bottom: 26rpx;
+}
+.payment-result__sheet {
+  max-height: 100%;
+  overflow-y: auto;
+  padding-bottom: 28rpx;
+}
+
+@media (max-width: 390px) {
+  .order-scroll__content {
+    padding-right: 22rpx;
+    padding-left: 22rpx;
+  }
+}
+
+@media (max-width: 360px) {
+  .order-scroll__content { padding: 12rpx 18rpx 40rpx; }
+  .cart-dock { padding-right: 18rpx; padding-left: 18rpx; }
+  .recommend-question { padding-right: 18rpx; padding-left: 18rpx; }
+  .recommend-question__sheet { max-height: calc(100vh - 28rpx); }
+  .checkout-confirm__sheet { max-height: 100%; }
+  .checkout-button { width: auto; }
+}
+
+@media (min-width: 700px) {
+  .order-scroll__content {
+    padding-right: 32px;
+    padding-left: 32px;
+  }
+  .cart-dock {
+    left: 50%;
+    width: 720px;
+    transform: translateX(-50%);
   }
 }

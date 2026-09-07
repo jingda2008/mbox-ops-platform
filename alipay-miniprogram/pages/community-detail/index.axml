@@ -1,6 +1,8 @@
 <view class="page detail-page">
   <state-panel a:if="{{loading}}" type="loading" title="正在读取活动详情" />
   <block a:elif="{{activity}}">
+    <scroll-view scroll-y enhanced show-scrollbar="{{false}}" class="detail-scroll">
+      <view class="detail-scroll__content">
     <view class="detail-hero">
       <image a:if="{{activity.coverUrl}}" src="{{activity.coverUrl}}" mode="aspectFill" />
       <view a:else class="detail-placeholder">超嗨</view>
@@ -80,7 +82,8 @@
       <button a:if="{{registration.canCancelDirectly && registration.canStartPayment}}" class="status-secondary" loading="{{busy}}" onTap="cancelRegistration">不再参加，取消未付报名</button>
     </view>
 
-    <view class="detail-bottom-space"></view>
+      </view>
+    </scroll-view>
     <view class="detail-dock">
       <view><text>{{previewOnly ? '活动公开预览' : (registration ? registration.statusText : (activity.registrationBlocked ? '暂不开放' : (selectedPricing ? selectedPricing.feeText : activity.feeText)))}}</text><text>{{previewOnly ? '加入会员后查看真实名额与付款' : (registration ? (registration.stateGuide || registration.resolutionText || '请在“我的活动”中查看状态') : (activity.registrationBlocked ? '报名条件暂未开放' : activity.remainingCapacity > 0 ? ('剩余 ' + activity.remainingCapacity + ' 位') : '名额已满，可加入候补'))}}</text></view>
       <button a:if="{{previewOnly}}" disabled="{{busy}}" loading="{{busy}}" onTap="openMembershipInvite">查看报名与入会</button>

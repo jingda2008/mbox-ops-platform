@@ -125,6 +125,26 @@ describe('staff access management API', () => {
     expect(response.json().error).toMatchObject({ code: 'AUTH_REQUIRED', retryable: false })
     expect(service.getOverview).not.toHaveBeenCalled()
   })
+
+  it('creates an employee without placing the raw PIN in the command fingerprint', async () => {
+    const service = servicePort()
+    service.createEmployee.mockResolvedValue({ employeeId: '55555555-5555-4555-8555-555555555555', status: 'active', verifiedAt: '2026-09-08T00:00:00.000Z', overview: emptyOverview(), replayed: false })
+    const app = await build(service)
+    const response = await app.inject({ method: 'POST', url: '/staff-access/employees', headers: { 'idempotency-key': 'staff-employee-create-0001' }, payload: { employeeCode: 'LIYAN', displayName: '李艳', pin: '4826', roleId, reason: '员工入职' } })
+    expect(response.statusCode).toBe(201)
+    const input = service.createEmployee.mock.calls[0]?.[0]
+    expect(input?.pin).toBe('4826')
+    expect(input?.requestFingerprint).not.toContain('4826')
+    expect(input?.requestFingerprint).toContain('"pinConfigured":true')
+  })
+
+  it('validates employee status changes before calling the service', async () => {
+    const service = servicePort()
+    const app = await build(service)
+    const response = await app.inject({ method: 'POST', url: `/staff-access/employees/${roleId}/status`, headers: { 'idempotency-key': 'staff-employee-status-0001' }, payload: { status: 'departed', reason: '无效状态' } })
+    expect(response.statusCode).toBe(400)
+    expect(service.setEmployeeStatus).not.toHaveBeenCalled()
+  })
 })
 
 async function build(
@@ -141,5 +161,9 @@ async function build(
 }
 
 function servicePort() {
-  return { getOverview: vi.fn(), deployPermissions: vi.fn() }
+  return { getOverview: vi.fn(), deployPermissions: vi.fn(), createEmployee: vi.fn(), setEmployeeStatus: vi.fn() }
+}
+
+function emptyOverview() {
+  return { generatedAt: '2026-09-08T00:00:00.000Z', roles: [], employees: [], permissions: [], areas: [], configurationDefinitions: [] }
 }

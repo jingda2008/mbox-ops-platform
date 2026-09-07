@@ -78,6 +78,16 @@ const productSchema = z.object({
     productId: identifierSchema,
     quantity: z.number().int().min(1).max(9999),
   }).strict()).max(50).optional(),
+  bundleChoiceGroups:z.array(z.object({
+    id:identifierSchema,
+    code:z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/),
+    name:z.string().trim().min(1).max(80),
+    selectionCount:z.number().int().min(1).max(20),
+    options:z.array(z.object({
+      productId:identifierSchema,
+      quantity:z.number().int().min(1).max(999),
+    }).strict()).min(1).max(100),
+  }).strict()).max(20).optional(),
   substitutionProductIds: z.array(identifierSchema).max(50).optional(),
   recommendation: z.object({
     enabled: z.boolean(),

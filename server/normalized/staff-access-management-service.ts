@@ -11,6 +11,7 @@ import type {
 import type { JsonCodec, JsonObject, JsonValue } from './command-executor.js'
 import { NormalizedCommandExecutor } from './command-executor.js'
 import { StaffAccessRepository } from './staff-access-repository.js'
+import { ScryptCredentialHasher, type CredentialHasher } from './staff-auth-command-service.js'
 import { ScopedPostgresTransactionRunner, type ScopedTransaction, type StoreScope } from './transaction-runner.js'
 
 interface RoleRow extends Record<string, unknown> {
@@ -73,10 +74,18 @@ interface PermissionDeploymentValue {
   overview: StaffAccessManagementOverview
 }
 
+interface EmployeeLifecycleValue {
+  employeeId: string
+  status: 'active' | 'suspended'
+  verifiedAt: string
+  overview: StaffAccessManagementOverview
+}
+
 export class StaffAccessManagementService {
   constructor(
     private readonly transactions: ScopedPostgresTransactionRunner,
     private readonly commands: Pick<NormalizedCommandExecutor, 'execute'>,
+    private readonly hasher: CredentialHasher = new ScryptCredentialHasher(),
   ) {}
 
   getOverview(input: Readonly<{ scope: StoreScope; actorEmployeeId: string }>): Promise<StaffAccessManagementOverview> {
@@ -203,6 +212,98 @@ export class StaffAccessManagementService {
       changes: execution.value.changes,
       overview: execution.value.overview,
     }
+  }
+
+  async createEmployee(input: Readonly<{
+    scope: StoreScope
+    actorEmployeeId: string
+    businessDate: string
+    idempotencyKey: string
+    requestFingerprint: string
+    employeeCode: string
+    displayName: string
+    pin: string
+    roleId: string
+    reason: string
+  }>) {
+    if (!/^\d{4}$/.test(input.pin)) throw new TypeError('员工PIN必须为4位数字')
+    const pinHash = await this.hasher.hash(input.pin)
+    const execution = await this.commands.execute({
+      scope: input.scope, operationScope: 'staff.employee.create', idempotencyKey: input.idempotencyKey,
+      requestFingerprint: input.requestFingerprint, resultCodec: employeeLifecycleCodec,
+    }, async (transaction) => {
+      await requireAdministrator(transaction, input.actorEmployeeId)
+      const role = await transaction.query<{ code: string }>(`
+        SELECT code FROM mbox.roles
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND status='active'
+      `, [transaction.scope.tenantId, transaction.scope.storeId, input.roleId])
+      if (role.rowCount !== 1) throw new TypeError('所选岗位不存在或已停用')
+      const duplicate = await transaction.query(`
+        SELECT 1 FROM mbox.employees
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND lower(employee_code)=lower($3)
+      `, [transaction.scope.tenantId, transaction.scope.storeId, input.employeeCode])
+      if (duplicate.rowCount) throw new TypeError('员工账号已存在')
+      const created = await transaction.query<{ id: string }>(`
+        INSERT INTO mbox.employees(tenant_id,store_id,employee_code,display_name,pin_hash,status)
+        VALUES($1::uuid,$2::uuid,$3,$4,$5,'active') RETURNING id
+      `, [transaction.scope.tenantId, transaction.scope.storeId, input.employeeCode, input.displayName, pinHash])
+      const employeeId = created.rows[0]?.id
+      if (!employeeId) throw new TypeError('员工账号没有建立成功')
+      await transaction.query(`
+        INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id,granted_by_employee_id)
+        VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid)
+      `, [transaction.scope.tenantId, transaction.scope.storeId, employeeId, input.roleId, input.actorEmployeeId])
+      const verifiedAt = await databaseTimestamp(transaction)
+      const access = await new StaffAccessRepository(transaction).resolve(employeeId, verifiedAt)
+      if (!access.roleCodes.includes(role.rows[0]!.code)) throw new TypeError('员工岗位写入后复核不一致，已回滚')
+      const result: EmployeeLifecycleValue = { employeeId, status: 'active', verifiedAt, overview: await readOverview(transaction) }
+      return employeeLifecycleOutcome(input, result, 'staff.employee.created', 1)
+    })
+    return { ...execution.value, replayed: execution.replayed }
+  }
+
+  async setEmployeeStatus(input: Readonly<{
+    scope: StoreScope
+    actorEmployeeId: string
+    businessDate: string
+    idempotencyKey: string
+    requestFingerprint: string
+    employeeId: string
+    status: 'active' | 'suspended'
+    reason: string
+  }>) {
+    if (input.employeeId === input.actorEmployeeId && input.status !== 'active') throw new TypeError('不能停用当前登录账号')
+    const execution = await this.commands.execute({
+      scope: input.scope, operationScope: 'staff.employee.status', idempotencyKey: input.idempotencyKey,
+      requestFingerprint: input.requestFingerprint, resultCodec: employeeLifecycleCodec,
+    }, async (transaction) => {
+      await requireAdministrator(transaction, input.actorEmployeeId)
+      const updated = await transaction.query<{ status: 'active' | 'suspended'; lifecycle_version: number }>(`
+        UPDATE mbox.employees SET status=$4,lifecycle_version=lifecycle_version+1,updated_at=clock_timestamp()
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND status<>$4
+          AND status IN ('active','suspended') RETURNING status,lifecycle_version
+      `, [transaction.scope.tenantId, transaction.scope.storeId, input.employeeId, input.status])
+      if (updated.rowCount !== 1) throw new TypeError('员工不存在或状态没有变化')
+      const verifiedAt = await databaseTimestamp(transaction)
+      await assertAdministratorRemains(transaction, new StaffAccessRepository(transaction), verifiedAt)
+      const result: EmployeeLifecycleValue = { employeeId: input.employeeId, status: updated.rows[0]!.status, verifiedAt, overview: await readOverview(transaction) }
+      return employeeLifecycleOutcome(input, result, 'staff.employee.status_changed', updated.rows[0]!.lifecycle_version)
+    })
+    return { ...execution.value, replayed: execution.replayed }
+  }
+}
+
+function employeeLifecycleOutcome(
+  input: Readonly<{ actorEmployeeId: string; businessDate: string; idempotencyKey: string; reason: string }>,
+  result: EmployeeLifecycleValue,
+  action: string,
+  aggregateVersion: number,
+) {
+  const evidence = { employeeId: result.employeeId, status: result.status, verifiedAt: result.verifiedAt }
+  return {
+    result,
+    auditEvents: [{ actor: { type: 'employee' as const, employeeId: input.actorEmployeeId }, action, objectType: 'employee', objectId: result.employeeId, businessDate: input.businessDate, reason: input.reason, afterData: evidence }],
+    outboxMessages: [{ eventId: `staff-employee:${input.idempotencyKey}`, aggregateType: 'employee', aggregateId: result.employeeId, aggregateVersion, eventType: `${action}.v1`, payload: evidence }],
   }
 }
 
@@ -741,4 +842,9 @@ function canonicalJson(value: unknown): unknown {
 const deploymentCodec: JsonCodec<PermissionDeploymentValue> = {
   encode: (value) => value as unknown as JsonObject,
   decode: (value) => value as PermissionDeploymentValue,
+}
+
+const employeeLifecycleCodec: JsonCodec<EmployeeLifecycleValue> = {
+  encode: (value) => value as unknown as JsonObject,
+  decode: (value) => value as unknown as EmployeeLifecycleValue,
 }

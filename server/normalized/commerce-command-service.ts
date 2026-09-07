@@ -770,6 +770,7 @@ function canonicalSubmitFingerprint(input: Readonly<SubmitOrderCommand>): string
       productId: line.productId,
       quantity: line.quantity,
       note: line.note?.trim() || null,
+      bundleSelections:line.bundleSelections??[],
     })),
     note: input.note?.trim() || null,
     createdByEmployeeId: input.createdByEmployeeId ?? null,
@@ -812,7 +813,7 @@ function isSubmittedOrder(value: unknown): value is SubmittedOrder {
       && typeof item.consumesInventory === 'boolean'
       && (item.unitCostMinorAtSubmission === null || typeof item.unitCostMinorAtSubmission === 'number')
       && (item.totalCostMinorAtSubmission === null || typeof item.totalCostMinorAtSubmission === 'number')
-      && ['catalog_product', 'legacy_snapshot', 'included_in_parent', 'unavailable'].includes(String(item.costSource))
+      && ['catalog_product', 'bundle_components', 'legacy_snapshot', 'included_in_parent', 'unavailable'].includes(String(item.costSource))
       && (item.costReferenceProductId === null || typeof item.costReferenceProductId === 'string')
       && (item.costReferenceOrderItemId === null || typeof item.costReferenceOrderItemId === 'string')
       && (item.costReferenceProductUpdatedAt === null

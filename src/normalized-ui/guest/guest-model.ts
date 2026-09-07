@@ -42,6 +42,10 @@ export interface GuestMenuProduct {
   fulfillmentStation: string
   productKind: 'single' | 'bundle'
   bundleComponents: Array<{ productId: string; name: string; quantity: number }>
+  bundleChoiceGroups?: MenuBundleChoiceGroup[]
+  fixedSeparateAmountMinor?: number | null
+  separateAmountFromMinor?: number | null
+  savingsFromMinor?: number | null
   recommendation: MenuRecommendationConfig
   /** Added by the client from the server-returned order; never serialized by the API. */
   serverRecommendationOrder?: number
@@ -170,5 +174,6 @@ export function safeIdempotencyKey(prefix: string, randomUuid: () => string = ()
 }
 import type {
   MenuBeverageFamily,
+  MenuBundleChoiceGroup,
   MenuRecommendationConfig,
 } from '../../shared/contracts'

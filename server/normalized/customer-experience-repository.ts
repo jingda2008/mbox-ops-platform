@@ -2583,6 +2583,15 @@ export class CustomerExperienceRepository {
         AND (cardinality(rule.alcohol_preference_tags) = 0 OR $6::text = ANY(rule.alcohol_preference_tags))
         AND target_price.amount_minor > source_price.amount_minor
         AND NOT EXISTS (SELECT 1 FROM requested WHERE product_id = rule.target_product_id)
+        -- Checkout upgrades replace a line without opening the package detail
+        -- selector. A configurable bundle must be chosen explicitly in the
+        -- menu, otherwise the kitchen/bar would receive no concrete option.
+        AND NOT EXISTS (
+          SELECT 1 FROM mbox.product_bundle_choice_groups choice_group
+          WHERE choice_group.tenant_id=target_product.tenant_id
+            AND choice_group.store_id=target_product.store_id
+            AND choice_group.bundle_product_id=target_product.id
+        )
       ORDER BY rule.priority DESC, target_price.amount_minor ASC, rule.id
       LIMIT 1
       FOR KEY SHARE OF rule, source_product, target_product

@@ -383,6 +383,93 @@ integration("normalized catalog PostgreSQL integration", () => {
     ]);
   });
 
+  it("keeps a choice-group id stable when staff rename or reorder the group", async () => {
+    await setPermission(pool, CATALOG_PRODUCT_MANAGE_PERMISSION, true);
+    const option = await pool.query<{ id: string }>(`
+      SELECT id FROM mbox.products
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND code=$3
+    `, [tenantId, storeId, integrationProductCode]);
+    const optionId=option.rows[0]!.id;
+    const bundleCode=`CHOICE-${integrationRunToken}`;
+    const created=await app.inject({
+      method:'POST',url:'/api/catalog/products',
+      headers:{ 'idempotency-key':integrationKey('choice-bundle-create') },
+      payload:{
+        code:bundleCode,name:'任选鸡尾酒套餐',categoryCode:'combo',fulfillmentStation:'none',
+        productKind:'bundle',bundleChoiceGroups:[{
+          code:'cocktail',name:'任选一款鸡尾酒',selectionCount:1,sortOrder:10,
+          options:[{ productId:optionId,quantity:1,sortOrder:10 }],
+        }],
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const bundleId=created.json().data.id as string;
+    const choiceGroupId=created.json().data.bundleChoiceGroups[0].id as string;
+
+    const updated=await app.inject({
+      method:'PATCH',url:`/api/catalog/products/${bundleId}`,
+      headers:{ 'idempotency-key':integrationKey('choice-bundle-update') },
+      payload:{ bundleChoiceGroups:[{
+        id:choiceGroupId,code:'signature',name:'任选一款招牌鸡尾酒',selectionCount:1,sortOrder:20,
+        options:[{ productId:optionId,quantity:1,sortOrder:10 }],
+      }] },
+    });
+
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json().data.bundleChoiceGroups).toEqual([
+      expect.objectContaining({ id:choiceGroupId,code:'signature',name:'任选一款招牌鸡尾酒',sortOrder:20 }),
+    ]);
+  });
+
+  it("refuses to publish a selectable bundle when an option has no usable recipe", async () => {
+    await setPermission(pool, CATALOG_PRODUCT_MANAGE_PERMISSION, true);
+    const optionId=randomUUID();
+    let bundleId:string|null=null;
+    await pool.query(`
+      INSERT INTO mbox.products(
+        id,tenant_id,store_id,code,name,category_code,fulfillment_station,
+        product_kind,inventory_control_mode,status
+      ) VALUES($1,$2,$3,$4,'缺少配方的候选鸡尾酒','cocktail','bar','single','tracked','active')
+    `,[optionId,tenantId,storeId,`CHOICE-NO-RECIPE-${integrationRunToken}`]);
+    try{
+      const created=await app.inject({
+        method:'POST',url:'/api/catalog/products',
+        headers:{ 'idempotency-key':integrationKey('choice-bundle-inactive-recipe') },
+        payload:{
+          code:`CHOICE-INVALID-${integrationRunToken}`,name:'配置不完整的自选套餐',
+          categoryCode:'combo',fulfillmentStation:'none',productKind:'bundle',status:'inactive',
+          bundleChoiceGroups:[{
+            code:'cocktail',name:'任选一款鸡尾酒',selectionCount:1,sortOrder:10,
+            options:[{ productId:optionId,quantity:1,sortOrder:10 }],
+          }],
+        },
+      });
+      expect(created.statusCode).toBe(201);
+      bundleId=created.json().data.id as string;
+      expect(created.json().data).toMatchObject({
+        status:'inactive',isAvailable:false,
+        bundleChoiceGroups:[{ options:[{
+          productId:optionId,available:false,unavailableReason:'配方正在更新',
+        }] }],
+      });
+
+      const published=await app.inject({
+        method:'PATCH',url:`/api/catalog/products/${bundleId}`,
+        headers:{ 'idempotency-key':integrationKey('choice-bundle-invalid-recipe') },
+        payload:{ status:'active' },
+      });
+      expect(published.statusCode).toBe(409);
+      expect(published.json().error).toMatchObject({ code:'CATALOG_CONFLICT' });
+      expect(published.json().error.message).toContain('没有足够的顾客可选菜品');
+    }finally{
+      if(bundleId!==null){
+        await pool.query(`DELETE FROM mbox.product_bundle_choice_groups WHERE bundle_product_id=$1`,[bundleId]);
+        await pool.query(`DELETE FROM mbox.products WHERE id=$1`,[bundleId]);
+      }
+      await pool.query(`DELETE FROM mbox.products WHERE id=$1`,[optionId]);
+    }
+  });
+
   it("prevents overlapping open-ended price ranges at the database boundary", async () => {
     const product = await pool.query<{ id: string }>(
       `

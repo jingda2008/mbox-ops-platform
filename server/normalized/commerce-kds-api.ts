@@ -1273,7 +1273,8 @@ function readOrderInput(body: JsonObject) {
     seen.add(productId)
     const quantity = readInteger(line.quantity, `items[${index}].quantity`, 1, 999)
     const note = readOptionalString(line.note, `items[${index}].note`, 300)
-    return { productId, quantity, note }
+    const bundleSelections=readBundleSelections(line.bundleSelections,`items[${index}].bundleSelections`,quantity)
+    return { productId, quantity, note, ...(bundleSelections.length>0?{ bundleSelections }: {}) }
   })
   const settlementMode = readOptionalString(body.settlementMode, 'settlementMode', 32)
   if (settlementMode !== null && !['immediate_payment', 'table_tab'].includes(settlementMode)) {
@@ -1295,6 +1296,29 @@ function readOrderInput(body: JsonObject) {
     giftReason,
     kdsOverride: readKdsOverride(body.kdsOverride),
   }
+}
+
+function readBundleSelections(value:unknown,label:string,maxUnits:number){
+  if(value===undefined||value===null)return []
+  if(!Array.isArray(value)||value.length>maxUnits) {
+    throw new CommerceKdsRequestError('BUNDLE_SELECTION_INVALID',`${label}与套餐数量不一致`)
+  }
+  return value.map((rawUnit,unitIndex)=>{
+    const unit=readObject(rawUnit,`${label}[${unitIndex}]`)
+    if(!Array.isArray(unit.groups)||unit.groups.length<1||unit.groups.length>20) {
+      throw new CommerceKdsRequestError('BUNDLE_SELECTION_INVALID','套餐选择组无效')
+    }
+    return { groups:unit.groups.map((rawGroup,groupIndex)=>{
+      const group=readObject(rawGroup,`${label}[${unitIndex}].groups[${groupIndex}]`)
+      if(!Array.isArray(group.productIds)||group.productIds.length<1||group.productIds.length>20) {
+        throw new CommerceKdsRequestError('BUNDLE_SELECTION_INVALID','套餐所选菜品无效')
+      }
+      return { groupId:readUuid(readRequiredString(group.groupId,'groupId',80),'groupId'),
+        productIds:group.productIds.map((productId)=>readUuid(
+          readRequiredString(productId,'selectedProductId',80),'selectedProductId',
+        )) }
+    }) }
+  })
 }
 
 async function resolveEmployeeGiftAuthorization(

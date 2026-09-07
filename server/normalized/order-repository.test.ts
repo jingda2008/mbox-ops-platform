@@ -15,6 +15,8 @@ const orderId = '44444444-4444-4444-8444-444444444444'
 const productId = '55555555-5555-4555-8555-555555555555'
 const itemId = '66666666-6666-4666-8666-666666666666'
 const employeeId = '77777777-7777-4777-8777-777777777777'
+const choiceGroupId = '88888888-8888-4888-8888-888888888888'
+const choiceProductId = '99999999-9999-4999-8999-999999999999'
 
 interface Call { sql: string; values: readonly unknown[] }
 type Response = { rows: Record<string, unknown>[]; rowCount?: number }
@@ -181,6 +183,107 @@ describe('OrderRepository', () => {
     expect(tx.calls).toHaveLength(2)
   })
 
+  it('persists one concrete bundle choice as an operational child item', async () => {
+    const tx = new ScriptedTransaction([
+      { rows: [{ id: sessionId }] },
+      { rows: [{ ...priceRow(), product_kind: 'bundle', fulfillment_station: 'none' }] },
+      { rows: [] },
+      { rows: [choiceOptionRow()] },
+      { rows: [{
+        request_index: 0,
+        bundle_product_id: productId,
+        choice_group_id: choiceGroupId,
+        selection_count: 1,
+        option_count: 1,
+      }] },
+      { rows: [{ ...orderRow(), subtotal_amount_minor: '8800', total_amount_minor: '8800' }] },
+      { rows: [{
+        ...itemRow(), quantity: 1, total_amount_minor: '8800',
+        unit_cost_minor_at_submission: '600', total_cost_minor_at_submission: '600',
+        cost_source: 'bundle_components', cost_reference_product_updated_at: null,
+      }] },
+      { rows: [{
+        ...itemRow(),
+        id: choiceProductId,
+        product_id: choiceProductId,
+        parent_order_item_id: itemId,
+        quantity: 1,
+        unit_price_minor: '0',
+        total_amount_minor: '0',
+        fulfillment_station: 'bar',
+        unit_cost_minor_at_submission: '0',
+        total_cost_minor_at_submission: '0',
+        cost_source: 'included_in_parent',
+      }] },
+    ])
+
+    const order = await new OrderRepository(tx).createSubmitted({
+      tableSessionId: sessionId,
+      publicId: 'order-public-bundle-choice',
+      channel: 'guest_qr',
+      lines: [{ productId, quantity: 1, bundleSelections: [{ groups: [{
+        groupId: choiceGroupId,
+        productIds: [choiceProductId],
+      }] }] }],
+    })
+
+    expect(order.items).toHaveLength(2)
+    expect(tx.calls[6]?.values[14]).toContain('bundleSelections')
+    expect(tx.calls[6]?.values.slice(16,22)).toEqual([
+      600,600,'bundle_components',productId,null,null,
+    ])
+    expect(tx.calls[7]?.values[4]).toBe(choiceProductId)
+    expect(tx.calls[7]?.values[14]).toContain('任选鸡尾酒')
+  })
+
+  it('rejects a configurable bundle when a physical unit has no concrete choice', async () => {
+    const tx = new ScriptedTransaction([
+      { rows: [{ ...priceRow(), product_kind: 'bundle', fulfillment_station: 'none' }] },
+      { rows: [] },
+      { rows: [choiceOptionRow()] },
+      { rows: [{
+        request_index: 0,
+        bundle_product_id: productId,
+        choice_group_id: choiceGroupId,
+        selection_count: 1,
+        option_count: 1,
+      }] },
+    ])
+
+    await expect(new OrderRepository(tx).assertCurrentOrderable([
+      { productId, quantity: 1 },
+    ], 'guest_qr')).rejects.toBeInstanceOf(OrderProductUnavailableError)
+    expect(tx.calls).toHaveLength(4)
+  })
+
+  it.each([
+    ['伪造的非候选菜品', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', {}],
+    ['已取消顾客可见的候选菜品', choiceProductId, { component_guest_visible: false }],
+    ['当前不在供应时段的候选菜品', choiceProductId, {
+      component_available_from: '18:00', component_available_until: '23:00', store_local_time: '12:00',
+    }],
+  ])('rejects %s inside a configurable bundle', async (_label, selectedProductId, optionPatch) => {
+    const tx = new ScriptedTransaction([
+      { rows: [{ ...priceRow(), product_kind: 'bundle', fulfillment_station: 'none' }] },
+      { rows: [] },
+      { rows: [{ ...choiceOptionRow(), ...optionPatch }] },
+      { rows: [{
+        request_index: 0,
+        bundle_product_id: productId,
+        choice_group_id: choiceGroupId,
+        selection_count: 1,
+        option_count: 1,
+      }] },
+    ])
+
+    await expect(new OrderRepository(tx).assertCurrentOrderable([{
+      productId,
+      quantity: 1,
+      bundleSelections: [{ groups: [{ groupId: choiceGroupId, productIds: [selectedProductId] }] }],
+    }], 'guest_qr')).rejects.toBeInstanceOf(OrderProductUnavailableError)
+    expect(tx.calls).toHaveLength(4)
+  })
+
   it('keeps delivery separate from KDS and requires every KDS task to be ready', async () => {
     const delivered = { ...itemRow(), status: 'delivered' }
     const tx = new ScriptedTransaction([{ rows: [delivered] }, { rows: [{ complete_annual_benefit_fulfillment_for_order: 1 }] }])
@@ -225,6 +328,34 @@ function priceRow(): Record<string, unknown> {
     store_timezone: 'Asia/Shanghai',
     store_local_time: '12:00',
     store_iso_weekday: 1,
+  }
+}
+
+function choiceOptionRow(): Record<string, unknown> {
+  return {
+    request_index: 0,
+    bundle_product_id: productId,
+    choice_group_id: choiceGroupId,
+    choice_group_name: '任选鸡尾酒',
+    choice_group_selection_count: 1,
+    component_product_id: choiceProductId,
+    option_quantity: 1,
+    component_code: 'COCKTAIL-CHOICE-01',
+    component_name: '客人选择的鸡尾酒',
+    component_category_code: 'cocktail',
+    component_fulfillment_station: 'bar',
+    component_product_snapshot: {},
+    component_kds_priority: 100,
+    component_fulfillment_sla_seconds: 300,
+    component_product_kind: 'single',
+    component_status: 'active',
+    component_cost_amount_minor: '600',
+    component_allowed_channels: ['guest_qr', 'staff_assisted'],
+    component_guest_visible: true,
+    component_available_from: null,
+    component_available_until: null,
+    store_local_time: '12:00',
+    component_quantity: 0,
   }
 }
 

@@ -10,6 +10,9 @@ import {
   MonitorSmartphone,
   Search,
   ShieldCheck,
+  UserCheck,
+  UserPlus,
+  UserX,
   UsersRound,
 } from 'lucide-react'
 import { NormalizedApiClient } from '../normalized-api'
@@ -24,6 +27,7 @@ import type {
   StaffPermissionDeploymentResult,
 } from '../shared/normalized-contracts'
 import { staffModuleForPermission, staffPermissionImpactLabel } from '../shared/staff-module-access'
+import { useConfirmationDialog } from './ConfirmationDialog'
 import './staff-access-management.css'
 
 type EditorMode = 'role' | 'employee' | 'policy' | 'navigation'
@@ -38,7 +42,8 @@ const beverageLaunchPermissionPackage = Object.freeze([
   'inventory.cost.view', 'catalog.product.manage', 'catalog.price.manage', 'media.asset.menu.manage',
 ])
 
-export function StaffAccessManagementPanel({ api }: { api: NormalizedApiClient }) {
+export function StaffAccessManagementPanel({ api, currentEmployeeId }: { api: NormalizedApiClient; currentEmployeeId: string }) {
+  const { confirmAction } = useConfirmationDialog()
   const [overview, setOverview] = useState<StaffAccessManagementOverview | null>(null)
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading')
   const [mode, setMode] = useState<EditorMode>('role')
@@ -51,13 +56,17 @@ export function StaffAccessManagementPanel({ api }: { api: NormalizedApiClient }
   const [category, setCategory] = useState('all')
   const [reason, setReason] = useState('调整岗位与员工实际职责')
   const [publishing, setPublishing] = useState(false)
+  const [employeeBusy, setEmployeeBusy] = useState(false)
+  const [employeeDraft, setEmployeeDraft] = useState({ employeeCode: '', displayName: '', pin: '', roleId: '', reason: '新员工入职并分配岗位' })
   const [notice, setNotice] = useState<Notice | null>(null)
 
   const load = useCallback(async () => {
     setPhase('loading'); setNotice(null)
     try {
       const next = await api.getEndpoint<{ data: StaffAccessManagementOverview }>('/api/staff-access/overview')
-      setOverview(next.data); setPhase('ready')
+      setOverview(next.data)
+      setEmployeeDraft((current) => ({ ...current, roleId: current.roleId || next.data.roles.find((role) => role.status === 'active' && role.code !== 'OWNER')?.id || next.data.roles.find((role) => role.status === 'active')?.id || '' }))
+      setPhase('ready')
     } catch (error) {
       setPhase('error'); setNotice({ tone: 'error', title: '权限状态没有读取成功', detail: message(error) })
     }
@@ -67,6 +76,7 @@ export function StaffAccessManagementPanel({ api }: { api: NormalizedApiClient }
 
   const roles = overview?.roles.filter((role) => role.status === 'active') ?? []
   const employees = overview?.employees.filter((employee) => employee.status === 'active') ?? []
+  const allEmployees = overview?.employees.filter((employee) => employee.status === 'active' || employee.status === 'suspended') ?? []
   const selectedRole = roles.find((role) => role.id === targetId) ?? null
   const selectedEmployee = employees.find((employee) => employee.id === targetId) ?? null
   const selectedTarget = mode === 'employee' ? selectedEmployee : selectedRole
@@ -146,6 +156,34 @@ export function StaffAccessManagementPanel({ api }: { api: NormalizedApiClient }
     } finally { setPublishing(false) }
   }
 
+  const createEmployee = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (employeeBusy) return
+    setEmployeeBusy(true); setNotice(null)
+    try {
+      const result = await api.postEndpoint<{ overview: StaffAccessManagementOverview; replayed: boolean }>('/api/staff-access/employees', employeeDraft, { idempotencyKey: `staff-employee-${crypto.randomUUID()}`, timeoutMs: 20_000 })
+      setOverview(result.overview)
+      setEmployeeDraft((current) => ({ ...current, employeeCode: '', displayName: '', pin: '', reason: '新员工入职并分配岗位' }))
+      setNotice({ tone: 'success', title: '员工账号已建立并复核', detail: '初始岗位和4位PIN已保存；请线下安全告知员工，并要求避免与他人共用。' })
+    } catch (error) {
+      setNotice({ tone: 'error', title: '员工账号没有建立成功', detail: message(error) })
+    } finally { setEmployeeBusy(false) }
+  }
+
+  const changeEmployeeStatus = async (employee: StaffAccessManagementOverview['employees'][number]) => {
+    const status = employee.status === 'active' ? 'suspended' : 'active'
+    const action = status === 'active' ? '恢复' : '停用'
+    if (!(await confirmAction({ title: `${action}员工账号`, description: `${action}“${employee.displayName}”的登录资格。历史订单、工资和审计记录不会删除。`, confirmLabel: `确认${action}`, tone: status === 'suspended' ? 'danger' : 'default' }))) return
+    setEmployeeBusy(true); setNotice(null)
+    try {
+      const result = await api.postEndpoint<{ overview: StaffAccessManagementOverview }>(`/api/staff-access/employees/${employee.id}/status`, { status, reason: `管理员确认${action}员工账号` }, { idempotencyKey: `staff-employee-status-${crypto.randomUUID()}`, timeoutMs: 20_000 })
+      setOverview(result.overview)
+      setNotice({ tone: 'success', title: `员工账号已${action}并复核`, detail: status === 'suspended' ? '该员工后续无法登录，历史业务和工资记录保持可追溯。' : '该员工已恢复登录资格，原岗位权限重新生效。' })
+    } catch (error) {
+      setNotice({ tone: 'error', title: `员工账号未能${action}`, detail: message(error) })
+    } finally { setEmployeeBusy(false) }
+  }
+
   if (phase === 'loading' && overview === null) return <div className="staff-access-state" role="status"><LoaderCircle className="is-spinning" /><strong>正在核对人员与权限</strong></div>
   if (phase === 'error' && overview === null) return <div className="staff-access-state is-error" role="alert"><CircleAlert /><strong>{notice?.title}</strong><span>{notice?.detail}</span><button type="button" onClick={() => void load()}>重新读取</button></div>
   if (overview === null) return null
@@ -161,6 +199,20 @@ export function StaffAccessManagementPanel({ api }: { api: NormalizedApiClient }
       <article><ShieldCheck /><span><strong>{roles.length}</strong><small>岗位模板</small></span></article>
       <article><KeyRound /><span><strong>{overview.permissions.length}</strong><small>权限能力</small></span></article>
     </div>
+
+    <details className="staff-access-employees">
+      <summary><span><strong>员工账号管理</strong><small>新增、分岗、停用或恢复；历史记录不会删除</small></span><ChevronRight /></summary>
+      <form onSubmit={createEmployee}>
+        <label><span>员工账号</span><input required maxLength={64} pattern="[A-Za-z0-9_-]+" value={employeeDraft.employeeCode} onChange={(event) => setEmployeeDraft({ ...employeeDraft, employeeCode: event.target.value })} placeholder="如：LIYAN" /></label>
+        <label><span>员工姓名</span><input required maxLength={64} value={employeeDraft.displayName} onChange={(event) => setEmployeeDraft({ ...employeeDraft, displayName: event.target.value })} placeholder="如：李艳" /></label>
+        <label><span>初始PIN</span><input required type="password" inputMode="numeric" autoComplete="new-password" minLength={4} maxLength={4} pattern="[0-9]{4}" value={employeeDraft.pin} onChange={(event) => setEmployeeDraft({ ...employeeDraft, pin: event.target.value.replace(/\D/g, '').slice(0, 4) })} placeholder="4位数字" /></label>
+        <label><span>初始岗位</span><select required value={employeeDraft.roleId} onChange={(event) => setEmployeeDraft({ ...employeeDraft, roleId: event.target.value })}><option value="">请选择</option>{roles.map((role) => <option key={role.id} value={role.id}>{roleLabel(role.code, role.name)}</option>)}</select></label>
+        <label className="is-wide"><span>建立原因</span><input required minLength={2} maxLength={200} value={employeeDraft.reason} onChange={(event) => setEmployeeDraft({ ...employeeDraft, reason: event.target.value })} /></label>
+        <button disabled={employeeBusy || employeeDraft.pin.length !== 4}><UserPlus />{employeeBusy ? '正在处理' : '建立员工账号'}</button>
+      </form>
+      <div className="staff-access-employee-list">{allEmployees.map((employee) => <article key={employee.id} data-status={employee.status}><div><strong>{employee.displayName}</strong><small>{employee.code} · {employee.roleCodes.map(roleCodeLabel).join(' / ') || '未分岗'} · {employee.status === 'active' ? '在岗' : '已停用'}</small></div><button type="button" disabled={employeeBusy || employee.id === currentEmployeeId} onClick={() => void changeEmployeeStatus(employee)}>{employee.status === 'active' ? <UserX /> : <UserCheck />}{employee.status === 'active' ? '停用' : '恢复'}</button></article>)}</div>
+      <small className="staff-access-security-note">PIN只用于门店员工登录，不在页面回显；工资模块不保存银行卡，也不自动转账。</small>
+    </details>
 
     <section className="staff-access-map" aria-labelledby="staff-access-map-title">
       <header><div><small>按职责分区，修改后统一发布</small><h2 id="staff-access-map-title">管理员控制中心</h2></div></header>

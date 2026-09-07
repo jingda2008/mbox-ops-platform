@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { JsonObject } from './command-executor.js'
 import { OrderRepository } from './order-repository.js'
+import type { BundleUnitSelectionInput } from './order-repository.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
 export interface GuestSharedCartLine {
@@ -12,6 +13,7 @@ export interface GuestSharedCartLine {
   currency: string | null
   available: boolean
   unavailableReason: string | null
+  bundleSelections: readonly BundleUnitSelectionInput[]
 }
 
 export interface GuestSharedCart {
@@ -47,6 +49,7 @@ interface LineRow extends Record<string, unknown> {
   currency: string | null
   available: boolean
   unavailable_reason: string | null
+  bundle_selections: unknown
 }
 
 interface OperationRow extends Record<string, unknown> {
@@ -113,7 +116,7 @@ export class GuestSharedCartRepository {
     tableSessionId:string
     actorSessionRef:string
     operationId:string
-    action:'adjust'|'remove'|'clear'|'checkout'
+    action:'adjust'|'replace_selection'|'remove'|'clear'|'checkout'
   }>):Promise<boolean>{
     validateOperation(input.operationId,input.actorSessionRef)
     const actorSessionRef=auditActorSessionRef(input.actorSessionRef)
@@ -189,6 +192,7 @@ export class GuestSharedCartRepository {
       expectedVersion: number
       operationId: string
       actorSessionRef: string
+      bundleSelections?: readonly BundleUnitSelectionInput[]
     }>,
   ): Promise<GuestSharedCart> {
     validateAdjust(input)
@@ -197,7 +201,15 @@ export class GuestSharedCartRepository {
     // table-session-scoped idempotency was introduced.  The operation id names
     // the logical action; a later retry may legitimately arrive after checkout
     // has advanced the cart generation.
-    const payload = { productId: input.productId, delta: input.delta } as JsonObject
+    const addedSelections=input.bundleSelections??[]
+    if(input.delta<=0&&addedSelections.length>0)throw new TypeError('减少商品时不能提交套餐选项')
+    if(input.delta>0&&addedSelections.length!==input.delta) {
+      // Ordinary products use an empty selection array. Custom bundles are
+      // checked authoritatively below, so only reject a partial non-empty set.
+      if(addedSelections.length>0)throw new TypeError('每份新增套餐都必须分别提交一组选择')
+    }
+    const payload = { productId: input.productId, delta: input.delta,
+      ...(addedSelections.length>0?{ bundleSelections:bundleSelectionsToJson(addedSelections) }:{}), } as JsonObject
     if (await this.isOperationReplay(cart.tableSessionId, input.operationId, 'adjust', payload)) {
       return this.snapshot(cart)
     }
@@ -208,12 +220,16 @@ export class GuestSharedCartRepository {
       && await this.wasSubmittedGeneration(cart.tableSessionId, input.expectedGeneration)
     if (!latePositiveAdd) this.assertExpectedState(cart, input.expectedGeneration, input.expectedVersion)
     const current = await this.transaction.query<LineRow>(`
-      SELECT product_id,quantity
+      SELECT product_id,quantity,bundle_selections
       FROM mbox.guest_shared_cart_lines
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND cart_id=$3::uuid AND product_id=$4::uuid
       FOR UPDATE
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, cart.id, input.productId])
     const nextQuantity = Number(current.rows[0]?.quantity ?? 0) + input.delta
+    const currentSelections=normalizeStoredBundleSelections(current.rows[0]?.bundle_selections)
+    const nextSelections=input.delta>0
+      ? [...currentSelections,...addedSelections]
+      : currentSelections.slice(0,Math.max(0,currentSelections.length+input.delta))
     if (nextQuantity < 0) {
       throw new GuestSharedCartVersionConflictError(cart)
     }
@@ -222,7 +238,7 @@ export class GuestSharedCartRepository {
     }
     if (nextQuantity > 0) {
       await new OrderRepository(this.transaction).assertCurrentOrderable([
-        { productId: input.productId, quantity: nextQuantity },
+        { productId: input.productId, quantity: nextQuantity, bundleSelections:nextSelections },
       ], 'guest_qr')
     }
     if (nextQuantity === 0) {
@@ -232,11 +248,14 @@ export class GuestSharedCartRepository {
       `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, cart.id, input.productId])
     } else {
       await this.transaction.query(`
-        INSERT INTO mbox.guest_shared_cart_lines(tenant_id,store_id,cart_id,product_id,quantity)
-        VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::integer)
+        INSERT INTO mbox.guest_shared_cart_lines(
+          tenant_id,store_id,cart_id,product_id,quantity,bundle_selections
+        ) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::integer,$6::jsonb)
         ON CONFLICT (tenant_id,store_id,cart_id,product_id)
-        DO UPDATE SET quantity=EXCLUDED.quantity,updated_at=clock_timestamp()
-      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, cart.id, input.productId, nextQuantity])
+        DO UPDATE SET quantity=EXCLUDED.quantity,bundle_selections=EXCLUDED.bundle_selections,
+          updated_at=clock_timestamp()
+      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, cart.id,
+        input.productId, nextQuantity,JSON.stringify(nextSelections)])
     }
     await this.assertCartLimits(cart.id)
     const version = await this.incrementVersion(cart)
@@ -245,6 +264,65 @@ export class GuestSharedCartRepository {
       expectedVersion: input.expectedVersion, resultingVersion: version, payload,
     })
     return this.snapshot({ ...cart, version })
+  }
+
+  async replaceBundleSelection(
+    tableSessionId:string,
+    publicId:string,
+    input:Readonly<{
+      productId:string
+      unitIndex:number
+      bundleSelection:BundleUnitSelectionInput
+      expectedGeneration:number
+      expectedVersion:number
+      operationId:string
+      actorSessionRef:string
+    }>,
+  ):Promise<GuestSharedCart>{
+    validateReplaceBundleSelection(input)
+    const cart=await this.getOrCreateOpen(tableSessionId,publicId)
+    const payload={
+      productId:input.productId,
+      unitIndex:input.unitIndex,
+      bundleSelection:bundleSelectionsToJson([input.bundleSelection])[0]!,
+    } as JsonObject
+    if(await this.isOperationReplay(cart.tableSessionId,input.operationId,'replace_selection',payload)){
+      return this.snapshot(cart)
+    }
+    await this.assertWriteAllowed(cart,input.actorSessionRef)
+    this.assertExpectedState(cart,input.expectedGeneration,input.expectedVersion)
+    const current=await this.transaction.query<LineRow>(`
+      SELECT product_id,quantity,bundle_selections
+      FROM mbox.guest_shared_cart_lines
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND cart_id=$3::uuid AND product_id=$4::uuid
+      FOR UPDATE
+    `,[this.transaction.scope.tenantId,this.transaction.scope.storeId,cart.id,input.productId])
+    const line=current.rows[0]
+    const quantity=Number(line?.quantity??0)
+    const currentSelections=normalizeStoredBundleSelections(line?.bundle_selections)
+    if(!line||currentSelections.length!==quantity||input.unitIndex>=quantity){
+      throw new GuestSharedCartVersionConflictError(await this.snapshot(cart))
+    }
+    const nextSelections=currentSelections.map((selection,index)=>(
+      index===input.unitIndex?input.bundleSelection:selection
+    ))
+    await new OrderRepository(this.transaction).assertCurrentOrderable([{
+      productId:input.productId,quantity,bundleSelections:nextSelections,
+    }],'guest_qr')
+    await this.transaction.query(`
+      UPDATE mbox.guest_shared_cart_lines
+      SET bundle_selections=$5::jsonb,updated_at=clock_timestamp()
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND cart_id=$3::uuid AND product_id=$4::uuid
+    `,[this.transaction.scope.tenantId,this.transaction.scope.storeId,cart.id,input.productId,
+      JSON.stringify(nextSelections)])
+    await this.assertCartLimits(cart.id)
+    const version=await this.incrementVersion(cart)
+    await this.appendOperation(cart,{
+      command:'replace_selection',operationId:input.operationId,
+      actorSessionRef:auditActorSessionRef(input.actorSessionRef),
+      expectedVersion:input.expectedVersion,resultingVersion:version,payload,
+    })
+    return this.snapshot({ ...cart,version })
   }
 
   async clear(
@@ -418,12 +496,14 @@ export class GuestSharedCartRepository {
 
   private async snapshot(cart: Omit<GuestSharedCart, 'lines' | 'totalAmountMinor' | 'currency'>): Promise<GuestSharedCart> {
     const lines = await this.transaction.query<LineRow>(`
-      SELECT line.product_id,line.quantity,product.name AS product_name,
+      SELECT line.product_id,line.quantity,line.bundle_selections,product.name AS product_name,
         price.amount_minor AS unit_price_minor,price.currency,
         CASE
           WHEN product.id IS NULL OR product.status<>'active' THEN '商品已下架'
           WHEN NOT product.guest_visible OR NOT ('guest_qr'=ANY(product.allowed_channels)) THEN '当前商品暂不对顾客开放'
           WHEN price.amount_minor IS NULL THEN '商品价格待确认'
+          WHEN product.product_kind='bundle' AND NOT selection_state.valid
+            THEN '套餐选择已变更，请重新选择'
           WHEN product.inventory_control_mode='tracked' AND NOT inventory_state.configuration_complete
             THEN '商品配方正在更新'
           WHEN product.inventory_control_mode='tracked' AND NOT inventory_state.available
@@ -443,6 +523,7 @@ export class GuestSharedCartRepository {
           AND product.guest_visible
           AND 'guest_qr'=ANY(product.allowed_channels)
           AND price.amount_minor IS NOT NULL
+          AND (product.product_kind<>'bundle' OR selection_state.valid)
           AND (product.inventory_control_mode<>'tracked' OR (
             inventory_state.configuration_complete AND inventory_state.available
           ))
@@ -473,6 +554,54 @@ export class GuestSharedCartRepository {
         LIMIT 1
       ) AS price ON true
       LEFT JOIN LATERAL (
+        SELECT CASE
+          WHEN product.product_kind<>'bundle' THEN jsonb_array_length(line.bundle_selections)=0
+          WHEN NOT EXISTS (
+            SELECT 1 FROM mbox.product_bundle_choice_groups choice_group
+            WHERE choice_group.tenant_id=product.tenant_id
+              AND choice_group.store_id=product.store_id
+              AND choice_group.bundle_product_id=product.id
+          ) THEN jsonb_array_length(line.bundle_selections)=0
+          WHEN jsonb_array_length(line.bundle_selections)<>line.quantity THEN false
+          ELSE NOT EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements(line.bundle_selections) selected_unit
+            WHERE (
+              SELECT count(*) FROM jsonb_array_elements(selected_unit.value->'groups')
+            )<>(
+              SELECT count(*) FROM mbox.product_bundle_choice_groups choice_group
+              WHERE choice_group.tenant_id=product.tenant_id
+                AND choice_group.store_id=product.store_id
+                AND choice_group.bundle_product_id=product.id
+            ) OR EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements(selected_unit.value->'groups') selected_group
+              LEFT JOIN mbox.product_bundle_choice_groups choice_group
+                ON choice_group.tenant_id=product.tenant_id
+               AND choice_group.store_id=product.store_id
+               AND choice_group.bundle_product_id=product.id
+               AND choice_group.id::text=selected_group.value->>'groupId'
+              WHERE choice_group.id IS NULL
+                OR jsonb_array_length(selected_group.value->'productIds')<>choice_group.selection_count
+                OR (
+                  SELECT count(DISTINCT selected_product.value)
+                  FROM jsonb_array_elements_text(selected_group.value->'productIds') selected_product
+                )<>choice_group.selection_count
+                OR EXISTS (
+                  SELECT 1
+                  FROM jsonb_array_elements_text(selected_group.value->'productIds') selected_product
+                  LEFT JOIN mbox.product_bundle_choice_options choice_option
+                    ON choice_option.tenant_id=product.tenant_id
+                   AND choice_option.store_id=product.store_id
+                   AND choice_option.choice_group_id=choice_group.id
+                   AND choice_option.component_product_id::text=selected_product.value
+                  WHERE choice_option.id IS NULL
+                )
+            )
+          )
+        END AS valid
+      ) selection_state ON true
+      LEFT JOIN LATERAL (
         SELECT
           CASE WHEN count(*)=0 THEN product.product_kind<>'bundle'
             WHEN product.product_kind='bundle' AND count(*)<>(
@@ -480,6 +609,10 @@ export class GuestSharedCartRepository {
               WHERE expected_component.tenant_id=product.tenant_id
                 AND expected_component.store_id=product.store_id
                 AND expected_component.bundle_product_id=product.id
+            ) + (
+              SELECT count(*) FROM jsonb_array_elements(line.bundle_selections) selected_unit
+              CROSS JOIN LATERAL jsonb_array_elements(selected_unit.value->'groups') selected_group
+              CROSS JOIN LATERAL jsonb_array_elements_text(selected_group.value->'productIds') selected_product
             ) THEN false
             ELSE bool_and(
               required_product.inventory_control_mode='not_managed'
@@ -515,6 +648,10 @@ export class GuestSharedCartRepository {
               WHERE expected_component.tenant_id=product.tenant_id
                 AND expected_component.store_id=product.store_id
                 AND expected_component.bundle_product_id=product.id
+            ) + (
+              SELECT count(*) FROM jsonb_array_elements(line.bundle_selections) selected_unit
+              CROSS JOIN LATERAL jsonb_array_elements(selected_unit.value->'groups') selected_group
+              CROSS JOIN LATERAL jsonb_array_elements_text(selected_group.value->'productIds') selected_product
             ) THEN false
             ELSE bool_and(
               required_product.inventory_control_mode='not_managed'
@@ -573,6 +710,31 @@ export class GuestSharedCartRepository {
                     AND bundle_component.bundle_product_id=product.id
                     AND product.product_kind='bundle'
                     AND component_product.status='active'
+                  UNION ALL
+                  SELECT option_product.id,option_product.fulfillment_station,
+                    option_product.inventory_control_mode,
+                    choice_option.quantity::numeric/line.quantity::numeric
+                  FROM jsonb_array_elements(line.bundle_selections) selected_unit
+                  CROSS JOIN LATERAL jsonb_array_elements(selected_unit.value->'groups') selected_group
+                  CROSS JOIN LATERAL jsonb_array_elements_text(selected_group.value->'productIds') selected_product
+                  JOIN mbox.product_bundle_choice_options choice_option
+                    ON choice_option.tenant_id=product.tenant_id AND choice_option.store_id=product.store_id
+                   AND choice_option.choice_group_id=(selected_group.value->>'groupId')::uuid
+                   AND choice_option.component_product_id=selected_product.value::uuid
+                  JOIN mbox.products option_product
+                    ON option_product.tenant_id=choice_option.tenant_id
+                   AND option_product.store_id=choice_option.store_id
+                   AND option_product.id=choice_option.component_product_id
+                  WHERE product.product_kind='bundle' AND option_product.status='active'
+                    AND option_product.guest_visible
+                    AND 'guest_qr'=ANY(option_product.allowed_channels)
+                    AND (option_product.available_from IS NULL OR option_product.available_until IS NULL
+                      OR (option_product.available_from<option_product.available_until
+                        AND (clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
+                        AND (clock_timestamp() AT TIME ZONE store.timezone)::time<option_product.available_until)
+                      OR (option_product.available_from>=option_product.available_until
+                        AND ((clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
+                          OR (clock_timestamp() AT TIME ZONE store.timezone)::time<option_product.available_until)))
                 ) aggregate_product
                 JOIN LATERAL (
                   SELECT recipe.id,recipe.yield_quantity
@@ -618,6 +780,31 @@ export class GuestSharedCartRepository {
           WHERE component.tenant_id=product.tenant_id AND component.store_id=product.store_id
             AND component.bundle_product_id=product.id AND product.product_kind='bundle'
             AND component_product.status='active'
+          UNION ALL
+          SELECT option_product.id,option_product.fulfillment_station,
+            option_product.inventory_control_mode,
+            choice_option.quantity::numeric/line.quantity::numeric
+          FROM jsonb_array_elements(line.bundle_selections) selected_unit
+          CROSS JOIN LATERAL jsonb_array_elements(selected_unit.value->'groups') selected_group
+          CROSS JOIN LATERAL jsonb_array_elements_text(selected_group.value->'productIds') selected_product
+          JOIN mbox.product_bundle_choice_options choice_option
+            ON choice_option.tenant_id=product.tenant_id AND choice_option.store_id=product.store_id
+           AND choice_option.choice_group_id=(selected_group.value->>'groupId')::uuid
+           AND choice_option.component_product_id=selected_product.value::uuid
+          JOIN mbox.products option_product
+            ON option_product.tenant_id=choice_option.tenant_id
+           AND option_product.store_id=choice_option.store_id
+           AND option_product.id=choice_option.component_product_id
+          WHERE product.product_kind='bundle' AND option_product.status='active'
+            AND option_product.guest_visible
+            AND 'guest_qr'=ANY(option_product.allowed_channels)
+            AND (option_product.available_from IS NULL OR option_product.available_until IS NULL
+              OR (option_product.available_from<option_product.available_until
+                AND (clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
+                AND (clock_timestamp() AT TIME ZONE store.timezone)::time<option_product.available_until)
+              OR (option_product.available_from>=option_product.available_until
+                AND ((clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
+                  OR (clock_timestamp() AT TIME ZONE store.timezone)::time<option_product.available_until)))
         ) required_product
       ) inventory_state ON true
       WHERE line.tenant_id=$1::uuid AND line.store_id=$2::uuid AND line.cart_id=$3::uuid
@@ -643,6 +830,7 @@ export class GuestSharedCartRepository {
         unavailableReason: available?null:cartWideInventoryAvailable
           ? line.unavailable_reason||'商品信息正在更新，暂不可结算'
           : '本桌购物车合计库存不足',
+        bundleSelections:normalizeStoredBundleSelections(line.bundle_selections),
       }
     })
     const currencies = new Set(mappedLines.filter((line) => line.available).map((line) => line.currency))
@@ -685,6 +873,27 @@ export class GuestSharedCartRepository {
         WHERE line.tenant_id=$1::uuid AND line.store_id=$2::uuid AND line.cart_id=$3::uuid
           AND required_product.inventory_control_mode='tracked'
           AND required_product.fulfillment_station IN ('bar','kitchen')
+        UNION ALL
+        SELECT line.product_id,option_product.id,choice_option.quantity::numeric
+        FROM mbox.guest_shared_cart_lines line
+        JOIN mbox.products product
+          ON product.tenant_id=line.tenant_id AND product.store_id=line.store_id
+         AND product.id=line.product_id AND product.status='active' AND product.product_kind='bundle'
+        CROSS JOIN LATERAL jsonb_array_elements(line.bundle_selections) selected_unit
+        CROSS JOIN LATERAL jsonb_array_elements(selected_unit.value->'groups') selected_group
+        CROSS JOIN LATERAL jsonb_array_elements_text(selected_group.value->'productIds') selected_product
+        JOIN mbox.product_bundle_choice_options choice_option
+          ON choice_option.tenant_id=product.tenant_id AND choice_option.store_id=product.store_id
+         AND choice_option.choice_group_id=(selected_group.value->>'groupId')::uuid
+         AND choice_option.component_product_id=selected_product.value::uuid
+        JOIN mbox.products option_product
+          ON option_product.tenant_id=choice_option.tenant_id
+         AND option_product.store_id=choice_option.store_id
+         AND option_product.id=choice_option.component_product_id
+         AND option_product.status='active'
+         AND option_product.inventory_control_mode='tracked'
+         AND option_product.fulfillment_station IN ('bar','kitchen')
+        WHERE line.tenant_id=$1::uuid AND line.store_id=$2::uuid AND line.cart_id=$3::uuid
       ), recipe_demands AS (
         SELECT component.cart_product_id,recipe_item.inventory_item_id,
           (recipe_item.quantity+recipe_item.expected_waste_quantity)
@@ -840,7 +1049,7 @@ export class GuestSharedCartRepository {
   private appendOperation(
     cart: Readonly<GuestSharedCart>,
     input: Readonly<{
-      command: 'adjust' | 'remove' | 'clear' | 'submit'
+      command: 'adjust' | 'replace_selection' | 'remove' | 'clear' | 'submit'
       operationId: string
       actorSessionRef: string
       expectedVersion: number
@@ -909,6 +1118,20 @@ function validateRemove(input:Readonly<{
   validateClear(input)
 }
 
+function validateReplaceBundleSelection(input:Readonly<{
+  productId:string;unitIndex:number;bundleSelection:BundleUnitSelectionInput;
+  expectedGeneration:number;expectedVersion:number;operationId:string;actorSessionRef:string
+}>):void{
+  validateRemove(input)
+  if(!Number.isSafeInteger(input.unitIndex)||input.unitIndex<0||input.unitIndex>=MAX_LINE_QUANTITY){
+    throw new TypeError('unitIndex is invalid')
+  }
+  if(!input.bundleSelection||!Array.isArray(input.bundleSelection.groups)
+    ||input.bundleSelection.groups.length<1){
+    throw new TypeError('bundleSelection is invalid')
+  }
+}
+
 function validateOperation(operationId: string, actorSessionRef: string): void {
   if (!/^[A-Za-z0-9_-]{8,128}$/.test(operationId)) throw new TypeError('operationId is invalid')
   if (actorSessionRef.trim().length < 8 || actorSessionRef.length > 180) throw new TypeError('actorSessionRef is invalid')
@@ -919,6 +1142,29 @@ function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
   const record = value as Record<string, unknown>
   return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(',')}}`
+}
+
+function normalizeStoredBundleSelections(value:unknown):BundleUnitSelectionInput[]{
+  if(!Array.isArray(value))return []
+  return value.flatMap((unit)=>{
+    if(typeof unit!=='object'||unit===null||Array.isArray(unit))return []
+    const groups=(unit as Record<string,unknown>).groups
+    if(!Array.isArray(groups))return []
+    const normalized=groups.flatMap((group)=>{
+      if(typeof group!=='object'||group===null||Array.isArray(group))return []
+      const record=group as Record<string,unknown>
+      if(typeof record.groupId!=='string'||!Array.isArray(record.productIds)
+        ||!record.productIds.every((productId)=>typeof productId==='string'))return []
+      return [{ groupId:record.groupId,productIds:record.productIds as string[] }]
+    })
+    return normalized.length===groups.length?[{ groups:normalized }]:[]
+  })
+}
+
+function bundleSelectionsToJson(selections:readonly BundleUnitSelectionInput[]):JsonObject[]{
+  return selections.map((unit)=>({ groups:unit.groups.map((group)=>({
+    groupId:group.groupId,productIds:[...group.productIds],
+  })) }))
 }
 
 function auditActorSessionRef(value: string): string {

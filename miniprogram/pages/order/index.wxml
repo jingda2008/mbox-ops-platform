@@ -137,7 +137,7 @@
   </view>
 
   <view wx:if="{{detailProduct}}" class="product-detail-mask sheet-mask" bindtap="closeProductDetail">
-    <view class="product-detail-sheet" catchtap="keepProductDetailOpen">
+    <view class="product-detail-sheet {{detailProduct.productKind === 'bundle' ? 'is-bundle' : ''}}" catchtap="keepProductDetailOpen">
       <button class="product-detail-close compact-icon-action" aria-label="关闭商品详情" catchtap="closeProductDetail">×</button>
       <scroll-view scroll-y class="product-detail-scroll">
         <view class="product-detail-hero" catchtap="previewProductImage">
@@ -154,18 +154,30 @@
             <text class="product-detail-section-title">组合内容</text>
             <view wx:for="{{detailProduct.bundleComponents}}" wx:key="productId" class="product-detail-component"><text>{{item.name}}</text><text>× {{item.quantity}}</text></view>
           </view>
+          <view wx:for="{{detailProduct.bundleChoiceGroups}}" wx:key="id" class="product-detail-choice-group">
+            <view class="product-detail-choice-head"><text>{{item.name}}</text><text>请选择 {{item.selectionCount}} 款</text></view>
+            <view class="product-detail-choice-options"><button wx:for="{{item.options}}" wx:for-item="option" wx:key="productId"
+                class="product-detail-choice {{option.selected ? 'is-selected' : ''}}"
+                data-group="{{item.id}}" data-product="{{option.productId}}"
+                disabled="{{option.available === false}}" catchtap="selectBundleChoice">
+                <view><text>{{option.name}}</text><text>{{option.available === false ? (option.unavailableReason || '当前不可选') : (option.quantity > 1 ? '每份 × ' + option.quantity : '包含 1 份')}}</text></view>
+                <text>{{option.selected ? '已选' : '选择'}}</text>
+              </button></view>
+          </view>
           <view wx:if="{{detailProduct.discountVisible}}" class="product-detail-saving">
             <view><text>单点合计</text><text>{{detailProduct.separatePriceText}}</text></view>
             <text>{{detailProduct.savingsText}}</text>
           </view>
-          <view class="product-detail-footer">
-            <view><text>当前售价</text><text>{{detailProduct.priceText}}</text></view>
-            <button wx:if="{{connectionState === 'active' && detailProduct.available}}" data-id="{{detailProduct.productId}}" catchtap="addProduct">加入购物车</button>
-            <button wx:elif="{{connectionState === 'active'}}" class="product-detail-unavailable" disabled="{{true}}">{{detailProduct.availabilityDetail}}</button>
-            <text wx:else class="product-detail-browse-note">{{connectionState === 'waiting' ? '服务人员开台后可下单' : '到店扫码后可下单'}}</text>
-          </view>
         </view>
       </scroll-view>
+      <view class="product-detail-footer">
+        <view><text>当前售价</text><text>{{detailProduct.priceText}}</text></view>
+        <button wx:if="{{connectionState === 'active' && detailProduct.available && detailProduct.productKind === 'bundle'}}"
+          disabled="{{!detailSelectionsComplete}}" catchtap="confirmBundleProduct">{{detailProduct.bundleChoiceGroups.length ? (detailSelectionsComplete ? (detailEditUnitIndex >= 0 ? '保存第' + (detailEditUnitIndex + 1) + '份' : '确认选择并加入') : '请先完成选择') : '确认套餐并加入'}}</button>
+        <button wx:elif="{{connectionState === 'active' && detailProduct.available}}" data-id="{{detailProduct.productId}}" catchtap="addProduct">加入购物车</button>
+        <button wx:elif="{{connectionState === 'active'}}" class="product-detail-unavailable" disabled="{{true}}">{{detailProduct.availabilityDetail}}</button>
+        <text wx:else class="product-detail-browse-note">{{connectionState === 'waiting' ? '服务人员开台后可下单' : '到店扫码后可下单'}}</text>
+      </view>
     </view>
   </view>
 
@@ -175,7 +187,7 @@
 
   <view wx:if="{{checkoutConfirmVisible}}" class="checkout-confirm sheet-mask">
     <view class="checkout-confirm__sheet"><view class="sheet-handle"></view><view class="checkout-confirm__head"><view><text class="checkout-confirm__eyebrow">本桌订单</text><text class="checkout-confirm__title">核对商品与金额</text></view><view class="checkout-confirm__close-slot"><button class="checkout-confirm__close compact-text-action" aria-label="关闭订单明细" hover-class="checkout-confirm__close--pressed" bindtap="closeCheckoutConfirm" disabled="{{busy}}">关闭</button></view></view>
-      <scroll-view scroll-y class="checkout-confirm__lines"><view wx:for="{{cart}}" wx:key="productId" class="checkout-confirm__line"><view class="checkout-confirm__copy"><text>{{item.name}}</text><text>{{item.priceText}} × {{item.quantity}} · 小计 {{item.subtotalText}}</text><text wx:if="{{!item.available}}" class="cart-line__unavailable">{{item.unavailableReason}}</text></view><view class="checkout-confirm__actions"><button class="checkout-confirm__remove" aria-label="移除{{item.name}}" data-id="{{item.productId}}" bindtap="removeCartLine" disabled="{{busy || cartSyncing || cartWritesFrozen}}">移除</button><button data-id="{{item.productId}}" data-delta="-1" bindtap="changeQuantity" disabled="{{busy || cartSyncing || cartWritesFrozen}}">−</button><text>{{item.quantity}}</text><button data-id="{{item.productId}}" data-delta="1" bindtap="changeQuantity" disabled="{{busy || cartSyncing || cartWritesFrozen || !item.available}}">＋</button></view></view></scroll-view>
+      <scroll-view scroll-y class="checkout-confirm__lines"><view wx:for="{{cart}}" wx:key="productId" class="checkout-confirm__line"><view class="checkout-confirm__copy"><text>{{item.name}}</text><text>{{item.priceText}} × {{item.quantity}} · 小计 {{item.subtotalText}}</text><view wx:if="{{item.selectionUnits.length}}" class="cart-line__selection"><button wx:for="{{item.selectionUnits}}" wx:for-item="unit" wx:key="unitIndex" data-id="{{item.productId}}" data-index="{{unit.unitIndex}}" bindtap="editBundleUnitSelection" disabled="{{busy || cartSyncing || cartWritesFrozen}}">第{{unit.unitIndex + 1}}份：{{unit.label}} · 修改</button></view><text wx:if="{{!item.available}}" class="cart-line__unavailable">{{item.unavailableReason}}</text></view><view class="checkout-confirm__actions"><button class="checkout-confirm__remove" aria-label="移除{{item.name}}" data-id="{{item.productId}}" bindtap="removeCartLine" disabled="{{busy || cartSyncing || cartWritesFrozen}}">移除</button><button data-id="{{item.productId}}" data-delta="-1" bindtap="changeQuantity" disabled="{{busy || cartSyncing || cartWritesFrozen}}">−</button><text>{{item.quantity}}</text><button data-id="{{item.productId}}" data-delta="1" bindtap="changeQuantity" disabled="{{busy || cartSyncing || cartWritesFrozen || !item.available}}">＋</button></view></view></scroll-view>
       <view class="checkout-confirm__total"><view><text class="checkout-confirm__total-label">本次应付</text><text class="checkout-confirm__total-note">确认后调起微信支付</text></view><text class="checkout-confirm__total-price">{{cartTotal}}</text></view>
       <view class="checkout-confirm__footer"><button class="checkout-confirm__footer-button secondary-button" bindtap="closeCheckoutConfirm" disabled="{{busy}}">继续加购</button><button class="checkout-confirm__footer-button primary-button" bindtap="confirmCheckout" loading="{{busy}}" disabled="{{busy || cartSyncing || cartWritesFrozen || checkoutLocked}}">{{checkoutLocked ? '订单确认中' : '确认支付'}}</button></view>
     </view>

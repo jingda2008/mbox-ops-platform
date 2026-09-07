@@ -1,5 +1,5 @@
 {
-  "version": "2026.09.07-v20",
+  "version": "2026.09.08-v21",
   "tenant": {
     "id": "10000000-0000-4000-8000-000000000001",
     "code": "superhigh",
@@ -1023,7 +1023,11 @@
         "catalog.product.manage",
         "catalog.price.manage",
         "commercial.profit.view",
+        "commercial.cost.view",
         "commercial.cost.manage",
+        "commercial.payroll.view",
+        "commercial.payroll.manage",
+        "commercial.payroll.post",
         "commercial.sales.view_all",
         "song.view",
         "song.manage",
@@ -1209,6 +1213,7 @@
         "catalog.product.manage",
         "catalog.price.manage",
         "commercial.profit.view",
+        "commercial.cost.view",
         "commercial.cost.manage",
         "commercial.sales.view_all",
         "song.view",

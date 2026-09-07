@@ -94,6 +94,25 @@ interface BundleComponentInput extends JsonObject {
   note: string | null;
 }
 
+interface BundleChoiceGroup {
+  id: string;
+  code: string;
+  name: string;
+  selectionCount: number;
+  sortOrder: number;
+  options: Array<{ productId:string;code:string;name:string;quantity:number;sortOrder:number;
+    available:boolean;unavailableReason:string|null }>;
+}
+
+interface BundleChoiceGroupInput extends JsonObject {
+  id:string|null;
+  code:string;
+  name:string;
+  selectionCount:number;
+  sortOrder:number;
+  options:Array<{ productId:string;quantity:number;sortOrder:number }>;
+}
+
 interface ProductRow extends Record<string, unknown> {
   id: string;
   code: string;
@@ -104,6 +123,8 @@ interface ProductRow extends Record<string, unknown> {
   inventory_control_mode: InventoryControlMode;
   bundle_components: JsonValue;
   bundle_components_available: boolean;
+  bundle_choice_groups: JsonValue;
+  bundle_choice_groups_available: boolean;
   inventory_configuration_complete: boolean;
   inventory_available: boolean;
   product_snapshot: JsonObject;
@@ -148,6 +169,7 @@ interface CatalogProduct {
   productKind: ProductKind;
   inventoryControlMode: InventoryControlMode;
   bundleComponents: BundleComponent[];
+  bundleChoiceGroups: BundleChoiceGroup[];
   productSnapshot: JsonObject;
   guestVisible: boolean;
   searchText: string;
@@ -625,14 +647,20 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
           const productId = result.rows[0]?.id;
           if (productId === undefined) throw new Error("Product insert did not return an id");
           await replaceBundleComponents(transaction, productId, input.bundleComponents);
+          await replaceBundleChoiceGroups(transaction, productId, input.bundleChoiceGroups);
           if (input.productKind === "bundle") {
             await new InventoryRepository(transaction).synchronizeBundleCostsForComponentProducts(
-              input.bundleComponents.map((component) => component.productId),
+              [...input.bundleComponents.map((component) => component.productId),
+                ...input.bundleChoiceGroups.flatMap((group)=>group.options.map((option)=>option.productId))],
             );
+            if(input.bundleChoiceGroups.length>0){
+              await markBundleChoiceCostIncomplete(transaction,productId);
+            }
           }
           if (input.standardPrice !== null) {
             await replaceCurrentStandardPrice(transaction, productId, input.standardPrice);
           }
+          if(input.productKind==='bundle')await assertActiveBundleChoiceChannels(transaction,productId);
           const product = mapProduct(await getProduct(transaction, productId));
           return catalogOutcome(
             request,
@@ -731,12 +759,14 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
             }
             const targetStation = patch.fulfillmentStation ?? before.fulfillmentStation;
             const targetComponents = patch.bundleComponents ?? before.bundleComponents.map(componentInput);
-            assertProductShape(targetKind, targetStation, targetComponents);
+            const targetChoiceGroups = patch.bundleChoiceGroups ?? before.bundleChoiceGroups.map(choiceGroupInput);
+            assertProductShape(targetKind, targetStation, targetComponents, targetChoiceGroups);
             if (before.productKind === "single" && targetKind === "bundle") {
               await assertProductIsNotAComponent(transaction, productId);
             }
             if (before.productKind === "bundle" && targetKind === "single") {
               await deleteBundleComponents(transaction, productId);
+              await deleteBundleChoiceGroups(transaction, productId);
             }
             const result = await transaction.query<IdRow>(
               `
@@ -831,18 +861,24 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
             if (result.rowCount !== 1) throw new CatalogProductNotFoundError();
             if (
               targetKind === "bundle" &&
-              (patch.bundleComponents !== null || before.productKind !== targetKind)
+              (patch.bundleComponents !== null || patch.bundleChoiceGroups!==null || before.productKind !== targetKind)
             ) {
               await replaceBundleComponents(transaction, productId, targetComponents);
+              await replaceBundleChoiceGroups(transaction, productId, targetChoiceGroups);
               await new InventoryRepository(transaction).synchronizeBundleCostsForComponentProducts(
-                targetComponents.map((component) => component.productId),
+                [...targetComponents.map((component) => component.productId),
+                  ...targetChoiceGroups.flatMap((group)=>group.options.map((option)=>option.productId))],
               );
+              if(targetChoiceGroups.length>0){
+                await markBundleChoiceCostIncomplete(transaction,productId);
+              }
             } else if (costChanged && targetKind === "single") {
               await new InventoryRepository(transaction).synchronizeBundleCostsForComponentProducts([productId]);
             }
             if (patch.standardPrice !== null) {
               await replaceCurrentStandardPrice(transaction, productId, patch.standardPrice);
             }
+            if(targetKind==='bundle')await assertActiveBundleChoiceChannels(transaction,productId);
             const product = mapProduct(
               await getProduct(transaction, productId),
             );
@@ -1152,6 +1188,8 @@ async function listProducts(
       product.fulfillment_station, product.product_kind, product.inventory_control_mode,
       COALESCE(component_list.items, '[]'::jsonb) AS bundle_components,
       COALESCE(component_list.all_available, false) AS bundle_components_available,
+      COALESCE(choice_group_list.items,'[]'::jsonb) AS bundle_choice_groups,
+      COALESCE(choice_group_list.all_available,false) AS bundle_choice_groups_available,
       COALESCE(inventory_readiness.configuration_complete, false) AS inventory_configuration_complete,
       COALESCE(inventory_stock.available, false) AS inventory_available,
       product.product_snapshot, product.guest_visible, product.search_text,
@@ -1209,6 +1247,114 @@ async function listProducts(
         AND component.store_id = product.store_id
         AND component.bundle_product_id = product.id
     ) AS component_list ON true
+    LEFT JOIN LATERAL (
+      SELECT jsonb_agg(jsonb_build_object(
+        'id',choice_group.id,'code',choice_group.code,'name',choice_group.display_name,
+        'selectionCount',choice_group.selection_count,'sortOrder',choice_group.sort_order,
+        'options',COALESCE(choice_options.items,'[]'::jsonb)
+      ) ORDER BY choice_group.sort_order,choice_group.id) AS items,
+      COALESCE(bool_and(choice_options.available_count>=choice_group.selection_count),true) AS all_available
+      FROM mbox.product_bundle_choice_groups choice_group
+      LEFT JOIN LATERAL (
+        SELECT jsonb_agg(jsonb_build_object(
+          'productId',option_product.id,'code',option_product.code,'name',option_product.name,
+          'quantity',choice_option.quantity,'sortOrder',choice_option.sort_order,
+          'available',(option_product.status='active' AND 'staff_assisted'=ANY(option_product.allowed_channels)
+            AND option_inventory.configuration_complete AND option_inventory.available
+            AND (option_product.available_from IS NULL OR option_product.available_until IS NULL
+              OR (option_product.available_from<option_product.available_until
+                AND (clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
+                AND (clock_timestamp() AT TIME ZONE store.timezone)::time<option_product.available_until)
+              OR (option_product.available_from>=option_product.available_until
+                AND ((clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
+                  OR (clock_timestamp() AT TIME ZONE store.timezone)::time<option_product.available_until)))),
+          'unavailableReason',CASE
+            WHEN option_product.status<>'active' THEN '当前已停用'
+            WHEN NOT ('staff_assisted'=ANY(option_product.allowed_channels)) THEN '未开放员工协助点单'
+            WHEN NOT option_inventory.configuration_complete THEN '配方正在更新'
+            WHEN NOT option_inventory.available THEN '当前库存不足'
+            WHEN NOT (option_product.available_from IS NULL OR option_product.available_until IS NULL
+              OR (option_product.available_from<option_product.available_until
+                AND (clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
+                AND (clock_timestamp() AT TIME ZONE store.timezone)::time<option_product.available_until)
+              OR (option_product.available_from>=option_product.available_until
+                AND ((clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
+                  OR (clock_timestamp() AT TIME ZONE store.timezone)::time<option_product.available_until)))
+              THEN '当前不在可售时间'
+            ELSE NULL END
+        ) ORDER BY choice_option.sort_order,choice_option.id) AS items,
+        count(*) FILTER(WHERE option_product.status='active' AND 'staff_assisted'=ANY(option_product.allowed_channels)
+          AND option_inventory.configuration_complete AND option_inventory.available
+          AND (option_product.available_from IS NULL OR option_product.available_until IS NULL
+            OR (option_product.available_from<option_product.available_until
+              AND (clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
+              AND (clock_timestamp() AT TIME ZONE store.timezone)::time<option_product.available_until)
+            OR (option_product.available_from>=option_product.available_until
+              AND ((clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
+                OR (clock_timestamp() AT TIME ZONE store.timezone)::time<option_product.available_until))))::integer AS available_count
+        FROM mbox.product_bundle_choice_options choice_option
+        JOIN mbox.products option_product
+          ON option_product.tenant_id=choice_option.tenant_id AND option_product.store_id=choice_option.store_id
+         AND option_product.id=choice_option.component_product_id
+        LEFT JOIN LATERAL (
+          SELECT
+            option_product.inventory_control_mode='not_managed'
+              OR option_product.fulfillment_station NOT IN ('bar','kitchen')
+              OR EXISTS (
+                SELECT 1 FROM mbox.recipes recipe
+                WHERE recipe.tenant_id=option_product.tenant_id AND recipe.store_id=option_product.store_id
+                  AND recipe.product_id=option_product.id AND recipe.status='active'
+                  AND recipe.effective_at<=statement_timestamp()
+                  AND EXISTS (SELECT 1 FROM mbox.recipe_items recipe_item
+                    WHERE recipe_item.tenant_id=recipe.tenant_id AND recipe_item.store_id=recipe.store_id
+                      AND recipe_item.recipe_id=recipe.id AND recipe_item.quantity>0)
+                  AND NOT EXISTS (
+                    SELECT 1 FROM mbox.recipe_items recipe_item
+                    LEFT JOIN mbox.inventory_items inventory_item
+                      ON inventory_item.tenant_id=recipe_item.tenant_id
+                     AND inventory_item.store_id=recipe_item.store_id
+                     AND inventory_item.id=recipe_item.inventory_item_id
+                    LEFT JOIN mbox.inventory_balances balance
+                      ON balance.tenant_id=recipe_item.tenant_id AND balance.store_id=recipe_item.store_id
+                     AND balance.inventory_item_id=recipe_item.inventory_item_id
+                    WHERE recipe_item.tenant_id=recipe.tenant_id AND recipe_item.store_id=recipe.store_id
+                      AND recipe_item.recipe_id=recipe.id
+                      AND (inventory_item.id IS NULL OR inventory_item.status<>'active' OR balance.id IS NULL)
+                  )
+              ) AS configuration_complete,
+            option_product.inventory_control_mode='not_managed'
+              OR option_product.fulfillment_station NOT IN ('bar','kitchen')
+              OR EXISTS (
+                SELECT 1 FROM mbox.recipes recipe
+                WHERE recipe.tenant_id=option_product.tenant_id AND recipe.store_id=option_product.store_id
+                  AND recipe.product_id=option_product.id AND recipe.status='active'
+                  AND recipe.effective_at<=statement_timestamp()
+                  AND EXISTS (SELECT 1 FROM mbox.recipe_items recipe_item
+                    WHERE recipe_item.tenant_id=recipe.tenant_id AND recipe_item.store_id=recipe.store_id
+                      AND recipe_item.recipe_id=recipe.id AND recipe_item.quantity>0)
+                  AND NOT EXISTS (
+                    SELECT 1 FROM mbox.recipe_items recipe_item
+                    LEFT JOIN mbox.inventory_items inventory_item
+                      ON inventory_item.tenant_id=recipe_item.tenant_id
+                     AND inventory_item.store_id=recipe_item.store_id
+                     AND inventory_item.id=recipe_item.inventory_item_id
+                    LEFT JOIN mbox.inventory_balances balance
+                      ON balance.tenant_id=recipe_item.tenant_id AND balance.store_id=recipe_item.store_id
+                     AND balance.inventory_item_id=recipe_item.inventory_item_id
+                    WHERE recipe_item.tenant_id=recipe.tenant_id AND recipe_item.store_id=recipe.store_id
+                      AND recipe_item.recipe_id=recipe.id
+                      AND (inventory_item.id IS NULL OR inventory_item.status<>'active' OR balance.id IS NULL
+                        OR balance.on_hand_quantity-balance.reserved_quantity
+                          < recipe_item.quantity*choice_option.quantity)
+                  )
+              ) AS available
+        ) option_inventory ON true
+        WHERE choice_option.tenant_id=choice_group.tenant_id AND choice_option.store_id=choice_group.store_id
+          AND choice_option.choice_group_id=choice_group.id
+      ) choice_options ON true
+      WHERE choice_group.tenant_id=product.tenant_id AND choice_group.store_id=product.store_id
+        AND choice_group.bundle_product_id=product.id
+    ) choice_group_list ON true
     LEFT JOIN LATERAL (
       SELECT COALESCE(bool_and(
         required_product.inventory_control_mode = 'not_managed'
@@ -1395,6 +1541,7 @@ function assistedOrderCatalogProduct(
     fulfillmentStation: product.fulfillmentStation,
     productKind: product.productKind,
     bundleComponents: product.bundleComponents,
+    bundleChoiceGroups: product.bundleChoiceGroups,
     productSnapshot: product.productSnapshot,
     guestVisible: product.guestVisible,
     recommendationEnabled: product.recommendationEnabled,
@@ -1465,22 +1612,38 @@ function componentInput(component: BundleComponent): BundleComponentInput {
   };
 }
 
+function choiceGroupInput(group: BundleChoiceGroup): BundleChoiceGroupInput {
+  return {
+    id: group.id,
+    code: group.code,
+    name: group.name,
+    selectionCount: group.selectionCount,
+    sortOrder: group.sortOrder,
+    options: group.options.map((option) => ({
+      productId: option.productId,
+      quantity: option.quantity,
+      sortOrder: option.sortOrder,
+    })),
+  };
+}
+
 function assertProductShape(
   productKind: ProductKind,
   fulfillmentStation: FulfillmentStation,
   components: readonly BundleComponentInput[],
+  choiceGroups: readonly BundleChoiceGroupInput[],
 ): void {
   if (productKind === "bundle") {
     if (fulfillmentStation !== "none") {
       throw new CatalogRequestError("组合商品的出品岗位必须为none，由组成单品分别出品");
     }
-    if (components.length === 0) {
-      throw new CatalogRequestError("组合商品至少需要一个组成单品");
+    if (components.length === 0 && choiceGroups.length === 0) {
+      throw new CatalogRequestError("组合商品至少需要一个固定组成单品或必选组");
     }
     return;
   }
-  if (components.length > 0) {
-    throw new CatalogRequestError("普通单品不能配置组合组成清单");
+  if (components.length > 0 || choiceGroups.length > 0) {
+    throw new CatalogRequestError("普通单品不能配置组合组成清单或必选组");
   }
 }
 
@@ -1510,8 +1673,10 @@ async function assertProductIsNotAComponent(
 ): Promise<void> {
   const result = await transaction.query<IdRow>(`
     SELECT id FROM mbox.product_bundle_components
-    WHERE tenant_id = $1::uuid AND store_id = $2::uuid
-      AND component_product_id = $3::uuid
+    WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND component_product_id = $3::uuid
+    UNION ALL
+    SELECT id FROM mbox.product_bundle_choice_options
+    WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND component_product_id = $3::uuid
     LIMIT 1
   `, [transaction.scope.tenantId, transaction.scope.storeId, productId]);
   if ((result.rowCount ?? 0) > 0) {
@@ -1528,6 +1693,13 @@ async function deleteBundleComponents(
     WHERE tenant_id = $1::uuid AND store_id = $2::uuid
       AND bundle_product_id = $3::uuid
   `, [transaction.scope.tenantId, transaction.scope.storeId, productId]);
+}
+
+async function deleteBundleChoiceGroups(transaction:ScopedTransaction,productId:string):Promise<void>{
+  await transaction.query(`
+    DELETE FROM mbox.product_bundle_choice_groups
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND bundle_product_id=$3::uuid
+  `,[transaction.scope.tenantId,transaction.scope.storeId,productId]);
 }
 
 async function replaceBundleComponents(
@@ -1575,6 +1747,173 @@ async function replaceBundleComponents(
       note: component.note,
     }))),
   ]);
+}
+
+async function replaceBundleChoiceGroups(
+  transaction:ScopedTransaction,
+  productId:string,
+  groups:readonly BundleChoiceGroupInput[],
+):Promise<void>{
+  const productIds=groups.flatMap((group)=>group.options.map((option)=>option.productId));
+  if(productIds.length>0){
+    const validation=await transaction.query<{ id:string }>(`
+      SELECT id FROM mbox.products
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=ANY($3::uuid[])
+        AND id<>$4::uuid AND product_kind='single'
+    `,[transaction.scope.tenantId,transaction.scope.storeId,[...new Set(productIds)],productId]);
+    if(validation.rows.length!==new Set(productIds).size){
+      throw new CatalogConflictError('套餐必选组包含不存在、嵌套或跨门店的商品');
+    }
+  }
+  const existing=await transaction.query<{ id:string;code:string }>(`
+    SELECT id,code FROM mbox.product_bundle_choice_groups
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND bundle_product_id=$3::uuid
+    ORDER BY sort_order,id
+    FOR UPDATE
+  `,[transaction.scope.tenantId,transaction.scope.storeId,productId]);
+  const existingById=new Map(existing.rows.map((group)=>[group.id,group]));
+  const existingByCode=new Map(existing.rows.map((group)=>[group.code,group]));
+  const requestedIds=new Set(groups.flatMap((group)=>group.id===null?[]:[group.id]));
+  if(requestedIds.size!==groups.filter((group)=>group.id!==null).length){
+    throw new CatalogConflictError('同一套餐不能重复提交同一个必选组');
+  }
+  for(const id of requestedIds){
+    if(!existingById.has(id))throw new CatalogConflictError('套餐必选组已变更，请刷新后重试');
+  }
+  // Temporarily free every existing code so that two retained groups can swap
+  // codes without hitting the unique constraint. Their stable UUIDs remain
+  // unchanged, so open carts do not become invalid after an unrelated edit.
+  if(existing.rows.length>0){
+    await transaction.query(`
+      UPDATE mbox.product_bundle_choice_groups
+      SET code='pending_'||replace(id::text,'-','')
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND bundle_product_id=$3::uuid
+    `,[transaction.scope.tenantId,transaction.scope.storeId,productId]);
+  }
+  const retainedIds:string[]=[];
+  for(const group of groups){
+    const matched=group.id===null?existingByCode.get(group.code):existingById.get(group.id);
+    const saved=matched===undefined
+      ?await transaction.query<{ id:string }>(`
+        INSERT INTO mbox.product_bundle_choice_groups(
+          tenant_id,store_id,bundle_product_id,code,display_name,selection_count,sort_order
+        ) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5,$6::smallint,$7::integer)
+        RETURNING id
+      `,[transaction.scope.tenantId,transaction.scope.storeId,productId,
+        group.code,group.name,group.selectionCount,group.sortOrder])
+      :await transaction.query<{ id:string }>(`
+        UPDATE mbox.product_bundle_choice_groups
+        SET code=$4,display_name=$5,selection_count=$6::smallint,sort_order=$7::integer
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+          AND bundle_product_id=$8::uuid
+        RETURNING id
+      `,[transaction.scope.tenantId,transaction.scope.storeId,matched.id,
+        group.code,group.name,group.selectionCount,group.sortOrder,productId]);
+    const groupId=saved.rows[0]?.id;
+    if(!groupId)throw new Error('Bundle choice group insert did not return an id');
+    retainedIds.push(groupId);
+    await transaction.query(`
+      DELETE FROM mbox.product_bundle_choice_options
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND choice_group_id=$3::uuid
+    `,[transaction.scope.tenantId,transaction.scope.storeId,groupId]);
+    await transaction.query(`
+      INSERT INTO mbox.product_bundle_choice_options(
+        tenant_id,store_id,choice_group_id,component_product_id,quantity,sort_order
+      ) SELECT $1::uuid,$2::uuid,$3::uuid,input.product_id,input.quantity,input.sort_order
+      FROM jsonb_to_recordset($4::jsonb) AS input(
+        product_id uuid,quantity integer,sort_order integer
+      )
+    `,[transaction.scope.tenantId,transaction.scope.storeId,groupId,
+      JSON.stringify(group.options.map((option)=>({ product_id:option.productId,
+        quantity:option.quantity,sort_order:option.sortOrder }))) ]);
+  }
+  await transaction.query(`
+    DELETE FROM mbox.product_bundle_choice_groups
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND bundle_product_id=$3::uuid
+      AND NOT (id=ANY($4::uuid[]))
+  `,[transaction.scope.tenantId,transaction.scope.storeId,productId,retainedIds]);
+}
+
+async function markBundleChoiceCostIncomplete(
+  transaction:ScopedTransaction,
+  productId:string,
+):Promise<void>{
+  await transaction.query(`
+    UPDATE mbox.products
+    SET cost_amount_minor=NULL,cost_source='incomplete',recipe_cost_version_id=NULL,
+      updated_at=clock_timestamp()
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+  `,[transaction.scope.tenantId,transaction.scope.storeId,productId]);
+}
+
+async function assertActiveBundleChoiceChannels(
+  transaction:ScopedTransaction,
+  productId:string,
+):Promise<void>{
+  const result=await transaction.query<{
+    status:ProductStatus;allowed_channels:string[];display_name:string;
+    selection_count:number;guest_count:number;staff_count:number
+  }>(`
+    SELECT bundle.status,bundle.allowed_channels,choice_group.display_name,
+      choice_group.selection_count,
+      count(choice_option.id) FILTER(WHERE option_product.status='active'
+        AND option_product.guest_visible AND 'guest_qr'=ANY(option_product.allowed_channels)
+        AND option_inventory.configuration_complete)::integer AS guest_count,
+      count(choice_option.id) FILTER(WHERE option_product.status='active'
+        AND 'staff_assisted'=ANY(option_product.allowed_channels)
+        AND option_inventory.configuration_complete)::integer AS staff_count
+    FROM mbox.products bundle
+    JOIN mbox.product_bundle_choice_groups choice_group
+      ON choice_group.tenant_id=bundle.tenant_id AND choice_group.store_id=bundle.store_id
+     AND choice_group.bundle_product_id=bundle.id
+    LEFT JOIN mbox.product_bundle_choice_options choice_option
+      ON choice_option.tenant_id=choice_group.tenant_id AND choice_option.store_id=choice_group.store_id
+     AND choice_option.choice_group_id=choice_group.id
+    LEFT JOIN mbox.products option_product
+      ON option_product.tenant_id=choice_option.tenant_id AND option_product.store_id=choice_option.store_id
+     AND option_product.id=choice_option.component_product_id
+    LEFT JOIN LATERAL (
+      SELECT option_product.inventory_control_mode='not_managed'
+        OR option_product.fulfillment_station NOT IN ('bar','kitchen')
+        OR EXISTS (
+          SELECT 1 FROM mbox.recipes recipe
+          WHERE recipe.tenant_id=option_product.tenant_id AND recipe.store_id=option_product.store_id
+            AND recipe.product_id=option_product.id AND recipe.status='active'
+            AND recipe.effective_at<=statement_timestamp()
+            AND EXISTS (
+              SELECT 1 FROM mbox.recipe_items recipe_item
+              WHERE recipe_item.tenant_id=recipe.tenant_id AND recipe_item.store_id=recipe.store_id
+                AND recipe_item.recipe_id=recipe.id AND recipe_item.quantity>0
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM mbox.recipe_items recipe_item
+              LEFT JOIN mbox.inventory_items inventory_item
+                ON inventory_item.tenant_id=recipe_item.tenant_id
+               AND inventory_item.store_id=recipe_item.store_id
+               AND inventory_item.id=recipe_item.inventory_item_id
+              LEFT JOIN mbox.inventory_balances balance
+                ON balance.tenant_id=recipe_item.tenant_id AND balance.store_id=recipe_item.store_id
+               AND balance.inventory_item_id=recipe_item.inventory_item_id
+              WHERE recipe_item.tenant_id=recipe.tenant_id AND recipe_item.store_id=recipe.store_id
+                AND recipe_item.recipe_id=recipe.id
+                AND (recipe_item.quantity<=0 OR recipe_item.expected_waste_quantity<0
+                  OR inventory_item.id IS NULL OR inventory_item.status<>'active' OR balance.id IS NULL)
+            )
+        ) AS configuration_complete
+    ) option_inventory ON true
+    WHERE bundle.tenant_id=$1::uuid AND bundle.store_id=$2::uuid AND bundle.id=$3::uuid
+    GROUP BY bundle.status,bundle.allowed_channels,choice_group.id,choice_group.display_name,
+      choice_group.selection_count
+  `,[transaction.scope.tenantId,transaction.scope.storeId,productId])
+  for(const group of result.rows){
+    if(group.status!=='active')continue
+    if(group.allowed_channels.includes('guest_qr')&&group.guest_count<group.selection_count){
+      throw new CatalogConflictError(`必选组“${group.display_name}”没有足够的顾客可选菜品`)
+    }
+    if(group.allowed_channels.includes('staff_assisted')&&group.staff_count<group.selection_count){
+      throw new CatalogConflictError(`必选组“${group.display_name}”没有足够的员工协助点单菜品`)
+    }
+  }
 }
 
 async function assertLivePermission(
@@ -1736,6 +2075,8 @@ async function getProduct(
       product.fulfillment_station, product.product_kind, product.inventory_control_mode,
       COALESCE(component_list.items, '[]'::jsonb) AS bundle_components,
       COALESCE(component_list.all_available, false) AS bundle_components_available,
+      COALESCE(choice_group_list.items,'[]'::jsonb) AS bundle_choice_groups,
+      COALESCE(choice_group_list.all_available,false) AS bundle_choice_groups_available,
       COALESCE(inventory_readiness.configuration_complete, false) AS inventory_configuration_complete,
       COALESCE(inventory_stock.available, false) AS inventory_available,
       product.product_snapshot, product.guest_visible, product.search_text,
@@ -1793,6 +2134,114 @@ async function getProduct(
         AND component.store_id = product.store_id
         AND component.bundle_product_id = product.id
     ) AS component_list ON true
+    LEFT JOIN LATERAL (
+      SELECT jsonb_agg(jsonb_build_object(
+        'id',choice_group.id,'code',choice_group.code,'name',choice_group.display_name,
+        'selectionCount',choice_group.selection_count,'sortOrder',choice_group.sort_order,
+        'options',COALESCE(choice_options.items,'[]'::jsonb)
+      ) ORDER BY choice_group.sort_order,choice_group.id) AS items,
+      COALESCE(bool_and(choice_options.available_count>=choice_group.selection_count),true) AS all_available
+      FROM mbox.product_bundle_choice_groups choice_group
+      LEFT JOIN LATERAL (
+        SELECT jsonb_agg(jsonb_build_object(
+          'productId',option_product.id,'code',option_product.code,'name',option_product.name,
+          'quantity',choice_option.quantity,'sortOrder',choice_option.sort_order,
+          'available',(option_product.status='active' AND 'staff_assisted'=ANY(option_product.allowed_channels)
+            AND option_inventory.configuration_complete AND option_inventory.available
+            AND (option_product.available_from IS NULL OR option_product.available_until IS NULL
+              OR (option_product.available_from<option_product.available_until
+                AND (clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
+                AND (clock_timestamp() AT TIME ZONE store.timezone)::time<option_product.available_until)
+              OR (option_product.available_from>=option_product.available_until
+                AND ((clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
+                  OR (clock_timestamp() AT TIME ZONE store.timezone)::time<option_product.available_until)))),
+          'unavailableReason',CASE
+            WHEN option_product.status<>'active' THEN '当前已停用'
+            WHEN NOT ('staff_assisted'=ANY(option_product.allowed_channels)) THEN '未开放员工协助点单'
+            WHEN NOT option_inventory.configuration_complete THEN '配方正在更新'
+            WHEN NOT option_inventory.available THEN '当前库存不足'
+            WHEN NOT (option_product.available_from IS NULL OR option_product.available_until IS NULL
+              OR (option_product.available_from<option_product.available_until
+                AND (clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
+                AND (clock_timestamp() AT TIME ZONE store.timezone)::time<option_product.available_until)
+              OR (option_product.available_from>=option_product.available_until
+                AND ((clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
+                  OR (clock_timestamp() AT TIME ZONE store.timezone)::time<option_product.available_until)))
+              THEN '当前不在可售时间'
+            ELSE NULL END
+        ) ORDER BY choice_option.sort_order,choice_option.id) AS items,
+        count(*) FILTER(WHERE option_product.status='active' AND 'staff_assisted'=ANY(option_product.allowed_channels)
+          AND option_inventory.configuration_complete AND option_inventory.available
+          AND (option_product.available_from IS NULL OR option_product.available_until IS NULL
+            OR (option_product.available_from<option_product.available_until
+              AND (clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
+              AND (clock_timestamp() AT TIME ZONE store.timezone)::time<option_product.available_until)
+            OR (option_product.available_from>=option_product.available_until
+              AND ((clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
+                OR (clock_timestamp() AT TIME ZONE store.timezone)::time<option_product.available_until))))::integer AS available_count
+        FROM mbox.product_bundle_choice_options choice_option
+        JOIN mbox.products option_product
+          ON option_product.tenant_id=choice_option.tenant_id AND option_product.store_id=choice_option.store_id
+         AND option_product.id=choice_option.component_product_id
+        LEFT JOIN LATERAL (
+          SELECT
+            option_product.inventory_control_mode='not_managed'
+              OR option_product.fulfillment_station NOT IN ('bar','kitchen')
+              OR EXISTS (
+                SELECT 1 FROM mbox.recipes recipe
+                WHERE recipe.tenant_id=option_product.tenant_id AND recipe.store_id=option_product.store_id
+                  AND recipe.product_id=option_product.id AND recipe.status='active'
+                  AND recipe.effective_at<=statement_timestamp()
+                  AND EXISTS (SELECT 1 FROM mbox.recipe_items recipe_item
+                    WHERE recipe_item.tenant_id=recipe.tenant_id AND recipe_item.store_id=recipe.store_id
+                      AND recipe_item.recipe_id=recipe.id AND recipe_item.quantity>0)
+                  AND NOT EXISTS (
+                    SELECT 1 FROM mbox.recipe_items recipe_item
+                    LEFT JOIN mbox.inventory_items inventory_item
+                      ON inventory_item.tenant_id=recipe_item.tenant_id
+                     AND inventory_item.store_id=recipe_item.store_id
+                     AND inventory_item.id=recipe_item.inventory_item_id
+                    LEFT JOIN mbox.inventory_balances balance
+                      ON balance.tenant_id=recipe_item.tenant_id AND balance.store_id=recipe_item.store_id
+                     AND balance.inventory_item_id=recipe_item.inventory_item_id
+                    WHERE recipe_item.tenant_id=recipe.tenant_id AND recipe_item.store_id=recipe.store_id
+                      AND recipe_item.recipe_id=recipe.id
+                      AND (inventory_item.id IS NULL OR inventory_item.status<>'active' OR balance.id IS NULL)
+                  )
+              ) AS configuration_complete,
+            option_product.inventory_control_mode='not_managed'
+              OR option_product.fulfillment_station NOT IN ('bar','kitchen')
+              OR EXISTS (
+                SELECT 1 FROM mbox.recipes recipe
+                WHERE recipe.tenant_id=option_product.tenant_id AND recipe.store_id=option_product.store_id
+                  AND recipe.product_id=option_product.id AND recipe.status='active'
+                  AND recipe.effective_at<=statement_timestamp()
+                  AND EXISTS (SELECT 1 FROM mbox.recipe_items recipe_item
+                    WHERE recipe_item.tenant_id=recipe.tenant_id AND recipe_item.store_id=recipe.store_id
+                      AND recipe_item.recipe_id=recipe.id AND recipe_item.quantity>0)
+                  AND NOT EXISTS (
+                    SELECT 1 FROM mbox.recipe_items recipe_item
+                    LEFT JOIN mbox.inventory_items inventory_item
+                      ON inventory_item.tenant_id=recipe_item.tenant_id
+                     AND inventory_item.store_id=recipe_item.store_id
+                     AND inventory_item.id=recipe_item.inventory_item_id
+                    LEFT JOIN mbox.inventory_balances balance
+                      ON balance.tenant_id=recipe_item.tenant_id AND balance.store_id=recipe_item.store_id
+                     AND balance.inventory_item_id=recipe_item.inventory_item_id
+                    WHERE recipe_item.tenant_id=recipe.tenant_id AND recipe_item.store_id=recipe.store_id
+                      AND recipe_item.recipe_id=recipe.id
+                      AND (inventory_item.id IS NULL OR inventory_item.status<>'active' OR balance.id IS NULL
+                        OR balance.on_hand_quantity-balance.reserved_quantity
+                          < recipe_item.quantity*choice_option.quantity)
+                  )
+              ) AS available
+        ) option_inventory ON true
+        WHERE choice_option.tenant_id=choice_group.tenant_id AND choice_option.store_id=choice_group.store_id
+          AND choice_option.choice_group_id=choice_group.id
+      ) choice_options ON true
+      WHERE choice_group.tenant_id=product.tenant_id AND choice_group.store_id=product.store_id
+        AND choice_group.bundle_product_id=product.id
+    ) choice_group_list ON true
     LEFT JOIN LATERAL (
       SELECT COALESCE(bool_and(
         required_product.inventory_control_mode = 'not_managed'
@@ -1907,8 +2356,14 @@ function mapProduct(row: ProductRow, guest = false, includeCost = true): Catalog
           validFrom: row.price_valid_from,
           validUntil: row.price_valid_until,
         };
+  const bundleComponents=readStoredBundleComponents(row.bundle_components??[]);
+  const bundleChoiceGroups=readStoredBundleChoiceGroups(row.bundle_choice_groups??[]);
   const catalogAvailable = row.status === "active" && standardPrice !== null
-    && (row.product_kind !== "bundle" || row.bundle_components_available === true);
+    && (row.product_kind !== "bundle" || (
+      (bundleComponents.length>0||bundleChoiceGroups.length>0)
+      && (bundleComponents.length===0||row.bundle_components_available===true)
+      && row.bundle_choice_groups_available===true
+    ));
   return {
     id: row.id,
     code: row.code,
@@ -1917,7 +2372,8 @@ function mapProduct(row: ProductRow, guest = false, includeCost = true): Catalog
     fulfillmentStation: row.fulfillment_station,
     productKind: row.product_kind ?? "single",
     inventoryControlMode: row.inventory_control_mode,
-    bundleComponents: readStoredBundleComponents(row.bundle_components ?? []),
+    bundleComponents,
+    bundleChoiceGroups,
     productSnapshot: guest
       ? guestProductSnapshot(sanitizeProductDisplaySnapshot(row.product_snapshot) as JsonObject)
       : sanitizeProductDisplaySnapshot(row.product_snapshot) as JsonObject,
@@ -2198,6 +2654,7 @@ function readCreateProduct(value: unknown): {
   productKind: ProductKind;
   inventoryControlMode: InventoryControlMode;
   bundleComponents: BundleComponentInput[];
+  bundleChoiceGroups: BundleChoiceGroupInput[];
   productSnapshot: JsonObject;
   operationalFields: ProductOperationalFields;
   costAmountProvided: boolean;
@@ -2209,10 +2666,11 @@ function readCreateProduct(value: unknown): {
   const name = requiredText(body.name, "name", 160);
   const productKind = readProductKind(body.productKind);
   const fulfillmentStation = readStation(body.fulfillmentStation);
-  const bundleComponents = readBundleComponents(body.bundleComponents, productKind === "bundle");
+  const bundleComponents = readBundleComponents(body.bundleComponents, false);
+  const bundleChoiceGroups=readBundleChoiceGroups(body.bundleChoiceGroups);
   const productSnapshot = optionalJsonObject(body.productSnapshot);
   assertDisplayOnlyProductSnapshot(productSnapshot);
-  assertProductShape(productKind, fulfillmentStation, bundleComponents);
+  assertProductShape(productKind, fulfillmentStation, bundleComponents,bundleChoiceGroups);
   const operationalFields = strongProductOperationalFields(body, { code, name }, productSnapshot);
   const status = body.status === undefined ? "active" : readStatus(body.status, false);
   const standardPrice = body.standardPrice === undefined ? null : readStandardPrice(body.standardPrice);
@@ -2227,6 +2685,7 @@ function readCreateProduct(value: unknown): {
     productKind,
     inventoryControlMode,
     bundleComponents,
+    bundleChoiceGroups,
     productSnapshot,
     operationalFields,
     costAmountProvided: body.costAmountMinor !== undefined,
@@ -2242,6 +2701,7 @@ function readUpdateProduct(value: unknown): {
   productKind: ProductKind | null;
   inventoryControlMode: InventoryControlMode | null;
   bundleComponents: BundleComponentInput[] | null;
+  bundleChoiceGroups: BundleChoiceGroupInput[] | null;
   productSnapshot: JsonObject | null;
   operationalInput: JsonObject;
   costAmountProvided: boolean;
@@ -2271,6 +2731,8 @@ function readUpdateProduct(value: unknown): {
       body.bundleComponents === undefined
         ? null
         : readBundleComponents(body.bundleComponents, false),
+    bundleChoiceGroups:body.bundleChoiceGroups===undefined
+      ?null:readBundleChoiceGroups(body.bundleChoiceGroups),
     productSnapshot,
     operationalInput: body,
     costAmountProvided: body.costAmountMinor !== undefined,
@@ -2281,7 +2743,7 @@ function readUpdateProduct(value: unknown): {
     standardPrice: body.standardPrice === undefined ? null : readStandardPrice(body.standardPrice),
   };
   if ([patch.name, patch.categoryCode, patch.fulfillmentStation, patch.productKind, patch.inventoryControlMode,
-    patch.bundleComponents, patch.productSnapshot, patch.status, patch.standardPrice].every((item) => item === null)
+    patch.bundleComponents,patch.bundleChoiceGroups, patch.productSnapshot, patch.status, patch.standardPrice].every((item) => item === null)
     && !PRODUCT_OPERATIONAL_INPUT_KEYS.some((key) => body[key] !== undefined)) {
     throw new CatalogRequestError("至少提供一个可修改字段");
   }
@@ -2498,6 +2960,40 @@ function readBundleComponents(
   return components;
 }
 
+function readBundleChoiceGroups(value:JsonValue|undefined):BundleChoiceGroupInput[]{
+  if(value===undefined)return [];
+  if(!Array.isArray(value)||value.length>20){
+    throw new CatalogRequestError('bundleChoiceGroups必须是最多20项的数组');
+  }
+  const seenCodes=new Set<string>();
+  return value.map((rawGroup,index)=>{
+    const group=readRecord(rawGroup,`bundleChoiceGroups[${index}]`);
+    const code=requiredCode(group.code,`bundleChoiceGroups[${index}].code`);
+    if(seenCodes.has(code))throw new CatalogRequestError('同一套餐的必选组编号不能重复');
+    seenCodes.add(code);
+    if(!Array.isArray(group.options)||group.options.length<1||group.options.length>100){
+      throw new CatalogRequestError('每个套餐必选组必须配置1至100个候选菜品');
+    }
+    const seenProducts=new Set<string>();
+    const options=group.options.map((rawOption,optionIndex)=>{
+      const option=readRecord(rawOption,`bundleChoiceGroups[${index}].options[${optionIndex}]`);
+      const productId=readUuid(option.productId,`bundleChoiceGroups[${index}].options[${optionIndex}].productId`);
+      if(seenProducts.has(productId))throw new CatalogRequestError('同一必选组不能重复添加菜品');
+      seenProducts.add(productId);
+      return { productId,
+        quantity:readInteger(option.quantity,`bundleChoiceGroups[${index}].options[${optionIndex}].quantity`,1,999),
+        sortOrder:optionalInteger(option.sortOrder,`bundleChoiceGroups[${index}].options[${optionIndex}].sortOrder`,0,10_000)
+          ??(optionIndex+1)*10 };
+    });
+    const selectionCount=readInteger(group.selectionCount,`bundleChoiceGroups[${index}].selectionCount`,1,20);
+    if(selectionCount>options.length)throw new CatalogRequestError('必选数量不能超过候选菜品数量');
+    return { id:group.id===undefined||group.id===null?null:readUuid(group.id,`bundleChoiceGroups[${index}].id`),
+      code,name:requiredText(group.name,`bundleChoiceGroups[${index}].name`,80),selectionCount,
+      sortOrder:optionalInteger(group.sortOrder,`bundleChoiceGroups[${index}].sortOrder`,0,10_000)??(index+1)*10,
+      options };
+  });
+}
+
 function readStatus(value: unknown, allowAll: true): ProductStatus | "all";
 function readStatus(value: unknown, allowAll: false): ProductStatus;
 function readStatus(value: unknown, allowAll: boolean): ProductStatus | "all" {
@@ -2643,6 +3139,31 @@ function readStoredBundleComponents(value: JsonValue): BundleComponent[] {
   });
 }
 
+function readStoredBundleChoiceGroups(value:JsonValue):BundleChoiceGroup[]{
+  if(!Array.isArray(value))throw new TypeError('Stored bundle choice groups are invalid');
+  return value.map((rawGroup)=>{
+    if(!isJsonObject(rawGroup)||typeof rawGroup.id!=='string'||typeof rawGroup.code!=='string'
+      ||typeof rawGroup.name!=='string'||!Number.isSafeInteger(rawGroup.selectionCount)
+      ||!Number.isSafeInteger(rawGroup.sortOrder)||!Array.isArray(rawGroup.options)){
+      throw new TypeError('Stored bundle choice group is invalid');
+    }
+    const options=rawGroup.options.map((rawOption)=>{
+      if(!isJsonObject(rawOption)||typeof rawOption.productId!=='string'
+        ||typeof rawOption.code!=='string'||typeof rawOption.name!=='string'
+        ||!Number.isSafeInteger(rawOption.quantity)||!Number.isSafeInteger(rawOption.sortOrder)
+        ||typeof rawOption.available!=='boolean'
+        ||!(rawOption.unavailableReason===undefined||rawOption.unavailableReason===null||typeof rawOption.unavailableReason==='string')){
+        throw new TypeError('Stored bundle choice option is invalid');
+      }
+      return { productId:rawOption.productId,code:rawOption.code,name:rawOption.name,
+        quantity:rawOption.quantity as number,sortOrder:rawOption.sortOrder as number,
+        available:rawOption.available,unavailableReason:rawOption.unavailableReason??null };
+    });
+    return { id:rawGroup.id,code:rawGroup.code,name:rawGroup.name,
+      selectionCount:rawGroup.selectionCount as number,sortOrder:rawGroup.sortOrder as number,options };
+  });
+}
+
 function isJsonValue(value: unknown): value is JsonValue {
   if (value === null || typeof value === "string" || typeof value === "boolean")
     return true;
@@ -2682,6 +3203,8 @@ function catalogProductToJson(product: CatalogProduct): JsonObject {
     productKind: product.productKind,
     inventoryControlMode: product.inventoryControlMode,
     bundleComponents: product.bundleComponents.map((component) => ({ ...component })),
+    bundleChoiceGroups:product.bundleChoiceGroups.map((group)=>({ ...group,
+      options:group.options.map((option)=>({ ...option })), })),
     productSnapshot: product.productSnapshot,
     guestVisible: product.guestVisible,
     searchText: product.searchText,
@@ -2762,7 +3285,8 @@ const catalogProductCodec: JsonCodec<CatalogProduct> = {
       typeof value.recommendationEnabled !== "boolean" ||
       typeof value.recommendationSingleWaveEligible !== "boolean" ||
       !isJsonObject(value.productSnapshot) ||
-      !Array.isArray(value.bundleComponents)
+      !Array.isArray(value.bundleComponents) ||
+      (value.bundleChoiceGroups!==undefined&&!Array.isArray(value.bundleChoiceGroups))
     ) {
       throw new TypeError("Stored catalog product is invalid");
     }
@@ -2785,7 +3309,12 @@ const catalogProductCodec: JsonCodec<CatalogProduct> = {
       || !nullableOptionalSafeInteger(value.costAmountMinor)) {
       throw new TypeError("Stored catalog product is invalid");
     }
-    return value as unknown as CatalogProduct;
+    return {
+      ...value,
+      // Idempotent results written before schema 159 do not contain the new
+      // display field. They remain replayable as an empty choice-group list.
+      bundleChoiceGroups:Array.isArray(value.bundleChoiceGroups)?value.bundleChoiceGroups:[],
+    } as unknown as CatalogProduct;
   },
 };
 

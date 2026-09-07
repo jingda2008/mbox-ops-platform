@@ -18,7 +18,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError } from '../../shared/api-error'
 import { MenuOrderingWorkspace, type MenuSubmitOptions } from '../../components/MenuOrderingWorkspace'
-import type { MenuRecommendationScene } from '../../shared/contracts'
+import type { MenuBundleUnitSelection, MenuRecommendationScene } from '../../shared/contracts'
 import {
   GuestApiClient,
   GuestApiError,
@@ -44,7 +44,7 @@ import { guestMenuProductToMenuProduct } from './menu-product-adapter'
 import { shortPublicReference } from '../public-reference'
 import './guest-app.css'
 
-type GuestApiPort = Pick<GuestApiClient, 'scanTable' | 'loadSession' | 'searchMenu' | 'submitOrder' | 'loadSharedCart' | 'adjustSharedCart' | 'removeSharedCartLine' | 'checkoutSharedCart' | 'loadTableOrders' | 'loadTodayPerformance' | 'payTableOrder' | 'abandonCheckout' | 'requestService' | 'recordMood'>
+type GuestApiPort = Pick<GuestApiClient, 'scanTable' | 'loadSession' | 'searchMenu' | 'submitOrder' | 'loadSharedCart' | 'adjustSharedCart' | 'replaceSharedCartBundleSelection' | 'removeSharedCartLine' | 'checkoutSharedCart' | 'loadTableOrders' | 'loadTodayPerformance' | 'payTableOrder' | 'abandonCheckout' | 'requestService' | 'recordMood'>
 type ServiceType = 'call_staff' | 'complaint' | 'custom'
 type Panel = 'orders' | 'complaint' | 'custom' | 'checkout' | null
 export type { GuestGateReason } from './guest-gate-model'
@@ -125,6 +125,8 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const sharedCartUnitAmountMinors = useMemo(() => Object.fromEntries((sharedCart?.lines ?? [])
     .filter((line): line is typeof line & { unitPriceMinor: number } => Number.isSafeInteger(line.unitPriceMinor))
     .map((line) => [line.productId, line.unitPriceMinor])), [sharedCart])
+  const sharedCartBundleSelections=useMemo(()=>Object.fromEntries((sharedCart?.lines??[])
+    .map((line)=>[line.productId,line.bundleSelections??[]])),[sharedCart])
 
   const notify = useCallback((message: string, tone: ToastState['tone'] = 'info') => {
     setToast({ id: ++toastSequence.current, message, tone })
@@ -447,7 +449,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     }
   }, [blockForSession, notify, pendingMood, selectedMood])
 
-  const adjustSharedCart = useCallback(async (productId: string, delta: number) => {
+  const adjustSharedCart = useCallback(async (productId: string, delta: number,bundleSelections:readonly MenuBundleUnitSelection[] = []) => {
     const api = apiRef.current
     if (api === null || sharedCart === null) throw new Error('同桌购物车正在同步，请稍后再试。')
     if (sharedCart.guestWritesFrozen) throw new Error('服务人员正在核对本桌点单，暂时只能查看购物车。')
@@ -458,6 +460,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
         delta,
         expectedGeneration: sharedCart.generation,
         expectedVersion: sharedCart.version,
+        ...(bundleSelections.length>0?{ bundleSelections }:{}),
       }, { idempotencyKey: safeIdempotencyKey('guest-shared-cart-adjust') })
       setSharedCart(cart)
       setSharedCartError(null)
@@ -491,8 +494,31 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     }
   },[blockForSession,loadSharedCart,sharedCart])
 
+  const replaceSharedCartBundleSelection=useCallback(async(
+    productId:string,unitIndex:number,bundleSelection:MenuBundleUnitSelection,
+  )=>{
+    const api=apiRef.current
+    if(api===null||sharedCart===null)throw new Error('同桌购物车正在同步，请稍后再试。')
+    if(sharedCart.guestWritesFrozen)throw new Error('服务人员正在核对本桌点单，暂时只能查看购物车。')
+    if(!sharedCart.allowedActions.includes('replace_selection'))throw new Error('套餐选择当前不能修改，请刷新后再试。')
+    try{
+      const cart=await api.replaceSharedCartBundleSelection({
+        productId,unitIndex,bundleSelection,
+        expectedGeneration:sharedCart.generation,expectedVersion:sharedCart.version,
+      },{ idempotencyKey:safeIdempotencyKey('guest-shared-cart-choice') })
+      setSharedCart(cart);setSharedCartError(null)
+    }catch(error){
+      if(error instanceof GuestApiError&&error.code==='SHARED_CART_VERSION_CONFLICT'){
+        await loadSharedCart(true)
+        throw new Error('同桌购物车已经更新，已为您刷新，请确认后再操作。')
+      }
+      if(blockForSession(error))throw new Error('桌次已失效，请重新扫码后继续。')
+      throw new Error(errorMessage(error,'套餐选择暂时没有更新，请稍后再试。'))
+    }
+  },[blockForSession,loadSharedCart,sharedCart])
+
   const submitOrder = useCallback(async (
-    items: Array<{ productId: string; quantity: number }>,
+    items: Array<{ productId: string; quantity: number;bundleSelections?:MenuBundleUnitSelection[] }>,
     options: MenuSubmitOptions,
   ) => {
     const api = apiRef.current
@@ -660,10 +686,12 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
           {...(cartProtocolVersion === 2 ? {
             cart: sharedCartItems,
             cartUnitAmountMinors: sharedCartUnitAmountMinors,
+            cartBundleSelections:sharedCartBundleSelections,
             cartTotalAmountMinor: sharedCart?.totalAmountMinor,
             cartReadOnly: sharedCart?.guestWritesFrozen ?? false,
             cartReadOnlyMessage: '服务人员正在核对本桌点单，暂时只能查看购物车；完成后会恢复修改。',
             onCartAdjust: adjustSharedCart,
+            onCartReplaceBundleSelection:replaceSharedCartBundleSelection,
             onCartRemove:removeSharedCartLine,
           } : {})}
           submitDisabled={cartProtocolVersion === 2 && (

@@ -936,6 +936,91 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
     })
   })
 
+  it('routes the concrete option selected inside a bundle to KDS and inventory without charging it twice',async()=>{
+    const choiceGroupId=randomUUID()
+    await pool.query(`
+      INSERT INTO mbox.product_bundle_choice_groups(
+        id,tenant_id,store_id,bundle_product_id,code,display_name,selection_count,sort_order
+      ) VALUES($1,$2,$3,$4,'cocktail_choice','任选一款鸡尾酒',1,10)
+    `,[choiceGroupId,tenantId,storeId,bundleProductId])
+    await pool.query(`
+      INSERT INTO mbox.product_bundle_choice_options(
+        tenant_id,store_id,choice_group_id,component_product_id,quantity,sort_order
+      ) VALUES($1,$2,$3,$4,1,10)
+    `,[tenantId,storeId,choiceGroupId,productBId])
+    try{
+      const input=command('integration-bundle-choice-order',sessionOneId,bundleProductId,1,
+        'integration-bundle-choice-0001')
+      const submitted=await service.submitOrder({ ...input,lines:[{
+        productId:bundleProductId,quantity:1,bundleSelections:[{ groups:[{
+          groupId:choiceGroupId,productIds:[productBId],
+        }] }],
+      }] })
+
+      const parent=submitted.value.order.items.find((item)=>item.productId===bundleProductId)!
+      const children=submitted.value.order.items.filter((item)=>item.parentOrderItemId===parent.id)
+      expect(submitted.value.order.totalAmountMinor).toBe(14800)
+      expect(children.map((item)=>item.productId).toSorted()).toEqual(
+        [productAId,productBId,productKitchenId].toSorted(),
+      )
+      expect(submitted.value.kdsTasks).toHaveLength(3)
+      expect(submitted.value.inventoryConsumptions).toHaveLength(3)
+
+      const selected=children.find((item)=>item.productId===productBId)!
+      expect(selected).toMatchObject({ billable:false,totalAmountMinor:0,fulfillmentStation:'bar' })
+      expect(selected.productSnapshot).toMatchObject({
+        bundleChoiceGroupId:choiceGroupId,bundleChoiceGroupName:'任选一款鸡尾酒',
+      })
+    }finally{
+      await pool.query(`DELETE FROM mbox.product_bundle_choice_groups WHERE id=$1`,[choiceGroupId])
+    }
+  })
+
+  it('freezes the exact combined cost when two copies of one bundle use different choices',async()=>{
+    const choiceGroupId=randomUUID()
+    await pool.query(`
+      INSERT INTO mbox.product_bundle_choice_groups(
+        id,tenant_id,store_id,bundle_product_id,code,display_name,selection_count,sort_order
+      ) VALUES($1,$2,$3,$4,'two_unit_choice','每份任选一款',1,10)
+    `,[choiceGroupId,tenantId,storeId,bundleProductId])
+    await pool.query(`
+      INSERT INTO mbox.product_bundle_choice_options(
+        tenant_id,store_id,choice_group_id,component_product_id,quantity,sort_order
+      ) VALUES($1,$2,$3,$4,1,10),($1,$2,$3,$5,1,20)
+    `,[tenantId,storeId,choiceGroupId,productAId,productBId])
+    try{
+      const input=command('integration-bundle-two-distinct-choices',sessionOneId,bundleProductId,2,
+        'integration-bundle-two-distinct-choices-0001')
+      const submitted=await service.submitOrder({ ...input,lines:[{
+        productId:bundleProductId,quantity:2,bundleSelections:[
+          { groups:[{ groupId:choiceGroupId,productIds:[productAId] }] },
+          { groups:[{ groupId:choiceGroupId,productIds:[productBId] }] },
+        ],
+      }] })
+
+      const parent=submitted.value.order.items.find((item)=>item.productId===bundleProductId)!
+      const children=submitted.value.order.items.filter((item)=>item.parentOrderItemId===parent.id)
+      // Fixed A + kitchen cost 5,000 per package; the two concrete choices
+      // cost 3,000 and 2,000. Revenue remains two package prices, not a sum
+      // of the operational child prices.
+      expect(parent).toMatchObject({
+        quantity:2,totalAmountMinor:29_600,
+        unitCostMinorAtSubmission:7_500,totalCostMinorAtSubmission:15_000,
+        costSource:'bundle_components',
+      })
+      expect(parent.totalAmountMinor-parent.totalCostMinorAtSubmission!).toBe(14_600)
+      expect(children.map((item)=>item.productId).toSorted()).toEqual(
+        [productAId,productAId,productBId,productKitchenId].toSorted(),
+      )
+      expect(children.every((item)=>!item.billable&&item.totalAmountMinor===0
+        &&item.totalCostMinorAtSubmission===0)).toBe(true)
+      expect(submitted.value.kdsTasks).toHaveLength(4)
+      expect(submitted.value.inventoryConsumptions).toHaveLength(4)
+    }finally{
+      await pool.query(`DELETE FROM mbox.product_bundle_choice_groups WHERE id=$1`,[choiceGroupId])
+    }
+  })
+
   it('replays an authorized adjustment without authorizing or writing it twice', async () => {
     const authority = employeePricingAuthority(100)
     const authorizedService = new CommerceCommandService(

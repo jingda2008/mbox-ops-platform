@@ -90,6 +90,24 @@ async function guestCartItemCount(cartDock: import('@playwright/test').Locator):
   return Number(match[1])
 }
 
+async function completeBundleDetailIfOpen(page: import('@playwright/test').Page): Promise<void> {
+  const detail = page.locator('.menu-detail-drawer')
+  if (!await detail.isVisible().catch(() => false)) return
+  const groups = detail.locator('.menu-detail-choice-group')
+  for (let groupIndex = 0; groupIndex < await groups.count(); groupIndex += 1) {
+    const group = groups.nth(groupIndex)
+    const instruction = await group.locator('header span').textContent()
+    const selectionCount = Number(instruction?.match(/请选择\s*(\d+)\s*款/)?.[1] ?? 0)
+    expect(selectionCount, `无法读取套餐选择数量: ${instruction ?? ''}`).toBeGreaterThan(0)
+    const options = group.locator('button:not([disabled])')
+    expect(await options.count()).toBeGreaterThanOrEqual(selectionCount)
+    for (let optionIndex = 0; optionIndex < selectionCount; optionIndex += 1) {
+      await options.nth(optionIndex).click()
+    }
+  }
+  await detail.getByRole('button', { name: /确认选择并加入|加入购物车/ }).click()
+}
+
 test('mobile guest scans a fixed table QR, searches, orders and sees payment result', async ({ page }) => {
   const data = await fixture()
   await page.goto(data.guestUrl)
@@ -218,6 +236,7 @@ test('narrow mobile guest keeps mood and service controls compact above the menu
       if (beforeCount === 0) await expect(checkoutDock).toHaveCount(0)
       else await expect(checkoutDock).toBeVisible()
       await quickAdd.click()
+      await completeBundleDetailIfOpen(page)
       await expect.poll(() => guestCartItemCount(checkoutDock)).toBe(beforeCount + 1)
       await expect(checkoutDock).toBeVisible()
       const dockBox = await checkoutDock.boundingBox()

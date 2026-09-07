@@ -13,6 +13,7 @@ import { MediaAssetPicker } from './MediaAssetPicker'
 import { menuImageOptions } from './menu-image-library'
 import { NumberInputWithUnit } from './NumberInputWithUnit'
 import { sanitizeProductDisplaySnapshot } from '../shared/product-display-snapshot'
+import { calculateBundleCostRange } from '../shared/bundle-cost-range'
 
 type ProductStatus = 'active' | 'sold_out' | 'inactive'
 type ProductKind = 'single' | 'bundle'
@@ -46,6 +47,8 @@ interface CatalogProduct {
   productKind: ProductKind
   inventoryControlMode: InventoryControlMode
   bundleComponents: Array<{ productId: string; quantity: number; sortOrder: number; note: string | null }>
+  bundleChoiceGroups:Array<{ id:string;code:string;name:string;selectionCount:number;sortOrder:number;
+    options:Array<{ productId:string;quantity:number;sortOrder:number }> }>
   productSnapshot: Record<string, unknown>
   guestVisible: boolean
   searchText: string
@@ -137,6 +140,7 @@ interface ProductDraft {
   imageUrl: string
   snapshot: Record<string, unknown>
   componentQuantities: Record<string, string>
+  choiceGroups:Array<{ id:string|null;code:string;name:string;selectionCount:string;optionQuantities:Record<string,string> }>
 }
 
 interface InventoryItemOption {
@@ -195,6 +199,9 @@ export function CatalogManagementPanel({
   const [menuCategories, setMenuCategories] = useState<MenuCategory[]>([])
   const [phase, setPhase] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [query, setQuery] = useState('')
+  const [choiceProductQuery,setChoiceProductQuery]=useState('')
+  const [choiceProductCategory,setChoiceProductCategory]=useState('')
+  const [choiceProductStatus,setChoiceProductStatus]=useState<'all'|'active'|'ready'>('all')
   const [draft, setDraft] = useState<ProductDraft | null>(null)
   const [categoryDraft, setCategoryDraft] = useState<MenuCategoryDraft | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
@@ -253,6 +260,14 @@ export function CatalogManagementPanel({
   const singleProducts = useMemo(() => products.filter((product) => (
     product.productKind === 'single' && product.id !== draft?.id
   )), [draft?.id, products])
+  const choiceCandidateMatches=(product:CatalogProduct)=>{
+    const normalized=choiceProductQuery.trim().toLocaleLowerCase('zh-CN')
+    return (normalized===''||[product.name,product.code,product.categoryCode].some((value)=>
+      value.toLocaleLowerCase('zh-CN').includes(normalized)))
+      &&(choiceProductCategory===''||product.categoryCode===choiceProductCategory)
+      &&(choiceProductStatus==='all'||(choiceProductStatus==='active'?product.status==='active'
+        :product.status==='active'&&product.inventoryConfigurationComplete))
+  }
   const recipeCategories = useMemo(() => [...new Set(inventoryItems.map((item) => item.categoryCode))]
     .sort((left, right) => inventoryCategoryLabel(left).localeCompare(inventoryCategoryLabel(right), 'zh-CN')), [inventoryItems])
   const visibleRecipeItems = recipeCategoryFilter === ''
@@ -265,6 +280,29 @@ export function CatalogManagementPanel({
     ? null
     : products.find((product) => product.id === draft.id) ?? null
   const currentSaleBlockers = currentProduct === null ? [] : sellingBlockers(currentProduct)
+  const draftBundleEconomics = useMemo(() => {
+    if (!canViewInventoryCost || draft === null || draft.productKind !== 'bundle') return null
+    const bundleComponents = Object.entries(draft.componentQuantities).map(([productId, quantity]) => ({
+      productId,
+      quantity: readInteger(quantity, 1, 100) ?? 0,
+    }))
+    const bundleChoiceGroups = draft.choiceGroups.map((group) => ({
+      selectionCount: readInteger(group.selectionCount, 1, 20) ?? 0,
+      options: Object.entries(group.optionQuantities).map(([productId, quantity]) => ({
+        productId,
+        quantity: readInteger(quantity, 1, 999) ?? 0,
+      })),
+    }))
+    const costRange = calculateBundleCostRange({ bundleComponents, bundleChoiceGroups }, products)
+    const priceMinor = moneyToMinor(draft.priceYuan, false)
+    const minimumGrossProfitMinor = costRange.maximumCostMinor !== null && typeof priceMinor === 'number'
+      ? priceMinor - costRange.maximumCostMinor
+      : null
+    const minimumMarginBasisPoints = minimumGrossProfitMinor !== null && typeof priceMinor === 'number' && priceMinor > 0
+      ? Math.round((minimumGrossProfitMinor / priceMinor) * 10_000)
+      : null
+    return { costRange, priceMinor, minimumGrossProfitMinor, minimumMarginBasisPoints }
+  }, [canViewInventoryCost, draft, products])
 
   if (!canManageProduct) return null
 
@@ -453,6 +491,10 @@ export function CatalogManagementPanel({
       imageUrl: typeof product.productSnapshot.imageUrl === 'string' ? product.productSnapshot.imageUrl : '',
       snapshot: sanitizeProductDisplaySnapshot(product.productSnapshot),
       componentQuantities: Object.fromEntries(product.bundleComponents.map((component) => [component.productId, String(component.quantity)])),
+      choiceGroups:(product.bundleChoiceGroups??[]).map((group)=>({ id:group.id,code:group.code,name:group.name,
+        selectionCount:String(group.selectionCount),optionQuantities:Object.fromEntries(
+          group.options.map((option)=>[option.productId,String(option.quantity)]),
+        ) })),
     })
     setShowAdvanced(false)
     setNotice(null)
@@ -478,7 +520,7 @@ export function CatalogManagementPanel({
       priceYuan: '',
       priceReason: `新增${label}销售规格`,
       costChangeReason: '',
-      componentQuantities: {},
+      componentQuantities: {},choiceGroups:[],
     })
     resetPerformancePhaseEditor()
     resetRecipeEditor()
@@ -509,6 +551,26 @@ export function CatalogManagementPanel({
     else quantities[productId] = '1'
     updateDraft('componentQuantities', quantities)
   }
+
+  const addChoiceGroup=()=>setDraft((current)=>current===null?null:{ ...current,choiceGroups:[...current.choiceGroups,{
+    id:null,code:`choice_${current.choiceGroups.length+1}`,name:'任选一款',selectionCount:'1',optionQuantities:{},
+  }] })
+
+  const updateChoiceGroup=(index:number,patch:Partial<ProductDraft['choiceGroups'][number]>)=>setDraft((current)=>{
+    if(current===null)return null
+    return { ...current,choiceGroups:current.choiceGroups.map((group,position)=>position===index?{ ...group,...patch }:group) }
+  })
+
+  const toggleChoiceOption=(groupIndex:number,productId:string)=>setDraft((current)=>{
+    if(current===null)return null
+    return { ...current,choiceGroups:current.choiceGroups.map((group,index)=>{
+      if(index!==groupIndex)return group
+      const optionQuantities={...group.optionQuantities}
+      if(productId in optionQuantities)delete optionQuantities[productId]
+      else optionQuantities[productId]='1'
+      return { ...group,optionQuantities }
+    }) }
+  })
 
   const toggleRecipeComponent = (inventoryItemId: string) => {
     setRecipeComponents((current) => {
@@ -666,8 +728,9 @@ export function CatalogManagementPanel({
         return
       }
     }
-    if (draft.productKind === 'bundle' && Object.keys(draft.componentQuantities).length === 0) {
-      setNotice({ kind: 'error', text: '组合商品至少选择一个组成单品' })
+    if (draft.productKind === 'bundle' && Object.keys(draft.componentQuantities).length === 0
+      && draft.choiceGroups.length===0) {
+      setNotice({ kind: 'error', text: '组合商品至少选择一个固定组成单品或必选组' })
       return
     }
     if (draft.id === null && draft.status === 'active' && !canManagePrice) {
@@ -687,6 +750,33 @@ export function CatalogManagementPanel({
     if (bundleComponents.some((component) => component.quantity === 0)) {
       setNotice({ kind: 'error', text: '组合商品数量必须为1至100' })
       return
+    }
+    const bundleChoiceGroups=draft.choiceGroups.map((group,index)=>({
+      id:group.id,code:group.code.trim(),name:group.name.trim(),
+      selectionCount:readInteger(group.selectionCount,1,20)??0,sortOrder:(index+1)*10,
+      options:Object.entries(group.optionQuantities).map(([productId,quantity],optionIndex)=>({
+        productId,quantity:readInteger(quantity,1,999)??0,sortOrder:(optionIndex+1)*10,
+      })),
+    }))
+    if(bundleChoiceGroups.some((group)=>!group.code||!group.name||group.selectionCount<1
+      ||group.options.length<group.selectionCount||group.options.some((option)=>option.quantity<1))){
+      setNotice({ kind:'error',text:'请填写必选组编号和名称，并确保候选菜品不少于必选数量' })
+      return
+    }
+    if(draft.status==='active'){
+      for(const group of bundleChoiceGroups){
+        const candidates=group.options.map((option)=>products.find((product)=>product.id===option.productId))
+          .filter((product):product is CatalogProduct=>product!==undefined)
+        const staticallyReady=(product:CatalogProduct,channel:string)=>product.status==='active'
+          &&product.inventoryConfigurationComplete&&product.allowedChannels.includes(channel)
+          &&(channel!=='guest_qr'||product.guestVisible)
+        for(const channel of ['guest_qr','staff_assisted'].filter((channel)=>draft.allowedChannels.includes(channel))){
+          if(candidates.filter((product)=>staticallyReady(product,channel)).length<group.selectionCount){
+            setNotice({ kind:'error',text:`必选组“${group.name}”在${channel==='guest_qr'?'顾客点单':'员工协助点单'}渠道没有足够的已启用且配方完整菜品` })
+            return
+          }
+        }
+      }
     }
     const productSnapshot = sanitizeProductDisplaySnapshot({
       ...draft.snapshot,
@@ -718,6 +808,7 @@ export function CatalogManagementPanel({
       productKind: draft.productKind,
       inventoryControlMode: draft.productKind === 'bundle' ? 'tracked' : draft.inventoryControlMode,
       bundleComponents: draft.productKind === 'bundle' ? bundleComponents : [],
+      bundleChoiceGroups:draft.productKind==='bundle'?bundleChoiceGroups:[],
       productSnapshot,
       guestVisible: draft.guestVisible,
       searchText: draft.searchText.trim(),
@@ -807,10 +898,20 @@ export function CatalogManagementPanel({
             <label>搜索文本<input maxLength={4000} value={draft.searchText} onChange={(event) => updateDraft('searchText', event.target.value)} /></label>
             <label>标准售价<NumberInputWithUnit disabled={!canManagePrice} inputMode="decimal" unit="元" value={draft.priceYuan} onChange={(event) => updateDraft('priceYuan', event.target.value)} />{!canManagePrice && <small>当前岗位不能定价；不会在保存后尝试补写售价。</small>}</label>
             {canViewInventoryCost && (draft.inventoryControlMode === 'tracked' || draft.productKind === 'bundle')
-              ? <p className="catalog-permission-note">{draft.productKind === 'bundle' ? '套餐成本由组成商品的当前成本自动汇总；' : '库存成本由已确认收货、库存加权成本和正式配方自动计算；'}日常不在商品页手填。当前状态：{currentProduct?.costAmountMinor == null ? '待补成本' : `¥${minorToYuan(currentProduct.costAmountMinor)}/份`}。</p>
+              ? <p className="catalog-permission-note">{draft.productKind === 'bundle'
+                ? '套餐成本由固定组成和客人实际选择的单品成本计算，日常不在商品页手填；成交后按实际选择冻结成本。'
+                : `库存成本由已确认收货、库存加权成本和正式配方自动计算；日常不在商品页手填。当前状态：${currentProduct?.costAmountMinor == null ? '待补成本' : `¥${minorToYuan(currentProduct.costAmountMinor)}/份`}。`}</p>
               : canViewInventoryCost
               ? <label>成本金额<NumberInputWithUnit inputMode="decimal" unit="元" value={draft.costYuan} onChange={(event) => updateDraft('costYuan', event.target.value)} /><small>非库存商品可由有权限人员更正成本；修改成本需单独填写原因。</small></label>
               : <p className="catalog-permission-note">成本已受权限保护。你可以保存商品资料，但系统不会读取、显示或改写成本。</p>}
+            {draftBundleEconomics !== null && <section className={`catalog-bundle-economics catalog-wide${draftBundleEconomics.minimumGrossProfitMinor !== null && draftBundleEconomics.minimumGrossProfitMinor <= 0 ? ' is-risk' : ''}`} aria-label="套餐成本与最低毛利预览">
+              <header><div><strong>套餐成本与最低毛利</strong><small>覆盖全部已配置候选项；临时售罄的选项恢复供应后仍可能被选择，因此也计入区间。</small></div><em>{draftBundleEconomics.costRange.status === 'complete' ? '已核算' : '待补数据'}</em></header>
+              {draftBundleEconomics.costRange.status === 'complete'
+                ? <><div className="catalog-bundle-economics__metrics"><span><small>每份成本</small><strong>{formatCostRange(draftBundleEconomics.costRange.minimumCostMinor!, draftBundleEconomics.costRange.maximumCostMinor!)}</strong></span><span><small>最低毛利</small><strong>{draftBundleEconomics.minimumGrossProfitMinor === null ? '售价待填' : formatSignedYuan(draftBundleEconomics.minimumGrossProfitMinor)}</strong></span><span><small>最低毛利率</small><strong>{draftBundleEconomics.minimumMarginBasisPoints === null ? '售价待填' : formatBasisPoints(draftBundleEconomics.minimumMarginBasisPoints)}</strong></span></div><p>最低毛利按成本最高的合法选择计算；实际订单会按客人逐份选择重新计算，不使用套餐平均成本。</p></>
+                : <p>{draftBundleEconomics.costRange.status === 'cost_incomplete'
+                  ? `以下候选或固定商品成本待补：${draftBundleEconomics.costRange.missingProductIds.map((productId) => products.find((product) => product.id === productId)?.name ?? productId).join('、')}。系统不会用零成本推算毛利。`
+                  : '请补齐固定组成、必选数量和候选数量，完成后才会显示可信成本区间。'}</p>}
+            </section>}
             <label>推荐最少人数<NumberInputWithUnit inputMode="numeric" unit="人" value={draft.recommendationMinGuests} onChange={(event) => updateDraft('recommendationMinGuests', event.target.value)} /></label>
             <label>推荐最多人数<NumberInputWithUnit inputMode="numeric" unit="人" value={draft.recommendationMaxGuests} onChange={(event) => updateDraft('recommendationMaxGuests', event.target.value)} /></label>
             <label>推荐优先级<NumberInputWithUnit inputMode="numeric" unit="级" value={draft.recommendationPriority} onChange={(event) => updateDraft('recommendationPriority', event.target.value)} /></label>
@@ -888,6 +989,7 @@ export function CatalogManagementPanel({
             </section>}
           </div>
           {draft.productKind === 'bundle' && <section className="catalog-components"><strong>组合内容</strong><div>{singleProducts.map((product) => <label key={product.id} className={product.id in draft.componentQuantities ? 'is-selected' : ''}><input type="checkbox" checked={product.id in draft.componentQuantities} onChange={() => toggleComponent(product.id)} /><span>{product.name}</span>{product.id in draft.componentQuantities && <NumberInputWithUnit aria-label={`${product.name}数量`} inputMode="numeric" unit="份" value={draft.componentQuantities[product.id]} onChange={(event) => updateDraft('componentQuantities', { ...draft.componentQuantities, [product.id]: event.target.value })} />}</label>)}</div></section>}
+          {draft.productKind==='bundle'&&<section className="catalog-components catalog-choice-groups"><header><div><strong>客人必选项</strong><small>例如“任选一款鸡尾酒”；客人未选完时不能加入购物车，所选具体菜品会进入出品。</small></div><button type="button" onClick={addChoiceGroup}><CirclePlus size={16}/>新增必选组</button></header><div className="catalog-choice-filters"><input type="search" value={choiceProductQuery} onChange={(event)=>setChoiceProductQuery(event.target.value)} placeholder="搜索菜品名、编号或分类" aria-label="搜索套餐候选菜品"/><select value={choiceProductCategory} onChange={(event)=>setChoiceProductCategory(event.target.value)} aria-label="按分类筛选套餐候选菜品"><option value="">全部分类</option>{menuCategoryOptions.map((category)=><option key={category.code} value={category.code}>{category.label}</option>)}</select><select value={choiceProductStatus} onChange={(event)=>setChoiceProductStatus(event.target.value as 'all'|'active'|'ready')} aria-label="按状态筛选套餐候选菜品"><option value="all">全部状态</option><option value="active">仅已启用</option><option value="ready">仅配方完整</option></select></div>{draft.choiceGroups.map((group,groupIndex)=><article key={group.id??`${group.code}-${groupIndex}`} className="catalog-choice-group"><div className="catalog-choice-group__head"><label>组编号<input required pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" value={group.code} onChange={(event)=>updateChoiceGroup(groupIndex,{ code:event.target.value })}/></label><label>客人看到的提示<input required maxLength={80} value={group.name} onChange={(event)=>updateChoiceGroup(groupIndex,{ name:event.target.value })}/></label><label>必须选择<NumberInputWithUnit inputMode="numeric" min={1} max={20} unit="款" value={group.selectionCount} onChange={(event)=>updateChoiceGroup(groupIndex,{ selectionCount:event.target.value })}/></label><button type="button" onClick={()=>updateDraft('choiceGroups',draft.choiceGroups.filter((_,index)=>index!==groupIndex))}>删除本组</button></div><div>{singleProducts.filter((product)=>product.id in group.optionQuantities||choiceCandidateMatches(product)).map((product)=><label key={product.id} className={product.id in group.optionQuantities?'is-selected':''}><input type="checkbox" checked={product.id in group.optionQuantities} onChange={()=>toggleChoiceOption(groupIndex,product.id)}/><span>{product.name}<small>{product.categoryCode} · {statusLabel(product.status)} · {product.allowedChannels.includes('staff_assisted')?'可协助点单':'不可协助点单'} · {product.guestVisible&&product.allowedChannels.includes('guest_qr')?'顾客可见':'顾客不可见'} · {product.inventoryConfigurationComplete?'配方完整':'配方待补'} · {product.inventoryAvailable?'当前有库存':'当前库存不足'}</small></span>{product.id in group.optionQuantities&&<NumberInputWithUnit aria-label={`${product.name}每次选择包含数量`} inputMode="numeric" unit="份" value={group.optionQuantities[product.id]} onChange={(event)=>updateChoiceGroup(groupIndex,{ optionQuantities:{ ...group.optionQuantities,[product.id]:event.target.value } })}/>}</label>)}</div></article>)}</section>}
           <button type="submit" className="catalog-save" disabled={busy || performancePhaseDirty}>{busy ? <LoaderCircle className="is-spinning" size={18} /> : <Check size={18} />}{performancePhaseDirty ? '请先处理阶段配置' : '保存并读回验证'}</button>
         </form>}
         <div className="catalog-management-list">{visibleProducts.map((product) => {
@@ -929,7 +1031,7 @@ function emptyDraft(categories: readonly MenuCategory[]): ProductDraft {
     recommendationUpgradeProductId: '', sortOrder: '999', availableFrom: '', availableUntil: '',
     allowedChannels: ['guest_qr', 'staff_assisted', 'cashier', 'reservation', 'integration'],
     maxOrderQuantity: '50', kdsPriority: '100', fulfillmentSlaSeconds: '',
-    costYuan: '', costChangeReason: '', priceYuan: '', priceReason: '新增商品标准售价', description: '', imageUrl: '', snapshot: {}, componentQuantities: {},
+    costYuan: '', costChangeReason: '', priceYuan: '', priceReason: '新增商品标准售价', description: '', imageUrl: '', snapshot: {}, componentQuantities: {},choiceGroups:[],
   }
 }
 
@@ -1023,7 +1125,8 @@ function readProducts(value: unknown): CatalogProduct[] {
     && typeof item.isAvailable === 'boolean' && typeof item.inventoryConfigurationComplete === 'boolean'
     && typeof item.inventoryAvailable === 'boolean'
     && Array.isArray(item.allowedChannels)
-    && Array.isArray(item.bundleComponents) && typeof item.updatedAt === 'string'
+    && Array.isArray(item.bundleComponents) && Array.isArray(item.bundleChoiceGroups)
+    && typeof item.updatedAt === 'string'
     ? [item as unknown as CatalogProduct] : [])
 }
 
@@ -1172,6 +1275,20 @@ function moneyToMinor(value: string, allowBlank: boolean): number | null | undef
 function minorToYuan(value: unknown): string {
   const amount = typeof value === 'string' ? Number(value) : typeof value === 'number' ? value : NaN
   return Number.isFinite(amount) ? (amount / 100).toFixed(2) : ''
+}
+
+function formatCostRange(minimumMinor: number, maximumMinor: number): string {
+  return minimumMinor === maximumMinor
+    ? `¥${minorToYuan(minimumMinor)}`
+    : `¥${minorToYuan(minimumMinor)}～¥${minorToYuan(maximumMinor)}`
+}
+
+function formatSignedYuan(amountMinor: number): string {
+  return `${amountMinor < 0 ? '-' : ''}¥${minorToYuan(Math.abs(amountMinor))}`
+}
+
+function formatBasisPoints(basisPoints: number): string {
+  return `${(basisPoints / 100).toFixed(2)}%`
 }
 
 function operationKey(prefix: string): string {

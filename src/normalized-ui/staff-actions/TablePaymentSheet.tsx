@@ -118,8 +118,8 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
       setPaymentStatus(nextAction.status === 'failed' ? 'failed' : 'pending')
       setScannerOpen(false)
       onUpdated(method === 'native_qr'
-        ? `${table.code} 已调出本单付款二维码；到账前请不要再次收款。`
-        : `${table.code} 已受理顾客付款码；请等待支付结果。`)
+        ? `${table.code} 已调出本单付款二维码；只有确认足额到账后才停止收款。`
+        : `${table.code} 已受理顾客付款码；只有确认足额到账后才停止收款。`)
       return true
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '无法发起本次收款，请到收银页面核对')
@@ -144,7 +144,7 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
       } else if (status === 'failed' || status === 'closed') {
         setError('支付渠道已确认本次未成功，可以重新发起收款。')
       } else {
-        onUpdated(`${table.code} 支付渠道仍在处理中，请勿重复收款。`)
+        onUpdated(`${table.code} 支付渠道仍在处理中；可继续等待，也可明确保留旧单待核对并重新收款。`)
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '暂时无法核对支付状态，请由收银处理')
@@ -179,21 +179,21 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
     }
   }
 
-  const closeUnresolvedPaymentBeforeReplacement = async () => {
+  const releaseUnresolvedPaymentForRetry = async () => {
     if (selected?.unresolvedOnlinePaymentId === null || selected?.unresolvedOnlinePaymentId === undefined || busy) return
     setBusy(true)
     setError(null)
     try {
-      await api.closeUnresolvedPaymentBeforeReplacement(
+      await api.releaseUnresolvedPaymentForRetry(
         selected.unresolvedOnlinePaymentId,
-        '未收到明确成功结果，查询并关闭原线上收款后改用其他方式',
+        '未收到明确成功结果，保留原支付待核对并改用其他方式收款',
       )
       setAction(null)
       setPaymentStatus('pending')
       await refresh()
-      onUpdated(`${table.code} 已确认关闭原线上收款；现在可选择现金、实体POS或重新出示二维码。`)
+      onUpdated(`${table.code} 已放开新收款；原支付仍会继续核对，若随后到账将记录为溢收并进入退款处理。`)
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '暂时无法查询并关闭原线上收款，请由收银核对')
+      setError(reason instanceof Error ? reason.message : '暂时无法放开新收款，请到收银页面核对')
     } finally {
       setBusy(false)
     }
@@ -209,7 +209,7 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
         <div><small>{table.code} · 仅本桌未结订单</small><h2><QrCode size={21} /> 本桌收款</h2></div>
         <button type="button" aria-label="关闭本桌收款" onClick={onClose}><X size={21} /></button>
       </header>
-      <p className="staff-order-payment-note">普通未结订单可直接收款；退款后的订单须由收银先授权才会出现。渠道结果不明时，先查单并关闭原线上单，确认未收后再改现金、POS或重新发起线上收款。</p>
+      <p className="staff-order-payment-note">普通未结订单可直接收款；退款后的订单须由收银先授权。渠道结果不明不会锁住桌台：可继续查单，或明确保留旧支付待核对后重新收款。只有系统确认足额到账才停止再次发起。</p>
       {error !== null && <p className="staff-order-error" role="alert">{error}</p>}
       {!loading && error !== null && orders.length === 0 && <button type="button" className="staff-payment-reload" onClick={() => setLoadAttempt((current) => current + 1)}><RefreshCcw size={18} />重新读取本桌收款</button>}
       {loading ? <p className="staff-order-loading"><LoaderCircle className="is-spinning" /> 正在读取本桌未结订单</p> : orders.length === 0 ? error === null && <p className="staff-actions-empty">本桌没有需要再次收款的订单。</p> : <>
@@ -222,18 +222,18 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
           </button>)}
         </div>
         {selected !== null && <section className="staff-payment-choice" aria-label="再次发起本桌收款">
-          <div className="staff-payment-summary"><small title={selected.publicId}>{shortPaymentOrderLabel(selected.publicId)}</small><strong>{money(selected.outstandingAmountMinor, selected.currency)}</strong><span>{selected.hasOnlinePaymentInProgress ? '已有渠道动作。需先查单并安全关闭，才能改用其他方式收款。' : '选择顾客扫码、扫描付款码，或确认现金已收。'}</span></div>
+          <div className="staff-payment-summary"><small title={selected.publicId}>{shortPaymentOrderLabel(selected.publicId)}</small><strong>{money(selected.outstandingAmountMinor, selected.currency)}</strong><span>{selected.hasOnlinePaymentInProgress ? '已有渠道动作但结果未明。可查单，或保留旧单待核对并放开新收款。' : '选择顾客扫码、扫描付款码，或确认现金已收。'}</span></div>
           {paymentStatus === 'succeeded' ? <span className="staff-payment-result is-succeeded"><Check /><strong>支付成功，订单余额已刷新</strong></span> : paymentStatus === 'failed' || paymentStatus === 'closed' ? <>
             <span className="staff-payment-result"><X /><strong>本次付款未成功</strong></span>
             <PaymentButtons busy={busy} onlineDisabled={access?.canInitiatePayment !== true} canRecordCash={access?.manualCollection.canRecordCash === true} onQr={() => void createPayment('native_qr')} onScan={() => setScannerOpen(true)} onCash={() => void recordCashPayment()} />
           </> : selected.unresolvedOnlinePaymentId !== null ? <>
             <span className="staff-payment-result"><LoaderCircle className="is-spinning" /><strong>已有一笔线上收款尚未明确结果</strong></span>
             {access?.canQueryOnlinePayment === true && <button type="button" className="staff-payment-query" disabled={busy} onClick={() => void queryPayment()}><RefreshCcw size={18} />先查询渠道结果</button>}
-            <button type="button" className="staff-payment-query" disabled={busy} onClick={() => void closeUnresolvedPaymentBeforeReplacement()}><RefreshCcw size={18} />查单并关闭后改收款</button>
-            <p>先查单，仍未收款才请求关闭原线上单；结果未知、已成功或关单失败时不会放开其他收款方式。</p>
+            <button type="button" className="staff-payment-query is-attention" disabled={busy} onClick={() => void releaseUnresolvedPaymentForRetry()}><RefreshCcw size={18} />保留旧单待核对，继续收款</button>
+            <p>旧支付不会被伪造为失败，后台仍会接收查单和迟到通知。若多笔后来到账，系统只按实际应收结单，超出部分会明确显示为溢收并进入联系退款流程。</p>
           </> : qrValue !== null ? <>
             <TablePaymentQr value={qrValue} />
-            <h3>请顾客扫码付款</h3><p>到账前不要重复收款；支付结果会自动刷新。</p>
+            <h3>请顾客扫码付款</h3><p>支付结果会自动刷新；如长时间无结果，可保留本次待核对并重新收款。</p>
             {access?.canQueryOnlinePayment === true && <button type="button" className="staff-payment-query" disabled={busy} onClick={() => void queryPayment()}><RefreshCcw size={18} />查询渠道结果</button>}
           </> : action?.presentation === 'barcode' ? <>
             <span className="staff-payment-result"><LoaderCircle className="is-spinning" /><strong>付款码已提交，正在确认到账</strong></span>

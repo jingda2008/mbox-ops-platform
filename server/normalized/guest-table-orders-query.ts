@@ -125,6 +125,7 @@ export async function loadGuestTableOrders(
           AND payment.store_id = ordering.store_id
           AND payment.order_id = ordering.id
           AND payment.status IN ('created', 'pending')
+          AND payment.retry_released_at IS NULL
         ORDER BY payment.created_at DESC, payment.id DESC
         LIMIT 1
       ) AS active_payment ON true

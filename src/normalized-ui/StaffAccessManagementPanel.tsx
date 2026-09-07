@@ -163,7 +163,7 @@ export function StaffAccessManagementPanel({ api }: { api: NormalizedApiClient }
     </div>
 
     <section className="staff-access-map" aria-labelledby="staff-access-map-title">
-      <header><div><small>按职责分区，修改后统一发布</small><h3 id="staff-access-map-title">管理员控制中心</h3></div></header>
+      <header><div><small>按职责分区，修改后统一发布</small><h2 id="staff-access-map-title">管理员控制中心</h2></div></header>
       <div>
         <ModeButton active={mode === 'role'} icon={<ShieldCheck />} title="岗位权限" detail="批量调整岗位可做什么" onClick={() => chooseMode('role')} />
         <ModeButton active={mode === 'employee'} icon={<UsersRound />} title="员工例外" detail="临时增加或明确禁止" onClick={() => chooseMode('employee')} />
@@ -173,7 +173,7 @@ export function StaffAccessManagementPanel({ api }: { api: NormalizedApiClient }
     </section>
 
     <section className="staff-access-editor" id="staff-access-editor" data-action-reveal aria-labelledby="staff-access-editor-title">
-      <header><div><small>{modeHint(mode)}</small><h3 id="staff-access-editor-title">{modeTitle(mode)}</h3></div></header>
+      <header><div><small>{modeHint(mode)}</small><h2 id="staff-access-editor-title">{modeTitle(mode)}</h2></div></header>
       <label className="staff-access-target"><span>{mode === 'employee' ? '选择员工' : '选择岗位'}</span><select aria-label={mode === 'employee' ? '选择员工' : '选择岗位'} value={targetId} onChange={(event) => chooseTarget(event.target.value)}>
         <option value="">请选择</option>
         {mode === 'employee'

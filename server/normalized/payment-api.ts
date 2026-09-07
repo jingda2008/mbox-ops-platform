@@ -103,6 +103,7 @@ type PaymentCommandPort = Pick<
   | 'recordManualRefundResult'
   | 'authorizeRecollection'
   | 'authorizeActivityRecollection'
+  | 'releaseUnresolvedForRetry'
   | 'authorizeProviderCloseForReplacement'
 >
 
@@ -478,34 +479,18 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
   app.post<{ Params: { paymentId: string } }>(
     '/payments/:paymentId/retry-release',
     async (request, reply) => handleRoute(reply, async () => {
-      if (options.onlinePayments?.close === undefined) throw new OnlinePaymentUnavailableError()
       const context = await resolveStaffContext(options, request)
-      requireStaffCapability(context, 'reconciliation.view')
       const body = readOptionalObject(request.body)
       assertActorBinding(body, context.actor)
       const paymentId = readUuid(request.params.paymentId, 'paymentId')
       const reason = readOptionalString(body.reason, 'reason', 500, 4)
-        ?? '未收到明确成功结果，查询并关闭原线上收款后改用其他方式'
+        ?? '未收到明确成功结果，保留原支付待核对并改用其他方式收款'
       const idempotencyKey = readIdempotencyKey(request)
-      await options.commands.authorizeProviderCloseForReplacement({
+      const execution = await options.commands.releaseUnresolvedForRetry({
         ...metadata(request, context, idempotencyKey, { paymentId, reason }),
         paymentId,
         reason,
       })
-      const closed = await options.onlinePayments.close({
-        scope: context.scope,
-        paymentId,
-        closeBindingId: `staff-close-${createHash('sha256').update(idempotencyKey).digest('hex')}`,
-        principal: paymentInitiationPrincipal(context),
-      })
-      const execution = await recordOnlinePaymentObservation(
-        options,
-        request,
-        context,
-        closed,
-        `provider-close-${createHash('sha256').update(idempotencyKey).digest('hex')}`,
-        'postar-close-payment',
-      )
       return reply.send(executionResponse(execution))
     }),
   )

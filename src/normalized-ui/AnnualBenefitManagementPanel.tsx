@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import type { NormalizedApiClient, StaffAuthView } from '../normalized-api'
 import { useConfirmationDialog } from './ConfirmationDialog'
 
@@ -99,7 +99,7 @@ export function AnnualBenefitManagementPanel({ api, auth }: { api: NormalizedApi
   const [notice, setNotice] = useState('')
 
   const festivalRules = useMemo(() => (configuration?.rules ?? []).filter((rule) => rule.ruleKind === 'festival'), [configuration])
-  async function load() {
+  const load = useCallback(async () => {
     try {
       if (canView) {
         const response = await api.getEndpoint<{ data: Configuration }>('/api/staff/loyalty/annual-benefit-policies')
@@ -123,8 +123,8 @@ export function AnnualBenefitManagementPanel({ api, auth }: { api: NormalizedApi
         setFulfillmentExceptions(response.data)
       }
     } catch (error) { setNotice(error instanceof Error ? error.message : '年度礼遇配置暂时无法读取') }
-  }
-  useEffect(() => { void load() }, [canView,canFulfill,canHandleException])
+  }, [api, canFulfill, canHandleException, canView])
+  useEffect(() => { void load() }, [load])
   if (!canView && !canManage && !canApprove && !canPublish && !canConfirmOccurrence && !canFulfill && !canHandleException) return null
 
   function updateRule(patch: Partial<RuleDraft>) { setDraftRule((current) => ({ ...current, ...patch })) }

@@ -134,6 +134,7 @@ function factQuery(code: TableSessionClosureBlockerCode): string {
         payment.provider_snapshot->>'collectedByEmployeeId'
       )
     WHERE payment.status IN ('created','pending')
+      AND payment.retry_released_at IS NULL
       AND NOT (ordering.status='cancelled' AND NOT EXISTS (
         SELECT 1 FROM mbox.order_items item WHERE item.tenant_id=ordering.tenant_id
           AND item.store_id=ordering.store_id AND item.order_id=ordering.id AND item.status='delivered'

@@ -83,6 +83,14 @@ const TABLE_COLLECTION_PERMISSIONS = [
   'payment.manual.external.record',
 ] as const
 
+const FULFILLMENT_READ_PERMISSIONS = [
+  'order.view',
+  'kds.prepare',
+  'kds.deliver',
+  'kds.exception.manage',
+  'fulfillment.view_all',
+] as const
+
 function hasTableCollectionPermission(permissions: readonly string[]): boolean {
   return TABLE_COLLECTION_PERMISSIONS.some((permission) => permissions.includes(permission))
 }
@@ -173,13 +181,9 @@ export function StaffActionsPanel({
     requestRef.current = controller
     if (!quiet) setPhase('loading')
     try {
-      const [operationsResult, fulfillmentResult] = await Promise.allSettled([
-        api.loadOperations(controller.signal),
-        api.loadFulfillment(controller.signal),
-      ])
-      if (operationsResult.status === 'rejected') throw operationsResult.reason
-      setOperations(operationsResult.value)
-      const { paymentDue, refunds } = staffTableFinancialSummary(operationsResult.value.tables)
+      const nextOperations = await api.loadOperations(controller.signal)
+      setOperations(nextOperations)
+      const { paymentDue, refunds } = staffTableFinancialSummary(nextOperations.tables)
       const previousFinancialAttention = financialAttentionRef.current
       financialAttentionRef.current = { paymentDue, refunds }
       if (quiet && previousFinancialAttention !== null) {
@@ -191,19 +195,23 @@ export function StaffActionsPanel({
           showNotice({ kind: 'attention', message: `新增 ${newPaymentDue} 张桌待收款，请核对桌台付款状态。` })
         }
       }
-      if (fulfillmentResult.status === 'fulfilled') {
-        setFulfillment(fulfillmentResult.value)
-      } else if (fulfillmentResult.reason instanceof StaffActionsApiError
-        && fulfillmentResult.reason.status === 401) {
-        throw fulfillmentResult.reason
+      const canLoadFulfillment = FULFILLMENT_READ_PERMISSIONS.some((permission) => (
+        nextOperations.actor.capabilities.includes(permission)
+      ))
+      if (canLoadFulfillment) {
+        try {
+          setFulfillment(await api.loadFulfillment(controller.signal))
+        } catch (error) {
+          if (error instanceof StaffActionsApiError && error.status === 401) throw error
+          setFulfillment(null)
+          if (!quiet && !(error instanceof StaffActionsApiError && error.status === 403)) {
+            showNotice({ kind: 'error', message: '桌台与服务已更新，出品待办暂时无法读取' })
+          }
+        }
       } else {
         setFulfillment(null)
-        if (!quiet && !(fulfillmentResult.reason instanceof StaffActionsApiError
-          && fulfillmentResult.reason.status === 403)) {
-          showNotice({ kind: 'error', message: '桌台与服务已更新，出品待办暂时无法读取' })
-        }
       }
-      if (operationsResult.value.actor.capabilities.includes('loyalty.redemption.fulfill')
+      if (nextOperations.actor.capabilities.includes('loyalty.redemption.fulfill')
         && api.loadMemberBenefitTasks !== undefined) {
         try {
           setMemberBenefits(await api.loadMemberBenefitTasks(null,controller.signal))
@@ -897,7 +905,7 @@ export function StaffActionsPanel({
           {visibleTables.length === 0 && <div className="staff-table-empty"><strong>当前范围没有桌台</strong><span>可搜索桌号，或切换到“全部”查看完整桌图。</span><button type="button" onClick={() => setTableScope('all')}>查看全部桌台</button></div>}
           {tableGroups(visibleTables).map((group) => (
             <section className="staff-table-area" key={group.area}>
-              <h3>{group.area}</h3>
+              <h2>{group.area}</h2>
               <div className="staff-table-grid">
                 {group.tables.map((table) => {
                   const mood = table.activeSession?.latestMood === null || table.activeSession === null

@@ -103,6 +103,7 @@ async function claimExpiredPaymentReservations(
             AND payment.store_id = order_row.store_id
             AND payment.order_id = order_row.id
             AND payment.status IN ('created', 'pending')
+            AND payment.retry_released_at IS NULL
         ) THEN 'unknown'
         WHEN EXISTS (
           SELECT 1 FROM mbox.payments AS payment
@@ -125,6 +126,7 @@ async function claimExpiredPaymentReservations(
           AND pending_payment.store_id = order_row.store_id
           AND pending_payment.order_id = order_row.id
           AND pending_payment.status IN ('created', 'pending')
+          AND pending_payment.retry_released_at IS NULL
       ) THEN 1 ELSE 0 END,
       order_row.fulfillment_expires_at, order_row.id
     FOR UPDATE OF order_row SKIP LOCKED

@@ -37,7 +37,7 @@ describe('normalized migration baseline', () => {
       '037', '038', '039', '040', '041', '042', '043', '044', '045', '046', '047', '048',
       '049', '050', '051', '052', '053', '054', '055', '056', '057', '058', '059', '060',
       '061', '062', '063', '064', '065', '066', '067', '068', '069', '070', '071', '072',
-      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099', '100', '101', '102', '103', '104', '105', '106', '107', '108', '109', '110', '111', '112', '113', '114', '115', '116', '117', '118', '119', '120', '121', '122', '123', '124', '125', '126', '127', '128', '129', '130', '131', '132', '133', '134', '135', '136', '137', '138', '139', '140', '141', '142', '143', '144', '145', '146', '147', '148', '149', '150', '151', '152', '153', '154', '155', '156', '157',
+      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099', '100', '101', '102', '103', '104', '105', '106', '107', '108', '109', '110', '111', '112', '113', '114', '115', '116', '117', '118', '119', '120', '121', '122', '123', '124', '125', '126', '127', '128', '129', '130', '131', '132', '133', '134', '135', '136', '137', '138', '139', '140', '141', '142', '143', '144', '145', '146', '147', '148', '149', '150', '151', '152', '153', '154', '155', '156', '157', '158',
     ])
     for (const migration of migrations) {
       expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/)
@@ -60,6 +60,16 @@ describe('normalized migration baseline', () => {
         checksum: '8804baccfbb3bf7b1371ace9e786214654c37203530e7e51598ea4bd2ab18680',
       },
     ])
+  })
+
+  it('grants payment initiation to every active role without broadening table or finance scope', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '158')
+    expect(migration?.filename).toBe('158_all_employee_payment_initiation.sql')
+    expect(migration?.sql).toMatch(/WHERE role\.status='active'/)
+    expect(migration?.sql).toMatch(/permission\.code='payment\.initiate\.staff'/)
+    expect(migration?.sql).not.toMatch(/payment\.collect\.all_tables/)
+    expect(migration?.sql).not.toMatch(/payment\.manual\./)
+    expect(migration?.sql).toMatch(/schema_version='158'/)
   })
 
   it('adds revocable Windows print bridges and typed bridge-pull printer jobs', async () => {

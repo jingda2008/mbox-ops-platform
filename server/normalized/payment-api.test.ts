@@ -195,6 +195,14 @@ function fixture(overrides: Partial<PaymentApiOptions> = {}) {
         authorizedByEmployeeId: employeeId, expiresAt: '2026-08-11T13:00:00.000Z', createdAt: '2026-08-11T12:30:00.000Z',
       }, replayed: false,
     })),
+    releaseUnresolvedForRetry: vi.fn(async () => ({
+      value: {
+        ...payment,
+        retryReleasedAt: '2026-08-11T12:10:00.000Z',
+        retryReleaseReason: '顾客未确认到账，重新发起收款',
+      },
+      replayed: false,
+    })),
     authorizeProviderCloseForReplacement: vi.fn(async () => ({ value: payment, replayed: false })),
   }
   const providerVerifier = {
@@ -300,26 +308,12 @@ function fixture(overrides: Partial<PaymentApiOptions> = {}) {
 }
 
 describe('paymentApiPlugin', () => {
-  it('queries and closes an unresolved online payment before a staff member may change collection method', async () => {
-    const close = vi.fn(async () => ({
-      context: {
-        id: payment.id, orderId: payment.orderId, orderPublicId: 'OORDER0001',
-        publicId: payment.publicId, provider: payment.provider, providerTransactionId: null,
-        method: payment.method, amountMinor: payment.amountMinor, currency: payment.currency,
-        status: payment.status, tableSessionId, tableCode: 'W01', createdAt: payment.createdAt,
-      },
-      observation: {
-        paymentIntentId: payment.publicId, providerTransactionId: 'POSTAR-TX-CLOSED-0001',
-        status: 'closed' as const, amount: payment.amountMinor,
-        providerReportedAmount: payment.amountMinor, currency: payment.currency,
-        settlementChannel: 'wechat' as const, merchantId: trustedMerchant.merchantId,
-        occurredAt: '2026-08-11T12:10:00.000Z',
-      },
-      verifiedObservationId: verifiedPaymentObservationId,
-    }))
+  it('releases an unresolved online attempt locally without depending on provider query or close', async () => {
+    const query = vi.fn(async () => { throw new Error('provider query must not run') })
+    const close = vi.fn(async () => { throw new Error('provider close must not run') })
     const value = fixture({
       onlinePayments: {
-        assertAvailable: vi.fn(), resolveActivePayment: vi.fn(), create: vi.fn(), query: vi.fn(), close,
+        assertAvailable: vi.fn(), resolveActivePayment: vi.fn(), create: vi.fn(), query, close,
       },
     })
     const response = await value.app.inject({
@@ -331,23 +325,20 @@ describe('paymentApiPlugin', () => {
 
     expect(response.statusCode).toBe(200)
     expect(response.json()).toMatchObject({
-      data: { id: paymentId, status: 'closed' },
+      data: {
+        id: paymentId,
+        status: 'pending',
+        retryReleasedAt: '2026-08-11T12:10:00.000Z',
+      },
       meta: { replayed: false },
     })
-    expect(value.commands.authorizeProviderCloseForReplacement).toHaveBeenCalledWith(expect.objectContaining({
+    expect(value.commands.releaseUnresolvedForRetry).toHaveBeenCalledWith(expect.objectContaining({
       paymentId,
       reason: '顾客未确认到账，重新发起收款',
       idempotencyKey: 'payment-retry-release-api-0001',
     }))
-    expect(close).toHaveBeenCalledWith(expect.objectContaining({
-      paymentId,
-      principal: { type: 'employee', employeeId },
-    }))
-    expect(value.commands.recordProviderQueryResult).toHaveBeenCalledWith(expect.objectContaining({
-      actor: { type: 'integration', ref: 'postar-close-payment' },
-      status: 'closed',
-      providerTransactionId: 'POSTAR-TX-CLOSED-0001',
-    }))
+    expect(close).not.toHaveBeenCalled()
+    expect(query).not.toHaveBeenCalled()
   })
 
   it('initiates an online payment with a server-resolved actor and idempotency boundary', async () => {
@@ -1552,6 +1543,7 @@ function fixtureCommands(): PaymentApiOptions['commands'] {
         authorizedByEmployeeId: employeeId, expiresAt: '2026-08-11T13:00:00.000Z', createdAt: '2026-08-11T12:30:00.000Z',
       }, replayed: false,
     })),
+    releaseUnresolvedForRetry: vi.fn(async () => ({ value: payment, replayed: false })),
     authorizeProviderCloseForReplacement: vi.fn(async () => ({ value: payment, replayed: false })),
   }
 }

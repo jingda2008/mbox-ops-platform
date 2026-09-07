@@ -426,6 +426,7 @@ function parsePaymentObservation(
   response: PostarSynchronousResponse,
   request: ProviderPaymentQueryRequest,
   agencyId: string,
+  observedAt: string,
 ) {
   if (!['000000', '222222', '555555'].includes(response.code)) {
     throw new Error(`星驿支付查询返回不可映射状态码: ${response.code} ${response.msg}`)
@@ -455,13 +456,23 @@ function parsePaymentObservation(
   if (status !== 'succeeded' && providerReportedAmount !== 0 && providerReportedAmount !== request.amount) {
     throw new Error('星驿支付查询金额与预期金额不匹配')
   }
+  const providerOrderTime = optionalString(data, 'orderTime')
+  if (status === 'succeeded' && providerOrderTime === undefined) {
+    throw new Error('星驿支付成功结果缺少支付完成时间')
+  }
   return {
     amount: request.amount,
     providerReportedAmount,
     currency: request.currency,
     merchantId: request.merchantId,
     settlementChannel: settlementChannel(data.payChannel),
-    occurredAt: parsePostarDateTime(requiredString(data, 'orderTime'), '星驿支付完成时间'),
+    // The provider contract only guarantees orderTime for a successful
+    // transaction.  Pending/failed query observations still need an event
+    // time locally, so use the trusted query time instead of rejecting a
+    // legitimate non-final response and leaving the venue stuck.
+    occurredAt: providerOrderTime === undefined
+      ? observedAt
+      : parsePostarDateTime(providerOrderTime, '星驿支付完成时间'),
     paymentIntentId,
     providerTransactionId: requiredString(data, 'orderNo'),
     status,
@@ -812,19 +823,25 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
       this.agencyIdSecretName,
       this.publicKeySecretName,
     )
+    const observedAt = this.now()
     const response = await this.options.httpClient.post({
       body: signedRequestBody({
         agetId: agencyId,
         custId: request.merchantId,
         orderNo: request.paymentIntentId,
         orderTime: orderDate,
-        timeStamp: formatPostarTimestamp(this.now()),
+        timeStamp: formatPostarTimestamp(observedAt),
         version: VERSION,
       }, publicKey),
       headers: { 'content-type': 'application/json; charset=utf-8' },
       url: `${this.baseUrl}${POSTAR_ENDPOINTS.queryPayment}`,
     })
-    return parsePaymentObservation(parseSynchronousResponse(response, publicKey), request, agencyId)
+    return parsePaymentObservation(
+      parseSynchronousResponse(response, publicKey),
+      request,
+      agencyId,
+      observedAt.toISOString(),
+    )
   }
 
   async closePayment(

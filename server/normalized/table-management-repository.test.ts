@@ -156,7 +156,7 @@ integration('normalized table management PostgreSQL concurrency', () => {
       FROM mbox.role_permission_assignments
       WHERE tenant_id = $1 AND store_id = $2 AND role_id = $3
     `, [tenantId, storeId, managerRoleId])
-    expect(accessSeed.rows[0]?.permission_count).toBe('6')
+    expect(accessSeed.rows[0]?.permission_count).toBe('7')
   })
 
   afterAll(async () => {

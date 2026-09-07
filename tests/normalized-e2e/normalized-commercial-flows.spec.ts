@@ -83,8 +83,8 @@ async function verifyStaffDevice(page: import('@playwright/test').Page, credenti
 }
 
 async function guestCartItemCount(cartDock: import('@playwright/test').Locator): Promise<number> {
+  if (await cartDock.count() === 0) return 0
   const copy = await cartDock.locator('.menu-cart-summary-copy strong').textContent()
-  if (copy?.includes('本次还未选择')) return 0
   const match = copy?.match(/本次待提交\s*(\d+)\s*件/)
   if (!match) throw new Error(`无法读取购物车件数: ${copy ?? ''}`)
   return Number(match[1])
@@ -210,15 +210,19 @@ test('narrow mobile guest keeps mood and service controls compact above the menu
       const checkoutDock = page.getByRole('complementary', { name: '订单结算' })
       await expect(quickAdd).toBeVisible()
       const quickAddBox = await quickAdd.boundingBox()
-      const dockBox = await checkoutDock.boundingBox()
       expect(quickAddBox).not.toBeNull()
-      expect(dockBox).not.toBeNull()
-      expect(quickAddBox!.y + quickAddBox!.height).toBeLessThanOrEqual(dockBox!.y)
+      expect(quickAddBox!.y + quickAddBox!.height).toBeLessThanOrEqual(568)
       expect(quickAddBox!.width).toBeGreaterThanOrEqual(44)
       expect(quickAddBox!.height).toBeGreaterThanOrEqual(44)
       const beforeCount = await guestCartItemCount(checkoutDock)
+      if (beforeCount === 0) await expect(checkoutDock).toHaveCount(0)
+      else await expect(checkoutDock).toBeVisible()
       await quickAdd.click()
       await expect.poll(() => guestCartItemCount(checkoutDock)).toBe(beforeCount + 1)
+      await expect(checkoutDock).toBeVisible()
+      const dockBox = await checkoutDock.boundingBox()
+      expect(dockBox).not.toBeNull()
+      expect(dockBox!.x + dockBox!.width).toBeLessThanOrEqual(320)
       await page.screenshot({ path: 'artifacts/normalized-browser/audit-rc78-guest-menu-cart-320.png', fullPage: true })
     }
     if (width === 390) {
@@ -756,7 +760,7 @@ test('mobile manager payment choices stay synchronized with two guests at the sa
   await tableActions.getByRole('button', { name: '本桌收款' }).click()
   const reopenedTablePayment = page.getByRole('dialog', { name: 'W01本桌收款' })
   await expect(reopenedTablePayment.getByText('已有一笔线上收款尚未明确结果')).toBeVisible()
-  await expect(reopenedTablePayment.getByRole('button', { name: '查单并关闭后改收款' })).toBeEnabled()
+  await expect(reopenedTablePayment.getByRole('button', { name: '保留旧单待核对，继续收款' })).toBeEnabled()
   await expect(reopenedTablePayment.getByRole('button', { name: '未到账，重新收款' })).toHaveCount(0)
   await reopenedTablePayment.getByRole('button', { name: '关闭本桌收款' }).click()
 
@@ -844,8 +848,6 @@ test('two guests see the same server cart before either one checks out', async (
 
     const firstCart = page.getByRole('complementary', { name: '订单结算' })
     const secondCart = secondGuest.getByRole('complementary', { name: '订单结算' })
-    await expect(firstCart).toBeVisible()
-    await expect(secondCart).toBeVisible()
     const beforeCount = await guestCartItemCount(firstCart)
     await page.getByLabel('搜索菜单商品').fill(data.orderableProductName)
     const add = page.getByRole('button', { name: `加入${data.orderableProductName}` })
@@ -856,6 +858,8 @@ test('two guests see the same server cart before either one checks out', async (
 
     await expect.poll(() => guestCartItemCount(firstCart)).toBe(beforeCount + 1)
     await expect.poll(() => guestCartItemCount(secondCart)).toBe(beforeCount + 1)
+    await expect(firstCart).toBeVisible()
+    await expect(secondCart).toBeVisible()
     expect(sharedCartRequests.some((url) => url.endsWith('/api/guest/shared-cart/lines'))).toBe(true)
   } finally {
     await secondGuestContext.close()

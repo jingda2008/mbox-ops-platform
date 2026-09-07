@@ -60,6 +60,14 @@ button:active:not(:disabled) {
   backdrop-filter: blur(12px);
 }
 
+/* The menu already owns the sticky category/search controls. Two top layers
+   cover content on safe-area and short-height devices, so the brand context
+   scrolls away on this menu surface. */
+.guest-app-restored-menu > .guest-header {
+  position: relative;
+  top: auto;
+}
+
 .guest-performance-card {
   min-height: 70px;
   display: grid;

@@ -268,6 +268,47 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
     expect((await financialSnapshot(pool, fixture.orderId)).pending_payments).toBe('1')
   })
 
+  it('records a released attempt that succeeds late as overcollection without reopening payment', async () => {
+    const fixture = await createOrder(pool, [8800])
+    const original = await initiateOnlinePayment(service, fixture.orderId)
+    await service.releaseUnresolvedForRetry({
+      ...metadata(`retry-release-${randomUUID()}`, actor(cashierId)),
+      paymentId: original.id,
+      reason: '顾客未确认到账，保留旧单待核对并重新收款',
+    })
+    const replacement = await initiateOnlinePayment(service, fixture.orderId)
+    const settledReplacement = await succeedPaymentCallback(service, replacement)
+    await succeedPaymentCallback(service, original)
+
+    expect(await financialSnapshot(pool, fixture.orderId)).toMatchObject({
+      payment_status: 'paid',
+      gross_paid_minor: '17600',
+      refunded_minor: '0',
+      net_minor: '17600',
+      pending_payments: '0',
+      payment_entries: '2',
+    })
+    await expect(initiateOnlinePayment(service, fixture.orderId))
+      .rejects.toThrow('the order has no outstanding balance')
+    const order = await pool.query<{ total_amount_minor: string }>(
+      'SELECT total_amount_minor::text FROM mbox.orders WHERE id=$1::uuid',
+      [fixture.orderId],
+    )
+    expect(order.rows[0]?.total_amount_minor).toBe('8800')
+
+    await succeedOnlineRefund(service, settledReplacement, [allocation(fixture, 0, 8800)])
+    expect(await financialSnapshot(pool, fixture.orderId)).toMatchObject({
+      payment_status: 'paid',
+      gross_paid_minor: '17600',
+      refunded_minor: '8800',
+      net_minor: '8800',
+      payment_entries: '2',
+      refund_entries: '1',
+    })
+    await expect(initiateOnlinePayment(service, fixture.orderId))
+      .rejects.toThrow('the order has no outstanding balance')
+  })
+
   it('serializes concurrent refund requests so reserved refunds cannot exceed payment or item value', async () => {
     const fixture = await createOrder(pool, [10000])
     const payment = await captureOnlinePayment(service, fixture.orderId)

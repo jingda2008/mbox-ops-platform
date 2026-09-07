@@ -45,6 +45,12 @@ button { letter-spacing: 0; transition: transform 100ms ease, opacity 100ms ease
 .compact-icon-action.button-hover::before,
 .compact-text-action.button-hover::before { transform: translate(-50%, -50%) scale(.96); }
 .page { min-height: 100vh; padding: 0 28rpx calc(48rpx + constant(safe-area-inset-bottom)); padding: 0 28rpx calc(48rpx + env(safe-area-inset-bottom)); }
+/* Native tab-bar pages already exclude the device bottom inset. */
+.home-page,
+.reservations-page,
+.order-page,
+.community-page,
+.profile-page { padding-bottom: 48rpx; }
 .h-scroll { width: 100%; white-space: nowrap; }
 .h-scroll__track { display: inline-flex; min-width: 100%; align-items: stretch; gap: 16rpx; }
 .top-band { margin: 0 -28rpx 28rpx; padding: 38rpx 28rpx 34rpx; background: radial-gradient(circle at 90% 4%, rgba(198, 163, 105, .22), transparent 34%), linear-gradient(145deg, #0d1712, #234031 68%, #101512); color: #fffdf8; }

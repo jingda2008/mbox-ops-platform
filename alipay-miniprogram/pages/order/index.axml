@@ -1,4 +1,6 @@
 <view class="page order-page">
+  <scroll-view scroll-y enhanced show-scrollbar="{{false}}" class="order-scroll">
+    <view class="order-scroll__content">
   <state-panel a:if="{{loading}}" type="loading" title="正在确认桌次与菜单" />
 
   <view a:elif="{{connectionState === 'needs_scan' || connectionState === 'waiting' || connectionState === 'upgrade_required'}}" class="gate-wrap">
@@ -96,15 +98,6 @@
       </view>
     </view>
 
-    <view a:if="{{recommendationQuestionVisible && recommendationQuestion}}" class="recommend-question sheet-mask">
-      <scroll-view scroll-y="true" class="recommend-question__sheet">
-        <button class="recommend-question__close compact-text-action" aria-label="关闭帮我选" onTap="closeRecommendationQuestions">取消</button>
-        <view class="recommend-question__head"><text>帮我选</text><text>{{recommendationQuestion.title}}</text></view>
-        <view class="recommend-question__progress"><text a:for="{{recommendationConfiguration.questions}}" a:key="code" class="{{index <= recommendationQuestionIndex ? 'is-active' : ''}}"></text></view>
-        <view class="recommend-question__options"><button a:for="{{recommendationQuestion.options}}" a:key="value" data-value="{{item.value}}" onTap="selectRecommendationAnswer">{{item.label}}</button></view>
-      </scroll-view>
-    </view>
-
     <view class="menu-tools">
       <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="category-scroll"><view class="category-row"><button a:for="{{categories}}" a:key="code" class="{{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" onTap="selectCategory">{{item.name}}</button></view></scroll-view>
       <scroll-view a:if="{{subcategories.length}}" scroll-x enhanced show-scrollbar="{{false}}" class="category-scroll category-scroll--sub"><view class="category-row category-row--sub"><button a:for="{{subcategories}}" a:key="code" class="{{selectedSubcategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" onTap="selectSubcategory">{{item.name}}</button></view></scroll-view>
@@ -131,6 +124,17 @@
       <text>本桌共享购物车</text><text>还没有商品；同桌每位顾客加入的商品都会在这里同步显示。</text>
     </view>
   </block>
+    </view>
+  </scroll-view>
+
+  <view a:if="{{recommendationQuestionVisible && recommendationQuestion}}" class="recommend-question sheet-mask">
+    <scroll-view scroll-y="true" class="recommend-question__sheet">
+      <button class="recommend-question__close compact-text-action" aria-label="关闭帮我选" onTap="closeRecommendationQuestions">取消</button>
+      <view class="recommend-question__head"><text>帮我选</text><text>{{recommendationQuestion.title}}</text></view>
+      <view class="recommend-question__progress"><text a:for="{{recommendationConfiguration.questions}}" a:key="code" class="{{index <= recommendationQuestionIndex ? 'is-active' : ''}}"></text></view>
+      <view class="recommend-question__options"><button a:for="{{recommendationQuestion.options}}" a:key="value" data-value="{{item.value}}" onTap="selectRecommendationAnswer">{{item.label}}</button></view>
+    </scroll-view>
+  </view>
 
   <view a:if="{{detailProduct}}" class="product-detail-mask sheet-mask" onTap="closeProductDetail">
     <view class="product-detail-sheet" catchTap="keepProductDetailOpen">

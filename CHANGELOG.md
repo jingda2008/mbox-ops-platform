@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.0-rc.178 - 2026-09-07
+
+- Restores snacks and cold-food child categories in staff-assisted ordering by
+  using the catalog hierarchy instead of exact root-category codes, while
+  preserving staff eligibility independently from guest-menu visibility.
+- Adds bounded background reconciliation for submitted StarPay refunds. Only a
+  verified terminal query result changes financial state; provider outages and
+  non-terminal results remain auditable without blocking table operations.
+- Separates refunds that need an employee action from refunds already being
+  checked by the system, and keeps confirmed refund failures visible for
+  follow-up instead of silently dropping the alert.
+- Preserves category-parent metadata in the web guest menu so nested food
+  categories use the same classification rule. Native WeChat Mini Program
+  source is unchanged in this candidate.
+
 ## 1.0.0-rc.177 - 2026-09-07
 
 - Advances the immutable LuJiazui store configuration from

@@ -55,6 +55,7 @@ describe('OperationsQueryService', () => {
         mood_code: 'happy', mood_occurred_at: '2026-08-11T12:02:00.000Z',
         financial_state: 'refund_pending', order_count: 2, unpaid_order_count: 0,
         pending_payment_count: 0, refund_attention_count: 1,
+        refund_action_count: 0, refund_processing_count: 1,
         session_status: 'open', opened_at: '2026-08-11T12:00:00.000Z',
       }], rowCount: 1 },
       { rows: [{
@@ -80,6 +81,8 @@ describe('OperationsQueryService', () => {
       financialState: 'refund_pending',
       orderCount: 2,
       refundAttentionCount: 1,
+      refundActionCount: 0,
+      refundProcessingCount: 1,
     })
     expect(view.tasks[0]).toMatchObject({
       tableCode: 'VIP1', title: '加水', assignedToActor: true, interactionMode: 'quick_complete',
@@ -89,6 +92,8 @@ describe('OperationsQueryService', () => {
     const tableQuery = fixture.client.calls.find((call) => call.sql.includes('FROM mbox.tables venue_table'))
     const taskQuery = fixture.client.calls.find((call) => call.sql.includes('FROM mbox.service_tasks task'))
     expect(tableQuery?.sql).toContain("behavior.behavior_type = 'guest.mood.selected'")
+    expect(tableQuery?.sql).toContain("refund.status IN ('requested','approved','processing','failed')")
+    expect(tableQuery?.sql).toContain("refund.status IN ('requested','approved','failed')")
     expect(taskQuery?.sql).not.toContain("behavior.behavior_type = 'guest.mood.selected'")
     expect(taskQuery?.values[4]).toBe(true)
     expect(taskQuery?.values[5]).toBe(false)

@@ -241,6 +241,30 @@ export class PaymentProviderActionRepository {
     return result.rows.map((row) => row.id)
   }
 
+  async listStaleProcessingPostarRefundIds(
+    minAgeSeconds: number,
+    limit: number,
+  ): Promise<string[]> {
+    const result = await this.transaction.query<{ id: string }>(`
+      SELECT refund.id
+      FROM mbox.refunds refund
+      JOIN mbox.payments payment
+        ON payment.tenant_id=refund.tenant_id
+        AND payment.store_id=refund.store_id
+        AND payment.id=refund.payment_id
+      WHERE refund.tenant_id=$1::uuid
+        AND refund.store_id=$2::uuid
+        AND refund.status='processing'
+        AND refund.provider_submission_state IN ('submitting','submitted')
+        AND refund.merchant_refund_id IS NOT NULL
+        AND payment.provider='postar'
+        AND refund.updated_at<=clock_timestamp()-make_interval(secs=>$3::integer)
+      ORDER BY refund.updated_at,refund.id
+      LIMIT $4::integer
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, minAgeSeconds, limit])
+    return result.rows.map((row) => row.id)
+  }
+
   async listStaleGuestImmediateCheckoutPaymentCandidates(
     minAgeSeconds: number,
     limit: number,

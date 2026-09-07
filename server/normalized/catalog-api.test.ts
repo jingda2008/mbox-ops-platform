@@ -488,6 +488,9 @@ describe("normalized catalog HTTP API", () => {
     const fixture = await createFixture({
       grantedPermissions: [ASSISTED_ORDER_CATALOG_VIEW_PERMISSION],
       productPages: new Map([[0, firstPage], [100, secondPage]]),
+      assistedCategoryRows: [{
+        code: 'wine', display_name: '葡萄酒', parent_code: 'drinks', parent_name: '酒水',
+      }],
     });
 
     const response = await fixture.app.inject({
@@ -498,6 +501,11 @@ describe("normalized catalog HTTP API", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json().data).toHaveLength(101);
     expect(response.json().data[100]).toMatchObject({ name: "小食与酒水第101项" });
+    expect(response.json().data[0]).toMatchObject({
+      categoryName: "葡萄酒",
+      categoryParentCode: "drinks",
+      categoryParentName: "酒水",
+    });
     expect(response.json().data[0]).not.toHaveProperty("costAmountMinor");
     expect(response.json().data[0].productSnapshot).not.toHaveProperty("costAmount");
     expect(fixture.runs).toContainEqual({ isolation: "repeatable-read", readOnly: true });
@@ -1028,6 +1036,7 @@ interface QueryCall {
 interface FixtureOptions {
   grantedPermissions?: readonly string[];
   categoryRows?: Array<Record<string, unknown>>;
+  assistedCategoryRows?: Array<Record<string, unknown>>;
   serializationFailures?: number;
   failStaffContext?: boolean;
   inventoryControlMode?: "tracked" | "not_managed";
@@ -1168,7 +1177,7 @@ function fakeQuery(
   if (sql.includes("FROM mbox.role_approval_limits")) return result([]);
   if (sql.includes("FROM mbox.role_navigation_items")) return result([]);
   if (sql.includes("FROM mbox.menu_categories AS category")) {
-    return result([menuCategoryRow()]);
+    return result(options.assistedCategoryRows ?? [menuCategoryRow()]);
   }
   if (sql.includes("GROUP BY product.category_code"))
     return result(options.categoryRows ?? []);

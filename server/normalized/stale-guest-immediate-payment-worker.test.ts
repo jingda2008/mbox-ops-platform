@@ -4,7 +4,7 @@ import {
   STALE_GUEST_IMMEDIATE_PAYMENT_MIN_AGE_SECONDS,
   StaleGuestImmediatePaymentWorker,
 } from './stale-guest-immediate-payment-worker.js'
-import { OnlinePaymentUnavailableError, OnlinePaymentUnknownError } from './online-payment-service.js'
+import { OnlinePaymentUnavailableError, OnlinePaymentUnknownError, OnlineRefundStatusUnknownError } from './online-payment-service.js'
 
 const scope = { tenantId: 'tenant', storeId: 'store' }
 const businessDate = '2026-08-29'
@@ -21,6 +21,89 @@ function observed(id: string, status: 'closed' | 'failed' | 'succeeded') {
 }
 
 describe('stale guest immediate payment worker', () => {
+  it('automatically applies only a provider-verified terminal refund result', async () => {
+    const listRefunds = vi.fn(async () => ['refund-processing'])
+    const queryRefund = vi.fn(async () => ({
+      refundId: 'refund-processing', refundPublicId: 'R-public', merchantRefundId: 'merchant-refund',
+      paymentPublicId: 'P-public', originalProviderTransactionId: 'payment-provider-txn',
+      amountMinor: 4_000, currency: 'CNY', verifiedObservationId: 'refund-observation',
+      observation: {
+        refundId: 'merchant-refund', providerRefundId: 'merchant-refund',
+        providerRefundTransactionId: 'refund-provider-txn',
+        originalProviderTransactionId: 'payment-provider-txn', status: 'succeeded' as const,
+        amount: 4_000, currency: 'CNY', occurredAt: '2026-09-07T10:00:00.000Z',
+      },
+    }))
+    const recordProviderRefundResult = vi.fn(async () => ({ replayed: false, value: {} }))
+    const worker = new StaleGuestImmediatePaymentWorker({
+      onlinePayments: {
+        listStaleGuestImmediateCheckoutPaymentCandidates: vi.fn(async () => []), closeSystem: vi.fn(),
+        listStaleProcessingPostarRefundIds: listRefunds, queryRefund,
+      } as never,
+      payments: { recordProviderQueryResult: vi.fn(), recordProviderRefundResult } as never,
+      reconciliation: { commitTerminal: vi.fn(), abandonUnresolved: vi.fn() } as never,
+    })
+
+    const result = await worker.runBatch(scope, 'worker-test', businessDate)
+
+    expect(listRefunds).toHaveBeenCalledWith(scope, 15, 20)
+    expect(queryRefund).toHaveBeenCalledWith(scope, 'refund-processing', expect.stringMatching(/^pending-refund:/))
+    expect(recordProviderRefundResult).toHaveBeenCalledWith(expect.objectContaining({
+      refundPublicId: 'merchant-refund', verifiedObservationId: 'refund-observation',
+      providerRefundId: 'refund-provider-txn', succeeded: true,
+      actor: { type: 'integration', ref: 'postar-refund-active-query' },
+    }))
+    expect(result.terminalRefundIds).toEqual(['refund-processing'])
+    expect(result.failedRefundIds).toEqual([])
+  })
+
+  it('keeps a non-terminal refund in reconciliation without blocking table payment recovery', async () => {
+    const worker = new StaleGuestImmediatePaymentWorker({
+      onlinePayments: {
+        listStaleGuestImmediateCheckoutPaymentCandidates: vi.fn(async () => []), closeSystem: vi.fn(),
+        listStaleProcessingPostarRefundIds: vi.fn(async () => ['refund-waiting']),
+        queryRefund: vi.fn(async () => ({
+          verifiedObservationId: 'refund-observation', merchantRefundId: 'merchant-refund',
+          observation: { status: 'processing' as const },
+        })),
+      } as never,
+      payments: { recordProviderQueryResult: vi.fn(), recordProviderRefundResult: vi.fn() } as never,
+      reconciliation: { commitTerminal: vi.fn(), abandonUnresolved: vi.fn() } as never,
+    })
+
+    const result = await worker.runBatch(scope, 'worker-test', businessDate)
+
+    expect(result.deferredRefundIds).toEqual(['refund-waiting'])
+    expect(result.failedRefundIds).toEqual([])
+  })
+
+  it('treats a refund query outage as deferred financial follow-up, not worker failure', async () => {
+    const closeSystem = vi.fn(async () => observed('table-still-operates', 'closed'))
+    const commitTerminal = vi.fn(async () => ({ replayed: false, value: {} }))
+    const worker = new StaleGuestImmediatePaymentWorker({
+      onlinePayments: {
+        listStaleGuestImmediateCheckoutPaymentCandidates: vi.fn(async () => [{
+          id: 'payment-table-still-operates',
+          createdAt: '2026-08-29T03:00:00.000Z',
+          operationallyAbandoned: false,
+        }]),
+        closeSystem,
+        listStaleProcessingPostarRefundIds: vi.fn(async () => ['refund-provider-outage']),
+        queryRefund: vi.fn(async () => { throw new OnlineRefundStatusUnknownError() }),
+      } as never,
+      payments: { recordProviderQueryResult: vi.fn(), recordProviderRefundResult: vi.fn() } as never,
+      reconciliation: { commitTerminal, abandonUnresolved: vi.fn() } as never,
+    })
+
+    const result = await worker.runBatch(scope, 'worker-test', businessDate)
+
+    expect(result.deferredRefundIds).toEqual(['refund-provider-outage'])
+    expect(result.failedRefundIds).toEqual([])
+    expect(closeSystem).toHaveBeenCalledTimes(1)
+    expect(commitTerminal).toHaveBeenCalledTimes(1)
+    expect(result.terminalAbandonedPaymentIds).toEqual(['payment-table-still-operates'])
+  })
+
   it('reconciles general pending payments in the worker instead of a page read', async () => {
     const listGeneral = vi.fn(async () => ['payment-general'])
     const querySystem = vi.fn(async () => observed('general', 'succeeded'))

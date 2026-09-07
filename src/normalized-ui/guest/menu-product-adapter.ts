@@ -17,6 +17,8 @@ export function guestMenuProductToMenuProduct(product: GuestMenuProduct): MenuPr
     recommendation: { ...product.recommendation },
     categoryId: product.categoryCode,
     categoryName: product.categoryName,
+    categoryParentId: product.categoryParentCode,
+    categoryParentName: product.categoryParentName,
     description: product.description ?? undefined,
     imageUrl: product.imageUrl ?? undefined,
     tags: [...product.tags],

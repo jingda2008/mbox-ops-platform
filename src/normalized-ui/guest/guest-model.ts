@@ -23,6 +23,8 @@ export interface GuestMenuProduct {
   name: string
   categoryCode: string
   categoryName: string
+  categoryParentCode?: string | null
+  categoryParentName?: string | null
   beverageFamily: MenuBeverageFamily
   specification: string | null
   aliases: string[]

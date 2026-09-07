@@ -1,13 +1,17 @@
 import { randomUUID } from 'node:crypto'
 import type { PaymentCommandService } from './payment-command-service.js'
+import { sanitizeProviderSnapshot } from './payment-security-policy.js'
 import {
   applyProviderQueryObservation,
+  PENDING_PAYMENT_RECONCILE_BATCH_LIMIT,
+  PENDING_PAYMENT_RECONCILE_MIN_AGE_SECONDS,
   reconcileStalePendingOnlinePaymentsForStore,
   type PendingOnlinePaymentReconciliationContext,
 } from './pending-online-payment-reconciliation.js'
 import {
   OnlinePaymentUnavailableError,
   OnlinePaymentUnknownError,
+  OnlineRefundStatusUnknownError,
   type OnlinePaymentService,
 } from './online-payment-service.js'
 import { GuestImmediateCheckoutReconciliationService } from './guest-immediate-checkout-reconciliation-service.js'
@@ -30,8 +34,13 @@ export const STALE_GUEST_IMMEDIATE_PAYMENT_DEFERRED_RETRY_SECONDS = 5 * 60
 type OnlinePaymentPort = Pick<
   OnlinePaymentService,
   'closeSystem' | 'listStaleGuestImmediateCheckoutPaymentCandidates'
-> & Partial<Pick<OnlinePaymentService, 'query' | 'querySystem' | 'listStalePendingPostarPaymentIds'>>
-type PaymentCommandPort = Pick<PaymentCommandService, 'recordProviderQueryResult'>
+> & Partial<Pick<OnlinePaymentService,
+  'query' | 'querySystem' | 'listStalePendingPostarPaymentIds'
+  | 'queryRefund' | 'listStaleProcessingPostarRefundIds'
+>>
+type PaymentCommandPort = Pick<PaymentCommandService,
+  'recordProviderQueryResult' | 'recordProviderRefundResult'
+>
 
 export interface StaleGuestImmediatePaymentWorkerDeps {
   onlinePayments: OnlinePaymentPort
@@ -51,6 +60,10 @@ export interface StaleGuestImmediatePaymentBatch {
   unresolvedAbandonedPaymentIds: readonly string[]
   deferredPaymentIds: readonly string[]
   failedPaymentIds: readonly string[]
+  queriedRefundIds: readonly string[]
+  terminalRefundIds: readonly string[]
+  deferredRefundIds: readonly string[]
+  failedRefundIds: readonly string[]
 }
 
 /**
@@ -104,6 +117,10 @@ export class StaleGuestImmediatePaymentWorker {
     const unresolvedAbandonedPaymentIds: string[] = []
     const deferredPaymentIds: string[] = []
     const failedPaymentIds: string[] = []
+    const queriedRefundIds: string[] = []
+    const terminalRefundIds: string[] = []
+    const deferredRefundIds: string[] = []
+    const failedRefundIds: string[] = []
     const context: PendingOnlinePaymentReconciliationContext = {
       scope,
       businessDate: resolvedBusinessDate,
@@ -128,6 +145,76 @@ export class StaleGuestImmediatePaymentWorker {
       } catch {
         // A provider/list failure is financial follow-up only. Guest checkout
         // retirement below must still run and the physical table stays usable.
+      }
+    }
+
+    // A refund submission response only proves that the provider accepted the
+    // request. Query stale processing refunds in this bounded worker so a
+    // signed terminal result is applied without an employee repeatedly opening
+    // the cashier screen. Each refund is isolated from table operations and
+    // from the remaining batch when the provider is unavailable.
+    if (this.deps.onlinePayments.queryRefund !== undefined
+      && this.deps.onlinePayments.listStaleProcessingPostarRefundIds !== undefined) {
+      try {
+        const refundIds = await this.deps.onlinePayments.listStaleProcessingPostarRefundIds(
+          scope, PENDING_PAYMENT_RECONCILE_MIN_AGE_SECONDS, PENDING_PAYMENT_RECONCILE_BATCH_LIMIT,
+        )
+        for (const refundId of refundIds) {
+          const binding = `pending-refund:${refundId}:${randomUUID()}`
+          try {
+            const result = await this.deps.onlinePayments.queryRefund(scope, refundId, binding)
+            queriedRefundIds.push(refundId)
+            const observed = result.observation
+            if (!['succeeded', 'failed'].includes(observed.status)
+              || result.verifiedObservationId === null) {
+              deferredRefundIds.push(refundId)
+              continue
+            }
+            const actor = { type: 'integration' as const, ref: 'postar-refund-active-query' }
+            await this.deps.payments.recordProviderRefundResult({
+              scope,
+              actor,
+              businessDate: resolvedBusinessDate,
+              idempotencyKey: binding,
+              requestFingerprint: JSON.stringify({
+                method: 'POST', path: '/internal/refunds/provider-query',
+                tenantId: scope.tenantId, storeId: scope.storeId, actor,
+                payload: {
+                  merchantRefundId: result.merchantRefundId,
+                  providerRefundTransactionId: observed.providerRefundTransactionId,
+                  status: observed.status,
+                  amountMinor: observed.amount,
+                  currency: observed.currency,
+                },
+              }),
+              refundPublicId: result.merchantRefundId,
+              verifiedObservationId: result.verifiedObservationId,
+              provider: 'postar',
+              succeeded: observed.status === 'succeeded',
+              providerRefundId: observed.providerRefundTransactionId ?? result.merchantRefundId,
+              originalProviderTransactionId: result.originalProviderTransactionId,
+              reportedAmountMinor: observed.amount,
+              reportedCurrency: observed.currency,
+              providerSnapshot: sanitizeProviderSnapshot({
+                merchantRefundId: result.merchantRefundId,
+                providerStatus: observed.status,
+                providerReportedAmountMinor: observed.amount,
+                occurredAt: observed.occurredAt,
+                receivedAt: new Date().toISOString(),
+                ...(observed.failureReason === undefined ? {} : { failureReason: observed.failureReason }),
+              }),
+              occurredAt: observed.occurredAt,
+            })
+            terminalRefundIds.push(refundId)
+          } catch (error) {
+            if (error instanceof OnlineRefundStatusUnknownError
+              || error instanceof OnlinePaymentUnavailableError) deferredRefundIds.push(refundId)
+            else failedRefundIds.push(refundId)
+          }
+        }
+      } catch {
+        // A provider/list failure is financial follow-up only. Payment recovery
+        // and table operations below must continue independently.
       }
     }
 
@@ -231,6 +318,7 @@ export class StaleGuestImmediatePaymentWorker {
     return {
       workerId, claimed: candidates.length, queriedPaymentIds, paidPaymentIds,
       terminalAbandonedPaymentIds, unresolvedAbandonedPaymentIds, deferredPaymentIds, failedPaymentIds,
+      queriedRefundIds, terminalRefundIds, deferredRefundIds, failedRefundIds,
     }
   }
 

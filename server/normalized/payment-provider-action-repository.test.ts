@@ -18,6 +18,29 @@ const secret = 'provider-action-unit-test-secret-at-least-32-bytes'
 const expiresAt = '2099-08-13T13:05:00.000Z'
 
 describe('PaymentProviderActionRepository', () => {
+  it('lists only stale submitted Postar refunds for bounded background reconciliation', async () => {
+    let capturedSql = ''
+    let capturedValues: readonly unknown[] = []
+    const transaction = {
+      scope: { tenantId, storeId },
+      query: async (text: string, values: readonly unknown[] = []) => {
+        capturedSql = text
+        capturedValues = values
+        return { rows: [{ id: '88888888-8888-4888-8888-888888888888' }], rowCount: 1 }
+      },
+    } as unknown as ScopedTransaction
+
+    const ids = await new PaymentProviderActionRepository(transaction, secret)
+      .listStaleProcessingPostarRefundIds(15, 20)
+
+    expect(ids).toEqual(['88888888-8888-4888-8888-888888888888'])
+    expect(capturedSql).toContain("refund.status='processing'")
+    expect(capturedSql).toContain("refund.provider_submission_state IN ('submitting','submitted')")
+    expect(capturedSql).toContain("payment.provider='postar'")
+    expect(capturedSql).toContain('LIMIT $4::integer')
+    expect(capturedValues).toEqual([tenantId, storeId, 15, 20])
+  })
+
   it('resolves an existing payment in a read-only transaction without a locking clause', async () => {
     let capturedSql = ''
     const transaction = {

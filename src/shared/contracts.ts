@@ -190,6 +190,9 @@ export interface MenuProduct {
   recommendation?: MenuRecommendationConfig
   categoryId?: string
   categoryName?: string
+  /** Optional editable-catalog hierarchy used to group operational child categories. */
+  categoryParentId?: string | null
+  categoryParentName?: string | null
   description?: string
   imageUrl?: string
   tags?: string[]

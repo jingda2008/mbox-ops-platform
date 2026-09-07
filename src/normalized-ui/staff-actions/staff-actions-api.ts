@@ -73,6 +73,9 @@ export interface AssistedOrderCatalogProduct {
   code: string
   name: string
   categoryCode: string
+  categoryName?: string
+  categoryParentCode?: string | null
+  categoryParentName?: string | null
   fulfillmentStation: 'bar' | 'kitchen' | 'cashier' | 'none'
   productKind: 'single' | 'bundle'
   bundleComponents: Array<{

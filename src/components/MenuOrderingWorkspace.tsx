@@ -13,7 +13,7 @@ import {
   selectMenuRecommendationSlots,
   type MenuRecommendationContext,
 } from '../shared/menu-recommendation'
-import { guestDrinkMatchesFamily } from '../shared/menu-product-classification'
+import { guestDrinkMatchesFamily, isEligibleForGuestStyleMenu, isFoodMenuProduct } from '../shared/menu-product-classification'
 import { productAvailability } from '../shared/product-availability'
 import { GuestRecommendationTools, type GuestRecommendationContext } from './GuestRecommendationTools'
 import './MenuOrderingWorkspace.css'
@@ -126,6 +126,8 @@ interface MenuOrderingWorkspaceProps {
   submitDisabled?: boolean
   complimentaryMode?: boolean
   guestSalesMode?: boolean
+  /** The staff-assisted endpoint has already enforced staff_assisted eligibility. */
+  includeNonGuestProducts?: boolean
   partySize?: number
   recommendationScene?: MenuRecommendationScene
   cartStorageKey?: string
@@ -176,6 +178,7 @@ export function MenuOrderingWorkspace({
   submitDisabled = false,
   complimentaryMode = false,
   guestSalesMode = false,
+  includeNonGuestProducts = false,
   partySize = 1,
   recommendationScene,
   cartStorageKey,
@@ -270,8 +273,10 @@ export function MenuOrderingWorkspace({
       scene: recommendationScene,
       ...recommendationContext,
     } as MenuRecommendationContext,
-    (product) => recommendationProductIsOrderable(product, availability, guestSalesMode),
-  ), [availability, guestSalesMode, orderedProducts, partySize, recommendationContext, recommendationScene])
+    (product) => recommendationProductIsOrderable(
+      product, availability, guestSalesMode && !includeNonGuestProducts,
+    ),
+  ), [availability, guestSalesMode, includeNonGuestProducts, orderedProducts, partySize, recommendationContext, recommendationScene])
   const recommendationSlots = useMemo(
     () => selectMenuRecommendationSlots(rankedRecommendations),
     [rankedRecommendations],
@@ -281,9 +286,12 @@ export function MenuOrderingWorkspace({
     [rankedRecommendations, recommendationSlots],
   )
   const guestVisibleProducts = useMemo(() => {
+    const guestEligible = (product: MenuProduct) => (
+      isEligibleForGuestStyleMenu(product, includeNonGuestProducts)
+    )
     if (searchQuery.trim()) {
       return filterMenuProducts(
-        orderedProducts.filter((product) => product.guestVisible !== false),
+        orderedProducts.filter(guestEligible),
         'all',
         searchQuery,
       )
@@ -292,26 +300,26 @@ export function MenuOrderingWorkspace({
       return []
     }
     if (guestMenuView === 'bundles') return orderedProducts.filter((product) => (
-      product.guestVisible !== false && product.productKind === 'bundle'
+      guestEligible(product) && product.productKind === 'bundle'
     ))
     if (guestMenuView === 'drinks') return orderedProducts.filter((product) => (
-      product.guestVisible !== false
+      guestEligible(product)
       &&
       product.productKind !== 'bundle'
       && guestDrinkMatchesFamily(product, beverageFamily)
     ))
     if (guestMenuView === 'food') return orderedProducts.filter((product) => (
-      product.guestVisible !== false
-      && (product.categoryId === 'food' || product.categoryId === 'foods')
+      guestEligible(product) && isFoodMenuProduct(product)
     ))
     return filterMenuProducts(
-      orderedProducts.filter((product) => product.guestVisible !== false),
+      orderedProducts.filter(guestEligible),
       'all',
       searchQuery,
     )
   }, [
     beverageFamily,
     guestMenuView,
+    includeNonGuestProducts,
     orderedProducts,
     searchQuery,
   ])
@@ -319,7 +327,7 @@ export function MenuOrderingWorkspace({
     ? guestVisibleProducts
     : filterMenuProducts(orderedProducts, categoryId, searchQuery)
   const guestSearchableProductCount = guestSalesMode
-    ? orderedProducts.filter((product) => product.guestVisible !== false).length
+    ? orderedProducts.filter((product) => isEligibleForGuestStyleMenu(product, includeNonGuestProducts)).length
     : visibleProducts.length
   const cartProducts = orderedProducts.filter((product) => (
     (cart[product.id] ?? 0) > 0 && availability.get(product.id)?.orderable

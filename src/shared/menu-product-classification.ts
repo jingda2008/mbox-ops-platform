@@ -2,7 +2,8 @@ import type { MenuBeverageFamily, MenuProduct } from './contracts.js'
 
 type ClassifiableMenuProduct = Pick<
   MenuProduct,
-  'beverageFamily' | 'categoryId' | 'categoryName' | 'name' | 'description' | 'tags'
+  'beverageFamily' | 'categoryId' | 'categoryName' | 'categoryParentId' | 'categoryParentName'
+  | 'name' | 'description' | 'tags'
 >
 
 export function resolveMenuBeverageFamily(product: ClassifiableMenuProduct): MenuBeverageFamily {
@@ -38,4 +39,22 @@ export function isDrinkMenuProduct(product: ClassifiableMenuProduct) {
 export function guestDrinkMatchesFamily(product: ClassifiableMenuProduct, family: string) {
   if (!isDrinkMenuProduct(product)) return false
   return family === 'all' || resolveMenuBeverageFamily(product) === family
+}
+
+export function isFoodMenuProduct(product: ClassifiableMenuProduct) {
+  const categoryId = product.categoryId?.trim().toLowerCase()
+  const parentId = product.categoryParentId?.trim().toLowerCase()
+  const categoryName = product.categoryName?.trim().toLowerCase() ?? ''
+  const parentName = product.categoryParentName?.trim().toLowerCase() ?? ''
+  return parentId === 'food'
+    || parentId === 'foods'
+    || ['food', 'foods', 'snack', 'snacks', 'cold_food'].includes(categoryId ?? '')
+    || /小食|冷食|餐食|甜点|食品/.test(`${categoryName} ${parentName}`)
+}
+
+export function isEligibleForGuestStyleMenu(
+  product: Pick<MenuProduct, 'guestVisible'>,
+  includeNonGuestProducts = false,
+): boolean {
+  return includeNonGuestProducts || product.guestVisible !== false
 }

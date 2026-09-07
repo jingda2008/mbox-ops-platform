@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import {
   BarChart3,
   CalendarClock,
@@ -16,11 +16,6 @@ import {
 } from 'lucide-react'
 import { NormalizedApiClient, NormalizedApiError, type StaffAuthView } from '../normalized-api'
 import type { BusinessDayBlockerFact, BusinessDayNavigationContext } from '../shared/business-day-closure-contracts'
-import { CashierAfterSalesWorkbench } from './CashierAfterSalesWorkbench'
-import { CatalogManagementPanel } from './CatalogManagementPanel'
-import { VenueManagementPanel } from './VenueManagementPanel'
-import { StaffAccessManagementPanel } from './StaffAccessManagementPanel'
-import { CustomerPublicationPanel } from './CustomerPublicationPanel'
 import {
   CustomerExperienceManagementPanel,
   customerExperienceDashboard,
@@ -43,10 +38,28 @@ import {
   requiresMillilitreInventoryMigration,
 } from './inventory-presentation'
 import { NumberInputWithUnit } from './NumberInputWithUnit'
-import { PerformanceRevisionPanel } from './PerformanceRevisionPanel'
 import { InventoryBarcodeScanner } from './InventoryBarcodeScanner'
 import { useConfirmationDialog } from './ConfirmationDialog'
 import './staff-module-panel.css'
+
+const CashierAfterSalesWorkbench = lazy(() => import('./CashierAfterSalesWorkbench').then((module) => ({
+  default: module.CashierAfterSalesWorkbench,
+})))
+const CatalogManagementPanel = lazy(() => import('./CatalogManagementPanel').then((module) => ({
+  default: module.CatalogManagementPanel,
+})))
+const VenueManagementPanel = lazy(() => import('./VenueManagementPanel').then((module) => ({
+  default: module.VenueManagementPanel,
+})))
+const StaffAccessManagementPanel = lazy(() => import('./StaffAccessManagementPanel').then((module) => ({
+  default: module.StaffAccessManagementPanel,
+})))
+const CustomerPublicationPanel = lazy(() => import('./CustomerPublicationPanel').then((module) => ({
+  default: module.CustomerPublicationPanel,
+})))
+const PerformanceRevisionPanel = lazy(() => import('./PerformanceRevisionPanel').then((module) => ({
+  default: module.PerformanceRevisionPanel,
+})))
 
 export type StaffModule = 'payments' | 'performance' | 'inventory' | 'operations' | 'experience'
   | 'member-fulfillment' | 'member-exceptions' | 'member-overview' | 'member-rule-drafts'
@@ -503,7 +516,7 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
     </aside>}
     {phase === 'loading' && <div className="staff-module-state" role="status"><LoaderCircle className="is-spinning" /><strong>正在读取最新状态</strong></div>}
     {phase === 'error' && <div className="staff-module-state is-error" role="alert"><strong>暂时没有接上</strong><p>{message}</p><button type="button" onClick={() => void load()}>重试</button></div>}
-    {phase === 'ready' && content}
+    {phase === 'ready' && <Suspense fallback={<div className="staff-module-state" role="status"><LoaderCircle className="is-spinning" /><strong>正在打开功能页面</strong></div>}>{content}</Suspense>}
   </section>
 }
 
@@ -753,7 +766,7 @@ function PerformanceModule({ api, auth, view, performers, requests, phases, onCh
       })}
     </div>}
     <PerformanceRevisionPanel api={api} auth={auth} schedules={schedules} onChanged={onChanged} />
-    {requests.length > 0 && <section className="staff-song-requests"><h3>点歌待办</h3>{requests.slice(0, 8).map((request) => <article key={request.id}><div><strong>{request.songTitle}</strong><span>{songStatus(request.status)}</span></div>{canManage && request.status === 'requested' && <div className="staff-song-actions"><label>报价<NumberInputWithUnit inputMode="decimal" unit="元" value={quotes[request.id] ?? ''} onChange={(event) => setQuotes((current) => ({ ...current, [request.id]: event.target.value }))} placeholder="0" /></label><button type="button" disabled={busyKey !== null} onClick={() => transitionSong(request, 'confirm')}>接受</button><button type="button" className="is-danger" disabled={busyKey !== null} onClick={() => transitionSong(request, 'reject')}>拒绝</button></div>}{canManage && request.status === 'paid' && <button type="button" disabled={busyKey !== null} onClick={() => transitionSong(request, 'performed')}>已演唱</button>}{canManage && request.status === 'accepted' && <button type="button" className="is-danger" disabled={busyKey !== null} onClick={() => transitionSong(request, 'cancel')}>取消</button>}</article>)}</section>}
+    {requests.length > 0 && <section className="staff-song-requests"><h2>点歌待办</h2>{requests.slice(0, 8).map((request) => <article key={request.id}><div><strong>{request.songTitle}</strong><span>{songStatus(request.status)}</span></div>{canManage && request.status === 'requested' && <div className="staff-song-actions"><label>报价<NumberInputWithUnit inputMode="decimal" unit="元" value={quotes[request.id] ?? ''} onChange={(event) => setQuotes((current) => ({ ...current, [request.id]: event.target.value }))} placeholder="0" /></label><button type="button" disabled={busyKey !== null} onClick={() => transitionSong(request, 'confirm')}>接受</button><button type="button" className="is-danger" disabled={busyKey !== null} onClick={() => transitionSong(request, 'reject')}>拒绝</button></div>}{canManage && request.status === 'paid' && <button type="button" disabled={busyKey !== null} onClick={() => transitionSong(request, 'performed')}>已演唱</button>}{canManage && request.status === 'accepted' && <button type="button" className="is-danger" disabled={busyKey !== null} onClick={() => transitionSong(request, 'cancel')}>取消</button>}</article>)}</section>}
   </div>
 }
 
@@ -1496,10 +1509,10 @@ function DevicesModule({ api, auth, devices, jobs, bridges, routes, onChanged }:
       <label>打印份数<NumberInputWithUnit required inputMode="numeric" min={1} max={5} unit="份" value={routeCopies} onChange={(event) => setRouteCopies(event.target.value)} /></label>
       <button type="submit" disabled={busyKey !== null}>保存打印分流</button>
     </form>}
-    {routes.length > 0 && <section className="staff-song-requests"><h3>当前打印分流</h3>{routes.map((route) => <article key={route.id}><div><strong>{hardwareStationLabel(route.stationCode)} · {route.name}</strong><span>{devices.find((device) => device.id === route.printerDeviceId)?.name ?? '打印机已移除'} · {route.copies}份</span></div><div className="staff-inline-actions"><em>{route.status === 'active' ? '启用' : '暂停'}</em>{canManagePrinter && <button type="button" onClick={() => openRoute(route)}>编辑</button>}{canManagePrinter && route.status !== 'retired' && <button type="button" onClick={() => setRouteStatus(route, route.status === 'active' ? 'paused' : 'active')}>{route.status === 'active' ? '暂停' : '启用'}</button>}</div></article>)}</section>}
+    {routes.length > 0 && <section className="staff-song-requests"><h2>当前打印分流</h2>{routes.map((route) => <article key={route.id}><div><strong>{hardwareStationLabel(route.stationCode)} · {route.name}</strong><span>{devices.find((device) => device.id === route.printerDeviceId)?.name ?? '打印机已移除'} · {route.copies}份</span></div><div className="staff-inline-actions"><em>{route.status === 'active' ? '启用' : '暂停'}</em>{canManagePrinter && <button type="button" onClick={() => openRoute(route)}>编辑</button>}{canManagePrinter && route.status !== 'retired' && <button type="button" onClick={() => setRouteStatus(route, route.status === 'active' ? 'paused' : 'active')}>{route.status === 'active' ? '暂停' : '启用'}</button>}</div></article>)}</section>}
     {devices.length === 0 ? <EmptyState text="尚未配置真实打印或硬件设备" /> : <div className="staff-module-list">{devices.map((device) => <article key={device.id} className={device.connectivityStatus === 'offline' ? 'has-attention' : ''}><div><strong>{device.name}</strong><small>{device.stationCode ?? '全店'} · {hardwareType(device.deviceType)} · {device.status === 'active' ? '启用' : device.status === 'paused' ? '暂停' : '退役'}</small></div><div className="staff-inline-actions"><em>{connectivityLabel(device.connectivityStatus)}</em>{canManagePrinter && device.deviceType === 'printer' && <button type="button" disabled={busyKey !== null} onClick={() => openPrinter(device)}>编辑</button>}{canManagePrinter && device.deviceType === 'printer' && device.status !== 'retired' && <button type="button" disabled={busyKey !== null} onClick={() => setPrinterStatus(device, device.status === 'active' ? 'paused' : 'active')}>{device.status === 'active' ? '暂停' : '启用'}</button>}{canCommand && <button type="button" disabled={busyKey !== null || device.status !== 'active'} onClick={() => command(device, 'ping')}>检测</button>}{canCommand && device.connectivityStatus !== 'online' && <button type="button" disabled={busyKey !== null || device.status !== 'active'} onClick={() => command(device, 'reconnect')}>重连</button>}{canCommand && device.deviceType === 'printer' && <button type="button" disabled={busyKey !== null || device.status !== 'active'} onClick={() => command(device, 'test_print')}>测试打印</button>}</div></article>)}</div>}
-    {jobs.some((job) => job.status === 'failed' || job.status === 'dead') && <section className="staff-song-requests"><h3>打印失败待办</h3>{jobs.filter((job) => job.status === 'failed' || job.status === 'dead').map((job) => <article key={job.id}><div><strong>{job.printerName}</strong><span>{job.stationCode} · 已尝试{job.attempts}/{job.maxAttempts}次</span></div>{canRetry ? <button type="button" disabled={busyKey !== null || job.status === 'dead'} onClick={() => retry(job)}>{job.status === 'dead' ? '已停止自动重试' : '检查后重试'}</button> : <span>需打印重试权限</span>}</article>)}</section>}
-    {canReprint && jobs.some((job) => job.status === 'printed') && <section className="staff-song-requests"><h3>收工补打</h3><p className="staff-module-footnote">仅从已完成的原始快照生成一张标有“补打”的新票；请填写原因，避免把失败任务当作补打。</p>{jobs.filter((job) => job.status === 'printed').slice(0, 20).map((job) => <article key={job.id}><div><strong>{job.sourceReference}</strong><span>{hardwareStationLabel(job.stationCode)} · {job.printerName} · {formatDateTime(job.createdAt)}</span></div><button type="button" disabled={busyKey !== null} onClick={() => reprint(job)}>补打</button></article>)}</section>}
+    {jobs.some((job) => job.status === 'failed' || job.status === 'dead') && <section className="staff-song-requests"><h2>打印失败待办</h2>{jobs.filter((job) => job.status === 'failed' || job.status === 'dead').map((job) => <article key={job.id}><div><strong>{job.printerName}</strong><span>{job.stationCode} · 已尝试{job.attempts}/{job.maxAttempts}次</span></div>{canRetry ? <button type="button" disabled={busyKey !== null || job.status === 'dead'} onClick={() => retry(job)}>{job.status === 'dead' ? '已停止自动重试' : '检查后重试'}</button> : <span>需打印重试权限</span>}</article>)}</section>}
+    {canReprint && jobs.some((job) => job.status === 'printed') && <section className="staff-song-requests"><h2>收工补打</h2><p className="staff-module-footnote">仅从已完成的原始快照生成一张标有“补打”的新票；请填写原因，避免把失败任务当作补打。</p>{jobs.filter((job) => job.status === 'printed').slice(0, 20).map((job) => <article key={job.id}><div><strong>{job.sourceReference}</strong><span>{hardwareStationLabel(job.stationCode)} · {job.printerName} · {formatDateTime(job.createdAt)}</span></div><button type="button" disabled={busyKey !== null} onClick={() => reprint(job)}>补打</button></article>)}</section>}
     {jobs.some((job) => job.status === 'failed' || job.status === 'dead') && <p className="staff-module-footnote">重试前必须确认设备在线并检查是否已实际出单；已停止自动重试的任务需管理员排查，不能直接重复发送。</p>}
   </div>
 }

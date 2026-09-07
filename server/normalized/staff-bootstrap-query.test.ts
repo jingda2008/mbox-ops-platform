@@ -362,6 +362,7 @@ postgresIt('executes the compact bootstrap query against normalized PostgreSQL t
         'membership.terms.manage',
         'membership.terms.view',
         'payment.collect.all_tables',
+        'payment.initiate.staff',
         'payment.manual.external.record',
         'performance.phase.manage',
         'performance.schedule.revise',

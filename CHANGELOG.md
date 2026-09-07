@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.0.0-rc.176 - 2026-09-07
+
+- Lets staff explicitly retain an unresolved online attempt for reconciliation
+  while immediately opening another approved collection method, without a
+  synchronous provider query or fabricated failure.
+- Excludes retry-released attempts from the current-payment, table-closure and
+  expired-reservation blockers while preserving them for late-success review.
+- Preserves every confirmed money movement but prevents duplicate fulfilment,
+  sales attribution or loyalty award; refunding overcollection no longer
+  reverses benefits while the order remains fully paid.
+- Accepts StarPay pending and failed query results without a success-only
+  transaction timestamp, while keeping the timestamp mandatory for success.
+- Removes empty-cart and double-sticky customer-page overlap, restores staff
+  accessibility details and splits heavy staff routes to remove the production
+  bundle-size warning.
+- Removes an unreachable WeChat Mini Program account-page payment binding, so a
+  new native experience upload is required for this candidate.
+
 ## 1.0.0-rc.175 - 2026-09-07
 
 - Keeps the provider-close binding and normalized payment idempotency key below

@@ -224,7 +224,7 @@ export function CustomerPublicationPanel({ api, permissions }: {
   if (phase === 'error') return <div className="staff-module-state is-error" role="alert"><CircleAlert /><strong>{notice?.text ?? '顾客公开内容没有读取成功'}</strong><button type="button" onClick={() => void load()}>重新读取</button></div>
 
   return <section className="customer-publication-panel" aria-labelledby="customer-publication-title">
-    <header><div><small>顾客可见内容必须经独立复核、版本化留痕</small><h3 id="customer-publication-title">顾客公开资料与隐私政策</h3></div><button type="button" disabled={busy} onClick={() => void load(true)}><RefreshCw />刷新</button></header>
+    <header><div><small>顾客可见内容必须经独立复核、版本化留痕</small><h2 id="customer-publication-title">顾客公开资料与隐私政策</h2></div><button type="button" disabled={busy} onClick={() => void load(true)}><RefreshCw />刷新</button></header>
     {notice !== null && <p className={`customer-publication-notice is-${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'}>{notice.tone === 'success' ? <CheckCircle2 /> : <CircleAlert />}{notice.text}</p>}
 
     {canManageProfile && <form className="staff-module-form" onSubmit={(event) => void submitProfileDraft(event)}>

@@ -1350,6 +1350,7 @@
       "canReceiveTasks": false,
       "permissions": [
         "dashboard.view",
+        "payment.initiate.staff",
         "table.view_all",
         "table.manage",
         "reservation.view",
@@ -1588,6 +1589,7 @@
       "name": "副店长",
       "permissions": [
         "dashboard.view",
+        "payment.initiate.staff",
         "table.view_all",
         "table.open",
         "table.close",
@@ -1793,6 +1795,7 @@
       "name": "门迎",
       "permissions": [
         "dashboard.view",
+        "payment.initiate.staff",
         "table.open",
         "reservation.view",
         "reservation.view.all",
@@ -1822,6 +1825,7 @@
       "name": "调酒师",
       "permissions": [
         "dashboard.view",
+        "payment.initiate.staff",
         "order.view",
         "kds.prepare",
         "kds.exception.manage",
@@ -1915,6 +1919,7 @@
       "name": "后厨",
       "permissions": [
         "dashboard.view",
+        "payment.initiate.staff",
         "order.view",
         "kds.prepare",
         "kds.exception.manage",
@@ -1952,6 +1957,7 @@
       "name": "舞台运营",
       "permissions": [
         "dashboard.view",
+        "payment.initiate.staff",
         "song.view",
         "song.manage",
         "performance.phase.manage",
@@ -1974,6 +1980,7 @@
       "name": "调音灯光",
       "permissions": [
         "dashboard.view",
+        "payment.initiate.staff",
         "song.view",
         "service.view",
         "service.execute"
@@ -1994,6 +2001,7 @@
       "name": "市场运营",
       "permissions": [
         "dashboard.view",
+        "payment.initiate.staff",
         "reservation.view",
         "reservation.view.all",
         "reservation.manage",
@@ -2038,6 +2046,7 @@
       "canReceiveTasks": false,
       "permissions": [
         "dashboard.view",
+        "payment.initiate.staff",
         "reservation.view",
         "song.view"
       ],

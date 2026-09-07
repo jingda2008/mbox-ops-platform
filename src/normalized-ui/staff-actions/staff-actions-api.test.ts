@@ -358,13 +358,13 @@ describe('StaffActionsApi', () => {
     }), { status: 200, headers: { 'content-type': 'application/json' } }))
     const api = new StaffActionsApi({ fetch: send, createIdempotencyKey: () => 'query-close-key-0001' })
 
-    await api.closeUnresolvedPaymentBeforeReplacement(paymentId, '顾客未确认到账，查询并关闭原线上收款')
+    await api.releaseUnresolvedPaymentForRetry(paymentId, '顾客未确认到账，保留旧支付待核对并重新收款')
 
     const [url, request] = send.mock.calls[0]!
     expect(url).toBe(`/api/payments/${paymentId}/retry-release`)
     expect(request?.method).toBe('POST')
-    expect(new Headers(request?.headers).get('idempotency-key')).toBe(`staff-payment-query-close-${paymentId}-query-close-key-0001`)
-    expect(request?.body).toBe(JSON.stringify({ reason: '顾客未确认到账，查询并关闭原线上收款' }))
+    expect(new Headers(request?.headers).get('idempotency-key')).toBe(`staff-payment-retry-release-${paymentId}-query-close-key-0001`)
+    expect(request?.body).toBe(JSON.stringify({ reason: '顾客未确认到账，保留旧支付待核对并重新收款' }))
   })
 
   it('only reads the persisted payment outcome for the assisted order auto-refresh', async () => {

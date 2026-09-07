@@ -791,7 +791,8 @@ function assembleView(
       carryoverOrderCount: orders.filter((order) => order.carryover === true).length,
       carryoverPendingPaymentCount: paymentRows.filter((payment) => (
         payment.status === 'created' || payment.status === 'pending'
-      ) && (orderById.get(payment.order_id)?.business_date ?? input.businessDate) < input.businessDate).length,
+      ) && payment.retry_released_at === null
+        && (orderById.get(payment.order_id)?.business_date ?? input.businessDate) < input.businessDate).length,
       activityPendingPaymentCount: activityRegistrations.filter((registration) => (
         registration.status === 'payment_pending' || registration.paymentStatus === 'pending'
       )).length,

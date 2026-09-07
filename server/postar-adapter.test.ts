@@ -495,6 +495,68 @@ describe('Postar active payment query', () => {
     })
   })
 
+  it('accepts a pending query without provider orderTime and records the trusted query time', async () => {
+    const adapter = new PostarPaymentProviderAdapter(testOptions(async () => response({
+      code: '222222',
+      data: {
+        agetId: 'AGENCY001',
+        orderNo: 'POSTAR202607140001',
+        orderStatus: '2',
+        threeOrderNo: 'PaymentABC123',
+        txamt: '0',
+      },
+      msg: '支付中',
+    })))
+
+    const observation = await adapter.queryPayment({
+      merchantId: 'MERCHANT001',
+      paymentIntentId: 'PaymentABC123',
+      amount: 3000,
+      currency: 'CNY',
+      providerTransactionId: null,
+      orderDate: '20260714',
+    }, context)
+
+    expect(observation.status).toBe('processing')
+    expect(observation.occurredAt).toBe('2026-07-14T04:05:06.000Z')
+  })
+
+  it('still rejects a successful query without the provider completion time', async () => {
+    const adapter = new PostarPaymentProviderAdapter(testOptions(async () => response({
+      code: '000000',
+      data: {
+        agetId: 'AGENCY001', orderNo: 'POSTAR202607140001', orderStatus: '1',
+        threeOrderNo: 'PaymentABC123', txamt: '3000',
+      },
+      msg: '交易成功',
+    })))
+
+    await expect(adapter.queryPayment({
+      merchantId: 'MERCHANT001', paymentIntentId: 'PaymentABC123', amount: 3000,
+      currency: 'CNY', providerTransactionId: null, orderDate: '20260714',
+    }, context)).rejects.toThrow('缺少支付完成时间')
+  })
+
+  it('accepts a failed query without provider orderTime without inventing a success fact', async () => {
+    const adapter = new PostarPaymentProviderAdapter(testOptions(async () => response({
+      code: '555555',
+      data: {
+        agetId: 'AGENCY001', orderNo: 'POSTAR202607140001', orderStatus: '99',
+        threeOrderNo: 'PaymentABC123', txamt: '0',
+      },
+      msg: '支付失败',
+    })))
+
+    const observation = await adapter.queryPayment({
+      merchantId: 'MERCHANT001', paymentIntentId: 'PaymentABC123', amount: 3000,
+      currency: 'CNY', providerTransactionId: null, orderDate: '20260714',
+    }, context)
+
+    expect(observation).toMatchObject({
+      status: 'failed', providerReportedAmount: 0, occurredAt: '2026-07-14T04:05:06.000Z',
+    })
+  })
+
   it('rejects a successful provider query whose amount differs from the bound payment', async () => {
     const adapter = new PostarPaymentProviderAdapter(testOptions(async () => response({
       code: '000000',

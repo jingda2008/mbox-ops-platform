@@ -186,7 +186,7 @@ describe('CashierAfterSalesWorkbenchView', () => {
     expect(html).toContain('登记现金收款')
   })
 
-  it('keeps a presented online attempt visible until staff explicitly releases it after no clear success', () => {
+  it('keeps a presented online attempt visible while offering an explicit non-blocking retry release', () => {
     const pending = payment('postar', [])
     pending.status = 'pending'
     pending.succeededAt = null
@@ -195,11 +195,30 @@ describe('CashierAfterSalesWorkbenchView', () => {
     view.orders[0]!.paymentStatus = 'unpaid'
     view.orders[0]!.outstandingAmountMinor = 6_800
     const html = render(view)
-    expect(html).toContain('已有线上支付')
-    expect(html).toContain('查单并关闭后改收款')
-    expect(html).toContain('渠道结果未知、已成功或关单失败时')
+    expect(html).toContain('尚无明确结果')
+    expect(html).toContain('保留旧单待核对，继续收款')
+    expect(html).toContain('不会被标记为失败')
+    expect(html).toContain('溢收')
     expect(html).toContain('查询渠道结果')
     expect(html).not.toContain('登记现金收款</button>')
+  })
+
+  it('keeps a retry-released payment visible for audit without blocking another collection', () => {
+    const released = payment('postar', [])
+    released.status = 'pending'
+    released.succeededAt = null
+    released.providerActionState = 'ready'
+    released.retryReleasedAt = '2026-08-13T12:03:00.000Z'
+    released.retryReleaseReason = '顾客未确认到账，保留原支付待核对并重新收款'
+    const view = workbench([released])
+    view.orders[0]!.paymentStatus = 'unpaid'
+    view.orders[0]!.outstandingAmountMinor = 6_800
+
+    const html = render(view)
+    expect(html).toContain('PAYMENT-postar')
+    expect(html).toContain('出示付款二维码')
+    expect(html).toContain('登记现金收款')
+    expect(html).not.toContain('保留旧单待核对，继续收款')
   })
 
   it('keeps every remaining late activity payment visible as a collection blocker and lets terminal refund attempts be requested again', () => {
@@ -489,6 +508,8 @@ function payment(
     method: provider === 'cash' ? 'cash' : provider === 'physical_pos' ? 'card' : provider === 'external_manual' ? 'manual' : 'native_qr',
     providerTransactionId: `TX-${provider}`,
     providerActionState: provider === 'postar' || provider === 'wechat' ? 'consumed' : null,
+    retryReleasedAt: null,
+    retryReleaseReason: null,
     amountMinor: 6_800,
     currency: 'CNY',
     status: 'succeeded',

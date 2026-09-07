@@ -222,7 +222,4 @@ Page({
     return '如需付款，请返回点单重新选购'
   },
 
-  continuePayment() {
-    this.setData({ error: '支付宝在线支付后端适配尚未接通；历史订单不会在这里重新发起付款。' })
-  },
 })

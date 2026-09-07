@@ -65,7 +65,7 @@ describe('PaymentRepository', () => {
     expect(transaction.calls).toHaveLength(2)
   })
 
-  it('keeps a legacy unresolved-payment release auditable without treating it as a safe replacement collection', async () => {
+  it('keeps a released unresolved payment auditable while removing it from the active pending lock', async () => {
     const releasedAt = '2026-08-11T12:02:00.000Z'
     const transaction = new ScriptedTransaction([
       rows([paymentRow('pending', 8800)]),
@@ -93,7 +93,7 @@ describe('PaymentRepository', () => {
     expect(transaction.calls[3]?.values.slice(3)).toEqual([
       employeeId, '顾客未确认到账，改用另一种方式收款', 'payment-retry-release-0001',
     ])
-    expect(transaction.calls[5]?.sql).not.toContain('p.retry_released_at IS NULL')
+    expect(transaction.calls[5]?.sql).toContain('p.retry_released_at IS NULL')
   })
 
   it('derives the payment amount only from the locked order and existing database settlement', async () => {

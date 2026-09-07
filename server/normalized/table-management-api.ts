@@ -333,6 +333,7 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
           WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid
             AND payment.order_id=ANY(SELECT id FROM scoped_orders)
             AND payment.status IN ('created','pending')
+            AND payment.retry_released_at IS NULL
             AND NOT EXISTS (
               SELECT 1 FROM scoped_orders cancelled_order
               WHERE cancelled_order.id=payment.order_id AND cancelled_order.status='cancelled'

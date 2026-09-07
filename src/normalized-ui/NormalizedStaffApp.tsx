@@ -1,17 +1,22 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { ArrowLeft, ArrowRight, KeyRound, LoaderCircle, LogOut, Repeat2, ShieldCheck, UserRound, X } from 'lucide-react'
 import { NormalizedApiClient, NormalizedApiError, type StaffAuthView } from '../normalized-api'
 import type { StaffBootstrapView } from '../shared/normalized-contracts'
 import type { BusinessDayNavigationContext } from '../shared/business-day-closure-contracts'
 import { NormalizedStaffWorkspace, StaffBottomNavigation } from './NormalizedStaffWorkspace'
-import { StaffModulePanel } from './StaffModulePanel'
-import { StaffActionsPanel } from './staff-actions'
 import type { StaffActionsTab } from './staff-actions/types'
 import { normalizedStaffNavigationCode, normalizedStaffRoute, type NormalizedStaffRoute } from './normalized-staff-routes'
 import { bootstrapForAuthenticatedStaff, staffWorkspaceIdentityKey } from './staff-workspace-identity'
 import { clearDeviceLease, getOrCreateDeviceKey, hasUsableDeviceLease, saveDeviceLease } from './staff-device'
 import staffLogo from './assets/mbox-logo-badge.png'
 import './normalized-staff-login.css'
+
+const StaffActionsPanel = lazy(() => import('./staff-actions').then((module) => ({
+  default: module.StaffActionsPanel,
+})))
+const StaffModulePanel = lazy(() => import('./StaffModulePanel').then((module) => ({
+  default: module.StaffModulePanel,
+})))
 
 export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiClient }) {
   const api = useMemo(() => suppliedApi ?? new NormalizedApiClient(), [suppliedApi])
@@ -164,17 +169,17 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
       {staffNavigation === null ? <StaffGateLoading /> : !staffNavigation.some((item) => item.code === normalizedStaffNavigationCode(window.location.pathname))
         ? <div className="normalized-route-notice" role="alert">当前账号没有这个页面的有效权限。请由管理员授权后刷新；直接输入页面地址不会绕过权限。</div>
         : isStaffActionsTab(staffRoute)
-        ? <StaffActionsPanel
+        ? <Suspense fallback={<StaffGateLoading />}><StaffActionsPanel
             initialTab={staffRoute}
             initialTableSessionId={new URLSearchParams(window.location.search).get('tableSessionId')}
             initialFactId={new URLSearchParams(window.location.search).get('factId')}
             initialFocus={new URLSearchParams(window.location.search).get('focus')}
             onLoginRequired={loginRequired}
             onNavigate={navigate}
-          />
-        : <StaffModulePanel key={staffWorkspaceIdentityKey(auth)} api={api} auth={auth} module={staffRoute}
+          /></Suspense>
+        : <Suspense fallback={<StaffGateLoading />}><StaffModulePanel key={staffWorkspaceIdentityKey(auth)} api={api} auth={auth} module={staffRoute}
             initialBlockerFact={businessDayBlockerFactFromHistory(window.history.state)}
-            onLoginRequired={loginRequired} onNavigate={navigate} />}
+            onLoginRequired={loginRequired} onNavigate={navigate} /></Suspense>}
     </main>
   ) : (<>
       {message !== null && <p className="normalized-route-notice" role="status">{message}</p>}

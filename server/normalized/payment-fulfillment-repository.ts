@@ -352,6 +352,7 @@ export class PaymentFulfillmentRepository {
         SELECT 1 FROM mbox.payments
         WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND order_id = $3::uuid
           AND status IN ('created', 'pending')
+          AND retry_released_at IS NULL
       ) AS exists
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
     return result.rows[0]?.exists === true

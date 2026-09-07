@@ -688,7 +688,7 @@ export function MenuOrderingWorkspace({
   const upgradeSourceProduct = orderedProducts.find((product) => product.id === upgradeSourceProductId) ?? null
 
   return (
-    <section className={`menu-ordering-workspace${compactCart ? ' has-compact-cart' : ''}${deemphasizeCollapsedTotal ? ' has-gentle-cart-summary' : ''}${guestSalesMode ? ' is-guest-sales' : ''}${cartReadOnly ? ' is-cart-read-only' : ''}`}>
+    <section className={`menu-ordering-workspace${compactCart && itemCount > 0 ? ' has-compact-cart' : ''}${deemphasizeCollapsedTotal ? ' has-gentle-cart-summary' : ''}${guestSalesMode ? ' is-guest-sales' : ''}${cartReadOnly ? ' is-cart-read-only' : ''}`}>
       <header className="menu-workspace-header">
         <div>
           <span>当前桌台</span>
@@ -929,7 +929,7 @@ export function MenuOrderingWorkspace({
               </footer>
             </aside>
           )}
-          <aside className={`menu-cart-dock${itemCount === 0 ? ' is-empty' : ''}`} aria-label="订单结算">
+          {itemCount > 0 && <aside className="menu-cart-dock" aria-label="订单结算">
             <button
               className="menu-cart-summary"
               type="button"
@@ -947,7 +947,7 @@ export function MenuOrderingWorkspace({
             <button className="menu-submit-button" disabled={cartProducts.length === 0 || checkoutBusy || submitDisabled} onClick={() => setCartOpen(true)}>
               {cartMutating ? '正在同步' : submitDisabled ? submitLabel : '查看已选'}<ChevronRight size={18} />
             </button>
-          </aside>
+          </aside>}
         </> : (
           <aside className="menu-cart-panel">
             <div className="menu-cart-heading"><ShoppingCart size={20} /><strong>已选商品</strong><span>{itemCount} 件</span></div>

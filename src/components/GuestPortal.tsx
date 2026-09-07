@@ -610,7 +610,7 @@ export function GuestPortal() {
   }
 
   return (
-    <main className="guest-shell">
+    <main className="guest-shell guest-shell-menu">
       <header className="guest-header">
         <div className="guest-brand-lockup">
           <img src="/brand/superhigh-horizontal.png" alt="SUPERHIGH" />

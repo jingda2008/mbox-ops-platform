@@ -949,21 +949,28 @@ export class PaymentCommandService {
         const payments = new PaymentRepository(transaction)
         if (refund.orderId === null) await payments.syncActivityRegistrationRefundStatus(refund.paymentId)
         else {
-          await new RecommendationFinancialAttributionRepository(transaction).recordRefundedForOrder({
-            refundId: refund.id,
-            paymentId: refund.paymentId,
-            orderId: refund.orderId,
-            actorRef: `refund:${refund.id}`,
-          })
-          await new LoyaltyAccrualRepository(transaction).reverseSucceededRefund({
-            refundId: refund.id,
-            paymentId: refund.paymentId,
-            orderId: refund.orderId,
-            occurredAt: input.occurredAt,
-          })
-          await payments.syncOrderPaymentStatus(refund.orderId)
-          await new ExperiencePlanActivationRepository(transaction)
-            .cancelAfterFullRefund(refund.orderId,refund.paymentId)
+          const orderPaymentStatus = await payments.syncOrderPaymentStatus(refund.orderId)
+          // Returning an overcollection leaves the order fully paid.  The
+          // payment/refund ledgers still record both money movements, but the
+          // sale, recommendation, loyalty and experience facts must remain a
+          // single fulfilled order regardless of which duplicate payment was
+          // chosen for the refund.
+          if (orderPaymentStatus !== 'paid') {
+            await new RecommendationFinancialAttributionRepository(transaction).recordRefundedForOrder({
+              refundId: refund.id,
+              paymentId: refund.paymentId,
+              orderId: refund.orderId,
+              actorRef: `refund:${refund.id}`,
+            })
+            await new LoyaltyAccrualRepository(transaction).reverseSucceededRefund({
+              refundId: refund.id,
+              paymentId: refund.paymentId,
+              orderId: refund.orderId,
+              occurredAt: input.occurredAt,
+            })
+            await new ExperiencePlanActivationRepository(transaction)
+              .cancelAfterFullRefund(refund.orderId,refund.paymentId)
+          }
         }
       }
       return refundOutcome(
@@ -1018,21 +1025,23 @@ export class PaymentCommandService {
         const payments = new PaymentRepository(transaction)
         if (refund.orderId === null) await payments.syncActivityRegistrationRefundStatus(refund.paymentId)
         else {
-          await new RecommendationFinancialAttributionRepository(transaction).recordRefundedForOrder({
-            refundId: refund.id,
-            paymentId: refund.paymentId,
-            orderId: refund.orderId,
-            actorRef: `refund:${refund.id}`,
-          })
-          await new LoyaltyAccrualRepository(transaction).reverseSucceededRefund({
-            refundId: refund.id,
-            paymentId: refund.paymentId,
-            orderId: refund.orderId,
-            occurredAt,
-          })
-          await payments.syncOrderPaymentStatus(refund.orderId)
-          await new ExperiencePlanActivationRepository(transaction)
-            .cancelAfterFullRefund(refund.orderId,refund.paymentId)
+          const orderPaymentStatus = await payments.syncOrderPaymentStatus(refund.orderId)
+          if (orderPaymentStatus !== 'paid') {
+            await new RecommendationFinancialAttributionRepository(transaction).recordRefundedForOrder({
+              refundId: refund.id,
+              paymentId: refund.paymentId,
+              orderId: refund.orderId,
+              actorRef: `refund:${refund.id}`,
+            })
+            await new LoyaltyAccrualRepository(transaction).reverseSucceededRefund({
+              refundId: refund.id,
+              paymentId: refund.paymentId,
+              orderId: refund.orderId,
+              occurredAt,
+            })
+            await new ExperiencePlanActivationRepository(transaction)
+              .cancelAfterFullRefund(refund.orderId,refund.paymentId)
+          }
         }
       }
       return refundOutcome(

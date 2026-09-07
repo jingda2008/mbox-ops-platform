@@ -138,6 +138,11 @@ body {
   border-bottom-color: #c9cdc6;
 }
 
+.guest-shell-menu > .guest-header {
+  position: relative;
+  top: auto;
+}
+
 .guest-brand-lockup {
   min-width: 0;
   display: flex;

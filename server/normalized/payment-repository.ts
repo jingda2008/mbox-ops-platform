@@ -283,6 +283,7 @@ export class PaymentRepository {
         AND payment.order_id = $3::uuid
         AND payment.provider IN ('wechat', 'postar')
         AND payment.status IN ('created', 'pending')
+        AND payment.retry_released_at IS NULL
       ORDER BY payment.created_at, payment.id
       FOR UPDATE OF payment
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
@@ -1338,7 +1339,7 @@ export class PaymentRepository {
             AND r.status = 'succeeded'
         ), 0)::text AS refunded_minor,
         COALESCE(BOOL_OR(
-          p.status IN ('created', 'pending')
+          p.status IN ('created', 'pending') AND p.retry_released_at IS NULL
         ), false) AS has_pending
       FROM mbox.payments AS p
       WHERE p.tenant_id = $1::uuid

@@ -333,7 +333,7 @@ export interface StaffActionsApiPort {
     signal?: AbortSignal,
   ): Promise<'pending' | 'succeeded' | 'failed' | 'closed'>
   queryOnlinePayment(paymentId: string): Promise<'pending' | 'succeeded' | 'failed' | 'closed'>
-  closeUnresolvedPaymentBeforeReplacement(paymentId: string, reason: string): Promise<void>
+  releaseUnresolvedPaymentForRetry(paymentId: string, reason: string): Promise<void>
   parseObservation(input: Readonly<{
     tableSessionId: string
     rawContent: string
@@ -760,12 +760,12 @@ export class StaffActionsApi implements StaffActionsApiPort {
     return status
   }
 
-  async closeUnresolvedPaymentBeforeReplacement(paymentId: string, reason: string): Promise<void> {
+  async releaseUnresolvedPaymentForRetry(paymentId: string, reason: string): Promise<void> {
     await this.command(
       `/api/payments/${encodeURIComponent(paymentId)}/retry-release`,
       { reason },
       'idempotency-key',
-      `staff-payment-query-close-${paymentId}-${this.createIdempotencyKey()}`,
+      `staff-payment-retry-release-${paymentId}-${this.createIdempotencyKey()}`,
     )
   }
 

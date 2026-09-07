@@ -89,10 +89,13 @@ test('customer pages avoid duplicate status labels and backstage implementation 
 })
 
 test('customer self-checkout never revives an unpaid order after the final payment sheet ends', async () => {
-  const [orderLogic, orderView, accountLogic] = await Promise.all([
+  const [orderLogic, orderView, accountLogic, accountView, alipayAccountLogic, alipayAccountView] = await Promise.all([
     read('miniprogram/pages/order/index.js'),
     read('miniprogram/pages/order/index.wxml'),
     read('miniprogram/pages/account/index.js'),
+    read('miniprogram/pages/account/index.wxml'),
+    read('alipay-miniprogram/pages/account/index.js'),
+    read('alipay-miniprogram/pages/account/index.axml'),
   ])
 
   assert.match(orderLogic, /async handlePendingPaymentBeforeCheckout\(\)/)
@@ -105,6 +108,9 @@ test('customer self-checkout never revives an unpaid order after the final payme
   assert.match(accountLogic, /canPay: false/)
   assert.match(accountLogic, /如需付款，请返回点单重新选购/)
   assert.doesNotMatch(accountLogic, /async continuePayment\(/)
+  assert.doesNotMatch(accountView, /bindtap="continuePayment"/)
+  assert.doesNotMatch(alipayAccountLogic, /continuePayment\(/)
+  assert.doesNotMatch(alipayAccountView, /onTap="continuePayment"/)
 })
 
 test('activity cards are horizontal brand-green surfaces and profile actions expose their destinations', async () => {

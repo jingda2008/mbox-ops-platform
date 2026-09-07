@@ -25,7 +25,6 @@
           </view>
           <view class="payment-line">
             <text class="payment-line__hint">{{item.paymentHint}}</text>
-            <button a:if="{{item.canPay}}" class="payment-line__button" loading="{{busyOrderId === item.publicId}}" disabled="{{!!busyOrderId}}" data-id="{{item.publicId}}" onTap="continuePayment">继续支付</button>
           </view>
           <view a:for="{{item.items}}" a:for-item="product" a:key="key" class="list-row">
             <view class="list-row__main"><text class="list-row__title">{{product.name}} ×{{product.quantity}}</text><text class="list-row__meta">{{product.statusText}}</text></view>

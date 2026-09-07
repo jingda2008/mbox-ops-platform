@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Clock3, UsersRound } from 'lucide-react'
 import type { NormalizedApiClient, StaffAuthView } from '../normalized-api'
 import { useConfirmationDialog } from './ConfirmationDialog'
@@ -335,7 +335,7 @@ function TierBenefitPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth:
   const [busy, setBusy] = useState('')
   const [notice, setNotice] = useState('')
 
-  async function load() {
+  const load = useCallback(async () => {
     if (!canRead) return
     try {
       const response = await api.getEndpoint<{ data: TierBenefitConfigurationView }>('/api/staff/loyalty/tier-benefits')
@@ -347,9 +347,9 @@ function TierBenefitPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth:
           || response.data.definitions.find((item) => item.status === 'active')?.id || '',
       }))
     } catch (error) { setNotice(error instanceof Error ? error.message : '等级权益配置暂时无法读取') }
-  }
+  }, [api, canRead])
 
-  useEffect(() => { void load() }, [canRead])
+  useEffect(() => { void load() }, [load])
   if (!canView && !canManage && !canApprove && !canPublish) return null
 
   function addRule() {
@@ -458,15 +458,15 @@ function MembershipTermsManagementPanel({ api, auth }: { api: NormalizedApiClien
   const [busy, setBusy] = useState('')
   const [notice, setNotice] = useState('')
 
-  async function load() {
+  const load = useCallback(async () => {
     if (!canView) return
     try {
       const response = await api.getEndpoint<{ data: MembershipTermsVersionView[] }>('/api/staff/membership-terms')
       setVersions(Array.isArray(response.data) ? response.data : [])
     } catch (error) { setNotice(error instanceof Error ? error.message : '入会条款暂时无法读取') }
-  }
+  }, [api, canView])
 
-  useEffect(() => { void load() }, [canView])
+  useEffect(() => { void load() }, [load])
   if (!canView && !canManage && !canApprove && !canPublish) return null
 
   async function createDraft(event: FormEvent) {
@@ -554,15 +554,15 @@ function MembershipRecoveryPanel({ api, auth }: { api: NormalizedApiClient; auth
   const [busy, setBusy] = useState('')
   const [notice, setNotice] = useState('')
 
-  async function load() {
+  const load = useCallback(async () => {
     if (!canVerify && !canApprove) return
     try {
       const response = await api.getEndpoint<{ data: MembershipRecoveryCaseView[] }>('/api/staff/membership-recovery/cases')
       setCases(response.data)
     } catch (error) { setNotice(error instanceof Error ? error.message : '会员找回队列暂时无法读取') }
-  }
+  }, [api, canApprove, canVerify])
 
-  useEffect(() => { void load() }, [canVerify, canApprove])
+  useEffect(() => { void load() }, [load])
   if (!canVerify && !canApprove) return null
 
   async function saveVerifiedContact(event: FormEvent) {
@@ -689,7 +689,7 @@ function LoyaltyTierAndRedemptionPanel({ api, auth }: { api: NormalizedApiClient
     availableFrom: '', availableUntil: '', description: '', reason: '',
   })
 
-  async function load() {
+  const load = useCallback(async () => {
     try {
       const [tierResponse, configurationResponse, productResponse, pendingResponse] = await Promise.all([
         (canView
@@ -710,9 +710,9 @@ function LoyaltyTierAndRedemptionPanel({ api, auth }: { api: NormalizedApiClient
       setProducts(redemptionProducts(productResponse.data))
       setPending(Array.isArray(pendingResponse.data) ? pendingResponse.data : [])
     } catch (error) { setNotice(error instanceof Error ? error.message : '等级与兑换配置读取失败') }
-  }
+  }, [api, canManageCatalog, canReadConfiguration, canReadPending, canView])
 
-  useEffect(() => { void load() }, [canView, canManageCatalog, canReadConfiguration, canReadPending])
+  useEffect(() => { void load() }, [load])
   if (!canView && !canManage && !canApprove && !canPublish && !canManageCatalog
     && !canApproveCatalog && !canPublishCatalog && !canControl && !canFulfill && !canHandleException) return null
 
@@ -968,7 +968,7 @@ function LoyaltyPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth: Sta
     roundingMode: 'floor', pointsValidityMonths: '18', reason: '',
   })
 
-  async function load() {
+  const load = useCallback(async () => {
     try {
       const [policyResponse, reconciliationResponse, supplementResponse] = await Promise.all([
         canRead
@@ -985,9 +985,9 @@ function LoyaltyPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth: Sta
       setReconciliation(Array.isArray(reconciliationResponse.data) ? reconciliationResponse.data : [])
       setSupplements(Array.isArray(supplementResponse.data) ? supplementResponse.data : [])
     } catch (error) { setNotice(error instanceof Error ? error.message : '会员规则读取失败') }
-  }
+  }, [api, canRead, canViewExceptions])
 
-  useEffect(() => { void load() }, [canRead, canViewExceptions])
+  useEffect(() => { void load() }, [load])
   if (!canView && !canManage && !canApprove && !canPublish && !canViewExceptions) return null
 
   async function draft(event: FormEvent) {

@@ -1960,13 +1960,15 @@ async function createGuestProviderAction(
       jsapiPayWay: paymentMode === 'alipay_jsapi' ? 'alipay' : 'wechat',
     })
   } catch (error) {
-    if (error instanceof PostarPaymentRejectedError) return unavailablePaymentAction(payment, orderPublicId, 'failed')
+    if (error instanceof PostarPaymentRejectedError) {
+      return unavailablePaymentAction(payment, orderPublicId, 'failed', paymentFailureCode(error))
+    }
     // The order/payment command already committed before this external call.
     // Return a typed failed presentation, rather than an opaque 5xx that
     // hides the order identifier and prevents the Mini Program from releasing
     // its own cancelled checkout.
     if (error instanceof OnlinePaymentUnavailableError) {
-      return unavailablePaymentAction(payment, orderPublicId, 'failed')
+      return unavailablePaymentAction(payment, orderPublicId, 'failed', 'configuration_unavailable')
     }
     // The identity is preflighted before checkout, but it can still be
     // revoked between the committed order and the provider action request.
@@ -1974,7 +1976,7 @@ async function createGuestProviderAction(
     // public order id and let the normal abandonment path release it.
     if (error instanceof WechatPaymentIdentityRequiredError
       || error instanceof AlipayPaymentIdentityRequiredError) {
-      return unavailablePaymentAction(payment, orderPublicId, 'failed')
+      return unavailablePaymentAction(payment, orderPublicId, 'failed', 'identity_rejected')
     }
     if (error instanceof ProviderPaymentInProgressError) return unavailablePaymentAction(payment, orderPublicId, 'pending')
     if (error instanceof ProviderPaymentUnknownError || error instanceof OnlinePaymentUnknownError) {
@@ -1988,6 +1990,7 @@ function unavailablePaymentAction(
   payment: Payment,
   orderPublicId: string,
   status: Extract<OnlinePaymentAction['status'], 'pending' | 'unknown' | 'failed'>,
+  failureCode?: OnlinePaymentAction['failureCode'],
 ): OnlinePaymentAction {
   const presentation = payment.method === 'jsapi' ? 'jsapi'
     : payment.method === 'auth_code' ? 'barcode'
@@ -2000,7 +2003,21 @@ function unavailablePaymentAction(
     presentation,
     expiresAt: new Date().toISOString(),
     payload: null,
+    ...(failureCode === undefined ? {} : { failureCode }),
   }
+}
+
+function paymentFailureCode(error: Readonly<PostarPaymentRejectedError>): OnlinePaymentAction['failureCode'] {
+  if (error.reason === 'IP_RISK_REJECTED') return 'network_rejected'
+  if (error.reason === 'APPID_OPENID_MISMATCH' || error.reason === 'OPENID_INVALID') {
+    return 'identity_rejected'
+  }
+  if (error.reason === 'MERCHANT_APPID_NOT_LINKED'
+    || error.reason === 'MERCHANT_VERIFICATION_REQUIRED'
+    || error.reason === 'MINIPROGRAM_PAYMENT_RESTRICTED') {
+    return 'configuration_unavailable'
+  }
+  return 'provider_rejected'
 }
 
 function checkoutResponse(

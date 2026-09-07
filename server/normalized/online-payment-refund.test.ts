@@ -180,6 +180,7 @@ describe('OnlinePaymentService provider refund closure', () => {
       status: 'processing' as const, amount: 2_000, currency: 'CNY',
       occurredAt: '2026-08-16T12:01:00.000Z',
     }))
+    const recorder = observationRecorder()
     const service = new OnlinePaymentService(
       runner(new RefundTransaction(false, {
         created_at: '2026-08-14T03:00:00.000Z',
@@ -187,19 +188,21 @@ describe('OnlinePaymentService provider refund closure', () => {
         provider_snapshot: { channel: 'wechat', occurredAt: '2026-08-15T03:00:00.000Z' },
       })), 'test-secret-at-least-thirty-two-bytes', secrets,
       { createPayment: vi.fn(), queryPayment: vi.fn(), requestRefund: vi.fn(), queryRefund } as never,
-      observationRecorder(),
+      recorder,
     )
 
-    await service.queryRefund(scope, refundId, 'refund-query-binding-0001')
+    const result = await service.queryRefund(scope, refundId, 'refund-query-binding-0001')
 
     expect(queryRefund).toHaveBeenCalledWith(expect.objectContaining({ refundDate: '20260816' }), expect.anything())
+    expect(result.verifiedObservationId).toBeNull()
+    expect(recorder.recordRefund).not.toHaveBeenCalled()
   })
 
   it('binds each active refund query attempt to its idempotency key', async () => {
     const queryRefund = vi.fn(async () => ({
       refundId: merchantRefundId, providerRefundId: merchantRefundId,
       providerRefundTransactionId: null, originalProviderTransactionId: 'POSTAR-PAYMENT-001',
-      status: 'processing' as const, amount: 2_000, currency: 'CNY',
+      status: 'succeeded' as const, amount: 2_000, currency: 'CNY',
       occurredAt: '2026-08-16T12:01:00.000Z',
     }))
     const recorder = observationRecorder()

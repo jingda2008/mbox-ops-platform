@@ -56,6 +56,7 @@ describe('OperationsQueryService', () => {
         financial_state: 'refund_pending', order_count: 2, unpaid_order_count: 0,
         pending_payment_count: 0, refund_attention_count: 1,
         refund_action_count: 0, refund_processing_count: 1,
+        order_amount_minor: '13600',
         session_status: 'open', opened_at: '2026-08-11T12:00:00.000Z',
       }], rowCount: 1 },
       { rows: [{
@@ -83,6 +84,7 @@ describe('OperationsQueryService', () => {
       refundAttentionCount: 1,
       refundActionCount: 0,
       refundProcessingCount: 1,
+      orderAmountMinor: 13600,
     })
     expect(view.tasks[0]).toMatchObject({
       tableCode: 'VIP1', title: '加水', assignedToActor: true, interactionMode: 'quick_complete',

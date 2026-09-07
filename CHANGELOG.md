@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.0.0-rc.179 - 2026-09-08
+
+- Persists payment and refund provider-query schedules, leases and outcomes so
+  process restarts or concurrent workers cannot reset financial backoff.
+- Moves operationally released payments through 5-minute, 15-minute, hourly
+  and daily follow-up without blocking tables or alternative collection, then
+  requires finance review after a conservative seven-day observation window.
+- Stops appending immutable provider observations for unchanged pending or
+  processing results while retaining verified terminal facts and callbacks.
+- Classifies StarPay JSAPI IP-risk rejection separately, stores only a masked
+  network diagnostic and gives guests and staff explicit alternate-payment
+  guidance; every retry remains a distinct payment attempt and merchant ID.
+- Adds financial monitoring signals for long processing, excessive queries,
+  missing reconciliation, overcollection, IP rejection and late-capture refund
+  follow-up without making metrics or provider latency part of readiness.
+- Adds visible desktop new-order/service notices, an audited manager batch path
+  for verified historical KDS carryover and current ordered amount on table
+  cards. It deliberately does not auto-open a table from an unauthenticated QR
+  scan or invent an electronic parking ticket without a parking-system contract.
+- Updates the native WeChat Mini Program payment-result copy for network,
+  identity, configuration and general provider rejection, requiring a new
+  experience-version upload.
+
 ## 1.0.0-rc.178 - 2026-09-07
 
 - Restores snacks and cold-food child categories in staff-assisted ordering by

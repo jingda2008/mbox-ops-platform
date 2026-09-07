@@ -233,6 +233,11 @@ export class ActivityPaymentService {
     idempotencyKey: string,
   ): Promise<PublicActivityPaymentState> {
     const observed = queried.observation
+    if (queried.verifiedObservationId === null) {
+      return this.transactions.run(context.scope, async (transaction) => view(
+        await ownedActivityPayment(transaction, context.customerId, registrationPublicId),
+      ), { readOnly: true })
+    }
     const actor: AuditActor = { type: 'integration', ref: 'postar-active-query' }
     const providerSnapshot: JsonObject = {
       providerStatus: observed.status,

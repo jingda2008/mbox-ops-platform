@@ -26,6 +26,9 @@ export interface ProviderPaymentContext {
   createdAt: string
 }
 
+export type AutomaticPaymentQueryOutcome = 'processing' | 'error' | 'terminal'
+export type AutomaticRefundQueryOutcome = 'processing' | 'error' | 'terminal'
+
 export type PaymentPrincipal =
   | { type: 'employee'; employeeId: string }
   | { type: 'guest'; tableSessionId: string | null; customerId: string; guestSessionId?: string }
@@ -216,110 +219,332 @@ export class PaymentProviderActionRepository {
     minAgeSeconds: number,
     limit: number,
   ): Promise<string[]> {
+    await this.seedAutomaticReconciliationStates(false, minAgeSeconds)
     const result = await this.transaction.query<{ id: string }>(`
-      SELECT payment.id
+      WITH due AS (
+        SELECT state.payment_id
+        FROM mbox.payment_reconciliation_states state
+        JOIN mbox.payments payment
+          ON payment.tenant_id=state.tenant_id AND payment.store_id=state.store_id
+         AND payment.id=state.payment_id
+        WHERE state.tenant_id=$1::uuid AND state.store_id=$2::uuid
+          AND state.phase<>'stopped'
+          AND state.next_query_at<=clock_timestamp()
+          AND (state.lease_until IS NULL OR state.lease_until<clock_timestamp())
+          AND payment.provider='postar' AND payment.status IN ('created','pending')
+          AND payment.created_at<=clock_timestamp()-make_interval(secs=>$3::integer)
+          AND NOT EXISTS (
+            SELECT 1 FROM mbox.orders ordering
+            WHERE ordering.tenant_id=payment.tenant_id AND ordering.store_id=payment.store_id
+              AND ordering.id=payment.order_id AND ordering.channel='guest_qr'
+              AND ordering.settlement_mode='immediate_payment' AND payment.method='jsapi'
+          )
+        ORDER BY state.next_query_at,payment.created_at,payment.id
+        FOR UPDATE OF state SKIP LOCKED
+        LIMIT $4::integer
+      )
+      UPDATE mbox.payment_reconciliation_states state
+      SET last_queried_at=clock_timestamp(),lease_until=clock_timestamp()+interval '2 minutes',
+        total_query_count=state.total_query_count+1,updated_at=clock_timestamp()
+      FROM due
+      WHERE state.payment_id=due.payment_id
+      RETURNING state.payment_id AS id
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, minAgeSeconds, limit])
+    return result.rows.map((row) => row.id)
+  }
+
+  private async seedAutomaticReconciliationStates(
+    guestImmediate: boolean,
+    minAgeSeconds: number,
+  ): Promise<void> {
+    await this.transaction.query(`
+      INSERT INTO mbox.payment_reconciliation_states(
+        payment_id,tenant_id,store_id,phase,next_query_at,released_at
+      )
+      SELECT payment.id,payment.tenant_id,payment.store_id,
+        CASE WHEN payment.retry_released_at IS NOT NULL
+          OR COALESCE(ordering.status='cancelled',false)
+          OR COALESCE(action.expires_at<=clock_timestamp(),true)
+          OR abandonment.payment_id IS NOT NULL
+          THEN 'released' ELSE 'interactive' END,
+        clock_timestamp(),
+        CASE WHEN payment.retry_released_at IS NOT NULL
+          OR COALESCE(ordering.status='cancelled',false)
+          OR COALESCE(action.expires_at<=clock_timestamp(),true)
+          OR abandonment.payment_id IS NOT NULL
+          THEN clock_timestamp() ELSE NULL END
       FROM mbox.payments payment
+      LEFT JOIN mbox.orders ordering
+        ON ordering.tenant_id=payment.tenant_id AND ordering.store_id=payment.store_id
+       AND ordering.id=payment.order_id
+      LEFT JOIN mbox.payment_provider_actions action
+        ON action.tenant_id=payment.tenant_id AND action.store_id=payment.store_id
+       AND action.payment_id=payment.id
+      LEFT JOIN mbox.guest_immediate_checkout_abandonment_events abandonment
+        ON abandonment.tenant_id=payment.tenant_id AND abandonment.store_id=payment.store_id
+       AND abandonment.payment_id=payment.id
       WHERE payment.tenant_id = $1::uuid
         AND payment.store_id = $2::uuid
         AND payment.provider = 'postar'
         AND payment.status IN ('created', 'pending')
         AND payment.created_at <= clock_timestamp() - make_interval(secs => $3::integer)
-        -- Guest QR JSAPI checkout has a dedicated query/close worker. Keeping
-        -- it out of the generic reconciler prevents a race that can release
-        -- reservations without retiring the operational order.
-        AND NOT EXISTS (
-          SELECT 1
-          FROM mbox.orders AS ordering
-          WHERE ordering.tenant_id=payment.tenant_id AND ordering.store_id=payment.store_id
-            AND ordering.id=payment.order_id
-            AND ordering.channel='guest_qr' AND ordering.settlement_mode='immediate_payment'
-            AND payment.method='jsapi'
-        )
-      ORDER BY payment.created_at ASC, payment.id ASC
-      LIMIT $4::integer
-    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, minAgeSeconds, limit])
-    return result.rows.map((row) => row.id)
+        AND (COALESCE(ordering.channel='guest_qr' AND ordering.settlement_mode='immediate_payment'
+              AND payment.method='jsapi',false)=$4::boolean)
+      ON CONFLICT (payment_id) DO UPDATE SET
+        phase=CASE
+          WHEN mbox.payment_reconciliation_states.phase='interactive'
+            AND (EXCLUDED.phase='released') THEN 'released'
+          ELSE mbox.payment_reconciliation_states.phase END,
+        released_at=CASE
+          WHEN mbox.payment_reconciliation_states.phase='interactive'
+            AND EXCLUDED.phase='released'
+          THEN COALESCE(mbox.payment_reconciliation_states.released_at,clock_timestamp())
+          ELSE mbox.payment_reconciliation_states.released_at END,
+        updated_at=CASE
+          WHEN mbox.payment_reconciliation_states.phase='interactive'
+            AND EXCLUDED.phase='released' THEN clock_timestamp()
+          ELSE mbox.payment_reconciliation_states.updated_at END
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, minAgeSeconds, guestImmediate])
   }
 
   async listStaleProcessingPostarRefundIds(
     minAgeSeconds: number,
     limit: number,
   ): Promise<string[]> {
-    const result = await this.transaction.query<{ id: string }>(`
-      SELECT refund.id
+    await this.transaction.query(`
+      INSERT INTO mbox.refund_reconciliation_states(
+        refund_id,tenant_id,store_id,next_query_at
+      )
+      SELECT refund.id,refund.tenant_id,refund.store_id,clock_timestamp()
       FROM mbox.refunds refund
       JOIN mbox.payments payment
-        ON payment.tenant_id=refund.tenant_id
-        AND payment.store_id=refund.store_id
-        AND payment.id=refund.payment_id
-      WHERE refund.tenant_id=$1::uuid
-        AND refund.store_id=$2::uuid
+        ON payment.tenant_id=refund.tenant_id AND payment.store_id=refund.store_id
+       AND payment.id=refund.payment_id
+      WHERE refund.tenant_id=$1::uuid AND refund.store_id=$2::uuid
         AND refund.status='processing'
         AND refund.provider_submission_state IN ('submitting','submitted')
         AND refund.merchant_refund_id IS NOT NULL
         AND payment.provider='postar'
         AND refund.updated_at<=clock_timestamp()-make_interval(secs=>$3::integer)
-      ORDER BY refund.updated_at,refund.id
-      LIMIT $4::integer
+      ON CONFLICT (refund_id) DO NOTHING
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, minAgeSeconds])
+    const result = await this.transaction.query<{ id: string }>(`
+      WITH due AS (
+        SELECT state.refund_id
+        FROM mbox.refund_reconciliation_states state
+        JOIN mbox.refunds refund
+          ON refund.tenant_id=state.tenant_id AND refund.store_id=state.store_id
+         AND refund.id=state.refund_id
+        JOIN mbox.payments payment
+          ON payment.tenant_id=refund.tenant_id AND payment.store_id=refund.store_id
+         AND payment.id=refund.payment_id
+        WHERE state.tenant_id=$1::uuid AND state.store_id=$2::uuid
+          AND state.phase<>'stopped'
+          AND state.next_query_at<=clock_timestamp()
+          AND (state.lease_until IS NULL OR state.lease_until<clock_timestamp())
+          AND refund.status='processing'
+          AND refund.provider_submission_state IN ('submitting','submitted')
+          AND refund.merchant_refund_id IS NOT NULL
+          AND payment.provider='postar'
+          AND refund.updated_at<=clock_timestamp()-make_interval(secs=>$3::integer)
+        ORDER BY state.next_query_at,refund.updated_at,refund.id
+        FOR UPDATE OF state SKIP LOCKED
+        LIMIT $4::integer
+      )
+      UPDATE mbox.refund_reconciliation_states state
+      SET last_queried_at=clock_timestamp(),lease_until=clock_timestamp()+interval '2 minutes',
+        total_query_count=state.total_query_count+1,updated_at=clock_timestamp()
+      FROM due
+      WHERE state.refund_id=due.refund_id
+      RETURNING state.refund_id AS id
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, minAgeSeconds, limit])
     return result.rows.map((row) => row.id)
+  }
+
+  async recordAutomaticRefundQueryOutcome(
+    refundId: string,
+    outcome: AutomaticRefundQueryOutcome,
+    observedStatus?: string,
+  ): Promise<void> {
+    const result = await this.transaction.query<{ total_query_count: number }>(`
+      SELECT total_query_count
+      FROM mbox.refund_reconciliation_states
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND refund_id=$3::uuid
+        AND phase<>'stopped'
+      FOR UPDATE
+    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,refundId])
+    const row = result.rows[0]
+    if (row === undefined) return
+    if (outcome === 'terminal') {
+      await this.transaction.query(`
+        UPDATE mbox.refund_reconciliation_states
+        SET phase='stopped',lease_until=NULL,last_observed_status=$4,
+          automatic_query_stopped_at=clock_timestamp(),stop_reason='provider_terminal_result',
+          updated_at=clock_timestamp()
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND refund_id=$3::uuid
+      `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,refundId,observedStatus ?? null])
+      return
+    }
+    const count = row.total_query_count
+    const phase = count >= 12 ? 'finance_review' : 'active'
+    const delay = count <= 1 ? '1 minute'
+      : count === 2 ? '5 minutes'
+        : count === 3 ? '15 minutes'
+          : count <= 5 ? '1 hour' : '6 hours'
+    await this.transaction.query(`
+      UPDATE mbox.refund_reconciliation_states
+      SET phase=$4,next_query_at=clock_timestamp()+$5::interval,lease_until=NULL,
+        last_observed_status=COALESCE($6,last_observed_status),
+        consecutive_processing_count=CASE WHEN $7='processing'
+          THEN consecutive_processing_count+1 ELSE 0 END,
+        consecutive_error_count=CASE WHEN $7='error'
+          THEN consecutive_error_count+1 ELSE 0 END,
+        updated_at=clock_timestamp()
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND refund_id=$3::uuid
+    `, [
+      this.transaction.scope.tenantId,this.transaction.scope.storeId,refundId,
+      phase,delay,observedStatus ?? null,outcome,
+    ])
   }
 
   async listStaleGuestImmediateCheckoutPaymentCandidates(
     minAgeSeconds: number,
     limit: number,
   ): Promise<Array<{ id: string; createdAt: string; operationallyAbandoned: boolean }>> {
+    await this.seedAutomaticReconciliationStates(true, minAgeSeconds)
     const result = await this.transaction.query<{
       id: string
       created_at: string
       operationally_abandoned: boolean
     }>(`
+      WITH due AS (
+        SELECT state.payment_id
+        FROM mbox.payment_reconciliation_states state
+        JOIN mbox.payments payment
+          ON payment.tenant_id=state.tenant_id AND payment.store_id=state.store_id
+         AND payment.id=state.payment_id
+        JOIN mbox.orders ordering
+          ON ordering.tenant_id=payment.tenant_id AND ordering.store_id=payment.store_id
+         AND ordering.id=payment.order_id
+        WHERE state.tenant_id=$1::uuid AND state.store_id=$2::uuid
+          AND state.phase<>'stopped'
+          AND state.next_query_at<=clock_timestamp()
+          AND (state.lease_until IS NULL OR state.lease_until<clock_timestamp())
+          AND payment.provider='postar' AND payment.method='jsapi'
+          AND payment.status IN ('created','pending')
+          AND ordering.channel='guest_qr' AND ordering.settlement_mode='immediate_payment'
+          AND (payment.created_at<=clock_timestamp()-make_interval(secs=>$3::integer)
+            OR ordering.status='cancelled'
+            OR EXISTS (SELECT 1 FROM mbox.guest_immediate_checkout_abandonment_events abandonment
+              WHERE abandonment.tenant_id=payment.tenant_id AND abandonment.store_id=payment.store_id
+                AND abandonment.payment_id=payment.id))
+        ORDER BY state.next_query_at,payment.created_at,payment.id
+        FOR UPDATE OF state SKIP LOCKED
+        LIMIT $4::integer
+      ), claimed AS (
+        UPDATE mbox.payment_reconciliation_states state
+        SET last_queried_at=clock_timestamp(),lease_until=clock_timestamp()+interval '2 minutes',
+          total_query_count=state.total_query_count+1,updated_at=clock_timestamp()
+        FROM due WHERE state.payment_id=due.payment_id
+        RETURNING state.payment_id
+      )
       SELECT payment.id,payment.created_at::text,
-        EXISTS (
+        (ordering.status='cancelled' OR EXISTS (
           SELECT 1 FROM mbox.guest_immediate_checkout_abandonment_events AS abandonment
           WHERE abandonment.tenant_id=payment.tenant_id AND abandonment.store_id=payment.store_id
             AND abandonment.payment_id=payment.id
-        ) AS operationally_abandoned
+        )) AS operationally_abandoned
       FROM mbox.payments AS payment
       JOIN mbox.orders AS ordering
         ON ordering.tenant_id=payment.tenant_id AND ordering.store_id=payment.store_id
        AND ordering.id=payment.order_id
-      WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid
-        AND payment.provider='postar' AND payment.method='jsapi'
-        AND payment.status IN ('created','pending')
-        AND ordering.channel='guest_qr' AND ordering.settlement_mode='immediate_payment'
-        -- An explicit customer exit already released the order.  Pick that
-        -- payment up on the next worker cycle rather than making a customer
-        -- wait for the general stale-age window before its rail is queried
-        -- and safely closed.  Other candidates must age first so a normal
-        -- native payment sheet is never interrupted.
-        AND (
-          payment.created_at<=clock_timestamp()-make_interval(secs=>$3::integer)
-          OR EXISTS (
-            SELECT 1 FROM mbox.guest_immediate_checkout_abandonment_events AS abandonment
-            WHERE abandonment.tenant_id=payment.tenant_id AND abandonment.store_id=payment.store_id
-              AND abandonment.payment_id=payment.id
-          )
-        )
-        -- Normal candidates need retirement. Event-backed candidates stay in
-        -- this loop so a late provider success is still detected and sent to
-        -- the controlled refund-review queue.
-        AND (
-          ordering.status<>'cancelled'
-          OR EXISTS (
-            SELECT 1 FROM mbox.guest_immediate_checkout_abandonment_events AS abandonment
-            WHERE abandonment.tenant_id=payment.tenant_id AND abandonment.store_id=payment.store_id
-              AND abandonment.payment_id=payment.id
-          )
-        )
+      JOIN claimed ON claimed.payment_id=payment.id
       ORDER BY payment.created_at,payment.id
-      LIMIT $4::integer
     `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,minAgeSeconds,limit])
     return result.rows.map((row) => ({
       id: row.id,
       createdAt: row.created_at,
       operationallyAbandoned: row.operationally_abandoned === true,
     }))
+  }
+
+  async recordAutomaticPaymentQueryOutcome(
+    paymentId: string,
+    outcome: AutomaticPaymentQueryOutcome,
+    observedStatus?: string,
+    forceReleased = false,
+  ): Promise<void> {
+    const locked = await this.transaction.query<{
+      phase: 'interactive' | 'released' | 'finance_review' | 'stopped'
+      released_query_count: number
+      operationally_released: boolean
+      tracking_window_expired: boolean
+    }>(`
+      SELECT state.phase,state.released_query_count,
+        ($4::boolean OR payment.retry_released_at IS NOT NULL
+          OR COALESCE(ordering.status='cancelled',false)
+          OR COALESCE(action.expires_at<=clock_timestamp(),true)
+          OR abandonment.payment_id IS NOT NULL) AS operationally_released,
+        payment.created_at<=clock_timestamp()-interval '7 days' AS tracking_window_expired
+      FROM mbox.payment_reconciliation_states state
+      JOIN mbox.payments payment
+        ON payment.tenant_id=state.tenant_id AND payment.store_id=state.store_id
+       AND payment.id=state.payment_id
+      LEFT JOIN mbox.orders ordering
+        ON ordering.tenant_id=payment.tenant_id AND ordering.store_id=payment.store_id
+       AND ordering.id=payment.order_id
+      LEFT JOIN mbox.payment_provider_actions action
+        ON action.tenant_id=payment.tenant_id AND action.store_id=payment.store_id
+       AND action.payment_id=payment.id
+      LEFT JOIN mbox.guest_immediate_checkout_abandonment_events abandonment
+        ON abandonment.tenant_id=payment.tenant_id AND abandonment.store_id=payment.store_id
+       AND abandonment.payment_id=payment.id
+      WHERE state.tenant_id=$1::uuid AND state.store_id=$2::uuid AND state.payment_id=$3::uuid
+      FOR UPDATE OF state
+    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,paymentId,forceReleased])
+    const row = locked.rows[0]
+    if (row === undefined || row.phase === 'stopped') return
+    if (outcome === 'terminal') {
+      await this.transaction.query(`
+        UPDATE mbox.payment_reconciliation_states
+        SET phase='stopped',next_query_at=NULL,lease_until=NULL,last_observed_status=$4,
+          automatic_query_stopped_at=clock_timestamp(),stop_reason='provider_terminal_result',
+          updated_at=clock_timestamp()
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND payment_id=$3::uuid
+      `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,paymentId,observedStatus ?? null])
+      return
+    }
+    const released = forceReleased || row.operationally_released || row.phase !== 'interactive'
+    const releasedQueryCount = row.released_query_count + (released ? 1 : 0)
+    // Xingyi does not expose one universal expiry timestamp for every channel.
+    // Preserve a conservative seven-day financial window while moving a
+    // released payment to hours/days instead of page-speed polling.
+    const stop = released && row.tracking_window_expired
+    const delay = !released ? '30 seconds'
+      : releasedQueryCount === 1 ? '5 minutes'
+        : releasedQueryCount === 2 ? '15 minutes'
+          : releasedQueryCount === 3 ? '1 hour'
+            : releasedQueryCount <= 5 ? '6 hours' : '24 hours'
+    await this.transaction.query(`
+      UPDATE mbox.payment_reconciliation_states
+      SET phase=$4,next_query_at=CASE WHEN $5::boolean THEN NULL
+          ELSE clock_timestamp()+$6::interval END,
+        lease_until=NULL,last_observed_status=COALESCE($7,last_observed_status),
+        consecutive_processing_count=CASE WHEN $8='processing'
+          THEN consecutive_processing_count+1 ELSE 0 END,
+        consecutive_error_count=CASE WHEN $8='error'
+          THEN consecutive_error_count+1 ELSE 0 END,
+        released_query_count=$9,
+        released_at=CASE WHEN $10::boolean THEN COALESCE(released_at,clock_timestamp()) ELSE released_at END,
+        automatic_query_stopped_at=CASE WHEN $5::boolean THEN clock_timestamp() ELSE NULL END,
+        stop_reason=CASE WHEN $5::boolean THEN 'finance_review_required' ELSE NULL END,
+        updated_at=clock_timestamp()
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND payment_id=$3::uuid
+    `, [
+      this.transaction.scope.tenantId,this.transaction.scope.storeId,paymentId,
+      stop ? 'stopped' : released ? 'released' : 'interactive',stop,delay,
+      observedStatus ?? null,outcome,releasedQueryCount,released,
+    ])
   }
 
   async resolveInitiatedPaymentStatus(
@@ -431,6 +656,7 @@ export class PaymentProviderActionRepository {
     principal: Readonly<PaymentPrincipal>,
     idempotencyKey?: string,
     sensitiveRequestBinding?: string,
+    clientNetworkSnapshot: Readonly<Record<string, string>> = {},
   ): Promise<{ claimed: true } | { claimed: false; payload: ProviderActionPayload; expiresAt: string }> {
     if (idempotencyKey !== undefined && (idempotencyKey.length < 8 || idempotencyKey.length > 128)) {
       throw new TypeError('payment action idempotency key must contain between 8 and 128 characters')
@@ -448,8 +674,8 @@ export class PaymentProviderActionRepository {
       INSERT INTO mbox.payment_provider_actions (
         payment_id, tenant_id, store_id, presentation,
         initiated_by_type, initiated_by_ref, state, expires_at,
-        request_idempotency_key, request_fingerprint
-      ) VALUES ($3::uuid, $1::uuid, $2::uuid, $4, $5, $6::uuid, 'creating', $7::timestamptz, $8, $9)
+        request_idempotency_key, request_fingerprint, client_network_snapshot
+      ) VALUES ($3::uuid, $1::uuid, $2::uuid, $4, $5, $6::uuid, 'creating', $7::timestamptz, $8, $9, $10::jsonb)
       ON CONFLICT (tenant_id, store_id, payment_id) DO NOTHING
     `, [
       this.transaction.scope.tenantId,
@@ -461,6 +687,7 @@ export class PaymentProviderActionRepository {
       expiresAt,
       idempotencyKey ?? null,
       requestFingerprint,
+      JSON.stringify(clientNetworkSnapshot),
     ])
     if (inserted.rowCount === 1) return { claimed: true }
     const selected = await this.transaction.query<ActionRow>(`

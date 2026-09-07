@@ -51,7 +51,7 @@ export function registerNormalizedObservability(
     return reply
       .header('cache-control', 'no-store')
       .type('text/plain; version=0.0.4; charset=utf-8')
-      .send(renderMetrics(config, transactions))
+      .send(await renderMetrics(config, transactions))
   })
 }
 
@@ -73,11 +73,12 @@ function hasMetricsAccess(request: FastifyRequest, expected: string | null): boo
   return left.length === right.length && timingSafeEqual(left, right)
 }
 
-function renderMetrics(
+async function renderMetrics(
   config: Readonly<NormalizedRuntimeConfig>,
   transactions: ScopedPostgresTransactionRunner,
-): string {
+): Promise<string> {
   const database = transactions.telemetrySnapshot()
+  const paymentSignals = await readPaymentSignalCounts(config,transactions)
   const lines = [
     '# HELP mbox_runtime_info Immutable runtime identity.',
     '# TYPE mbox_runtime_info gauge',
@@ -101,8 +102,34 @@ function renderMetrics(
     `mbox_database_queries_total{outcome="completed"} ${database.queries.completed}`,
     `mbox_database_queries_total{outcome="failed"} ${database.queries.failed}`,
     ...durationLines('mbox_database_query_duration_ms', database.queries.durationMs),
+    '# HELP mbox_payment_financial_signals Current payment and refund attention signals.',
+    '# TYPE mbox_payment_financial_signals gauge',
+    ...paymentSignals.map((item) => `mbox_payment_financial_signals{signal="${label(item.signal)}"} ${item.count}`),
   ]
   return `${lines.join('\n')}\n`
+}
+
+async function readPaymentSignalCounts(
+  config: Readonly<NormalizedRuntimeConfig>,
+  transactions: ScopedPostgresTransactionRunner,
+): Promise<Array<{ signal: string; count: number }>> {
+  try {
+    const result = await transactions.run(
+      { tenantId: config.tenantId, storeId: config.storeId },
+      async (transaction) => transaction.query<{ signal: string; count: string | number }>(`
+        SELECT signal,count(*)::text AS count
+        FROM mbox.payment_financial_monitoring_signals
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        GROUP BY signal ORDER BY signal
+      `, [config.tenantId,config.storeId]),
+      { readOnly: true },
+    )
+    return result.rows.map((row) => ({ signal: row.signal, count: Math.max(0,Number(row.count)||0) }))
+  } catch {
+    // During rolling migration the old application may briefly run before the
+    // new view exists. Core readiness and table operations must stay healthy.
+    return []
+  }
 }
 
 function durationLines(

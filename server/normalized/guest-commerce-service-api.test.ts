@@ -739,13 +739,15 @@ describe('guest commerce/service API trust boundaries', () => {
     })
   })
 
-  it('keeps the created order visible when the provider rejects payment initiation', async () => {
+  it('keeps the created order visible and identifies an IP-risk rejection', async () => {
     const value = fixture({
       onlinePayments: {
         assertAvailable: vi.fn(),
         resolveGuestMethod: vi.fn(async () => 'jsapi' as const),
         resolveActivePayment: vi.fn(async () => null),
-        create: vi.fn(async () => { throw new PostarPaymentRejectedError('test rejection') }),
+        create: vi.fn(async () => { throw new PostarPaymentRejectedError('test rejection', {
+          operation: 'CREATE_JSAPI', providerCode: 'RISK01', providerMessage: 'IP地址异常',
+        }) }),
       },
     })
     const response = await value.app.inject({
@@ -766,6 +768,7 @@ describe('guest commerce/service API trust boundaries', () => {
           status: 'failed',
           presentation: 'jsapi',
           payload: null,
+          failureCode: 'network_rejected',
         },
       },
     } })

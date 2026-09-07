@@ -9,6 +9,8 @@ import type { PostarHttpClient, PostarTransactionMetadataSource, PostarSftpBillS
 import { PostarPaymentProviderAdapter, PostarPaymentRejectedError } from '../postar-adapter.js'
 import type { NormalizedPaymentRuntimeConfig } from './normalized-runtime-config.js'
 import {
+  type AutomaticPaymentQueryOutcome,
+  type AutomaticRefundQueryOutcome,
   PaymentProviderActionRepository,
   type PaymentPrincipal,
   type ProviderPaymentContext,
@@ -71,7 +73,10 @@ export interface CloseSystemOnlinePaymentInput {
 export interface OnlinePaymentQueryResult {
   context: ProviderPaymentContext
   observation: ProviderPaymentObservation
-  verifiedObservationId: string
+  // A non-terminal "still processing" answer updates the durable mutable
+  // reconciliation state only.  It is not duplicated into the immutable
+  // verified-observation ledger on every poll.
+  verifiedObservationId: string | null
 }
 
 export interface OnlinePaymentCloseResult extends OnlinePaymentQueryResult {}
@@ -287,8 +292,8 @@ export class OnlinePaymentService {
     if (observation.amount !== context.amountMinor || observation.currency !== context.currency) {
       throw new OnlinePaymentUnknownError()
     }
-    const evidence = paymentQueryEvidence(observation)
-    const verifiedObservationId = await this.providerObservations.recordPayment({
+    const verifiedObservationId = isTerminalPaymentObservation(observation.status)
+      ? await this.providerObservations.recordPayment({
         scope: input.scope,
         provider: 'postar',
         verificationKind: 'active_query_binding',
@@ -304,8 +309,9 @@ export class OnlinePaymentService {
         status: observation.status,
         settlementChannel: observation.settlementChannel,
         occurredAt: observation.occurredAt,
-        evidence,
+        evidence: paymentQueryEvidence(observation),
       })
+      : null
     return { context, observation, verifiedObservationId }
   }
 
@@ -383,7 +389,8 @@ export class OnlinePaymentService {
       if (!close.closed || close.paymentIntentId !== context.publicId) throw new OnlinePaymentUnknownError()
       observation = { ...queried, status: 'closed', occurredAt: close.occurredAt }
     }
-    const verifiedObservationId = await this.providerObservations.recordPayment({
+    const verifiedObservationId = isTerminalPaymentObservation(observation.status)
+      ? await this.providerObservations.recordPayment({
       scope,
       provider: 'postar',
       // A close is accepted only after a bound provider query.  It belongs to
@@ -403,7 +410,8 @@ export class OnlinePaymentService {
       settlementChannel: observation.settlementChannel,
       occurredAt: observation.occurredAt,
       evidence: paymentQueryEvidence(observation),
-    })
+      })
+      : null
     return { context, observation, verifiedObservationId }
   }
 
@@ -436,8 +444,8 @@ export class OnlinePaymentService {
     if (observation.amount !== context.amountMinor || observation.currency !== context.currency) {
       throw new OnlinePaymentUnknownError()
     }
-    const evidence = paymentQueryEvidence(observation)
-    const verifiedObservationId = await this.providerObservations.recordPayment({
+    const verifiedObservationId = isTerminalPaymentObservation(observation.status)
+      ? await this.providerObservations.recordPayment({
       scope: input.scope,
       provider: 'postar',
       verificationKind: 'active_query_binding',
@@ -453,8 +461,9 @@ export class OnlinePaymentService {
       status: observation.status,
       settlementChannel: observation.settlementChannel,
       occurredAt: observation.occurredAt,
-      evidence,
+      evidence: paymentQueryEvidence(observation),
     })
+      : null
     return { context, observation, verifiedObservationId }
   }
 
@@ -466,7 +475,7 @@ export class OnlinePaymentService {
     return this.transactions.run(scope, async (transaction) => (
       new PaymentProviderActionRepository(transaction, this.secret)
         .listStalePendingPostarPaymentIds(minAgeSeconds, limit)
-    ), { readOnly: true })
+    ))
   }
 
   listStaleProcessingPostarRefundIds(
@@ -477,7 +486,19 @@ export class OnlinePaymentService {
     return this.transactions.run(scope, async (transaction) => (
       new PaymentProviderActionRepository(transaction, this.secret)
         .listStaleProcessingPostarRefundIds(minAgeSeconds, limit)
-    ), { readOnly: true })
+    ))
+  }
+
+  recordAutomaticRefundQueryOutcome(
+    scope: Readonly<StoreScope>,
+    refundId: string,
+    outcome: AutomaticRefundQueryOutcome,
+    observedStatus?: string,
+  ): Promise<void> {
+    return this.transactions.run(scope, async (transaction) => (
+      new PaymentProviderActionRepository(transaction, this.secret)
+        .recordAutomaticRefundQueryOutcome(refundId, outcome, observedStatus)
+    ))
   }
 
   listStaleGuestImmediateCheckoutPaymentCandidates(
@@ -488,7 +509,20 @@ export class OnlinePaymentService {
     return this.transactions.run(scope, async (transaction) => (
       new PaymentProviderActionRepository(transaction, this.secret)
         .listStaleGuestImmediateCheckoutPaymentCandidates(minAgeSeconds, limit)
-    ), { readOnly: true })
+    ))
+  }
+
+  recordAutomaticPaymentQueryOutcome(
+    scope: Readonly<StoreScope>,
+    paymentId: string,
+    outcome: AutomaticPaymentQueryOutcome,
+    observedStatus?: string,
+    forceReleased = false,
+  ): Promise<void> {
+    return this.transactions.run(scope, async (transaction) => (
+      new PaymentProviderActionRepository(transaction, this.secret)
+        .recordAutomaticPaymentQueryOutcome(paymentId, outcome, observedStatus, forceReleased)
+    ))
   }
 
   async requestRefund(
@@ -554,7 +588,8 @@ export class OnlinePaymentService {
         throw new OnlinePaymentUnknownError()
       }
       await this.recordRefundObservation(scope, context.refund_id, observation)
-      const verifiedObservationId = await this.providerObservations.recordRefund({
+      const verifiedObservationId = ['succeeded', 'failed'].includes(observation.status)
+        ? await this.providerObservations.recordRefund({
           scope,
           provider: 'postar',
           verificationKind: 'active_query_binding',
@@ -574,6 +609,7 @@ export class OnlinePaymentService {
           occurredAt: observation.occurredAt,
           evidence: refundQueryEvidence(observation),
         })
+        : null
       return onlineRefundResult(context, observation, verifiedObservationId)
     } catch (error) {
       if (error instanceof OnlinePaymentUnavailableError || error instanceof OnlineRefundStatusUnknownError) {
@@ -612,6 +648,7 @@ export class OnlinePaymentService {
       const claim = await repository.claim(
         input.paymentId,presentation,expiresAt,input.principal,input.idempotencyKey,
         presentation === 'barcode' ? input.customerAuthCode : undefined,
+        presentation === 'jsapi' ? clientNetworkSnapshot(input.clientIp) : {},
       )
       if (!claim.claimed) {
         return { context, payerId: null, cached: claim, simulated: false as const }
@@ -1045,6 +1082,10 @@ function paymentQueryEvidence(observation: Readonly<ProviderPaymentObservation>)
   }
 }
 
+function isTerminalPaymentObservation(status: ProviderPaymentObservation['status']): boolean {
+  return status === 'succeeded' || status === 'failed' || status === 'closed'
+}
+
 async function queryPaymentWithUnknownBoundary(
   adapter: Pick<OnlinePaymentAdapter, 'queryPayment'>,
   request: Parameters<OnlinePaymentAdapter['queryPayment']>[0],
@@ -1098,6 +1139,16 @@ function trustedIp(value: string): string {
   const normalized = value.trim().replace(/^::ffff:/, '')
   if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(normalized) || /^[0-9a-f:]+$/i.test(normalized)) return normalized
   throw new OnlinePaymentUnavailableError('无法确认支付终端网络地址')
+}
+
+function clientNetworkSnapshot(value: string): Readonly<Record<string, string>> {
+  const normalized = trustedIp(value)
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(normalized)) {
+    const octets = normalized.split('.')
+    return { family: 'ipv4', maskedPrefix: `${octets[0]}.${octets[1]}.${octets[2]}.x`, source: 'trusted_request_ip' }
+  }
+  const groups = normalized.split(':').filter(Boolean).slice(0, 3)
+  return { family: 'ipv6', maskedPrefix: `${groups.join(':')}::`, source: 'trusted_request_ip' }
 }
 
 function safeOperator(value: string): string {

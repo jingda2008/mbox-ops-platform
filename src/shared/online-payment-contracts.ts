@@ -10,4 +10,5 @@ export interface OnlinePaymentAction {
   presentation: OnlinePaymentPresentation
   expiresAt: string
   payload: Readonly<Record<string, unknown>> | null
+  failureCode?: 'network_rejected' | 'identity_rejected' | 'configuration_unavailable' | 'provider_rejected'
 }

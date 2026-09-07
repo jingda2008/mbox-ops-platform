@@ -116,6 +116,10 @@ describe('GuestApiClient', () => {
     await expect(client.loadSharedCart()).resolves.toMatchObject({ version: 2, lines: [{ quantity: 1 }] })
     await expect(client.adjustSharedCart({
       productId: '55555555-5555-4555-8555-555555555555', delta: 1, expectedGeneration: 1, expectedVersion: 2,
+      bundleSelections: [{ groups: [{
+        groupId: '66666666-6666-4666-8666-666666666666',
+        productIds: ['77777777-7777-4777-8777-777777777777'],
+      }] }],
     }, { idempotencyKey: 'shared-cart-adjust-test-0001' })).resolves.toMatchObject({ version: 3, lines: [{ quantity: 2 }] })
     await expect(client.checkoutSharedCart({
       expectedGeneration: 1, expectedVersion: 3, note: '酒水和小食一起上', confirmedDuplicateOrderId: 'guest-order-existing-0001',
@@ -130,11 +134,44 @@ describe('GuestApiClient', () => {
     ])
     expect(JSON.parse(String(send.mock.calls[1]?.[1]?.body))).toEqual({
       productId: '55555555-5555-4555-8555-555555555555', delta: 1, expectedGeneration: 1, expectedVersion: 2,
+      bundleSelections: [{ groups: [{
+        groupId: '66666666-6666-4666-8666-666666666666',
+        productIds: ['77777777-7777-4777-8777-777777777777'],
+      }] }],
     })
     expect(JSON.parse(String(send.mock.calls[2]?.[1]?.body))).toEqual({
       expectedGeneration: 1, expectedVersion: 3, note: '酒水和小食一起上', confirmedDuplicateOrderId: 'guest-order-existing-0001',
     })
     expect(new Headers(send.mock.calls[2]?.[1]?.headers).get('idempotency-key')).toBe('shared-cart-checkout-test-0001')
+  })
+
+  it('replaces exactly one physical bundle selection with a versioned idempotent request', async () => {
+    const send = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => jsonResponse({
+      data: sharedCart({ version: 4, quantity: 2 }),
+    }))
+    const client = new GuestApiClient(deviceKey, { fetch: send })
+    const bundleSelection = { groups: [{
+      groupId: '66666666-6666-4666-8666-666666666666',
+      productIds: ['99999999-9999-4999-8999-999999999999'],
+    }] }
+
+    await expect(client.replaceSharedCartBundleSelection({
+      productId: '55555555-5555-4555-8555-555555555555',
+      unitIndex: 1,
+      bundleSelection,
+      expectedGeneration: 1,
+      expectedVersion: 3,
+    }, { idempotencyKey: 'shared-cart-replace-test-0001' })).resolves.toMatchObject({ version: 4 })
+
+    const [url, init] = send.mock.calls[0]!
+    expect(url).toBe('/api/guest/shared-cart/lines/55555555-5555-4555-8555-555555555555/bundle-selections/1')
+    expect(init?.method).toBe('PUT')
+    expect(JSON.parse(String(init?.body))).toEqual({
+      bundleSelection,
+      expectedGeneration: 1,
+      expectedVersion: 3,
+    })
+    expect(new Headers(init?.headers).get('idempotency-key')).toBe('shared-cart-replace-test-0001')
   })
 
   it('preserves server duplicate details for the confirmation dialog', async () => {

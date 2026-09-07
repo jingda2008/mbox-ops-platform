@@ -8,6 +8,7 @@ import {
   GuestSharedCartLimitError,
   GuestSharedCartVersionConflictError,
 } from './guest-shared-cart-repository.js'
+import { OrderProductUnavailableError } from './order-repository.js'
 import { ScopedPostgresTransactionRunner, type PostgresPool } from './transaction-runner.js'
 
 const databaseUrl = process.env.TEST_NORMALIZED_DATABASE_URL
@@ -28,6 +29,10 @@ integration('GuestSharedCartRepository PostgreSQL authority', () => {
   const submittedOrderId = '10600000-0000-4000-8000-000000000010'
   const secondSubmittedOrderId = '10600000-0000-4000-8000-000000000011'
   const checkoutOrderId = '10600000-0000-4000-8000-000000000012'
+  const choiceTableId = '10600000-0000-4000-8000-000000000015'
+  const choiceTableSessionId = '10600000-0000-4000-8000-000000000016'
+  const bundleProductId = '10600000-0000-4000-8000-000000000017'
+  const choiceGroupId = '10600000-0000-4000-8000-000000000018'
   const scope = { tenantId, storeId }
   let pool: Pool
   let transactions: ScopedPostgresTransactionRunner
@@ -44,10 +49,15 @@ integration('GuestSharedCartRepository PostgreSQL authority', () => {
     `, [employeeId, tenantId, storeId])
     await pool.query(`INSERT INTO mbox.areas(id,tenant_id,store_id,code,name,area_type) VALUES ($1,$2,$3,'SC','共享购物车区','indoor')`, [areaId, tenantId, storeId])
     await pool.query(`INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity) VALUES ($1,$2,$3,$4,'SC01','SC01',4)`, [tableId, tenantId, storeId, areaId])
+    await pool.query(`INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity) VALUES ($1,$2,$3,$4,'SC02','SC02',4)`, [choiceTableId, tenantId, storeId, areaId])
     await pool.query(`
       INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count,status)
       VALUES ($1,$2,$3,$4,'shared-cart-session',CURRENT_DATE,2,'open')
     `, [tableSessionId, tenantId, storeId, tableId])
+    await pool.query(`
+      INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count,status)
+      VALUES ($1,$2,$3,$4,'shared-cart-choice-session',CURRENT_DATE,2,'open')
+    `, [choiceTableSessionId, tenantId, storeId, choiceTableId])
     await pool.query(`
       INSERT INTO mbox.products(id,tenant_id,store_id,code,name,category_code,fulfillment_station)
       VALUES ($1,$2,$3,'SC-DRINK','共享购物车测试饮品','drink','bar')
@@ -88,6 +98,25 @@ integration('GuestSharedCartRepository PostgreSQL authority', () => {
       INSERT INTO mbox.recipe_items(tenant_id,store_id,recipe_id,inventory_item_id,quantity)
       VALUES ($1,$2,$3,$4,10)
     `,[tenantId,storeId,secondRecipeId,inventoryItemId])
+    await pool.query(`
+      INSERT INTO mbox.products(
+        id,tenant_id,store_id,code,name,category_code,fulfillment_station,product_kind
+      ) VALUES ($1,$2,$3,'SC-BUNDLE-CHOICE','任选鸡尾酒套餐','bundle','none','bundle')
+    `,[bundleProductId,tenantId,storeId])
+    await pool.query(`
+      INSERT INTO mbox.product_prices(tenant_id,store_id,product_id,price_type,amount_minor,currency,valid_from)
+      VALUES ($1,$2,$3,'standard',5000,'CNY',clock_timestamp()-interval '1 minute')
+    `,[tenantId,storeId,bundleProductId])
+    await pool.query(`
+      INSERT INTO mbox.product_bundle_choice_groups(
+        id,tenant_id,store_id,bundle_product_id,code,display_name,selection_count,sort_order
+      ) VALUES($1,$2,$3,$4,'cocktail','任选一款鸡尾酒',1,10)
+    `,[choiceGroupId,tenantId,storeId,bundleProductId])
+    await pool.query(`
+      INSERT INTO mbox.product_bundle_choice_options(
+        tenant_id,store_id,choice_group_id,component_product_id,quantity,sort_order
+      ) VALUES($1,$2,$3,$4,1,10),($1,$2,$3,$5,1,20)
+    `,[tenantId,storeId,choiceGroupId,productId,secondProductId])
   })
 
   afterAll(async () => { await pool?.end() })
@@ -154,6 +183,72 @@ integration('GuestSharedCartRepository PostgreSQL authority', () => {
         actorSessionRef: 'guest-session:shared-cart-test',
       })
     ))).rejects.toBeInstanceOf(GuestSharedCartVersionConflictError)
+  })
+
+  it('requires and preserves one concrete selection for every physical bundle unit', async () => {
+    const publicId='GSC10600000000040008000000000000099'
+    const initial=await transactions.run(scope,(transaction)=>(
+      new GuestSharedCartRepository(transaction).readOpen(choiceTableSessionId,publicId)
+    ))
+    await expect(transactions.run(scope,(transaction)=>(
+      new GuestSharedCartRepository(transaction).adjust(choiceTableSessionId,publicId,{
+        productId:bundleProductId,delta:1,expectedGeneration:1,expectedVersion:0,
+        operationId:'shared-cart-choice-missing-0001',actorSessionRef:'guest-session:bundle-choice-test',
+      })
+    ))).rejects.toBeInstanceOf(OrderProductUnavailableError)
+
+    const firstUnit={ groups:[{ groupId:choiceGroupId,productIds:[productId] }] }
+    const secondUnit={ groups:[{ groupId:choiceGroupId,productIds:[secondProductId] }] }
+    const added=await transactions.run(scope,(transaction)=>(
+      new GuestSharedCartRepository(transaction).adjust(choiceTableSessionId,publicId,{
+        productId:bundleProductId,delta:2,expectedGeneration:initial.generation,
+        expectedVersion:initial.version,operationId:'shared-cart-choice-add-0001',
+        actorSessionRef:'guest-session:bundle-choice-test',bundleSelections:[firstUnit,secondUnit],
+      })
+    ))
+    expect(added.lines[0]).toMatchObject({
+      productId:bundleProductId,quantity:2,available:true,bundleSelections:[firstUnit,secondUnit],
+    })
+
+    const replaced=await transactions.run(scope,(transaction)=>(
+      new GuestSharedCartRepository(transaction).replaceBundleSelection(choiceTableSessionId,publicId,{
+        productId:bundleProductId,unitIndex:0,bundleSelection:secondUnit,
+        expectedGeneration:added.generation,expectedVersion:added.version,
+        operationId:'shared-cart-choice-replace-0001',actorSessionRef:'guest-session:bundle-choice-test',
+      })
+    ))
+    expect(replaced.lines[0]).toMatchObject({
+      productId:bundleProductId,quantity:2,bundleSelections:[secondUnit,secondUnit],
+    })
+
+    await pool.query(`
+      UPDATE mbox.product_bundle_choice_groups
+      SET selection_count=2
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+    `,[tenantId,storeId,choiceGroupId])
+    const stale=await transactions.run(scope,(transaction)=>(
+      new GuestSharedCartRepository(transaction).readOpen(choiceTableSessionId,publicId)
+    ))
+    expect(stale.lines[0]).toMatchObject({
+      productId:bundleProductId,quantity:2,available:false,
+      unavailableReason:'套餐选择已变更，请重新选择',
+    })
+    await pool.query(`
+      UPDATE mbox.product_bundle_choice_groups
+      SET selection_count=1
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+    `,[tenantId,storeId,choiceGroupId])
+
+    const reduced=await transactions.run(scope,(transaction)=>(
+      new GuestSharedCartRepository(transaction).adjust(choiceTableSessionId,publicId,{
+        productId:bundleProductId,delta:-1,expectedGeneration:replaced.generation,
+        expectedVersion:replaced.version,operationId:'shared-cart-choice-reduce-0001',
+        actorSessionRef:'guest-session:bundle-choice-test',
+      })
+    ))
+    expect(reduced.lines[0]).toMatchObject({
+      productId:bundleProductId,quantity:1,available:true,bundleSelections:[secondUnit],
+    })
   })
 
   it('revalidates recipe and total line inventory instead of trusting an earlier cart snapshot', async () => {

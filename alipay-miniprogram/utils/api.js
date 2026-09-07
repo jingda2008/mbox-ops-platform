@@ -735,10 +735,19 @@ async function checkout(items, checkoutUpgradeOfferPublicId, idempotencyKey, rec
   })
 }
 async function getSharedCart() { return (await request('/api/guest/shared-cart')).data }
-async function adjustSharedCart(productId, delta, expectedGeneration, expectedVersion, idempotencyKey) {
+async function adjustSharedCart(productId, delta, expectedGeneration, expectedVersion, idempotencyKey, bundleSelections) {
   return (await request('/api/guest/shared-cart/lines', {
     method: 'POST', headers: { 'idempotency-key': idempotencyKey || randomId('shared-cart-adjust') },
-    data: { productId, delta, expectedGeneration, expectedVersion },
+    data: {
+      productId, delta, expectedGeneration, expectedVersion,
+      ...(Array.isArray(bundleSelections) && bundleSelections.length ? { bundleSelections } : {}),
+    },
+  })).data
+}
+async function replaceSharedCartBundleSelection(productId, unitIndex, bundleSelection, expectedGeneration, expectedVersion, idempotencyKey) {
+  return (await request(`/api/guest/shared-cart/lines/${encodeURIComponent(productId)}/bundle-selections/${unitIndex}`, {
+    method: 'PUT', headers: { 'idempotency-key': idempotencyKey || randomId('shared-cart-choice') },
+    data: { bundleSelection, expectedGeneration, expectedVersion },
   })).data
 }
 async function removeSharedCartLine(productId, expectedGeneration, expectedVersion, idempotencyKey) {
@@ -866,7 +875,7 @@ export {
   getReservationPerformanceNotificationAuthorizations,
   recordReservationPerformanceNotificationAuthorization,
   getMenu, getPublicMenu, recommendExperience, getRecommendationConfiguration, recordRecommendationEvent, prepareCheckoutUpgrade, recordCheckoutUpgradeEvent,
-  checkout, getSharedCart, adjustSharedCart, removeSharedCartLine, clearSharedCart, checkoutSharedCart, getTableOrders, retryOrderPayment, abandonGuestCheckout,
+  checkout, getSharedCart, adjustSharedCart, replaceSharedCartBundleSelection, removeSharedCartLine, clearSharedCart, checkoutSharedCart, getTableOrders, retryOrderPayment, abandonGuestCheckout,
   createServiceTask, getServiceRequests, actOnServiceTask,
   getCustomerBenefits, getCustomerProfile, reserveCustomerBenefit, claimAnnualDailySnack, submitSongRequest, getTodayPerformances,
   logoutAlipayIdentity,

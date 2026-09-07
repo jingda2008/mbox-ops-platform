@@ -9,6 +9,7 @@ const {
   checkoutSharedCart,
   getSharedCart,
   adjustSharedCart,
+  replaceSharedCartBundleSelection,
   removeSharedCartLine,
   clearSharedCart,
   getTableOrders,
@@ -81,8 +82,9 @@ function compactMoney(amount) {
 
 function bundleValuePresentation(item) {
   const amountMinor = Number(item.amountMinor)
-  const separateAmountMinor = Number(item.separateAmountMinor)
-  const savingsAmountMinor = Number(item.savingsAmountMinor)
+  const configurable = Array.isArray(item.bundleChoiceGroups) && item.bundleChoiceGroups.length > 0
+  const separateAmountMinor = Number(configurable ? item.separateAmountFromMinor : item.separateAmountMinor)
+  const savingsAmountMinor = Number(configurable ? item.savingsFromMinor : item.savingsAmountMinor)
   const discountVisible = item.productKind === 'bundle'
     && Number.isSafeInteger(amountMinor) && amountMinor >= 0
     && Number.isSafeInteger(separateAmountMinor) && separateAmountMinor > amountMinor
@@ -90,8 +92,30 @@ function bundleValuePresentation(item) {
   return {
     discountVisible,
     separatePriceText: discountVisible ? compactMoney(separateAmountMinor) : '',
-    savingsText: discountVisible ? `组合省 ${compactMoney(savingsAmountMinor)}` : '',
+    savingsText: discountVisible ? `${configurable ? '至少省' : '组合省'} ${compactMoney(savingsAmountMinor)}` : '',
   }
+}
+
+function selectedBundleValuePresentation(item) {
+  const groups = item.bundleChoiceGroups || []
+  if (!groups.length) return bundleValuePresentation(item)
+  if (item.fixedSeparateAmountMinor === null || item.fixedSeparateAmountMinor === undefined) return bundleValuePresentation(item)
+  let separateAmountMinor = Number(item.fixedSeparateAmountMinor)
+  if (!Number.isSafeInteger(separateAmountMinor) || separateAmountMinor < 0) return bundleValuePresentation(item)
+  for (const group of groups) {
+    const selected = (group.options || []).filter((option) => option.selected)
+    if (selected.length !== Number(group.selectionCount)) return bundleValuePresentation(item)
+    for (const option of selected) {
+      if (option.amountMinor === null || option.amountMinor === undefined) return bundleValuePresentation(item)
+      const amountMinor = Number(option.amountMinor)
+      if (!Number.isSafeInteger(amountMinor) || amountMinor < 0) return bundleValuePresentation(item)
+      separateAmountMinor += amountMinor * Number(option.quantity || 1)
+    }
+  }
+  const amountMinor = Number(item.amountMinor)
+  const discountVisible = Number.isSafeInteger(amountMinor) && separateAmountMinor > amountMinor
+  return { discountVisible, separatePriceText: discountVisible ? compactMoney(separateAmountMinor) : '',
+    savingsText: discountVisible ? `组合省 ${compactMoney(separateAmountMinor - amountMinor)}` : '' }
 }
 
 // The app never owns the question wording, answer taxonomy, or the scoring
@@ -224,6 +248,9 @@ function menuProducts(items) {
       imageUrl: publicImageUrl(item.imageUrl),
       availabilityText: availability.text,
       availabilityDetail: availability.detail,
+      bundleChoiceGroups: (item.bundleChoiceGroups || []).map((group) => Object.assign({}, group, {
+        options: (group.options || []).map((option) => Object.assign({}, option, { selected: false })),
+      })),
     })
   })
 }
@@ -414,8 +441,50 @@ function sharedCartView(sharedCart, products) {
       available: available && Boolean(product && product.available),
       unavailableReason: available && Boolean(product && product.available)
         ? '' : cartUnavailableReason(line.unavailableReason, product),
+      bundleSelections: Array.isArray(line.bundleSelections) ? line.bundleSelections : [],
+      selectionSummary: bundleSelectionSummary(product, line.bundleSelections),
+      selectionUnits: bundleSelectionUnits(product, line.bundleSelections),
     }
   }).filter((line) => line.quantity > 0)
+}
+
+function bundleSelectionSummary(product, selections) {
+  if (!product || !Array.isArray(selections) || !selections.length) return ''
+  return selections.map((unit, index) => {
+    const names = (unit.groups || []).flatMap((selection) => {
+      const group = (product.bundleChoiceGroups || []).find((candidate) => candidate.id === selection.groupId)
+      return (selection.productIds || []).map((id) => {
+        const option = group && (group.options || []).find((candidate) => candidate.productId === id)
+        return option && option.name ? option.name : '已选菜品'
+      })
+    })
+    return `第${index + 1}份：${names.join('、')}`
+  }).join('；')
+}
+
+function bundleSelectionUnits(product, selections) {
+  if (!product || !Array.isArray(selections)) return []
+  return selections.map((unit, index) => ({ unitIndex: index, label: (unit.groups || []).flatMap((selection) => {
+    const group = (product.bundleChoiceGroups || []).find((candidate) => candidate.id === selection.groupId)
+    return (selection.productIds || []).map((id) => {
+      const option = group && (group.options || []).find((candidate) => candidate.productId === id)
+      return option && option.name ? option.name : '已选菜品'
+    })
+  }).join('、') }))
+}
+
+function resetBundleChoiceSelections(product) {
+  return Object.assign({}, product, { bundleChoiceGroups: (product.bundleChoiceGroups || []).map((group) =>
+    Object.assign({}, group, { options: (group.options || []).map((option) => Object.assign({}, option, { selected: false })) })) })
+}
+
+function applyBundleUnitSelection(product, unit) {
+  const selectedByGroup = new Map(((unit && unit.groups) || []).map((group) => [group.groupId, group.productIds || []]))
+  const selected = Object.assign({}, product, { bundleChoiceGroups: (product.bundleChoiceGroups || []).map((group) =>
+    Object.assign({}, group, { options: (group.options || []).map((option) => Object.assign({}, option, {
+      selected: (selectedByGroup.get(group.id) || []).includes(option.productId),
+    })) })) })
+  return Object.assign(selected, selectedBundleValuePresentation(selected))
 }
 
 Page({
@@ -437,6 +506,8 @@ Page({
     products: [],
     visibleProducts: [],
     detailProduct: null,
+    detailSelectionsComplete: true,
+    detailEditUnitIndex: -1,
     categories: [{ code: 'all', name: '全部' }],
     selectedCategory: 'all',
     subcategories: [],
@@ -676,6 +747,7 @@ Page({
         checkoutLocked: false, pendingPayment: null, paymentResult: null, cart: [], cartVersion: 0, cartGeneration: 0,
         cartTotal: '¥0.00', cartTotalCompact: '¥0', cartCount: 0, cartExpanded: false, checkoutConfirmVisible: false, cartWritesFrozen: false,
         detailProduct: null,
+        detailEditUnitIndex: -1,
         recommendations: [], recommendationPublicId: '', recommendationAttribution: null, recommendationEmpty: false, recommendationError: '', performance: null, performanceError: '',
         recommendationConfiguration: EMPTY_RECOMMENDATION_CONFIGURATION, recommendationQuestionVisible: false, recommendationQuestionIndex: 0, recommendationQuestion: null, recommendationAnswers: {},
       })
@@ -1007,9 +1079,15 @@ Page({
   openProductDetail(event) {
     const productId = String(event.currentTarget.dataset.id || '')
     const detailProduct = this.data.products.find((item) => item.productId === productId) || null
-    if (detailProduct) this.setData({ detailProduct })
+    if (detailProduct) this.setData({
+      detailProduct: Object.assign(resetBundleChoiceSelections(detailProduct), {
+        selectionSource: String(event.currentTarget.dataset.source || ''),
+      }),
+      detailSelectionsComplete: (detailProduct.bundleChoiceGroups || []).length === 0,
+      detailEditUnitIndex: -1,
+    })
   },
-  closeProductDetail() { this.setData({ detailProduct: null }) },
+  closeProductDetail() { this.setData({ detailProduct: null, detailSelectionsComplete: true, detailEditUnitIndex: -1 }) },
   keepProductDetailOpen() {},
   previewProductImage() {
     const imageUrl = this.data.detailProduct && this.data.detailProduct.imageUrl
@@ -1206,16 +1284,111 @@ Page({
       runtime.showToast({ title: '这款商品当前暂不可点', icon: 'none' })
       return
     }
+    if (product.productKind === 'bundle') {
+      this.setData({
+        detailProduct: Object.assign(resetBundleChoiceSelections(product), {
+          selectionSource: String(event.currentTarget.dataset.source || ''),
+        }),
+        detailSelectionsComplete: (product.bundleChoiceGroups || []).length === 0,
+        detailEditUnitIndex: -1,
+      })
+      return
+    }
+    return this.commitProductAdd(productId, event.currentTarget.dataset.source || '', [])
+  },
+
+  selectBundleChoice(event) {
+    const detail = this.data.detailProduct
+    if (!detail) return
+    const groupId = String(event.currentTarget.dataset.group || '')
+    const productId = String(event.currentTarget.dataset.product || '')
+    const groups = (detail.bundleChoiceGroups || []).map((group) => {
+      if (group.id !== groupId) return group
+      const option = group.options.find((candidate) => candidate.productId === productId)
+      if (!option || option.available === false) return group
+      const selected = group.options.filter((candidate) => candidate.selected).map((candidate) => candidate.productId)
+      const next = selected.includes(productId)
+        ? selected.filter((id) => id !== productId)
+        : Number(group.selectionCount) === 1
+          ? [productId]
+          : selected.length >= Number(group.selectionCount) ? selected : [...selected, productId]
+      return Object.assign({}, group, { options: group.options.map((candidate) => Object.assign({}, candidate, {
+        selected: next.includes(candidate.productId),
+      })) })
+    })
+    const complete = groups.every((group) => group.options.filter((option) => option.selected).length === Number(group.selectionCount))
+    const selectedProduct = Object.assign({}, detail, { bundleChoiceGroups: groups })
+    this.setData({ detailProduct: Object.assign(selectedProduct, selectedBundleValuePresentation(selectedProduct)), detailSelectionsComplete: complete })
+  },
+
+  async confirmBundleProduct() {
+    const product = this.data.detailProduct
+    if (!product || product.productKind !== 'bundle' || !this.data.detailSelectionsComplete) return
+    const groups = (product.bundleChoiceGroups || []).map((group) => ({
+      groupId: group.id,
+      productIds: group.options.filter((option) => option.selected).map((option) => option.productId),
+    }))
+    if (this.data.detailEditUnitIndex >= 0) {
+      const updated = await this.replaceBundleUnitSelection(product.productId, this.data.detailEditUnitIndex, { groups })
+      if (updated) this.closeProductDetail()
+      return
+    }
+    const added = await this.commitProductAdd(product.productId, product.selectionSource || 'bundle_detail', groups.length ? [{ groups }] : [])
+    if (added) this.closeProductDetail()
+  },
+
+  editBundleUnitSelection(event) {
+    if (this.data.checkoutLocked || this.data.cartWritesFrozen || this.data.cartSyncing) return
+    const productId = String(event.currentTarget.dataset.id || '')
+    const unitIndex = Number(event.currentTarget.dataset.index)
+    const line = this.data.cart.find((item) => item.productId === productId)
+    const product = this.data.products.find((item) => item.productId === productId)
+    const unit = line && line.bundleSelections && line.bundleSelections[unitIndex]
+    if (!product || !unit || !Number.isSafeInteger(unitIndex)) return
+    const detailProduct = applyBundleUnitSelection(product, unit)
+    const complete = (detailProduct.bundleChoiceGroups || []).every((group) =>
+      (group.options || []).filter((option) => option.selected).length === Number(group.selectionCount))
+    this.setData({ detailProduct: Object.assign(detailProduct, { selectionSource: 'cart_edit' }),
+      detailSelectionsComplete: complete, detailEditUnitIndex: unitIndex,
+      checkoutConfirmVisible: false, cartExpanded: false })
+  },
+
+  async replaceBundleUnitSelection(productId, unitIndex, bundleSelection) {
+    const tableRequest = this.currentTableRequest()
+    if (!tableRequest || !this.isCurrentTableRequest(tableRequest) || this.data.cartSyncing) return false
+    this.setData({ cartSyncing: true, error: '' })
+    try {
+      const sharedCart = await replaceSharedCartBundleSelection(
+        productId, unitIndex, bundleSelection, this.data.cartGeneration, this.data.cartVersion,
+        randomId('shared-cart-choice'),
+      )
+      if (!this.isCurrentTableRequest(tableRequest)) return false
+      this.updateCart(cartFromShared(sharedCart, this.data.products), sharedCart)
+      return true
+    } catch (error) {
+      if (this.isCurrentTableRequest(tableRequest)) {
+        await this.syncSharedCart(true, tableRequest)
+        this.setData({ error: customerErrorMessage(error, '套餐选择暂时没有更新，请重试') })
+      }
+      return false
+    } finally {
+      if (this.isCurrentTableRequest(tableRequest)) this.setData({ cartSyncing: false })
+    }
+  },
+
+  async commitProductAdd(productId, source, bundleSelections) {
+    const product = this.data.products.find((item) => item.productId === productId)
+    if (!product || !product.available) return false
     const tableRequest = this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
     // The first concrete order action is the natural place for the benefit
     // bundle.  It is separate from the later payment-result bundle.
     await this.offerOrderNotifications('order_selection', tableRequest)
     if (!this.isCurrentTableRequest(tableRequest)) return
-    if (!await this.adjustSharedCart(productId, 1)) return
+    if (!await this.adjustSharedCart(productId, 1, bundleSelections)) return false
     // 推荐只影响当前购物车。体验承诺必须在有效订单且付款门禁通过后由服务端建立，
     // 这里不能提前派发服务节点或把“选择推荐”误当作已购买权益。
-    if (event.currentTarget.dataset.source === 'recommendation' && this.data.recommendationPublicId) {
+    if (source === 'recommendation' && this.data.recommendationPublicId) {
       this.setData({
         recommendationAttribution: {
           recommendationPublicId: this.data.recommendationPublicId,
@@ -1226,6 +1399,7 @@ Page({
         surface: 'guest_order_recommendations',
       }).catch(() => {})
     }
+    return true
   },
 
   async rejectRecommendation(event) {
@@ -1302,6 +1476,16 @@ Page({
       runtime.showToast({ title: '这款商品当前暂不可点', icon: 'none' })
       return
     }
+    if (delta > 0 && product && product.productKind === 'bundle') {
+      this.setData({
+        detailProduct: Object.assign(resetBundleChoiceSelections(product), { selectionSource: 'cart_plus' }),
+        detailSelectionsComplete: (product.bundleChoiceGroups || []).length === 0,
+        detailEditUnitIndex: -1,
+        cartExpanded: false,
+        checkoutConfirmVisible: false,
+      })
+      return
+    }
     const item = this.data.cart.find((line) => line.productId === productId)
     if (!item) return
     const attribution = this.data.recommendationAttribution
@@ -1358,7 +1542,7 @@ Page({
     }
   },
 
-  async adjustSharedCart(productId, delta) {
+  async adjustSharedCart(productId, delta, bundleSelections = []) {
     const tableRequest = this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return false
     if (this.data.cartSyncing) return false
@@ -1369,7 +1553,7 @@ Page({
     this.setData({ cartSyncing: true, error: '' })
     try {
       const sharedCart = await adjustSharedCart(
-        productId, delta, this.data.cartGeneration, this.data.cartVersion, randomId('shared-cart-adjust'),
+        productId, delta, this.data.cartGeneration, this.data.cartVersion, randomId('shared-cart-adjust'), bundleSelections,
       )
       if (!this.isCurrentTableRequest(tableRequest)) return false
       this.updateCart(sharedCartView(sharedCart, this.data.products), sharedCart)

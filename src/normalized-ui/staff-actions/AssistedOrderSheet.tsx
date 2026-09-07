@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Banknote, Check, CreditCard, Gift, LoaderCircle, Minus, Plus, QrCode, ReceiptText, RefreshCcw, ScanLine, Search, ShoppingCart, X } from 'lucide-react'
-import { MenuOrderingWorkspace, type MenuSubmitOptions } from '../../components/MenuOrderingWorkspace'
+import { MenuOrderingWorkspace, type MenuCartItem, type MenuSubmitOptions } from '../../components/MenuOrderingWorkspace'
 import { CustomerPaymentCodeScanner } from '../../components/CustomerPaymentCodeScanner'
 import type { MenuProduct, MenuRecommendationConfig, MenuRecommendationScene } from '../../shared/contracts'
 import type { OnlinePaymentAction } from '../../shared/online-payment-contracts'
+import { conservativeBundleCostAmount } from '../../shared/bundle-cost-range'
 import type {
   AssistedOrderAccess,
   AssistedOrderCatalogProduct,
@@ -152,7 +153,7 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
     }
   }
 
-  const submitPaidOrder = async (items: Array<{ productId: string; quantity: number }>, options: MenuSubmitOptions) => {
+  const submitPaidOrder = async (items: MenuCartItem[], options: MenuSubmitOptions) => {
     if (phase !== 'ready' || access?.canCreateOrder !== true || items.length === 0) return
     if (settlementMode === 'immediate_payment' && !canSettleImmediately(access)) {
       setError('当前岗位没有可用的线上或现场收款权限，请先挂桌账或联系收银负责人。')
@@ -274,7 +275,7 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
   }
 
   if (mode === 'paid') {
-    const menuProducts = products.map(assistedProductToMenuProduct)
+    const menuProducts = products.map((product) => assistedProductToMenuProduct(product, products))
     const immediatePaymentMessage = paymentInitiationMessage(access)
     const canInitiatePayment = access?.canInitiatePayment === true
     const canImmediateSettle = canSettleImmediately(access)
@@ -374,11 +375,14 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
         {phase !== 'loading' && filtered.length === 0 && <p>没有找到可售商品</p>}
         {filtered.map((product) => {
           const quantity = quantities[product.id] ?? 0
-          const configurationReady = product.inventoryConfigurationComplete
+          const requiresBundleChoice = (product.bundleChoiceGroups?.length ?? 0) > 0
+          const configurationReady = product.inventoryConfigurationComplete && !requiresBundleChoice
           const inventoryAvailable = product.inventoryAvailable
           return <article className={`${quantity > 0 ? 'is-selected' : ''}${configurationReady && inventoryAvailable ? '' : ' is-unavailable'}`} key={product.id}>
             <div><strong>{product.name}</strong><small>{product.code} · {categoryLabel(product.categoryCode)}</small>{!configurationReady
-              ? <small>库存或配方配置未完成，暂不能下单</small>
+              ? requiresBundleChoice
+                ? <small>自选套餐请使用“协助点单”完成具体选择，赠送入口暂不支持</small>
+                : <small>库存或配方配置未完成，暂不能下单</small>
               : !inventoryAvailable ? <small>当前可售库存不足，补货入库后自动恢复</small> : null}</div>
             <b>{money(Number(product.standardPrice?.amountMinor ?? 0), product.standardPrice?.currency ?? 'CNY')}</b>
             <div className="staff-order-quantity">
@@ -583,11 +587,21 @@ function categoryLabel(code: string): string {
     ?? code
 }
 
-function assistedProductToMenuProduct(product: AssistedOrderCatalogProduct): MenuProduct {
+function assistedProductToMenuProduct(
+  product: AssistedOrderCatalogProduct,
+  catalog: readonly AssistedOrderCatalogProduct[],
+): MenuProduct {
   const snapshot = product.productSnapshot
   const recommendation = record(snapshot.recommendation)
   const amountMinor = Number(product.standardPrice?.amountMinor ?? 0)
-  const costAmount = product.costAmountMinor ?? 0
+  const costAmount = product.productKind === 'bundle'
+    ? conservativeBundleCostAmount({
+        bundleComponents: product.bundleComponents,
+        bundleChoiceGroups: product.bundleChoiceGroups,
+      }, catalog, amountMinor)
+    : product.costAmountMinor ?? amountMinor
+  // Recommendations use the worst valid bundle choice. Missing cost authority
+  // is treated conservatively as zero contribution, never as zero cost.
   const availability = assistedProductAvailability(product)
   return {
     id: product.id,
@@ -600,6 +614,12 @@ function assistedProductToMenuProduct(product: AssistedOrderCatalogProduct): Men
       productId: component.productId,
       quantity: component.quantity,
       note: component.note ?? undefined,
+    })),
+    bundleChoiceGroups:(product.bundleChoiceGroups??[]).map((group)=>({
+      id:group.id,code:group.code,name:group.name,selectionCount:group.selectionCount,
+      options:group.options.map((option)=>({ productId:option.productId,name:option.name,
+        quantity:option.quantity,available:option.available,
+        unavailableReason:option.available?null:option.unavailableReason??'当前不可选' })),
     })),
     substitutionProductIds: [],
     recommendation: menuRecommendation(recommendation, product),

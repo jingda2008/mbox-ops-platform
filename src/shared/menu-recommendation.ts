@@ -91,6 +91,11 @@ export function normalizeMenuProductConfiguration(product: MenuProduct): MenuPro
 
 export function bundleComparisonAmount(product: MenuProduct, products: MenuProduct[]) {
   if ((product.productKind ?? 'single') !== 'bundle') return null
+  if ((product.bundleChoiceGroups?.length ?? 0) > 0) {
+    const conservativeAmount=product.bundleSeparateAmountFromMinor
+    return Number.isSafeInteger(conservativeAmount)&&Number(conservativeAmount)>=0
+      ?Number(conservativeAmount):null
+  }
   const byId = new Map(products.map((item) => [item.id, item]))
   let total = 0
   for (const component of product.bundleComponents ?? []) {

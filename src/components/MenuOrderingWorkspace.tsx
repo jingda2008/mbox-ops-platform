@@ -2,7 +2,7 @@ import { AlertTriangle, Check, CheckCircle2, ChevronRight, Clock3, Gift, Message
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ApiError } from '../shared/api-error'
 import type { OrderSafetyConfig } from '../shared/commercial-ops-contracts'
-import type { MenuProduct, MenuRecommendationScene } from '../shared/contracts'
+import type { MenuBundleUnitSelection, MenuProduct, MenuRecommendationScene } from '../shared/contracts'
 import type { GuestBehaviorEventType } from '../shared/guest-insight-contracts'
 import {
   bundleComparisonAmount,
@@ -24,6 +24,7 @@ import { recommendationProductIsOrderable } from './menu-recommendation-availabi
 export interface MenuCartItem {
   productId: string
   quantity: number
+  bundleSelections?: MenuBundleUnitSelection[]
 }
 
 export interface MenuInteraction {
@@ -41,6 +42,27 @@ export interface MenuSubmitOptions {
 
 function formatMenuAmount(amount: number) {
   return (amount / 100).toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1')
+}
+
+function selectedBundleComparisonAmount(
+  product:MenuProduct,
+  selections:Readonly<Record<string,readonly string[]>>,
+):number|null{
+  const groups=product.bundleChoiceGroups??[]
+  if(groups.length===0)return null
+  const fixed=product.bundleFixedSeparateAmountMinor
+  if(!Number.isSafeInteger(fixed)||Number(fixed)<0)return null
+  let total=Number(fixed)
+  for(const group of groups){
+    const selected=selections[group.id]??[]
+    if(selected.length!==group.selectionCount)return null
+    for(const productId of selected){
+      const option=group.options.find((candidate)=>candidate.productId===productId)
+      if(!option||!Number.isSafeInteger(option.amountMinor)||Number(option.amountMinor)<0)return null
+      total+=Number(option.amountMinor)*option.quantity
+    }
+  }
+  return Number.isSafeInteger(total)?total:null
 }
 
 function menuProductContents(product: MenuProduct, products: MenuProduct[]) {
@@ -136,11 +158,13 @@ interface MenuOrderingWorkspaceProps {
    * component (for example, a table-wide cart shared by several guests).
    */
   cart?: Readonly<Record<string, number>>
+  cartBundleSelections?:Readonly<Record<string,readonly MenuBundleUnitSelection[]>>
   cartUnitAmountMinors?: Readonly<Record<string, number>>
   cartTotalAmountMinor?: number | null
   cartReadOnly?: boolean
   cartReadOnlyMessage?: string
-  onCartAdjust?: (productId: string, delta: number) => Promise<void>
+  onCartAdjust?: (productId: string, delta: number, bundleSelections?:readonly MenuBundleUnitSelection[]) => Promise<void>
+  onCartReplaceBundleSelection?: (productId:string,unitIndex:number,bundleSelection:MenuBundleUnitSelection)=>Promise<void>
   onCartRemove?: (productId:string) => Promise<void>
   onSubmit: (items: MenuCartItem[], options: MenuSubmitOptions) => Promise<void>
   onInteraction?: (interaction: MenuInteraction) => void
@@ -183,8 +207,10 @@ export function MenuOrderingWorkspace({
   recommendationScene,
   cartStorageKey,
   cart: controlledCart,
+  cartBundleSelections:controlledBundleSelections,
   cartUnitAmountMinors,
   cartTotalAmountMinor,
+  onCartReplaceBundleSelection,
   cartReadOnly = false,
   cartReadOnlyMessage = '当前购物车只能查看',
   onCartAdjust,
@@ -192,7 +218,9 @@ export function MenuOrderingWorkspace({
   onCartCountChange,
 }: MenuOrderingWorkspaceProps) {
   const [persistedCart, setPersistedCart] = useState<Record<string, number>>(() => readPersistedCart(cartStorageKey))
+  const [localBundleSelections,setLocalBundleSelections]=useState<Record<string,MenuBundleUnitSelection[]>>({})
   const cart = controlledCart ?? persistedCart
+  const cartBundleSelections=controlledBundleSelections??localBundleSelections
   const [categoryId, setCategoryId] = useState('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [clock, setClock] = useState(() => Date.now() + clockOffsetMs)
@@ -200,6 +228,7 @@ export function MenuOrderingWorkspace({
   const [confirmationError, setConfirmationError] = useState('')
   const [confirmedDuplicateOrderId, setConfirmedDuplicateOrderId] = useState('')
   const [pendingProductId, setPendingProductId] = useState('')
+  const [pendingBundleSelections, setPendingBundleSelections] = useState<readonly MenuBundleUnitSelection[]>([])
   const [lastSubmittedAt, setLastSubmittedAt] = useState(0)
   const [cartOpen, setCartOpen] = useState(false)
   const [fulfillmentNote, setFulfillmentNote] = useState('')
@@ -211,6 +240,8 @@ export function MenuOrderingWorkspace({
   const [shakeProductId, setShakeProductId] = useState('')
   const [shakeProductIds, setShakeProductIds] = useState<string[]>([])
   const [detailProductId, setDetailProductId] = useState('')
+  const [detailChoiceSelections,setDetailChoiceSelections]=useState<Record<string,string[]>>({})
+  const [editingBundleUnit,setEditingBundleUnit]=useState<{ productId:string;unitIndex:number }|null>(null)
   const [upgradePromptProductId, setUpgradePromptProductId] = useState('')
   const [upgradeSourceProductId, setUpgradeSourceProductId] = useState('')
   const [cartMutating, setCartMutating] = useState(false)
@@ -497,17 +528,25 @@ export function MenuOrderingWorkspace({
   }
 
   function openProductDetail(product: MenuProduct) {
+    setEditingBundleUnit(null)
     setDetailProductId(product.id)
+    setDetailChoiceSelections({})
     emitInteraction('product_detail_viewed', { productId: product.id })
   }
 
   function chooseRecommendedProduct(product: MenuProduct) {
-    changeQuantity(product.id, 1)
+    if(product.productKind==='bundle')openProductDetail(product)
+    else changeQuantity(product.id, 1)
     emitInteraction('recommendation_accepted', { productId: product.id })
   }
 
   function changeQuantity(productId: string, delta: number) {
     if (cartReadOnly) return
+    const product=products.find((candidate)=>candidate.id===productId)
+    if(delta>0&&product?.productKind==='bundle'){
+      openProductDetail(product)
+      return
+    }
     const continuationSeconds = orderSafety?.requireContinuationConfirmationSeconds ?? 120
     if (
       delta > 0
@@ -516,6 +555,7 @@ export function MenuOrderingWorkspace({
       && Date.now() - lastSubmittedAt < continuationSeconds * 1000
     ) {
       setPendingProductId(productId)
+      setPendingBundleSelections([])
       setConfirmationError('')
       setConfirmation('continue')
       return
@@ -528,21 +568,26 @@ export function MenuOrderingWorkspace({
     void setProductQuantity(productId, (cart[productId] ?? 0) + delta, delta > 0 ? 'product_added' : 'product_removed')
   }
 
-  async function setProductQuantity(productId: string, requestedQuantity: number, interactionType: 'product_added' | 'product_removed' = 'product_added') {
-    if (cartReadOnly) return
+  async function setProductQuantity(
+    productId: string,
+    requestedQuantity: number,
+    interactionType: 'product_added' | 'product_removed' = 'product_added',
+    addedBundleSelections:readonly MenuBundleUnitSelection[] = [],
+  ):Promise<boolean> {
+    if (cartReadOnly) return false
     const product = products.find((item) => item.id === productId)
     const nextQuantity = Math.max(0, Math.min(product?.maxOrderQuantity ?? 50, Math.round(requestedQuantity)))
     const currentQuantity = cart[productId] ?? 0
     const delta = nextQuantity - currentQuantity
-    if (delta === 0 || cartMutating) return
+    if (delta === 0 || cartMutating) return false
     if (onCartAdjust !== undefined) {
       setCartMutating(true)
       setCartAdjustmentError('')
       try {
-        await onCartAdjust(productId, delta)
+        await onCartAdjust(productId, delta,addedBundleSelections)
       } catch (error) {
         setCartAdjustmentError(error instanceof Error ? error.message : '购物车暂时没有更新，请稍后再试。')
-        return
+        return false
       } finally {
         setCartMutating(false)
       }
@@ -554,6 +599,12 @@ export function MenuOrderingWorkspace({
           return next
         }
         return { ...current, [productId]: nextQuantity }
+      })
+      setLocalBundleSelections((current)=>{
+        const existing=current[productId]??[]
+        const selections=delta>0?[...existing,...addedBundleSelections]:existing.slice(0,Math.max(0,existing.length+delta))
+        if(selections.length===0){ const next={...current};delete next[productId];return next }
+        return { ...current,[productId]:selections }
       })
     }
     onInteraction?.({
@@ -575,6 +626,64 @@ export function MenuOrderingWorkspace({
       setUpgradePromptProductId(product.recommendation.upgradeProductId)
       setUpgradeSourceProductId(product.id)
     }
+    return true
+  }
+
+  async function addConfiguredBundle(product:MenuProduct){
+    const groups=product.bundleChoiceGroups??[]
+    const complete=groups.every((group)=>(detailChoiceSelections[group.id]?.length??0)===group.selectionCount)
+    if(!complete)return
+    const unit:MenuBundleUnitSelection={ groups:groups.map((group)=>({
+      groupId:group.id,productIds:[...(detailChoiceSelections[group.id]??[])],
+    })) }
+    if(editingBundleUnit?.productId===product.id){
+      if(cartReadOnly||cartMutating)return
+      setCartMutating(true)
+      setCartAdjustmentError('')
+      try{
+        if(onCartReplaceBundleSelection!==undefined){
+          await onCartReplaceBundleSelection(product.id,editingBundleUnit.unitIndex,unit)
+        }else{
+          setLocalBundleSelections((current)=>({ ...current,[product.id]:(current[product.id]??[]).map(
+            (selection,index)=>index===editingBundleUnit.unitIndex?unit:selection,
+          ) }))
+        }
+        setDetailProductId('');setDetailChoiceSelections({});setEditingBundleUnit(null)
+      }catch(error){
+        setCartAdjustmentError(error instanceof Error?error.message:'套餐选择暂时没有更新，请稍后再试。')
+      }finally{ setCartMutating(false) }
+      return
+    }
+    const addedSelections=groups.length>0?[unit]:[]
+    const continuationSeconds=orderSafety?.requireContinuationConfirmationSeconds??120
+    if(itemCount===0&&lastSubmittedAt>0&&Date.now()-lastSubmittedAt<continuationSeconds*1000){
+      setPendingProductId(product.id)
+      setPendingBundleSelections(addedSelections)
+      setConfirmationError('')
+      setConfirmation('continue')
+      return
+    }
+    if(!await setProductQuantity(product.id,(cart[product.id]??0)+1,'product_added',addedSelections))return
+    setDetailProductId('')
+    setDetailChoiceSelections({})
+  }
+
+  function editBundleUnit(product:MenuProduct,unitIndex:number){
+    const unit=cartBundleSelections[product.id]?.[unitIndex]
+    if(!unit||cartReadOnly||cartMutating)return
+    setDetailChoiceSelections(Object.fromEntries(unit.groups.map((group)=>[group.groupId,[...group.productIds]])))
+    setEditingBundleUnit({ productId:product.id,unitIndex })
+    setDetailProductId(product.id)
+  }
+
+  function toggleDetailChoice(groupId:string,productId:string,selectionCount:number){
+    setDetailChoiceSelections((current)=>{
+      const selected=current[groupId]??[]
+      if(selected.includes(productId))return { ...current,[groupId]:selected.filter((id)=>id!==productId) }
+      if(selectionCount===1)return { ...current,[groupId]:[productId] }
+      if(selected.length>=selectionCount)return current
+      return { ...current,[groupId]:[...selected,productId] }
+    })
   }
 
   function removeProduct(productId: string) {
@@ -606,11 +715,14 @@ export function MenuOrderingWorkspace({
     if (cartProducts.length === 0 || checkoutBusy || submitDisabled) return
     try {
       await onSubmit(
-        cartProducts.map((product) => ({ productId: product.id, quantity: cart[product.id]! })),
+        cartProducts.map((product) => ({ productId: product.id, quantity: cart[product.id]!,
+          ...((cartBundleSelections[product.id]?.length??0)>0
+            ?{ bundleSelections:[...(cartBundleSelections[product.id]??[])] }:{}), })),
         { confirmedDuplicateOrderId: duplicateOrderId, fulfillmentNote: fulfillmentNote.trim() },
       )
       if (controlledCart === undefined) {
         setPersistedCart({})
+        setLocalBundleSelections({})
         clearPersistedCart(cartStorageKey)
       }
       setFulfillmentNote('')
@@ -633,9 +745,25 @@ export function MenuOrderingWorkspace({
     }
   }
 
-  function confirmContinuation() {
-    if (pendingProductId) applyQuantityChange(pendingProductId, 1)
+  async function confirmContinuation() {
+    if (pendingProductId) {
+      if (pendingBundleSelections.length > 0) {
+        const added=await setProductQuantity(
+          pendingProductId,
+          (cart[pendingProductId] ?? 0) + 1,
+          'product_added',
+          pendingBundleSelections,
+        )
+        if(!added)return
+        setDetailProductId('')
+        setDetailChoiceSelections({})
+      } else {
+        const added=await setProductQuantity(pendingProductId,(cart[pendingProductId]??0)+1,'product_added')
+        if(!added)return
+      }
+    }
     setPendingProductId('')
+    setPendingBundleSelections([])
     setConfirmation(null)
     setConfirmationError('')
   }
@@ -659,10 +787,21 @@ export function MenuOrderingWorkspace({
     <div className="menu-cart-empty"><ShoppingCart size={28} /><span>点击商品图片旁的加号</span></div>
   ) : cartProducts.map((product) => (
     <div className="menu-cart-line" key={product.id}>
-      <div><strong>{product.name}</strong><span>¥{(cartUnitAmount(product) / 100).toFixed(0)} × {cart[product.id]}</span></div>
-      <div className={`menu-stepper${(product.maxOrderQuantity ?? 50) > 50 ? ' has-direct-input' : ''}`}>
+      <div><strong>{product.name}</strong><span>¥{(cartUnitAmount(product) / 100).toFixed(0)} × {cart[product.id]}</span>
+        {(cartBundleSelections[product.id]?.length??0)>0&&<span className="menu-cart-choice-summary">
+          {cartBundleSelections[product.id]!.map((unit,index)=><button type="button" key={index}
+            disabled={cartReadOnly||cartMutating}
+            onClick={()=>editBundleUnit(product,index)}>
+            第{index+1}份：{unit.groups.flatMap((selection)=>{
+              const group=(product.bundleChoiceGroups??[]).find((candidate)=>candidate.id===selection.groupId)
+              return selection.productIds.map((id)=>group?.options.find((option)=>option.productId===id)?.name??'已选菜品')
+            }).join('、')} · 修改
+          </button>)}
+        </span>}
+      </div>
+      <div className={`menu-stepper${product.productKind!=='bundle'&&(product.maxOrderQuantity ?? 50)>50?' has-direct-input':''}`}>
         <button type="button" title={`移除${product.name}`} disabled={cartReadOnly || cartMutating} onClick={() => removeProduct(product.id)}><Trash2 size={15} /></button>
-        {(product.maxOrderQuantity ?? 50) > 50
+        {product.productKind!=='bundle'&&(product.maxOrderQuantity ?? 50)>50
           ? <input aria-label={`${product.name}数量`} type="number" inputMode="numeric" min={1} max={product.maxOrderQuantity} value={cart[product.id]} disabled={cartReadOnly || cartMutating} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setProductQuantity(product.id, Number(event.target.value))} />
           : <strong>{cart[product.id]}</strong>}
         <button type="button" title={`增加${product.name}`} disabled={cartReadOnly || cartMutating} onClick={() => changeQuantity(product.id, 1)}><Plus size={15} /></button>
@@ -687,11 +826,16 @@ export function MenuOrderingWorkspace({
     ...component,
     product: orderedProducts.find((product) => product.id === component.productId),
   })).filter((component) => component.product) ?? []
-  const detailComparisonAmount = detailProduct ? bundleComparisonAmount(detailProduct, orderedProducts) : null
+  const detailComparisonAmount = detailProduct
+    ?selectedBundleComparisonAmount(detailProduct,detailChoiceSelections)
+      ??bundleComparisonAmount(detailProduct, orderedProducts)
+    :null
   const detailSavingsAmount = detailProduct && detailComparisonAmount !== null
     ? detailComparisonAmount - detailProduct.listPriceAmount
     : 0
   const detailQuantity = detailProduct ? cart[detailProduct.id] ?? 0 : 0
+  const detailChoiceGroups=detailProduct?.bundleChoiceGroups??[]
+  const detailChoicesComplete=detailChoiceGroups.every((group)=>(detailChoiceSelections[group.id]?.length??0)===group.selectionCount)
   const upgradeProduct = orderedProducts.find((product) => product.id === upgradePromptProductId) ?? null
   const upgradeSourceProduct = orderedProducts.find((product) => product.id === upgradeSourceProductId) ?? null
 
@@ -813,7 +957,7 @@ export function MenuOrderingWorkspace({
                     <div className="menu-recommendation-option-value">
                       <strong>¥{formatMenuAmount(product.listPriceAmount)}</strong>
                       {savingsRatio >= .1
-                        ? <span>单点 ¥{formatMenuAmount(comparisonAmount!)}<b>少付 ¥{formatMenuAmount(savingsAmount)}</b></span>
+                        ? <span>单点{(product.bundleChoiceGroups?.length??0)>0?'至少 ': ' '}¥{formatMenuAmount(comparisonAmount!)}<b>{(product.bundleChoiceGroups?.length??0)>0?'至少省':'少付'} ¥{formatMenuAmount(savingsAmount)}</b></span>
                         : <span><b>组合已配齐</b></span>}
                     </div>
                     {!status.orderable ? <button className="menu-recommendation-choose" disabled><Clock3 size={16} />{status.label}</button>
@@ -898,7 +1042,7 @@ export function MenuOrderingWorkspace({
                     <p>{status.orderable
                       ? (recommendationRole ? recommendation.headline || recommendation.reason || rankedRecommendation?.reason : product.description) || '门店现制现送'
                       : status.label}</p>
-                    {product.productKind === 'bundle' && savingsAmount > 0 && <small className="menu-product-value">单点合计 ¥{formatMenuAmount(comparisonAmount!)} · 少付 ¥{formatMenuAmount(savingsAmount)}</small>}
+                    {product.productKind === 'bundle' && savingsAmount > 0 && <small className="menu-product-value">单点{(product.bundleChoiceGroups?.length??0)>0?'至少':'合计'} ¥{formatMenuAmount(comparisonAmount!)} · {(product.bundleChoiceGroups?.length??0)>0?'至少省':'少付'} ¥{formatMenuAmount(savingsAmount)}</small>}
                     <footer>
                       <b>¥{(product.listPriceAmount / 100).toFixed(0)}</b>
                       {!status.orderable ? (
@@ -906,9 +1050,9 @@ export function MenuOrderingWorkspace({
                       ) : quantity === 0 ? (
                         <button type="button" className="menu-add-button" title={`加入${product.name}`} aria-label={`加入${product.name}`} disabled={cartMutating} onClick={() => changeQuantity(product.id, 1)}><Plus size={20} strokeWidth={2.5} /></button>
                       ) : (
-                        <div className={`menu-stepper${(product.maxOrderQuantity ?? 50) > 50 ? ' has-direct-input' : ''}`}>
+                        <div className={`menu-stepper${product.productKind!=='bundle'&&(product.maxOrderQuantity ?? 50)>50?' has-direct-input':''}`}>
                           <button type="button" title={`减少${product.name}`} disabled={cartMutating} onClick={() => changeQuantity(product.id, -1)}><Minus size={17} /></button>
-                          {(product.maxOrderQuantity ?? 50) > 50
+                          {product.productKind!=='bundle'&&(product.maxOrderQuantity ?? 50)>50
                             ? <input aria-label={`${product.name}数量`} type="number" inputMode="numeric" min={1} max={product.maxOrderQuantity} value={quantity} disabled={cartMutating} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setProductQuantity(product.id, Number(event.target.value))} />
                             : <strong>{quantity}</strong>}
                           <button type="button" title={`增加${product.name}`} disabled={cartMutating} onClick={() => changeQuantity(product.id, 1)}><Plus size={17} /></button>
@@ -971,11 +1115,11 @@ export function MenuOrderingWorkspace({
       </div>
 
       {detailProduct && <>
-        <button className="menu-detail-backdrop" type="button" aria-label="关闭商品详情" onClick={() => setDetailProductId('')} />
+        <button className="menu-detail-backdrop" type="button" aria-label="关闭商品详情" onClick={() => { setDetailProductId('');setEditingBundleUnit(null) }} />
         <aside className="menu-detail-drawer" role="dialog" aria-modal="true" aria-label={`${detailProduct.name}商品详情`}>
           <header>
             <div><small>{detailProduct.productKind === 'bundle' ? 'CURATED FOR TONIGHT' : detailProduct.categoryName ?? 'M-BOX MENU'}</small><h2>{detailProduct.name}</h2><span>{detailProduct.specification}</span></div>
-            <button className="icon-button" title="关闭商品详情" onClick={() => setDetailProductId('')}><X size={18} /></button>
+            <button className="icon-button" title="关闭商品详情" onClick={() => { setDetailProductId('');setEditingBundleUnit(null) }}><X size={18} /></button>
           </header>
           <div className="menu-detail-media">{detailProduct.imageUrl
             ? <img src={detailProduct.imageUrl} alt={detailProduct.name} />
@@ -999,9 +1143,23 @@ export function MenuOrderingWorkspace({
                 </article>
               })}</div>
             </section>}
+            {detailChoiceGroups.map((group)=><section className="menu-detail-choice-group" key={group.id}>
+              <header><strong>{group.name}</strong><span>请选择 {group.selectionCount} 款</span></header>
+              <div>{group.options.map((option)=>{
+                const selected=(detailChoiceSelections[group.id]??[]).includes(option.productId)
+                return <button type="button" key={option.productId}
+                  className={selected?'is-selected':''}
+                  disabled={option.available===false}
+                  aria-pressed={selected}
+                  onClick={()=>toggleDetailChoice(group.id,option.productId,group.selectionCount)}>
+                  <span><strong>{option.name??'可选菜品'}</strong><small>{option.quantity>1?`每份 × ${option.quantity}`:(option.unavailableReason??'包含 1 份')}</small></span>
+                  <b>{selected?'已选':'选择'}</b>
+                </button>
+              })}</div>
+            </section>)}
             {detailProduct.productKind === 'bundle' && detailSavingsAmount > 0 && <section className="menu-detail-value">
-              <span>按当前单点合计 <s>¥{formatMenuAmount(detailComparisonAmount!)}</s></span>
-              <strong>这份安排少付 ¥{formatMenuAmount(detailSavingsAmount)}</strong>
+              <span>{detailChoicesComplete?'按所选菜品单点合计':'单点最低合计'} <s>¥{formatMenuAmount(detailComparisonAmount!)}</s></span>
+              <strong>{detailChoicesComplete?'这份安排少付':'至少可省'} ¥{formatMenuAmount(detailSavingsAmount)}</strong>
             </section>}
             <section className="menu-detail-service">
               <span>{recommendationConfig(detailProduct).singleWaveEligible ? '按一轮集中准备，尽量一次上齐' : '按现场最佳状态分批送达'}</span>
@@ -1010,15 +1168,22 @@ export function MenuOrderingWorkspace({
           </div>
           <footer>
             <div><small>今晚价格</small><strong>¥{formatMenuAmount(detailProduct.listPriceAmount)}</strong></div>
-            {detailQuantity === 0 ? <button
+            {detailProduct.productKind==='bundle'?<button
+              className="menu-submit-button"
+              data-haptic="action"
+              disabled={availability.get(detailProduct.id)?.orderable !== true || cartMutating || !detailChoicesComplete}
+              onClick={()=>void addConfiguredBundle(detailProduct)}
+            >{editingBundleUnit?<Check size={18}/>:<Plus size={18} />}{detailChoiceGroups.length>0
+                ?(detailChoicesComplete?(editingBundleUnit?`保存第${editingBundleUnit.unitIndex+1}份`:'确认选择并加入'):'请先完成选择')
+                :'加入购物车'}</button>:detailQuantity===0?<button
               className="menu-submit-button"
               data-haptic="action"
               disabled={availability.get(detailProduct.id)?.orderable !== true || cartMutating}
-              onClick={() => changeQuantity(detailProduct.id, 1)}
-            ><Plus size={18} />加入购物车</button> : <div className="menu-detail-stepper" aria-label={`${detailProduct.name}已选${detailQuantity}件`}>
-              <button type="button" aria-label={`减少${detailProduct.name}`} disabled={cartMutating} onClick={() => changeQuantity(detailProduct.id, -1)}><Minus size={18} /></button>
+              onClick={()=>changeQuantity(detailProduct.id,1)}
+            ><Plus size={18}/>加入购物车</button>:<div className="menu-detail-stepper" aria-label={`${detailProduct.name}已选${detailQuantity}件`}>
+              <button type="button" aria-label={`减少${detailProduct.name}`} disabled={cartMutating} onClick={()=>changeQuantity(detailProduct.id,-1)}><Minus size={18}/></button>
               <span><small>已加入购物车</small><strong>{detailQuantity} 件</strong></span>
-              <button type="button" aria-label={`增加${detailProduct.name}`} disabled={cartMutating} onClick={() => changeQuantity(detailProduct.id, 1)}><Plus size={18} /></button>
+              <button type="button" aria-label={`增加${detailProduct.name}`} disabled={cartMutating} onClick={()=>changeQuantity(detailProduct.id,1)}><Plus size={18}/></button>
             </div>}
           </footer>
         </aside>
@@ -1073,7 +1238,7 @@ export function MenuOrderingWorkspace({
               confirmation,
               confirmedDuplicateOrderId,
             })} onClick={() => {
-              if (confirmation === 'continue') confirmContinuation()
+              if (confirmation === 'continue') void confirmContinuation()
               else void executeSubmit(confirmation === 'duplicate' ? confirmedDuplicateOrderId : undefined)
             }}><Check size={17} />{cartMutating ? '正在同步选择' : busy ? '正在提交' : confirmation === 'duplicate' ? '确认继续加单' : confirmation === 'continue' ? '继续选商品' : complimentaryMode ? '确认赠送' : '确认上单'}</button>
           </footer>

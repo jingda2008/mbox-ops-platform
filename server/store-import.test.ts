@@ -171,6 +171,43 @@ function extendedPackage() {
 }
 
 describe('store import preflight', () => {
+  it('accepts a choice-only bundle and preserves its concrete option dependency', () => {
+    const input=completePackage()
+    input.data.products.push({
+      id:'product-choice-bundle',sku:'BUNDLE-CHOICE-001',name:'任选饮品套餐',specification:'任选一款',
+      productKind:'bundle',bundleChoiceGroups:[{
+        id:'choice-drink',code:'drink',name:'任选一款饮品',selectionCount:1,
+        options:[{ productId:'product-water',quantity:1 }],
+      }],
+      listPriceAmount:5000,costAmount:300,stationId:'bar-main',enabled:true,configVersion:2,
+    })
+
+    const result=preflightStoreImportPackage(sourceState(),input)
+
+    expect(result.valid).toBe(true)
+    expect(result.issues).toEqual([])
+    expect(result.preview?.products.added).toBe(2)
+  })
+
+  it('rejects a bundle choice group that cannot satisfy its exact selection count', () => {
+    const input=completePackage()
+    input.data.products.push({
+      id:'product-choice-bundle',sku:'BUNDLE-CHOICE-001',name:'任选饮品套餐',specification:'任选两款',
+      productKind:'bundle',bundleChoiceGroups:[{
+        id:'choice-drink',code:'drink',name:'任选两款饮品',selectionCount:2,
+        options:[{ productId:'product-water',quantity:1 }],
+      }],
+      listPriceAmount:5000,costAmount:300,stationId:'bar-main',enabled:true,configVersion:2,
+    })
+
+    const result=preflightStoreImportPackage(sourceState(),input)
+
+    expect(result.valid).toBe(false)
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code:'BUNDLE_CHOICE_COUNT_INVALID',section:'products',field:'bundleChoiceGroups.0.selectionCount',
+    }))
+  })
+
   it('accepts workstation, skill, assignment and guest visibility extensions', () => {
     const result = preflightStoreImportPackage(sourceState(), extendedPackage())
 

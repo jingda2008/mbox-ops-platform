@@ -13,6 +13,11 @@ export function guestMenuProductToMenuProduct(product: GuestMenuProduct): MenuPr
       productId: component.productId,
       quantity: component.quantity,
     })),
+    bundleChoiceGroups:(product.bundleChoiceGroups??[]).map((group)=>({
+      ...group,options:group.options.map((option)=>({ ...option })),
+    })),
+    bundleFixedSeparateAmountMinor:product.fixedSeparateAmountMinor,
+    bundleSeparateAmountFromMinor:product.separateAmountFromMinor,
     substitutionProductIds: [],
     recommendation: { ...product.recommendation },
     categoryId: product.categoryCode,

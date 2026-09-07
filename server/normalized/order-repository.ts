@@ -20,6 +20,7 @@ export type FulfillmentStation = 'bar' | 'kitchen' | 'cashier' | 'none'
 
 export type OrderItemCostSource =
   | 'catalog_product'
+  | 'bundle_components'
   | 'legacy_snapshot'
   | 'included_in_parent'
   | 'unavailable'
@@ -33,6 +34,16 @@ export interface SubmitOrderLineInput {
   productId: string
   quantity: number
   note?: string | null
+  bundleSelections?: readonly BundleUnitSelectionInput[]
+}
+
+export interface BundleChoiceSelectionInput {
+  groupId: string
+  productIds: readonly string[]
+}
+
+export interface BundleUnitSelectionInput {
+  groups: readonly BundleChoiceSelectionInput[]
 }
 
 export interface CreateSubmittedOrderInput {
@@ -136,7 +147,30 @@ interface BundleComponentRow extends Record<string, unknown> {
   component_fulfillment_sla_seconds: number | null
   component_product_kind: 'single' | 'bundle'
   component_status: 'active' | 'sold_out' | 'inactive'
+  component_cost_amount_minor: string | number | null
   component_quantity: number
+  choice_group_id?: string | null
+  choice_group_name?: string | null
+}
+
+interface BundleChoiceOptionRow extends BundleComponentRow {
+  choice_group_id: string
+  choice_group_name: string
+  choice_group_selection_count: number
+  option_quantity: number
+  component_allowed_channels: OrderChannel[]
+  component_guest_visible: boolean
+  component_available_from: string | null
+  component_available_until: string | null
+  store_local_time: string
+}
+
+interface BundleChoiceGroupRow extends Record<string, unknown> {
+  request_index: number
+  bundle_product_id: string
+  choice_group_id: string
+  selection_count: number
+  option_count: number
 }
 
 interface OrderRow extends Record<string, unknown> {
@@ -191,6 +225,7 @@ interface RequestedLineRecord {
   productId: string
   quantity: number
   note: string | null
+  bundleSelections: BundleUnitSelectionInput[]
 }
 
 export class TableSessionUnavailableForOrderError extends Error {
@@ -238,7 +273,7 @@ export class OrderRepository {
     for (const [index, price] of priced.entries()) {
       assertProductOrderable(price, requested[index]!, channel)
     }
-    await this.loadBundleComponents(requested, priced)
+    await this.loadBundleComponents(requested, priced, channel)
   }
 
   async createSubmitted(
@@ -258,8 +293,9 @@ export class OrderRepository {
     const subtotalAmountMinor = sumSafe(grossItems.map((item) => item.unitPriceMinor * item.quantity))
     validatePricingAuthorization(pricingAuthorization, subtotalAmountMinor)
     const itemRows = allocatePricingAdjustment(grossItems, pricingAuthorization)
-    const bundleComponents = await this.loadBundleComponents(requested, priced)
-    const operationalItems = expandBundleItems(itemRows, bundleComponents)
+    const bundleComponents = await this.loadBundleComponents(requested, priced, input.channel)
+    const costedItems=applyConfigurableBundleCosts(itemRows,bundleComponents)
+    const operationalItems = expandBundleItems(costedItems, bundleComponents)
     const discountAmountMinor = sumSafe(itemRows.map((item) => item.discountAmountMinor))
     const totalAmountMinor = subtotalAmountMinor - discountAmountMinor
 
@@ -533,7 +569,13 @@ export class OrderRepository {
   private async loadBundleComponents(
     requested: readonly RequestedLineRecord[],
     priced: readonly ProductPriceRow[],
+    channel: OrderChannel,
   ): Promise<BundleComponentRow[]> {
+    for(const [index,price] of priced.entries()){
+      if(price.product_kind==='single'&&requested[index]!.bundleSelections.length>0){
+        throw new OrderProductUnavailableError(price.product_id)
+      }
+    }
     const bundles = priced.flatMap((price, index) => price.product_kind === 'bundle'
       ? [{
           request_index: requested[index]!.requestIndex,
@@ -542,7 +584,7 @@ export class OrderRepository {
         }]
       : [])
     if (bundles.length === 0) return []
-    const result = await this.transaction.query<BundleComponentRow>(`
+    const fixedResult = await this.transaction.query<BundleComponentRow>(`
       WITH requested_bundle AS (
         SELECT request_index, bundle_product_id, ordered_quantity
         FROM jsonb_to_recordset($3::jsonb)
@@ -560,7 +602,10 @@ export class OrderRepository {
         product.fulfillment_sla_seconds AS component_fulfillment_sla_seconds,
         product.product_kind AS component_product_kind,
         product.status AS component_status,
-        component.quantity * requested_bundle.ordered_quantity AS component_quantity
+        product.cost_amount_minor AS component_cost_amount_minor,
+        component.quantity * requested_bundle.ordered_quantity AS component_quantity,
+        NULL::uuid AS choice_group_id,
+        NULL::text AS choice_group_name
       FROM requested_bundle
       JOIN mbox.product_bundle_components AS component
         ON component.tenant_id = $1::uuid
@@ -577,10 +622,115 @@ export class OrderRepository {
       this.transaction.scope.storeId,
       JSON.stringify(bundles),
     ])
+    const choiceResult = await this.transaction.query<BundleChoiceOptionRow>(`
+      WITH requested_bundle AS (
+        SELECT request_index,bundle_product_id,ordered_quantity,bundle_selections
+        FROM jsonb_to_recordset($3::jsonb) AS line(
+          request_index integer,bundle_product_id uuid,ordered_quantity integer,bundle_selections jsonb
+        )
+      )
+      SELECT requested_bundle.request_index,requested_bundle.bundle_product_id,
+        choice_group.id AS choice_group_id,choice_group.display_name AS choice_group_name,
+        choice_group.selection_count AS choice_group_selection_count,
+        choice_option.component_product_id,choice_option.quantity AS option_quantity,
+        product.code AS component_code,product.name AS component_name,
+        product.category_code AS component_category_code,
+        product.fulfillment_station AS component_fulfillment_station,
+        product.product_snapshot AS component_product_snapshot,
+        product.kds_priority AS component_kds_priority,
+        product.fulfillment_sla_seconds AS component_fulfillment_sla_seconds,
+        product.product_kind AS component_product_kind,product.status AS component_status,
+        product.cost_amount_minor AS component_cost_amount_minor,
+        product.allowed_channels AS component_allowed_channels,
+        product.guest_visible AS component_guest_visible,
+        to_char(product.available_from,'HH24:MI') AS component_available_from,
+        to_char(product.available_until,'HH24:MI') AS component_available_until,
+        to_char((clock_timestamp() AT TIME ZONE store.timezone)::time,'HH24:MI') AS store_local_time,
+        0::integer AS component_quantity
+      FROM requested_bundle
+      JOIN mbox.product_bundle_choice_groups choice_group
+        ON choice_group.tenant_id=$1::uuid AND choice_group.store_id=$2::uuid
+       AND choice_group.bundle_product_id=requested_bundle.bundle_product_id
+      JOIN mbox.product_bundle_choice_options choice_option
+        ON choice_option.tenant_id=choice_group.tenant_id AND choice_option.store_id=choice_group.store_id
+       AND choice_option.choice_group_id=choice_group.id
+      JOIN mbox.products product
+        ON product.tenant_id=choice_option.tenant_id AND product.store_id=choice_option.store_id
+       AND product.id=choice_option.component_product_id
+      JOIN mbox.stores store ON store.tenant_id=product.tenant_id AND store.id=product.store_id
+      ORDER BY requested_bundle.request_index,choice_group.sort_order,choice_group.id,
+        choice_option.sort_order,choice_option.id
+      FOR KEY SHARE OF choice_group,choice_option,product
+    `,[
+      this.transaction.scope.tenantId,
+      this.transaction.scope.storeId,
+      JSON.stringify(bundles.map((bundle) => ({
+        ...bundle,
+        bundle_selections: requested[bundle.request_index]!.bundleSelections,
+      }))),
+    ])
+    const groupResult=await this.transaction.query<BundleChoiceGroupRow>(`
+      WITH requested_bundle AS (
+        SELECT request_index,bundle_product_id
+        FROM jsonb_to_recordset($3::jsonb)
+          AS line(request_index integer,bundle_product_id uuid)
+      )
+      SELECT requested_bundle.request_index,requested_bundle.bundle_product_id,
+        choice_group.id AS choice_group_id,choice_group.selection_count,
+        count(choice_option.id)::integer AS option_count
+      FROM requested_bundle
+      JOIN mbox.product_bundle_choice_groups choice_group
+        ON choice_group.tenant_id=$1::uuid AND choice_group.store_id=$2::uuid
+       AND choice_group.bundle_product_id=requested_bundle.bundle_product_id
+      LEFT JOIN mbox.product_bundle_choice_options choice_option
+        ON choice_option.tenant_id=choice_group.tenant_id AND choice_option.store_id=choice_group.store_id
+       AND choice_option.choice_group_id=choice_group.id
+      GROUP BY requested_bundle.request_index,requested_bundle.bundle_product_id,
+        choice_group.id,choice_group.selection_count,choice_group.sort_order
+      ORDER BY requested_bundle.request_index,choice_group.sort_order,choice_group.id
+    `,[this.transaction.scope.tenantId,this.transaction.scope.storeId,JSON.stringify(bundles)])
+    const selectedComponents: BundleComponentRow[]=[]
     for (const bundle of bundles) {
-      const components = result.rows.filter((row) => row.request_index === bundle.request_index)
-      if (components.length === 0) throw new OrderProductUnavailableError(bundle.bundle_product_id)
-      for (const component of components) {
+      const fixedComponents = fixedResult.rows.filter((row) => row.request_index === bundle.request_index)
+      const optionRows = choiceResult.rows.filter((row) => row.request_index === bundle.request_index)
+      const groupDefinitions=groupResult.rows.filter((row)=>row.request_index===bundle.request_index)
+      const groups = new Map<string, BundleChoiceOptionRow[]>()
+      for (const row of optionRows) groups.set(row.choice_group_id,[...(groups.get(row.choice_group_id)??[]),row])
+      const selections = requested[bundle.request_index]!.bundleSelections
+      if (groupDefinitions.some((group)=>group.option_count<group.selection_count)) {
+        throw new OrderProductUnavailableError(bundle.bundle_product_id)
+      }
+      if (groupDefinitions.length === 0 && selections.length > 0) throw new OrderProductUnavailableError(bundle.bundle_product_id)
+      if (groupDefinitions.length > 0 && selections.length !== bundle.ordered_quantity) {
+        throw new OrderProductUnavailableError(bundle.bundle_product_id)
+      }
+      for (const unit of selections) {
+        if (unit.groups.length !== groupDefinitions.length) throw new OrderProductUnavailableError(bundle.bundle_product_id)
+        const seenGroups=new Set<string>()
+        for (const selection of unit.groups) {
+          if (seenGroups.has(selection.groupId)) throw new OrderProductUnavailableError(bundle.bundle_product_id)
+          seenGroups.add(selection.groupId)
+          const availableOptions=groups.get(selection.groupId)
+          if (!availableOptions || selection.productIds.length !== Number(availableOptions[0]!.choice_group_selection_count)
+            || new Set(selection.productIds).size !== selection.productIds.length) {
+            throw new OrderProductUnavailableError(bundle.bundle_product_id)
+          }
+          for (const productId of selection.productIds) {
+            const option=availableOptions.find((candidate)=>candidate.component_product_id===productId)
+            if (!option || !choiceOptionOrderable(option,channel)) {
+              throw new OrderProductUnavailableError(bundle.bundle_product_id)
+            }
+            selectedComponents.push({
+              ...option,
+              component_quantity: Number(option.option_quantity),
+            })
+          }
+        }
+      }
+      if (fixedComponents.length === 0 && groupDefinitions.length === 0) {
+        throw new OrderProductUnavailableError(bundle.bundle_product_id)
+      }
+      for (const component of fixedComponents) {
         if (component.component_product_kind !== 'single'
           || component.component_status !== 'active'
           || !Number.isInteger(component.component_quantity)
@@ -590,7 +740,7 @@ export class OrderRepository {
         }
       }
     }
-    return result.rows
+    return [...fixedResult.rows,...selectedComponents]
   }
 }
 
@@ -614,8 +764,63 @@ function normalizeRequestedLines(lines: readonly SubmitOrderLineInput[]): Reques
       productId: line.productId,
       quantity: line.quantity,
       note: line.note?.trim() || null,
+      bundleSelections: normalizeBundleSelections(untrustedLine.bundleSelections, requestIndex, line.quantity),
     }
   })
+}
+
+function normalizeBundleSelections(
+  value: unknown,
+  lineIndex: number,
+  quantity: number,
+): BundleUnitSelectionInput[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length > quantity) {
+    throw new TypeError(`lines[${lineIndex}].bundleSelections must contain at most one selection per bundle unit`)
+  }
+  return value.map((unit, unitIndex) => {
+    if (!isRecord(unit) || !Array.isArray(unit.groups) || unit.groups.length > 20) {
+      throw new TypeError(`lines[${lineIndex}].bundleSelections[${unitIndex}] is invalid`)
+    }
+    return { groups: unit.groups.map((rawGroup, groupIndex) => {
+      if (!isRecord(rawGroup) || typeof rawGroup.groupId !== 'string'
+        || !Array.isArray(rawGroup.productIds) || rawGroup.productIds.length < 1
+        || rawGroup.productIds.length > 20) {
+        throw new TypeError(`lines[${lineIndex}].bundleSelections[${unitIndex}].groups[${groupIndex}] is invalid`)
+      }
+      requireUuidLike(
+        `lines[${lineIndex}].bundleSelections[${unitIndex}].groups[${groupIndex}].groupId`,
+        rawGroup.groupId,
+      )
+      const productIds = rawGroup.productIds.map((productId, optionIndex) => {
+        if (typeof productId !== 'string') throw new TypeError(`selected product ${optionIndex} is invalid`)
+        requireUuidLike(`selected product ${optionIndex}`, productId)
+        return productId
+      })
+      return { groupId: rawGroup.groupId, productIds }
+    }) }
+  })
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function choiceOptionOrderable(option: BundleChoiceOptionRow, channel: OrderChannel): boolean {
+  if (option.component_product_kind !== 'single' || option.component_status !== 'active') return false
+  if (!option.component_allowed_channels.includes(channel)) return false
+  if (channel === 'guest_qr' && !option.component_guest_visible) return false
+  const start = option.component_available_from
+  const end = option.component_available_until
+  if (start === null || end === null) return true
+  const now = option.store_local_time
+  return start < end ? now >= start && now < end : now >= start || now < end
+}
+
+function bundleSelectionsToJson(selections:readonly BundleUnitSelectionInput[]):JsonObject[]{
+  return selections.map((unit)=>({ groups:unit.groups.map((group)=>({
+    groupId:group.groupId,productIds:[...group.productIds],
+  })) }))
 }
 
 function buildItem(price: ProductPriceRow, requested: RequestedLineRecord) {
@@ -658,6 +863,7 @@ function buildItem(price: ProductPriceRow, requested: RequestedLineRecord) {
       priceType: price.price_type,
       productKind: price.product_kind,
       source: toJsonObject(price.product_snapshot),
+      ...(requested.bundleSelections.length > 0 ? { bundleSelections: bundleSelectionsToJson(requested.bundleSelections) } : {}),
     },
     unitCostMinorAtSubmission,
     totalCostMinorAtSubmission,
@@ -709,6 +915,10 @@ function expandBundleItems<T extends ReturnType<typeof buildItem>>(
           source: toJsonObject(component.component_product_snapshot),
           bundleComponent: true,
           paidByParentOrderItemId: parent.id,
+          ...(component.choice_group_id ? {
+            bundleChoiceGroupId: component.choice_group_id,
+            bundleChoiceGroupName: component.choice_group_name ?? null,
+          } : {}),
         },
         unitCostMinorAtSubmission: 0,
         totalCostMinorAtSubmission: 0,
@@ -723,6 +933,34 @@ function expandBundleItems<T extends ReturnType<typeof buildItem>>(
     }
   }
   return operational
+}
+
+function applyConfigurableBundleCosts<T extends ReturnType<typeof buildItem>>(
+  paidItems:readonly T[],
+  components:readonly BundleComponentRow[],
+):T[]{
+  return paidItems.map((item)=>{
+    const selected=components.filter((component)=>component.request_index===item.requestIndex)
+    if(item.productSnapshot.productKind!=='bundle'||!selected.some((component)=>component.choice_group_id))return item
+    const costs=selected.map((component)=>authoritativeCatalogCostOrNull(component.component_cost_amount_minor))
+    if(costs.some((cost)=>cost===null))return {
+      ...item,unitCostMinorAtSubmission:null,totalCostMinorAtSubmission:null,
+      costSource:'unavailable' as const,costReferenceProductId:null,
+      costReferenceProductUpdatedAt:null,
+      costSnapshot:costSnapshot(null,null,'unavailable'),
+    }
+    const totalCostMinorAtSubmission=sumSafe(selected.map((component,index)=>multiplySafeMoney(
+      costs[index]!,component.component_quantity,`bundle component cost for ${item.productId}`,
+    )))
+    const unitCostMinorAtSubmission=totalCostMinorAtSubmission%item.quantity===0
+      ?totalCostMinorAtSubmission/item.quantity:null
+    return {
+      ...item,unitCostMinorAtSubmission,totalCostMinorAtSubmission,
+      costSource:'bundle_components' as const,costReferenceProductId:item.productId,
+      costReferenceProductUpdatedAt:null,
+      costSnapshot:costSnapshot(unitCostMinorAtSubmission,totalCostMinorAtSubmission,'bundle_components'),
+    }
+  })
 }
 
 function authoritativeCatalogCostOrNull(costAmountMinor: unknown): number | null {
@@ -751,7 +989,7 @@ function authoritativeCatalogCostVersion(value: unknown, productId: string): str
 function costSnapshot(
   unitCostMinor: number | null,
   totalCostMinor: number | null,
-  source: 'catalog_product' | 'included_in_parent' | 'unavailable',
+  source: 'catalog_product' | 'bundle_components' | 'included_in_parent' | 'unavailable',
 ): JsonObject {
   if (unitCostMinor === null || totalCostMinor === null) {
     return { source, authority: 'strong_order_item_columns' }

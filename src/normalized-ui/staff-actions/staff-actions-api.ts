@@ -86,6 +86,10 @@ export interface AssistedOrderCatalogProduct {
     sortOrder: number
     note: string | null
   }>
+  bundleChoiceGroups?:Array<{
+    id:string;code:string;name:string;selectionCount:number;sortOrder:number
+    options:Array<{ productId:string;code:string;name:string;quantity:number;sortOrder:number;available:boolean;unavailableReason?:string|null }>
+  }>
   productSnapshot: Record<string, unknown>
   allowedChannels: Array<'guest_qr' | 'staff_assisted' | 'cashier' | 'reservation' | 'integration'>
   guestVisible: boolean
@@ -312,7 +316,9 @@ export interface StaffActionsApiPort {
     tableSessionId: string
     assistedOrderContextToken: string
     orderMode: 'paid' | 'gift'
-    items: ReadonlyArray<{ productId: string; quantity: number }>
+    items: ReadonlyArray<{ productId: string; quantity: number;bundleSelections?:Array<{
+      groups:Array<{ groupId:string;productIds:string[] }>
+    }> }>
     fulfillmentNote?: string
     giftReason?: string
     settlementMode: 'immediate_payment' | 'table_tab'
@@ -667,7 +673,9 @@ export class StaffActionsApi implements StaffActionsApiPort {
     tableSessionId: string
     assistedOrderContextToken: string
     orderMode: 'paid' | 'gift'
-    items: ReadonlyArray<{ productId: string; quantity: number }>
+    items: ReadonlyArray<{ productId: string; quantity: number;bundleSelections?:Array<{
+      groups:Array<{ groupId:string;productIds:string[] }>
+    }> }>
     fulfillmentNote?: string
     giftReason?: string
     settlementMode: 'immediate_payment' | 'table_tab'

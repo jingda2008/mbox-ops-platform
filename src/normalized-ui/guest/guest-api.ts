@@ -1,5 +1,6 @@
 import type { GuestMenuProduct, GuestMood } from './guest-model'
 import type { MenuRecommendationScene } from '../../shared/contracts'
+import type { MenuBundleUnitSelection } from '../../shared/contracts'
 import type { OnlinePaymentAction } from '../../shared/online-payment-contracts'
 
 export type { OnlinePaymentAction } from '../../shared/online-payment-contracts'
@@ -102,6 +103,7 @@ export interface GuestSharedCart {
     currency: string | null
     available: boolean
     unavailableReason: string | null
+    bundleSelections?: MenuBundleUnitSelection[]
   }>
   totalAmountMinor: number | null
   currency: string | null
@@ -251,7 +253,7 @@ export class GuestApiClient {
 
   async submitOrder(
     input: Readonly<{
-      items: Array<{ productId: string; quantity: number }>
+      items: Array<{ productId: string; quantity: number;bundleSelections?:MenuBundleUnitSelection[] }>
       note: string | null
       confirmedDuplicateOrderId?: string
     }>,
@@ -275,7 +277,8 @@ export class GuestApiClient {
   }
 
   async adjustSharedCart(
-    input: Readonly<{ productId: string; delta: number; expectedGeneration: number; expectedVersion: number }>,
+    input: Readonly<{ productId: string; delta: number; expectedGeneration: number; expectedVersion: number;
+      bundleSelections?:readonly MenuBundleUnitSelection[] }>,
     options: Readonly<RequestOptions> & { idempotencyKey: string },
   ): Promise<GuestSharedCart> {
     const body = await this.request<unknown>('/api/guest/shared-cart/lines', {
@@ -296,6 +299,24 @@ export class GuestApiClient {
     })
     const data=responseData(body)
     if (!isSharedCart(data)) throw invalidResponse()
+    return data
+  }
+
+  async replaceSharedCartBundleSelection(
+    input:Readonly<{ productId:string;unitIndex:number;bundleSelection:MenuBundleUnitSelection;
+      expectedGeneration:number;expectedVersion:number }>,
+    options:Readonly<RequestOptions>&{ idempotencyKey:string },
+  ):Promise<GuestSharedCart>{
+    const body=await this.request<unknown>(
+      `/api/guest/shared-cart/lines/${encodeURIComponent(input.productId)}/bundle-selections/${input.unitIndex}`,
+      { method:'PUT',body:{
+        bundleSelection:input.bundleSelection,
+        expectedGeneration:input.expectedGeneration,
+        expectedVersion:input.expectedVersion,
+      },signal:options.signal,idempotencyKey:options.idempotencyKey },
+    )
+    const data=responseData(body)
+    if(!isSharedCart(data))throw invalidResponse()
     return data
   }
 
@@ -395,7 +416,7 @@ export class GuestApiClient {
   private async request<Data>(
     url: string,
     options: Readonly<{
-      method: 'GET' | 'POST' | 'DELETE'
+      method: 'GET' | 'POST' | 'PUT' | 'DELETE'
       body?: unknown
       signal?: AbortSignal
       idempotencyKey?: string
@@ -496,12 +517,19 @@ function isSharedCart(value: unknown): value is GuestSharedCart {
       && (line.subtotalAmountMinor === null || Number.isSafeInteger(line.subtotalAmountMinor))
       && (line.currency === null || typeof line.currency === 'string')
       && typeof line.available === 'boolean'
-      && (line.unavailableReason === null || typeof line.unavailableReason === 'string'))
+      && (line.unavailableReason === null || typeof line.unavailableReason === 'string')
+      && (line.bundleSelections===undefined||isBundleSelections(line.bundleSelections)))
     && (value.totalAmountMinor === null || Number.isSafeInteger(value.totalAmountMinor))
     && (value.currency === null || typeof value.currency === 'string')
     && typeof value.updatedAt === 'string'
     && Array.isArray(value.allowedActions)
     && value.allowedActions.every((action) => typeof action === 'string')
+}
+
+function isBundleSelections(value:unknown):boolean{
+  return Array.isArray(value)&&value.every((unit)=>isObject(unit)&&Array.isArray(unit.groups)
+    &&unit.groups.every((group)=>isObject(group)&&typeof group.groupId==='string'
+      &&Array.isArray(group.productIds)&&group.productIds.every((productId)=>typeof productId==='string')))
 }
 
 function isMenuProduct(value: unknown): value is GuestMenuProduct {
@@ -538,6 +566,20 @@ function isMenuProduct(value: unknown): value is GuestMenuProduct {
       && typeof component.name === 'string'
       && Number.isSafeInteger(component.quantity)
       && (component.quantity as number) > 0)
+    && (value.fixedSeparateAmountMinor===undefined||value.fixedSeparateAmountMinor===null||Number.isSafeInteger(value.fixedSeparateAmountMinor))
+    && (value.separateAmountFromMinor===undefined||value.separateAmountFromMinor===null||Number.isSafeInteger(value.separateAmountFromMinor))
+    && (value.savingsFromMinor===undefined||value.savingsFromMinor===null||Number.isSafeInteger(value.savingsFromMinor))
+    && (value.bundleChoiceGroups===undefined||(Array.isArray(value.bundleChoiceGroups)
+    && value.bundleChoiceGroups.every((group)=>isObject(group)
+      &&typeof group.id==='string'&&typeof group.code==='string'&&typeof group.name==='string'
+      &&Number.isSafeInteger(group.selectionCount)&&(group.selectionCount as number)>0
+      &&Array.isArray(group.options)&&group.options.every((option)=>isObject(option)
+        &&typeof option.productId==='string'&&typeof option.name==='string'
+        &&Number.isSafeInteger(option.quantity)&&(option.quantity as number)>0
+        &&(option.amountMinor===undefined||option.amountMinor===null||Number.isSafeInteger(option.amountMinor))
+        &&(option.currency===undefined||option.currency===null||typeof option.currency==='string')
+        &&typeof option.available==='boolean'
+        &&(option.unavailableReason===null||typeof option.unavailableReason==='string')))))
     && isObject(value.recommendation)
     && typeof value.recommendation.enabled === 'boolean'
     && Number.isSafeInteger(value.recommendation.priority)

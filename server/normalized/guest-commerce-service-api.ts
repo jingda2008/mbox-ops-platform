@@ -124,7 +124,11 @@ interface CatalogMenuRow extends Record<string, unknown> {
   fulfillment_station: string
   product_kind: 'single' | 'bundle'
   bundle_components: unknown
-  separate_amount_minor: string | null
+  bundle_choice_groups: unknown
+  fixed_separate_amount_minor: string | null
+  minimum_choice_amount_minor: string | null
+  /** Compatibility alias used by older catalog projections and fixtures. */
+  separate_amount_minor?: string | null
   product_snapshot: JsonObject
   guest_visible: boolean
   search_text: string
@@ -315,6 +319,29 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
     })
     return reply.send({ data: publicSharedCart(cart) })
   }))
+
+  app.put<{ Params:{ productId:string;unitIndex:string } }>(
+    '/guest/shared-cart/lines/:productId/bundle-selections/:unitIndex',
+    async (request,reply)=>handleRoute(reply,async()=>{
+      const context=await requireTableContext(options,request,'guest.order.create')
+      const input=readSharedCartBundleSelectionReplacement(request.body)
+      const operationId=readIdempotencyKey(request)
+      await recordSharedCartWriteAttempt(options,context,operationId,'replace_selection')
+      const cart=await options.transactions.run(context.scope,async(transaction)=>{
+        if(!await lockBoundGuestTablePosition(transaction,context))throw new GuestAuthenticationRequiredError()
+        await requireGuestCartProtocol(transaction,context.tableSessionId,2)
+        return new GuestSharedCartRepository(transaction).replaceBundleSelection(
+          context.tableSessionId,createSharedCartPublicId(),{
+            ...input,
+            productId:readUuid(request.params.productId,'productId'),
+            unitIndex:readInteger(Number(request.params.unitIndex),'unitIndex',0,19),
+            operationId,actorSessionRef:context.actorRef,
+          },
+        )
+      })
+      return reply.send({ data:publicSharedCart(cart) })
+    }),
+  )
 
   app.delete<{ Params:{ productId:string } }>('/guest/shared-cart/lines/:productId',async (request,reply) => (
     handleRoute(reply,async () => {
@@ -869,7 +896,9 @@ async function searchGuestCatalog(
       COALESCE(parent_menu_category.sort_order,menu_category.sort_order) AS top_category_sort_order,
       product.fulfillment_station, product.product_kind,
       COALESCE(component_list.items, '[]'::jsonb) AS bundle_components,
-      component_list.separate_amount_minor,
+      COALESCE(choice_group_list.items, '[]'::jsonb) AS bundle_choice_groups,
+      component_list.separate_amount_minor AS fixed_separate_amount_minor,
+      choice_group_list.minimum_choice_amount_minor,
       product.product_snapshot, product.guest_visible, product.search_text,
       product.recommendation_beverage_family,
       product.recommendation_enabled, product.recommendation_min_guests,
@@ -932,7 +961,8 @@ async function searchGuestCatalog(
           ) ORDER BY component.sort_order, component.id
         ) AS items,
         CASE
-          WHEN count(*) > 0 AND bool_and(
+          WHEN count(*) = 0 THEN '0'
+          WHEN bool_and(
             component_price.amount_minor IS NOT NULL
             AND component_price.currency = price.currency
           )
@@ -960,6 +990,173 @@ async function searchGuestCatalog(
         AND component.store_id = product.store_id
         AND component.bundle_product_id = product.id
     ) AS component_list ON true
+    LEFT JOIN LATERAL (
+      SELECT jsonb_agg(jsonb_build_object(
+        'id',choice_group.id,
+        'code',choice_group.code,
+        'name',choice_group.display_name,
+        'selectionCount',choice_group.selection_count,
+        'options',COALESCE(choice_options.items,'[]'::jsonb)
+      ) ORDER BY choice_group.sort_order,choice_group.id) AS items,
+      CASE WHEN count(*)=0 THEN '0'
+        WHEN bool_and(choice_minimum.amount_minor IS NOT NULL)
+          THEN sum(choice_minimum.amount_minor)::bigint::text
+        ELSE NULL END AS minimum_choice_amount_minor
+      FROM mbox.product_bundle_choice_groups choice_group
+      LEFT JOIN LATERAL (
+        SELECT jsonb_agg(jsonb_build_object(
+          'productId',option_product.id,
+          'name',option_product.name,
+          'quantity',choice_option.quantity,
+          'amountMinor',option_price.amount_minor,
+          'currency',option_price.currency,
+          'available',(
+            option_product.status='active' AND option_product.guest_visible
+            AND 'guest_qr'=ANY(option_product.allowed_channels)
+            AND option_inventory.configuration_complete
+            AND option_inventory.available
+            AND (option_product.available_from IS NULL OR option_product.available_until IS NULL
+              OR (option_product.available_from<option_product.available_until
+                AND (clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
+                AND (clock_timestamp() AT TIME ZONE store.timezone)::time<option_product.available_until)
+              OR (option_product.available_from>=option_product.available_until
+                AND ((clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
+                  OR (clock_timestamp() AT TIME ZONE store.timezone)::time<option_product.available_until)))
+          ),
+          'unavailableReason',CASE
+            WHEN option_product.status<>'active' THEN '当前已停用'
+            WHEN NOT option_product.guest_visible OR NOT ('guest_qr'=ANY(option_product.allowed_channels)) THEN '当前不对顾客开放'
+            WHEN NOT option_inventory.configuration_complete THEN '配方正在更新'
+            WHEN NOT option_inventory.available THEN '当前库存不足'
+            WHEN NOT (option_product.available_from IS NULL OR option_product.available_until IS NULL
+              OR (option_product.available_from<option_product.available_until
+                AND (clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
+                AND (clock_timestamp() AT TIME ZONE store.timezone)::time<option_product.available_until)
+              OR (option_product.available_from>=option_product.available_until
+                AND ((clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
+                  OR (clock_timestamp() AT TIME ZONE store.timezone)::time<option_product.available_until)))
+              THEN '当前不在可售时间'
+            ELSE NULL END
+        ) ORDER BY choice_option.sort_order,choice_option.id) AS items
+        FROM mbox.product_bundle_choice_options choice_option
+        JOIN mbox.products option_product
+          ON option_product.tenant_id=choice_option.tenant_id
+         AND option_product.store_id=choice_option.store_id
+         AND option_product.id=choice_option.component_product_id
+        LEFT JOIN LATERAL (
+          SELECT current_price.amount_minor,current_price.currency
+          FROM mbox.product_prices current_price
+          WHERE current_price.tenant_id=option_product.tenant_id
+            AND current_price.store_id=option_product.store_id
+            AND current_price.product_id=option_product.id
+              AND current_price.price_type='standard'
+              AND current_price.valid_from<=clock_timestamp()
+              AND (current_price.valid_until IS NULL OR current_price.valid_until>clock_timestamp())
+              AND current_price.currency=price.currency
+            ORDER BY current_price.valid_from DESC,current_price.id DESC LIMIT 1
+        ) option_price ON true
+        LEFT JOIN LATERAL (
+          SELECT
+            option_product.inventory_control_mode='not_managed'
+              OR option_product.fulfillment_station NOT IN ('bar','kitchen')
+              OR EXISTS (
+                SELECT 1 FROM mbox.recipes recipe
+                WHERE recipe.tenant_id=option_product.tenant_id
+                  AND recipe.store_id=option_product.store_id
+                  AND recipe.product_id=option_product.id
+                  AND recipe.status='active' AND recipe.effective_at<=statement_timestamp()
+                  AND EXISTS (
+                    SELECT 1 FROM mbox.recipe_items recipe_item
+                    WHERE recipe_item.tenant_id=recipe.tenant_id
+                      AND recipe_item.store_id=recipe.store_id
+                      AND recipe_item.recipe_id=recipe.id AND recipe_item.quantity>0
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM mbox.recipe_items recipe_item
+                    LEFT JOIN mbox.inventory_items inventory_item
+                      ON inventory_item.tenant_id=recipe_item.tenant_id
+                     AND inventory_item.store_id=recipe_item.store_id
+                     AND inventory_item.id=recipe_item.inventory_item_id
+                    LEFT JOIN mbox.inventory_balances balance
+                      ON balance.tenant_id=recipe_item.tenant_id
+                     AND balance.store_id=recipe_item.store_id
+                     AND balance.inventory_item_id=recipe_item.inventory_item_id
+                    WHERE recipe_item.tenant_id=recipe.tenant_id
+                      AND recipe_item.store_id=recipe.store_id
+                      AND recipe_item.recipe_id=recipe.id
+                      AND (inventory_item.id IS NULL OR inventory_item.status<>'active' OR balance.id IS NULL)
+                  )
+              ) AS configuration_complete,
+            option_product.inventory_control_mode='not_managed'
+              OR option_product.fulfillment_station NOT IN ('bar','kitchen')
+              OR EXISTS (
+                SELECT 1 FROM mbox.recipes recipe
+                WHERE recipe.tenant_id=option_product.tenant_id
+                  AND recipe.store_id=option_product.store_id
+                  AND recipe.product_id=option_product.id
+                  AND recipe.status='active' AND recipe.effective_at<=statement_timestamp()
+                  AND EXISTS (
+                    SELECT 1 FROM mbox.recipe_items recipe_item
+                    WHERE recipe_item.tenant_id=recipe.tenant_id
+                      AND recipe_item.store_id=recipe.store_id
+                      AND recipe_item.recipe_id=recipe.id AND recipe_item.quantity>0
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM mbox.recipe_items recipe_item
+                    LEFT JOIN mbox.inventory_items inventory_item
+                      ON inventory_item.tenant_id=recipe_item.tenant_id
+                     AND inventory_item.store_id=recipe_item.store_id
+                     AND inventory_item.id=recipe_item.inventory_item_id
+                    LEFT JOIN mbox.inventory_balances balance
+                      ON balance.tenant_id=recipe_item.tenant_id
+                     AND balance.store_id=recipe_item.store_id
+                     AND balance.inventory_item_id=recipe_item.inventory_item_id
+                    WHERE recipe_item.tenant_id=recipe.tenant_id
+                      AND recipe_item.store_id=recipe.store_id
+                      AND recipe_item.recipe_id=recipe.id
+                      AND (inventory_item.id IS NULL OR inventory_item.status<>'active' OR balance.id IS NULL
+                        OR balance.on_hand_quantity-balance.reserved_quantity
+                          < recipe_item.quantity*choice_option.quantity)
+                  )
+              ) AS available
+        ) option_inventory ON true
+        WHERE choice_option.tenant_id=choice_group.tenant_id
+          AND choice_option.store_id=choice_group.store_id
+          AND choice_option.choice_group_id=choice_group.id
+      ) choice_options ON true
+      LEFT JOIN LATERAL (
+        SELECT CASE WHEN count(*)=choice_group.selection_count
+          THEN sum(candidate.line_amount)::bigint ELSE NULL END AS amount_minor
+        FROM (
+          SELECT choice_option.quantity*option_price.amount_minor AS line_amount
+          FROM mbox.product_bundle_choice_options choice_option
+          JOIN mbox.products option_product
+            ON option_product.tenant_id=choice_option.tenant_id
+           AND option_product.store_id=choice_option.store_id
+           AND option_product.id=choice_option.component_product_id
+          JOIN LATERAL (
+            SELECT current_price.amount_minor,current_price.currency
+            FROM mbox.product_prices current_price
+            WHERE current_price.tenant_id=option_product.tenant_id
+              AND current_price.store_id=option_product.store_id
+              AND current_price.product_id=option_product.id
+              AND current_price.price_type='standard'
+              AND current_price.valid_from<=clock_timestamp()
+              AND (current_price.valid_until IS NULL OR current_price.valid_until>clock_timestamp())
+              AND current_price.currency=price.currency
+            ORDER BY current_price.valid_from DESC,current_price.id DESC LIMIT 1
+          ) option_price ON true
+          WHERE choice_option.tenant_id=choice_group.tenant_id
+            AND choice_option.store_id=choice_group.store_id
+            AND choice_option.choice_group_id=choice_group.id
+          ORDER BY line_amount,choice_option.id
+          LIMIT choice_group.selection_count
+        ) candidate
+      ) choice_minimum ON true
+      WHERE choice_group.tenant_id=product.tenant_id
+        AND choice_group.store_id=product.store_id
+        AND choice_group.bundle_product_id=product.id
+    ) AS choice_group_list ON true
     LEFT JOIN LATERAL (
       SELECT COALESCE(bool_and(
         required_product.inventory_control_mode = 'not_managed'
@@ -1072,12 +1269,17 @@ async function searchGuestCatalog(
       AND (
         product.product_kind = 'single'
         OR (
-          EXISTS (
+          (EXISTS (
             SELECT 1 FROM mbox.product_bundle_components component
             WHERE component.tenant_id = product.tenant_id
               AND component.store_id = product.store_id
               AND component.bundle_product_id = product.id
-          )
+          ) OR EXISTS (
+            SELECT 1 FROM mbox.product_bundle_choice_groups choice_group
+            WHERE choice_group.tenant_id=product.tenant_id
+              AND choice_group.store_id=product.store_id
+              AND choice_group.bundle_product_id=product.id
+          ))
           AND NOT EXISTS (
             SELECT 1
             FROM mbox.product_bundle_components component
@@ -1089,6 +1291,24 @@ async function searchGuestCatalog(
               AND component.store_id = product.store_id
               AND component.bundle_product_id = product.id
               AND component_product.status <> 'active'
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM mbox.product_bundle_choice_groups choice_group
+            WHERE choice_group.tenant_id=product.tenant_id
+              AND choice_group.store_id=product.store_id
+              AND choice_group.bundle_product_id=product.id
+              AND choice_group.selection_count>(
+                SELECT count(*) FROM mbox.product_bundle_choice_options choice_option
+                JOIN mbox.products option_product
+                  ON option_product.tenant_id=choice_option.tenant_id
+                 AND option_product.store_id=choice_option.store_id
+                 AND option_product.id=choice_option.component_product_id
+                WHERE choice_option.tenant_id=choice_group.tenant_id
+                  AND choice_option.store_id=choice_group.store_id
+                  AND choice_option.choice_group_id=choice_group.id
+                  AND option_product.status='active' AND option_product.guest_visible
+                  AND 'guest_qr'=ANY(option_product.allowed_channels)
+              )
           )
         )
       )
@@ -1135,15 +1355,32 @@ async function searchGuestCatalog(
 function publicCatalogProduct(row: CatalogMenuRow) {
   const source = jsonObject(row.product_snapshot.source)
   const amountMinor = publicMinorAmount(row.amount_minor)
-  const separateAmountMinor = row.product_kind === 'bundle'
-    ? publicMinorAmount(row.separate_amount_minor)
+  const bundleChoiceGroups=publicBundleChoiceGroups(row.bundle_choice_groups)
+  const fixedSeparateAmountMinor=publicMinorAmount(
+    row.fixed_separate_amount_minor??row.separate_amount_minor??null,
+  )
+  const minimumChoiceAmountMinor=bundleChoiceGroups.length===0
+    ?0:publicMinorAmount(row.minimum_choice_amount_minor)
+  const separateAmountCandidate=fixedSeparateAmountMinor!==null&&minimumChoiceAmountMinor!==null
+    ?fixedSeparateAmountMinor+minimumChoiceAmountMinor:null
+  const separateAmountFromMinor=row.product_kind==='bundle'
+    && separateAmountCandidate!==null&&Number.isSafeInteger(separateAmountCandidate)
+    ?separateAmountCandidate:null
+  const separateAmountMinor = row.product_kind === 'bundle' && bundleChoiceGroups.length===0
+    ? separateAmountFromMinor
     : null
   const savingsAmountMinor = amountMinor !== null
     && separateAmountMinor !== null
     && separateAmountMinor > amountMinor
     ? separateAmountMinor - amountMinor
     : null
-  const availabilityStatus = publicCatalogAvailabilityStatus(row)
+  const savingsFromMinor=amountMinor!==null&&separateAmountFromMinor!==null
+    &&separateAmountFromMinor>amountMinor?separateAmountFromMinor-amountMinor:null
+  const choiceGroupsReady=bundleChoiceGroups.every((group)=>
+    group.options.filter((option)=>option.available).length>=group.selectionCount)
+  const baseAvailabilityStatus = publicCatalogAvailabilityStatus(row)
+  const availabilityStatus=baseAvailabilityStatus==='available'&&!choiceGroupsReady
+    ?'inventory_unavailable':baseAvailabilityStatus
   const configuredCategoryName = publicString(row.category_name)
   const categoryName = configuredCategoryName
     ?? publicCatalogCategoryFallbackName(row.category_code, row.product_snapshot, source)
@@ -1185,8 +1422,12 @@ function publicCatalogProduct(row: CatalogMenuRow) {
     fulfillmentStation: row.fulfillment_station,
     productKind: row.product_kind,
     bundleComponents: publicBundleComponents(row.bundle_components),
+    bundleChoiceGroups,
+    fixedSeparateAmountMinor,
+    separateAmountFromMinor,
     separateAmountMinor,
     savingsAmountMinor,
+    savingsFromMinor,
     recommendation: publicRecommendation(row, amountMinor),
     availabilityStatus,
     available: availabilityStatus === 'available',
@@ -1264,6 +1505,28 @@ function publicBundleComponents(value: unknown): Array<{ productId: string; name
           quantity: Number(component.quantity),
         }]
       : []
+  })
+}
+
+function publicBundleChoiceGroups(value:unknown){
+  if(!Array.isArray(value))return []
+  return value.flatMap((rawGroup)=>{
+    const group=jsonObject(rawGroup)
+    if(typeof group.id!=='string'||typeof group.code!=='string'||typeof group.name!=='string'
+      ||!Number.isSafeInteger(group.selectionCount)||Number(group.selectionCount)<1
+      ||!Array.isArray(group.options))return []
+    const options=group.options.flatMap((rawOption)=>{
+      const option=jsonObject(rawOption)
+      return typeof option.productId==='string'&&typeof option.name==='string'
+        &&Number.isSafeInteger(option.quantity)&&Number(option.quantity)>0
+        ? [{ productId:option.productId,name:option.name,quantity:Number(option.quantity),
+          amountMinor:option.amountMinor===null?null:publicMinorAmount(String(option.amountMinor)),
+          currency:publicString(option.currency),
+          available:option.available===true,
+          unavailableReason:publicString(option.unavailableReason), }]:[]
+    })
+    return [{ id:group.id,code:group.code,name:group.name,
+      selectionCount:Number(group.selectionCount),options }]
   })
 }
 
@@ -1598,7 +1861,7 @@ async function recordSharedCartWriteAttempt(
   options:GuestCommerceServiceApiOptions,
   context:GuestRequestContext&{tableSessionId:string;businessDate:string},
   operationId:string,
-  action:'adjust'|'remove'|'clear'|'checkout',
+  action:'adjust'|'replace_selection'|'remove'|'clear'|'checkout',
 ):Promise<void>{
   const allowed=await options.transactions.run(context.scope,async transaction=>{
     if(!await lockBoundGuestTablePosition(transaction,context))throw new GuestAuthenticationRequiredError()
@@ -1616,6 +1879,7 @@ async function recordSharedCartWriteAttempt(
 function publicSharedCart(cart: GuestSharedCart) {
   const guestMayWrite = cart.status === 'open' && !cart.guestWritesFrozen
   const hasLines = cart.lines.length > 0
+  const hasBundleSelections=cart.lines.some((line)=>line.bundleSelections.length>0)
   const mayCheckout = guestMayWrite
     && hasLines
     && cart.totalAmountMinor !== null
@@ -1635,12 +1899,16 @@ function publicSharedCart(cart: GuestSharedCart) {
       currency: line.currency,
       available: line.available,
       unavailableReason: line.unavailableReason,
+      bundleSelections:line.bundleSelections.map((unit)=>({ groups:unit.groups.map((group)=>({
+        groupId:group.groupId,productIds:[...group.productIds],
+      })) })),
     })),
     totalAmountMinor: cart.totalAmountMinor,
     currency: cart.currency,
     updatedAt: cart.updatedAt,
     allowedActions: guestMayWrite ? [
       'adjust',
+      ...(hasBundleSelections?['replace_selection']:[]),
       ...(hasLines ? ['remove', 'clear'] : []),
       ...(mayCheckout ? ['checkout'] : []),
     ] : [],
@@ -1858,7 +2126,7 @@ function serviceResponse(result: GuestServiceCommandResult) {
 }
 
 function readGuestOrder(value: unknown): {
-  items: Array<{ productId: string; quantity: number; note?: string | null }>
+  items: Array<{ productId: string; quantity: number; note?: string | null; bundleSelections?: ReturnType<typeof readBundleSelections> }>
   note: string | null
   confirmedDuplicateOrderId: string | null
   checkoutUpgradeOfferPublicId: string | null
@@ -1874,7 +2142,7 @@ function readGuestOrder(value: unknown): {
   }
   const seen = new Set<string>()
   const items = body.items.map((raw, index) => {
-    const item = readStrictObject(raw, `items[${index}]`, ['productId', 'quantity', 'note'])
+    const item = readStrictObject(raw, `items[${index}]`, ['productId', 'quantity', 'note', 'bundleSelections'])
     const productId = readUuid(item.productId, `items[${index}].productId`)
     if (seen.has(productId)) {
       throw new GuestApiRequestError('ORDER_DUPLICATE_PRODUCT', '相同商品请合并数量后再下单')
@@ -1882,7 +2150,8 @@ function readGuestOrder(value: unknown): {
     seen.add(productId)
     const quantity = readInteger(item.quantity, `items[${index}].quantity`, 1, 999)
     const note = readOptionalString(item.note, `items[${index}].note`, 300)
-    return { productId, quantity, note }
+    const bundleSelections=readBundleSelections(item.bundleSelections,`items[${index}].bundleSelections`,quantity)
+    return { productId, quantity, note, ...(bundleSelections.length>0?{ bundleSelections }: {}) }
   })
   const confirmedDuplicateOrderId = readOptionalString(
     body.confirmedDuplicateOrderId,
@@ -1933,16 +2202,40 @@ function readSharedCartAdjustment(value: unknown): {
   delta: number
   expectedGeneration: number
   expectedVersion: number
+  bundleSelections: ReturnType<typeof readBundleSelections>
 } {
   const body = readStrictObject(value, '共享购物车请求', [
-    'productId', 'delta', 'expectedGeneration', 'expectedVersion',
+    'productId', 'delta', 'expectedGeneration', 'expectedVersion', 'bundleSelections',
   ])
+  const delta=readInteger(body.delta, 'delta', -99, 99)
   return {
     productId: readUuid(body.productId, 'productId'),
-    delta: readInteger(body.delta, 'delta', -99, 99),
+    delta,
     expectedGeneration: readInteger(body.expectedGeneration, 'expectedGeneration', 1, 2_147_483_647),
     expectedVersion: readInteger(body.expectedVersion, 'expectedVersion', 0, 2_147_483_647),
+    bundleSelections:readBundleSelections(body.bundleSelections,'bundleSelections',Math.max(0,delta)),
   }
+}
+
+function readBundleSelections(value:unknown,label:string,maxUnits:number){
+  if(value===undefined||value===null)return []
+  if(!Array.isArray(value)||value.length>maxUnits) {
+    throw new GuestApiRequestError('BUNDLE_SELECTION_INVALID',`${label}与新增套餐数量不一致`,400)
+  }
+  return value.map((rawUnit,unitIndex)=>{
+    const unit=readStrictObject(rawUnit,`${label}[${unitIndex}]`,['groups'])
+    if(!Array.isArray(unit.groups)||unit.groups.length<1||unit.groups.length>20) {
+      throw new GuestApiRequestError('BUNDLE_SELECTION_INVALID','套餐选择组无效',400)
+    }
+    return { groups:unit.groups.map((rawGroup,groupIndex)=>{
+      const group=readStrictObject(rawGroup,`${label}[${unitIndex}].groups[${groupIndex}]`,['groupId','productIds'])
+      if(!Array.isArray(group.productIds)||group.productIds.length<1||group.productIds.length>20) {
+        throw new GuestApiRequestError('BUNDLE_SELECTION_INVALID','套餐所选菜品无效',400)
+      }
+      return { groupId:readUuid(group.groupId,'groupId'),
+        productIds:group.productIds.map((productId)=>readUuid(productId,'selectedProductId')) }
+    }) }
+  })
 }
 
 function readSharedCartClear(value: unknown): {
@@ -1953,6 +2246,28 @@ function readSharedCartClear(value: unknown): {
   return {
     expectedGeneration: readInteger(body.expectedGeneration, 'expectedGeneration', 1, 2_147_483_647),
     expectedVersion: readInteger(body.expectedVersion, 'expectedVersion', 0, 2_147_483_647),
+  }
+}
+
+function readSharedCartBundleSelectionReplacement(value:unknown):{
+  expectedGeneration:number
+  expectedVersion:number
+  bundleSelection:ReturnType<typeof readBundleSelections>[number]
+}{
+  const body=readStrictObject(value,'修改套餐选择请求',[
+    'expectedGeneration','expectedVersion','bundleSelection',
+  ])
+  const bundleSelection=readBundleSelections(
+    body.bundleSelection===undefined?undefined:[body.bundleSelection],
+    'bundleSelection',1,
+  )[0]
+  if(!bundleSelection){
+    throw new GuestApiRequestError('BUNDLE_SELECTION_INVALID','套餐选择不能为空',400)
+  }
+  return {
+    expectedGeneration:readInteger(body.expectedGeneration,'expectedGeneration',1,2_147_483_647),
+    expectedVersion:readInteger(body.expectedVersion,'expectedVersion',0,2_147_483_647),
+    bundleSelection,
   }
 }
 

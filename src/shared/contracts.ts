@@ -160,6 +160,34 @@ export interface MenuBundleComponent {
   quantity: number
 }
 
+export interface MenuBundleChoiceOption {
+  productId: string
+  name?: string
+  quantity: number
+  amountMinor?: number | null
+  currency?: string | null
+  available?: boolean
+  unavailableReason?: string | null
+}
+
+export interface MenuBundleChoiceGroup {
+  id: string
+  code: string
+  name: string
+  selectionCount: number
+  options: MenuBundleChoiceOption[]
+}
+
+export interface MenuBundleChoiceSelection {
+  groupId: string
+  productIds: string[]
+}
+
+/** One complete set of choices for one physical bundle. */
+export interface MenuBundleUnitSelection {
+  groups: MenuBundleChoiceSelection[]
+}
+
 export interface MenuRecommendationConfig {
   enabled: boolean
   priority: number
@@ -186,6 +214,11 @@ export interface MenuProduct {
   productKind?: MenuProductKind
   beverageFamily?: MenuBeverageFamily
   bundleComponents?: MenuBundleComponent[]
+  bundleChoiceGroups?: MenuBundleChoiceGroup[]
+  /** Current single-item value of fixed bundle components; zero when there are none. */
+  bundleFixedSeparateAmountMinor?: number | null
+  /** Conservative comparison value before configurable choices are resolved. */
+  bundleSeparateAmountFromMinor?: number | null
   substitutionProductIds?: string[]
   recommendation?: MenuRecommendationConfig
   categoryId?: string

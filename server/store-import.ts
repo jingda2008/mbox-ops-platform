@@ -678,8 +678,9 @@ function semanticIssues(state: RuntimeState, input: StoreImportPackage, candidat
     if (product.configVersion > candidate.config.version) add('error', 'PRODUCT_VERSION_AHEAD_OF_CONFIG', `商品 ${product.sku} 的配置版本不能高于门店配置版本`, 'products', row, 'configVersion')
     if (!workstations.has(product.stationId)) add('error', 'WORKSTATION_REFERENCE_MISSING', `商品 ${product.sku} 的工作站不存在`, 'products', row, 'stationId')
     const componentIds = product.bundleComponents?.map((component) => component.productId) ?? []
-    if (product.productKind === 'bundle' && componentIds.length === 0) {
-      add('error', 'BUNDLE_COMPONENT_REQUIRED', `组合商品 ${product.sku} 至少需要一个组成商品`, 'products', row, 'bundleComponents')
+    const choiceGroups=product.bundleChoiceGroups??[]
+    if (product.productKind === 'bundle' && componentIds.length === 0&&choiceGroups.length===0) {
+      add('error', 'BUNDLE_CONTENT_REQUIRED', `组合商品 ${product.sku} 至少需要一个固定商品或必选组`, 'products', row, 'bundleComponents')
     }
     if (new Set(componentIds).size !== componentIds.length) {
       add('error', 'BUNDLE_COMPONENT_DUPLICATE', `组合商品 ${product.sku} 的组成商品重复`, 'products', row, 'bundleComponents')
@@ -689,6 +690,30 @@ function semanticIssues(state: RuntimeState, input: StoreImportPackage, candidat
       if (!component) add('error', 'PRODUCT_REFERENCE_MISSING', `组合商品 ${product.sku} 引用了不存在的商品 ${componentId}`, 'products', row, 'bundleComponents')
       else if (component.id === product.id) add('error', 'BUNDLE_SELF_REFERENCE', `组合商品 ${product.sku} 不能包含自己`, 'products', row, 'bundleComponents')
       else if (component.productKind === 'bundle') add('error', 'BUNDLE_NESTING_FORBIDDEN', `组合商品 ${product.sku} 不能嵌套组合商品 ${component.sku}`, 'products', row, 'bundleComponents')
+    }
+    if(product.productKind!=='bundle'&&choiceGroups.length>0){
+      add('error','BUNDLE_CHOICE_SINGLE_FORBIDDEN',`单品 ${product.sku} 不能配置套餐必选组`,'products',row,'bundleChoiceGroups')
+    }
+    const choiceGroupIds=new Set<string>()
+    const choiceGroupCodes=new Set<string>()
+    for(const [groupIndex,group] of choiceGroups.entries()){
+      if(choiceGroupIds.has(group.id)||choiceGroupCodes.has(group.code)){
+        add('error','BUNDLE_CHOICE_GROUP_DUPLICATE',`组合商品 ${product.sku} 的必选组编号或ID重复`,'products',row,`bundleChoiceGroups.${groupIndex}`)
+      }
+      choiceGroupIds.add(group.id);choiceGroupCodes.add(group.code)
+      const optionIds=group.options.map((option)=>option.productId)
+      if(group.selectionCount>optionIds.length){
+        add('error','BUNDLE_CHOICE_COUNT_INVALID',`组合商品 ${product.sku} 的必选数量超过候选数量`,'products',row,`bundleChoiceGroups.${groupIndex}.selectionCount`)
+      }
+      if(new Set(optionIds).size!==optionIds.length){
+        add('error','BUNDLE_CHOICE_OPTION_DUPLICATE',`组合商品 ${product.sku} 的同一必选组存在重复菜品`,'products',row,`bundleChoiceGroups.${groupIndex}.options`)
+      }
+      for(const optionId of optionIds){
+        const option=products.get(optionId)
+        if(!option)add('error','PRODUCT_REFERENCE_MISSING',`组合商品 ${product.sku} 的必选组引用不存在商品 ${optionId}`,'products',row,`bundleChoiceGroups.${groupIndex}.options`)
+        else if(option.id===product.id)add('error','BUNDLE_SELF_REFERENCE',`组合商品 ${product.sku} 的必选组不能引用自己`,'products',row,`bundleChoiceGroups.${groupIndex}.options`)
+        else if(option.productKind==='bundle')add('error','BUNDLE_NESTING_FORBIDDEN',`组合商品 ${product.sku} 的必选组不能嵌套组合商品 ${option.sku}`,'products',row,`bundleChoiceGroups.${groupIndex}.options`)
+      }
     }
     for (const replacementId of product.substitutionProductIds ?? []) {
       if (!products.has(replacementId)) add('error', 'PRODUCT_REFERENCE_MISSING', `商品 ${product.sku} 的替换商品 ${replacementId} 不存在`, 'products', row, 'substitutionProductIds')

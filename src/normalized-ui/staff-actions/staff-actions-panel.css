@@ -294,6 +294,7 @@
 .staff-table-financial-detail { max-width: 100%; overflow: hidden; color: #6b3e00; font-size: 10px; font-style: normal; font-weight: 800; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
 .staff-table-tile.is-financial-refund_pending .staff-table-financial-detail,
 .staff-table-tile.is-financial-payment_exception .staff-table-financial-detail { color: #84232b; }
+.staff-table-spend { color: #173f30; font-size: 11px; font-style: normal; font-weight: 800; }
 .staff-table-attention-badge { position: absolute; top: 5px; right: 5px; width: 18px; height: 18px; display: grid; place-items: center; border-radius: 999px; color: #fff; background: #b52f37; font-size: 11px !important; }
 .staff-table-tile.is-selected { outline: 2px solid var(--staff-gold); outline-offset: 1px; }
 .staff-table-tile small { color: var(--staff-green); font-weight: 700; }
@@ -402,6 +403,13 @@
 .staff-action-card-actions > button { min-height: 44px; padding: 0 12px; border-radius: 6px; display: flex; align-items: center; justify-content: center; gap: 5px; color: #fff; background: var(--staff-green); border-color: var(--staff-green); font-weight: 700; }
 .staff-action-card-actions > button.is-readonly { color: #6c561f; background: #fff9e9; border-color: #dec98e; }
 .staff-actions-more { margin: 2px 0 6px; color: var(--staff-muted); font-size: 12px; text-align: center; }
+.staff-carryover-bulk-panel { margin-top: 10px; padding: 10px; display: grid; grid-template-columns: minmax(0,1fr) minmax(220px,1.2fr) auto; gap: 8px; align-items: center; border: 1px solid #d7b866; border-left: 5px solid #9c6c17; border-radius: 7px; background: #fff8e5; }
+.staff-carryover-bulk-panel > div { min-width: 0; display: grid; gap: 2px; }
+.staff-carryover-bulk-panel strong { color: #68470d; }
+.staff-carryover-bulk-panel small { color: #765f35; font-size: 11px; line-height: 1.4; }
+.staff-carryover-bulk-panel input { width: 100%; min-height: 42px; border: 1px solid #d0b66c; border-radius: 5px; background: #fff; }
+.staff-carryover-bulk-panel button { min-height: 42px; color: #fff; border-color: #8a5e12; background: #8a5e12; font-weight: 800; }
+@media (max-width: 720px) { .staff-carryover-bulk-panel { grid-template-columns: 1fr; } }
 .staff-actions-empty, .staff-actions-gate { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 130px; color: var(--staff-muted); }
 .staff-actions-announcer { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 

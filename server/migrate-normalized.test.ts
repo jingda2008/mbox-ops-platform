@@ -37,7 +37,7 @@ describe('normalized migration baseline', () => {
       '037', '038', '039', '040', '041', '042', '043', '044', '045', '046', '047', '048',
       '049', '050', '051', '052', '053', '054', '055', '056', '057', '058', '059', '060',
       '061', '062', '063', '064', '065', '066', '067', '068', '069', '070', '071', '072',
-      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099', '100', '101', '102', '103', '104', '105', '106', '107', '108', '109', '110', '111', '112', '113', '114', '115', '116', '117', '118', '119', '120', '121', '122', '123', '124', '125', '126', '127', '128', '129', '130', '131', '132', '133', '134', '135', '136', '137', '138', '139', '140', '141', '142', '143', '144', '145', '146', '147', '148', '149', '150', '151', '152', '153', '154', '155', '156', '157', '158', '159', '160',
+      '073', '074', '075', '076', '077', '078', '079', '080', '081', '082', '083', '084', '085', '086', '087', '088', '089', '090', '091', '092', '093', '094', '095', '096', '097', '098', '099', '100', '101', '102', '103', '104', '105', '106', '107', '108', '109', '110', '111', '112', '113', '114', '115', '116', '117', '118', '119', '120', '121', '122', '123', '124', '125', '126', '127', '128', '129', '130', '131', '132', '133', '134', '135', '136', '137', '138', '139', '140', '141', '142', '143', '144', '145', '146', '147', '148', '149', '150', '151', '152', '153', '154', '155', '156', '157', '158', '159', '160', '161',
     ])
     for (const migration of migrations) {
       expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/)
@@ -90,6 +90,27 @@ describe('normalized migration baseline', () => {
     expect(migration?.sql).toMatch(/commercial\.payroll\.post/)
     expect(migration?.sql).toMatch(/posting never initiates a bank or wallet transfer/)
     expect(migration?.sql).toMatch(/schema_version='160'/)
+  })
+
+  it('persists payment-query backoff separately from table state and exposes financial signals', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '161')
+    expect(migration?.filename).toBe('161_payment_reconciliation_backoff.sql')
+    expect(migration?.sql).toMatch(/CREATE TABLE mbox\.payment_reconciliation_states/)
+    expect(migration?.sql).toMatch(/last_queried_at timestamptz/)
+    expect(migration?.sql).toMatch(/next_query_at timestamptz/)
+    expect(migration?.sql).toMatch(/released_query_count integer/)
+    expect(migration?.sql).toMatch(/CREATE TABLE mbox\.refund_reconciliation_states/)
+    expect(migration?.sql).toMatch(/WITH query_history AS/)
+    expect(migration?.sql).toMatch(/verification_kind='active_query_binding'/)
+    expect(migration?.sql).toMatch(/finance_review_required/)
+    expect(migration?.sql).toMatch(/candidate\.last_queried_at\+interval '24 hours'/)
+    expect(migration?.sql).toMatch(/refund_processing_over_5m/)
+    expect(migration?.sql).toMatch(/CREATE VIEW mbox\.payment_financial_monitoring_signals/)
+    expect(migration?.sql).toMatch(/payment_processing_over_5m/)
+    expect(migration?.sql).toMatch(/order_overcollected/)
+    expect(migration?.sql).toMatch(/postar_ip_risk_rejected/)
+    expect(migration?.sql).toMatch(/late_capture_refund_followup_open/)
+    expect(migration?.sql).toMatch(/schema_version='161'/)
   })
 
   it('grants payment initiation to every active role without broadening table or finance scope', async () => {

@@ -196,6 +196,21 @@ describe('PaymentProviderActionRepository', () => {
     })).rejects.toBeInstanceOf(ProviderPaymentMethodConflictError)
   })
 
+  it('stores only a masked network diagnostic for a JSAPI action', async () => {
+    const transaction = new ActionTransaction()
+    const repository = new PaymentProviderActionRepository(transaction, secret)
+    await repository.claim(paymentId, 'jsapi', expiresAt, {
+      type: 'guest', tableSessionId, customerId: customerOneId,
+    }, undefined, undefined, {
+      family: 'ipv4', maskedPrefix: '203.0.113.x', source: 'trusted_request_ip',
+    })
+
+    expect(transaction.persisted?.client_network_snapshot).toEqual({
+      family: 'ipv4', maskedPrefix: '203.0.113.x', source: 'trusted_request_ip',
+    })
+    expect(JSON.stringify(transaction.persisted)).not.toContain('203.0.113.42')
+  })
+
   it('locks a payment to the first selected presentation', async () => {
     const transaction = new ActionTransaction()
     const repository = new PaymentProviderActionRepository(transaction, secret)
@@ -277,6 +292,7 @@ class ActionTransaction implements ScopedTransaction {
     updated_at: string
     request_idempotency_key: string | null
     request_fingerprint: string | null
+    client_network_snapshot: Readonly<Record<string, string>>
   } = null
 
   async query<Row extends Record<string, unknown> = Record<string, unknown>>(
@@ -295,6 +311,7 @@ class ActionTransaction implements ScopedTransaction {
         expires_at: String(values[6]), updated_at: new Date().toISOString(),
         request_idempotency_key: values[7] === null ? null : String(values[7]),
         request_fingerprint: values[8] === null ? null : String(values[8]),
+        client_network_snapshot: JSON.parse(String(values[9])) as Readonly<Record<string, string>>,
       }
       return { rows: [], rowCount: 1 }
     }

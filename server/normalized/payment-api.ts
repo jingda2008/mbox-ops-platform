@@ -525,7 +525,15 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
         idempotencyKey,
         'postar-active-query',
       )
-      return reply.send(executionResponse(execution))
+      if (execution !== null) return reply.send(executionResponse(execution))
+      return reply.send({
+        data: { publicId: queried.context.publicId, status: 'pending' },
+        meta: { replayed: false },
+        provider: {
+          status: queried.observation.status,
+          occurredAt: queried.observation.occurredAt,
+        },
+      })
     }),
   )
 
@@ -1139,7 +1147,8 @@ async function recordOnlinePaymentObservation(
   result: Pick<OnlinePaymentQueryResult, 'context' | 'observation' | 'verifiedObservationId'>,
   idempotencyKey: string,
   integrationRef: string,
-): Promise<CommandExecution<Payment>> {
+): Promise<CommandExecution<Payment> | null> {
+  if (result.verifiedObservationId === null) return null
   const observed = result.observation
   const actor: AuditActor = { type: 'integration', ref: integrationRef }
   const providerSnapshot = sanitizeProviderSnapshot({
@@ -1632,6 +1641,10 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
     return apiError(503, 'ONLINE_PAYMENT_UNAVAILABLE', error.message)
   }
   if (error instanceof PostarPaymentRejectedError) {
+    if (error.reason === 'IP_RISK_REJECTED') {
+      return apiError(409, 'PAYMENT_NETWORK_REJECTED',
+        '当前网络未通过支付渠道验证，本次没有发起扣款。请切换网络或改用扫码、POS、现金收款')
+    }
     return apiError(409, 'PROVIDER_PAYMENT_REJECTED', '支付机构未受理本次付款，请核对后重试')
   }
   if (error instanceof PaymentCallbackMismatchError) {

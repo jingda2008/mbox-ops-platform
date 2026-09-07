@@ -38,6 +38,34 @@ const config = {
 }
 
 describe('OnlinePaymentService payment query uncertainty boundary', () => {
+  it('does not append an immutable observation for an unchanged processing result', async () => {
+    const recordPayment = vi.fn()
+    const service = new OnlinePaymentService(
+      runner(), 'test-secret-at-least-thirty-two-bytes', config,
+      {
+        createPayment: vi.fn(), closePayment: vi.fn(), requestRefund: vi.fn(), queryRefund: vi.fn(),
+        queryPayment: vi.fn(async () => ({
+          paymentIntentId: paymentContext.public_id,
+          providerTransactionId: 'POSTAR-PENDING-001',
+          status: 'processing' as const,
+          amount: Number(paymentContext.amount_minor),
+          currency: paymentContext.currency,
+          merchantId: config.merchantId,
+          occurredAt: '2026-09-06T15:41:00.000Z',
+        })),
+      },
+      { recordPayment, recordRefund: vi.fn() },
+    )
+
+    const result = await service.querySystem({
+      scope, paymentId, queryBindingId: 'processing-does-not-grow-ledger',
+    })
+
+    expect(result.observation.status).toBe('processing')
+    expect(result.verifiedObservationId).toBeNull()
+    expect(recordPayment).not.toHaveBeenCalled()
+  })
+
   it.each(['query', 'querySystem', 'closeSystem'] as const)(
     'maps an unmappable provider response to unknown for %s',
     async (operation) => {

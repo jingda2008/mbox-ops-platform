@@ -47,6 +47,7 @@ export interface OperationsTableView {
     refundAttentionCount: number
     refundActionCount: number
     refundProcessingCount: number
+    orderAmountMinor: number
     status: 'open' | 'closing'
     openedAt: string
   }
@@ -120,6 +121,7 @@ interface TableRow extends Record<string, unknown> {
   refund_attention_count: number | null
   refund_action_count: number | null
   refund_processing_count: number | null
+  order_amount_minor: string | number | null
   session_status: 'open' | 'closing' | null
   opened_at: string | null
 }
@@ -247,6 +249,7 @@ async function readTables(
       END AS financial_state,
       finance.order_count,finance.unpaid_order_count,finance.pending_payment_count,
       finance.refund_attention_count,finance.refund_action_count,finance.refund_processing_count,
+      finance.order_amount_minor,
       session.status AS session_status, session.opened_at::text
     FROM mbox.tables venue_table
     JOIN mbox.areas area
@@ -275,6 +278,9 @@ async function readTables(
         (SELECT count(*)::integer FROM mbox.orders ordering
           WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
             AND ordering.table_session_id=session.id AND ordering.status NOT IN ('draft','cancelled')) AS order_count,
+        (SELECT COALESCE(sum(ordering.total_amount_minor),0)::bigint FROM mbox.orders ordering
+          WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
+            AND ordering.table_session_id=session.id AND ordering.status NOT IN ('draft','cancelled')) AS order_amount_minor,
         (SELECT count(*)::integer FROM mbox.orders ordering
           WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
             AND ordering.table_session_id=session.id AND ordering.status<>'cancelled'
@@ -482,8 +488,14 @@ function mapTable(row: TableRow): OperationsTableView {
       refundAttentionCount: row.refund_attention_count ?? 0,
       refundActionCount: row.refund_action_count ?? 0,
       refundProcessingCount: row.refund_processing_count ?? 0,
+      orderAmountMinor: safeMinor(row.order_amount_minor),
       status: row.session_status!,
       openedAt: row.opened_at!,
     },
   }
+}
+
+function safeMinor(value: string | number | null): number {
+  const amount=Number(value??0)
+  return Number.isSafeInteger(amount)&&amount>=0?amount:0
 }

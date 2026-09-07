@@ -37,6 +37,7 @@ type OnlinePaymentPort = Pick<
 > & Partial<Pick<OnlinePaymentService,
   'query' | 'querySystem' | 'listStalePendingPostarPaymentIds'
   | 'queryRefund' | 'listStaleProcessingPostarRefundIds'
+  | 'recordAutomaticPaymentQueryOutcome' | 'recordAutomaticRefundQueryOutcome'
 >>
 type PaymentCommandPort = Pick<PaymentCommandService,
   'recordProviderQueryResult' | 'recordProviderRefundResult'
@@ -73,8 +74,6 @@ export interface StaleGuestImmediatePaymentBatch {
  * abandonment remains a finance/refund case rather than renewed fulfilment.
  */
 export class StaleGuestImmediatePaymentWorker {
-  private readonly deferredUntilByPaymentId = new Map<string, number>()
-
   constructor(
     private readonly deps: Readonly<StaleGuestImmediatePaymentWorkerDeps>,
     private readonly transactions?: Pick<ScopedPostgresTransactionRunner, 'run'>,
@@ -107,10 +106,6 @@ export class StaleGuestImmediatePaymentWorker {
     const candidates = await this.deps.onlinePayments.listStaleGuestImmediateCheckoutPaymentCandidates(
       scope, minAgeSeconds, limit,
     )
-    const candidateIds = new Set(candidates.map((candidate) => candidate.id))
-    for (const paymentId of this.deferredUntilByPaymentId.keys()) {
-      if (!candidateIds.has(paymentId)) this.deferredUntilByPaymentId.delete(paymentId)
-    }
     const queriedPaymentIds: string[] = []
     const paidPaymentIds: string[] = []
     const terminalAbandonedPaymentIds: string[] = []
@@ -136,7 +131,8 @@ export class StaleGuestImmediatePaymentWorker {
       try {
         await reconcileStalePendingOnlinePaymentsForStore(
           {
-            onlinePayments: this.deps.onlinePayments as Pick<OnlinePaymentService, 'query' | 'querySystem' | 'listStalePendingPostarPaymentIds'>,
+            onlinePayments: this.deps.onlinePayments as Pick<OnlinePaymentService,
+              'query' | 'querySystem' | 'listStalePendingPostarPaymentIds' | 'recordAutomaticPaymentQueryOutcome'>,
             commands: this.deps.payments,
           },
           context,
@@ -168,6 +164,9 @@ export class StaleGuestImmediatePaymentWorker {
             if (!['succeeded', 'failed'].includes(observed.status)
               || result.verifiedObservationId === null) {
               deferredRefundIds.push(refundId)
+              await this.deps.onlinePayments.recordAutomaticRefundQueryOutcome?.(
+                scope,refundId,'processing',observed.status,
+              )
               continue
             }
             const actor = { type: 'integration' as const, ref: 'postar-refund-active-query' }
@@ -206,10 +205,16 @@ export class StaleGuestImmediatePaymentWorker {
               occurredAt: observed.occurredAt,
             })
             terminalRefundIds.push(refundId)
+            await this.deps.onlinePayments.recordAutomaticRefundQueryOutcome?.(
+              scope,refundId,'terminal',observed.status,
+            )
           } catch (error) {
             if (error instanceof OnlineRefundStatusUnknownError
               || error instanceof OnlinePaymentUnavailableError) deferredRefundIds.push(refundId)
             else failedRefundIds.push(refundId)
+            await this.deps.onlinePayments.recordAutomaticRefundQueryOutcome?.(
+              scope,refundId,'error',
+            )
           }
         }
       } catch {
@@ -220,11 +225,6 @@ export class StaleGuestImmediatePaymentWorker {
 
     for (const candidate of candidates) {
       const candidateNow = now()
-      const deferredUntil = this.deferredUntilByPaymentId.get(candidate.id) ?? 0
-      if (deferredUntil > candidateNow) {
-        deferredPaymentIds.push(candidate.id)
-        continue
-      }
       // This value is both the provider close binding and the normalized
       // command idempotency key, whose audited maximum is 128 characters.
       // The coordinator appends the full worker name to workerId, so including
@@ -238,7 +238,6 @@ export class StaleGuestImmediatePaymentWorker {
         queriedPaymentIds.push(candidate.id)
         const observation = closed.observation
         if (observation.status === 'closed' || observation.status === 'failed') {
-          this.deferredUntilByPaymentId.delete(candidate.id)
           if (candidate.operationallyAbandoned) {
             // The order was already cancelled. Apply the verified financial
             // terminal fact only; never attempt to re-open or re-retire it.
@@ -246,6 +245,9 @@ export class StaleGuestImmediatePaymentWorker {
               this.deps.payments, context, closed, binding, 'postar-close-payment',
             )
           } else {
+            if (closed.verifiedObservationId === null) {
+              throw new OnlinePaymentUnknownError()
+            }
             await this.deps.reconciliation.commitTerminal({
               scope,
               actor: { type: 'integration', ref: 'postar-close-payment' },
@@ -274,17 +276,41 @@ export class StaleGuestImmediatePaymentWorker {
             })
             terminalAbandonedPaymentIds.push(candidate.id)
           }
+          await this.recordAutomaticOutcome(scope,candidate.id,'terminal',observation.status,true)
           continue
         }
         await applyProviderQueryObservation(
           this.deps.payments, context, closed, binding, 'postar-close-payment',
         )
-        if (observation.status === 'succeeded') paidPaymentIds.push(candidate.id)
-        else deferredPaymentIds.push(candidate.id)
-        if (observation.status === 'processing' || observation.status === 'pending') {
-          this.deferProviderRetry(candidate.id, now())
+        if (observation.status === 'succeeded') {
+          paidPaymentIds.push(candidate.id)
+          await this.recordAutomaticOutcome(scope,candidate.id,'terminal',observation.status,true)
         } else {
-          this.deferredUntilByPaymentId.delete(candidate.id)
+          let operationallyReleased = candidate.operationallyAbandoned
+          if (!operationallyReleased
+            && candidateAgeSeconds(candidate.createdAt, candidateNow) >= unresolvedAbandonAgeSeconds) {
+            try {
+              await this.deps.reconciliation.abandonUnresolved({
+                scope,
+                actor: { type: 'integration', ref: 'postar-stale-guest-checkout' },
+                businessDate: resolvedBusinessDate,
+                idempotencyKey: `stale-guest-unresolved:${candidate.id}`,
+                requestFingerprint: JSON.stringify({
+                  operation: 'stale_guest_immediate_payment_processing_abandon', paymentId: candidate.id,
+                }),
+                paymentId: candidate.id,
+                workerId,
+              })
+              unresolvedAbandonedPaymentIds.push(candidate.id)
+              operationallyReleased = true
+            } catch {
+              failedPaymentIds.push(candidate.id)
+            }
+          }
+          deferredPaymentIds.push(candidate.id)
+          await this.recordAutomaticOutcome(
+            scope,candidate.id,'processing',observation.status,operationallyReleased,
+          )
         }
       } catch (error) {
         if (!candidate.operationallyAbandoned
@@ -303,15 +329,20 @@ export class StaleGuestImmediatePaymentWorker {
               workerId,
             })
             unresolvedAbandonedPaymentIds.push(candidate.id)
-            this.deferredUntilByPaymentId.delete(candidate.id)
+            await this.recordAutomaticOutcome(scope,candidate.id,'error',undefined,true)
           } catch {
             failedPaymentIds.push(candidate.id)
           }
         } else if (isProviderOutcomeUnknown(error)) {
           deferredPaymentIds.push(candidate.id)
-          this.deferProviderRetry(candidate.id, now())
+          await this.recordAutomaticOutcome(
+            scope,candidate.id,'error',undefined,candidate.operationallyAbandoned,
+          )
         } else {
           failedPaymentIds.push(candidate.id)
+          await this.recordAutomaticOutcome(
+            scope,candidate.id,'error',undefined,candidate.operationallyAbandoned,
+          )
         }
       }
     }
@@ -322,10 +353,15 @@ export class StaleGuestImmediatePaymentWorker {
     }
   }
 
-  private deferProviderRetry(paymentId: string, nowMs: number): void {
-    this.deferredUntilByPaymentId.set(
-      paymentId,
-      nowMs + STALE_GUEST_IMMEDIATE_PAYMENT_DEFERRED_RETRY_SECONDS * 1_000,
+  private async recordAutomaticOutcome(
+    scope: Readonly<StoreScope>,
+    paymentId: string,
+    outcome: 'processing' | 'error' | 'terminal',
+    observedStatus?: string,
+    forceReleased = false,
+  ): Promise<void> {
+    await this.deps.onlinePayments.recordAutomaticPaymentQueryOutcome?.(
+      scope,paymentId,outcome,observedStatus,forceReleased,
     )
   }
 

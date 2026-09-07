@@ -43,6 +43,7 @@ export interface StaffActionTableSession {
   refundAttentionCount: number
   refundActionCount?: number
   refundProcessingCount?: number
+  orderAmountMinor?: number
 }
 
 export type StaffTableFinancialState = 'no_order' | 'unpaid' | 'payment_pending' | 'paid' | 'refund_pending' | 'payment_exception'

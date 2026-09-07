@@ -10,7 +10,7 @@ export const PENDING_PAYMENT_RECONCILE_BATCH_LIMIT = 20
 
 type OnlinePaymentReconciliationPort = Pick<
   OnlinePaymentService,
-  'query' | 'querySystem' | 'listStalePendingPostarPaymentIds'
+  'query' | 'querySystem' | 'listStalePendingPostarPaymentIds' | 'recordAutomaticPaymentQueryOutcome'
 >
 
 type PaymentCommandReconciliationPort = Pick<PaymentCommandService, 'recordProviderQueryResult'>
@@ -49,6 +49,9 @@ export async function reconcileStalePendingOnlinePayments(
       )
       if (applied) reconciled.push(paymentId)
     } catch {
+      await deps.onlinePayments.recordAutomaticPaymentQueryOutcome(
+        context.scope,paymentId,'error',undefined,false,
+      ).catch(() => {})
       // A single stale payment must not block workbench/status reads for the rest.
     }
   }
@@ -90,6 +93,12 @@ export async function reconcileStalePendingOnlinePayment(
       principal,
     })
   await applyProviderQueryObservation(deps.commands, context, queried, queryBindingId)
+  await deps.onlinePayments.recordAutomaticPaymentQueryOutcome(
+    context.scope,paymentId,
+    isTerminalStatus(queried.observation.status) ? 'terminal' : 'processing',
+    queried.observation.status,
+    false,
+  )
   return queried.observation.status === 'succeeded'
 }
 
@@ -100,6 +109,7 @@ export async function applyProviderQueryObservation(
   idempotencyKey: string,
   integrationRef = 'postar-active-query',
 ): Promise<void> {
+  if (queried.verifiedObservationId === null) return
   const observed = queried.observation
   const actor: AuditActor = { type: 'integration', ref: integrationRef }
   const providerSnapshot = sanitizeProviderSnapshot({
@@ -141,6 +151,10 @@ export async function applyProviderQueryObservation(
     providerSnapshot,
     occurredAt: observed.occurredAt,
   })
+}
+
+function isTerminalStatus(status: string): boolean {
+  return status === 'succeeded' || status === 'failed' || status === 'closed'
 }
 
 export function shouldReconcilePaymentContext(

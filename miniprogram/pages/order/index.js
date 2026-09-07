@@ -1810,6 +1810,9 @@ Page({
       const waitingForResult = Boolean(action && (
         action.status === 'unknown' || (action.status === 'pending' && !action.payload)
       ))
+      const networkRejected = Boolean(action && action.failureCode === 'network_rejected')
+      const identityRejected = Boolean(action && action.failureCode === 'identity_rejected')
+      const configurationUnavailable = Boolean(action && action.failureCode === 'configuration_unavailable')
       const pendingPayment = Object.assign({}, this.data.pendingPayment, {
         statusText: waitingForResult ? '付款结果确认中' : '付款未完成',
         paymentPresentationState: waitingForResult ? 'result_unknown' : 'action_failed',
@@ -1825,10 +1828,19 @@ Page({
         paymentResult: {
           kind: waitingForResult ? 'pending' : 'failed',
           mark: waitingForResult ? '…' : '!',
-          title: waitingForResult ? '正在核对付款结果' : '未能发起微信支付',
+          title: waitingForResult ? '正在核对付款结果'
+            : networkRejected ? '当前网络未通过支付验证'
+              : identityRejected ? '微信支付身份需要刷新'
+                : configurationUnavailable ? '线上支付暂时不可用' : '未能发起微信支付',
           copy: waitingForResult
             ? '本次不会进入出品；核对完成后可重新选购付款。'
-            : '本次订单正在释放，你可以继续选购后重新付款。',
+            : networkRejected
+              ? '本次没有发起扣款。请切换手机网络或门店 Wi-Fi 后重试，也可请服务员改用扫码、POS 或现金收款。'
+              : identityRejected
+                ? '本次没有发起扣款。请重新进入小程序刷新微信身份，或请服务员协助收款。'
+                : configurationUnavailable
+                  ? '本次没有发起扣款。订单正在释放，请联系服务员改用扫码、POS 或现金收款。'
+                  : '本次没有发起扣款。订单正在释放，你可以继续选购后重新付款。',
           canRetry: false,
         },
       })

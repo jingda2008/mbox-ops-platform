@@ -56,6 +56,27 @@ describe('StaffActionsPanel', () => {
     expect(source).toContain('桌有支付或退款异常')
     expect(css).toContain('.staff-table-tile.is-financial-unpaid')
     expect(css).toContain('.staff-table-tile.is-financial-payment_exception')
+    expect(source).toContain('staff-table-spend')
+    expect(source).toContain('activeSession.orderAmountMinor')
+  })
+
+  it('announces newly arriving service or fulfillment facts on the desktop workbench', () => {
+    const source = readFileSync(new URL('./StaffActionsPanel.tsx', import.meta.url), 'utf8')
+
+    expect(source).toContain('新增 ${newFulfillment.length} 项出品')
+    expect(source).toContain('新增 ${newService.length} 项桌台服务')
+    expect(source).toContain('previous === null')
+  })
+
+  it('lets an exception manager close verified carryover tasks in one audited batch', () => {
+    const source = readFileSync(new URL('./StaffActionsPanel.tsx', import.meta.url), 'utf8')
+    const css = readFileSync(new URL('./staff-actions-panel.css', import.meta.url), 'utf8')
+
+    expect(source).toContain('cancelAllCarryoverFulfillment')
+    expect(source).toContain("permissions.includes('kds.exception.manage')")
+    expect(source).toContain('至少4个字的现场核对原因')
+    expect(source).toContain('await api.cancelKdsTask(item.taskId,reason)')
+    expect(css).toMatch(/@media \(max-width: 720px\) \{ \.staff-carryover-bulk-panel \{ grid-template-columns: 1fr;/)
   })
 
   it('shows read-only served and unserved item detail directly after selecting an active table', () => {

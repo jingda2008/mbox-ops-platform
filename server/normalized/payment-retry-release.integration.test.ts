@@ -6,6 +6,7 @@ import { NormalizedCommandExecutor } from './command-executor.js'
 import { listTablePaymentOrdersForSession } from './commerce-kds-api.js'
 import { PaymentCommandService } from './payment-command-service.js'
 import { PaymentRepository } from './payment-repository.js'
+import { PaymentProviderActionRepository } from './payment-provider-action-repository.js'
 import type { PaymentCapabilityAuthorizationPort } from './payment-security-policy.js'
 import { ScopedPostgresTransactionRunner, type PostgresPool } from './transaction-runner.js'
 
@@ -103,6 +104,33 @@ integration('unresolved payment retry release', () => {
       { id: firstPaymentId, status: 'pending', retry_released_at: expect.any(String) },
       { id: replacement.id, status: 'created', retry_released_at: null },
     ]))
+
+    // A fresh repository instance represents a process restart. The retry
+    // release remains a durable finance-only backoff even when the original
+    // provider action has not reached its local expiry.
+    await pool.query(`UPDATE mbox.payments SET created_at=clock_timestamp()-interval '10 minutes'
+      WHERE id=$1`, [firstPaymentId])
+    await pool.query(`INSERT INTO mbox.payment_provider_actions(
+      payment_id,tenant_id,store_id,presentation,initiated_by_type,initiated_by_ref,state,expires_at
+    ) VALUES($1,$2,$3,'qr','employee',$4,'unknown',clock_timestamp()+interval '5 minutes')`, [
+      firstPaymentId,tenantId,storeId,employeeId,
+    ])
+    const secret='payment-retry-backoff-test-secret-at-least-32-bytes'
+    const firstDue=await runner.run({tenantId,storeId},(transaction)=>
+      new PaymentProviderActionRepository(transaction,secret).listStalePendingPostarPaymentIds(15,20))
+    expect(firstDue).toContain(firstPaymentId)
+    await runner.run({tenantId,storeId},(transaction)=>
+      new PaymentProviderActionRepository(transaction,secret)
+        .recordAutomaticPaymentQueryOutcome(firstPaymentId,'processing','processing'))
+    const afterRestart=await runner.run({tenantId,storeId},(transaction)=>
+      new PaymentProviderActionRepository(transaction,secret).listStalePendingPostarPaymentIds(15,20))
+    expect(afterRestart).not.toContain(firstPaymentId)
+    const state=await pool.query<{phase:string;delay_seconds:number}>(`
+      SELECT phase,extract(epoch FROM next_query_at-clock_timestamp())::integer AS delay_seconds
+      FROM mbox.payment_reconciliation_states WHERE payment_id=$1
+    `,[firstPaymentId])
+    expect(state.rows[0]?.phase).toBe('released')
+    expect(state.rows[0]?.delay_seconds).toBeGreaterThanOrEqual(295)
   })
 
   it('returns the exact unresolved payment id used by the table collection sheet', async () => {

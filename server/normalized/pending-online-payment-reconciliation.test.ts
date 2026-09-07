@@ -39,10 +39,13 @@ describe('pending online payment reconciliation', () => {
         verifiedObservationId: 'obs-1',
       })
       .mockRejectedValueOnce(new Error('provider timeout'))
+    const recordAutomaticPaymentQueryOutcome = vi.fn(async () => undefined)
     const recordProviderQueryResult = vi.fn(async () => ({ replayed: false, value: {} }))
     const result = await reconcileStalePendingOnlinePaymentsForStore(
       {
-        onlinePayments: { listStalePendingPostarPaymentIds, querySystem } as never,
+        onlinePayments: {
+          listStalePendingPostarPaymentIds, querySystem, recordAutomaticPaymentQueryOutcome,
+        } as never,
         commands: { recordProviderQueryResult },
       },
       {
@@ -55,5 +58,11 @@ describe('pending online payment reconciliation', () => {
     expect(result.attempted).toBe(2)
     expect(result.reconciled).toBe(1)
     expect(recordProviderQueryResult).toHaveBeenCalledTimes(1)
+    expect(recordAutomaticPaymentQueryOutcome).toHaveBeenCalledWith(
+      { tenantId: 'tenant', storeId: 'store' }, 'pay-1', 'terminal', 'succeeded', false,
+    )
+    expect(recordAutomaticPaymentQueryOutcome).toHaveBeenCalledWith(
+      { tenantId: 'tenant', storeId: 'store' }, 'pay-2', 'error', undefined, false,
+    )
   })
 })

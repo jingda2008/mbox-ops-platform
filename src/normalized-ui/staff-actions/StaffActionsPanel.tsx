@@ -144,6 +144,7 @@ export function StaffActionsPanel({
   const [resolutionNotes, setResolutionNotes] = useState<Record<string, string>>({})
   const [carryoverCancelNotes, setCarryoverCancelNotes] = useState<Record<string, string>>({})
   const [carryoverCancelConfirmTaskId, setCarryoverCancelConfirmTaskId] = useState<string | null>(null)
+  const [carryoverBulkReason,setCarryoverBulkReason]=useState('')
   const [pendingAction, setPendingAction] = useState<string | null>(null)
   const [orderSheetMode, setOrderSheetMode] = useState<'paid' | 'gift' | null>(null)
   const [tablePaymentOpen, setTablePaymentOpen] = useState(false)
@@ -445,7 +446,14 @@ export function StaffActionsPanel({
       !previous.has(`fulfillment:${item.taskId}`) && (item.readyForDelivery || item.overdue)
     ))
     if (hasNewAttention && typeof navigator.vibrate === 'function') navigator.vibrate([18, 45, 18])
-  }, [currentActionKeys, fulfillmentActions, pendingAction, serviceActions])
+    const newFulfillment = fulfillmentActions.filter((item) => !previous.has(`fulfillment:${item.taskId}`))
+    const newService = serviceActions.filter((task) => !previous.has(`service:${task.id}`))
+    if (newFulfillment.length > 0) {
+      showNotice({ kind: 'attention', message: `新增 ${newFulfillment.length} 项出品，请立即进入“出品”查看制作与配送。` })
+    } else if (newService.length > 0) {
+      showNotice({ kind: 'attention', message: `新增 ${newService.length} 项桌台服务，请及时处理。` })
+    }
+  }, [currentActionKeys, fulfillmentActions, pendingAction, serviceActions, showNotice])
 
   const selectTable = (table: StaffActionTable, openDialog = true) => {
     secondaryTableSessionIdRef.current = null
@@ -778,6 +786,40 @@ export function StaffActionsPanel({
     }
   }
 
+  const cancelAllCarryoverFulfillment = async () => {
+    const carryover = fulfillmentVisibleItems.filter((item) => item.carryover)
+    if (carryover.length === 0 || pendingAction !== null) return
+    if (!permissions.includes('kds.exception.manage')) {
+      return revealPermissionGuidance('kds.exception.manage')
+    }
+    const reason = carryoverBulkReason.trim()
+    if (reason.length < 4) {
+      return showNotice({kind:'guidance',message:'批量处理前请填写至少4个字的现场核对原因。'})
+    }
+    if (!(await confirmAction({
+      title:`确认处理 ${carryover.length} 项历史遗留`,
+      description:`这些任务将逐项记录“不再出品”，不会删除历史、改写收入或自动退款。\n原因：${reason}`,
+      confirmLabel:'确认逐项结案',
+    }))) return
+    setPendingAction('kds-cancel:all-carryover')
+    let completed=0
+    for (const item of carryover) {
+      try {
+        await api.cancelKdsTask(item.taskId,reason)
+        completed+=1
+      } catch {
+        // Each task is independently idempotent. Continue so one stale task
+        // cannot prevent the remaining verified carryover from being closed.
+      }
+    }
+    setCarryoverBulkReason('')
+    setPendingAction(null)
+    showNotice(completed===carryover.length
+      ? {kind:'success',message:`${completed} 项历史出品均已受控结案。`}
+      : {kind:'attention',message:`已结案 ${completed} 项，另有 ${carryover.length-completed} 项状态已变化或权限不足，请刷新后逐项核对。`})
+    await load(true)
+  }
+
   const redeemAnnualGift = async (item:StaffAnnualGiftReservation) => {
     if (api.redeemAnnualGift===undefined||pendingAction!==null) return
     const selection=giftSelections[item.reservationId]??{productId:item.originalProductId,reason:''}
@@ -935,6 +977,7 @@ export function StaffActionsPanel({
                     >
                       <strong>{table.code}</strong>
                       <span>{table.activeSession === null ? `${table.capacity}人 · 空台` : `${table.activeSession.guestCount}人 · ${table.activeSession.status === 'closing' ? '结台中' : tableFinancialLabel(table.activeSession.financialState)}`}</span>
+                      {table.activeSession !== null && <em className="staff-table-spend">已点 ¥{((table.activeSession.orderAmountMinor??0)/100).toFixed(2)}</em>}
                       {table.activeSession !== null && (table.activeSession.unpaidOrderCount > 0 || table.activeSession.pendingPaymentCount > 0 || table.activeSession.refundAttentionCount > 0) && <em className="staff-table-financial-detail">{table.activeSession.unpaidOrderCount > 0 ? `${table.activeSession.unpaidOrderCount}笔未收` : ''}{table.activeSession.pendingPaymentCount > 0 ? `${table.activeSession.unpaidOrderCount > 0 ? ' · ' : ''}${table.activeSession.pendingPaymentCount}笔确认中` : ''}{table.activeSession.refundAttentionCount > 0 ? `${table.activeSession.unpaidOrderCount > 0 || table.activeSession.pendingPaymentCount > 0 ? ' · ' : ''}${table.activeSession.refundAttentionCount}笔${(table.activeSession.refundActionCount ?? table.activeSession.refundAttentionCount) > 0 ? '退款待办' : '退款核对中'}` : ''}</em>}
                       {hasFinancialAttention && <b className="staff-table-attention-badge" aria-label="支付或退款待办">!</b>}
                       {table.assignedToActor && <small>负责桌</small>}
@@ -1092,6 +1135,13 @@ export function StaffActionsPanel({
       )}
 
       {tab === 'fulfillment' && operations !== null && (
+        <>{fulfillmentVisibleItems.some((item)=>item.carryover)
+          && permissions.includes('kds.exception.manage')
+          && <div className="staff-carryover-bulk-panel">
+            <div><strong>历史遗留 {fulfillmentVisibleItems.filter((item)=>item.carryover).length} 项</strong><small>确认现场不再出品后，可一次说明、逐项留痕结案。</small></div>
+            <input value={carryoverBulkReason} maxLength={500} placeholder="填写共同的现场核对原因（至少4字）" aria-label="历史遗留批量结案原因" onChange={(event)=>setCarryoverBulkReason(event.target.value)}/>
+            <button type="button" disabled={pendingAction!==null} onClick={()=>void cancelAllCarryoverFulfillment()}>{pendingAction==='kds-cancel:all-carryover'?'正在逐项结案':'批量标记不再出品'}</button>
+          </div>}
         <ActionList empty={fulfillment === null ? '出品队列暂时无法读取，请刷新后重试' : '当前没有需要制作或配送的出品'}>
           {visibleFulfillmentCards.map((item) => {
             const fulfillmentCommand = fulfillmentAction(item)
@@ -1160,7 +1210,7 @@ export function StaffActionsPanel({
           {fulfillmentVisibleItems.length > visibleFulfillmentCards.length && (
             <p className="staff-actions-more">还有 {fulfillmentVisibleItems.length - visibleFulfillmentCards.length} 项，完成当前事项后自动补入</p>
           )}
-        </ActionList>
+        </ActionList></>
       )}
 
       {tab === 'reservations' && (

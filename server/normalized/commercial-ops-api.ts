@@ -80,6 +80,11 @@ interface CostResult extends JsonObject {
   grossAmountMinor: number
   currency: string
   sourceType: string
+  displayName: string | null
+  categoryDefinitionId: string | null
+  costCenterId: string | null
+  counterparty: string | null
+  note: string | null
   correctsCostEntryId: string | null
   correctionReason: string | null
   recordedBusinessDate: string
@@ -471,6 +476,13 @@ function readCostInput(
     taxAmountMinor: body.taxAmountMinor === undefined ? 0 : readInteger(body.taxAmountMinor, 'taxAmountMinor', 0),
     currency: readCurrency(body.currency),
     sourceType: readEnum(body.sourceType, SOURCE_TYPES, 'sourceType'),
+    displayName: readOptionalString(body.displayName, 'displayName', 128),
+    categoryDefinitionId: body.categoryDefinitionId === undefined || body.categoryDefinitionId === null
+      ? null : readUuid(body.categoryDefinitionId, 'categoryDefinitionId'),
+    costCenterId: body.costCenterId === undefined || body.costCenterId === null
+      ? null : readUuid(body.costCenterId, 'costCenterId'),
+    counterparty: readOptionalString(body.counterparty, 'counterparty', 128),
+    note: readOptionalString(body.note, 'note', 1000),
     purchaseReceiptLineId: body.purchaseReceiptLineId === undefined
       ? null : readUuid(body.purchaseReceiptLineId, 'purchaseReceiptLineId'),
     employeeId: body.employeeId === undefined ? null : readUuid(body.employeeId, 'employeeId'),
@@ -498,6 +510,8 @@ function toCostResult(cost: OperatingCostEntry): CostResult {
     cashPaidOn: cost.cashPaidOn, netAmountMinor: cost.netAmountMinor,
     taxAmountMinor: cost.taxAmountMinor, grossAmountMinor: cost.grossAmountMinor,
     currency: cost.currency, sourceType: cost.sourceType,
+    displayName: cost.displayName, categoryDefinitionId: cost.categoryDefinitionId,
+    costCenterId: cost.costCenterId, counterparty: cost.counterparty, note: cost.note,
     correctsCostEntryId: cost.correctsCostEntryId,
     correctionReason: cost.correctionReason, recordedBusinessDate: cost.recordedBusinessDate,
     recordedAt: cost.recordedAt,
@@ -512,6 +526,8 @@ function auditCost(value: CostResult): JsonObject {
     netAmountMinor: value.netAmountMinor, taxAmountMinor: value.taxAmountMinor,
     grossAmountMinor: value.grossAmountMinor, currency: value.currency,
     sourceType: value.sourceType,
+    displayName: value.displayName, categoryDefinitionId: value.categoryDefinitionId,
+    costCenterId: value.costCenterId,
   }
 }
 

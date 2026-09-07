@@ -23,6 +23,42 @@ export const staffAccessManagementApiPlugin: FastifyPluginAsync<{
     return reply.send({ data, meta: { generatedAt: data.generatedAt } })
   }))
 
+  app.post('/staff-access/employees', async (request, reply) => handle(reply, async () => {
+    const context = await options.resolveContext(request)
+    const body = object(request.body)
+    const employeeCode = staffCode(body.employeeCode)
+    const displayName = text(body.displayName, '员工姓名', 64, 1)
+    const pin = text(body.pin, '员工PIN', 4, 4)
+    if (!/^\d{4}$/.test(pin)) throw new RequestError('员工PIN必须为4位数字')
+    const roleId = uuid(body.roleId, '岗位')
+    const reason = text(body.reason, '建立原因', 200, 2)
+    const idempotencyKey = idempotency(request)
+    const data = await options.service.createEmployee({
+      scope: context.scope, actorEmployeeId: context.employeeId, businessDate: context.businessDate,
+      idempotencyKey,
+      requestFingerprint: JSON.stringify({ actorEmployeeId: context.employeeId, employeeCode, displayName, roleId, reason, pinConfigured: true }),
+      employeeCode, displayName, pin, roleId, reason,
+    })
+    return reply.code(data.replayed ? 200 : 201).send({ data, meta: { generatedAt: data.verifiedAt } })
+  }))
+
+  app.post<{ Params: { employeeId: string } }>('/staff-access/employees/:employeeId/status', async (request, reply) => handle(reply, async () => {
+    const context = await options.resolveContext(request)
+    const body = object(request.body)
+    const employeeId = uuid(request.params.employeeId, '员工')
+    const status = body.status === 'active' || body.status === 'suspended' ? body.status : null
+    if (status === null) throw new RequestError('员工状态无效')
+    const reason = text(body.reason, '变更原因', 200, 2)
+    const idempotencyKey = idempotency(request)
+    const data = await options.service.setEmployeeStatus({
+      scope: context.scope, actorEmployeeId: context.employeeId, businessDate: context.businessDate,
+      idempotencyKey,
+      requestFingerprint: JSON.stringify({ actorEmployeeId: context.employeeId, employeeId, status, reason }),
+      employeeId, status, reason,
+    })
+    return reply.send({ data, meta: { generatedAt: data.verifiedAt } })
+  }))
+
   app.post('/staff-access/deploy', async (request, reply) => handle(reply, async () => {
     const context = await options.resolveContext(request)
     const body = object(request.body)
@@ -129,6 +165,18 @@ function text(value: unknown, label: string, maximum: number, minimum: number) {
 function code(value: unknown, label: string) {
   const result = text(value, label, 128, 3)
   if (!/^[a-z][a-z0-9_.-]{2,127}$/.test(result)) throw new RequestError(`${label}格式无效`)
+  return result
+}
+
+function staffCode(value: unknown) {
+  const result = text(value, '员工账号', 64, 1)
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(result)) throw new RequestError('员工账号只能使用字母、数字、横线或下划线')
+  return result
+}
+
+function uuid(value: unknown, label: string) {
+  const result = text(value, label, 36, 36)
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(result)) throw new RequestError(`${label}无效`)
   return result
 }
 

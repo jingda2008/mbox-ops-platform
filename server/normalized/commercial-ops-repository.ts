@@ -25,6 +25,15 @@ export interface OperatingCostEntry {
   grossAmountMinor: number
   currency: string
   sourceType: CostSourceType
+  displayName: string | null
+  categoryDefinitionId: string | null
+  costCenterId: string | null
+  recurringRuleId: string | null
+  recurringOccurrenceOn: string | null
+  counterparty: string | null
+  note: string | null
+  payrollRunId: string | null
+  payrollLineId: string | null
   purchaseReceiptLineId: string | null
   employeeId: string | null
   scheduleId: string | null
@@ -49,6 +58,15 @@ export interface WriteOperatingCostInput {
   taxAmountMinor?: number
   currency: string
   sourceType: CostSourceType
+  displayName?: string | null
+  categoryDefinitionId?: string | null
+  costCenterId?: string | null
+  recurringRuleId?: string | null
+  recurringOccurrenceOn?: string | null
+  counterparty?: string | null
+  note?: string | null
+  payrollRunId?: string | null
+  payrollLineId?: string | null
   purchaseReceiptLineId?: string | null
   employeeId?: string | null
   scheduleId?: string | null
@@ -157,6 +175,15 @@ interface CostRow extends Record<string, unknown> {
   gross_amount_minor: string | number
   currency: string
   source_type: CostSourceType
+  display_name: string | null
+  category_definition_id: string | null
+  cost_center_id: string | null
+  recurring_rule_id: string | null
+  recurring_occurrence_on: string | null
+  counterparty: string | null
+  note: string | null
+  payroll_run_id: string | null
+  payroll_line_id: string | null
   purchase_receipt_line_id: string | null
   employee_id: string | null
   schedule_id: string | null
@@ -201,7 +228,7 @@ interface SaleSourceRow extends Record<string, unknown> {
   product_name: string
   category_code: string
   total_cost_minor_at_submission: string | number | null
-  cost_source: 'catalog_product' | 'legacy_snapshot' | 'included_in_parent' | 'unavailable'
+  cost_source: 'catalog_product' | 'bundle_components' | 'legacy_snapshot' | 'included_in_parent' | 'unavailable'
 }
 
 interface AttributionRow extends Record<string, unknown> {
@@ -573,11 +600,14 @@ export class CommercialOpsRepository {
         net_amount_minor, tax_amount_minor, currency, source_type,
         purchase_receipt_line_id, employee_id, schedule_id, source_reference,
         source_snapshot, corrects_cost_entry_id, correction_reason,
-        recorded_business_date, recorded_by_employee_id
+        recorded_business_date, recorded_by_employee_id, display_name,
+        category_definition_id, cost_center_id, recurring_rule_id,
+        recurring_occurrence_on, counterparty, note, payroll_run_id, payroll_line_id
       ) VALUES (
         $1::uuid, $2::uuid, $3, $4, $5, $6, $7::date, $8::date, $9::date,
         $10::bigint, $11::bigint, $12, $13, $14::uuid, $15::uuid, $16::uuid,
-        $17, $18::jsonb, $19::uuid, $20, $21::date, $22::uuid
+        $17, $18::jsonb, $19::uuid, $20, $21::date, $22::uuid,
+        $23, $24::uuid, $25::uuid, $26::uuid, $27::date, $28, $29, $30::uuid, $31::uuid
       ) RETURNING ${COST_COLUMNS}
     `, [
       this.transaction.scope.tenantId, this.transaction.scope.storeId,
@@ -587,7 +617,11 @@ export class CommercialOpsRepository {
       input.purchaseReceiptLineId ?? null, input.employeeId ?? null, input.scheduleId ?? null,
       input.sourceReference?.trim() || null, JSON.stringify(input.sourceSnapshot ?? {}),
       correctsCostEntryId, correctionReason, input.recordedBusinessDate,
-      input.recordedByEmployeeId,
+      input.recordedByEmployeeId, input.displayName?.trim() || null,
+      input.categoryDefinitionId ?? null, input.costCenterId ?? null,
+      input.recurringRuleId ?? null, input.recurringOccurrenceOn ?? null,
+      input.counterparty?.trim() || null, input.note?.trim() || null,
+      input.payrollRunId ?? null, input.payrollLineId ?? null,
     ])
     return mapCost(required(result.rows[0], 'Cost entry was not inserted'))
   }
@@ -694,6 +728,9 @@ const COST_COLUMNS = `
   cost.allocation_period, cost.service_start_date::text, cost.service_end_date::text,
   cost.cash_paid_on::text, cost.net_amount_minor::text, cost.tax_amount_minor::text,
   cost.gross_amount_minor::text, cost.currency, cost.source_type,
+  cost.display_name, cost.category_definition_id, cost.cost_center_id,
+  cost.recurring_rule_id, cost.recurring_occurrence_on::text,
+  cost.counterparty, cost.note, cost.payroll_run_id, cost.payroll_line_id,
   cost.purchase_receipt_line_id, cost.employee_id, cost.schedule_id,
   cost.source_reference, cost.source_snapshot, cost.corrects_cost_entry_id,
   cost.correction_reason, cost.recorded_business_date::text,
@@ -727,7 +764,12 @@ function mapCost(row: CostRow): OperatingCostEntry {
     cashPaidOn: row.cash_paid_on, netAmountMinor: safeMinor(row.net_amount_minor, 'net cost'),
     taxAmountMinor: safeMinor(row.tax_amount_minor, 'tax cost'),
     grossAmountMinor: safeMinor(row.gross_amount_minor, 'gross cost'), currency: row.currency,
-    sourceType: row.source_type, purchaseReceiptLineId: row.purchase_receipt_line_id,
+    sourceType: row.source_type, displayName: row.display_name,
+    categoryDefinitionId: row.category_definition_id, costCenterId: row.cost_center_id,
+    recurringRuleId: row.recurring_rule_id, recurringOccurrenceOn: row.recurring_occurrence_on,
+    counterparty: row.counterparty, note: row.note,
+    payrollRunId: row.payroll_run_id, payrollLineId: row.payroll_line_id,
+    purchaseReceiptLineId: row.purchase_receipt_line_id,
     employeeId: row.employee_id, scheduleId: row.schedule_id,
     sourceReference: row.source_reference, sourceSnapshot: row.source_snapshot,
     correctsCostEntryId: row.corrects_cost_entry_id, correctionReason: row.correction_reason,
@@ -780,6 +822,13 @@ function validateCost(input: Readonly<WriteOperatingCostInput>): void {
   validateDate(input.serviceEndDate, 'serviceEndDate')
   validateDate(input.recordedBusinessDate, 'recordedBusinessDate')
   if (input.cashPaidOn) validateDate(input.cashPaidOn, 'cashPaidOn')
+  if (input.recurringOccurrenceOn) validateDate(input.recurringOccurrenceOn, 'recurringOccurrenceOn')
+  if ((input.recurringRuleId == null) !== (input.recurringOccurrenceOn == null)) {
+    throw new TypeError('recurringRuleId and recurringOccurrenceOn must be provided together')
+  }
+  if ((input.payrollRunId == null) !== (input.payrollLineId == null)) {
+    throw new TypeError('payrollRunId and payrollLineId must be provided together')
+  }
   if (input.serviceEndDate < input.serviceStartDate) throw new TypeError('service period is invalid')
   safeMinor(input.netAmountMinor, 'netAmountMinor')
   safeMinor(input.taxAmountMinor ?? 0, 'taxAmountMinor')
@@ -816,7 +865,8 @@ function validateVoucher(input: Readonly<RedeemGroupVoucherInput>): void {
 }
 
 function requireFrozenOrderItemCost(source: SaleSourceRow): number {
-  if (source.cost_source !== 'catalog_product' && source.cost_source !== 'legacy_snapshot') {
+  if (source.cost_source !== 'catalog_product' && source.cost_source !== 'bundle_components'
+    && source.cost_source !== 'legacy_snapshot') {
     throw new SalesAttributionNotAllowedError('Order item has no authoritative frozen contribution cost')
   }
   if (source.total_cost_minor_at_submission === null) {

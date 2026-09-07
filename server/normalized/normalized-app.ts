@@ -28,6 +28,7 @@ import { appendAuditEvent, appendOutboxMessage, NormalizedCommandExecutor, type 
 import { CommerceCommandService } from './commerce-command-service.js'
 import { commerceKdsApiPlugin } from './commerce-kds-api.js'
 import { commercialOpsApiPlugin } from './commercial-ops-api.js'
+import { ownerFinanceApiPlugin } from './owner-finance-api.js'
 import { customerBenefitApiPlugin } from './customer-benefit-api.js'
 import { customerExperienceAnalyticsApiPlugin } from './customer-experience-analytics-api.js'
 import { customerExperienceApiPlugin } from './customer-experience-api.js'
@@ -822,6 +823,12 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       transactions,
       commandExecutor,
       queryService: new ProfitQueryService(transactions),
+      resolveContext: operationsContext,
+    })
+    instance.register(ownerFinanceApiPlugin, {
+      prefix: '/api',
+      transactions,
+      commandExecutor,
       resolveContext: operationsContext,
     })
     instance.register(tableManagementApiPlugin, {

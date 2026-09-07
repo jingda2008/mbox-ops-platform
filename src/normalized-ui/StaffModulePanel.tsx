@@ -54,6 +54,9 @@ const VenueManagementPanel = lazy(() => import('./VenueManagementPanel').then((m
 const StaffAccessManagementPanel = lazy(() => import('./StaffAccessManagementPanel').then((module) => ({
   default: module.StaffAccessManagementPanel,
 })))
+const OwnerFinancePanel = lazy(() => import('./OwnerFinancePanel').then((module) => ({
+  default: module.OwnerFinancePanel,
+})))
 const CustomerPublicationPanel = lazy(() => import('./CustomerPublicationPanel').then((module) => ({
   default: module.CustomerPublicationPanel,
 })))
@@ -219,8 +222,9 @@ interface ProfitView {
   currency: string
   range: { startDate: string; endDate: string }
   revenue: { cash: { netReceiptsMinor: number } }
-  costs: { cashPaidMinor: number; accrualAllocatedMinor: number }
-  profit: { cashBasisMinor: number; accrualBasisMinor: number }
+  costs: { cashPaidMinor: number; accrualAllocatedMinor: number; goodsCostMinor: number; inventoryLossMinor: number; operatingExpenseMinor: number }
+  profit: { cashBalanceMinor: number; grossProfitMinor: number; operatingProfitMinor: number; cashBasisMinor: number; accrualBasisMinor: number }
+  gaps: { orderItemsMissingCostCount: number; inventoryLossesMissingCostCount: number }
   caveats: string[]
 }
 
@@ -461,7 +465,7 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
     }
     if (module === 'performance') return <PerformanceModule api={api} auth={auth} view={data.performance} performers={data.performers} requests={data.songRequests} phases={data.performancePhases} onChanged={refresh} />
     if (module === 'inventory') return <InventoryModule api={api} auth={auth} view={data.inventory} onChanged={refresh} />
-    if (module === 'operations') return <OperationsModule view={data.profit} sales={data.employeeSales} canViewProfit={auth.permissions.includes('commercial.profit.view')} />
+    if (module === 'operations') return <OperationsModule api={api} auth={auth} view={data.profit} sales={data.employeeSales} canViewProfit={auth.permissions.includes('commercial.profit.view')} />
     if (module === 'experience') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={data.customerExperience} mode="experience" />
     if (module === 'member-fulfillment') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={null} mode="member-fulfillment" />
     if (module === 'member-exceptions') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={null} mode="member-exceptions" />
@@ -1278,7 +1282,7 @@ function formatEmployeeInventoryQuantity(item: InventoryItemView): string {
   )
 }
 
-function OperationsModule({ view, sales, canViewProfit }: { view: ProfitView | null; sales: EmployeeSalesView[]; canViewProfit: boolean }) {
+function OperationsModule({ api, auth, view, sales, canViewProfit }: { api: NormalizedApiClient; auth: StaffAuthView; view: ProfitView | null; sales: EmployeeSalesView[]; canViewProfit: boolean }) {
   if (!canViewProfit) return <div className="staff-module-body">
     <div className="staff-module-summary"><span><BarChart3 size={18} /></span><div><strong>客户与销售</strong><small>仅显示当前账号权限范围内的销售归属，不展示门店利润与成本。</small></div></div>
     {sales.length === 0 ? <EmptyState text="当前范围暂无销售归属数据" /> : <div className="staff-module-list">{sales.slice(0, 30).map((item) => <article key={`${item.employeeId}:${item.productId}`}><div><strong>{item.productName}</strong><small>{item.employeeDisplayName} · {item.quantity}件</small></div><b>¥{formatAmount(item.salesAmountMinor)}</b></article>)}</div>}
@@ -1288,11 +1292,16 @@ function OperationsModule({ view, sales, canViewProfit }: { view: ProfitView | n
     <div className="staff-module-summary"><span><BarChart3 size={18} /></span><div><strong>{view.range.startDate} 营业概览</strong><small>{view.status === 'complete' ? '数据已完整核对' : '当日数据暂估，后补成本会自动更新'}</small></div></div>
     <div className="staff-metric-grid">
       <article><small>实收净额</small><strong>¥{formatAmount(view.revenue.cash.netReceiptsMinor)}</strong></article>
-      <article><small>已付成本</small><strong>¥{formatAmount(view.costs.cashPaidMinor)}</strong></article>
-      <article><small>现金利润</small><strong className={view.profit.cashBasisMinor < 0 ? 'is-negative' : ''}>¥{formatSignedAmount(view.profit.cashBasisMinor)}</strong></article>
-      <article><small>权责利润</small><strong className={view.profit.accrualBasisMinor < 0 ? 'is-negative' : ''}>¥{formatSignedAmount(view.profit.accrualBasisMinor)}</strong></article>
+      <article><small>已售商品成本</small><strong>¥{formatAmount(view.costs.goodsCostMinor)}</strong></article>
+      <article><small>经营费用</small><strong>¥{formatAmount(view.costs.operatingExpenseMinor)}</strong></article>
+      <article><small>库存损耗</small><strong>¥{formatAmount(view.costs.inventoryLossMinor)}</strong></article>
+      <article><small>毛利润</small><strong className={view.profit.grossProfitMinor < 0 ? 'is-negative' : ''}>¥{formatSignedAmount(view.profit.grossProfitMinor)}</strong></article>
+      <article><small>经营利润</small><strong className={view.profit.operatingProfitMinor < 0 ? 'is-negative' : ''}>¥{formatSignedAmount(view.profit.operatingProfitMinor)}</strong></article>
+      <article><small>现金结余（非利润）</small><strong className={view.profit.cashBalanceMinor < 0 ? 'is-negative' : ''}>¥{formatSignedAmount(view.profit.cashBalanceMinor)}</strong></article>
     </div>
+    {(view.gaps.orderItemsMissingCostCount > 0 || view.gaps.inventoryLossesMissingCostCount > 0) && <p className="staff-module-warning">有 {view.gaps.orderItemsMissingCostCount} 个已售单品和 {view.gaps.inventoryLossesMissingCostCount} 笔损耗缺少成本，当前利润只能作为暂估。</p>}
     {view.caveats.length > 0 && <p className="staff-module-footnote">{view.caveats[0]}</p>}
+    {auth.permissions.includes('commercial.cost.manage') && <OwnerFinancePanel api={api} auth={auth} />}
   </div>
 }
 
@@ -1596,7 +1605,7 @@ function SettingsModule({ api, auth, policy, onChanged }: { api: NormalizedApiCl
     {notice !== '' && <p className="staff-module-notice" role="status">{notice}</p>}
     <details className="staff-module-disclosure"><summary>支付安全边界</summary><p className="staff-module-footnote">支付渠道密钥和远端连接只能由受控部署配置提供，门店开关不会读取、显示或覆盖它们。每次调整要求原因、版本校验、幂等键和审计记录；关闭只阻止新支付，不得中断在途回调、查单、退款或对账。</p></details>
     {auth.permissions.includes('table.manage') && <VenueManagementPanel api={api} />}
-    {auth.permissions.includes('staff.access.configure') && <StaffAccessManagementPanel api={api} />}
+    {auth.permissions.includes('staff.access.configure') && <StaffAccessManagementPanel api={api} currentEmployeeId={auth.employee.id} />}
     {(auth.permissions.includes('customer.public-profile.manage')
       || auth.permissions.includes('customer.public-profile.publish')
       || auth.permissions.includes('privacy.policy.view')
@@ -1745,11 +1754,14 @@ function purchaseReceiptViews(value: unknown): PurchaseReceiptView[] {
 }
 
 function profitView(value: unknown): ProfitView | null {
-  if (!isRecord(value) || !isRecord(value.range) || !isRecord(value.revenue) || !isRecord(value.costs) || !isRecord(value.profit)) return null
+  if (!isRecord(value) || !isRecord(value.range) || !isRecord(value.revenue) || !isRecord(value.costs) || !isRecord(value.profit) || !isRecord(value.gaps)) return null
   const cash = isRecord(value.revenue.cash) ? value.revenue.cash : null
   if (cash === null || typeof cash.netReceiptsMinor !== 'number'
     || typeof value.costs.cashPaidMinor !== 'number' || typeof value.costs.accrualAllocatedMinor !== 'number'
+    || typeof value.costs.goodsCostMinor !== 'number' || typeof value.costs.inventoryLossMinor !== 'number' || typeof value.costs.operatingExpenseMinor !== 'number'
     || typeof value.profit.cashBasisMinor !== 'number' || typeof value.profit.accrualBasisMinor !== 'number'
+    || typeof value.profit.cashBalanceMinor !== 'number' || typeof value.profit.grossProfitMinor !== 'number' || typeof value.profit.operatingProfitMinor !== 'number'
+    || typeof value.gaps.orderItemsMissingCostCount !== 'number' || typeof value.gaps.inventoryLossesMissingCostCount !== 'number'
     || typeof value.range.startDate !== 'string' || typeof value.range.endDate !== 'string') return null
   return value as unknown as ProfitView
 }

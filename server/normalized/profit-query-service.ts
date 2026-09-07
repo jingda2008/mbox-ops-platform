@@ -28,9 +28,16 @@ export interface ProfitReport {
   costs: {
     cashPaidMinor: number
     accrualAllocatedMinor: number
+    goodsCostMinor: number
+    inventoryLossMinor: number
+    operatingExpenseMinor: number
+    inventoryPurchasesPaidMinor: number
     taxIncludedMinor: number
   }
   profit: {
+    cashBalanceMinor: number
+    grossProfitMinor: number
+    operatingProfitMinor: number
     cashBasisMinor: number
     accrualBasisMinor: number
   }
@@ -39,6 +46,8 @@ export interface ProfitReport {
     unsettledVoucherSettlementMinor: number
     unactualizedAccrualMinor: number
     costsMissingCashDateMinor: number
+    orderItemsMissingCostCount: number
+    inventoryLossesMissingCostCount: number
     unknownUnrecordedCostsMeasurable: false
   }
   caveats: string[]
@@ -113,9 +122,20 @@ interface RevenueRow extends Record<string, unknown> {
 interface CostAggregateRow extends Record<string, unknown> {
   cash_cost_minor: string | number
   accrual_cost_minor: string | number
+  inventory_purchases_paid_minor: string | number
   allocated_tax_minor: string | number
   unactualized_accrual_minor: string | number
   missing_cash_date_minor: string | number
+}
+
+interface GoodsCostAggregateRow extends Record<string, unknown> {
+  goods_cost_minor: string | number
+  missing_cost_count: string | number
+}
+
+interface InventoryLossAggregateRow extends Record<string, unknown> {
+  inventory_loss_minor: string | number
+  missing_cost_count: string | number
 }
 
 interface GapRow extends Record<string, unknown> {
@@ -233,7 +253,8 @@ export class ProfitQueryService {
                 AND correction.corrects_cost_entry_id = cost.id
             )
         ), allocated_days AS (
-          SELECT cost.id, cost.recognition_state, day::date AS allocated_date,
+          SELECT cost.id, cost.recognition_state, cost.category, cost.source_type,
+            day::date AS allocated_date,
             (cost.gross_amount_minor / day_count)
               + CASE WHEN day_number <= (cost.gross_amount_minor % day_count) THEN 1 ELSE 0 END
                 AS allocated_gross_minor,
@@ -259,7 +280,12 @@ export class ProfitQueryService {
             WHERE cash_paid_on BETWEEN $3::date AND $4::date), 0)::text AS cash_cost_minor,
           COALESCE(SUM(allocated_gross_minor) FILTER (
             WHERE allocated_date BETWEEN $3::date AND $4::date
+              AND category <> 'beverage_purchase' AND source_type <> 'inventory_purchase'
           ), 0)::text AS accrual_cost_minor,
+          COALESCE((SELECT SUM(gross_amount_minor) FROM active_costs
+            WHERE cash_paid_on BETWEEN $3::date AND $4::date
+              AND (category = 'beverage_purchase' OR source_type = 'inventory_purchase')), 0)::text
+            AS inventory_purchases_paid_minor,
           COALESCE(SUM(allocated_tax_minor) FILTER (
             WHERE allocated_date BETWEEN $3::date AND $4::date
           ), 0)::text AS allocated_tax_minor,
@@ -271,6 +297,40 @@ export class ProfitQueryService {
               AND service_start_date <= $4::date AND service_end_date >= $3::date), 0)::text
             AS missing_cash_date_minor
         FROM allocated_days
+      `, [scope.tenantId, scope.storeId, range.startDate, range.endDate, currency])
+
+      const goodsCosts = await transaction.query<GoodsCostAggregateRow>(`
+        SELECT
+          COALESCE(SUM(item.total_cost_minor_at_submission), 0)::text AS goods_cost_minor,
+          COUNT(*) FILTER (WHERE item.total_cost_minor_at_submission IS NULL)::text AS missing_cost_count
+        FROM mbox.order_items AS item
+        JOIN mbox.orders AS order_row
+          ON order_row.tenant_id=item.tenant_id AND order_row.store_id=item.store_id
+         AND order_row.id=item.order_id
+        JOIN mbox.table_sessions AS session
+          ON session.tenant_id=order_row.tenant_id AND session.store_id=order_row.store_id
+         AND session.id=order_row.table_session_id
+        WHERE item.tenant_id=$1::uuid AND item.store_id=$2::uuid
+          AND session.business_date BETWEEN $3::date AND $4::date
+          AND order_row.payment_status IN ('paid','partially_refunded','refunded')
+          AND order_row.status <> 'cancelled'
+          AND item.parent_order_item_id IS NULL
+          AND item.status <> 'cancelled'
+          AND item.currency=$5
+      `, [scope.tenantId, scope.storeId, range.startDate, range.endDate, currency])
+
+      const inventoryLosses = await transaction.query<InventoryLossAggregateRow>(`
+        SELECT
+          COALESCE(SUM(round(abs(movement.quantity_delta)*movement.unit_cost_minor))
+            FILTER (WHERE movement.unit_cost_minor IS NOT NULL), 0)::text AS inventory_loss_minor,
+          COUNT(*) FILTER (WHERE movement.unit_cost_minor IS NULL)::text AS missing_cost_count
+        FROM mbox.inventory_movements AS movement
+        JOIN mbox.stores AS store
+          ON store.tenant_id=movement.tenant_id AND store.id=movement.store_id
+        WHERE movement.tenant_id=$1::uuid AND movement.store_id=$2::uuid
+          AND movement.movement_type='waste' AND movement.currency=$5
+          AND ((movement.occurred_at AT TIME ZONE store.timezone)-store.business_day_cutoff)::date
+            BETWEEN $3::date AND $4::date
       `, [scope.tenantId, scope.storeId, range.startDate, range.endDate, currency])
 
       const gaps = await transaction.query<GapRow>(`
@@ -306,6 +366,8 @@ export class ProfitQueryService {
 
       const cash = required(cashRevenue.rows[0])
       const cost = required(costs.rows[0])
+      const goodsCost = required(goodsCosts.rows[0])
+      const inventoryLoss = required(inventoryLosses.rows[0])
       const gap = required(gaps.rows[0])
       const paymentReceiptsMinor = minor(cash.payment_minor)
       const refundsMinor = minor(cash.refund_minor)
@@ -315,11 +377,20 @@ export class ProfitQueryService {
       const reconciledRevenueMinor = minor(required(accrualRevenue.rows[0]).net_minor)
       const cashPaidMinor = minor(cost.cash_cost_minor)
       const accrualAllocatedMinor = minor(cost.accrual_cost_minor)
+      const goodsCostMinor = minor(goodsCost.goods_cost_minor)
+      const inventoryLossMinor = minor(inventoryLoss.inventory_loss_minor)
+      const orderItemsMissingCostCount = minor(goodsCost.missing_cost_count)
+      const inventoryLossesMissingCostCount = minor(inventoryLoss.missing_cost_count)
+      const cashBalanceMinor = netReceiptsMinor - cashPaidMinor
+      const grossProfitMinor = reconciledRevenueMinor - goodsCostMinor
+      const operatingProfitMinor = grossProfitMinor - inventoryLossMinor - accrualAllocatedMinor
       const reportGaps = {
         unreconciledCapturedPaymentsMinor: minor(gap.unreconciled_payments_minor),
         unsettledVoucherSettlementMinor: minor(gap.unsettled_vouchers_minor),
         unactualizedAccrualMinor: minor(cost.unactualized_accrual_minor),
         costsMissingCashDateMinor: minor(cost.missing_cash_date_minor),
+        orderItemsMissingCostCount,
+        inventoryLossesMissingCostCount,
         unknownUnrecordedCostsMeasurable: false as const,
       }
       const hasKnownGap = Object.values(reportGaps).some((value) => typeof value === 'number' && value !== 0)
@@ -332,16 +403,21 @@ export class ProfitQueryService {
         },
         costs: {
           cashPaidMinor, accrualAllocatedMinor,
+          goodsCostMinor, inventoryLossMinor,
+          operatingExpenseMinor: accrualAllocatedMinor,
+          inventoryPurchasesPaidMinor: minor(cost.inventory_purchases_paid_minor),
           taxIncludedMinor: minor(cost.allocated_tax_minor),
         },
         profit: {
-          cashBasisMinor: netReceiptsMinor - cashPaidMinor,
-          accrualBasisMinor: reconciledRevenueMinor - accrualAllocatedMinor,
+          cashBalanceMinor, grossProfitMinor, operatingProfitMinor,
+          cashBasisMinor: cashBalanceMinor,
+          accrualBasisMinor: operatingProfitMinor,
         },
         gaps: reportGaps,
         caveats: [
           '收入只采用已写入对账流水的支付、退款、费用和调整。',
-          '现金口径按对账营业日和成本付款日计算；权责口径按订单营业日及成本服务期逐日分摊。',
+          '现金结余按对账营业日和成本付款日计算；它不是会计利润。',
+          '经营利润按订单冻结商品成本、单独损耗成本和费用服务期分摊计算；库存采购付款不会与商品成本重复扣除。',
           '尚未录入系统的未知成本无法被量化，报告不能替代月末财务关账。',
         ],
       }

@@ -1,0 +1,291 @@
+.owner-finance-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #d7ddd7;
+  min-width: 0;
+}
+.owner-finance-panel > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.owner-finance-panel > header > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.owner-finance-panel > header strong {
+  font-size: 15px;
+}
+.owner-finance-panel > header small {
+  color: #687068;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.owner-finance-panel > header button {
+  width: 40px;
+  height: 40px;
+  border: 1px solid #c8d0c8;
+  border-radius: 7px;
+  background: #fff;
+  color: #176f4c;
+}
+.owner-finance-notice {
+  margin: 0;
+  padding: 9px 11px;
+  border-left: 3px solid #caa444;
+  background: #fff8dc;
+  color: #5f511f;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.owner-finance-panel > nav {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+.owner-finance-panel > nav button {
+  min-width: 0;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px;
+  border: 1px solid #cbd2cb;
+  border-radius: 7px;
+  background: #fff;
+  color: #59615b;
+  font-size: 11px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+.owner-finance-panel > nav button[data-active="true"] {
+  border-color: #176f4c;
+  background: #edf7f2;
+  color: #176f4c;
+}
+.owner-finance-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid #c9d0c8;
+  border-top: 3px solid #d4b44f;
+  border-radius: 8px;
+  background: #fff;
+  min-width: 0;
+}
+.owner-finance-form > header {
+  grid-column: 1/-1;
+  display: grid;
+  gap: 3px;
+}
+.owner-finance-form > header strong {
+  font-size: 14px;
+}
+.owner-finance-form > header small {
+  color: #687068;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.owner-finance-form label {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  color: #535b54;
+  font-size: 11px;
+  font-weight: 750;
+}
+.owner-finance-form input,
+.owner-finance-form select,
+.owner-finance-form textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid #c4cbc3;
+  border-radius: 6px;
+  background: #fff;
+  color: #202621;
+  font: inherit;
+  box-sizing: border-box;
+}
+.owner-finance-form textarea {
+  resize: vertical;
+  line-height: 1.5;
+}
+.owner-finance-form .wide {
+  grid-column: 1/-1;
+}
+.owner-finance-form > button,
+.owner-finance-form-actions button {
+  min-height: 44px;
+  align-self: end;
+  padding: 0 14px;
+  border: 1px solid #105f3f;
+  border-radius: 6px;
+  background: #176f4c;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+}
+.owner-finance-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.owner-finance-form-actions button.secondary {
+  border-color: #b8a69d;
+  background: #fff8f4;
+  color: #805445;
+}
+.owner-finance-form > button:disabled,
+.owner-finance-form-actions button:disabled,
+.owner-finance-toolbar button:disabled,
+.owner-finance-actions button:disabled {
+  opacity: 0.55;
+}
+.owner-finance-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid #d5d9d2;
+  border-radius: 7px;
+  background: #f8faf8;
+  font-size: 11px;
+}
+.owner-finance-toolbar button,
+.owner-finance-actions button {
+  min-height: 38px;
+  padding: 0 11px;
+  border: 1px solid #1a704e;
+  border-radius: 6px;
+  background: #eef7f2;
+  color: #185d43;
+  font-size: 11px;
+  font-weight: 750;
+}
+.owner-finance-list {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+.owner-finance-list > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px;
+}
+.owner-finance-list > header strong {
+  font-size: 13px;
+}
+.owner-finance-list > header span {
+  color: #687068;
+  font-size: 11px;
+}
+.owner-finance-list > p {
+  margin: 0;
+  padding: 20px;
+  border: 1px dashed #ccd2cc;
+  border-radius: 7px;
+  background: #fafbfa;
+  color: #737a74;
+  text-align: center;
+  font-size: 12px;
+}
+.owner-finance-list article {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #d5d9d2;
+  border-radius: 7px;
+  background: #fff;
+}
+.owner-finance-list article > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.owner-finance-list article strong {
+  font-size: 12px;
+}
+.owner-finance-list article small {
+  color: #687068;
+  font-size: 10px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.owner-finance-list article > b {
+  color: #176b43;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.owner-finance-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.owner-finance-actions em {
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: #f6edd0;
+  color: #745d19;
+  font-size: 10px;
+  font-style: normal;
+  white-space: nowrap;
+}
+.owner-finance-actions b {
+  color: #176b43;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.owner-finance-actions button.secondary {
+  border-color: #b8a69d;
+  background: #fff8f4;
+  color: #805445;
+}
+.owner-finance-form-warning {
+  margin: 0;
+  padding: 8px 10px;
+  border-left: 3px solid #c48b25;
+  background: #fff7df;
+  color: #69521b;
+  font-size: 11px;
+  line-height: 1.5;
+}
+@media (max-width: 700px) {
+  .owner-finance-panel > nav {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .owner-finance-form {
+    grid-template-columns: 1fr;
+  }
+  .owner-finance-form > header,
+  .owner-finance-form .wide {
+    grid-column: auto;
+  }
+  .owner-finance-list article {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .owner-finance-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .owner-finance-panel {
+    overflow-x: hidden;
+  }
+}

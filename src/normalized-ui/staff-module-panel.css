@@ -91,6 +91,7 @@
 .staff-metric-grid small { color: #656c64; font-size: 10px; }
 .staff-metric-grid strong { font-size: 18px; }
 .staff-metric-grid strong.is-negative { color: #b3383f; }
+.staff-module-warning { margin: 0; padding: 9px 11px; border-left: 3px solid #c9972a; background: #fff7db; color: #66531b; font-size: 11px; line-height: 1.5; }
 
 .staff-module-actions { display: flex; flex-wrap: wrap; gap: 7px; }
 .staff-module-actions button { min-height: 44px; padding: 0 13px; border: 1px solid #1a704e; border-radius: 6px; background: #fff; color: #185d43; font-size: 12px; font-weight: 750; box-shadow: 0 2px 0 #b9c9c0; }

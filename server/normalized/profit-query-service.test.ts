@@ -59,9 +59,15 @@ integration('ProfitQueryService PostgreSQL accounting correctness', () => {
     expect(report.costs).toMatchObject({
       cashPaidMinor: 0,
       accrualAllocatedMinor: 1_200,
+      goodsCostMinor: 4_000,
+      inventoryLossMinor: 0,
+      operatingExpenseMinor: 1_200,
       taxIncludedMinor: 100,
     })
-    expect(report.profit).toEqual({ cashBasisMinor: 9_900, accrualBasisMinor: 6_200 })
+    expect(report.profit).toEqual({
+      cashBalanceMinor: 9_900, grossProfitMinor: 3_400, operatingProfitMinor: 2_200,
+      cashBasisMinor: 9_900, accrualBasisMinor: 2_200,
+    })
     expect(report.gaps).toMatchObject({
       unsettledVoucherSettlementMinor: 18_800,
       unactualizedAccrualMinor: 100,
@@ -130,8 +136,10 @@ integration('ProfitQueryService PostgreSQL accounting correctness', () => {
     await pool.query(`INSERT INTO mbox.order_items (
       id, tenant_id, store_id, order_id, product_id, quantity, unit_price_minor,
       total_amount_minor, currency, fulfillment_station, product_snapshot, cost_snapshot, status
+      ,unit_cost_minor_at_submission,total_cost_minor_at_submission,cost_source,
+      cost_reference_product_id,cost_reference_product_updated_at
     ) VALUES ($1, $2, $3, $4, $5, 2, 5000, 10000, 'CNY', 'bar', '{}',
-      '{"totalCostMinor":4000}', 'delivered')`, [orderItemId, tenantId, storeId, orderId, productId])
+      '{"totalCostMinor":4000}', 'delivered',2000,4000,'catalog_product',$5,clock_timestamp())`, [orderItemId, tenantId, storeId, orderId, productId])
     await pool.query(`INSERT INTO mbox.payments (
       id, tenant_id, store_id, order_id, public_id, provider, provider_transaction_id,
       method, amount_minor, currency, status, succeeded_at

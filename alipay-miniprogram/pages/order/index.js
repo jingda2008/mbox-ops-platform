@@ -1291,8 +1291,9 @@ Page({
     if (product.productKind === 'bundle') {
       this.setData({
         detailProduct: Object.assign(resetBundleChoiceSelections(product), {
-          selectionSource: String(event.currentTarget.dataset.source || ''),
+          selectionSource: String(event.currentTarget.dataset.source || 'menu_add'),
         }),
+        detailInformationExpanded: false,
         detailSelectionsComplete: (product.bundleChoiceGroups || []).length === 0,
         detailEditUnitIndex: -1,
       })

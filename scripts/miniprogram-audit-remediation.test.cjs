@@ -86,6 +86,13 @@ async function run() {
   order.loadActiveData = async () => {}
   order.queuePendingGuestPaymentAbandonment = () => null
   await order.preparePage()
+  order.data.products = [{ productId: 'choice-layout', available: true, productKind: 'bundle', bundleChoiceGroups: [{ id: 'group', selectionCount: 1, options: [{ productId: 'cocktail', available: true }] }] }]
+  order.data.detailInformationExpanded = true
+  await order.addProduct({ currentTarget: { dataset: { id: 'choice-layout' } } })
+  assert.equal(order.data.detailProduct.selectionSource, 'menu_add')
+  assert.equal(order.data.detailInformationExpanded, false)
+  assert.equal(order.data.detailSelectionsComplete, false)
+  order.closeProductDetail()
   const code = 'call'
   const first = order.requestQuickService({ currentTarget: { dataset: { code } } })
   assert.equal(writes, 1)

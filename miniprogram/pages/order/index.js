@@ -1281,9 +1281,9 @@ Page({
     }
     if(product.productKind==='bundle'){
       this.setData({ detailProduct:Object.assign(resetBundleChoiceSelections(product),{
-          selectionSource:String(event.currentTarget.dataset.source||''),
+          selectionSource:String(event.currentTarget.dataset.source||'menu_add'),
         }),
-        detailSelectionsComplete:(product.bundleChoiceGroups||[]).length===0,detailEditUnitIndex:-1 })
+        detailInformationExpanded:false,detailSelectionsComplete:(product.bundleChoiceGroups||[]).length===0,detailEditUnitIndex:-1 })
       return
     }
     return this.commitProductAdd(productId,event.currentTarget.dataset.source||'',[])

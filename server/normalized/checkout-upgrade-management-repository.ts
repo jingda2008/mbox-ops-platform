@@ -365,7 +365,8 @@ export class CheckoutUpgradeManagementRepository {
         SELECT CASE
           WHEN count(*)=0 THEN 'not_created'
           WHEN bool_or(payment.status IN ('succeeded','partially_refunded','refunded')) THEN 'paid'
-          WHEN bool_or(payment.status IN ('created','pending')) THEN 'pending'
+          WHEN bool_or(payment.status IN ('created','pending')
+            AND payment.retry_released_at IS NULL) THEN 'pending'
           ELSE 'failed_or_closed' END AS state,
           COALESCE(sum(payment.amount_minor) FILTER (WHERE payment.status IN ('succeeded','partially_refunded','refunded')),0) AS paid_amount_minor
         FROM mbox.payments payment

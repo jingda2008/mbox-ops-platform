@@ -328,6 +328,21 @@ export class PaymentProviderActionRepository {
         AND refund.updated_at<=clock_timestamp()-make_interval(secs=>$3::integer)
       ON CONFLICT (refund_id) DO NOTHING
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, minAgeSeconds])
+    // StarPay's refund-query contract supports the original refund date for
+    // only 60 days. Stop provider I/O after that boundary while retaining the
+    // refund itself as an explicit finance-review item.
+    await this.transaction.query(`
+      UPDATE mbox.refund_reconciliation_states state
+      SET phase='stopped',lease_until=NULL,
+        automatic_query_stopped_at=COALESCE(automatic_query_stopped_at,clock_timestamp()),
+        stop_reason='provider_query_window_expired',updated_at=clock_timestamp()
+      FROM mbox.refunds refund
+      WHERE state.tenant_id=$1::uuid AND state.store_id=$2::uuid
+        AND refund.tenant_id=state.tenant_id AND refund.store_id=state.store_id
+        AND refund.id=state.refund_id AND state.phase<>'stopped'
+        AND refund.status='processing'
+        AND refund.provider_submission_started_at<=clock_timestamp()-interval '60 days'
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId])
     const result = await this.transaction.query<{ id: string }>(`
       WITH due AS (
         SELECT state.refund_id
@@ -585,6 +600,7 @@ export class PaymentProviderActionRepository {
             AND payment.store_id = ordering.store_id
             AND payment.order_id = ordering.id
             AND payment.status IN ('created', 'pending')
+            AND payment.retry_released_at IS NULL
           ORDER BY payment.created_at DESC, payment.id DESC
           LIMIT 1
         ) AS payment_id
@@ -640,6 +656,7 @@ export class PaymentProviderActionRepository {
         AND payment.store_id = $2::uuid
         AND payment.order_id = $3::uuid
         AND payment.status IN ('created', 'pending')
+        AND payment.retry_released_at IS NULL
       ORDER BY payment.created_at DESC, payment.id DESC
       LIMIT 1
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])

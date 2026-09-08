@@ -77,6 +77,39 @@ describe('stale guest immediate payment worker', () => {
     expect(result.failedRefundIds).toEqual([])
   })
 
+  it('reuses the stored integration authority when recovering a terminal refund observation', async () => {
+    const recordProviderRefundResult = vi.fn(async () => ({ replayed: false, value: {} }))
+    const worker = new StaleGuestImmediatePaymentWorker({
+      onlinePayments: {
+        listStaleGuestImmediateCheckoutPaymentCandidates: vi.fn(async () => []), closeSystem: vi.fn(),
+        listStaleProcessingPostarRefundIds: vi.fn(async () => ['refund-recovered']),
+        queryRefund: vi.fn(async () => ({
+          merchantRefundId: 'merchant-refund',
+          originalProviderTransactionId: 'payment-provider-txn',
+          verifiedObservationId: 'refund-observation',
+          observationIntegrationRef: 'postar-refund-submit-rejection',
+          observation: {
+            refundId: 'merchant-refund', providerRefundId: 'merchant-refund',
+            providerRefundTransactionId: 'merchant-refund',
+            originalProviderTransactionId: 'payment-provider-txn', status: 'failed' as const,
+            amount: 4_000, currency: 'CNY', occurredAt: '2026-09-07T10:00:00.000Z',
+          },
+        })),
+      } as never,
+      payments: { recordProviderQueryResult: vi.fn(), recordProviderRefundResult } as never,
+      reconciliation: { commitTerminal: vi.fn(), abandonUnresolved: vi.fn() } as never,
+    })
+
+    const result = await worker.runBatch(scope, 'worker-test', businessDate)
+
+    expect(recordProviderRefundResult).toHaveBeenCalledWith(expect.objectContaining({
+      actor: { type: 'integration', ref: 'postar-refund-submit-rejection' },
+      succeeded: false,
+      verifiedObservationId: 'refund-observation',
+    }))
+    expect(result.terminalRefundIds).toEqual(['refund-recovered'])
+  })
+
   it('treats a refund query outage as deferred financial follow-up, not worker failure', async () => {
     const closeSystem = vi.fn(async () => observed('table-still-operates', 'closed'))
     const commitTerminal = vi.fn(async () => ({ replayed: false, value: {} }))

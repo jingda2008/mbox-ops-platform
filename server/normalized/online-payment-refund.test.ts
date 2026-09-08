@@ -168,6 +168,7 @@ describe('OnlinePaymentService provider refund closure', () => {
     expect(queryRefund).toHaveBeenCalledWith(expect.objectContaining({
       refundId: merchantRefundId, providerRefundId: merchantRefundId,
       merchantId: 'TESTMERCHANT', originalProviderTransactionId: 'POSTAR-PAYMENT-001',
+      amount: 2_000, currency: 'CNY',
       refundDate: '20260816',
     }), expect.anything())
     expect(result.observation.status).toBe('succeeded')
@@ -196,6 +197,68 @@ describe('OnlinePaymentService provider refund closure', () => {
     expect(queryRefund).toHaveBeenCalledWith(expect.objectContaining({ refundDate: '20260816' }), expect.anything())
     expect(result.verifiedObservationId).toBeNull()
     expect(recorder.recordRefund).not.toHaveBeenCalled()
+  })
+
+  it('recovers an unconsumed verified terminal observation before querying StarPay again', async () => {
+    const queryRefund = vi.fn()
+    const transaction = new RefundTransaction(false, {}, [{
+      verified_observation_id: verifiedObservationId,
+      integration_ref: 'postar-refund-submit-rejection',
+      observed_status: 'refund_failed',
+      provider_transaction_id: merchantRefundId,
+      original_provider_transaction_id: 'POSTAR-PAYMENT-001',
+      reported_amount_minor: '2000',
+      reported_currency: 'CNY',
+      occurred_at: '2026-08-16T12:00:00.000Z',
+    }])
+    const service = new OnlinePaymentService(
+      runner(transaction), 'test-secret-at-least-thirty-two-bytes', secrets,
+      { createPayment: vi.fn(), queryPayment: vi.fn(), requestRefund: vi.fn(), queryRefund } as never,
+      observationRecorder(),
+    )
+
+    const result = await service.queryRefund(scope, refundId, 'refund-recovery-binding-0001')
+
+    expect(queryRefund).not.toHaveBeenCalled()
+    expect(result).toMatchObject({
+      verifiedObservationId,
+      observationIntegrationRef: 'postar-refund-submit-rejection',
+      observation: {
+        status: 'failed', amount: 2_000, currency: 'CNY',
+        providerRefundTransactionId: merchantRefundId,
+      },
+    })
+  })
+
+  it('fails closed when two unconsumed verified refund terminals conflict', async () => {
+    const transaction = new RefundTransaction(false, {}, [
+      {
+        verified_observation_id: verifiedObservationId,
+        integration_ref: 'postar-refund-submit-rejection',
+        observed_status: 'refund_failed',
+        provider_transaction_id: merchantRefundId,
+        original_provider_transaction_id: 'POSTAR-PAYMENT-001',
+        reported_amount_minor: '2000', reported_currency: 'CNY',
+        occurred_at: '2026-08-16T12:00:00.000Z',
+      },
+      {
+        verified_observation_id: '92000000-0000-4000-8000-000000000005',
+        integration_ref: 'postar-refund-active-query',
+        observed_status: 'refund_succeeded',
+        provider_transaction_id: 'POSTAR-REFUND-002',
+        original_provider_transaction_id: 'POSTAR-PAYMENT-001',
+        reported_amount_minor: '2000', reported_currency: 'CNY',
+        occurred_at: '2026-08-16T12:01:00.000Z',
+      },
+    ])
+    const service = new OnlinePaymentService(
+      runner(transaction), 'test-secret-at-least-thirty-two-bytes', secrets,
+      { createPayment: vi.fn(), queryPayment: vi.fn(), requestRefund: vi.fn(), queryRefund: vi.fn() } as never,
+      observationRecorder(),
+    )
+
+    await expect(service.queryRefund(scope, refundId, 'refund-recovery-binding-0002'))
+      .rejects.toBeInstanceOf(OnlineRefundStatusUnknownError)
   })
 
   it('binds each active refund query attempt to its idempotency key', async () => {
@@ -274,6 +337,7 @@ class RefundTransaction implements ScopedTransaction {
   constructor(
     private readonly claimsSubmission: boolean,
     private readonly overrides: Record<string, unknown> = {},
+    private readonly recoverableObservations: Record<string, unknown>[] = [],
   ) {
     this.submissionClaimed = !claimsSubmission
   }
@@ -293,6 +357,9 @@ class RefundTransaction implements ScopedTransaction {
       provider_snapshot: { channel: 'wechat' }, refund_items: [],
       ...this.overrides,
     }])
+    if (sql.startsWith('SELECT observation.id AS verified_observation_id')) {
+      return result<Row>(this.recoverableObservations)
+    }
     if (sql.includes("providerStatus', 'submission_started'")) {
       if (!this.claimsSubmission || this.submissionClaimed) return result<Row>([])
       this.submissionClaimed = true

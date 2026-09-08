@@ -501,9 +501,27 @@ function parseRefundQueryObservation(
   response: PostarSynchronousResponse,
   request: ProviderRefundQueryRequest,
   agencyId: string,
+  observedAt: string,
 ) {
+  if (!Number.isSafeInteger(request.amount) || request.amount <= 0) {
+    throw new Error('星驿退款查询预期金额必须为正整数分')
+  }
+  if (request.currency !== 'CNY') throw new Error('星驿退款查询仅支持CNY')
   if (response.code === '121338') {
-    throw new Error('星驿退款处理中响应不含可核验金额，拒绝写入支付域')
+    // StarPay documents 121338 as "not refunded yet, query later" and does
+    // not guarantee a data object. This is only a non-financial scheduling
+    // observation: keep the locally bound amount/transaction and never create
+    // a verified terminal observation from it.
+    return {
+      amount: request.amount,
+      currency: request.currency,
+      occurredAt: observedAt,
+      providerRefundId: request.providerRefundId,
+      providerRefundTransactionId: null,
+      originalProviderTransactionId: request.originalProviderTransactionId,
+      refundId: request.refundId,
+      status: 'processing',
+    } satisfies ProviderRefundObservation
   }
   if (response.code !== '000000') {
     throw new Error(`星驿退款查询返回不可安全映射状态码: ${response.code} ${response.msg}`)
@@ -512,6 +530,7 @@ function parseRefundQueryObservation(
   assertAgency(data, agencyId)
   assertMerchant(data, request.merchantId)
   const refundAmount = Math.abs(parseMoney(data.refundAmt, '星驿退款金额', { allowNegative: true }))
+  if (refundAmount !== request.amount) throw new Error('星驿退款查询金额与预期金额不匹配')
   const status = refundStatus(requiredString(data, 'orderStatus'))
   const transactionId = requiredString(data, 'orderFlowNo')
   const originalProviderTransactionId = requiredString(data, 'oldOrderNo')
@@ -965,7 +984,7 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
       headers: { 'content-type': 'application/json; charset=utf-8' },
       url: `${this.baseUrl}${POSTAR_ENDPOINTS.queryRefund}`,
     }), publicKey)
-    return parseRefundQueryObservation(response, request, agencyId)
+    return parseRefundQueryObservation(response, request, agencyId, this.now().toISOString())
   }
 
   async downloadBill(

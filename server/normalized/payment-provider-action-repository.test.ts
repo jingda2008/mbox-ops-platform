@@ -21,11 +21,13 @@ describe('PaymentProviderActionRepository', () => {
   it('lists only stale submitted Postar refunds for bounded background reconciliation', async () => {
     let capturedSql = ''
     let capturedValues: readonly unknown[] = []
+    const allSql: string[] = []
     const transaction = {
       scope: { tenantId, storeId },
       query: async (text: string, values: readonly unknown[] = []) => {
         capturedSql = text
         capturedValues = values
+        allSql.push(text)
         return { rows: [{ id: '88888888-8888-4888-8888-888888888888' }], rowCount: 1 }
       },
     } as unknown as ScopedTransaction
@@ -39,6 +41,8 @@ describe('PaymentProviderActionRepository', () => {
     expect(capturedSql).toContain("payment.provider='postar'")
     expect(capturedSql).toContain('LIMIT $4::integer')
     expect(capturedValues).toEqual([tenantId, storeId, 15, 20])
+    expect(allSql.some((sql) => sql.includes("stop_reason='provider_query_window_expired'")
+      && sql.includes("interval '60 days'"))).toBe(true)
   })
 
   it('resolves an existing payment in a read-only transaction without a locking clause', async () => {
@@ -76,6 +80,28 @@ describe('PaymentProviderActionRepository', () => {
       { lock: false },
     )).resolves.toMatchObject({ id: paymentId, method: 'native_qr', tableCode: 'W01' })
     expect(capturedSql).not.toContain('FOR SHARE')
+  })
+
+  it('never resumes an operationally released payment as the active order payment', async () => {
+    const captured: string[] = []
+    const transaction = {
+      scope: { tenantId, storeId },
+      query: async (text: string) => {
+        captured.push(text.replace(/\s+/g, ' ').trim())
+        return { rows: [], rowCount: 0 }
+      },
+    } as unknown as ScopedTransaction
+    const repository = new PaymentProviderActionRepository(transaction, secret)
+
+    await expect(repository.resolveActivePaymentForOrder(paymentId, {
+      type: 'employee', employeeId,
+    })).resolves.toBeNull()
+    await expect(repository.resolveOrderForGuest('order-shared-payment-0001', {
+      type: 'guest', tableSessionId, customerId: customerOneId,
+    })).rejects.toBeInstanceOf(GuestOrderPaymentAccessError)
+
+    expect(captured).toHaveLength(2)
+    expect(captured.every((sql) => sql.includes('payment.retry_released_at IS NULL'))).toBe(true)
   })
 
   it('does not let another employee use an opaque payment id to watch an assisted payment', async () => {

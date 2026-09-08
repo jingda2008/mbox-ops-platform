@@ -1260,7 +1260,10 @@ async function applyTerminalRefundObservation(
   if (observed.status === 'processing') return null
   if (observed.status === 'succeeded' && result.verifiedObservationId === null) return null
   if (result.verifiedObservationId === null) return null
-  const actor: AuditActor = { type: 'integration', ref: 'postar-refund-active-query' }
+  const actor: AuditActor = {
+    type: 'integration',
+    ref: result.observationIntegrationRef ?? 'postar-refund-active-query',
+  }
   const providerSnapshot: JsonObject = {
     merchantRefundId: result.merchantRefundId,
     providerStatus: observed.status,

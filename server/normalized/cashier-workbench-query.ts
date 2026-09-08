@@ -238,20 +238,26 @@ export class PostgresCashierWorkbenchQuery {
           AND orders.store_id = $2::uuid
           AND (
             session.business_date = $3::date
+            -- Explicit lookup/status filtering is global across earlier
+            -- business days, while the routine queue below contains
+            -- unresolved work only.
+            OR (($4::text <> '' OR $9::text IS NOT NULL)
+              AND session.business_date < $3::date)
             OR (session.business_date < $3::date AND (
-              (orders.payment_status='unpaid' AND orders.status<>'cancelled')
-              OR EXISTS (
-                SELECT 1 FROM mbox.order_settlement_exception_events carryover_settlement_exception
-                WHERE carryover_settlement_exception.tenant_id=orders.tenant_id
-                  AND carryover_settlement_exception.store_id=orders.store_id
-                  AND carryover_settlement_exception.order_id=orders.id
-              )
+              (orders.payment_status='unpaid' AND orders.status<>'cancelled'
+                AND NOT EXISTS (
+                  SELECT 1 FROM mbox.order_settlement_exception_events terminal_settlement_exception
+                  WHERE terminal_settlement_exception.tenant_id=orders.tenant_id
+                    AND terminal_settlement_exception.store_id=orders.store_id
+                    AND terminal_settlement_exception.order_id=orders.id
+                ))
               OR EXISTS (
                 SELECT 1 FROM mbox.payments AS carryover_payment
                 WHERE carryover_payment.tenant_id=orders.tenant_id
                   AND carryover_payment.store_id=orders.store_id
                   AND carryover_payment.order_id=orders.id
                   AND carryover_payment.status IN ('created','pending')
+                  AND carryover_payment.retry_released_at IS NULL
               )
               OR EXISTS (
                 SELECT 1 FROM mbox.payments AS carryover_payment
@@ -483,7 +489,7 @@ export class PostgresCashierWorkbenchQuery {
                     AND activity_reconciliation.business_date=$3::date
                 )
                 OR registration.status='payment_pending'
-                OR registration.payment_status IN ('pending','refunded')
+                OR registration.payment_status='pending'
                 OR refund.status IN ('requested','approved','processing')
                 OR jsonb_array_length(late_payments.payments)>0
                 OR recollection.id IS NOT NULL

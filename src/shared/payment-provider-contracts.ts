@@ -107,6 +107,9 @@ export interface ProviderRefundQueryRequest {
   providerRefundId: string
   merchantId: string
   originalProviderTransactionId: string
+  /** Expected refund amount in minor units; used to bind non-terminal provider replies. */
+  amount: MoneyAmount
+  currency: string
   /** Original refund submission date in the provider's merchant timezone, YYYYMMDD. */
   refundDate?: string
 }

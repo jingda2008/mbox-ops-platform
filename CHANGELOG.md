@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0-rc.181 - 2026-09-08
+
+- Recover verified refund terminal observations using their original integration authority after interrupted execution; preserve immutable financial history.
+- Exclude released payment attempts and completed historical activity refunds from routine cashier work while retaining explicit history search.
+- Validate refund query amounts, interpret StarPay 121338 as nonterminal, and stop automatic queries beyond the provider query window.
+- No Mini Program source changes or database migrations.
+
 ## 1.0.0-rc.180 - 2026-09-08
 
 - Allows an authorized manager exception command to terminally cancel one

@@ -1095,6 +1095,7 @@ describe('paymentApiPlugin', () => {
         occurredAt: '2026-08-11T12:20:00.000Z',
       },
       verifiedObservationId: verifiedRefundObservationId,
+      observationIntegrationRef: 'postar-refund-submit-rejection',
     }))
     const value = fixture({
       onlinePayments: {
@@ -1118,6 +1119,7 @@ describe('paymentApiPlugin', () => {
     expect(value.commands.recordProviderRefundResult).toHaveBeenCalledWith(expect.objectContaining({
       succeeded: false,
       verifiedObservationId: verifiedRefundObservationId,
+      actor: { type: 'integration', ref: 'postar-refund-submit-rejection' },
       providerSnapshot: expect.objectContaining({ failureReason: '021000: 商户余额不足' }),
     }))
   })

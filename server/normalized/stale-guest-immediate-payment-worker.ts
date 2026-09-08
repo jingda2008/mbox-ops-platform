@@ -169,7 +169,10 @@ export class StaleGuestImmediatePaymentWorker {
               )
               continue
             }
-            const actor = { type: 'integration' as const, ref: 'postar-refund-active-query' }
+            const actor = {
+              type: 'integration' as const,
+              ref: result.observationIntegrationRef ?? 'postar-refund-active-query',
+            }
             await this.deps.payments.recordProviderRefundResult({
               scope,
               actor,

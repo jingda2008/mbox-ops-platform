@@ -1243,7 +1243,7 @@ jq -n \
     targetSchemaVersion: $targetSchemaVersion,
     rollbackMode: (if $contractMigration == 1
       then "forward_only_after_contract_cutover" else "application_image" end),
-    previousIdentityComplete: $previousIdentityComplete,
+    previousIdentityComplete: ($previousIdentityComplete == 1),
     configuration: {storeSha256:$storeConfigSha256,catalogSha256:$catalogConfigSha256},
     workerAdapter: (if $workerAdapterModule == "" then null else {
       module:$workerAdapterModule,

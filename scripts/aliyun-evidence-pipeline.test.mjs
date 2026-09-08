@@ -377,6 +377,27 @@ test('rollback audit only reports success after the restored service is verified
   assert.doesNotMatch(externalRollback, /failed_renamed=|rollback_promoted=|traffic_switched=/)
 })
 
+test('rollback identity gate accepts legacy numeric flags and canonical booleans but rejects unknown values', async () => {
+  const rollback = await read('../deploy/aliyun/rollback-activated-release.sh')
+  const gate = rollback.split('\n').find((line) => line.startsWith('case "${previous_identity_complete}"'))
+  assert.ok(gate)
+  for (const [value, expected] of [['1', '1'], ['0', '0'], ['true', '1'], ['false', '0']]) {
+    const result = spawnSync('bash', ['-c', `${gate}\nprintf '%s' "$previous_identity_complete"`], {
+      encoding: 'utf8', env: { ...process.env, previous_identity_complete: value },
+    })
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(result.stdout, expected)
+  }
+  for (const value of ['2', '-1', 'yes', 'unknown', '']) {
+    const result = spawnSync('bash', ['-c', gate], {
+      encoding: 'utf8', env: { ...process.env, previous_identity_complete: value },
+    })
+    assert.notEqual(result.status, 0)
+  }
+  const activate = await read('../deploy/aliyun/activate-release.sh')
+  assert.match(activate, /previousIdentityComplete: \(\$previousIdentityComplete == 1\)/)
+})
+
 test('external rollback starts and verifies the previous SHA before candidate-IP cutover and stopping the failed release', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'mbox-external-rollback-'))
   const installRoot = join(directory, 'install')
@@ -410,6 +431,7 @@ test('external rollback starts and verifies the previous SHA before candidate-IP
     previousReleaseDir: previousRelease,
     previousPlatformImageDigest: previousPlatformDigest,
     previousDeploymentTier: 'validation',
+    previousIdentityComplete: 1,
   }))
   await writeFile(join(previousRelease, 'release-manifest.json'), JSON.stringify({
     releaseSha: previousSha, imageDigest: previousDigest, migration: { count: 40 },

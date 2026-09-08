@@ -203,6 +203,8 @@ describe('PostgresCashierWorkbenchQuery', () => {
     expect(activitySql).toContain('jsonb_agg')
     expect(activitySql).toContain("succeeded_refund.status='succeeded'")
     expect(activitySql).toContain('candidate.amount_minor>COALESCE')
+    expect(activitySql).toContain("registration.payment_status='pending'")
+    expect(activitySql).not.toContain("registration.payment_status IN ('pending','refunded')")
   })
 
   it('returns an empty workbench without running detail queries', async () => {
@@ -258,7 +260,25 @@ describe('PostgresCashierWorkbenchQuery', () => {
     expect(view.orders[0]).toMatchObject({ businessDate: '2026-08-12', carryover: true })
     expect(runner.calls[0]?.sql).toContain("orders.payment_status='unpaid'")
     expect(runner.calls[0]?.sql).toContain("carryover_payment.status IN ('created','pending')")
+    expect(runner.calls[0]?.sql).toContain('carryover_payment.retry_released_at IS NULL')
+    expect(runner.calls[0]?.sql).toContain('NOT EXISTS ( SELECT 1 FROM mbox.order_settlement_exception_events terminal_settlement_exception')
     expect(runner.calls[0]?.sql).toContain("carryover_refund.status IN ('requested','approved','processing')")
+  })
+
+  it('hides terminal history from the routine queue but keeps it available to explicit search', async () => {
+    const runner = new QueryRunner([[], []])
+    const query = new PostgresCashierWorkbenchQuery(
+      runner as unknown as ScopedPostgresTransactionRunner,
+    )
+
+    await query.get({
+      scope: { tenantId, storeId }, employeeId, businessDate: '2026-08-13',
+      capabilities: ['community.activity.cashier'], limit: 20,
+    })
+
+    expect(runner.calls[0]?.sql).toContain("OR (($4::text <> '' OR $9::text IS NOT NULL) AND session.business_date < $3::date)")
+    expect(runner.calls[1]?.sql).toContain("OR $4::text <> ''")
+    expect(runner.calls[1]?.sql).not.toContain("registration.payment_status IN ('pending','refunded')")
   })
 
   it('projects a completed-refund allocation onto an unstarted KDS task without treating it as an automatic cancellation', async () => {

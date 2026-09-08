@@ -3,10 +3,31 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
 import { CheckoutUpgradeManagementRepository } from './checkout-upgrade-management-repository.js'
-import { ScopedPostgresTransactionRunner, type PostgresPool } from './transaction-runner.js'
+import {
+  ScopedPostgresTransactionRunner,
+  type PostgresPool,
+  type ScopedTransaction,
+} from './transaction-runner.js'
 
 const databaseUrl = process.env.TEST_NORMALIZED_DATABASE_URL
 const integration = databaseUrl ? describe : describe.skip
+
+describe('checkout upgrade payment-state projection', () => {
+  it('does not report an operationally released payment attempt as pending', async () => {
+    let capturedSql = ''
+    const transaction = {
+      scope: { tenantId: randomUUID(), storeId: randomUUID() },
+      query: async (text: string) => {
+        capturedSql = text.replace(/\s+/g, ' ').trim()
+        return { rows: [], rowCount: 0 }
+      },
+    } as unknown as ScopedTransaction
+
+    await new CheckoutUpgradeManagementRepository(transaction).listOutcomes()
+
+    expect(capturedSql).toContain("payment.status IN ('created','pending') AND payment.retry_released_at IS NULL")
+  })
+})
 
 integration('checkout upgrade and capacity release management PostgreSQL integration', () => {
   const tenantId = randomUUID()

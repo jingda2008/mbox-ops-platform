@@ -91,6 +91,19 @@ export interface OnlineRefundResult {
   currency: string
   observation: ProviderRefundObservation
   verifiedObservationId: string | null
+  /** Must match the immutable observation's integration authority when terminal. */
+  observationIntegrationRef: string | null
+}
+
+interface RecoverableRefundObservationRow extends Record<string, unknown> {
+  verified_observation_id: string
+  integration_ref: string
+  observed_status: 'refund_succeeded' | 'refund_failed'
+  provider_transaction_id: string
+  original_provider_transaction_id: string
+  reported_amount_minor: string | number
+  reported_currency: string
+  occurred_at: string
 }
 
 interface RefundExecutionRow extends Record<string, unknown> {
@@ -553,11 +566,13 @@ export class OnlinePaymentService {
         const verifiedObservationId = await this.recordVerifiedSubmitRejection(
           scope, claimedContext, observation, queryBindingId,
         )
-        return onlineRefundResult(claimedContext, observation, verifiedObservationId)
+        return onlineRefundResult(
+          claimedContext, observation, verifiedObservationId, 'postar-refund-submit-rejection',
+        )
       }
       // The refund endpoint only acknowledges submission. StarPay requires a
       // signed callback or refund query before any terminal result is trusted.
-      return onlineRefundResult(claimedContext, observation, null)
+      return onlineRefundResult(claimedContext, observation, null, null)
     } catch (error) {
       await this.releaseRefundSubmission(scope, context.refund_id)
       if (error instanceof PostarPaymentRejectedError) throw error
@@ -572,6 +587,8 @@ export class OnlinePaymentService {
     queryBindingId: string,
   ): Promise<OnlineRefundResult> {
     const context = await this.refundContext(scope, refundId)
+    const recoverable = await this.recoverTerminalRefundObservation(scope, context)
+    if (recoverable !== null) return recoverable
     const adapter = this.requireRefundAdapter()
     const providerRefundId = requireMerchantRefundId(context)
     try {
@@ -580,6 +597,8 @@ export class OnlinePaymentService {
         providerRefundId,
         merchantId: this.config!.merchantId,
         originalProviderTransactionId: requireProviderTransactionId(context),
+        amount: safeMinor(context.amount_minor, '退款金额'),
+        currency: context.currency,
         refundDate: refundSubmissionDate(context),
       }, { secrets: this.secrets! })
       if (observation.amount !== safeMinor(context.amount_minor, '退款金额')
@@ -610,13 +629,76 @@ export class OnlinePaymentService {
           evidence: refundQueryEvidence(observation),
         })
         : null
-      return onlineRefundResult(context, observation, verifiedObservationId)
+      return onlineRefundResult(
+        context,
+        observation,
+        verifiedObservationId,
+        verifiedObservationId === null ? null : 'postar-refund-active-query',
+      )
     } catch (error) {
       if (error instanceof OnlinePaymentUnavailableError || error instanceof OnlineRefundStatusUnknownError) {
         throw error
       }
       throw new OnlineRefundStatusUnknownError()
     }
+  }
+
+  private recoverTerminalRefundObservation(
+    scope: Readonly<StoreScope>,
+    context: Readonly<RefundExecutionRow>,
+  ): Promise<OnlineRefundResult | null> {
+    return this.transactions.run(scope, async (transaction) => {
+      const result = await transaction.query<RecoverableRefundObservationRow>(`
+        SELECT observation.id AS verified_observation_id,
+          observation.integration_ref,observation.observed_status,
+          observation.provider_transaction_id,
+          observation.original_provider_transaction_id,
+          observation.reported_amount_minor,observation.reported_currency,
+          observation.occurred_at::text
+        FROM mbox.verified_provider_observations observation
+        JOIN mbox.refunds refund
+          ON refund.tenant_id=observation.tenant_id
+         AND refund.store_id=observation.store_id
+         AND refund.id=observation.refund_id
+        JOIN mbox.payments payment
+          ON payment.tenant_id=refund.tenant_id
+         AND payment.store_id=refund.store_id
+         AND payment.id=refund.payment_id
+        WHERE observation.tenant_id=$1::uuid AND observation.store_id=$2::uuid
+          AND refund.id=$3::uuid AND refund.status='processing'
+          AND observation.subject_kind='refund'
+          AND observation.consumed_at IS NULL
+          AND observation.observed_status IN ('refund_succeeded','refund_failed')
+          AND observation.provider='postar' AND payment.provider='postar'
+          AND observation.reported_amount_minor=refund.amount_minor
+          AND observation.reported_currency=refund.currency
+          AND observation.original_provider_transaction_id=payment.provider_transaction_id
+        ORDER BY observation.recorded_at,observation.id
+        LIMIT 2
+      `, [scope.tenantId, scope.storeId, context.refund_id])
+      const first = result.rows[0]
+      if (first === undefined) return null
+      const conflicting = result.rows.slice(1).some((row) => (
+        row.observed_status !== first.observed_status
+        || row.provider_transaction_id !== first.provider_transaction_id
+        || row.original_provider_transaction_id !== first.original_provider_transaction_id
+        || safeMinor(row.reported_amount_minor, '已验证退款金额')
+          !== safeMinor(first.reported_amount_minor, '已验证退款金额')
+        || row.reported_currency !== first.reported_currency
+      ))
+      if (conflicting) throw new OnlineRefundStatusUnknownError()
+      const succeeded = first.observed_status === 'refund_succeeded'
+      return onlineRefundResult(context, {
+        amount: safeMinor(first.reported_amount_minor, '已验证退款金额'),
+        currency: first.reported_currency,
+        occurredAt: first.occurred_at,
+        providerRefundId: requireMerchantRefundId(context),
+        providerRefundTransactionId: first.provider_transaction_id,
+        originalProviderTransactionId: first.original_provider_transaction_id,
+        refundId: requireMerchantRefundId(context),
+        status: succeeded ? 'succeeded' : 'failed',
+      }, first.verified_observation_id, first.integration_ref)
+    }, { readOnly: true })
   }
 
   async create(input: Readonly<CreateOnlinePaymentInput>): Promise<OnlinePaymentAction> {
@@ -1056,6 +1138,7 @@ function onlineRefundResult(
   context: Readonly<RefundExecutionRow>,
   observation: ProviderRefundObservation,
   verifiedObservationId: string | null,
+  observationIntegrationRef: string | null,
 ): OnlineRefundResult {
   return {
     refundId: context.refund_id,
@@ -1067,6 +1150,7 @@ function onlineRefundResult(
     currency: context.currency,
     observation,
     verifiedObservationId,
+    observationIntegrationRef,
   }
 }
 

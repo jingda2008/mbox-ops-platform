@@ -658,6 +658,8 @@ describe('Postar ordinary partial refund', () => {
       providerRefundId: 'RefundABC123',
       refundId: 'RefundABC123',
       originalProviderTransactionId: 'POSTAR202607140001',
+      amount: 1200,
+      currency: 'CNY',
       refundDate: '20260714',
     }, context)
     expect(observation).toMatchObject({
@@ -672,6 +674,8 @@ describe('Postar ordinary partial refund', () => {
       providerRefundId: 'RefundABC123',
       refundId: 'RefundABC123',
       originalProviderTransactionId: 'FORGED-ORIGINAL-PAYMENT',
+      amount: 1200,
+      currency: 'CNY',
       refundDate: '20260714',
     }, context)).rejects.toThrow('原支付订单号不匹配')
 
@@ -693,8 +697,53 @@ describe('Postar ordinary partial refund', () => {
       providerRefundId: 'RefundABC123',
       refundId: 'RefundABC123',
       originalProviderTransactionId: 'POSTAR202607140001',
+      amount: 1200,
+      currency: 'CNY',
       refundDate: '20260714',
     }, context)).rejects.toThrow('不是普通退款状态')
+  })
+
+  it('maps StarPay 121338 to a bound non-terminal refund observation', async () => {
+    const waiting = new PostarPaymentProviderAdapter(testOptions(async () => response({
+      code: '121338',
+      msg: '还未退款稍后查询',
+    })))
+
+    const observation = await waiting.queryRefund({
+      merchantId: 'MERCHANT001',
+      providerRefundId: 'RefundABC123',
+      refundId: 'RefundABC123',
+      originalProviderTransactionId: 'POSTAR202607140001',
+      amount: 1200,
+      currency: 'CNY',
+      refundDate: '20260714',
+    }, context)
+
+    expect(observation).toMatchObject({
+      amount: 1200,
+      currency: 'CNY',
+      providerRefundTransactionId: null,
+      originalProviderTransactionId: 'POSTAR202607140001',
+      status: 'processing',
+    })
+  })
+
+  it('rejects a terminal refund query whose amount differs from the bound refund', async () => {
+    const mismatched = new PostarPaymentProviderAdapter(testOptions(async () => response({
+      code: '000000',
+      data: {
+        agetId: 'AGENCY001', custId: 'MERCHANT001', orderFlowNo: 'POSTARREFUND001',
+        orderStatus: '4', orderTime: '20260714120700', refundAmt: '-1199',
+        oldOrderNo: 'POSTAR202607140001',
+      },
+      msg: 'success',
+    })))
+
+    await expect(mismatched.queryRefund({
+      merchantId: 'MERCHANT001', providerRefundId: 'RefundABC123',
+      refundId: 'RefundABC123', originalProviderTransactionId: 'POSTAR202607140001',
+      amount: 1200, currency: 'CNY', refundDate: '20260714',
+    }, context)).rejects.toThrow('退款查询金额与预期金额不匹配')
   })
 })
 

@@ -1,5 +1,6 @@
 const { getActivities, getActivityRegistrations, getMiniBootstrap, enrollMembership } = require('../../utils/api')
 const { money, dateInput } = require('../../utils/format')
+const { currentActivities, activityTimeText } = require('../../utils/activity-display')
 const { publicImageUrl } = require('../../utils/media')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 const { customerErrorMessage } = require('../../utils/customer-error')
@@ -57,12 +58,12 @@ Page({
         getMiniBootstrap(),
       ])
       const registrations = new Map((rawRegistrations || []).map((item) => [item.activityPublicId, item]))
-      const activities = (rawActivities || []).map((item) => {
+      const activities = currentActivities(rawActivities).map((item) => {
         const registration = registrations.get(item.publicId)
         return Object.assign({}, item, {
           coverUrl: publicImageUrl(item.coverUrl),
           kindText: KIND_NAMES[item.kind] || '超嗨活动',
-          dateText: dateText(item.startsAt),
+          dateText: activityTimeText(item),
           feeText: item.feeAmountMinor > 0 ? `${money(item.feeAmountMinor)}${item.feeBasis === 'per_person' ? '/人' : '/次'}` : '免费',
           availabilityText: item.remainingCapacity > 0 ? `余 ${item.remainingCapacity} 位` : '已满',
           sequenceText: Number.isInteger(Number(item.sortOrder)) && Number(item.sortOrder) > 0

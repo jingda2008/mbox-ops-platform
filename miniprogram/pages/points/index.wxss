@@ -10,7 +10,8 @@
 .points-head text { display: block; }
 .points-title { margin-top: 28rpx; font-family: "Songti SC", "STSong", serif; font-size: 46rpx; font-weight: 600; }
 .points-copy { margin-top: 12rpx; color: #d2cec8; font-size: 23rpx; line-height: 1.55; }
-.balance-card { display: grid; grid-template-columns: 1fr 1fr; gap: 16rpx; padding: 26rpx; border-radius: 22rpx; background: linear-gradient(145deg, #1a2f24, #315d46); color: #fff; }
+.balance-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16rpx; padding: 26rpx; border-radius: 22rpx; background: linear-gradient(145deg, #1a2f24, #315d46); color: #fff; }
+.balance-card view { min-width: 0; overflow-wrap: anywhere; }
 .balance-card view text { display: block; }
 .balance-card view text:first-child { color: #e0c18e; font-size: 44rpx; font-weight: 650; }
 .balance-card view text:last-child { margin-top: 6rpx; color: #c5d4cb; font-size: 21rpx; }

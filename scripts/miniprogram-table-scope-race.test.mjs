@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import vm from 'node:vm'
+import { loadMiniModule } from './load-miniprogram-test-module.mjs'
 
 const GUEST_COOKIE_KEY = 'mbox.http.cookie.guest.v2'
 const RESERVATION_COOKIE_KEY = 'mbox.http.cookie.reservation.v2'
@@ -197,6 +198,7 @@ async function loadHomePage(state) {
         }),
       }
       if (specifier === '../../utils/format') return { dateTime: (value) => String(value || '') }
+      if (specifier === '../../utils/activity-display') return loadMiniModule(new URL('../miniprogram/utils/activity-display.js', import.meta.url))
       if (specifier === '../../utils/wechat-phone') return { readWechatPhoneAuthorization: () => ({ code: '' }) }
       if (specifier === '../../utils/media') return { publicImageUrl: (value) => value || '' }
       if (specifier === '../../utils/customer-error') return { customerErrorMessage: (_error, fallback) => fallback }

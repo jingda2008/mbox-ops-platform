@@ -477,6 +477,10 @@ Page({
   async load() {
     this.setData({ loading: true, error: '', success: '' })
     try {
+      if (!this.data.id) {
+        this.setData({ loading: false, activity: null, membershipInviteVisible: false, error: '活动入口无效，请返回活动列表重新选择' })
+        return
+      }
       if (this.data.shareSource === 'share' && !this.data.memberAccessRequested) {
         await this.loadAnonymousSharePreview(false)
         return
@@ -486,21 +490,17 @@ Page({
       const membershipTerms = bootstrap.membershipTerms || null
       this.setData({ membership, membershipTerms })
       if (!membership) {
+        if (!membershipTerms || !membershipTerms.title) {
+          this.setData({ loading: false, membershipInviteVisible: false, membershipInviteAgreed: false, error: '会员条款暂时不可用，请稍后重试或返回活动列表' })
+          return
+        }
         if (this.data.shareSource === 'share') {
           await this.loadAnonymousSharePreview(Boolean(membershipTerms))
           if (!membershipTerms) this.setData({ error: '当前会员协议暂时无法读取，请稍后再试。' })
           return
         }
-        this.setData({
-          loading: false,
-          activity: null,
-          registration: null,
-          loyaltyBenefits: [],
-          previewOnly: false,
-          membershipInviteVisible: true,
-          membershipInviteAgreed: false,
-          error: '',
-        })
+        // Verify the public activity exists before asking the guest to join.
+        await this.loadAnonymousSharePreview(true)
         return
       }
       const [raw, activityPrompt, memberPrompt, couponPrompt] = await Promise.all([
@@ -569,9 +569,9 @@ Page({
           activity: null,
           registration: null,
           membership: null,
-          membershipInviteVisible: true,
+          membershipInviteVisible: Boolean(this.data.membershipTerms && this.data.membershipTerms.title),
           membershipInviteAgreed: false,
-          error: '',
+          error: this.data.membershipTerms && this.data.membershipTerms.title ? '' : '会员条款暂时不可用，请稍后重试',
         })
         return
       }
@@ -608,7 +608,7 @@ Page({
   async openMembershipInvite() {
     if (this.data.membership) return
     if (this.data.memberAccessRequested) {
-      if (!this.data.membershipTerms) runtime.showToast({ title: '当前会员协议暂时无法读取', icon: 'none' })
+      if (!this.data.membershipTerms || !this.data.membershipTerms.title) runtime.showToast({ title: '当前会员协议暂时无法读取', icon: 'none' })
       else this.setData({ membershipInviteVisible: true, membershipInviteAgreed: false, error: '' })
       return
     }
@@ -762,7 +762,7 @@ Page({
     const activity = this.data.activity
     if (!activity || this.data.busy) return
     if (!this.data.membership) {
-      this.setData({ membershipInviteVisible: true, membershipInviteAgreed: false, error: '' })
+      await this.openMembershipInvite()
       return
     }
     const chosenPackage = this.data.selectedPackage

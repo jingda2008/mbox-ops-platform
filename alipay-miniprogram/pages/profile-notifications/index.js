@@ -2,6 +2,7 @@ const {
   getAlipayNotificationAuthorizations,
   getAlipayMemberServiceNotificationAuthorizations,
 } = require('../../utils/api')
+const { customerErrorMessage } = require('../../utils/customer-error')
 
 const TITLE_NAMES = {
   loyalty_points_credited: '积分到账提醒',
@@ -15,14 +16,19 @@ const TITLE_NAMES = {
 Page({
   data: { loading: true, error: '', options: [] },
   onShow() { this.load() },
+  onHide() { this.loadGeneration = (this.loadGeneration || 0) + 1 },
+  onUnload() { this.loadGeneration = (this.loadGeneration || 0) + 1 },
 
   async load() {
-    this.setData({ loading: true, error: '' })
+    const generation = this.loadGeneration = (this.loadGeneration || 0) + 1
+    this.setData({ loading: true, error: '', options: [] })
     try {
+      const errors = []
       const [loyalty, memberService] = await Promise.all([
-        getAlipayNotificationAuthorizations().catch(() => ({ authorizations: [] })),
-        getAlipayMemberServiceNotificationAuthorizations().catch(() => ({ authorizations: [] })),
+        getAlipayNotificationAuthorizations().catch((error) => { errors.push(`积分提醒：${customerErrorMessage(error, '读取失败')}`); return { authorizations: [] } }),
+        getAlipayMemberServiceNotificationAuthorizations().catch((error) => { errors.push(`会员提醒：${customerErrorMessage(error, '读取失败')}`); return { authorizations: [] } }),
       ])
+      if (generation !== this.loadGeneration) return
       const options = [
         ...(loyalty.authorizations || []).map((item) => ({ ...item, apiKind: 'loyalty' })),
         ...(memberService.authorizations || []).map((item) => ({ ...item, apiKind: 'member_service' })),
@@ -41,9 +47,10 @@ Page({
           statusText: banned ? '当前支付宝暂不支持' : usable ? '已准备好' : item.decision === 'granted' ? '下次操作时会再次确认' : '将在相关操作时由支付宝询问',
         }
       })
-      this.setData({ loading: false, options })
-    } catch (_error) {
-      this.setData({ loading: false, options: [] })
+      this.setData({ loading: false, options, error: errors.join('；') })
+    } catch (error) {
+      if (generation !== this.loadGeneration) return
+      this.setData({ loading: false, options: [], error: customerErrorMessage(error, '提醒设置暂时无法读取') })
     }
   },
 

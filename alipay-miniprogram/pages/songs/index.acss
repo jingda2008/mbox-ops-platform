@@ -14,3 +14,4 @@
 .payment-boundary { margin-top: 24rpx; }
 @media (max-width: 390px) { .song-form, .picker-field { min-width: 0; box-sizing: border-box; } }
 @media (max-width: 360px) { .song-title { font-size: 36rpx; } .song-subtitle { font-size: 21rpx; } .picker-field { min-height: 88rpx; padding-right: 18rpx; padding-left: 18rpx; gap: 10rpx; font-size: 24rpx; } .picker-field view text:last-child { font-size: 19rpx; } .extension-row { gap: 12rpx; } }
+.song-note.song-note { height:auto; min-height:100rpx; max-height:300rpx; }

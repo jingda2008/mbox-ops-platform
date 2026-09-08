@@ -6,6 +6,14 @@ const projectRoot = new URL('../../', import.meta.url)
 const read = (path: string) => readFileSync(new URL(path, projectRoot), 'utf8')
 
 describe('mini-program mobile business flow contract', () => {
+  it('constrains the native table status button to its grid cell, not just its minimum size', () => {
+    for (const path of ['miniprogram/pages/order/index.wxss', 'alipay-miniprogram/pages/order/index.acss']) {
+      const rule = read(path).match(/\.table-strip__service\.table-strip__service\s*\{([^}]+)\}/)?.[1] ?? ''
+      expect(rule).toContain('box-sizing: border-box')
+      expect(rule).toContain('width: 100%')
+      expect(rule).toContain('max-width: 100%')
+    }
+  })
   it('keeps exactly five fixed customer tabs in the agreed order', () => {
     const app = JSON.parse(read('miniprogram/app.json')) as { tabBar: { list: Array<{ pagePath: string; text: string }> } }
     expect(app.tabBar.list.map(({ pagePath,text })=>({ pagePath,text }))).toEqual([
@@ -37,7 +45,8 @@ describe('mini-program mobile business flow contract', () => {
     const view = read('miniprogram/pages/reservations/index.wxml')
     expect(reservation).toContain('step: 1')
     expect(reservation).toContain('const step = Math.min(3, this.data.step + 1)')
-    expect(reservation).toContain('getReservationPerformances(this.data.reservationDate)')
+    expect(reservation).toContain('getReservationPerformances(date)')
+    expect(reservation).toContain('this.performanceGeneration')
     expect(reservation).toContain('preferredScheduleId: show ? show.id : null')
     expect(view).toContain('第一步')
     expect(view).toContain('第二步')
@@ -151,7 +160,7 @@ describe('mini-program mobile business flow contract', () => {
     expect(pointsView).not.toContain('顾客不能自行填写补分金额')
     expect(pointsView).not.toContain('item.reason')
     expect(profileView).not.toContain('item.reason')
-    expect(pointsCss).toMatch(/\.ledger-tabs button \{[^}]*min-height: 88rpx;/)
+    expect(pointsCss).toMatch(/\.ledger-tabs button\.ledger-tab \{[^}]*width:100%;[^}]*min-height: 88rpx;/)
     expect(pointsCss).toContain('.progress-card')
     expect(pointsCss).toContain('overflow-wrap: anywhere')
     expect(pointsCss).toContain('@media (max-width: 390px)')
@@ -218,7 +227,7 @@ describe('mini-program mobile business flow contract', () => {
     expect(preferences).toContain('const birthdayMonthDay =')
     expect(preferences).toContain('recordBirthdayBenefitConsent(birthdayMonthDay)')
     expect(preferences).not.toMatch(/const preferences = \{[\s\S]{0,500}birthdayMonthDay:/)
-    expect(api).toContain("const allowed = ['preferredAlcohol', 'tasteNotes', 'musicStyles', 'serviceIntensity', 'seatPreference', 'dietaryNotes']")
+    expect(api).toContain("const allowed = ['preferredAlcohol', 'preferredAlcoholChoices', 'tasteNotes', 'musicStyles', 'serviceIntensity', 'seatPreference', 'dietaryNotes']")
     expect(service).toContain("'BIRTHDAY_CHANGE_TOO_FREQUENT'")
     expect(service).toContain("preference_key='birthdayMonthDay'")
   })
@@ -394,7 +403,7 @@ describe('mini-program mobile business flow contract', () => {
   it('keeps key customer inputs and actions at least 44px and has a compact-width fallback', () => {
     const globalCss = read('miniprogram/app.wxss')
     const reservationCss = read('miniprogram/pages/reservations/index.wxss')
-    expect(globalCss).toMatch(/\.primary-button, \.secondary-button, \.danger-button \{ min-height: 88rpx;/)
+    expect(globalCss).toMatch(/\.primary-button\.primary-button, \.secondary-button\.secondary-button, \.danger-button\.danger-button \{[^}]*width:100%;[^}]*min-height: 88rpx;/)
     expect(globalCss).toMatch(/\.field__input \{ height: 88rpx;/)
     expect(globalCss).toContain('@media (max-width: 390px)')
     expect(reservationCss).toMatch(/\.picker-field\{[^}]*min-height:88rpx/)

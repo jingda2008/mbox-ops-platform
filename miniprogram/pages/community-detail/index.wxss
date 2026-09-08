@@ -176,7 +176,7 @@
 .detail-member-agreement .wx-checkbox-input.wx-checkbox-input-checked { border-color: #315d46; background: #315d46; }
 .detail-member-agreement view { flex: 1; min-width: 0; }
 .detail-member-terms { display: block; color: #315d46; }
-.detail-member-authorize { width: 100%; min-height: 88rpx; margin: 24rpx 0 0; border: 1rpx solid #315d46; border-radius: 44rpx; background: #315d46; color: #fff; font-size: 24rpx; font-weight: 700; line-height: 88rpx; }
+.detail-member-authorize.detail-member-authorize { width: 100%; min-height: 88rpx; margin: 24rpx 0 0; border: 1rpx solid #315d46; border-radius: 44rpx; background: #315d46; color: #fff; font-size: 24rpx; font-weight: 700; line-height: 88rpx; }
 .detail-member-authorize--disabled { border-color: #c5c1ba; background: #c5c1ba; }
 .detail-member-note { margin-top: 16rpx; color: #90877e; font-size: 18rpx; line-height: 1.55; }
 

@@ -757,8 +757,8 @@ function canonicalSubmitFingerprint(input: Readonly<SubmitOrderCommand>): string
     ? { type: input.actor.type, employeeId: input.actor.employeeId, ref: input.actor.ref ?? null }
     : { type: input.actor.type, ref: input.actor.ref ?? null }
   return JSON.stringify({
-    tableSessionId: input.channel === 'staff_assisted' ? null : input.tableSessionId,
-    assistedOrderContextTokenHash: input.assistedOrderContext
+    tableSessionId: input.tableSessionId ?? null,
+    assistedOrderContextTokenHash: input.assistedOrderContext && !input.tableSessionId
       ? hashAssistedOrderContextToken(input.assistedOrderContext.token)
       : null,
     assistedOrderStaffSessionId: input.assistedOrderContext?.staffSessionId ?? null,

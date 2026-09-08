@@ -48,7 +48,7 @@ describe('customer preference mini-program contract', () => {
     expect(contentWidth).toBeGreaterThan(280)
     expect(css).toContain('@media(max-width:390px)')
     expect(css).toContain('.option-chip')
-    expect(css).toContain('min-height:68rpx')
+    expect(css).toContain('.option-chip.option-chip{width:auto;min-height:44px;')
     expect(css).not.toMatch(/\.option-chip[^\{]*\{[^}]*min-width:\s*(?:3[2-9]\d|[4-9]\d\d)px/s)
   })
 })

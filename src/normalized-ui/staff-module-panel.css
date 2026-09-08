@@ -65,7 +65,7 @@
 .customer-publication-panel > header > div, .customer-publication-list > header > div { display: grid; gap: 3px; }
 .customer-publication-panel h3, .customer-publication-list strong { margin: 0; font-size: 14px; }
 .customer-publication-panel header small, .customer-publication-list header small { color: #687068; font-size: 10px; line-height: 1.45; }
-.customer-publication-panel > header > button { min-width: 70px; min-height: 42px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 1px solid #aeb8ae; border-radius: 6px; background: #fff; color: #374137; font: inherit; font-size: 11px; font-weight: 750; }
+.customer-publication-panel > header > button { min-width: 70px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 1px solid #aeb8ae; border-radius: 6px; background: #fff; color: #374137; font: inherit; font-size: 11px; font-weight: 750; }
 .customer-publication-panel > header > button svg { width: 15px; }
 .customer-publication-wide { grid-column: 1 / -1; }
 .customer-publication-policy-form textarea { min-height: 160px; }
@@ -79,7 +79,7 @@
 .customer-publication-list article strong { font-size: 12px; overflow-wrap: anywhere; }
 .customer-publication-list article small { color: #687068; font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; }
 .customer-publication-list article > div:last-child { flex: 0 0 auto; }
-.customer-publication-list article button { min-height: 42px; padding: 0 10px; border: 1px solid #176b4c; border-radius: 5px; background: #eef7f2; color: #185d43; font: inherit; font-size: 11px; font-weight: 800; }
+.customer-publication-list article button { min-height: 44px; padding: 0 10px; border: 1px solid #176b4c; border-radius: 5px; background: #eef7f2; color: #185d43; font: inherit; font-size: 11px; font-weight: 800; }
 .customer-publication-list article button.is-danger { border-color: #d6a6a8; background: #fff4f4; color: #9a3137; }
 .customer-publication-notice { display: flex; align-items: flex-start; gap: 7px; margin: 0; padding: 9px 10px; border: 1px solid #b9d6c7; border-left: 4px solid #176b4c; border-radius: 6px; background: #eff8f3; color: #175c43; font-size: 11px; line-height: 1.5; }
 .customer-publication-notice svg, .customer-publication-panel > .staff-module-footnote svg { flex: 0 0 auto; width: 15px; margin-top: 1px; }
@@ -130,7 +130,7 @@
 .inventory-draft-receipts article strong, .inventory-draft-receipts article small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inventory-draft-receipts article small { color: #687068; font-size: 10px; }
 .inventory-draft-receipts article span { color: #3f4942; font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
-.inventory-draft-receipts article button { min-height: 42px; padding: 0 11px; border: 1px solid #176b4c; border-radius: 6px; background: #176b4c; color: #fff; font: inherit; font-size: 11px; font-weight: 800; }
+.inventory-draft-receipts article button { min-height: 44px; padding: 0 11px; border: 1px solid #176b4c; border-radius: 6px; background: #176b4c; color: #fff; font: inherit; font-size: 11px; font-weight: 800; }
 .inventory-publish-preview { padding: 13px; border: 1px solid #8ab89f; border-top: 3px solid #176b4c; border-radius: 8px; background: linear-gradient(135deg, #f0f8f3, #fff); display: grid; gap: 10px; }
 .inventory-publish-preview > header { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
 .inventory-publish-preview > header > div { min-width: 0; display: grid; gap: 3px; }
@@ -156,7 +156,7 @@
 .inventory-camera { position: relative; min-height: min(58dvh, 440px); border-radius: 11px; background: #0c100e; overflow: hidden; display: grid; place-items: center; }
 .inventory-camera video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .inventory-camera > i { position: relative; z-index: 1; width: min(78%, 300px); height: 132px; border: 2px solid #e4c95f; border-radius: 10px; box-shadow: 0 0 0 999px rgb(0 0 0 / 25%); }
-.inventory-camera > span { position: absolute; z-index: 2; left: 50%; bottom: 15px; translate: -50% 0; min-width: 190px; min-height: 42px; padding: 8px 12px; border-radius: 22px; background: rgb(0 0 0 / 72%); color: #fff; display: flex; align-items: center; justify-content: center; gap: 7px; font-size: 12px; font-weight: 750; }
+.inventory-camera > span { position: absolute; z-index: 2; left: 50%; bottom: 15px; translate: -50% 0; min-width: 190px; min-height: 44px; padding: 8px 12px; border-radius: 22px; background: rgb(0 0 0 / 72%); color: #fff; display: flex; align-items: center; justify-content: center; gap: 7px; font-size: 12px; font-weight: 750; }
 .inventory-camera.is-unavailable > i { display: none; }
 .inventory-camera.is-unavailable { min-height: 220px; background: #222824; }
 .inventory-scanner-dialog > p { margin: 0; color: #606961; font-size: 11px; line-height: 1.5; }
@@ -292,13 +292,13 @@
 .catalog-menu-categories > header { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
 .catalog-menu-categories > header > div { min-width: 0; display: grid; gap: 3px; }
 .catalog-menu-categories > header small { color: #557162; font-size: 10px; line-height: 1.45; }
-.catalog-menu-categories > header button, .catalog-menu-category-list button, .catalog-menu-category-form button { min-height: 40px; padding: 0 10px; border: 1px solid #176b4c; border-radius: 5px; background: #fff; color: #175d42; display: flex; align-items: center; justify-content: center; gap: 5px; font: inherit; font-size: 11px; font-weight: 750; }
+.catalog-menu-categories > header button, .catalog-menu-category-list button, .catalog-menu-category-form button { min-height: 44px; padding: 0 10px; border: 1px solid #176b4c; border-radius: 5px; background: #fff; color: #175d42; display: flex; align-items: center; justify-content: center; gap: 5px; font: inherit; font-size: 11px; font-weight: 750; }
 .catalog-menu-categories > p { margin: 0; color: #5c6f63; font-size: 11px; line-height: 1.5; }
 .catalog-menu-category-form { padding: 10px; border: 1px solid #b2ccbd; border-radius: 6px; background: #fff; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .catalog-menu-category-form > strong, .catalog-menu-category-form__actions { grid-column: 1 / -1; }
 .catalog-menu-category-form label { min-width: 0; display: grid; gap: 5px; color: #40574b; font-size: 11px; font-weight: 750; }
-.catalog-menu-category-form input, .catalog-menu-category-form select { width: 100%; min-width: 0; min-height: 42px; padding: 0 9px; border: 1px solid #b9c9bf; border-radius: 5px; background: #fff; color: #202621; }
-.catalog-menu-category-form .catalog-check { min-height: 42px; grid-template-columns: auto minmax(0, 1fr); align-items: center; padding: 0 9px; border: 1px solid #c8d6cd; border-radius: 5px; background: #f7fbf8; }
+.catalog-menu-category-form input, .catalog-menu-category-form select { width: 100%; min-width: 0; min-height: 44px; padding: 0 9px; border: 1px solid #b9c9bf; border-radius: 5px; background: #fff; color: #202621; }
+.catalog-menu-category-form .catalog-check { min-height: 44px; grid-template-columns: auto minmax(0, 1fr); align-items: center; padding: 0 9px; border: 1px solid #c8d6cd; border-radius: 5px; background: #f7fbf8; }
 .catalog-menu-category-form .catalog-check input { width: 18px; min-height: 18px; height: 18px; padding: 0; accent-color: #176b4c; }
 .catalog-menu-category-form__actions { display: flex; justify-content: flex-end; gap: 7px; }
 .catalog-menu-category-form__actions button:last-child { border-color: #176b4c; background: #176b4c; color: #fff; }
@@ -347,9 +347,9 @@
 .catalog-recipe > header > div { min-width: 0; display: grid; gap: 3px; }
 .catalog-recipe > header small { color: #5f7268; font-size: 10px; line-height: 1.45; }
 .catalog-recipe > header em { flex: 0 0 auto; padding: 4px 7px; border-radius: 4px; background: #fff; color: #176b4c; font-size: 10px; font-style: normal; font-weight: 750; }
-.catalog-recipe > p { min-height: 42px; margin: 0; display: flex; align-items: center; gap: 7px; color: #53685d; font-size: 11px; line-height: 1.5; }
+.catalog-recipe > p { min-height: 44px; margin: 0; display: flex; align-items: center; gap: 7px; color: #53685d; font-size: 11px; line-height: 1.5; }
 .catalog-recipe > label { display: grid; gap: 5px; color: #40574b; font-size: 11px; font-weight: 750; }
-.catalog-recipe > label input { min-height: 42px; padding: 0 9px; border: 1px solid #adc2b6; border-radius: 5px; background: #fff; }
+.catalog-recipe > label input { min-height: 44px; padding: 0 9px; border: 1px solid #adc2b6; border-radius: 5px; background: #fff; }
 .catalog-recipe > button { min-height: 44px; padding: 0 12px; border: 1px solid #176b4c; border-radius: 5px; background: #176b4c; color: #fff; font: inherit; font-size: 11px; font-weight: 800; }
 .catalog-recipe > button:disabled { border-color: #aebbb4; background: #aebbb4; }
 .catalog-recipe-cost { padding: 10px; border: 1px solid #b8d3c3; border-radius: 5px; background: #fff; display: grid; gap: 8px; }
@@ -359,8 +359,8 @@
 .catalog-recipe-cost > header em { flex: 0 0 auto; color: #176b4c; font-size: 12px; font-style: normal; font-weight: 800; }
 .catalog-recipe-cost > p { margin: 0; color: #7c5723; font-size: 11px; line-height: 1.5; }
 .catalog-recipe-cost > label { display: grid; gap: 5px; color: #40574b; font-size: 11px; font-weight: 750; }
-.catalog-recipe-cost input { min-height: 40px; padding: 0 9px; border: 1px solid #adc2b6; border-radius: 5px; background: #fff; }
-.catalog-recipe-cost > button { min-height: 42px; padding: 0 12px; border: 1px solid #176b4c; border-radius: 5px; background: #176b4c; color: #fff; font: inherit; font-size: 11px; font-weight: 800; }
+.catalog-recipe-cost input { min-height: 44px; padding: 0 9px; border: 1px solid #adc2b6; border-radius: 5px; background: #fff; }
+.catalog-recipe-cost > button { min-height: 44px; padding: 0 12px; border: 1px solid #176b4c; border-radius: 5px; background: #176b4c; color: #fff; font: inherit; font-size: 11px; font-weight: 800; }
 .catalog-recipe-cost-lines { display: flex; flex-wrap: wrap; gap: 5px; }
 .catalog-recipe-cost-lines span { padding: 4px 6px; border-radius: 4px; background: #edf6f0; color: #40574b; font-size: 10px; }
 .catalog-bundle-economics { padding: 10px; border: 1px solid #b8d3c3; border-radius: 5px; background: #f7fbf8; display: grid; gap: 8px; }
@@ -451,7 +451,7 @@
 .staff-print-setup-flow li > span { min-width: 0; display: grid; gap: 3px; }
 .staff-print-setup-flow li > span strong { font-size: 11px; }
 .staff-print-setup-flow li > span small { color: #687068; font-size: 9px; line-height: 1.45; }
-.staff-print-setup-flow li > button { grid-column: 1 / -1; min-height: 40px; border: 1px solid #176b4c; border-radius: 5px; background: #eef7f2; color: #175d42; font-size: 11px; font-weight: 800; }
+.staff-print-setup-flow li > button { grid-column: 1 / -1; min-height: 44px; border: 1px solid #176b4c; border-radius: 5px; background: #eef7f2; color: #175d42; font-size: 11px; font-weight: 800; }
 .staff-print-config > button { min-height: 44px; align-self: end; border: 1px solid #176b4c; border-radius: 6px; background: #176b4c; color: #fff; font-weight: 800; }
 .staff-print-pairing { grid-column: 1 / -1; display: grid; gap: 5px; padding: 12px; border: 1px dashed #8cb49d; border-radius: 6px; background: #eff8f3; }
 .staff-print-pairing strong { color: #174f39; font: 800 19px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .08em; }
@@ -462,7 +462,7 @@
 .staff-print-bridge-list article > div { min-width: 0; display: grid; gap: 3px; }
 .staff-print-bridge-list article small { color: #687068; font-size: 10px; }
 .staff-print-bridge-list article em { color: #176b4c; font-size: 10px; font-style: normal; font-weight: 800; }
-.staff-print-bridge-list article button { min-height: 40px; padding: 0 10px; border: 1px solid #b44248; border-radius: 5px; background: #fff3f3; color: #953139; font-size: 10px; font-weight: 800; }
+.staff-print-bridge-list article button { min-height: 44px; padding: 0 10px; border: 1px solid #b44248; border-radius: 5px; background: #fff3f3; color: #953139; font-size: 10px; font-weight: 800; }
 @media (min-width: 760px) {
   .staff-module-body { max-width: 860px; margin: 0 auto; padding: 18px; }
 }

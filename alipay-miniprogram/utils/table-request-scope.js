@@ -17,6 +17,23 @@ function tableRequestScope(session) {
 function createTableRequestGuard(readCurrentScope) {
   let generation = 0
   let active = null
+  const writes = new Map()
+
+  // Reads are replaceable; writes survive polling and same-table navigation.
+  // Ownership, not a read generation, determines whether a write may settle.
+  function beginWrite(scope, lane) {
+    const write = { scope: String(scope || ''), lane }
+    writes.set(lane, write)
+    return write
+  }
+  function isCurrentWrite(write) {
+    return Boolean(write && writes.get(write.lane) === write && readCurrentScope() === write.scope)
+  }
+  function finishWrite(write) {
+    if (!write || writes.get(write.lane) !== write) return false
+    writes.delete(write.lane)
+    return true
+  }
 
   function begin(scope) {
     active = { scope: String(scope || ''), generation: generation + 1 }
@@ -46,7 +63,7 @@ function createTableRequestGuard(readCurrentScope) {
     active = null
   }
 
-  return { begin, current, rebase, isCurrent, invalidate }
+  return { begin, current, rebase, isCurrent, invalidate, beginWrite, isCurrentWrite, finishWrite }
 }
 
 export { tableRequestScope, createTableRequestGuard }

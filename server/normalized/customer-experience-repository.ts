@@ -1435,7 +1435,7 @@ export class CustomerExperienceRepository {
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
       customerId,
-      ['preferredAlcohol', 'tasteNotes', 'musicStyles', 'serviceIntensity', 'seatPreference', 'dietaryNotes', 'birthdayMonthDay'],
+      ['preferredAlcohol', 'preferredAlcoholChoices', 'tasteNotes', 'musicStyles', 'serviceIntensity', 'seatPreference', 'dietaryNotes', 'birthdayMonthDay'],
     ])
     return Object.fromEntries(result.rows.map((row) => [row.preference_key, row.preference_value])) as JsonObject
   }

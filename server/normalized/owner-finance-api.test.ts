@@ -5,6 +5,8 @@ import { Pool } from "pg";
 import { runNormalizedMigrations } from "../migrate-normalized.js";
 import { NormalizedCommandExecutor } from "./command-executor.js";
 import { ownerFinanceApiPlugin } from "./owner-finance-api.js";
+import { commercialOpsApiPlugin } from "./commercial-ops-api.js";
+import { ProfitQueryService } from "./profit-query-service.js";
 import {
   ScopedPostgresTransactionRunner,
   type PostgresPool,
@@ -71,7 +73,32 @@ integration("owner finance normalized accounting workflow", () => {
         capabilities: [],
       }),
     });
+    app.register(commercialOpsApiPlugin, {
+      prefix: "/api", transactions,
+      commandExecutor: new NormalizedCommandExecutor(transactions),
+      queryService: new ProfitQueryService(transactions),
+      resolveContext: () => ({ scope: { tenantId, storeId }, employeeId: ownerId, businessDate: "2026-09-08", capabilities: [] }),
+    });
     await app.ready();
+  });
+
+  it("replays a cost after a lost response without generating another public ID or accounting entry", async () => {
+    const payload = { name: "Retry expense", category: "rent", recognitionState: "actual", allocationPeriod: "month", serviceStartDate: "2026-12-01", serviceEndDate: "2026-12-31", netAmountMinor: 10000, taxAmountMinor: 0, currency: "CNY", sourceType: "lease" };
+    const request = { method: "POST" as const, url: "/api/commercial-ops/costs", headers: { "idempotency-key": "audit-cost-lost-response-100" }, payload };
+    const first = await app.inject(request);
+    expect(first.statusCode, first.body).toBe(201);
+    const second = await app.inject(request);
+    expect(second.statusCode, second.body).toBe(200);
+    expect(second.json().replayed).toBe(true);
+    expect(second.json().data.id).toBe(first.json().data.id);
+    expect(second.json().data.publicId).toBe(first.json().data.publicId);
+    const rows = await pool.query("SELECT count(*)::int AS count, sum(gross_amount_minor)::int AS amount FROM mbox.operating_cost_entries WHERE tenant_id=$1 AND store_id=$2 AND id=$3", [tenantId, storeId, first.json().data.id]);
+    expect(rows.rows[0]).toEqual({ count: 1, amount: 10000 });
+    const changed = await app.inject({ ...request, payload: { ...payload, netAmountMinor: 11000 } });
+    expect(changed.statusCode).toBe(409);
+    const deliberate = await app.inject({ ...request, headers: { "idempotency-key": "audit-cost-deliberate-repeat-100" } });
+    expect(deliberate.statusCode, deliberate.body).toBe(201);
+    expect(deliberate.json().data.id).not.toBe(first.json().data.id);
   });
   afterAll(async () => {
     await app?.close();
@@ -422,6 +449,55 @@ integration("owner finance normalized accounting workflow", () => {
       cost_amount: "125000",
       payment_count: "0",
     });
+  });
+
+  it("adds three employees to one draft, edits and removes with version checks, and posts only once", async () => {
+    const overview = await getOverview(app);
+    const center = overview.costCenters[0].id;
+    const employeeIds = [randomUUID(), randomUUID(), randomUUID()];
+    const rules: string[] = [];
+    for (const [index, id] of employeeIds.entries()) {
+      await pool.query(`INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($1,$2,$3,$4,$5)`, [id, tenantId, storeId, `MULTI-${index}`, `多人核算${index}`]);
+      const response = await app.inject({ method: "POST", url: "/api/commercial-ops/compensation-rules", headers: { "idempotency-key": `multi-rule-${id}` }, payload: {
+        employeeId: id, costCenterId: center, payBasis: "monthly", baseRateMinor: 100000, effectiveFrom: "2026-11-01", reason: "多人核算测试标准",
+      } });
+      expect(response.statusCode, response.body).toBe(201);
+      rules.push(response.json().data.id);
+    }
+    const line = (index: number, bonusMinor = 0) => ({ employeeId: employeeIds[index], compensationRuleId: rules[index], units: 1, basePayMinor: 100000, bonusMinor });
+    const period = { periodStart: "2026-11-01", periodEnd: "2026-11-30" };
+    const create = await app.inject({ method: "POST", url: "/api/commercial-ops/payroll-runs", headers: { "idempotency-key": "multi-payroll-first" }, payload: { ...period, lines: [line(0)] } });
+    expect(create.statusCode, create.body).toBe(201);
+    const draftRunId = create.json().data.id;
+    const second = { ...period, draftRunId, expectedVersion: 1, lines: [line(1)] };
+    const append = await app.inject({ method: "POST", url: "/api/commercial-ops/payroll-runs", headers: { "idempotency-key": "multi-payroll-second" }, payload: second });
+    expect(append.statusCode, append.body).toBe(201);
+    const replay = await app.inject({ method: "POST", url: "/api/commercial-ops/payroll-runs", headers: { "idempotency-key": "multi-payroll-second" }, payload: second });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json().replayed).toBe(true);
+    const stale = await app.inject({ method: "POST", url: "/api/commercial-ops/payroll-runs", headers: { "idempotency-key": "multi-payroll-stale" }, payload: { ...second, lines: [line(2)] } });
+    expect(stale.statusCode).toBe(400);
+    const third = await app.inject({ method: "POST", url: "/api/commercial-ops/payroll-runs", headers: { "idempotency-key": "multi-payroll-third" }, payload: { ...second, expectedVersion: 2, lines: [line(2)] } });
+    expect(third.statusCode, third.body).toBe(201);
+    const duplicate = await app.inject({ method: "POST", url: "/api/commercial-ops/payroll-runs", headers: { "idempotency-key": "multi-payroll-duplicate" }, payload: { ...second, expectedVersion: 3 } });
+    expect(duplicate.statusCode).toBe(400);
+    const edit = await app.inject({ method: "POST", url: "/api/commercial-ops/payroll-runs", headers: { "idempotency-key": "multi-payroll-edit" }, payload: { ...second, expectedVersion: 3, replaceEmployeeLine: true, lines: [line(1, 5000)] } });
+    expect(edit.statusCode, edit.body).toBe(201);
+    let current = await getOverview(app);
+    expect(current.payrollRuns.find((run: { id: string }) => run.id === draftRunId).lineCount).toBe(3);
+    expect(current.payrollLines.filter((item: { payrollRunId: string }) => item.payrollRunId === draftRunId)).toHaveLength(3);
+    const remove = await app.inject({ method: "POST", url: "/api/commercial-ops/payroll-runs", headers: { "idempotency-key": "multi-payroll-remove" }, payload: { ...period, draftRunId, expectedVersion: 4, removeEmployeeId: employeeIds[2], lines: [] } });
+    expect(remove.statusCode, remove.body).toBe(201);
+    for (const action of ["approve", "post"]) {
+      const response = await app.inject({ method: "POST", url: `/api/commercial-ops/payroll-runs/${draftRunId}/${action}`, headers: { "idempotency-key": `multi-payroll-${action}` }, payload: { reason: "核对多人明细后操作" } });
+      expect(response.statusCode, response.body).toBe(201);
+    }
+    current = await getOverview(app);
+    expect(current.payrollRuns.find((run: { id: string }) => run.id === draftRunId)).toMatchObject({ status: "posted", lineCount: 2, employerCostMinor: 205000 });
+    const facts = await pool.query(`SELECT count(*)::int AS count,sum(gross_amount_minor)::text AS total FROM mbox.operating_cost_entries WHERE payroll_run_id=$1`, [draftRunId]);
+    expect(facts.rows[0]).toEqual({ count: 2, total: "205000" });
+    const postedEdit = await app.inject({ method: "POST", url: "/api/commercial-ops/payroll-runs", headers: { "idempotency-key": "multi-payroll-posted-edit" }, payload: { ...second, expectedVersion: 7, replaceEmployeeLine: true } });
+    expect(postedEdit.statusCode).toBe(400);
   });
 });
 

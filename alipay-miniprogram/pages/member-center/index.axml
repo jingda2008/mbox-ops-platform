@@ -27,7 +27,7 @@
       <text a:if="{{membership.updatedText}}">{{membership.updatedText}}</text>
       <view a:if="{{membership.qualificationProgressText}}" class="qualification-progress"><view><view style="width: {{membership.progressPercent}}%;"></view></view><text>{{membership.qualificationProgressText}}</text></view>
     </view>
-    <view class="member-actions"><button onTap="openPoints"><text>积分与成长值</text><text>{{membership.pointsBalance}} 积分 ›</text></button><button onTap="openCoupons"><text>优惠券与权益</text><text>{{benefits.length}} 项 ›</text></button></view>
+    <view class="member-actions"><button class="member-action" onTap="openPoints"><text>积分与成长值</text><text>{{membership.pointsBalance}} 积分 ›</text></button><button class="member-action" onTap="openCoupons"><text>优惠券与权益</text><text>{{benefits.length}} 项 ›</text></button></view>
     <view class="rights-section">
       <view class="section-head"><text>我的权益</text><text>到店使用</text></view>
       <view a:if="{{benefits.length}}" class="rights-list"><view a:for="{{benefits}}" a:key="id" class="right-row"><view><text>{{item.title}}</text><text>{{item.description}}</text></view><view><text>{{item.statusText}}</text><text a:if="{{item.valueText}}">{{item.valueText}}</text><text>{{item.quantityText}} · {{item.validText}}</text></view></view></view>
@@ -48,8 +48,8 @@
       <text>请向服务人员出示此码。确认后即可为你准备点心；这不是付款码。</text>
     </view>
 
-    <view a:if="{{points.length}}" class="ledger-section"><view class="section-head"><text>最近积分流水</text><button onTap="openPoints">查看全部 ›</button></view><view class="ledger-list"><view a:for="{{points}}" a:key="id" class="ledger-row"><view><text>{{item.title}}</text><text>{{item.timeText}}</text></view><text class="{{item.positive ? 'positive' : ''}}">{{item.amountText}}</text></view></view></view>
-    <view a:if="{{growth.length}}" class="ledger-section"><view class="section-head"><text>最近成长值流水</text><button onTap="openPoints">查看全部 ›</button></view><view class="ledger-list"><view a:for="{{growth}}" a:key="id" class="ledger-row"><view><text>{{item.title}}</text><text>{{item.timeText}}</text></view><text class="{{item.positive ? 'positive' : ''}}">{{item.amountText}}</text></view></view></view>
+    <view a:if="{{points.length}}" class="ledger-section"><view class="section-head"><text>最近积分流水</text><button class="member-action" onTap="openPoints">查看全部 ›</button></view><view class="ledger-list"><view a:for="{{points}}" a:key="id" class="ledger-row"><view><text>{{item.title}}</text><text>{{item.timeText}}</text></view><text class="{{item.positive ? 'positive' : ''}}">{{item.amountText}}</text></view></view></view>
+    <view a:if="{{growth.length}}" class="ledger-section"><view class="section-head"><text>最近成长值流水</text><button class="member-action" onTap="openPoints">查看全部 ›</button></view><view class="ledger-list"><view a:for="{{growth}}" a:key="id" class="ledger-row"><view><text>{{item.title}}</text><text>{{item.timeText}}</text></view><text class="{{item.positive ? 'positive' : ''}}">{{item.amountText}}</text></view></view></view>
     <view a:if="{{processing.length}}" class="ledger-section"><view class="section-head"><text>会员进展</text><text>有新进展会显示在这里</text></view><view class="processing-list"><view a:for="{{processing}}" a:key="key" class="processing-row"><view><text>{{item.title}}</text><text>{{item.message}}</text></view><text>{{item.active ? '处理中' : '已完成'}}</text></view></view></view>
     </block>
     <state-panel a:else type="empty" title="当前身份还没有会员账户" message="请返回“我的”查看入会或找回会员说明。" />

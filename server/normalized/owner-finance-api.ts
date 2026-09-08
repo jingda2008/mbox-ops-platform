@@ -74,10 +74,10 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
       const data = await options.transactions.run(
         context.scope,
         async (transaction) => {
-          const effective = await access(transaction).assertPermission(
-            context.employeeId,
-            "commercial.cost.view",
-          );
+          const effective = await access(transaction).resolve(context.employeeId);
+          if (!effective.permissions.some((permission) => ["commercial.cost.view", "commercial.cost.manage", "commercial.payroll.view", "commercial.payroll.manage", "commercial.payroll.post"].includes(permission)))
+            throw new StaffAccessDeniedError("没有费用或工资访问权限");
+          const canViewCost = effective.permissions.includes("commercial.cost.view");
           const canViewPayroll = effective.permissions.includes(
             "commercial.payroll.view",
           );
@@ -117,16 +117,21 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
                 ids(context),
               )
             : emptyResult();
+          const payrollLines = canViewPayroll ? await transaction.query(
+            `SELECT line.id,line.payroll_run_id AS "payrollRunId",line.employee_id AS "employeeId",employee.display_name AS "employeeName",line.compensation_rule_id AS "compensationRuleId",line.units::text, line.base_pay_minor::text AS "basePayMinor",line.overtime_minor::text AS "overtimeMinor",line.bonus_minor::text AS "bonusMinor",line.commission_minor::text AS "commissionMinor",line.allowance_minor::text AS "allowanceMinor",line.deduction_minor::text AS "deductionMinor",line.employer_contribution_minor::text AS "employerContributionMinor",line.note FROM mbox.payroll_lines line JOIN mbox.employees employee ON employee.tenant_id=line.tenant_id AND employee.store_id=line.store_id AND employee.id=line.employee_id WHERE line.tenant_id=$1::uuid AND line.store_id=$2::uuid ORDER BY line.payroll_run_id,employee.display_name,line.id`, ids(context),
+          ) : emptyResult();
           return {
             businessDate: context.businessDate,
             categories: categories.rows,
             costCenters: centers.rows,
-            recurringRules: numericRows(recurring.rows),
-            costs: numericRows(costs.rows),
+            recurringRules: canViewCost ? numericRows(recurring.rows) : [],
+            costs: canViewCost ? numericRows(costs.rows) : [],
             employees: employees.rows,
             compensationRules: numericRows(compensation.rows),
             payrollRuns: numericRows(payroll.rows),
+            payrollLines: numericRows(payrollLines.rows),
             canViewPayroll,
+            canViewCost,
           };
         },
         { readOnly: true, isolation: "repeatable-read" },
@@ -533,9 +538,13 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
       const context = await options.resolveContext(request);
       const body = object(request.body);
       const rawLines = array(body.lines, "工资明细");
-      if (rawLines.length === 0 || rawLines.length > 200)
+      if ((!rawLines.length && !body.removeEmployeeId) || rawLines.length > 200)
         throw new OwnerFinanceRequestError("工资明细数量不正确");
       const input = {
+        draftRunId: body.draftRunId ? uuid(body.draftRunId, "工资草稿") : null,
+        expectedVersion: body.draftRunId ? integer(body.expectedVersion, "草稿版本", 1, 1_000_000) : null,
+        replaceEmployeeLine: body.replaceEmployeeLine === true,
+        removeEmployeeId: body.removeEmployeeId ? uuid(body.removeEmployeeId, "移除员工") : null,
         periodStart: date(body.periodStart, "周期开始"),
         periodEnd: date(body.periodEnd, "周期结束"),
         note: optionalText(body.note, "备注", 1000),
@@ -543,6 +552,10 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
       };
       if (input.periodEnd < input.periodStart)
         throw new OwnerFinanceRequestError("工资周期不正确");
+      if (new Set(input.lines.map((line) => line.employeeId)).size !== input.lines.length)
+        throw new OwnerFinanceRequestError("同一工资批次不能重复录入同一员工");
+      if (input.removeEmployeeId && (!input.draftRunId || input.lines.length))
+        throw new OwnerFinanceRequestError("请单独移除草稿中的员工明细");
       return commandReply(
         reply,
         options,
@@ -555,16 +568,20 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
             context.employeeId,
             "commercial.payroll.manage",
           );
-          const overlapping = await transaction.query<{ id: string }>(
-            `SELECT id FROM mbox.payroll_runs WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND status<>'voided' AND daterange(period_start,period_end,'[]') && daterange($3::date,$4::date,'[]') LIMIT 1 FOR UPDATE`,
+          const overlapping = await transaction.query<{ id: string; public_id: string; status: string; period_start: string; period_end: string; version: number }>(
+            `SELECT id,public_id,status,period_start::text,period_end::text,version FROM mbox.payroll_runs WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND status<>'voided' AND daterange(period_start,period_end,'[]') && daterange($3::date,$4::date,'[]') LIMIT 1 FOR UPDATE`,
             [...ids(context), input.periodStart, input.periodEnd],
           );
-          if (overlapping.rowCount)
+          const draft = overlapping.rows[0];
+          if (input.draftRunId && (!draft || draft.id !== input.draftRunId || draft.status !== 'draft'
+            || draft.period_start !== input.periodStart || draft.period_end !== input.periodEnd || draft.version !== input.expectedVersion))
+            throw new OwnerFinanceRequestError("工资草稿已变化或已确认，请刷新后核对；未覆盖他人修改");
+          if (overlapping.rowCount && !input.draftRunId)
             throw new OwnerFinanceRequestError(
               "该工资周期与已有工资单重叠，请先作废未入账工资单或调整周期",
             );
-          const publicId = `payroll-${randomUUID()}`;
-          const run = one(
+          const publicId = draft?.public_id ?? `payroll-${randomUUID()}`;
+          const run = draft ?? one(
             await transaction.query<{ id: string }>(
               `INSERT INTO mbox.payroll_runs(tenant_id,store_id,public_id,period_start,period_end,currency,note,created_by_employee_id) VALUES($1::uuid,$2::uuid,$3,$4::date,$5::date,'CNY',$6,$7::uuid) RETURNING id`,
               [
@@ -577,7 +594,28 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
               ],
             ),
           );
+          const previousLines = input.draftRunId ? await transaction.query<JsonObject>(
+            `SELECT * FROM mbox.payroll_lines WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND payroll_run_id=$3::uuid ORDER BY id`,
+            [...ids(context), run.id],
+          ) : { rows: [] };
+          const appendedCount = input.lines.filter((line) => !previousLines.rows.some((row) => row.employee_id === line.employeeId)).length;
+          if (previousLines.rows.length + appendedCount > 200) throw new OwnerFinanceRequestError("一个工资周期最多200名员工");
+          if (input.removeEmployeeId) {
+            if (previousLines.rows.length <= 1) throw new OwnerFinanceRequestError("最后一条明细请通过作废整个草稿处理");
+            const removed = await transaction.query(
+              `DELETE FROM mbox.payroll_lines WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND payroll_run_id=$3::uuid AND employee_id=$4::uuid RETURNING id`,
+              [...ids(context), run.id, input.removeEmployeeId],
+            );
+            if (!removed.rowCount) throw new OwnerFinanceRequestError("该员工明细不存在，请刷新");
+          }
           for (const line of input.lines) {
+            const exists = previousLines.rows.some((row) => row.employee_id === line.employeeId);
+            if (exists && !input.replaceEmployeeLine) throw new OwnerFinanceRequestError("该员工已有工资明细，请选择编辑，不要重复追加");
+            if (input.replaceEmployeeLine && !exists) throw new OwnerFinanceRequestError("待编辑的员工明细已变化，请刷新");
+            if (exists) await transaction.query(
+              `DELETE FROM mbox.payroll_lines WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND payroll_run_id=$3::uuid AND employee_id=$4::uuid`,
+              [...ids(context), run.id, line.employeeId],
+            );
             const rule = one(
               await transaction.query<CompensationRuleDbRow>(
                 `SELECT rule.pay_basis,rule.base_rate_minor::text AS base_rate_minor,rule.effective_from::text AS effective_from,rule.effective_until::text AS effective_until FROM mbox.employee_compensation_rules rule JOIN mbox.employees employee ON employee.tenant_id=rule.tenant_id AND employee.store_id=rule.store_id AND employee.id=rule.employee_id WHERE rule.tenant_id=$1::uuid AND rule.store_id=$2::uuid AND rule.id=$3::uuid AND rule.employee_id=$4::uuid AND rule.effective_from<=$5::date AND (rule.effective_until IS NULL OR rule.effective_until>=$6::date)`,
@@ -631,9 +669,14 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
               ],
             );
           }
-          return result(run.id, publicId, "draft");
+          const version = draft ? one(await transaction.query<{ version: number }>(
+            `UPDATE mbox.payroll_runs SET version=version+1,updated_at=clock_timestamp() WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid RETURNING version`,
+            [...ids(context), run.id],
+          )).version : 1;
+          return { ...result(run.id, publicId, "draft", version),
+            ...(draft ? { previousLines: JSON.parse(JSON.stringify(previousLines.rows)) as JsonValue, changes: JSON.parse(JSON.stringify(input)) as JsonValue } : {}) };
         },
-        "commercial.payroll_run.created",
+        input.draftRunId ? "commercial.payroll_run.draft_updated" : "commercial.payroll_run.created",
         "payroll_run",
       );
     }),
@@ -1112,6 +1155,11 @@ function optionalDate(value: unknown, label: string) {
   return value === undefined || value === null || value === ""
     ? null
     : date(value, label);
+}
+function integer(value: unknown, label: string, minimum: number, maximum: number) {
+  if (!Number.isSafeInteger(value) || Number(value) < minimum || Number(value) > maximum)
+    throw new OwnerFinanceRequestError(`${label}不正确`);
+  return Number(value);
 }
 function minor(value: unknown, label: string) {
   if (!Number.isSafeInteger(value) || Number(value) < 0)

@@ -2,8 +2,8 @@
   <view class="coupons-hero"><text>M-BOX · 优惠券</text><text>我的优惠券</text><text>门店发放的券与可用权益都在这里。</text></view>
   <state-panel a:if="{{loading}}" type="loading" title="正在读取优惠券" />
   <block a:else>
-    <view a:if="{{error}}" class="error-banner">{{error}}</view>
-    <view a:if="{{coupons.length}}" class="coupon-list">
+    <view a:if="{{error}}" class="error-banner">{{error}}<button class="secondary-button" onTap="load">重新读取优惠券</button></view>
+    <view a:elif="{{coupons.length}}" class="coupon-list">
       <view a:for="{{coupons}}" a:key="id" class="coupon-card">
         <view class="coupon-card__head"><text>{{item.typeText}}</text><text>{{item.quantityText}}</text></view>
         <text class="coupon-title">{{item.title}}</text>

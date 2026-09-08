@@ -68,19 +68,13 @@ async function expectFixedFiveTabs(page: Page) {
 
 async function captureExpandedPreview(page: Page, name: string) {
   await expectFixedFiveTabs(page)
-  await page.evaluate(() => {
-    const shell = document.querySelector<HTMLElement>('.mini-preview-shell')
-    const content = document.querySelector<HTMLElement>('.mini-preview-content')
-    if (!shell || !content) throw new Error('mini preview shell is missing')
-    shell.style.height = 'auto'
-    shell.style.minHeight = '100dvh'
-    shell.style.gridTemplateRows = '36px auto 70px'
-    content.style.overflow = 'visible'
-  })
+  // Capture the actual viewport. Expanding the shell here used to remove the
+  // clipping/scroll constraints being audited. This remains WEB preview proof,
+  // never evidence of WeChat native or a real phone.
   await page.evaluate(() => new Promise<void>((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
   }))
-  await page.screenshot({ path: `${previewDir}/${name}.png`, fullPage: true, animations: 'disabled' })
+  await page.screenshot({ path: `${previewDir}/${name}.png`, fullPage: false, animations: 'disabled' })
 }
 
 async function openPreview(page: Page, width: number, height: number) {

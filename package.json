@@ -1,7 +1,7 @@
 {
   "name": "@mbox/ops-platform",
   "private": true,
-  "version": "1.0.0-rc.181",
+  "version": "1.0.0-rc.182",
   "type": "module",
   "packageManager": "npm@11.12.1",
   "engines": {

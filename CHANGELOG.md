@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0-rc.182 - 2026-09-08
+
+- Bind staff payment responses and QR codes to their original order; expose local release for new unresolved attempts without waiting on channel queries.
+- Preserve recoverable command identities for assisted orders, operating expenses, performance forms and guest service/benefit requests.
+- Support versioned multi-employee payroll drafts, read-only finance access, dated expense search and pagination.
+- Separate Mini Program write ownership from page reads, preserve multi-choice preferences, guard reservation and performer races, and gate membership invitations on valid terms and activities.
+- Repair shared-cart bundle editing and compact native buttons, service grids, option sheets, benefit cards and empty recommendation states across WeChat and Alipay.
+- Retain schema 162 and financial history. WeChat upload and experience selection are independent release gates; no Alipay upload or standalone Android app.
+
 ## 1.0.0-rc.181 - 2026-09-08
 
 - Recover verified refund terminal observations using their original integration authority after interrupted execution; preserve immutable financial history.

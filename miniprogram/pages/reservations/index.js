@@ -248,10 +248,18 @@ Page({
   arrivalAt() { return `${this.data.reservationDate}T${this.data.reservationTime}:00+08:00` },
 
   async checkAvailability() {
-    if (this.data.partySize < 1 || this.data.partySize > this.data.maxGuestCount) return
+    const generation = this.availabilityGeneration = (this.availabilityGeneration || 0) + 1
+    if (this.data.partySize < 1 || this.data.partySize > this.data.maxGuestCount) {
+      this.setData({ checking: false, availability: null, availabilityText: '请先填写有效人数' })
+      return
+    }
+    const arrivalAt = this.arrivalAt()
+    const partySize = this.data.partySize
+    const current = () => generation === this.availabilityGeneration && arrivalAt === this.arrivalAt() && partySize === this.data.partySize
     this.setData({ checking: true })
     try {
-      const availability = await getReservationAvailability(this.arrivalAt(), this.data.partySize)
+      const availability = await getReservationAvailability(arrivalAt, partySize)
+      if (!current()) return
       const rule = availability.depositRule || {}
       const seatOptions = Array.isArray(availability.seatPreferences) && availability.seatPreferences.length
         ? availability.seatPreferences : this.data.seatOptions
@@ -263,14 +271,19 @@ Page({
         depositText: rule.enabled ? `需付${money(rule.amountMinor || 0)}定金 · ${rule.ruleText || '提交前再次确认'}` : '当前不要求线上定金',
       })
     } catch (error) {
+      if (!current()) return
       this.setData({ availability: null, availabilityText: customerErrorMessage(error, '暂时无法确认容量'), depositText: '' })
-    } finally { this.setData({ checking: false }) }
+    } finally { if (current()) this.setData({ checking: false }) }
   },
 
   async loadPerformances() {
+    const generation = this.performanceGeneration = (this.performanceGeneration || 0) + 1
+    const date = this.data.reservationDate
+    const current = () => generation === this.performanceGeneration && date === this.data.reservationDate
     this.setData({ loadingShows: true })
     try {
-      const view = await getReservationPerformances(this.data.reservationDate)
+      const view = await getReservationPerformances(date)
+      if (!current()) return
       const performances = performanceRows(view)
       const selectedPerformanceId = performances.some((item) => item.id === this.data.selectedPerformanceId) ? this.data.selectedPerformanceId : ''
       this.setData({
@@ -278,8 +291,8 @@ Page({
         selectedPerformanceId,
         selectedPerformance: performances.find((item) => item.id === selectedPerformanceId) || null,
       })
-    } catch (_error) { this.setData({ performances: [], selectedPerformanceId: '', selectedPerformance: null }) }
-    finally { this.setData({ loadingShows: false }) }
+    } catch (error) { if (current()) this.setData({ performances: [], selectedPerformanceId: '', selectedPerformance: null, error: customerErrorMessage(error, '演出场次暂时无法读取，请重试') }) }
+    finally { if (current()) this.setData({ loadingShows: false }) }
   },
 
   startNewReservation() {

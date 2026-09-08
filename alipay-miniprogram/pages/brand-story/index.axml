@@ -3,7 +3,6 @@
     <view class="story-article">
       <text class="story-article__eyebrow">M-BOX · SINCE 1999</text>
       <text class="story-article__title">从1999开始，<text style="display:block"></text>品味上海的现场</text>
-      <text class="story-article__lead">一座仍在演出的城市档案</text>
 
       <view a:for="{{sections}}" a:key="heading" class="story-article__section">
         <text class="story-article__heading">{{item.heading}}</text>

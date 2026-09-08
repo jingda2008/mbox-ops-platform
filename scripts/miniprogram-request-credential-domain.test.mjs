@@ -68,6 +68,7 @@ async function loadApiModule() {
         }
       }
       if (specifier === './id') return { randomId: (prefix) => `${prefix}-contract-id` }
+      if (specifier === './recoverable-command') return { recoverableGuestCommand: (_operation, _body, send) => send('credential-command-test') }
       if (specifier === './session') {
         return {
           getTableSession: () => ({}), rememberTableConnection: () => undefined,

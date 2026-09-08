@@ -1780,10 +1780,24 @@ function recommendationAnswers(
 }
 
 function publicPreferences(value: unknown): JsonObject {
-  const source = object(value, '偏好')
+  const source = { ...object(value, '偏好') }
   // Birthday month/day is purpose-bound personal data. It must only enter the
   // system through the atomic annual-benefit consent command above.
-  const allowed = ['preferredAlcohol', 'tasteNotes', 'musicStyles', 'serviceIntensity', 'seatPreference', 'dietaryNotes']
+  const allowed = ['preferredAlcohol', 'preferredAlcoholChoices', 'tasteNotes', 'musicStyles', 'serviceIntensity', 'seatPreference', 'dietaryNotes']
+  if (source.preferredAlcoholChoices !== undefined) {
+    const choices = source.preferredAlcoholChoices
+    const values = ['cocktail', 'wine', 'sparkling', 'beer', 'spirits', 'non_alcoholic', 'mixed']
+    if (!Array.isArray(choices) || choices.length < 1 || choices.length > values.length
+      || choices.some((item) => typeof item !== 'string' || !values.includes(item))
+      || new Set(choices).size !== choices.length || (choices.includes('mixed') && choices.length > 1)) {
+      throw new CustomerExperienceRequestError('酒水偏好选项无效，请重新选择')
+    }
+    source.preferredAlcohol = choices.length === 1 ? choices[0]! : 'mixed'
+  } else if (typeof source.preferredAlcohol === 'string' && source.preferredAlcohol !== 'mixed') {
+    // Legacy explicit single selections remain usable; legacy "mixed" cannot
+    // erase a newer multi-selection that the old client cannot represent.
+    source.preferredAlcoholChoices = [source.preferredAlcohol]
+  }
   return Object.fromEntries(allowed.flatMap((key) => (
     source[key] === undefined ? [] : [[key, source[key]]]
   ))) as JsonObject

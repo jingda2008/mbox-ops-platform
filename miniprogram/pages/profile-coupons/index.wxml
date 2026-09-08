@@ -2,8 +2,8 @@
   <view class="coupons-hero"><text>M-BOX · 优惠券</text><text>我的优惠券</text><text>门店发放的券与可用权益都在这里。</text></view>
   <state-panel wx:if="{{loading}}" type="loading" title="正在读取优惠券" />
   <block wx:else>
-    <view wx:if="{{error}}" class="error-banner">{{error}}</view>
-    <view wx:if="{{coupons.length}}" class="coupon-list">
+    <view wx:if="{{error}}" class="error-banner">{{error}}<button class="secondary-button" bindtap="load">重新读取优惠券</button></view>
+    <view wx:elif="{{coupons.length}}" class="coupon-list">
       <view wx:for="{{coupons}}" wx:key="id" class="coupon-card">
         <view class="coupon-card__head"><text>{{item.typeText}}</text><text>{{item.quantityText}}</text></view>
         <text class="coupon-title">{{item.title}}</text>

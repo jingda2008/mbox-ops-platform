@@ -7,6 +7,8 @@ import './miniprogram-request-credential-domain.test.mjs'
 import './miniprogram-activity-share.test.mjs'
 import './miniprogram-public-share.test.mjs'
 import './miniprogram-table-scope-race.test.mjs'
+import './miniprogram-audit-remediation.test.cjs'
+import './miniprogram-recoverable-command.test.mjs'
 
 async function loadSessionModule() {
   const source = await readFile(new URL('../miniprogram/utils/session.js', import.meta.url), 'utf8')

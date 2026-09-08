@@ -28,8 +28,8 @@
 .progress-row text:first-child { color: #342e29; font-size: 23rpx; font-weight: 650; }
 .progress-row text:nth-child(2) { margin-top: 5rpx; color: #6f675e; font-size: 21rpx; line-height: 1.5; }
 .progress-row text:last-child { margin-top: 5rpx; color: #9b9288; font-size: 19rpx; }
-.ledger-tabs { display: grid; margin-top: 24rpx; padding: 6rpx; grid-template-columns: 1fr 1fr; border-radius: 18rpx; background: #ebe6de; }
-.ledger-tabs button { min-height: 88rpx; margin: 0; border-radius: 14rpx; background: transparent; color: #6c645b; font-size: 24rpx; line-height: 88rpx; }
+.ledger-tabs { display: grid; margin-top: 24rpx; padding: 6rpx; grid-template-columns: repeat(2,minmax(0,1fr)); border-radius: 18rpx; background: #ebe6de; }
+.ledger-tabs button.ledger-tab { box-sizing:border-box; width:100%; min-width:0; min-height: 88rpx; margin: 0; border-radius: 14rpx; background: transparent; color: #6c645b; font-size: 24rpx; line-height: 88rpx; }
 .ledger-tabs button::after { border: 0; }
 .ledger-tabs button.is-active { background: #fff; color: #211e1a; box-shadow: 0 4rpx 14rpx rgba(36,29,22,.08); }
 .ledger-list { display: grid; gap: 14rpx; margin-top: 18rpx; }

@@ -144,7 +144,7 @@
             <text class="benefit-description">{{item.description}}</text>
             <view class="benefit-foot">
               <view><text a:if="{{item.valueText}}">{{item.valueText}}</text><text>有效至 {{item.validText}}</text></view>
-              <button data-id="{{item.id}}" loading="{{benefitBusyId === item.id}}" onTap="requestBenefitUse">使用</button>
+              <button data-id="{{item.id}}" disabled="{{!!benefitBusyId}}" loading="{{benefitBusyId === item.id}}" onTap="requestBenefitUse">使用</button>
             </view>
           </view>
         </view>

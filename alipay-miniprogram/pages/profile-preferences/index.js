@@ -62,7 +62,8 @@ Page({
       const profile = await getCustomerProfile()
       const preferences = profile.preferences || {}
       const preferred = preferences.preferredAlcohol || 'mixed'
-      const selectedAlcohol = preferred === 'mixed' ? ['mixed'] : [preferred]
+      const selectedAlcohol = Array.isArray(preferences.preferredAlcoholChoices)
+        ? preferences.preferredAlcoholChoices : preferred === 'mixed' ? ['mixed'] : [preferred]
       this.setData({
         loading: false, profile,
         avatarUrl: runtime.getStorageSync(AVATAR_KEY) || '',
@@ -125,6 +126,7 @@ Page({
       seatPreference: this.data.seatValue,
       serviceIntensity: this.data.serviceValue,
       preferredAlcohol,
+      preferredAlcoholChoices: selectedAlcohol,
       tasteNotes: String(this.data.tasteNotes || '').trim(),
       musicStyles: String(this.data.musicStyles || '').trim(),
       dietaryNotes: String(this.data.dietaryNotes || '').trim(),

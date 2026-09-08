@@ -42,6 +42,7 @@ async function loadApi(state, requestHandler) {
         },
       }
       if (specifier === './id') return { randomId: (prefix) => `${prefix}-pagination-test` }
+      if (specifier === './recoverable-command') return { recoverableGuestCommand: (_operation, _body, send) => send('pagination-command-test') }
       if (specifier === './session') return {
         getTableSession: () => state.session,
         rememberTableConnection: () => undefined,

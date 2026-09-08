@@ -40,6 +40,17 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
   const [paymentStatus, setPaymentStatus] = useState<'pending' | 'succeeded' | 'failed' | 'closed'>('pending')
   const [paymentWaitingLong, setPaymentWaitingLong] = useState(false)
   const [paymentBusy, setPaymentBusy] = useState(false)
+  const [paymentQueryBusy, setPaymentQueryBusy] = useState(false)
+  const paymentGeneration = useRef(0)
+  const paymentWriting = useRef(false)
+  const [paymentEpoch, setPaymentEpoch] = useState(0)
+  const advancePayment = () => {
+    const generation = ++paymentGeneration.current
+    setPaymentEpoch(generation)
+    setPaymentQueryBusy(false)
+    return generation
+  }
+  useEffect(() => () => { paymentGeneration.current += 1 }, [])
   const [manualPaymentRecorded, setManualPaymentRecorded] = useState(false)
   const [showPaymentScanner, setShowPaymentScanner] = useState(false)
   const announcedPaymentId = useRef<string | null>(null)
@@ -65,10 +76,11 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
     if (paymentAction === null || paymentStatus !== 'pending') return
     const controller = new AbortController()
     let active = true
+    const generation = paymentGeneration.current
     const synchronize = async () => {
       try {
         const status = await api.loadOnlinePaymentStatus(paymentAction.paymentId, controller.signal)
-        if (!active || status === 'pending') return
+        if (!active || generation !== paymentGeneration.current || status === 'pending') return
         setPaymentStatus(status)
         if (status === 'succeeded' && announcedPaymentId.current !== paymentAction.paymentId) {
           announcedPaymentId.current = paymentAction.paymentId
@@ -89,7 +101,7 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
       controller.abort()
       window.clearInterval(interval)
     }
-  }, [api, onSubmitted, paymentAction, paymentStatus, table.code])
+  }, [api, onSubmitted, paymentAction, paymentStatus, paymentEpoch, table.code])
 
   useEffect(() => {
     if (paymentAction === null || paymentStatus !== 'pending') {
@@ -187,7 +199,7 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
   }
 
   const createPayment = async (method: 'native_qr' | 'auth_code', customerAuthCode?: string) => {
-    if (paymentOrder === null || paymentBusy) return false
+    if (paymentOrder === null || paymentBusy || paymentWriting.current) return false
     if (access?.canInitiatePayment !== true) {
       setError(paymentInitiationMessage(access))
       return false
@@ -196,6 +208,8 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
       setError('本店当前没有启用线上收款，请改为挂桌账或联系收银员。')
       return false
     }
+    paymentWriting.current = true
+    const generation = advancePayment()
     setPaymentBusy(true)
     setError(null)
     try {
@@ -205,29 +219,34 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
         method,
         ...(customerAuthCode === undefined ? {} : { customerAuthCode }),
       })
+      if (generation !== paymentGeneration.current) return false
       setPaymentAction(action)
       setManualPaymentRecorded(false)
       setPaymentStatus(action.status === 'failed' ? 'failed' : 'pending')
       setPaymentWaitingLong(false)
       setShowPaymentScanner(false)
       onSubmitted(method === 'native_qr'
-        ? `${table.code} 付款码已生成；客人手机也可从本桌订单发起同一笔付款`
+        ? `${table.code} 付款码已生成，请客人扫码；未确认时可保留此笔待核对并重新收款`
         : `${table.code} 付款已受理，到账结果以支付通知为准`)
       return true
     } catch (reason) {
+      if (generation !== paymentGeneration.current) return false
       setError(reason instanceof Error ? reason.message : '付款没有发起成功，请到收银页面核对')
       return false
     } finally {
+      paymentWriting.current = false
       setPaymentBusy(false)
     }
   }
 
   const queryPayment = async () => {
-    if (paymentAction === null || paymentBusy) return
-    setPaymentBusy(true)
+    if (paymentAction === null || paymentQueryBusy) return
+    const generation = paymentGeneration.current
+    setPaymentQueryBusy(true)
     setError(null)
     try {
       const status = await api.queryOnlinePayment(paymentAction.paymentId)
+      if (generation !== paymentGeneration.current) return
       if (status === 'succeeded') {
         setPaymentStatus('succeeded')
         onSubmitted(`${table.code} 已确认到账，订单和收银状态已同步`)
@@ -238,12 +257,31 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
         setError('支付机构已确认本次未成功，可以重新发起收款。')
         return
       }
-      onSubmitted(`${table.code} 支付机构仍在处理，请勿重复收款`)
+      onSubmitted(`${table.code} 到账尚未确认，可保留旧单待核对并继续收款`)
     } catch (reason) {
+      if (generation !== paymentGeneration.current) return
       setError(reason instanceof Error ? reason.message : '暂时无法核对到账，请到收银页面查看')
     } finally {
-      setPaymentBusy(false)
+      if (generation === paymentGeneration.current) setPaymentQueryBusy(false)
     }
+  }
+
+  const releasePayment = async () => {
+    if (!paymentAction || paymentBusy || paymentWriting.current || paymentStatus === 'succeeded') return
+    paymentWriting.current = true
+    setPaymentBusy(true)
+    const generation = advancePayment()
+    setError(null)
+    try {
+      await api.releaseUnresolvedPaymentForRetry(paymentAction.paymentId, '员工保留原支付待核对，继续收款')
+      if (generation !== paymentGeneration.current) return
+      setPaymentAction(null)
+      setPaymentStatus('pending')
+      onSubmitted(`${table.code} 可以重新收款；原支付继续财务核对，多收会进入退款待办`)
+    } catch (reason) {
+      if (generation !== paymentGeneration.current) return
+      setError(reason instanceof Error ? reason.message : '暂未释放，请重试；其他桌台不受影响')
+    } finally { paymentWriting.current = false; setPaymentBusy(false) }
   }
 
   const recordManualPayment = async (input: Readonly<{
@@ -253,11 +291,14 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
     externalMethodCode?: 'bank_transfer' | 'mobile_wallet' | 'stored_value_voucher' | 'corporate_account' | 'other'
     collectionNote?: string
   }>) => {
-    if (paymentOrder === null || paymentBusy) return false
+    if (paymentOrder === null || paymentBusy || paymentWriting.current) return false
+    paymentWriting.current = true
+    const generation = advancePayment()
     setPaymentBusy(true)
     setError(null)
     try {
       await api.recordManualPayment({ orderId: paymentOrder.paymentNextStep.orderId, ...input })
+      if (generation !== paymentGeneration.current) return false
       setManualPaymentRecorded(true)
       setPaymentStatus('succeeded')
       onSubmitted(input.provider === 'cash'
@@ -267,9 +308,11 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
           : `${table.code} 其他线下收款已登记并进入日结对账`)
       return true
     } catch (reason) {
+      if (generation !== paymentGeneration.current) return false
       setError(reason instanceof Error ? reason.message : '现场收款没有登记成功，请到收银页面核对')
       return false
     } finally {
+      paymentWriting.current = false
       setPaymentBusy(false)
     }
   }
@@ -314,6 +357,8 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
           onCreateQr={() => void createPayment('native_qr')}
           onScan={() => setShowPaymentScanner(true)}
           onQuery={() => void queryPayment()}
+          queryBusy={paymentQueryBusy}
+          onRelease={() => void releasePayment()}
           onManual={recordManualPayment}
           onDone={onClose}
         /> : phase === 'loading' ? <p className="staff-order-loading"><LoaderCircle className="is-spinning" /> 正在读取可售商品</p> : (
@@ -414,11 +459,12 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
   </div>
 }
 
-function StaffPaymentChoice({ action, amountMinor, currency, busy, status, waitingLong, canInitiatePayment, paymentInitiationMessage, canQuery, manualCollection, manualPaymentRecorded, tableCode, onCreateQr, onScan, onQuery, onManual, onDone }: {
+function StaffPaymentChoice({ action, amountMinor, currency, busy, queryBusy, status, waitingLong, canInitiatePayment, paymentInitiationMessage, canQuery, manualCollection, manualPaymentRecorded, tableCode, onCreateQr, onScan, onQuery, onRelease, onManual, onDone }: {
   action: OnlinePaymentAction | null
   amountMinor: number
   currency: string
   busy: boolean
+  queryBusy: boolean
   status: 'pending' | 'succeeded' | 'failed' | 'closed'
   waitingLong: boolean
   canInitiatePayment: boolean
@@ -430,6 +476,7 @@ function StaffPaymentChoice({ action, amountMinor, currency, busy, status, waiti
   onCreateQr(): void
   onScan(): void
   onQuery(): void
+  onRelease(): void
   onManual(input: Readonly<{
     provider: 'cash' | 'physical_pos' | 'external_manual'
     receiptReference: string
@@ -443,7 +490,8 @@ function StaffPaymentChoice({ action, amountMinor, currency, busy, status, waiti
     ? action.payload.qrCodeUrl
     : null
   return <section className="staff-payment-choice" aria-label={`${tableCode}收款`}>
-    <div className="staff-payment-summary"><small>{tableCode} · 订单已同步本桌</small><strong>{money(amountMinor, currency)}</strong><span>只发起一笔付款，到账结果以支付通知为准。</span></div>
+    <div className="staff-payment-summary"><small>{tableCode} · 订单已同步本桌</small><strong>{money(amountMinor, currency)}</strong><span>只有确认足额到账才停止再次收款；未知结果不会锁住桌台。</span></div>
+    {action !== null && status === 'pending' && <button type="button" className="staff-payment-query is-attention" disabled={busy} onClick={onRelease}>保留旧单待核对，继续收款</button>}
     {status === 'succeeded' ? <>
       <span className="staff-payment-result is-succeeded"><Check /><strong>{manualPaymentRecorded ? '现场收款已登记' : '支付成功'}，已同步出品</strong></span>
       <p>收款状态已更新；后厨、吧台和打印会按本单商品与门店配置继续处理。</p>
@@ -464,16 +512,16 @@ function StaffPaymentChoice({ action, amountMinor, currency, busy, status, waiti
       <StaffPaymentQr value={qrValue} />
       <h3>请客人扫码付款</h3>
       <p>{waitingLong
-        ? '仍在等待支付机构回传，请勿重复收款；请联系收银核对这笔付款。'
+        ? '仍在等待支付机构回传；可保留本次待核对并重新收款。'
         : '支付成功后页面会自动更新；客人也可以打开桌码中的“本桌已点”，从自己的手机继续这笔付款。'}</p>
-      {canQuery && <button type="button" className="staff-payment-query" disabled={busy} onClick={onQuery}><RefreshCcw size={18} />收银查单</button>}
+      {canQuery && <button type="button" className="staff-payment-query" disabled={queryBusy} onClick={onQuery}><RefreshCcw size={18} />{queryBusy ? '正在查询，可继续其他操作' : '查询结果'}</button>}
       <button type="button" className="staff-payment-done" onClick={onDone}><Check size={18} />暂时收起</button>
     </> : action?.presentation === 'barcode' ? <>
       <span className="staff-payment-result"><LoaderCircle className="is-spinning" /><strong>付款已受理，正在确认到账</strong></span>
       <p>{waitingLong
-        ? '仍在等待支付机构回传，请勿重复扫描；请联系收银核对这笔付款。'
-        : '不要重复扫描；支付成功后页面会自动同步订单与出品状态。'}</p>
-      {canQuery && <button type="button" className="staff-payment-query" disabled={busy} onClick={onQuery}><RefreshCcw size={18} />收银查单</button>}
+        ? '仍在等待支付机构回传；可保留旧单待核对并重新收款。'
+        : '支付成功后自动同步；若需另收一笔，请先保留旧单待核对。'}</p>
+      {canQuery && <button type="button" className="staff-payment-query" disabled={queryBusy} onClick={onQuery}><RefreshCcw size={18} />{queryBusy ? '正在查询，可继续其他操作' : '查询结果'}</button>}
       <button type="button" className="staff-payment-done" onClick={onDone}><Check size={18} />完成</button>
     </> : <>
       <div className="staff-payment-methods">

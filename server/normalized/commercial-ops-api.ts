@@ -167,7 +167,7 @@ export const commercialOpsApiPlugin: FastifyPluginAsync<CommercialOpsApiOptions>
       scope: context.scope,
       operationScope: 'commercial.cost.create',
       idempotencyKey,
-      requestFingerprint: fingerprint({ input, actor: context.employeeId }),
+      requestFingerprint: fingerprint({ input: { ...input, publicId: body.publicId ?? null }, actor: context.employeeId }),
       resultCodec: jsonCodec<CostResult>(),
     }, async (transaction) => {
       await createAccess(transaction).assertPermission(context.employeeId, 'commercial.cost.manage')
@@ -201,7 +201,7 @@ export const commercialOpsApiPlugin: FastifyPluginAsync<CommercialOpsApiOptions>
       const idempotencyKey = readIdempotencyKey(request)
       const execution = await options.commandExecutor.execute({
         scope: context.scope, operationScope: 'commercial.cost.correct', idempotencyKey,
-        requestFingerprint: fingerprint({ costId, input, reason, actor: context.employeeId }),
+        requestFingerprint: fingerprint({ costId, input: { ...input, publicId: body.publicId ?? null }, reason, actor: context.employeeId }),
         resultCodec: jsonCodec<CostResult>(),
       }, async (transaction) => {
         await createAccess(transaction).assertPermission(context.employeeId, 'commercial.cost.manage')
@@ -380,7 +380,7 @@ export const commercialOpsApiPlugin: FastifyPluginAsync<CommercialOpsApiOptions>
     const idempotencyKey = readIdempotencyKey(request)
     const execution = await options.commandExecutor.execute({
       scope: context.scope, operationScope: 'commercial.voucher.redeem', idempotencyKey,
-      requestFingerprint: fingerprint({ ...input, voucherCode: voucherHash, actor: context.employeeId }),
+      requestFingerprint: fingerprint({ ...input, publicId: body.publicId ?? null, voucherCode: voucherHash, actor: context.employeeId }),
       resultCodec: jsonCodec<VoucherResult>(),
     }, async (transaction) => {
       await createAccess(transaction).assertPermission(context.employeeId, 'commercial.voucher.redeem')

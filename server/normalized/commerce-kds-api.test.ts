@@ -462,6 +462,7 @@ describe('commerceKdsApiPlugin', () => {
     expect(response.json()).toEqual({
       data: {
         canCreateOrder: true,
+        employeeId: '33333333-3333-4333-8333-333333333333',
         canInitiatePayment: false,
         paymentInitiationBlockReason: 'permission_required',
         canQueryOnlinePayment: false,

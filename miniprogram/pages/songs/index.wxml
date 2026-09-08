@@ -15,7 +15,7 @@
         </picker>
       </label>
       <label class="field"><text class="field__label">想听的歌</text><input class="field__input" maxlength="200" value="{{songTitle}}" placeholder="输入歌曲名称" bindinput="onSongInput" /></label>
-      <label class="field"><text class="field__label">祝福语或说明（选填）</text><textarea class="field__textarea" maxlength="300" value="{{note}}" placeholder="例如生日祝福、纪念日；不要填写敏感隐私" bindinput="onNoteInput" /></label>
+      <label class="field"><text class="field__label">祝福语或说明（选填）</text><textarea class="field__textarea song-note" auto-height maxlength="300" value="{{note}}" placeholder="例如生日祝福、纪念日；不要填写敏感隐私" bindinput="onNoteInput" /></label>
       <label class="extension-row"><switch checked="{{requestExtension}}" bindchange="onExtensionChange" color="#9a7130" /><view><text>场次时间不足时，允许工作人员沟通延长方案</text><text>只表达意愿，不代表加时或收费已经确认</text></view></label>
       <button class="primary-button" disabled="{{submitting}}" bindtap="submitIntent">{{submitting ? '正在提交' : '提交点歌意向'}}</button>
     </view>

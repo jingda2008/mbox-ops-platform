@@ -103,21 +103,23 @@ Page({
   },
 
   async submitFeedback(event) {
+    if (this.data.feedbackTaskId) return
     const taskPublicId = event.currentTarget.dataset.id
     const action = event.currentTarget.dataset.action
-    const request = this.beginTableRequest()
+    const guard = this.ensureTableRequestGuard()
+    const request = guard.beginWrite(tableRequestScope(getTableSession()), 'feedback')
     this.setData({ feedbackTaskId: taskPublicId, error: '', success: '' })
     try {
       await actOnServiceTask(taskPublicId, action)
-      if (!this.isCurrentTableRequest(request)) return
+      if (!guard.isCurrentWrite(request)) return
       this.setData({
         feedbackTaskId: '',
         success: action === 'confirm' ? '感谢确认，本次服务已经解决。' : '已继续升级处理，值班负责人会跟进。',
       })
       await this.loadData()
     } catch (error) {
-      if (this.isCurrentTableRequest(request)) this.setData({ error: customerErrorMessage(error, '反馈没有送达，请稍后重试') })
-    } finally { if (this.isCurrentTableRequest(request)) this.setData({ feedbackTaskId: '' }) }
+      if (guard.isCurrentWrite(request)) this.setData({ error: customerErrorMessage(error, '反馈结果尚未确认，可重试核对原请求') })
+    } finally { if (guard.finishWrite(request)) this.setData({ feedbackTaskId: '' }) }
   },
 
   openService() { wx.navigateTo({ url: '/pages/service/index' }) },

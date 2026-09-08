@@ -15,6 +15,7 @@ import type {
   StaffParticipantMovementPreview,
 } from './types'
 import type { OnlinePaymentAction } from '../../shared/online-payment-contracts'
+import { executeRecoverableCommand } from '../recoverable-command'
 
 export class StaffActionsApiError extends Error {
   readonly code: string
@@ -39,6 +40,7 @@ export class StaffActionsApiError extends Error {
 }
 
 export interface AssistedOrderAccess {
+  employeeId?: string
   canCreateOrder: boolean
   canInitiatePayment: boolean
   paymentInitiationBlockReason: 'permission_required' | 'provider_not_configured' | 'online_payment_unavailable' | null
@@ -386,6 +388,7 @@ export interface StaffActionsApiOptions {
 }
 
 export class StaffActionsApi implements StaffActionsApiPort {
+  private employeeId = 'current-session'
   private readonly send: typeof fetch
   private readonly timeoutMs: number
   private readonly createIdempotencyKey: () => string
@@ -626,8 +629,10 @@ export class StaffActionsApi implements StaffActionsApiPort {
     )
   }
 
-  loadAssistedOrderAccess(signal?: AbortSignal): Promise<AssistedOrderAccess> {
-    return this.getData('/api/commerce/assisted-order-access', signal)
+  async loadAssistedOrderAccess(signal?: AbortSignal): Promise<AssistedOrderAccess> {
+    const access = await this.getData<AssistedOrderAccess>('/api/commerce/assisted-order-access', signal)
+    if (!signal?.aborted && access.employeeId) this.employeeId = access.employeeId
+    return access
   }
 
   async loadTableOrderDetails(tableSessionId: string, signal?: AbortSignal): Promise<StaffTableOrderDetail[]> {
@@ -680,11 +685,14 @@ export class StaffActionsApi implements StaffActionsApiPort {
     giftReason?: string
     settlementMode: 'immediate_payment' | 'table_tab'
   }>): Promise<AssistedOrderResult> {
+    const { assistedOrderContextToken, ...businessInput } = input
+    return executeRecoverableCommand(`${this.employeeId}:assisted-order:${input.tableSessionId}`, businessInput,
+      `staff-order-${this.createIdempotencyKey()}`, async (idempotencyKey) => {
     const headers = new Headers({
       accept: 'application/json',
       'content-type': 'application/json',
-      'idempotency-key': `staff-order-${this.createIdempotencyKey()}`,
-      'x-assisted-order-context': input.assistedOrderContextToken,
+      'idempotency-key': idempotencyKey,
+      'x-assisted-order-context': assistedOrderContextToken,
     })
     const response = await this.request('/api/commerce/orders', {
       method: 'POST', headers, body: JSON.stringify(input),
@@ -694,6 +702,7 @@ export class StaffActionsApi implements StaffActionsApiPort {
       throw new StaffActionsApiError('订单结果无法识别，请到订单列表核对', 'INVALID_RESPONSE', response.status)
     }
     return body as unknown as AssistedOrderResult
+    })
   }
 
   async createOnlinePayment(input: Readonly<{

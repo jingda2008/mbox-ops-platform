@@ -91,11 +91,12 @@ Page({
 
   async submitService(id, requestType, detail, relatedOrderPublicId) {
     if (this.data.submittingId) return
-    const request = this.beginTableRequest()
+    const guard = this.ensureTableRequestGuard()
+    const request = guard.beginWrite(tableRequestScope(getTableSession()), 'service')
     this.setData({ submittingId: id, error: '', success: '' })
     try {
       const response = await createServiceTask({ requestType, detail, relatedOrderPublicId })
-      if (!this.isCurrentTableRequest(request)) return
+      if (!guard.isCurrentWrite(request)) return
       const task = response.data || response
       const record = {
         publicId: task.taskPublicId || `local-${Date.now()}`,
@@ -113,8 +114,8 @@ Page({
       })
       this.setData({ tableCode: getTableSession().tableCode, success: task.message || '收到，我们马上来照顾您。', note: '' })
     } catch (error) {
-      if (this.isCurrentTableRequest(request)) this.setData({ error: customerErrorMessage(error, '请求暂时没有送达，请稍后重试') })
-    } finally { if (this.isCurrentTableRequest(request)) this.setData({ submittingId: '' }) }
+      if (guard.isCurrentWrite(request)) this.setData({ error: customerErrorMessage(error, '请求结果尚未确认，可重试核对原请求') })
+    } finally { if (guard.finishWrite(request)) this.setData({ submittingId: '' }) }
   },
 
   openStatus() { runtime.navigateTo({ url: '/pages/status/index' }) },

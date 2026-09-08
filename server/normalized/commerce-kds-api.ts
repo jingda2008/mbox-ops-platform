@@ -433,6 +433,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
     return reply.send({
       data: {
         canCreateOrder,
+        employeeId: context.employeeId,
         canInitiatePayment: paymentInitiationBlockReason === null,
         paymentInitiationBlockReason,
         canQueryOnlinePayment: access.permissions.includes('reconciliation.view'),

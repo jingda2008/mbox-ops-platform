@@ -342,10 +342,11 @@ Page({
     this.setData({ performancePanel: 'tonight' })
   },
 
+  onPerformerImageError() { this.setData({ performerImageFailed: true }) },
   openPerformerProfile() {
     const performance = this.data.performance
     if (performance && performance.hasSchedule) {
-      this.setData({ performancePanel: 'performer' })
+      this.setData({ performancePanel: 'performer', performerImageFailed: false })
       return
     }
     if (performance && performance.schedules && performance.schedules.length) {

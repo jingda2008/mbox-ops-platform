@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { executeRecoverableCommand } from './recoverable-command'
 import {
   BarChart3,
   CalendarClock,
@@ -388,10 +389,10 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
         if (auth.permissions.includes('commercial.profit.view')) {
           const response = await api.getEndpoint<{ data: unknown }>('/api/commercial-ops/profit?period=day')
           setData({ ...emptyData, profit: profitView(response.data) })
-        } else {
+        } else if (auth.permissions.some((permission) => ['commercial.sales.view', 'commercial.sales.view_all'].includes(permission))) {
           const response = await api.getEndpoint<{ data: unknown }>('/api/commercial-ops/employee-sales')
           setData({ ...emptyData, employeeSales: employeeSales(response.data) })
-        }
+        } else setData(emptyData)
       } else if (module === 'experience') {
         if (auth.permissions.includes('customer.experience.view')) {
           const response = await api.getEndpoint<{ data: unknown }>('/api/staff/customer-experience/dashboard')
@@ -534,6 +535,14 @@ function PerformanceModule({ api, auth, view, performers, requests, phases, onCh
   onChanged(): Promise<void>
 }) {
   const { confirmAction } = useConfirmationDialog()
+  function postCommand(endpoint: string, body: unknown, options: { idempotencyKey: string }) {
+    return executeRecoverableCommand(auth.employee.id + ':POST:' + endpoint, body, options.idempotencyKey,
+      (idempotencyKey) => api.postEndpoint(endpoint, body, { idempotencyKey }))
+  }
+  function patchCommand(endpoint: string, body: unknown, options: { idempotencyKey: string }) {
+    return executeRecoverableCommand(auth.employee.id + ':PATCH:' + endpoint, body, options.idempotencyKey,
+      (idempotencyKey) => api.patchEndpoint(endpoint, body, { idempotencyKey }))
+  }
   const schedules = view?.schedules ?? []
   const stalePhases = phases.filter((phase) => (
     schedules.find((schedule) => schedule.id === phase.scheduleId)?.status !== 'performing'
@@ -564,53 +573,70 @@ function PerformanceModule({ api, auth, view, performers, requests, phases, onCh
   const [endsAt, setEndsAt] = useState('')
   const [quotes, setQuotes] = useState<Record<string, string>>({})
   const [phaseChoice, setPhaseChoice] = useState<Record<string, PerformancePhaseCode>>({})
+  const catalogGeneration = useRef(0)
+  const catalogIdentity = useRef(catalogPerformerId)
+  catalogIdentity.current = catalogPerformerId
+  const writeInFlight = useRef(false)
 
-  const selectedPerformer = performers.find((performer) => performer.id === catalogPerformerId) ?? performers[0]
+  const selectedPerformer = performers.find((performer) => performer.id === catalogPerformerId)
 
   useEffect(() => {
     if (catalogPerformerId === '' && performers[0] !== undefined) setCatalogPerformerId(performers[0].id)
   }, [catalogPerformerId, performers])
 
   const loadCatalog = useCallback(async (performerId: string, search: string) => {
+    if (catalogIdentity.current !== performerId) return
+    const generation = ++catalogGeneration.current
+    const current = () => generation === catalogGeneration.current && catalogIdentity.current === performerId
     if (performerId === '') { setCatalogSongs([]); return }
     setCatalogLoading(true)
     try {
       const response = await api.getEndpoint<{ data: unknown }>(`/api/staff/performers/${performerId}/songs?search=${encodeURIComponent(search.trim())}&limit=500`)
+      if (!current()) return
       setCatalogSongs(performerSongEntries(response.data))
     } catch (error) {
+      if (!current()) return
       setNotice(error instanceof Error ? error.message : '歌单读取失败')
     } finally {
-      setCatalogLoading(false)
+      if (current()) setCatalogLoading(false)
     }
   }, [api])
 
   useEffect(() => {
+    setCatalogSongs([])
+    setEditingSong(null)
     if (form === 'songs' && catalogPerformerId !== '') void loadCatalog(catalogPerformerId, '')
+    return () => { catalogGeneration.current += 1 }
   }, [catalogPerformerId, form, loadCatalog])
 
-  async function run(key: string, operation: () => Promise<unknown>, success: string) {
-    if (busyKey !== null) return
+  async function run(key: string, operation: () => Promise<unknown>, success: string): Promise<boolean> {
+    if (writeInFlight.current) return false
+    writeInFlight.current = true
     setBusyKey(key)
     setNotice('')
     try {
       await operation()
       setNotice(success)
-      await onChanged()
+      try { await onChanged() } catch { setNotice(`${success}；列表刷新失败，请重新读取，不必再次提交`) }
+      return true
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '操作未完成，请核对后重试')
+      return false
     } finally {
+      writeInFlight.current = false
       setBusyKey(null)
     }
   }
 
   async function createPerformer(event: React.FormEvent) {
     event.preventDefault()
-    await run('performer-create', () => api.postEndpoint('/api/staff/performers', {
+    const succeeded = await run('performer-create', () => postCommand('/api/staff/performers', {
       code: performerCode.trim(),
       stageName: stageName.trim(),
       profileSnapshot: { genres: genres.split(/[，,]/).map((value) => value.trim()).filter(Boolean) },
       status: 'active',
     }, { idempotencyKey: operationIdempotency('performer-create') }), '演员资料已建立')
+    if (!succeeded) return
     setPerformerCode('')
     setStageName('')
     setGenres('')
@@ -628,7 +654,7 @@ function PerformanceModule({ api, auth, view, performers, requests, phases, onCh
   async function updatePerformer(event: React.FormEvent) {
     event.preventDefault()
     if (selectedPerformer === undefined) return
-    await run(`performer-update-${selectedPerformer.id}`, () => api.patchEndpoint(`/api/staff/performers/${selectedPerformer.id}`, {
+    await run(`performer-update-${selectedPerformer.id}`, () => patchCommand(`/api/staff/performers/${selectedPerformer.id}`, {
       stageName: editPerformerName.trim(),
       profileSnapshot: { ...selectedPerformer.profileSnapshot, genres: editPerformerGenres.split(/[，,]/).map((value) => value.trim()).filter(Boolean) },
       status: editPerformerStatus,
@@ -647,14 +673,16 @@ function PerformanceModule({ api, auth, view, performers, requests, phases, onCh
     }
     if (songs.length === 0 && catalogMode !== 'replace') { setNotice('追加导入至少需要一首歌曲'); return }
     if (catalogMode === 'replace' && !(await confirmAction({title:'确认替换演员歌单',description:`用当前${songs.length}首歌曲替换该演员的可用歌单后，未列出的歌曲将停用。`,confirmLabel:'确认替换',tone:'danger'}))) return
-    await run(`song-import-${catalogPerformerId}`, () => api.postEndpoint(`/api/staff/performers/${catalogPerformerId}/songs/import`, {
+    const succeeded = await run(`song-import-${catalogPerformerId}`, () => postCommand(`/api/staff/performers/${catalogPerformerId}/songs/import`, {
       sourceName: '员工端批量维护', mode: catalogMode, songs,
     }, { idempotencyKey: operationIdempotency('song-import') }), `已导入${songs.length}首歌曲`)
+    if (!succeeded || catalogIdentity.current !== catalogPerformerId) return
     setCatalogRows('')
     await loadCatalog(catalogPerformerId, catalogSearch)
   }
 
   function beginSongEdit(song: PerformerSongEntry) {
+    if (song.performerId !== catalogPerformerId || catalogLoading || !catalogSongs.some((item) => item.id === song.id)) return
     setEditingSong(song)
     setEditSongCode(song.code ?? '')
     setEditSongTitle(song.title)
@@ -663,19 +691,21 @@ function PerformanceModule({ api, auth, view, performers, requests, phases, onCh
 
   async function updateSong(event: React.FormEvent) {
     event.preventDefault()
-    if (editingSong === null) return
-    await run(`song-update-${editingSong.id}`, () => api.patchEndpoint(`/api/staff/songs/${editingSong.id}`, {
+    if (editingSong === null || editingSong.performerId !== catalogPerformerId || catalogLoading || !catalogSongs.some((item) => item.id === editingSong.id)) return
+    const succeeded = await run(`song-update-${editingSong.id}`, () => patchCommand(`/api/staff/songs/${editingSong.id}`, {
       code: editSongCode.trim() || null,
       title: editSongTitle.trim(),
       aliases: editSongAliases.split(/[，,]/).map((value) => value.trim()).filter(Boolean),
     }, { idempotencyKey: operationIdempotency('song-update') }), '歌曲资料已更新')
+    if (!succeeded || catalogIdentity.current !== catalogPerformerId) return
     setEditingSong(null)
     await loadCatalog(catalogPerformerId, catalogSearch)
   }
 
   async function deactivateSong(song: PerformerSongEntry) {
     if (!(await confirmAction({title:'确认停用歌曲',description:`停用“${song.title}”后，顾客不能再从该演员歌单点选。`,confirmLabel:'确认停用',tone:'danger'}))) return
-    await run(`song-disable-${song.id}`, () => api.patchEndpoint(`/api/staff/songs/${song.id}`, { status: 'inactive' }, {
+    if (song.performerId !== catalogPerformerId || catalogIdentity.current !== catalogPerformerId || catalogLoading || !catalogSongs.some((item) => item.id === song.id)) return
+    await run(`song-disable-${song.id}`, () => patchCommand(`/api/staff/songs/${song.id}`, { status: 'inactive' }, {
       idempotencyKey: operationIdempotency('song-disable'),
     }), '歌曲已停用')
     await loadCatalog(catalogPerformerId, catalogSearch)
@@ -695,22 +725,23 @@ function PerformanceModule({ api, auth, view, performers, requests, phases, onCh
       return
     }
     if (Date.parse(end) <= Date.parse(start)) { setNotice('结束时间必须晚于开始时间'); return }
-    await run('schedule-create', () => api.postEndpoint('/api/staff/schedules', {
+    const succeeded = await run('schedule-create', () => postCommand('/api/staff/schedules', {
       performerId, startsAt: start, endsAt: end, sortOrder: schedules.length,
     }, { idempotencyKey: operationIdempotency('schedule-create') }), '演出场次已保存并对顾客可见')
+    if (!succeeded) return
     setStartsAt('')
     setEndsAt('')
   }
 
   function transitionSchedule(schedule: ScheduleEntry, targetStatus: 'performing' | 'completed') {
-    void run(`schedule-${schedule.id}-${targetStatus}`, () => api.postEndpoint(`/api/staff/schedules/${schedule.id}/status`, { targetStatus }, {
+    void run(`schedule-${schedule.id}-${targetStatus}`, () => postCommand(`/api/staff/schedules/${schedule.id}/status`, { targetStatus }, {
       idempotencyKey: operationIdempotency(`schedule-${targetStatus}`),
     }), targetStatus === 'performing' ? '已切换为演出中' : '已标记演出结束')
   }
 
   function startPhase(schedule: ScheduleEntry) {
     const phaseCode = phaseChoice[schedule.id] ?? 'band_live'
-    void run(`phase-${schedule.id}-start`, () => api.postEndpoint(
+    void run(`phase-${schedule.id}-start`, () => postCommand(
       `/api/staff/customer-experience/schedules/${schedule.id}/performance-phases`,
       { phaseCode, reason: '舞台授权人员确认现场阶段开始' },
       { idempotencyKey: operationIdempotency('performance-phase-start') },
@@ -719,7 +750,7 @@ function PerformanceModule({ api, auth, view, performers, requests, phases, onCh
 
   async function transitionPhase(event: PerformancePhaseEvent, action: 'end' | 'cancel') {
     if (action === 'cancel' && !(await confirmAction({title:'确认取消现场阶段记录',description:'取消后受阶段限制的商品将停止推荐。',confirmLabel:'确认取消',tone:'danger'}))) return
-    void run(`phase-${event.publicId}-${action}`, () => api.postEndpoint(
+    void run(`phase-${event.publicId}-${action}`, () => postCommand(
       `/api/staff/customer-experience/performance-phases/${event.publicId}/${action}`,
       { reason: action === 'end' ? '舞台授权人员确认本阶段结束' : '舞台授权人员确认阶段记录取消' },
       { idempotencyKey: operationIdempotency(`performance-phase-${action}`) },
@@ -735,7 +766,7 @@ function PerformanceModule({ api, auth, view, performers, requests, phases, onCh
       setNotice('请填写有效的点歌报价；免费可填0')
       return
     }
-    void run(`song-${request.id}-${action}`, () => api.postEndpoint(`/api/staff/song-requests/${request.id}/${action}`, body, {
+    void run(`song-${request.id}-${action}`, () => postCommand(`/api/staff/song-requests/${request.id}/${action}`, body, {
       idempotencyKey: operationIdempotency(`song-${action}`),
     }), action === 'confirm' ? '点歌需求已接受' : action === 'reject' ? '点歌需求已拒绝' : action === 'performed' ? '已记录演唱完成' : '点歌需求已取消')
   }
@@ -1283,11 +1314,14 @@ function formatEmployeeInventoryQuantity(item: InventoryItemView): string {
 }
 
 function OperationsModule({ api, auth, view, sales, canViewProfit }: { api: NormalizedApiClient; auth: StaffAuthView; view: ProfitView | null; sales: EmployeeSalesView[]; canViewProfit: boolean }) {
+  const finance = auth.permissions.some((permission) => ['commercial.cost.view', 'commercial.cost.manage', 'commercial.payroll.view', 'commercial.payroll.manage', 'commercial.payroll.post'].includes(permission))
+    ? <OwnerFinancePanel api={api} auth={auth} /> : null
   if (!canViewProfit) return <div className="staff-module-body">
+    {finance}
     <div className="staff-module-summary"><span><BarChart3 size={18} /></span><div><strong>客户与销售</strong><small>仅显示当前账号权限范围内的销售归属，不展示门店利润与成本。</small></div></div>
     {sales.length === 0 ? <EmptyState text="当前范围暂无销售归属数据" /> : <div className="staff-module-list">{sales.slice(0, 30).map((item) => <article key={`${item.employeeId}:${item.productId}`}><div><strong>{item.productName}</strong><small>{item.employeeDisplayName} · {item.quantity}件</small></div><b>¥{formatAmount(item.salesAmountMinor)}</b></article>)}</div>}
   </div>
-  if (view === null) return <EmptyState text="本营业日暂无经营数据" />
+  if (view === null) return <div className="staff-module-body">{finance}<EmptyState text="本营业日暂无经营数据" /></div>
   return <div className="staff-module-body">
     <div className="staff-module-summary"><span><BarChart3 size={18} /></span><div><strong>{view.range.startDate} 营业概览</strong><small>{view.status === 'complete' ? '数据已完整核对' : '当日数据暂估，后补成本会自动更新'}</small></div></div>
     <div className="staff-metric-grid">
@@ -1301,7 +1335,7 @@ function OperationsModule({ api, auth, view, sales, canViewProfit }: { api: Norm
     </div>
     {(view.gaps.orderItemsMissingCostCount > 0 || view.gaps.inventoryLossesMissingCostCount > 0) && <p className="staff-module-warning">有 {view.gaps.orderItemsMissingCostCount} 个已售单品和 {view.gaps.inventoryLossesMissingCostCount} 笔损耗缺少成本，当前利润只能作为暂估。</p>}
     {view.caveats.length > 0 && <p className="staff-module-footnote">{view.caveats[0]}</p>}
-    {auth.permissions.includes('commercial.cost.manage') && <OwnerFinancePanel api={api} auth={auth} />}
+    {finance}
   </div>
 }
 

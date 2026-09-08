@@ -82,7 +82,7 @@
       <button class="membership-invite__privacy" bindtap="showMembershipTerms">查看会员权益说明</button>
     </view>
 
-    <view class="recommend-entry">
+    <view class="recommend-entry {{recommendationEmpty && !recommendations.length ? 'recommend-entry--compact' : ''}}">
       <view class="recommend-entry__head"><view><text>今夜甄选</text><text>先为这桌挑三款</text></view></view>
       <scroll-view wx:if="{{recommendations.length}}" scroll-x enhanced show-scrollbar="{{false}}" class="recommend-scroll"><view class="recommend-row">
         <view wx:for="{{recommendations}}" wx:key="productId" class="recommend-card {{index === 0 ? 'recommend-card--priority' : ''}}">
@@ -140,7 +140,7 @@
     <view class="product-detail-sheet {{detailProduct.productKind === 'bundle' ? 'is-bundle' : ''}}" catchtap="keepProductDetailOpen">
       <button class="product-detail-close compact-icon-action" aria-label="关闭商品详情" catchtap="closeProductDetail">×</button>
       <scroll-view scroll-y class="product-detail-scroll">
-        <view class="product-detail-hero" catchtap="previewProductImage">
+        <view wx:if="{{!detailProduct.selectionSource || !detailProduct.bundleChoiceGroups.length || detailInformationExpanded}}" class="product-detail-hero" catchtap="previewProductImage">
           <image wx:if="{{detailProduct.imageUrl}}" src="{{detailProduct.imageUrl}}" mode="aspectFill" />
           <view wx:else class="product-detail-placeholder"><text>M-BOX</text></view>
           <text wx:if="{{detailProduct.imageUrl}}" class="product-detail-preview-hint">点击查看全屏大图</text>
@@ -149,8 +149,9 @@
           <text class="product-detail-kind">{{detailProduct.productKind === 'bundle' ? '体验组合' : detailProduct.categoryName}}</text>
           <text class="product-detail-name">{{detailProduct.name}}</text>
           <text wx:if="{{detailProduct.specification}}" class="product-detail-specification">规格：{{detailProduct.specification}}</text>
-          <text class="product-detail-description">{{detailProduct.description || '详情以当晚正式菜单为准'}}</text>
-          <view wx:if="{{detailProduct.productKind === 'bundle' && detailProduct.bundleComponents.length}}" class="product-detail-components">
+          <button wx:if="{{detailProduct.selectionSource && detailProduct.bundleChoiceGroups.length}}" class="detail-info-toggle" bindtap="toggleDetailInformation">{{detailInformationExpanded ? '收起介绍，选择酒水' : '查看套餐图片与固定组成'}}</button>
+          <text wx:if="{{!detailProduct.selectionSource || !detailProduct.bundleChoiceGroups.length || detailInformationExpanded}}" class="product-detail-description">{{detailProduct.description || '详情以当晚正式菜单为准'}}</text>
+          <view wx:if="{{detailProduct.productKind === 'bundle' && detailProduct.bundleComponents.length && (!detailProduct.selectionSource || !detailProduct.bundleChoiceGroups.length || detailInformationExpanded)}}" class="product-detail-components">
             <text class="product-detail-section-title">组合内容</text>
             <view wx:for="{{detailProduct.bundleComponents}}" wx:key="productId" class="product-detail-component"><text>{{item.name}}</text><text>× {{item.quantity}}</text></view>
           </view>

@@ -15,7 +15,8 @@ describe('TablePaymentSheet', () => {
   it('can query a persisted unresolved attempt and offers cash beside both scan methods', () => {
     const source = readFileSync(new URL('./TablePaymentSheet.tsx', import.meta.url), 'utf8')
 
-    expect(source).toContain('action?.paymentId ?? selected?.unresolvedOnlinePaymentId ?? null')
+    expect(source).toContain('actionOrderId.current === selectedOrderId ? action : null')
+    expect(source).toContain('ownedAction?.paymentId ?? selected?.unresolvedOnlinePaymentId ?? null')
     expect(source).toContain('api.queryOnlinePayment(activePaymentId)')
     expect(source).toContain('确认已收到现金')
     expect(source).toContain("provider: 'cash'")

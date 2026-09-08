@@ -35,9 +35,11 @@ button { letter-spacing: 0; transition: transform 100ms ease, opacity 100ms ease
   box-shadow: 0 3rpx 10rpx rgba(45, 38, 31, .045);
   content: "";
   pointer-events: none;
+  z-index: -1;
   transform: translate(-50%, -50%);
   transition: transform 100ms ease, background 100ms ease;
 }
+.compact-icon-action.compact-icon-action, .compact-text-action.compact-text-action { z-index:0; }
 .compact-icon-action::before { width: 48rpx; height: 48rpx; border-radius: 50%; }
 .compact-text-action::before { width: 80rpx; height: 48rpx; border-radius: 24rpx; }
 .compact-icon-action::after,
@@ -69,7 +71,7 @@ button { letter-spacing: 0; transition: transform 100ms ease, opacity 100ms ease
 .warning { margin-bottom: 22rpx; padding: 18rpx 20rpx; border-left: 5rpx solid #b98a50; border-radius: 12rpx; background: #fcf5e8; color: #735934; font-size: 23rpx; line-height: 1.6; }
 .error-banner { margin-bottom: 22rpx; padding: 18rpx 20rpx; border-left: 5rpx solid #984f43; border-radius: 12rpx; background: #faeeeb; color: #7c3930; font-size: 24rpx; line-height: 1.6; }
 .success-banner { margin-bottom: 22rpx; padding: 18rpx 20rpx; border-left: 5rpx solid #557461; border-radius: 12rpx; background: #edf4ef; color: #3b6048; font-size: 24rpx; line-height: 1.6; }
-.primary-button, .secondary-button, .danger-button { min-height: 88rpx; border-radius: 999rpx; font-size: 28rpx; font-weight: 600; line-height: 88rpx; }
+.primary-button.primary-button, .secondary-button.secondary-button, .danger-button.danger-button { box-sizing:border-box; width:100%; min-width:0; margin-right:0; margin-left:0; white-space:normal; min-height: 88rpx; border-radius: 999rpx; font-size: 28rpx; font-weight: 600; line-height: 88rpx; }
 .primary-button { background: linear-gradient(145deg, #315d46, #214635); color: #fffdf8; box-shadow: 0 10rpx 24rpx rgba(35, 78, 58, .16); }
 .secondary-button { border: 1rpx solid #b9c8bf; background: #fffdfa; color: #315d46; }
 .danger-button { background: #8d493e; color: #fffdf8; }

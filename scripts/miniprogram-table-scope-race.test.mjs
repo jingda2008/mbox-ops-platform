@@ -108,6 +108,7 @@ async function loadApiRaceModule(state) {
         },
       }
       if (specifier === './id') return { randomId: (prefix) => `${prefix}-scope-test` }
+      if (specifier === './recoverable-command') return { recoverableGuestCommand: (_operation, _body, send) => send('scope-command-test') }
       if (specifier === './session') return {
         getTableSession: () => state.session,
         rememberTableConnection: (value) => {

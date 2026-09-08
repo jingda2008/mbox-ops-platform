@@ -1,13 +1,13 @@
 .service-page{padding-top:0}
-.service-head{margin:0 -28rpx 28rpx;padding:46rpx 28rpx 42rpx;background:linear-gradient(145deg,#191715,#302a25);color:#fff}
+.service-head{margin:0 -28rpx 22rpx;padding:28rpx 28rpx;background:linear-gradient(145deg,#191715,#302a25);color:#fff}
 .service-title,.service-copy{display:block}
 .service-title{margin-top:8rpx;font-family:"Songti SC","STSong",serif;font-size:43rpx;font-weight:600}
 .service-copy{margin-top:13rpx;color:#cbc3b8;font-size:23rpx;line-height:1.55}
-.service-grid{display:grid;grid-template-columns:1fr 1fr;gap:14rpx}
-.service-grid button{display:flex;min-height:152rpx;margin:0;padding:22rpx;align-items:center;border:1rpx solid #ddd7cf;border-radius:20rpx;background:#fff;color:#2c2925;text-align:left;gap:18rpx}
+.service-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12rpx}
+.service-option.service-option{box-sizing:border-box;display:flex;width:100%;min-width:0;min-height:100rpx;margin:0;padding:16rpx 8rpx;flex-direction:column;justify-content:center;align-items:center;border:1rpx solid #ddd7cf;border-radius:16rpx;background:#fff;color:#2c2925;text-align:center;line-height:1.4;white-space:normal;gap:10rpx}
 .service-grid button::after{border:0}
-.service-mark{display:flex;width:58rpx;height:58rpx;align-items:center;justify-content:center;flex:0 0 auto;border-radius:50%;background:#eee6da;color:#795a35;font-size:22rpx;font-weight:700}
-.service-item__name{font-size:26rpx;font-weight:700}
+.service-mark{display:flex;width:44rpx;height:44rpx;align-items:center;justify-content:center;flex:0 0 auto;border-radius:50%;background:#eee6da;color:#795a35;font-size:22rpx;font-weight:700}
+.service-item__name{font-size:23rpx;font-weight:700;word-break:break-word}
 .custom-panel{padding:26rpx;border:1rpx solid #ddd7cf;border-radius:20rpx;background:#fff}
 .custom-panel textarea{width:100%;min-height:180rpx;padding:20rpx;border:1rpx solid #d8d1c8;border-radius:16rpx;background:#fbfaf8;font-size:24rpx;line-height:1.5}
 .custom-panel .primary-button{margin-top:18rpx}
@@ -21,5 +21,5 @@
 .manager-entry view text:last-child{margin-top:7rpx;color:#8d6c65;font-size:20rpx}
 .manager-entry>text{font-size:34rpx}
 .status-link{margin-top:16rpx}
-@media(max-width:390px){.service-head{margin-right:-22rpx;margin-left:-22rpx;padding-right:22rpx;padding-left:22rpx}.service-grid{grid-template-columns:1fr}.service-grid button{min-height:126rpx}.manager-order{display:block}.manager-order picker{max-width:100%;margin-top:8rpx;text-align:left}}
-@media(max-width:360px){.service-head{margin-right:-18rpx;margin-left:-18rpx;padding-right:18rpx;padding-left:18rpx}.service-grid button{min-height:112rpx;padding:18rpx}.custom-panel{padding:20rpx}}
+@media(max-width:390px){.service-head{margin-right:-22rpx;margin-left:-22rpx;padding-right:22rpx;padding-left:22rpx}.manager-order{display:block}.manager-order picker{max-width:100%;margin-top:8rpx;text-align:left}}
+@media(max-width:360px){.service-head{margin-right:-18rpx;margin-left:-18rpx;padding-right:18rpx;padding-left:18rpx}.service-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.service-option.service-option{min-height:54px;flex-direction:row;padding:10rpx}.custom-panel{padding:20rpx}}

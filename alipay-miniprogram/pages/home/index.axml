@@ -156,7 +156,7 @@
       <view a:if="{{performancePanel === 'tonight'}}" class="performance-panel__schedule">
         <view a:for="{{performance.schedules}}" a:key="id" class="performance-schedule-row {{item.stateText === '正在演出' ? 'is-current' : ''}}"><view><text>{{item.stateText}}</text><text>{{item.timeText}}</text></view><view><text>{{item.performer}}</text><text>{{item.tags || '现场演出'}}</text></view></view>
       </view>
-      <view a:else class="performance-panel__artist"><image a:if="{{performance.imageUrl}}" src="{{performance.imageUrl}}" mode="aspectFill" /><view><text>{{performance.performer}}</text><text>{{performance.tags || 'M-BOX 当晚舞台阵容'}}</text><text>{{performance.bio || '更多介绍由门店发布后展示。'}}</text></view></view>
+      <view a:else class="performance-panel__artist {{!performance.imageUrl || performerImageFailed ? 'performance-panel__artist--text' : ''}}"><image a:if="{{performance.imageUrl && !performerImageFailed}}" src="{{performance.imageUrl}}" mode="aspectFill" onError="onPerformerImageError" /><view><text>{{performance.performer}}</text><text>{{performance.tags || 'M-BOX 当晚舞台阵容'}}</text><text>{{performance.bio || '更多介绍由门店发布后展示。'}}</text></view></view>
       <text class="performance-panel__note">演出时间与阵容以当晚安排为准。</text>
     </view>
   </view>

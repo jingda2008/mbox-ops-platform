@@ -843,6 +843,7 @@ Page({
   },
 
   async requestBenefitUse(event) {
+    if (this.data.benefitBusyId) return
     if (!this.requireMembership()) return
     const id = event.currentTarget.dataset.id
     if (!this.data.hasTableContext) return runtime.showModal({ title: '到店后使用', content: '请入座并扫描桌码后申请使用，现场人员确认后才会核销。', showCancel: false })

@@ -1,5 +1,6 @@
 const { request, deviceKey } = require('./request')
 const { randomId } = require('./id')
+const { recoverableGuestCommand } = require('./recoverable-command')
 const { getTableSession, rememberTableConnection, clearTableConnection } = require('./session')
 const { tableRequestScope } = require('./table-request-scope')
 const { ensureCustomerSession, renewReservationSessionOnly, isCustomerSessionInvalid, isWechatIdentityUnavailable } = require('./auth')
@@ -874,23 +875,23 @@ async function abandonGuestCheckout(orderPublicId, idempotencyKey) {
   })).data
 }
 async function createServiceTask(input) {
-  return request('/api/guest/service-requests', {
-    method: 'POST', headers: { 'idempotency-key': randomId('guest-service') },
+  return recoverableGuestCommand('service', input, (idempotencyKey) => request('/api/guest/service-requests', {
+    method: 'POST', headers: { 'idempotency-key': idempotencyKey },
     data: {
       requestType: input.requestType || 'custom',
       detail: input.detail || null,
       relatedOrderPublicId: input.relatedOrderPublicId || null,
     },
-  })
+  }))
 }
 async function getServiceRequests() {
   return (await request('/api/guest/service-requests')).data
 }
 async function actOnServiceTask(taskPublicId, action) {
-  return (await request(`/api/guest/service-requests/${encodeURIComponent(taskPublicId)}/feedback`, {
-    method: 'POST', headers: { 'idempotency-key': randomId(`guest-service-feedback-${taskPublicId}-${action}`) },
+  return (await recoverableGuestCommand(`feedback:${taskPublicId}`, { action }, (idempotencyKey) => request(`/api/guest/service-requests/${encodeURIComponent(taskPublicId)}/feedback`, {
+    method: 'POST', headers: { 'idempotency-key': idempotencyKey },
     data: { action },
-  })).data
+  }))).data
 }
 async function getCustomerBenefits() {
   return (await publicRequest('/api/public/mini/customer/benefits')).data
@@ -899,9 +900,9 @@ async function getCustomerProfile() {
   return (await publicRequest('/api/public/mini/customer/profile')).data
 }
 async function reserveCustomerBenefit(benefitId, quantity) {
-  return (await request(`/api/guest/customer/benefits/${encodeURIComponent(benefitId)}/reservations`, {
-    method: 'POST', headers: { 'idempotency-key': randomId(`guest-benefit-${benefitId}`) }, data: { quantity: quantity || 1 },
-  })).data
+  return (await recoverableGuestCommand(`benefit:${benefitId}`, { quantity: quantity || 1 }, (idempotencyKey) => request(`/api/guest/customer/benefits/${encodeURIComponent(benefitId)}/reservations`, {
+    method: 'POST', headers: { 'idempotency-key': idempotencyKey }, data: { quantity: quantity || 1 },
+  }))).data
 }
 async function claimAnnualDailySnack() {
   return (await request('/api/guest/customer/annual-daily-snacks/claim', {

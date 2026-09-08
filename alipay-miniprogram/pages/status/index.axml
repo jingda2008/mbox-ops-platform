@@ -7,7 +7,7 @@
       <view a:for="{{tasks}}" a:key="publicId" class="status-card">
         <view class="status-card__head"><view><text class="status-card__name">{{item.name}}</text><text class="status-card__time">{{item.createdAtText}}</text></view><text class="status-chip status-chip--{{item.status}}">{{item.statusText}}</text></view>
         <text a:if="{{item.detail}}" class="status-detail">{{item.detail}}</text><text class="status-owner">{{item.ownerText}}</text><text a:if="{{item.requestCountText}}" class="status-owner">{{item.requestCountText}}</text>
-        <view a:if="{{live && (item.canConfirm || item.canEscalate)}}" class="feedback-actions" style="grid-template-columns:1fr"><button a:if="{{item.canConfirm}}" data-id="{{item.publicId}}" data-action="confirm" disabled="{{feedbackTaskId}}" onTap="submitFeedback">已经解决</button><button a:if="{{item.canEscalate}}" data-id="{{item.publicId}}" data-action="escalate" disabled="{{feedbackTaskId}}" onTap="submitFeedback">仍未解决，催办</button></view>
+        <view a:if="{{live && (item.canConfirm || item.canEscalate)}}" class="feedback-actions" style="grid-template-columns:1fr"><button class="feedback-action" a:if="{{item.canConfirm}}" data-id="{{item.publicId}}" data-action="confirm" disabled="{{feedbackTaskId}}" onTap="submitFeedback">已经解决</button><button class="feedback-action" a:if="{{item.canEscalate}}" data-id="{{item.publicId}}" data-action="escalate" disabled="{{feedbackTaskId}}" onTap="submitFeedback">仍未解决，催办</button></view>
       </view>
     </view>
     <state-panel a:else type="empty" title="暂无服务记录" message="提交桌边服务后，进展会显示在这里" />

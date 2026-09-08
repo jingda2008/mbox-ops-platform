@@ -492,6 +492,8 @@
 .performance-schedule-row view:last-child text:first-child { font-size: 27rpx; font-weight: 650; }
 .performance-schedule-row view:last-child text:last-child { margin-top: 6rpx; color: #7c746b; font-size: 19rpx; }
 .performance-panel__artist { display: grid; margin-top: 28rpx; grid-template-columns: 180rpx minmax(0, 1fr); gap: 24rpx; }
+.performance-panel__artist--text { grid-template-columns: minmax(0,1fr); }
+.performance-panel__artist > view { min-width:0; white-space:normal; overflow-wrap:anywhere; }
 .performance-panel__artist image { width: 180rpx; height: 220rpx; border-radius: 20rpx; background: #27211c; }
 .performance-panel__artist view text { display: block; }
 .performance-panel__artist view text:first-child { font-family: "Songti SC", "STSong", serif; font-size: 34rpx; font-weight: 600; }

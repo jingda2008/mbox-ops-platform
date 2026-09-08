@@ -82,7 +82,7 @@
       <button class="membership-invite__privacy" onTap="showMembershipTerms">查看会员权益说明</button>
     </view>
 
-    <view class="recommend-entry">
+    <view class="recommend-entry {{recommendationEmpty && !recommendations.length ? 'recommend-entry--compact' : ''}}">
       <view class="recommend-entry__head"><view><text>今夜甄选</text><text>先为这桌挑三款</text></view></view>
       <scroll-view a:if="{{recommendations.length}}" scroll-x enhanced show-scrollbar="{{false}}" class="recommend-scroll"><view class="recommend-row">
         <view a:for="{{recommendations}}" a:key="productId" class="recommend-card {{index === 0 ? 'recommend-card--priority' : ''}}">
@@ -140,7 +140,7 @@
     <view class="product-detail-sheet {{detailProduct.productKind === 'bundle' ? 'is-bundle' : ''}}" catchTap="keepProductDetailOpen">
       <button class="product-detail-close compact-icon-action" aria-label="关闭商品详情" catchTap="closeProductDetail">×</button>
       <scroll-view scroll-y class="product-detail-scroll">
-        <view class="product-detail-hero" catchTap="previewProductImage">
+        <view a:if="{{!detailProduct.selectionSource || !detailProduct.bundleChoiceGroups.length || detailInformationExpanded}}" class="product-detail-hero" catchTap="previewProductImage">
           <image a:if="{{detailProduct.imageUrl}}" src="{{detailProduct.imageUrl}}" mode="aspectFill" />
           <view a:else class="product-detail-placeholder"><text>M-BOX</text></view>
           <text a:if="{{detailProduct.imageUrl}}" class="product-detail-preview-hint">点击查看全屏大图</text>
@@ -149,8 +149,9 @@
           <text class="product-detail-kind">{{detailProduct.productKind === 'bundle' ? '体验组合' : detailProduct.categoryName}}</text>
           <text class="product-detail-name">{{detailProduct.name}}</text>
           <text a:if="{{detailProduct.specification}}" class="product-detail-specification">规格：{{detailProduct.specification}}</text>
-          <text class="product-detail-description">{{detailProduct.description || '详情以当晚正式菜单为准'}}</text>
-          <view a:if="{{detailProduct.productKind === 'bundle' && detailProduct.bundleComponents.length}}" class="product-detail-components">
+          <button a:if="{{detailProduct.selectionSource && detailProduct.bundleChoiceGroups.length}}" class="detail-info-toggle" onTap="toggleDetailInformation">{{detailInformationExpanded ? '收起介绍，选择酒水' : '查看套餐图片与固定组成'}}</button>
+          <text a:if="{{!detailProduct.selectionSource || !detailProduct.bundleChoiceGroups.length || detailInformationExpanded}}" class="product-detail-description">{{detailProduct.description || '详情以当晚正式菜单为准'}}</text>
+          <view a:if="{{detailProduct.productKind === 'bundle' && detailProduct.bundleComponents.length && (!detailProduct.selectionSource || !detailProduct.bundleChoiceGroups.length || detailInformationExpanded)}}" class="product-detail-components">
             <text class="product-detail-section-title">组合内容</text>
             <view a:for="{{detailProduct.bundleComponents}}" a:key="productId" class="product-detail-component"><text>{{item.name}}</text><text>× {{item.quantity}}</text></view>
           </view>

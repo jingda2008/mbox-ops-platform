@@ -500,6 +500,7 @@ Page({
     products: [],
     visibleProducts: [],
     detailProduct: null,
+    detailInformationExpanded: false,
     detailSelectionsComplete: true,
     detailEditUnitIndex: -1,
     categories: [{ code: 'all', name: '全部' }],
@@ -1078,7 +1079,8 @@ Page({
       }),
       detailSelectionsComplete:(detailProduct.bundleChoiceGroups||[]).length===0,detailEditUnitIndex:-1 })
   },
-  closeProductDetail() { this.setData({ detailProduct: null,detailSelectionsComplete:true,detailEditUnitIndex:-1 }) },
+  closeProductDetail() { this.setData({ detailProduct: null,detailInformationExpanded:false,detailSelectionsComplete:true,detailEditUnitIndex:-1 }) },
+  toggleDetailInformation() { this.setData({ detailInformationExpanded: !this.data.detailInformationExpanded }) },
   keepProductDetailOpen() {},
   previewProductImage() {
     const imageUrl = this.data.detailProduct && this.data.detailProduct.imageUrl
@@ -1252,10 +1254,12 @@ Page({
     if (!request || this.data.quickServiceBusy) return
     const tableRequest = this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
+    const writeGuard = this.ensureTableRequestGuard()
+    const write = writeGuard.beginWrite(tableRequest.scope, 'quick-service')
     this.setData({ quickServiceBusy: code, error: '', success: '' })
     try {
       const response = await createServiceTask(request)
-      if (!this.isCurrentTableRequest(tableRequest)) return
+      if (!writeGuard.isCurrentWrite(write)) return
       const task = response.data || response
       this.setData({
         success: task.message || '请求已送达，我们会尽快到桌。',
@@ -1263,8 +1267,8 @@ Page({
       })
       await this.refreshServiceSummary(true, tableRequest)
     } catch (error) {
-      if (this.isCurrentTableRequest(tableRequest)) this.setData({ error: customerErrorMessage(error, '请求暂时没有送达，请稍后重试') })
-    } finally { if (this.isCurrentTableRequest(tableRequest)) this.setData({ quickServiceBusy: '' }) }
+      if (writeGuard.isCurrentWrite(write)) this.setData({ error: customerErrorMessage(error, '请求暂时没有送达，请稍后重试') })
+    } finally { if (writeGuard.finishWrite(write)) this.setData({ quickServiceBusy: '' }) }
   },
 
   async addProduct(event) {
@@ -1341,23 +1345,25 @@ Page({
   async replaceBundleUnitSelection(productId,unitIndex,bundleSelection){
     const tableRequest=this.currentTableRequest()
     if(!tableRequest||!this.isCurrentTableRequest(tableRequest)||this.data.cartSyncing)return false
+    const writeGuard = this.ensureTableRequestGuard()
+    const write = writeGuard.beginWrite(tableRequest.scope, 'cart')
     this.setData({ cartSyncing:true,error:'' })
     try{
       const sharedCart=await replaceSharedCartBundleSelection(
         productId,unitIndex,bundleSelection,this.data.cartGeneration,this.data.cartVersion,
         randomId('shared-cart-choice'),
       )
-      if(!this.isCurrentTableRequest(tableRequest))return false
-      this.updateCart(cartFromShared(sharedCart,this.data.products),sharedCart)
+      if(!writeGuard.isCurrentWrite(write))return false
+      this.updateCart(sharedCartView(sharedCart,this.data.products),sharedCart)
       return true
     }catch(error){
-      if(this.isCurrentTableRequest(tableRequest)){
-        await this.syncSharedCart(true,tableRequest)
+      if(writeGuard.isCurrentWrite(write)){
+        await this.refreshSharedCart(true,this.currentTableRequest())
         this.setData({ error:customerErrorMessage(error,'套餐选择暂时没有更新，请重试') })
       }
       return false
     }finally{
-      if(this.isCurrentTableRequest(tableRequest))this.setData({ cartSyncing:false })
+      if(writeGuard.finishWrite(write))this.setData({ cartSyncing:false })
     }
   },
 
@@ -1531,24 +1537,26 @@ Page({
       this.setData({ error: '服务人员正在核对本桌点单，暂时只能查看购物车。' })
       return false
     }
+    const writeGuard = this.ensureTableRequestGuard()
+    const write = writeGuard.beginWrite(tableRequest.scope, 'cart')
     this.setData({ cartSyncing: true, error: '' })
     try {
       const sharedCart = await adjustSharedCart(
         productId, delta, this.data.cartGeneration, this.data.cartVersion, randomId('shared-cart-adjust'),bundleSelections,
       )
-      if (!this.isCurrentTableRequest(tableRequest)) return false
+      if (!writeGuard.isCurrentWrite(write)) return false
       this.updateCart(sharedCartView(sharedCart, this.data.products), sharedCart)
       return true
     } catch (error) {
-      if (!this.isCurrentTableRequest(tableRequest)) return false
+      if (!writeGuard.isCurrentWrite(write)) return false
       if (error && error.code === 'SHARED_CART_VERSION_CONFLICT') {
-        await this.refreshSharedCart(true, tableRequest)
+        await this.refreshSharedCart(true, this.currentTableRequest())
         this.setData({ error: '同桌购物车已经更新，已为你刷新，请确认后再操作。' })
       } else {
         this.setData({ error: customerErrorMessage(error, '购物车暂时无法更新，请稍后重试') })
       }
       return false
-    } finally { if (this.isCurrentTableRequest(tableRequest)) this.setData({ cartSyncing: false }) }
+    } finally { if (writeGuard.finishWrite(write)) this.setData({ cartSyncing: false }) }
   },
 
   async clearCart() {
@@ -1565,16 +1573,18 @@ Page({
     if (!confirmed) return
     const tableRequest = this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
+    const writeGuard = this.ensureTableRequestGuard()
+    const write = writeGuard.beginWrite(tableRequest.scope, 'cart')
     this.setData({ cartSyncing: true, clearingCart: true, error: '' })
     try {
       const sharedCart = await clearSharedCart(
         this.data.cartGeneration, this.data.cartVersion, randomId('shared-cart-clear'),
       )
-      if (!this.isCurrentTableRequest(tableRequest)) return
+      if (!writeGuard.isCurrentWrite(write)) return
       this.updateCart(sharedCartView(sharedCart, this.data.products), sharedCart)
       wx.showToast({ title: '已清空本桌购物车', icon: 'none' })
     } catch (error) {
-      if (!this.isCurrentTableRequest(tableRequest)) return
+      if (!writeGuard.isCurrentWrite(write)) return
       if (error && error.code === 'WECHAT_IDENTITY_REQUIRED') {
         wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
         this.setData({
@@ -1584,12 +1594,12 @@ Page({
         return
       }
       if (error && error.code === 'SHARED_CART_VERSION_CONFLICT') {
-        await this.refreshSharedCart(true, tableRequest)
+        await this.refreshSharedCart(true, this.currentTableRequest())
         this.setData({ error: '同桌购物车已经更新，未执行清空，已为你刷新。' })
       } else {
         this.setData({ error: customerErrorMessage(error, '购物车暂时无法清空，请稍后重试') })
       }
-    } finally { if (this.isCurrentTableRequest(tableRequest)) this.setData({ cartSyncing: false, clearingCart: false }) }
+    } finally { if (writeGuard.finishWrite(write)) this.setData({ cartSyncing: false, clearingCart: false }) }
   },
 
   async removeCartLine(event) {
@@ -1599,23 +1609,25 @@ Page({
     if (!item) return
     const tableRequest = this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
+    const writeGuard = this.ensureTableRequestGuard()
+    const write = writeGuard.beginWrite(tableRequest.scope, 'cart')
     this.setData({ cartSyncing:true,error:'' })
     try {
       const sharedCart=await removeSharedCartLine(
         productId,this.data.cartGeneration,this.data.cartVersion,randomId('shared-cart-remove'),
       )
-      if (!this.isCurrentTableRequest(tableRequest)) return
+      if (!writeGuard.isCurrentWrite(write)) return
       this.updateCart(sharedCartView(sharedCart,this.data.products),sharedCart)
       wx.showToast({ title:'已移除这件商品',icon:'none' })
     } catch (error) {
-      if (!this.isCurrentTableRequest(tableRequest)) return
+      if (!writeGuard.isCurrentWrite(write)) return
       if (error&&error.code==='SHARED_CART_VERSION_CONFLICT') {
-        await this.refreshSharedCart(true,tableRequest)
+        await this.refreshSharedCart(true,this.currentTableRequest())
         this.setData({ error:'同桌购物车已经更新，已为你刷新，请确认后再操作。' })
       } else {
         this.setData({ error:customerErrorMessage(error,'这件商品暂时没有移除，请稍后重试') })
       }
-    } finally { if (this.isCurrentTableRequest(tableRequest)) this.setData({ cartSyncing:false }) }
+    } finally { if (writeGuard.finishWrite(write)) this.setData({ cartSyncing:false }) }
   },
 
   openService() { wx.navigateTo({ url: '/pages/service/index' }) },

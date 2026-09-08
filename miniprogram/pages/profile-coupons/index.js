@@ -14,10 +14,14 @@ const BENEFIT_NAMES = {
 Page({
   data: { loading: true, error: '', coupons: [] },
   onShow() { this.load() },
+  onHide() { this.loadGeneration = (this.loadGeneration || 0) + 1 },
+  onUnload() { this.loadGeneration = (this.loadGeneration || 0) + 1 },
   async load() {
-    this.setData({ loading: true, error: '' })
+    const generation = this.loadGeneration = (this.loadGeneration || 0) + 1
+    this.setData({ loading: true, error: '', coupons: [] })
     try {
       const rows = await getCustomerBenefits()
+      if (generation !== this.loadGeneration) return
       const coupons = (rows || []).map((item) => {
         const display = item.display || {}
         return {
@@ -32,6 +36,7 @@ Page({
       })
       this.setData({ loading: false, coupons })
     } catch (error) {
+      if (generation !== this.loadGeneration) return
       this.setData({ loading: false, error: customerErrorMessage(error, '优惠券暂时无法读取') })
     }
   },

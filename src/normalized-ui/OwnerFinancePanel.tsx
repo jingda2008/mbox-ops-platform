@@ -21,6 +21,7 @@ import {
 import { useConfirmationDialog } from "./ConfirmationDialog";
 import { NumberInputWithUnit } from "./NumberInputWithUnit";
 import "./owner-finance-panel.css";
+import { executeRecoverableCommand } from "./recoverable-command";
 
 type Mode = "cost" | "recurring" | "payroll" | "settings";
 type Category = {
@@ -110,6 +111,12 @@ type Payroll = {
   voidReason: string | null;
   version: number;
 };
+type PayrollLine = {
+  id: string; payrollRunId: string; employeeId: string; employeeName: string;
+  compensationRuleId: string; units: string; basePayMinor: number; overtimeMinor: number;
+  bonusMinor: number; commissionMinor: number; allowanceMinor: number; deductionMinor: number;
+  employerContributionMinor: number; note: string | null;
+};
 type Overview = {
   businessDate: string;
   categories: Category[];
@@ -119,6 +126,8 @@ type Overview = {
   costs: Cost[];
   recurringRules: Recurring[];
   payrollRuns: Payroll[];
+  payrollLines: PayrollLine[];
+  canViewCost: boolean;
   canViewPayroll: boolean;
 };
 
@@ -130,15 +139,23 @@ export function OwnerFinancePanel({
   auth: StaffAuthView;
 }) {
   const { confirmAction } = useConfirmationDialog();
-  const [mode, setMode] = useState<Mode>("cost");
+  function postCommand(endpoint: string, body: unknown, options: { idempotencyKey: string }) {
+    return executeRecoverableCommand(auth.employee.id + ":" + endpoint, body, options.idempotencyKey,
+      (idempotencyKey) => api.postEndpoint(endpoint, body, { idempotencyKey }));
+  }
+  const [mode, setMode] = useState<Mode>(auth.permissions.some((p) => p.startsWith("commercial.cost.")) ? "cost" : "payroll");
   const [overview, setOverview] = useState<Overview | null>(null);
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
   const costFormRef = useRef<HTMLFormElement>(null);
   const [correctingCost, setCorrectingCost] = useState<Cost | null>(null);
   const [correctionReason, setCorrectionReason] = useState("");
+  const [editingPayrollLine, setEditingPayrollLine] = useState<PayrollLine | null>(null);
+  const writeInFlight = useRef(false);
+  const loadGeneration = useRef(0);
   const today = new Date().toISOString().slice(0, 10);
   const firstOfMonth = `${today.slice(0, 7)}-01`;
+  const [range, setRange] = useState({ start: firstOfMonth, end: today });
   const [cost, setCost] = useState({
     name: "",
     categoryId: "",
@@ -196,22 +213,30 @@ export function OwnerFinancePanel({
   const canPayroll =
     auth.permissions.includes("commercial.payroll.manage") &&
     overview?.canViewPayroll === true;
-  const load = useCallback(async () => {
+  const load = useCallback(async (afterWrite = false) => {
+    const generation = ++loadGeneration.current;
+    if (!range.start || !range.end || range.start > range.end) {
+      setNotice("请选择完整且起止顺序正确的日期范围。");
+      setBusy("");
+      return;
+    }
     setBusy("load");
-    setNotice("");
+    if (!afterWrite) setNotice("");
     try {
       const response = await api.getEndpoint<{ data: Overview }>(
-        "/api/commercial-ops/owner-finance",
+        `/api/commercial-ops/owner-finance?startDate=${range.start}&endDate=${range.end}`,
       );
-      setOverview(response.data);
+      if (generation === loadGeneration.current) setOverview(response.data);
     } catch (error) {
-      setNotice(errorMessage(error, "经营费用暂时无法读取"));
+      if (generation !== loadGeneration.current) return;
+      setNotice((previous) => (afterWrite ? `${previous}；刷新失败，请刷新记录核对，勿重复新建。` : errorMessage(error, "经营费用暂时无法读取")));
     } finally {
-      setBusy("");
+      if (generation === loadGeneration.current) setBusy("");
     }
-  }, [api]);
+  }, [api, range.start, range.end]);
   useEffect(() => {
     void load();
+    return () => { loadGeneration.current += 1; };
   }, [load]);
   useEffect(() => {
     if (!overview) return;
@@ -290,18 +315,20 @@ export function OwnerFinancePanel({
     operation: () => Promise<unknown>,
     success: string,
   ): Promise<boolean> {
-    if (busy) return false;
+    if (busy || writeInFlight.current) return false;
+    writeInFlight.current = true;
     setBusy(key);
     setNotice("");
     try {
       await operation();
       setNotice(success);
-      await load();
+      await load(true);
       return true;
     } catch (error) {
       setNotice(errorMessage(error, "操作没有完成，请核对后重试"));
       return false;
     } finally {
+      writeInFlight.current = false;
       setBusy("");
     }
   }
@@ -314,7 +341,7 @@ export function OwnerFinancePanel({
     const succeeded = await run(
       "cost",
       () =>
-        api.postEndpoint(
+        postCommand(
           endpoint,
           {
             displayName: cost.name,
@@ -393,7 +420,7 @@ export function OwnerFinancePanel({
     await run(
       "recurring",
       () =>
-        api.postEndpoint(
+        postCommand(
           "/api/commercial-ops/recurring-costs",
           {
             name: recurring.name,
@@ -420,7 +447,7 @@ export function OwnerFinancePanel({
     await run(
       "materialize",
       () =>
-        api.postEndpoint(
+        postCommand(
           "/api/commercial-ops/recurring-costs/materialize",
           { throughDate },
           { idempotencyKey: key("owner-materialize") },
@@ -445,7 +472,7 @@ export function OwnerFinancePanel({
     await run(
       `recurring-${item.id}`,
       () =>
-        api.postEndpoint(
+        postCommand(
           `/api/commercial-ops/recurring-costs/${item.id}/status`,
           { status, reason: `老板确认${label}周期费用规则` },
           { idempotencyKey: key("owner-recurring-status") },
@@ -467,7 +494,7 @@ export function OwnerFinancePanel({
     await run(
       "setting",
       () =>
-        api.postEndpoint(endpoint, body, {
+        postCommand(endpoint, body, {
           idempotencyKey: key("owner-setting"),
         }),
       "自定义项目已添加",
@@ -478,7 +505,7 @@ export function OwnerFinancePanel({
     await run(
       "comp",
       () =>
-        api.postEndpoint(
+        postCommand(
           "/api/commercial-ops/compensation-rules",
           {
             employeeId: comp.employeeId,
@@ -493,18 +520,22 @@ export function OwnerFinancePanel({
       "薪资标准已建立；旧标准已保留并标记为历史版本",
     );
   }
+  const currentDraft = overview?.payrollRuns.find((item) => item.status === "draft" && item.periodStart === payroll.periodStart && item.periodEnd === payroll.periodEnd);
   async function submitPayroll(event: FormEvent) {
     event.preventDefault();
     if (!selectedPayrollRule)
       return setNotice("请先为该员工建立有效的薪资标准");
-    await run(
+    if (editingPayrollLine && (editingPayrollLine.employeeId !== payroll.employeeId || editingPayrollLine.payrollRunId !== currentDraft?.id))
+      return setNotice("编辑对象与当前周期或员工不一致，请取消编辑后重新选择");
+    const succeeded = await run(
       "payroll",
       () =>
-        api.postEndpoint(
+        postCommand(
           "/api/commercial-ops/payroll-runs",
           {
             periodStart: payroll.periodStart,
             periodEnd: payroll.periodEnd,
+            ...(currentDraft ? { draftRunId: currentDraft.id, expectedVersion: currentDraft.version, replaceEmployeeLine: Boolean(editingPayrollLine) } : {}),
             note: optional(payroll.note),
             lines: [
               {
@@ -526,8 +557,27 @@ export function OwnerFinancePanel({
           },
           { idempotencyKey: key("owner-payroll") },
         ),
-      "工资草稿已建立；尚未入账，也不会自动转账",
+      "工资明细已保存到本期草稿；尚未入账，也不会自动转账",
     );
+    if (succeeded) setEditingPayrollLine(null);
+  }
+  function editPayrollLine(line: PayrollLine) {
+    const draft = overview?.payrollRuns.find((item) => item.id === line.payrollRunId && item.status === "draft");
+    if (!draft || !canPayroll || busy) return;
+    setEditingPayrollLine(line);
+    setPayroll({ employeeId: line.employeeId, periodStart: draft.periodStart, periodEnd: draft.periodEnd,
+      units: String(line.units), base: fromMinor(line.basePayMinor), overtime: fromMinor(line.overtimeMinor),
+      bonus: fromMinor(line.bonusMinor), commission: fromMinor(line.commissionMinor), allowance: fromMinor(line.allowanceMinor),
+      deduction: fromMinor(line.deductionMinor), employerContribution: fromMinor(line.employerContributionMinor), note: line.note ?? "" });
+  }
+  async function removePayrollLine(line: PayrollLine) {
+    const draft = overview?.payrollRuns.find((item) => item.id === line.payrollRunId && item.status === "draft");
+    if (!draft || !canPayroll || busy) return;
+    if (!(await confirmAction({ title: "移除草稿明细", description: `从尚未入账的工资草稿移除${line.employeeName}，变更保留审计记录。`, confirmLabel: "确认移除" }))) return;
+    await run("remove-payroll-line", () => postCommand("/api/commercial-ops/payroll-runs", {
+      draftRunId: draft.id, expectedVersion: draft.version, periodStart: draft.periodStart, periodEnd: draft.periodEnd,
+      removeEmployeeId: line.employeeId, lines: [], note: "移除未入账工资明细",
+    }, { idempotencyKey: key("owner-payroll-remove") }), "工资草稿明细已移除");
   }
   async function approve(run: Payroll) {
     if (
@@ -541,7 +591,7 @@ export function OwnerFinancePanel({
     await runAction(
       `approve-${run.id}`,
       () =>
-        api.postEndpoint(
+        postCommand(
           `/api/commercial-ops/payroll-runs/${run.id}/approve`,
           { reason: "老板核对工资明细后确认" },
           { idempotencyKey: key("owner-payroll-approve") },
@@ -561,7 +611,7 @@ export function OwnerFinancePanel({
     await runAction(
       `post-${run.id}`,
       () =>
-        api.postEndpoint(
+        postCommand(
           `/api/commercial-ops/payroll-runs/${run.id}/post`,
           { reason: "老板确认工资成本入账" },
           { idempotencyKey: key("owner-payroll-post") },
@@ -581,7 +631,7 @@ export function OwnerFinancePanel({
     await runAction(
       `void-${run.id}`,
       () =>
-        api.postEndpoint(
+        postCommand(
           `/api/commercial-ops/payroll-runs/${run.id}/void`,
           { reason: "老板确认作废未入账工资单并准备重新核算" },
           { idempotencyKey: key("owner-payroll-void") },
@@ -591,7 +641,7 @@ export function OwnerFinancePanel({
   }
   const runAction = run;
 
-  if (!canManage) return null;
+  if (!auth.permissions.some((p) => ["commercial.cost.view", "commercial.cost.manage", "commercial.payroll.view", "commercial.payroll.manage", "commercial.payroll.post"].includes(p))) return null;
   return (
     <section className="owner-finance-panel" aria-label="老板费用与工资管理">
       <header>
@@ -614,17 +664,17 @@ export function OwnerFinancePanel({
         </p>
       )}
       <nav aria-label="经营费用功能">
-        <button data-active={mode === "cost"} onClick={() => setMode("cost")}>
+        {(canManage || overview?.canViewCost) && <button data-active={mode === "cost"} onClick={() => setMode("cost")}>
           <CircleDollarSign size={16} />
           费用
-        </button>
-        <button
+        </button>}
+        {canManage && <button
           data-active={mode === "recurring"}
           onClick={() => setMode("recurring")}
         >
           <CalendarPlus size={16} />
           周期费用
-        </button>
+        </button>}
         {overview?.canViewPayroll && (
           <button
             data-active={mode === "payroll"}
@@ -634,17 +684,17 @@ export function OwnerFinancePanel({
             员工工资
           </button>
         )}
-        <button
+        {canManage && <button
           data-active={mode === "settings"}
           onClick={() => setMode("settings")}
         >
           <Settings2 size={16} />
           分类设置
-        </button>
+        </button>}
       </nav>
       {mode === "cost" && (
         <>
-          <form
+          {canManage && <form
             ref={costFormRef}
             className="owner-finance-form"
             onSubmit={submitCost}
@@ -801,15 +851,20 @@ export function OwnerFinancePanel({
                 </button>
               )}
             </div>
-          </form>
+          </form>}
+          <div className="owner-finance-form">
+            <label>记录开始日期<input type="date" value={range.start} onChange={(event) => setRange({ ...range, start: event.target.value })} /></label>
+            <label>记录结束日期<input type="date" value={range.end} onChange={(event) => setRange({ ...range, end: event.target.value })} /></label>
+          </div>
           <Records
             costs={overview?.costs ?? []}
             busy={busy}
             onCorrect={beginCostCorrection}
+            canManage={canManage}
           />
         </>
       )}
-      {mode === "recurring" && (
+      {mode === "recurring" && canManage && (
         <>
           <form className="owner-finance-form" onSubmit={submitRecurring}>
             <header>
@@ -936,7 +991,7 @@ export function OwnerFinancePanel({
       )}
       {mode === "payroll" && overview?.canViewPayroll && (
         <>
-          <form className="owner-finance-form" onSubmit={submitComp}>
+          {canPayroll && <form className="owner-finance-form" onSubmit={submitComp}>
             <header>
               <strong>员工薪资标准</strong>
               <small>
@@ -1003,10 +1058,10 @@ export function OwnerFinancePanel({
               />
             </label>
             <button disabled={!canPayroll || busy !== ""}>保存薪资标准</button>
-          </form>
-          <form className="owner-finance-form" onSubmit={submitPayroll}>
+          </form>}
+          {canPayroll && <form className="owner-finance-form" onSubmit={submitPayroll}>
             <header>
-              <strong>建立工资草稿</strong>
+              <strong>{editingPayrollLine ? "编辑员工工资明细" : currentDraft ? "追加员工到本期草稿" : "建立工资草稿"}</strong>
               <small>
                 基本工资由服务端薪资标准×计薪数量计算；应发=基本工资+加班+奖金+提成+补贴；实发=应发−员工代扣；经营成本=应发+雇主承担。缺勤应减少计薪数量，不要填入员工代扣。
               </small>
@@ -1108,19 +1163,33 @@ export function OwnerFinancePanel({
             <button
               disabled={!canPayroll || !selectedPayrollRule || busy !== ""}
             >
-              建立工资草稿
+              {editingPayrollLine ? "保存明细修改" : currentDraft ? "追加到本期草稿" : "建立工资草稿"}
             </button>
-          </form>
+            {editingPayrollLine && <button type="button" className="secondary" onClick={() => setEditingPayrollLine(null)}>取消编辑</button>}
+          </form>}
+          <div className="owner-finance-list">
+            <label>查看工资周期<select value={overview.payrollRuns.find((item) => item.periodStart === payroll.periodStart && item.periodEnd === payroll.periodEnd)?.id ?? ""} onChange={(event) => {
+              const selected = overview.payrollRuns.find((item) => item.id === event.target.value);
+              if (selected) { setEditingPayrollLine(null); setPayroll((value) => ({ ...value, periodStart: selected.periodStart, periodEnd: selected.periodEnd })); }
+            }}><option value="">当前录入周期</option>{overview.payrollRuns.map((item) => <option key={item.id} value={item.id}>{item.periodStart} 至 {item.periodEnd}</option>)}</select></label>
+            <header><strong>本期逐人明细</strong><span>{payroll.periodStart} 至 {payroll.periodEnd}</span></header>
+            {(overview.payrollLines ?? []).filter((line) => overview.payrollRuns.some((item) => item.id === line.payrollRunId && item.periodStart === payroll.periodStart && item.periodEnd === payroll.periodEnd)).map((line) => <article key={line.id}>
+              <div><strong>{line.employeeName}</strong><small>基本 ¥{fromMinor(line.basePayMinor)} · 加班 ¥{fromMinor(line.overtimeMinor)} · 奖金 ¥{fromMinor(line.bonusMinor)} · 提成 ¥{fromMinor(line.commissionMinor)} · 补贴 ¥{fromMinor(line.allowanceMinor)} · 代扣 ¥{fromMinor(line.deductionMinor)} · 雇主承担 ¥{fromMinor(line.employerContributionMinor)}</small></div>
+              {canPayroll && currentDraft?.id === line.payrollRunId && <div className="owner-finance-actions"><button type="button" disabled={!!busy} onClick={() => editPayrollLine(line)}>编辑</button><button type="button" className="secondary" disabled={!!busy || currentDraft.lineCount <= 1} onClick={() => void removePayrollLine(line)}>移除</button></div>}
+            </article>)}
+          </div>
           <PayrollList
             items={overview.payrollRuns}
             busy={busy}
             approve={approve}
             post={post}
             voidPayroll={voidPayroll}
+            canManage={canPayroll}
+            canPost={auth.permissions.includes("commercial.payroll.post")}
           />
         </>
       )}
-      {mode === "settings" && (
+      {mode === "settings" && canManage && (
         <form className="owner-finance-form" onSubmit={submitSetting}>
           <header>
             <strong>自定义费用项目</strong>
@@ -1270,22 +1339,29 @@ function Records({
   costs,
   busy,
   onCorrect,
+  canManage,
 }: {
   costs: Cost[];
   busy: string;
   onCorrect(item: Cost): void;
+  canManage: boolean;
 }) {
-  const current = costs.filter((item) => !item.corrected);
+  const [page, setPage] = useState(0);
+  const [search, setSearch] = useState("");
+  useEffect(() => { setPage(0); }, [costs, search]);
+  const term = search.trim().toLocaleLowerCase("zh-CN");
+  const current = costs.filter((item) => !item.corrected && (!term || [item.name, item.publicId, item.costCenterName, item.counterparty, item.note, fromMinor(item.grossAmountMinor)].join(" ").toLocaleLowerCase("zh-CN").includes(term)));
   return (
     <div className="owner-finance-list">
       <header>
-        <strong>本月费用记录</strong>
+        <strong>所选期间费用记录</strong>
         <span>{current.length} 笔</span>
       </header>
+      <label>搜索费用<input type="search" placeholder="项目、单号、往来方、备注或金额" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
       {current.length === 0 ? (
-        <p>本月尚未录入费用。</p>
+        <p>{term ? "所选期间没有匹配的费用，请调整关键词或日期。" : "所选期间尚未录入费用。"}</p>
       ) : (
-        current.slice(0, 50).map((item) => (
+        current.slice(page * 50, (page + 1) * 50).map((item) => (
           <article key={item.id}>
             <div>
               <strong>{item.name}</strong>
@@ -1300,7 +1376,7 @@ function Records({
             </div>
             <div className="owner-finance-actions">
               <b>¥{fromMinor(item.grossAmountMinor)}</b>
-              {item.sourceType !== "payroll" &&
+              {canManage && item.sourceType !== "payroll" &&
                 item.sourceType !== "inventory_purchase" && (
                   <button
                     type="button"
@@ -1315,6 +1391,7 @@ function Records({
           </article>
         ))
       )}
+      {current.length > 50 && <div className="owner-finance-actions"><button type="button" disabled={page === 0} onClick={() => setPage(page - 1)}>上一页</button><span>第 {page + 1} / {Math.ceil(current.length / 50)} 页</span><button type="button" disabled={(page + 1) * 50 >= current.length} onClick={() => setPage(page + 1)}>下一页</button></div>}
     </div>
   );
 }
@@ -1396,12 +1473,16 @@ function PayrollList({
   approve,
   post,
   voidPayroll,
+  canManage,
+  canPost,
 }: {
   items: Payroll[];
   busy: string;
   approve(item: Payroll): Promise<void>;
   post(item: Payroll): Promise<void>;
   voidPayroll(item: Payroll): Promise<void>;
+  canManage: boolean;
+  canPost: boolean;
 }) {
   return (
     <div className="owner-finance-list">
@@ -1423,7 +1504,7 @@ function PayrollList({
           </div>
           <div className="owner-finance-actions">
             <em>{payrollStatus(item.status)}</em>
-            {item.status === "draft" && (
+            {canManage && item.status === "draft" && (
               <button
                 type="button"
                 disabled={busy !== ""}
@@ -1432,7 +1513,7 @@ function PayrollList({
                 确认
               </button>
             )}
-            {item.status === "approved" && (
+            {canPost && item.status === "approved" && (
               <button
                 type="button"
                 disabled={busy !== ""}
@@ -1441,7 +1522,7 @@ function PayrollList({
                 入账
               </button>
             )}
-            {(item.status === "draft" || item.status === "approved") && (
+            {canManage && (item.status === "draft" || item.status === "approved") && (
               <button
                 type="button"
                 className="secondary"

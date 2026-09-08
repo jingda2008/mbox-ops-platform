@@ -14,7 +14,7 @@
       <text>{{membership.expiryText}}</text>
       <text wx:if="{{membership.debtText}}" class="balance-debt">{{membership.debtText}}</text>
     </view>
-    <view wx:else class="empty-member"><text>当前身份还没有会员账户</text><button bindtap="openMembership">返回“我的”查看入会说明</button></view>
+    <view wx:else class="empty-member"><text>当前身份还没有会员账户</text><button class="secondary-button" bindtap="openMembership">返回“我的”查看入会说明</button></view>
 
     <view wx:if="{{membership && processing.length}}" class="progress-card">
       <view class="progress-head"><text>积分与成长值进展</text><text>仅显示你的记录</text></view>
@@ -25,8 +25,8 @@
     </view>
 
     <view wx:if="{{membership}}" class="ledger-tabs">
-      <button class="{{tab === 'points' ? 'is-active' : ''}}" data-tab="points" bindtap="switchTab">积分明细</button>
-      <button class="{{tab === 'growth' ? 'is-active' : ''}}" data-tab="growth" bindtap="switchTab">成长值明细</button>
+      <button class="ledger-tab {{tab === 'points' ? 'is-active' : ''}}" data-tab="points" bindtap="switchTab">积分明细</button>
+      <button class="ledger-tab {{tab === 'growth' ? 'is-active' : ''}}" data-tab="growth" bindtap="switchTab">成长值明细</button>
     </view>
 
     <view wx:if="{{membership && tab === 'points'}}" class="ledger-list">

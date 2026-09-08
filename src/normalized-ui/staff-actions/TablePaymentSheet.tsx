@@ -32,15 +32,24 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
   const [paymentStatus, setPaymentStatus] = useState<'pending' | 'succeeded' | 'failed' | 'closed'>('pending')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
+  const [querying, setQuerying] = useState(false)
   const [scannerOpen, setScannerOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [loadAttempt, setLoadAttempt] = useState(0)
   const announcedPaymentId = useRef<string | null>(null)
+  const generation = useRef(0)
+  const [interactionEpoch, setInteractionEpoch] = useState(0)
+  const advanceGeneration = () => { generation.current += 1; setInteractionEpoch(generation.current); return generation.current }
+  const writing = useRef(false)
+  const actionOrderId = useRef<string | null>(null)
+  useEffect(() => () => { generation.current += 1 }, [])
 
   const selected = orders.find((order) => order.id === selectedOrderId) ?? null
-  const activePaymentId = action?.paymentId ?? selected?.unresolvedOnlinePaymentId ?? null
+  const ownedAction = actionOrderId.current === selectedOrderId ? action : null
+  const activePaymentId = ownedAction?.paymentId ?? selected?.unresolvedOnlinePaymentId ?? null
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
+    const requestGeneration = generation.current
     if (api.loadTablePaymentOrders === undefined) {
       throw new Error('本桌收款入口暂时不可用，请到收银页面处理')
     }
@@ -48,6 +57,7 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
       api.loadAssistedOrderAccess(signal),
       api.loadTablePaymentOrders(table.activeSession.id, signal),
     ])
+    if (signal?.aborted || requestGeneration !== generation.current) return
     setAccess(nextAccess)
     setOrders(nextOrders)
     setSelectedOrderId((current) => (
@@ -73,15 +83,17 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
     if (activePaymentId === null || paymentStatus !== 'pending') return
     const controller = new AbortController()
     let active = true
+    const requestGeneration = generation.current
     const synchronize = async () => {
       try {
         const status = await api.loadOnlinePaymentStatus(activePaymentId, controller.signal)
-        if (!active || status === 'pending') return
+        if (!active || requestGeneration !== generation.current || status === 'pending') return
         setPaymentStatus(status)
         if (status === 'succeeded' && announcedPaymentId.current !== activePaymentId) {
           announcedPaymentId.current = activePaymentId
           onUpdated(`${table.code} 已确认到账；如需继续核对，请在收银页查看本单与小票。`)
           await refresh(controller.signal)
+          if (!active || requestGeneration !== generation.current) return
           setAction(null)
           setPaymentStatus('pending')
         }
@@ -97,14 +109,17 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
       controller.abort()
       window.clearInterval(interval)
     }
-  }, [activePaymentId, api, onUpdated, paymentStatus, refresh, table.code])
+  }, [activePaymentId, api, onUpdated, paymentStatus, refresh, table.code, interactionEpoch])
 
   const createPayment = async (method: 'native_qr' | 'auth_code', customerAuthCode?: string) => {
-    if (selected === null || busy) return false
+    if (selected === null || writing.current) return false
     if (access?.canInitiatePayment !== true || access.onlinePaymentProvider === null || access.onlinePaymentProvider === undefined) {
       setError(paymentEntryMessage(access))
       return false
     }
+    writing.current = true
+    const requestGeneration = advanceGeneration()
+    setQuerying(false)
     setBusy(true)
     setError(null)
     try {
@@ -114,6 +129,8 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
         method,
         ...(customerAuthCode === undefined ? {} : { customerAuthCode }),
       })
+      if (requestGeneration !== generation.current) return false
+      actionOrderId.current = selected.id
       setAction(nextAction)
       setPaymentStatus(nextAction.status === 'failed' ? 'failed' : 'pending')
       setScannerOpen(false)
@@ -122,23 +139,28 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
         : `${table.code} 已受理顾客付款码；只有确认足额到账后才停止收款。`)
       return true
     } catch (reason) {
+      if (requestGeneration !== generation.current) return false
       setError(reason instanceof Error ? reason.message : '无法发起本次收款，请到收银页面核对')
       return false
     } finally {
+      writing.current = false
       setBusy(false)
     }
   }
 
   const queryPayment = async () => {
-    if (activePaymentId === null || busy) return
-    setBusy(true)
+    if (activePaymentId === null || querying) return
+    const requestGeneration = generation.current
+    setQuerying(true)
     setError(null)
     try {
       const status = await api.queryOnlinePayment(activePaymentId)
+      if (requestGeneration !== generation.current) return
       setPaymentStatus(status)
       if (status === 'succeeded') {
         onUpdated(`${table.code} 已确认到账。`)
         await refresh()
+        if (requestGeneration !== generation.current) return
         setAction(null)
         setPaymentStatus('pending')
       } else if (status === 'failed' || status === 'closed') {
@@ -147,21 +169,24 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
         onUpdated(`${table.code} 支付渠道仍在处理中；可继续等待，也可明确保留旧单待核对并重新收款。`)
       }
     } catch (reason) {
+      if (requestGeneration !== generation.current) return
       setError(reason instanceof Error ? reason.message : '暂时无法核对支付状态，请由收银处理')
     } finally {
-      setBusy(false)
+      if (requestGeneration === generation.current) setQuerying(false)
     }
   }
 
   const recordCashPayment = async () => {
-    if (selected === null || access?.manualCollection.canRecordCash !== true || busy) return
+    if (selected === null || access?.manualCollection.canRecordCash !== true || writing.current) return
+    const requestGeneration = generation.current
     const confirmed = await confirmAction({
       title: `确认 ${table.code} 已收到现金`,
       description: `请确认已经实际收到 ${money(selected.outstandingAmountMinor, selected.currency)} 现金。确认后会立即计入收款、日结和小票，不可把“准备收钱”提前登记成到账。`,
       confirmLabel: '确认已收到现金',
       cancelLabel: '暂未收到',
     })
-    if (!confirmed) return
+    if (!confirmed || requestGeneration !== generation.current || writing.current) return
+    writing.current = true
     setBusy(true)
     setError(null)
     try {
@@ -170,24 +195,31 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
         provider: 'cash',
         receiptReference: createCashReceiptReference(table.code),
       })
+      if (requestGeneration !== generation.current) return
       onUpdated(`${table.code} 现金收款已登记并进入日结对账。`)
       onClose()
     } catch (reason) {
+      if (requestGeneration !== generation.current) return
       setError(reason instanceof Error ? reason.message : '现金收款未完成，请核对后重试')
     } finally {
+      writing.current = false
       setBusy(false)
     }
   }
 
   const releaseUnresolvedPaymentForRetry = async () => {
-    if (selected?.unresolvedOnlinePaymentId === null || selected?.unresolvedOnlinePaymentId === undefined || busy) return
+    if (activePaymentId === null || writing.current) return
+    writing.current = true
+    const requestGeneration = advanceGeneration()
+    setQuerying(false)
     setBusy(true)
     setError(null)
     try {
       await api.releaseUnresolvedPaymentForRetry(
-        selected.unresolvedOnlinePaymentId,
+        activePaymentId,
         '未收到明确成功结果，保留原支付待核对并改用其他方式收款',
       )
+      if (requestGeneration !== generation.current) return
       setAction(null)
       setPaymentStatus('pending')
       await refresh()
@@ -195,12 +227,13 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '暂时无法放开新收款，请到收银页面核对')
     } finally {
+      writing.current = false
       setBusy(false)
     }
   }
 
-  const qrValue = action?.presentation === 'qr' && typeof action.payload?.qrCodeUrl === 'string'
-    ? action.payload.qrCodeUrl
+  const qrValue = ownedAction?.presentation === 'qr' && typeof ownedAction.payload?.qrCodeUrl === 'string'
+    ? ownedAction.payload.qrCodeUrl
     : null
 
   return <div className="staff-order-overlay" role="dialog" aria-modal="true" aria-label={`${table.code}本桌收款`}>
@@ -215,8 +248,9 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
       {loading ? <p className="staff-order-loading"><LoaderCircle className="is-spinning" /> 正在读取本桌未结订单</p> : orders.length === 0 ? error === null && <p className="staff-actions-empty">本桌没有需要再次收款的订单。</p> : <>
         <div className="staff-payment-order-list" aria-label="本桌未结订单">
           {orders.map((order) => <button type="button" key={order.id}
+            disabled={busy}
             className={order.id === selectedOrderId ? 'is-active' : ''}
-            onClick={() => { setSelectedOrderId(order.id); setAction(null); setPaymentStatus('pending'); setError(null) }}>
+            onClick={() => { if (writing.current) return; advanceGeneration(); setQuerying(false); setScannerOpen(false); setSelectedOrderId(order.id); setAction(null); setPaymentStatus('pending'); setError(null) }}>
             <span><strong title={order.publicId}>{shortPaymentOrderLabel(order.publicId)}</strong><small>{order.hasOnlinePaymentInProgress ? '支付渠道处理中，点击可核对' : order.paymentStatus === 'partially_refunded' ? '退款后待补收' : '待收款'}</small></span>
             <b>{money(order.outstandingAmountMinor, order.currency)}</b>
           </button>)}
@@ -226,18 +260,12 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
           {paymentStatus === 'succeeded' ? <span className="staff-payment-result is-succeeded"><Check /><strong>支付成功，订单余额已刷新</strong></span> : paymentStatus === 'failed' || paymentStatus === 'closed' ? <>
             <span className="staff-payment-result"><X /><strong>本次付款未成功</strong></span>
             <PaymentButtons busy={busy} onlineDisabled={access?.canInitiatePayment !== true} canRecordCash={access?.manualCollection.canRecordCash === true} onQr={() => void createPayment('native_qr')} onScan={() => setScannerOpen(true)} onCash={() => void recordCashPayment()} />
-          </> : selected.unresolvedOnlinePaymentId !== null ? <>
+          </> : activePaymentId !== null ? <>
+            {qrValue !== null && <TablePaymentQr key={activePaymentId} value={qrValue} />}
             <span className="staff-payment-result"><LoaderCircle className="is-spinning" /><strong>已有一笔线上收款尚未明确结果</strong></span>
-            {access?.canQueryOnlinePayment === true && <button type="button" className="staff-payment-query" disabled={busy} onClick={() => void queryPayment()}><RefreshCcw size={18} />先查询渠道结果</button>}
+            {access?.canQueryOnlinePayment === true && <button type="button" className="staff-payment-query" disabled={querying} onClick={() => void queryPayment()}><RefreshCcw size={18} />{querying ? '正在查询，可继续其他操作' : '先查询渠道结果'}</button>}
             <button type="button" className="staff-payment-query is-attention" disabled={busy} onClick={() => void releaseUnresolvedPaymentForRetry()}><RefreshCcw size={18} />保留旧单待核对，继续收款</button>
             <p>旧支付不会被伪造为失败，后台仍会接收查单和迟到通知。若多笔后来到账，系统只按实际应收结单，超出部分会明确显示为溢收并进入联系退款流程。</p>
-          </> : qrValue !== null ? <>
-            <TablePaymentQr value={qrValue} />
-            <h3>请顾客扫码付款</h3><p>支付结果会自动刷新；如长时间无结果，可保留本次待核对并重新收款。</p>
-            {access?.canQueryOnlinePayment === true && <button type="button" className="staff-payment-query" disabled={busy} onClick={() => void queryPayment()}><RefreshCcw size={18} />查询渠道结果</button>}
-          </> : action?.presentation === 'barcode' ? <>
-            <span className="staff-payment-result"><LoaderCircle className="is-spinning" /><strong>付款码已提交，正在确认到账</strong></span>
-            {access?.canQueryOnlinePayment === true && <button type="button" className="staff-payment-query" disabled={busy} onClick={() => void queryPayment()}><RefreshCcw size={18} />查询渠道结果</button>}
           </> : <PaymentButtons busy={busy} onlineDisabled={access?.canInitiatePayment !== true} canRecordCash={access?.manualCollection.canRecordCash === true} onQr={() => void createPayment('native_qr')} onScan={() => setScannerOpen(true)} onCash={() => void recordCashPayment()} />}
           {paymentEntryMessage(access) !== null && <p className="staff-order-payment-note">{paymentEntryMessage(access)}</p>}
           {busy && <span className="staff-payment-busy"><LoaderCircle className="is-spinning" />正在安全发起，请勿重复操作</span>}
@@ -269,6 +297,7 @@ function TablePaymentQr({ value }: { value: string }) {
   const [image, setImage] = useState<string | null>(null)
   useEffect(() => {
     let active = true
+    setImage(null)
     void import('qrcode').then(({ default: QRCode }) => QRCode.toDataURL(value, {
       width: 260, margin: 1, errorCorrectionLevel: 'M',
     })).then((next) => { if (active) setImage(next) })

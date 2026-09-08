@@ -2,7 +2,7 @@
   <view class="notifications-hero"><text>M-BOX · 消息提醒</text><text>消息提醒</text><text>由你决定是否接收；关闭后不影响点单与预约。</text></view>
   <state-panel wx:if="{{loading}}" type="loading" title="正在读取提醒设置" />
   <block wx:else>
-    <view wx:if="{{error}}" class="error-banner">{{error}}</view>
+    <view wx:if="{{error}}" class="error-banner">{{error}}<button class="secondary-button" bindtap="load">重新读取提醒设置</button></view>
     <view class="notice-card">
       <text class="notice-title">微信会在需要时发起确认</text>
       <text class="notice-copy">报名、付款或查看优惠券时，微信会展示相应模板。你当场选择即可；不影响报名、点单或会员权益。</text>
@@ -16,6 +16,6 @@
         </view>
       </view>
     </view>
-    <state-panel wx:else type="empty" title="暂未配置消息模板" message="门店发布模板后，会在相关操作中由微信自动发起确认。" />
+    <state-panel wx:elif="{{!error}}" type="empty" title="暂未配置消息模板" message="门店发布模板后，会在相关操作中由微信自动发起确认。" />
   </block>
 </view>

@@ -56,6 +56,8 @@ export const staffModuleAccessDefinitions: readonly StaffModuleAccessDefinition[
     code: 'operations', label: '经营数据', route: '/staff/operations', sortOrder: 280,
     permissionCodes: [
       'commercial.sales.view', 'commercial.sales.view_all', 'commercial.profit.view',
+      'commercial.cost.view', 'commercial.cost.manage', 'commercial.payroll.view',
+      'commercial.payroll.manage', 'commercial.payroll.post',
     ],
   },
   {

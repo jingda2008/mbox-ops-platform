@@ -344,6 +344,9 @@ function fixture(input: {
       if (sql.includes('FROM mbox.kds_remake_inventory_reservations')) {
         return rows([]) as PostgresQueryResult<Row>
       }
+      if (sql.startsWith("SELECT set_config('app.kds_manager_cancel_task_id'")) {
+        return rows([{ set_config: taskId }]) as PostgresQueryResult<Row>
+      }
       if (sql.startsWith('UPDATE mbox.kds_tasks SET status=')) {
         return { rows: [] as Row[], rowCount: 1 }
       }
@@ -1057,6 +1060,9 @@ describe('commerceKdsApiPlugin', () => {
       }],
     })
     expect(value.kdsRepository.cancel).toHaveBeenCalledOnce()
+    expect(value.commandQueries).toContain(
+      `SELECT set_config('app.kds_manager_cancel_task_id',$1,true)`,
+    )
     expect(value.executions[0]?.outcome.auditEvents[0]).toMatchObject({
       action: 'kds.manager_cancelled',
       afterData: { exceptionEvidence: { reasonCode: 'guest_cancelled' } },

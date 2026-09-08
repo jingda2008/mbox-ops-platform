@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.0-rc.180 - 2026-09-08
+
+- Allows an authorized manager exception command to terminally cancel one
+  exact legacy KDS task after its table session has already closed, while
+  retaining the closed-table write lock for every ordinary or advancing task
+  transition.
+- Preserves the task event, exception evidence, staff actor, reason, audit and
+  outbox trail instead of deleting or directly rewriting historical data.
+- Adds a real PostgreSQL regression that proves ordinary closed-table writes
+  still fail and the narrowly bound manager cancellation succeeds.
+
 ## 1.0.0-rc.179 - 2026-09-08
 
 - Persists payment and refund provider-query schedules, leases and outcomes so

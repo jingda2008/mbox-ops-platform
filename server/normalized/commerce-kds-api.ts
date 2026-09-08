@@ -838,6 +838,15 @@ async function executeManagerCancellation(
       stationCode: target.task.stationCode,
       tableId: target.tableId,
     })
+    // A previous business day's table session can already be closed while a
+    // legacy KDS task is still active.  Bind the one permitted terminal write
+    // to this exact, already-authorized manager command.  Migration 162 reads
+    // this transaction-local marker; ordinary KDS actions cannot use it to
+    // create or advance work on a closed table.
+    await transaction.query(
+      `SELECT set_config('app.kds_manager_cancel_task_id',$1,true)`,
+      [taskId],
+    )
     const task = await options.createKdsRepository(transaction).cancel({
       taskId,
       actorEmployeeId: context.employeeId,

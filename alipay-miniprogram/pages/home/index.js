@@ -11,6 +11,7 @@ const { getRuntimeConfig } = require('../../config/index')
 const { getTableSession } = require('../../utils/session')
 const { createTableRequestGuard, tableRequestScope } = require('../../utils/table-request-scope')
 const { dateTime } = require('../../utils/format')
+const { currentActivities, activityTimeText } = require('../../utils/activity-display')
 const { obtainAlipayPhoneAuthorization } = require('../../utils/alipay-phone')
 const { publicImageUrl } = require('../../utils/media')
 const { customerErrorMessage, membershipEnrollErrorMessage } = require('../../utils/customer-error')
@@ -128,7 +129,7 @@ function activityFeatureView(item) {
   if (!item) return null
   return Object.assign({}, item, {
     coverUrl: publicImageUrl(item.coverUrl),
-    dateText: dateTime(item.startsAt),
+    dateText: activityTimeText(item),
     availabilityText: item.remainingCapacity > 0 ? `余 ${item.remainingCapacity} 位` : '名额已满',
   })
 }
@@ -274,7 +275,7 @@ Page({
       membershipTerms: bootstrap.membershipTerms || null,
       membershipInviteVisible: false,
       benefitCount: (benefits || []).reduce((sum, item) => sum + Number(item.quantityAvailable || 0), 0),
-      upcomingActivity: activityFeatureView(bootstrap.activities && bootstrap.activities.length ? bootstrap.activities[0] : null),
+      upcomingActivity: activityFeatureView(currentActivities(bootstrap.activities)[0] || null),
       brandStoryCard: homepageCards.find((item) => item.isMboxStory) || MBOX_STORY_CARD,
       editorialCards: homepageCards.filter((item) => !item.isMboxStory),
       monthlyPerformanceCard: contentCardView((bootstrap.content || []).find((item) => item && item.type === 'show') || {

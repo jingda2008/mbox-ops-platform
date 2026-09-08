@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0-rc.183 - 2026-09-08
+
+- Repair application rollback manifest compatibility: accept legacy numeric identity flags and canonical booleans, reject unknown values, and emit booleans for new activations.
+- Add executable regression coverage using the real rollback script with a numeric manifest, plus valid/invalid representation cases.
+- No application, Mini Program, financial data or database schema changes relative to rc.182. Preserve its business remediation and separate pending WeChat upload confirmation.
+
 ## 1.0.0-rc.182 - 2026-09-08
 
 - Bind staff payment responses and QR codes to their original order; expose local release for new unresolved attempts without waiting on channel queries.

@@ -49,7 +49,9 @@ failed_sha=$(jq -er '.releaseSha' "${manifest}")
 previous_release_sha=$(jq -er '.previousReleaseSha' "${manifest}")
 previous_release_dir=$(jq -er '.previousReleaseDir' "${manifest}")
 previous_identity_complete=$(jq -r '.previousIdentityComplete // false' "${manifest}")
-case "${previous_identity_complete}" in true) previous_identity_complete=1 ;; false) previous_identity_complete=0 ;; *) exit 1 ;; esac
+# Older activation manifests emitted numeric 0/1; current manifests use JSON booleans.
+# Preserve both representations without treating arbitrary nonempty values as true.
+case "${previous_identity_complete}" in true|1) previous_identity_complete=1 ;; false|0) previous_identity_complete=0 ;; *) exit 1 ;; esac
 case "${rollback_container}" in mbox-app-rollback-*) ;; *) exit 1 ;; esac
 case "${previous_release_dir}" in "${install_root}"/releases/*) ;; *) exit 1 ;; esac
 [[ "${failed_sha}" =~ ^[0-9a-f]{40}$ ]]

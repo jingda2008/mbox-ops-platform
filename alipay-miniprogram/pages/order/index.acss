@@ -262,6 +262,9 @@
 .table-strip__content { display: grid; min-width: 0; }
 .table-strip__service.table-strip__service {
   display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
   min-height: 88rpx;
   margin: 0;

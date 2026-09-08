@@ -6,6 +6,14 @@ const projectRoot = new URL('../../', import.meta.url)
 const read = (path: string) => readFileSync(new URL(path, projectRoot), 'utf8')
 
 describe('mini-program mobile business flow contract', () => {
+  it('constrains the native table status button to its grid cell, not just its minimum size', () => {
+    for (const path of ['miniprogram/pages/order/index.wxss', 'alipay-miniprogram/pages/order/index.acss']) {
+      const rule = read(path).match(/\.table-strip__service\.table-strip__service\s*\{([^}]+)\}/)?.[1] ?? ''
+      expect(rule).toContain('box-sizing: border-box')
+      expect(rule).toContain('width: 100%')
+      expect(rule).toContain('max-width: 100%')
+    }
+  })
   it('keeps exactly five fixed customer tabs in the agreed order', () => {
     const app = JSON.parse(read('miniprogram/app.json')) as { tabBar: { list: Array<{ pagePath: string; text: string }> } }
     expect(app.tabBar.list.map(({ pagePath,text })=>({ pagePath,text }))).toEqual([

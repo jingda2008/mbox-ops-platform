@@ -1540,7 +1540,7 @@ function DevicesModule({ api, auth, devices, jobs, bridges, routes, onChanged }:
     </section>}
     {mode === 'printer' && canManagePrinter && <form className="staff-module-form staff-print-config" onSubmit={savePrinter}>
       <header><strong>{editingPrinterId === null ? '登记Windows打印机' : '编辑打印机'}</strong><small>先在Windows“打印机和扫描仪”完成驱动和测试页；队列名称只从打印桥实际读取。</small></header>
-      <label>设备编号<input required readOnly={editingPrinterId !== null} pattern="[A-Za-z0-9][A-Za-z0-9_.-]{1,63}" value={printerCode} onChange={(event) => setPrinterCode(event.target.value)} placeholder="例如 CASHIER-USB-01" /></label>
+      <label>设备编号<input required readOnly={editingPrinterId !== null} pattern="[A-Za-z0-9][A-Za-z0-9_.-]{1,63}" title="只能用英文、数字、点、下划线和中划线，例如 batai 或 BAR-USB-01；中文请写在显示名称" value={printerCode} onChange={(event) => setPrinterCode(event.target.value)} placeholder="例如 batai 或 BAR-USB-01" /><small>编号不能用中文；中文名称填「显示名称」。</small></label>
       <label>显示名称<input required maxLength={120} value={printerName} onChange={(event) => setPrinterName(event.target.value)} placeholder="例如 收银吧台USB打印机" /></label>
       <label>所在位置<select value={printerStation} onChange={(event) => setPrinterStation(event.target.value as typeof printerStation)}><option value="cashier">收银/吧台</option><option value="bar">吧台</option><option value="kitchen">后厨</option></select></label>
       <label>打印桥<select required value={printBridgeId} onChange={(event) => { setPrintBridgeId(event.target.value); setWindowsQueueName('') }}><option value="">请选择</option>{bridges.filter((bridge) => bridge.status === 'active').map((bridge) => <option key={bridge.id} value={bridge.id}>{bridge.name}（{bridge.online ? '在线' : '离线'}）</option>)}</select></label>

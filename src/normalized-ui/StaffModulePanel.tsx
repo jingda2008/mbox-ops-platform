@@ -1416,10 +1416,15 @@ function DevicesModule({ api, auth, devices, jobs, bridges, routes, onChanged }:
 
   function createPairingCode() {
     void run('bridge-pairing', async () => {
-      const response = await api.postEndpoint<{ data: { pairingCode: string; expiresAt: string } }>('/api/hardware/print-bridges/pairing-code', {
-        reason: reason.trim(), ttlSeconds: 600,
-      })
-      setPairing(response.data)
+      // postEndpoint 已解包 { data }，此处直接得到配对码对象
+      const created = await api.postEndpoint<{ pairingCode: string; expiresAt: string }>(
+        '/api/hardware/print-bridges/pairing-code',
+        { reason: reason.trim(), ttlSeconds: 600 },
+      )
+      if (!created?.pairingCode || !created.expiresAt) {
+        throw new Error('配对码返回异常，请刷新后重试')
+      }
+      setPairing({ pairingCode: created.pairingCode, expiresAt: created.expiresAt })
     }, '一次性配对码已生成，请在10分钟内填入门店Windows打印桥')
   }
 

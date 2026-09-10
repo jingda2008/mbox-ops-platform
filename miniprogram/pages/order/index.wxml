@@ -33,7 +33,7 @@
 <view class="menu-tools menu-tools--browse">
       <view class="category-grid">
         <button wx:for="{{categoryPreview}}" wx:key="code" class="category-chip {{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectCategory">{{item.name}}</button>
-        <button wx:if="{{categories.length > 7}}" class="category-chip category-more" bindtap="toggleCategories">{{categoriesExpanded ? '收起分类' : '全部分类 ⌄'}}</button>
+        <button wx:if="{{categories.length > 8}}" class="category-chip category-more" bindtap="toggleCategories">{{categoriesExpanded ? '收起分类' : '全部分类 ⌄'}}</button>
       </view>
       <scroll-view wx:if="{{categoriesExpanded}}" scroll-y class="category-options"><view class="category-grid">
         <button wx:for="{{categories}}" wx:key="code" class="category-chip {{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectCategory">{{item.name}}</button>
@@ -56,7 +56,7 @@
             <text wx:if="{{item.discountVisible}}" class="product-media__saving">{{item.savingsText}}</text>
             <text class="product-media__detail-hint">查看详情</text>
           </view>
-          <view class="product-main"><text class="product-kind">{{item.productKind === 'bundle' ? '体验组合' : item.categoryName}}</text><text class="product-name">{{item.name}}</text><view wx:if="{{item.tasteLabels.length}}" class="product-tastes"><text wx:for="{{item.tasteLabels}}" wx:for-item="taste" wx:key="*this">{{taste}}</text></view><text class="product-copy">{{item.description || item.includedText || '详情以当晚正式菜单为准'}}</text><text wx:if="{{item.discountVisible}}" class="product-saving">单点合计 {{item.separatePriceText}}</text></view>
+          <view class="product-main"><text class="product-kind">{{item.productKind === 'bundle' ? (item.bundleSelectionText ? '套餐组合 · 需选款' : '套餐组合 · 固定搭配') : item.categoryName}}</text><text class="product-name">{{item.name}}</text><view wx:if="{{item.tasteLabels.length}}" class="product-tastes"><text wx:for="{{item.tasteLabels}}" wx:for-item="taste" wx:key="*this">{{taste}}</text></view><text class="product-copy">{{(item.productKind === 'bundle' ? (item.includedText || item.description) : item.description) || '查看详情了解内容'}}</text><text wx:if="{{item.discountVisible}}" class="product-saving">单点合计 {{item.separatePriceText}}</text></view>
           <view class="product-action"><view class="product-action__meta"><text class="product-price">{{item.priceText}}</text><text class="product-availability {{item.available ? 'is-available' : 'is-unavailable'}}">{{item.availabilityText}}</text><text class="product-availability-copy">{{item.available ? (connectionState === 'waiting' ? '服务人员开台后可下单' : '到店扫码后可下单') : item.availabilityDetail}}</text></view></view>
         </view>
       </view>
@@ -96,7 +96,7 @@
 <view class="menu-tools">
       <view class="category-grid">
         <button wx:for="{{categoryPreview}}" wx:key="code" class="category-chip {{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectCategory">{{item.name}}</button>
-        <button wx:if="{{categories.length > 7}}" class="category-chip category-more" bindtap="toggleCategories">{{categoriesExpanded ? '收起分类' : '全部分类 ⌄'}}</button>
+        <button wx:if="{{categories.length > 8}}" class="category-chip category-more" bindtap="toggleCategories">{{categoriesExpanded ? '收起分类' : '全部分类 ⌄'}}</button>
       </view>
       <scroll-view wx:if="{{categoriesExpanded}}" scroll-y class="category-options"><view class="category-grid">
         <button wx:for="{{categories}}" wx:key="code" class="category-chip {{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectCategory">{{item.name}}</button>
@@ -112,16 +112,20 @@
       <view wx:if="{{searchExpanded || searchText}}" class="search-box"><text>⌕</text><input value="{{searchText}}" placeholder="搜索酒水、套餐或口味" bindinput="onSearchInput" /><button class="menu-search-clear" bindtap="clearMenuSearch">清除</button></view>
     </view>
 
+    <view class="menu-filter-line" aria-label="选购帮助">
+      <button class="menu-search-trigger" data-code="recommendation" bindtap="selectCategory"><view class="menu-filter-surface">帮我选</view></button>
+      <button class="menu-search-trigger" bindtap="openAllBundles"><view class="menu-filter-surface">查看全部套餐</view></button>
+    </view>
     <view wx:if="{{selectedCategory === 'recommendation'}}" class="recommend-entry {{recommendationEmpty && !recommendations.length ? 'recommend-entry--compact' : ''}}">
-      <view class="recommend-entry__head"><view><text>推荐组合</text><text>根据本桌情况精选，最多三款</text></view></view>
+      <view class="recommend-entry__head"><view><text>不知道怎么选？</text><text>这里是精选推荐，不是全部套餐</text></view></view>
       <scroll-view wx:if="{{recommendations.length}}" scroll-x enhanced show-scrollbar="{{false}}" class="recommend-scroll"><view class="recommend-row">
         <view wx:for="{{recommendations}}" wx:key="productId" class="recommend-card {{index === 0 ? 'recommend-card--priority' : ''}}">
           <image wx:if="{{item.imageUrl}}" class="recommend-card__image" src="{{item.imageUrl}}" mode="aspectFill" />
-          <view class="recommend-body"><view class="recommend-labels"><text class="recommend-tier">{{item.tierText}}</text><text wx:if="{{index === 0}}" class="recommend-fit">更适合这一桌</text></view><text class="recommend-name">{{item.name}}</text><text class="recommend-reason">{{item.reason}}</text><view wx:if="{{item.savingsText || item.separatePriceText}}" class="recommend-value"><text wx:if="{{item.separatePriceText}}">单点约 {{item.separatePriceText}}</text><text wx:if="{{item.savingsText}}" class="saving">{{item.savingsText}}</text></view><view class="recommend-foot"><text class="recommend-price">{{item.priceText}}</text><view class="recommend-actions"><button class="recommend-reject" data-id="{{item.productId}}" bindtap="rejectRecommendation" loading="{{item.rejecting}}" disabled="{{item.rejecting}}">不合适</button><button class="recommend-select" data-id="{{item.productId}}" data-source="recommendation" bindtap="addProduct">选这款</button></view></view></view>
+          <view class="recommend-body"><view class="recommend-labels"><text class="recommend-tier">{{item.tierText}}</text></view><text class="recommend-name">{{item.name}}</text><text class="recommend-reason">{{item.reason}}</text><view wx:if="{{item.savingsText || item.separatePriceText}}" class="recommend-value"><text wx:if="{{item.separatePriceText}}">单点约 {{item.separatePriceText}}</text><text wx:if="{{item.savingsText}}" class="saving">{{item.savingsText}}</text></view><view class="recommend-foot"><text class="recommend-price">{{item.priceText}}</text><view class="recommend-actions"><button class="recommend-reject" data-id="{{item.productId}}" bindtap="rejectRecommendation" loading="{{item.rejecting}}" disabled="{{item.rejecting}}">不合适</button><button class="recommend-select" data-id="{{item.productId}}" data-source="recommendation" bindtap="addProduct">{{item.selectionActionText}}</button></view></view></view>
         </view>
       </view></scroll-view>
       <view wx:elif="{{recommendationBusy}}" class="recommend-loading"><text>正在为这桌挑选</text><text>稍等片刻</text></view>
-      <view wx:elif="{{recommendationEmpty}}" class="recommend-empty"><text>暂时没有合适的推荐组合</text><text>可在甄选组合中查看全部套餐</text></view>
+      <view wx:elif="{{recommendationEmpty}}" class="recommend-empty"><text>暂时没有合适的推荐组合</text><text>可以直接浏览全部套餐，不必等待推荐</text></view>
       <view class="recommend-entry__actions" aria-label="智能推荐">
         <button bindtap="onRecommend" loading="{{recommendationBusy}}"><view class="recommend-entry__action-icon recommend-entry__action-icon--guided" aria-hidden="true"><view class="pick-glass"></view><view class="pick-spark">✧</view></view><view><text>帮我选</text><text>发现合你口味的</text></view></button>
         <button class="shake-recommendation" bindtap="onShakeRecommendation" loading="{{recommendationBusy}}" disabled="{{shakeArmed}}"><view class="recommend-entry__action-icon recommend-entry__action-icon--shake" aria-hidden="true"><view class="dice dice--one"><view></view></view><view class="dice dice--two"><view></view><view></view></view><view class="dice dice--three"><view></view><view></view><view></view></view></view><view><text>{{shakeArmed ? '请摇动手机' : '摇一摇'}}</text><text>摇出今夜灵感</text></view></button>
@@ -137,8 +141,8 @@
             <text wx:if="{{item.discountVisible}}" class="product-media__saving">{{item.savingsText}}</text>
             <text class="product-media__detail-hint">查看详情</text>
           </view>
-          <view class="product-main"><text class="product-kind">{{item.productKind === 'bundle' ? '体验组合' : item.categoryName}}</text><text class="product-name">{{item.name}}</text><view wx:if="{{item.tasteLabels.length}}" class="product-tastes"><text wx:for="{{item.tasteLabels}}" wx:for-item="taste" wx:key="*this">{{taste}}</text></view><text class="product-copy">{{item.description || item.includedText || '详情以当晚正式菜单为准'}}</text><text wx:if="{{item.discountVisible}}" class="product-saving">单点合计 {{item.separatePriceText}}</text></view>
-          <view class="product-action"><view class="product-action__meta"><text class="product-price">{{item.priceText}}</text><text class="product-availability {{item.available ? 'is-available' : 'is-unavailable'}}">{{item.availabilityText}}</text></view><button wx:if="{{item.available}}" aria-label="添加{{item.name}}" data-id="{{item.productId}}" catchtap="addProduct">＋</button><button wx:else class="product-unavailable" disabled="{{true}}">{{item.availabilityDetail}}</button></view>
+          <view class="product-main"><text class="product-kind">{{item.productKind === 'bundle' ? (item.bundleSelectionText ? '套餐组合 · 需选款' : '套餐组合 · 固定搭配') : item.categoryName}}</text><text class="product-name">{{item.name}}</text><view wx:if="{{item.tasteLabels.length}}" class="product-tastes"><text wx:for="{{item.tasteLabels}}" wx:for-item="taste" wx:key="*this">{{taste}}</text></view><text class="product-copy">{{(item.productKind === 'bundle' ? (item.includedText || item.description) : item.description) || '查看详情了解内容'}}</text><text wx:if="{{item.discountVisible}}" class="product-saving">单点合计 {{item.separatePriceText}}</text></view>
+          <view class="product-action"><view class="product-action__meta"><text class="product-price">{{item.priceText}}</text><text class="product-availability {{item.available ? 'is-available' : 'is-unavailable'}}">{{item.availabilityText}}</text></view><button wx:if="{{item.available}}" aria-label="{{item.selectionActionText}}：{{item.name}}" data-id="{{item.productId}}" catchtap="addProduct">＋</button><button wx:else class="product-unavailable" disabled="{{true}}">{{item.availabilityDetail}}</button></view>
         </view>
       </view>
       <state-panel wx:else type="empty" title="没有找到符合条件的商品" message="可清空搜索或切换分类" />
@@ -169,7 +173,7 @@
           <text wx:if="{{detailProduct.imageUrl}}" class="product-detail-preview-hint">点击查看全屏大图</text>
         </view>
         <view class="product-detail-content">
-          <text class="product-detail-kind">{{detailProduct.productKind === 'bundle' ? '体验组合' : detailProduct.categoryName}}</text>
+          <text class="product-detail-kind">{{detailProduct.productKind === 'bundle' ? '套餐组合' : detailProduct.categoryName}}</text>
           <text class="product-detail-name">{{detailProduct.name}}</text><view wx:if="{{detailProduct.tasteLabels.length}}" class="product-tastes product-tastes--detail"><text wx:for="{{detailProduct.tasteLabels}}" wx:for-item="taste" wx:key="*this">{{taste}}</text></view>
           <text wx:if="{{detailProduct.specification}}" class="product-detail-specification">规格：{{detailProduct.specification}}</text>
           <button wx:if="{{detailProduct.selectionSource && detailProduct.bundleChoiceGroups.length}}" class="detail-info-toggle" bindtap="toggleDetailInformation">{{detailInformationExpanded ? '收起介绍，选择酒水' : '查看套餐图片与固定组成'}}</button>

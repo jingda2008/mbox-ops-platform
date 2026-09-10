@@ -1,5 +1,7 @@
 # M-BOX 1.0.0-rc.185
 
+Store configuration 2026.09.11-v22 preserves the new history permissions through provisioning. Management retains full history; other roles retain the three-business-day scope. Manual order bills are explicitly granted to OWNER, OPS_LEAD, MANAGER and CASHIER; no refund or repricing authority is inferred from query/print grants.
+
 September 11 operations consolidation. Includes normalized migrations 187–188: independent order history permissions, immutable delivery batches and partial physical stock-return records. Includes all current local source changes: order center/history scope, manual single-order bills, payment-code scanner fallback, confirmed delivery feedback, product taste profiles, gift presentation, historical package price references, kitchen routing and print-bridge unknown-result protection.
 
 Delivery slips now require explicit batch-ready confirmation in the fulfillment page. Batch creation is not delivery completion. Whole-item delivery remains available independently of printer success; different table sessions and workstations cannot be combined. Legacy generated delivery sources are retained without automatic duplicate batches.

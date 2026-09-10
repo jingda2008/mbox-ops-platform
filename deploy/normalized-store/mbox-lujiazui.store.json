@@ -1,5 +1,5 @@
 {
-  "version": "2026.09.08-v21",
+  "version": "2026.09.11-v22",
   "tenant": {
     "id": "10000000-0000-4000-8000-000000000001",
     "code": "superhigh",
@@ -1096,7 +1096,10 @@
         "recommendation.rule.view",
         "recommendation.rule.publish",
         "recommendation.analytics.view",
-        "product.observation.analytics.view"
+        "product.observation.analytics.view",
+        "order.history.view",
+        "order.history.all",
+        "order.bill.print"
       ],
       "navigation": [
         {
@@ -1274,7 +1277,10 @@
         "recommendation.rule.view",
         "recommendation.rule.approve",
         "recommendation.analytics.view",
-        "product.observation.analytics.view"
+        "product.observation.analytics.view",
+        "order.history.view",
+        "order.history.all",
+        "order.bill.print"
       ],
       "navigation": [
         {
@@ -1373,7 +1379,9 @@
         "observation.view.raw",
         "recommendation.rule.view",
         "recommendation.analytics.view",
-        "product.observation.analytics.view"
+        "product.observation.analytics.view",
+        "order.history.view",
+        "order.history.all"
       ],
       "navigation": [
         {
@@ -1492,7 +1500,10 @@
         "recommendation.rule.view",
         "recommendation.rule.draft",
         "recommendation.analytics.view",
-        "product.observation.analytics.view"
+        "product.observation.analytics.view",
+        "order.history.view",
+        "order.history.all",
+        "order.bill.print"
       ],
       "navigation": [
         {
@@ -1646,7 +1657,9 @@
         "observation.view.raw",
         "recommendation.rule.view",
         "recommendation.analytics.view",
-        "product.observation.analytics.view"
+        "product.observation.analytics.view",
+        "order.history.view",
+        "order.history.all"
       ],
       "navigation": [
         {
@@ -1740,7 +1753,8 @@
         "song.view",
         "observation.record",
         "recommendation.staff.modify",
-        "observation.confirm"
+        "observation.confirm",
+        "order.history.view"
       ],
       "navigation": [
         {
@@ -1805,7 +1819,8 @@
         "reservation.view",
         "reservation.view.all",
         "reservation.manage",
-        "service.view"
+        "service.view",
+        "order.history.view"
       ],
       "navigation": [
         {
@@ -1839,7 +1854,8 @@
         "inventory.receive",
         "inventory.count",
         "inventory.waste",
-        "service.view"
+        "service.view",
+        "order.history.view"
       ],
       "dataScopes": [
         {
@@ -1890,7 +1906,9 @@
         "reconciliation.view",
         "reservation.view",
         "printer.manage",
-        "print.reprint"
+        "print.reprint",
+        "order.history.view",
+        "order.bill.print"
       ],
       "navigation": [
         {
@@ -1929,7 +1947,8 @@
         "kds.prepare",
         "kds.exception.manage",
         "inventory.view",
-        "inventory.manage"
+        "inventory.manage",
+        "order.history.view"
       ],
       "dataScopes": [
         {
@@ -1967,7 +1986,8 @@
         "song.manage",
         "performance.phase.manage",
         "reservation.view",
-        "service.view"
+        "service.view",
+        "order.history.view"
       ],
       "navigation": [
         {
@@ -1988,7 +2008,8 @@
         "payment.initiate.staff",
         "song.view",
         "service.view",
-        "service.execute"
+        "service.execute",
+        "order.history.view"
       ],
       "navigation": [
         {
@@ -2019,7 +2040,8 @@
         "loyalty.promotion.view",
         "recommendation.rule.view",
         "recommendation.analytics.view",
-        "product.observation.analytics.view"
+        "product.observation.analytics.view",
+        "order.history.view"
       ],
       "navigation": [
         {
@@ -2053,7 +2075,8 @@
         "dashboard.view",
         "payment.initiate.staff",
         "reservation.view",
-        "song.view"
+        "song.view",
+        "order.history.view"
       ],
       "navigation": [
         {

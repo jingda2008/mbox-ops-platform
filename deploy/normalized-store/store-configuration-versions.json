@@ -12,6 +12,10 @@
     {
       "version": "2026.09.08-v21",
       "sha256": "d72532237a46bd90b59cabc6515e8f5dee3250b2a7939facadbaca8c755c9075"
+    },
+    {
+      "version": "2026.09.11-v22",
+      "sha256": "48c76fe28f7d04882fc24f36d89e4b2c1662a1045a48be29e13d117dede18f2a"
     }
   ]
 }

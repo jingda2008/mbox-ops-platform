@@ -1790,3 +1790,49 @@
 .page.page .menu-result-count { font-size:21rpx;color:#7a7c72; }
 .page.page .menu-tools .search-box { height:44px;margin-top:4rpx; }
 .page.page .menu-tools button::after { border:0; }
+/* Order action hierarchy: quiet choices, clear commitment, stable touch geometry. */
+.page.page .category-chip {
+  border-color:transparent;border-radius:22px;background:#eeeee8;
+  color:#515c52;font-size:14px;font-weight:500;
+}
+.page.page .category-chip.is-active {
+  border-color:#a8c4b3;background:#deebe1;color:#214f3e;font-weight:600;
+}
+.page.page .category-more { background:transparent;color:#466650; }
+.page.page .menu-filter-surface {
+  border-color:#d4ded4;border-radius:15px;background:#eef2ec;
+}
+.page.page .menu-search-trigger .menu-filter-surface { background:#fafbf7; }
+.page.page .primary-button:not([disabled]),
+.page.page .checkout-button:not([disabled]),
+.page.page .recommend-select:not([disabled]),
+.page.page .product-action button:not([disabled]),
+.page.page .product-detail-footer button:not([disabled]) {
+  border-color:#315d46;border-radius:24px;
+  background:linear-gradient(135deg,#38644f,#214f3e);color:#fff;
+  box-shadow:0 2px 5px rgba(33,79,62,.10);
+}
+.page.page .secondary-button:not([disabled]),
+.page.page .recommend-reject:not([disabled]),
+.page.page .cart-clear:not([disabled]) {
+  border:1rpx solid #d5dfd4;border-radius:24px;
+  background:#f1f4ed;color:#365743;box-shadow:none;
+}
+.page.page .recommend-question__options button {
+  border-color:#d5dfd4;border-radius:18px;box-shadow:none;
+}
+.page.page .product-detail-choice {
+  border-radius:14px;background:#fafbf7;border-color:#d5dfd4;
+}
+.page.page .product-detail-choice.is-selected {
+  background:#deebe1;border-color:#739980;box-shadow:inset 0 0 0 1rpx #739980;
+}
+.page.page button.button-hover:not([disabled]) {
+  opacity:.78;box-shadow:none;transform:none;filter:none;
+}
+.page.page button[disabled] {
+  box-shadow:none;
+}
+.page.page button:focus-visible {
+  outline:2px solid #537b64;outline-offset:2px;
+}

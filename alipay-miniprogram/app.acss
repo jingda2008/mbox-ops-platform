@@ -1,5 +1,6 @@
 @import "./styles/compact-secondary.acss";
 @import "./styles/refined-journey.acss";
+@import "./styles/soft-actions.acss";
 page { min-height: 100%; background: #f7f4ef; color: #29251f; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif; }
 view, text, button, input, textarea { box-sizing: border-box; }
 button { letter-spacing: 0; transition: transform 100ms ease, opacity 100ms ease, filter 100ms ease, box-shadow 140ms ease; }

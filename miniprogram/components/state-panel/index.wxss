@@ -6,3 +6,7 @@
 .state__message { max-width: 100%; margin-top: 8rpx; color: #746c63; font-size: 23rpx; line-height: 1.6; }
 .state__action.state__action { box-sizing:border-box; width:auto; min-width: 0; max-width:100%; min-height:44px; height:auto; margin:18rpx 0 0; padding:10rpx 24rpx; border:1rpx solid #d8d1c8; border-radius:14rpx; background:#fffdfa; color:#315d46; font-size:24rpx; line-height:1.5; white-space:normal; }
 .state__action::after { border: 0; }
+.state__action.state__action { display:flex;align-items:center;justify-content:center; }
+.state__action.state__action { border-radius:22px;border-color:#d5dfd4;background:#f1f4ed;color:#365743;box-shadow:none; }
+.state__action.button-hover { opacity:.78;transform:none; }
+.state__action:focus-visible { outline:2px solid #537b64;outline-offset:2px; }

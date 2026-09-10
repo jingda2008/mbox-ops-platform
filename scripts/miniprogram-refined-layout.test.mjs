@@ -14,6 +14,107 @@ async function css(path, refined = true) {
 }
 const widths = [320, 375, 390, 430]
 
+test('native-like block buttons center their labels across dock and related text actions', async () => {
+  const browser = await chromium.launch({headless:true})
+  const cases = [
+    ['community-detail','detail-dock','','免费报名'],
+    ['community-detail','detail-dock','payment-button','提交报名并支付'],
+    ['community-detail','detail-dock','cancel-button','退款与联系'],
+    ['community-detail','detail-dock','','查询付款结果'],
+    ['profile-cards','cards-actions','cards-button primary','提交申请'],
+    ['profile-marketing','contact-page','contact-button stop','停止所有营销联系'],
+    ['profile-preferences','preferences-page','save-button','保存偏好'],
+    ['profile','benefit-foot','','领取权益'],
+    ['profile','redemption-history__row','','取消兑换'],
+    ['reservations','reservation-notification-row','','开启演出提醒'],
+    ['privacy','privacy-contact-row','','更新活动联系信息'],
+    ['order','checkout-upgrade__actions','checkout-upgrade__decline','保留原单，继续付款']
+  ]
+  try {
+    const page = await browser.newPage()
+    for (const [base,ext] of [['miniprogram','wxss'],['alipay-miniprogram','acss']]) {
+      const app = await css(resolve(root,base,'app.'+ext))
+      for (const [route,parent,cls,label] of cases) {
+        const source = app + await css(resolve(root,base,'pages',route,'index.'+ext))
+        for (const width of widths) for (const disabled of [false,true]) {
+          await page.setViewportSize({width,height:740})
+          const styles = scale(source,width).replace(/env\(safe-area-inset-bottom\)/g,'34px')
+          // Deliberately emulate native block text placement, not HTML button's implicit centering.
+          await page.setContent(`<style>${reset}button{display:block;line-height:1.5}${styles}</style><page><view class="page"><view class="${parent}">${parent==='detail-dock'?'<view><text>免费</text><text>剩余 300 位</text></view>':''}<button class="${cls}" ${disabled?'disabled':''}><span class="fixture-label">${label}</span></button></view></view></page>`)
+          const button = await page.locator('button').boundingBox()
+          const text = await page.locator('.fixture-label').boundingBox()
+          assert.ok(Math.abs(button.y+button.height/2-text.y-text.height/2)<=1.5,base+'/'+route+'/'+label+' vertical center')
+          assert.ok(text.x>=button.x-1 && text.x+text.width<=button.x+button.width+1,'label must fit button')
+          assert.ok(button.height>=44,'touch target')
+          assert.ok(button.x>=-1 && button.x+button.width<=width+1,'screen overflow')
+          if(base==='miniprogram' && width===375 && route==='community-detail' && label==='免费报名' && !disabled) {
+            const out=resolve(root,'artifacts/button-alignment-20260910')
+            await mkdir(out,{recursive:true})
+            await page.locator('.detail-dock').screenshot({path:resolve(out,'free-registration-css-fixture.png')})
+          }
+        }
+      }
+    }
+  } finally {await browser.close()}
+})
+
+test('custom actions keep selection, warning, consent and isolated component semantics', async () => {
+  const browser = await chromium.launch({headless:true})
+  try {
+    const page = await browser.newPage()
+    for (const [base,ext] of [['miniprogram','wxss'],['alipay-miniprogram','acss']]) {
+      const app = await css(resolve(root,base,'app.'+ext))
+      const phoneClass = base === 'miniprogram' ? 'wx-phone-button' : 'alipay-phone-button'
+      for (const width of widths) {
+        await page.setViewportSize({width,height:740})
+        const styles = 'button{line-height:1.5}' + app + await css(resolve(root,base,'pages/profile-marketing/index.'+ext))
+        await page.setContent(`<style>${reset}${scale(styles,width)}</style><page><view class="page contact-page"><button class="contact-button primary">同意所选联系渠道</button><button class="contact-button stop">停止所有营销联系</button><button class="contact-button" disabled>正在保存</button><button class="chip">未选择</button><button class="chip is-on">已选择</button><button class="wx-phone-button button-hover">授权手机号</button></view></page>`)
+        await page.locator('.wx-phone-button').evaluate((n,cls)=>n.className=cls+' button-hover',phoneClass)
+        inside(await geometry(page,'button'),width,base+' custom actions')
+        assert.notEqual(await page.locator('.stop').evaluate(n=>getComputedStyle(n).backgroundColor),await page.locator('.primary').evaluate(n=>getComputedStyle(n).backgroundColor),'withdrawal must retain warning palette')
+        const shades = await page.locator('.chip').evaluateAll(ns=>ns.map(n=>getComputedStyle(n).backgroundColor))
+        assert.notEqual(shades[0],shades[1])
+        assert.equal(await page.locator('.'+phoneClass).evaluate(n=>getComputedStyle(n).transform),'none')
+        assert.equal(await page.locator('.'+phoneClass).evaluate(n=>getComputedStyle(n).opacity),'1')
+        for (const [component,cls] of [['state-panel','state__action'],['member-identities','identity-retry']]) {
+          const isolated = await css(resolve(root,base,'components',component,'index.'+ext))
+          await page.setContent(`<style>${reset}${scale(isolated,width)}</style><button class="${cls}">暂时未读取，请点击重新尝试</button>`)
+          inside(await geometry(page,'button'),width,base+'/'+component)
+          assert.ok((await page.locator('button').boundingBox()).height>=44)
+          assert.equal(await page.locator('button').evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(241, 244, 237)')
+        }
+      }
+    }
+  } finally { await browser.close() }
+})
+
+test('order action hierarchy preserves readable states and press geometry on both platforms', async () => {
+  const browser = await chromium.launch({headless:true})
+  try {
+    const page = await browser.newPage()
+    for (const [platform, sheet] of [['miniprogram','wxss'],['alipay-miniprogram','acss']]) {
+      const styles = await css(resolve(root,platform,'app.'+sheet)) + await css(resolve(root,platform,'pages/order/index.'+sheet))
+      for (const width of widths) {
+        await page.setViewportSize({width,height:740})
+        await page.setContent(`<style>${reset}${scale(styles,width)}</style><page><view class="page order-page"><view class="category-grid"><button class="category-chip">鲜果与冷食</button><button class="category-chip is-active">套餐组合</button></view><button class="primary-button">确认支付</button><button class="secondary-button">继续加购</button><button class="primary-button" disabled>订单确认中</button></view></page>`)
+        const action = page.locator('.primary-button:not([disabled])')
+        const initial = await action.boundingBox()
+        const primary = await action.evaluate(n=>getComputedStyle(n).backgroundImage)
+        assert.notEqual(primary,'none')
+        assert.equal(await page.locator('.secondary-button').evaluate(n=>getComputedStyle(n).backgroundImage),'none')
+        const backgrounds = await page.locator('.category-chip').evaluateAll(ns=>ns.map(n=>getComputedStyle(n).backgroundColor))
+        assert.notEqual(backgrounds[0],backgrounds[1],'selection stays identifiable')
+        await action.evaluate(n=>n.classList.add('button-hover'))
+        await page.waitForFunction(()=>Number(getComputedStyle(document.querySelector('.button-hover')).opacity)<1)
+        assert.deepEqual(await action.boundingBox(),initial,'press must not shift content')
+        assert.ok(Number(await action.evaluate(n=>getComputedStyle(n).opacity))<1)
+        assert.notEqual(await page.locator('[disabled]').evaluate(n=>getComputedStyle(n).backgroundImage),primary,'busy action must not resemble enabled primary')
+        inside(await geometry(page,'button'),width,'soft actions/'+platform+'/'+width)
+      }
+    }
+  } finally { await browser.close() }
+})
+
 test('menu decision helper uses compact reachable actions without overflow', async () => {
   const browser = await chromium.launch({headless:true})
   try {
@@ -120,6 +221,10 @@ test('all 23 page style cascades preserve compact wrapping actions in normal and
         // CSS-cascade fixture, not a rendered full-page or real payment acceptance claim.
         await page.setContent(`<style>${reset}${scale(styles,width)}</style><page><view class="${classes}"><view class="panel"><button class="primary-button">确认并继续</button><button class="secondary-button">网络暂时未返回，查看订单并选择下一步操作</button><button class="danger-button" disabled>正在处理，请稍候</button></view></view></page>`)
         inside(await geometry(page, 'button'), width, `${route}/${width}`)
+        assert.equal(await page.locator('.primary-button').evaluate(n=>getComputedStyle(n).borderRadius),'24px')
+        assert.notEqual(await page.locator('.primary-button').evaluate(n=>getComputedStyle(n).backgroundImage),'none')
+        assert.equal(await page.locator('.secondary-button').evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(241, 244, 237)')
+        assert.equal(await page.locator('[disabled]').evaluate(n=>getComputedStyle(n).opacity),'1','disabled labels remain legible')
       }
     }
   } finally { await browser.close() }

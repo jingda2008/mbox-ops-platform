@@ -28,6 +28,44 @@ CREATE TRIGGER order_business_date_guard BEFORE INSERT OR UPDATE OF business_dat
  FOR EACH ROW EXECUTE FUNCTION mbox.assign_order_business_date();
 REVOKE ALL ON FUNCTION mbox.assign_order_business_date() FROM PUBLIC;
 
+-- Manual operations must accept the same current date as the staff context.
+-- Keep the separate automatic cutoff function on its calendar/operating-hour
+-- clock: manually ending a day must not automatically evict occupied tables.
+DO $migration$
+DECLARE target regprocedure; definition text;
+ old_clock text := '((clock_timestamp() AT TIME ZONE store.timezone)-store.business_day_cutoff)::date';
+BEGIN
+ FOREACH target IN ARRAY ARRAY[
+   'mbox.cancel_unpaid_order(uuid,uuid,date,text,text,text,character)'::regprocedure,
+   'mbox.settle_cancelled_unpaid_order_exception(uuid,uuid,date,text,text,text,character)'::regprocedure,
+   'mbox.close_table_after_customer_left(uuid,uuid,date,text,text,character)'::regprocedure
+ ] LOOP
+   definition:=pg_get_functiondef(target);
+   IF position(old_clock IN definition)=0 THEN
+     RAISE EXCEPTION 'manual operating-date function baseline mismatch: %',target;
+   END IF;
+   definition:=replace(definition,old_clock,'mbox.current_operating_business_date(tenant_scope,store_scope)');
+   definition:=replace(definition,'SELECT ordering.*,session.business_date INTO order_row','SELECT ordering.* INTO order_row');
+   EXECUTE definition;
+ END LOOP;
+END $migration$;
+
+-- All writers, including legacy turnover procedures, use the immutable order
+-- date for new financial exception evidence; never rewrite old evidence.
+CREATE FUNCTION mbox.assign_order_event_source_date() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ SELECT business_date INTO STRICT NEW.source_business_date FROM mbox.orders
+  WHERE tenant_id=NEW.tenant_id AND store_id=NEW.store_id AND id=NEW.order_id;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER cancellation_order_date BEFORE INSERT ON mbox.order_cancellation_events
+ FOR EACH ROW EXECUTE FUNCTION mbox.assign_order_event_source_date();
+CREATE TRIGGER settlement_exception_order_date BEFORE INSERT ON mbox.order_settlement_exception_events
+ FOR EACH ROW EXECUTE FUNCTION mbox.assign_order_event_source_date();
+CREATE TRIGGER abandonment_order_date BEFORE INSERT ON mbox.guest_immediate_checkout_abandonment_events
+ FOR EACH ROW EXECUTE FUNCTION mbox.assign_order_event_source_date();
+REVOKE ALL ON FUNCTION mbox.assign_order_event_source_date() FROM PUBLIC;
+
 ALTER TABLE mbox.manual_business_day_ends ADD COLUMN operating_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb;
 CREATE FUNCTION mbox.operating_day_summary(p_tenant uuid,p_store uuid,p_date date)
 RETURNS jsonb LANGUAGE sql STABLE AS $$

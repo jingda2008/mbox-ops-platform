@@ -5,6 +5,57 @@ import vm from 'node:vm'
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), 'utf8')
 
+test('customer navigation promotes familiar choices without mutating custom or operational categories', async () => {
+  for (const platform of ['miniprogram', 'alipay-miniprogram']) {
+    const source = await read(`${platform}/pages/order/index.js`)
+    const legacyStart = source.indexOf('const LEGACY_MENU_CATEGORY_HIERARCHY =')
+    const legacyEnd = source.indexOf('\nconst ', legacyStart + 1)
+    const start = source.indexOf('function categoryText(')
+    const end = source.indexOf('function publicServiceName(', start)
+    const { identity, state } = vm.runInNewContext(source.slice(legacyStart, legacyEnd) + '\n' + source.slice(start, end)
+      + ';({identity:menuCategoryIdentity,state:menuCategoryState})')
+    const products = [
+      { productId:'a', categoryCode:'cocktail', categoryName:'鸡尾酒', categoryParentCode:'drinks' },
+      { productId:'b', categoryCode:'snack', categoryName:'小食', categoryParentCode:'food' },
+      { productId:'c', categoryCode:'non_alcoholic', categoryName:'无酒精', categoryParentCode:'drinks' },
+      { productId:'d', categoryCode:'wine', categoryName:'联名红酒', categoryParentCode:'collaboration', categoryParentName:'联名专区' },
+      { productId:'e', categoryCode:'new_code', categoryName:'新分类' },
+      { productId:'f', productKind:'bundle', categoryCode:'cocktail', available:false },
+    ]
+    const before = JSON.stringify(products)
+    assert.deepEqual(Array.from(products, p => identity(p).topName), ['鸡尾酒','小食与果盘','无酒精饮品','联名专区','新分类','套餐组合'])
+    const browse = state(products,'all','all',false)
+    const scanned = state(products,'all','all',true)
+    assert.equal(JSON.stringify(browse.categories), JSON.stringify(scanned.categories))
+    assert.equal(products.filter(p => identity(p).topCode === 'bundles').length, 1, 'unavailable bundles remain in catalogue')
+    const recommendation = state(products,'recommendation','all',true)
+    assert.equal(recommendation.selectedCategory,'recommendation')
+    assert.ok(recommendation.categoryPreview.every(Boolean), 'helper state must not inject an undefined category')
+    assert.equal(state(products,'obsolete','missing',true).selectedCategory,'all')
+    assert.equal(JSON.stringify(products),before, 'display grouping must not mutate product IDs, status, or backend category')
+    const productStart = source.indexOf('function menuProducts(')
+    const productEnd = source.indexOf('function serviceSummaryView(', productStart)
+    const views = vm.runInNewContext(source.slice(productStart,productEnd) + ';({products:menuProducts,recommend:menuRecommendations})', {
+      menuAvailability:()=>({text:'可下单',detail:''}), bundleValuePresentation:()=>({}), customerCategoryName:p=>p.categoryName,
+      publicImageUrl:x=>x, money:x=>String(x),
+    })
+    const presented = views.products([{productId:'fixed',productKind:'bundle',available:true,bundleChoiceGroups:[]},
+      {productId:'choice',productKind:'bundle',available:true,bundleChoiceGroups:[{name:'鸡尾酒',selectionCount:2,options:[]}]}])
+    assert.equal(presented.find(p=>p.productId==='fixed').selectionActionText,'加入购物车')
+    assert.equal(presented.find(p=>p.productId==='choice').selectionActionText,'选款并加入')
+    assert.equal(views.recommend([{productId:'choice'}],presented)[0].selectionActionText,'选款并加入')
+    const methodStart = source.indexOf('  openAllBundles() {')
+    const methodEnd = source.indexOf('  toggleCategories()',methodStart)
+    const page = vm.runInNewContext('({' + source.slice(methodStart,methodEnd) + '})')
+    const data = {searchText:'不匹配搜索',searchExpanded:true}
+    page.setData = (patch,done) => { Object.assign(data,patch); done() }
+    page.selectCategory = event => { data.selectedCategory=event.currentTarget.dataset.code }
+    page.openAllBundles()
+    assert.equal(data.searchText,'')
+    assert.equal(data.selectedCategory,'bundles')
+  }
+})
+
 test('bundle catalogue remains exhaustive and separate from scanned recommendations', async () => {
   for (const platform of ['miniprogram', 'alipay-miniprogram']) {
     const source = await read(`${platform}/pages/order/index.js`)
@@ -19,12 +70,13 @@ test('bundle catalogue remains exhaustive and separate from scanned recommendati
     assert.equal(products.filter(p => identity(p).topCode === 'bundles').length, 8)
     const category = state(products, 'bundles', 'all')
     assert.equal(category.selectedCategory, 'bundles')
-    assert.equal(category.categories.find(c => c.code === 'bundles').name, '甄选组合')
+    assert.equal(category.categories.find(c => c.code === 'bundles').name, '套餐组合')
     assert.equal(category.categories.filter(c => c.code === 'bundles').length, 1)
     assert.equal(category.categories.some(c => c.code === 'recommendation'), false)
     const more = products.concat(Array.from({length:12},(_,i)=>({productKind:'single',categoryCode:'c'+i,categoryName:'分类'+i})))
     const connected = state(more,'c11','all',true)
-    assert.equal(connected.categories.some(c => c.code === 'recommendation'), true)
+    assert.equal(connected.categories.some(c => c.code === 'recommendation'), false)
+    assert.equal(state(more,'recommendation','all',true).selectedCategory,'recommendation')
     assert.equal(connected.categoryPreview.length, 7)
     assert.ok(connected.categoryPreview.some(c => c.code === 'c11'))
     assert.equal(state(more,'recommendation','all',false).selectedCategory,'all')
@@ -32,7 +84,7 @@ test('bundle catalogue remains exhaustive and separate from scanned recommendati
     const ext = platform === 'miniprogram' ? 'wxml' : 'axml'
     const template = await read(`${platform}/pages/order/index.${ext}`)
     const scanned = template.indexOf('<block ' + (platform === 'miniprogram' ? 'wx' : 'a') + ':else>')
-    assert.ok(template.indexOf('<text>推荐组合</text>') > scanned)
+    assert.ok(template.indexOf('<text>不知道怎么选？</text>') > scanned)
     assert.doesNotMatch(template.slice(0, scanned), /recommend-entry/)
     const profile = await read(`${platform}/pages/profile/index.${ext}`)
     assert.doesNotMatch(profile, /我的夜晚|class="profile-hero"/)
@@ -427,7 +479,7 @@ test('tonight ordering keeps live service separate from recommendation and deleg
   assert.match(orderView, /摇一摇/)
   const recommendationIndex = orderView.indexOf('class="recommend-entry ')
   assert.ok(recommendationIndex > orderView.lastIndexOf('<view class="menu-tools">'), 'recommendations remain below the sticky category controls')
-  assert.match(orderView, /class="recommend-entry [^"]*">[\s\S]*?<text>推荐组合<\/text>/)
+  assert.match(orderView, /class="recommend-entry [^"]*">[\s\S]*?<text>不知道怎么选？<\/text>/)
   assert.match(orderView, /selectedCategory === 'recommendation'/)
   assert.match(orderView, /selectedCategory !== 'recommendation'/)
   assert.doesNotMatch(orderView, /今晚先看这三款|按本桌情况与当晚菜单实时推荐|不合适就换一组|recommendation-note/)
@@ -459,7 +511,7 @@ test('tonight ordering keeps live service separate from recommendation and deleg
   assert.match(guestMenuApi, /component_price\.amount_minor IS NOT NULL[\s\S]*?component_price\.currency = price\.currency/)
   assert.match(guestMenuApi, /savingsAmountMinor/)
   assert.match(recommendationRepository, /component_price\.amount_minor IS NOT NULL[\s\S]*?component_price\.currency = price\.currency/)
-  assert.match(orderView, /class="recommend-fit">更适合这一桌/)
+  assert.doesNotMatch(orderView, /class="recommend-fit">更适合这一桌/)
   assert.match(orderLogic, /getServiceRequests/)
   assert.match(orderLogic, /async function loadPerformanceView\(\)[\s\S]*?演出信息暂时未更新，请点一下重试/)
   assert.match(orderLogic, /async retryPerformance\(\)/)

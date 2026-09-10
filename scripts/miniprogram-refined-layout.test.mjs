@@ -14,6 +14,25 @@ async function css(path, refined = true) {
 }
 const widths = [320, 375, 390, 430]
 
+test('menu decision helper uses compact reachable actions without overflow', async () => {
+  const browser = await chromium.launch({headless:true})
+  try {
+    const page = await browser.newPage()
+    const template = await readFile(resolve(root,'miniprogram/pages/order/index.wxml'),'utf8')
+    const helper = template.match(/<view class="menu-filter-line" aria-label="选购帮助">[\s\S]*?<\/button>\s*<\/view>/)[0]
+    const styles = await css(resolve(root,'miniprogram/app.wxss')) + await css(resolve(root,'miniprogram/pages/order/index.wxss'))
+    for (const width of widths) {
+      await page.setViewportSize({width,height:740})
+      await page.setContent(`<style>${reset}${scale(styles,width)}</style><page><view class="page order-page">${helper}</view></page>`)
+      inside(await geometry(page,'button'),width,'decision helper/'+width)
+      assert.equal(await page.locator('button').count(),2)
+      const bounds = await page.locator('.menu-filter-line').boundingBox()
+      assert.ok(bounds.height <= 60,'helper must not become another large hero')
+      for (const box of await geometry(page,'button')) assert.ok(box.height>=44,'keep comfortable tap targets')
+    }
+  } finally { await browser.close() }
+})
+
 test('category grid stays inside the screen and remains pinned while the menu scrolls', async () => {
   const browser = await chromium.launch({headless:true})
   try {
@@ -21,7 +40,7 @@ test('category grid stays inside the screen and remains pinned while the menu sc
     const styles = await css(resolve(root,'miniprogram/app.wxss')) + await css(resolve(root,'miniprogram/pages/order/index.wxss'))
     for(const width of widths) for(const browse of [true,false]) {
       await page.setViewportSize({width,height:740})
-      const labels=['全部','甄选组合','鸡尾酒','威士忌','鲜果与冷食','无酒精饮品','葡萄酒与起泡酒','全部分类 ⌄']
+      const labels=['全部','套餐组合','鸡尾酒','啤酒','葡萄酒与起泡酒','威士忌与烈酒','小食与果盘','无酒精饮品']
       await page.setContent(`<style>${reset}${scale(styles,width)} .order-scroll{overflow-y:auto}</style><page><view class="page order-page"><scroll-view class="order-scroll"><view class="order-scroll__content"><view style="height:180px">扫码提示或桌台信息</view><view class="menu-tools ${browse?'menu-tools--browse':''}"><view class="category-grid">${labels.map((x,i)=>'<button class="category-chip '+(!i?'is-active':'')+'">'+x+'</button>').join('')}</view><view class="menu-filter-line"><button class="subcategory-trigger"><view class="menu-filter-surface">细分类 ⌄</view></button><button class="menu-search-trigger"><view class="menu-filter-surface">⌕ 搜索</view></button></view></view><view style="height:1800px">菜品列表</view></view></scroll-view></view></page>`)
       inside(await geometry(page,'button'),width,'category/'+width)
       for(const selector of ['.subcategory-trigger','.menu-search-trigger']) {

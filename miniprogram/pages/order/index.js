@@ -243,6 +243,10 @@ function menuProducts(items) {
       categoryName: customerCategoryName(item),
       tasteLabels: [...new Set((Array.isArray((item.recommendation || {}).tasteTags) ? item.recommendation.tasteTags : []).map(tag => ({ refreshing: '清爽', layered: '层次丰富', strong: '浓郁' })[tag]).filter(Boolean))],
       priceText: money(item.amountMinor),
+      selectionActionText: (item.bundleChoiceGroups || []).length ? '选款并加入' : '加入购物车',
+      bundleSelectionText: (item.bundleChoiceGroups || []).length
+        ? '需要选款：' + item.bundleChoiceGroups.map(group => `${group.name || '可选内容'}选${group.selectionCount}款`).join(' · ')
+        : '',
       includedText: (item.bundleComponents || []).map((line) => `${line.name || '组合内容'}×${line.quantity || 1}`).join(' · '),
       imageUrl: publicImageUrl(item.imageUrl),
       availabilityText: availability.text,
@@ -268,6 +272,7 @@ function menuRecommendations(items, products) {
       imageUrl: product.imageUrl,
       description: product.description,
       includedText: product.includedText,
+      selectionActionText: product.selectionActionText,
       separatePriceText: Number(item.separateAmountMinor || 0) > Number(item.amountMinor || 0)
         ? money(item.separateAmountMinor) : '',
       marketingLabel: item.marketingLabel || (index === 0 ? '今晚优先推荐' : ''),
@@ -317,7 +322,7 @@ function customerCategoryName(item) {
 function menuCategoryIdentity(item) {
   // Bundle browsing is exhaustive and independent of personalized recommendations.
   if (item && item.productKind === 'bundle') {
-    return { topCode: 'bundles', topName: '甄选组合', topSortOrder: -0.5,
+    return { topCode: 'bundles', topName: '套餐组合', topSortOrder: -0.5,
       childCode: '', childName: '', childSortOrder: 0 }
   }
   const categoryCode = categoryText(item && item.categoryCode, 'other')
@@ -331,6 +336,21 @@ function menuCategoryIdentity(item) {
   const topCategorySortOrder = Number.isFinite(Number(item && item.topCategorySortOrder))
     ? Number(item.topCategorySortOrder) : categorySortOrder
   const legacyCategory = LEGACY_MENU_CATEGORY_HIERARCHY[normalizedCategoryCode]
+  // Presentation only: preserve operational IDs and custom parent categories.
+  const customerGroups = {
+    cocktail: ['cocktails', '鸡尾酒', 10], beer: ['beers', '啤酒', 20],
+    wine: ['wines', '葡萄酒与起泡酒', 30], sparkling: ['wines', '葡萄酒与起泡酒', 30],
+    whisky: ['spirits_menu', '威士忌与烈酒', 40], spirits: ['spirits_menu', '威士忌与烈酒', 40],
+    fruit: ['food_menu', '小食与果盘', 50], cold_food: ['food_menu', '小食与果盘', 50],
+    snack: ['food_menu', '小食与果盘', 50], non_alcoholic: ['soft_drinks', '无酒精饮品', 60],
+  }
+  const customerGroup = customerGroups[normalizedCategoryCode]
+  if (customerGroup && ['', 'drinks', 'food'].includes(parentCode)
+    && (!rawCategoryName || rawCategoryName.toLowerCase() === normalizedCategoryCode
+      || (legacyCategory && rawCategoryName === legacyCategory.name))) {
+    return { topCode: customerGroup[0], topName: customerGroup[1], topSortOrder: customerGroup[2],
+      childCode: normalizedCategoryCode, childName: categoryName, childSortOrder: categorySortOrder }
+  }
   const legacyUnparentedCategory = parentCode === '' && legacyCategory
     && (!rawCategoryName || rawCategoryName.toLowerCase() === normalizedCategoryCode || rawCategoryName === legacyCategory.name)
   if (legacyUnparentedCategory) {
@@ -385,12 +405,13 @@ function menuCategoryState(products, selectedTopCategory, selectedSubcategory, c
   })
   // Keep the full catalogue independent from the connected-only recommendation tab.
   const leadingCategories = [{ code: 'all', name: '全部', sortOrder: -2 }]
-  if (connected) leadingCategories.push({code:'recommendation',name:'推荐组合',sortOrder:-1})
+  // Recommendations have a separate helper entry, not a catalogue category.
   const categories = leadingCategories.concat(
     Array.from(roots.values()).sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name, 'zh-CN')),
   )
   const fallbackTopCode = 'all'
-  const topCode = categories.some((item) => item.code === selectedTopCategory) ? selectedTopCategory : fallbackTopCode
+  const topCode = (connected && selectedTopCategory === 'recommendation')
+    || categories.some((item) => item.code === selectedTopCategory) ? selectedTopCategory : fallbackTopCode
   const children = topCode === 'all'
     ? []
     : Array.from((childrenByRoot.get(topCode) || new Map()).values())
@@ -402,7 +423,7 @@ function menuCategoryState(products, selectedTopCategory, selectedSubcategory, c
     ? selectedSubcategory : 'all'
   return {
     categories,
-    categoryPreview: categories.slice(0, 7).some((item) => item.code === topCode)
+    categoryPreview: categories.length <= 8 ? categories : topCode === 'recommendation' || categories.slice(0, 7).some((item) => item.code === topCode)
       ? categories.slice(0, 7) : categories.slice(0, 6).concat(categories.find((item) => item.code === topCode)),
     selectedSubcategoryName: (subcategories.find((item) => item.code === subcategoryCode) || {name:'全部'}).name,
     selectedCategory: topCode,
@@ -1117,6 +1138,10 @@ Page({
       this.applyFilters()
       this.setData({menuScrollTarget:this.data.browseOnly?'browse-menu-anchor':'connected-menu-anchor'})
     })
+  },
+  openAllBundles() {
+    this.setData({ searchText: '', searchExpanded: false }, () =>
+      this.selectCategory({ currentTarget: { dataset: { code: 'bundles' } } }))
   },
   toggleCategories() { this.setData({categoriesExpanded:!this.data.categoriesExpanded,subcategoriesExpanded:false}) },
   toggleSubcategories() { this.setData({subcategoriesExpanded:!this.data.subcategoriesExpanded,categoriesExpanded:false}) },

@@ -371,7 +371,7 @@ function menuCategoryIdentity(item) {
   }
 }
 
-function menuCategoryState(products, selectedTopCategory, selectedSubcategory) {
+function menuCategoryState(products, selectedTopCategory, selectedSubcategory, connected = false) {
   const roots = new Map()
   const childrenByRoot = new Map()
   ;(products || []).forEach((item) => {
@@ -389,11 +389,9 @@ function menuCategoryState(products, selectedTopCategory, selectedSubcategory) {
       childrenByRoot.set(category.topCode, children)
     }
   })
-  // Recommendations are an always-visible merchandising module, not a menu
-  // category. Keeping the category state strictly about the catalogue means a
-  // customer can browse any menu family without making the recommendation
-  // surface disappear or resetting their selection.
-  const leadingCategories = [{ code: 'all', name: '全部', sortOrder: -1 }]
+  // Keep the full catalogue independent from the connected-only recommendation tab.
+  const leadingCategories = [{ code: 'all', name: '全部', sortOrder: -2 }]
+  if (connected) leadingCategories.push({code:'recommendation',name:'推荐组合',sortOrder:-1})
   const categories = leadingCategories.concat(
     Array.from(roots.values()).sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name, 'zh-CN')),
   )
@@ -410,6 +408,9 @@ function menuCategoryState(products, selectedTopCategory, selectedSubcategory) {
     ? selectedSubcategory : 'all'
   return {
     categories,
+    categoryPreview: categories.slice(0, 7).some((item) => item.code === topCode)
+      ? categories.slice(0, 7) : categories.slice(0, 6).concat(categories.find((item) => item.code === topCode)),
+    selectedSubcategoryName: (subcategories.find((item) => item.code === subcategoryCode) || {name:'全部'}).name,
     selectedCategory: topCode,
     subcategories,
     selectedSubcategory: subcategoryCode,
@@ -541,6 +542,12 @@ Page({
     detailEditVersion: null,
     categories: [{ code: 'all', name: '全部' }],
     selectedCategory: 'all',
+    categoryPreview: [{code:'all',name:'全部'}],
+    categoriesExpanded: false,
+    subcategoriesExpanded: false,
+    searchExpanded: false,
+    menuScrollTarget: '',
+    selectedSubcategoryName: '全部',
     subcategories: [],
     selectedSubcategory: 'all',
     searchText: '',
@@ -925,6 +932,7 @@ Page({
       products,
         this.data.selectedCategory,
         this.data.selectedSubcategory,
+        true,
     )
     const sharedCart = results[4]
     const cart = sharedCartView(sharedCart, products)
@@ -1110,10 +1118,25 @@ Page({
   onSearchInput(event) { this.setData({ searchText: event.detail.value }, () => this.applyFilters()) },
   selectCategory(event) {
     const selectedCategory = event.currentTarget.dataset.code
-    const categoryState = menuCategoryState(this.data.products, selectedCategory, 'all')
-    this.setData(categoryState, () => this.applyFilters())
+    const categoryState = menuCategoryState(this.data.products, selectedCategory, 'all', !this.data.browseOnly)
+    this.setData(Object.assign(categoryState, {categoriesExpanded:false,subcategoriesExpanded:false,menuScrollTarget:''}), () => {
+      this.applyFilters()
+      this.setData({menuScrollTarget:this.data.browseOnly?'browse-menu-anchor':'connected-menu-anchor'})
+    })
   },
-  selectSubcategory(event) { this.setData({ selectedSubcategory: event.currentTarget.dataset.code }, () => this.applyFilters()) },
+  toggleCategories() { this.setData({categoriesExpanded:!this.data.categoriesExpanded,subcategoriesExpanded:false}) },
+  toggleSubcategories() { this.setData({subcategoriesExpanded:!this.data.subcategoriesExpanded,categoriesExpanded:false}) },
+  toggleMenuSearch() { this.setData({searchExpanded:!this.data.searchExpanded || Boolean(this.data.searchText)}) },
+  clearMenuSearch() { this.setData({searchText:'',searchExpanded:false}, () => this.applyFilters()) },
+  selectSubcategory(event) {
+    const code = event.currentTarget.dataset.code
+    const item = this.data.subcategories.find((value) => value.code === code)
+    if (!item) return
+    this.setData({selectedSubcategory:code,selectedSubcategoryName:item.name,subcategoriesExpanded:false,menuScrollTarget:''}, () => {
+      this.applyFilters()
+      this.setData({menuScrollTarget:this.data.browseOnly?'browse-menu-anchor':'connected-menu-anchor'})
+    })
+  },
   openProductDetail(event) {
     const productId = String(event.currentTarget.dataset.id || '')
     const detailProduct = this.data.products.find((item) => item.productId === productId) || null

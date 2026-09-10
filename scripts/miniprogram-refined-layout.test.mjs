@@ -14,6 +14,44 @@ async function css(path, refined = true) {
 }
 const widths = [320, 375, 390, 430]
 
+test('category grid stays inside the screen and remains pinned while the menu scrolls', async () => {
+  const browser = await chromium.launch({headless:true})
+  try {
+    const page = await browser.newPage()
+    const styles = await css(resolve(root,'miniprogram/app.wxss')) + await css(resolve(root,'miniprogram/pages/order/index.wxss'))
+    for(const width of widths) for(const browse of [true,false]) {
+      await page.setViewportSize({width,height:740})
+      const labels=['全部','甄选组合','鸡尾酒','威士忌','鲜果与冷食','无酒精饮品','葡萄酒与起泡酒','全部分类 ⌄']
+      await page.setContent(`<style>${reset}${scale(styles,width)} .order-scroll{overflow-y:auto}</style><page><view class="page order-page"><scroll-view class="order-scroll"><view class="order-scroll__content"><view style="height:180px">扫码提示或桌台信息</view><view class="menu-tools ${browse?'menu-tools--browse':''}"><view class="category-grid">${labels.map((x,i)=>'<button class="category-chip '+(!i?'is-active':'')+'">'+x+'</button>').join('')}</view><view class="menu-filter-line"><button class="subcategory-trigger"><view class="menu-filter-surface">细分类 ⌄</view></button><button class="menu-search-trigger"><view class="menu-filter-surface">⌕ 搜索</view></button></view></view><view style="height:1800px">菜品列表</view></view></scroll-view></view></page>`)
+      inside(await geometry(page,'button'),width,'category/'+width)
+      for(const selector of ['.subcategory-trigger','.menu-search-trigger']) {
+        const style = await page.locator(selector + ' .menu-filter-surface').evaluate(n=>{
+          const s=getComputedStyle(n);return {font:parseFloat(s.fontSize),border:parseFloat(s.borderTopWidth),background:s.backgroundColor}
+        })
+        assert.ok(style.font>=14, 'filter actions must remain readable')
+        assert.ok(style.border>0, 'filter actions must look like buttons')
+        assert.notEqual(style.background,'rgba(0, 0, 0, 0)')
+        const surface = await page.locator(selector + ' .menu-filter-surface').boundingBox()
+        assert.ok(surface.height <= 32, 'visible filter buttons remain small while hit area stays 44px')
+      }
+      const grid = await page.locator('.category-grid').boundingBox()
+      const detailButton = await page.locator('.subcategory-trigger').boundingBox()
+      const searchButton = await page.locator('.menu-search-trigger').boundingBox()
+      assert.ok(detailButton.width < width * 0.5, 'short subcategory button must not stretch across the row')
+      assert.ok(searchButton.width < width * 0.25, 'search button should fit its label')
+      assert.ok(grid.height < 130, 'collapsed grid remains compact')
+      await page.locator('.order-scroll').evaluate(n=>{n.scrollTop=450})
+      const bar=await page.locator('.menu-tools').boundingBox()
+      assert.ok(Math.abs(bar.y)<2,'category bar must stick to scroll viewport')
+      if(width===375 && browse) {
+        const directory=resolve(root,'artifacts/menu-navigation-20260910')
+        await mkdir(directory,{recursive:true})
+        await page.locator('.menu-tools').screenshot({path:resolve(directory,'category-css-fixture.png')})
+      }
+    }
+  } finally { await browser.close() }
+})
+
 test('compact pre-scan strip fits narrow screens and preserves a reachable scan action', async () => {
   const browser = await chromium.launch({headless:true})
   try {

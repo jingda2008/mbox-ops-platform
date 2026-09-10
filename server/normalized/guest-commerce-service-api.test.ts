@@ -165,6 +165,18 @@ describe('guest commerce/service API trust boundaries', () => {
     expect(value.query.mock.calls[0]?.[1]).toEqual(expect.arrayContaining([null, 'qingdao']))
   })
 
+  it('keeps an active bundle visible but unavailable when its components are disabled', async () => {
+    const value = fixture({}, {product_kind:'bundle',name:'组成待恢复套餐',bundle_configuration_ready:false})
+    for (const path of ['/api/public/mini/menu/products','/api/guest/menu/products']) {
+      const response = await value.app.inject({method:'GET',url:path})
+      expect(response.statusCode).toBe(200)
+      expect(response.json().data[0]).toMatchObject({name:'组成待恢复套餐',available:false,availabilityStatus:'configuration_incomplete'})
+    }
+    const sql=String(value.query.mock.calls[0]?.[0])
+    expect(sql).toContain('AS bundle_configuration_ready')
+    expect(sql.slice(sql.indexOf("AND 'guest_qr'=ANY(product.allowed_channels)"))).not.toContain("component_product.status <> 'active'")
+  })
+
   it('returns bundle savings from complete current component prices instead of asking the client to estimate', async () => {
     const value = fixture({}, {
       name: '双杯鸡尾酒组合',
@@ -1089,7 +1101,7 @@ integration('guest service and mood API with PostgreSQL', () => {
       tableDisplayName: 'VIP 3',
       businessDate: '2026-08-11',
       expiresAt: '2026-08-11T15:00:00.000Z',
-      capabilities: ['guest.session.read', 'guest.service.create', 'guest.order.create'],
+      capabilities: ['guest.session.read', 'guest.menu.read', 'guest.service.create', 'guest.order.create'],
       actorRef: integrationActorRef,
     }
     app = Fastify()
@@ -1268,6 +1280,31 @@ integration('guest service and mood API with PostgreSQL', () => {
       abandonment_events: '1', refund_followups: '1', order_status: 'cancelled', fulfillment_state: 'cancelled',
       refund_eligible: 'true',
     }])
+  })
+
+  it('lists all active bundles with disabled components without enabling ordering or exposing stopped bundles', async () => {
+    const marker = 'BROWSE-' + randomUUID().slice(0,8)
+    const component = randomUUID()
+    await pool.query(`INSERT INTO mbox.products(id,tenant_id,store_id,code,name,category_code,fulfillment_station,product_kind,guest_visible,status)
+      VALUES($1,$2,$3,$4,'停用的组成单品','drink','bar','single',true,'inactive')`,
+      [component,integrationTenantId,integrationStoreId,marker+'-component'])
+    for(let i=0;i<6;i++) {
+      const id=randomUUID()
+      await pool.query(`INSERT INTO mbox.products(id,tenant_id,store_id,code,name,category_code,fulfillment_station,product_kind,guest_visible,status)
+        VALUES($1,$2,$3,$4,$4,'bundles','bar','bundle',true,$5)`,
+        [id,integrationTenantId,integrationStoreId,marker+'-'+i,i===5?'inactive':'active'])
+      await pool.query(`INSERT INTO mbox.product_prices(tenant_id,store_id,product_id,price_type,amount_minor,currency,valid_from)
+        VALUES($1,$2,$3,'standard',12000,'CNY',now()-interval '1 minute')`,[integrationTenantId,integrationStoreId,id])
+      await pool.query(`INSERT INTO mbox.product_bundle_components(tenant_id,store_id,bundle_product_id,component_product_id,quantity)
+        VALUES($1,$2,$3,$4,1)`,[integrationTenantId,integrationStoreId,id,component])
+    }
+    for(const route of ['/api/public/mini/menu/products','/api/guest/menu/products']) {
+      const response=await app.inject({method:'GET',url:route+'?limit=100&search='+marker})
+      expect(response.statusCode).toBe(200)
+      expect(response.json().data).toHaveLength(5)
+      expect(response.json().data.every((p:{available:boolean;availabilityStatus:string})=>
+        !p.available && p.availabilityStatus==='configuration_incomplete')).toBe(true)
+    }
   })
 
   it('loads a public read-only menu without a table session and fails closed when inventory setup is incomplete', async () => {

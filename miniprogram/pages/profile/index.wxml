@@ -1,16 +1,4 @@
 <view class="page profile-page">
-  <view class="profile-hero">
-    <view class="profile-hero__brand">
-      <image class="profile-hero__badge" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX" />
-      <text>M-BOX</text>
-    </view>
-    <view class="profile-hero__content">
-      <text class="profile-hero__kicker">会员 · 我的</text>
-      <text class="profile-hero__title">我的夜晚</text>
-      <text class="profile-hero__copy">积分、权益与到店安排，都在这里。</text>
-    </view>
-  </view>
-
   <state-panel wx:if="{{loading}}" type="loading" title="正在读取会员与权益" />
   <view wx:elif="{{error}}" class="profile-load-error">
     <state-panel type="error" title="会员资料读取失败" message="{{error}}" />

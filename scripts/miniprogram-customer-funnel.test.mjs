@@ -5,6 +5,33 @@ import vm from 'node:vm'
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), 'utf8')
 
+test('bundle catalogue remains exhaustive and separate from scanned recommendations', async () => {
+  for (const platform of ['miniprogram', 'alipay-miniprogram']) {
+    const source = await read(`${platform}/pages/order/index.js`)
+    const start = source.indexOf('function categoryText(')
+    const end = source.indexOf('function publicServiceName(', start)
+    const { identity, state } = vm.runInNewContext(source.slice(start, end) +
+      ';({identity:menuCategoryIdentity,state:menuCategoryState})', { LEGACY_MENU_CATEGORY_HIERARCHY: {} })
+    const products = Array.from({length: 8}, (_, i) => ({
+      productId: 'bundle-' + i, productKind: 'bundle',
+      categoryCode: i % 2 ? 'wine' : 'cocktail', categoryName: '不同后台分类',
+    }))
+    assert.equal(products.filter(p => identity(p).topCode === 'bundles').length, 8)
+    const category = state(products, 'bundles', 'all')
+    assert.equal(category.selectedCategory, 'bundles')
+    assert.equal(category.categories.find(c => c.code === 'bundles').name, '甄选组合')
+    assert.equal(category.categories.filter(c => c.code === 'bundles').length, 1)
+    assert.match(source, /menuRecommendations\(result.recommendations, this.data.products\)\.slice\(0, 3\)/)
+    const ext = platform === 'miniprogram' ? 'wxml' : 'axml'
+    const template = await read(`${platform}/pages/order/index.${ext}`)
+    const scanned = template.indexOf('<block ' + (platform === 'miniprogram' ? 'wx' : 'a') + ':else>')
+    assert.ok(template.indexOf('<text>推荐组合</text>') > scanned)
+    assert.doesNotMatch(template.slice(0, scanned), /recommend-entry/)
+    const profile = await read(`${platform}/pages/profile/index.${ext}`)
+    assert.doesNotMatch(profile, /我的夜晚|class="profile-hero"/)
+  }
+})
+
 for(const platform of ['miniprogram','alipay-miniprogram'])test(`${platform}: stopped admissions preserve payment facts but block new registration`,async()=>{
   const source=await read(`${platform}/pages/community-detail/index.js`)
   const start=source.indexOf('function viewActivity(raw)'),end=source.indexOf('function viewRegistration(raw)',start)
@@ -393,7 +420,7 @@ test('tonight ordering keeps live service separate from recommendation and deleg
   assert.match(orderView, /摇一摇/)
   const recommendationIndex = orderView.indexOf('class="recommend-entry ')
   assert.ok(recommendationIndex >= 0 && recommendationIndex < orderView.lastIndexOf('<view class="menu-tools">'), 'first-screen recommendation value appears before the full menu controls')
-  assert.match(orderView, /<view class="recommend-entry [^"]*">[\s\S]*?<text>今夜甄选<\/text>/)
+  assert.match(orderView, /<view class="recommend-entry [^"]*">[\s\S]*?<text>推荐组合<\/text>/)
   assert.doesNotMatch(orderView, /selectedCategory === 'recommendation'|selectedCategory !== 'recommendation'/)
   assert.doesNotMatch(orderView, /今晚先看这三款|按本桌情况与当晚菜单实时推荐|不合适就换一组|recommendation-note/)
   assert.match(orderView, /class="recommend-question sheet-mask"[\s\S]*?bindtap="selectRecommendationAnswer"/)
@@ -593,7 +620,8 @@ test('official M-BOX artwork replaces temporary letter marks with restrained cir
   assert.match(homeView, /class="brand-logo"[^>]*mbox-logo-badge\.png/)
   assert.match(homeView, /class="member-invite-logo"[^>]*mbox-logo-badge\.png/)
   assert.match(profileView, /class="identity-avatar"[^>]*mbox-logo-badge\.png/)
-  assert.match(orderView, /class="gate-logo"[^>]*mbox-logo-badge\.png/)
+  assert.match(orderView, /class="browse-intro browse-intro--compact"/)
+  assert.doesNotMatch(orderView, /class="gate-logo"/)
   assert.doesNotMatch(homeView, /class="brand-mark">M</)
   assert.doesNotMatch(homeView, /class="member-invite-art"/)
   assert.match(appStyle, /\.brand-logo\s*\{[^}]*width:\s*60rpx[^}]*border-radius:\s*50%/)
@@ -640,7 +668,7 @@ test('customers can browse a read-only menu before scanning, but the browse view
   const browseView = orderView.slice(browseStart, browseEnd)
 
   assert.match(browseView, /今晚菜单/)
-  assert.match(browseView, /随便看看也完全可以/)
+  assert.match(browseView, /可先浏览，扫码后下单/)
   assert.match(browseView, /请联系服务人员开台/)
   assert.match(browseView, /等待期间可以先查看今晚真实菜单/)
   assert.match(browseView, /\{\{item\.availabilityText\}\}/)

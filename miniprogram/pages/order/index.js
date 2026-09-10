@@ -315,6 +315,11 @@ function customerCategoryName(item) {
 }
 
 function menuCategoryIdentity(item) {
+  // Bundle browsing is exhaustive and independent of personalized recommendations.
+  if (item && item.productKind === 'bundle') {
+    return { topCode: 'bundles', topName: '甄选组合', topSortOrder: -0.5,
+      childCode: '', childName: '', childSortOrder: 0 }
+  }
   const categoryCode = categoryText(item && item.categoryCode, 'other')
   const normalizedCategoryCode = categoryCode.toLowerCase()
   const rawCategoryName = categoryText(item && item.categoryName, '')

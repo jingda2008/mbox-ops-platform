@@ -34,7 +34,6 @@ import { NormalizedApiClient, NormalizedApiError, type StaffAuthView } from '../
 import { CashierMutationCoordinator } from './cashier-mutation'
 import './cashier-after-sales-workbench.css'
 import {OperatingHistoryPanel} from './OperatingHistoryPanel'
-import {ManualBusinessDayEndPanel} from './ManualBusinessDayEndPanel'
 
 interface WorkbenchNotice {
   kind: 'success' | 'error' | 'attention'
@@ -272,8 +271,6 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
   }, [api, load, onLoginRequired, query])
 
   return <>{view && auth.permissions.includes('reconciliation.view') && <OperatingHistoryPanel key={auth.employee.id} api={api} businessDate={view.businessDate} />}
-    {view && auth.permissions.includes('business_day.close') &&
-      <ManualBusinessDayEndPanel key={auth.employee.id} api={api} businessDate={view.businessDate} onCompleted={()=>void load(query)}/>}
     <CashierAfterSalesWorkbenchView
     auth={auth}
     view={view}

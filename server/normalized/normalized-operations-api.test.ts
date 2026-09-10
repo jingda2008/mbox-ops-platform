@@ -167,16 +167,20 @@ function fixture(overrides: Partial<NormalizedOperationsApiOptions> = {}) {
 }
 
 describe('normalizedOperationsApiPlugin', () => {
-  it('allows the current-day preview for close permission without granting general history access',async()=>{
+  it('rejects manual early closing even for close permission and never executes a write or preview',async()=>{
     const value=fixture({resolveContext:()=>({scope:{tenantId,storeId},employeeId,businessDate:'2026-09-10',capabilities:['business_day.close']})})
     const read=vi.fn(async()=>({orders:[],receipts:[]}))
     Object.assign(value.operationsQuery,{getManualDayEndPreview:read})
-    expect((await value.app.inject({method:'GET',url:'/api/business-days/end-current/preview?businessDate=2020-01-01'})).statusCode).toBe(200)
-    expect(read).toHaveBeenCalledWith({tenantId,storeId},employeeId,'2026-09-10')
+    expect((await value.app.inject({method:'GET',url:'/api/business-days/end-current/preview?businessDate=2020-01-01'})).statusCode).toBe(410)
+    const refused=await value.app.inject({method:'POST',url:'/api/business-days/end-current',payload:{expectedBusinessDate:'2026-09-10',reason:'提前结束'}})
+    expect(refused.statusCode).toBe(410)
+    expect(refused.json().error.code).toBe('MANUAL_BUSINESS_DAY_END_DISABLED')
+    expect(read).not.toHaveBeenCalled()
+    expect(value.executions).toHaveLength(0)
     expect((await value.app.inject({method:'GET',url:'/api/operations/history'})).statusCode).toBe(403)
     const denied=fixture({resolveContext:()=>({scope:{tenantId,storeId},employeeId,businessDate:'2026-09-10',capabilities:['reconciliation.view']})})
-    expect((await denied.app.inject({method:'GET',url:'/api/business-days/end-current/preview'})).statusCode).toBe(403)
-    expect((await denied.app.inject({method:'POST',url:'/api/business-days/end-current',payload:{}})).statusCode).toBe(403)
+    expect((await denied.app.inject({method:'GET',url:'/api/business-days/end-current/preview'})).statusCode).toBe(410)
+    expect((await denied.app.inject({method:'POST',url:'/api/business-days/end-current',payload:{}})).statusCode).toBe(410)
   })
   it('validates history ranges and requires financial permission before querying', async () => {
     const denied=fixture()

@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto'
-import {recordManualBusinessDayEnd,ManualBusinessDayEndConflict,type ManualBusinessDayEnd} from './manual-business-day-end-repository.js'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type {
   AuditActor,
@@ -177,10 +176,8 @@ export const normalizedOperationsApiPlugin: FastifyPluginAsync<NormalizedOperati
 ) => {
   const createPublicId = options.createPublicId ?? defaultPublicId
   app.get('/business-days/end-current/preview',async(request,reply)=>handleRoute(reply,async()=>{
-    const context=await resolveAndValidateContext(options,request)
-    requireCapability(context,'business_day.close')
-    if(!options.operationsQuery.getManualDayEndPreview)return reply.code(503).send({error:{message:'日结核对暂不可用'}})
-    return reply.send({data:await options.operationsQuery.getManualDayEndPreview(context.scope,context.employeeId,context.businessDate)})
+    await resolveAndValidateContext(options,request)
+    return reply.code(410).send({error:{code:'MANUAL_BUSINESS_DAY_END_DISABLED',message:'不支持提前结束营业日，系统会按门店设定时间自动切日。'}})
   }))
   app.get('/operations/history', async (request,reply)=>handleRoute(reply,async()=>{
     const context=await resolveAndValidateContext(options,request)
@@ -398,25 +395,8 @@ export const normalizedOperationsApiPlugin: FastifyPluginAsync<NormalizedOperati
   )
 
   app.post('/business-days/end-current',async(request,reply)=>handleRoute(reply,async()=>{
-    const context=await resolveAndValidateContext(options,request)
-    requireCapability(context,'business_day.close')
-    const body=readObject(request.body,'日结请求')
-    assertActorBinding(body,context.employeeId)
-    const expectedBusinessDate=readPatternString(body.expectedBusinessDate,'营业日',/^\d{4}-\d{2}-\d{2}$/)
-    const reason=readString(body.reason,'日结原因',500,2)
-    const execution=await options.commandExecutor.execute({scope:context.scope,operationScope:'business-day.end-current',
-      idempotencyKey:readIdempotencyKey(request),requestFingerprint:fingerprint(request,context,{expectedBusinessDate,reason}),
-      resultCodec:{encode:value=>value as unknown as JsonObject,decode:value=>decodeRecord<ManualBusinessDayEnd>(value,['id','businessDate','nextBusinessDate','endedAt'])},
-    },async tx=>{
-      const result=await recordManualBusinessDayEnd(tx,{employeeId:context.employeeId,expectedBusinessDate,reason})
-      return {result,auditEvents:result.replayed?[]:[{actor:employeeActor(context.employeeId),action:'business_day.manually_ended',
-        objectType:'manual_business_day_end',objectId:result.id,businessDate:result.businessDate,
-        beforeData:null,afterData:{nextBusinessDate:result.nextBusinessDate,endedAt:result.endedAt},reason}],
-        outboxMessages:result.replayed?[]:[{businessEventKey:`manual-business-day-end:${result.id}`,aggregateType:'manual_business_day_end',
-          aggregateId:result.id,aggregateVersion:1,eventType:'business_day.manually_ended.v1',
-          payload:{businessDate:result.businessDate,nextBusinessDate:result.nextBusinessDate,boundaryId:result.id}}]}
-    })
-    return reply.send(executionResponse(execution))
+    await resolveAndValidateContext(options,request)
+    return reply.code(410).send({error:{code:'MANUAL_BUSINESS_DAY_END_DISABLED',message:'不支持提前结束营业日，系统会按门店设定时间自动切日。'}})
   }))
 
   app.post('/business-days/close-pending', async (request, reply) => handleRoute(reply, async () => {
@@ -1048,7 +1028,6 @@ function safeErrorCode(error: unknown): string {
 }
 
 function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
-  if(error instanceof ManualBusinessDayEndConflict)return apiError(409,'BUSINESS_DAY_END_CONFLICT',error.message)
   if (error instanceof NormalizedAuthenticationRequiredError || error instanceof StaffSessionNotFoundError) {
     return apiError(401, 'AUTH_REQUIRED', '登录信息无效或已过期，请重新登录')
   }

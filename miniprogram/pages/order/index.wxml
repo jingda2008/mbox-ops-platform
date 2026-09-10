@@ -1,5 +1,5 @@
 <view class="page order-page">
-  <scroll-view scroll-y enhanced show-scrollbar="{{false}}" class="order-scroll">
+  <scroll-view scroll-y enhanced show-scrollbar="{{false}}" scroll-into-view="{{menuScrollTarget}}" class="order-scroll">
     <view class="order-scroll__content">
   <state-panel wx:if="{{loading}}" type="loading" title="正在确认桌次与菜单" />
 
@@ -29,11 +29,25 @@
 
     <view class="browse-menu">
       <view class="browse-menu__heading"><view><text>今晚菜单</text><text>价格透明 · {{connectionState === 'waiting' ? '开台后即可下单' : '到店后即可下单'}}</text></view><text>{{visibleProducts.length}} 款</text></view>
-      <view class="menu-tools menu-tools--browse">
-        <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="category-scroll"><view class="category-row"><button wx:for="{{categories}}" wx:key="code" class="{{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectCategory">{{item.name}}</button></view></scroll-view>
-        <scroll-view wx:if="{{subcategories.length}}" scroll-x enhanced show-scrollbar="{{false}}" class="category-scroll category-scroll--sub"><view class="category-row category-row--sub"><button wx:for="{{subcategories}}" wx:key="code" class="{{selectedSubcategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectSubcategory">{{item.name}}</button></view></scroll-view>
-        <view class="search-box"><text>⌕</text><input value="{{searchText}}" placeholder="搜索酒水、套餐或口味" bindinput="onSearchInput" /></view>
+      <view id="browse-menu-anchor"></view>
+<view class="menu-tools menu-tools--browse">
+      <view class="category-grid">
+        <button wx:for="{{categoryPreview}}" wx:key="code" class="category-chip {{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectCategory">{{item.name}}</button>
+        <button wx:if="{{categories.length > 7}}" class="category-chip category-more" bindtap="toggleCategories">{{categoriesExpanded ? '收起分类' : '全部分类 ⌄'}}</button>
       </view>
+      <scroll-view wx:if="{{categoriesExpanded}}" scroll-y class="category-options"><view class="category-grid">
+        <button wx:for="{{categories}}" wx:key="code" class="category-chip {{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectCategory">{{item.name}}</button>
+      </view></scroll-view>
+      <view class="menu-filter-line">
+        <button wx:if="{{subcategories.length}}" class="subcategory-trigger {{subcategoriesExpanded ? 'is-active' : ''}}" hover-class="menu-filter-pressed" bindtap="toggleSubcategories"><view class="menu-filter-surface">{{selectedSubcategory === 'all' ? '细分类' : selectedSubcategoryName}} {{subcategoriesExpanded ? '⌃' : '⌄'}}</view></button>
+        <text wx:else class="menu-result-count">{{selectedCategory === 'recommendation' ? '按本桌情况精选' : visibleProducts.length + ' 款'}}</text>
+        <button class="menu-search-trigger {{searchExpanded || searchText ? 'is-active' : ''}}" hover-class="menu-filter-pressed" aria-label="搜索菜单" bindtap="toggleMenuSearch"><view class="menu-filter-surface">⌕ 搜索{{searchText ? ' ·' : ''}}</view></button>
+      </view>
+      <scroll-view wx:if="{{subcategoriesExpanded}}" scroll-y class="category-options"><view class="category-grid">
+        <button wx:for="{{subcategories}}" wx:key="code" class="category-chip {{selectedSubcategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectSubcategory">{{item.name}}</button>
+      </view></scroll-view>
+      <view wx:if="{{searchExpanded || searchText}}" class="search-box"><text>⌕</text><input value="{{searchText}}" placeholder="搜索酒水、套餐或口味" bindinput="onSearchInput" /><button class="menu-search-clear" bindtap="clearMenuSearch">清除</button></view>
+    </view>
       <view wx:if="{{visibleProducts.length}}" class="product-list product-list--browse">
         <view wx:for="{{visibleProducts}}" wx:key="productId" class="product-row {{item.available ? '' : 'is-unavailable'}}" data-id="{{item.productId}}" role="button" aria-label="查看{{item.name}}大图和详情" hover-class="product-row--pressed" bindtap="openProductDetail">
           <view class="product-media">
@@ -77,7 +91,28 @@
       <button class="membership-invite__privacy" bindtap="showMembershipTerms">查看会员权益说明</button>
     </view>
 
-    <view class="recommend-entry {{recommendationEmpty && !recommendations.length ? 'recommend-entry--compact' : ''}}">
+
+    <view id="connected-menu-anchor"></view>
+<view class="menu-tools">
+      <view class="category-grid">
+        <button wx:for="{{categoryPreview}}" wx:key="code" class="category-chip {{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectCategory">{{item.name}}</button>
+        <button wx:if="{{categories.length > 7}}" class="category-chip category-more" bindtap="toggleCategories">{{categoriesExpanded ? '收起分类' : '全部分类 ⌄'}}</button>
+      </view>
+      <scroll-view wx:if="{{categoriesExpanded}}" scroll-y class="category-options"><view class="category-grid">
+        <button wx:for="{{categories}}" wx:key="code" class="category-chip {{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectCategory">{{item.name}}</button>
+      </view></scroll-view>
+      <view class="menu-filter-line">
+        <button wx:if="{{subcategories.length}}" class="subcategory-trigger {{subcategoriesExpanded ? 'is-active' : ''}}" hover-class="menu-filter-pressed" bindtap="toggleSubcategories"><view class="menu-filter-surface">{{selectedSubcategory === 'all' ? '细分类' : selectedSubcategoryName}} {{subcategoriesExpanded ? '⌃' : '⌄'}}</view></button>
+        <text wx:else class="menu-result-count">{{selectedCategory === 'recommendation' ? '按本桌情况精选' : visibleProducts.length + ' 款'}}</text>
+        <button class="menu-search-trigger {{searchExpanded || searchText ? 'is-active' : ''}}" hover-class="menu-filter-pressed" aria-label="搜索菜单" bindtap="toggleMenuSearch"><view class="menu-filter-surface">⌕ 搜索{{searchText ? ' ·' : ''}}</view></button>
+      </view>
+      <scroll-view wx:if="{{subcategoriesExpanded}}" scroll-y class="category-options"><view class="category-grid">
+        <button wx:for="{{subcategories}}" wx:key="code" class="category-chip {{selectedSubcategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectSubcategory">{{item.name}}</button>
+      </view></scroll-view>
+      <view wx:if="{{searchExpanded || searchText}}" class="search-box"><text>⌕</text><input value="{{searchText}}" placeholder="搜索酒水、套餐或口味" bindinput="onSearchInput" /><button class="menu-search-clear" bindtap="clearMenuSearch">清除</button></view>
+    </view>
+
+    <view wx:if="{{selectedCategory === 'recommendation'}}" class="recommend-entry {{recommendationEmpty && !recommendations.length ? 'recommend-entry--compact' : ''}}">
       <view class="recommend-entry__head"><view><text>推荐组合</text><text>根据本桌情况精选，最多三款</text></view></view>
       <scroll-view wx:if="{{recommendations.length}}" scroll-x enhanced show-scrollbar="{{false}}" class="recommend-scroll"><view class="recommend-row">
         <view wx:for="{{recommendations}}" wx:key="productId" class="recommend-card {{index === 0 ? 'recommend-card--priority' : ''}}">
@@ -92,14 +127,7 @@
         <button class="shake-recommendation" bindtap="onShakeRecommendation" loading="{{recommendationBusy}}" disabled="{{shakeArmed}}"><view class="recommend-entry__action-icon recommend-entry__action-icon--shake" aria-hidden="true"><view class="dice dice--one"><view></view></view><view class="dice dice--two"><view></view><view></view></view><view class="dice dice--three"><view></view><view></view><view></view></view></view><view><text>{{shakeArmed ? '请摇动手机' : '摇一摇'}}</text><text>摇出今夜灵感</text></view></button>
       </view>
     </view>
-
-    <view class="menu-tools">
-      <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="category-scroll"><view class="category-row"><button wx:for="{{categories}}" wx:key="code" class="{{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectCategory">{{item.name}}</button></view></scroll-view>
-      <scroll-view wx:if="{{subcategories.length}}" scroll-x enhanced show-scrollbar="{{false}}" class="category-scroll category-scroll--sub"><view class="category-row category-row--sub"><button wx:for="{{subcategories}}" wx:key="code" class="{{selectedSubcategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectSubcategory">{{item.name}}</button></view></scroll-view>
-      <view class="search-box"><text>⌕</text><input value="{{searchText}}" placeholder="搜索酒水、套餐或口味" bindinput="onSearchInput" /></view>
-    </view>
-
-    <view class="section product-section">
+    <view wx:if="{{selectedCategory !== 'recommendation'}}" class="section product-section">
       <view class="section-title"><text>菜单</text><text wx:if="{{benefitCount}}" class="section-link" bindtap="openBenefits">{{benefitCount}}项权益可用</text></view>
       <view wx:if="{{visibleProducts.length}}" class="product-list">
         <view wx:for="{{visibleProducts}}" wx:key="productId" class="product-row {{item.available ? '' : 'is-unavailable'}}" data-id="{{item.productId}}" role="button" aria-label="查看{{item.name}}大图和详情" hover-class="product-row--pressed" bindtap="openProductDetail">

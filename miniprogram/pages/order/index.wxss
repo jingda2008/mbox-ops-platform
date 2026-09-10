@@ -1769,3 +1769,24 @@
 .coupon-portion>text{display:block;font-size:22rpx;line-height:1.5;word-break:break-all}
 .coupon-portion picker{min-width:0;margin-top:8rpx;padding:12rpx;border-radius:12rpx;background:#eee9e2}
 .coupon-portion picker view{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:22rpx;line-height:1.5}
+/* No horizontal category hunting. The category bar shares the menu scroll owner. */
+.page.page .order-scroll__content { overflow:visible; }
+.page.page .menu-tools { position:sticky;top:0;z-index:8;margin:16rpx 0 0;padding:12rpx 0 8rpx;background:#f7f5f1;border-bottom:1rpx solid #e0dbd4; }
+.page.page .category-grid { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8rpx; }
+.page.page .category-chip { display:flex;align-items:center;justify-content:center;box-sizing:border-box;width:100%;min-width:0;min-height:44px;height:auto;margin:0;padding:8rpx 6rpx;border:1rpx solid #e2ded5;border-radius:12rpx;background:#fff;color:#555b50;font-size:22rpx;font-weight:500;line-height:1.35;white-space:normal;word-break:break-all; }
+.page.page .category-chip.is-active { background:#214f3e;color:#fff;border-color:#214f3e; }
+.page.page .category-more { background:#eeeee6;color:#315d46; }
+.page.page .category-options { height:220rpx;max-height:30vh;margin-top:10rpx; }
+.page.page .menu-filter-line { display:flex;align-items:center;justify-content:flex-start;gap:12rpx;min-width:0;margin-top:10rpx; }
+.page.page .subcategory-trigger,.page.page .menu-search-trigger,.page.page .menu-search-clear { display:flex;align-items:center;justify-content:center;width:auto;min-width:0;min-height:44px;height:auto;margin:0;padding:6rpx 8rpx;background:transparent;color:#315d46;font-size:22rpx;font-weight:500;line-height:1.4;white-space:normal; }
+.page.page .subcategory-trigger,.page.page .menu-search-trigger { box-sizing:border-box;padding:0;border:0;border-radius:0;background:transparent;color:#214f3e;font-size:14px;font-weight:500;line-height:1.4; }
+.page.page .menu-filter-surface { box-sizing:border-box;min-height:30px;max-width:100%;padding:4px 8px;border:1rpx solid #c5d3c9;border-radius:6px;background:#edf3ee; }
+.page.page .subcategory-trigger { flex:0 1 auto;max-width:72%;justify-content:center; }
+.page.page .menu-search-trigger { flex:0 0 auto;min-width:44px;max-width:46%;background:transparent; }
+.page.page .menu-search-trigger .menu-filter-surface { background:#fff; }
+.page.page .is-active .menu-filter-surface { border-color:#315d46;background:#dcebe1; }
+.page.page .menu-filter-pressed .menu-filter-surface { background:#d0e2d6;color:#153c2c; }
+@media (max-width:375px) { .page.page .subcategory-trigger,.page.page .menu-search-trigger { font-size:14px; } }
+.page.page .menu-result-count { font-size:21rpx;color:#7a7c72; }
+.page.page .menu-tools .search-box { height:44px;margin-top:4rpx; }
+.page.page .menu-tools button::after { border:0; }

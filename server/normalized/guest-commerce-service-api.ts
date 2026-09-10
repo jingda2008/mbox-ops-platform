@@ -132,6 +132,7 @@ interface CatalogMenuRow extends Record<string, unknown> {
   top_category_sort_order: number | null
   fulfillment_station: string
   product_kind: 'single' | 'bundle'
+  bundle_configuration_ready?: boolean
   bundle_components: unknown
   bundle_choice_groups: unknown
   fixed_separate_amount_minor: string | null
@@ -976,6 +977,52 @@ async function searchGuestCatalog(
       menu_category.sort_order AS category_sort_order,
       COALESCE(parent_menu_category.sort_order,menu_category.sort_order) AS top_category_sort_order,
       product.fulfillment_station, product.product_kind,
+      (
+        product.product_kind = 'single'
+        OR (
+          (EXISTS (
+            SELECT 1 FROM mbox.product_bundle_components component
+            WHERE component.tenant_id = product.tenant_id
+              AND component.store_id = product.store_id
+              AND component.bundle_product_id = product.id
+          ) OR EXISTS (
+            SELECT 1 FROM mbox.product_bundle_choice_groups choice_group
+            WHERE choice_group.tenant_id=product.tenant_id
+              AND choice_group.store_id=product.store_id
+              AND choice_group.bundle_product_id=product.id
+          ))
+          AND NOT EXISTS (
+            SELECT 1
+            FROM mbox.product_bundle_components component
+            JOIN mbox.products component_product
+              ON component_product.tenant_id = component.tenant_id
+              AND component_product.store_id = component.store_id
+              AND component_product.id = component.component_product_id
+            WHERE component.tenant_id = product.tenant_id
+              AND component.store_id = product.store_id
+              AND component.bundle_product_id = product.id
+              AND component_product.status <> 'active'
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM mbox.product_bundle_choice_groups choice_group
+            WHERE choice_group.tenant_id=product.tenant_id
+              AND choice_group.store_id=product.store_id
+              AND choice_group.bundle_product_id=product.id
+              AND choice_group.selection_count>(
+                SELECT count(*) FROM mbox.product_bundle_choice_options choice_option
+                JOIN mbox.products option_product
+                  ON option_product.tenant_id=choice_option.tenant_id
+                 AND option_product.store_id=choice_option.store_id
+                 AND option_product.id=choice_option.component_product_id
+                WHERE choice_option.tenant_id=choice_group.tenant_id
+                  AND choice_option.store_id=choice_group.store_id
+                  AND choice_option.choice_group_id=choice_group.id
+                  AND option_product.status='active' AND option_product.guest_visible
+                  AND 'guest_qr'=ANY(option_product.allowed_channels)
+              )
+          )
+        )
+      ) AS bundle_configuration_ready,
       COALESCE(component_list.items, '[]'::jsonb) AS bundle_components,
       COALESCE(choice_group_list.items, '[]'::jsonb) AS bundle_choice_groups,
       component_list.separate_amount_minor AS fixed_separate_amount_minor,
@@ -1347,52 +1394,6 @@ async function searchGuestCatalog(
       ))
       AND 'guest_qr'=ANY(product.allowed_channels)
       AND price.amount_minor IS NOT NULL
-      AND (
-        product.product_kind = 'single'
-        OR (
-          (EXISTS (
-            SELECT 1 FROM mbox.product_bundle_components component
-            WHERE component.tenant_id = product.tenant_id
-              AND component.store_id = product.store_id
-              AND component.bundle_product_id = product.id
-          ) OR EXISTS (
-            SELECT 1 FROM mbox.product_bundle_choice_groups choice_group
-            WHERE choice_group.tenant_id=product.tenant_id
-              AND choice_group.store_id=product.store_id
-              AND choice_group.bundle_product_id=product.id
-          ))
-          AND NOT EXISTS (
-            SELECT 1
-            FROM mbox.product_bundle_components component
-            JOIN mbox.products component_product
-              ON component_product.tenant_id = component.tenant_id
-              AND component_product.store_id = component.store_id
-              AND component_product.id = component.component_product_id
-            WHERE component.tenant_id = product.tenant_id
-              AND component.store_id = product.store_id
-              AND component.bundle_product_id = product.id
-              AND component_product.status <> 'active'
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM mbox.product_bundle_choice_groups choice_group
-            WHERE choice_group.tenant_id=product.tenant_id
-              AND choice_group.store_id=product.store_id
-              AND choice_group.bundle_product_id=product.id
-              AND choice_group.selection_count>(
-                SELECT count(*) FROM mbox.product_bundle_choice_options choice_option
-                JOIN mbox.products option_product
-                  ON option_product.tenant_id=choice_option.tenant_id
-                 AND option_product.store_id=choice_option.store_id
-                 AND option_product.id=choice_option.component_product_id
-                WHERE choice_option.tenant_id=choice_group.tenant_id
-                  AND choice_option.store_id=choice_group.store_id
-                  AND choice_option.choice_group_id=choice_group.id
-                  AND option_product.status='active' AND option_product.guest_visible
-                  AND 'guest_qr'=ANY(option_product.allowed_channels)
-              )
-          )
-        )
-      )
       AND ($4::text IS NULL OR product.category_code = $4)
       AND (
         $5 = ''
@@ -1459,7 +1460,8 @@ function publicCatalogProduct(row: CatalogMenuRow) {
     &&separateAmountFromMinor>amountMinor?separateAmountFromMinor-amountMinor:null
   const choiceGroupsReady=bundleChoiceGroups.every((group)=>
     group.options.filter((option)=>option.available).length>=group.selectionCount)
-  const baseAvailabilityStatus = publicCatalogAvailabilityStatus(row)
+  const baseAvailabilityStatus = row.bundle_configuration_ready === false
+    ? 'configuration_incomplete' : publicCatalogAvailabilityStatus(row)
   const availabilityStatus=baseAvailabilityStatus==='available'&&!choiceGroupsReady
     ?'inventory_unavailable':baseAvailabilityStatus
   const configuredCategoryName = publicString(row.category_name)

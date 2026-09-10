@@ -136,7 +136,7 @@ export class RecollectionAuthorizationRepository {
     const updated = await this.transaction.query(`
       UPDATE mbox.order_recollection_authorizations
       SET status='consumed', consumed_at=clock_timestamp(), consumed_payment_id=$4::uuid
-      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND status='active'
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND status='active' AND expires_at>clock_timestamp()
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, authorizationId, paymentId])
     if (updated.rowCount !== 1) throw new RecollectionAuthorizationRequiredError()
   }

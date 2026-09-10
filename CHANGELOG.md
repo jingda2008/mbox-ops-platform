@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0-rc.186 - 2026-09-11
+
+- Distinguish actual SLA escalation from rate-limited urgent reminders.
+- Expire stale recollection authorizations with audit evidence and recheck expiry at consumption.
+- Add schema189 to allow evidence-bound terminal correction of fully refunded, manager-cancelled historical items; preserve financial and inventory history.
+- Include an explicit four-item repair preview/apply script and a separate Windows bridge upgrade package source.
+
 ## 1.0.0-rc.185 - 2026-09-11
 
 - Consolidate order-center permissions/history, manual order bills, scanner compatibility, product taste profiles and gift presentation.

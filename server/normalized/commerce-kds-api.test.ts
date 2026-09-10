@@ -347,6 +347,7 @@ function fixture(input: {
       if (sql.startsWith("SELECT set_config('app.kds_manager_cancel_task_id'")) {
         return rows([{ set_config: taskId }]) as PostgresQueryResult<Row>
       }
+      if (sql.startsWith("UPDATE mbox.order_items item SET status='cancelled'")) return rows([]) as PostgresQueryResult<Row>
       if (sql.startsWith('UPDATE mbox.kds_tasks SET status=')) {
         return { rows: [] as Row[], rowCount: 1 }
       }

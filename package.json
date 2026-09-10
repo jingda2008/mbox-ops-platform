@@ -67,6 +67,7 @@
     "release:metadata": "node scripts/verify-release-metadata.mjs",
     "release:verify": "node scripts/verify-release-smoke.mjs && node scripts/verify-release-browser.mjs",
     "release:miniprogram:verify": "node scripts/verify-miniprogram-release.mjs",
+    "test:miniprogram:layout": "node --test scripts/miniprogram-refined-layout.test.mjs",
     "release:miniprogram:build": "node scripts/build-miniprogram-release-candidate.mjs",
     "release:miniprogram:test": "node --test scripts/miniprogram-checkout-upgrade.test.mjs scripts/miniprogram-checkout-coupons.test.mjs scripts/miniprogram-cart-portions.test.mjs scripts/miniprogram-marketing-preferences.test.mjs scripts/miniprogram-member-cards.test.mjs scripts/miniprogram-benefit-wallet.test.mjs scripts/miniprogram-session-launch.test.mjs scripts/miniprogram-customer-funnel.test.mjs scripts/miniprogram-menu-pagination.test.mjs scripts/miniprogram-compact-overlay-actions.test.mjs scripts/miniprogram-viewport-layout.test.mjs scripts/build-miniprogram-release-candidate.test.mjs scripts/verify-miniprogram-release.test.mjs",
     "release:config:generate": "tsx scripts/generate-normalized-runtime-config.ts",

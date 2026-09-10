@@ -144,6 +144,11 @@ const [wechatGlobalStyle, alipayGlobalStyle] = await Promise.all([
   readFile(join(alipayRoot, 'app.acss'), 'utf8'),
 ])
 assert(cssSignature(alipayGlobalStyle) === cssSignature(wechatGlobalStyle), '全局布局样式与微信不一致')
+const [wechatStateStyle, alipayStateStyle] = await Promise.all([
+  readFile(join(wechatRoot, 'components/state-panel/index.wxss'), 'utf8'),
+  readFile(join(alipayRoot, 'components/state-panel/index.acss'), 'utf8'),
+])
+assert(cssSignature(alipayStateStyle) === cssSignature(wechatStateStyle), '加载/空态/异常组件样式与微信不一致')
 for (const file of await walk(join(wechatRoot,'styles'))) {
   if (!file.endsWith('.wxss')) continue
   const equivalent=join(alipayRoot,'styles',relative(join(wechatRoot,'styles'),file).replace(/\.wxss$/,'.acss'))

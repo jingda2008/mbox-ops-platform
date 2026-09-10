@@ -1,0 +1,152 @@
+/* Shared visual hierarchy for every customer journey state.
+   Keep touch targets in px; rpx alone becomes too small on narrow phones.
+   Do not change scrolling ownership, safe-area insets or financial semantics. */
+.page.page .primary-button.primary-button,
+.page.page .secondary-button.secondary-button,
+.page.page .danger-button.danger-button,
+.page.page .accept-button {
+  display:flex; align-items:center; justify-content:center;
+  min-width:0; max-width:100%; min-height:44px; height:auto;
+  padding:12rpx 20rpx; border-radius:16rpx;
+  font-size:26rpx; font-weight:600; line-height:1.45;
+  white-space:normal; overflow-wrap:anywhere; box-shadow:none;
+}
+.page.page .primary-button[disabled],
+.page.page .danger-button[disabled] { color:#62594e; background:#e4dfd7; }
+.page.page .compact-icon-action,
+.page.page .compact-text-action {
+  width:44px; min-width:44px; max-width:44px;
+  height:44px; min-height:44px; max-height:44px; flex-basis:44px;
+}
+.page.page .top-band,
+.page.page .reservation-head,
+.page.page .service-head,
+.page.page .status-head,
+.page.page .points-head,
+.page.page .member-center-head,
+.page.page .preferences-hero,
+.page.page .contact-hero,
+.page.page .coupons-hero,
+.page.page .notifications-hero,
+.page.page .performance-hero {
+  padding-top:24rpx; padding-bottom:24rpx; margin-bottom:20rpx;
+}
+.page.page .hero-title,
+.page.page .story-article__title,
+.page.page .reservation-title,
+.page.page .gate-title,
+.page.page .community-hero__title,
+.page.page .detail-title text:nth-child(2),
+.page.page .profile-hero__title,
+.page.page .preferences-title,
+.page.page .contact-hero text:nth-child(2),
+.page.page .coupons-hero text:nth-child(2),
+.page.page .cards-title,
+.page.page .contact-title,
+.page.page .notifications-hero text:nth-child(2),
+.page.page .performance-hero__title,
+.page.page .points-title,
+.page.page .member-center-title,
+.page.page .account-table,
+.page.page .service-title,
+.page.page .status-title,
+.page.page .complaint-title,
+.page.page .song-title,
+.page.page .privacy-title {
+  margin-top:8rpx; font-size:34rpx; font-weight:600;
+  line-height:1.35; letter-spacing:.5rpx; overflow-wrap:anywhere;
+}
+.page.page .panel,
+.page.page .status-card,
+.page.page .custom-panel,
+.page.page .terms-head,
+.page.page .terms-content,
+.page.page .terms-status {
+  padding:20rpx; border-radius:16rpx; box-shadow:none;
+}
+.page.page .section { margin-top:24rpx; }
+.page.page .section-title { margin-bottom:14rpx; gap:12rpx; }
+.page.page .section-title text:first-child { min-width:0; font-size:28rpx; overflow-wrap:anywhere; }
+.page.page .warning,
+.page.page .error-banner,
+.page.page .success-banner,
+.page.page .status-banner {
+  margin-bottom:14rpx; padding:14rpx 16rpx;
+  border-left-width:3rpx; border-radius:10rpx;
+  font-size:24rpx; line-height:1.5; overflow-wrap:anywhere;
+}
+.page.page .field { margin-bottom:18rpx; }
+.page.page .field__label { margin-bottom:8rpx; font-size:24rpx; }
+.page.page .field__input { min-height:44px; height:44px; font-size:26rpx; border-radius:12rpx; }
+.page.page .field__textarea { border-radius:12rpx; font-size:26rpx; }
+.page.page .list-row { padding:18rpx 0; gap:14rpx; }
+.page.page .list-row__title { font-size:26rpx; line-height:1.45; overflow-wrap:anywhere; }
+.page.page .list-row__meta { margin-top:6rpx; line-height:1.5; overflow-wrap:anywhere; }
+/* Existing modal scroll/flex structure and native tab safe-area stay intact. */
+.page.page .editorial-panel__title,
+.page.page .member-invite-title,
+.page.page .community-member-title,
+.page.page .detail-member-title,
+.page.page .login-sheet__title,
+.page.page .product-detail-name,
+.page.page .checkout-confirm__title,
+.page.page .payment-result__title {
+  font-size:32rpx; font-weight:600; line-height:1.4; overflow-wrap:anywhere;
+}
+.page.page .payment-result__sheet {
+  padding-top:44px; border-radius:20rpx 20rpx 0 0;
+  box-shadow:0 -4rpx 20rpx rgba(25,20,16,.1);
+}
+.page.page .payment-result__mark {
+  width:56rpx; height:56rpx; margin:0 auto 12rpx;
+  font-size:28rpx; font-weight:600;
+}
+.page.page .payment-result__copy { font-size:26rpx; line-height:1.55; overflow-wrap:anywhere; }
+.page.page .payment-result__actions {
+  display:grid; grid-template-columns:repeat(2,minmax(0,1fr));
+  align-items:stretch; gap:12rpx; margin-top:20rpx;
+}
+.page.page .payment-result__actions button {
+  width:100%; min-width:0; max-width:100%; margin:0; flex-basis:auto;
+}
+.page.page .checkout-confirm__footer {
+  display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12rpx;
+}
+.page.page .checkout-confirm__footer-button { width:100%; min-width:0; margin:0; flex-basis:auto; white-space:normal; overflow-wrap:anywhere; }
+.page.page .cart-dock { box-shadow:0 -2rpx 12rpx rgba(24,20,17,.06); }
+.page.page .cart-overview__copy > text:first-child { font-size:25rpx; font-weight:600; }
+.page.page .product-detail-choice.product-detail-choice {
+  min-width:0; min-height:44px; border-radius:10rpx; box-shadow:none;
+}
+.page.page .service-option.service-option {
+  min-height:56px; padding:12rpx 8rpx; gap:6rpx; border-radius:12rpx;
+}
+.page.page .service-item__name { font-weight:600; }
+.page.page .feedback-actions button.feedback-action {
+  display:flex; align-items:center; justify-content:center;
+  min-height:44px; height:auto; padding:10rpx 12rpx;
+  border-radius:14rpx; font-size:24rpx; line-height:1.45; white-space:normal;
+}
+.page.page .account-total__amount { margin:8rpx 0 16rpx; font-size:44rpx; line-height:1.3; overflow-wrap:anywhere; }
+.page.page .account-note { padding-top:14rpx; }
+.page.page .order-card__head { display:flex; flex-wrap:wrap; gap:12rpx; padding-bottom:14rpx; }
+.page.page .order-card__head > view:first-child { flex:1 1 220rpx; min-width:0; }
+.page.page .order-card__amount { margin-top:0; max-width:100%; text-align:right; }
+.page.page .order-card__amount .amount { white-space:normal; overflow-wrap:anywhere; }
+.page.page .payment-line { min-height:0; padding:12rpx 0; margin-bottom:12rpx; }
+.page.page .order-detail-meta { font-size:23rpx; gap:4rpx; }
+.page.page .song-band { border-bottom-width:3rpx; }
+.page.page .song-subtitle { margin-top:10rpx; }
+.page.page .privacy-section { padding:20rpx 0; }
+.page.page .privacy-section text:last-child { margin-top:10rpx; }
+/* Do not shrink legal text, monetary precision or disabled-state explanations. */
+@media (max-width:340px) {
+  .page.page .payment-result__actions,
+  .page.page .checkout-confirm__footer { grid-template-columns:minmax(0,1fr); }
+}
+/* Browsing keeps the menu first; scan remains a reachable compact action. */
+.page.page .browse-intro--compact { display:flex;align-items:center;justify-content:space-between;gap:16rpx;margin:0;padding:16rpx 20rpx;border-radius:18rpx;box-shadow:none; }
+.page.page .browse-intro--compact .browse-intro__copy { flex:1;min-width:0;padding:0; }
+.page.page .scan-strip-title { display:block;font-size:26rpx;line-height:1.5;font-weight:600; }
+.page.page .scan-strip-copy { display:block;font-size:22rpx;line-height:1.5;color:#e4e8df; }
+.page.page .browse-intro--compact .gate-button { flex:0 0 auto;width:auto;max-width:50%;min-height:44px;margin:0;padding:8rpx 16rpx;font-size:24rpx;line-height:1.5;background:#f5eee5;color:#214f3e; }

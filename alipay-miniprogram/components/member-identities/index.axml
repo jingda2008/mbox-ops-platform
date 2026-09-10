@@ -1,5 +1,5 @@
 <view class="identities">
-  <view class="identities-head"><text>我的专属身份</text><navigator url="/pages/profile-cards/index">发现同好 ›</navigator></view>
+  <navigator class="identities-head" url="/pages/profile-cards/index"><text>我的专属身份</text><text>发现同好 ›</text></navigator>
   <view a:if="{{identities.length}}" class="identity-badges"><navigator a:for="{{identities}}" a:key="id" url="/pages/profile-cards/index" class="identity-badge"><text class="identity-star">✦</text><text>{{item.name}}</text></navigator></view>
   <text a:elif="{{loading}}" class="identity-hint">正在读取身份标识</text>
   <button a:elif="{{failed}}" class="identity-retry" onTap="reload">身份标识暂未读取，点此重试</button>

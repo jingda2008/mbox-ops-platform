@@ -1,10 +1,10 @@
 .identities{min-width:0;margin:8rpx 0 12rpx;color:#315d46}
-.identities-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8rpx;font-size:22rpx}
-.identities-head navigator{min-height:44px;display:flex;align-items:center;color:#826331}
+.identities-head{display:flex;box-sizing:border-box;width:100%;min-height:44px;padding:18rpx 22rpx;border-radius:18rpx;background:#214f3e;color:#fff;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8rpx;font-size:24rpx;line-height:1.5}
+.identities-head text:last-child{color:#e5d3a5;font-size:22rpx}
 .identity-badges{display:flex;flex-wrap:wrap;gap:12rpx}
 .identity-badge{display:flex;align-items:center;gap:8rpx;box-sizing:border-box;min-height:44px;max-width:100%;padding:8rpx 20rpx;border:1rpx solid #ded1b3;border-radius:16rpx;background:linear-gradient(130deg,#f8f0dc,#fffcf4);font-size:24rpx;font-weight:600;line-height:1.5}
 .identity-badge text:last-child{min-width:0;overflow-wrap:anywhere;word-break:break-all}
 .identity-star{flex-shrink:0;color:#a07634}
-.identity-hint{display:block;font-size:22rpx;color:#76776c;line-height:1.6}
+.identity-hint{display:block;margin-top:8rpx;font-size:22rpx;color:#76776c;line-height:1.6}
 .identity-retry{min-height:44px;margin:0;padding:8rpx 0;text-align:left;color:#76776c;background:transparent;font-size:22rpx;line-height:1.6;white-space:normal}
 .identity-retry::after{border:0}

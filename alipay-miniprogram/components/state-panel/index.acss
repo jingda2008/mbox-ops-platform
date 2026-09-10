@@ -1,8 +1,8 @@
-.state { display: flex; min-height: 240rpx; padding: 48rpx 32rpx; align-items: center; justify-content: center; flex-direction: column; text-align: center; box-sizing: border-box; }
-.state__mark { display: flex; width: 64rpx; height: 64rpx; margin-bottom: 20rpx; align-items: center; justify-content: center; border-radius: 50%; background: #e5e7eb; color: #5f6672; font-weight: 700; }
+.state { display: flex; min-width:0; min-height: 180rpx; padding: 28rpx 22rpx; align-items: center; justify-content: center; flex-direction: column; text-align: center; box-sizing: border-box; overflow-wrap:anywhere; }
+.state__mark { display: flex; width: 48rpx; height: 48rpx; margin-bottom: 12rpx; align-items: center; justify-content: center; border-radius: 50%; background: #e5e7eb; color: #5f6672; font-weight: 600; }
 .state--error .state__mark { background: #fff0ed; color: #b53d2e; }
 .state--loading .state__mark { background: #edf4ff; color: #315f9a; }
-.state__title { color: #16181d; font-size: 30rpx; font-weight: 700; }
-.state__message { max-width: 560rpx; margin-top: 12rpx; color: #68707d; font-size: 25rpx; line-height: 1.6; }
-.state__action { min-width: 180rpx; height: 72rpx; margin-top: 28rpx; padding: 0 30rpx; border: 1rpx solid #ccd1d9; border-radius: 8rpx; background: #ffffff; color: #24272d; font-size: 26rpx; line-height: 70rpx; }
+.state__title { max-width:100%; color: #29251f; font-size: 26rpx; font-weight: 600; line-height:1.5; }
+.state__message { max-width: 100%; margin-top: 8rpx; color: #746c63; font-size: 23rpx; line-height: 1.6; }
+.state__action.state__action { box-sizing:border-box; width:auto; min-width: 0; max-width:100%; min-height:44px; height:auto; margin:18rpx 0 0; padding:10rpx 24rpx; border:1rpx solid #d8d1c8; border-radius:14rpx; background:#fffdfa; color:#315d46; font-size:24rpx; line-height:1.5; white-space:normal; }
 .state__action::after { border: 0; }

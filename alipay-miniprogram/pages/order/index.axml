@@ -21,14 +21,9 @@
       <button class="secondary-button gate-button" onTap="retryTable">结台后重新扫码</button>
       <text class="gate-note">你可以先查看今晚菜单</text>
     </view>
-    <view a:else class="browse-intro">
-      <image class="gate-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX 标志" />
-      <view class="browse-intro__copy">
-        <text class="gate-kicker">M-BOX · 今晚菜单</text><text class="gate-title">先看今晚，再决定怎么喝</text>
-        <text class="gate-copy">先慢慢看；到店扫码后就能下单付款。</text>
-      </view>
+    <view a:else class="browse-intro browse-intro--compact">
+      <view class="browse-intro__copy"><text class="scan-strip-title">今晚菜单</text><text class="scan-strip-copy">可先浏览，扫码后下单</text></view>
       <button class="primary-button gate-button" onTap="scanTable">到店扫码点单</button>
-      <text class="gate-note">随便看看也完全可以</text>
     </view>
     <view a:if="{{error}}" class="error-banner gate-error">{{error}}</view>
 
@@ -83,7 +78,7 @@
     </view>
 
     <view class="recommend-entry {{recommendationEmpty && !recommendations.length ? 'recommend-entry--compact' : ''}}">
-      <view class="recommend-entry__head"><view><text>今夜甄选</text><text>先为这桌挑三款</text></view></view>
+      <view class="recommend-entry__head"><view><text>推荐组合</text><text>根据本桌情况精选，最多三款</text></view></view>
       <scroll-view a:if="{{recommendations.length}}" scroll-x enhanced show-scrollbar="{{false}}" class="recommend-scroll"><view class="recommend-row">
         <view a:for="{{recommendations}}" a:key="productId" class="recommend-card {{index === 0 ? 'recommend-card--priority' : ''}}">
           <image a:if="{{item.imageUrl}}" class="recommend-card__image" src="{{item.imageUrl}}" mode="aspectFill" />
@@ -91,7 +86,7 @@
         </view>
       </view></scroll-view>
       <view a:elif="{{recommendationBusy}}" class="recommend-loading"><text>正在为这桌挑选</text><text>稍等片刻</text></view>
-      <view a:elif="{{recommendationEmpty}}" class="recommend-empty"><text>今夜的三款正在准备</text><text>先看看菜单，稍后再来看看</text></view>
+      <view a:elif="{{recommendationEmpty}}" class="recommend-empty"><text>暂时没有合适的推荐组合</text><text>可在甄选组合中查看全部套餐</text></view>
       <view class="recommend-entry__actions" aria-label="智能推荐">
         <button onTap="onRecommend" loading="{{recommendationBusy}}"><view class="recommend-entry__action-icon recommend-entry__action-icon--guided" aria-hidden="true"><view class="pick-glass"></view><view class="pick-spark">✧</view></view><view><text>帮我选</text><text>发现合你口味的</text></view></button>
         <button class="shake-recommendation" onTap="onShakeRecommendation" loading="{{recommendationBusy}}" disabled="{{shakeArmed}}"><view class="recommend-entry__action-icon recommend-entry__action-icon--shake" aria-hidden="true"><view class="dice dice--one"><view></view></view><view class="dice dice--two"><view></view><view></view></view><view class="dice dice--three"><view></view><view></view><view></view></view></view><view><text>{{shakeArmed ? '请摇动手机' : '摇一摇'}}</text><text>摇出今夜灵感</text></view></button>

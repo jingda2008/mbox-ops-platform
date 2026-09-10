@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { mkdir, open, readFile, rename, writeFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
 
-const VERSION = '1.0.1'
+const VERSION = '1.0.2'
 const execFileAsync = promisify(execFile)
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const dataDirectory = process.env.MBOX_PRINT_BRIDGE_DATA
@@ -204,11 +204,14 @@ function renderTicket(value) {
     value.tableCode ? `桌台：${value.tableCode}${value.guestCount ? `  人数：${value.guestCount}` : ''}` : '',
     `单号：${requiredText(value.ticketReference, 'ticket.ticketReference')}`,
     `营业日：${requiredText(value.businessDate, 'ticket.businessDate')}`,
+    value.issuedAt ? `时间：${new Date(value.issuedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}` : '',
+    value.operatorLabel ? `经办：${String(value.operatorLabel)}` : '',
     divider(),
   ]
   for (const item of value.lines) {
     if (!item || typeof item !== 'object') throw new Error('invalid_ticket_line')
     lines.push(`${requiredText(item.name, 'line.name')}  ×${positiveInteger(item.quantity, 'line.quantity')}`)
+    if (Number.isSafeInteger(item.unitAmountMinor)) lines.push(`  单价：${formatCny(item.unitAmountMinor)}`)
     if (item.note) lines.push(`  备注：${String(item.note)}`)
     if (Number.isSafeInteger(item.totalAmountMinor)) lines.push(`  小计：${formatCny(item.totalAmountMinor)}`)
   }
@@ -230,7 +233,9 @@ function paymentLabel(payment) {
   if (provider === 'physical_pos') return 'POS刷卡支付'
   if (provider === 'wechat') return '微信支付'
   if (provider === 'postar') return '星驿支付'
-  return '测试支付'
+  if (provider === 'external_manual') return '其他线下收款'
+  if (provider === 'simulation') return '模拟支付（测试）'
+  return '收款方式待核对'
 }
 
 async function authenticatedRequest(config, path, body) {

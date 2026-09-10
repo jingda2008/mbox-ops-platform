@@ -24,6 +24,7 @@ export interface FulfillmentWorkItem {
   priority: number
   overdue: boolean
   readyForDelivery: boolean
+  deliveryUnbatchedQuantity?:number
   canPrepare: boolean
   canDeliver: boolean
   canRemake: boolean
@@ -94,6 +95,7 @@ interface FulfillmentRow extends Record<string, unknown> {
   product_id: string
   product_name: string
   quantity: number
+  delivery_unbatched_quantity?:number
   unit_price_minor: string
   total_amount_minor: string
   parent_order_item_id: string | null
@@ -197,6 +199,8 @@ async function readFulfillmentRows(
       item.product_id,
       product.name AS product_name,
       item.quantity,
+      CASE WHEN EXISTS(SELECT 1 FROM mbox.print_source_jobs legacy WHERE legacy.tenant_id=task.tenant_id AND legacy.store_id=task.store_id AND legacy.aggregate_id=task.id AND legacy.ticket_kind='delivery') THEN 0
+        ELSE GREATEST(0,task.quantity-COALESCE((SELECT sum(part.quantity) FROM mbox.delivery_batch_items part WHERE part.tenant_id=task.tenant_id AND part.store_id=task.store_id AND part.kds_task_id=task.id),0)) END::integer AS delivery_unbatched_quantity,
       item.unit_price_minor::text,
       item.total_amount_minor::text,
       item.parent_order_item_id,
@@ -357,6 +361,7 @@ function mapWorkItem(row: FulfillmentRow): FulfillmentWorkItem {
     priority: row.priority,
     overdue: row.overdue,
     readyForDelivery: row.ready_for_delivery,
+    deliveryUnbatchedQuantity:row.delivery_unbatched_quantity,
     canPrepare: row.can_prepare,
     canDeliver: row.can_deliver,
     canRemake: row.can_remake,

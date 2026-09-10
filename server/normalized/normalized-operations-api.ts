@@ -181,13 +181,19 @@ export const normalizedOperationsApiPlugin: FastifyPluginAsync<NormalizedOperati
   }))
   app.get('/operations/history', async (request,reply)=>handleRoute(reply,async()=>{
     const context=await resolveAndValidateContext(options,request)
-    requireCapability(context,'reconciliation.view')
+    if (!context.capabilities.some(permission => ['reconciliation.view','order.history.view','order.history.all'].includes(permission))) {
+      requireCapability(context,'order.history.view')
+    }
     const query=readObject(request.query,'查询条件')
     const businessDate=typeof query.businessDate==='string'?query.businessDate:context.businessDate
     const endDate=typeof query.endDate==='string'?query.endDate:businessDate
     const page=Number(query.page??0)
     const table=typeof query.table==='string'?query.table.trim():''
     const employee=typeof query.employee==='string'?query.employee.trim():''
+    const search=typeof query.search==='string'?query.search.trim():''
+    const area=typeof query.area==='string'?query.area.trim():''
+    const paymentStatus=typeof query.paymentStatus==='string'?query.paymentStatus:''
+    if(search.length>80||area.length>80||!['','unpaid','pending','partially_paid','paid','partially_refunded','refunded'].includes(paymentStatus))throw new RequestValidationError('搜索或支付状态无效')
     if(!/^\d{4}-\d{2}-\d{2}$/.test(businessDate)||!Number.isFinite(Date.parse(businessDate))
       ||new Date(businessDate).toISOString().slice(0,10)!==businessDate
       ||!/^\d{4}-\d{2}-\d{2}$/.test(endDate)||!Number.isFinite(Date.parse(endDate))
@@ -196,7 +202,7 @@ export const normalizedOperationsApiPlugin: FastifyPluginAsync<NormalizedOperati
       ||!Number.isSafeInteger(page)||page<0||page>2000||table.length>80||employee.length>80) throw new RequestValidationError('查询日期、页码或筛选条件无效')
     if(!options.operationsQuery.getOperatingHistory) return reply.code(503).send({error:{message:'历史查询暂不可用'}})
     if(query.exportAll!==undefined&&query.exportAll!=='true')throw new RequestValidationError('导出参数无效')
-    return reply.send({data:await options.operationsQuery.getOperatingHistory(context.scope,context.employeeId,{businessDate,endDate,table,employee,page,...(query.exportAll==='true'?{exportAll:true}:{})})})
+    return reply.send({data:await options.operationsQuery.getOperatingHistory(context.scope,context.employeeId,{businessDate,endDate,table,employee,page,...(search?{search}:{}),...(area?{area}:{}),...(paymentStatus?{paymentStatus}:{}),...(query.exportAll==='true'?{exportAll:true}:{})})})
   }))
 
   app.get('/operations', async (request, reply) => handleRoute(reply, async () => {

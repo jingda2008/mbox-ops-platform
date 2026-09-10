@@ -31,6 +31,19 @@ function ticket(kind: 'cashier_settlement' | 'cashier_payment' | 'cashier_refund
 }
 
 describe('print ticket layout', () => {
+  it('renders historical unit prices without deriving them from discounted totals', () => {
+    const source = createPrintTicketSnapshot({...ticket('cashier_settlement'), lines: [
+      {name:'啤酒',quantity:4,unitAmountMinor:4000,totalAmountMinor:12000},
+      {name:'套餐内鸡尾酒',quantity:1,note:'套餐内商品，不另收费',unitAmountMinor:null,totalAmountMinor:null},
+    ]})
+    for (const paper of ['58mm','80mm'] as const) {
+      const html = renderPrintTicketHtml(source,{paper,thermal:true})
+      expect(html).toContain('单价 ¥40.00')
+      expect(html).toContain('¥120.00')
+      expect(html).not.toContain('单价 ¥30.00')
+      expect(html).toContain('套餐内商品，不另收费')
+    }
+  })
   it('roundtrips new document kinds, keeps 300-character notes, and never clips long table bills', () => {
     for (const kind of ['order_summary','delivery','table_settlement'] as const) {
       const source=createPrintTicketSnapshot({...ticket('cashier_payment'),kind,note:'注'.repeat(300)})

@@ -194,6 +194,21 @@ describe('StaffActionsApi', () => {
     }))
   })
 
+  it('reuses an uncertain KDS attempt and gives distinct actions their own key', async () => {
+    const send = vi.fn<typeof fetch>()
+      .mockRejectedValueOnce(new TypeError('offline'))
+      .mockImplementation(async () => new Response(JSON.stringify({ data: {} }), { status: 200 }))
+    let count = 0
+    const api = new StaffActionsApi({ fetch: send, createIdempotencyKey: () => `attempt-${++count}` })
+    await expect(api.runKdsAction('task-a', 'deliver')).rejects.toThrow()
+    await api.runKdsAction('task-b', 'complete')
+    await api.runKdsAction('task-a', 'deliver')
+    const keys = send.mock.calls.map((call) => new Headers(call[1]?.headers).get('idempotency-key'))
+    expect(keys).toEqual(['staff-action-attempt-1', 'staff-action-attempt-2', 'staff-action-attempt-1'])
+    await api.runKdsAction('task-a', 'remake')
+    expect(new Headers(send.mock.calls[3]?.[1]?.headers).get('idempotency-key')).toBe('staff-action-attempt-3')
+  })
+
   it('binds assisted ordering to the current table context and sends gift mode without a client authority id', async () => {
     const token = 'T'.repeat(43)
     const send = vi.fn<typeof fetch>()

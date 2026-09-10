@@ -182,7 +182,7 @@ describe('normalizedOperationsApiPlugin', () => {
     expect((await denied.app.inject({method:'GET',url:'/api/business-days/end-current/preview'})).statusCode).toBe(410)
     expect((await denied.app.inject({method:'POST',url:'/api/business-days/end-current',payload:{}})).statusCode).toBe(410)
   })
-  it('validates history ranges and requires financial permission before querying', async () => {
+  it('validates history ranges and requires explicit read permission before querying', async () => {
     const denied=fixture()
     expect((await denied.app.inject({method:'GET',url:'/api/operations/history'})).statusCode).toBe(403)
     const value=fixture({resolveContext:()=>({scope:{tenantId,storeId},employeeId,businessDate:'2026-09-10',capabilities:['reconciliation.view']})})
@@ -194,6 +194,17 @@ describe('normalizedOperationsApiPlugin', () => {
     expect(read).not.toHaveBeenCalled()
     expect((await value.app.inject({method:'GET',url:'/api/operations/history?businessDate=2026-09-01&endDate=2026-09-10&table=W01'})).statusCode).toBe(200)
     expect(read).toHaveBeenCalledWith({tenantId,storeId},employeeId,{businessDate:'2026-09-01',endDate:'2026-09-10',table:'W01',employee:'',page:0})
+  })
+  it('allows order read permission without granting finance, printing or refund execution', async () => {
+    const value=fixture({resolveContext:()=>({scope:{tenantId,storeId},employeeId,businessDate:'2026-09-10',capabilities:['order.history.view']})})
+    const read=vi.fn(async()=>({orders:[],receipts:[],financialSummaryVisible:false}))
+    Object.assign(value.operationsQuery,{getOperatingHistory:read})
+    const response=await value.app.inject({method:'GET',url:'/api/operations/history?search=136&area=大厅&paymentStatus=paid&earliestBusinessDate=1900-01-01&allowFinancialSummary=true'})
+    expect(response.statusCode).toBe(200)
+    expect(read.mock.calls[0]).toEqual([expect.anything(),employeeId,expect.objectContaining({search:'136',area:'大厅',paymentStatus:'paid'})])
+    expect(read.mock.calls[0]?.[2]).not.toHaveProperty('earliestBusinessDate')
+    expect(read.mock.calls[0]?.[2]).not.toHaveProperty('allowFinancialSummary')
+    expect(value.executions).toHaveLength(0)
   })
   it('uses a distinct, permissioned command for customer-left turnover without calling normal close', async () => {
     const customerLeftRepository = {

@@ -273,9 +273,11 @@ export class PrintBridgeRepository {
       await this.appendPrintEvent(input.jobId, 'printed', 'printing', 'printed', null)
       return { id: input.jobId, status: 'printed', replayed: false }
     }
-    const failureCode = normalizeHardwareFailureCode(input.failureCode ?? 'bridge_print_failed')
-    const terminal = Number(job.attempts) >= Number(job.max_attempts)
-      || failureCode.startsWith('ambiguous_')
+    const failureCode = normalizeHardwareFailureCode(input.failureCode ?? 'print_result_unknown')
+    // Only a definite pre-submission failure may be retried automatically.
+    // Unknown/future bridge codes must not silently become permission to print twice.
+    const definitelyNotSubmitted=['powershell_not_found','invalid_ticket_snapshot','printer_queue_not_found','printer_unavailable'].includes(failureCode)
+    const terminal = Number(job.attempts) >= Number(job.max_attempts) || !definitelyNotSubmitted
     const status = terminal ? 'dead' : 'failed'
     const updated = await this.transaction.query(`
       UPDATE mbox.print_jobs SET status=$5,

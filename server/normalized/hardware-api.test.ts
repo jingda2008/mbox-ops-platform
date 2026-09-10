@@ -15,6 +15,15 @@ const apps: ReturnType<typeof Fastify>[] = []
 afterEach(async () => Promise.all(apps.splice(0).map((app) => app.close())))
 
 describe('hardware API role cropping', () => {
+  it('does not infer stock-return or delivery authority from printer management',async()=>{
+    const app=await build(['printer.manage','order.history.all'])
+    expect((await app.inject({method:'POST',url:'/operations/delivery-batches',payload:{items:[]}})).statusCode).toBe(403)
+    expect((await app.inject({method:'POST',url:`/operations/order-items/${deviceId}/stock-return`,payload:{quantity:1}})).statusCode).toBe(403)
+  })
+  it.each([['order.history.all'],['printer.manage'],['reconciliation.view'],['print.reprint']])('does not infer bill-print authority from %s',async permission=>{
+    const app=await build([permission])
+    expect((await app.inject({method:'POST',url:`/hardware/orders/${deviceId}/bill`,payload:{},headers:{'idempotency-key':'bill-access-test-0001'}})).statusCode).toBe(403)
+  })
   it('restricts ticket policies to printer managers and validates independent switches and copy bounds', async () => {
     const staff=await build(['print.view','work.bar'])
     expect((await staff.inject({method:'GET',url:'/hardware/print-ticket-policies'})).statusCode).toBe(403)

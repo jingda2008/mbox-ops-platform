@@ -115,6 +115,8 @@ export interface UpsertPrinterRouteInput {
 }
 
 export interface MaterializePrintJobsInput {
+  /** Server-only explicit user print request; automatic policy switches do not deny manual printing. */
+  manualRequest?: boolean
   sourceOutboxMessageId: string
   stationCode: HardwareStation
   productCategoryCode?: string | null
@@ -419,7 +421,7 @@ export class HardwareRepository {
       SELECT enabled,copies FROM mbox.print_ticket_policies
       WHERE tenant_id=$1 AND store_id=$2 AND ticket_kind=$3 FOR SHARE`,
     [this.transaction.scope.tenantId,this.transaction.scope.storeId,input.printSnapshot.kind ?? ''])).rows[0]
-    if (policy?.enabled === false) return []
+    if (policy?.enabled === false && !input.manualRequest) return []
 
     const routes = await this.transaction.query<RouteRow>(`
       SELECT route.id, route.code, route.name, route.station_code,

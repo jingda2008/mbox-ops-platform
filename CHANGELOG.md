@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0-rc.185 - 2026-09-11
+
+- Consolidate order-center permissions/history, manual order bills, scanner compatibility, product taste profiles and gift presentation.
+- Add same-session/workstation delivery batches with partial quantities, asynchronous printing and concurrency protection.
+- Add authorized partial physical stock returns after confirmed refunds, original-cost movements and duplicate protection; never refund again or restore consumed recipes automatically.
+- Include migrations 187–188 and preserve physical/native acceptance gaps. Backend deployment does not update Mini Programs or Windows bridge installations.
+
 ## 1.0.0-rc.184 - 2026-09-10
 
 - Consolidate member identity, consent, coupon and optional checkout-upgrade work with operational recovery and linked Mini Program layout fixes.

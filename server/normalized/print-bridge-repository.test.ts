@@ -13,6 +13,20 @@ const databaseUrl = process.env.TEST_NORMALIZED_DATABASE_URL
 const postgresIt = databaseUrl ? it : it.skip
 
 describe('PrintBridgeRepository', () => {
+  it.each([undefined,'print_result_unknown','bridge_print_failed','ambiguous_print_result','bridge_print_timeout','future_error','包含打印内容的非法错误'])('does not retry an uncertain bridge result %s',async failureCode=>{
+    const transaction=new ScriptedTransaction([rows([{status:'printing',attempts:1,max_attempts:5}]),rows([],1),rows([],1)])
+    const result=await new PrintBridgeRepository(transaction,'unit-test-secret-value').recordPrintResult(
+      {id:bridgeId,publicId:'print-bridge-1234567890abcdef'}, {jobId,outcome:'failed',failureCode})
+    expect(result.status).toBe('dead')
+    expect(transaction.calls[1]?.values[4]).toBe('dead')
+  })
+  it.each(['powershell_not_found','invalid_ticket_snapshot','printer_queue_not_found','printer_unavailable'])('permits bounded retry for definite pre-submission failure %s',async failureCode=>{
+    const transaction=new ScriptedTransaction([rows([{status:'printing',attempts:1,max_attempts:5}]),rows([],1),rows([],1)])
+    const result=await new PrintBridgeRepository(transaction,'unit-test-secret-value').recordPrintResult(
+      {id:bridgeId,publicId:'print-bridge-1234567890abcdef'}, {jobId,outcome:'failed',failureCode})
+    expect(result.status).toBe('failed')
+    expect(transaction.calls[1]?.values[4]).toBe('failed')
+  })
   it('claims only assigned bridge jobs and does not lease commands behind slow prints', async () => {
     const transaction = new ScriptedTransaction([
       rows([{

@@ -187,6 +187,7 @@ export type FulfillmentStation = 'bar' | 'kitchen' | 'cashier'
 export type FulfillmentStatus = 'pending' | 'accepted' | 'preparing' | 'ready' | 'failed'
 
 export interface StaffFulfillmentItem {
+  deliveryUnbatchedQuantity?:number
   taskId: string
   businessDate: string
   carryover: boolean

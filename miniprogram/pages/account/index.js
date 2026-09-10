@@ -180,7 +180,9 @@ Page({
         publicId: order.publicId,
         roundText: this.historyMode ? '我的订单' : `第 ${order.round} 轮`,
         statusText: ORDER_STATUS[order.status] || '状态待确认',
-        paymentText: PAYMENT_STATUS[order.paymentStatus] || '付款状态待确认',
+        paymentText: order.totalAmountMinor === 0 && order.status !== 'cancelled'
+          ? (order.pricingKind === 'gift' ? '赠送，无需支付' : '无需支付')
+          : PAYMENT_STATUS[order.paymentStatus] || '付款状态待确认',
         createdAtText: dateTime(order.createdAt),
         paidAtText: order.paidAt ? dateTime(order.paidAt) : '',
         totalText: Number.isSafeInteger(order.totalAmountMinor) ? money(order.totalAmountMinor) : '金额待同步',

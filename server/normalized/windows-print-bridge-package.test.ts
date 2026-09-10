@@ -6,6 +6,22 @@ import { describe, expect, it } from 'vitest'
 const directory = join(process.cwd(), 'deploy', 'windows-print-bridge')
 
 describe('Windows print bridge package', () => {
+  it('prints unit price, Chinese payment label and issued time without inventing prices', async () => {
+    const source = await readFile(join(directory,'bridge.mjs'),'utf8')
+    const render = vm.runInNewContext(`${source.slice(source.indexOf('function renderTicket(value)'),source.indexOf('async function authenticatedRequest'))}; renderTicket`, {
+      requiredText:(value:string)=>value,positiveInteger:(value:number)=>value,
+      divider:()=> '---',center:(value:string)=>value,formatCny:(value:number)=>`¥${(value/100).toFixed(2)}`,
+    })
+    const text = render({schemaVersion:1,title:'结账单',ticketReference:'order-test',businessDate:'2026-09-10',
+      issuedAt:'2026-09-10T12:00:00Z',operatorLabel:'收银员',payment:{provider:'external_manual'},
+      lines:[{name:'啤酒',quantity:4,unitAmountMinor:4000,totalAmountMinor:12000}]})
+    expect(text).toContain('单价：¥40.00')
+    expect(text).toContain('小计：¥120.00')
+    expect(text).toContain('其他线下收款')
+    expect(text).toContain('时间：')
+    expect(text).toContain('经办：收银员')
+    expect(text).not.toContain('测试支付')
+  })
   it('measures remaining text and paginates long tickets instead of truncating them', async () => {
     const source = await readFile(join(directory, 'print-ticket.ps1'), 'utf8')
     expect(source).toContain('MeasureString($pageState.Remaining')

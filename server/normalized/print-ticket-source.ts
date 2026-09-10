@@ -37,6 +37,7 @@ interface OrderItemRow extends Record<string, unknown> {
   parent_order_item_id: string | null
   quantity: number
   total_amount_minor: string | number
+  unit_price_minor?: string | number
   fulfillment_station: HardwareStation | 'cashier' | 'none'
   product_snapshot: unknown
   note: string | null
@@ -94,10 +95,13 @@ interface RouteCategoryRow extends Record<string, unknown> {
 }
 
 interface SourceItem {
+  id: string
   name: string
   quantity: number
   note: string | null
   totalAmountMinor: number
+  unitAmountMinor: number | null
+  referenceUnitAmountMinor: number | null
   categoryCode: string | null
   parentOrderItemId: string | null
   fulfillmentStation: HardwareStation | 'cashier' | 'none'
@@ -111,8 +115,61 @@ interface SourceItem {
 export class PrintTicketSourceRepository {
   private readonly hardware: HardwareRepository
 
-  constructor(private readonly transaction: ScopedTransaction) {
+  constructor(private readonly transaction: ScopedTransaction, private readonly manualRequest = false) {
     this.hardware = new HardwareRepository(transaction)
+  }
+
+  async materializeManualOrderBill(sourceId:string,orderId:string,operatorLabel:string):Promise<readonly PrintJob[]> {
+    if(!this.manualRequest)throw new Error('账单须由订单中心明确请求')
+    const source=(await this.transaction.query<{occurred_at:string}>(
+      'SELECT occurred_at::text FROM mbox.outbox_messages WHERE tenant_id=$1 AND store_id=$2 AND id=$3',
+      [this.transaction.scope.tenantId,this.transaction.scope.storeId,sourceId])).rows[0]
+    if(!source)throw new Error('打印请求不存在')
+    const context=await this.loadOrderContext(orderId)
+    if(context.order_status==='draft')throw new Error('草稿不能生成消费账单')
+    const items=await this.loadItems(orderId)
+    const amounts=(await this.transaction.query<{received:string;refunded:string;pending:string}>(`
+      SELECT COALESCE(sum(p.amount_minor) FILTER(WHERE p.status IN ('succeeded','partially_refunded','refunded')),0)::text received,
+        COALESCE(sum((SELECT COALESCE(sum(r.amount_minor),0) FROM mbox.refunds r
+          WHERE r.tenant_id=p.tenant_id AND r.store_id=p.store_id AND r.payment_id=p.id AND r.status='succeeded')),0)::text refunded,
+        COALESCE(sum(p.amount_minor) FILTER(WHERE p.status='pending'),0)::text pending
+      FROM mbox.payments p WHERE p.tenant_id=$1 AND p.store_id=$2 AND p.order_id=$3`,
+    [this.transaction.scope.tenantId,this.transaction.scope.storeId,orderId])).rows[0]!
+    const received=numeric(amounts.received,'received'),refunded=numeric(amounts.refunded,'refunded')
+    const total=numeric(context.total_amount_minor,'total'),pending=numeric(amounts.pending,'pending')
+    const unsettled=context.order_status!=='cancelled'&&total>0&&['unpaid','pending','partially_paid'].includes(context.payment_status)
+    const due=unsettled?Math.max(0,total-received):0
+    const consumedAt=new Date(context.submitted_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})
+    const packageComparisons:PrintTicketLine[]=[]
+    for(const parent of items.filter(item=>item.productKind==='bundle'&&item.parentOrderItemId===null)){
+      const children=items.filter(item=>item.parentOrderItemId===parent.id)
+      if(!children.length||children.some(item=>item.referenceUnitAmountMinor===null)||parent.unitAmountMinor===null){
+        packageComparisons.push({name:`${parent.name} · 套餐参考价`,quantity:1,note:'历史单点参考价未完整留存，不能计算单点对比优惠。'})
+        continue
+      }
+      const reference=children.reduce((sum,item)=>sum+item.referenceUnitAmountMinor!*item.quantity,0)
+      const packagePrice=parent.unitAmountMinor*parent.quantity
+      if(!Number.isSafeInteger(reference)||!Number.isSafeInteger(packagePrice))throw new Error('套餐参考金额超出有效范围')
+      packageComparisons.push({name:`${parent.name} · 单点参考合计`,quantity:1,totalAmountMinor:reference},
+        {name:reference>=packagePrice?'套餐优惠（已体现在套餐售价）':'套餐售价高于单点参考的差额',quantity:1,totalAmountMinor:Math.abs(reference-packagePrice)})
+    }
+    const lines:PrintTicketLine[]=[{name:'消费时间',quantity:1,note:consumedAt},...items.map(toCashierLine),...packageComparisons,
+      {name:'优惠前应付（套餐按套餐售价）',quantity:1,totalAmountMinor:numeric(context.subtotal_amount_minor,'subtotal')},
+      {name:'其他优惠减免（已扣除）',quantity:1,totalAmountMinor:numeric(context.discount_amount_minor,'discount')},
+      {name:'订单应付金额',quantity:1,totalAmountMinor:total},
+      {name:'已确认实际收款',quantity:1,totalAmountMinor:received},
+      {name:'已确认实际退款',quantity:1,totalAmountMinor:refunded},
+      {name:'实际净收款',quantity:1,totalAmountMinor:received-refunded},
+      {name:'尚未收款',quantity:1,totalAmountMinor:due},
+      {name:'渠道待确认金额（不计入实收）',quantity:1,totalAmountMinor:pending}]
+    return this.materializeDocument(sourceId,orderId,{
+      kind:unsettled?'cashier_settlement':'order_summary',
+      subtitle:context.order_status==='cancelled'?'订单已取消 · 历史收退款核对':unsettled?'订单预结账 · 不代表已付款':'单笔订单账单 · 非整桌汇总',
+      test:false,issuedAt:source.occurred_at,businessDate:context.business_date,
+      ticketReference:context.order_public_id,tableCode:context.table_code,guestCount:context.guest_count,
+      operatorLabel,note:context.order_note,
+      payment:null,lines,totalAmountMinor:null,currency:currency(context.currency),
+    })
   }
 
   async materializeOrderSummary(sourceId: string, orderId: string): Promise<readonly PrintJob[]> {
@@ -126,11 +183,11 @@ export class PrintTicketSourceRepository {
       ticketReference: context.order_public_id, tableCode: context.table_code,
       guestCount: context.guest_count, operatorLabel: null, note: context.order_note,
       payment: null, currency: currency(context.currency),
-      lines: items.map(item => item.parentOrderItemId ? toProductionLine(item) : toCashierLine(item)),
+      lines: items.map(toCashierLine),
       totalAmountMinor: numeric(context.total_amount_minor, 'order total'),
     }
     snapshot.lines = [...snapshot.lines,
-      {name:'商品原价合计',quantity:1,totalAmountMinor:numeric(context.subtotal_amount_minor,'subtotal')},
+      {name:'优惠前应付合计（套餐按套餐售价）',quantity:1,totalAmountMinor:numeric(context.subtotal_amount_minor,'subtotal')},
       {name:'优惠减免（已扣除）',quantity:1,totalAmountMinor:numeric(context.discount_amount_minor,'discount')}]
     const jobs = await this.materializeDocument(sourceId, `${context.order_public_id}:summary`, snapshot)
     // A tab order needs a pre-bill before any collection has been initiated.
@@ -159,20 +216,49 @@ export class PrintTicketSourceRepository {
       WHERE task.tenant_id=$1 AND task.store_id=$2 AND task.id=$3
         AND task.status='ready' AND item.status<>'delivered' AND item.status<>'cancelled'
       FOR SHARE OF task,item`, [this.transaction.scope.tenantId,this.transaction.scope.storeId,taskId])).rows[0]
-    if (!task || !await this.hasActiveRoute('cashier')) return []
+    if (!task) return []
     const context = await this.loadOrderContext(task.order_id)
     if (context.order_status === 'cancelled') return []
     const result = await this.transaction.query<OrderItemRow>(`SELECT item.id AS item_id,item.parent_order_item_id,
-      item.quantity,item.total_amount_minor,item.fulfillment_station,item.product_snapshot,item.note
+      item.quantity,item.unit_price_minor,item.total_amount_minor,item.fulfillment_station,item.product_snapshot,item.note
       FROM mbox.order_items item WHERE item.tenant_id=$1 AND item.store_id=$2 AND item.id=$3`,
     [this.transaction.scope.tenantId,this.transaction.scope.storeId,task.order_item_id])
     const item = sourceItem(result.rows[0]!)
+    if (item.fulfillmentStation !== 'bar' && item.fulfillmentStation !== 'kitchen') return []
+    if (!await this.hasActiveRoute(item.fulfillmentStation)) return []
     return this.materializeDocument(sourceId, taskId, createPrintTicketSnapshot({
       kind:'delivery',subtitle:`M-BOX · ${item.fulfillmentStation === 'kitchen' ? '后厨' : '吧台'}取货后送桌，不是制作单`,
       test:false,issuedAt:task.ready_at,businessDate:context.business_date,ticketReference:context.order_public_id,
       tableCode:context.table_code,guestCount:context.guest_count,operatorLabel:null,note:context.order_note,
       payment:null,lines:[toProductionLine(item)],totalAmountMinor:null,currency:'CNY',
-    }))
+    }), item.fulfillmentStation)
+  }
+
+  async materializeDeliveryBatch(sourceId:string,batchId:string):Promise<readonly PrintJob[]>{
+    const scope=[this.transaction.scope.tenantId,this.transaction.scope.storeId]
+    const batch=(await this.transaction.query<{station_code:'bar'|'kitchen';created_at:string;table_code:string;business_date:string;employee_name:string}>(`
+      SELECT batch.station_code,batch.created_at::text,venue.code AS table_code,session.business_date::text,employee.display_name AS employee_name
+      FROM mbox.delivery_batches batch JOIN mbox.table_sessions session ON session.tenant_id=batch.tenant_id AND session.store_id=batch.store_id AND session.id=batch.table_session_id
+      JOIN mbox.tables venue ON venue.tenant_id=session.tenant_id AND venue.store_id=session.store_id AND venue.id=session.table_id
+      JOIN mbox.employees employee ON employee.tenant_id=batch.tenant_id AND employee.store_id=batch.store_id AND employee.id=batch.created_by_employee_id
+      WHERE batch.tenant_id=$1 AND batch.store_id=$2 AND batch.id=$3`,[...scope,batchId])).rows[0]
+    if(!batch)throw new Error('配送批次不存在')
+    const rows=(await this.transaction.query<OrderItemRow>(`SELECT item.id AS item_id,item.parent_order_item_id,part.quantity,
+      item.unit_price_minor,item.total_amount_minor,item.fulfillment_station,item.product_snapshot,item.note
+      FROM mbox.delivery_batch_items part JOIN mbox.kds_tasks task ON task.tenant_id=part.tenant_id AND task.store_id=part.store_id AND task.id=part.kds_task_id
+      JOIN mbox.order_items item ON item.tenant_id=task.tenant_id AND item.store_id=task.store_id AND item.id=task.order_item_id
+      WHERE part.tenant_id=$1 AND part.store_id=$2 AND part.batch_id=$3 ORDER BY item.created_at,item.id`,[...scope,batchId])).rows
+    const lines:PrintTicketLine[]=[],keys:string[]=[]
+    for(const row of rows){
+      const line=toProductionLine(sourceItem(row))
+      const key=JSON.stringify([row.product_snapshot,row.note])
+      const existing=lines[keys.indexOf(key)]
+      if(existing)existing.quantity+=line.quantity
+      else {lines.push(line);keys.push(key)}
+    }
+    return this.materializeDocument(sourceId,batchId,{kind:'delivery',subtitle:'本批配送 · 勿重复制作',test:false,
+      issuedAt:batch.created_at,businessDate:batch.business_date,ticketReference:batchId,tableCode:batch.table_code,
+      guestCount:null,operatorLabel:batch.employee_name,note:null,payment:null,lines,totalAmountMinor:null,currency:'CNY'},batch.station_code)
   }
 
   async materializeTableSettlement(sourceId: string, sessionId: string): Promise<readonly PrintJob[]> {
@@ -233,10 +319,10 @@ export class PrintTicketSourceRepository {
       operatorLabel:row.employee_name,note:row.reason,payment:null,lines,totalAmountMinor:null,currency:'CNY'})
   }
 
-  private async materializeDocument(sourceId: string, reference: string, snapshot: Omit<PrintTicketSnapshot, 'schemaVersion' | 'title'>): Promise<PrintJob[]> {
+  private async materializeDocument(sourceId: string, reference: string, snapshot: Omit<PrintTicketSnapshot, 'schemaVersion' | 'title'>, station: HardwareStation = 'cashier'): Promise<PrintJob[]> {
     const jobs: PrintJob[]=[]
     for(const [index,page] of paginatePrintTicket(snapshot).entries()) {
-      jobs.push(...await this.hardware.materializeFromOutbox({sourceOutboxMessageId:sourceId,stationCode:'cashier',sourceType:'cashier',
+      jobs.push(...await this.hardware.materializeFromOutbox({manualRequest:this.manualRequest,sourceOutboxMessageId:sourceId,stationCode:station,sourceType:station === 'cashier' ? 'cashier' : 'kds',
         sourceReference:`${reference}:page${index+1}`,printSnapshot:ticketToJson(page),containsPriorityNote:page.note !== null || page.lines.some(l=>Boolean(l.note))}))
     }
     return jobs
@@ -583,7 +669,7 @@ export class PrintTicketSourceRepository {
   private async loadItems(orderId: string, productionOnly = false): Promise<readonly SourceItem[]> {
     const result = await this.transaction.query<OrderItemRow>(`
       SELECT item.id AS item_id, item.parent_order_item_id, item.quantity,
-        item.total_amount_minor, item.fulfillment_station, item.product_snapshot, item.note
+        item.unit_price_minor, item.total_amount_minor, item.fulfillment_station, item.product_snapshot, item.note
       FROM mbox.order_items AS item
       WHERE item.tenant_id=$1::uuid AND item.store_id=$2::uuid AND item.order_id=$3::uuid
         AND item.status<>'cancelled'
@@ -715,10 +801,13 @@ function sourceItem(row: Readonly<OrderItemRow>): SourceItem {
   const categoryCode = optionalText(snapshot.categoryCode)
   const productKind = optionalText(snapshot.productKind) ?? 'single'
   return {
+    id: row.item_id,
     name,
     quantity: integer(row.quantity, 'quantity'),
     note: row.note,
     totalAmountMinor: numeric(row.total_amount_minor, 'total_amount_minor'),
+    unitAmountMinor: row.unit_price_minor === undefined ? null : numeric(row.unit_price_minor, 'unit_price_minor'),
+    referenceUnitAmountMinor: typeof snapshot.singlePriceReferenceMinor==='number' && Number.isSafeInteger(snapshot.singlePriceReferenceMinor) && snapshot.singlePriceReferenceMinor>=0 ? snapshot.singlePriceReferenceMinor : null,
     categoryCode,
     parentOrderItemId: row.parent_order_item_id,
     fulfillmentStation: row.fulfillment_station,
@@ -731,7 +820,9 @@ function toProductionLine(item: Readonly<SourceItem>): PrintTicketLine {
 }
 
 function toCashierLine(item: Readonly<SourceItem>): PrintTicketLine {
-  return { name: item.name, quantity: item.quantity, note: item.note, totalAmountMinor: item.totalAmountMinor }
+  return { name: item.name, quantity: item.quantity,
+    note: item.parentOrderItemId ? `套餐内商品，不另收费；${item.referenceUnitAmountMinor===null?'下单时单点参考价未留存':`单点参考单价 ¥${(item.referenceUnitAmountMinor/100).toFixed(2)}`} ${item.note??''}`.trim().slice(0,300) : item.note,
+    unitAmountMinor: item.parentOrderItemId ? null : item.unitAmountMinor, totalAmountMinor: item.parentOrderItemId ? null : item.totalAmountMinor }
 }
 
 function paymentFromRow(row: Readonly<Pick<PaymentContextRow, 'payment_provider' | 'payment_method'>>): PrintTicketPayment {

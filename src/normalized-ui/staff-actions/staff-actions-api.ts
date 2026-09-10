@@ -240,6 +240,7 @@ export interface ObservationEventReplacement {
 }
 
 export interface StaffActionsApiPort {
+  createDeliveryBatch?(items:Array<{taskId:string;quantity:number}>):Promise<void>
   loadOperations(signal?: AbortSignal): Promise<StaffOperationsData>
   loadFulfillment(signal?: AbortSignal): Promise<StaffFulfillmentData>
   loadMemberBenefitTasks?(tableSessionId?: string | null, signal?: AbortSignal): Promise<StaffMemberBenefitTasks>
@@ -388,6 +389,7 @@ export interface StaffActionsApiOptions {
 }
 
 export class StaffActionsApi implements StaffActionsApiPort {
+  private readonly pendingKdsCommands = new Map<string, string>()
   private employeeId = 'current-session'
   private readonly send: typeof fetch
   private readonly timeoutMs: number
@@ -601,15 +603,26 @@ export class StaffActionsApi implements StaffActionsApiPort {
   }
 
   async runKdsAction(taskId: string, action: 'complete' | 'deliver' | 'remake'): Promise<void> {
+    const fingerprint = `${this.employeeId}:${taskId}:${action}`
+    const key = this.pendingKdsCommands.get(fingerprint) ?? `staff-action-${this.createIdempotencyKey()}`
+    this.pendingKdsCommands.set(fingerprint, key)
     if (action === 'remake') {
       await this.command(
         `/api/commerce/kds/${encodeURIComponent(taskId)}/remake`,
         { reasonCode: 'production_remake', reasonNote: '现场确认后重新制作' },
         'idempotency-key',
+        key,
       )
+      this.pendingKdsCommands.delete(fingerprint)
       return
     }
-    await this.command(`/api/commerce/kds/${encodeURIComponent(taskId)}/actions`, { action }, 'idempotency-key')
+    await this.command(`/api/commerce/kds/${encodeURIComponent(taskId)}/actions`, { action }, 'idempotency-key', key)
+    this.pendingKdsCommands.delete(fingerprint)
+  }
+
+  async createDeliveryBatch(items:Array<{taskId:string;quantity:number}>):Promise<void>{
+    await executeRecoverableCommand(`${this.employeeId}:delivery-batch`,{items},`delivery-batch-${this.createIdempotencyKey()}`,
+      key=>this.command('/api/operations/delivery-batches',{items},'idempotency-key',key))
   }
 
   async cancelKdsTask(taskId: string, reasonNote: string): Promise<void> {

@@ -183,7 +183,7 @@ export function renderPrintTicketHtml(
     : `<section class="payment"><span>支付方式</span><strong>${escapeHtml(paymentLabel(ticket.payment))}</strong></section>`
   const venue = ticket.kind === 'cashier_settlement' ? '<p class="venue">陆家嘴中心 L+MALL</p>' : ''
   const note = ticket.note === null ? '' : `<section class="note"><b>备注</b>${escapeHtml(ticket.note)}</section>`
-  const lines = ticket.lines.map((line) => `<li><div><b>${escapeHtml(line.name)}</b>${line.note ? `<small>${escapeHtml(line.note)}</small>` : ''}</div><strong>×${line.quantity}</strong>${line.totalAmountMinor === null || line.totalAmountMinor === undefined ? '' : `<em>${escapeHtml(formatCny(line.totalAmountMinor))}</em>`}</li>`).join('')
+  const lines = ticket.lines.map((line) => `<li><div><b>${escapeHtml(line.name)}</b>${line.unitAmountMinor == null ? '' : `<small>单价 ${escapeHtml(formatCny(line.unitAmountMinor))}</small>`}${line.note ? `<small>${escapeHtml(line.note)}</small>` : ''}</div><strong>×${line.quantity}</strong>${line.totalAmountMinor === null || line.totalAmountMinor === undefined ? '' : `<em>${escapeHtml(formatCny(line.totalAmountMinor))}</em>`}</li>`).join('')
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>
     @page { size: ${profile.paper === 'a4' ? 'A4' : `${profile.paper} auto`}; margin: 0; }
     :root { --ticket-width: ${profile.paper === 'a4' ? '80mm' : profile.paper}; --ticket-padding-x: ${profile.paper === '58mm' ? '4.5mm' : '6mm'}; --ticket-padding-y: ${profile.paper === '58mm' ? '5.5mm' : '7mm'}; --brand: ${profile.thermal ? '#15291f' : '#176a4a'}; --brand-soft: ${profile.thermal ? '#f4f4f4' : '#eff7f2'}; --text: #18241e; }

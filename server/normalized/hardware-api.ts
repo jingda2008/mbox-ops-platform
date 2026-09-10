@@ -5,6 +5,7 @@ import {
   IdempotencyConflictError,
   IdempotencyInProgressError,
   IdempotencyRecordError,
+  appendOutboxMessage,
   type JsonCodec,
   type JsonObject,
   type NormalizedCommandExecutor,
@@ -22,6 +23,13 @@ import type { NormalizedOperationsRequestContext } from './normalized-operations
 import { NormalizedAuthenticationRequiredError } from './normalized-request-context.js'
 import { StaffSessionNotFoundError } from './staff-session-repository.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction } from './transaction-runner.js'
+import {StaffAccessRepository} from './staff-access-repository.js'
+import {orderHistoryAccess} from './order-history-access.js'
+import {PrintTicketSourceRepository} from './print-ticket-source.js'
+import {DeliveryBatchRepository} from './delivery-batch-repository.js'
+import {OrderStockReturnRepository} from './order-stock-return-repository.js'
+import {InventoryConflictError} from './inventory-repository.js'
+import {assertEmployeeTableSessionAccess, EmployeeTableAccessDeniedError} from './employee-table-access.js'
 
 type TransactionPort = Pick<ScopedPostgresTransactionRunner, 'run'>
 type CommandPort = Pick<NormalizedCommandExecutor, 'execute'>
@@ -48,6 +56,73 @@ class HardwareAccessDeniedError extends Error {
 }
 
 export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (app, options) => {
+  app.post('/operations/delivery-batches',async(request,reply)=>handle(reply,async()=>{
+    const context=await options.resolveContext(request),body=readObject(request.body)
+    requireAny(context,['kds.deliver'])
+    if(!Array.isArray(body.items))throw new HardwareRequestError('请选择配送菜品')
+    const items=body.items.map(value=>{const item=readObject(value);return {taskId:readUuid(item.taskId,'taskId'),quantity:optionalInteger(item.quantity,1,9999)??0}})
+    const result=await options.commands.execute(command(request,context,'delivery.batch.create',body,codec()),async tx=>{
+      const access=await new StaffAccessRepository(tx).resolve(context.employeeId)
+      if(!access.permissions.includes('kds.deliver'))throw new HardwareAccessDeniedError()
+      const batch=await new DeliveryBatchRepository(tx).create(context.employeeId,items)
+      await assertEmployeeTableSessionAccess(tx,{employeeId:context.employeeId,tableSessionId:batch.tableSessionId,allTablePermissionCodes:['kds.deliver'],requiredPermissionCodes:['kds.deliver']})
+      return outcome(context,'delivery.batch.ready.v1','delivery_batch',batch.id,'确认本批备齐',batch)
+    })
+    return reply.code(result.replayed?200:202).send({data:result.value,replayed:result.replayed})
+  }))
+  app.post('/operations/order-items/:itemId/stock-return',async(request,reply)=>handle(reply,async()=>{
+    const context=await options.resolveContext(request),body=readObject(request.body)
+    requireAny(context,['inventory.receive'])
+    const itemId=readUuid(readObject(request.params).itemId,'itemId')
+    const result=await options.commands.execute(command(request,context,'order.stock-return',body,codec()),async tx=>{
+      const access=await new StaffAccessRepository(tx).resolve(context.employeeId)
+      if(!access.permissions.includes('inventory.receive'))throw new HardwareAccessDeniedError()
+      if(!access.permissions.some(p=>['order.history.view','order.history.all','reconciliation.view'].includes(p)))throw new HardwareAccessDeniedError()
+      const date=(await tx.query<{date:string}>('SELECT mbox.current_operating_business_date($1,$2)::text AS date',[context.scope.tenantId,context.scope.storeId])).rows[0]!.date
+      const earliest=orderHistoryAccess(access.permissions,date).earliestBusinessDate
+      const visible=(await tx.query<{id:string}>(`SELECT item.id FROM mbox.order_items item JOIN mbox.orders o ON o.tenant_id=item.tenant_id AND o.store_id=item.store_id AND o.id=item.order_id
+        WHERE item.tenant_id=$1 AND item.store_id=$2 AND item.id=$3 AND ($4::date IS NULL OR o.business_date>=$4::date
+        OR (o.status<>'cancelled' AND o.total_amount_minor>0 AND o.payment_status IN ('unpaid','pending','partially_paid'))
+        OR EXISTS(SELECT 1 FROM mbox.refunds r JOIN mbox.payments p ON p.tenant_id=r.tenant_id AND p.store_id=r.store_id AND p.id=r.payment_id
+          WHERE p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.order_id=o.id AND r.status IN ('requested','approved','processing','failed')))`,
+      [context.scope.tenantId,context.scope.storeId,itemId,earliest])).rows[0]
+      if(!visible)throw new HardwareAccessDeniedError()
+      try{
+        const value=await new OrderStockReturnRepository(tx).record({orderItemId:itemId,employeeId:context.employeeId,
+          quantity:optionalInteger(body.quantity,1,9999)??0,disposition:readEnum(body.disposition,['unmade','returned_unopened']) as 'unmade'|'returned_unopened',
+          reason:readString(body.reason,'reason',1000,3),unopenedConfirmed:body.unopenedConfirmed===true})
+        return outcome(context,'order.stock-return.recorded.v1','order_stock_return',value.id,body.reason,value)
+      }catch(error){if(error instanceof InventoryConflictError)throw new HardwareConflictError(error.message);throw error}
+    })
+    return reply.code(result.replayed?200:201).send({data:result.value,replayed:result.replayed})
+  }))
+  app.post('/hardware/orders/:orderId/bill',async(request,reply)=>handle(reply,async()=>{
+    const context=await options.resolveContext(request)
+    requireAny(context,['order.bill.print'])
+    const orderId=readUuid(readObject(request.params).orderId,'orderId'),body=readObject(request.body??{})
+    const execution=await options.commands.execute(command(request,context,'order.bill.print',body,codec()),async tx=>{
+      const access=await new StaffAccessRepository(tx).resolve(context.employeeId)
+      if(!access.permissions.includes('order.bill.print')||!access.permissions.some(p=>['order.history.view','order.history.all','reconciliation.view'].includes(p)))throw new HardwareAccessDeniedError()
+      const current=(await tx.query<{date:string}>('SELECT mbox.current_operating_business_date($1,$2)::text AS date',[context.scope.tenantId,context.scope.storeId])).rows[0]!.date
+      const policy=orderHistoryAccess(access.permissions,current)
+      const visible=(await tx.query<{id:string}>(`
+        SELECT o.id FROM mbox.orders o WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.id=$3 AND o.status<>'draft'
+          AND ($4::date IS NULL OR o.business_date>=$4::date
+            OR (o.status<>'cancelled' AND o.total_amount_minor>0 AND o.payment_status IN ('unpaid','pending','partially_paid'))
+            OR EXISTS(SELECT 1 FROM mbox.refunds r JOIN mbox.payments p ON p.tenant_id=r.tenant_id AND p.store_id=r.store_id AND p.id=r.payment_id
+              WHERE p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.order_id=o.id AND r.status IN ('requested','approved','processing','failed')))`,
+      [context.scope.tenantId,context.scope.storeId,orderId,policy.earliestBusinessDate])).rows[0]
+      if(!visible)throw new HardwareAccessDeniedError()
+      const requestId=randomUUID()
+      const sourceId=await appendOutboxMessage(tx,{aggregateType:'manual_print_request',aggregateId:requestId,aggregateVersion:1,
+        eventType:'manual.order-bill.requested.v1',payload:{orderId,employeeId:context.employeeId}})
+      const jobs=await new PrintTicketSourceRepository(tx,true).materializeManualOrderBill(sourceId,orderId,access.displayName)
+      if(!jobs.length)throw new HardwarePolicyError('当前没有可用的账单打印路由；订单和收款未受影响')
+      return outcome(context,'manual.order-bill.queued.v1','manual_print_request',requestId,'订单中心手动打印',
+        {requestId,orderId,jobIds:jobs.map(job=>job.id),status:'queued'})
+    })
+    return reply.code(execution.replayed?200:202).send({data:execution.value,replayed:execution.replayed})
+  }))
   app.get('/hardware/print-ticket-policies', async (request,reply) => handle(reply,async()=>{
     const context=await options.resolveContext(request)
     requireAny(context,['hardware.manage','printer.manage'])
@@ -490,7 +565,7 @@ async function handle(reply: FastifyReply, operation: () => Promise<FastifyReply
     if (error instanceof NormalizedAuthenticationRequiredError || error instanceof StaffSessionNotFoundError) {
       return reply.code(401).send({ error: { code: 'AUTH_REQUIRED', message: '登录信息无效或已过期，请重新登录' } })
     }
-    if (error instanceof HardwareAccessDeniedError) {
+    if (error instanceof HardwareAccessDeniedError || error instanceof EmployeeTableAccessDeniedError) {
       return reply.code(403).send({ error: { code: 'HARDWARE_FORBIDDEN', message: error.message } })
     }
     if (error instanceof HardwareNotFoundError) {

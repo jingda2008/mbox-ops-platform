@@ -247,7 +247,9 @@ function menuProducts(items) {
     const availability = menuAvailability(item)
     return Object.assign({}, item, bundleValuePresentation(item), {
       categoryName: customerCategoryName(item),
-      tasteLabels: [...new Set((Array.isArray((item.recommendation || {}).tasteTags) ? item.recommendation.tasteTags : []).map(tag => ({ refreshing: '清爽', layered: '层次丰富', strong: '浓郁' })[tag]).filter(Boolean))],
+      tasteLabels: [...new Set((Array.isArray((item.recommendation || {}).tasteTags) ? item.recommendation.tasteTags : []).map(tag => ({ refreshing: '清爽', layered: '层次丰富', strong: '浓郁' })[tag]).filter(Boolean))].concat(
+        ['acidity','sweetness'].filter(key => item.tasteProfile && Number.isInteger(item.tasteProfile[key]) && item.tasteProfile[key]>=0 && item.tasteProfile[key]<=5)
+          .map(key => `${key==='acidity'?'酸度':'甜度'} ${item.tasteProfile[key]}/5`)),
       priceText: money(item.amountMinor),
       selectionActionText: (item.bundleChoiceGroups || []).length ? '选款并加入' : '加入购物车',
       bundleSelectionText: (item.bundleChoiceGroups || []).length

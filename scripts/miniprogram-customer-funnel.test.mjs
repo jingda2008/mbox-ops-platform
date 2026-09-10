@@ -43,6 +43,12 @@ test('customer navigation promotes familiar choices without mutating custom or o
       {productId:'choice',productKind:'bundle',available:true,bundleChoiceGroups:[{name:'鸡尾酒',selectionCount:2,options:[]}]}])
     assert.equal(presented.find(p=>p.productId==='fixed').selectionActionText,'加入购物车')
     assert.equal(presented.find(p=>p.productId==='choice').selectionActionText,'选款并加入')
+    const tasted = views.products([{productId:'taste',tasteProfile:{acidity:0,sweetness:5}},
+      {productId:'unrated',tasteProfile:{acidity:null,sweetness:null}},
+      {productId:'invalid',tasteProfile:{acidity:9,sweetness:'4'}}])
+    assert.deepEqual(Array.from(tasted.find(p=>p.productId==='taste').tasteLabels),['酸度 0/5','甜度 5/5'])
+    assert.equal(tasted.find(p=>p.productId==='unrated').tasteLabels.length,0)
+    assert.equal(tasted.find(p=>p.productId==='invalid').tasteLabels.length,0)
     assert.equal(views.recommend([{productId:'choice'}],presented)[0].selectionActionText,'选款并加入')
     const methodStart = source.indexOf('  openAllBundles() {')
     const methodEnd = source.indexOf('  toggleCategories()',methodStart)

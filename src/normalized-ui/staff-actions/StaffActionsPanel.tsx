@@ -1,4 +1,5 @@
 import { Children, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {DeliveryBatchComposer} from './DeliveryBatchComposer'
 import {
   AlertTriangle,
   ArrowRightLeft,
@@ -146,6 +147,8 @@ export function StaffActionsPanel({
   const [carryoverCancelConfirmTaskId, setCarryoverCancelConfirmTaskId] = useState<string | null>(null)
   const [carryoverBulkReason,setCarryoverBulkReason]=useState('')
   const [pendingAction, setPendingAction] = useState<string | null>(null)
+  const [pendingFulfillment, setPendingFulfillment] = useState<ReadonlySet<string>>(new Set())
+  const fulfillmentRevisionRef = useRef(0)
   const [orderSheetMode, setOrderSheetMode] = useState<'paid' | 'gift' | null>(null)
   const [tablePaymentOpen, setTablePaymentOpen] = useState(false)
   const [observationOpen, setObservationOpen] = useState(false)
@@ -183,6 +186,7 @@ export function StaffActionsPanel({
     if (!quiet) setPhase('loading')
     try {
       const nextOperations = await api.loadOperations(controller.signal)
+      if (controller.signal.aborted) return
       setOperations(nextOperations)
       const { paymentDue, refunds } = staffTableFinancialSummary(nextOperations.tables)
       const previousFinancialAttention = financialAttentionRef.current
@@ -200,9 +204,14 @@ export function StaffActionsPanel({
         nextOperations.actor.capabilities.includes(permission)
       ))
       if (canLoadFulfillment) {
+        const fulfillmentRevision = fulfillmentRevisionRef.current
         try {
-          setFulfillment(await api.loadFulfillment(controller.signal))
+          const nextFulfillment = await api.loadFulfillment(controller.signal)
+          if (!controller.signal.aborted && fulfillmentRevision === fulfillmentRevisionRef.current) {
+            setFulfillment(nextFulfillment)
+          }
         } catch (error) {
+          if (controller.signal.aborted || fulfillmentRevision !== fulfillmentRevisionRef.current) return
           if (error instanceof StaffActionsApiError && error.status === 401) throw error
           setFulfillment(null)
           if (!quiet && !(error instanceof StaffActionsApiError && error.status === 403)) {
@@ -726,15 +735,21 @@ export function StaffActionsPanel({
 
   const runFulfillmentAction = async (item: StaffFulfillmentData['workItems'][number]) => {
     if (fulfillment === null) return
+    const actionKey = `kds:${item.taskId}`
+    if (actionLocksRef.current.has(actionKey)) return
     const action = fulfillmentAction(item)
     if (action === null) {
       return revealPermissionGuidance(item.readyForDelivery ? 'kds.deliver' : 'kds.prepare')
     }
-    const snapshot = fulfillment
-    setPendingAction(`kds:${item.taskId}`)
-    setFulfillment({ ...snapshot, workItems: snapshot.workItems.filter((entry) => entry.taskId !== item.taskId) })
+    actionLocksRef.current.add(actionKey)
+    setPendingFulfillment((current) => new Set(current).add(item.taskId))
+    fulfillmentRevisionRef.current += 1
     try {
       await api.runKdsAction(item.taskId, action)
+      fulfillmentRevisionRef.current += 1
+      setFulfillment((current) => current === null ? null : {
+        ...current, workItems: current.workItems.filter((entry) => entry.taskId !== item.taskId),
+      })
       showNotice({
         kind: 'success',
         message: action === 'deliver'
@@ -743,12 +758,18 @@ export function StaffActionsPanel({
             ? `${item.item.productName} 已重新进入制作队列`
             : `${item.item.productName} 已制作完成，配送岗位已收到`,
       })
-      await load(true)
+      // The command is confirmed. A subsequent read is not part of its success.
+      void load(true)
     } catch (error) {
-      setFulfillment(snapshot)
-      showNotice({ kind: 'error', message: actionError(error, '出品状态未更新，任务已恢复') })
+      fulfillmentRevisionRef.current += 1
+      showNotice({ kind: 'error', message: actionError(error, '尚未确认操作结果，请刷新核对；重试将沿用本次操作编号') })
     } finally {
-      setPendingAction(null)
+      actionLocksRef.current.delete(actionKey)
+      setPendingFulfillment((current) => {
+        const next = new Set(current)
+        next.delete(item.taskId)
+        return next
+      })
     }
   }
 
@@ -1135,7 +1156,9 @@ export function StaffActionsPanel({
       )}
 
       {tab === 'fulfillment' && operations !== null && (
-        <>{fulfillmentVisibleItems.some((item)=>item.carryover)
+        <>{onNavigate && permissions.some(permission=>['order.history.view','order.history.all'].includes(permission)) && <button type="button" onClick={()=>onNavigate('/staff/orders')}>查看制作与送达历史</button>}
+        {permissions.includes('kds.deliver')&&api.createDeliveryBatch&&<DeliveryBatchComposer items={fulfillmentVisibleItems} onSubmit={items=>api.createDeliveryBatch!(items)} onChanged={()=>load(true)}/>}
+        {fulfillmentVisibleItems.some((item)=>item.carryover)
           && permissions.includes('kds.exception.manage')
           && <div className="staff-carryover-bulk-panel">
             <div><strong>历史遗留 {fulfillmentVisibleItems.filter((item)=>item.carryover).length} 项</strong><small>确认现场不再出品后，可一次说明、逐项留痕结案。</small></div>
@@ -1188,9 +1211,9 @@ export function StaffActionsPanel({
                 </div>
                 <div className="staff-action-card-actions">
                   {fulfillmentCommand !== null && (
-                    <button type="button" onClick={() => void runFulfillmentAction(item)} disabled={pendingAction === `kds:${item.taskId}`}>
+                    <button type="button" onClick={() => void runFulfillmentAction(item)} disabled={pendingFulfillment.has(item.taskId)} aria-busy={pendingFulfillment.has(item.taskId)}>
                       {fulfillmentCommand === 'deliver' ? <Send size={18} /> : <ChefHat size={18} />}
-                      {fulfillmentCommand === 'deliver' ? '已送达' : fulfillmentCommand === 'remake' ? '重新制作' : '制作完成'}
+                      {pendingFulfillment.has(item.taskId) ? '正在确认…' : fulfillmentCommand === 'deliver' ? '全部已送达' : fulfillmentCommand === 'remake' ? '重新制作' : '制作完成'}
                     </button>
                   )}
                   {fulfillmentCommand === null && (

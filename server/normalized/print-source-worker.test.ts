@@ -5,6 +5,7 @@ import { runNormalizedMigrations } from '../migrate-normalized.js'
 import { appendOutboxMessage } from './command-executor.js'
 import { PrintSourceWorker } from './print-source-worker.js'
 import { PrintTicketSourceRepository } from './print-ticket-source.js'
+import {DeliveryBatchRepository} from './delivery-batch-repository.js'
 import { ScopedPostgresTransactionRunner, type PostgresPool } from './transaction-runner.js'
 
 const databaseUrl = process.env.TEST_NORMALIZED_DATABASE_URL
@@ -79,7 +80,7 @@ integration('asynchronous print sources: committed events, isolation and recover
     await pool.query("INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,subtotal_amount_minor,total_amount_minor,submitted_at) VALUES($1,$2,$3,$4,'async-print-order','staff_assisted','fulfilling','paid',1500,1500,clock_timestamp())",[order,scope.tenantId,scope.storeId,session])
     await pool.query(`INSERT INTO mbox.order_items(tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,total_amount_minor,fulfillment_station,product_snapshot,status)
       VALUES($1,$2,$3,$4,1,1000,1000,'bar','{"name":"测试酒","productKind":"single"}','preparing'),
-      ($1,$2,$3,$5,1,500,500,'kitchen','{"name":"测试小食","productKind":"single"}','preparing')`,[scope.tenantId,scope.storeId,order,drink,snack])
+      ($1,$2,$3,$5,4,125,500,'kitchen','{"name":"测试小食","productKind":"single"}','preparing')`,[scope.tenantId,scope.storeId,order,drink,snack])
     await pool.query("INSERT INTO mbox.payments(id,tenant_id,store_id,order_id,public_id,provider,method,amount_minor,currency,status,succeeded_at,provider_transaction_id) VALUES($1,$2,$3,$4,'async-print-payment','cash','cash',1500,'CNY','succeeded',clock_timestamp(),'local-test-cash-receipt')",[payment,scope.tenantId,scope.storeId,order])
     await pool.query("INSERT INTO mbox.devices(id,tenant_id,store_id,code,name,device_type,station_code,connectivity_status) VALUES($1,$3,$4,'AP-BAR','吧台','printer','bar','offline'),($2,$3,$4,'AP-KITCHEN','厨房','printer','kitchen','offline')",[bar,kitchen,scope.tenantId,scope.storeId])
     await pool.query("INSERT INTO mbox.printer_routes(tenant_id,store_id,code,name,station_code,printer_device_id) VALUES($1,$2,'AP-BAR-ROUTE','吧台','bar',$3),($1,$2,'AP-CASH-ROUTE','收银','cashier',$3),($1,$2,'AP-KITCHEN-ROUTE','厨房','kitchen',$4)",[scope.tenantId,scope.storeId,bar,kitchen])
@@ -113,7 +114,7 @@ integration('asynchronous print sources: committed events, isolation and recover
     expect(prebill.printSnapshot.totalAmountMinor).toBe(1500)
     expect(prebill.printerDeviceId).toBe(bar)
     expect(prebill.printSnapshot.lines).toEqual(expect.arrayContaining([
-      expect.objectContaining({name:'商品原价合计',totalAmountMinor:1500}),
+      expect.objectContaining({name:'优惠前应付合计（套餐按套餐售价）',totalAmountMinor:1500}),
       expect.objectContaining({name:'优惠减免（已扣除）',totalAmountMinor:0}),
     ]))
     expect((await pool.query('SELECT status FROM mbox.payments WHERE order_id=$1',[order])).rows).toEqual([{status:'failed'}])
@@ -130,18 +131,34 @@ integration('asynchronous print sources: committed events, isolation and recover
     expect(await transactions.run({tenantId:randomUUID(),storeId:randomUUID()},async tx=>{
       await tx.query('SET LOCAL ROLE mbox_runtime');return (await tx.query('SELECT * FROM mbox.print_ticket_policies')).rows
     })).toEqual([])
-    // Ready kitchen dishes produce a DELIVERY slip at the bar, not another
-    // kitchen production slip. Repeated complete events deduplicate by task.
+    // Completion alone no longer emits separate slips: explicitly confirm a batch.
     const snackItem=(await pool.query('SELECT id FROM mbox.order_items WHERE order_id=$1 AND product_id=$2',[order,snack])).rows[0].id
     const task=randomUUID()
     await pool.query("UPDATE mbox.order_items SET status='ready' WHERE id=$1",[snackItem])
-    await pool.query("INSERT INTO mbox.kds_tasks(id,tenant_id,store_id,order_item_id,station_code,status,quantity,ready_at) VALUES($1,$2,$3,$4,'kitchen','ready',1,clock_timestamp())",[task,scope.tenantId,scope.storeId,snackItem])
+    await pool.query("INSERT INTO mbox.kds_tasks(id,tenant_id,store_id,order_item_id,station_code,status,quantity,ready_at) VALUES($1,$2,$3,$4,'kitchen','ready',4,clock_timestamp())",[task,scope.tenantId,scope.storeId,snackItem])
     for(const version of [1,2])await transactions.run(scope,tx=>appendOutboxMessage(tx,{aggregateType:'kds_task',aggregateId:task,aggregateVersion:version,eventType:'kds.complete.v1',payload:{}}))
+    expect((await worker.runBatch(scope,'no-unbatched-delivery')).completed).toBe(0)
+    const deliveryEmployee=randomUUID()
+    await pool.query("INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($1,$2,$3,'BATCH-STAFF','配送员')",[deliveryEmployee,scope.tenantId,scope.storeId])
+    await transactions.run(scope,async tx=>{
+      const batch=await new DeliveryBatchRepository(tx).create(deliveryEmployee,[{taskId:task,quantity:2}])
+      await appendOutboxMessage(tx,{aggregateType:'delivery_batch',aggregateId:batch.id,aggregateVersion:1,eventType:'delivery.batch.ready.v1',payload:batch})
+    })
+    await expect(transactions.run(scope,tx=>new DeliveryBatchRepository(tx).create(deliveryEmployee,[{taskId:task,quantity:3}]))).rejects.toThrow('超过')
     expect((await worker.runBatch(scope,'delivery-test')).completed).toBe(1)
     const delivery=(await pool.query("SELECT printer_device_id,print_snapshot FROM mbox.print_jobs WHERE tenant_id=$1 AND print_snapshot->>'kind'='delivery'",[scope.tenantId])).rows
     expect(delivery).toHaveLength(1)
-    expect(delivery[0].printer_device_id).toBe(bar)
+    expect(delivery[0].printer_device_id).toBe(kitchen)
     expect(delivery[0].print_snapshot.lines[0].name).toBe('测试小食')
+    expect(delivery[0].print_snapshot.lines[0].quantity).toBe(2)
+    const batchResults=await Promise.allSettled([1,2].map(()=>transactions.run(scope,async tx=>{
+      const batch=await new DeliveryBatchRepository(tx).create(deliveryEmployee,[{taskId:task,quantity:2}])
+      await appendOutboxMessage(tx,{aggregateType:'delivery_batch',aggregateId:batch.id,aggregateVersion:1,eventType:'delivery.batch.ready.v1',payload:batch})
+    })))
+    expect(batchResults.filter(result=>result.status==='fulfilled')).toHaveLength(1)
+    expect(batchResults.filter(result=>result.status==='rejected')).toHaveLength(1)
+    expect((await worker.runBatch(scope,'second-delivery-batch')).completed).toBe(1)
+    expect((await pool.query("SELECT print_snapshot->'lines'->0->>'quantity' AS quantity FROM mbox.print_jobs WHERE tenant_id=$1 AND print_snapshot->>'kind'='delivery'",[scope.tenantId])).rows).toEqual([{quantity:'2'},{quantity:'2'}])
     // A delayed generator must not ask the kitchen to make delivered dishes
     // again merely because a print queue recovered after electronic service.
     await pool.query("UPDATE mbox.order_items SET status='delivered' WHERE order_id=$1",[order])
@@ -158,6 +175,23 @@ integration('asynchronous print sources: committed events, isolation and recover
     expect(final).toHaveLength(1)
     expect(final[0].print_snapshot.totalAmountMinor).toBe(1500)
     expect(final[0].print_snapshot.lines.map((l:{name:string})=>l.name)).toEqual(expect.arrayContaining(['测试酒','测试小食','累计成功收款','累计成功退款']))
+    await pool.query("INSERT INTO mbox.print_ticket_policies(tenant_id,store_id,ticket_kind,enabled,copies) VALUES($1,$2,'order_summary',false,1) ON CONFLICT(tenant_id,store_id,ticket_kind) DO UPDATE SET enabled=false,copies=1",[scope.tenantId,scope.storeId])
+    const manual=await transactions.run(scope,async tx=>{
+      const requestId=randomUUID()
+      const outboxId=await appendOutboxMessage(tx,{aggregateType:'manual_print_request',aggregateId:requestId,aggregateVersion:1,eventType:'manual.order-bill.requested.v1',payload:{orderId:order}})
+      const repository=new PrintTicketSourceRepository(tx,true)
+      const jobs=await repository.materializeManualOrderBill(outboxId,order,'测试收银员')
+      const repeated=await repository.materializeManualOrderBill(outboxId,order,'测试收银员')
+      expect(repeated.map(job=>job.id)).toEqual(jobs.map(job=>job.id))
+      return jobs
+    })
+    expect(manual).toHaveLength(1)
+    expect(manual[0].printSnapshot).toMatchObject({operatorLabel:'测试收银员',totalAmountMinor:null})
+    expect(manual[0].printSnapshot.lines).toEqual(expect.arrayContaining([
+      expect.objectContaining({name:'测试酒',unitAmountMinor:1000,totalAmountMinor:1000}),
+      expect.objectContaining({name:'已确认实际收款',totalAmountMinor:1500}),
+      expect.objectContaining({name:'尚未收款',totalAmountMinor:0}),
+    ]))
   })
   it('prints an immutable daily snapshot asynchronously to cashier while printers are offline',async()=>{
     const worker=new PrintSourceWorker(transactions)

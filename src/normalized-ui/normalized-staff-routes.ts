@@ -5,6 +5,7 @@ import { staffModuleForRoute } from '../shared/staff-module-access'
 export type NormalizedStaffRoute = StaffActionsTab | StaffModule
 
 export function normalizedStaffRoute(path: string): NormalizedStaffRoute | null {
+  if (path === '/staff/orders') return 'orders'
   if (path === '/staff/live') return 'tables'
   if (path === '/staff/tasks') return 'tasks'
   if (path === '/staff/fulfillment') return 'fulfillment'

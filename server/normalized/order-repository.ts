@@ -150,6 +150,7 @@ interface BundleComponentRow extends Record<string, unknown> {
   component_product_kind: 'single' | 'bundle'
   component_status: 'active' | 'sold_out' | 'inactive'
   component_cost_amount_minor: string | number | null
+  component_reference_price_minor?: string | number | null
   component_quantity: number
   choice_group_id?: string | null
   choice_group_name?: string | null
@@ -637,6 +638,12 @@ export class OrderRepository {
         product.product_kind AS component_product_kind,
         product.status AS component_status,
         product.cost_amount_minor AS component_cost_amount_minor,
+        (SELECT reference_price.amount_minor FROM mbox.product_prices reference_price
+         WHERE reference_price.tenant_id=product.tenant_id AND reference_price.store_id=product.store_id
+           AND reference_price.product_id=product.id AND reference_price.price_type='standard'
+           AND reference_price.currency='CNY' AND reference_price.valid_from<=statement_timestamp()
+           AND (reference_price.valid_until IS NULL OR reference_price.valid_until>statement_timestamp())
+         ORDER BY reference_price.valid_from DESC,reference_price.id DESC LIMIT 1) AS component_reference_price_minor,
         component.quantity * requested_bundle.ordered_quantity AS component_quantity,
         NULL::uuid AS choice_group_id,
         NULL::text AS choice_group_name
@@ -675,6 +682,12 @@ export class OrderRepository {
         product.fulfillment_sla_seconds AS component_fulfillment_sla_seconds,
         product.product_kind AS component_product_kind,product.status AS component_status,
         product.cost_amount_minor AS component_cost_amount_minor,
+        (SELECT reference_price.amount_minor FROM mbox.product_prices reference_price
+         WHERE reference_price.tenant_id=product.tenant_id AND reference_price.store_id=product.store_id
+           AND reference_price.product_id=product.id AND reference_price.price_type='standard'
+           AND reference_price.currency='CNY' AND reference_price.valid_from<=statement_timestamp()
+           AND (reference_price.valid_until IS NULL OR reference_price.valid_until>statement_timestamp())
+         ORDER BY reference_price.valid_from DESC,reference_price.id DESC LIMIT 1) AS component_reference_price_minor,
         product.allowed_channels AS component_allowed_channels,
         product.guest_visible AS component_guest_visible,
         to_char(product.available_from,'HH24:MI') AS component_available_from,
@@ -948,6 +961,9 @@ function expandBundleItems<T extends ReturnType<typeof buildItem>>(
           productKind: 'single',
           source: toJsonObject(component.component_product_snapshot),
           bundleComponent: true,
+          ...(component.component_reference_price_minor == null || !Number.isSafeInteger(Number(component.component_reference_price_minor)) || Number(component.component_reference_price_minor)<0 ? {} : {
+            singlePriceReferenceMinor: Number(component.component_reference_price_minor),
+          }),
           paidByParentOrderItemId: parent.id,
           ...(component.choice_group_id ? {
             bundleChoiceGroupId: component.choice_group_id,

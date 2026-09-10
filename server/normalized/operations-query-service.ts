@@ -1,4 +1,5 @@
 import type { JsonObject } from './command-executor.js'
+import { orderHistoryAccess } from './order-history-access.js'
 import { readOperatingHistory, type OperatingHistoryFilter } from './operating-history-query.js'
 import {
   StaffAccessDeniedError,
@@ -168,8 +169,14 @@ export class OperationsQueryService {
 
   getOperatingHistory(scope: Readonly<StoreScope>, employeeId: string, filter: OperatingHistoryFilter) {
     return this.transactions.run(scope,async transaction=>{
-      await new StaffAccessRepository(transaction).assertPermission(employeeId,'reconciliation.view')
-      return readOperatingHistory(transaction,filter)
+      const access = await new StaffAccessRepository(transaction).resolve(employeeId)
+      if (!access.permissions.some(permission => ['reconciliation.view','order.history.view','order.history.all'].includes(permission))) {
+        throw new StaffAccessDeniedError('当前账号没有订单历史查询权限')
+      }
+      const clock = await transaction.query<{business_date:string}>(
+        'SELECT mbox.current_operating_business_date($1::uuid,$2::uuid)::text AS business_date', [scope.tenantId,scope.storeId])
+      if (!clock.rows[0]) throw new Error('门店营业日暂不可用')
+      return readOperatingHistory(transaction,{...filter,...orderHistoryAccess(access.permissions,clock.rows[0].business_date)})
     },{isolation:'repeatable-read',readOnly:true})
   }
 

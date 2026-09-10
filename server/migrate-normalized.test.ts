@@ -62,6 +62,8 @@ describe('normalized migration baseline', () => {
       '184',
       '185',
       '186',
+      '187',
+      '188',
     ])
     for (const migration of migrations) {
       expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/)

@@ -13,6 +13,7 @@ import { MediaAssetPicker } from './MediaAssetPicker'
 import { menuImageOptions } from './menu-image-library'
 import { NumberInputWithUnit } from './NumberInputWithUnit'
 import { sanitizeProductDisplaySnapshot } from '../shared/product-display-snapshot'
+import { publicProductTasteProfile } from '../shared/product-taste-profile'
 import { calculateBundleCostRange } from '../shared/bundle-cost-range'
 
 type ProductStatus = 'active' | 'sold_out' | 'inactive'
@@ -137,6 +138,8 @@ interface ProductDraft {
   priceYuan: string
   priceReason: string
   description: string
+  acidity: string
+  sweetness: string
   imageUrl: string
   snapshot: Record<string, unknown>
   componentQuantities: Record<string, string>
@@ -488,6 +491,8 @@ export function CatalogManagementPanel({
       priceYuan: minorToYuan(product.standardPrice?.amountMinor ?? null),
       priceReason: '商品配置同步调整标准售价',
       description: typeof product.productSnapshot.description === 'string' ? product.productSnapshot.description : '',
+      acidity: String(publicProductTasteProfile(product.productSnapshot.tasteProfile)?.acidity??''),
+      sweetness: String(publicProductTasteProfile(product.productSnapshot.tasteProfile)?.sweetness??''),
       imageUrl: typeof product.productSnapshot.imageUrl === 'string' ? product.productSnapshot.imageUrl : '',
       snapshot: sanitizeProductDisplaySnapshot(product.productSnapshot),
       componentQuantities: Object.fromEntries(product.bundleComponents.map((component) => [component.productId, String(component.quantity)])),
@@ -781,6 +786,7 @@ export function CatalogManagementPanel({
     const productSnapshot = sanitizeProductDisplaySnapshot({
       ...draft.snapshot,
       description: draft.description.trim(),
+      tasteProfile: {acidity:draft.acidity===''?null:Number(draft.acidity),sweetness:draft.sweetness===''?null:Number(draft.sweetness)},
       imageUrl: draft.imageUrl.trim(),
       salesSpecificationType: draft.salesSpecificationType,
     })
@@ -938,6 +944,9 @@ export function CatalogManagementPanel({
               <label>口味标签<input value={draft.recommendationTasteTags} placeholder="refreshing,layered" onChange={(event) => updateDraft('recommendationTasteTags', event.target.value)} /></label>
               <label>停留标签<input value={draft.recommendationDwellTags} placeholder="one_set,stay_longer" onChange={(event) => updateDraft('recommendationDwellTags', event.target.value)} /></label>
               <label className="catalog-wide">商品文案<input maxLength={1000} value={draft.description} onChange={(event) => updateDraft('description', event.target.value)} /></label>
+              <label>酸度<select value={draft.acidity} onChange={event=>updateDraft('acidity',event.target.value)}><option value="">未评价</option>{[0,1,2,3,4,5].map(level=><option key={level} value={level}>{level}/5</option>)}</select></label>
+              <label>甜度<select value={draft.sweetness} onChange={event=>updateDraft('sweetness',event.target.value)}><option value="">未评价</option>{[0,1,2,3,4,5].map(level=><option key={level} value={level}>{level}/5</option>)}</select></label>
+              <small className="catalog-wide">门店感官评分：0最低、5最高；未评价留空，不代表零。不是糖含量或酸碱度检测值。</small>
               <label className="catalog-wide">菜单图片<select value={menuImageOptions.some((option) => option.url === draft.imageUrl) ? draft.imageUrl : ''} onChange={(event) => updateDraft('imageUrl', event.target.value)}><option value="">从下方图片库选择或暂不设置</option>{menuImageOptions.map((option) => <option value={option.url} key={option.url}>{option.label}</option>)}</select></label>
               <label className="catalog-wide">已选图片<input readOnly value={draft.imageUrl} placeholder="请选择受控菜单素材，或从下方图片库上传（单张不超过 200KB）" /></label>
               <div className="catalog-wide"><MediaAssetPicker api={api} purpose="menu" value={draft.imageUrl} onChange={(imageUrl) => updateDraft('imageUrl', imageUrl)} label="上传或选择菜单图片" /></div>
@@ -1031,7 +1040,7 @@ function emptyDraft(categories: readonly MenuCategory[]): ProductDraft {
     recommendationUpgradeProductId: '', sortOrder: '999', availableFrom: '', availableUntil: '',
     allowedChannels: ['guest_qr', 'staff_assisted', 'cashier', 'reservation', 'integration'],
     maxOrderQuantity: '50', kdsPriority: '100', fulfillmentSlaSeconds: '',
-    costYuan: '', costChangeReason: '', priceYuan: '', priceReason: '新增商品标准售价', description: '', imageUrl: '', snapshot: {}, componentQuantities: {},choiceGroups:[],
+    costYuan: '', costChangeReason: '', priceYuan: '', priceReason: '新增商品标准售价', description: '', acidity:'',sweetness:'',imageUrl: '', snapshot: {}, componentQuantities: {},choiceGroups:[],
   }
 }
 

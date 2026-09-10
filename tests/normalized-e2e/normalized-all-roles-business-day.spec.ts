@@ -144,6 +144,7 @@ async function expectStaffRoute(page: Page, route: string) {
     '/staff/tasks': '只看需要服务的事',
     '/staff/fulfillment': '只做当前下一步',
     '/staff/payments': '收银与退款',
+    '/staff/orders': '订单中心',
     '/staff/performance': '演出与点歌',
     '/staff/inventory': '库存与酒水上架',
     '/staff/operations': '经营数据',

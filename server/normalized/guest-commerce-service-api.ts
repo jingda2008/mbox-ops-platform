@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { publicProductTasteProfile } from '../../src/shared/product-taste-profile.js'
 import { checkoutLinesWithNotes, type CheckoutLineNote } from './checkout-line-notes.js'
 import {CheckoutCouponQuoteRepository} from './checkout-coupon-quote-repository.js'
 import {CheckoutUpgradeCandidateRepository} from './checkout-upgrade-candidate-repository.js'
@@ -1494,6 +1495,7 @@ function publicCatalogProduct(row: CatalogMenuRow) {
     imageUrl: publicMiniProgramImageUrl(publicString(row.product_snapshot.imageUrl))
       ?? publicMiniProgramImageUrl(publicString(source.imageUrl)),
     description: publicString(row.product_snapshot.description) ?? publicString(source.description),
+    tasteProfile: publicProductTasteProfile(row.product_snapshot.tasteProfile),
     sortOrder: row.menu_sort_order,
     availableFrom: row.available_from,
     availableUntil: row.available_until,

@@ -47,6 +47,7 @@ import './staff-module-panel.css'
 const CashierAfterSalesWorkbench = lazy(() => import('./CashierAfterSalesWorkbench').then((module) => ({
   default: module.CashierAfterSalesWorkbench,
 })))
+const OrderCenterPanel = lazy(() => import('./OrderCenterPanel').then(module=>({default:module.OrderCenterPanel})))
 const CatalogManagementPanel = lazy(() => import('./CatalogManagementPanel').then((module) => ({
   default: module.CatalogManagementPanel,
 })))
@@ -66,7 +67,7 @@ const PerformanceRevisionPanel = lazy(() => import('./PerformanceRevisionPanel')
   default: module.PerformanceRevisionPanel,
 })))
 
-export type StaffModule = 'payments' | 'performance' | 'inventory' | 'operations' | 'experience'
+export type StaffModule = 'orders' | 'payments' | 'performance' | 'inventory' | 'operations' | 'experience'
   | 'member-fulfillment' | 'member-exceptions' | 'member-overview' | 'member-rule-drafts'
   | 'member-rule-approvals' | 'member-rule-publish' | 'member-accounts' | 'member-management'
   | 'devices' | 'settings'
@@ -346,13 +347,14 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
   const [message, setMessage] = useState<string | null>(null)
   const [data, setData] = useState<ModuleData>(emptyData)
   const [paymentRefreshToken, setPaymentRefreshToken] = useState(0)
+  const [orderRefreshToken, setOrderRefreshToken] = useState(0)
   const loadedModule = useRef<StaffModule | null>(null)
 
   const load = useCallback(async (quiet = false) => {
     if (!quiet) setPhase('loading')
     setMessage(null)
     try {
-      if (module === 'payments') {
+      if (module === 'payments' || module === 'orders') {
         setData(emptyData)
       } else if (module === 'performance') {
         const canReadSongs = auth.permissions.includes('song.view') || auth.permissions.includes('song.manage')
@@ -456,6 +458,7 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
   }, [load, module])
 
   const content = useMemo(() => {
+    if(module==='orders')return <OrderCenterPanel key={orderRefreshToken} api={api} onLoginRequired={onLoginRequired} printEmployeeId={auth.permissions.includes('order.bill.print')?auth.employee.id:undefined} inventoryEmployeeId={auth.permissions.includes('inventory.receive')?auth.employee.id:undefined}/>
     if (module === 'payments') {
       return <CashierAfterSalesWorkbench
         api={api}
@@ -479,9 +482,10 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
     if (module === 'member-management') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={null} mode="member-management" />
     if (module === 'devices') return <DevicesModule api={api} auth={auth} devices={data.devices} jobs={data.printJobs} bridges={data.printBridges} routes={data.printerRoutes} onChanged={refresh} />
     return <SettingsModule api={api} auth={auth} policy={data.commercePolicy} onChanged={refresh} />
-  }, [api, auth, data, module, onLoginRequired, onNavigate, paymentRefreshToken, refresh])
+  }, [api, auth, data, module, onLoginRequired, onNavigate, paymentRefreshToken, orderRefreshToken, refresh])
 
   const modulePresentation = {
+    orders: {title:'订单中心',icon:PackageSearch},
     payments: { title: '收银与退款', icon: CircleDollarSign },
     performance: { title: '演出与点歌', icon: Music2 },
     inventory: { title: '库存与酒水上架', icon: PackageSearch },
@@ -507,7 +511,8 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
       <button
         type="button"
         aria-label={`刷新${title}`}
-        onClick={() => module === 'payments' ? setPaymentRefreshToken((value) => value + 1) : void load()}
+        onClick={() => module === 'payments' ? setPaymentRefreshToken((value) => value + 1)
+          : module === 'orders' ? setOrderRefreshToken(value=>value+1) : void load()}
         disabled={phase === 'loading'}
       >
         <RefreshCw size={18} className={phase === 'loading' ? 'is-spinning' : ''} />

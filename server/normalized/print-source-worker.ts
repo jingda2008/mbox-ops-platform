@@ -4,7 +4,7 @@ import type { ScopedPostgresTransactionRunner, ScopedTransaction, StoreScope } f
 export interface PrintSourceBatch { examined: number; completed: number; skipped: number; retrying: number; dead: number }
 interface SourceRow extends Record<string, unknown> {
   id: string; source_outbox_message_id: string; aggregate_id: string; attempts: number
-  ticket_kind: 'production' | 'settlement' | 'payment' | 'activity_payment' | 'refund' | 'activity_refund' | 'order_summary' | 'delivery' | 'table_settlement' | 'daily_settlement'
+  ticket_kind: 'production' | 'settlement' | 'payment' | 'activity_payment' | 'refund' | 'activity_refund' | 'order_summary' | 'delivery' | 'table_settlement' | 'daily_settlement' | 'delivery_batch'
 }
 
 /** No device I/O. A rendering/routing failure is retained after rolling back
@@ -44,6 +44,7 @@ async function materialize(tx: ScopedTransaction, id: string): Promise<Exclude<k
       refund: 'materializeCashierRefund', activity_refund: 'materializeActivityCashierRefund',
       order_summary: 'materializeOrderSummary', delivery: 'materializeDelivery', table_settlement: 'materializeTableSettlement',
       daily_settlement: 'materializeDailySettlement',
+      delivery_batch: 'materializeDeliveryBatch',
     } as const
     const jobs = await repository[method[source.ticket_kind]](source.source_outbox_message_id, source.aggregate_id)
     const status = jobs.length > 0 ? 'completed' : 'skipped'

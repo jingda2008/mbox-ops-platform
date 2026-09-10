@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { productTasteProfile } from '../../src/shared/product-taste-profile.js';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import type {
   CommandExecution,
@@ -2853,6 +2854,9 @@ function strongProductOperationalFields(
 }
 
 function assertDisplayOnlyProductSnapshot(snapshot: Readonly<JsonObject>): void {
+  try { productTasteProfile(snapshot.tasteProfile) } catch(error) {
+    throw new CatalogRequestError(error instanceof Error?error.message:'口味评分无效');
+  }
   const imageUrl = snapshot.imageUrl;
   if (imageUrl !== undefined && imageUrl !== null
     && (typeof imageUrl !== 'string' || (imageUrl.trim() !== '' && !isPublicMiniProgramImageUrl(imageUrl)))) {

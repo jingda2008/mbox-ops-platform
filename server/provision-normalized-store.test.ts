@@ -104,7 +104,12 @@ describe('normalized store provisioning config', () => {
       'utf8',
     )) as unknown
     const config = parseStoreProvisionConfig(source)
-    expect(config.version).toBe('2026.09.08-v21')
+    expect(config.version).toBe('2026.09.11-v22')
+    for (const candidate of config.roles) {
+      expect(candidate.permissions).toContain('order.history.view')
+      expect(candidate.permissions.includes('order.history.all')).toBe(['OWNER','ADMIN','MANAGER','DEPUT_MANAGER','OPS_LEAD'].includes(candidate.code))
+      expect(candidate.permissions.includes('order.bill.print')).toBe(['OWNER','MANAGER','OPS_LEAD','CASHIER'].includes(candidate.code))
+    }
     expect(config.automaticTableTurnover).toEqual({ enabled: true, operatingStartsAt: '12:00' })
     const role = (code: string) => config.roles.find((candidate) => candidate.code === code)
 

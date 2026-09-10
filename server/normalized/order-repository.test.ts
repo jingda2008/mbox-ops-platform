@@ -219,12 +219,15 @@ describe('OrderRepository', () => {
     expect(tx.calls).toHaveLength(2)
   })
 
-  it('persists one concrete bundle choice as an operational child item', async () => {
+  it.each([
+    ['6800',6800], ['0',0], [null,undefined], ['-1',undefined], ['9007199254740992',undefined],
+  ])('persists a concrete bundle choice with authoritative reference price %s, without charging it twice', async (referencePrice,expectedReference) => {
     const tx = new ScriptedTransaction([
       { rows: [{ id: sessionId }] },
       { rows: [{ ...priceRow(), product_kind: 'bundle', fulfillment_station: 'none' }] },
       { rows: [] },
-      { rows: [choiceOptionRow()] },
+      { rows: [{...choiceOptionRow(),component_reference_price_minor:referencePrice,
+        component_product_snapshot:{singlePriceReferenceMinor:999999}}] },
       { rows: [{
         request_index: 0,
         bundle_product_id: productId,
@@ -270,6 +273,10 @@ describe('OrderRepository', () => {
     ])
     expect(tx.calls[7]?.values[4]).toBe(choiceProductId)
     expect(tx.calls[7]?.values[14]).toContain('任选鸡尾酒')
+    const snapshot=JSON.parse(String(tx.calls[7]?.values[14]))
+    expect(snapshot.singlePriceReferenceMinor).toBe(expectedReference)
+    expect(tx.calls[7]?.values.slice(7,10)).toEqual([0,0,0])
+    expect(tx.calls[3]?.sql).toContain("reference_price.price_type='standard'")
   })
 
   it('rejects a configurable bundle when a physical unit has no concrete choice', async () => {

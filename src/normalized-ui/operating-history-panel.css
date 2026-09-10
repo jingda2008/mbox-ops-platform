@@ -13,3 +13,6 @@
 .operating-history-panel p { line-height: 1.6; margin: 10px 0; }
 .operating-history-panel button:focus-visible,.operating-history-panel input:focus-visible { outline: 2px solid #315d46; outline-offset: 2px; }
 .operating-history-panel > label + button { margin-top: 12px; background: #285540; color: white; }
+.operating-history-panel select { box-sizing:border-box; min-width:0; width:100%; max-width:100%; min-height:44px; padding:8px; border:1px solid #b9c8bd; border-radius:8px; background:#fff; color:#252d28; font:inherit; }
+.operating-history-panel h4 { overflow-wrap:anywhere; }
+@media(max-width:380px) { .operating-history-panel form { grid-template-columns:minmax(0,1fr); } }

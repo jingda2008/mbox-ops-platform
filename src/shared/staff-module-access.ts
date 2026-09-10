@@ -11,6 +11,7 @@ export interface StaffModuleAccessDefinition {
  * reorder an eligible module, but it must never create or remove authority.
  */
 export const staffModuleAccessDefinitions: readonly StaffModuleAccessDefinition[] = Object.freeze([
+  {code:'orders',label:'订单中心',route:'/staff/orders',sortOrder:245,permissionCodes:['order.history.view','order.history.all']},
   {
     code: 'live', label: '现场', route: '/staff/live', sortOrder: 210,
     permissionCodes: [

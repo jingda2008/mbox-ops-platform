@@ -30,7 +30,7 @@ export interface ServiceTaskSlaWorkerOptions {
 
 export interface ServiceTaskSlaResult {
   taskId: string
-  action: 'backup_assigned' | 'escalated'
+  action: 'backup_assigned' | 'escalated' | 'reminded'
   status: ServiceTaskStatus
   priority: ServiceTaskPriority
   assignedEmployeeId: string | null
@@ -104,7 +104,12 @@ async function processClaimedTask(
     && task.backup_employee_id !== task.assigned_employee_id
   const nextPriority = usesBackup ? task.priority : escalatePriority(task.priority)
   const nextAssignedEmployeeId = usesBackup ? task.backup_employee_id : task.assigned_employee_id
-  const eventType = usesBackup ? 'task.backup_assigned' : 'task.escalated'
+  const action = usesBackup ? 'backup_assigned' : nextPriority !== task.priority ? 'escalated' : 'reminded'
+  const eventType = `task.${action}`
+  // At the ceiling, retain the unresolved task and remind at most twice an hour.
+  // Row locking and next_action_at make concurrent worker runs deduplicate.
+  const nextDelayMs = nextPriority === 'urgent' && !usesBackup
+    ? Math.max(retryDelayMs, 30 * 60_000) : retryDelayMs
   const updated = await transaction.query<UpdatedTaskRow>(`
     UPDATE mbox.service_tasks
     SET priority = $4,
@@ -128,7 +133,7 @@ async function processClaimedTask(
     nextAssignedEmployeeId,
     usesBackup,
     workerId,
-    retryDelayMs,
+    nextDelayMs,
     task.status,
   ])
   const row = updated.rows[0]
@@ -143,6 +148,7 @@ async function processClaimedTask(
     previousAssignedEmployeeId: task.assigned_employee_id,
     assignedEmployeeId: row.assigned_employee_id,
     usedBackup: usesBackup,
+    retryDelayMs: nextDelayMs,
   }
   const event = await transaction.query(`
     INSERT INTO mbox.service_task_events (
@@ -208,7 +214,7 @@ async function processClaimedTask(
 
   return {
     taskId: row.id,
-    action: usesBackup ? 'backup_assigned' : 'escalated',
+    action,
     status: row.status,
     priority: row.priority,
     assignedEmployeeId: row.assigned_employee_id,

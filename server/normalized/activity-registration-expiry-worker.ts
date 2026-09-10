@@ -1,3 +1,4 @@
+import { expireRecollectionAuthorizations } from './recollection-expiry.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction, StoreScope } from './transaction-runner.js'
 
 interface DueActivityRegistration extends Record<string, unknown> {
@@ -23,6 +24,7 @@ export class ActivityRegistrationExpiryWorker {
     validateWorkerId(workerId)
     validateBatchSize(batchSize)
     return this.transactions.run(scope, async (transaction) => {
+      await expireRecollectionAuthorizations(transaction, batchSize)
       const due = await claimDue(transaction, batchSize)
       const releasedRegistrationIds: string[] = []
       const confirmedRegistrationIds: string[] = []

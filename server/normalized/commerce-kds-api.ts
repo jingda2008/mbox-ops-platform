@@ -1,3 +1,4 @@
+import { synchronizeRefundedCancelledItem } from './refunded-fulfillment-repair.js'
 import { createHash, randomUUID } from 'node:crypto'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type {
@@ -861,6 +862,7 @@ async function executeManagerCancellation(
         inventoryTruth: 'unchanged_pending_review',
       },
     })
+    await synchronizeRefundedCancelledItem(transaction, target.orderItemId)
     await new InventoryRepository(transaction).releaseRemakeMaterials(
       task.id,
       `重新制作任务被终止：${reason.note}`,

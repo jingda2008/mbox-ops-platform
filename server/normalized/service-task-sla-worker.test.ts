@@ -29,6 +29,8 @@ class WorkerPool implements PostgresPool {
   readonly tasks = new Map<string, FakeTask>()
   readonly locks = new Map<string, number>()
   readonly queries: string[] = []
+  eventTypes: unknown[] = []
+  delays: unknown[] = []
   committedEvents = 0
   committedAudits = 0
   committedOutbox = 0
@@ -111,6 +113,7 @@ class WorkerClient implements PostgresPoolClient {
       }) as unknown as Row))
     }
     if (sql.startsWith('UPDATE mbox.service_tasks')) {
+      this.pool.delays.push(values[7])
       const original = this.pool.tasks.get(String(values[2]))
       if (original === undefined || this.pool.locks.get(original.id) !== this.clientId) {
         return result<Row>([])
@@ -133,6 +136,7 @@ class WorkerClient implements PostgresPoolClient {
     }
     if (sql.startsWith('INSERT INTO mbox.service_task_events')) {
       if (this.pool.failEvent) throw new Error('event store unavailable')
+      this.pool.eventTypes.push(values[3])
       this.stagedEvents += 1
       return { rows: [], rowCount: 1 }
     }
@@ -223,6 +227,30 @@ describe('ServiceTaskSlaWorker', () => {
     expect(pool.committedEvents).toBe(0)
     expect(pool.locks.size).toBe(0)
     expect(pool.queries).toContain('ROLLBACK')
+  })
+
+  it('reminds an urgent unresolved task without another escalation and backs off concurrent retries', async () => {
+    const pool = new WorkerPool()
+    pool.tasks.set(taskId, { ...task(), priority: 'urgent', backupEmployeeId: null })
+    const worker = new ServiceTaskSlaWorker(new ScopedPostgresTransactionRunner(pool))
+    const batches = await Promise.all([
+      worker.runBatch({ tenantId, storeId }, 'sla-worker-a'),
+      worker.runBatch({ tenantId, storeId }, 'sla-worker-b'),
+    ])
+    expect(batches.flatMap(batch => batch.processed)).toMatchObject([{ action: 'reminded', status: 'pending' }])
+    expect(pool.eventTypes).toEqual(['task.reminded'])
+    expect(pool.delays).toEqual([1_800_000])
+    expect(pool.committedOutbox).toBe(1)
+  })
+
+  it('records the actual high-to-urgent escalation once before reminder backoff', async () => {
+    const pool = new WorkerPool()
+    pool.tasks.set(taskId, { ...task(), priority: 'high', backupEmployeeId: null })
+    const worker = new ServiceTaskSlaWorker(new ScopedPostgresTransactionRunner(pool))
+    expect((await worker.runBatch({ tenantId, storeId }, 'sla-worker-a')).processed[0]?.action).toBe('escalated')
+    pool.tasks.get(taskId)!.due = true
+    await worker.runBatch({ tenantId, storeId }, 'sla-worker-a')
+    expect(pool.eventTypes).toEqual(['task.escalated', 'task.reminded'])
   })
 
   it('rejects oversized batches instead of silently defeating the bounded claim', async () => {

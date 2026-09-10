@@ -1,3 +1,5 @@
+import { expireRecollectionAuthorizations } from './recollection-expiry.js'
+import { synchronizeRefundedCancelledItem } from './refunded-fulfillment-repair.js'
 import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -111,4 +113,37 @@ integration('closed-session KDS terminalization', () => {
       actor_employee_id: employeeId,
     })
   })
+  it('keeps unpaid history unchanged, then terminalizes refunded cancelled items idempotently', async () => {
+    expect(await transactions.run({ tenantId, storeId }, tx => synchronizeRefundedCancelledItem(tx, orderItemId))).toEqual([])
+    await pool.query(`UPDATE mbox.orders SET payment_status='paid' WHERE id=$1`, [orderId])
+    await pool.query(`UPDATE mbox.orders SET payment_status='refunded' WHERE id=$1`, [orderId])
+    await expect(pool.query(`UPDATE mbox.order_items SET status='cancelled',total_amount_minor=99 WHERE id=$1`, [orderItemId]))
+      .rejects.toBeDefined()
+    expect(await transactions.run({ tenantId, storeId }, tx => synchronizeRefundedCancelledItem(tx, orderItemId))).toEqual([orderItemId])
+    expect(await transactions.run({ tenantId, storeId }, tx => synchronizeRefundedCancelledItem(tx, orderItemId))).toEqual([])
+    expect((await pool.query(`SELECT status,total_amount_minor FROM mbox.order_items WHERE id=$1`, [orderItemId])).rows[0])
+      .toMatchObject({status:'cancelled',total_amount_minor:'100'})
+    expect((await pool.query(`SELECT fulfillment_state FROM mbox.orders WHERE id=$1`, [orderId])).rows[0].fulfillment_state).toBe('cancelled')
+    expect((await pool.query(`SELECT count(*) FROM mbox.audit_events WHERE object_id=$1 AND action='order_item.refunded_cancellation_synchronized'`, [orderItemId])).rows[0].count).toBe('1')
+  })
+
+  it('expires only due authorizations and writes one audit across concurrent runs', async () => {
+    const expiredId = randomUUID()
+    const futureId = randomUUID()
+    // The one-active-per-order invariant also applies to expired-but-active rows.
+    await pool.query(`INSERT INTO mbox.order_recollection_authorizations(
+      id,tenant_id,store_id,public_id,order_id,amount_minor,currency,status,reason,authorized_by_employee_id,expires_at
+    ) VALUES($1::uuid,$2,$3,$1::uuid::text,$4,100,'CNY','active','test expired authorization',$5,clock_timestamp()-interval '1 day')`,
+      [expiredId,tenantId,storeId,orderId,employeeId])
+    await Promise.all([1,2].map(() => transactions.run({tenantId,storeId}, tx => expireRecollectionAuthorizations(tx))))
+    expect((await pool.query(`SELECT status FROM mbox.order_recollection_authorizations WHERE id=$1`,[expiredId])).rows[0].status).toBe('expired')
+    expect((await pool.query(`SELECT count(*) FROM mbox.audit_events WHERE object_id=$1 AND action='payment.recollection_expired'`,[expiredId])).rows[0].count).toBe('1')
+    await pool.query(`INSERT INTO mbox.order_recollection_authorizations(
+      id,tenant_id,store_id,public_id,order_id,amount_minor,currency,status,reason,authorized_by_employee_id,expires_at
+    ) VALUES($1::uuid,$2,$3,$1::uuid::text,$4,100,'CNY','active','test future authorization',$5,clock_timestamp()+interval '1 hour')`,
+      [futureId,tenantId,storeId,orderId,employeeId])
+    await transactions.run({tenantId,storeId}, tx => expireRecollectionAuthorizations(tx))
+    expect((await pool.query(`SELECT status FROM mbox.order_recollection_authorizations WHERE id=$1`,[futureId])).rows[0].status).toBe('active')
+  })
+
 })

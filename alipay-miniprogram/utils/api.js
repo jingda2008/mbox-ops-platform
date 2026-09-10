@@ -780,6 +780,8 @@ async function checkoutSharedCart(input, idempotencyKey) {
   return request('/api/guest/shared-cart/checkout', {
     method: 'POST', headers: { 'idempotency-key': idempotencyKey || randomId('shared-cart-checkout') },
     data: {
+      note: input.note || null,
+      ...(input.lineNotes && input.lineNotes.length ? { lineNotes: input.lineNotes } : {}),
       expectedGeneration: input.expectedGeneration,
       expectedVersion: input.expectedVersion,
       confirmedDuplicateOrderId: input.confirmedDuplicateOrderId || null,

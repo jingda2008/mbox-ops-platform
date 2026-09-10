@@ -42,6 +42,9 @@ export interface FulfillmentWorkItem {
     productId: string
     productName: string
     quantity: number
+    unitPriceMinor?: number
+    totalAmountMinor?: number
+    includedInBundle?: boolean
     status: 'submitted' | 'accepted' | 'preparing' | 'ready'
     note: string | null
   }
@@ -91,6 +94,9 @@ interface FulfillmentRow extends Record<string, unknown> {
   product_id: string
   product_name: string
   quantity: number
+  unit_price_minor: string
+  total_amount_minor: string
+  parent_order_item_id: string | null
   item_status: FulfillmentWorkItem['item']['status']
   item_note: string | null
   table_id: string
@@ -157,8 +163,8 @@ async function readFulfillmentRows(
   const result = await transaction.query<FulfillmentRow>(`
     SELECT
       task.id AS task_id,
-      session.business_date::text AS business_date,
-      (session.business_date < $8::date) AS carryover,
+      customer_order.business_date::text AS business_date,
+      (customer_order.business_date < $8::date) AS carryover,
       task.station_code,
       task.status AS kds_status,
       task.priority,
@@ -191,6 +197,9 @@ async function readFulfillmentRows(
       item.product_id,
       product.name AS product_name,
       item.quantity,
+      item.unit_price_minor::text,
+      item.total_amount_minor::text,
+      item.parent_order_item_id,
       item.status AS item_status,
       item.note AS item_note,
       venue_table.id AS table_id,
@@ -366,6 +375,11 @@ function mapWorkItem(row: FulfillmentRow): FulfillmentWorkItem {
       productId: row.product_id,
       productName: row.product_name,
       quantity: row.quantity,
+      ...(row.unit_price_minor !== undefined ? {
+        unitPriceMinor: checkedAmount(row.unit_price_minor),
+        totalAmountMinor: checkedAmount(row.total_amount_minor),
+        includedInBundle: row.parent_order_item_id !== null,
+      } : {}),
       status: row.item_status,
       note: row.item_note,
     },
@@ -376,4 +390,10 @@ function mapWorkItem(row: FulfillmentRow): FulfillmentWorkItem {
     },
     attentionMessages,
   }
+}
+
+function checkedAmount(value: string): number {
+  const amount = Number(value)
+  if (!Number.isSafeInteger(amount) || amount < 0) throw new TypeError('Invalid fulfillment sale amount')
+  return amount
 }

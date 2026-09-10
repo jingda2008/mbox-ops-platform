@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { CustomerExperienceRepository } from './customer-experience-repository.js'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
@@ -42,6 +43,20 @@ integration('activity operations PostgreSQL integration', () => {
   })
 
   afterAll(async () => { await pool?.end() })
+
+  it('closes an empty draft without deleting history and refuses live registrations', async () => {
+    await run(repository => repository.createDraft('activity-ops-close-empty', draftInput, employeeId))
+    await expect(run(repository => repository.closeActivity('activity-ops-close-empty','completed')))
+      .rejects.toMatchObject({code:'ACTIVITY_NOT_STARTED'})
+    const result=await run(repository => repository.closeActivity('activity-ops-close-empty','cancelled'))
+    expect(result.status).toBe('cancelled')
+    expect((await run(repository => repository.closeActivity('activity-ops-close-empty','cancelled'))).status).toBe('cancelled')
+    await expect(run(repository => repository.closeActivity('activity-ops-close-empty','completed')))
+      .rejects.toMatchObject({code:'ACTIVITY_TERMINAL'})
+    await expect(run(repository => repository.closeActivity('activity-ops-published','cancelled')))
+      .rejects.toMatchObject({code:'ACTIVITY_CLOSE_BLOCKED'})
+    expect((await run(repository => repository.detail('activity-ops-published'))).activity.status).toBe('published')
+  })
 
   it('reads operational counts without exposing protected contact and updates draft-only promises', async () => {
     const listed = await run((repository) => repository.list())
@@ -188,6 +203,29 @@ integration('activity operations PostgreSQL integration', () => {
       sku: 'ACTIVITY-LEGACY-BOTTLE',
       name: '活动历史瓶装威士忌',
       baseUnit: 'bottle',
+    })
+  })
+
+  it('stops admissions idempotently without hiding existing financial work or completing the activity',async()=>{
+    const before=(await pool.query('SELECT id,status,paid_amount_minor FROM mbox.community_activity_registrations WHERE activity_id=$1 ORDER BY id',[publishedActivityId])).rows
+    const first=await run(repository=>repository.stopRegistration('activity-ops-published'))
+    expect(first.registrationClosedAt).toBeTruthy()
+    expect(first.status).toBe('published')
+    const second=await run(repository=>repository.stopRegistration('activity-ops-published'))
+    expect(second.registrationClosedAt).toBe(first.registrationClosedAt)
+    expect((await pool.query('SELECT id,status,paid_amount_minor FROM mbox.community_activity_registrations WHERE activity_id=$1 ORDER BY id',[publishedActivityId])).rows).toEqual(before)
+    await expect(insertRegistration(pool,randomUUID(),'activity-ops-stopped-new',customerIds[0]!,'confirmed','not_required',1)).rejects.toThrow('registration is stopped')
+    await expect(run(repository=>repository.closeActivity('activity-ops-published','cancelled'))).rejects.toMatchObject({code:'ACTIVITY_CLOSE_BLOCKED'})
+    expect((await run(repository=>repository.detail('activity-ops-published'))).registrations).toHaveLength(before.length)
+    await pool.query('INSERT INTO mbox.customer_memberships(tenant_id,store_id,customer_id,member_no) VALUES($1,$2,$3,$4)',[tenantId,storeId,customerIds[2],`MBX-${randomUUID().slice(0,16).toUpperCase()}`])
+    await pool.query('INSERT INTO mbox.loyalty_accounts(tenant_id,store_id,membership_id,customer_id) SELECT tenant_id,store_id,id,customer_id FROM mbox.customer_memberships WHERE tenant_id=$1 AND store_id=$2 AND customer_id=$3',[tenantId,storeId,customerIds[2]])
+    await runner.run({tenantId,storeId},async tx=>{
+      const customer=new CustomerExperienceRepository(tx)
+      expect(await customer.publicActivities(customerIds[2]!)).toEqual([])
+      await expect(customer.publicActivitySharePreview('activity-ops-published')).rejects.toMatchObject({code:'ACTIVITY_NOT_FOUND'})
+      const own=await customer.publicActivity(customerIds[2]!,'activity-ops-published')
+      expect(own.registrationClosedAt).toBeTruthy()
+      expect(own.publicId).toBe('activity-ops-published')
     })
   })
 

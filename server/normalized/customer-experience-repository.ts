@@ -155,6 +155,7 @@ export interface PublicContentCard {
 }
 
 export interface PublicActivity {
+  registrationClosedAt?: string | null
   publicId: string
   kind: string
   title: string
@@ -689,6 +690,7 @@ interface CardRow extends Record<string, unknown> {
 }
 
 interface ActivityRow extends Record<string, unknown> {
+  registration_closed_at?: string | null
   public_id: string
   activity_kind: string
   title: string
@@ -1580,6 +1582,7 @@ export class CustomerExperienceRepository {
       FROM mbox.community_activities AS activity
       WHERE activity.tenant_id = $1::uuid AND activity.store_id = $2::uuid
         AND activity.public_id = $3 AND activity.status IN ('published', 'full')
+        AND activity.registration_closed_at IS NULL
         AND activity.ends_at > clock_timestamp()
       FOR UPDATE OF activity
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.activityPublicId])
@@ -4136,7 +4139,7 @@ export class CustomerExperienceRepository {
         SELECT child.id FROM mbox.customers child JOIN family parent ON child.merged_into_customer_id=parent.id
         WHERE child.tenant_id=$1::uuid AND child.store_id=$2::uuid
       )
-      SELECT activity.public_id, activity.activity_kind, activity.title,
+      SELECT activity.public_id, activity.registration_closed_at::text, activity.activity_kind, activity.title,
         activity.summary, activity.cover_url, activity.starts_at::text,
         activity.ends_at::text, activity.assembly_location, activity.capacity,
         activity.fee_amount_minor, activity.deposit_amount_minor, activity.fee_basis,
@@ -4228,6 +4231,7 @@ export class CustomerExperienceRepository {
       ) AS registration ON true
       WHERE activity.tenant_id = $1::uuid AND activity.store_id = $2::uuid
         AND activity.status IN ('published', 'full')
+        AND (activity.registration_closed_at IS NULL OR ($4::text IS NOT NULL AND registration.status IS NOT NULL))
         AND activity.ends_at > clock_timestamp()
         AND ($4::text IS NULL OR activity.public_id=$4)
       GROUP BY activity.id, registration.status
@@ -5533,6 +5537,7 @@ function activityView(row: ActivityRow, providerConfigured: boolean): PublicActi
     providerConfigured && row.activity_payment_authorized,
   )
   return {
+    registrationClosedAt: row.registration_closed_at ?? null,
     publicId: row.public_id,
     kind: row.activity_kind,
     title: row.title,

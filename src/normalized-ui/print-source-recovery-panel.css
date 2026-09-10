@@ -15,3 +15,15 @@
 .print-source-recovery article { min-width: 0; flex-wrap: wrap; gap: 10px; }
 .print-source-recovery article > div { min-width: 0; flex: 1 1 180px; overflow-wrap: anywhere; }
 .print-source-recovery article > button { flex: 0 1 auto; }
+.print-source-recovery article { display: flex; align-items: center; }
+.print-source-recovery article > strong { flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; }
+.print-source-recovery input[type="checkbox"] { width: 20px; min-height: 20px; }
+.print-source-recovery select { min-height: 42px; max-width: 100%; border: 1px solid #b9c8bd; border-radius: 8px; background: white; padding: 6px; }
+.print-source-recovery.print-ticket-policies article {
+  display: grid; grid-template-columns: minmax(0, 1fr) 76px 54px; align-items: end;
+  min-height: 0; height: auto; padding: 12px; gap: 8px; border-radius: 10px;
+}
+.print-source-recovery.print-ticket-policies article > strong { grid-column: 1 / -1; min-height: 0; margin: 0; font-size: 14px; }
+.print-source-recovery.print-ticket-policies article label { margin: 0; min-height: 0; font-size: 12px; }
+.print-source-recovery.print-ticket-policies article label:first-of-type { display: flex; align-items: center; gap: 6px; min-height: 42px; }
+.print-source-recovery.print-ticket-policies article button { margin: 0; padding: 8px 5px; min-height: 42px; font-size: 12px; }

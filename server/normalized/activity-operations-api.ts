@@ -35,6 +35,20 @@ export interface ActivityOperationsApiOptions {
 }
 
 export const activityOperationsApiPlugin: FastifyPluginAsync<ActivityOperationsApiOptions> = async (app, options) => {
+  app.post<{Params:{publicId:string}}>('/staff/activity-operations/:publicId/stop-registration',async(request,reply)=>handle(reply,async()=>{
+    const context=await authorized(options,request,['community.activity.manage'])
+    const body=object(request.body,'停止报名')
+    const result=await options.service.stopRegistration(context,{publicId:publicId(request.params.publicId),reason:text(body.reason,'操作原因',2,500),idempotencyKey:idempotencyKey(request)})
+    return reply.send({data:result.value,meta:{replayed:result.replayed}})
+  }))
+  app.post<{Params:{publicId:string}}>('/staff/activity-operations/:publicId/close', async (request,reply) => handle(reply,async()=>{
+    const context=await authorized(options,request,['community.activity.manage'])
+    const body=object(request.body,'活动结束操作')
+    if(body.status!=='cancelled' && body.status!=='completed') throw new ActivityOperationsError('活动结束状态无效','ACTIVITY_CLOSE_INVALID',400)
+    const result=await options.service.closeActivity(context,{publicId:publicId(request.params.publicId),status:body.status,
+      reason:text(body.reason,'操作原因',2,500),idempotencyKey:idempotencyKey(request)})
+    return reply.send({data:result.value,meta:{replayed:result.replayed}})
+  }))
   app.post('/staff/activity-operations', async (request, reply) => handle(reply, async () => {
     const context = await authorized(options, request, ['community.activity.manage'])
     const body = object(request.body, '活动草稿')

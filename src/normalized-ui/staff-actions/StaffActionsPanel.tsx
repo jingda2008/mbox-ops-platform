@@ -1165,6 +1165,9 @@ export function StaffActionsPanel({
                 <div className="staff-action-card-main">
                   <strong>{item.table.code} · {item.item.productName} × {item.item.quantity}</strong>
                   <p>{item.stationCode === 'bar' ? '吧台' : item.stationCode === 'kitchen' ? '后厨' : '收银'} · {item.kdsStatus === 'failed' ? '制作失败，等待重新制作或后续处理' : item.readyForDelivery ? '待配送' : '待制作'}</p>
+                  {item.item.unitPriceMinor !== undefined && item.item.totalAmountMinor !== undefined && <small>
+                    {item.item.includedInBundle ? '套餐内菜品，不另计价' : `单价 ¥${(item.item.unitPriceMinor / 100).toFixed(2)} · 优惠后小计 ¥${(item.item.totalAmountMinor / 100).toFixed(2)}`}
+                  </small>}
                   {item.carryover && <small className="staff-action-carryover">前营业日遗留 · 原营业日 {item.businessDate}，处理结果仍归原订单</small>}
                   {item.attentionMessages.map((message) => <small className="staff-action-note" key={message}>备注：{message}</small>)}
                   {item.overdue && <small className="staff-action-overdue">已超时，优先处理</small>}

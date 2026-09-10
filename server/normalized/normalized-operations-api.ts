@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import {recordManualBusinessDayEnd,ManualBusinessDayEndConflict,type ManualBusinessDayEnd} from './manual-business-day-end-repository.js'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type {
   AuditActor,
@@ -70,7 +71,7 @@ export interface NormalizedOperationsRequestContext {
   capabilities: readonly string[]
 }
 
-type OperationsQueryPort = Pick<OperationsQueryService, 'getStaffView'>
+type OperationsQueryPort = Pick<OperationsQueryService, 'getStaffView'> & Partial<Pick<OperationsQueryService,'getOperatingHistory'|'getManualDayEndPreview'>>
 type TableSessionCommandPort = Pick<TableSessionCommandService, 'open'>
 type CommandExecutorPort = Pick<NormalizedCommandExecutor, 'execute'>
 type TableSessionRepositoryPort = Pick<TableSessionRepository, 'beginClosing' | 'completeClosing'>
@@ -175,6 +176,31 @@ export const normalizedOperationsApiPlugin: FastifyPluginAsync<NormalizedOperati
   options,
 ) => {
   const createPublicId = options.createPublicId ?? defaultPublicId
+  app.get('/business-days/end-current/preview',async(request,reply)=>handleRoute(reply,async()=>{
+    const context=await resolveAndValidateContext(options,request)
+    requireCapability(context,'business_day.close')
+    if(!options.operationsQuery.getManualDayEndPreview)return reply.code(503).send({error:{message:'日结核对暂不可用'}})
+    return reply.send({data:await options.operationsQuery.getManualDayEndPreview(context.scope,context.employeeId,context.businessDate)})
+  }))
+  app.get('/operations/history', async (request,reply)=>handleRoute(reply,async()=>{
+    const context=await resolveAndValidateContext(options,request)
+    requireCapability(context,'reconciliation.view')
+    const query=readObject(request.query,'查询条件')
+    const businessDate=typeof query.businessDate==='string'?query.businessDate:context.businessDate
+    const endDate=typeof query.endDate==='string'?query.endDate:businessDate
+    const page=Number(query.page??0)
+    const table=typeof query.table==='string'?query.table.trim():''
+    const employee=typeof query.employee==='string'?query.employee.trim():''
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(businessDate)||!Number.isFinite(Date.parse(businessDate))
+      ||new Date(businessDate).toISOString().slice(0,10)!==businessDate
+      ||!/^\d{4}-\d{2}-\d{2}$/.test(endDate)||!Number.isFinite(Date.parse(endDate))
+      ||new Date(endDate).toISOString().slice(0,10)!==endDate||endDate<businessDate
+      ||Date.parse(endDate)-Date.parse(businessDate)>366*86400000
+      ||!Number.isSafeInteger(page)||page<0||page>2000||table.length>80||employee.length>80) throw new RequestValidationError('查询日期、页码或筛选条件无效')
+    if(!options.operationsQuery.getOperatingHistory) return reply.code(503).send({error:{message:'历史查询暂不可用'}})
+    if(query.exportAll!==undefined&&query.exportAll!=='true')throw new RequestValidationError('导出参数无效')
+    return reply.send({data:await options.operationsQuery.getOperatingHistory(context.scope,context.employeeId,{businessDate,endDate,table,employee,page,...(query.exportAll==='true'?{exportAll:true}:{})})})
+  }))
 
   app.get('/operations', async (request, reply) => handleRoute(reply, async () => {
     const context = await resolveAndValidateContext(options, request)
@@ -370,6 +396,28 @@ export const normalizedOperationsApiPlugin: FastifyPluginAsync<NormalizedOperati
       return reply.send(executionResponse(execution))
     }),
   )
+
+  app.post('/business-days/end-current',async(request,reply)=>handleRoute(reply,async()=>{
+    const context=await resolveAndValidateContext(options,request)
+    requireCapability(context,'business_day.close')
+    const body=readObject(request.body,'日结请求')
+    assertActorBinding(body,context.employeeId)
+    const expectedBusinessDate=readPatternString(body.expectedBusinessDate,'营业日',/^\d{4}-\d{2}-\d{2}$/)
+    const reason=readString(body.reason,'日结原因',500,2)
+    const execution=await options.commandExecutor.execute({scope:context.scope,operationScope:'business-day.end-current',
+      idempotencyKey:readIdempotencyKey(request),requestFingerprint:fingerprint(request,context,{expectedBusinessDate,reason}),
+      resultCodec:{encode:value=>value as unknown as JsonObject,decode:value=>decodeRecord<ManualBusinessDayEnd>(value,['id','businessDate','nextBusinessDate','endedAt'])},
+    },async tx=>{
+      const result=await recordManualBusinessDayEnd(tx,{employeeId:context.employeeId,expectedBusinessDate,reason})
+      return {result,auditEvents:result.replayed?[]:[{actor:employeeActor(context.employeeId),action:'business_day.manually_ended',
+        objectType:'manual_business_day_end',objectId:result.id,businessDate:result.businessDate,
+        beforeData:null,afterData:{nextBusinessDate:result.nextBusinessDate,endedAt:result.endedAt},reason}],
+        outboxMessages:result.replayed?[]:[{businessEventKey:`manual-business-day-end:${result.id}`,aggregateType:'manual_business_day_end',
+          aggregateId:result.id,aggregateVersion:1,eventType:'business_day.manually_ended.v1',
+          payload:{businessDate:result.businessDate,nextBusinessDate:result.nextBusinessDate,boundaryId:result.id}}]}
+    })
+    return reply.send(executionResponse(execution))
+  }))
 
   app.post('/business-days/close-pending', async (request, reply) => handleRoute(reply, async () => {
     const context = await resolveAndValidateContext(options, request)
@@ -1000,6 +1048,7 @@ function safeErrorCode(error: unknown): string {
 }
 
 function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
+  if(error instanceof ManualBusinessDayEndConflict)return apiError(409,'BUSINESS_DAY_END_CONFLICT',error.message)
   if (error instanceof NormalizedAuthenticationRequiredError || error instanceof StaffSessionNotFoundError) {
     return apiError(401, 'AUTH_REQUIRED', '登录信息无效或已过期，请重新登录')
   }

@@ -318,7 +318,7 @@ export interface StaffActionsApiPort {
     tableSessionId: string
     assistedOrderContextToken: string
     orderMode: 'paid' | 'gift'
-    items: ReadonlyArray<{ productId: string; quantity: number;bundleSelections?:Array<{
+    items: ReadonlyArray<{ productId: string; quantity: number; note?: string;bundleSelections?:Array<{
       groups:Array<{ groupId:string;productIds:string[] }>
     }> }>
     fulfillmentNote?: string
@@ -678,7 +678,7 @@ export class StaffActionsApi implements StaffActionsApiPort {
     tableSessionId: string
     assistedOrderContextToken: string
     orderMode: 'paid' | 'gift'
-    items: ReadonlyArray<{ productId: string; quantity: number;bundleSelections?:Array<{
+    items: ReadonlyArray<{ productId: string; quantity: number; note?: string;bundleSelections?:Array<{
       groups:Array<{ groupId:string;productIds:string[] }>
     }> }>
     fulfillmentNote?: string

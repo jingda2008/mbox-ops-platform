@@ -33,6 +33,8 @@ import { CustomerPaymentCodeScanner } from '../components/CustomerPaymentCodeSca
 import { NormalizedApiClient, NormalizedApiError, type StaffAuthView } from '../normalized-api'
 import { CashierMutationCoordinator } from './cashier-mutation'
 import './cashier-after-sales-workbench.css'
+import {OperatingHistoryPanel} from './OperatingHistoryPanel'
+import {ManualBusinessDayEndPanel} from './ManualBusinessDayEndPanel'
 
 interface WorkbenchNotice {
   kind: 'success' | 'error' | 'attention'
@@ -269,7 +271,10 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
     }
   }, [api, load, onLoginRequired, query])
 
-  return <CashierAfterSalesWorkbenchView
+  return <>{view && auth.permissions.includes('reconciliation.view') && <OperatingHistoryPanel key={auth.employee.id} api={api} businessDate={view.businessDate} />}
+    {view && auth.permissions.includes('business_day.close') &&
+      <ManualBusinessDayEndPanel key={auth.employee.id} api={api} businessDate={view.businessDate} onCompleted={()=>void load(query)}/>}
+    <CashierAfterSalesWorkbenchView
     auth={auth}
     view={view}
     phase={phase}
@@ -289,7 +294,7 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
     onCreateOnlinePayment={createOnlinePayment}
     onClosePendingBusinessDays={closePendingBusinessDays}
     onNavigate={onNavigate}
-  />
+  /></>
 }
 
 export function CashierAfterSalesWorkbenchView({
@@ -610,7 +615,7 @@ export function CashierAfterSalesWorkbenchView({
                 onClick={() => setExpandedOrderId(expanded ? null : order.id)}
               >
                 <span><b>{order.tableCode}</b><small>{order.carryover ? `${order.businessDate ?? '前一营业日'}遗留 · ` : ''}{shortReference(order.publicId)} · {formatTime(order.submittedAt ?? order.createdAt)}</small></span>
-                <span><strong>¥{formatAmount(order.totalAmountMinor)}</strong><em>{paymentStatusLabel(order.paymentStatus)}</em>{(order.couponRefundReviewCount??0)>0&&<small>权益待复核 {order.couponRefundReviewCount} 项</small>}</span>
+                <span><strong>¥{formatAmount(order.totalAmountMinor)}</strong><em>{order.totalAmountMinor === 0 && order.status !== 'cancelled' ? '无需收款' : paymentStatusLabel(order.paymentStatus)}</em>{(order.couponRefundReviewCount??0)>0&&<small>权益待复核 {order.couponRefundReviewCount} 项</small>}</span>
                 <ChevronDown size={18} className={expanded ? 'is-open' : ''} />
               </button>
               {expanded && <div className="cashier-order-detail">

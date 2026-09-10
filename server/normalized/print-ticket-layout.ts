@@ -2,7 +2,7 @@ import type { JsonObject, JsonValue } from './command-executor.js'
 
 export const PRINT_TICKET_SCHEMA_VERSION = 1
 
-export type PrintTicketKind = 'cashier_settlement' | 'cashier_payment' | 'cashier_refund' | 'bar_production' | 'kitchen_production'
+export type PrintTicketKind = 'cashier_settlement' | 'cashier_payment' | 'cashier_refund' | 'bar_production' | 'kitchen_production' | 'order_summary' | 'delivery' | 'table_settlement' | 'daily_settlement'
 export type PrintTicketPaper = '58mm' | '80mm' | 'a4'
 
 export interface PrintTicketOutputProfile {
@@ -48,11 +48,15 @@ export interface PrintTicketSnapshot {
 }
 
 const TICKET_TITLES: Record<PrintTicketKind, string> = {
-  cashier_settlement: '结账单',
+  cashier_settlement: '预结账单（未确认收款）',
   cashier_payment: '支付凭条',
   cashier_refund: '退款凭条',
   bar_production: '吧台调酒制作单',
   kitchen_production: '后厨制作单',
+  order_summary: '订单汇总单（非制作指令）',
+  delivery: '配送单（勿重复制作）',
+  table_settlement: '整桌结账归档单',
+  daily_settlement: '营业日结单',
 }
 
 export function createPrintTicketSnapshot(input: Readonly<Omit<PrintTicketSnapshot, 'schemaVersion' | 'title'>>): PrintTicketSnapshot {
@@ -66,7 +70,7 @@ export function createPrintTicketSnapshot(input: Readonly<Omit<PrintTicketSnapsh
     throw new TypeError('guestCount无效')
   }
   if (input.operatorLabel !== null) assertShortText(input.operatorLabel, 'operatorLabel', 1, 80)
-  if (input.note !== null) assertShortText(input.note, 'note', 1, 240)
+  if (input.note !== null) assertShortText(input.note, 'note', 1, 300)
   if (input.payment !== null) validatePayment(input.payment)
   if (!Array.isArray(input.lines) || input.lines.length === 0 || input.lines.length > 60) {
     throw new TypeError('lines必须包含1至60项')
@@ -102,6 +106,18 @@ export function isPrintTicketSnapshot(value: unknown): value is PrintTicketSnaps
   } catch {
     return false
   }
+}
+
+/** Keep the validated per-ticket bound, splitting long whole-table documents
+ * without truncating dishes. Only the last page carries the financial total. */
+export function paginatePrintTicket(input: Readonly<Omit<PrintTicketSnapshot, 'schemaVersion' | 'title'>>): PrintTicketSnapshot[] {
+  if (input.lines.length <= 60) return [createPrintTicketSnapshot(input)]
+  const pages = Math.ceil(input.lines.length / 60)
+  if (pages > 50) throw new TypeError('打印明细超过安全页数，请人工核对')
+  return Array.from({length:pages}, (_,index)=>createPrintTicketSnapshot({
+    ...input, subtitle:`${input.subtitle.slice(0,55)} · 第${index+1}/${pages}页`,
+    lines:input.lines.slice(index*60,(index+1)*60), totalAmountMinor:index===pages-1?input.totalAmountMinor:null,
+  }))
 }
 
 export function parsePrintTicketSnapshot(value: unknown): PrintTicketSnapshot {
@@ -157,7 +173,7 @@ export function renderPrintTicketHtml(
   requestedProfile: Readonly<PrintTicketOutputProfile> = DEFAULT_PRINT_TICKET_OUTPUT_PROFILE,
 ): string {
   const profile = normalizePrintTicketOutputProfile(requestedProfile)
-  const production = ticket.kind === 'bar_production' || ticket.kind === 'kitchen_production'
+  const production = ticket.kind === 'bar_production' || ticket.kind === 'kitchen_production' || ticket.kind === 'delivery'
   const amount = ticket.totalAmountMinor === null ? '' : `<section class="total"><span>合计</span><strong>${escapeHtml(formatCny(ticket.totalAmountMinor))}</strong></section>`
   const table = ticket.tableCode === null ? '' : `<section class="table-hero"><span>桌台</span><strong>${escapeHtml(ticket.tableCode)}</strong></section>`
   const guest = production || ticket.guestCount === null ? '' : `<p class="guest-count"><span>消费人数</span><strong>${ticket.guestCount} 位</strong></p>`
@@ -233,7 +249,7 @@ export function printTicketPageHeightMm(ticket: Readonly<PrintTicketSnapshot>, p
 function normalizeLine(input: Readonly<PrintTicketLine>): PrintTicketLine {
   assertShortText(input.name, 'line.name', 1, 120)
   if (!Number.isSafeInteger(input.quantity) || input.quantity < 1 || input.quantity > 999) throw new TypeError('line.quantity无效')
-  if (input.note !== undefined && input.note !== null) assertShortText(input.note, 'line.note', 1, 240)
+  if (input.note !== undefined && input.note !== null) assertShortText(input.note, 'line.note', 1, 300)
   for (const [key, value] of [['unitAmountMinor', input.unitAmountMinor], ['totalAmountMinor', input.totalAmountMinor]] as const) {
     if (value !== undefined && value !== null && (!Number.isSafeInteger(value) || value < 0)) throw new TypeError(`line.${key}无效`)
   }
@@ -272,7 +288,7 @@ export function paymentLabel(payment: Readonly<PrintTicketPayment>): string {
 }
 
 function assertTicketKind(value: unknown): asserts value is PrintTicketKind {
-  if (value !== 'cashier_settlement' && value !== 'cashier_payment' && value !== 'cashier_refund' && value !== 'bar_production' && value !== 'kitchen_production') throw new TypeError('打印票据类型无效')
+  if (typeof value !== 'string' || !Object.hasOwn(TICKET_TITLES, value)) throw new TypeError('打印票据类型无效')
 }
 
 function readKind(value: unknown): PrintTicketKind { assertTicketKind(value); return value }

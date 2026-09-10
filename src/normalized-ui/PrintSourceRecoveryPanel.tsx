@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { NormalizedApiClient } from '../normalized-api'
 import './print-source-recovery-panel.css'
+import { PrintTicketPolicyPanel } from './PrintTicketPolicyPanel'
 
 interface Source {id:string;ticketKind:string;status:string;attempts:number;createdAt:string;nextAttemptAt:string}
-const names:Record<string,string>={production:'出品单',settlement:'结账单',payment:'收款凭条',activity_payment:'活动收款',refund:'退款凭条',activity_refund:'活动退款'}
+const names:Record<string,string>={production:'出品单',settlement:'预结账单（未收款）',payment:'收款凭条',activity_payment:'活动收款',refund:'退款凭条',activity_refund:'活动退款',order_summary:'订单汇总及挂单预结算',delivery:'配送单',table_settlement:'整桌结账归档',daily_settlement:'营业日结单'}
 const statuses:Record<string,string>={pending:'等待生成',retry:'失败，等待重试',dead:'已停止，需核对',skipped:'无有效路由或业务已失效，未生成'}
 
 export function PrintSourceRecoveryPanel({api}:{api:NormalizedApiClient}){
@@ -28,7 +29,7 @@ export function PrintSourceRecoveryPanel({api}:{api:NormalizedApiClient}){
     catch{setError('操作结果未确认，请刷新核对；再次操作沿用原编号，不重复生成')}
     finally{setBusy(false)}
   }
-  return <section className="staff-song-requests print-source-recovery"><h2>票据生成检查</h2>
+  return <><PrintTicketPolicyPanel api={api}/><section className="staff-song-requests print-source-recovery"><h2>票据生成检查</h2>
     <p className="staff-module-footnote">这里只处理票据生成，不会重新点单、扣库存、收款或退款。打印关闭期间跳过的记录不会在开机后集中补出。</p>
     <button type="button" disabled={busy} onClick={()=>void refresh()}>刷新生成状态</button>
     {error&&<p role="status">{error}</p>}
@@ -39,5 +40,5 @@ export function PrintSourceRecoveryPanel({api}:{api:NormalizedApiClient}){
       {confirmId===row.id&&<span>请确认不是已经不再需要的历史出品单，恢复只生成纸票。</span>}</div>
       {['retry','dead'].includes(row.status)&&<button type="button" disabled={busy||reason.trim().length<3} onClick={()=>void retry(row)}>{confirmId===row.id?'确认恢复生成':'核对后重试'}</button>}
     </article>)}
-  </section>
+  </section></>
 }

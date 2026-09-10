@@ -415,6 +415,12 @@ export class HardwareRepository {
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.sourceOutboxMessageId])
     if (!source.rows[0]) throw new HardwareNotFoundError('打印源Outbox事件不存在')
 
+    const policy = (await this.transaction.query<{enabled:boolean;copies:number}>(`
+      SELECT enabled,copies FROM mbox.print_ticket_policies
+      WHERE tenant_id=$1 AND store_id=$2 AND ticket_kind=$3 FOR SHARE`,
+    [this.transaction.scope.tenantId,this.transaction.scope.storeId,input.printSnapshot.kind ?? ''])).rows[0]
+    if (policy?.enabled === false) return []
+
     const routes = await this.transaction.query<RouteRow>(`
       SELECT route.id, route.code, route.name, route.station_code,
         route.product_category_code, route.printer_device_id, route.copies,
@@ -460,6 +466,7 @@ export class HardwareRepository {
 
     const jobs: PrintJob[] = []
     for (const route of routes.rows) {
+      if (policy) route.copies = policy.copies
       const businessKey = printBusinessKey(input.sourceOutboxMessageId, route.id, input.sourceReference)
       const inserted = await this.transaction.query<{ id: string }>(`
         INSERT INTO mbox.print_jobs (

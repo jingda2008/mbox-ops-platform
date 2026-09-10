@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { PRINT_TICKET_KINDS } from '../../src/shared/print-ticket-policy.js'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import {
   IdempotencyConflictError,
@@ -47,6 +48,36 @@ class HardwareAccessDeniedError extends Error {
 }
 
 export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (app, options) => {
+  app.get('/hardware/print-ticket-policies', async (request,reply) => handle(reply,async()=>{
+    const context=await options.resolveContext(request)
+    requireAny(context,['hardware.manage','printer.manage'])
+    const rows=await options.transactions.run(context.scope,async tx=>(await tx.query<{ticketKind:string;enabled:boolean;copies:number}>(`
+      SELECT ticket_kind AS "ticketKind",enabled,copies FROM mbox.print_ticket_policies WHERE tenant_id=$1 AND store_id=$2`,
+    [context.scope.tenantId,context.scope.storeId])).rows,{readOnly:true})
+    return reply.send({data:PRINT_TICKET_KINDS.map(ticketKind=>rows.find(row=>row.ticketKind===ticketKind)??{ticketKind,enabled:true,copies:null})})
+  }))
+
+  app.post('/hardware/print-ticket-policies', async (request,reply) => handle(reply,async()=>{
+    const context=await options.resolveContext(request)
+    requireAny(context,['hardware.manage','printer.manage'])
+    const body=readObject(request.body)
+    const ticketKind=readEnum(body.ticketKind,[...PRINT_TICKET_KINDS])
+    if(typeof body.enabled!=='boolean')throw new HardwareRequestError('enabled必须为布尔值')
+    const enabled=body.enabled,copies=optionalInteger(body.copies,1,5)
+    if(copies===undefined)throw new HardwareRequestError('请指定1至5份')
+    const reason=readString(body.reason,'reason',1000,3)
+    const execution=await options.commands.execute(command(request,context,'print.ticket-policy.update',body,codec()),async tx=>{
+      const before=(await tx.query(`SELECT enabled,copies FROM mbox.print_ticket_policies WHERE tenant_id=$1 AND store_id=$2 AND ticket_kind=$3 FOR UPDATE`,
+        [context.scope.tenantId,context.scope.storeId,ticketKind])).rows[0]
+      await tx.query(`INSERT INTO mbox.print_ticket_policies(tenant_id,store_id,ticket_kind,enabled,copies)
+        VALUES($1,$2,$3,$4,$5) ON CONFLICT(tenant_id,store_id,ticket_kind) DO UPDATE
+        SET enabled=EXCLUDED.enabled,copies=EXCLUDED.copies,updated_at=clock_timestamp()`,
+      [context.scope.tenantId,context.scope.storeId,ticketKind,enabled,copies])
+      return outcome(context,'print.ticket-policy.updated.v1','store',context.scope.storeId,reason,{ticketKind,enabled,copies},before)
+    })
+    return reply.send({data:execution.value,replayed:execution.replayed})
+  }))
+
   const repository = (transaction: ScopedTransaction) => (
     options.createRepository?.(transaction) ?? new HardwareRepository(transaction)
   )

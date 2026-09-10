@@ -1,4 +1,5 @@
 import type { JsonObject } from './command-executor.js'
+import { readOperatingHistory, type OperatingHistoryFilter } from './operating-history-query.js'
 import {
   StaffAccessDeniedError,
   StaffAccessRepository,
@@ -158,6 +159,20 @@ export class StaffNotFoundError extends Error {
 export class OperationsQueryService {
   constructor(private readonly transactions: ScopedPostgresTransactionRunner) {}
 
+  getManualDayEndPreview(scope: Readonly<StoreScope>, employeeId: string, businessDate: string) {
+    return this.transactions.run(scope,async transaction=>{
+      await new StaffAccessRepository(transaction).assertPermission(employeeId,'business_day.close')
+      return readOperatingHistory(transaction,{businessDate,table:'',employee:'',page:0})
+    },{isolation:'repeatable-read',readOnly:true})
+  }
+
+  getOperatingHistory(scope: Readonly<StoreScope>, employeeId: string, filter: OperatingHistoryFilter) {
+    return this.transactions.run(scope,async transaction=>{
+      await new StaffAccessRepository(transaction).assertPermission(employeeId,'reconciliation.view')
+      return readOperatingHistory(transaction,filter)
+    },{isolation:'repeatable-read',readOnly:true})
+  }
+
   getStaffView(
     scope: Readonly<StoreScope>,
     employeeId: string,
@@ -283,7 +298,8 @@ async function readTables(
             AND ordering.table_session_id=session.id AND ordering.status NOT IN ('draft','cancelled')) AS order_amount_minor,
         (SELECT count(*)::integer FROM mbox.orders ordering
           WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
-            AND ordering.table_session_id=session.id AND ordering.status<>'cancelled'
+            AND ordering.table_session_id=session.id AND ordering.status NOT IN ('draft','cancelled')
+            AND ordering.total_amount_minor > 0
             AND ordering.payment_status IN ('unpaid','pending','partially_paid')) AS unpaid_order_count,
         (SELECT count(*)::integer FROM mbox.payments payment
           JOIN mbox.orders ordering ON ordering.tenant_id=payment.tenant_id

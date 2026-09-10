@@ -201,6 +201,7 @@ Page({
         items: (order.items || []).map((item, index) => ({
           key: item.id || `${order.publicId}:${item.productId}:${index}`,
           name: item.name,
+          note: item.note || '',
           quantity: item.quantity,
           unitPriceText: Number.isSafeInteger(item.unitPriceMinor) ? money(item.unitPriceMinor) : '待同步',
           totalText: Number.isSafeInteger(item.totalAmountMinor) ? money(item.totalAmountMinor) : '待同步',

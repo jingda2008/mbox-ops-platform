@@ -79,7 +79,8 @@ function factQuery(code: TableSessionClosureBlockerCode): string {
     FROM order_facts ordering
     LEFT JOIN mbox.employees employee ON employee.tenant_id=ordering.tenant_id
       AND employee.store_id=ordering.store_id AND employee.id=ordering.created_by_employee_id
-    WHERE NOT ((ordering.status<>'cancelled' AND ordering.payment_status IN ('paid','partially_refunded','refunded'))
+    WHERE NOT ((ordering.status NOT IN ('draft','cancelled') AND ordering.total_amount_minor=0)
+      OR (ordering.status<>'cancelled' AND ordering.payment_status IN ('paid','partially_refunded','refunded'))
       OR (ordering.status='cancelled' AND ordering.payment_status='refunded')
       OR (ordering.status='cancelled' AND NOT EXISTS (
         SELECT 1 FROM mbox.order_items item WHERE item.tenant_id=ordering.tenant_id

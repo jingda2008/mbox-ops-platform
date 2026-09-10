@@ -426,7 +426,7 @@ async function readSummaries(
       WHERE tenant_id = $1::uuid AND id = $2::uuid
     ),
     kds_work AS (
-      SELECT task.status, task.station_code, task.due_at, session.business_date
+      SELECT task.status, task.station_code, task.due_at, customer_order.business_date
       FROM mbox.kds_tasks AS task
       JOIN mbox.order_items AS item
         ON item.tenant_id=task.tenant_id AND item.store_id=task.store_id
@@ -500,7 +500,7 @@ async function readSummaries(
         WHERE payment.tenant_id = $1::uuid AND payment.store_id = $2::uuid
         AND payment.status IN ('created', 'pending') AND payment.retry_released_at IS NULL
         AND payment_order.status<>'cancelled' AND payment_order.payment_status IN ('unpaid','pending','partially_paid')
-        AND payment_session.business_date=$3::date
+        AND payment_order.business_date=$3::date
         AND NOT EXISTS (
           SELECT 1 FROM mbox.guest_immediate_checkout_abandonment_events abandonment
           WHERE abandonment.tenant_id=payment.tenant_id AND abandonment.store_id=payment.store_id
@@ -514,7 +514,7 @@ async function readSummaries(
         WHERE payment.tenant_id = $1::uuid AND payment.store_id = $2::uuid
         AND payment.status = 'failed'
         AND payment_order.status<>'cancelled' AND payment_order.payment_status IN ('unpaid','pending','partially_paid')
-        AND payment_session.business_date=$3::date
+        AND payment_order.business_date=$3::date
         AND NOT EXISTS (
           SELECT 1 FROM mbox.guest_immediate_checkout_abandonment_events abandonment
           WHERE abandonment.tenant_id=payment.tenant_id AND abandonment.store_id=payment.store_id
@@ -530,7 +530,7 @@ async function readSummaries(
           AND (payment.status='failed' OR payment.retry_released_at IS NULL)
           AND payment_order.status<>'cancelled'
           AND payment_order.payment_status IN ('unpaid','pending','partially_paid')
-          AND payment_session.business_date<$3::date
+          AND payment_order.business_date<$3::date
           AND NOT EXISTS (
             SELECT 1 FROM mbox.guest_immediate_checkout_abandonment_events abandonment
             WHERE abandonment.tenant_id=payment.tenant_id AND abandonment.store_id=payment.store_id
@@ -547,7 +547,7 @@ async function readSummaries(
           AND session.store_id=customer_order.store_id AND session.id=customer_order.table_session_id
         WHERE refund.tenant_id=$1::uuid AND refund.store_id=$2::uuid
           AND refund.status='requested' AND refund.requested_by_employee_id<>$4::uuid
-          AND session.business_date=$3::date)::text AS current_refund_approval_tasks,
+          AND customer_order.business_date=$3::date)::text AS current_refund_approval_tasks,
       (SELECT count(*) FROM mbox.refunds AS refund
         JOIN mbox.payments AS payment ON payment.tenant_id=refund.tenant_id
           AND payment.store_id=refund.store_id AND payment.id=refund.payment_id
@@ -557,7 +557,7 @@ async function readSummaries(
           AND session.store_id=customer_order.store_id AND session.id=customer_order.table_session_id
         WHERE refund.tenant_id=$1::uuid AND refund.store_id=$2::uuid
           AND refund.status IN ('approved','processing')
-          AND session.business_date=$3::date)::text AS current_refund_execution_tasks,
+          AND customer_order.business_date=$3::date)::text AS current_refund_execution_tasks,
       (SELECT count(*) FROM mbox.refunds AS refund
         JOIN mbox.payments AS payment ON payment.tenant_id=refund.tenant_id
           AND payment.store_id=refund.store_id AND payment.id=refund.payment_id
@@ -567,7 +567,7 @@ async function readSummaries(
           AND session.store_id=customer_order.store_id AND session.id=customer_order.table_session_id
         WHERE refund.tenant_id=$1::uuid AND refund.store_id=$2::uuid
           AND refund.status='requested' AND refund.requested_by_employee_id<>$4::uuid
-          AND session.business_date<$3::date)::text AS carryover_refund_approval_tasks,
+          AND customer_order.business_date<$3::date)::text AS carryover_refund_approval_tasks,
       (SELECT count(*) FROM mbox.refunds AS refund
         JOIN mbox.payments AS payment ON payment.tenant_id=refund.tenant_id
           AND payment.store_id=refund.store_id AND payment.id=refund.payment_id
@@ -577,7 +577,7 @@ async function readSummaries(
           AND session.store_id=customer_order.store_id AND session.id=customer_order.table_session_id
         WHERE refund.tenant_id=$1::uuid AND refund.store_id=$2::uuid
           AND refund.status IN ('approved','processing')
-          AND session.business_date<$3::date)::text AS carryover_refund_execution_tasks,
+          AND customer_order.business_date<$3::date)::text AS carryover_refund_execution_tasks,
       (SELECT count(*) FROM mbox.inventory_balances AS balance
         JOIN mbox.inventory_items AS item ON item.tenant_id = balance.tenant_id
           AND item.store_id = balance.store_id AND item.id = balance.inventory_item_id

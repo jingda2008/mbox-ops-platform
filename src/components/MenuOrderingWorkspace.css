@@ -418,3 +418,5 @@
   pointer-events: none;
   opacity: .45;
 }
+.menu-item-note { display: grid; gap: 4px; margin-top: 8px; min-width: 0; font-size: 12px; }
+.menu-item-note input { box-sizing: border-box; width: 100%; min-width: 0; min-height: 40px; padding: 8px; border: 1px solid #d9d7d0; border-radius: 8px; background: #fff; font-size: 14px; }

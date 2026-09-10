@@ -4,6 +4,11 @@ import {afterAll,beforeAll,describe,expect,it} from 'vitest'
 import {runNormalizedMigrations} from '../migrate-normalized.js'
 import {businessDayClosureCodec,closeAwaitingBusinessDays} from './business-day-closure.js'
 import {NormalizedCommandExecutor} from './command-executor.js'
+import {readTableSessionClosureState} from './table-session-closure-blockers.js'
+import {readBusinessDayBlockerFacts} from './business-day-blocker-facts.js'
+import {readOperatingHistory} from './operating-history-query.js'
+import {recordManualBusinessDayEnd} from './manual-business-day-end-repository.js'
+import {PostgresNormalizedBusinessClock} from './normalized-request-context.js'
 import {ScopedPostgresTransactionRunner,type PostgresPool} from './transaction-runner.js'
 
 const databaseUrl=process.env.TEST_NORMALIZED_DATABASE_URL
@@ -26,6 +31,7 @@ integration('business-day closure',()=>{
   let pool:Pool
   let transactions:ScopedPostgresTransactionRunner
   let commands:NormalizedCommandExecutor
+
 
   beforeAll(async()=>{
     await runNormalizedMigrations(databaseUrl!)
@@ -125,6 +131,38 @@ integration('business-day closure',()=>{
     expect(Number((await pool.query(`SELECT count(*) AS count FROM mbox.outbox_messages
       WHERE tenant_id=$1 AND store_id=$2 AND message_type IN ('table_session.closed.v1','business_day.closed.v1')`,
     [tenantId,storeId])).rows[0]?.count)).toBe(3)
+  })
+
+  it('does not demand payment for zero-due gifts but retains their production blocker',async()=>{
+    const session=randomUUID(),table=randomUUID(),order=randomUUID(),item=randomUUID()
+    await pool.query(`INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity)
+      VALUES($1,$2,$3,$4,'GIFT','GIFT',4)`,[table,tenantId,storeId,areaId])
+    await pool.query(`INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count,capacity_at_open,status)
+      VALUES($1,$2,$3,$4,$5,'2026-08-20',1,4,'open')`,[session,tenantId,storeId,table,`gift-${session}`])
+    await pool.query(`INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,subtotal_amount_minor,discount_amount_minor,total_amount_minor)
+      VALUES($1,$2,$3,$4,$5,'staff_assisted','submitted','unpaid',1000,1000,0)`,[order,tenantId,storeId,session,`gift-${order}`])
+    await pool.query(`INSERT INTO mbox.order_items(id,tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,discount_amount_minor,total_amount_minor,fulfillment_station,status,product_snapshot,cost_snapshot)
+      VALUES($1,$2,$3,$4,$5,1,1000,1000,0,'bar','submitted','{}','{}')`,[item,tenantId,storeId,order,productId])
+    const state=await transactions.run({tenantId,storeId},tx=>readTableSessionClosureState(tx,session))
+    expect(state.blockers.map(row=>row.code)).not.toContain('ORDER_UNSETTLED')
+    expect(state.blockers.map(row=>row.code)).toContain('ORDER_ITEM_UNRESOLVED')
+    expect(state.outstandingAmountMinor).toBe(0)
+    expect(await transactions.run({tenantId,storeId},tx=>readBusinessDayBlockerFacts(tx,session,'ORDER_UNSETTLED'))).toEqual([])
+    expect((await pool.query(`SELECT payment_status FROM mbox.orders WHERE id=$1`,[order])).rows[0].payment_status).toBe('unpaid')
+    const history=await transactions.run({tenantId,storeId},tx=>readOperatingHistory(tx,{businessDate:'2026-08-20',table:'GIFT',employee:'',page:0}),{readOnly:true})
+    expect(history.orders).toHaveLength(1)
+    expect(history.orders[0]).toMatchObject({totalMinor:0,items:[{quantity:1,unitPriceMinor:1000,totalMinor:0,status:'submitted'}]})
+    expect(history.receipts).toEqual([])
+    await pool.query("UPDATE mbox.order_items SET status='delivered' WHERE id=$1",[item])
+    const readHistory=()=>transactions.run({tenantId,storeId},tx=>readOperatingHistory(tx,{businessDate:'2026-08-20',table:'GIFT',employee:'',page:0,exportAll:true}),{readOnly:true})
+    expect((await readHistory()).orders[0]!.items[0]).toMatchObject({deliveredAt:null,deliveredBy:null})
+    const task=randomUUID()
+    await pool.query("INSERT INTO mbox.kds_tasks(id,tenant_id,store_id,order_item_id,station_code,status,quantity) VALUES($1,$2,$3,$4,'bar','ready',1)",[task,tenantId,storeId,item])
+    await pool.query(`INSERT INTO mbox.audit_events(tenant_id,store_id,actor_type,actor_employee_id,action,object_type,object_id,business_date,occurred_at)
+      VALUES($1,$2,'employee',$3,'kds.deliver','kds_task',$4,'2026-08-20','2026-08-20T15:01:02Z')`,[tenantId,storeId,employeeId,task])
+    const delivered=(await readHistory()).orders[0]!.items[0]!
+    expect(new Date(delivered.deliveredAt!).toISOString()).toBe('2026-08-20T15:01:02.000Z')
+    expect(delivered.deliveredBy).toBeTruthy()
   })
 
   it('serializes a concurrent refund request with the authoritative table-session close lock',async()=>{
@@ -301,6 +339,42 @@ integration('business-day closure',()=>{
     expect((await pool.query(`SELECT status,payment_status FROM mbox.orders WHERE id=$1`,[
       immutableOrderId,
     ])).rows[0]).toMatchObject({status:'submitted',payment_status:'partially_refunded'})
+  })
+  it('records a manual boundary once under concurrency without settling old orders or mutating its snapshot',async()=>{
+    const scope={tenantId,storeId}
+    const date=(await pool.query(`SELECT ((clock_timestamp() AT TIME ZONE timezone)-business_day_cutoff)::date::text AS day FROM mbox.stores WHERE id=$1`,[storeId])).rows[0].day as string
+    const before=(await pool.query('SELECT status,payment_status FROM mbox.orders WHERE id=$1',[orderId])).rows[0]
+    const newTable=randomUUID(),newSession=randomUUID(),oldOrder=randomUUID(),newOrder=randomUUID()
+    await pool.query(`INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity) VALUES($1,$2,$3,$4,'END1','日结测试',4)`,[newTable,tenantId,storeId,areaId])
+    await pool.query(`INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count,capacity_at_open,status,opened_by_employee_id)
+      VALUES($1,$2,$3,$4,$5,$6::date,1,4,'open',$7)`,[newSession,tenantId,storeId,newTable,`session-${newSession}`,date,employeeId])
+    const addOrder=(id:string)=>pool.query(`INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,subtotal_amount_minor,total_amount_minor,created_by_employee_id)
+      VALUES($1,$2,$3,$4,$5,'staff_assisted','submitted','unpaid',100,100,$6)`,[id,tenantId,storeId,newSession,`order-${id}`,employeeId])
+    await addOrder(oldOrder)
+    // Simulate an offline rollover worker leaving an older open-day marker.
+    await pool.query(`UPDATE mbox.business_days SET status='awaiting_close' WHERE tenant_id=$1 AND store_id=$2 AND status='open'`,[tenantId,storeId])
+    await pool.query(`INSERT INTO mbox.business_days(tenant_id,store_id,business_date,status) VALUES($1,$2,$3::date-1,'open')
+      ON CONFLICT(tenant_id,store_id,business_date) DO UPDATE SET status='open'`,[tenantId,storeId,date])
+    const results=await Promise.all([1,2].map(()=>transactions.run(scope,tx=>recordManualBusinessDayEnd(tx,{employeeId,expectedBusinessDate:date,reason:'员工提前结束测试'}))))
+    expect(results[0]!.id).toBe(results[1]!.id)
+    expect(results.map(row=>row.replayed).sort()).toEqual([false,true])
+    const next=results[0]!.nextBusinessDate
+    expect((await pool.query(`SELECT business_date::text FROM mbox.business_days WHERE tenant_id=$1 AND store_id=$2 AND status='open'`,[tenantId,storeId])).rows).toEqual([{business_date:next}])
+    await addOrder(newOrder)
+    const dates=(await pool.query('SELECT id,business_date::text FROM mbox.orders WHERE id=ANY($1::uuid[]) ORDER BY id',[[oldOrder,newOrder]])).rows
+    expect(dates.find(row=>row.id===oldOrder).business_date).toBe(date)
+    expect(dates.find(row=>row.id===newOrder).business_date).toBe(next)
+    await expect(pool.query('UPDATE mbox.orders SET business_date=$2::date WHERE id=$1',[oldOrder,next])).rejects.toThrow('immutable')
+    expect((await transactions.run(scope,tx=>tx.query<{day:string}>('SELECT mbox.current_operating_business_date($1,$2)::text AS day',[tenantId,storeId]),{readOnly:true})).rows[0]!.day).toBe(next)
+    expect((await new PostgresNormalizedBusinessClock(transactions).current(scope)).businessDate).toBe(next)
+    await expect(transactions.run(scope,tx=>recordManualBusinessDayEnd(tx,{employeeId,expectedBusinessDate:next,reason:'不得连续跳日'}))).rejects.toThrow('不能连续提前结束')
+    expect((await pool.query('SELECT status,payment_status FROM mbox.orders WHERE id=$1',[orderId])).rows[0]).toEqual(before)
+    await expect(pool.query(`UPDATE mbox.manual_business_day_ends SET ledger_snapshot='[]'::jsonb WHERE id=$1`,[results[0]!.id])).rejects.toThrow('immutable')
+    const otherScope={tenantId,storeId:randomUUID()}
+    expect((await transactions.run(otherScope,async tx=>{
+      await tx.query('SET LOCAL ROLE mbox_runtime')
+      return tx.query('SELECT * FROM mbox.manual_business_day_ends')
+    },{readOnly:true})).rows).toEqual([])
   })
 })
 

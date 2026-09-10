@@ -332,6 +332,7 @@ Page({
   },
 
   onShow() {
+    this.setData({ identitiesVisible: true })
     const shouldOpenLogin = consumeMembershipLoginRedirect()
     this.setData({
       avatarUrl: runtime.getStorageSync('mbox.member.avatarUrl') || '',
@@ -342,6 +343,8 @@ Page({
   },
 
 
+
+  onHide() { this.setData({ identitiesVisible: false }) },
 
   async load() {
     this.setData({ loading: true, error: '', benefitError: '', registrationError: '', redemptionError: '', preferenceError: '' })

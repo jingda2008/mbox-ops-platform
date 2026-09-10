@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import vm from 'node:vm'
-const read = path => readFile(new URL('../' + path, import.meta.url), 'utf8')
+for (const platform of ['miniprogram','alipay-miniprogram']) {
+const read = path => readFile(new URL('../' + path.replace(/^miniprogram\//,platform+'/').replace(/\.wxml$/,platform==='miniprogram'?'.wxml':'.axml'), import.meta.url), 'utf8')
 
 test('portion notes survive polling, follow stable portions, and reset with the table generation', async () => {
   const source = await read('miniprogram/pages/order/index.js')
@@ -39,8 +40,8 @@ test('retry uses saved note snapshot and template has per-portion fields plus co
   const view = await read('miniprogram/pages/order/index.wxml')
   assert.match(source, /const attempt = previousAttempt \|\| \{\s*note: this.data.checkoutNote/)
   assert.match(source, /checkoutSharedCart\(\{\s*note: attempt.note \|\| '',\s*lineNotes: attempt.lineNotes \|\| \[\]/)
-  assert.match(view, /wx:key="portionId"/)
-  assert.match(view, /bindinput="onLineNoteInput" maxlength="300"/)
+  assert.match(view, /(?:wx|a):key="portionId"/)
+  assert.match(view, /(?:bindinput|onInput)="onLineNoteInput" maxlength="300"/)
   assert.match(view, /class="checkout-note"/)
   assert.match(await read('miniprogram/pages/account/index.wxml'), /备注：\{\{product.note\}\}/)
 })
@@ -87,7 +88,9 @@ test('hidden page rejects late identity responses', async () => {
   let resolve
   const { instance, definition } = await identityFixture([new Promise(done => { resolve = done })])
   const pending = instance.reload()
-  definition.pageLifetimes.hide.call(instance)
+  if(platform==='miniprogram')definition.pageLifetimes.hide.call(instance)
+  else definition.didUnmount.call(instance)
   resolve({ activeMember: true, cards: [identity] })
   await pending; assert.equal(instance.data.identities.length, 0)
 })
+}

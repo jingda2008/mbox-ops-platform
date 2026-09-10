@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { CheckCircle2, ChevronDown, RefreshCw, UserCheck, XCircle } from 'lucide-react'
 import type { NormalizedApiClient, StaffAuthView } from '../normalized-api'
 import { useConfirmationDialog } from './ConfirmationDialog'
@@ -12,6 +12,7 @@ type ActivityPaymentMode = 'none' | 'deposit_optional' | 'deposit_required' | 'f
 type RegistrationStatus = 'reserved' | 'payment_pending' | 'confirmed' | 'waitlisted' | 'cancelled' | 'checked_in' | 'no_show' | 'refunded'
 
 interface ActivitySummary {
+  registrationClosedAt?:string|null
   publicId: string; title: string; status: ActivityStatus; startsAt: string; endsAt: string
   assemblyLocation: string; capacity: number; occupiedSeats: number; waitlistedSeats: number
   registrationCount: number; paymentMode: ActivityPaymentMode; feeAmountMinor: number; currency: string
@@ -95,6 +96,10 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
   const [reason, setReason] = useState('')
   const [phase, setPhase] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [busy, setBusy] = useState('')
+  const closeInFlight=useRef(false)
+  const detailGeneration=useRef(0)
+  useEffect(()=>()=>{detailGeneration.current++},[api])
+  const closeAttempt=useRef<{fingerprint:string;key:string}|null>(null)
   const [notice, setNotice] = useState('')
   const [componentCatalog, setComponentCatalog] = useState<ActivityPackageComponentCatalogItem[]>([])
   const [componentCatalogState, setComponentCatalogState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
@@ -159,15 +164,18 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
   }
 
   async function loadDetail(publicId: string) {
+    const generation=++detailGeneration.current
     setRevealedContacts({})
+    setDetail(null);setDraft(null);setReason('')
     setBusy('detail'); setNotice('')
     try {
       const response = await api.getEndpoint<{ data: unknown }>(`/api/staff/activity-operations/${encodeURIComponent(publicId)}`)
+      if(generation!==detailGeneration.current)return
       const loaded = operationsDetail(response.data)
       setSelected(publicId); setDetail(loaded)
       setDraft(loaded.activity.status === 'draft' ? draftFromActivity(loaded.activity) : null)
-    } catch (error) { setNotice(message(error, '活动详情读取失败')) }
-    finally { setBusy('') }
+    } catch (error) { if(generation===detailGeneration.current)setNotice(message(error, '活动详情读取失败')) }
+    finally { if(generation===detailGeneration.current)setBusy('') }
   }
 
   async function saveDraft(event: FormEvent) {
@@ -300,11 +308,52 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
   }
 
   function startCreate() {
+    if(busy||closeInFlight.current)return
+    detailGeneration.current++
+    setRevealedContacts({});setReason('')
     const nextDraft = emptyDraft()
     setSelected(null)
     setDetail({ activity: draftShell(nextDraft), registrations: [] })
     setDraft(nextDraft)
     setNotice('正在建立新活动草稿。费用、权益、退款和安全承诺请一次填写完整。')
+  }
+
+  async function stopRegistration(activity:ActivityDetail) {
+    if(busy||closeInFlight.current)return
+    const submittedReason=reason.trim()
+    if(submittedReason.length<2){setNotice('请先填写至少2个字的操作原因');return}
+    closeInFlight.current=true
+    try {
+      if(!await confirmAction({title:'停止新报名',description:'停止新报名和候补递补；已有报名、收款、签到和退款继续保留处理。此操作不自动退款，也不表示活动已结清。',confirmLabel:'确认停止报名'}))return
+      setBusy('stop-registration')
+      const fingerprint=`stop-registration:${activity.publicId}:${submittedReason}`
+      if(closeAttempt.current?.fingerprint!==fingerprint)closeAttempt.current={fingerprint,key:operationKey('activity-stop-registration')}
+      await api.postEndpoint(`/api/staff/activity-operations/${encodeURIComponent(activity.publicId)}/stop-registration`,{reason:submittedReason},{idempotencyKey:closeAttempt.current.key})
+      closeAttempt.current=null
+      await loadActivities()
+      setNotice('已停止新报名；请继续处理原有名单与收退款，处理完毕后再结束活动。')
+    }catch(error){setNotice(message(error,'停止报名结果尚未确认，请刷新核对'))}
+    finally{closeInFlight.current=false;setBusy('')}
+  }
+
+  async function closeActivity(activity: ActivityDetail, status: 'cancelled' | 'completed') {
+    if (busy || closeInFlight.current) return
+    if (reason.trim().length < 2) { setNotice('请先填写至少2个字的操作原因'); return }
+    closeInFlight.current=true
+    const submittedReason=reason.trim()
+    try {
+      if (!(await confirmAction({title:status==='cancelled'?'取消活动':'结束活动',
+        description:'仅在报名、套餐交付和收退款均处理后结束。不删除记录、不自动退款。',confirmLabel:'检查并结束'}))) return
+      setBusy('close'); setNotice('')
+      const fingerprint=JSON.stringify([auth.employee.id,activity.publicId,status,submittedReason])
+      if(closeAttempt.current?.fingerprint!==fingerprint)closeAttempt.current={fingerprint,key:operationKey('activity-close')}
+      await api.postEndpoint(`/api/staff/activity-operations/${encodeURIComponent(activity.publicId)}/close`,
+        {status,reason:submittedReason},{idempotencyKey:closeAttempt.current.key})
+      closeAttempt.current=null
+      await refreshSelected()
+      setNotice('活动已结束并保留原报名与资金记录。')
+    } catch(error) { setNotice(message(error,'活动尚未结束，请检查剩余待办')) }
+    finally { closeInFlight.current=false; setBusy('') }
   }
 
   async function publishActivity(activity: ActivityDetail) {
@@ -381,7 +430,7 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
       {notice && <p className="activity-operations-notice" role="status">{notice}</p>}
       <div className="activity-operations-toolbar"><span>{activities.length} 个活动</span><div>{canManage && <button type="button" onClick={startCreate}>新建活动草稿</button>}<button type="button" disabled={phase === 'loading'} onClick={() => void loadActivities()}><RefreshCw size={16} />刷新</button></div></div>
       {phase === 'error' && <button type="button" onClick={() => void loadActivities()}>重新读取</button>}
-      <div className="activity-operations-list">{activities.map((activity) => <button type="button" className={selected === activity.publicId ? 'is-selected' : ''} key={activity.publicId} onClick={() => void loadDetail(activity.publicId)}>
+      <div className="activity-operations-list">{activities.map((activity) => <button type="button" disabled={!!busy} className={selected === activity.publicId ? 'is-selected' : ''} key={activity.publicId} onClick={() => {if(!closeInFlight.current)void loadDetail(activity.publicId)}}>
         <strong>{activity.title}</strong><span>{statusLabel(activity.status)} · {dateText(activity.startsAt)}</span><small>{activity.occupiedSeats}/{activity.capacity} 人 · 候补 {activity.waitlistedSeats} 人</small>
       </button>)}</div>
       {detail && <div className="activity-operations-detail">
@@ -457,6 +506,13 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
           </fieldset>
           <button type="submit" disabled={busy === 'draft'}>{busy === 'draft' ? '保存中' : detail.activity.publicId === '' ? '建立草稿并读回' : '保存草稿并读回'}</button>
         </form></details>}
+        {canManage && detail.activity.publicId !== '' && !['cancelled','completed'].includes(detail.activity.status) && <section aria-label="活动结束处理">
+          {detail.activity.registrationClosedAt?<p>已停止新报名和候补递补；原名单与收退款继续处理。</p>:<button type="button" disabled={!!busy||detail.activity.status==='draft'} onClick={()=>void stopRegistration(detail.activity)}>先停止新报名</button>}
+          <label>活动结束原因<input value={reason} maxLength={500} onChange={event=>setReason(event.target.value)} /></label>
+          <button type="button" disabled={!!busy} onClick={()=>void closeActivity(detail.activity,'completed')}>检查并结束活动</button>
+          <button type="button" disabled={!!busy} onClick={()=>void closeActivity(detail.activity,'cancelled')}>取消活动</button>
+          <p>待报名、待交付和收退款未处理时会说明原因；不会自动退款或删除历史。</p>
+        </section>}
         {detail.activity.publicId !== '' && <section className="activity-package-status-list"><header><div><strong>套餐状态</strong><small>套餐为活动票加购项；暂停只影响新报名，已报名套餐承诺不变。</small></div><span>{detail.activity.packages.length} 档</span></header>
           {detail.activity.packages.length === 0 && <p>本活动没有配置加购套餐。</p>}
           {detail.activity.packages.map((activityPackage) => <article key={activityPackage.publicId}>
@@ -652,6 +708,7 @@ function operationsDetail(value: unknown): OperationsDetail {
 function activitySummary(value: unknown): ActivitySummary {
   const record = object(value,'活动摘要')
   return {
+    registrationClosedAt: typeof record.registrationClosedAt==='string'?record.registrationClosedAt:null,
     publicId: string(record.publicId), title: string(record.title), status: activityStatus(record.status),
     startsAt: string(record.startsAt), endsAt: string(record.endsAt), assemblyLocation: string(record.assemblyLocation),
     capacity: number(record.capacity), occupiedSeats: number(record.occupiedSeats), waitlistedSeats: number(record.waitlistedSeats),

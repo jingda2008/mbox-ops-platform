@@ -9,6 +9,7 @@ interface ReleaseEventRow extends Record<string, unknown> {
 }
 
 interface ActivityRow extends Record<string, unknown> {
+  registration_closed_at?: string | null
   id: string
   public_id: string
   title: string
@@ -82,7 +83,7 @@ export class ActivityWaitlistPromotionWorker {
     workerId: string,
   ): Promise<{ promotedRegistrationIds: string[]; deferred: boolean }> {
     const activity = await lockActivity(transaction, event.activity_id)
-    if (activity === null || !['published','full'].includes(activity.status)
+    if (activity === null || activity.registration_closed_at || !['published','full'].includes(activity.status)
       || Date.parse(activity.starts_at) <= Date.now()) {
       await completeEvent(transaction, event.id, 'activity_unavailable', workerId)
       return { promotedRegistrationIds: [], deferred: false }
@@ -190,7 +191,7 @@ async function claimReleaseEvents(
 
 async function lockActivity(transaction: ScopedTransaction, activityId: string): Promise<ActivityRow | null> {
   const result = await transaction.query<ActivityRow>(`
-    SELECT activity.id,activity.public_id,activity.title,activity.status,
+    SELECT activity.id,activity.public_id,activity.title,activity.status,activity.registration_closed_at::text,
       activity.starts_at::text,activity.ends_at::text,activity.capacity,activity.payment_deadline_minutes,
       COALESCE(policy.online_payment_enabled,false)
         AND EXISTS (

@@ -204,6 +204,9 @@ export interface StaffFulfillmentItem {
   item: {
     productName: string
     quantity: number
+    unitPriceMinor?: number
+    totalAmountMinor?: number
+    includedInBundle?: boolean
     note: string | null
   }
   order: {

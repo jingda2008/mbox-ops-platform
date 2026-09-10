@@ -10,6 +10,10 @@
 .coupon-card{min-width:0;overflow-wrap:anywhere;word-break:break-word}
 .coupon-foot{flex-wrap:wrap}
 .coupon-more{margin-top:20rpx}
+.coupon-nav { display: flex; align-items: center; justify-content: space-between; min-height: 44px; margin: 0 0 18rpx; padding: 12rpx 18rpx; border: 1rpx solid #ddd7cd; border-radius: 14rpx; color: #315d46; font-size: 24rpx; background: #fffdfa; }
+.coupon-nav text { font-size: 21rpx; }
+.coupon-foot > text:first-child { color: #315d46; font-size: 27rpx; font-weight: 700; }
+.coupon-card__head { gap: 12rpx; flex-wrap: wrap; }
 .coupon-card__head text:first-child{color:#315d46;font-size:18rpx;font-weight:750}
 .coupon-card__head text:last-child{color:#8a8178;font-size:18rpx}
 .coupon-title{display:block;margin-top:10rpx;font-size:28rpx;font-weight:700}

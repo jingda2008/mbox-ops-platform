@@ -6,6 +6,7 @@ import type {
   JsonValue,
 } from './command-executor.js'
 import { NormalizedCommandExecutor } from './command-executor.js'
+import { assertEmployeeEffectivePermission } from './employee-table-access.js'
 import {
   ActivityOperationsRepository,
   type ActivityDraftInput,
@@ -156,6 +157,28 @@ export class ActivityOperationsService {
         })],
         outboxMessages: [],
       }
+    })
+  }
+
+  stopRegistration(context:ActivityOperationsStaffContext,input:Readonly<{publicId:string;reason:string;idempotencyKey:string}>):Promise<CommandExecution<ActivityOperationsActivity>> {
+    return this.commands.execute({scope:context.scope,operationScope:'community.activity.stop-registration',
+      idempotencyKey:input.idempotencyKey,requestFingerprint:fingerprint(input),resultCodec:objectCodec<ActivityOperationsActivity>()},async transaction=>{
+      await assertEmployeeEffectivePermission(transaction,context.employeeId,'community.activity.manage')
+      const result=await new ActivityOperationsRepository(transaction).stopRegistration(input.publicId)
+      return {result,auditEvents:[audit(context,{action:'community.activity.registration_stopped',objectType:'community_activity',objectId:input.publicId,reason:input.reason,afterData:{registrationClosedAt:result.registrationClosedAt??null}})],outboxMessages:[]}
+    })
+  }
+
+  closeActivity(context: ActivityOperationsStaffContext, input: Readonly<{
+    publicId: string; status: 'cancelled' | 'completed'; reason: string; idempotencyKey: string
+  }>): Promise<CommandExecution<ActivityOperationsActivity>> {
+    return this.commands.execute({scope: context.scope, operationScope: 'community.activity.close',
+      idempotencyKey: input.idempotencyKey, requestFingerprint: fingerprint(input), resultCodec: objectCodec<ActivityOperationsActivity>(),
+    }, async transaction => {
+      await assertEmployeeEffectivePermission(transaction,context.employeeId,'community.activity.manage')
+      const result = await new ActivityOperationsRepository(transaction).closeActivity(input.publicId,input.status)
+      return { result, auditEvents: [audit(context,{action:'community.activity.closed',objectType:'community_activity',
+        objectId:input.publicId,reason:input.reason,afterData:{status:result.status}})],outboxMessages:[] }
     })
   }
 

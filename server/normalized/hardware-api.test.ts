@@ -15,6 +15,23 @@ const apps: ReturnType<typeof Fastify>[] = []
 afterEach(async () => Promise.all(apps.splice(0).map((app) => app.close())))
 
 describe('hardware API role cropping', () => {
+  it('restricts ticket policies to printer managers and validates independent switches and copy bounds', async () => {
+    const staff=await build(['print.view','work.bar'])
+    expect((await staff.inject({method:'GET',url:'/hardware/print-ticket-policies'})).statusCode).toBe(403)
+    expect((await staff.inject({method:'POST',url:'/hardware/print-ticket-policies',payload:{}})).statusCode).toBe(403)
+    const manager=await build(['printer.manage'])
+    const rows=(await manager.inject({method:'GET',url:'/hardware/print-ticket-policies'})).json().data
+    expect(rows).toHaveLength(9)
+    expect(rows).toContainEqual({ticketKind:'daily_settlement',enabled:true,copies:null})
+    expect(rows).toContainEqual({ticketKind:'cashier_settlement',enabled:true,copies:null})
+    const send=(body:object)=>manager.inject({method:'POST',url:'/hardware/print-ticket-policies',
+      headers:{'idempotency-key':'print-policy-validation-0001'},payload:body})
+    for(const patch of [{ticketKind:'unknown'},{enabled:'false'},{copies:0},{copies:6},{copies:1.5},{reason:''}]) {
+      expect((await send({ticketKind:'delivery',enabled:false,copies:2,reason:'调整配送打印',...patch})).statusCode).toBe(400)
+    }
+    expect((await send({ticketKind:'delivery',enabled:false,copies:2,reason:'调整配送打印'})).json().data)
+      .toEqual({ticketKind:'delivery',enabled:false,copies:2})
+  })
   it('returns 401 instead of an internal error when the staff session is missing', async () => {
     const app = Fastify()
     apps.push(app)

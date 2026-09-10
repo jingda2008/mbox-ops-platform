@@ -97,7 +97,7 @@ describe('PostgresCashierWorkbenchQuery', () => {
       receiptReference: null,
       allocations: [{ orderItemId: itemId, amountMinor: 1_000 }],
     })
-    expect(runner.calls[0]?.sql).toContain('session.business_date = $3::date')
+    expect(runner.calls[0]?.sql).toContain('orders.business_date = $3::date')
     expect(runner.calls[0]?.values).toEqual([
       tenantId,
       storeId,
@@ -267,6 +267,8 @@ describe('PostgresCashierWorkbenchQuery', () => {
     expect(view.summary.carryoverOrderCount).toBe(1)
     expect(view.orders[0]).toMatchObject({ businessDate: '2026-08-12', carryover: true })
     expect(runner.calls[0]?.sql).toContain("orders.payment_status='unpaid'")
+    expect(runner.calls[0]?.sql).toContain("orders.status<>'cancelled' AND orders.total_amount_minor > 0")
+    expect(runner.calls[0]?.sql).toContain("$9='unpaid' AND orders.total_amount_minor > 0")
     expect(runner.calls[0]?.sql).toContain("carryover_payment.status IN ('created','pending')")
     expect(runner.calls[0]?.sql).toContain('carryover_payment.retry_released_at IS NULL')
     expect(runner.calls[0]?.sql).toContain('NOT EXISTS ( SELECT 1 FROM mbox.order_settlement_exception_events terminal_settlement_exception')
@@ -284,7 +286,7 @@ describe('PostgresCashierWorkbenchQuery', () => {
       capabilities: ['community.activity.cashier'], limit: 20,
     })
 
-    expect(runner.calls[0]?.sql).toContain("OR (($4::text <> '' OR $9::text IS NOT NULL) AND session.business_date < $3::date)")
+    expect(runner.calls[0]?.sql).toContain("OR (($4::text <> '' OR $9::text IS NOT NULL) AND orders.business_date < $3::date)")
     expect(runner.calls[1]?.sql).toContain("OR $4::text <> ''")
     expect(runner.calls[1]?.sql).not.toContain("registration.payment_status IN ('pending','refunded')")
   })

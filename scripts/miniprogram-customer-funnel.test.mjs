@@ -5,6 +5,24 @@ import vm from 'node:vm'
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), 'utf8')
 
+for(const platform of ['miniprogram','alipay-miniprogram'])test(`${platform}: stopped admissions preserve payment facts but block new registration`,async()=>{
+  const source=await read(`${platform}/pages/community-detail/index.js`)
+  const start=source.indexOf('function viewActivity(raw)'),end=source.indexOf('function viewRegistration(raw)',start)
+  assert.ok(start>=0&&end>start)
+  const view=vm.runInNewContext(`(${source.slice(start,end).trim()})`,{
+    packageView:x=>x,list:x=>Array.isArray(x)?x:[],publicImageUrl:x=>x,KIND_NAMES:{},dateTime:x=>x,money:x=>String(x),paymentText:()=>'',publicText:(_x,fallback)=>fallback,
+  })
+  const original={publicId:'stopped',feeAmountMinor:2000,remainingCapacity:5,safety:{policyVersion:'s1'},refundPolicy:{policyVersion:'r1'},availablePaymentChoices:['full'],availablePaymentMethods:['jsapi','alipay_jsapi'],paymentAvailability:'available'}
+  assert.equal(view(original).registrationBlocked,false)
+  const stopped=view({...original,registrationClosedAt:'2026-09-10T00:00:00Z',registrationStatus:'payment_pending'})
+  assert.equal(stopped.registrationBlocked,true)
+  assert.equal(stopped.availabilityText,'已停止新报名')
+  assert.match(stopped.paymentBlockedText,/已停止新报名/)
+  assert.equal(stopped.registrationStatus,'payment_pending')
+  assert.equal(stopped.paymentAvailability,'available')
+  assert.equal(stopped.feeAmountMinor,2000)
+})
+
 test('home offers menu browsing and an explicit opt-in membership invitation', async () => {
   const [homeView, homeLogic, configSource] = await Promise.all([
     read('miniprogram/pages/home/index.wxml'),
@@ -435,7 +453,7 @@ test('tonight ordering keeps live service separate from recommendation and deleg
   assert.match(orderStyle, /\.product-main \{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/)
   assert.match(orderStyle, /\.product-copy \{[^}]*height:\s*27rpx[^}]*text-overflow:\s*ellipsis[^}]*white-space:\s*nowrap/)
   assert.match(orderStyle, /\.product-action \{[^}]*height:\s*110rpx[^}]*min-height:\s*0/)
-  assert.match(alipayOrderStyle, /\.product-row \{[^}]*display:\s*grid[^}]*grid-template-rows:\s*274rpx minmax\(0, 1fr\) 110rpx/)
+  assert.match(alipayOrderStyle, /\.product-row \{[^}]*display:\s*grid[^}]*grid-template-rows:\s*274rpx auto minmax\(110rpx, auto\)/)
   assert.match(alipayOrderStyle, /\.product-main \{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/)
   assert.match(orderStyle, /\.product-detail-sheet\.is-bundle \.product-detail-hero \{ height:\s*320rpx/)
   assert.match(orderStyle, /\.product-detail-choice-options \{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/)

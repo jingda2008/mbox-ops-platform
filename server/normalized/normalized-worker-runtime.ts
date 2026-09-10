@@ -11,6 +11,7 @@ import { IdempotencyCleanupWorker } from './idempotency-cleanup-worker.js'
 import { NotificationWorker, type NotificationDelivery } from './notification-worker.js'
 import { OutboxDispatcher, type OutboxDelivery } from './outbox-dispatcher.js'
 import { PrintWorker, type PrintAdapter } from './print-worker.js'
+import { PrintSourceWorker } from './print-source-worker.js'
 import { ReservationHoldExpiryWorker } from './reservation-hold-expiry-worker.js'
 import { PaymentReservationExpiryWorker } from './payment-reservation-expiry-worker.js'
 import { ActivityRegistrationExpiryWorker } from './activity-registration-expiry-worker.js'
@@ -24,6 +25,9 @@ import { LoyaltyAccrualDeferredWorker } from './loyalty-accrual-deferred-worker.
 import { LoyaltyRedemptionRecoveryWorker } from './loyalty-redemption-recovery-worker.js'
 import { LoyaltyTierBenefitExpiryWorker } from './loyalty-tier-benefit-expiry-worker.js'
 import { LoyaltyAnnualBenefitGrantWorker } from './loyalty-annual-benefit-grant-worker.js'
+import { MemberGiftDeliveryWorker } from './member-gift-delivery-worker.js'
+import {CheckoutCouponRecoveryWorker} from './checkout-coupon-recovery-worker.js'
+import { MarketingDeliveryWorker,type MarketingDeliveryAdapter } from './marketing-delivery-worker.js'
 import { AnnualDailySnackExpiryWorker } from './annual-daily-snack-expiry-worker.js'
 import { LoyaltyTierReviewWorker } from './loyalty-tier-review-worker.js'
 import {
@@ -91,6 +95,7 @@ export interface NormalizedWorkerRuntimeOptions {
     delivery: WechatTemplateMessageDelivery
   }> | null
   staleGuestImmediatePaymentReconciliation?: Readonly<StaleGuestImmediatePaymentWorkerDeps> | null
+  marketingDelivery?: MarketingDeliveryAdapter | null
   onError?: (worker: NormalizedWorkerName, error: unknown) => void
   onCycle?: (result: Readonly<NormalizedWorkerCycleResult>) => void
 }
@@ -144,6 +149,10 @@ export function createNormalizedWorkerRuntime(
     loyaltyRedemptionRecovery: new LoyaltyRedemptionRecoveryWorker(transactions),
     promotionalLoyalty: new PromotionalLoyaltyWorker(transactions),
     loyaltyAnnualBenefitGrant: new LoyaltyAnnualBenefitGrantWorker(transactions),
+    memberGiftDelivery: new MemberGiftDeliveryWorker(transactions),
+    checkoutCouponRecovery:new CheckoutCouponRecoveryWorker(transactions),
+    marketingDelivery: new MarketingDeliveryWorker(transactions,options.marketingDelivery??null),
+    printSource: new PrintSourceWorker(transactions),
     annualDailySnackExpiry: new AnnualDailySnackExpiryWorker(transactions),
     loyaltyTierBenefitExpiry: new LoyaltyTierBenefitExpiryWorker(transactions),
     loyaltyTierReview: new LoyaltyTierReviewWorker(transactions),

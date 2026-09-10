@@ -18,6 +18,14 @@ const paymentId = '66666666-6666-4666-8666-666666666666'
 const refundId = '77777777-7777-4777-8777-777777777777'
 
 describe('PostgresCashierWorkbenchQuery', () => {
+  it('separates coupon review counts from collection and monetary refund work',async()=>{
+    const runner=new QueryRunner([[{...orderRow(),coupon_refund_review_count:2}],[],[itemRow()],[paymentRow()],[refundRow()],[allocationRow()]])
+    const view=await new PostgresCashierWorkbenchQuery(runner as unknown as ScopedPostgresTransactionRunner).get({scope:{tenantId,storeId},employeeId,businessDate:'2026-08-13',capabilities:['refund.execute','community.activity.cashier'],limit:20})
+    expect(view.summary.couponRefundReviewCount).toBe(2)
+    expect(view.orders[0]?.couponRefundReviewCount).toBe(2)
+    expect(view.orders[0]?.outstandingAmountMinor).toBeGreaterThanOrEqual(0)
+    expect(view.summary.requestedRefundCount).not.toBe(2)
+  })
   it('returns current-day orders with payment and per-item remaining refundable amounts', async () => {
     const runner = new QueryRunner([
       [orderRow()],
@@ -89,7 +97,7 @@ describe('PostgresCashierWorkbenchQuery', () => {
       receiptReference: null,
       allocations: [{ orderItemId: itemId, amountMinor: 1_000 }],
     })
-    expect(runner.calls[0]?.sql).toContain('session.business_date = $3::date')
+    expect(runner.calls[0]?.sql).toContain('orders.business_date = $3::date')
     expect(runner.calls[0]?.values).toEqual([
       tenantId,
       storeId,
@@ -259,6 +267,8 @@ describe('PostgresCashierWorkbenchQuery', () => {
     expect(view.summary.carryoverOrderCount).toBe(1)
     expect(view.orders[0]).toMatchObject({ businessDate: '2026-08-12', carryover: true })
     expect(runner.calls[0]?.sql).toContain("orders.payment_status='unpaid'")
+    expect(runner.calls[0]?.sql).toContain("orders.status<>'cancelled' AND orders.total_amount_minor > 0")
+    expect(runner.calls[0]?.sql).toContain("$9='unpaid' AND orders.total_amount_minor > 0")
     expect(runner.calls[0]?.sql).toContain("carryover_payment.status IN ('created','pending')")
     expect(runner.calls[0]?.sql).toContain('carryover_payment.retry_released_at IS NULL')
     expect(runner.calls[0]?.sql).toContain('NOT EXISTS ( SELECT 1 FROM mbox.order_settlement_exception_events terminal_settlement_exception')
@@ -276,7 +286,7 @@ describe('PostgresCashierWorkbenchQuery', () => {
       capabilities: ['community.activity.cashier'], limit: 20,
     })
 
-    expect(runner.calls[0]?.sql).toContain("OR (($4::text <> '' OR $9::text IS NOT NULL) AND session.business_date < $3::date)")
+    expect(runner.calls[0]?.sql).toContain("OR (($4::text <> '' OR $9::text IS NOT NULL) AND orders.business_date < $3::date)")
     expect(runner.calls[1]?.sql).toContain("OR $4::text <> ''")
     expect(runner.calls[1]?.sql).not.toContain("registration.payment_status IN ('pending','refunded')")
   })

@@ -193,6 +193,19 @@ integration('unpaid order cancellation', () => {
     expect(evidence.rows[0]?.count).toBe(1)
   })
 
+  it('keeps cancellation and settlement usable after manual day end and attributes new orders to the new day',async()=>{
+    await pool.query(`INSERT INTO mbox.manual_business_day_ends(tenant_id,store_id,business_date,next_business_date,calendar_business_date,employee_id,reason,ledger_snapshot)
+      VALUES($1,$2,$3::date,$3::date+1,$3::date,$4,'隔离验证提前日结','[]')`,[tenantId,storeId,actionBusinessDate,employeeId])
+    const next=(await pool.query('SELECT ($1::date+1)::text AS day',[actionBusinessDate])).rows[0].day
+    const fixture=await createOrder('unpaid',null,true)
+    const cancelled=await repository.cancel({scope:{tenantId,storeId},orderId:fixture.orderId,employeeId,businessDate:next,
+      reasonCode:'guest_left',reasonNote:'提前日结后客人离店取消未送达',idempotencyKey:`next-day-cancel:${randomUUID()}`})
+    expect(cancelled).toMatchObject({sourceBusinessDate:next,actionBusinessDate:next})
+    const settled=await settlementRepository.settle({scope:{tenantId,storeId},orderId:fixture.orderId,employeeId,businessDate:next,
+      reasonCode:'manager_comp',reasonNote:'提前日结后确认已送达免单',idempotencyKey:`next-day-settle:${randomUUID()}`})
+    expect(settled).toMatchObject({sourceBusinessDate:next,actionBusinessDate:next,settledAmountMinor:100})
+  })
+
   async function createOrder(
     paymentStatus: 'unpaid',
     paymentIntent: 'pending' | null,

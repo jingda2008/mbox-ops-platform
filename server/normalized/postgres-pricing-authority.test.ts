@@ -11,6 +11,9 @@ import {
 import { CommerceCommandService } from './commerce-command-service.js'
 import { InsufficientInventoryError } from './inventory-repository.js'
 import { PostgresPricingAuthority } from './postgres-pricing-authority.js'
+import { BenefitRepository } from './benefit-repository.js'
+import { CouponCalendarRepository } from './coupon-calendar-repository.js'
+import { PaymentFulfillmentRepository } from './payment-fulfillment-repository.js'
 import { seedActiveGuestTableAuthority } from './guest-table-authority.test-helper.js'
 import {
   PricingAuthorizationDeniedError,
@@ -82,6 +85,70 @@ integration('PostgresPricingAuthority PostgreSQL authorization integrity', () =>
 
   afterAll(async () => {
     await pool?.end()
+  })
+
+  async function calendarGift() {
+    const runner = new ScopedPostgresTransactionRunner(asPool(pool))
+    const giftId = randomUUID()
+    const day = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' })
+    const version = await runner.run({ tenantId, storeId }, tx => new CouponCalendarRepository(tx).save({
+      code: `GIFT_${giftId.slice(0,8).toUpperCase()}`, employeeId, businessDate: day, reason: '隔离交易测试', requestKey: randomUUID(), expectedVersion: 0,
+      rule: { timezone: 'Asia/Shanghai', dateBasis: 'natural', businessDayStartMinute: 0, dateFrom: day, dateThrough: day,
+        validFrom: new Date(Date.now()-3600000).toISOString(), validUntil: new Date(Date.now()+3600000).toISOString(),
+        weekdays: [1,2,3,4,5,6,7], weekStartsOn: 1, windows: [{ startMinute: 0, endMinute: 1440 }], excludedDates: [] },
+      limits: { perCustomerDay: 2, perCustomerWeek: 2, perCustomerCampaign: 2 },
+    }))
+    await pool.query(`INSERT INTO mbox.benefits(id,tenant_id,store_id,customer_id,benefit_code,benefit_type,value_amount_minor,currency,quantity_total,valid_from,valid_until)
+      VALUES($1,$2,$3,$4,'CALENDAR_GIFT','gift_product',88000,'CNY',2,clock_timestamp()-interval '1 hour',clock_timestamp()+interval '1 hour')`, [giftId,tenantId,storeId,tableCustomerIds[1]])
+    await pool.query('INSERT INTO mbox.benefit_allowed_products(tenant_id,store_id,benefit_id,product_id) VALUES($1,$2,$3,$4)', [tenantId,storeId,giftId,productId])
+    await pool.query('INSERT INTO mbox.benefit_coupon_calendar_bindings(tenant_id,store_id,benefit_id,version_id) VALUES($1,$2,$3,$4)', [tenantId,storeId,giftId,version.id])
+    return { runner, giftId, day }
+  }
+
+  it('rejects direct calendar gift pricing without its counted reservation', async () => {
+    const { giftId } = await calendarGift()
+    const publicId = `calendar-bypass-${randomUUID()}`
+    await expect(service.submitOrder({ ...baseOrder(sessionIds[1]!, publicId, randomUUID()),
+      pricingAuthorization: { sourceType: 'benefit', sourceId: giftId },
+    })).rejects.toThrow('须先预约')
+    await expectNoOrder(publicId)
+    expect((await pool.query('SELECT status,quantity_reserved FROM mbox.benefits WHERE id=$1', [giftId])).rows[0]).toEqual({ status: 'issued', quantity_reserved: 0 })
+    await expect(pool.query(`INSERT INTO mbox.pricing_authorizations(tenant_id,store_id,table_session_id,source_type,source_id,kind,amount_minor,maximum_amount_minor,currency,benefit_id)
+      VALUES($1,$2,$3,'benefit',$4,'gift',8800,88000,'CNY',$4)`,[tenantId,storeId,sessionIds[1],giftId])).rejects.toThrow('requires its counted reservation')
+  })
+
+  it('fulfills two independently reserved portions without redeeming the whole gift early or duplicating an order', async () => {
+    const { runner, giftId, day } = await calendarGift()
+    const reserve = () => runner.run({ tenantId,storeId }, tx => new BenefitRepository(tx).reserve({
+      benefitId: giftId, customerId: tableCustomerIds[1], tableSessionId: sessionIds[1]!, quantity: 1,
+      expiresAt: new Date(Date.now()+600000).toISOString(), reservationIdempotencyKey: randomUUID(), reservationFingerprint: randomUUID(),
+    }, guestActorRefs.get(sessionIds[1]!)))
+    for (let index=0;index<2;index++) {
+      const reservation = await reserve()
+      const input = { benefitId: giftId, benefitReservationId: reservation.id, customerId: tableCustomerIds[1], tableSessionId: sessionIds[1]!,
+        redeemedByEmployeeId: employeeId, authorizationSource: { kind: 'employee' }, redemptionIdempotencyKey: randomUUID(), redemptionFingerprint: randomUUID(), businessDate: day }
+      const redeem = () => runner.run({ tenantId,storeId }, tx => new BenefitRepository(tx).redeem(input, {
+        createGiftOrder: async (transaction, gift) => {
+          const result = await service.submitOrderInTransaction(transaction, {
+            scope: { tenantId,storeId }, actor: { type:'employee',employeeId }, businessDate:day, idempotencyKey:randomUUID(),
+            tableSessionId:gift.tableSessionId, publicId:`calendar-fulfill-${gift.benefitReservationId}`, channel:'cashier', settlementMode:'immediate_payment',
+            createdByEmployeeId:employeeId, lines:[{productId,quantity:gift.quantity}],
+            pricingAuthorization:{sourceType:'benefit',sourceId:gift.benefitId},benefitFulfillmentReservationId:gift.benefitReservationId,
+          })
+          expect(result.result.order).toMatchObject({totalAmountMinor:0,discountAmountMinor:8800})
+          await new PaymentFulfillmentRepository(transaction).activateComplimentaryBenefitOrder(result.result.order.id,gift.benefitId)
+          return {reference:result.result.order.publicId}
+        },
+      }, undefined, employeeId))
+      const first = await redeem()
+      expect((await redeem()).id).toBe(first.id)
+      expect((await pool.query('SELECT status,quantity_redeemed,quantity_reserved FROM mbox.benefits WHERE id=$1',[giftId])).rows[0]).toEqual({status:index===0?'issued':'redeemed',quantity_redeemed:index+1,quantity_reserved:0})
+    }
+    const authorizations = await pool.query('SELECT benefit_reservation_id,status FROM mbox.pricing_authorizations WHERE benefit_id=$1',[giftId])
+    expect(authorizations.rows).toHaveLength(2)
+    expect(new Set(authorizations.rows.map(row=>row.benefit_reservation_id)).size).toBe(2)
+    expect(authorizations.rows.every(row=>row.status==='consumed')).toBe(true)
+    await expect(reserve()).rejects.toThrow()
   })
 
   it('derives employee discount from active role permission and consumes it with the order', async () => {
@@ -407,7 +474,7 @@ async function seed(pool: Pool): Promise<void> {
   await pool.query(`
     INSERT INTO mbox.staff_permission_definitions(tenant_id, store_id, code, name)
     SELECT $1::uuid, $2::uuid, code, code
-    FROM unnest(ARRAY['order.gift','kds.prepare']::text[]) code
+    FROM unnest(ARRAY['order.gift','kds.prepare','loyalty.redemption.fulfill','table.view_all']::text[]) code
     ON CONFLICT (tenant_id, store_id, code) DO UPDATE SET status='active'
   `, [tenantId, storeId])
   await pool.query(`
@@ -417,7 +484,7 @@ async function seed(pool: Pool): Promise<void> {
     JOIN mbox.staff_permission_definitions permission
       ON permission.tenant_id=role.tenant_id AND permission.store_id=role.store_id
     WHERE role.tenant_id=$1::uuid AND role.store_id=$2::uuid
-      AND ((role.id=$3::uuid AND permission.code IN ('order.discount','order.gift','kds.prepare'))
+      AND ((role.id=$3::uuid AND permission.code IN ('order.discount','order.gift','kds.prepare','loyalty.redemption.fulfill','table.view_all'))
         OR (role.id=$4::uuid AND permission.code IN ('order.discount','kds.prepare')))
     ON CONFLICT DO NOTHING
   `, [tenantId, storeId, roleId, deniedRoleId])

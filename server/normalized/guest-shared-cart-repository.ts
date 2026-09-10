@@ -3,9 +3,11 @@ import type { JsonObject } from './command-executor.js'
 import { OrderRepository } from './order-repository.js'
 import type { BundleUnitSelectionInput } from './order-repository.js'
 import type { ScopedTransaction } from './transaction-runner.js'
+import {MAX_LINE_QUANTITY,MAX_CART_QUANTITY,MAX_CART_AMOUNT_MINOR} from './guest-shared-cart-limits.js'
 
 export interface GuestSharedCartLine {
   productId: string
+  portionIds?: readonly string[]
   quantity: number
   name: string
   unitPriceMinor: number | null
@@ -43,6 +45,7 @@ interface CartRow extends Record<string, unknown> {
 
 interface LineRow extends Record<string, unknown> {
   product_id: string
+  portion_ids?: string[]
   quantity: number | string
   product_name: string | null
   unit_price_minor: number | string | null
@@ -104,9 +107,6 @@ export class GuestSharedCartFrozenError extends Error {
   }
 }
 
-const MAX_LINE_QUANTITY = 20
-const MAX_CART_QUANTITY = 60
-const MAX_CART_AMOUNT_MINOR = 2_000_000
 const MAX_WRITES_PER_TEN_SECONDS = 12
 
 export class GuestSharedCartRepository {
@@ -180,6 +180,19 @@ export class GuestSharedCartRepository {
 
   async readOpen(tableSessionId: string, publicId: string): Promise<GuestSharedCart> {
     return this.getOrCreateOpen(tableSessionId, publicId)
+  }
+
+  /** Optional recommendation reads must not create a cart or take its write
+   * lock. Discard a torn snapshot rather than offering against mixed versions. */
+  async findCurrentOpen(tableSessionId:string):Promise<GuestSharedCart|null>{
+    const cart=await this.loadOpenForUpdate(tableSessionId,false)
+    if(!cart)return null
+    const snapshot=await this.snapshot(cart)
+    const current=await this.transaction.query<{version:number|string;guest_writes_frozen:boolean}>(`
+      SELECT cart.version,session.guest_cart_writes_frozen AS guest_writes_frozen FROM mbox.guest_shared_carts cart
+      JOIN mbox.table_sessions session ON session.tenant_id=cart.tenant_id AND session.store_id=cart.store_id AND session.id=cart.table_session_id
+      WHERE cart.tenant_id=$1 AND cart.store_id=$2 AND cart.id=$3 AND cart.status='open' AND session.status='open'`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,cart.id])
+    return current.rows[0]&&Number(current.rows[0].version)===cart.version&&current.rows[0].guest_writes_frozen===cart.guestWritesFrozen?snapshot:null
   }
 
   async adjust(
@@ -258,12 +271,58 @@ export class GuestSharedCartRepository {
         input.productId, nextQuantity,JSON.stringify(nextSelections)])
     }
     await this.assertCartLimits(cart.id)
-    const version = await this.incrementVersion(cart)
+    const {version,updatedAt} = await this.incrementVersion(cart)
     await this.appendOperation(cart, {
       command: 'adjust', operationId: input.operationId, actorSessionRef: auditActorSessionRef(input.actorSessionRef),
       expectedVersion: input.expectedVersion, resultingVersion: version, payload,
     })
-    return this.snapshot({ ...cart, version })
+    return this.snapshot({ ...cart, version,updatedAt })
+  }
+
+  /** Internal cart mutation only: callers must independently verify an accepted
+   * recommendation and re-quote benefits. This never authorizes an order or price.
+   * Retire exactly the chosen identity, not the last unit of a same-product line. */
+  async replacePortionProduct(tableSessionId:string,publicId:string,input:Readonly<{
+    productId:string;portionId:string;targetProductId:string;
+    bundleSelection?:BundleUnitSelectionInput;
+    expectedGeneration:number;expectedVersion:number;operationId:string;actorSessionRef:string;
+  }>):Promise<GuestSharedCart>{
+    validateRemove(input)
+    validateRemove({...input,productId:input.targetProductId})
+    if(input.targetProductId===input.productId)throw new TypeError('替换商品必须不同；修改选项请使用原份次编辑')
+    if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.portionId))throw new TypeError('portionId is invalid')
+    const cart=await this.getOrCreateOpen(tableSessionId,publicId)
+    const payload={productId:input.productId,portionId:input.portionId,targetProductId:input.targetProductId,
+      ...(input.bundleSelection?{bundleSelection:bundleSelectionsToJson([input.bundleSelection])[0]!}:{})} as JsonObject
+    if(await this.isOperationReplay(tableSessionId,input.operationId,'replace_portion',payload))return this.snapshot(cart)
+    await this.assertWriteAllowed(cart,input.actorSessionRef)
+    this.assertExpectedState(cart,input.expectedGeneration,input.expectedVersion)
+    const source=cart.lines.find(line=>line.productId===input.productId)
+    const index=source?.portionIds?.indexOf(input.portionId)??-1
+    if(!source||index<0||source.portionIds?.length!==source.quantity)throw new GuestSharedCartVersionConflictError(cart)
+    const target=cart.lines.find(line=>line.productId===input.targetProductId)
+    const targetQuantity=(target?.quantity??0)+1
+    if(targetQuantity>MAX_LINE_QUANTITY)throw new GuestSharedCartLimitError(`单个商品最多可加入${MAX_LINE_QUANTITY}件`)
+    const targetSelections=[...(target?.bundleSelections??[]),...(input.bundleSelection?[input.bundleSelection]:[])]
+    await new OrderRepository(this.transaction).assertCurrentOrderable([{productId:input.targetProductId,quantity:targetQuantity,bundleSelections:targetSelections}],'guest_qr')
+    const scope=[this.transaction.scope.tenantId,this.transaction.scope.storeId,cart.id]
+    await this.transaction.query(`UPDATE mbox.guest_shared_cart_portions SET removed_at=clock_timestamp()
+      WHERE tenant_id=$1 AND store_id=$2 AND cart_id=$3 AND id=$4 AND removed_at IS NULL`,[...scope,input.portionId])
+    if(source.quantity===1){
+      await this.transaction.query('DELETE FROM mbox.guest_shared_cart_lines WHERE tenant_id=$1 AND store_id=$2 AND cart_id=$3 AND product_id=$4',[...scope,input.productId])
+    }else{
+      await this.transaction.query(`UPDATE mbox.guest_shared_cart_lines SET quantity=quantity-1,bundle_selections=$5::jsonb,updated_at=clock_timestamp()
+        WHERE tenant_id=$1 AND store_id=$2 AND cart_id=$3 AND product_id=$4`,[...scope,input.productId,JSON.stringify(source.bundleSelections.filter((_,position)=>position!==index))])
+    }
+    await this.transaction.query(`INSERT INTO mbox.guest_shared_cart_lines(tenant_id,store_id,cart_id,product_id,quantity,bundle_selections)
+      VALUES($1,$2,$3,$4,$5,$6::jsonb) ON CONFLICT(tenant_id,store_id,cart_id,product_id)
+      DO UPDATE SET quantity=EXCLUDED.quantity,bundle_selections=EXCLUDED.bundle_selections,updated_at=clock_timestamp()`,[...scope,input.targetProductId,targetQuantity,JSON.stringify(targetSelections)])
+    await this.assertCartLimits(cart.id)
+    const {version,updatedAt}=await this.incrementVersion(cart)
+    const result=await this.snapshot({...cart,version,updatedAt})
+    if(result.lines.some(line=>!line.available))throw new GuestSharedCartLimitError('替换后的商品或库存已变化，请重新确认；原购物车保持不变')
+    await this.appendOperation(cart,{command:'replace_portion',operationId:input.operationId,actorSessionRef:auditActorSessionRef(input.actorSessionRef),expectedVersion:input.expectedVersion,resultingVersion:version,payload})
+    return result
   }
 
   async replaceBundleSelection(
@@ -272,6 +331,7 @@ export class GuestSharedCartRepository {
     input:Readonly<{
       productId:string
       unitIndex:number
+      portionId?:string
       bundleSelection:BundleUnitSelectionInput
       expectedGeneration:number
       expectedVersion:number
@@ -285,6 +345,7 @@ export class GuestSharedCartRepository {
       productId:input.productId,
       unitIndex:input.unitIndex,
       bundleSelection:bundleSelectionsToJson([input.bundleSelection])[0]!,
+      ...(input.portionId?{portionId:input.portionId}:{}),
     } as JsonObject
     if(await this.isOperationReplay(cart.tableSessionId,input.operationId,'replace_selection',payload)){
       return this.snapshot(cart)
@@ -292,7 +353,11 @@ export class GuestSharedCartRepository {
     await this.assertWriteAllowed(cart,input.actorSessionRef)
     this.assertExpectedState(cart,input.expectedGeneration,input.expectedVersion)
     const current=await this.transaction.query<LineRow>(`
-      SELECT product_id,quantity,bundle_selections
+      SELECT product_id,quantity,bundle_selections,
+        ARRAY(SELECT p.id::text FROM mbox.guest_shared_cart_portions p
+          WHERE p.tenant_id=$1::uuid AND p.store_id=$2::uuid
+            AND p.line_id=guest_shared_cart_lines.id AND p.removed_at IS NULL
+          ORDER BY p.ordinal) AS portion_ids
       FROM mbox.guest_shared_cart_lines
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND cart_id=$3::uuid AND product_id=$4::uuid
       FOR UPDATE
@@ -300,7 +365,8 @@ export class GuestSharedCartRepository {
     const line=current.rows[0]
     const quantity=Number(line?.quantity??0)
     const currentSelections=normalizeStoredBundleSelections(line?.bundle_selections)
-    if(!line||currentSelections.length!==quantity||input.unitIndex>=quantity){
+    if(!line||currentSelections.length!==quantity||input.unitIndex>=quantity
+      ||(input.portionId!==undefined&&line.portion_ids?.[input.unitIndex]!==input.portionId)){
       throw new GuestSharedCartVersionConflictError(await this.snapshot(cart))
     }
     const nextSelections=currentSelections.map((selection,index)=>(
@@ -316,13 +382,13 @@ export class GuestSharedCartRepository {
     `,[this.transaction.scope.tenantId,this.transaction.scope.storeId,cart.id,input.productId,
       JSON.stringify(nextSelections)])
     await this.assertCartLimits(cart.id)
-    const version=await this.incrementVersion(cart)
+    const {version,updatedAt}=await this.incrementVersion(cart)
     await this.appendOperation(cart,{
       command:'replace_selection',operationId:input.operationId,
       actorSessionRef:auditActorSessionRef(input.actorSessionRef),
       expectedVersion:input.expectedVersion,resultingVersion:version,payload,
     })
-    return this.snapshot({ ...cart,version })
+    return this.snapshot({ ...cart,version,updatedAt })
   }
 
   async clear(
@@ -349,14 +415,14 @@ export class GuestSharedCartRepository {
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, cart.id])
     // Clearing an already-empty cart is a valid, idempotent no-op.  It still
     // records the command so a retry cannot be mistaken for a later clear.
-    const version = (deleted.rowCount ?? 0) > 0
+    const {version,updatedAt} = (deleted.rowCount ?? 0) > 0
       ? await this.incrementVersion(cart)
-      : cart.version
+      : cart
     await this.appendOperation(cart, {
       command: 'clear', operationId: input.operationId, actorSessionRef: auditActorSessionRef(input.actorSessionRef),
       expectedVersion: input.expectedVersion, resultingVersion: version, payload,
     })
-    return this.snapshot({ ...cart, version })
+    return this.snapshot({ ...cart, version,updatedAt })
   }
 
   async removeLine(
@@ -386,13 +452,13 @@ export class GuestSharedCartRepository {
     // Recheck the authoritative amount cap before committing so an attacker
     // cannot hide an over-limit priced basket behind one stale-price line.
     await this.assertCartLimits(cart.id)
-    const version=(deleted.rowCount??0)>0?await this.incrementVersion(cart):cart.version
+    const {version,updatedAt}=(deleted.rowCount??0)>0?await this.incrementVersion(cart):cart
     await this.appendOperation(cart,{
       command:'remove',operationId:input.operationId,
       actorSessionRef:auditActorSessionRef(input.actorSessionRef),
       expectedVersion:input.expectedVersion,resultingVersion:version,payload,
     })
-    return this.snapshot({ ...cart,version })
+    return this.snapshot({ ...cart,version,updatedAt })
   }
 
   async beginCheckout(
@@ -472,7 +538,7 @@ export class GuestSharedCartRepository {
     return { submittedCart, nextCart: await this.snapshot(next) }
   }
 
-  private async loadOpenForUpdate(tableSessionId: string): Promise<Omit<GuestSharedCart, 'lines' | 'totalAmountMinor' | 'currency'> | null> {
+  private async loadOpenForUpdate(tableSessionId: string,lock=true): Promise<Omit<GuestSharedCart, 'lines' | 'totalAmountMinor' | 'currency'> | null> {
     const result = await this.transaction.query<CartRow>(`
       SELECT cart.id,cart.public_id,cart.table_session_id,cart.generation,cart.version,
         cart.status,cart.updated_at::text,session.guest_cart_writes_frozen AS guest_writes_frozen
@@ -484,7 +550,7 @@ export class GuestSharedCartRepository {
         AND cart.table_session_id=$3::uuid AND cart.status='open'
       ORDER BY cart.generation DESC
       LIMIT 1
-      FOR UPDATE OF cart
+      ${lock?'FOR UPDATE OF cart':''}
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, tableSessionId])
     const row = result.rows[0]
     return row === undefined ? null : {
@@ -497,6 +563,7 @@ export class GuestSharedCartRepository {
   private async snapshot(cart: Omit<GuestSharedCart, 'lines' | 'totalAmountMinor' | 'currency'>): Promise<GuestSharedCart> {
     const lines = await this.transaction.query<LineRow>(`
       SELECT line.product_id,line.quantity,line.bundle_selections,product.name AS product_name,
+        ARRAY(SELECT portion.id::text FROM mbox.guest_shared_cart_portions portion WHERE portion.tenant_id=line.tenant_id AND portion.store_id=line.store_id AND portion.line_id=line.id AND portion.removed_at IS NULL ORDER BY portion.ordinal) AS portion_ids,
         price.amount_minor AS unit_price_minor,price.currency,
         CASE
           WHEN product.id IS NULL OR product.status<>'active' THEN '商品已下架'
@@ -831,6 +898,7 @@ export class GuestSharedCartRepository {
           ? line.unavailable_reason||'商品信息正在更新，暂不可结算'
           : '本桌购物车合计库存不足',
         bundleSelections:normalizeStoredBundleSelections(line.bundle_selections),
+        portionIds:line.portion_ids??[],
       }
     })
     const currencies = new Set(mappedLines.filter((line) => line.available).map((line) => line.currency))
@@ -933,15 +1001,15 @@ export class GuestSharedCartRepository {
 
   private async incrementVersion(
     cart: Readonly<Omit<GuestSharedCart, 'lines' | 'totalAmountMinor' | 'currency'>>,
-  ): Promise<number> {
-    const update = await this.transaction.query<{ version: number | string }>(`
+  ): Promise<{version:number;updatedAt:string}> {
+    const update = await this.transaction.query<{ version: number | string;updated_at:string }>(`
       UPDATE mbox.guest_shared_carts
       SET version=version+1,updated_at=clock_timestamp()
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND status='open'
-      RETURNING version
+      RETURNING version,updated_at::text
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, cart.id])
     if (!update.rows[0]) throw new GuestSharedCartVersionConflictError()
-    return Number(update.rows[0].version)
+    return {version:Number(update.rows[0].version),updatedAt:update.rows[0].updated_at}
   }
 
   private async assertWriteAllowed(
@@ -1049,7 +1117,7 @@ export class GuestSharedCartRepository {
   private appendOperation(
     cart: Readonly<GuestSharedCart>,
     input: Readonly<{
-      command: 'adjust' | 'replace_selection' | 'remove' | 'clear' | 'submit'
+      command: 'adjust' | 'replace_selection' | 'replace_portion' | 'remove' | 'clear' | 'submit'
       operationId: string
       actorSessionRef: string
       expectedVersion: number
@@ -1119,10 +1187,13 @@ function validateRemove(input:Readonly<{
 }
 
 function validateReplaceBundleSelection(input:Readonly<{
-  productId:string;unitIndex:number;bundleSelection:BundleUnitSelectionInput;
+  productId:string;unitIndex:number;portionId?:string;bundleSelection:BundleUnitSelectionInput;
   expectedGeneration:number;expectedVersion:number;operationId:string;actorSessionRef:string
 }>):void{
   validateRemove(input)
+  if(input.portionId!==undefined&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.portionId)){
+    throw new TypeError('portionId is invalid')
+  }
   if(!Number.isSafeInteger(input.unitIndex)||input.unitIndex<0||input.unitIndex>=MAX_LINE_QUANTITY){
     throw new TypeError('unitIndex is invalid')
   }

@@ -13,6 +13,7 @@ export type ActivityRegistrationOperation = 'check_in' | 'fulfill_package' | 'no
 export type ActivityPackageAvailabilityOperation = 'pause' | 'resume'
 
 export interface ActivityOperationsSummary {
+  registrationClosedAt?: string | null
   publicId: string
   title: string
   status: ActivityStatus
@@ -639,6 +640,56 @@ export class ActivityOperationsRepository {
     return (await this.detail(activityPublicId)).activity
   }
 
+  async stopRegistration(publicId:string):Promise<ActivityOperationsActivity> {
+    const scope=this.transaction.scope
+    const result=await this.transaction.query(`UPDATE mbox.community_activities
+      SET registration_closed_at=COALESCE(registration_closed_at,clock_timestamp()),updated_at=clock_timestamp()
+      WHERE tenant_id=$1 AND store_id=$2 AND public_id=$3 AND status IN ('published','full') RETURNING id`,[scope.tenantId,scope.storeId,publicId])
+    if(!result.rows.length)throw new ActivityOperationsError('活动不存在或已结束','ACTIVITY_UNAVAILABLE',409)
+    return (await this.detail(publicId)).activity
+  }
+
+  async closeActivity(publicId: string, status: 'cancelled' | 'completed'): Promise<ActivityOperationsActivity> {
+    const scope = this.transaction.scope
+    const locked = await this.transaction.query<{ id: string; status: ActivityStatus; started: boolean }>(`
+      SELECT id,status,starts_at<=clock_timestamp() AS started FROM mbox.community_activities
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND public_id=$3 FOR UPDATE
+    `, [scope.tenantId, scope.storeId, publicId])
+    const activity = locked.rows[0]
+    if (!activity) throw new ActivityOperationsError('活动不存在', 'ACTIVITY_NOT_FOUND', 404)
+    if (activity.status === status) return (await this.detail(publicId)).activity
+    if (['cancelled','completed'].includes(activity.status)) throw new ActivityOperationsError('活动已经结束，不能改写原结果', 'ACTIVITY_TERMINAL', 409)
+    if (status === 'completed' && (!activity.started || activity.status === 'draft')) throw new ActivityOperationsError('未开始的活动不能登记已完成，请使用取消活动', 'ACTIVITY_NOT_STARTED', 409)
+    const unresolved = await this.transaction.query<{ count: string }>(`
+      SELECT count(*)::text AS count FROM mbox.community_activity_registrations registration
+      WHERE registration.tenant_id=$1::uuid AND registration.store_id=$2::uuid AND registration.activity_id=$3::uuid
+        AND (registration.status IN ('reserved','payment_pending','confirmed','waitlisted')
+          OR EXISTS (SELECT 1 FROM mbox.community_activity_package_fulfillment_intents intent
+            WHERE intent.tenant_id=registration.tenant_id AND intent.store_id=registration.store_id
+              AND intent.registration_id=registration.id AND intent.status='pending')
+          OR ($4='cancelled' AND registration.status NOT IN ('cancelled','refunded','no_show'))
+          OR ($4='cancelled' AND EXISTS (SELECT 1 FROM mbox.payments payment
+            WHERE payment.tenant_id=registration.tenant_id AND payment.store_id=registration.store_id
+              AND payment.activity_registration_id=registration.id
+              AND payment.status IN ('succeeded','partially_refunded','refunded')
+              AND payment.amount_minor>COALESCE((SELECT sum(refund.amount_minor) FROM mbox.refunds refund
+                WHERE refund.tenant_id=payment.tenant_id AND refund.store_id=payment.store_id
+                  AND refund.payment_id=payment.id AND refund.status='succeeded'),0)))
+          OR EXISTS (SELECT 1 FROM mbox.payments payment
+            WHERE payment.tenant_id=registration.tenant_id AND payment.store_id=registration.store_id
+              AND payment.activity_registration_id=registration.id AND payment.status IN ('created','pending'))
+          OR EXISTS (SELECT 1 FROM mbox.refunds refund JOIN mbox.payments payment
+            ON payment.tenant_id=refund.tenant_id AND payment.store_id=refund.store_id AND payment.id=refund.payment_id
+            WHERE payment.tenant_id=registration.tenant_id AND payment.store_id=registration.store_id
+              AND payment.activity_registration_id=registration.id AND refund.status IN ('requested','approved','processing','failed')))
+    `, [scope.tenantId, scope.storeId, activity.id, status])
+    if (Number(unresolved.rows[0]?.count ?? 0)>0) throw new ActivityOperationsError(
+      `还有 ${unresolved.rows[0]!.count} 笔报名或收退款未处理，请先完成签到、未到、取消报名及退款核对；不会自动退款或删除记录`, 'ACTIVITY_CLOSE_BLOCKED', 409)
+    await this.transaction.query(`UPDATE mbox.community_activities SET status=$4,updated_at=clock_timestamp()
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid`, [scope.tenantId,scope.storeId,activity.id,status])
+    return (await this.detail(publicId)).activity
+  }
+
   private async replaceDraftPackages(
     activityPublicId: string,
     packages: readonly ActivityPackageDraftInput[],
@@ -1099,7 +1150,7 @@ export class ActivityOperationsRepository {
 }
 
 const ACTIVITY_SUMMARY_QUERY = `
-  SELECT activity.public_id, activity.title, activity.status,
+  SELECT activity.public_id, activity.title, activity.status,activity.registration_closed_at::text,
     activity.starts_at::text, activity.ends_at::text, activity.assembly_location,
     activity.capacity, activity.registration_payment_mode, activity.fee_amount_minor,
     activity.currency,
@@ -1119,7 +1170,7 @@ const ACTIVITY_SUMMARY_QUERY = `
 `
 
 const ACTIVITY_DETAIL_QUERY = `
-  SELECT activity.public_id, activity.title, activity.status,
+  SELECT activity.public_id, activity.title, activity.status,activity.registration_closed_at::text,
     activity.starts_at::text, activity.ends_at::text, activity.assembly_location,
     activity.capacity, activity.registration_payment_mode, activity.fee_amount_minor,
     activity.currency, activity.activity_kind, activity.summary, activity.cover_url,
@@ -1148,6 +1199,7 @@ const ACTIVITY_DETAIL_QUERY = `
 
 function summaryView(row: ActivitySummaryRow): ActivityOperationsSummary {
   return {
+    registrationClosedAt: typeof row.registration_closed_at==='string'?row.registration_closed_at:null,
     publicId: row.public_id,
     title: row.title,
     status: row.status,

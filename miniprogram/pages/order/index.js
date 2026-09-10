@@ -6,6 +6,10 @@ const {
   getRecommendationConfiguration,
   recordRecommendationEvent,
   checkoutSharedCart,
+  quoteSharedCartCoupons,
+  prepareSharedCartUpgrade,
+  decideSharedCartUpgrade,
+  getCustomerBenefitWallet,
   getSharedCart,
   adjustSharedCart,
   replaceSharedCartBundleSelection,
@@ -237,6 +241,7 @@ function menuProducts(items) {
     const availability = menuAvailability(item)
     return Object.assign({}, item, bundleValuePresentation(item), {
       categoryName: customerCategoryName(item),
+      tasteLabels: [...new Set((Array.isArray((item.recommendation || {}).tasteTags) ? item.recommendation.tasteTags : []).map(tag => ({ refreshing: '清爽', layered: '层次丰富', strong: '浓郁' })[tag]).filter(Boolean))],
       priceText: money(item.amountMinor),
       includedText: (item.bundleComponents || []).map((line) => `${line.name || '组合内容'}×${line.quantity || 1}`).join(' · '),
       imageUrl: publicImageUrl(item.imageUrl),
@@ -436,6 +441,7 @@ function sharedCartView(sharedCart, products) {
       unavailableReason: available && Boolean(product && product.available)
         ? '' : cartUnavailableReason(line.unavailableReason, product),
       bundleSelections:Array.isArray(line.bundleSelections)?line.bundleSelections:[],
+      portionIds:Array.isArray(line.portionIds)?line.portionIds:[],
       selectionSummary:bundleSelectionSummary(product,line.bundleSelections),
       selectionUnits:bundleSelectionUnits(product,line.bundleSelections),
     }
@@ -481,8 +487,24 @@ function applyBundleUnitSelection(product,unit){
   return Object.assign(selected,selectedBundleValuePresentation(selected))
 }
 
+const { initialCheckoutCoupons, checkoutCouponMethods } = require('../../utils/checkout-coupons')
+const { initialCheckoutUpgrade, checkoutUpgradeMethods } = require('../../utils/checkout-upgrade')
+const checkoutUpgradeActions = checkoutUpgradeMethods({ prepare: prepareSharedCartUpgrade, decide: decideSharedCartUpgrade, randomId, scope: tableSessionCacheScope, money })
+const checkoutCouponActions = checkoutCouponMethods({ getWallet: getCustomerBenefitWallet, quote: quoteSharedCartCoupons, money, randomId, scope: tableSessionCacheScope, errorMessage: customerErrorMessage })
 Page({
+  ...checkoutUpgradeActions,
+  acceptCheckoutUpgrade() { return checkoutUpgradeActions.acceptCheckoutUpgrade.call(this) },
+  declineCheckoutUpgrade() { return checkoutUpgradeActions.declineCheckoutUpgrade.call(this) },
+  chooseCheckoutUpgradeVariant(event) { return checkoutUpgradeActions.chooseCheckoutUpgradeVariant.call(this, event) },
+  ...checkoutCouponActions,
+  openCheckoutCoupons() { return checkoutCouponActions.openCheckoutCoupons.call(this) },
+  loadMoreCheckoutCoupons() { return checkoutCouponActions.loadMoreCheckoutCoupons.call(this) },
+  chooseCheckoutCoupon(event) { return checkoutCouponActions.chooseCheckoutCoupon.call(this, event) },
+  quoteCheckoutCoupons() { return checkoutCouponActions.quoteCheckoutCoupons.call(this) },
+  skipCheckoutCoupons() { return checkoutCouponActions.skipCheckoutCoupons.call(this) },
   data: {
+    ...initialCheckoutCoupons,
+    ...initialCheckoutUpgrade,
     loading: true,
     browseOnly: false,
     browseCatalogLoaded: false,
@@ -503,6 +525,9 @@ Page({
     detailInformationExpanded: false,
     detailSelectionsComplete: true,
     detailEditUnitIndex: -1,
+    detailEditPortionId: '',
+    detailEditGeneration: null,
+    detailEditVersion: null,
     categories: [{ code: 'all', name: '全部' }],
     selectedCategory: 'all',
     subcategories: [],
@@ -521,6 +546,7 @@ Page({
     recommendationQuestion: null,
     recommendationAnswers: {},
     cart: [],
+    checkoutNote: '',
     cartVersion: 0,
     cartGeneration: 0,
     cartWritesFrozen: false,
@@ -560,12 +586,14 @@ Page({
     })
   },
   onHide() {
+    this.invalidateCheckoutCoupons(true, this.data.couponSelections.length > 0)
     const record = this.queuePendingGuestPaymentAbandonment()
     if (record) void this.executePendingGuestPaymentAbandonment(record)
     this.invalidateTableRequests()
     this.stopWaitingPoll(); this.stopSharedCartPolling(); this.stopServicePolling(); this.stopShakeRecommendation()
   },
   onUnload() {
+    this.invalidateCheckoutCoupons(true, false)
     const record = this.queuePendingGuestPaymentAbandonment()
     if (record) void this.executePendingGuestPaymentAbandonment(record)
     this.invalidateTableRequests()
@@ -637,7 +665,11 @@ Page({
       // Network/unknown outcomes retain the exact same key for a later retry;
       // the server worker separately reconciles the financial rail.
       if (error && ['GUEST_CHECKOUT_ALREADY_PAID', 'GUEST_CHECKOUT_NOT_FOUND', 'GUEST_ORDER_ACCESS_FORBIDDEN'].includes(error.code)) {
-        wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
+        const currentRecord = wx.getStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
+        if (currentRecord && currentRecord.idempotencyKey === record.idempotencyKey
+          && currentRecord.tableScope === record.tableScope) {
+          wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
+        }
         const pendingPayment = wx.getStorageSync(PENDING_PAYMENT_KEY)
         if (pendingPayment && pendingPayment.tableScope === record.tableScope
           && pendingPayment.orderPublicId === record.orderPublicId) {
@@ -1095,7 +1127,7 @@ Page({
         || category.topCode === this.data.selectedCategory
       const subcategoryMatches = this.data.selectedSubcategory === 'all'
         || category.childCode === this.data.selectedSubcategory
-      const searchable = [item.name, item.description, item.includedText].concat(item.aliases || []).join(' ').toLowerCase()
+      const searchable = [item.name, item.description, item.includedText].concat(item.aliases || [], item.tasteLabels || []).join(' ').toLowerCase()
       return topCategoryMatches && subcategoryMatches && (!search || searchable.includes(search))
     })
     this.setData({ visibleProducts })
@@ -1339,6 +1371,8 @@ Page({
       (group.options||[]).filter((option)=>option.selected).length===Number(group.selectionCount))
     this.setData({ detailProduct:Object.assign(detailProduct,{ selectionSource:'cart_edit' }),
       detailSelectionsComplete:complete,detailEditUnitIndex:unitIndex,
+      detailEditPortionId:(line.portionIds||[])[unitIndex]||'',
+      detailEditGeneration:this.data.cartGeneration,detailEditVersion:this.data.cartVersion,
       checkoutConfirmVisible:false,cartExpanded:false })
   },
 
@@ -1350,8 +1384,8 @@ Page({
     this.setData({ cartSyncing:true,error:'' })
     try{
       const sharedCart=await replaceSharedCartBundleSelection(
-        productId,unitIndex,bundleSelection,this.data.cartGeneration,this.data.cartVersion,
-        randomId('shared-cart-choice'),
+        productId,unitIndex,bundleSelection,this.data.detailEditGeneration,this.data.detailEditVersion,
+        randomId('shared-cart-choice'),this.data.detailEditPortionId,
       )
       if(!writeGuard.isCurrentWrite(write))return false
       this.updateCart(sharedCartView(sharedCart,this.data.products),sharedCart)
@@ -1492,7 +1526,38 @@ Page({
     }
   },
 
+  onCheckoutNoteInput(event) {
+    if (this.data.busy || this.data.checkoutLocked) return
+    this.setData({ checkoutNote: String(event.detail.value || '').slice(0, 500) })
+  },
+  onLineNoteInput(event) {
+    if (this.data.busy || this.data.checkoutLocked || this.data.cartWritesFrozen) return
+    const portionId = event.currentTarget.dataset.portion
+    if (!this.data.cart.some(line => (line.portionIds || []).includes(portionId))) return
+    this.checkoutLineNotes = Object.assign({}, this.checkoutLineNotes, { [portionId]: String(event.detail.value || '').slice(0, 300) })
+    this.setData({ cart: this.data.cart.map(line => Object.assign({}, line, {
+      noteUnits: (line.noteUnits || []).map(unit => unit.portionId === portionId ? Object.assign({}, unit, { note: this.checkoutLineNotes[portionId] }) : unit),
+    })) })
+  },
   updateCart(cart, sharedCart) {
+    const couponScope = tableSessionCacheScope()
+    const noteScope = couponScope + ':' + (sharedCart ? sharedCart.generation : this.data.cartGeneration)
+    if (noteScope !== this.checkoutNoteScope || !cart.length) {
+      this.checkoutNoteScope = noteScope
+      this.checkoutLineNotes = {}
+      this.setData({ checkoutNote: '' })
+    }
+    const retainedNotes = {}
+    cart = cart.map(line => Object.assign({}, line, { noteUnits: (line.portionIds || []).map((portionId, index) => {
+      const note = (this.checkoutLineNotes || {})[portionId] || ''
+      if (note) retainedNotes[portionId] = note
+      return { portionId, label: line.quantity > 1 ? '第' + (index + 1) + '份备注' : '菜品备注', note }
+    }) }))
+    this.checkoutLineNotes = retainedNotes
+    if (this.checkoutCouponScope !== couponScope || (sharedCart && (Number(sharedCart.version) !== this.data.cartVersion || Number(sharedCart.generation) !== this.data.cartGeneration))) {
+      this.invalidateCheckoutCoupons(this.checkoutCouponScope !== couponScope, this.data.couponSelections.length > 0 || this.data.couponNeedsReview)
+      this.checkoutCouponScope = couponScope
+    }
     const serverTotal = sharedCart && Number(sharedCart.totalAmountMinor)
     const total = Number.isSafeInteger(serverTotal) && serverTotal >= 0
       ? serverTotal
@@ -1639,30 +1704,17 @@ Page({
   openCartDetails() {
     if (!this.data.cart.length) return
     this.setData({ checkoutConfirmVisible: true, cartExpanded: false, error: '' })
+    this.loadCheckoutUpgrade()
   },
 
   async handlePendingPaymentBeforeCheckout() {
     const pending = this.data.pendingPayment
-    if (!pending) return false
-    // Legacy versions kept a cancelled JSAPI attempt in local storage and
-    // blocked every following checkout.  A pending final-sheet exit now gets
-    // abandoned on the server and never blocks a fresh cart.  A WeChat
-    // success callback remains a protected reconciliation case, but it still
-    // does not stop the customer from adding a later, separate order.
-    if (pending.orderPublicId) {
-      const record = this.queuePendingGuestPaymentAbandonment(pending)
-      if (record) {
-        const result = await this.executePendingGuestPaymentAbandonment(record)
-        if ((result && result.operationalState === 'cancelled')
-          || (!this.data.pendingPayment && !wx.getStorageSync(PENDING_PAYMENT_KEY))) return false
-        // A fresh order must never race an unverified earlier WeChat rail.
-        // This is a short recovery state, not a retained payable order: the
-        // customer can keep browsing, and retrying here reuses the same safe
-        // cancellation key rather than starting a second charge.
-        this.setData({ error: '正在结束上一笔付款，请稍后再确认支付。' })
-        return true
-      }
-    }
+    if (!pending || !pending.orderPublicId) return false
+    // A previous order's financial recovery is independent of this new cart.
+    // Persist its original cancellation key, but never await an unavailable
+    // rail here or erase its receivable/unknown result to make checkout work.
+    const record = this.queuePendingGuestPaymentAbandonment(pending)
+    if (record) void this.executePendingGuestPaymentAbandonment(record)
     return false
   },
 
@@ -1681,14 +1733,19 @@ Page({
       return
     }
     this.setData({ checkoutConfirmVisible: true, cartExpanded: false, error: '' })
+    this.loadCheckoutUpgrade()
   },
 
   closeCheckoutConfirm() {
     if (this.data.busy) return
-    this.setData({ checkoutConfirmVisible: false })
+    this.invalidateCheckoutUpgrade()
+    this.checkoutCouponEpoch = (this.checkoutCouponEpoch || 0) + 1
+    this.setData({ checkoutConfirmVisible: false, couponLoading: false })
   },
 
   async confirmCheckout() {
+    if (!await this.checkoutUpgradeReady()) return
+    if (!this.couponCheckoutReady()) return
     if (!this.data.checkoutConfirmVisible || !this.data.cart.length || this.data.busy) return
     const tableRequest = this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
@@ -1705,6 +1762,7 @@ Page({
     // payment. Subscription prompts belong to the earlier selection action;
     // putting one here would create an unexpected third checkout step.
     this.setData({ busy: true, error: '', checkoutConfirmVisible: false })
+    this.invalidateCheckoutUpgrade()
     try {
       await this.submitOrder(null, true, null, tableRequest)
     } catch (error) { if (this.isCurrentTableRequest(tableRequest)) this.setData({ error: customerErrorMessage(error, '订单暂时无法提交，请稍后重试。') }) }
@@ -1734,10 +1792,13 @@ Page({
       this.data.recommendationAttribution,
     )
     const attempt = previousAttempt || {
+      note: this.data.checkoutNote || '',
+      lineNotes: Object.entries(this.checkoutLineNotes || {}).filter(([, note]) => note.trim()).map(([portionId, note]) => ({ portionId, note: note.trim() })),
       idempotencyKey: randomId('guest-order'),
       expectedGeneration: this.data.cartGeneration,
       expectedVersion: this.data.cartVersion,
       offerPublicId: offerPublicId || null,
+      couponQuoteId: this.data.couponQuote && this.data.couponQuote.id || null,
       recommendationPublicId: currentAttribution ? currentAttribution.recommendationPublicId : null,
       selectedRecommendationProductId: currentAttribution ? currentAttribution.selectedProductId : null,
       tableScope: tableSessionCacheScope(),
@@ -1757,9 +1818,12 @@ Page({
         selectedProductId: attempt.selectedRecommendationProductId,
       })
       const result = await checkoutSharedCart({
+        note: attempt.note || '',
+        lineNotes: attempt.lineNotes || [],
         expectedGeneration: attempt.expectedGeneration,
         expectedVersion: attempt.expectedVersion,
         checkoutUpgradeOfferPublicId: attempt.offerPublicId,
+        ...(attempt.couponQuoteId ? { couponQuoteId: attempt.couponQuoteId } : {}),
         recommendationAttribution: attemptAttribution,
       }, attempt.idempotencyKey)
       if (!this.isCurrentTableRequest(tableRequest)) return
@@ -1790,6 +1854,13 @@ Page({
           error: '同桌购物车已经更新，原结账请求没有提交。请确认最新商品后再结账。',
           checkoutLocked: false,
         })
+        return
+      }
+      if (error && (error.code === 'CHECKOUT_COUPON_RECONFIRM_REQUIRED' || error.code === 'COUPON_UPGRADE_REQUOTE_REQUIRED')) {
+        wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
+        this.invalidateCheckoutCoupons(false, true)
+        this.setData({ checkoutLocked: false, checkoutConfirmVisible: true, couponPickerOpen: false,
+          error: '优惠条件已变化，本次没有创建订单。请重新选券或不用券继续。' })
         return
       }
       if (String(error && error.code || '').startsWith('CHECKOUT_UPGRADE_')) {

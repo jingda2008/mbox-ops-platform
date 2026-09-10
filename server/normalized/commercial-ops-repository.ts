@@ -632,7 +632,7 @@ export class CommercialOpsRepository {
         order_row.table_session_id, session.table_id,
         order_row.created_by_employee_id AS order_created_by_employee_id,
         COALESCE(order_row.submitted_at, order_row.created_at)::text AS order_created_at,
-        session.business_date::text, order_row.payment_status,
+        order_row.business_date::text, order_row.payment_status,
         order_row.status AS order_status, item.product_id, item.quantity,
         item.total_amount_minor::text, item.currency, product.code AS product_code,
         product.name AS product_name, product.category_code,

@@ -1,4 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { checkoutLinesWithNotes, type CheckoutLineNote } from './checkout-line-notes.js'
+import {CheckoutCouponQuoteRepository} from './checkout-coupon-quote-repository.js'
+import {CheckoutUpgradeCandidateRepository} from './checkout-upgrade-candidate-repository.js'
+import {CheckoutUpgradeOpportunityRepository} from './checkout-upgrade-opportunity-repository.js'
+import {CheckoutCartPricingError} from './checkout-cart-pricing.js'
+import {CouponCalendarError} from './coupon-calendar.js'
+import {StackingPricingError} from './stacking-pricing.js'
+import {PricingAuthorizationDeniedError} from './pricing-authorization-policy.js'
+import {BenefitUnavailableError,BenefitOwnershipError} from './benefit-repository.js'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type {
   AuditActor,
@@ -380,6 +389,68 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
     return reply.send({ data: publicSharedCart(cart) })
   }))
 
+  app.post('/guest/shared-cart/upgrade-opportunity',async(request,reply)=>handleRoute(reply,async()=>{
+    const context=await requireTableContext(options,request,'guest.order.create')
+    const body=readStrictObject(request.body,'升级推荐请求',['expectedGeneration','expectedVersion','occasion','alcoholPreference','selections'])
+    const expectedGeneration=readInteger(body.expectedGeneration,'expectedGeneration',1,2_147_483_647),expectedVersion=readInteger(body.expectedVersion,'expectedVersion',0,2_147_483_647)
+    const occasion=readOptionalString(body.occasion,'occasion',120)??null,alcoholPreference=readOptionalString(body.alcoholPreference,'alcoholPreference',120)??null
+    const rawSelections=body.selections??[]
+    if(!Array.isArray(rawSelections)||rawSelections.length>10)throw new GuestApiRequestError('COUPON_SELECTION_INVALID','最多选择10份券权益')
+    const selections=rawSelections.map(raw=>{const value=readStrictObject(raw,'用券份次',['benefitId','portionId']);return{benefitId:readUuid(value.benefitId,'benefitId'),portionId:readUuid(value.portionId,'portionId')}})
+    const requestKey=readIdempotencyKey(request)
+    let preparationReason='unreported'
+    const opportunity=await options.transactions.run(context.scope,async tx=>{
+      await tx.query("SET LOCAL lock_timeout='150ms'")
+      await tx.query("SET LOCAL statement_timeout='500ms'")
+      if(!await lockBoundGuestTablePosition(tx,context))throw new GuestAuthenticationRequiredError()
+      return new CheckoutUpgradeCandidateRepository(tx,reason=>{preparationReason=reason}).prepare({customerId:context.customerId,tableSessionId:context.tableSessionId,expectedGeneration,expectedVersion,occasion,alcoholPreference,selections,requestKey})
+    })
+    try{request.log.info({event:'checkout_upgrade_preparation',reason:preparationReason},'Checkout upgrade preparation decision')}catch{/* Logging is not a checkout dependency. */}
+    reply.header('cache-control','no-store')
+    return{data:opportunity}
+  }))
+
+  app.post<{Params:{opportunityId:string}}>('/guest/shared-cart/upgrade-opportunity/:opportunityId',async(request,reply)=>handleRoute(reply,async()=>{
+    const context=await requireTableContext(options,request,'guest.order.create'),id=readUuid(request.params.opportunityId,'opportunityId')
+    const body=readStrictObject(request.body,'升级决定',['action','variantId'])
+    if(body.action!=='accept'&&body.action!=='decline')throw new GuestApiRequestError('UPGRADE_ACTION_INVALID','请明确接受升级或保留原订单')
+    const action=body.action
+    const variantId=body.variantId===undefined?undefined:readUuid(body.variantId,'variantId')
+    if(action==='decline'&&variantId)throw new GuestApiRequestError('UPGRADE_ACTION_INVALID','保留原单无需选择升级菜品')
+    try{
+      const result=await options.transactions.run(context.scope,async tx=>{
+        await tx.query("SET LOCAL lock_timeout='150ms'")
+        await tx.query("SET LOCAL statement_timeout='1500ms'")
+        if(!await lockBoundGuestTablePosition(tx,context))throw new GuestAuthenticationRequiredError()
+        const repository=new CheckoutUpgradeOpportunityRepository(tx)
+        if(action==='decline')return{opportunity:await repository.decline(id,context.customerId,context.tableSessionId),cart:null,replayed:false}
+        return repository.accept(id,{customerId:context.customerId,tableSessionId:context.tableSessionId,actorSessionRef:context.actorRef,...(variantId?{variantId}:{})})
+      })
+      reply.header('cache-control','no-store')
+      return{data:{opportunity:result.opportunity,cart:result.cart?publicSharedCart(result.cart):null,replayed:result.replayed}}
+    }catch(error){
+      if(error instanceof CheckoutCartPricingError)throw new GuestApiRequestError('CHECKOUT_UPGRADE_RECONFIRM_REQUIRED',error.message,409)
+      throw error
+    }
+  }))
+
+  app.post('/guest/shared-cart/coupon-quote',async(request,reply)=>handleRoute(reply,async()=>{
+    const context=await requireTableContext(options,request,'guest.order.create')
+    const body=readStrictObject(request.body,'券报价请求',['expectedGeneration','expectedVersion','selections'])
+    if(!Array.isArray(body.selections)||body.selections.length<1||body.selections.length>10)throw new GuestApiRequestError('COUPON_SELECTION_INVALID','请选择1至10份券权益')
+    const selections=body.selections.map(raw=>{const selection=readStrictObject(raw,'用券份次',['benefitId','portionId']);return{benefitId:readUuid(selection.benefitId,'benefitId'),portionId:readUuid(selection.portionId,'portionId')}})
+    const expectedGeneration=readInteger(body.expectedGeneration,'expectedGeneration',1,2_147_483_647),expectedVersion=readInteger(body.expectedVersion,'expectedVersion',0,2_147_483_647)
+    const requestKey=readIdempotencyKey(request)
+    await recordSharedCartWriteAttempt(options,context,requestKey,'checkout')
+    const quote=await options.transactions.run(context.scope,async tx=>{
+      if(!await lockBoundGuestTablePosition(tx,context))throw new GuestAuthenticationRequiredError()
+      return new CheckoutCouponQuoteRepository(tx).prepare({customerId:context.customerId,tableSessionId:context.tableSessionId,expectedGeneration,expectedVersion,selections,requestKey})
+    })
+    reply.header('cache-control','no-store')
+    return{data:{id:quote.id,generation:quote.generation,version:quote.version,current:quote.current,expiresAt:quote.expiresAt,currency:quote.currency,subtotalMinor:quote.subtotalMinor,discountMinor:quote.discountMinor,payableMinor:quote.payableMinor,couponsReserved:false,
+      lines:quote.lines.map(line=>({portionId:line.portionId,productId:line.productId,benefitId:line.benefitId,standardMinor:line.standardMinor,discountMinor:line.discountMinor,payableMinor:line.standardMinor-line.discountMinor}))}}
+  }))
+
   app.post('/guest/shared-cart/checkout', async (request, reply) => handleRoute(reply, async () => {
     const context = await requireTableContext(options, request, 'guest.order.create')
     const paymentMode = await effectivePaymentMode(options, context.scope, request)
@@ -407,15 +478,21 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
         expectedGeneration: input.expectedGeneration,
         expectedVersion: input.expectedVersion,
         note: input.note,
+        ...(input.lineNotes.length ? { lineNotes: input.lineNotes } : {}),
         confirmedDuplicateOrderId: input.confirmedDuplicateOrderId,
         checkoutUpgradeOfferPublicId: input.checkoutUpgradeOfferPublicId,
         recommendationPublicId: input.recommendationPublicId,
         selectedRecommendationProductId: input.selectedRecommendationProductId,
+        ...(input.couponQuoteId?{couponQuoteId:input.couponQuoteId}:{}),
       }),
       resultCodec: sharedCartCheckoutCodec,
     }, async (transaction) => {
       if (!await lockBoundGuestTablePosition(transaction, context)) throw new GuestAuthenticationRequiredError()
       await requireGuestCartProtocol(transaction, context.tableSessionId, 2)
+      if(input.couponQuoteId){
+        const quote=await new CheckoutCouponQuoteRepository(transaction).find(input.couponQuoteId,context.customerId)
+        if(!quote.current||quote.tableSessionId!==context.tableSessionId||quote.generation!==input.expectedGeneration||quote.version!==input.expectedVersion)throw new CheckoutCartPricingError('优惠报价已失效，请重新选择优惠或按原价提交')
+      }
       const repository = new GuestSharedCartRepository(transaction)
       const cart = await repository.beginCheckout(context.tableSessionId, createSharedCartPublicId(), {
         expectedGeneration: input.expectedGeneration,
@@ -423,6 +500,9 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
         operationId: idempotencyKey,
         actorSessionRef: context.actorRef,
       })
+      let checkoutLines
+      try { checkoutLines = checkoutLinesWithNotes(cart.lines, input.lineNotes, Boolean(input.couponQuoteId)) }
+      catch { throw new GuestApiRequestError('CART_NOTE_STALE', '菜品备注对应的份次已变化，请刷新购物车后重新核对', 409) }
       const orderOutcome = await submitOrderInTransaction(transaction, {
         scope: context.scope,
         actor: guestActor(context),
@@ -432,7 +512,8 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
         publicId: createPublicId('order', `${context.scope.storeId}:${idempotencyKey}`),
         channel: 'guest_qr',
         settlementMode: 'immediate_payment',
-        lines: cart.lines,
+        lines: checkoutLines,
+        ...(input.couponQuoteId?{pricingAuthorization:{sourceType:'checkout_quote' as const,sourceId:input.couponQuoteId}}:{}),
         note: input.note,
         createdByCustomerId: context.customerId,
         confirmedDuplicateOrderPublicId: input.confirmedDuplicateOrderId,
@@ -1893,6 +1974,7 @@ function publicSharedCart(cart: GuestSharedCart) {
     lines: cart.lines.map((line) => ({
       productId: line.productId,
       quantity: line.quantity,
+      portionIds: [...(line.portionIds??[])],
       name: line.name,
       unitPriceMinor: line.unitPriceMinor,
       subtotalAmountMinor: line.subtotalAmountMinor,
@@ -2183,8 +2265,8 @@ function readGuestOrder(value: unknown): {
     'checkoutUpgradeOfferPublicId',
     128,
   )
-  if (checkoutUpgradeOfferPublicId !== null && checkoutUpgradeOfferPublicId.length < 8) {
-    throw new GuestApiRequestError('CHECKOUT_UPGRADE_INVALID', '付款前升级编号无效')
+  if (checkoutUpgradeOfferPublicId !== null) {
+    throw new GuestApiRequestError('CHECKOUT_UPGRADE_RECONFIRM_REQUIRED', '旧版升级建议已失效，请刷新购物车核对具体菜品后重新确认；尚未发起付款', 409)
   }
   const recommendationPublicId = readOptionalString(
     body.recommendationPublicId,
@@ -2269,10 +2351,11 @@ function readSharedCartClear(value: unknown): {
 function readSharedCartBundleSelectionReplacement(value:unknown):{
   expectedGeneration:number
   expectedVersion:number
+  portionId?:string
   bundleSelection:ReturnType<typeof readBundleSelections>[number]
 }{
   const body=readStrictObject(value,'修改套餐选择请求',[
-    'expectedGeneration','expectedVersion','bundleSelection',
+    'expectedGeneration','expectedVersion','bundleSelection','portionId',
   ])
   const bundleSelection=readBundleSelections(
     body.bundleSelection===undefined?undefined:[body.bundleSelection],
@@ -2285,10 +2368,13 @@ function readSharedCartBundleSelectionReplacement(value:unknown):{
     expectedGeneration:readInteger(body.expectedGeneration,'expectedGeneration',1,2_147_483_647),
     expectedVersion:readInteger(body.expectedVersion,'expectedVersion',0,2_147_483_647),
     bundleSelection,
+    ...(body.portionId===undefined?{}:{portionId:readUuid(body.portionId,'portionId')}),
   }
 }
 
 function readSharedCartCheckout(value: unknown): {
+  lineNotes: CheckoutLineNote[]
+  couponQuoteId:string|null
   expectedGeneration: number
   expectedVersion: number
   note: string | null
@@ -2298,6 +2384,8 @@ function readSharedCartCheckout(value: unknown): {
   selectedRecommendationProductId: string | null
 } {
   const body = readStrictObject(value, '共享购物车结账请求', [
+    'lineNotes',
+    'couponQuoteId',
     'expectedGeneration', 'expectedVersion', 'note', 'confirmedDuplicateOrderId', 'checkoutUpgradeOfferPublicId',
     'recommendationPublicId', 'selectedRecommendationProductId',
   ])
@@ -2310,9 +2398,11 @@ function readSharedCartCheckout(value: unknown): {
   const checkoutUpgradeOfferPublicId = readOptionalString(
     body.checkoutUpgradeOfferPublicId, 'checkoutUpgradeOfferPublicId', 128,
   )
-  if (checkoutUpgradeOfferPublicId !== null && checkoutUpgradeOfferPublicId.length < 8) {
-    throw new GuestApiRequestError('CHECKOUT_UPGRADE_INVALID', '付款前升级编号无效')
+  if (checkoutUpgradeOfferPublicId !== null) {
+    throw new GuestApiRequestError('CHECKOUT_UPGRADE_RECONFIRM_REQUIRED', '旧版升级建议已失效，请刷新购物车核对具体菜品后重新确认；尚未发起付款', 409)
   }
+  const couponQuoteId=body.couponQuoteId===undefined||body.couponQuoteId===null?null:readUuid(body.couponQuoteId,'couponQuoteId')
+  if(couponQuoteId&&checkoutUpgradeOfferPublicId)throw new GuestApiRequestError('COUPON_UPGRADE_REQUOTE_REQUIRED','请先确认套餐选择再重新获取券报价，不能把原套餐报价用于另一款套餐')
   const recommendationPublicId = readOptionalString(
     body.recommendationPublicId, 'recommendationPublicId', 128,
   )
@@ -2329,14 +2419,29 @@ function readSharedCartCheckout(value: unknown): {
     )
   }
   return {
+    lineNotes: readCheckoutLineNotes(body.lineNotes),
     expectedGeneration: readInteger(body.expectedGeneration, 'expectedGeneration', 1, 2_147_483_647),
     expectedVersion: readInteger(body.expectedVersion, 'expectedVersion', 0, 2_147_483_647),
     note: readOptionalString(body.note, 'note', 500),
     confirmedDuplicateOrderId,
+    couponQuoteId,
     checkoutUpgradeOfferPublicId,
     recommendationPublicId,
     selectedRecommendationProductId,
   }
+}
+
+function readCheckoutLineNotes(value: unknown): CheckoutLineNote[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length > 100) throw new GuestApiRequestError('CART_NOTE_INVALID', '菜品备注数量无效')
+  const seen = new Set<string>()
+  return value.map(raw => {
+    const entry = readStrictObject(raw, '菜品备注', ['portionId', 'note'])
+    const portionId = readUuid(entry.portionId, 'portionId')
+    if (seen.has(portionId)) throw new GuestApiRequestError('CART_NOTE_INVALID', '同一份菜品不能重复填写备注')
+    seen.add(portionId)
+    return { portionId, note: readOptionalString(entry.note, 'note', 300) || '' }
+  })
 }
 
 function readServiceRequest(value: unknown): {
@@ -2465,6 +2570,9 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<unknown
   try {
     return await operation()
   } catch (error) {
+    if(error instanceof CheckoutCartPricingError||error instanceof CouponCalendarError||error instanceof StackingPricingError||error instanceof PricingAuthorizationDeniedError||error instanceof BenefitUnavailableError||error instanceof BenefitOwnershipError){
+      return reply.code(409).send({error:{code:'CHECKOUT_COUPON_RECONFIRM_REQUIRED',message:error instanceof BenefitOwnershipError?'优惠券不属于当前会员，请重新选择':error.message}})
+    }
     if (error instanceof GuestApiRequestError) {
       return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message } })
     }

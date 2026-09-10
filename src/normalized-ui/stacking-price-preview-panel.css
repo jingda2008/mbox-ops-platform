@@ -1,0 +1,16 @@
+.stacking-preview{margin:16px 0;padding:16px;border:1px solid #d6ddd6;border-radius:12px;background:#fff;min-width:0;overflow-wrap:anywhere}
+.stacking-preview summary{cursor:pointer;font-weight:650;min-height:44px}
+.stacking-preview p{font-size:13px;line-height:1.6;color:#586057}
+.stacking-preview-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr));gap:12px;margin:12px 0}
+.stacking-preview-grid label{display:flex;flex-direction:column;gap:6px;min-width:0;font-size:13px}
+.stacking-preview select,.stacking-preview-grid input{width:100%;min-width:0;min-height:44px;box-sizing:border-box}
+.stacking-preview fieldset{min-width:0;border:1px solid #d6ddd6;border-radius:8px}
+.stacking-preview-switches{display:flex;flex-wrap:wrap;gap:8px 20px}
+.stacking-preview-switches label{display:flex;align-items:center;gap:6px;min-height:44px}
+.stacking-preview button{min-height:44px;padding:8px 16px;border:1px solid #315b46;border-radius:8px;background:#315b46;color:#fff}
+.stacking-preview button:disabled{opacity:.65}
+.stacking-preview li{font-size:13px;line-height:1.8}
+.coupon-calendar-days { list-style: none; padding: 0; display: grid; gap: 6px; }
+.coupon-calendar-days li { display: flex; flex-wrap: wrap; gap: 6px 12px; padding: 8px 0; border-bottom: 1px solid #deded5; }
+.coupon-calendar-days span { min-width: 0; overflow-wrap: anywhere; }
+.coupon-calendar-preview textarea { width: 100%; box-sizing: border-box; min-height: 72px; resize: vertical; }

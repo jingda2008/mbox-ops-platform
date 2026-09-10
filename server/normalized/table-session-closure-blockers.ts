@@ -128,7 +128,8 @@ export async function readTableSessionClosureState(
       WHERE ordering.payment_status IN ('unpaid','pending','partially_paid')
     ) SELECT
       (SELECT count(*)::text FROM scoped_orders ordering
-        WHERE NOT ((ordering.status<>'cancelled'
+        WHERE NOT ((ordering.status NOT IN ('draft','cancelled') AND ordering.total_amount_minor=0)
+          OR (ordering.status<>'cancelled'
             AND ordering.payment_status IN ('paid','partially_refunded','refunded'))
           OR (ordering.status='cancelled' AND ordering.payment_status='refunded')
           OR (ordering.status='cancelled' AND NOT EXISTS (

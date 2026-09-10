@@ -89,6 +89,29 @@ const apps: FastifyInstance[] = []
 afterEach(async () => Promise.all(apps.splice(0).map((app) => app.close())))
 
 describe('customerBenefitApiPlugin privacy and permission boundaries', () => {
+  it('lists future and historical wallet states without leaking internal benefit fields', async () => {
+    const { app } = fixture()
+    const response = await app.inject({ method: 'GET', url: '/api/public/mini/customer/benefit-wallet' })
+    expect(response.statusCode).toBe(200)
+    expect(response.headers['cache-control']).toContain('no-store')
+    expect(response.json().data.items.map((item: { state: string }) => item.state)).toEqual(['available', 'upcoming', 'revoked'])
+    expect(response.json().data.nextCursor).toBeNull()
+    expect(response.body).not.toContain('never-public')
+    expect(response.body).not.toContain(employeeId)
+  })
+
+  it.each(['limit=0', 'limit=51', 'limit=no', 'cursor=invalid', 'cursor=2026-02-30T00%3A00%3A00Z%7C66666666-6666-4666-8666-666666666666'])('rejects malformed wallet pagination: %s', async (query) => {
+    const { app } = fixture()
+    const response = await app.inject({ method: 'GET', url: `/api/public/mini/customer/benefit-wallet?${query}` })
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('requires authenticated self context for the complete wallet', async () => {
+    const { app } = fixture({ resolveSelfContext: async () => { throw new GuestAuthenticationRequiredError() } })
+    const response = await app.inject({ method: 'GET', url: '/api/public/mini/customer/benefit-wallet' })
+    expect(response.statusCode).toBe(401)
+  })
+
   it('returns a scannable daily-snack claim code without treating the QR as authorization', async () => {
     const claim = vi.fn(async () => ({ replayed: false, value: {
       id: 'daily-snack-claim-1', claimCode: 'DSN-ABCDEFGHIJ', benefitId,
@@ -335,6 +358,16 @@ describe('customerBenefitApiPlugin privacy and permission boundaries', () => {
   })
 })
 
+it('requires authenticated self identity for paid history and never accepts another customer query as authority', async () => {
+  const unauthenticated = fixture({ resolveSelfContext: async () => { throw new GuestAuthenticationRequiredError() } })
+  expect((await unauthenticated.app.inject({ method: 'GET', url: '/api/public/mini/customer/orders' })).statusCode).toBe(401)
+  const value = fixture()
+  const response = await value.app.inject({ method: 'GET', url: '/api/public/mini/customer/orders?customerId=someone-else' })
+  expect(response.statusCode).toBe(200)
+  expect(response.headers['cache-control']).toContain('no-store')
+  expect(response.json()).toEqual({ data: [], meta: { count: 0, limit: 30, scope: 'own_paid_orders' } })
+})
+
 function fixture(overrides: Partial<CustomerBenefitApiOptions> = {}) {
   const transaction = {
     scope: { tenantId, storeId },
@@ -379,6 +412,10 @@ function fixture(overrides: Partial<CustomerBenefitApiOptions> = {}) {
     } as unknown as ReturnType<NonNullable<CustomerBenefitApiOptions['createCustomerRepository']>>),
     createBenefitRepository: () => ({
       listAvailableForCustomer: vi.fn(async () => [benefit]),
+      listWalletForCustomer: vi.fn(async () => ({ items: [benefit,
+        { ...benefit, id: 'future', validFrom: '2026-09-01T00:00:00Z' },
+        { ...benefit, id: 'revoked', status: 'revoked' },
+      ], nextCursor: null })),
     } as unknown as ReturnType<NonNullable<CustomerBenefitApiOptions['createBenefitRepository']>>),
     createStaffAccessRepository: () => ({ assertPermission: vi.fn(async () => ({} as never)) }),
     now: () => new Date('2026-08-11T12:00:00.000Z'),

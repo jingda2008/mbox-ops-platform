@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto'
+import { notificationLocalTime as providerTime } from './notification-local-time.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction, StoreScope } from './transaction-runner.js'
 import { LoyaltyOperationalControlRepository } from './loyalty-operational-control-repository.js'
 import type { WechatMiniProgramNotificationRecipientResolver, WechatSubscriptionDeliveryResult } from './wechat-loyalty-notification-worker.js'
 import type { WechatTemplateMessageDelivery } from './wechat-subscription-message-adapter.js'
+import {CouponCalendarRepository} from './coupon-calendar-repository.js'
 
 interface ClaimedRow extends Record<string,unknown> {
   id:string;customer_id:string;identity_external_id:string;template_id:string;page_path:string
@@ -11,6 +13,7 @@ interface ClaimedRow extends Record<string,unknown> {
 }
 export interface WechatMemberServiceNotificationBatch {
   workerId:string;paused:boolean;claimed:number;accepted:string[];rejected:string[];unknown:string[]
+  recoveredUnknown:string[]
 }
 
 export class WechatMemberServiceNotificationWorker {
@@ -22,26 +25,81 @@ export class WechatMemberServiceNotificationWorker {
 
   async runBatch(scope:Readonly<StoreScope>,workerId:string,batchSize=50):Promise<WechatMemberServiceNotificationBatch>{
     validateWorker(workerId,batchSize)
+    const recoveredUnknown=await recoverAbandoned(this.transactions,scope,batchSize)
     const initiallyPaused=await this.transactions.run(scope,async(transaction)=>(
       (await new LoyaltyOperationalControlRepository(transaction).state('wechat_notification')).state==='paused'
     ),{readOnly:true})
-    if(initiallyPaused)return {workerId,paused:true,claimed:0,accepted:[],rejected:[],unknown:[]}
-    await this.delivery.preflight?.()
-    const claimed=await this.transactions.run(scope,(transaction)=>claim(transaction,workerId,batchSize))
-    const batch:WechatMemberServiceNotificationBatch={workerId,paused:claimed.paused,claimed:claimed.jobs.length,accepted:[],rejected:[],unknown:[]}
+    if(initiallyPaused)return {workerId,paused:true,claimed:0,accepted:[],rejected:[],unknown:[],recoveredUnknown}
+    if(this.delivery.preflight)await bounded(this.delivery.preflight(),5000)
+    // At most five external handoffs per cycle: bounded adapter waits cannot
+    // leave the tail of a large preclaimed batch older than its recovery lease.
+    const claimed=await this.transactions.run(scope,(transaction)=>claim(transaction,workerId,Math.min(batchSize,5)))
+    const batch:WechatMemberServiceNotificationBatch={workerId,paused:claimed.paused,claimed:claimed.jobs.length,accepted:[],rejected:[],unknown:[],recoveredUnknown}
     for(const job of claimed.jobs){
       let result:WechatSubscriptionDeliveryResult
       try{
-        const recipient=await this.recipients.resolveMiniProgramNotificationRecipient(job.customer_id,job.identity_external_id)
+        const recipient=await bounded(this.recipients.resolveMiniProgramNotificationRecipient(job.customer_id,job.identity_external_id),2000)
+        const eligible=recipient!==null&&await this.transactions.run(scope,transaction=>stillSendable(transaction,job.id,workerId),{readOnly:true})
         result=recipient===null?{outcome:'provider_rejected',providerReference:null,errorCode:'recipient_unavailable'}
-          :await this.delivery.sendTemplate({jobId:job.id,recipientOpenId:recipient.openId,templateId:job.template_id,
-            pagePath:job.page_path,data:{[job.title_data_key]:job.title,[job.detail_data_key]:job.detail,[job.occurred_at_data_key]:providerTime(job.event_occurred_at)}})
+          :!eligible?{outcome:'provider_rejected',providerReference:null,errorCode:'authority_or_source_changed'}
+          :await bounded(this.delivery.sendTemplate({jobId:job.id,recipientOpenId:recipient.openId,templateId:job.template_id,
+            pagePath:job.page_path,data:{[job.title_data_key]:job.title,[job.detail_data_key]:job.detail,[job.occurred_at_data_key]:providerTime(job.event_occurred_at)}}),5000)
       }catch{result={outcome:'unknown',providerReference:null,errorCode:'delivery_outcome_unknown'}}
       await this.transactions.run(scope,(transaction)=>recordOutcome(transaction,job.id,workerId,result))
       batch[result.outcome==='accepted'?'accepted':result.outcome==='provider_rejected'?'rejected':'unknown'].push(job.id)
     }
     return batch
   }
+}
+
+async function bounded<T>(operation:Promise<T>,milliseconds:number):Promise<T>{
+  let timer:ReturnType<typeof setTimeout>|undefined
+  try{return await Promise.race([operation,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error('Notification operation timeout')),milliseconds)})])}
+  finally{if(timer)clearTimeout(timer)}
+}
+async function recoverAbandoned(transactions:Pick<ScopedPostgresTransactionRunner,'run'>,scope:Readonly<StoreScope>,limit:number){
+  const rows=await transactions.run(scope,async tx=>(await tx.query<{id:string}>(`SELECT id FROM mbox.wechat_member_service_notification_jobs WHERE tenant_id=$1 AND store_id=$2 AND status='sending' AND locked_at<clock_timestamp()-interval '5 minutes' ORDER BY locked_at,id LIMIT $3`,[scope.tenantId,scope.storeId,limit])).rows,{readOnly:true})
+  const recovered:string[]=[]
+  for(const row of rows){
+    const changed=await transactions.run(scope,async tx=>{
+      const stale=(await tx.query<{locked_by:string}>(`SELECT locked_by FROM mbox.wechat_member_service_notification_jobs WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND status='sending' AND locked_at<clock_timestamp()-interval '5 minutes' FOR UPDATE SKIP LOCKED`,[scope.tenantId,scope.storeId,row.id])).rows[0]
+      if(!stale)return false
+      // A terminated sender may have reached WeChat. Keep the consumed
+      // authorization and append an unknown receipt, never requeue it.
+      await recordOutcome(tx,row.id,stale.locked_by,{outcome:'unknown',providerReference:null,errorCode:'worker_interrupted_outcome_unknown'})
+      return true
+    })
+    if(changed)recovered.push(row.id)
+  }
+  return recovered
+}
+
+// Recipient resolution can be slow. Recheck the actual authorization and
+// source after it returns, rather than relying on the earlier batch claim.
+// No external call runs while holding these database reads.
+async function stillSendable(transaction:ScopedTransaction,jobId:string,workerId:string):Promise<boolean>{
+  if((await new LoyaltyOperationalControlRepository(transaction).state('wechat_notification')).state==='paused')return false
+  const current=(await transaction.query<{source_type:string;source_id:string;now:string}>(`
+    SELECT job.source_type,job.source_id,clock_timestamp()::text AS now
+    FROM mbox.wechat_member_service_notification_jobs job
+    JOIN mbox.wechat_member_service_notification_authorizations auth ON auth.tenant_id=job.tenant_id AND auth.store_id=job.store_id AND auth.id=job.authorization_id
+    JOIN mbox.wechat_member_service_notification_policies policy ON policy.tenant_id=auth.tenant_id AND policy.store_id=auth.store_id AND policy.id=auth.policy_id
+    JOIN mbox.customer_memberships membership ON membership.tenant_id=auth.tenant_id AND membership.store_id=auth.store_id AND membership.id=auth.membership_id AND membership.customer_id=auth.customer_id AND membership.status='active'
+    JOIN mbox.wechat_identities identity ON identity.tenant_id=auth.tenant_id AND identity.store_id=auth.store_id AND identity.external_identity_id=auth.identity_external_id AND identity.channel='mini_program' AND identity.revoked_at IS NULL
+    WHERE job.tenant_id=$1 AND job.store_id=$2 AND job.id=$3 AND job.locked_by=$4 AND job.status='sending'
+      AND auth.decision='granted' AND policy.status='published' AND policy.effective_from<=clock_timestamp()
+      AND (policy.effective_until IS NULL OR policy.effective_until>clock_timestamp())
+      AND auth.id=(SELECT latest.id FROM mbox.wechat_member_service_notification_authorizations latest WHERE latest.tenant_id=auth.tenant_id AND latest.store_id=auth.store_id AND latest.customer_id=auth.customer_id AND latest.policy_id=auth.policy_id ORDER BY latest.authorization_version DESC,latest.id DESC LIMIT 1)
+      AND (job.source_type<>'benefit' OR EXISTS(SELECT 1 FROM mbox.benefits b WHERE b.tenant_id=job.tenant_id AND b.store_id=job.store_id AND b.id=job.source_id AND b.customer_id=job.customer_id AND b.status IN('issued','reserved') AND b.quantity_total>b.quantity_redeemed AND (b.valid_until IS NULL OR b.valid_until>clock_timestamp())))
+      AND (job.source_type<>'activity_registration' OR EXISTS(SELECT 1 FROM mbox.community_activity_registrations r WHERE r.tenant_id=job.tenant_id AND r.store_id=job.store_id AND r.id=job.source_id AND r.customer_id=job.customer_id AND r.membership_id=job.membership_id AND r.registration_cycle=job.source_occurrence AND r.status IN('confirmed','checked_in')))
+      AND (job.source_type<>'membership_tier_event' OR EXISTS(SELECT 1 FROM mbox.membership_tier_events e WHERE e.tenant_id=job.tenant_id AND e.store_id=job.store_id AND e.id=job.source_id AND e.membership_id=job.membership_id))
+  `,[transaction.scope.tenantId,transaction.scope.storeId,jobId,workerId])).rows[0]
+  if(!current)return false
+  if(current.source_type==='benefit'){
+    const calendar=(await new CouponCalendarRepository(transaction).walletViews([current.source_id],new Date(current.now))).get(current.source_id)
+    if(calendar&&!calendar.nextAvailableAt)return false
+  }
+  return true
 }
 
 async function claim(transaction:ScopedTransaction,workerId:string,batchSize:number):Promise<{jobs:ClaimedRow[];paused:boolean}>{
@@ -163,6 +221,5 @@ async function recordOutcome(transaction:ScopedTransaction,jobId:string,workerId
   `,[transaction.scope.tenantId,transaction.scope.storeId,jobId,result.outcome==='accepted'?'sent':'failed',errorCode,workerId])
   if(updated.rowCount!==1)throw new Error('WeChat member-service notification job lease was lost after receipt')
 }
-function providerTime(value:string):string{const date=new Date(value);if(!Number.isFinite(date.getTime()))throw new TypeError('provider time is invalid');return date.toISOString().replace('T',' ').slice(0,16)}
 function validateWorker(workerId:string,batchSize:number):void{if(!/^[A-Za-z0-9][A-Za-z0-9_.:-]{2,95}$/.test(workerId))throw new TypeError('workerId is invalid');if(!Number.isSafeInteger(batchSize)||batchSize<1||batchSize>100)throw new TypeError('batchSize is invalid')}
 function normalizeCode(value:string):string{const normalized=value.trim().toLowerCase();return /^[a-z][a-z0-9_.:-]{2,95}$/.test(normalized)?normalized:'provider_error_invalid'}

@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
+import {fulfillmentDueAt} from './fulfillment-sla.js'
 import type { JsonObject } from './command-executor.js'
 import type { ScopedTransaction } from './transaction-runner.js'
+import {verifyPricingLineAllocations} from './pricing-line-allocation.js'
 import {
   assertVerifiedPricingAuthorization,
   PricingAuthorizationDeniedError,
@@ -259,6 +261,34 @@ export class OrderDeliveryBlockedError extends Error {
 export class OrderRepository {
   constructor(private readonly transaction: ScopedTransaction) {}
 
+  /** Read-only business quote using the exact price, choice expansion and
+   * cost functions used by createSubmitted. Does not create an order, reserve
+   * stock or consume a coupon. Additional pricing must be authorized separately;
+   * this result deliberately identifies itself as standard-price only. */
+  async quoteCurrent(lines:readonly SubmitOrderLineInput[],channel:OrderChannel){
+    const requested=normalizeRequestedLines(lines),priced=await this.loadCurrentPrices(requested,false)
+    const currency=requireSingleCurrency(priced)
+    const gross=priced.map((price,index)=>{assertProductOrderable(price,requested[index]!,channel);return buildItem(price,requested[index]!)})
+    const components=await this.loadBundleComponents(requested,priced,channel,false)
+    const costed=applyConfigurableBundleCosts(gross,components)
+    const items=costed.map(item=>({
+      requestIndex:item.requestIndex,productId:item.productId,quantity:item.quantity,
+      amountMinor:multiplySafeMoney(item.unitPriceMinor,item.quantity,'quoted line price'),
+      unitPriceMinor:item.unitPriceMinor,costMinor:item.totalCostMinorAtSubmission,
+      name:String(item.productSnapshot.name??''),bundle:item.productSnapshot.productKind==='bundle',
+      note:requested[item.requestIndex]!.note,
+      composition:item.productSnapshot.productKind==='bundle'
+        ?components.filter(component=>component.request_index===item.requestIndex).map(component=>({productId:component.component_product_id,quantity:component.component_quantity,choiceGroupId:component.choice_group_id??null,name:component.component_name}))
+        :[{productId:item.productId,quantity:item.quantity,choiceGroupId:null,name:String(item.productSnapshot.name??'')}],
+    }))
+    const operationalPortions=expandBundleItems(costed,components).map(item=>({
+      requestIndex:item.requestIndex,productId:item.productId,quantity:item.quantity,
+      fulfillmentStation:item.fulfillmentStation,
+      consumesInventory:item.parentOrderItemId!==null||item.fulfillmentStation!=='none',
+    }))
+    return{pricingBasis:'standard_only' as const,currency,subtotalAmountMinor:sumSafe(items.map(item=>item.amountMinor)),costAmountMinor:items.some(item=>item.costMinor===null)?null:sumSafe(items.map(item=>item.costMinor!)),items,operationalPortions}
+  }
+
   /**
    * Reuses the order-price authority for a server-owned cart before it accepts
    * a quantity increase.  Checkout repeats the full order and inventory
@@ -292,6 +322,9 @@ export class OrderRepository {
     })
     const subtotalAmountMinor = sumSafe(grossItems.map((item) => item.unitPriceMinor * item.quantity))
     validatePricingAuthorization(pricingAuthorization, subtotalAmountMinor)
+    if(pricingAuthorization?.lineAllocations){
+      verifyPricingLineAllocations(pricingAuthorization.lineAllocations,input.lines,pricingAuthorization.amountMinor)
+    }
     const itemRows = allocatePricingAdjustment(grossItems, pricingAuthorization)
     const bundleComponents = await this.loadBundleComponents(requested, priced, input.channel)
     const costedItems=applyConfigurableBundleCosts(itemRows,bundleComponents)
@@ -505,7 +538,7 @@ export class OrderRepository {
     if (locked.rowCount !== 1) throw new TableSessionUnavailableForOrderError(tableSessionId)
   }
 
-  private async loadCurrentPrices(requested: readonly RequestedLineRecord[]): Promise<ProductPriceRow[]> {
+  private async loadCurrentPrices(requested: readonly RequestedLineRecord[],lock=true): Promise<ProductPriceRow[]> {
     const result = await this.transaction.query<ProductPriceRow>(`
       WITH requested AS (
         SELECT request_index, product_id
@@ -549,7 +582,7 @@ export class OrderRepository {
         LIMIT 1
       ) AS price ON true
       ORDER BY requested.request_index
-      FOR SHARE OF product
+      ${lock?'FOR SHARE OF product':''}
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -570,6 +603,7 @@ export class OrderRepository {
     requested: readonly RequestedLineRecord[],
     priced: readonly ProductPriceRow[],
     channel: OrderChannel,
+    lock=true,
   ): Promise<BundleComponentRow[]> {
     for(const [index,price] of priced.entries()){
       if(price.product_kind==='single'&&requested[index]!.bundleSelections.length>0){
@@ -616,7 +650,7 @@ export class OrderRepository {
        AND product.store_id = component.store_id
        AND product.id = component.component_product_id
       ORDER BY requested_bundle.request_index, component.sort_order, component.component_product_id
-      FOR KEY SHARE OF component, product
+      ${lock?'FOR KEY SHARE OF component, product':''}
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -660,7 +694,7 @@ export class OrderRepository {
       JOIN mbox.stores store ON store.tenant_id=product.tenant_id AND store.id=product.store_id
       ORDER BY requested_bundle.request_index,choice_group.sort_order,choice_group.id,
         choice_option.sort_order,choice_option.id
-      FOR KEY SHARE OF choice_group,choice_option,product
+      ${lock?'FOR KEY SHARE OF choice_group,choice_option,product':''}
     `,[
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -1022,9 +1056,13 @@ function allocatePricingAdjustment<T extends {
 ): T[] {
   if (!authorization) return [...items]
   let remaining = authorization.amountMinor
-  return items.map((item) => {
+  return items.map((item,index) => {
     const gross = item.unitPriceMinor * item.quantity
-    const allocated = Math.min(gross, remaining)
+    const explicit=authorization.lineAllocations?.[index]
+    if(explicit&&(explicit.unitPriceMinor!==item.unitPriceMinor||explicit.quantity!==item.quantity)){
+      throw new PricingAuthorizationDeniedError('商品价格已变化，请重新确认报价')
+    }
+    const allocated = explicit?explicit.discountAmountMinor:Math.min(gross, remaining)
     remaining -= allocated
     return {
       ...item,
@@ -1147,12 +1185,6 @@ function assertProductOrderable(
     ? price.store_local_time >= price.available_from && price.store_local_time < price.available_until
     : price.store_local_time >= price.available_from || price.store_local_time < price.available_until
   if (!orderable) throw new OrderProductUnavailableError(requested.productId)
-}
-
-function fulfillmentDueAt(station: FulfillmentStation, configuredSeconds: number | null): string | null {
-  if (station === 'none') return null
-  const fallback = station === 'bar' ? 5 * 60 : station === 'kitchen' ? 10 * 60 : 2 * 60
-  return new Date(Date.now() + (configuredSeconds ?? fallback) * 1_000).toISOString()
 }
 
 function requireUuidLike(name: string, value: string): void {

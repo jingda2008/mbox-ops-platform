@@ -70,7 +70,7 @@ export interface NormalizedOperationsRequestContext {
   capabilities: readonly string[]
 }
 
-type OperationsQueryPort = Pick<OperationsQueryService, 'getStaffView'>
+type OperationsQueryPort = Pick<OperationsQueryService, 'getStaffView'> & Partial<Pick<OperationsQueryService,'getOperatingHistory'|'getManualDayEndPreview'>>
 type TableSessionCommandPort = Pick<TableSessionCommandService, 'open'>
 type CommandExecutorPort = Pick<NormalizedCommandExecutor, 'execute'>
 type TableSessionRepositoryPort = Pick<TableSessionRepository, 'beginClosing' | 'completeClosing'>
@@ -175,6 +175,29 @@ export const normalizedOperationsApiPlugin: FastifyPluginAsync<NormalizedOperati
   options,
 ) => {
   const createPublicId = options.createPublicId ?? defaultPublicId
+  app.get('/business-days/end-current/preview',async(request,reply)=>handleRoute(reply,async()=>{
+    await resolveAndValidateContext(options,request)
+    return reply.code(410).send({error:{code:'MANUAL_BUSINESS_DAY_END_DISABLED',message:'不支持提前结束营业日，系统会按门店设定时间自动切日。'}})
+  }))
+  app.get('/operations/history', async (request,reply)=>handleRoute(reply,async()=>{
+    const context=await resolveAndValidateContext(options,request)
+    requireCapability(context,'reconciliation.view')
+    const query=readObject(request.query,'查询条件')
+    const businessDate=typeof query.businessDate==='string'?query.businessDate:context.businessDate
+    const endDate=typeof query.endDate==='string'?query.endDate:businessDate
+    const page=Number(query.page??0)
+    const table=typeof query.table==='string'?query.table.trim():''
+    const employee=typeof query.employee==='string'?query.employee.trim():''
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(businessDate)||!Number.isFinite(Date.parse(businessDate))
+      ||new Date(businessDate).toISOString().slice(0,10)!==businessDate
+      ||!/^\d{4}-\d{2}-\d{2}$/.test(endDate)||!Number.isFinite(Date.parse(endDate))
+      ||new Date(endDate).toISOString().slice(0,10)!==endDate||endDate<businessDate
+      ||Date.parse(endDate)-Date.parse(businessDate)>366*86400000
+      ||!Number.isSafeInteger(page)||page<0||page>2000||table.length>80||employee.length>80) throw new RequestValidationError('查询日期、页码或筛选条件无效')
+    if(!options.operationsQuery.getOperatingHistory) return reply.code(503).send({error:{message:'历史查询暂不可用'}})
+    if(query.exportAll!==undefined&&query.exportAll!=='true')throw new RequestValidationError('导出参数无效')
+    return reply.send({data:await options.operationsQuery.getOperatingHistory(context.scope,context.employeeId,{businessDate,endDate,table,employee,page,...(query.exportAll==='true'?{exportAll:true}:{})})})
+  }))
 
   app.get('/operations', async (request, reply) => handleRoute(reply, async () => {
     const context = await resolveAndValidateContext(options, request)
@@ -370,6 +393,11 @@ export const normalizedOperationsApiPlugin: FastifyPluginAsync<NormalizedOperati
       return reply.send(executionResponse(execution))
     }),
   )
+
+  app.post('/business-days/end-current',async(request,reply)=>handleRoute(reply,async()=>{
+    await resolveAndValidateContext(options,request)
+    return reply.code(410).send({error:{code:'MANUAL_BUSINESS_DAY_END_DISABLED',message:'不支持提前结束营业日，系统会按门店设定时间自动切日。'}})
+  }))
 
   app.post('/business-days/close-pending', async (request, reply) => handleRoute(reply, async () => {
     const context = await resolveAndValidateContext(options, request)

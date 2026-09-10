@@ -10,6 +10,8 @@ import { PromotionalLoyaltyPanel } from './PromotionalLoyaltyPanel'
 import { CheckoutUpgradeManagementPanel } from './CheckoutUpgradeManagementPanel'
 import { RecommendationPolicyManagementPanel } from './RecommendationPolicyManagementPanel'
 import { MembershipConfigurationCenterPanel } from './MembershipConfigurationCenterPanel'
+import { MemberCardManagementPanel } from './MemberCardManagementPanel'
+import { MarketingContactPanel } from './MarketingContactPanel'
 import { PersonalContactGovernancePanel } from './PersonalContactGovernancePanel'
 import { HomeContentManagementPanel } from './HomeContentManagementPanel'
 import { AnnualBenefitManagementPanel } from './AnnualBenefitManagementPanel'
@@ -227,6 +229,8 @@ export function CustomerExperienceManagementPanel({ api, auth, dashboard, mode =
     <MemberAccountLookupPanel api={api} auth={auth} />
   </div>
   if (mode === 'member-management') return <div className="staff-module-body customer-experience-management">
+    <MemberCardManagementPanel api={api} auth={auth} />
+    <MarketingContactPanel api={api} auth={auth} />
     <section className="customer-experience-publishing-intro"><strong>其他会员经营配置</strong><small>年度礼遇、兑换目录、活动、会员条款与账户恢复按各自最终权限显示。</small></section>
     <LoyaltyEmergencyControlPanel api={api} auth={auth} />
     <MembershipConfigurationCenterPanel api={api} auth={auth} />

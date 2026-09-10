@@ -5,7 +5,7 @@ import type {
   JsonCodec,
   JsonObject,
 } from './command-executor.js'
-import { appendOutboxMessage, type NormalizedCommandExecutor, type OutboxMessage } from './command-executor.js'
+import { type NormalizedCommandExecutor, type OutboxMessage } from './command-executor.js'
 import type { ScopedTransaction, StoreScope } from './transaction-runner.js'
 import {
   AssistedOrderContextDeniedError,
@@ -44,7 +44,6 @@ import {
 } from './customer-experience-repository.js'
 import { ExperiencePlanActivationRepository } from './experience-plan-activation-repository.js'
 import { lockBoundGuestTablePosition } from './guest-table-authority.js'
-import { PrintTicketSourceRepository } from './print-ticket-source.js'
 
 export interface KdsSchedulingOverride {
   priority?: number
@@ -67,6 +66,8 @@ export interface SubmitOrderCommand extends Omit<CreateSubmittedOrderInput, 'tab
   assistedOrderContext?: Readonly<AssistedOrderContextProof>
   kdsOverride?: Readonly<KdsSchedulingOverride>
   pricingAuthorization?: Readonly<PricingAuthorizationRequest>
+  /** Supplied only by the authoritative benefit redemption adapter. */
+  benefitFulfillmentReservationId?: string
   confirmedDuplicateOrderPublicId?: string | null
   checkoutUpgradeOfferPublicId?: string | null
   recommendationAttribution?: Readonly<RecommendationOrderAttribution> | null
@@ -241,11 +242,6 @@ export class CommerceCommandService {
           orderedRecommendation,
         ),
       }
-      const productionSourceMaterialized = this.options.printTicketSources === true && result.kdsTasks.length > 0
-      if (productionSourceMaterialized) {
-        const sourceOutboxMessageId = await appendOutboxMessage(transaction, outboxMessage)
-        await new PrintTicketSourceRepository(transaction).materializeOrderProduction(sourceOutboxMessageId, order.id)
-      }
       return {
         result,
         auditEvents: [{
@@ -259,7 +255,7 @@ export class CommerceCommandService {
             orderedRecommendation,
           ),
         }],
-        outboxMessages: productionSourceMaterialized ? [] : [outboxMessage],
+        outboxMessages: [outboxMessage],
       }
   }
 
@@ -275,7 +271,8 @@ export class CommerceCommandService {
       actor: input.actor,
       tableSessionId: orderInput.tableSessionId,
       channel: input.channel,
-      lines: input.lines,
+      lines: orderInput.lines,
+      benefitFulfillmentReservationId: input.benefitFulfillmentReservationId,
     }, input.pricingAuthorization)
   }
 }
@@ -783,6 +780,7 @@ function canonicalSubmitFingerprint(input: Readonly<SubmitOrderCommand>): string
       reason: input.kdsOverride.reason.trim(),
     } : null,
     pricingAuthorization: input.pricingAuthorization ?? null,
+    ...(input.benefitFulfillmentReservationId ? { benefitFulfillmentReservationId: input.benefitFulfillmentReservationId } : {}),
     confirmedDuplicateOrderPublicId: input.confirmedDuplicateOrderPublicId ?? null,
     checkoutUpgradeOfferPublicId: input.checkoutUpgradeOfferPublicId?.trim() || null,
     ...(input.recommendationAttribution ? {

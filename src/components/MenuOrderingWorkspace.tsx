@@ -19,11 +19,13 @@ import { GuestRecommendationTools, type GuestRecommendationContext } from './Gue
 import './MenuOrderingWorkspace.css'
 import { filterMenuProducts } from './menu-search'
 import { clearPersistedCart, persistCart, readPersistedCart } from './menu-cart-storage'
+import {clearStaffOrderDraft,readStaffOrderDraft,saveStaffOrderDraft} from './staff-order-draft'
 import { recommendationProductIsOrderable } from './menu-recommendation-availability'
 
 export interface MenuCartItem {
   productId: string
   quantity: number
+  note?: string
   bundleSelections?: MenuBundleUnitSelection[]
 }
 
@@ -38,6 +40,14 @@ export interface MenuInteraction {
 export interface MenuSubmitOptions {
   confirmedDuplicateOrderId?: string
   fulfillmentNote: string
+}
+
+export function buildMenuCartItems(products: readonly Pick<MenuProduct,'id'>[], cart: Readonly<Record<string,number>>,
+  selections: Readonly<Record<string,readonly MenuBundleUnitSelection[]>>, notes: Readonly<Record<string,string>>): MenuCartItem[] {
+  return products.map(product=>({productId:product.id,quantity:cart[product.id]!,
+    ...(notes[product.id]?.trim()?{note:notes[product.id]!.trim()}:{}),
+    ...(selections[product.id]?.length?{bundleSelections:[...selections[product.id]!]}:{}),
+  }))
 }
 
 function formatMenuAmount(amount: number) {
@@ -153,6 +163,7 @@ interface MenuOrderingWorkspaceProps {
   partySize?: number
   recommendationScene?: MenuRecommendationScene
   cartStorageKey?: string
+  draftStorageKey?: string
   /**
    * When supplied, quantity is owned by an authoritative cart outside this
    * component (for example, a table-wide cart shared by several guests).
@@ -206,6 +217,7 @@ export function MenuOrderingWorkspace({
   partySize = 1,
   recommendationScene,
   cartStorageKey,
+  draftStorageKey,
   cart: controlledCart,
   cartBundleSelections:controlledBundleSelections,
   cartUnitAmountMinors,
@@ -217,8 +229,10 @@ export function MenuOrderingWorkspace({
   onCartRemove,
   onCartCountChange,
 }: MenuOrderingWorkspaceProps) {
-  const [persistedCart, setPersistedCart] = useState<Record<string, number>>(() => readPersistedCart(cartStorageKey))
-  const [localBundleSelections,setLocalBundleSelections]=useState<Record<string,MenuBundleUnitSelection[]>>({})
+  const [initialDraft]=useState(()=>readStaffOrderDraft(draftStorageKey))
+  const draftHandedOff=useRef(false)
+  const [persistedCart, setPersistedCart] = useState<Record<string, number>>(() => draftStorageKey?initialDraft.quantities:readPersistedCart(cartStorageKey))
+  const [localBundleSelections,setLocalBundleSelections]=useState<Record<string,MenuBundleUnitSelection[]>>(initialDraft.selections)
   const cart = controlledCart ?? persistedCart
   const cartBundleSelections=controlledBundleSelections??localBundleSelections
   const [categoryId, setCategoryId] = useState('all')
@@ -231,7 +245,8 @@ export function MenuOrderingWorkspace({
   const [pendingBundleSelections, setPendingBundleSelections] = useState<readonly MenuBundleUnitSelection[]>([])
   const [lastSubmittedAt, setLastSubmittedAt] = useState(0)
   const [cartOpen, setCartOpen] = useState(false)
-  const [fulfillmentNote, setFulfillmentNote] = useState('')
+  const [fulfillmentNote, setFulfillmentNote] = useState(initialDraft.note)
+  const [itemNotes, setItemNotes] = useState<Record<string, string>>(initialDraft.notes)
   const [guestMenuView, setGuestMenuView] = useState<'recommend' | 'bundles' | 'drinks' | 'food' | 'search'>('recommend')
   const [beverageFamily, setBeverageFamily] = useState('all')
   const [recommendationContext, setRecommendationContext] = useState<GuestRecommendationContext>({})
@@ -256,6 +271,10 @@ export function MenuOrderingWorkspace({
     if (controlledCart !== undefined) return
     persistCart(cartStorageKey, persistedCart)
   }, [cartStorageKey, controlledCart, persistedCart])
+  useEffect(()=>{
+    if(controlledCart!==undefined||draftHandedOff.current)return
+    saveStaffOrderDraft(draftStorageKey,{quantities:persistedCart,selections:localBundleSelections,notes:itemNotes,note:fulfillmentNote,giftReason:''})
+  },[draftStorageKey,controlledCart,persistedCart,localBundleSelections,itemNotes,fulfillmentNote])
   useEffect(() => {
     const updateClock = () => setClock(Date.now() + clockOffsetMs)
     updateClock()
@@ -612,6 +631,11 @@ export function MenuOrderingWorkspace({
       productId,
       quantity: nextQuantity,
     })
+    if (nextQuantity === 0) setItemNotes((current) => {
+      const next = { ...current }
+      delete next[productId]
+      return next
+    })
     if (
       guestSalesMode
       && onCartAdjust === undefined
@@ -713,11 +737,13 @@ export function MenuOrderingWorkspace({
 
   async function executeSubmit(duplicateOrderId?: string) {
     if (cartProducts.length === 0 || checkoutBusy || submitDisabled) return
+    // Only unsubmitted drafts may be restored. An unknown submission must not
+    // silently become a fresh order after reload.
+    draftHandedOff.current=true
+    clearStaffOrderDraft(draftStorageKey)
     try {
       await onSubmit(
-        cartProducts.map((product) => ({ productId: product.id, quantity: cart[product.id]!,
-          ...((cartBundleSelections[product.id]?.length??0)>0
-            ?{ bundleSelections:[...(cartBundleSelections[product.id]??[])] }:{}), })),
+        buildMenuCartItems(cartProducts,cart,cartBundleSelections,itemNotes),
         { confirmedDuplicateOrderId: duplicateOrderId, fulfillmentNote: fulfillmentNote.trim() },
       )
       if (controlledCart === undefined) {
@@ -726,6 +752,8 @@ export function MenuOrderingWorkspace({
         clearPersistedCart(cartStorageKey)
       }
       setFulfillmentNote('')
+      setItemNotes({})
+      draftHandedOff.current=false
       setCartOpen(false)
       setLastSubmittedAt(Date.now())
       setConfirmation(null)
@@ -787,7 +815,13 @@ export function MenuOrderingWorkspace({
     <div className="menu-cart-empty"><ShoppingCart size={28} /><span>点击商品图片旁的加号</span></div>
   ) : cartProducts.map((product) => (
     <div className="menu-cart-line" key={product.id}>
-      <div><strong>{product.name}</strong><span>¥{(cartUnitAmount(product) / 100).toFixed(0)} × {cart[product.id]}</span>
+      <div><strong>{product.name}</strong><span>¥{formatMenuAmount(cartUnitAmount(product))} × {cart[product.id]}</span>
+        <label className="menu-item-note"><span>此商品备注{cart[product.id]! > 1 ? '（适用这几份）' : ''}</span>
+          <input aria-label={`${product.name}商品备注`} maxLength={300}
+            disabled={checkoutBusy || cartReadOnly || cartMutating}
+            value={itemNotes[product.id] ?? ''} placeholder="如：少冰、不放香菜"
+            onChange={(event) => setItemNotes((current) => ({ ...current, [product.id]: event.target.value }))} />
+        </label>
         {(cartBundleSelections[product.id]?.length??0)>0&&<span className="menu-cart-choice-summary">
           {cartBundleSelections[product.id]!.map((unit,index)=><button type="button" key={index}
             disabled={cartReadOnly||cartMutating}

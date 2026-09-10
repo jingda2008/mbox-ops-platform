@@ -1,9 +1,10 @@
 import type { AuditActor } from './command-executor.js'
 import type { OrderChannel, SubmitOrderLineInput } from './order-repository.js'
 import type { ScopedTransaction, StoreScope } from './transaction-runner.js'
+import {verifyPricingLineAllocations,type PricingLineAllocation} from './pricing-line-allocation.js'
 
 export type PricingAuthorizationKind = 'discount' | 'gift'
-export type PricingAuthorizationSourceType = 'employee' | 'activity' | 'benefit'
+export type PricingAuthorizationSourceType = 'employee' | 'activity' | 'benefit' | 'checkout_quote'
 
 export interface PricingAuthorizationRequest {
   sourceType: PricingAuthorizationSourceType
@@ -16,10 +17,13 @@ export interface PricingAuthorityContext {
   tableSessionId: string
   channel: OrderChannel
   lines: readonly SubmitOrderLineInput[]
+  /** Internal fulfillment reference; never populated from an order HTTP body. */
+  benefitFulfillmentReservationId?: string
   request: Readonly<PricingAuthorizationRequest>
 }
 
 export interface PricingAuthorityDecision {
+  lineAllocations?:readonly PricingLineAllocation[]
   authorized: boolean
   authorizationId: string
   kind: PricingAuthorizationKind
@@ -46,6 +50,7 @@ export interface PricingAuthorityPort {
 }
 
 export interface VerifiedPricingAuthorization {
+  readonly lineAllocations?:readonly Readonly<PricingLineAllocation>[]
   readonly authorizationId: string
   readonly kind: PricingAuthorizationKind
   readonly sourceType: PricingAuthorizationSourceType
@@ -113,6 +118,7 @@ export class PricingAuthorizationPolicy {
       currency: decision.currency,
       authorizedByEmployeeId: decision.authorizedByEmployeeId ?? null,
       capability: decision.capability ?? null,
+      ...(decision.lineAllocations===undefined?{}:{lineAllocations:verifyPricingLineAllocations(decision.lineAllocations,context.lines,decision.amountMinor)}),
     })
     verifiedAuthorizations.add(verified)
     return verified

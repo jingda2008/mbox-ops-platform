@@ -233,7 +233,7 @@ describe('PostgresNormalizedBusinessClock', () => {
       timezone: 'Asia/Shanghai',
       cutoff: '06:00:00',
     })
-    expect(query.mock.calls[0]?.[0]).toContain('clock_timestamp() AT TIME ZONE timezone')
+    expect(query.mock.calls[0]?.[0]).toContain('mbox.current_operating_business_date(tenant_id,id)')
     expect(query.mock.calls[0]?.[0]).toContain('business_day_cutoff')
   })
 })

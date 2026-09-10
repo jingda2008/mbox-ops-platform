@@ -12,6 +12,7 @@ import type {
   StaffActionsApiPort,
 } from './staff-actions-api'
 import { assistedProductAvailability, isAssistedOrderCatalogProduct } from './assisted-order-product'
+import {clearStaffOrderDraft,readStaffOrderDraft,saveStaffOrderDraft,staffOrderDraftKey} from '../../components/staff-order-draft'
 
 export interface AssistedOrderSheetProps {
   api: StaffActionsApiPort
@@ -33,7 +34,16 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
   const [category, setCategory] = useState('all')
   const [quantities, setQuantities] = useState<Record<string, number>>({})
   const [note, setNote] = useState('')
+  const [itemNotes, setItemNotes] = useState<Record<string, string>>({})
+  useEffect(() => { loadedGiftDraft.current=undefined; giftDraftHandedOff.current=false; setItemNotes({}); setQuantities({}); setNote(''); setGiftReason('') }, [table.activeSession.id,mode])
   const [giftReason, setGiftReason] = useState('')
+  const loadedGiftDraft=useRef<string|undefined>(undefined)
+  const giftDraftHandedOff=useRef(false)
+  const giftDraftKey=staffOrderDraftKey(access?.employeeId,table.activeSession.id,'gift')
+  useEffect(()=>{
+    if(mode!=='gift'||!giftDraftKey||loadedGiftDraft.current!==giftDraftKey||giftDraftHandedOff.current)return
+    saveStaffOrderDraft(giftDraftKey,{quantities,selections:{},notes:itemNotes,note,giftReason})
+  },[mode,giftDraftKey,quantities,itemNotes,note,giftReason])
   const [settlementMode, setSettlementMode] = useState<'immediate_payment' | 'table_tab'>('table_tab')
   const [paymentOrder, setPaymentOrder] = useState<AssistedOrderResult | null>(null)
   const [paymentAction, setPaymentAction] = useState<OnlinePaymentAction | null>(null)
@@ -57,10 +67,18 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
 
   useEffect(() => {
     const controller = new AbortController()
+    setPhase('loading');setAccess(null)
     Promise.all([
       api.loadAssistedOrderAccess(controller.signal),
       api.loadAssistedOrderCatalog(controller.signal),
     ]).then(([nextAccess, catalog]) => {
+      if(controller.signal.aborted)return
+      if(mode==='gift'){
+        const key=staffOrderDraftKey(nextAccess.employeeId,table.activeSession.id,'gift')
+        const draft=readStaffOrderDraft(key)
+        loadedGiftDraft.current=key;giftDraftHandedOff.current=false
+        setQuantities(draft.quantities);setItemNotes(draft.notes);setNote(draft.note);setGiftReason(draft.giftReason)
+      }
       setAccess(nextAccess)
       setProducts(catalog.filter(isAssistedOrderCatalogProduct))
       setPhase('ready')
@@ -70,7 +88,7 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
       setPhase('error')
     })
     return () => controller.abort()
-  }, [api])
+  }, [api,mode,table.activeSession.id])
 
   useEffect(() => {
     if (paymentAction === null || paymentStatus !== 'pending') return
@@ -132,6 +150,14 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
     && (mode === 'paid' || (giftAllowed && giftReason.trim().length >= 2))
 
   const changeQuantity = (productId: string, delta: number) => {
+    if (phase === 'submitting') return
+    if ((quantities[productId] ?? 0) + delta <= 0) {
+      setItemNotes(current => {
+        const next = { ...current }
+        delete next[productId]
+        return next
+      })
+    }
     setQuantities((current) => {
       const next = Math.max(0, Math.min(99, (current[productId] ?? 0) + delta))
       return { ...current, [productId]: next }
@@ -140,6 +166,8 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
 
   const submit = async () => {
     if (!canSubmit) return
+    giftDraftHandedOff.current=true
+    clearStaffOrderDraft(giftDraftKey)
     setPhase('submitting')
     setError(null)
     try {
@@ -148,7 +176,9 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
         tableSessionId: table.activeSession.id,
         assistedOrderContextToken: token,
         orderMode: mode,
-        items: selected.map((item) => ({ productId: item.product.id, quantity: item.quantity })),
+        items: selected.map((item) => ({ productId: item.product.id, quantity: item.quantity,
+          ...(itemNotes[item.product.id]?.trim() ? { note: itemNotes[item.product.id]!.trim() } : {}),
+        })),
         ...(note.trim().length > 0 ? { fulfillmentNote: note.trim() } : {}),
         ...(mode === 'gift' ? { giftReason: giftReason.trim() } : {}),
         settlementMode: mode === 'gift' ? 'table_tab' : settlementMode,
@@ -166,10 +196,10 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
   }
 
   const submitPaidOrder = async (items: MenuCartItem[], options: MenuSubmitOptions) => {
-    if (phase !== 'ready' || access?.canCreateOrder !== true || items.length === 0) return
+    if (phase !== 'ready' || access?.canCreateOrder !== true || items.length === 0) throw new Error('当前不可提交，请重新核对点单权限和菜品')
     if (settlementMode === 'immediate_payment' && !canSettleImmediately(access)) {
       setError('当前岗位没有可用的线上或现场收款权限，请先挂桌账或联系收银负责人。')
-      return
+      throw new Error('当前岗位没有可用收款权限，请先挂桌账或联系收银负责人')
     }
     setPhase('submitting')
     setError(null)
@@ -363,10 +393,12 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
           onDone={onClose}
         /> : phase === 'loading' ? <p className="staff-order-loading"><LoaderCircle className="is-spinning" /> 正在读取可售商品</p> : (
           <MenuOrderingWorkspace
+            key={`${access?.employeeId??''}:${table.activeSession.id}`}
+            draftStorageKey={staffOrderDraftKey(access?.employeeId,table.activeSession.id,'paid')}
             products={menuProducts}
             tableLabel={table.code}
             submitLabel="核对无误，确认下单"
-            submitHint="桌号已锁定；提交后按选择进入挂账或付款流程。"
+            submitHint="桌号已锁定。未提交草稿可在本机当前窗口恢复；已发起提交后请先核对订单，不会自动恢复为新单。"
             busy={phase === 'submitting'}
             compactCart
             deemphasizeCollapsedTotal
@@ -430,6 +462,11 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
                 : <small>库存或配方配置未完成，暂不能下单</small>
               : !inventoryAvailable ? <small>当前可售库存不足，补货入库后自动恢复</small> : null}</div>
             <b>{money(Number(product.standardPrice?.amountMinor ?? 0), product.standardPrice?.currency ?? 'CNY')}</b>
+            {quantity > 0 && <label className="menu-item-note">此商品备注
+              <input aria-label={`${product.name}商品备注`} maxLength={300} value={itemNotes[product.id] ?? ''}
+                disabled={phase === 'submitting'} placeholder="仅用于这个商品"
+                onChange={(event) => setItemNotes((current) => ({ ...current, [product.id]: event.target.value }))} />
+            </label>}
             <div className="staff-order-quantity">
               {quantity > 0 && <button type="button" aria-label={`减少${product.name}`} onClick={() => changeQuantity(product.id, -1)}><Minus size={17} /></button>}
               {quantity > 0 && <span>{quantity}</span>}

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { mkdir, open, readFile, rename, writeFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
 
-const VERSION = '1.0.0'
+const VERSION = '1.0.1'
 const execFileAsync = promisify(execFile)
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const dataDirectory = process.env.MBOX_PRINT_BRIDGE_DATA
@@ -66,7 +66,7 @@ async function serviceLoop(config) {
 
 async function runCycle(config) {
   assertPaired(config)
-  const claimed = await authenticatedRequest(config, '/api/print-bridge/work/claim', { limit: 10 })
+  const claimed = await authenticatedRequest(config, '/api/print-bridge/work/claim', { limit: 1 })
   const jobs = Array.isArray(claimed.data?.jobs) ? claimed.data.jobs : []
   const commands = Array.isArray(claimed.data?.commands) ? claimed.data.commands : []
   for (const job of jobs) await processJob(config, job)
@@ -338,10 +338,17 @@ function requiredUuid(value, field) {
 }
 
 function normalizeFailure(error) {
-  const value = safeError(error).toLowerCase().replace(/[^a-z0-9_:-]/g, '_').slice(0, 90)
-  if (value.includes('queue_not_found') || value.includes('invalidprinter')) return 'printer_queue_not_found'
-  if (value.includes('timeout') || value.includes('aborted')) return 'bridge_print_timeout'
-  return value || 'bridge_print_failed'
+  // Inspect diagnostics before truncation, but only export a stable allowlisted
+  // code. Never send a command line, credential, Windows path or ticket text.
+  const value = `${safeError(error)} ${typeof error?.stderr === 'string' ? error.stderr : ''}`.toLowerCase()
+  if (error?.code === 'ENOENT') return 'powershell_not_found'
+  if (value.includes('queue_not_found') || value.includes('invalidprinter') || value.includes('invalid_printer_queue')) return 'printer_queue_not_found'
+  if (value.includes('printer_unavailable')) return 'printer_unavailable'
+  if (value.includes('timeout') || value.includes('aborted') || error?.killed === true) return 'bridge_print_timeout'
+  if (value.includes('print_job_failed')) return 'printer_spooler_failed'
+  if (value.includes('access is denied') || value.includes('unauthorizedaccessexception')) return 'printer_access_denied'
+  if (value.includes('unsupported_ticket_snapshot') || value.includes('invalid_ticket_line')) return 'invalid_ticket_snapshot'
+  return 'bridge_print_failed'
 }
 
 function isDefinitelyNotSubmitted(error) {

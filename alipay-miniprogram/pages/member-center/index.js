@@ -202,7 +202,8 @@ Page({
     dailySnackClaim: null,
   },
 
-  onShow() { this.load() },
+  onShow() { this.setData({ identitiesVisible: true }); this.load() },
+  onHide() { this.setData({ identitiesVisible: false }) },
 
   async load() {
     this.setData({ loading: true, error: '' })

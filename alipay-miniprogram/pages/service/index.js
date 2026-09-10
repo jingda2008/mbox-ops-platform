@@ -33,11 +33,17 @@ Page({
   },
 
   onLoad() {
+    this.serviceScope = tableRequestScope(getTableSession())
     this.ensureTableRequestGuard()
     this.setData({ tableCode: getTableSession().tableCode, isDevelopment: getRuntimeConfig().isDevelopment })
     this.loadComplaintOrders()
   },
   onShow() {
+    const scope = tableRequestScope(getTableSession())
+    if (this.serviceScope !== scope) {
+      this.serviceScope = scope
+      this.setData({ submittingId: '', note: '', error: '', success: '', complaintOrderIndex: 0, complaintOrders: [{ publicId: '', label: '整桌问题（不指定订单）' }] })
+    }
     this.setData({ tableCode: getTableSession().tableCode })
     this.loadComplaintOrders()
   },
@@ -69,8 +75,8 @@ Page({
     } catch (_) {}
   },
 
-  onNoteInput(event) { this.setData({ note: event.detail.value }) },
-  onComplaintOrderChange(event) { this.setData({ complaintOrderIndex: Number(event.detail.value) }) },
+  onNoteInput(event) { if (!this.data.submittingId) this.setData({ note: String(event.detail.value || '').slice(0, 300) }) },
+  onComplaintOrderChange(event) { const index = Number(event.detail.value); if (!this.data.submittingId && Number.isInteger(index) && index >= 0 && index < this.data.complaintOrders.length) this.setData({ complaintOrderIndex: index }) },
 
   requestService(event) {
     const item = this.data.serviceTypes.find((value) => value.id === event.currentTarget.dataset.id)

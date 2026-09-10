@@ -1,1 +1,1 @@
-{ "defaultTitle": "我的 M-BOX" }
+{ "defaultTitle": "我的 M-BOX", "usingComponents": { "member-identities": "/components/member-identities/index" } }

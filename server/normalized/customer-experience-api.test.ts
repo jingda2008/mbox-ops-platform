@@ -22,6 +22,28 @@ afterEach(async () => {
 })
 
 describe('customer experience activity contact API', () => {
+  it('retires legacy offer issuance without blocking original checkout and still rejects malformed units', async () => {
+    const app=Fastify(); apps.push(app)
+    const scope={tenantId:'11111111-1111-4111-8111-111111111111',storeId:'22222222-2222-4222-8222-222222222222'}
+    const prepareCheckoutUpgrade=vi.fn(async()=>({value:null,replayed:false}))
+    await app.register(customerExperienceApiPlugin,{
+      transactions:{run:async(_scope,operation)=>operation({scope,query:vi.fn(async()=>({rows:[{guest_count:2,guest_profile_snapshot:{}}],rowCount:1}))} as never)},
+      service:{prepareCheckoutUpgrade} as unknown as CustomerExperienceService,
+      resolveGuestContext:()=>({scope,customerId:'33333333-3333-4333-8333-333333333333',tableSessionId:'44444444-4444-4444-8444-444444444444',actorRef:'test-guest',businessDate:'2026-09-09'}),
+      resolvePublicContext:()=>{throw new Error('not used')},resolveStaffContext:()=>{throw new Error('not used')},protectContact:()=>{throw new Error('not used')},
+    })
+    const selections=[{groups:[{groupId:'55555555-5555-4555-8555-555555555555',productIds:['66666666-6666-4666-8666-666666666666']}]}]
+    const item={productId:'77777777-7777-4777-8777-777777777777',quantity:1,bundleSelections:selections}
+    const response=await app.inject({method:'POST',url:'/guest/checkout/upgrade-offers',headers:{'idempotency-key':'upgrade-choices-http-0001'},payload:{items:[item]}})
+    expect(response.statusCode).toBe(200)
+    expect(response.json().data).toBeNull()
+    expect(response.headers['cache-control']).toBe('no-store')
+    expect(prepareCheckoutUpgrade).not.toHaveBeenCalled()
+    const invalid=await app.inject({method:'POST',url:'/guest/checkout/upgrade-offers',headers:{'idempotency-key':'upgrade-choices-http-0002'},payload:{items:[{...item,quantity:2}]}})
+    expect(invalid.statusCode).toBe(400)
+    expect(prepareCheckoutUpgrade).not.toHaveBeenCalled()
+  })
+
   it('returns a non-cacheable scannable member identification code in the mini-program bootstrap', async () => {
     const portal = vi.fn(async () => ({
       features: [], membership: { memberNo: 'MBX-35648', level: 'silver' }, points: [], growth: [],

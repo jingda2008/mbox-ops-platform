@@ -1,0 +1,15 @@
+.operating-history-panel { margin: 12px 0; padding: 14px; border: 1px solid #d7dbd3; border-radius: 14px; background: #fffdf8; min-width: 0; }
+.operating-history-panel summary { cursor: pointer; padding: 8px 0; font-weight: 650; overflow-wrap: anywhere; }
+.operating-history-panel form { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin: 12px 0; }
+.operating-history-panel label { display: grid; gap: 5px; min-width: 0; }
+.operating-history-panel input,.operating-history-panel button { box-sizing: border-box; min-width: 0; max-width: 100%; min-height: 44px; padding: 8px; }
+.operating-history-panel article { display: grid; gap: 5px; padding: 10px 0; border-bottom: 1px solid #e5e5df; min-height: 0; }
+.operating-history-panel p,.operating-history-panel span { overflow-wrap: anywhere; font-size: 13px; }
+.operating-history-panel nav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+.operating-history-panel button { border: 1px solid #517962; border-radius: 10px; background: #f0f6f1; color: #244d39; font: inherit; font-size: 14px; font-weight: 650; padding: 9px 14px; white-space: normal; overflow-wrap: anywhere; cursor: pointer; }
+.operating-history-panel button:disabled { opacity: .55; cursor: default; }
+.operating-history-panel input { width: 100%; border: 1px solid #b9c8bd; border-radius: 8px; background: white; color: #252d28; font: inherit; font-size: 16px; }
+.operating-history-panel label { font-size: 14px; }
+.operating-history-panel p { line-height: 1.6; margin: 10px 0; }
+.operating-history-panel button:focus-visible,.operating-history-panel input:focus-visible { outline: 2px solid #315d46; outline-offset: 2px; }
+.operating-history-panel > label + button { margin-top: 12px; background: #285540; color: white; }

@@ -46,7 +46,7 @@ describe('PrintWorker', () => {
       printSnapshot: { tableCode: 'VIP1', productName: '精酿啤酒', note: '少冰' },
       containsPriorityNote: true,
     }))
-    expect(transactions.statements[0]).toContain('FOR UPDATE SKIP LOCKED')
+    expect(transactions.statements[0]).toContain('FOR UPDATE OF job SKIP LOCKED')
     expect(transactions.statements[0]).toContain('LIMIT $4')
   })
 
@@ -62,6 +62,30 @@ describe('PrintWorker', () => {
     expect(print).not.toHaveBeenCalled()
     expect(result.retrying).toEqual(['26100000-0000-4000-8000-000000000010'])
     expect(transactions.statements[1]).toContain("'failed'")
+  })
+
+  it('bounds a hung adapter, retains an unknown result without automatic resend, and clears its timer', async () => {
+    vi.useFakeTimers()
+    try {
+      const transactions = new ScriptedTransactions([response([jobRow()]), response([],1), response([],1)])
+      const run=new PrintWorker(transactions).runBatch(scope,'print-timeout-test',{
+        print:()=>new Promise<void>(()=>{}),
+      },{adapterTimeoutMs:100})
+      await vi.advanceTimersByTimeAsync(101)
+      expect((await run).dead).toHaveLength(1)
+      expect(vi.getTimerCount()).toBe(0)
+      expect(transactions.statements[0]).toContain("target.status='active'")
+      expect(transactions.statements[0]).toContain("route.status='active'")
+    } finally { vi.useRealTimers() }
+  })
+
+  it('does not automatically resend after an unclassified adapter exception', async () => {
+    const transactions = new ScriptedTransactions([response([jobRow()]), response([],1), response([],1)])
+    const print = vi.fn().mockRejectedValue(new Error('ack lost after spool submission'))
+    const result = await new PrintWorker(transactions).runBatch(scope,'print-unknown-test',{print})
+    expect(print).toHaveBeenCalledTimes(1)
+    expect(result.dead).toHaveLength(1)
+    expect(result.retrying).toEqual([])
   })
 })
 

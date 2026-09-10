@@ -138,4 +138,24 @@ integration('HardwareRepository PostgreSQL', () => {
       code: 'bar-printer-01', name: '吧台打印机（暂停维护）', status: 'paused',
     })
   })
+
+  it('retires the failed original before a new reprint and does not reopen either on replay', async () => {
+    const original = (await pool.query<{id:string}>("SELECT id FROM mbox.print_jobs WHERE tenant_id=$1 AND station_code='kitchen'",[scope.tenantId])).rows[0]!
+    await pool.query("UPDATE mbox.print_jobs SET status='failed',attempts=1,last_error_code='device_offline' WHERE id=$1",[original.id])
+    const copy = await transactions.run(scope, async tx => {
+      await tx.query('SET LOCAL ROLE mbox_runtime')
+      return new HardwareRepository(tx).reprintPrintJob(original.id,employeeId,'确认未出纸后补打','reprint-failed-original-0001')
+    })
+    expect(copy.id).not.toBe(original.id)
+    expect(copy.reprintOfJobId).toBe(original.id)
+    expect(copy.status).toBe('pending')
+    expect(copy.printSnapshot.note).toContain('补打')
+    const replay=await transactions.run(scope,tx=>new HardwareRepository(tx).reprintPrintJob(original.id,employeeId,'确认未出纸后补打','reprint-failed-original-0001'))
+    expect(replay.id).toBe(copy.id)
+    const old=(await pool.query('SELECT status,attempts,last_error_code FROM mbox.print_jobs WHERE id=$1',[original.id])).rows[0]
+    expect(old).toEqual({status:'dead',attempts:1,last_error_code:'superseded_manual_reprint'})
+    await expect(transactions.run(scope,tx=>new HardwareRepository(tx).retryPrintJob(original.id,employeeId,'不允许重开旧尝试'))).rejects.toThrow('使用补打')
+    await expect(transactions.run(scope,tx=>new HardwareRepository(tx).reprintPrintJob(copy.id,employeeId,'在途任务不可重复','reprint-inflight-denied-0001'))).rejects.toThrow('在途任务')
+    expect((await pool.query('SELECT id FROM mbox.print_jobs WHERE reprint_of_job_id=$1',[original.id])).rowCount).toBe(1)
+  })
 })

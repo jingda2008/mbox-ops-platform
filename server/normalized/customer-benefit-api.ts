@@ -1,4 +1,7 @@
 import { createHash } from 'node:crypto'
+import { loadGuestCustomerOrderHistory } from './guest-table-orders-query.js'
+import { benefitWalletState, parseBenefitWalletCursor } from './benefit-wallet.js'
+import { CouponCalendarError } from './coupon-calendar.js'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import {
   BenefitAuthorizationError,
@@ -125,6 +128,15 @@ export const customerBenefitApiPlugin: FastifyPluginAsync<CustomerBenefitApiOpti
   app,
   options,
 ) => {
+  app.get('/public/mini/customer/orders', async (request, reply) => {
+    privateNoStore(reply)
+    return handleRoute(reply, async () => {
+      const context = await options.resolveSelfContext(request)
+      const data = await options.transactions.run(context.scope,
+        transaction => loadGuestCustomerOrderHistory(transaction, context.customerId), { readOnly: true })
+      return reply.send({ data, meta: { count: data.length, limit: 30, scope: 'own_paid_orders' } })
+    })
+  })
   app.get('/public/mini/customer/profile', async (request, reply) => {
     privateNoStore(reply)
     return handleRoute(reply, async () => {
@@ -145,6 +157,36 @@ export const customerBenefitApiPlugin: FastifyPluginAsync<CustomerBenefitApiOpti
         benefitRepository(options, transaction).listAvailableForCustomer(context.customerId)
       ), { readOnly: true })
       return reply.send({ data: benefits.map(toPublicBenefit) })
+    })
+  })
+
+  app.get('/public/mini/customer/benefit-wallet', async (request, reply) => {
+    privateNoStore(reply)
+    return handleRoute(reply, async () => {
+      const context = await options.resolveSelfContext(request)
+      const query = request.query as Record<string, unknown>
+      let cursor
+      try { cursor = parseBenefitWalletCursor(query.cursor) }
+      catch { throw new CustomerBenefitRequestError('优惠券分页位置无效，请重新读取') }
+      const rawLimit = query.limit === undefined ? '30' : query.limit
+      if (typeof rawLimit !== 'string' || !/^[1-9]\d?$/.test(rawLimit) || Number(rawLimit) > 50) {
+        throw new CustomerBenefitRequestError('优惠券分页数量须为1至50')
+      }
+      const at = options.now?.() ?? new Date()
+      const page = await options.transactions.run(context.scope, (transaction) => (
+        benefitRepository(options, transaction).listWalletForCustomer(context.customerId, cursor, Number(rawLimit), at)
+      ), { readOnly: true })
+      return reply.send({ data: {
+        items: page.items.map((benefit) => ({
+          ...toPublicBenefit(benefit),
+          state: benefitWalletState(benefit, at),
+          quantityTotal: benefit.quantityTotal,
+          quantityReserved: benefit.quantityReserved,
+          quantityRedeemed: benefit.quantityRedeemed,
+        })),
+        nextCursor: page.nextCursor,
+        asOf: at.toISOString(),
+      } })
     })
   })
 
@@ -806,6 +848,8 @@ function staffAccess(
 
 function toPublicBenefit(benefit: Awaited<ReturnType<BenefitRepository['listAvailableForCustomer']>>[number]) {
   return {
+    ...(benefit.calendar ? { calendar: benefit.calendar } : {}),
+    ...(benefit.pricePromise ? { pricePromise: benefit.pricePromise } : {}),
     id: benefit.id,
     code: benefit.benefitCode,
     type: benefit.benefitType,
@@ -855,6 +899,7 @@ function readIssueBenefit(body: JsonObject) {
     throw new CustomerBenefitRequestError('适用商品必须使用强类型allowedProductIds字段，不能写入权益快照')
   }
   return {
+    ...(body.couponCalendarVersionId === undefined ? {} : { couponCalendarVersionId: readString(body.couponCalendarVersionId, '券时间规则版本', 36, 36) }),
     customerId: readString(body.customerId, '客户', 64, 8),
     benefitCode: readString(body.benefitCode, '权益编码', 64, 2),
     benefitType: readEnum(body.benefitType, ['gift_product', 'discount', 'credit', 'access', 'other'], '权益类型'),
@@ -934,7 +979,7 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
     }
     return apiError(409,error.code,error.message)
   }
-  if (error instanceof CustomerBenefitRequestError || error instanceof TypeError) {
+  if (error instanceof CustomerBenefitRequestError || error instanceof TypeError || error instanceof CouponCalendarError) {
     return apiError(400, 'CUSTOMER_BENEFIT_REQUEST_INVALID', error.message)
   }
   return apiError(500, 'CUSTOMER_BENEFIT_INTERNAL_ERROR', '客户权益服务暂时不可用，请稍后再试')

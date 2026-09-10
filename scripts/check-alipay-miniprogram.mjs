@@ -40,6 +40,7 @@ function cssSignature(source) {
     // support WeChat's private internal checkbox selectors.
     .replace(/[^{}]*\.wx-checkbox-input[^{}]*\{[^{}]*\}/g, '')
     .replace(/\.wx-phone-button/g, '.alipay-phone-button')
+    .replace(/\.wxss/g, '.acss')
     .replace(/\s+/g, ' ')
     .trim()
 }
@@ -143,6 +144,11 @@ const [wechatGlobalStyle, alipayGlobalStyle] = await Promise.all([
   readFile(join(alipayRoot, 'app.acss'), 'utf8'),
 ])
 assert(cssSignature(alipayGlobalStyle) === cssSignature(wechatGlobalStyle), '全局布局样式与微信不一致')
+for (const file of await walk(join(wechatRoot,'styles'))) {
+  if (!file.endsWith('.wxss')) continue
+  const equivalent=join(alipayRoot,'styles',relative(join(wechatRoot,'styles'),file).replace(/\.wxss$/,'.acss'))
+  assert(cssSignature(await readFile(file,'utf8'))===cssSignature(await readFile(equivalent,'utf8')),`共享样式不一致: ${relative(wechatRoot,file)}`)
+}
 
 const wechatAssets = (await walk(join(wechatRoot, 'assets'))).map((file) => relative(join(wechatRoot, 'assets'), file))
 const alipayAssets = (await walk(join(alipayRoot, 'assets'))).map((file) => relative(join(alipayRoot, 'assets'), file))

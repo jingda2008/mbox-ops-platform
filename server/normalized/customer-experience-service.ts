@@ -2662,6 +2662,7 @@ export class CustomerExperienceService {
   upsertCheckoutUpgradeRule(
     context: StaffCustomerExperienceContext,
     input: Readonly<{
+      qualification?:unknown
       code: string
       name: string
       sourceProductId: string
@@ -2744,13 +2745,14 @@ export class CustomerExperienceService {
         offerValidMinutes:input.offerValidMinutes,
         minimumGrossMarginBasisPoints:input.minimumGrossMarginBasisPoints,
         employeeId:context.employeeId,
+        ...(input.qualification!==undefined?{qualification:input.qualification}:{}),
       })
       return commandOutcome(
         value,
         staffActor(context),
         'customer.checkout.upgrade.rule.saved',
         'checkout_upgrade_rule',
-        input.code,
+        value.id,
         context.businessDate,
         {
           status: value.status,
@@ -2771,9 +2773,9 @@ export class CustomerExperienceService {
       operationScope: 'customer.checkout.upgrade.rule.approve',
       idempotencyKey: input.idempotencyKey,
       requestFingerprint: fingerprint(input),
-      resultCodec: objectCodec<{ code: string; status: string; revision: number }>(),
+      resultCodec: objectCodec<{ id:string; code: string; status: string; revision: number }>(),
     }, async (transaction) => {
-      const approved = await transaction.query<{ code: string; status: string; revision: number }>(`
+      const approved = await transaction.query<{ id:string; code: string; status: string; revision: number }>(`
         WITH candidate AS (
           SELECT rule.id
           FROM mbox.checkout_upgrade_rules AS rule
@@ -2827,6 +2829,7 @@ export class CustomerExperienceService {
                   component_product.status<>'active'
                   OR (
                     component_product.fulfillment_station IN ('bar','kitchen')
+                    AND component_product.inventory_control_mode='tracked'
                     AND NOT EXISTS (
                       SELECT 1
                       FROM mbox.recipes recipe
@@ -2843,6 +2846,7 @@ export class CustomerExperienceService {
                         AND recipe.store_id=component.store_id
                         AND recipe.product_id=component.component_product_id
                         AND recipe.status='active'
+                        AND recipe.effective_at<=clock_timestamp()
                     )
                   )
                 )
@@ -2857,7 +2861,7 @@ export class CustomerExperienceService {
         FROM candidate
         WHERE rule.tenant_id=$1::uuid AND rule.store_id=$2::uuid
           AND rule.id=candidate.id
-        RETURNING rule.code, rule.status, rule.revision
+        RETURNING rule.id, rule.code, rule.status, rule.revision
       `, [
         transaction.scope.tenantId,
         transaction.scope.storeId,
@@ -2878,7 +2882,7 @@ export class CustomerExperienceService {
         staffActor(context),
         'customer.checkout.upgrade.rule.approved',
         'checkout_upgrade_rule',
-        input.code,
+        value.id,
         context.businessDate,
         { revision: value.revision, reason: input.reason },
       )

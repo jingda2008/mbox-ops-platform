@@ -7,6 +7,8 @@ import {
 } from './order-repository.js'
 import { PricingAuthorizationDeniedError } from './pricing-authorization-policy.js'
 import type { VerifiedPricingAuthorization } from './pricing-authorization-policy.js'
+import {PricingAuthorizationPolicy} from './pricing-authorization-policy.js'
+import {pricingLineFingerprint} from './pricing-line-allocation.js'
 
 const tenantId = '11111111-1111-4111-8111-111111111111'
 const storeId = '22222222-2222-4222-8222-222222222222'
@@ -37,6 +39,40 @@ class ScriptedTransaction implements ScopedTransaction {
 }
 
 describe('OrderRepository', () => {
+  it('writes a bound discount to the selected second portion, leaving first price and both costs intact',async()=>{
+    const lines=[{productId,quantity:1,note:'第一杯原价'},{productId,quantity:1,note:'第二杯9.9元'}]
+    const tx=new ScriptedTransaction([{rows:[{id:sessionId}]},{rows:[priceRow(),{...priceRow(),request_index:1}]},
+      {rows:[{...orderRow(),discount_amount_minor:'7810',total_amount_minor:'9790'}]},
+      {rows:[{...itemRow(),quantity:1,total_amount_minor:'8800'}]},
+      {rows:[{...itemRow(),quantity:1,discount_amount_minor:'7810',total_amount_minor:'990'}]},
+    ])
+    const authorization=await new PricingAuthorizationPolicy({
+      authorize:async()=>({authorized:true,authorizationId:itemId,kind:'discount',sourceType:'benefit',sourceId:itemId,
+        amountMinor:7810,maximumAmountMinor:7810,currency:'CNY',lineAllocations:lines.map((line,index)=>({
+          requestIndex:index,productId,quantity:1,unitPriceMinor:8800,discountAmountMinor:index===1?7810:0,lineFingerprint:pricingLineFingerprint(line),
+        }))}),consume:async()=>{},
+    }).authorize(tx,{scope:tx.scope,actor:{type:'system',ref:'pricing-test'},tableSessionId:sessionId,channel:'staff_assisted',lines},{sourceType:'benefit',sourceId:itemId})
+    const result=await new OrderRepository(tx).createSubmitted({tableSessionId:sessionId,publicId:'priced-portions',channel:'staff_assisted',lines},authorization)
+    expect(result.totalAmountMinor).toBe(9790)
+    const inserts=tx.calls.filter(call=>call.sql.includes('INSERT INTO mbox.order_items'))
+    expect(inserts.map(call=>call.values.slice(7,10))).toEqual([[8800,0,8800],[8800,7810,990]])
+    expect(inserts.map(call=>call.values[17])).toEqual([1050,1050])
+  })
+  it('quotes with the submission price and cost functions without creating or reserving anything',async()=>{
+    const tx=new ScriptedTransaction([{rows:[priceRow()]}])
+    const quote=await new OrderRepository(tx).quoteCurrent([{productId,quantity:2,note:'保留口味'}],'staff_assisted')
+    expect(quote).toMatchObject({pricingBasis:'standard_only',subtotalAmountMinor:17600,costAmountMinor:2100,currency:'CNY',items:[{productId,quantity:2,costMinor:2100,note:'保留口味'}]})
+    expect(tx.calls).toHaveLength(1);expect(tx.calls.every(call=>!/(?:INSERT|UPDATE|DELETE)\s+(?:INTO|FROM|mbox\.)/.test(call.sql))).toBe(true)
+  })
+  it('never guesses zero quote cost when catalog cost is unknown',async()=>{
+    const tx=new ScriptedTransaction([{rows:[{...priceRow(),cost_amount_minor:null}]}])
+    expect(await new OrderRepository(tx).quoteCurrent([{productId,quantity:1}],'staff_assisted')).toMatchObject({costAmountMinor:null,items:[{costMinor:null}]})
+  })
+  it('rejects client quote prices just as actual submission does',async()=>{
+    const tx=new ScriptedTransaction([])
+    await expect(new OrderRepository(tx).quoteCurrent([{productId,quantity:1,discountAmountMinor:1} as never],'guest_qr')).rejects.toThrow(PricingAuthorizationDeniedError)
+    expect(tx.calls).toHaveLength(0)
+  })
   it('locks the target session, prices on the server and inserts only target order rows', async () => {
     const tx = new ScriptedTransaction([
       { rows: [{ id: sessionId }] },

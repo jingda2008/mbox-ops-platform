@@ -1,0 +1,24 @@
+<view class="page contact-page">
+  <text class="contact-title">联系偏好</text><text class="contact-copy">是否接收活动信息由你决定，不影响会员、卡券和正常点单。</text>
+  <button class="contact-button stop" disabled="{{busy}}" bindtap="stopAll">停止全部营销联系</button>
+  <text wx:if="{{message}}" class="contact-message">{{message}}</text>
+  <view wx:if="{{error}}" class="contact-error"><text>{{error}}</text><button class="contact-button" disabled="{{busy}}" bindtap="load">刷新核对</button></view>
+  <text wx:if="{{loading}}" class="contact-copy">正在读取联系偏好</text>
+  <block wx:if="{{loaded}}">
+    <view wx:for="{{channels}}" wx:key="channel" class="contact-box"><view class="contact-row"><text>{{item.name}}</text><text class="contact-status">{{item.stateText}}</text></view><text class="contact-copy">{{item.capabilityText}}</text><button wx:if="{{item.granted}}" class="contact-button" disabled="{{busy}}" data-channel="{{item.channel}}" bindtap="withdrawChannel">停止此渠道</button></view>
+    <text class="contact-title">主动选择活动信息</text><text class="contact-copy">以下均为可选，默认不勾选。保存只新增本次明确选择；停止旧许可请用上方停止按钮。</text>
+    <text wx:if="{{!notices.length}}" class="contact-copy">门店暂未开放新的营销许可申请，你仍可停止既有营销。</text>
+    <button wx:for="{{notices}}" wx:key="id" class="contact-button" disabled="{{busy}}" data-id="{{item.id}}" bindtap="openNotice">{{item.rule.operatorName}} · 查看第{{item.version}}版说明</button>
+    <view wx:if="{{selectedNotice}}" class="contact-box">
+      <text class="contact-title">{{selectedNotice.rule.operatorName}}</text><text class="contact-copy">联系主体及客服：{{selectedNotice.rule.operatorContact}}</text><text class="contact-terms">{{selectedNotice.rule.summary}}</text>
+      <text class="contact-copy">北京时间周{{selectedNotice.weekdayText}}，{{selectedNotice.startText}}—{{selectedNotice.endText}}；每日最多{{selectedNotice.rule.maximumPerDay}}次，每月最多{{selectedNotice.rule.maximumPerMonth}}次。</text>
+      <text class="contact-copy">本次许可最多{{selectedNotice.rule.consentDays}}天，且不超过告知期限；可随时撤回。</text><text class="contact-copy">告知有效期：{{selectedNotice.fromText}} 至 {{selectedNotice.untilText}}（北京时间）</text>
+      <text class="contact-copy">所用资料：{{selectedNotice.dataText}}</text><text class="contact-copy">停止方法：{{selectedNotice.rule.withdrawalInstructions}}</text>
+      <checkbox-group bindchange="chooseChannels"><label wx:for="{{selectedNotice.channelOptions}}" wx:key="channel" class="contact-choice"><checkbox value="{{item.channel}}" checked="{{item.checked}}" disabled="{{busy}}" color="#315d46"/><text>{{item.name}}</text></label></checkbox-group>
+      <checkbox-group wx:if="{{selectedNotice.hasJoint}}" bindchange="chooseJoint"><label class="contact-choice"><checkbox value="joint" checked="{{jointSelected}}" disabled="{{busy}}" color="#315d46"/><text>也愿意接收由本店联系的联合活动；不向合作方提供名单</text></label></checkbox-group>
+      <checkbox-group bindchange="acknowledge"><label class="contact-choice"><checkbox value="agree" checked="{{acknowledged}}" disabled="{{busy}}" color="#315d46"/><text>我已阅读上方主体、用途、资料范围与停止方式，同意本次选择</text></label></checkbox-group>
+      <button class="contact-button primary" disabled="{{busy || !canSubmit}}" loading="{{busy}}" bindtap="submit">保存本次选择</button>
+      <text class="contact-copy">微信还需适用的原生订阅或已核实渠道能力；不会替你添加企微、关注公众号。短信和电话仅在本人联系方式核实后联系。</text>
+    </view>
+  </block>
+</view>

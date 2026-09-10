@@ -54,9 +54,10 @@ if (result.status !== 0) {
 }
 
 const appConfig = JSON.parse(await readFile(join(output, 'appConfig.json'), 'utf8'))
+const sourceApp = JSON.parse(await readFile(join(projectRoot, 'app.json'), 'utf8'))
 const workerPath = join(output, 'index.worker.js')
 const workerSize = (await stat(workerPath)).size
-if (!Array.isArray(appConfig.pages) || appConfig.pages.length !== 21 || workerSize <= 0) {
+if (!Array.isArray(appConfig.pages) || appConfig.pages.length !== sourceApp.pages.length || workerSize <= 0) {
   if (result.stderr) process.stderr.write(result.stderr)
   throw new Error('支付宝编译产物不完整')
 }
@@ -76,4 +77,4 @@ const nonFatal = String(result.stderr || '').trim()
 if (nonFatal && !/^EISDIR: illegal operation on a directory, open '/.test(nonFatal)) {
   process.stderr.write(result.stderr)
 }
-console.log(`Alipay official compiler passed (21 pages, worker ${workerSize} bytes, output ${output})`)
+console.log(`Alipay official compiler passed (${sourceApp.pages.length} pages, worker ${workerSize} bytes, output ${output})`)

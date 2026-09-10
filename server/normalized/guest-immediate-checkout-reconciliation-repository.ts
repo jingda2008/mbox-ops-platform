@@ -182,10 +182,13 @@ export class GuestImmediateCheckoutReconciliationRepository {
         released_inventory_reservation_count,cancelled_item_count,cancelled_kds_task_count,worker_ref
       )
       SELECT $1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6,
-        session.business_date,
-        (((clock_timestamp() AT TIME ZONE store.timezone)-store.business_day_cutoff)::date),
+        ordering.business_date,
+        mbox.current_operating_business_date($1::uuid,$2::uuid),
         $7,$8,$9::integer,$10::integer,$11::integer,$12
       FROM mbox.table_sessions AS session
+      JOIN mbox.orders AS ordering
+        ON ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
+       AND ordering.table_session_id=session.id AND ordering.id=$4::uuid
       JOIN mbox.stores AS store
         ON store.tenant_id=session.tenant_id AND store.id=session.store_id AND store.status='active'
       WHERE session.tenant_id=$1::uuid AND session.store_id=$2::uuid

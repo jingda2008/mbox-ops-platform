@@ -237,7 +237,7 @@ export class ProfitQueryService {
           ON session.tenant_id = order_row.tenant_id AND session.store_id = order_row.store_id
          AND session.id = order_row.table_session_id
         WHERE entry.tenant_id = $1::uuid AND entry.store_id = $2::uuid
-          AND session.business_date BETWEEN $3::date AND $4::date
+          AND order_row.business_date BETWEEN $3::date AND $4::date
           AND entry.currency = $5
       `, [scope.tenantId, scope.storeId, range.startDate, range.endDate, currency])
 
@@ -311,7 +311,7 @@ export class ProfitQueryService {
           ON session.tenant_id=order_row.tenant_id AND session.store_id=order_row.store_id
          AND session.id=order_row.table_session_id
         WHERE item.tenant_id=$1::uuid AND item.store_id=$2::uuid
-          AND session.business_date BETWEEN $3::date AND $4::date
+          AND order_row.business_date BETWEEN $3::date AND $4::date
           AND order_row.payment_status IN ('paid','partially_refunded','refunded')
           AND order_row.status <> 'cancelled'
           AND item.parent_order_item_id IS NULL
@@ -347,7 +347,7 @@ export class ProfitQueryService {
             WHERE payment.tenant_id = $1::uuid AND payment.store_id = $2::uuid
               AND payment.status IN ('succeeded', 'partially_refunded', 'refunded')
               AND payment.currency = $5
-              AND session.business_date BETWEEN $3::date AND $4::date
+              AND order_row.business_date BETWEEN $3::date AND $4::date
               AND NOT EXISTS (
                 SELECT 1 FROM mbox.reconciliation_entries AS entry
                 WHERE entry.tenant_id = payment.tenant_id AND entry.store_id = payment.store_id

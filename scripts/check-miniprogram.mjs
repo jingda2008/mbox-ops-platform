@@ -16,6 +16,16 @@ async function walk(directory) {
 
 await walk(root)
 
+const app = JSON.parse(await readFile(join(root, 'app.json'), 'utf8'))
+if (!Array.isArray(app.pages) || new Set(app.pages).size !== app.pages.length) {
+  throw new Error('小程序页面路由不能为空或重复')
+}
+for (const page of app.pages) {
+  for (const extension of ['.js', '.wxml', '.wxss']) {
+    if (!files.includes(join(root, page + extension))) throw new Error(`小程序页面缺失: ${page}${extension}`)
+  }
+}
+
 for (const file of files) {
   const extension = extname(file)
   const source = await readFile(file, 'utf8')

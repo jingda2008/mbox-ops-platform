@@ -13,6 +13,7 @@ import type {
   CashierWorkbenchView,
 } from '../../src/shared/cashier-workbench-contracts.js'
 import type { ScopedPostgresTransactionRunner, StoreScope } from './transaction-runner.js'
+import {cashierCouponRefundReviewCountSql} from './checkout-coupon-refund-review-repository.js'
 
 export interface CashierWorkbenchQueryInput {
   scope: Readonly<StoreScope>
@@ -26,6 +27,7 @@ export interface CashierWorkbenchQueryInput {
 }
 
 interface OrderRow extends Record<string, unknown> {
+  coupon_refund_review_count?:number
   id: string
   public_id: string
   table_code: string
@@ -221,7 +223,7 @@ export class PostgresCashierWorkbenchQuery {
           orders.channel, orders.status, orders.payment_status,
           orders.total_amount_minor, orders.currency,
           orders.submitted_at::text, orders.created_at::text,
-          session.business_date::text
+          orders.business_date::text,${cashierCouponRefundReviewCountSql} AS coupon_refund_review_count
         FROM mbox.orders AS orders
         JOIN mbox.table_sessions AS session
           ON session.tenant_id = orders.tenant_id
@@ -237,14 +239,15 @@ export class PostgresCashierWorkbenchQuery {
         WHERE orders.tenant_id = $1::uuid
           AND orders.store_id = $2::uuid
           AND (
-            session.business_date = $3::date
+            orders.business_date = $3::date
             -- Explicit lookup/status filtering is global across earlier
             -- business days, while the routine queue below contains
             -- unresolved work only.
             OR (($4::text <> '' OR $9::text IS NOT NULL)
-              AND session.business_date < $3::date)
-            OR (session.business_date < $3::date AND (
-              (orders.payment_status='unpaid' AND orders.status<>'cancelled'
+              AND orders.business_date < $3::date)
+            OR (orders.business_date < $3::date AND (
+              ${cashierCouponRefundReviewCountSql}>0 OR
+              (orders.payment_status='unpaid' AND orders.status<>'cancelled' AND orders.total_amount_minor > 0
                 AND NOT EXISTS (
                   SELECT 1 FROM mbox.order_settlement_exception_events terminal_settlement_exception
                   WHERE terminal_settlement_exception.tenant_id=orders.tenant_id
@@ -342,7 +345,7 @@ export class PostgresCashierWorkbenchQuery {
           AND ($8::uuid IS NULL OR area.id=$8::uuid)
           AND (
             $9::text IS NULL
-            OR ($9='unpaid' AND orders.payment_status IN ('unpaid','partially_paid')
+            OR ($9='unpaid' AND orders.total_amount_minor > 0 AND orders.payment_status IN ('unpaid','partially_paid')
               AND NOT EXISTS (SELECT 1 FROM mbox.payments filter_payment
                 WHERE filter_payment.tenant_id=orders.tenant_id AND filter_payment.store_id=orders.store_id
                   AND filter_payment.order_id=orders.id AND filter_payment.status IN ('created','pending')
@@ -351,10 +354,11 @@ export class PostgresCashierWorkbenchQuery {
                 WHERE filter_payment.tenant_id=orders.tenant_id AND filter_payment.store_id=orders.store_id
                   AND filter_payment.order_id=orders.id AND filter_payment.status IN ('created','pending')
                   AND filter_payment.retry_released_at IS NULL))
-            OR ($9='completed' AND orders.payment_status='paid')
+            OR ($9='completed' AND (orders.payment_status='paid'
+              OR (orders.total_amount_minor=0 AND orders.status NOT IN ('draft','cancelled'))))
             OR ($9='refunded' AND orders.payment_status IN ('partially_refunded','refunded'))
           )
-        ORDER BY (session.business_date < $3::date) DESC,
+        ORDER BY (orders.business_date < $3::date) DESC,
           COALESCE(orders.submitted_at, orders.created_at) DESC, orders.id DESC
         LIMIT $5
       `, [
@@ -736,6 +740,7 @@ function assembleView(
     const netCollectedMinor = grossPaidMinor - refundedMinor
     return {
       id: order.id,
+      ...(Number(order.coupon_refund_review_count)>0?{couponRefundReviewCount:Number(order.coupon_refund_review_count)}:{}),
       publicId: order.public_id,
       tableCode: order.table_code,
       areaId: order.area_id,
@@ -791,6 +796,7 @@ function assembleView(
     actions: actions(input.capabilities),
     summary: {
       orderCount: orders.length,
+      ...(orders.some(order=>(order.couponRefundReviewCount??0)>0)?{couponRefundReviewCount:orders.reduce((sum,order)=>sum+(order.couponRefundReviewCount??0),0)}:{}),
       capturedPaymentCount: paymentRows.filter((payment) => CAPTURED_PAYMENT_STATUSES.includes(payment.status)).length,
       requestedRefundCount: refundRows.filter((refund) => refund.status === 'requested').length,
       processingRefundCount: refundRows.filter((refund) => refund.status === 'approved' || refund.status === 'processing').length,

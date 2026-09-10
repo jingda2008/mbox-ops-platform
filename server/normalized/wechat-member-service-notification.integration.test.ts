@@ -45,11 +45,37 @@ integration('typed WeChat member-service notification delivery',()=>{
     `,[ids.tenant,ids.store,benefitId])
     expect(delivered.rows).toEqual([{status:'sent',outcome:'accepted'}])
   })
+  it.each(['revoke','expire','crash'] as const)('does not send after %s invalidates the original attempt',async(change)=>{
+    const isolated={tenant:randomUUID(),store:randomUUID(),customer:randomUUID(),membership:randomUUID(),policy:randomUUID()}
+    await seed(pool,isolated)
+    const currentScope={tenantId:isolated.tenant,storeId:isolated.store}
+    const authorization={customerId:isolated.customer,notificationType:'member_benefit_issued' as const,policyId:isolated.policy,policyVersion:1,templateId:'wechat-template-benefit-001'}
+    await transactions.run(currentScope,tx=>new WechatMemberServiceNotificationRepository(tx).recordAuthorization({...authorization,expectedVersion:0,platformResult:'accept',platformEventReference:`member-service-${change}-grant`}))
+    const benefitId=randomUUID()
+    await pool.query("INSERT INTO mbox.benefits(id,tenant_id,store_id,customer_id,benefit_code,benefit_type,status,benefit_snapshot,valid_from) VALUES($1,$2,$3,$4,'PREFLIGHT-GIFT','gift_product','issued',jsonb_build_object('title','发送前复核测试券'),clock_timestamp()-interval '1 day')",[benefitId,isolated.tenant,isolated.store,isolated.customer])
+    if(change==='crash')await transactions.run(currentScope,async tx=>{
+      await tx.query("INSERT INTO mbox.wechat_member_service_notification_authorization_uses(tenant_id,store_id,authorization_id,notification_job_id) SELECT tenant_id,store_id,authorization_id,id FROM mbox.wechat_member_service_notification_jobs WHERE tenant_id=$1 AND store_id=$2 AND source_id=$3",[isolated.tenant,isolated.store,benefitId])
+      await tx.query("UPDATE mbox.wechat_member_service_notification_jobs SET status='sending',attempts=1,locked_by='interrupted-worker',locked_at=clock_timestamp()-interval '10 minutes' WHERE tenant_id=$1 AND store_id=$2 AND source_id=$3",[isolated.tenant,isolated.store,benefitId])
+    })
+    const sendTemplate=vi.fn(async()=>({outcome:'accepted' as const,providerReference:'must-not-send'}))
+    const worker=new WechatMemberServiceNotificationWorker(transactions,{resolveMiniProgramNotificationRecipient:async()=>{
+      if(change==='revoke')await transactions.run(currentScope,tx=>new WechatMemberServiceNotificationRepository(tx).recordAuthorization({...authorization,expectedVersion:1,platformResult:'revoke',platformEventReference:'member-service-during-resolve-revoke'}))
+      else await pool.query("UPDATE mbox.benefits SET valid_until=clock_timestamp()-interval '1 minute' WHERE id=$1",[benefitId])
+      return{identityExternalId:'member-service-identity',openId:'openid-member-service'}
+    }},{sendTemplate})
+    const result=await worker.runBatch(currentScope,`member-service-${change}`)
+    expect(result).toMatchObject(change==='crash'?{claimed:0,recoveredUnknown:[expect.any(String)],accepted:[]}:{claimed:1,rejected:[expect.any(String)],accepted:[]})
+    if(change==='crash')expect((await pool.query('SELECT outcome FROM mbox.wechat_member_service_notification_receipts WHERE tenant_id=$1 AND store_id=$2',[isolated.tenant,isolated.store])).rows).toEqual([{outcome:'unknown'}])
+    expect(sendTemplate).not.toHaveBeenCalled()
+    expect(await worker.runBatch(currentScope,`member-service-${change}-retry`)).toMatchObject({claimed:0})
+    expect((await pool.query('SELECT status FROM mbox.wechat_member_service_notification_jobs WHERE tenant_id=$1 AND store_id=$2 AND source_id=$3',[isolated.tenant,isolated.store,benefitId])).rows[0]).toMatchObject({status:'suppressed'})
+  })
 })
 
-async function seed(pool:Pool):Promise<void>{
+async function seed(pool:Pool,fixtureIds=ids):Promise<void>{
+  const ids=fixtureIds
   const principal='member-service-principal'
-  await pool.query(`INSERT INTO mbox.tenants(id,code,name) VALUES($1,'member-service-notice','Member service notice tenant')`,[ids.tenant])
+  await pool.query(`INSERT INTO mbox.tenants(id,code,name) VALUES($1::uuid,'member-service-'||$1::text,'Member service notice tenant')`,[ids.tenant])
   await pool.query(`INSERT INTO mbox.stores(id,tenant_id,code,name,timezone) VALUES($1,$2,'member-service-notice','Member service notice store','Asia/Shanghai')`,[ids.store,ids.tenant])
   await pool.query(`INSERT INTO mbox.customers(id,tenant_id,store_id,public_id) VALUES($1,$2,$3,'member-service-notice-customer')`,[ids.customer,ids.tenant,ids.store])
   await pool.query(`INSERT INTO mbox.customer_memberships(id,tenant_id,store_id,customer_id,member_no) VALUES($1,$2,$3,$4,'MBX-MEMBER-SERVICE-001')`,[ids.membership,ids.tenant,ids.store,ids.customer])

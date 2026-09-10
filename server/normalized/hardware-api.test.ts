@@ -15,6 +15,23 @@ const apps: ReturnType<typeof Fastify>[] = []
 afterEach(async () => Promise.all(apps.splice(0).map((app) => app.close())))
 
 describe('hardware API role cropping', () => {
+  it('restricts ticket policies to printer managers and validates independent switches and copy bounds', async () => {
+    const staff=await build(['print.view','work.bar'])
+    expect((await staff.inject({method:'GET',url:'/hardware/print-ticket-policies'})).statusCode).toBe(403)
+    expect((await staff.inject({method:'POST',url:'/hardware/print-ticket-policies',payload:{}})).statusCode).toBe(403)
+    const manager=await build(['printer.manage'])
+    const rows=(await manager.inject({method:'GET',url:'/hardware/print-ticket-policies'})).json().data
+    expect(rows).toHaveLength(9)
+    expect(rows).toContainEqual({ticketKind:'daily_settlement',enabled:true,copies:null})
+    expect(rows).toContainEqual({ticketKind:'cashier_settlement',enabled:true,copies:null})
+    const send=(body:object)=>manager.inject({method:'POST',url:'/hardware/print-ticket-policies',
+      headers:{'idempotency-key':'print-policy-validation-0001'},payload:body})
+    for(const patch of [{ticketKind:'unknown'},{enabled:'false'},{copies:0},{copies:6},{copies:1.5},{reason:''}]) {
+      expect((await send({ticketKind:'delivery',enabled:false,copies:2,reason:'调整配送打印',...patch})).statusCode).toBe(400)
+    }
+    expect((await send({ticketKind:'delivery',enabled:false,copies:2,reason:'调整配送打印'})).json().data)
+      .toEqual({ticketKind:'delivery',enabled:false,copies:2})
+  })
   it('returns 401 instead of an internal error when the staff session is missing', async () => {
     const app = Fastify()
     apps.push(app)
@@ -181,6 +198,33 @@ describe('hardware API role cropping', () => {
     })
     expect(response.statusCode).toBe(403)
     expect(fake.reprintPrintJob).not.toHaveBeenCalled()
+  })
+
+  it('does not let a bartender retry a kitchen failure', async () => {
+    const fake = repository()
+    fake.getById.mockResolvedValue({ id: deviceId, stationCode: 'kitchen', status: 'failed' })
+    const app = await build(['print.retry', 'work.bar'], fake)
+    const response = await app.inject({ method: 'POST', url: `/hardware/print-jobs/${deviceId}/retry`,
+      headers: { 'idempotency-key': 'bar-kitchen-retry-0001' }, payload: { reason: '不允许越岗位重发' } })
+    expect(response.statusCode).toBe(403)
+    expect(fake.retryPrintJob).not.toHaveBeenCalled()
+  })
+
+  it('restricts source recovery to printer managers and never executes an unscoped read', async () => {
+    const app = await build(['print.view', 'print.retry', 'work.bar'])
+    expect((await app.inject({ method: 'GET', url: '/hardware/print-sources' })).statusCode).toBe(403)
+    expect((await app.inject({ method: 'POST', url: `/hardware/print-sources/${deviceId}/retry`,
+      headers: { 'idempotency-key': 'source-retry-denied-0001' }, payload: { reason: '核对后重试' } })).statusCode).toBe(403)
+  })
+
+  it('requires a reason and idempotency and refuses missing or completed source tasks', async () => {
+    const app = await build(['printer.manage'])
+    const url = `/hardware/print-sources/${deviceId}/retry`
+    expect((await app.inject({ method: 'POST', url, payload: { reason: '核对后重试' } })).statusCode).toBe(400)
+    expect((await app.inject({ method: 'POST', url, headers: { 'idempotency-key': 'source-retry-missing-reason' }, payload: {} })).statusCode).toBe(400)
+    expect((await app.inject({ method: 'POST', url, headers: { 'idempotency-key': 'source-retry-not-found-0001' },
+      payload: { reason: '核对后重试' } })).statusCode).toBe(409)
+    expect((await app.inject({ method: 'GET', url: '/hardware/print-sources' })).json()).toEqual({ data: [] })
   })
 })
 

@@ -1,6 +1,8 @@
 // Customer pages must never render a backend/WeChat error string directly.
 // Error codes are stable contracts; the fallback remains local Chinese copy.
 const CODE_MESSAGES = Object.freeze({
+  CHECKOUT_COUPON_RECONFIRM_REQUIRED: '优惠条件已变化，请重新选券或不用券继续，本次没有创建订单',
+  COUPON_UPGRADE_REQUOTE_REQUIRED: '套餐已变更，请重新确认商品和优惠报价',
   NETWORK_ERROR: '网络暂时不可用，请检查网络后重试',
   GUEST_SESSION_INVALID: '桌台连接已失效，请重新扫描桌面二维码',
   GUEST_ORDER_ACCESS_FORBIDDEN: '这笔订单不属于当前桌位，请重新扫描当前桌面的二维码',
@@ -12,6 +14,7 @@ const CODE_MESSAGES = Object.freeze({
   PRODUCT_UNAVAILABLE: '有商品暂时无法供应，请返回购物车调整后再试',
   PRODUCT_NOT_AVAILABLE: '有商品刚刚下架或售罄，请返回购物车调整后再试',
   SHARED_CART_VERSION_CONFLICT: '同桌购物车已更新，请刷新后重新确认',
+  CART_NOTE_STALE: '菜品份次已变化，请刷新购物车并重新核对每份备注',
   SHARED_CART_EMPTY: '本桌共享购物车为空，请先加入商品',
   SHARED_CART_OPERATION_CONFLICT: '本次购物车操作状态异常，请刷新后再试',
   SHARED_CART_LIMIT_EXCEEDED: '本桌购物车已达到数量或金额上限，请先确认现有商品',

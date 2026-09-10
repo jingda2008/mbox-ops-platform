@@ -11,6 +11,10 @@ import { TableSessionCommandService } from '../server/normalized/table-session-r
 import { parseNormalizedCatalog, provisionNormalizedCatalog } from '../server/provision-normalized-catalog.js'
 import { parseStoreProvisionConfig, provisionNormalizedStore, shanghaiBusinessDate } from '../server/provision-normalized-store.js'
 import { effectiveStaffNavigation } from '../src/shared/staff-module-access.js'
+import { MemberCardRepository } from '../server/normalized/member-card-repository.js'
+import { CouponCalendarRepository } from '../server/normalized/coupon-calendar-repository.js'
+import { StaffAccessRepository } from '../server/normalized/staff-access-repository.js'
+import { MarketingContactRepository } from '../server/normalized/marketing-contact-repository.js'
 
 const adminSource = required('TEST_NORMALIZED_ADMIN_URL')
 const storePath = resolve(process.env.STORE_CONFIG_FILE ?? 'deploy/normalized-store/mbox-lujiazui.store.json')
@@ -73,6 +77,49 @@ try {
     if (!result.rows[0]) throw new Error('normalized browser fixture employee is missing')
     return result.rows[0].id
   }, { readOnly: true })
+  // Opt-in, throwaway database only. Never add these grants to the real store
+  // configuration merely to make a new feature visible during acceptance.
+  const memberCardFixture = process.env.NORMALIZED_E2E_MEMBER_CARDS === 'true'
+  if (memberCardFixture) await runtime.transactions.run(scope, async transaction => {
+    // Deterministic qualification fixture: a counted, non-stock-managed drink
+    // and a bundle retaining two of that exact drink. Never a live campaign.
+    const upgradeProducts=(await transaction.query<{id:string;code:string}>(`INSERT INTO mbox.products(tenant_id,store_id,code,name,category_code,product_kind,fulfillment_station,inventory_control_mode,cost_amount_minor,guest_visible,allowed_channels)
+      VALUES($1,$2,'BROWSER-UPGRADE-SOURCE','隔离升级原饮品','test','single','bar','not_managed',200,true,ARRAY['guest_qr','staff_assisted']),
+      ($1,$2,'BROWSER-UPGRADE-TARGET','隔离升级双份套餐','test','bundle','none','not_managed',400,true,ARRAY['guest_qr','staff_assisted']) RETURNING id,code`,[scope.tenantId,scope.storeId])).rows
+    const upgradeSource=upgradeProducts.find(row=>row.code==='BROWSER-UPGRADE-SOURCE')!.id,upgradeTarget=upgradeProducts.find(row=>row.code==='BROWSER-UPGRADE-TARGET')!.id
+    await transaction.query(`INSERT INTO mbox.product_prices(tenant_id,store_id,product_id,price_type,amount_minor,currency,valid_from) VALUES($1,$2,$3,'standard',1000,'CNY',clock_timestamp()-interval '1 day'),($1,$2,$4,'standard',2000,'CNY',clock_timestamp()-interval '1 day')`,[scope.tenantId,scope.storeId,upgradeSource,upgradeTarget])
+    await transaction.query('INSERT INTO mbox.product_bundle_components(tenant_id,store_id,bundle_product_id,component_product_id,quantity,sort_order) VALUES($1,$2,$3,$4,2,1)',[scope.tenantId,scope.storeId,upgradeTarget,upgradeSource])
+    const access = new StaffAccessRepository(transaction)
+    const startsAt = new Date(Date.now()-60_000).toISOString()
+    for (const permissionCode of ['member.card.manage','member.card.review']) await access.setEmployeePermissionOverride({employeeId,permissionCode,effect:'grant',reason:'隔离卡页面测试',configuredByEmployeeId:employeeId,startsAt})
+    const creator = (await transaction.query<{id:string}>("SELECT id FROM mbox.employees WHERE tenant_id=$1 AND store_id=$2 AND employee_code='chenfangyu'",[scope.tenantId,scope.storeId])).rows[0]!.id
+    await access.setEmployeePermissionOverride({employeeId:creator,permissionCode:'member.card.manage',effect:'grant',reason:'隔离卡项目创建',configuredByEmployeeId:employeeId,startsAt})
+    await access.setEmployeePermissionOverride({employeeId,permissionCode:'loyalty.policy.publish',effect:'grant',reason:'隔离项目开放测试',configuredByEmployeeId:employeeId,startsAt})
+    const repository=new MemberCardRepository(transaction)
+    for(const width of [320,360]){
+      const project=await repository.createProject({code:`BROWSER_CARD_${width}`,name:`测试音乐兴趣卡${width}`,terms:'免费兴趣卡，消费等级保持不变，不代表同意营销。',kind:'interest',availableFrom:new Date(Date.now()-3600000).toISOString(),availableUntil:'2037-10-01T00:00:00Z',cooperationConfirmed:false,cooperationValidUntil:null,cooperationReference:null,employeeId:creator,businessDate})
+      await repository.setProjectState({projectId:project.projectId,state:'open',employeeId,businessDate,reason:'隔离项目开放'})
+      const customer=(await transaction.query<{id:string}>("INSERT INTO mbox.customers(tenant_id,store_id,public_id) VALUES($1,$2,$3) RETURNING id",[scope.tenantId,scope.storeId,`browser-card-${width}`])).rows[0]!.id
+      await transaction.query("INSERT INTO mbox.customer_memberships(tenant_id,store_id,customer_id,member_no,level) VALUES($1,$2,$3,$4,'gold')",[scope.tenantId,scope.storeId,customer,`MBX-CARD${width}`])
+      await repository.apply({projectId:project.projectId,customerId:customer,acceptedProjectVersion:1,businessDate})
+    }
+    const giftProduct=(await transaction.query<{id:string}>("INSERT INTO mbox.products(tenant_id,store_id,code,name,category_code,fulfillment_station,cost_amount_minor) VALUES($1,$2,'BROWSER-GIFT-SNACK','测试发券小食','snack','kitchen',100) RETURNING id",[scope.tenantId,scope.storeId])).rows[0]!.id
+    await transaction.query("INSERT INTO mbox.product_prices(tenant_id,store_id,product_id,price_type,amount_minor,currency,valid_from) VALUES($1,$2,$3,'standard',1000,'CNY',clock_timestamp()-interval '1 day')",[scope.tenantId,scope.storeId,giftProduct])
+    const calendar=new CouponCalendarRepository(transaction),from=new Date(Date.now()-86400000).toISOString(),until=new Date(Date.now()+30*86400000).toISOString()
+    const saved=await calendar.save({code:'BROWSER_GIFT_CAL',rule:{timezone:'Asia/Shanghai',dateBasis:'natural',businessDayStartMinute:0,dateFrom:from.slice(0,10),dateThrough:until.slice(0,10),validFrom:from,validUntil:until,weekdays:[1,2,3,4,5,6,7],weekStartsOn:1,windows:[{startMinute:0,endMinute:1440}],excludedDates:[],relativeValidity:{days:3,basis:'elapsed'}},limits:{perCustomerDay:null,perCustomerWeek:null,perCustomerCampaign:null},employeeId,businessDate,reason:'隔离赠券页面规则',requestKey:'browser-gift-calendar',expectedVersion:0})
+    const approver=(await transaction.query<{id:string}>("SELECT id FROM mbox.employees WHERE tenant_id=$1 AND store_id=$2 AND employee_code='hugu'",[scope.tenantId,scope.storeId])).rows[0]!.id
+    await calendar.decide({versionId:saved.id,action:'approve',employeeId:approver,businessDate,reason:'隔离规则审核'})
+    await calendar.decide({versionId:saved.id,action:'publish',employeeId:creator,businessDate,reason:'隔离规则发布'})
+    for(const actor of [employeeId,approver,creator])for(const permissionCode of ['marketing.notice.view','marketing.notice.edit','marketing.notice.approve','marketing.notice.publish','marketing.send','marketing.refusal.record','marketing.consent.audit'])await access.setEmployeePermissionOverride({employeeId:actor,permissionCode,effect:'grant',reason:'隔离营销页面测试',configuredByEmployeeId:employeeId,startsAt})
+    const marketing=new MarketingContactRepository(transaction)
+    const marketingNotice=await marketing.save({code:'BROWSER_MARKETING',expectedVersion:0,employeeId,businessDate,reason:'隔离无外部发送夹具',requestKey:'browser-marketing-notice',rule:{operatorName:'隔离测试经营主体',operatorContact:'隔离测试客服',summary:'仅用于隔离浏览器测试，不联系真实客户。',withdrawalInstructions:'联系偏好中随时停止，会员与点单不受影响。',purposes:['own_activities'],channels:['sms'],dataCategories:['本人验证手机号'],validFrom:from,validUntil:until,consentDays:7,contactStartMinute:0,contactEndMinute:1440,weekdays:[1,2,3,4,5,6,7],maximumPerDay:1,maximumPerMonth:4,sharingMode:'no_partner_list'}})
+    await marketing.decide({noticeId:marketingNotice.noticeId,action:'approve',employeeId:approver,businessDate,reason:'隔离告知审核'})
+    await marketing.decide({noticeId:marketingNotice.noticeId,action:'publish',employeeId:creator,businessDate,reason:'隔离告知发布'})
+    for(const width of [320,360]){
+      const customer=(await transaction.query<{id:string}>('SELECT id FROM mbox.customers WHERE tenant_id=$1 AND store_id=$2 AND public_id=$3',[scope.tenantId,scope.storeId,`browser-card-${width}`])).rows[0]!.id
+      await marketing.recordChoices({customerId:customer,noticeId:marketingNotice.noticeId,expectedRevision:'none',businessDate,choices:[{channel:'sms',purpose:'own_activities',decision:'granted'}]})
+    }
+  })
   await runtime.transactions.run(scope, async (transaction) => {
     await transaction.query(`
       INSERT INTO mbox.store_commerce_policies(
@@ -155,6 +202,7 @@ try {
     dailyCredential,
     employeeCode: 'liyan',
     employeePin: '5210',
+    memberCardFixture,
     adminEmployeeCode: 'wuya',
     adminEmployeePin: '5210',
     orderableProductName: orderableProducts.bar,

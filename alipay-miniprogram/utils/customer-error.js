@@ -1,6 +1,8 @@
 // Customer pages must never render a raw backend or payment-provider error.
 // Error codes are stable contracts; the fallback remains local Chinese copy.
 const CODE_MESSAGES = Object.freeze({
+  CHECKOUT_COUPON_RECONFIRM_REQUIRED: '优惠条件已变化，请重新选券或不用券继续，本次没有创建订单',
+  COUPON_UPGRADE_REQUOTE_REQUIRED: '套餐已变更，请重新确认商品和优惠报价',
   NETWORK_ERROR: '网络暂时不可用，请检查网络后重试',
   GUEST_SESSION_INVALID: '桌台连接已失效，请重新扫描桌面二维码',
   GUEST_ORDER_ACCESS_FORBIDDEN: '这笔订单不属于当前桌位，请重新扫描当前桌面的二维码',

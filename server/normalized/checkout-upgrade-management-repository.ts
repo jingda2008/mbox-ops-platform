@@ -1,10 +1,13 @@
 import type { ScopedTransaction } from './transaction-runner.js'
 import { CustomerExperienceRequestError } from './customer-experience-repository.js'
+import {CheckoutUpgradeQualificationRepository,qualificationBounds} from './checkout-upgrade-qualification-repository.js'
+import type {UpgradeQualificationRule} from './checkout-upgrade-eligibility.js'
 
 export type CheckoutUpgradeRuleStatus = 'draft' | 'approved' | 'active' | 'paused' | 'retired'
 export type CapacityPolicyStatus = 'draft' | 'approved' | 'published' | 'retired'
 
 export interface CheckoutUpgradeRuleAdminView {
+  qualification?:UpgradeQualificationRule
   id: string
   code: string
   revision: number
@@ -75,6 +78,7 @@ export interface CapacityPolicyView {
 }
 
 interface RuleRow extends Record<string, unknown> {
+  has_qualification?:boolean
   id: string
   code: string
   revision: number
@@ -132,7 +136,7 @@ export class CheckoutUpgradeManagementRepository {
         rule.minimum_gross_margin_basis_points,rule.drafted_by_employee_id,
         rule.approved_by_employee_id,rule.published_by_employee_id,
         rule.valid_from::text,rule.valid_until::text,rule.publication_mode,
-        rule.created_at::text
+        rule.created_at::text,EXISTS(SELECT 1 FROM mbox.checkout_upgrade_qualifications q WHERE q.tenant_id=rule.tenant_id AND q.store_id=rule.store_id AND q.rule_id=rule.id) AS has_qualification
       FROM mbox.checkout_upgrade_rules rule
       JOIN mbox.products source ON source.tenant_id=rule.tenant_id
         AND source.store_id=rule.store_id AND source.id=rule.source_product_id
@@ -142,10 +146,12 @@ export class CheckoutUpgradeManagementRepository {
       ORDER BY rule.code,rule.revision DESC,rule.id
       LIMIT 300
     `, [this.transaction.scope.tenantId,this.transaction.scope.storeId])
-    return result.rows.map(ruleView)
+    const qualifications=await new CheckoutUpgradeQualificationRepository(this.transaction).many(result.rows.filter(row=>row.has_qualification).map(row=>row.id))
+    return result.rows.map(row=>({...ruleView(row),...(qualifications.has(row.id)?{qualification:qualifications.get(row.id)!}:{})}))
   }
 
   async insertRuleDraft(input: Readonly<{
+    qualification?:unknown
     code: string
     name: string
     sourceProductId: string
@@ -205,7 +211,8 @@ export class CheckoutUpgradeManagementRepository {
       input.callToAction,input.priority,input.offerValidMinutes,input.minimumGrossMarginBasisPoints,
       input.employeeId,
     ])
-    return ruleView(required(inserted.rows[0],'checkout upgrade rule draft'))
+    const view=ruleView(required(inserted.rows[0],'checkout upgrade rule draft'))
+    return input.qualification===undefined?view:{...view,qualification:await new CheckoutUpgradeQualificationRepository(this.transaction).save(view.id,input.qualification)}
   }
 
   async approveRule(ruleId: string, employeeId: string, reason: string): Promise<CheckoutUpgradeRuleAdminView> {
@@ -332,7 +339,9 @@ export class CheckoutUpgradeManagementRepository {
     `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,ruleId])
     const row = source.rows[0]
     if (!row) throw new CustomerExperienceRequestError('没有找到可回滚的历史规则','CHECKOUT_UPGRADE_RULE_NOT_FOUND',404)
+    const qualification=await new CheckoutUpgradeQualificationRepository(this.transaction).find(row.id)
     return this.insertRuleDraft({
+      ...(qualification?{qualification:qualificationBounds(qualification)}:{}),
       code:row.code,name:row.name,sourceProductId:row.source_product_id,targetProductId:row.target_product_id,
       minimumPartySize:row.minimum_party_size,maximumPartySize:row.maximum_party_size,
       occasionTags:row.occasion_tags,alcoholPreferenceTags:row.alcohol_preference_tags,
@@ -344,19 +353,48 @@ export class CheckoutUpgradeManagementRepository {
 
   async listOutcomes(): Promise<CheckoutUpgradeOutcomeView[]> {
     const result = await this.transaction.query<Record<string, unknown>>(`
+      WITH offer_candidates AS (
+        SELECT id,tenant_id,store_id,public_id,rule_id,rule_revision,status,
+          source_name_at_offer,target_name_at_offer,amount_to_add_minor,currency,created_at,
+          converted_order_id,converted_order_item_id,false AS modern
+        FROM mbox.checkout_upgrade_offers WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        UNION ALL
+        SELECT opportunity.id,opportunity.tenant_id,opportunity.store_id,opportunity.id::text,
+          opportunity.rule_id,rule.revision,
+          COALESCE(closure.action,CASE WHEN opportunity.expires_at<=clock_timestamp() THEN 'expired' ELSE 'offered' END),
+          opportunity.source_name,opportunity.target_name,
+          opportunity.upgraded_payable_minor-opportunity.original_payable_minor,
+          opportunity.currency,opportunity.created_at,
+          CASE WHEN closure.action='accepted' AND cart.status='submitted'
+            AND portion.id IS NOT NULL
+            AND (portion.removed_at IS NULL OR portion.removed_at>cart.submitted_at)
+            THEN cart.submitted_order_id END,NULL::uuid,true
+        FROM mbox.checkout_upgrade_opportunities opportunity
+        JOIN mbox.checkout_upgrade_rules rule ON rule.tenant_id=opportunity.tenant_id
+          AND rule.store_id=opportunity.store_id AND rule.id=opportunity.rule_id
+        JOIN mbox.guest_shared_carts cart ON cart.tenant_id=opportunity.tenant_id
+          AND cart.store_id=opportunity.store_id AND cart.id=opportunity.cart_id
+        LEFT JOIN mbox.checkout_upgrade_opportunity_closures closure ON closure.tenant_id=opportunity.tenant_id
+          AND closure.store_id=opportunity.store_id AND closure.opportunity_id=opportunity.id
+        LEFT JOIN mbox.guest_shared_cart_portions portion ON portion.tenant_id=closure.tenant_id
+          AND portion.store_id=closure.store_id AND portion.id=closure.replacement_portion_id
+        WHERE opportunity.tenant_id=$1::uuid AND opportunity.store_id=$2::uuid
+      ),offer AS MATERIALIZED (
+        SELECT * FROM offer_candidates ORDER BY created_at DESC,id DESC LIMIT 300
+      )
       SELECT offer.public_id,rule.code,offer.rule_revision,offer.status,
         offer.source_name_at_offer,offer.target_name_at_offer,offer.amount_to_add_minor,
         offer.currency,offer.created_at::text,ordered.public_id AS order_public_id,
         COALESCE(payment_fact.state,'not_created') AS payment_state,
-        COALESCE(payment_fact.paid_amount_minor,0)::bigint AS paid_amount_minor,
+        LEAST(COALESCE(payment_fact.paid_amount_minor,0),COALESCE(ordered.total_amount_minor,0))::bigint AS paid_amount_minor,
         COALESCE(refund_fact.refunded_amount_minor,0)::bigint AS refunded_amount_minor,
         COALESCE(complaint_fact.complaint_count,0)::bigint AS complaint_count,
         COALESCE(event_fact.viewed,0)::bigint AS viewed,
-        COALESCE(event_fact.declined,0)::bigint AS declined,
-        COALESCE(event_fact.accepted,0)::bigint AS accepted,
-        COALESCE(event_fact.converted,0)::bigint AS converted,
-        COALESCE(event_fact.invalidated,0)::bigint AS invalidated
-      FROM mbox.checkout_upgrade_offers offer
+        CASE WHEN offer.modern THEN (offer.status='declined')::integer ELSE COALESCE(event_fact.declined,0) END::bigint AS declined,
+        CASE WHEN offer.modern THEN (offer.status='accepted')::integer ELSE COALESCE(event_fact.accepted,0) END::bigint AS accepted,
+        CASE WHEN offer.modern THEN (offer.converted_order_id IS NOT NULL)::integer ELSE COALESCE(event_fact.converted,0) END::bigint AS converted,
+        CASE WHEN offer.modern THEN (offer.status IN ('expired','invalidated'))::integer ELSE COALESCE(event_fact.invalidated,0) END::bigint AS invalidated
+      FROM offer
       JOIN mbox.checkout_upgrade_rules rule ON rule.tenant_id=offer.tenant_id
         AND rule.store_id=offer.store_id AND rule.id=offer.rule_id
       LEFT JOIN mbox.orders ordered ON ordered.tenant_id=offer.tenant_id
@@ -377,9 +415,11 @@ export class CheckoutUpgradeManagementRepository {
         SELECT COALESCE(sum(item.amount_minor),0) AS refunded_amount_minor
         FROM mbox.refund_items item JOIN mbox.refunds refund
           ON refund.tenant_id=item.tenant_id AND refund.store_id=item.store_id AND refund.id=item.refund_id
+        JOIN mbox.order_items order_item ON order_item.tenant_id=item.tenant_id
+          AND order_item.store_id=item.store_id AND order_item.id=item.order_item_id
         WHERE item.tenant_id=offer.tenant_id AND item.store_id=offer.store_id
-          AND item.order_item_id=offer.converted_order_item_id AND refund.status='succeeded'
-      ) refund_fact ON offer.converted_order_item_id IS NOT NULL
+          AND order_item.order_id=offer.converted_order_id AND refund.status='succeeded'
+      ) refund_fact ON offer.converted_order_id IS NOT NULL
       LEFT JOIN LATERAL (
         SELECT count(*) AS complaint_count
         FROM mbox.guest_service_request_groups request_group

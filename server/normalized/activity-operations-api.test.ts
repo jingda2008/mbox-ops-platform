@@ -16,6 +16,20 @@ const context = {
 }
 
 describe('activity operations API', () => {
+  it('stops new admissions only with management permission, a reason and an idempotency key',async()=>{
+    const service=serviceMock()
+    const permissions:string[]=[]
+    const app=await application(service,{assertPermission:async(_id,permission)=>{permissions.push(permission)}})
+    const response=await app.inject({method:'POST',url:'/staff/activity-operations/activity-stop-test/stop-registration',headers:{'idempotency-key':'activity-stop-attempt-001'},payload:{reason:'先处理已报名退款'}})
+    expect(response.statusCode).toBe(200)
+    expect(permissions).toEqual(['community.activity.manage'])
+    expect(service.stopRegistration).toHaveBeenCalledWith(context,{publicId:'activity-stop-test',reason:'先处理已报名退款',idempotencyKey:'activity-stop-attempt-001'})
+    expect((await app.inject({method:'POST',url:'/staff/activity-operations/activity-stop-test/stop-registration',payload:{reason:'x'}})).statusCode).toBe(400)
+    await app.close()
+    const denied=await application(service,{assertPermission:async()=>{throw new StaffAccessDeniedError('employee','community.activity.manage')}})
+    expect((await denied.inject({method:'POST',url:'/staff/activity-operations/activity-stop-test/stop-registration',payload:{reason:'停止报名'}})).statusCode).toBe(403)
+    await denied.close()
+  })
   it('returns a clear authentication response when the staff session expired', async () => {
     const service = serviceMock()
     const app = await application(
@@ -356,6 +370,7 @@ describe('activity operations API', () => {
 
 function serviceMock() {
   return {
+    stopRegistration:vi.fn(async()=>({value:{publicId:'activity-stop-test',registrationClosedAt:'2026-09-10T06:00:00Z'},replayed:false})),
     list: vi.fn(async () => []),
     componentCatalog: vi.fn(async () => []),
     detail: vi.fn(async () => ({ activity: {}, registrations: [] })),

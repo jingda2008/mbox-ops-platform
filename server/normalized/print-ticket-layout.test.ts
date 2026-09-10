@@ -8,6 +8,7 @@ import {
   parsePrintTicketSnapshot,
   renderPrintTicketHtml,
   ticketToJson,
+  paginatePrintTicket,
 } from './print-ticket-layout.js'
 
 function ticket(kind: 'cashier_settlement' | 'cashier_payment' | 'cashier_refund' | 'bar_production' | 'kitchen_production') {
@@ -30,8 +31,21 @@ function ticket(kind: 'cashier_settlement' | 'cashier_payment' | 'cashier_refund
 }
 
 describe('print ticket layout', () => {
+  it('roundtrips new document kinds, keeps 300-character notes, and never clips long table bills', () => {
+    for (const kind of ['order_summary','delivery','table_settlement'] as const) {
+      const source=createPrintTicketSnapshot({...ticket('cashier_payment'),kind,note:'注'.repeat(300)})
+      expect(parsePrintTicketSnapshot(ticketToJson(source))).toEqual(source)
+      expect(renderPrintTicketHtml(source)).toContain(source.title)
+    }
+    const lines=Array.from({length:125},(_,i)=>({name:`菜品${i}`,quantity:1,note:'注'.repeat(300)}))
+    const pages=paginatePrintTicket({...ticket('cashier_payment'),kind:'table_settlement',lines})
+    expect(pages.map(p=>p.lines.length)).toEqual([60,60,5])
+    expect(pages.flatMap(p=>p.lines).map(l=>l.name)).toEqual(lines.map(l=>l.name))
+    expect(pages.map(p=>p.totalAmountMinor)).toEqual([null,null,17600])
+    expect(pages[2].subtitle).toContain('第3/3页')
+  })
   it('uses a distinct, immutable title for every operational ticket', () => {
-    expect(ticket('cashier_settlement').title).toBe('结账单')
+    expect(ticket('cashier_settlement').title).toBe('预结账单（未确认收款）')
     expect(ticket('cashier_payment').title).toBe('支付凭条')
     expect(ticket('cashier_refund').title).toBe('退款凭条')
     expect(ticket('bar_production').title).toBe('吧台调酒制作单')

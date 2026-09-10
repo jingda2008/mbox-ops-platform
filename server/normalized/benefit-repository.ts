@@ -10,12 +10,17 @@ import { StaffAccessRepository } from './staff-access-repository.js'
 import type { ScopedTransaction, StoreScope } from './transaction-runner.js'
 import { lockBoundGuestTablePosition } from './guest-table-authority.js'
 import { assertEmployeeTableSessionAccess } from './employee-table-access.js'
+import type { BenefitWalletCursor } from './benefit-wallet.js'
+import {CouponPricePromiseRepository,type CouponPricePromiseView} from './coupon-price-promise-repository.js'
+import { CouponCalendarRepository, type CouponCalendarWalletView } from './coupon-calendar-repository.js'
 
 export type BenefitType = 'gift_product' | 'discount' | 'credit' | 'access' | 'other'
 export type BenefitStatus = 'issued' | 'reserved' | 'redeemed' | 'expired' | 'revoked'
 export type BenefitReservationStatus = 'reserved' | 'redeemed' | 'cancelled' | 'expired'
 
 export interface Benefit {
+  pricePromise?:CouponPricePromiseView
+  calendar?: CouponCalendarWalletView
   id: string
   customerId: string
   benefitCode: string
@@ -66,6 +71,9 @@ export interface BenefitRedemption {
 }
 
 export interface IssueBenefitInput {
+  couponCalendarVersionId?: string
+  /** Internal immutable campaign binding; never accepted as client price. */
+  couponPriceCampaignVersionId?: string
   customerId: string
   benefitCode: string
   benefitType: BenefitType
@@ -265,6 +273,35 @@ export class BenefitAuthorizationError extends Error {
 export class BenefitRepository {
   constructor(private readonly transaction: ScopedTransaction) {}
 
+  async listWalletForCustomer(customerId: string, cursor: BenefitWalletCursor | null, limit: number, at = new Date()): Promise<{
+    items: Benefit[]; nextCursor: string | null
+  }> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new Error('优惠券分页数量无效')
+    const customer = await new CustomerRepository(this.transaction).resolveCanonical(customerId)
+    const result = await this.transaction.query<BenefitRow>(`${benefitSelectSql()}
+      AND b.customer_id IN (
+        WITH RECURSIVE family(id) AS (
+          SELECT $3::uuid
+          UNION ALL
+          SELECT c.id FROM mbox.customers AS c JOIN family ON c.merged_into_customer_id = family.id
+          WHERE c.tenant_id = $1::uuid AND c.store_id = $2::uuid
+        ) SELECT id FROM family
+      )
+      AND ($4::timestamptz IS NULL OR (b.created_at, b.id) < ($4::timestamptz, $5::uuid))
+      ORDER BY b.created_at DESC, b.id DESC
+      LIMIT $6
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, customer.id,
+      cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1])
+    const page = result.rows.slice(0, limit)
+    const last = page.at(-1)
+    const views = await new CouponCalendarRepository(this.transaction).walletViews(page.map(row => row.id), at)
+    const prices=await new CouponPricePromiseRepository(this.transaction).views(page.map(row=>row.id))
+    return {
+      items: page.map(row => ({ ...mapBenefit(row), ...(views.has(row.id) ? { calendar: views.get(row.id)! } : {}),...(prices.has(row.id)?{pricePromise:prices.get(row.id)!}:{}) })),
+      nextCursor: result.rows.length > limit && last ? `${last.created_at}|${last.id}` : null,
+    }
+  }
+
   async findById(id: string): Promise<Benefit | null> {
     const row = await this.selectById(id, false)
     return row === null ? null : mapBenefit(row)
@@ -287,11 +324,17 @@ export class BenefitRepository {
       AND (b.valid_until IS NULL OR b.valid_until > COALESCE($4::timestamptz, clock_timestamp()))
       ORDER BY b.valid_until NULLS LAST, b.created_at, b.id
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, customer.id, at ?? null])
-    return result.rows.map(mapBenefit)
+    const views = await new CouponCalendarRepository(this.transaction).walletViews(result.rows.map(row => row.id), at ? new Date(at) : new Date())
+    const prices=await new CouponPricePromiseRepository(this.transaction).views(result.rows.map(row=>row.id))
+    return result.rows.map(row => ({ ...mapBenefit(row), ...(views.has(row.id) ? { calendar: views.get(row.id)! } : {}),...(prices.has(row.id)?{pricePromise:prices.get(row.id)!}:{}) }))
+      .filter(benefit => benefit.calendar?.available !== false)
   }
 
   async issue(input: Readonly<IssueBenefitInput>): Promise<Benefit> {
     validateIssue(input)
+    if (input.couponCalendarVersionId !== undefined && input.benefitType !== 'gift_product'&&input.couponPriceCampaignVersionId===undefined) {
+      throw new TypeError('当前时间规则绑定仅支持赠品券；低价与抵扣券须通过独立计价占用链路')
+    }
     const customer = await new CustomerRepository(this.transaction).resolveCanonical(input.customerId)
     await this.lockIdempotency(`benefit-issue:${input.issuanceIdempotencyKey}`)
     const existing = await this.transaction.query<BenefitRow>(`${benefitSelectSql()}
@@ -309,6 +352,7 @@ export class BenefitRepository {
     }
 
     await this.assertIssuanceAuthority(input)
+    const calendarValidity=input.couponCalendarVersionId===undefined?null:await new CouponCalendarRepository(this.transaction).issuanceValidity(input.couponCalendarVersionId,{validFrom:input.validFrom,validUntil:input.validUntil})
     const inserted = await this.transaction.query<BenefitRow>(`
       INSERT INTO mbox.benefits (
         tenant_id, store_id, customer_id, benefit_code, benefit_type,
@@ -333,8 +377,8 @@ export class BenefitRepository {
       input.currency ?? null,
       JSON.stringify(input.benefitSnapshot ?? {}),
       input.quantity ?? 1,
-      input.validFrom ?? null,
-      input.validUntil ?? null,
+      calendarValidity?.validFrom ?? input.validFrom ?? null,
+      calendarValidity?.validUntil ?? input.validUntil ?? null,
       input.issuedByEmployeeId ?? null,
       normalizeReason(input.reason),
       input.authorizationLimitId ?? null,
@@ -370,6 +414,14 @@ export class BenefitRepository {
         throw new TypeError('allowedProductIds contains an unavailable product')
       }
     }
+    if(input.couponPriceCampaignVersionId!==undefined){
+      if(input.benefitType!=='discount'||input.couponCalendarVersionId===undefined)throw new BenefitAuthorizationError('低价承诺必须绑定独立计价和时间规则')
+      const bound=await this.transaction.query(`INSERT INTO mbox.benefit_coupon_price_promises(tenant_id,store_id,benefit_id,campaign_version_id,stacking_version_id,fixed_price_minor)
+        SELECT tenant_id,store_id,$3,id,stacking_version_id,fixed_price_minor FROM mbox.member_gift_campaign_versions
+        WHERE tenant_id=$1 AND store_id=$2 AND id=$4 AND coupon_calendar_version_id=$5 AND pricing_kind='fixed_price' AND status='published'`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,benefit.id,input.couponPriceCampaignVersionId,input.couponCalendarVersionId])
+      if(bound.rowCount!==1)throw new BenefitAuthorizationError('低价券承诺与已发布活动或时间规则不一致')
+    }
+    if (input.couponCalendarVersionId !== undefined) await new CouponCalendarRepository(this.transaction).bindIssuedBenefit(benefit.id, input.couponCalendarVersionId)
     return mapBenefit(benefit)
   }
 
@@ -377,6 +429,7 @@ export class BenefitRepository {
     input: Readonly<ReserveBenefitInput>,guestActorRef?: string,employeeActorId?: string,
   ): Promise<BenefitReservation> {
     validateReserve(input)
+    await this.lockCustomerFamily()
     const canonical = await new CustomerRepository(this.transaction).resolveCanonical(input.customerId)
     await this.assertCurrentTableCustomer(
       canonical.id,input.tableSessionId,guestActorRef,employeeActorId,'loyalty.redemption.fulfill',
@@ -399,6 +452,8 @@ export class BenefitRepository {
     await this.assertAnnualDailySnackClaimReservation(
       benefit.id, input.tableSessionId, input.annualDailySnackClaimId,
     )
+    const calendars = new CouponCalendarRepository(this.transaction)
+    const calendarAuthorization = await calendars.authorizeReservation(benefit.id, canonical.id, quantity)
     const updated = await this.transaction.query(`
       UPDATE mbox.benefits
       SET quantity_reserved = quantity_reserved + $4::integer,
@@ -427,7 +482,9 @@ export class BenefitRepository {
       input.reservationFingerprint,
       input.expiresAt,
     ])
-    return mapReservation(requireOne(inserted, 'Reserving a benefit'))
+    const reservation = requireOne(inserted, 'Reserving a benefit')
+    if (calendarAuthorization !== null) await calendars.recordReservation(reservation.id, canonical.id, calendarAuthorization)
+    return mapReservation(reservation)
   }
 
   async redeem(
@@ -437,6 +494,7 @@ export class BenefitRepository {
     employeeActorId?: string,
   ): Promise<BenefitRedemption> {
     validateRedeem(input)
+    await this.lockCustomerFamily()
     const canonical = await new CustomerRepository(this.transaction).resolveCanonical(input.customerId)
     await this.assertCurrentTableCustomer(
       canonical.id,input.tableSessionId,guestActorRef,employeeActorId,'loyalty.redemption.fulfill',
@@ -470,7 +528,7 @@ export class BenefitRepository {
     const reservation = await this.selectReservation(input.benefitReservationId, true)
     if (reservation === null) throw new BenefitReservationNotFoundError(input.benefitReservationId)
     if (reservation.benefit_id !== input.benefitId
-      || reservation.customer_id !== canonical.id
+      || !await this.isSameCustomerFamily(reservation.customer_id, canonical.id)
       || reservation.table_session_id !== input.tableSessionId) throw new BenefitOwnershipError()
     if (reservation.status !== 'reserved' || !await this.isReservationCurrent(reservation.id)) {
       throw new BenefitUnavailableError('Benefit reservation is no longer redeemable')
@@ -479,6 +537,8 @@ export class BenefitRepository {
     if (benefit === null) throw new BenefitNotFoundError(input.benefitId)
 
     let giftOrderReference: string | null = null
+    const lowPrice=await this.transaction.query('SELECT 1 FROM mbox.benefit_coupon_price_promises WHERE tenant_id=$1 AND store_id=$2 AND benefit_id=$3',[this.transaction.scope.tenantId,this.transaction.scope.storeId,benefit.id])
+    if(lowPrice.rowCount)throw new BenefitAuthorizationError('固定低价券须在订单报价确认入口使用，不能按免费赠品或普通金额券核销')
     if (benefit.benefit_type === 'gift_product') {
       if (giftOrders === undefined) throw new BenefitAuthorizationError('Gift product order adapter is required')
       const gift = await giftOrders.createGiftOrder(this.transaction, {
@@ -553,6 +613,7 @@ export class BenefitRepository {
     input: Readonly<CancelBenefitReservationInput>,guestActorRef?: string,employeeActorId?: string,
   ): Promise<BenefitReservation> {
     validateCancel(input)
+    await this.lockCustomerFamily()
     const canonical = await new CustomerRepository(this.transaction).resolveCanonical(input.customerId)
     await this.assertCurrentTableCustomer(
       canonical.id,input.tableSessionId,guestActorRef,employeeActorId,
@@ -560,10 +621,12 @@ export class BenefitRepository {
     )
     const reservation = await this.selectReservation(input.benefitReservationId, true)
     if (reservation === null) throw new BenefitReservationNotFoundError(input.benefitReservationId)
-    if (reservation.customer_id !== canonical.id || reservation.table_session_id !== input.tableSessionId) {
+    if (!await this.isSameCustomerFamily(reservation.customer_id, canonical.id) || reservation.table_session_id !== input.tableSessionId) {
       throw new BenefitOwnershipError()
     }
     if (reservation.status === 'cancelled') return mapReservation(reservation)
+    const checkoutHold=await this.transaction.query('SELECT 1 FROM mbox.checkout_coupon_quote_reservations WHERE tenant_id=$1 AND store_id=$2 AND reservation_id=$3',[this.transaction.scope.tenantId,this.transaction.scope.storeId,reservation.id])
+    if(checkoutHold.rowCount)throw new BenefitAuthorizationError('此券已绑定订单，须按订单支付或退款结果处理，不能单独取消占用')
     if (reservation.status !== 'reserved') throw new BenefitUnavailableError('Only reserved benefits can be cancelled')
     await this.transaction.query(`
       UPDATE mbox.benefit_reservations
@@ -664,6 +727,17 @@ export class BenefitRepository {
       SELECT 1 AS allowed FROM family WHERE id = $3::uuid
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, ownerId, canonicalId])
     return result.rowCount === 1
+  }
+
+  private async lockCustomerFamily(): Promise<void> {
+    // Shared readers coexist; identity/location rewrites take this same guard
+    // exclusively before row locks. No provider/network work is done here.
+    // Some callers already hold a table row. Never wait in an inverted lock
+    // order: fail this benefit action promptly and let other operations proceed.
+    const result = await this.transaction.query<{ locked: boolean }>(`SELECT pg_try_advisory_xact_lock_shared(hashtextextended(
+      'table-customer-movement:' || $1::text || ':' || $2::text,0
+    )) AS locked`, [this.transaction.scope.tenantId, this.transaction.scope.storeId])
+    if (result.rows[0]?.locked !== true) throw new BenefitUnavailableError('客户身份正在同步，请稍后重试本次权益操作；桌台与其他收款不受影响')
   }
 
   private lockIdempotency(key: string): Promise<unknown> {
@@ -941,7 +1015,13 @@ function mapRedemption(row: RedemptionRow): BenefitRedemption {
   }
 }
 
-function benefitToJson(value: Benefit): JsonObject { return { ...value } }
+function benefitToJson(value: Benefit): JsonObject {
+  // The time-sensitive wallet projection is not an issuance/audit authority.
+  const { calendar, pricePromise, ...facts } = value
+  void calendar
+  void pricePromise
+  return facts
+}
 function reservationToJson(value: BenefitReservation): JsonObject { return { ...value } }
 function redemptionToJson(value: BenefitRedemption): JsonObject { return { ...value } }
 

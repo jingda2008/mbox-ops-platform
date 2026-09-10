@@ -89,7 +89,7 @@ export class BusinessDayRolloverWorker {
 async function readStoreClock(transaction: ScopedTransaction): Promise<StoreClockRow> {
   const result = await transaction.query<StoreClockRow>(`
     SELECT
-      (((clock_timestamp() AT TIME ZONE timezone) - business_day_cutoff)::date)::text
+      mbox.current_operating_business_date(tenant_id,id)::text
         AS business_date,
       timezone,
       business_day_cutoff::text AS cutoff

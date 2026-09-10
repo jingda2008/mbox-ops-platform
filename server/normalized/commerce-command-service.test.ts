@@ -15,6 +15,7 @@ import {
 } from './index.js'
 import { CommerceCommandService, type SubmittedCommerceResult } from './commerce-command-service.js'
 import { CustomerExperienceRepository } from './customer-experience-repository.js'
+import { OrderRepository } from './order-repository.js'
 import {
   GuestOrderDuplicateConfirmationRequiredError,
   GuestOrderRateLimitedError,
@@ -736,7 +737,7 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
         actorRef: 'checkout-upgrade-integration',
         partySize: 2,
       }, {
-        items: [{ productId: productBId, quantity: 1 }],
+        items: [{ productId: productBId, quantity: 1, note: '少冰，不加装饰' }],
         idempotencyKey: `checkout-upgrade-offer-${randomUUID()}`,
       })
     ))
@@ -748,10 +749,11 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
         `integration-checkout-upgrade-${randomUUID()}`,
       ),
       checkoutUpgradeOfferPublicId: offer!.publicId,
+      lines: [{ productId: productBId, quantity: 1, note: '少冰，不加装饰' }],
     })
 
     expect(submitted.value.order.items.filter((item) => item.billable)).toEqual([
-      expect.objectContaining({ productId: bundleProductId, unitPriceMinor: 14800, quantity: 1 }),
+      expect.objectContaining({ productId: bundleProductId, unitPriceMinor: 14800, quantity: 1, note: '少冰，不加装饰' }),
     ])
     expect(submitted.value.kdsTasks).toHaveLength(0)
     expect(submitted.value.inventoryConsumptions).toHaveLength(0)
@@ -936,6 +938,36 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
     })
   })
 
+  it('keeps unrelated per-portion bundle choices when another item is upgraded',async()=>{
+    const runner=new ScopedPostgresTransactionRunner(asPool(pool))
+    const choiceBundle=randomUUID(),choiceGroup=randomUUID()
+    await pool.query(`INSERT INTO mbox.products(id,tenant_id,store_id,code,name,category_code,product_kind,fulfillment_station,cost_amount_minor)
+      VALUES($1,$2,$3,$4,'升级旁的自选套餐','drink','bundle','none',5000)`,[choiceBundle,tenantId,storeId,`CHOICE_${choiceBundle.slice(0,8)}`])
+    await pool.query(`INSERT INTO mbox.product_prices(tenant_id,store_id,product_id,price_type,amount_minor,currency,valid_from)
+      VALUES($1,$2,$3,'standard',10000,'CNY',clock_timestamp()-interval '1 hour')`,[tenantId,storeId,choiceBundle])
+    await pool.query(`INSERT INTO mbox.product_bundle_choice_groups(id,tenant_id,store_id,bundle_product_id,code,display_name,selection_count)
+      VALUES($1,$2,$3,$4,'side_choice','具体菜品',1)`,[choiceGroup,tenantId,storeId,choiceBundle])
+    await pool.query(`INSERT INTO mbox.product_bundle_choice_options(tenant_id,store_id,choice_group_id,component_product_id,quantity)
+      VALUES($1,$2,$3,$4,1),($1,$2,$3,$5,1)`,[tenantId,storeId,choiceGroup,productAId,productKitchenId])
+    await pool.query(`INSERT INTO mbox.customer_experience_features(tenant_id,store_id,feature_code,rollout_state,configuration,reason)
+      VALUES($1,$2,'checkout_upgrade','enabled','{}','自选关联测试') ON CONFLICT(tenant_id,store_id,feature_code) DO UPDATE SET rollout_state='enabled'`,[tenantId,storeId])
+    await seedReleasedCheckoutUpgradeRule(pool,`CHOICE_UP_${randomUUID().slice(0,8).toUpperCase()}`,'Preserve other choices')
+    const lines=[{productId:productBId,quantity:1,note:'保留升级备注'},{productId:choiceBundle,quantity:2,note:'分两份',bundleSelections:[
+      {groups:[{groupId:choiceGroup,productIds:[productAId]}]},
+      {groups:[{groupId:choiceGroup,productIds:[productKitchenId]}]},
+    ]}]
+    const offer=await runner.run({tenantId,storeId},tx=>new CustomerExperienceRepository(tx).prepareCheckoutUpgrade({
+      customerId,tableSessionId:sessionOneId,businessDate:'2026-08-11',actorRef:'upgrade-preserve-test',partySize:2,
+    },{items:lines,idempotencyKey:randomUUID()}))
+    expect(offer).not.toBeNull()
+    const submitted=await service.submitOrder({...guestCommand(`upgrade-preserve-${randomUUID()}`,customerId,productBId,1,randomUUID()),lines,checkoutUpgradeOfferPublicId:offer!.publicId})
+    expect(submitted.value.order.totalAmountMinor).toBe(34800)
+    const selected=submitted.value.order.items.filter(item=>item.productSnapshot.bundleChoiceGroupId===choiceGroup)
+    expect(selected.map(item=>item.productId).sort()).toEqual([productAId,productKitchenId].sort())
+    expect(selected.every(item=>!item.billable&&item.totalAmountMinor===0)).toBe(true)
+    expect(submitted.value.order.items.find(item=>item.billable&&item.productId===bundleProductId)?.note).toBe('保留升级备注')
+  })
+
   it('routes the concrete option selected inside a bundle to KDS and inventory without charging it twice',async()=>{
     const choiceGroupId=randomUUID()
     await pool.query(`
@@ -1009,6 +1041,13 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
         costSource:'bundle_components',
       })
       expect(parent.totalAmountMinor-parent.totalCostMinorAtSubmission!).toBe(14_600)
+      const countsBefore=(await pool.query('SELECT (SELECT count(*) FROM mbox.orders WHERE tenant_id=$1 AND store_id=$2) AS orders,(SELECT count(*) FROM mbox.inventory_order_reservations WHERE tenant_id=$1 AND store_id=$2) AS reservations',[tenantId,storeId])).rows[0]
+      const quote=await new ScopedPostgresTransactionRunner(asPool(pool)).run({tenantId,storeId},tx=>new OrderRepository(tx).quoteCurrent([{productId:bundleProductId,quantity:2,bundleSelections:[{groups:[{groupId:choiceGroupId,productIds:[productAId]}]},{groups:[{groupId:choiceGroupId,productIds:[productBId]}]}]}],'staff_assisted'))
+      expect(quote).toMatchObject({pricingBasis:'standard_only',subtotalAmountMinor:parent.totalAmountMinor,costAmountMinor:parent.totalCostMinorAtSubmission})
+      expect(quote.items[0]!.composition.map(item=>item.productId).toSorted()).toEqual(children.map(item=>item.productId).toSorted())
+      expect(quote.operationalPortions.map(item=>({productId:item.productId,quantity:item.quantity,fulfillmentStation:item.fulfillmentStation,consumesInventory:item.consumesInventory})))
+        .toEqual(submitted.value.order.items.map(item=>({productId:item.productId,quantity:item.quantity,fulfillmentStation:item.fulfillmentStation,consumesInventory:item.consumesInventory})))
+      expect((await pool.query('SELECT (SELECT count(*) FROM mbox.orders WHERE tenant_id=$1 AND store_id=$2) AS orders,(SELECT count(*) FROM mbox.inventory_order_reservations WHERE tenant_id=$1 AND store_id=$2) AS reservations',[tenantId,storeId])).rows[0]).toEqual(countsBefore)
       expect(children.map((item)=>item.productId).toSorted()).toEqual(
         [productAId,productAId,productBId,productKitchenId].toSorted(),
       )

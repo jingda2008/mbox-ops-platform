@@ -1,0 +1,7 @@
+<view class="identities">
+  <view class="identities-head"><text>我的专属身份</text><navigator url="/pages/profile-cards/index">发现同好 ›</navigator></view>
+  <view wx:if="{{identities.length}}" class="identity-badges"><navigator wx:for="{{identities}}" wx:key="id" url="/pages/profile-cards/index" class="identity-badge"><text class="identity-star">✦</text><text>{{item.name}}</text></navigator></view>
+  <text wx:elif="{{loading}}" class="identity-hint">正在读取身份标识</text>
+  <button wx:elif="{{failed}}" class="identity-retry" bindtap="reload">身份标识暂未读取，点此重试</button>
+  <text wx:else class="identity-hint">找到同好，申请属于你的专属卡。</text>
+</view>

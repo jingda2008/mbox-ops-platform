@@ -135,6 +135,8 @@ integration('CommercialOpsRepository PostgreSQL integrity', () => {
   })
 
   it('uses frozen strong item cost despite tampered JSON and reverses refunds exactly', async () => {
+    // Model an older table session carrying a later order without rewriting the immutable order date.
+    await pool.query("UPDATE mbox.table_sessions SET business_date='2026-08-10' WHERE id=$1",[tableSessionId])
     await transactions.run({ tenantId, storeId }, async (transaction) => {
       await new CommercialOpsRepository(transaction).createSalesRule({
         productId, attributionMode: 'explicit', salesCreditBps: 10_000,
@@ -152,6 +154,7 @@ integration('CommercialOpsRepository PostgreSQL integrity', () => {
       })
     ))
     expect(sale).toMatchObject({
+      businessDate:'2026-08-11',
       employeeId: salespersonId, salesAmountDeltaMinor: 10_000,
       costAmountDeltaMinor: 4_000, quantityDelta: '2.000000',
     })

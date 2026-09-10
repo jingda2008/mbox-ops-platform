@@ -270,7 +270,9 @@ integration('FulfillmentQueryService PostgreSQL authorization and ordering', () 
     ])
     expect(manager.actor).toMatchObject({ canViewAll: true, allowedStations: [] })
     expect(manager.workItems.every((item) => !item.canPrepare && !item.canDeliver)).toBe(true)
-    expect(JSON.stringify(manager)).not.toMatch(/costSnapshot|paymentStatus|amountMinor|provider|refund/i)
+    expect(JSON.stringify(manager)).not.toMatch(/costSnapshot|paymentStatus|provider|refund/i)
+    expect(manager.workItems.every(item => Number.isSafeInteger(item.item.unitPriceMinor)
+      && Number.isSafeInteger(item.item.totalAmountMinor))).toBe(true)
   })
 
   it('keeps bootstrap fulfillment counts identical to each employee action scope', async () => {

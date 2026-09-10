@@ -8,6 +8,7 @@
   <view a:elif="{{error}}" class="error-banner"><text>{{error}}</text><button onTap="load">重新读取</button></view>
   <block a:else>
     <block a:if="{{membership}}">
+    <member-identities id="member-identities" a:if="{{identitiesVisible}}" />
     <view class="member-card member-card--{{membership.level}}">
       <view class="member-card__glow"></view><view class="member-card__corner"></view>
       <view class="member-card__top"><image src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" /><view class="member-card__identity"><text>{{membership.levelText}}</text><text>{{membership.levelEnglish}}</text><text>{{membership.memberNo}}</text></view><text class="member-card__brand">M-BOX</text></view>

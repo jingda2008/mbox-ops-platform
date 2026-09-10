@@ -6,7 +6,7 @@
   </view>
   <view class="section custom-panel">
     <view class="section-title"><text>其他需要</text><text class="section-link">300字以内</text></view>
-    <textarea maxlength="300" value="{{note}}" placeholder="例如：需要两杯温水、想调整上桌节奏" bindinput="onNoteInput" />
+    <textarea maxlength="300" value="{{note}}" placeholder="例如：需要两杯温水、想调整上桌节奏" bindinput="onNoteInput" disabled="{{submittingId}}" />
     <button class="primary-button" disabled="{{!note || submittingId}}" bindtap="submitCustomRequest">提交需求</button>
   </view>
   <view class="manager-panel">

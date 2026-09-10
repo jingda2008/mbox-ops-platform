@@ -10,6 +10,8 @@
     "pages/profile-preferences/index",
     "pages/profile-contact/index",
     "pages/profile-coupons/index",
+    "pages/profile-cards/index",
+    "pages/profile-marketing/index",
     "pages/profile-notifications/index",
     "pages/performances/index",
     "pages/points/index",

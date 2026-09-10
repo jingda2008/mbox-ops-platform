@@ -149,6 +149,15 @@ integration('activity waitlist promotion PostgreSQL integration', () => {
     })
   })
 
+  it('does not promote waiting guests after admissions stop even when a seat is released',async()=>{
+    await pool.query('UPDATE mbox.community_activities SET registration_closed_at=clock_timestamp() WHERE id=$1',[freeActivityId])
+    await release(pool,freeOccupiedIds[1]!,'cancelled')
+    const result=await worker.runBatch({tenantId,storeId},'stopped-admissions-worker')
+    expect(result.promotedRegistrationIds).not.toContain(freeWaitIds[1])
+    expect((await pool.query('SELECT status FROM mbox.community_activity_registrations WHERE id=$1',[freeWaitIds[1]])).rows[0].status).toBe('waitlisted')
+    await expect(pool.query("UPDATE mbox.community_activity_registrations SET status='confirmed' WHERE id=$1",[freeWaitIds[1]])).rejects.toThrow('registration is stopped')
+  })
+
   it('rejects silent published-promise edits and nonversioned activity points in PostgreSQL', async () => {
     await expect(pool.query(`
       UPDATE mbox.community_activities SET title='静默改变后的标题'

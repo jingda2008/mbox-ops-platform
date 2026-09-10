@@ -332,6 +332,7 @@ Page({
   },
 
   onShow() {
+    this.setData({ identitiesVisible: true })
     const shouldOpenLogin = consumeMembershipLoginRedirect()
     this.setData({
       avatarUrl: runtime.getStorageSync('mbox.member.avatarUrl') || '',
@@ -342,6 +343,8 @@ Page({
   },
 
 
+
+  onHide() { this.setData({ identitiesVisible: false }) },
 
   async load() {
     this.setData({ loading: true, error: '', benefitError: '', registrationError: '', redemptionError: '', preferenceError: '' })
@@ -487,6 +490,10 @@ Page({
   openMemberCenter() {
     if (!this.requireMembership('member-center')) return
     runtime.navigateTo({ url: '/pages/member-center/index' })
+  },
+
+  openOrderHistory() {
+    runtime.navigateTo({ url: '/pages/account/index?mode=history' })
   },
 
   noop() {},
@@ -934,6 +941,9 @@ Page({
   openPreferenceSettings() {
     if (!this.requireMembership('preferences')) return
     runtime.navigateTo({ url: '/pages/profile-preferences/index' })
+  },
+  openMarketingPreferences() {
+    runtime.navigateTo({ url: '/pages/profile-marketing/index' })
   },
   openContact() {
     if (!this.requireMembership('contact')) return

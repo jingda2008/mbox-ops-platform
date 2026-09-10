@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-rc.184 - 2026-09-10
+
+- Consolidate member identity, consent, coupon and optional checkout-upgrade work with operational recovery and linked Mini Program layout fixes.
+- Add asynchronous bar/kitchen ticket policies, unpaid pre-bills, offline refund recording, activity admission controls, operating history and scoped staff draft recovery.
+- Preserve financial tracking independently of table operations; prohibit manual early business-day ending and retain scheduled rollover.
+- Include normalized migrations 163–186. External marketing adapters, real payments/refunds, physical printing and native-device acceptance remain explicitly open; this release does not claim all requested development or commercial acceptance is complete.
+- WeChat candidate upload and experience selection remain separate from backend release. No Alipay upload or Android application release.
+
 ## 1.0.0-rc.183 - 2026-09-08
 
 - Repair application rollback manifest compatibility: accept legacy numeric identity flags and canonical booleans, reject unknown values, and emit booleans for new activations.

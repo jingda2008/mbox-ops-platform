@@ -306,13 +306,15 @@ function viewActivity(raw) {
   const providerBlocked = raw.feeAmountMinor > 0 && raw.paymentAvailability !== 'available'
   const clientPaymentBlocked = requiresOnlinePayment
     && !availablePaymentMethods.some((method) => ['alipay_jsapi', 'trade_pay'].includes(method))
-  const registrationBlocked = !isSharePreview && (providerBlocked || clientPaymentBlocked || !safetyPolicyVersion || !refundPolicyVersion)
+  const registrationStopped = Boolean(raw.registrationClosedAt)
+  const registrationBlocked = !isSharePreview && (registrationStopped || providerBlocked || clientPaymentBlocked || !safetyPolicyVersion || !refundPolicyVersion)
   const safetyFacts = []
   if (safety.difficulty) safetyFacts.push(`难度：${safety.difficulty}`)
   if (safety.ageRequirement) safetyFacts.push(`年龄：${safety.ageRequirement}`)
   if (safety.insuranceIncluded !== undefined) safetyFacts.push(safety.insuranceIncluded ? '活动包含保险' : '活动不包含保险')
   let paymentBlockedText = ''
-  if (providerBlocked) paymentBlockedText = '线上付款暂时不可用，暂时不能报名。'
+  if (registrationStopped) paymentBlockedText = '已停止新报名；原报名、付款和退款仍可继续处理。'
+  else if (providerBlocked) paymentBlockedText = '线上付款暂时不可用，暂时不能报名。'
   else if (clientPaymentBlocked) paymentBlockedText = '线上付款暂时不可用，暂时不能提交收费报名。'
   else if (!safetyPolicyVersion || !refundPolicyVersion) paymentBlockedText = '报名说明暂未准备好，暂时不能报名。'
   return Object.assign({}, raw, {
@@ -338,7 +340,7 @@ function viewActivity(raw) {
     availablePaymentMethods,
     packages,
     isSharePreview,
-    availabilityText: String(raw.availabilityText || (raw.remainingCapacity > 0 ? '可报名' : '暂不可订')),
+    availabilityText: registrationStopped ? '已停止新报名' : String(raw.availabilityText || (raw.remainingCapacity > 0 ? '可报名' : '暂不可订')),
     packageSelectionRequired: Boolean(raw.packageSelectionRequired),
     requiresPaymentOnSubmit: raw.feeAmountMinor > 0 && !availablePaymentChoices.includes('none'),
     safetyFacts,

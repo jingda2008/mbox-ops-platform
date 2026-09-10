@@ -109,6 +109,9 @@ export const staffModuleAccessDefinitions: readonly StaffModuleAccessDefinition[
     code: 'member-management', label: '其他会员经营配置', route: '/staff/member-management', sortOrder: 293,
     permissionCodes: [
       'loyalty.operations.view', 'loyalty.operations.control',
+      'member.card.review', 'member.card.manage',
+      'marketing.notice.view', 'marketing.notice.edit', 'marketing.notice.approve', 'marketing.notice.publish',
+      'marketing.send', 'marketing.refusal.record', 'marketing.consent.audit',
       'loyalty.configuration.view', 'loyalty.configuration.edit', 'loyalty.configuration.preview',
       'loyalty.configuration.approve',
       'loyalty.promotion.view', 'loyalty.promotion.manage', 'loyalty.promotion.approve',

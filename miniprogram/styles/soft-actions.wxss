@@ -1,0 +1,115 @@
+/* Shared customer action finish. Geometry, permissions and financial state stay page-owned. */
+/* Text-only actions must not rely on native line-height centering.
+   Composite cards, pickers and quantity controls retain their page layouts. */
+.page.page .detail-dock > button,
+.page.page .cards-button,
+.page.page .contact-button,
+.page.page .save-button,
+.page.page .state-card__action,
+.page.page .story-article__close,
+.page.page .editorial-panel__action,
+.page.page .reservation-history .section-title button,
+.page.page .impact-load-error button,
+.page.page .performance-impact-actions button,
+.page.page .reservation-notification-row button,
+.page.page .expiry-row button,
+.page.page .benefit-foot button,
+.page.page .redemption-card button,
+.page.page .redemption-history__row button,
+.page.page .restriction-row button,
+.page.page .member-content-copy button,
+.page.page .profile-load-error button,
+.page.page .logout-button,
+.page.page .privacy-contact-row button,
+.page.page .privacy-phone-replace,
+.page.page .member-invite-agree,
+.page.page .member-invite-refuse,
+.page.page .community-member-authorize,
+.page.page .detail-member-authorize,
+.page.page .login-action-link,
+.page.page .membership-invite__actions button,
+.page.page .checkout-upgrade__actions button {
+  display:flex;align-items:center;justify-content:center;
+  height:auto;min-height:44px;line-height:1.45;
+  padding-top:8rpx;padding-bottom:8rpx;
+  white-space:normal;overflow-wrap:anywhere;text-align:center;
+}
+.page.page button {
+  min-height:44px;border-radius:14px;
+  box-shadow:none;
+  transition:opacity 100ms ease,background-color 100ms ease;
+}
+.page.page .avatar-button { border-radius:50%; }
+.page.page .wx-phone-button,
+.page.page .wx-phone-button.button-hover {
+  transition:none;transform:none;opacity:1;filter:none;box-shadow:none;
+}
+.page.page .primary-button.primary-button,
+.page.page .secondary-button.secondary-button,
+.page.page .danger-button.danger-button,
+.page.page .accept-button {
+  border-radius:24px;
+}
+.page.page .primary-button:not([disabled]),
+.page.page .save-button:not([disabled]),
+.page.page .cards-button.primary:not([disabled]),
+.page.page .contact-button.primary:not([disabled]),
+.page.page .editorial-panel__action:not([disabled]),
+.page.page .detail-dock > .payment-button:not([disabled]) {
+  background:linear-gradient(135deg,#38644f,#214f3e);
+  color:#fff;border-color:#315d46;box-shadow:0 2px 5px rgba(33,79,62,.10);
+}
+.page.page .secondary-button:not([disabled]),
+.page.page .cards-button:not(.primary):not([disabled]),
+.page.page .contact-button:not(.primary):not(.stop):not([disabled]),
+.page.page .state-card__action:not([disabled]),
+.page.page .reservation-notification-row button:not([disabled]),
+.page.page .performance-impact-actions button:not([disabled]),
+.page.page .performance-impact-options button:not([disabled]),
+.page.page .calendar-row button:not([disabled]),
+.page.page .redemption-history__row button:not([disabled]),
+.page.page .restriction-row button:not([disabled]),
+.page.page .privacy-contact-row button:not([disabled]) {
+  background:#f1f4ed;color:#365743;border:1rpx solid #d5dfd4;box-shadow:none;
+}
+.page.page .chip:not([disabled]),
+.page.page .show-chip:not([disabled]),
+.page.page .ledger-tab:not([disabled]) {
+  border-radius:18px;background:#eeeee8;color:#515c52;border-color:transparent;
+}
+.page.page .chip.is-on:not([disabled]),
+.page.page .show-chip.is-selected:not([disabled]),
+.page.page .ledger-tab.is-active:not([disabled]) {
+  background:#deebe1;color:#214f3e;border-color:#a8c4b3;
+  box-shadow:inset 0 0 0 1rpx #a8c4b3;
+}
+.page.page .service-option.service-option {
+  border-radius:14px;border-color:#d5dfd4;background:#fafbf7;
+}
+.page.page .action-grid__button,
+.page.page .contact-action,
+.page.page .member-actions button.member-action {
+  border-radius:14px;border-color:#d5dfd4;box-shadow:none;
+}
+.page.page .feedback-actions button.feedback-action { border-radius:18px; }
+.page.page .day-chip { border-radius:14px;box-shadow:none; }
+.page.page .day-chip--pressed { transform:none;opacity:.78;box-shadow:none; }
+/* Keep destructive actions visibly distinct and consent actions independent. */
+.page.page .danger-button:not([disabled]) {
+  background:#8d493e;color:#fff;box-shadow:none;
+}
+.page.page button[disabled][disabled] {
+  background:#e5e8e2;color:#657066;border-color:#d7ddd4;
+  opacity:1;box-shadow:none;transform:none;filter:none;
+}
+.page.page button.button-hover:not([disabled]):not(.wx-phone-button) {
+  opacity:.78;transform:none;filter:none;box-shadow:none;
+}
+.page.page .compact-icon-action.button-hover::before,
+.page.page .compact-text-action.button-hover::before {
+  transform:translate(-50%,-50%);background:#dce5db;
+}
+.page.page button:focus-visible { outline:2px solid #537b64;outline-offset:2px; }
+@media (prefers-reduced-motion:reduce) {
+  .page.page button,.page.page button::before { transition:none; }
+}

@@ -1,9 +1,10 @@
+import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 import { ScopedPostgresTransactionRunner, type PostgresPool } from './transaction-runner.js'
-import { loadGuestTableOrders } from './guest-table-orders-query.js'
+import { loadGuestTableOrders, loadGuestCustomerOrderHistory } from './guest-table-orders-query.js'
 
 const tenantId = '11111111-1111-4111-8111-111111111111'
 const storeId = '22222222-2222-4222-8222-222222222222'
@@ -23,10 +24,12 @@ describe('loadGuestTableOrders', () => {
           public_id: 'order-shared-0001', round_number: 2, channel: 'guest_qr',
           order_status: 'submitted', visibility: 'shared', is_mine: false,
           order_created_at: '2026-08-12T12:00:00.000Z',
+          paid_at: null, total_amount_minor: '6800', subtotal_amount_minor: '6800', discount_amount_minor: '0',
           payment_status: 'unpaid', payment_access: 'available', payable_amount_minor: '6800', currency: 'CNY',
           pricing_kind: 'gift',
           product_id: '55555555-5555-4555-8555-555555555555', product_name: '精酿啤酒',
-          quantity: 2, item_status: 'preparing',
+          quantity: 2, item_status: 'preparing', item_note: '少冰',
+          item_id: 'item-one', unit_price_minor: '3400', item_total_amount_minor: '6800', components: [],
         }], rowCount: 1 }
       },
     } as unknown as ScopedTransaction
@@ -34,11 +37,13 @@ describe('loadGuestTableOrders', () => {
     await expect(loadGuestTableOrders(transaction, tableSessionId, customerId)).resolves.toEqual([{
       publicId: 'order-shared-0001', round: 2, channel: 'guest_qr', sourceText: '顾客扫码点单', status: 'submitted',
       visibility: 'shared', isMine: false, createdAt: '2026-08-12T12:00:00.000Z',
+      paidAt: null, totalAmountMinor: 6800, subtotalAmountMinor: 6800, discountAmountMinor: 0,
       paymentStatus: 'unpaid', paymentAccess: 'available', payableAmountMinor: 6800, currency: 'CNY',
       pricingKind: 'gift', pricingLabel: '门店赠送',
       items: [{
         productId: '55555555-5555-4555-8555-555555555555', name: '精酿啤酒', quantity: 2,
         status: 'preparing',
+        id: 'item-one', unitPriceMinor: 3400, totalAmountMinor: 6800, components: [], note: '少冰',
       }],
     }])
     expect(capturedValues).toEqual([tenantId, storeId, tableSessionId, customerId])
@@ -174,6 +179,42 @@ integration('loadGuestTableOrders PostgreSQL privacy and turnover isolation', ()
       { readOnly: true },
     )
     expect(orders).toEqual([])
+  })
+
+  it('retains only personally created paid history, independent of table participation', async () => {
+    const scope = { tenantId: integrationTenantId, storeId: integrationStoreId }
+    const own = await transactions.run(scope, async tx => {
+      await tx.query('SET LOCAL ROLE mbox_runtime')
+      return loadGuestCustomerOrderHistory(tx, customerTwoId)
+    }, { readOnly: true })
+    expect(own.map(order => order.publicId)).toEqual(['shared-paid-two'])
+    expect(own[0]).toMatchObject({ visibility: 'private', totalAmountMinor: 13600 })
+    const other = await transactions.run(scope, tx => loadGuestCustomerOrderHistory(tx, customerOneId), { readOnly: true })
+    expect(other).toEqual([])
+    const foreign = await transactions.run({ ...scope, storeId: '74000000-0000-4000-8000-000000000099' },
+      tx => loadGuestCustomerOrderHistory(tx, customerTwoId), { readOnly: true })
+    expect(foreign).toEqual([])
+  })
+
+  it('keeps cancelled but financially settled orders in personal history, never in the live table list', async () => {
+    const scope = { tenantId: integrationTenantId, storeId: integrationStoreId }
+    // The old fixture round is already closed and correctly rejects changing
+    // its business state. Create this separate scenario in the open round.
+    const orderId = randomUUID()
+    await pool.query(`INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,
+      subtotal_amount_minor,total_amount_minor,created_by_customer_id,cancelled_at)
+      VALUES($1,$2,$3,$4,'cancelled-refunded-history','guest_qr','cancelled','refunded',13600,13600,$5,clock_timestamp())`,
+      [orderId,integrationTenantId,integrationStoreId,secondSessionId,customerTwoId])
+    await pool.query(`INSERT INTO mbox.order_items(tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,total_amount_minor,fulfillment_station,product_snapshot,status)
+      SELECT item.tenant_id,item.store_id,$1,item.product_id,item.quantity,item.unit_price_minor,item.total_amount_minor,item.fulfillment_station,item.product_snapshot,'cancelled'
+      FROM mbox.order_items item JOIN mbox.orders ordering ON ordering.id=item.order_id
+      WHERE ordering.tenant_id=$2 AND ordering.public_id='shared-paid-two' AND item.parent_order_item_id IS NULL`,[orderId,integrationTenantId])
+    const own = await transactions.run(scope, tx => loadGuestCustomerOrderHistory(tx, customerTwoId), { readOnly: true })
+    expect(own).toHaveLength(2)
+    expect(own[0]).toMatchObject({ publicId:'cancelled-refunded-history',status:'cancelled',paymentStatus:'refunded',visibility:'private',paymentAccess:'not_required' })
+    expect(own[0]!.items.length).toBeGreaterThan(0)
+    const live = await transactions.run(scope, tx => loadGuestTableOrders(tx, secondSessionId, customerTwoId), { readOnly: true })
+    expect(live.some(order => order.publicId==='cancelled-refunded-history')).toBe(false)
   })
 })
 

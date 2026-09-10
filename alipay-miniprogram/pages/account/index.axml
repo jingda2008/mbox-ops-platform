@@ -1,19 +1,19 @@
 <view class="page">
   <view class="top-band">
-    <view class="brand-row"><view><text class="eyebrow">当前桌台</text><text class="account-table">{{tableCode}} 桌账摘要</text></view></view>
+    <view class="brand-row"><view><text class="eyebrow">{{historyMode ? '个人订单' : '当前桌台'}}</text><text class="account-table">{{historyMode ? '我的已付订单' : tableCode + ' 桌账摘要'}}</text></view></view>
   </view>
-  <state-panel a:if="{{loading}}" type="loading" title="正在查看桌账" />
+  <state-panel a:if="{{loading}}" type="loading" title="{{historyMode ? '正在读取我的订单' : '正在查看桌账'}}" />
   <block a:else>
     <view a:if="{{error}}" class="error-banner">{{error}}</view>
     <view a:if="{{success}}" class="success-banner">{{success}}</view>
-    <view class="account-total panel">
+    <view a:if="{{!historyMode}}" class="account-total panel">
       <text class="eyebrow">当前未结余额</text>
       <text class="account-total__amount">{{outstandingText}}</text>
       <text class="account-note">同桌订单可共同查看，不显示付款人信息。</text>
     </view>
-    <view class="warning payment-boundary">金额会在付款或退款确认后更新。付款结果尚未确认时，请先查看结果，避免重复付款。</view>
+    <view class="warning payment-boundary">{{historyMode ? '最近30笔本人下单的已付及退款订单。不含仅同桌共享的他人订单，历史记录不重新发起支付。' : '金额会在付款或退款确认后更新。付款结果尚未确认时，请先查看结果，避免重复付款。'}}</view>
     <view class="section">
-      <view class="section-title"><text>本桌订单</text><text class="section-link">下拉刷新</text></view>
+      <view class="section-title"><text>{{historyMode ? '我的成交记录' : '本桌订单'}}</text><text class="section-link">下拉刷新</text></view>
       <view a:if="{{orders.length}}" class="order-list">
         <view a:for="{{orders}}" a:key="publicId" class="panel order-card">
           <view class="order-card__head">
@@ -21,17 +21,18 @@
               <view class="order-title-row"><text class="list-row__title">{{item.roundText}} · {{item.statusText}}</text><text a:if="{{item.pricingLabel}}" class="pricing-badge pricing-badge--{{item.pricingKind}}">{{item.pricingLabel}}</text></view>
               <text class="list-row__meta">{{item.sourceText}} · {{item.createdAtText}}</text>
             </view>
-            <view class="order-card__amount"><text class="amount">{{item.payableText}}</text><text>{{item.paymentText}}</text></view>
+            <view class="order-card__amount"><text class="amount">{{item.totalText}}</text><text>{{item.paymentText}}</text></view>
           </view>
           <view class="payment-line">
             <text class="payment-line__hint">{{item.paymentHint}}</text>
           </view>
+          <view class="order-detail-meta"><text>订单号：{{item.publicId}}</text><text a:if="{{item.paidAtText}}">最近收款确认：{{item.paidAtText}}</text><text a:if="{{item.discountText}}">本单优惠：{{item.discountText}}</text><text a:if="{{!historyMode}}">待付余额：{{item.payableText}}</text></view>
           <view a:for="{{item.items}}" a:for-item="product" a:key="key" class="list-row">
-            <view class="list-row__main"><text class="list-row__title">{{product.name}} ×{{product.quantity}}</text><text class="list-row__meta">{{product.statusText}}</text></view>
+            <view class="list-row__main"><text class="list-row__title">{{product.name}}</text><text a:if="{{product.componentsText}}" class="list-row__meta">{{product.componentsText}}</text><view class="order-item-price"><text>单价 {{product.unitPriceText}} × {{product.quantity}}</text><text>小计 {{product.totalText}}</text></view><text class="list-row__meta">{{product.statusText}}</text></view>
           </view>
         </view>
       </view>
-      <state-panel a:else type="empty" title="当前暂无订单" message="下单后，商品与出品进度会显示在这里" />
+      <state-panel a:else type="empty" title="{{historyMode ? '暂无本人已付订单' : '当前暂无订单'}}" message="{{historyMode ? '本人下单并确认收款后，可在此查看明细与退款状态' : '下单后，商品与出品进度会显示在这里'}}" />
     </view>
   </block>
 </view>

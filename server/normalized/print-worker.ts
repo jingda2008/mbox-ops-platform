@@ -62,21 +62,23 @@ export class PrintWorker {
       limit?: number
       staleLockMs?: number
       retryDelayMs?: number
+      adapterTimeoutMs?: number
     }> = {},
   ): Promise<PrintBatchResult> {
-    const limit = integer(options.limit ?? 50, 1, 50, 'limit')
+    const limit = integer(options.limit ?? 5, 1, 50, 'limit')
+    const timeoutMs = integer(options.adapterTimeoutMs ?? 5_000, 100, 30_000, 'adapterTimeoutMs')
     const staleLockMs = integer(options.staleLockMs ?? 60_000, 1_000, 30 * 60_000, 'staleLockMs')
     const retryDelayMs = integer(options.retryDelayMs ?? 5_000, 1_000, 60 * 60_000, 'retryDelayMs')
     if (!/^[A-Za-z0-9_.:-]{3,96}$/.test(workerId)) throw new TypeError('workerId格式无效')
     const jobs = await this.transactions.run(scope, (transaction) => claimJobs(
-      transaction, workerId, limit, staleLockMs,
+      transaction, workerId, Math.min(limit, Math.max(1, Math.floor(staleLockMs / (timeoutMs + 1_000)))), staleLockMs,
     ))
     const result: PrintBatchResult = { claimed: jobs.length, printed: [], retrying: [], dead: [], lost: [] }
 
     for (const job of jobs) {
       try {
         if (job.connectivity_status !== 'online') throw new PrintAdapterError('device_offline')
-        await adapter.print({
+        await boundedPrint(adapter, {
           jobId: job.id,
           idempotencyKey: job.business_key,
           printerDeviceId: job.printer_device_id,
@@ -85,16 +87,20 @@ export class PrintWorker {
           copies: Number(job.copies),
           printSnapshot: job.print_snapshot,
           containsPriorityNote: job.contains_priority_note,
-        })
+        }, timeoutMs)
         const changed = await this.transactions.run(scope, (transaction) => markPrinted(transaction, job, workerId))
         ;(changed ? result.printed : result.lost).push(job.id)
       } catch (error) {
+        // Once handed to an adapter, an unclassified exception does not prove
+        // that no paper was produced (it may even be a lost DB acknowledgement).
+        const failureCode = error instanceof PrintAdapterError ? error.failureCode : 'print_result_unknown'
         const terminal = Number(job.attempts) >= Number(job.max_attempts)
+          || failureCode === 'print_result_unknown' || failureCode.startsWith('ambiguous_')
         const changed = await this.transactions.run(scope, (transaction) => markFailed(
           transaction,
           job,
           workerId,
-          error instanceof PrintAdapterError ? error.failureCode : 'print_failed:unknown',
+          failureCode,
           terminal,
           retryDelayMs,
         ))
@@ -113,19 +119,31 @@ async function claimJobs(
   staleLockMs: number,
 ): Promise<ClaimedJob[]> {
   const result = await transaction.query<ClaimedJob>(`
-    WITH candidates AS (
+    WITH abandoned AS (
+      UPDATE mbox.print_jobs SET status='dead',dead_at=clock_timestamp(),
+        locked_by=NULL,locked_at=NULL,last_error_code='print_result_unknown'
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id IN (
+        SELECT id FROM mbox.print_jobs WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+          AND delivery_mode='cloud_adapter' AND status='printing'
+          AND locked_at<clock_timestamp()-($5::bigint*interval '1 millisecond')
+        ORDER BY locked_at,id LIMIT 50 FOR UPDATE SKIP LOCKED
+      ) RETURNING id
+    ), abandoned_events AS (
+      INSERT INTO mbox.print_job_events(tenant_id,store_id,print_job_id,event_type,from_status,to_status,actor_type,failure_code)
+      SELECT $1::uuid,$2::uuid,id,'dead','printing','dead','system','print_result_unknown' FROM abandoned
+    ), candidates AS (
       SELECT job.id
       FROM mbox.print_jobs AS job
+      JOIN mbox.devices AS target ON target.tenant_id=job.tenant_id AND target.store_id=job.store_id
+        AND target.id=job.printer_device_id AND target.status='active'
+      JOIN mbox.printer_routes AS route ON route.tenant_id=job.tenant_id AND route.store_id=job.store_id
+        AND route.id=job.printer_route_id AND route.status='active'
       WHERE job.tenant_id = $1::uuid AND job.store_id = $2::uuid
         AND job.delivery_mode = 'cloud_adapter'
         AND job.attempts < job.max_attempts
-        AND (
-          (job.status IN ('pending', 'failed') AND job.available_at <= clock_timestamp())
-          OR (job.status = 'printing'
-            AND job.locked_at < clock_timestamp() - ($5::bigint * interval '1 millisecond'))
-        )
+        AND job.status IN ('pending', 'failed') AND job.available_at <= clock_timestamp()
       ORDER BY job.contains_priority_note DESC, job.available_at, job.created_at, job.id
-      FOR UPDATE SKIP LOCKED
+      FOR UPDATE OF job SKIP LOCKED
       LIMIT $4
     )
     UPDATE mbox.print_jobs AS job
@@ -214,4 +232,13 @@ async function appendEvent(
 function integer(value: number, minimum: number, maximum: number, field: string) {
   if (!Number.isInteger(value) || value < minimum || value > maximum) throw new TypeError(`${field}格式无效`)
   return value
+}
+
+async function boundedPrint(adapter: PrintAdapter, request: PrintAdapterRequest, timeoutMs: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([adapter.print(request), new Promise<never>((_, reject) => {
+      timer=setTimeout(() => reject(new PrintAdapterError('print_result_unknown')), timeoutMs)
+    })])
+  } finally { if (timer !== undefined) clearTimeout(timer) }
 }

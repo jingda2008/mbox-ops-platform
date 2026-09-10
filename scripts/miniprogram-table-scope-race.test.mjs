@@ -9,6 +9,24 @@ const RESERVATION_COOKIE_KEY = 'mbox.http.cookie.reservation.v2'
 const PENDING_PAYMENT_KEY = 'mbox.pending.guest.payment.v1'
 const CHECKOUT_ATTEMPT_KEY = 'mbox.pending.guest.checkout.v1'
 
+for (const platform of ['miniprogram', 'alipay-miniprogram']) {
+  test(`${platform} never awaits prior order release to review a separate cart`, async () => {
+    const source=await readFile(new URL(`../${platform}/pages/order/index.js`,import.meta.url),'utf8')
+    const start=source.indexOf('  async handlePendingPaymentBeforeCheckout() {')
+    const end=source.indexOf('\n  async openCheckout()',start)
+    assert.ok(start>=0&&end>start)
+    const actions=vm.runInNewContext('({'+source.slice(start,end)+'})')
+    const record={idempotencyKey:'prior-order-stable-key',orderPublicId:'prior-order'}
+    let requested=0
+    const page={data:{pendingPayment:{orderPublicId:'prior-order'}},queuePendingGuestPaymentAbandonment:()=>record,
+      executePendingGuestPaymentAbandonment:value=>{assert.equal(value,record);requested++;return new Promise(()=>{})}}
+    const result=await Promise.race([actions.handlePendingPaymentBeforeCheckout.call(page),new Promise(resolve=>setTimeout(()=>resolve('blocked'),50))])
+    assert.equal(result,false)
+    assert.equal(requested,1)
+    assert.equal(page.data.pendingPayment.orderPublicId,'prior-order')
+  })
+}
+
 function guestPaymentAbandonmentModule() {
   const PENDING_GUEST_PAYMENT_ABANDONMENT_KEY = 'mbox.pending.guest.payment.abandon.v1'
   return {
@@ -99,6 +117,8 @@ async function loadApiRaceModule(state) {
   const context = {
     module: { exports: {} }, exports: {},
     require(specifier) {
+      if (specifier === '../../utils/checkout-coupons') return loadMiniModule(new URL('../miniprogram/utils/checkout-coupons.js', import.meta.url))
+      if (specifier === '../../utils/checkout-upgrade') return loadMiniModule(new URL('../miniprogram/utils/checkout-upgrade.js', import.meta.url))
       if (specifier === './request') return {
         deviceKey: () => 'device-table-race',
         request: (path, options) => {
@@ -144,6 +164,8 @@ async function loadRequestRaceModule(state) {
   const context = {
     module: { exports: {} }, exports: {},
     require(specifier) {
+      if (specifier === '../../utils/checkout-coupons') return loadMiniModule(new URL('../miniprogram/utils/checkout-coupons.js', import.meta.url))
+      if (specifier === '../../utils/checkout-upgrade') return loadMiniModule(new URL('../miniprogram/utils/checkout-upgrade.js', import.meta.url))
       if (specifier === '../config/index') return { getRuntimeConfig: () => ({
         apiBaseUrl: 'https://mini.example.test', storeId: 'mbox-lujiazui', requestTimeoutMs: 10_000,
       }) }
@@ -186,6 +208,8 @@ async function loadHomePage(state) {
   const context = {
     module: { exports: {} }, exports: {}, Page: (value) => { definition = value }, getApp: () => app,
     require(specifier) {
+      if (specifier === '../../utils/checkout-coupons') return loadMiniModule(new URL('../miniprogram/utils/checkout-coupons.js', import.meta.url))
+      if (specifier === '../../utils/checkout-upgrade') return loadMiniModule(new URL('../miniprogram/utils/checkout-upgrade.js', import.meta.url))
       if (specifier === '../../utils/api') return api
       if (specifier === '../../config/index') return { getRuntimeConfig: () => ({ isDevelopment: false }) }
       if (specifier === '../../utils/session') return { getTableSession: () => state.session }
@@ -227,6 +251,8 @@ async function loadOrderPage(state) {
     module: { exports: {} }, exports: {}, Page: (value) => { definition = value },
     getApp: () => ({ refreshRuntime: () => state.session }),
     require(specifier) {
+      if (specifier === '../../utils/checkout-coupons') return loadMiniModule(new URL('../miniprogram/utils/checkout-coupons.js', import.meta.url))
+      if (specifier === '../../utils/checkout-upgrade') return loadMiniModule(new URL('../miniprogram/utils/checkout-upgrade.js', import.meta.url))
       if (specifier === '../../utils/api') return {
         getGuestSession: async () => {
           state.session = Object.assign({}, state.session, {
@@ -258,6 +284,7 @@ async function loadOrderPage(state) {
         abandonGuestCheckout: async (orderPublicId, idempotencyKey) => {
           calls.abandonGuestCheckout.push({ orderPublicId, idempotencyKey })
           if (state.abandonCheckoutError) throw state.abandonCheckoutError
+          if (state.abandonCheckoutDeferred) return state.abandonCheckoutDeferred.promise
           return state.abandonCheckoutResult || { operationalState: 'cancelled', paymentState: 'reconciliation_pending' }
         },
         getTodayPerformances: async () => null, getCustomerBenefits: async () => [], getMiniBootstrap: async () => null,
@@ -344,15 +371,19 @@ async function loadOrderPage(state) {
   return { page, calls }
 }
 
-async function loadAccountPage(state) {
-  const source = await readFile(new URL('../miniprogram/pages/account/index.js', import.meta.url), 'utf8')
+async function loadAccountPage(state, platform = 'miniprogram') {
+  const source = await readFile(new URL(`../${platform}/pages/account/index.js`, import.meta.url), 'utf8')
   let definition = null
   const guard = requestGuard()
   const context = {
     module: { exports: {} }, exports: {}, Page: (value) => { definition = value },
     require(specifier) {
+      if (specifier === '../../utils/platform') return context.wx
+      if (specifier === '../../utils/checkout-coupons') return loadMiniModule(new URL('../miniprogram/utils/checkout-coupons.js', import.meta.url))
+      if (specifier === '../../utils/checkout-upgrade') return loadMiniModule(new URL('../miniprogram/utils/checkout-upgrade.js', import.meta.url))
       if (specifier === '../../utils/api') return {
         getTableOrders: () => state.orderReads.shift().promise,
+        getCustomerOrderHistory: () => state.historyReads.shift().promise,
         retryOrderPayment: async () => {
           state.retryPaymentCalls = Number(state.retryPaymentCalls || 0) + 1
           if (state.retryPaymentError) throw state.retryPaymentError
@@ -673,12 +704,63 @@ test('Order cancels a legacy pending checkout instead of retrying its old paymen
   state.storage.set(PENDING_PAYMENT_KEY, pending)
   page.setData({ pendingPayment: pending })
   await page.handlePendingPaymentBeforeCheckout()
+  await new Promise((resolve) => setTimeout(resolve, 0))
 
   assert.equal(calls.abandonGuestCheckout.length, 1)
   assert.equal(calls.abandonGuestCheckout[0].orderPublicId, 'order-abandon-0001')
   assert.equal(state.storage.get(PENDING_PAYMENT_KEY), undefined)
   assert.equal(page.data.pendingPayment, null)
   assert.equal(page.data.error, '')
+})
+
+for (const failure of ['slow', 'rejected']) {
+  test(`Order permits a fresh cart while previous payment release is ${failure}, retaining its financial recovery`, async () => {
+    const scope = 'cache.session:fixed-token:cart-scope-for-turn-b-000000002'
+    const release = deferred()
+    const state = {
+      session: { tableCode: '', tableToken: 'fixed-token', scanNonce: 'scan-b' },
+      resolvedTableCode: 'VIP1', resolvedCartScope: 'cart-scope-for-turn-b-000000002', storage: new Map(),
+      ...(failure === 'slow' ? { abandonCheckoutDeferred: release } : { abandonCheckoutError: Object.assign(new Error('channel unavailable'), { code: 'GUEST_CHECKOUT_CANNOT_BE_CANCELLED' }) }),
+    }
+    const { page, calls } = await loadOrderPage(state)
+    await page.preparePage()
+    const pending = { orderPublicId: 'order-recovery-0001', retryIdempotencyKey: 'retry-recovery-0001', tableScope: scope, checkoutKind: 'guest_immediate_payment', paymentPresentationState: 'result_unknown' }
+    state.storage.set(PENDING_PAYMENT_KEY, pending)
+    page.setData({ pendingPayment: pending })
+    const allowed = await Promise.race([page.handlePendingPaymentBeforeCheckout(), new Promise(resolve => setTimeout(() => resolve('blocked'), 50))])
+    assert.equal(allowed, false)
+    assert.equal(calls.abandonGuestCheckout.length, 1)
+    assert.equal(calls.checkoutSharedCart.length, 0)
+    assert.equal(calls.requestPayment.length, 0)
+    assert.equal(state.storage.get(PENDING_PAYMENT_KEY).orderPublicId, pending.orderPublicId)
+    assert.equal(page.data.checkoutLocked, false)
+    assert.equal(page.data.error, '')
+    if (failure === 'slow') {
+      release.resolve({ operationalState: 'cancelled', paymentState: 'reconciliation_pending' })
+      await new Promise(resolve => setTimeout(resolve, 0))
+      assert.equal(state.storage.get(PENDING_PAYMENT_KEY), undefined)
+    }
+  })
+}
+
+test('A late terminal payment release cannot remove another table recovery record', async () => {
+  const release = deferred()
+  const state = {
+    session: { tableCode: '', tableToken: 'fixed-token', scanNonce: 'scan-b' },
+    resolvedTableCode: 'VIP1', resolvedCartScope: 'cart-scope-for-turn-b-000000002', storage: new Map(),
+    abandonCheckoutDeferred: release,
+  }
+  const { page } = await loadOrderPage(state)
+  await page.preparePage()
+  const original = { orderPublicId: 'order-old-scope', tableScope: 'old-scope', idempotencyKey: 'release-old-scope' }
+  const execution = page.executePendingGuestPaymentAbandonment(original)
+  const current = { orderPublicId: 'order-new-scope', tableScope: 'new-scope', idempotencyKey: 'release-new-scope' }
+  state.storage.set('mbox.pending.guest.payment.abandon.v1', current)
+  state.storage.set(PENDING_PAYMENT_KEY, { orderPublicId: current.orderPublicId, tableScope: current.tableScope })
+  release.reject(Object.assign(new Error('old order ended'), { code: 'GUEST_CHECKOUT_ALREADY_PAID' }))
+  await execution
+  assert.deepEqual(state.storage.get('mbox.pending.guest.payment.abandon.v1'), current)
+  assert.equal(state.storage.get(PENDING_PAYMENT_KEY).orderPublicId, current.orderPublicId)
 })
 
 test('Account drops an A pending-payment record and late A orders after a B table switch', async () => {
@@ -744,6 +826,39 @@ test('Account shows a historical unpaid guest order without a payment revival ac
   assert.match(page.data.orders[0].paymentHint, /返回点单重新选购/)
   assert.equal(typeof page.continuePayment, 'undefined')
 })
+
+for(const platform of ['miniprogram','alipay-miniprogram']){
+  test(`${platform} loads own history without a table and leaves pending payment recovery untouched`, async () => {
+    const pending = { orderPublicId: 'current-pending', tableScope: 'another-active-scope' }
+    const state = { session: {}, storage: new Map([['mbox.pending.guest.payment.v1', pending]]), orderReads: [],
+      historyReads: [{ promise: Promise.resolve([{ publicId: 'historic', status: 'completed', paymentStatus: 'refunded',
+        totalAmountMinor: 2000, discountAmountMinor: 0, payableAmountMinor: 2000, items: [] }]) }] }
+    const page = await loadAccountPage(state, platform)
+    page.onLoad({ mode: 'history' }); await page.loadData()
+    assert.equal(page.data.orders[0].totalText, '¥20')
+    assert.equal(page.data.orders[0].canPay, false)
+    assert.match(page.data.orders[0].paymentHint, /不在此重复收款/)
+    assert.equal(page.data.orders[0].roundText, '我的订单')
+    assert.equal(page.queuePendingGuestPaymentAbandonment(), null)
+    page.onHide()
+    assert.equal(state.storage.get('mbox.pending.guest.payment.v1'), pending)
+  })
+  test(`${platform} retains paid order totals, frozen item prices and independent selections`,async()=>{
+    const state={session:{tableCode:'AP01',tableToken:'test-token'},storage:new Map(),orderReads:[{promise:Promise.resolve([{
+      publicId:'paid-order',round:1,status:'fulfilling',paymentStatus:'paid',paymentAccess:'not_required',
+      totalAmountMinor:1500,discountAmountMinor:500,payableAmountMinor:0,createdAt:'2026-09-09T12:00:00Z',paidAt:'2026-09-09T12:01:00Z',
+      items:[{id:'portion-a',productId:'same-product',name:'套餐',quantity:1,unitPriceMinor:1000,totalAmountMinor:750,components:[{name:'鸡尾酒A',quantity:1}]},
+        {id:'portion-b',productId:'same-product',name:'套餐',quantity:1,unitPriceMinor:1000,totalAmountMinor:750,components:[{name:'鸡尾酒B',quantity:1}]}],
+    }])}]}
+    const page=await loadAccountPage(state,platform);page.onLoad();await page.loadData()
+    const order=page.data.orders[0]
+    assert.equal(order.totalText,'¥15');assert.equal(order.payableText,'¥0');assert.equal(order.discountText,'¥5')
+    assert.equal(order.items[0].unitPriceText,'¥10');assert.equal(order.items[0].totalText,'¥7.5')
+    assert.equal(order.items[0].componentsText,'鸡尾酒A ×1');assert.equal(order.items[1].componentsText,'鸡尾酒B ×1')
+    assert.notEqual(order.items[0].key,order.items[1].key);assert.equal(order.canPay,false)
+    assert.equal(order.paidAtText,'2026-09-09T12:01:00Z')
+  })
+}
 
 test('guest cart opens a review sheet before it creates an order or starts payment', async () => {
   const state = {
@@ -910,6 +1025,26 @@ test('the previous online-payment-unavailable response also unlocks without crea
   assert.equal(state.storage.get(CHECKOUT_ATTEMPT_KEY), undefined)
   assert.match(page.data.error, /没有创建订单/)
 })
+
+for (const code of ['CHECKOUT_COUPON_RECONFIRM_REQUIRED', 'COUPON_UPGRADE_REQUOTE_REQUIRED']) {
+  test(`${code} reopens price confirmation without retaining a locked checkout attempt`, async () => {
+    const state = {
+      session: { tableCode: 'A01', tableToken: 'token-a', cartScope: 'cart-scope-for-turn-a-000000001' },
+      storage: new Map(), checkoutError: Object.assign(new Error('reconfirm price'), { code }),
+    }
+    const { page, calls } = await loadOrderPage(state)
+    const request = { scope: scope(state.session), generation: 1 }
+    page.currentTableRequest = () => request
+    page.isCurrentTableRequest = (value) => value === request
+    page.setData({ cart: [{ productId: 'product-001', quantity: 1, available: true }], cartGeneration: 1, cartVersion: 1 })
+    await page.submitOrder(null, false, null, request)
+    assert.equal(page.data.checkoutLocked, false)
+    assert.equal(page.data.checkoutConfirmVisible, true)
+    assert.equal(page.data.couponNeedsReview, true)
+    assert.equal(state.storage.get(CHECKOUT_ATTEMPT_KEY), undefined)
+    assert.equal(calls.requestPayment.length, 0)
+  })
+}
 
 test('unknown checkout result preserves and retries the same idempotent attempt without a blocking sheet', async () => {
   const networkError = Object.assign(new Error('connection reset'), { code: 'NETWORK_ERROR' })

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { notificationLocalTime as providerTime } from './notification-local-time.js'
 import type { WechatMiniProgramNotificationRecipientResolver } from './wechat-loyalty-notification-worker.js'
 import type { WechatTemplateMessageDelivery } from './wechat-subscription-message-adapter.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction, StoreScope } from './transaction-runner.js'
@@ -248,17 +249,6 @@ async function recordOutcome(
 
 function revisionLabel(kind: ClaimedReservationNotification['revision_kind']): string {
   return kind === 'rescheduled' ? '演出改期' : kind === 'replaced' ? '演出换场' : '演出取消'
-}
-
-function providerTime(value: string): string {
-  const date = new Date(value)
-  if (!Number.isFinite(date.getTime())) throw new TypeError('Reservation notification time is invalid')
-  const parts = new Intl.DateTimeFormat('zh-CN', {
-    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', hour12: false,
-  }).formatToParts(date)
-  const field = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value
-  return `${field('year')}-${field('month')}-${field('day')} ${field('hour')}:${field('minute')}`
 }
 
 function validate(workerId: string, batchSize: number) {

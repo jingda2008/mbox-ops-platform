@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
+import {UpgradeQualificationError} from './checkout-upgrade-eligibility.js'
 import {
   IdempotencyConflictError,
   IdempotencyInProgressError,
@@ -8,6 +9,7 @@ import {
 } from './command-executor.js'
 import {
   CustomerExperienceRequestError,
+  normalizeCheckoutBasket,
   type ProtectedActivityRegistrationContact,
   type AlcoholPreference,
   type CheckoutBasketLine,
@@ -789,15 +791,16 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
   }))
 
   app.post('/guest/checkout/upgrade-offers', async (request, reply) => handle(reply, async () => {
-    const context = await tableContext(options, request)
+    await tableContext(options, request)
     const body = objectBody(request.body)
-    const result = await options.service.prepareCheckoutUpgrade(context, {
-      items: checkoutItems(body.items),
-      ...(body.occasion === undefined ? {} : { occasion: enumValue(body.occasion, '场景', OCCASIONS) }),
-      ...(body.alcoholPreference === undefined ? {} : { alcoholPreference: enumValue(body.alcoholPreference, '酒水偏好', ALCOHOL) }),
-      idempotencyKey: idempotencyKey(request),
-    })
-    return reply.send({ data: result.value, meta: { replayed: result.replayed, pricing: 'server_authoritative' } })
+    checkoutItems(body.items)
+    if(body.occasion!==undefined)enumValue(body.occasion,'场景',OCCASIONS)
+    if(body.alcoholPreference!==undefined)enumValue(body.alcoholPreference,'酒水偏好',ALCOHOL)
+    idempotencyKey(request)
+    // Old clients may still ask here. Never issue an unqualified offer: the
+    // portion-aware shared-cart endpoint is the only new recommendation path.
+    reply.header('cache-control','no-store')
+    return reply.send({ data: null, meta: { replayed: false, pricing: 'server_authoritative', replacement: 'shared_cart_opportunity' } })
   }))
 
   app.post<{ Params: { publicId: string } }>('/guest/checkout/upgrade-offers/:publicId/events', async (request, reply) => handle(reply, async () => {
@@ -1043,6 +1046,7 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
       'CHECKOUT_UPGRADE_FREE_CONFIGURATION_REJECTED',
     )
     const result = await options.service.upsertCheckoutUpgradeRule(context, {
+      ...(body.qualification!==undefined?{qualification:body.qualification}:{}),
       code: ruleCode(request.params.ruleCode),
       name: text(body.name, '规则名称', 2, 80),
       sourceProductId: uuid(body.sourceProductId, '原酒水'),
@@ -1682,6 +1686,7 @@ function errorResponse(error: unknown): { statusCode: number; code: string; mess
 }
 
 function knownErrorResponse(error: unknown): { statusCode: number; code: string; message: string } | null {
+  if (error instanceof UpgradeQualificationError) return { statusCode:400,code:'CHECKOUT_UPGRADE_QUALIFICATION_INVALID',message:error.message }
   if (error instanceof CustomerExperienceRequestError) return { statusCode: error.statusCode, code: error.code, message: error.message }
   if (error instanceof ReservationGuestSessionInvalidError || error instanceof GuestAuthenticationRequiredError
     || error instanceof NormalizedAuthenticationRequiredError || error instanceof StaffSessionNotFoundError) {
@@ -1805,14 +1810,15 @@ function publicPreferences(value: unknown): JsonObject {
 
 function checkoutItems(value: unknown): CheckoutBasketLine[] {
   if (!Array.isArray(value) || value.length < 1 || value.length > 50) throw new CustomerExperienceRequestError('购物车商品数量不正确')
-  return value.map((entry) => {
+  return normalizeCheckoutBasket(value.map((entry) => {
     const item = object(entry, '购物车商品')
     return {
       productId: uuid(item.productId, '商品'),
       quantity: integer(item.quantity, '数量', 1, 20),
       ...(item.note === undefined ? {} : { note: optionalText(item.note, '备注', 240) }),
+      ...(item.bundleSelections === undefined ? {} : { bundleSelections: item.bundleSelections as unknown as CheckoutBasketLine['bundleSelections'] }),
     }
-  })
+  }))
 }
 
 function capacityWindows(value: unknown): Array<{

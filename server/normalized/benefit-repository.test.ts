@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { Pool } from 'pg'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
-import { BenefitCommandService, BenefitUnavailableError } from './benefit-repository.js'
+import { BenefitCommandService, BenefitRepository, BenefitUnavailableError } from './benefit-repository.js'
+import { parseBenefitWalletCursor } from './benefit-wallet.js'
+import { CouponCalendarRepository } from './coupon-calendar-repository.js'
 import { NormalizedCommandExecutor } from './command-executor.js'
 import {
   ComplimentaryFulfillmentResolutionError,
@@ -455,6 +457,194 @@ integration('BenefitRepository normalized grant and redemption integrity', () =>
       tag_delete: true,
     })
   })
+
+  it('paginates complete wallet with microsecond cursors, no duplicate rows or other customer leakage', async () => {
+    const isolated = await customers.createAnonymous({
+      scope: { tenantId, storeId }, actor: { type: 'system', ref: 'wallet-test' }, businessDate: '2026-08-11',
+      publicId: 'wallet-customer-public-0001', identityHash: 'a'.repeat(64),
+      idempotencyKey: 'wallet-customer-create-0001', requestFingerprint: 'wallet-customer-fingerprint',
+    })
+    const walletCustomer = isolated.value.customer.id
+    const ids: string[] = []
+    for (let index = 0; index < 3; index += 1) {
+      const issued = await benefits.issue({ ...issueCommand(`wallet-${index}`, 100, 1), customerId: walletCustomer })
+      ids.push(issued.value.id)
+      await pool.query(`UPDATE mbox.benefits SET created_at = $2::timestamptz,
+        valid_from = CASE WHEN $3 = 0 THEN '2099-01-01'::timestamptz ELSE valid_from END,
+        valid_until = '2100-01-01'::timestamptz,
+        status = CASE WHEN $3 = 1 THEN 'revoked' ELSE status END
+        WHERE id = $1`, [issued.value.id, `2026-09-09 04:00:00.12345${index}+00`, index])
+    }
+    const read = (cursor: string | null) => transactions.run({ tenantId, storeId },
+      (transaction) => new BenefitRepository(transaction).listWalletForCustomer(walletCustomer, parseBenefitWalletCursor(cursor ?? undefined), 1), { readOnly: true })
+    const first = await read(null)
+    const second = await read(first.nextCursor)
+    const third = await read(second.nextCursor)
+    expect([first.items[0]!.id, second.items[0]!.id, third.items[0]!.id]).toEqual(ids.toReversed())
+    expect(second.items[0]!.status).toBe('revoked')
+    expect(third.items[0]!.validFrom).toContain('2099-01-01')
+    expect(third.nextCursor).toBeNull()
+  })
+
+  it('persists calendar versions and atomically caps multiple issued coupons of one customer', async () => {
+    const scope = { tenantId, storeId }
+    const rule = currentCalendar()
+    const draftInput = { code: 'CALENDAR_SHARED', rule, limits: { perCustomerDay: 1, perCustomerWeek: 2, perCustomerCampaign: 3 },
+      employeeId, businessDate: '2026-08-11', reason: '时间次数联动测试', requestKey: randomUUID(), expectedVersion: 0 }
+    const draft = await transactions.run(scope, tx => new CouponCalendarRepository(tx).save(draftInput))
+    const replay = await transactions.run(scope, tx => new CouponCalendarRepository(tx).save(draftInput))
+    expect(replay.id).toBe(draft.id)
+    expect(replay.replayed).toBe(true)
+    const decisionGuard = await pool.connect()
+    try {
+      await decisionGuard.query('BEGIN')
+      await decisionGuard.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`coupon-calendar:${tenantId}:${storeId}:decision:${draft.id}`])
+      await expect(pool.query('INSERT INTO mbox.coupon_calendar_exclusions(tenant_id,store_id,version_id,excluded_date) VALUES($1,$2,$3,$4)', [tenantId, storeId, draft.id, rule.dateFrom])).rejects.toThrow('decision in progress')
+    } finally {
+      await decisionGuard.query('ROLLBACK')
+      decisionGuard.release()
+    }
+    await expect(benefits.issue({ ...issueCommand('unpublished-calendar', 100, 1), couponCalendarVersionId: draft.id })).rejects.toThrow('规则未发布')
+    const [approver, publisher] = await calendarReviewers()
+    const decision = (action: 'approve' | 'publish' | 'stop_issuing', actor: string) => transactions.run(scope, tx => new CouponCalendarRepository(tx).decide({
+      versionId: draft.id, action, employeeId: actor, businessDate: '2026-08-11', reason: '隔离测试审批发布',
+    }))
+    await decision('approve', approver)
+    await expect(decision('publish', approver)).rejects.toThrow('审批人之外')
+    await decision('publish', publisher)
+    await expect(pool.query('INSERT INTO mbox.coupon_calendar_exclusions(tenant_id,store_id,version_id,excluded_date) VALUES($1,$2,$3,$4)', [tenantId, storeId, draft.id, rule.dateFrom])).rejects.toThrow('cannot acquire')
+    const issued = await Promise.all(['calendar-a','calendar-b'].map(suffix => benefits.issue({ ...issueCommand(suffix, 100, 1), couponCalendarVersionId: draft.id })))
+    const reserve = (benefitId: string, suffix: string) => benefits.reserve({ scope, actor: { type: 'guest', ref: guestActorRef }, businessDate: '2026-08-11',
+      benefitId, customerId, tableSessionId, quantity: 1, expiresAt: new Date(Date.now() + 600000).toISOString(),
+      reservationIdempotencyKey: `calendar-reserve-${suffix}`, reservationFingerprint: suffix })
+    const attempts = await Promise.allSettled(issued.map((item, index) => reserve(item.value.id, String(index))))
+    expect(attempts.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+    const failed = attempts.find(result => result.status === 'rejected') as PromiseRejectedResult
+    expect(String(failed.reason)).toContain('当日使用上限')
+    const successIndex = attempts.findIndex(result => result.status === 'fulfilled')
+    const success = attempts[successIndex] as PromiseFulfilledResult<Awaited<ReturnType<typeof reserve>>>
+    const original = await reserve(issued[successIndex]!.value.id, String(successIndex))
+    expect(original.value.id).toBe(success.value.value.id)
+    await benefits.cancelReservation({ scope, actor: { type: 'guest', ref: guestActorRef }, businessDate: '2026-08-11',
+      benefitReservationId: original.value.id, customerId, tableSessionId, reason: '客户取消未履约占用', cancellationIdempotencyKey: randomUUID(), cancellationFingerprint: randomUUID() })
+    await decision('stop_issuing', publisher)
+    await expect(benefits.issue({ ...issueCommand('calendar-stopped', 100, 1), couponCalendarVersionId: draft.id })).rejects.toThrow('已停发')
+    const preserved = await reserve(issued[1 - successIndex]!.value.id, 'after-cancel-and-stop')
+    expect(preserved.value.status).toBe('reserved')
+    await expect(transactions.run(scope, tx => new CouponCalendarRepository(tx).save({ ...draftInput, requestKey: randomUUID(), expectedVersion: 1,
+      rule: { ...rule, weekStartsOn: 7 } }))).rejects.toThrow('周起点不可改写')
+  })
+
+  it('rejects an excluded current day without consuming quantity and does not affect an old unbound benefit', async () => {
+    const scope = { tenantId, storeId }
+    const rule = currentCalendar()
+    const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0,10)
+    const draft = await transactions.run(scope, tx => new CouponCalendarRepository(tx).save({ code: 'CALENDAR_EXCLUDED', rule: { ...rule, excludedDates: [today] },
+      limits: { perCustomerDay: null, perCustomerWeek: null, perCustomerCampaign: null }, employeeId, businessDate: '2026-08-11',
+      reason: '排除日期不占用测试', requestKey: randomUUID(), expectedVersion: 0 }))
+    const [approver, publisher] = await calendarReviewers()
+    for (const [action, actor] of [['approve', approver], ['publish', publisher]] as const) await transactions.run(scope, tx => new CouponCalendarRepository(tx).decide({ versionId: draft.id, action, employeeId: actor, businessDate: '2026-08-11', reason: '隔离规则测试批准' }))
+    const issued = await benefits.issue({ ...issueCommand('calendar-excluded',100,1), couponCalendarVersionId: draft.id })
+    await expect(benefits.reserve({ scope, actor: { type: 'guest', ref: guestActorRef }, businessDate: '2026-08-11', benefitId: issued.value.id, customerId, tableSessionId,
+      expiresAt: new Date(Date.now()+600000).toISOString(), reservationIdempotencyKey: randomUUID(), reservationFingerprint: randomUUID() })).rejects.toThrow('不在此券可用时段')
+    const saved = await transactions.run(scope, tx => new BenefitRepository(tx).findById(issued.value.id))
+    expect(saved?.quantityAvailable).toBe(1)
+    const wallet = await transactions.run(scope, tx => new BenefitRepository(tx).listWalletForCustomer(customerId, null, 50))
+    expect(wallet.items.find(item => item.id === issued.value.id)?.calendar).toMatchObject({ available: false })
+    const available = await transactions.run(scope, tx => new BenefitRepository(tx).listAvailableForCustomer(customerId))
+    expect(available.some(item => item.id === issued.value.id)).toBe(false)
+  })
+
+  it.each([
+    ['WEEK_CAP', { perCustomerDay: null, perCustomerWeek: 1, perCustomerCampaign: 2 }, '本周'],
+    ['CAMPAIGN_CAP', { perCustomerDay: null, perCustomerWeek: null, perCustomerCampaign: 1 }, '本活动'],
+  ] as const)('enforces independent %s across two issued coupons', async (code, limits, label) => {
+    const scope = { tenantId,storeId }
+    const draft = await transactions.run(scope, tx => new CouponCalendarRepository(tx).save({ code, rule: currentCalendar(), limits, employeeId,
+      businessDate: '2026-08-11', reason: '独立次数上限测试', requestKey: randomUUID(), expectedVersion: 0 }))
+    const [approver, publisher] = await calendarReviewers()
+    for (const [action, actor] of [['approve',approver],['publish',publisher]] as const) await transactions.run(scope, tx => new CouponCalendarRepository(tx).decide({
+      versionId: draft.id, action, employeeId: actor, businessDate: '2026-08-11', reason: '隔离次数验证审批' }))
+    const reserve = async (suffix: string) => {
+      const issued = await benefits.issue({ ...issueCommand(`${code}-${suffix}`,100,1), couponCalendarVersionId: draft.id })
+      return benefits.reserve({ scope, actor: { type: 'guest', ref: guestActorRef }, businessDate: '2026-08-11', benefitId: issued.value.id, customerId, tableSessionId,
+        expiresAt: new Date(Date.now()+600000).toISOString(), reservationIdempotencyKey: randomUUID(), reservationFingerprint: randomUUID() })
+    }
+    await reserve('first')
+    await expect(reserve('second')).rejects.toThrow(`已达到${label}使用上限`)
+  })
+
+  it('keeps pre-merge reservations cancellable and redeemable only by the canonical customer family', async () => {
+    const scope = { tenantId, storeId }
+    const create = () => customers.createAnonymous({ scope, actor: { type: 'system', ref: 'merge-test' }, businessDate: '2026-08-11',
+      publicId: `calendar-merge-${randomUUID()}`, identityHash: randomUUID().replaceAll('-','').repeat(2), idempotencyKey: randomUUID(), requestFingerprint: randomUUID() })
+    const source = (await create()).value.customer.id, target = (await create()).value.customer.id
+    const mergeTable = randomUUID(), mergeSession = randomUUID()
+    await pool.query('INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity) VALUES($1,$2,$3,$4,$5,$5,4)', [mergeTable,tenantId,storeId,areaId,`M${mergeTable.slice(0,6)}`])
+    await pool.query(`INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count) VALUES($1,$2,$3,$4,$5,'2026-08-11',1)`, [mergeSession,tenantId,storeId,mergeTable,`merge-${mergeSession}`])
+    await pool.query(`INSERT INTO mbox.table_session_customers(tenant_id,store_id,table_session_id,customer_id,relationship) VALUES($1,$2,$3,$4,'primary')`, [tenantId,storeId,mergeSession,source])
+    const actorRef = await seedActiveGuestTableAuthority(pool,{tenantId,storeId,tableSessionId:mergeSession,customerId:source})
+    const issued = await benefits.issue({ ...issueCommand('merge-reservations',100,2), customerId: source })
+    const reserve = () => benefits.reserve({ scope, actor: { type: 'guest', ref: actorRef }, businessDate: '2026-08-11', benefitId: issued.value.id,
+      customerId: source, tableSessionId: mergeSession, expiresAt: new Date(Date.now()+600000).toISOString(), reservationIdempotencyKey: randomUUID(), reservationFingerprint: randomUUID() })
+    const first = await reserve(), second = await reserve()
+    await customers.merge({ scope, actor: { type: 'system', ref: 'verified-merge-test' }, businessDate: '2026-08-11', sourceCustomerId: source, targetCustomerId: target,
+      reason: '隔离库已核验身份合并', idempotencyKey: randomUUID(), requestFingerprint: randomUUID() })
+    const cancelled = await benefits.cancelReservation({ scope, actor: { type: 'guest', ref: actorRef }, businessDate: '2026-08-11', benefitReservationId: first.value.id,
+      customerId: target, tableSessionId: mergeSession, reason: '合并后取消原占用', cancellationIdempotencyKey: randomUUID(), cancellationFingerprint: randomUUID() })
+    expect(cancelled.value.status).toBe('cancelled')
+    const redeemed = await benefits.redeem({ scope, actor: { type: 'guest', ref: actorRef }, businessDate: '2026-08-11', benefitId: issued.value.id,
+      benefitReservationId: second.value.id, customerId: target, tableSessionId: mergeSession, selectedProductId: productId, redeemedByEmployeeId: employeeId,
+      authorizationSource: { kind: 'verified-merge-test' }, redemptionIdempotencyKey: randomUUID(), redemptionFingerprint: randomUUID() })
+    expect(redeemed.value.benefitReservationId).toBe(second.value.id)
+    expect(redeemed.value.customerId).toBe(source) // original financial provenance is retained
+    const facts = await transactions.run(scope, tx => new BenefitRepository(tx).findById(issued.value.id))
+    expect(facts).toMatchObject({ quantityReserved: 0, quantityRedeemed: 1, quantityAvailable: 1 })
+  })
+
+  function currentCalendar() {
+    const date = (offset: number) => new Date(Date.now()+offset*86400000+8*3600000).toISOString().slice(0,10)
+    return { timezone: 'Asia/Shanghai', dateBasis: 'natural', businessDayStartMinute: 0, dateFrom: date(-1), dateThrough: date(2),
+      validFrom: `${date(-1)}T00:00:00+08:00`, validUntil: `${date(3)}T00:00:00+08:00`, weekdays: [1,2,3,4,5,6,7], weekStartsOn: 1,
+      windows: [{ startMinute: 0, endMinute: 1440 }], excludedDates: [] as string[] }
+  }
+  it('freezes relative coupon expiry once and clips wallet calendar to this coupon instead of the campaign',async()=>{
+    const scope={tenantId,storeId},rule={...currentCalendar(),relativeValidity:{days:1,basis:'elapsed'}}
+    const draft=await transactions.run(scope,tx=>new CouponCalendarRepository(tx).save({code:'RELATIVE_VALIDITY',rule,limits:{perCustomerDay:null,perCustomerWeek:null,perCustomerCampaign:null},employeeId,businessDate:'2026-08-11',reason:'相对有效期测试',requestKey:randomUUID(),expectedVersion:0}))
+    expect(draft.rule.relativeValidity).toEqual({days:1,basis:'elapsed'})
+    const [approver,publisher]=await calendarReviewers()
+    for(const [action,actor] of [['approve',approver],['publish',publisher]] as const)await transactions.run(scope,tx=>new CouponCalendarRepository(tx).decide({versionId:draft.id,action,employeeId:actor,businessDate:'2026-08-11',reason:'相对有效期批准'}))
+    const input={...issueCommand('relative-validity',100,1),validUntil:new Date(Date.now()+10*86400000).toISOString(),couponCalendarVersionId:draft.id}
+    const first=await benefits.issue(input),replay=await benefits.issue(input)
+    expect(replay.value.id).toBe(first.value.id)
+    expect(replay.value.validUntil).toBe(first.value.validUntil)
+    expect(Date.parse(first.value.validUntil!)-Date.parse(first.value.validFrom)).toBe(86400000)
+    const wallet=await transactions.run(scope,tx=>new CouponCalendarRepository(tx).walletViews([first.value.id],new Date(first.value.validUntil!)))
+    expect(wallet.get(first.value.id)).toMatchObject({available:false,nextAvailableAt:null,lastAvailableUntil:new Date(first.value.validUntil!).toISOString()})
+  })
+  it('fails a benefit action promptly while identity movement owns the guard instead of waiting on table locks', async () => {
+    const issued = await benefits.issue(issueCommand('identity-contention', 100, 1))
+    const owner = await pool.connect()
+    try {
+      await owner.query('BEGIN')
+      await owner.query(`SELECT pg_advisory_xact_lock(hashtextextended('table-customer-movement:' || $1::text || ':' || $2::text,0))`, [tenantId,storeId])
+      await expect(benefits.reserve({ scope: { tenantId,storeId }, actor: { type: 'guest', ref: guestActorRef }, businessDate: '2026-08-11',
+        benefitId: issued.value.id, customerId, tableSessionId, expiresAt: new Date(Date.now()+600000).toISOString(), reservationIdempotencyKey: randomUUID(), reservationFingerprint: randomUUID() })).rejects.toThrow('客户身份正在同步')
+    } finally { await owner.query('ROLLBACK'); owner.release() }
+  })
+  async function calendarReviewers(): Promise<[string,string]> {
+    const people: [string,string] = [randomUUID(),randomUUID()]
+    const reviewRole = randomUUID()
+    await pool.query('INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,$4,$4)', [reviewRole,tenantId,storeId,`REVIEW_${reviewRole.slice(0,8).toUpperCase()}`])
+    await pool.query(`INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code IN ('loyalty.configuration.approve','loyalty.policy.publish')`, [tenantId,storeId,reviewRole])
+    for (const person of people) {
+      await pool.query('INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($1,$2,$3,$4,$4)', [person,tenantId,storeId,`person-${person}`])
+      // This fixture means "already authorized", not a future-start boundary:
+      // PostgreSQL defaults keep microseconds while the app clock keeps ms.
+      await pool.query("INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id,starts_at) VALUES($1,$2,$3,$4,clock_timestamp()-interval '1 minute')", [tenantId,storeId,person,reviewRole])
+    }
+    return people
+  }
 
   function issueCommand(suffix: string, valueAmountMinor: number, quantity: number) {
     return {

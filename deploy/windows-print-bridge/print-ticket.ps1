@@ -28,13 +28,24 @@ $document.DefaultPageSettings.Margins = New-Object System.Drawing.Printing.Margi
 $font = New-Object System.Drawing.Font('Microsoft YaHei UI', $fontSize, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Point)
 $brush = [System.Drawing.Brushes]::Black
 $format = New-Object System.Drawing.StringFormat
-$format.Trimming = [System.Drawing.StringTrimming]::Word
+$format.Trimming = [System.Drawing.StringTrimming]::None
+$format.FormatFlags = [System.Drawing.StringFormatFlags]::LineLimit
+# Keep mutable state across PrintPage callbacks; long tickets must not be clipped
+# to the first roll segment. Each copy is handled by the printer driver.
+$pageState = @{ Remaining = $content }
 
 $handler = [System.Drawing.Printing.PrintPageEventHandler]{
   param($sender, $eventArgs)
   $bounds = $eventArgs.MarginBounds
-  $eventArgs.Graphics.DrawString($content, $font, $brush, [System.Drawing.RectangleF]::new($bounds.X, $bounds.Y, $bounds.Width, $bounds.Height), $format)
-  $eventArgs.HasMorePages = $false
+  [int]$charactersOnPage = 0
+  [int]$linesOnPage = 0
+  [void]$eventArgs.Graphics.MeasureString($pageState.Remaining, $font,
+    [System.Drawing.SizeF]::new($bounds.Width, $bounds.Height), $format,
+    [ref]$charactersOnPage, [ref]$linesOnPage)
+  if ($charactersOnPage -le 0 -and $pageState.Remaining.Length -gt 0) { throw 'invalid_print_page_bounds' }
+  $eventArgs.Graphics.DrawString($pageState.Remaining, $font, $brush, [System.Drawing.RectangleF]::new($bounds.X, $bounds.Y, $bounds.Width, $bounds.Height), $format)
+  $pageState.Remaining = $pageState.Remaining.Substring($charactersOnPage)
+  $eventArgs.HasMorePages = $pageState.Remaining.Length -gt 0
 }
 $document.add_PrintPage($handler)
 try {

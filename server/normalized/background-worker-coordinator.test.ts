@@ -97,7 +97,7 @@ describe('NormalizedBackgroundWorkerCoordinator', () => {
     expect(serviceSla).toHaveBeenCalledTimes(1)
   })
 
-  it('contains a print failure without blocking the business-day or SOP workers', async () => {
+  it('contains both print stages and failing diagnostics without blocking business readiness or SOP', async () => {
     const errors: string[] = []
     const coordinator = new NormalizedBackgroundWorkerCoordinator(scope, {
       serviceSla: { runBatch: vi.fn(async () => ({ workerId: 'sla', claimed: 0, processed: [] })) },
@@ -114,6 +114,7 @@ describe('NormalizedBackgroundWorkerCoordinator', () => {
       aiScheduled: { runBatch: vi.fn(async () => ({ workerId: 'ai', claimed: 0, statuses: [] })) },
       personalContactDisposition: { runBatch: vi.fn(async () => personalContactDispositionResult()) },
       print: { runBatch: vi.fn(async () => { throw new Error('printer unavailable') }) },
+      printSource: { runBatch: vi.fn(async () => { throw new Error('ticket source unavailable') }) },
       outbox: { runBatch: vi.fn(async () => ({ claimed: 0, delivered: [], failed: [] })) },
       notification: { runBatch: vi.fn(async () => ({ claimed: 0, delivered: [], retrying: [], dead: [], lost: [] })) },
     }, {
@@ -122,15 +123,16 @@ describe('NormalizedBackgroundWorkerCoordinator', () => {
       print: { print: async () => undefined },
     }, {
       workerId: 'normalized-test',
-      onError: (worker) => errors.push(worker),
+      onError: (worker) => { errors.push(worker); throw new Error('diagnostic unavailable') },
     })
 
     const result = await coordinator.runOnce()
-    expect(result.failures).toEqual(['print'])
+    expect(result.failures).toEqual([])
     expect(result.workers.print).toBeNull()
+    expect(result.workers.printSource).toBeNull()
     expect(result.workers.businessDay).not.toBeNull()
     expect(result.workers.sop?.claimed).toBe(1)
-    expect(errors).toEqual(['print'])
+    expect(errors).toEqual(['print', 'print-source'])
   })
 
   it('runs each worker on its own cadence instead of querying every queue on every tick', async () => {

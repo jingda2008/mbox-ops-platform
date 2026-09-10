@@ -15,6 +15,7 @@ import {
 import type { ScopedTransaction } from './transaction-runner.js'
 
 interface OrderContextRow extends Record<string, unknown> {
+  order_status: string
   order_id: string
   order_public_id: string
   order_note: string | null
@@ -38,6 +39,7 @@ interface OrderItemRow extends Record<string, unknown> {
 }
 
 interface PaymentContextRow extends OrderContextRow {
+  retry_released: boolean
   payment_id: string
   payment_public_id: string
   payment_provider: string
@@ -114,7 +116,8 @@ export class PrintTicketSourceRepository {
     orderId: string,
   ): Promise<readonly PrintJob[]> {
     const context = await this.loadOrderContext(orderId)
-    const items = await this.loadItems(orderId)
+    if (context.order_status === 'cancelled' || context.order_status === 'draft') return []
+    const items = await this.loadItems(orderId, true)
     const jobs: PrintJob[] = []
     for (const station of ['bar', 'kitchen'] as const) {
       const operational = items.filter((item) => (
@@ -144,7 +147,8 @@ export class PrintTicketSourceRepository {
     paymentId: string,
   ): Promise<readonly PrintJob[]> {
     const payment = await this.loadPaymentContext(paymentId)
-    if (payment.payment_status_value !== 'pending') return []
+    if (payment.payment_status_value !== 'pending' || payment.retry_released
+      || payment.order_status === 'cancelled' || payment.order_status === 'draft') return []
     const items = await this.loadItems(payment.order_id)
     const snapshot = cashierSnapshot(payment, 'cashier_settlement', items, null)
     return this.materializeCashier(sourceOutboxMessageId, payment, snapshot)
@@ -158,7 +162,7 @@ export class PrintTicketSourceRepository {
     // A payment voucher states one committed payment, not the entire bill.
     // That keeps split settlements and post-refund replacement payments
     // printable without falsely labelling a partial collection as full payment.
-    if (payment.payment_status_value !== 'succeeded') return []
+    if (!['succeeded', 'partially_refunded', 'refunded'].includes(payment.payment_status_value)) return []
     const snapshot = cashierPaymentSnapshot(payment)
     return this.materializeCashier(sourceOutboxMessageId, payment, snapshot)
   }
@@ -168,7 +172,7 @@ export class PrintTicketSourceRepository {
     paymentId: string,
   ): Promise<readonly PrintJob[]> {
     const payment = await this.loadActivityPaymentContext(paymentId)
-    if (payment.payment_status_value !== 'succeeded') return []
+    if (!['succeeded', 'partially_refunded', 'refunded'].includes(payment.payment_status_value)) return []
     const snapshot = createPrintTicketSnapshot({
       kind: 'cashier_payment',
       subtitle: 'M-BOX · 活动现场收款凭条',
@@ -289,6 +293,7 @@ export class PrintTicketSourceRepository {
   private async loadOrderContext(orderId: string): Promise<OrderContextRow> {
     const result = await this.transaction.query<OrderContextRow>(`
       SELECT ordering.id AS order_id, ordering.public_id AS order_public_id,
+        ordering.status AS order_status,
         ordering.note AS order_note, ordering.total_amount_minor, ordering.currency,
         ordering.payment_status, venue_table.code AS table_code, session.guest_count,
         session.business_date::text, ordering.submitted_at::text
@@ -300,7 +305,6 @@ export class PrintTicketSourceRepository {
         ON venue_table.tenant_id=session.tenant_id AND venue_table.store_id=session.store_id
        AND venue_table.id=session.table_id
       WHERE ordering.tenant_id=$1::uuid AND ordering.store_id=$2::uuid AND ordering.id=$3::uuid
-        AND ordering.status='submitted'
       FOR SHARE OF ordering, session, venue_table
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
     const row = result.rows[0]
@@ -311,6 +315,7 @@ export class PrintTicketSourceRepository {
   private async loadPaymentContext(paymentId: string): Promise<PaymentContextRow> {
     const result = await this.transaction.query<PaymentContextRow>(`
       SELECT ordering.id AS order_id, ordering.public_id AS order_public_id,
+        ordering.status AS order_status, payment.retry_released_at IS NOT NULL AS retry_released,
         ordering.note AS order_note, ordering.total_amount_minor, ordering.currency,
         ordering.payment_status, venue_table.code AS table_code, session.guest_count,
         session.business_date::text, ordering.submitted_at::text,
@@ -441,17 +446,17 @@ export class PrintTicketSourceRepository {
     return row
   }
 
-  private async loadItems(orderId: string): Promise<readonly SourceItem[]> {
+  private async loadItems(orderId: string, productionOnly = false): Promise<readonly SourceItem[]> {
     const result = await this.transaction.query<OrderItemRow>(`
       SELECT item.id AS item_id, item.parent_order_item_id, item.quantity,
         item.total_amount_minor, item.fulfillment_station, item.product_snapshot, item.note
       FROM mbox.order_items AS item
       WHERE item.tenant_id=$1::uuid AND item.store_id=$2::uuid AND item.order_id=$3::uuid
-        AND item.status='submitted'
+        AND item.status<>'cancelled'
+        AND (NOT $4::boolean OR item.status<>'delivered')
       ORDER BY item.created_at, item.id
       FOR SHARE
-    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
-    if (result.rows.length === 0) throw new Error('打印源订单没有可用明细')
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId, productionOnly])
     return result.rows.map(sourceItem)
   }
 

@@ -1,0 +1,17 @@
+.print-source-recovery { min-width: 0; display: grid; gap: 12px; }
+.print-source-recovery > h2 { margin: 0; font-size: 20px; line-height: 1.4; }
+.print-source-recovery p { margin: 0; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+.print-source-recovery > button, .print-source-recovery article button {
+  box-sizing: border-box; min-height: 42px; max-width: 100%; padding: 9px 14px;
+  border: 1px solid #517962; border-radius: 10px; background: #f6faf6;
+  color: #244d39; font: inherit; font-size: 14px; font-weight: 650;
+  white-space: normal; overflow-wrap: anywhere; cursor: pointer;
+}
+.print-source-recovery button:disabled { opacity: .55; cursor: default; }
+.print-source-recovery button:focus-visible { outline: 2px solid #315d46; outline-offset: 3px; }
+.print-source-recovery label { min-width: 0; display: grid; gap: 6px; font-size: 14px; }
+.print-source-recovery input { box-sizing: border-box; width: 100%; min-width: 0; min-height: 42px;
+  border: 1px solid #b9c8bd; border-radius: 8px; padding: 8px 10px; font: inherit; background: white; }
+.print-source-recovery article { min-width: 0; flex-wrap: wrap; gap: 10px; }
+.print-source-recovery article > div { min-width: 0; flex: 1 1 180px; overflow-wrap: anywhere; }
+.print-source-recovery article > button { flex: 0 1 auto; }

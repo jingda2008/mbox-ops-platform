@@ -4,9 +4,12 @@
 .coupons-hero text:nth-child(1){color:#c8a675;font-size:18rpx;font-weight:700;letter-spacing:3rpx}
 .coupons-hero text:nth-child(2){margin-top:12rpx;font-family:"Songti SC","STSong",serif;font-size:42rpx;font-weight:600}
 .coupons-hero text:nth-child(3){margin-top:10rpx;color:#d5ddd7;font-size:22rpx;line-height:1.5}
-.coupon-list{display:grid;gap:14rpx}
+.coupon-list{display:flex;flex-direction:column;gap:14rpx;min-width:0}
 .coupon-card{padding:22rpx;border:1rpx solid #e0d9d0;border-radius:18rpx;background:#fff}
-.coupon-card__head{display:flex;align-items:center;justify-content:space-between;gap:12rpx}
+.coupon-card__head{display:flex;align-items:center;justify-content:space-between;gap:12rpx;flex-wrap:wrap}
+.coupon-card{min-width:0;overflow-wrap:anywhere;word-break:break-word}
+.coupon-foot{flex-wrap:wrap}
+.coupon-more{margin-top:20rpx}
 .coupon-card__head text:first-child{color:#315d46;font-size:18rpx;font-weight:750}
 .coupon-card__head text:last-child{color:#8a8178;font-size:18rpx}
 .coupon-title{display:block;margin-top:10rpx;font-size:28rpx;font-weight:700}

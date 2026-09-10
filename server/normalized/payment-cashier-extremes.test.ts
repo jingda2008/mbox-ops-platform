@@ -425,6 +425,11 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
       WHERE payment_id IN ($1::uuid,$2::uuid) ORDER BY occurred_at,id
     `, [cash.id, replacement.id])
     expect(new Set(references.rows.map((row) => row.provider_reference)).size).toBe(3)
+    const sources=await pool.query(`SELECT ticket_kind,aggregate_id FROM mbox.print_source_jobs
+      WHERE tenant_id=$1 AND store_id=$2 AND aggregate_id=ANY($3::uuid[]) ORDER BY ticket_kind,aggregate_id`,
+      [tenantId,storeId,[cash.id,replacement.id,refund.id]])
+    expect(sources.rows.filter(row=>row.ticket_kind==='payment')).toHaveLength(2)
+    expect(sources.rows.filter(row=>row.ticket_kind==='refund')).toEqual([{ticket_kind:'refund',aggregate_id:refund.id}])
   })
 
   it('rolls back a duplicate cash or POS receipt reference instead of inventing a second payment', async () => {

@@ -29,6 +29,10 @@ import { FulfillmentCapacityUnavailableError } from './fulfillment-capacity-repo
 import { ServiceTaskRepository } from './service-task-repository.js'
 import { readTableSessionClosureState } from './table-session-closure-blockers.js'
 import { seedActiveGuestTableAuthority } from './guest-table-authority.test-helper.js'
+import {CheckoutCouponQuoteRepository} from './checkout-coupon-quote-repository.js'
+import {CheckoutUpgradeCandidateRepository} from './checkout-upgrade-candidate-repository.js'
+import {CheckoutUpgradeOpportunityRepository} from './checkout-upgrade-opportunity-repository.js'
+import {CheckoutCartPricingError} from './checkout-cart-pricing.js'
 import { ReservationGuestSessionInvalidError } from './reservation-guest-session.js'
 import { GuestSessionInvalidError, GuestTableSessionEndedError } from './guest-session-repository.js'
 import {
@@ -71,6 +75,71 @@ afterEach(async () => {
 })
 
 describe('guest commerce/service API trust boundaries', () => {
+  it.each([
+    [{ portionId: 'not-a-uuid', note: '少冰' }],
+    [{ portionId: productId, note: 'a'.repeat(301) }],
+    [{ portionId: productId, note: '少冰', amountMinor: 1 }],
+    [{ portionId: productId, note: 'A' }, { portionId: productId, note: 'B' }],
+  ].map(lineNotes => ({ lineNotes })))('rejects invalid portion instructions before checkout: %j', async ({ lineNotes }) => {
+    const value = fixture()
+    const response = await value.app.inject({ method: 'POST', url: '/api/guest/shared-cart/checkout', headers: { 'idempotency-key': 'invalid-line-notes' }, payload: { expectedGeneration: 1, expectedVersion: 2, lineNotes } })
+    expect(response.statusCode).toBe(400)
+  })
+  it.each(['/api/guest/orders','/api/guest/shared-cart/checkout'])('rejects legacy upgrade authority at %s without executing a payment',async url=>{
+    const value=fixture()
+    const response=await value.app.inject({method:'POST',url,headers:{'idempotency-key':'legacy-upgrade-block-0001'},payload:{...(url.includes('shared-cart')?{expectedGeneration:1,expectedVersion:2}:{items:[{productId,quantity:1}]}),checkoutUpgradeOfferPublicId:'old-unqualified-offer'}})
+    expect(response.statusCode).toBe(409)
+    expect(response.body).toContain('CHECKOUT_UPGRADE_RECONFIRM_REQUIRED')
+    expect(value.commerce.submitOrder).not.toHaveBeenCalled()
+  })
+  it.each([{customerId},{targetProductId:productId},{payableMinor:1},{eligible:true}])('rejects client upgrade authority overrides %j',async override=>{
+    const value=fixture(),response=await value.app.inject({method:'POST',url:'/api/guest/shared-cart/upgrade-opportunity',headers:{'idempotency-key':'upgrade-untrusted-request'},payload:{expectedGeneration:1,expectedVersion:2,...override}})
+    expect(response.statusCode).toBe(400)
+    expect(response.json().error.code).toBe('UNTRUSTED_FIELD')
+  })
+  it('binds the optional recommendation to actual guest identity and cart version',async()=>{
+    const prepare=vi.spyOn(CheckoutUpgradeCandidateRepository.prototype,'prepare').mockResolvedValue(null)
+    try{
+      const value=fixture(),response=await value.app.inject({method:'POST',url:'/api/guest/shared-cart/upgrade-opportunity',headers:{'idempotency-key':'upgrade-bound-request'},payload:{expectedGeneration:1,expectedVersion:2}})
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toEqual({data:null})
+      expect(prepare).toHaveBeenCalledWith({customerId,tableSessionId,expectedGeneration:1,expectedVersion:2,occasion:null,alcoholPreference:null,selections:[],requestKey:'upgrade-bound-request'})
+      expect(response.headers['cache-control']).toBe('no-store')
+    }finally{prepare.mockRestore()}
+  })
+  it('maps upgrade rejection independently from payment uncertainty and coupon conflict',async()=>{
+    const accept=vi.spyOn(CheckoutUpgradeOpportunityRepository.prototype,'accept').mockRejectedValue(new CheckoutCartPricingError('价格变化，未更改原购物车'))
+    try{
+      const value=fixture(),response=await value.app.inject({method:'POST',url:`/api/guest/shared-cart/upgrade-opportunity/${productId}`,payload:{action:'accept'}})
+      expect(response.statusCode).toBe(409)
+      expect(response.json().error.code).toBe('CHECKOUT_UPGRADE_RECONFIRM_REQUIRED')
+      expect(accept).toHaveBeenCalledWith(productId,{customerId,tableSessionId,actorSessionRef:context.actorRef})
+    }finally{accept.mockRestore()}
+  })
+  it.each([{customerId},{payableMinor:1},{discountMinor:6800},{policy:{allowOtherCoupons:true}},{selections:[{benefitId:productId,portionId:productId,amountMinor:1}]}])('rejects client coupon ownership or price overrides %j',async override=>{
+    const value=fixture()
+    const response=await value.app.inject({method:'POST',url:'/api/guest/shared-cart/coupon-quote',headers:{'idempotency-key':'coupon-quote-untrusted'},payload:{expectedGeneration:1,expectedVersion:2,selections:[{benefitId:productId,portionId:productId}],...override}})
+    expect(response.statusCode).toBe(400)
+    expect(response.json().error.code).toBe('UNTRUSTED_FIELD')
+  })
+  it('binds quote identity to the authenticated table and excludes private costing from its response',async()=>{
+    const prepare=vi.spyOn(CheckoutCouponQuoteRepository.prototype,'prepare').mockResolvedValue({id:productId,generation:1,version:2,current:true,expiresAt:new Date(Date.now()+120000).toISOString(),currency:'CNY',subtotalMinor:1000,discountMinor:10,payableMinor:990,customerId,lines:[{portionId:productId,productId,benefitId:productId,standardMinor:1000,discountMinor:10,lineFingerprint:'private-fingerprint'}]} as never)
+    try{
+      const value=fixture(),response=await value.app.inject({method:'POST',url:'/api/guest/shared-cart/coupon-quote',headers:{'idempotency-key':'coupon-quote-authority'},payload:{expectedGeneration:1,expectedVersion:2,selections:[{benefitId:productId,portionId:productId}]}})
+      expect(response.statusCode).toBe(200)
+      expect(prepare).toHaveBeenCalledWith(expect.objectContaining({customerId:context.customerId,tableSessionId:context.tableSessionId,requestKey:'coupon-quote-authority'}))
+      expect(response.headers['cache-control']).toBe('no-store')
+      expect(response.json().data).toMatchObject({payableMinor:990,couponsReserved:false})
+      expect(JSON.stringify(response.json())).not.toMatch(/private-fingerprint|customerId/)
+    }finally{prepare.mockRestore()}
+  })
+  it('classifies stale coupon quotes as recoverable confirmation conflicts',async()=>{
+    const prepare=vi.spyOn(CheckoutCouponQuoteRepository.prototype,'prepare').mockRejectedValue(new CheckoutCartPricingError('购物车已变化，请重新确认'))
+    try{
+      const value=fixture(),response=await value.app.inject({method:'POST',url:'/api/guest/shared-cart/coupon-quote',headers:{'idempotency-key':'coupon-quote-conflict'},payload:{expectedGeneration:1,expectedVersion:2,selections:[{benefitId:productId,portionId:productId}]}})
+      expect(response.statusCode).toBe(409);expect(response.json().error.code).toBe('CHECKOUT_COUPON_RECONFIRM_REQUIRED')
+    }finally{prepare.mockRestore()}
+  })
   it('allows an authenticated mini-program customer to browse the current menu without a table session', async () => {
     const resolvePublicContext = vi.fn(async () => ({ scope: context.scope }))
     const value = fixture({
@@ -312,7 +381,7 @@ describe('guest commerce/service API trust boundaries', () => {
     })
   })
 
-  it('passes a checkout upgrade reference into the single atomic order command', async () => {
+  it('rejects a legacy upgrade reference before any order command can bypass qualification', async () => {
     const value = fixture()
     const response = await value.app.inject({
       method: 'POST',
@@ -324,12 +393,9 @@ describe('guest commerce/service API trust boundaries', () => {
       },
     })
 
-    expect(response.statusCode).toBe(201)
-    expect(value.commerce.submitOrder).toHaveBeenCalledOnce()
-    expect(value.commerce.submitOrder).toHaveBeenCalledWith(expect.objectContaining({
-      lines: [{ productId, quantity: 1, note: null }],
-      checkoutUpgradeOfferPublicId: 'checkout-upgrade-public-0001',
-    }))
+    expect(response.statusCode).toBe(409)
+    expect(response.body).toContain('CHECKOUT_UPGRADE_RECONFIRM_REQUIRED')
+    expect(value.commerce.submitOrder).not.toHaveBeenCalled()
   })
 
   it('forwards an optional server recommendation attribution into the order command', async () => {
@@ -1429,13 +1495,15 @@ function fixture(
   const paymentMode = overrides.paymentMode ?? 'wechat_jsapi'
   const query = vi.fn(async (sql: string) => sql.includes('lock_active_table_guest_session_position') ? ({
     rows:[{ participation_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }],rowCount:1,
-  }) : sql.includes('WITH order_balances AS') ? ({
+  }) : sql.includes('order_balances AS (') ? ({
     rows: [{
       public_id: 'shared-order-0001', round_number: 1, channel: 'guest_qr',
       order_status: 'submitted', visibility: 'shared', is_mine: false,
       order_created_at: '2026-08-11T12:00:00.000Z', payment_status: 'unpaid',
       payment_access: 'available', payable_amount_minor: '13600', currency: 'CNY', product_id: productId,
       pricing_kind: 'gift',
+      paid_at: null, total_amount_minor: '13600', subtotal_amount_minor: '13600', discount_amount_minor: '0',
+      item_id: 'shared-order-item-0001', unit_price_minor: '6800', item_total_amount_minor: '13600', components: [],
       product_name: '青岛啤酒', quantity: 2, item_status: 'preparing',
     }],
     rowCount: 1,

@@ -1300,6 +1300,24 @@ describe('paymentApiPlugin', () => {
     expect(JSON.stringify(value.commands.recordManualRefundResult.mock.calls[0]?.[0])).not.toContain('must-be-ignored')
   })
 
+  it('keeps cash collection and cash refund execution independent of every online adapter',async()=>{
+    const requestRefund=vi.fn(async()=>{throw new Error('online channel must not run')})
+    const create=vi.fn(async()=>{throw new Error('online channel must not run')})
+    const query=vi.fn(async()=>{throw new Error('online channel must not run')})
+    const value=fixture({onlinePayments:{requestRefund,create,query} as never})
+    value.commands.beginRefundExecution.mockResolvedValue({value:{...refund,paymentProvider:'cash',status:'processing',approvedByEmployeeId:employeeId},replayed:false})
+    const collected=await value.app.inject({method:'POST',url:'/api/payments/manual',headers:{'idempotency-key':'cash-offline-only-collect'},
+      payload:{orderId,provider:'cash',method:'cash',receiptReference:'CASH-COLLECT-LOCAL-TEST'}})
+    expect(collected.statusCode).toBe(201)
+    const started=await value.app.inject({method:'POST',url:`/api/refunds/${refundId}/execute`,headers:{'idempotency-key':'cash-offline-only-start'},payload:{}})
+    expect(started.statusCode).toBe(200)
+    const completed=await value.app.inject({method:'POST',url:`/api/refunds/${refundId}/manual-result`,headers:{'idempotency-key':'cash-offline-only-result'},
+      payload:{succeeded:true,receiptReference:'CASH-REFUND-LOCAL-TEST'}})
+    expect(completed.statusCode).toBe(200)
+    expect(create).not.toHaveBeenCalled();expect(query).not.toHaveBeenCalled();expect(requestRefund).not.toHaveBeenCalled()
+    expect(value.commands.recordManualRefundResult).toHaveBeenCalledWith(expect.objectContaining({actor:{type:'employee',employeeId},receiptReference:'CASH-REFUND-LOCAL-TEST'}))
+  })
+
   it('lists scoped reconciliation evidence without accepting client employee or store scope', async () => {
     const value = fixture()
     const response = await value.app.inject({

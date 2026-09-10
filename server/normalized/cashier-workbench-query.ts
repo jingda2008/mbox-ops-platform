@@ -13,6 +13,7 @@ import type {
   CashierWorkbenchView,
 } from '../../src/shared/cashier-workbench-contracts.js'
 import type { ScopedPostgresTransactionRunner, StoreScope } from './transaction-runner.js'
+import {cashierCouponRefundReviewCountSql} from './checkout-coupon-refund-review-repository.js'
 
 export interface CashierWorkbenchQueryInput {
   scope: Readonly<StoreScope>
@@ -26,6 +27,7 @@ export interface CashierWorkbenchQueryInput {
 }
 
 interface OrderRow extends Record<string, unknown> {
+  coupon_refund_review_count?:number
   id: string
   public_id: string
   table_code: string
@@ -221,7 +223,7 @@ export class PostgresCashierWorkbenchQuery {
           orders.channel, orders.status, orders.payment_status,
           orders.total_amount_minor, orders.currency,
           orders.submitted_at::text, orders.created_at::text,
-          session.business_date::text
+          session.business_date::text,${cashierCouponRefundReviewCountSql} AS coupon_refund_review_count
         FROM mbox.orders AS orders
         JOIN mbox.table_sessions AS session
           ON session.tenant_id = orders.tenant_id
@@ -244,6 +246,7 @@ export class PostgresCashierWorkbenchQuery {
             OR (($4::text <> '' OR $9::text IS NOT NULL)
               AND session.business_date < $3::date)
             OR (session.business_date < $3::date AND (
+              ${cashierCouponRefundReviewCountSql}>0 OR
               (orders.payment_status='unpaid' AND orders.status<>'cancelled'
                 AND NOT EXISTS (
                   SELECT 1 FROM mbox.order_settlement_exception_events terminal_settlement_exception
@@ -736,6 +739,7 @@ function assembleView(
     const netCollectedMinor = grossPaidMinor - refundedMinor
     return {
       id: order.id,
+      ...(Number(order.coupon_refund_review_count)>0?{couponRefundReviewCount:Number(order.coupon_refund_review_count)}:{}),
       publicId: order.public_id,
       tableCode: order.table_code,
       areaId: order.area_id,
@@ -791,6 +795,7 @@ function assembleView(
     actions: actions(input.capabilities),
     summary: {
       orderCount: orders.length,
+      ...(orders.some(order=>(order.couponRefundReviewCount??0)>0)?{couponRefundReviewCount:orders.reduce((sum,order)=>sum+(order.couponRefundReviewCount??0),0)}:{}),
       capturedPaymentCount: paymentRows.filter((payment) => CAPTURED_PAYMENT_STATUSES.includes(payment.status)).length,
       requestedRefundCount: refundRows.filter((refund) => refund.status === 'requested').length,
       processingRefundCount: refundRows.filter((refund) => refund.status === 'approved' || refund.status === 'processing').length,

@@ -18,6 +18,14 @@ const paymentId = '66666666-6666-4666-8666-666666666666'
 const refundId = '77777777-7777-4777-8777-777777777777'
 
 describe('PostgresCashierWorkbenchQuery', () => {
+  it('separates coupon review counts from collection and monetary refund work',async()=>{
+    const runner=new QueryRunner([[{...orderRow(),coupon_refund_review_count:2}],[],[itemRow()],[paymentRow()],[refundRow()],[allocationRow()]])
+    const view=await new PostgresCashierWorkbenchQuery(runner as unknown as ScopedPostgresTransactionRunner).get({scope:{tenantId,storeId},employeeId,businessDate:'2026-08-13',capabilities:['refund.execute','community.activity.cashier'],limit:20})
+    expect(view.summary.couponRefundReviewCount).toBe(2)
+    expect(view.orders[0]?.couponRefundReviewCount).toBe(2)
+    expect(view.orders[0]?.outstandingAmountMinor).toBeGreaterThanOrEqual(0)
+    expect(view.summary.requestedRefundCount).not.toBe(2)
+  })
   it('returns current-day orders with payment and per-item remaining refundable amounts', async () => {
     const runner = new QueryRunner([
       [orderRow()],

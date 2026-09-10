@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto'
+import {authorizeCheckoutCouponQuote} from './checkout-coupon-pricing-authority.js'
+import { StaffAccessRepository } from './staff-access-repository.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 import {
   PricingAuthorizationDeniedError,
@@ -66,6 +68,7 @@ export class PostgresPricingAuthority implements PricingAuthorityPort {
       )
     }
 
+    if(context.request.sourceType==='checkout_quote')return authorizeCheckoutCouponQuote(transaction,context)
     const basket = await loadServerPricedBasket(transaction, context)
     if (context.request.sourceType === 'employee') {
       return this.authorizeEmployee(transaction, context, basket)
@@ -103,7 +106,15 @@ export class PostgresPricingAuthority implements PricingAuthorityPort {
       orderId,
     ])
     const row = requireOne(consumed, 'Pricing authorization could not be consumed')
+    if(authorization.sourceType==='checkout_quote'){
+      await transaction.query('INSERT INTO mbox.checkout_coupon_order_links(tenant_id,store_id,quote_id,order_id) VALUES($1,$2,$3,$4)',[transaction.scope.tenantId,transaction.scope.storeId,authorization.sourceId,orderId])
+    }
     if (row.benefit_id === null) return
+
+    // Calendar gifts are fulfilled within BenefitRepository.redeem, which owns
+    // quantity counters and the reservation/redemption facts in this transaction.
+    const calendar = await transaction.query('SELECT 1 FROM mbox.benefit_coupon_calendar_bindings WHERE tenant_id=$1 AND store_id=$2 AND benefit_id=$3', [transaction.scope.tenantId, transaction.scope.storeId, row.benefit_id])
+    if (calendar.rowCount) return
 
     const redeemed = await transaction.query(`
       UPDATE mbox.benefits
@@ -270,6 +281,27 @@ export class PostgresPricingAuthority implements PricingAuthorityPort {
     context: Readonly<PricingAuthorityContext>,
     basket: Readonly<Basket>,
   ): Promise<Readonly<PricingAuthorityDecision>> {
+    const lowPrice=await transaction.query('SELECT 1 FROM mbox.benefit_coupon_price_promises WHERE tenant_id=$1 AND store_id=$2 AND benefit_id=$3',[transaction.scope.tenantId,transaction.scope.storeId,context.request.sourceId])
+    if(lowPrice.rowCount)throw new PricingAuthorizationDeniedError('固定低价券须使用绑定具体份次的订单报价，不能直接当减免金额使用')
+    const calendar = await transaction.query('SELECT 1 FROM mbox.benefit_coupon_calendar_bindings WHERE tenant_id=$1 AND store_id=$2 AND benefit_id=$3', [transaction.scope.tenantId, transaction.scope.storeId, context.request.sourceId])
+    if (calendar.rowCount) {
+      if (context.actor.type !== 'employee' || !context.benefitFulfillmentReservationId) {
+        throw new PricingAuthorizationDeniedError('限时赠品券须先预约，再从权益核销入口履约')
+      }
+      await new StaffAccessRepository(transaction).assertPermission(context.actor.employeeId!, 'loyalty.redemption.fulfill')
+      const reservation = await transaction.query<{ quantity: number }>(`
+        SELECT r.quantity FROM mbox.benefit_reservations r
+        JOIN mbox.benefit_coupon_calendar_usage u ON u.tenant_id=r.tenant_id AND u.store_id=r.store_id AND u.reservation_id=r.id
+        JOIN mbox.benefit_coupon_calendar_bindings b ON b.tenant_id=r.tenant_id AND b.store_id=r.store_id AND b.benefit_id=r.benefit_id AND b.version_id=u.version_id
+        WHERE r.tenant_id=$1 AND r.store_id=$2 AND r.id=$3 AND r.benefit_id=$4 AND r.table_session_id=$5
+          AND r.status='reserved' AND r.expires_at>clock_timestamp()
+          AND NOT EXISTS(SELECT 1 FROM mbox.benefit_redemptions d WHERE d.tenant_id=r.tenant_id AND d.store_id=r.store_id AND d.benefit_reservation_id=r.id)
+        FOR UPDATE OF r
+      `, [transaction.scope.tenantId, transaction.scope.storeId, context.benefitFulfillmentReservationId, context.request.sourceId, context.tableSessionId])
+      if (!reservation.rows[0] || context.lines.reduce((sum, line) => sum + line.quantity, 0) !== reservation.rows[0].quantity) {
+        throw new PricingAuthorizationDeniedError('券预约不存在、已处理或出品份数不一致')
+      }
+    }
     const lockedSession = await transaction.query<{ id: string }>(`
       SELECT session.id
       FROM mbox.table_sessions session
@@ -365,6 +397,7 @@ export class PostgresPricingAuthority implements PricingAuthorityPort {
       capability: null,
       expiresAt: row.valid_until === null ? null : toIso(row.valid_until),
       snapshot: { benefitType: row.benefit_type },
+      benefitReservationId: calendar.rowCount ? context.benefitFulfillmentReservationId : undefined,
     })
     return {
       authorized: true,
@@ -471,6 +504,7 @@ async function reserveAuthorization(
     capability: string | null
     expiresAt: string | null
     snapshot: Record<string, unknown>
+    benefitReservationId?: string
   }>,
 ): Promise<void> {
   try {
@@ -479,14 +513,14 @@ async function reserveAuthorization(
         id, tenant_id, store_id, table_session_id,
         source_type, source_id, kind, amount_minor, maximum_amount_minor, currency,
         authorized_by_employee_id, capability, benefit_id, role_approval_limit_id,
-        status, expires_at, authorization_snapshot
+        status, expires_at, authorization_snapshot, benefit_reservation_id
       ) VALUES (
         $1::uuid, $2::uuid, $3::uuid, $4::uuid,
         $5::text, $6::uuid, $7::text, $8::bigint, $9::bigint, $10::text,
         $11::uuid, $12::text,
         CASE WHEN $5::text = 'benefit' THEN $6::uuid ELSE NULL END,
         CASE WHEN $5::text = 'employee' THEN $6::uuid ELSE NULL END,
-        'reserved', $13::timestamptz, $14::jsonb
+        'reserved', $13::timestamptz, $14::jsonb, $15::uuid
       )
       RETURNING id
     `, [
@@ -504,6 +538,7 @@ async function reserveAuthorization(
       input.capability,
       input.expiresAt,
       JSON.stringify(input.snapshot),
+      input.benefitReservationId ?? null,
     ])
     requireOne(inserted, 'Pricing authorization reservation failed')
   } catch (error) {

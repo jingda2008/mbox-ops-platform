@@ -3,6 +3,9 @@ import { ChevronDown,FileCheck2,RefreshCw,Save,ShieldCheck } from 'lucide-react'
 import type { NormalizedApiClient,StaffAuthView } from '../normalized-api'
 import { useConfirmationDialog } from './ConfirmationDialog'
 import './membership-configuration-center-panel.css'
+import { StackingPricePreviewPanel } from './StackingPricePreviewPanel'
+import { CouponCalendarPreviewPanel } from './CouponCalendarPreviewPanel'
+import { MemberGiftCampaignPanel } from './MemberGiftCampaignPanel'
 
 type Domain='base_points'|'tier_policy'|'tier_benefits'|'redemption_catalog'|'promotion_points'|'membership_terms'|'wechat_notifications'
 type ConfigurationContent={domain:Domain}&Record<string,unknown>
@@ -68,6 +71,9 @@ export function MembershipConfigurationCenterPanel({api,auth}:{api:NormalizedApi
       <span><ShieldCheck size={18}/></span><div><strong>会员经营配置中心</strong><small>保存草稿、计算影响、独立审批；所有经营字段均为强类型配置。</small></div><em>{summaries.filter((item)=>item.status==='draft').length} 个待处理</em><ChevronDown size={17}/>
     </button>
     {expanded&&<div className="membership-configuration-body">
+      {canPreview && <StackingPricePreviewPanel key={auth.employee.id} api={api} auth={auth} />}
+      {canPreview && <CouponCalendarPreviewPanel key={`calendar:${auth.employee.id}`} api={api} auth={auth} />}
+      <MemberGiftCampaignPanel key={`gifts:${auth.employee.id}`} api={api} auth={auth} />
       {notice&&<p role="status">{notice}</p>}
       <div className="membership-configuration-layout">
         <nav aria-label="配置列表"><header><strong>配置版本</strong><button type="button" disabled={busy!==''} onClick={()=>void load()} aria-label="刷新配置"><RefreshCw size={15}/></button></header>

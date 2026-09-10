@@ -115,6 +115,7 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
         return [...next.entries()].map(([id, name]) => ({ id, name }))
       })
       const attentionCount = response.data.summary.requestedRefundCount
+        + (response.data.summary.couponRefundReviewCount ?? 0)
         + response.data.summary.processingRefundCount
         + (response.data.summary.activityRequestedRefundCount ?? 0)
         + (response.data.summary.activityProcessingRefundCount ?? 0)
@@ -123,7 +124,7 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
       if (isGlobalView && quiet && previousAttentionCount !== null && attentionCount > previousAttentionCount) {
         setNotice({
           kind: 'attention',
-          text: `新增 ${attentionCount - previousAttentionCount} 项退款待办，请及时复核或执行。`,
+          text: `新增 ${attentionCount - previousAttentionCount} 项退款或权益待办，请及时复核或执行。`,
         })
       }
       if (isGlobalView) attentionCountRef.current = attentionCount
@@ -577,6 +578,12 @@ export function CashierAfterSalesWorkbenchView({
       {(view.summary.activityRequestedRefundCount ?? 0) > 0 && <span className="has-attention"><b>{view.summary.activityRequestedRefundCount}</b><small>活动待复核</small></span>}
       {(view.summary.activityProcessingRefundCount ?? 0) > 0 && <span className="has-attention"><b>{view.summary.activityProcessingRefundCount}</b><small>活动待退款</small></span>}
     </div>
+    {(view.summary.couponRefundReviewCount??0)>0&&<p className="cashier-guidance" role="status">
+      当前列表有 {view.summary.couponRefundReviewCount} 项退款后的权益待复核。退款金额已记录，券处理由授权人员另行核对，不影响收款或桌台。
+      {auth.permissions.includes('loyalty.configuration.view')&&onNavigate
+        ?<button type="button" className="cashier-quiet-action" onClick={()=>onNavigate('/staff/member-management')}>前往会员管理</button>
+        :<span>请联系会员管理负责人处理。</span>}
+    </p>}
     {summaryFilter !== 'all' && <p className="cashier-guidance cashier-summary-filter-note">
       当前只显示{summaryFilter === 'requested' ? '待收银复核' : '待执行或待查渠道'}的订单。
       <button type="button" className="cashier-quiet-action" onClick={() => setSummaryFilter('all')}>显示全部</button>
@@ -603,7 +610,7 @@ export function CashierAfterSalesWorkbenchView({
                 onClick={() => setExpandedOrderId(expanded ? null : order.id)}
               >
                 <span><b>{order.tableCode}</b><small>{order.carryover ? `${order.businessDate ?? '前一营业日'}遗留 · ` : ''}{shortReference(order.publicId)} · {formatTime(order.submittedAt ?? order.createdAt)}</small></span>
-                <span><strong>¥{formatAmount(order.totalAmountMinor)}</strong><em>{paymentStatusLabel(order.paymentStatus)}</em></span>
+                <span><strong>¥{formatAmount(order.totalAmountMinor)}</strong><em>{paymentStatusLabel(order.paymentStatus)}</em>{(order.couponRefundReviewCount??0)>0&&<small>权益待复核 {order.couponRefundReviewCount} 项</small>}</span>
                 <ChevronDown size={18} className={expanded ? 'is-open' : ''} />
               </button>
               {expanded && <div className="cashier-order-detail">
@@ -1393,7 +1400,7 @@ function RefundBlock({
   const ownRequest = refund.requestedByEmployeeId === auth.employee.id
   const canDecide = refund.status === 'requested' && actions.canApproveRefund && !ownRequest
   const canBegin = (refund.status === 'approved'
-    || (refund.status === 'processing' && refund.providerSubmissionState === 'not_started'))
+    || (!manualProvider && refund.status === 'processing' && refund.providerSubmissionState === 'not_started'))
     && actions.canExecuteRefund
   const canRecordManual = refund.status === 'processing' && actions.canExecuteRefund && manualProvider
   return <div className={`cashier-refund-row is-${refund.status}`}>
@@ -1429,7 +1436,7 @@ function RefundBlock({
             `refund-approve-${refund.id}`,
             `/api/refunds/${encodeURIComponent(refund.id)}/approve`,
             { reason: decisionReason },
-            '退款已复核通过，下一步仍需执行退款或等待支付渠道。',
+            manualProvider ? '退款已复核通过，请在线下实际退还后登记独立凭证；系统不会自动转账。' : '退款已复核通过，下一步仍需执行退款或等待支付渠道。',
           )}
         ><Check size={17} />复核通过</button>
       </div>
@@ -1470,7 +1477,8 @@ function RefundBlock({
       && <p className="cashier-guidance">上次提交支付渠道失败，可再次进入渠道待处理重试。</p>}
 
     {canRecordManual && <div className="cashier-manual-result">
-      <label className="cashier-field"><span>{payment.provider === 'cash' ? '现金退款凭证号' : 'POS退款小票/交易号'}</span><input value={manualReceipt} placeholder="必须与原收款凭证分开" onChange={(event) => onManualReceipt(refund.id, event.target.value)} /></label>
+      <p className="cashier-guidance">{payment.provider === 'cash' ? '请实际退还现金。本操作仅登记退款账和凭证，不调用微信或星驿，也不会自动退钱。' : '请在原线下收款工具完成退款后登记凭证；本系统不会代为转账。'}</p>
+      <label className="cashier-field"><span>{payment.provider === 'cash' ? '现金退款凭证号' : payment.provider === 'physical_pos' ? 'POS退款小票/交易号' : '线下退款凭证号'}</span><input value={manualReceipt} maxLength={256} placeholder="必须与原收款凭证分开" onChange={(event) => {setManualConfirmation(null);onManualReceipt(refund.id, event.target.value)}} /></label>
       <div className="cashier-action-row">
         <button
           type="button"

@@ -824,10 +824,10 @@ async function adjustSharedCart(productId, delta, expectedGeneration, expectedVe
       ...(Array.isArray(bundleSelections)&&bundleSelections.length?{ bundleSelections }:{}), },
   })).data
 }
-async function replaceSharedCartBundleSelection(productId, unitIndex, bundleSelection, expectedGeneration, expectedVersion, idempotencyKey) {
+async function replaceSharedCartBundleSelection(productId, unitIndex, bundleSelection, expectedGeneration, expectedVersion, idempotencyKey, portionId) {
   return (await request(`/api/guest/shared-cart/lines/${encodeURIComponent(productId)}/bundle-selections/${unitIndex}`, {
     method: 'PUT', headers: { 'idempotency-key': idempotencyKey || randomId('shared-cart-choice') },
-    data: { bundleSelection, expectedGeneration, expectedVersion },
+    data: { bundleSelection, expectedGeneration, expectedVersion, ...(portionId ? { portionId } : {}) },
   })).data
 }
 async function removeSharedCartLine(productId, expectedGeneration, expectedVersion, idempotencyKey) {
@@ -842,6 +842,15 @@ async function clearSharedCart(expectedGeneration, expectedVersion, idempotencyK
     data: { expectedGeneration, expectedVersion },
   })).data
 }
+async function quoteSharedCartCoupons(input, idempotencyKey) {
+  return (await request('/api/guest/shared-cart/coupon-quote', { method: 'POST', headers: { 'idempotency-key': idempotencyKey || randomId('coupon-quote') }, data: input })).data
+}
+async function prepareSharedCartUpgrade(input, idempotencyKey) {
+  return (await request('/api/guest/shared-cart/upgrade-opportunity', { method: 'POST', headers: { 'idempotency-key': idempotencyKey }, data: input })).data
+}
+async function decideSharedCartUpgrade(id, action, variantId) {
+  return (await request('/api/guest/shared-cart/upgrade-opportunity/' + encodeURIComponent(id), { method: 'POST', data: { action, ...(variantId ? { variantId } : {}) } })).data
+}
 async function checkoutSharedCart(input, idempotencyKey) {
   const attribution = checkoutRecommendationAttribution(
     input.checkoutUpgradeOfferPublicId,
@@ -850,10 +859,13 @@ async function checkoutSharedCart(input, idempotencyKey) {
   return request('/api/guest/shared-cart/checkout', {
     method: 'POST', headers: { 'idempotency-key': idempotencyKey || randomId('shared-cart-checkout') },
     data: {
+      note: input.note || null,
+      ...(input.lineNotes && input.lineNotes.length ? { lineNotes: input.lineNotes } : {}),
       expectedGeneration: input.expectedGeneration,
       expectedVersion: input.expectedVersion,
       confirmedDuplicateOrderId: input.confirmedDuplicateOrderId || null,
       checkoutUpgradeOfferPublicId: input.checkoutUpgradeOfferPublicId || null,
+      ...(input.couponQuoteId ? { couponQuoteId: input.couponQuoteId } : {}),
       ...(attribution ? {
         recommendationPublicId: attribution.recommendationPublicId,
         selectedRecommendationProductId: attribution.selectedProductId,
@@ -862,6 +874,7 @@ async function checkoutSharedCart(input, idempotencyKey) {
   })
 }
 async function getTableOrders() { return (await request('/api/guest/orders/table')).data }
+async function getCustomerOrderHistory() { return (await publicRequest('/api/public/mini/customer/orders')).data }
 async function retryOrderPayment(orderPublicId, idempotencyKey) {
   return (await request(`/api/guest/orders/${encodeURIComponent(orderPublicId)}/payment`, {
     method: 'POST', headers: { 'idempotency-key': idempotencyKey || randomId(`guest-payment-${orderPublicId}`) }, data: {},
@@ -896,8 +909,35 @@ async function actOnServiceTask(taskPublicId, action) {
 async function getCustomerBenefits() {
   return (await publicRequest('/api/public/mini/customer/benefits')).data
 }
+
+async function getCustomerBenefitWallet(cursor) {
+  const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''
+  return (await publicRequest(`/api/public/mini/customer/benefit-wallet?limit=30${suffix}`)).data
+}
 async function getCustomerProfile() {
   return (await publicRequest('/api/public/mini/customer/profile')).data
+}
+async function getMarketingPreferences() {
+  return (await publicRequest('/api/public/mini/marketing-preferences')).data
+}
+async function updateMarketingPreferences(action, data) {
+  if (!['choices', 'stop-all', 'withdraw-channel'].includes(action)) throw new Error('不支持的联系偏好操作')
+  return (await recoverableGuestCommand('marketing-preferences:' + action, data, key => publicRequest('/api/public/mini/marketing-preferences/' + action, { method: 'POST', headers: { 'idempotency-key': key }, data }))).data
+}
+async function getMemberGiftJobs(cursor) {
+  return (await publicRequest('/api/public/mini/member-gift-jobs' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : ''))).data
+}
+async function getMemberCards(cursors) {
+  const query = Object.keys(cursors || {}).filter(key => ['projects', 'cards', 'applications'].includes(key) && cursors[key]).map(key => key + '=' + encodeURIComponent(cursors[key])).join('&')
+  return (await publicRequest('/api/public/mini/member-cards' + (query ? '?' + query : ''))).data
+}
+async function submitMemberCardAction(action, id, input) {
+  const suffix = action === 'apply' ? '/applications' : action === 'withdraw-application' ? '/applications/' + encodeURIComponent(id) + '/withdraw' : action === 'withdraw-card' ? '/' + encodeURIComponent(id) + '/withdraw' : null
+  if (!suffix) throw new Error('不支持的卡片操作')
+  const data = input || {}
+  return (await recoverableGuestCommand('member-card:' + action + ':' + (id || ''), data, key => publicRequest('/api/public/mini/member-cards' + suffix, {
+    method: 'POST', headers: { 'idempotency-key': key }, data,
+  }))).data
 }
 async function reserveCustomerBenefit(benefitId, quantity) {
   return (await recoverableGuestCommand(`benefit:${benefitId}`, { quantity: quantity || 1 }, (idempotencyKey) => request(`/api/guest/customer/benefits/${encodeURIComponent(benefitId)}/reservations`, {
@@ -952,6 +992,8 @@ async function logoutWechatIdentity() {
 }
 
 module.exports = {
+  getCustomerOrderHistory,
+  getMemberCards, submitMemberCardAction, getMemberGiftJobs, getMarketingPreferences, updateMarketingPreferences,
   getGuestSession, getMiniBootstrap, getPrivacyPolicy, getMiniLoyalty, getMiniLoyaltyLedger,
   recordBirthdayBenefitConsent, withdrawBirthdayBenefitConsent,
   getNotificationConsent, recordNotificationConsent,
@@ -973,8 +1015,8 @@ module.exports = {
   getReservationPerformanceNotificationAuthorizations,
   recordReservationPerformanceNotificationAuthorization,
   getMenu, getPublicMenu, recommendExperience, getRecommendationConfiguration, recordRecommendationEvent, prepareCheckoutUpgrade, recordCheckoutUpgradeEvent,
-  checkout, getSharedCart, adjustSharedCart, replaceSharedCartBundleSelection, removeSharedCartLine, clearSharedCart, checkoutSharedCart, getTableOrders, retryOrderPayment, abandonGuestCheckout,
+  checkout, getSharedCart, adjustSharedCart, replaceSharedCartBundleSelection, removeSharedCartLine, clearSharedCart, checkoutSharedCart, quoteSharedCartCoupons, prepareSharedCartUpgrade, decideSharedCartUpgrade, getTableOrders, retryOrderPayment, abandonGuestCheckout,
   createServiceTask, getServiceRequests, actOnServiceTask,
-  getCustomerBenefits, getCustomerProfile, reserveCustomerBenefit, claimAnnualDailySnack, submitSongRequest, getTodayPerformances,
+  getCustomerBenefits, getCustomerBenefitWallet, getCustomerProfile, reserveCustomerBenefit, claimAnnualDailySnack, submitSongRequest, getTodayPerformances,
   logoutWechatIdentity,
 }

@@ -18,6 +18,7 @@
     <text>暂时无法确认会员身份，请稍后再试。</text>
   </view>
   <block wx:else>
+    <member-identities id="member-identities" wx:if="{{membership}}" />
     <view wx:if="{{membership}}" class="profile-member-card profile-member-card--{{membership.level}}">
       <view class="profile-member-card__glow"></view>
       <view class="profile-member-card__corner"></view>
@@ -46,6 +47,7 @@
       <button class="identity-action" bindtap="focusJoinInvitation">邀请加入</button>
     </view>
 
+    <button class="panel order-history-entry" bindtap="openOrderHistory"><view><text>我的已付订单</text><text>查看菜品与收款明细</text></view><text>›</text></button>
     <view class="metric-card">
       <button class="metric-item" bindtap="openPoints" hover-class="metric-item--hover">
         <text class="metric-icon">积</text>
@@ -100,6 +102,9 @@
         </view>
         <view class="service-chip" bindtap="openPreferenceSettings" hover-class="service-chip--hover" role="button">
           <view class="service-chip__face"><image class="service-chip__icon" src="/assets/tabbar/profile-active.png" mode="aspectFit" /><view class="service-chip__copy"><text>我的偏好</text><text>口味与服务</text></view><text class="service-chip__arrow">›</text></view>
+        </view>
+        <view class="service-chip" bindtap="openMarketingPreferences" hover-class="service-chip--hover" role="button">
+          <view class="service-chip__face"><image class="service-chip__icon" src="/assets/tabbar/profile-active.png" mode="aspectFit" /><view class="service-chip__copy"><text>联系偏好</text><text>选择或停止营销</text></view><text class="service-chip__arrow">›</text></view>
         </view>
         <view class="service-chip" bindtap="openContact" hover-class="service-chip--hover" role="button">
           <view class="service-chip__face"><image class="service-chip__icon service-chip__icon--badge" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" /><view class="service-chip__copy"><text>联系我们</text><text>门店客服</text></view><text class="service-chip__arrow">›</text></view>

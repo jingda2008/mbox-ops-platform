@@ -4,6 +4,16 @@ import test from 'node:test'
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), 'utf8')
 
+test('membership and consent actions override native half-width without overflowing action groups', async () => {
+  for (const [root, extension] of [['miniprogram', 'wxss'], ['alipay-miniprogram', 'acss']]) {
+    const cards = await read(`${root}/pages/profile-cards/index.${extension}`)
+    const marketing = await read(`${root}/pages/profile-marketing/index.${extension}`)
+    assert.match(cards, /\.member-cards-page \.cards-button\{width:100%;min-width:0\}/)
+    assert.match(cards, /\.member-cards-page \.cards-actions \.cards-button\{width:auto;flex:1 1 160rpx\}/)
+    assert.match(marketing, /\.contact-page \.contact-button\{width:100%;min-width:0\}/)
+  }
+})
+
 const listFiles = async (directory) => {
   const entries = await readdir(new URL(`../${directory}/`, import.meta.url), { withFileTypes: true })
   const nested = await Promise.all(entries.map(async (entry) => {

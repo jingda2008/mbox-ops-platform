@@ -182,6 +182,33 @@ describe('hardware API role cropping', () => {
     expect(response.statusCode).toBe(403)
     expect(fake.reprintPrintJob).not.toHaveBeenCalled()
   })
+
+  it('does not let a bartender retry a kitchen failure', async () => {
+    const fake = repository()
+    fake.getById.mockResolvedValue({ id: deviceId, stationCode: 'kitchen', status: 'failed' })
+    const app = await build(['print.retry', 'work.bar'], fake)
+    const response = await app.inject({ method: 'POST', url: `/hardware/print-jobs/${deviceId}/retry`,
+      headers: { 'idempotency-key': 'bar-kitchen-retry-0001' }, payload: { reason: '不允许越岗位重发' } })
+    expect(response.statusCode).toBe(403)
+    expect(fake.retryPrintJob).not.toHaveBeenCalled()
+  })
+
+  it('restricts source recovery to printer managers and never executes an unscoped read', async () => {
+    const app = await build(['print.view', 'print.retry', 'work.bar'])
+    expect((await app.inject({ method: 'GET', url: '/hardware/print-sources' })).statusCode).toBe(403)
+    expect((await app.inject({ method: 'POST', url: `/hardware/print-sources/${deviceId}/retry`,
+      headers: { 'idempotency-key': 'source-retry-denied-0001' }, payload: { reason: '核对后重试' } })).statusCode).toBe(403)
+  })
+
+  it('requires a reason and idempotency and refuses missing or completed source tasks', async () => {
+    const app = await build(['printer.manage'])
+    const url = `/hardware/print-sources/${deviceId}/retry`
+    expect((await app.inject({ method: 'POST', url, payload: { reason: '核对后重试' } })).statusCode).toBe(400)
+    expect((await app.inject({ method: 'POST', url, headers: { 'idempotency-key': 'source-retry-missing-reason' }, payload: {} })).statusCode).toBe(400)
+    expect((await app.inject({ method: 'POST', url, headers: { 'idempotency-key': 'source-retry-not-found-0001' },
+      payload: { reason: '核对后重试' } })).statusCode).toBe(409)
+    expect((await app.inject({ method: 'GET', url: '/hardware/print-sources' })).json()).toEqual({ data: [] })
+  })
 })
 
 async function build(capabilities: string[], fake = repository()) {

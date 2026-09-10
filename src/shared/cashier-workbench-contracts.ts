@@ -153,6 +153,8 @@ export interface CashierWorkbenchActivityRegistration {
 }
 
 export interface CashierWorkbenchOrder {
+  /** Separate benefit review, never a new payment or table blocker. */
+  couponRefundReviewCount?: number
   id: string
   publicId: string
   tableCode: string
@@ -210,6 +212,7 @@ export interface CashierWorkbenchView {
     canManageKdsException: boolean
   }
   summary: {
+    couponRefundReviewCount?: number
     orderCount: number
     capturedPaymentCount: number
     requestedRefundCount: number

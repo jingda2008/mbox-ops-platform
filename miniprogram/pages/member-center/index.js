@@ -133,7 +133,7 @@ function benefitView(item) {
   const ends = item.validUntil ? String(item.validUntil).slice(0, 10) : ''
   return {
     id: item.id,
-    title: display.title || display.name || item.name || BENEFIT_NAMES[item.type] || '会员权益',
+    title: display.title || display.name || (typeof item.name === 'string' && !/^[A-Z][A-Z0-9_]+$/.test(item.name) ? item.name : '') || BENEFIT_NAMES[item.type] || '会员权益',
     description: display.description || display.summary || item.description || '使用条件以权益详情和现场确认为准',
     quantity,
     quantityText: `可用 ${quantity} 份`,

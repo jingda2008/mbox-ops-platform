@@ -56,6 +56,7 @@ describe('NormalizedWorkerRuntime', () => {
     expect(result.workers.print).not.toBeNull()
     expect(result.workers.outbox).not.toBeNull()
     expect(result.workers.notification).not.toBeNull()
+    expect(result.workers.memberGiftDelivery).toMatchObject({discovered:0,issued:0,blocked:0,failed:0})
     expect(errors).toEqual(['reservation-expiry'])
   })
 

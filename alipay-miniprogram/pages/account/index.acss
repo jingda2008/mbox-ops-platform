@@ -21,3 +21,7 @@
   .payment-line { align-items: flex-start; flex-direction: column; padding: 14rpx 0; }
   .payment-line__button { width: 100%; margin: 0; }
 }
+.order-detail-meta { display: flex; flex-direction: column; gap: 6rpx; font-size: 23rpx; line-height: 1.5; color: #686b65; overflow-wrap: anywhere; margin-bottom: 14rpx; }
+.order-item-price { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8rpx 16rpx; font-size: 24rpx; line-height: 1.5; padding-top: 6rpx; }
+.order-card__head > view:first-child, .list-row__main { min-width: 0; }
+.order-card__amount { flex-shrink: 0; max-width: 45%; overflow-wrap: anywhere; }

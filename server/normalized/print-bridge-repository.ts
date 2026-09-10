@@ -241,7 +241,8 @@ export class PrintBridgeRepository {
   async claim(bridge: Readonly<{ id: string; publicId: string }>, limit = 10, staleLockSeconds = 90) {
     if (!Number.isInteger(limit) || limit < 1 || limit > 25) throw new PrintBridgeRequestError('领取数量无效')
     const jobs = await this.claimJobs(bridge, limit, staleLockSeconds)
-    const commands = await this.claimCommands(bridge, Math.max(1, Math.min(10, limit)), staleLockSeconds)
+    // Do not lease diagnostic commands behind a batch of slow physical prints.
+    const commands = jobs.length > 0 ? [] : await this.claimCommands(bridge, 1, staleLockSeconds)
     return { jobs, commands }
   }
 
@@ -274,6 +275,7 @@ export class PrintBridgeRepository {
     }
     const failureCode = normalizeHardwareFailureCode(input.failureCode ?? 'bridge_print_failed')
     const terminal = Number(job.attempts) >= Number(job.max_attempts)
+      || failureCode.startsWith('ambiguous_')
     const status = terminal ? 'dead' : 'failed'
     const updated = await this.transaction.query(`
       UPDATE mbox.print_jobs SET status=$5,
@@ -326,6 +328,9 @@ export class PrintBridgeRepository {
         JOIN mbox.devices candidate_device
           ON candidate_device.tenant_id=job.tenant_id AND candidate_device.store_id=job.store_id
          AND candidate_device.id=job.printer_device_id
+        JOIN mbox.printer_routes route
+          ON route.tenant_id=job.tenant_id AND route.store_id=job.store_id
+         AND route.id=job.printer_route_id AND route.status='active'
         WHERE job.tenant_id=$1::uuid AND job.store_id=$2::uuid
           AND job.delivery_mode='bridge_pull' AND job.print_bridge_id=$3::uuid
           AND candidate_device.status='active' AND candidate_device.print_bridge_id=$3::uuid

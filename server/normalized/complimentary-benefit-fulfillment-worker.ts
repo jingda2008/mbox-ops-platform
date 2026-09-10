@@ -1,6 +1,5 @@
 import { appendOutboxMessage } from './command-executor.js'
 import { KdsRepository, type KdsStation, type KdsTask } from './kds-repository.js'
-import { PrintTicketSourceRepository } from './print-ticket-source.js'
 import type {
   ScopedPostgresTransactionRunner,
   ScopedTransaction,
@@ -153,15 +152,13 @@ async function dispatchIntent(
     payload:{ taskId:task.id,orderId:intent.order_id,orderItemId:task.orderItemId,
       stationCode:task.stationCode,status:task.status,source:'benefit_gift' },
   })
-  const sourceOutboxMessageId=await appendOutboxMessage(transaction,{
+  await appendOutboxMessage(transaction,{
     businessEventKey:`benefit-gift-fulfillment-dispatched:${intent.id}`,
     aggregateType:'order',aggregateId:intent.order_id,aggregateVersion:1,
     eventType:'benefit.gift.fulfillment-dispatched.v1',
     payload:{ intentId:intent.id,orderId:intent.order_id,benefitId:intent.benefit_id,
       kdsTaskIds:tasks.map((task) => task.id) },
   })
-  await new PrintTicketSourceRepository(transaction)
-    .materializeOrderProduction(sourceOutboxMessageId,intent.order_id)
   return true
 }
 

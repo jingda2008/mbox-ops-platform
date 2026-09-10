@@ -620,14 +620,19 @@ export class HardwareRepository {
     assertUuid(jobId, 'jobId')
     assertUuid(employeeId, 'employeeId')
     const normalizedReason = requireText(reason, 'reason', 3, 1000)
-    const current = await this.transaction.query<{ status: PrintJobStatus }>(`
-      SELECT status FROM mbox.print_jobs
+    const current = await this.transaction.query<{ status: PrintJobStatus; attempts: number; max_attempts: number; last_error_code: string|null }>(`
+      SELECT status,attempts,max_attempts,last_error_code FROM mbox.print_jobs
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
       FOR UPDATE
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, jobId])
     if (!current.rows[0]) throw new HardwareNotFoundError('打印任务不存在')
     if (!['failed', 'dead'].includes(current.rows[0].status)) {
       throw new HardwareConflictError('只有失败或已终止的打印任务可以重试')
+    }
+    if (current.rows[0].status==='dead' || Number(current.rows[0].attempts)>=Number(current.rows[0].max_attempts)
+      || current.rows[0].last_error_code?.startsWith('ambiguous_')
+      || current.rows[0].last_error_code==='print_result_unknown') {
+      throw new HardwareConflictError('原任务已停止或出纸结果未知，请现场核对后使用补打创建新任务')
     }
     await this.transaction.query(`
       UPDATE mbox.print_jobs
@@ -660,11 +665,22 @@ export class HardwareRepository {
     const normalizedKey = requireText(idempotencyKey, 'idempotencyKey', 8, 128)
     const original = await this.getById(jobId, true)
     if (!original) throw new HardwareNotFoundError('打印任务不存在')
-    if (original.status !== 'printed') {
-      throw new HardwareConflictError('只有已完成打印的小票可以补打；失败任务请使用重试')
+    if (!['printed','failed','dead'].includes(original.status)) {
+      throw new HardwareConflictError('只有已完成或已停止的失败小票可以核对后补打；在途任务不能重复发送')
     }
     const businessKey = reprintBusinessKey(original.id, normalizedKey)
     const snapshot = reprintSnapshot(original.printSnapshot, normalizedReason)
+    // A failed task may still be due for automatic retry. Retire that attempt
+    // under the same row lock before creating the replacement, or both the old
+    // attempt and the new copy could print after the printer reconnects.
+    if (original.status === 'failed') {
+      await this.transaction.query(`UPDATE mbox.print_jobs SET status='dead',dead_at=clock_timestamp(),
+        locked_by=NULL,locked_at=NULL,last_error_code='superseded_manual_reprint'
+        WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND status='failed'`,
+      [this.transaction.scope.tenantId,this.transaction.scope.storeId,original.id])
+      await this.appendPrintJobEvent(original.id,'dead','failed','dead','employee',employeeId,
+        'superseded_manual_reprint',normalizedReason)
+    }
     const inserted = await this.transaction.query<{ id: string }>(`
       INSERT INTO mbox.print_jobs (
         tenant_id,store_id,business_key,source_outbox_message_id,

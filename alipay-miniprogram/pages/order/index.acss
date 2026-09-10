@@ -1718,3 +1718,19 @@
     transform: translateX(-50%);
   }
 }
+.checkout-upgrade{box-sizing:border-box;min-width:0;padding:16rpx;margin-bottom:16rpx;border:1rpx solid #d4bd8c;border-radius:16rpx;background:#fbf6e9}
+.checkout-upgrade text,.checkout-upgrade__message{display:block;font-size:22rpx;line-height:1.5;overflow-wrap:anywhere;color:#526158}
+.checkout-upgrade .checkout-upgrade__title{font-size:26rpx;font-weight:600;color:#254c3e}
+.checkout-upgrade__actions{display:flex;gap:12rpx;margin-top:12rpx}
+.checkout-upgrade__actions button{flex:1;min-width:0;min-height:44px;height:auto;box-sizing:border-box;margin:0;padding:10rpx;font-size:24rpx;line-height:1.5;white-space:normal}
+.checkout-upgrade__actions button:last-child{background:#254c3e;color:#fff}
+.checkout-upgrade__message{margin:12rpx 0}
+.checkout-upgrade__choice{box-sizing:border-box;min-height:44px;margin-top:12rpx;padding:12rpx;border:1rpx solid #cbb786;border-radius:10rpx;background:#fff;font-size:24rpx;line-height:1.5;overflow-wrap:anywhere}
+.checkout-coupons{min-width:0;padding:16rpx 0;border-top:1rpx solid #e4ded5}
+.checkout-coupons button{box-sizing:border-box;width:100%;min-width:0;margin:8rpx 0;min-height:44px;height:auto;padding:8rpx 16rpx;font-size:22rpx;line-height:1.5;white-space:normal}
+.coupon-quote-copy,.coupon-quote-error{display:block;margin:10rpx 0;font-size:22rpx;line-height:1.5;word-break:break-all}
+.coupon-quote-error{color:#9c3038}
+.coupon-portion{min-width:0;padding:12rpx 0;border-bottom:1rpx solid #eee7df}
+.coupon-portion>text{display:block;font-size:22rpx;line-height:1.5;word-break:break-all}
+.coupon-portion picker{min-width:0;margin-top:8rpx;padding:12rpx;border-radius:12rpx;background:#eee9e2}
+.coupon-portion picker view{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:22rpx;line-height:1.5}

@@ -3,6 +3,7 @@ import { ChevronDown, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import type { NormalizedApiClient, StaffAuthView } from '../normalized-api'
 import { useConfirmationDialog } from './ConfirmationDialog'
 import { loadCompleteActiveCatalog } from './complete-catalog'
+import {NumberInputWithUnit} from './NumberInputWithUnit'
 import './checkout-upgrade-management-panel.css'
 
 type RuleStatus = 'draft' | 'approved' | 'active' | 'retired'
@@ -10,6 +11,8 @@ type CapacityStatus = 'draft' | 'approved' | 'published' | 'retired'
 
 interface ProductOption { id: string; name: string; code: string; productKind: string; status: string }
 interface RuleView {
+  draftedByEmployeeId?:string|null;approvedByEmployeeId?:string|null
+  qualification?:{maximumAddMinor:number;maximumAddBasisPoints:number|null;minimumContributionMinor:number;minimumIncrementalContributionMinor:number;positiveFitReason:string;maximumQuantitiesPerPerson:Array<{productId:string;quantity:number}>;excludedProductIds:string[]}
   id: string; code: string; revision: number; name: string; status: RuleStatus
   sourceProductId: string; sourceProductName: string; targetProductId: string; targetProductName: string
   minimumPartySize: number; maximumPartySize: number; priority: number; offerValidMinutes: number
@@ -55,6 +58,9 @@ export function CheckoutUpgradeManagementPanel({ api, auth }: { api: NormalizedA
   const [capacity, setCapacity] = useState<{ stationCode:'bar'|'kitchen'|'cashier'; reason:string; windows:CapacityWindowDraft[] }>({
     stationCode:'bar',reason:'',windows:[emptyWindow()],
   })
+  const [qualification,setQualification]=useState({maximumAddMinor:'',maximumAddBasisPoints:'',minimumContributionMinor:'',minimumIncrementalContributionMinor:'',positiveFitReason:''})
+  const [portionLimits,setPortionLimits]=useState<Array<{productId:string;quantity:number}>>([]),[excludedProducts,setExcludedProducts]=useState<string[]>([])
+  const [limitProduct,setLimitProduct]=useState(''),[limitQuantity,setLimitQuantity]=useState('1')
 
   const load = useCallback(async () => {
     setBusy('load'); setNotice('')
@@ -79,9 +85,9 @@ export function CheckoutUpgradeManagementPanel({ api, auth }: { api: NormalizedA
   useEffect(() => { if (expanded) void load() }, [expanded, load])
 
   const summary = useMemo(() => ({
-    viewed:outcomes.reduce((sum,item)=>sum+item.eventCounts.viewed,0),
+    accepted:outcomes.reduce((sum,item)=>sum+item.eventCounts.accepted,0),
     converted:outcomes.reduce((sum,item)=>sum+item.eventCounts.converted,0),
-    paid:outcomes.reduce((sum,item)=>sum+item.paidAmountMinor,0),
+    paid:outcomes.filter((item)=>item.paymentState==='paid').length,
     complaints:outcomes.reduce((sum,item)=>sum+item.complaintCount,0),
   }), [outcomes])
 
@@ -92,7 +98,10 @@ export function CheckoutUpgradeManagementPanel({ api, auth }: { api: NormalizedA
     setBusy('rule-draft'); setNotice('')
     try {
       const code = rule.code.trim().toUpperCase()
+      if(!portionLimits.length)throw new Error('请明确每种新增商品的人均份量上限')
       await api.putEndpoint(`/api/staff/customer-experience/checkout-upgrade-rules/${encodeURIComponent(code)}`, {
+        qualification:{maximumAddMinor:number(qualification.maximumAddMinor,'最多加价',0),maximumAddBasisPoints:qualification.maximumAddBasisPoints.trim()?number(qualification.maximumAddBasisPoints,'相对加价上限',0):null,
+          minimumContributionMinor:number(qualification.minimumContributionMinor,'升级后最低贡献额',0),minimumIncrementalContributionMinor:number(qualification.minimumIncrementalContributionMinor,'最低新增贡献额',0),positiveFitReason:qualification.positiveFitReason.trim(),maximumQuantitiesPerPerson:portionLimits,excludedProductIds:excludedProducts},
         name:rule.name.trim(),sourceProductId:rule.sourceProductId,targetProductId:rule.targetProductId,
         minimumPartySize:number(rule.minimumPartySize,'最少人数',1),maximumPartySize:number(rule.maximumPartySize,'最多人数',1),
         occasionTags:tags(rule.occasionTags),alcoholPreferenceTags:tags(rule.alcoholPreferenceTags),
@@ -100,7 +109,7 @@ export function CheckoutUpgradeManagementPanel({ api, auth }: { api: NormalizedA
         priority:number(rule.priority,'优先级',0),offerValidMinutes:number(rule.offerValidMinutes,'报价有效分钟',2),
         minimumGrossMarginBasisPoints:number(rule.minimumGrossMarginBasisPoints,'最低毛利基点',0),status:'draft',
       }, { idempotencyKey:operationKey('checkout-rule-draft') })
-      setNotice('规则草稿已保存。须由另一人审批、第三人发布；当前升级功能仍保持关闭。'); await load()
+      setNotice('规则草稿已保存。须由另一人审批、第三人发布；保存草稿不会开启升级推荐。'); await load()
     } catch (error) { setNotice(message(error,'规则草稿没有保存')) }
     finally { setBusy('') }
   }
@@ -119,7 +128,7 @@ export function CheckoutUpgradeManagementPanel({ api, auth }: { api: NormalizedA
         ? `/api/staff/customer-experience/checkout-upgrade-rules/${encodeURIComponent(item.code)}/approve`
         : `/api/staff/customer-experience/checkout-upgrade-rule-versions/${encodeURIComponent(item.id)}/${action}`
       await api.postEndpoint(endpoint,{reason},{idempotencyKey:operationKey(`checkout-rule-${action}`)})
-      setNotice(action==='approve'?'审批完成，仍需第三人发布。':action==='publish'?'新版本已发布；升级功能开关仍保持关闭。':'已从历史版本复制新草稿，不会覆盖当前版本。')
+      setNotice(action==='approve'?'审批完成，仍需第三人发布。':action==='publish'?'新规则版本已发布；此操作不改变升级功能开关。':'已从历史版本复制新草稿，不会覆盖当前版本。')
       await load()
     } catch (error) { setNotice(message(error,'规则操作没有完成')) }
     finally { setBusy('') }
@@ -161,12 +170,13 @@ export function CheckoutUpgradeManagementPanel({ api, auth }: { api: NormalizedA
     <header><div><strong>付款前升级与产能</strong><small>规则、报价、成交和出品上限统一管理；三人分离发布，功能默认关闭。</small></div><button type="button" aria-expanded={expanded} onClick={()=>setExpanded((value)=>!value)}>{expanded?'收起':'配置'}<ChevronDown size={17}/></button></header>
     {expanded && <div className="checkout-upgrade-content">
       {notice && <p className="checkout-upgrade-notice" role="status">{notice}</p>}
-      <div className="checkout-upgrade-toolbar"><span>报价 {outcomes.length} · 浏览 {summary.viewed} · 成交 {summary.converted} · 投诉 {summary.complaints}</span><button type="button" disabled={busy==='load'} onClick={()=>void load()}><RefreshCw size={15}/>刷新</button></div>
+      <div className="checkout-upgrade-toolbar"><span>建议 {outcomes.length} · 已接受 {summary.accepted} · 已提交 {summary.converted} · 已付款 {summary.paid} · 投诉 {summary.complaints}</span><button type="button" disabled={busy==='load'} onClick={()=>void load()}><RefreshCw size={15}/>刷新</button></div>
+      <p>统计最近300次建议，生成建议不等于顾客已看到；接受后删除该份套餐不计提交。付款与退款为关联订单口径，不代表升级带来的增量收入；已付款包含后来退款的订单。</p>
       {canDraftRule && <details><summary>新建规则草稿</summary><form className="checkout-upgrade-form" onSubmit={(event)=>void saveRule(event)}>
-        <label>规则代码<input required pattern="[A-Z][A-Z0-9_-]{2,63}" value={rule.code} onChange={(event)=>setRule({...rule,code:event.target.value.toUpperCase()})}/></label>
+        <label>规则代码<input required pattern={'[A-Z][A-Z0-9_\\-]{2,63}'} value={rule.code} onChange={(event)=>setRule({...rule,code:event.target.value.toUpperCase()})}/></label>
         <label>规则名称<input required minLength={2} maxLength={80} value={rule.name} onChange={(event)=>setRule({...rule,name:event.target.value})}/></label>
-        <label>原商品<select required value={rule.sourceProductId} onChange={(event)=>setRule({...rule,sourceProductId:event.target.value})}>{products.filter((item)=>item.productKind==='single').map((item)=><option key={item.id} value={item.id}>{item.name} · {item.code}</option>)}</select></label>
-        <label>升级套餐<select required value={rule.targetProductId} onChange={(event)=>setRule({...rule,targetProductId:event.target.value})}>{products.filter((item)=>item.productKind==='bundle').map((item)=><option key={item.id} value={item.id}>{item.name} · {item.code}</option>)}</select></label>
+        <label>原商品<select aria-label="原商品" required value={rule.sourceProductId} onChange={(event)=>setRule({...rule,sourceProductId:event.target.value})}>{products.filter((item)=>item.productKind==='single'||item.productKind==='bundle').map((item)=><option key={item.id} value={item.id}>{item.name} · {item.code}</option>)}</select></label>
+        <label>升级套餐<select aria-label="升级套餐" required value={rule.targetProductId} onChange={(event)=>setRule({...rule,targetProductId:event.target.value})}>{products.filter((item)=>item.productKind==='bundle').map((item)=><option key={item.id} value={item.id}>{item.name} · {item.code}</option>)}</select></label>
         <label>人数范围<div className="inline-fields"><input type="number" min={1} max={200} value={rule.minimumPartySize} onChange={(event)=>setRule({...rule,minimumPartySize:event.target.value})}/><span>至</span><input type="number" min={1} max={200} value={rule.maximumPartySize} onChange={(event)=>setRule({...rule,maximumPartySize:event.target.value})}/></div></label>
         <label>优先级<input type="number" min={0} max={10000} value={rule.priority} onChange={(event)=>setRule({...rule,priority:event.target.value})}/></label>
         <label>报价有效分钟<input type="number" min={2} max={30} value={rule.offerValidMinutes} onChange={(event)=>setRule({...rule,offerValidMinutes:event.target.value})}/></label>
@@ -176,9 +186,35 @@ export function CheckoutUpgradeManagementPanel({ api, auth }: { api: NormalizedA
         <label className="wide">顾客标题<input required value={rule.promptTitle} onChange={(event)=>setRule({...rule,promptTitle:event.target.value})}/></label>
         <label className="wide">顾客说明<textarea required rows={2} value={rule.promptBody} onChange={(event)=>setRule({...rule,promptBody:event.target.value})}/></label>
         <label>确认按钮<input required value={rule.callToAction} onChange={(event)=>setRule({...rule,callToAction:event.target.value})}/></label>
+        <fieldset className="wide upgrade-qualification-fields"><legend>高度匹配准入条件</legend>
+          <p>先满足全部条件，再按优先级排序。贡献额为成交额减商品成本，不是扣除房租工资后的净利润；未填写、成本未知或不适配时不能主动推荐。</p>
+          <label>最多加价<NumberInputWithUnit required inputMode="numeric" unit="分" min={0} step={1} value={qualification.maximumAddMinor} onChange={event=>setQualification({...qualification,maximumAddMinor:event.target.value})}/></label>
+          <label>相对加价上限（可留空，仅用绝对上限）<NumberInputWithUnit inputMode="numeric" unit="万分比" min={0} max={1000000} step={1} value={qualification.maximumAddBasisPoints} onChange={event=>setQualification({...qualification,maximumAddBasisPoints:event.target.value})}/></label>
+          <label>升级后最低贡献额<NumberInputWithUnit required inputMode="numeric" unit="分" min={0} step={1} value={qualification.minimumContributionMinor} onChange={event=>setQualification({...qualification,minimumContributionMinor:event.target.value})}/></label>
+          <label>最低新增贡献额<NumberInputWithUnit required inputMode="numeric" unit="分" min={0} step={1} value={qualification.minimumIncrementalContributionMinor} onChange={event=>setQualification({...qualification,minimumIncrementalContributionMinor:event.target.value})}/></label>
+          <label>适配依据<textarea required minLength={2} maxLength={500} value={qualification.positiveFitReason} onChange={event=>setQualification({...qualification,positiveFitReason:event.target.value})} placeholder="说明保留什么、增加什么，以及为什么适合此人数和场景"/></label>
+          <label>新增商品<select aria-label="份量上限商品" value={limitProduct} onChange={event=>setLimitProduct(event.target.value)}><option value="">选择需要限定份量的商品</option>{products.map(item=><option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
+          <label>该商品每人最多<NumberInputWithUnit inputMode="numeric" unit="份 / 人" min={1} max={100} step={1} value={limitQuantity} onChange={event=>setLimitQuantity(event.target.value)}/></label>
+          <button type="button" disabled={!limitProduct||!limitQuantity.trim()||!Number.isInteger(Number(limitQuantity))||Number(limitQuantity)<1||Number(limitQuantity)>100} onClick={()=>setPortionLimits(previous=>[...previous.filter(item=>item.productId!==limitProduct),{productId:limitProduct,quantity:Number(limitQuantity)}])}>保存此份量上限</button>
+          {portionLimits.map(item=><div className="upgrade-qualification-entry" key={item.productId}><span>{products.find(product=>product.id===item.productId)?.name??item.productId} · {item.quantity}份 / 人</span><button type="button" onClick={()=>setPortionLimits(previous=>previous.filter(value=>value.productId!==item.productId))}>移除</button></div>)}
+          <label>出现以下商品时不推荐<select aria-label="排除商品" value="" onChange={event=>{if(event.target.value)setExcludedProducts(previous=>[...new Set([...previous,event.target.value])])}}><option value="">按需添加排除商品</option>{products.map(item=><option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
+          {excludedProducts.map(id=><div className="upgrade-qualification-entry" key={id}><span>{products.find(product=>product.id===id)?.name??id}</span><button type="button" onClick={()=>setExcludedProducts(previous=>previous.filter(value=>value!==id))}>移除排除商品</button></div>)}
+        </fieldset>
         <button type="submit" disabled={busy==='rule-draft'}>保存草稿</button>
       </form></details>}
-      <div className="checkout-rule-list">{rules.map((item)=><article key={item.id}><div><strong>{item.name}</strong><small>{item.code} · V{item.revision} · {status(item.status)}</small><span>{item.sourceProductName} → {item.targetProductName} · {item.minimumPartySize}–{item.maximumPartySize}人</span></div><div>{item.status==='draft'&&canApproveRule&&<button type="button" onClick={()=>void ruleAction(item,'approve')}>审批</button>}{item.status==='approved'&&canPublishRule&&<button type="button" onClick={()=>void ruleAction(item,'publish')}>发布</button>}{item.status==='retired'&&canPublishRule&&<button type="button" onClick={()=>void ruleAction(item,'rollback-draft')}>复制为回滚草稿</button>}</div></article>)}</div>
+      <div className="checkout-rule-list">{rules.map((item)=><article key={item.id}>
+        <div><strong>{item.name}</strong><small>{item.code} · V{item.revision} · {status(item.status)}</small>
+          <span>{item.sourceProductName} → {item.targetProductName} · {item.minimumPartySize}–{item.maximumPartySize}人</span>
+          {item.qualification?<details className="upgrade-qualification-review"><summary>核对高度匹配条件</summary>
+            <p>{item.qualification.positiveFitReason}</p>
+            <p>最多加价 ¥{(item.qualification.maximumAddMinor/100).toFixed(2)}；相对上限 {item.qualification.maximumAddBasisPoints===null?'未另设':`${item.qualification.maximumAddBasisPoints/100}%`}。</p>
+            <p>最低贡献额 ¥{(item.qualification.minimumContributionMinor/100).toFixed(2)}；最低新增贡献额 ¥{(item.qualification.minimumIncrementalContributionMinor/100).toFixed(2)}。</p>
+            <p>人均上限：{item.qualification.maximumQuantitiesPerPerson.map(limit=>`${products.find(product=>product.id===limit.productId)?.name??limit.productId} ${limit.quantity}份/人`).join('；')}</p>
+            <p>排除商品：{item.qualification.excludedProductIds.map(id=>products.find(product=>product.id===id)?.name??id).join('、')||'未另设'}。核心酒水和具体选择仍必须保留，不因没有排除商品而放宽。</p>
+          </details>:<small>旧版本未配置新准入条件，须建立完整新草稿再验收。</small>}
+        </div>
+        <div>{item.status==='draft'&&canApproveRule&&item.draftedByEmployeeId!==auth.employee.id&&<button type="button" onClick={()=>void ruleAction(item,'approve')}>审批</button>}{item.status==='approved'&&canPublishRule&&item.draftedByEmployeeId!==auth.employee.id&&item.approvedByEmployeeId!==auth.employee.id&&<button type="button" onClick={()=>void ruleAction(item,'publish')}>发布</button>}{item.status==='retired'&&canPublishRule&&<button type="button" onClick={()=>void ruleAction(item,'rollback-draft')}>复制为回滚草稿</button>}</div>
+      </article>)}</div>
       {canDraftCapacity && <details><summary>新建产能版本</summary><form className="checkout-capacity-form" onSubmit={(event)=>void saveCapacity(event)}>
         <label>出品站点<select value={capacity.stationCode} onChange={(event)=>setCapacity({...capacity,stationCode:event.target.value as typeof capacity.stationCode})}><option value="bar">吧台</option><option value="kitchen">厨房</option><option value="cashier">收银</option></select></label>
         <label>配置原因<input required minLength={2} maxLength={240} value={capacity.reason} onChange={(event)=>setCapacity({...capacity,reason:event.target.value})}/></label>
@@ -186,7 +222,7 @@ export function CheckoutUpgradeManagementPanel({ api, auth }: { api: NormalizedA
         <div className="capacity-actions"><button type="button" onClick={()=>setCapacity({...capacity,windows:[...capacity.windows,emptyWindow()]})}><Plus size={15}/>增加时间窗</button><button type="submit" disabled={busy==='capacity-draft'}>保存产能草稿</button></div>
       </form></details>}
       <div className="capacity-policy-list">{capacities.map((item)=><article key={item.id}><div><strong>{station(item.stationCode)} · V{item.policyVersion}</strong><small>{status(item.status)} · {item.reason}</small><span>{item.windows.length}个时段 · 占用 {item.windows.reduce((sum,window)=>sum+window.usedUnits,0)} 单位</span></div><div>{item.status==='draft'&&canApproveCapacity&&<button type="button" onClick={()=>void capacityAction(item,'approve')}>审批</button>}{item.status==='approved'&&canPublishCapacity&&<button type="button" onClick={()=>void capacityAction(item,'publish')}>发布</button>}</div></article>)}</div>
-      <p className="checkout-upgrade-safety">付款前升级仍保持关闭，直至规则、全站产能、库存与原子下单验收全部通过。此页面不会打开功能开关。</p>
+      <p className="checkout-upgrade-safety">规则、出品产能、库存与整笔下单验收通过后才可启用付款前升级；保存或发布规则不会改变功能开关。</p>
     </div>}
   </section>
 }
@@ -199,7 +235,7 @@ function productOptions(value:unknown):ProductOption[] {
 }
 function emptyWindow():CapacityWindowDraft { return {key:crypto.randomUUID(),startsAt:'',endsAt:'',capacityLimitUnits:'40'} }
 function replaceWindow(rows:CapacityWindowDraft[],index:number,row:CapacityWindowDraft) { return rows.map((item,position)=>position===index?row:item) }
-function number(value:string,label:string,min:number) { const result=Number(value); if(!Number.isInteger(result)||result<min) throw new Error(`${label}不正确`); return result }
+function number(value:string,label:string,min:number) { const result=Number(value); if(!value.trim()||!Number.isSafeInteger(result)||result<min) throw new Error(`${label}须填写有效整数`); return result }
 function tags(value:string) { return [...new Set(value.split(',').map((item)=>item.trim()).filter(Boolean))] }
 function localIso(value:string,label:string) { const parsed=Date.parse(value); if(!Number.isFinite(parsed)) throw new Error(`${label}不正确`); return new Date(parsed).toISOString() }
 function operationKey(prefix:string) { return `${prefix}-${crypto.randomUUID()}` }

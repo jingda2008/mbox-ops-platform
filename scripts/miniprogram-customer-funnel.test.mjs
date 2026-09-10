@@ -430,7 +430,7 @@ test('tonight ordering keeps live service separate from recommendation and deleg
   assert.match(orderStyle, /\.quick-service button[\s\S]*?min-height:\s*88rpx/)
   assert.match(orderStyle, /\.table-strip__service \{ min-height: 88rpx/)
   assert.match(orderStyle, /\.product-row \{[\s\S]*?height:\s*520rpx/)
-  assert.match(orderStyle, /\.product-row \{[^}]*display:\s*grid[^}]*grid-template-rows:\s*274rpx minmax\(0, 1fr\) 110rpx/)
+  assert.match(orderStyle, /\.product-row \{[^}]*display:\s*grid[^}]*grid-template-rows:\s*274rpx auto minmax\(110rpx, auto\)/)
   assert.match(orderStyle, /\.product-media \{[\s\S]*?height:\s*100%/)
   assert.match(orderStyle, /\.product-main \{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/)
   assert.match(orderStyle, /\.product-copy \{[^}]*height:\s*27rpx[^}]*text-overflow:\s*ellipsis[^}]*white-space:\s*nowrap/)

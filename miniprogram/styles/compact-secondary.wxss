@@ -1,0 +1,69 @@
+/* Secondary-page density and intrinsic-size guards. Never hide overflow to mask it. */
+.page.service-page .primary-button,.page.service-page .secondary-button,.page.reservations-page .flow-actions button,.page.complaint-page .danger-button,.page.preferences-page .save-button,.page.status-page .feedback-actions button{display:flex;align-items:center;justify-content:center}
+.page.service-page .service-head,.page.reservations-page .reservation-head,.page.status-page .status-head,.page.preferences-page .preferences-hero,.page.notifications-page .notifications-hero,.page.profile-contact-page .contact-hero,.page.points-page .points-head,.page.performances-page .performance-hero{padding-top:28rpx;padding-bottom:26rpx;margin-bottom:20rpx}
+.page.service-page .service-title,.page.reservations-page .reservation-title,.page.status-page .status-title,.page.preferences-page .preferences-title,.page.notifications-page .notifications-hero text:nth-child(2),.page.profile-contact-page .contact-hero text:nth-child(2),.page.points-page .points-title,.page.performances-page .performance-hero__title{font-size:36rpx;line-height:1.35;margin-top:8rpx;overflow-wrap:anywhere}
+.page.service-page .service-copy,.page.reservations-page .reservation-copy,.page.status-page .status-copy,.page.preferences-page .preferences-copy,.page.points-page .points-copy{font-size:23rpx;line-height:1.55;margin-top:8rpx}
+
+.page.service-page .custom-panel{padding:20rpx;margin-top:18rpx;border-radius:16rpx;box-shadow:none}
+.page.service-page .manager-entry{box-sizing:border-box;width:100%;min-width:0;min-height:44px;height:auto;padding:12rpx 18rpx;line-height:1.5;white-space:normal;gap:14rpx}
+.page.service-page .manager-entry>view{min-width:0;flex:1;overflow-wrap:anywhere}
+.page.service-page .manager-entry>text{flex:0 0 auto}
+.page.service-page .manager-order{gap:12rpx;flex-wrap:wrap}
+.page.service-page .manager-order picker{min-width:0;flex:1;max-width:100%;min-height:44px;display:flex;align-items:center;justify-content:flex-end}
+.page.service-page .primary-button,.page.service-page .secondary-button{height:auto;min-height:44px;padding:12rpx 18rpx;border-radius:16rpx;font-size:24rpx;line-height:1.5;box-shadow:none;white-space:normal}
+
+.page.reservations-page .field-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14rpx}
+.page.reservations-page .field,.page.reservations-page picker,.page.reservations-page .booking-summary>view>text{min-width:0;overflow-wrap:anywhere}
+.page.reservations-page .flow-panel{padding:20rpx;border-radius:18rpx}
+.page.reservations-page .flow-title{font-size:32rpx;margin-bottom:18rpx}
+.page.reservations-page .picker-field,.page.reservations-page .field__input{box-sizing:border-box;width:100%;min-width:0;min-height:44px;height:auto;padding:12rpx 14rpx;font-size:24rpx;line-height:1.5}
+.page.reservations-page .flow-actions button{height:auto;min-height:44px;padding:12rpx 14rpx;line-height:1.5;font-size:24rpx;border-radius:16rpx;box-shadow:none;white-space:normal}
+.page.reservations-page .performance-impact-actions button,.page.reservations-page .performance-impact-options button{box-sizing:border-box;width:100%;min-width:0;min-height:44px;height:auto;white-space:normal;overflow-wrap:anywhere}
+.page.reservations-page .reservation-card__side{max-width:42%;min-width:0}
+.page.reservations-page .reservation-cancel{box-sizing:border-box;width:auto;min-width:0;max-width:100%;min-height:44px;height:auto;padding:10rpx 16rpx;line-height:1.5;white-space:normal}
+
+.page.complaint-page .complaint-band{padding-top:28rpx;padding-bottom:26rpx;border-bottom-width:3rpx}
+.page.complaint-page .complaint-title{font-size:34rpx;line-height:1.35}
+.page.complaint-page .complaint-subtitle{margin-top:10rpx}
+.page.complaint-page .complaint-form{padding:20rpx;border-radius:18rpx;box-shadow:none}
+.page.complaint-page .field__textarea{height:180rpx;min-height:100px;width:100%;font-size:24rpx;line-height:1.5}
+.page.complaint-page .picker-field{height:auto;min-height:44px;padding:12rpx 16rpx;gap:12rpx;flex-wrap:wrap;font-size:24rpx}
+.page.complaint-page .danger-button{height:auto;min-height:44px;padding:12rpx 18rpx;line-height:1.5;font-size:24rpx;border-radius:16rpx;box-shadow:none;white-space:normal}
+.page.complaint-page .complaint-policy{margin-top:18rpx;padding-top:18rpx}
+
+.page.preferences-page .preference-card{padding:20rpx;border-radius:16rpx;margin-top:12rpx}
+.page.preferences-page .avatar-button{display:flex;align-items:center;justify-content:center}
+.page.preferences-page .chip-grid{gap:8rpx;margin-top:10rpx}
+.page.preferences-page .chip{padding:0 14rpx;border-radius:14rpx;font-size:22rpx}
+.page.preferences-page .save-button{height:auto;min-height:44px;padding:12rpx 18rpx;line-height:1.5;font-size:24rpx}
+.page.preferences-page .field-note{font-size:21rpx}
+
+.page.profile-contact-page .contact-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12rpx}
+.page.profile-contact-page .contact-action{width:100%;min-width:0;height:auto;min-height:44px;max-height:none;white-space:normal;line-height:1.5;padding:12rpx 16rpx;font-size:24rpx;border-radius:16rpx;overflow:visible}
+.page.profile-contact-page .contact-action:last-child{background:#edf3ee;color:#315d46;border:1rpx solid #cbd8cc}
+.page.profile-contact-page .wecom-card{padding:20rpx;gap:18rpx;box-shadow:none;border-radius:16rpx;flex-wrap:wrap}
+.page.profile-contact-page .wecom-card image{flex:0 0 144rpx;width:144rpx;height:144rpx}
+.page.profile-contact-page .wecom-card view{flex:1 1 180rpx;min-width:0;overflow-wrap:anywhere}
+.page.profile-contact-page .contact-phone-hint{margin-bottom:16rpx;text-align:left;font-size:22rpx}
+
+.page.member-cards-page .cards-box,.page.contact-page .contact-box{padding:18rpx;margin:12rpx 0;border-radius:16rpx}
+.page.member-cards-page .cards-heading{margin-bottom:12rpx}
+.page.member-cards-page .cards-title,.page.contact-page .contact-title{font-size:28rpx}
+.page.member-cards-page .cards-section{font-size:26rpx;margin:20rpx 0 10rpx}
+.page.member-cards-page .cards-button,.page.contact-page .contact-button{display:flex;align-items:center;justify-content:center;min-height:44px;height:auto;margin-top:12rpx;padding:10rpx 16rpx;font-size:23rpx;line-height:1.5;overflow-wrap:anywhere}
+.page.member-cards-page .cards-row>text,.page.contact-page .contact-row>text{min-width:0;overflow-wrap:anywhere}
+.page.member-cards-page .cards-actions{gap:12rpx}
+.page.member-cards-page .cards-actions navigator{background:#f0ede6;border:1rpx solid #ddd6cb}
+.page.notifications-page .option-row{padding:16rpx;flex-wrap:wrap}
+.page.notifications-page .option-row>view{min-width:0;flex:1;overflow-wrap:anywhere}
+.page.notifications-page .option-row view text:last-child{font-size:22rpx;line-height:1.5}
+.page.status-page .status-card{padding:20rpx;border-radius:16rpx}
+.page.status-page .status-card__head>view{flex:1;min-width:0;overflow-wrap:anywhere}
+.page.status-page .status-chip{max-width:42%;min-width:0;white-space:normal;overflow-wrap:anywhere;line-height:1.5}
+.page.status-page .feedback-actions button{height:auto;min-height:44px;padding:10rpx 12rpx;font-size:23rpx;line-height:1.5;border-radius:16rpx;white-space:normal}
+.page.points-page .ledger-row>view:last-child{flex:0 1 auto;min-width:0;max-width:45%;overflow-wrap:anywhere}
+.page.performances-page .day-chip{width:0;min-width:0;flex:1;min-height:100rpx}
+.page.performances-page .day-pager__nav{width:76rpx;min-width:0;flex:0 0 76rpx;min-height:44px}
+.page.performances-page .schedule-card>view{min-width:0;overflow-wrap:anywhere}
+
+@media(max-width:340px){.page.profile-contact-page .contact-actions{grid-template-columns:1fr}.page.reservations-page .field-row{gap:10rpx}.page.reservations-page .picker-field{padding-right:10rpx;padding-left:10rpx;font-size:23rpx}}

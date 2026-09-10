@@ -1,4 +1,4 @@
-<view class="page">
+<view class="page complaint-page">
   <view class="top-band complaint-band">
     <view class="brand-row"><view><text class="eyebrow">{{tableCode}} · 认真听你说</text><text class="complaint-title">由值班负责人跟进</text></view></view>
     <text class="complaint-subtitle">你的反馈会直接通知值班负责人，由门店跟进处理。</text>
@@ -14,7 +14,7 @@
     </label>
     <label class="field">
       <text class="field__label">发生了什么</text>
-      <textarea class="field__textarea" maxlength="300" value="{{details}}" placeholder="请描述事实和您希望如何解决" bindinput="onDetailsInput" />
+      <textarea class="field__textarea" maxlength="300" value="{{details}}" placeholder="请描述事实和您希望如何解决" bindinput="onDetailsInput" disabled="{{submitting}}" />
     </label>
     <button class="danger-button" disabled="{{submitting}}" bindtap="submitComplaint">{{submitting ? '正在提交' : '提交给值班经理'}}</button>
   </view>

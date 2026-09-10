@@ -85,6 +85,35 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
     return reply.send({ data })
   }))
 
+  app.get('/hardware/print-sources', async (request, reply) => handle(reply, async () => {
+    const context=await options.resolveContext(request)
+    requireAny(context,['hardware.manage','printer.manage'])
+    const data=await options.transactions.run(context.scope,async tx=>(await tx.query(`
+      SELECT id,ticket_kind AS "ticketKind",status,attempts,last_error_code AS "lastErrorCode",
+        created_at::text AS "createdAt",next_attempt_at::text AS "nextAttemptAt",job_count AS "jobCount"
+      FROM mbox.print_source_jobs WHERE tenant_id=$1 AND store_id=$2
+        AND status IN ('pending','retry','dead','skipped')
+      ORDER BY CASE status WHEN 'dead' THEN 0 WHEN 'retry' THEN 1 ELSE 2 END,created_at DESC,id LIMIT 50`,
+      [context.scope.tenantId,context.scope.storeId])).rows,{readOnly:true})
+    return reply.send({data})
+  }))
+
+  app.post('/hardware/print-sources/:sourceId/retry', async (request, reply) => handle(reply, async () => {
+    const context=await options.resolveContext(request)
+    requireAny(context,['hardware.manage','printer.manage'])
+    const body=readObject(request.body),sourceId=readUuid(readObject(request.params).sourceId,'sourceId')
+    const reason=readString(body.reason,'reason',1000,3)
+    const execution=await options.commands.execute(command(request,context,'print.source.retry',body,codec()),async tx=>{
+      const updated=await tx.query<{id:string}>(`UPDATE mbox.print_source_jobs SET status='pending',attempts=0,
+        next_attempt_at=clock_timestamp(),last_error_code=NULL
+        WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND status IN ('retry','dead') RETURNING id`,
+        [context.scope.tenantId,context.scope.storeId,sourceId])
+      if(!updated.rows[0])throw new HardwareConflictError('仅失败的票据生成任务可重试；已完成或已跳过的任务不可重复生成')
+      return outcome(context,'print.source.retried.v1','print_source',sourceId,reason,{id:sourceId,status:'pending'})
+    })
+    return reply.send({data:execution.value,replayed:execution.replayed})
+  }))
+
   app.get('/hardware/printer-routes', async (request, reply) => handle(reply, async () => {
     const context = await options.resolveContext(request)
     requireAny(context, ['hardware.view_all', 'hardware.manage', 'printer.manage'])
@@ -198,6 +227,9 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
     const reason = readString(body.reason, 'reason', 1000, 3)
     const jobId = readUuid(readObject(request.params).jobId, 'jobId')
     const execution = await options.commands.execute(command(request, context, 'print.job.retry', body, codec()), async (transaction) => {
+      const original=await repository(transaction).getById(jobId)
+      if(!original)throw new HardwareNotFoundError('打印任务不存在')
+      if(!printStationsFor(context).includes(original.stationCode))throw new HardwareAccessDeniedError()
       const result = await repository(transaction).retryPrintJob(jobId, context.employeeId, reason)
       return outcome(context, 'print.job.manual_retry.v1', 'print_job', result.id, reason, result)
     })

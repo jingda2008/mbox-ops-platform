@@ -1,4 +1,5 @@
 import type { JsonObject } from './command-executor.js'
+import {CheckoutCouponLifecycleRepository} from './checkout-coupon-lifecycle-repository.js'
 import {
   InventoryRepository,
   type InventoryConsumption,
@@ -156,6 +157,7 @@ export class PaymentFulfillmentRepository {
         AND id = $3::uuid AND fulfillment_state = 'awaiting_payment' AND payment_status = 'paid'
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
     if (activated.rowCount !== 1) throw new Error(`Order ${orderId} lost its fulfillment activation transition`)
+    await new CheckoutCouponLifecycleRepository(this.transaction).redeemPaidOrder(orderId)
     await new FulfillmentCapacityRepository(this.transaction).activateForPaidOrder(orderId)
     const order = await new OrderRepository(this.transaction).getSubmittedForFulfillment(orderId)
     const inventoryConsumptions = await new InventoryRepository(this.transaction)

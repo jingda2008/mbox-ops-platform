@@ -7,7 +7,6 @@ import type {
   NormalizedCommandExecutor,
   OutboxMessage,
 } from './command-executor.js'
-import { appendOutboxMessage } from './command-executor.js'
 import type { ChannelPaymentStatus } from '../../src/shared/payment-contracts.js'
 import {
   PaymentRepository,
@@ -42,7 +41,6 @@ import {
   RejectingProviderObservationAuthority,
   type ProviderObservationAuthorityPort,
 } from './provider-verification-observation.js'
-import { PrintTicketSourceRepository } from './print-ticket-source.js'
 import {
   RecollectionAuthorizationRepository,
   type OrderRecollectionAuthorization,
@@ -1073,14 +1071,14 @@ function command<Result>(
 }
 
 async function paymentOutcome(
-  transaction: import('./transaction-runner.js').ScopedTransaction,
+  _transaction: import('./transaction-runner.js').ScopedTransaction,
   input: Readonly<CommandMetadata>,
   payment: Payment,
   action: string,
   version: number,
   businessEventKey?: string,
   fulfillment?: PaymentFulfillmentActivation | PaymentFulfillmentRelease,
-  printTicketSources = false,
+  _printTicketSources = false,
 ): Promise<CommandOutcome<Payment>> {
   const snapshot = paymentToJson(payment)
   const fulfillmentChanged = fulfillment !== undefined && (
@@ -1115,20 +1113,6 @@ async function paymentOutcome(
     eventType: `${action}.v1`,
     payload: snapshot,
   }
-  const producesCashierTicket = printTicketSources && (
-    (action === 'payment.initiated' && payment.orderId !== null) || payment.status === 'succeeded'
-  )
-  if (producesCashierTicket) {
-    const sourceOutboxMessageId = await appendOutboxMessage(transaction, paymentOutbox)
-    const sources = new PrintTicketSourceRepository(transaction)
-    if (action === 'payment.initiated') {
-      await sources.materializeCashierSettlement(sourceOutboxMessageId, payment.id)
-    } else if (payment.orderId !== null) {
-      await sources.materializeCashierPayment(sourceOutboxMessageId, payment.id)
-    } else {
-      await sources.materializeActivityCashierPayment(sourceOutboxMessageId, payment.id)
-    }
-  }
   const fulfillmentOutbox: OutboxMessage | null = fulfillmentEvent === null ? null : {
     businessEventKey: `fulfillment:${fulfillmentEvent.action}:${fulfillment!.orderId}`,
     aggregateType: 'order',
@@ -1136,11 +1120,6 @@ async function paymentOutcome(
     aggregateVersion: 2,
     eventType: fulfillmentEvent.eventType,
     payload: fulfillmentEvent.payload,
-  }
-  const producesProductionTicket = printTicketSources && fulfillmentOutbox !== null && 'activated' in fulfillment! && fulfillment!.activated
-  if (producesProductionTicket && fulfillmentOutbox !== null) {
-    const sourceOutboxMessageId = await appendOutboxMessage(transaction, fulfillmentOutbox)
-    await new PrintTicketSourceRepository(transaction).materializeOrderProduction(sourceOutboxMessageId, fulfillment!.orderId)
   }
   return {
     result: payment,
@@ -1160,8 +1139,8 @@ async function paymentOutcome(
       afterData: fulfillmentEvent.payload,
     }])],
     outboxMessages: [
-      ...(producesCashierTicket ? [] : [paymentOutbox]),
-      ...(fulfillmentOutbox === null || producesProductionTicket ? [] : [fulfillmentOutbox]),
+      paymentOutbox,
+      ...(fulfillmentOutbox === null ? [] : [fulfillmentOutbox]),
     ],
   }
 }
@@ -1172,8 +1151,8 @@ async function refundOutcome(
   action: string,
   version: number,
   auditReason?: string,
-  transaction?: import('./transaction-runner.js').ScopedTransaction,
-  printTicketSources = false,
+  _transaction?: import('./transaction-runner.js').ScopedTransaction,
+  _printTicketSources = false,
 ): Promise<CommandOutcome<Refund>> {
   const snapshot = refundToJson(refund)
   const refundOutbox: OutboxMessage = {
@@ -1182,14 +1161,6 @@ async function refundOutcome(
     aggregateVersion: version,
     eventType: `${action}.v1`,
     payload: snapshot,
-  }
-  const producesRefundTicket = printTicketSources && transaction !== undefined
-    && refund.status === 'succeeded'
-  if (producesRefundTicket) {
-    const sourceOutboxMessageId = await appendOutboxMessage(transaction!, refundOutbox)
-    const sources = new PrintTicketSourceRepository(transaction!)
-    if (refund.orderId !== null) await sources.materializeCashierRefund(sourceOutboxMessageId, refund.id)
-    else await sources.materializeActivityCashierRefund(sourceOutboxMessageId, refund.id)
   }
   return {
     result: refund,
@@ -1202,7 +1173,7 @@ async function refundOutcome(
       afterData: snapshot,
       reason: auditReason ?? refund.reason,
     }],
-    outboxMessages: producesRefundTicket ? [] : [refundOutbox],
+    outboxMessages: [refundOutbox],
   }
 }
 

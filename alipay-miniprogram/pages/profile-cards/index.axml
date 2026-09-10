@@ -1,0 +1,37 @@
+<view class="page member-cards-page">
+  <view class="cards-actions">
+    <navigator url="/pages/profile-marketing/index" class="cards-button">联系偏好</navigator>
+    <navigator url="/pages/profile-contact/index" class="cards-button">企业微信与客服</navigator>
+  </view>
+  <view class="cards-heading"><text class="cards-title">兴趣卡与联名卡</text><text class="cards-copy">与消费等级独立；申请不代替营销、消息或联系方式授权。</text></view>
+  <text a:if="{{message}}" class="cards-message">{{message}}</text>
+  <view a:if="{{error}}" class="cards-error"><text>{{error}}</text><button class="cards-button" onTap="load" disabled="{{busy}}">刷新核对</button></view>
+  <state-panel a:if="{{loading}}" type="loading" title="正在读取本人卡片" />
+  <block a:elif="{{selectedProject}}">
+    <view class="cards-box"><text class="cards-title">{{selectedProject.name}}</text><text class="cards-copy">有效至 {{selectedProject.untilText}}（北京时间）</text><text class="cards-terms">{{selectedProject.terms}}</text>
+      <checkbox-group onChange="acknowledge"><label class="cards-ack"><checkbox value="agree" checked="{{acknowledged}}" color="#315d46" disabled="{{busy}}"/>我已阅读并同意本卡申请说明</label></checkbox-group>
+      <view class="cards-actions"><button class="cards-button" disabled="{{busy}}" onTap="closeProject">返回</button><button class="cards-button primary" disabled="{{busy || !acknowledged}}" loading="{{busy}}" onTap="apply">提交申请</button></view>
+    </view>
+  </block>
+  <block a:elif="{{loaded}}">
+    <view a:if="{{!activeMember}}" class="cards-box"><text class="cards-copy">请先在“我的”完成正常入会，再申请兴趣卡。</text><button class="cards-button" onTap="openMembership">前往我的</button></view>
+    <text class="cards-section">活动赠券进度</text>
+    <text a:if="{{giftLoading}}" class="cards-copy">正在读取赠券进度</text>
+    <view a:if="{{giftError}}" class="cards-error"><text>{{giftError}}</text><button class="cards-button" onTap="loadGifts" disabled="{{giftLoading}}">重试读取赠券</button></view>
+    <view a:for="{{giftJobs}}" a:key="id" class="cards-box"><view class="cards-row"><text>{{item.name}}</text><text class="cards-status">{{item.stateText}}</text></view><text class="cards-copy">{{item.quantity}}份；发券进度不代表消息已送达。</text></view>
+    <text a:if="{{giftLoaded && !giftJobs.length}}" class="cards-copy">暂无活动赠券记录；卡审核通过不代表每个项目都有赠券。</text>
+    <button a:if="{{giftCursor}}" class="cards-button" data-more="true" onTap="loadGifts" disabled="{{giftLoading}}">更多赠券记录</button>
+    <button class="cards-button" onTap="openGiftWallet">查看优惠券包</button>
+    <text class="cards-section">我的卡片</text>
+    <view a:for="{{cards}}" a:key="id" class="cards-box"><view class="cards-row"><text>{{item.name}}</text><text class="cards-status">{{item.stateText}}</text></view><text class="cards-copy">有效至 {{item.untilText}}（北京时间）</text><button a:if="{{item.canWithdraw}}" class="cards-button" disabled="{{busy}}" data-id="{{item.id}}" data-action="withdraw-card" onTap="withdraw">退出此卡</button></view>
+    <text a:if="{{!cards.length}}" class="cards-copy">暂无持卡记录。</text>
+    <button a:if="{{nextCursors.cards}}" class="cards-button" disabled="{{busy}}" data-kind="cards" onTap="loadMore">加载更多卡片</button>
+    <text class="cards-section">可申请项目</text>
+    <view a:for="{{projects}}" a:key="id" class="cards-box"><text>{{item.name}}</text><text class="cards-copy">{{item.kind === 'interest' ? '兴趣社群卡' : '联名卡'}} · 有效至 {{item.untilText}}</text><button class="cards-button primary" disabled="{{busy || !item.canApply}}" data-id="{{item.id}}" onTap="openProject">{{item.buttonText}}</button></view>
+    <text a:if="{{!projects.length}}" class="cards-copy">当前没有开放申请的项目。</text>
+    <button a:if="{{nextCursors.projects}}" class="cards-button" disabled="{{busy}}" data-kind="projects" onTap="loadMore">加载更多项目</button>
+    <text class="cards-section">申请记录</text>
+    <view a:for="{{applications}}" a:key="id" class="cards-box"><view class="cards-row"><text>{{item.name}}</text><text class="cards-status">{{item.stateText}}</text></view><text class="cards-copy">{{item.requestedText}}</text><text a:if="{{item.review_reason}}" class="cards-copy">{{item.review_reason}}</text><button a:if="{{item.status === 'pending'}}" class="cards-button" disabled="{{busy}}" data-id="{{item.id}}" data-action="withdraw-application" onTap="withdraw">撤回申请</button></view>
+    <button a:if="{{nextCursors.applications}}" class="cards-button" disabled="{{busy}}" data-kind="applications" onTap="loadMore">加载更多申请记录</button>
+  </block>
+</view>

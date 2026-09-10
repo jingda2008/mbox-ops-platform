@@ -489,6 +489,10 @@ Page({
     runtime.navigateTo({ url: '/pages/member-center/index' })
   },
 
+  openOrderHistory() {
+    runtime.navigateTo({ url: '/pages/account/index?mode=history' })
+  },
+
   noop() {},
 
   requireMembership(pendingAction) {
@@ -934,6 +938,9 @@ Page({
   openPreferenceSettings() {
     if (!this.requireMembership('preferences')) return
     runtime.navigateTo({ url: '/pages/profile-preferences/index' })
+  },
+  openMarketingPreferences() {
+    runtime.navigateTo({ url: '/pages/profile-marketing/index' })
   },
   openContact() {
     if (!this.requireMembership('contact')) return

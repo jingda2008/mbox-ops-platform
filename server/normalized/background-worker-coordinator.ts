@@ -29,6 +29,10 @@ import type { StoreScope } from './transaction-runner.js'
 import type { PersonalContactDispositionBatch } from './personal-contact-disposition-worker.js'
 import type { ComplimentaryBenefitFulfillmentBatch } from './complimentary-benefit-fulfillment-worker.js'
 import type { StaleGuestImmediatePaymentBatch } from './stale-guest-immediate-payment-worker.js'
+import type { MemberGiftDeliveryBatch } from './member-gift-delivery-worker.js'
+import type {CheckoutCouponRecoveryBatch} from './checkout-coupon-recovery-worker.js'
+import type { MarketingDeliveryBatch } from './marketing-delivery-worker.js'
+import type { PrintSourceBatch } from './print-source-worker.js'
 
 type ServiceSlaPort = {
   runBatch(scope: Readonly<StoreScope>, workerId: string): Promise<ServiceTaskSlaBatch>
@@ -145,6 +149,7 @@ export interface NormalizedWorkerCoordinatorOptions {
 }
 
 export type NormalizedWorkerName =
+  | 'print-source'
   | 'service-sla'
   | 'reservation-expiry'
   | 'payment-reservation-expiry'
@@ -174,6 +179,9 @@ export type NormalizedWorkerName =
   | 'personal-contact-disposition'
   | 'complimentary-benefit-fulfillment'
   | 'stale-guest-immediate-payment-reconciliation'
+  | 'member-gift-delivery'
+  | 'marketing-delivery'
+  | 'checkout-coupon-recovery'
 
 export interface NormalizedWorkerCycleResult {
   startedAt: string
@@ -211,6 +219,10 @@ export interface NormalizedWorkerCycleResult {
     personalContactDisposition: PersonalContactDispositionBatch | null
     complimentaryBenefitFulfillment: ComplimentaryBenefitFulfillmentBatch | null
     staleGuestImmediatePaymentReconciliation: StaleGuestImmediatePaymentBatch | null
+    memberGiftDelivery: MemberGiftDeliveryBatch | null
+    marketingDelivery: MarketingDeliveryBatch | null
+    checkoutCouponRecovery:CheckoutCouponRecoveryBatch|null
+    printSource?: PrintSourceBatch|null
   }
   failures: NormalizedWorkerName[]
 }
@@ -255,6 +267,10 @@ export class NormalizedBackgroundWorkerCoordinator {
       personalContactDisposition: PersonalContactDispositionPort
       complimentaryBenefitFulfillment?: ComplimentaryBenefitFulfillmentPort
       staleGuestImmediatePaymentReconciliation?: StaleGuestImmediatePaymentPort
+      memberGiftDelivery?: {runBatch(scope:Readonly<StoreScope>,workerId:string):Promise<MemberGiftDeliveryBatch>}
+      marketingDelivery?: {runBatch(scope:Readonly<StoreScope>,workerId:string):Promise<MarketingDeliveryBatch>}
+      checkoutCouponRecovery?:{runBatch(scope:Readonly<StoreScope>,workerId:string):Promise<CheckoutCouponRecoveryBatch>}
+      printSource?:{runBatch(scope:Readonly<StoreScope>,workerId:string):Promise<PrintSourceBatch>}
     }>,
     private readonly delivery: Readonly<{
       outbox?: OutboxDelivery
@@ -326,6 +342,10 @@ export class NormalizedBackgroundWorkerCoordinator {
       'complimentary-benefit-fulfillment',
       'wechat-member-service-notification',
       'stale-guest-immediate-payment-reconciliation',
+      'member-gift-delivery',
+      'marketing-delivery',
+      'checkout-coupon-recovery',
+      'print-source',
     ]
     const executions = await Promise.allSettled([
       this.runWhenDue('service-sla', () => this.workers.serviceSla.runBatch(this.scope, `${this.options.workerId}:service-sla`)),
@@ -460,6 +480,10 @@ export class NormalizedBackgroundWorkerCoordinator {
             this.scope, `${this.options.workerId}:stale-guest-immediate-payment-reconciliation`,
           )
         )),
+      this.workers.memberGiftDelivery===undefined ? Promise.resolve(null) : this.runWhenDue('member-gift-delivery',()=>this.workers.memberGiftDelivery!.runBatch(this.scope,`${this.options.workerId}:member-gift-delivery`)),
+      this.workers.marketingDelivery===undefined ? Promise.resolve(null) : this.runWhenDue('marketing-delivery',()=>this.workers.marketingDelivery!.runBatch(this.scope,`${this.options.workerId}:marketing-delivery`)),
+      this.workers.checkoutCouponRecovery===undefined?Promise.resolve(null):this.runWhenDue('checkout-coupon-recovery',()=>this.workers.checkoutCouponRecovery!.runBatch(this.scope,`${this.options.workerId}:coupon-recovery`)),
+      this.workers.printSource===undefined?Promise.resolve(null):this.runWhenDue('print-source',()=>this.workers.printSource!.runBatch(this.scope,`${this.options.workerId}:print-source`)),
     ] as const)
 
     const failures: NormalizedWorkerName[] = []
@@ -467,8 +491,12 @@ export class NormalizedBackgroundWorkerCoordinator {
       if (execution.status === 'fulfilled') return
       const worker = names[index]
       if (worker === undefined) return
-      failures.push(worker)
-      this.options.onError?.(worker, execution.reason)
+      if (worker !== 'print' && worker !== 'print-source') failures.push(worker)
+      // Printer failures stay observable without taking the venue out of
+      // readiness/load-balancing. The separate DB probe still detects DB loss.
+      if (worker === 'print' || worker === 'print-source') {
+        try { this.options.onError?.(worker, execution.reason) } catch { /* A diagnostics sink cannot stop business. */ }
+      } else this.options.onError?.(worker, execution.reason)
     })
     const automaticTableTurnover = fulfilledValue(executions[19])
     if (automaticTableTurnover !== null && automaticTableTurnover.failedSessionIds.length > 0) {
@@ -497,6 +525,28 @@ export class NormalizedBackgroundWorkerCoordinator {
       )
     }
 
+    const memberGiftDelivery=fulfilledValue(executions[29])
+    const marketingDelivery=fulfilledValue(executions[30])
+    const checkoutCouponRecovery=fulfilledValue(executions[31])
+    const printSource=fulfilledValue(executions[32])
+    if(printSource!==null&&(printSource.dead>0||printSource.retrying>0)){
+      // A local printing warning must not make business readiness fail.
+      // Detailed counts remain visible in the print panel and cycle snapshot.
+      try { this.options.onError?.('print-source',new Error('print_source_materialization_failed')) }
+      catch { /* Preserve source state even when diagnostic logging fails. */ }
+    }
+    if(checkoutCouponRecovery!==null&&checkoutCouponRecovery.failed>0){
+      failures.push('checkout-coupon-recovery')
+      this.options.onError?.('checkout-coupon-recovery',new Error('checkout_coupon_recovery_items_failed'))
+    }
+    if(marketingDelivery!==null&&marketingDelivery.failed>0){
+      failures.push('marketing-delivery')
+      this.options.onError?.('marketing-delivery',new Error('marketing_delivery_items_failed'))
+    }
+    if(memberGiftDelivery!==null&&memberGiftDelivery.failed>0){
+      failures.push('member-gift-delivery')
+      this.options.onError?.('member-gift-delivery',new Error('member_gift_delivery_items_failed'))
+    }
     const result: NormalizedWorkerCycleResult = {
       startedAt,
       completedAt: new Date().toISOString(),
@@ -530,6 +580,10 @@ export class NormalizedBackgroundWorkerCoordinator {
         complimentaryBenefitFulfillment: fulfilledValue(executions[26]),
         wechatMemberServiceNotification: fulfilledValue(executions[27]),
         staleGuestImmediatePaymentReconciliation,
+        memberGiftDelivery,
+        marketingDelivery,
+        checkoutCouponRecovery,
+        printSource,
       },
       failures,
     }
@@ -595,6 +649,10 @@ const DEFAULT_WORKER_CADENCES: Readonly<Record<NormalizedWorkerName, number>> = 
   'personal-contact-disposition': 60_000,
   'complimentary-benefit-fulfillment': 500,
   'stale-guest-immediate-payment-reconciliation': 30_000,
+  'member-gift-delivery': 30_000,
+  'marketing-delivery': 30_000,
+  'checkout-coupon-recovery': 60_000,
+  'print-source': 1_000,
 })
 
 function workerCadences(

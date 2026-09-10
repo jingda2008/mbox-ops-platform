@@ -24,6 +24,7 @@ import {
 } from './CustomerExperienceManagementPanel'
 import { paymentPolicyPresentation } from './payment-policy-presentation'
 import { shortPublicReference } from './public-reference'
+import { PrintSourceRecoveryPanel } from './PrintSourceRecoveryPanel'
 import {
   formatInventoryQuantity,
   formatInventoryQuantityWithUnit,
@@ -1408,7 +1409,7 @@ function DevicesModule({ api, auth, devices, jobs, bridges, routes, onChanged }:
   }
 
   async function reprint(job: PrintJobView) {
-    if (!(await confirmAction({title:'确认补打小票',description:'原票不会重试或修改，新票会标注“补打”。',confirmLabel:'确认补打'}))) return
+    if (!(await confirmAction({title:'核对后补打小票',description:'请先确认现场是否已出纸，避免重复制作。原成功、失败或未知记录均保留，新票标注“补打”，不会重新下单或收款。',confirmLabel:'已核对补打'}))) return
     void run(`job-reprint-${job.id}`, () => api.postEndpoint(`/api/hardware/print-jobs/${job.id}/reprint`, { reason: reason.trim() }, {
       idempotencyKey: operationIdempotency('print-reprint'),
     }), '补打任务已进入队列；请在原打印机领取')
@@ -1559,9 +1560,10 @@ function DevicesModule({ api, auth, devices, jobs, bridges, routes, onChanged }:
     </form>}
     {routes.length > 0 && <section className="staff-song-requests"><h2>当前打印分流</h2>{routes.map((route) => <article key={route.id}><div><strong>{hardwareStationLabel(route.stationCode)} · {route.name}</strong><span>{devices.find((device) => device.id === route.printerDeviceId)?.name ?? '打印机已移除'} · {route.copies}份</span></div><div className="staff-inline-actions"><em>{route.status === 'active' ? '启用' : '暂停'}</em>{canManagePrinter && <button type="button" onClick={() => openRoute(route)}>编辑</button>}{canManagePrinter && route.status !== 'retired' && <button type="button" onClick={() => setRouteStatus(route, route.status === 'active' ? 'paused' : 'active')}>{route.status === 'active' ? '暂停' : '启用'}</button>}</div></article>)}</section>}
     {devices.length === 0 ? <EmptyState text="尚未配置真实打印或硬件设备" /> : <div className="staff-module-list">{devices.map((device) => <article key={device.id} className={device.connectivityStatus === 'offline' ? 'has-attention' : ''}><div><strong>{device.name}</strong><small>{device.stationCode ?? '全店'} · {hardwareType(device.deviceType)} · {device.status === 'active' ? '启用' : device.status === 'paused' ? '暂停' : '退役'}</small></div><div className="staff-inline-actions"><em>{connectivityLabel(device.connectivityStatus)}</em>{canManagePrinter && device.deviceType === 'printer' && <button type="button" disabled={busyKey !== null} onClick={() => openPrinter(device)}>编辑</button>}{canManagePrinter && device.deviceType === 'printer' && device.status !== 'retired' && <button type="button" disabled={busyKey !== null} onClick={() => setPrinterStatus(device, device.status === 'active' ? 'paused' : 'active')}>{device.status === 'active' ? '暂停' : '启用'}</button>}{canCommand && <button type="button" disabled={busyKey !== null || device.status !== 'active'} onClick={() => command(device, 'ping')}>检测</button>}{canCommand && device.connectivityStatus !== 'online' && <button type="button" disabled={busyKey !== null || device.status !== 'active'} onClick={() => command(device, 'reconnect')}>重连</button>}{canCommand && device.deviceType === 'printer' && <button type="button" disabled={busyKey !== null || device.status !== 'active'} onClick={() => command(device, 'test_print')}>测试打印</button>}</div></article>)}</div>}
-    {jobs.some((job) => job.status === 'failed' || job.status === 'dead') && <section className="staff-song-requests"><h2>打印失败待办</h2>{jobs.filter((job) => job.status === 'failed' || job.status === 'dead').map((job) => <article key={job.id}><div><strong>{job.printerName}</strong><span>{job.stationCode} · 已尝试{job.attempts}/{job.maxAttempts}次</span></div>{canRetry ? <button type="button" disabled={busyKey !== null || job.status === 'dead'} onClick={() => retry(job)}>{job.status === 'dead' ? '已停止自动重试' : '检查后重试'}</button> : <span>需打印重试权限</span>}</article>)}</section>}
+    {jobs.some((job) => job.status === 'failed' || job.status === 'dead') && <section className="staff-song-requests"><h2>打印失败待办</h2>{jobs.filter((job) => job.status === 'failed' || job.status === 'dead').map((job) => <article key={job.id}><div><strong>{job.printerName}</strong><span>{hardwareStationLabel(job.stationCode)} · 已尝试{job.attempts}/{job.maxAttempts}次</span><span>{job.sourceReference} · {formatDateTime(job.createdAt)}</span></div><div className="staff-inline-actions">{canRetry && job.status === 'failed' && <button type="button" disabled={busyKey !== null} onClick={() => retry(job)}>检查后重试</button>}{canReprint && <button type="button" disabled={busyKey !== null} onClick={() => reprint(job)}>核对后补打</button>}{!canRetry && !canReprint && <span>需打印处理权限</span>}</div></article>)}</section>}
     {canReprint && jobs.some((job) => job.status === 'printed') && <section className="staff-song-requests"><h2>收工补打</h2><p className="staff-module-footnote">仅从已完成的原始快照生成一张标有“补打”的新票；请填写原因，避免把失败任务当作补打。</p>{jobs.filter((job) => job.status === 'printed').slice(0, 20).map((job) => <article key={job.id}><div><strong>{job.sourceReference}</strong><span>{hardwareStationLabel(job.stationCode)} · {job.printerName} · {formatDateTime(job.createdAt)}</span></div><button type="button" disabled={busyKey !== null} onClick={() => reprint(job)}>补打</button></article>)}</section>}
-    {jobs.some((job) => job.status === 'failed' || job.status === 'dead') && <p className="staff-module-footnote">重试前必须确认设备在线并检查是否已实际出单；已停止自动重试的任务需管理员排查，不能直接重复发送。</p>}
+    {jobs.some((job) => job.status === 'failed' || job.status === 'dead') && <p className="staff-module-footnote">重试前必须确认设备在线并检查是否已实际出单；已停止自动重试的任务需核对后补打，不可盲目重复发送。</p>}
+    {canManagePrinter && <PrintSourceRecoveryPanel api={api} />}
   </div>
 }
 

@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
@@ -9,6 +9,7 @@ import {
   GuestSharedCartVersionConflictError,
 } from './guest-shared-cart-repository.js'
 import { OrderProductUnavailableError } from './order-repository.js'
+import {CheckoutUpgradePricingRepository} from './checkout-upgrade-pricing-repository.js'
 import { ScopedPostgresTransactionRunner, type PostgresPool } from './transaction-runner.js'
 
 const databaseUrl = process.env.TEST_NORMALIZED_DATABASE_URL
@@ -212,7 +213,7 @@ integration('GuestSharedCartRepository PostgreSQL authority', () => {
 
     const replaced=await transactions.run(scope,(transaction)=>(
       new GuestSharedCartRepository(transaction).replaceBundleSelection(choiceTableSessionId,publicId,{
-        productId:bundleProductId,unitIndex:0,bundleSelection:secondUnit,
+        productId:bundleProductId,unitIndex:0,portionId:added.lines[0]!.portionIds![0],bundleSelection:secondUnit,
         expectedGeneration:added.generation,expectedVersion:added.version,
         operationId:'shared-cart-choice-replace-0001',actorSessionRef:'guest-session:bundle-choice-test',
       })
@@ -220,6 +221,16 @@ integration('GuestSharedCartRepository PostgreSQL authority', () => {
     expect(replaced.lines[0]).toMatchObject({
       productId:bundleProductId,quantity:2,bundleSelections:[secondUnit,secondUnit],
     })
+    expect(added.lines[0]!.portionIds).toHaveLength(2)
+    expect(new Set(added.lines[0]!.portionIds).size).toBe(2)
+    expect(replaced.lines[0]!.portionIds).toEqual(added.lines[0]!.portionIds)
+    await expect(transactions.run(scope,transaction=>
+      new GuestSharedCartRepository(transaction).replaceBundleSelection(choiceTableSessionId,publicId,{
+        productId:bundleProductId,unitIndex:0,portionId:added.lines[0]!.portionIds![1],
+        bundleSelection:firstUnit,expectedGeneration:replaced.generation,expectedVersion:replaced.version,
+        operationId:'shared-cart-wrong-portion-0001',actorSessionRef:'guest-session:bundle-choice-test',
+      }),
+    )).rejects.toBeInstanceOf(GuestSharedCartVersionConflictError)
 
     await pool.query(`
       UPDATE mbox.product_bundle_choice_groups
@@ -249,6 +260,59 @@ integration('GuestSharedCartRepository PostgreSQL authority', () => {
     expect(reduced.lines[0]).toMatchObject({
       productId:bundleProductId,quantity:1,available:true,bundleSelections:[secondUnit],
     })
+    expect(reduced.lines[0]!.portionIds).toEqual([added.lines[0]!.portionIds![0]])
+    const regrown=await transactions.run(scope,transaction=>
+      new GuestSharedCartRepository(transaction).adjust(choiceTableSessionId,publicId,{
+        productId:bundleProductId,delta:1,expectedGeneration:reduced.generation,expectedVersion:reduced.version,
+        operationId:'shared-cart-regrow-portion-0001',actorSessionRef:'guest-session:bundle-choice-test',
+        bundleSelections:[firstUnit],
+      }),
+    )
+    expect(regrown.lines[0]!.portionIds).toHaveLength(2)
+    expect(regrown.lines[0]!.portionIds![0]).toBe(added.lines[0]!.portionIds![0])
+    expect(regrown.lines[0]!.portionIds![1]).not.toBe(added.lines[0]!.portionIds![1])
+  })
+
+  it('replaces only the selected first portion, preserves later choices and rolls failed replacements back',async()=>{
+    const replacementTable=randomUUID(),replacementSession=randomUUID(),publicId=`GSC${randomUUID().replaceAll('-','').toUpperCase()}`
+    await pool.query(`INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity) VALUES($1,$2,$3,$4,'SC03','SC03',4)`,[replacementTable,tenantId,storeId,areaId])
+    await pool.query(`INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count,status) VALUES($1,$2,$3,$4,'portion-replacement-session',CURRENT_DATE,2,'open')`,[replacementSession,tenantId,storeId,replacementTable])
+    const first={groups:[{groupId:choiceGroupId,productIds:[productId]}]},second={groups:[{groupId:choiceGroupId,productIds:[secondProductId]}]}
+    const actorSessionRef='guest-session:replacement-test'
+    expect(await transactions.run(scope,tx=>new GuestSharedCartRepository(tx).findCurrentOpen(replacementSession),{readOnly:true})).toBeNull()
+    expect((await pool.query('SELECT count(*)::int AS n FROM mbox.guest_shared_carts WHERE table_session_id=$1',[replacementSession])).rows[0].n).toBe(0)
+    const added=await transactions.run(scope,tx=>new GuestSharedCartRepository(tx).adjust(replacementSession,publicId,{productId:bundleProductId,delta:2,expectedGeneration:1,expectedVersion:0,operationId:'replace-portion-add-source',actorSessionRef,bundleSelections:[first,second]}))
+    const input={productId:bundleProductId,portionId:added.lines[0]!.portionIds![0]!,targetProductId:productId,expectedGeneration:added.generation,expectedVersion:added.version,operationId:'replace-portion-first-unit',actorSessionRef}
+    expect(await transactions.run(scope,tx=>new GuestSharedCartRepository(tx).findCurrentOpen(replacementSession),{readOnly:true})).toEqual(added)
+    const replace=(value:typeof input)=>transactions.run(scope,tx=>new GuestSharedCartRepository(tx).replacePortionProduct(replacementSession,publicId,value))
+    const [result,concurrentReplay]=await Promise.all([replace(input),replace(input)])
+    expect(concurrentReplay).toEqual(result)
+    expect(result.version).toBe(added.version+1)
+    expect(result.lines.find(line=>line.productId===bundleProductId)).toMatchObject({quantity:1,portionIds:[added.lines[0]!.portionIds![1]],bundleSelections:[second]})
+    const target=result.lines.find(line=>line.productId===productId)!
+    expect(target).toMatchObject({quantity:1,bundleSelections:[]})
+    expect(target.portionIds![0]).not.toBe(input.portionId)
+    expect((await replace(input)).version).toBe(result.version)
+    await expect(replace({...input,operationId:'replace-portion-stale-version'})).rejects.toBeInstanceOf(GuestSharedCartVersionConflictError)
+    const before=await transactions.run(scope,tx=>new GuestSharedCartRepository(tx).readOpen(replacementSession,publicId))
+    const comparison=await transactions.run(scope,tx=>new CheckoutUpgradePricingRepository(tx).compare({cart:before,customerId:randomUUID(),portionId:target.portionIds![0]!,targetProductId:bundleProductId,bundleSelection:first,selections:[],channel:'guest_qr'}),{readOnly:true})
+    expect(comparison).toMatchObject({previewOnly:true,cartChanged:false,orderAuthorization:false,pricingBasis:'standard_only',addedPayableMinor:2200,before:{price:{payableMinor:7800}},after:{price:{payableMinor:10000}}})
+    expect(comparison.after.composition.find(line=>line.portionId===added.lines[0]!.portionIds![1])?.items.map(item=>item.productId)).toEqual([secondProductId])
+    expect(await transactions.run(scope,tx=>new GuestSharedCartRepository(tx).readOpen(replacementSession,publicId))).toEqual(before)
+    await expect(transactions.run(scope,tx=>new GuestSharedCartRepository(tx).replacePortionProduct(replacementSession,publicId,{...input,productId,portionId:target.portionIds![0]!,targetProductId:bundleProductId,expectedVersion:result.version,operationId:'replace-portion-missing-choice'}))).rejects.toBeInstanceOf(OrderProductUnavailableError)
+    expect(await transactions.run(scope,tx=>new GuestSharedCartRepository(tx).readOpen(replacementSession,publicId))).toEqual(before)
+    const returned=await transactions.run(scope,tx=>new GuestSharedCartRepository(tx).replacePortionProduct(replacementSession,publicId,{...input,productId,portionId:target.portionIds![0]!,targetProductId:bundleProductId,bundleSelection:first,expectedVersion:result.version,operationId:'replace-portion-with-choice'}))
+    expect(returned.lines).toHaveLength(1)
+    expect(returned.lines[0]).toMatchObject({quantity:2,bundleSelections:[second,first]})
+    expect(returned.lines[0]!.portionIds![0]).toBe(added.lines[0]!.portionIds![1])
+    expect(returned.lines[0]!.portionIds![1]).not.toBe(input.portionId)
+    // A stock failure after the proposed replacement must roll back identity,
+    // line content, version and operation record together.
+    await pool.query('UPDATE mbox.inventory_balances SET on_hand_quantity=15 WHERE inventory_item_id=$1',[inventoryItemId])
+    await expect(transactions.run(scope,tx=>new GuestSharedCartRepository(tx).replacePortionProduct(replacementSession,publicId,{...input,portionId:returned.lines[0]!.portionIds![0]!,expectedVersion:returned.version,operationId:'replace-portion-stock-failure'}))).rejects.toBeInstanceOf(GuestSharedCartLimitError)
+    await pool.query('UPDATE mbox.inventory_balances SET on_hand_quantity=100 WHERE inventory_item_id=$1',[inventoryItemId])
+    expect(await transactions.run(scope,tx=>new GuestSharedCartRepository(tx).readOpen(replacementSession,publicId))).toEqual(returned)
+    expect((await pool.query("SELECT count(*)::int AS n FROM mbox.guest_shared_cart_operations WHERE table_session_id=$1 AND scope_operation_id='replace-portion-stock-failure'",[replacementSession])).rows[0].n).toBe(0)
   })
 
   it('revalidates recipe and total line inventory instead of trusting an earlier cart snapshot', async () => {

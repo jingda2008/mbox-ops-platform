@@ -59,6 +59,11 @@ import { LoyaltyAnnualBenefitService } from './loyalty-annual-benefit-service.js
 import { loyaltyOperationalControlApiPlugin } from './loyalty-operational-control-api.js'
 import { LoyaltyOperationalControlService } from './loyalty-operational-control-service.js'
 import { membershipConfigurationApiPlugin } from './membership-configuration-api.js'
+import { stackingPricingApiPlugin } from './stacking-pricing-api.js'
+import { couponCalendarApiPlugin } from './coupon-calendar-api.js'
+import { memberCardApiPlugin } from './member-card-api.js'
+import { memberGiftCampaignApiPlugin } from './member-gift-campaign-api.js'
+import { marketingContactApiPlugin } from './marketing-contact-api.js'
 import { MembershipEnrollmentService } from './membership-enrollment-service.js'
 import {
   MembershipRecoveryService,
@@ -633,6 +638,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
             : `会员权益核销：${input.benefitId}`,
           createdByEmployeeId: input.redeemedByEmployeeId,
           pricingAuthorization: { sourceType: 'benefit', sourceId: input.benefitId },
+          benefitFulfillmentReservationId: input.benefitReservationId,
         })
         await new PaymentFulfillmentRepository(transaction)
           .activateComplimentaryBenefitOrder(orderOutcome.result.order.id,input.benefitId)
@@ -792,23 +798,21 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       createScheduleRepository: (transaction) => new ScheduleRepository(transaction),
       createSongRequestRepository: (transaction) => new SongRequestRepository(transaction),
     })
+    const memberSelfContext = async (request: FastifyRequest) => {
+      const session = await authenticateReservationGuest(request)
+      const businessDate = (await businessClock.current(scope)).businessDate
+      return { scope, customerId: session.customerId, tableSessionId: null, businessDate, actorRef: session.actorRef }
+    }
+    instance.register(memberCardApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveSelfContext: memberSelfContext, resolveStaffContext: staffReservationContext })
+    instance.register(memberGiftCampaignApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveSelfContext: memberSelfContext, resolveStaffContext: staffReservationContext })
+    instance.register(marketingContactApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveSelfContext: memberSelfContext, resolveStaffContext: staffReservationContext })
     instance.register(customerBenefitApiPlugin, {
       prefix: '/api',
       transactions,
       customers: new CustomerCommandService(commandExecutor),
       benefits: benefitCommands,
       dailySnackClaims: annualDailySnackClaims,
-      resolveSelfContext: async (request) => {
-        const session = await authenticateReservationGuest(request)
-        const businessDate = (await businessClock.current(scope)).businessDate
-        return {
-          scope,
-          customerId: session.customerId,
-          tableSessionId: null,
-          businessDate,
-          actorRef: session.actorRef,
-        }
-      },
+      resolveSelfContext: memberSelfContext,
       resolveGuestContext: guestReservationContext,
       resolveStaffContext: staffReservationContext,
     })
@@ -1066,6 +1070,11 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
         service: new MemberContentCardService(transactions, commandExecutor),
         resolveStaffContext: staffReservationContext,
       })
+      await reservationApp.register(stackingPricingApiPlugin, {
+        transactions,
+        resolveStaffContext: staffReservationContext,
+      })
+      await reservationApp.register(couponCalendarApiPlugin, { transactions, resolveStaffContext: staffReservationContext })
       await reservationApp.register(mediaAssetApiPlugin, {
         transactions,
         service: mediaAssets,

@@ -1,5 +1,5 @@
 const runtime = require('../../utils/platform')
-const { getTableOrders, abandonGuestCheckout } = require('../../utils/api')
+const { getTableOrders, getCustomerOrderHistory, abandonGuestCheckout } = require('../../utils/api')
 const { getRuntimeConfig } = require('../../config/index')
 const { getTableSession, tableSessionCacheScope } = require('../../utils/session')
 const { createTableRequestGuard, tableRequestScope } = require('../../utils/table-request-scope')
@@ -19,6 +19,7 @@ const ORDER_STATUS = {
   confirmed: '已确认',
   fulfilling: '出品中',
   completed: '已完成',
+  cancelled: '已取消',
 }
 
 const ITEM_STATUS = {
@@ -41,6 +42,7 @@ const PAYMENT_STATUS = {
 
 Page({
   data: {
+    historyMode: false,
     loading: true,
     error: '',
     isDevelopment: false,
@@ -51,7 +53,9 @@ Page({
     success: '',
   },
 
-  onLoad() {
+  onLoad(options) {
+    this.historyMode = !!options && options.mode === 'history'
+    this.setData({ historyMode: this.historyMode })
     this.ensureTableRequestGuard()
     this.setData({ tableCode: getTableSession().tableCode, isDevelopment: getRuntimeConfig().isDevelopment })
   },
@@ -101,6 +105,7 @@ Page({
   },
 
   queuePendingGuestPaymentAbandonment() {
+    if (this.historyMode) return null
     const paymentScope = tableSessionCacheScope()
     const pending = this.clearForeignPendingPayment(paymentScope)
     const record = createGuestPaymentAbandonmentRecord(
@@ -157,27 +162,30 @@ Page({
     const paymentScope = tableSessionCacheScope(session)
     const scopeChanged = this.visibleTableScope !== request.scope
     this.visibleTableScope = request.scope
-    this.clearForeignPendingPayment(paymentScope)
+    if (!this.historyMode) this.clearForeignPendingPayment(paymentScope)
     this.setData(Object.assign({
       loading: true, error: '', tableCode: session.tableCode || '',
     }, scopeChanged ? {
       orders: [], outstandingText: '¥0.00', busyOrderId: '',
     } : {}, preserveMessage ? {} : { success: '' }))
     try {
-      const rawOrders = await getTableOrders()
+      const rawOrders = await (this.historyMode ? getCustomerOrderHistory() : getTableOrders())
       if (!this.isCurrentTableRequest(request)) return
-      const storedAbandonment = runtime.getStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY) || null
-      const storedPending = this.clearForeignPendingPayment(paymentScope)
+      const storedAbandonment = this.historyMode ? null : runtime.getStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY) || null
+      const storedPending = this.historyMode ? null : this.clearForeignPendingPayment(paymentScope)
       const storedOrder = storedPending && (rawOrders || []).find((item) => item.publicId === storedPending.orderPublicId)
       if (storedPending && (!storedOrder || Number(storedOrder.payableAmountMinor || 0) === 0)) {
         runtime.removeStorageSync(PENDING_PAYMENT_KEY)
       }
       const orders = (rawOrders || []).map((order) => ({
         publicId: order.publicId,
-        roundText: `第 ${order.round} 轮`,
+        roundText: this.historyMode ? '我的订单' : `第 ${order.round} 轮`,
         statusText: ORDER_STATUS[order.status] || '状态待确认',
         paymentText: PAYMENT_STATUS[order.paymentStatus] || '付款状态待确认',
         createdAtText: dateTime(order.createdAt),
+        paidAtText: order.paidAt ? dateTime(order.paidAt) : '',
+        totalText: Number.isSafeInteger(order.totalAmountMinor) ? money(order.totalAmountMinor) : '金额待同步',
+        discountText: Number.isSafeInteger(order.discountAmountMinor) && order.discountAmountMinor > 0 ? money(order.discountAmountMinor) : '',
         payableText: money(order.payableAmountMinor),
         payableAmountMinor: Number(order.payableAmountMinor || 0),
         pricingKind: order.pricingKind || 'none',
@@ -187,13 +195,16 @@ Page({
         // A historical unpaid row is never an invitation to resurrect its old
         // payment; the customer can return to the cart and create a new one.
         canPay: false,
-        paymentHint: this.paymentHint(order.paymentAccess, Number(order.payableAmountMinor || 0)),
+        paymentHint: this.historyMode ? '历史成交记录，不在此重复收款' : this.paymentHint(order.paymentAccess, Number(order.payableAmountMinor || 0)),
         sourceText: typeof order.sourceText === 'string' && order.sourceText.trim()
           ? order.sourceText.trim() : '点单来源待确认',
-        items: (order.items || []).map((item) => ({
-          key: `${order.publicId}:${item.productId}`,
+        items: (order.items || []).map((item, index) => ({
+          key: item.id || `${order.publicId}:${item.productId}:${index}`,
           name: item.name,
           quantity: item.quantity,
+          unitPriceText: Number.isSafeInteger(item.unitPriceMinor) ? money(item.unitPriceMinor) : '待同步',
+          totalText: Number.isSafeInteger(item.totalAmountMinor) ? money(item.totalAmountMinor) : '待同步',
+          componentsText: (item.components || []).map((component) => `${component.name} ×${component.quantity}`).join(' · '),
           statusText: ITEM_STATUS[item.status] || '出品状态待确认',
         })),
       }))

@@ -13,7 +13,7 @@ const databaseUrl = process.env.TEST_NORMALIZED_DATABASE_URL
 const postgresIt = databaseUrl ? it : it.skip
 
 describe('PrintBridgeRepository', () => {
-  it('claims only bridge-pull jobs and printer commands assigned to this bridge', async () => {
+  it('claims only assigned bridge jobs and does not lease commands behind slow prints', async () => {
     const transaction = new ScriptedTransaction([
       rows([{
         id: jobId, business_key: 'ticket:bar:order-1', printer_device_id: '66666666-6666-4666-8666-666666666666',
@@ -31,11 +31,20 @@ describe('PrintBridgeRepository', () => {
 
     await expect(repository.claim({ id: bridgeId, publicId: 'print-bridge-1234567890abcdef' }, 10)).resolves.toEqual({
       jobs: [expect.objectContaining({ id: jobId, businessKey: 'ticket:bar:order-1', windowsQueueName: 'Gprinter GP-D802' })],
-      commands: [expect.objectContaining({ id: commandId, commandType: 'test_print' })],
+      commands: [],
     })
     expect(transaction.calls[0]?.sql).toContain("job.delivery_mode='bridge_pull'")
     expect(transaction.calls[0]?.sql).toContain('job.print_bridge_id=$3::uuid')
     expect(transaction.calls[0]?.sql).toContain("candidate_device.status='active'")
+    expect(transaction.calls).toHaveLength(1)
+    expect(transaction.calls[0]?.sql).toContain("route.status='active'")
+  })
+
+  it('claims one diagnostic command when no physical print is leased',async()=>{
+    const transaction=new ScriptedTransaction([rows([]),rows([{id:commandId,public_id:'test-command',device_id:jobId,
+      command_type:'test_print',windows_queue_name:'TEST QUEUE',print_profile:'escpos_80',payload_snapshot:{},attempts:1}])])
+    const result=await new PrintBridgeRepository(transaction,'unit-test-secret-value').claim({id:bridgeId,publicId:'print-bridge-1234567890abcdef'})
+    expect(result.commands).toHaveLength(1)
     expect(transaction.calls[1]?.sql).toContain("command.command_type IN ('test_print','reconnect','ping')")
     expect(transaction.calls[1]?.sql).toContain("device.status='active'")
   })

@@ -283,7 +283,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
     options.onlinePayments?.assertAvailable(provider === 'simulation' ? 'simulation' : 'postar')
     const idempotencyKey = readIdempotencyKey(request)
     const publicId = readOptionalString(body.publicId, 'publicId', 128, 8)
-      ?? (options.createPublicId?createPublicId('payment'):`payment-${createHash('sha256').update(`${context.scope.tenantId}:${context.scope.storeId}:${idempotencyKey}`).digest('hex').slice(0,48)}`)
+      ?? createPublicId('payment')
     const providerSnapshot = sanitizeClientPaymentHints(
       readOptionalJsonObject(body.providerSnapshot, 'providerSnapshot'),
     )
@@ -347,7 +347,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
     }
     const idempotencyKey = readIdempotencyKey(request)
     const publicId = readOptionalString(body.publicId, 'publicId', 128, 8)
-      ?? (options.createPublicId?createPublicId('payment'):`payment-${createHash('sha256').update(`${context.scope.tenantId}:${context.scope.storeId}:${idempotencyKey}`).digest('hex').slice(0,48)}`)
+      ?? createPublicId('payment')
     const {orderId,orderIds,amountMinor}=readOrderCollection(body)
     const execution = await options.commands.recordManual({
       ...metadata(request, context, idempotencyKey, {

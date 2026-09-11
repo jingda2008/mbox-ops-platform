@@ -787,7 +787,7 @@ class PaymentFlowTransaction implements ScopedTransaction {
         status: 'submitted',
       }])
     }
-    if (sql.startsWith('SELECT id, payable_kind, order_id, activity_registration_id FROM mbox.payments')) {
+    if (sql.startsWith('SELECT id, payable_kind, order_batch_id, order_id, activity_registration_id FROM mbox.payments')) {
       return result([{
         id: this.paymentId, payable_kind: 'order', order_id: this.orderId, activity_registration_id: null,
       }])

@@ -20,7 +20,7 @@ $document.PrinterSettings.Copies = [int16]$Copies
 if (-not $document.PrinterSettings.IsValid) { throw 'invalid_printer_queue' }
 
 $width = if ($Profile -eq 'escpos_58') { 228 } else { 315 }
-$fontSize = if ($Profile -eq 'escpos_58') { 8.5 } else { 10.0 }
+$fontSize = if ($Profile -eq 'escpos_58') { 9.0 } else { 11.0 }
 $lineCount = [Math]::Max(8, ($content -split "`r?`n").Count)
 $height = [Math]::Min(1200, [Math]::Max(360, 90 + ($lineCount * 24)))
 $document.DefaultPageSettings.PaperSize = New-Object System.Drawing.Printing.PaperSize('MBOX Ticket', $width, $height)
@@ -30,22 +30,41 @@ $brush = [System.Drawing.Brushes]::Black
 $format = New-Object System.Drawing.StringFormat
 $format.Trimming = [System.Drawing.StringTrimming]::None
 $format.FormatFlags = [System.Drawing.StringFormatFlags]::LineLimit
-# Keep mutable state across PrintPage callbacks; long tickets must not be clipped
-# to the first roll segment. Each copy is handled by the printer driver.
-$pageState = @{ Remaining = $content }
-
+# Classify original logical lines so wrapped table and product names keep their emphasis.
+$tableSize = if ($Profile -eq 'escpos_58') { 22.0 } else { 28.0 }
+$itemSize = if ($Profile -eq 'escpos_58') { 12.0 } else { 15.0 }
+$tableFont = New-Object System.Drawing.Font('Microsoft YaHei UI', $tableSize, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Point)
+$itemFont = New-Object System.Drawing.Font('Microsoft YaHei UI', $itemSize, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Point)
+$ticketLines = @($content -split "`r?`n")
+$pageState = @{ Index = 0; Offset = 0 }
 $handler = [System.Drawing.Printing.PrintPageEventHandler]{
   param($sender, $eventArgs)
   $bounds = $eventArgs.MarginBounds
-  [int]$charactersOnPage = 0
-  [int]$linesOnPage = 0
-  [void]$eventArgs.Graphics.MeasureString($pageState.Remaining, $font,
-    [System.Drawing.SizeF]::new($bounds.Width, $bounds.Height), $format,
-    [ref]$charactersOnPage, [ref]$linesOnPage)
-  if ($charactersOnPage -le 0 -and $pageState.Remaining.Length -gt 0) { throw 'invalid_print_page_bounds' }
-  $eventArgs.Graphics.DrawString($pageState.Remaining, $font, $brush, [System.Drawing.RectangleF]::new($bounds.X, $bounds.Y, $bounds.Width, $bounds.Height), $format)
-  $pageState.Remaining = $pageState.Remaining.Substring($charactersOnPage)
-  $eventArgs.HasMorePages = $pageState.Remaining.Length -gt 0
+  [single]$y = $bounds.Y
+  while ($pageState.Index -lt $ticketLines.Count) {
+    $original = $ticketLines[$pageState.Index]
+    $lineFont = if ($original -match '^桌台：') { $tableFont } elseif ($original -match '×\d+\s*$|^(合计|净收|应收)：') { $itemFont } else { $font }
+    $remaining = $original.Substring($pageState.Offset)
+    if ($remaining.Length -eq 0) { $remaining = ' ' }
+    [single]$available = $bounds.Bottom - $y
+    [int]$characters = 0
+    [int]$measuredLines = 0
+    $size = $eventArgs.Graphics.MeasureString($remaining, $lineFont,
+      [System.Drawing.SizeF]::new($bounds.Width, [Math]::Max(0, $available)), $format,
+      [ref]$characters, [ref]$measuredLines)
+    if ($characters -le 0) {
+      if ($y -eq $bounds.Y) { throw 'invalid_print_page_bounds' }
+      break
+    }
+    $fragment = $remaining.Substring(0, $characters)
+    $eventArgs.Graphics.DrawString($fragment, $lineFont, $brush,
+      [System.Drawing.RectangleF]::new($bounds.X, $y, $bounds.Width, $available), $format)
+    $y += $size.Height + 2
+    $pageState.Offset += $characters
+    if ($pageState.Offset -ge $original.Length) { $pageState.Index++; $pageState.Offset = 0 }
+    if ($y -ge $bounds.Bottom) { break }
+  }
+  $eventArgs.HasMorePages = $pageState.Index -lt $ticketLines.Count
 }
 $document.add_PrintPage($handler)
 try {
@@ -66,5 +85,7 @@ try {
   $document.remove_PrintPage($handler)
   $format.Dispose()
   $font.Dispose()
+  $tableFont.Dispose()
+  $itemFont.Dispose()
   $document.Dispose()
 }

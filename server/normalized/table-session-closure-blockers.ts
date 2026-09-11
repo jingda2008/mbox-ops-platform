@@ -119,7 +119,7 @@ export async function readTableSessionClosureState(
           ELSE ordering.total_amount_minor
         END-COALESCE((
           SELECT sum(payment.amount_minor)
-          FROM mbox.payments payment
+          FROM mbox.order_payment_facts payment
           WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid
             AND payment.order_id=ordering.id
             AND payment.status IN ('succeeded','partially_refunded','refunded')
@@ -128,7 +128,8 @@ export async function readTableSessionClosureState(
       WHERE ordering.payment_status IN ('unpaid','pending','partially_paid')
     ) SELECT
       (SELECT count(*)::text FROM scoped_orders ordering
-        WHERE NOT ((ordering.status NOT IN ('draft','cancelled') AND ordering.total_amount_minor=0)
+        WHERE NOT (EXISTS (SELECT 1 FROM payable_orders due WHERE due.id=ordering.id AND due.outstanding_amount_minor=0)
+          OR (ordering.status NOT IN ('draft','cancelled') AND ordering.total_amount_minor=0)
           OR (ordering.status<>'cancelled'
             AND ordering.payment_status IN ('paid','partially_refunded','refunded'))
           OR (ordering.status='cancelled' AND ordering.payment_status='refunded')
@@ -154,38 +155,14 @@ export async function readTableSessionClosureState(
           AND (task.status IN ('pending','accepted','preparing')
             OR (task.status='ready' AND item.status<>'delivered')
             OR (task.status='failed' AND item.status<>'cancelled'))) AS kds_active,
-      (SELECT count(*)::text FROM mbox.payments payment
-        WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid
-          AND payment.order_id=ANY(SELECT id FROM scoped_orders)
-          AND payment.status IN ('created','pending')
-          AND payment.retry_released_at IS NULL
-          AND NOT EXISTS (
-            SELECT 1 FROM scoped_orders cancelled_order
-            WHERE cancelled_order.id=payment.order_id AND cancelled_order.status='cancelled'
-              AND NOT EXISTS (
-                SELECT 1 FROM mbox.order_items delivered_item
-                WHERE delivered_item.tenant_id=$1::uuid AND delivered_item.store_id=$2::uuid
-                  AND delivered_item.order_id=cancelled_order.id AND delivered_item.status='delivered'
-              )
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM mbox.table_customer_left_turnover_events turnover
-            JOIN mbox.order_settlement_exception_events settlement_exception
-              ON settlement_exception.tenant_id=turnover.tenant_id
-             AND settlement_exception.store_id=turnover.store_id
-             AND settlement_exception.order_id=payment.order_id
-             AND settlement_exception.reason_code='customer_left'
-            WHERE turnover.tenant_id=payment.tenant_id
-              AND turnover.store_id=payment.store_id
-              AND turnover.table_session_id=$3::uuid
-          )) AS payment_pending,
+      '0'::text AS payment_pending, -- Financial uncertainty is separate from unsettled consumption.
       (SELECT count(*)::text FROM mbox.inventory_order_reservations reservation
         WHERE reservation.tenant_id=$1::uuid AND reservation.store_id=$2::uuid
           AND reservation.order_id=ANY(SELECT id FROM scoped_orders)
           AND reservation.status='reserved') AS inventory_reserved,
       (SELECT count(*)::text FROM mbox.refunds refund
-        JOIN mbox.payments payment ON payment.tenant_id=refund.tenant_id
-          AND payment.store_id=refund.store_id AND payment.id=refund.payment_id
+        JOIN mbox.order_payment_facts payment ON payment.tenant_id=refund.tenant_id
+          AND payment.store_id=refund.store_id AND payment.id=refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=payment.order_id)
         WHERE refund.tenant_id=$1::uuid AND refund.store_id=$2::uuid
           AND payment.order_id=ANY(SELECT id FROM scoped_orders)
           AND refund.status IN ('requested','approved','processing')) AS refund_pending,

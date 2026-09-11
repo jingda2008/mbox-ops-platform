@@ -408,15 +408,15 @@ integration('table customer location movements', () => {
     const secondCredential=await createCredential(tables[16]!)
     const customer=await createCustomer('double-position')
     await ensurePosition(firstCredential,firstSession,customer)
-    await expect(ensurePosition(secondCredential,secondSession,customer)).rejects.toMatchObject({ code:'55000' })
+    await expect(ensurePosition(secondCredential,secondSession,customer)).resolves.toEqual(expect.any(String))
 
     const racingCustomer=await createCustomer('racing-position')
     const attempts=await Promise.allSettled([
       ensurePosition(firstCredential,firstSession,racingCustomer),
       ensurePosition(secondCredential,secondSession,racingCustomer),
     ])
-    expect(attempts.filter((attempt) => attempt.status==='fulfilled')).toHaveLength(1)
-    expect(attempts.filter((attempt) => attempt.status==='rejected')).toHaveLength(1)
+    expect(attempts.filter((attempt) => attempt.status==='fulfilled')).toHaveLength(2)
+    expect(attempts.filter((attempt) => attempt.status==='rejected')).toHaveLength(0)
     const active=await pool.query(`SELECT count(*)::integer AS count
       FROM mbox.table_session_customer_participations
       WHERE tenant_id=$1 AND store_id=$2 AND customer_id=$3 AND left_at IS NULL`,
@@ -431,8 +431,8 @@ integration('table customer location movements', () => {
       ensurePosition(firstCredential,firstSession,aliasSource),
       ensurePosition(secondCredential,secondSession,aliasTarget),
     ])
-    expect(aliasAttempts.filter((attempt) => attempt.status==='fulfilled')).toHaveLength(1)
-    expect(aliasAttempts.filter((attempt) => attempt.status==='rejected')).toHaveLength(1)
+    expect(aliasAttempts.filter((attempt) => attempt.status==='fulfilled')).toHaveLength(2)
+    expect(aliasAttempts.filter((attempt) => attempt.status==='rejected')).toHaveLength(0)
     const aliasActive=await pool.query(`SELECT count(*)::integer AS count
       FROM mbox.table_session_customer_participations participation
       WHERE participation.tenant_id=$1 AND participation.store_id=$2 AND participation.left_at IS NULL

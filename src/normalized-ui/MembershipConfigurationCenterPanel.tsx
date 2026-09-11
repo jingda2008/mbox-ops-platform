@@ -11,7 +11,7 @@ type Domain='base_points'|'tier_policy'|'tier_benefits'|'redemption_catalog'|'pr
 type ConfigurationContent={domain:Domain}&Record<string,unknown>
 interface Summary{domain:Domain;configurationId:string;status:string;revision:number;version:number;title:string;updatedAt:string}
 interface Draft{publicId:string;domain:Domain;status:string;revision:number;makerEmployeeIds:string[];content:ConfigurationContent;updatedAt:string}
-interface Preview{publicId:string;draftRevision:number;expiresAt:string;historicalMembership:{activeMembers:number;availablePointsLiability:number};estimatedPointsIssued:number;estimatedPointsCostAmountMinor:number;estimatedBenefitCostAmountMinor:number;estimatedRedemptionCostAmountMinor:number;affectedExistingMembers:number;warnings:string[]}
+interface Preview{generatedAt?:string;fulfillment?:Array<{referenceCode:string;expectedDemand:number;availableAfterReservations:number;shortage:number;openFulfillmentTasks:number}>;publicId:string;draftRevision:number;expiresAt:string;historicalMembership:{activeMembers:number;availablePointsLiability:number};estimatedPointsIssued:number;estimatedPointsCostAmountMinor:number;estimatedBenefitCostAmountMinor:number;estimatedRedemptionCostAmountMinor:number;affectedExistingMembers:number;warnings:string[]}
 
 const domainLabels:Record<Domain,string>={base_points:'基础积分',tier_policy:'会员等级',tier_benefits:'等级权益',redemption_catalog:'积分兑换',promotion_points:'促销积分',membership_terms:'入会条款',wechat_notifications:'微信服务通知'}
 const statusLabels:Record<string,string>={draft:'待编辑/审批',approved:'已审批待发布',published:'运行中',paused:'已暂停',retired:'已退役'}
@@ -93,7 +93,7 @@ export function MembershipConfigurationCenterPanel({api,auth}:{api:NormalizedApi
             </div>
             {preview&&<article className="membership-impact-preview"><header><strong>影响预览</strong><small>{new Date(preview.expiresAt).toLocaleTimeString('zh-CN')} 前有效</small></header><dl>
               <div><dt>现有会员</dt><dd>{preview.historicalMembership.activeMembers}</dd></div><div><dt>受影响会员</dt><dd>{preview.affectedExistingMembers}</dd></div><div><dt>预计积分</dt><dd>{preview.estimatedPointsIssued}</dd></div><div><dt>积分成本</dt><dd>¥{minor(preview.estimatedPointsCostAmountMinor)}</dd></div><div><dt>权益成本</dt><dd>¥{minor(preview.estimatedBenefitCostAmountMinor)}</dd></div><div><dt>兑换成本</dt><dd>¥{minor(preview.estimatedRedemptionCostAmountMinor)}</dd></div>
-            </dl>{preview.warnings.length>0&&<ul>{preview.warnings.map((warning)=><li key={warning}>{warningLabels[warning]??warning}</li>)}</ul>}</article>}
+            </dl><p>以上为按当前会员与配置推算的影响，非已发生费用。预览数据时点：{preview.generatedAt?new Date(preview.generatedAt).toLocaleString('zh-CN'):'原预览未留存'}。</p>{preview.fulfillment?.length? <ul>{preview.fulfillment.map(fact=><li key={fact.referenceCode}>{fact.referenceCode}：预计需求 {fact.expectedDemand}，扣除暂留后可用 {fact.availableAfterReservations}，预计缺口 {fact.shortage}，当前未完成履约 {fact.openFulfillmentTasks}。人工承接能力未由此数字证明，需岗位负责人核对。</li>)}</ul>:<p>本预览没有商品履约明细；不能据此判定现场库存或人手足够。</p>}{preview.warnings.length>0&&<ul>{preview.warnings.map((warning)=><li key={warning}>{warningLabels[warning]??warning}</li>)}</ul>}</article>}
           </>}
         </div>
       </div>

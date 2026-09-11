@@ -18,6 +18,9 @@ export function MediaAssetPicker({ api, purpose, value, onChange, label = '上�
   const [open,setOpen] = useState(false)
   const [busy,setBusy] = useState(false)
   const [message,setMessage] = useState('')
+  const [previewFailed,setPreviewFailed] = useState(false)
+  const previewUrl=assets.find(asset=>asset.publicUrl===value)?.staffUrl ?? (value.startsWith('/api/public/media-assets/')?'':value)
+  useEffect(()=>setPreviewFailed(false),[previewUrl])
   const load = useCallback(async()=>{
     setBusy(true)
     try {
@@ -38,7 +41,7 @@ export function MediaAssetPicker({ api, purpose, value, onChange, label = '上�
       }, { idempotencyKey: `media-upload-${crypto.randomUUID()}` })
       const asset = readAsset(result.data)
       setAssets((current)=>[asset,...current.filter((item)=>item.publicId!==asset.publicId)])
-      onChange(asset.publicUrl);setMessage('图片已上传并选中；保存草稿后才会被活动或首页引用。')
+      onChange(asset.publicUrl);setMessage('图片已上传并选中；保存当前内容后才会正式绑定。')
     } catch(error) { setMessage(error instanceof Error ? error.message : '图片没有上传') }
     finally { setBusy(false) }
   }
@@ -47,7 +50,7 @@ export function MediaAssetPicker({ api, purpose, value, onChange, label = '上�
       <button type="button" onClick={()=>setOpen((current)=>!current)} aria-expanded={open}><ImagePlus size={16} />{label}</button>
       {value !== '' && <button type="button" className="is-text" onClick={()=>onChange('')}>移除已选图片</button>}
     </div>
-    {value !== '' && <figure><img src={assets.find((asset)=>asset.publicUrl===value)?.staffUrl ?? value} alt="已选图片预览" /><figcaption>当前选择：保存草稿后才会绑定到内容。</figcaption></figure>}
+    {value !== '' && <figure><>{previewUrl&&!previewFailed?<img src={previewUrl} alt="已选图片预览" onError={()=>setPreviewFailed(true)}/>:<p role="status">{busy?'正在读取图片预览':'图片预览未读取成功；请展开图片库重新读取，已保存地址不会被清除。'}</p>}</><figcaption>当前选择；更换图片后请保存商品或内容，使修改生效。</figcaption></figure>}
     {open && <div className="media-asset-library">
       <label className="media-asset-upload"><span>从电脑或手机选择图片（JPG、PNG、WebP，最大 200KB）</span><input type="file" accept="image/jpeg,image/png,image/webp" disabled={busy} onChange={(event)=>{const file=event.currentTarget.files?.[0];event.currentTarget.value='';if(file)void upload(file)}} /></label>
       {message !== '' && <p role="status">{message}</p>}

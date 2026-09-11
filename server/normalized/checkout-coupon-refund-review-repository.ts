@@ -5,7 +5,7 @@ import {appendAuditEvent} from './command-executor.js'
 
 const relations=`FROM mbox.refunds r
  JOIN mbox.payments p ON p.tenant_id=r.tenant_id AND p.store_id=r.store_id AND p.id=r.payment_id
- JOIN mbox.orders o ON o.tenant_id=p.tenant_id AND o.store_id=p.store_id AND o.id=p.order_id
+ JOIN mbox.orders o ON o.tenant_id=p.tenant_id AND o.store_id=p.store_id AND o.id=COALESCE(r.order_id,p.order_id)
  JOIN mbox.checkout_coupon_order_links l ON l.tenant_id=o.tenant_id AND l.store_id=o.store_id AND l.order_id=o.id
  JOIN mbox.checkout_coupon_quote_reservations h ON h.tenant_id=l.tenant_id AND h.store_id=l.store_id AND h.quote_id=l.quote_id
  JOIN mbox.benefit_reservations b ON b.tenant_id=h.tenant_id AND b.store_id=h.store_id AND b.id=h.reservation_id
@@ -15,7 +15,7 @@ const uuid=/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i
 /** Correlated to the already permission-scoped cashier alias `orders`. Only a
  * count is exposed there, not customer identity, reasons, or evidence. */
 export const cashierCouponRefundReviewCountSql=`(SELECT count(*)::integer ${relations}
- WHERE r.tenant_id=orders.tenant_id AND r.store_id=orders.store_id AND p.order_id=orders.id
+ WHERE r.tenant_id=orders.tenant_id AND r.store_id=orders.store_id AND o.id=orders.id
   AND r.status='succeeded' AND b.status IN('reserved','redeemed') AND d.refund_id IS NULL)`
 function identifier(value:string){if(!uuid.test(value))throw new MemberGiftCampaignError('退款或券记录编号无效')}
 /** Read actual successful refunds as the durable queue source. No callback,

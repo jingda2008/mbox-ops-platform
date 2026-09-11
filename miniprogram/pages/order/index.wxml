@@ -51,8 +51,8 @@
       <view wx:if="{{visibleProducts.length}}" class="product-list product-list--browse">
         <view wx:for="{{visibleProducts}}" wx:key="productId" class="product-row {{item.available ? '' : 'is-unavailable'}}" data-id="{{item.productId}}" role="button" aria-label="查看{{item.name}}大图和详情" hover-class="product-row--pressed" bindtap="openProductDetail">
           <view class="product-media">
-            <image wx:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" />
-            <view wx:else class="product-media__placeholder"><text>M-BOX</text></view>
+            <image wx:if="{{item.imageUrl && !item.imageFailed}}" src="{{item.imageUrl}}" mode="aspectFill" data-id="{{item.productId}}" binderror="productImageFailed" />
+            <view wx:else class="product-media__placeholder"><text>{{item.imageFailed ? '图片未加载，下拉刷新重试' : 'M-BOX'}}</text></view>
             <text wx:if="{{item.discountVisible}}" class="product-media__saving">{{item.savingsText}}</text>
             <text class="product-media__detail-hint">查看详情</text>
           </view>
@@ -136,8 +136,8 @@
       <view wx:if="{{visibleProducts.length}}" class="product-list">
         <view wx:for="{{visibleProducts}}" wx:key="productId" class="product-row {{item.available ? '' : 'is-unavailable'}}" data-id="{{item.productId}}" role="button" aria-label="查看{{item.name}}大图和详情" hover-class="product-row--pressed" bindtap="openProductDetail">
           <view class="product-media">
-            <image wx:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" />
-            <view wx:else class="product-media__placeholder"><text>M-BOX</text></view>
+            <image wx:if="{{item.imageUrl && !item.imageFailed}}" src="{{item.imageUrl}}" mode="aspectFill" data-id="{{item.productId}}" binderror="productImageFailed" />
+            <view wx:else class="product-media__placeholder"><text>{{item.imageFailed ? '图片未加载，下拉刷新重试' : 'M-BOX'}}</text></view>
             <text wx:if="{{item.discountVisible}}" class="product-media__saving">{{item.savingsText}}</text>
             <text class="product-media__detail-hint">查看详情</text>
           </view>
@@ -168,7 +168,7 @@
       <button class="product-detail-close compact-icon-action" aria-label="关闭商品详情" catchtap="closeProductDetail">×</button>
       <scroll-view scroll-y class="product-detail-scroll">
         <view wx:if="{{!detailProduct.selectionSource || !detailProduct.bundleChoiceGroups.length || detailInformationExpanded}}" class="product-detail-hero" catchtap="previewProductImage">
-          <image wx:if="{{detailProduct.imageUrl}}" src="{{detailProduct.imageUrl}}" mode="aspectFill" />
+          <image wx:if="{{detailProduct.imageUrl && !detailProduct.imageFailed}}" src="{{detailProduct.imageUrl}}" mode="aspectFit" data-id="{{detailProduct.productId}}" binderror="productImageFailed" />
           <view wx:else class="product-detail-placeholder"><text>M-BOX</text></view>
           <text wx:if="{{detailProduct.imageUrl}}" class="product-detail-preview-hint">点击查看全屏大图</text>
         </view>

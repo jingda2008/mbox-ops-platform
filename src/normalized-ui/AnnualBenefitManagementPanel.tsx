@@ -247,8 +247,8 @@ export function AnnualBenefitManagementPanel({ api, auth }: { api: NormalizedApi
   }
   async function cancelDailySnack(claim: DailySnackClaim) {
     if (!canFulfill || busy || claim.status !== 'reserved') return
-    const reason = (await promptAction({title:'填写取消暂留原因',description:`取消“${claim.title}”的暂留。`,label:'取消原因',confirmLabel:'继续'}))?.trim() ?? ''
-    if (reason.length < 2) return setNotice('取消原因不足，未释放每日点心暂留。')
+    const reason = (await promptAction({title:'填写取消暂留原因',description:`取消“${claim.title}”的暂留，请填写至少2个字的取消原因。`,label:'取消原因',confirmLabel:'继续'}))?.trim() ?? ''
+    if (reason.length < 2) return setNotice(`取消原因至少2字，当前${reason.length}字，还差${2-reason.length}字；暂留尚未释放。`)
     setBusy(`daily-snack-cancel-${claim.id}`); setNotice('')
     try {
       await api.postEndpoint(`/api/staff/annual-daily-snack-claims/${encodeURIComponent(claim.claimCode)}/cancel`, { reason }, {

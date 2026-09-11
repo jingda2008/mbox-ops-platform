@@ -112,7 +112,7 @@ test('all real employees enter role-scoped mobile workspaces and every high-freq
       await expect(page.getByText(/仍在规范化改造中/)).toHaveCount(0)
       if (entry.route === '/staff/performance') {
         await expect(page.getByRole('heading', { name: '演出与点歌' })).toBeVisible()
-        await expect(page.getByText('林小满')).toBeVisible()
+        await expect(page.getByText('林小满', {exact:true}).first()).toBeVisible()
         await expect(page.getByText('后来')).toBeVisible()
       }
       if (entry.route === '/staff/live') await expect(page.getByRole('heading', { name: '找到桌台，直接处理' })).toBeVisible()
@@ -235,7 +235,7 @@ test('one business-day order and guest requests flow through bartender, kitchen,
   const barCard = bartender.page.locator('.staff-action-card').filter({ hasText: data.orderableProductName }).first()
   await expect(barCard).toBeVisible()
   const bartenderKitchenCard = bartender.page.locator('.staff-action-card').filter({ hasText: data.kitchenProductName }).first()
-  await expect(bartenderKitchenCard).toContainText('当前账号可查看，不能确认制作')
+  await expect(bartenderKitchenCard).toHaveCount(0)
   await expect(bartenderKitchenCard.getByRole('button', { name: '制作完成' })).toHaveCount(0)
   await expect(bartender.page.locator('.staff-action-card').filter({ hasText: '未付款订单不得出品' })).toHaveCount(0)
   await expect(barCard).toContainText('营业日验收：酒水小食一起上')

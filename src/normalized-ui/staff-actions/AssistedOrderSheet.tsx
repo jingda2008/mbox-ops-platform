@@ -439,7 +439,7 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
 
       <div className="staff-order-search">
         <Search size={18} />
-        <input aria-label="搜索点单商品" value={search} placeholder="搜索酒水、小食或商品名" onChange={(event) => setSearch(event.target.value)} />
+        <input aria-label="搜索点单商品" value={search} placeholder="按商品名称或编号搜索" inputMode="search" onChange={(event) => setSearch(event.target.value)} />
       </div>
       <div className="staff-order-categories" aria-label="商品分类">
         <button type="button" className={category === 'all' ? 'is-active' : ''} onClick={() => setCategory('all')}>全部</button>
@@ -449,7 +449,7 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
       <div className="staff-order-products">
         {phase === 'loading' && <p><LoaderCircle className="is-spinning" /> 正在读取可售商品</p>}
         {phase === 'error' && <p className="staff-order-error">{error}</p>}
-        {phase !== 'loading' && filtered.length === 0 && <p>没有找到可售商品</p>}
+        {phase !== 'loading' && filtered.length === 0 && <p>当前{category==='all'?'全部':categoryLabel(category)}分类没有匹配商品。{category!=='all'&&<button type="button" onClick={()=>setCategory('all')}>保留关键词，搜索全部分类</button>}</p>}
         {filtered.map((product) => {
           const quantity = quantities[product.id] ?? 0
           const requiresBundleChoice = (product.bundleChoiceGroups?.length ?? 0) > 0
@@ -732,9 +732,10 @@ function assistedProductToMenuProduct(
 }
 
 function assistedAvailabilityReason(product: AssistedOrderCatalogProduct): string | undefined {
-  if (!product.inventoryConfigurationComplete) return '库存或配方配置未完成'
+  if(product.availabilityReasons?.length)return product.availabilityReasons.join('；')
+  if (!product.inventoryConfigurationComplete) return `${product.name} 的库存扣减配方未完整配置，请由商品配置负责人补齐`
   if (!product.inventoryAvailable) return '当前可售库存不足'
-  if (!product.isAvailable) return '当前暂不可点'
+  if (!product.isAvailable) return `${product.name} 当前可售条件未通过，接口未返回具体原因；请刷新并在商品配置核对`
   return undefined
 }
 

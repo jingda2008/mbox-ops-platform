@@ -14,7 +14,9 @@ export async function quoteCheckoutCart(
   input:{expectedGeneration:number;expectedVersion:number;policy:StackingPolicy;effects:readonly PricingEffect[];channel:OrderChannel;upgradedPortionIds?:readonly string[]},
 ){
   if(cart.status!=='open'||cart.guestWritesFrozen||cart.version!==input.expectedVersion||cart.generation!==input.expectedGeneration)throw new CheckoutCartPricingError('购物车已变化或不可修改，请刷新后重新确认')
-  if(!cart.lines.length||cart.lines.some(line=>!line.available))throw new CheckoutCartPricingError('购物车为空或有暂不可售商品')
+  if(!cart.lines.length)throw new CheckoutCartPricingError('购物车为空，请先添加商品')
+  const unavailable=cart.lines.filter(line=>!line.available)
+  if(unavailable.length)throw new CheckoutCartPricingError(`以下商品暂不可售：${unavailable.map(line=>line.name).join('、')}，请移除或重新选择`)
   const portionIds:string[]=[],lines:SubmitOrderLineInput[]=[]
   for(const line of cart.lines){
     if(!Number.isSafeInteger(line.quantity)||line.quantity<1||line.quantity>MAX_LINE_QUANTITY||line.portionIds?.length!==line.quantity

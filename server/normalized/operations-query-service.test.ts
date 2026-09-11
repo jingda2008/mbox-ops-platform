@@ -94,7 +94,7 @@ describe('OperationsQueryService', () => {
     const tableQuery = fixture.client.calls.find((call) => call.sql.includes('FROM mbox.tables venue_table'))
     const taskQuery = fixture.client.calls.find((call) => call.sql.includes('FROM mbox.service_tasks task'))
     expect(tableQuery?.sql).toContain("behavior.behavior_type = 'guest.mood.selected'")
-    expect(tableQuery?.sql).toContain("ordering.total_amount_minor > 0 AND ordering.payment_status IN ('unpaid','pending','partially_paid')")
+    expect(tableQuery?.sql).toContain("collected.status IN ('succeeded','partially_refunded','refunded')")
     expect(tableQuery?.sql).toContain("refund.status IN ('requested','approved','processing','failed')")
     expect(tableQuery?.sql).toContain("refund.status IN ('requested','approved','failed')")
     expect(taskQuery?.sql).not.toContain("behavior.behavior_type = 'guest.mood.selected'")

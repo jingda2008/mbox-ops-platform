@@ -132,11 +132,17 @@ export function previewCouponCalendar(value: unknown, at: Date, previewFrom?: st
   const first = dateMs(rule.dateFrom), last = dateMs(rule.dateThrough)
   const calendarStart = previewFrom === undefined ? first : dateMs(previewFrom)
   if (calendarStart < first || calendarStart > last) throw new CouponCalendarError('日历起点必须在活动日期内')
-  const calendar: Array<{ date: string; windows: Window[] }> = []
+  const calendar: Array<{ date: string; windows: Window[]; reasons?:string[] }> = []
   let nextAvailableAt: string | null = null, lastAvailableUntil: string | null = null, available = false
   for (let day = first; day <= last; day += DAY) {
     const windows = dailyWindows(rule, day)
-    if (day >= calendarStart && day < calendarStart + days * DAY) calendar.push({ date: isoDay(day), windows })
+    if (day >= calendarStart && day < calendarStart + days * DAY) calendar.push({ date: isoDay(day), windows,...(windows.length?{}:{reasons:[
+      ...(!rule.weekdays.includes(isoWeekday(day))?['该星期未在可用星期范围内']:[]),
+      ...(rule.excludedDates.includes(isoDay(day))?['该日期已被明确排除']:[]),
+      ...((day-SHANGHAI_OFFSET+rule.businessDayStartMinute*MINUTE+DAY<=Date.parse(rule.validFrom))?['该日期早于实际有效期开始']:[]),
+      ...((day-SHANGHAI_OFFSET+rule.businessDayStartMinute*MINUTE>=Date.parse(rule.validUntil))?['该日期已超过实际有效期结束（含发放后有效期限制）']:[]),
+      ...(rule.weekdays.includes(isoWeekday(day))&&!rule.excludedDates.includes(isoDay(day))?['配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限']:[]),
+    ]}) })
     for (const window of windows) {
       lastAvailableUntil = window.until
       if (Date.parse(window.from) <= at.getTime() && at.getTime() < Date.parse(window.until)) available = true

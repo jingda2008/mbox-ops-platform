@@ -189,7 +189,7 @@ test('customer pages avoid duplicate status labels and backstage implementation 
   assert.doesNotMatch(homeView, /状态实时同步/)
   assert.match(homeView, /<text class="performance-compact__state">/)
   assert.doesNotMatch(orderView, /自动更新|后端/)
-  assert.match(accountView, /付款结果尚未确认时，请先查看结果，避免重复付款。/)
+  assert.match(accountView, /勾选本桌订单合并付款，原订单分别保留。/)
   assert.doesNotMatch(communityView, /报名与安排以活动详情为准/)
   assert.doesNotMatch(detailView, /安全规则版本|由店长发起|收银复核|请求编号/)
   assert.doesNotMatch(detailLogic, /安全规则版本|可核验版本|由店长发起|收银复核|请求编号/)
@@ -198,7 +198,7 @@ test('customer pages avoid duplicate status labels and backstage implementation 
   assert.doesNotMatch(serviceView, /需要值班经理/)
 })
 
-test('customer self-checkout never revives an unpaid order after the final payment sheet ends', async () => {
+test('customer checkout keeps cancellation recovery and offers explicit current-table batch payment', async () => {
   const [orderLogic, orderView, accountLogic, accountView, alipayAccountLogic, alipayAccountView] = await Promise.all([
     read('miniprogram/pages/order/index.js'),
     read('miniprogram/pages/order/index.wxml'),
@@ -215,8 +215,8 @@ test('customer self-checkout never revives an unpaid order after the final payme
   assert.doesNotMatch(orderLogic, /本桌付款确认中，可继续加购/)
   assert.doesNotMatch(orderLogic, /confirmText: '继续付款'/)
   assert.doesNotMatch(orderView, /class="payment-recovery"/)
-  assert.match(accountLogic, /canPay: false/)
-  assert.match(accountLogic, /如需付款，请返回点单重新选购/)
+  assert.match(accountLogic, /canPay: !this.historyMode&&order.status!=='cancelled'/)
+  assert.match(accountLogic, /async paySelectedOrders/)
   assert.doesNotMatch(accountLogic, /async continuePayment\(/)
   assert.doesNotMatch(accountView, /bindtap="continuePayment"/)
   assert.doesNotMatch(alipayAccountLogic, /continuePayment\(/)

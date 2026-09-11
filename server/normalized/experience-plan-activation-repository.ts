@@ -355,10 +355,11 @@ export class ExperiencePlanActivationRepository{
     const result=await this.transaction.query(`
       SELECT 1 FROM mbox.payments payment JOIN mbox.orders ordered
         ON ordered.tenant_id=payment.tenant_id AND ordered.store_id=payment.store_id
-       AND ordered.id=payment.order_id
+       AND ordered.id=$4::uuid
+       AND (payment.order_id=ordered.id OR EXISTS(SELECT 1 FROM mbox.order_payment_allocations a WHERE a.tenant_id=payment.tenant_id AND a.store_id=payment.store_id AND a.batch_id=payment.order_batch_id AND a.order_id=ordered.id))
       WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid
-        AND payment.id=$3::uuid AND payment.order_id=$4::uuid
-        AND payment.payable_kind='order'
+        AND payment.id=$3::uuid
+        AND payment.payable_kind IN ('order','order_batch')
         AND payment.status IN ('succeeded','partially_refunded','refunded')
         AND ordered.payment_status IN ('paid','partially_refunded','refunded')
       FOR KEY SHARE OF payment,ordered
@@ -368,9 +369,10 @@ export class ExperiencePlanActivationRepository{
 
   private async succeededPaymentId(orderId:string):Promise<string|null>{
     const result=await this.transaction.query<{id:string}>(`
-      SELECT id FROM mbox.payments
-      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND order_id=$3::uuid
-        AND payable_kind='order' AND status IN ('succeeded','partially_refunded','refunded')
+      SELECT id FROM mbox.payments payment
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        AND (order_id=$3::uuid OR EXISTS(SELECT 1 FROM mbox.order_payment_allocations a WHERE a.tenant_id=payment.tenant_id AND a.store_id=payment.store_id AND a.batch_id=payment.order_batch_id AND a.order_id=$3::uuid))
+        AND payable_kind IN ('order','order_batch') AND status IN ('succeeded','partially_refunded','refunded')
       ORDER BY succeeded_at DESC NULLS LAST,created_at DESC,id DESC LIMIT 1
       FOR KEY SHARE
     `,[this.transaction.scope.tenantId,this.transaction.scope.storeId,orderId])

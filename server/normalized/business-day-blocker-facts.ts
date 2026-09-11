@@ -63,7 +63,7 @@ function factQuery(code: TableSessionClosureBlockerCode): string {
           ),0)::bigint
           ELSE ordering.total_amount_minor
         END-COALESCE((
-          SELECT sum(payment.amount_minor) FROM mbox.payments payment
+          SELECT sum(payment.amount_minor) FROM mbox.order_payment_facts payment
           WHERE payment.tenant_id=ordering.tenant_id AND payment.store_id=ordering.store_id
             AND payment.order_id=ordering.id
             AND payment.status IN ('succeeded','partially_refunded','refunded')
@@ -124,7 +124,7 @@ function factQuery(code: TableSessionClosureBlockerCode): string {
       '付款结果待确认'::text AS title,payment.status,payment.amount_minor::text AS amount_minor,
       NULL::text AS quantity_text,ordering.id AS order_id,ordering.public_id AS order_public_id,
       employee.display_name AS responsible_employee_name
-    FROM scoped_orders ordering JOIN mbox.payments payment ON payment.tenant_id=ordering.tenant_id
+    FROM scoped_orders ordering JOIN mbox.order_payment_facts payment ON payment.tenant_id=ordering.tenant_id
       AND payment.store_id=ordering.store_id AND payment.order_id=ordering.id
     LEFT JOIN mbox.payment_provider_actions action ON action.tenant_id=payment.tenant_id
       AND action.store_id=payment.store_id AND action.payment_id=payment.id
@@ -134,7 +134,7 @@ function factQuery(code: TableSessionClosureBlockerCode): string {
         CASE WHEN action.initiated_by_type='employee' THEN action.initiated_by_ref::text END,
         payment.provider_snapshot->>'collectedByEmployeeId'
       )
-    WHERE payment.status IN ('created','pending')
+    WHERE false AND payment.status IN ('created','pending')
       AND payment.retry_released_at IS NULL
       AND NOT (ordering.status='cancelled' AND NOT EXISTS (
         SELECT 1 FROM mbox.order_items item WHERE item.tenant_id=ordering.tenant_id
@@ -157,7 +157,7 @@ function factQuery(code: TableSessionClosureBlockerCode): string {
       '退款处理中'::text AS title,refund.status,refund.amount_minor::text AS amount_minor,
       NULL::text AS quantity_text,ordering.id AS order_id,ordering.public_id AS order_public_id,
       employee.display_name AS responsible_employee_name
-    FROM scoped_orders ordering JOIN mbox.payments payment ON payment.tenant_id=ordering.tenant_id
+    FROM scoped_orders ordering JOIN mbox.order_payment_facts payment ON payment.tenant_id=ordering.tenant_id
       AND payment.store_id=ordering.store_id AND payment.order_id=ordering.id
     JOIN mbox.refunds refund ON refund.tenant_id=payment.tenant_id AND refund.store_id=payment.store_id
       AND refund.payment_id=payment.id

@@ -778,8 +778,8 @@ test('mobile manager payment choices stay synchronized with two guests at the sa
 
   await tableActions.getByRole('button', { name: '本桌收款' }).click()
   const reopenedTablePayment = page.getByRole('dialog', { name: 'W01本桌收款' })
-  await expect(reopenedTablePayment.getByText('已有一笔线上收款尚未明确结果')).toBeVisible()
-  await expect(reopenedTablePayment.getByRole('button', { name: '保留旧单待核对，继续收款' })).toBeEnabled()
+  await expect(reopenedTablePayment.getByText('原支付结果尚未确认，可直接选择收款方式。')).toBeVisible()
+  await expect(reopenedTablePayment.getByRole('button', { name: /调出付款二维码/ })).toBeEnabled()
   await expect(reopenedTablePayment.getByRole('button', { name: '未到账，重新收款' })).toHaveCount(0)
   await reopenedTablePayment.getByRole('button', { name: '关闭本桌收款' }).click()
 
@@ -822,12 +822,12 @@ test('mobile manager payment choices stay synchronized with two guests at the sa
     expect(await syncedOrders.getByText('服务员协助点单').count()).toBeGreaterThanOrEqual(4)
   }).toPass()
   const staffQrOrder = syncedOrders.getByTestId(`guest-table-order-${staffQrBody.data.providerAction.orderPublicId}`)
-  await expect(staffQrOrder).toContainText('同桌已有付款正在进行，请勿重复发起')
-  await expect(staffQrOrder.getByRole('button', { name: /微信支付/ })).toHaveCount(0)
+  await expect(staffQrOrder).toContainText('等待付款')
+  await expect(staffQrOrder.getByRole('button', { name: /微信支付/ })).toBeEnabled()
 
   const barcodeOrder = syncedOrders.getByTestId(`guest-table-order-${barcodeBody.data.providerAction.orderPublicId}`)
-  await expect(barcodeOrder).toContainText('员工正在扫描付款码，请勿重复支付')
-  await expect(barcodeOrder.getByRole('button', { name: /微信支付/ })).toHaveCount(0)
+  await expect(barcodeOrder).toContainText('等待付款')
+  await expect(barcodeOrder.getByRole('button', { name: /微信支付/ })).toBeEnabled()
 
   const secondGuestContext = await browser.newContext({
     viewport: { width: 390, height: 844 },
@@ -842,7 +842,7 @@ test('mobile manager payment choices stay synchronized with two guests at the sa
     expect(await secondGuestOrders.getByText('服务员协助点单').count()).toBeGreaterThanOrEqual(4)
   }).toPass()
   await expect(secondGuestOrders.getByTestId(`guest-table-order-${staffQrBody.data.providerAction.orderPublicId}`)).toContainText(data.orderableProductName)
-  await expect(secondGuestOrders.getByTestId(`guest-table-order-${barcodeBody.data.providerAction.orderPublicId}`)).toContainText('员工正在扫描付款码，请勿重复支付')
+  await expect(secondGuestOrders.getByTestId(`guest-table-order-${barcodeBody.data.providerAction.orderPublicId}`)).toContainText('等待付款')
   await secondGuestContext.close()
 })
 

@@ -19,6 +19,7 @@ interface FulfillmentOrderRow extends Record<string, unknown> {
   id: string
   settlement_mode: 'immediate_payment' | 'table_tab'
   payment_status: string
+  status?: string
   fulfillment_state: 'awaiting_payment' | 'active' | 'released' | 'cancelled'
   fulfillment_expires_at: string | null
   total_amount_minor: string | number
@@ -84,9 +85,6 @@ export class PaymentFulfillmentRepository {
       && order.fulfillment_expires_at !== null
       && Date.parse(order.fulfillment_expires_at) > Date.now()) return
 
-    if (order.fulfillment_state === 'awaiting_payment' && await this.hasUnknownPayment(orderId)) {
-      throw new OrderNotPayableError(orderId, 'payment result is unknown; query the provider before retrying')
-    }
     if (order.fulfillment_state === 'awaiting_payment') {
       await this.release(orderId, 'payment reservation expired before an intent was active')
       order = await this.lockOrder(orderId)
@@ -122,19 +120,12 @@ export class PaymentFulfillmentRepository {
     }> = {},
   ): Promise<PaymentFulfillmentActivation> {
     const state = await this.lockOrder(orderId)
+    if(state.status==='cancelled'||state.fulfillment_state==='cancelled'||state.payment_status==='partially_paid')return {
+      activated:false,financialAttributionEligible:false,orderId,inventoryConsumptions:[],kdsTasks:[],experiencePlan:absentPlan(),
+    }
     if (state.settlement_mode !== 'immediate_payment') {
       return {
         activated: false, financialAttributionEligible: true, orderId,
-        inventoryConsumptions: [], kdsTasks: [], experiencePlan: absentPlan(),
-      }
-    }
-    // A customer-left turnover intentionally preserves an unresolved provider
-    // attempt for a possible late financial result, but it has already
-    // cancelled fulfillment and closed the table.  Record that late result;
-    // never recreate KDS or inventory work for a departed table.
-    if (state.fulfillment_state === 'cancelled') {
-      return {
-        activated: false, financialAttributionEligible: false, orderId,
         inventoryConsumptions: [], kdsTasks: [], experiencePlan: absentPlan(),
       }
     }
@@ -337,7 +328,7 @@ export class PaymentFulfillmentRepository {
 
   private async lockOrder(orderId: string): Promise<FulfillmentOrderRow> {
     const result = await this.transaction.query<FulfillmentOrderRow>(`
-      SELECT id, settlement_mode, payment_status, fulfillment_state,
+      SELECT id, status, settlement_mode, payment_status, fulfillment_state,
         fulfillment_expires_at::text,total_amount_minor
       FROM mbox.orders
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
@@ -346,18 +337,6 @@ export class PaymentFulfillmentRepository {
     const row = result.rows[0]
     if (row === undefined) throw new OrderNotPayableError(orderId, 'order was not found')
     return row
-  }
-
-  private async hasUnknownPayment(orderId: string): Promise<boolean> {
-    const result = await this.transaction.query<{ exists: boolean }>(`
-      SELECT EXISTS (
-        SELECT 1 FROM mbox.payments
-        WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND order_id = $3::uuid
-          AND status IN ('created', 'pending')
-          AND retry_released_at IS NULL
-      ) AS exists
-    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
-    return result.rows[0]?.exists === true
   }
 
   private async readPlans(orderId: string): Promise<PlannedItemRow[]> {

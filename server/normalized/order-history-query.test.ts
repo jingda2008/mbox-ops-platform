@@ -37,6 +37,8 @@ integration('order history SQL scope and session identity',()=>{
    await pool.query("INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,status,guest_count) VALUES($1,$2,$3,$4,$5,$6,'open',2)",[session,scope.tenantId,scope.storeId,table,`history-session-${index}`,date])
    await pool.query("INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,subtotal_amount_minor,total_amount_minor,submitted_at) VALUES($1,$2,$3,$4,$5,'staff_assisted','fulfilling',$6,13600,13600,clock_timestamp())",[order,scope.tenantId,scope.storeId,session,`history-order-${index}`,payment])
    await pool.query("INSERT INTO mbox.order_items(tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,total_amount_minor,fulfillment_station,product_snapshot,status) VALUES($1,$2,$3,$4,1,13600,13600,'bar','{\"name\":\"测试酒\"}','submitted')",[scope.tenantId,scope.storeId,order,product])
+   if(payment==='paid')await pool.query(`INSERT INTO mbox.payments(tenant_id,store_id,order_id,public_id,provider,method,amount_minor,currency,status,succeeded_at,provider_transaction_id)
+     VALUES($1,$2,$3,$4,'cash','cash',13600,'CNY','succeeded',clock_timestamp(),$4)`,[scope.tenantId,scope.storeId,order,`history-payment-${index}`])
    await pool.query("UPDATE mbox.table_sessions SET status='closed',closed_at=clock_timestamp() WHERE id=$1",[session])
   }
  })

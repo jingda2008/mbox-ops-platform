@@ -63,6 +63,7 @@ export interface VerifiedPricingAuthorization {
 }
 
 export class PricingAuthorizationDeniedError extends Error {
+  get userMessage():string {return pricingDenialMessage(this.message)}
   constructor(message = 'Pricing adjustment is not authorized') {
     super(message)
     this.name = 'PricingAuthorizationDeniedError'
@@ -183,4 +184,26 @@ function requireUuid(name: string, value: string): void {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
     throw new TypeError(`${name} must be a UUID`)
   }
+}
+
+function pricingDenialMessage(message:string):string{
+ const reasons:Record<string,string>={
+ 'Pricing adjustment is not authorized':'本次价格调整未获授权，请联系有对应审批权限的负责人',
+ 'Pricing authority returned a mismatched source':'本次授权来源与申请不一致，请重新选择有效授权',
+ 'Pricing adjustment exceeds the authorized limit':'本次减免超过授权金额，请降低减免或申请更高额度',
+ 'Pricing authorization has expired':'本次授权已过期，请重新申请授权',
+ 'Employee pricing authority is incomplete':'本次授权人员或操作权限不匹配，请使用本人有效授权',
+ 'Employee pricing permission is not active':'当前员工赠送或折扣权限未生效，请联系权限管理员',
+ 'Employee pricing currency does not match the order':'授权币种与订单不一致，不能使用本次授权',
+ 'Role limit does not authorize this full gift':'本单全额赠送超过当前审批额度，请降低赠送金额或申请更高额度',
+ 'Table session is no longer open':'当前桌次已结束，请回到当前有效桌台操作',
+ 'Benefit is outside its validity period':'该权益不在有效期内，请选择当前可用权益',
+ 'Benefit currency does not match the order':'权益币种与订单币种不一致',
+ 'Reserved benefit could not be redeemed':'权益暂留未能核销，请刷新原暂留记录核对当前状态',
+ 'Pricing authorization source is not trusted':'该授权来源未通过验证，请重新从正式入口申请',
+ 'Employee pricing requires an employee actor':'员工赠送或折扣必须由已登录员工操作',
+ 'Employee pricing is limited to staff-assisted channels':'此员工授权仅适用于协助点单入口',
+ 'Calculated discount is outside the server approval limit':'计算后的折扣超过服务端批准上限，请重新申请',
+ }
+ return reasons[message]??(/^[^A-Za-z]*[\u4e00-\u9fff]/.test(message)?message:'本次价格授权校验未通过，未应用减免；请刷新原授权并联系审批负责人')
 }

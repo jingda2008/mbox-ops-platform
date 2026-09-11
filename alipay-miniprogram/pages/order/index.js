@@ -1164,6 +1164,13 @@ Page({
       this.setData({menuScrollTarget:this.data.browseOnly?'browse-menu-anchor':'connected-menu-anchor'})
     })
   },
+  productImageFailed(event){
+    const id=event.currentTarget.dataset.id
+    if(!id)return
+    const update={visibleProducts:(this.data.visibleProducts||[]).map(item=>item.productId===id?Object.assign({},item,{imageFailed:true}):item)}
+    if(this.data.detailProduct&&this.data.detailProduct.productId===id)update.detailProduct=Object.assign({},this.data.detailProduct,{imageFailed:true})
+    this.setData(update)
+  },
   openProductDetail(event) {
     const productId = String(event.currentTarget.dataset.id || '')
     const detailProduct = this.data.products.find((item) => item.productId === productId) || null

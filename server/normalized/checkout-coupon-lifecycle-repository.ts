@@ -18,9 +18,9 @@ export class CheckoutCouponLifecycleRepository{
     const order=(await this.tx.query<{id:string;business_date:string}>(`SELECT o.id,t.business_date::text FROM mbox.orders o JOIN mbox.table_sessions t ON t.tenant_id=o.tenant_id AND t.store_id=o.store_id AND t.id=o.table_session_id WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.id=$3
       AND o.status='cancelled' AND o.fulfillment_state='cancelled'
       AND ${noCouponFulfillmentHistorySql}
-      AND NOT EXISTS(SELECT 1 FROM mbox.payments p WHERE p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.order_id=o.id AND p.status IN('created','pending'))
-      AND (SELECT COALESCE(sum(p.amount_minor),0) FROM mbox.payments p WHERE p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.order_id=o.id AND p.status IN('succeeded','partially_refunded','refunded'))
-       =(SELECT COALESCE(sum(r.amount_minor),0) FROM mbox.refunds r JOIN mbox.payments p ON p.tenant_id=r.tenant_id AND p.store_id=r.store_id AND p.id=r.payment_id WHERE p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.order_id=o.id AND r.status='succeeded')
+      AND NOT EXISTS(SELECT 1 FROM mbox.order_payment_facts p WHERE p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.order_id=o.id AND p.status IN('created','pending'))
+      AND (SELECT COALESCE(sum(p.amount_minor),0) FROM mbox.order_payment_facts p WHERE p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.order_id=o.id AND p.status IN('succeeded','partially_refunded','refunded'))
+       =(SELECT COALESCE(sum(r.amount_minor),0) FROM mbox.refunds r JOIN mbox.order_payment_facts p ON p.tenant_id=r.tenant_id AND p.store_id=r.store_id AND p.id=r.payment_id AND (r.order_id IS NULL OR r.order_id=p.order_id) WHERE p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.order_id=o.id AND r.status='succeeded')
       FOR UPDATE OF o SKIP LOCKED`,[...scope,orderId])).rows[0]
     if(!order)return{released:0}
     const holds=(await this.tx.query<{id:string;benefit_id:string;quantity:number}>(`SELECT r.id,r.benefit_id,r.quantity FROM mbox.checkout_coupon_order_links l JOIN mbox.checkout_coupon_quote_reservations h ON h.tenant_id=l.tenant_id AND h.store_id=l.store_id AND h.quote_id=l.quote_id JOIN mbox.benefit_reservations r ON r.tenant_id=h.tenant_id AND r.store_id=h.store_id AND r.id=h.reservation_id WHERE l.tenant_id=$1 AND l.store_id=$2 AND l.order_id=$3 AND r.status='reserved' ORDER BY r.benefit_id FOR UPDATE OF r`,[...scope,orderId])).rows
@@ -41,7 +41,7 @@ export class CheckoutCouponLifecycleRepository{
     const link=(await this.tx.query<{quote_id:string}>('SELECT quote_id FROM mbox.checkout_coupon_order_links WHERE tenant_id=$1 AND store_id=$2 AND order_id=$3',[...scope,orderId])).rows[0]
     if(!link)return{redeemed:0}
     const paid=(await this.tx.query<{id:string;public_id:string}>(`SELECT o.id,o.public_id FROM mbox.orders o WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.id=$3 AND o.payment_status='paid' AND o.fulfillment_state<>'cancelled'
-      AND o.total_amount_minor<=(SELECT COALESCE(sum(p.amount_minor),0) FROM mbox.payments p WHERE p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.order_id=o.id AND p.status IN('succeeded','partially_refunded','refunded')) FOR UPDATE`,[...scope,orderId])).rows[0]
+      AND o.total_amount_minor<=(SELECT COALESCE(sum(p.amount_minor),0) FROM mbox.order_payment_facts p WHERE p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.order_id=o.id AND p.status IN('succeeded','partially_refunded','refunded')) FOR UPDATE`,[...scope,orderId])).rows[0]
     if(!paid)throw new Error('Coupon redemption requires confirmed paid order and non-cancelled fulfillment')
     const holds=(await this.tx.query<{id:string;benefit_id:string;customer_id:string;table_session_id:string;quantity:number;status:string}>(`SELECT r.id,r.benefit_id,r.customer_id,r.table_session_id,r.quantity,r.status FROM mbox.checkout_coupon_quote_reservations h JOIN mbox.benefit_reservations r ON r.tenant_id=h.tenant_id AND r.store_id=h.store_id AND r.id=h.reservation_id WHERE h.tenant_id=$1 AND h.store_id=$2 AND h.quote_id=$3 ORDER BY r.benefit_id FOR UPDATE OF r`,[...scope,link.quote_id])).rows
     let redeemed=0

@@ -143,14 +143,14 @@ export class ReservationNotFoundError extends Error {
 }
 
 export class ReservationConflictError extends Error {
-  constructor() {
+  constructor(readonly startsAt?:string,readonly endsAt?:string) {
     super('One or more selected tables are already reserved during this time')
     this.name = 'ReservationConflictError'
   }
 }
 
 export class ReservationTransitionError extends Error {
-  constructor(id: string, from: ReservationStatus, to: ReservationStatus) {
+  constructor(readonly id: string, readonly from: ReservationStatus, readonly to: ReservationStatus) {
     super(`Reservation ${id} cannot transition from ${from} to ${to}`)
     this.name = 'ReservationTransitionError'
   }
@@ -171,7 +171,7 @@ export class ReservationHoldExpiredError extends Error {
 }
 
 export class ReservationTableUnavailableError extends Error {
-  constructor() {
+  constructor(readonly detail='所选桌台未在本店可预约列表中返回，请刷新桌台列表') {
     super('One or more reservation tables were not found or are unavailable')
     this.name = 'ReservationTableUnavailableError'
   }
@@ -219,7 +219,9 @@ export class ReservationRepository {
         FOR UPDATE
       `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, tableIds])
       if (existingTables.rowCount !== tableIds.length) {
-        throw new ReservationTableUnavailableError()
+        const unavailable=tableIds.filter(id=>!existingTables.rows.some(row=>row.id===id))
+        const facts=(await this.transaction.query<{code:string;status:string}>(`SELECT code,status FROM mbox.tables WHERE tenant_id=$1 AND store_id=$2 AND id=ANY($3::uuid[])`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,unavailable])).rows
+        throw new ReservationTableUnavailableError(facts.length?facts.map(row=>`${row.code} 当前${row.status==='disabled'?'已停用':'未开放预约'}，请选择其他桌台`).join('；'):'所选桌台未在本店可预约列表中返回，请刷新桌台列表')
       }
       const expiredReservations = await this.transaction.query<{ id: string; public_id: string }>(`
         SELECT reservation.id, reservation.public_id
@@ -344,7 +346,7 @@ export class ReservationRepository {
       }
       return this.hydrate(reservationRow)
     } catch (error) {
-      if (postgresErrorCode(error) === '23P01') throw new ReservationConflictError()
+      if (postgresErrorCode(error) === '23P01') throw new ReservationConflictError(input.arrivalAt,input.expectedEndAt)
       throw error
     }
   }

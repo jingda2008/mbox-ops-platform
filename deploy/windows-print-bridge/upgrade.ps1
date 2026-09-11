@@ -8,7 +8,7 @@ foreach ($file in $files) {
   if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot $file) -PathType Leaf)) { throw "升级文件缺失：$file" }
   if (-not (Test-Path -LiteralPath (Join-Path $InstallDirectory $file) -PathType Leaf)) { throw "原安装文件缺失：$file" }
 }
-if ((Get-Content -LiteralPath (Join-Path $PSScriptRoot 'bridge.mjs') -Raw) -notmatch "const VERSION = '1\.0\.2'") { throw '升级包版本不匹配' }
+if ((Get-Content -LiteralPath (Join-Path $PSScriptRoot 'bridge.mjs') -Raw) -notmatch "const VERSION = '1\.0\.3'") { throw '升级包版本不匹配' }
 $backup = Join-Path $InstallDirectory ('backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
 New-Item -ItemType Directory -Path $backup | Out-Null
 foreach ($file in $files) { Copy-Item -LiteralPath (Join-Path $InstallDirectory $file) -Destination $backup }
@@ -30,6 +30,6 @@ try {
   Start-Service -Name 'MBoxPrintBridge'
   throw
 }
-Write-Host '程序文件已更新到1.0.2，原配对、队列配置和防重复日志均保留。'
-Write-Host '请等待后台出现1.0.2且心跳更新；服务启动不能代替后台版本核验或实体纸票验收。'
+Write-Host '程序文件已更新到1.0.3，原配对、队列配置和防重复日志均保留。'
+Write-Host '请等待后台出现1.0.3且心跳更新；服务启动不能代替后台版本核验或实体纸票验收。'
 Write-Host "旧程序备份：$backup"

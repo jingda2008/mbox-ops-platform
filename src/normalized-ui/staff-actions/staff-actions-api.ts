@@ -1,3 +1,4 @@
+import type {OperatingHistory} from '../../shared/operating-history'
 import type {
   StaffFulfillmentData,
   StaffMemberBenefitTasks,
@@ -114,6 +115,7 @@ export interface AssistedOrderCatalogProduct {
   costAmountMinor?: number | null
   status: 'active' | 'sold_out' | 'inactive'
   isAvailable: boolean
+  availabilityReasons?:string[]
   inventoryConfigurationComplete: boolean
   inventoryAvailable: boolean
   standardPrice: null | {
@@ -309,6 +311,7 @@ export interface StaffActionsApiPort {
   cancelKdsTask(taskId: string, reasonNote: string): Promise<void>
   actOnReservation(reservationId: string, action: 'confirm' | 'arrive' | 'complete'): Promise<void>
   loadAssistedOrderAccess(signal?: AbortSignal): Promise<AssistedOrderAccess>
+  loadFulfillmentHistory?(input: {kind:'prepared'|'delivered';date:string;table:string;page:number}):Promise<OperatingHistory>
   loadTableOrderDetails?(tableSessionId: string, signal?: AbortSignal): Promise<StaffTableOrderDetail[]>
   loadTablePaymentOrders?(tableSessionId: string, signal?: AbortSignal): Promise<StaffTablePaymentOrder[]>
   loadAssistedOrderCatalog(signal?: AbortSignal): Promise<AssistedOrderCatalogProduct[]>
@@ -328,14 +331,19 @@ export interface StaffActionsApiPort {
   }>): Promise<AssistedOrderResult>
   createOnlinePayment(input: Readonly<{
     orderId: string
+    orderIds?:string[]
+    amountMinor?:number
     provider: 'postar' | 'simulation'
     method: 'native_qr' | 'auth_code'
     customerAuthCode?: string
   }>): Promise<OnlinePaymentAction>
   recordManualPayment(input: Readonly<{
     orderId: string
+    orderIds?:string[]
+    amountMinor?:number
     provider: 'cash' | 'physical_pos' | 'external_manual'
     receiptReference: string
+    idempotencyKey?: string
     terminalId?: string
     externalMethodCode?: 'bank_transfer' | 'mobile_wallet' | 'stored_value_voucher' | 'corporate_account' | 'other'
     collectionNote?: string
@@ -648,6 +656,12 @@ export class StaffActionsApi implements StaffActionsApiPort {
     return access
   }
 
+  async loadFulfillmentHistory(input: {kind:'prepared'|'delivered';date:string;table:string;page:number}):Promise<OperatingHistory> {
+    const params=new URLSearchParams({workKind:input.kind,table:input.table,page:String(input.page)})
+    if(input.date)params.set('businessDate',input.date)
+    return this.getData<OperatingHistory>(`/api/operations/history?${params}`)
+  }
+
   async loadTableOrderDetails(tableSessionId: string, signal?: AbortSignal): Promise<StaffTableOrderDetail[]> {
     const data = await this.getData<unknown>(
       `/api/commerce/table-sessions/${encodeURIComponent(tableSessionId)}/order-details`,
@@ -720,6 +734,8 @@ export class StaffActionsApi implements StaffActionsApiPort {
 
   async createOnlinePayment(input: Readonly<{
     orderId: string
+    orderIds?:string[]
+    amountMinor?:number
     provider: 'postar' | 'simulation'
     method: 'native_qr' | 'auth_code'
     customerAuthCode?: string
@@ -734,6 +750,8 @@ export class StaffActionsApi implements StaffActionsApiPort {
       headers,
       body: JSON.stringify({
         orderId: input.orderId,
+        ...(input.orderIds?{orderIds:input.orderIds}:{}),
+        ...(input.amountMinor===undefined?{}:{amountMinor:input.amountMinor}),
         provider: input.provider,
         method: input.method,
         ...(input.customerAuthCode === undefined ? {} : { customerAuthCode: input.customerAuthCode }),
@@ -748,8 +766,11 @@ export class StaffActionsApi implements StaffActionsApiPort {
 
   async recordManualPayment(input: Readonly<{
     orderId: string
+    orderIds?:string[]
+    amountMinor?:number
     provider: 'cash' | 'physical_pos' | 'external_manual'
     receiptReference: string
+    idempotencyKey?: string
     terminalId?: string
     externalMethodCode?: 'bank_transfer' | 'mobile_wallet' | 'stored_value_voucher' | 'corporate_account' | 'other'
     collectionNote?: string
@@ -757,13 +778,15 @@ export class StaffActionsApi implements StaffActionsApiPort {
     const headers = new Headers({
       accept: 'application/json',
       'content-type': 'application/json',
-      'idempotency-key': `staff-manual-payment-${this.createIdempotencyKey()}`,
+      'idempotency-key': input.idempotencyKey ?? `staff-manual-payment-${this.createIdempotencyKey()}`,
     })
     await this.request('/api/payments/manual', {
       method: 'POST',
       headers,
       body: JSON.stringify({
         orderId: input.orderId,
+        ...(input.orderIds?{orderIds:input.orderIds}:{}),
+        ...(input.amountMinor===undefined?{}:{amountMinor:input.amountMinor}),
         provider: input.provider,
         method: input.provider === 'cash' ? 'cash' : input.provider === 'physical_pos' ? 'card' : 'manual',
         receiptReference: input.receiptReference.trim(),
@@ -1245,6 +1268,9 @@ function tableOrderDetail(value: unknown): StaffTableOrderDetail {
       id: item.id,
       productName: item.productName,
       quantity: item.quantity,
+      unitPriceMinor: typeof item.unitPriceMinor === 'number' ? item.unitPriceMinor : undefined,
+      totalAmountMinor: typeof item.totalAmountMinor === 'number' ? item.totalAmountMinor : undefined,
+      includedInBundle: item.includedInBundle === true,
       fulfillmentStation: item.fulfillmentStation as StaffTableOrderDetail['items'][number]['fulfillmentStation'],
       fulfillmentStatus: item.fulfillmentStatus as StaffTableOrderDetail['items'][number]['fulfillmentStatus'],
     }
@@ -1256,7 +1282,7 @@ function isOnlinePaymentAction(value: unknown): value is OnlinePaymentAction {
   return isObject(value)
     && typeof value.paymentId === 'string'
     && typeof value.paymentPublicId === 'string'
-    && typeof value.orderPublicId === 'string'
+    && (typeof value.orderPublicId === 'string' || value.payableKind === 'order_batch' && value.orderPublicId === null)
     && (value.status === 'pending' || value.status === 'unknown' || value.status === 'failed')
     && (value.presentation === 'jsapi' || value.presentation === 'qr' || value.presentation === 'barcode')
     && typeof value.expiresAt === 'string'

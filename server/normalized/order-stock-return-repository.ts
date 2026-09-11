@@ -14,7 +14,7 @@ export class OrderStockReturnRepository {
   if(!item)throw new InventoryConflictError('商品记录不存在')
   const refunded=(await this.tx.query<{ok:boolean}>(`SELECT EXISTS(SELECT 1 FROM mbox.refunds r JOIN mbox.payments p
    ON p.tenant_id=r.tenant_id AND p.store_id=r.store_id AND p.id=r.payment_id
-   WHERE p.tenant_id=$1 AND p.store_id=$2 AND p.order_id=$3 AND r.status='succeeded') AS ok`,[...scope,item.order_id])).rows[0]?.ok
+   WHERE p.tenant_id=$1 AND p.store_id=$2 AND COALESCE(r.order_id,p.order_id)=$3 AND r.status='succeeded') AS ok`,[...scope,item.order_id])).rows[0]?.ok
   if(!refunded)throw new InventoryConflictError('尚无确认成功的退款；不会因退款申请直接恢复库存')
   const redemption=(await this.tx.query<{id:string}>('SELECT id FROM mbox.member_redemptions WHERE tenant_id=$1 AND store_id=$2 AND order_id=$3',[...scope,item.order_id])).rows[0]
   if(redemption)throw new InventoryConflictError('积分兑换商品须使用兑换恢复流程，不能重复退库')

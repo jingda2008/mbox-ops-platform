@@ -571,7 +571,7 @@ describe('reservationPerformanceApiPlugin staff reservation permissions', () => 
     })
     expect(response.statusCode).toBe(409)
     expect(response.json()).toEqual({
-      error: { code: 'RESERVATION_TABLE_CONFLICT', message: '所选桌位在该时段已不可预约' },
+      error: { code: 'RESERVATION_TABLE_CONFLICT', message: '所选桌位在所选开始时间至所选结束时间已有有效预约占用，请返回桌位选择查看可用时段' },
     })
   })
 })

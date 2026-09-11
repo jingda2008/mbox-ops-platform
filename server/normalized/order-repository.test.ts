@@ -340,7 +340,7 @@ describe('OrderRepository', () => {
   })
 
   it('does not deliver when the conditional row lock loses the race', async () => {
-    const tx = new ScriptedTransaction([{ rows: [] }])
+    const tx = new ScriptedTransaction([{ rows: [] },{rows:[{status:'delivered'}]}])
     await expect(new OrderRepository(tx).markDelivered(itemId, employeeId))
       .rejects.toBeInstanceOf(OrderDeliveryBlockedError)
   })

@@ -107,7 +107,7 @@ interface RefundRow extends RefundStoredRow {
 
 interface PaymentForRefundRow extends Record<string, unknown> {
   id: string
-  payable_kind: 'order' | 'activity_registration'
+  order_batch_id?:string|null; payable_kind: 'order' | 'activity_registration' | 'order_batch'
   order_id: string | null
   activity_registration_id: string | null
   provider: PaymentProvider
@@ -190,19 +190,30 @@ export class RefundRepository {
     if (!['succeeded', 'partially_refunded'].includes(payment.status)) {
       throw new RefundLimitError(`Payment ${payment.id} is not refundable from status ${payment.status}`)
     }
-    if (payment.order_id === null) {
+    if (payment.order_id === null && payment.payable_kind!=='order_batch') {
       throw new RefundLimitError('Activity payments require the full activity refund workflow')
     }
 
     const allocations = normalizeAllocations(input.allocations)
     const amountMinor = allocations.reduce((sum, allocation) => sum + allocation.amountMinor, 0)
-    const items = await this.lockOrderItems(payment.order_id, allocations.map((item) => item.orderItemId))
+    let orderId=payment.order_id
+    if(payment.payable_kind==='order_batch'){
+      const targets=(await this.transaction.query<{order_id:string}>(`SELECT DISTINCT order_id FROM mbox.order_items WHERE tenant_id=$1 AND store_id=$2 AND id=ANY($3::uuid[])`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,allocations.map(item=>item.orderItemId)])).rows
+      if(targets.length!==1)throw new RefundLimitError('每次退款请选择同一原订单的商品，不同原订单分别退款')
+      orderId=targets[0]!.order_id
+      const capacity=(await this.transaction.query<{amount_minor:string;reserved:string}>(`SELECT a.amount_minor::text,COALESCE((SELECT sum(r.amount_minor) FROM mbox.refunds r WHERE r.tenant_id=a.tenant_id AND r.store_id=a.store_id AND r.payment_id=$4 AND r.order_id=a.order_id AND r.status=ANY($5::text[])),0)::text AS reserved FROM mbox.order_payment_allocations a WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.batch_id=$3 AND a.order_id=$6`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,payment.order_batch_id,payment.id,RESERVING_REFUND_STATUSES,orderId])).rows[0]
+      if(!capacity||amountMinor+Number(capacity.reserved)>Number(capacity.amount_minor))throw new RefundLimitError('退款超过该原订单在本次合并付款中的可退分摊金额')
+    }
+    if(orderId===null)throw new RefundLimitError('退款缺少原订单归属')
+
+    const lateBatchCapture=payment.payable_kind==='order_batch'&&(await this.transaction.query<{ok:boolean}>(`SELECT EXISTS(SELECT 1 FROM mbox.orders o JOIN mbox.order_cancellation_events event ON event.tenant_id=o.tenant_id AND event.store_id=o.store_id AND event.order_id=o.id JOIN mbox.payments p ON p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.id=$4 WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.id=$3 AND o.status='cancelled' AND event.occurred_at<=p.succeeded_at) AS ok`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,orderId,payment.id])).rows[0]?.ok===true
+    const items = await this.lockOrderItems(orderId, allocations.map((item) => item.orderItemId))
     validateItems(items, allocations, payment.currency, {
       // An abandoned guest checkout can receive a late provider capture after
       // all its lines were correctly cancelled.  It remains refundable, but
       // only when the payment command has explicitly marked that protected
       // reconciliation path; normal cancelled order lines are still barred.
-      allowCancelledItems: payment.provider_snapshot?.guestCheckoutAbandoned === true,
+      allowCancelledItems: payment.provider_snapshot?.guestCheckoutAbandoned === true || lateBatchCapture,
     })
 
     const existingTotal = await this.transaction.query<ExistingRefundTotalRow>(`
@@ -255,10 +266,10 @@ export class RefundRepository {
     const inserted = await this.transaction.query<RefundStoredRow>(`
       INSERT INTO mbox.refunds (
         tenant_id, store_id, payment_id, public_id, amount_minor, currency,
-        status, reason, requested_by_employee_id, provider_snapshot
+        status, reason, requested_by_employee_id, provider_snapshot,order_id
       ) VALUES (
         $1::uuid, $2::uuid, $3::uuid, $4, $5::bigint, $6,
-        'requested', $7, $8::uuid, $9::jsonb
+        'requested', $7, $8::uuid, $9::jsonb,$10::uuid
       )
       RETURNING ${REFUND_BASE_COLUMNS}
     `, [
@@ -270,7 +281,7 @@ export class RefundRepository {
       payment.currency,
       input.reason.trim(),
       input.requestedByEmployeeId,
-      JSON.stringify(snapshot),
+      JSON.stringify(snapshot),orderId,
     ])
     const row = inserted.rows[0]
     if (inserted.rowCount !== 1 || row === undefined) {
@@ -297,7 +308,7 @@ export class RefundRepository {
     }
     return mapRefund({
       ...row,
-      order_id: payment.order_id,
+      order_id: orderId,
       activity_registration_id: null,
       payment_provider: payment.provider,
       payment_provider_transaction_id: payment.provider_transaction_id,
@@ -508,9 +519,9 @@ export class RefundRepository {
 
   private async lockPayment(paymentId: string): Promise<PaymentForRefundRow> {
     const reference = await this.transaction.query<{
-      payable_kind: 'order' | 'activity_registration'; order_id: string | null; activity_registration_id: string | null
+      order_batch_id?:string|null; payable_kind: 'order' | 'activity_registration' | 'order_batch'; order_id: string | null; activity_registration_id: string | null
     }>(`
-      SELECT payable_kind, order_id, activity_registration_id
+      SELECT payable_kind, order_batch_id, order_id, activity_registration_id
       FROM mbox.payments
       WHERE tenant_id = $1::uuid
         AND store_id = $2::uuid
@@ -520,7 +531,7 @@ export class RefundRepository {
     if (target === undefined) throw new RefundNotFoundError(paymentId)
     await this.lockPaymentTarget(target)
     const result = await this.transaction.query<PaymentForRefundRow>(`
-      SELECT id, payable_kind, order_id, activity_registration_id,
+      SELECT id, payable_kind, order_batch_id, order_id, activity_registration_id,
         provider, provider_transaction_id, amount_minor, currency, status,provider_snapshot
       FROM mbox.payments
       WHERE tenant_id = $1::uuid
@@ -549,9 +560,9 @@ export class RefundRepository {
 
   private async lockRefund(refundId: string): Promise<RefundRow> {
     const reference = await this.transaction.query<{
-      payable_kind: 'order' | 'activity_registration'; order_id: string | null; activity_registration_id: string | null
+      order_batch_id?:string|null; payable_kind: 'order' | 'activity_registration' | 'order_batch'; order_id: string | null; activity_registration_id: string | null
     }>(`
-      SELECT p.payable_kind, p.order_id, p.activity_registration_id
+      SELECT p.payable_kind, p.order_batch_id, p.order_id, p.activity_registration_id
       FROM mbox.refunds AS r
       JOIN mbox.payments AS p
         ON p.tenant_id = r.tenant_id
@@ -611,8 +622,13 @@ export class RefundRepository {
   }
 
   private async lockPaymentTarget(target: Readonly<{
-    payable_kind: 'order' | 'activity_registration'; order_id: string | null; activity_registration_id: string | null
+    order_batch_id?:string|null; payable_kind: 'order' | 'activity_registration' | 'order_batch'; order_id: string | null; activity_registration_id: string | null
   }>): Promise<void> {
+    if(target.payable_kind==='order_batch'&&target.order_batch_id){
+      const orders=await this.transaction.query(`SELECT o.id FROM mbox.orders o JOIN mbox.order_payment_allocations a ON a.tenant_id=o.tenant_id AND a.store_id=o.store_id AND a.order_id=o.id WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.batch_id=$3 ORDER BY o.id FOR UPDATE OF o`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,target.order_batch_id])
+      if(!orders.rowCount)throw new RefundNotFoundError('batch allocation missing')
+      return
+    }
     if (target.payable_kind === 'order' && target.order_id !== null) {
       await this.lockOrder(target.order_id)
       return
@@ -686,7 +702,7 @@ const REFUND_BASE_COLUMNS = `
 `
 
 const JOINED_REFUND_COLUMNS = `
-  r.id, r.payment_id, p.order_id, p.activity_registration_id,
+  r.id, r.payment_id, COALESCE(r.order_id,p.order_id) AS order_id, p.activity_registration_id,
   p.provider AS payment_provider,
   p.provider_transaction_id AS payment_provider_transaction_id,
   r.public_id, r.provider_refund_id, r.amount_minor, r.currency,

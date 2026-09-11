@@ -147,17 +147,14 @@ export class RecollectionAuthorizationRepository {
     const result = await this.transaction.query<BalanceRow>(`
       SELECT ordering.total_amount_minor,ordering.currency,ordering.status,
         COALESCE((
-          SELECT SUM(payment.amount_minor) FROM mbox.payments payment
+          SELECT SUM(payment.amount_minor) FROM mbox.order_payment_facts payment
           WHERE payment.tenant_id=ordering.tenant_id AND payment.store_id=ordering.store_id
             AND payment.order_id=ordering.id AND payment.status IN ('succeeded','partially_refunded','refunded')
         ),0)::bigint AS gross_paid_minor,
         COALESCE((
-          SELECT SUM(refund_row.amount_minor) FROM mbox.refunds refund_row
-          JOIN mbox.payments payment
-            ON payment.tenant_id=refund_row.tenant_id AND payment.store_id=refund_row.store_id
-           AND payment.id=refund_row.payment_id
+          SELECT SUM(refund_row.amount_minor) FROM mbox.order_refund_facts refund_row
           WHERE refund_row.tenant_id=ordering.tenant_id AND refund_row.store_id=ordering.store_id
-            AND payment.order_id=ordering.id AND refund_row.status='succeeded'
+            AND refund_row.order_id=ordering.id AND refund_row.status='succeeded'
         ),0)::bigint AS refunded_minor
       FROM mbox.orders ordering
       WHERE ordering.tenant_id=$1::uuid AND ordering.store_id=$2::uuid AND ordering.id=$3::uuid

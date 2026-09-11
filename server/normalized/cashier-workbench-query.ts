@@ -1,3 +1,4 @@
+import { orderNeedsCollectionSql } from './order-collection-sql.js'
 import type {
   CashierPaymentMethod as PaymentMethod,
   CashierPaymentProvider as PaymentProvider,
@@ -68,11 +69,13 @@ interface PaymentRow extends Record<string, unknown> {
   currency: string
   status: PaymentStatus
   provider_snapshot: Readonly<Record<string, unknown>>
+  cancelled_after_attempt?:boolean
   succeeded_at: string | null
   created_at: string
 }
 
 interface RefundRow extends Record<string, unknown> {
+  order_id?:string
   id: string
   payment_id: string
   public_id: string
@@ -246,28 +249,15 @@ export class PostgresCashierWorkbenchQuery {
             OR (($4::text <> '' OR $9::text IS NOT NULL)
               AND orders.business_date < $3::date)
             OR (orders.business_date < $3::date AND (
+              EXISTS(SELECT 1 FROM mbox.payment_financial_monitoring_signals signal WHERE signal.tenant_id=orders.tenant_id AND signal.store_id=orders.store_id AND signal.subject_id=orders.id AND signal.signal IN ('order_overcollected','cancelled_order_captured')) OR
               ${cashierCouponRefundReviewCountSql}>0 OR
-              (orders.payment_status='unpaid' AND orders.status<>'cancelled' AND orders.total_amount_minor > 0
-                AND NOT EXISTS (
-                  SELECT 1 FROM mbox.order_settlement_exception_events terminal_settlement_exception
-                  WHERE terminal_settlement_exception.tenant_id=orders.tenant_id
-                    AND terminal_settlement_exception.store_id=orders.store_id
-                    AND terminal_settlement_exception.order_id=orders.id
-                ))
+              ${orderNeedsCollectionSql('orders')}
               OR EXISTS (
-                SELECT 1 FROM mbox.payments AS carryover_payment
-                WHERE carryover_payment.tenant_id=orders.tenant_id
-                  AND carryover_payment.store_id=orders.store_id
-                  AND carryover_payment.order_id=orders.id
-                  AND carryover_payment.status IN ('created','pending')
-                  AND carryover_payment.retry_released_at IS NULL
-              )
-              OR EXISTS (
-                SELECT 1 FROM mbox.payments AS carryover_payment
+                SELECT 1 FROM mbox.order_payment_facts AS carryover_payment
                 JOIN mbox.refunds AS carryover_refund
                   ON carryover_refund.tenant_id=carryover_payment.tenant_id
                  AND carryover_refund.store_id=carryover_payment.store_id
-                 AND carryover_refund.payment_id=carryover_payment.id
+                 AND carryover_refund.payment_id=carryover_payment.id AND (carryover_refund.order_id IS NULL OR carryover_refund.order_id=carryover_payment.order_id)
                 WHERE carryover_payment.tenant_id=orders.tenant_id
                   AND carryover_payment.store_id=orders.store_id
                   AND carryover_payment.order_id=orders.id
@@ -282,7 +272,7 @@ export class PostgresCashierWorkbenchQuery {
           AND (
             orders.status <> 'cancelled'
             OR EXISTS (
-              SELECT 1 FROM mbox.payments abandoned_payment
+              SELECT 1 FROM mbox.order_payment_facts abandoned_payment
               WHERE abandoned_payment.tenant_id=orders.tenant_id
                 AND abandoned_payment.store_id=orders.store_id
                 AND abandoned_payment.order_id=orders.id
@@ -317,7 +307,7 @@ export class PostgresCashierWorkbenchQuery {
             OR area.name ILIKE '%' || $4 || '%'
             OR ($10::bigint IS NOT NULL AND orders.total_amount_minor=$10::bigint)
             OR EXISTS (
-              SELECT 1 FROM mbox.payments AS searched_payment
+              SELECT 1 FROM mbox.order_payment_facts AS searched_payment
               WHERE searched_payment.tenant_id = orders.tenant_id
                 AND searched_payment.store_id = orders.store_id
                 AND searched_payment.order_id = orders.id
@@ -329,10 +319,10 @@ export class PostgresCashierWorkbenchQuery {
             OR EXISTS (
               SELECT 1
               FROM mbox.refunds AS searched_refund
-              JOIN mbox.payments AS searched_refund_payment
+              JOIN mbox.order_payment_facts AS searched_refund_payment
                 ON searched_refund_payment.tenant_id = searched_refund.tenant_id
                AND searched_refund_payment.store_id = searched_refund.store_id
-               AND searched_refund_payment.id = searched_refund.payment_id
+               AND searched_refund_payment.id = searched_refund.payment_id AND (searched_refund.order_id IS NULL OR searched_refund.order_id=searched_refund_payment.order_id)
               WHERE searched_refund.tenant_id = orders.tenant_id
                 AND searched_refund.store_id = orders.store_id
                 AND searched_refund_payment.order_id = orders.id
@@ -345,12 +335,8 @@ export class PostgresCashierWorkbenchQuery {
           AND ($8::uuid IS NULL OR area.id=$8::uuid)
           AND (
             $9::text IS NULL
-            OR ($9='unpaid' AND orders.total_amount_minor > 0 AND orders.payment_status IN ('unpaid','partially_paid')
-              AND NOT EXISTS (SELECT 1 FROM mbox.payments filter_payment
-                WHERE filter_payment.tenant_id=orders.tenant_id AND filter_payment.store_id=orders.store_id
-                  AND filter_payment.order_id=orders.id AND filter_payment.status IN ('created','pending')
-                  AND filter_payment.retry_released_at IS NULL))
-            OR ($9='processing' AND EXISTS (SELECT 1 FROM mbox.payments filter_payment
+            OR ($9='unpaid' AND ${orderNeedsCollectionSql('orders')})
+            OR ($9='processing' AND EXISTS (SELECT 1 FROM mbox.order_payment_facts filter_payment
                 WHERE filter_payment.tenant_id=orders.tenant_id AND filter_payment.store_id=orders.store_id
                   AND filter_payment.order_id=orders.id AND filter_payment.status IN ('created','pending')
                   AND filter_payment.retry_released_at IS NULL))
@@ -552,8 +538,9 @@ export class PostgresCashierWorkbenchQuery {
             payment.retry_released_at::text AS retry_released_at,
             payment.retry_release_reason,
             payment.amount_minor, payment.currency, payment.status,payment.provider_snapshot,
-            payment.succeeded_at::text, payment.created_at::text
-          FROM mbox.payments payment
+            payment.succeeded_at::text, payment.created_at::text,
+            EXISTS(SELECT 1 FROM mbox.order_cancellation_events cancellation WHERE cancellation.tenant_id=payment.tenant_id AND cancellation.store_id=payment.store_id AND cancellation.order_id=payment.order_id AND cancellation.occurred_at<=payment.succeeded_at) AS cancelled_after_attempt
+          FROM mbox.order_payment_facts payment
           LEFT JOIN mbox.payment_provider_actions provider_action
             ON provider_action.tenant_id = payment.tenant_id
            AND provider_action.store_id = payment.store_id
@@ -564,7 +551,7 @@ export class PostgresCashierWorkbenchQuery {
           ORDER BY payment.created_at DESC, payment.id DESC
         `, [input.scope.tenantId, input.scope.storeId, orderIds])
       const refundResult = await transaction.query<RefundRow>(`
-          SELECT refund.id, refund.payment_id, refund.public_id, refund.provider_refund_id,
+          SELECT refund.id, refund.payment_id, COALESCE(refund.order_id,payment.order_id) AS order_id, refund.public_id, refund.provider_refund_id,
             refund.amount_minor, refund.currency, refund.status, refund.provider_submission_state,
             refund.reason,
             refund.requested_by_employee_id,
@@ -575,10 +562,10 @@ export class PostgresCashierWorkbenchQuery {
             NULLIF(refund.provider_snapshot ->> 'receiptReference', '') AS receipt_reference,
             refund.completed_at::text, refund.created_at::text
           FROM mbox.refunds AS refund
-          JOIN mbox.payments AS payment
+          JOIN mbox.order_payment_facts AS payment
             ON payment.tenant_id = refund.tenant_id
            AND payment.store_id = refund.store_id
-           AND payment.id = refund.payment_id
+           AND payment.id = refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=payment.order_id)
           JOIN mbox.employees AS requester
             ON requester.tenant_id = refund.tenant_id
            AND requester.store_id = refund.store_id
@@ -661,7 +648,6 @@ function assembleView(
   recollectionRows: readonly RecollectionAuthorizationRow[],
   activityRows: readonly ActivityRegistrationRow[],
 ): CashierWorkbenchView {
-  const orderById = new Map(orderRows.map((order) => [order.id, order]))
   const itemsByOrder = group(itemRows, (row) => row.order_id)
   const paymentsByOrder = group(paymentRows, (row) => row.order_id)
   const refundsByPayment = group(refundRows, (row) => row.payment_id)
@@ -681,7 +667,7 @@ function assembleView(
   const orders = orderRows.map((order): CashierWorkbenchOrder => {
     const items = (itemsByOrder.get(order.id) ?? []).map(mapItem)
     const payments = (paymentsByOrder.get(order.id) ?? []).map((payment) => {
-      const refunds = (refundsByPayment.get(payment.id) ?? []).map((refund) => mapRefund(
+      const refunds = (refundsByPayment.get(payment.id) ?? []).filter(refund=>refund.order_id===undefined||refund.order_id===order.id).map((refund) => mapRefund(
         refund,
         allocationsByRefund.get(refund.id) ?? [],
       ))
@@ -722,7 +708,7 @@ function assembleView(
             ...item,
             reservedRefundAmountMinor: reserved,
             remainingRefundableMinor: captured && (item.status !== 'cancelled'
-              || payment.provider_snapshot.guestCheckoutAbandoned === true)
+              || payment.provider_snapshot.guestCheckoutAbandoned === true || payment.cancelled_after_attempt===true)
               ? Math.min(Math.max(0, item.totalAmountMinor - reserved), paymentRemaining)
               : 0,
           }
@@ -749,7 +735,7 @@ function assembleView(
       tableSessionStatus: order.table_session_status,
       channel: order.channel,
       status: order.status,
-      paymentStatus: order.payment_status,
+      paymentStatus: netCollectedMinor >= totalAmountMinor && order.status !== 'cancelled' ? 'paid' : order.payment_status === 'pending' ? (refundedMinor > 0 ? (netCollectedMinor > 0 ? 'partially_refunded' : 'refunded') : grossPaidMinor > 0 ? 'partially_paid' : 'unpaid') : order.payment_status,
       totalAmountMinor,
       outstandingAmountMinor: Math.max(0, totalAmountMinor - netCollectedMinor),
       overCollectedAmountMinor: Math.max(0, netCollectedMinor - totalAmountMinor),
@@ -801,10 +787,7 @@ function assembleView(
       requestedRefundCount: refundRows.filter((refund) => refund.status === 'requested').length,
       processingRefundCount: refundRows.filter((refund) => refund.status === 'approved' || refund.status === 'processing').length,
       carryoverOrderCount: orders.filter((order) => order.carryover === true).length,
-      carryoverPendingPaymentCount: paymentRows.filter((payment) => (
-        payment.status === 'created' || payment.status === 'pending'
-      ) && payment.retry_released_at === null
-        && (orderById.get(payment.order_id)?.business_date ?? input.businessDate) < input.businessDate).length,
+      carryoverPendingPaymentCount: 0, // Old unknown attempts live in financial review, not the business queue.
       activityPendingPaymentCount: activityRegistrations.filter((registration) => (
         registration.status === 'payment_pending' || registration.paymentStatus === 'pending'
       )).length,

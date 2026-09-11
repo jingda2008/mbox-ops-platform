@@ -1,4 +1,4 @@
-import {useRef,useState} from 'react'
+import {useEffect,useRef,useState} from 'react'
 import type {NormalizedApiClient} from '../normalized-api'
 import type {OperatingHistory} from '../shared/operating-history'
 import {groupOrdersBySession,historyItemPriceLabel} from '../shared/order-history-presentation'
@@ -12,6 +12,7 @@ export function OperatingHistoryPanel({api,businessDate,standalone=false,initial
   const [data,setData]=useState<OperatingHistory|null>(initialData),[error,setError]=useState(''),[busy,setBusy]=useState(false)
   const [search,setSearch]=useState(''),[area,setArea]=useState(''),[paymentStatus,setPaymentStatus]=useState('')
   const generation=useRef(0)
+  useEffect(()=>{if(standalone&&initialData===null)void read();return()=>{generation.current++}},[api,businessDate,standalone])
   async function read(page=0) {
     const version=++generation.current
     setBusy(true);setError('')
@@ -47,7 +48,7 @@ export function OperatingHistoryPanel({api,businessDate,standalone=false,initial
     <p>按营业日查询；超期未结和退款待办保留可见。权限由服务端校验，查看不等于获得退款或打印授权。</p>
     <form onSubmit={event=>{event.preventDefault();void read()}}>
       <label>搜索<input value={search} maxLength={80} placeholder="桌号、订单号或金额（如136）" onChange={event=>{reset();setSearch(event.target.value)}} /></label>
-      <label>区域<input value={area} maxLength={80} placeholder="全部区域" onChange={event=>{reset();setArea(event.target.value)}} /></label>
+      <details><summary>日期与更多筛选</summary>      <label>区域<input value={area} maxLength={80} placeholder="全部区域" onChange={event=>{reset();setArea(event.target.value)}} /></label>
       <label>支付状态<select value={paymentStatus} onChange={event=>{reset();setPaymentStatus(event.target.value)}}>
         <option value="">全部状态</option><option value="unpaid">待支付</option><option value="pending">支付中</option><option value="partially_paid">部分付款</option><option value="paid">已支付</option><option value="partially_refunded">部分退款</option><option value="refunded">已退款</option>
       </select></label>
@@ -55,7 +56,8 @@ export function OperatingHistoryPanel({api,businessDate,standalone=false,initial
       <label>结束营业日<input type="date" required value={endDate} min={date} onChange={event=>{reset();setEndDate(event.target.value)}} /></label>
       <label>桌号<input value={table} maxLength={80} onChange={event=>{reset();setTable(event.target.value)}} /></label>
       <label>下单员工<input value={employee} maxLength={80} placeholder="留空含顾客自助" onChange={event=>{reset();setEmployee(event.target.value)}} /></label>
-      <button type="submit" disabled={busy}>{busy?'读取中':'查看账务与历史'}</button>
+</details>
+      <button type="submit" disabled={busy}>{busy?'读取中':'查找订单'}</button>
     </form>
     {error&&<p role="alert">{error}；可重新查询，原账务不会被修改。</p>}
     {data&&<>
@@ -69,8 +71,8 @@ export function OperatingHistoryPanel({api,businessDate,standalone=false,initial
       {data.orders.length===0&&<p>没有符合筛选条件的订单。</p>}
       {groupOrdersBySession(data.orders).map(group=><section key={group.key}>
         <h4>{group.orders[0].tableCode} · {group.orders[0].areaName??''} · 桌次 {group.orders[0].sessionPublicId??group.key}</h4>
-        <p>本页该桌次 {group.orders.length} 单；不同桌次不合账。</p>
-      {group.orders.map(order=><details key={order.id}><summary>{order.tableCode} · ¥{money(order.totalMinor)} · {time(order.submittedAt)}</summary>
+        <p>本页该桌次 {group.orders.length} 单；不同桌次不合账。</p>{standalone&&printEmployeeId&&group.orders[0].tableSessionId&&<OrderBillPrintButton api={api} orderId={group.orders[0].id} tableSessionId={group.orders[0].tableSessionId} employeeId={printEmployeeId}/>}
+      {group.orders.map(order=><details key={order.id} open><summary>{order.tableCode} · ¥{money(order.totalMinor)} · {time(order.submittedAt)}</summary>
         <p>{order.publicId} · {order.employeeName??'顾客自助'} · {status(order.status)}</p>
         {standalone&&printEmployeeId&&<OrderBillPrintButton api={api} orderId={order.id} employeeId={printEmployeeId}/>}
         {standalone&&inventoryEmployeeId&&['refunded','partially_refunded'].includes(order.paymentStatus)&&order.items.map(item=><section key={`return-${item.id}`}><strong>{item.name} ×{item.quantity} · 已退库 {item.returnedQuantity??0}</strong>{item.quantity>(item.returnedQuantity??0)&&<OrderStockReturnForm api={api} itemId={item.id} quantity={item.quantity-(item.returnedQuantity??0)} employeeId={inventoryEmployeeId} onChanged={()=>read(data.page)}/>}</section>)}

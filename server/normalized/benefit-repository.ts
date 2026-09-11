@@ -464,7 +464,12 @@ export class BenefitRepository {
         AND (valid_until IS NULL OR valid_until > clock_timestamp())
         AND quantity_reserved + quantity_redeemed + $4::integer <= quantity_total
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.benefitId, quantity])
-    if (updated.rowCount !== 1) throw new BenefitUnavailableError()
+    if (updated.rowCount !== 1) {
+      if(!['issued','reserved'].includes(benefit.status))throw new BenefitUnavailableError(`该权益当前状态为${({redeemed:'已用完',cancelled:'已取消',expired:'已过期'} as Record<string,string>)[benefit.status]??benefit.status}，未新增占用`)
+      if(Date.parse(benefit.valid_from)>Date.now())throw new BenefitUnavailableError(`该权益尚未生效，生效时间${new Date(benefit.valid_from).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})}；未新增占用`)
+      if(benefit.valid_until&&Date.parse(benefit.valid_until)<=Date.now())throw new BenefitUnavailableError(`该权益已于${new Date(benefit.valid_until).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})}到期；未新增占用`)
+      throw new BenefitUnavailableError(`该权益剩余${Math.max(0,Number(benefit.quantity_total)-Number(benefit.quantity_reserved)-Number(benefit.quantity_redeemed))}份，本次需${quantity}份；未新增占用`)
+    }
     const inserted = await this.transaction.query<ReservationRow>(`
       INSERT INTO mbox.benefit_reservations (
         tenant_id, store_id, benefit_id, customer_id, table_session_id,
@@ -687,7 +692,7 @@ export class BenefitRepository {
       throw new BenefitAuthorizationError('Benefit currency does not match the approval source')
     }
     if (row.maximum_amount_minor !== null && amount > Number(row.maximum_amount_minor)) {
-      throw new BenefitAuthorizationError('Benefit value exceeds the employee approval limit')
+      throw new BenefitAuthorizationError(`权益申请金额${(amount/100).toFixed(2)}元，超过当前批准额度${(Number(row.maximum_amount_minor)/100).toFixed(2)}元；请降低金额或联系有更高额度的审批人`)
     }
   }
 

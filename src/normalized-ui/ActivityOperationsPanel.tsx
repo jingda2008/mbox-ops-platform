@@ -673,7 +673,7 @@ function PackageComponentSelector({
       const selected = catalog.find((item) => item.id === component.inventoryItemId)
       return <div className="activity-package-component-row" key={`${component.inventoryItemId}:${index}`}>
         <label>物料<select value={component.inventoryItemId} onChange={(event) => update(index, { inventoryItemId: event.target.value })}>
-          {selected === undefined && <option value={component.inventoryItemId}>{component.inventoryItemId === '' ? '旧草稿物料无法识别，请重新选择' : '已选物料当前不可用，请重新选择'}</option>}
+          {selected === undefined && <option value={component.inventoryItemId}>{component.inventoryItemId === '' ? '旧草稿物料无法识别，请重新选择' : `物料 ${component.inventoryItemId} 未在当前可用列表返回，请核对是否停用或访问范围变化` }</option>}
           {catalog.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.sku} · {inventoryUnitLabel(item.baseUnit)}</option>)}
         </select></label>
         <label>每份数量<NumberInputWithUnit inputMode="decimal" unit={inventoryUnitLabel(selected?.baseUnit ?? '')} value={component.quantity} onChange={(event) => update(index, { quantity: event.target.value })} /></label>

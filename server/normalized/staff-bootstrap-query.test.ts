@@ -155,7 +155,7 @@ describe('StaffBootstrapQuery', () => {
       .toHaveLength(4)
     expect(calls.some((call) => /\bUPDATE\b/.test(call.sql))).toBe(false)
     const summaryQuery = calls.find((call) => call.sql.includes('WITH business_window'))
-    expect(summaryQuery?.sql).toContain('guest_immediate_checkout_abandonment_events')
+    expect(summaryQuery?.sql).toContain('order_settlement_exception_events settled')
     expect(value.clients).toHaveLength(4)
     expect(value.clients.every((client) => client.released)).toBe(true)
   })

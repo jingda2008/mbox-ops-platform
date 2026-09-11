@@ -521,7 +521,7 @@ describe('paymentApiPlugin', () => {
     expect(resolveOnlinePaymentAvailable).not.toHaveBeenCalled()
   })
 
-  it('reuses the one active payment for the same order and presentation', async () => {
+  it('does not resume an old unknown payment after the order is no longer collectible', async () => {
     const action = {
       paymentId, paymentPublicId: payment.publicId, orderPublicId: 'OORDER0001',
       status: 'pending' as const, presentation: 'qr' as const,
@@ -546,7 +546,7 @@ describe('paymentApiPlugin', () => {
       }),
       commands: {
         ...fixtureCommands(),
-        initiate: vi.fn(async () => { throw new OrderNotPayableError(orderId, 'another payment is already pending') }),
+        initiate: vi.fn(async () => { throw new OrderNotPayableError(orderId, 'the order has no outstanding balance') }),
       },
       onlinePayments,
     })
@@ -556,19 +556,20 @@ describe('paymentApiPlugin', () => {
       payload: { orderId, provider: 'postar', method: 'native_qr' },
     })
 
-    expect(response.statusCode).toBe(200)
-    expect(response.json()).toMatchObject({ data: { id: paymentId, providerAction: action }, meta: { replayed: true } })
-    expect(onlinePayments.create).toHaveBeenCalledWith(expect.objectContaining({ paymentId }))
+    expect(response.statusCode).toBe(409)
+    expect(response.json()).toMatchObject({error:{code:'ORDER_NOT_PAYABLE'}})
+    expect(onlinePayments.create).not.toHaveBeenCalled()
+    expect(onlinePayments.resolveActivePayment).not.toHaveBeenCalled()
   })
 
-  it('does not switch an active payment to a different staff collection method', async () => {
+  it('blocks a new collection of any method only when the command reports no collectible balance', async () => {
     const value = fixture({
       resolveActorContext: () => ({
         scope: { tenantId, storeId }, actor: { type: 'employee', employeeId }, businessDate: '2026-08-11',
       }),
       commands: {
         ...fixtureCommands(),
-        initiate: vi.fn(async () => { throw new OrderNotPayableError(orderId, 'another payment is already pending') }),
+        initiate: vi.fn(async () => { throw new OrderNotPayableError(orderId, 'the order has no outstanding balance') }),
       },
       onlinePayments: {
         assertAvailable: vi.fn(),
@@ -590,7 +591,7 @@ describe('paymentApiPlugin', () => {
     })
 
     expect(response.statusCode).toBe(409)
-    expect(response.json()).toMatchObject({ error: { code: 'PAYMENT_METHOD_LOCKED' } })
+    expect(response.json()).toMatchObject({ error: { code: 'ORDER_NOT_PAYABLE' } })
   })
 
   it('keeps guest and employee payment methods inside their real operating channels', async () => {

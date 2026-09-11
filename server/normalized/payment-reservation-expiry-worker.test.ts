@@ -30,7 +30,7 @@ class ExpiryClient implements PostgresPoolClient {
         payment_state: this.paymentState,
       }])
     }
-    if (normalized.startsWith('SELECT id, settlement_mode')) {
+    if (normalized.startsWith('SELECT id, status, settlement_mode')) {
       return result([{
         id: orderId,
         settlement_mode: 'immediate_payment',

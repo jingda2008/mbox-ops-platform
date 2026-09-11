@@ -303,6 +303,26 @@ integration('PerformanceCommandService PostgreSQL integration', () => {
     `, [submitted.value.request.id])
     expect(stored.rows[0]).toEqual({ evidence_count: '1', paid_events: '1' })
   })
+  it('publishes a monthly batch atomically, reuses identical slots and rejects conflicts without partial creation',async()=>{
+    const role=randomUUID()
+    await pool.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,'MONTHLY','排班')",[role,tenantId,storeId])
+    await pool.query('INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id) VALUES($1,$2,$3,$4)',[tenantId,storeId,employeeId,role])
+    await pool.query("INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code='song.manage'",[tenantId,storeId,role])
+    const slots=[{performerId,startsAt:'2026-09-30T15:00:00.000Z',endsAt:'2026-09-30T17:00:00.000Z'},
+      {performerId:nextPerformerId,startsAt:'2026-09-29T13:00:00.000Z',endsAt:'2026-09-29T14:00:00.000Z'}]
+    const input={...metadata('monthly-publish-original'),month:'2026-09',slots}
+    const result=await service.publishMonthly(input)
+    expect(result.value).toMatchObject({createdCount:2,existingCount:0})
+    expect(await service.publishMonthly(input)).toEqual({value:result.value,replayed:true})
+    expect((await service.publishMonthly({...input,...metadata('monthly-publish-repeat')})).value).toMatchObject({createdCount:0,existingCount:2})
+    await expect(service.publishMonthly({...input,...metadata('monthly-publish-conflict'),slots:[
+      {performerId,startsAt:'2026-09-28T13:00:00.000Z',endsAt:'2026-09-28T14:00:00.000Z'},
+      {performerId,startsAt:'2026-09-29T13:30:00.000Z',endsAt:'2026-09-29T14:30:00.000Z'}]})).rejects.toThrow('重叠')
+    expect((await pool.query("SELECT count(*)::int AS count FROM mbox.schedules WHERE tenant_id=$1 AND store_id=$2 AND starts_at>='2026-09-01'",[tenantId,storeId])).rows[0].count).toBe(2)
+    await pool.query('DELETE FROM mbox.employee_roles WHERE tenant_id=$1 AND store_id=$2 AND employee_id=$3 AND role_id=$4',[tenantId,storeId,employeeId,role])
+    await expect(service.publishMonthly({...input,...metadata('monthly-publish-no-access')})).rejects.toThrow()
+  })
+
 })
 
 function metadata(idempotencyKey: string, actor = { type: 'employee' as const, employeeId }) {

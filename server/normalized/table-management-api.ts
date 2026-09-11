@@ -265,7 +265,13 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
           AND venue_table.id=$3::uuid AND venue_table.status='available'
       `,[context.scope.tenantId,context.scope.storeId,targetTableId,tableSessionId,movementKind])
       const row=result.rows[0]
-      if (!row) throw new TableManagementConflictError('目标桌台当前不可用')
+      if (!row) {
+        const diagnostic=(await transaction.query<{source_status:string|null;target_status:string|null;area_status:string|null;code:string|null}>(`SELECT (SELECT status FROM mbox.table_sessions WHERE tenant_id=$1 AND store_id=$2 AND id=$4) AS source_status,t.status AS target_status,a.status AS area_status,t.code FROM mbox.tables t LEFT JOIN mbox.areas a ON a.tenant_id=t.tenant_id AND a.store_id=t.store_id AND a.id=t.area_id WHERE t.tenant_id=$1 AND t.store_id=$2 AND t.id=$3`,[context.scope.tenantId,context.scope.storeId,targetTableId,tableSessionId])).rows[0]
+        if(diagnostic?.source_status!=='open')throw new TableManagementConflictError('源桌次已结束或无法读取，请刷新源桌后重新选择操作')
+        if(diagnostic.area_status!=='active')throw new TableManagementConflictError(`目标桌 ${diagnostic.code??targetTableId} 所在区域未启用，请选择已启用区域的桌台`)
+        if(diagnostic.target_status!=='available')throw new TableManagementConflictError(`目标桌 ${diagnostic.code??targetTableId} 当前未开放，请选择可用桌台`)
+        throw new TableManagementConflictError('本次转桌条件已变化，请刷新源桌与目标桌后重试')
+      }
       if (row.source_table_id===targetTableId) throw new TableManagementRequestError('目标桌不能与源桌相同')
       if (movementKind==='participant_split' && targetTableSessionId!==null) {
         throw new TableManagementRequestError('人员拆桌必须选择空闲目标桌')
@@ -329,20 +335,7 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
             AND (task.status IN ('pending','accepted','preparing')
               OR (task.status='ready' AND item.status<>'delivered')
               OR (task.status='failed' AND item.status<>'cancelled'))) AS kds_active,
-        (SELECT count(*)::text FROM mbox.payments payment
-          WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid
-            AND payment.order_id=ANY(SELECT id FROM scoped_orders)
-            AND payment.status IN ('created','pending')
-            AND payment.retry_released_at IS NULL
-            AND NOT EXISTS (
-              SELECT 1 FROM scoped_orders cancelled_order
-              WHERE cancelled_order.id=payment.order_id AND cancelled_order.status='cancelled'
-                AND NOT EXISTS (
-                  SELECT 1 FROM mbox.order_items delivered_item
-                  WHERE delivered_item.tenant_id=$1::uuid AND delivered_item.store_id=$2::uuid
-                    AND delivered_item.order_id=cancelled_order.id AND delivered_item.status='delivered'
-                )
-            )) AS payment_pending,
+        0::text AS payment_pending,
         (SELECT count(*)::text FROM mbox.inventory_order_reservations reservation
           WHERE reservation.tenant_id=$1::uuid AND reservation.store_id=$2::uuid
             AND reservation.order_id=ANY(SELECT id FROM scoped_orders)
@@ -351,7 +344,7 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
           JOIN mbox.payments payment ON payment.tenant_id=refund.tenant_id
             AND payment.store_id=refund.store_id AND payment.id=refund.payment_id
           WHERE refund.tenant_id=$1::uuid AND refund.store_id=$2::uuid
-            AND payment.order_id=ANY(SELECT id FROM scoped_orders)
+            AND COALESCE(refund.order_id,payment.order_id)=ANY(SELECT id FROM scoped_orders)
             AND refund.status IN ('requested','approved','processing')) AS refund_pending,
         (SELECT count(*)::text FROM mbox.service_tasks task
           WHERE task.tenant_id=$1::uuid AND task.store_id=$2::uuid

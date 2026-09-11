@@ -314,7 +314,7 @@ function MemberAccountLookupPanel({ api, auth }: { api: NormalizedApiClient; aut
         <article><small>等级周期资格快照</small><strong>{account.tierQualificationGrowth ?? '暂无'}</strong></article>
         <article><small>待追回积分</small><strong>{account.pendingRecoveryPoints}</strong></article>
       </div>
-      <p className="staff-module-footnote">会员号 {account.memberNo} · {account.membershipStatus === 'active' ? '有效会员' : '会员状态受限'} · 数据更新 {new Date(account.updatedAt).toLocaleString('zh-CN')}</p>
+      <p className="staff-module-footnote">会员号 {account.memberNo} · {({active:'有效会员',suspended:'会员已暂停',expired:'会员已过期',cancelled:'会员已注销',inactive:'会员未启用'} as Record<string,string>)[account.membershipStatus] ?? `会员状态：${account.membershipStatus}`} · 数据更新 {new Date(account.updatedAt).toLocaleString('zh-CN')}</p>
       <div className="activity-admin-list"><header><strong>最近积分流水</strong><small>最多20条</small></header>{account.pointEntries.length === 0 ? <p>暂无积分流水。</p> : account.pointEntries.map((entry, index) => <article key={`point-${entry.occurredAt}-${index}`}><div><strong>{entry.delta > 0 ? '+' : ''}{entry.delta}积分 · 余额{entry.balanceAfter}</strong><small>{entry.reason} · {new Date(entry.occurredAt).toLocaleString('zh-CN')}</small></div></article>)}</div>
       <div className="activity-admin-list"><header><strong>最近成长值流水</strong><small>最多20条</small></header>{account.growthEntries.length === 0 ? <p>暂无成长值流水。</p> : account.growthEntries.map((entry, index) => <article key={`growth-${entry.occurredAt}-${index}`}><div><strong>{entry.delta > 0 ? '+' : ''}{entry.delta}成长值 · 累计{entry.balanceAfter}</strong><small>{entry.reason} · {new Date(entry.occurredAt).toLocaleString('zh-CN')}</small></div></article>)}</div>
     </>}

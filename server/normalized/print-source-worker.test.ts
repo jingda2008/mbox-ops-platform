@@ -193,6 +193,22 @@ integration('asynchronous print sources: committed events, isolation and recover
       expect.objectContaining({name:'尚未收款',totalAmountMinor:0}),
     ]))
   })
+  it('manually prints daily sales and totals without ending the business day, and reuses the same request snapshot',async()=>{
+    const before=(await pool.query('SELECT count(*)::int AS count FROM mbox.manual_business_day_ends WHERE tenant_id=$1 AND store_id=$2',[scope.tenantId,scope.storeId])).rows[0].count
+    const date=(await pool.query('SELECT min(business_date)::text AS date FROM mbox.orders WHERE tenant_id=$1 AND store_id=$2',[scope.tenantId,scope.storeId])).rows[0].date
+    const jobs=await transactions.run(scope,async tx=>{
+      const source=await appendOutboxMessage(tx,{aggregateType:'manual_print_request',aggregateId:randomUUID(),aggregateVersion:1,eventType:'manual.daily-report.requested.v1',payload:{businessDate:date}})
+      const repository=new PrintTicketSourceRepository(tx,true)
+      const first=await repository.materializeManualDailyReport(source,date,'日报员工')
+      const second=await repository.materializeManualDailyReport(source,date,'日报员工')
+      expect(second.map(job=>job.id)).toEqual(first.map(job=>job.id))
+      return first
+    })
+    expect(jobs.length).toBeGreaterThan(0)
+    expect(jobs.flatMap(job=>job.printSnapshot.lines).map(line=>line.name)).toEqual(expect.arrayContaining(['销售合计','实际收款','实际退款','净收','尚待收款']))
+    expect(jobs[0].printSnapshot).toMatchObject({kind:'daily_settlement',operatorLabel:'日报员工',businessDate:date})
+    expect((await pool.query('SELECT count(*)::int AS count FROM mbox.manual_business_day_ends WHERE tenant_id=$1 AND store_id=$2',[scope.tenantId,scope.storeId])).rows[0].count).toBe(before)
+  })
   it('prints an immutable daily snapshot asynchronously to cashier while printers are offline',async()=>{
     const worker=new PrintSourceWorker(transactions)
     const employee=randomUUID(),boundary=randomUUID()
@@ -204,12 +220,12 @@ integration('asynchronous print sources: committed events, isolation and recover
     const source=(await pool.query(`SELECT status FROM mbox.print_source_jobs WHERE tenant_id=$1 AND aggregate_id=$2`,[scope.tenantId,boundary])).rows[0]
     expect(source.status).toBe('pending')
     await worker.runBatch(scope,'daily-end-test')
-    const jobs=(await pool.query(`SELECT station_code,print_snapshot FROM mbox.print_jobs WHERE tenant_id=$1 AND print_snapshot->>'kind'='daily_settlement'`,[scope.tenantId])).rows
+    const jobs=(await pool.query(`SELECT station_code,print_snapshot FROM mbox.print_jobs WHERE tenant_id=$1 AND print_snapshot->>'kind'='daily_settlement' AND print_snapshot->>'ticketReference'=$2`,[scope.tenantId,boundary])).rows
     expect(jobs).toHaveLength(1)
     expect(jobs[0].station_code).toBe('cashier')
     expect(jobs[0].print_snapshot.lines[0].note).toContain('净收 -8.00')
     expect(jobs[0].print_snapshot.totalAmountMinor).toBeNull()
     await worker.runBatch(scope,'daily-end-test-retry')
-    expect((await pool.query(`SELECT count(*)::int AS n FROM mbox.print_jobs WHERE tenant_id=$1 AND print_snapshot->>'kind'='daily_settlement'`,[scope.tenantId])).rows[0].n).toBe(1)
+    expect((await pool.query(`SELECT count(*)::int AS n FROM mbox.print_jobs WHERE tenant_id=$1 AND print_snapshot->>'kind'='daily_settlement' AND print_snapshot->>'ticketReference'=$2`,[scope.tenantId,boundary])).rows[0].n).toBe(1)
   })
 })

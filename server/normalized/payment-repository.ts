@@ -1,3 +1,4 @@
+import {allocateOrderPayment} from '../../src/shared/order-payment-allocation.js'
 import { randomUUID } from 'node:crypto'
 import type { JsonObject } from './command-executor.js'
 import type { ChannelPaymentStatus, SettlementChannel } from '../../src/shared/payment-contracts.js'
@@ -24,7 +25,8 @@ export type PaymentStatus =
 
 export interface Payment {
   id: string
-  payableKind: 'order' | 'activity_registration'
+  payableKind: 'order' | 'activity_registration' | 'order_batch'
+  orderBatchId?:string|null
   orderId: string | null
   activityRegistrationId: string | null
   /** Immutable activity-registration cycle; null for table orders. */
@@ -75,6 +77,10 @@ export interface CreatePaymentForOrderInput {
     | { type: 'guest'; tableSessionId: string; customerId: string; guestSessionId: string }
 }
 
+export interface CreatePaymentForOrdersInput extends Omit<CreatePaymentForOrderInput,'orderId'> {
+ orderIds:readonly string[];amountMinor?:number
+}
+
 export interface ApplyPaymentCallbackInput {
   paymentPublicId: string
   provider: Extract<PaymentProvider, 'wechat' | 'postar' | 'simulation'>
@@ -103,6 +109,7 @@ export interface ReleaseUnresolvedPaymentForRetryInput {
 }
 
 interface PaymentRow extends Record<string, unknown> {
+  order_batch_id?:string|null
   id: string
   payable_kind: Payment['payableKind']
   order_id: string | null
@@ -171,7 +178,7 @@ export class PaymentNotFoundError extends Error {
 }
 
 export class OrderNotPayableError extends Error {
-  constructor(orderId: string, reason: string) {
+  constructor(readonly orderId: string, readonly reason: string) {
     super(`Order ${orderId} cannot be paid: ${reason}`)
     this.name = 'OrderNotPayableError'
   }
@@ -405,9 +412,8 @@ export class PaymentRepository {
     }
 
     const settlement = await this.readSettlement(order.id)
-    if (settlement.has_pending) {
-      throw new OrderNotPayableError(order.id, 'another payment is already pending')
-    }
+    // An unresolved attempt is a financial reconciliation concern, not a lock
+    // on collection. The order lock and confirmed settlement still bound new attempts.
     const outstandingMinor = toSafeMinor(order.total_amount_minor, 'order total')
       - (toSafeMinor(settlement.gross_paid_minor, 'gross paid')
         - toSafeMinor(settlement.refunded_minor, 'refunded'))
@@ -460,6 +466,39 @@ export class PaymentRepository {
    * into a synthetic order. A provider action that might already have reached
    * the rail is never replaced by cash/POS/manual collection.
    */
+  async createForOrders(input:Readonly<CreatePaymentForOrdersInput>):Promise<Payment> {
+    if(!input.orderIds.length||input.orderIds.length>100||new Set(input.orderIds).size!==input.orderIds.length)throw new TypeError('请选择1至100笔不重复的同桌次订单')
+    validateCreateInput({...input,orderId:input.orderIds[0]!})
+    for(const id of input.orderIds)if(!/^[0-9a-f-]{36}$/i.test(id))throw new TypeError('订单编号无效')
+    // Match callback/refund order lock ordering before locking the payment row.
+    const orders=(await this.transaction.query<OrderRow&{submitted_at:string}>(`SELECT id,table_session_id,total_amount_minor,currency,status,COALESCE(submitted_at,created_at)::text AS submitted_at FROM mbox.orders WHERE tenant_id=$1 AND store_id=$2 AND id=ANY($3::uuid[]) ORDER BY id FOR UPDATE`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,input.orderIds])).rows
+    if(orders.length!==input.orderIds.length)throw new OrderNotPayableError('batch','an order was not found')
+    if(orders.some(order=>order.table_session_id!==orders[0]!.table_session_id||order.currency!==orders[0]!.currency))throw new TypeError('合并付款只支持同一桌次、同一币种的订单')
+    const balances=[]
+    for(const order of orders){
+      await this.assertOrderAccess(order,input.principal)
+      if(['draft','cancelled'].includes(order.status))throw new OrderNotPayableError(order.id,`status is ${order.status}`)
+      const settled=await this.transaction.query('SELECT id FROM mbox.order_settlement_exception_events WHERE tenant_id=$1 AND store_id=$2 AND order_id=$3 LIMIT 1',[this.transaction.scope.tenantId,this.transaction.scope.storeId,order.id])
+      if(settled.rowCount)throw new TypeError('所选订单已有财务结案记录，请移除该订单')
+      const balance=await this.readSettlement(order.id)
+      const refunded=toSafeMinor(balance.refunded_minor,'refunded')
+      balances.push({id:order.id,submittedAt:order.submitted_at,outstandingMinor:Math.max(0,toSafeMinor(order.total_amount_minor,'total')-toSafeMinor(balance.gross_paid_minor,'paid')+refunded),refundedMinor:refunded})
+    }
+    const amount=input.amountMinor??balances.reduce((sum,row)=>sum+row.outstandingMinor,0)
+    const allocations=allocateOrderPayment(balances,amount)
+    const authorizations=[]
+    const recollections=new RecollectionAuthorizationRepository(this.transaction)
+    for(const allocation of allocations){const balance=balances.find(row=>row.id===allocation.orderId)!;authorizations.push(await recollections.prepareForPayment({orderId:allocation.orderId,outstandingMinor:balance.outstandingMinor,refundedMinor:balance.refundedMinor,currency:orders[0]!.currency}))}
+    const batchId=randomUUID(),scope=[this.transaction.scope.tenantId,this.transaction.scope.storeId]
+    await this.transaction.query(`INSERT INTO mbox.order_payment_batches(id,tenant_id,store_id,table_session_id,created_by_employee_id,created_by_customer_id,amount_minor,currency) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,[batchId,...scope,orders[0]!.table_session_id,input.principal.type==='employee'?input.principal.employeeId:null,input.principal.type==='guest'?input.principal.customerId:null,amount,orders[0]!.currency])
+    for(const [position,allocation] of allocations.entries())await this.transaction.query(`INSERT INTO mbox.order_payment_allocations(tenant_id,store_id,batch_id,order_id,amount_minor,outstanding_at_creation_minor,position) VALUES($1,$2,$3,$4,$5,$6,$7)`,[...scope,batchId,allocation.orderId,allocation.amountMinor,balances.find(row=>row.id===allocation.orderId)!.outstandingMinor,position])
+    const status=input.initialStatus??'created'
+    const inserted=await this.transaction.query<PaymentRow>(`INSERT INTO mbox.payments(tenant_id,store_id,payable_kind,order_batch_id,public_id,provider,provider_transaction_id,method,amount_minor,currency,status,provider_snapshot,succeeded_at) VALUES($1,$2,'order_batch',$3,$4,$5,$6,$7,$8,$9,$10,$11,CASE WHEN $10='succeeded' THEN clock_timestamp() ELSE NULL END) RETURNING ${PAYMENT_COLUMNS}`,[...scope,batchId,input.publicId,input.provider,input.providerTransactionId??null,input.method,amount,orders[0]!.currency,status,JSON.stringify(sanitizeProviderSnapshot(input.evidence))])
+    const payment=onePayment(inserted,'Creating batch payment did not insert one row')
+    for(const authorization of authorizations)await recollections.consume(authorization.authorizationId,payment.id)
+    return payment
+  }
+
   async recordManualForActivityRegistration(
     input: Readonly<RecordManualPaymentForActivityRegistrationInput>,
   ): Promise<{ payment: Payment; supersededOnlinePayments: readonly ClosedUnpresentedOnlineActivityPayment[] }> {
@@ -913,9 +952,9 @@ export class PaymentRepository {
   ): Promise<PaymentCallbackApplication> {
     validateCallbackInput(input)
     const paymentOrder = await this.transaction.query<{
-      id: string; payable_kind: Payment['payableKind']; order_id: string | null; activity_registration_id: string | null
+      id: string; order_batch_id?:string|null; payable_kind: Payment['payableKind']; order_id: string | null; activity_registration_id: string | null
     }>(`
-      SELECT id, payable_kind, order_id, activity_registration_id
+      SELECT id, payable_kind, order_batch_id, order_id, activity_registration_id
       FROM mbox.payments
       WHERE tenant_id = $1::uuid
         AND store_id = $2::uuid
@@ -991,9 +1030,9 @@ export class PaymentRepository {
   ): Promise<PaymentCallbackApplication> {
     validateCallbackInput(input)
     const paymentOrder = await this.transaction.query<{
-      id: string; payable_kind: Payment['payableKind']; order_id: string | null; activity_registration_id: string | null
+      id: string; order_batch_id?:string|null; payable_kind: Payment['payableKind']; order_id: string | null; activity_registration_id: string | null
     }>(`
-      SELECT id, payable_kind, order_id, activity_registration_id
+      SELECT id, payable_kind, order_batch_id, order_id, activity_registration_id
       FROM mbox.payments
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND public_id = $3 AND provider = $4
@@ -1132,9 +1171,7 @@ export class PaymentRepository {
     const grossPaid = toSafeMinor(settlement.gross_paid_minor, 'gross paid')
     const refunded = toSafeMinor(settlement.refunded_minor, 'refunded')
     const netPaid = grossPaid - refunded
-    const paymentStatus = settlement.has_pending && netPaid < total
-      ? 'pending'
-      : netPaid >= total
+    const paymentStatus = netPaid >= total
         ? 'paid'
         : refunded > 0 && netPaid <= 0
           ? 'refunded'
@@ -1273,8 +1310,13 @@ export class PaymentRepository {
   }
 
   private async lockPayable(reference: Readonly<{
-    payable_kind: Payment['payableKind']; order_id: string | null; activity_registration_id: string | null
+    order_batch_id?:string|null; payable_kind: Payment['payableKind']; order_id: string | null; activity_registration_id: string | null
   }>): Promise<void> {
+    if(reference.payable_kind==='order_batch'&&reference.order_batch_id){
+      const locked=await this.transaction.query(`SELECT o.id FROM mbox.orders o JOIN mbox.order_payment_allocations a ON a.tenant_id=o.tenant_id AND a.store_id=o.store_id AND a.order_id=o.id WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.batch_id=$3 ORDER BY o.id FOR UPDATE OF o`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,reference.order_batch_id])
+      if(!locked.rowCount)throw new PaymentNotFoundError('batch allocation missing')
+      return
+    }
     if (reference.payable_kind === 'order' && reference.order_id !== null) {
       await this.lockOrder(reference.order_id)
       return
@@ -1326,22 +1368,12 @@ export class PaymentRepository {
         COALESCE(SUM(p.amount_minor) FILTER (
           WHERE p.status IN ('succeeded', 'partially_refunded', 'refunded')
         ), 0)::text AS gross_paid_minor,
-        COALESCE((
-          SELECT SUM(r.amount_minor)
-          FROM mbox.refunds AS r
-          JOIN mbox.payments AS paid
-            ON paid.tenant_id = r.tenant_id
-           AND paid.store_id = r.store_id
-           AND paid.id = r.payment_id
-          WHERE paid.tenant_id = $1::uuid
-            AND paid.store_id = $2::uuid
-            AND paid.order_id = $3::uuid
-            AND r.status = 'succeeded'
-        ), 0)::text AS refunded_minor,
+        COALESCE((SELECT SUM(r.amount_minor) FROM mbox.order_refund_facts r
+          WHERE r.tenant_id=$1 AND r.store_id=$2 AND r.order_id=$3 AND r.status='succeeded'),0)::text AS refunded_minor,
         COALESCE(BOOL_OR(
           p.status IN ('created', 'pending') AND p.retry_released_at IS NULL
         ), false) AS has_pending
-      FROM mbox.payments AS p
+      FROM mbox.order_payment_facts AS p
       WHERE p.tenant_id = $1::uuid
         AND p.store_id = $2::uuid
         AND p.order_id = $3::uuid
@@ -1351,7 +1383,7 @@ export class PaymentRepository {
 }
 
 const PAYMENT_COLUMNS = `
-  id, payable_kind, order_id, activity_registration_id, activity_registration_cycle, public_id,
+  id, payable_kind, order_batch_id, order_id, activity_registration_id, activity_registration_cycle, public_id,
   provider, provider_transaction_id, settlement_channel, method,
   amount_minor, currency, status, provider_snapshot,
   retry_released_at::text, retry_release_reason,
@@ -1501,6 +1533,7 @@ function mapPayment(row: PaymentRow): Payment {
   return {
     id: row.id,
     payableKind: row.payable_kind,
+    ...(row.order_batch_id?{orderBatchId:row.order_batch_id}:{}),
     orderId: row.order_id,
     activityRegistrationId: row.activity_registration_id,
     activityRegistrationCycle: row.activity_registration_cycle === null

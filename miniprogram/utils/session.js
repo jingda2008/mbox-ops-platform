@@ -51,7 +51,13 @@ function applyLaunchSession(options, config) {
   // Re-scanning a fixed physical QR after turnover must start a new local
   // generation even when its credential text has not changed. It clears only
   // the guest-table domain; reservation and member credentials stay intact.
-  if (startsNewTableScan) clearTableConnection()
+  if (startsNewTableScan) {
+    if(previous.cartScope&&connection.status==='active'||previous.cartScope&&connection.status==='already_active') {
+      wx.setStorageSync('mbox.table.scan.previous',{session:previous,connection,
+        connectedToken:wx.getStorageSync('mbox.connected.table.token'),cookie:wx.getStorageSync('mbox.http.cookie.guest.v2')})
+    }
+    clearTableConnection()
+  }
   const previousScanNonce = normalizeScanNonce(previous.scanNonce)
   const scanNonce = resolvedToken
     ? (startsNewTableScan || !previousScanNonce ? createScanNonce() : previousScanNonce)
@@ -157,7 +163,20 @@ function clearTableConnection() {
   wx.removeStorageSync('mbox.pending.guest.payment.v1')
 }
 
+function restoreRejectedTableScan() {
+  const previous=wx.getStorageSync('mbox.table.scan.previous')
+  if(!previous||!previous.session||!previous.session.cartScope)return false
+  wx.setStorageSync('mbox.table.session',previous.session)
+  wx.setStorageSync('mbox.table.connection.state',previous.connection)
+  wx.setStorageSync('mbox.connected.table.token',previous.connectedToken)
+  wx.setStorageSync('mbox.http.cookie.guest.v2',previous.cookie)
+  getApp().globalData.tableSession=previous.session
+  wx.removeStorageSync('mbox.table.scan.previous')
+  return true
+}
+
 module.exports = {
+  restoreRejectedTableScan,
   applyLaunchSession,
   getTableSession,
   tableSessionCacheScope,

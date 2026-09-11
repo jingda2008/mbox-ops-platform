@@ -1,3 +1,4 @@
+import {readMonthlySchedule,previewMonthlySchedule} from './monthly-schedule.js'
 import { randomUUID } from 'node:crypto'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type { JsonObject, JsonValue } from './command-executor.js'
@@ -118,7 +119,7 @@ type SongRequestRepositoryPort = Pick<SongRequestRepository, 'findById'>
 export interface ReservationPerformanceApiOptions {
   transactions: Pick<ScopedPostgresTransactionRunner, 'run'>
   reservations: ReservationCommands
-  performance: PerformanceCommands
+  performance: PerformanceCommands & Partial<Pick<PerformanceCommandService, 'publishMonthly'>>
   resolveGuestContext(request: FastifyRequest): Promise<GuestReservationPerformanceContext>
     | GuestReservationPerformanceContext
   resolveStaffContext(request: FastifyRequest): Promise<StaffReservationPerformanceContext>
@@ -672,6 +673,27 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
     return reply.send({ data: view })
   }))
 
+  app.get('/staff/schedules/monthly',async(request,reply)=>handleRoute(reply,async()=>{
+    const context=await authorizedStaffAny(options,request,['song.manage','performance.schedule.revise'],createAccess)
+    const month=readObject(request.query).month
+    if(typeof month!=='string'||!/^20\d{2}-(0[1-9]|1[0-2])$/.test(month))throw new ApiRequestError('请选择有效月份')
+    const data=await options.transactions.run(context.scope,async tx=>(await tx.query(`SELECT s.id,s.starts_at::text AS "startsAt",s.ends_at::text AS "endsAt",s.status,p.stage_name AS "performerStageName" FROM mbox.schedules s JOIN mbox.performers p ON p.tenant_id=s.tenant_id AND p.store_id=s.store_id AND p.id=s.performer_id WHERE s.tenant_id=$1 AND s.store_id=$2 AND to_char(s.starts_at AT TIME ZONE 'Asia/Shanghai','YYYY-MM')=$3 AND s.status<>'cancelled' ORDER BY s.starts_at,s.id`,[context.scope.tenantId,context.scope.storeId,month])).rows,{readOnly:true})
+    return reply.send({data})
+  }))
+  app.post('/staff/schedules/monthly/preview',async(request,reply)=>handleRoute(reply,async()=>{
+    const context=await authorizedStaff(options,request,'song.manage',createAccess)
+    const input=readMonthlySchedule(request.body)
+    const data=await options.transactions.run(context.scope,tx=>previewMonthlySchedule(tx,input),{readOnly:true})
+    return reply.send({data})
+  }))
+  app.post('/staff/schedules/monthly/publish',async(request,reply)=>handleRoute(reply,async()=>{
+    const context=await authorizedStaff(options,request,'song.manage',createAccess)
+    const input=readMonthlySchedule(request.body)
+    if(!options.performance.publishMonthly)throw new ApiRequestError('月度排班功能尚未部署，请刷新后重试')
+    const execution=await options.performance.publishMonthly({...input,scope:context.scope,actor:employeeActor(context.employeeId),businessDate:context.businessDate,
+      idempotencyKey:readIdempotencyKey(request),requestFingerprint:fingerprint(request,context,input)})
+    return reply.code(execution.replayed?200:201).send({data:execution.value,meta:{replayed:execution.replayed}})
+  }))
   app.post('/staff/schedules', async (request, reply) => handleRoute(reply, async () => {
     const context = await authorizedStaff(options, request, 'song.manage', createAccess)
     const body = readObject(request.body)
@@ -1448,8 +1470,8 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   if (error instanceof PerformerSongNotFoundError) return apiError(404, 'PERFORMER_SONG_NOT_FOUND', '歌曲不存在')
   if (error instanceof ScheduleNotFoundError) return apiError(404, 'SCHEDULE_NOT_FOUND', '演出排班不存在')
   if (error instanceof SongRequestNotFoundError) return apiError(404, 'SONG_REQUEST_NOT_FOUND', '点歌请求不存在')
-  if (error instanceof ReservationConflictError) return apiError(409, 'RESERVATION_TABLE_CONFLICT', '所选桌位在该时段已不可预约')
-  if (error instanceof ReservationTableUnavailableError) return apiError(409, 'RESERVATION_TABLE_UNAVAILABLE', '所选桌位当前不可预约')
+  if (error instanceof ReservationConflictError) return apiError(409, 'RESERVATION_TABLE_CONFLICT', `所选桌位在${error.startsAt?new Date(error.startsAt).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'}):'所选开始时间'}至${error.endsAt?new Date(error.endsAt).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'}):'所选结束时间'}已有有效预约占用，请返回桌位选择查看可用时段`)
+  if (error instanceof ReservationTableUnavailableError) return apiError(409, 'RESERVATION_TABLE_UNAVAILABLE', error.detail)
   if (error instanceof ReservationCancellationPolicyError) {
     return error.reason === 'paid_deposit'
       ? apiError(409, 'RESERVATION_PAID_DEPOSIT_REQUIRES_STAFF', '该预约已有定金，请联系工作人员处理取消和退款')
@@ -1457,13 +1479,23 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   }
   if (error instanceof ReservationHoldExpiredError) return apiError(409, 'RESERVATION_HOLD_EXPIRED', '桌位保留时间已过，请重新选择')
   if (error instanceof ReservationLockUnavailableError) return apiError(409, 'RESERVATION_LOCK_UNAVAILABLE', '预约桌位锁已失效')
-  if (error instanceof ReservationTransitionError) return apiError(409, 'RESERVATION_STATE_CONFLICT', '当前预约状态不允许此操作')
+  if (error instanceof ReservationTransitionError) return apiError(409, 'RESERVATION_STATE_CONFLICT', `预约当前为${operationStateLabel(error.from)}，不能改为${operationStateLabel(error.to)}；请刷新该记录查看可用操作`)
   if (error instanceof ScheduleConflictError) return apiError(409, 'SCHEDULE_CONFLICT', '演出时间与现有排班冲突')
-  if (error instanceof ScheduleTransitionError) return apiError(409, 'SCHEDULE_STATE_CONFLICT', '当前演出状态不允许此操作')
+  if (error instanceof ScheduleTransitionError) return apiError(409, 'SCHEDULE_STATE_CONFLICT', `演出当前为${operationStateLabel(error.from)}，不能改为${operationStateLabel(error.to)}；请刷新该记录查看可用操作`)
   if (error instanceof SongRequestCustomerSessionError) return apiError(403, 'SONG_REQUEST_TABLE_CUSTOMER_MISMATCH', error.message)
   if (error instanceof SongRequestPaymentEvidenceError) return apiError(409, 'SONG_REQUEST_PAYMENT_EVIDENCE_INVALID', error.message)
-  if (error instanceof SongRequestEligibilityError) return apiError(409, 'SONG_REQUEST_NOT_ELIGIBLE', '当前桌次或演出安排暂不支持该点歌请求')
-  if (error instanceof SongRequestTransitionError) return apiError(409, 'SONG_REQUEST_STATE_CONFLICT', '当前点歌状态不允许此操作')
+  if (error instanceof SongRequestEligibilityError) {
+    const reasons:Record<string,string>={
+      'Song requests require an open table session':'当前桌次已结束，不能点歌；请扫描当前有效桌码或联系服务员',
+      'The selected performance slot is unavailable':'所选演出已取消、结束或不存在，请刷新后选择当前可点场次',
+      "Song requests are limited to today's current or next performer":'只能向本营业日正在演出或下一场歌手点歌，请刷新演出表选择',
+      'An extension can only be requested from the current performer':'加时仅适用于正在演出的歌手，请选择当前场次',
+      'The selected performer is unavailable':'所选歌手当前已停用或不存在，请选择其他歌手',
+      "The song is not in the selected performer's available catalog":'这首歌不在该歌手当前可点歌单中，请选择歌单内歌曲，或提交定制点歌由舞台确认',
+    }
+    return apiError(409,'SONG_REQUEST_NOT_ELIGIBLE',reasons[error.message]??'点歌资格校验未通过，请刷新当前桌台、场次和歌单后重试')
+  }
+  if (error instanceof SongRequestTransitionError) return apiError(409, 'SONG_REQUEST_STATE_CONFLICT', `点歌当前为${operationStateLabel(error.from)}，不能改为${operationStateLabel(error.to)}；请刷新该记录查看可用操作`)
   if (isPostgresConstraintError(error)) return apiError(409, 'SONG_CATALOG_CONFLICT', '歌曲名称、编号或别名与现有歌单冲突')
   if (error instanceof IdempotencyConflictError) return apiError(409, 'IDEMPOTENCY_CONFLICT', '重复请求内容不一致')
   if (error instanceof IdempotencyInProgressError) return apiError(425, 'IDEMPOTENCY_IN_PROGRESS', '相同请求正在处理中')
@@ -1487,3 +1519,5 @@ function isPostgresConstraintError(error: unknown): boolean {
 function apiError(statusCode: number, code: string, message: string) {
   return { statusCode, body: { error: { code, message } } }
 }
+
+function operationStateLabel(status:string):string{return ({draft:'草稿',pending:'待处理',held:'暂留',confirmed:'已确认',checked_in:'已签到',cancelled:'已取消',expired:'已过期',completed:'已完成',no_show:'未到店',scheduled:'已排期',performing:'演出中',ended:'已结束',requested:'待受理',confirming:'待确认',accepted:'已接受',paid:'已付款',performed:'已演唱',rejected:'已拒绝'} as Record<string,string>)[status]??`已记录状态（${status}）`}

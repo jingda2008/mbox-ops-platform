@@ -323,6 +323,7 @@ async function loadOrderPage(state) {
         })[error && error.code] || fallback,
         isWechatCancellation: (error) => /cancel/i.test(String(error && error.errMsg || '')),
       }
+      if (specifier === '../../utils/alipay-payment') return { isPresentableAlipayTradeAction: action => Boolean(action && action.status === 'pending' && action.payload && action.payload.tradeNO) }
       if (specifier === '../../utils/wechat-payment') return {
         isPresentableWechatJsapiAction: (action) => Boolean(action && action.status === 'pending'
           && action.presentation === 'jsapi' && action.payload
@@ -411,6 +412,7 @@ async function loadAccountPage(state, platform = 'miniprogram') {
           ? '这笔订单不属于当前桌位，请重新扫描当前桌面的二维码' : fallback,
         isWechatCancellation: () => false,
       }
+      if (specifier === '../../utils/alipay-payment') return { isPresentableAlipayTradeAction: action => Boolean(action && action.status === 'pending' && action.payload && action.payload.tradeNO) }
       if (specifier === '../../utils/wechat-payment') return {
         isPresentableWechatJsapiAction: (action) => Boolean(action && action.status === 'pending'
           && action.presentation === 'jsapi' && action.payload
@@ -809,7 +811,7 @@ test('Account clears an unscoped legacy pending-payment record before showing a 
   await load
 })
 
-test('Account shows a historical unpaid guest order without a payment revival action', async () => {
+test('Account permits an explicit batch payment for a current-table unpaid order', async () => {
   const state = {
     session: { tableCode: 'VIP1', tableToken: 'fixed-token', cartScope: 'cart-scope-for-turn-b-000000002' },
     storage: new Map(),
@@ -822,8 +824,8 @@ test('Account shows a historical unpaid guest order without a payment revival ac
   page.onLoad()
   await page.loadData()
 
-  assert.equal(page.data.orders[0].canPay, false)
-  assert.match(page.data.orders[0].paymentHint, /返回点单重新选购/)
+  assert.equal(page.data.orders[0].canPay, true)
+  assert.deepEqual(Array.from(page.data.selectedPublicIds), ['order-c'])
   assert.equal(typeof page.continuePayment, 'undefined')
 })
 
@@ -837,8 +839,8 @@ for(const platform of ['miniprogram','alipay-miniprogram']){
     page.onLoad({ mode: 'history' }); await page.loadData()
     assert.equal(page.data.orders[0].totalText, '¥20')
     assert.equal(page.data.orders[0].canPay, false)
-    assert.match(page.data.orders[0].paymentHint, /不在此重复收款/)
-    assert.equal(page.data.orders[0].roundText, '我的订单')
+    assert.match(page.data.orders[0].paymentHint, /保留原桌订单/)
+    assert.equal(page.data.orders[0].roundText, '原桌号未留存')
     assert.equal(page.queuePendingGuestPaymentAbandonment(), null)
     page.onHide()
     assert.equal(state.storage.get('mbox.pending.guest.payment.v1'), pending)

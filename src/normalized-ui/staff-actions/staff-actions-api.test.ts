@@ -242,6 +242,20 @@ describe('StaffActionsApi', () => {
     expect(String(orderRequest?.body)).not.toContain('sourceId')
   })
 
+  it('accepts a batch root without inventing an original order and retains explicit manual retry identity',async()=>{
+    const action={paymentId:'batch-root',paymentPublicId:'BATCH-ROOT',orderPublicId:null,payableKind:'order_batch',status:'pending',presentation:'qr',expiresAt:'2026-09-11T10:00:00Z',payload:{qrCodeUrl:'isolated-test'}}
+    const send=vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify({data:{providerAction:action}}),{status:201})).mockRejectedValue(new TypeError('response lost'))
+    const api=new StaffActionsApi({fetch:send,createIdempotencyKey:()=> 'batch-api-test'})
+    const orderIds=['22222222-2222-4222-8222-222222222222','33333333-3333-4333-8333-333333333333']
+    await expect(api.createOnlinePayment({orderId:orderIds[0]!,orderIds,amountMinor:1500,provider:'postar',method:'native_qr'})).resolves.toEqual(action)
+    expect(JSON.parse(String(send.mock.calls[0]![1]!.body))).toMatchObject({orderIds,amountMinor:1500})
+    const input={orderId:orderIds[0]!,orderIds,amountMinor:1500,provider:'cash' as const,receiptReference:'cash-same-receipt',idempotencyKey:'manual-same-operation'}
+    await expect(api.recordManualPayment(input)).rejects.toThrow()
+    await expect(api.recordManualPayment(input)).rejects.toThrow()
+    expect(new Headers(send.mock.calls[1]![1]!.headers).get('idempotency-key')).toBe('manual-same-operation')
+    expect(new Headers(send.mock.calls[2]![1]!.headers).get('idempotency-key')).toBe('manual-same-operation')
+  })
+
   it('starts exactly the staff-selected payment path for the assisted order', async () => {
     const providerAction = {
       paymentId: '11111111-1111-4111-8111-111111111111',
@@ -309,6 +323,7 @@ describe('StaffActionsApi', () => {
         quantity: 2,
         fulfillmentStation: 'bar',
         fulfillmentStatus: 'ready_for_delivery',
+        includedInBundle: false, unitPriceMinor: 1800, totalAmountMinor: 3600,
       }],
     }
     const send = vi.fn<typeof fetch>()

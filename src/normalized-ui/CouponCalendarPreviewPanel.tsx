@@ -6,7 +6,7 @@ import './stacking-price-preview-panel.css'
 
 interface CalendarPreview {
   available: boolean; hasUsableWindow: boolean; nextAvailableAt: string | null; lastAvailableUntil: string | null
-  calendar: Array<{ date: string; windows: Array<{ from: string; until: string }> }>
+  calendar: Array<{ date: string; reasons?:string[]; windows: Array<{ from: string; until: string }> }>
   nextCalendarDate: string | null
 }
 function minute(value: string, allowMidnightEnd = false): number {
@@ -97,9 +97,9 @@ export function CouponCalendarPreviewPanel({ api, auth }: { api: NormalizedApiCl
     <CouponCalendarVersionPanel api={api} auth={auth} inputRevision={inputRevision} readRule={readRule} onLoad={loadRule} onWriting={setWriting} />
     {error && <p role="alert">{error}</p>}
     {result && <div role="status">
-      {!result.hasUsableWindow ? <p>没有任何可用时段，不能发布此规则。请检查日期、星期、排除条件和绝对截止时间。</p> : <>
+      {!result.hasUsableWindow ? <p>没有任何可用时段，不能发布此规则。{[...new Set(result.calendar.flatMap(day=>day.reasons??[]))].join('；')}</p> : <>
         <p>下一次可用：{result.nextAvailableAt ? localTime(result.nextAvailableAt) : '已无后续可用时段'}；最后截止：{localTime(result.lastAvailableUntil!)}。</p>
-        <ul className="coupon-calendar-days">{result.calendar.map(day => <li key={day.date}><strong>{day.date}</strong><span>{day.windows.length ? day.windows.map(window => `${localTime(window.from)} 至 ${localTime(window.until)}`).join('；') : '不可用'}</span></li>)}</ul>
+        <ul className="coupon-calendar-days">{result.calendar.map(day => <li key={day.date}><strong>{day.date}</strong><span>{day.windows.length ? day.windows.map(window => `${localTime(window.from)} 至 ${localTime(window.until)}`).join('；') : (day.reasons?.join('；')??'无可用时段，原预览未返回具体规则原因')}</span></li>)}</ul>
         {result.nextCalendarDate && <button type="button" disabled={busy} onClick={() => void preview(result.nextCalendarDate!)}>查看后续日期</button>}
       </>}
     </div>}

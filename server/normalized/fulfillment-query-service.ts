@@ -21,6 +21,7 @@ export interface FulfillmentWorkItem {
   carryover: boolean
   stationCode: FulfillmentStation
   kdsStatus: FulfillmentKdsStatus
+  failureReason?:string|null
   priority: number
   overdue: boolean
   readyForDelivery: boolean
@@ -72,6 +73,7 @@ export interface FulfillmentStaffView {
 }
 
 interface FulfillmentRow extends Record<string, unknown> {
+  failure_reason?:string|null
   task_id: string
   business_date: string
   carryover: boolean
@@ -130,7 +132,7 @@ export class FulfillmentQueryService {
       const rows = await readFulfillmentRows(transaction, {
         employeeId,
         businessDate,
-        canViewAll,
+        canViewAll: canViewAll && (!canPrepare || scopedStations.length === 0),
         canPrepare,
         canDeliver,
         canManageExceptions,
@@ -165,6 +167,9 @@ async function readFulfillmentRows(
   const result = await transaction.query<FulfillmentRow>(`
     SELECT
       task.id AS task_id,
+      (SELECT COALESCE(e.metadata->>'reasonNote',e.metadata->>'reason',e.metadata->>'reasonCode')
+       FROM mbox.kds_task_events e WHERE e.tenant_id=task.tenant_id AND e.store_id=task.store_id AND e.kds_task_id=task.id AND e.to_status='failed'
+       ORDER BY e.occurred_at DESC,e.id DESC LIMIT 1) AS failure_reason,
       customer_order.business_date::text AS business_date,
       (customer_order.business_date < $8::date) AS carryover,
       task.station_code,
@@ -358,6 +363,7 @@ function mapWorkItem(row: FulfillmentRow): FulfillmentWorkItem {
     carryover: row.carryover,
     stationCode: row.station_code,
     kdsStatus: row.kds_status,
+    failureReason:row.failure_reason??null,
     priority: row.priority,
     overdue: row.overdue,
     readyForDelivery: row.ready_for_delivery,

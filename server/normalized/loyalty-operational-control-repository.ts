@@ -101,7 +101,7 @@ export class LoyaltyOperationalControlRepository {
       SELECT ordering.tenant_id,ordering.store_id,ordering.id,payment.id,
         ordering.loyalty_policy_version_id,$5,payment.succeeded_at
       FROM mbox.orders ordering
-      JOIN mbox.payments payment
+      JOIN mbox.order_payment_facts payment
         ON payment.tenant_id=ordering.tenant_id AND payment.store_id=ordering.store_id
        AND payment.order_id=ordering.id
       WHERE ordering.tenant_id=$1::uuid AND ordering.store_id=$2::uuid

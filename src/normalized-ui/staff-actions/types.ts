@@ -192,6 +192,7 @@ export interface StaffFulfillmentItem {
   businessDate: string
   carryover: boolean
   stationCode: FulfillmentStation
+  failureReason?:string|null
   kdsStatus: FulfillmentStatus
   priority: number
   overdue: boolean
@@ -253,6 +254,9 @@ export interface StaffTableOrderDetail {
     id: string
     productName: string
     quantity: number
+    unitPriceMinor?: number
+    totalAmountMinor?: number
+    includedInBundle?: boolean
     fulfillmentStation: FulfillmentStation | 'none'
     fulfillmentStatus: StaffTableOrderItemFulfillmentStatus
   }>

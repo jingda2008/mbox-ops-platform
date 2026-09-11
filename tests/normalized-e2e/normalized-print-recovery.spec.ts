@@ -49,7 +49,7 @@ for (const width of [320, 390]) test(`printer recovery is isolated and readable 
   const history=page.locator('[aria-label="营业日账务与历史订单"]')
   await history.getByText('营业日账务与历史订单',{exact:true}).click()
   const historyResponse=page.waitForResponse(response=>response.url().includes('/api/operations/history?'))
-  await history.getByRole('button',{name:'查看账务与历史'}).click()
+  await history.getByRole('button',{name:'查找订单'}).click()
   expect((await historyResponse).status()).toBe(200)
   await expect(history.getByRole('heading',{name:/全店已入账资金/})).toBeVisible()
   const exportButton=history.getByRole('button',{name:'导出全部筛选结果'})

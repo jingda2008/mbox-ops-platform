@@ -1510,13 +1510,13 @@ function mapError(error: unknown): {
       code: "INVENTORY_NOT_FOUND",
       message: "未找到对应库存记录",
     };
+  if(error instanceof InsufficientInventoryError)return {status:409,code:'INVENTORY_INSUFFICIENT',message:`物料 ${error.itemName??error.sku}（${error.sku}） 可用 ${error.availableQuantity}，本次需 ${error.requiredQuantity}（${error.baseUnit??'原记录未留存单位'}）；请调整数量或核对库存`};
+  if(error instanceof IdempotencyConflictError)return {status:409,code:'IDEMPOTENCY_CONFLICT',message:'同一请求编号不能提交不同库存操作，请恢复原操作或重新发起'};
+  if(error instanceof IdempotencyInProgressError)return {status:409,code:'IDEMPOTENCY_IN_PROGRESS',message:'原库存操作仍在处理，请用原请求重试核对结果，不能重复登记'};
   if (
-    error instanceof InventoryConflictError ||
-    error instanceof InsufficientInventoryError ||
-    error instanceof IdempotencyConflictError ||
-    error instanceof IdempotencyInProgressError
+    error instanceof InventoryConflictError
   )
-    return { status: 409, code: "INVENTORY_CONFLICT", message: error.message };
+    return { status: 409, code: "INVENTORY_CONFLICT", message: /[\u4e00-\u9fff]/.test(error.message)?error.message:"库存记录与本次操作条件不一致，请刷新记录核对后重试" };
   if (
     error instanceof IdempotencyRecordError ||
     error instanceof NormalizedStoreUnavailableError ||
@@ -1539,7 +1539,9 @@ function mapError(error: unknown): {
     return {
       status: 409,
       code: "INVENTORY_CONFLICT",
-      message: "库存数据已变化或不符合盘点规则，请刷新后重试",
+      message: error.code === '23505' ? '该库存编号或记录已存在，请核对重复记录'
+        : error.code === '23514' ? '本次库存数据不符合保存规则，请核对数量及盘点字段'
+        : '其他员工正在修改同一库存记录，请刷新后重试原操作',
     };
   }
   return {

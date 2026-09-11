@@ -561,6 +561,7 @@ describe('commerceKdsApiPlugin', () => {
             id: orderItemId,
             productName: '精酿啤酒',
             quantity: 2,
+            includedInBundle:false,
             fulfillmentStation: 'bar',
             fulfillmentStatus: 'delivered',
           },
@@ -568,6 +569,7 @@ describe('commerceKdsApiPlugin', () => {
             id: '78787878-7878-4787-8787-787878787878',
             productName: '威士忌酸',
             quantity: 1,
+            includedInBundle:false,
             fulfillmentStation: 'bar',
             fulfillmentStatus: 'ready_for_delivery',
           },
@@ -579,6 +581,7 @@ describe('commerceKdsApiPlugin', () => {
           id: '79797979-7979-4797-8979-797979797979',
           productName: '组合套餐',
           quantity: 1,
+          includedInBundle:false,
           fulfillmentStation: 'kitchen',
           fulfillmentStatus: 'awaiting_payment',
         }],
@@ -587,7 +590,7 @@ describe('commerceKdsApiPlugin', () => {
     const detailQuery = value.staffQueries.find((sql) => sql.includes('order_header.public_id AS order_public_id'))
     expect(detailQuery).toContain('item.status AS item_status')
     expect(detailQuery).toContain("WHEN 'ready' THEN 0")
-    expect(detailQuery).not.toContain('total_amount_minor')
+    expect(detailQuery).toContain('total_amount_minor')
     expect(detailQuery).not.toContain('mbox.payments')
     expect(value.staffAccessRunOptions).toEqual([{ readOnly: true }, { readOnly: true }])
   })

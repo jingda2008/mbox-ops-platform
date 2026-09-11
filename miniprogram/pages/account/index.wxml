@@ -1,6 +1,6 @@
 <view class="page">
   <view class="top-band">
-    <view class="brand-row"><view><text class="eyebrow">{{historyMode ? '个人订单' : '当前桌台'}}</text><text class="account-table">{{historyMode ? '我的已付订单' : tableCode + ' 桌账摘要'}}</text></view></view>
+    <view class="brand-row"><view><text class="eyebrow">{{historyMode ? '个人订单' : '当前桌台'}}</text><text class="account-table">{{historyMode ? '我的订单' : tableCode + ' 桌账摘要'}}</text></view></view>
   </view>
   <state-panel wx:if="{{loading}}" type="loading" title="{{historyMode ? '正在读取我的订单' : '正在查看桌账'}}" />
   <block wx:else>
@@ -9,13 +9,15 @@
     <view wx:if="{{!historyMode}}" class="account-total panel">
       <text class="eyebrow">当前未结余额</text>
       <text class="account-total__amount">{{outstandingText}}</text>
-      <text class="account-note">同桌订单可共同查看，不显示付款人信息。</text>
+      <text class="account-note">勾选本桌订单合并付款，原订单分别保留。</text>
+      <button wx:if="{{selectedPublicIds.length}}" loading="{{payingBatch}}" disabled="{{payingBatch}}" bindtap="paySelectedOrders">支付所选 {{selectedPublicIds.length}} 单 · {{selectedTotalText}}</button>
     </view>
-    <view class="warning payment-boundary">{{historyMode ? '最近30笔本人下单的已付及退款订单。不含仅同桌共享的他人订单，历史记录不重新发起支付。' : '金额会在付款或退款确认后更新。付款结果尚未确认时，请先查看结果，避免重复付款。'}}</view>
+    <view class="warning payment-boundary">{{historyMode ? '显示本人在各桌的订单，可继续翻页；不包含同桌其他客人的订单。' : '付款或退款到账后更新金额。如需帮助，请联系员工。'}}</view>
     <view class="section">
-      <view class="section-title"><text>{{historyMode ? '我的成交记录' : '本桌订单'}}</text><text class="section-link">下拉刷新</text></view>
+      <view class="section-title"><text>{{historyMode ? '我的点单记录' : '本桌订单'}}</text><text class="section-link">下拉刷新</text></view>
       <view wx:if="{{orders.length}}" class="order-list">
         <view wx:for="{{orders}}" wx:key="publicId" class="panel order-card">
+          <button wx:if="{{item.canPay}}" disabled="{{payingBatch}}" data-id="{{item.publicId}}" bindtap="togglePaymentOrder">{{item.selected ? '☑ 已选，点击取消' : '☐ 选择本单'}}</button>
           <view class="order-card__head">
             <view>
               <view class="order-title-row"><text class="list-row__title">{{item.roundText}} · {{item.statusText}}</text><text wx:if="{{item.pricingLabel}}" class="pricing-badge pricing-badge--{{item.pricingKind}}">{{item.pricingLabel}}</text></view>
@@ -32,7 +34,8 @@
           </view>
         </view>
       </view>
-      <state-panel wx:else type="empty" title="{{historyMode ? '暂无本人已付订单' : '当前暂无订单'}}" message="{{historyMode ? '本人下单并确认收款后，可在此查看明细与退款状态' : '下单后，商品与出品进度会显示在这里'}}" />
+      <state-panel wx:else type="empty" title="{{historyMode ? '暂无本人订单' : '当前暂无订单'}}" message="{{historyMode ? '本人下单后，可在此查看原桌号、明细与进度' : '下单后，商品与出品进度会显示在这里'}}" />
+      <button wx:if="{{historyMode && hasMoreHistory}}" bindtap="loadMoreHistory" disabled="{{loading}}">查看更多订单</button>
     </view>
   </block>
 </view>

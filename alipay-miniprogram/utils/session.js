@@ -16,7 +16,7 @@ function decodeScene(scene) {
       result[key] = value
     }
     return result
-  } catch {
+  } catch (error) {
     throw new Error('桌码scene无效，无法识别当前桌位')
   }
 }

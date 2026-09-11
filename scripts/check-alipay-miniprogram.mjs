@@ -64,6 +64,7 @@ for (const file of alipayFiles) {
   const extension = extname(file)
   if (source !== null && extension === '.json') JSON.parse(source)
   if (source !== null && extension === '.js') {
+    assert(!/\bcatch\s*\{/.test(source), `支付宝编译器不支持省略 catch 参数: ${relative(alipayRoot, file)}`)
     assert(!/^[\t ]*(?:module\.exports|exports\s*(?:\.|\[))/m.test(source), `支付宝 2.x 源码必须使用 ESM 导出: ${relative(alipayRoot, file)}`)
     new vm.Script(syntaxCheckSource(source), { filename: relative(alipayRoot, file) })
   }

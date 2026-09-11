@@ -160,6 +160,7 @@ describe('CashierAfterSalesWorkbenchView', () => {
     const css = readFileSync(new URL('./cashier-after-sales-workbench.css', import.meta.url), 'utf8')
     const source = readFileSync(new URL('./CashierAfterSalesWorkbench.tsx', import.meta.url), 'utf8')
     expect(css).toMatch(/\.cashier-workbench-filters select \{[^}]*min-height:\s*44px/)
+    expect(source).toContain("new URLSearchParams({ limit: '100' })")
     expect(source).toContain("const isGlobalView = searchQuery.trim() === '' && areaId === 'all' && paymentState === 'all'")
     expect(source).toContain('attentionCount - previousAttentionCount')
   })

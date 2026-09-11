@@ -252,6 +252,17 @@ export class PostgresCashierWorkbenchQuery {
               EXISTS(SELECT 1 FROM mbox.payment_financial_monitoring_signals signal WHERE signal.tenant_id=orders.tenant_id AND signal.store_id=orders.store_id AND signal.subject_id=orders.id AND signal.signal IN ('order_overcollected','cancelled_order_captured')) OR
               ${cashierCouponRefundReviewCountSql}>0 OR
               ${orderNeedsCollectionSql('orders')}
+              -- Keep a just-collected carryover visible long enough for the
+              -- cashier to verify it on this or another terminal. Older
+              -- terminal history remains in the dedicated history search.
+              OR EXISTS (
+                SELECT 1 FROM mbox.order_payment_facts recent_captured
+                WHERE recent_captured.tenant_id=orders.tenant_id
+                  AND recent_captured.store_id=orders.store_id
+                  AND recent_captured.order_id=orders.id
+                  AND recent_captured.status IN ('succeeded','partially_refunded','refunded')
+                  AND recent_captured.succeeded_at>=clock_timestamp()-INTERVAL '6 hours'
+              )
               OR EXISTS (
                 SELECT 1 FROM mbox.order_payment_facts AS carryover_payment
                 JOIN mbox.refunds AS carryover_refund
@@ -344,7 +355,16 @@ export class PostgresCashierWorkbenchQuery {
               OR (orders.total_amount_minor=0 AND orders.status NOT IN ('draft','cancelled'))))
             OR ($9='refunded' AND orders.payment_status IN ('partially_refunded','refunded'))
           )
-        ORDER BY (orders.business_date < $3::date) DESC,
+        ORDER BY ${orderNeedsCollectionSql('orders')} DESC,
+          EXISTS (
+            SELECT 1 FROM mbox.order_payment_facts recent_captured_ordering
+            WHERE recent_captured_ordering.tenant_id=orders.tenant_id
+              AND recent_captured_ordering.store_id=orders.store_id
+              AND recent_captured_ordering.order_id=orders.id
+              AND recent_captured_ordering.status IN ('succeeded','partially_refunded','refunded')
+              AND recent_captured_ordering.succeeded_at>=clock_timestamp()-INTERVAL '6 hours'
+          ) DESC,
+          (orders.business_date = $3::date) DESC,
           COALESCE(orders.submitted_at, orders.created_at) DESC, orders.id DESC
         LIMIT $5
       `, [

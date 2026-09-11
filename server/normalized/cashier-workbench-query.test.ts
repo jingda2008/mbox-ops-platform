@@ -272,7 +272,7 @@ describe('PostgresCashierWorkbenchQuery', () => {
     expect(runner.calls[0]?.sql).toContain("carryover_refund.status IN ('requested','approved','processing')")
   })
 
-  it('hides terminal history from the routine queue but keeps it available to explicit search', async () => {
+  it('keeps recent carryover collections visible while old terminal history requires explicit search', async () => {
     const runner = new QueryRunner([[], []])
     const query = new PostgresCashierWorkbenchQuery(
       runner as unknown as ScopedPostgresTransactionRunner,
@@ -284,6 +284,10 @@ describe('PostgresCashierWorkbenchQuery', () => {
     })
 
     expect(runner.calls[0]?.sql).toContain("OR (($4::text <> '' OR $9::text IS NOT NULL) AND orders.business_date < $3::date)")
+    expect(runner.calls[0]?.sql).toContain("recent_captured.status IN ('succeeded','partially_refunded','refunded')")
+    expect(runner.calls[0]?.sql).toContain("recent_captured.succeeded_at>=clock_timestamp()-INTERVAL '6 hours'")
+    expect(runner.calls[0]?.sql).toContain("ORDER BY (orders.status NOT IN ('draft','cancelled')")
+    expect(runner.calls[0]?.sql).toContain('recent_captured_ordering.succeeded_at>=clock_timestamp()')
     expect(runner.calls[1]?.sql).toContain("OR $4::text <> ''")
     expect(runner.calls[1]?.sql).not.toContain("registration.payment_status IN ('pending','refunded')")
   })

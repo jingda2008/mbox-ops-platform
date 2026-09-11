@@ -102,7 +102,9 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
       setMessage(null)
     }
     try {
-      const search = new URLSearchParams({ limit: '50' })
+      // Keep the complete active cashier queue visible in normal store load.
+      // The API caps this at 100 and prioritizes orders that still need money.
+      const search = new URLSearchParams({ limit: '100' })
       if (searchQuery.trim()) search.set('query', searchQuery.trim())
       if (areaId !== 'all') search.set('areaId', areaId)
       if (paymentState !== 'all') search.set('paymentState', paymentState)

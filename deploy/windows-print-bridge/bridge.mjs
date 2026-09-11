@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { mkdir, open, readFile, rename, writeFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
 
-const VERSION = '1.0.2'
+const VERSION = '1.0.3'
 const execFileAsync = promisify(execFile)
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const dataDirectory = process.env.MBOX_PRINT_BRIDGE_DATA

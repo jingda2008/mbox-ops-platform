@@ -80,6 +80,7 @@ type ProductKind = "single" | "bundle";
 type InventoryControlMode = "tracked" | "not_managed";
 
 interface BundleComponent {
+  status?: string;
   productId: string;
   code: string;
   name: string;
@@ -146,6 +147,7 @@ interface ProductRow extends Record<string, unknown> {
   menu_sort_order: number;
   available_from: string | null;
   available_until: string | null;
+  supply_window_available?: boolean;
   allowed_channels: string[];
   max_order_quantity: number;
   kds_priority: number;
@@ -162,6 +164,7 @@ interface ProductRow extends Record<string, unknown> {
 }
 
 interface CatalogProduct {
+  availabilityReasons?: string[];
   id: string;
   code: string;
   name: string;
@@ -1203,6 +1206,9 @@ async function listProducts(
       product.recommendation_upgrade_product_id,
       product.menu_sort_order, to_char(product.available_from, 'HH24:MI') AS available_from,
       to_char(product.available_until, 'HH24:MI') AS available_until,
+      (product.available_from IS NULL OR product.available_until IS NULL OR
+       (product.available_from<product.available_until AND (clock_timestamp() AT TIME ZONE store.timezone)::time>=product.available_from AND (clock_timestamp() AT TIME ZONE store.timezone)::time<product.available_until) OR
+       (product.available_from>=product.available_until AND ((clock_timestamp() AT TIME ZONE store.timezone)::time>=product.available_from OR (clock_timestamp() AT TIME ZONE store.timezone)::time<product.available_until))) AS supply_window_available,
       product.allowed_channels, product.max_order_quantity, product.kds_priority,
       product.fulfillment_sla_seconds,
       product.cost_amount_minor::text, product.status,
@@ -1233,6 +1239,7 @@ async function listProducts(
           'productId', component_product.id,
           'code', component_product.code,
           'name', component_product.name,
+          'status', component_product.status,
           'quantity', component.quantity,
           'sortOrder', component.sort_order,
           'note', component.note
@@ -1564,6 +1571,7 @@ function assistedOrderCatalogProduct(
     maxOrderQuantity: product.maxOrderQuantity,
     status: product.status,
     isAvailable: product.isAvailable,
+    availabilityReasons:product.availabilityReasons??[],
     inventoryConfigurationComplete: product.inventoryConfigurationComplete,
     inventoryAvailable: product.inventoryAvailable,
     standardPrice: product.standardPrice,
@@ -2090,6 +2098,9 @@ async function getProduct(
       product.recommendation_upgrade_product_id,
       product.menu_sort_order, to_char(product.available_from, 'HH24:MI') AS available_from,
       to_char(product.available_until, 'HH24:MI') AS available_until,
+      (product.available_from IS NULL OR product.available_until IS NULL OR
+       (product.available_from<product.available_until AND (clock_timestamp() AT TIME ZONE store.timezone)::time>=product.available_from AND (clock_timestamp() AT TIME ZONE store.timezone)::time<product.available_until) OR
+       (product.available_from>=product.available_until AND ((clock_timestamp() AT TIME ZONE store.timezone)::time>=product.available_from OR (clock_timestamp() AT TIME ZONE store.timezone)::time<product.available_until))) AS supply_window_available,
       product.allowed_channels, product.max_order_quantity, product.kds_priority,
       product.fulfillment_sla_seconds,
       product.cost_amount_minor::text, product.status,
@@ -2120,6 +2131,7 @@ async function getProduct(
           'productId', component_product.id,
           'code', component_product.code,
           'name', component_product.name,
+          'status', component_product.status,
           'quantity', component.quantity,
           'sortOrder', component.sort_order,
           'note', component.note
@@ -2359,13 +2371,32 @@ function mapProduct(row: ProductRow, guest = false, includeCost = true): Catalog
         };
   const bundleComponents=readStoredBundleComponents(row.bundle_components??[]);
   const bundleChoiceGroups=readStoredBundleChoiceGroups(row.bundle_choice_groups??[]);
-  const catalogAvailable = row.status === "active" && standardPrice !== null
+  const catalogAvailable = row.status === "active" && standardPrice !== null && row.supply_window_available!==false
     && (row.product_kind !== "bundle" || (
       (bundleComponents.length>0||bundleChoiceGroups.length>0)
       && (bundleComponents.length===0||row.bundle_components_available===true)
       && row.bundle_choice_groups_available===true
     ));
+  const availabilityReasons:string[]=[];
+  if(row.supply_window_available===false)availabilityReasons.push(`当前不在供应时段，供应时间为 ${row.available_from} 至 ${row.available_until}${row.available_from&&row.available_until&&row.available_from>=row.available_until?'（跨午夜）':''}`);
+  if(row.allowed_channels.length===0)availabilityReasons.push('尚未开放任何点单渠道，请在商品编辑中选择销售渠道');
+  if(row.status!=='active')availabilityReasons.push(`商品 ${row.name}（${row.code}）未启用，请调整销售状态`);
+  if(!standardPrice)availabilityReasons.push(`商品 ${row.name} 缺少当前有效标准售价，请在价格配置补齐`);
+  if(row.product_kind==='bundle'){
+    if(!bundleComponents.length&&!bundleChoiceGroups.length)availabilityReasons.push('套餐没有固定商品或必选组，请编辑套餐内容');
+    for(const component of bundleComponents)if(component.status&&component.status!=='active')availabilityReasons.push(`固定商品 ${component.name}（${component.code}）未启用，请启用或替换该商品`);
+    for(const group of bundleChoiceGroups){
+      const available=group.options.filter(option=>option.available).length;
+      if(available<group.selectionCount){
+        availabilityReasons.push(`必选组“${group.name}”需要 ${group.selectionCount} 款，当前仅 ${available} 款可选`);
+        for(const option of group.options.filter(option=>!option.available))availabilityReasons.push(`${group.name} · ${option.name}（${option.code}）：${option.unavailableReason??'当前可选条件未通过，请编辑该商品核对'}`);
+      }
+    }
+  }
+  if(!row.inventory_configuration_complete)availabilityReasons.push('库存扣减配方未完整配置，请补齐商品配方');
+  if(!row.inventory_available)availabilityReasons.push('当前库存不足以履约，请核对配方用量及实际库存');
   return {
+    ...(!guest?{availabilityReasons}:{}),
     id: row.id,
     code: row.code,
     name: row.name,
@@ -3133,6 +3164,7 @@ function readStoredBundleComponents(value: JsonValue): BundleComponent[] {
       throw new TypeError("Stored bundle component is invalid");
     }
     return {
+      ...(typeof item.status==='string'?{status:item.status}:{}),
       productId: item.productId,
       code: item.code,
       name: item.name,
@@ -3199,6 +3231,7 @@ function stableStringify(value: JsonValue): string {
 
 function catalogProductToJson(product: CatalogProduct): JsonObject {
   return {
+    ...(product.availabilityReasons?{availabilityReasons:product.availabilityReasons}:{}),
     id: product.id,
     code: product.code,
     name: product.name,
@@ -3236,6 +3269,7 @@ function catalogProductToJson(product: CatalogProduct): JsonObject {
       : { costAmountMinor: product.costAmountMinor }),
     status: product.status,
     isAvailable: product.isAvailable,
+    availabilityReasons:product.availabilityReasons??[],
     inventoryConfigurationComplete: product.inventoryConfigurationComplete,
     inventoryAvailable: product.inventoryAvailable,
     standardPrice:

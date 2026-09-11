@@ -563,6 +563,29 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
     })
   }))
 
+  app.post('/guest/orders/payment-batch',async(request,reply)=>handleRoute(reply,async()=>{
+    const context=await requireTableContext(options,request,'guest.order.create')
+    const mode=await effectivePaymentMode(options,context.scope,request)
+    assertGuestSelfPaymentMode(mode)
+    options.onlinePayments.assertAvailable(mode==='simulation'?'simulation':'postar')
+    const body=request.body as {orderPublicIds?:unknown}|null
+    if(!body||!Array.isArray(body.orderPublicIds)||body.orderPublicIds.length<1||body.orderPublicIds.length>100)throw new TypeError('请选择1至100笔本桌未结订单')
+    const publicIds=body.orderPublicIds.map(value=>readPublicId(value,'订单号')).sort()
+    if(new Set(publicIds).size!==publicIds.length)throw new TypeError('同一订单不能重复选择')
+    const orderIds=await options.transactions.run(context.scope,async tx=>{
+      const visible=await loadGuestTableOrders(tx,context.tableSessionId,context.customerId)
+      if(publicIds.some(id=>!visible.some(order=>order.publicId===id&&order.paymentAccess==='available'&&order.status!=='cancelled'&&order.payableAmountMinor>0)))throw new TypeError('所选订单已结清、已取消或不属于当前可查看桌账，请刷新后重选')
+      return (await tx.query<{id:string}>(`SELECT id FROM mbox.orders WHERE tenant_id=$1 AND store_id=$2 AND table_session_id=$3 AND public_id=ANY($4::text[]) ORDER BY id`,[context.scope.tenantId,context.scope.storeId,context.tableSessionId,publicIds])).rows.map(row=>row.id)
+    })
+    const method=await options.onlinePayments.assertGuestJsapiReady(context.scope,context.customerId)
+    const key=readIdempotencyKey(request)
+    const payment=await options.payments.initiate({scope:context.scope,actor:guestActor(context),businessDate:context.businessDate,idempotencyKey:key,
+      requestFingerprint:stableJson({orderIds,method,customerId:context.customerId,tableSessionId:context.tableSessionId}),orderId:orderIds[0]!,orderIds,
+      publicId:createPublicId('payment',`${context.scope.storeId}:${key}`),provider:mode==='simulation'?'simulation':'postar',method,principal:guestPaymentPrincipal(context),providerSnapshot:{channel:'guest_table_batch'}})
+    const action=await createGuestProviderAction(options,context,payment.value,publicIds[0]!,request.ip,mode)
+    return reply.send({data:action,meta:{replayed:payment.replayed}})
+  }))
+
   app.post<{ Params: { orderPublicId: string } }>(
     '/guest/orders/:orderPublicId/payment',
     async (request, reply) => handleRoute(reply, async () => {

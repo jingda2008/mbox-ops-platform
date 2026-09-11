@@ -77,10 +77,10 @@ describe('KdsRepository', () => {
   })
 
   it('rejects a lost or illegal transition without creating an event', async () => {
-    const tx = new ScriptedTransaction([{ rows: [] }])
+    const tx = new ScriptedTransaction([{ rows: [] },{rows:[{status:'ready',assigned_employee_id:null}]}])
     await expect(new KdsRepository(tx, allowAuthorization()).markReady({ taskId, actorEmployeeId: employeeId }))
       .rejects.toBeInstanceOf(KdsTransitionError)
-    expect(tx.calls).toHaveLength(1)
+    expect(tx.calls).toHaveLength(2)
   })
 
   it('authorizes every employee transition before taking the task row lock', async () => {

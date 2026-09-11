@@ -239,8 +239,8 @@ export class TableSessionUnavailableForOrderError extends Error {
 }
 
 export class OrderProductUnavailableError extends Error {
-  constructor(productId: string) {
-    super(`Product or active standard price is unavailable: ${productId}`)
+  constructor(readonly productId: string,readonly reason='当前有效商品或标准售价未找到，请刷新商品后重新选择') {
+    super(`商品 ${productId}：${reason}`)
     this.name = 'OrderProductUnavailableError'
   }
 }
@@ -253,7 +253,7 @@ export class OrderProductCostUnavailableError extends Error {
 }
 
 export class OrderDeliveryBlockedError extends Error {
-  constructor(orderItemId: string) {
+  constructor(readonly orderItemId: string,readonly currentStatus?:string) {
     super(`Order item is not ready for delivery: ${orderItemId}`)
     this.name = 'OrderDeliveryBlockedError'
   }
@@ -516,7 +516,8 @@ export class OrderRepository {
     ])
     const row = updated.rows[0]
     if (updated.rowCount !== 1 || row === undefined) {
-      throw new OrderDeliveryBlockedError(orderItemId)
+      const current=(await this.transaction.query<{status:string}>('SELECT status FROM mbox.order_items WHERE tenant_id=$1 AND store_id=$2 AND id=$3',[this.transaction.scope.tenantId,this.transaction.scope.storeId,orderItemId])).rows[0]
+      throw new OrderDeliveryBlockedError(orderItemId,current?.status)
     }
     await this.transaction.query(
       'SELECT mbox.complete_annual_benefit_fulfillment_for_order($1::uuid)',
@@ -1190,17 +1191,17 @@ function assertProductOrderable(
   channel: OrderChannel,
 ): void {
   if (requested.quantity > price.max_order_quantity) {
-    throw new OrderProductUnavailableError(requested.productId)
+    throw new OrderProductUnavailableError(requested.productId,`本次数量 ${requested.quantity} 超过单次上限 ${price.max_order_quantity}，请减少数量`)
   }
   if (!price.allowed_channels.includes(channel)
     || (channel === 'guest_qr' && !price.guest_visible)) {
-    throw new OrderProductUnavailableError(requested.productId)
+    throw new OrderProductUnavailableError(requested.productId,'该商品未开放当前点单渠道，请选择其他商品或联系服务员')
   }
   if (price.available_from === null || price.available_until === null) return
   const orderable = price.available_from < price.available_until
     ? price.store_local_time >= price.available_from && price.store_local_time < price.available_until
     : price.store_local_time >= price.available_from || price.store_local_time < price.available_until
-  if (!orderable) throw new OrderProductUnavailableError(requested.productId)
+  if (!orderable) throw new OrderProductUnavailableError(requested.productId,`不在供应时段 ${price.available_from}—${price.available_until}，请在供应时间下单`)
 }
 
 function requireUuidLike(name: string, value: string): void {

@@ -87,7 +87,7 @@ const TRANSITIONS: Readonly<Record<KdsStatus, readonly KdsStatus[]>> = {
 }
 
 export class KdsTransitionError extends Error {
-  constructor(taskId: string, targetStatus: KdsStatus) {
+  constructor(readonly taskId: string, readonly targetStatus: KdsStatus, readonly currentStatus?:string, readonly assignedElsewhere=false) {
     super(`KDS task cannot transition to ${targetStatus}: ${taskId}`)
     this.name = 'KdsTransitionError'
   }
@@ -283,7 +283,8 @@ export class KdsRepository {
     ])
     const row = updated.rows[0]
     if (updated.rowCount !== 1 || row === undefined || !row.previous_status) {
-      throw new KdsTransitionError(input.taskId, targetStatus)
+      const current=(await this.transaction.query<{status:string;assigned_employee_id:string|null}>(`SELECT status,assigned_employee_id FROM mbox.kds_tasks WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,input.taskId])).rows[0]
+      throw new KdsTransitionError(input.taskId, targetStatus,current?.status,current?.assigned_employee_id!==null&&current?.assigned_employee_id!==undefined&&current.assigned_employee_id!==input.actorEmployeeId)
     }
     await this.appendEvent({
       taskId: row.id,

@@ -1048,7 +1048,7 @@ export function MenuOrderingWorkspace({
                 {guestSalesMode && guestMenuView === 'recommend' ? <Sparkles size={26} aria-hidden="true" /> : <Search size={26} aria-hidden="true" />}
                 <strong>{guestSalesMode && guestMenuView === 'recommend' ? '今夜推荐正在更新' : '没有找到相关商品'}</strong>
                 <span>{guestSalesMode && guestMenuView === 'recommend' ? '可以直接看看酒水和小食，喜欢的照常点' : '换个商品名、分类或规格试试'}</span>
-                {searchQuery && <button type="button" onClick={() => setSearchQuery('')}>清除搜索</button>}
+                {searchQuery && <button type="button" onClick={() => setSearchQuery('')}>清除搜索</button>}{categoryId!=='all'&&<button type="button" onClick={()=>setCategoryId('all')}>清除分类，搜索全部商品</button>}
               </div>
             )}
             {visibleProducts.map((product) => {

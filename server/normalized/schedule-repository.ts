@@ -87,7 +87,7 @@ export class ScheduleConflictError extends Error {
 }
 
 export class ScheduleTransitionError extends Error {
-  constructor(id: string, from: ScheduleStatus, to: ScheduleStatus) {
+  constructor(readonly id: string, readonly from: ScheduleStatus, readonly to: ScheduleStatus) {
     super(`Performance schedule ${id} cannot transition from ${from} to ${to}`)
     this.name = 'ScheduleTransitionError'
   }

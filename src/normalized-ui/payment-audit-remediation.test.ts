@@ -35,26 +35,26 @@ describe('payment audit remediation', () => {
   it('keeps a new QR with its order, exposes release immediately, and ignores a query returning after switching orders', async () => {
     const access = { canInitiatePayment: true, canQueryOnlinePayment: true, onlinePaymentProvider: 'simulation', manualCollection: { canRecordCash: true } }
     const orders = ['A', 'B'].map(id => ({ id, publicId: id, outstandingAmountMinor: 1000, currency: 'CNY', unresolvedOnlinePaymentId: null, paymentStatus: 'unpaid' }))
-    const render = mount([access, orders, 'A', null, 'pending', false, false, false, false, null, 0])
+    const render = mount([access, orders, 'A', ['A'], '', null, 'pending', false, false, false, false, null, 0])
     let completeCreate!: (value: unknown) => void, completeQuery!: (value: string) => void
     const props = { api: { createOnlinePayment: () => new Promise(resolve => { completeCreate = resolve }), queryOnlinePayment: () => new Promise(resolve => { completeQuery = resolve }) }, table: { code: 'W01', activeSession: { id: 'isolated' } }, onClose() {}, onUpdated() {} }
     let nodes = elements(render(props))
     nodes.find(node => typeof node.type === 'function' && (node.type as { name: string }).name === 'PaymentButtons')!.props!.onQr()
     nodes = elements(render(props))
-    const switchDuringWrite = nodes.find(node => node.type === 'button' && text(node).startsWith('B '))!
+    const switchDuringWrite = nodes.find(node => node.type === 'button' && text(node).includes('B '))!
     expect(switchDuringWrite.props!.disabled).toBe(true)
     switchDuringWrite.props!.onClick() // stale event must also be guarded, not only CSS-disabled.
     completeCreate({ paymentId: 'payment-A', presentation: 'qr', status: 'pending', payload: { qrCodeUrl: 'isolated-qr-A' } })
     await settle(); nodes = elements(render(props))
-    expect(text(nodes.find(node => node.props?.className === 'staff-payment-summary'))).toContain('A')
-    expect(nodes.find(node => node.type === 'button' && text(node).includes('保留旧单待核对'))).toBeTruthy()
-    nodes.find(node => node.type === 'button' && text(node).includes('先查询渠道结果'))!.props!.onClick()
+    expect(text(nodes.find(node => node.props?.className === 'staff-payment-summary'))).toMatch(/已选\s+1\s+单/)
+    expect(nodes.find(node => typeof node.type === 'function' && (node.type as {name:string}).name==='PaymentButtons')!.props!.busy).toBe(false)
+    nodes.find(node => node.type === 'button' && node.props?.className === 'staff-payment-query')!.props!.onClick()
     nodes = elements(render(props))
-    const switchDuringQuery = nodes.find(node => node.type === 'button' && text(node).startsWith('B '))!
+    const switchDuringQuery = nodes.find(node => node.type === 'button' && text(node).includes('B '))!
     expect(switchDuringQuery.props!.disabled).toBe(false)
     switchDuringQuery.props!.onClick()
     completeQuery('succeeded'); await settle(); nodes = elements(render(props))
-    expect(text(nodes.find(node => node.props?.className === 'staff-payment-summary'))).toContain('B')
+    expect(text(nodes.find(node => node.props?.className === 'staff-payment-summary'))).toMatch(/已选\s+2\s+单/)
     expect(nodes.some(node => node.props?.value === 'isolated-qr-A')).toBe(false)
     expect(text(nodes)).not.toContain('支付成功，订单余额已刷新')
   })

@@ -1,3 +1,6 @@
+import {historicalPaymentDisplayAllowlist,repairHistoricalPaymentDisplays} from '../../scripts/repair-five-historical-payment-displays.mjs'
+import Fastify from 'fastify'
+import {paymentFinanceApiPlugin} from './payment-finance-api.js'
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
@@ -160,7 +163,7 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
 
     const replacement = await initiateOnlinePayment(service, fixture.orderId)
     expect(replacement.amountMinor).toBe(6800)
-    expect((await financialSnapshot(pool, fixture.orderId)).payment_status).toBe('pending')
+    expect((await financialSnapshot(pool, fixture.orderId)).payment_status).toBe('partially_refunded')
     await succeedPaymentCallback(service, replacement)
 
     expect(await financialSnapshot(pool, fixture.orderId)).toMatchObject({
@@ -183,7 +186,7 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
       .rejects.toThrow('退款后的订单须先由收银确认“重新收款”后才能再次扣款')
   })
 
-  it('re-collects the whole order after a full refund and blocks a second pending collection', async () => {
+  it('consumes refund recollection authorization once during concurrent collection', async () => {
     const fixture = await createOrder(pool, [8800, 6800])
     const original = await captureOnlinePayment(service, fixture.orderId)
     await succeedOnlineRefund(service, original, fixture.itemIds.map((_, index) => (
@@ -199,11 +202,11 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
     const rejected = attempts.filter((attempt) => attempt.status === 'rejected')
     expect(succeeded).toHaveLength(1)
     expect(rejected).toHaveLength(1)
-    expect(rejected[0]).toMatchObject({ reason: expect.objectContaining({ message: expect.stringContaining('already pending') }) })
+    expect(rejected[0]).toMatchObject({ reason: expect.objectContaining({ message: expect.stringContaining('重新收款') }) })
     expect((succeeded[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof initiateOnlinePayment>>>).value.amountMinor)
       .toBe(fixture.total)
     expect(await financialSnapshot(pool, fixture.orderId)).toMatchObject({
-      payment_status: 'pending',
+      payment_status: 'refunded',
       pending_payments: '1',
     })
   })
@@ -255,27 +258,23 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
     })).rejects.toThrow(/Idempotency key conflicts/)
   })
 
-  it('enforces one active payment intent at the database boundary', async () => {
+  it('allows concurrent explicit attempts without release and blocks new collection after confirmed full payment', async () => {
     const fixture = await createOrder(pool, [8800])
-    await initiateOnlinePayment(service, fixture.orderId)
-
-    await expect(pool.query(`
-      INSERT INTO mbox.payments(
-        tenant_id,store_id,order_id,public_id,provider,method,amount_minor,currency,status)
-      VALUES ($1::uuid,$2::uuid,$3::uuid,$4,'postar','native_qr',8800,'CNY','pending')
-    `, [tenantId, storeId, fixture.orderId, `pay-${randomUUID()}`]))
-      .rejects.toMatchObject({ code: '23505', constraint: 'payments_one_active_intent_per_order_uq' })
-    expect((await financialSnapshot(pool, fixture.orderId)).pending_payments).toBe('1')
+    const [first, second] = await Promise.all([initiateOnlinePayment(service, fixture.orderId), initiateOnlinePayment(service, fixture.orderId)])
+    expect(first.id).not.toBe(second.id)
+    const original = await pool.query('SELECT status,retry_released_at FROM mbox.payments WHERE order_id=$1', [fixture.orderId])
+    expect(original.rows).toHaveLength(2)
+    expect(original.rows.every(row => ['created','pending'].includes(row.status) && row.retry_released_at === null)).toBe(true)
+    await succeedPaymentCallback(service, first)
+    await expect(initiateOnlinePayment(service, fixture.orderId)).rejects.toThrow('the order has no outstanding balance')
+    await succeedPaymentCallback(service, second)
+    expect(await financialSnapshot(pool, fixture.orderId)).toMatchObject({ payment_status: 'paid', gross_paid_minor: '17600', payment_entries: '2' })
+    expect((await pool.query('SELECT total_amount_minor::text FROM mbox.orders WHERE id=$1', [fixture.orderId])).rows[0].total_amount_minor).toBe('8800')
   })
 
-  it('records a released attempt that succeeds late as overcollection without reopening payment', async () => {
+  it('records an unreleased attempt that succeeds late as overcollection without reopening payment', async () => {
     const fixture = await createOrder(pool, [8800])
     const original = await initiateOnlinePayment(service, fixture.orderId)
-    await service.releaseUnresolvedForRetry({
-      ...metadata(`retry-release-${randomUUID()}`, actor(cashierId)),
-      paymentId: original.id,
-      reason: '顾客未确认到账，保留旧单待核对并重新收款',
-    })
     const replacement = await initiateOnlinePayment(service, fixture.orderId)
     const settledReplacement = await succeedPaymentCallback(service, replacement)
     await succeedPaymentCallback(service, original)
@@ -500,6 +499,114 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
       refunded_minor: '0',
     })
   })
+  it('captures one real payment for three original orders with stable partial allocation and exactly one ledger entry',async()=>{
+    const first=await createOrder(pool,[1200]),second=await createOrder(pool,[2300],first.sessionId),third=await createOrder(pool,[3400],first.sessionId)
+    await pool.query("UPDATE mbox.orders SET submitted_at='2026-09-11T10:00:00Z'::timestamptz+CASE WHEN id=$1 THEN interval '0 minutes' WHEN id=$2 THEN interval '1 minute' ELSE interval '2 minutes' END WHERE id=ANY($3::uuid[])",[first.orderId,second.orderId,[first.orderId,second.orderId,third.orderId]])
+    const payment=(await service.initiate({...metadata(`batch-init-${randomUUID()}`,actor(cashierId)),orderId:first.orderId,orderIds:[third.orderId,first.orderId,second.orderId],amountMinor:2500,
+      publicId:`batch-payment-${randomUUID()}`,provider:'postar',method:'native_qr',principal:{type:'employee',employeeId:cashierId}})).value
+    expect(payment).toMatchObject({payableKind:'order_batch',orderId:null,amountMinor:2500,orderBatchId:expect.any(String)})
+    const captured=await succeedPaymentCallback(service,payment)
+    const rows=(await pool.query('SELECT order_id,amount_minor::int AS amount FROM mbox.order_payment_facts WHERE id=$1 ORDER BY amount_minor',[payment.id])).rows
+    expect(rows).toEqual([{order_id:first.orderId,amount:1200},{order_id:second.orderId,amount:1300}])
+    expect((await pool.query('SELECT count(*)::int AS count,sum(amount_minor)::int AS amount FROM mbox.reconciliation_entries WHERE payment_id=$1',[payment.id])).rows[0]).toEqual({count:1,amount:2500})
+    expect((await pool.query('SELECT id,payment_status FROM mbox.orders WHERE id=ANY($1::uuid[]) ORDER BY total_amount_minor',[[first.orderId,second.orderId,third.orderId]])).rows.map(row=>row.payment_status)).toEqual(['paid','partially_paid','unpaid'])
+    const rest=(await service.initiate({...metadata(`batch-rest-${randomUUID()}`,actor(cashierId)),orderId:second.orderId,orderIds:[second.orderId,third.orderId],publicId:`batch-rest-${randomUUID()}`,provider:'postar',method:'native_qr',principal:{type:'employee',employeeId:cashierId}})).value
+    expect(rest.amountMinor).toBe(4400)
+    await pool.query(`INSERT INTO mbox.loyalty_accrual_deferred_orders(tenant_id,store_id,order_id,payment_id,pause_control_version,payment_succeeded_at)
+      VALUES($1,$2,$3,$5,1,clock_timestamp()),($1,$2,$4,$5,1,clock_timestamp())`,[tenantId,storeId,first.orderId,second.orderId,payment.id])
+    await expect(pool.query(`INSERT INTO mbox.loyalty_accrual_deferred_orders(tenant_id,store_id,order_id,payment_id,pause_control_version,payment_succeeded_at)
+      VALUES($1,$2,$3,$4,1,clock_timestamp())`,[tenantId,storeId,third.orderId,payment.id])).rejects.toMatchObject({code:'23503'})
+
+    await succeedPaymentCallback(service,rest)
+    expect((await pool.query('SELECT payment_status FROM mbox.orders WHERE id=ANY($1::uuid[])',[[first.orderId,second.orderId,third.orderId]])).rows.every(row=>row.payment_status==='paid')).toBe(true)
+    await expect(requestRefund(service,captured.id,[allocation(second,0,1400)])).rejects.toThrow('分摊金额')
+    const refunded=await succeedOnlineRefund(service,captured,[allocation(first,0,1200)])
+    expect(refunded.orderId).toBe(first.orderId)
+    expect((await pool.query('SELECT id,payment_status FROM mbox.orders WHERE id=ANY($1::uuid[]) ORDER BY total_amount_minor',[[first.orderId,second.orderId,third.orderId]])).rows.map(row=>row.payment_status)).toEqual(['refunded','paid','paid'])
+    expect((await pool.query('SELECT amount_minor::int AS amount FROM mbox.reconciliation_entries WHERE refund_id=$1',[refunded.id])).rows).toEqual([{amount:-1200}])
+  })
+  it('records a partial batch receipt without activating an immediate-payment order',async()=>{
+    const fixture=await createOrder(pool,[1000])
+    const payment=(await service.initiate({...metadata(`partial-immediate-${randomUUID()}`,actor(cashierId)),orderId:fixture.orderId,orderIds:[fixture.orderId],amountMinor:500,publicId:`partial-${randomUUID()}`,provider:'postar',method:'native_qr',principal:{type:'employee',employeeId:cashierId}})).value
+    await pool.query("UPDATE mbox.orders SET settlement_mode='immediate_payment',fulfillment_state='awaiting_payment',fulfillment_activated_at=NULL,fulfillment_expires_at=clock_timestamp()+interval '10 minutes' WHERE id=$1",[fixture.orderId])
+    await succeedPaymentCallback(service,payment)
+    expect((await pool.query('SELECT payment_status,fulfillment_state FROM mbox.orders WHERE id=$1',[fixture.orderId])).rows[0]).toEqual({payment_status:'partially_paid',fulfillment_state:'awaiting_payment'})
+    expect((await pool.query('SELECT count(*)::int count FROM mbox.kds_tasks task JOIN mbox.order_items item ON item.id=task.order_item_id WHERE item.order_id=$1',[fixture.orderId])).rows[0].count).toBe(0)
+  })
+  it('serializes competing batch captures and retains both real receipts without reopening collection',async()=>{
+    const first=await createOrder(pool,[1300]),second=await createOrder(pool,[1700],first.sessionId)
+    const make=()=>service.initiate({...metadata(`batch-race-${randomUUID()}`,actor(cashierId)),orderId:first.orderId,orderIds:[first.orderId,second.orderId],publicId:`batch-race-${randomUUID()}`,provider:'postar',method:'native_qr',principal:{type:'employee',employeeId:cashierId}})
+    const attempts=await Promise.all([make(),make()])
+    await Promise.all(attempts.map(attempt=>succeedPaymentCallback(service,attempt.value)))
+    const rows=(await pool.query('SELECT order_id,sum(amount_minor)::int amount FROM mbox.order_payment_facts WHERE id=ANY($1::uuid[]) GROUP BY order_id ORDER BY amount',[attempts.map(value=>value.value.id)])).rows
+    expect(rows).toEqual([{order_id:first.orderId,amount:2600},{order_id:second.orderId,amount:3400}])
+    expect((await pool.query("SELECT count(*)::int count,sum(amount_minor)::int amount FROM mbox.reconciliation_entries WHERE payment_id=ANY($1::uuid[]) AND entry_type='payment'",[attempts.map(value=>value.value.id)])).rows[0]).toEqual({count:2,amount:6000})
+    const signals=(await pool.query("SELECT subject_id FROM mbox.payment_financial_monitoring_signals WHERE signal='order_overcollected' AND subject_id=ANY($1::uuid[])",[[first.orderId,second.orderId]])).rows
+    expect(signals).toHaveLength(2)
+    await expect(make()).rejects.toThrow()
+    await expect(service.initiate({...metadata(`batch-other-${randomUUID()}`,actor(cashierId)),orderId:first.orderId,orderIds:[first.orderId,(await createOrder(pool,[100])).orderId],publicId:`batch-other-${randomUUID()}`,provider:'postar',method:'native_qr',principal:{type:'employee',employeeId:cashierId}})).rejects.toThrow('同一桌次')
+  })
+  it('keeps a cancelled closed-table batch late capture refundable without producing again',async()=>{
+    const fixture=await createOrder(pool,[700])
+    const payment=(await service.initiate({...metadata(`late-batch-${randomUUID()}`,actor(cashierId)),orderId:fixture.orderId,orderIds:[fixture.orderId],publicId:`late-batch-${randomUUID()}`,provider:'postar',method:'native_qr',principal:{type:'employee',employeeId:cashierId}})).value
+    await pool.query(`INSERT INTO mbox.order_cancellation_events(tenant_id,store_id,order_id,order_public_id,actor_employee_id,source_business_date,action_business_date,reason_code,reason_note,delivered_item_count,cancelled_item_count,cancelled_kds_task_count,released_inventory_reservation_count,idempotency_key,request_sha256,occurred_at)
+      SELECT tenant_id,store_id,id,public_id,$2,business_date,business_date,'guest_left','客人离店取消本单',0,1,0,0,$3,repeat('a',64),'2026-08-12T10:00:00Z' FROM mbox.orders WHERE id=$1`,[fixture.orderId,cashierId,`cancel-${randomUUID()}`])
+    await pool.query("UPDATE mbox.order_items SET status='cancelled' WHERE order_id=$1",[fixture.orderId])
+    await pool.query("UPDATE mbox.orders SET status='cancelled',fulfillment_state='cancelled',fulfillment_activated_at=NULL,fulfillment_expires_at=NULL,fulfillment_released_at=clock_timestamp() WHERE id=$1",[fixture.orderId])
+    await pool.query("UPDATE mbox.table_sessions SET status='closed',closed_at=clock_timestamp() WHERE id=$1",[fixture.sessionId])
+    const captured=await succeedPaymentCallback(service,payment)
+    expect((await pool.query("SELECT signal FROM mbox.payment_financial_monitoring_signals WHERE subject_id=$1 AND signal='cancelled_order_captured'",[fixture.orderId])).rowCount).toBe(1)
+    expect((await pool.query('SELECT fulfillment_state FROM mbox.orders WHERE id=$1',[fixture.orderId])).rows[0].fulfillment_state).toBe('cancelled')
+    await succeedOnlineRefund(service,captured,[allocation(fixture,0,700)])
+    expect((await pool.query("SELECT signal FROM mbox.payment_financial_monitoring_signals WHERE subject_id=$1 AND signal='cancelled_order_captured'",[fixture.orderId])).rowCount).toBe(0)
+  })
+  it('repairs only the five cancelled historical displays, preserves payment facts, and is idempotent',async()=>{
+    for(const [paymentId,orderId,amount] of historicalPaymentDisplayAllowlist){
+      const fixture=await createOrder(pool,[amount],undefined,orderId)
+      await pool.query("INSERT INTO mbox.payments(id,tenant_id,store_id,order_id,public_id,provider,method,amount_minor,currency,status) VALUES($1,$2,$3,$4,$5,'postar','native_qr',$6,'CNY','pending')",[paymentId,tenantId,storeId,orderId,`history-${paymentId}`,amount])
+      await pool.query("UPDATE mbox.orders SET status='cancelled',payment_status='pending' WHERE id=$1",[orderId])
+      await pool.query("UPDATE mbox.table_sessions SET status='closed',closed_at=clock_timestamp() WHERE id=$1",[fixture.sessionId])
+      await pool.query("INSERT INTO mbox.payment_reconciliation_states(payment_id,tenant_id,store_id,phase,stop_reason,automatic_query_stopped_at) VALUES($1,$2,$3,'stopped','finance_review_required',clock_timestamp())",[paymentId,tenantId,storeId])
+    }
+    const unrelated=await createOrder(pool,[9900])
+    const client=await pool.connect()
+    try{
+      await client.query('BEGIN')
+      const repaired=await repairHistoricalPaymentDisplays(client,{tenantId,storeId})
+      expect(repaired.changed).toHaveLength(5)
+      expect((await repairHistoricalPaymentDisplays(client,{tenantId,storeId})).changed).toEqual([])
+      expect((await client.query("SELECT count(*)::int count FROM mbox.audit_events WHERE action='payment.historical_display_reconciled' AND tenant_id=$1",[tenantId])).rows[0].count).toBe(5)
+      await client.query('ROLLBACK')
+      expect((await client.query('SELECT payment_status FROM mbox.orders WHERE id=$1',[historicalPaymentDisplayAllowlist[0]![1]])).rows[0].payment_status).toBe('pending')
+      expect((await financialSnapshot(pool,unrelated.orderId)).gross_paid_minor).toBe('0')
+    }finally{await client.query('ROLLBACK');client.release()}
+  })
+  it('separates finance case ownership from collection and refuses to resolve an unknown payment',async()=>{
+    const fixture=await createOrder(pool,[7300]),pending=await initiateOnlinePayment(service,fixture.orderId)
+    const role=randomUUID(),runner=new ScopedPostgresTransactionRunner(asPool(pool))
+    await pool.query("INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name) VALUES($1,$2,'reconciliation.view','查看财务'),($1,$2,'reconciliation.manage','管理财务') ON CONFLICT(tenant_id,store_id,code) DO NOTHING",[tenantId,storeId])
+    await pool.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,'FINANCE_CASE','财务核对')",[role,tenantId,storeId])
+    await pool.query('INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id) VALUES($1,$2,$3,$4)',[tenantId,storeId,cashierId,role])
+    await pool.query("INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code IN ('reconciliation.view','reconciliation.manage')",[tenantId,storeId,role])
+    const app=Fastify()
+    await app.register(paymentFinanceApiPlugin,{transactions:runner,commands:new NormalizedCommandExecutor(runner),resolveContext:()=>({scope:{tenantId,storeId},employeeId:cashierId,businessDate} as never)})
+    try{
+      const list=await app.inject({method:'GET',url:'/payments/finance-review'})
+      expect(list.statusCode).toBe(200)
+      expect(list.json().data.map((row:{id:string})=>row.id)).toContain(pending.id)
+      const send=(key:string,resolve:boolean)=>app.inject({method:'POST',url:`/payments/${pending.id}/finance-review`,headers:{'idempotency-key':key},payload:{note:'渠道仍未返回最终结果，继续核对',resolve}})
+      const saved=await send('finance-case-save-1',false)
+      expect(saved.statusCode).toBe(200)
+      expect(saved.json().data).toMatchObject({ownerEmployeeId:cashierId,status:'reviewing'})
+      expect((await send('finance-case-save-1',false)).json().replayed).toBe(true)
+      expect((await send('finance-case-close-1',true)).statusCode).toBe(400)
+      expect((await pool.query('SELECT status FROM mbox.payments WHERE id=$1',[pending.id])).rows[0].status).toBe('pending')
+      await pool.query('DELETE FROM mbox.employee_roles WHERE tenant_id=$1 AND store_id=$2 AND employee_id=$3 AND role_id=$4',[tenantId,storeId,cashierId,role])
+      expect((await send('finance-case-revoked-1',false)).statusCode).toBe(403)
+      expect((await app.inject({method:'GET',url:'/payments/finance-review'})).statusCode).toBe(403)
+    }finally{await app.close()}
+  })
+
 })
 
 async function seedFoundation(pool: Pool): Promise<void> {
@@ -530,13 +637,14 @@ async function seedFoundation(pool: Pool): Promise<void> {
   `, [productId, tenantId, storeId])
 }
 
-async function createOrder(pool: Pool, totals: number[]): Promise<CashierFixture> {
+async function createOrder(pool: Pool, totals: number[],existingSessionId?:string,fixedOrderId?:string): Promise<CashierFixture> {
   const tableId = randomUUID()
-  const sessionId = randomUUID()
-  const orderId = randomUUID()
+  const sessionId = existingSessionId??randomUUID()
+  const orderId = fixedOrderId??randomUUID()
   const itemIds = totals.map(() => randomUUID())
   const total = totals.reduce((sum, amount) => sum + amount, 0)
   const code = `C${randomUUID().slice(0, 8)}`
+  if(!existingSessionId){
   await pool.query(`
     INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity)
     VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$5,8)
@@ -546,6 +654,7 @@ async function createOrder(pool: Pool, totals: number[]): Promise<CashierFixture
       id,tenant_id,store_id,table_id,public_id,business_date,guest_count,status)
     VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6::date,2,'open')
   `, [sessionId, tenantId, storeId, tableId, `session-${randomUUID()}`, businessDate])
+  }
   await pool.query(`
     INSERT INTO mbox.orders(
       id,tenant_id,store_id,table_session_id,public_id,channel,status,

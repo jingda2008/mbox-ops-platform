@@ -359,6 +359,42 @@ integration('normalized guest sessions with PostgreSQL', () => {
       deviceFingerprint: 'different-device-001',
     })).rejects.toBeInstanceOf(GuestSessionInvalidError)
   })
+  it('moves only the scanning customer and preserves old orders, companions and return visits', async () => {
+    const scope = {tenantId,storeId}
+    const createTable = async (code: string) => {
+      const id=randomUUID(), sessionId=randomUUID(), qr=`guest-move-${randomUUID()}`
+      await pool.query(`INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity,qr_version)
+        VALUES($1,$2,$3,$4,$5,$5,6,1)`,[id,tenantId,storeId,areaId,code])
+      await pool.query(`INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count,status)
+        VALUES($1,$2,$3,$4,$5,'2026-08-11',2,'open')`,[sessionId,tenantId,storeId,id,`session-${randomUUID()}`])
+      await pool.query(`INSERT INTO mbox.table_qr_credentials(tenant_id,store_id,table_id,qr_version,credential_hash)
+        VALUES($1,$2,$3,1,$4)`,[tenantId,storeId,id,hashTableQrCredential(secret,scope,qr)])
+      return {id,sessionId,qr}
+    }
+    const a=await createTable('MOVE666'),b=await createTable('MOVE888')
+    const device='guest-move-owner-device'
+    const first=await service.scanTable({scope,tableQrToken:a.qr,deviceFingerprint:device,businessDate:'2026-08-11'})
+    const companion=await service.scanTable({scope,tableQrToken:a.qr,deviceFingerprint:'guest-move-companion-device',businessDate:'2026-08-11'})
+    if(first.status!=='active'||companion.status!=='active')throw new Error('Expected new guest sessions')
+    const orderId=randomUUID()
+    await pool.query(`INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,total_amount_minor,created_by_customer_id)
+      VALUES($1,$2,$3,$4,$5,'guest_qr','submitted','unpaid',0,$6)`,[orderId,tenantId,storeId,a.sessionId,`order-${randomUUID()}`,first.session.customerId])
+    const moved=await service.scanTable({scope,tableQrToken:b.qr,deviceFingerprint:device,customerId:first.session.customerId,businessDate:'2026-08-11'})
+    expect(moved.status).toBe('active')
+    if(moved.status==='waiting_for_table')throw new Error('Expected open target')
+    expect(moved.session.tableSessionId).toBe(b.sessionId)
+    await expect(service.authenticate({scope,sessionToken:first.sessionToken,deviceFingerprint:device})).rejects.toThrow()
+    expect((await service.authenticate({scope,sessionToken:companion.sessionToken,deviceFingerprint:'guest-move-companion-device'})).tableSessionId).toBe(a.sessionId)
+    expect((await pool.query('SELECT table_session_id FROM mbox.orders WHERE id=$1',[orderId])).rows[0].table_session_id).toBe(a.sessionId)
+    await service.scanTable({scope,tableQrToken:a.qr,deviceFingerprint:device,customerId:first.session.customerId,businessDate:'2026-08-11'})
+    const segments=await pool.query('SELECT table_session_id,left_reason_code,left_at FROM mbox.table_session_customer_participations WHERE customer_id=$1 ORDER BY created_at',[first.session.customerId])
+    expect(segments.rows).toHaveLength(3)
+    expect(segments.rows.filter(row=>row.left_at===null)).toEqual([expect.objectContaining({table_session_id:a.sessionId})])
+    expect(segments.rows.filter(row=>row.left_at!==null).every(row=>row.left_reason_code==='guest_rescan')).toBe(true)
+    expect((await pool.query('SELECT count(*)::int n FROM mbox.guest_table_rescan_events WHERE customer_id=$1',[first.session.customerId])).rows[0].n).toBe(2)
+  })
+
+
 })
 
 function asPool(pool: Pool): PostgresPool {

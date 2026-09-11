@@ -186,6 +186,7 @@ interface DemandRow extends Record<string, unknown> {
 }
 
 interface LockedBalanceRow extends Record<string, unknown> {
+  item_name?:string; base_unit?:string;
   inventory_item_id: string;
   sku: string;
   on_hand_quantity: string;
@@ -307,14 +308,14 @@ interface StoredBottleRow extends Record<string, unknown> {
 }
 
 export class InventoryBalanceMissingError extends Error {
-  constructor(inventoryItemId: string) {
+  constructor(readonly inventoryItemId: string) {
     super(`Inventory balance is missing: ${inventoryItemId}`);
     this.name = "InventoryBalanceMissingError";
   }
 }
 
 export class InventoryRecipeMissingError extends Error {
-  constructor(orderItemId: string) {
+  constructor(readonly orderItemId: string) {
     super(`Active inventory recipe is missing for order item: ${orderItemId}`);
     this.name = "InventoryRecipeMissingError";
   }
@@ -325,6 +326,7 @@ export class InsufficientInventoryError extends Error {
     readonly sku: string,
     readonly availableQuantity: string,
     readonly requiredQuantity: string,
+    readonly itemName?:string,readonly baseUnit?:string,
   ) {
     super(
       `Insufficient inventory for ${sku}: available ${availableQuantity}, required ${requiredQuantity}`,
@@ -2565,12 +2567,13 @@ export class InventoryRepository {
         SELECT inventory_item_id, min(sku) AS sku, sum(required_quantity)::numeric(18,6) AS required_quantity
         FROM demand GROUP BY inventory_item_id
       )
-      SELECT balance.inventory_item_id, required.sku, balance.on_hand_quantity::text,
+      SELECT balance.inventory_item_id, required.sku, inventory_item.name AS item_name,inventory_item.base_unit, balance.on_hand_quantity::text,
         balance.reserved_quantity::text, required.required_quantity::text,
         (balance.on_hand_quantity - balance.reserved_quantity < required.required_quantity) AS insufficient
       FROM required
       JOIN mbox.inventory_balances AS balance ON balance.tenant_id = $1::uuid AND balance.store_id = $2::uuid
         AND balance.inventory_item_id = required.inventory_item_id
+      JOIN mbox.inventory_items inventory_item ON inventory_item.tenant_id=balance.tenant_id AND inventory_item.store_id=balance.store_id AND inventory_item.id=balance.inventory_item_id
       ORDER BY balance.inventory_item_id FOR UPDATE OF balance
     `,
       [
@@ -2603,7 +2606,7 @@ export class InventoryRepository {
         throw new InsufficientInventoryError(
           balance.sku,
           subtractDecimal(balance.on_hand_quantity, balance.reserved_quantity),
-          balance.required_quantity,
+          balance.required_quantity,balance.item_name,balance.base_unit,
         );
     }
   }

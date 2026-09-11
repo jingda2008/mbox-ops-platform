@@ -74,6 +74,8 @@ describe('PrintTicketSourceRepository', () => {
             }],
           }
         }
+        if(text.includes('SELECT payable_kind FROM mbox.payments'))return {rowCount:1,rows:[{payable_kind:'order'}]}
+        if(text.includes('FROM mbox.order_items AS item'))return {rowCount:0,rows:[]}
         if (text.includes('FROM mbox.printer_routes AS route')) return { rowCount: 1, rows: [{ active: false }] }
         throw new Error('unexpected query')
       },
@@ -85,7 +87,7 @@ describe('PrintTicketSourceRepository', () => {
     )).resolves.toEqual([])
 
     expect(queries.join('\n')).toContain('payment.status AS payment_status_value')
-    expect(queries.join('\n')).not.toContain('FROM mbox.order_items AS item')
+    expect(queries.join('\n')).toContain('FROM mbox.order_items AS item')
   })
 
   it('uses committed activity payment facts for a cashier voucher without loading attendee contact data', async () => {

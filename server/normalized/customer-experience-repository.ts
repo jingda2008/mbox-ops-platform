@@ -5695,7 +5695,7 @@ function publicActivityPackages(
       remainingCapacity,
       availability,
       availabilityText: availability === 'available' ? '可报名'
-        : availability === 'sold_out' ? '已售罄' : '暂不可订',
+        : availability === 'sold_out' ? '名额已满' : status!=='published'?'当前套餐尚未开放报名':availableFrom!==null&&Date.parse(availableFrom)>now?`将于${new Date(availableFrom).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})}开放`:availableUntil!==null&&Date.parse(availableUntil)<=now?'本套餐报名时间已结束':!inventoryAvailable?'套餐供应暂不足，请选择其他套餐':'当前套餐报名条件未满足',
       memberPurchaseLimit: integer(value.memberPurchaseLimit, 'activity package member purchase limit'),
       feeAmountMinor,
       depositAmountMinor,

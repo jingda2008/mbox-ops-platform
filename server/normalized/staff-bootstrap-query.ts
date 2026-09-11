@@ -1,3 +1,4 @@
+import { orderNeedsCollectionSql } from './order-collection-sql.js'
 import { createHash } from 'node:crypto'
 import type {
   StaffBootstrapView,
@@ -489,58 +490,18 @@ async function readSummaries(
       (SELECT count(*) FROM mbox.reservations WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND arrival_at >= business_window.starts_at AND arrival_at < business_window.ends_at
         AND status = 'pending')::text AS reservation_attention,
-      -- A customer-left self checkout remains in the financial audit trail for
-      -- a possible late capture/refund, but is not a live payment for staff
-      -- to chase.  Real late money returns through the refund workflow.
-      (SELECT count(DISTINCT payment.order_id) FROM mbox.payments payment
-        JOIN mbox.orders payment_order ON payment_order.tenant_id=payment.tenant_id
-          AND payment_order.store_id=payment.store_id AND payment_order.id=payment.order_id
-        JOIN mbox.table_sessions payment_session ON payment_session.tenant_id=payment_order.tenant_id
-          AND payment_session.store_id=payment_order.store_id AND payment_session.id=payment_order.table_session_id
-        WHERE payment.tenant_id = $1::uuid AND payment.store_id = $2::uuid
-        AND payment.status IN ('created', 'pending') AND payment.retry_released_at IS NULL
-        AND payment_order.status<>'cancelled' AND payment_order.payment_status IN ('unpaid','pending','partially_paid')
-        AND payment_order.business_date=$3::date
-        AND NOT EXISTS (
-          SELECT 1 FROM mbox.guest_immediate_checkout_abandonment_events abandonment
-          WHERE abandonment.tenant_id=payment.tenant_id AND abandonment.store_id=payment.store_id
-            AND abandonment.payment_id=payment.id
-        ))::text AS pending_payments,
-      (SELECT count(DISTINCT payment.order_id) FROM mbox.payments payment
-        JOIN mbox.orders payment_order ON payment_order.tenant_id=payment.tenant_id
-          AND payment_order.store_id=payment.store_id AND payment_order.id=payment.order_id
-        JOIN mbox.table_sessions payment_session ON payment_session.tenant_id=payment_order.tenant_id
-          AND payment_session.store_id=payment_order.store_id AND payment_session.id=payment_order.table_session_id
-        WHERE payment.tenant_id = $1::uuid AND payment.store_id = $2::uuid
-        AND payment.status = 'failed'
-        AND payment_order.status<>'cancelled' AND payment_order.payment_status IN ('unpaid','pending','partially_paid')
-        AND payment_order.business_date=$3::date
-        AND NOT EXISTS (
-          SELECT 1 FROM mbox.guest_immediate_checkout_abandonment_events abandonment
-          WHERE abandonment.tenant_id=payment.tenant_id AND abandonment.store_id=payment.store_id
-            AND abandonment.payment_id=payment.id
-        ))::text AS failed_payments,
-      (SELECT count(DISTINCT payment.order_id) FROM mbox.payments payment
-        JOIN mbox.orders payment_order ON payment_order.tenant_id=payment.tenant_id
-          AND payment_order.store_id=payment.store_id AND payment_order.id=payment.order_id
-        JOIN mbox.table_sessions payment_session ON payment_session.tenant_id=payment_order.tenant_id
-          AND payment_session.store_id=payment_order.store_id AND payment_session.id=payment_order.table_session_id
-        WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid
-          AND payment.status IN ('created','pending','failed')
-          AND (payment.status='failed' OR payment.retry_released_at IS NULL)
-          AND payment_order.status<>'cancelled'
-          AND payment_order.payment_status IN ('unpaid','pending','partially_paid')
-          AND payment_order.business_date<$3::date
-          AND NOT EXISTS (
-            SELECT 1 FROM mbox.guest_immediate_checkout_abandonment_events abandonment
-            WHERE abandonment.tenant_id=payment.tenant_id AND abandonment.store_id=payment.store_id
-              AND abandonment.payment_id=payment.id
-          ))::text AS carryover_payment_tasks,
+      (SELECT count(*) FROM mbox.orders payment_order WHERE payment_order.tenant_id=$1::uuid
+        AND payment_order.store_id=$2::uuid AND payment_order.business_date=$3::date
+        AND ${orderNeedsCollectionSql('payment_order')})::text AS pending_payments,
+      '0'::text AS failed_payments,
+      (SELECT count(*) FROM mbox.orders payment_order WHERE payment_order.tenant_id=$1::uuid
+        AND payment_order.store_id=$2::uuid AND payment_order.business_date<$3::date
+        AND ${orderNeedsCollectionSql('payment_order')})::text AS carryover_payment_tasks,
       (SELECT count(*) FROM mbox.refunds WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND status = 'requested')::text AS refund_approvals,
       (SELECT count(*) FROM mbox.refunds AS refund
-        JOIN mbox.payments AS payment ON payment.tenant_id=refund.tenant_id
-          AND payment.store_id=refund.store_id AND payment.id=refund.payment_id
+        JOIN mbox.order_payment_facts AS payment ON payment.tenant_id=refund.tenant_id
+          AND payment.store_id=refund.store_id AND payment.id=refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=payment.order_id)
         JOIN mbox.orders AS customer_order ON customer_order.tenant_id=payment.tenant_id
           AND customer_order.store_id=payment.store_id AND customer_order.id=payment.order_id
         JOIN mbox.table_sessions AS session ON session.tenant_id=customer_order.tenant_id
@@ -549,8 +510,8 @@ async function readSummaries(
           AND refund.status='requested' AND refund.requested_by_employee_id<>$4::uuid
           AND customer_order.business_date=$3::date)::text AS current_refund_approval_tasks,
       (SELECT count(*) FROM mbox.refunds AS refund
-        JOIN mbox.payments AS payment ON payment.tenant_id=refund.tenant_id
-          AND payment.store_id=refund.store_id AND payment.id=refund.payment_id
+        JOIN mbox.order_payment_facts AS payment ON payment.tenant_id=refund.tenant_id
+          AND payment.store_id=refund.store_id AND payment.id=refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=payment.order_id)
         JOIN mbox.orders AS customer_order ON customer_order.tenant_id=payment.tenant_id
           AND customer_order.store_id=payment.store_id AND customer_order.id=payment.order_id
         JOIN mbox.table_sessions AS session ON session.tenant_id=customer_order.tenant_id
@@ -559,8 +520,8 @@ async function readSummaries(
           AND refund.status IN ('approved','processing')
           AND customer_order.business_date=$3::date)::text AS current_refund_execution_tasks,
       (SELECT count(*) FROM mbox.refunds AS refund
-        JOIN mbox.payments AS payment ON payment.tenant_id=refund.tenant_id
-          AND payment.store_id=refund.store_id AND payment.id=refund.payment_id
+        JOIN mbox.order_payment_facts AS payment ON payment.tenant_id=refund.tenant_id
+          AND payment.store_id=refund.store_id AND payment.id=refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=payment.order_id)
         JOIN mbox.orders AS customer_order ON customer_order.tenant_id=payment.tenant_id
           AND customer_order.store_id=payment.store_id AND customer_order.id=payment.order_id
         JOIN mbox.table_sessions AS session ON session.tenant_id=customer_order.tenant_id
@@ -569,8 +530,8 @@ async function readSummaries(
           AND refund.status='requested' AND refund.requested_by_employee_id<>$4::uuid
           AND customer_order.business_date<$3::date)::text AS carryover_refund_approval_tasks,
       (SELECT count(*) FROM mbox.refunds AS refund
-        JOIN mbox.payments AS payment ON payment.tenant_id=refund.tenant_id
-          AND payment.store_id=refund.store_id AND payment.id=refund.payment_id
+        JOIN mbox.order_payment_facts AS payment ON payment.tenant_id=refund.tenant_id
+          AND payment.store_id=refund.store_id AND payment.id=refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=payment.order_id)
         JOIN mbox.orders AS customer_order ON customer_order.tenant_id=payment.tenant_id
           AND customer_order.store_id=payment.store_id AND customer_order.id=payment.order_id
         JOIN mbox.table_sessions AS session ON session.tenant_id=customer_order.tenant_id

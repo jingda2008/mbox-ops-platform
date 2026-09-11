@@ -2,7 +2,7 @@ const runtime = require('./platform')
 const { request, deviceKey } = require('./request')
 const { randomId } = require('./id')
 const { recoverableGuestCommand } = require('./recoverable-command')
-const { getTableSession, rememberTableConnection, clearTableConnection } = require('./session')
+const { getTableSession, rememberTableConnection, clearTableConnection, restoreRejectedTableScan } = require('./session')
 const { tableRequestScope } = require('./table-request-scope')
 const {
   ensureCustomerSession, clearCustomerSession, renewReservationSessionOnly,
@@ -32,17 +32,23 @@ async function loadGuestSession() {
     // deliberately guest-only. The table and reservation sessions remain
     // isolated and no identity bearer is fabricated on the client.
     await ensureCustomerSession(false).catch(() => undefined)
-    const connected = await request('/api/guest/session/scan', {
+    let connected
+    try { connected = await request('/api/guest/session/scan', {
       method: 'POST',
       requireTableSession: false,
       data: { tableQrToken: session.tableToken, deviceKey: deviceKey() },
       ...requestOptions,
-    })
+    }) } catch(error) {
+      if(!isCurrentScope())throw scopeChanged()
+      if(error&&error.code==='TABLE_QR_INVALID'&&restoreRejectedTableScan())error.message='新桌码无效，已保留原桌台；请扫描本店有效的新桌码。'
+      throw error
+    }
     if (!isCurrentScope()) throw scopeChanged()
     const data = connected.data
     rememberTableConnection(data)
     if (data && (data.status === 'active' || data.status === 'already_active')) {
       runtime.setStorageSync('mbox.connected.table.token', session.tableToken)
+      runtime.removeStorageSync('mbox.table.scan.previous')
     } else {
       runtime.removeStorageSync('mbox.connected.table.token')
     }
@@ -796,6 +802,9 @@ async function checkoutSharedCart(input, idempotencyKey) {
 }
 async function getTableOrders() { return (await request('/api/guest/orders/table')).data }
 async function getCustomerOrderHistory() { return (await publicRequest('/api/public/mini/customer/orders')).data }
+async function payTableOrders(orderPublicIds,idempotencyKey) {
+  return (await request('/api/guest/orders/payment-batch',{method:'POST',headers:{'idempotency-key':idempotencyKey},data:{orderPublicIds}})).data
+}
 async function retryOrderPayment(orderPublicId, idempotencyKey) {
   return (await request(`/api/guest/orders/${encodeURIComponent(orderPublicId)}/payment`, {
     method: 'POST', headers: { 'idempotency-key': idempotencyKey || randomId(`guest-payment-${orderPublicId}`) }, data: {},
@@ -917,7 +926,7 @@ export {
   getReservationPerformanceNotificationAuthorizations,
   recordReservationPerformanceNotificationAuthorization,
   getMenu, getPublicMenu, recommendExperience, getRecommendationConfiguration, recordRecommendationEvent, prepareCheckoutUpgrade, recordCheckoutUpgradeEvent,
-  checkout, getSharedCart, adjustSharedCart, replaceSharedCartBundleSelection, removeSharedCartLine, clearSharedCart, checkoutSharedCart, quoteSharedCartCoupons, prepareSharedCartUpgrade, decideSharedCartUpgrade, getTableOrders, retryOrderPayment, abandonGuestCheckout,
+  checkout, getSharedCart, adjustSharedCart, replaceSharedCartBundleSelection, removeSharedCartLine, clearSharedCart, checkoutSharedCart, quoteSharedCartCoupons, prepareSharedCartUpgrade, decideSharedCartUpgrade, getTableOrders, payTableOrders, retryOrderPayment, abandonGuestCheckout,
   createServiceTask, getServiceRequests, actOnServiceTask,
   getMemberCards, submitMemberCardAction, getMemberGiftJobs, getMarketingPreferences, updateMarketingPreferences,
   getCustomerBenefits, getCustomerBenefitWallet, getCustomerProfile, reserveCustomerBenefit, claimAnnualDailySnack, submitSongRequest, getTodayPerformances,

@@ -1,3 +1,4 @@
+import {paymentFinanceApiPlugin} from './payment-finance-api.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import staticPlugin from '@fastify/static'
@@ -875,6 +876,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       },
       paymentActionSecret: options.config.secret,
     })
+    instance.register(paymentFinanceApiPlugin,{prefix:'/api',transactions,commands:commandExecutor,resolveContext:operationsContext})
     instance.register(hardwareApiPlugin, {
       prefix: '/api',
       transactions,
@@ -894,6 +896,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       transactions,
       commands: commandExecutor,
       providerConfigured: paymentProviderConfigured,
+      providerDiagnostics:{checkedAt:new Date().toISOString(),reasons:paymentProviderConfigured?[]:['当前支付集成未启用（MBOX_PAYMENT_MODE）。管理员须在运行配置中启用并通过启动校验，经营开关不能替代渠道配置。']},
       provider: onlinePaymentProvider,
       resolveContext: operationsContext,
     })

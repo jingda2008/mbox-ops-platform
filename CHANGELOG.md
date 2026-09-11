@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0-rc.187 - 2026-09-11
+
+- Unknown payment attempts no longer reserve collection eligibility; preserve retry idempotency, actual funds, refund authorization, backoff reconciliation, and independent financial ownership.
+- Add same-session aggregate payments with immutable order allocations, partial collection, original-order refunds and financial attribution; retain one provider payment and ledger entry.
+- Guest rescan changes only their own active table; preserve original orders and private cross-table history. Add role-scoped preparation/delivery history and clearer item amounts.
+- Add concrete catalog, capacity, reservation, stock, payment and printing reasons; authenticated image preview, mobile search fixes, monthly schedule drafts and atomic publication.
+- Add daily and whole-table manual print snapshots, itemized payment receipts, and Windows bridge 1.0.3 large-font rendering. Physical installation and paper acceptance remain separate evidence.
+- Migrations 190–196 retain closed-table protection and restrict historical display repair to five exact cancelled orders. Exclude the already handled CNY20 refund.
+
 ## 1.0.0-rc.186 - 2026-09-11
 
 - Distinguish actual SLA escalation from rate-limited urgent reminders.

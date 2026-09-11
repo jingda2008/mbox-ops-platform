@@ -165,3 +165,10 @@
   .cashier-business-day-close { grid-template-columns: 1fr; }
   .cashier-business-day-close > button { width: 100%; }
 }
+
+.cashier-day-summary{padding:20px;border:1px solid #c6d9cf;border-radius:16px;background:#f4fbf7;margin-bottom:16px}.cashier-day-summary header{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}.cashier-day-net{display:flex;align-items:baseline;gap:16px;margin:16px 0}.cashier-day-net strong{font-size:clamp(30px,5vw,46px);overflow-wrap:anywhere}.cashier-day-metrics{display:flex;gap:20px;flex-wrap:wrap}.cashier-day-metrics span{display:flex;flex-direction:column;gap:6px}.cashier-day-summary details{margin-top:12px}
+
+.payment-finance-review { padding: 12px; margin-block: 12px; border: 1px solid #d2dfd9; border-radius: 12px; }
+.payment-finance-review article { padding: 12px 0; border-bottom: 1px solid #d2dfd9; }
+.payment-finance-review textarea { display: block; width: 100%; min-height: 72px; }
+.payment-finance-review button { min-height: 44px; margin: 6px; }

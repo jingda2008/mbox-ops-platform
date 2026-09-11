@@ -163,7 +163,7 @@ export class LoyaltyAccrualRepository {
       FROM mbox.orders ordering
       JOIN mbox.payments payment
         ON payment.tenant_id=ordering.tenant_id AND payment.store_id=ordering.store_id
-       AND payment.id=$4::uuid AND payment.order_id=ordering.id AND payment.status='succeeded'
+       AND payment.id=$4::uuid AND (payment.order_id=ordering.id OR EXISTS(SELECT 1 FROM mbox.order_payment_allocations batch_allocation WHERE batch_allocation.tenant_id=payment.tenant_id AND batch_allocation.store_id=payment.store_id AND batch_allocation.batch_id=payment.order_batch_id AND batch_allocation.order_id=ordering.id)) AND payment.status='succeeded'
       JOIN mbox.loyalty_policy_versions policy
         ON policy.tenant_id=ordering.tenant_id AND policy.store_id=ordering.store_id
        AND policy.id=ordering.loyalty_policy_version_id
@@ -357,7 +357,7 @@ export class LoyaltyAccrualRepository {
       FROM mbox.orders ordering
       JOIN mbox.payments payment
         ON payment.tenant_id=ordering.tenant_id AND payment.store_id=ordering.store_id
-       AND payment.id=$4::uuid AND payment.order_id=ordering.id
+       AND payment.id=$4::uuid AND (payment.order_id=ordering.id OR EXISTS(SELECT 1 FROM mbox.order_payment_allocations batch_allocation WHERE batch_allocation.tenant_id=payment.tenant_id AND batch_allocation.store_id=payment.store_id AND batch_allocation.batch_id=payment.order_batch_id AND batch_allocation.order_id=ordering.id))
        AND payment.succeeded_at IS NOT NULL
        AND payment.status IN ('succeeded','partially_refunded','refunded')
       JOIN mbox.refunds refund

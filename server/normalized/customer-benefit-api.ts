@@ -133,8 +133,8 @@ export const customerBenefitApiPlugin: FastifyPluginAsync<CustomerBenefitApiOpti
     return handleRoute(reply, async () => {
       const context = await options.resolveSelfContext(request)
       const data = await options.transactions.run(context.scope,
-        transaction => loadGuestCustomerOrderHistory(transaction, context.customerId), { readOnly: true })
-      return reply.send({ data, meta: { count: data.length, limit: 30, scope: 'own_paid_orders' } })
+        transaction => loadGuestCustomerOrderHistory(transaction, context.customerId, typeof (request.query as {before?: unknown}).before === 'string' ? String((request.query as {before?: string}).before).slice(0,128) : undefined), { readOnly: true })
+      return reply.send({ data, meta: { count: data.length, limit: 30, scope: 'own_orders' } })
     })
   })
   app.get('/public/mini/customer/profile', async (request, reply) => {
@@ -947,9 +947,8 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
     || error instanceof GuestStoreScopeError) {
     return apiError(403, 'CUSTOMER_BENEFIT_STORE_FORBIDDEN', '当前门店不可用或无权访问')
   }
-  if (error instanceof StaffAccessDeniedError || error instanceof BenefitAuthorizationError) {
-    return apiError(403, 'CUSTOMER_BENEFIT_FORBIDDEN', '当前账号无权执行此操作，或赠送额度不足')
-  }
+  if (error instanceof StaffAccessDeniedError) return apiError(403, 'CUSTOMER_BENEFIT_FORBIDDEN', '当前账号缺少本项权益操作权限，请联系权限管理员')
+  if (error instanceof BenefitAuthorizationError) return apiError(403,'BENEFIT_AUTHORIZATION_DENIED',benefitReasonMessage(error.message))
   if (error instanceof EmployeeTableAccessDeniedError) {
     return apiError(403, 'CUSTOMER_BENEFIT_TABLE_FORBIDDEN', '当前员工不是该桌负责人，无权处理该桌权益')
   }
@@ -961,7 +960,7 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
     return apiError(403, 'BENEFIT_OWNERSHIP_MISMATCH', '该权益不属于当前桌次客户')
   }
   if (error instanceof BenefitUnavailableError) {
-    return apiError(409, 'BENEFIT_UNAVAILABLE', '权益已过期、已用完或状态已变化')
+    return apiError(409, 'BENEFIT_UNAVAILABLE', benefitReasonMessage(error.message))
   }
   if (error instanceof BenefitIdempotencyConflictError || error instanceof CustomerIdentityConflictError
     || error instanceof CustomerMergeConflictError) {
@@ -1109,4 +1108,21 @@ function stableStringify(value: unknown): string {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function benefitReasonMessage(message:string):string{
+ const map:Record<string,string>={
+ 'already redeemed by another request':'该权益已由另一请求核销，本次没有重复核销，请刷新权益记录',
+ 'Benefit reservation is no longer redeemable':'该权益暂留已结束，不能再次核销，请刷新原暂留记录',
+ 'Benefit quantity changed during redemption':'权益数量在核销时发生变化，本次未完成，请刷新剩余数量',
+ 'Only reserved benefits can be cancelled':'只有尚在暂留中的权益可以释放；当前记录已离开暂留状态',
+ 'Daily snack benefits can only be reserved by their original table-side claim':'每日点心须从原桌边申请记录处理，不能另建重复占用',
+ 'Benefit approval source is not active':'当前权益审批来源未启用或未授予本人，请联系权限管理员',
+ 'Manual benefit issuance requires an approval limit':'人工发放权益尚未选择审批额度，请选择本人可用审批项',
+ 'Manual benefit issuance requires a reason':'人工发放权益必须填写原因，本次尚未发放',
+ 'Benefit currency does not match the approval source':'权益币种与审批币种不一致，本次尚未发放',
+ 'Benefit total value is too large':'权益总金额超出支持范围，请减少数量或金额',
+ 'Gift product order adapter is required':'门店尚未接通赠品出品流程，请联系管理员配置',
+ }
+ return map[message]??(/[\u4e00-\u9fff]/.test(message)?message:'本次权益条件校验未通过，未重复占用或核销；请刷新原权益记录核对')
 }

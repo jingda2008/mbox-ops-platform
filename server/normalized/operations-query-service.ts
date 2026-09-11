@@ -1,3 +1,5 @@
+import {resolveFulfillmentAllowedStations} from './fulfillment-query-service.js'
+import { orderNeedsCollectionSql } from './order-collection-sql.js'
 import type { JsonObject } from './command-executor.js'
 import { orderHistoryAccess } from './order-history-access.js'
 import { readOperatingHistory, type OperatingHistoryFilter } from './operating-history-query.js'
@@ -176,7 +178,9 @@ export class OperationsQueryService {
       const clock = await transaction.query<{business_date:string}>(
         'SELECT mbox.current_operating_business_date($1::uuid,$2::uuid)::text AS business_date', [scope.tenantId,scope.storeId])
       if (!clock.rows[0]) throw new Error('门店营业日暂不可用')
-      return readOperatingHistory(transaction,{...filter,...orderHistoryAccess(access.permissions,clock.rows[0].business_date)})
+      const stations=resolveFulfillmentAllowedStations(access.dataScopes)
+      return readOperatingHistory(transaction,{...filter,...orderHistoryAccess(access.permissions,clock.rows[0].business_date),
+        ...(filter.workKind?{allowFinancialSummary:false,workEmployeeId:employeeId,workStations:filter.workKind==='prepared'?stations:undefined}:{})})
     },{isolation:'repeatable-read',readOnly:true})
   }
 
@@ -305,21 +309,11 @@ async function readTables(
             AND ordering.table_session_id=session.id AND ordering.status NOT IN ('draft','cancelled')) AS order_amount_minor,
         (SELECT count(*)::integer FROM mbox.orders ordering
           WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
-            AND ordering.table_session_id=session.id AND ordering.status NOT IN ('draft','cancelled')
-            AND ordering.total_amount_minor > 0
-            AND ordering.payment_status IN ('unpaid','pending','partially_paid')) AS unpaid_order_count,
-        (SELECT count(*)::integer FROM mbox.payments payment
-          JOIN mbox.orders ordering ON ordering.tenant_id=payment.tenant_id
-            AND ordering.store_id=payment.store_id AND ordering.id=payment.order_id
-          WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
-            AND ordering.table_session_id=session.id AND payment.status IN ('created','pending')
-            AND payment.retry_released_at IS NULL
-            AND NOT EXISTS (SELECT 1 FROM mbox.guest_immediate_checkout_abandonment_events abandonment
-              WHERE abandonment.tenant_id=payment.tenant_id AND abandonment.store_id=payment.store_id
-                AND abandonment.payment_id=payment.id)) AS pending_payment_count,
+            AND ordering.table_session_id=session.id AND ${orderNeedsCollectionSql('ordering')}) AS unpaid_order_count,
+        0::integer AS pending_payment_count,
         (SELECT count(*)::integer FROM mbox.refunds refund
-          JOIN mbox.payments payment ON payment.tenant_id=refund.tenant_id
-            AND payment.store_id=refund.store_id AND payment.id=refund.payment_id
+          JOIN mbox.order_payment_facts payment ON payment.tenant_id=refund.tenant_id
+            AND payment.store_id=refund.store_id AND payment.id=refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=payment.order_id)
           JOIN mbox.orders ordering ON ordering.tenant_id=payment.tenant_id
             AND ordering.store_id=payment.store_id AND ordering.id=payment.order_id
           WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
@@ -337,8 +331,8 @@ async function readTables(
                   AND completed_refund.payment_id=followup.payment_id
                   AND completed_refund.status='succeeded'),0)) AS refund_attention_count,
         (SELECT count(*)::integer FROM mbox.refunds refund
-          JOIN mbox.payments payment ON payment.tenant_id=refund.tenant_id
-            AND payment.store_id=refund.store_id AND payment.id=refund.payment_id
+          JOIN mbox.order_payment_facts payment ON payment.tenant_id=refund.tenant_id
+            AND payment.store_id=refund.store_id AND payment.id=refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=payment.order_id)
           JOIN mbox.orders ordering ON ordering.tenant_id=payment.tenant_id
             AND ordering.store_id=payment.store_id AND ordering.id=payment.order_id
           WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
@@ -356,23 +350,14 @@ async function readTables(
                   AND completed_refund.payment_id=followup.payment_id
                   AND completed_refund.status='succeeded'),0)) AS refund_action_count,
         (SELECT count(*)::integer FROM mbox.refunds refund
-          JOIN mbox.payments payment ON payment.tenant_id=refund.tenant_id
-            AND payment.store_id=refund.store_id AND payment.id=refund.payment_id
+          JOIN mbox.order_payment_facts payment ON payment.tenant_id=refund.tenant_id
+            AND payment.store_id=refund.store_id AND payment.id=refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=payment.order_id)
           JOIN mbox.orders ordering ON ordering.tenant_id=payment.tenant_id
             AND ordering.store_id=payment.store_id AND ordering.id=payment.order_id
           WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
             AND ordering.table_session_id=session.id
             AND refund.status='processing') AS refund_processing_count,
-        (SELECT count(*)::integer FROM mbox.payments payment
-          JOIN mbox.orders ordering ON ordering.tenant_id=payment.tenant_id
-            AND ordering.store_id=payment.store_id AND ordering.id=payment.order_id
-          WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
-            AND ordering.table_session_id=session.id AND payment.status IN ('created','pending')
-            AND payment.retry_released_at IS NULL
-            AND payment.created_at<=clock_timestamp()-interval '5 minutes'
-            AND NOT EXISTS (SELECT 1 FROM mbox.guest_immediate_checkout_abandonment_events abandonment
-              WHERE abandonment.tenant_id=payment.tenant_id AND abandonment.store_id=payment.store_id
-                AND abandonment.payment_id=payment.id)) AS payment_exception_count
+        0::integer AS payment_exception_count
     ) finance ON session.id IS NOT NULL
     WHERE venue_table.tenant_id = $1::uuid
       AND venue_table.store_id = $2::uuid

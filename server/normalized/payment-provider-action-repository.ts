@@ -8,7 +8,7 @@ export type ProviderActionPayload = Readonly<Record<string, unknown>>
 
 export interface ProviderPaymentContext {
   id: string
-  payableKind: 'order' | 'activity_registration'
+  payableKind: 'order' | 'activity_registration' | 'order_batch'
   orderId: string | null
   orderPublicId: string | null
   activityRegistrationId: string | null
@@ -144,16 +144,18 @@ export class PaymentProviderActionRepository {
         payment.method, payment.amount_minor,
         payment.currency, payment.status, payment.created_at::text,
         activity_registration.customer_id,
-        ordering.table_session_id, venue_table.code AS table_code
+        COALESCE(ordering.table_session_id,payment_batch.table_session_id) AS table_session_id, venue_table.code AS table_code
       FROM mbox.payments payment
       LEFT JOIN mbox.orders ordering
         ON ordering.tenant_id = payment.tenant_id
        AND ordering.store_id = payment.store_id
        AND ordering.id = payment.order_id
+      LEFT JOIN mbox.order_payment_batches payment_batch
+        ON payment_batch.tenant_id=payment.tenant_id AND payment_batch.store_id=payment.store_id AND payment_batch.id=payment.order_batch_id
       LEFT JOIN mbox.table_sessions table_session
-        ON table_session.tenant_id = ordering.tenant_id
-       AND table_session.store_id = ordering.store_id
-       AND table_session.id = ordering.table_session_id
+        ON table_session.tenant_id = payment.tenant_id
+       AND table_session.store_id = payment.store_id
+       AND table_session.id = COALESCE(ordering.table_session_id,payment_batch.table_session_id)
       LEFT JOIN mbox.tables venue_table
         ON venue_table.tenant_id = table_session.tenant_id
        AND venue_table.store_id = table_session.store_id
@@ -187,16 +189,18 @@ export class PaymentProviderActionRepository {
         payment.method, payment.amount_minor,
         payment.currency, payment.status, payment.created_at::text,
         activity_registration.customer_id,
-        ordering.table_session_id, venue_table.code AS table_code
+        COALESCE(ordering.table_session_id,payment_batch.table_session_id) AS table_session_id, venue_table.code AS table_code
       FROM mbox.payments payment
       LEFT JOIN mbox.orders ordering
         ON ordering.tenant_id = payment.tenant_id
        AND ordering.store_id = payment.store_id
        AND ordering.id = payment.order_id
+      LEFT JOIN mbox.order_payment_batches payment_batch
+        ON payment_batch.tenant_id=payment.tenant_id AND payment_batch.store_id=payment.store_id AND payment_batch.id=payment.order_batch_id
       LEFT JOIN mbox.table_sessions table_session
-        ON table_session.tenant_id = ordering.tenant_id
-       AND table_session.store_id = ordering.store_id
-       AND table_session.id = ordering.table_session_id
+        ON table_session.tenant_id = payment.tenant_id
+       AND table_session.store_id = payment.store_id
+       AND table_session.id = COALESCE(ordering.table_session_id,payment_batch.table_session_id)
       LEFT JOIN mbox.tables venue_table
         ON venue_table.tenant_id = table_session.tenant_id
        AND venue_table.store_id = table_session.store_id
@@ -638,7 +642,7 @@ export class PaymentProviderActionRepository {
         payment.method, payment.amount_minor,
         payment.currency, payment.status, payment.created_at::text,
         NULL::uuid AS customer_id,
-        ordering.table_session_id, venue_table.code AS table_code
+        COALESCE(ordering.table_session_id,payment_batch.table_session_id) AS table_session_id, venue_table.code AS table_code
       FROM mbox.payments payment
       JOIN mbox.orders ordering
         ON ordering.tenant_id = payment.tenant_id

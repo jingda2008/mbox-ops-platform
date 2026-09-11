@@ -15,6 +15,7 @@ export interface StoreCommercePolicyView extends Record<string, unknown> {
   policyOnlinePaymentEnabled: boolean
   onlinePaymentEnabled: boolean
   providerConfigured: boolean
+  providerDiagnostics?:{checkedAt:string;reasons:string[]}
   provider: 'postar' | 'simulation' | null
   paymentReservationMinutes: number
   policyVersion: number
@@ -36,6 +37,7 @@ export interface StoreCommercePolicyApiOptions {
   transactions: Pick<ScopedPostgresTransactionRunner, 'run'>
   commands: Pick<NormalizedCommandExecutor, 'execute'>
   providerConfigured: boolean
+  providerDiagnostics?:{checkedAt:string;reasons:string[]}
   provider: 'postar' | 'simulation' | null
   resolveContext(request: FastifyRequest): Promise<NormalizedOperationsRequestContext> | NormalizedOperationsRequestContext
 }
@@ -143,7 +145,7 @@ export const storeCommercePolicyApiPlugin: FastifyPluginAsync<StoreCommercePolic
       await new StaffAccessRepository(transaction).assertPermission(context.employeeId, 'payment.policy.manage')
       return new StoreCommercePolicyRepository(transaction).get(options.providerConfigured, options.provider)
     }, { readOnly: true })
-    return reply.send({ data })
+    return reply.send({ data:{...data,providerDiagnostics:options.providerDiagnostics??{checkedAt:new Date().toISOString(),reasons:options.providerConfigured?[]:['当前服务未加载支付渠道配置，请由管理员核对运行配置；没有发起渠道探测']}} })
   }))
 
   app.patch('/store/commerce-policy/online-payment', async (request, reply) => handle(reply, async () => {

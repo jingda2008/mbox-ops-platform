@@ -236,6 +236,7 @@ export class HardwarePolicyError extends Error {
 }
 
 export class HardwareRepository {
+  lastSkipReason:string|null=null
   constructor(private readonly transaction: ScopedTransaction) {}
 
   async createDevice(input: Readonly<CreateDeviceInput>): Promise<HardwareDevice> {
@@ -410,18 +411,19 @@ export class HardwareRepository {
 
   async materializeFromOutbox(input: Readonly<MaterializePrintJobsInput>): Promise<PrintJob[]> {
     validateMaterializeInput(input)
-    const source = await this.transaction.query<{ id: string }>(`
-      SELECT id
+    const source = await this.transaction.query<{ id: string;created_at?:string }>(`
+      SELECT id,created_at::text
       FROM mbox.outbox_messages
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.sourceOutboxMessageId])
     if (!source.rows[0]) throw new HardwareNotFoundError('打印源Outbox事件不存在')
 
-    const policy = (await this.transaction.query<{enabled:boolean;copies:number}>(`
-      SELECT enabled,copies FROM mbox.print_ticket_policies
+    const policy = (await this.transaction.query<{enabled:boolean;copies:number;updated_at?:string}>(`
+      SELECT enabled,copies,updated_at::text FROM mbox.print_ticket_policies
       WHERE tenant_id=$1 AND store_id=$2 AND ticket_kind=$3 FOR SHARE`,
     [this.transaction.scope.tenantId,this.transaction.scope.storeId,input.printSnapshot.kind ?? ''])).rows[0]
-    if (policy?.enabled === false && !input.manualRequest) return []
+    if (policy?.enabled === false && !input.manualRequest) {this.lastSkipReason='print_policy_disabled';return []}
+    if(!input.manualRequest&&input.printSnapshot.kind==='cashier_payment'&&policy?.updated_at&&source.rows[0]?.created_at&&Date.parse(source.rows[0].created_at)<Date.parse(policy.updated_at)){this.lastSkipReason='payment_before_policy_change';return []}
 
     const routes = await this.transaction.query<RouteRow>(`
       SELECT route.id, route.code, route.name, route.station_code,

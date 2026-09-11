@@ -358,14 +358,14 @@ describe('customerBenefitApiPlugin privacy and permission boundaries', () => {
   })
 })
 
-it('requires authenticated self identity for paid history and never accepts another customer query as authority', async () => {
+it('requires authenticated self identity for personal history and never accepts another customer query as authority', async () => {
   const unauthenticated = fixture({ resolveSelfContext: async () => { throw new GuestAuthenticationRequiredError() } })
   expect((await unauthenticated.app.inject({ method: 'GET', url: '/api/public/mini/customer/orders' })).statusCode).toBe(401)
   const value = fixture()
   const response = await value.app.inject({ method: 'GET', url: '/api/public/mini/customer/orders?customerId=someone-else' })
   expect(response.statusCode).toBe(200)
   expect(response.headers['cache-control']).toContain('no-store')
-  expect(response.json()).toEqual({ data: [], meta: { count: 0, limit: 30, scope: 'own_paid_orders' } })
+  expect(response.json()).toEqual({ data: [], meta: { count: 0, limit: 30, scope: 'own_orders' } })
 })
 
 function fixture(overrides: Partial<CustomerBenefitApiOptions> = {}) {

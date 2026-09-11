@@ -1,3 +1,5 @@
+import {PaymentFinanceReviewPanel} from './PaymentFinanceReviewPanel'
+import {CashierDaySummary} from './CashierDaySummary'
 import { useCallback, useEffect, useRef, useState, type FormEvent, type RefObject } from 'react'
 import {
   Check,
@@ -270,7 +272,7 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
     }
   }, [api, load, onLoginRequired, query])
 
-  return <>{view && auth.permissions.includes('reconciliation.view') && <OperatingHistoryPanel key={auth.employee.id} api={api} businessDate={view.businessDate} />}
+  return <>{view && auth.permissions.includes('reconciliation.view') && <CashierDaySummary api={api} businessDate={view.businessDate} revision={view} printEmployeeId={auth.permissions.includes('order.bill.print')?auth.employee.id:undefined}/>}{auth.permissions.includes('reconciliation.view')&&<PaymentFinanceReviewPanel api={api} canManage={auth.permissions.includes('reconciliation.manage')}/>} {view && auth.permissions.includes('reconciliation.view') && <OperatingHistoryPanel key={auth.employee.id} api={api} businessDate={view.businessDate} />}
     <CashierAfterSalesWorkbenchView
     auth={auth}
     view={view}
@@ -626,6 +628,7 @@ export function CashierAfterSalesWorkbenchView({
                     className="cashier-order-turnover-link"
                     onClick={() => onNavigate?.(`/staff/live?tableSessionId=${encodeURIComponent(order.tableSessionId ?? '')}`)}
                   >顾客已离店，去翻台</button>}
+                {order.status==='cancelled'&&order.payments.some(payment=>payment.remainingRefundableMinor>0&&['succeeded','partially_refunded'].includes(payment.status))&&<p className="cashier-workflow-guidance" role="alert">订单已取消，仍有实际到账，请核对下方原付款并办理退款。</p>}
                 {order.overCollectedAmountMinor > 0 && <p className="cashier-workflow-guidance" role="alert">本单已确认多收 ¥{formatAmount(order.overCollectedAmountMinor)}。请在下方对应收款记录发起退款；不要用新订单或手工改金额冲抵。</p>}
                 {orderWorkflowGuidance(order, view.actions) && <p className="cashier-workflow-guidance">{orderWorkflowGuidance(order, view.actions)}</p>}
                 <section>
@@ -845,13 +848,6 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOn
     && (payment.providerTransactionId !== null
       || (payment.providerActionState !== null && payment.providerActionState !== 'failed'))
   ))
-  const unpresentedOnlinePayment = order.payments.find((payment) => (
-    (payment.provider === 'postar' || payment.provider === 'wechat')
-    && (payment.status === 'created' || payment.status === 'pending')
-    && payment.retryReleasedAt === null
-    && payment.providerTransactionId === null
-    && (payment.providerActionState === null || payment.providerActionState === 'failed')
-  ))
   const canCreateOnline = actions.canInitiateOnlinePayment
     && actions.onlinePaymentProvider !== null
     && onCreateOnlinePayment !== undefined
@@ -888,21 +884,10 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOn
     </div>
   }
   if (!canCollect) return null
-  const blocked = activeOnlinePayment !== undefined
   const mutationKey = provider === null ? '' : `manual-payment-${provider}-${order.id}`
 
-  async function closeUnresolvedPaymentBeforeReplacement(): Promise<void> {
-    if (activeOnlinePayment === undefined) return
-    await onMutation(
-      `payment-retry-release-${activeOnlinePayment.id}`,
-      `/api/payments/${encodeURIComponent(activeOnlinePayment.id)}/retry-release`,
-      { reason: '未收到明确成功结果，保留原支付待核对并改用其他方式收款' },
-      '已放开新的收款尝试。原支付仍会继续核对；若随后到账，系统会记录溢收并提示退款。',
-    )
-  }
-
   async function createPayment(method: 'native_qr' | 'auth_code', customerAuthCode?: string) {
-    if (!canCreateOnline || actions.onlinePaymentProvider === null || blocked) return false
+    if (!canCreateOnline || actions.onlinePaymentProvider === null) return false
     setOnlineError(null)
     const action = await onCreateOnlinePayment({
       orderId: order.id,
@@ -920,7 +905,7 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOn
   }
 
   async function submit() {
-    if (provider === null || blocked || receiptReference.trim().length < 3) return
+    if (provider === null || receiptReference.trim().length < 3) return
     if (provider === 'physical_pos' && terminalId.trim().length < 2) return
     if (provider === 'external_manual' && collectionNote.trim().length < 2) return
     if (!confirmed) { setConfirmed(true); return }
@@ -952,14 +937,15 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOn
   const qrValue = onlineAction?.presentation === 'qr'
     && typeof onlineAction.payload?.qrCodeUrl === 'string' ? onlineAction.payload.qrCodeUrl : null
 
-  return <div className={`cashier-manual-collection${blocked ? ' is-blocked' : ''}`}>
+  return <div className="cashier-manual-collection">
     <div><strong>现场收款</strong><small>剩余应收 ¥{formatAmount(order.outstandingAmountMinor)}；{order.recollectionAuthorization !== null ? '退款后重新收款授权已生效，请在到期前完成一次实际收款。' : '可让顾客扫二维码、扫顾客付款码，或登记已实际收到的现金/POS/其他款项。'}</small></div>
     {onlineAction !== null && onlineAction.status !== 'failed' ? <div className="cashier-manual-result" aria-live="polite">
       {qrValue !== null ? <><CashierPaymentQr value={qrValue} /><strong>请顾客扫码付款</strong><p>实际到账以渠道回传为准；长时间无结果时可保留本次待核对并重新收款。</p></>
         : <><strong>顾客付款码已受理</strong><p>实际到账以支付渠道回传为准；长时间无结果时可放开新的收款尝试。</p></>}
       <button type="button" className="cashier-quiet-action" onClick={() => setOnlineAction(null)}>暂时收起</button>
-    </div> : blocked ? <div className="cashier-channel-pending"><p>线上支付“{shortReference(activeOnlinePayment.publicId)}”尚无明确结果。它不会锁住桌台；可保留旧支付继续核对，同时放开现金、POS或新的线上收款。</p><div className="cashier-action-row"><button type="button" className="cashier-primary-action" disabled={busyKey !== null} onClick={() => void closeUnresolvedPaymentBeforeReplacement()}><RefreshCcw size={16} />保留旧单待核对，继续收款</button></div><p>旧支付不会被标记为失败。若随后多笔到账，超出应收会记录为溢收并提示联系客人退款。</p></div> : <>
-      {unpresentedOnlinePayment !== undefined && <p className="cashier-guidance">系统发现一笔尚未向支付渠道发起的线上记录。登记现场收款时会在同一笔操作中安全关闭该记录，不需要客人继续线上待支付。</p>}
+    </div> : null}
+    {activeOnlinePayment !== undefined && <p className="cashier-guidance">原支付结果尚未确认，可直接继续收款；原记录保留在订单详情，后台继续核对。</p>}
+    <>
       {provider === null ? <div className="cashier-action-row">
         {canCreateOnline && <button type="button" className="cashier-primary-action" disabled={busyKey !== null} onClick={() => void createPayment('native_qr')}><QrCode size={17} />出示付款二维码</button>}
         {canCreateOnline && <button type="button" className="cashier-secondary-action" disabled={busyKey !== null} onClick={() => setShowScanner(true)}><ScanLine size={17} />扫顾客付款码</button>}
@@ -983,7 +969,7 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOn
       </div>}
       {onlineAction?.status === 'failed' && <p className="cashier-guidance">上一次线上收款未成功，可重新生成二维码、重新扫码或改用现场收款。</p>}
       {onlineError !== null && <p className="cashier-guidance" role="alert">{onlineError}</p>}
-    </>}
+    </>
     {showScanner && <CustomerPaymentCodeScanner
       tableCode={order.tableCode}
       amountLabel={`¥${formatAmount(order.outstandingAmountMinor)}`}

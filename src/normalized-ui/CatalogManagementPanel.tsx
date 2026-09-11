@@ -40,6 +40,7 @@ const salesSpecificationOptions: ReadonlyArray<{ code: SalesSpecificationType; l
 ]
 
 interface CatalogProduct {
+  availabilityReasons?:string[]
   id: string
   code: string
   name: string
@@ -186,11 +187,13 @@ export function CatalogManagementPanel({
   auth,
   placement = 'settings',
   openRequest = 0,
+  onOpenInventoryCost,
 }: {
   api: NormalizedApiClient
   auth: StaffAuthView
   placement?: 'inventory' | 'settings'
   openRequest?: number
+  onOpenInventoryCost?(inventoryItemId:string):void
 }) {
   const canManageProduct = auth.permissions.includes('catalog.product.manage')
   const canManagePrice = auth.permissions.includes('catalog.price.manage')
@@ -347,7 +350,7 @@ export function CatalogManagementPanel({
       setRecipeInstructionsSnapshot(recipe?.instructionsSnapshot ?? {})
       setRecipeComponents(Object.fromEntries((recipe?.components ?? []).map((component) => {
         const item = itemById.get(component.inventoryItemId)
-        if (item === undefined) throw new Error('当前配方引用了已不可用的库存物料')
+        if (item === undefined) throw new Error(`配方引用物料 ${component.inventoryItemId}，但当前库存列表未返回该物料；请核对停用状态和查看权限，不要删除原配方记录`)
         const quantity = inventoryQuantityForEmployee(
           component.quantity, item.categoryCode, item.baseUnit, item.packageVolumeMl,
         )
@@ -708,17 +711,18 @@ export function CatalogManagementPanel({
     const costAmount = canViewInventoryCost && !inventoryCostIsAutomatic
       ? moneyToMinor(draft.costYuan, true) : undefined
     const priceAmount = moneyToMinor(draft.priceYuan, false)
-    if (minimum === null || maximum === null || minimum > maximum || priority === null
-      || prepMinutes === null || holdMinutes === null || sortOrder === null || maxOrderQuantity === null
-      || kdsPriority === null || fulfillmentSlaSeconds === undefined
-      || sceneTags === null || intentTags === null || tasteTags === null || dwellTags === null
-      || draft.allowedChannels.length === 0 || Boolean(draft.availableFrom) !== Boolean(draft.availableUntil)
-      || (draft.availableFrom !== '' && draft.availableFrom === draft.availableUntil)
-      || (!inventoryCostIsAutomatic && canViewInventoryCost
-        && (costAmount === undefined || (draft.status === 'active' && costAmount === null)))) {
-      setNotice({ kind: 'error', text: '请核对推荐、供应时段、渠道、限购和出品时限；非库存商品在售时必须填写成本' })
-      return
-    }
+    const fieldProblems:string[]=[]
+    if(minimum===null||maximum===null||minimum>maximum)fieldProblems.push('推荐人数：请填写有效最小/最大人数，最小人数不能大于最大人数')
+    if(priority===null||sortOrder===null||kdsPriority===null)fieldProblems.push('推荐、菜单或出品排序：请填写范围内的整数')
+    if(prepMinutes===null||holdMinutes===null||fulfillmentSlaSeconds===undefined)fieldProblems.push('制作、保留或出品时限：请填写有效时长')
+    if(maxOrderQuantity===null)fieldProblems.push('单次限购数量：请填写有效整数')
+    if(sceneTags===null||intentTags===null||tasteTags===null||dwellTags===null)fieldProblems.push('推荐标签：存在不符合格式或数量限制的内容，请检查各标签字段')
+    if(draft.allowedChannels.length===0)fieldProblems.push('销售渠道：至少开放一个点单渠道')
+    if(Boolean(draft.availableFrom)!==Boolean(draft.availableUntil)||draft.availableFrom!==''&&draft.availableFrom===draft.availableUntil)fieldProblems.push('供应时间：开始与结束需同时填写且不能相同；跨午夜可使用较早的结束时间')
+    if(!inventoryCostIsAutomatic&&canViewInventoryCost&&(costAmount===undefined||draft.status==='active'&&costAmount===null))fieldProblems.push('非库存商品成本：在售前须填写有效成本；库存商品和套餐成本由配方自动计算')
+    if(fieldProblems.length){setNotice({kind:'error',text:fieldProblems.join('；')});return}
+    // Keep narrowing explicit for the typed command payload after listing every invalid field.
+    if(minimum===null||maximum===null||priority===null||prepMinutes===null||holdMinutes===null||sortOrder===null||maxOrderQuantity===null||kdsPriority===null||fulfillmentSlaSeconds===undefined||sceneTags===null||intentTags===null||tasteTags===null||dwellTags===null)return
     if (draft.id === null && draft.status === 'active' && !canViewInventoryCost && !inventoryCostIsAutomatic) {
       setNotice({ kind: 'error', text: '当前岗位不能查看或填写成本，不能直接创建在售商品；请先保存为停用，或由具备成本权限的员工完成上架。' })
       return
@@ -950,7 +954,6 @@ export function CatalogManagementPanel({
               <label className="catalog-wide">菜单图片<select value={menuImageOptions.some((option) => option.url === draft.imageUrl) ? draft.imageUrl : ''} onChange={(event) => updateDraft('imageUrl', event.target.value)}><option value="">从下方图片库选择或暂不设置</option>{menuImageOptions.map((option) => <option value={option.url} key={option.url}>{option.label}</option>)}</select></label>
               <label className="catalog-wide">已选图片<input readOnly value={draft.imageUrl} placeholder="请选择受控菜单素材，或从下方图片库上传（单张不超过 200KB）" /></label>
               <div className="catalog-wide"><MediaAssetPicker api={api} purpose="menu" value={draft.imageUrl} onChange={(imageUrl) => updateDraft('imageUrl', imageUrl)} label="上传或选择菜单图片" /></div>
-              {draft.imageUrl !== '' && <figure className="catalog-image-preview catalog-wide"><img src={draft.imageUrl} alt={`${draft.name || '商品'}菜单图预览`} /><figcaption>保存前预览；图片中的“以实物为准”提示不会替代真实配方、品牌和份量核对。</figcaption></figure>}
               <label className="catalog-check"><input type="checkbox" checked={draft.recommendationSingleWaveEligible} onChange={(event) => updateDraft('recommendationSingleWaveEligible', event.target.checked)} />可一次出齐</label>
               <fieldset className="catalog-wide"><legend>允许下单渠道</legend>{[['guest_qr', '顾客扫码'], ['staff_assisted', '员工协助'], ['cashier', '收银'], ['reservation', '预约'], ['integration', '系统接入']].map(([value, label]) => <label className="catalog-check" key={value}><input type="checkbox" checked={draft.allowedChannels.includes(value)} onChange={() => updateDraft('allowedChannels', draft.allowedChannels.includes(value) ? draft.allowedChannels.filter((item) => item !== value) : [...draft.allowedChannels, value])} />{label}</label>)}</fieldset>
             </>}
@@ -987,8 +990,9 @@ export function CatalogManagementPanel({
                 {canViewInventoryCost && recipeCost !== null && <section className="catalog-recipe-cost" aria-label="配方成本核算">
                   <header><div><strong>配方成本核算</strong><small>只读取已确认收货形成的移动加权库存成本。保存配方或确认收货后，系统会自动更新当前成本；历史订单不会改写。</small></div><em>{recipeCost.costAmountMinor === null ? '待补成本' : `¥${minorToYuan(recipeCost.costAmountMinor)}/份`}</em></header>
                   {recipeCost.costAmountMinor === null
-                    ? <p>以下物料成本待补或待核对：{recipeCost.components.filter((component) => component.componentCostMinor === null).map((component) => component.itemName).join('、')}。销售仍可继续，但毛利会明确显示为不完整。</p>
+                    ? <p>以下物料成本待补或待核对：{recipeCost.components.filter((component) => component.componentCostMinor === null).map((component) => component.itemName).join('、')}。请在库存页核对原料的收货数量与采购总额；历史成本更正需要独立授权。补齐后重新核算，套餐上架仍需通过成本校验。</p>
                     : <div className="catalog-recipe-cost-lines">{recipeCost.components.map((component) => <span key={component.inventoryItemId}>{component.itemName} · {component.componentCostMinor === null ? '待补成本' : `¥${minorToYuan(component.componentCostMinor)}`}</span>)}</div>}
+                  {onOpenInventoryCost && auth.permissions.includes('inventory.cost.correct') && recipeCost.components.filter(component=>component.componentCostMinor===null).map(component=><button type="button" key={component.inventoryItemId} onClick={()=>onOpenInventoryCost(component.inventoryItemId)}>核对 {component.itemName} 的库存成本</button>)}
                 </section>}
               </>}
             </section>}
@@ -1004,7 +1008,7 @@ export function CatalogManagementPanel({
         <div className="catalog-management-list">{visibleProducts.map((product) => {
           const blockers = sellingBlockers(product)
           const categoryLabel = menuCategoryOptions.find((option) => option.code === product.categoryCode)?.label ?? '其他分类'
-          return <article key={product.id}><div><strong>{product.name}</strong><span>{product.code} · {categoryLabel} · {product.productKind === 'bundle' ? '组合' : stationLabel(product.fulfillmentStation)}</span><small>{statusLabel(product.status)} · {product.inventoryControlMode === 'tracked' ? '跟踪库存' : '暂不管理数量'} · {product.guestVisible ? '顾客可见' : '顾客隐藏'} · {product.standardPrice?.amountMinor == null ? '未定价' : `¥${minorToYuan(product.standardPrice.amountMinor)}`}</small>{isInventoryFlow && <small className={blockers.length === 0 ? 'catalog-sale-state is-ready' : 'catalog-sale-state'}>{blockers.length === 0 ? '小程序可售' : `待完成：${blockers[0]}`}</small>}</div><button type="button" onClick={() => startEdit(product)}><Pencil size={16} /> 编辑</button></article>
+          return <article key={product.id}><div><strong>{product.name}</strong><span>{product.code} · {categoryLabel} · {product.productKind === 'bundle' ? '组合' : stationLabel(product.fulfillmentStation)}</span><small>{statusLabel(product.status)} · {product.inventoryControlMode === 'tracked' ? '跟踪库存' : '暂不管理数量'} · {product.guestVisible ? '顾客可见' : '顾客隐藏'} · {product.standardPrice?.amountMinor == null ? '未定价' : `¥${minorToYuan(product.standardPrice.amountMinor)}`}</small>{isInventoryFlow && <small className={blockers.length === 0 ? 'catalog-sale-state is-ready' : 'catalog-sale-state'}>{blockers.length === 0 ? '小程序可售' : `待完成：${blockers[0]}${blockers.length>1?`（另有${blockers.length-1}项）`:''}`}</small>}{blockers.length>1&&<details><summary>查看全部原因</summary><ul>{blockers.map(reason=><li key={reason}>{reason}</li>)}</ul></details>}</div><button type="button" onClick={() => startEdit(product)}><Pencil size={16} /> 编辑</button></article>
         })}</div>
       </>}
     </div>}
@@ -1175,15 +1179,15 @@ function readInventoryItems(value: unknown): InventoryItemOption[] {
 }
 
 function sellingBlockers(product: CatalogProduct): string[] {
-  const blockers: string[] = []
+  const blockers: string[] = [...(product.availabilityReasons??[])]
   if (product.status !== 'active') blockers.push('销售状态尚未设为“在售”')
   if (product.standardPrice?.amountMinor === null || product.standardPrice === null) blockers.push('尚未设置标准售价')
   if (!product.guestVisible) blockers.push('尚未设为顾客菜单可见')
   if (!product.allowedChannels.includes('guest_qr')) blockers.push('尚未开放顾客扫码点单渠道')
   if (product.inventoryControlMode === 'tracked' && !product.inventoryConfigurationComplete) blockers.push('库存扣减配方未完成')
   if (product.inventoryControlMode === 'tracked' && !product.inventoryAvailable) blockers.push('当前可售库存不足，请完成入库或盘点')
-  if (!product.isAvailable && blockers.length === 0) blockers.push('当前供应时段或组合内容未满足')
-  return blockers
+  if (!product.isAvailable && blockers.length === 0) blockers.push('可售校验未通过且原因未返回，请刷新商品；仍未恢复请联系管理员核对该商品')
+  return [...new Set(blockers)]
 }
 
 function readActiveRecipe(value: unknown): {

@@ -284,16 +284,20 @@ export class NormalizedApiClient {
 
 async function responseError(response: Response): Promise<NormalizedApiError> {
   let code = 'HTTP_ERROR'
-  let message = response.statusText || '请求失败'
+  let message = response.status===401?'登录已失效，请重新登录':response.status===403?'当前账号无此操作权限，请联系店长核对授权':response.status===404?'请求的记录或接口不存在，请刷新后重试':response.status===429?'请求过于频繁，请稍后重试':response.status>=500?'服务暂未正常响应，本次操作结果尚未确认，请用原请求重试':'请求未通过，请检查填写内容后重试'
+  let requestId=response.headers.get('x-request-id')||''
   let bodyRetryable: boolean | undefined
   try {
     const body = await response.json() as Partial<NormalizedApiErrorBody>
     if (typeof body.error?.code === 'string') code = body.error.code
     if (typeof body.error?.message === 'string') message = body.error.message
+    const detail=body.error as unknown as Record<string,unknown>|undefined
+    if(typeof detail?.requestId==='string')requestId=detail.requestId
     if (typeof body.error?.retryable === 'boolean') bodyRetryable = body.error.retryable
   } catch {
     // The status still determines a safe recovery path when an upstream returns non-JSON.
   }
+  if(/^[A-Za-z0-9_.:-]{1,128}$/.test(requestId))message+=`（查询编号：${requestId}）`
   const recovery: NormalizedRecovery = response.status === 401
     ? 'login'
     : response.status >= 500 || response.status === 429 ? 'retry' : 'none'

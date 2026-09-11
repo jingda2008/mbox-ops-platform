@@ -76,7 +76,7 @@ describe('activity operations staff and customer contract', () => {
     expect(panel).toContain("'/api/staff/activity-operations/component-catalog'")
     expect(panel).toContain('<PackageComponentSelector')
     expect(panel).toContain('添加库存物料')
-    expect(panel).toContain('已选物料当前不可用')
+    expect(panel).toContain('未在当前可用列表返回')
     expect(panel).not.toContain('物料UUID,数量,每人或每次')
     expect(api).toContain("'/staff/activity-operations/component-catalog'")
     expect(api).toContain("['community.activity.manage']")

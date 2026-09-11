@@ -1,3 +1,6 @@
+import {randomUUID} from 'node:crypto'
+import {readMonthlySchedule,previewMonthlySchedule,type MonthlyScheduleInput} from './monthly-schedule.js'
+import {StaffAccessRepository} from './staff-access-repository.js'
 import type {
   AuditActor,
   CommandExecution,
@@ -180,6 +183,22 @@ export class PerformanceCommandService {
         schedule.id,
         scheduleAuditData(schedule),
       )
+    })
+  }
+
+  publishMonthly(input:Readonly<MonthlyScheduleInput & CommandMetadata>):Promise<CommandExecution<JsonObject>> {
+    const validated=readMonthlySchedule(input)
+    return this.commands.execute(command(input,'performance-schedule.monthly-publish',{encode:value=>value,decode:value=>{if(value===null||Array.isArray(value)||typeof value!=='object')throw new TypeError('排班结果无效');return value as JsonObject}}),async transaction=>{
+      if(input.actor.type!=='employee')throw new TypeError('需要员工身份')
+      await new StaffAccessRepository(transaction).assertPermission(input.actor.employeeId,'song.manage')
+      await transaction.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${transaction.scope.tenantId}:${transaction.scope.storeId}:performance-timeline`])
+      const preview=await previewMonthlySchedule(transaction,validated)
+      const blocked=preview.find(slot=>slot.reasons.length)
+      if(blocked)throw new TypeError(`${new Date(blocked.startsAt).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})} ${blocked.performerName}：${blocked.reasons.join('；')}`)
+      const ids:string[]=[]
+      for(const slot of preview)ids.push(slot.existingId??(await new ScheduleRepository(transaction).create(slot)).id)
+      const result:JsonObject={month:validated.month,scheduleIds:ids,createdCount:preview.filter(slot=>!slot.existingId).length,existingCount:preview.filter(slot=>slot.existingId).length}
+      return outcome(result,input.actor,input.businessDate,input.idempotencyKey,'performance_schedule.monthly_published','performance_schedule_batch',randomUUID(),{...result,slots:validated.slots.map(slot=>({...slot}))})
     })
   }
 

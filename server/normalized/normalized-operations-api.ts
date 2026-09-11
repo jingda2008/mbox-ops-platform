@@ -187,6 +187,8 @@ export const normalizedOperationsApiPlugin: FastifyPluginAsync<NormalizedOperati
     const query=readObject(request.query,'查询条件')
     const businessDate=typeof query.businessDate==='string'?query.businessDate:context.businessDate
     const endDate=typeof query.endDate==='string'?query.endDate:businessDate
+    const workKind = query.workKind
+    if(workKind!==undefined&&!['prepared','delivered'].includes(String(workKind)))throw new RequestValidationError('履约历史类型无效')
     const page=Number(query.page??0)
     const table=typeof query.table==='string'?query.table.trim():''
     const employee=typeof query.employee==='string'?query.employee.trim():''
@@ -202,7 +204,7 @@ export const normalizedOperationsApiPlugin: FastifyPluginAsync<NormalizedOperati
       ||!Number.isSafeInteger(page)||page<0||page>2000||table.length>80||employee.length>80) throw new RequestValidationError('查询日期、页码或筛选条件无效')
     if(!options.operationsQuery.getOperatingHistory) return reply.code(503).send({error:{message:'历史查询暂不可用'}})
     if(query.exportAll!==undefined&&query.exportAll!=='true')throw new RequestValidationError('导出参数无效')
-    return reply.send({data:await options.operationsQuery.getOperatingHistory(context.scope,context.employeeId,{businessDate,endDate,table,employee,page,...(search?{search}:{}),...(area?{area}:{}),...(paymentStatus?{paymentStatus}:{}),...(query.exportAll==='true'?{exportAll:true}:{})})})
+    return reply.send({data:await options.operationsQuery.getOperatingHistory(context.scope,context.employeeId,{businessDate,endDate,table,employee,page,...(workKind?{workKind:workKind as 'prepared'|'delivered'}:{}),...(search?{search}:{}),...(area?{area}:{}),...(paymentStatus?{paymentStatus}:{}),...(query.exportAll==='true'?{exportAll:true}:{})})})
   }))
 
   app.get('/operations', async (request, reply) => handleRoute(reply, async () => {

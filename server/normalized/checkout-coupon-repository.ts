@@ -35,7 +35,8 @@ export class CheckoutCouponRepository{
     const promises=await new CouponPricePromiseRepository(this.tx).views(ids),policies=new Map<string,StackingPolicy>(),effects:PricingEffect[]=[]
     for(const row of owned.rows){
       const selections=input.selections.filter(s=>s.benefitId===row.id),promise=promises.get(row.id)
-      if(!promise||row.available<selections.length)throw new CheckoutCartPricingError('券种不适用此入口或剩余份数不足')
+      if(!promise)throw new CheckoutCartPricingError('所选券没有本入口所需的低价承诺，请从券包查看适用入口')
+      if(row.available<selections.length)throw new CheckoutCartPricingError(`所选券可用${row.available}份，本次选择${selections.length}份，请减少用券数量`)
       // Preview has not persisted reservations: account for every selected
       // coupon sharing this calendar campaign, including different versions.
       const combinedQuantity=input.selections.filter(s=>codes.get(s.benefitId)===codes.get(row.id)).length

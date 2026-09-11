@@ -83,14 +83,14 @@ function mapCapacityError(error: unknown): FulfillmentCapacityUnavailableError |
   if (error.message.includes('capacity exceeded')) {
     return new FulfillmentCapacityUnavailableError(
       'FULFILLMENT_CAPACITY_EXCEEDED',
-      '该出品时段的可用产能已满，请稍后重试或调整商品',
+      capacityFailureDetails(error),
     )
   }
   if (error.message.includes('published capacity policy')
     || error.message.includes('order due time')) {
     return new FulfillmentCapacityUnavailableError(
       'FULFILLMENT_CAPACITY_CONFIGURATION_INCOMPLETE',
-      '出品产能时间窗未完整配置，请联系值班经理',
+      `出品工作站${capacityStation(error.message)}未配置覆盖所选时间的已发布产能窗口，请由值班经理核对该站产能规则和商品出品时间`,
     )
   }
   if (error.message.includes('capacity reservation')
@@ -103,7 +103,7 @@ function mapCapacityError(error: unknown): FulfillmentCapacityUnavailableError |
   return null
 }
 
-function isDatabaseError(value: unknown): value is { code: string; message: string } {
+function isDatabaseError(value: unknown): value is { code: string; message: string;detail?:unknown } {
   return typeof value === 'object' && value !== null
     && 'code' in value && typeof value.code === 'string'
     && 'message' in value && typeof value.message === 'string'
@@ -113,4 +113,12 @@ function requireUuid(value: string): void {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
     throw new TypeError('orderId must be a UUID')
   }
+}
+
+function capacityStation(message:string):string{return message.endsWith('station bar')?'吧台':message.endsWith('station kitchen')?'后厨':'（原记录未指出）'}
+function capacityFailureDetails(error:{message:string;detail?:unknown}):string{
+ try{const facts=typeof error.detail==='string'?JSON.parse(error.detail):null
+ if(facts&&['bar','kitchen'].includes(facts.station)&&[facts.capacity,facts.used,facts.required].every(value=>Number.isSafeInteger(Number(value))&&Number(value)>=0)&&Number.isFinite(Date.parse(facts.startsAt))&&Number.isFinite(Date.parse(facts.endsAt))){const time=(value:string)=>new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false});return `${facts.station==='bar'?'吧台':'后厨'} ${time(facts.startsAt)}至${time(facts.endsAt)}产能不足：已占用${facts.used}，本次需${facts.required}，容量${facts.capacity}（产能单位）；请调整商品或由员工另选可用时段。后续时段是否有余量尚未核对。`}
+ }catch{/* Never expose unvalidated database detail. */}
+ return `${capacityStation(error.message)}出品时段产能不足，原记录未包含具体占用数字；请刷新产能安排后调整商品或时段`
 }

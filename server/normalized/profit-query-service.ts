@@ -225,14 +225,17 @@ export class ProfitQueryService {
       `, [scope.tenantId, scope.storeId, range.startDate, range.endDate, currency])
 
       const accrualRevenue = await transaction.query<{ net_minor: string | number }>(`
-        SELECT COALESCE(SUM(entry.amount_minor), 0)::text AS net_minor
+        SELECT COALESCE(SUM(CASE WHEN payment.order_batch_id IS NULL THEN entry.amount_minor WHEN entry.entry_type='payment' THEN allocated.amount_minor WHEN entry.entry_type='refund' THEN entry.amount_minor ELSE trunc(entry.amount_minor::numeric*allocated.cumulative_minor/payment.amount_minor)-trunc(entry.amount_minor::numeric*(allocated.cumulative_minor-allocated.amount_minor)/payment.amount_minor) END), 0)::text AS net_minor
         FROM mbox.reconciliation_entries AS entry
         JOIN mbox.payments AS payment
           ON payment.tenant_id = entry.tenant_id AND payment.store_id = entry.store_id
          AND payment.id = entry.payment_id
+        LEFT JOIN mbox.refunds refund ON refund.tenant_id=entry.tenant_id AND refund.store_id=entry.store_id AND refund.id=entry.refund_id
+        LEFT JOIN LATERAL(SELECT a.order_id,a.amount_minor,sum(a.amount_minor) OVER(ORDER BY a.position) AS cumulative_minor FROM mbox.order_payment_allocations a WHERE a.tenant_id=payment.tenant_id AND a.store_id=payment.store_id AND a.batch_id=payment.order_batch_id) allocated ON true
         JOIN mbox.orders AS order_row
           ON order_row.tenant_id = payment.tenant_id AND order_row.store_id = payment.store_id
-         AND order_row.id = payment.order_id
+         AND order_row.id = COALESCE(payment.order_id,allocated.order_id)
+         AND (entry.entry_type<>'refund' OR refund.order_id IS NULL OR refund.order_id=order_row.id)
         JOIN mbox.table_sessions AS session
           ON session.tenant_id = order_row.tenant_id AND session.store_id = order_row.store_id
          AND session.id = order_row.table_session_id
@@ -337,7 +340,7 @@ export class ProfitQueryService {
         SELECT
           COALESCE((
             SELECT SUM(payment.amount_minor)
-            FROM mbox.payments AS payment
+            FROM mbox.order_payment_facts AS payment
             JOIN mbox.orders AS order_row
               ON order_row.tenant_id = payment.tenant_id AND order_row.store_id = payment.store_id
              AND order_row.id = payment.order_id

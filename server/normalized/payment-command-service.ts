@@ -59,6 +59,8 @@ interface CommandMetadata {
 }
 
 export interface InitiatePaymentCommand extends CommandMetadata {
+  orderIds?:readonly string[]
+  amountMinor?:number
   orderId: string
   publicId: string
   provider: Extract<PaymentProvider, 'wechat' | 'postar' | 'simulation'>
@@ -70,6 +72,8 @@ export interface InitiatePaymentCommand extends CommandMetadata {
 }
 
 export interface RecordManualPaymentCommand extends CommandMetadata {
+  orderIds?:readonly string[]
+  amountMinor?:number
   orderId: string
   publicId: string
   provider: Extract<PaymentProvider, 'cash' | 'physical_pos' | 'external_manual'>
@@ -194,6 +198,7 @@ export class PaymentCommandService {
     transaction: ScopedTransaction,
     input: Readonly<InitiatePaymentCommand>,
   ): Promise<CommandOutcome<Payment>> {
+      const orderIds=input.orderIds??[input.orderId]
       const providerHints = sanitizeClientPaymentHints(input.providerSnapshot)
       if (input.principal.type === 'employee') {
         const employeeId = requireEmployee(input.actor, 'Staff payment initiation')
@@ -205,17 +210,18 @@ export class PaymentCommandService {
           employeeId,
           capability: 'payment.initiate.staff',
         })
-        await this.authorization.assertEmployeeOrderAccess({
+        for(const orderId of orderIds)await this.authorization.assertEmployeeOrderAccess({
           transaction,
           employeeId,
-          orderId: input.orderId,
+          orderId,
         })
       } else if (input.actor.type !== 'guest') {
         throw new TypeError('Guest payment initiation requires a guest actor')
       }
-      await new PaymentFulfillmentRepository(transaction).ensureReservationBeforePayment(input.orderId)
+      for(const orderId of orderIds)await new PaymentFulfillmentRepository(transaction).ensureReservationBeforePayment(orderId)
       const payments = new PaymentRepository(transaction)
-      const payment = await payments.createForOrder({
+      const payment = await (input.orderIds?payments.createForOrders.bind(payments):payments.createForOrder.bind(payments))({
+        orderIds,amountMinor:input.amountMinor,
         orderId: input.orderId,
         publicId: input.publicId,
         provider: input.provider,
@@ -224,8 +230,7 @@ export class PaymentCommandService {
         initialStatus: 'pending',
         principal: input.principal,
       })
-      if (payment.orderId === null) throw new Error('Order payment lost its order target')
-      await payments.syncOrderPaymentStatus(payment.orderId)
+      for(const orderId of orderIds)await payments.syncOrderPaymentStatus(orderId)
       return paymentOutcome(transaction, input, payment, 'payment.initiated', 1, undefined, undefined, this.options.printTicketSources === true)
   }
 
@@ -330,20 +335,18 @@ export class PaymentCommandService {
             ? 'payment.manual.pos.record'
             : 'payment.manual.external.record',
       })
-      await this.authorization.assertEmployeeOrderAccess({
+      const orderIds=input.orderIds??[input.orderId]
+      for(const orderId of orderIds)await this.authorization.assertEmployeeOrderAccess({
         transaction,
         employeeId,
-        orderId: input.orderId,
+        orderId,
       })
       const fulfillment = new PaymentFulfillmentRepository(transaction)
-      await fulfillment.ensureReservationBeforePayment(input.orderId)
+      for(const orderId of orderIds)await fulfillment.ensureReservationBeforePayment(orderId)
       const payments = new PaymentRepository(transaction)
-      const supersededOnlinePayments = await payments.closeUnpresentedOnlinePaymentsForManualCollection(
-        input.orderId,
-        employeeId,
-      )
       const reference = requiredEvidenceString(evidence, 'receiptReference')
-      const payment = await payments.createForOrder({
+      const payment = await (input.orderIds?payments.createForOrders.bind(payments):payments.createForOrder.bind(payments))({
+        orderIds,amountMinor:input.amountMinor,
         orderId: input.orderId,
         publicId: input.publicId,
         provider: input.provider,
@@ -366,6 +369,7 @@ export class PaymentCommandService {
         occurredAt,
         evidenceSnapshot: evidence,
       })
+      if(payment.payableKind==='order_batch')return this.batchPaymentOutcome(transaction,input,payment,'payment.manual_recorded',1,undefined,occurredAt)
       if (payment.orderId === null) throw new Error('Manual payment lost its order target')
       const orderPaymentStatus = await payments.syncOrderPaymentStatus(payment.orderId)
       if (orderPaymentStatus === 'paid') {
@@ -395,43 +399,7 @@ export class PaymentCommandService {
         activation,
         this.options.printTicketSources === true,
       )
-      if (supersededOnlinePayments.length === 0) return outcome
-      return {
-        ...outcome,
-        auditEvents: [
-          ...supersededOnlinePayments.map((superseded) => ({
-            actor: input.actor,
-            action: 'payment.unpresented_closed_for_manual',
-            objectType: 'payment',
-            objectId: superseded.id,
-            businessDate: input.businessDate,
-            afterData: {
-              publicId: superseded.publicId,
-              provider: superseded.provider,
-              status: 'closed',
-              replacementPaymentId: payment.id,
-            },
-            reason: '尚未向支付渠道发起，改为现场收款',
-          })),
-          ...outcome.auditEvents,
-        ],
-        outboxMessages: [
-          ...supersededOnlinePayments.map((superseded) => ({
-            aggregateType: 'payment',
-            aggregateId: superseded.id,
-            aggregateVersion: 2,
-            eventType: 'payment.unpresented_closed_for_manual.v1',
-            payload: {
-              id: superseded.id,
-              publicId: superseded.publicId,
-              provider: superseded.provider,
-              status: 'closed',
-              replacementPaymentId: payment.id,
-            },
-          })),
-          ...outcome.outboxMessages,
-        ],
-      }
+      return outcome
     })
   }
 
@@ -655,6 +623,7 @@ export class PaymentCommandService {
         occurredAt: input.occurredAt,
         evidenceSnapshot: providerSnapshot,
       })
+      if(payment.payableKind==='order_batch')return this.batchPaymentOutcome(transaction,input,payment,'payment.succeeded',2,paymentBusinessEventKey('succeeded',payment.provider,input.providerTransactionId),input.occurredAt)
       let activation: PaymentFulfillmentActivation | undefined
       if (payment.orderId === null) {
         await payments.syncActivityRegistrationPaymentStatus(payment)
@@ -752,6 +721,7 @@ export class PaymentCommandService {
           evidenceSnapshot: providerSnapshot,
         })
       }
+      if(payment.payableKind==='order_batch')return this.batchPaymentOutcome(transaction,input,payment,input.status==='succeeded'?'payment.succeeded':input.status==='failed'||input.status==='closed'?'payment.provider_failed':'payment.provider_pending',input.status==='succeeded'?2:1,input.status==='succeeded'?paymentBusinessEventKey('succeeded',payment.provider,input.providerTransactionId):undefined,input.occurredAt)
       let fulfillmentResult: PaymentFulfillmentActivation | PaymentFulfillmentRelease | undefined
       if (payment.orderId === null) {
         await payments.syncActivityRegistrationPaymentStatus(payment)
@@ -803,6 +773,25 @@ export class PaymentCommandService {
         this.options.printTicketSources === true,
       )
     })
+  }
+
+  private async batchPaymentOutcome(transaction:ScopedTransaction,input:Readonly<CommandMetadata>,payment:Payment,action:string,version:number,businessKey:string|undefined,occurredAt:string):Promise<CommandOutcome<Payment>> {
+    if(!payment.orderBatchId)throw new Error('Batch payment missing batch target')
+    const orders=(await transaction.query<{order_id:string}>('SELECT order_id FROM mbox.order_payment_allocations WHERE tenant_id=$1 AND store_id=$2 AND batch_id=$3 ORDER BY order_id',[transaction.scope.tenantId,transaction.scope.storeId,payment.orderBatchId])).rows
+    const result=await paymentOutcome(transaction,input,payment,action,version,businessKey)
+    for(const row of orders){
+      const status=await new PaymentRepository(transaction).syncOrderPaymentStatus(row.order_id)
+      const fulfillment=new PaymentFulfillmentRepository(transaction)
+      const activation=payment.status==='succeeded'?await fulfillment.activatePaidOrder(row.order_id,{paymentId:payment.id,metadata:{paymentId:payment.id,paymentProvider:payment.provider},...(input.actor.type==='employee'?{createdByEmployeeId:input.actor.employeeId}:{})}):payment.status==='failed'||payment.status==='closed'?await fulfillment.releaseAfterDefinitiveFailure(row.order_id,`verified provider result: ${payment.status}`):undefined
+      if(payment.status==='succeeded'&&status==='paid'&&activation&&'financialAttributionEligible' in activation&&activation.financialAttributionEligible){
+        await new RecommendationFinancialAttributionRepository(transaction).recordPaidForOrder({paymentId:payment.id,orderId:row.order_id,actorRef:`payment:${payment.id}`})
+        await new LoyaltyAccrualRepository(transaction).recordPaidOrder({paymentId:payment.id,orderId:row.order_id,occurredAt})
+      }
+      const effects=await paymentOutcome(transaction,input,payment,action,version,businessKey,activation)
+      result.auditEvents=[...(result.auditEvents??[]),...(effects.auditEvents??[]).filter(event=>event.objectType==='order')]
+      result.outboxMessages=[...(result.outboxMessages??[]),...(effects.outboxMessages??[]).filter(event=>event.aggregateType==='order')]
+    }
+    return result
   }
 
   requestRefund(input: Readonly<RequestRefundCommand>): Promise<CommandExecution<Refund>> {

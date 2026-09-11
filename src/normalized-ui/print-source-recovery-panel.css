@@ -27,3 +27,15 @@
 .print-source-recovery.print-ticket-policies article label { margin: 0; min-height: 0; font-size: 12px; }
 .print-source-recovery.print-ticket-policies article label:first-of-type { display: flex; align-items: center; gap: 6px; min-height: 42px; }
 .print-source-recovery.print-ticket-policies article button { margin: 0; padding: 8px 5px; min-height: 42px; font-size: 12px; }
+/* Source cards inherit a column layout from the staff shell; keep their flex
+   basis horizontal so a short status does not reserve 180px of empty height. */
+.print-source-recovery:not(.print-ticket-policies) > article {
+  flex-direction: row;
+  min-height: 0;
+  align-items: flex-start;
+}
+.print-source-recovery:not(.print-ticket-policies) > article > div {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}

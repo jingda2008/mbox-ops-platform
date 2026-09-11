@@ -240,6 +240,9 @@ export interface StaffTableOrderDetailView {
     id: string
     productName: string
     quantity: number
+    unitPriceMinor?: number
+    totalAmountMinor?: number
+    includedInBundle?: boolean
     fulfillmentStation: 'bar' | 'kitchen' | 'cashier' | 'none'
     fulfillmentStatus: StaffTableOrderItemFulfillmentStatus
   }>
@@ -271,7 +274,7 @@ export async function listTableOrderDetailsForSession(
       order_header.status AS order_status,order_header.fulfillment_state AS order_fulfillment_state,
       item.id AS item_id,
       COALESCE(NULLIF(item.product_snapshot->>'name',''),product.name,'商品') AS product_name,
-      item.quantity,item.fulfillment_station,item.status AS item_status,kds.status AS kds_status
+      item.quantity,item.unit_price_minor,item.total_amount_minor,item.parent_order_item_id,item.fulfillment_station,item.status AS item_status,kds.status AS kds_status
     FROM mbox.orders order_header
     JOIN mbox.order_items item
       ON item.tenant_id=order_header.tenant_id AND item.store_id=order_header.store_id
@@ -309,6 +312,9 @@ export async function listTableOrderDetailsForSession(
       id: row.item_id,
       productName: row.product_name,
       quantity: Number(row.quantity),
+      unitPriceMinor: row.unit_price_minor == null ? undefined : Number(row.unit_price_minor),
+      totalAmountMinor: row.total_amount_minor == null ? undefined : Number(row.total_amount_minor),
+      includedInBundle: row.parent_order_item_id != null,
       fulfillmentStation: row.fulfillment_station,
       fulfillmentStatus: tableOrderItemFulfillmentStatus(row),
     })
@@ -1790,28 +1796,27 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   if (error instanceof TypeError) return apiError(400, 'REQUEST_INVALID', error.message)
   if (error instanceof KdsTaskNotFoundError) return apiError(404, 'KDS_TASK_NOT_FOUND', error.message)
   if (error instanceof OrderProductUnavailableError) {
-    return apiError(409, 'ORDER_PRODUCT_UNAVAILABLE', '订单中有商品已下架或价格失效，请刷新后重试')
+    return apiError(409, 'ORDER_PRODUCT_UNAVAILABLE', error.message)
   }
   if (error instanceof TableSessionUnavailableForOrderError) {
     return apiError(409, 'TABLE_SESSION_UNAVAILABLE', '桌次未开台或已经结束，请刷新后重试')
   }
-  if (error instanceof InventoryRecipeMissingError || error instanceof InventoryBalanceMissingError) {
-    return apiError(409, 'INVENTORY_CONFIGURATION_INCOMPLETE', '商品库存配置不完整，请联系值班经理')
-  }
+  if (error instanceof InventoryRecipeMissingError) return apiError(409,'INVENTORY_RECIPE_MISSING',`订单商品 ${error.orderItemId} 缺少有效库存配方；请在商品配置中补齐配方后重试`)
+  if (error instanceof InventoryBalanceMissingError) return apiError(409,'INVENTORY_BALANCE_MISSING',`物料 ${error.inventoryItemId} 缺少库存余额记录；请由库存负责人核对入库初始化`)
   if (error instanceof InsufficientInventoryError) {
-    return apiError(409, 'INVENTORY_INSUFFICIENT', '部分商品库存不足，请调整订单后重试')
+    return apiError(409, 'INVENTORY_INSUFFICIENT', `库存物料 ${error.itemName??error.sku}（${error.sku}） 不足：可用 ${error.availableQuantity}，本次需要 ${error.requiredQuantity}（${error.baseUnit??'原记录未留存单位'}）；请调整数量或核对库存`)
   }
   if (error instanceof FulfillmentCapacityUnavailableError) {
     return apiError(409, error.code, error.message)
   }
   if (error instanceof PricingAuthorizationDeniedError) {
-    return apiError(403, 'PRICING_AUTHORIZATION_DENIED', '本次赠送超过当前岗位额度，或赠送权限已失效')
+    return apiError(403, 'PRICING_AUTHORIZATION_DENIED', error.userMessage)
   }
   if (error instanceof KdsTransitionError) {
-    return apiError(409, 'KDS_TRANSITION_CONFLICT', '出品状态已经变化，请刷新后重试')
+    return apiError(409, 'KDS_TRANSITION_CONFLICT', `任务 ${error.taskId} 当前${fulfillmentStateLabel(error.currentStatus)}，不能${fulfillmentStateLabel(error.targetStatus)}${error.assignedElsewhere?'；该任务已由其他员工接单':''}。请刷新任务后选择可用操作`)
   }
   if (error instanceof OrderDeliveryBlockedError) {
-    return apiError(409, 'ORDER_ITEM_NOT_READY', '该商品尚未完成制作或已被处理，请刷新后重试')
+    return apiError(409, 'ORDER_ITEM_NOT_READY', `商品 ${error.orderItemId} 当前${fulfillmentStateLabel(error.currentStatus)}，本次未登记送达；请刷新核对制作状态和本人操作权限`)
   }
   if (error instanceof IdempotencyConflictError) {
     return apiError(409, 'IDEMPOTENCY_CONFLICT', '同一个提交标识不能用于不同操作')
@@ -1828,3 +1833,5 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
 function apiError(statusCode: number, code: string, message: string) {
   return { statusCode, body: { error: { code, message } } }
 }
+
+function fulfillmentStateLabel(value:string|undefined):string{return ({pending:'待接单',submitted:'已提交',accepted:'已接单',preparing:'制作中',ready:'制作完成',delivered:'已送达',cancelled:'已取消',failed:'制作失败'} as Record<string,string>)[value??'']??'状态未能读取'}

@@ -60,7 +60,6 @@ import {
   ProviderPaymentStatusAccessError,
   ProviderPaymentUnknownError,
   WechatPaymentIdentityRequiredError,
-  type ProviderPaymentContext,
 } from './payment-provider-action-repository.js'
 import { PostarPaymentRejectedError } from '../postar-adapter.js'
 import type { ProviderObservationRecorderPort } from './provider-verification-observation.js'
@@ -284,11 +283,11 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
     options.onlinePayments?.assertAvailable(provider === 'simulation' ? 'simulation' : 'postar')
     const idempotencyKey = readIdempotencyKey(request)
     const publicId = readOptionalString(body.publicId, 'publicId', 128, 8)
-      ?? createPublicId('payment')
+      ?? (options.createPublicId?createPublicId('payment'):`payment-${createHash('sha256').update(`${context.scope.tenantId}:${context.scope.storeId}:${idempotencyKey}`).digest('hex').slice(0,48)}`)
     const providerSnapshot = sanitizeClientPaymentHints(
       readOptionalJsonObject(body.providerSnapshot, 'providerSnapshot'),
     )
-    const orderId = readUuid(body.orderId, 'orderId')
+    const {orderId,orderIds,amountMinor}=readOrderCollection(body)
     assertActorPaymentMethod(context.actor, method)
     const customerAuthCode = method === 'auth_code'
       ? readString(body.customerAuthCode, 'customerAuthCode', 32, 16)
@@ -297,11 +296,9 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       ? null
       : createHash('sha256').update('mbox:payment-auth-code:v1:').update(customerAuthCode).digest('hex')
     const principal = paymentInitiationPrincipal(context)
-    let execution: CommandExecution<Payment>
-    try {
-      execution = await options.commands.initiate({
+    const execution = await options.commands.initiate({
         ...metadata(request, context, idempotencyKey, {
-          orderId,
+          orderId, orderIds:orderIds??null, amountMinor:amountMinor??null,
           publicId,
           provider,
           method,
@@ -309,26 +306,13 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
           providerSnapshot: providerSnapshot ?? null,
           principal: principalToJson(principal),
         }),
-        orderId,
+        orderId, orderIds, amountMinor,
         publicId,
         provider,
         method,
         providerSnapshot,
         principal,
       })
-    } catch (error) {
-      if (!(error instanceof OrderNotPayableError) || options.onlinePayments === undefined) throw error
-      const active = await options.onlinePayments.resolveActivePayment({
-        scope: context.scope,
-        orderId,
-        principal,
-      })
-      if (active === null) throw error
-      if (active.provider !== provider || active.method !== method) {
-        throw new ProviderPaymentMethodConflictError()
-      }
-      execution = { value: paymentFromProviderContext(active), replayed: true }
-    }
     const action = options.onlinePayments === undefined ? null : await options.onlinePayments.create({
       scope: context.scope,
       paymentId: execution.value.id,
@@ -363,17 +347,17 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
     }
     const idempotencyKey = readIdempotencyKey(request)
     const publicId = readOptionalString(body.publicId, 'publicId', 128, 8)
-      ?? createPublicId('payment')
-    const orderId = readUuid(body.orderId, 'orderId')
+      ?? (options.createPublicId?createPublicId('payment'):`payment-${createHash('sha256').update(`${context.scope.tenantId}:${context.scope.storeId}:${idempotencyKey}`).digest('hex').slice(0,48)}`)
+    const {orderId,orderIds,amountMinor}=readOrderCollection(body)
     const execution = await options.commands.recordManual({
       ...metadata(request, context, idempotencyKey, {
-        orderId,
+        orderId, orderIds:orderIds??null, amountMinor:amountMinor??null,
         publicId,
         provider,
         method,
         evidence,
       }),
-      orderId,
+      orderId, orderIds, amountMinor,
       publicId,
       provider,
       method,
@@ -933,30 +917,6 @@ function readSettlementExceptionReason(value: unknown): SettleCancelledUnpaidOrd
     throw new PaymentApiRequestError('异常结清原因无效')
   }
   return result as SettleCancelledUnpaidOrderInput['reasonCode']
-}
-
-function paymentFromProviderContext(value: ProviderPaymentContext): Payment {
-  return {
-    id: value.id,
-    payableKind: 'order',
-    orderId: value.orderId,
-    activityRegistrationId: null,
-    activityRegistrationCycle: null,
-    publicId: value.publicId,
-    provider: value.provider,
-    providerTransactionId: value.providerTransactionId,
-    settlementChannel: null,
-    method: value.method,
-    amountMinor: value.amountMinor,
-    currency: value.currency,
-    status: value.status as Payment['status'],
-    providerSnapshot: {},
-    retryReleasedAt: null,
-    retryReleaseReason: null,
-    succeededAt: null,
-    createdAt: value.createdAt,
-    updatedAt: value.createdAt,
-  }
 }
 
 async function refundDecisionRoute(
@@ -1612,7 +1572,7 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
     return apiError(409, 'ORDER_SETTLEMENT_EXCEPTION_CONFLICT', '订单仍有未完成出品、付款或退款，请先按实际状态处理')
   }
   if (error instanceof RefundNotFoundError) return apiError(404, 'REFUND_NOT_FOUND', error.message)
-  if (error instanceof OrderNotPayableError) return apiError(409, 'ORDER_NOT_PAYABLE', error.message)
+  if (error instanceof OrderNotPayableError) return apiError(409, 'ORDER_NOT_PAYABLE', error.reason==='the order has no outstanding balance'?'本单已足额收清，不能再次收款':error.reason==='status is cancelled'?'订单已取消，不能收款':error.reason==='status is draft'?'订单仍为草稿，请先提交订单':'当前订单未通过收款条件校验，请刷新订单核对桌次、归属和待收金额')
   if (error instanceof RecollectionAuthorizationRequiredError) {
     return apiError(409, 'REFUND_RECOLLECTION_AUTHORIZATION_REQUIRED', error.message)
   }
@@ -1695,4 +1655,12 @@ function safeErrorName(error: unknown): string {
 
 function apiError(statusCode: number, code: string, message: string) {
   return { statusCode, body: { error: { code, message } } }
+}
+
+function readOrderCollection(body:Record<string,unknown>):{orderId:string;orderIds?:string[];amountMinor?:number}{
+ const orderIds=body.orderIds===undefined?undefined:(()=>{if(!Array.isArray(body.orderIds)||body.orderIds.length<1||body.orderIds.length>100)throw new TypeError('请选择1至100笔本桌订单');const ids=body.orderIds.map(value=>readUuid(value,'orderIds'));if(new Set(ids).size!==ids.length)throw new TypeError('同一订单不能重复选择');return ids.sort()})()
+ const orderId=body.orderId===undefined&&orderIds?orderIds[0]!:readUuid(body.orderId,'orderId')
+ if(orderIds&&!orderIds.includes(orderId))throw new TypeError('当前订单必须包含在所选订单中')
+ const amountMinor=body.amountMinor===undefined?undefined:readInteger(body.amountMinor,'收款金额（分）',1,Number.MAX_SAFE_INTEGER)
+ return {orderId,orderIds:orderIds??(amountMinor===undefined?undefined:[orderId]),amountMinor}
 }

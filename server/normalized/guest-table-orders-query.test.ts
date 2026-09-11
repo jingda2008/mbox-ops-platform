@@ -35,7 +35,7 @@ describe('loadGuestTableOrders', () => {
     } as unknown as ScopedTransaction
 
     await expect(loadGuestTableOrders(transaction, tableSessionId, customerId)).resolves.toEqual([{
-      publicId: 'order-shared-0001', round: 2, channel: 'guest_qr', sourceText: '顾客扫码点单', status: 'submitted',
+      publicId: 'order-shared-0001', tableCode: '', businessDate: '', round: 2, channel: 'guest_qr', sourceText: '顾客扫码点单', status: 'submitted',
       visibility: 'shared', isMine: false, createdAt: '2026-08-12T12:00:00.000Z',
       paidAt: null, totalAmountMinor: 6800, subtotalAmountMinor: 6800, discountAmountMinor: 0,
       paymentStatus: 'unpaid', paymentAccess: 'available', payableAmountMinor: 6800, currency: 'CNY',
@@ -46,11 +46,11 @@ describe('loadGuestTableOrders', () => {
         id: 'item-one', unitPriceMinor: 3400, totalAmountMinor: 6800, components: [], note: '少冰',
       }],
     }])
-    expect(capturedValues).toEqual([tenantId, storeId, tableSessionId, customerId])
+    expect(capturedValues).toEqual([tenantId, storeId, tableSessionId, customerId, null])
     expect(capturedSql).toContain("COALESCE(ordering.created_by_customer_id = $4::uuid, false)")
     expect(capturedSql).toContain("payment.status IN ('succeeded', 'partially_refunded', 'refunded')")
-    expect(capturedSql).toContain("WHEN active_payment.method = 'auth_code' THEN 'staff_collecting'")
-    expect(capturedSql).toContain("WHEN active_payment.id IS NOT NULL THEN 'payment_in_progress'")
+    expect(capturedSql).not.toContain("THEN 'staff_collecting'")
+    expect(capturedSql).not.toContain("THEN 'payment_in_progress'")
     expect(capturedSql).toContain("pricing_authorization.status = 'consumed'")
     expect(capturedSql).not.toContain("pricing_authorization.authorization_snapshot")
     expect(capturedSql.indexOf('row_number() OVER')).toBeGreaterThan(capturedSql.indexOf('visible_orders_unbounded'))
@@ -114,11 +114,11 @@ integration('loadGuestTableOrders PostgreSQL privacy and turnover isolation', ()
     ])
     expect(customerTwo.map((order) => order.round)).toEqual([1, 2, 3, 4])
     expect(customerTwo.at(-1)).toMatchObject({
-      channel: 'staff_assisted', sourceText: '服务员协助点单', paymentAccess: 'staff_collecting', payableAmountMinor: 6800,
+      channel: 'staff_assisted', sourceText: '服务员协助点单', paymentAccess: 'available', payableAmountMinor: 6800,
     })
   })
 
-  it('shows an employee barcode collection as busy instead of allowing a second guest payment', async () => {
+  it('does not let an unknown employee attempt override the actual payable balance', async () => {
     const scope = { tenantId: integrationTenantId, storeId: integrationStoreId }
     const [customerOne, customerTwo] = await Promise.all([
       transactions.run(scope, (transaction) => loadGuestTableOrders(transaction, firstSessionId, customerOneId), { readOnly: true }),
@@ -126,12 +126,12 @@ integration('loadGuestTableOrders PostgreSQL privacy and turnover isolation', ()
     ])
 
     expect(customerOne.find((order) => order.publicId === 'staff-assisted-unpaid')?.paymentAccess)
-      .toBe('staff_collecting')
+      .toBe('available')
     expect(customerTwo.find((order) => order.publicId === 'staff-assisted-unpaid')?.paymentAccess)
-      .toBe('staff_collecting')
+      .toBe('available')
   })
 
-  it('keeps a pending QR payment under review when the provider action is missing and in progress when it is ready',async()=>{
+  it('keeps collection available when an old QR action is missing or ready',async()=>{
     const paymentId='74000000-0000-4000-8000-000000000032'
     const orderId='74000000-0000-4000-8000-000000000033'
     const orderItemId='74000000-0000-4000-8000-000000000034'
@@ -154,7 +154,7 @@ integration('loadGuestTableOrders PostgreSQL privacy and turnover isolation', ()
     const missingAction=await transactions.run(scope,(transaction)=>(
       loadGuestTableOrders(transaction,secondSessionId,customerOneId)
     ),{readOnly:true})
-    expect(missingAction.find((order)=>order.publicId==='shared-payment-window')?.paymentAccess).toBe('status_review')
+    expect(missingAction.find((order)=>order.publicId==='shared-payment-window')?.paymentAccess).toBe('available')
 
     await pool.query(`INSERT INTO mbox.payment_provider_actions(
       payment_id,tenant_id,store_id,presentation,initiated_by_type,initiated_by_ref,state,
@@ -165,7 +165,7 @@ integration('loadGuestTableOrders PostgreSQL privacy and turnover isolation', ()
     const readyAction=await transactions.run(scope,(transaction)=>(
       loadGuestTableOrders(transaction,secondSessionId,customerTwoId)
     ),{readOnly:true})
-    expect(readyAction.find((order)=>order.publicId==='shared-payment-window')?.paymentAccess).toBe('payment_in_progress')
+    expect(readyAction.find((order)=>order.publicId==='shared-payment-window')?.paymentAccess).toBe('available')
     await pool.query('DELETE FROM mbox.payment_provider_actions WHERE payment_id=$1::uuid',[paymentId])
     await pool.query('DELETE FROM mbox.payments WHERE id=$1::uuid',[paymentId])
     await pool.query('DELETE FROM mbox.order_items WHERE id=$1::uuid',[orderItemId])
@@ -181,16 +181,16 @@ integration('loadGuestTableOrders PostgreSQL privacy and turnover isolation', ()
     expect(orders).toEqual([])
   })
 
-  it('retains only personally created paid history, independent of table participation', async () => {
+  it('retains personally created paid and unpaid history, independent of table participation', async () => {
     const scope = { tenantId: integrationTenantId, storeId: integrationStoreId }
     const own = await transactions.run(scope, async tx => {
       await tx.query('SET LOCAL ROLE mbox_runtime')
       return loadGuestCustomerOrderHistory(tx, customerTwoId)
     }, { readOnly: true })
-    expect(own.map(order => order.publicId)).toEqual(['shared-paid-two'])
+    expect(own.map(order => order.publicId)).toEqual(['shared-paid-two','shared-private-two'])
     expect(own[0]).toMatchObject({ visibility: 'private', totalAmountMinor: 13600 })
     const other = await transactions.run(scope, tx => loadGuestCustomerOrderHistory(tx, customerOneId), { readOnly: true })
-    expect(other).toEqual([])
+    expect(other.map(order=>order.publicId)).toEqual(['shared-private-one'])
     const foreign = await transactions.run({ ...scope, storeId: '74000000-0000-4000-8000-000000000099' },
       tx => loadGuestCustomerOrderHistory(tx, customerTwoId), { readOnly: true })
     expect(foreign).toEqual([])
@@ -210,7 +210,7 @@ integration('loadGuestTableOrders PostgreSQL privacy and turnover isolation', ()
       FROM mbox.order_items item JOIN mbox.orders ordering ON ordering.id=item.order_id
       WHERE ordering.tenant_id=$2 AND ordering.public_id='shared-paid-two' AND item.parent_order_item_id IS NULL`,[orderId,integrationTenantId])
     const own = await transactions.run(scope, tx => loadGuestCustomerOrderHistory(tx, customerTwoId), { readOnly: true })
-    expect(own).toHaveLength(2)
+    expect(own).toHaveLength(3)
     expect(own[0]).toMatchObject({ publicId:'cancelled-refunded-history',status:'cancelled',paymentStatus:'refunded',visibility:'private',paymentAccess:'not_required' })
     expect(own[0]!.items.length).toBeGreaterThan(0)
     const live = await transactions.run(scope, tx => loadGuestTableOrders(tx, secondSessionId, customerTwoId), { readOnly: true })

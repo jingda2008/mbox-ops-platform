@@ -196,11 +196,10 @@ describe('CashierAfterSalesWorkbenchView', () => {
     view.orders[0]!.outstandingAmountMinor = 6_800
     const html = render(view)
     expect(html).toContain('尚无明确结果')
-    expect(html).toContain('保留旧单待核对，继续收款')
-    expect(html).toContain('不会被标记为失败')
-    expect(html).toContain('溢收')
+    expect(html).toContain('可直接继续收款')
+    expect(html).toContain('原记录保留在订单详情')
     expect(html).toContain('查询渠道结果')
-    expect(html).not.toContain('登记现金收款</button>')
+    expect(html).toContain('登记现金收款</button>')
   })
 
   it('keeps a retry-released payment visible for audit without blocking another collection', () => {

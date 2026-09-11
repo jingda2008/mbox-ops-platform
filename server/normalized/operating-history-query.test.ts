@@ -22,7 +22,7 @@ describe('operating history',()=>{
     const result=await readOperatingHistory(tx,{businessDate:'2026-09-09',table:'L01',employee:'张三',page:2})
     expect(result.receipts).toEqual([{provider:'cash',receivedMinor:1000,refundedMinor:1800,netMinor:-800}])
     expect(result.orders).toEqual([])
-    expect(calls[0]?.values).toEqual(['tenant','store','2026-09-09','L01','张三',100,'2026-09-09',null,'','',''])
+    expect(calls[0]?.values).toEqual(['tenant','store','2026-09-09','L01','张三',100,'2026-09-09',null,'','','',null,null,null])
     expect(calls[1]?.values).toEqual(['tenant','store','2026-09-09','2026-09-09'])
     expect(calls.every(call=>!/(UPDATE|INSERT|DELETE)/.test(call.sql))).toBe(true)
   })
@@ -30,7 +30,7 @@ describe('operating history',()=>{
     const calls:unknown[][]=[]
     const tx={scope:{tenantId:'tenant',storeId:'store'},query:async(_sql:string,values:unknown[])=>{calls.push(values);return {rows:[]}}} as unknown as ScopedTransaction
     const result=await readOperatingHistory(tx,{businessDate:'2026-09-01',endDate:'2026-09-10',table:'W01',employee:'员工',page:0})
-    expect(calls).toEqual([['tenant','store','2026-09-01','W01','员工',0,'2026-09-10',null,'','',''],['tenant','store','2026-09-01','2026-09-10']])
+    expect(calls).toEqual([['tenant','store','2026-09-01','W01','员工',0,'2026-09-10',null,'','','',null,null,null],['tenant','store','2026-09-01','2026-09-10']])
     expect(result.endDate).toBe('2026-09-10')
   })
 })

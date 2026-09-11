@@ -49,8 +49,8 @@ async function materialize(tx: ScopedTransaction, id: string): Promise<Exclude<k
     const jobs = await repository[method[source.ticket_kind]](source.source_outbox_message_id, source.aggregate_id)
     const status = jobs.length > 0 ? 'completed' : 'skipped'
     await tx.query(`UPDATE mbox.print_source_jobs SET status=$4,attempts=attempts+1,
-      job_count=$5,completed_at=clock_timestamp(),last_error_code=NULL
-      WHERE tenant_id=$1 AND store_id=$2 AND id=$3`, [tx.scope.tenantId, tx.scope.storeId, id, status, jobs.length])
+      job_count=$5,completed_at=clock_timestamp(),last_error_code=$6
+      WHERE tenant_id=$1 AND store_id=$2 AND id=$3`, [tx.scope.tenantId, tx.scope.storeId, id, status, jobs.length,status==='skipped'?repository.skipReason:null])
     await tx.query('RELEASE SAVEPOINT print_materialization')
     return status
   } catch {

@@ -3,7 +3,7 @@ export type OnlinePaymentPresentation = 'jsapi' | 'alipay_jsapi' | 'qr' | 'barco
 export interface OnlinePaymentAction {
   paymentId: string
   paymentPublicId: string
-  payableKind?: 'order' | 'activity_registration'
+  payableKind?: 'order' | 'activity_registration' | 'order_batch'
   orderPublicId: string | null
   activityRegistrationPublicId?: string | null
   status: 'pending' | 'unknown' | 'failed'

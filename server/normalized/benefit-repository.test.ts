@@ -107,7 +107,7 @@ integration('BenefitRepository normalized grant and redemption integrity', () =>
     })
     expect(replay.replayed).toBe(true)
     await expect(benefits.issue(issueCommand('manual-over-limit', 1_001, 1)))
-      .rejects.toThrow('exceeds the employee approval limit')
+      .rejects.toThrow('超过当前批准额度')
 
     const evidence = await pool.query<{ benefits: string; audits: string; outbox: string }>(`
       SELECT

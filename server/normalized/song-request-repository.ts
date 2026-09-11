@@ -107,7 +107,7 @@ export class SongRequestEligibilityError extends Error {
 }
 
 export class SongRequestTransitionError extends Error {
-  constructor(id: string, from: SongRequestStatus, to: SongRequestStatus) {
+  constructor(readonly id: string, readonly from: SongRequestStatus, readonly to: SongRequestStatus) {
     super(`Song request ${id} cannot transition from ${from} to ${to}`)
     this.name = 'SongRequestTransitionError'
   }

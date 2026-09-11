@@ -12,11 +12,16 @@ import {BenefitRepository} from './benefit-repository.js'
 export async function authorizeCheckoutCouponQuote(tx:ScopedTransaction,context:Readonly<PricingAuthorityContext>):Promise<Readonly<PricingAuthorityDecision>>{
   const scope=[tx.scope.tenantId,tx.scope.storeId]
   if(context.actor.type!=='guest'||context.channel!=='guest_qr')throw new PricingAuthorizationDeniedError('此报价只能由原会员在桌边结算时确认')
-  const row=(await tx.query<{customer_id:string}>(`SELECT q.customer_id FROM mbox.checkout_coupon_quotes q JOIN mbox.guest_shared_carts c ON c.tenant_id=q.tenant_id AND c.store_id=q.store_id AND c.id=q.cart_id
-    WHERE q.tenant_id=$1 AND q.store_id=$2 AND q.id=$3 AND q.table_session_id=$4 AND q.expires_at>clock_timestamp()
-      AND c.status='submitting' AND c.generation=q.cart_generation AND c.version=q.cart_version+1
-    FOR UPDATE OF q`,[...scope,context.request.sourceId,context.tableSessionId])).rows[0]
-  if(!row||!await lockBoundGuestTablePosition(tx,{tableSessionId:context.tableSessionId,customerId:row.customer_id,actorRef:context.actor.ref}))throw new PricingAuthorizationDeniedError('报价已失效、购物车已变更或会员不在此桌')
+  const row=(await tx.query<{customer_id:string;table_session_id:string;unexpired:boolean;cart_matches:boolean}>(`SELECT q.customer_id,q.table_session_id,q.expires_at>clock_timestamp() AS unexpired,
+      (c.status='submitting' AND c.generation=q.cart_generation AND c.version=q.cart_version+1) AS cart_matches
+    FROM mbox.checkout_coupon_quotes q JOIN mbox.guest_shared_carts c ON c.tenant_id=q.tenant_id AND c.store_id=q.store_id AND c.id=q.cart_id
+    WHERE q.tenant_id=$1 AND q.store_id=$2 AND q.id=$3
+    FOR UPDATE OF q`,[...scope,context.request.sourceId])).rows[0]
+  if(!row)throw new PricingAuthorizationDeniedError('该结算报价不存在，请重新确认购物车')
+  if(row.table_session_id!==context.tableSessionId)throw new PricingAuthorizationDeniedError('该报价属于原桌次，请在当前桌重新确认购物车')
+  if(!row.unexpired)throw new PricingAuthorizationDeniedError('结算报价已过期，请重新确认当前价格与优惠')
+  if(!row.cart_matches)throw new PricingAuthorizationDeniedError('购物车商品已变更，请重新确认结算报价')
+  if(!await lockBoundGuestTablePosition(tx,{tableSessionId:context.tableSessionId,customerId:row.customer_id,actorRef:context.actor.ref}))throw new PricingAuthorizationDeniedError('原会员已不在此桌，请重新扫码确认会员与桌台')
   const quote=await new CheckoutCouponQuoteRepository(tx).find(context.request.sourceId,row.customer_id)
   const allocations=verifyPricingLineAllocations(quote.lines.map(line=>({requestIndex:line.requestIndex,productId:line.productId,quantity:1,unitPriceMinor:line.standardMinor,discountAmountMinor:line.discountMinor,lineFingerprint:line.lineFingerprint})),context.lines,quote.discountMinor)
   const standard=await new OrderRepository(tx).quoteCurrent(context.lines,context.channel)

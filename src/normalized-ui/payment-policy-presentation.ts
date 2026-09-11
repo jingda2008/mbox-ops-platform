@@ -2,6 +2,7 @@ export interface PaymentPolicyPresentationInput {
   policyOnlinePaymentEnabled: boolean
   onlinePaymentEnabled: boolean
   providerConfigured: boolean
+  providerDiagnostics?:{checkedAt:string;reasons:string[]}
 }
 
 export function paymentPolicyPresentation(policy: Readonly<PaymentPolicyPresentationInput>): {
@@ -17,7 +18,7 @@ export function paymentPolicyPresentation(policy: Readonly<PaymentPolicyPresenta
   if (policy.policyOnlinePaymentEnabled && !policy.providerConfigured) return {
     summary: '策略开放 · 渠道不可用',
     title: '线上支付当前不可用',
-    detail: '经营策略仍为开放；渠道恢复后会自动生效。如不希望自动恢复，请立即关闭线上支付策略。',
+    detail: `经营策略仍为开放。${policy.providerDiagnostics?.reasons.join('；')||'当前渠道配置未就绪，请由管理员核对运行配置。'}${policy.providerDiagnostics?` 检查时点：${new Date(policy.providerDiagnostics.checkedAt).toLocaleString('zh-CN')}。`:''}渠道恢复后策略会生效；如需暂停后续线上收款，可关闭经营开关。`,
   }
   return {
     summary: '已关闭',

@@ -1,7 +1,9 @@
+import {orderNeedsCollectionSql} from './order-collection-sql.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 import type { OperatingHistory } from '../../src/shared/operating-history.js'
 import type { OperatingDaySummary } from '../../src/shared/operating-history.js'
 export interface OperatingHistoryFilter { businessDate: string; endDate?: string; table: string; employee: string; page: number; exportAll?:boolean;
+  workKind?:'prepared'|'delivered'; workEmployeeId?:string; workStations?:string[];
   search?:string; paymentStatus?:string; area?:string;
   earliestBusinessDate?:string|null; allowFinancialSummary?:boolean }
 
@@ -18,9 +20,9 @@ export async function readOperatingHistory(tx: ScopedTransaction, input: Operati
     LEFT JOIN mbox.employees employee ON employee.tenant_id=ordering.tenant_id AND employee.store_id=ordering.store_id
       AND employee.id=ordering.created_by_employee_id
     CROSS JOIN LATERAL (SELECT (
-      (ordering.status<>'cancelled' AND ordering.total_amount_minor>0 AND ordering.payment_status IN ('unpaid','pending','partially_paid'))
-      OR EXISTS(SELECT 1 FROM mbox.refunds refund JOIN mbox.payments payment
-        ON payment.tenant_id=refund.tenant_id AND payment.store_id=refund.store_id AND payment.id=refund.payment_id
+      ${orderNeedsCollectionSql('ordering')}
+      OR EXISTS(SELECT 1 FROM mbox.refunds refund JOIN mbox.order_payment_facts payment
+        ON payment.tenant_id=refund.tenant_id AND payment.store_id=refund.store_id AND payment.id=refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=payment.order_id)
         WHERE payment.tenant_id=ordering.tenant_id AND payment.store_id=ordering.store_id AND payment.order_id=ordering.id
           AND refund.status IN ('requested','approved','processing','failed'))
     ) AS needs_attention) attention
@@ -33,9 +35,17 @@ export async function readOperatingHistory(tx: ScopedTransaction, input: Operati
         OR ordering.total_amount_minor::numeric/100=CASE WHEN $9 ~ '^\\d+(\\.\\d{1,2})?$' THEN $9::numeric ELSE NULL END)
       AND ($10='' OR ordering.payment_status=$10)
       AND ($11='' OR area.name ILIKE '%'||$11||'%')
+      AND ($12::text IS NULL OR EXISTS(SELECT 1 FROM mbox.order_items history_item JOIN mbox.kds_tasks history_task
+        ON history_task.tenant_id=history_item.tenant_id AND history_task.store_id=history_item.store_id AND history_task.order_item_id=history_item.id
+        JOIN mbox.audit_events history_event ON history_event.tenant_id=history_task.tenant_id AND history_event.store_id=history_task.store_id
+          AND history_event.object_type='kds_task' AND history_event.object_id=history_task.id::text
+        WHERE history_item.tenant_id=ordering.tenant_id AND history_item.store_id=ordering.store_id AND history_item.order_id=ordering.id
+          AND history_event.action=CASE $12 WHEN 'prepared' THEN 'kds.complete' ELSE 'kds.deliver' END
+          AND ($13::uuid IS NULL OR history_event.actor_employee_id=$13)
+          AND ($14::text[] IS NULL OR history_task.station_code=ANY($14))))
     ORDER BY ordering.created_at DESC,ordering.id DESC LIMIT ${input.exportAll?5001:51} OFFSET $6
   `,[tx.scope.tenantId,tx.scope.storeId,input.businessDate,input.table,input.employee,input.exportAll?0:input.page*50,input.endDate??input.businessDate,
-    input.earliestBusinessDate??null,input.search??'',input.paymentStatus??'',input.area??''])
+    input.earliestBusinessDate??null,input.search??'',input.paymentStatus??'',input.area??'',input.workKind??null,input.workEmployeeId??null,input.workStations??null])
   if(input.exportAll&&orders.rows.length>5000)throw new TypeError('筛选结果超过5000单，请缩小日期或桌台范围后导出；不会只导出部分数据')
   const page=input.exportAll?orders.rows:orders.rows.slice(0,50)
   const items=page.length?await tx.query<{id:string;order_id:string;name:string;quantity:number;unit_price_minor:string;
@@ -65,8 +75,13 @@ export async function readOperatingHistory(tx: ScopedTransaction, input: Operati
       ORDER BY audit.occurred_at DESC,audit.id DESC LIMIT 1
     ) preparation ON true
     WHERE item.tenant_id=$1::uuid AND item.store_id=$2::uuid AND item.order_id=ANY($3::uuid[])
+      AND ($4::text IS NULL OR EXISTS(SELECT 1 FROM mbox.kds_tasks ht JOIN mbox.audit_events he
+        ON he.tenant_id=ht.tenant_id AND he.store_id=ht.store_id AND he.object_type='kds_task' AND he.object_id=ht.id::text
+        WHERE ht.tenant_id=item.tenant_id AND ht.store_id=item.store_id AND ht.order_item_id=item.id
+          AND he.action=CASE $4 WHEN 'prepared' THEN 'kds.complete' ELSE 'kds.deliver' END
+          AND ($5::uuid IS NULL OR he.actor_employee_id=$5) AND ($6::text[] IS NULL OR ht.station_code=ANY($6))))
     ORDER BY item.created_at,item.id
-  `,[tx.scope.tenantId,tx.scope.storeId,page.map(row=>row.id)]):{rows:[]}
+  `,[tx.scope.tenantId,tx.scope.storeId,page.map(row=>row.id),input.workKind??null,input.workEmployeeId??null,input.workStations??null]):{rows:[]}
   const receipts=input.allowFinancialSummary===false?{rows:[]}:await tx.query<{provider:string;received:string;refunded:string;net:string}>(`
     SELECT provider,COALESCE(sum(amount_minor) FILTER(WHERE entry_type='payment'),0)::text AS received,
       (-COALESCE(sum(amount_minor) FILTER(WHERE entry_type='refund'),0))::text AS refunded,

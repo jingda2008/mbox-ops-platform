@@ -1,3 +1,4 @@
+import {FulfillmentHistoryPanel} from './FulfillmentHistoryPanel'
 import { Children, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {DeliveryBatchComposer} from './DeliveryBatchComposer'
 import {
@@ -122,6 +123,7 @@ export function StaffActionsPanel({
   const [memberBenefits,setMemberBenefits]=useState<StaffMemberBenefitTasks|null>(null)
   const [memberBenefitQuery,setMemberBenefitQuery]=useState('')
   const [memberScannerOpen,setMemberScannerOpen]=useState(false)
+  const [fulfillmentHistory,setFulfillmentHistory]=useState<'active'|'prepared'|'delivered'>('active')
   const [giftSelections,setGiftSelections]=useState<Record<string,{productId:string;reason:string}>>({})
   const [reservations, setReservations] = useState<StaffReservation[] | null>(null)
   const [priorityQueue, setPriorityQueue] = useState<StaffReservationIntakeEntry[] | null>(null)
@@ -824,11 +826,13 @@ export function StaffActionsPanel({
     }))) return
     setPendingAction('kds-cancel:all-carryover')
     let completed=0
+    const failures:string[]=[]
     for (const item of carryover) {
       try {
         await api.cancelKdsTask(item.taskId,reason)
         completed+=1
-      } catch {
+      } catch(error) {
+        failures.push(`${item.taskId}：${error instanceof Error?error.message:'请求未完成，原因未返回'}`)
         // Each task is independently idempotent. Continue so one stale task
         // cannot prevent the remaining verified carryover from being closed.
       }
@@ -837,7 +841,7 @@ export function StaffActionsPanel({
     setPendingAction(null)
     showNotice(completed===carryover.length
       ? {kind:'success',message:`${completed} 项历史出品均已受控结案。`}
-      : {kind:'attention',message:`已结案 ${completed} 项，另有 ${carryover.length-completed} 项状态已变化或权限不足，请刷新后逐项核对。`})
+      : {kind:'attention',message:`已结案 ${completed} 项，另有 ${carryover.length-completed} 项未结案。${failures.join('；')}`})
     await load(true)
   }
 
@@ -1156,7 +1160,9 @@ export function StaffActionsPanel({
       )}
 
       {tab === 'fulfillment' && operations !== null && (
-        <>{onNavigate && permissions.some(permission=>['order.history.view','order.history.all'].includes(permission)) && <button type="button" onClick={()=>onNavigate('/staff/orders')}>查看制作与送达历史</button>}
+        <><nav className="staff-history-tabs"><button type="button" aria-pressed={fulfillmentHistory==='active'} onClick={()=>setFulfillmentHistory('active')}>待制作 / 待取送</button>{permissions.some(permission=>['order.history.view','order.history.all'].includes(permission))&&<>{permissions.includes('kds.prepare')&&<button type="button" aria-pressed={fulfillmentHistory==='prepared'} onClick={()=>setFulfillmentHistory('prepared')}>我的已制作</button>}{permissions.includes('kds.deliver')&&<button type="button" aria-pressed={fulfillmentHistory==='delivered'} onClick={()=>setFulfillmentHistory('delivered')}>我的已送达</button>}</>}</nav>
+        {fulfillmentHistory!=='active'&&<FulfillmentHistoryPanel api={api} kind={fulfillmentHistory}/>}
+        <div hidden={fulfillmentHistory!=='active'}>
         {permissions.includes('kds.deliver')&&api.createDeliveryBatch&&<DeliveryBatchComposer items={fulfillmentVisibleItems} onSubmit={items=>api.createDeliveryBatch!(items)} onChanged={()=>load(true)}/>}
         {fulfillmentVisibleItems.some((item)=>item.carryover)
           && permissions.includes('kds.exception.manage')
@@ -1187,7 +1193,7 @@ export function StaffActionsPanel({
               >
                 <div className="staff-action-card-main">
                   <strong>{item.table.code} · {item.item.productName} × {item.item.quantity}</strong>
-                  <p>{item.stationCode === 'bar' ? '吧台' : item.stationCode === 'kitchen' ? '后厨' : '收银'} · {item.kdsStatus === 'failed' ? '制作失败，等待重新制作或后续处理' : item.readyForDelivery ? '待配送' : '待制作'}</p>
+                  <p>{item.stationCode === 'bar' ? '吧台' : item.stationCode === 'kitchen' ? '后厨' : '收银'} · {item.kdsStatus === 'failed' ? `制作失败：${item.failureReason||'历史失败原因未留存，请向当班制作人员核对'}；核对后选择重做或不再出品` : item.readyForDelivery ? '待配送' : '待制作'}</p>
                   {item.item.unitPriceMinor !== undefined && item.item.totalAmountMinor !== undefined && <small>
                     {item.item.includedInBundle ? '套餐内菜品，不另计价' : `单价 ¥${(item.item.unitPriceMinor / 100).toFixed(2)} · 优惠后小计 ¥${(item.item.totalAmountMinor / 100).toFixed(2)}`}
                   </small>}
@@ -1236,7 +1242,7 @@ export function StaffActionsPanel({
           {fulfillmentVisibleItems.length > visibleFulfillmentCards.length && (
             <p className="staff-actions-more">还有 {fulfillmentVisibleItems.length - visibleFulfillmentCards.length} 项，完成当前事项后自动补入</p>
           )}
-        </ActionList></>
+        </ActionList></div></>
       )}
 
       {tab === 'reservations' && (

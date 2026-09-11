@@ -99,11 +99,9 @@ integration('business-day closure',()=>{
             type:'order',reference:'business-day-order',amountMinor:12800,
             employeeRelationLabel:'订单录入人',relatedEmployeeName:'店长',
           }]},
-          {tableCode:'VIP1',code:'PAYMENT_PENDING',facts:[{
-            type:'payment',reference:'business-day-payment',amountMinor:12800,
-            employeeRelationLabel:'收款发起人',relatedEmployeeName:'店长',orderPublicId:'business-day-order',
-          }]},
+
         ]}]})
+    expect(first.value.businessDays.flatMap(day=>day.blockers).some(blocker=>blocker.code==='PAYMENT_PENDING')).toBe(false)
     const afterFirst=await pool.query(`SELECT id,status FROM mbox.table_sessions
       WHERE id=ANY($1::uuid[]) ORDER BY id`,[[cleanSessionId,blockedSessionId]])
     expect(afterFirst.rows.find(row=>row.id===cleanSessionId)?.status).toBe('closed')

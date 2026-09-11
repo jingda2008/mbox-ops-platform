@@ -14,6 +14,8 @@ export interface GuestTableOrderItemView {
 
 export interface GuestTableOrderView {
   publicId: string
+  tableCode?: string
+  businessDate?: string
   round: number
   channel: 'guest_qr' | 'staff_assisted' | 'cashier' | 'reservation' | 'integration'
   sourceText: string
@@ -73,32 +75,38 @@ export async function loadGuestTableOrders(
 /** The identity comes from the authenticated self context, never a query param.
  * Historical access is limited to the customer's own created orders; merely
  * sharing a table must not grant permanent access to another guest's history. */
-export async function loadGuestCustomerOrderHistory(transaction: ScopedTransaction, customerId: string): Promise<GuestTableOrderView[]> {
-  return (await loadOrderDetails(transaction, null, customerId)).reverse()
+export async function loadGuestCustomerOrderHistory(transaction: ScopedTransaction, customerId: string, beforePublicId?: string): Promise<GuestTableOrderView[]> {
+  return (await loadOrderDetails(transaction, null, customerId, beforePublicId)).reverse()
 }
 
-async function loadOrderDetails(transaction: ScopedTransaction, tableSessionId: string | null, customerId: string): Promise<GuestTableOrderView[]> {
+async function loadOrderDetails(transaction: ScopedTransaction, tableSessionId: string | null, customerId: string, beforePublicId?: string): Promise<GuestTableOrderView[]> {
   const result = await transaction.query<GuestTableOrderRow>(`
     WITH RECURSIVE family(id) AS (
       SELECT mbox.canonical_customer_id($1::uuid,$2::uuid,$4::uuid)
       UNION SELECT c.id FROM mbox.customers c JOIN family f ON c.merged_into_customer_id=f.id
       WHERE c.tenant_id=$1 AND c.store_id=$2
     ), selected_orders AS (
-      SELECT ordering.* FROM mbox.orders ordering
+      SELECT ordering.*,venue_table.code AS original_table_code FROM mbox.orders ordering
+      JOIN mbox.table_sessions original_session ON original_session.tenant_id=ordering.tenant_id
+        AND original_session.store_id=ordering.store_id AND original_session.id=ordering.table_session_id
+      JOIN mbox.tables venue_table ON venue_table.tenant_id=original_session.tenant_id
+        AND venue_table.store_id=original_session.store_id AND venue_table.id=original_session.table_id
       WHERE ordering.tenant_id=$1 AND ordering.store_id=$2
         AND ordering.status <> 'draft'
         AND (($3::uuid IS NOT NULL AND ordering.table_session_id=$3 AND ordering.status<>'cancelled')
-          OR ($3::uuid IS NULL AND ordering.created_by_customer_id IN (SELECT id FROM family)
-            AND ordering.payment_status IN ('paid','partially_refunded','refunded')))
+          OR ($3::uuid IS NULL AND ordering.created_by_customer_id IN (SELECT id FROM family)))
+        AND ($5::text IS NULL OR (ordering.created_at,ordering.id)<(SELECT cursor_order.created_at,cursor_order.id
+          FROM mbox.orders cursor_order WHERE cursor_order.tenant_id=$1 AND cursor_order.store_id=$2
+            AND cursor_order.public_id=$5 AND cursor_order.created_by_customer_id IN (SELECT id FROM family)))
       ORDER BY ordering.created_at DESC,ordering.id DESC
       LIMIT CASE WHEN $3::uuid IS NULL THEN 30 ELSE 2147483647 END
     ), order_balances AS (
       SELECT ordering.id, ordering.tenant_id, ordering.store_id,
-        ordering.public_id, ordering.channel, ordering.status,
+        ordering.public_id, ordering.original_table_code, ordering.business_date, ordering.channel, ordering.status,
         ordering.payment_status, ordering.created_by_customer_id,
         ordering.created_at, ordering.currency, ordering.total_amount_minor,
         ordering.subtotal_amount_minor, ordering.discount_amount_minor,
-        (SELECT max(payment.succeeded_at) FROM mbox.payments payment
+        (SELECT max(payment.succeeded_at) FROM mbox.order_payment_facts payment
          WHERE payment.tenant_id=ordering.tenant_id AND payment.store_id=ordering.store_id
            AND payment.order_id=ordering.id AND payment.status IN ('succeeded','partially_refunded','refunded')) AS paid_at,
         COALESCE(pricing_authorization.kind, 'none') AS pricing_kind,
@@ -106,7 +114,7 @@ async function loadOrderDetails(transaction: ScopedTransaction, tableSessionId: 
           ordering.total_amount_minor
           - COALESCE((
               SELECT SUM(payment.amount_minor)
-              FROM mbox.payments payment
+              FROM mbox.order_payment_facts payment
               WHERE payment.tenant_id = ordering.tenant_id
                 AND payment.store_id = ordering.store_id
                 AND payment.order_id = ordering.id
@@ -115,10 +123,10 @@ async function loadOrderDetails(transaction: ScopedTransaction, tableSessionId: 
           + COALESCE((
               SELECT SUM(refund.amount_minor)
               FROM mbox.refunds refund
-              JOIN mbox.payments paid
+              JOIN mbox.order_payment_facts paid
                 ON paid.tenant_id = refund.tenant_id
                AND paid.store_id = refund.store_id
-               AND paid.id = refund.payment_id
+               AND paid.id = refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=paid.order_id)
               WHERE paid.tenant_id = ordering.tenant_id
                 AND paid.store_id = ordering.store_id
                 AND paid.order_id = ordering.id
@@ -129,10 +137,10 @@ async function loadOrderDetails(transaction: ScopedTransaction, tableSessionId: 
         COALESCE((
           SELECT SUM(refund.amount_minor)
           FROM mbox.refunds refund
-          JOIN mbox.payments paid
+          JOIN mbox.order_payment_facts paid
             ON paid.tenant_id = refund.tenant_id
            AND paid.store_id = refund.store_id
-           AND paid.id = refund.payment_id
+           AND paid.id = refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=paid.order_id)
           WHERE paid.tenant_id = ordering.tenant_id
             AND paid.store_id = ordering.store_id
             AND paid.order_id = ordering.id
@@ -150,23 +158,18 @@ async function loadOrderDetails(transaction: ScopedTransaction, tableSessionId: 
     ), table_orders AS (
       SELECT ordering.*,
         CASE
-          WHEN $3::uuid IS NULL THEN 'not_required'
+          WHEN $3::uuid IS NULL OR ordering.status='cancelled' THEN 'not_required'
           WHEN ordering.payable_amount_minor = 0 THEN 'not_required'
           -- A completed refund is not a public invitation to charge again.
           -- Only a live, cashier-issued recollection authorization may expose
           -- this amount to the table payment flow.
           WHEN ordering.refunded_amount_minor > 0 AND NOT recollection.active THEN 'status_review'
-          WHEN active_payment.method = 'auth_code' THEN 'staff_collecting'
-          WHEN active_payment.id IS NOT NULL AND (
-            provider_action.payment_id IS NULL OR provider_action.state IN ('unknown','failed','consumed')
-          ) THEN 'status_review'
-          WHEN active_payment.id IS NOT NULL THEN 'payment_in_progress'
           ELSE 'available'
         END AS payment_access
       FROM order_balances AS ordering
       LEFT JOIN LATERAL (
         SELECT payment.id, payment.method
-        FROM mbox.payments payment
+        FROM mbox.order_payment_facts payment
         WHERE payment.tenant_id = ordering.tenant_id
           AND payment.store_id = ordering.store_id
           AND payment.order_id = ordering.id
@@ -197,7 +200,7 @@ async function loadOrderDetails(transaction: ScopedTransaction, tableSessionId: 
       ORDER BY ordering.created_at DESC, ordering.id DESC
       LIMIT 30
     )
-    SELECT ordering.public_id, ordering.round_number,
+    SELECT ordering.public_id, ordering.original_table_code, ordering.business_date::text, ordering.round_number,
       ordering.channel, ordering.status AS order_status,
       CASE WHEN $3::uuid IS NULL THEN 'private' ELSE 'shared' END AS visibility,
       COALESCE(ordering.created_by_customer_id = $4::uuid, false) AS is_mine,
@@ -224,7 +227,7 @@ async function loadOrderDetails(transaction: ScopedTransaction, tableSessionId: 
      AND product.store_id = item.store_id
      AND product.id = item.product_id
     ORDER BY ordering.created_at, ordering.id, item.created_at, item.id
-  `, [transaction.scope.tenantId, transaction.scope.storeId, tableSessionId, customerId])
+  `, [transaction.scope.tenantId, transaction.scope.storeId, tableSessionId, customerId, beforePublicId ?? null])
 
   const orders = new Map<string, GuestTableOrderView>()
   for (const row of result.rows) {
@@ -238,6 +241,8 @@ async function loadOrderDetails(transaction: ScopedTransaction, tableSessionId: 
         status: row.order_status,
         visibility: row.visibility,
         isMine: row.is_mine,
+        tableCode: String(row.original_table_code ?? ''),
+        businessDate: String(row.business_date ?? ''),
         createdAt: timestamp(row.order_created_at),
         paidAt: row.paid_at === null ? null : timestamp(row.paid_at),
         totalAmountMinor: safeMinor(row.total_amount_minor),
@@ -245,7 +250,7 @@ async function loadOrderDetails(transaction: ScopedTransaction, tableSessionId: 
         discountAmountMinor: safeMinor(row.discount_amount_minor),
         paymentStatus: row.payment_status,
         paymentAccess: row.payment_access,
-        payableAmountMinor: safeMinor(row.payable_amount_minor),
+        payableAmountMinor: row.payment_access==='status_review'||row.payment_access==='not_required'||row.order_status==='cancelled'?0:safeMinor(row.payable_amount_minor),
         currency: row.currency,
         pricingKind: row.pricing_kind,
         pricingLabel: row.pricing_kind === 'gift'

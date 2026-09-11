@@ -27,6 +27,7 @@ App({
   },
 
   onLaunch(options) {
+    this.skipInitialShow = true;
     const config = getRuntimeConfig()
     this.globalData.config = config
     const launchSessionOptions = hasTableScanLaunch(options)
@@ -41,6 +42,16 @@ App({
     ensureCustomerSession().catch((error) => {
       this.globalData.identityError = customerErrorMessage(error, '微信身份初始化失败')
     })
+  },
+
+  onShow(options) {
+    if (this.skipInitialShow) { this.skipInitialShow = false; return }
+    if (!hasTableScanLaunch(options)) return
+    try {
+      this.globalData.tableSession = applyLaunchSession(Object.assign({}, options || {}, { forceTableScan: true }), this.globalData.config || getRuntimeConfig())
+    } catch (error) {
+      this.globalData.tableConnectionError = customerErrorMessage(error, '桌码无法识别，请重新扫码')
+    }
   },
 
   refreshRuntime(options) {

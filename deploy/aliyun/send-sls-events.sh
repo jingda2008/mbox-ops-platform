@@ -64,6 +64,9 @@ while IFS= read -r event; do
       elif .key == "fingerprint" then
         .value |= (safe_string("fingerprint"; 64)
           | if test("^[0-9a-f]{64}$") then . else error("fingerprint is invalid") end)
+      elif .key == "paymentRef" then .value |= (safe_string("paymentRef"; 80) | if test("^[A-Za-z0-9_-]+$") then . else error("paymentRef is invalid") end)
+      elif .key == "stage" then .value |= (if IN("apply_verified_success", "query_provider") then . else error("stage is invalid") end)
+      elif .key == "errorLocation" then .value |= (safe_string("errorLocation"; 512) | if test("^/server/[A-Za-z0-9_./:-]+( <- /server/[A-Za-z0-9_./:-]+){0,2}$") then . else error("errorLocation is invalid") end)
       elif .key == "requestId" then .value |= safe_string("requestId"; 96)
       elif .key == "container" then .value |= safe_string("container"; 96)
       elif .key == "code" then .value |= safe_string("code"; 96)
@@ -78,7 +81,7 @@ while IFS= read -r event; do
     if .logstore == "runtime-errors" then
       sanitize(["logstore","timestamp","eventType","severity","statusCode","route","code","container","outcome","durationMs","releaseSha","requestId","fingerprint"])
     elif .logstore == "payment-audit" then
-      sanitize(["logstore","timestamp","eventType","severity","statusCode","route","code","outcome","requestId","releaseSha","fingerprint"])
+      sanitize(["logstore","timestamp","eventType","severity","statusCode","route","code","outcome","requestId","releaseSha","fingerprint","paymentRef","stage","errorLocation"])
     elif .logstore == "release-audit" then
       sanitize(["logstore","timestamp","eventType","severity","code","outcome","releaseSha","imageDigest","actorId","operation","fingerprint"])
     else error("unapproved SLS logstore") end

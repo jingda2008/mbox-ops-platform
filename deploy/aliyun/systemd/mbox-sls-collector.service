@@ -8,6 +8,7 @@ Type=oneshot
 User=root
 Environment=MBOX_SLS_ENDPOINT=cn-shanghai-internal.log.aliyuncs.com
 Environment=MBOX_SLS_PROJECT=mbox-validation-139224254060
+EnvironmentFile=-/opt/mbox/observability/collector.env
 ExecStart=/opt/mbox/bin/collect-selective-events.sh
 Nice=10
 IOSchedulingClass=idle

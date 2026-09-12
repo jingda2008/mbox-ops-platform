@@ -590,7 +590,7 @@ test('SLS sender removes route queries and undeclared fields at the final send b
   await writeFile(input, `${JSON.stringify({
     timestamp: '2026-08-13T00:00:00Z', eventType: 'payment_exception', severity: 'error',
     logstore: 'payment-audit', route: '/api/payments?token=redacted-query-value',
-    code: 'PAYMENT_TIMEOUT', phoneNumber: '13800138000', arbitrary: 'discard-me',
+    code: 'PAYMENT_TIMEOUT', paymentRef: 'Pexample', stage: 'apply_verified_success', errorLocation: '/server/normalized/payment.js:10:2', phoneNumber: '13800138000', arbitrary: 'discard-me',
   })}\n`)
   const environment = {
     ...process.env,
@@ -609,6 +609,9 @@ test('SLS sender removes route queries and undeclared fields at the final send b
     const logs = JSON.parse(args[args.indexOf('--logs') + 1]).map((entry) => JSON.parse(entry))
     assert.equal(logs.length, 1)
     assert.equal(logs[0].route, '/api/payments')
+    assert.equal(logs[0].paymentRef, 'Pexample')
+    assert.equal(logs[0].stage, 'apply_verified_success')
+    assert.equal(logs[0].errorLocation, '/server/normalized/payment.js:10:2')
     assert.equal('phoneNumber' in logs[0], false)
     assert.equal('arbitrary' in logs[0], false)
   } finally {

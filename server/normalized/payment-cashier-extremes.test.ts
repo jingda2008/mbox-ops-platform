@@ -3,6 +3,7 @@ import { applyProviderQueryObservation, reconcileStalePendingOnlinePayment } fro
 import {historicalPaymentDisplayAllowlist,repairHistoricalPaymentDisplays} from '../../scripts/repair-five-historical-payment-displays.mjs'
 import Fastify from 'fastify'
 import {paymentFinanceApiPlugin} from './payment-finance-api.js'
+import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
@@ -634,6 +635,19 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
       expect((await financialSnapshot(pool,unrelated.orderId)).gross_paid_minor).toBe('0')
     }finally{await client.query('ROLLBACK');client.release()}
   })
+  it('backfills finance management only to finance roles already allowed to view, without changing payment authority',async()=>{
+    const financeRole=randomUUID(),serverRole=randomUUID()
+    await pool.query("INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name) VALUES($1,$2,'reconciliation.view','查看财务') ON CONFLICT(tenant_id,store_id,code) DO NOTHING",[tenantId,storeId])
+    await pool.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$3,$4,'CASHIER','收银'),($2,$3,$4,'SERVER','服务员')",[financeRole,serverRole,tenantId,storeId])
+    await pool.query("INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) SELECT $1,$2,r.id,p.id FROM mbox.roles r JOIN mbox.staff_permission_definitions p ON p.tenant_id=r.tenant_id AND p.store_id=r.store_id WHERE r.id=ANY($3::uuid[]) AND p.code='reconciliation.view'",[tenantId,storeId,[financeRole,serverRole]])
+    const before=(await pool.query("SELECT role_id,permission_id FROM mbox.role_permission_assignments WHERE role_id=ANY($1::uuid[]) ORDER BY role_id,permission_id",[[financeRole,serverRole]])).rows
+    const migration=await readFile(new URL('../../database/normalized-migrations/197_payment_finance_management_permission.sql',import.meta.url),'utf8')
+    await pool.query(migration);await pool.query(migration)
+    const grants=(await pool.query("SELECT r.code,p.code permission FROM mbox.role_permission_assignments a JOIN mbox.roles r ON r.id=a.role_id JOIN mbox.staff_permission_definitions p ON p.id=a.permission_id WHERE r.id=ANY($1::uuid[]) ORDER BY r.code,p.code",[[financeRole,serverRole]])).rows
+    expect(grants.filter(row=>row.permission==='reconciliation.manage')).toEqual([{code:'CASHIER',permission:'reconciliation.manage'}])
+    const after=(await pool.query("SELECT a.role_id,a.permission_id FROM mbox.role_permission_assignments a JOIN mbox.staff_permission_definitions p ON p.id=a.permission_id WHERE a.role_id=ANY($1::uuid[]) AND p.code<>'reconciliation.manage' ORDER BY a.role_id,a.permission_id",[[financeRole,serverRole]])).rows
+    expect(after).toEqual(before)
+  })
   it('separates finance case ownership from collection and refuses to resolve an unknown payment',async()=>{
     const fixture=await createOrder(pool,[7300]),pending=await initiateOnlinePayment(service,fixture.orderId)
     const role=randomUUID(),runner=new ScopedPostgresTransactionRunner(asPool(pool))
@@ -647,6 +661,18 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
       const list=await app.inject({method:'GET',url:'/payments/finance-review'})
       expect(list.statusCode).toBe(200)
       expect(list.json().data.map((row:{id:string})=>row.id)).toContain(pending.id)
+      const financeTransaction=`finance-tx-${randomUUID()}`
+      const financeProof=await providerObservationRecorder.recordPayment({scope:{tenantId,storeId},provider:'postar',
+        verificationKind:'active_query_binding',providerEventId:`finance-proof-${randomUUID()}`,integrationRef:'postar-active-query',
+        paymentPublicId:pending.publicId,providerTransactionId:financeTransaction,reportedAmountMinor:7300,
+        reportedCurrency:'CNY',status:'succeeded',settlementChannel:'wechat',occurredAt:'2026-08-12T12:00:00.000Z',evidence:{tradeState:'SUCCESS'}})
+      for(let attempt=0;attempt<2;attempt++){
+        const alert=(await app.inject({method:'GET',url:'/payments/finance-review'})).json()
+        expect(alert.urgentCount).toBeGreaterThan(0)
+        expect(alert.data.filter((row:{id:string})=>row.id===pending.id)).toHaveLength(1)
+        expect(alert.data.find((row:{id:string})=>row.id===pending.id).financialSignals).toContain('confirmed_payment_not_applied')
+      }
+      expect((await pool.query('SELECT count(*)::int count FROM mbox.payment_finance_cases WHERE payment_id=$1',[pending.id])).rows[0].count).toBe(0)
       const send=(key:string,resolve:boolean)=>app.inject({method:'POST',url:`/payments/${pending.id}/finance-review`,headers:{'idempotency-key':key},payload:{note:'渠道仍未返回最终结果，继续核对',resolve}})
       const saved=await send('finance-case-save-1',false)
       expect(saved.statusCode).toBe(200)
@@ -654,6 +680,13 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
       expect((await send('finance-case-save-1',false)).json().replayed).toBe(true)
       expect((await send('finance-case-close-1',true)).statusCode).toBe(400)
       expect((await pool.query('SELECT status FROM mbox.payments WHERE id=$1',[pending.id])).rows[0].status).toBe('pending')
+      await service.recordProviderQueryResult({...metadata(`finance-apply-${randomUUID()}`,{type:'integration',ref:'postar-active-query'}),
+        paymentPublicId:pending.publicId,verifiedObservationId:financeProof,provider:'postar',providerTransactionId:financeTransaction,
+        reportedAmountMinor:7300,reportedCurrency:'CNY',settlementChannel:'wechat',status:'succeeded',providerSnapshot:{tradeState:'SUCCESS'},occurredAt:'2026-08-12T12:00:00.000Z'})
+      const recovered=(await app.inject({method:'GET',url:'/payments/finance-review'})).json().data.find((row:{id:string})=>row.id===pending.id)
+      expect(recovered.financialSignals??[]).not.toContain('confirmed_payment_not_applied')
+      expect((await send('finance-case-resolved-1',true)).statusCode).toBe(200)
+      expect((await app.inject({method:'GET',url:'/payments/finance-review'})).json().data.some((row:{id:string})=>row.id===pending.id)).toBe(false)
       await pool.query('DELETE FROM mbox.employee_roles WHERE tenant_id=$1 AND store_id=$2 AND employee_id=$3 AND role_id=$4',[tenantId,storeId,cashierId,role])
       expect((await send('finance-case-revoked-1',false)).statusCode).toBe(403)
       expect((await app.inject({method:'GET',url:'/payments/finance-review'})).statusCode).toBe(403)

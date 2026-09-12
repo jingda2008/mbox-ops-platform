@@ -44,3 +44,18 @@ test('accepts explicit deployment and container events only from a closed vocabu
   assert.equal(classifySlsEvent({ mboxAuditEvent: 'container_oom', container: 'mbox-app' })?.logstore, 'runtime-errors')
   assert.equal(classifySlsEvent({ mboxAuditEvent: 'arbitrary_customer_event', message: 'normal' }), null)
 })
+
+for (const name of ['payment_reconciliation_failed','verified_payment_callback_apply_failed','payment_command_failed']) {
+ test(`retains structured ${name} without raw error text`, () => {
+  const event=classifySlsEvent({event:name,paymentId:'ec8959e0-c502-4688-8fce-7ac1b59527d7',stage:'apply_verified_success',errorCode:'23514',errorLocation:'/server/normalized/payment.js:10:2',message:'secret SQL',stack:'secret stack'})
+  assert.equal(event?.logstore,'payment-audit');assert.equal(event?.severity,'error');assert.equal(event?.code,'23514')
+  assert.equal(event?.stage,'apply_verified_success');assert.equal(event?.errorLocation,'/server/normalized/payment.js:10:2')
+  assert.ok(event?.paymentRef);assert.equal(JSON.stringify(event).includes('secret'),false)
+ })
+}
+
+test('preserves Docker event time so replay does not change event identity',()=>{
+ const line='2026-09-12T08:00:00.123456789Z '+JSON.stringify({event:'payment_reconciliation_failed',errorCode:'23514',time:1789199999000})
+ const first=classifySlsEvent(line),second=classifySlsEvent(line)
+ assert.equal(first?.timestamp,'2026-09-12T08:00:00.123456789Z');assert.equal(first?.fingerprint,second?.fingerprint)
+})

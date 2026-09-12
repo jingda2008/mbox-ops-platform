@@ -8,6 +8,8 @@ const permittedExplicitTypes = new Set([
   'rollback_started', 'rollback_succeeded', 'rollback_failed', 'permission_denied', 'critical_audit',
 ])
 
+const paymentFailureTypes = new Set(['payment_reconciliation_failed', 'verified_payment_callback_apply_failed', 'payment_command_failed'])
+
 const paymentExpression = /(?:payment|refund|callback|notify|付款|支付|退款|回调)/i
 const databaseExpression = /(?:database pool|pool acquisition|connection pool|mutation queue|persistence unavailable|数据库连接池|连接池|持久化不可用)/i
 const containerExpression = /(?:container|oom|out of memory|restart|容器|内存溢出|重启)/i
@@ -24,6 +26,11 @@ function finite(value) {
 
 function unwrap(input) {
   if (typeof input === 'string') {
+    const dockerLine = input.match(/^(\d{4}-\d{2}-\d{2}T[0-9:.]+Z) (.*)$/)
+    if (dockerLine) {
+      try { return { ...JSON.parse(dockerLine[2]), dockerTime: dockerLine[1] } }
+      catch { return { msg: dockerLine[2], dockerTime: dockerLine[1] } }
+    }
     try { return JSON.parse(input) } catch { return { msg: input } }
   }
   if (input && typeof input === 'object' && typeof input.log === 'string') {
@@ -51,13 +58,14 @@ function baseEvent(record, eventType, logstore) {
   const statusCode = finite(record.statusCode ?? record.res?.statusCode)
   const durationMs = finite(record.durationMs ?? record.responseTime)
   const event = {
-    timestamp: text(record.timestamp || record.time || record.dockerTime) || new Date().toISOString(),
+    timestamp: text(record.timestamp) || text(record.dockerTime) || text(record.time)
+      || (typeof record.time === 'number' && Number.isFinite(record.time) ? new Date(record.time).toISOString() : new Date().toISOString()),
     eventType,
     severity: finite(record.level) >= 50 ? 'error' : finite(record.level) >= 40 ? 'warning' : text(record.severity) || 'info',
     ...(statusCode === undefined ? {} : { statusCode }),
     ...(durationMs === undefined ? {} : { durationMs }),
     ...(normalizedRoute(record) ? { route: normalizedRoute(record) } : {}),
-    ...(text(record.code) ? { code: text(record.code).slice(0, 96) } : {}),
+    ...(text(record.errorCode || record.code) ? { code: text(record.errorCode || record.code).slice(0, 96) } : {}),
     ...(text(record.reqId || record.requestId) ? { requestId: text(record.reqId || record.requestId).slice(0, 96) } : {}),
     ...(text(record.releaseSha) ? { releaseSha: text(record.releaseSha).slice(0, 64) } : {}),
     ...(text(record.imageDigest) ? { imageDigest: text(record.imageDigest).slice(0, 80) } : {}),
@@ -65,6 +73,9 @@ function baseEvent(record, eventType, logstore) {
     ...(text(record.outcome) ? { outcome: text(record.outcome).slice(0, 48) } : {}),
     ...(text(record.actorId) ? { actorId: text(record.actorId).slice(0, 96) } : {}),
     ...(text(record.operation) ? { operation: text(record.operation).slice(0, 128) } : {}),
+    ...(text(record.paymentId || record.paymentPublicId).match(/^[A-Za-z0-9_-]{1,80}$/) ? { paymentRef: text(record.paymentId || record.paymentPublicId) } : {}),
+    ...(['apply_verified_success', 'query_provider'].includes(record.stage) ? { stage: record.stage } : {}),
+    ...(text(record.errorLocation).match(/^\/server\/[A-Za-z0-9_./:-]+(?: <- \/server\/[A-Za-z0-9_./:-]+){0,2}$/) ? { errorLocation: record.errorLocation.slice(0, 512) } : {}),
     logstore,
   }
   return { ...event, fingerprint: eventFingerprint(event) }
@@ -72,6 +83,7 @@ function baseEvent(record, eventType, logstore) {
 
 export function classifySlsEvent(input) {
   const record = unwrap(input)
+  if (paymentFailureTypes.has(record.event)) return baseEvent({ ...record, severity: 'error' }, record.event, 'payment-audit')
   const message = `${text(record.msg)} ${text(record.message)} ${text(record.code)} ${text(record.eventType)} ${normalizedRoute(record) ?? ''}`
   const explicitType = text(record.mboxAuditEvent || record.eventType)
   if (permittedExplicitTypes.has(explicitType)) {

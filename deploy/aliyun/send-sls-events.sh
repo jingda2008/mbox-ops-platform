@@ -56,14 +56,11 @@ while IFS= read -r event; do
           | safe_string("route"; 256)
           | if startswith("/") then . else error("route is invalid") end)
       elif .key == "releaseSha" then
-        .value |= (safe_string("releaseSha"; 64)
-          | if test("^[0-9a-f]{7,64}$") then . else error("releaseSha is invalid") end)
+        .value |= (if type == "string" and test("^[0-9a-f]{7,64}$") then . else error("releaseSha is invalid") end)
       elif .key == "imageDigest" then
-        .value |= (safe_string("imageDigest"; 80)
-          | if test("^sha256:[0-9a-f]{64}$") then . else error("imageDigest is invalid") end)
+        .value |= (if type == "string" and test("^sha256:[0-9a-f]{64}$") then . else error("imageDigest is invalid") end)
       elif .key == "fingerprint" then
-        .value |= (safe_string("fingerprint"; 64)
-          | if test("^[0-9a-f]{64}$") then . else error("fingerprint is invalid") end)
+        .value |= (if type == "string" and test("^[0-9a-f]{64}$") then . else error("fingerprint is invalid") end)
       elif .key == "paymentRef" then .value |= (safe_string("paymentRef"; 80) | if test("^[A-Za-z0-9_-]+$") then . else error("paymentRef is invalid") end)
       elif .key == "stage" then .value |= (if IN("apply_verified_success", "query_provider") then . else error("stage is invalid") end)
       elif .key == "errorLocation" then .value |= (safe_string("errorLocation"; 512) | if test("^/server/[A-Za-z0-9_./:-]+( <- /server/[A-Za-z0-9_./:-]+){0,2}$") then . else error("errorLocation is invalid") end)
@@ -93,7 +90,7 @@ for logstore in runtime-errors payment-audit release-audit; do
   mapfile -t payloads < <(
     jq -c \
       --arg logstore "${logstore}" \
-      'select(.logstore == $logstore) | del(.logstore) + {__time__: ((try (.timestamp | fromdateiso8601) catch now) | floor | tostring)}' \
+      'select(.logstore == $logstore) | del(.logstore) + {__time__: ((.timestamp | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) | floor | tostring)}' \
       "${sanitized_input}"
   )
   [ "${#payloads[@]}" -gt 0 ] || continue

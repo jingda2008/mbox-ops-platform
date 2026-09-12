@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0-rc.190 - 2026-09-12
+
+- Preserve cashier finance-case management through release provisioning by updating the versioned store defaults.
+- Route selective logs over the verified private relay, support production systemd 219, and prevent hexadecimal digests from being mistaken for personal data.
+- Preserve fractional source timestamps when indexing cloud logs.
+
 ## 1.0.0-rc.189 - 2026-09-12
 
 - Converge legacy payment ingress onto the current verified application and retire the incompatible shared-database worker after route verification; preserve legacy logs and rollback configuration.

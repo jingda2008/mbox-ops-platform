@@ -668,6 +668,36 @@ test('SLS sender rejects sensitive values without echoing them', async () => {
   }
 })
 
+test('SLS accepts strictly formatted digests with numeric runs and retains fractional source time', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mbox-sls-digests-'))
+  try {
+    const input = join(directory, 'input')
+    const capture = join(directory, 'capture')
+    await writeFile(join(directory, 'aliyun'), '#!/bin/sh\nprintf "%s\\n" "$@" > "$CAPTURE"\n', { mode: 0o700 })
+    const event = { timestamp: '2026-09-11T14:30:30.982123456Z', eventType: 'deployment_succeeded',
+      severity: 'info', logstore: 'release-audit',
+      imageDigest: `sha256:${'a'.repeat(25)}13800138000${'b'.repeat(28)}`,
+      fingerprint: `${'a'.repeat(25)}13800138000${'b'.repeat(28)}`,
+      releaseSha: `${'a'.repeat(14)}13800138000${'b'.repeat(15)}` }
+    await writeFile(input, `${JSON.stringify(event)}\n`)
+    const env = { ...process.env, PATH: `${directory}:${process.env.PATH}`, CAPTURE: capture, MBOX_SLS_DRY_RUN: '0' }
+    const result = spawnSync('bash', [new URL('../deploy/aliyun/send-sls-events.sh', import.meta.url).pathname, input], { encoding: 'utf8', env })
+    assert.equal(result.status, 0, result.stderr)
+    const args = (await readFile(capture, 'utf8')).trim().split('\n')
+    const payload = JSON.parse(JSON.parse(args[args.indexOf('--logs') + 1])[0])
+    assert.equal(payload.imageDigest, event.imageDigest)
+    assert.equal(payload.fingerprint, event.fingerprint)
+    assert.equal(payload.__time__, String(Date.parse('2026-09-11T14:30:30Z') / 1000))
+    for (const field of ['imageDigest', 'fingerprint', 'releaseSha']) {
+      await writeFile(input, `${JSON.stringify({ ...event, [field]: '13800138000-phone' })}\n`)
+      const invalid = spawnSync('bash', [new URL('../deploy/aliyun/send-sls-events.sh', import.meta.url).pathname, input], { encoding: 'utf8', env })
+      assert.notEqual(invalid.status, 0)
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('release smoke fails closed on a missing digest and reports the observed digest on success', async () => {
   const releaseSha = 'a'.repeat(40)
   const releaseDigest = `sha256:${'b'.repeat(64)}`

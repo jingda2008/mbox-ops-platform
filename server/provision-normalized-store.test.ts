@@ -104,7 +104,7 @@ describe('normalized store provisioning config', () => {
       'utf8',
     )) as unknown
     const config = parseStoreProvisionConfig(source)
-    expect(config.version).toBe('2026.09.11-v22')
+    expect(config.version).toBe('2026.09.12-v23')
     for (const candidate of config.roles) {
       expect(candidate.permissions).toContain('order.history.view')
       expect(candidate.permissions.includes('order.history.all')).toBe(['OWNER','ADMIN','MANAGER','DEPUT_MANAGER','OPS_LEAD'].includes(candidate.code))

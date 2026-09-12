@@ -37,3 +37,9 @@ VIP1成功观察14:30:30.982Z，中转Caddy回调404在14:30:31.027Z；B06成功
 2026-09-12 17:38 CST正式部署rc.189/1642b0dbf53b199d229fef443b59c0a137755a0e，schema197；镜像sha256:1cfbaa77f4828bffcae8f64ba8f18bd54c4a81f4d66f075666f908eefa97cd90。备份mbox-20260912T093705Z-guq33v.dump，发布脚本页面及浏览器检查通过。17:40按已合并8311d777b3ff8ea89400d8aab4f6c4c443003355执行入口收敛，结果legacyStopped/legacyIpRetired/ingressVerified均true；备份/opt/mbox/ingress-backups/20260912T094036Z-converged。
 
 日志安装首次运行因应用到中转公网6122连接超时失败，事件保留队列，未标记完成。中转实际内网10.100.50.234:6122连通且受限密钥认证成功；改内网路由，并以HostKeyAlias沿用已核实的公网主机密钥。主机systemd219不支持strict/ReadWritePaths和show --value，改支持的full/ReadWriteDirectories和Result=success判断。云端回读完成后另记实际结果。
+
+## 线上回读发现的剩余缺口与rc.190
+
+收银员工有效权限view=true/manage=false，数据库无员工deny；原因是正式发布provision会删掉门店默认配置外且未标记运行配置管理的权限。迁移197有效但随后被旧v22配置覆盖。v23默认配置补CASHIER核对管理，并新增读取实际门店配置、重复provision后的真实数据库断言。该发现证明迁移测试不能替代发布后有效权限检查。
+
+日志内网认证后，旧积压发布日志的合法镜像摘要含连续数字，被通用手机号扫描拒绝；队列仍保留。严格哈希字段以精确十六进制长度/前缀校验，自由文本继续敏感过滤；云端索引先去小数秒再转时间，保留原timestamp字段。新增合法/非法摘要与源时间回归，目标rc.190。

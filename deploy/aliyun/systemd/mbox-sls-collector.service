@@ -15,5 +15,6 @@ IOSchedulingClass=idle
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=read-only
-ProtectSystem=strict
-ReadWritePaths=/opt/mbox/observability
+# systemd 219 on the production host supports full and ReadWriteDirectories.
+ProtectSystem=full
+ReadWriteDirectories=/opt/mbox/observability

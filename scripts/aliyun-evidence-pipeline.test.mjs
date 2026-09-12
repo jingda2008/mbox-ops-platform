@@ -355,6 +355,35 @@ test('selective observability installer fails visibly before systemd changes whe
   }
 })
 
+test('log relay uses the reachable private host while pinning its existing public host identity', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mbox-relay-route-'))
+  try {
+    const script = await read('../deploy/aliyun/send-sls-relay.sh')
+    const capture = join(directory, 'args')
+    const input = join(directory, 'events')
+    await writeFile(input, '{"eventType":"observability_probe"}\n')
+    await writeFile(join(directory, 'ssh'), '#!/bin/sh\nprintf "%s\\n" "$@" > "$CAPTURE"\ncat\n', { mode: 0o700 })
+    const result = spawnSync('bash', ['-c', script, 'relay', input], {
+      encoding: 'utf8', env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, CAPTURE: capture },
+    })
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(result.stdout, await readFile(input, 'utf8'))
+    const args = await readFile(capture, 'utf8')
+    assert.match(args, /root@10\.100\.50\.234/)
+    assert.match(args, /HostKeyAlias=\[139\.224\.254\.60\]:6122/)
+    assert.match(args, /StrictHostKeyChecking=yes/)
+    const installer = await read('../deploy/aliyun/install-selective-observability.sh')
+    const service = await read('../deploy/aliyun/systemd/mbox-sls-collector.service')
+    assert.doesNotMatch(installer, /--value/)
+    assert.match(installer, /= Result=success/)
+    assert.match(service, /ProtectSystem=full/)
+    assert.match(service, /ReadWriteDirectories=/)
+    assert.doesNotMatch(service, /ProtectSystem=strict|ReadWritePaths=/)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('rollback audit only reports success after the restored service is verified', async () => {
   const activate = await read('../deploy/aliyun/activate-release.sh')
   assert.match(activate, /emit_release_audit rollback_started/)

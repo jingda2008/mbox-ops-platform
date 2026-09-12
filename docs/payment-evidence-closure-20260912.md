@@ -31,3 +31,9 @@ VIP1成功观察14:30:30.982Z，中转Caddy回调404在14:30:31.027Z；B06成功
 ## 入口切换校验补充
 
 首次切换被TLS验证阻止并自动恢复，旧实例未停：旧IP证书有效期2026-08-22至08-28，已过期；pay.shmbox.com证书有效至2027-02-27。Caddy续签日志显示ACME外部连接超时，不能绕过TLS校验宣称入口正常。2026-09-12 08:00 CST至检查时刻未发现旧IP业务请求；用户营业入口为mbox域名，支付回调实际走pay域名。整改为退役旧IP虚拟主机，保留pay域名并验证当前应用SHA；保留所有备份。另修复旧配置CRLF兼容与候选仍含旧上游时的显式退出。切换脚本成功/失败回退测试覆盖CRLF，应用镜像仍rc.189，运维脚本修订另按合并SHA执行。
+
+## rc.189部署与旧入口退役实证
+
+2026-09-12 17:38 CST正式部署rc.189/1642b0dbf53b199d229fef443b59c0a137755a0e，schema197；镜像sha256:1cfbaa77f4828bffcae8f64ba8f18bd54c4a81f4d66f075666f908eefa97cd90。备份mbox-20260912T093705Z-guq33v.dump，发布脚本页面及浏览器检查通过。17:40按已合并8311d777b3ff8ea89400d8aab4f6c4c443003355执行入口收敛，结果legacyStopped/legacyIpRetired/ingressVerified均true；备份/opt/mbox/ingress-backups/20260912T094036Z-converged。
+
+日志安装首次运行因应用到中转公网6122连接超时失败，事件保留队列，未标记完成。中转实际内网10.100.50.234:6122连通且受限密钥认证成功；改内网路由，并以HostKeyAlias沿用已核实的公网主机密钥。主机systemd219不支持strict/ReadWritePaths和show --value，改支持的full/ReadWriteDirectories和Result=success判断。云端回读完成后另记实际结果。

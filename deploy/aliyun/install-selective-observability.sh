@@ -50,6 +50,6 @@ systemctl daemon-reload || fail 'systemd daemon reload failed'
 systemctl enable --now mbox-sls-collector.timer || fail 'collector timer could not be enabled'
 systemctl start mbox-sls-collector.service || fail 'initial collector run failed'
 systemctl is-active mbox-sls-collector.timer >/dev/null || fail 'collector timer is not active'
-test "$(systemctl show mbox-sls-collector.service --property=Result --value)" = success \
+test "$(systemctl show mbox-sls-collector.service --property=Result)" = Result=success \
   || fail 'collector service did not complete successfully'
 printf 'selective_observability=installed\ntimer=active\n'

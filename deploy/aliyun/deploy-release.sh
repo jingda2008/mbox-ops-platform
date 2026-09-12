@@ -246,8 +246,7 @@ evidence_scp_options=(
 # A retired shared-database runtime is an ingress/evidence relay, never an app
 # deployment target. Do not let a later default-host deployment resurrect it.
 ssh "${ssh_options[@]}" "${ssh_target}" \
-  "test ! -f /opt/mbox/observability/legacy-runtime-retired.json" \
-  || { echo 'application deployment refused: target is a retired payment runtime; use the primary application host' >&2; exit 1; }
+  "test ! -f /opt/mbox/observability/legacy-runtime-retired.json || { echo 'application deployment refused: target is a retired payment runtime; use the primary application host' >&2; exit 1; }"
 
 # This deployment script only owns a direct public origin. Refuse to touch a
 # database when the public hostname resolves to another server: an unmanaged

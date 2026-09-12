@@ -30,6 +30,12 @@ printf '{"status":"ready","deploymentTier":"production","commitSha":"%s"}\\n' "$
   const script=join(dir,'run.sh');await writeFile(script,(await readFile(new URL('../deploy/aliyun/converge-payment-ingress.sh',import.meta.url),'utf8')).replaceAll('/opt/mbox',root))
   const result=spawnSync('bash',[script],{encoding:'utf8',env:{...process.env,PATH:`${bin}:${process.env.PATH}`,MBOX_EXPECTED_PRIMARY_SHA:'a'.repeat(40),MBOX_EXPECTED_LEGACY_SHA:'b'.repeat(40),MBOX_TEST_FAIL:fail?'1':'0'}})
   if(fail){assert.notEqual(result.status,0);await assert.rejects(access(join(dir,'stopped')));assert.equal(await readFile(config,'utf8'),original);assert.match(await readFile(watchdog,'utf8'),/mbox-app mbox-caddy/)}
-  else{assert.equal(result.status,0,result.stderr);await access(join(dir,'stopped'));assert.match(await readFile(config,'utf8'),/tls_server_name mbox.shmbox.com/);assert.doesNotMatch(await readFile(config,'utf8'),/reverse_proxy mbox-app/);assert.equal(await readFile(watchdog,'utf8'),'\nMBOX_REQUIRED_CONTAINERS="mbox-caddy"\n')}
+  else{assert.equal(result.status,0,result.stderr);await access(join(dir,'stopped'));assert.equal(JSON.parse(await readFile(join(root,'observability/legacy-runtime-retired.json'),'utf8')).legacyStopped,true);assert.match(await readFile(config,'utf8'),/tls_server_name mbox.shmbox.com/);assert.doesNotMatch(await readFile(config,'utf8'),/reverse_proxy mbox-app/);assert.equal(await readFile(watchdog,'utf8'),'\nMBOX_REQUIRED_CONTAINERS="mbox-caddy"\n')}
  }finally{await rm(dir,{recursive:true,force:true})}
+})
+
+test('release entrypoint rejects retired application hosts before activation',async()=>{
+ const source=await readFile(new URL('../deploy/aliyun/deploy-release.sh',import.meta.url),'utf8')
+ assert.match(source,/test ! -f \/opt\/mbox\/observability\/legacy-runtime-retired.json/)
+ assert.ok(source.indexOf('legacy-runtime-retired.json')<source.indexOf('uses_evidence_relay='))
 })

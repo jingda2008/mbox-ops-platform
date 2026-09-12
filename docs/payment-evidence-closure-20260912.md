@@ -25,3 +25,5 @@ RDS日志追查限制：2026-09-12现有ECS角色调用rds:DescribeDBInstances�
 VIP1成功观察14:30:30.982Z，中转Caddy回调404在14:30:31.027Z；B06成功观察16:39:22.654Z，中转Caddy回调404在16:39:22.681Z。两笔均order_batch。旧PaymentRepository.lockPayable只支持order和activity_registration，对order_batch抛PaymentNotFoundError('invalid payable target')；旧接口映射404。已在旧容器实际编译代码以无数据库写入的调用复现该错误。该证据把此前缺失原始异常的排查推进到可复现的版本不兼容原因；不能再仅归因为日志缺失或渠道故障。401请求同时存在，但不据此断言其来源或把它当两笔已验签成功记录的原因。
 
 修复入口脚本converge-payment-ingress.sh核实新版SHA和TLS身份，经内网HTTPS转发至10.100.80.223，保留mbox.shmbox.com证书验证；备份配置并验证两个旧入口均返回新版SHA后，才把旧mbox-app移出守护列表、禁用自动重启并停止旧实例。旧容器与历史日志保留。入口验证失败时恢复原配置且不停止旧实例；旧实例已停止后不自动回退到不兼容代码。归档脚本及执行结果，不使用数据库状态伪造补救。
+
+防复发：旧主机退出后写入受控退役标记；正式deploy-release.sh在任何激活前拒绝把应用再次部署至已退役的支付主机。中转日志与网关用途继续保留，不能将其当作门店应用发布目标。

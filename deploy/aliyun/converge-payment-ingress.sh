@@ -18,7 +18,7 @@ snippet="$data/mbox-ingress/payment-domain.caddy"
 watchdog=/opt/mbox/config/health-watchdog.env
 test -f "$config"; test -f "$snippet"; test -f "$watchdog"
 backup="/opt/mbox/ingress-backups/$(date -u +%Y%m%dT%H%M%SZ)-converged"
-install -d -m 0700 "$backup" /opt/mbox/locks /opt/mbox/run/health-watchdog
+install -d -m 0700 "$backup" /opt/mbox/locks /opt/mbox/run/health-watchdog /opt/mbox/observability
 exec 8>/opt/mbox/locks/release.lock; flock -w 30 8
 exec 9>/opt/mbox/run/health-watchdog/watchdog.lock; flock -w 30 9
 cp "$config" "$backup/Caddyfile"; cp "$snippet" "$backup/payment-domain.caddy"; cp "$watchdog" "$backup/health-watchdog.env"
@@ -70,4 +70,4 @@ test "$(docker inspect mbox-app --format '{{.State.Running}}')" = false
 primary_ready; verify_ingress
 trap - ERR
 jq -n --arg sha "$expected" --arg legacy "$legacy" --arg backup "$backup" \
- '{primarySha:$sha,legacySha:$legacy,legacyStopped:true,ingressVerified:true,backup:$backup}' | tee "$backup/result.json"
+ '{primarySha:$sha,legacySha:$legacy,legacyStopped:true,ingressVerified:true,backup:$backup}' | tee "$backup/result.json" /opt/mbox/observability/legacy-runtime-retired.json

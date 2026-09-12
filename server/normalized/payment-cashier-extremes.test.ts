@@ -90,7 +90,7 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
   const run = <T,>(work: (tx: import('./transaction-runner.js').ScopedTransaction) => Promise<T>) => new ScopedPostgresTransactionRunner(asPool(pool)).run(scope, work)
   const tableState = async (sessionId: string) => (await run(tx => readTables(tx, cashierId, true))).find(table => table.activeSession?.id === sessionId)?.activeSession
 
-  async function stockFixture(status: 'pending' | 'accepted' | 'preparing' | 'failed', reservation: 'reserved' | 'consumed') {
+  async function stockFixture(status: 'pending' | 'accepted' | 'preparing' | 'failed', reservation: 'reserved' | 'consumed' | 'direct') {
     const fixture = await createOrder(pool, [4000, 1000])
     const payment = await captureOnlinePayment(service, fixture.orderId)
     const item = fixture.itemIds[0]!, inventory = randomUUID(), movement = randomUUID(), task = randomUUID()
@@ -98,14 +98,14 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
     await pool.query("INSERT INTO mbox.kds_tasks(id,tenant_id,store_id,order_item_id,station_code,status,quantity,accepted_at) VALUES($1,$2,$3,$4,'bar',$5,1,CASE WHEN $5='pending' THEN NULL ELSE clock_timestamp() END)", [task,tenantId,storeId,item,status])
     if (status === 'preparing' || status === 'failed') await pool.query("INSERT INTO mbox.kds_task_events(tenant_id,store_id,kds_task_id,event_type,from_status,to_status) VALUES($1,$2,$3,'task.preparing','accepted','preparing')",[tenantId,storeId,task])
     await pool.query("INSERT INTO mbox.inventory_items(id,tenant_id,store_id,sku,name,item_type,base_unit) VALUES($1::uuid,$2,$3,($1::uuid)::text,'退款测试库存','bottle','bottle')",[inventory,tenantId,storeId])
-    if(reservation==='consumed') await pool.query("INSERT INTO mbox.inventory_movements(id,tenant_id,store_id,inventory_item_id,movement_type,quantity_delta,reference_type,reference_id,order_item_id,unit_cost_minor) VALUES($1,$2,$3,$4,'sale',-4,'order_item',$5,$5,300)",[movement,tenantId,storeId,inventory,item])
+    if(reservation!=='reserved') await pool.query("INSERT INTO mbox.inventory_movements(id,tenant_id,store_id,inventory_item_id,movement_type,quantity_delta,reference_type,reference_id,order_item_id,unit_cost_minor) VALUES($1,$2,$3,$4,'sale',-4,'order_item',$5,$5,300)",[movement,tenantId,storeId,inventory,item])
     await pool.query("INSERT INTO mbox.inventory_balances(tenant_id,store_id,inventory_item_id,on_hand_quantity,reserved_quantity) VALUES($1,$2,$3,$4,$5)",[tenantId,storeId,inventory,reservation==='reserved'?10:6,reservation==='reserved'?4:0])
-    await pool.query("INSERT INTO mbox.inventory_order_reservations(tenant_id,store_id,order_id,order_item_id,inventory_item_id,quantity,status,movement_id,consumed_at,expires_at) VALUES($1,$2,$3,$4,$5,4,$6,$7,CASE WHEN $6='consumed' THEN clock_timestamp() ELSE NULL END,CASE WHEN $6='reserved' THEN clock_timestamp()+interval '1 hour' ELSE NULL END)",[tenantId,storeId,fixture.orderId,item,inventory,reservation,reservation==='consumed'?movement:null])
+    if(reservation!=='direct') await pool.query("INSERT INTO mbox.inventory_order_reservations(tenant_id,store_id,order_id,order_item_id,inventory_item_id,quantity,status,movement_id,consumed_at,expires_at) VALUES($1,$2,$3,$4,$5,4,$6,$7,CASE WHEN $6='consumed' THEN clock_timestamp() ELSE NULL END,CASE WHEN $6='reserved' THEN clock_timestamp()+interval '1 hour' ELSE NULL END)",[tenantId,storeId,fixture.orderId,item,inventory,reservation,reservation==='consumed'?movement:null])
     return {...fixture,payment,item,inventory,task}
   }
   const inventoryState = async (inventory: string) => (await pool.query("SELECT on_hand_quantity::text AS stock,reserved_quantity::text AS reserved FROM mbox.inventory_balances WHERE inventory_item_id=$1",[inventory])).rows[0]
 
-  it.each(['reserved','consumed'] as const)('cancels unstarted refunded goods and restores %s stock only once', async reservation => {
+  it.each(['reserved','consumed','direct'] as const)('cancels unstarted refunded goods and restores %s stock only once', async reservation => {
     const f = await stockFixture('accepted',reservation)
     const refund=await succeedOnlineRefund(service,f.payment,[allocation(f,0,4000)])
     expect(await inventoryState(f.inventory)).toEqual({stock:'10.000000',reserved:'0.000000'})
@@ -113,10 +113,20 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
     expect((await pool.query('SELECT status FROM mbox.order_items WHERE id=$1',[f.itemIds[1]])).rows[0].status).toBe('delivered')
     await expect(run(tx=>new KdsRepository(tx,{assertCanPrepare:async()=>undefined}).startPreparing({taskId:f.task,actorEmployeeId:cashierId}))).rejects.toThrow('cannot transition')
     const retry=await run(tx=>new RefundFulfillmentRepository(tx).synchronize(f.orderId,refund.id))
-    expect(retry).toEqual({cancelledItemIds:[],restoredReservations:0})
+    expect(retry).toEqual({cancelledItemIds:[],restoredInventoryRecords:0})
     expect(await inventoryState(f.inventory)).toEqual({stock:'10.000000',reserved:'0.000000'})
     expect(await tableState(f.sessionId)).toMatchObject({financialState:'partially_refunded',refundedAmountMinor:4000,netCollectedAmountMinor:1000})
   })
+  it('subtracts an existing direct stock return before restoring the remaining consumption',async()=>{
+    const f=await stockFixture('pending','direct')
+    await pool.query("INSERT INTO mbox.inventory_movements(tenant_id,store_id,inventory_item_id,movement_type,quantity_delta,reference_type,reference_id,order_item_id,reason) VALUES($1,$2,$3,'return',2,'order_item',$4,$4,'原部分实物退库')",[tenantId,storeId,f.inventory,f.item])
+    await pool.query('UPDATE mbox.inventory_balances SET on_hand_quantity=8 WHERE inventory_item_id=$1',[f.inventory])
+    await succeedOnlineRefund(service,f.payment,[allocation(f,0,4000)])
+    expect(await inventoryState(f.inventory)).toEqual({stock:'10.000000',reserved:'0.000000'})
+    const rows=await pool.query("SELECT quantity_delta::text,unit_cost_minor FROM mbox.inventory_movements WHERE order_item_id=$1 AND reference_type='refund_unmade'",[f.item])
+    expect(rows.rows).toEqual([{quantity_delta:'2.000000',unit_cost_minor:'300.000000'}])
+  })
+
   it.each(['preparing','failed'] as const)('preserves production evidence and consumed materials for %s tasks',async status=>{
     const f=await stockFixture(status,'consumed')
     await succeedOnlineRefund(service,f.payment,[allocation(f,0,4000)])

@@ -19,7 +19,7 @@ export class RefundFulfillmentRepository {
           AND r.id=$4 AND r.status='succeeded' AND COALESCE(r.order_id,
             (SELECT p.order_id FROM mbox.payments p WHERE p.tenant_id=r.tenant_id AND p.store_id=r.store_id AND p.id=r.payment_id))=o.id)
       FOR UPDATE OF o`, [...scope, orderId, refundId])).rows[0]
-    if (!order || order.payment_status === 'paid') return { cancelledItemIds: [], restoredReservations: 0 }
+    if (!order || order.payment_status === 'paid') return { cancelledItemIds: [], restoredInventoryRecords: 0 }
     // Match production's task -> item lock order, then re-read authoritative
     // production evidence. A refund racing a start cannot return used material.
     const tasks = (await this.tx.query<{ id: string; order_item_id: string; status: string; ready_at: string | null }>(`
@@ -47,7 +47,7 @@ export class RefundFulfillmentRepository {
       WHERE task.tenant_id=$1 AND task.store_id=$2 AND task.id=ANY($3::uuid[])
         AND (event.from_status IN ('preparing','ready') OR event.to_status IN ('preparing','ready'))`, [...scope, tasks.map(task => task.id)])).rows.map(row => row.order_item_id))
     const cancelledItemIds: string[] = []
-    let restoredReservations = 0
+    let restoredInventoryRecords = 0
     for (const item of items) {
       if (!eligible.has(item.id) || ['preparing', 'ready', 'delivered'].includes(item.status) || produced.has(item.id)) continue
       const itemTasks = tasks.filter(task => task.order_item_id === item.id)
@@ -65,14 +65,14 @@ export class RefundFulfillmentRepository {
       const changed = await this.tx.query(`UPDATE mbox.order_items SET status='cancelled',updated_at=clock_timestamp()
         WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND status<>'cancelled'`, [...scope, item.id])
       const restored = await this.restoreReservations(item.id, refundId)
-      restoredReservations += restored
+      restoredInventoryRecords += restored
       for (const task of itemTasks) await new InventoryRepository(this.tx).releaseRemakeMaterials(task.id, '退款确认成功，尚未制作的重做任务已取消')
       if (changed.rowCount || restored > 0) {
         cancelledItemIds.push(item.id)
         await this.tx.query(`INSERT INTO mbox.audit_events(tenant_id,store_id,actor_type,actor_ref,action,object_type,object_id,business_date,metadata)
           SELECT $1,$2,'system','confirmed-refund','order_item.refund_fulfillment_cancelled','order_item',$3::text,
             ((clock_timestamp() AT TIME ZONE timezone)-make_interval(secs=>extract(epoch FROM business_day_cutoff)))::date,
-            jsonb_build_object('refundId',$4::text,'restoredReservations',$5::integer,'productionEvidence','not_started')
+            jsonb_build_object('refundId',$4::text,'restoredInventoryRecords',$5::integer,'productionEvidence','not_started')
           FROM mbox.stores WHERE tenant_id=$1 AND id=$2`, [...scope, item.id, refundId, restored])
       }
     }
@@ -83,7 +83,7 @@ export class RefundFulfillmentRepository {
       WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.id=$3
         AND NOT EXISTS(SELECT 1 FROM mbox.order_items item WHERE item.tenant_id=o.tenant_id AND item.store_id=o.store_id
           AND item.order_id=o.id AND item.status<>'cancelled')`, [...scope, orderId])
-    return { cancelledItemIds, restoredReservations }
+    return { cancelledItemIds, restoredInventoryRecords }
   }
 
   private async restoreReservations(itemId: string, refundId: string) {
@@ -91,6 +91,7 @@ export class RefundFulfillmentRepository {
     const rows = (await this.tx.query<{ id: string; inventory_item_id: string; status: string; quantity: string; movement_id: string | null }>(`
       SELECT id,inventory_item_id,status,quantity::text,movement_id FROM mbox.inventory_order_reservations
       WHERE tenant_id=$1 AND store_id=$2 AND order_item_id=$3 ORDER BY inventory_item_id,id FOR UPDATE`, [...scope, itemId])).rows
+    if (rows.length === 0) return this.restoreDeferredConsumption(itemId, refundId)
     let count = 0
     for (const row of rows) {
       if (!['reserved', 'consumed'].includes(row.status)) continue
@@ -128,4 +129,39 @@ export class RefundFulfillmentRepository {
     }
     return count
   }
+  // Deferred settlement predates reservation-backed consumption. Return only
+  // original order-item sale movements, net of all already recorded returns.
+  private async restoreDeferredConsumption(itemId: string, refundId: string) {
+    const scope = [this.tx.scope.tenantId, this.tx.scope.storeId]
+    const movements = (await this.tx.query<{id:string;inventory_item_id:string;remaining:string;unit_cost_minor:string|null}>(`
+      SELECT original.id,original.inventory_item_id,original.unit_cost_minor,
+        GREATEST(0,LEAST(-original.quantity_delta,
+          sum(-original.quantity_delta) OVER(PARTITION BY original.inventory_item_id ORDER BY original.occurred_at,original.id)
+          -COALESCE((SELECT sum(returned.quantity_delta) FROM mbox.inventory_movements returned
+            WHERE returned.tenant_id=original.tenant_id AND returned.store_id=original.store_id
+              AND returned.order_item_id=original.order_item_id AND returned.inventory_item_id=original.inventory_item_id
+              AND returned.movement_type='return' AND returned.quantity_delta>0),0)))::text AS remaining
+      FROM mbox.inventory_movements original
+      WHERE original.tenant_id=$1 AND original.store_id=$2 AND original.order_item_id=$3
+        AND original.movement_type='sale' AND original.reference_type='order_item' AND original.quantity_delta<0
+      ORDER BY original.inventory_item_id,original.occurred_at,original.id`,[...scope,itemId])).rows
+    let count = 0
+    for (const movement of movements) {
+      if (Number(movement.remaining)<=0) continue
+      await this.tx.query(`SELECT inventory_item_id FROM mbox.inventory_balances
+        WHERE tenant_id=$1 AND store_id=$2 AND inventory_item_id=$3 FOR UPDATE`,[...scope,movement.inventory_item_id])
+      const restored=(await this.tx.query<{id:string}>(`INSERT INTO mbox.inventory_movements(tenant_id,store_id,inventory_item_id,
+        movement_type,quantity_delta,reference_type,reference_id,order_item_id,reason,unit_cost_minor,metadata)
+        VALUES($1,$2,$3,'return',$4::numeric,'refund_unmade',$5,$6,'退款确认成功，未开始制作',$7,
+          jsonb_build_object('originalMovementId',$8::text,'source','deferred_order_sale')) RETURNING id`,
+        [...scope,movement.inventory_item_id,movement.remaining,refundId,itemId,movement.unit_cost_minor,movement.id])).rows[0]!
+      const balance=await this.tx.query(`UPDATE mbox.inventory_balances SET on_hand_quantity=on_hand_quantity+$4::numeric,
+        last_movement_id=$5,updated_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND inventory_item_id=$3`,
+        [...scope,movement.inventory_item_id,movement.remaining,restored.id])
+      if(balance.rowCount!==1) throw new Error('Deferred refund inventory return lacks matching balance')
+      count++
+    }
+    return count
+  }
+
 }

@@ -52,7 +52,12 @@ export async function readOperatingHistory(tx: ScopedTransaction, input: Operati
     returned_quantity?:number;total_amount_minor:string;parent_order_item_id:string|null;status:string;note:string|null;delivered_at:string|null;delivered_by:string|null;prepared_at:string|null;prepared_by:string|null}>(`
     SELECT item.id,item.order_id,COALESCE(NULLIF(item.product_snapshot->>'name',''),product.name) AS name,
       item.quantity,item.unit_price_minor::text,item.total_amount_minor::text,item.parent_order_item_id,item.status,item.note,
-      (SELECT COALESCE(sum(stock_return.quantity),0)::integer FROM mbox.order_stock_returns stock_return WHERE stock_return.tenant_id=item.tenant_id AND stock_return.store_id=item.store_id AND stock_return.order_item_id=item.id) AS returned_quantity,
+      CASE WHEN item.status='cancelled' AND (
+        EXISTS(SELECT 1 FROM mbox.inventory_order_reservations r WHERE r.tenant_id=item.tenant_id AND r.store_id=item.store_id AND r.order_item_id=item.id
+          GROUP BY r.order_item_id HAVING bool_and(r.status IN ('released','returned')))
+        OR EXISTS(SELECT 1 FROM mbox.inventory_movements movement WHERE movement.tenant_id=item.tenant_id AND movement.store_id=item.store_id
+          AND movement.order_item_id=item.id AND movement.reference_type='refund_unmade' AND movement.movement_type='return')
+      ) THEN item.quantity ELSE (SELECT COALESCE(sum(stock_return.quantity),0)::integer FROM mbox.order_stock_returns stock_return WHERE stock_return.tenant_id=item.tenant_id AND stock_return.store_id=item.store_id AND stock_return.order_item_id=item.id) END AS returned_quantity,
       delivery.delivered_at,delivery.delivered_by,preparation.prepared_at,preparation.prepared_by
     FROM mbox.order_items item JOIN mbox.products product
       ON product.tenant_id=item.tenant_id AND product.store_id=item.store_id AND product.id=item.product_id

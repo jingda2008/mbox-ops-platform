@@ -1,3 +1,4 @@
+import { readOperatingHistory } from './operating-history-query.js'
 import { KdsRepository } from './kds-repository.js'
 import { InventoryRepository } from './inventory-repository.js'
 import { RefundFulfillmentRepository } from './refund-fulfillment-repository.js'
@@ -116,6 +117,9 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
     expect(retry).toEqual({cancelledItemIds:[],restoredInventoryRecords:0})
     expect(await inventoryState(f.inventory)).toEqual({stock:'10.000000',reserved:'0.000000'})
     expect(await tableState(f.sessionId)).toMatchObject({financialState:'partially_refunded',refundedAmountMinor:4000,netCollectedAmountMinor:1000})
+    const publicId=(await pool.query('SELECT public_id FROM mbox.orders WHERE id=$1',[f.orderId])).rows[0].public_id
+    const history=await run(tx=>readOperatingHistory(tx,{businessDate:'2020-01-01',endDate:'2030-01-01',table:'',employee:'',page:0,search:publicId,allowFinancialSummary:false}))
+    expect(history.orders[0]?.items.find(item=>item.id===f.item)?.returnedQuantity).toBe(1)
   })
   it('subtracts an existing direct stock return before restoring the remaining consumption',async()=>{
     const f=await stockFixture('pending','direct')

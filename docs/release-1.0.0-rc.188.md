@@ -7,3 +7,5 @@ Separate verified-success application failures from channel failures; retain the
 Includes mainline fixes for Postar-safe public payment numbers, payable/recently paid cashier visibility and recent provider failure retry. Production incident evidence proves confirmed results were received but not applied; the original triggering exception was discarded by the old handlers and remains unproven. This release fixes the recovery and diagnostic gaps, not a claimed reconstruction of that missing exception.
 
 No database migration or Mini Program source change. Physical device acceptance and original commercial release blockers remain separate. Validation and deployment evidence: payment-sync-incident-20260912.md.
+
+Default payment numbers are now both Postar-safe and deterministic per operation, preserving same-operation retries for online and manual collections. Different idempotency keys still create distinct attempts. This corrects the random-number retry regression in the earlier mainline format hotfix.

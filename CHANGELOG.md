@@ -4,6 +4,7 @@
 
 - Recover unapplied, verified payment success locally without depending on another channel query; keep the original receipt business date and one observation recovery key.
 - Distinguish provider failures from local application failures, retry local recovery in one minute, and record safe diagnostic codes for callback and worker failures.
+- Keep default online/manual payment IDs stable across the same retry while remaining alphanumeric and within Postar limits.
 - Include mainline cashier visibility, Postar payment number and recent-query retry fixes in the immutable release. Historical first-failure exceptions remain unproven because the old handlers discarded them.
 
 ## 1.0.0-rc.187 - 2026-09-11

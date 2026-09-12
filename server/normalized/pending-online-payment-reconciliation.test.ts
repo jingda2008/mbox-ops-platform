@@ -30,6 +30,25 @@ describe('pending online payment reconciliation', () => {
     })).toBe(false)
   })
 
+  it('keeps confirmed application failures separate from provider outages and retries the next payment', async () => {
+    const log = vi.spyOn(console,'error').mockImplementation(() => {})
+    const querySystem = vi.fn(async () => ({context:{publicId:'P-1'},
+      observation:{status:'succeeded',amount:8800,currency:'CNY',providerTransactionId:'TX-1',occurredAt:'2026-09-11T14:30:30.000Z'},
+      verifiedObservationId:'obs-1'}))
+    const recordAutomaticPaymentQueryOutcome = vi.fn(async () => undefined)
+    const recordProviderQueryResult = vi.fn().mockRejectedValueOnce(Object.assign(new Error('private SQL or token must not be logged'),{code:'23514'}))
+      .mockResolvedValue({replayed:false,value:{}})
+    const result = await reconcileStalePendingOnlinePaymentsForStore({onlinePayments:{
+      listStalePendingPostarPaymentIds:async()=>['pay-1','pay-2'],querySystem,recordAutomaticPaymentQueryOutcome,
+    } as never,commands:{recordProviderQueryResult}},
+    {scope:{tenantId:'tenant',storeId:'store'},businessDate:'2026-09-11',actor:{type:'integration',ref:'test'}},'application-failure')
+    expect(result).toMatchObject({attempted:2,reconciled:1})
+    expect(recordAutomaticPaymentQueryOutcome).toHaveBeenCalledWith({tenantId:'tenant',storeId:'store'},'pay-1','error','succeeded',false)
+    expect(JSON.parse(log.mock.calls[0]![0])).toEqual({event:'payment_reconciliation_failed',paymentId:'pay-1',stage:'apply_verified_success',errorCode:'23514'})
+    expect(JSON.stringify(log.mock.calls)).not.toContain('private SQL')
+    log.mockRestore()
+  })
+
   it('reconciles each stale payment without aborting the batch', async () => {
     const listStalePendingPostarPaymentIds = vi.fn(async () => ['pay-1', 'pay-2'])
     const querySystem = vi.fn()

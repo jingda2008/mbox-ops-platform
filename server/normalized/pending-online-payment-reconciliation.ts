@@ -48,9 +48,15 @@ export async function reconcileStalePendingOnlinePayments(
         `${queryBindingPrefix}:${paymentId}`,
       )
       if (applied) reconciled.push(paymentId)
-    } catch {
+    } catch (error) {
+      const application = error instanceof ConfirmedPaymentApplicationError
+      console.error(JSON.stringify({
+        event: 'payment_reconciliation_failed', paymentId,
+        stage: application ? 'apply_verified_success' : 'query_provider',
+        errorCode: safePaymentErrorCode(application ? error.cause : error),
+      }))
       await deps.onlinePayments.recordAutomaticPaymentQueryOutcome(
-        context.scope,paymentId,'error',undefined,false,
+        context.scope,paymentId,'error',application ? 'succeeded' : undefined,false,
       ).catch(() => {})
       // A single stale payment must not block workbench/status reads for the rest.
     }
@@ -92,7 +98,14 @@ export async function reconcileStalePendingOnlinePayment(
       queryBindingId,
       principal,
     })
-  await applyProviderQueryObservation(deps.commands, context, queried, queryBindingId)
+  try {
+    await applyProviderQueryObservation(deps.commands, context, queried, queryBindingId)
+  } catch (cause) {
+    if (queried.observation.status === 'succeeded' && queried.verifiedObservationId !== null) {
+      throw new ConfirmedPaymentApplicationError(cause)
+    }
+    throw cause
+  }
   await deps.onlinePayments.recordAutomaticPaymentQueryOutcome(
     context.scope,paymentId,
     isTerminalStatus(queried.observation.status) ? 'terminal' : 'processing',
@@ -122,8 +135,8 @@ export async function applyProviderQueryObservation(
   await commands.recordProviderQueryResult({
     scope: context.scope,
     actor,
-    businessDate: context.businessDate,
-    idempotencyKey,
+    businessDate: queried.businessDate ?? context.businessDate,
+    idempotencyKey: queried.reusedVerifiedSuccess ? `verified-payment:${queried.verifiedObservationId}` : idempotencyKey,
     requestFingerprint: JSON.stringify({
       method: 'POST',
       path: '/internal/payments/provider-query',
@@ -171,4 +184,17 @@ export function shouldReconcilePaymentContext(
 
 export function reconciliationQueryBinding(prefix: string): string {
   return `${prefix}-${randomUUID()}`
+}
+
+class ConfirmedPaymentApplicationError extends Error {
+  constructor(cause: unknown) {
+    super('Verified payment success could not be applied', { cause })
+    this.name = 'ConfirmedPaymentApplicationError'
+  }
+}
+
+export function safePaymentErrorCode(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'code' in error
+    && typeof error.code === 'string' && /^[A-Z0-9_]{1,64}$/.test(error.code)) return error.code
+  return error instanceof Error && /^[A-Za-z0-9_]{1,64}$/.test(error.name) ? error.name : 'UNKNOWN'
 }

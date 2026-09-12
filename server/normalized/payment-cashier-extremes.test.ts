@@ -1,3 +1,5 @@
+import { OnlinePaymentService } from './online-payment-service.js'
+import { reconcileStalePendingOnlinePayment } from './pending-online-payment-reconciliation.js'
 import {historicalPaymentDisplayAllowlist,repairHistoricalPaymentDisplays} from '../../scripts/repair-five-historical-payment-displays.mjs'
 import Fastify from 'fastify'
 import {paymentFinanceApiPlugin} from './payment-finance-api.js'
@@ -525,6 +527,50 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
     expect((await pool.query('SELECT id,payment_status FROM mbox.orders WHERE id=ANY($1::uuid[]) ORDER BY total_amount_minor',[[first.orderId,second.orderId,third.orderId]])).rows.map(row=>row.payment_status)).toEqual(['refunded','paid','paid'])
     expect((await pool.query('SELECT amount_minor::int AS amount FROM mbox.reconciliation_entries WHERE refund_id=$1',[refunded.id])).rows).toEqual([{amount:-1200}])
   })
+  it('recovers a rolled-back batch capture from durable provider proof without another channel query', async () => {
+    const fixture = await createOrder(pool,[138000])
+    const payment = (await service.initiate({...metadata(`recover-init-${randomUUID()}`,actor(cashierId)),
+      orderId:fixture.orderId,orderIds:[fixture.orderId],publicId:`recover-${randomUUID()}`,
+      provider:'postar',method:'native_qr',principal:{type:'employee',employeeId:cashierId}})).value
+    const observationId = await providerObservationRecorder.recordPayment({scope:{tenantId,storeId},provider:'postar',
+      verificationKind:'active_query_binding',providerEventId:`recover-proof-${randomUUID()}`,integrationRef:'postar-active-query',
+      paymentPublicId:payment.publicId,providerTransactionId:`recover-tx-${randomUUID()}`,reportedAmountMinor:138000,
+      reportedCurrency:'CNY',status:'succeeded',settlementChannel:'wechat',occurredAt:'2026-08-12T16:39:11.000Z',evidence:{tradeState:'SUCCESS'}})
+    let failOnce = true
+    const recoveryRunner = new ScopedPostgresTransactionRunner({
+      connect: async () => {
+        const client = await pool.connect()
+        return {
+          query: async (sql: string, values?: unknown[]) => {
+            if (failOnce && sql.includes('INSERT INTO mbox.outbox_messages')) {
+              failOnce = false
+              throw Object.assign(new Error('simulated local application failure'),{code:'23514'})
+            }
+            return client.query(sql,values)
+          },
+          release: () => client.release(),
+        }
+      },
+      end: async () => {},
+    })
+    const recoveryCommands = new PaymentCommandService(new NormalizedCommandExecutor(recoveryRunner),allowAll,new NormalizedProviderObservationAuthority())
+    let channelCalls = 0
+    const unavailable = async (): Promise<never> => {channelCalls++;throw new Error('channel offline')}
+    const onlinePayments = new OnlinePaymentService(recoveryRunner,'test-secret-at-least-thirty-two-bytes',{
+      provider:'postar',environment:'test',agencyId:'TESTAGENCY',merchantId:'TESTMERCHANT',publicKey:'TESTPUBLICKEY',
+      callbackUrl:'https://example.test/callback',timeoutMs:1000,wechat:null,
+    },{createPayment:unavailable,queryPayment:unavailable,closePayment:unavailable,requestRefund:unavailable,queryRefund:unavailable})
+    const context = {scope:{tenantId,storeId},businessDate,actor:{type:'integration' as const,ref:'postar-active-query'}}
+    await expect(reconcileStalePendingOnlinePayment({onlinePayments,commands:recoveryCommands},context,payment.id,'recover-attempt-1')).rejects.toThrow('Verified payment success could not be applied')
+    expect((await pool.query('SELECT count(*)::int count FROM mbox.reconciliation_entries WHERE payment_id=$1',[payment.id])).rows[0].count).toBe(0)
+    expect((await pool.query('SELECT consumed_at FROM mbox.verified_provider_observations WHERE id=$1',[observationId])).rows[0].consumed_at).toBeNull()
+    expect(await reconcileStalePendingOnlinePayment({onlinePayments,commands:recoveryCommands},context,payment.id,'recover-attempt-2')).toBe(true)
+    expect((await financialSnapshot(pool,fixture.orderId)).payment_status).toBe('paid')
+    expect((await pool.query('SELECT count(*)::int count,sum(amount_minor)::text amount FROM mbox.reconciliation_entries WHERE payment_id=$1',[payment.id])).rows[0]).toEqual({count:1,amount:'138000'})
+    expect((await pool.query('SELECT consumed_at FROM mbox.verified_provider_observations WHERE id=$1',[observationId])).rows[0].consumed_at).not.toBeNull()
+    expect(channelCalls).toBe(0)
+  })
+
   it('records a partial batch receipt without activating an immediate-payment order',async()=>{
     const fixture=await createOrder(pool,[1000])
     const payment=(await service.initiate({...metadata(`partial-immediate-${randomUUID()}`,actor(cashierId)),orderId:fixture.orderId,orderIds:[fixture.orderId],amountMinor:500,publicId:`partial-${randomUUID()}`,provider:'postar',method:'native_qr',principal:{type:'employee',employeeId:cashierId}})).value

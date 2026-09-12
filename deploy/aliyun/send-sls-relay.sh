@@ -5,6 +5,7 @@ input=${1:?JSONL input is required}
 test -f "${input}"
 exec ssh -T -i /opt/mbox/observability/sls-relay-ed25519 \
  -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+ -o 'HostKeyAlias=[139.224.254.60]:6122' \
  -o UserKnownHostsFile=/opt/mbox/observability/sls-relay-known-hosts \
  -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 \
- -p 6122 root@139.224.254.60 < "${input}"
+ -p 6122 root@10.100.50.234 < "${input}"

@@ -310,7 +310,6 @@ test('selective collection is outside the request path and only three stores can
   assert.match(collector, /mboxAuditEvent:"container_started"/)
   assert.match(sender, /runtime-errors\|payment-audit\|release-audit/)
   assert.match(sender, /for logstore in runtime-errors payment-audit release-audit/)
-  assert.match(sender, /payload_list=.*jq -cs 'map\(tojson\)'/)
   assert.match(sender, /--logs "\$\{payload_list\}"/)
   assert.match(collector, /cp "\$\{merged\}" "\$\{queue_file\}"[\s\S]*printf '%s\\n' "\$\{now\}" > "\$\{cursor_file\}"/)
   assert.match(collector, /cp "\$\{remainder\}" "\$\{queue_file\}"/)
@@ -350,6 +349,35 @@ test('selective observability installer fails visibly before systemd changes whe
     assert.doesNotMatch(result.stdout, /selective_observability=installed/)
     const markerExists = await access(marker).then(() => true, () => false)
     assert.equal(markerExists, false)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('log relay uses the reachable private host while pinning its existing public host identity', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mbox-relay-route-'))
+  try {
+    const script = await read('../deploy/aliyun/send-sls-relay.sh')
+    const capture = join(directory, 'args')
+    const input = join(directory, 'events')
+    await writeFile(input, '{"eventType":"observability_probe"}\n')
+    await writeFile(join(directory, 'ssh'), '#!/bin/sh\nprintf "%s\\n" "$@" > "$CAPTURE"\ncat\n', { mode: 0o700 })
+    const result = spawnSync('bash', ['-c', script, 'relay', input], {
+      encoding: 'utf8', env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, CAPTURE: capture },
+    })
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(result.stdout, await readFile(input, 'utf8'))
+    const args = await readFile(capture, 'utf8')
+    assert.match(args, /root@10\.100\.50\.234/)
+    assert.match(args, /HostKeyAlias=\[139\.224\.254\.60\]:6122/)
+    assert.match(args, /StrictHostKeyChecking=yes/)
+    const installer = await read('../deploy/aliyun/install-selective-observability.sh')
+    const service = await read('../deploy/aliyun/systemd/mbox-sls-collector.service')
+    assert.doesNotMatch(installer, /--value/)
+    assert.match(installer, /= Result=success/)
+    assert.match(service, /ProtectSystem=full/)
+    assert.match(service, /ReadWriteDirectories=/)
+    assert.doesNotMatch(service, /ProtectSystem=strict|ReadWritePaths=/)
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
@@ -634,6 +662,61 @@ test('SLS sender rejects sensitive values without echoing them', async () => {
     assert.notEqual(result.status, 0)
     assert.match(result.stderr, /sensitive SLS value rejected/)
     assert.equal(result.stderr.includes(secret), false)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('SLS accepts strictly formatted digests with numeric runs and retains fractional source time', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mbox-sls-digests-'))
+  try {
+    const input = join(directory, 'input')
+    const capture = join(directory, 'capture')
+    await writeFile(join(directory, 'aliyun'), '#!/bin/sh\nprintf "%s\\n" "$@" > "$CAPTURE"\n', { mode: 0o700 })
+    const event = { timestamp: '2026-09-11T14:30:30.982123456Z', eventType: 'deployment_succeeded',
+      severity: 'info', logstore: 'release-audit',
+      imageDigest: `sha256:${'a'.repeat(25)}13800138000${'b'.repeat(28)}`,
+      fingerprint: `${'a'.repeat(25)}13800138000${'b'.repeat(28)}`,
+      releaseSha: `${'a'.repeat(14)}13800138000${'b'.repeat(15)}` }
+    await writeFile(input, `${JSON.stringify(event)}\n`)
+    const env = { ...process.env, PATH: `${directory}:${process.env.PATH}`, CAPTURE: capture, MBOX_SLS_DRY_RUN: '0' }
+    const result = spawnSync('bash', [new URL('../deploy/aliyun/send-sls-events.sh', import.meta.url).pathname, input], { encoding: 'utf8', env })
+    assert.equal(result.status, 0, result.stderr)
+    const args = (await readFile(capture, 'utf8')).trim().split('\n')
+    const payload = JSON.parse(JSON.parse(args[args.indexOf('--logs') + 1])[0])
+    assert.equal(payload.imageDigest, event.imageDigest)
+    assert.equal(payload.fingerprint, event.fingerprint)
+    assert.equal(payload.__time__, String(Date.parse('2026-09-11T14:30:30Z') / 1000))
+    for (const field of ['imageDigest', 'fingerprint', 'releaseSha']) {
+      await writeFile(input, `${JSON.stringify({ ...event, [field]: '13800138000-phone' })}\n`)
+      const invalid = spawnSync('bash', [new URL('../deploy/aliyun/send-sls-events.sh', import.meta.url).pathname, input], { encoding: 'utf8', env })
+      assert.notEqual(invalid.status, 0)
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('SLS chunks encoded log arguments below the Linux per-argument limit without losing events', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mbox-sls-chunks-'))
+  try {
+    const input = join(directory, 'input')
+    const capture = join(directory, 'capture')
+    await writeFile(join(directory, 'aliyun'), '#!/bin/sh\nwhile [ "$#" -gt 0 ]; do if [ "$1" = "--logs" ]; then shift; printf "%s\\n" "$1" >> "$CAPTURE"; exit 0; fi; shift; done\nexit 1\n', { mode: 0o700 })
+    const events = Array.from({ length: 180 }, (_, index) => ({
+      timestamp: '2026-09-12T00:00:00Z', logstore: 'payment-audit', eventType: 'payment_reconciliation_failed', severity: 'error',
+      paymentRef: `P${index}`, code: 'a'.repeat(90), requestId: 'b'.repeat(90),
+      route: `/${'c'.repeat(240)}`, errorLocation: `/server/${'d'.repeat(480)}`, stage: 'query_provider',
+    }))
+    await writeFile(input, `${events.map(event => JSON.stringify(event)).join('\n')}\n`)
+    const result = spawnSync('bash', [new URL('../deploy/aliyun/send-sls-events.sh', import.meta.url).pathname, input], {
+      encoding: 'utf8', env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, CAPTURE: capture, MBOX_SLS_DRY_RUN: '0' },
+    })
+    assert.equal(result.status, 0, result.stderr)
+    const batches = (await readFile(capture, 'utf8')).trim().split('\n')
+    assert.ok(batches.length > 1)
+    assert.ok(batches.every(batch => Buffer.byteLength(batch) <= 60000))
+    assert.deepEqual(batches.flatMap(batch => JSON.parse(batch).map(value => JSON.parse(value).paymentRef)), events.map(event => event.paymentRef))
   } finally {
     await rm(directory, { recursive: true, force: true })
   }

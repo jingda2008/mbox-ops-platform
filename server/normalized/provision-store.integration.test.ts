@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
+import { readFile } from 'node:fs/promises'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
 import {
   parseStoreProvisionConfig,
@@ -46,6 +47,26 @@ integration('normalized store provisioning', () => {
 
   afterAll(async () => {
     await pool.end()
+  })
+
+  it('keeps the production cashier finance permission through repeated release provisioning', async () => {
+    const production = parseStoreProvisionConfig(JSON.parse(await readFile('deploy/normalized-store/mbox-lujiazui.store.json', 'utf8')))
+    const cashier = production.roles.find(role => role.code === 'CASHIER')!
+    expect(cashier.permissions).toContain('reconciliation.manage')
+    const financeConfig = parseStoreProvisionConfig({ ...config,
+      tenant: { ...config.tenant, id: 'ef000000-0000-4000-8000-000000000013', code: 'finance-provision' },
+      store: { ...config.store, id: 'ef000000-0000-4000-8000-000000000014', code: 'finance-provision' },
+      roles: [{ code: cashier.code, name: cashier.name, permissions: cashier.permissions }],
+      employees: config.employees.map(employee => ({ ...employee, roleCodes: ['CASHIER'] })),
+    })
+    const environment = { MBOX_EMPLOYEE_PIN_TOM: '5210', MBOX_STORE_DAILY_CREDENTIAL: 'MBOX521' }
+    for (const sourceCommitSha of ['a'.repeat(40), 'b'.repeat(40)]) {
+      await provisionNormalizedStore({ databaseUrl: databaseUrl!, config: financeConfig, environment, sourceCommitSha })
+      const rows = await pool.query(`SELECT p.code FROM mbox.role_permission_assignments a
+        JOIN mbox.staff_permission_definitions p ON p.id=a.permission_id
+        WHERE a.tenant_id=$1 AND a.store_id=$2 ORDER BY p.code`, [financeConfig.tenant.id, financeConfig.store.id])
+      expect(rows.rows.map(row => row.code)).toEqual([...cashier.permissions].sort())
+    }
   })
 
   it('applies an idempotent secret-free definition and stores only password hashes', async () => {

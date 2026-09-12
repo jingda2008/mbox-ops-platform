@@ -498,13 +498,15 @@ export class PaymentProviderActionRepository {
       released_query_count: number
       operationally_released: boolean
       tracking_window_expired: boolean
+      recent_payment: boolean
     }>(`
       SELECT state.phase,state.released_query_count,
         ($4::boolean OR payment.retry_released_at IS NOT NULL
           OR COALESCE(ordering.status='cancelled',false)
           OR COALESCE(action.expires_at<=clock_timestamp(),true)
           OR abandonment.payment_id IS NOT NULL) AS operationally_released,
-        payment.created_at<=clock_timestamp()-interval '7 days' AS tracking_window_expired
+        payment.created_at<=clock_timestamp()-interval '7 days' AS tracking_window_expired,
+        payment.created_at>clock_timestamp()-interval '24 hours' AS recent_payment
       FROM mbox.payment_reconciliation_states state
       JOIN mbox.payments payment
         ON payment.tenant_id=state.tenant_id AND payment.store_id=state.store_id
@@ -540,10 +542,14 @@ export class PaymentProviderActionRepository {
     // released payment to hours/days instead of page-speed polling.
     const stop = released && row.tracking_window_expired
     const delay = !released ? '30 seconds'
-      : releasedQueryCount === 1 ? '5 minutes'
-        : releasedQueryCount === 2 ? '15 minutes'
-          : releasedQueryCount === 3 ? '1 hour'
-            : releasedQueryCount <= 5 ? '6 hours' : '24 hours'
+      : outcome === 'error'
+        ? row.recent_payment
+          ? releasedQueryCount <= 3 ? '1 minute' : '5 minutes'
+          : '1 hour'
+        : releasedQueryCount === 1 ? '5 minutes'
+          : releasedQueryCount === 2 ? '15 minutes'
+            : releasedQueryCount === 3 ? '1 hour'
+              : releasedQueryCount <= 5 ? '6 hours' : '24 hours'
     await this.transaction.query(`
       UPDATE mbox.payment_reconciliation_states
       SET phase=$4,next_query_at=CASE WHEN $5::boolean THEN NULL

@@ -18,6 +18,36 @@ const secret = 'provider-action-unit-test-secret-at-least-32-bytes'
 const expiresAt = '2099-08-13T13:05:00.000Z'
 
 describe('PaymentProviderActionRepository', () => {
+  it('retries recent released-payment query errors within five minutes', async () => {
+    const calls: Array<{ text: string; values: readonly unknown[] }> = []
+    const transaction = {
+      scope: { tenantId, storeId },
+      query: async (text: string, values: readonly unknown[] = []) => {
+        calls.push({ text, values })
+        if (text.includes('SELECT state.phase')) {
+          return {
+            rows: [{
+              phase: 'released',
+              released_query_count: 4,
+              operationally_released: true,
+              tracking_window_expired: false,
+              recent_payment: true,
+            }],
+            rowCount: 1,
+          }
+        }
+        return { rows: [], rowCount: 1 }
+      },
+    } as unknown as ScopedTransaction
+
+    await new PaymentProviderActionRepository(transaction, secret)
+      .recordAutomaticPaymentQueryOutcome(paymentId, 'error')
+
+    expect(calls[0]?.text).toContain("interval '24 hours' AS recent_payment")
+    expect(calls[1]?.values[5]).toBe('5 minutes')
+    expect(calls[1]?.values[7]).toBe('error')
+  })
+
   it('lists only stale submitted Postar refunds for bounded background reconciliation', async () => {
     let capturedSql = ''
     let capturedValues: readonly unknown[] = []

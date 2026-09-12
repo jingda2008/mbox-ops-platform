@@ -25,7 +25,7 @@ cp "$config" "$backup/Caddyfile"; cp "$snippet" "$backup/payment-domain.caddy"; 
 chmod 0600 "$backup"/*
 rewrite() {
  awk '
- /^[ \t]*reverse_proxy mbox-app:8787[ \t]*$/ {
+ /^[ \t]*reverse_proxy mbox-app:8787[ \t\r]*$/ {
   print "\treverse_proxy https://10.100.80.223 {"
   print "\t\theader_up Host mbox.shmbox.com"
   print "\t\ttransport http {"
@@ -35,10 +35,20 @@ rewrite() {
   next
  } {print}' "$1"
 }
-rewrite "$backup/Caddyfile" > "$backup/Caddyfile.next"
+# The obsolete IP certificate has expired and the IP is no longer an operating
+# URL. Retire that virtual host instead of disabling TLS verification.
+grep -Eq '^https://139[.]224[.]254[.]60[[:space:]]*\{' "$backup/Caddyfile"
+cat > "$backup/Caddyfile.next" <<'CADDY'
+{
+ default_sni pay.shmbox.com
+}
+import /data/mbox-ingress/*.caddy
+CADDY
 rewrite "$backup/payment-domain.caddy" > "$backup/payment-domain.caddy.next"
 # No legacy upstream may remain in either public ingress.
-! grep -q 'reverse_proxy mbox-app' "$backup/Caddyfile.next" "$backup/payment-domain.caddy.next"
+if grep -q 'reverse_proxy mbox-app' "$backup/Caddyfile.next" "$backup/payment-domain.caddy.next"; then
+ echo 'legacy upstream remains in candidate configuration' >&2; exit 1
+fi
 stopped=0
 restore_on_error() {
  if [ "$stopped" = 0 ]; then
@@ -53,7 +63,7 @@ cat "$backup/Caddyfile.next" > "$config"; cp "$backup/payment-domain.caddy.next"
 docker exec mbox-caddy caddy validate --config /etc/caddy/Caddyfile >/dev/null
 docker exec mbox-caddy caddy reload --config /etc/caddy/Caddyfile >/dev/null
 verify_ingress() {
- for origin in pay.shmbox.com 139.224.254.60; do
+ for origin in pay.shmbox.com; do
   curl --resolve "$origin:443:127.0.0.1" -fsS --max-time 10 "https://$origin/api/ready" \
    | jq -e --arg sha "$expected" '.status=="ready" and .commitSha==$sha' >/dev/null
  done
@@ -70,4 +80,4 @@ test "$(docker inspect mbox-app --format '{{.State.Running}}')" = false
 primary_ready; verify_ingress
 trap - ERR
 jq -n --arg sha "$expected" --arg legacy "$legacy" --arg backup "$backup" \
- '{primarySha:$sha,legacySha:$legacy,legacyStopped:true,ingressVerified:true,backup:$backup}' | tee "$backup/result.json" /opt/mbox/observability/legacy-runtime-retired.json
+ '{primarySha:$sha,legacySha:$legacy,legacyStopped:true,legacyIpRetired:true,ingressVerified:true,backup:$backup}' | tee "$backup/result.json" /opt/mbox/observability/legacy-runtime-retired.json

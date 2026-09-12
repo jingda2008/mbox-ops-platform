@@ -55,7 +55,7 @@ for (const name of ['payment_reconciliation_failed','verified_payment_callback_a
 }
 
 test('preserves Docker event time so replay does not change event identity',()=>{
- const line='2026-09-12T08:00:00.123456789Z '+JSON.stringify({event:'payment_reconciliation_failed',errorCode:'23514'})
+ const line='2026-09-12T08:00:00.123456789Z '+JSON.stringify({event:'payment_reconciliation_failed',errorCode:'23514',time:1789199999000})
  const first=classifySlsEvent(line),second=classifySlsEvent(line)
  assert.equal(first?.timestamp,'2026-09-12T08:00:00.123456789Z');assert.equal(first?.fingerprint,second?.fingerprint)
 })

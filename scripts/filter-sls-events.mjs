@@ -58,7 +58,8 @@ function baseEvent(record, eventType, logstore) {
   const statusCode = finite(record.statusCode ?? record.res?.statusCode)
   const durationMs = finite(record.durationMs ?? record.responseTime)
   const event = {
-    timestamp: text(record.timestamp || record.time || record.dockerTime) || new Date().toISOString(),
+    timestamp: text(record.timestamp) || text(record.dockerTime) || text(record.time)
+      || (typeof record.time === 'number' && Number.isFinite(record.time) ? new Date(record.time).toISOString() : new Date().toISOString()),
     eventType,
     severity: finite(record.level) >= 50 ? 'error' : finite(record.level) >= 40 ? 'warning' : text(record.severity) || 'info',
     ...(statusCode === undefined ? {} : { statusCode }),

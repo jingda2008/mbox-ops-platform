@@ -5,3 +5,7 @@ rc.189部署回读发现：门店配置仍无reconciliation.manage，部署provi
 采集改已核实内网地址及原主机密钥校验，兼容systemd219；严格格式的摘要/指纹不套用通用手机号识别，自由文本仍脱敏拒绝；云端索引保留源时间。旧支付实例已按8311d77停止并退役；不再次启动旧实例。
 
 需经门店配置重复provision真实数据库回归、日志末端验证、CI及正式发布；上线回读有效收银权限与SLS记录。真实营业收款、人员接手和硬件验收不以测试替代。本版无小程序改动或上传，不发起顾客收款/退款。
+
+## 实际发布记录
+
+2026-09-12 18:21 CST正式部署完成，SHA475fe51ff99bed633c8879c37961f29aa58dcdb9，镜像sha256:cfd3a5e626ae0e6da44b8cbf9d52d685312e40675c0f640e91cb866eaf3102c3。PR216、标签CI34687549172、release34687549208通过；备份mbox-20260912T101953Z-Do3ecl.dump已验证云端回读。正式门店/pay入口同SHA，schema197、production/ready；有效收银view/manage均true，SLS查回新SHA启动事件与真实支付错误。完整记录见payment-evidence-closure-20260912.md。现场真实交易和人员实际处理验收仍独立开放。

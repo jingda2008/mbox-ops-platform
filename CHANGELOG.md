@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0-rc.189 - 2026-09-12
+
+- Retain structured payment failures, safe diagnostic locations and original Docker timestamps in selective SLS logging; support restricted relay transport for the production host.
+- Prioritize verified-but-unapplied receipts in finance review, display explicit reasons and refresh without creating repeated tasks.
+- Add missing finance case management permission for existing finance-view cashier/management roles; retain collection and refund authority unchanged.
+
 ## 1.0.0-rc.188 - 2026-09-12
 
 - Recover unapplied, verified payment success locally without depending on another channel query; keep the original receipt business date and one observation recovery key.

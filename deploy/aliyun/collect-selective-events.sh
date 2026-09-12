@@ -9,7 +9,7 @@ queue_file=${cursor_dir}/pending-events.jsonl
 release_queue_file=${cursor_dir}/pending-release-events.jsonl
 queue_lock_file=${cursor_dir}/pending-events.lock
 filter=/app/scripts/filter-sls-events.mjs
-sender=${install_root}/bin/send-sls-events.sh
+sender=${MBOX_SLS_SENDER:-${install_root}/bin/send-sls-events.sh}
 now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 since=$(cat "${cursor_file}" 2>/dev/null || date -u -d '2 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
 maximum_events=${MBOX_SLS_MAX_EVENTS_PER_RUN:-500}
@@ -31,8 +31,7 @@ selected=$(mktemp)
 remainder=$(mktemp)
 trap 'rm -f "${temporary}" "${merged}" "${selected}" "${remainder}"' EXIT
 
-docker logs --since "${since}" --timestamps "${container}" 2>&1 \
-  | sed -E 's/^[0-9TZ:.-]+ //' \
+docker logs --since "${since}" --until "${now}" --timestamps "${container}" 2>&1 \
   | docker exec -i "${container}" node "${filter}" > "${temporary}"
 
 oom=$(docker inspect "${container}" --format '{{if .State.OOMKilled}}true{{else}}false{{end}}')

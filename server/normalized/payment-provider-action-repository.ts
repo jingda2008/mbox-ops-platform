@@ -541,7 +541,8 @@ export class PaymentProviderActionRepository {
     // Preserve a conservative seven-day financial window while moving a
     // released payment to hours/days instead of page-speed polling.
     const stop = released && row.tracking_window_expired
-    const delay = !released ? '30 seconds'
+    const confirmedApplicationFailure = outcome === 'error' && observedStatus === 'succeeded'
+    const delay = confirmedApplicationFailure ? '1 minute' : !released ? '30 seconds'
       : outcome === 'error'
         ? row.recent_payment
           ? releasedQueryCount <= 3 ? '1 minute' : '5 minutes'

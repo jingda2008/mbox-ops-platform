@@ -77,6 +77,8 @@ export interface OnlinePaymentQueryResult {
   // reconciliation state only.  It is not duplicated into the immutable
   // verified-observation ledger on every poll.
   verifiedObservationId: string | null
+  reusedVerifiedSuccess?: boolean
+  businessDate?: string
 }
 
 export interface OnlinePaymentCloseResult extends OnlinePaymentQueryResult {}
@@ -445,6 +447,39 @@ export class OnlinePaymentService {
     }
     if (!['created', 'pending'].includes(context.status)) {
       throw new OnlinePaymentUnavailableError('这笔付款已有明确结果，无需重复查单')
+    }
+    // A bound, verified success is durable evidence. An application failure is
+    // local recovery work; do not ask an unavailable channel to prove it again.
+    const saved = await this.transactions.run(input.scope, async (transaction) => {
+      const result = await transaction.query<{
+        id: string; provider_transaction_id: string; reported_amount_minor: string | number
+        reported_currency: string; settlement_channel: ProviderPaymentObservation['settlementChannel'] | null
+        occurred_at: string; business_date: string
+      }>(`
+        SELECT observation.id,provider_transaction_id,reported_amount_minor,reported_currency,
+          settlement_channel,occurred_at::text,
+          (((occurred_at AT TIME ZONE store.timezone)-store.business_day_cutoff)::date)::text AS business_date
+        FROM mbox.verified_provider_observations observation
+        JOIN mbox.stores store ON store.tenant_id=observation.tenant_id AND store.id=observation.store_id
+        WHERE observation.tenant_id=$1::uuid AND observation.store_id=$2::uuid AND payment_id=$3::uuid
+          AND provider='postar' AND verification_kind='active_query_binding'
+          AND integration_ref='postar-active-query' AND observed_status='payment_succeeded'
+          AND consumed_at IS NULL
+        ORDER BY recorded_at,observation.id LIMIT 1
+      `, [input.scope.tenantId,input.scope.storeId,input.paymentId])
+      return result.rows[0]
+    }, { readOnly: true })
+    if (saved !== undefined) {
+      return {
+        context, verifiedObservationId: saved.id, reusedVerifiedSuccess: true, businessDate: saved.business_date,
+        observation: {
+          paymentIntentId: context.publicId, providerTransactionId: saved.provider_transaction_id,
+          status: 'succeeded', amount: Number(saved.reported_amount_minor),
+          currency: saved.reported_currency, merchantId: this.config.merchantId,
+          occurredAt: saved.occurred_at,
+          ...(saved.settlement_channel === null ? {} : { settlementChannel: saved.settlement_channel }),
+        },
+      }
     }
     const observation = await queryPaymentWithUnknownBoundary(this.adapter, {
       paymentIntentId: context.publicId,

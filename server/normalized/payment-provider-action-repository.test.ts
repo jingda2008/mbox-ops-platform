@@ -48,6 +48,36 @@ describe('PaymentProviderActionRepository', () => {
     expect(calls[1]?.values[7]).toBe('error')
   })
 
+  it('retries applying verified success locally without an hourly provider backoff', async () => {
+    const calls: Array<{ text: string; values: readonly unknown[] }> = []
+    const transaction = {
+      scope: { tenantId, storeId },
+      query: async (text: string, values: readonly unknown[] = []) => {
+        calls.push({ text, values })
+        if (text.includes('SELECT state.phase')) {
+          return {
+            rows: [{
+              phase: 'released',
+              released_query_count: 4,
+              operationally_released: true,
+              tracking_window_expired: false,
+              recent_payment: true,
+            }],
+            rowCount: 1,
+          }
+        }
+        return { rows: [], rowCount: 1 }
+      },
+    } as unknown as ScopedTransaction
+
+    await new PaymentProviderActionRepository(transaction, secret)
+      .recordAutomaticPaymentQueryOutcome(paymentId, 'error', 'succeeded')
+
+    expect(calls[0]?.text).toContain("interval '24 hours' AS recent_payment")
+    expect(calls[1]?.values[5]).toBe('1 minute')
+    expect(calls[1]?.values[7]).toBe('error')
+  })
+
   it('lists only stale submitted Postar refunds for bounded background reconciliation', async () => {
     let capturedSql = ''
     let capturedValues: readonly unknown[] = []

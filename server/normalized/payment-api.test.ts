@@ -341,6 +341,22 @@ describe('paymentApiPlugin', () => {
     expect(query).not.toHaveBeenCalled()
   })
 
+  it.each([false,true])('keeps the provider-safe default payment number stable for the same retry (manual=%s)', async (manual) => {
+    const value = fixture({createPublicId:undefined})
+    for (const key of ['same-payment-operation','same-payment-operation','new-payment-operation']) {
+      const response = await value.app.inject({method:'POST',url:manual?'/api/payments/manual':'/api/payments',
+        headers:{'idempotency-key':key},payload:manual
+          ?{orderId,provider:'physical_pos',method:'card',receiptReference:'POS-RETRY-001',terminalId:'POS-01'}
+          :{orderId,provider:'postar',method:'jsapi'}})
+      expect(response.statusCode).toBe(201)
+    }
+    const [first,retry,next] = (manual?value.commands.recordManual.mock.calls:value.commands.initiate.mock.calls).map(call=>call[0])
+    expect(first!.publicId).toMatch(/^P[a-f0-9]{32}$/)
+    expect(retry!.publicId).toBe(first!.publicId)
+    expect(retry!.requestFingerprint).toBe(first!.requestFingerprint)
+    expect(next!.publicId).not.toBe(first!.publicId)
+  })
+
   it('initiates an online payment with a server-resolved actor and idempotency boundary', async () => {
     const value = fixture()
     const response = await value.app.inject({

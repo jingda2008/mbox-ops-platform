@@ -38,6 +38,22 @@ const config = {
 }
 
 describe('OnlinePaymentService payment query uncertainty boundary', () => {
+  it('reuses unconsumed verified success while the channel is unavailable', async () => {
+    const queryPayment = vi.fn().mockRejectedValue(new Error('channel offline'))
+    const recordPayment = vi.fn()
+    const service = new OnlinePaymentService(
+      runner({id:'saved-observation',provider_transaction_id:'POSTAR-SAVED',reported_amount_minor:'13600',
+        reported_currency:'CNY',settlement_channel:'wechat',occurred_at:'2026-09-06T15:41:00.000Z'}),
+      'test-secret-at-least-thirty-two-bytes', config,
+      {createPayment:vi.fn(),closePayment:vi.fn(),requestRefund:vi.fn(),queryRefund:vi.fn(),queryPayment},
+      {recordPayment,recordRefund:vi.fn()},
+    )
+    const result = await service.querySystem({scope,paymentId,queryBindingId:'local-recovery'})
+    expect(result).toMatchObject({verifiedObservationId:'saved-observation',observation:{status:'succeeded',amount:13600,settlementChannel:'wechat'}})
+    expect(queryPayment).not.toHaveBeenCalled()
+    expect(recordPayment).not.toHaveBeenCalled()
+  })
+
   it('does not append an immutable observation for an unchanged processing result', async () => {
     const recordPayment = vi.fn()
     const service = new OnlinePaymentService(
@@ -121,7 +137,7 @@ describe('OnlinePaymentService payment query uncertainty boundary', () => {
   })
 })
 
-function runner() {
+function runner(saved?: Record<string, unknown>) {
   const transaction: ScopedTransaction = {
     scope,
     query: async <Row extends Record<string, unknown>>(text: string) => {
@@ -129,6 +145,7 @@ function runner() {
       if (sql.startsWith('SELECT payment.id')) {
         return { rows: [paymentContext as Row], rowCount: 1 }
       }
+      if (sql.includes('FROM mbox.verified_provider_observations')) return { rows: saved ? [saved as Row] : [], rowCount: saved ? 1 : 0 }
       throw new Error(`Unexpected payment query: ${sql}`)
     },
   }

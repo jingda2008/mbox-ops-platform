@@ -97,11 +97,14 @@ function hasTableCollectionPermission(permissions: readonly string[]): boolean {
   return TABLE_COLLECTION_PERMISSIONS.some((permission) => permissions.includes(permission))
 }
 
-function tableFinancialLabel(state: StaffTableFinancialState): string {
+export function tableFinancialLabel(state: StaffTableFinancialState): string {
   if (state === 'payment_exception') return '支付异常'
   if (state === 'refund_pending') return '退款待办'
   if (state === 'payment_pending') return '支付确认中'
   if (state === 'unpaid') return '待支付'
+  if (state === 'refunded') return '已退款'
+  if (state === 'partially_refunded') return '已结清 · 含退款'
+  if (state === 'cancelled') return '已取消'
   if (state === 'paid') return '已结清'
   return '已开台'
 }
@@ -1001,8 +1004,9 @@ export function StaffActionsPanel({
                       disabled={pendingAction === `table:${table.id}`}
                     >
                       <strong>{table.code}</strong>
-                      <span>{table.activeSession === null ? `${table.capacity}人 · 空台` : `${table.activeSession.guestCount}人 · ${table.activeSession.status === 'closing' ? '结台中' : tableFinancialLabel(table.activeSession.financialState)}`}</span>
+                      <span>{table.activeSession === null ? `${table.capacity}人 · 空台` : `${table.activeSession.guestCount}人 · ${`${table.activeSession.status === 'closing' ? '结台中 · ' : ''}${tableFinancialLabel(table.activeSession.financialState)}`}`}</span>
                       {table.activeSession !== null && <em className="staff-table-spend">已点 ¥{((table.activeSession.orderAmountMinor??0)/100).toFixed(2)}</em>}
+                      {table.activeSession !== null && (table.activeSession.refundedAmountMinor ?? 0) > 0 && <em className="staff-table-financial-detail">已退 ¥{((table.activeSession.refundedAmountMinor ?? 0)/100).toFixed(2)} · 净收 ¥{((table.activeSession.netCollectedAmountMinor ?? 0)/100).toFixed(2)}</em>}
                       {table.activeSession !== null && (table.activeSession.unpaidOrderCount > 0 || table.activeSession.pendingPaymentCount > 0 || table.activeSession.refundAttentionCount > 0) && <em className="staff-table-financial-detail">{table.activeSession.unpaidOrderCount > 0 ? `${table.activeSession.unpaidOrderCount}笔未收` : ''}{table.activeSession.pendingPaymentCount > 0 ? `${table.activeSession.unpaidOrderCount > 0 ? ' · ' : ''}${table.activeSession.pendingPaymentCount}笔确认中` : ''}{table.activeSession.refundAttentionCount > 0 ? `${table.activeSession.unpaidOrderCount > 0 || table.activeSession.pendingPaymentCount > 0 ? ' · ' : ''}${table.activeSession.refundAttentionCount}笔${(table.activeSession.refundActionCount ?? table.activeSession.refundAttentionCount) > 0 ? '退款待办' : '退款核对中'}` : ''}</em>}
                       {hasFinancialAttention && <b className="staff-table-attention-badge" aria-label="支付或退款待办">!</b>}
                       {table.assignedToActor && <small>负责桌</small>}

@@ -44,13 +44,15 @@ export interface OperationsTableView {
       code: string
       occurredAt: string
     }
-    financialState: 'no_order' | 'unpaid' | 'payment_pending' | 'paid' | 'refund_pending' | 'payment_exception'
+    financialState: 'no_order' | 'unpaid' | 'payment_pending' | 'paid' | 'refunded' | 'partially_refunded' | 'cancelled' | 'refund_pending' | 'payment_exception'
     orderCount: number
     unpaidOrderCount: number
     pendingPaymentCount: number
     refundAttentionCount: number
     refundActionCount: number
     refundProcessingCount: number
+    refundedAmountMinor: number
+    netCollectedAmountMinor: number
     orderAmountMinor: number
     status: 'open' | 'closing'
     openedAt: string
@@ -118,13 +120,15 @@ interface TableRow extends Record<string, unknown> {
   guest_cart_writes_frozen: boolean | null
   mood_code: string | null
   mood_occurred_at: string | null
-  financial_state: 'no_order' | 'unpaid' | 'payment_pending' | 'paid' | 'refund_pending' | 'payment_exception'
+  financial_state: 'no_order' | 'unpaid' | 'payment_pending' | 'paid' | 'refunded' | 'partially_refunded' | 'cancelled' | 'refund_pending' | 'payment_exception'
   order_count: number | null
   unpaid_order_count: number | null
   pending_payment_count: number | null
   refund_attention_count: number | null
   refund_action_count: number | null
   refund_processing_count: number | null
+  refunded_amount_minor: string | number | null
+  gross_collected_minor: string | number | null
   order_amount_minor: string | number | null
   session_status: 'open' | 'closing' | null
   opened_at: string | null
@@ -244,7 +248,7 @@ async function readStaffAccess(
   }
 }
 
-async function readTables(
+export async function readTables(
   transaction: ScopedTransaction,
   employeeId: string,
   includeAllTables: boolean,
@@ -270,12 +274,15 @@ async function readTables(
         WHEN COALESCE(finance.refund_attention_count,0)>0 THEN 'refund_pending'
         WHEN COALESCE(finance.pending_payment_count,0)>0 THEN 'payment_pending'
         WHEN COALESCE(finance.unpaid_order_count,0)>0 THEN 'unpaid'
+        WHEN COALESCE(finance.refunded_amount_minor,0)>0 AND finance.refunded_amount_minor>=finance.gross_collected_minor THEN 'refunded'
+        WHEN COALESCE(finance.refunded_amount_minor,0)>0 THEN 'partially_refunded'
         WHEN COALESCE(finance.order_count,0)>0 THEN 'paid'
+        WHEN COALESCE(finance.cancelled_order_count,0)>0 THEN 'cancelled'
         ELSE 'no_order'
       END AS financial_state,
       finance.order_count,finance.unpaid_order_count,finance.pending_payment_count,
       finance.refund_attention_count,finance.refund_action_count,finance.refund_processing_count,
-      finance.order_amount_minor,
+      finance.order_amount_minor, finance.refunded_amount_minor, finance.gross_collected_minor,
       session.status AS session_status, session.opened_at::text
     FROM mbox.tables venue_table
     JOIN mbox.areas area
@@ -310,6 +317,18 @@ async function readTables(
         (SELECT count(*)::integer FROM mbox.orders ordering
           WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
             AND ordering.table_session_id=session.id AND ${orderNeedsCollectionSql('ordering')}) AS unpaid_order_count,
+        (SELECT count(*)::integer FROM mbox.orders ordering WHERE ordering.tenant_id=session.tenant_id
+          AND ordering.store_id=session.store_id AND ordering.table_session_id=session.id AND ordering.status='cancelled') AS cancelled_order_count,
+        (SELECT COALESCE(sum(payment.amount_minor),0)::bigint FROM mbox.order_payment_facts payment
+          JOIN mbox.orders ordering ON ordering.tenant_id=payment.tenant_id AND ordering.store_id=payment.store_id AND ordering.id=payment.order_id
+          WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id AND ordering.table_session_id=session.id
+            AND payment.status IN ('succeeded','partially_refunded','refunded')) AS gross_collected_minor,
+        (SELECT COALESCE(sum(refund.amount_minor),0)::bigint FROM mbox.refunds refund
+          JOIN mbox.order_payment_facts payment ON payment.tenant_id=refund.tenant_id AND payment.store_id=refund.store_id
+            AND payment.id=refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=payment.order_id)
+          JOIN mbox.orders ordering ON ordering.tenant_id=payment.tenant_id AND ordering.store_id=payment.store_id AND ordering.id=payment.order_id
+          WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id AND ordering.table_session_id=session.id
+            AND refund.status='succeeded') AS refunded_amount_minor,
         0::integer AS pending_payment_count,
         (SELECT count(*)::integer FROM mbox.refunds refund
           JOIN mbox.order_payment_facts payment ON payment.tenant_id=refund.tenant_id
@@ -496,6 +515,8 @@ function mapTable(row: TableRow): OperationsTableView {
       refundAttentionCount: row.refund_attention_count ?? 0,
       refundActionCount: row.refund_action_count ?? 0,
       refundProcessingCount: row.refund_processing_count ?? 0,
+      refundedAmountMinor: safeMinor(row.refunded_amount_minor),
+      netCollectedAmountMinor: Math.max(0, safeMinor(row.gross_collected_minor) - safeMinor(row.refunded_amount_minor)),
       orderAmountMinor: safeMinor(row.order_amount_minor),
       status: row.session_status!,
       openedAt: row.opened_at!,

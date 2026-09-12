@@ -43,10 +43,12 @@ export interface StaffActionTableSession {
   refundAttentionCount: number
   refundActionCount?: number
   refundProcessingCount?: number
+  refundedAmountMinor?: number
+  netCollectedAmountMinor?: number
   orderAmountMinor?: number
 }
 
-export type StaffTableFinancialState = 'no_order' | 'unpaid' | 'payment_pending' | 'paid' | 'refund_pending' | 'payment_exception'
+export type StaffTableFinancialState = 'no_order' | 'unpaid' | 'payment_pending' | 'paid' | 'refunded' | 'partially_refunded' | 'cancelled' | 'refund_pending' | 'payment_exception'
 
 export interface StaffActionTable {
   id: string
@@ -250,6 +252,7 @@ export type StaffTableOrderItemFulfillmentStatus =
 
 export interface StaffTableOrderDetail {
   publicId: string
+  paymentStatus?: string
   items: Array<{
     id: string
     productName: string
@@ -257,6 +260,7 @@ export interface StaffTableOrderDetail {
     unitPriceMinor?: number
     totalAmountMinor?: number
     includedInBundle?: boolean
+    refundedAmountMinor?: number
     fulfillmentStation: FulfillmentStation | 'none'
     fulfillmentStatus: StaffTableOrderItemFulfillmentStatus
   }>

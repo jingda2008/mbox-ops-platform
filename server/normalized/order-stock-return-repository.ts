@@ -8,6 +8,8 @@ export class OrderStockReturnRepository {
   if(!['unmade','returned_unopened'].includes(input.disposition)||input.reason.trim().length<3||input.reason.length>1000)throw new InventoryConflictError('请选择退库原因并填写说明')
   if(input.disposition==='returned_unopened'&&!input.unopenedConfirmed)throw new InventoryConflictError('必须确认商品未开封且已实际退回')
   const scope=[this.tx.scope.tenantId,this.tx.scope.storeId]
+  // Match production/refund task -> item ordering to avoid a lock inversion.
+  await this.tx.query(`SELECT id FROM mbox.kds_tasks WHERE tenant_id=$1 AND store_id=$2 AND order_item_id=$3 ORDER BY id FOR UPDATE`,[...scope,input.orderItemId])
   // All returns for an item serialize here; never infer units from refund money.
   const item=(await this.tx.query<{id:string;order_id:string;quantity:number;status:string}>(`
    SELECT id,order_id,quantity,status FROM mbox.order_items WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE`,[...scope,input.orderItemId])).rows[0]
@@ -20,7 +22,8 @@ export class OrderStockReturnRepository {
   if(redemption)throw new InventoryConflictError('积分兑换商品须使用兑换恢复流程，不能重复退库')
   const tasks=await this.tx.query<{status:string;accepted_at:string|null;ready_at:string|null}>(`
    SELECT status,accepted_at,ready_at FROM mbox.kds_tasks WHERE tenant_id=$1 AND store_id=$2 AND order_item_id=$3 ORDER BY id FOR UPDATE`,[...scope,item.id])
-  if(input.disposition==='unmade'&&(item.status!=='cancelled'||tasks.rows.some(task=>task.accepted_at!==null||task.ready_at!==null||!['cancelled','failed'].includes(task.status))))throw new InventoryConflictError('未制作退库须先停止出品；已有制作记录不能自动恢复原料')
+  const started=(await this.tx.query<{started:boolean}>(`SELECT EXISTS(SELECT 1 FROM mbox.kds_tasks t JOIN mbox.kds_task_events e ON e.tenant_id=t.tenant_id AND e.store_id=t.store_id AND e.kds_task_id=t.id WHERE t.tenant_id=$1 AND t.store_id=$2 AND t.order_item_id=$3 AND (e.from_status IN ('preparing','ready') OR e.to_status IN ('preparing','ready'))) AS started`,[...scope,item.id])).rows[0]?.started
+  if(input.disposition==='unmade'&&(started||item.status!=='cancelled'||tasks.rows.some(task=>task.ready_at!==null||!['cancelled','failed'].includes(task.status))))throw new InventoryConflictError('未制作退库须先停止出品；已有制作记录不能自动恢复原料')
   if(input.disposition==='returned_unopened'&&!['delivered','cancelled'].includes(item.status))throw new InventoryConflictError('商品仍在履约中，请先核对送达或停止出品，不能边制作边退库')
   const previous=Number((await this.tx.query<{quantity:string}>(`SELECT COALESCE(sum(quantity),0)::text AS quantity FROM mbox.order_stock_returns WHERE tenant_id=$1 AND store_id=$2 AND order_item_id=$3`,[...scope,item.id])).rows[0]!.quantity)
   if(previous+input.quantity>item.quantity)throw new InventoryConflictError('累计退回数量超过原商品数量')

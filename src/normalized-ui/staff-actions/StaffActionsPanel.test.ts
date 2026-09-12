@@ -2,12 +2,19 @@ import { createElement } from 'react'
 import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import { ActionList, filterMemberBenefitTasks, memberBenefitTaskCount, normalizeMemberBenefitScanCode, prioritizeActionFact, splitReservationLoadResults, StaffActionsPanel } from './StaffActionsPanel'
+import { tableFinancialLabel, ActionList, filterMemberBenefitTasks, memberBenefitTaskCount, normalizeMemberBenefitScanCode, prioritizeActionFact, splitReservationLoadResults, StaffActionsPanel } from './StaffActionsPanel'
 import { ConfirmationDialogProvider } from '../ConfirmationDialog'
 import type { StaffActionsApiPort } from './staff-actions-api'
 import type { StaffFulfillmentData, StaffOperationsData, StaffReservation } from './types'
 
 describe('StaffActionsPanel', () => {
+  it('distinguishes confirmed refunds from a settled bill', () => {
+    expect(tableFinancialLabel('refunded')).toBe('已退款')
+    expect(tableFinancialLabel('partially_refunded')).toBe('已结清 · 含退款')
+    expect(tableFinancialLabel('cancelled')).toBe('已取消')
+    expect(tableFinancialLabel('unpaid')).toBe('待支付')
+    expect(tableFinancialLabel('paid')).toBe('已结清')
+  })
   it('keeps the final paid-order confirmation as a flat WeChat-green action', () => {
     const css = readFileSync(new URL('./staff-actions-panel.css', import.meta.url), 'utf8')
     const rule = css.match(/\.staff-order-sheet \.menu-cart-drawer-footer > \.menu-submit-button:not\(:disabled\) \{([^}]+)\}/)?.[1]

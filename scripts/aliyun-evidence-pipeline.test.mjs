@@ -310,7 +310,6 @@ test('selective collection is outside the request path and only three stores can
   assert.match(collector, /mboxAuditEvent:"container_started"/)
   assert.match(sender, /runtime-errors\|payment-audit\|release-audit/)
   assert.match(sender, /for logstore in runtime-errors payment-audit release-audit/)
-  assert.match(sender, /payload_list=.*jq -cs 'map\(tojson\)'/)
   assert.match(sender, /--logs "\$\{payload_list\}"/)
   assert.match(collector, /cp "\$\{merged\}" "\$\{queue_file\}"[\s\S]*printf '%s\\n' "\$\{now\}" > "\$\{cursor_file\}"/)
   assert.match(collector, /cp "\$\{remainder\}" "\$\{queue_file\}"/)
@@ -693,6 +692,31 @@ test('SLS accepts strictly formatted digests with numeric runs and retains fract
       const invalid = spawnSync('bash', [new URL('../deploy/aliyun/send-sls-events.sh', import.meta.url).pathname, input], { encoding: 'utf8', env })
       assert.notEqual(invalid.status, 0)
     }
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('SLS chunks encoded log arguments below the Linux per-argument limit without losing events', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mbox-sls-chunks-'))
+  try {
+    const input = join(directory, 'input')
+    const capture = join(directory, 'capture')
+    await writeFile(join(directory, 'aliyun'), '#!/bin/sh\nwhile [ "$#" -gt 0 ]; do if [ "$1" = "--logs" ]; then shift; printf "%s\\n" "$1" >> "$CAPTURE"; exit 0; fi; shift; done\nexit 1\n', { mode: 0o700 })
+    const events = Array.from({ length: 180 }, (_, index) => ({
+      timestamp: '2026-09-12T00:00:00Z', logstore: 'payment-audit', eventType: 'payment_reconciliation_failed', severity: 'error',
+      paymentRef: `P${index}`, code: 'a'.repeat(90), requestId: 'b'.repeat(90),
+      route: `/${'c'.repeat(240)}`, errorLocation: `/server/${'d'.repeat(480)}`, stage: 'query_provider',
+    }))
+    await writeFile(input, `${events.map(event => JSON.stringify(event)).join('\n')}\n`)
+    const result = spawnSync('bash', [new URL('../deploy/aliyun/send-sls-events.sh', import.meta.url).pathname, input], {
+      encoding: 'utf8', env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, CAPTURE: capture, MBOX_SLS_DRY_RUN: '0' },
+    })
+    assert.equal(result.status, 0, result.stderr)
+    const batches = (await readFile(capture, 'utf8')).trim().split('\n')
+    assert.ok(batches.length > 1)
+    assert.ok(batches.every(batch => Buffer.byteLength(batch) <= 60000))
+    assert.deepEqual(batches.flatMap(batch => JSON.parse(batch).map(value => JSON.parse(value).paymentRef)), events.map(event => event.paymentRef))
   } finally {
     await rm(directory, { recursive: true, force: true })
   }

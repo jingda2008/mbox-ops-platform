@@ -16,7 +16,8 @@ test -f "${input}"
 
 sent=0
 sanitized_input=$(mktemp)
-trap 'rm -f "${sanitized_input}"' EXIT
+payload_batches=$(mktemp)
+trap 'rm -f "${sanitized_input}" "${payload_batches}"' EXIT
 : > "${sanitized_input}"
 while IFS= read -r event; do
   [ -n "${event}" ] || continue
@@ -98,14 +99,22 @@ for logstore in runtime-errors payment-audit release-audit; do
     # aliyun-cli-sls 0.7.4 declares --logs as a list. Its parser expects one
     # JSON array whose members are JSON-encoded log strings, even though the
     # generated help shows repeated object arguments.
-    payload_list=$(printf '%s\n' "${payloads[@]}" | jq -cs 'map(tojson)')
-    aliyun --profile "${profile}" sls put-json-logs \
-      --endpoint "${endpoint}" \
-      --project "${project}" \
-      --logstore "${logstore}" \
-      --topic mbox-selective-audit \
-      --source ecs-validation \
-      --logs "${payload_list}" >/dev/null
+    # Linux limits each argument independently, below the collector's 512 KiB
+    # input cap. Bound the actual encoded UTF-8 --logs argument per request.
+    printf '%s\n' "${payloads[@]}" | jq -cs '
+      map(tojson) | reduce .[] as $item ([[]];
+        if ($item | tojson | utf8bytelength) > 59998 then error("SLS event exceeds argument limit")
+        elif ((.[-1] + [$item]) | tojson | utf8bytelength) > 60000 then . + [[$item]]
+        else .[-1] += [$item] end) | .[]' > "${payload_batches}"
+    while IFS= read -r payload_list; do
+      aliyun --profile "${profile}" sls put-json-logs \
+        --endpoint "${endpoint}" \
+        --project "${project}" \
+        --logstore "${logstore}" \
+        --topic mbox-selective-audit \
+        --source ecs-validation \
+        --logs "${payload_list}" >/dev/null
+    done < "${payload_batches}"
   fi
 done
 printf 'sls_send=%s\nevents=%s\nproject=%s\nendpoint=%s\n' "$([ "${dry_run}" = 1 ] && echo dry-run || echo complete)" "${sent}" "${project}" "${endpoint}"

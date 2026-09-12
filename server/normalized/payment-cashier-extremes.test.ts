@@ -1,5 +1,5 @@
 import { OnlinePaymentService } from './online-payment-service.js'
-import { reconcileStalePendingOnlinePayment } from './pending-online-payment-reconciliation.js'
+import { applyProviderQueryObservation, reconcileStalePendingOnlinePayment } from './pending-online-payment-reconciliation.js'
 import {historicalPaymentDisplayAllowlist,repairHistoricalPaymentDisplays} from '../../scripts/repair-five-historical-payment-displays.mjs'
 import Fastify from 'fastify'
 import {paymentFinanceApiPlugin} from './payment-finance-api.js'
@@ -564,7 +564,14 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
     await expect(reconcileStalePendingOnlinePayment({onlinePayments,commands:recoveryCommands},context,payment.id,'recover-attempt-1')).rejects.toThrow('Verified payment success could not be applied')
     expect((await pool.query('SELECT count(*)::int count FROM mbox.reconciliation_entries WHERE payment_id=$1',[payment.id])).rows[0].count).toBe(0)
     expect((await pool.query('SELECT consumed_at FROM mbox.verified_provider_observations WHERE id=$1',[observationId])).rows[0].consumed_at).toBeNull()
-    expect(await reconcileStalePendingOnlinePayment({onlinePayments,commands:recoveryCommands},context,payment.id,'recover-attempt-2')).toBe(true)
+    const [firstReader, secondReader] = await Promise.all([
+      onlinePayments.querySystem({scope:{tenantId,storeId},paymentId:payment.id,queryBindingId:'recover-reader-one'}),
+      onlinePayments.querySystem({scope:{tenantId,storeId},paymentId:payment.id,queryBindingId:'recover-reader-two'}),
+    ])
+    await Promise.all([
+      applyProviderQueryObservation(recoveryCommands,context,firstReader,'recover-attempt-2'),
+      applyProviderQueryObservation(recoveryCommands,context,secondReader,'recover-attempt-3'),
+    ])
     expect((await financialSnapshot(pool,fixture.orderId)).payment_status).toBe('paid')
     expect((await pool.query('SELECT count(*)::int count,sum(amount_minor)::text amount FROM mbox.reconciliation_entries WHERE payment_id=$1',[payment.id])).rows[0]).toEqual({count:1,amount:'138000'})
     expect((await pool.query('SELECT consumed_at FROM mbox.verified_provider_observations WHERE id=$1',[observationId])).rows[0].consumed_at).not.toBeNull()

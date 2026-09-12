@@ -1,4 +1,4 @@
-import { safePaymentErrorCode } from './pending-online-payment-reconciliation.js'
+import { safePaymentErrorCode, safePaymentErrorLocation } from './pending-online-payment-reconciliation.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { Transform } from 'node:stream'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
@@ -597,7 +597,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
         occurredAt: readTimestamp(verified.occurredAt, 'occurredAt'),
       }).catch((error: unknown) => {
         reply.log.error({event:'verified_payment_callback_apply_failed',paymentPublicId:verified.paymentPublicId,
-          verifiedObservationId,errorCode:safePaymentErrorCode(error)}, 'Verified payment callback could not be applied')
+          verifiedObservationId,errorCode:safePaymentErrorCode(error),errorLocation:safePaymentErrorLocation(error)}, 'Verified payment callback could not be applied')
         throw error
       })
       return reply.send(providerAcknowledgement())
@@ -1533,7 +1533,7 @@ async function handleRoute(
   } catch (error) {
     const mapped = mapError(error)
     if (mapped.statusCode >= 500) reply.log.error({
-      event: 'payment_command_failed', errorCode: safePaymentErrorCode(error),
+      event: 'payment_command_failed', errorCode: safePaymentErrorCode(error),errorLocation:safePaymentErrorLocation(error),
     }, 'Payment command failed; verified evidence remains available for reconciliation')
     return reply.code(mapped.statusCode).send(mapped.body)
   }

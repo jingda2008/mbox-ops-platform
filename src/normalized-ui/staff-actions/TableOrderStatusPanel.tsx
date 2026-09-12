@@ -103,11 +103,11 @@ export function TableOrderStatusPanel({ api, table }: TableOrderStatusPanelProps
             {error !== null && <OrderDetailsErrorNotice error={error} copied={referenceCopied} onCopy={copyReference} />}
             <div className="staff-table-order-status-list">
               {orders.map((order) => <article key={order.publicId}>
-                <header><strong title={order.publicId}>{shortOrderLabel(order.publicId)}</strong><small>{order.items.length} 个商品</small></header>
+                <header><strong title={order.publicId}>{shortOrderLabel(order.publicId)}</strong><small>{order.paymentStatus === 'refunded' ? '已退款 · ' : order.paymentStatus === 'partially_refunded' ? '含退款 · ' : ''}{order.items.length} 个商品</small></header>
                 {order.items.map((item) => {
                   const status = STATUS_PRESENTATION[item.fulfillmentStatus]
                   return <div className="staff-table-order-status-item" key={item.id}>
-                    <span><strong>{item.productName}</strong><small>{stationLabel(item.fulfillmentStation)} · {status.detail}</small><small>{item.includedInBundle ? '已含套餐，不另收费' : item.unitPriceMinor !== undefined && item.totalAmountMinor !== undefined ? `单价 ¥${(item.unitPriceMinor/100).toFixed(2)} · 小计 ¥${(item.totalAmountMinor/100).toFixed(2)}` : '成交金额暂未读取'}</small></span>
+                    <span><strong>{item.productName}</strong><small>{stationLabel(item.fulfillmentStation)} · {status.detail}</small><small>{item.includedInBundle ? '已含套餐，不另收费' : item.unitPriceMinor !== undefined && item.totalAmountMinor !== undefined ? `单价 ¥${(item.unitPriceMinor/100).toFixed(2)} · 小计 ¥${(item.totalAmountMinor/100).toFixed(2)}` : '成交金额暂未读取'}</small>{(item.refundedAmountMinor ?? 0)>0 && <small>已退 ¥{((item.refundedAmountMinor ?? 0)/100).toFixed(2)}</small>}</span>
                     <b>×{item.quantity}</b>
                     <em className={status.className}>{status.label}</em>
                   </div>

@@ -717,3 +717,6 @@
   .staff-recommendation-sheet { max-height: 96dvh; }
   .staff-recommendation-body { max-height: calc(96dvh - 66px); padding-inline: 10px; }
 }
+
+.staff-table-tile.is-financial-refunded, .staff-table-tile.is-financial-cancelled { border-color: #8b9891; background: #edf1ee; }
+.staff-table-tile.is-financial-partially_refunded { border-color: #4c956f; background: #eef5ef; }

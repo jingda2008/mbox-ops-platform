@@ -236,6 +236,7 @@ export type StaffTableOrderItemFulfillmentStatus =
 
 export interface StaffTableOrderDetailView {
   publicId: string
+  paymentStatus?: string
   items: Array<{
     id: string
     productName: string
@@ -243,6 +244,7 @@ export interface StaffTableOrderDetailView {
     unitPriceMinor?: number
     totalAmountMinor?: number
     includedInBundle?: boolean
+    refundedAmountMinor?: number
     fulfillmentStation: 'bar' | 'kitchen' | 'cashier' | 'none'
     fulfillmentStatus: StaffTableOrderItemFulfillmentStatus
   }>
@@ -253,6 +255,8 @@ interface StaffTableOrderDetailRow extends Record<string, unknown> {
   order_public_id: string
   order_status: string
   order_fulfillment_state: string
+  order_payment_status: string
+  refunded_amount_minor: string | number
   item_id: string
   product_name: string
   quantity: string | number
@@ -272,6 +276,11 @@ export async function listTableOrderDetailsForSession(
   const result = await transaction.query<StaffTableOrderDetailRow>(`
     SELECT order_header.id AS order_id,order_header.public_id AS order_public_id,
       order_header.status AS order_status,order_header.fulfillment_state AS order_fulfillment_state,
+      order_header.payment_status AS order_payment_status,
+      COALESCE((SELECT sum(ri.amount_minor) FROM mbox.refund_items ri JOIN mbox.refunds r
+        ON r.tenant_id=ri.tenant_id AND r.store_id=ri.store_id AND r.id=ri.refund_id
+        WHERE ri.tenant_id=item.tenant_id AND ri.store_id=item.store_id AND ri.order_item_id=item.id
+          AND r.status='succeeded'),0) AS refunded_amount_minor,
       item.id AS item_id,
       COALESCE(NULLIF(item.product_snapshot->>'name',''),product.name,'商品') AS product_name,
       item.quantity,item.unit_price_minor,item.total_amount_minor,item.parent_order_item_id,item.fulfillment_station,item.status AS item_status,kds.status AS kds_status
@@ -299,13 +308,15 @@ export async function listTableOrderDetailsForSession(
       LIMIT 1
     ) kds ON true
     WHERE order_header.tenant_id=$1::uuid AND order_header.store_id=$2::uuid
-      AND order_header.table_session_id=$3::uuid AND order_header.status NOT IN ('draft','cancelled')
+      AND order_header.table_session_id=$3::uuid AND order_header.status<>'draft'
+      AND (order_header.status<>'cancelled' OR order_header.payment_status IN ('refunded','partially_refunded'))
     ORDER BY order_header.created_at DESC,order_header.id DESC,item.created_at,item.id
   `, [transaction.scope.tenantId, transaction.scope.storeId, tableSessionId])
   const orders = new Map<string, StaffTableOrderDetailView>()
   for (const row of result.rows) {
     const order = orders.get(row.order_id) ?? {
       publicId: row.order_public_id,
+      paymentStatus: row.order_payment_status,
       items: [],
     }
     order.items.push({
@@ -315,6 +326,7 @@ export async function listTableOrderDetailsForSession(
       unitPriceMinor: row.unit_price_minor == null ? undefined : Number(row.unit_price_minor),
       totalAmountMinor: row.total_amount_minor == null ? undefined : Number(row.total_amount_minor),
       includedInBundle: row.parent_order_item_id != null,
+      refundedAmountMinor: row.refunded_amount_minor == null ? undefined : Number(row.refunded_amount_minor),
       fulfillmentStation: row.fulfillment_station,
       fulfillmentStatus: tableOrderItemFulfillmentStatus(row),
     })

@@ -1,3 +1,4 @@
+import { RefundFulfillmentRepository } from './refund-fulfillment-repository.js'
 import type {
   AuditActor,
   CommandExecution,
@@ -957,6 +958,7 @@ export class PaymentCommandService {
             })
             await new ExperiencePlanActivationRepository(transaction)
               .cancelAfterFullRefund(refund.orderId,refund.paymentId)
+            await new RefundFulfillmentRepository(transaction).synchronize(refund.orderId, refund.id)
           }
         }
       }
@@ -1028,6 +1030,7 @@ export class PaymentCommandService {
             })
             await new ExperiencePlanActivationRepository(transaction)
               .cancelAfterFullRefund(refund.orderId,refund.paymentId)
+            await new RefundFulfillmentRepository(transaction).synchronize(refund.orderId, refund.id)
           }
         }
       }

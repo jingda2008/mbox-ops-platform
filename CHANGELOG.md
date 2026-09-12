@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0-rc.191 - 2026-09-12
+
+- Stop fully refunded, unstarted order items and return their evidenced reserved or consumed inventory exactly once. Preserve started production and partial-amount refund boundaries.
+- Show full and partial refunds with refunded and net collected amounts on staff tables, retaining refunded item history and prioritizing real outstanding orders.
+- Align physical-return locks with production and check actual preparation history instead of treating acceptance as material consumption.
+
 ## 1.0.0-rc.190 - 2026-09-12
 
 - Preserve cashier finance-case management through release provisioning by updating the versioned store defaults.

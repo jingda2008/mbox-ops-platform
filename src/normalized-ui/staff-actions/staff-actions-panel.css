@@ -723,3 +723,6 @@
 
 .staff-payment-pinned-total { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 12px; background: #fff; border-bottom: 2px solid #07c160; }
 .staff-payment-pinned-total strong { font-size: 20px; overflow-wrap: anywhere; }
+
+.staff-fulfillment-field { display: grid; gap: 5px; min-width: 0; }
+.staff-fulfillment-field input { min-width: 44px; min-height: 44px; max-width: 100%; box-sizing: border-box; padding: 0 10px; border: 1px solid var(--staff-line); border-radius: 6px; font: inherit; }

@@ -103,3 +103,26 @@ grep -qx 'MBOX_WECHAT_APP_SECRET=wechat-secret-value' "${postar_env_file}"
 grep -qx 'MBOX_WECHAT_SERVICE_TEMPLATE_ID=wechat-template-001' "${postar_env_file}"
 grep -qx 'MBOX_ALIPAY_APP_ID=2021006196615276' "${postar_env_file}"
 grep -qx 'MBOX_ALIPAY_AES_KEY=alipay-aes-key-16' "${postar_env_file}"
+
+# Release normalization must preserve the explicit aftersales rollout decision.
+# Missing means the runtime default, and invalid values must reach the runtime
+# validator instead of being silently erased into a disabled feature.
+for tier in validation production; do
+  for value in missing true false typo; do
+    cp "${postar_env_file}" "${env_file}"
+    if [ "${value}" != missing ]; then
+      printf 'MBOX_QUANTITY_AFTER_SALES_ENABLED=%s\n' "${value}" >> "${env_file}"
+    fi
+    for pass in 1 2; do
+      "${root}/deploy/aliyun/normalize-runtime-env.sh" "${env_file}" "${tier}"
+      if [ "${value}" = missing ]; then
+        ! grep -q '^MBOX_QUANTITY_AFTER_SALES_ENABLED=' "${env_file}"
+      else
+        grep -qx "MBOX_QUANTITY_AFTER_SALES_ENABLED=${value}" "${env_file}"
+        test "$(grep -c '^MBOX_QUANTITY_AFTER_SALES_ENABLED=' "${env_file}")" = 1
+      fi
+      grep -qx 'POSTAR_MERCHANT_ID=merchant' "${env_file}"
+      grep -qx 'MBOX_GUEST_PAYMENT_MODE=wechat_native_qr' "${env_file}"
+    done
+  done
+done

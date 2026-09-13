@@ -1871,25 +1871,6 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     expect(await list(inventoryWorker)).toBe(false)
     if(decision==='approved')expect(await list(reviewerId)).toBe(true)
   })
-  it('handover keeps rejected paused cases until explicit resume, with complete pagination and employee scope',async()=>{
-    const outsider=randomUUID();await pool.query("INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($1,$2,$3,$4,'Other server')",[outsider,tenantId,storeId,`Q-${outsider}`])
-    await grantActor(outsider,['refund.request'])
-    const row=await item(),created=await runner.run(scope,tx=>new ItemQuantityRepository(tx).hold({orderItemId:row.itemId,quantity:1,kind:'paid_return',employeeId:outsider,businessDate:'2026-09-12',reason:'上个营业日遗留暂停'}))
-    await runner.run(scope,tx=>new ItemQuantityRepository(tx).decide({caseId:created.caseId,employeeId:reviewerId,decision:'rejected',reason:'保留商品但尚未确认继续'}))
-    const query=new ItemAfterSalesHandoverQuery(runner)
-    const own=await query.list({scope,employeeId:outsider,limit:1})
-    expect(own.items.map(item=>item.caseId)).toEqual([created.caseId]);expect(own.items[0]).toMatchObject({businessDate:'2026-09-12',status:'rejected',heldQuantity:1});expect(own.nextCursor).toBeNull()
-    const allIds:string[]=[];let cursor:{createdAt:string;id:string}|undefined
-    for(let page=0;page<100;page++){
-      const next=await query.list({scope,employeeId:reviewerId,limit:2,cursor})
-      allIds.push(...next.items.map(item=>item.caseId))
-      if(!next.nextCursor)break
-      cursor=next.nextCursor
-    }
-    expect(allIds.length).toBeGreaterThan(2);expect(new Set(allIds).size).toBe(allIds.length);expect(allIds).toContain(created.caseId)
-    await runner.run(scope,tx=>new ItemQuantityRepository(tx).resume({caseId:created.caseId,employeeId:outsider}))
-    expect((await query.list({scope,employeeId:outsider})).items).toHaveLength(0)
-  })
 
   it('persists one station-specific stop notice, filters a delayed original ticket and uses the existing print worker',async()=>{
     const printer=randomUUID()

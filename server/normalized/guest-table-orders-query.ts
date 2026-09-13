@@ -1,6 +1,8 @@
+import {orderReceivableSql} from './order-collection-sql.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
 export interface GuestTableOrderItemView {
+  progressText?:string
   note?: string | null
   id: string
   productId: string
@@ -8,11 +10,14 @@ export interface GuestTableOrderItemView {
   quantity: number
   unitPriceMinor: number
   totalAmountMinor: number
-  components: { name: string; quantity: number }[]
+  components: { name: string; quantity: number; progressText?:string }[]
   status: 'submitted' | 'accepted' | 'preparing' | 'ready' | 'delivered' | 'cancelled'
 }
 
 export interface GuestTableOrderView {
+  receivableReductionMinor?:number
+  receivableIncreaseMinor?:number
+  settlementReviewRequired?:boolean
   publicId: string
   tableCode?: string
   businessDate?: string
@@ -37,6 +42,9 @@ export interface GuestTableOrderView {
 }
 
 interface GuestTableOrderRow extends Record<string, unknown> {
+  receivable_reduction_minor?:string|number
+  has_unresolved_unpaid_stop?:boolean
+  quantity_facts?:GuestQuantityFacts|null
   item_note: string | null
   public_id: string
   round_number: number
@@ -106,12 +114,21 @@ async function loadOrderDetails(transaction: ScopedTransaction, tableSessionId: 
         ordering.payment_status, ordering.created_by_customer_id,
         ordering.created_at, ordering.currency, ordering.total_amount_minor,
         ordering.subtotal_amount_minor, ordering.discount_amount_minor,
+        ordering.total_amount_minor-(${orderReceivableSql('ordering')}) AS receivable_reduction_minor,
+        EXISTS(SELECT 1 FROM mbox.item_after_sales_cases pending_stop
+          WHERE pending_stop.tenant_id=ordering.tenant_id AND pending_stop.store_id=ordering.store_id AND pending_stop.order_id=ordering.id
+            AND COALESCE(pending_stop.resolved_kind,pending_stop.kind)='unpaid_stop'
+            AND NOT EXISTS(SELECT 1 FROM mbox.item_receivable_adjustment_facts adjustment
+              WHERE adjustment.tenant_id=pending_stop.tenant_id AND adjustment.store_id=pending_stop.store_id AND adjustment.case_id=pending_stop.id)
+            AND EXISTS(SELECT 1 FROM mbox.order_item_quantity_units unit
+              WHERE unit.tenant_id=pending_stop.tenant_id AND unit.store_id=pending_stop.store_id
+                AND (unit.held_by_case_id=pending_stop.id OR unit.stopped_by_case_id=pending_stop.id))) AS has_unresolved_unpaid_stop,
         (SELECT max(payment.succeeded_at) FROM mbox.order_payment_facts payment
          WHERE payment.tenant_id=ordering.tenant_id AND payment.store_id=ordering.store_id
            AND payment.order_id=ordering.id AND payment.status IN ('succeeded','partially_refunded','refunded')) AS paid_at,
         COALESCE(pricing_authorization.kind, 'none') AS pricing_kind,
         GREATEST(
-          ordering.total_amount_minor
+          ${orderReceivableSql('ordering')}
           - COALESCE((
               SELECT SUM(payment.amount_minor)
               FROM mbox.order_payment_facts payment
@@ -159,6 +176,7 @@ async function loadOrderDetails(transaction: ScopedTransaction, tableSessionId: 
       SELECT ordering.*,
         CASE
           WHEN $3::uuid IS NULL OR ordering.status='cancelled' THEN 'not_required'
+          WHEN ordering.has_unresolved_unpaid_stop THEN 'status_review'
           WHEN ordering.payable_amount_minor = 0 THEN 'not_required'
           -- A completed refund is not a public invitation to charge again.
           -- Only a live, cashier-issued recollection authorization may expose
@@ -207,12 +225,13 @@ async function loadOrderDetails(transaction: ScopedTransaction, tableSessionId: 
       ordering.created_at::text AS order_created_at,
       ordering.paid_at::text,ordering.total_amount_minor::text,
       ordering.subtotal_amount_minor::text,ordering.discount_amount_minor::text,
-      ordering.payment_status, ordering.payment_access,
+      ordering.payment_status, ordering.payment_access,ordering.receivable_reduction_minor::text,ordering.has_unresolved_unpaid_stop,
       ordering.payable_amount_minor::text, ordering.currency, ordering.pricing_kind,
       item.product_id, COALESCE(NULLIF(item.product_snapshot ->> 'name', ''), product.name) AS product_name,
       item.id AS item_id, item.quantity, item.status AS item_status, item.note AS item_note,
       item.unit_price_minor::text, item.total_amount_minor::text AS item_total_amount_minor,
-      COALESCE((SELECT jsonb_agg(jsonb_build_object('name',child.product_snapshot->>'name','quantity',child.quantity)
+      ${guestQuantityFactsSql('item')} AS quantity_facts,
+      COALESCE((SELECT jsonb_agg(jsonb_build_object('name',child.product_snapshot->>'name','quantity',child.quantity,'quantity_facts',${guestQuantityFactsSql('child')})
         ORDER BY child.created_at,child.id) FROM mbox.order_items child
         WHERE child.tenant_id=item.tenant_id AND child.store_id=item.store_id
           AND child.order_id=item.order_id AND child.parent_order_item_id=item.id), '[]'::jsonb) AS components
@@ -248,6 +267,8 @@ async function loadOrderDetails(transaction: ScopedTransaction, tableSessionId: 
         totalAmountMinor: safeMinor(row.total_amount_minor),
         subtotalAmountMinor: safeMinor(row.subtotal_amount_minor),
         discountAmountMinor: safeMinor(row.discount_amount_minor),
+        ...(row.receivable_reduction_minor===undefined?{}:{receivableReductionMinor:Math.max(0,Number(row.receivable_reduction_minor)),...(Number(row.receivable_reduction_minor)<0?{receivableIncreaseMinor:safeMinor(-Number(row.receivable_reduction_minor))}:{})}),
+        ...(row.has_unresolved_unpaid_stop===undefined?{}:{settlementReviewRequired:row.has_unresolved_unpaid_stop}),
         paymentStatus: row.payment_status,
         paymentAccess: row.payment_access,
         payableAmountMinor: row.payment_access==='status_review'||row.payment_access==='not_required'||row.order_status==='cancelled'?0:safeMinor(row.payable_amount_minor),
@@ -268,11 +289,35 @@ async function loadOrderDetails(transaction: ScopedTransaction, tableSessionId: 
       quantity: Number(row.quantity),
       unitPriceMinor: safeMinor(row.unit_price_minor),
       totalAmountMinor: safeMinor(row.item_total_amount_minor),
-      components: row.components,
+      components: row.components.map(component=>({name:component.name,quantity:component.quantity,...quantityProgress((component as typeof component&{quantity_facts?:GuestQuantityFacts|null}).quantity_facts)})),
+      ...quantityProgress(row.quantity_facts),
       status: row.item_status,
     })
   }
   return [...orders.values()]
+}
+
+interface GuestQuantityFacts {remakePreparing?:number;remakeReady?:number;remakeDelivered?:number;remakePending?:number;redelivery?:number;total:number;held:number;stopped:number;preparing:number;ready:number;delivered:number}
+function guestQuantityFactsSql(item:'item'|'child'){
+  return `(SELECT CASE WHEN count(*)>0 THEN jsonb_build_object('total',count(*),
+    'held',count(*) FILTER(WHERE unit.held_by_case_id IS NOT NULL AND NOT unit.operationally_stopped),
+    'stopped',count(*) FILTER(WHERE unit.operationally_stopped),
+    'preparing',count(*) FILTER(WHERE latest.id IS NULL AND unit.production_state IN ('unmade','started') AND unit.held_by_case_id IS NULL AND NOT unit.operationally_stopped),
+    'ready',count(*) FILTER(WHERE latest.id IS NULL AND unit.production_state='ready' AND unit.held_by_case_id IS NULL AND NOT unit.operationally_stopped),
+    'delivered',count(*) FILTER(WHERE unit.production_state='delivered'),
+    'remakePreparing',count(*) FILTER(WHERE latest.cancelled_at IS NULL AND latest.production_state IN ('unmade','started') AND unit.held_by_case_id IS NULL AND NOT unit.operationally_stopped),
+    'remakeReady',count(*) FILTER(WHERE latest.cancelled_at IS NULL AND latest.production_state='ready' AND unit.held_by_case_id IS NULL AND NOT unit.operationally_stopped),
+    'remakeDelivered',count(*) FILTER(WHERE latest.cancelled_at IS NULL AND latest.production_state='delivered'),
+    'remakePending',count(*) FILTER(WHERE latest.cancelled_at IS NOT NULL AND NOT unit.operationally_stopped),
+    'redelivery',count(*) FILTER(WHERE EXISTS(SELECT 1 FROM mbox.quantity_redelivery_units part WHERE part.tenant_id=unit.tenant_id AND part.store_id=unit.store_id AND part.unit_id=unit.id AND part.outcome IS NULL))) END FROM mbox.order_item_quantity_units unit
+    LEFT JOIN LATERAL(SELECT part.id,part.production_state,part.cancelled_at FROM mbox.quantity_remake_units part WHERE part.tenant_id=unit.tenant_id AND part.store_id=unit.store_id AND part.unit_id=unit.id ORDER BY part.generation DESC LIMIT 1) latest ON true
+    WHERE unit.tenant_id=${item}.tenant_id AND unit.store_id=${item}.store_id AND unit.order_item_id=${item}.id)`
+}
+function quantityProgress(facts:GuestQuantityFacts|null|undefined):{progressText?:string}{
+  if(!facts)return {}
+  const parts:Array<[string,number]>=[['暂停',facts.held],['已停止',facts.stopped],['准备中',facts.preparing],['已备齐',facts.ready],['已送达记录',facts.delivered],['待补送',facts.redelivery??0],['重新准备中',facts.remakePreparing??0],['重做已备齐',facts.remakeReady??0],['重做已送达',facts.remakeDelivered??0],['门店处理中',facts.remakePending??0]]
+  if(!Number.isSafeInteger(facts.total)||facts.total<1||parts.some(([,count])=>!Number.isSafeInteger(count)||count<0||count>facts.total))throw new Error('原商品数量进度无效')
+  return {progressText:parts.filter(([,count])=>count>0).map(([label,count])=>`${label} ${count} 份`).join(' · ')}
 }
 
 function safeMinor(value: string | number): number {

@@ -1,3 +1,4 @@
+import {itemAfterSalesApiPlugin} from './item-after-sales-api.js'
 import {paymentFinanceApiPlugin} from './payment-finance-api.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
@@ -213,6 +214,8 @@ export interface NormalizedInjectedPlugin {
 }
 
 export interface NormalizedAppOptions {
+  /** Keep the full quantity after-sales batch disabled until joint acceptance. */
+  quantityAfterSalesEnabled?:boolean
   config: Readonly<NormalizedRuntimeConfig>
   pool?: PostgresPool
   logger?: boolean
@@ -572,6 +575,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       new PostgresPricingAuthority(),
       {
         inventoryEnforcementMode: options.config.inventoryEnforcementMode,
+        quantityAfterSalesEnabled:(options.quantityAfterSalesEnabled ?? options.config.quantityAfterSalesEnabled)===true,
         guestOrderSafetyPolicy: options.config.guestOrderSafetyPolicy,
       },
     )
@@ -722,6 +726,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       onlinePaymentProvider,
     )
     instance.register(commerceKdsApiPlugin, {
+      quantityActionsEnabled:(options.quantityAfterSalesEnabled ?? options.config.quantityAfterSalesEnabled)===true,
       prefix: '/api',
       commerce,
       fulfillmentQuery: new FulfillmentQueryService(transactions),
@@ -877,6 +882,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       paymentActionSecret: options.config.secret,
     })
     instance.register(paymentFinanceApiPlugin,{prefix:'/api',transactions,commands:commandExecutor,resolveContext:operationsContext})
+    instance.register(itemAfterSalesApiPlugin,{prefix:'/api',transactions,commands:commandExecutor,resolveContext:operationsContext,resolveKdsContext:commerceContext,enabled:(options.quantityAfterSalesEnabled ?? options.config.quantityAfterSalesEnabled)===true})
     instance.register(hardwareApiPlugin, {
       prefix: '/api',
       transactions,
@@ -1079,6 +1085,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       })
       await reservationApp.register(couponCalendarApiPlugin, { transactions, resolveStaffContext: staffReservationContext })
       await reservationApp.register(mediaAssetApiPlugin, {
+        staticDirectory: options.config.staticDir ?? undefined,
         transactions,
         service: mediaAssets,
         resolveStaffContext: staffReservationContext,

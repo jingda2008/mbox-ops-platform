@@ -49,7 +49,7 @@ Page({
     isDevelopment: false,
     tableCode: '',
     orders: [],
-    outstandingText: '¥0.00',
+    outstandingText: '¥0.00', settlementReviewCount: 0,
     busyOrderId: '', selectedPublicIds:[], selectedTotalText:'¥0.00', payingBatch:false,
     success: '',
   },
@@ -172,7 +172,7 @@ Page({
     this.setData(Object.assign({
       loading: true, error: '', tableCode: session.tableCode || '',
     }, scopeChanged ? {
-      orders: [], outstandingText: '¥0.00', busyOrderId: '',
+      orders: [], outstandingText: '¥0.00', settlementReviewCount: 0, busyOrderId: '',
     } : {}, preserveMessage ? {} : { success: '' }))
     try {
       const rawOrders = await (this.historyMode ? getCustomerOrderHistory(before) : getTableOrders())
@@ -187,13 +187,17 @@ Page({
         publicId: order.publicId,
         roundText: this.historyMode ? (order.tableCode ? order.tableCode + '桌' : '原桌号未留存') : `第 ${order.round} 轮`,
         statusText: ORDER_STATUS[order.status] || '状态待确认',
-        paymentText: order.totalAmountMinor === 0 && order.status !== 'cancelled'
+        paymentText: order.receivableReductionMinor > 0 && order.paymentAccess === 'not_required' && order.paymentStatus === 'unpaid'
+          ? '无需再付款' : order.totalAmountMinor === 0 && order.status !== 'cancelled'
           ? (order.pricingKind === 'gift' ? '赠送，无需支付' : '无需支付')
           : PAYMENT_STATUS[order.paymentStatus] || '付款状态待确认',
         createdAtText: dateTime(order.createdAt),
         paidAtText: order.paidAt ? dateTime(order.paidAt) : '',
         totalText: Number.isSafeInteger(order.totalAmountMinor) ? money(order.totalAmountMinor) : '金额待同步',
         discountText: Number.isSafeInteger(order.discountAmountMinor) && order.discountAmountMinor > 0 ? money(order.discountAmountMinor) : '',
+        receivableIncreaseText: Number.isSafeInteger(order.receivableIncreaseMinor) && order.receivableIncreaseMinor > 0 ? money(order.receivableIncreaseMinor) : '',
+        receivableReductionText: Number.isSafeInteger(order.receivableReductionMinor) && order.receivableReductionMinor > 0 ? money(order.receivableReductionMinor) : '',
+        settlementReviewRequired: order.settlementReviewRequired === true,
         payableText: money(order.payableAmountMinor),
         payableAmountMinor: Number(order.payableAmountMinor || 0),
         pricingKind: order.pricingKind || 'none',
@@ -203,7 +207,7 @@ Page({
         // A historical unpaid row is never an invitation to resurrect its old
         // payment; the customer can return to the cart and create a new one.
         canPay: !this.historyMode&&order.status!=='cancelled'&&order.paymentAccess==='available'&&Number(order.payableAmountMinor)>0,
-        paymentHint: this.historyMode ? '保留原桌订单；未送达商品仍按原订单地点协调送达' : this.paymentHint(order.paymentAccess, Number(order.payableAmountMinor || 0)),
+        paymentHint: order.settlementReviewRequired === true ? '商品停止金额待员工核对，暂不发起本单付款' : this.historyMode ? '保留原桌订单；未送达商品仍按原订单地点协调送达' : this.paymentHint(order.paymentAccess, Number(order.payableAmountMinor || 0)),
         sourceText: typeof order.sourceText === 'string' && order.sourceText.trim()
           ? order.sourceText.trim() : '点单来源待确认',
         items: (order.items || []).map((item, index) => ({
@@ -212,16 +216,16 @@ Page({
           quantity: item.quantity,
           unitPriceText: Number.isSafeInteger(item.unitPriceMinor) ? money(item.unitPriceMinor) : '待同步',
           totalText: Number.isSafeInteger(item.totalAmountMinor) ? money(item.totalAmountMinor) : '待同步',
-          componentsText: (item.components || []).map((component) => `${component.name} ×${component.quantity}`).join(' · '),
+          componentsText: (item.components || []).map((component) => `${component.name} ×${component.quantity}${component.progressText ? '（' + component.progressText + '）' : ''}`).join(' · '),
           note: item.note || '',
-          statusText: ITEM_STATUS[item.status] || '出品状态待确认',
+          statusText: item.progressText || ITEM_STATUS[item.status] || '出品状态待确认',
         })),
       }))
       const selectedPublicIds=orders.filter(order=>order.canPay).map(order=>order.publicId)
       orders.forEach(order=>{order.selected=selectedPublicIds.includes(order.publicId)})
       const outstanding = orders.reduce((sum, order) => sum + order.payableAmountMinor, 0)
       const nextOrders = before ? this.data.orders.concat(orders.filter(order => !this.data.orders.some(current => current.publicId === order.publicId))) : orders
-      this.setData({ loading: false, orders: nextOrders, selectedPublicIds, selectedTotalText:money(outstanding), hasMoreHistory: this.historyMode && rawOrders.length === 30, outstandingText: money(outstanding) })
+      this.setData({ loading: false, orders: nextOrders, settlementReviewCount: orders.filter(order => order.paymentAccess === 'status_review').length, selectedPublicIds, selectedTotalText:money(outstanding), hasMoreHistory: this.historyMode && rawOrders.length === 30, outstandingText: money(outstanding) })
       const abandonmentOrder = storedAbandonment
         && storedAbandonment.tableScope === paymentScope
         && (rawOrders || []).find((item) => item.publicId === storedAbandonment.orderPublicId)

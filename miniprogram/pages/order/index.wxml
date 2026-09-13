@@ -51,8 +51,8 @@
       <view wx:if="{{visibleProducts.length}}" class="product-list product-list--browse">
         <view wx:for="{{visibleProducts}}" wx:key="productId" class="product-row {{item.available ? '' : 'is-unavailable'}}" data-id="{{item.productId}}" role="button" aria-label="查看{{item.name}}大图和详情" hover-class="product-row--pressed" bindtap="openProductDetail">
           <view class="product-media">
-            <image wx:if="{{item.imageUrl && !item.imageFailed}}" src="{{item.imageUrl}}" mode="aspectFill" data-id="{{item.productId}}" binderror="productImageFailed" />
-            <view wx:else class="product-media__placeholder"><text>{{item.imageFailed ? '图片未加载，下拉刷新重试' : 'M-BOX'}}</text></view>
+            <image wx:if="{{item.imageUrl && !item.imageFailed}}" src="{{item.listImageUrl || item.imageUrl}}" lazy-load="{{index > 3}}" mode="aspectFill" data-image-index="{{index}}" data-load-generation="{{menuImageGeneration}}" bindload="recordFirstScreenImage" data-id="{{item.productId}}" binderror="productImageFailed" />
+            <view wx:else class="product-media__placeholder"><text>{{item.imageFailed ? '图片暂未加载，可查看详情' : 'M-BOX'}}</text></view>
             <text wx:if="{{item.discountVisible}}" class="product-media__saving">{{item.savingsText}}</text>
             <text class="product-media__detail-hint">查看详情</text>
           </view>
@@ -65,7 +65,7 @@
   </view>
 
   <block wx:else>
-    <view wx:if="{{error && !checkoutLocked}}" class="error-banner">{{error}}</view>
+    <view wx:if="{{error && !checkoutLocked}}" class="error-banner" bindtap="retryOrderLoad">{{error}}{{!orderReady ? '，点此重试' : ''}}</view>
     <view wx:if="{{success}}" class="success-banner">{{success}}</view>
     <view wx:if="{{cartWritesFrozen}}" class="status-banner status-banner--waiting">本桌点单正在确认，当前选择已保留，稍后即可继续调整。</view>
 
@@ -136,13 +136,13 @@
       <view wx:if="{{visibleProducts.length}}" class="product-list">
         <view wx:for="{{visibleProducts}}" wx:key="productId" class="product-row {{item.available ? '' : 'is-unavailable'}}" data-id="{{item.productId}}" role="button" aria-label="查看{{item.name}}大图和详情" hover-class="product-row--pressed" bindtap="openProductDetail">
           <view class="product-media">
-            <image wx:if="{{item.imageUrl && !item.imageFailed}}" src="{{item.imageUrl}}" mode="aspectFill" data-id="{{item.productId}}" binderror="productImageFailed" />
-            <view wx:else class="product-media__placeholder"><text>{{item.imageFailed ? '图片未加载，下拉刷新重试' : 'M-BOX'}}</text></view>
+            <image wx:if="{{item.imageUrl && !item.imageFailed}}" src="{{item.listImageUrl || item.imageUrl}}" lazy-load="{{index > 3}}" mode="aspectFill" data-image-index="{{index}}" data-load-generation="{{menuImageGeneration}}" bindload="recordFirstScreenImage" data-id="{{item.productId}}" binderror="productImageFailed" />
+            <view wx:else class="product-media__placeholder"><text>{{item.imageFailed ? '图片暂未加载，可查看详情' : 'M-BOX'}}</text></view>
             <text wx:if="{{item.discountVisible}}" class="product-media__saving">{{item.savingsText}}</text>
             <text class="product-media__detail-hint">查看详情</text>
           </view>
           <view class="product-main"><text class="product-kind">{{item.productKind === 'bundle' ? (item.bundleSelectionText ? '套餐组合 · 需选款' : '套餐组合 · 固定搭配') : item.categoryName}}</text><text class="product-name">{{item.name}}</text><view wx:if="{{item.tasteLabels.length}}" class="product-tastes"><text wx:for="{{item.tasteLabels}}" wx:for-item="taste" wx:key="*this">{{taste}}</text></view><text class="product-copy">{{(item.productKind === 'bundle' ? (item.includedText || item.description) : item.description) || '查看详情了解内容'}}</text><text wx:if="{{item.discountVisible}}" class="product-saving">单点合计 {{item.separatePriceText}}</text></view>
-          <view class="product-action"><view class="product-action__meta"><text class="product-price">{{item.priceText}}</text><text class="product-availability {{item.available ? 'is-available' : 'is-unavailable'}}">{{item.availabilityText}}</text></view><button wx:if="{{item.available}}" aria-label="{{item.selectionActionText}}：{{item.name}}" data-id="{{item.productId}}" catchtap="addProduct">＋</button><button wx:else class="product-unavailable" disabled="{{true}}">{{item.availabilityDetail}}</button></view>
+          <view class="product-action"><view class="product-action__meta"><text class="product-price">{{item.priceText}}</text><text class="product-availability {{item.available ? 'is-available' : 'is-unavailable'}}">{{item.availabilityText}}</text></view><button wx:if="{{item.available}}" aria-label="{{item.selectionActionText}}：{{item.name}}" data-id="{{item.productId}}" catchtap="addProduct" disabled="{{!orderReady}}">＋</button><button wx:else class="product-unavailable" disabled="{{true}}">{{item.availabilityDetail}}</button></view>
         </view>
       </view>
       <state-panel wx:else type="empty" title="没有找到符合条件的商品" message="可清空搜索或切换分类" />
@@ -168,7 +168,7 @@
       <button class="product-detail-close compact-icon-action" aria-label="关闭商品详情" catchtap="closeProductDetail">×</button>
       <scroll-view scroll-y class="product-detail-scroll">
         <view wx:if="{{!detailProduct.selectionSource || !detailProduct.bundleChoiceGroups.length || detailInformationExpanded}}" class="product-detail-hero" catchtap="previewProductImage">
-          <image wx:if="{{detailProduct.imageUrl && !detailProduct.imageFailed}}" src="{{detailProduct.imageUrl}}" mode="aspectFit" data-id="{{detailProduct.productId}}" binderror="productImageFailed" />
+          <image wx:if="{{detailProduct.imageUrl && !detailProduct.imageFailed}}" src="{{detailProduct.imageUrl}}" mode="aspectFit" data-id="{{detailProduct.productId}}" data-load-generation="{{menuImageGeneration}}" binderror="productImageFailed" />
           <view wx:else class="product-detail-placeholder"><text>M-BOX</text></view>
           <text wx:if="{{detailProduct.imageUrl}}" class="product-detail-preview-hint">点击查看全屏大图</text>
         </view>
@@ -201,8 +201,8 @@
       <view class="product-detail-footer">
         <view><text>当前售价</text><text>{{detailProduct.priceText}}</text></view>
         <button wx:if="{{connectionState === 'active' && detailProduct.available && detailProduct.productKind === 'bundle'}}"
-          disabled="{{!detailSelectionsComplete}}" catchtap="confirmBundleProduct">{{detailProduct.bundleChoiceGroups.length ? (detailSelectionsComplete ? (detailEditUnitIndex >= 0 ? '保存第' + (detailEditUnitIndex + 1) + '份' : '确认选择并加入') : '请先完成选择') : '确认套餐并加入'}}</button>
-        <button wx:elif="{{connectionState === 'active' && detailProduct.available}}" data-id="{{detailProduct.productId}}" catchtap="addProduct">加入购物车</button>
+          disabled="{{!orderReady || !detailSelectionsComplete}}" catchtap="confirmBundleProduct">{{detailProduct.bundleChoiceGroups.length ? (detailSelectionsComplete ? (detailEditUnitIndex >= 0 ? '保存第' + (detailEditUnitIndex + 1) + '份' : '确认选择并加入') : '请先完成选择') : '确认套餐并加入'}}</button>
+        <button wx:elif="{{connectionState === 'active' && detailProduct.available}}" data-id="{{detailProduct.productId}}" data-load-generation="{{menuImageGeneration}}" catchtap="addProduct">加入购物车</button>
         <button wx:elif="{{connectionState === 'active'}}" class="product-detail-unavailable" disabled="{{true}}">{{detailProduct.availabilityDetail}}</button>
         <text wx:else class="product-detail-browse-note">{{connectionState === 'waiting' ? '服务人员开台后可下单' : '到店扫码后可下单'}}</text>
       </view>
@@ -210,7 +210,7 @@
   </view>
 
   <view wx:if="{{connectionState === 'active' && cart.length}}" class="cart-dock">
-    <view class="cart-summary"><button class="cart-overview" aria-label="查看本桌购物车，已选{{cartCount}}件商品" hover-class="cart-overview--pressed" bindtap="openCartDetails"><view class="cart-overview__mark"><view class="cart-overview__mark-icon"></view><text class="cart-overview__badge">{{cartCount}}</text></view><view class="cart-overview__copy"><text>购物车 · {{cartCount}} 件</text><text>{{cartWritesFrozen ? '当前选择已保留' : checkoutLocked ? '上次提交待确认，可继续确认或查看桌账' : cartSyncing ? '正在同步同桌选择' : '点击查看商品与金额'}}</text></view></button><button class="checkout-button" bindtap="openCheckout" loading="{{busy}}" disabled="{{cartSyncing || cartWritesFrozen}}">{{checkoutLocked ? '继续确认' : '提交订单'}}</button></view>
+    <view class="cart-summary"><button class="cart-overview" aria-label="查看本桌购物车，已选{{cartCount}}件商品" hover-class="cart-overview--pressed" bindtap="openCartDetails"><view class="cart-overview__mark"><view class="cart-overview__mark-icon"></view><text class="cart-overview__badge">{{cartCount}}</text></view><view class="cart-overview__copy"><text>购物车 · {{cartCount}} 件</text><text>{{cartWritesFrozen ? '当前选择已保留' : checkoutLocked ? '上次提交待确认，可继续确认或查看桌账' : cartSyncing ? '正在同步同桌选择' : '点击查看商品与金额'}}</text></view></button><button class="checkout-button" bindtap="openCheckout" loading="{{busy}}" disabled="{{!orderReady || cartSyncing || cartWritesFrozen}}">{{checkoutLocked ? '继续确认' : '提交订单'}}</button></view>
   </view>
 
   <view wx:if="{{checkoutConfirmVisible}}" class="checkout-confirm sheet-mask">

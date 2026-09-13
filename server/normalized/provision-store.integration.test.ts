@@ -65,7 +65,7 @@ integration('normalized store provisioning', () => {
       const rows = await pool.query(`SELECT p.code FROM mbox.role_permission_assignments a
         JOIN mbox.staff_permission_definitions p ON p.id=a.permission_id
         WHERE a.tenant_id=$1 AND a.store_id=$2 ORDER BY p.code`, [financeConfig.tenant.id, financeConfig.store.id])
-      expect(rows.rows.map(row => row.code)).toEqual([...cashier.permissions].sort())
+      expect(rows.rows.map(row => row.code).sort()).toEqual([...cashier.permissions].sort())
     }
   })
 

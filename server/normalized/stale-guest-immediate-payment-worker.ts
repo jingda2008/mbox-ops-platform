@@ -36,7 +36,7 @@ type OnlinePaymentPort = Pick<
   'closeSystem' | 'listStaleGuestImmediateCheckoutPaymentCandidates'
 > & Partial<Pick<OnlinePaymentService,
   'query' | 'querySystem' | 'listStalePendingPostarPaymentIds'
-  | 'queryRefund' | 'listStaleProcessingPostarRefundIds'
+  | 'queryRefund' | 'requestRefund' | 'listStaleProcessingPostarRefundIds'
   | 'recordAutomaticPaymentQueryOutcome' | 'recordAutomaticRefundQueryOutcome'
 >>
 type PaymentCommandPort = Pick<PaymentCommandService,
@@ -158,7 +158,10 @@ export class StaleGuestImmediatePaymentWorker {
         for (const refundId of refundIds) {
           const binding = `pending-refund:${refundId}:${randomUUID()}`
           try {
-            const result = await this.deps.onlinePayments.queryRefund(scope, refundId, binding)
+            // requestRefund submits only a not_started claim; an existing claim queries the same refund.
+            const result = this.deps.onlinePayments.requestRefund
+              ? await this.deps.onlinePayments.requestRefund(scope, refundId, binding)
+              : await this.deps.onlinePayments.queryRefund(scope, refundId, binding)
             queriedRefundIds.push(refundId)
             const observed = result.observation
             if (!['succeeded', 'failed'].includes(observed.status)

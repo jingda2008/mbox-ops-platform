@@ -1,6 +1,9 @@
+import {approvedFailedRefundReservesSql} from './refund-attempt-sql.js'
+import {fullyWaivedQuantityItemSql,unreservedOrderExcessSql} from './quantity-late-capture-refund.js'
 import type { JsonObject } from './command-executor.js'
 import type { PaymentProvider } from './payment-repository.js'
 import type { ScopedTransaction } from './transaction-runner.js'
+import {REFUND_PURPOSES,type RefundPurpose} from '../../src/shared/refund-purpose.js'
 
 export type RefundStatus =
   | 'requested'
@@ -17,6 +20,7 @@ export interface RefundAllocation {
 }
 
 export interface Refund {
+  purpose?: RefundPurpose
   id: string
   paymentId: string
   orderId: string | null
@@ -39,6 +43,9 @@ export interface Refund {
 }
 
 export interface RequestRefundInput {
+  /** Internal coordinator only; verified against the original approved case and exact allocations. */
+  quantityRetryOf?: string
+  purpose?: RefundPurpose
   paymentId: string
   publicId: string
   reason: string
@@ -79,6 +86,7 @@ export interface RefundCompletionApplication {
 }
 
 interface RefundStoredRow extends Record<string, unknown> {
+  purpose?: RefundPurpose | null
   id: string
   payment_id: string
   public_id: string
@@ -185,6 +193,7 @@ export class RefundRepository {
   constructor(private readonly transaction: ScopedTransaction) {}
 
   async request(input: Readonly<RequestRefundInput>): Promise<Refund> {
+    if(input.purpose!==undefined&&!REFUND_PURPOSES.includes(input.purpose))throw new RefundLimitError('请选择有效退款用途')
     validateRequest(input)
     const payment = await this.lockPayment(input.paymentId)
     if (!['succeeded', 'partially_refunded'].includes(payment.status)) {
@@ -196,38 +205,51 @@ export class RefundRepository {
 
     const allocations = normalizeAllocations(input.allocations)
     const amountMinor = allocations.reduce((sum, allocation) => sum + allocation.amountMinor, 0)
+    const retryOf=input.quantityRetryOf??null
+    if(retryOf!==null)await this.validateQuantityRetry(input,payment,allocations,amountMinor)
     let orderId=payment.order_id
     if(payment.payable_kind==='order_batch'){
       const targets=(await this.transaction.query<{order_id:string}>(`SELECT DISTINCT order_id FROM mbox.order_items WHERE tenant_id=$1 AND store_id=$2 AND id=ANY($3::uuid[])`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,allocations.map(item=>item.orderItemId)])).rows
       if(targets.length!==1)throw new RefundLimitError('每次退款请选择同一原订单的商品，不同原订单分别退款')
       orderId=targets[0]!.order_id
-      const capacity=(await this.transaction.query<{amount_minor:string;reserved:string}>(`SELECT a.amount_minor::text,COALESCE((SELECT sum(r.amount_minor) FROM mbox.refunds r WHERE r.tenant_id=a.tenant_id AND r.store_id=a.store_id AND r.payment_id=$4 AND r.order_id=a.order_id AND r.status=ANY($5::text[])),0)::text AS reserved FROM mbox.order_payment_allocations a WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.batch_id=$3 AND a.order_id=$6`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,payment.order_batch_id,payment.id,RESERVING_REFUND_STATUSES,orderId])).rows[0]
+      const capacity=(await this.transaction.query<{amount_minor:string;reserved:string}>(`SELECT a.amount_minor::text,COALESCE((SELECT sum(r.amount_minor) FROM mbox.refunds r WHERE r.tenant_id=a.tenant_id AND r.store_id=a.store_id AND r.payment_id=$4 AND r.order_id=a.order_id AND (r.status=ANY($5::text[]) OR ${approvedFailedRefundReservesSql('r')}) AND r.id IS DISTINCT FROM $7::uuid),0)::text AS reserved FROM mbox.order_payment_allocations a WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.batch_id=$3 AND a.order_id=$6`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,payment.order_batch_id,payment.id,RESERVING_REFUND_STATUSES,orderId,retryOf])).rows[0]
       if(!capacity||amountMinor+Number(capacity.reserved)>Number(capacity.amount_minor))throw new RefundLimitError('退款超过该原订单在本次合并付款中的可退分摊金额')
     }
     if(orderId===null)throw new RefundLimitError('退款缺少原订单归属')
 
     const lateBatchCapture=payment.payable_kind==='order_batch'&&(await this.transaction.query<{ok:boolean}>(`SELECT EXISTS(SELECT 1 FROM mbox.orders o JOIN mbox.order_cancellation_events event ON event.tenant_id=o.tenant_id AND event.store_id=o.store_id AND event.order_id=o.id JOIN mbox.payments p ON p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.id=$4 WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.id=$3 AND o.status='cancelled' AND event.occurred_at<=p.succeeded_at) AS ok`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,orderId,payment.id])).rows[0]?.ok===true
     const items = await this.lockOrderItems(orderId, allocations.map((item) => item.orderItemId))
+    let quantityLateCaptureItems:readonly string[]=[]
+    if(payment.provider_snapshot?.lateSuccessAfterClose===true&&['price_adjustment','duplicate_payment'].includes(input.purpose??'')&&items.some(item=>item.status==='cancelled')){
+      quantityLateCaptureItems=(await this.transaction.query<{id:string}>(`SELECT item.id FROM mbox.order_items item
+        WHERE item.tenant_id=$1 AND item.store_id=$2 AND item.order_id=$3 AND item.id=ANY($4::uuid[])
+          AND ${fullyWaivedQuantityItemSql('item')} AND ${unreservedOrderExcessSql('item')}>=$5`,[
+        this.transaction.scope.tenantId,this.transaction.scope.storeId,orderId,allocations.map(item=>item.orderItemId),amountMinor,
+      ])).rows.map(item=>item.id)
+    }
     validateItems(items, allocations, payment.currency, {
       // An abandoned guest checkout can receive a late provider capture after
       // all its lines were correctly cancelled.  It remains refundable, but
       // only when the payment command has explicitly marked that protected
       // reconciliation path; normal cancelled order lines are still barred.
-      allowCancelledItems: payment.provider_snapshot?.guestCheckoutAbandoned === true || lateBatchCapture,
+      allowCancelledItems: payment.provider_snapshot?.guestCheckoutAbandoned === true || lateBatchCapture || retryOf!==null,
+      allowedCancelledItemIds:quantityLateCaptureItems,
     })
 
     const existingTotal = await this.transaction.query<ExistingRefundTotalRow>(`
-      SELECT COALESCE(SUM(amount_minor), 0)::text AS reserved_total_minor
-      FROM mbox.refunds
-      WHERE tenant_id = $1::uuid
-        AND store_id = $2::uuid
-        AND payment_id = $3::uuid
-        AND status = ANY($4::text[])
+      SELECT COALESCE(SUM(refund.amount_minor), 0)::text AS reserved_total_minor
+      FROM mbox.refunds refund
+      WHERE refund.tenant_id = $1::uuid
+        AND refund.store_id = $2::uuid
+        AND refund.payment_id = $3::uuid
+        AND (refund.status = ANY($4::text[]) OR ${approvedFailedRefundReservesSql('refund')})
+        AND refund.id IS DISTINCT FROM $5::uuid
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
       payment.id,
       RESERVING_REFUND_STATUSES,
+      retryOf,
     ])
     const existingAllocations = await this.transaction.query<ExistingRefundAllocationRow>(`
       SELECT refund_item.order_item_id,
@@ -240,8 +262,9 @@ export class RefundRepository {
       WHERE refund.tenant_id = $1::uuid
         AND refund.store_id = $2::uuid
         AND refund.payment_id = $3::uuid
-        AND refund.status = ANY($4::text[])
+        AND (refund.status = ANY($4::text[]) OR ${approvedFailedRefundReservesSql('refund')})
         AND refund_item.order_item_id = ANY($5::uuid[])
+        AND refund.id IS DISTINCT FROM $6::uuid
       GROUP BY refund_item.order_item_id
       ORDER BY refund_item.order_item_id
     `, [
@@ -250,6 +273,7 @@ export class RefundRepository {
       payment.id,
       RESERVING_REFUND_STATUSES,
       allocations.map((allocation) => allocation.orderItemId),
+      retryOf,
     ])
     validateRefundCapacity(
       payment,
@@ -266,10 +290,10 @@ export class RefundRepository {
     const inserted = await this.transaction.query<RefundStoredRow>(`
       INSERT INTO mbox.refunds (
         tenant_id, store_id, payment_id, public_id, amount_minor, currency,
-        status, reason, requested_by_employee_id, provider_snapshot,order_id
+        status, reason, requested_by_employee_id, provider_snapshot,order_id,purpose
       ) VALUES (
         $1::uuid, $2::uuid, $3::uuid, $4, $5::bigint, $6,
-        'requested', $7, $8::uuid, $9::jsonb,$10::uuid
+        'requested', $7, $8::uuid, $9::jsonb,$10::uuid,$11
       )
       RETURNING ${REFUND_BASE_COLUMNS}
     `, [
@@ -281,7 +305,7 @@ export class RefundRepository {
       payment.currency,
       input.reason.trim(),
       input.requestedByEmployeeId,
-      JSON.stringify(snapshot),orderId,
+      JSON.stringify(snapshot),orderId,input.purpose??null,
     ])
     const row = inserted.rows[0]
     if (inserted.rowCount !== 1 || row === undefined) {
@@ -414,10 +438,12 @@ export class RefundRepository {
       && current.payment_provider !== 'external_manual') {
       throw new RefundCallbackMismatchError('Online-provider refunds require a verified provider callback or query')
     }
+    const reference = input.receiptReference.trim() || (current.payment_provider === 'cash' ? `CASH-REFUND-${current.id}` : '')
+    if (!reference) throw new RefundCallbackMismatchError('请填写原线下工具的真实退款凭证号')
     return this.completeLocked(current, {
       succeeded: input.succeeded,
-      providerRefundId: input.receiptReference,
-      providerSnapshot: input.providerSnapshot,
+      providerRefundId: reference,
+      providerSnapshot: { ...input.providerSnapshot, receiptReference: reference },
     })
   }
 
@@ -556,6 +582,24 @@ export class RefundRepository {
       FOR UPDATE
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId, [...itemIds]])
     return result.rows
+  }
+
+  private async validateQuantityRetry(input:Readonly<RequestRefundInput>,payment:PaymentForRefundRow,allocations:readonly RefundAllocation[],amountMinor:number){
+    if(input.purpose!=='return_goods')throw new RefundLimitError('退款重试必须沿用原商品申请')
+    const verified=(await this.transaction.query<{valid:boolean}>(`SELECT EXISTS(
+      SELECT 1 FROM mbox.refunds original
+      JOIN mbox.item_after_sales_case_refunds link ON link.tenant_id=original.tenant_id AND link.store_id=original.store_id AND link.refund_id=original.id
+      JOIN mbox.item_after_sales_cases target ON target.tenant_id=link.tenant_id AND target.store_id=link.store_id AND target.id=link.case_id
+      WHERE original.tenant_id=$1 AND original.store_id=$2 AND original.id=$3 AND original.payment_id=$4
+        AND original.requested_by_employee_id=$5 AND original.amount_minor=$6 AND original.currency=$8
+        AND original.purpose='return_goods' AND target.status='approved'
+        AND target.requested_by_employee_id=original.requested_by_employee_id
+        AND target.decided_by_employee_id=original.approved_by_employee_id
+        AND mbox.quantity_refund_retry_eligible(original.tenant_id,original.store_id,original.id)
+        AND (SELECT jsonb_agg(jsonb_build_object('orderItemId',item.order_item_id,'amountMinor',item.amount_minor) ORDER BY item.order_item_id)
+          FROM mbox.refund_items item WHERE item.tenant_id=original.tenant_id AND item.store_id=original.store_id AND item.refund_id=original.id)=$7::jsonb
+      ) AS valid`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,input.quantityRetryOf,payment.id,input.requestedByEmployeeId,amountMinor,JSON.stringify(allocations),payment.currency])).rows[0]?.valid
+    if(!verified)throw new RefundLimitError('退款重试必须匹配原审核、失败凭证和原付款金额分摊')
   }
 
   private async lockRefund(refundId: string): Promise<RefundRow> {
@@ -697,7 +741,7 @@ type PaymentRefundStatus = 'succeeded' | 'partially_refunded' | 'refunded'
 
 const REFUND_BASE_COLUMNS = `
   id, payment_id, public_id, provider_refund_id, amount_minor, currency,
-  status, reason, requested_by_employee_id, approved_by_employee_id, decision_reason,
+  status, reason, purpose, requested_by_employee_id, approved_by_employee_id, decision_reason,
   provider_snapshot, provider_submission_state, completed_at::text, created_at::text, updated_at::text
 `
 
@@ -706,7 +750,7 @@ const JOINED_REFUND_COLUMNS = `
   p.provider AS payment_provider,
   p.provider_transaction_id AS payment_provider_transaction_id,
   r.public_id, r.provider_refund_id, r.amount_minor, r.currency,
-  r.status, r.reason, r.requested_by_employee_id, r.approved_by_employee_id, r.decision_reason,
+  r.status, r.reason, r.purpose, r.requested_by_employee_id, r.approved_by_employee_id, r.decision_reason,
   r.provider_snapshot, r.provider_submission_state, r.completed_at::text, r.created_at::text, r.updated_at::text,
   COALESCE((
     SELECT jsonb_agg(jsonb_build_object(
@@ -765,7 +809,7 @@ function validateItems(
   items: readonly OrderItemRow[],
   allocations: readonly RefundAllocation[],
   currency: string,
-  options: Readonly<{ allowCancelledItems: boolean }> = { allowCancelledItems: false },
+  options: Readonly<{ allowCancelledItems: boolean;allowedCancelledItemIds?:readonly string[] }> = { allowCancelledItems: false },
 ): void {
   if (items.length !== allocations.length) {
     throw new RefundLimitError('One or more refund allocations do not belong to the payment order')
@@ -774,7 +818,7 @@ function validateItems(
   for (const allocation of allocations) {
     const item = byId.get(allocation.orderItemId)
     if (item === undefined) throw new RefundLimitError(`Order item ${allocation.orderItemId} was not found`)
-    if (item.status === 'cancelled' && !options.allowCancelledItems) {
+    if (item.status === 'cancelled' && !options.allowCancelledItems&&!options.allowedCancelledItemIds?.includes(item.id)) {
       throw new RefundLimitError(`Order item ${item.id} is cancelled`)
     }
     if (item.currency !== currency) throw new RefundLimitError(`Order item ${item.id} has a currency mismatch`)
@@ -830,6 +874,7 @@ function allocationRowToJson(row: RefundAllocationRow): JsonObject {
 
 function mapRefund(row: RefundRow): Refund {
   return {
+    ...(row.purpose?{purpose:row.purpose}:{}),
     id: row.id,
     paymentId: row.payment_id,
     orderId: row.order_id,

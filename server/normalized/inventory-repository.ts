@@ -1242,6 +1242,25 @@ export class InventoryRepository {
     );
     for (const line of lines.rows) {
       const current = await this.lockOrCreateBalance(line.inventory_item_id);
+      // Check after the balance lock, so a concurrent sale cannot pass between
+      // the baseline check and adjustment. Movement history catches sell/return
+      // pairs even when the quantity has returned to the captured value.
+      const changed = await this.transaction.query<{ changed: boolean }>(`
+        SELECT EXISTS (
+          SELECT 1 FROM mbox.inventory_stock_count_lines line
+          JOIN mbox.inventory_movements movement
+            ON movement.tenant_id = line.tenant_id AND movement.store_id = line.store_id
+           AND movement.inventory_item_id = line.inventory_item_id
+           AND movement.occurred_at >= line.created_at
+          WHERE line.tenant_id = $1::uuid AND line.store_id = $2::uuid
+            AND line.stock_count_id = $3::uuid AND line.inventory_item_id = $4::uuid
+        ) AS changed
+      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, countId, line.inventory_item_id]);
+      if (changed.rows[0]?.changed || compareDecimal(current.onHandQuantity, line.system_quantity_snapshot) !== 0) {
+        throw new InventoryConflictError(
+          `盘点后库存已变动，当前账面数量为${current.onHandQuantity}；请重新清点该商品并提交新盘点，旧盘点未生效`,
+        );
+      }
       const delta = subtractDecimal(line.counted_quantity, current.onHandQuantity);
       if (isZeroDecimal(delta)) continue;
       const movement = await this.insertMovement({

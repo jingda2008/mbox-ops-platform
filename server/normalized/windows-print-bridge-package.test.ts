@@ -13,8 +13,9 @@ describe('Windows print bridge package', () => {
       divider:()=> '---',center:(value:string)=>value,formatCny:(value:number)=>`¥${(value/100).toFixed(2)}`,
     })
     const text = render({schemaVersion:1,title:'结账单',ticketReference:'order-test',businessDate:'2026-09-10',
-      issuedAt:'2026-09-10T12:00:00Z',operatorLabel:'收银员',payment:{provider:'external_manual'},
+      tableCode:'B05',guestCount:2,issuedAt:'2026-09-10T12:00:00Z',operatorLabel:'收银员',payment:{provider:'external_manual'},
       lines:[{name:'啤酒',quantity:4,unitAmountMinor:4000,totalAmountMinor:12000}]})
+    expect(text).toContain('桌台：B05\r\n人数：2')
     expect(text).toContain('单价：¥40.00')
     expect(text).toContain('小计：¥120.00')
     expect(text).toContain('其他线下收款')
@@ -22,14 +23,13 @@ describe('Windows print bridge package', () => {
     expect(text).toContain('经办：收银员')
     expect(text).not.toContain('测试支付')
   })
-  it('measures remaining text and paginates long tickets instead of truncating them', async () => {
+  it('retains venue RAW transport, GBK and cutting instead of Windows font rendering', async () => {
     const source = await readFile(join(directory, 'print-ticket.ps1'), 'utf8')
-    expect(source).toContain('MeasureString($remaining')
-    expect(source).toContain('[ref]$characters')
-    expect(source).toContain('$remaining.Substring(0, $characters)')
-    expect(source).toContain('$eventArgs.HasMorePages = $pageState.Index -lt $ticketLines.Count')
-    expect(source).toContain("throw 'invalid_print_page_bounds'")
-    expect(source).not.toContain('$eventArgs.HasMorePages = $false')
+    expect(source).toContain('di.pDatatype = "RAW"')
+    expect(source).toContain('GetEncoding(936)')
+    expect(source).toContain('0x1D, 0x56, 0x01')
+    expect(source).toContain('GetTextElementEnumerator')
+    expect(source).not.toMatch(/DrawString|PrintDocument|MeasureString/)
   })
   it('classifies process failures without exposing command arguments and inspects untruncated diagnostics',async()=>{
     const source=await readFile(join(directory,'bridge.mjs'),'utf8')
@@ -74,5 +74,22 @@ describe('Windows print bridge package', () => {
     expect(installer).toContain('Get-FileHash')
     expect(installer).toContain('SHA256')
     expect(installer).not.toMatch(/Invoke-WebRequest|curl|Start-BitsTransfer/i)
+  })
+
+  it('provides a one-click guarded upgrade without changing printer configuration', async () => {
+    const [launcher, upgrade] = await Promise.all([
+      readFile(join(directory, 'MBOX-OneClick-Upgrade.cmd'), 'utf8'),
+      readFile(join(directory, 'upgrade.ps1'), 'utf8'),
+    ])
+    expect(launcher).toContain('upgrade.ps1')
+    expect(upgrade).toContain('-Verb RunAs')
+    expect(upgrade).toContain('-PassThru')
+    expect(upgrade).toContain('exit $elevated.ExitCode')
+    expect(upgrade).toContain("Document -like 'MBOX-*'")
+    expect(upgrade).toContain("state -eq 'printing'")
+    expect(upgrade).toContain('Global\\MBOX-PrintBridge-Upgrade')
+    expect(upgrade).toContain("$files = @('bridge.mjs','print-ticket.ps1','list-printers.ps1')")
+    expect(upgrade).not.toMatch(/Set-Printer|Remove-PrintJob|Add-Printer|printer_routes|pairing/i)
+    expect(upgrade).not.toContain('SilentlyContinue')
   })
 })

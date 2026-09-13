@@ -70,6 +70,19 @@ describe('GuestApiClient', () => {
     expect(init?.credentials).toBe('include')
   })
 
+  it('queries table availability without accepting a session or issuing a scan', async () => {
+    const send=vi.fn<(url:string|URL|Request,init?:RequestInit)=>Promise<Response>>()
+      .mockResolvedValueOnce(jsonResponse({data:{status:'waiting_for_table',message:'等待开台',table:{code:'W01',displayName:'室外 W01'}}}))
+      .mockResolvedValueOnce(jsonResponse({data:{status:'ready_for_scan',table:{code:'W01',displayName:'室外 W01'}}}))
+      .mockResolvedValueOnce(jsonResponse({data:{status:'active',table:{code:'W01',displayName:'室外 W01'},cartScope:'abcdefghijklmnopqrstuvwxyzABCDEF'}}))
+    const client=new GuestApiClient(deviceKey,{fetch:send})
+    await expect(client.waitForTable(qrToken)).resolves.toMatchObject({status:'waiting_for_table'})
+    await expect(client.waitForTable(qrToken)).resolves.toMatchObject({status:'ready_for_scan'})
+    await expect(client.waitForTable(qrToken)).rejects.toMatchObject({kind:'invalid_response'})
+    expect(send.mock.calls.every(([url])=>url==='/api/guest/session/wait')).toBe(true)
+    expect(JSON.parse(String(send.mock.calls[0]![1]?.body))).toEqual({tableQrToken:qrToken,deviceKey})
+  })
+
   it('searches every menu page rather than silently stopping at the first 100 products', async () => {
     const firstPage = Array.from({ length: 100 }, (_, index) => product(index + 1))
     const send = vi.fn<(url: string | URL | Request, init?: RequestInit) => Promise<Response>>()

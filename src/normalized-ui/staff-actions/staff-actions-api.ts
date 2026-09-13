@@ -307,7 +307,10 @@ export interface StaffActionsApiPort {
     capacityOverrideReason?:string
   }>):Promise<void>
   completeServiceTask(taskId: string, note?: string): Promise<void>
-  runKdsAction(taskId: string, action: 'complete' | 'deliver' | 'remake'): Promise<void>
+  runKdsAction(taskId: string, action: 'complete' | 'deliver' | 'remake', quantity?:number): Promise<void>
+  loadItemAfterSalesAccess?():Promise<{enabled:boolean;recoveryAvailable?:boolean;employeeId:string}>
+  pendingKdsActions?():Array<{taskId:string;action:'complete'|'deliver'|'remake';quantity?:number}>
+  recoverKdsResults?():Promise<void>
   cancelKdsTask(taskId: string, reasonNote: string): Promise<void>
   actOnReservation(reservationId: string, action: 'confirm' | 'arrive' | 'complete'): Promise<void>
   loadAssistedOrderAccess(signal?: AbortSignal): Promise<AssistedOrderAccess>
@@ -322,6 +325,8 @@ export interface StaffActionsApiPort {
     tableSessionId: string
     assistedOrderContextToken: string
     orderMode: 'paid' | 'gift'
+    replacementCaseId?:string
+    replacementPreviousOrderId?:string
     items: ReadonlyArray<{ productId: string; quantity: number; note?: string;bundleSelections?:Array<{
       groups:Array<{ groupId:string;productIds:string[] }>
     }> }>
@@ -391,19 +396,22 @@ export interface StaffReservationListOptions {
 }
 
 export interface StaffActionsApiOptions {
+  commandStorage?: Pick<Storage,'getItem'|'setItem'|'removeItem'>
   fetch?: typeof fetch
   timeoutMs?: number
   createIdempotencyKey?: () => string
 }
 
 export class StaffActionsApi implements StaffActionsApiPort {
-  private readonly pendingKdsCommands = new Map<string, string>()
+  private readonly pendingKdsCommands = new Map<string, {key:string;quantity?:number}>()
+  private readonly commandStorage:StaffActionsApiOptions['commandStorage']
   private employeeId = 'current-session'
   private readonly send: typeof fetch
   private readonly timeoutMs: number
   private readonly createIdempotencyKey: () => string
 
   constructor(options: Readonly<StaffActionsApiOptions> = {}) {
+    this.commandStorage=options.commandStorage??safeCommandStorage()
     this.send = options.fetch ?? globalThis.fetch.bind(globalThis)
     this.timeoutMs = options.timeoutMs ?? 8_000
     this.createIdempotencyKey = options.createIdempotencyKey ?? (() => crypto.randomUUID())
@@ -610,22 +618,66 @@ export class StaffActionsApi implements StaffActionsApiPort {
     )
   }
 
-  async runKdsAction(taskId: string, action: 'complete' | 'deliver' | 'remake'): Promise<void> {
+  async loadItemAfterSalesAccess():Promise<{enabled:boolean;recoveryAvailable?:boolean;employeeId:string}>{
+    return this.getData('/api/commerce/item-after-sales/access')
+  }
+
+  async runKdsAction(taskId: string, action: 'complete' | 'deliver' | 'remake', quantity?:number): Promise<void> {
     const fingerprint = `${this.employeeId}:${taskId}:${action}`
-    const key = this.pendingKdsCommands.get(fingerprint) ?? `staff-action-${this.createIdempotencyKey()}`
-    this.pendingKdsCommands.set(fingerprint, key)
-    if (action === 'remake') {
-      await this.command(
-        `/api/commerce/kds/${encodeURIComponent(taskId)}/remake`,
-        { reasonCode: 'production_remake', reasonNote: '现场确认后重新制作' },
-        'idempotency-key',
-        key,
-      )
-      this.pendingKdsCommands.delete(fingerprint)
-      return
+    this.readPendingKds()
+    const pending=this.pendingKdsCommands.get(fingerprint)
+    if(pending&&pending.quantity!==quantity)throw new StaffActionsApiError('上次操作尚未确认，请先按原数量恢复结果，再处理下一批','KDS_ORIGINAL_COMMAND_PENDING',409)
+    const key=pending?.key??`staff-action-${this.createIdempotencyKey()}`
+    this.pendingKdsCommands.set(fingerprint,{key,quantity})
+    this.persistPendingKds()
+
+    try {
+      if(action==='remake')await this.command(`/api/commerce/kds/${encodeURIComponent(taskId)}/remake`,
+        {reasonCode:'production_remake',reasonNote:'现场确认后重新制作'},'idempotency-key',key)
+      else await this.command(`/api/commerce/kds/${encodeURIComponent(taskId)}/actions`,
+        {action,...(quantity===undefined?{}:{quantity})},'idempotency-key',key)
+    }catch(error){
+      // These application errors are returned only after the command transaction
+      // has rolled back. Unknown results and in-progress commands retain the key.
+      if(error instanceof StaffActionsApiError&&[400,409].includes(error.status??0)&&[
+        'REQUEST_INVALID','QUANTITY_INVALID','QUANTITY_UNAVAILABLE','QUANTITY_FACTS_CONFLICT','QUANTITY_BATCH_NOT_ENABLED',
+        'KDS_TRANSITION_CONFLICT','ORDER_ITEM_NOT_READY','TABLE_SESSION_UNAVAILABLE',
+        'INVENTORY_INSUFFICIENT','INVENTORY_RECIPE_MISSING','INVENTORY_BALANCE_MISSING',
+      ].includes(error.code??'')){
+        this.pendingKdsCommands.delete(fingerprint)
+        this.persistPendingKds()
+      }
+      throw error
     }
-    await this.command(`/api/commerce/kds/${encodeURIComponent(taskId)}/actions`, { action }, 'idempotency-key', key)
     this.pendingKdsCommands.delete(fingerprint)
+    this.persistPendingKds()
+  }
+
+  private readPendingKds(){
+    try{
+      const stored=JSON.parse(this.commandStorage?.getItem(`mbox-kds-pending-v2:${this.employeeId}`)??'{}')
+      if(!isObject(stored))return
+      for(const [fingerprint,value] of Object.entries(stored))if(fingerprint.startsWith(`${this.employeeId}:`)&&isObject(value)&&typeof value.key==='string'
+        &&(value.quantity===undefined||Number.isSafeInteger(value.quantity)&&Number(value.quantity)>0))this.pendingKdsCommands.set(fingerprint,{key:value.key,...(value.quantity===undefined?{}:{quantity:Number(value.quantity)})})
+    }catch{/* Keep the in-memory recovery when storage is unavailable. */}
+  }
+  private persistPendingKds(){
+    const entries=[...this.pendingKdsCommands].filter(([key])=>key.startsWith(`${this.employeeId}:`))
+    try{
+      this.commandStorage?.setItem(`mbox-kds-pending-v2:${this.employeeId}`,JSON.stringify(Object.fromEntries(entries)))
+    }catch{/* Private browsing may disallow storage. */}
+  }
+  pendingKdsActions(){
+    this.readPendingKds()
+    return [...this.pendingKdsCommands].filter(([key])=>key.startsWith(`${this.employeeId}:`)).flatMap(([key,value])=>{
+      const [,taskId,action]=key.split(':')
+      return taskId&&['complete','deliver','remake'].includes(action??'')?[{taskId,action:action as 'complete'|'deliver'|'remake',quantity:value.quantity}]:[]
+    })
+  }
+  async recoverKdsResults():Promise<void>{
+    // Replays the original payload and key. It never creates a new batch from
+    // whatever quantities happen to be visible after a page reload.
+    for(const pending of this.pendingKdsActions())await this.runKdsAction(pending.taskId,pending.action,pending.quantity)
   }
 
   async createDeliveryBatch(items:Array<{taskId:string;quantity:number}>):Promise<void>{
@@ -705,6 +757,8 @@ export class StaffActionsApi implements StaffActionsApiPort {
     tableSessionId: string
     assistedOrderContextToken: string
     orderMode: 'paid' | 'gift'
+    replacementCaseId?:string
+    replacementPreviousOrderId?:string
     items: ReadonlyArray<{ productId: string; quantity: number; note?: string;bundleSelections?:Array<{
       groups:Array<{ groupId:string;productIds:string[] }>
     }> }>
@@ -1264,18 +1318,24 @@ function tableOrderDetail(value: unknown): StaffTableOrderDetail {
       || !statuses.has(item.fulfillmentStatus)) {
       throw new StaffActionsApiError('本桌点单详情无法识别，请刷新后重试', 'INVALID_TABLE_ORDER_DETAILS_RESPONSE', null)
     }
+    const quantityFacts=item.quantities
     return {
       id: item.id,
       productName: item.productName,
       quantity: item.quantity,
       unitPriceMinor: typeof item.unitPriceMinor === 'number' ? item.unitPriceMinor : undefined,
       totalAmountMinor: typeof item.totalAmountMinor === 'number' ? item.totalAmountMinor : undefined,
+      refundedAmountMinor: typeof item.refundedAmountMinor === 'number' ? item.refundedAmountMinor : undefined,
+      ...(isObject(quantityFacts)&&['total','held','stopped','ready','delivered','pending'].every(key=>Number.isSafeInteger(quantityFacts[key])&&Number(quantityFacts[key])>=0)?{quantities:quantityFacts as unknown as NonNullable<StaffTableOrderDetail['items'][number]['quantities']>}:{}),
       includedInBundle: item.includedInBundle === true,
       fulfillmentStation: item.fulfillmentStation as StaffTableOrderDetail['items'][number]['fulfillmentStation'],
       fulfillmentStatus: item.fulfillmentStatus as StaffTableOrderDetail['items'][number]['fulfillmentStatus'],
     }
   })
-  return { publicId: value.publicId, items }
+  return { publicId: value.publicId,
+    ...(isObject(value.replacementSource)&&typeof value.replacementSource.orderPublicId==='string'&&typeof value.replacementSource.orderItemId==='string'?{replacementSource:{orderPublicId:value.replacementSource.orderPublicId,orderItemId:value.replacementSource.orderItemId}}:{}),
+    paymentStatus: typeof value.paymentStatus === 'string' ? value.paymentStatus : undefined,
+    totalAmountMinor: typeof value.totalAmountMinor === 'number' ? value.totalAmountMinor : undefined, receivableIncreaseMinor:typeof value.receivableIncreaseMinor==='number'?value.receivableIncreaseMinor:undefined, stoppedAmountMinor:typeof value.stoppedAmountMinor==='number'?value.stoppedAmountMinor:undefined, items }
 }
 
 function isOnlinePaymentAction(value: unknown): value is OnlinePaymentAction {
@@ -1297,4 +1357,8 @@ function shanghaiCalendarDay(): { from: string; to: string } {
   const from = new Date(`${date}T00:00:00.000+08:00`)
   const to = new Date(from); to.setUTCDate(to.getUTCDate() + 1)
   return { from: from.toISOString(), to: to.toISOString() }
+}
+
+function safeCommandStorage():StaffActionsApiOptions['commandStorage']{
+  try{return globalThis.sessionStorage}catch{return undefined}
 }

@@ -1,4 +1,5 @@
 import { safePaymentErrorCode, safePaymentErrorLocation } from './pending-online-payment-reconciliation.js'
+import {REFUND_PURPOSES,type RefundPurpose} from '../../src/shared/refund-purpose.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { Transform } from 'node:stream'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
@@ -334,8 +335,13 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
     const provider = readManualProvider(body.provider)
     const method = readManualMethod(body.method)
     assertManualMethod(provider, method)
+    const idempotencyKey = readIdempotencyKey(request)
     const evidence: JsonObject = {
-      receiptReference: readString(body.receiptReference, 'receiptReference', 256, 3),
+      // Existing clients keep their supplied receipt and replay fingerprint.
+      // New cash forms omit it; the same attempt always gets the same number.
+      receiptReference: provider === 'cash' && (body.receiptReference === undefined || typeof body.receiptReference==='string' && body.receiptReference.trim()==='')
+        ? `CASH-${createHash('sha256').update(`${context.scope.tenantId}:${context.scope.storeId}:${idempotencyKey}`).digest('hex')}`
+        : readString(body.receiptReference, 'receiptReference', 256, 3),
       collectedByEmployeeId: context.employeeId,
       ...(body.terminalId === undefined
         ? {}
@@ -347,7 +353,6 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
           }
         : {}),
     }
-    const idempotencyKey = readIdempotencyKey(request)
     const publicId = readOptionalString(body.publicId, 'publicId', 128, 8)
       ?? (options.createPublicId ? createPublicId('payment')
         : `P${createHash('sha256').update(`${context.scope.tenantId}:${context.scope.storeId}:${idempotencyKey}`).digest('hex').slice(0, 32)}`)
@@ -384,8 +389,11 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       const provider = readManualProvider(body.provider)
       const method = readManualMethod(body.method)
       assertManualMethod(provider, method)
+      const idempotencyKey = readIdempotencyKey(request)
       const evidence: JsonObject = {
-        receiptReference: readString(body.receiptReference, 'receiptReference', 256, 3),
+        receiptReference: provider === 'cash' && (body.receiptReference === undefined || typeof body.receiptReference==='string' && body.receiptReference.trim()==='')
+          ? `CASH-ACTIVITY-${createHash('sha256').update(`${context.scope.tenantId}:${context.scope.storeId}:${idempotencyKey}`).digest('hex')}`
+          : readString(body.receiptReference, 'receiptReference', 256, 3),
         collectedByEmployeeId: context.employeeId,
         ...(body.terminalId === undefined
           ? {}
@@ -397,7 +405,6 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
             }
           : {}),
       }
-      const idempotencyKey = readIdempotencyKey(request)
       const registrationPublicId = readString(
         request.params.registrationPublicId,
         'registrationPublicId',
@@ -615,6 +622,8 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       const paymentId = readUuid(request.params.paymentId, 'paymentId')
       const reason = readString(body.reason, 'reason', 1_000, 2)
       const allocations = readRefundAllocations(body.allocations)
+      if(body.purpose!==undefined&&(typeof body.purpose!=='string'||!REFUND_PURPOSES.includes(body.purpose as RefundPurpose)))throw new PaymentApiRequestError('请选择有效退款用途')
+      const purpose=body.purpose as RefundPurpose|undefined
       const requestEvidence = sanitizeClientRefundEvidence(
         readOptionalJsonObject(body.requestEvidence, 'requestEvidence'),
       )
@@ -627,12 +636,14 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
           publicId,
           reason,
           allocations: allocations.map((allocation) => ({ ...allocation })),
+          ...(purpose?{purpose}:{}),
           requestEvidence: requestEvidence ?? null,
         }),
         paymentId,
         publicId,
         reason,
         allocations,
+        ...(purpose?{purpose}:{}),
         requestEvidence,
       })
       return reply.code(execution.replayed ? 200 : 201).send(executionResponse(execution))
@@ -724,7 +735,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       assertActorBinding(body, context.actor)
       const refundId = readUuid(request.params.refundId, 'refundId')
       const succeeded = readBoolean(body.succeeded, 'succeeded')
-      const receiptReference = readString(body.receiptReference, 'receiptReference', 256)
+      const receiptReference = body.receiptReference === undefined ? '' : readString(body.receiptReference, 'receiptReference', 256)
       const providerSnapshot: JsonObject = {
         receiptReference,
         collectedByEmployeeId: context.employeeId,
@@ -1542,6 +1553,11 @@ async function handleRoute(
 }
 
 function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
+  if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505'
+    && 'constraint' in error && ['payments_provider_transaction_uq', 'refunds_provider_refund_uq'].includes(String(error.constraint))) {
+    return apiError(409, 'FINANCIAL_REFERENCE_CONFLICT', '该收退款凭证已有记录，请核对原付款或退款结果；不要重复收付或另编凭证号')
+  }
+
   if (error instanceof NormalizedAuthenticationRequiredError || error instanceof StaffSessionNotFoundError) {
     return apiError(401, 'AUTH_REQUIRED', '登录信息无效或已过期，请重新登录')
   }
@@ -1582,7 +1598,7 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
     return apiError(409, 'ORDER_SETTLEMENT_EXCEPTION_CONFLICT', '订单仍有未完成出品、付款或退款，请先按实际状态处理')
   }
   if (error instanceof RefundNotFoundError) return apiError(404, 'REFUND_NOT_FOUND', error.message)
-  if (error instanceof OrderNotPayableError) return apiError(409, 'ORDER_NOT_PAYABLE', error.reason==='the order has no outstanding balance'?'本单已足额收清，不能再次收款':error.reason==='status is cancelled'?'订单已取消，不能收款':error.reason==='status is draft'?'订单仍为草稿，请先提交订单':'当前订单未通过收款条件校验，请刷新订单核对桌次、归属和待收金额')
+  if (error instanceof OrderNotPayableError) return apiError(409, 'ORDER_NOT_PAYABLE', error.reason==='unpaid item stop requires settlement'?'本单有停止菜品尚未核定减免，请在商品售后待办处理后收款；其他订单可单独收款':error.reason==='the order has no outstanding balance'?'本单已足额收清，不能再次收款':error.reason==='status is cancelled'?'订单已取消，不能收款':error.reason==='status is draft'?'订单仍为草稿，请先提交订单':'当前订单未通过收款条件校验，请刷新订单核对桌次、归属和待收金额')
   if (error instanceof RecollectionAuthorizationRequiredError) {
     return apiError(409, 'REFUND_RECOLLECTION_AUTHORIZATION_REQUIRED', error.message)
   }

@@ -21,6 +21,7 @@ import {
   canonicalizePostarPayload,
   hashPostarPayload,
   PostarPaymentRejectedError,
+  PostarPaymentNotSubmittedError,
   PostarPaymentProviderAdapter,
 } from './postar-adapter.js'
 
@@ -114,6 +115,16 @@ const PAYMENT_CALLBACK = {
 } as const
 
 describe('Postar canonical signing', () => {
+  it.each(['bad-id-with-hyphens', '', 'A'.repeat(41)])('certifies invalid order id as not submitted without making an HTTP call: %s', async (paymentIntentId) => {
+    const post=vi.fn()
+    const adapter=new PostarPaymentProviderAdapter(testOptions(post))
+    await expect(adapter.createPayment({paymentIntentId,merchantId:'MERCHANT001',amount:800,currency:'CNY',
+      expiresAt:'2026-07-14T04:20:00.000Z',presentation:'qr',clientIp:'203.0.113.10',
+      callbackUrl:'https://pay.example.test/callback',operatorId:'MBOX',remark:'test'}, context))
+      .rejects.toBeInstanceOf(PostarPaymentNotSubmittedError)
+    expect(post).not.toHaveBeenCalled()
+  })
+
   it('sorts top-level ASCII keys, excludes null, keeps empty strings and compacts nested JSON', () => {
     const payload = { c: 3, ignored: null, b: { z: 1 }, a: '' } as const
 

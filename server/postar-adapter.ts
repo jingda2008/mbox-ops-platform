@@ -57,6 +57,49 @@ interface PostarPaymentRejectionDetails {
   providerMessage?: string
 }
 
+export class PostarPaymentNotSubmittedError extends Error {
+  readonly diagnosticCode = 'POSTAR_CREATE_NOT_SUBMITTED_INVALID_REQUEST'
+  constructor() {
+    super('支付请求未发出，参数校验未通过，请核对配置后重试')
+    this.name = 'PostarPaymentNotSubmittedError'
+  }
+}
+
+function validatePaymentBeforeSubmission(request: ProviderCreatePaymentRequest, now: Date) {
+  try {
+    if (!ALPHANUMERIC_ORDER_ID.test(request.paymentIntentId)) {
+      throw new Error('星驿支付单号必须为1至40位大小写字母或数字')
+    }
+    if (request.currency !== 'CNY') throw new Error('星驿基础支付仅支持CNY')
+    if (!Number.isSafeInteger(request.amount) || request.amount <= 0) throw new Error('星驿支付金额必须为正整数分')
+    if (!request.merchantId.trim()) throw new Error('星驿支付商户号不能为空')
+    if (request.presentation === 'jsapi' && !request.payerId?.trim()) throw new Error('星驿JSAPI支付付款人标识不能为空')
+    if (request.presentation === 'jsapi' && !request.payWay) throw new Error('星驿JSAPI支付方式不能为空')
+    if (request.presentation === 'jsapi' && !request.clientIp.trim()) throw new Error('星驿JSAPI支付消费者IP不能为空')
+    if (request.presentation === 'barcode' && !request.clientIp.trim()) throw new Error('星驿付款码支付交易IP不能为空')
+    if (request.presentation === 'barcode' && !request.customerAuthCode?.trim()) throw new Error('星驿付款码不能为空')
+    if (request.presentation === 'barcode' && !/^(?:1[0-5]\d{16}|(?:2[5-9]|30)\d{14,22}|62\d{17})$/.test(request.customerAuthCode ?? '')) {
+      throw new Error('星驿付款码格式无效')
+    }
+    if (!request.operatorId.trim()) throw new Error('星驿支付操作员不能为空')
+    const callbackUrl = new URL(request.callbackUrl)
+    if (callbackUrl.protocol !== 'https:') throw new Error('星驿异步通知地址必须使用HTTPS')
+    if (request.presentation === 'jsapi' && request.payWay === 'wechat' && !request.wxAppid?.trim()) throw new Error('星驿微信支付必须提供wxAppid')
+    if (request.presentation === 'jsapi' && request.payWay === 'wechat'
+      && request.wechatTradeType !== '5' && request.wechatTradeType !== '8') {
+      throw new Error('星驿微信支付必须提供有效traType')
+    }
+    const expiresInMinutes = Math.ceil((Date.parse(request.expiresAt) - now.getTime()) / 60_000)
+    if (!Number.isInteger(expiresInMinutes) || expiresInMinutes < 1 || expiresInMinutes > 15) {
+      throw new Error('星驿支付有效期必须为1至15分钟')
+    }
+
+    return { callbackUrl, expiresInMinutes }
+  } catch {
+    throw new PostarPaymentNotSubmittedError()
+  }
+}
+
 export class PostarPaymentRejectedError extends Error {
   readonly diagnosticCode: string
   readonly providerCode: string
@@ -638,32 +681,7 @@ export class PostarPaymentProviderAdapter implements PaymentProviderAdapter {
     request: ProviderCreatePaymentRequest,
     context: PaymentProviderContext,
   ): Promise<ProviderCreatePaymentResult> {
-    if (!ALPHANUMERIC_ORDER_ID.test(request.paymentIntentId)) {
-      throw new Error('星驿支付单号必须为1至40位大小写字母或数字')
-    }
-    if (request.currency !== 'CNY') throw new Error('星驿基础支付仅支持CNY')
-    if (!Number.isSafeInteger(request.amount) || request.amount <= 0) throw new Error('星驿支付金额必须为正整数分')
-    if (!request.merchantId.trim()) throw new Error('星驿支付商户号不能为空')
-    if (request.presentation === 'jsapi' && !request.payerId?.trim()) throw new Error('星驿JSAPI支付付款人标识不能为空')
-    if (request.presentation === 'jsapi' && !request.payWay) throw new Error('星驿JSAPI支付方式不能为空')
-    if (request.presentation === 'jsapi' && !request.clientIp.trim()) throw new Error('星驿JSAPI支付消费者IP不能为空')
-    if (request.presentation === 'barcode' && !request.clientIp.trim()) throw new Error('星驿付款码支付交易IP不能为空')
-    if (request.presentation === 'barcode' && !request.customerAuthCode?.trim()) throw new Error('星驿付款码不能为空')
-    if (request.presentation === 'barcode' && !/^(?:1[0-5]\d{16}|(?:2[5-9]|30)\d{14,22}|62\d{17})$/.test(request.customerAuthCode ?? '')) {
-      throw new Error('星驿付款码格式无效')
-    }
-    if (!request.operatorId.trim()) throw new Error('星驿支付操作员不能为空')
-    const callbackUrl = new URL(request.callbackUrl)
-    if (callbackUrl.protocol !== 'https:') throw new Error('星驿异步通知地址必须使用HTTPS')
-    if (request.presentation === 'jsapi' && request.payWay === 'wechat' && !request.wxAppid?.trim()) throw new Error('星驿微信支付必须提供wxAppid')
-    if (request.presentation === 'jsapi' && request.payWay === 'wechat'
-      && request.wechatTradeType !== '5' && request.wechatTradeType !== '8') {
-      throw new Error('星驿微信支付必须提供有效traType')
-    }
-    const expiresInMinutes = Math.ceil((Date.parse(request.expiresAt) - this.now().getTime()) / 60_000)
-    if (!Number.isInteger(expiresInMinutes) || expiresInMinutes < 1 || expiresInMinutes > 15) {
-      throw new Error('星驿支付有效期必须为1至15分钟')
-    }
+    const { callbackUrl, expiresInMinutes } = validatePaymentBeforeSubmission(request, this.now())
 
     const { agencyId, publicKey } = await getCredentials(
       context,

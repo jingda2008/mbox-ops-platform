@@ -1,5 +1,6 @@
+import {currentRefundAttemptSql} from './refund-attempt-sql.js'
 import {resolveFulfillmentAllowedStations} from './fulfillment-query-service.js'
-import { orderNeedsCollectionSql } from './order-collection-sql.js'
+import { orderNeedsCollectionSql, orderReceivableSql } from './order-collection-sql.js'
 import type { JsonObject } from './command-executor.js'
 import { orderHistoryAccess } from './order-history-access.js'
 import { readOperatingHistory, type OperatingHistoryFilter } from './operating-history-query.js'
@@ -75,6 +76,7 @@ export interface OperationsTaskView {
   assignedEmployeeId: string | null
   backupEmployeeId: string | null
   assignedToActor: boolean
+  originalOrderItemId?:string|null
   interactionMode: 'quick_complete' | 'manager_resolution'
   dueAt: string | null
   escalateAt: string | null
@@ -150,6 +152,7 @@ interface TaskRow extends Record<string, unknown> {
   assigned_employee_id: string | null
   backup_employee_id: string | null
   assigned_to_actor: boolean
+  original_order_item_id?:string|null
   interaction_mode: OperationsTaskView['interactionMode']
   due_at: string | null
   escalate_at: string | null
@@ -183,7 +186,7 @@ export class OperationsQueryService {
         'SELECT mbox.current_operating_business_date($1::uuid,$2::uuid)::text AS business_date', [scope.tenantId,scope.storeId])
       if (!clock.rows[0]) throw new Error('门店营业日暂不可用')
       const stations=resolveFulfillmentAllowedStations(access.dataScopes)
-      return readOperatingHistory(transaction,{...filter,...orderHistoryAccess(access.permissions,clock.rows[0].business_date),
+      return readOperatingHistory(transaction,{...filter,...orderHistoryAccess(access.permissions,clock.rows[0].business_date),includeStockReturnWork:access.permissions.includes('inventory.receive')&&!filter.workKind,
         ...(filter.workKind?{allowFinancialSummary:false,workEmployeeId:employeeId,workStations:filter.workKind==='prepared'?stations:undefined}:{})})
     },{isolation:'repeatable-read',readOnly:true})
   }
@@ -311,7 +314,7 @@ export async function readTables(
         (SELECT count(*)::integer FROM mbox.orders ordering
           WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
             AND ordering.table_session_id=session.id AND ordering.status NOT IN ('draft','cancelled')) AS order_count,
-        (SELECT COALESCE(sum(ordering.total_amount_minor),0)::bigint FROM mbox.orders ordering
+        (SELECT COALESCE(sum(${orderReceivableSql('ordering')}),0)::bigint FROM mbox.orders ordering
           WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
             AND ordering.table_session_id=session.id AND ordering.status NOT IN ('draft','cancelled')) AS order_amount_minor,
         (SELECT count(*)::integer FROM mbox.orders ordering
@@ -337,7 +340,7 @@ export async function readTables(
             AND ordering.store_id=payment.store_id AND ordering.id=payment.order_id
           WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
             AND ordering.table_session_id=session.id
-            AND refund.status IN ('requested','approved','processing','failed'))
+            AND refund.status IN ('requested','approved','processing','failed') AND ${currentRefundAttemptSql('refund')})
           + (SELECT count(*)::integer FROM mbox.guest_immediate_checkout_late_capture_refund_followups followup
             JOIN mbox.orders ordering ON ordering.tenant_id=followup.tenant_id
               AND ordering.store_id=followup.store_id AND ordering.id=followup.order_id
@@ -356,7 +359,7 @@ export async function readTables(
             AND ordering.store_id=payment.store_id AND ordering.id=payment.order_id
           WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
             AND ordering.table_session_id=session.id
-            AND refund.status IN ('requested','approved','failed'))
+            AND refund.status IN ('requested','approved','failed') AND ${currentRefundAttemptSql('refund')})
           + (SELECT count(*)::integer FROM mbox.guest_immediate_checkout_late_capture_refund_followups followup
             JOIN mbox.orders ordering ON ordering.tenant_id=followup.tenant_id
               AND ordering.store_id=followup.store_id AND ordering.id=followup.order_id
@@ -408,6 +411,7 @@ async function readTasks(
       task.table_session_id, task.task_type, task.title, task.detail, task.priority,
       task.status, task.source, task.requested_role_code, task.assigned_employee_id,
       task.backup_employee_id,
+      (SELECT original.order_item_id::text FROM mbox.quantity_redeliveries original WHERE original.tenant_id=task.tenant_id AND original.store_id=task.store_id AND original.service_task_id=task.id) AS original_order_item_id,
       (
         task.assigned_employee_id = $3::uuid
         OR task.backup_employee_id = $3::uuid
@@ -441,6 +445,8 @@ async function readTasks(
         OR task.assigned_employee_id = $3::uuid
         OR task.backup_employee_id = $3::uuid
         OR (task.assigned_employee_id IS NULL AND task.requested_role_code = ANY($4::text[]))
+        OR (task.task_type='goods.redelivery'
+          AND mbox.employee_has_effective_permission(task.tenant_id,task.store_id,$3::uuid,'kds.deliver'))
         OR EXISTS (
           SELECT 1 FROM mbox.table_assignments assignment
           WHERE assignment.tenant_id = task.tenant_id
@@ -480,6 +486,7 @@ async function readTasks(
     assignedEmployeeId: row.assigned_employee_id,
     backupEmployeeId: row.backup_employee_id,
     assignedToActor: row.assigned_to_actor,
+    originalOrderItemId:row.original_order_item_id??null,
     interactionMode: row.interaction_mode,
     dueAt: row.due_at,
     escalateAt: row.escalate_at,

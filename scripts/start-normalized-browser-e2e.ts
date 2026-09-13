@@ -1,4 +1,7 @@
-import { randomBytes } from 'node:crypto'
+import {QuantityRemakeRepository} from '../server/normalized/quantity-remake-repository.js'
+import {QuantityRemakeFulfillmentRepository} from '../server/normalized/quantity-remake-fulfillment-repository.js'
+import {PostgresTableCustomerLeftTurnoverRepository} from '../server/normalized/table-customer-left-turnover-repository.js'
+import { randomBytes,randomUUID } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import process from 'node:process'
@@ -24,6 +27,7 @@ const databaseName = `mbox_normalized_browser_${process.pid}_${randomBytes(4).to
 const admin = new Client({ connectionString: databaseUrl(adminSource, 'postgres'), application_name: 'normalized-browser-admin' })
 const testUrl = databaseUrl(adminSource, databaseName)
 let runtime: Awaited<ReturnType<typeof createNormalizedApp>> | null = null
+let recoveryRuntime: Awaited<ReturnType<typeof createNormalizedApp>> | null = null
 let created = false
 
 try {
@@ -61,6 +65,7 @@ try {
     MBOX_NORMALIZED_SECRET: secret,
     MBOX_GUEST_PAYMENT_MODE: 'simulation',
     MBOX_START_WORKERS: 'false',
+    MBOX_QUANTITY_AFTER_SALES_ENABLED: 'true',
     MBOX_STATIC_DIR: resolve(process.env.MBOX_STATIC_DIR ?? 'dist'),
     HOST: '127.0.0.1',
     PORT: String(port),
@@ -162,6 +167,24 @@ try {
     product.productKind === 'bundle' && product.enabled && !product.soldOut && product.guestVisible
   ))?.name
   if (!bundleProductName) throw new Error('normalized browser fixture has no guest-visible bundle product')
+  let remakeHandoverFixture:{batchId:string;itemId:string;tableCode:string;productName:string}|undefined
+  if(process.env.NORMALIZED_E2E_REMAKE_HANDOVER==='true'){
+    // Opt-in fixture only: publicly creating remake batches remains disabled.
+    // No printer/provider worker runs in this throwaway browser database.
+    const opened=await new TableSessionCommandService(runtime.commandExecutor).open({scope,actor:{type:'employee',employeeId},table:{kind:'code',value:'W02'},publicId:`remake-fixture-${randomUUID()}`,businessDate,guestCount:2,guestProfileSnapshot:{source:'browser_remake_fixture'},openedByEmployeeId:employeeId,idempotencyKey:randomUUID(),requestFingerprint:'isolated-remake-handover'})
+    const ids=await runtime.transactions.run(scope,async tx=>{
+      const productId=randomUUID(),orderId=randomUUID(),itemId=randomUUID(),taskId=randomUUID(),productName='隔离重做实物'
+      await tx.query(`INSERT INTO mbox.products(id,tenant_id,store_id,code,name,category_code,fulfillment_station,inventory_control_mode) VALUES($1,$2,$3,'QA-REMAKE-HANDOVER',$4,'test','bar','not_managed')`,[productId,scope.tenantId,scope.storeId,productName])
+      await tx.query(`INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,channel,status,submitted_at,subtotal_amount_minor,total_amount_minor) VALUES($1,$2,$3,$4,$5,'staff_assisted','submitted',clock_timestamp(),3000,3000)`,[orderId,scope.tenantId,scope.storeId,opened.value.id,`remake-original-${orderId}`])
+      await tx.query(`INSERT INTO mbox.order_items(id,tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,total_amount_minor,fulfillment_station,status,product_snapshot) VALUES($1,$2,$3,$4,$5,3,1000,3000,'bar','ready',$6::jsonb)`,[itemId,scope.tenantId,scope.storeId,orderId,productId,JSON.stringify({name:productName,inventoryControlMode:'not_managed'})])
+      await tx.query(`INSERT INTO mbox.kds_tasks(id,tenant_id,store_id,order_item_id,station_code,quantity,status,ready_at) VALUES($1,$2,$3,$4,'bar',3,'ready',clock_timestamp())`,[taskId,scope.tenantId,scope.storeId,itemId])
+      const batch=await new QuantityRemakeRepository(tx).create({itemId,employeeId,quantity:3,originalGoodsLost:true,reason:'隔离测试原实物无法交付',eventKey:randomUUID()})
+      await new QuantityRemakeFulfillmentRepository(tx).act({taskId:batch.taskId,employeeId,action:'complete',quantity:2,eventKey:randomUUID()})
+      return {batchId:batch.id,itemId,productName,tableCode:'W02'}
+    })
+    await runtime.transactions.run(scope,tx=>new PostgresTableCustomerLeftTurnoverRepository(tx).close({scope,employeeId,tableSessionId:opened.value.id,businessDate,reasonNote:'隔离测试离店，实物留待处理',idempotencyKey:randomUUID()}))
+    remakeHandoverFixture=ids
+  }
   const roleByCode = new Map(store.roles.map((role) => [role.code, role]))
   const employees = store.employees.map((employee) => {
     const roles = employee.roleCodes.map((roleCode) => {
@@ -208,13 +231,22 @@ try {
     orderableProductName: orderableProducts.bar,
     kitchenProductName: orderableProducts.kitchen,
     bundleProductName,
+    remakeHandoverFixture,
     employees,
+    ...(process.env.NORMALIZED_E2E_RECOVERY_PEER==='true'?{recoveryBaseUrl:`http://localhost:${config.port+1}`} : {}),
   }, null, 2)}\n`, { mode: 0o600 })
 
+  if(process.env.NORMALIZED_E2E_RECOVERY_PEER==='true'){
+    // Same throwaway database and session secret, with new quantity admission
+    // disabled. Browser routing can exercise a rollout pause at the same origin.
+    recoveryRuntime=await createNormalizedApp({config:{...config,port:config.port+1},quantityAfterSalesEnabled:false,logger:false})
+    await recoveryRuntime.app.listen({host:config.host,port:config.port+1})
+  }
   await runtime.app.listen({ host: config.host, port: config.port })
   process.stdout.write(`normalized browser fixture ready on ${config.port}\n`)
   await waitForShutdown()
 } finally {
+  await recoveryRuntime?.app.close().catch(() => undefined)
   await runtime?.app.close().catch(() => undefined)
   if (created) {
     await admin.query(`

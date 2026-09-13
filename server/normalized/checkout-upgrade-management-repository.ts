@@ -461,12 +461,12 @@ export class CheckoutUpgradeManagementRepository {
         policy.publication_mode,policy.reason,
         COALESCE(jsonb_agg(jsonb_build_object(
           'id',window_row.id,'startsAt',window_row.starts_at::text,'endsAt',window_row.ends_at::text,
-          'capacityLimitUnits',window_row.capacity_limit_units,'usedUnits',COALESCE(usage.used_units,0)
+          'capacityLimitUnits',window_row.capacity_limit_units,'usedUnits',COALESCE(usage.used_units,0)+mbox.remake_window_used_units(window_row.tenant_id,window_row.store_id,window_row.id)
         ) ORDER BY window_row.starts_at,window_row.id) FILTER (WHERE window_row.id IS NOT NULL),'[]'::jsonb) AS windows
       FROM mbox.fulfillment_capacity_policy_versions policy
       LEFT JOIN mbox.fulfillment_capacity_windows window_row ON window_row.tenant_id=policy.tenant_id
         AND window_row.store_id=policy.store_id AND window_row.policy_version_id=policy.id
-      LEFT JOIN LATERAL (SELECT COALESCE(sum(reservation.capacity_units),0) AS used_units
+      LEFT JOIN LATERAL (SELECT COALESCE(sum(mbox.item_remaining_capacity_units(reservation.tenant_id,reservation.store_id,reservation.order_item_id,reservation.capacity_units)),0) AS used_units
         FROM mbox.fulfillment_capacity_reservations reservation
         WHERE reservation.tenant_id=window_row.tenant_id AND reservation.store_id=window_row.store_id
           AND reservation.capacity_window_id=window_row.id AND reservation.status IN ('reserved','active')) usage ON true

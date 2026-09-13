@@ -1,3 +1,5 @@
+import {ItemAfterSalesReplacementRepository} from './item-after-sales-replacement-repository.js'
+import {ItemQuantityConflict} from './order-item-quantity-plan.js'
 import type {
   AuditActor,
   CommandExecution,
@@ -43,7 +45,7 @@ import {
   type SelectedCheckoutUpgrade,
 } from './customer-experience-repository.js'
 import { ExperiencePlanActivationRepository } from './experience-plan-activation-repository.js'
-import { lockBoundGuestTablePosition } from './guest-table-authority.js'
+import { lockBoundGuestCheckoutPosition } from './guest-table-authority.js'
 
 export interface KdsSchedulingOverride {
   priority?: number
@@ -63,6 +65,8 @@ export interface SubmitOrderCommand extends Omit<CreateSubmittedOrderInput, 'tab
   businessDate: string
   idempotencyKey: string
   tableSessionId?: string
+  replacementCaseId?: string
+  replacementPreviousOrderId?:string
   assistedOrderContext?: Readonly<AssistedOrderContextProof>
   kdsOverride?: Readonly<KdsSchedulingOverride>
   pricingAuthorization?: Readonly<PricingAuthorizationRequest>
@@ -93,6 +97,7 @@ export interface CommerceCommandServiceOptions {
   inventoryEnforcementMode?: 'strict' | 'audit_only'
   guestOrderSafetyPolicy?: Readonly<GuestOrderSafetyPolicy>
   printTicketSources?: boolean
+  quantityAfterSalesEnabled?: boolean
 }
 
 export class GuestTablePositionChangedError extends Error {
@@ -129,15 +134,15 @@ export class CommerceCommandService {
     input: Readonly<SubmitOrderCommand>,
   ): Promise<CommandOutcome<SubmittedCommerceResult>> {
       validateCommand(input)
+      if(input.replacementPreviousOrderId&&!input.replacementCaseId)throw new TypeError('原换品关联缺失，请重新打开商品')
       const context = await resolveAuthoritativeTableContext(transaction, input)
+      if(input.replacementCaseId){
+        if(!this.options.quantityAfterSalesEnabled)throw new ItemQuantityConflict('QUANTITY_BATCH_NOT_ENABLED','暂不新增换品关联；已经创建的新单仍按原订单继续')
+        if(input.channel!=='staff_assisted'||input.actor.type!=='employee'||input.createdByEmployeeId!==input.actor.employeeId)throw new ItemQuantityConflict('QUANTITY_UNAVAILABLE','请由员工从原商品发起换品新单')
+        await new ItemAfterSalesReplacementRepository(transaction).lockSource({caseId:input.replacementCaseId,employeeId:input.actor.employeeId,tableSessionId:context.tableSessionId,previousOrderId:input.replacementPreviousOrderId})
+      }
       if (input.channel === 'guest_qr') {
-        const lockedSession=await transaction.query<{ id:string }>(`
-          SELECT id FROM mbox.table_sessions
-          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND status='open'
-          FOR UPDATE
-        `,[transaction.scope.tenantId,transaction.scope.storeId,context.tableSessionId])
-        if (!lockedSession.rows[0]) throw new GuestTablePositionChangedError()
-        const allowed=await lockBoundGuestTablePosition(transaction,{
+        const allowed=await lockBoundGuestCheckoutPosition(transaction,{
           tableSessionId:context.tableSessionId,
           customerId:input.createdByCustomerId!,
           actorRef:input.actor.ref,
@@ -167,6 +172,7 @@ export class CommerceCommandService {
       }
       const schedulingOverride = await authorizeKdsOverride(transaction, input)
       const order = await new OrderRepository(transaction).createSubmitted(orderInput, pricingAuthorization)
+      if(input.replacementCaseId)await new ItemAfterSalesReplacementRepository(transaction).link({caseId:input.replacementCaseId,orderId:order.id,employeeId:input.createdByEmployeeId!,previousOrderId:input.replacementPreviousOrderId})
       if (pricingAuthorization) await this.pricingPolicy!.consume(transaction, pricingAuthorization, order.id)
 
       const inventoryEnforcementMode = this.options.inventoryEnforcementMode ?? 'strict'
@@ -250,6 +256,7 @@ export class CommerceCommandService {
           objectType: 'order',
           objectId: order.id,
           businessDate: input.businessDate,
+          ...(input.replacementCaseId?{metadata:{replacementCaseId:input.replacementCaseId}}:{}),
           afterData: orderAuditSnapshot(
             result, pricingAuthorization, context, schedulingOverride, inventoryControl, selectedUpgrade?.offerId ?? null,
             orderedRecommendation,
@@ -754,6 +761,7 @@ function canonicalSubmitFingerprint(input: Readonly<SubmitOrderCommand>): string
     ? { type: input.actor.type, employeeId: input.actor.employeeId, ref: input.actor.ref ?? null }
     : { type: input.actor.type, ref: input.actor.ref ?? null }
   return JSON.stringify({
+    ...(input.replacementCaseId?{replacementCaseId:input.replacementCaseId,...(input.replacementPreviousOrderId?{replacementPreviousOrderId:input.replacementPreviousOrderId}:{})}:{}),
     tableSessionId: input.tableSessionId ?? null,
     assistedOrderContextTokenHash: input.assistedOrderContext && !input.tableSessionId
       ? hashAssistedOrderContextToken(input.assistedOrderContext.token)

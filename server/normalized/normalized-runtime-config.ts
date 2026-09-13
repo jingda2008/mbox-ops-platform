@@ -78,6 +78,7 @@ export interface NormalizedRuntimeConfig {
   trustProxyHops: number
   staticDir: string | null
   startWorkers: boolean
+  quantityAfterSalesEnabled?: boolean
   workerId: string | null
   workerIntervalMs: number
   workerAdapterModule: string | null
@@ -178,6 +179,9 @@ export function loadNormalizedRuntimeConfig(
   const commitSha = readCommitSha(environment.APP_COMMIT_SHA ?? environment.GITHUB_SHA)
   const releaseImageDigest = readImageDigest(environment.MBOX_RELEASE_IMAGE_DIGEST, errors)
   const staticDir = optional(environment.MBOX_STATIC_DIR)
+  const quantityAfterSalesEnabled = readBoolean(
+    environment.MBOX_QUANTITY_AFTER_SALES_ENABLED, false, 'MBOX_QUANTITY_AFTER_SALES_ENABLED', errors,
+  )
   const startWorkers = readBoolean(environment.MBOX_START_WORKERS, false, 'MBOX_START_WORKERS', errors)
   if (commercialProduction && !startWorkers && runtimeRole!=='contract_candidate') {
     errors.push('MBOX_START_WORKERS')
@@ -231,6 +235,7 @@ export function loadNormalizedRuntimeConfig(
     trustProxyHops,
     staticDir,
     startWorkers,
+    quantityAfterSalesEnabled,
     workerId,
     workerIntervalMs,
     workerAdapterModule,

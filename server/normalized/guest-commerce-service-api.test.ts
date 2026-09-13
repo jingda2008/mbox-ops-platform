@@ -28,6 +28,7 @@ import { PostarPaymentRejectedError } from '../postar-adapter.js'
 import { FulfillmentCapacityUnavailableError } from './fulfillment-capacity-repository.js'
 import { ServiceTaskRepository } from './service-task-repository.js'
 import { readTableSessionClosureState } from './table-session-closure-blockers.js'
+import { lockBoundGuestTablePosition, lockBoundGuestCheckoutPosition } from './guest-table-authority.js'
 import { seedActiveGuestTableAuthority } from './guest-table-authority.test-helper.js'
 import {CheckoutCouponQuoteRepository} from './checkout-coupon-quote-repository.js'
 import {CheckoutUpgradeCandidateRepository} from './checkout-upgrade-candidate-repository.js'
@@ -1132,6 +1133,50 @@ integration('guest service and mood API with PostgreSQL', () => {
     await app?.close()
     await pool?.end()
   })
+
+  it('reproduces the old lock upgrade cycle and lets checkout/service complete with table-first locks', async () => {
+    const start = async () => {
+      const client = await pool.connect()
+      await client.query('BEGIN')
+      await client.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.store_id',$2,true)", [integrationTenantId,integrationStoreId])
+      await client.query("SET LOCAL statement_timeout='5s'")
+      return client
+    }
+    const scoped = (client: Awaited<ReturnType<typeof start>>): ScopedTransaction => ({
+      scope: integrationContext.scope,
+      query: (sql, values) => client.query(sql, values ? [...values] : undefined),
+    })
+    const waitBlocked = async (pid: number) => {
+      for (let n=0;n<150;n++) {
+        const state=await pool.query('SELECT cardinality(pg_blocking_pids($1)) AS count',[pid])
+        if (state.rows[0].count>0) return
+        await new Promise(resolve=>setTimeout(resolve,10))
+      }
+      throw new Error('reader did not reach controlled lock wait')
+    }
+    const finalTableLock = (client: Awaited<ReturnType<typeof start>>) => client.query(
+      'SELECT id FROM mbox.table_sessions WHERE id=$1::uuid FOR UPDATE',[integrationSessionId])
+    for (const fixed of [false,true]) {
+      const writer=await start(), reader=await start()
+      try {
+        const readerPid=(await reader.query('SELECT pg_backend_pid() AS pid')).rows[0].pid
+        expect(await (fixed ? lockBoundGuestCheckoutPosition : lockBoundGuestTablePosition)(scoped(writer),integrationContext)).toBe(true)
+        const reading=lockBoundGuestTablePosition(scoped(reader),integrationContext)
+          .then(async result=>{await reader.query('COMMIT');return {ok:result,code:null}})
+          .catch(async (error: {code:string})=>{await reader.query('ROLLBACK');return {ok:false,code:error.code}})
+        await waitBlocked(readerPid)
+        const writing=finalTableLock(writer)
+          .then(async()=>{await writer.query('COMMIT');return {ok:true,code:null}})
+          .catch(async (error: {code:string})=>{await writer.query('ROLLBACK');return {ok:false,code:error.code}})
+        const result=await Promise.all([reading,writing])
+        if (fixed) expect(result.every(value=>value.ok)).toBe(true)
+        else expect(result.map(value=>value.code)).toContain('40P01')
+      } finally {
+        await writer.query('ROLLBACK'); await reader.query('ROLLBACK')
+        writer.release();reader.release()
+      }
+    }
+  }, 15000)
 
   it('cancels an abandoned guest self-checkout without leaving service work or a later checkout blocker', async () => {
     const abandonedOrderId = randomUUID()

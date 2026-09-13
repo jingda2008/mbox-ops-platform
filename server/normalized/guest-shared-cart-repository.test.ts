@@ -122,6 +122,59 @@ integration('GuestSharedCartRepository PostgreSQL authority', () => {
 
   afterAll(async () => { await pool?.end() })
 
+  it('keeps concurrent same-table adds exact and different-table reads independent', async () => {
+    const makeSession = async () => {
+      const table = randomUUID(), session = randomUUID()
+      await pool.query(`INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity)
+        VALUES($1,$2,$3,$4,$5,'并发测试桌',4)`,[table,tenantId,storeId,areaId,`PF-${table.slice(0,8)}`])
+      await pool.query(`INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count,status)
+        VALUES($1,$2,$3,$4,$5,CURRENT_DATE,2,'open')`,[session,tenantId,storeId,table,`perf-${session}`])
+      return session
+    }
+    const firstSession=await makeSession(), secondSession=await makeSession()
+    const firstPublic=`GSC${randomUUID().replaceAll('-','').toUpperCase()}`, secondPublic=`GSC${randomUUID().replaceAll('-','').toUpperCase()}`
+    const read=(session:string,publicId:string)=>transactions.run(scope,tx=>new GuestSharedCartRepository(tx).readOpen(session,publicId))
+    const initial=await read(firstSession,firstPublic)
+    const operations=['perf-same-a','perf-same-b'].map(key=>({productId,delta:1,expectedGeneration:initial.generation,expectedVersion:initial.version,operationId:key,actorSessionRef:`guest-session:${randomUUID()}`}))
+    const concurrent=await Promise.allSettled(operations.map(input=>transactions.run(scope,tx=>new GuestSharedCartRepository(tx).adjust(firstSession,firstPublic,input))))
+    expect(concurrent.filter(result=>result.status==='fulfilled')).toHaveLength(1)
+    const conflictIndex=concurrent.findIndex(result=>result.status==='rejected')
+    expect(conflictIndex).toBeGreaterThanOrEqual(0)
+    const rejected=concurrent[conflictIndex] as PromiseRejectedResult
+    expect(rejected.reason).toBeInstanceOf(GuestSharedCartVersionConflictError)
+    const refreshed=await read(firstSession,firstPublic)
+    await transactions.run(scope,tx=>new GuestSharedCartRepository(tx).adjust(firstSession,firstPublic,{
+      ...operations[conflictIndex]!,expectedGeneration:refreshed.generation,expectedVersion:refreshed.version,
+    }))
+    const added=await read(firstSession,firstPublic)
+    expect(added.lines[0]?.quantity).toBe(2)
+    expect(added.totalAmountMinor).toBe(5600)
+    await Promise.all(operations.map(input=>transactions.run(scope,tx=>new GuestSharedCartRepository(tx).adjust(firstSession,firstPublic,input))))
+    expect((await read(firstSession,firstPublic)).lines[0]?.quantity).toBe(2)
+    const holder=await pool.connect()
+    try {
+      await holder.query('BEGIN')
+      await holder.query(`SELECT id FROM mbox.guest_shared_carts WHERE table_session_id=$1 FOR UPDATE`,[firstSession])
+      // A lock on another table must not prevent this independent cart from opening.
+      expect((await read(secondSession,secondPublic)).lines).toHaveLength(0)
+    } finally {await holder.query('ROLLBACK');holder.release()}
+  },10000)
+
+  it('does not upgrade a shared-cart read into a conflicting table lock',async()=>{
+    // The prior unqualified joined FOR UPDATE also locked the parent table.
+    await transactions.run(scope,tx=>new GuestSharedCartRepository(tx).readOpen(tableSessionId,'GSC10600000000040008000000000000001'))
+    const other=await pool.connect()
+    try {
+      await other.query('BEGIN')
+      await other.query(`SELECT id FROM mbox.table_sessions WHERE id=$1 FOR KEY SHARE`,[tableSessionId])
+      const value=await transactions.run(scope,async tx=>{
+        await tx.query("SET LOCAL lock_timeout='1500ms'")
+        return new GuestSharedCartRepository(tx).readOpen(tableSessionId,'GSC10600000000040008000000000000001')
+      })
+      expect(value.generation).toBe(1)
+    } finally {await other.query('ROLLBACK');other.release()}
+  })
+
   it('uses table-session-scoped server versions and replays an identical operation safely', async () => {
     const protocol = await pool.query<{ guest_cart_protocol_version: number }>(`
       SELECT guest_cart_protocol_version FROM mbox.table_sessions WHERE id=$1::uuid

@@ -154,9 +154,11 @@ function unifiedActionTime(action: StaffUnifiedAction): number {
     : eventTime(action.item.dueAt ?? action.item.nextActionAt ?? action.item.createdAt)
 }
 
-export function fulfillmentAction(item: StaffFulfillmentItem): 'complete' | 'deliver' | 'remake' | null {
+export function fulfillmentAction(item: StaffFulfillmentItem, queue?:'production'|'delivery'): 'complete' | 'deliver' | 'remake' | null {
   if (item.canRemake && item.kdsStatus === 'failed') return 'remake'
-  if (item.canDeliver && item.readyForDelivery && item.kdsStatus === 'ready') return 'deliver'
+  if(queue==='production'&&item.canPrepare)return 'complete'
+  if (item.canDeliver && item.readyForDelivery && (item.kdsStatus === 'ready'||item.quantities)) return 'deliver'
+  if(queue==='delivery')return null
   if (item.canPrepare && item.kdsStatus !== 'ready') return 'complete'
   return null
 }

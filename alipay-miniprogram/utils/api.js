@@ -2,7 +2,7 @@ const runtime = require('./platform')
 const { request, deviceKey } = require('./request')
 const { randomId } = require('./id')
 const { recoverableGuestCommand } = require('./recoverable-command')
-const { getTableSession, rememberTableConnection, clearTableConnection, restoreRejectedTableScan } = require('./session')
+const { getTableSession, rememberTableConnection, clearTableConnection } = require('./session')
 const { tableRequestScope } = require('./table-request-scope')
 const {
   ensureCustomerSession, clearCustomerSession, renewReservationSessionOnly,
@@ -28,6 +28,19 @@ async function loadGuestSession() {
     || !session.cartScope
   )
   if (needsScan) {
+    if (rememberedConnection.status === 'waiting_for_table'
+      && String(rememberedConnection.scanNonce || '') === String(session.scanNonce || '')) {
+      const waiting = await request('/api/guest/session/wait', {
+        method: 'POST', requireTableSession: false,
+        data: { tableQrToken: session.tableToken, deviceKey: deviceKey() }, ...requestOptions,
+      })
+      if (!isCurrentScope()) throw scopeChanged()
+      if (waiting.data && waiting.data.status === 'waiting_for_table') {
+        rememberTableConnection(waiting.data)
+        return waiting.data
+      }
+      if (!waiting.data || waiting.data.status !== 'ready_for_scan') throw new Error('桌台状态暂未确认，请稍后重试')
+    }
     // Until the shared backend has an Alipay identity adapter, table entry is
     // deliberately guest-only. The table and reservation sessions remain
     // isolated and no identity bearer is fabricated on the client.
@@ -40,7 +53,7 @@ async function loadGuestSession() {
       ...requestOptions,
     }) } catch(error) {
       if(!isCurrentScope())throw scopeChanged()
-      if(error&&error.code==='TABLE_QR_INVALID'&&restoreRejectedTableScan())error.message='新桌码无效，已保留原桌台；请扫描本店有效的新桌码。'
+      if(error&&error.code==='TABLE_QR_INVALID')error.message='桌台同步未成功，请重新扫描有效桌码；核验前不能向原桌下单。'
       throw error
     }
     if (!isCurrentScope()) throw scopeChanged()
@@ -68,7 +81,17 @@ async function loadGuestSession() {
   }
 }
 
-async function getGuestSession() { return { data: await loadGuestSession(), source: 'api', warning: '' } }
+let guestSessionPending = null
+async function getGuestSession() {
+  const scope = tableRequestScope(getTableSession())
+  if (guestSessionPending && guestSessionPending.scope === scope) return guestSessionPending.promise
+  const pending = { scope, promise: null }
+  pending.promise = loadGuestSession().then(data => ({ data, source: 'api', warning: '' })).finally(() => {
+    if (guestSessionPending === pending) guestSessionPending = null
+  })
+  guestSessionPending = pending
+  return pending.promise
+}
 
 async function publicRequest(path, options) {
   await ensureCustomerSession(false)

@@ -45,7 +45,7 @@ export async function readBusinessDayBlockerFacts(
 function factQuery(code: TableSessionClosureBlockerCode): string {
   const prefix = `
     WITH scoped_orders AS (
-      SELECT ordering.*,
+      SELECT ordering.*,mbox.order_receivable_amount(ordering.tenant_id,ordering.store_id,ordering.id) AS effective_amount_minor,
         EXISTS (SELECT 1 FROM mbox.order_settlement_exception_events exception
           WHERE exception.tenant_id=ordering.tenant_id AND exception.store_id=ordering.store_id
             AND exception.order_id=ordering.id) AS has_settlement_exception
@@ -61,7 +61,7 @@ function factQuery(code: TableSessionClosureBlockerCode): string {
             WHERE item.tenant_id=ordering.tenant_id AND item.store_id=ordering.store_id
               AND item.order_id=ordering.id AND item.status='delivered'
           ),0)::bigint
-          ELSE ordering.total_amount_minor
+          ELSE ordering.effective_amount_minor
         END-COALESCE((
           SELECT sum(payment.amount_minor) FROM mbox.order_payment_facts payment
           WHERE payment.tenant_id=ordering.tenant_id AND payment.store_id=ordering.store_id
@@ -79,7 +79,8 @@ function factQuery(code: TableSessionClosureBlockerCode): string {
     FROM order_facts ordering
     LEFT JOIN mbox.employees employee ON employee.tenant_id=ordering.tenant_id
       AND employee.store_id=ordering.store_id AND employee.id=ordering.created_by_employee_id
-    WHERE NOT ((ordering.status NOT IN ('draft','cancelled') AND ordering.total_amount_minor=0)
+    WHERE NOT ((ordering.payment_status IN ('unpaid','pending','partially_paid') AND ordering.outstanding_amount_minor=0)
+      OR (ordering.status NOT IN ('draft','cancelled') AND ordering.effective_amount_minor=0)
       OR (ordering.status<>'cancelled' AND ordering.payment_status IN ('paid','partially_refunded','refunded'))
       OR (ordering.status='cancelled' AND ordering.payment_status='refunded')
       OR (ordering.status='cancelled' AND NOT EXISTS (
@@ -144,14 +145,14 @@ function factQuery(code: TableSessionClosureBlockerCode): string {
   if (code === 'INVENTORY_RESERVED') return `${prefix}
     SELECT 'inventory_reservation'::text AS entity_type,reservation.id AS entity_id,
       ordering.public_id AS reference,inventory.name AS title,reservation.status,
-      NULL::text AS amount_minor,reservation.quantity::text||' '||inventory.base_unit AS quantity_text,
+      NULL::text AS amount_minor,mbox.inventory_reservation_remaining_quantity(reservation.tenant_id,reservation.store_id,reservation.id)::text||' '||inventory.base_unit AS quantity_text,
       ordering.id AS order_id,ordering.public_id AS order_public_id,NULL::text AS responsible_employee_name
     FROM scoped_orders ordering JOIN mbox.inventory_order_reservations reservation
       ON reservation.tenant_id=ordering.tenant_id AND reservation.store_id=ordering.store_id
      AND reservation.order_id=ordering.id
     JOIN mbox.inventory_items inventory ON inventory.tenant_id=reservation.tenant_id
       AND inventory.store_id=reservation.store_id AND inventory.id=reservation.inventory_item_id
-    WHERE reservation.status='reserved' ORDER BY reservation.reserved_at,reservation.id LIMIT 25`
+    WHERE mbox.inventory_reservation_remaining_quantity(reservation.tenant_id,reservation.store_id,reservation.id)>0 ORDER BY reservation.reserved_at,reservation.id LIMIT 25`
   if (code === 'REFUND_PENDING') return `${prefix}
     SELECT 'refund'::text AS entity_type,refund.id AS entity_id,refund.public_id AS reference,
       '退款处理中'::text AS title,refund.status,refund.amount_minor::text AS amount_minor,

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0-rc.192 - 2026-09-14
+
+- 合并桌台扫码归属、员工单品售后/一次审核、数量履约与实物退库、原价明确套餐拆退、日期扎账及打印表达修复，schema198—202、门店配置v24。
+- 菜单和有效点单优先，非必要模块独立加载，两端首屏图片与兼容缩略图优化；保留金额、库存、支付和旧桌响应校验。
+- 增加数量售后显式生产开关，默认关闭，关闭后仍可恢复已有操作；积分用途及券扩展暂缓，打印桥不自动升级，协议V2仍为送审稿。
+
 ## 1.0.0-rc.191 - 2026-09-12
 
 - Stop fully refunded, unstarted order items and return their evidenced reserved or consumed inventory exactly once. Preserve started production and partial-amount refund boundaries.

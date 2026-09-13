@@ -2,6 +2,22 @@ import { describe, expect, it, vi } from 'vitest'
 import { StaffActionsApi, StaffActionsApiError } from './staff-actions-api'
 
 describe('StaffActionsApi', () => {
+  it.each(['QUANTITY_UNAVAILABLE','QUANTITY_BATCH_NOT_ENABLED'])('clears definite %s without losing an in-progress original result',async(code)=>{
+    const send=vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({error:{code,message:'本次数量未执行'}}),{status:409}))
+      .mockResolvedValueOnce(new Response(JSON.stringify({error:{code:'IDEMPOTENCY_IN_PROGRESS',message:'处理中'}}),{status:409}))
+      .mockResolvedValueOnce(new Response('{}',{status:200}))
+    let sequence=0
+    const api=new StaffActionsApi({fetch:send,createIdempotencyKey:()=>`correction-${++sequence}`})
+    await expect(api.runKdsAction('task-1','complete',2)).rejects.toMatchObject({code})
+    expect(api.pendingKdsActions()).toHaveLength(0)
+    await expect(api.runKdsAction('task-1','complete',1)).rejects.toMatchObject({code:'IDEMPOTENCY_IN_PROGRESS'})
+    expect(api.pendingKdsActions()).toMatchObject([{quantity:1}])
+    await api.recoverKdsResults()
+    const keys=send.mock.calls.map(([,init])=>new Headers(init?.headers).get('idempotency-key'))
+    expect(keys[0]).not.toBe(keys[1]);expect(keys[2]).toBe(keys[1])
+  })
+
   it('loads the complete read-only assisted catalog instead of the management first page', async () => {
     const send = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ data: [] }), { status: 200 }))
     const api = new StaffActionsApi({ fetch: send })
@@ -209,6 +225,25 @@ describe('StaffActionsApi', () => {
     expect(new Headers(send.mock.calls[3]?.[1]?.headers).get('idempotency-key')).toBe('staff-action-attempt-3')
   })
 
+  it('restores the exact partial KDS command across a reload before allowing a different quantity',async()=>{
+    const values=new Map<string,string>()
+    const commandStorage={getItem:(key:string)=>values.get(key)??null,setItem:(key:string,value:string)=>{values.set(key,value)},removeItem:(key:string)=>{values.delete(key)}}
+    const send=vi.fn<typeof fetch>().mockRejectedValueOnce(new TypeError('response lost')).mockImplementation(async()=>new Response(JSON.stringify({data:{}}),{status:200}))
+    const first=new StaffActionsApi({fetch:send,commandStorage,createIdempotencyKey:()=> 'original-quantity'})
+    await expect(first.runKdsAction('task-q','complete',2)).rejects.toThrow()
+    const restored=new StaffActionsApi({fetch:send,commandStorage,createIdempotencyKey:()=> 'next-quantity'})
+    expect(restored.pendingKdsActions()).toEqual([{taskId:'task-q',action:'complete',quantity:2}])
+    await expect(restored.runKdsAction('task-q','complete',1)).rejects.toMatchObject({code:'KDS_ORIGINAL_COMMAND_PENDING'})
+    expect(send).toHaveBeenCalledTimes(1)
+    await restored.recoverKdsResults()
+    expect(send.mock.calls[1][1]?.body).toBe(send.mock.calls[0][1]?.body)
+    expect(new Headers(send.mock.calls[1][1]?.headers).get('idempotency-key')).toBe('staff-action-original-quantity')
+    expect(restored.pendingKdsActions()).toEqual([])
+    await restored.runKdsAction('task-q','complete',1)
+    expect(new Headers(send.mock.calls[2][1]?.headers).get('idempotency-key')).toBe('staff-action-next-quantity')
+    expect(JSON.parse(String(send.mock.calls[2][1]?.body))).toEqual({action:'complete',quantity:1})
+  })
+
   it('binds assisted ordering to the current table context and sends gift mode without a client authority id', async () => {
     const token = 'T'.repeat(43)
     const send = vi.fn<typeof fetch>()
@@ -317,6 +352,7 @@ describe('StaffActionsApi', () => {
   it('reads only product delivery progress from the active table order-details endpoint', async () => {
     const valid = {
       publicId: 'ORDER-A01-0001',
+      paymentStatus: 'partially_refunded', totalAmountMinor: 3600,
       items: [{
         id: '22222222-2222-4222-8222-222222222222',
         productName: '金汤力',
@@ -324,6 +360,7 @@ describe('StaffActionsApi', () => {
         fulfillmentStation: 'bar',
         fulfillmentStatus: 'ready_for_delivery',
         includedInBundle: false, unitPriceMinor: 1800, totalAmountMinor: 3600,
+        refundedAmountMinor: 1800,
       }],
     }
     const send = vi.fn<typeof fetch>()

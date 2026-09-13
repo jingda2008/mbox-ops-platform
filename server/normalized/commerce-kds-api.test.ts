@@ -275,6 +275,9 @@ function fixture(input: {
     query: async <Row extends Record<string, unknown>>(text: string): Promise<PostgresQueryResult<Row>> => {
       const sql = text.replace(/\s+/g, ' ').trim()
       commandQueries.push(sql)
+      if(sql.includes('AS task_id'))return rows([{task_id:taskId,order_id:orderId,session_id:tableSessionId}]) as PostgresQueryResult<Row>
+      if(sql.startsWith('SELECT id FROM mbox.table_sessions'))return rows([{id:tableSessionId}]) as PostgresQueryResult<Row>
+      if(sql.startsWith('SELECT id,table_session_id FROM mbox.orders'))return rows([{id:orderId,table_session_id:tableSessionId}]) as PostgresQueryResult<Row>
       if (sql.includes('FROM mbox.kds_tasks AS task')) {
         return rows([{
           id: taskId,
@@ -901,6 +904,7 @@ describe('commerceKdsApiPlugin', () => {
       { tenantId, storeId },
       employeeId,
       '2026-08-11',
+      {staffSessionId,deviceAccessLeaseId},
     )
 
     const denied = fixture({ permissions: ['dashboard.view'] })
@@ -927,10 +931,12 @@ describe('commerceKdsApiPlugin', () => {
     })
     expect(value.kdsRepository.accept).toHaveBeenCalledOnce()
     expect(value.kdsRepository.startPreparing).toHaveBeenCalledOnce()
-    expect(value.commandQueries[0]).toContain('task.id = $3::uuid')
-    expect(value.commandQueries[0]).not.toContain('JOIN mbox.order_items')
-    expect(value.commandQueries[1]).toContain('item.id = $3::uuid')
-    expect(value.commandQueries[1]).not.toContain('FOR UPDATE')
+    expect(value.commandQueries[1]).toContain('FOR SHARE')
+    expect(value.commandQueries[2]).toContain('FOR UPDATE')
+    expect(value.commandQueries[3]).toContain('task.id = $3::uuid')
+    expect(value.commandQueries[3]).not.toContain('JOIN mbox.order_items')
+    expect(value.commandQueries[4]).toContain('item.id = $3::uuid')
+    expect(value.commandQueries[4]).not.toContain('FOR UPDATE')
     expect(value.executions[0]?.command).toMatchObject({
       operationScope: 'commerce.kds.action',
       idempotencyKey: 'kds-start-0001',
@@ -983,9 +989,9 @@ describe('commerceKdsApiPlugin', () => {
     })
     expect(value.orderRepository.markDelivered).toHaveBeenCalledWith(orderItemId, employeeId)
     expect(value.kdsRepository.markReady).not.toHaveBeenCalled()
-    expect(value.commandQueries[0]).toContain('mbox.kds_tasks')
-    expect(value.commandQueries[0]).not.toContain('mbox.order_items')
-    expect(value.commandQueries[1]).toContain('mbox.order_items')
+    expect(value.commandQueries[3]).toContain('mbox.kds_tasks')
+    expect(value.commandQueries[3]).not.toContain('mbox.order_items')
+    expect(value.commandQueries[4]).toContain('mbox.order_items')
   })
 
   it('removes ordinary cancel and requires failure reasons with actionable audit evidence', async () => {

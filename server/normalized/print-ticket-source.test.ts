@@ -13,6 +13,7 @@ describe('PrintTicketSourceRepository', () => {
       scope,
       query: async (text) => {
         queries.push(text)
+        if(text.includes('FROM mbox.item_receivable_adjustment_facts'))return {rowCount:1,rows:[{amount:'0'}]}
         if (text.includes('FROM mbox.orders AS ordering')) {
           return {
             rowCount: 1,
@@ -36,6 +37,7 @@ describe('PrintTicketSourceRepository', () => {
             }],
           }
         }
+        if (text.includes('FROM mbox.order_item_quantity_units unit')) return { rowCount: 0, rows: [] }
         if (text.includes('FROM mbox.printer_routes AS route')) return { rowCount: 0, rows: [] }
         throw new Error('unexpected query')
       },
@@ -58,6 +60,7 @@ describe('PrintTicketSourceRepository', () => {
       scope,
       query: async (text) => {
         queries.push(text)
+        if(text.includes('FROM mbox.item_receivable_adjustment_facts'))return {rowCount:1,rows:[{amount:'0'}]}
         if (text.includes('FROM mbox.payments AS payment')) {
           return {
             rowCount: 1,
@@ -96,6 +99,7 @@ describe('PrintTicketSourceRepository', () => {
       scope,
       query: async (text) => {
         queries.push(text)
+        if(text.includes('FROM mbox.item_receivable_adjustment_facts'))return {rowCount:1,rows:[{amount:'0'}]}
         if (text.includes('FROM mbox.payments payment') && text.includes('community_activity_registrations')) {
           return {
             rowCount: 1,

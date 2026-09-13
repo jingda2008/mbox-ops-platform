@@ -55,6 +55,8 @@ export interface TableScanInput {
   tableQrToken: string
   deviceFingerprint: string
   businessDate: string
+  /** Availability polling never issues or moves a guest session. */
+  availabilityOnly?: boolean
   /**
    * Optional server-resolved WeChat customer.  This is never accepted from the
    * request body; it lets a mini-program table session use the same canonical
@@ -78,6 +80,7 @@ export type TableScanResult =
       tableCode: string
       tableDisplayName: string
     }
+  | { status: 'ready_for_scan'; tableCode: string; tableDisplayName: string }
   | { status: 'invalid_qr' }
   | { status: 'rate_limited'; retryAt: string }
 
@@ -655,13 +658,13 @@ export class GuestSessionService {
     const ratePrincipal = hmacSensitiveValue(
       this.hashSecret,
       input.scope,
-      'guest-scan-rate-v1',
+      input.availabilityOnly ? 'guest-wait-rate-v1' : 'guest-scan-rate-v1',
       `${credentialHash}:${deviceHash}`,
     )
     const tableRatePrincipal = hmacSensitiveValue(
       this.hashSecret,
       input.scope,
-      'guest-table-scan-rate-v1',
+      input.availabilityOnly ? 'guest-table-wait-rate-v1' : 'guest-table-scan-rate-v1',
       credentialHash,
     )
     const rawToken = this.randomToken()
@@ -673,10 +676,10 @@ export class GuestSessionService {
     return this.transactions.run(input.scope, async (transaction) => {
       const repository = new GuestSessionRepository(transaction)
       const deviceRate = await repository.consumeRateLimit(
-        'table_scan', ratePrincipal, 10, 60_000,
+        'table_scan', ratePrincipal, input.availabilityOnly ? 30 : 10, 60_000,
       )
       const tableRate = await repository.consumeRateLimit(
-        'table_scan', tableRatePrincipal, 30, 60_000,
+        'table_scan', tableRatePrincipal, input.availabilityOnly ? 100 : 30, 60_000,
       )
       if (!deviceRate.allowed || !tableRate.allowed) {
         const retryAt = new Date(Math.max(
@@ -686,7 +689,7 @@ export class GuestSessionService {
         await repository.recordEvent({
           eventType: 'guest_session.scan-denied',
           outcome: 'rate_limited',
-          reasonCode: 'SCAN_RATE_LIMITED',
+          reasonCode: input.availabilityOnly ? 'WAIT_RATE_LIMITED' : 'SCAN_RATE_LIMITED',
         })
         return { status: 'rate_limited', retryAt }
       }
@@ -712,6 +715,10 @@ export class GuestSessionService {
           tableCode: credential.tableCode,
           tableDisplayName: credential.tableDisplayName,
         }
+      }
+
+      if (input.availabilityOnly) return {
+        status: 'ready_for_scan', tableCode: credential.tableCode, tableDisplayName: credential.tableDisplayName,
       }
 
       const customerId = input.customerId ?? (await this.identities.resolveAnonymous({

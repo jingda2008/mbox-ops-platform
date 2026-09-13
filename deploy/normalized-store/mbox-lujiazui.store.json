@@ -1,5 +1,5 @@
 {
-  "version": "2026.09.12-v23",
+  "version": "2026.09.13-v24",
   "tenant": {
     "id": "10000000-0000-4000-8000-000000000001",
     "code": "superhigh",
@@ -1099,7 +1099,8 @@
         "product.observation.analytics.view",
         "order.history.view",
         "order.history.all",
-        "order.bill.print"
+        "order.bill.print",
+        "refund.request"
       ],
       "navigation": [
         {
@@ -1280,7 +1281,8 @@
         "product.observation.analytics.view",
         "order.history.view",
         "order.history.all",
-        "order.bill.print"
+        "order.bill.print",
+        "refund.request"
       ],
       "navigation": [
         {
@@ -1381,7 +1383,8 @@
         "recommendation.analytics.view",
         "product.observation.analytics.view",
         "order.history.view",
-        "order.history.all"
+        "order.history.all",
+        "refund.request"
       ],
       "navigation": [
         {
@@ -1588,15 +1591,6 @@
             "allowFullGift": true,
             "requiresReason": true
           }
-        },
-        {
-          "code": "refund.request",
-          "amountMinor": 200000,
-          "currency": "CNY",
-          "rules": {
-            "requiresSecondActor": true,
-            "requiresReason": true
-          }
         }
       ]
     },
@@ -1659,7 +1653,8 @@
         "recommendation.analytics.view",
         "product.observation.analytics.view",
         "order.history.view",
-        "order.history.all"
+        "order.history.all",
+        "refund.request"
       ],
       "navigation": [
         {
@@ -1754,7 +1749,8 @@
         "observation.record",
         "recommendation.staff.modify",
         "observation.confirm",
-        "order.history.view"
+        "order.history.view",
+        "refund.request"
       ],
       "navigation": [
         {
@@ -1820,7 +1816,8 @@
         "reservation.view.all",
         "reservation.manage",
         "service.view",
-        "order.history.view"
+        "order.history.view",
+        "refund.request"
       ],
       "navigation": [
         {
@@ -1855,7 +1852,8 @@
         "inventory.count",
         "inventory.waste",
         "service.view",
-        "order.history.view"
+        "order.history.view",
+        "refund.request"
       ],
       "dataScopes": [
         {
@@ -1909,7 +1907,8 @@
         "printer.manage",
         "print.reprint",
         "order.history.view",
-        "order.bill.print"
+        "order.bill.print",
+        "refund.request"
       ],
       "navigation": [
         {
@@ -1949,7 +1948,8 @@
         "kds.exception.manage",
         "inventory.view",
         "inventory.manage",
-        "order.history.view"
+        "order.history.view",
+        "refund.request"
       ],
       "dataScopes": [
         {
@@ -1988,7 +1988,8 @@
         "performance.phase.manage",
         "reservation.view",
         "service.view",
-        "order.history.view"
+        "order.history.view",
+        "refund.request"
       ],
       "navigation": [
         {
@@ -2010,7 +2011,8 @@
         "song.view",
         "service.view",
         "service.execute",
-        "order.history.view"
+        "order.history.view",
+        "refund.request"
       ],
       "navigation": [
         {
@@ -2042,7 +2044,8 @@
         "recommendation.rule.view",
         "recommendation.analytics.view",
         "product.observation.analytics.view",
-        "order.history.view"
+        "order.history.view",
+        "refund.request"
       ],
       "navigation": [
         {
@@ -2077,7 +2080,8 @@
         "payment.initiate.staff",
         "reservation.view",
         "song.view",
-        "order.history.view"
+        "order.history.view",
+        "refund.request"
       ],
       "navigation": [
         {

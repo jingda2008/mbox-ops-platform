@@ -36,10 +36,10 @@ export function MediaAssetPicker({ api, purpose, value, onChange, label = '上�
     setBusy(true);setMessage('')
     try {
       const base64 = await readBase64(file)
-      const result = await api.postEndpoint<{data:unknown}>('/api/staff/media-assets', {
+      const result = await api.postEndpoint<unknown>('/api/staff/media-assets', {
         purpose,fileName:file.name,mimeType:file.type,base64,
       }, { idempotencyKey: `media-upload-${crypto.randomUUID()}` })
-      const asset = readAsset(result.data)
+      const asset = readAsset(result)
       setAssets((current)=>[asset,...current.filter((item)=>item.publicId!==asset.publicId)])
       onChange(asset.publicUrl);setMessage('图片已上传并选中；保存当前内容后才会正式绑定。')
     } catch(error) { setMessage(error instanceof Error ? error.message : '图片没有上传') }

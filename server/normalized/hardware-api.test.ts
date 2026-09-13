@@ -15,6 +15,21 @@ const apps: ReturnType<typeof Fastify>[] = []
 afterEach(async () => Promise.all(apps.splice(0).map((app) => app.close())))
 
 describe('hardware API role cropping', () => {
+  it.each(['2026-09-01','2026-09-31','2028-09-13'])('rejects reversed, invalid or excessive report end dates (%s)',async endDate=>{
+    const app=await build(['order.bill.print','reconciliation.view'])
+    expect((await app.inject({method:'POST',url:'/hardware/business-days/2026-09-13/report',
+      payload:{endDate},headers:{'idempotency-key':'range-report-invalid'}})).statusCode).toBe(400)
+  })
+  it('validates preview content and refuses unrelated access before generating a job',async()=>{
+    const viewer=await build(['reconciliation.view'])
+    expect((await viewer.inject({method:'POST',url:'/hardware/business-days/2026-09-13/report-preview',payload:{}})).statusCode).toBe(403)
+    const printer=await build(['order.bill.print','reconciliation.view'])
+    expect((await printer.inject({method:'POST',url:'/hardware/business-days/2026-09-13/report-preview',payload:{mode:'unknown'}})).statusCode).toBe(400)
+  })
+  it('does not grant request tracking from unrelated printer capabilities',async()=>{
+    const app=await build(['printer.manage'])
+    expect((await app.inject({method:'GET',url:`/hardware/print-requests/${deviceId}`})).statusCode).toBe(403)
+  })
   it('does not infer stock-return or delivery authority from printer management',async()=>{
     const app=await build(['printer.manage','order.history.all'])
     expect((await app.inject({method:'POST',url:'/operations/delivery-batches',payload:{items:[]}})).statusCode).toBe(403)

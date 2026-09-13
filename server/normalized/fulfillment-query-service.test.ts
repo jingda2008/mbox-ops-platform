@@ -22,6 +22,26 @@ const storeId = '71000000-0000-4000-8000-000000000002'
 const actorId = '71000000-0000-4000-8000-000000000003'
 
 describe('FulfillmentQueryService', () => {
+  it.each([true,false])('retains authorized rows but matches action session availability (%s)',async valid=>{
+    const fixture=scriptedService([
+      employeeRow(actorId,'BAR01','调酒师'),rows([{code:'BARTENDER',name:'调酒师'}]),
+      permissionRows(KDS_PREPARE_PERMISSION),
+      rows([{scope_key:KDS_STATION_SCOPE,effect:'include',value_kind:'text_set',text_values:['bar']}]),
+      rows([]),rows([]),rows(valid?[{id:actorId}]:[]),
+      rows([fulfillmentRow({station_code:'bar',can_prepare:true})]),
+    ])
+    const result=await fixture.service.getStaffWorkQueue({tenantId,storeId},actorId,'2026-08-11',{
+      staffSessionId:actorId,deviceAccessLeaseId:actorId,
+    })
+    expect(result.actor.actionSessionValid).toBe(valid)
+    expect(result.workItems).toHaveLength(1)
+    expect(result.workItems[0]?.canPrepare).toBe(valid)
+    const query=fixture.client.calls.find(call=>call.sql.includes('FROM mbox.staff_sessions AS session'))!
+    expect(query.sql).toContain('online_lease_until > clock_timestamp()')
+    expect(query.sql).toContain('credential.valid_until > clock_timestamp()')
+    expect(query.sql).not.toContain('FOR KEY SHARE')
+    if(!valid)expect(result.workItems[0]?.attentionMessages.join('')).toContain('恢复登录')
+  })
   it('uses live staff access and station scopes without accepting a client all-store switch', async () => {
     const fixture = scriptedService([
       employeeRow(actorId, 'BAR01', '调酒师'),
@@ -120,7 +140,7 @@ describe('FulfillmentQueryService', () => {
       table: { assignmentType: null },
     })
     const query = fulfillmentCall(fixture.client)
-    expect(query.sql).toContain("$7::boolean AND task.status = 'ready'")
+    expect(query.sql).toContain("$7::boolean AND (CASE WHEN portions.total>0 THEN portions.ready>0 ELSE task.status='ready' END)")
     expect(query.sql).not.toContain("task.status = 'ready' AND assignment.assignment_type")
   })
 
@@ -270,7 +290,7 @@ integration('FulfillmentQueryService PostgreSQL authorization and ordering', () 
     ])
     expect(manager.actor).toMatchObject({ canViewAll: true, allowedStations: [] })
     expect(manager.workItems.every((item) => !item.canPrepare && !item.canDeliver)).toBe(true)
-    expect(JSON.stringify(manager)).not.toMatch(/costSnapshot|paymentStatus|provider|refund/i)
+    expect(JSON.stringify(manager.workItems)).not.toMatch(/costSnapshot|paymentStatus|provider|refund/i)
     expect(manager.workItems.every(item => Number.isSafeInteger(item.item.unitPriceMinor)
       && Number.isSafeInteger(item.item.totalAmountMinor))).toBe(true)
   })

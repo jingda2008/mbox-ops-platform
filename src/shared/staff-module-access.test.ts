@@ -42,7 +42,7 @@ describe('permission-derived staff modules', () => {
 
   it('does not advertise a top-level page for a capability whose action lives inside another workflow', () => {
     expect(staffModuleForPermission('payment.initiate.staff')).toBeNull()
-    expect(staffModuleForPermission('commercial.cost.manage')).toBeNull()
+    expect(staffModuleForPermission('commercial.cost.manage')).toMatchObject({ code: 'operations' })
     expect(staffModuleForPermission('observation.record')).toMatchObject({ code: 'live' })
     expect(staffModuleForPermission('catalog.product.manage')).toMatchObject({ code: 'inventory' })
   })

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { rankMenuRecommendations } from '../../shared/menu-recommendation'
-import { GuestApp, GuestGate, paymentStatusCopy } from './GuestApp'
+import { GuestApp, GuestGate, TableOrdersPanel, paymentStatusCopy } from './GuestApp'
 import type { GuestOrderResult, GuestTableOrder } from './guest-api'
 import { guestGatePresentation } from './guest-gate-model'
 import { guestMenuProductToMenuProduct } from './menu-product-adapter'
@@ -150,4 +150,22 @@ describe('GuestApp', () => {
     expect(source).toContain('await api.abandonCheckout(result.order.publicId')
     expect(source).toContain('订单和占用已安全释放')
   })
+})
+
+
+it('renders actual item and bundle progress while leaving unresolved stopped amounts unpayable', () => {
+  const base: GuestTableOrder = { publicId: 'original', round: 1, channel: 'staff_assisted', sourceText: '员工协助点单',
+    status: 'fulfilling', visibility: 'shared', isMine: false, createdAt: '2026-09-13T10:00:00Z', paymentStatus: 'unpaid',
+    paymentAccess: 'status_review', settlementReviewRequired: true, payableAmountMinor: 0, currency: 'CNY',
+    items: [{ productId: 'water', name: '水', quantity: 5, status: 'preparing', progressText: '暂停 2 份 · 准备中 3 份' },
+      { productId: 'bundle', name: '套餐', quantity: 1, status: 'preparing', components: [{ name: '套餐鸡尾酒', quantity: 2, progressText: '暂停 1 份 · 已备齐 1 份' }] }] }
+  const render = (order: GuestTableOrder) => renderToStaticMarkup(createElement(TableOrdersPanel, { orders: [order], loading: false, onRefresh() {}, onPay() {} }))
+  const review = render(base)
+  expect(review).toContain('水 × 5'); expect(review).toContain('暂停 2 份 · 准备中 3 份')
+  expect(review).toContain('套餐鸡尾酒 × 2'); expect(review).toContain('暂停 1 份 · 已备齐 1 份')
+  expect(review).toContain('商品停止金额待员工核对'); expect(review).not.toContain('微信支付')
+  const payable = render({ ...base, settlementReviewRequired: false, paymentAccess: 'available', payableAmountMinor: 2400, receivableReductionMinor: 1600 })
+  expect(payable).toContain('退菜减额'); expect(payable).toContain('微信支付')
+  const stopped = render({ ...base, settlementReviewRequired: false, paymentAccess: 'not_required', receivableReductionMinor: 4000 })
+  expect(stopped).toContain('无需再付款'); expect(stopped).not.toContain('等待付款'); expect(stopped).not.toContain('微信支付')
 })

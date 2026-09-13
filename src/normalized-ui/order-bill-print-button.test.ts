@@ -11,12 +11,13 @@ describe('order bill print recovery',()=>{
  const mount=()=>{values=[];refs=[];return render()}
  const render=()=>{
   stateIndex=0;refIndex=0
-  return OrderBillPrintButton({api:{postEndpoint:post} as unknown as NormalizedApiClient,orderId:'order-1',employeeId:'employee-1'})
+  const wrapper=OrderBillPrintButton({api:{postEndpoint:post} as unknown as NormalizedApiClient,orderId:'order-1',employeeId:'employee-1'})
+  return wrapper.type(wrapper.props)
  }
  const press=(tree:ReturnType<typeof render>)=>tree.props.children[0].props.onClick()
  beforeEach(()=>{
   vi.clearAllMocks();stored.clear()
-  vi.stubGlobal('sessionStorage',{getItem:(key:string)=>stored.get(key)??null,setItem:(key:string,value:string)=>stored.set(key,value)})
+  vi.stubGlobal('sessionStorage',{getItem:(key:string)=>stored.get(key)??null,setItem:(key:string,value:string)=>stored.set(key,value),removeItem:(key:string)=>stored.delete(key)})
   vi.mocked(useState).mockImplementation(initial=>{
    const index=stateIndex++;if(!(index in values))values[index]=initial
    return [values[index],(value:unknown)=>{values[index]=value}] as never
@@ -31,7 +32,7 @@ describe('order bill print recovery',()=>{
   post.mockReturnValue(new Promise(resolve=>{finish=resolve}))
   const tree=mount();press(tree);press(tree)
   expect(post).toHaveBeenCalledOnce()
-  finish({status:'queued'})
+  finish({requestId:'request-1',jobIds:['job-1']})
   await vi.waitFor(()=>expect(values[2]).toBe(true))
   const next=render()
   expect(next.props.children[0].props.disabled).toBe(true)
@@ -44,5 +45,15 @@ describe('order bill print recovery',()=>{
   press(mount());await vi.waitFor(()=>expect(post).toHaveBeenCalledTimes(2))
   expect(post.mock.calls[1][2].idempotencyKey).toBe(first)
   expect(stored.size).toBe(1)
+ })
+ it('creates a new request only after explicitly choosing a new amount snapshot',async()=>{
+  post.mockResolvedValue({requestId:'request-first',jobIds:['job-first']})
+  press(mount());await vi.waitFor(()=>expect(values[2]).toBe(true))
+  const first=post.mock.calls[0][2].idempotencyKey
+  render().props.children[3].props.onClick()
+  expect(stored.size).toBe(0)
+  expect(values[2]).toBe(false)
+  press(render());await vi.waitFor(()=>expect(post).toHaveBeenCalledTimes(2))
+  expect(post.mock.calls[1][2].idempotencyKey).not.toBe(first)
  })
 })

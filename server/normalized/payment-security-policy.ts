@@ -207,7 +207,8 @@ implements PaymentCapabilityAuthorizationPort {
     if (row.requested_by_employee_id !== input.employeeId) {
       throw new PaymentAuthorizationError('Refund requester identity does not match the acting employee')
     }
-    assertConfiguredRefundLimit(row, 'request')
+    // A request only reserves refundable balance. One reviewer enforces the
+    // actual approval limit; staff need no second amount authorization to ask.
   }
 
   private async refundAmountAuthorization(

@@ -10,6 +10,7 @@ import type {
 } from './command-executor.js'
 import { NormalizedCommandExecutor } from './command-executor.js'
 import { PaymentCommandService } from './payment-command-service.js'
+import {PaymentProviderActionRepository} from './payment-provider-action-repository.js'
 import type { Payment } from './payment-repository.js'
 import {
   NormalizedPaymentCapabilityAuthorization,
@@ -504,12 +505,27 @@ integration('normalized payment PostgreSQL integration', () => {
       refundId: requested.value.id,
     })).rejects.toThrow('requires human approval')
 
-    await service.approveRefund({
+    const approvalInput = {
       ...integrationMetadata('integration-refund-approve-0001', '{"approve":true}'),
-      actor: { type: 'employee', employeeId: integrationApproverId },
+      actor: { type: 'employee' as const, employeeId: integrationApproverId },
       refundId: requested.value.id,
       decisionReason: '商品未出品，同意退款',
-    })
+    }
+    const approved = await service.approveRefund(approvalInput)
+    expect(approved.value.status).toBe('processing')
+    expect((await service.approveRefund(approvalInput)).replayed).toBe(true)
+    const intent = await pool.query(`SELECT status,provider_submission_state,
+      auto_execute_requested_at IS NOT NULL AS durable_intent,
+      (SELECT count(*)::int FROM mbox.audit_events WHERE object_type='refund'
+        AND object_id=$1::text AND action='refund.approved') AS approval_count
+      FROM mbox.refunds WHERE id=$1::uuid`, [requested.value.id])
+    expect(intent.rows[0]).toEqual({status:'processing',provider_submission_state:'not_started',durable_intent:true,approval_count:1})
+    const claim=()=>runner.run(callback.scope,tx=>new PaymentProviderActionRepository(tx,'integration-secret-at-least-thirty-two-bytes').listStaleProcessingPostarRefundIds(0,20))
+    const claimed=await Promise.all([claim(),claim()])
+    expect(claimed.flat().filter(id=>id===requested.value.id)).toHaveLength(1)
+    // Losing the worker only delays the lease; the original approved intent survives.
+    expect((await claim()).includes(requested.value.id)).toBe(false)
+    // The original execution command remains usable after rollback/restart.
     await service.beginRefundExecution({
       ...integrationMetadata('integration-refund-execute-0001', '{"execute":true}'),
       actor: { type: 'employee', employeeId: integrationApproverId },
@@ -634,6 +650,17 @@ integration('normalized payment PostgreSQL integration', () => {
     expect(authority.rows[0]?.succeeded_at).toBeTruthy()
     expect(authority.rows[0]?.reconciliation_occurred_at).toBe(authority.rows[0]?.succeeded_at)
     expect(Number(authority.rows[0]?.delta_ms)).toBe(0)
+    const refund=await service.requestRefund({
+      ...integrationMetadata('manual-refund-request','{"manualRefund":100}'),
+      actor:{type:'employee',employeeId:integrationRequesterId},paymentId:recorded.value.id,
+      publicId:`manual-refund-${manualOrderId}`,reason:'现金部分退款',allocations:[{orderItemId:manualItemId,amountMinor:100}],
+    })
+    const decision=await service.approveRefund({
+      ...integrationMetadata('manual-refund-approve','{"approveManual":true}'),
+      actor:{type:'employee',employeeId:integrationApproverId},refundId:refund.value.id,decisionReason:'核对后同意现金退付',
+    })
+    expect(decision.value.status).toBe('approved')
+    expect((await pool.query('SELECT auto_execute_requested_at FROM mbox.refunds WHERE id=$1',[refund.value.id])).rows[0].auto_execute_requested_at).toBeNull()
   })
 
   it('enforces captured-payment and reconciliation sign invariants in PostgreSQL', async () => {

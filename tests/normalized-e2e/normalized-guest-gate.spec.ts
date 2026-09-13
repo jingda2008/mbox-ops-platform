@@ -1,7 +1,11 @@
 import { expect, test } from '@playwright/test'
 
 test('fixed QR waiting state is compact, self-updating and does not ask the guest to scan again', async ({ page }) => {
-  let scanCount = 0
+  let scanCount = 0, waitCount = 0
+  await page.route('**/api/guest/session/wait', async route => {
+    waitCount++
+    await route.fulfill({status:200,json:{data:{status:'waiting_for_table',message:'等待开台',table:{code:'W01',displayName:'室外 W01'}}}})
+  })
   await page.route('**/api/guest/session/scan', async (route) => {
     scanCount += 1
     await route.fulfill({
@@ -29,7 +33,14 @@ test('fixed QR waiting state is compact, self-updating and does not ask the gues
   await expect(page.getByRole('alert')).toHaveCount(0)
 
   await page.getByRole('button', { name: '立即刷新' }).click()
-  await expect.poll(() => scanCount).toBe(2)
+  await expect.poll(() => waitCount).toBe(1)
+  expect(scanCount).toBe(1)
+  // Many manual refreshes must not consume the real scan allowance.
+  for(let index=0;index<11;index++){
+    await page.getByRole('button', { name: '立即刷新' }).click()
+    await expect.poll(() => waitCount).toBe(index+2)
+  }
+  expect(scanCount).toBe(1)
   await expect(page.getByRole('heading', { name: '欢迎入座，请联系服务人员开台' })).toBeVisible()
 
   const dimensions = await page.evaluate(() => ({
@@ -52,4 +63,24 @@ test('invalid unsigned entry gives one precise recovery instruction and no ineff
 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)
   expect(overflow).toBe(false)
+})
+
+
+test('waiting refresh respects retryAt and resumes the availability check without another scan',async({page})=>{
+  await page.clock.install()
+  let scans=0,waits=0
+  await page.route('**/api/guest/session/scan',async route=>{scans++;await route.fulfill({status:200,json:{data:{status:'waiting_for_table',message:'等待开台',table:{code:'W01',displayName:'室外 W01'}}}})})
+  await page.route('**/api/guest/session/wait',async route=>{
+    waits++
+    if(waits===1){const now=await page.evaluate(()=>Date.now());return route.fulfill({status:429,json:{error:{code:'GUEST_SCAN_RATE_LIMITED',message:'稍后再试',retryAt:new Date(now+30000).toISOString()}}})}
+    return route.fulfill({status:200,json:{data:{status:'waiting_for_table',message:'等待开台',table:{code:'W01',displayName:'室外 W01'}}}})
+  })
+  await page.goto(`/guest?table=W01#token=${'a'.repeat(48)}`)
+  const refresh=page.getByRole('button',{name:'立即刷新'})
+  await refresh.click();await expect.poll(()=>waits).toBe(1);await expect(refresh).toBeEnabled()
+  await refresh.click();await page.clock.runFor(16000)
+  expect(waits).toBe(1);expect(scans).toBe(1)
+  await page.clock.runFor(17000);await expect.poll(()=>waits).toBe(2)
+  expect(scans).toBe(1)
+  await expect(page.getByRole('heading',{name:'欢迎入座，请联系服务人员开台'})).toBeVisible()
 })

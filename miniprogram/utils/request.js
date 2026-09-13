@@ -230,6 +230,7 @@ function request(path, options) {
         const error = new Error(detail.message || `请求失败（${response.statusCode}）`)
         error.code = detail.code || 'HTTP_ERROR'
         error.statusCode = response.statusCode
+        if (typeof detail.retryAt === 'string') error.retryAt = detail.retryAt
         // A rejected guest call is the first reliable evidence that this
         // device's table credential has ended. Do not leave a stale local
         // table binding to keep polling carts and service tasks as 5xx/401.

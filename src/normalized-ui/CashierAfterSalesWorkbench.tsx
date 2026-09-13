@@ -1,4 +1,5 @@
 import {PaymentFinanceReviewPanel} from './PaymentFinanceReviewPanel'
+import {REFUND_PURPOSE_LABELS} from '../shared/refund-purpose'
 import {CashierDaySummary} from './CashierDaySummary'
 import { useCallback, useEffect, useRef, useState, type FormEvent, type RefObject } from 'react'
 import {
@@ -43,6 +44,7 @@ interface WorkbenchNotice {
 }
 
 interface RefundDraft {
+  purpose: import('../shared/refund-purpose').RefundPurpose
   paymentId: string
   reason: string
   amounts: Record<string, string>
@@ -380,7 +382,7 @@ export function CashierAfterSalesWorkbenchView({
   }
 
   function openRefund(payment: CashierWorkbenchPayment) {
-    setRefundDraft({ paymentId: payment.id, reason: '', amounts: {} })
+    setRefundDraft({ paymentId: payment.id, reason: '', amounts: {}, purpose:payment.refundableItems.some(item=>item.fundsOnly&&item.remainingRefundableMinor>0)?'price_adjustment':'return_goods' })
   }
 
   function toggleRefundItem(itemId: string, remainingMinor: number) {
@@ -411,7 +413,7 @@ export function CashierAfterSalesWorkbenchView({
     const completed = await onMutation(
       `refund-request-${payment.id}`,
       `/api/payments/${encodeURIComponent(payment.id)}/refunds`,
-      { reason: refundDraft.reason, allocations, requestEvidence: { source: 'cashier_workbench' } },
+      { reason: refundDraft.reason, purpose:refundDraft.purpose, allocations, requestEvidence: { source: 'cashier_workbench' } },
       '退款申请已提交，等待收银复核。',
     )
     if (completed) setRefundDraft(null)
@@ -616,7 +618,7 @@ export function CashierAfterSalesWorkbenchView({
                 onClick={() => setExpandedOrderId(expanded ? null : order.id)}
               >
                 <span><b>{order.tableCode}</b><small>{order.carryover ? `${order.businessDate ?? '前一营业日'}遗留 · ` : ''}{shortReference(order.publicId)} · {formatTime(order.submittedAt ?? order.createdAt)}</small></span>
-                <span><strong>¥{formatAmount(order.totalAmountMinor)}</strong><em>{order.totalAmountMinor === 0 && order.status !== 'cancelled' ? '无需收款' : paymentStatusLabel(order.paymentStatus)}</em>{(order.couponRefundReviewCount??0)>0&&<small>权益待复核 {order.couponRefundReviewCount} 项</small>}</span>
+                <span><strong>¥{formatAmount(order.totalAmountMinor)}</strong><em>{order.totalAmountMinor === 0 && order.status !== 'cancelled' ? '无需收款' : paymentStatusLabel(order.paymentStatus)}</em>{(order.receivableIncreaseMinor??0)>0&&<small>原单 ¥{formatAmount(order.originalAmountMinor??order.totalAmountMinor)} · 套餐按单点价补差 ¥{formatAmount(order.receivableIncreaseMinor!)}</small>}{(order.stoppedAmountMinor??0)>0&&<small>原单 ¥{formatAmount(order.originalAmountMinor??order.totalAmountMinor)} · 已停止减免 ¥{formatAmount(order.stoppedAmountMinor!)}</small>}{(order.couponRefundReviewCount??0)>0&&<small>权益待复核 {order.couponRefundReviewCount} 项</small>}</span>
                 <ChevronDown size={18} className={expanded ? 'is-open' : ''} />
               </button>
               {expanded && <div className="cashier-order-detail">
@@ -665,6 +667,7 @@ export function CashierAfterSalesWorkbenchView({
                         onToggleRefundItem={toggleRefundItem}
                         onRefundAmount={updateRefundAmount}
                         onRefundReason={(reason) => setRefundDraft((current) => current === null ? current : { ...current, reason })}
+                        onRefundPurpose={(purpose) => setRefundDraft(current=>current===null?current:{...current,purpose})}
                         onSubmitRefund={submitRefund}
                         onDecisionReason={(refundId, reason) => setDecisionReasons((current) => ({ ...current, [refundId]: reason }))}
                         onManualReceipt={(refundId, receipt) => setManualReceipts((current) => ({ ...current, [refundId]: receipt }))}
@@ -907,7 +910,7 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOn
   }
 
   async function submit() {
-    if (provider === null || receiptReference.trim().length < 3) return
+    if (provider === null || (provider !== 'cash' && receiptReference.trim().length < 3)) return
     if (provider === 'physical_pos' && terminalId.trim().length < 2) return
     if (provider === 'external_manual' && collectionNote.trim().length < 2) return
     if (!confirmed) { setConfirmed(true); return }
@@ -918,7 +921,7 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOn
         orderId: order.id,
         provider,
         method: provider === 'cash' ? 'cash' : provider === 'physical_pos' ? 'card' : 'manual',
-        receiptReference: receiptReference.trim(),
+        ...(provider === 'cash' ? {} : { receiptReference: receiptReference.trim() }),
         ...(provider === 'physical_pos' && terminalId.trim() ? { terminalId: terminalId.trim() } : {}),
         ...(provider === 'external_manual' ? {
           externalMethodCode,
@@ -958,13 +961,13 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOn
         <strong>{manualCollectionLabel(provider)}</strong>
         <p>只在款项已经实际收到后登记。系统将记录当前登录员工、时间和凭证，不允许代填他人身份。</p>
         {provider === 'external_manual' && <label className="cashier-field"><span>实际收款方式</span><select value={externalMethodCode} onChange={(event) => { setExternalMethodCode(event.target.value as typeof externalMethodCode); setConfirmed(false) }}><option value="bank_transfer">银行转账</option><option value="mobile_wallet">其他扫码或数字钱包</option><option value="stored_value_voucher">储值卡或代金凭证</option><option value="corporate_account">公司账户结算</option><option value="other">其他经批准方式</option></select></label>}
-        <label className="cashier-field"><span>{provider === 'cash' ? '现金收款凭证号' : provider === 'physical_pos' ? 'POS小票/交易号' : '外部交易号或凭证号'}</span><input value={receiptReference} maxLength={256} placeholder={provider === 'cash' ? '例如 XJ-20260824-L01-001' : provider === 'physical_pos' ? '例如 POS-20260824-0001' : '填写可供日结核对的真实凭证号'} onChange={(event) => { setReceiptReference(event.target.value); setConfirmed(false) }} /></label>
+        {provider === 'cash' ? <p className="cashier-guidance">现金记账编号由系统自动生成，无需填写。</p> : <label className="cashier-field"><span>{provider === 'physical_pos' ? 'POS小票/交易号' : '外部交易号或凭证号'}</span><input value={receiptReference} maxLength={256} placeholder={provider === 'physical_pos' ? '例如 POS-20260824-0001' : '填写可供日结核对的真实凭证号'} onChange={(event) => { setReceiptReference(event.target.value); setConfirmed(false) }} /></label>}
         {provider === 'physical_pos' && <label className="cashier-field"><span>POS终端编号</span><input value={terminalId} maxLength={128} placeholder="例如 POS-01" onChange={(event) => { setTerminalId(event.target.value); setConfirmed(false) }} /></label>}
         {provider === 'external_manual' && <label className="cashier-field"><span>收款说明</span><textarea value={collectionNote} maxLength={500} placeholder="说明收款平台、核对对象或其他可复核信息" onChange={(event) => { setCollectionNote(event.target.value); setConfirmed(false) }} /></label>}
-        {confirmed && <p className="cashier-guidance">请再次核对：已经实际收到{manualCollectionAmountLabel(provider)} ¥{formatAmount(order.outstandingAmountMinor)}，凭证号为“{receiptReference.trim()}”。确认后将计入收款和对账，并在订单收清后允许继续结台。</p>}
+        {confirmed && <p className="cashier-guidance">请再次核对：已经实际收到{manualCollectionAmountLabel(provider)} ¥{formatAmount(order.outstandingAmountMinor)}，{provider === 'cash' ? '记账编号将自动生成' : `凭证号为“${receiptReference.trim()}”`}。确认后将计入收款和对账，并在订单收清后允许继续结台。</p>}
         <div className="cashier-action-row">
           <button type="button" className="cashier-quiet-action" disabled={busyKey !== null} onClick={() => { setProvider(null); setConfirmed(false) }}>返回</button>
-          <button type="button" className="cashier-primary-action" disabled={busyKey !== null || receiptReference.trim().length < 3 || (provider === 'physical_pos' && terminalId.trim().length < 2) || (provider === 'external_manual' && collectionNote.trim().length < 2)} onClick={() => void submit()}>
+          <button type="button" className="cashier-primary-action" disabled={busyKey !== null || (provider !== 'cash' && receiptReference.trim().length < 3) || (provider === 'physical_pos' && terminalId.trim().length < 2) || (provider === 'external_manual' && collectionNote.trim().length < 2)} onClick={() => void submit()}>
             {busyKey === mutationKey ? <LoaderCircle className="is-spinning" size={17} /> : null}{confirmed ? `确认已收到${manualCollectionAmountLabel(provider)}` : '核对并继续'}
           </button>
         </div>
@@ -1058,7 +1061,7 @@ function ActivityCashierRegistrationCard({ registration, auth, actions, busyKey,
   const collectionKey = provider === null ? '' : `activity-manual-payment-${provider}-${registration.id}`
 
   async function submitCollection() {
-    if (!canManual || provider === null || !collectionConfirmed || receiptReference.trim().length < 3) return
+    if (!canManual || provider === null || !collectionConfirmed || (provider !== 'cash' && receiptReference.trim().length < 3)) return
     if (provider === 'physical_pos' && terminalId.trim().length < 2) return
     if (provider === 'external_manual' && collectionNote.trim().length < 2) return
     const completed = await onMutation(
@@ -1067,7 +1070,7 @@ function ActivityCashierRegistrationCard({ registration, auth, actions, busyKey,
       {
         provider,
         method: provider === 'cash' ? 'cash' : provider === 'physical_pos' ? 'card' : 'manual',
-        receiptReference: receiptReference.trim(),
+        ...(provider === 'cash' ? {} : { receiptReference: receiptReference.trim() }),
         ...(provider === 'physical_pos' ? { terminalId: terminalId.trim() } : {}),
         ...(provider === 'external_manual' ? { externalMethodCode, collectionNote: collectionNote.trim() } : {}),
       },
@@ -1138,11 +1141,11 @@ function ActivityCashierRegistrationCard({ registration, auth, actions, busyKey,
             {actions.canRecordManualExternal && <button type="button" className="cashier-secondary-action" disabled={busyKey !== null} onClick={() => setProvider('external_manual')}>登记其他方式</button>}
           </div> : <div className="cashier-manual-result">
             {provider === 'external_manual' && <label className="cashier-field"><span>实际收款方式</span><select value={externalMethodCode} onChange={(event) => { setExternalMethodCode(event.target.value as typeof externalMethodCode); setCollectionConfirmed(false) }}><option value="bank_transfer">银行转账</option><option value="mobile_wallet">其他扫码或数字钱包</option><option value="stored_value_voucher">储值卡或代金凭证</option><option value="corporate_account">公司账户结算</option><option value="other">其他经批准方式</option></select></label>}
-            <label className="cashier-field"><span>{provider === 'cash' ? '现金收款凭证号' : provider === 'physical_pos' ? 'POS小票/交易号' : '外部交易号或凭证号'}</span><input value={receiptReference} maxLength={256} onChange={(event) => { setReceiptReference(event.target.value); setCollectionConfirmed(false) }} /></label>
+            {provider === 'cash' ? <p className="cashier-guidance">现金记账编号由系统自动生成，无需填写。</p> : <label className="cashier-field"><span>{provider === 'physical_pos' ? 'POS小票/交易号' : '外部交易号或凭证号'}</span><input value={receiptReference} maxLength={256} onChange={(event) => { setReceiptReference(event.target.value); setCollectionConfirmed(false) }} /></label>}
             {provider === 'physical_pos' && <label className="cashier-field"><span>POS终端编号</span><input value={terminalId} maxLength={128} onChange={(event) => { setTerminalId(event.target.value); setCollectionConfirmed(false) }} /></label>}
             {provider === 'external_manual' && <label className="cashier-field"><span>收款说明</span><textarea value={collectionNote} maxLength={500} onChange={(event) => { setCollectionNote(event.target.value); setCollectionConfirmed(false) }} /></label>}
             {collectionConfirmed && <p className="cashier-guidance">请确认已实际收到 ¥{formatAmount(dueMinor)}，凭证“{receiptReference.trim()}”真实可核对。提交后会计入收款与日结。</p>}
-            <div className="cashier-action-row"><button type="button" className="cashier-quiet-action" disabled={busyKey !== null} onClick={() => { setProvider(null); setCollectionConfirmed(false) }}>返回</button><button type="button" className="cashier-primary-action" disabled={busyKey !== null || receiptReference.trim().length < 3 || (provider === 'physical_pos' && terminalId.trim().length < 2) || (provider === 'external_manual' && collectionNote.trim().length < 2)} onClick={() => { if (!collectionConfirmed) setCollectionConfirmed(true); else void submitCollection() }}>{collectionConfirmed ? '确认已实际收款' : '核对并继续'}</button></div>
+            <div className="cashier-action-row"><button type="button" className="cashier-quiet-action" disabled={busyKey !== null} onClick={() => { setProvider(null); setCollectionConfirmed(false) }}>返回</button><button type="button" className="cashier-primary-action" disabled={busyKey !== null || (provider !== 'cash' && receiptReference.trim().length < 3) || (provider === 'physical_pos' && terminalId.trim().length < 2) || (provider === 'external_manual' && collectionNote.trim().length < 2)} onClick={() => { if (!collectionConfirmed) setCollectionConfirmed(true); else void submitCollection() }}>{collectionConfirmed ? '确认已实际收款' : '核对并继续'}</button></div>
           </div>}
         </div>}
         {canRequestRefund && <div className="cashier-refund-form">
@@ -1221,6 +1224,7 @@ function PaymentBlock({
   onToggleRefundItem,
   onRefundAmount,
   onRefundReason,
+  onRefundPurpose,
   onSubmitRefund,
   onDecisionReason,
   onManualReceipt,
@@ -1238,6 +1242,7 @@ function PaymentBlock({
   onToggleRefundItem(itemId: string, remainingMinor: number): void
   onRefundAmount(itemId: string, value: string): void
   onRefundReason(reason: string): void
+  onRefundPurpose(purpose: import('../shared/refund-purpose').RefundPurpose):void
   onSubmitRefund(payment: CashierWorkbenchPayment): Promise<void>
   onDecisionReason(refundId: string, reason: string): void
   onManualReceipt(refundId: string, receipt: string): void
@@ -1257,6 +1262,7 @@ function PaymentBlock({
       return amountMinor !== null
         && amountMinor > 0
         && item !== undefined
+        && (!item.fundsOnly||['price_adjustment','duplicate_payment'].includes(refundDraft.purpose))
         && amountMinor <= item.remainingRefundableMinor
     })
   const manualProvider = payment.provider === 'cash'
@@ -1309,16 +1315,22 @@ function PaymentBlock({
 
     {drafting && <div className="cashier-refund-form">
       <h4>选择本次退款商品和金额</h4>
+      <label className="cashier-field"><span>本次处理</span><select value={refundDraft.purpose} onChange={event=>onRefundPurpose(event.target.value as RefundDraft['purpose'])}>
+        <option value="return_goods">退货或取消商品</option><option value="price_adjustment">退差价</option>
+        <option value="service_compensation">服务补偿，商品继续供应</option><option value="duplicate_payment">重复收款退回</option>
+      </select></label>
+      {refundDraft.purpose!=='return_goods'&&<p>仅处理资金，商品保持原处理进度，不自动恢复制作或退库。</p>}
+      {payment.refundableItems.some(item=>item.fundsOnly)&&<p>已停止商品的后到原款，可按“退差价”或“重复收款退回”处理。原减免和库存结果保留。</p>}
       {payment.refundableItems.map((item) => {
         const selected = refundDraft.amounts[item.id] !== undefined
         return <label className={`cashier-refund-item${selected ? ' is-selected' : ''}`} key={item.id}>
           <input
             type="checkbox"
             checked={selected}
-            disabled={item.remainingRefundableMinor <= 0}
+            disabled={item.remainingRefundableMinor <= 0||item.fundsOnly&&!['price_adjustment','duplicate_payment'].includes(refundDraft.purpose)}
             onChange={() => onToggleRefundItem(item.id, item.remainingRefundableMinor)}
           />
-          <span><b>{item.productName}</b><small>原实付 ¥{formatAmount(item.totalAmountMinor)} · 剩余可退 ¥{formatAmount(item.remainingRefundableMinor)}</small></span>
+          <span><b>{item.productName}</b><small>原成交 ¥{formatAmount(item.totalAmountMinor)} · 剩余可退 ¥{formatAmount(item.remainingRefundableMinor)}</small></span>
           {selected && <input
             type="text"
             inputMode="decimal"
@@ -1399,6 +1411,7 @@ function RefundBlock({
       <Clock3 size={17} />
     </div>
     <p>{refund.reason}</p>
+    {refund.purpose&&<p>{REFUND_PURPOSE_LABELS[refund.purpose]}</p>}
     {refund.decisionReason && <small>复核说明：{refund.decisionReason}</small>}
     {refund.receiptReference && <small>退款凭证：{refund.receiptReference}</small>}
 
@@ -1426,7 +1439,7 @@ function RefundBlock({
             `refund-approve-${refund.id}`,
             `/api/refunds/${encodeURIComponent(refund.id)}/approve`,
             { reason: decisionReason },
-            manualProvider ? '退款已复核通过，请在线下实际退还后登记独立凭证；系统不会自动转账。' : '退款已复核通过，下一步仍需执行退款或等待支付渠道。',
+            manualProvider ? '退款已复核通过，请在线下实际退还后登记独立凭证；系统不会自动转账。' : '退款已复核通过，系统会自动向原支付渠道提交并核对结果，无需再次点击执行。',
           )}
         ><Check size={17} />复核通过</button>
       </div>
@@ -1444,7 +1457,7 @@ function RefundBlock({
           ? '已进入人工退款处理，请完成退款后登记独立凭证。'
           : '退款已进入待渠道处理，尚未证明渠道受理或退款成功。',
       )}
-    >{busyKey === `refund-execute-${refund.id}` ? <LoaderCircle className="is-spinning" size={17} /> : <ReceiptText size={17} />}{manualProvider ? '开始人工退款' : '进入渠道待处理'}</button>}
+    >{busyKey === `refund-execute-${refund.id}` ? <LoaderCircle className="is-spinning" size={17} /> : <ReceiptText size={17} />}{manualProvider ? '开始人工退款' : '立即提交原路退款'}</button>}
 
     {refund.status === 'processing' && !manualProvider && payment.provider === 'postar'
       && refund.providerSubmissionState !== 'not_started' && actions.canExecuteRefund
@@ -1464,29 +1477,29 @@ function RefundBlock({
     {refund.status === 'processing' && !manualProvider && refund.providerSubmissionState !== 'not_started'
       && <p className="cashier-channel-pending">待支付渠道回传结果。本页不能把线上退款手工改成成功。</p>}
     {refund.status === 'processing' && !manualProvider && refund.providerSubmissionState === 'not_started'
-      && <p className="cashier-guidance">上次提交支付渠道失败，可再次进入渠道待处理重试。</p>}
+      && <p className="cashier-guidance">已批准，等待系统提交原支付渠道；也可立即提交。请勿另开重复退款。</p>}
 
     {canRecordManual && <div className="cashier-manual-result">
       <p className="cashier-guidance">{payment.provider === 'cash' ? '请实际退还现金。本操作仅登记退款账和凭证，不调用微信或星驿，也不会自动退钱。' : '请在原线下收款工具完成退款后登记凭证；本系统不会代为转账。'}</p>
-      <label className="cashier-field"><span>{payment.provider === 'cash' ? '现金退款凭证号' : payment.provider === 'physical_pos' ? 'POS退款小票/交易号' : '线下退款凭证号'}</span><input value={manualReceipt} maxLength={256} placeholder="必须与原收款凭证分开" onChange={(event) => {setManualConfirmation(null);onManualReceipt(refund.id, event.target.value)}} /></label>
+      {payment.provider === 'cash' ? <p className="cashier-guidance">确认实际退付后，系统自动生成现金退款编号。</p> : <label className="cashier-field"><span>{payment.provider === 'physical_pos' ? 'POS退款小票/交易号' : '线下退款凭证号'}</span><input value={manualReceipt} maxLength={256} placeholder="必须与原收款凭证分开" onChange={(event) => {setManualConfirmation(null);onManualReceipt(refund.id, event.target.value)}} /></label>}
       <div className="cashier-action-row">
         <button
           type="button"
           className="cashier-danger-action"
-          disabled={manualReceipt.trim().length === 0 || busyKey !== null}
+          disabled={(payment.provider !== 'cash' && manualReceipt.trim().length === 0) || busyKey !== null}
           onClick={() => setManualConfirmation('failed')}
         >登记失败</button>
         <button
           type="button"
           className="cashier-primary-action"
-          disabled={manualReceipt.trim().length === 0 || busyKey !== null}
+          disabled={(payment.provider !== 'cash' && manualReceipt.trim().length === 0) || busyKey !== null}
           onClick={() => setManualConfirmation('succeeded')}
         >登记已退</button>
       </div>
       {manualConfirmation !== null && <div className="cashier-manual-confirm" role="dialog" aria-modal="true" aria-label="确认人工退款结果">
         <strong>{manualConfirmation === 'succeeded' ? '确认款项已经实际退给客人？' : '确认本次人工退款没有完成？'}</strong>
         <p>{manualConfirmation === 'succeeded'
-          ? `确认后将凭证“${manualReceipt.trim()}”写入退款账，不能只凭口头结果登记。`
+          ? (payment.provider === 'cash' ? '确认后将登记实际现金退付并自动生成编号。' : `确认后将凭证“${manualReceipt.trim()}”写入退款账，不能只凭口头结果登记。`)
           : '确认后本次处理会标记失败，不会占用已退款金额。'}</p>
         <div className="cashier-action-row">
           <button type="button" className="cashier-quiet-action" onClick={() => setManualConfirmation(null)}>返回核对</button>
@@ -1500,7 +1513,7 @@ function RefundBlock({
               void onMutation(
                 `refund-manual-${succeeded ? 'success' : 'failed'}-${refund.id}`,
                 `/api/refunds/${encodeURIComponent(refund.id)}/manual-result`,
-                { succeeded, receiptReference: manualReceipt },
+                { succeeded, ...(payment.provider === 'cash' ? {} : { receiptReference: manualReceipt }) },
                 succeeded ? '人工退款凭证已登记并写入退款账。' : '已登记人工退款失败，金额未记入退款账。',
               )
             }}

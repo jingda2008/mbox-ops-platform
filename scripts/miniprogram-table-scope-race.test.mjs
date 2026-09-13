@@ -364,6 +364,8 @@ async function loadOrderPage(state) {
   vm.runInNewContext(source, context, { filename: 'miniprogram/pages/order/index.js' })
   const page = Object.assign({}, definition, { data: JSON.parse(JSON.stringify(definition.data)) })
   page.setData = (patch, callback) => { Object.assign(page.data, patch); if (callback) callback() }
+  // This fixture starts in a ready table; preparePage explicitly resets it when exercised.
+  page.data.orderReady = true
   page.updateCart = () => undefined
   page.applyFilters = () => undefined
   page.startSharedCartPolling = () => undefined
@@ -675,6 +677,7 @@ test('Order renders only the server-owned three questions and sends exactly thos
   }
   const { page, calls } = await loadOrderPage(state)
   await page.preparePage()
+  await page.orderExtrasPending
   page.onRecommend()
   assert.equal(page.data.recommendationQuestionVisible, true)
   assert.equal(page.data.recommendationQuestion.title, '今晚想怎么喝？')
@@ -1088,3 +1091,35 @@ test('unknown checkout result preserves and retries the same idempotent attempt 
   assert.equal(calls.requestPayment.length, 1)
   assert.equal(state.storage.get(CHECKOUT_ATTEMPT_KEY), undefined)
 })
+
+for (const platform of ['miniprogram', 'alipay-miniprogram']) {
+  test(`${platform}: quantity after-sales keeps original prices and separates unresolved orders from payable balance`, async () => {
+    const original = { round: 1, status: 'fulfilling', paymentStatus: 'unpaid', totalAmountMinor: 4000, discountAmountMinor: 0,
+      items: [{ id: 'original-water', productId: 'water', name: '水', quantity: 5, unitPriceMinor: 800, totalAmountMinor: 4000,
+        progressText: '已停止 2 份 · 准备中 3 份' }] }
+    const state = { session: { tableCode: 'B05', tableToken: 'current-token' }, storage: new Map(), orderReads: [{ promise: Promise.resolve([
+      { ...original, publicId: 'stopped-two', paymentAccess: 'available', payableAmountMinor: 2400, receivableReductionMinor: 1600 },
+      { ...original, publicId: 'review-bundle', totalAmountMinor: 3900, discountAmountMinor: 100, paymentAccess: 'status_review', payableAmountMinor: 0,
+        settlementReviewRequired: true, items: [{ name: '原套餐', quantity: 1, unitPriceMinor: 3900, totalAmountMinor: 3900,
+          components: [{ name: '水', quantity: 5, progressText: '暂停 2 份 · 准备中 3 份' }] }] },
+      { ...original, publicId: 'stopped-all', paymentAccess: 'not_required', payableAmountMinor: 0, receivableReductionMinor: 4000 },
+    ]) }] }
+    const page = await loadAccountPage(state, platform); page.onLoad(); await page.loadData()
+    assert.equal(page.data.error, '')
+    assert.equal(page.data.outstandingText, '¥24'); assert.equal(page.data.settlementReviewCount, 1)
+    assert.deepEqual(Array.from(page.data.selectedPublicIds), ['stopped-two'])
+    const [partial, review, whole] = page.data.orders
+    assert.equal(partial.totalText, '¥40'); assert.equal(partial.receivableReductionText, '¥16')
+    assert.equal(partial.items[0].quantity, 5); assert.equal(partial.items[0].unitPriceText, '¥8'); assert.equal(partial.items[0].totalText, '¥40')
+    assert.equal(partial.items[0].statusText, '已停止 2 份 · 准备中 3 份')
+    assert.equal(review.canPay, false); assert.match(review.paymentHint, /停止金额待员工核对/)
+    assert.equal(review.items[0].componentsText, '水 ×5（暂停 2 份 · 准备中 3 份）')
+    assert.equal(whole.paymentText, '无需再付款'); assert.equal(whole.canPay, false)
+    state.orderReads.push({ promise: Promise.resolve([{ ...original, publicId: 'replacement-table', paymentAccess: 'available', payableAmountMinor: 4000 }]) })
+    state.session = { tableCode: 'B06', tableToken: 'new-token' }
+    await page.loadData()
+    assert.equal(page.data.settlementReviewCount, 0); assert.equal(page.data.outstandingText, '¥40')
+    assert.equal(page.data.orders[0].receivableReductionText, '')
+    assert.deepEqual(Array.from(page.data.selectedPublicIds), ['replacement-table'])
+  })
+}

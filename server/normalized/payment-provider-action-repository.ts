@@ -326,8 +326,8 @@ export class PaymentProviderActionRepository {
        AND payment.id=refund.payment_id
       WHERE refund.tenant_id=$1::uuid AND refund.store_id=$2::uuid
         AND refund.status='processing'
-        AND refund.provider_submission_state IN ('submitting','submitted')
-        AND refund.merchant_refund_id IS NOT NULL
+        AND ((refund.provider_submission_state IN ('submitting','submitted') AND refund.merchant_refund_id IS NOT NULL)
+          OR (refund.provider_submission_state='not_started' AND refund.auto_execute_requested_at IS NOT NULL))
         AND payment.provider='postar'
         AND refund.updated_at<=clock_timestamp()-make_interval(secs=>$3::integer)
       ON CONFLICT (refund_id) DO NOTHING
@@ -362,8 +362,8 @@ export class PaymentProviderActionRepository {
           AND state.next_query_at<=clock_timestamp()
           AND (state.lease_until IS NULL OR state.lease_until<clock_timestamp())
           AND refund.status='processing'
-          AND refund.provider_submission_state IN ('submitting','submitted')
-          AND refund.merchant_refund_id IS NOT NULL
+          AND ((refund.provider_submission_state IN ('submitting','submitted') AND refund.merchant_refund_id IS NOT NULL)
+            OR (refund.provider_submission_state='not_started' AND refund.auto_execute_requested_at IS NOT NULL))
           AND payment.provider='postar'
           AND refund.updated_at<=clock_timestamp()-make_interval(secs=>$3::integer)
         ORDER BY state.next_query_at,refund.updated_at,refund.id
@@ -821,7 +821,7 @@ export class PaymentProviderActionRepository {
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId, errorCode.slice(0, 128)])
   }
 
-  async markFailed(paymentId: string, errorCode: string): Promise<void> {
+  async markFailed(paymentId: string, errorCode: string, providerStatus: 'rejected' | 'not_submitted' = 'rejected'): Promise<void> {
     await this.transaction.query(`
       WITH action_updated AS (
         UPDATE mbox.payment_provider_actions
@@ -835,7 +835,7 @@ export class PaymentProviderActionRepository {
         UPDATE mbox.payments payment
         SET status = 'failed',
             provider_snapshot = payment.provider_snapshot || jsonb_build_object(
-              'providerStatus', 'rejected', 'errorCode', $4
+              'providerStatus', $5::text, 'errorCode', $4
             ),
             updated_at = clock_timestamp()
         FROM action_updated
@@ -849,7 +849,7 @@ export class PaymentProviderActionRepository {
       FROM payment_updated
       WHERE ordering.tenant_id = $1::uuid AND ordering.store_id = $2::uuid
         AND ordering.id = payment_updated.order_id
-    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId, errorCode.slice(0, 128)])
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId, errorCode.slice(0, 128), providerStatus])
     await this.transaction.query(`
       UPDATE mbox.community_activity_registrations registration
       SET status='cancelled', payment_status='expired', amount_due_minor=0,

@@ -22,6 +22,21 @@ const secrets = {
 }
 
 describe('OnlinePaymentService provider refund closure', () => {
+  it('preserves an uncertain submission across service restart and only queries the original refund',async()=>{
+    const transaction=new RefundTransaction(true)
+    const requestRefund=vi.fn(async()=>{throw new Error('response lost after channel accepted')})
+    const queryRefund=vi.fn(async()=>({refundId:merchantRefundId,providerRefundId:merchantRefundId,
+      providerRefundTransactionId:'POSTAR-REFUND-001',originalProviderTransactionId:'POSTAR-PAYMENT-001',
+      status:'succeeded' as const,amount:2000,currency:'CNY',occurredAt:'2026-08-16T12:01:00.000Z'}))
+    const service=()=>new OnlinePaymentService(runner(transaction),'test-secret-at-least-thirty-two-bytes',secrets,
+      {createPayment:vi.fn(),queryPayment:vi.fn(),requestRefund,queryRefund} as never,observationRecorder())
+    await expect(service().requestRefund(scope,refundId,'lost-response')).rejects.toBeInstanceOf(OnlineRefundStatusUnknownError)
+    const recovered=await service().requestRefund(scope,refundId,'after-restart')
+    expect(recovered.observation.status).toBe('succeeded')
+    expect(requestRefund).toHaveBeenCalledOnce()
+    expect(queryRefund).toHaveBeenCalledOnce()
+    expect(transaction.calls.some(sql=>sql.includes('merchant_refund_id=NULL'))).toBe(false)
+  })
   it('submits an approved refund once with the internal UUID-derived order number and bound payment truth', async () => {
     const requestRefund = vi.fn(async () => ({
       refundId: merchantRefundId, providerRefundId: merchantRefundId,

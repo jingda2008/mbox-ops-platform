@@ -2,7 +2,7 @@ import type { JsonObject, JsonValue } from './command-executor.js'
 
 export const PRINT_TICKET_SCHEMA_VERSION = 1
 
-export type PrintTicketKind = 'cashier_settlement' | 'cashier_payment' | 'cashier_refund' | 'bar_production' | 'kitchen_production' | 'order_summary' | 'delivery' | 'table_settlement' | 'daily_settlement'
+export type PrintTicketKind = 'cashier_settlement' | 'cashier_payment' | 'cashier_refund' | 'bar_production' | 'kitchen_production' | 'order_summary' | 'delivery' | 'table_settlement' | 'daily_settlement' | 'production_notice'
 export type PrintTicketPaper = '58mm' | '80mm' | 'a4'
 
 export interface PrintTicketOutputProfile {
@@ -57,6 +57,7 @@ const TICKET_TITLES: Record<PrintTicketKind, string> = {
   delivery: '配送单（勿重复制作）',
   table_settlement: '整桌结账归档单',
   daily_settlement: '营业日结单',
+  production_notice: '商品处理通知',
 }
 
 export function createPrintTicketSnapshot(input: Readonly<Omit<PrintTicketSnapshot, 'schemaVersion' | 'title'>>): PrintTicketSnapshot {
@@ -173,7 +174,7 @@ export function renderPrintTicketHtml(
   requestedProfile: Readonly<PrintTicketOutputProfile> = DEFAULT_PRINT_TICKET_OUTPUT_PROFILE,
 ): string {
   const profile = normalizePrintTicketOutputProfile(requestedProfile)
-  const production = ticket.kind === 'bar_production' || ticket.kind === 'kitchen_production' || ticket.kind === 'delivery'
+  const production = ticket.kind === 'bar_production' || ticket.kind === 'kitchen_production' || ticket.kind === 'production_notice' || ticket.kind === 'delivery'
   const amount = ticket.totalAmountMinor === null ? '' : `<section class="total"><span>合计</span><strong>${escapeHtml(formatCny(ticket.totalAmountMinor))}</strong></section>`
   const table = ticket.tableCode === null ? '' : `<section class="table-hero"><span>桌台</span><strong>${escapeHtml(ticket.tableCode)}</strong></section>`
   const guest = production || ticket.guestCount === null ? '' : `<p class="guest-count"><span>消费人数</span><strong>${ticket.guestCount} 位</strong></p>`
@@ -183,7 +184,8 @@ export function renderPrintTicketHtml(
     : `<section class="payment"><span>支付方式</span><strong>${escapeHtml(paymentLabel(ticket.payment))}</strong></section>`
   const venue = ticket.kind === 'cashier_settlement' ? '<p class="venue">陆家嘴中心 L+MALL</p>' : ''
   const note = ticket.note === null ? '' : `<section class="note"><b>备注</b>${escapeHtml(ticket.note)}</section>`
-  const lines = ticket.lines.map((line) => `<li><div><b>${escapeHtml(line.name)}</b>${line.unitAmountMinor == null ? '' : `<small>单价 ${escapeHtml(formatCny(line.unitAmountMinor))}</small>`}${line.note ? `<small>${escapeHtml(line.note)}</small>` : ''}</div><strong>×${line.quantity}</strong>${line.totalAmountMinor === null || line.totalAmountMinor === undefined ? '' : `<em>${escapeHtml(formatCny(line.totalAmountMinor))}</em>`}</li>`).join('')
+  const columns = '<div class="item-head"><span>品名 / 单价</span><span>数量</span><span>小计</span></div>'
+  const lines = ticket.lines.map((line) => `<li><div><b>${escapeHtml(line.name)}</b>${line.unitAmountMinor == null ? '' : `<small>单价 ${escapeHtml(formatCny(line.unitAmountMinor))}</small>`}${line.note ? `<small>${escapeHtml(line.note)}</small>` : ''}</div><strong>×${line.quantity}</strong><em>${line.totalAmountMinor == null ? '—' : escapeHtml(formatCny(line.totalAmountMinor))}</em></li>`).join('')
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>
     @page { size: ${profile.paper === 'a4' ? 'A4' : `${profile.paper} auto`}; margin: 0; }
     :root { --ticket-width: ${profile.paper === 'a4' ? '80mm' : profile.paper}; --ticket-padding-x: ${profile.paper === '58mm' ? '4.5mm' : '6mm'}; --ticket-padding-y: ${profile.paper === '58mm' ? '5.5mm' : '7mm'}; --brand: ${profile.thermal ? '#15291f' : '#176a4a'}; --brand-soft: ${profile.thermal ? '#f4f4f4' : '#eff7f2'}; --text: #18241e; }
@@ -202,7 +204,34 @@ export function renderPrintTicketHtml(
     footer { margin-top:5mm; color:#829287; font-size:7pt; line-height:1.5; text-align:center; } .dash { margin:4mm 0 0; border-top:.35mm dashed #8da99a; }
     main.production .table-hero { margin-top:0; border-width:.65mm; background:#eaf5ef; } main.production .table-hero strong { font-size:30pt; } main.production ul { margin-top:4mm; } main.production li { padding:3.5mm 0; font-size:12pt; } main.production li b { font-size:16pt; line-height:1.25; } main.production li small { font-size:9pt; } main.production li strong { font-size:14pt; }
     main.paper-58 .brand { font-size:7.5pt; } main.paper-58 h1 { font-size:15pt; } main.paper-58 .subtitle { font-size:7.5pt; } main.paper-58 .table-hero strong { font-size:20pt; } main.paper-58 .meta, main.paper-58 .payment, main.paper-58 .note { font-size:7pt; } main.paper-58 li { grid-template-columns:minmax(0,1fr) auto; font-size:9pt; } main.paper-58 li em { grid-column:2; min-width:0; } main.paper-58 li b { font-size:10pt; } main.paper-58 .total strong { font-size:16pt; } main.paper-58.production .table-hero strong { font-size:25pt; } main.paper-58.production li b { font-size:13pt; } main.paper-58.production li { font-size:10pt; }
-  </style></head><body><main class="${production ? 'production' : 'cashier'} paper-${profile.paper.replace('mm', '')}"><div class="brand">M-BOX · SHANGHAI</div><div class="center">${ticket.test ? '<span class="test">系统打印测试</span>' : ''}</div>${venue}<h1>${escapeHtml(ticket.title)}</h1><p class="subtitle">${escapeHtml(ticket.subtitle)}</p>${table}${guest}<section class="meta"><div class="meta-line"><span>${escapeHtml(ticket.ticketReference)}</span><span>${escapeHtml(ticket.businessDate)} ${escapeHtml(formatTime(ticket.issuedAt))}</span></div><div class="meta-line">${operator}</div></section><ul>${lines}</ul>${payment}${note}${amount}<div class="dash"></div><footer>请按票据内容执行；如有异常请联系当班负责人。<br>此票据为${ticket.test ? '测试' : '系统'}留痕，不替代支付凭证。</footer></main></body></html>`
+
+    /* High contrast receipt layout: hierarchy comes from type, not backgrounds. */
+    main { min-height:0; padding-bottom:5mm; }
+    main, main * { color:#000; background-color:#fff; }
+    .test { color:#000; border: .3mm solid #000; border-radius:0; }
+    .table-hero { justify-content:flex-start; border:0; border-bottom:.5mm solid #000; border-radius:0; padding:2mm 0; }
+    .table-hero strong { font-size:30pt; overflow-wrap:anywhere; min-width:0; }
+    .table-hero span { font-size:12pt; flex-shrink:0; }
+    .guest-count { justify-content:flex-start; margin-bottom:2mm; }
+    .meta { padding:2mm 0; border:0; gap:1mm; }
+    .meta-line { flex-wrap:wrap; font-size:8pt; }
+    .meta-line span { min-width:0; overflow-wrap:anywhere; }
+    .item-head, li { display:grid; grid-template-columns:minmax(0,1fr) 8mm 18mm; gap:1.5mm; }
+    .item-head { border-top:.4mm solid #000; border-bottom:.3mm solid #000; padding:2mm 0; font-size:9pt; font-weight:700; }
+    .item-head span:not(:first-child), li strong, li em { text-align:right; font-variant-numeric:tabular-nums; }
+    ul { margin:0; } li { padding:2.5mm 0; border-bottom:.2mm dashed #000; break-inside:avoid; }
+    li div, li em { min-width:0; overflow-wrap:anywhere; } li b { font-size:12pt; line-height:1.3; }
+    li small { font-size:9pt; } li em { font-size:10pt; }
+    .payment { padding:2mm 0; border:0; border-radius:0; }
+    .note { padding:2mm 0; border-left:0; border-top:.3mm dashed #000; font-size:10pt; overflow-wrap:anywhere; }
+    .total { align-items:baseline; gap:2mm; margin-top:3mm; border-top:.5mm solid #000; }
+    .total span { flex-shrink:0; font-size:13pt; font-weight:700; } .total strong { font-size:26pt; line-height:1.2; overflow-wrap:anywhere; min-width:0; }
+    main.production li { padding:3mm 0; } main.production li b { font-size:16pt; } main.production li strong { font-size:16pt; }
+    main.paper-58 .item-head, main.paper-58 li { grid-template-columns:minmax(0,1fr) 7mm 14mm; gap:1mm; }
+    main.paper-58 li em { grid-column:auto; font-size:8pt; } main.paper-58 .table-hero strong { font-size:25pt; }
+    main.paper-58 .total strong { font-size:21pt; } main.paper-58.production li b { font-size:12pt; }
+    footer { margin-top:3mm; } .dash { margin-top:3mm; border-color:#000; }
+  </style></head><body><main class="${production ? 'production' : 'cashier'} paper-${profile.paper.replace('mm', '')}"><div class="brand">M-BOX · SHANGHAI</div><div class="center">${ticket.test ? '<span class="test">系统打印测试</span>' : ''}</div>${venue}<h1>${escapeHtml(ticket.title)}</h1><p class="subtitle">${escapeHtml(ticket.subtitle)}</p>${table}${guest}<section class="meta"><div class="meta-line"><span>${escapeHtml(ticket.ticketReference)}</span><span>${escapeHtml(ticket.businessDate)} ${escapeHtml(formatTime(ticket.issuedAt))}</span></div><div class="meta-line">${operator}</div></section>${columns}<ul>${lines}</ul>${payment}${note}${amount}<div class="dash"></div><footer>请按票据内容执行；如有异常请联系当班负责人。<br>此票据为${ticket.test ? '测试' : '系统'}留痕，不替代支付凭证。</footer></main></body></html>`
 }
 
 export function normalizePrintTicketOutputProfile(value: Readonly<PrintTicketOutputProfile>): PrintTicketOutputProfile {
@@ -240,7 +269,7 @@ function profileForPaper(paper: PrintTicketPaper): PrintTicketOutputProfile {
 export function printTicketPageHeightMm(ticket: Readonly<PrintTicketSnapshot>, profile: Readonly<PrintTicketOutputProfile>): number {
   const normalized = normalizePrintTicketOutputProfile(profile)
   if (normalized.paper === 'a4') return 297
-  const fixed = ticket.kind === 'bar_production' || ticket.kind === 'kitchen_production' ? 70 : 92
+  const fixed = ticket.kind === 'bar_production' || ticket.kind === 'kitchen_production' || ticket.kind === 'production_notice' ? 70 : 92
   const perLine = normalized.paper === '58mm' ? 13 : 11
   const extra = (ticket.note === null ? 0 : 14) + (ticket.payment === null ? 0 : 11) + (ticket.totalAmountMinor === null ? 0 : 16)
   return Math.min(260, Math.max(90, fixed + ticket.lines.length * perLine + extra))

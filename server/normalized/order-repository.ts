@@ -117,6 +117,7 @@ interface ProductPriceRow extends Record<string, unknown> {
   category_code: string
   product_kind: 'single' | 'bundle'
   fulfillment_station: FulfillmentStation
+  inventory_control_mode?: 'tracked' | 'not_managed'
   product_snapshot: unknown
   guest_visible: boolean
   allowed_channels: OrderChannel[]
@@ -144,6 +145,7 @@ interface BundleComponentRow extends Record<string, unknown> {
   component_name: string
   component_category_code: string
   component_fulfillment_station: FulfillmentStation
+  component_inventory_control_mode?: 'tracked' | 'not_managed'
   component_product_snapshot: unknown
   component_kds_priority: number
   component_fulfillment_sla_seconds: number | null
@@ -550,7 +552,7 @@ export class OrderRepository {
       SELECT requested.request_index, product.id AS product_id,
         product.code AS product_code, product.name AS product_name,
         product.category_code, product.product_kind, product.fulfillment_station,
-        product.product_snapshot, product.guest_visible, product.allowed_channels,
+        product.product_snapshot, product.inventory_control_mode, product.guest_visible, product.allowed_channels,
         product.max_order_quantity,
         to_char(product.available_from, 'HH24:MI') AS available_from,
         to_char(product.available_until, 'HH24:MI') AS available_until,
@@ -634,6 +636,7 @@ export class OrderRepository {
         product.category_code AS component_category_code,
         product.fulfillment_station AS component_fulfillment_station,
         product.product_snapshot AS component_product_snapshot,
+        product.inventory_control_mode AS component_inventory_control_mode,
         product.kds_priority AS component_kds_priority,
         product.fulfillment_sla_seconds AS component_fulfillment_sla_seconds,
         product.product_kind AS component_product_kind,
@@ -679,6 +682,7 @@ export class OrderRepository {
         product.category_code AS component_category_code,
         product.fulfillment_station AS component_fulfillment_station,
         product.product_snapshot AS component_product_snapshot,
+        product.inventory_control_mode AS component_inventory_control_mode,
         product.kds_priority AS component_kds_priority,
         product.fulfillment_sla_seconds AS component_fulfillment_sla_seconds,
         product.product_kind AS component_product_kind,product.status AS component_status,
@@ -908,6 +912,7 @@ function buildItem(price: ProductPriceRow, requested: RequestedLineRecord) {
       code: price.product_code,
       name: price.product_name,
       categoryCode: price.category_code,
+      ...(price.inventory_control_mode ? { inventoryControlMode: price.inventory_control_mode } : {}),
       priceType: price.price_type,
       productKind: price.product_kind,
       source: toJsonObject(price.product_snapshot),
@@ -958,6 +963,7 @@ function expandBundleItems<T extends ReturnType<typeof buildItem>>(
           code: component.component_code,
           name: component.component_name,
           categoryCode: component.component_category_code,
+          ...(component.component_inventory_control_mode ? { inventoryControlMode: component.component_inventory_control_mode } : {}),
           priceType: 'bundle_component',
           productKind: 'single',
           source: toJsonObject(component.component_product_snapshot),

@@ -67,7 +67,7 @@ describe('NormalizedPaymentCapabilityAuthorization', () => {
     })).resolves.toBeUndefined()
   })
 
-  it('requires a configurable request limit for the acting refund requester', async () => {
+  it('allows requests without a second amount limit, while preserving identity and effective permission', async () => {
     const policy = new NormalizedPaymentCapabilityAuthorization()
     const request = (overrides: Record<string, unknown> = {}) => ({
       employee_status: 'active',
@@ -88,12 +88,18 @@ describe('NormalizedPaymentCapabilityAuthorization', () => {
       transaction: transaction([request({ approval_limit_minor: null })]),
       employeeId,
       refundId,
-    })).rejects.toThrow('request limit is not configured')
+    })).resolves.toBeUndefined()
     await expect(policy.assertRefundRequestLimit({
       transaction: transaction([request({ amount_minor: '5001' })]),
       employeeId,
       refundId,
-    })).rejects.toThrow('exceeds employee request limit')
+    })).resolves.toBeUndefined()
+    await expect(policy.assertRefundRequestLimit({
+      transaction: transaction([request({ allowed: false })]),employeeId,refundId,
+    })).rejects.toThrow('lacks financial capability')
+    await expect(policy.assertRefundRequestLimit({
+      transaction: transaction([request({ employee_status: 'departed' })]),employeeId,refundId,
+    })).rejects.toThrow('not active')
     await expect(policy.assertRefundRequestLimit({
       transaction: transaction([request()]),
       employeeId,

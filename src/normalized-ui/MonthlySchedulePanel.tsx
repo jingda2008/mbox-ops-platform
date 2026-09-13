@@ -37,12 +37,12 @@ export function MonthlySchedulePanel({api,auth,performers,onChanged}:{api:Normal
   }
   setSlots(next.sort((a,b)=>a.startsAt.localeCompare(b.startsAt)));setMessage(`已生成 ${next.length} 场草稿。可逐场修改歌手、时间或移除例外日期，预览通过后发布。`)
  }
- async function check(){const version=++generation.current;setBusy(true);try{const result=await api.postEndpoint<{data:Preview[]}>('/api/staff/schedules/monthly/preview',{month,slots});if(version===generation.current)setPreview(result.data)}catch(error){if(version===generation.current)setMessage(error instanceof Error?error.message:'预览未完成')}finally{if(version===generation.current)setBusy(false)}}
+ async function check(){const version=++generation.current;setBusy(true);try{const result=await api.postEndpoint<Preview[]>('/api/staff/schedules/monthly/preview',{month,slots});if(version===generation.current)setPreview(result)}catch(error){if(version===generation.current)setMessage(error instanceof Error?error.message:'预览未完成')}finally{if(version===generation.current)setBusy(false)}}
  async function publish(){
   if(writing.current||!preview||preview.some(slot=>slot.reasons.length))return
   writing.current=true;setBusy(true);const payload={month,slots},fingerprint=JSON.stringify(payload)
   if(attempt.current?.fingerprint!==fingerprint)attempt.current={fingerprint,key:crypto.randomUUID()}
-  try{const result=await api.postEndpoint<{data:{createdCount:number;existingCount:number}}>('/api/staff/schedules/monthly/publish',payload,{idempotencyKey:attempt.current.key});setMessage(`已发布 ${result.data.createdCount} 场，${result.data.existingCount} 场已存在并保留。`);setPreview(null);attempt.current=null;await loadPublished();await onChanged()}
+  try{const result=await api.postEndpoint<{createdCount:number;existingCount:number}>('/api/staff/schedules/monthly/publish',payload,{idempotencyKey:attempt.current.key});setMessage(`已发布 ${result.createdCount} 场，${result.existingCount} 场已存在并保留。`);setPreview(null);attempt.current=null;await loadPublished();await onChanged()}
   catch(error){setMessage(error instanceof Error?error.message:'发布结果未确认，再次点击会核对同一请求')}
   finally{writing.current=false;setBusy(false)}
  }

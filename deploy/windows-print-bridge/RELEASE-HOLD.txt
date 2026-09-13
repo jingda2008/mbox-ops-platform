@@ -1,0 +1,5 @@
+2026-09-13: 1.0.3 r1/r2 upgrade delivery is withdrawn for this venue.
+The user installed r2 and reported missing Chinese output and lost paper cutting at the bar.
+Do not distribute another renderer update before identifying the actual original backup/driver and passing physical acceptance.
+Use the incident-specific backup recovery tool to restore the venue's own pre-upgrade program first.
+See docs/print-bridge-upgrade-incident-20260913.md.

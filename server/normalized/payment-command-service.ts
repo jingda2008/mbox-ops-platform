@@ -1,4 +1,6 @@
+import {ItemAfterSalesProgressRepository} from './item-after-sales-progress-repository.js'
 import { RefundFulfillmentRepository } from './refund-fulfillment-repository.js'
+import type {RefundPurpose} from '../../src/shared/refund-purpose.js'
 import type {
   AuditActor,
   CommandExecution,
@@ -107,6 +109,7 @@ export interface PaymentProviderQueryResultCommand extends PaymentCallbackComman
 }
 
 export interface RequestRefundCommand extends CommandMetadata {
+  purpose?: RefundPurpose
   paymentId: string
   publicId: string
   reason: string
@@ -810,6 +813,7 @@ export class PaymentCommandService {
         reason: input.reason,
         requestedByEmployeeId: employeeId,
         allocations: input.allocations,
+        purpose: input.purpose,
         requestEvidence,
       })
       await this.authorization.assertRefundRequestLimit({
@@ -850,11 +854,18 @@ export class PaymentCommandService {
     const employeeId = requireEmployee(input.actor, 'Refund approval')
     return this.commands.execute(command(input, 'refund.approve', refundCodec), async (transaction) => {
       await this.authorization.assertRefundApproval({ transaction, employeeId, refundId: input.refundId })
-      const refund = await new RefundRepository(transaction).approve(
+      let refund = await new RefundRepository(transaction).approve(
         input.refundId,
         employeeId,
         input.decisionReason,
       )
+      if (refund.paymentProvider === 'postar') {
+        refund = await new RefundRepository(transaction).beginExecution(refund.id)
+        await transaction.query(`
+          UPDATE mbox.refunds SET auto_execute_requested_at=clock_timestamp()
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+        `,[transaction.scope.tenantId,transaction.scope.storeId,refund.id])
+      }
       return refundOutcome(input, refund, 'refund.approved', 2, input.decisionReason)
     })
   }
@@ -962,6 +973,7 @@ export class PaymentCommandService {
           }
         }
       }
+      if(refund.orderId)await new ItemAfterSalesProgressRepository(transaction).synchronizeRefund(refund.orderId,refund.id)
       return refundOutcome(
         input,
         refund,
@@ -1008,7 +1020,7 @@ export class PaymentCommandService {
           currency: refund.currency,
           businessDate: input.businessDate,
           occurredAt,
-          evidenceSnapshot: providerSnapshot,
+          evidenceSnapshot: {...providerSnapshot, receiptReference: refund.providerRefundId!},
         })
         await refunds.syncPaymentRefundStatus(refund.paymentId)
         const payments = new PaymentRepository(transaction)
@@ -1034,6 +1046,7 @@ export class PaymentCommandService {
           }
         }
       }
+      if(refund.orderId)await new ItemAfterSalesProgressRepository(transaction).synchronizeRefund(refund.orderId,refund.id)
       return refundOutcome(
         input,
         refund,

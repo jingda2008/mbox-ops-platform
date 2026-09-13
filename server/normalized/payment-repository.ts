@@ -140,6 +140,8 @@ interface OrderRow extends Record<string, unknown> {
 }
 
 interface SettlementRow extends Record<string, unknown> {
+  receivable_reduction_minor?: string | number
+  has_unresolved_unpaid_stop?: boolean
   gross_paid_minor: string | number
   refunded_minor: string | number
   has_pending: boolean
@@ -412,9 +414,10 @@ export class PaymentRepository {
     }
 
     const settlement = await this.readSettlement(order.id)
+    assertUnpaidStopsSettled(order.id, settlement)
     // An unresolved attempt is a financial reconciliation concern, not a lock
     // on collection. The order lock and confirmed settlement still bound new attempts.
-    const outstandingMinor = toSafeMinor(order.total_amount_minor, 'order total')
+    const outstandingMinor = effectiveOrderTotal(order, settlement)
       - (toSafeMinor(settlement.gross_paid_minor, 'gross paid')
         - toSafeMinor(settlement.refunded_minor, 'refunded'))
     if (outstandingMinor <= 0) {
@@ -481,8 +484,9 @@ export class PaymentRepository {
       const settled=await this.transaction.query('SELECT id FROM mbox.order_settlement_exception_events WHERE tenant_id=$1 AND store_id=$2 AND order_id=$3 LIMIT 1',[this.transaction.scope.tenantId,this.transaction.scope.storeId,order.id])
       if(settled.rowCount)throw new TypeError('所选订单已有财务结案记录，请移除该订单')
       const balance=await this.readSettlement(order.id)
+      assertUnpaidStopsSettled(order.id,balance)
       const refunded=toSafeMinor(balance.refunded_minor,'refunded')
-      balances.push({id:order.id,submittedAt:order.submitted_at,outstandingMinor:Math.max(0,toSafeMinor(order.total_amount_minor,'total')-toSafeMinor(balance.gross_paid_minor,'paid')+refunded),refundedMinor:refunded})
+      balances.push({id:order.id,submittedAt:order.submitted_at,outstandingMinor:Math.max(0,effectiveOrderTotal(order,balance)-toSafeMinor(balance.gross_paid_minor,'paid')+refunded),refundedMinor:refunded})
     }
     const amount=input.amountMinor??balances.reduce((sum,row)=>sum+row.outstandingMinor,0)
     const allocations=allocateOrderPayment(balances,amount)
@@ -1167,7 +1171,7 @@ export class PaymentRepository {
   async syncOrderPaymentStatus(orderId: string): Promise<string> {
     const order = await this.lockOrder(orderId)
     const settlement = await this.readSettlement(order.id)
-    const total = toSafeMinor(order.total_amount_minor, 'order total')
+    const total = effectiveOrderTotal(order, settlement)
     const grossPaid = toSafeMinor(settlement.gross_paid_minor, 'gross paid')
     const refunded = toSafeMinor(settlement.refunded_minor, 'refunded')
     const netPaid = grossPaid - refunded
@@ -1365,6 +1369,19 @@ export class PaymentRepository {
   private async readSettlement(orderId: string): Promise<SettlementRow> {
     const result = await this.transaction.query<SettlementRow>(`
       SELECT
+        -- Read after the order lock, in the same fresh statement as payment facts.
+        -- A concurrent partial stop must commit before this amount is collected.
+        COALESCE((SELECT SUM(adjustment.amount_minor) FROM mbox.item_receivable_adjustment_facts adjustment
+          WHERE adjustment.tenant_id=$1 AND adjustment.store_id=$2 AND adjustment.order_id=$3),0)::text AS receivable_reduction_minor,
+        EXISTS(SELECT 1 FROM mbox.item_after_sales_cases pending_stop
+          WHERE pending_stop.tenant_id=$1 AND pending_stop.store_id=$2 AND pending_stop.order_id=$3
+            AND COALESCE(pending_stop.resolved_kind,pending_stop.kind)='unpaid_stop'
+            AND NOT EXISTS(SELECT 1 FROM mbox.item_receivable_adjustment_facts adjustment
+              WHERE adjustment.tenant_id=pending_stop.tenant_id AND adjustment.store_id=pending_stop.store_id
+                AND adjustment.case_id=pending_stop.id)
+            AND EXISTS(SELECT 1 FROM mbox.order_item_quantity_units unit
+              WHERE unit.tenant_id=pending_stop.tenant_id AND unit.store_id=pending_stop.store_id
+                AND (unit.held_by_case_id=pending_stop.id OR unit.stopped_by_case_id=pending_stop.id))) AS has_unresolved_unpaid_stop,
         COALESCE(SUM(p.amount_minor) FILTER (
           WHERE p.status IN ('succeeded', 'partially_refunded', 'refunded')
         ), 0)::text AS gross_paid_minor,
@@ -1380,6 +1397,19 @@ export class PaymentRepository {
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
     return result.rows[0] ?? { gross_paid_minor: '0', refunded_minor: '0', has_pending: false }
   }
+}
+
+function assertUnpaidStopsSettled(orderId:string,settlement:SettlementRow):void {
+  // Only this order is affected. Withdrawal/rejection alone does not resume goods;
+  // keep their unsettled price out of new collections until disposition or resume.
+  if(settlement.has_unresolved_unpaid_stop)throw new OrderNotPayableError(orderId,'unpaid item stop requires settlement')
+}
+
+function effectiveOrderTotal(order: OrderRow, settlement: SettlementRow): number {
+  const original = toSafeMinor(order.total_amount_minor, 'original order total')
+  const reduction = toSafeMinor(settlement.receivable_reduction_minor ?? 0, 'stopped item receivable')
+  if (!Number.isSafeInteger(reduction) || reduction > original) throw new PaymentEvidenceError('Stopped item receivable does not match the original order')
+  return original - reduction
 }
 
 const PAYMENT_COLUMNS = `

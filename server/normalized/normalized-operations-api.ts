@@ -1,3 +1,5 @@
+import {QuantityRedeliveryRepository} from './quantity-redelivery-repository.js'
+import {ItemQuantityConflict} from './order-item-quantity-plan.js'
 import { randomUUID } from 'node:crypto'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type {
@@ -657,7 +659,13 @@ async function executeTaskTransition(
       note,
       eventIdempotencyKey: `${idempotencyKey}:${transition}`,
     }
-    const task = await repository[transition](transitionInput)
+    const redelivery = currentTask.taskType === 'goods.redelivery' ? new QuantityRedeliveryRepository(transaction) : null
+    const original = redelivery ? await redelivery.lockForTask(taskId) : null
+    let task: ServiceTask
+    if (redelivery && original && transition === 'complete') {
+      await redelivery.complete({redeliveryId:original.id,employeeId:context.employeeId,reason:note?.trim()||'确认原实物已补送给客人',eventKey:`${idempotencyKey}:complete`})
+      task = (await repository.findById(taskId))!
+    } else task = await repository[transition](transitionInput)
     return {
       result: task,
       auditEvents: [{
@@ -698,6 +706,7 @@ function readOpenTableInput(body: JsonObject) {
 }
 
 function readCreateTaskInput(body: JsonObject, employeeId: string) {
+  if(body.taskType==='goods.redelivery')throw new RequestValidationError('请从原商品安排补送，保留实际商品份数')
   if (body.source !== undefined && body.source !== 'employee') {
     throw new ActorBindingError()
   }
@@ -1086,6 +1095,7 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   if (error instanceof CustomerLeftTableTurnoverConflictError) {
     return apiError(409, 'TABLE_CUSTOMER_LEFT_TURNOVER_CONFLICT', error.message)
   }
+  if (error instanceof ItemQuantityConflict) return apiError(409,error.code,error.message)
   if (error instanceof ServiceTaskTransitionError) {
     return apiError(409, 'SERVICE_TASK_TRANSITION_CONFLICT', error.message)
   }

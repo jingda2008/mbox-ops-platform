@@ -15,6 +15,13 @@ const base = {
 }
 
 describe('loadNormalizedRuntimeConfig', () => {
+  it('requires an explicit valid quantity after-sales switch and keeps it disabled by default', () => {
+    expect(loadNormalizedRuntimeConfig(base).quantityAfterSalesEnabled).toBe(false)
+    expect(loadNormalizedRuntimeConfig({...base, MBOX_QUANTITY_AFTER_SALES_ENABLED:'true'}).quantityAfterSalesEnabled).toBe(true)
+    expect(loadNormalizedRuntimeConfig({...base, MBOX_QUANTITY_AFTER_SALES_ENABLED:'false'}).quantityAfterSalesEnabled).toBe(false)
+    expect(() => loadNormalizedRuntimeConfig({...base, MBOX_QUANTITY_AFTER_SALES_ENABLED:'typo'})).toThrowError(/MBOX_QUANTITY_AFTER_SALES_ENABLED/)
+  })
+
   it('loads a non-production normalized service without enabling real payment', () => {
     const config = loadNormalizedRuntimeConfig(base)
     expect(config).toMatchObject({

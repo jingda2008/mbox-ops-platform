@@ -251,6 +251,7 @@ function menuProducts(items) {
         : '',
       includedText: (item.bundleComponents || []).map((line) => `${line.name || '组合内容'}×${line.quantity || 1}`).join(' · '),
       imageUrl: publicImageUrl(item.imageUrl),
+      listImageUrl: publicImageUrl(item.imageUrl, 'menu'),
       availabilityText: availability.text,
       availabilityDetail: availability.detail,
       bundleChoiceGroups:(item.bundleChoiceGroups||[]).map((group)=>Object.assign({},group,{
@@ -535,6 +536,8 @@ Page({
     ...initialCheckoutCoupons,
     ...initialCheckoutUpgrade,
     loading: true,
+    orderReady: false,
+    menuImageGeneration: 0,
     browseOnly: false,
     browseCatalogLoaded: false,
     busy: false,
@@ -793,12 +796,59 @@ Page({
     }, delay)
   },
 
+  recordOrderTiming(stage, startedAt, success) {
+    if (!['menu', 'ready', 'add', 'submit', 'first_screen_image'].includes(stage)) return
+    if (!Number.isFinite(startedAt)) return
+    if (!this.orderPerformance) this.orderPerformance = {}
+    const rows = this.orderPerformance[stage] || (this.orderPerformance[stage] = [])
+    rows.push({ durationMs: Math.max(0, Date.now() - startedAt), success: success !== false })
+    if (rows.length > 60) rows.shift()
+  },
+  getOrderPerformance() {
+    // Inspect-only accounting: no timer, upload, customer identifiers or scrolling samples.
+    if (this.firstScreenImages && Date.now() - this.menuDisplayStartedAt >= 15000) {
+      this.firstScreenImages.forEach(() => this.recordOrderTiming('first_screen_image', this.menuDisplayStartedAt, false))
+      this.firstScreenImages.clear()
+    }
+    const result = {}
+    Object.keys(this.orderPerformance || {}).forEach(stage => {
+      const rows = this.orderPerformance[stage]
+      const durations = rows.filter(row => row.success).map(row => row.durationMs).sort((a,b) => a-b)
+      result[stage] = { count: rows.length, failures: rows.filter(row => !row.success).length,
+        failureRate: rows.filter(row => !row.success).length / rows.length,
+        medianMs: durations.length ? durations[Math.ceil(durations.length * 0.5)-1] : null,
+        p95Ms: durations.length ? durations[Math.ceil(durations.length * 0.95)-1] : null }
+    })
+    return result
+  },
+  recordFirstScreenImage(event) {
+    const data = event.currentTarget.dataset
+    if (Number(data.loadGeneration) !== this.data.menuImageGeneration
+      || !this.firstScreenImages || !this.firstScreenImages.has(data.id)) return
+    this.firstScreenImages.delete(data.id)
+    this.recordOrderTiming('first_screen_image', this.menuDisplayStartedAt, event.type !== 'error')
+  },
+  showMenuBeforeCart(menu, request) {
+    if (request && !this.isCurrentTableRequest(request)) return
+    const products = menuProducts(menu)
+    this.menuDisplayStartedAt = Date.now()
+    this.setData({ loading: false, browseOnly: false, products,
+      menuImageGeneration: this.data.menuImageGeneration + 1,
+      ...menuCategoryState(products, this.data.selectedCategory, this.data.selectedSubcategory, true) })
+    this.applyFilters(() => {
+      if (!request || this.isCurrentTableRequest(request)) this.recordOrderTiming('menu', this.orderLoadStartedAt, true)
+    })
+    this.firstScreenImages = new Set(this.data.visibleProducts.slice(0,4).filter(item => item.listImageUrl || item.imageUrl).map(item => item.productId))
+  },
+
   async preparePage(silent) {
     this.stopWaitingPoll()
     this.stopSharedCartPolling()
     this.stopServicePolling()
     const session = getTableSession()
     const request = this.beginTableRequest(session)
+    this.orderLoadStartedAt = Date.now()
+    this.setData({ orderReady: false })
     const scopeChanged = this.visibleTableScope !== request.scope
     this.visibleTableScope = request.scope
     if (scopeChanged) {
@@ -826,6 +876,7 @@ Page({
       await this.loadBrowseData('', undefined, request)
       return
     }
+    let tableConfirmed = false
     try {
       const result = await getGuestSession()
       // A fixed QR is resolved to cartScope only by the verified session
@@ -863,9 +914,20 @@ Page({
         // 不把“已分配服务人员”伪装成“正在处理”。
         serviceStaffName: publicServiceName(connected.primaryServiceName),
       })
+      tableConfirmed = true
+      const confirmedScope = tableSessionCacheScope()
+      ;[PENDING_PAYMENT_KEY, PENDING_GUEST_PAYMENT_ABANDONMENT_KEY, CHECKOUT_ATTEMPT_KEY].forEach(key => {
+        const stored = wx.getStorageSync(key)
+        if (stored && stored.tableScope !== confirmedScope) wx.removeStorageSync(key)
+      })
       await this.loadActiveData(request)
     } catch (error) {
       if (this.isCurrentTableRequest(request)) {
+        if (tableConfirmed && !['GUEST_SESSION_INVALID','TABLE_QR_INVALID'].includes(error && error.code)) {
+          this.recordOrderTiming('ready', this.orderLoadStartedAt, false)
+          this.setData({ loading: false, orderReady: false, error: customerErrorMessage(error, '购物车或付款状态暂未确认，请重试；可以先浏览菜单。') })
+          return
+        }
         // A remembered table code alone is not proof that this visitor scanned a
         // current table QR. Only a scanned credential should produce an
         // "expired" instruction; otherwise preserve the neutral browse entry.
@@ -883,10 +945,7 @@ Page({
       table: null,
     }, view || {})
     try {
-      const [menu, performanceResult] = await Promise.all([
-        getPublicMenu({}),
-        loadPerformanceView(),
-      ])
+      const menu = await getPublicMenu({})
       if (request && !this.isCurrentTableRequest(request)) return false
       const products = menuProducts(menu)
       const categoryState = menuCategoryState(
@@ -905,11 +964,12 @@ Page({
         serviceSummary: { status: 'ready', label: '到店后可呼叫服务', detail: '扫码开台后显示本桌服务进度', live: false },
         products,
         ...categoryState,
-        performance: performanceResult.performance,
-        performanceError: performanceResult.error,
+        orderReady: false,
         error: connectionError || '',
       })
       this.applyFilters()
+      this.recordOrderTiming('menu', this.orderLoadStartedAt, true)
+      void this.loadOrderExtra('performance', request)
       return true
     } catch (error) {
       if (request && !this.isCurrentTableRequest(request)) return false
@@ -931,17 +991,15 @@ Page({
   },
 
   async loadActiveData(request) {
+    // Only these authoritative reads are prerequisites for this table's writes.
+    // Render the complete menu as soon as it arrives, even if cart/payment reads are slow.
     const results = await Promise.all([
-      getMenu({}),
-      loadPerformanceView(),
-      getCustomerBenefits().catch(() => []),
-      getTableOrders().catch(() => null),
+      getMenu({}).then(menu => { this.showMenuBeforeCart(menu, request); return menu }).catch(error => {
+        if (!request || this.isCurrentTableRequest(request)) this.recordOrderTiming('menu', this.orderLoadStartedAt, false)
+        throw error
+      }),
       getSharedCart(),
-      getMiniBootstrap().catch(() => null),
-      getWechatNotificationPrompt('order_checkout').catch(() => ({ available: false, authorizations: [] })),
-      getWechatNotificationPrompt('order_selection').catch(() => ({ available: false, authorizations: [] })),
-      getServiceRequests().catch(() => null),
-      getRecommendationConfiguration().catch(() => null),
+      getTableOrders().catch(() => null),
     ])
     if (request && !this.isCurrentTableRequest(request)) return false
     const products = menuProducts(results[0])
@@ -951,15 +1009,15 @@ Page({
         this.data.selectedSubcategory,
         true,
     )
-    const sharedCart = results[4]
+    const sharedCart = results[1]
     const cart = sharedCartView(sharedCart, products)
     const recommendations = menuRecommendations(this.data.recommendations, products)
     const recommendationAttribution = this.data.recommendationAttribution
       && recommendations.some((item) => item.productId === this.data.recommendationAttribution.selectedProductId)
       ? this.data.recommendationAttribution
       : null
-    const tableOrdersAvailable = Array.isArray(results[3])
-    const tableOrders = tableOrdersAvailable ? results[3] : []
+    const tableOrdersAvailable = Array.isArray(results[2])
+    const tableOrders = tableOrdersAvailable ? results[2] : []
     const paymentScope = tableSessionCacheScope()
     let storedAbandonment = wx.getStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY) || null
     if (storedAbandonment && storedAbandonment.tableScope !== paymentScope) {
@@ -1034,7 +1092,6 @@ Page({
               : '还有一笔待付款',
           canContinue: pendingFromOrders.paymentAccess === 'available',
         } : null)
-    const bootstrap = results[5]
     const pendingCheckout = (() => {
       const stored = wx.getStorageSync(CHECKOUT_ATTEMPT_KEY)
       if (stored && stored.tableScope !== paymentScope) {
@@ -1044,36 +1101,27 @@ Page({
       return stored || null
     })()
     const checkoutLocked = Boolean(pendingCheckout)
-    const configuredRecommendations = recommendationConfiguration(results[9])
     this.setData({
       loading: false,
+      orderReady: true,
+      paymentStateReady: tableOrdersAvailable,
       browseOnly: false,
       products,
       ...categoryState,
       recommendations,
       recommendationAttribution,
-      performance: results[1].performance,
-      performanceError: results[1].error,
-      serviceSummary: serviceSummaryView(results[8], this.data.serviceStaffName),
-      benefitCount: (results[2] || []).reduce((sum, item) => sum + Number(item.quantityAvailable || 0), 0),
       pendingPayment,
       paymentResult: completedPayment || this.data.paymentResult,
       success: completedPayment ? completedPayment.title : this.data.success,
       checkoutLocked,
-      membershipTerms: bootstrap && bootstrap.membershipTerms ? bootstrap.membershipTerms : null,
       membershipInviteVisible: false,
-      wechatNotificationPromptOptions: extractPromptPresentation(results[6]),
-      wechatOrderSelectionPromptOptions: extractPromptPresentation(results[7]),
-      recommendationConfiguration: configuredRecommendations,
-      recommendationQuestion: configuredRecommendations.questions[0] || null,
     })
-    rememberPresentationOptions('order_checkout', extractPromptPresentation(results[6]))
-    rememberPresentationOptions('order_selection', extractPromptPresentation(results[7]))
     this.updateCart(cart, sharedCart)
     this.applyFilters()
+    this.recordOrderTiming('ready', this.orderLoadStartedAt, true)
+    this.loadOrderExtras(request)
     this.startSharedCartPolling(request)
     this.startServicePolling(request)
-    this.ensureInitialRecommendations(request)
     const abandonmentOrder = storedAbandonment && tableOrders.find((item) => item.publicId === storedAbandonment.orderPublicId)
     if (isRetryableGuestPaymentAbandonment(storedAbandonment, paymentScope, abandonmentOrder)) {
       void this.executePendingGuestPaymentAbandonment(storedAbandonment)
@@ -1081,6 +1129,39 @@ Page({
       wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
     }
     return true
+  },
+
+  loadOrderExtras(request) {
+    this.orderExtrasPending = Promise.all(['performance', 'benefits', 'membership', 'order_checkout', 'order_selection', 'service', 'recommendation']
+      .map(name => this.loadOrderExtra(name, request)))
+  },
+  async loadOrderExtra(name, request) {
+    const current = () => !request || this.isCurrentTableRequest(request)
+    if (!current()) return
+    const loaders = {
+      performance: async () => { const result = await loadPerformanceView(); return { performance: result.performance, performanceError: result.error } },
+      benefits: async () => ({ benefitCount: (await getCustomerBenefits() || []).reduce((sum,item) => sum + Number(item.quantityAvailable || 0),0) }),
+      membership: async () => { const result = await getMiniBootstrap(); return { membershipTerms: result && result.membershipTerms || null } },
+      order_checkout: async () => ({ wechatNotificationPromptOptions: extractPromptPresentation(await getWechatNotificationPrompt('order_checkout')) }),
+      order_selection: async () => ({ wechatOrderSelectionPromptOptions: extractPromptPresentation(await getWechatNotificationPrompt('order_selection')) }),
+      service: async () => ({ serviceSummary: serviceSummaryView(await getServiceRequests(), this.data.serviceStaffName) }),
+      recommendation: async () => { const result = recommendationConfiguration(await getRecommendationConfiguration()); return { recommendationConfiguration: result, recommendationQuestion: result.questions[0] || null } },
+    }
+    if (!loaders[name]) return
+    try {
+      const update = await loaders[name]()
+      if (!current()) return
+      this.setData(update)
+      if (name === 'order_checkout') rememberPresentationOptions(name, update.wechatNotificationPromptOptions)
+      if (name === 'order_selection') rememberPresentationOptions(name, update.wechatOrderSelectionPromptOptions)
+      if (name === 'recommendation') this.ensureInitialRecommendations(request)
+      if (this.orderExtraErrors) delete this.orderExtraErrors[name]
+    } catch (_error) {
+      if (!current()) return
+      if (!this.orderExtraErrors) this.orderExtraErrors = {}
+      this.orderExtraErrors[name] = true
+      if (name === 'recommendation') this.setData({ recommendationError: '推荐暂时无法读取，点此重试；菜单仍可正常点单。' })
+    }
   },
 
   dismissMembershipInvite() {
@@ -1126,6 +1207,9 @@ Page({
   },
 
   retryTable() { this.preparePage() },
+  retryOrderLoad() {
+    if (this.data.orderReady === false && !this.data.loading) return this.preparePage()
+  },
   async retryPerformance() {
     const request = this.currentTableRequest()
     const result = await loadPerformanceView()
@@ -1159,17 +1243,24 @@ Page({
     })
   },
   productImageFailed(event){
+    if (event.currentTarget.dataset.loadGeneration !== undefined
+      && Number(event.currentTarget.dataset.loadGeneration) !== this.data.menuImageGeneration) return
+    this.recordFirstScreenImage(event)
     const id=event.currentTarget.dataset.id
     if(!id)return
-    const update={visibleProducts:(this.data.visibleProducts||[]).map(item=>item.productId===id?Object.assign({},item,{imageFailed:true}):item)}
-    if(this.data.detailProduct&&this.data.detailProduct.productId===id)update.detailProduct=Object.assign({},this.data.detailProduct,{imageFailed:true})
-    this.setData(update)
+    if (event.currentTarget.dataset.imageIndex !== undefined) {
+      const fallback = item => item.productId !== id ? item : Object.assign({}, item,
+        item.listImageUrl && item.listImageUrl !== item.imageUrl ? {listImageUrl:item.imageUrl} : {imageFailed:true})
+      this.setData({ products: this.data.products.map(fallback), visibleProducts: this.data.visibleProducts.map(fallback) })
+    } else if(this.data.detailProduct && this.data.detailProduct.productId===id) {
+      this.setData({detailProduct:Object.assign({},this.data.detailProduct,{imageFailed:true})})
+    }
   },
   openProductDetail(event) {
     const productId = String(event.currentTarget.dataset.id || '')
     const detailProduct = this.data.products.find((item) => item.productId === productId) || null
     if (detailProduct) this.setData({ detailProduct:Object.assign(resetBundleChoiceSelections(detailProduct),{
-        selectionSource:String(event.currentTarget.dataset.source||''),
+        selectionSource:String(event.currentTarget.dataset.source||''), imageFailed:false,
       }),
       detailSelectionsComplete:(detailProduct.bundleChoiceGroups||[]).length===0,detailEditUnitIndex:-1 })
   },
@@ -1181,7 +1272,7 @@ Page({
     if (!imageUrl) return
     wx.previewImage({ current: imageUrl, urls: [imageUrl] })
   },
-  applyFilters() {
+  applyFilters(onVisible) {
     const search = this.data.searchText.trim().toLowerCase()
     const visibleProducts = this.data.products.filter((item) => {
       const category = menuCategoryIdentity(item)
@@ -1192,7 +1283,7 @@ Page({
       const searchable = [item.name, item.description, item.includedText].concat(item.aliases || [], item.tasteLabels || []).join(' ').toLowerCase()
       return topCategoryMatches && subcategoryMatches && (!search || searchable.includes(search))
     })
-    this.setData({ visibleProducts })
+    this.setData({ visibleProducts }, onVisible)
   },
 
   ensureInitialRecommendations(request) {
@@ -1208,6 +1299,9 @@ Page({
 
   onRecommend() {
     if (this.data.recommendationBusy) return
+    if (this.orderExtraErrors && this.orderExtraErrors.recommendation) {
+      return this.loadOrderExtra('recommendation', this.currentTableRequest())
+    }
     const configuration = this.data.recommendationConfiguration
     if (!configuration.questions.length) return this.recommend('guided')
     this.setData({
@@ -1366,6 +1460,7 @@ Page({
   },
 
   async addProduct(event) {
+    if (this.data.orderReady === false) return false
     if (this.data.checkoutLocked) return
     const productId = event.currentTarget.dataset.id
     const product = this.data.products.find((item) => item.productId === productId)
@@ -1464,13 +1559,15 @@ Page({
   },
 
   async commitProductAdd(productId,source,bundleSelections){
+    if (this.data.orderReady === false) return false
     const product = this.data.products.find((item) => item.productId === productId)
     if(!product||!product.available)return false
     const tableRequest = this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
     // The first concrete order action is the natural place for the benefit
     // bundle.  It is separate from the later payment-result bundle.
-    await this.offerOrderNotifications('order_selection', tableRequest)
+    // Cached optional notification prompts cannot delay the cart write.
+    void this.offerOrderNotifications('order_selection', tableRequest).catch(() => {})
     if (!this.isCurrentTableRequest(tableRequest)) return
     if (!await this.adjustSharedCart(productId, 1,bundleSelections)) return false
     // 推荐只影响当前购物车。体验承诺必须在有效订单且付款门禁通过后由服务端建立，
@@ -1657,6 +1754,7 @@ Page({
   },
 
   async adjustSharedCart(productId, delta,bundleSelections=[]) {
+    if (this.data.orderReady === false) return false
     const tableRequest = this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return false
     if (this.data.cartSyncing) return false
@@ -1667,14 +1765,17 @@ Page({
     const writeGuard = this.ensureTableRequestGuard()
     const write = writeGuard.beginWrite(tableRequest.scope, 'cart')
     this.setData({ cartSyncing: true, error: '' })
+    const feedbackStartedAt = Date.now()
     try {
       const sharedCart = await adjustSharedCart(
         productId, delta, this.data.cartGeneration, this.data.cartVersion, randomId('shared-cart-adjust'),bundleSelections,
       )
       if (!writeGuard.isCurrentWrite(write)) return false
+      this.recordOrderTiming('add', feedbackStartedAt, true)
       this.updateCart(sharedCartView(sharedCart, this.data.products), sharedCart)
       return true
     } catch (error) {
+      this.recordOrderTiming('add', feedbackStartedAt, false)
       if (!writeGuard.isCurrentWrite(write)) return false
       if (error && error.code === 'SHARED_CART_VERSION_CONFLICT') {
         await this.refreshSharedCart(true, this.currentTableRequest())
@@ -1781,6 +1882,7 @@ Page({
   },
 
   async openCheckout() {
+    if (this.data.orderReady === false) return false
     if (!this.data.cart.length || this.data.busy) return
     const tableRequest = this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
@@ -1846,6 +1948,17 @@ Page({
   },
 
   async submitOrder(offerPublicId, allowBusy, previousAttempt, request) {
+    if (!previousAttempt && this.data.paymentStateReady === false) {
+      const expected = request || this.currentTableRequest()
+      try {
+        const orders = await getTableOrders()
+        if (!this.isCurrentTableRequest(expected) || !Array.isArray(orders)) return
+        this.setData({ paymentStateReady: true })
+      } catch (_error) {
+        if (this.isCurrentTableRequest(expected)) this.setData({ error: '付款状态暂未确认，请稍后重试；购物车已保留。' })
+        return
+      }
+    }
     const tableRequest = request || this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
     if (this.data.busy && !allowBusy) return
@@ -1874,6 +1987,8 @@ Page({
       error: '',
       success: '',
     })
+    const submitStartedAt = Date.now()
+    let submitMeasured = false
     try {
       const attemptAttribution = checkoutRecommendationAttribution(attempt.offerPublicId, {
         recommendationPublicId: attempt.recommendationPublicId,
@@ -1888,6 +2003,8 @@ Page({
         ...(attempt.couponQuoteId ? { couponQuoteId: attempt.couponQuoteId } : {}),
         recommendationAttribution: attemptAttribution,
       }, attempt.idempotencyKey)
+      this.recordOrderTiming('submit', submitStartedAt, true)
+      submitMeasured = true
       if (!this.isCurrentTableRequest(tableRequest)) return
       const data = result.data || result
       const pendingPayment = {
@@ -1908,6 +2025,7 @@ Page({
       this.setData({ pendingPayment, checkoutLocked: false })
       await this.handlePaymentAction(data.payment && data.payment.providerAction, tableRequest)
     } catch (error) {
+      if (!submitMeasured) this.recordOrderTiming('submit', submitStartedAt, false)
       if (!this.isCurrentTableRequest(tableRequest)) return
       if (error && error.code === 'SHARED_CART_VERSION_CONFLICT') {
         wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
@@ -2113,6 +2231,7 @@ Page({
 
   async offerOrderNotifications(context, request) {
     if (request && !this.isCurrentTableRequest(request)) return
+    if (context === 'order_selection' && !(this.data.wechatOrderSelectionPromptOptions || []).length) return
     const promptKey = `${tableSessionCacheScope()}:${context}`
     if (!this._notificationPromptContexts) this._notificationPromptContexts = new Set()
     if (this._notificationPromptContexts.has(promptKey)) return
@@ -2129,6 +2248,7 @@ Page({
     let options = context === 'order_selection'
       ? this.data.wechatOrderSelectionPromptOptions
       : this.data.wechatNotificationPromptOptions
+    if (context === 'order_selection' && (!options || !options.length)) return
     if (!options || !options.length) {
       try {
         const prompts = await Promise.all([

@@ -49,6 +49,7 @@ function pageHarness(name, overrides = {}) {
       return importedModule.exports
     },
   }, { filename: sourcePath })
+  if (name === 'order') page.data.orderReady = true // This fixture represents an already confirmed table.
   return page
 }
 async function run() {
@@ -83,7 +84,7 @@ async function run() {
   } })
   // Unrelated loads/polls stubbed; real lifecycle, generation and mutation handlers retained.
   order.stopWaitingPoll = order.stopSharedCartPolling = order.stopServicePolling = order.stopShakeRecommendation = () => {}
-  order.loadActiveData = async () => {}
+  order.loadActiveData = async () => { order.data.orderReady = true }
   order.queuePendingGuestPaymentAbandonment = () => null
   await order.preparePage()
   order.data.products = [{ productId: 'choice-layout', available: true, productKind: 'bundle', bundleChoiceGroups: [{ id: 'group', selectionCount: 1, options: [{ productId: 'cocktail', available: true }] }] }]
@@ -112,7 +113,7 @@ async function run() {
     getGuestSession: async () => ({ data: { status: 'active', cartProtocolVersion: 2 } }),
   } })
   cart.stopWaitingPoll = cart.stopSharedCartPolling = cart.stopServicePolling = cart.stopShakeRecommendation = () => {}
-  cart.loadActiveData = async () => {}
+  cart.loadActiveData = async () => { cart.data.orderReady = true }
   cart.queuePendingGuestPaymentAbandonment = () => null
   await cart.preparePage()
   const adjustment = cart.adjustSharedCart('isolated-product', 1)

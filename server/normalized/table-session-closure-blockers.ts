@@ -89,7 +89,7 @@ export async function readTableSessionClosureState(
 ): Promise<TableSessionClosureState> {
   const result = await transaction.query<ClosureCountRow>(`
     WITH scoped_orders AS (
-      SELECT ordering.id,ordering.status,ordering.payment_status,ordering.total_amount_minor,
+      SELECT ordering.id,ordering.status,ordering.payment_status,mbox.order_receivable_amount(ordering.tenant_id,ordering.store_id,ordering.id) AS total_amount_minor,
         EXISTS (
           SELECT 1 FROM mbox.order_settlement_exception_events settlement_exception
           WHERE settlement_exception.tenant_id=ordering.tenant_id
@@ -159,7 +159,7 @@ export async function readTableSessionClosureState(
       (SELECT count(*)::text FROM mbox.inventory_order_reservations reservation
         WHERE reservation.tenant_id=$1::uuid AND reservation.store_id=$2::uuid
           AND reservation.order_id=ANY(SELECT id FROM scoped_orders)
-          AND reservation.status='reserved') AS inventory_reserved,
+          AND mbox.inventory_reservation_remaining_quantity(reservation.tenant_id,reservation.store_id,reservation.id)>0) AS inventory_reserved,
       (SELECT count(*)::text FROM mbox.refunds refund
         JOIN mbox.order_payment_facts payment ON payment.tenant_id=refund.tenant_id
           AND payment.store_id=refund.store_id AND payment.id=refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=payment.order_id)

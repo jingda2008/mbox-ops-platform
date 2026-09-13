@@ -358,7 +358,11 @@ integration('business-day closure',()=>{
     expect(results.map(row=>row.replayed).sort()).toEqual([false,true])
     const next=results[0]!.nextBusinessDate
     expect((await pool.query(`SELECT business_date::text FROM mbox.business_days WHERE tenant_id=$1 AND store_id=$2 AND status='open'`,[tenantId,storeId])).rows).toEqual([{business_date:next}])
-    await addOrder(newOrder)
+    await transactions.run(scope,async tx=>{
+      await tx.query('SET LOCAL ROLE mbox_runtime')
+      await tx.query(`INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,subtotal_amount_minor,total_amount_minor,created_by_employee_id)
+        VALUES($1,$2,$3,$4,$5,'staff_assisted','submitted','unpaid',100,100,$6)`,[newOrder,tenantId,storeId,newSession,`order-${newOrder}`,employeeId])
+    })
     const dates=(await pool.query('SELECT id,business_date::text FROM mbox.orders WHERE id=ANY($1::uuid[]) ORDER BY id',[[oldOrder,newOrder]])).rows
     expect(dates.find(row=>row.id===oldOrder).business_date).toBe(date)
     expect(dates.find(row=>row.id===newOrder).business_date).toBe(next)

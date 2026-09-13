@@ -1,3 +1,8 @@
+import {QuantityRemakeCommandService} from './quantity-remake-command-service.js'
+import {orderReceivableSql} from './order-collection-sql.js'
+import {lockQuantityTaskOrders} from './quantity-task-lock.js'
+import {executeQuantityKdsAction} from './quantity-kds-action.js'
+import {ItemQuantityConflict} from './order-item-quantity-plan.js'
 import { synchronizeRefundedCancelledItem } from './refunded-fulfillment-repair.js'
 import { createHash, randomUUID } from 'node:crypto'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
@@ -91,6 +96,7 @@ type KdsRepositoryPort = Pick<KdsRepository, 'accept' | 'startPreparing' | 'mark
 type OrderRepositoryPort = Pick<OrderRepository, 'markDelivered'>
 
 export interface CommerceKdsApiOptions {
+  quantityActionsEnabled?:boolean
   commerce: CommerceCommandPort
   fulfillmentQuery: FulfillmentQueryPort
   commandExecutor: CommandExecutorPort
@@ -118,6 +124,7 @@ type KdsAction =
   | 'fail'
 
 interface KdsCommandTarget {
+  quantityManaged?:boolean
   task: KdsTask
   orderItemId: string
   orderId: string
@@ -132,6 +139,7 @@ interface KdsCommandTarget {
 }
 
 interface KdsActionResult {
+  affectedQuantity?:number
   task: KdsTask
   target: KdsCommandTarget
   orderItem: OrderItem | null
@@ -170,6 +178,7 @@ interface KdsTaskLockRow extends Record<string, unknown> {
 }
 
 interface KdsTargetDetailRow extends Record<string, unknown> {
+  quantity_managed?:boolean
   order_item_id: string
   order_id: string
   table_session_id: string
@@ -237,6 +246,10 @@ export type StaffTableOrderItemFulfillmentStatus =
 export interface StaffTableOrderDetailView {
   publicId: string
   paymentStatus?: string
+  totalAmountMinor?: number
+  stoppedAmountMinor?:number
+  receivableIncreaseMinor?:number
+  replacementSource?:{orderPublicId:string;orderItemId:string}
   items: Array<{
     id: string
     productName: string
@@ -245,6 +258,7 @@ export interface StaffTableOrderDetailView {
     totalAmountMinor?: number
     includedInBundle?: boolean
     refundedAmountMinor?: number
+    quantities?:{total:number;held:number;stopped:number;ready:number;delivered:number;pending:number}
     fulfillmentStation: 'bar' | 'kitchen' | 'cashier' | 'none'
     fulfillmentStatus: StaffTableOrderItemFulfillmentStatus
   }>
@@ -253,10 +267,12 @@ export interface StaffTableOrderDetailView {
 interface StaffTableOrderDetailRow extends Record<string, unknown> {
   order_id: string
   order_public_id: string
+  replacement_source?:{orderPublicId:string;orderItemId:string}|null
   order_status: string
   order_fulfillment_state: string
   order_payment_status: string
   refunded_amount_minor: string | number
+  quantity_facts?:{total:number;held:number;stopped:number;ready:number;delivered:number;pending:number}|null
   item_id: string
   product_name: string
   quantity: string | number
@@ -277,10 +293,23 @@ export async function listTableOrderDetailsForSession(
     SELECT order_header.id AS order_id,order_header.public_id AS order_public_id,
       order_header.status AS order_status,order_header.fulfillment_state AS order_fulfillment_state,
       order_header.payment_status AS order_payment_status,
+      order_header.total_amount_minor AS order_total_amount_minor,
+      (SELECT jsonb_build_object('orderPublicId',original.public_id,'orderItemId',(
+          SELECT min(unit.order_item_id::text) FROM mbox.item_after_sales_case_units selected JOIN mbox.order_item_quantity_units unit
+            ON unit.tenant_id=selected.tenant_id AND unit.store_id=selected.store_id AND unit.id=selected.unit_id
+          WHERE selected.tenant_id=link.tenant_id AND selected.store_id=link.store_id AND selected.case_id=link.case_id))
+        FROM mbox.item_after_sales_replacement_orders link JOIN mbox.item_after_sales_cases source ON source.tenant_id=link.tenant_id AND source.store_id=link.store_id AND source.id=link.case_id
+        JOIN mbox.orders original ON original.tenant_id=source.tenant_id AND original.store_id=source.store_id AND original.id=source.order_id
+        WHERE link.tenant_id=order_header.tenant_id AND link.store_id=order_header.store_id AND link.order_id=order_header.id) AS replacement_source,
+      order_header.total_amount_minor-(${orderReceivableSql('order_header')}) AS stopped_amount_minor,
       COALESCE((SELECT sum(ri.amount_minor) FROM mbox.refund_items ri JOIN mbox.refunds r
         ON r.tenant_id=ri.tenant_id AND r.store_id=ri.store_id AND r.id=ri.refund_id
         WHERE ri.tenant_id=item.tenant_id AND ri.store_id=item.store_id AND ri.order_item_id=item.id
           AND r.status='succeeded'),0) AS refunded_amount_minor,
+      (SELECT CASE WHEN count(*)>0 THEN jsonb_build_object('total',count(*),'held',count(*) FILTER(WHERE unit.held_by_case_id IS NOT NULL AND NOT unit.operationally_stopped),
+        'stopped',count(*) FILTER(WHERE unit.operationally_stopped),'ready',count(*) FILTER(WHERE unit.production_state='ready' AND unit.held_by_case_id IS NULL AND NOT unit.operationally_stopped),
+        'delivered',count(*) FILTER(WHERE unit.production_state='delivered'),'pending',count(*) FILTER(WHERE unit.production_state<>'delivered' AND NOT unit.operationally_stopped)) END FROM mbox.order_item_quantity_units unit
+        WHERE unit.tenant_id=item.tenant_id AND unit.store_id=item.store_id AND unit.order_item_id=item.id) AS quantity_facts,
       item.id AS item_id,
       COALESCE(NULLIF(item.product_snapshot->>'name',''),product.name,'商品') AS product_name,
       item.quantity,item.unit_price_minor,item.total_amount_minor,item.parent_order_item_id,item.fulfillment_station,item.status AS item_status,kds.status AS kds_status
@@ -316,7 +345,10 @@ export async function listTableOrderDetailsForSession(
   for (const row of result.rows) {
     const order = orders.get(row.order_id) ?? {
       publicId: row.order_public_id,
+      ...(row.replacement_source?{replacementSource:row.replacement_source}:{}),
       paymentStatus: row.order_payment_status,
+      totalAmountMinor: row.order_total_amount_minor == null ? undefined : Number(row.order_total_amount_minor),
+      ...(Number(row.stopped_amount_minor??0)>0?{stoppedAmountMinor:Number(row.stopped_amount_minor)}:Number(row.stopped_amount_minor??0)<0?{receivableIncreaseMinor:-Number(row.stopped_amount_minor)}:{}),
       items: [],
     }
     order.items.push({
@@ -327,6 +359,7 @@ export async function listTableOrderDetailsForSession(
       totalAmountMinor: row.total_amount_minor == null ? undefined : Number(row.total_amount_minor),
       includedInBundle: row.parent_order_item_id != null,
       refundedAmountMinor: row.refunded_amount_minor == null ? undefined : Number(row.refunded_amount_minor),
+      ...(row.quantity_facts?{quantities:row.quantity_facts}:{}),
       fulfillmentStation: row.fulfillment_station,
       fulfillmentStatus: tableOrderItemFulfillmentStatus(row),
     })
@@ -361,7 +394,7 @@ export async function listTablePaymentOrdersForSession(
     unresolved_online_payment_id: string | null
   }>(`
     SELECT order_header.id,order_header.public_id,order_header.currency,order_header.payment_status,
-      GREATEST(0,order_header.total_amount_minor-paid.captured_amount_minor+refund.refunded_amount_minor)
+      GREATEST(0,(${orderReceivableSql('order_header')})-paid.captured_amount_minor+refund.refunded_amount_minor)
         AS outstanding_amount_minor,
       pending.has_online_payment_in_progress,
       pending.unresolved_online_payment_id
@@ -371,24 +404,21 @@ export async function listTablePaymentOrdersForSession(
         WHERE payment.status IN ('succeeded','partially_refunded','refunded')
       ),0)::bigint
         AS captured_amount_minor
-      FROM mbox.payments payment
+      FROM mbox.order_payment_facts payment
       WHERE payment.tenant_id=order_header.tenant_id AND payment.store_id=order_header.store_id
         AND payment.order_id=order_header.id
     ) paid ON true
     LEFT JOIN LATERAL (
       SELECT COALESCE(SUM(refund_row.amount_minor) FILTER (WHERE refund_row.status='succeeded'),0)::bigint
         AS refunded_amount_minor
-      FROM mbox.refunds refund_row
-      JOIN mbox.payments payment
-        ON payment.tenant_id=refund_row.tenant_id AND payment.store_id=refund_row.store_id
-       AND payment.id=refund_row.payment_id
+      FROM mbox.order_refund_facts refund_row
       WHERE refund_row.tenant_id=order_header.tenant_id AND refund_row.store_id=order_header.store_id
-        AND payment.order_id=order_header.id
+        AND refund_row.order_id=order_header.id
     ) refund ON true
     LEFT JOIN LATERAL (
       SELECT payment.id AS unresolved_online_payment_id,
         true AS has_online_payment_in_progress
-      FROM mbox.payments payment
+      FROM mbox.order_payment_facts payment
       WHERE payment.tenant_id=order_header.tenant_id AND payment.store_id=order_header.store_id
         AND payment.order_id=order_header.id AND payment.status='pending'
         AND payment.provider IN ('wechat','postar','simulation')
@@ -408,7 +438,7 @@ export async function listTablePaymentOrdersForSession(
     ) recollection ON true
     WHERE order_header.tenant_id=$1::uuid AND order_header.store_id=$2::uuid
       AND order_header.table_session_id=$3::uuid AND order_header.status<>'cancelled'
-      AND GREATEST(0,order_header.total_amount_minor-paid.captured_amount_minor+refund.refunded_amount_minor)>0
+      AND GREATEST(0,(${orderReceivableSql('order_header')})-paid.captured_amount_minor+refund.refunded_amount_minor)>0
       -- A server can collect only an ordinary unpaid balance, or a balance
       -- that a cashier explicitly reopened after a completed refund.
       AND (refund.refunded_amount_minor=0 OR recollection.active)
@@ -560,6 +590,8 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
       publicId: readOptionalString(body.publicId, 'publicId', 128)
         ?? deterministicPublicId(context.scope, idempotencyKey),
       channel: 'staff_assisted',
+      replacementCaseId:readOptionalUuid(body.replacementCaseId,'replacementCaseId')??undefined,
+      replacementPreviousOrderId:readOptionalUuid(body.replacementPreviousOrderId,'replacementPreviousOrderId')??undefined,
       lines: input.lines,
       note: input.orderMode === 'gift'
         ? giftOrderNote(input.giftReason!, input.note)
@@ -591,6 +623,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
       context.scope,
       context.employeeId,
       context.businessDate,
+      {staffSessionId:context.staffSessionId,deviceAccessLeaseId:context.deviceAccessLeaseId},
     )
     return reply.send({ data: view })
   }))
@@ -624,6 +657,8 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
       )
       const taskId = readUuid(request.params.taskId, 'taskId')
       const reason = action === 'fail' ? readExceptionReason(body) : null
+      const quantity=body.quantity===undefined?undefined:Number(body.quantity)
+      if(quantity!==undefined&&(!Number.isSafeInteger(quantity)||quantity<1||quantity>999))throw new CommerceKdsRequestError('KDS_QUANTITY_INVALID','请选择1至999的实际份数',400)
       const idempotencyKey = readIdempotencyKey(request, body)
       const execution = await executeKdsAction(
         options,
@@ -633,6 +668,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
         idempotencyKey,
         request.id,
         reason,
+        quantity,
       )
       return reply.send(kdsResponse(execution))
     }),
@@ -672,6 +708,12 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
       const taskId = readUuid(request.params.taskId, 'taskId')
       const reason = readExceptionReason(body)
       const idempotencyKey = readIdempotencyKey(request, body)
+      if(body.quantity!==undefined){
+        if(typeof body.quantity!=='number'||!Number.isSafeInteger(body.quantity)||body.quantity<1||body.quantity>999)throw new TypeError('请选择1至999的实际重做份数')
+        if(typeof body.originalGoodsLost!=='boolean')throw new TypeError('请确认原实物是否已无法交付')
+        const result=await new QuantityRemakeCommandService(options.commandExecutor,options.quantityActionsEnabled===true).create({...context,taskId,quantity:body.quantity,originalGoodsLost:body.originalGoodsLost,reason:reason.note,idempotencyKey})
+        return reply.send({data:result.value,replayed:result.replayed})
+      }
       const execution = await executeKdsRemake(
         options,
         context,
@@ -693,12 +735,13 @@ async function executeKdsAction(
   idempotencyKey: string,
   requestId: string,
   reason: KdsExceptionReason | null,
+  quantity?:number,
 ): Promise<CommandExecution<KdsActionResult>> {
   return options.commandExecutor.execute({
     scope: context.scope,
     operationScope: 'commerce.kds.action',
     idempotencyKey,
-    requestFingerprint: JSON.stringify({ taskId, action, employeeId: context.employeeId, reason }),
+    requestFingerprint: JSON.stringify({ taskId, action, employeeId: context.employeeId, reason, ...(quantity===undefined?{}:{quantity}) }),
     resultCodec: kdsActionResultCodec,
   }, async (transaction) => {
     const target = await lockKdsCommandTarget(transaction, taskId)
@@ -723,7 +766,13 @@ async function executeKdsAction(
     let task = target.task
     let orderItem: OrderItem | null = null
     let exceptionEvidence: JsonObject | null = null
-    if (action === 'accept') {
+    let quantityOutcome:Awaited<ReturnType<typeof executeQuantityKdsAction>>|null=null
+    if(quantity!==undefined&&options.quantityActionsEnabled===false&&!target.quantityManaged)throw new CommerceKdsRequestError('QUANTITY_BATCH_NOT_ENABLED','暂不新增数量制作批次，已有批次可继续原操作',409)
+    if((target.quantityManaged||quantity!==undefined)&&action==='fail')throw new ItemQuantityConflict('QUANTITY_UNAVAILABLE','该商品已按份数处理，请保留当前数量并从商品售后记录实际处置，不能整行作废')
+    if((target.quantityManaged||quantity!==undefined)&&['start','complete','deliver','pickupAndDeliver'].includes(action)){
+      quantityOutcome=await executeQuantityKdsAction(transaction,{task,action:action as 'start'|'complete'|'deliver'|'pickupAndDeliver',employeeId:context.employeeId,quantity,eventKey:`${idempotencyKey}:quantity`})
+      task=quantityOutcome.task
+    } else if (action === 'accept') {
       task = await kds.accept(transitionInput('accept'))
     } else if (action === 'start') {
       if (task.status === 'pending') task = await kds.accept(transitionInput('accept'))
@@ -806,7 +855,8 @@ async function executeKdsAction(
       task,
       target,
       orderItem,
-      fulfillmentStatus: fulfillmentStatus(task, orderItem),
+      fulfillmentStatus: quantityOutcome?.fulfillmentStatus??fulfillmentStatus(task, orderItem),
+      ...(quantityOutcome?{affectedQuantity:quantityOutcome.quantity}:{}),
       exceptionEvidence,
     }
     const actionName = action === 'pickupAndDeliver' ? 'deliver' : action
@@ -821,11 +871,12 @@ async function executeKdsAction(
         afterData: kdsActionResultToJson(result),
         requestId,
       }],
-      outboxMessages: [{
+      outboxMessages: [...(quantityOutcome?.batch?[{aggregateType:'delivery_batch',aggregateId:quantityOutcome.batch.id,aggregateVersion:1,eventType:'delivery.batch.ready.v1',payload:{...quantityOutcome.batch}}]:[]),{
+        ...(quantityOutcome?{businessEventKey:`quantity-kds:${task.id}:${idempotencyKey}`} : {}),
         aggregateType: 'kds_task',
         aggregateId: task.id,
         aggregateVersion: kdsVersion(result.fulfillmentStatus),
-        eventType: `kds.${actionName}.v1`,
+        eventType: `kds.${quantityOutcome?'quantity.':''}${actionName}.v1`,
         payload: kdsActionResultToJson(result),
         headers: { requestId },
       }],
@@ -849,6 +900,7 @@ async function executeManagerCancellation(
     resultCodec: kdsActionResultCodec,
   }, async (transaction) => {
     const target = await lockKdsCommandTarget(transaction, taskId)
+    if(target.quantityManaged)throw new ItemQuantityConflict('QUANTITY_UNAVAILABLE','该商品已有按份数处置记录，请从商品售后处理所选数量，不能整行取消或重做')
     await new NormalizedKdsAuthorization().assertCanActOnTask({
       transaction,
       employeeId: context.employeeId,
@@ -960,6 +1012,7 @@ async function executeKdsRemake(
     resultCodec: kdsActionResultCodec,
   }, async (transaction) => {
     const target = await lockKdsCommandTarget(transaction, taskId)
+    if(target.quantityManaged)throw new ItemQuantityConflict('QUANTITY_UNAVAILABLE','该商品已有按份数处置记录，请从商品售后处理所选数量，不能整行取消或重做')
     if (target.task.status !== 'failed') {
       throw new CommerceKdsRequestError(
         'KDS_REMAKE_NOT_AVAILABLE',
@@ -1143,7 +1196,8 @@ async function lockKdsCommandTarget(
   transaction: ScopedTransaction,
   taskId: string,
 ): Promise<KdsCommandTarget> {
-  // Lock the authoritative task by its scoped unique key first. Keeping the
+  await lockQuantityTaskOrders(transaction,[taskId])
+  // Lock the authoritative task by its scoped unique key after its parent locks. Keeping the
   // descriptive joins out of this statement prevents PostgreSQL from choosing
   // a tenant-wide nested-loop plan as a store accumulates orders.
   const selectedTask = await transaction.query<KdsTaskLockRow>(`
@@ -1162,7 +1216,8 @@ async function lockKdsCommandTarget(
   if (selectedTask.rowCount !== 1 || taskRow === undefined) throw new KdsTaskNotFoundError(taskId)
 
   const selectedDetail = await transaction.query<KdsTargetDetailRow>(`
-    SELECT item.id AS order_item_id, ordering.id AS order_id,
+    SELECT EXISTS(SELECT 1 FROM mbox.order_item_quantity_units unit WHERE unit.tenant_id=item.tenant_id AND unit.store_id=item.store_id AND unit.order_item_id=item.id) AS quantity_managed,
+      item.id AS order_item_id, ordering.id AS order_id,
       ordering.table_session_id, table_session.table_id,
       venue_table.code AS table_code, item.product_id,
       COALESCE(item.product_snapshot ->> 'name', product.name) AS product_name,
@@ -1196,6 +1251,7 @@ async function lockKdsCommandTarget(
   const detailRow = selectedDetail.rows[0]
   if (selectedDetail.rowCount !== 1 || detailRow === undefined) throw new KdsTaskNotFoundError(taskId)
   return {
+    quantityManaged:detailRow.quantity_managed===true,
     orderItemId: detailRow.order_item_id,
     orderId: detailRow.order_id,
     tableSessionId: detailRow.table_session_id,
@@ -1464,6 +1520,7 @@ function kdsResponse(execution: CommandExecution<KdsActionResult>) {
     productId: result.target.productId,
     specification: result.target.specification,
     quantity: task.quantity,
+    ...(result.affectedQuantity===undefined?{}:{affectedQuantity:result.affectedQuantity}),
     fulfillmentNote: result.target.fulfillmentNote,
     status: compatibleKdsStatus(result),
     normalizedStatus: task.status,
@@ -1532,6 +1589,7 @@ const kdsActionResultCodec: JsonCodec<KdsActionResult> = {
 
 function kdsActionResultToJson(result: KdsActionResult): JsonObject {
   return {
+    ...(result.affectedQuantity===undefined?{}:{affectedQuantity:result.affectedQuantity}),
     task: kdsTaskToJson(result.task),
     target: {
       orderItemId: result.target.orderItemId,
@@ -1756,6 +1814,16 @@ async function handleRoute(
     return await operation()
   } catch (error) {
     const mapped = mapError(error)
+    if (mapped.statusCode === 403 && reply.request.routeOptions.url?.includes('/kds/')) {
+      const referenceId = safeReferenceId(reply.request.id)
+      mapped.body.error.referenceId = referenceId
+      const params = reply.request.params as { taskId?: unknown }
+      reply.request.log.warn({ event: 'kds_action_denied', referenceId,
+        reasonCode: mapped.body.error.code,
+        action: error instanceof KdsAuthorizationError ? error.action : undefined,
+        taskId: typeof params?.taskId === 'string' ? safeReferenceId(params.taskId) : undefined,
+      }, 'KDS action rejected; task remains available for recovery')
+    }
     if (mapped.statusCode >= 500) {
       const referenceId = safeReferenceId(reply.request.id)
       mapped.body.error.referenceId = referenceId
@@ -1797,7 +1865,15 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
     return apiError(403, 'STAFF_ACCESS_FORBIDDEN', '当前员工无权执行此操作')
   }
   if (error instanceof KdsAuthorizationError) {
-    return apiError(403, error.code, '当前员工无权执行该出品操作')
+    return apiError(403, error.code, ({
+      KDS_SESSION_INVALID: '当前设备的登录授权已过期，请重新验证登录后处理原任务',
+      KDS_STATION_FORBIDDEN: '这项出品不在当前岗位范围，请由对应吧台或后厨处理',
+      KDS_TABLE_FORBIDDEN: '当前账号无权处理这张桌的出品异常',
+      KDS_ACTOR_INACTIVE: '当前员工账号不可用，请联系当班管理人员',
+      KDS_DELIVER_FORBIDDEN: '当前岗位没有送达确认权限，请由有权人员接手',
+      KDS_PREPARE_FORBIDDEN: '当前岗位没有制作确认权限，请由有权人员接手',
+      KDS_EXCEPTION_FORBIDDEN: '当前岗位没有出品异常处置权限，请由有权人员接手',
+    })[error.code])
   }
   if (error instanceof AssistedOrderContextDeniedError) {
     return apiError(403, error.code, error.message)
@@ -1824,6 +1900,7 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   if (error instanceof PricingAuthorizationDeniedError) {
     return apiError(403, 'PRICING_AUTHORIZATION_DENIED', error.userMessage)
   }
+  if (error instanceof ItemQuantityConflict) return apiError(409,error.code,error.message)
   if (error instanceof KdsTransitionError) {
     return apiError(409, 'KDS_TRANSITION_CONFLICT', `任务 ${error.taskId} 当前${fulfillmentStateLabel(error.currentStatus)}，不能${fulfillmentStateLabel(error.targetStatus)}${error.assignedElsewhere?'；该任务已由其他员工接单':''}。请刷新任务后选择可用操作`)
   }

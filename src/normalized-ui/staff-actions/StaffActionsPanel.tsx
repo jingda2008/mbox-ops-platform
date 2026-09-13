@@ -1,3 +1,5 @@
+import {ItemAfterSalesPanel} from '../ItemAfterSalesPanel'
+import {ItemAfterSalesPendingPanel} from '../ItemAfterSalesPendingPanel'
 import {FulfillmentHistoryPanel} from './FulfillmentHistoryPanel'
 import { Children, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {DeliveryBatchComposer} from './DeliveryBatchComposer'
@@ -58,6 +60,7 @@ import type {
   StaffActionTable,
   StaffTableFinancialState,
   StaffFulfillmentData,
+  StaffFulfillmentItem,
   StaffAnnualGiftReservation,
   StaffDailySnackClaim,
   StaffMemberBenefitTasks,
@@ -126,7 +129,9 @@ export function StaffActionsPanel({
   const [memberBenefits,setMemberBenefits]=useState<StaffMemberBenefitTasks|null>(null)
   const [memberBenefitQuery,setMemberBenefitQuery]=useState('')
   const [memberScannerOpen,setMemberScannerOpen]=useState(false)
-  const [fulfillmentHistory,setFulfillmentHistory]=useState<'active'|'prepared'|'delivered'>('active')
+  const [fulfillmentHistory,setFulfillmentHistory]=useState<'active'|'delivery'|'prepared'|'delivered'>('active')
+  const [fulfillmentLimit, setFulfillmentLimit] = useState(24)
+  const [fulfillmentSearch, setFulfillmentSearch] = useState('')
   const [giftSelections,setGiftSelections]=useState<Record<string,{productId:string;reason:string}>>({})
   const [reservations, setReservations] = useState<StaffReservation[] | null>(null)
   const [priorityQueue, setPriorityQueue] = useState<StaffReservationIntakeEntry[] | null>(null)
@@ -152,6 +157,11 @@ export function StaffActionsPanel({
   const [carryoverCancelConfirmTaskId, setCarryoverCancelConfirmTaskId] = useState<string | null>(null)
   const [carryoverBulkReason,setCarryoverBulkReason]=useState('')
   const [pendingAction, setPendingAction] = useState<string | null>(null)
+  const [redeliveryItemId,setRedeliveryItemId]=useState<string|null>(null)
+  const [quantitySelections,setQuantitySelections]=useState<Record<string,string>>({})
+  const [quantityBatchEnabled,setQuantityBatchEnabled]=useState(false)
+  const [quantityRecoveryAvailable,setQuantityRecoveryAvailable]=useState(false)
+  useEffect(()=>{let active=true;setQuantityBatchEnabled(false);setQuantityRecoveryAvailable(false);void api.loadItemAfterSalesAccess?.().then(value=>{if(active){setQuantityBatchEnabled(value.enabled);setQuantityRecoveryAvailable(value.recoveryAvailable===true)}}).catch(()=>{});return()=>{active=false}},[api])
   const [pendingFulfillment, setPendingFulfillment] = useState<ReadonlySet<string>>(new Set())
   const fulfillmentRevisionRef = useRef(0)
   const [orderSheetMode, setOrderSheetMode] = useState<'paid' | 'gift' | null>(null)
@@ -393,9 +403,28 @@ export function StaffActionsPanel({
   const visibleServiceActions = useMemo(() => prioritizeActionFact(
     serviceActions, initialFactId, (task) => task.id,
   ), [initialFactId, serviceActions])
+  const filteredFulfillmentItems = useMemo(() => filterFulfillmentQueue(
+    fulfillmentVisibleItems, fulfillmentHistory === 'delivery' ? 'delivery' : 'production', fulfillmentSearch,
+  ), [fulfillmentVisibleItems, fulfillmentHistory, fulfillmentSearch])
   const visibleFulfillmentCards = useMemo(() => prioritizeActionFact(
-    fulfillmentVisibleItems, initialFactId, (item) => item.taskId,
-  ), [fulfillmentVisibleItems, initialFactId])
+    filteredFulfillmentItems, initialFactId, (item) => item.taskId, fulfillmentLimit,
+  ), [filteredFulfillmentItems, initialFactId, fulfillmentLimit])
+  const initializedQueueActor = useRef<string | null>(null)
+  useEffect(() => {
+    if (operations && initializedQueueActor.current !== operations.actor.id) {
+      initializedQueueActor.current = operations.actor.id
+      if (!initialFactId) setFulfillmentHistory(operations.actor.capabilities.includes('kds.deliver')
+        && !operations.actor.capabilities.includes('kds.prepare') ? 'delivery' : 'active')
+    }
+  }, [operations,initialFactId])
+  const selectedInitialFact = useRef<string | null>(null)
+  useEffect(() => {
+    const item = fulfillmentVisibleItems.find(item => item.taskId === initialFactId)
+    if (item && selectedInitialFact.current !== initialFactId) {
+      selectedInitialFact.current = initialFactId
+      setFulfillmentHistory(item.readyForDelivery ? 'delivery' : 'active')
+    }
+  }, [initialFactId, fulfillmentVisibleItems])
   const attentionTableIds = useMemo(() => new Set([
     ...serviceActions.map((task) => task.tableId),
     ...fulfillmentActions.map((item) => item.table.id),
@@ -742,7 +771,7 @@ export function StaffActionsPanel({
     if (fulfillment === null) return
     const actionKey = `kds:${item.taskId}`
     if (actionLocksRef.current.has(actionKey)) return
-    const action = fulfillmentAction(item)
+    const action = fulfillmentAction(item,fulfillmentHistory==='delivery'?'delivery':'production')
     if (action === null) {
       return revealPermissionGuidance(item.readyForDelivery ? 'kds.deliver' : 'kds.prepare')
     }
@@ -750,10 +779,14 @@ export function StaffActionsPanel({
     setPendingFulfillment((current) => new Set(current).add(item.taskId))
     fulfillmentRevisionRef.current += 1
     try {
-      await api.runKdsAction(item.taskId, action)
+      const selected=quantitySelections[`${item.taskId}:${action}`]
+      const quantity=action==='remake'?undefined:selected!==undefined?Number(selected):item.quantities?(action==='deliver'?item.quantities.ready:item.quantities.unmade+item.quantities.started):undefined
+      if(quantity!==undefined&&(!Number.isSafeInteger(quantity)||quantity<1))throw new Error('请选择实际完成的份数')
+      await api.runKdsAction(item.taskId, action,quantity)
+      setQuantitySelections(current=>{const next={...current};delete next[`${item.taskId}:${action}`];return next})
       fulfillmentRevisionRef.current += 1
       setFulfillment((current) => current === null ? null : {
-        ...current, workItems: current.workItems.filter((entry) => entry.taskId !== item.taskId),
+        ...current, workItems: item.quantities?current.workItems:current.workItems.filter((entry) => entry.taskId !== item.taskId),
       })
       showNotice({
         kind: 'success',
@@ -768,6 +801,7 @@ export function StaffActionsPanel({
     } catch (error) {
       fulfillmentRevisionRef.current += 1
       showNotice({ kind: 'error', message: actionError(error, '尚未确认操作结果，请刷新核对；重试将沿用本次操作编号') })
+      if (error instanceof StaffActionsApiError && (error.status === 401 || error.code === 'KDS_SESSION_INVALID')) onLoginRequired?.()
     } finally {
       actionLocksRef.current.delete(actionKey)
       setPendingFulfillment((current) => {
@@ -776,6 +810,14 @@ export function StaffActionsPanel({
         return next
       })
     }
+  }
+
+  const recoverKdsResults=async()=>{
+    if(!api.recoverKdsResults)return
+    setPendingAction('kds:recover')
+    try{await api.recoverKdsResults();await load(true);showNotice({kind:'success',message:'原制作/送达操作结果已恢复'})}
+    catch(error){showNotice({kind:'error',message:actionError(error,'原操作结果仍待确认，恢复会沿用原数量和编号')})}
+    finally{setPendingAction(null)}
   }
 
   const cancelCarryoverFulfillment = async (item: StaffFulfillmentData['workItems'][number]) => {
@@ -933,6 +975,7 @@ export function StaffActionsPanel({
 
   return (
     <section className="staff-actions-panel" aria-label="现场高频操作">
+      {redeliveryItemId&&operations&&<ItemAfterSalesPanel itemId={redeliveryItemId} employeeId={operations.actor.id} onClose={()=>setRedeliveryItemId(null)} onChanged={()=>void load(true)}/>}
       <header className="staff-actions-header">
         <div>
           <p>{tab === 'tables' ? '现场调度' : tab === 'tasks' ? '服务执行' : tab === 'fulfillment' ? '出品履约' : '预约接待'}</p>
@@ -1080,7 +1123,7 @@ export function StaffActionsPanel({
               orderStatusPanel={selectedTable.activeSession !== null
                 && !selectedTable.activeSession.id.startsWith('optimistic-')
                 && (hasPermission(permissions, 'service.execute') || hasPermission(permissions, 'order.view'))
-                ? <TableOrderStatusPanel api={api} table={{ code: selectedTable.code, activeSession: selectedTable.activeSession }} />
+                ? <TableOrderStatusPanel api={api} table={{ code: selectedTable.code, activeSession: selectedTable.activeSession }} onOpenAfterSales={setRedeliveryItemId} />
                 : null}
               memberBenefitsPanel={selectedTable.activeSession !== null && memberBenefits !== null
                 ? <MemberBenefitTaskCards
@@ -1100,6 +1143,7 @@ export function StaffActionsPanel({
         </div>
       )}
 
+      {tab === 'tasks' && (quantityBatchEnabled||quantityRecoveryAvailable)&&operations!==null&&<ItemAfterSalesPendingPanel employeeId={operations.actor.id}/>}
       {tab === 'tasks' && operations !== null && (
         <><div className="staff-member-benefit-tools">
           <label><Search size={17}/><input value={memberBenefitQuery} onChange={(event)=>setMemberBenefitQuery(event.target.value)} placeholder="输入会员号或核销码" aria-label="输入会员号或核销码"/></label>
@@ -1148,7 +1192,7 @@ export function StaffActionsPanel({
                   />
                 )}
               </div>
-              {hasPermission(permissions, 'service.execute') ? (
+              {task.taskType==='goods.redelivery'&&task.originalOrderItemId&&permissions.includes('refund.request')?<button type="button" onClick={()=>setRedeliveryItemId(task.originalOrderItemId!)}>核对补送份数</button>:hasPermission(permissions, 'service.execute') ? (
                 <button type="button" onClick={() => void completeServiceTask(task)} disabled={pendingAction === `service:${task.id}`}>
                   <Check size={18} /> {task.interactionMode === 'manager_resolution' ? '记录并完成' : '完成'}
                 </button>
@@ -1164,10 +1208,11 @@ export function StaffActionsPanel({
       )}
 
       {tab === 'fulfillment' && operations !== null && (
-        <><nav className="staff-history-tabs"><button type="button" aria-pressed={fulfillmentHistory==='active'} onClick={()=>setFulfillmentHistory('active')}>待制作 / 待取送</button>{permissions.some(permission=>['order.history.view','order.history.all'].includes(permission))&&<>{permissions.includes('kds.prepare')&&<button type="button" aria-pressed={fulfillmentHistory==='prepared'} onClick={()=>setFulfillmentHistory('prepared')}>我的已制作</button>}{permissions.includes('kds.deliver')&&<button type="button" aria-pressed={fulfillmentHistory==='delivered'} onClick={()=>setFulfillmentHistory('delivered')}>我的已送达</button>}</>}</nav>
-        {fulfillmentHistory!=='active'&&<FulfillmentHistoryPanel api={api} kind={fulfillmentHistory}/>}
-        <div hidden={fulfillmentHistory!=='active'}>
-        {permissions.includes('kds.deliver')&&api.createDeliveryBatch&&<DeliveryBatchComposer items={fulfillmentVisibleItems} onSubmit={items=>api.createDeliveryBatch!(items)} onChanged={()=>load(true)}/>}
+        <>{(api.pendingKdsActions?.().length??0)>0&&<p role="status">有制作/送达操作结果待确认。<button type="button" disabled={pendingAction==='kds:recover'} onClick={()=>void recoverKdsResults()}>{pendingAction==='kds:recover'?'正在恢复…':'恢复上次结果'}</button></p>}{fulfillment?.actor.actionSessionValid===false&&<p role="alert">当前设备会话已失效，恢复登录后可继续原任务。{onLoginRequired&&<button type="button" onClick={onLoginRequired}>恢复登录</button>}</p>}<nav className="staff-history-tabs"><button type="button" aria-pressed={fulfillmentHistory==='active'} onClick={()=>setFulfillmentHistory('active')}>待制作（{fulfillmentVisibleItems.filter(item => item.quantities?item.quantities.unmade+item.quantities.started+item.quantities.held>0:!item.readyForDelivery).length}）</button><button type="button" aria-pressed={fulfillmentHistory==='delivery'} onClick={()=>setFulfillmentHistory('delivery')}>待取送（{fulfillmentVisibleItems.filter(item => item.readyForDelivery).length}）</button>{permissions.some(permission=>['order.history.view','order.history.all'].includes(permission))&&<>{permissions.includes('kds.prepare')&&<button type="button" aria-pressed={fulfillmentHistory==='prepared'} onClick={()=>setFulfillmentHistory('prepared')}>我的已制作</button>}{permissions.includes('kds.deliver')&&<button type="button" aria-pressed={fulfillmentHistory==='delivered'} onClick={()=>setFulfillmentHistory('delivered')}>我的已送达</button>}</>}</nav>
+        {(fulfillmentHistory==='prepared'||fulfillmentHistory==='delivered')&&<FulfillmentHistoryPanel api={api} kind={fulfillmentHistory} onOpenItem={(quantityBatchEnabled||quantityRecoveryAvailable)&&permissions.includes('refund.request')?setRedeliveryItemId:undefined}/>}
+        <div hidden={fulfillmentHistory==='prepared'||fulfillmentHistory==='delivered'}>
+        <label className="staff-fulfillment-field">查找待办<input aria-label="按桌号或品名查找出品" value={fulfillmentSearch} placeholder="桌号或品名" onChange={event=>{setFulfillmentSearch(event.target.value);setFulfillmentLimit(24)}} /></label>
+        {fulfillment?.actor.actionSessionValid!==false&&permissions.includes('kds.deliver')&&api.createDeliveryBatch&&<DeliveryBatchComposer items={fulfillmentVisibleItems} onSubmit={items=>api.createDeliveryBatch!(items)} onChanged={()=>load(true)}/>}
         {fulfillmentVisibleItems.some((item)=>item.carryover)
           && permissions.includes('kds.exception.manage')
           && <div className="staff-carryover-bulk-panel">
@@ -1175,9 +1220,9 @@ export function StaffActionsPanel({
             <input value={carryoverBulkReason} maxLength={500} placeholder="填写共同的现场核对原因（至少4字）" aria-label="历史遗留批量结案原因" onChange={(event)=>setCarryoverBulkReason(event.target.value)}/>
             <button type="button" disabled={pendingAction!==null} onClick={()=>void cancelAllCarryoverFulfillment()}>{pendingAction==='kds-cancel:all-carryover'?'正在逐项结案':'批量标记不再出品'}</button>
           </div>}
-        <ActionList empty={fulfillment === null ? '出品队列暂时无法读取，请刷新后重试' : '当前没有需要制作或配送的出品'}>
+        <ActionList empty={fulfillment === null ? '出品队列暂时无法读取，请刷新后重试' : (fulfillmentSearch ? '没有匹配的待办' : fulfillmentHistory === 'delivery' ? '当前没有待取送的出品' : '当前没有待制作的出品')}>
           {visibleFulfillmentCards.map((item) => {
-            const fulfillmentCommand = fulfillmentAction(item)
+            const fulfillmentCommand = fulfillmentAction(item,fulfillmentHistory==='delivery'?'delivery':'production')
             const missingPermission = item.kdsStatus === 'failed' ? 'kds.exception.manage' : item.readyForDelivery ? 'kds.deliver' : 'kds.prepare'
             return (
               <article
@@ -1201,6 +1246,7 @@ export function StaffActionsPanel({
                   {item.item.unitPriceMinor !== undefined && item.item.totalAmountMinor !== undefined && <small>
                     {item.item.includedInBundle ? '套餐内菜品，不另计价' : `单价 ¥${(item.item.unitPriceMinor / 100).toFixed(2)} · 优惠后小计 ¥${(item.item.totalAmountMinor / 100).toFixed(2)}`}
                   </small>}
+                  {item.quantities&&<small>待制作 {item.quantities.unmade+item.quantities.started} · 已备齐 {item.quantities.ready} · 暂停 {item.quantities.held} · 已停止 {item.quantities.stopped} · 已送达 {item.quantities.delivered}</small>}
                   {item.carryover && <small className="staff-action-carryover">前营业日遗留 · 原营业日 {item.businessDate}，处理结果仍归原订单</small>}
                   {item.attentionMessages.map((message) => <small className="staff-action-note" key={message}>备注：{message}</small>)}
                   {item.overdue && <small className="staff-action-overdue">已超时，优先处理</small>}
@@ -1220,10 +1266,15 @@ export function StaffActionsPanel({
                   )}
                 </div>
                 <div className="staff-action-card-actions">
+                  {(quantityBatchEnabled||quantityRecoveryAvailable)&&permissions.includes('refund.request')&&item.item.id&&<button type="button" disabled={pendingFulfillment.has(item.taskId)} onClick={()=>setRedeliveryItemId(item.item.id!)}>商品处理</button>}
+                  {(quantityBatchEnabled||item.quantities)&&fulfillmentCommand!==null&&fulfillmentCommand!=='remake'&&item.item.quantity>1&&<label className="staff-fulfillment-field">本次份数<input type="number" min="1" max={item.quantities?(fulfillmentCommand==='deliver'?item.quantities.ready:item.quantities.unmade+item.quantities.started):item.item.quantity}
+                    aria-label={`${item.table.code}${item.item.productName}本次${fulfillmentCommand==='deliver'?'送达':'完成'}份数`}
+                    value={quantitySelections[`${item.taskId}:${fulfillmentCommand}`]??(item.quantities?(fulfillmentCommand==='deliver'?item.quantities.ready:item.quantities.unmade+item.quantities.started):item.item.quantity)}
+                    disabled={pendingFulfillment.has(item.taskId)} onChange={event=>setQuantitySelections(current=>({...current,[`${item.taskId}:${fulfillmentCommand}`]:event.target.value}))}/></label>}
                   {fulfillmentCommand !== null && (
                     <button type="button" onClick={() => void runFulfillmentAction(item)} disabled={pendingFulfillment.has(item.taskId)} aria-busy={pendingFulfillment.has(item.taskId)}>
                       {fulfillmentCommand === 'deliver' ? <Send size={18} /> : <ChefHat size={18} />}
-                      {pendingFulfillment.has(item.taskId) ? '正在确认…' : fulfillmentCommand === 'deliver' ? '全部已送达' : fulfillmentCommand === 'remake' ? '重新制作' : '制作完成'}
+                      {pendingFulfillment.has(item.taskId) ? '正在确认…' : fulfillmentCommand === 'deliver' ? ((item.quantities||quantitySelections[`${item.taskId}:${fulfillmentCommand}`]!==undefined)?'本次已送达':'全部已送达') : fulfillmentCommand === 'remake' ? '重新制作' : '制作完成'}
                     </button>
                   )}
                   {fulfillmentCommand === null && (
@@ -1243,8 +1294,10 @@ export function StaffActionsPanel({
               </article>
             )
           })}
-          {fulfillmentVisibleItems.length > visibleFulfillmentCards.length && (
-            <p className="staff-actions-more">还有 {fulfillmentVisibleItems.length - visibleFulfillmentCards.length} 项，完成当前事项后自动补入</p>
+          {filteredFulfillmentItems.length > visibleFulfillmentCards.length && (
+            <button type="button" className="staff-actions-more" onClick={() => setFulfillmentLimit(value => value + 24)}>
+              再显示24项（还有{filteredFulfillmentItems.length - visibleFulfillmentCards.length}项）
+            </button>
           )}
         </ActionList></div></>
       )}
@@ -1429,6 +1482,12 @@ function dailySnackTaskStatus(item:StaffDailySnackClaim):string {
   if (item.status==='cancelled_after_redemption') return '出品失败，已取消并释放'
   if (item.status==='cancelled') return '已取消并释放'
   return '暂留已过期并释放'
+}
+
+export function filterFulfillmentQueue(items: readonly StaffFulfillmentItem[], queue: 'production' | 'delivery', query: string): StaffFulfillmentItem[] {
+  const term = query.trim().toLocaleLowerCase()
+  return items.filter(item => (queue === 'delivery' ? item.readyForDelivery : item.quantities?item.quantities.unmade+item.quantities.started+item.quantities.held>0:!item.readyForDelivery)
+    && (!term || `${item.table.code} ${item.item.productName}`.toLocaleLowerCase().includes(term)))
 }
 
 export function prioritizeActionFact<T>(

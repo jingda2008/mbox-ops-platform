@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { mkdir, open, readFile, rename, writeFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
 
-const VERSION = '1.0.3'
+const VERSION = '1.0.4'
 const execFileAsync = promisify(execFile)
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const dataDirectory = process.env.MBOX_PRINT_BRIDGE_DATA
@@ -201,26 +201,33 @@ function renderTicket(value) {
     center(title, 24),
     String(value.subtitle || ''),
     divider(),
-    value.tableCode ? `桌台：${value.tableCode}${value.guestCount ? `  人数：${value.guestCount}` : ''}` : '',
+    value.tableCode ? `桌台：${value.tableCode}` : '',
+    value.guestCount ? `人数：${value.guestCount}` : '',
     `单号：${requiredText(value.ticketReference, 'ticket.ticketReference')}`,
     `营业日：${requiredText(value.businessDate, 'ticket.businessDate')}`,
     value.issuedAt ? `时间：${new Date(value.issuedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}` : '',
+    `打印时间：${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}`,
     value.operatorLabel ? `经办：${String(value.operatorLabel)}` : '',
     divider(),
   ]
+  const header = lines.filter(line => line !== '')
+  lines.splice(0, lines.length, ...header)
   for (const item of value.lines) {
     if (!item || typeof item !== 'object') throw new Error('invalid_ticket_line')
     lines.push(`${requiredText(item.name, 'line.name')}  ×${positiveInteger(item.quantity, 'line.quantity')}`)
-    if (Number.isSafeInteger(item.unitAmountMinor)) lines.push(`  单价：${formatCny(item.unitAmountMinor)}`)
+    const prices = []
+    if (Number.isSafeInteger(item.unitAmountMinor)) prices.push(`单价：${formatCny(item.unitAmountMinor)}`)
+    if (Number.isSafeInteger(item.totalAmountMinor)) prices.push(`小计：${formatCny(item.totalAmountMinor)}`)
+    if (prices.length) lines.push(`  ${prices.join('  ')}`)
     if (item.note) lines.push(`  备注：${String(item.note)}`)
-    if (Number.isSafeInteger(item.totalAmountMinor)) lines.push(`  小计：${formatCny(item.totalAmountMinor)}`)
+    lines.push('')
   }
   lines.push(divider())
   if (value.payment) lines.push(`支付方式：${paymentLabel(value.payment)}`)
   if (Number.isSafeInteger(value.totalAmountMinor)) lines.push(`合计：${formatCny(value.totalAmountMinor)}`)
   if (value.note) lines.push(`备注：${String(value.note)}`)
   lines.push('', '请按票据内容执行；异常请联系当班负责人。', '')
-  return lines.filter((line, index) => line !== '' || index > lines.length - 4).join('\r\n')
+  return lines.join('\r\n')
 }
 
 function renderTestTicket(queue) {

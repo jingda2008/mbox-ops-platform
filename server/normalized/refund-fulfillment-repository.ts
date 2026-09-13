@@ -8,12 +8,19 @@ export class RefundFulfillmentRepository {
 
   async synchronize(orderId: string, refundId: string) {
     const scope = [this.tx.scope.tenantId, this.tx.scope.storeId]
+    const purpose=(await this.tx.query<{purpose:string|null}>(`SELECT purpose FROM mbox.refunds
+      WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[...scope,refundId])).rows[0]?.purpose
+    if(purpose && purpose!=='return_goods')return {cancelledItemIds:[],restoredInventoryRecords:0}
     const order = (await this.tx.query<{ payment_status: string; fully_refunded: boolean }>(`
       SELECT o.payment_status,
         o.total_amount_minor>0 AND o.payment_status='refunded'
         AND COALESCE((SELECT sum(p.amount_minor) FROM mbox.order_payment_facts p
           WHERE p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.order_id=o.id
-            AND p.status IN ('succeeded','partially_refunded','refunded')),0)>=o.total_amount_minor AS fully_refunded
+            AND p.status IN ('succeeded','partially_refunded','refunded')),0)>=o.total_amount_minor
+        AND COALESCE((SELECT sum(r.amount_minor) FROM mbox.refunds r JOIN mbox.payments p
+          ON p.tenant_id=r.tenant_id AND p.store_id=r.store_id AND p.id=r.payment_id
+          WHERE r.tenant_id=o.tenant_id AND r.store_id=o.store_id AND COALESCE(r.order_id,p.order_id)=o.id
+            AND r.status='succeeded' AND (r.purpose IS NULL OR r.purpose='return_goods')),0)>=o.total_amount_minor AS fully_refunded
       FROM mbox.orders o WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.id=$3
         AND EXISTS(SELECT 1 FROM mbox.refunds r WHERE r.tenant_id=o.tenant_id AND r.store_id=o.store_id
           AND r.id=$4 AND r.status='succeeded' AND COALESCE(r.order_id,
@@ -30,13 +37,17 @@ export class RefundFulfillmentRepository {
       SELECT item.id,item.status,item.parent_order_item_id,
         item.total_amount_minor>0 AND COALESCE((SELECT sum(ri.amount_minor) FROM mbox.refund_items ri
           JOIN mbox.refunds r ON r.tenant_id=ri.tenant_id AND r.store_id=ri.store_id AND r.id=ri.refund_id
-          WHERE ri.tenant_id=item.tenant_id AND ri.store_id=item.store_id AND ri.order_item_id=item.id AND r.status='succeeded'),0)>=item.total_amount_minor AS fully_refunded
+          WHERE ri.tenant_id=item.tenant_id AND ri.store_id=item.store_id AND ri.order_item_id=item.id AND r.status='succeeded'
+            AND (r.purpose IS NULL OR r.purpose='return_goods')),0)>=item.total_amount_minor AS fully_refunded
       FROM mbox.order_items item WHERE item.tenant_id=$1 AND item.store_id=$2 AND item.order_id=$3
       ORDER BY item.id FOR UPDATE`, [...scope, orderId])).rows
-    const eligible = new Set(items.filter(item => order.fully_refunded || item.fully_refunded).map(item => item.id))
+    const quantityManaged = new Set((await this.tx.query<{order_item_id:string}>(`SELECT DISTINCT unit.order_item_id FROM mbox.order_item_quantity_units unit JOIN mbox.order_items item ON item.tenant_id=unit.tenant_id AND item.store_id=unit.store_id AND item.id=unit.order_item_id WHERE item.tenant_id=$1 AND item.store_id=$2 AND item.order_id=$3`,scope.concat(orderId))).rows.map(unit=>unit.order_item_id))
+    // Quantity cases already own their exact inventory dispositions. A later
+    // whole-bill refund must never infer another full-line physical return.
+    const eligible = new Set(items.filter(item => !quantityManaged.has(item.id)&&(order.fully_refunded || item.fully_refunded)).map(item => item.id))
     for (let pass = 0; pass < items.length; pass++) {
       let added = false
-      for (const item of items) if (item.parent_order_item_id && eligible.has(item.parent_order_item_id) && !eligible.has(item.id)) {
+      for (const item of items) if (!quantityManaged.has(item.id) && item.parent_order_item_id && eligible.has(item.parent_order_item_id) && !eligible.has(item.id)) {
         eligible.add(item.id); added = true
       }
       if (!added) break

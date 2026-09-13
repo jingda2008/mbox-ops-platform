@@ -6,7 +6,7 @@ import type {
 import type { RefundItem, SettlementChannel } from '../../src/shared/payment-contracts.js'
 import type { OnlinePaymentAction } from '../../src/shared/online-payment-contracts.js'
 import type { PostarHttpClient, PostarTransactionMetadataSource, PostarSftpBillSource } from '../../src/shared/postar-contracts.js'
-import { PostarPaymentProviderAdapter, PostarPaymentRejectedError } from '../postar-adapter.js'
+import { PostarPaymentProviderAdapter, PostarPaymentRejectedError, PostarPaymentNotSubmittedError } from '../postar-adapter.js'
 import type { NormalizedPaymentRuntimeConfig } from './normalized-runtime-config.js'
 import {
   type AutomaticPaymentQueryOutcome,
@@ -581,6 +581,9 @@ export class OnlinePaymentService {
     const context = await this.refundContext(scope, refundId)
     const adapter = this.requireRefundAdapter()
     const settlementChannel = refundSettlementChannel(context)
+    // Validate immutable local facts before recording a potentially sent request.
+    safeMinor(context.amount_minor, '退款金额')
+    refundItems(context)
     const claimed = await this.claimRefundSubmission(scope, context.refund_id)
     if (!claimed) return this.queryRefund(scope, refundId, queryBindingId)
     const claimedContext = await this.refundContext(scope, refundId)
@@ -609,7 +612,9 @@ export class OnlinePaymentService {
       // signed callback or refund query before any terminal result is trusted.
       return onlineRefundResult(claimedContext, observation, null, null)
     } catch (error) {
-      await this.releaseRefundSubmission(scope, context.refund_id)
+      // The channel may have accepted before the response/local write failed.
+      // Retain the claim, merchant number and submission date across restarts;
+      // the next execution queries this exact refund instead of resubmitting.
       if (error instanceof PostarPaymentRejectedError) throw error
       if (error instanceof OnlinePaymentUnavailableError) throw error
       throw new OnlineRefundStatusUnknownError()
@@ -858,12 +863,14 @@ export class OnlinePaymentService {
       try {
         await this.transactions.run(input.scope, async (transaction) => {
           const repository = new PaymentProviderActionRepository(transaction, this.secret)
-          if (error instanceof PostarPaymentRejectedError) await repository.markFailed(prepared.context.id, code)
+          if (error instanceof PostarPaymentNotSubmittedError) await repository.markFailed(prepared.context.id, code, 'not_submitted')
+          else if (error instanceof PostarPaymentRejectedError) await repository.markFailed(prepared.context.id, code)
           else await repository.markUnknown(prepared.context.id, code)
         })
       } catch {
         throw new OnlinePaymentUnknownError()
       }
+      if (error instanceof PostarPaymentNotSubmittedError) throw new OnlinePaymentUnavailableError(error.message)
       if (error instanceof PostarPaymentRejectedError) throw error
       throw new OnlinePaymentUnknownError()
     }
@@ -932,7 +939,7 @@ export class OnlinePaymentService {
       const row = result.rows[0]
       if (row === undefined) throw new OnlinePaymentUnavailableError('退款记录不存在')
       if (row.refund_status !== 'processing') {
-        throw new OnlinePaymentUnavailableError('退款必须先由店长发起、不同员工复核，再由收银执行')
+        throw new OnlinePaymentUnavailableError('退款须先由服务人员申请、另一位有权人员审核，批准后进入执行')
       }
       if (row.provider_submission_state === 'manual_review') {
         throw new OnlinePaymentUnavailableError('这笔历史退款缺少可证明的支付机构提交状态，必须人工复核')
@@ -996,20 +1003,6 @@ export class OnlinePaymentService {
       status: 'failed',
       occurredAt: observation.occurredAt,
       evidence: refundQueryEvidence(observation),
-    })
-  }
-
-  private releaseRefundSubmission(scope: Readonly<StoreScope>, refundId: string): Promise<void> {
-    return this.transactions.run(scope, async (transaction) => {
-      await transaction.query(`
-        UPDATE mbox.refunds
-        SET provider_submission_state='not_started',
-          merchant_refund_id=NULL,
-          provider_submission_started_at=NULL,
-          updated_at=clock_timestamp()
-        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
-          AND status='processing' AND provider_submission_state='submitting'
-      `, [scope.tenantId, scope.storeId, refundId])
     })
   }
 
@@ -1276,7 +1269,7 @@ function safeOperator(value: string): string {
 }
 
 function safeErrorCode(error: unknown): string {
-  if (error instanceof PostarPaymentRejectedError) return error.diagnosticCode
+  if (error instanceof PostarPaymentRejectedError || error instanceof PostarPaymentNotSubmittedError) return error.diagnosticCode
   const name = error instanceof Error ? error.name : 'UnknownError'
   return name.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 128) || 'UnknownError'
 }

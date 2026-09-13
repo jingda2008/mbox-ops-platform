@@ -1,3 +1,7 @@
+import {currentRefundAttemptSql} from './refund-attempt-sql.js'
+import {orderHasLegacyStockReturnSql} from './order-stock-return-capability.js'
+import { buildDailyReportLines, type DailyReportOptions } from './daily-report-format.js'
+import { readOperatingHistory } from './operating-history-query.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { PRINT_TICKET_KINDS } from '../../src/shared/print-ticket-policy.js'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
@@ -84,7 +88,8 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
         WHERE item.tenant_id=$1 AND item.store_id=$2 AND item.id=$3 AND ($4::date IS NULL OR o.business_date>=$4::date
         OR (o.status<>'cancelled' AND o.total_amount_minor>0 AND o.payment_status IN ('unpaid','pending','partially_paid'))
         OR EXISTS(SELECT 1 FROM mbox.refunds r JOIN mbox.payments p ON p.tenant_id=r.tenant_id AND p.store_id=r.store_id AND p.id=r.payment_id
-          WHERE p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND COALESCE(r.order_id,p.order_id)=o.id AND r.status IN ('requested','approved','processing','failed')))`,
+          WHERE p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND COALESCE(r.order_id,p.order_id)=o.id AND r.status IN ('requested','approved','processing','failed') AND ${currentRefundAttemptSql('r')})
+        OR ${orderHasLegacyStockReturnSql('o')})`,
       [context.scope.tenantId,context.scope.storeId,itemId,earliest])).rows[0]
       if(!visible)throw new HardwareAccessDeniedError()
       try{
@@ -92,7 +97,7 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
           quantity:optionalInteger(body.quantity,1,9999)??0,disposition:readEnum(body.disposition,['unmade','returned_unopened']) as 'unmade'|'returned_unopened',
           reason:readString(body.reason,'reason',1000,3),unopenedConfirmed:body.unopenedConfirmed===true})
         return outcome(context,'order.stock-return.recorded.v1','order_stock_return',value.id,body.reason,value)
-      }catch(error){if(error instanceof InventoryConflictError)throw new HardwareConflictError(error.message);throw error}
+      }catch(error){if(error instanceof InventoryConflictError)throw new OrderStockReturnConflictError(error.message);throw error}
     })
     return reply.code(result.replayed?200:201).send({data:result.value,replayed:result.replayed})
   }))
@@ -109,7 +114,7 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
       const id=randomUUID(),source=await appendOutboxMessage(tx,{aggregateType:'manual_print_request',aggregateId:id,aggregateVersion:1,eventType:'manual.table-bill.requested.v1',payload:{sessionId,employeeId:context.employeeId}})
       const jobs=await new PrintTicketSourceRepository(tx,true).materializeManualTableBill(source,sessionId,access.displayName)
       if(!jobs.length)throw new HardwarePolicyError('当前没有可用的账单打印路由，请在设备管理配置收银路由')
-      return outcome(context,'manual.table-bill.queued.v1','manual_print_request',id,'订单中心整桌次账单',{requestId:id,jobCount:jobs.length})
+      return outcome(context,'manual.table-bill.queued.v1','manual_print_request',id,'订单中心整桌次账单',{requestId:id,jobCount:jobs.length,jobIds:jobs.map(job=>job.id),status:'queued'})
     });return reply.code(result.replayed?200:201).send({data:result.value,replayed:result.replayed})
   }))
   app.post('/hardware/orders/:orderId/bill',async(request,reply)=>handle(reply,async()=>{
@@ -126,7 +131,7 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
           AND ($4::date IS NULL OR o.business_date>=$4::date
             OR (o.status<>'cancelled' AND o.total_amount_minor>0 AND o.payment_status IN ('unpaid','pending','partially_paid'))
             OR EXISTS(SELECT 1 FROM mbox.refunds r JOIN mbox.payments p ON p.tenant_id=r.tenant_id AND p.store_id=r.store_id AND p.id=r.payment_id
-              WHERE p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND COALESCE(r.order_id,p.order_id)=o.id AND r.status IN ('requested','approved','processing','failed')))`,
+              WHERE p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND COALESCE(r.order_id,p.order_id)=o.id AND r.status IN ('requested','approved','processing','failed') AND ${currentRefundAttemptSql('r')}))`,
       [context.scope.tenantId,context.scope.storeId,orderId,policy.earliestBusinessDate])).rows[0]
       if(!visible)throw new HardwareAccessDeniedError()
       const requestId=randomUUID()
@@ -139,22 +144,45 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
     })
     return reply.code(execution.replayed?200:202).send({data:execution.value,replayed:execution.replayed})
   }))
-  app.post('/hardware/business-days/:businessDate/report',async(request,reply)=>handle(reply,async()=>{
+  for (const previewOnly of [false,true]) app.post(previewOnly ? '/hardware/business-days/:businessDate/report-preview' : '/hardware/business-days/:businessDate/report',async(request,reply)=>handle(reply,async()=>{
     const context=await options.resolveContext(request)
     requireAny(context,['order.bill.print'])
     const date=readString(readObject(request.params).businessDate,'businessDate',10,10)
     if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||!Number.isFinite(Date.parse(date))||new Date(date).toISOString().slice(0,10)!==date)throw new HardwareRequestError('请选择有效营业日')
     const body=readObject(request.body??{})
+    const endDate=body.endDate===undefined?date:readString(body.endDate,'endDate',10,10)
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(endDate)||!Number.isFinite(Date.parse(endDate))||new Date(endDate).toISOString().slice(0,10)!==endDate||endDate<date||Date.parse(endDate)-Date.parse(date)>365*86400000)throw new HardwareRequestError('请选择有效起止营业日，最多366天；不会截断报表')
+    const mode=body.mode??'summary',grouping=body.grouping??'none'
+    if(!['summary','details','both'].includes(String(mode))||!['none','products','categories','bundles'].includes(String(grouping)))throw new HardwareRequestError('请选择有效打印内容')
+    const reportOptions={mode,grouping} as DailyReportOptions
+    if(previewOnly){
+      const data=await options.transactions.run(context.scope,async tx=>{
+        const access=await new StaffAccessRepository(tx).resolve(context.employeeId)
+        if(!access.permissions.includes('order.bill.print')||!access.permissions.includes('reconciliation.view'))throw new HardwareAccessDeniedError()
+        const current=(await tx.query<{date:string}>('SELECT mbox.current_operating_business_date($1,$2)::text AS date',[context.scope.tenantId,context.scope.storeId])).rows[0]!.date
+        const policy=orderHistoryAccess(access.permissions,current)
+        if(policy.earliestBusinessDate&&date<policy.earliestBusinessDate)throw new HardwarePolicyError('所选范围超出历史权限，请由有全历史权限的人员打印')
+        const snapshot=await readOperatingHistory(tx,{businessDate:date,endDate,table:'',employee:'',page:0,exportAll:true,allowFinancialSummary:true})
+        const lines=buildDailyReportLines(snapshot,date,endDate,reportOptions)
+        return {businessDate:date,endDate,...reportOptions,templateVersion:2,generatedAt:snapshot.generatedAt,
+          orderCount:snapshot.orders.filter(order=>(order.businessDate??date)>=date).length,logicalRows:lines.length,
+          estimatedPages:Math.max(1,Math.ceil(lines.length/60)),lines}
+      },{readOnly:true,isolation:'repeatable-read'})
+      return reply.send({data})
+    }
     const execution=await options.commands.execute(command(request,context,'business-day.report.print',body,codec()),async tx=>{
       const access=await new StaffAccessRepository(tx).resolve(context.employeeId)
       if(!access.permissions.includes('order.bill.print')||!access.permissions.includes('reconciliation.view'))throw new HardwareAccessDeniedError()
+      const current=(await tx.query<{date:string}>('SELECT mbox.current_operating_business_date($1,$2)::text AS date',[context.scope.tenantId,context.scope.storeId])).rows[0]!.date
+      const policy=orderHistoryAccess(access.permissions,current)
+      if(policy.earliestBusinessDate&&date<policy.earliestBusinessDate)throw new HardwarePolicyError('所选范围超出历史权限，请由有全历史权限的人员打印')
       const requestId=randomUUID()
       const sourceId=await appendOutboxMessage(tx,{aggregateType:'manual_print_request',aggregateId:requestId,aggregateVersion:1,
-        eventType:'manual.daily-report.requested.v1',payload:{businessDate:date,employeeId:context.employeeId}})
-      const jobs=await new PrintTicketSourceRepository(tx,true).materializeManualDailyReport(sourceId,date,access.displayName)
+        eventType:'manual.daily-report.requested.v1',payload:{businessDate:date,endDate,...reportOptions,templateVersion:2,employeeId:context.employeeId}})
+      const jobs=await new PrintTicketSourceRepository(tx,true).materializeManualDailyReport(sourceId,date,access.displayName,endDate,reportOptions)
       if(!jobs.length)throw new HardwarePolicyError('收银打印路由不可用；请在设备管理检查路由，营业日未结束')
       return outcome(context,'manual.daily-report.queued.v1','manual_print_request',requestId,'收银打印营业日报',
-        {requestId,businessDate:date,jobIds:jobs.map(job=>job.id),status:'queued'})
+        {requestId,businessDate:date,endDate,jobIds:jobs.map(job=>job.id),status:'queued'})
     })
     return reply.code(execution.replayed?200:202).send({data:execution.value,replayed:execution.replayed})
   }))
@@ -204,6 +232,26 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
       { readOnly: true },
     )
     return reply.send({ data: printerManagerOnly ? data.filter((device) => device.deviceType === 'printer') : data })
+  }))
+
+  app.get('/hardware/print-requests/:requestId', async(request,reply)=>handle(reply,async()=>{
+    const context=await options.resolveContext(request)
+    requireAny(context,['order.bill.print'])
+    const requestId=readUuid(readObject(request.params).requestId,'requestId')
+    const data=await options.transactions.run(context.scope,async tx=>{
+      const source=(await tx.query<{id:string}>(`
+        SELECT id FROM mbox.outbox_messages WHERE tenant_id=$1 AND store_id=$2
+          AND aggregate_type='manual_print_request' AND aggregate_id=$3::uuid
+          AND payload->>'employeeId'=$4::text
+      `,[context.scope.tenantId,context.scope.storeId,requestId,context.employeeId])).rows[0]
+      if(!source)throw new HardwareAccessDeniedError()
+      return (await tx.query<{id:string;status:string;stationCode:string;failureCode:string|null}>(`
+        SELECT id,status,station_code AS "stationCode",last_error_code AS "failureCode"
+        FROM mbox.print_jobs WHERE tenant_id=$1 AND store_id=$2 AND source_outbox_message_id=$3
+        ORDER BY created_at,id
+      `,[context.scope.tenantId,context.scope.storeId,source.id])).rows
+    },{readOnly:true})
+    return reply.send({data})
   }))
 
   app.get('/hardware/print-jobs', async (request, reply) => handle(reply, async () => {
@@ -593,6 +641,7 @@ function optionalStringArray(value: unknown): string[] | undefined {
   return value.map((item) => readString(item, 'capability', 64))
 }
 
+class OrderStockReturnConflictError extends HardwareConflictError {}
 async function handle(reply: FastifyReply, operation: () => Promise<FastifyReply>) {
   try {
     return await operation()
@@ -606,6 +655,7 @@ async function handle(reply: FastifyReply, operation: () => Promise<FastifyReply
     if (error instanceof HardwareNotFoundError) {
       return reply.code(404).send({ error: { code: 'HARDWARE_NOT_FOUND', message: error.message } })
     }
+    if (error instanceof OrderStockReturnConflictError) return reply.code(409).send({error:{code:'STOCK_RETURN_CONFLICT',message:error.message}})
     if (error instanceof HardwareConflictError || error instanceof IdempotencyConflictError || error instanceof IdempotencyInProgressError) {
       return reply.code(409).send({ error: { code: 'HARDWARE_CONFLICT', message: error.message } })
     }

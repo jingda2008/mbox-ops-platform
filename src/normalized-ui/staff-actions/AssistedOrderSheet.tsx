@@ -17,6 +17,8 @@ import {clearStaffOrderDraft,readStaffOrderDraft,saveStaffOrderDraft,staffOrderD
 export interface AssistedOrderSheetProps {
   api: StaffActionsApiPort
   mode: 'paid' | 'gift'
+  replacementCaseId?:string
+  replacementPreviousOrderId?:string
   table: Readonly<{
     code: string
     activeSession: { id: string; guestCount: number; guestProfileSnapshot?: Record<string, unknown> }
@@ -25,7 +27,7 @@ export interface AssistedOrderSheetProps {
   onSubmitted(message: string): void
 }
 
-export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: AssistedOrderSheetProps) {
+export function AssistedOrderSheet({ api, mode, table, replacementCaseId, replacementPreviousOrderId, onClose, onSubmitted }: AssistedOrderSheetProps) {
   const [access, setAccess] = useState<AssistedOrderAccess | null>(null)
   const [products, setProducts] = useState<AssistedOrderCatalogProduct[]>([])
   const [phase, setPhase] = useState<'loading' | 'ready' | 'submitting' | 'error'>('loading')
@@ -209,6 +211,7 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
         tableSessionId: table.activeSession.id,
         assistedOrderContextToken: token,
         orderMode: 'paid',
+        ...(replacementCaseId?{replacementCaseId,...(replacementPreviousOrderId?{replacementPreviousOrderId}:{})}:{}),
         items,
         ...(options.fulfillmentNote.trim().length > 0 ? { fulfillmentNote: options.fulfillmentNote.trim() } : {}),
         settlementMode,
@@ -394,11 +397,11 @@ export function AssistedOrderSheet({ api, mode, table, onClose, onSubmitted }: A
         /> : phase === 'loading' ? <p className="staff-order-loading"><LoaderCircle className="is-spinning" /> 正在读取可售商品</p> : (
           <MenuOrderingWorkspace
             key={`${access?.employeeId??''}:${table.activeSession.id}`}
-            draftStorageKey={staffOrderDraftKey(access?.employeeId,table.activeSession.id,'paid')}
+            draftStorageKey={(() => {const key=staffOrderDraftKey(access?.employeeId,table.activeSession.id,'paid');return key&&replacementCaseId?`${key}:replacement:${replacementCaseId}:${replacementPreviousOrderId??'first'}`:key})()}
             products={menuProducts}
             tableLabel={table.code}
-            submitLabel="核对无误，确认下单"
-            submitHint="桌号已锁定。未提交草稿可在本机当前窗口恢复；已发起提交后请先核对订单，不会自动恢复为新单。"
+            submitLabel={replacementCaseId?"确认换品，建立新单":"核对无误，确认下单"}
+            submitHint={replacementCaseId?"新商品按当前价格单独下单；旧商品按原申请处理，不自动抵扣退款。结果不明确时先关闭并读回原商品的新单关联。":"桌号已锁定。未提交草稿可在本机当前窗口恢复；已发起提交后请先核对订单，不会自动恢复为新单。"}
             busy={phase === 'submitting'}
             compactCart
             deemphasizeCollapsedTotal

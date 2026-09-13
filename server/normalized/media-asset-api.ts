@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { createMenuThumbnailer, readLegacyMenuImage } from './menu-thumbnail.js'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type { ActivityOperationsStaffContext } from './activity-operations-service.js'
 import { IdempotencyConflictError, IdempotencyInProgressError, IdempotencyRecordError } from './command-executor.js'
@@ -16,6 +17,7 @@ const MAX_IMAGE_BASE64_LENGTH = Math.ceil(MAX_IMAGE_BYTES / 3) * 4
 const MEDIA_UPLOAD_BODY_LIMIT_BYTES = 300_000
 
 export interface MediaAssetApiOptions {
+  staticDirectory?: string
   transactions: Pick<ScopedPostgresTransactionRunner,'run'>
   service: MediaAssetService
   resolveStaffContext(request: FastifyRequest): ActivityOperationsStaffContext | Promise<ActivityOperationsStaffContext>
@@ -24,6 +26,15 @@ export interface MediaAssetApiOptions {
 }
 
 export const mediaAssetApiPlugin: FastifyPluginAsync<MediaAssetApiOptions> = async (app, options) => {
+  const thumbnail = createMenuThumbnailer()
+  app.get<{ Querystring: { path?: string } }>('/public/menu-thumbnail', async (request, reply) => {
+    const original = await readLegacyMenuImage(options.staticDirectory, request.query.path)
+    if (!original) return reply.code(404).send({ error: { code: 'MENU_IMAGE_NOT_FOUND', message: '图片不存在' } })
+    const image = await thumbnail(original)
+    reply.header('cache-control', image === original ? 'public, max-age=60' : 'public, max-age=86400').header('etag', `"${image.sha256}"`)
+    if (request.headers['if-none-match'] === `"${image.sha256}"`) return reply.code(304).send()
+    return reply.type(image.mimeType).send(image.bytes)
+  })
   app.get('/staff/media-assets', async (request, reply) => handle(reply, async () => {
     const context = await authorizedAny(options, request, [
       'community.activity.view', 'community.activity.manage', 'community.activity.publish',
@@ -72,9 +83,14 @@ export const mediaAssetApiPlugin: FastifyPluginAsync<MediaAssetApiOptions> = asy
       new MediaAssetRepository(transaction).publicBytes(publicId)
     ), { readOnly: true })
     if (value === null) return reply.code(404).send({ error: { code: 'MEDIA_ASSET_NOT_PUBLIC', message: '图片不存在或尚未发布' } })
-    reply.header('cache-control', 'public, max-age=31536000, immutable')
-    reply.header('etag', `"${value.sha256}"`)
-    return reply.type(value.mimeType).send(value.bytes)
+    // Authorization/publication lookup above always precedes cached conversion.
+    const query = request.query as { variant?: string }
+    const image = query.variant === 'menu320' ? await thumbnail(value) : value
+    reply.header('cache-control', query.variant === 'menu320' && image === value
+      ? 'public, max-age=60' : 'public, max-age=31536000, immutable')
+    reply.header('etag', `"${image.sha256}"`)
+    if (request.headers['if-none-match'] === `"${image.sha256}"`) return reply.code(304).send()
+    return reply.type(image.mimeType).send(image.bytes)
   })
 }
 

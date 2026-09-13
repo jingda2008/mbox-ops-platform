@@ -373,6 +373,7 @@ postgresIt('executes the compact bootstrap query against normalized PostgreSQL t
         'recommendation.rule.view',
         'recommendation.staff.modify',
         'recommendation.staff.modify.all',
+        'refund.request',
         'table.participation.manage',
       ] },
       navigation: [

@@ -63,6 +63,7 @@ export interface StaffActionTable {
 }
 
 export interface StaffServiceTask {
+  originalOrderItemId?:string|null
   id: string
   taskType: string
   tableId: string
@@ -189,6 +190,7 @@ export type FulfillmentStation = 'bar' | 'kitchen' | 'cashier'
 export type FulfillmentStatus = 'pending' | 'accepted' | 'preparing' | 'ready' | 'failed'
 
 export interface StaffFulfillmentItem {
+  quantities?: {total:number;unmade:number;started:number;ready:number;delivered:number;held:number;stopped:number}
   deliveryUnbatchedQuantity?:number
   taskId: string
   businessDate: string
@@ -206,6 +208,7 @@ export interface StaffFulfillmentItem {
   nextActionAt: string
   createdAt: string
   item: {
+    id?: string
     productName: string
     quantity: number
     unitPriceMinor?: number
@@ -227,6 +230,7 @@ export interface StaffFulfillmentItem {
 
 export interface StaffFulfillmentData {
   actor: {
+    actionSessionValid?: boolean
     employeeId: string
     permissions: string[]
     allowedStations: FulfillmentStation[]
@@ -253,6 +257,9 @@ export type StaffTableOrderItemFulfillmentStatus =
 export interface StaffTableOrderDetail {
   publicId: string
   paymentStatus?: string
+  totalAmountMinor?: number
+  receivableIncreaseMinor?:number; stoppedAmountMinor?:number
+  replacementSource?:{orderPublicId:string;orderItemId:string}
   items: Array<{
     id: string
     productName: string
@@ -261,6 +268,7 @@ export interface StaffTableOrderDetail {
     totalAmountMinor?: number
     includedInBundle?: boolean
     refundedAmountMinor?: number
+    quantities?:{total:number;held:number;stopped:number;ready:number;delivered:number;pending:number}
     fulfillmentStation: FulfillmentStation | 'none'
     fulfillmentStatus: StaffTableOrderItemFulfillmentStatus
   }>

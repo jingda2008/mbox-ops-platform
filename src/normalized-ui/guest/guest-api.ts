@@ -127,8 +127,14 @@ export interface GuestTableOrder {
   paymentStatus: 'unpaid' | 'pending' | 'partially_paid' | 'paid' | 'partially_refunded' | 'refunded'
   paymentAccess: 'available' | 'staff_collecting' | 'payment_in_progress' | 'status_review' | 'not_required'
   payableAmountMinor: number
+  receivableReductionMinor?: number
+  receivableIncreaseMinor?: number
+  settlementReviewRequired?: boolean
   currency: string
   items: Array<{
+    id?: string
+    progressText?: string
+    components?: Array<{ name: string; quantity: number; progressText?: string }>
     productId: string
     name: string
     quantity: number
@@ -216,6 +222,18 @@ export class GuestApiClient {
     const data = responseData(body)
     if (!isSessionView(data)) throw invalidResponse()
     return data
+  }
+
+  async waitForTable(tableQrToken: string, options: Readonly<RequestOptions> = {}): Promise<{status:'ready_for_scan';table:GuestSessionView['table']} | (GuestSessionView & {status:'waiting_for_table'})> {
+    const data = responseData(await this.request<unknown>('/api/guest/session/wait', {
+      method: 'POST', body: { tableQrToken, deviceKey: this.deviceKey }, signal: options.signal,
+    }))
+    if (isObject(data) && data.status === 'ready_for_scan' && isObject(data.table)
+      && typeof data.table.code === 'string' && typeof data.table.displayName === 'string') {
+      return {status:'ready_for_scan', table:{code:data.table.code,displayName:data.table.displayName}}
+    }
+    if (isSessionView(data) && data.status === 'waiting_for_table') return {...data,status:'waiting_for_table'}
+    throw invalidResponse()
   }
 
   async loadSession(options: Readonly<RequestOptions> = {}): Promise<GuestSessionView> {
@@ -612,13 +630,21 @@ function isTableOrder(value: unknown): value is GuestTableOrder {
     && typeof value.paymentStatus === 'string'
     && ['available', 'staff_collecting', 'payment_in_progress', 'status_review', 'not_required'].includes(String(value.paymentAccess))
     && Number.isSafeInteger(value.payableAmountMinor)
+    && (value.receivableIncreaseMinor === undefined || (Number.isSafeInteger(value.receivableIncreaseMinor) && Number(value.receivableIncreaseMinor) >= 0))
+    && (value.receivableReductionMinor === undefined || (Number.isSafeInteger(value.receivableReductionMinor) && Number(value.receivableReductionMinor) >= 0))
+    && (value.settlementReviewRequired === undefined || typeof value.settlementReviewRequired === 'boolean')
     && typeof value.currency === 'string'
     && Array.isArray(value.items)
     && value.items.every((item) => isObject(item)
       && typeof item.productId === 'string'
       && typeof item.name === 'string'
       && Number.isSafeInteger(item.quantity)
-      && typeof item.status === 'string')
+      && typeof item.status === 'string'
+      && (item.id === undefined || typeof item.id === 'string')
+      && (item.progressText === undefined || typeof item.progressText === 'string')
+      && (item.components === undefined || (Array.isArray(item.components) && item.components.every(component => isObject(component)
+        && typeof component.name === 'string' && Number.isSafeInteger(component.quantity)
+        && (component.progressText === undefined || typeof component.progressText === 'string')))))
 }
 
 function isDailyPerformance(value: unknown): value is GuestDailyPerformanceView {

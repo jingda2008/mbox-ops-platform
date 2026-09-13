@@ -1,3 +1,4 @@
+import {orderReceivableSql} from './order-collection-sql.js'
 import { randomUUID } from 'node:crypto'
 import type { ScopedTransaction } from './transaction-runner.js'
 
@@ -145,7 +146,7 @@ export class RecollectionAuthorizationRepository {
     total_amount_minor: number; gross_paid_minor: number; refunded_minor: number; currency: string; status: string
   }> {
     const result = await this.transaction.query<BalanceRow>(`
-      SELECT ordering.total_amount_minor,ordering.currency,ordering.status,
+      SELECT ${orderReceivableSql('ordering')} AS total_amount_minor,ordering.currency,ordering.status,
         COALESCE((
           SELECT SUM(payment.amount_minor) FROM mbox.order_payment_facts payment
           WHERE payment.tenant_id=ordering.tenant_id AND payment.store_id=ordering.store_id

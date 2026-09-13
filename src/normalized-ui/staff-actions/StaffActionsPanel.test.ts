@@ -2,12 +2,27 @@ import { createElement } from 'react'
 import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import { tableFinancialLabel, ActionList, filterMemberBenefitTasks, memberBenefitTaskCount, normalizeMemberBenefitScanCode, prioritizeActionFact, splitReservationLoadResults, StaffActionsPanel } from './StaffActionsPanel'
+import { filterFulfillmentQueue, tableFinancialLabel, ActionList, filterMemberBenefitTasks, memberBenefitTaskCount, normalizeMemberBenefitScanCode, prioritizeActionFact, splitReservationLoadResults, StaffActionsPanel } from './StaffActionsPanel'
 import { ConfirmationDialogProvider } from '../ConfirmationDialog'
 import type { StaffActionsApiPort } from './staff-actions-api'
 import type { StaffFulfillmentData, StaffOperationsData, StaffReservation } from './types'
 
 describe('StaffActionsPanel', () => {
+  it('keeps every queued task reachable and separates prepared work from delivery', () => {
+    const tasks = Array.from({ length: 60 }, (_, index) => ({
+      taskId: `task-${index}`, readyForDelivery: index >= 40,
+      table: { code: index === 32 ? 'B05' : 'A01' }, item: { productName: '气泡水' },
+    })) as StaffFulfillmentData['workItems']
+    const production = filterFulfillmentQueue(tasks, 'production', '')
+    expect(production).toHaveLength(40)
+    expect(prioritizeActionFact(production, null, item => item.taskId, 48)).toHaveLength(40)
+    expect(filterFulfillmentQueue(tasks, 'delivery', '')).toHaveLength(20)
+    expect(filterFulfillmentQueue(tasks, 'production', ' b05 ').map(item => item.taskId)).toEqual(['task-32'])
+    tasks[32]!.readyForDelivery = true
+    expect(filterFulfillmentQueue(tasks, 'production', 'b05')).toHaveLength(0)
+    expect(filterFulfillmentQueue(tasks, 'delivery', 'b05')).toHaveLength(1)
+  })
+
   it('distinguishes confirmed refunds from a settled bill', () => {
     expect(tableFinancialLabel('refunded')).toBe('已退款')
     expect(tableFinancialLabel('partially_refunded')).toBe('已结清 · 含退款')

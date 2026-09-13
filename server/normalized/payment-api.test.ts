@@ -357,6 +357,47 @@ describe('paymentApiPlugin', () => {
     expect(next!.publicId).not.toBe(first!.publicId)
   })
 
+  it('generates cash references without manual input and keeps them stable on retry', async () => {
+    const value = fixture({ createPublicId: undefined })
+    for (const key of ['cash-auto-attempt-1', 'cash-auto-attempt-1', 'cash-auto-attempt-2']) {
+      const result = await value.app.inject({ method: 'POST', url: '/api/payments/manual',
+        headers: { 'idempotency-key': key }, payload: { orderId, provider: 'cash', method: 'cash' } })
+      expect(result.statusCode).toBe(201)
+    }
+    const inputs = value.commands.recordManual.mock.calls.map(call => call[0])
+    expect(inputs[0]!.evidence.receiptReference).toMatch(/^CASH-[a-f0-9]{64}$/)
+    expect(inputs[1]!.requestFingerprint).toBe(inputs[0]!.requestFingerprint)
+    expect(inputs[2]!.evidence.receiptReference).not.toBe(inputs[0]!.evidence.receiptReference)
+    const missingPos = await value.app.inject({ method: 'POST', url: '/api/payments/manual',
+      headers: { 'idempotency-key': 'pos-missing-reference' }, payload: { orderId, provider: 'physical_pos', method: 'card', terminalId: 'POS-01' } })
+    expect(missingPos.statusCode).toBe(400)
+  })
+
+  it('accepts an older cash form blank receipt as the same automatic receipt while rejecting a blank POS receipt',async()=>{
+    const value=fixture({createPublicId:undefined})
+    for(const receiptReference of [undefined,'','   ']){
+      const result=await value.app.inject({method:'POST',url:'/api/payments/manual',headers:{'idempotency-key':'old-cash-form-same-attempt'},payload:{orderId,provider:'cash',method:'cash',...(receiptReference===undefined?{}:{receiptReference})}})
+      expect(result.statusCode).toBe(201)
+    }
+    const calls=value.commands.recordManual.mock.calls.map(call=>call[0])
+    expect(new Set(calls.map(call=>call.requestFingerprint)).size).toBe(1)
+    expect(new Set(calls.map(call=>call.evidence.receiptReference)).size).toBe(1)
+    const invalid=await value.app.inject({method:'POST',url:'/api/payments/manual',headers:{'idempotency-key':'pos-form-blank'},payload:{orderId,provider:'physical_pos',method:'card',terminalId:'POS-01',receiptReference:'   '}})
+    expect(invalid.statusCode).toBe(400)
+  })
+
+  it('reports a duplicate external financial reference as a recoverable conflict', async () => {
+    const value = fixture()
+    value.commands.recordManual.mockRejectedValueOnce(Object.assign(new Error('duplicate'), {
+      code: '23505', constraint: 'payments_provider_transaction_uq',
+    }))
+    const result = await value.app.inject({ method: 'POST', url: '/api/payments/manual',
+      headers: { 'idempotency-key': 'pos-duplicate-reference' },
+      payload: { orderId, provider: 'physical_pos', method: 'card', terminalId: 'POS-01', receiptReference: 'POS-1234' } })
+    expect(result.statusCode).toBe(409)
+    expect(result.json().error.code).toBe('FINANCIAL_REFERENCE_CONFLICT')
+  })
+
   it('initiates an online payment with a server-resolved actor and idempotency boundary', async () => {
     const value = fixture()
     const response = await value.app.inject({
@@ -1057,6 +1098,7 @@ describe('paymentApiPlugin', () => {
       headers: { 'idempotency-key': 'refund-request-0001' },
       payload: {
         reason: '客人退回一项未出品商品',
+        purpose: 'return_goods',
         allocations: [{ orderItemId, amountMinor: 1_000 }],
         requestEvidence: {
           reasonCode: 'NOT_PRODUCED',
@@ -1084,6 +1126,7 @@ describe('paymentApiPlugin', () => {
       actor: { type: 'employee', employeeId },
       paymentId,
       allocations: [{ orderItemId, amountMinor: 1_000 }],
+      purpose: 'return_goods',
       requestEvidence: { reasonCode: 'NOT_PRODUCED' },
     }))
     expect(value.commands.approveRefund).toHaveBeenCalledWith(expect.objectContaining({ refundId }))
@@ -1094,6 +1137,15 @@ describe('paymentApiPlugin', () => {
     }))
     expect(value.commands.recordProviderRefundResult).not.toHaveBeenCalled()
     expect(value.commands.recordManualRefundResult).not.toHaveBeenCalled()
+  })
+
+  it('rejects an unknown refund purpose before requesting any refund',async()=>{
+    const value=fixture()
+    const response=await value.app.inject({method:'POST',url:`/api/payments/${paymentId}/refunds`,
+      headers:{'idempotency-key':'refund-bad-purpose-0001'},payload:{reason:'用途校验测试',purpose:'automatic_stock_increase',
+        allocations:[{orderItemId,amountMinor:1000}]}})
+    expect(response.statusCode).toBe(400)
+    expect(value.commands.requestRefund).not.toHaveBeenCalled()
   })
 
   it('closes a refund as failed when the provider synchronously rejects execute', async () => {

@@ -44,7 +44,7 @@ import { guestMenuProductToMenuProduct } from './menu-product-adapter'
 import { shortPublicReference } from '../public-reference'
 import './guest-app.css'
 
-type GuestApiPort = Pick<GuestApiClient, 'scanTable' | 'loadSession' | 'searchMenu' | 'submitOrder' | 'loadSharedCart' | 'adjustSharedCart' | 'replaceSharedCartBundleSelection' | 'removeSharedCartLine' | 'checkoutSharedCart' | 'loadTableOrders' | 'loadTodayPerformance' | 'payTableOrder' | 'abandonCheckout' | 'requestService' | 'recordMood'>
+type GuestApiPort = Pick<GuestApiClient, 'waitForTable' | 'scanTable' | 'loadSession' | 'searchMenu' | 'submitOrder' | 'loadSharedCart' | 'adjustSharedCart' | 'replaceSharedCartBundleSelection' | 'removeSharedCartLine' | 'checkoutSharedCart' | 'loadTableOrders' | 'loadTodayPerformance' | 'payTableOrder' | 'abandonCheckout' | 'requestService' | 'recordMood'>
 type ServiceType = 'call_staff' | 'complaint' | 'custom'
 type Panel = 'orders' | 'complaint' | 'custom' | 'checkout' | null
 export type { GuestGateReason } from './guest-gate-model'
@@ -108,6 +108,8 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const apiRef = useRef<GuestApiPort | null>(null)
   const tableCodeRef = useRef<string | null>(null)
   const qrCredentialRef = useRef<string | null>(null)
+  const waitingCredentialRef = useRef<string | null>(null)
+  const nextTableRetryRef = useRef(0)
   const menuRequest = useRef(0)
   const sharedCartInFlight = useRef<Promise<GuestSharedCart | null> | null>(null)
   const sharedCartPollFailures = useRef(0)
@@ -294,6 +296,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     setSharedCart(null)
     setSharedCartError(null)
     if (session.status === 'waiting_for_table') {
+      waitingCredentialRef.current = qrCredentialRef.current
       setCartStorageKey(undefined)
       setPhase('waiting')
       setGateReason('waiting')
@@ -304,6 +307,8 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     setCartProtocolVersion(protocolVersion)
     setCartStorageKey(protocolVersion === 1 ? guestCartStorageKey(session) : undefined)
     qrCredentialRef.current = null
+    waitingCredentialRef.current = null
+    nextTableRetryRef.current = 0
     setPhase('ready')
     return true
   }, [])
@@ -311,7 +316,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const connectTable = useCallback(async (quiet = false) => {
     const api = apiRef.current
     const expectedTable = tableCodeRef.current
-    if (api === null || expectedTable === null || connectingRef.current) return
+    if (api === null || expectedTable === null || connectingRef.current || Date.now() < nextTableRetryRef.current) return
     connectingRef.current = true
     if (quiet) {
       setGateRefreshing(true)
@@ -322,10 +327,23 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     }
     try {
       const credential = qrCredentialRef.current
+      if (credential !== null && waitingCredentialRef.current === credential) {
+        const availability = await api.waitForTable(credential)
+        if (availability.table.code.toUpperCase() !== expectedTable.toUpperCase()) {
+          throw new GuestApiError('桌位核对结果不一致，请重新扫描所在桌面的二维码。', 'invalid_response')
+        }
+        nextTableRetryRef.current = 0
+        if (availability.status === 'waiting_for_table') {
+          acceptSession(availability, expectedTable)
+          return
+        }
+      }
       const session = credential === null ? await api.loadSession() : await api.scanTable(credential)
       acceptSession(session, expectedTable)
     } catch (error) {
       if (quiet && error instanceof GuestApiError && error.retryable) {
+        const retryAt = error.retryAt === null ? NaN : Date.parse(error.retryAt)
+        if (Number.isFinite(retryAt) && retryAt > Date.now()) nextTableRetryRef.current = retryAt
         setGateMessage('网络刚才有点慢，我们会继续自动更新。')
         return
       }
@@ -862,21 +880,26 @@ function GuestPanel({ title, dismissible, onClose, children }: { title: string; 
   </div>
 }
 
-function TableOrdersPanel({ orders, loading, onRefresh, onPay }: { orders: GuestTableOrder[]; loading: boolean; onRefresh: () => void; onPay: (orderPublicId: string) => void }) {
+export function TableOrdersPanel({ orders, loading, onRefresh, onPay }: { orders: GuestTableOrder[]; loading: boolean; onRefresh: () => void; onPay: (orderPublicId: string) => void }) {
   return <div className="guest-table-orders">
     <div className="guest-table-orders-toolbar"><span>{orders.length === 0 ? '还没有已确认的订单' : `共 ${orders.length} 轮`}</span><button type="button" onClick={onRefresh} disabled={loading}><RefreshCw className={loading ? 'is-spinning' : ''} />刷新</button></div>
     {orders.map((order) => <article key={order.publicId} data-testid={`guest-table-order-${order.publicId}`}>
       <header><strong>{`本桌第 ${order.round} 轮 · ${orderSourceCopy(order)}`}</strong><span>{orderStatusCopy(order)}</span></header>
-      <div>{order.items.map((item) => <p key={item.productId}><span>{item.name} × {item.quantity}</span><small>{itemStatusCopy(item.status)}</small></p>)}</div>
+      <div>{order.items.map((item, index) => <div key={item.id ?? `${item.productId}:${index}`}><p><span>{item.name} × {item.quantity}</span><small>{item.progressText || itemStatusCopy(item.status)}</small></p>
+        {item.components?.map((component, componentIndex) => <p key={componentIndex}><span>{component.name} × {component.quantity}</span><small>{component.progressText}</small></p>)}
+      </div>)}</div>
+      {(order.receivableIncreaseMinor ?? 0)>0&&<small>套餐按单点价补差：{formatMoney(order.receivableIncreaseMinor!,order.currency)}</small>}
+      {(order.receivableReductionMinor ?? 0) > 0 && <small>退菜减额：{formatMoney(order.receivableReductionMinor!, order.currency)}</small>}
       {order.payableAmountMinor > 0 && order.paymentAccess === 'available' && <button type="button" className="guest-primary guest-order-pay" onClick={() => onPay(order.publicId)}>
         微信支付 {formatMoney(order.payableAmountMinor, order.currency)}
       </button>}
-      {order.paymentAccess !== 'available' && order.paymentAccess !== 'not_required' && <small className="guest-order-payment-state">{paymentAccessCopy(order.paymentAccess)}</small>}
+      {order.paymentAccess !== 'available' && order.paymentAccess !== 'not_required' && <small className="guest-order-payment-state">{order.settlementReviewRequired ? '商品停止金额待员工核对，暂不发起本单付款。' : paymentAccessCopy(order.paymentAccess)}</small>}
     </article>)}
   </div>
 }
 
 function orderStatusCopy(order: GuestTableOrder): string {
+  if (order.paymentAccess === 'not_required' && (order.receivableReductionMinor ?? 0) > 0 && order.paymentStatus === 'unpaid') return '无需再付款'
   if (order.paymentAccess === 'staff_collecting') return '员工收款中'
   if (order.paymentAccess === 'payment_in_progress') return '付款进行中'
   if (order.paymentAccess === 'status_review') return '等待收银核对'

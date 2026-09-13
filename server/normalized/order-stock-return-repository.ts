@@ -16,8 +16,13 @@ export class OrderStockReturnRepository {
   if(!item)throw new InventoryConflictError('商品记录不存在')
   const refunded=(await this.tx.query<{ok:boolean}>(`SELECT EXISTS(SELECT 1 FROM mbox.refunds r JOIN mbox.payments p
    ON p.tenant_id=r.tenant_id AND p.store_id=r.store_id AND p.id=r.payment_id
-   WHERE p.tenant_id=$1 AND p.store_id=$2 AND COALESCE(r.order_id,p.order_id)=$3 AND r.status='succeeded') AS ok`,[...scope,item.order_id])).rows[0]?.ok
-  if(!refunded)throw new InventoryConflictError('尚无确认成功的退款；不会因退款申请直接恢复库存')
+   WHERE p.tenant_id=$1 AND p.store_id=$2 AND COALESCE(r.order_id,p.order_id)=$3 AND r.status='succeeded'
+    AND (r.purpose IS NULL OR r.purpose='return_goods') AND EXISTS(
+      SELECT 1 FROM mbox.refund_items ri JOIN mbox.order_items target
+      ON target.tenant_id=ri.tenant_id AND target.store_id=ri.store_id AND target.id=$4
+      WHERE ri.tenant_id=r.tenant_id AND ri.store_id=r.store_id AND ri.refund_id=r.id
+       AND (ri.order_item_id=target.id OR ri.order_item_id=target.parent_order_item_id))) AS ok`,[...scope,item.order_id,item.id])).rows[0]?.ok
+  if(!refunded)throw new InventoryConflictError('尚无确认成功的本商品退货退款；差价、补偿及其他商品退款不能作为退库依据')
   const redemption=(await this.tx.query<{id:string}>('SELECT id FROM mbox.member_redemptions WHERE tenant_id=$1 AND store_id=$2 AND order_id=$3',[...scope,item.order_id])).rows[0]
   if(redemption)throw new InventoryConflictError('积分兑换商品须使用兑换恢复流程，不能重复退库')
   const tasks=await this.tx.query<{status:string;accepted_at:string|null;ready_at:string|null}>(`

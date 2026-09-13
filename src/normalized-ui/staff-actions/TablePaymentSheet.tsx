@@ -238,6 +238,10 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
       {error !== null && <p className="staff-order-error" role="alert">{error}</p>}
       {!loading && error !== null && orders.length === 0 && <button type="button" className="staff-payment-reload" onClick={() => setLoadAttempt((current) => current + 1)}><RefreshCcw size={18} />重新读取本桌收款</button>}
       {loading ? <p className="staff-order-loading"><LoaderCircle className="is-spinning" /> 正在读取本桌未结订单</p> : orders.length === 0 ? error === null && <p className="staff-actions-empty">本桌没有需要再次收款的订单。</p> : <>
+        <div className="staff-payment-pinned-total" aria-label="本桌本次收款合计">
+          <span>已选{selectedOrders.length}单 · 待收 {money(selectedTotal,selected?.currency??'CNY')}</span>
+          <strong>本次 {Number.isSafeInteger(enteredMinor)&&enteredMinor>0?money(enteredMinor,selected?.currency??'CNY'):'请填写有效金额'}</strong>
+        </div>
         <div className="staff-payment-order-list" aria-label="本桌未结订单">
           {orders.map((order) => <button type="button" key={order.id}
             disabled={busy}

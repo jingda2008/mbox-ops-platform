@@ -49,13 +49,14 @@ class GuestSessionRequestError extends Error {
 }
 
 export const guestSessionApiPlugin: FastifyPluginAsync<GuestSessionApiOptions> = async (app, options) => {
-  app.post('/session/scan', async (request, reply) => handleRoute(reply, async () => {
+  for (const availabilityOnly of [false, true]) app.post(availabilityOnly ? '/session/wait' : '/session/scan', async (request, reply) => handleRoute(reply, async () => {
     const body = readObject(request.body)
     const scope = await options.requestContext.resolveTrustedScope(request)
     const businessClock = await options.businessClock.current(scope)
-    const customerId = await options.resolveWechatCustomer?.(request, scope) ?? null
+    const customerId = availabilityOnly ? null : await options.resolveWechatCustomer?.(request, scope) ?? null
     const result = await options.sessions.scanTable({
       scope,
+      ...(availabilityOnly ? { availabilityOnly: true } : {}),
       tableQrToken: readString(body.tableQrToken, '桌面二维码', 256, 32),
       deviceFingerprint: options.requestContext.resolveDeviceFingerprint(
         request,
@@ -65,6 +66,10 @@ export const guestSessionApiPlugin: FastifyPluginAsync<GuestSessionApiOptions> =
       ...(customerId === null ? {} : { customerId }),
     })
     reply.header('cache-control', 'no-store')
+
+    if (result.status === 'ready_for_scan') return reply.send({ data: {
+      status: 'ready_for_scan', table: { code: result.tableCode, displayName: result.tableDisplayName },
+    } })
 
     if (result.status === 'active') {
       const overview = await options.loadTableOverview(scope, result.session.tableSessionId!)

@@ -1116,6 +1116,30 @@ integration("normalized inventory API PostgreSQL integration", () => {
     ).rejects.toMatchObject({ code: "55000" });
   });
 
+  it("rejects an old count after movements even when on-hand returns to its snapshot", async () => {
+    const created = await app.inject({ method: "POST", url: "/api/inventory/stock-counts",
+      headers: headers(managerId, "stale-stock-count-create"),
+      payload: { lines: [{ inventoryItemId: spiritItemId, countedQuantity: "2" }] } });
+    expect(created.statusCode).toBe(201);
+    const countId = created.json().data.id as string;
+    const submitted = await app.inject({ method: "POST", url: `/api/inventory/stock-counts/${countId}/submit`,
+      headers: headers(managerId, "stale-stock-count-submit") });
+    expect(submitted.statusCode).toBe(200);
+    // Two offsetting movements must not make an old physical count current.
+    await pool.query(`INSERT INTO mbox.inventory_movements
+      (tenant_id,store_id,inventory_item_id,movement_type,quantity_delta,reference_type)
+      VALUES ($1,$2,$3,'return',1,'test'),($1,$2,$3,'waste',-1,'test')`, [tenantId,storeId,spiritItemId]);
+    const before = await pool.query(`SELECT on_hand_quantity::text AS quantity FROM mbox.inventory_balances WHERE inventory_item_id=$1`, [spiritItemId]);
+    const rejected = await app.inject({ method: "POST", url: `/api/inventory/stock-counts/${countId}/approve`,
+      headers: headers(approverId, "stale-stock-count-approve") });
+    expect(rejected.statusCode).toBe(409);
+    expect(rejected.body).toContain("盘点后库存已变动");
+    const after = await pool.query(`SELECT on_hand_quantity::text AS quantity FROM mbox.inventory_balances WHERE inventory_item_id=$1`, [spiritItemId]);
+    expect(after.rows).toEqual(before.rows);
+    expect((await pool.query(`SELECT status FROM mbox.inventory_stock_counts WHERE id=$1`, [countId])).rows[0].status).toBe("submitted");
+    expect((await pool.query(`SELECT count(*)::int AS n FROM mbox.inventory_movements WHERE reference_id=$1`, [countId])).rows[0].n).toBe(0);
+  });
+
   it("requires independent stock-count approval and enforces integer snack counts in PostgreSQL", async () => {
     await receiveStock(snackItemId, "3", "snack-receipt");
     const invalid = await app.inject({

@@ -7,85 +7,141 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName System.Drawing
+
+# Venue-verified RAW transport restored from the user backup (2026-09-09).
+# Do not substitute Windows font drawing for this transport without device acceptance.
 $printer = Get-Printer -Name $QueueName -ErrorAction Stop
 if ($printer.PrinterStatus -match 'Error|Offline|PaperProblem|NoToner') {
   throw "printer_unavailable:$($printer.PrinterStatus)"
 }
-$content = [System.IO.File]::ReadAllText($ContentPath, [System.Text.Encoding]::UTF8)
-$document = New-Object System.Drawing.Printing.PrintDocument
-$document.DocumentName = $DocumentName
-$document.PrinterSettings.PrinterName = $QueueName
-$document.PrinterSettings.Copies = [int16]$Copies
-if (-not $document.PrinterSettings.IsValid) { throw 'invalid_printer_queue' }
 
-$width = if ($Profile -eq 'escpos_58') { 228 } else { 315 }
-$fontSize = if ($Profile -eq 'escpos_58') { 9.0 } else { 11.0 }
-$lineCount = [Math]::Max(8, ($content -split "`r?`n").Count)
-$height = [Math]::Min(1200, [Math]::Max(360, 90 + ($lineCount * 24)))
-$document.DefaultPageSettings.PaperSize = New-Object System.Drawing.Printing.PaperSize('MBOX Ticket', $width, $height)
-$document.DefaultPageSettings.Margins = New-Object System.Drawing.Printing.Margins(10, 10, 8, 8)
-$font = New-Object System.Drawing.Font('Microsoft YaHei UI', $fontSize, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Point)
-$brush = [System.Drawing.Brushes]::Black
-$format = New-Object System.Drawing.StringFormat
-$format.Trimming = [System.Drawing.StringTrimming]::None
-$format.FormatFlags = [System.Drawing.StringFormatFlags]::LineLimit
-# Classify original logical lines so wrapped table and product names keep their emphasis.
-$tableSize = if ($Profile -eq 'escpos_58') { 22.0 } else { 28.0 }
-$itemSize = if ($Profile -eq 'escpos_58') { 12.0 } else { 15.0 }
-$tableFont = New-Object System.Drawing.Font('Microsoft YaHei UI', $tableSize, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Point)
-$itemFont = New-Object System.Drawing.Font('Microsoft YaHei UI', $itemSize, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Point)
-$ticketLines = @($content -split "`r?`n")
-$pageState = @{ Index = 0; Offset = 0 }
-$handler = [System.Drawing.Printing.PrintPageEventHandler]{
-  param($sender, $eventArgs)
-  $bounds = $eventArgs.MarginBounds
-  [single]$y = $bounds.Y
-  while ($pageState.Index -lt $ticketLines.Count) {
-    $original = $ticketLines[$pageState.Index]
-    $lineFont = if ($original -match '^桌台：') { $tableFont } elseif ($original -match '×\d+\s*$|^(合计|净收|应收)：') { $itemFont } else { $font }
-    $remaining = $original.Substring($pageState.Offset)
-    if ($remaining.Length -eq 0) { $remaining = ' ' }
-    [single]$available = $bounds.Bottom - $y
-    [int]$characters = 0
-    [int]$measuredLines = 0
-    $size = $eventArgs.Graphics.MeasureString($remaining, $lineFont,
-      [System.Drawing.SizeF]::new($bounds.Width, [Math]::Max(0, $available)), $format,
-      [ref]$characters, [ref]$measuredLines)
-    if ($characters -le 0) {
-      if ($y -eq $bounds.Y) { throw 'invalid_print_page_bounds' }
-      break
-    }
-    $fragment = $remaining.Substring(0, $characters)
-    $eventArgs.Graphics.DrawString($fragment, $lineFont, $brush,
-      [System.Drawing.RectangleF]::new($bounds.X, $y, $bounds.Width, $available), $format)
-    $y += $size.Height + 2
-    $pageState.Offset += $characters
-    if ($pageState.Offset -ge $original.Length) { $pageState.Index++; $pageState.Offset = 0 }
-    if ($y -ge $bounds.Bottom) { break }
-  }
-  $eventArgs.HasMorePages = $pageState.Index -lt $ticketLines.Count
+$content = [System.IO.File]::ReadAllText($ContentPath, [System.Text.Encoding]::UTF8)
+if ([string]::IsNullOrWhiteSpace($content)) {
+  throw 'empty_ticket_content'
 }
-$document.add_PrintPage($handler)
-try {
-  $document.Print()
-  $deadline = [DateTime]::UtcNow.AddSeconds(30)
-  do {
-    $job = Get-PrintJob -PrinterName $QueueName -ErrorAction SilentlyContinue |
-      Where-Object { $_.DocumentName -eq $DocumentName } |
-      Select-Object -First 1
-    if ($null -eq $job) { break }
-    if ([string]$job.JobStatus -match 'Error|Offline|PaperOut|Blocked|UserIntervention') {
-      throw "print_job_failed:$($job.JobStatus)"
+
+if (-not ('MboxRawPrinter' -as [type])) {
+  Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class MboxRawPrinter {
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  private class DOCINFOW {
+    [MarshalAs(UnmanagedType.LPWStr)] public string pDocName;
+    [MarshalAs(UnmanagedType.LPWStr)] public string pOutputFile;
+    [MarshalAs(UnmanagedType.LPWStr)] public string pDatatype;
+  }
+
+  [DllImport("winspool.Drv", EntryPoint = "OpenPrinterW", SetLastError = true, CharSet = CharSet.Unicode)]
+  private static extern bool OpenPrinter(string src, out IntPtr hPrinter, IntPtr pd);
+
+  [DllImport("winspool.Drv", EntryPoint = "ClosePrinter", SetLastError = true)]
+  private static extern bool ClosePrinter(IntPtr hPrinter);
+
+  [DllImport("winspool.Drv", EntryPoint = "StartDocPrinterW", SetLastError = true, CharSet = CharSet.Unicode)]
+  private static extern int StartDocPrinter(IntPtr hPrinter, int level, [In] DOCINFOW di);
+
+  [DllImport("winspool.Drv", EntryPoint = "EndDocPrinter", SetLastError = true)]
+  private static extern bool EndDocPrinter(IntPtr hPrinter);
+
+  [DllImport("winspool.Drv", EntryPoint = "StartPagePrinter", SetLastError = true)]
+  private static extern bool StartPagePrinter(IntPtr hPrinter);
+
+  [DllImport("winspool.Drv", EntryPoint = "EndPagePrinter", SetLastError = true)]
+  private static extern bool EndPagePrinter(IntPtr hPrinter);
+
+  [DllImport("winspool.Drv", EntryPoint = "WritePrinter", SetLastError = true)]
+  private static extern bool WritePrinter(IntPtr hPrinter, IntPtr pBytes, int dwCount, out int dwWritten);
+
+  public static void SendBytes(string printerName, string documentName, byte[] payload) {
+    if (string.IsNullOrWhiteSpace(printerName)) throw new ArgumentException("printerName");
+    if (payload == null || payload.Length == 0) throw new ArgumentException("payload");
+
+    IntPtr hPrinter;
+    if (!OpenPrinter(printerName, out hPrinter, IntPtr.Zero)) {
+      throw new InvalidOperationException("open_printer_failed:" + Marshal.GetLastWin32Error());
     }
-    Start-Sleep -Milliseconds 250
-  } while ([DateTime]::UtcNow -lt $deadline)
-  if ($null -ne $job) { throw 'print_job_timeout' }
-} finally {
-  $document.remove_PrintPage($handler)
-  $format.Dispose()
-  $font.Dispose()
-  $tableFont.Dispose()
-  $itemFont.Dispose()
-  $document.Dispose()
+
+    try {
+      DOCINFOW di = new DOCINFOW();
+      di.pDocName = string.IsNullOrWhiteSpace(documentName) ? "M-BOX Ticket" : documentName;
+      di.pOutputFile = null;
+      di.pDatatype = "RAW";
+
+      if (StartDocPrinter(hPrinter, 1, di) <= 0) {
+        throw new InvalidOperationException("start_doc_failed:" + Marshal.GetLastWin32Error());
+      }
+      try {
+        if (!StartPagePrinter(hPrinter)) {
+          throw new InvalidOperationException("start_page_failed:" + Marshal.GetLastWin32Error());
+        }
+        try {
+          IntPtr unmanaged = Marshal.AllocHGlobal(payload.Length);
+          try {
+            Marshal.Copy(payload, 0, unmanaged, payload.Length);
+            int written;
+            if (!WritePrinter(hPrinter, unmanaged, payload.Length, out written) || written != payload.Length) {
+              throw new InvalidOperationException("write_printer_failed:" + Marshal.GetLastWin32Error());
+            }
+          } finally {
+            Marshal.FreeHGlobal(unmanaged);
+          }
+        } finally {
+          EndPagePrinter(hPrinter);
+        }
+      } finally {
+        EndDocPrinter(hPrinter);
+      }
+    } finally {
+      ClosePrinter(hPrinter);
+    }
+  }
+}
+'@
+}
+
+function New-EscPosTicketBytes {
+  param([string]$Text, [string]$TicketProfile)
+  if ([string]::IsNullOrWhiteSpace($Text)) { throw 'empty_ticket_content' }
+  $gbk = [System.Text.Encoding]::GetEncoding(936)
+  $chunks = New-Object System.Collections.Generic.List[byte]
+  # Keep the venue-proven initialization, code table and left alignment.
+  $chunks.AddRange([byte[]](0x1B, 0x40, 0x1B, 0x74, 0x00, 0x1B, 0x61, 0x00))
+  $normalized = ($Text -replace "`r`n", "`n" -replace "`r", "`n").TrimEnd()
+  # Ticket data cannot inject ESC/POS commands. Preserve printable data and newlines.
+  $normalized = ($normalized -replace "`t", '    ') -replace '[\x00-\x09\x0B-\x1F\x7F]', ''
+  $normalized = $normalized.Replace([string][char]0x00A5, [string][char]0xFFE5)
+  $lineWidth = if ($TicketProfile -eq 'escpos_58') { 32 } else { 42 }
+  foreach ($line in ($normalized -split "`n")) {
+    $label = $line.TrimStart()
+    [byte]$size = 0
+    [byte]$bold = 0
+    if ($label -match '^(桌台|桌号)：') { $size=0x22; $bold=1 }
+    elseif ($label -match '^(合计|净收|应收|应付)：') { $size=0x11; $bold=1 }
+    elseif ($label -match '×\d+\s*$') { $size=0x11; $bold=1 }
+    elseif ($label -match '^备注：') { $bold=1 }
+    $chunks.AddRange([byte[]](0x1D, 0x21, $size, 0x1B, 0x45, $bold))
+    $width = [int][Math]::Floor($lineWidth / (1 + ($size -shr 4)))
+    $used = 0
+    $elements = [Globalization.StringInfo]::GetTextElementEnumerator($line)
+    while ($elements.MoveNext()) {
+      $bytes = $gbk.GetBytes($elements.GetTextElement())
+      if ($used -gt 0 -and $used + $bytes.Length -gt $width) { $chunks.Add(0x0A); $used=0 }
+      $chunks.AddRange($bytes); $used += $bytes.Length
+    }
+    $chunks.Add(0x0A)
+    if ($size -gt 0) { $chunks.Add(0x0A) }
+    # Explicit reset prevents emphasis leaking into subsequent fields/jobs.
+    $chunks.AddRange([byte[]](0x1D, 0x21, 0x00, 0x1B, 0x45, 0x00))
+  }
+  # Identical feed-and-half-cut suffix to the working venue script.
+  $chunks.AddRange([byte[]](0x0A, 0x0A, 0x0A, 0x1D, 0x56, 0x01))
+  return ,$chunks.ToArray()
+}
+
+$payload = New-EscPosTicketBytes -Text $content -TicketProfile $Profile
+for ($i = 1; $i -le $Copies; $i++) {
+  $docName = if ($Copies -gt 1) { "$DocumentName#$i" } else { $DocumentName }
+  [MboxRawPrinter]::SendBytes($QueueName, $docName, $payload)
 }

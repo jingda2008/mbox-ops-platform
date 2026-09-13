@@ -25,3 +25,19 @@ export async function lockBoundGuestTablePosition(
   `,[input.tableSessionId,input.customerId,guestSessionId])
   return result.rows[0]?.participation_id!==null
 }
+
+/** Checkout eventually locks the table FOR UPDATE. Take that final lock before
+ * participation/session locks so a concurrent service read cannot block its upgrade. */
+export async function lockBoundGuestCheckoutPosition(
+  transaction: ScopedTransaction,
+  input: Readonly<{ tableSessionId: string; customerId: string; actorRef: string | null | undefined }>,
+): Promise<boolean> {
+  if (guestSessionIdFromActorRef(input.actorRef) === null) return false
+  const table = await transaction.query<{ id: string }>(`
+    SELECT id FROM mbox.table_sessions
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND status='open'
+    FOR UPDATE
+  `, [transaction.scope.tenantId, transaction.scope.storeId, input.tableSessionId])
+  if (!table.rows[0]) return false
+  return lockBoundGuestTablePosition(transaction, input)
+}

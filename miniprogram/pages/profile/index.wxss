@@ -1177,3 +1177,7 @@
 .order-history-entry view text:last-child{font-size:22rpx;font-weight:400;color:#79776d}
 .order-history-entry>text{flex-shrink:0;color:#315d46}
 .profile-member-card--silver .profile-member-card__corner,.profile-member-card--gold .profile-member-card__corner{width:180rpx;height:180rpx;right:-126rpx;bottom:-126rpx;opacity:.65}
+
+.profile-legal-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 12rpx 24rpx; padding: 24rpx 0; }
+.profile-legal-links button { margin: 0; padding: 8rpx 12rpx; background: transparent; color: #52645b; font-size: 24rpx; line-height: 1.8; }
+.profile-legal-links button::after { border: 0; }

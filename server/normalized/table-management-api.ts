@@ -298,7 +298,14 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
           AND participation.table_session_id=$3::uuid
           AND participation.public_id=ANY($4::text[]) AND participation.left_at IS NULL
       ), scoped_orders AS (
-        SELECT order_row.id,order_row.status,order_row.payment_status
+        SELECT order_row.id,order_row.status,order_row.payment_status,
+          (order_row.status NOT IN ('draft','cancelled') AND (order_row.total_amount_minor=0 OR (
+            EXISTS(SELECT 1 FROM mbox.item_receivable_adjustment_facts adjustment WHERE adjustment.tenant_id=order_row.tenant_id
+              AND adjustment.store_id=order_row.store_id AND adjustment.order_id=order_row.id)
+            AND mbox.order_receivable_amount(order_row.tenant_id,order_row.store_id,order_row.id)<=COALESCE((
+              SELECT sum(payment.amount_minor) FROM mbox.order_payment_facts payment WHERE payment.tenant_id=order_row.tenant_id
+                AND payment.store_id=order_row.store_id AND payment.order_id=order_row.id AND payment.status IN ('succeeded','partially_refunded','refunded')),0)
+          ))) AS no_collection_due
         FROM mbox.orders order_row
         WHERE order_row.tenant_id=$1::uuid AND order_row.store_id=$2::uuid
           AND order_row.table_session_id=$3::uuid
@@ -308,7 +315,7 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
             )=ANY(SELECT customer_id FROM selected_customers))
       ) SELECT
         (SELECT count(*)::text FROM scoped_orders order_row
-          WHERE NOT ((order_row.status<>'cancelled'
+          WHERE NOT (order_row.no_collection_due OR (order_row.status<>'cancelled'
               AND order_row.payment_status IN ('paid','partially_refunded','refunded'))
             OR (order_row.status='cancelled' AND order_row.payment_status='refunded')
             OR (order_row.status='cancelled' AND NOT EXISTS (
@@ -339,7 +346,7 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
         (SELECT count(*)::text FROM mbox.inventory_order_reservations reservation
           WHERE reservation.tenant_id=$1::uuid AND reservation.store_id=$2::uuid
             AND reservation.order_id=ANY(SELECT id FROM scoped_orders)
-            AND reservation.status='reserved') AS inventory_reserved,
+            AND mbox.inventory_reservation_remaining_quantity(reservation.tenant_id,reservation.store_id,reservation.id)>0) AS inventory_reserved,
         (SELECT count(*)::text FROM mbox.refunds refund
           JOIN mbox.payments payment ON payment.tenant_id=refund.tenant_id
             AND payment.store_id=refund.store_id AND payment.id=refund.payment_id

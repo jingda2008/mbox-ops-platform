@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
-import { appendOutboxMessage } from './command-executor.js'
+import { appendOutboxMessage,NormalizedCommandExecutor } from './command-executor.js'
+import Fastify from 'fastify'
+import {hardwareApiPlugin} from './hardware-api.js'
 import { PrintSourceWorker } from './print-source-worker.js'
 import { PrintTicketSourceRepository } from './print-ticket-source.js'
 import {DeliveryBatchRepository} from './delivery-batch-repository.js'
@@ -208,6 +210,53 @@ integration('asynchronous print sources: committed events, isolation and recover
     expect(jobs.flatMap(job=>job.printSnapshot.lines).map(line=>line.name)).toEqual(expect.arrayContaining(['销售合计','实际收款','实际退款','净收','尚待收款']))
     expect(jobs[0].printSnapshot).toMatchObject({kind:'daily_settlement',operatorLabel:'日报员工',businessDate:date})
     expect((await pool.query('SELECT count(*)::int AS count FROM mbox.manual_business_day_ends WHERE tenant_id=$1 AND store_id=$2',[scope.tenantId,scope.storeId])).rows[0].count).toBe(before)
+  })
+  it('prints a date range with historical unpaid work separately and no sales from outside the range',async()=>{
+    const oldOrder=randomUUID()
+    const session=randomUUID()
+    await pool.query(`INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count,status)
+      SELECT $3,$1,$2,id,'range-test-session',CURRENT_DATE,1,'open' FROM mbox.tables WHERE tenant_id=$1 AND store_id=$2 LIMIT 1`,
+      [scope.tenantId,scope.storeId,session])
+    await pool.query(`INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,channel,status,
+      payment_status,subtotal_amount_minor,total_amount_minor,submitted_at)
+      VALUES($3,$1,$2,$4,'old-unpaid-range-test','staff_assisted','submitted','unpaid',1234,1234,clock_timestamp())`,[scope.tenantId,scope.storeId,oldOrder,session])
+    const {start_date:start,end_date:end}=(await pool.query(`SELECT (max(business_date)+1)::text AS start_date,
+      (max(business_date)+2)::text AS end_date FROM mbox.orders WHERE tenant_id=$1 AND store_id=$2`,[scope.tenantId,scope.storeId])).rows[0]
+    const jobs=await transactions.run(scope,async tx=>{
+      const source=await appendOutboxMessage(tx,{aggregateType:'manual_print_request',aggregateId:randomUUID(),aggregateVersion:1,
+        eventType:'manual.daily-report.requested.v1',payload:{businessDate:start,endDate:end}})
+      return new PrintTicketSourceRepository(tx,true).materializeManualDailyReport(source,start,'区间测试员工',end,{mode:'details',grouping:'none'})
+    })
+    const lines=jobs.flatMap(job=>job.printSnapshot.lines)
+    expect(lines.find(line=>line.name==='销售合计')?.note).toBe('¥0.00')
+    expect(lines.find(line=>line.name==='尚待收款')?.note).toBe('¥0.00')
+    const historyIndex=lines.findIndex(line=>line.name==='历史未完事项（不计入本期销售）')
+    expect(historyIndex).toBeGreaterThan(lines.findIndex(line=>line.name==='销售合计'))
+    expect(lines.findIndex(line=>line.name.includes('old-unpaid-range-test'))).toBeGreaterThan(historyIndex)
+    expect(jobs[0].printSnapshot.subtitle).toContain(`${start} 至 ${end}`)
+  })
+  it('tracks only the requesting employee’s print snapshot without exposing ticket content',async()=>{
+    const requestId=randomUUID(),owner=randomUUID(),other=randomUUID()
+    const date=(await pool.query('SELECT max(business_date)::text AS date FROM mbox.orders WHERE tenant_id=$1 AND store_id=$2',[scope.tenantId,scope.storeId])).rows[0].date
+    const jobs=await transactions.run(scope,async tx=>{
+      const source=await appendOutboxMessage(tx,{aggregateType:'manual_print_request',aggregateId:requestId,aggregateVersion:1,
+        eventType:'manual.daily-report.requested.v1',payload:{businessDate:date,employeeId:owner}})
+      return new PrintTicketSourceRepository(tx,true).materializeManualDailyReport(source,date,'查询测试')
+    })
+    let employeeId=owner
+    const app=Fastify()
+    await app.register(hardwareApiPlugin,{transactions,commands:new NormalizedCommandExecutor(transactions),
+      resolveContext:()=>({scope,employeeId,businessDate:date,capabilities:['order.bill.print']})})
+    try{
+      const read=()=>app.inject({method:'GET',url:`/hardware/print-requests/${requestId}`})
+      const response=await read()
+      expect(response.statusCode).toBe(200)
+      expect(response.json().data.map((job:{id:string})=>job.id).sort()).toEqual(jobs.map(job=>job.id).sort())
+      expect(response.json().data.every((job:object)=>Object.keys(job).sort().join(',')==='failureCode,id,stationCode,status')).toBe(true)
+      employeeId=other
+      expect((await read()).statusCode).toBe(403)
+      expect((await app.inject({method:'GET',url:`/hardware/print-requests/${randomUUID()}`})).statusCode).toBe(403)
+    }finally{await app.close()}
   })
   it('prints an immutable daily snapshot asynchronously to cashier while printers are offline',async()=>{
     const worker=new PrintSourceWorker(transactions)

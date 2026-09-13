@@ -45,6 +45,7 @@ export type CashierRefundProviderSubmissionState =
   | 'manual_review'
 
 export interface CashierWorkbenchRefund {
+  purpose?: import('./refund-purpose.js').RefundPurpose
   id: string
   publicId: string
   paymentId: string
@@ -66,6 +67,7 @@ export interface CashierWorkbenchRefund {
 }
 
 export interface CashierWorkbenchRefundableItem extends CashierWorkbenchItem {
+  fundsOnly?:boolean
   reservedRefundAmountMinor: number
   remainingRefundableMinor: number
 }
@@ -166,6 +168,8 @@ export interface CashierWorkbenchOrder {
   channel: string
   status: string
   paymentStatus: string
+  originalAmountMinor?: number
+  receivableIncreaseMinor?:number; stoppedAmountMinor?: number
   totalAmountMinor: number
   outstandingAmountMinor: number
   /** Confirmed net receipts above the order total; resolve from this order's refund controls. */

@@ -1,10 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import {ItemAfterSalesPanel} from '../ItemAfterSalesPanel'
+import {ItemAfterSalesApi} from '../item-after-sales-api'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Check, CircleAlert, Clock3, LoaderCircle, PackageOpen, RefreshCw } from 'lucide-react'
+import { startTableOrderRefresh } from './table-order-refresh'
 import { StaffActionsApiError, type StaffActionsApiPort } from './staff-actions-api'
 import type { StaffTableOrderDetail, StaffTableOrderItemFulfillmentStatus } from './types'
 
 export interface TableOrderStatusPanelProps {
   api: StaffActionsApiPort
+  onOpenAfterSales?(itemId: string): void
   table: Readonly<{ code: string; activeSession: { id: string } }>
 }
 
@@ -23,51 +27,49 @@ const STATUS_PRESENTATION: Record<StaffTableOrderItemFulfillmentStatus, {
   attention: { label: '待处理', detail: '请联系吧台或店长核对', className: 'is-attention' },
 }
 
-export function TableOrderStatusPanel({ api, table }: TableOrderStatusPanelProps) {
+export function TableOrderStatusPanel(props: TableOrderStatusPanelProps) {
+  return <TableOrderStatusContent key={props.table.activeSession.id} {...props} />
+}
+
+function TableOrderStatusContent({ api, table, onOpenAfterSales }: TableOrderStatusPanelProps) {
+  const [afterSalesAccess,setAfterSalesAccess]=useState<{enabled:boolean;recoveryAvailable?:boolean;employeeId:string}|null>(null)
+  const afterSalesRecovery=useMemo(()=>afterSalesAccess?new ItemAfterSalesApi(afterSalesAccess.employeeId):null,[afterSalesAccess])
+  const [afterSalesItem,setAfterSalesItem]=useState<string|null>(null)
+  const openAfterSales=onOpenAfterSales ?? setAfterSalesItem
+  useEffect(()=>{let active=true;void api.loadItemAfterSalesAccess?.().then(value=>{if(active)setAfterSalesAccess(value)}).catch(()=>{});return()=>{active=false}},[api])
   const [orders, setOrders] = useState<StaffTableOrderDetail[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<TableOrderStatusError | null>(null)
-  const [refreshAttempt, setRefreshAttempt] = useState(0)
-  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true)
   const [referenceCopied, setReferenceCopied] = useState(false)
+  const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
+  const refreshControl = useRef<ReturnType<typeof startTableOrderRefresh> | null>(null)
 
-  const refresh = useCallback(async (signal?: AbortSignal) => {
-    if (api.loadTableOrderDetails === undefined) {
-      throw new Error('本桌点单详情暂时不可用，请刷新后重试')
+  useEffect(() => {
+    const control=startTableOrderRefresh({
+      load: async (signal) => {
+        if (!api.loadTableOrderDetails) throw new Error('本桌点单详情暂时不可用')
+        return api.loadTableOrderDetails(table.activeSession.id, signal)
+      },
+      visible: () => document.visibilityState === 'visible',
+      retryable: (reason) => !(reason instanceof StaffActionsApiError)
+        || reason.status === null || reason.status >= 500 || reason.status === 408 || reason.status === 429,
+      onStart: () => setLoading(true),
+      onSuccess: (next) => { setOrders(next);setError(null);setUpdatedAt(new Date());setReferenceCopied(false) },
+      onError: (reason) => setError(presentOrderDetailsError(reason)),
+      onSettled: () => setLoading(false),
+    })
+    refreshControl.current=control
+    const resume=()=>control.resume()
+    window.addEventListener('online',resume)
+    document.addEventListener('visibilitychange',resume)
+    return ()=>{
+      control.dispose();refreshControl.current=null
+      window.removeEventListener('online',resume)
+      document.removeEventListener('visibilitychange',resume)
     }
-    const next = await api.loadTableOrderDetails(table.activeSession.id, signal)
-    setOrders(next)
-    setAutoRefreshEnabled(true)
   }, [api, table.activeSession.id])
 
-  useEffect(() => {
-    const controller = new AbortController()
-    setLoading(true)
-    setError(null)
-    setReferenceCopied(false)
-    void refresh(controller.signal).catch((reason: unknown) => {
-      if (!controller.signal.aborted) {
-        setError(presentOrderDetailsError(reason))
-        setAutoRefreshEnabled(false)
-      }
-    }).finally(() => {
-      if (!controller.signal.aborted) setLoading(false)
-    })
-    return () => controller.abort()
-  }, [refresh, refreshAttempt])
-
-  useEffect(() => {
-    if (!autoRefreshEnabled) return undefined
-    const timer = globalThis.setInterval(() => {
-      if (document.visibilityState === 'visible') setRefreshAttempt((current) => current + 1)
-    }, 10_000)
-    return () => globalThis.clearInterval(timer)
-  }, [autoRefreshEnabled])
-
-  const retry = () => {
-    setAutoRefreshEnabled(true)
-    setRefreshAttempt((current) => current + 1)
-  }
+  const retry = () => refreshControl.current?.retry()
 
   const copyReference = () => {
     const referenceId = error?.referenceId
@@ -78,10 +80,14 @@ export function TableOrderStatusPanel({ api, table }: TableOrderStatusPanelProps
   }
 
   const items = useMemo(() => orders.flatMap((order) => order.items), [orders])
-  const deliveredQuantity = totalQuantity(items.filter((item) => item.fulfillmentStatus === 'delivered'))
-  const pendingQuantity = totalQuantity(items.filter((item) => (
-    !['delivered', 'cancelled', 'not_required'].includes(item.fulfillmentStatus)
-  )))
+  const orderTotal = orders.every(order => Number.isSafeInteger(order.totalAmountMinor))
+    ? orders.reduce((sum, order) => sum + order.totalAmountMinor!, 0) : null
+  const refundedTotal = items.every(item => Number.isSafeInteger(item.refundedAmountMinor))
+    ? items.reduce((sum, item) => sum + item.refundedAmountMinor!, 0) : null
+  const increasedAmount=orders.reduce((sum,order)=>sum+(order.receivableIncreaseMinor??0),0)
+  const stoppedAmount=orders.reduce((sum,order)=>sum+(order.stoppedAmountMinor??0),0)
+  const deliveredQuantity=items.reduce((sum,item)=>sum+(item.quantities?.delivered??(item.fulfillmentStatus==='delivered'?item.quantity:0)),0)
+  const pendingQuantity=items.reduce((sum,item)=>sum+(item.quantities?item.quantities.pending:!['delivered','cancelled','not_required'].includes(item.fulfillmentStatus)?item.quantity:0),0)
   const attentionQuantity = totalQuantity(items.filter((item) => item.fulfillmentStatus === 'attention'))
 
   return <section className="staff-table-order-status" aria-label={`${table.code}本桌点单详情`}>
@@ -91,10 +97,16 @@ export function TableOrderStatusPanel({ api, table }: TableOrderStatusPanelProps
         <RefreshCw size={16} className={loading ? 'is-spinning' : ''} /> 刷新
       </button>
     </header>
+    {updatedAt !== null && <p>{error ? '数据待更新 · ' : ''}最近更新 {updatedAt.toLocaleTimeString('zh-CN', {hour12:false})}</p>}
     {loading && items.length === 0 ? <p className="staff-table-order-status-loading"><LoaderCircle className="is-spinning" /> 正在读取本桌点单</p>
       : error !== null && items.length === 0 ? <OrderDetailsErrorNotice error={error} copied={referenceCopied} onCopy={copyReference} />
         : items.length === 0 ? <p className="staff-table-order-status-empty">本桌暂时没有已提交的商品。</p>
           : <>
+            <p aria-label="本桌消费金额">消费原金额 {orderTotal===null?'待更新':`¥${(orderTotal/100).toFixed(2)}`}
+              {refundedTotal!==null&&refundedTotal>0&&` · 已退款 ¥${(refundedTotal/100).toFixed(2)}`}
+              {increasedAmount>0&&` · 套餐按单点价补差 ¥${(increasedAmount/100).toFixed(2)}`}
+              {stoppedAmount>0&&` · 退菜减额 ¥${(stoppedAmount/100).toFixed(2)}`}
+              <small> · 原成交金额含优惠，实收及待收请查看收款明细</small></p>
             <div className="staff-table-order-status-summary" aria-label="出品汇总">
               <span className="is-delivered"><Check size={16} />已上 {deliveredQuantity} 份</span>
               <span><Clock3 size={16} />未上 {pendingQuantity} 份</span>
@@ -104,17 +116,22 @@ export function TableOrderStatusPanel({ api, table }: TableOrderStatusPanelProps
             <div className="staff-table-order-status-list">
               {orders.map((order) => <article key={order.publicId}>
                 <header><strong title={order.publicId}>{shortOrderLabel(order.publicId)}</strong><small>{order.paymentStatus === 'refunded' ? '已退款 · ' : order.paymentStatus === 'partially_refunded' ? '含退款 · ' : ''}{order.items.length} 个商品</small></header>
+                {order.replacementSource&&<p>换品新单 · 原单 {shortOrderLabel(order.replacementSource.orderPublicId)}；分别收退款。
+                  {afterSalesAccess&&(afterSalesAccess.enabled||afterSalesAccess.recoveryAvailable)&&<button type="button" onClick={()=>openAfterSales(order.replacementSource!.orderItemId)}>查看换品原商品</button>}</p>}
                 {order.items.map((item) => {
                   const status = STATUS_PRESENTATION[item.fulfillmentStatus]
                   return <div className="staff-table-order-status-item" key={item.id}>
                     <span><strong>{item.productName}</strong><small>{stationLabel(item.fulfillmentStation)} · {status.detail}</small><small>{item.includedInBundle ? '已含套餐，不另收费' : item.unitPriceMinor !== undefined && item.totalAmountMinor !== undefined ? `单价 ¥${(item.unitPriceMinor/100).toFixed(2)} · 小计 ¥${(item.totalAmountMinor/100).toFixed(2)}` : '成交金额暂未读取'}</small>{(item.refundedAmountMinor ?? 0)>0 && <small>已退 ¥{((item.refundedAmountMinor ?? 0)/100).toFixed(2)}</small>}</span>
+                    {item.quantities&&<small>暂停 {item.quantities.held} · 停止 {item.quantities.stopped} · 已备齐 {item.quantities.ready} · 已送达 {item.quantities.delivered}</small>}
                     <b>×{item.quantity}</b>
                     <em className={status.className}>{status.label}</em>
+                    {(afterSalesAccess?.enabled||afterSalesAccess?.recoveryAvailable&&item.quantities||afterSalesRecovery?.pending(item.id))&&<button type="button" onClick={()=>openAfterSales(item.id)}>{afterSalesAccess?.enabled?(item.includedInBundle?'处理套餐内商品':'停止 / 退款'):'处理原申请'}</button>}
                   </div>
                 })}
               </article>)}
             </div>
           </>}
+    {afterSalesItem&&afterSalesAccess&&<ItemAfterSalesPanel itemId={afterSalesItem} employeeId={afterSalesAccess.employeeId} onClose={()=>setAfterSalesItem(null)} onChanged={retry}/>}
   </section>
 }
 

@@ -1,3 +1,5 @@
+import {orderReceivableSql} from './order-collection-sql.js'
+import { buildDailyReportLines, DEFAULT_DAILY_REPORT, type DailyReportOptions } from './daily-report-format.js'
 import {readOperatingHistory} from './operating-history-query.js'
 import type { JsonObject } from './command-executor.js'
 import {
@@ -7,6 +9,7 @@ import {
 } from './hardware-repository.js'
 import {
   createPrintTicketSnapshot,
+  parsePrintTicketSnapshot,
   paginatePrintTicket,
   ticketToJson,
   type PrintTicketKind,
@@ -17,6 +20,8 @@ import {
 import type { ScopedTransaction } from './transaction-runner.js'
 
 interface OrderContextRow extends Record<string, unknown> {
+  original_amount_minor?: number
+  stopped_amount_minor?: number
   settlement_mode: string
   subtotal_amount_minor: string | number
   discount_amount_minor: string | number
@@ -124,14 +129,20 @@ export class PrintTicketSourceRepository {
 
   async materializeManualTableBill(sourceId:string,sessionId:string,operatorLabel:string):Promise<readonly PrintJob[]>{
     if(!this.manualRequest)throw new Error('整桌账单须由订单中心明确请求')
-    const orders=(await this.transaction.query<{id:string;public_id:string;total_amount_minor:string;status:string}>(`SELECT id,public_id,total_amount_minor::text,status FROM mbox.orders WHERE tenant_id=$1 AND store_id=$2 AND table_session_id=$3 AND status<>'draft' ORDER BY submitted_at,id LIMIT 1001`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,sessionId])).rows
+    const orders=(await this.transaction.query<{id:string;public_id:string;total_amount_minor:string;status:string}>(`SELECT id,public_id,total_amount_minor::text,status FROM mbox.orders WHERE tenant_id=$1 AND store_id=$2 AND table_session_id=$3 AND status<>'draft' ORDER BY submitted_at,id LIMIT 1001 FOR SHARE`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,sessionId])).rows
     if(!orders.length)throw new Error('本桌次没有已提交订单，不能生成消费账单')
     if(orders.length>1000)throw new Error('本桌次超过1000单，请按订单分批打印，避免截断账单')
     const context=await this.loadOrderContext(orders[0]!.id)
     const source=(await this.transaction.query<{occurred_at:string}>('SELECT occurred_at::text FROM mbox.outbox_messages WHERE tenant_id=$1 AND store_id=$2 AND id=$3',[this.transaction.scope.tenantId,this.transaction.scope.storeId,sourceId])).rows[0]!
     const totals=(await this.transaction.query<{received:string;refunded:string}>(`SELECT COALESCE((SELECT sum(p.amount_minor) FROM mbox.order_payment_facts p WHERE p.tenant_id=$1 AND p.store_id=$2 AND p.order_id=ANY($3::uuid[]) AND p.status IN ('succeeded','partially_refunded','refunded')),0)::text received,COALESCE((SELECT sum(r.amount_minor) FROM mbox.order_refund_facts r WHERE r.tenant_id=$1 AND r.store_id=$2 AND r.order_id=ANY($3::uuid[]) AND r.status='succeeded'),0)::text refunded`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,orders.map(o=>o.id)])).rows[0]!
     const lines:PrintTicketLine[]=[]
-    for(const order of orders)lines.push({name:`订单 ${order.public_id}${order.status==='cancelled'?'（已取消）':''}`,quantity:1},...(await this.loadItems(order.id,false,true)).map(toCashierLine),{name:'原订单应付',quantity:1,totalAmountMinor:numeric(order.total_amount_minor,'total')})
+    const reductions=new Map((await this.transaction.query<{order_id:string;amount:string}>(`SELECT order_id,sum(amount_minor)::text AS amount FROM mbox.item_receivable_adjustment_facts WHERE tenant_id=$1 AND store_id=$2 AND order_id=ANY($3::uuid[]) GROUP BY order_id`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,orders.map(order=>order.id)])).rows.map(row=>[row.order_id,signedAdjustment(row.amount)]))
+    for(const order of orders){
+      const original=numeric(order.total_amount_minor,'total'),stopped=reductions.get(order.id)??0
+      if(stopped>original)throw new Error('停止减免超过原订单金额，未生成整桌账单')
+      lines.push({name:`订单 ${order.public_id}${order.status==='cancelled'?'（已取消）':''}`,quantity:1},...(await this.loadItems(order.id,false,true)).map(toCashierLine),{name:'原订单应付',quantity:1,totalAmountMinor:original})
+      if(stopped!==0)lines.push({name:stopped>0?'退菜减额（已扣除）':'套餐按单点价补差（已计入）',quantity:1,totalAmountMinor:Math.abs(stopped)},{name:'退菜重算后应付',quantity:1,totalAmountMinor:original-stopped})
+    }
     lines.push({name:'桌次实际收款',quantity:1,totalAmountMinor:numeric(totals.received,'received')},{name:'桌次实际退款',quantity:1,totalAmountMinor:numeric(totals.refunded,'refunded')},{name:'桌次实际净收',quantity:1,totalAmountMinor:numeric(totals.received,'received')-numeric(totals.refunded,'refunded')})
     return this.materializeDocument(sourceId,sessionId,{kind:'order_summary',subtitle:'M-BOX · 本桌次完整消费账单',test:false,issuedAt:source.occurred_at,businessDate:context.business_date,ticketReference:sessionId,tableCode:context.table_code,guestCount:context.guest_count,operatorLabel,note:'整桌次完整快照，包含列表其他分页的订单。取消商品保留记录，不表示重新消费。',payment:null,lines,totalAmountMinor:null,currency:currency(context.currency)})
   }
@@ -173,6 +184,7 @@ export class PrintTicketSourceRepository {
     const lines:PrintTicketLine[]=[{name:'消费时间',quantity:1,note:consumedAt},...items.map(toCashierLine),...packageComparisons,
       {name:'优惠前应付（套餐按套餐售价）',quantity:1,totalAmountMinor:numeric(context.subtotal_amount_minor,'subtotal')},
       {name:'其他优惠减免（已扣除）',quantity:1,totalAmountMinor:numeric(context.discount_amount_minor,'discount')},
+      ...receivableAdjustmentLines(context),
       {name:'订单应付金额',quantity:1,totalAmountMinor:total},
       {name:'已确认实际收款',quantity:1,totalAmountMinor:received},
       {name:'已确认实际退款',quantity:1,totalAmountMinor:refunded},
@@ -200,7 +212,7 @@ export class PrintTicketSourceRepository {
       ticketReference: context.order_public_id, tableCode: context.table_code,
       guestCount: context.guest_count, operatorLabel: null, note: context.order_note,
       payment: null, currency: currency(context.currency),
-      lines: items.map(toCashierLine),
+      lines: [...items.map(toCashierLine),...receivableAdjustmentLines(context)],
       totalAmountMinor: numeric(context.total_amount_minor, 'order total'),
     }
     snapshot.lines = [...snapshot.lines,
@@ -260,19 +272,30 @@ export class PrintTicketSourceRepository {
       JOIN mbox.employees employee ON employee.tenant_id=batch.tenant_id AND employee.store_id=batch.store_id AND employee.id=batch.created_by_employee_id
       WHERE batch.tenant_id=$1 AND batch.store_id=$2 AND batch.id=$3`,[...scope,batchId])).rows[0]
     if(!batch)throw new Error('配送批次不存在')
-    const rows=(await this.transaction.query<OrderItemRow>(`SELECT item.id AS item_id,item.parent_order_item_id,part.quantity,
+    const rows=(await this.transaction.query<OrderItemRow & {is_remake:boolean}>(`SELECT item.id AS item_id,item.parent_order_item_id,
+      CASE WHEN task.quantity_remake_batch_id IS NULL THEN part.quantity ELSE (SELECT count(*)::int FROM mbox.delivery_batch_remake_units binding
+        JOIN mbox.quantity_remake_units physical ON physical.tenant_id=binding.tenant_id AND physical.store_id=binding.store_id AND physical.id=binding.remake_unit_id
+        JOIN mbox.order_item_quantity_units original_unit ON original_unit.tenant_id=physical.tenant_id AND original_unit.store_id=physical.store_id AND original_unit.id=physical.unit_id
+        JOIN mbox.orders original ON original.tenant_id=item.tenant_id AND original.store_id=item.store_id AND original.id=item.order_id
+        JOIN mbox.table_sessions visit ON visit.tenant_id=original.tenant_id AND visit.store_id=original.store_id AND visit.id=original.table_session_id
+        WHERE binding.tenant_id=part.tenant_id AND binding.store_id=part.store_id AND binding.batch_id=part.batch_id AND binding.kds_task_id=task.id
+          AND physical.production_state='ready' AND physical.cancelled_at IS NULL AND original_unit.held_by_case_id IS NULL AND NOT original_unit.operationally_stopped
+          AND original.status<>'cancelled' AND visit.status IN ('open','closing')) END AS quantity,task.quantity_remake_batch_id IS NOT NULL AS is_remake,
       item.unit_price_minor,item.total_amount_minor,item.fulfillment_station,item.product_snapshot,item.note
       FROM mbox.delivery_batch_items part JOIN mbox.kds_tasks task ON task.tenant_id=part.tenant_id AND task.store_id=part.store_id AND task.id=part.kds_task_id
       JOIN mbox.order_items item ON item.tenant_id=task.tenant_id AND item.store_id=task.store_id AND item.id=task.order_item_id
       WHERE part.tenant_id=$1 AND part.store_id=$2 AND part.batch_id=$3 ORDER BY item.created_at,item.id`,[...scope,batchId])).rows
     const lines:PrintTicketLine[]=[],keys:string[]=[]
     for(const row of rows){
+      if(row.quantity<=0)continue
       const line=toProductionLine(sourceItem(row))
-      const key=JSON.stringify([row.product_snapshot,row.note])
+      if(row.is_remake){line.name=`重做：${line.name}`;line.unitAmountMinor=null;line.totalAmountMinor=null}
+      const key=JSON.stringify([row.product_snapshot,row.note,row.is_remake])
       const existing=lines[keys.indexOf(key)]
       if(existing)existing.quantity+=line.quantity
       else {lines.push(line);keys.push(key)}
     }
+    if(!lines.length){this.explicitSkipReason='print_delivery_no_remaining_quantity';return []}
     return this.materializeDocument(sourceId,batchId,{kind:'delivery',subtitle:'本批配送 · 勿重复制作',test:false,
       issuedAt:batch.created_at,businessDate:batch.business_date,ticketReference:batchId,tableCode:batch.table_code,
       guestCount:null,operatorLabel:batch.employee_name,note:null,payment:null,lines,totalAmountMinor:null,currency:'CNY'},batch.station_code)
@@ -286,8 +309,8 @@ export class PrintTicketSourceRepository {
     [this.transaction.scope.tenantId,this.transaction.scope.storeId,sessionId])).rows[0]
     if (!session || !await this.hasActiveRoute('cashier')) return []
     const orders = (await this.transaction.query<{id:string;public_id:string;total_amount_minor:string;payment_status:string}>(`
-      SELECT id,public_id,total_amount_minor::text,payment_status FROM mbox.orders
-      WHERE tenant_id=$1 AND store_id=$2 AND table_session_id=$3 AND status<>'cancelled' ORDER BY created_at,id`,
+      SELECT ordering.id,ordering.public_id,${orderReceivableSql('ordering')}::text AS total_amount_minor,ordering.payment_status FROM mbox.orders ordering
+      WHERE ordering.tenant_id=$1 AND ordering.store_id=$2 AND ordering.table_session_id=$3 AND ordering.status<>'cancelled' ORDER BY ordering.created_at,ordering.id`,
     [this.transaction.scope.tenantId,this.transaction.scope.storeId,sessionId])).rows
     if (!orders.length || orders.some(o => Number(o.total_amount_minor)>0 && !['paid','refunded','partially_refunded'].includes(o.payment_status))) return []
     const lines: PrintTicketLine[] = []
@@ -312,25 +335,15 @@ export class PrintTicketSourceRepository {
     })
   }
 
-  async materializeManualDailyReport(sourceId:string,businessDate:string,operatorLabel:string):Promise<readonly PrintJob[]> {
+  async materializeManualDailyReport(sourceId:string,businessDate:string,operatorLabel:string,endDate=businessDate,options:DailyReportOptions=DEFAULT_DAILY_REPORT):Promise<readonly PrintJob[]> {
     if(!this.manualRequest)throw new Error('日报需要手动打印请求')
-    const snapshot=await readOperatingHistory(this.transaction,{businessDate,table:'',employee:'',page:0,exportAll:true,allowFinancialSummary:true})
+    const snapshot=await readOperatingHistory(this.transaction,{businessDate,endDate,table:'',employee:'',page:0,exportAll:true,allowFinancialSummary:true})
     const source=(await this.transaction.query<{occurred_at:string}>(`SELECT occurred_at::text FROM mbox.outbox_messages WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,sourceId])).rows[0]
     if(!source)throw new Error('打印请求不存在')
-    const money=(value:number)=>`¥${(value/100).toFixed(2)}`
-    const lines:PrintTicketLine[]=[]
-    for(const order of snapshot.orders){
-      lines.push({name:`${order.tableCode} · ${order.publicId}`,quantity:1,note:`订单金额 ${money(order.totalMinor)}`})
-      for(const item of order.items)lines.push({name:item.name,quantity:item.quantity,
-        ...(item.includedInBundle?{note:'套餐内商品，不另收费'}:{unitAmountMinor:item.unitPriceMinor,totalAmountMinor:item.totalMinor})})
-    }
-    const totals=snapshot.receipts.reduce((sum,row)=>({received:sum.received+row.receivedMinor,refunded:sum.refunded+row.refundedMinor,net:sum.net+row.netMinor}),{received:0,refunded:0,net:0})
-    lines.push({name:'销售合计',quantity:1,note:money(Number(snapshot.summary?.orderAmountMinor??0))},
-      {name:'实际收款',quantity:1,note:money(totals.received)},{name:'实际退款',quantity:1,note:money(totals.refunded)},
-      {name:'净收',quantity:1,note:money(totals.net)},{name:'尚待收款',quantity:1,note:money(Number(snapshot.summary?.outstandingMinor??0))})
-    return this.materializeDocument(sourceId,sourceId,{kind:'daily_settlement',subtitle:'当日销售明细与资金汇总 · 打印不结束营业日',test:false,
+    const lines=buildDailyReportLines(snapshot,businessDate,endDate,options)
+    return this.materializeDocument(sourceId,sourceId,{kind:'daily_settlement',subtitle:`${businessDate} 至 ${endDate} · ${options.mode === 'summary' ? '汇总' : options.mode === 'details' ? '明细' : '汇总及明细'} · 模板2 · 打印不结束营业日`,test:false,
       issuedAt:source.occurred_at,businessDate,ticketReference:sourceId,tableCode:null,guestCount:null,operatorLabel,
-      note:'金额为生成时快照。销售按订单营业日；收退款按入账营业日，包含活动款项。后续入账请重新生成新快照。',payment:null,lines,totalAmountMinor:null,currency:'CNY'})
+      note:'金额及所选订单待收为生成时快照，不是历史时点余额。销售按订单营业日；收退款按入账营业日，包含活动款项。后续入账请重新生成新快照。',payment:null,lines,totalAmountMinor:null,currency:'CNY'})
   }
 
   async materializeDailySettlement(sourceId:string,boundaryId:string):Promise<readonly PrintJob[]> {
@@ -366,13 +379,45 @@ export class PrintTicketSourceRepository {
     return jobs
   }
 
+  async materializeProductionNotice(sourceId:string,aggregateId:string):Promise<readonly PrintJob[]>{
+    const source=(await this.transaction.query<{payload:{stationCode:string;categoryCode:string|null;remakeBatchId?:string;ticket:unknown}}>(`SELECT payload FROM mbox.outbox_messages WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND aggregate_id=$4 AND message_type='item.after_sales.production_notice.v1'`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,sourceId,aggregateId])).rows[0]
+    if(!source||!['bar','kitchen'].includes(source.payload.stationCode))throw new Error('商品处理通知缺少原岗位事实')
+    let ticket=parsePrintTicketSnapshot(source.payload.ticket)
+    if(ticket.kind!=='production_notice')throw new Error('商品处理通知不得冒充原制作单')
+    if(source.payload.remakeBatchId){
+      const current=(await this.transaction.query<{quantity:number;table_code:string;guest_count:number}>(`SELECT count(*)::int AS quantity,venue.code AS table_code,visit.guest_count
+        FROM mbox.quantity_remake_batches batch JOIN mbox.quantity_remake_units physical ON physical.tenant_id=batch.tenant_id AND physical.store_id=batch.store_id AND physical.batch_id=batch.id
+        JOIN mbox.order_item_quantity_units unit ON unit.tenant_id=physical.tenant_id AND unit.store_id=physical.store_id AND unit.id=physical.unit_id
+        JOIN mbox.order_items item ON item.tenant_id=batch.tenant_id AND item.store_id=batch.store_id AND item.id=batch.order_item_id
+        JOIN mbox.orders original ON original.tenant_id=item.tenant_id AND original.store_id=item.store_id AND original.id=item.order_id
+        JOIN mbox.table_sessions visit ON visit.tenant_id=original.tenant_id AND visit.store_id=original.store_id AND visit.id=original.table_session_id
+        JOIN mbox.tables venue ON venue.tenant_id=visit.tenant_id AND venue.store_id=visit.store_id AND venue.id=visit.table_id
+        WHERE batch.tenant_id=$1 AND batch.store_id=$2 AND batch.id=$3 AND physical.cancelled_at IS NULL AND physical.production_state IN ('unmade','started')
+          AND unit.held_by_case_id IS NULL AND NOT unit.operationally_stopped AND original.status<>'cancelled' AND visit.status IN ('open','closing')
+        GROUP BY venue.code,visit.guest_count`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,source.payload.remakeBatchId])).rows[0]
+      if(!current?.quantity){this.explicitSkipReason='print_remake_no_remaining_quantity';return []}
+      if(ticket.lines.length!==1)throw new Error('重做通知必须对应一个实际商品批次')
+      ticket={...ticket,lines:[{...ticket.lines[0]!,quantity:current.quantity}],tableCode:current.table_code,guestCount:current.guest_count}
+    }
+
+    return this.hardware.materializeFromOutbox({sourceOutboxMessageId:sourceId,stationCode:source.payload.stationCode as 'bar'|'kitchen',productCategoryCode:source.payload.categoryCode,
+      sourceType:'kds',sourceReference:`quantity-notice:${aggregateId}`,printSnapshot:ticketToJson(ticket),containsPriorityNote:true})
+  }
+
   async materializeOrderProduction(
     sourceOutboxMessageId: string,
     orderId: string,
   ): Promise<readonly PrintJob[]> {
     const context = await this.loadOrderContext(orderId)
     if (context.order_status === 'cancelled' || context.order_status === 'draft') {this.explicitSkipReason='print_order_not_active';return []}
-    const items = await this.loadItems(orderId, true)
+    const originals = await this.loadItems(orderId, true)
+    const quantities=(await this.transaction.query<{order_item_id:string;quantity:number}>(`SELECT unit.order_item_id,count(*) FILTER(WHERE unit.held_by_case_id IS NULL AND NOT unit.operationally_stopped AND unit.production_state IN ('unmade','started') AND NOT EXISTS(SELECT 1 FROM mbox.quantity_remake_units remake WHERE remake.tenant_id=unit.tenant_id AND remake.store_id=unit.store_id AND remake.unit_id=unit.id) AND NOT EXISTS(
+      SELECT 1 FROM mbox.item_after_sales_case_units selected JOIN mbox.item_after_sales_events event ON event.tenant_id=selected.tenant_id AND event.store_id=selected.store_id AND event.case_id=selected.case_id AND event.event_type='operating.resume'
+      WHERE selected.tenant_id=unit.tenant_id AND selected.store_id=unit.store_id AND selected.unit_id=unit.id))::int AS quantity
+      FROM mbox.order_item_quantity_units unit JOIN mbox.order_items item ON item.tenant_id=unit.tenant_id AND item.store_id=unit.store_id AND item.id=unit.order_item_id
+      WHERE item.tenant_id=$1 AND item.store_id=$2 AND item.order_id=$3 GROUP BY unit.order_item_id`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,orderId])).rows
+    const quantityByItem=new Map(quantities.map(row=>[row.order_item_id,row.quantity]))
+    const items=originals.map(item=>({...item,quantity:quantityByItem.get(item.id)??item.quantity})).filter(item=>item.quantity>0)
     const jobs: PrintJob[] = []
     for (const station of ['bar', 'kitchen'] as const) {
       const operational = items.filter((item) => (
@@ -561,6 +606,18 @@ export class PrintTicketSourceRepository {
     })
   }
 
+  private async withEffectiveReceivable<T extends OrderContextRow>(row:T):Promise<T>{
+    // The preceding context read holds the order. Read the adjustment in a new
+    // statement so a stop that committed while that lock was waiting is visible.
+    const adjustment=(await this.transaction.query<{amount:string}>(`SELECT COALESCE(sum(amount_minor),0)::text AS amount
+      FROM mbox.item_receivable_adjustment_facts WHERE tenant_id=$1 AND store_id=$2 AND order_id=$3`,
+      [this.transaction.scope.tenantId,this.transaction.scope.storeId,row.order_id])).rows[0]
+    if(!adjustment)throw new Error('订单停止金额读取失败，未生成账单')
+    const original=numeric(row.total_amount_minor,'original total'),stopped=signedAdjustment(adjustment.amount)
+    if(stopped>original)throw new Error('订单停止金额超过原应付，未生成账单')
+    return {...row,original_amount_minor:original,stopped_amount_minor:stopped,total_amount_minor:original-stopped}
+  }
+
   private async loadOrderContext(orderId: string): Promise<OrderContextRow> {
     const result = await this.transaction.query<OrderContextRow>(`
       SELECT ordering.id AS order_id, ordering.public_id AS order_public_id,
@@ -580,7 +637,7 @@ export class PrintTicketSourceRepository {
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
     const row = result.rows[0]
     if (!row) throw new Error('打印源订单不存在或不可打印')
-    return row
+    return this.withEffectiveReceivable(row)
   }
 
   private async loadPaymentContext(paymentId: string): Promise<PaymentContextRow> {
@@ -616,7 +673,7 @@ export class PrintTicketSourceRepository {
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId])
     const row = result.rows[0]
     if (!row) throw new Error('打印源支付不存在')
-    return row
+    return this.withEffectiveReceivable(row)
   }
 
   private async loadRefundContext(refundId: string): Promise<RefundContextRow> {
@@ -647,7 +704,7 @@ export class PrintTicketSourceRepository {
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, refundId])
     const row = result.rows[0]
     if (!row) throw new Error('打印源退款不存在')
-    return row
+    return this.withEffectiveReceivable(row)
   }
 
   private async loadActivityPaymentContext(paymentId: string): Promise<ActivityPaymentContextRow> {
@@ -802,6 +859,13 @@ function productionSnapshot(
   })
 }
 
+function receivableAdjustmentLines(context:Readonly<OrderContextRow>):PrintTicketLine[]{
+  return (context.stopped_amount_minor??0)!==0?[
+    {name:'原订单应付（停止前）',quantity:1,totalAmountMinor:context.original_amount_minor},
+    {name:context.stopped_amount_minor!>0?'退菜减额（已扣除）':'套餐按单点价补差（已计入）',quantity:1,totalAmountMinor:Math.abs(context.stopped_amount_minor!)},
+  ]:[]
+}
+
 function cashierSnapshot(
   context: Readonly<PaymentContextRow>,
   kind: Extract<PrintTicketKind, 'cashier_settlement' | 'cashier_payment'>,
@@ -822,7 +886,7 @@ function cashierSnapshot(
     operatorLabel: null,
     note: context.order_note,
     payment,
-    lines: billable.map(toCashierLine),
+    lines: [...billable.map(toCashierLine),...receivableAdjustmentLines(context)],
     totalAmountMinor: numeric(context.total_amount_minor, 'total_amount_minor'),
     currency: currency(context.currency),
   })
@@ -842,7 +906,7 @@ function cashierPaymentSnapshot(context: Readonly<PaymentContextRow>,items:reado
     operatorLabel: null,
     note: context.order_note,
     payment: paymentFromRow(context),
-    lines: [...items.map(toCashierLine),{name:`订单应付 · ${context.order_public_id}`,quantity:1,totalAmountMinor:numeric(context.total_amount_minor,'order total')},{ name: '本次实际收款', quantity: 1, totalAmountMinor: amount }],
+    lines: [...items.map(toCashierLine),...receivableAdjustmentLines(context),{name:`订单应付 · ${context.order_public_id}`,quantity:1,totalAmountMinor:numeric(context.total_amount_minor,'order total')},{ name: '本次实际收款', quantity: 1, totalAmountMinor: amount }],
     totalAmountMinor: amount,
     currency: currency(context.currency),
   })
@@ -911,6 +975,8 @@ function text(value: unknown, field: string): string {
 function optionalText(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null
 }
+
+function signedAdjustment(value:string|number){const amount=Number(value);if(!Number.isSafeInteger(amount))throw new Error('退菜重算金额无效');return amount}
 
 function numeric(value: string | number, field: string): number {
   const numberValue = Number(value)

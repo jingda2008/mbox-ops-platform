@@ -28,9 +28,34 @@ describe('operating history',()=>{
   })
   it('applies the same date range to orders and ledger without applying employee filters to receipts',async()=>{
     const calls:unknown[][]=[]
-    const tx={scope:{tenantId:'tenant',storeId:'store'},query:async(_sql:string,values:unknown[])=>{calls.push(values);return {rows:[]}}} as unknown as ScopedTransaction
+    const tx={scope:{tenantId:'tenant',storeId:'store'},query:async(sql:string,values:unknown[])=>{calls.push(values);return {rows:sql.includes('operating_day_summary')?[
+      {summary:{orderCount:1,orderAmountMinor:'2000',unsettledCount:1,outstandingMinor:'500',pendingPaymentCount:0,pendingRefundCount:1}},
+      {summary:{orderCount:2,orderAmountMinor:'3000',unsettledCount:0,outstandingMinor:'0',pendingPaymentCount:0,pendingRefundCount:2}},
+    ]:[]}}} as unknown as ScopedTransaction
     const result=await readOperatingHistory(tx,{businessDate:'2026-09-01',endDate:'2026-09-10',table:'W01',employee:'员工',page:0})
-    expect(calls).toEqual([['tenant','store','2026-09-01','W01','员工',0,'2026-09-10',null,'','','',null,null,null],['tenant','store','2026-09-01','2026-09-10']])
+    expect(calls).toEqual([['tenant','store','2026-09-01','W01','员工',0,'2026-09-10',null,'','','',null,null,null],['tenant','store','2026-09-01','2026-09-10'],['tenant','store','2026-09-01','2026-09-10']])
     expect(result.endDate).toBe('2026-09-10')
+    expect(result.summary).toEqual({orderCount:3,orderAmountMinor:'5000',unsettledCount:1,outstandingMinor:'500',pendingPaymentCount:0,pendingRefundCount:3})
+  })
+  it('never fills missing range money with zero and does not reveal summaries to non-financial roles',async()=>{
+    let summaryReads=0
+    const tx={scope:{tenantId:'tenant',storeId:'store'},query:async(sql:string)=>{
+      if(sql.includes('operating_day_summary')){summaryReads++;return {rows:[{summary:{orderCount:1}}]}}
+      return {rows:[]}
+    }} as unknown as ScopedTransaction
+    const filter={businessDate:'2026-09-01',endDate:'2026-09-10',table:'',employee:'',page:0}
+    await expect(readOperatingHistory(tx,filter)).rejects.toThrow('营业汇总字段缺失')
+    const restricted=await readOperatingHistory(tx,{...filter,allowFinancialSummary:false})
+    expect(restricted.summary).toBeUndefined()
+    expect(restricted.receipts).toEqual([])
+    expect(summaryReads).toBe(1)
+  })
+  it('keeps long historical exports available without unbounded per-day summary work',async()=>{
+    const reads:string[]=[]
+    const tx={scope:{tenantId:'tenant',storeId:'store'},query:async(sql:string)=>{reads.push(sql);return {rows:[]}}} as unknown as ScopedTransaction
+    const result=await readOperatingHistory(tx,{businessDate:'2020-01-01',endDate:'2030-01-01',table:'',employee:'',page:0,exportAll:true})
+    expect(result.summary).toBeUndefined()
+    expect(reads.some(sql=>sql.includes('operating_day_summary'))).toBe(false)
+    expect(reads.some(sql=>sql.includes('reconciliation_entries'))).toBe(true)
   })
 })

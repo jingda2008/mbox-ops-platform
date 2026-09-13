@@ -27,6 +27,7 @@ export interface KdsTask {
 }
 
 export interface CreateKdsTaskInput {
+  quantityRemakeBatchId?:string
   orderItemId: string
   remakeOfTaskId?: string | null
   stationCode: KdsStation
@@ -123,10 +124,10 @@ export class KdsRepository {
     const inserted = await this.transaction.query<KdsTaskRow>(`
       INSERT INTO mbox.kds_tasks (
         tenant_id, store_id, order_item_id, remake_of_task_id, station_code,
-        status, priority, quantity, due_at, next_action_at
+        status, priority, quantity, due_at, next_action_at, quantity_remake_batch_id
       ) VALUES (
         $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5,
-        'pending', $6, $7, $8::timestamptz, clock_timestamp()
+        'pending', $6, $7, $8::timestamptz, clock_timestamp(), $9::uuid
       )
       RETURNING ${TASK_COLUMNS}
     `, [
@@ -138,6 +139,7 @@ export class KdsRepository {
       input.priority ?? 100,
       input.quantity,
       input.dueAt ?? null,
+      input.quantityRemakeBatchId ?? null,
     ])
     const row = requireOne(inserted, 'KDS task insert')
     await this.appendEvent({

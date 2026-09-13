@@ -21,7 +21,7 @@ function observed(id: string, status: 'closed' | 'failed' | 'succeeded') {
 }
 
 describe('stale guest immediate payment worker', () => {
-  it('automatically applies only a provider-verified terminal refund result', async () => {
+  it.each(['query-only', 'durable-submit'] as const)('automatically applies only a provider-verified terminal refund result (%s)', async (mode) => {
     const listRefunds = vi.fn(async () => ['refund-processing'])
     const queryRefund = vi.fn(async () => ({
       refundId: 'refund-processing', refundPublicId: 'R-public', merchantRefundId: 'merchant-refund',
@@ -39,6 +39,7 @@ describe('stale guest immediate payment worker', () => {
       onlinePayments: {
         listStaleGuestImmediateCheckoutPaymentCandidates: vi.fn(async () => []), closeSystem: vi.fn(),
         listStaleProcessingPostarRefundIds: listRefunds, queryRefund,
+        ...(mode === 'durable-submit' ? { requestRefund: queryRefund } : {}),
       } as never,
       payments: { recordProviderQueryResult: vi.fn(), recordProviderRefundResult } as never,
       reconciliation: { commitTerminal: vi.fn(), abandonUnresolved: vi.fn() } as never,

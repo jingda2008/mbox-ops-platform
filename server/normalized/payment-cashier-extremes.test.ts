@@ -5,6 +5,7 @@ import { RefundFulfillmentRepository } from './refund-fulfillment-repository.js'
 import { readTables } from './operations-query-service.js'
 import { listTableOrderDetailsForSession } from './commerce-kds-api.js'
 import { OnlinePaymentService } from './online-payment-service.js'
+import {PaymentProviderActionRepository} from './payment-provider-action-repository.js'
 import { applyProviderQueryObservation, reconcileStalePendingOnlinePayment } from './pending-online-payment-reconciliation.js'
 import {historicalPaymentDisplayAllowlist,repairHistoricalPaymentDisplays} from '../../scripts/repair-five-historical-payment-displays.mjs'
 import Fastify from 'fastify'
@@ -91,6 +92,26 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
   const run = <T,>(work: (tx: import('./transaction-runner.js').ScopedTransaction) => Promise<T>) => new ScopedPostgresTransactionRunner(asPool(pool)).run(scope, work)
   const tableState = async (sessionId: string) => (await run(tx => readTables(tx, cashierId, true))).find(table => table.activeSession?.id === sessionId)?.activeSession
 
+  it('persists typed pre-dispatch failure without receipts and preserves an already captured payment',async()=>{
+    const fixture=await createOrder(pool,[1000])
+    const payment=await initiateOnlinePayment(service,fixture.orderId)
+    await pool.query(`INSERT INTO mbox.payment_provider_actions(tenant_id,store_id,payment_id,presentation,initiated_by_type,initiated_by_ref,state,expires_at)
+      VALUES($1,$2,$3,'qr','employee',$4,'creating',clock_timestamp()+interval '5 minutes')`,[tenantId,storeId,payment.id,cashierId])
+    const mark=()=>run(tx=>new PaymentProviderActionRepository(tx,'isolated-action-test-secret-at-least-32-bytes')
+      .markFailed(payment.id,'POSTAR_CREATE_NOT_SUBMITTED_INVALID_REQUEST','not_submitted'))
+    await mark()
+    expect((await pool.query('SELECT status,provider_snapshot FROM mbox.payments WHERE id=$1',[payment.id])).rows[0])
+      .toMatchObject({status:'failed',provider_snapshot:{providerStatus:'not_submitted',errorCode:'POSTAR_CREATE_NOT_SUBMITTED_INVALID_REQUEST'}})
+    expect(await financialSnapshot(pool,fixture.orderId)).toMatchObject({payment_status:'unpaid',payment_entries:'0',gross_paid_minor:'0'})
+    await mark()
+    expect(await financialSnapshot(pool,fixture.orderId)).toMatchObject({payment_status:'unpaid',payment_entries:'0'})
+    const paidFixture=await createOrder(pool,[1000])
+    const paid=await captureOnlinePayment(service,paidFixture.orderId)
+    await run(tx=>new PaymentProviderActionRepository(tx,'isolated-action-test-secret-at-least-32-bytes')
+      .markFailed(paid.id,'POSTAR_CREATE_NOT_SUBMITTED_INVALID_REQUEST','not_submitted'))
+    expect(await financialSnapshot(pool,paidFixture.orderId)).toMatchObject({payment_status:'paid',payment_entries:'1',gross_paid_minor:'1000'})
+  })
+
   async function stockFixture(status: 'pending' | 'accepted' | 'preparing' | 'failed', reservation: 'reserved' | 'consumed' | 'direct') {
     const fixture = await createOrder(pool, [4000, 1000])
     const payment = await captureOnlinePayment(service, fixture.orderId)
@@ -105,6 +126,26 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
     return {...fixture,payment,item,inventory,task}
   }
   const inventoryState = async (inventory: string) => (await pool.query("SELECT on_hand_quantity::text AS stock,reserved_quantity::text AS reserved FROM mbox.inventory_balances WHERE inventory_item_id=$1",[inventory])).rows[0]
+
+  it.each(['price_adjustment','service_compensation','duplicate_payment'] as const)('does not cancel goods or restore stock for %s even at full item amount',async purpose=>{
+    const f=await stockFixture('pending','consumed')
+    const refund=await requestRefund(service,f.payment.id,[allocation(f,0,4000)],purpose)
+    expect(refund.purpose).toBe(purpose)
+    await approveRefund(service,refund.id)
+    await recordProviderRefund(service,f.payment,refund,true)
+    expect(await inventoryState(f.inventory)).toEqual({stock:'6.000000',reserved:'0.000000'})
+    expect((await pool.query('SELECT status FROM mbox.kds_tasks WHERE id=$1',[f.task])).rows[0].status).toBe('pending')
+    await expect(pool.query("UPDATE mbox.refunds SET purpose='return_goods' WHERE id=$1",[refund.id])).rejects.toThrow('refund purpose is immutable')
+  })
+  it('does not combine compensation and a partial goods refund into a full item cancellation',async()=>{
+    const f=await stockFixture('pending','reserved')
+    for(const [amount,purpose] of [[1000,'service_compensation'],[3000,'return_goods']] as const){
+      const refund=await requestRefund(service,f.payment.id,[allocation(f,0,amount)],purpose)
+      await approveRefund(service,refund.id);await recordProviderRefund(service,f.payment,refund,true)
+    }
+    expect(await inventoryState(f.inventory)).toEqual({stock:'10.000000',reserved:'4.000000'})
+    expect((await pool.query('SELECT status FROM mbox.kds_tasks WHERE id=$1',[f.task])).rows[0].status).toBe('pending')
+  })
 
   it.each(['reserved','consumed','direct'] as const)('cancels unstarted refunded goods and restores %s stock only once', async reservation => {
     const f = await stockFixture('accepted',reservation)
@@ -492,6 +533,20 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
     )
     expect(state.rows[0]).toEqual({ status: 'processing', provider_refund_id: null })
     expect((await financialSnapshot(pool, fixture.orderId)).refund_entries).toBe('0')
+  })
+
+  it('automatically numbers a cash refund and replays without a second ledger entry', async () => {
+    const fixture = await createOrder(pool, [1200])
+    const cash = await recordManualPayment(service, fixture.orderId, 'cash')
+    const refund = await requestRefund(service, cash.id, [allocation(fixture, 0, 1200)])
+    await approveRefund(service, refund.id)
+    await executeRefund(service, refund.id)
+    const input = { ...metadata(`cash-auto-refund-${randomUUID()}`, actor(approverId)),
+      refundId: refund.id, succeeded: true, receiptReference: '', occurredAt: '2026-08-12T13:00:00.000Z' }
+    const result = await service.recordManualRefundResult(input)
+    expect(result.value.providerRefundId).toBe(`CASH-REFUND-${refund.id}`)
+    expect((await service.recordManualRefundResult(input)).replayed).toBe(true)
+    expect((await financialSnapshot(pool, fixture.orderId)).refund_entries).toBe('1')
   })
 
   it('records cash refund and physical-POS recollection with separate immutable references', async () => {
@@ -949,6 +1004,7 @@ async function requestRefund(
   service: PaymentCommandService,
   paymentId: string,
   allocations: { orderItemId: string; amountMinor: number }[],
+  purpose?: import('../../src/shared/refund-purpose.js').RefundPurpose,
 ) {
   const key = `refund-request-${randomUUID()}`
   return (await service.requestRefund({
@@ -957,6 +1013,7 @@ async function requestRefund(
     publicId: `refund-${randomUUID()}`,
     reason: '收银极端场景验收',
     allocations,
+    purpose,
     requestEvidence: { source: 'cashier_extreme_acceptance' },
   })).value
 }

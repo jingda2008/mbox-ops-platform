@@ -4,7 +4,7 @@ import {
   type ScopedTransaction,
   type StoreScope,
 } from './transaction-runner.js'
-import { KDS_EXCEPTION_MANAGE_CAPABILITY } from './kds-authorization-policy.js'
+import { KDS_EXCEPTION_MANAGE_CAPABILITY, hasActiveKdsSession } from './kds-authorization-policy.js'
 
 export const FULFILLMENT_VIEW_ALL_PERMISSION = 'fulfillment.view_all'
 export const KDS_PREPARE_PERMISSION = 'kds.prepare'
@@ -16,6 +16,7 @@ export type FulfillmentStation = 'bar' | 'kitchen' | 'cashier'
 export type FulfillmentKdsStatus = 'pending' | 'accepted' | 'preparing' | 'ready' | 'failed'
 
 export interface FulfillmentWorkItem {
+  quantities?: {total:number;unmade:number;started:number;ready:number;delivered:number;held:number;stopped:number}
   taskId: string
   businessDate: string
   carryover: boolean
@@ -36,7 +37,7 @@ export interface FulfillmentWorkItem {
     id: string
     publicId: string
     channel: 'guest_qr' | 'staff_assisted' | 'cashier' | 'reservation' | 'integration'
-    status: 'submitted' | 'confirmed' | 'fulfilling'
+    status: 'submitted' | 'confirmed' | 'fulfilling' | 'completed'
     note: string | null
   }
   item: {
@@ -47,7 +48,7 @@ export interface FulfillmentWorkItem {
     unitPriceMinor?: number
     totalAmountMinor?: number
     includedInBundle?: boolean
-    status: 'submitted' | 'accepted' | 'preparing' | 'ready'
+    status: 'submitted' | 'accepted' | 'preparing' | 'ready' | 'delivered'
     note: string | null
   }
   table: {
@@ -67,12 +68,15 @@ export interface FulfillmentStaffView {
     permissions: string[]
     allowedStations: FulfillmentStation[]
     canViewAll: boolean
+    actionSessionValid?: boolean
   }
   generatedAt: string
   workItems: FulfillmentWorkItem[]
 }
 
 interface FulfillmentRow extends Record<string, unknown> {
+  remake_batch_id?:string|null
+  quantity_facts?: FulfillmentWorkItem['quantities'] | null
   failure_reason?:string|null
   task_id: string
   business_date: string
@@ -116,12 +120,14 @@ export class FulfillmentQueryService {
     scope: Readonly<StoreScope>,
     employeeId: string,
     businessDate: string,
+    actionSession?: { staffSessionId: string; deviceAccessLeaseId: string },
   ): Promise<FulfillmentStaffView> {
     if (employeeId.trim().length === 0) throw new TypeError('employeeId must not be blank')
     if (!/^\d{4}-\d{2}-\d{2}$/.test(businessDate)) throw new TypeError('businessDate must be YYYY-MM-DD')
 
     return this.transactions.run(scope, async (transaction) => {
       const access = await new StaffAccessRepository(transaction).resolve(employeeId)
+      const actionSessionValid = actionSession === undefined || await hasActiveKdsSession({transaction,employeeId,...actionSession})
       const canViewAll = access.permissions.includes(FULFILLMENT_VIEW_ALL_PERMISSION)
       const canPrepare = access.permissions.includes(KDS_PREPARE_PERMISSION)
       const canDeliver = access.permissions.includes(KDS_DELIVER_PERMISSION)
@@ -142,9 +148,9 @@ export class FulfillmentQueryService {
       })
 
       return {
-        actor: mapActor(access, allowedStations, canViewAll),
+        actor: {...mapActor(access, allowedStations, canViewAll), ...(actionSession ? {actionSessionValid} : {})},
         generatedAt: rows[0]?.generated_at ?? new Date().toISOString(),
-        workItems: rows.map(mapWorkItem),
+        workItems: rows.map(row => { const item = mapWorkItem(row); return actionSessionValid ? item : { ...item, canPrepare:false, canDeliver:false, canRemake:false, attentionMessages:[...item.attentionMessages,'当前设备会话已失效，请恢复登录后继续原任务'] } }),
       }
     }, { isolation: 'repeatable-read', readOnly: true })
   }
@@ -167,6 +173,7 @@ async function readFulfillmentRows(
   const result = await transaction.query<FulfillmentRow>(`
     SELECT
       task.id AS task_id,
+      remake.id AS remake_batch_id,
       (SELECT COALESCE(e.metadata->>'reasonNote',e.metadata->>'reason',e.metadata->>'reasonCode')
        FROM mbox.kds_task_events e WHERE e.tenant_id=task.tenant_id AND e.store_id=task.store_id AND e.kds_task_id=task.id AND e.to_status='failed'
        ORDER BY e.occurred_at DESC,e.id DESC LIMIT 1) AS failure_reason,
@@ -176,19 +183,21 @@ async function readFulfillmentRows(
       task.status AS kds_status,
       task.priority,
       (task.due_at IS NOT NULL AND task.due_at < transaction_timestamp()) AS overdue,
-      (task.status = 'ready') AS ready_for_delivery,
+      (CASE WHEN portions.total>0 THEN portions.ready>0 ELSE task.status='ready' END) AS ready_for_delivery,
+      CASE WHEN portions.total>0 THEN jsonb_build_object('total',portions.total,'unmade',portions.unmade,'started',portions.started,'ready',portions.ready,'delivered',portions.delivered,'held',portions.held,'stopped',portions.stopped) END AS quantity_facts,
       (
         $6::boolean
         AND task.station_code = ANY($5::text[])
         AND task.status IN ('pending', 'accepted', 'preparing')
+        AND (portions.total=0 OR portions.unmade+portions.started>0)
       ) AS can_prepare,
       (
         $7::boolean
-        AND task.status = 'ready'
+        AND (CASE WHEN portions.total>0 THEN portions.ready>0 ELSE task.status='ready' END)
       ) AS can_deliver,
       (
         $9::boolean
-        AND task.status = 'failed'
+        AND task.status = 'failed' AND portions.total=0
         AND task.station_code = ANY($11::text[])
         AND ($10::boolean OR assignment.assignment_type IS NOT NULL)
       ) AS can_remake,
@@ -203,8 +212,9 @@ async function readFulfillmentRows(
       item.id AS order_item_id,
       item.product_id,
       product.name AS product_name,
-      item.quantity,
+      CASE WHEN remake.id IS NOT NULL THEN task.quantity ELSE item.quantity END AS quantity,
       CASE WHEN EXISTS(SELECT 1 FROM mbox.print_source_jobs legacy WHERE legacy.tenant_id=task.tenant_id AND legacy.store_id=task.store_id AND legacy.aggregate_id=task.id AND legacy.ticket_kind='delivery') THEN 0
+        WHEN portions.total>0 THEN CASE WHEN COALESCE((SELECT sum(part.quantity) FROM mbox.delivery_batch_items part WHERE part.tenant_id=task.tenant_id AND part.store_id=task.store_id AND part.kds_task_id=task.id),0)<>(CASE WHEN remake.id IS NOT NULL THEN (SELECT count(*) FROM mbox.delivery_batch_remake_units assigned WHERE assigned.tenant_id=task.tenant_id AND assigned.store_id=task.store_id AND assigned.kds_task_id=task.id) ELSE (SELECT count(*) FROM mbox.delivery_batch_quantity_units assigned WHERE assigned.tenant_id=task.tenant_id AND assigned.store_id=task.store_id AND assigned.kds_task_id=task.id) END) THEN 0 ELSE portions.unbatched END
         ELSE GREATEST(0,task.quantity-COALESCE((SELECT sum(part.quantity) FROM mbox.delivery_batch_items part WHERE part.tenant_id=task.tenant_id AND part.store_id=task.store_id AND part.kds_task_id=task.id),0)) END::integer AS delivery_unbatched_quantity,
       item.unit_price_minor::text,
       item.total_amount_minor::text,
@@ -236,6 +246,29 @@ async function readFulfillmentRows(
       ON product.tenant_id = item.tenant_id
       AND product.store_id = item.store_id
       AND product.id = item.product_id
+    LEFT JOIN mbox.quantity_remake_batches remake ON remake.tenant_id=task.tenant_id AND remake.store_id=task.store_id AND remake.kds_task_id=task.id
+    LEFT JOIN LATERAL (
+      SELECT count(*)::int AS total,
+        count(*) FILTER(WHERE unit.held_by_case_id IS NULL AND NOT unit.operationally_stopped AND unit.production_state='unmade')::int AS unmade,
+        count(*) FILTER(WHERE unit.held_by_case_id IS NULL AND NOT unit.operationally_stopped AND unit.production_state='started')::int AS started,
+        count(*) FILTER(WHERE unit.held_by_case_id IS NULL AND NOT unit.operationally_stopped AND unit.production_state='ready')::int AS ready,
+        count(*) FILTER(WHERE NOT unit.operationally_stopped AND unit.production_state='delivered')::int AS delivered,
+        count(*) FILTER(WHERE unit.held_by_case_id IS NOT NULL AND NOT unit.operationally_stopped)::int AS held,
+        count(*) FILTER(WHERE unit.operationally_stopped)::int AS stopped,
+        count(*) FILTER(WHERE unit.held_by_case_id IS NULL AND NOT unit.operationally_stopped AND unit.production_state='ready'
+          AND NOT unit.batched)::int AS unbatched
+      FROM (
+        SELECT original.production_state,original.held_by_case_id,
+          original.operationally_stopped OR EXISTS(SELECT 1 FROM mbox.quantity_remake_units replacement WHERE replacement.tenant_id=original.tenant_id AND replacement.store_id=original.store_id AND replacement.unit_id=original.id) AS operationally_stopped,
+          EXISTS(SELECT 1 FROM mbox.delivery_batch_quantity_units selected WHERE selected.tenant_id=original.tenant_id AND selected.store_id=original.store_id AND selected.unit_id=original.id) AS batched
+        FROM mbox.order_item_quantity_units original WHERE original.tenant_id=item.tenant_id AND original.store_id=item.store_id AND original.order_item_id=item.id AND remake.id IS NULL
+        UNION ALL
+        SELECT part.production_state,original.held_by_case_id,part.cancelled_at IS NOT NULL OR original.operationally_stopped AS operationally_stopped,
+          EXISTS(SELECT 1 FROM mbox.delivery_batch_remake_units selected WHERE selected.tenant_id=part.tenant_id AND selected.store_id=part.store_id AND selected.remake_unit_id=part.id) AS batched
+        FROM mbox.quantity_remake_units part JOIN mbox.order_item_quantity_units original ON original.tenant_id=part.tenant_id AND original.store_id=part.store_id AND original.id=part.unit_id
+        WHERE part.tenant_id=item.tenant_id AND part.store_id=item.store_id AND part.batch_id=remake.id
+      ) unit
+    ) portions ON true
     LEFT JOIN LATERAL (
       SELECT table_assignment.assignment_type
       FROM mbox.table_assignments AS table_assignment
@@ -268,14 +301,15 @@ async function readFulfillmentRows(
             AND exception.status IN ('open', 'remediating')
         )
       )
-      AND item.status IN ('submitted', 'accepted', 'preparing', 'ready')
-      AND customer_order.status IN ('submitted', 'confirmed', 'fulfilling')
+      AND (item.status IN ('submitted', 'accepted', 'preparing', 'ready') OR remake.id IS NOT NULL AND item.status='delivered')
+      AND (customer_order.status IN ('submitted', 'confirmed', 'fulfilling') OR remake.id IS NOT NULL AND customer_order.status='completed')
+      AND (remake.id IS NULL OR session.status IN ('open','closing') AND portions.unmade+portions.started+portions.ready+portions.held>0)
       AND (
         $4::boolean
         OR task.station_code = ANY($5::text[])
         OR (
           $7::boolean
-          AND task.status = 'ready'
+          AND (CASE WHEN portions.total>0 THEN portions.ready>0 ELSE task.status='ready' END)
         )
         OR (
           $9::boolean
@@ -357,7 +391,9 @@ function mapActor(
 function mapWorkItem(row: FulfillmentRow): FulfillmentWorkItem {
   const attentionMessages = [row.order_note, row.item_note]
     .filter((note): note is string => note !== null && note.trim().length > 0)
+  if(row.remake_batch_id)attentionMessages.unshift(`重做 ${row.quantity} 份，原单金额不变，按本批实际数量制作和取送`)
   return {
+    ...(row.quantity_facts?{quantities:row.quantity_facts}:{}),
     taskId: row.task_id,
     businessDate: row.business_date,
     carryover: row.carryover,
@@ -384,9 +420,9 @@ function mapWorkItem(row: FulfillmentRow): FulfillmentWorkItem {
     item: {
       id: row.order_item_id,
       productId: row.product_id,
-      productName: row.product_name,
+      productName: row.remake_batch_id?`重做：${row.product_name}`:row.product_name,
       quantity: row.quantity,
-      ...(row.unit_price_minor !== undefined ? {
+      ...(!row.remake_batch_id&&row.unit_price_minor !== undefined ? {
         unitPriceMinor: checkedAmount(row.unit_price_minor),
         totalAmountMinor: checkedAmount(row.total_amount_minor),
         includedInBundle: row.parent_order_item_id !== null,

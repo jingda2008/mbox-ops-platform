@@ -213,12 +213,12 @@ Page({
     this.waitingTimer = null
   },
 
-  scheduleWaitingPoll(request) {
+  scheduleWaitingPoll(request, retryAt) {
     this.stopWaitingPoll()
     this.waitingTimer = setTimeout(() => {
       if (!this.isCurrentTableRequest(request)) return
       this.loadTableState(true, request)
-    }, 6000)
+    }, Math.max(15000, (Date.parse(retryAt) || 0) - Date.now() + 250))
   },
 
   ensureTableRequestGuard() {
@@ -319,13 +319,15 @@ Page({
       if (waiting) this.scheduleWaitingPoll(tableRequest)
     } catch (error) {
       if (!this.isCurrentTableRequest(tableRequest)) return
+      const waiting = this.data.visitState === 'waiting' || error.statusCode === 429
       this.setData({
         loading: false,
-        visitState: 'prearrival',
+        visitState: waiting ? 'waiting' : 'prearrival',
         canEnter: false,
-        table: null,
+        table: waiting ? this.data.table : null,
         error: silent ? this.data.error : softNetworkError(error),
       })
+      if (waiting) this.scheduleWaitingPoll(tableRequest, error.retryAt)
     }
   },
 

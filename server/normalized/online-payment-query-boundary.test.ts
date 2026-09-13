@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   OnlinePaymentService,
   OnlinePaymentUnknownError,
+  OnlinePaymentUnavailableError,
 } from './online-payment-service.js'
+import { PostarPaymentNotSubmittedError } from '../postar-adapter.js'
+import { PaymentProviderActionRepository } from './payment-provider-action-repository.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
 const scope = {
@@ -38,6 +41,25 @@ const config = {
 }
 
 describe('OnlinePaymentService payment query uncertainty boundary', () => {
+  it.each([true,false])('persists a proven pre-dispatch failure separately from unknown (%s)',async (notSubmitted)=>{
+    const load=vi.spyOn(PaymentProviderActionRepository.prototype,'resolvePaymentContext').mockResolvedValue({
+      id:paymentId,status:'pending',publicId:'LOCALPAY0001',provider:'postar',method:'native_qr',amountMinor:800,currency:'CNY',payableKind:'order',orderPublicId:'ORDER001',
+    } as never)
+    const claim=vi.spyOn(PaymentProviderActionRepository.prototype,'claim').mockResolvedValue({claimed:true} as never)
+    const failed=vi.spyOn(PaymentProviderActionRepository.prototype,'markFailed').mockResolvedValue()
+    const unknown=vi.spyOn(PaymentProviderActionRepository.prototype,'markUnknown').mockResolvedValue()
+    try {
+      const service=new OnlinePaymentService(runner(),'test-secret-at-least-thirty-two-bytes',config,{
+        createPayment:vi.fn().mockRejectedValue(notSubmitted?new PostarPaymentNotSubmittedError():new Error('response corrupted')),
+        queryPayment:vi.fn(),closePayment:vi.fn(),requestRefund:vi.fn(),queryRefund:vi.fn(),
+      })
+      await expect(service.create({scope,paymentId,principal:{type:'employee',employeeId:'employee'},clientIp:'203.0.113.10',operatorId:'MBOX'}))
+        .rejects.toBeInstanceOf(notSubmitted?OnlinePaymentUnavailableError:OnlinePaymentUnknownError)
+      if(notSubmitted){expect(failed).toHaveBeenCalledWith(paymentId,'POSTAR_CREATE_NOT_SUBMITTED_INVALID_REQUEST','not_submitted');expect(unknown).not.toHaveBeenCalled()}
+      else{expect(unknown).toHaveBeenCalledOnce();expect(failed).not.toHaveBeenCalled()}
+    } finally {load.mockRestore();claim.mockRestore();failed.mockRestore();unknown.mockRestore()}
+  })
+
   it('reuses unconsumed verified success while the channel is unavailable', async () => {
     const queryPayment = vi.fn().mockRejectedValue(new Error('channel offline'))
     const recordPayment = vi.fn()

@@ -288,7 +288,7 @@ describe('CashierAfterSalesWorkbenchView', () => {
     expect(html).not.toContain('异常结清已送达金额')
   })
 
-  it('requires a separate receipt surface for cash and physical POS manual results', () => {
+  it('generates cash refund references while preserving external POS evidence', () => {
     const cashHtml = render(workbench([
       payment('cash', [refund('refund-cash', 'processing', otherEmployeeId)]),
     ]))
@@ -296,8 +296,8 @@ describe('CashierAfterSalesWorkbenchView', () => {
       payment('physical_pos', [refund('refund-pos', 'processing', otherEmployeeId)]),
     ]))
 
-    expect(cashHtml).toContain('现金退款凭证号')
-    expect(cashHtml).toContain('必须与原收款凭证分开')
+    expect(cashHtml).not.toContain('现金退款凭证号')
+    expect(cashHtml).toContain('系统自动生成现金退款编号')
     expect(cashHtml).toContain('登记已退')
     expect(posHtml).toContain('POS退款小票/交易号')
     expect(posHtml).toContain('登记已退')

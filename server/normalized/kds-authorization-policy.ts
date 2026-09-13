@@ -10,7 +10,7 @@ export const KDS_PRIORITY_OVERRIDE_CAPABILITY = 'kds.priority.override'
 // `cancel` remains only for the repository's manager-exception transition.
 // It is deliberately not exposed by the ordinary KDS HTTP action union.
 export type KdsEmployeeAction = 'claim' | 'accept' | 'start' | 'complete' | 'fail' | 'cancel'
-export type KdsScopedAction = KdsEmployeeAction | 'deliver' | 'manager_cancel' | 'manager_remake'
+export type KdsScopedAction = KdsEmployeeAction | 'deliver' | 'manager_cancel' | 'manager_remake' | 'quantity_remake'
 
 export type KdsAuthorizationErrorCode =
   | 'KDS_ACTOR_INACTIVE'
@@ -78,39 +78,8 @@ export class NormalizedKdsAuthorization implements KdsAuthorizationPort {
 
   async assertCanActOnTask(input: Readonly<ScopedKdsAuthorizationInput>): Promise<void> {
     const access = await new StaffAccessRepository(input.transaction).resolve(input.employeeId)
-    const session = await input.transaction.query<{ id: string }>(`
-      SELECT session.id
-      FROM mbox.staff_sessions AS session
-      JOIN mbox.store_device_access_leases AS lease
-        ON lease.tenant_id = session.tenant_id
-       AND lease.store_id = session.store_id
-       AND lease.id = session.device_access_lease_id
-      JOIN mbox.store_daily_credentials AS credential
-        ON credential.tenant_id = lease.tenant_id
-       AND credential.store_id = lease.store_id
-       AND credential.id = lease.daily_credential_id
-      WHERE session.tenant_id = $1::uuid
-        AND session.store_id = $2::uuid
-        AND session.id = $3::uuid
-        AND session.employee_id = $4::uuid
-        AND session.device_access_lease_id = $5::uuid
-        AND session.revoked_at IS NULL
-        AND session.expires_at > clock_timestamp()
-        AND session.online_lease_until > clock_timestamp()
-        AND lease.revoked_at IS NULL
-        AND lease.expires_at > clock_timestamp()
-        AND credential.revoked_at IS NULL
-        AND credential.valid_from <= clock_timestamp()
-        AND credential.valid_until > clock_timestamp()
-      FOR KEY SHARE OF session, lease, credential
-    `, [
-      input.transaction.scope.tenantId,
-      input.transaction.scope.storeId,
-      input.staffSessionId,
-      input.employeeId,
-      input.deviceAccessLeaseId,
-    ])
-    if (session.rowCount !== 1) {
+    const sessionValid = await hasActiveKdsSession(input, true)
+    if (!sessionValid) {
       throw new KdsAuthorizationError('KDS_SESSION_INVALID', input.action)
     }
 
@@ -150,6 +119,45 @@ export class NormalizedKdsAuthorization implements KdsAuthorizationPort {
       }
     }
   }
+}
+
+/** Shared read/action predicate; the action locks the same session rows before mutation. */
+export async function hasActiveKdsSession(input: Readonly<{
+  transaction: ScopedTransaction; employeeId: string; staffSessionId: string; deviceAccessLeaseId: string;
+}>, lock = false): Promise<boolean> {
+  const session = await input.transaction.query<{ id: string }>(`
+      SELECT session.id
+      FROM mbox.staff_sessions AS session
+      JOIN mbox.store_device_access_leases AS lease
+        ON lease.tenant_id = session.tenant_id
+       AND lease.store_id = session.store_id
+       AND lease.id = session.device_access_lease_id
+      JOIN mbox.store_daily_credentials AS credential
+        ON credential.tenant_id = lease.tenant_id
+       AND credential.store_id = lease.store_id
+       AND credential.id = lease.daily_credential_id
+      WHERE session.tenant_id = $1::uuid
+        AND session.store_id = $2::uuid
+        AND session.id = $3::uuid
+        AND session.employee_id = $4::uuid
+        AND session.device_access_lease_id = $5::uuid
+        AND session.revoked_at IS NULL
+        AND session.expires_at > clock_timestamp()
+        AND session.online_lease_until > clock_timestamp()
+        AND lease.revoked_at IS NULL
+        AND lease.expires_at > clock_timestamp()
+        AND credential.revoked_at IS NULL
+        AND credential.valid_from <= clock_timestamp()
+        AND credential.valid_until > clock_timestamp()
+      ${lock ? 'FOR KEY SHARE OF session, lease, credential' : ''}
+    `, [
+      input.transaction.scope.tenantId,
+      input.transaction.scope.storeId,
+      input.staffSessionId,
+      input.employeeId,
+      input.deviceAccessLeaseId,
+    ])
+  return session.rowCount === 1
 }
 
 function permissionSql(): string {
@@ -228,7 +236,7 @@ function permissionSql(): string {
 
 function requiredCapability(action: KdsScopedAction): string {
   if (action === 'deliver') return KDS_DELIVER_CAPABILITY
-  if (action === 'manager_cancel' || action === 'manager_remake' || action === 'cancel') return KDS_EXCEPTION_MANAGE_CAPABILITY
+  if (action === 'manager_cancel' || action === 'manager_remake' || action === 'quantity_remake' || action === 'cancel') return KDS_EXCEPTION_MANAGE_CAPABILITY
   return KDS_PREPARE_CAPABILITY
 }
 
@@ -240,7 +248,7 @@ function errorForCapability(capability: string): KdsAuthorizationErrorCode {
 
 function isProductionAction(action: KdsScopedAction): boolean {
   return action === 'claim' || action === 'accept' || action === 'start'
-    || action === 'complete' || action === 'fail' || action === 'manager_remake'
+    || action === 'complete' || action === 'fail' || action === 'manager_remake' || action === 'quantity_remake'
 }
 
 function stationAllowed(

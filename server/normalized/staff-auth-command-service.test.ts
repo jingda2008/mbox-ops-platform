@@ -213,9 +213,9 @@ integration('normalized staff authentication PostgreSQL integration', () => {
     await expect(accessManagement.deployPermissions({
       scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
       idempotencyKey: 'staff-access-route-lockout-0001',
-      requestFingerprint: 'server-payment-route-v1', reason: '入口越权验证',
-      changes: [{ kind: 'role_navigation', roleId: serverRoleId, navigationCode: 'payments', label: '收银', route: '/staff/payments', icon: null, sortOrder: 10, enabled: true, displayConfig: {} }],
-    })).rejects.toThrow('缺少使用/staff/payments所需权限')
+      requestFingerprint: 'server-inventory-route-v1', reason: '入口越权验证',
+      changes: [{ kind: 'role_navigation', roleId: serverRoleId, navigationCode: 'inventory', label: '库存', route: '/staff/inventory', icon: null, sortOrder: 10, enabled: true, displayConfig: {} }],
+    })).rejects.toThrow('缺少使用/staff/inventory所需权限')
     const overview = await accessManagement.getOverview({ scope: { tenantId, storeId }, actorEmployeeId: adminId })
     expect(overview.roles.find((entry) => entry.id === serverRoleId)?.navigation).toEqual([])
   })

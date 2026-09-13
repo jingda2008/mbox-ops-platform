@@ -85,6 +85,7 @@ import {
 import { PostarPaymentRejectedError } from '../postar-adapter.js'
 import {
   lockBoundGuestTablePosition,
+  lockBoundGuestCheckoutPosition,
   requireGuestSessionIdFromActorRef,
 } from './guest-table-authority.js'
 import { ReservationGuestSessionInvalidError } from './reservation-guest-session.js'
@@ -489,7 +490,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
       }),
       resultCodec: sharedCartCheckoutCodec,
     }, async (transaction) => {
-      if (!await lockBoundGuestTablePosition(transaction, context)) throw new GuestAuthenticationRequiredError()
+      if (!await lockBoundGuestCheckoutPosition(transaction, context)) throw new GuestAuthenticationRequiredError()
       await requireGuestCartProtocol(transaction, context.tableSessionId, 2)
       if(input.couponQuoteId){
         const quote=await new CheckoutCouponQuoteRepository(transaction).find(input.couponQuoteId,context.customerId)

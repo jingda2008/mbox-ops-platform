@@ -140,6 +140,19 @@ integration('normalized guest sessions with PostgreSQL', () => {
     expect(counts.rows[0]).toEqual({ customers: '0', sessions: '0', waiting_events: '1' })
   })
 
+  it('keeps repeated availability checks out of the real-scan allowance and creates no guest identity', async () => {
+    const before = customerCreates
+    for (let i = 0; i < 15; i++) {
+      const result = await service.scanTable({ scope: { tenantId, storeId }, tableQrToken: fixedQr,
+        deviceFingerprint: 'waiting-poll-device', businessDate: '2026-08-11', availabilityOnly: true })
+      expect(result.status).toBe('waiting_for_table')
+    }
+    const actualScan = await service.scanTable({ scope: { tenantId, storeId }, tableQrToken: fixedQr,
+      deviceFingerprint: 'waiting-poll-device', businessDate: '2026-08-11' })
+    expect(actualScan.status).toBe('waiting_for_table')
+    expect(customerCreates).toBe(before)
+  })
+
   it('creates one anonymous customer and one active session under concurrent rescans', async () => {
     tableSessionId = randomUUID()
     await pool.query(`
@@ -157,6 +170,12 @@ integration('normalized guest sessions with PostgreSQL', () => {
       deviceFingerprint: deviceKey,
       businessDate: '2026-08-11',
     })
+    const beforeAvailability = customerCreates
+    const availability = await service.scanTable({scope:{tenantId,storeId},tableQrToken:fixedQr,
+      deviceFingerprint:'ready-wait-without-login',businessDate:'2026-08-11',availabilityOnly:true})
+    expect(availability.status).toBe('ready_for_scan')
+    expect(customerCreates).toBe(beforeAvailability)
+    expect((await pool.query('SELECT count(*)::int n FROM mbox.guest_sessions WHERE tenant_id=$1',[tenantId])).rows[0].n).toBe(0)
     const results = await Promise.all([scan(), scan()])
     expect(results.map((result) => result.status).toSorted())
       .toEqual(['active', 'already_active'])

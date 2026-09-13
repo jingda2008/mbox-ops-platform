@@ -1,0 +1,189 @@
+param([string]$InstallDirectory = '')
+$ErrorActionPreference = 'Stop'
+$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+  try {
+    $arguments = @('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + $PSCommandPath + '"'))
+    if ($InstallDirectory) { $arguments += @('-InstallDirectory',('"' + $InstallDirectory + '"')) }
+    $elevated = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -ArgumentList $arguments
+    exit $elevated.ExitCode
+  } catch { Write-Host '未获得管理员授权，未执行恢复。'; exit 10 }
+}
+Add-Type -AssemblyName System.Windows.Forms
+$mutex = New-Object System.Threading.Mutex($false, 'Global\MBOX-PrintBridge-Upgrade')
+$ownsMutex = $false
+$exitCode = 1
+$stage = '初始化'
+$backup = ''
+try {
+  try { $ownsMutex = $mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $ownsMutex = $true }
+  if (-not $ownsMutex) { throw '另一个恢复程序正在运行。' }
+  $stage = '核对恢复包完整性'
+  $manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+  if ($manifest.kind -ne 'incident-original-restore' -or $manifest.packageRevision -ne 'recovery-r2') { throw '恢复包版本不正确。' }
+  $expectedFiles = @('restore.ps1','restore-policy.ps1','upgrade-core.ps1','MBOX-Restore-Before-Upgrade.cmd','使用说明.txt')
+  if (@($manifest.files.psobject.Properties).Count -ne $expectedFiles.Count) { throw '恢复包清单不完整。' }
+  foreach ($file in $expectedFiles) {
+    $entry = $manifest.files.psobject.Properties[$file]
+    if ($null -eq $entry -or [string]$entry.Value -notmatch '^[a-fA-F0-9]{64}$') { throw '恢复包清单无效。' }
+    if ((Get-FileHash -LiteralPath (Join-Path $PSScriptRoot $file) -Algorithm SHA256).Hash -ne $entry.Value) { throw '恢复包文件校验失败。' }
+  }
+  . (Join-Path $PSScriptRoot 'upgrade-core.ps1')
+  . (Join-Path $PSScriptRoot 'restore-policy.ps1')
+  $stage = '识别现有安装和服务'
+  $registration = Get-CimInstance Win32_Service -Filter "Name='MBoxPrintBridge'" -ErrorAction Stop
+  if ($null -eq $registration) { throw '没有找到已安装的MBOX打印桥。' }
+  $binaryPath = [Environment]::ExpandEnvironmentVariables([string]$registration.PathName)
+  if ($binaryPath -match '^"([^"]+\.exe)"(?:\s|$)') { $executable = $Matches[1] }
+  elseif ($binaryPath -match '^(.+?\.exe)(?:\s|$)') { $executable = $Matches[1] }
+  else { throw '无法识别服务位置。' }
+  $actualDirectory = Split-Path -Parent $executable
+  if ($InstallDirectory -and [IO.Path]::GetFullPath($InstallDirectory).TrimEnd('\') -ne [IO.Path]::GetFullPath($actualDirectory).TrimEnd('\')) { throw '指定目录与实际服务不一致。' }
+  $InstallDirectory = $actualDirectory
+  if ([IO.Path]::GetFullPath($PSScriptRoot).StartsWith([IO.Path]::GetFullPath($InstallDirectory).TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) -or $PSScriptRoot -eq $InstallDirectory) { throw '恢复包需要放在独立目录。' }
+  [xml]$serviceXml = Get-Content -LiteralPath ([IO.Path]::ChangeExtension($executable,'.xml')) -Raw -Encoding UTF8
+  $dataDirectory = Join-Path $env:ProgramData 'MBOX\PrintBridge'
+  foreach ($entry in @($serviceXml.service.env)) {
+    if ($entry -and $entry.name -eq 'MBOX_PRINT_BRIDGE_DATA') {
+      $dataDirectory = [Environment]::ExpandEnvironmentVariables(([string]$entry.value).Replace('%BASE%',$InstallDirectory))
+    }
+  }
+  if (-not [IO.Path]::IsPathRooted($dataDirectory) -or $dataDirectory.Contains('%')) { throw '无法识别数据目录。' }
+  $configPath = Join-Path $dataDirectory 'config.json'
+  $journalPath = Join-Path $dataDirectory 'journal.json'
+  $configHash = (Get-FileHash -LiteralPath $configPath -Algorithm SHA256).Hash
+  $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+  if (-not $config.publicId -or -not $config.credential -or -not $config.serverUrl) { throw '现有配对信息不完整。' }
+  $service = Get-Service -Name 'MBoxPrintBridge' -ErrorAction Stop
+  if ($service.Status -notin @('Running','Stopped')) { throw '服务正在切换状态。' }
+  $wasRunning = $service.Status -eq 'Running'
+  $files = @('bridge.mjs','print-ticket.ps1','list-printers.ps1')
+  $stage = '读取已确认的00:12:41原备份'
+  $originalBackup = Get-MboxIncidentBackup -InstallDirectory $InstallDirectory
+  $backup = Join-Path $InstallDirectory ('recovery-safety-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0,8))
+  function Save-MboxRecoveryDiagnostics {
+    param([string]$OutputName = 'MBOX-Recovery-Diagnostics.json')
+    try {
+      $programs = @()
+      foreach ($location in @($InstallDirectory, $originalBackup.Path)) {
+        foreach ($name in $files) {
+          $p = Join-Path $location $name
+          $raw = [IO.File]::ReadAllText($p)
+          $bytes = [IO.File]::ReadAllBytes($p)
+          $version = $null
+          if ($name -eq 'bridge.mjs' -and $raw -match "const VERSION = '([0-9]+\.[0-9]+\.[0-9]+)'") { $version=$Matches[1] }
+          $programs += [pscustomobject]@{ Location=(Split-Path $location -Leaf); File=$name; SHA256=(Get-FileHash -LiteralPath $p).Hash; Version=$version; Utf8Bom=($bytes.Length -ge 3 -and $bytes[0] -eq 239 -and $bytes[1] -eq 187 -and $bytes[2] -eq 191); UsesGdi=($raw -match 'PrintDocument|DrawString'); HasRawMarkers=($raw -match 'WritePrinter|StartDocPrinter'); UsesRaster=($raw -match 'DrawImage|Bitmap|raster'); HasCutMention=($raw -match '(?i)cut|切纸|裁纸'); HasEncodingMention=($raw -match 'GetEncoding|codepage|Encoding') }
+        }
+      }
+      $printers=@(); $printerQuery='ok'
+      try { $printers=@(Get-CimInstance Win32_Printer -ErrorAction Stop | Where-Object { $_.Name -in @('batai','chufang') } | Select-Object Name,DriverName,PrintProcessor,DefaultDataType,PrinterStatus,WorkOffline) } catch { $printerQuery='unavailable' }
+      $fonts=@(); $fontQuery='ok'
+      try { Add-Type -AssemblyName System.Drawing; $fonts=@([Drawing.FontFamily]::Families | Where-Object { $_.Name -match 'YaHei|SimSun|SimHei|Noto|Arial' } | ForEach-Object { $_.Name }) } catch { $fontQuery='unavailable' }
+      $report=[pscustomobject]@{ Time=(Get-Date).ToString('o'); PowerShell=$PSVersionTable.PSVersion.ToString(); Stage=$stage; Result=$result; OriginalBackup=$originalBackup.Path; SafetyBackup=$backup; ProgramMetadata=$programs; PrinterQuery=$printerQuery; Printers=$printers; FontQuery=$fontQuery; Fonts=$fonts; PhysicalPrinting='not-verified'; Note='No credentials, receipts or journal content included.' }
+      $report | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath (Join-Path $PSScriptRoot $OutputName) -Encoding UTF8
+    } catch { Write-Host '诊断文件未能保存；请保留结果窗口。' }
+  }
+  function Assert-MboxIdle {
+    # Query failure never means an empty queue. No spooler jobs are removed.
+    $jobs = @(Get-CimInstance Win32_PrintJob -ErrorAction Stop | Where-Object { $_.Document -like 'MBOX-*' })
+    if ($jobs.Count -gt 0) { throw 'MBOX仍有排队打印任务。' }
+    $children = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction Stop | Where-Object {
+      $_.CommandLine -and $_.CommandLine.IndexOf($InstallDirectory,[StringComparison]::OrdinalIgnoreCase) -ge 0 -and $_.CommandLine -match 'print-ticket\.ps1'
+    })
+    if ($children.Count -gt 0) { throw '仍有打印程序正在执行。' }
+    if (Test-Path -LiteralPath $journalPath -PathType Leaf) {
+      $journal = Get-Content -LiteralPath $journalPath -Raw -Encoding UTF8 | ConvertFrom-Json
+      if ($null -eq $journal.entries -or $journal.entries -isnot [pscustomobject]) { throw '防重复记录格式无法核实。' }
+      $printing = @($journal.entries.psobject.Properties | Where-Object { $_.Value.state -eq 'printing' })
+      if ($printing.Count -gt 0) { throw '本地存在尚未确认结束的打印任务。' }
+    }
+  }
+  function Stop-MboxBridge {
+    $currentService = Get-Service -Name 'MBoxPrintBridge' -ErrorAction Stop
+    if ($currentService.Status -eq 'Stopped') { return }
+    if ($currentService.Status -ne 'StopPending') { $currentService.Stop() }
+    $currentService.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Stopped,[TimeSpan]::FromSeconds(60))
+  }
+  function Start-MboxBridge {
+    $currentService = Get-Service -Name 'MBoxPrintBridge' -ErrorAction Stop
+    if ($currentService.Status -eq 'StopPending') { $currentService.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Stopped,[TimeSpan]::FromSeconds(60)) }
+    $currentService.Refresh()
+    if ($currentService.Status -eq 'Stopped') { $currentService.Start() }
+    $currentService.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running,[TimeSpan]::FromSeconds(30))
+  }
+  function Assert-MboxRunning {
+    for ($i=0; $i -lt 3; $i++) {
+      if ((Get-Service -Name 'MBoxPrintBridge' -ErrorAction Stop).Status -ne 'Running') { throw '服务未保持运行。' }
+      Start-Sleep -Seconds 2
+    }
+    if ((Get-FileHash -LiteralPath $configPath -Algorithm SHA256).Hash -ne $configHash) { throw '配对配置发生变化，需要核对。' }
+  }
+  $operations = @{
+    Validate = {
+      $same = Test-MboxRecoveryTarget -InstallDirectory $InstallDirectory -OriginalHashes $originalBackup.Hashes -IncidentHashes $manifest.incidentHashes
+      return ($same -and $wasRunning)
+    }
+    ProbeIdle = { for ($i=0; $i -lt 3; $i++) { Assert-MboxIdle; Start-Sleep -Seconds 2 } }
+    Backup = {
+      New-Item -ItemType Directory -Path $backup -ErrorAction Stop | Out-Null
+      foreach ($file in $files) {
+        $original = Join-Path $InstallDirectory $file
+        Copy-Item -LiteralPath $original -Destination $backup -ErrorAction Stop
+        if ((Get-FileHash -LiteralPath $original).Hash -ne (Get-FileHash -LiteralPath (Join-Path $backup $file)).Hash) { throw '备份校验失败。' }
+      }
+    }
+    Stop = { Stop-MboxBridge }
+    ProbeStoppedIdle = { Assert-MboxIdle }
+    Copy = { foreach ($file in $files) { Copy-Item -LiteralPath (Join-Path $originalBackup.Path $file) -Destination (Join-Path $InstallDirectory $file) -Force -ErrorAction Stop } }
+    VerifyFiles = {
+      foreach ($file in $files) {
+        if ((Get-FileHash -LiteralPath (Join-Path $InstallDirectory $file) -Algorithm SHA256).Hash -ne $originalBackup.Hashes[$file]) { throw '恢复文件校验失败。' }
+      }
+    }
+    Start = { Start-MboxBridge }
+    VerifyRunning = { Assert-MboxRunning }
+    Restore = {
+      foreach ($file in $files) {
+        Copy-Item -LiteralPath (Join-Path $backup $file) -Destination (Join-Path $InstallDirectory $file) -Force -ErrorAction Stop
+        if ((Get-FileHash -LiteralPath (Join-Path $InstallDirectory $file)).Hash -ne (Get-FileHash -LiteralPath (Join-Path $backup $file)).Hash) { throw '恢复文件校验失败。' }
+      }
+    }
+    RestoreServiceState = { if ($wasRunning) { Start-MboxBridge; Assert-MboxRunning } else { Stop-MboxBridge } }
+  }
+  Save-MboxRecoveryDiagnostics -OutputName 'MBOX-Recovery-Before.json'
+  $stage = '恢复原程序'
+  $result = Invoke-MboxUpgradeTransaction -Operations $operations
+  $stage = '显示恢复结果'
+  # Status only; never save credentials, ticket content or unfiltered exceptions.
+  $record = [pscustomobject]@{ Time=(Get-Date).ToString('o'); Package='recovery-r2'; Result=$result; Backup=$backup; RestoredFrom=$originalBackup.Path; BackendHeartbeat='not-verified'; PhysicalPrinting='not-verified' }
+  try { $record | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $InstallDirectory 'recovery-last-result.json') -Encoding UTF8 } catch { Write-Host '结果文件未能保存，请保留当前提示。' }
+  if ($result.State -eq 'failed') {
+    $recoveryText = switch ($result.Recovery) {
+      'not-needed' { '程序文件未替换。' }
+      'original-restored' { '本次恢复未完成，已退回恢复操作开始前的程序及服务状态；打印故障尚未解决。' }
+      default { '自动恢复未完成，请联系运维。不要重装、重新配对或补打历史任务。' }
+    }
+    $message = "恢复未完成。阶段：$($result.Stage)" + [Environment]::NewLine + $recoveryText + [Environment]::NewLine + '若处于idle阶段，请等票据出完后再试；持续失败请联系运维。' + [Environment]::NewLine + "恢复操作前备份：$backup"
+    $exitCode = 1
+  } else {
+    $message = '已按原始备份恢复升级前的3个程序文件，服务正在运行。' + [Environment]::NewLine + '原配对、队列、驱动和防重复记录保留。请先验吧台一张测试票的中文及切纸；程序恢复不等于纸票已验收。' + [Environment]::NewLine + "恢复操作前备份：$backup"
+    $exitCode = 0
+  }
+  Save-MboxRecoveryDiagnostics
+  [System.Windows.Forms.MessageBox]::Show($message,'M-BOX打印桥恢复结果') | Out-Null
+} catch {
+  if (Get-Command Save-MboxRecoveryDiagnostics -ErrorAction SilentlyContinue) { Save-MboxRecoveryDiagnostics }
+  # Only controlled error codes and exception type are displayed, never raw source or credentials.
+  $reason = switch ($_.Exception.Message) {
+    'incident_backup_missing' { '未找到 backup-20260913-001241-bb38d4d9，请保留备份目录原名。' }
+    'backup_file_missing' { '备份缺少 bridge.mjs、print-ticket.ps1 或 list-printers.ps1，未执行替换。' }
+    'backup_file_invalid' { '备份文件为空或类型不正确，未执行替换。' }
+    'backup_link_not_allowed' { '备份是目录链接，需要核对实际原文件。' }
+    default { '错误类型：' + $_.Exception.GetType().Name + '。请保留此窗口及检查结果。' }
+  }
+  [System.Windows.Forms.MessageBox]::Show("检查未完成：$stage。`n$reason`n实际服务目录：$InstallDirectory",'M-BOX恢复提示') | Out-Null
+} finally {
+  if ($ownsMutex) { $mutex.ReleaseMutex() }
+  $mutex.Dispose()
+}
+exit $exitCode

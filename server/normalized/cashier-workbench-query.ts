@@ -1,4 +1,6 @@
-import { orderNeedsCollectionSql } from './order-collection-sql.js'
+import {approvedFailedRefundReservesSql} from './refund-attempt-sql.js'
+import {fullyWaivedQuantityItemSql,unreservedOrderExcessSql} from './quantity-late-capture-refund.js'
+import { orderNeedsCollectionSql, orderReceivableSql } from './order-collection-sql.js'
 import type {
   CashierPaymentMethod as PaymentMethod,
   CashierPaymentProvider as PaymentProvider,
@@ -39,6 +41,7 @@ interface OrderRow extends Record<string, unknown> {
   channel: string
   status: string
   payment_status: string
+  effective_amount_minor?: string | number
   total_amount_minor: string | number
   currency: string
   submitted_at: string | null
@@ -47,6 +50,7 @@ interface OrderRow extends Record<string, unknown> {
 }
 
 interface ItemRow extends Record<string, unknown> {
+  fully_waived_quantity?:boolean
   id: string
   order_id: string
   product_name: string
@@ -56,6 +60,7 @@ interface ItemRow extends Record<string, unknown> {
 }
 
 interface PaymentRow extends Record<string, unknown> {
+  unreserved_excess_minor?:string|number
   id: string
   order_id: string
   public_id: string
@@ -75,6 +80,8 @@ interface PaymentRow extends Record<string, unknown> {
 }
 
 interface RefundRow extends Record<string, unknown> {
+  approved_failed_amount_reserved?:boolean
+  purpose?: import('../../src/shared/refund-purpose.js').RefundPurpose|null
   order_id?:string
   id: string
   payment_id: string
@@ -224,7 +231,7 @@ export class PostgresCashierWorkbenchQuery {
           area.id AS area_id,area.name AS area_name,
           session.id AS table_session_id, session.status AS table_session_status,
           orders.channel, orders.status, orders.payment_status,
-          orders.total_amount_minor, orders.currency,
+          orders.total_amount_minor, ${orderReceivableSql('orders')} AS effective_amount_minor, orders.currency,
           orders.submitted_at::text, orders.created_at::text,
           orders.business_date::text,${cashierCouponRefundReviewCountSql} AS coupon_refund_review_count
         FROM mbox.orders AS orders
@@ -539,7 +546,7 @@ export class PostgresCashierWorkbenchQuery {
       const itemResult = await transaction.query<ItemRow>(`
           SELECT item.id, item.order_id,
             COALESCE(NULLIF(item.product_snapshot ->> 'name', ''), product.name) AS product_name,
-            item.quantity, item.total_amount_minor, item.status
+            item.quantity, item.total_amount_minor, item.status,${fullyWaivedQuantityItemSql('item')} AS fully_waived_quantity
           FROM mbox.order_items AS item
           JOIN mbox.products AS product
             ON product.tenant_id = item.tenant_id
@@ -558,6 +565,7 @@ export class PostgresCashierWorkbenchQuery {
             payment.retry_released_at::text AS retry_released_at,
             payment.retry_release_reason,
             payment.amount_minor, payment.currency, payment.status,payment.provider_snapshot,
+            CASE WHEN payment.provider_snapshot->'lateSuccessAfterClose'='true'::jsonb THEN ${unreservedOrderExcessSql('payment')} ELSE 0 END::text AS unreserved_excess_minor,
             payment.succeeded_at::text, payment.created_at::text,
             EXISTS(SELECT 1 FROM mbox.order_cancellation_events cancellation WHERE cancellation.tenant_id=payment.tenant_id AND cancellation.store_id=payment.store_id AND cancellation.order_id=payment.order_id AND cancellation.occurred_at<=payment.succeeded_at) AS cancelled_after_attempt
           FROM mbox.order_payment_facts payment
@@ -572,7 +580,8 @@ export class PostgresCashierWorkbenchQuery {
         `, [input.scope.tenantId, input.scope.storeId, orderIds])
       const refundResult = await transaction.query<RefundRow>(`
           SELECT refund.id, refund.payment_id, COALESCE(refund.order_id,payment.order_id) AS order_id, refund.public_id, refund.provider_refund_id,
-            refund.amount_minor, refund.currency, refund.status, refund.provider_submission_state,
+            refund.amount_minor, refund.currency, refund.status, refund.provider_submission_state,refund.purpose,
+            ${approvedFailedRefundReservesSql('refund')} AS approved_failed_amount_reserved,
             refund.reason,
             refund.requested_by_employee_id,
             requester.display_name AS requested_by_employee_name,
@@ -670,6 +679,7 @@ function assembleView(
 ): CashierWorkbenchView {
   const itemsByOrder = group(itemRows, (row) => row.order_id)
   const paymentsByOrder = group(paymentRows, (row) => row.order_id)
+  const approvedFailedAmountIds=new Set(refundRows.filter(row=>row.approved_failed_amount_reserved===true).map(row=>row.id))
   const refundsByPayment = group(refundRows, (row) => row.payment_id)
   const allocationsByRefund = group(allocationRows, (row) => row.refund_id)
   const kdsByOrderItem = group(kdsTaskRows, (row) => row.refundable_order_item_id)
@@ -691,7 +701,7 @@ function assembleView(
         refund,
         allocationsByRefund.get(refund.id) ?? [],
       ))
-      const reservingRefunds = refunds.filter((refund) => RESERVING_REFUND_STATUSES.includes(refund.status))
+      const reservingRefunds = refunds.filter((refund) => RESERVING_REFUND_STATUSES.includes(refund.status)||approvedFailedAmountIds.has(refund.id))
       const reservedRefundAmountMinor = sumMinor(reservingRefunds.map((refund) => refund.amountMinor))
       const reservedByItem = new Map<string, number>()
       for (const refund of reservingRefunds) {
@@ -724,10 +734,12 @@ function assembleView(
         remainingRefundableMinor: paymentRemaining,
         refundableItems: items.map((item) => {
           const reserved = reservedByItem.get(item.id) ?? 0
+          const fundsOnly=payment.provider_snapshot?.lateSuccessAfterClose===true&&(itemsByOrder.get(order.id)??[]).some(original=>original.id===item.id&&original.fully_waived_quantity===true)
           return {
             ...item,
+            ...(fundsOnly?{fundsOnly:true}:{}),
             reservedRefundAmountMinor: reserved,
-            remainingRefundableMinor: captured && (item.status !== 'cancelled'
+            remainingRefundableMinor: fundsOnly&&captured?Math.min(Math.max(0,item.totalAmountMinor-reserved),paymentRemaining,asSafeMinor(payment.unreserved_excess_minor??0,'unreserved excess')):captured && (item.status !== 'cancelled'
               || payment.provider_snapshot.guestCheckoutAbandoned === true || payment.cancelled_after_attempt===true)
               ? Math.min(Math.max(0, item.totalAmountMinor - reserved), paymentRemaining)
               : 0,
@@ -742,7 +754,8 @@ function assembleView(
     const refundedMinor = payments.reduce((sum, payment) => sum + payment.refunds
       .filter((refund) => refund.status === 'succeeded')
       .reduce((refundSum, refund) => refundSum + refund.amountMinor, 0), 0)
-    const totalAmountMinor = asSafeMinor(order.total_amount_minor, 'order total')
+    const originalAmountMinor = asSafeMinor(order.total_amount_minor, 'original order total')
+    const totalAmountMinor = asSafeMinor(order.effective_amount_minor ?? order.total_amount_minor, 'effective order total')
     const netCollectedMinor = grossPaidMinor - refundedMinor
     return {
       id: order.id,
@@ -757,6 +770,9 @@ function assembleView(
       status: order.status,
       paymentStatus: netCollectedMinor >= totalAmountMinor && order.status !== 'cancelled' ? 'paid' : order.payment_status === 'pending' ? (refundedMinor > 0 ? (netCollectedMinor > 0 ? 'partially_refunded' : 'refunded') : grossPaidMinor > 0 ? 'partially_paid' : 'unpaid') : order.payment_status,
       totalAmountMinor,
+      originalAmountMinor,
+      stoppedAmountMinor: Math.max(0,originalAmountMinor - totalAmountMinor),
+      ...(totalAmountMinor>originalAmountMinor?{receivableIncreaseMinor:totalAmountMinor-originalAmountMinor}:{}),
       outstandingAmountMinor: Math.max(0, totalAmountMinor - netCollectedMinor),
       overCollectedAmountMinor: Math.max(0, netCollectedMinor - totalAmountMinor),
       currency: order.currency,
@@ -859,6 +875,7 @@ function mapRefund(
   allocations: readonly RefundAllocationRow[],
 ): CashierWorkbenchRefund {
   return {
+    ...(row.purpose?{purpose:row.purpose}:{}),
     id: row.id,
     publicId: row.public_id,
     paymentId: row.payment_id,

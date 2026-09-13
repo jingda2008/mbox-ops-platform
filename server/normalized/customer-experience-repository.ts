@@ -4522,7 +4522,7 @@ export class CustomerExperienceRepository {
         ) capacity_need
         LEFT JOIN LATERAL (
           SELECT capacity_window.capacity_limit_units::bigint,
-            COALESCE(sum(reservation.capacity_units),0)::bigint AS used_units
+            (COALESCE(sum(mbox.item_remaining_capacity_units(reservation.tenant_id,reservation.store_id,reservation.order_item_id,reservation.capacity_units)),0)+mbox.remake_window_used_units(capacity_window.tenant_id,capacity_window.store_id,capacity_window.id))::bigint AS used_units
           FROM mbox.fulfillment_capacity_policy_versions capacity_policy
           JOIN mbox.fulfillment_capacity_windows capacity_window
             ON capacity_window.tenant_id=capacity_policy.tenant_id
@@ -4698,13 +4698,13 @@ export class CustomerExperienceRepository {
               AND capacity_window.starts_at<=clock_timestamp()+make_interval(mins=>product.recommendation_expected_prep_minutes)
               AND capacity_window.ends_at>clock_timestamp()+make_interval(mins=>product.recommendation_expected_prep_minutes)
               AND capacity_window.capacity_limit_units-COALESCE((
-                SELECT SUM(reservation.capacity_units)
+                SELECT SUM(mbox.item_remaining_capacity_units(reservation.tenant_id,reservation.store_id,reservation.order_item_id,reservation.capacity_units))
                 FROM mbox.fulfillment_capacity_reservations reservation
                 WHERE reservation.tenant_id=capacity_window.tenant_id
                   AND reservation.store_id=capacity_window.store_id
                   AND reservation.capacity_window_id=capacity_window.id
                   AND reservation.status IN ('reserved','active')
-              ),0)>=capacity_need.required_units
+              ),0)-mbox.remake_window_used_units(capacity_window.tenant_id,capacity_window.store_id,capacity_window.id)>=capacity_need.required_units
           )
         )
       ORDER BY product.recommendation_priority, price.amount_minor, product.id

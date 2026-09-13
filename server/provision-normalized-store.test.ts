@@ -98,14 +98,16 @@ describe('normalized store provisioning config', () => {
     })).toThrow(/valid JSON/)
   })
 
-  it('defaults to manager request and cashier review without hard-coding an employee', () => {
+  it('allows every staff role to request while keeping cashier review and execution separate', () => {
     const source = JSON.parse(readFileSync(
       new URL('../deploy/normalized-store/mbox-lujiazui.store.json', import.meta.url),
       'utf8',
     )) as unknown
     const config = parseStoreProvisionConfig(source)
-    expect(config.version).toBe('2026.09.12-v23')
+    expect(config.version).toBe('2026.09.13-v24')
     for (const candidate of config.roles) {
+      expect(candidate.permissions).toContain('refund.request')
+      expect(candidate.approvalLimits?.some(limit=>limit.code==='refund.request')).not.toBe(true)
       expect(candidate.permissions).toContain('order.history.view')
       expect(candidate.permissions.includes('order.history.all')).toBe(['OWNER','ADMIN','MANAGER','DEPUT_MANAGER','OPS_LEAD'].includes(candidate.code))
       expect(candidate.permissions.includes('order.bill.print')).toBe(['OWNER','MANAGER','OPS_LEAD','CASHIER'].includes(candidate.code))
@@ -115,11 +117,8 @@ describe('normalized store provisioning config', () => {
 
     expect(role('MANAGER')?.permissions.filter((code) => code.startsWith('refund.')))
       .toEqual(['refund.request'])
-    expect(role('MANAGER')?.approvalLimits).toContainEqual(expect.objectContaining({
-      code: 'refund.request', amountMinor: 200_000, currency: 'CNY', enabled: true,
-    }))
     expect(role('CASHIER')?.permissions.filter((code) => code.startsWith('refund.')))
-      .toEqual(['refund.approve', 'refund.execute'])
+      .toEqual(['refund.approve', 'refund.execute', 'refund.request'])
     expect(role('CASHIER')?.approvalLimits).toContainEqual(expect.objectContaining({
       code: 'refund.approve', amountMinor: 200_000, currency: 'CNY', enabled: true,
     }))
@@ -140,7 +139,7 @@ describe('normalized store provisioning config', () => {
       expect(cashierPermissions.has(permission)).toBe(false)
     }
     expect(config.roles.filter((candidate) => candidate.code !== 'MANAGER' && candidate.code !== 'CASHIER')
-      .flatMap((candidate) => candidate.permissions.filter((code) => code.startsWith('refund.'))))
+      .flatMap((candidate) => candidate.permissions.filter((code) => ['refund.approve','refund.execute'].includes(code))))
       .toEqual([])
     for (const roleCode of ['OWNER', 'MANAGER', 'SERVER']) {
       expect(new Set(role(roleCode)?.permissions).has('guest.cart.freeze')).toBe(true)

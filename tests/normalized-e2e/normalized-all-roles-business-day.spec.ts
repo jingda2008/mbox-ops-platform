@@ -1080,6 +1080,13 @@ test('关桌后撤回退款仍能登记实际耗用，原操作恢复不重复�
   await expect(workspace).toContainText('暂停 2 · 已停止 0')
   const closed=await manager.page.request.post(`/api/table-sessions/${original.tableSessionId}/close-after-customer-left`,{headers:{'idempotency-key':`qa-physical-close-${Date.now()}`},data:{reasonNote:'隔离验收离店后只处理实物，不退款'}})
   expect(closed.ok(),await closed.text()).toBe(true)
+  // Force the regular table poll to observe the closure while the original
+  // product is open; the after-sales workspace must survive that refresh.
+  const refreshed=manager.page.waitForResponse(response=>response.url().includes('/api/operations')&&response.request().method()==='GET')
+  await manager.page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')))
+  await refreshed
+  await expect(manager.page.getByRole('region',{name:`${tableCode}本桌点单详情`})).toHaveCount(0)
+  await expect(workspace).toBeVisible()
   await workspace.getByRole('button',{name:'撤回申请'}).click()
   await expect(workspace).toContainText('退款决定保持，仅核对实物去向')
   await expect(workspace.getByRole('button',{name:'确认继续原商品'})).toHaveCount(0)

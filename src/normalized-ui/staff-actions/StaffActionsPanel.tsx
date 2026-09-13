@@ -1123,7 +1123,7 @@ export function StaffActionsPanel({
               orderStatusPanel={selectedTable.activeSession !== null
                 && !selectedTable.activeSession.id.startsWith('optimistic-')
                 && (hasPermission(permissions, 'service.execute') || hasPermission(permissions, 'order.view'))
-                ? <TableOrderStatusPanel api={api} table={{ code: selectedTable.code, activeSession: selectedTable.activeSession }} />
+                ? <TableOrderStatusPanel api={api} table={{ code: selectedTable.code, activeSession: selectedTable.activeSession }} onOpenAfterSales={setRedeliveryItemId} />
                 : null}
               memberBenefitsPanel={selectedTable.activeSession !== null && memberBenefits !== null
                 ? <MemberBenefitTaskCards

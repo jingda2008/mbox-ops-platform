@@ -8,6 +8,7 @@ import type { StaffTableOrderDetail, StaffTableOrderItemFulfillmentStatus } from
 
 export interface TableOrderStatusPanelProps {
   api: StaffActionsApiPort
+  onOpenAfterSales?(itemId: string): void
   table: Readonly<{ code: string; activeSession: { id: string } }>
 }
 
@@ -30,10 +31,11 @@ export function TableOrderStatusPanel(props: TableOrderStatusPanelProps) {
   return <TableOrderStatusContent key={props.table.activeSession.id} {...props} />
 }
 
-function TableOrderStatusContent({ api, table }: TableOrderStatusPanelProps) {
+function TableOrderStatusContent({ api, table, onOpenAfterSales }: TableOrderStatusPanelProps) {
   const [afterSalesAccess,setAfterSalesAccess]=useState<{enabled:boolean;recoveryAvailable?:boolean;employeeId:string}|null>(null)
   const afterSalesRecovery=useMemo(()=>afterSalesAccess?new ItemAfterSalesApi(afterSalesAccess.employeeId):null,[afterSalesAccess])
   const [afterSalesItem,setAfterSalesItem]=useState<string|null>(null)
+  const openAfterSales=onOpenAfterSales ?? setAfterSalesItem
   useEffect(()=>{let active=true;void api.loadItemAfterSalesAccess?.().then(value=>{if(active)setAfterSalesAccess(value)}).catch(()=>{});return()=>{active=false}},[api])
   const [orders, setOrders] = useState<StaffTableOrderDetail[]>([])
   const [loading, setLoading] = useState(true)
@@ -115,7 +117,7 @@ function TableOrderStatusContent({ api, table }: TableOrderStatusPanelProps) {
               {orders.map((order) => <article key={order.publicId}>
                 <header><strong title={order.publicId}>{shortOrderLabel(order.publicId)}</strong><small>{order.paymentStatus === 'refunded' ? '已退款 · ' : order.paymentStatus === 'partially_refunded' ? '含退款 · ' : ''}{order.items.length} 个商品</small></header>
                 {order.replacementSource&&<p>换品新单 · 原单 {shortOrderLabel(order.replacementSource.orderPublicId)}；分别收退款。
-                  {afterSalesAccess&&(afterSalesAccess.enabled||afterSalesAccess.recoveryAvailable)&&<button type="button" onClick={()=>setAfterSalesItem(order.replacementSource!.orderItemId)}>查看换品原商品</button>}</p>}
+                  {afterSalesAccess&&(afterSalesAccess.enabled||afterSalesAccess.recoveryAvailable)&&<button type="button" onClick={()=>openAfterSales(order.replacementSource!.orderItemId)}>查看换品原商品</button>}</p>}
                 {order.items.map((item) => {
                   const status = STATUS_PRESENTATION[item.fulfillmentStatus]
                   return <div className="staff-table-order-status-item" key={item.id}>
@@ -123,7 +125,7 @@ function TableOrderStatusContent({ api, table }: TableOrderStatusPanelProps) {
                     {item.quantities&&<small>暂停 {item.quantities.held} · 停止 {item.quantities.stopped} · 已备齐 {item.quantities.ready} · 已送达 {item.quantities.delivered}</small>}
                     <b>×{item.quantity}</b>
                     <em className={status.className}>{status.label}</em>
-                    {(afterSalesAccess?.enabled||afterSalesAccess?.recoveryAvailable&&item.quantities||afterSalesRecovery?.pending(item.id))&&<button type="button" onClick={()=>setAfterSalesItem(item.id)}>{afterSalesAccess?.enabled?(item.includedInBundle?'处理套餐内商品':'停止 / 退款'):'处理原申请'}</button>}
+                    {(afterSalesAccess?.enabled||afterSalesAccess?.recoveryAvailable&&item.quantities||afterSalesRecovery?.pending(item.id))&&<button type="button" onClick={()=>openAfterSales(item.id)}>{afterSalesAccess?.enabled?(item.includedInBundle?'处理套餐内商品':'停止 / 退款'):'处理原申请'}</button>}
                   </div>
                 })}
               </article>)}

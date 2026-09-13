@@ -1,0 +1,2 @@
+# Keep the physically accepted Windows compatibility ticket bytes intact.
+deploy/windows-print-bridge/compatibility-test/test-ticket.txt -text whitespace=cr-at-eol

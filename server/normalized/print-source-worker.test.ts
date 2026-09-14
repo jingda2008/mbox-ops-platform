@@ -215,6 +215,25 @@ integration('asynchronous print sources: committed events, isolation and recover
       expect(repeated.map(job=>job.id)).toEqual(jobs.map(job=>job.id))
       return jobs
     })
+    const tableBill=await transactions.run(scope,async tx=>{
+      const source=await appendOutboxMessage(tx,{aggregateType:'manual_print_request',aggregateId:randomUUID(),aggregateVersion:1,
+        eventType:'manual.table-bill.requested.v1',payload:{tableSessionId:session}})
+      const repository=new PrintTicketSourceRepository(tx,true)
+      const first=await repository.materializeManualTableBill(source,session,'测试收银员')
+      expect((await repository.materializeManualTableBill(source,session,'测试收银员')).map(job=>job.id)).toEqual(first.map(job=>job.id))
+      return first
+    })
+    expect(tableBill[0].printSnapshot).toMatchObject({kind:'order_summary',documentRole:'checkout',title:'结账单',
+      subtitle:'陆家嘴中心 L+MALL · 本桌次完整消费账单',test:false,totalAmountMinor:null})
+    expect(tableBill[0].printSnapshot.lines).toEqual(expect.arrayContaining([
+      expect.objectContaining({name:'桌次实际收款',totalAmountMinor:1500}),
+      expect.objectContaining({name:'桌次实际退款',totalAmountMinor:0}),
+      expect.objectContaining({name:'桌次实际净收',totalAmountMinor:1500}),
+    ]))
+    await pool.query("UPDATE mbox.print_jobs SET status='printed',printed_at=clock_timestamp() WHERE id=$1",[tableBill[0].id])
+    const billCopy=await transactions.run(scope,tx=>new HardwareRepository(tx).reprintPrintJob(tableBill[0].id,reprintEmployee,'结账票遗失补打','checkout-reprint-test'))
+    expect(billCopy.printSnapshot).toMatchObject({documentRole:'checkout',title:'结账单',subtitle:tableBill[0].printSnapshot.subtitle})
+    expect(billCopy.printSnapshot.lines).toEqual(tableBill[0].printSnapshot.lines)
     expect(manual).toHaveLength(1)
     expect(manual[0].printSnapshot).toMatchObject({operatorLabel:'测试收银员',totalAmountMinor:null})
     expect(manual[0].printSnapshot.lines).toEqual(expect.arrayContaining([

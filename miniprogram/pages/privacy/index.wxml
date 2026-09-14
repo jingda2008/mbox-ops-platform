@@ -13,7 +13,7 @@
     <view class="privacy-section"><text>生效时间</text><text>{{policy.effectiveAt}}</text></view>
     <view class="privacy-section"><text>政策全文</text><text>{{policy.content}}</text></view>
   </block>
-  <view wx:else class="privacy-section privacy-release-note"><text>隐私政策暂时无法读取</text><text>{{policyMessage}}</text></view>
+  <view wx:else class="privacy-section privacy-release-note"><text>隐私政策暂时无法读取</text><text>{{policyMessage}}</text><button bindtap="loadPrivacyPolicy">重新读取</button></view>
   <view class="privacy-contact-tools">
     <button class="privacy-contact-toggle" bindtap="toggleContactTools">{{contactToolsOpen ? '收起我的联系方式' : '管理我的联系方式'}}</button>
     <view wx:if="{{contactToolsOpen}}" class="privacy-contact-body">

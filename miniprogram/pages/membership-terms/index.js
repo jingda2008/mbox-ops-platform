@@ -1,4 +1,4 @@
-const { getMiniBootstrap, enrollMembership } = require('../../utils/api')
+const { getMiniBootstrap, getMembershipTerms, enrollMembership } = require('../../utils/api')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 const { customerErrorCode, customerErrorMessage } = require('../../utils/customer-error')
 
@@ -6,7 +6,7 @@ Page({
   data: {
     loading: true, busy: false, error: '', membership: null,
     terms: null, acknowledgementSource: 'mini_profile', allowEnrollment: false,
-    agreedToPolicies: false,
+    agreedToPolicies: false, enrollmentReady: false, enrollmentError: '',
   },
 
   onLoad(query) {
@@ -21,23 +21,37 @@ Page({
 
   onShow() { this.load() },
 
+  onHide() { this.termsReadGeneration = (this.termsReadGeneration || 0) + 1 },
+  onUnload() { this.termsReadGeneration = (this.termsReadGeneration || 0) + 1 },
+
   async load() {
-    this.setData({ loading: true, error: '' })
+    const generation = this.termsReadGeneration = (this.termsReadGeneration || 0) + 1
+    this.setData({ loading: true, error: '', agreedToPolicies: false, enrollmentReady: false, enrollmentError: '' })
+    if (this.data.allowEnrollment) this.enrollmentPending = this.loadEnrollmentContext(generation)
     try {
-      const bootstrap = await getMiniBootstrap()
-      this.setData({
-        loading: false,
-        membership: bootstrap.membership || null,
-        terms: bootstrap.membershipTerms || null,
-      })
+      const terms = await getMembershipTerms()
+      if (generation !== this.termsReadGeneration) return
+      this.setData({ loading: false, terms: terms || null })
     } catch (error) {
+      if (generation !== this.termsReadGeneration) return
       const code = customerErrorCode(error)
       this.setData({
-        loading: false,
+        loading: false, terms: null,
         error: code === 'ROUTE_NOT_FOUND'
-          ? '会员服务暂时连不上，请稍后重试'
-          : customerErrorMessage(error, '当前入会条款暂时无法读取'),
+          ? '协议服务暂时连不上，请稍后重试'
+          : customerErrorMessage(error, '当前条款暂时无法读取，请稍后重试'),
       })
+    }
+  },
+
+  async loadEnrollmentContext(generation) {
+    try {
+      const bootstrap = await getMiniBootstrap()
+      if (generation !== this.termsReadGeneration) return
+      this.setData({ membership: bootstrap.membership || null, enrollmentReady: true })
+    } catch (error) {
+      if (generation !== this.termsReadGeneration) return
+      this.setData({ enrollmentReady: false, enrollmentError: customerErrorMessage(error, '会员身份暂时无法确认，请重新读取；协议仍可阅读。') })
     }
   },
 
@@ -59,6 +73,10 @@ Page({
   async acceptAndEnroll(event) {
     const terms = this.data.terms
     if (this.data.busy) return
+    if (this.data.allowEnrollment && !this.data.enrollmentReady) {
+      this.setData({ enrollmentError: '会员身份暂时无法确认，请重新读取后再加入。' })
+      return
+    }
     if (!this.data.agreedToPolicies) {
       this.remindAgreement()
       return

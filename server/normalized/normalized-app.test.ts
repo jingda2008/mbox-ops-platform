@@ -52,6 +52,67 @@ const config: NormalizedRuntimeConfig = {
 }
 
 describe('createNormalizedApp', () => {
+  it('classifies malformed JSON without exposing the payload and preserves empty-body compatibility', async () => {
+    const received = vi.fn()
+    const probe: FastifyPluginAsync<Record<string, unknown>> = async (app) => {
+      app.route({ method: ['POST', 'PATCH', 'DELETE'], url: '/json-probe', handler: async request => {
+        received(request.body)
+        return { body: request.body ?? null }
+      } })
+      app.get('/failure-probe', async () => { throw new Error('test internal failure') })
+    }
+    const runtime = await createNormalizedApp({ config, pool: fakePool(), logger: false,
+      injectedPlugins: [{ name: 'json-probe', plugin: probe, prefix: '/api' }],
+    })
+    try {
+      for (const payload of ['{"privateContact":"do-not-reflect",', '  ', '{"x":NaN}']) {
+        const response = await runtime.app.inject({ method: 'POST', url: '/api/json-probe',
+          headers: { 'content-type': 'application/json' }, payload })
+        expect(response.statusCode).toBe(400)
+        expect(response.json()).toEqual({ error: { code: 'REQUEST_JSON_INVALID', message: '请求内容不是有效的 JSON，请重试' } })
+        expect(response.body).not.toContain('do-not-reflect')
+      }
+      expect(received).not.toHaveBeenCalled()
+      for (const method of ['DELETE', 'PATCH'] as const) {
+        const empty = await runtime.app.inject({ method, url: '/api/json-probe', headers: { 'content-type': 'application/json' } })
+        expect(empty.statusCode).toBe(200)
+        expect(empty.json()).toEqual({ body: null })
+      }
+      const valid = await runtime.app.inject({ method: 'POST', url: '/api/json-probe', payload: { value: '正常' } })
+      expect(valid.json()).toEqual({ body: { value: '正常' } })
+      const oversized = await runtime.app.inject({ method: 'POST', url: '/api/json-probe',
+        headers: { 'content-type': 'application/json' }, payload: JSON.stringify({ text: 'x'.repeat(1048576) }) })
+      expect(oversized.statusCode).toBe(413)
+      const internal = await runtime.app.inject({ method: 'GET', url: '/api/failure-probe' })
+      expect(internal.statusCode).toBe(500)
+    } finally { await runtime.app.close() }
+  })
+
+  it('serves only published agreement copy without customer login while personal routes remain protected', async () => {
+    const pool = fakePool()
+    const runtime = await createNormalizedApp({ config, pool, logger: false })
+    try {
+      for (const path of ['privacy-policy', 'membership-terms']) {
+        const response = await runtime.app.inject({ method: 'GET', url: `/api/public/mini/${path}?storeId=other-store`,
+          headers: { 'x-mbox-store-id': 'other-store', cookie: 'mbox_reservation_session=expired' } })
+        expect(response.statusCode).toBe(200)
+        expect(response.json()).toEqual({ data: null, meta: { published: false } })
+        expect(response.headers['cache-control']).toBe('no-store')
+        expect(response.headers['set-cookie']).toBeUndefined()
+      }
+      expect(pool.queries.some(query => query.includes('privacy_policy_releases'))).toBe(true)
+      expect(pool.queries.some(query => query.includes('membership_terms_versions'))).toBe(true)
+      for (const path of ['bootstrap', 'loyalty']) {
+        const response = await runtime.app.inject({ method: 'GET', url: `/api/public/mini/${path}` })
+        expect(response.statusCode).toBe(401)
+      }
+      const consent = await runtime.app.inject({ method: 'PUT', url: '/api/public/mini/annual-benefits/birthday-consent', payload: {} })
+      expect(consent.statusCode).toBe(401)
+      const dietary = await runtime.app.inject({ method: 'PATCH', url: '/api/public/mini/wechat-preferences', payload: {} })
+      expect(dietary.statusCode).toBe(401)
+    } finally { await runtime.app.close() }
+  })
+
   it('redacts contact plaintext and one-use phone authorization codes from defensive logs', () => {
     expect(NORMALIZED_LOG_REDACTION_PATHS).toEqual(expect.arrayContaining([
       'body.contactValue', 'body.phoneAuthorizationCode',

@@ -229,6 +229,7 @@ try {
     adminEmployeeCode: 'wuya',
     adminEmployeePin: '5210',
     orderableProductName: orderableProducts.bar,
+    orderableProductUnitPriceMinor: orderableProducts.barUnitPriceMinor,
     kitchenProductName: orderableProducts.kitchen,
     bundleProductName,
     remakeHandoverFixture,
@@ -263,7 +264,7 @@ async function seedOrderableInventory(
   databaseUrlValue: string,
   tenantId: string,
   storeId: string,
-): Promise<{ bar: string; kitchen: string }> {
+): Promise<{ bar: string; kitchen: string; barUnitPriceMinor: number }> {
   const client = new Client({ connectionString: databaseUrlValue, application_name: 'normalized-browser-inventory' })
   await client.connect()
   try {
@@ -310,7 +311,16 @@ async function seedOrderableInventory(
         VALUES ($1,$2,$3,1000,0)
       `, [tenantId, storeId, item.rows[0]!.id])
     }
-    return { bar: selected.bar.name, kitchen: selected.kitchen.name }
+    const price = await client.query<{ amount_minor: number }>(`
+      SELECT amount_minor FROM mbox.product_prices
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND product_id=$3::uuid
+        AND price_type='standard' AND valid_from <= clock_timestamp()
+        AND (valid_until IS NULL OR valid_until > clock_timestamp())
+      ORDER BY valid_from DESC LIMIT 1
+    `, [tenantId, storeId, selected.bar.id])
+    const barUnitPriceMinor = Number(price.rows[0]?.amount_minor)
+    if (!Number.isSafeInteger(barUnitPriceMinor) || barUnitPriceMinor <= 0) throw new Error('missing fixture product price')
+    return { bar: selected.bar.name, kitchen: selected.kitchen.name, barUnitPriceMinor }
   } finally {
     await client.end()
   }

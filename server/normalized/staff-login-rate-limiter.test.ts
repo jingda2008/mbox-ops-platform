@@ -67,28 +67,73 @@ integration('normalized staff login rate limiter', () => {
       FROM mbox.staff_login_rate_limits
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid
     `, [tenantId, storeId])
-    expect(stored.rows).toHaveLength(1)
+    expect(stored.rows).toHaveLength(3)
     expect(stored.rows[0]?.attempt_count).toBe(6)
     expect(stored.rows[0]?.principal_hash).toMatch(/^[0-9a-f]{64}$/)
     expect(stored.rows[0]?.principal_hash).not.toContain(attempt.principalKey)
   })
 
-  it('clears a successful principal without affecting another employee', async () => {
-    const base = {
-      scope: { tenantId, storeId },
-      kind: 'employee_pin' as const,
-      deviceKeyHash: hashDeviceKey('shared-tablet'),
-    }
-    await limiter.consume({ ...base, principalKey: 'tom' })
-    await limiter.consume({ ...base, principalKey: 'jerry' })
-    await limiter.recordResult({ ...base, principalKey: 'tom' }, true)
+  const attemptFor = (index: number, kind: 'employee_pin' | 'daily_store_credential' = 'employee_pin') => ({
+    scope: { tenantId, storeId }, kind, principalKey: kind === 'employee_pin' ? `employee-${index}` : '2026-09-14',
+    deviceKeyHash: hashDeviceKey(`device-${index}`), sourceKey: '203.0.113.7',
+  })
 
-    const stored = await pool.query<{ count: string }>(`
-      SELECT count(*)::text AS count
-      FROM mbox.staff_login_rate_limits
-      WHERE tenant_id = $1::uuid AND store_id = $2::uuid
-    `, [tenantId, storeId])
-    expect(stored.rows[0]?.count).toBe('1')
+  it('blocks account guessing across rotated devices and sources, including concurrent attempts', async () => {
+    const results = await Promise.allSettled(Array.from({ length: 12 }, (_, index) => limiter.consume({
+      ...attemptFor(index), principalKey: 'tom', sourceKey: `203.0.113.${index + 1}`,
+    })))
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(8)
+    for (const result of results) if (result.status === 'rejected') expect(result.reason).toBeInstanceOf(StaffLoginRateLimitError)
+  })
+
+  it('bounds source attempts even with rotating devices and employee names', async () => {
+    for (let index = 0; index < 40; index++) await limiter.consume(attemptFor(index))
+    await expect(limiter.consume(attemptFor(40))).rejects.toBeInstanceOf(StaffLoginRateLimitError)
+    await expect(limiter.consume({ ...attemptFor(41), sourceKey: '203.0.113.8' })).resolves.toBeUndefined()
+  })
+
+  it('bounds daily credentials despite device rotation and normalizes mapped IPv4', async () => {
+    for (let index = 0; index < 40; index++) await limiter.consume(attemptFor(index, 'daily_store_credential'))
+    await expect(limiter.consume({ ...attemptFor(41, 'daily_store_credential'), sourceKey: '::ffff:203.0.113.7' }))
+      .rejects.toBeInstanceOf(StaffLoginRateLimitError)
+  })
+
+  it('bounds distributed store attempts before creating more per-device rows', async () => {
+    for (let index = 0; index < 200; index++) await limiter.consume({ ...attemptFor(index), sourceKey: `10.0.0.${index + 1}` })
+    await expect(limiter.consume({ ...attemptFor(201), sourceKey: '10.0.1.1' })).rejects.toBeInstanceOf(StaffLoginRateLimitError)
+    const before = await pool.query('SELECT count(*) FROM mbox.staff_login_rate_limits WHERE store_id=$1', [storeId])
+    await expect(limiter.consume({ ...attemptFor(202), sourceKey: '10.0.1.2' })).rejects.toBeInstanceOf(StaffLoginRateLimitError)
+    const after = await pool.query('SELECT count(*) FROM mbox.staff_login_rate_limits WHERE store_id=$1', [storeId])
+    expect(after.rows).toEqual(before.rows)
+  })
+
+  it('successful shared-source logins release only their own attempt, once', async () => {
+    for (let index = 0; index < 39; index++) await limiter.consume(attemptFor(index))
+    for (let index = 0; index < 60; index++) {
+      const success = attemptFor(100 + index)
+      await limiter.consume(success)
+      await limiter.recordResult(success, true)
+      await limiter.recordResult(success, true)
+    }
+    await limiter.consume(attemptFor(300))
+    await expect(limiter.consume(attemptFor(301))).rejects.toBeInstanceOf(StaffLoginRateLimitError)
+  })
+
+  it('does not let a late success decrement a newer window', async () => {
+    const old = attemptFor(1)
+    await limiter.consume(old)
+    await pool.query("UPDATE mbox.staff_login_rate_limits SET expires_at=expires_at + interval '10 minutes' WHERE store_id=$1", [storeId])
+    await limiter.recordResult(old, true)
+    const counts = await pool.query('SELECT attempt_count FROM mbox.staff_login_rate_limits WHERE store_id=$1', [storeId])
+    expect(counts.rows.every(row => row.attempt_count === 1)).toBe(true)
+  })
+
+  it('resets expired failure windows', async () => {
+    const attempt = attemptFor(1)
+    for (let index = 0; index < 8; index++) await limiter.consume(attempt)
+    await expect(limiter.consume(attempt)).rejects.toBeInstanceOf(StaffLoginRateLimitError)
+    await pool.query("UPDATE mbox.staff_login_rate_limits SET window_started_at=clock_timestamp()-interval '20 minutes', expires_at=clock_timestamp()-interval '10 minutes' WHERE store_id=$1", [storeId])
+    await expect(limiter.consume(attempt)).resolves.toBeUndefined()
   })
 
   it('allows distinct employees and devices to proceed concurrently', async () => {

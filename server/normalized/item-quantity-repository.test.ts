@@ -55,6 +55,7 @@ const databaseUrl=process.env.TEST_NORMALIZED_DATABASE_URL
 const integration=databaseUrl?describe:describe.skip
 integration('quantity after-sales PostgreSQL candidate',()=>{
   let pool:Pool,runner:ScopedPostgresTransactionRunner
+  let businessDate:string,nextBusinessDate:string
   const tenantId=randomUUID(),storeId=randomUUID(),areaId=randomUUID(),tableId=randomUUID(),sessionId=randomUUID(),productId=randomUUID(),employeeId=randomUUID(),reviewerId=randomUUID()
   const scope={tenantId,storeId}
   beforeAll(async()=>{
@@ -62,9 +63,15 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     pool=new Pool({connectionString:databaseUrl,max:8});runner=new ScopedPostgresTransactionRunner(pool)
     await pool.query(`INSERT INTO mbox.tenants(id,code,name) VALUES($1,$2,'Quantity foundation')`,[tenantId,`q-${tenantId}`])
     await pool.query(`INSERT INTO mbox.stores(id,tenant_id,code,name,timezone,business_day_cutoff) VALUES($1,$2,'q-store','Quantity store','Asia/Shanghai','06:00')`,[storeId,tenantId])
+    // Use the same database business clock as the production guards; preserve next-day replays.
+    const day = await runner.run(scope,async tx => (await tx.query<{today:string; tomorrow:string}>(`
+      WITH day AS (SELECT mbox.current_operating_business_date($1::uuid,$2::uuid) AS value)
+      SELECT value::text AS today,(value+1)::text AS tomorrow FROM day
+    `,[tenantId,storeId])).rows[0]!,{readOnly:true})
+    businessDate=day.today;nextBusinessDate=day.tomorrow
     await pool.query(`INSERT INTO mbox.areas(id,tenant_id,store_id,code,name,area_type) VALUES($1,$2,$3,'Q','Q','indoor')`,[areaId,tenantId,storeId])
     await pool.query(`INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity) VALUES($1,$2,$3,$4,'Q01','Q01',8)`,[tableId,tenantId,storeId,areaId])
-    await pool.query(`INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count) VALUES($1,$2,$3,$4,'quantity-session-001','2026-09-13',2)`,[sessionId,tenantId,storeId,tableId])
+    await pool.query(`INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count) VALUES($1,$2,$3,$4,'quantity-session-001','${businessDate}',2)`,[sessionId,tenantId,storeId,tableId])
     for(const [id,code] of [[employeeId,'Q01'],[reviewerId,'Q02']])await pool.query(`INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($1,$2,$3,$4,$4)`,[id,tenantId,storeId,code])
     await pool.query(`INSERT INTO mbox.products(id,tenant_id,store_id,code,name,category_code,fulfillment_station) VALUES($1,$2,$3,'Q-WATER','水','drink','bar')`,[productId,tenantId,storeId])
   })
@@ -89,7 +96,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     return {orderId,itemId,taskId}
   }
   function hold(itemId:string,quantity:number,kind:'unpaid_stop'|'paid_return'='paid_return'){
-    return runner.run(scope,tx=>new ItemQuantityRepository(tx).hold({orderItemId:itemId,quantity,kind,employeeId,businessDate:'2026-09-13',reason:'客人停止所选数量'}),{isolation:'read-committed'})
+    return runner.run(scope,tx=>new ItemQuantityRepository(tx).hold({orderItemId:itemId,quantity,kind,employeeId,businessDate:businessDate,reason:'客人停止所选数量'}),{isolation:'read-committed'})
   }
   async function stock(row:{orderId:string;itemId:string},kind:'reserved'|'direct_sale',quantity='5'){
     const stockId=randomUUID()
@@ -123,7 +130,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const created=await hold(row.itemId,quantity,'unpaid_stop')
     await runner.run(scope,async tx=>{
       await new ItemUnitInventoryRepository(tx).disposeUnmadeUnits({itemId:row.itemId,unitIds:created.unitIds,employeeId,caseId:created.caseId})
-      await new ItemQuantityReceivableRepository(tx).recordUnpaidReduction({caseId:created.caseId,employeeId,businessDate:'2026-09-13'})
+      await new ItemQuantityReceivableRepository(tx).recordUnpaidReduction({caseId:created.caseId,employeeId,businessDate:businessDate})
     })
     return created
   }
@@ -178,7 +185,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const row=await deliveredOriginal()
     const runtimeTransactions={run:<T>(current:typeof scope,operation:(tx:import('./transaction-runner.js').ScopedTransaction)=>Promise<T>)=>runner.run(current,async tx=>{await tx.query('SET LOCAL ROLE mbox_runtime');return operation(tx)})} as ScopedPostgresTransactionRunner
     const commands=new NormalizedCommandExecutor(runtimeTransactions)
-    const make=async(enabled:boolean)=>{const app=Fastify();await app.register(itemAfterSalesApiPlugin,{prefix:'/api',enabled,transactions:runner,commands,resolveContext:()=>({scope,employeeId,businessDate:'2026-09-13',capabilities:['refund.request']})});return app}
+    const make=async(enabled:boolean)=>{const app=Fastify();await app.register(itemAfterSalesApiPlugin,{prefix:'/api',enabled,transactions:runner,commands,resolveContext:()=>({scope,employeeId,businessDate:businessDate,capabilities:['refund.request']})});return app}
     const live=await make(true),recovery=await make(false)
     try{
       const body={orderItemId:row.itemId,quantity:2,reason:'原实物仍在需再次送达',originalGoodsAvailable:true},headers={'idempotency-key':`redelivery-request-${randomUUID()}`},url='/api/commerce/item-after-sales/redeliveries'
@@ -204,12 +211,12 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const row=await deliveredOriginal();await payment(row.orderId)
     const task=await redelivery(repo=>repo.request({itemId:row.itemId,employeeId,quantity:2,originalGoodsAvailable:true,reason:'原两瓶重新送达',eventKey:randomUUID()}))
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const requested=await service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:1,reason:'原一瓶客人不再需要',idempotencyKey:randomUUID()})
-    await service.decide({scope,employeeId:reviewerId,businessDate:'2026-09-13',caseId:requested.value.caseId,decision:'approved',reason:'同意退款，实物另行核对',idempotencyKey:randomUUID()})
+    const requested=await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity:1,reason:'原一瓶客人不再需要',idempotencyKey:randomUUID()})
+    await service.decide({scope,employeeId:reviewerId,businessDate:businessDate,caseId:requested.value.caseId,decision:'approved',reason:'同意退款，实物另行核对',idempotencyKey:randomUUID()})
     expect(await redelivery(repo=>repo.read(task.id))).toMatchObject({pendingQuantity:2,pausedQuantity:1})
     await grantActor(employeeId,['inventory.waste'])
     const heldUnits=(await pool.query('SELECT id FROM mbox.order_item_quantity_units WHERE held_by_case_id=$1',[requested.value.caseId])).rows.map(value=>value.id)
-    await service.disposeMade({scope,employeeId,businessDate:'2026-09-13',caseId:requested.value.caseId,unitIds:heldUnits,disposition:'used_loss',unopenedReceived:false,reason:'已耗用，保留原消耗不回库',idempotencyKey:randomUUID()})
+    await service.disposeMade({scope,employeeId,businessDate:businessDate,caseId:requested.value.caseId,unitIds:heldUnits,disposition:'used_loss',unopenedReceived:false,reason:'已耗用，保留原消耗不回库',idempotencyKey:randomUUID()})
     expect(await redelivery(repo=>repo.read(task.id))).toMatchObject({pendingQuantity:1,cancelledQuantity:1,pausedQuantity:0})
     expect(await redelivery(repo=>repo.complete({redeliveryId:task.id,employeeId,reason:'仅剩的一瓶已实际补送',eventKey:randomUUID()}))).toMatchObject({status:'completed',pendingQuantity:0,cancelledQuantity:1,deliveredQuantity:1})
     expect(await balance(row.stockId)).toEqual({on_hand:'5.000000',reserved:'0.000000'})
@@ -318,10 +325,10 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const row=await deliveredOriginal();await payment(row.orderId)
     await pool.query("UPDATE mbox.inventory_balances SET on_hand_quantity=$2,cost_status='complete',cost_basis='manual_correction',weighted_unit_cost_minor=222 WHERE inventory_item_id=$1",[row.stockId,onHand])
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const requested=await service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:1,reason:'原一瓶未开封实际退货',idempotencyKey:randomUUID()})
-    await service.decide({scope,employeeId:reviewerId,businessDate:'2026-09-13',caseId:requested.value.caseId,decision:'approved',reason:'同意一瓶原付款退款',idempotencyKey:randomUUID()})
+    const requested=await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity:1,reason:'原一瓶未开封实际退货',idempotencyKey:randomUUID()})
+    await service.decide({scope,employeeId:reviewerId,businessDate:businessDate,caseId:requested.value.caseId,decision:'approved',reason:'同意一瓶原付款退款',idempotencyKey:randomUUID()})
     const units=(await pool.query('SELECT id FROM mbox.order_item_quantity_units WHERE held_by_case_id=$1',[requested.value.caseId])).rows.map(value=>value.id)
-    await service.disposeMade({scope,employeeId,businessDate:'2026-09-13',caseId:requested.value.caseId,unitIds:units,disposition:'returned_unopened',unopenedReceived:true,reason:'实物已收回且未开封',idempotencyKey:randomUUID()})
+    await service.disposeMade({scope,employeeId,businessDate:businessDate,caseId:requested.value.caseId,unitIds:units,disposition:'returned_unopened',unopenedReceived:true,reason:'实物已收回且未开封',idempotencyKey:randomUUID()})
     expect((await pool.query('SELECT on_hand_quantity::text AS quantity,weighted_unit_cost_minor::text AS cost FROM mbox.inventory_balances WHERE inventory_item_id=$1',[row.stockId])).rows[0]).toEqual({quantity:`${onHand+1}.000000`,cost:onHand===0?'123.000000':'205.500000'})
   })
   it('uses the latest made physical batch for redelivery and ends that pending delivery when its actual goods are disposed',async()=>{
@@ -400,10 +407,10 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const batch=await remake(repo=>repo.create({itemId:row.itemId,employeeId,quantity:1,originalGoodsLost:true,reason:'原一瓶损坏，另批提供',eventKey:randomUUID()})),part=batch.units[0]!
     if(made)await remake(repo=>repo.consume({batchId:batch.id,employeeId,unitIds:[part.id]}))
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const requested=await service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:1,reason:'客人取消原一份商品，按实际批次处理',idempotencyKey:randomUUID()}),caseId=requested.value.caseId
-    await service.decide({scope,employeeId:reviewerId,businessDate:'2026-09-13',caseId,decision:'approved',reason:'一次审核同意原商品退款',idempotencyKey:randomUUID()})
+    const requested=await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity:1,reason:'客人取消原一份商品，按实际批次处理',idempotencyKey:randomUUID()}),caseId=requested.value.caseId
+    await service.decide({scope,employeeId:reviewerId,businessDate:businessDate,caseId,decision:'approved',reason:'一次审核同意原商品退款',idempotencyKey:randomUUID()})
     await expect(remake((_repo,tx)=>tx.query('UPDATE mbox.order_item_quantity_units SET held_by_case_id=NULL,stopped_by_case_id=$2 WHERE id=$1',[part.unit_id,caseId]))).rejects.toThrow('dispose actual remake materials')
-    const command={scope,employeeId,businessDate:'2026-09-13',caseId,unitIds:[part.unit_id],disposition:'returned_unopened' as const,unopenedReceived:true,reason:made?'新瓶已实际收回且未开封':'新批尚未制作，取消本批预留',idempotencyKey:randomUUID()}
+    const command={scope,employeeId,businessDate:businessDate,caseId,unitIds:[part.unit_id],disposition:'returned_unopened' as const,unopenedReceived:true,reason:made?'新瓶已实际收回且未开封':'新批尚未制作，取消本批预留',idempotencyKey:randomUUID()}
     await service.disposeMade(command);await service.disposeMade(command)
     expect(await balance(row.stockId)).toEqual({on_hand:'5.000000',reserved:'0.000000'})
     expect((await pool.query('SELECT status FROM mbox.order_item_unit_inventory WHERE unit_id=$1',[part.unit_id])).rows[0].status).toBe('used_loss')
@@ -421,7 +428,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     expect(first).toMatchObject({quantity:1,fulfillmentStatus:'in_progress',batch:{items:[{taskId:batch.taskId,quantity:1}]}})
     expect((await remake((_repo,tx)=>executeQuantityKdsAction(tx,action))).batch).toEqual(first.batch)
     await expect(remake((_repo,tx)=>executeQuantityKdsAction(tx,{...action,employeeId:reviewerId}))).rejects.toThrow('同一重做操作')
-    const queue=await new FulfillmentQueryService(runner).getStaffWorkQueue(scope,employeeId,'2026-09-13')
+    const queue=await new FulfillmentQueryService(runner).getStaffWorkQueue(scope,employeeId,businessDate)
     const listed=queue.workItems.find(value=>value.taskId===batch.taskId)!
     expect(listed).toMatchObject({quantities:{total:2,unmade:1,ready:1,delivered:0},canDeliver:true,deliveryUnbatchedQuantity:0,item:{quantity:2,productName:'重做：水'}})
     expect(listed.item.totalAmountMinor).toBeUndefined()
@@ -433,7 +440,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await remake((_repo,tx)=>executeQuantityKdsAction(tx,{...action,action:'deliver',eventKey:randomUUID()}))
     await remake((_repo,tx)=>executeQuantityKdsAction(tx,{...action,eventKey:randomUUID()}))
     expect((await remake((_repo,tx)=>executeQuantityKdsAction(tx,{...action,action:'deliver',eventKey:randomUUID()}))).fulfillmentStatus).toBe('delivered')
-    const after=await new FulfillmentQueryService(runner).getStaffWorkQueue(scope,employeeId,'2026-09-13')
+    const after=await new FulfillmentQueryService(runner).getStaffWorkQueue(scope,employeeId,businessDate)
     expect(after.workItems.some(value=>value.taskId===batch.taskId)).toBe(false)
     expect((await pool.query("SELECT count(*)::int n FROM mbox.order_item_quantity_units WHERE order_item_id=$1 AND production_state='delivered'",[row.itemId])).rows[0].n).toBe(5)
     expect((await pool.query('SELECT count(*)::int n FROM mbox.delivery_batches batch JOIN mbox.delivery_batch_items item ON item.batch_id=batch.id WHERE item.kds_task_id=$1',[batch.taskId])).rows[0].n).toBe(2)
@@ -443,7 +450,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await grantActor(employeeId,['kds.exception.manage','fulfillment.view_all','kds.deliver'])
     const row=await item('ready');await stock(row,'direct_sale')
     const batch=await remake(repo=>repo.create({itemId:row.itemId,employeeId,quantity:1,originalGoodsLost:true,reason:'备齐后其中一瓶损坏，另批替换',eventKey:randomUUID()}))
-    const before=await new FulfillmentQueryService(runner).getStaffWorkQueue(scope,employeeId,'2026-09-13')
+    const before=await new FulfillmentQueryService(runner).getStaffWorkQueue(scope,employeeId,businessDate)
     expect(before.workItems.find(value=>value.taskId===row.taskId)?.quantities).toMatchObject({total:5,ready:4,stopped:1})
     await expect(remake((_repo,tx)=>tx.query("UPDATE mbox.order_item_quantity_units SET production_state='delivered' WHERE id=$1",[batch.units[0]!.unit_id]))).rejects.toThrow('original physical history')
     await expect(remake((_repo,tx)=>new ItemQuantityFulfillmentRepository(tx).deliver({itemId:row.itemId,taskId:row.taskId,employeeId,quantity:5,eventKey:randomUUID()}))).rejects.toThrow('最多可送达4份')
@@ -461,7 +468,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
       await pool.query("UPDATE mbox.table_sessions SET business_date='2026-09-12' WHERE id=$1",[source.id])
       await pool.query("INSERT INTO mbox.store_automatic_table_turnover_policies(tenant_id,store_id,enabled,operating_starts_at) VALUES($1,$2,true,TIME '12:00') ON CONFLICT(tenant_id,store_id) DO UPDATE SET enabled=true",[tenantId,storeId])
     }
-    const key=randomUUID(),close=()=>kind==='order_cancel'?new PostgresOrderCancellationRepository(runtimeTransactions).cancel({scope,employeeId,orderId:row.orderId,businessDate:'2026-09-13',reasonCode:'guest_left',reasonNote:'客人离店，保留实际新批实物记录',idempotencyKey:key}):runtimeTransactions.run(scope,tx=>kind==='customer_left'?new PostgresTableCustomerLeftTurnoverRepository(tx).close({scope,employeeId,tableSessionId:source.id,businessDate:'2026-09-13',reasonNote:'客人离店，保留实际新批实物记录',idempotencyKey:key}):new PostgresAutomaticTableTurnoverRepository(tx).close({scope,tableSessionId:source.id,businessDate:'2026-09-13',reasonNote:'营业结束，原批及新批实物交接',idempotencyKey:key}))
+    const key=randomUUID(),close=()=>kind==='order_cancel'?new PostgresOrderCancellationRepository(runtimeTransactions).cancel({scope,employeeId,orderId:row.orderId,businessDate:businessDate,reasonCode:'guest_left',reasonNote:'客人离店，保留实际新批实物记录',idempotencyKey:key}):runtimeTransactions.run(scope,tx=>kind==='customer_left'?new PostgresTableCustomerLeftTurnoverRepository(tx).close({scope,employeeId,tableSessionId:source.id,businessDate:businessDate,reasonNote:'客人离店，保留实际新批实物记录',idempotencyKey:key}):new PostgresAutomaticTableTurnoverRepository(tx).close({scope,tableSessionId:source.id,businessDate:businessDate,reasonNote:'营业结束，原批及新批实物交接',idempotencyKey:key}))
     const first=await close();expect(await close()).toMatchObject({eventId:first.eventId,replayed:true})
     if(kind!=='order_cancel')expect(first).toMatchObject({deliveredUnpaidAmountMinor:800})
     expect(await balance(stockId)).toEqual({on_hand:'3.000000',reserved:'0.000000'})
@@ -471,7 +478,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await expect(remake((_repo,tx)=>new QuantityRemakeFulfillmentRepository(tx).act({taskId:batch.taskId,employeeId,action:'deliver',quantity:1,eventKey:randomUUID()}))).rejects.toThrow('任务已结束')
     const handover=new QuantityRemakeHandoverQuery(runner),visible=await handover.list({scope,employeeId})
     expect(visible.items.find(value=>value.batchId===batch.id)).toMatchObject({pendingQuantity:1,unitIds:[batch.units[1]!.id],canReceive:true})
-    const disposals=new QuantityRemakeHandoverCommand(new NormalizedCommandExecutor(runtimeTransactions)),command={scope,employeeId,businessDate:'2026-09-13',idempotencyKey:randomUUID(),batchId:batch.id,unitIds:[batch.units[1]!.id],disposition:'returned_unopened' as const,unopenedReceived:true,reason:'离店后新瓶实际收回且未开封'}
+    const disposals=new QuantityRemakeHandoverCommand(new NormalizedCommandExecutor(runtimeTransactions)),command={scope,employeeId,businessDate:businessDate,idempotencyKey:randomUUID(),batchId:batch.id,unitIds:[batch.units[1]!.id],disposition:'returned_unopened' as const,unopenedReceived:true,reason:'离店后新瓶实际收回且未开封'}
     const recorded=await disposals.dispose(command),recovered=await disposals.dispose(command)
     expect(recorded.value).toMatchObject({batchId:batch.id,itemId:row.itemId,remainingQuantity:0});expect(recovered).toMatchObject({replayed:true,value:recorded.value})
     expect((await handover.list({scope,employeeId})).items.some(value=>value.batchId===batch.id)).toBe(false)
@@ -528,12 +535,12 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
   async function freshTableSession(){
     const id=randomUUID(),venueId=randomUUID()
     await pool.query("INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity) VALUES($1,$2,$3,$4,$5,'Quantity closure',8)",[venueId,tenantId,storeId,areaId,`Q-${venueId.slice(0,24)}`])
-    await pool.query("INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count) VALUES($1,$2,$3,$4,$5,'2026-09-13',2)",[id,tenantId,storeId,venueId,`quantity-closure-${id}`])
+    await pool.query(`INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count) VALUES($1,$2,$3,$4,$5,'${businessDate}',2)`,[id,tenantId,storeId,venueId,`quantity-closure-${id}`])
     return {id,tableId:venueId}
   }
   async function previewSession(source:string,target:{id:string;tableId:string}){
     const app=Fastify()
-    await app.register(tableManagementApiPlugin,{transactions:runner,commands:{} as never,resolveContext:()=>({scope,employeeId,businessDate:'2026-09-13',capabilities:['table.participation.manage']})})
+    await app.register(tableManagementApiPlugin,{transactions:runner,commands:{} as never,resolveContext:()=>({scope,employeeId,businessDate:businessDate,capabilities:['table.participation.manage']})})
     try{
       const result=await app.inject({method:'POST',url:`/table-management/sessions/${source}/participant-movements/preview`,payload:{movementKind:'participant_merge',targetTableId:target.tableId,targetTableSessionId:target.id,movedGuestCount:2,participantPublicIds:[]}})
       expect(result.statusCode).toBe(200)
@@ -560,7 +567,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await pool.query(`INSERT INTO mbox.kds_tasks(id,tenant_id,store_id,order_item_id,station_code,quantity,status) VALUES($1,$2,$3,$4,'kitchen',1,'pending')`,[siblingTaskId,tenantId,storeId,siblingId])
     if(paid)await payment(row.orderId)
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const input={scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:2,reason:'套餐两瓶先暂停，金额按原套餐另行核对',idempotencyKey:`bundle-hold-${randomUUID()}`}
+    const input={scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity:2,reason:'套餐两瓶先暂停，金额按原套餐另行核对',idempotencyKey:`bundle-hold-${randomUUID()}`}
     const before=await new ItemAfterSalesQuery(runner).item({scope,employeeId,itemId:row.itemId})
     expect(before.canRequest).toBe(true)
     const request=await service.request(input),caseId=request.value.caseId
@@ -576,7 +583,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     expect(JSON.stringify(guest)).not.toMatch(/quantity_facts|caseId|employeeId|requestedBy|refundId/)
     const review=await new ItemAfterSalesQuery(runner).item({scope,employeeId:reviewerId,itemId:row.itemId})
     expect(review.item).toMatchObject({bundle:true,includedInBundle:true});expect(review.cases[0]!.canApprove).toBe(false)
-    await expect(service.decide({scope,employeeId:reviewerId,businessDate:'2026-09-13',caseId,decision:'approved',reason:'不能把套餐组成行的零元当实际退款',idempotencyKey:`bundle-approve-${randomUUID()}`})).rejects.toThrow()
+    await expect(service.decide({scope,employeeId:reviewerId,businessDate:businessDate,caseId,decision:'approved',reason:'不能把套餐组成行的零元当实际退款',idempotencyKey:`bundle-approve-${randomUUID()}`})).rejects.toThrow()
     expect((await pool.query('SELECT status,quantity FROM mbox.kds_tasks WHERE id=$1',[siblingTaskId])).rows[0]).toEqual({status:'pending',quantity:1})
     expect((await pool.query('SELECT station_code FROM mbox.item_after_sales_notices WHERE case_id=$1',[caseId])).rows).toEqual([{station_code:'bar'}])
     expect((await new ItemAfterSalesQuery(runner).item({scope,employeeId,itemId:parentId})).canRequest).toBe(false)
@@ -584,9 +591,9 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const task={id:row.taskId,orderItemId:row.itemId,remakeOfTaskId:null,stationCode:'bar' as const,status:'pending' as const,priority:100,quantity:5,assignedEmployeeId:null,dueAt:null,nextActionAt:new Date().toISOString(),acceptedAt:null,readyAt:null,cancelledAt:null}
     await runner.run(scope,tx=>executeQuantityKdsAction(tx,{task,employeeId,action:'complete',quantity:3,eventKey:`bundle-complete-${randomUUID()}`}))
     expect(await balance(stockId)).toEqual({on_hand:'7.000000',reserved:'2.000000'})
-    await service.decide({scope,employeeId,businessDate:'2026-09-13',caseId,decision:'withdrawn',reason:'客人明确保留套餐，先撤回原申请',idempotencyKey:`bundle-withdraw-${randomUUID()}`})
+    await service.decide({scope,employeeId,businessDate:businessDate,caseId,decision:'withdrawn',reason:'客人明确保留套餐，先撤回原申请',idempotencyKey:`bundle-withdraw-${randomUUID()}`})
     expect((await new ItemAfterSalesQuery(runner).item({scope,employeeId,itemId:row.itemId})).cases[0]).toMatchObject({status:'withdrawn',heldQuantity:2,canResume:true})
-    await service.resume({scope,employeeId,businessDate:'2026-09-13',caseId,reason:'已联系吧台，客人确认继续原两瓶',idempotencyKey:`bundle-resume-${randomUUID()}`})
+    await service.resume({scope,employeeId,businessDate:businessDate,caseId,reason:'已联系吧台，客人确认继续原两瓶',idempotencyKey:`bundle-resume-${randomUUID()}`})
     expect((await pool.query('SELECT count(*)::int AS count FROM mbox.order_item_quantity_units WHERE order_item_id=$1 AND held_by_case_id IS NOT NULL',[row.itemId])).rows[0].count).toBe(0)
     expect(await balance(stockId)).toEqual({on_hand:'7.000000',reserved:'2.000000'})
   })
@@ -595,13 +602,13 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const row=await item(),stockId=await stock(row,'reserved');await payment(row.orderId)
     const runtimeTransactions={run:<T>(current:typeof scope,operation:(tx:import('./transaction-runner.js').ScopedTransaction)=>Promise<T>)=>runner.run(current,async tx=>{await tx.query('SET LOCAL ROLE mbox_runtime');return operation(tx)})} as ScopedPostgresTransactionRunner
     const commands=new NormalizedCommandExecutor(runtimeTransactions),service=new ItemAfterSalesCommandService(commands,new ItemAfterSalesOperatingEffects())
-    const metadata={scope,employeeId,businessDate:'2026-09-13',reason:'客人先停两瓶'}
+    const metadata={scope,employeeId,businessDate:businessDate,reason:'客人先停两瓶'}
     const original=await service.request({...metadata,orderItemId:row.itemId,quantity:2,idempotencyKey:`revise-source-${randomUUID()}`}),oldId=original.value.caseId
     const oldUnits=(await pool.query('SELECT unit_id FROM mbox.item_after_sales_case_units WHERE case_id=$1 ORDER BY unit_id',[oldId])).rows.map(unit=>unit.unit_id)
     const input={...metadata,caseId:oldId,quantity:revisedQuantity,reason:'现场重新确认数量，旧申请保留',idempotencyKey:`revision-${randomUUID()}`}
     const updated=await service.revise(input),newId=updated.value.caseId
     expect(updated.value).toMatchObject({revisesCaseId:oldId,status:'requested',selectedQuantity:revisedQuantity,heldQuantity:revisedQuantity,amountMinor:revisedQuantity*800})
-    expect(await service.revise({...input,businessDate:'2026-09-14'})).toEqual({...updated,replayed:true})
+    expect(await service.revise({...input,businessDate:nextBusinessDate})).toEqual({...updated,replayed:true})
     expect(await new ItemAfterSalesCommandService(commands,new ItemAfterSalesOperatingEffects(),false).revise(input)).toEqual({...updated,replayed:true})
     await expect(service.revise({...input,quantity:4})).rejects.toThrow('conflicts with another request')
     const old=await runner.run(scope,tx=>new ItemAfterSalesProgressRepository(tx).read(oldId))
@@ -628,7 +635,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await grantActor(employeeId,['refund.request']);await grantActor(reviewerId,['refund.request','refund.approve'],100000)
     const row=await item();await stock(row,'reserved');await payment(row.orderId)
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const metadata={scope,employeeId,businessDate:'2026-09-13',reason:'原申请待审核'}
+    const metadata={scope,employeeId,businessDate:businessDate,reason:'原申请待审核'}
     const original=await service.request({...metadata,orderItemId:row.itemId,quantity:2,idempotencyKey:`revision-fail-source-${randomUUID()}`}),caseId=original.value.caseId
     const input={...metadata,caseId,quantity:6,idempotencyKey:`revision-too-many-${randomUUID()}`}
     await expect(service.revise(input)).rejects.toThrow('当前最多')
@@ -641,7 +648,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await grantActor(employeeId,['refund.request']);await grantActor(reviewerId,['refund.approve'],100000)
     const row=await item(),stockId=await stock(row,'reserved');await payment(row.orderId)
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const metadata={scope,employeeId,businessDate:'2026-09-13',reason:'并发修改和审核'}
+    const metadata={scope,employeeId,businessDate:businessDate,reason:'并发修改和审核'}
     const source=await service.request({...metadata,orderItemId:row.itemId,quantity:2,idempotencyKey:`revision-race-source-${randomUUID()}`}),caseId=source.value.caseId
     const results=await Promise.allSettled([
       service.revise({...metadata,caseId,quantity:1,idempotencyKey:`revision-race-${randomUUID()}`}),
@@ -662,7 +669,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await grantActor(employeeId,['refund.request'])
     const row=await item('pending',100),stockId=await stock(row,'reserved')
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const metadata={scope,employeeId,businessDate:'2026-09-13',reason:'先暂停含优惠的两份'}
+    const metadata={scope,employeeId,businessDate:businessDate,reason:'先暂停含优惠的两份'}
     const original=await service.request({...metadata,orderItemId:row.itemId,quantity:2,idempotencyKey:`revise-discount-source-${randomUUID()}`})
     expect(original.value).toMatchObject({amountMinor:null,status:'requested',heldQuantity:2})
     const updated=await service.revise({...metadata,caseId:original.value.caseId,quantity:5,reason:'客人确认原行五份全部不要了',idempotencyKey:`revise-whole-discount-${randomUUID()}`})
@@ -677,7 +684,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const customer=randomUUID(),row=await item('pending',discount)
     await pool.query('INSERT INTO mbox.customers(id,tenant_id,store_id,public_id) VALUES($1,$2,$3,$4)',[customer,tenantId,storeId,`quantity-guest-${customer}`])
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    await service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:2,reason:'客人取消原商品两份',idempotencyKey:`guest-quantity-${randomUUID()}`})
+    await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity:2,reason:'客人取消原商品两份',idempotencyKey:`guest-quantity-${randomUUID()}`})
     const guest=(await runner.run(scope,tx=>loadGuestTableOrders(tx,sessionId,customer),{readOnly:true})).find(order=>order.publicId===`quantity-${row.orderId}`)!
     expect(guest).toMatchObject({totalAmountMinor:4000-discount,receivableReductionMinor:discount?0:1600,settlementReviewRequired:discount>0,paymentAccess:discount?'status_review':'available',payableAmountMinor:discount?0:2400,
       items:[{quantity:5,totalAmountMinor:4000-discount,progressText:discount?'暂停 2 份 · 准备中 3 份':'已停止 2 份 · 准备中 3 份'}]})
@@ -702,7 +709,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await grantActor(employeeId,['refund.request','order.create'])
     const row=await item(),stockId=await stock(row,'reserved');await payment(row.orderId)
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const metadata={scope,employeeId,businessDate:'2026-09-13',reason:'客人希望换另一种酒'}
+    const metadata={scope,employeeId,businessDate:businessDate,reason:'客人希望换另一种酒'}
     const original=await service.request({...metadata,orderItemId:row.itemId,quantity:2,idempotencyKey:`replacement-original-${randomUUID()}`})
     const caseId=original.value.caseId,newId=await replacementOrder(caseId)
     const progress=await runner.run(scope,tx=>new ItemAfterSalesProgressRepository(tx).read(caseId))
@@ -739,7 +746,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await grantActor(employeeId,['refund.request','order.create','order.cancel_unpaid'])
     const row=await item(),source=await stopUnpaid(row,1),first=await replacementOrder(source.caseId)
     await expect(replacementOrder(source.caseId,sessionId,false,first)).rejects.toThrow('已有换品新单')
-    await new PostgresOrderCancellationRepository(runner).cancel({scope,employeeId,orderId:first,businessDate:'2026-09-13',reasonCode:'other',reasonNote:'客人不要这份新商品，改选另一种',idempotencyKey:`replacement-cancel-${randomUUID()}`})
+    await new PostgresOrderCancellationRepository(runner).cancel({scope,employeeId,orderId:first,businessDate:businessDate,reasonCode:'other',reasonNote:'客人不要这份新商品，改选另一种',idempotencyKey:`replacement-cancel-${randomUUID()}`})
     const read=await new ItemAfterSalesQuery(runner).item({scope,employeeId,itemId:row.itemId})
     expect(read.cases.find(value=>value.caseId===source.caseId)).toMatchObject({canReplace:true,replacementOrder:{orderId:first,status:'cancelled'}})
     await expect(replacementOrder(source.caseId)).rejects.toThrow('已有换品新单')
@@ -763,7 +770,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await grantActor(employeeId,['refund.request','order.cancel_unpaid','table.transfer','table.participation.manage'])
     const source=await freshTableSession(),target=await freshTableSession(),row=await item('pending',0,source.id),stockId=await stock(row,'reserved')
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    await service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:2,reason:'未制作两份不要了',idempotencyKey:`closure-stop-${randomUUID()}`})
+    await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity:2,reason:'未制作两份不要了',idempotencyKey:`closure-stop-${randomUUID()}`})
     const state=()=>runner.run(scope,tx=>readTableSessionClosureState(tx,source.id))
     expect(await state()).toMatchObject({outstandingAmountMinor:2400})
     const reserved=await runner.run(scope,tx=>readBusinessDayBlockerFacts(tx,source.id,'INVENTORY_RESERVED'))
@@ -788,7 +795,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await grantActor(employeeId,['refund.request','order.cancel_unpaid','table.transfer','table.participation.manage'])
     const source=await freshTableSession(),target=await freshTableSession(),row=await item('pending',0,source.id),stockId=await stock(row,'reserved')
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    await service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:5,reason:'未制作全部停止',idempotencyKey:`closure-all-${randomUUID()}`})
+    await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity:5,reason:'未制作全部停止',idempotencyKey:`closure-all-${randomUUID()}`})
     expect(await runner.run(scope,tx=>readTableSessionClosureState(tx,source.id))).toMatchObject({blockers:[],outstandingAmountMinor:0,outstandingOrderCount:0})
     expect((await previewSession(source.id,target)).blockers).toEqual([])
     await mergeSession(source.id,target)
@@ -800,7 +807,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await grantActor(employeeId,['refund.request','order.cancel_unpaid','table.close','table.turnover_unsettled'])
     const source=await freshTableSession(),row=await item('pending',0,source.id),stockId=await stock(row,'reserved')
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const stopped=await service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:2,reason:'未制作两份不要了',idempotencyKey:`whole-stop-${randomUUID()}`})
+    const stopped=await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity:2,reason:'未制作两份不要了',idempotencyKey:`whole-stop-${randomUUID()}`})
     await runner.run(scope,tx=>new ItemQuantityFulfillmentRepository(tx).complete({itemId:row.itemId,taskId:row.taskId,employeeId,quantity:1,eventKey:`whole-ready-${randomUUID()}`}))
     await runner.run(scope,tx=>new ItemQuantityFulfillmentRepository(tx).deliver({itemId:row.itemId,taskId:row.taskId,employeeId,quantity:1,eventKey:`whole-deliver-${randomUUID()}`}))
     expect(await balance(stockId)).toEqual({on_hand:'9.000000',reserved:'2.000000'})
@@ -810,7 +817,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
       await pool.query("UPDATE mbox.table_sessions SET business_date='2026-09-12' WHERE id=$1",[source.id])
       await pool.query("INSERT INTO mbox.store_automatic_table_turnover_policies(tenant_id,store_id,enabled,operating_starts_at) VALUES($1,$2,true,TIME '12:00') ON CONFLICT(tenant_id,store_id) DO UPDATE SET enabled=true",[tenantId,storeId])
     }
-    const close=()=>kind==='order_cancel'?new PostgresOrderCancellationRepository(runtimeTransactions).cancel({scope,employeeId,orderId:row.orderId,businessDate:'2026-09-13',reasonCode:'guest_left',reasonNote:'已联系岗位确认客人离店',idempotencyKey:key}):runtimeTransactions.run(scope,tx=>kind==='customer_left'?new PostgresTableCustomerLeftTurnoverRepository(tx).close({scope,employeeId,tableSessionId:source.id,businessDate:'2026-09-13',reasonNote:'已联系岗位确认客人离店',idempotencyKey:key}):new PostgresAutomaticTableTurnoverRepository(tx).close({scope,tableSessionId:source.id,businessDate:'2026-09-13',reasonNote:'营业日结束保留原售后事实',idempotencyKey:key}))
+    const close=()=>kind==='order_cancel'?new PostgresOrderCancellationRepository(runtimeTransactions).cancel({scope,employeeId,orderId:row.orderId,businessDate:businessDate,reasonCode:'guest_left',reasonNote:'已联系岗位确认客人离店',idempotencyKey:key}):runtimeTransactions.run(scope,tx=>kind==='customer_left'?new PostgresTableCustomerLeftTurnoverRepository(tx).close({scope,employeeId,tableSessionId:source.id,businessDate:businessDate,reasonNote:'已联系岗位确认客人离店',idempotencyKey:key}):new PostgresAutomaticTableTurnoverRepository(tx).close({scope,tableSessionId:source.id,businessDate:businessDate,reasonNote:'营业日结束保留原售后事实',idempotencyKey:key}))
     const original=await close(),replay=await close()
     expect(replay).toMatchObject({eventId:original.eventId,replayed:true})
     if(kind!=='order_cancel')expect(original).toMatchObject({deliveredUnpaidAmountMinor:800})
@@ -830,18 +837,18 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await runner.run(scope,async tx=>{const payments=new PaymentRepository(tx);await payments.createForOrder({...cashInput(),orderId:row.orderId});await payments.syncOrderPaymentStatus(row.orderId)})
     await runner.run(scope,tx=>new ItemQuantityFulfillmentRepository(tx).complete({itemId:row.itemId,taskId:row.taskId,employeeId,quantity:1,eventKey:`paid-close-ready-${randomUUID()}`}))
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const requested=await service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:5,reason:'全部停止，原现金退回待审核',idempotencyKey:`paid-close-request-${randomUUID()}`})
+    const requested=await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity:5,reason:'全部停止，原现金退回待审核',idempotencyKey:`paid-close-request-${randomUUID()}`})
     expect(requested.value).toMatchObject({status:'requested',heldQuantity:5,madeQuantity:1})
-    await runner.run(scope,tx=>new PostgresTableCustomerLeftTurnoverRepository(tx).close({scope,employeeId,tableSessionId:source.id,businessDate:'2026-09-13',reasonNote:'客人已离店，原退款另行处理',idempotencyKey:`paid-close-${randomUUID()}`}))
+    await runner.run(scope,tx=>new PostgresTableCustomerLeftTurnoverRepository(tx).close({scope,employeeId,tableSessionId:source.id,businessDate:businessDate,reasonNote:'客人已离店，原退款另行处理',idempotencyKey:`paid-close-${randomUUID()}`}))
     expect(await balance(stockId)).toEqual({on_hand:'9.000000',reserved:'0.000000'})
     const afterClose=await new ItemAfterSalesQuery(runner).item({scope,employeeId:reviewerId,itemId:row.itemId})
     expect(afterClose.canRequest).toBe(false);expect(afterClose.cases[0]).toMatchObject({canApprove:true,moneyComplete:false,physicalComplete:false})
-    const approval=await service.decide({scope,employeeId:reviewerId,businessDate:'2026-09-13',caseId:requested.value.caseId,decision:'approved',reason:'同意原付款一次退款审核',idempotencyKey:`paid-close-review-${randomUUID()}`})
+    const approval=await service.decide({scope,employeeId:reviewerId,businessDate:businessDate,caseId:requested.value.caseId,decision:'approved',reason:'同意原付款一次退款审核',idempotencyKey:`paid-close-review-${randomUUID()}`})
     expect(approval.value).toMatchObject({status:'approved',heldQuantity:1,stoppedQuantity:4,physicalComplete:false})
     await manualResult(approval.value.refunds[0].id,true)
     expect(await runner.run(scope,tx=>new ItemAfterSalesProgressRepository(tx).read(requested.value.caseId))).toMatchObject({status:'approved',moneyComplete:true,physicalComplete:false})
     const made=(await pool.query("SELECT id FROM mbox.order_item_quantity_units WHERE order_item_id=$1 AND production_state='ready'",[row.itemId])).rows[0].id
-    const receipt={scope,employeeId,businessDate:'2026-09-13',caseId:requested.value.caseId,unitIds:[made],disposition:'returned_unopened' as const,unopenedReceived:true,reason:'实物已收回且未开封',idempotencyKey:`paid-close-return-${randomUUID()}`}
+    const receipt={scope,employeeId,businessDate:businessDate,caseId:requested.value.caseId,unitIds:[made],disposition:'returned_unopened' as const,unopenedReceived:true,reason:'实物已收回且未开封',idempotencyKey:`paid-close-return-${randomUUID()}`}
     expect((await service.disposeMade(receipt)).value).toMatchObject({status:'completed',moneyComplete:true,physicalComplete:true,succeededMinor:4000})
     expect((await service.disposeMade(receipt)).replayed).toBe(true)
     expect(await balance(stockId)).toEqual({on_hand:'10.000000',reserved:'0.000000'})
@@ -852,10 +859,10 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await grantActor(employeeId,['refund.request','order.cancel_unpaid'])
     const source=await freshTableSession(),row=await item('pending',300,source.id),stockId=await stock(row,'reserved')
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const request=await service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:2,reason:'含原优惠的两份先停止制作',idempotencyKey:`cancel-price-${randomUUID()}`})
+    const request=await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity:2,reason:'含原优惠的两份先停止制作',idempotencyKey:`cancel-price-${randomUUID()}`})
     expect(request.value).toMatchObject({status:'requested',amountMinor:null,heldQuantity:2})
-    if(status==='withdrawn')await service.decide({scope,employeeId,businessDate:'2026-09-13',caseId:request.value.caseId,decision:'withdrawn',reason:'暂不单品处理，保持暂停',idempotencyKey:`cancel-price-withdraw-${randomUUID()}`})
-    const cancelled=await new PostgresOrderCancellationRepository(runner).cancel({scope,employeeId,orderId:row.orderId,businessDate:'2026-09-13',reasonCode:'guest_left',reasonNote:'客人整单不要，原整单取消',idempotencyKey:`cancel-price-whole-${randomUUID()}`})
+    if(status==='withdrawn')await service.decide({scope,employeeId,businessDate:businessDate,caseId:request.value.caseId,decision:'withdrawn',reason:'暂不单品处理，保持暂停',idempotencyKey:`cancel-price-withdraw-${randomUUID()}`})
+    const cancelled=await new PostgresOrderCancellationRepository(runner).cancel({scope,employeeId,orderId:row.orderId,businessDate:businessDate,reasonCode:'guest_left',reasonNote:'客人整单不要，原整单取消',idempotencyKey:`cancel-price-whole-${randomUUID()}`})
     const progress=await runner.run(scope,tx=>new ItemAfterSalesProgressRepository(tx).read(request.value.caseId))
     expect(progress).toMatchObject({status:status==='requested'?'completed':'withdrawn',amountMinor:null,heldQuantity:0,stoppedQuantity:2,physicalComplete:true,moneyComplete:true,closedByOrderCancellationId:cancelled.eventId})
     expect(await balance(stockId)).toEqual({on_hand:'10.000000',reserved:'0.000000'})
@@ -869,14 +876,14 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await runner.run(scope,async tx=>{const payments=new PaymentRepository(tx);await payments.createForOrder({...cashInput(),orderId:row.orderId});await payments.syncOrderPaymentStatus(row.orderId)})
     await runner.run(scope,tx=>new ItemQuantityFulfillmentRepository(tx).complete({itemId:row.itemId,taskId:row.taskId,employeeId,quantity:2,eventKey:`declined-made-${randomUUID()}`}))
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const request=await service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:5,reason:'整行商品先暂停申请退款',idempotencyKey:`declined-request-${randomUUID()}`})
-    const decide=()=>service.decide({scope,employeeId:decision==='withdrawn'?employeeId:reviewerId,businessDate:'2026-09-13',caseId:request.value.caseId,decision,reason:'原退款不再执行，未确认继续制作',idempotencyKey:`declined-decision-${randomUUID()}`})
+    const request=await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity:5,reason:'整行商品先暂停申请退款',idempotencyKey:`declined-request-${randomUUID()}`})
+    const decide=()=>service.decide({scope,employeeId:decision==='withdrawn'?employeeId:reviewerId,businessDate:businessDate,caseId:request.value.caseId,decision,reason:'原退款不再执行，未确认继续制作',idempotencyKey:`declined-decision-${randomUUID()}`})
     if(!closeFirst)await decide()
     const read=async()=>(await new ItemAfterSalesQuery(runner).item({scope,employeeId,itemId:row.itemId})).cases.find(value=>value.caseId===request.value.caseId)!
     const made=(await pool.query("SELECT id FROM mbox.order_item_quantity_units WHERE order_item_id=$1 AND production_state='ready' ORDER BY unit_index",[row.itemId])).rows.map(value=>value.id)
-    const receive={scope,employeeId,businessDate:'2026-09-13',caseId:request.value.caseId,unitIds:[made[0]],disposition:'returned_unopened' as const,unopenedReceived:true,reason:'已核对这份未开封实物退回',idempotencyKey:`declined-receive-${randomUUID()}`}
+    const receive={scope,employeeId,businessDate:businessDate,caseId:request.value.caseId,unitIds:[made[0]],disposition:'returned_unopened' as const,unopenedReceived:true,reason:'已核对这份未开封实物退回',idempotencyKey:`declined-receive-${randomUUID()}`}
     await expect(service.disposeMade(receive)).rejects.toThrow('先按原授权')
-    await runner.run(scope,tx=>new PostgresTableCustomerLeftTurnoverRepository(tx).close({scope,employeeId,tableSessionId:source.id,businessDate:'2026-09-13',reasonNote:'客人已离店，保持原退款决定',idempotencyKey:`declined-close-${randomUUID()}`}))
+    await runner.run(scope,tx=>new PostgresTableCustomerLeftTurnoverRepository(tx).close({scope,employeeId,tableSessionId:source.id,businessDate:businessDate,reasonNote:'客人已离店，保持原退款决定',idempotencyKey:`declined-close-${randomUUID()}`}))
     if(closeFirst)await decide()
     expect(await read()).toMatchObject({status:decision,heldQuantity:2,stoppedQuantity:3,canResume:false,canDisposeMade:true})
     expect(await balance(stockId)).toEqual({on_hand:'8.000000',reserved:'0.000000'})
@@ -888,7 +895,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     expect(done).toMatchObject({status:decision,heldQuantity:0,stoppedQuantity:5,physicalComplete:true,succeededMinor:0})
     expect(await balance(stockId)).toEqual({on_hand:'9.000000',reserved:'0.000000'})
     expect((await pool.query("SELECT status FROM mbox.refunds WHERE order_id=$1",[row.orderId])).rows).toEqual([{status:decision==='withdrawn'?'cancelled':'rejected'}])
-    await service.acknowledgeNotices({scope,employeeId,businessDate:'2026-09-13',caseId:request.value.caseId,noticeIds:done.notices.map(value=>value.id),reason:'所有原岗位通知均已核实知悉',idempotencyKey:`declined-ack-${randomUUID()}`})
+    await service.acknowledgeNotices({scope,employeeId,businessDate:businessDate,caseId:request.value.caseId,noticeIds:done.notices.map(value=>value.id),reason:'所有原岗位通知均已核实知悉',idempotencyKey:`declined-ack-${randomUUID()}`})
     expect((await new ItemAfterSalesHandoverQuery(runner).list({scope,employeeId,limit:100})).items.some(value=>value.caseId===request.value.caseId)).toBe(false)
   })
   it.each(['rejected','withdrawn'] as const)('requires actual inventory handling for legacy upfront-consumed unmade shares after %s and guest departure',async(decision)=>{
@@ -897,17 +904,17 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const source=await freshTableSession(),row=await item('pending',0,source.id),stockId=await stock(row,'direct_sale')
     await runner.run(scope,async tx=>{const payments=new PaymentRepository(tx);await payments.createForOrder({...cashInput(),orderId:row.orderId});await payments.syncOrderPaymentStatus(row.orderId)})
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const request=await service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:2,reason:'原预扣库存商品先暂停',idempotencyKey:`upfront-request-${randomUUID()}`})
-    await service.decide({scope,employeeId:decision==='withdrawn'?employeeId:reviewerId,businessDate:'2026-09-13',caseId:request.value.caseId,decision,reason:'保留原退款决定，实物另行核对',idempotencyKey:`upfront-decision-${randomUUID()}`})
-    await runner.run(scope,tx=>new PostgresTableCustomerLeftTurnoverRepository(tx).close({scope,employeeId,tableSessionId:source.id,businessDate:'2026-09-13',reasonNote:'客人离店，原库存未确认收回',idempotencyKey:`upfront-close-${randomUUID()}`}))
+    const request=await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity:2,reason:'原预扣库存商品先暂停',idempotencyKey:`upfront-request-${randomUUID()}`})
+    await service.decide({scope,employeeId:decision==='withdrawn'?employeeId:reviewerId,businessDate:businessDate,caseId:request.value.caseId,decision,reason:'保留原退款决定，实物另行核对',idempotencyKey:`upfront-decision-${randomUUID()}`})
+    await runner.run(scope,tx=>new PostgresTableCustomerLeftTurnoverRepository(tx).close({scope,employeeId,tableSessionId:source.id,businessDate:businessDate,reasonNote:'客人离店，原库存未确认收回',idempotencyKey:`upfront-close-${randomUUID()}`}))
     const read=async()=>(await new ItemAfterSalesQuery(runner).item({scope,employeeId,itemId:row.itemId})).cases.find(value=>value.caseId===request.value.caseId)!
     expect(await read()).toMatchObject({status:decision,heldQuantity:2,stoppedQuantity:0,canDisposeHeldUnmade:true})
     expect(await balance(stockId)).toEqual({on_hand:'5.000000',reserved:'0.000000'})
     const units=(await pool.query('SELECT id FROM mbox.order_item_quantity_units WHERE held_by_case_id=$1 ORDER BY unit_index',[request.value.caseId])).rows.map(value=>value.id)
-    const receive={scope,employeeId,businessDate:'2026-09-13',caseId:request.value.caseId,unitIds:[units[0]],disposition:'returned_unopened' as const,unopenedReceived:true,reason:'实物已收回且未开封，核对原预扣记录',idempotencyKey:`upfront-receive-${randomUUID()}`}
+    const receive={scope,employeeId,businessDate:businessDate,caseId:request.value.caseId,unitIds:[units[0]],disposition:'returned_unopened' as const,unopenedReceived:true,reason:'实物已收回且未开封，核对原预扣记录',idempotencyKey:`upfront-receive-${randomUUID()}`}
     await expect(service.disposeMade({...receive,unopenedReceived:false})).rejects.toThrow('需确认实物')
     await service.disposeMade(receive)
-    expect((await service.disposeMade({...receive,businessDate:'2026-09-14'})).replayed).toBe(true)
+    expect((await service.disposeMade({...receive,businessDate:nextBusinessDate})).replayed).toBe(true)
     await service.disposeMade({...receive,unitIds:[units[1]],disposition:'used_loss',unopenedReceived:false,reason:'实物已耗用，不再重复扣库存',idempotencyKey:`upfront-used-${randomUUID()}`})
     expect(await read()).toMatchObject({status:decision,heldQuantity:0,stoppedQuantity:2,physicalComplete:true,succeededMinor:0})
     expect(await balance(stockId)).toEqual({on_hand:'6.000000',reserved:'0.000000'})
@@ -919,19 +926,19 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const source=await freshTableSession(),row=await item('pending',300,source.id),stockId=await stock(row,'reserved'),publicId=`closure-money-${randomUUID()}`
     await runner.run(scope,tx=>new PaymentRepository(tx).createForOrder({orderId:row.orderId,publicId,provider:'postar',method:'native_qr',initialStatus:'created',principal:{type:'employee',employeeId}}))
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const request=await service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:2,reason:'原付款还未确认，两份先不制作',idempotencyKey:`closure-money-request-${randomUUID()}`})
+    const request=await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity:2,reason:'原付款还未确认，两份先不制作',idempotencyKey:`closure-money-request-${randomUUID()}`})
     expect(request.value).toMatchObject({kind:'payment_review',status:'requested',amountMinor:null})
-    await runner.run(scope,tx=>new PostgresTableCustomerLeftTurnoverRepository(tx).close({scope,employeeId,tableSessionId:source.id,businessDate:'2026-09-13',reasonNote:'客人离店，原付款保留查询',idempotencyKey:`closure-money-table-${randomUUID()}`}))
+    await runner.run(scope,tx=>new PostgresTableCustomerLeftTurnoverRepository(tx).close({scope,employeeId,tableSessionId:source.id,businessDate:businessDate,reasonNote:'客人离店，原付款保留查询',idempotencyKey:`closure-money-table-${randomUUID()}`}))
     const read=async()=>(await new ItemAfterSalesQuery(runner).item({scope,employeeId,itemId:row.itemId})).cases.find(value=>value.caseId===request.value.caseId)!
     expect(await read()).toMatchObject({status:'requested',heldQuantity:2,moneyComplete:false,canResolveUnpaid:false,closedByOrderCancellationId:null})
     expect(await runner.run(scope,async tx=>{await tx.query('SET LOCAL ROLE mbox_runtime');return (await tx.query<{done:boolean}>('SELECT mbox.complete_quantity_case_from_order_cancellation($1) AS done',[request.value.caseId])).rows[0].done})).toBe(false)
-    const input={scope,employeeId,businessDate:'2026-09-13',caseId:request.value.caseId,reason:'核对原付款后继续原单处理',idempotencyKey:`closure-money-resolve-${randomUUID()}`}
+    const input={scope,employeeId,businessDate:businessDate,caseId:request.value.caseId,reason:'核对原付款后继续原单处理',idempotencyKey:`closure-money-resolve-${randomUUID()}`}
     await expect(service.resolveUnpaid(input)).rejects.toThrow('原付款仍有已收或未确认结果')
     await runner.run(scope,async tx=>{const payment=new PaymentRepository(tx);await payment.applyProviderQueryResult({paymentPublicId:publicId,provider:'postar',providerTransactionId:`closure-money-result-${randomUUID()}`,reportedAmountMinor:3700,reportedCurrency:'CNY',status:outcome});await payment.syncOrderPaymentStatus(row.orderId)})
     if(outcome==='closed'){
       expect(await read()).toMatchObject({canResolveUnpaid:true})
       expect((await service.resolveUnpaid(input)).value).toMatchObject({status:'completed',amountMinor:null,stoppedQuantity:2,heldQuantity:0,moneyComplete:true})
-      expect((await service.resolveUnpaid({...input,businessDate:'2026-09-14'})).replayed).toBe(true)
+      expect((await service.resolveUnpaid({...input,businessDate:nextBusinessDate})).replayed).toBe(true)
     }else{
       expect(await read()).toMatchObject({canResolveUnpaid:false,status:'requested',heldQuantity:2})
       await expect(service.resolveUnpaid(input)).rejects.toThrow('原付款仍有已收或未确认结果')
@@ -951,23 +958,23 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const serviceEmployee=await ordinaryServiceEmployee(),row=await item(),stockId=await stock(row,'reserved')
     const runtimeTransactions={run:<T>(current:typeof scope,operation:(tx:import('./transaction-runner.js').ScopedTransaction)=>Promise<T>)=>runner.run(current,async tx=>{await tx.query('SET LOCAL ROLE mbox_runtime');return operation(tx)})} as ScopedPostgresTransactionRunner
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runtimeTransactions),new ItemAfterSalesOperatingEffects())
-    const result=await service.request({scope,employeeId:serviceEmployee,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:2,reason:'正常未付两份不要了',idempotencyKey:`staff-unpaid-${randomUUID()}`})
+    const result=await service.request({scope,employeeId:serviceEmployee,businessDate:businessDate,orderItemId:row.itemId,quantity:2,reason:'正常未付两份不要了',idempotencyKey:`staff-unpaid-${randomUUID()}`})
     expect(result.value).toMatchObject({kind:'unpaid_stop',status:'completed',stoppedQuantity:2,refunds:[]})
     expect(await balance(stockId)).toEqual({on_hand:'10.000000',reserved:'3.000000'})
-    await expect(new PostgresOrderCancellationRepository(runtimeTransactions).cancel({scope,employeeId:serviceEmployee,orderId:row.orderId,businessDate:'2026-09-13',reasonCode:'other',reasonNote:'不能因此越权取消整单',idempotencyKey:`staff-whole-${randomUUID()}`})).rejects.toThrow('lacks unpaid order cancellation permission')
-    await expect(service.decide({scope,employeeId:serviceEmployee,businessDate:'2026-09-13',caseId:result.value.caseId,decision:'approved',reason:'不能因此获得审核权',idempotencyKey:`staff-review-${randomUUID()}`})).rejects.toThrow('permission')
-    await expect(service.disposeMade({scope,employeeId:serviceEmployee,businessDate:'2026-09-13',caseId:result.value.caseId,unitIds:(await runner.run(scope,tx=>new ItemQuantityRepository(tx).readUnits(row.itemId))).slice(0,1).map(unit=>unit.id),disposition:'returned_unopened',unopenedReceived:true,reason:'不能因此获得实物入库权',idempotencyKey:`staff-stock-${randomUUID()}`})).rejects.toThrow('permission')
+    await expect(new PostgresOrderCancellationRepository(runtimeTransactions).cancel({scope,employeeId:serviceEmployee,orderId:row.orderId,businessDate:businessDate,reasonCode:'other',reasonNote:'不能因此越权取消整单',idempotencyKey:`staff-whole-${randomUUID()}`})).rejects.toThrow('lacks unpaid order cancellation permission')
+    await expect(service.decide({scope,employeeId:serviceEmployee,businessDate:businessDate,caseId:result.value.caseId,decision:'approved',reason:'不能因此获得审核权',idempotencyKey:`staff-review-${randomUUID()}`})).rejects.toThrow('permission')
+    await expect(service.disposeMade({scope,employeeId:serviceEmployee,businessDate:businessDate,caseId:result.value.caseId,unitIds:(await runner.run(scope,tx=>new ItemQuantityRepository(tx).readUnits(row.itemId))).slice(0,1).map(unit=>unit.id),disposition:'returned_unopened',unopenedReceived:true,reason:'不能因此获得实物入库权',idempotencyKey:`staff-stock-${randomUUID()}`})).rejects.toThrow('permission')
   })
   it('the same ordinary staff can finish a held stop once its original payment is definitively closed',async()=>{
     const serviceEmployee=await ordinaryServiceEmployee(),row=await item(),publicId=`staff-payment-${randomUUID()}`
     await runner.run(scope,tx=>new PaymentRepository(tx).createForOrder({orderId:row.orderId,publicId,provider:'postar',method:'native_qr',initialStatus:'created',principal:{type:'employee',employeeId}}))
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const result=await service.request({scope,employeeId:serviceEmployee,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:2,reason:'付款未定先暂停两份',idempotencyKey:`staff-pending-${randomUUID()}`})
+    const result=await service.request({scope,employeeId:serviceEmployee,businessDate:businessDate,orderItemId:row.itemId,quantity:2,reason:'付款未定先暂停两份',idempotencyKey:`staff-pending-${randomUUID()}`})
     const read=()=>new ItemAfterSalesQuery(runner).item({scope,employeeId:serviceEmployee,itemId:row.itemId})
     expect((await read()).cases[0].canResolveUnpaid).toBe(false)
     await runner.run(scope,tx=>new PaymentRepository(tx).applyProviderQueryResult({paymentPublicId:publicId,provider:'postar',providerTransactionId:`staff-provider-${randomUUID()}`,reportedAmountMinor:4000,reportedCurrency:'CNY',status:'closed'}))
     expect((await read()).cases[0].canResolveUnpaid).toBe(true)
-    const resolved=await service.resolveUnpaid({scope,employeeId:serviceEmployee,businessDate:'2026-09-13',caseId:result.value.caseId,reason:'原付款关闭，直接未付停菜',idempotencyKey:`staff-resolve-${randomUUID()}`})
+    const resolved=await service.resolveUnpaid({scope,employeeId:serviceEmployee,businessDate:businessDate,caseId:result.value.caseId,reason:'原付款关闭，直接未付停菜',idempotencyKey:`staff-resolve-${randomUUID()}`})
     expect(resolved.value).toMatchObject({kind:'unpaid_stop',status:'completed',stoppedQuantity:2,refunds:[]})
   })
   it('keeps an unresolved unpaid stop out of collection, without blocking unrelated orders or treating withdrawal as resume',async()=>{
@@ -1027,7 +1034,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const stopGate=new Promise<void>(resolve=>{releaseStop=resolve}),locked=new Promise<void>(resolve=>{signalLocked=resolve}),collectionEntered=new Promise<void>(resolve=>{signalCollection=resolve})
     const stopping=runner.run(scope,async tx=>{
       await new ItemUnitInventoryRepository(tx).disposeUnmadeUnits({itemId:row.itemId,unitIds:created.unitIds,employeeId,caseId:created.caseId})
-      await new ItemQuantityReceivableRepository(tx).recordUnpaidReduction({caseId:created.caseId,employeeId,businessDate:'2026-09-13'})
+      await new ItemQuantityReceivableRepository(tx).recordUnpaidReduction({caseId:created.caseId,employeeId,businessDate:businessDate})
       signalLocked();await stopGate
     })
     await locked
@@ -1039,7 +1046,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await grantActor(employeeId,['refund.request','order.cancel_unpaid'])
     await grantActor(reviewerId,['refund.request','refund.approve'],5000)
     const row=await item(),stockId=await stock(row,'direct_sale'),key=`quantity-coordinator-${randomUUID()}`
-    const input={scope,employeeId,businessDate:'2026-09-13',idempotencyKey:key,reason:'客人未付款停止两瓶',orderItemId:row.itemId,quantity:2}
+    const input={scope,employeeId,businessDate:businessDate,idempotencyKey:key,reason:'客人未付款停止两瓶',orderItemId:row.itemId,quantity:2}
     const failed=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),{apply:async()=>{throw new Error('operational effect unavailable')}})
     await expect(failed.request(input)).rejects.toThrow('operational effect unavailable')
     expect((await pool.query('SELECT count(*)::int n FROM mbox.item_after_sales_cases WHERE order_id=$1',[row.orderId])).rows[0].n).toBe(0)
@@ -1049,7 +1056,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     // an acceptance substitute for the production KDS/notification adapter.
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),{apply:async()=>{effectCalls++}})
     const result=await service.request(input);expect(result).toMatchObject({replayed:false,value:{status:'completed',moneyComplete:true,stoppedQuantity:2}})
-    expect(await service.request({...input,businessDate:'2026-09-14'})).toEqual({...result,replayed:true})
+    expect(await service.request({...input,businessDate:nextBusinessDate})).toEqual({...result,replayed:true})
     expect(effectCalls).toBe(1);expect(await balance(stockId)).toEqual({on_hand:'7.000000',reserved:'0.000000'})
     await expect(service.request({...input,quantity:3})).rejects.toThrow('conflicts with another request')
     const stranger=randomUUID();await pool.query("INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($1,$2,$3,$4,'No capability')",[stranger,tenantId,storeId,`Q-${stranger}`])
@@ -1083,18 +1090,18 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await grantActor(employeeId,['refund.request']);await grantActor(reviewerId,['refund.approve','refund.execute'],100000)
     const row=await item(),stockId=await stock(row,'reserved');await payment(row.orderId,'cash',1600)
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const created=await service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity,reason:'按实付上限退所选商品',idempotencyKey:randomUUID()})
+    const created=await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity,reason:'按实付上限退所选商品',idempotencyKey:randomUUID()})
     const expected=Math.min(quantity*800,1600)
     expect(created.value.amountMinor).toBe(expected)
     expect(created.value.refunds).toHaveLength(1)
-    const approve={scope,employeeId:reviewerId,businessDate:'2026-09-13',caseId:created.value.caseId,decision:'approved' as const,reason:'核对实付上限并停止所选份数',idempotencyKey:randomUUID()}
+    const approve={scope,employeeId:reviewerId,businessDate:businessDate,caseId:created.value.caseId,decision:'approved' as const,reason:'核对实付上限并停止所选份数',idempotencyKey:randomUUID()}
     const approved=await service.decide(approve)
     expect(approved.value.stoppedQuantity).toBe(quantity)
     expect(await runner.run(scope,tx=>new ItemQuantityReceivableRepository(tx).readOrder(row.orderId))).toMatchObject({effectiveAmountMinor:4000-quantity*800})
     await manualResult(created.value.refunds[0]!.id,true)
     expect((await pool.query("SELECT sum(amount_minor)::int amount FROM mbox.refunds WHERE order_id=$1 AND status='succeeded'",[row.orderId])).rows[0].amount).toBe(expected)
     expect((await pool.query('SELECT total_amount_minor::int amount FROM mbox.orders WHERE id=$1',[row.orderId])).rows[0].amount).toBe(4000)
-    expect(await service.decide({...approve,businessDate:'2026-09-14'})).toMatchObject({replayed:true})
+    expect(await service.decide({...approve,businessDate:nextBusinessDate})).toMatchObject({replayed:true})
     expect((await balance(stockId)).reserved).toBe(`${5-quantity}.000000`)
     const outstanding=4000-quantity*800-(1600-expected)
     expect((await runner.run(scope,tx=>tx.query(`SELECT ${orderNeedsCollectionSql('original')} AS needs FROM mbox.orders original WHERE id=$1`,[row.orderId]))).rows[0].needs).toBe(outstanding>0)
@@ -1109,12 +1116,12 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const row=await pricedBundle(),parent=row.parent
     if(paid)await payment(row.orderId,'cash',4000)
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const created=await service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity,reason:'套餐退部分水，保留商品按单点原价',idempotencyKey:randomUUID()})
+    const created=await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity,reason:'套餐退部分水，保留商品按单点原价',idempotencyKey:randomUUID()})
     const remaining=(5-quantity)*800+2000,refund=paid?Math.max(0,4000-remaining):0
     expect(created.value.amountMinor).toBe(refund)
     const review=await new ItemAfterSalesQuery(runner).item({scope,employeeId:reviewerId,itemId:row.itemId})
     expect(review.cases[0]).toMatchObject({canApprove:paid,pricing:{policy:'broken_bundle',effectiveAmountMinor:remaining,refundAmountMinor:refund}})
-    if(paid)await service.decide({scope,employeeId:reviewerId,businessDate:'2026-09-13',caseId:created.value.caseId,decision:'approved',reason:'确认单点重算及本次差额',idempotencyKey:randomUUID()})
+    if(paid)await service.decide({scope,employeeId:reviewerId,businessDate:businessDate,caseId:created.value.caseId,decision:'approved',reason:'确认单点重算及本次差额',idempotencyKey:randomUUID()})
     expect(await runner.run(scope,tx=>new ItemQuantityReceivableRepository(tx).readOrder(row.orderId))).toMatchObject({originalAmountMinor:4000,effectiveAmountMinor:remaining})
     if(refund){
       expect((await pool.query('SELECT order_item_id FROM mbox.refund_items WHERE refund_id=$1',[created.value.refunds[0]!.id])).rows[0].order_item_id).toBe(parent)
@@ -1136,11 +1143,11 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await grantActor(employeeId,['refund.request']);await grantActor(reviewerId,['refund.approve','refund.execute'],100000)
     const row=await item();await payment(row.orderId,'cash',800)
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const request=()=>service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:1,reason:'并发退一份，以实付扣除在途退款为上限',idempotencyKey:randomUUID()})
+    const request=()=>service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity:1,reason:'并发退一份，以实付扣除在途退款为上限',idempotencyKey:randomUUID()})
     const cases=await Promise.all([request(),request()])
     expect(cases.map(c=>c.value.amountMinor).sort()).toEqual([0,800])
     for(const current of cases.sort((a,b)=>a.value.amountMinor!-b.value.amountMinor!)){
-      await service.decide({scope,employeeId:reviewerId,businessDate:'2026-09-13',caseId:current.value.caseId,decision:'approved',reason:'批准当前金额，其他申请不重复占款',idempotencyKey:randomUUID()})
+      await service.decide({scope,employeeId:reviewerId,businessDate:businessDate,caseId:current.value.caseId,decision:'approved',reason:'批准当前金额，其他申请不重复占款',idempotencyKey:randomUUID()})
       for(const refund of current.value.refunds)await manualResult(refund.id,true)
     }
     expect((await pool.query("SELECT sum(amount_minor)::int amount FROM mbox.refunds WHERE order_id=$1 AND status='succeeded'",[row.orderId])).rows[0].amount).toBe(800)
@@ -1152,9 +1159,9 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const row=await pricedBundle();await payment(row.orderId)
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
     for(const [quantity,expectedRefund,effective] of [[3,400,3600],[1,800,2800],[1,800,2000]]){
-      const created=await service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity,reason:'连续退套餐内水，每次保留原单价',idempotencyKey:randomUUID()})
+      const created=await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity,reason:'连续退套餐内水，每次保留原单价',idempotencyKey:randomUUID()})
       expect(created.value.amountMinor).toBe(expectedRefund)
-      await service.decide({scope,employeeId:reviewerId,businessDate:'2026-09-13',caseId:created.value.caseId,decision:'approved',reason:'确认本次保留商品和差额',idempotencyKey:randomUUID()})
+      await service.decide({scope,employeeId:reviewerId,businessDate:businessDate,caseId:created.value.caseId,decision:'approved',reason:'确认本次保留商品和差额',idempotencyKey:randomUUID()})
       await manualResult(created.value.refunds[0]!.id,true)
       expect(await runner.run(scope,tx=>new ItemQuantityReceivableRepository(tx).readOrder(row.orderId))).toMatchObject({effectiveAmountMinor:effective})
     }
@@ -1167,7 +1174,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const row=await pricedBundle(),publicId=`bundle-unknown-${randomUUID()}`
     await runner.run(scope,tx=>new PaymentRepository(tx).createForOrder({orderId:row.orderId,publicId,provider:'postar',method:'native_qr',initialStatus:'created',principal:{type:'employee',employeeId}}))
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const original=await service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:3,reason:'付款未知先暂停套餐三瓶',idempotencyKey:randomUUID()})
+    const original=await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity:3,reason:'付款未知先暂停套餐三瓶',idempotencyKey:randomUUID()})
     const query=()=>new ItemAfterSalesQuery(runner).item({scope,employeeId:reviewerId,itemId:row.itemId})
     expect((await query()).cases[0]).toMatchObject({amountMinor:null,canApprove:false,canResolveUnpaid:false})
     await runner.run(scope,tx=>new PaymentRepository(tx).applyProviderQueryResult({paymentPublicId:publicId,provider:'postar',providerTransactionId:`bundle-result-${randomUUID()}`,reportedAmountMinor:4000,reportedCurrency:'CNY',status:outcome}))
@@ -1176,9 +1183,9 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     // Read previews cannot reserve money or write pricing facts.
     expect((await pool.query('SELECT count(*)::int n FROM mbox.item_after_sales_price_resolutions WHERE case_id=$1',[original.value.caseId])).rows[0].n).toBe(0)
     if(outcome==='closed'){
-      await service.resolveUnpaid({scope,employeeId,businessDate:'2026-09-13',caseId:original.value.caseId,reason:'原款已关闭，接续原套餐停止',idempotencyKey:randomUUID()})
+      await service.resolveUnpaid({scope,employeeId,businessDate:businessDate,caseId:original.value.caseId,reason:'原款已关闭，接续原套餐停止',idempotencyKey:randomUUID()})
     }else{
-      await service.decide({scope,employeeId:reviewerId,businessDate:'2026-09-13',caseId:original.value.caseId,decision:'approved',reason:'已到账按原单点差额退款',idempotencyKey:randomUUID()})
+      await service.decide({scope,employeeId:reviewerId,businessDate:businessDate,caseId:original.value.caseId,decision:'approved',reason:'已到账按原单点差额退款',idempotencyKey:randomUUID()})
     }
     expect(await runner.run(scope,tx=>new ItemQuantityReceivableRepository(tx).readOrder(row.orderId))).toMatchObject({effectiveAmountMinor:3600})
     expect((await query()).cases[0]).toMatchObject({caseId:original.value.caseId,stoppedQuantity:3,heldQuantity:0})
@@ -1190,7 +1197,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const row=await pricedBundle()
     await pool.query('UPDATE mbox.order_items SET quantity=2,unit_price_minor=2000 WHERE id=$1',[row.parent]);await payment(row.orderId)
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const created=await service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:1,reason:'原多份套餐未保存逐套归属，不能取消其他完整套餐优惠',idempotencyKey:randomUUID()})
+    const created=await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity:1,reason:'原多份套餐未保存逐套归属，不能取消其他完整套餐优惠',idempotencyKey:randomUUID()})
     expect(created.value).toMatchObject({heldQuantity:1,stoppedQuantity:0,amountMinor:null,refunds:[]})
     expect((await new ItemAfterSalesQuery(runner).item({scope,employeeId:reviewerId,itemId:row.itemId})).cases[0].canApprove).toBe(false)
     expect(await runner.run(scope,tx=>new ItemQuantityReceivableRepository(tx).readOrder(row.orderId))).toMatchObject({effectiveAmountMinor:4000})
@@ -1200,12 +1207,12 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await grantActor(employeeId,['refund.request']);await grantActor(reviewerId,['refund.approve','refund.execute'],100000)
     const row=await pricedBundle();await payment(row.orderId)
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const request=(quantity:number)=>service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity,reason:'同时申请套餐内不同份数',idempotencyKey:randomUUID()})
+    const request=(quantity:number)=>service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity,reason:'同时申请套餐内不同份数',idempotencyKey:randomUUID()})
     const first=await request(2),second=await request(1)
-    const approve=(caseId:string)=>service.decide({scope,employeeId:reviewerId,businessDate:'2026-09-13',caseId,decision:'approved',reason:'核对保留商品及当前价差',idempotencyKey:randomUUID()})
+    const approve=(caseId:string)=>service.decide({scope,employeeId:reviewerId,businessDate:businessDate,caseId,decision:'approved',reason:'核对保留商品及当前价差',idempotencyKey:randomUUID()})
     await approve(first.value.caseId)
     await expect(approve(second.value.caseId)).rejects.toThrow('原付款或套餐保留商品已变化')
-    const revised=await service.revise({scope,employeeId,businessDate:'2026-09-13',caseId:second.value.caseId,quantity:1,reason:'刷新原暂停申请计价，不再重复选菜',idempotencyKey:randomUUID()})
+    const revised=await service.revise({scope,employeeId,businessDate:businessDate,caseId:second.value.caseId,quantity:1,reason:'刷新原暂停申请计价，不再重复选菜',idempotencyKey:randomUUID()})
     expect(revised.value.amountMinor).toBe(400)
     await approve(revised.value.caseId);await manualResult(revised.value.refunds[0]!.id,true)
     expect(await runner.run(scope,tx=>new ItemQuantityReceivableRepository(tx).readOrder(row.orderId))).toMatchObject({effectiveAmountMinor:3600})
@@ -1231,14 +1238,14 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const row=await item(),publicId=`late-quantity-${randomUUID()}`
     await runner.run(scope,tx=>new PaymentRepository(tx).createForOrder({orderId:row.orderId,publicId,provider:'postar',method:'native_qr',initialStatus:'created',principal:{type:'employee',employeeId}}))
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const created=await service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:2,reason:'扫码付款还未返回，先停止',idempotencyKey:`late-pause-${randomUUID()}`})
+    const created=await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity:2,reason:'扫码付款还未返回，先停止',idempotencyKey:`late-pause-${randomUUID()}`})
     const read=()=>new ItemAfterSalesQuery(runner).item({scope,employeeId:reviewerId,itemId:row.itemId})
     expect(created.value).toMatchObject({kind:'payment_review',heldQuantity:2,refunds:[]})
     expect((await read()).cases[0].canApprove).toBe(false)
     await runner.run(scope,tx=>new PaymentRepository(tx).applySucceededCallback({paymentPublicId:publicId,provider:'postar',providerTransactionId:`late-provider-${randomUUID()}`,reportedAmountMinor:4000,reportedCurrency:'CNY'}))
     const reviewed=(await read()).cases[0]
     expect(reviewed).toMatchObject({canApprove:true,heldQuantity:2,refunds:[]})
-    const approved=await service.decide({scope,employeeId:reviewerId,businessDate:'2026-09-13',caseId:created.value.caseId,decision:'approved',reason:'确认原付款已成功，原路退两份',idempotencyKey:`late-review-${randomUUID()}`})
+    const approved=await service.decide({scope,employeeId:reviewerId,businessDate:businessDate,caseId:created.value.caseId,decision:'approved',reason:'确认原付款已成功，原路退两份',idempotencyKey:`late-review-${randomUUID()}`})
     expect(approved.value).toMatchObject({heldQuantity:0,stoppedQuantity:2,moneyComplete:false,refunds:[{amountMinor:1600,status:'processing'}]})
     expect((await pool.query('SELECT count(*)::int n FROM mbox.item_after_sales_cases WHERE order_id=$1',[row.orderId])).rows[0].n).toBe(1)
   })
@@ -1248,17 +1255,17 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const row=await item(),stockId=await stock(row,'direct_sale'),publicId=`closed-quantity-${randomUUID()}`
     await runner.run(scope,tx=>new PaymentRepository(tx).createForOrder({orderId:row.orderId,publicId,provider:'postar',method:'native_qr',initialStatus:'created',principal:{type:'employee',employeeId}}))
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const created=await service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:2,reason:'等待原付款核对，先停两瓶',idempotencyKey:`close-pause-${randomUUID()}`})
+    const created=await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity:2,reason:'等待原付款核对，先停两瓶',idempotencyKey:`close-pause-${randomUUID()}`})
     const read=()=>new ItemAfterSalesQuery(runner).item({scope,employeeId,itemId:row.itemId})
     expect((await read()).cases[0].canResolveUnpaid).toBe(false)
-    const input={scope,employeeId,businessDate:'2026-09-13',caseId:created.value.caseId,reason:'原付款已确认关闭，继续停止',idempotencyKey:`close-resolve-${randomUUID()}`}
+    const input={scope,employeeId,businessDate:businessDate,caseId:created.value.caseId,reason:'原付款已确认关闭，继续停止',idempotencyKey:`close-resolve-${randomUUID()}`}
     await expect(service.resolveUnpaid(input)).rejects.toThrow('原付款仍有已收或未确认结果')
     expect(await balance(stockId)).toEqual({on_hand:'5.000000',reserved:'0.000000'})
     await runner.run(scope,tx=>new PaymentRepository(tx).applyProviderQueryResult({paymentPublicId:publicId,provider:'postar',providerTransactionId:`closed-provider-${randomUUID()}`,reportedAmountMinor:4000,reportedCurrency:'CNY',status:'closed'}))
     expect((await read()).cases[0].canResolveUnpaid).toBe(true)
     const resolved=await service.resolveUnpaid(input)
     expect(resolved.value).toMatchObject({kind:'unpaid_stop',status:'completed',stoppedQuantity:2,heldQuantity:0,moneyComplete:true,refunds:[]})
-    expect((await service.resolveUnpaid({...input,businessDate:'2026-09-14'})).replayed).toBe(true)
+    expect((await service.resolveUnpaid({...input,businessDate:nextBusinessDate})).replayed).toBe(true)
     expect(await balance(stockId)).toEqual({on_hand:'7.000000',reserved:'0.000000'})
     expect((await pool.query('SELECT kind,resolved_kind FROM mbox.item_after_sales_cases WHERE id=$1',[created.value.caseId])).rows[0]).toEqual({kind:'payment_review',resolved_kind:'unpaid_stop'})
     await expect(pool.query('UPDATE mbox.item_after_sales_cases SET resolved_kind=NULL WHERE id=$1',[created.value.caseId])).rejects.toThrow('cannot be rewritten')
@@ -1271,10 +1278,10 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const row=await item(),stockId=await stock(row,'direct_sale'),publicId=`late-after-stop-${randomUUID()}`
     await runner.run(scope,tx=>new PaymentRepository(tx).createForOrder({orderId:row.orderId,publicId,provider:'postar',method:'native_qr',initialStatus:'created',principal:{type:'employee',employeeId}}))
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const request=(await service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity,reason:'原付款核对中先停止所选瓶数',idempotencyKey:`late-stop-request-${randomUUID()}`})).value
+    const request=(await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity,reason:'原付款核对中先停止所选瓶数',idempotencyKey:`late-stop-request-${randomUUID()}`})).value
     const providerTransactionId=`late-confirmed-${randomUUID()}`
     await runner.run(scope,tx=>new PaymentRepository(tx).applyProviderQueryResult({paymentPublicId:publicId,provider:'postar',providerTransactionId,reportedAmountMinor:4000,reportedCurrency:'CNY',status:'closed'}))
-    await service.resolveUnpaid({scope,employeeId,businessDate:'2026-09-13',caseId:request.caseId,reason:'原付款已确认关闭，停止所选瓶数',idempotencyKey:`late-stop-resolve-${randomUUID()}`})
+    await service.resolveUnpaid({scope,employeeId,businessDate:businessDate,caseId:request.caseId,reason:'原付款已确认关闭，停止所选瓶数',idempotencyKey:`late-stop-resolve-${randomUUID()}`})
     if(collected)await runner.run(scope,tx=>new PaymentRepository(tx).createForOrder({...cashInput(),orderId:row.orderId}))
     const integrationRef='quantity-late-capture-isolated',occurredAt=new Date().toISOString()
     const verifiedObservationId=await new VerifiedProviderObservationService(runner).recordPayment({scope,provider:'postar',verificationKind:'callback_signature',providerEventId:`late-event-${randomUUID()}`,integrationRef,providerTransactionId,reportedAmountMinor:4000,reportedCurrency:'CNY',occurredAt,paymentPublicId:publicId,status:'succeeded'})
@@ -1286,7 +1293,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     expect((await pool.query("SELECT count(*)::int n,sum(amount_minor)::int amount FROM mbox.reconciliation_entries WHERE payment_id=$1 AND entry_type='payment'",[capture.value.id])).rows[0]).toEqual({n:1,amount:4000})
     const excess=collected?4000:quantity*800
     const cashier=async()=>{
-      const view=await new PostgresCashierWorkbenchQuery(runner).get({scope,employeeId:reviewerId,businessDate:'2026-09-13',capabilities:['refund.request','refund.execute'],query:`quantity-${row.orderId}`,limit:20})
+      const view=await new PostgresCashierWorkbenchQuery(runner).get({scope,employeeId:reviewerId,businessDate:businessDate,capabilities:['refund.request','refund.execute'],query:`quantity-${row.orderId}`,limit:20})
       return view.orders.find(order=>order.id===row.orderId)!.payments.find(payment=>payment.id===capture.value.id)!
     }
     const refundInput={...financialMetadata(),actor:{type:'employee' as const,employeeId},paymentId:capture.value.id,publicId:`late-refund-${randomUUID()}`,purpose:collected?'duplicate_payment' as const:'price_adjustment' as const,reason:'核对停止减免后的原多收款，商品保持原进度',allocations:[{orderItemId:row.itemId,amountMinor:excess}]}
@@ -1324,9 +1331,9 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await grantActor(employeeId,['refund.request']);await grantActor(reviewerId,['refund.approve'],100000)
     const row=await item();const cash=await payment(row.orderId,'cash',2000),online=await payment(row.orderId,'postar',2000)
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const created=await service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:2,reason:'原两笔付款退两瓶',idempotencyKey:`split-request-${randomUUID()}`})
+    const created=await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity:2,reason:'原两笔付款退两瓶',idempotencyKey:`split-request-${randomUUID()}`})
     expect(created.value.refunds).toHaveLength(0)
-    const input={scope,employeeId:reviewerId,businessDate:'2026-09-13',caseId:created.value.caseId,decision:'approved' as const,reason:'按两笔原付款各退八元',idempotencyKey:`split-review-${randomUUID()}`}
+    const input={scope,employeeId:reviewerId,businessDate:businessDate,caseId:created.value.caseId,decision:'approved' as const,reason:'按两笔原付款各退八元',idempotencyKey:`split-review-${randomUUID()}`}
     await expect(service.decide({...input,funding:[{paymentId:cash,amountMinor:1601}]})).rejects.toThrow('合计必须等于')
     expect((await runner.run(scope,tx=>new ItemAfterSalesProgressRepository(tx).read(created.value.caseId))).refunds).toHaveLength(0)
     const funding=[{paymentId:cash,amountMinor:800},{paymentId:online,amountMinor:800}]
@@ -1344,7 +1351,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await grantActor(employeeId,['refund.request','order.cancel_unpaid'])
     const row=await item(),stockId=await stock(row,'direct_sale')
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const created=await service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:1,reason:'客人停止一瓶',idempotencyKey:`notice-stop-${randomUUID()}`})
+    const created=await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity:1,reason:'客人停止一瓶',idempotencyKey:`notice-stop-${randomUUID()}`})
     expect(created.value).toMatchObject({status:'completed',moneyComplete:true,physicalComplete:true,unconfirmedNoticeCount:1})
     await pool.query(`UPDATE mbox.print_source_jobs SET status='dead' WHERE source_outbox_message_id IN (SELECT source_outbox_message_id FROM mbox.item_after_sales_notices WHERE case_id=$1)`,[created.value.caseId])
     const query=new ItemAfterSalesQuery(runner),read=()=>query.item({scope,employeeId,itemId:row.itemId})
@@ -1352,10 +1359,10 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     expect(current.notices).toHaveLength(1);expect(current.notices[0]).toMatchObject({stationCode:'bar',printState:'attention'})
     const pending=()=>new ItemAfterSalesHandoverQuery(runner).list({scope,employeeId,limit:100})
     expect((await pending()).items.some(value=>value.caseId===current.caseId)).toBe(true)
-    const input={scope,employeeId,businessDate:'2026-09-13',caseId:current.caseId,noticeIds:current.notices.map(value=>value.id),reason:'已电话联系吧台确认本通知',idempotencyKey:`notice-ack-${randomUUID()}`}
+    const input={scope,employeeId,businessDate:businessDate,caseId:current.caseId,noticeIds:current.notices.map(value=>value.id),reason:'已电话联系吧台确认本通知',idempotencyKey:`notice-ack-${randomUUID()}`}
     const acknowledged=await service.acknowledgeNotices(input)
     expect(acknowledged.value).toMatchObject({status:'completed',unconfirmedNoticeCount:0})
-    expect((await service.acknowledgeNotices({...input,businessDate:'2026-09-14'})).replayed).toBe(true)
+    expect((await service.acknowledgeNotices({...input,businessDate:nextBusinessDate})).replayed).toBe(true)
     expect((await pending()).items.some(value=>value.caseId===current.caseId)).toBe(false)
     expect(await balance(stockId)).toEqual({on_hand:'6.000000',reserved:'0.000000'})
     expect((await pool.query('SELECT count(*)::int n FROM mbox.item_receivable_adjustments WHERE case_id=$1',[current.caseId])).rows[0].n).toBe(1)
@@ -1365,10 +1372,10 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
   it('acknowledges only shown notice versions and cannot acknowledge another case or discard later instructions',async()=>{
     const row=await item('pending',1)
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const requested=await service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:1,reason:'暂时停止核对',idempotencyKey:`notice-version-${randomUUID()}`})
+    const requested=await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity:1,reason:'暂时停止核对',idempotencyKey:`notice-version-${randomUUID()}`})
     const first=(await new ItemAfterSalesQuery(runner).item({scope,employeeId,itemId:row.itemId})).cases[0]!.notices
-    await service.decide({scope,employeeId,businessDate:'2026-09-13',caseId:requested.value.caseId,decision:'withdrawn',reason:'客人考虑保留',idempotencyKey:`notice-withdraw-${randomUUID()}`})
-    const input={scope,employeeId,businessDate:'2026-09-13',caseId:requested.value.caseId,noticeIds:first.map(value=>value.id),reason:'只确认已展示的通知',idempotencyKey:`notice-version-ack-${randomUUID()}`}
+    await service.decide({scope,employeeId,businessDate:businessDate,caseId:requested.value.caseId,decision:'withdrawn',reason:'客人考虑保留',idempotencyKey:`notice-withdraw-${randomUUID()}`})
+    const input={scope,employeeId,businessDate:businessDate,caseId:requested.value.caseId,noticeIds:first.map(value=>value.id),reason:'只确认已展示的通知',idempotencyKey:`notice-version-ack-${randomUUID()}`}
     await expect(service.acknowledgeNotices({...input,noticeIds:[randomUUID()]})).rejects.toThrow('不属于原商品申请')
     expect((await service.acknowledgeNotices(input)).value).toMatchObject({status:'withdrawn',heldQuantity:1,unconfirmedNoticeCount:1})
     const remaining=(await new ItemAfterSalesQuery(runner).item({scope,employeeId,itemId:row.itemId})).cases[0]!
@@ -1421,7 +1428,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await expect(runner.run(scope,tx=>new ItemQuantityRepository(tx).resume({caseId:created.caseId,employeeId}))).rejects.toThrow('先处理原退款')
   })
   function financialService(){return new PaymentCommandService(new NormalizedCommandExecutor(runner),new NormalizedPaymentCapabilityAuthorization(),new NormalizedProviderObservationAuthority())}
-  function financialMetadata(){return {scope,actor:{type:'employee' as const,employeeId:reviewerId},businessDate:'2026-09-13',idempotencyKey:`quantity-finance-${randomUUID()}`,requestFingerprint:randomUUID()}}
+  function financialMetadata(){return {scope,actor:{type:'employee' as const,employeeId:reviewerId},businessDate:businessDate,idempotencyKey:`quantity-finance-${randomUUID()}`,requestFingerprint:randomUUID()}}
   async function manualResult(refundId:string,succeeded:boolean){
     const service=financialService()
     await service.beginRefundExecution({...financialMetadata(),refundId})
@@ -1440,10 +1447,10 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await grantActor(employeeId,['refund.request']);await grantActor(reviewerId,['refund.approve','refund.execute'],100000)
     const row=await item(),stockId=await stock(row,'direct_sale'),cash=await payment(row.orderId,'cash',2000),online=await payment(row.orderId,'postar',2000)
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const requested=await service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:2,reason:'组合付款退两瓶',idempotencyKey:`retry-request-${randomUUID()}`}),caseId=requested.value.caseId
-    const approved=await service.decide({scope,employeeId:reviewerId,businessDate:'2026-09-13',caseId,decision:'approved',funding:[{paymentId:cash,amountMinor:800},{paymentId:online,amountMinor:800}],reason:'一次批准原分摊',idempotencyKey:`retry-review-${randomUUID()}`})
+    const requested=await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity:2,reason:'组合付款退两瓶',idempotencyKey:`retry-request-${randomUUID()}`}),caseId=requested.value.caseId
+    const approved=await service.decide({scope,employeeId:reviewerId,businessDate:businessDate,caseId,decision:'approved',funding:[{paymentId:cash,amountMinor:800},{paymentId:online,amountMinor:800}],reason:'一次批准原分摊',idempotencyKey:`retry-review-${randomUUID()}`})
     const cashRefund=approved.value.refunds.find(refund=>refund.provider==='cash')!.id,onlineRefund=approved.value.refunds.find(refund=>refund.provider==='postar')!.id
-    const input={scope,employeeId:reviewerId,businessDate:'2026-09-13',caseId,refundId:onlineRefund,reason:'重试已核实失败的一笔',idempotencyKey:`retry-attempt-${randomUUID()}`}
+    const input={scope,employeeId:reviewerId,businessDate:businessDate,caseId,refundId:onlineRefund,reason:'重试已核实失败的一笔',idempotencyKey:`retry-attempt-${randomUUID()}`}
     await expect(service.retryRefund(input)).rejects.toThrow('尚未确认失败')
     await manualResult(cashRefund,true)
     await onlineObservation(onlineRefund,false,false)
@@ -1461,7 +1468,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     expect(replacements).toHaveLength(1)
     const replacement=replacements[0].replacement_refund_id
     for(const result of attempts)expect(result.value).toMatchObject({refundFailed:false,succeededMinor:800,moneyComplete:false})
-    expect((await service.retryRefund({...input,businessDate:'2026-09-14'})).replayed).toBe(true)
+    expect((await service.retryRefund({...input,businessDate:nextBusinessDate})).replayed).toBe(true)
     const original=(await pool.query('SELECT status,approved_by_employee_id FROM mbox.refunds WHERE id=$1',[onlineRefund])).rows[0]
     expect(original).toEqual({status:'failed',approved_by_employee_id:reviewerId})
     expect((await pool.query('SELECT payment_id,status,approved_by_employee_id,auto_execute_requested_at IS NOT NULL queued FROM mbox.refunds WHERE id=$1',[replacement])).rows[0]).toEqual({payment_id:online,status:'processing',approved_by_employee_id:reviewerId,queued:true})
@@ -1472,7 +1479,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     expect((await pool.query("SELECT count(*)::int n,sum(amount_minor)::int amount FROM mbox.reconciliation_entries WHERE refund_id=ANY($1::uuid[]) AND entry_type='refund'",[[cashRefund,onlineRefund,replacement]])).rows[0]).toEqual({n:2,amount:-1600})
     expect((await pool.query('SELECT count(*)::int n FROM mbox.item_after_sales_notices WHERE case_id=$1',[caseId])).rows[0].n).toBe(2)
     expect((await runner.run(scope,tx=>new ItemQuantityRefundRepository(tx).prepare(caseId,[{paymentId:cash,amountMinor:800},{paymentId:online,amountMinor:800}]))).refundIds.sort()).toEqual([cashRefund,replacement].sort())
-    const closedHistory=await runner.run(scope,tx=>readOperatingHistory(tx,{businessDate:'2026-09-14',earliestBusinessDate:'2026-09-14',search:`quantity-${row.orderId}`,table:'',employee:'',page:0,allowFinancialSummary:false}))
+    const closedHistory=await runner.run(scope,tx=>readOperatingHistory(tx,{businessDate:nextBusinessDate,earliestBusinessDate:nextBusinessDate,search:`quantity-${row.orderId}`,table:'',employee:'',page:0,allowFinancialSummary:false}))
     expect(closedHistory.orders).toHaveLength(0)
     await expect(service.retryRefund({...input,refundId:cashRefund,idempotencyKey:`retry-success-${randomUUID()}`})).rejects.toThrow('尚未确认失败')
   })
@@ -1482,7 +1489,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await runner.run(scope,tx=>new ItemQuantityRefundRepository(tx).decide({caseId:created.caseId,employeeId:reviewerId,decision:'approved',reason:'原单同意退一份'}))
     await manualResult(prepared.refundIds[0],false)
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const result=await service.retryRefund({scope,employeeId:reviewerId,businessDate:'2026-09-13',caseId:created.caseId,refundId:prepared.refundIds[0],reason:'现金未交付重试原退付',idempotencyKey:`retry-cash-${randomUUID()}`})
+    const result=await service.retryRefund({scope,employeeId:reviewerId,businessDate:businessDate,caseId:created.caseId,refundId:prepared.refundIds[0],reason:'现金未交付重试原退付',idempotencyKey:`retry-cash-${randomUUID()}`})
     expect(result.value).toMatchObject({awaitingCashPayout:true,moneyComplete:false,refundFailed:false})
     const replacement=result.value.refunds.find(refund=>refund.id!==prepared.refundIds[0])!
     expect(replacement.status).toBe('approved')
@@ -1494,11 +1501,11 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await grantActor(employeeId,['refund.request']);await grantActor(reviewerId,['refund.approve','refund.execute'],100000)
     const row=await item(),stockId=await stock(row,'direct_sale');await payment(row.orderId)
     const created=await hold(row.itemId,5),prepared=await runner.run(scope,tx=>new ItemQuantityRefundRepository(tx).prepare(created.caseId))
-    await new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects()).decide({scope,employeeId:reviewerId,businessDate:'2026-09-13',caseId:created.caseId,decision:'approved',reason:'全部五份停止退款',idempotencyKey:`review-all-${randomUUID()}`})
+    await new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects()).decide({scope,employeeId:reviewerId,businessDate:businessDate,caseId:created.caseId,decision:'approved',reason:'全部五份停止退款',idempotencyKey:`review-all-${randomUUID()}`})
     expect((await pool.query('SELECT status FROM mbox.order_items WHERE id=$1',[row.itemId])).rows[0].status).toBe('cancelled')
     await manualResult(prepared.refundIds[0],false)
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const retried=await service.retryRefund({scope,employeeId:reviewerId,businessDate:'2026-09-13',caseId:created.caseId,refundId:prepared.refundIds[0],reason:'原整行已停，只接续退款',idempotencyKey:`retry-all-${randomUUID()}`})
+    const retried=await service.retryRefund({scope,employeeId:reviewerId,businessDate:businessDate,caseId:created.caseId,refundId:prepared.refundIds[0],reason:'原整行已停，只接续退款',idempotencyKey:`retry-all-${randomUUID()}`})
     const replacement=retried.value.refunds.find(refund=>refund.id!==prepared.refundIds[0])!
     await manualResult(replacement.id,true)
     expect(await runner.run(scope,tx=>new ItemAfterSalesProgressRepository(tx).read(created.caseId))).toMatchObject({status:'completed',succeededMinor:4000})
@@ -1515,13 +1522,13 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await expect(another(800)).resolves.toMatchObject({amountMinor:800,status:'requested'})
     const read=await new ItemAfterSalesQuery(runner).item({scope,employeeId:reviewerId,itemId:row.itemId})
     expect(read.fundingSources[0].availableMinor).toBe(1600)
-    const cashier=await new PostgresCashierWorkbenchQuery(runner).get({scope,employeeId:reviewerId,businessDate:'2026-09-13',capabilities:['refund.request','refund.execute'],query:`quantity-${row.orderId}`,limit:20})
+    const cashier=await new PostgresCashierWorkbenchQuery(runner).get({scope,employeeId:reviewerId,businessDate:businessDate,capabilities:['refund.request','refund.execute'],query:`quantity-${row.orderId}`,limit:20})
     expect(cashier.orders.find(order=>order.id===row.orderId)?.payments[0]).toMatchObject({reservedRefundAmountMinor:2400,remainingRefundableMinor:1600,refundableItems:[{remainingRefundableMinor:1600}]})
     for(const override of [{allocations:[{orderItemId:row.itemId,amountMinor:800}]},{requestedByEmployeeId:reviewerId},{purpose:'price_adjustment' as const},{quantityRetryOf:''}]){
       await expect(runner.run(scope,tx=>new RefundRepository(tx).request({quantityRetryOf:prepared.refundIds[0],paymentId,publicId:`bad-retry-${randomUUID()}`,requestedByEmployeeId:employeeId,purpose:'return_goods',reason:'不能改写原重试事实',allocations:[{orderItemId:row.itemId,amountMinor:1600}],...override}))).rejects.toThrow()
     }
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const retried=await service.retryRefund({scope,employeeId:reviewerId,businessDate:'2026-09-13',caseId:created.caseId,refundId:prepared.refundIds[0],reason:'原额度仍可接续',idempotencyKey:`retry-held-amount-${randomUUID()}`})
+    const retried=await service.retryRefund({scope,employeeId:reviewerId,businessDate:businessDate,caseId:created.caseId,refundId:prepared.refundIds[0],reason:'原额度仍可接续',idempotencyKey:`retry-held-amount-${randomUUID()}`})
     expect(retried.value.refunds.filter(refund=>!refund.replacedByRefundId).map(refund=>refund.amountMinor)).toEqual([1600])
   })
   it('keeps failed quantity approval within its combined-payment share while another original order refunds independently',async()=>{
@@ -1535,13 +1542,13 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await expect(another(first.itemId,3200)).rejects.toThrow('可退分摊金额')
     await expect(another(second.itemId,4000)).resolves.toMatchObject({amountMinor:4000,orderId:second.orderId})
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const retried=await service.retryRefund({scope,employeeId:reviewerId,businessDate:'2026-09-13',caseId:created.caseId,refundId:prepared.refundIds[0],reason:'接续原合付分摊',idempotencyKey:`retry-batch-${randomUUID()}`})
+    const retried=await service.retryRefund({scope,employeeId:reviewerId,businessDate:businessDate,caseId:created.caseId,refundId:prepared.refundIds[0],reason:'接续原合付分摊',idempotencyKey:`retry-batch-${randomUUID()}`})
     const current=retried.value.refunds.find(refund=>!refund.replacedByRefundId)!
     expect(current).toMatchObject({amountMinor:1600,status:'approved'})
     expect((await new ItemAfterSalesQuery(runner).item({scope,employeeId:reviewerId,itemId:first.itemId})).fundingSources[0].availableMinor).toBe(2400)
     // Failing the replacement again transfers the same approval to one new leaf.
     await manualResult(current.id,false)
-    const repeated=await service.retryRefund({scope,employeeId:reviewerId,businessDate:'2026-09-13',caseId:created.caseId,refundId:current.id,reason:'仍未交付，原失败再接续',idempotencyKey:`retry-batch-again-${randomUUID()}`})
+    const repeated=await service.retryRefund({scope,employeeId:reviewerId,businessDate:businessDate,caseId:created.caseId,refundId:current.id,reason:'仍未交付，原失败再接续',idempotencyKey:`retry-batch-again-${randomUUID()}`})
     expect(repeated.value.refunds.filter(refund=>!refund.replacedByRefundId)).toHaveLength(1)
     expect((await new ItemAfterSalesQuery(runner).item({scope,employeeId:reviewerId,itemId:first.itemId})).fundingSources[0].availableMinor).toBe(2400)
     expect((await pool.query('SELECT count(*)::int n FROM mbox.item_after_sales_cases WHERE order_id=$1',[second.orderId])).rows[0].n).toBe(0)
@@ -1554,7 +1561,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
       await runner.run(scope,tx=>new ItemQuantityRefundRepository(tx).decide({caseId:created.caseId,employeeId:reviewerId,decision:'approved',reason:'原退货审核'}))
       if(provider==='cash')await runner.run(scope,async tx=>{const refunds=new RefundRepository(tx);await refunds.beginExecution(prepared.refundIds[0]);await refunds.completeManualExecution({refundId:prepared.refundIds[0],succeeded:false,receiptReference:''})})
       else {await onlineObservation(prepared.refundIds[0],false);await onlineObservation(prepared.refundIds[0],true,false)}
-      const input={scope,employeeId:reviewerId,businessDate:'2026-09-13',caseId:created.caseId,refundId:prepared.refundIds[0],reason:'不能把异常当失败',idempotencyKey:`retry-no-proof-${randomUUID()}`}
+      const input={scope,employeeId:reviewerId,businessDate:businessDate,caseId:created.caseId,refundId:prepared.refundIds[0],reason:'不能把异常当失败',idempotencyKey:`retry-no-proof-${randomUUID()}`}
       await expect(service.retryRefund(input)).rejects.toThrow('尚未确认失败')
       expect((await pool.query('SELECT count(*)::int n FROM mbox.item_after_sales_refund_retries WHERE case_id=$1',[created.caseId])).rows[0].n).toBe(0)
     }
@@ -1643,7 +1650,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
   })
   it('records exactly the stopped unpaid receivable once while preserving the original invoice',async()=>{
     const row=await item(),created=await hold(row.itemId,2,'unpaid_stop')
-    const reduction=()=>runner.run(scope,tx=>new ItemQuantityReceivableRepository(tx).recordUnpaidReduction({caseId:created.caseId,employeeId,businessDate:'2026-09-13'}))
+    const reduction=()=>runner.run(scope,tx=>new ItemQuantityReceivableRepository(tx).recordUnpaidReduction({caseId:created.caseId,employeeId,businessDate:businessDate}))
     await expect(reduction()).rejects.toThrow('库存处置')
     await runner.run(scope,tx=>new ItemUnitInventoryRepository(tx).disposeUnmadeUnits({itemId:row.itemId,unitIds:created.unitIds,employeeId,caseId:created.caseId}))
     const first=await reduction();expect(first).toMatchObject({amountMinor:1600,quantity:2,replayed:false})
@@ -1698,10 +1705,10 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const source=await freshTableSession(),row=await item('pending',0,source.id)
     const created=await hold(row.itemId,2)
     await runner.run(scope,tx=>new ItemQuantityRepository(tx).decide({caseId:created.caseId,employeeId,decision:'withdrawn',reason:'暂不退款，但未确认继续制作'}))
-    if(closedKind==='cancelled_order')await new PostgresOrderCancellationRepository(runner).cancel({scope,employeeId,orderId:row.orderId,businessDate:'2026-09-13',reasonCode:'guest_left',reasonNote:'原整单已停止',idempotencyKey:`closed-resume-${randomUUID()}`})
+    if(closedKind==='cancelled_order')await new PostgresOrderCancellationRepository(runner).cancel({scope,employeeId,orderId:row.orderId,businessDate:businessDate,reasonCode:'guest_left',reasonNote:'原整单已停止',idempotencyKey:`closed-resume-${randomUUID()}`})
     else await pool.query("UPDATE mbox.table_sessions SET status='closed',closed_at=clock_timestamp() WHERE id=$1",[source.id])
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    await expect(service.resume({scope,employeeId,caseId:created.caseId,businessDate:'2026-09-13',reason:'旧页面点击继续',idempotencyKey:`resume-old-${randomUUID()}`})).rejects.toThrow('原桌次或商品已结束')
+    await expect(service.resume({scope,employeeId,caseId:created.caseId,businessDate:businessDate,reason:'旧页面点击继续',idempotencyKey:`resume-old-${randomUUID()}`})).rejects.toThrow('原桌次或商品已结束')
     const workspace=await new ItemAfterSalesQuery(runner).item({scope,employeeId,itemId:row.itemId})
     expect(workspace.canRequest).toBe(false)
     expect(workspace.cases.find(value=>value.caseId===created.caseId)).toMatchObject({canResume:false,heldQuantity:closedKind==='cancelled_order'?0:2,resumeUnavailableReason:closedKind==='cancelled_order'?null:'原桌次或商品已结束，不能继续原商品；原售后记录仍可核对。'})
@@ -1718,7 +1725,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const actor=await ordinaryServiceEmployee(),row=await item('failed'),stockId=await stock(row,'direct_sale')
     if(paid)await payment(row.orderId)
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    await expect(service.request({scope,employeeId:actor,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:1,reason:'旧失败单不能只拆一份再封死原重做入口',idempotencyKey:randomUUID()})).rejects.toMatchObject({code:'QUANTITY_FACTS_CONFLICT'})
+    await expect(service.request({scope,employeeId:actor,businessDate:businessDate,orderItemId:row.itemId,quantity:1,reason:'旧失败单不能只拆一份再封死原重做入口',idempotencyKey:randomUUID()})).rejects.toMatchObject({code:'QUANTITY_FACTS_CONFLICT'})
     const view=await new ItemAfterSalesQuery(runner).item({scope,employeeId:actor,itemId:row.itemId})
     expect(view.canRequest).toBe(false);expect(view.quantityEntryUnavailableReason).toContain('原异常入口保留')
     expect(view.units).toHaveLength(0);expect(view.cases).toHaveLength(0)
@@ -1738,9 +1745,9 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     if(state==='delivered')await pool.query("UPDATE mbox.order_items SET status='delivered' WHERE id=$1",[row.itemId])
     const runtime={run:<T>(current:typeof scope,operation:(tx:import('./transaction-runner.js').ScopedTransaction)=>Promise<T>)=>runner.run(current,async tx=>{await tx.query('SET LOCAL ROLE mbox_runtime');return operation(tx)})} as ScopedPostgresTransactionRunner
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runtime),new ItemAfterSalesOperatingEffects())
-    const request=await service.request({scope,employeeId:actor,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:2,reason:'客人不要这两瓶，先暂停原商品',idempotencyKey:randomUUID()})
+    const request=await service.request({scope,employeeId:actor,businessDate:businessDate,orderItemId:row.itemId,quantity:2,reason:'客人不要这两瓶，先暂停原商品',idempotencyKey:randomUUID()})
     expect(request.value).toMatchObject({kind:'unpaid_stop',status:'requested',heldQuantity:2,stoppedQuantity:0,moneyComplete:false,refunds:[]})
-    const decision={scope,employeeId:actor,businessDate:'2026-09-13',caseId:request.value.caseId,decision:'approved' as const,reason:'按现有授权确认所选两瓶停止并免收',idempotencyKey:randomUUID()}
+    const decision={scope,employeeId:actor,businessDate:businessDate,caseId:request.value.caseId,decision:'approved' as const,reason:'按现有授权确认所选两瓶停止并免收',idempotencyKey:randomUUID()}
     await expect(service.decide(decision)).rejects.toThrow('does not have permission')
     await grantActor(actor,['order.cancel_unpaid','inventory.receive','inventory.waste'])
     if(state==='delivered'){
@@ -1749,7 +1756,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     }
     const approved=await service.decide(decision)
     expect(approved.value).toMatchObject({status:'approved',moneyComplete:true,physicalComplete:false,heldQuantity:2,refunds:[]})
-    expect((await new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runtime),new ItemAfterSalesOperatingEffects(),false).decide({...decision,businessDate:'2026-09-14'})).replayed).toBe(true)
+    expect((await new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runtime),new ItemAfterSalesOperatingEffects(),false).decide({...decision,businessDate:nextBusinessDate})).replayed).toBe(true)
     expect(await runner.run(scope,tx=>new ItemQuantityReceivableRepository(tx).readOrder(row.orderId))).toMatchObject({originalAmountMinor:4000,effectiveAmountMinor:2400})
     expect(await balance(stockId)).toEqual({on_hand:'5.000000',reserved:'0.000000'})
     const selected=(await pool.query('SELECT id,production_state FROM mbox.order_item_quantity_units WHERE held_by_case_id=$1 ORDER BY unit_index',[request.value.caseId])).rows
@@ -1757,7 +1764,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     // Remaining goods can be paid while this original physical handover is open.
     const collected=await runner.run(scope,tx=>new PaymentRepository(tx).createForOrder({...cashInput(),orderId:row.orderId}))
     expect(collected.amountMinor).toBe(2400)
-    const physical={scope,employeeId:actor,businessDate:'2026-09-13',caseId:request.value.caseId,unitIds:[selected[0].id],disposition:'returned_unopened' as const,unopenedReceived:true,reason:'这瓶已实际收回且未开封',idempotencyKey:randomUUID()}
+    const physical={scope,employeeId:actor,businessDate:businessDate,caseId:request.value.caseId,unitIds:[selected[0].id],disposition:'returned_unopened' as const,unopenedReceived:true,reason:'这瓶已实际收回且未开封',idempotencyKey:randomUUID()}
     await service.disposeMade(physical)
     expect((await service.disposeMade(physical)).replayed).toBe(true)
     const completed=await service.disposeMade({...physical,unitIds:[selected[1].id],disposition:'used_loss',unopenedReceived:false,reason:'另一瓶已开封，原耗用不再重复扣库',idempotencyKey:randomUUID()})
@@ -1770,18 +1777,18 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     if(state==='delivered')await pool.query("UPDATE mbox.order_items SET status='delivered' WHERE id=$1",[row.itemId])
     const runtime={run:<T>(current:typeof scope,operation:(tx:import('./transaction-runner.js').ScopedTransaction)=>Promise<T>)=>runner.run(current,async tx=>{await tx.query('SET LOCAL ROLE mbox_runtime');return operation(tx)})} as ScopedPostgresTransactionRunner
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runtime),new ItemAfterSalesOperatingEffects())
-    const request=await service.request({scope,employeeId:actor,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:2,reason:'先暂停这两份，现场核对后决定',idempotencyKey:randomUUID()})
-    const decision={scope,employeeId:actor,businessDate:'2026-09-13',caseId:request.value.caseId,decision:'rejected' as const,reason:'不同意免收，客人确认保留原商品',idempotencyKey:randomUUID()}
+    const request=await service.request({scope,employeeId:actor,businessDate:businessDate,orderItemId:row.itemId,quantity:2,reason:'先暂停这两份，现场核对后决定',idempotencyKey:randomUUID()})
+    const decision={scope,employeeId:actor,businessDate:businessDate,caseId:request.value.caseId,decision:'rejected' as const,reason:'不同意免收，客人确认保留原商品',idempotencyKey:randomUUID()}
     await expect(service.decide(decision)).rejects.toThrow('does not have permission')
     await grantActor(actor,[state==='delivered'?'order.settle_exception':'order.cancel_unpaid'])
     const view=await new ItemAfterSalesQuery(runtime).item({scope,employeeId:actor,itemId:row.itemId})
     const rejected=await service.decide(decision)
     expect(view.cases.find(value=>value.caseId===request.value.caseId)?.canReject).toBe(true)
     expect(rejected.value).toMatchObject({kind:'unpaid_stop',status:'rejected',heldQuantity:2,stoppedQuantity:0,moneyComplete:false,refunds:[]})
-    expect((await new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runtime),new ItemAfterSalesOperatingEffects(),false).decide({...decision,businessDate:'2026-09-14'})).replayed).toBe(true)
+    expect((await new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runtime),new ItemAfterSalesOperatingEffects(),false).decide({...decision,businessDate:nextBusinessDate})).replayed).toBe(true)
     expect(await runner.run(scope,tx=>new ItemQuantityReceivableRepository(tx).readOrder(row.orderId))).toMatchObject({originalAmountMinor:4000,effectiveAmountMinor:4000})
     expect(await balance(stockId)).toEqual({on_hand:'5.000000',reserved:'0.000000'})
-    const resumed=await service.resume({scope,employeeId:actor,businessDate:'2026-09-13',caseId:request.value.caseId,reason:'客人确认继续原商品，已通知岗位勿重做',idempotencyKey:randomUUID()})
+    const resumed=await service.resume({scope,employeeId:actor,businessDate:businessDate,caseId:request.value.caseId,reason:'客人确认继续原商品，已通知岗位勿重做',idempotencyKey:randomUUID()})
     expect(resumed.value).toMatchObject({status:'rejected',heldQuantity:0,stoppedQuantity:0,refunds:[]})
     expect((await pool.query('SELECT DISTINCT production_state FROM mbox.order_item_quantity_units WHERE order_item_id=$1',[row.itemId])).rows).toEqual([{production_state:state}])
     expect((await pool.query('SELECT count(*)::int n FROM mbox.item_receivable_adjustments WHERE case_id=$1',[request.value.caseId])).rows[0].n).toBe(0)
@@ -1792,17 +1799,17 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const row=await item(),stockId=await stock(row,'reserved')
     await runner.run(scope,tx=>new ItemQuantityFulfillmentRepository(tx).complete({itemId:row.itemId,taskId:row.taskId,employeeId,quantity:2,eventKey:randomUUID()}))
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const request=await service.request({scope,employeeId:actor,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:4,reason:'三份未做和一份已做都先暂停',idempotencyKey:randomUUID()})
+    const request=await service.request({scope,employeeId:actor,businessDate:businessDate,orderItemId:row.itemId,quantity:4,reason:'三份未做和一份已做都先暂停',idempotencyKey:randomUUID()})
     expect(request.value).toMatchObject({madeQuantity:1,heldQuantity:4,moneyComplete:false,stoppedQuantity:0})
     const view=(await new ItemAfterSalesQuery(runner).item({scope,employeeId:actor,itemId:row.itemId})).cases.find(value=>value.caseId===request.value.caseId)!
     expect(view.canApprove).toBe(true)
-    const approved=await service.decide({scope,employeeId:actor,businessDate:'2026-09-13',caseId:request.value.caseId,decision:'approved',reason:'现有取消权限确认四份不再收费',idempotencyKey:randomUUID()})
+    const approved=await service.decide({scope,employeeId:actor,businessDate:businessDate,caseId:request.value.caseId,decision:'approved',reason:'现有取消权限确认四份不再收费',idempotencyKey:randomUUID()})
     expect(approved.value).toMatchObject({heldQuantity:1,stoppedQuantity:3,moneyComplete:true,physicalComplete:false,refunds:[]})
     expect(await balance(stockId)).toEqual({on_hand:'8.000000',reserved:'0.000000'})
     const collected=await runner.run(scope,tx=>new PaymentRepository(tx).createForOrder({...cashInput(),orderId:row.orderId}))
     expect(collected.amountMinor).toBe(800)
     const made=(await pool.query('SELECT id FROM mbox.order_item_quantity_units WHERE held_by_case_id=$1',[request.value.caseId])).rows[0].id
-    const done=await service.disposeMade({scope,employeeId:actor,businessDate:'2026-09-13',caseId:request.value.caseId,unitIds:[made],disposition:'used_loss',unopenedReceived:false,reason:'该份已开封耗用，无实物回库',idempotencyKey:randomUUID()})
+    const done=await service.disposeMade({scope,employeeId:actor,businessDate:businessDate,caseId:request.value.caseId,unitIds:[made],disposition:'used_loss',unopenedReceived:false,reason:'该份已开封耗用，无实物回库',idempotencyKey:randomUUID()})
     expect(done.value).toMatchObject({status:'completed',stoppedQuantity:4,moneyComplete:true,refunds:[]})
     expect(await balance(stockId)).toEqual({on_hand:'8.000000',reserved:'0.000000'})
   })
@@ -1810,16 +1817,16 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const actor=await ordinaryServiceEmployee();await grantActor(actor,['order.cancel_unpaid','inventory.waste'])
     const row=await item('ready',mode==='unknown_price'?333:0),stockId=await stock(row,'direct_sale')
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const request=await service.request({scope,employeeId:actor,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:2,reason:'先暂停并保留实际原成交事实',idempotencyKey:randomUUID()})
+    const request=await service.request({scope,employeeId:actor,businessDate:businessDate,orderItemId:row.itemId,quantity:2,reason:'先暂停并保留实际原成交事实',idempotencyKey:randomUUID()})
     if(mode==='late_payment')await payment(row.orderId)
-    await expect(service.decide({scope,employeeId:actor,businessDate:'2026-09-13',caseId:request.value.caseId,decision:'approved',reason:'金额或原支付事实未核定不能免收',idempotencyKey:randomUUID()})).rejects.toMatchObject({code:mode==='unknown_price'?'PRICE_REVIEW_REQUIRED':'QUANTITY_UNAVAILABLE'})
+    await expect(service.decide({scope,employeeId:actor,businessDate:businessDate,caseId:request.value.caseId,decision:'approved',reason:'金额或原支付事实未核定不能免收',idempotencyKey:randomUUID()})).rejects.toMatchObject({code:mode==='unknown_price'?'PRICE_REVIEW_REQUIRED':'QUANTITY_UNAVAILABLE'})
     const view=(await new ItemAfterSalesQuery(runner).item({scope,employeeId:actor,itemId:row.itemId})).cases.find(value=>value.caseId===request.value.caseId)!
     expect(view).toMatchObject({status:'requested',heldQuantity:2,canApprove:false,moneyComplete:false})
     expect(view.unpaidPaymentChanged).toBe(mode==='late_payment')
     expect((await pool.query('SELECT count(*)::int n FROM mbox.item_receivable_adjustments WHERE case_id=$1',[request.value.caseId])).rows[0].n).toBe(0)
     expect(await balance(stockId)).toEqual({on_hand:'5.000000',reserved:'0.000000'})
     if(mode==='late_payment'){
-      const revision=await service.revise({scope,employeeId:actor,businessDate:'2026-09-13',caseId:request.value.caseId,quantity:2,reason:'原付款已入账，保持暂停并按原款申请退款',idempotencyKey:randomUUID()})
+      const revision=await service.revise({scope,employeeId:actor,businessDate:businessDate,caseId:request.value.caseId,quantity:2,reason:'原付款已入账，保持暂停并按原款申请退款',idempotencyKey:randomUUID()})
       expect(revision.value).toMatchObject({kind:'paid_return',status:'requested',heldQuantity:2,moneyComplete:false})
       expect(revision.value.refunds).toHaveLength(1)
       expect(revision.value.refunds[0]).toMatchObject({status:'requested',amountMinor:1600})
@@ -1827,8 +1834,8 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
       expect(await balance(stockId)).toEqual({on_hand:'5.000000',reserved:'0.000000'})
       return
     }
-    await service.decide({scope,employeeId:actor,businessDate:'2026-09-13',caseId:request.value.caseId,decision:'withdrawn',reason:'客人保留原商品，先撤回本次停止',idempotencyKey:randomUUID()})
-    await service.resume({scope,employeeId:actor,businessDate:'2026-09-13',caseId:request.value.caseId,reason:'明确继续原商品，勿重做或重复扣库',idempotencyKey:randomUUID()})
+    await service.decide({scope,employeeId:actor,businessDate:businessDate,caseId:request.value.caseId,decision:'withdrawn',reason:'客人保留原商品，先撤回本次停止',idempotencyKey:randomUUID()})
+    await service.resume({scope,employeeId:actor,businessDate:businessDate,caseId:request.value.caseId,reason:'明确继续原商品，勿重做或重复扣库',idempotencyKey:randomUUID()})
     expect((await pool.query('SELECT count(*)::int n FROM mbox.order_item_quantity_units WHERE held_by_case_id=$1',[request.value.caseId])).rows[0].n).toBe(0)
   })
   it('can promptly hold discounted goods while keeping unknown per-unit refund price for review',async()=>{
@@ -1845,29 +1852,29 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await runner.run(scope,tx=>new ItemQuantityFulfillmentRepository(tx).complete({itemId:row.itemId,taskId:row.taskId,employeeId,quantity:1,eventKey:`handover-ready-${randomUUID()}`}))
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
     // Hold all units so the made share remains in this same original request.
-    const request=await service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:5,reason:'原商品需要售后处置',idempotencyKey:`handover-request-${randomUUID()}`})
+    const request=await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity:5,reason:'原商品需要售后处置',idempotencyKey:`handover-request-${randomUUID()}`})
     const list=async(id:string)=>{
       let cursor:{createdAt:string;id:string}|undefined
       do{const page=await new ItemAfterSalesHandoverQuery(runner).list({scope,employeeId:id,limit:100,cursor});if(page.items.some(value=>value.caseId===request.value.caseId))return true;cursor=page.nextCursor??undefined}while(cursor)
       return false
     }
     expect(await list(inventoryWorker)).toBe(false)
-    await runner.run(scope,tx=>new PostgresTableCustomerLeftTurnoverRepository(tx).close({scope,employeeId,tableSessionId:source.id,businessDate:'2026-09-13',reasonNote:'客人离店，交班接续原商品处置',idempotencyKey:`handover-close-${randomUUID()}`}))
+    await runner.run(scope,tx=>new PostgresTableCustomerLeftTurnoverRepository(tx).close({scope,employeeId,tableSessionId:source.id,businessDate:businessDate,reasonNote:'客人离店，交班接续原商品处置',idempotencyKey:`handover-close-${randomUUID()}`}))
     expect(await list(inventoryWorker)).toBe(false)
-    await service.decide({scope,employeeId:decision==='withdrawn'?employeeId:reviewerId,businessDate:'2026-09-13',caseId:request.value.caseId,decision,reason:'原审核决定，实物交接处理',idempotencyKey:`handover-decision-${randomUUID()}`})
+    await service.decide({scope,employeeId:decision==='withdrawn'?employeeId:reviewerId,businessDate:businessDate,caseId:request.value.caseId,decision,reason:'原审核决定，实物交接处理',idempotencyKey:`handover-decision-${randomUUID()}`})
     expect(await list(ordinary)).toBe(false);expect(await list(inventoryWorker)).toBe(true)
     expect((await new ItemAfterSalesHandoverQuery(runner).list({scope,employeeId:inventoryWorker,limit:100})).items.find(value=>value.caseId===request.value.caseId)).toMatchObject({physicalOnly:true})
     const workspace=await new ItemAfterSalesQuery(runner).item({scope,employeeId:inventoryWorker,itemId:row.itemId})
     expect(workspace).toMatchObject({canRecordUsed:true,canReceive:false,canExecuteRefund:false})
     expect(workspace.cases[0]).toMatchObject({canApprove:false,canReject:false,canResume:false})
     const made=(await pool.query("SELECT id FROM mbox.order_item_quantity_units WHERE order_item_id=$1 AND production_state='ready'",[row.itemId])).rows[0].id
-    const done=await service.disposeMade({scope,employeeId:inventoryWorker,businessDate:'2026-09-14',caseId:request.value.caseId,unitIds:[made],disposition:'used_loss',unopenedReceived:false,reason:'交班确认原商品已消耗，无实物回库',idempotencyKey:`handover-used-${randomUUID()}`})
+    const done=await service.disposeMade({scope,employeeId:inventoryWorker,businessDate:nextBusinessDate,caseId:request.value.caseId,unitIds:[made],disposition:'used_loss',unopenedReceived:false,reason:'交班确认原商品已消耗，无实物回库',idempotencyKey:`handover-used-${randomUUID()}`})
     expect(done.value).toMatchObject({physicalComplete:true,heldQuantity:0,succeededMinor:0})
     expect(await balance(stockId)).toEqual({on_hand:'9.000000',reserved:'0.000000'})
     // The worker must still find their original notice acknowledgement after
     // finishing the last physical share or recovering across a page reload.
     expect(await list(inventoryWorker)).toBe(true)
-    await service.acknowledgeNotices({scope,employeeId:inventoryWorker,businessDate:'2026-09-14',caseId:request.value.caseId,noticeIds:(await new ItemAfterSalesQuery(runner).item({scope,employeeId:inventoryWorker,itemId:row.itemId})).cases[0].notices.map(value=>value.id),reason:'交班已联系原岗位核对全部通知',idempotencyKey:`handover-ack-${randomUUID()}`})
+    await service.acknowledgeNotices({scope,employeeId:inventoryWorker,businessDate:nextBusinessDate,caseId:request.value.caseId,noticeIds:(await new ItemAfterSalesQuery(runner).item({scope,employeeId:inventoryWorker,itemId:row.itemId})).cases[0].notices.map(value=>value.id),reason:'交班已联系原岗位核对全部通知',idempotencyKey:`handover-ack-${randomUUID()}`})
     expect(await list(inventoryWorker)).toBe(false)
     if(decision==='approved')expect(await list(reviewerId)).toBe(true)
   })
@@ -1879,7 +1886,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const row=await item();await payment(row.orderId)
     const runtimeTransactions={run:<T>(current:typeof scope,operation:(tx:import('./transaction-runner.js').ScopedTransaction)=>Promise<T>)=>runner.run(current,async tx=>{await tx.query('SET LOCAL ROLE mbox_runtime');return operation(tx)})} as ScopedPostgresTransactionRunner
     const effects=new ItemAfterSalesOperatingEffects(),service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runtimeTransactions),effects)
-    const request={scope,employeeId,businessDate:'2026-09-13',idempotencyKey:`quantity-notice-${randomUUID()}`,orderItemId:row.itemId,quantity:2,reason:'客人先暂停两瓶'}
+    const request={scope,employeeId,businessDate:businessDate,idempotencyKey:`quantity-notice-${randomUUID()}`,orderItemId:row.itemId,quantity:2,reason:'客人先暂停两瓶'}
     const created=await service.request(request),caseId=created.value.caseId
     await runner.run(scope,tx=>effects.apply(tx,{caseId,employeeId,action:'request',eventKey:'different-click-same-case'}))
     expect((await pool.query("SELECT count(*)::int n FROM mbox.print_source_jobs job JOIN mbox.outbox_messages message ON message.tenant_id=job.tenant_id AND message.store_id=job.store_id AND message.id=job.source_outbox_message_id WHERE job.tenant_id=$1 AND job.ticket_kind='production_notice' AND message.payload->>'caseId'=$2",[tenantId,caseId])).rows[0].n).toBe(1)
@@ -1902,7 +1909,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     expect(notice).toHaveLength(1);expect(notice[0]).toMatchObject({station_code:'bar',printer_device_id:printer,print_snapshot:{title:'商品处理通知',tableCode:'Q01',lines:[{quantity:2}]}})
     expect(notice[0].print_snapshot.subtitle).toContain('暂停')
     expect((await worker.runBatch(scope,'quantity-notice-restart')).examined).toBe(0)
-    await service.decide({scope,employeeId:reviewerId,businessDate:'2026-09-13',idempotencyKey:`quantity-notice-review-${randomUUID()}`,caseId,decision:'approved',reason:'同意原单停止两瓶'})
+    await service.decide({scope,employeeId:reviewerId,businessDate:businessDate,idempotencyKey:`quantity-notice-review-${randomUUID()}`,caseId,decision:'approved',reason:'同意原单停止两瓶'})
     expect((await runner.run(scope,tx=>new ItemAfterSalesProgressRepository(tx).read(caseId))).stoppedQuantity).toBe(2)
     expect(await worker.runBatch(scope,'quantity-notice-approved')).toMatchObject({completed:1,retrying:0,dead:0})
     expect((await pool.query("SELECT count(*)::int n FROM mbox.print_jobs WHERE tenant_id=$1 AND station_code='kitchen'",[tenantId])).rows[0].n).toBe(0)
@@ -1938,7 +1945,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const runtime={run:<T>(current:typeof scope,operation:(tx:import('./transaction-runner.js').ScopedTransaction)=>Promise<T>)=>runner.run(current,async tx=>{await tx.query('SET LOCAL ROLE mbox_runtime');return operation(tx)})} as ScopedPostgresTransactionRunner
     const executor=new NormalizedCommandExecutor(runtime),command=new QuantityRemakeCommandService(executor,true),row=await deliveredOriginal()
     await pool.query("INSERT INTO mbox.role_data_scopes(tenant_id,store_id,role_id,scope_key,effect,scope_value,value_kind,text_values,enabled) SELECT tenant_id,store_id,role_id,'kds.station_codes','include','[\"bar\"]'::jsonb,'text_set',ARRAY['bar']::text[],true FROM mbox.employee_roles WHERE tenant_id=$1 AND store_id=$2 AND employee_id=$3 LIMIT 1",[tenantId,storeId,employeeId])
-    const input={scope,employeeId,staffSessionId,deviceAccessLeaseId:leaseId,businessDate:'2026-09-13',taskId:row.taskId,quantity:2,originalGoodsLost:true,reason:'实际损坏两瓶，原单不再收款',idempotencyKey:randomUUID()}
+    const input={scope,employeeId,staffSessionId,deviceAccessLeaseId:leaseId,businessDate:businessDate,taskId:row.taskId,quantity:2,originalGoodsLost:true,reason:'实际损坏两瓶，原单不再收款',idempotencyKey:randomUUID()}
     await runner.run(scope,async tx=>{
       const policy=new NormalizedKdsAuthorization()
       await expect(policy.assertCanActOnTask({transaction:tx,...input,action:'quantity_remake',stationCode:'kitchen',tableId})).rejects.toMatchObject({code:'KDS_STATION_FORBIDDEN'})
@@ -1956,7 +1963,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     expect((await pool.query('SELECT print_snapshot FROM mbox.print_jobs WHERE source_outbox_message_id=$1',[notices[0].id])).rows[0].print_snapshot.lines).toMatchObject([{quantity:1}])
     await pool.query("UPDATE mbox.staff_sessions SET revoked_at=clock_timestamp() WHERE id=$1",[staffSessionId])
     await expect(command.create({...input,idempotencyKey:randomUUID()})).rejects.toMatchObject({code:'KDS_SESSION_INVALID'})
-    expect((await new QuantityRemakeCommandService(executor,false).create({...input,businessDate:'2026-09-14'})).value).toEqual(first.value)
+    expect((await new QuantityRemakeCommandService(executor,false).create({...input,businessDate:nextBusinessDate})).value).toEqual(first.value)
     await expect(new QuantityRemakeCommandService(executor,false).create({...input,idempotencyKey:randomUUID()})).rejects.toThrow('暂不新增')
     expect((await pool.query('SELECT count(*)::int n FROM mbox.quantity_remake_batches WHERE order_item_id=$1',[row.itemId])).rows[0].n).toBe(1)
   })
@@ -1966,7 +1973,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await grantActor(reviewerId,['refund.approve'],100000)
     const row=await item('preparing'),stockId=await stock(row,'direct_sale');await payment(row.orderId)
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    const metadata={scope,employeeId,businessDate:'2026-09-13',reason:'现场收回与实际消耗核对'}
+    const metadata={scope,employeeId,businessDate:businessDate,reason:'现场收回与实际消耗核对'}
     const created=await service.request({...metadata,idempotencyKey:`physical-request-${randomUUID()}`,orderItemId:row.itemId,quantity:2})
     const caseId=created.value.caseId
     await service.decide({...metadata,caseId,employeeId:reviewerId,decision:'approved',idempotencyKey:`physical-approved-${randomUUID()}`})
@@ -1974,7 +1981,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const received={...metadata,caseId,unitIds:[units[0].id],disposition:'returned_unopened' as const,unopenedReceived:true,idempotencyKey:`physical-return-${randomUUID()}`}
     const first=await service.disposeMade(received)
     expect(first.value).toMatchObject({heldQuantity:1,stoppedQuantity:1,moneyComplete:false,awaitingCashPayout:true})
-    expect((await service.disposeMade({...received,businessDate:'2026-09-14'})).replayed).toBe(true)
+    expect((await service.disposeMade({...received,businessDate:nextBusinessDate})).replayed).toBe(true)
     const final=await service.disposeMade({...metadata,caseId,unitIds:[units[1].id],disposition:'used_loss',unopenedReceived:false,idempotencyKey:`physical-loss-${randomUUID()}`})
     expect(final.value).toMatchObject({heldQuantity:0,stoppedQuantity:2,physicalComplete:true,moneyComplete:false})
     expect(await balance(stockId)).toEqual({on_hand:'6.000000',reserved:'0.000000'})
@@ -1987,7 +1994,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await grantActor(employeeId,['refund.request','refund.approve'],100000)
     await grantActor(reviewerId,['refund.approve'],100000)
     const row=await item();await payment(row.orderId)
-    let actor=employeeId,date='2026-09-13'
+    let actor=employeeId,date=businessDate
     const app=Fastify()
     await app.register(itemAfterSalesApiPlugin,{prefix:'/api',transactions:runner,commands:new NormalizedCommandExecutor(runner),resolveContext:()=>({scope,employeeId:actor,businessDate:date,capabilities:[]})})
     try{
@@ -1999,9 +2006,9 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
       const requested=await app.inject({method:'POST',url,headers,payload})
       expect(requested.statusCode).toBe(201)
       const caseId=requested.json().data.caseId
-      date='2026-09-14'
+      date=nextBusinessDate
       const replay=await app.inject({method:'POST',url,headers,payload})
-      expect(replay.statusCode).toBe(200);expect(replay.json()).toMatchObject({replayed:true,data:{caseId,businessDate:'2026-09-13',heldQuantity:2}})
+      expect(replay.statusCode).toBe(200);expect(replay.json()).toMatchObject({replayed:true,data:{caseId,businessDate:businessDate,heldQuantity:2}})
       const decisionUrl=`/api/commerce/item-after-sales/${caseId}/decision`
       expect((await app.inject({method:'POST',url:decisionUrl,headers:{'idempotency-key':`self-${randomUUID()}`},payload:{decision:'approved',reason:'本人不应自审'}})).statusCode).toBe(409)
       actor=reviewerId
@@ -2024,7 +2031,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await grantActor(employeeId,['refund.request'])
     await grantActor(reviewerId,['refund.approve','refund.execute'],100000)
     const row=await item();await payment(row.orderId)
-    let actor=employeeId,date='2026-09-13'
+    let actor=employeeId,date=businessDate
     const enabled=Fastify(),recovery=Fastify(),commands=new NormalizedCommandExecutor(runner)
     for(const [app,flag] of [[enabled,true],[recovery,false]] as const)await app.register(itemAfterSalesApiPlugin,{enabled:flag,prefix:'/api',transactions:runner,commands,resolveContext:()=>({scope,employeeId:actor,businessDate:date,capabilities:[]})})
     try{
@@ -2032,13 +2039,13 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
       const requested=await enabled.inject({method:'POST',url,headers,payload})
       expect(requested.statusCode).toBe(201)
       const caseId=requested.json().data.caseId
-      date='2026-09-14'
+      date=nextBusinessDate
       const access=await recovery.inject({method:'GET',url:'/api/commerce/item-after-sales/access'})
       expect(access.json().data).toMatchObject({enabled:false,recoveryAvailable:true})
       const detail=await recovery.inject({method:'GET',url:`/api/commerce/item-after-sales/items/${row.itemId}`})
       expect(detail.statusCode).toBe(200);expect(detail.json().data).toMatchObject({canRequest:false,cases:[{caseId,status:'requested',heldQuantity:2}]})
       const repeated=await recovery.inject({method:'POST',url,headers,payload})
-      expect(repeated.statusCode).toBe(200);expect(repeated.json()).toMatchObject({replayed:true,data:{caseId,businessDate:'2026-09-13'}})
+      expect(repeated.statusCode).toBe(200);expect(repeated.json()).toMatchObject({replayed:true,data:{caseId,businessDate:businessDate}})
       const newRequest=await recovery.inject({method:'POST',url,headers:{'idempotency-key':`rollback-new-${randomUUID()}`},payload})
       expect(newRequest.statusCode).toBe(409);expect(newRequest.json().error.code).toBe('QUANTITY_BATCH_NOT_ENABLED')
       expect((await pool.query('SELECT count(*)::int n FROM mbox.item_after_sales_cases WHERE order_id=$1',[row.orderId])).rows[0].n).toBe(1)
@@ -2092,7 +2099,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await grantActor(employeeId,['refund.request'])
     const row=await pricedBundle()
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
-    await service.request({scope,employeeId,businessDate:'2026-09-13',orderItemId:row.itemId,quantity:2,reason:'未付套餐退两瓶，余项单点价44元',idempotencyKey:randomUUID()})
+    await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity:2,reason:'未付套餐退两瓶，余项单点价44元',idempotencyKey:randomUUID()})
     const source=await runner.run(scope,tx=>appendOutboxMessage(tx,{aggregateType:'order',aggregateId:row.orderId,aggregateVersion:1,eventType:'test.bundle.bill',payload:{}}))
     const jobs=await runner.run(scope,tx=>new PrintTicketSourceRepository(tx,true).materializeManualOrderBill(source,row.orderId,'测试员工'))
     expect(jobs.length).toBeGreaterThan(0)
@@ -2134,7 +2141,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const assigned=(await pool.query('SELECT unit_id FROM mbox.delivery_batch_quantity_units WHERE batch_id=$1',[completed.batch!.id])).rows.map(row=>row.unit_id)
     expect(assigned).toHaveLength(3);expect(assigned.some(id=>created.unitIds.includes(id))).toBe(false)
     const query=new FulfillmentQueryService(runner)
-    const work=(await query.getStaffWorkQueue(scope,employeeId,'2026-09-13')).workItems.find(work=>work.taskId===row.taskId)
+    const work=(await query.getStaffWorkQueue(scope,employeeId,businessDate)).workItems.find(work=>work.taskId===row.taskId)
     expect(work).toMatchObject({kdsStatus:'preparing',readyForDelivery:true,canDeliver:true,deliveryUnbatchedQuantity:0,quantities:{total:5,ready:3,held:2,stopped:0}})
     await expect(runner.run(scope,tx=>new DeliveryBatchRepository(tx).create(employeeId,[{taskId:row.taskId,quantity:1}]))).rejects.toThrow('尚未安排配送')
     const delivered=await runner.run(scope,tx=>executeQuantityKdsAction(tx,{task,action:'deliver',employeeId,quantity:3,eventKey:`quantity-deliver-${randomUUID()}`}))
@@ -2148,7 +2155,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     expect((await pool.query('SELECT count(*)::int n FROM mbox.delivery_batch_quantity_units WHERE kds_task_id=$1',[row.taskId])).rows[0].n).toBe(5)
     const final=await runner.run(scope,tx=>executeQuantityKdsAction(tx,{task,action:'deliver',employeeId,eventKey:`quantity-final-${randomUUID()}`}))
     expect(final).toMatchObject({quantity:2,fulfillmentStatus:'delivered'})
-    expect((await query.getStaffWorkQueue(scope,employeeId,'2026-09-13')).workItems.some(work=>work.taskId===row.taskId)).toBe(false)
+    expect((await query.getStaffWorkQueue(scope,employeeId,businessDate)).workItems.some(work=>work.taskId===row.taskId)).toBe(false)
   })
 
 })

@@ -1,4 +1,5 @@
 import { Pool, type PoolClient } from 'pg'
+import { PostgresStaffLoginRateLimiter } from './staff-login-rate-limiter.js'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
 import { NormalizedCommandExecutor } from './command-executor.js'
@@ -84,6 +85,48 @@ integration('normalized staff authentication PostgreSQL integration', () => {
 
   afterAll(async () => {
     await pool?.end()
+  })
+
+  it('logs in and switches concurrently with the real limiter and a one-connection pool', async () => {
+    const smallPool = new Pool({ connectionString: databaseUrl, max: 1, connectionTimeoutMillis: 500 })
+    const smallRunner = new ScopedPostgresTransactionRunner(asPool(smallPool))
+    const realService = new StaffAuthCommandService(smallRunner, new NormalizedCommandExecutor(smallRunner),
+      new PostgresStaffLoginRateLimiter(smallRunner, 'isolated-concurrent-login-rate-limit-secret'), hasher, undefined, clock)
+    try {
+      const devices = [await grantDevice(realService, 'small-pool-device-one'), await grantDevice(realService, 'small-pool-device-two')]
+      const sessions = await Promise.all(devices.map(device => realService.login({
+        scope: { tenantId, storeId }, deviceAccessToken: device.leaseToken, employeeCode: 'tom', pin: '2222', sourceKey: '203.0.113.1',
+      })))
+      expect(sessions).toHaveLength(2)
+      const switched = await realService.switchEmployee({ scope: { tenantId, storeId },
+        currentSessionToken: sessions[0]!.sessionToken, employeeCode: 'jerry', pin: '3333', sourceKey: '203.0.113.1' })
+      expect(switched.session.employeeId).toBe(employeeTwoId)
+    } finally { await smallPool.end() }
+  })
+
+  it.each(['login', 'switch'] as const)('rechecks revoked device authority after %s admission', async (operation) => {
+    let invalidate = false
+    const results: boolean[] = []
+    const guarded = new StaffAuthCommandService(runner, new NormalizedCommandExecutor(runner), {
+      consume: async attempt => {
+        if (invalidate && attempt.kind === 'employee_pin') await pool.query(
+          'UPDATE mbox.store_device_access_leases SET revoked_at=$3::timestamptz WHERE tenant_id=$1 AND store_id=$2',
+          [tenantId, storeId, clock.now().toISOString()],
+        )
+      },
+      recordResult: async (_attempt, success) => { results.push(success) },
+    }, hasher, undefined, clock)
+    const device = await grantDevice(guarded, `revocation-${operation}`)
+    const first = operation === 'switch' ? await guarded.login({ scope: { tenantId, storeId },
+      deviceAccessToken: device.leaseToken, employeeCode: 'tom', pin: '2222' }) : null
+    invalidate = true
+    const before = await pool.query('SELECT count(*) FROM mbox.staff_sessions WHERE tenant_id=$1 AND store_id=$2', [tenantId, storeId])
+    const action = first ? guarded.switchEmployee({ scope: { tenantId, storeId }, currentSessionToken: first.sessionToken,
+      employeeCode: 'jerry', pin: '3333' }) : guarded.login({ scope: { tenantId, storeId },
+      deviceAccessToken: device.leaseToken, employeeCode: 'tom', pin: '2222' })
+    await expect(action).rejects.toBeInstanceOf(DeviceAccessDeniedError)
+    expect(results.at(-1)).toBe(false)
+    expect((await pool.query('SELECT count(*) FROM mbox.staff_sessions WHERE tenant_id=$1 AND store_id=$2', [tenantId, storeId])).rows).toEqual(before.rows)
   })
 
   it('rejects a suspended employee even when the PIN hash matches', async () => {

@@ -34,6 +34,8 @@ export interface StaffLoginRateLimitAttempt {
   kind: 'daily_store_credential' | 'employee_pin'
   principalKey: string
   deviceKeyHash: string
+  /** Server-derived peer address; never a client-supplied header or body field. */
+  sourceKey?: string
 }
 
 export interface StaffLoginRateLimiter {
@@ -285,11 +287,12 @@ export class StaffAuthCommandService {
     businessDate: string
     credential: string
     deviceKey: string
+    sourceKey?: string
   }>): Promise<DeviceAccessGrant> {
     assertStoreCredential(input.credential)
     const now = this.clock.now().toISOString()
     const deviceKeyHash = hashDeviceKey(input.deviceKey)
-    const attempt = rateLimitAttempt(input.scope, 'daily_store_credential', input.businessDate, deviceKeyHash)
+    const attempt = rateLimitAttempt(input.scope, 'daily_store_credential', input.businessDate, deviceKeyHash, input.sourceKey)
     await this.rateLimiter.consume(attempt)
     try {
       const result = await this.transactions.run(input.scope, async (transaction) => {
@@ -360,6 +363,7 @@ export class StaffAuthCommandService {
     deviceAccessToken: string
     employeeCode: string
     pin: string
+    sourceKey?: string
   }>): Promise<StaffLoginResult> {
     assertPin(input.pin)
     const deviceAccessHash = hashOpaqueToken(input.deviceAccessToken)
@@ -368,6 +372,7 @@ export class StaffAuthCommandService {
       deviceAccessHash,
       employeeCode: input.employeeCode,
       pin: input.pin,
+      sourceKey: input.sourceKey,
       currentSession: null,
     })
   }
@@ -377,27 +382,28 @@ export class StaffAuthCommandService {
     currentSessionToken: string
     employeeCode: string
     pin: string
+    sourceKey?: string
   }>): Promise<StaffLoginResult> {
     assertPin(input.pin)
-    const now = this.clock.now().toISOString()
     const currentSessionHash = hashOpaqueToken(input.currentSessionToken)
-    return this.transactions.run(input.scope, async (transaction) => {
-      const sessionRepository = new StaffSessionRepository(transaction)
-      const current = await sessionRepository.requireSession(currentSessionHash, now, true)
-      const lease = await sessionRepository.requireDeviceAccessLeaseForSession(
-        current.deviceAccessLeaseId,
-        now,
-      )
-      return this.loginInsideTransaction({
-        transaction,
-        employeeCode: input.employeeCode,
-        pin: input.pin,
-        deviceAccessLeaseId: current.deviceAccessLeaseId,
-        deviceKeyHash: lease.deviceKeyHash,
-        currentSession: current,
-        now,
-      })
+    const deviceKeyHash = await this.transactions.run(input.scope, async (transaction) => {
+      const repository = new StaffSessionRepository(transaction)
+      const now = this.clock.now().toISOString()
+      const current = await repository.requireSession(currentSessionHash, now, true)
+      return (await repository.requireDeviceAccessLeaseForSession(current.deviceAccessLeaseId, now)).deviceKeyHash
     })
+    const attempt = rateLimitAttempt(input.scope, 'employee_pin', input.employeeCode, deviceKeyHash, input.sourceKey)
+    return this.withLoginRateLimit(attempt, () => this.transactions.run(input.scope, async (transaction) => {
+      // Re-read authority after waiting for admission; do not reuse the preflight session.
+      const now = this.clock.now().toISOString()
+      const repository = new StaffSessionRepository(transaction)
+      const current = await repository.requireSession(currentSessionHash, now, true)
+      const lease = await repository.requireDeviceAccessLeaseForSession(current.deviceAccessLeaseId, now)
+      return this.loginInsideTransaction({
+        transaction, employeeCode: input.employeeCode, pin: input.pin,
+        deviceAccessLeaseId: lease.id, currentSession: current, now,
+      })
+    }))
   }
 
   async authenticateSession(
@@ -475,22 +481,34 @@ export class StaffAuthCommandService {
     deviceAccessHash: string
     employeeCode: string
     pin: string
+    sourceKey?: string
     currentSession: StaffSession | null
   }) {
-    const now = this.clock.now().toISOString()
-    return this.transactions.run(input.scope, async (transaction) => {
-      const sessionRepository = new StaffSessionRepository(transaction)
-      const lease = await sessionRepository.requireDeviceAccessLease(input.deviceAccessHash, now)
+    const deviceKeyHash = await this.transactions.run(input.scope, async (transaction) => (
+      await new StaffSessionRepository(transaction).requireDeviceAccessLease(input.deviceAccessHash, this.clock.now().toISOString())
+    ).deviceKeyHash)
+    const attempt = rateLimitAttempt(input.scope, 'employee_pin', input.employeeCode, deviceKeyHash, input.sourceKey)
+    return this.withLoginRateLimit(attempt, () => this.transactions.run(input.scope, async (transaction) => {
+      const now = this.clock.now().toISOString()
+      const lease = await new StaffSessionRepository(transaction).requireDeviceAccessLease(input.deviceAccessHash, now)
       return this.loginInsideTransaction({
-        transaction,
-        employeeCode: input.employeeCode,
-        pin: input.pin,
-        deviceAccessLeaseId: lease.id,
-        deviceKeyHash: lease.deviceKeyHash,
-        currentSession: input.currentSession,
-        now,
+        transaction, employeeCode: input.employeeCode, pin: input.pin,
+        deviceAccessLeaseId: lease.id, currentSession: input.currentSession, now,
       })
-    })
+    }))
+  }
+
+  private async withLoginRateLimit<T>(attempt: StaffLoginRateLimitAttempt, operation: () => Promise<T>): Promise<T> {
+    // Limiter transactions must never borrow a connection while login holds one.
+    await this.rateLimiter.consume(attempt)
+    try {
+      const result = await operation()
+      await this.rateLimiter.recordResult?.(attempt, true)
+      return result
+    } catch (error) {
+      await this.rateLimiter.recordResult?.(attempt, false)
+      throw error
+    }
   }
 
   private async loginInsideTransaction(input: {
@@ -498,67 +516,53 @@ export class StaffAuthCommandService {
     employeeCode: string
     pin: string
     deviceAccessLeaseId: string
-    deviceKeyHash: string
     currentSession: StaffSession | null
     now: string
   }): Promise<StaffLoginResult> {
-    const attempt = rateLimitAttempt(
-      input.transaction.scope,
-      'employee_pin',
-      input.employeeCode,
-      input.deviceKeyHash,
-    )
-    await this.rateLimiter.consume(attempt)
-    try {
-      const sessionRepository = new StaffSessionRepository(input.transaction)
-      const employee = await sessionRepository.findEmployeeByCode(input.employeeCode)
-      if (!employee || employee.status !== 'active' || !employee.pinHash
-        || !await this.hasher.verify(input.pin, employee.pinHash)) {
-        throw new InvalidStaffCredentialsError()
-      }
-      const nowDate = new Date(input.now)
-      const expiresAt = new Date(nowDate.getTime() + SESSION_DURATION_MS)
-
-      if (input.currentSession) {
-        await sessionRepository.revokeSession(
-          input.currentSession.id,
-          input.currentSession.employeeId,
-          'employee switched on device',
-          input.now,
-        )
-      }
-      const sessionToken = this.tokenSource.create()
-      const session = await sessionRepository.createSession({
-        employeeId: employee.id,
-        deviceAccessLeaseId: input.deviceAccessLeaseId,
-        sessionTokenHash: hashOpaqueToken(sessionToken),
-        issuedAt: input.now,
-        expiresAt: expiresAt.toISOString(),
-        onlineLeaseUntil: new Date(Math.min(
-          nowDate.getTime() + ONLINE_LEASE_MS,
-          expiresAt.getTime(),
-        )).toISOString(),
-      })
-      const access = await new StaffAccessRepository(input.transaction).resolve(employee.id, input.now)
-      await appendSecurityEvidence(input.transaction, {
-        actor: { type: 'employee', employeeId: employee.id },
-        action: 'staff.session.started',
-        objectType: 'staff_session',
-        objectId: session.id,
-        businessDate: await businessDateForLease(input.transaction, input.deviceAccessLeaseId),
-        eventType: 'staff.session.started.v1',
-        payload: {
-          sessionId: session.id,
-          employeeId: employee.id,
-          expiresAt: session.expiresAt,
-        },
-      })
-      await this.rateLimiter.recordResult?.(attempt, true)
-      return { sessionToken, session, access }
-    } catch (error) {
-      await this.rateLimiter.recordResult?.(attempt, false)
-      throw error
+    const sessionRepository = new StaffSessionRepository(input.transaction)
+    const employee = await sessionRepository.findEmployeeByCode(input.employeeCode)
+    if (!employee || employee.status !== 'active' || !employee.pinHash
+      || !await this.hasher.verify(input.pin, employee.pinHash)) {
+      throw new InvalidStaffCredentialsError()
     }
+    const nowDate = new Date(input.now)
+    const expiresAt = new Date(nowDate.getTime() + SESSION_DURATION_MS)
+
+    if (input.currentSession) {
+      await sessionRepository.revokeSession(
+        input.currentSession.id,
+        input.currentSession.employeeId,
+        'employee switched on device',
+        input.now,
+      )
+    }
+    const sessionToken = this.tokenSource.create()
+    const session = await sessionRepository.createSession({
+      employeeId: employee.id,
+      deviceAccessLeaseId: input.deviceAccessLeaseId,
+      sessionTokenHash: hashOpaqueToken(sessionToken),
+      issuedAt: input.now,
+      expiresAt: expiresAt.toISOString(),
+      onlineLeaseUntil: new Date(Math.min(
+        nowDate.getTime() + ONLINE_LEASE_MS,
+        expiresAt.getTime(),
+      )).toISOString(),
+    })
+    const access = await new StaffAccessRepository(input.transaction).resolve(employee.id, input.now)
+    await appendSecurityEvidence(input.transaction, {
+      actor: { type: 'employee', employeeId: employee.id },
+      action: 'staff.session.started',
+      objectType: 'staff_session',
+      objectId: session.id,
+      businessDate: await businessDateForLease(input.transaction, input.deviceAccessLeaseId),
+      eventType: 'staff.session.started.v1',
+      payload: {
+        sessionId: session.id,
+        employeeId: employee.id,
+        expiresAt: session.expiresAt,
+      },
+    })
+    return { sessionToken, session, access }
   }
 
   private executeAccessChange(
@@ -680,8 +684,9 @@ function rateLimitAttempt(
   kind: StaffLoginRateLimitAttempt['kind'],
   principalKey: string,
   deviceKeyHash: string,
+  sourceKey?: string,
 ): StaffLoginRateLimitAttempt {
-  return { scope, kind, principalKey, deviceKeyHash }
+  return { scope, kind, principalKey, deviceKeyHash, sourceKey }
 }
 
 function assertPin(pin: string) {

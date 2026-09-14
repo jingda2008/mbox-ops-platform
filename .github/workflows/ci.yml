@@ -79,8 +79,8 @@ jobs:
       - run: npm ci
       - name: Install release-smoke browser
         run: npx playwright install --with-deps chromium
-      - name: Audit production dependencies
-        run: npm audit --omit=dev --audit-level=high
+      - name: Audit production and development dependencies
+        run: npm audit --audit-level=moderate
       - name: Run code, unit, metadata and production-build checks
         run: npm run check && npm run release:system:test
       - name: Verify candidate, upload and release gate semantics
@@ -100,8 +100,8 @@ jobs:
       - run: npm ci
       - name: Install release-smoke browser
         run: npx playwright install --with-deps chromium
-      - name: Audit production dependencies
-        run: npm audit --omit=dev --audit-level=high
+      - name: Audit production and development dependencies
+        run: npm audit --audit-level=moderate
       - name: Run deterministic frontend checks and production build
         run: npm run check
 

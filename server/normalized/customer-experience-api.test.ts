@@ -44,6 +44,39 @@ describe('customer experience activity contact API', () => {
     expect(prepareCheckoutUpgrade).not.toHaveBeenCalled()
   })
 
+  it('requires separate dietary consent in the WeChat contract and records the decision with the same profile command', async () => {
+    const updatePreferences = vi.fn(async (_context: unknown, _input: unknown) => ({ value: {}, replayed: false }))
+    const app = publicExperienceFixture({ updatePreferences })
+    const send = (preferences: object, dietaryConsent?: object) => app.inject({
+      method: 'PATCH', url: '/public/mini/wechat-preferences',
+      headers: { 'idempotency-key': 'wechat-dietary-consent-test' },
+      payload: { preferences, dietaryConsent },
+    })
+    for (const consent of [undefined, { version: 'wechat-dietary-v1', granted: false }, { version: 'old', granted: true }]) {
+      expect((await send({ dietaryNotes: '花生过敏' }, consent)).statusCode).toBe(400)
+    }
+    expect(updatePreferences).not.toHaveBeenCalled()
+    const accepted = await send({ dietaryNotes: '花生过敏', dietaryNotesConsent: { recordedAt: 'fake' } }, { version: 'wechat-dietary-v1', granted: true })
+    expect(accepted.statusCode, accepted.body).toBe(200)
+    expect(updatePreferences.mock.calls[0]?.[1]).toMatchObject({ preferences: {
+      dietaryNotes: '花生过敏', dietaryNotesConsent: {
+        version: 'wechat-dietary-v1', decision: 'granted', purpose: 'in_store_dietary_service', source: 'wechat_preferences',
+      },
+    } })
+    expect(JSON.stringify(updatePreferences.mock.calls)).not.toContain('fake')
+    expect((await send({ dietaryNotes: '' }, { version: 'wechat-dietary-v1', granted: false })).statusCode).toBe(200)
+    expect(updatePreferences.mock.calls[1]?.[1]).toMatchObject({ preferences: { dietaryNotes: '', dietaryNotesConsent: { decision: 'withdrawn' } } })
+    expect((await send({ tasteNotes: '少甜' })).statusCode).toBe(200)
+    const legacy = await app.inject({method:'PATCH',url:'/public/mini/preferences',headers:{'idempotency-key':'legacy-preferences-test'},payload:{preferences:{tasteNotes:'少甜'}}})
+    expect(legacy.statusCode).toBe(200)
+  })
+
+  it('returns a stable readable error when the membership terms service is unavailable', async () => {
+    const response = await publicExperienceFixture({}).inject({ method: 'GET', url: '/public/mini/membership-terms' })
+    expect(response.statusCode).toBe(503)
+    expect(response.json()).toEqual({ error: { code: 'MEMBERSHIP_TERMS_NOT_AVAILABLE', message: '当前条款暂时无法读取，请稍后重试' } })
+  })
+
   it('returns a non-cacheable scannable member identification code in the mini-program bootstrap', async () => {
     const portal = vi.fn(async () => ({
       features: [], membership: { memberNo: 'MBX-35648', level: 'silver' }, points: [], growth: [],

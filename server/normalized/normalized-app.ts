@@ -294,9 +294,18 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
         return
       }
       done(null, JSON.parse(text) as unknown)
-    } catch (error) {
-      done(error as Error)
+    } catch (_error) {
+      done(Object.assign(new Error('请求内容不是有效的 JSON，请重试'), {
+        code: 'REQUEST_JSON_INVALID', statusCode: 400,
+      }))
     }
+  })
+  app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof Error && 'code' in error && error.code === 'REQUEST_JSON_INVALID') {
+      return reply.code(400).send({ error: { code: error.code, message: error.message } })
+    }
+    // Preserve Fastify's default handling for body limits and actual server failures.
+    return reply.send(error)
   })
   if (options.config.runtimeRole==='contract_candidate') {
     app.addHook('onRequest',async(request,reply)=>{
@@ -1018,6 +1027,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
         },
       })
       await reservationApp.register(customerExperienceApiPlugin, {
+        publishedContentScope: scope,
         transactions,
         service: customerExperience,
         resolvePublicContext: async (request) => {

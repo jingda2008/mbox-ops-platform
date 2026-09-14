@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
+import { CustomerExperienceService } from './customer-experience-service.js'
 import { NormalizedCommandExecutor } from './command-executor.js'
 import {
   CustomerCommandService,
@@ -93,6 +94,33 @@ integration('CustomerRepository normalized identity and profile integrity', () =
     expect(query.publicCustomer?.preferences).toEqual({ publicScene: 'date' })
     expect(JSON.stringify(query.publicCustomer)).not.toContain('internalRisk')
     expect(query.history.map((event) => event.eventType)).toContain('customer.profile-updated')
+  })
+
+  it('stores dietary consent with the preference and replaying an earlier grant cannot undo withdrawal', async () => {
+    const created = await customers.createAnonymous(customerCommand('dietary-consent', '8'))
+    const service = new CustomerExperienceService(transactions, new NormalizedCommandExecutor(transactions), customers)
+    const context = { scope: { tenantId, storeId }, customerId: created.value.customer.id,
+      actorRef: 'guest:dietary-consent', businessDate: '2026-08-11' }
+    const grant = { preferences: { dietaryNotes: '隔离测试饮食说明', dietaryNotesConsent: {
+      version: 'wechat-dietary-v1', decision: 'granted', purpose: 'in_store_dietary_service', source: 'wechat_preferences',
+    } }, idempotencyKey: 'dietary-consent-grant-0001' }
+    await service.updatePreferences(context, grant)
+    const read = () => transactions.run(context.scope, tx => tx.query<{ preference_key: string; preference_value: unknown; observed_at: Date }>(`
+      SELECT preference_key,preference_value,observed_at FROM mbox.customer_preferences
+      WHERE tenant_id=$1 AND store_id=$2 AND customer_id=$3
+        AND preference_key IN ('dietaryNotes','dietaryNotesConsent') ORDER BY preference_key
+    `, [tenantId, storeId, context.customerId]), { readOnly: true })
+    const first = await read()
+    expect(first.rows[0]?.preference_value).toBe('隔离测试饮食说明')
+    expect(first.rows[1]?.preference_value).toMatchObject({ decision: 'granted', version: 'wechat-dietary-v1' })
+    expect(first.rows.every(row => row.observed_at !== null)).toBe(true)
+    await service.updatePreferences(context, { preferences: { dietaryNotes: '', dietaryNotesConsent: {
+      ...grant.preferences.dietaryNotesConsent, decision: 'withdrawn',
+    } }, idempotencyKey: 'dietary-consent-withdraw-0001' })
+    expect((await service.updatePreferences(context, grant)).replayed).toBe(true)
+    const after = await read()
+    expect(after.rows[0]?.preference_value).toBe('')
+    expect(after.rows[1]?.preference_value).toMatchObject({ decision: 'withdrawn' })
   })
 
   it('links multiple hashed identities, rejects cross-customer reuse, and prevents merge cycles', async () => {

@@ -421,7 +421,17 @@ export class StaffActionsApi implements StaffActionsApiPort {
     return this.getData('/api/operations', signal)
   }
 
-  loadFulfillment(signal?: AbortSignal): Promise<StaffFulfillmentData> {
+  async loadFulfillment(signal?: AbortSignal): Promise<StaffFulfillmentData> {
+    const queue = await this.getData<StaffFulfillmentData>('/api/commerce/fulfillment', signal)
+    if (queue.actor.actionSessionValid !== false) return queue
+    // A backgrounded phone can outlive its online lease while its login remains
+    // valid. Renew through authentication, then re-read server permissions once.
+    // Expired/revoked credentials still fail at the heartbeat; never grant locally.
+    if (signal?.aborted) throw new StaffActionsApiError('操作已取消', 'ABORTED', null)
+    await this.request('/api/auth/heartbeat', {
+      method: 'POST', signal, body: '{}',
+      headers: new Headers({ accept: 'application/json', 'content-type': 'application/json' }),
+    })
     return this.getData('/api/commerce/fulfillment', signal)
   }
 

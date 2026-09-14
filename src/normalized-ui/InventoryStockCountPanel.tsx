@@ -6,8 +6,9 @@ import { executeRecoverableCommand } from './recoverable-command'
 import { useConfirmationDialog } from './ConfirmationDialog'
 import './inventory-stock-count.css'
 
-export function InventoryStockCountPanel({ api, auth, refreshToken, onChanged }: {
+export function InventoryStockCountPanel({ api, auth, refreshToken, onChanged, onRecount }: {
   api: NormalizedApiClient; auth: StaffAuthView; refreshToken: unknown; onChanged(): Promise<void>
+  onRecount?(inventoryItemId: string): void
 }) {
   const [status, setStatus] = useState<'submitted' | 'processed'>('submitted')
   const [page, setPage] = useState(0), [revision, setRevision] = useState(0)
@@ -68,7 +69,8 @@ export function InventoryStockCountPanel({ api, auth, refreshToken, onChanged }:
         <span>盘点时账面 {quantity(line.systemQuantity, line)} · 实盘 {quantity(line.countedQuantity, line)}</span>
         <span>差异 {quantity(line.varianceQuantity, line)} · 当前账面 {quantity(line.currentQuantity, line)}</span>
         {line.reason && <span>说明：{line.reason}</span>}
-        {line.stale && <p className="staff-module-warning">盘点后库存已变动，不能直接通过；请退回后重新清点提交。</p>}
+        {line.stale && <p className="staff-module-warning">盘点后库存已变动，不能直接通过；{count.canReview ? '请退回后由盘点人重新清点提交。' : '请联系其他有审批权限的同事退回，再重新清点提交。'}</p>}
+        {count.status === 'rejected' && onRecount && <button type="button" disabled={busy || loading} onClick={() => onRecount(line.inventoryItemId)}>重新盘点：{line.itemName}</button>}
       </div>)}
       {count.status === 'submitted' && !count.canReview && <p>{count.createdByEmployeeId === auth.employee.id ? '本人提交，等待其他有审批权限的同事复核。' : '当前账号没有此盘点的审批权限。'}</p>}
       {count.canReview && <div className="inventory-stock-count-actions">

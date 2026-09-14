@@ -543,8 +543,9 @@ test('我的已制作多商品长单号在窄屏逐项显示，保留商品处�
     expect(boxes[i].left).toBeGreaterThanOrEqual(0)
     if(i) expect(boxes[i].top).toBeGreaterThanOrEqual(boxes[i-1].bottom)
   }
-  await page.evaluate(() => window.scrollTo(0, 0))
-  await page.screenshot({path:testInfo.outputPath('prepared-history-375.png'),fullPage:true})
+  await page.evaluate(() => window.scrollTo({top:0,behavior:'instant'}))
+  await expect.poll(() => page.locator('.normalized-staff-action-shell > header').evaluate(node => node.getBoundingClientRect().top)).toBe(0)
+  await page.screenshot({path:testInfo.outputPath('prepared-history-375.png')})
   await bartender.context.close()
 })
 
@@ -596,7 +597,57 @@ test('盘点复核让有权限同事通过或退回，提交人能查结果，�
   await expect(rejectRow).toContainText('当前账面 500 毫升')
   await expectNoHorizontalOverflow(reviewer.page)
   await reviews.screenshot({path:testInfo.outputPath('stock-count-reviewed-375.png')})
+  await counter.page.reload()
+  await mine.getByRole('button',{name:'已处理',exact:true}).click()
+  await mine.getByRole('article',{name:`盘点 ${second.publicId}`,exact:true})
+    .getByRole('button',{name:'重新盘点：复核测试酒水',exact:true}).click()
+  const recount = counter.page.locator('#inventory-quick-count')
+  await expect(recount.getByRole('combobox',{name:'物料',exact:true})).toHaveValue(itemId)
+  await expect(recount.getByRole('textbox',{name:/实盘数量/})).toHaveValue('')
+  await recount.getByRole('textbox',{name:/实盘数量/}).fill('450')
+  const createdAgain = counter.page.waitForResponse(response => response.url().endsWith('/api/inventory/stock-counts') && response.request().method() === 'POST')
+  await recount.getByRole('button',{name:'提交盘点复核',exact:true}).click()
+  const replacement = (await (await createdAgain).json()).data
+  expect(replacement.id).not.toBe(second.id)
+  await expect(counter.page.getByText('盘点已提交，等待有审批权限的岗位复核',{exact:true})).toBeVisible()
+  await reviewer.page.reload()
+  const replacementRow = reviews.getByRole('article',{name:`盘点 ${replacement.publicId}`,exact:true})
+  await expect(replacementRow).toContainText('实盘 450 毫升')
+  await replacementRow.getByRole('button',{name:'审核通过',exact:true}).click()
+  await reviewer.page.getByRole('alertdialog',{name:'确认盘点差异'}).getByRole('button',{name:'核对通过',exact:true}).click()
+  await reviews.getByRole('button',{name:'已处理',exact:true}).click()
+  await expect(replacementRow).toContainText('已通过')
+  await expect(replacementRow).toContainText('当前账面 450 毫升')
+  await expect(reviews.getByRole('article',{name:`盘点 ${second.publicId}`,exact:true})).toContainText('已退回')
   await counter.context.close(); await reviewer.context.close()
+})
+
+test('制作队列在线资格失效后先续期再核验，无需手动退出登录', async ({browser}) => {
+  const staff = await staffPage(browser,await fixture(),'lengyanzhi')
+  let invalidDelivered = false
+  const recoveryRequests: string[] = []
+  staff.page.on('request', request => {
+    if (invalidDelivered && ['/api/auth/heartbeat','/api/commerce/fulfillment'].some(path => request.url().endsWith(path))) {
+      recoveryRequests.push(new URL(request.url()).pathname)
+    }
+  })
+  await staff.page.route('**/api/commerce/fulfillment', async route => {
+    const response = await route.fetch()
+    const body = await response.json()
+    if (!invalidDelivered) {
+      body.data.actor.actionSessionValid = false
+      body.data.workItems = body.data.workItems.map((item: object) => ({...item,canPrepare:false,canDeliver:false}))
+      invalidDelivered = true
+    }
+    await route.fulfill({response,json:body})
+  })
+  await staff.page.goto('/staff/fulfillment')
+  await expect.poll(() => recoveryRequests.includes('/api/commerce/fulfillment')).toBe(true)
+  const reread = recoveryRequests.indexOf('/api/commerce/fulfillment')
+  expect(recoveryRequests.slice(0,reread)).toContain('/api/auth/heartbeat')
+  await expect(staff.page.getByRole('button',{name:'恢复登录',exact:true})).toHaveCount(0)
+  await expect(staff.page.getByRole('button',{name:/待制作（/})).toBeVisible()
+  await staff.context.close()
 })
 
 test('快捷盘点提交丢失回执后复用原单，不直接改变库存', async ({ browser }) => {

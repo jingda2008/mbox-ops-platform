@@ -478,6 +478,25 @@ integration('normalized staff authentication PostgreSQL integration', () => {
     )).rejects.toBeInstanceOf(StaffSessionNotFoundError)
   })
 
+  it('renews only the online lease after phone suspension and cannot revive a revoked login', async () => {
+    const device = await grantDevice(service, 'phone-resume-device')
+    const loggedIn = await service.login({
+      scope: { tenantId, storeId }, deviceAccessToken: device.leaseToken,
+      employeeCode: 'tom', pin: '2222',
+    })
+    clock.set('2026-08-11T10:05:00.000Z')
+    expect((await service.authenticateSession({ tenantId, storeId }, loggedIn.sessionToken)).session.isOnline).toBe(false)
+    const renewed = await service.heartbeat({ tenantId, storeId }, loggedIn.sessionToken)
+    expect(renewed.session.isOnline).toBe(true)
+    expect(renewed.session.id).toBe(loggedIn.session.id)
+    expect(renewed.session.expiresAt).toBe(loggedIn.session.expiresAt)
+    await service.revokeSession({
+      scope: { tenantId, storeId }, sessionToken: loggedIn.sessionToken,
+      actorEmployeeId: employeeOneId, businessDate, reason: 'resume safety verification',
+    })
+    await expect(service.heartbeat({ tenantId, storeId }, loggedIn.sessionToken)).rejects.toBeInstanceOf(StaffSessionNotFoundError)
+  })
+
   it('logs in different employees concurrently without a process-wide queue', async () => {
     const [deviceOne, deviceTwo] = await Promise.all([
       grantDevice(service, 'concurrent-device-one'),

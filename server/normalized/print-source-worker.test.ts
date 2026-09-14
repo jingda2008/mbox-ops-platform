@@ -225,6 +225,9 @@ integration('asynchronous print sources: committed events, isolation and recover
     })
     expect(tableBill[0].printSnapshot).toMatchObject({kind:'order_summary',documentRole:'checkout',title:'结账单',
       subtitle:'陆家嘴中心 L+MALL · 本桌次完整消费账单',test:false,totalAmountMinor:null})
+    expect(tableBill[0].printSnapshot.ticketReference).toMatch(/^\d{8}-\d{6}-\d{6}$/)
+    expect(tableBill[0].printSnapshot.note).toContain(`原始桌次追溯码：${session}`)
+    expect(tableBill[0].sourceReference).toBe(`${session}:page1`)
     expect(tableBill[0].printSnapshot.lines).toEqual(expect.arrayContaining([
       expect.objectContaining({name:'桌次实际收款',totalAmountMinor:1500}),
       expect.objectContaining({name:'桌次实际退款',totalAmountMinor:0}),
@@ -234,6 +237,19 @@ integration('asynchronous print sources: committed events, isolation and recover
     const billCopy=await transactions.run(scope,tx=>new HardwareRepository(tx).reprintPrintJob(tableBill[0].id,reprintEmployee,'结账票遗失补打','checkout-reprint-test'))
     expect(billCopy.printSnapshot).toMatchObject({documentRole:'checkout',title:'结账单',subtitle:tableBill[0].printSnapshot.subtitle})
     expect(billCopy.printSnapshot.lines).toEqual(tableBill[0].printSnapshot.lines)
+    expect(billCopy.printSnapshot.ticketReference).toBe(tableBill[0].printSnapshot.ticketReference)
+    expect(billCopy.printSnapshot.note).toContain(`原始桌次追溯码：${session}`)
+    await pool.query("UPDATE mbox.print_jobs SET status='printed',printed_at=clock_timestamp() WHERE id=$1",[billCopy.id])
+    const secondCopy=await transactions.run(scope,tx=>new HardwareRepository(tx).reprintPrintJob(billCopy.id,reprintEmployee,'长备注'.repeat(60),'checkout-second-reprint-test'))
+    expect(secondCopy.printSnapshot.ticketReference).toBe(tableBill[0].printSnapshot.ticketReference)
+    expect(secondCopy.printSnapshot.note).toContain(`原始桌次追溯码：${session}`)
+    expect(String(secondCopy.printSnapshot.note).length).toBeLessThanOrEqual(240)
+    const freshBill=await transactions.run(scope,async tx=>{
+      const source=await appendOutboxMessage(tx,{aggregateType:'manual_print_request',aggregateId:randomUUID(),aggregateVersion:1,
+        eventType:'manual.table-bill.requested.v1',payload:{tableSessionId:session}})
+      return new PrintTicketSourceRepository(tx,true).materializeManualTableBill(source,session,'测试收银员')
+    })
+    expect(freshBill[0].printSnapshot.ticketReference).not.toBe(tableBill[0].printSnapshot.ticketReference)
     expect(manual).toHaveLength(1)
     expect(manual[0].printSnapshot).toMatchObject({operatorLabel:'测试收银员',totalAmountMinor:null})
     expect(manual[0].printSnapshot.lines).toEqual(expect.arrayContaining([

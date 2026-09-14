@@ -680,7 +680,7 @@ export class HardwareRepository {
       throw new HardwareConflictError('只有已完成或已停止的失败小票可以核对后补打；在途任务不能重复发送')
     }
     const businessKey = reprintBusinessKey(original.id, normalizedKey)
-    const snapshot = reprintSnapshot(original.printSnapshot, normalizedReason)
+    const snapshot = reprintSnapshot(original.printSnapshot, normalizedReason, original.sourceReference)
     // A failed task may still be due for automatic retry. Retire that attempt
     // under the same row lock before creating the replacement, or both the old
     // attempt and the new copy could print after the printer reconnects.
@@ -903,12 +903,17 @@ function reprintBusinessKey(jobId: string, idempotencyKey: string): string {
   return `reprint:${jobId}:${createHash('sha256').update(idempotencyKey).digest('hex').slice(0, 32)}`
 }
 
-function reprintSnapshot(snapshot: JsonObject, reason: string): JsonObject {
+function reprintSnapshot(snapshot: JsonObject, reason: string, sourceReference: string): JsonObject {
   // PrintTicketSnapshot caps notes at 240 characters.  The full, auditable
   // reason lives in print_jobs.reprint_reason; the copy only needs a compact,
   // visible marker so the bridge never rejects a valid reprint at render time.
   const originalNote = typeof snapshot.note === 'string' ? snapshot.note.trim() : ''
   const visibleReason = truncateText(reason, 120)
+  if (snapshot.documentRole === 'checkout') {
+    // Rebuild from the immutable job source, not a previously truncated reprint note.
+    const tableReference = sourceReference.replace(/:page\d+$/, '')
+    return { ...snapshot, note: `原始桌次追溯码：${tableReference}\n补打：${visibleReason}` }
+  }
   const combined = originalNote === ''
     ? `补打：${visibleReason}`
     : `补打：${visibleReason}\n原备注：${truncateText(originalNote, 100)}`

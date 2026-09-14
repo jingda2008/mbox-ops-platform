@@ -1287,6 +1287,26 @@ describe('paymentApiPlugin', () => {
     expect(value.commands.recordProviderRefundResult).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ['self', '发起人不能审核或驳回'],
+    ['permission', '没有退款复核权限'],
+    ['limit_missing', '未配置有效退款复核额度'],
+    ['limit_exceeded', '超过当前员工的复核额度'],
+  ] as const)('explains refund review block %s for approval and rejection', async (block, expected) => {
+    for (const action of ['approve', 'reject'] as const) {
+      const value = fixture({ commands: { ...fixtureCommands(),
+        [action === 'approve' ? 'approveRefund' : 'rejectRefund']: vi.fn(async () => {
+          throw new PaymentAuthorizationError('internal diagnostic', block)
+        }),
+      } })
+      const response = await value.app.inject({ method: 'POST', url: `/api/refunds/${refundId}/${action}`,
+        headers: { 'idempotency-key': `refund-review-${block}-${action}` }, payload: { reason: '复核配置验证' } })
+      expect(response.statusCode).toBe(403)
+      expect(response.json().error.message).toContain(expected)
+      expect(response.json().error.message).not.toContain('internal diagnostic')
+    }
+  })
+
   it('preserves authorization and approval guards from the payment command service', async () => {
     const deniedApproval = fixture({
       commands: {

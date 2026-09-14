@@ -1429,8 +1429,8 @@ function RefundBlock({
     {refund.decisionReason && <small>复核说明：{refund.decisionReason}</small>}
     {refund.receiptReference && <small>退款凭证：{refund.receiptReference}</small>}
 
-    {refund.status === 'requested' && ownRequest && <p className="cashier-guidance">发起人不能复核自己的退款，请交给收银处理。</p>}
-    {refund.status === 'requested' && !actions.canApproveRefund && <p className="cashier-guidance">等待具备退款复核权限和额度的收银处理。</p>}
+    {refund.status === 'requested' && ownRequest && <p className="cashier-guidance">发起人不能审核或驳回自己的退款，请交给另一名具备复核权限和额度的员工；无人可处理时，请联系管理员配置“退款复核”。</p>}
+    {refund.status === 'requested' && !actions.canApproveRefund && <p className="cashier-guidance">当前员工没有退款复核权限，请交给有权限和额度的其他员工，或联系管理员配置“退款复核”。</p>}
     {canDecide && <div className="cashier-decision-form">
       <label className="cashier-field"><span>复核说明</span><input value={decisionReason} placeholder="核对原支付、商品、金额和原因" onChange={(event) => onDecisionReason(refund.id, event.target.value)} /></label>
       <div className="cashier-action-row">

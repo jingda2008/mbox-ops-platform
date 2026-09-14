@@ -238,6 +238,16 @@
   border-top: 1px solid #eef0ec;
 }
 
+.staff-access-refund-review { grid-template-columns: minmax(0, 1fr); }
+.staff-access-refund-review > p { margin: 0; line-height: 1.6; }
+.staff-access-refund-review > article { display: grid; gap: 12px; min-width: 0; }
+.staff-access-refund-review .staff-access-money { max-width: 420px; grid-template-columns: minmax(0, 1fr) minmax(80px, 1fr); font-size: 14px; }
+.staff-access-refund-review .staff-access-money input { min-height: 44px; font-size: 16px; }
+.staff-access-refund-review .staff-access-check { grid-column: auto; min-height: 44px; font-size: 14px; }
+.staff-access-refund-review .staff-access-employee-list { max-height: none; }
+.staff-access-refund-review .staff-access-employee-list strong { font-size: 14px; }
+.staff-access-refund-review .staff-access-employee-list small { font-size: 13px; }
+
 .staff-access-policy > section {
   min-width: 0;
   border: 1px solid #d8ddd6;

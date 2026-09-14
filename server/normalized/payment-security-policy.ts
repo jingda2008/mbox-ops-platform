@@ -64,7 +64,7 @@ interface RefundAmountAuthorizationRow extends Record<string, unknown> {
 }
 
 export class PaymentAuthorizationError extends Error {
-  constructor(message: string) {
+  constructor(message: string, readonly refundReviewBlock?: 'self' | 'permission' | 'limit_missing' | 'limit_exceeded') {
     super(message)
     this.name = 'PaymentAuthorizationError'
   }
@@ -197,7 +197,7 @@ implements PaymentCapabilityAuthorizationPort {
   async assertRefundApproval(input: Readonly<RefundApprovalAuthorization>): Promise<void> {
     const row = await this.refundAmountAuthorization(input, 'refund.approve')
     if (row.requested_by_employee_id === input.employeeId) {
-      throw new PaymentAuthorizationError('Refund requester cannot approve or reject the same refund')
+      throw new PaymentAuthorizationError('Refund requester cannot approve or reject the same refund', 'self')
     }
     assertConfiguredRefundLimit(row, 'approval')
   }
@@ -330,7 +330,7 @@ implements PaymentCapabilityAuthorizationPort {
       throw new PaymentAuthorizationError('Employee is not active or refund is unavailable')
     }
     if (!row.allowed) {
-      throw new PaymentAuthorizationError(`Employee lacks financial capability: ${capability}`)
+      throw new PaymentAuthorizationError(`Employee lacks financial capability: ${capability}`, capability === 'refund.approve' ? 'permission' : undefined)
     }
     return row
   }
@@ -342,10 +342,10 @@ function assertConfiguredRefundLimit(
 ): void {
   const limit = row.approval_limit_minor === null ? null : toSafeMinor(row.approval_limit_minor)
   if (limit === null) {
-    throw new PaymentAuthorizationError(`Refund ${action} limit is not configured for ${row.currency}`)
+    throw new PaymentAuthorizationError(`Refund ${action} limit is not configured for ${row.currency}`, 'limit_missing')
   }
   if (toSafeMinor(row.amount_minor) > limit) {
-    throw new PaymentAuthorizationError(`Refund amount exceeds employee ${action} limit for ${row.currency}`)
+    throw new PaymentAuthorizationError(`Refund amount exceeds employee ${action} limit for ${row.currency}`, 'limit_exceeded')
   }
 }
 

@@ -28,9 +28,11 @@ import type {
 } from '../shared/normalized-contracts'
 import { staffModuleForPermission, staffPermissionImpactLabel } from '../shared/staff-module-access'
 import { useConfirmationDialog } from './ConfirmationDialog'
+import { refundReviewChanges, refundReviewDraft, refundReviewAmount, type RefundReviewDraft } from '../shared/refund-review-configuration'
+import { RefundReviewConfiguration } from './RefundReviewConfiguration'
 import './staff-access-management.css'
 
-type EditorMode = 'role' | 'employee' | 'policy' | 'navigation'
+type EditorMode = 'role' | 'employee' | 'policy' | 'navigation' | 'refund'
 type PermissionDraftValue = boolean | 'grant' | 'deny' | null
 type Notice = { tone: 'success' | 'error'; title: string; detail: string }
 type ApprovalDraft = Pick<StaffAccessApprovalLimitView, 'amountMinor' | 'currency' | 'rules' | 'enabled'>
@@ -50,6 +52,7 @@ export function StaffAccessManagementPanel({ api, currentEmployeeId }: { api: No
   const [targetId, setTargetId] = useState('')
   const [permissionDraft, setPermissionDraft] = useState<Record<string, PermissionDraftValue>>({})
   const [approvalDraft, setApprovalDraft] = useState<Record<string, ApprovalDraft>>({})
+  const [refundDraft, setRefundDraft] = useState<RefundReviewDraft | null>(null)
   const [scopeDraft, setScopeDraft] = useState<Record<string, ScopeDraft>>({})
   const [navigationDraft, setNavigationDraft] = useState<Record<string, NavigationDraft>>({})
   const [query, setQuery] = useState('')
@@ -80,6 +83,12 @@ export function StaffAccessManagementPanel({ api, currentEmployeeId }: { api: No
   const selectedRole = roles.find((role) => role.id === targetId) ?? null
   const selectedEmployee = employees.find((employee) => employee.id === targetId) ?? null
   const selectedTarget = mode === 'employee' ? selectedEmployee : selectedRole
+  const refundValue = selectedRole ? refundDraft ?? refundReviewDraft(selectedRole) : null
+  let refundError: string | null = null
+  if (mode === 'refund' && selectedRole && refundValue) {
+    try { refundReviewChanges(selectedRole, refundValue.enabled, refundReviewAmount(refundValue.amount)) }
+    catch (error) { refundError = message(error) }
+  }
   const categories = [...new Set((overview?.permissions ?? []).map((permission) => permission.category))]
   const visiblePermissions = useMemo(() => (overview?.permissions ?? []).filter((permission) => {
     const normalizedQuery = query.trim().toLowerCase()
@@ -89,6 +98,11 @@ export function StaffAccessManagementPanel({ api, currentEmployeeId }: { api: No
 
   const pendingChanges = useMemo<StaffPermissionDeploymentChange[]>(() => {
     if (selectedTarget === null) return []
+    if (mode === 'refund') {
+      const draft = refundDraft ?? refundReviewDraft(selectedRole!)
+      try { return refundReviewChanges(selectedRole!, draft.enabled, refundReviewAmount(draft.amount)) }
+      catch { return [] }
+    }
     if (mode === 'role') return permissionChanges(selectedRole!, permissionDraft)
     if (mode === 'employee') return employeeChanges(selectedEmployee!, permissionDraft)
     if (mode === 'policy') return [
@@ -96,7 +110,7 @@ export function StaffAccessManagementPanel({ api, currentEmployeeId }: { api: No
       ...scopeChanges(selectedRole!, scopeDraft),
     ]
     return navigationChanges(selectedRole!, navigationDraft)
-  }, [approvalDraft, mode, navigationDraft, permissionDraft, scopeDraft, selectedEmployee, selectedRole, selectedTarget])
+  }, [approvalDraft, refundDraft, mode, navigationDraft, permissionDraft, scopeDraft, selectedEmployee, selectedRole, selectedTarget])
 
   const chooseMode = (nextMode: EditorMode) => {
     setMode(nextMode); setTargetId(''); resetDrafts(); setNotice(null)
@@ -105,7 +119,7 @@ export function StaffAccessManagementPanel({ api, currentEmployeeId }: { api: No
     setTargetId(nextTargetId); resetDrafts(); setNotice(null); setCategory('all'); setQuery('')
   }
   const resetDrafts = () => {
-    setPermissionDraft({}); setApprovalDraft({}); setScopeDraft({}); setNavigationDraft({})
+    setPermissionDraft({}); setApprovalDraft({}); setScopeDraft({}); setNavigationDraft({}); setRefundDraft(null)
   }
 
   const applyBeverageLaunchPackage = () => {
@@ -220,6 +234,7 @@ export function StaffAccessManagementPanel({ api, currentEmployeeId }: { api: No
         <ModeButton active={mode === 'role'} icon={<ShieldCheck />} title="岗位权限" detail="批量调整岗位可做什么" onClick={() => chooseMode('role')} />
         <ModeButton active={mode === 'employee'} icon={<UsersRound />} title="员工例外" detail="临时增加或明确禁止" onClick={() => chooseMode('employee')} />
         <ModeButton active={mode === 'policy'} icon={<BadgeDollarSign />} title="审批与范围" detail="金额边界和可查看数据" onClick={() => chooseMode('policy')} />
+        <ModeButton active={mode === 'refund'} icon={<BadgeDollarSign />} title="退款复核" detail="同时配置权限和单次额度" onClick={() => chooseMode('refund')} />
         <ModeButton active={mode === 'navigation'} icon={<MonitorSmartphone />} title="入口与设备" detail="岗位入口和设备管理权" onClick={() => chooseMode('navigation')} />
       </div>
     </section>
@@ -232,6 +247,8 @@ export function StaffAccessManagementPanel({ api, currentEmployeeId }: { api: No
           ? employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName}（{employee.roleCodes.map(roleCodeLabel).join(' / ') || '未分岗'}）</option>)
           : roles.map((role) => <option key={role.id} value={role.id}>{roleLabel(role.code, role.name)}（{role.memberCount}人）</option>)}
       </select></label>
+
+      {mode === 'refund' && <RefundReviewConfiguration overview={overview} role={selectedRole} draft={refundValue} onChange={setRefundDraft} error={refundError} />}
 
       {selectedTarget !== null && <>
         {mode === 'employee' && selectedEmployee !== null && <div className="staff-access-advisory"><ShieldCheck /><div><strong>中文权限包：酒水上架管理员</strong><span>批量预览扫码入库、商品、配方、定价、渠道、受控图片和发布；个人明确拒绝优先，高风险审批不打包。</span></div><button type="button" onClick={applyBeverageLaunchPackage}>套用并预览</button></div>}
@@ -250,7 +267,7 @@ export function StaffAccessManagementPanel({ api, currentEmployeeId }: { api: No
         />}
         <div className="staff-access-publish">
           <label><span>发布原因</span><input aria-label="发布原因" value={reason} maxLength={200} onChange={(event) => setReason(event.target.value)} /></label>
-          <button type="button" disabled={pendingChanges.length === 0 || reason.trim().length < 2 || publishing} onClick={() => void deploy()}>
+          <button type="button" disabled={pendingChanges.length === 0 || reason.trim().length < 2 || publishing || refundError !== null} onClick={() => void deploy()}>
             {publishing ? <LoaderCircle className="is-spinning" /> : <ShieldCheck />}{publishing ? '正在发布并复核' : `发布${pendingChanges.length}项修改`}
           </button>
           <small>未发布不会改变员工权限；服务端整批写入、重新读取并留痕，任何一项失败都会全部回滚。</small>
@@ -489,8 +506,8 @@ function discountPercent(rules: Record<string, unknown>) {
 
 function hasAny(role: StaffAccessRoleView, permissions: string[]) { return permissions.some((permission) => role.permissionCodes.includes(permission)) }
 function stationLabel(value: string) { return ({ bar: '吧台', kitchen: '后厨', cashier: '收银台' } as Record<string, string>)[value] ?? value }
-function modeTitle(mode: EditorMode) { return ({ role: '岗位权限', employee: '员工例外', policy: '审批与数据范围', navigation: '岗位入口与设备权限' })[mode] }
-function modeHint(mode: EditorMode) { return ({ role: '先选岗位，再勾选允许能力', employee: '个人例外优先于岗位权限', policy: '高风险额度和数据边界分开设置', navigation: '控制工作台显示，不代替操作权限' })[mode] }
+function modeTitle(mode: EditorMode) { return ({ role: '岗位权限', employee: '员工例外', policy: '审批与数据范围', navigation: '岗位入口与设备权限', refund: '退款复核权限与额度' })[mode] }
+function modeHint(mode: EditorMode) { return ({ role: '先选岗位，再勾选允许能力', employee: '个人例外优先于岗位权限', policy: '高风险额度和数据边界分开设置', navigation: '控制工作台显示，不代替操作权限', refund: '先选岗位，权限和额度一起配置并发布' })[mode] }
 
 function categoryLabel(category: string): string {
   const labels: Record<string, string> = {

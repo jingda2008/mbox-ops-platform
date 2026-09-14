@@ -6,6 +6,7 @@ import {
 import type { StoreScope } from "./transaction-runner.js";
 import { ScopedPostgresTransactionRunner } from "./transaction-runner.js";
 import { InventoryRepository, type RecipeCostPreview } from './inventory-repository.js';
+import type { StockCountReview, StockCountReviewPage } from '../../src/shared/inventory-stock-count.js';
 
 export interface InventoryItemView {
   id: string;
@@ -155,6 +156,56 @@ interface BottleRow extends Record<string, unknown> {
 
 export class InventoryQueryService {
   constructor(private readonly transactions: ScopedPostgresTransactionRunner) {}
+
+  getStockCounts(scope: Readonly<StoreScope>, employeeId: string,
+    input: { status: 'submitted' | 'processed'; page: number; pageSize: number }): Promise<StockCountReviewPage> {
+    return this.transactions.run(scope, async transaction => {
+      const access = await new StaffAccessRepository(transaction).resolve(employeeId);
+      const canApprove = access.permissions.includes('inventory.count.approve');
+      if (!canApprove) assertInventoryPermission(access.permissions, 'inventory.count');
+      const result = await transaction.query<{ record: StockCountReview }>(`
+        SELECT jsonb_build_object(
+          'id', counts.id, 'publicId', counts.public_id, 'status', counts.status,
+          'createdByEmployeeId', counts.created_by_employee_id, 'createdByName', creator.display_name,
+          'submittedAt', counts.submitted_at::text, 'decidedAt', counts.decided_at::text,
+          'decidedByName', decider.display_name, 'decisionReason', counts.decision_reason, 'note', counts.note,
+          'canReview', $3::boolean AND counts.created_by_employee_id <> $4::uuid AND counts.status='submitted',
+          'lines', COALESCE((
+            SELECT jsonb_agg(jsonb_build_object(
+              'inventoryItemId', item.id, 'itemName', item.name, 'baseUnit', item.base_unit,
+              'categoryCode', item.category_code, 'packageVolumeMl', item.package_volume_ml::text,
+              'systemQuantity', line.system_quantity_snapshot::text,
+              'countedQuantity', line.counted_quantity::text, 'varianceQuantity', line.variance_quantity::text,
+              'currentQuantity', COALESCE(balance.on_hand_quantity,0)::text, 'reason', line.reason,
+              'stale', counts.status='submitted' AND (
+                line.system_quantity_snapshot <> COALESCE(balance.on_hand_quantity,0) OR EXISTS (
+                  SELECT 1 FROM mbox.inventory_movements movement
+                  WHERE movement.tenant_id=line.tenant_id AND movement.store_id=line.store_id
+                    AND movement.inventory_item_id=line.inventory_item_id AND movement.occurred_at>=line.created_at
+                ))
+            ) ORDER BY item.name, item.id)
+            FROM mbox.inventory_stock_count_lines line
+            JOIN mbox.inventory_items item ON item.tenant_id=line.tenant_id AND item.store_id=line.store_id
+              AND item.id=line.inventory_item_id
+            LEFT JOIN mbox.inventory_balances balance ON balance.tenant_id=line.tenant_id AND balance.store_id=line.store_id
+              AND balance.inventory_item_id=line.inventory_item_id
+            WHERE line.tenant_id=counts.tenant_id AND line.store_id=counts.store_id AND line.stock_count_id=counts.id
+          ), '[]'::jsonb)
+        ) AS record
+        FROM mbox.inventory_stock_counts counts
+        JOIN mbox.employees creator ON creator.tenant_id=counts.tenant_id AND creator.store_id=counts.store_id
+          AND creator.id=counts.created_by_employee_id
+        LEFT JOIN mbox.employees decider ON decider.tenant_id=counts.tenant_id AND decider.store_id=counts.store_id
+          AND decider.id=counts.decided_by_employee_id
+        WHERE counts.tenant_id=$1::uuid AND counts.store_id=$2::uuid
+          AND ($3::boolean OR counts.created_by_employee_id=$4::uuid)
+          AND (($5='submitted' AND counts.status='submitted') OR ($5='processed' AND counts.status IN ('approved','rejected')))
+        ORDER BY counts.submitted_at DESC, counts.id DESC LIMIT $6 OFFSET $7
+      `, [scope.tenantId, scope.storeId, canApprove, employeeId, input.status, input.pageSize+1, input.page*input.pageSize]);
+      return { counts: result.rows.slice(0,input.pageSize).map(row=>row.record), canApprove,
+        page: input.page, hasMore: result.rows.length>input.pageSize };
+    }, { readOnly: true });
+  }
 
   getDashboard(
     scope: Readonly<StoreScope>,

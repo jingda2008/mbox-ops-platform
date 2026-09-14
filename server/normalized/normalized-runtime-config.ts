@@ -41,6 +41,12 @@ export interface NormalizedWechatNotificationRuntimeConfig {
   policyVersion: string
 }
 
+export interface NormalizedWechatServiceAccountCallbackRuntimeConfig {
+  appId: string
+  token: string
+  encodingAesKey: string
+}
+
 export interface NormalizedPersonalContactRuntimeConfig {
   activeKeyId: string
   activeKey: Buffer
@@ -63,6 +69,7 @@ export interface NormalizedRuntimeConfig {
   payment: NormalizedPaymentRuntimeConfig | null
   wechatIdentity: NormalizedWechatIdentityRuntimeConfig | null
   wechatNotification: NormalizedWechatNotificationRuntimeConfig | null
+  wechatServiceAccountCallback?: NormalizedWechatServiceAccountCallbackRuntimeConfig | null
   alipayPhone: NormalizedAlipayPhoneRuntimeConfig | null
   personalContactProtection?: NormalizedPersonalContactRuntimeConfig | null
   guestPaymentMode: GuestCheckoutPaymentMode
@@ -120,6 +127,7 @@ export function loadNormalizedRuntimeConfig(
   const payment = readPayment(environment, integrations.modes.payment, errors)
   const wechatIdentity = readWechatIdentity(environment, errors)
   const wechatNotification = readWechatNotification(environment, errors)
+  const wechatServiceAccountCallback = readWechatServiceAccountCallback(environment, errors)
   const alipayPhone = readAlipayPhone(environment, errors)
   const personalContactProtection = readPersonalContactProtection(
     environment,commercialProduction,errors,
@@ -220,6 +228,7 @@ export function loadNormalizedRuntimeConfig(
     payment,
     wechatIdentity,
     wechatNotification,
+    wechatServiceAccountCallback,
     alipayPhone,
     personalContactProtection,
     guestPaymentMode,
@@ -347,6 +356,28 @@ function readWechatNotification(
   }
   if (serviceTemplateId === null || policyVersion === null) return null
   return Object.freeze({ serviceTemplateId, policyVersion })
+}
+
+function readWechatServiceAccountCallback(
+  environment: Readonly<Record<string, string | undefined>>,
+  errors: string[],
+): NormalizedWechatServiceAccountCallbackRuntimeConfig | null {
+  const appId = optional(environment.MBOX_WECHAT_SERVICE_ACCOUNT_APP_ID)
+  const token = optional(environment.MBOX_WECHAT_SERVICE_ACCOUNT_CALLBACK_TOKEN)
+  const encodingAesKey = optional(environment.MBOX_WECHAT_SERVICE_ACCOUNT_ENCODING_AES_KEY)
+  if (appId === null && token === null && encodingAesKey === null) return null
+  if (appId === null || !/^wx[A-Za-z0-9_-]{4,126}$/.test(appId)) {
+    errors.push('MBOX_WECHAT_SERVICE_ACCOUNT_APP_ID')
+  }
+  if (token === null || !/^[A-Za-z0-9]{3,32}$/.test(token)) {
+    errors.push('MBOX_WECHAT_SERVICE_ACCOUNT_CALLBACK_TOKEN')
+  }
+  if (encodingAesKey === null || !/^[A-Za-z0-9]{43}$/.test(encodingAesKey)
+    || Buffer.from(`${encodingAesKey}=`, 'base64').length !== 32) {
+    errors.push('MBOX_WECHAT_SERVICE_ACCOUNT_ENCODING_AES_KEY')
+  }
+  if (appId === null || token === null || encodingAesKey === null) return null
+  return Object.freeze({ appId, token, encodingAesKey })
 }
 
 function readWechatIdentity(

@@ -150,6 +150,7 @@ import {
 import { wechatLoyaltyNotificationApiPlugin } from './wechat-loyalty-notification-api.js'
 import { wechatMemberServiceNotificationApiPlugin } from './wechat-member-service-notification-api.js'
 import { wechatNotificationPromptApiPlugin } from './wechat-notification-prompt-api.js'
+import { wechatServiceAccountCallbackPlugin } from './wechat-service-account-callback.js'
 import { MembershipTermsService } from './membership-terms-service.js'
 import { memberContentCardApiPlugin } from './member-content-card-api.js'
 import { MemberContentCardService } from './member-content-card-service.js'
@@ -402,6 +403,13 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     registerSystemRoutes(
       app,options.config,transactions,scope,activityContactProtection,options.workerHealth,
     )
+    if (options.config.wechatServiceAccountCallback !== null
+      && options.config.wechatServiceAccountCallback !== undefined) {
+      await app.register(wechatServiceAccountCallbackPlugin, {
+        prefix: '/api',
+        config: options.config.wechatServiceAccountCallback,
+      })
+    }
     if (options.config.wechatIdentity !== null && wechatIdentity !== null) {
       const repositoryOptions = {
         pool: pool as unknown as WechatPostgresPool,

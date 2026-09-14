@@ -62,6 +62,9 @@ const production = [
   'MBOX_WECHAT_ENCRYPTION_KEY_BASE64=<base64-encoded-32-byte-key>',
   'MBOX_WECHAT_SERVICE_TEMPLATE_ID=<wechat-service-template-id>',
   'MBOX_WECHAT_NOTIFICATION_POLICY_VERSION=<approved-notification-policy-version>',
+  'MBOX_WECHAT_SERVICE_ACCOUNT_APP_ID=<service-account-app-id>',
+  'MBOX_WECHAT_SERVICE_ACCOUNT_CALLBACK_TOKEN=<service-account-callback-token>',
+  'MBOX_WECHAT_SERVICE_ACCOUNT_ENCODING_AES_KEY=<service-account-encoding-aes-key>',
   'MBOX_PAYMENT_MODE=production',
   'MBOX_PAYMENT_PROVIDER=postar',
   'POSTAR_AGENCY_ID=<agency-id>',
@@ -103,6 +106,10 @@ const requiredFields = {
     ],
     wechatServiceNotification: [
       'MBOX_WECHAT_SERVICE_TEMPLATE_ID', 'MBOX_WECHAT_NOTIFICATION_POLICY_VERSION',
+    ],
+    wechatServiceAccountCallback: [
+      'MBOX_WECHAT_SERVICE_ACCOUNT_APP_ID', 'MBOX_WECHAT_SERVICE_ACCOUNT_CALLBACK_TOKEN',
+      'MBOX_WECHAT_SERVICE_ACCOUNT_ENCODING_AES_KEY',
     ],
     payment: ['MBOX_PAYMENT_PROVIDER', 'POSTAR_AGENCY_ID', 'POSTAR_MERCHANT_ID', 'POSTAR_PUBLIC_KEY', 'POSTAR_CALLBACK_URL'],
     ai: ['MBOX_AI_PROVIDER', 'MBOX_AI_ENDPOINT', 'MBOX_AI_MODEL', 'MBOX_AI_API_KEY'],

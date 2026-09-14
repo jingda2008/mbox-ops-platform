@@ -1490,6 +1490,7 @@ function mapError(error: unknown): {
   code: string;
   message: string;
 } {
+  if(typeof error==='object'&&error!==null&&'constraint' in error&&error.constraint==='inventory_packaging_recipe_ck')return {status:409,code:'INVENTORY_PACKAGING_CONFLICT',message:'整瓶商品的库存扣减配方与包装容量不一致，请核对单瓶容量、每份用量和配方产出份数。'};
   if (error instanceof InventoryRequestError || error instanceof TypeError)
     return {
       status: 400,

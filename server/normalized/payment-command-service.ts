@@ -1,3 +1,4 @@
+import {assertStandaloneRefundDecision} from './refund-case-decision.js'
 import {ItemAfterSalesProgressRepository} from './item-after-sales-progress-repository.js'
 import { RefundFulfillmentRepository } from './refund-fulfillment-repository.js'
 import type {RefundPurpose} from '../../src/shared/refund-purpose.js'
@@ -854,6 +855,7 @@ export class PaymentCommandService {
     const employeeId = requireEmployee(input.actor, 'Refund approval')
     return this.commands.execute(command(input, 'refund.approve', refundCodec), async (transaction) => {
       await this.authorization.assertRefundApproval({ transaction, employeeId, refundId: input.refundId })
+      await assertStandaloneRefundDecision(transaction,input.refundId)
       let refund = await new RefundRepository(transaction).approve(
         input.refundId,
         employeeId,
@@ -874,6 +876,7 @@ export class PaymentCommandService {
     const employeeId = requireEmployee(input.actor, 'Refund rejection')
     return this.commands.execute(command(input, 'refund.reject', refundCodec), async (transaction) => {
       await this.authorization.assertRefundApproval({ transaction, employeeId, refundId: input.refundId })
+      await assertStandaloneRefundDecision(transaction,input.refundId)
       const refund = await new RefundRepository(transaction).reject(
         input.refundId,
         employeeId,

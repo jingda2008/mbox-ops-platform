@@ -1,9 +1,9 @@
 const REVEAL_SELECTOR = [
   '[data-action-reveal]:not([data-action-reveal="off"])',
-  '[role="alert"]',
+  '[role="alert"]:not([data-action-reveal="off"])',
   '[role="dialog"]',
-  '[role="status"]',
-  '[aria-live]:not([aria-live="off"])',
+  '[role="status"]:not([data-action-reveal="off"])',
+  '[aria-live]:not([aria-live="off"]):not([data-action-reveal="off"])',
 ].join(',')
 
 const ACTION_SELECTOR = 'button, [role="button"], input[type="button"], input[type="submit"], input[type="reset"], a[href]'
@@ -55,6 +55,15 @@ export function installGlobalActionReveal(
           && !isComfortablyVisible(candidate, windowRef)
         ))
       if (target === undefined) return
+      const dialog=target.closest('dialog[open]')
+      if(dialog){
+        const region=target.closest('[data-dialog-scroll]')
+        if(region instanceof HTMLElement){
+          const bounds=region.getBoundingClientRect(),rect=target.getBoundingClientRect()
+          if(rect.top<bounds.top||rect.bottom>bounds.bottom)region.scrollTo({top:region.scrollTop+rect.top-bounds.top-12,behavior:'auto'})
+        }
+        return
+      }
       target.scrollIntoView({
         behavior: prefersReducedMotion(windowRef) ? 'auto' : 'smooth',
         block: target.getAttribute('role') === 'dialog' ? 'center' : 'start',

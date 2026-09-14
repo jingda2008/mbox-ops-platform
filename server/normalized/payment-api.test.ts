@@ -1,3 +1,4 @@
+import {RefundRequiresCaseDecisionError} from './refund-case-decision.js'
 import { createHash } from 'node:crypto'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -1137,6 +1138,24 @@ describe('paymentApiPlugin', () => {
     }))
     expect(value.commands.recordProviderRefundResult).not.toHaveBeenCalled()
     expect(value.commands.recordManualRefundResult).not.toHaveBeenCalled()
+  })
+
+  it.each(['approve','reject'] as const)('returns a controlled original-case conflict for ordinary %s',async decision=>{
+    const value=fixture()
+    value.commands[decision==='approve'?'approveRefund':'rejectRefund'].mockRejectedValueOnce(new RefundRequiresCaseDecisionError(refundId,orderItemId))
+    const response=await value.app.inject({method:'POST',url:`/api/refunds/${refundId}/${decision}`,headers:{'idempotency-key':`case-route-${decision}`},payload:{reason:'核对原商品售后申请'}})
+    expect(response.statusCode).toBe(409)
+    expect(response.json().error).toEqual({code:'REFUND_REQUIRES_CASE_DECISION',message:'这笔退款属于商品售后，请进入原售后单审批。'})
+    expect(value.commands.beginRefundExecution).not.toHaveBeenCalled()
+  })
+  it('does not misclassify arbitrary database constraints or disclose their contents',async()=>{
+    const value=fixture()
+    value.commands.approveRefund.mockRejectedValueOnce(Object.assign(new Error('sensitive SQL and provider key'),{code:'23514',constraint:'unrelated_guard'}))
+    const response=await value.app.inject({method:'POST',url:`/api/refunds/${refundId}/approve`,headers:{'idempotency-key':'case-unrelated-error'},payload:{reason:'核对原商品售后申请'}})
+    expect(response.statusCode).toBe(500)
+    expect(response.json().error.code).toBe('PAYMENT_INTERNAL_ERROR')
+    expect(response.json().error.message).toContain('错误编号：')
+    expect(response.body).not.toMatch(/sensitive|SQL|provider key|unrelated_guard|23514|REFUND_REQUIRES_CASE_DECISION/)
   })
 
   it('rejects an unknown refund purpose before requesting any refund',async()=>{

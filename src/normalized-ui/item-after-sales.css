@@ -12,3 +12,11 @@
 .staff-item-after-sales-pending{padding:16px;border:1px solid #ded8c9;border-radius:12px;margin:12px 0;min-width:0;overflow-wrap:anywhere}.staff-item-after-sales-pending header{display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between;align-items:center}.staff-item-after-sales-pending article{padding:12px 0;border-top:1px solid #ded8c9}.staff-item-after-sales-pending p{font-size:14px}.staff-item-after-sales-pending button{min-height:44px;padding:8px 12px;cursor:pointer}
 
 .staff-item-after-sales-pending label{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:10px 0}.staff-item-after-sales-pending input[type=number]{width:80px;min-height:44px;box-sizing:border-box;padding:6px}
+
+/* The exit is outside the scroll region, including while an error is revealed. */
+.staff-item-after-sales{position:fixed;top:calc(var(--after-sales-viewport-top,0px) + 12px);bottom:auto;margin:0 auto;padding:0;overflow:hidden;max-height:calc(var(--after-sales-viewport-height,100dvh) - 24px);max-width:calc(100vw - 24px)}
+.staff-item-after-sales[open]{display:flex;flex-direction:column}
+.staff-item-after-sales>header{flex:none;padding:12px 14px;border-bottom:1px solid #ded8c9;background:#fffdf7;align-items:center}
+.staff-item-after-sales>header h3{margin:0;min-width:0}
+.staff-item-after-sales>header button{flex:none;min-width:44px;min-height:44px;max-width:48%}
+.staff-item-after-sales-body{overflow:auto;overscroll-behavior:contain;min-height:0;padding:14px;scroll-padding-block:12px}

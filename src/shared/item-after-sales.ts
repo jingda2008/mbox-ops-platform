@@ -13,7 +13,7 @@ export interface ItemAfterSalesCase {
   canDisposeMade?:boolean
   canDisposeHeldUnmade?:boolean
   unconfirmedNoticeCount:number
-  notices:Array<{id:string;stationCode:string;instruction:string;createdAt:string;printState:string}>
+  notices:Array<{id:string;stationCode:string;instruction:string;phase?:string|null;createdAt:string;printState:string}>
   refunds:Array<{id:string;status:string;amountMinor:number;provider:string;replacedByRefundId?:string|null;canRetry?:boolean}>
   canResolveUnpaid:boolean
   requiresFundingChoice?:boolean
@@ -30,16 +30,16 @@ export interface ItemAfterSalesWorkspace {
   redeliveryAvailableQuantity?:number;canRequestRedelivery?:boolean;canConfirmRedelivery?:boolean;canCancelRedelivery?:boolean
   redeliveries?:Array<{id:string;taskId:string;status:string;reason:string;pendingQuantity:number;pausedQuantity:number;deliveredQuantity:number;cancelledQuantity:number;selectedQuantity:number}>
   canRequest:boolean;canExecuteRefund:boolean;canReceive:boolean;canRecordUsed:boolean;canAcknowledgeNotices:boolean
-  units:Array<{id:string;index:number;productionState:string;heldByCaseId:string|null;stoppedByCaseId:string|null;operationallyStopped?:boolean;inventoryEvidence:string}>
+  units:Array<{id:string;index:number;productionState:string;heldByCaseId:string|null;stoppedByCaseId:string|null;operationallyStopped?:boolean;inventoryEvidence:string;returnEligibility?:{canReturn:boolean;reason:string|null;releaseOnly?:boolean}}>
   cases:ItemAfterSalesCase[]
 }
 
 export interface ItemAfterSalesPending {
-  items:Array<Pick<ItemAfterSalesCase,'caseId'|'businessDate'|'selectedQuantity'|'heldQuantity'|'status'|'amountMinor'|'awaitingCashPayout'|'refundFailed'|'refundNeedsReview'|'unconfirmedNoticeCount'>&{orderItemId:string;productName:string;tableCode:string;requesterName:string;physicalOnly?:boolean;orderPublicId?:string;orderBusinessDate?:string;createdAt?:string}>
+  items:Array<Pick<ItemAfterSalesCase,'caseId'|'businessDate'|'selectedQuantity'|'heldQuantity'|'status'|'amountMinor'|'awaitingCashPayout'|'refundFailed'|'refundNeedsReview'|'unconfirmedNoticeCount'|'moneyComplete'|'physicalComplete'|'succeededMinor'>&{orderItemId:string;productName:string;tableCode:string;requesterName:string;physicalOnly?:boolean;orderPublicId?:string;orderBusinessDate?:string;createdAt?:string}>
   nextCursor:{id:string;createdAt:string}|null
 }
 
 export interface RemakePhysicalHandover {
-  items:Array<{batchId:string;itemId:string;taskId:string;createdAt:string;tableCode:string;productName:string;orderPublicId:string;pendingQuantity:number;unitIds:string[];canReceive:boolean;canRecordUsed:boolean}>
+  items:Array<{batchId:string;itemId:string;taskId:string;createdAt:string;tableCode:string;productName:string;orderPublicId:string;pendingQuantity:number;unitIds:string[];canReceive:boolean;canRecordUsed:boolean;returnEligibility?:Record<string,{canReturn:boolean;reason:string|null}>}>
   nextCursor:{id:string;createdAt:string}|null
 }

@@ -43,7 +43,7 @@ export class ItemAfterSalesOperatingEffects implements QuantityOperatingEffects 
         :group.stopped?'已停止，勿制作/取送':['rejected','withdrawn'].includes(input.action)?'保持暂停，等明确继续':'暂停后续制作和取送'
       const eventId=randomUUID()
       const source=await appendOutboxMessage(tx,{eventId,aggregateType:'item_after_sales_notice',aggregateId:eventId,aggregateVersion:1,eventType:'item.after_sales.production_notice.v1',occurredAt:context.issued_at,
-        payload:{caseId:input.caseId,stationCode:group.station,categoryCode:group.category_code,ticket:{schemaVersion:1,kind:'production_notice',title:'商品处理通知',subtitle:instruction,test:false,
+        payload:{caseId:input.caseId,phase:input.action,stationCode:group.station,categoryCode:group.category_code,ticket:{schemaVersion:1,kind:'production_notice',title:'商品处理通知',subtitle:instruction,test:false,
           issuedAt:context.issued_at,businessDate:context.business_date,ticketReference:context.order_public_id,tableCode:context.table_code,guestCount:context.guest_count,operatorLabel:context.operator_name,
           lines:[{name:`${instruction}：${group.remake_batch_id?'重做批次 · ':''}${group.name}`.slice(0,120),quantity:group.quantity,unitAmountMinor:null,totalAmountMinor:null,note:group.remake_batch_id?`仅处理重做批次 ${group.remake_batch_id} 的本票数量；不要另开重做。`:group.production_state==='unmade'?'仅处理本票所选数量，其余商品继续。':'已有制作或送达记录，勿重新制作或重复配送。'}],
           payment:null,totalAmountMinor:null,currency:'CNY',note:`${['open','closing'].includes(context.session_status)?'':'原桌次已结束，此为历史商品通知，不属于当前桌上客人。'}申请：${input.caseId}。${input.reason??context.reason}`.slice(0,300)}}})

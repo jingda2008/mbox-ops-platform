@@ -80,6 +80,7 @@ interface PaymentRow extends Record<string, unknown> {
 }
 
 interface RefundRow extends Record<string, unknown> {
+  after_sales_case?:CashierWorkbenchRefund['afterSalesCase']
   approved_failed_amount_reserved?:boolean
   purpose?: import('../../src/shared/refund-purpose.js').RefundPurpose|null
   order_id?:string
@@ -582,6 +583,14 @@ export class PostgresCashierWorkbenchQuery {
           SELECT refund.id, refund.payment_id, COALESCE(refund.order_id,payment.order_id) AS order_id, refund.public_id, refund.provider_refund_id,
             refund.amount_minor, refund.currency, refund.status, refund.provider_submission_state,refund.purpose,
             ${approvedFailedRefundReservesSql('refund')} AS approved_failed_amount_reserved,
+            (SELECT jsonb_build_object('caseId',link.case_id,'status',target.status,'orderItemId',(
+              SELECT unit.order_item_id FROM mbox.item_after_sales_case_units selected JOIN mbox.order_item_quantity_units unit
+                ON unit.tenant_id=selected.tenant_id AND unit.store_id=selected.store_id AND unit.id=selected.unit_id
+              WHERE selected.tenant_id=link.tenant_id AND selected.store_id=link.store_id AND selected.case_id=link.case_id
+              ORDER BY unit.unit_index,unit.id LIMIT 1))
+             FROM mbox.item_after_sales_case_refunds link JOIN mbox.item_after_sales_cases target
+               ON target.tenant_id=link.tenant_id AND target.store_id=link.store_id AND target.id=link.case_id
+             WHERE link.tenant_id=refund.tenant_id AND link.store_id=refund.store_id AND link.refund_id=refund.id) AS after_sales_case,
             refund.reason,
             refund.requested_by_employee_id,
             requester.display_name AS requested_by_employee_name,
@@ -876,6 +885,7 @@ function mapRefund(
 ): CashierWorkbenchRefund {
   return {
     ...(row.purpose?{purpose:row.purpose}:{}),
+    afterSalesCase:row.after_sales_case??null,
     id: row.id,
     publicId: row.public_id,
     paymentId: row.payment_id,

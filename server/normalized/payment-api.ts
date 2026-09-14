@@ -1,3 +1,4 @@
+import {RefundRequiresCaseDecisionError} from './refund-case-decision.js'
 import { safePaymentErrorCode, safePaymentErrorLocation } from './pending-online-payment-reconciliation.js'
 import {REFUND_PURPOSES,type RefundPurpose} from '../../src/shared/refund-purpose.js'
 import { createHash, randomUUID } from 'node:crypto'
@@ -1545,9 +1546,11 @@ async function handleRoute(
     return await operation()
   } catch (error) {
     const mapped = mapError(error)
+    if(error instanceof RefundRequiresCaseDecisionError) reply.log.info({event:"refund_case_decision_required",refundId:error.refundId,caseId:error.caseId,errorCode:error.code,requestId:reply.request.id},"Refund decision belongs to the original after-sales case")
     if (mapped.statusCode >= 500) reply.log.error({
-      event: 'payment_command_failed', errorCode: safePaymentErrorCode(error),errorLocation:safePaymentErrorLocation(error),
+      event: 'payment_command_failed', requestId:reply.request.id, command:reply.request.routeOptions.url, constraint:safePaymentConstraint(error), errorCode: safePaymentErrorCode(error),errorLocation:safePaymentErrorLocation(error),
     }, 'Payment command failed; verified evidence remains available for reconciliation')
+    if(mapped.statusCode>=500)mapped.body.error.message+=` 错误编号：${reply.request.id}`
     return reply.code(mapped.statusCode).send(mapped.body)
   }
 }
@@ -1597,6 +1600,7 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   if (error instanceof OrderSettlementExceptionConflictError) {
     return apiError(409, 'ORDER_SETTLEMENT_EXCEPTION_CONFLICT', '订单仍有未完成出品、付款或退款，请先按实际状态处理')
   }
+  if (error instanceof RefundRequiresCaseDecisionError) return apiError(409,error.code,error.message)
   if (error instanceof RefundNotFoundError) return apiError(404, 'REFUND_NOT_FOUND', error.message)
   if (error instanceof OrderNotPayableError) return apiError(409, 'ORDER_NOT_PAYABLE', error.reason==='unpaid item stop requires settlement'?'本单有停止菜品尚未核定减免，请在商品售后待办处理后收款；其他订单可单独收款':error.reason==='the order has no outstanding balance'?'本单已足额收清，不能再次收款':error.reason==='status is cancelled'?'订单已取消，不能收款':error.reason==='status is draft'?'订单仍为草稿，请先提交订单':'当前订单未通过收款条件校验，请刷新订单核对桌次、归属和待收金额')
   if (error instanceof RecollectionAuthorizationRequiredError) {
@@ -1671,7 +1675,7 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   ) {
     return apiError(400, 'PAYMENT_REQUEST_INVALID', error.message)
   }
-  return apiError(500, 'PAYMENT_INTERNAL_ERROR', '支付服务暂时不可用，请稍后重试')
+  return apiError(500, 'PAYMENT_INTERNAL_ERROR', '收退款处理异常，请刷新查看原记录；仍有异常请联系管理员。')
 }
 
 function safeErrorName(error: unknown): string {
@@ -1689,4 +1693,10 @@ function readOrderCollection(body:Record<string,unknown>):{orderId:string;orderI
  if(orderIds&&!orderIds.includes(orderId))throw new TypeError('当前订单必须包含在所选订单中')
  const amountMinor=body.amountMinor===undefined?undefined:readInteger(body.amountMinor,'收款金额（分）',1,Number.MAX_SAFE_INTEGER)
  return {orderId,orderIds:orderIds??(amountMinor===undefined?undefined:[orderId]),amountMinor}
+}
+
+function safePaymentConstraint(error:unknown):string|undefined{
+  if(typeof error!=="object"||error===null||!("constraint" in error))return undefined
+  const value=error.constraint
+  return typeof value==='string'&&/^[a-z][a-z0-9_]{0,95}$/.test(value)?value:undefined
 }

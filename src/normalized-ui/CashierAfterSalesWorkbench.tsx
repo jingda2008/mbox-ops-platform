@@ -1,3 +1,4 @@
+import {ItemAfterSalesPanel} from './ItemAfterSalesPanel'
 import {PaymentFinanceReviewPanel} from './PaymentFinanceReviewPanel'
 import {REFUND_PURPOSE_LABELS} from '../shared/refund-purpose'
 import {CashierDaySummary} from './CashierDaySummary'
@@ -156,9 +157,11 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
     }
     const timer = globalThis.setInterval(refresh, 15_000)
     document.addEventListener('visibilitychange', refresh)
+    window.addEventListener('mbox:after-sales-changed',refresh)
     return () => {
       globalThis.clearInterval(timer)
       document.removeEventListener('visibilitychange', refresh)
+      window.removeEventListener('mbox:after-sales-changed',refresh)
     }
   }, [busyKey, load, phase, query])
   useEffect(() => {
@@ -1399,13 +1402,21 @@ function RefundBlock({
   onMutation(key: string, endpoint: string, body: unknown, successMessage: string): Promise<boolean>
 }) {
   const [manualConfirmation, setManualConfirmation] = useState<'failed' | 'succeeded' | null>(null)
+  const [caseOpen,setCaseOpen]=useState(false)
   const ownRequest = refund.requestedByEmployeeId === auth.employee.id
-  const canDecide = refund.status === 'requested' && actions.canApproveRefund && !ownRequest
+  const canDecide = !refund.afterSalesCase && refund.status === 'requested' && actions.canApproveRefund && !ownRequest
   const canBegin = (refund.status === 'approved'
     || (!manualProvider && refund.status === 'processing' && refund.providerSubmissionState === 'not_started'))
     && actions.canExecuteRefund
   const canRecordManual = refund.status === 'processing' && actions.canExecuteRefund && manualProvider
   return <div className={`cashier-refund-row is-${refund.status}`}>
+    {refund.afterSalesCase&&<section aria-label="原商品售后">
+      <p>商品售后退款 · 请通过原售后单统一处理。</p>
+      <button type="button" onClick={()=>setCaseOpen(true)} disabled={!refund.afterSalesCase.orderItemId}>处理原售后单</button>
+      {!refund.afterSalesCase.orderItemId&&<p>原售后商品关联待核对，请联系管理员。</p>}
+      {caseOpen&&refund.afterSalesCase.orderItemId&&<ItemAfterSalesPanel itemId={refund.afterSalesCase.orderItemId} initialCaseId={refund.afterSalesCase.caseId} employeeId={auth.employee.id}
+        onClose={()=>setCaseOpen(false)} onChanged={()=>window.dispatchEvent(new Event('mbox:after-sales-changed'))}/>}
+    </section>}
     <div className="cashier-refund-heading">
       <span><b>退款 ¥{formatAmount(refund.amountMinor)}</b><small>{refundStatusLabel(refund.status)} · {refund.requestedByEmployeeName}发起</small></span>
       <Clock3 size={17} />

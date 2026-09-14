@@ -87,6 +87,7 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
 }) {
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading')
   const [message, setMessage] = useState<string | null>(null)
+  const [refreshDelayed,setRefreshDelayed]=useState(false)
   const [view, setView] = useState<CashierWorkbenchView | null>(null)
   const [query, setQuery] = useState('')
   const [areaId, setAreaId] = useState('all')
@@ -115,6 +116,7 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
         `/api/payments/workbench?${search.toString()}`,
       )
       setView(response.data)
+      setRefreshDelayed(false)
       setAreaOptions((current) => {
         const next = new Map(current.map((area) => [area.id, area.name]))
         for (const order of response.data.orders) {
@@ -142,6 +144,7 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
         onLoginRequired()
         return
       }
+      if(quiet)setRefreshDelayed(true)
       if (!quiet) {
         setMessage(error instanceof Error ? error.message : '收银售后数据暂时无法读取')
         setPhase('error')
@@ -279,7 +282,7 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
     }
   }, [api, load, onLoginRequired, query])
 
-  return <>{view && auth.permissions.includes('reconciliation.view') && <CashierDaySummary api={api} businessDate={view.businessDate} revision={view} printEmployeeId={auth.permissions.includes('order.bill.print')?auth.employee.id:undefined}/>}{auth.permissions.includes('reconciliation.view')&&<PaymentFinanceReviewPanel api={api} canManage={auth.permissions.includes('reconciliation.manage')}/>} {view && auth.permissions.includes('reconciliation.view') && <OperatingHistoryPanel key={auth.employee.id} api={api} businessDate={view.businessDate} />}
+  return <>{refreshDelayed&&<p role="status" data-action-reveal="off">收银状态更新暂时延迟，已有记录保留，请刷新核对；不要因显示未变重复收退款。</p>}{view && auth.permissions.includes('reconciliation.view') && <CashierDaySummary api={api} businessDate={view.businessDate} revision={view} printEmployeeId={auth.permissions.includes('order.bill.print')?auth.employee.id:undefined}/>}{auth.permissions.includes('reconciliation.view')&&<PaymentFinanceReviewPanel api={api} canManage={auth.permissions.includes('reconciliation.manage')}/>} {view && auth.permissions.includes('reconciliation.view') && <OperatingHistoryPanel key={auth.employee.id} api={api} businessDate={view.businessDate} />}
     <CashierAfterSalesWorkbenchView
     auth={auth}
     view={view}

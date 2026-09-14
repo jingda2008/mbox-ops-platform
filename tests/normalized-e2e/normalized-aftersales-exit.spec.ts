@@ -31,13 +31,13 @@ async function visibleExit(page:Page){
 test('after-sales exit remains visible during long errors, polling, small views and enlarged text',async({page})=>{
   let writes=0
   await page.route('**/api/commerce/item-after-sales/*/physical',route=>{writes++;return route.fulfill({status:409,json:{error:{code:'PRODUCTION_REVIEW_REQUIRED',message:'库存记录待核对：原记录扣减500毫升，与包装记录330毫升/瓶不一致。'.repeat(5)}}})})
+  await page.clock.install()
   await page.setViewportSize({width:390,height:650})
   const dialog=await open(page)
   await dialog.getByLabel('已实际收回且未开封').check()
   await dialog.getByRole('button',{name:'确认收回入库',exact:true}).click()
   await expect(dialog.getByRole('alert')).toBeVisible();await visibleExit(page)
   const background=await page.evaluate(()=>window.scrollY)
-  await page.clock.install()
   const region=dialog.locator('[data-dialog-scroll]')
   await region.evaluate(element=>element.scrollTop=element.scrollHeight)
   const scroll=await region.evaluate(element=>element.scrollTop)
@@ -116,4 +116,8 @@ test('cashier opens the linked original case and keeps ordinary refund controls 
   await parent.getByRole('button',{name:'关闭商品处理'}).click()
   await expect(caseRow.getByRole('button',{name:'处理原售后单',exact:true})).toBeFocused()
   await expect(page.locator('[data-cashier-order-id="order"] .cashier-order-toggle')).toHaveAttribute('aria-expanded','true')
+  await page.route('**/api/payments/workbench?*',route=>route.fulfill({status:503,json:{error:{message:'isolated delayed read'}}}))
+  await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')))
+  await expect(page.getByText('收银状态更新暂时延迟，已有记录保留，请刷新核对；不要因显示未变重复收退款。')).toBeVisible()
+  await expect(caseRow).toBeVisible();await expect(ordinary).toBeVisible()
 })

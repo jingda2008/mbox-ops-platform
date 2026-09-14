@@ -1259,7 +1259,12 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
     <div className={`staff-module-summary${view.lowStockCount > 0 ? ' has-attention' : ''}`}><span><PackageSearch size={18} /></span><div><strong>{view.lowStockCount} 项低库存 · {view.items.length} 项物料</strong><small>{view.receipts.length} 笔进货记录 · {view.storedBottles.length} 笔存酒</small></div></div>
     <section className="inventory-selling-flow" aria-label="酒水从建档到小程序可售流程"><header><div><strong>酒水四步入库发布</strong><small>同一物料可被整瓶、单杯、Shot 和鸡尾酒共同引用；发布必须先展示本次收货形成的真实成本与可售结果。</small></div><em>4 步</em></header><ol><li><b>01</b><span><strong>扫码或建立物料</strong><small>登记净含量、瓶数、采购总额、批次和供应商。</small></span>{canReceive && <button type="button" onClick={() => chooseMode('receive')}>扫码入库</button>}</li><li><b>02</b><span><strong>选择销售规格</strong><small>整瓶、单杯、Shot、鸡尾酒或自定义，均引用正式配方。</small></span>{canManageCatalog && <button type="button" onClick={() => setCatalogOpenRequest((current) => current + 1)}>配置</button>}</li><li><b>03</b><span><strong>生成完整预览</strong><small>核对容量、单位/单份成本、扣减、可售份数、毛利和渠道。</small></span>{draftReceipts.length > 0 && <em>待预览 {draftReceipts.length}</em>}</li><li><b>04</b><span><strong>确认入库并发布</strong><small>服务端在同一事务重算成本；任一门禁失败则整体回滚。</small></span>{canManageCatalog && <button type="button" onClick={() => setCatalogOpenRequest((current) => current + 1)}>检查商品</button>}</li></ol></section>
     {notice !== '' && <p className="staff-module-notice" role="status">{notice}</p>}
-    {(canCount || auth.permissions.includes('inventory.count.approve')) && <InventoryStockCountPanel key={auth.employee.id} api={api} auth={auth} refreshToken={view} onChanged={onChanged} />}
+    {(canCount || auth.permissions.includes('inventory.count.approve')) && <InventoryStockCountPanel key={auth.employee.id} api={api} auth={auth} refreshToken={view} onChanged={onChanged}
+      onRecount={canCount ? (id) => {
+        const item = operationalItems.find(candidate => candidate.id === id)
+        if (item) startQuickCount(item)
+        else setNotice('该物料暂不在当前库存列表，请刷新库存后核对物料状态，再提交新盘点。')
+      } : undefined} />}
     {(canCount || canWaste || canReceive || canManage || canBindBarcode || canCorrectInventoryCost) && <div className="staff-module-actions" aria-label="库存操作">
       {canManage && <button type="button" className={mode === 'create' ? 'is-active' : ''} aria-pressed={mode === 'create'} onClick={() => chooseMode('create')}>新建库存物料</button>}
       {canReceive && <button type="button" className={`is-primary${mode === 'receive' ? ' is-active' : ''}`} aria-pressed={mode === 'receive'} onClick={() => chooseMode('receive')}><ScanLine size={16} />手机扫码入库</button>}

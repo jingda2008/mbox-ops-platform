@@ -83,6 +83,9 @@ MBOX_WECHAT_ENCRYPTION_KEY_VERSION=1
 MBOX_WECHAT_ENCRYPTION_KEY_BASE64=BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=
 MBOX_WECHAT_SERVICE_TEMPLATE_ID=wechat-template-001
 MBOX_WECHAT_NOTIFICATION_POLICY_VERSION=service-notice-v1
+MBOX_WECHAT_SERVICE_ACCOUNT_APP_ID=wxMboxService01
+MBOX_WECHAT_SERVICE_ACCOUNT_CALLBACK_TOKEN=MBoxCallbackToken2026
+MBOX_WECHAT_SERVICE_ACCOUNT_ENCODING_AES_KEY=BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc
 MBOX_ALIPAY_APP_ID=2021006196615276
 MBOX_ALIPAY_AES_KEY=alipay-aes-key-16
 MBOX_AI_MODE=disabled
@@ -101,6 +104,9 @@ grep -qx 'MBOX_WECHAT_ENABLED=true' "${postar_env_file}"
 grep -qx 'MBOX_WECHAT_APP_ID=wxMboxCommercial01' "${postar_env_file}"
 grep -qx 'MBOX_WECHAT_APP_SECRET=wechat-secret-value' "${postar_env_file}"
 grep -qx 'MBOX_WECHAT_SERVICE_TEMPLATE_ID=wechat-template-001' "${postar_env_file}"
+grep -qx 'MBOX_WECHAT_SERVICE_ACCOUNT_APP_ID=wxMboxService01' "${postar_env_file}"
+grep -qx 'MBOX_WECHAT_SERVICE_ACCOUNT_CALLBACK_TOKEN=MBoxCallbackToken2026' "${postar_env_file}"
+grep -qx 'MBOX_WECHAT_SERVICE_ACCOUNT_ENCODING_AES_KEY=BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc' "${postar_env_file}"
 grep -qx 'MBOX_ALIPAY_APP_ID=2021006196615276' "${postar_env_file}"
 grep -qx 'MBOX_ALIPAY_AES_KEY=alipay-aes-key-16' "${postar_env_file}"
 

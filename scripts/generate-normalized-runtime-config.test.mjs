@@ -23,6 +23,9 @@ test('config templates use explicit integration modes without secrets', () => {
   assert.match(production, /MBOX_WECHAT_APP_ID=<mini-program-app-id>/)
   assert.match(production, /MBOX_WECHAT_APP_SECRET=<mini-program-app-secret>/)
   assert.match(production, /MBOX_WECHAT_SERVICE_TEMPLATE_ID=<wechat-service-template-id>/)
+  assert.match(production, /MBOX_WECHAT_SERVICE_ACCOUNT_APP_ID=<service-account-app-id>/)
+  assert.match(production, /MBOX_WECHAT_SERVICE_ACCOUNT_CALLBACK_TOKEN=<service-account-callback-token>/)
+  assert.match(production, /MBOX_WECHAT_SERVICE_ACCOUNT_ENCODING_AES_KEY=<service-account-encoding-aes-key>/)
   assert.equal(required.configVersion, 'normalized-runtime-config/v1')
   assert.ok(required.alwaysRequiredInOptimizedRuntime.includes('MBOX_WECHAT_ENABLED'))
   for (const field of [
@@ -37,6 +40,10 @@ test('config templates use explicit integration modes without secrets', () => {
   assert.deepEqual(required.conditional.wechatIdentity, [
     'MBOX_WECHAT_APP_ID', 'MBOX_WECHAT_APP_SECRET', 'MBOX_WECHAT_STATE_SECRET',
     'MBOX_WECHAT_ENCRYPTION_KEY_VERSION', 'MBOX_WECHAT_ENCRYPTION_KEY_BASE64',
+  ])
+  assert.deepEqual(required.conditional.wechatServiceAccountCallback, [
+    'MBOX_WECHAT_SERVICE_ACCOUNT_APP_ID', 'MBOX_WECHAT_SERVICE_ACCOUNT_CALLBACK_TOKEN',
+    'MBOX_WECHAT_SERVICE_ACCOUNT_ENCODING_AES_KEY',
   ])
   assert.match(validation, /MBOX_STORE_DAILY_CREDENTIAL=<store-daily-credential>/)
   assert.match(validation, /MBOX_EMPLOYEE_PIN_LIYAN=<unique-four-digit-pin>/)

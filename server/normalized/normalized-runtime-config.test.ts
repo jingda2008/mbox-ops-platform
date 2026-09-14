@@ -29,6 +29,7 @@ describe('loadNormalizedRuntimeConfig', () => {
       deploymentTier: 'validation',
       payment: null,
       wechatIdentity: null,
+      wechatServiceAccountCallback: null,
       alipayPhone: null,
       metricsToken: null,
       guestPaymentMode: 'simulation',
@@ -144,6 +145,24 @@ describe('loadNormalizedRuntimeConfig', () => {
     })
     expect(() => loadNormalizedRuntimeConfig({
       ...base, MBOX_WECHAT_SERVICE_TEMPLATE_ID: 'wechatTemplate_001',
+    })).toThrowError(NormalizedRuntimeConfigurationError)
+  })
+
+  it('loads a complete service-account callback and rejects partial secrets', () => {
+    const encodingAesKey = Buffer.alloc(32, 7).toString('base64').slice(0, -1)
+    expect(loadNormalizedRuntimeConfig({
+      ...base,
+      MBOX_WECHAT_SERVICE_ACCOUNT_APP_ID: 'wxMboxService01',
+      MBOX_WECHAT_SERVICE_ACCOUNT_CALLBACK_TOKEN: 'MBoxCallbackToken2026',
+      MBOX_WECHAT_SERVICE_ACCOUNT_ENCODING_AES_KEY: encodingAesKey,
+    }).wechatServiceAccountCallback).toEqual({
+      appId: 'wxMboxService01',
+      token: 'MBoxCallbackToken2026',
+      encodingAesKey,
+    })
+    expect(() => loadNormalizedRuntimeConfig({
+      ...base,
+      MBOX_WECHAT_SERVICE_ACCOUNT_APP_ID: 'wxMboxService01',
     })).toThrowError(NormalizedRuntimeConfigurationError)
   })
 

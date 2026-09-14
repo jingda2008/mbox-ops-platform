@@ -1546,7 +1546,7 @@ async function handleRoute(
     return await operation()
   } catch (error) {
     const mapped = mapError(error)
-    if(error instanceof RefundRequiresCaseDecisionError) reply.log.info({event:"refund_case_decision_required",refundId:error.refundId,caseId:error.caseId,errorCode:error.code,requestId:reply.request.id},"Refund decision belongs to the original after-sales case")
+    if(error instanceof RefundRequiresCaseDecisionError) reply.log.info({event:"refund_case_decision_required",command:reply.request.routeOptions.url,tenantId:error.scope.tenantId,storeId:error.scope.storeId,stage:"refund_decision_guard",refundId:error.refundId,caseId:error.caseId,errorCode:error.code,requestId:reply.request.id},"Refund decision belongs to the original after-sales case")
     if (mapped.statusCode >= 500) reply.log.error({
       event: 'payment_command_failed', requestId:reply.request.id, command:reply.request.routeOptions.url, constraint:safePaymentConstraint(error), errorCode: safePaymentErrorCode(error),errorLocation:safePaymentErrorLocation(error),
     }, 'Payment command failed; verified evidence remains available for reconciliation')

@@ -127,7 +127,7 @@ afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()))
 })
 
-function fixture(overrides: Partial<PaymentApiOptions> = {}) {
+function fixture(overrides: Partial<PaymentApiOptions> = {}, logs?:string[]) {
   const commands = {
     initiate: vi.fn(async (
       _input: Parameters<PaymentApiOptions['commands']['initiate']>[0],
@@ -299,7 +299,7 @@ function fixture(overrides: Partial<PaymentApiOptions> = {}) {
     createPublicId: (kind) => `${kind}-generated-0001`,
     ...overrides,
   }
-  const app = Fastify()
+  const app = Fastify(logs?{logger:{stream:{write:(line:string)=>{logs.push(line)}}}}:{})
   apps.push(app)
   app.register(paymentApiPlugin, { ...options, prefix: '/api' })
   return {
@@ -1141,12 +1141,14 @@ describe('paymentApiPlugin', () => {
   })
 
   it.each(['approve','reject'] as const)('returns a controlled original-case conflict for ordinary %s',async decision=>{
-    const value=fixture()
-    value.commands[decision==='approve'?'approveRefund':'rejectRefund'].mockRejectedValueOnce(new RefundRequiresCaseDecisionError(refundId,orderItemId))
+    const logs:string[]=[],value=fixture({},logs)
+    value.commands[decision==='approve'?'approveRefund':'rejectRefund'].mockRejectedValueOnce(new RefundRequiresCaseDecisionError(refundId,orderItemId,{tenantId,storeId}))
     const response=await value.app.inject({method:'POST',url:`/api/refunds/${refundId}/${decision}`,headers:{'idempotency-key':`case-route-${decision}`},payload:{reason:'核对原商品售后申请'}})
     expect(response.statusCode).toBe(409)
     expect(response.json().error).toEqual({code:'REFUND_REQUIRES_CASE_DECISION',message:'这笔退款属于商品售后，请进入原售后单审批。'})
     expect(value.commands.beginRefundExecution).not.toHaveBeenCalled()
+    const recorded=logs.map(line=>JSON.parse(line)).find(line=>line.event==='refund_case_decision_required')
+    expect(recorded).toMatchObject({level:30,tenantId,storeId,command:`/api/refunds/:refundId/${decision}`,stage:'refund_decision_guard',refundId,caseId:orderItemId,errorCode:'REFUND_REQUIRES_CASE_DECISION',requestId:expect.any(String)})
   })
   it('does not misclassify arbitrary database constraints or disclose their contents',async()=>{
     const value=fixture()

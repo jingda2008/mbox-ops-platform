@@ -22,4 +22,14 @@
 
 ## 交付状态
 
-本地实现与专项验证完成；提交、合并、精确标签CI及正式部署据实追加。证据位于`artifacts/stock-count-batch-20260914/`。
+已提交、合并并上线rc.200，生产完成时间为2026-09-15 00:08:49 CST。
+
+- [PR237](https://github.com/jingda2008/mbox-ops-platform/pull/237)于2026-09-14 23:49:46合并，提交`b4d34ed73c64016e1d5773f90057973b1151f0fa`，标签`v1.0.0-rc.200`。
+- [精确标签CI](https://github.com/jingda2008/mbox-ops-platform/actions/runs/34864805069)全部通过：质量、数据库/HTTP、完整浏览器、性能、镜像及verify；[发布工作流](https://github.com/jingda2008/mbox-ops-platform/actions/runs/34864804881)成功。本地完整check为1799通过/710条件跳过。
+- 独立发布目录`/Users/jingda/mbox/mbox-stock-count-batch-release-20260914`，保留此前release与原工作树；唯一执行入口`./deploy/aliyun/deploy-release.sh`，预检dry_run=verified，最终deployment=complete、退出码0。
+- 生产readiness为ready、workers healthy、production、schema203，SHA与标签相同；无新增迁移。镜像摘要`sha256:f3822f0da3466dba2205d58d9667bba101a51a1f27c058d6a51952d02620eeb3`，平台摘要`sha256:30ec056d688ad44378dee53ae14bee99901200d12c5f24f77468a0914210b020`。
+- 候选服务健康/深链检查后切换；公网`/`、`/guest?table=W01`、`/reserve`、`/staff/live`的HTTP和浏览器校验全部通过。备份、部署及完成OSS证据均verified=true且EcsRamRole回读一致，release-state为completed。上版rc.199保留回滚容器。
+- 数量售后在canonical、release、活动配置、容器环境和runtime解析中均true；支付与服务号配置SHA256指纹前后相同。worker能力保持postar支付/退款。只使用本命令验证过的Node24及保留TLS的公共源站映射，没有改系统DNS或代理。
+- 本地专项日志在开发工作树`artifacts/stock-count-batch-20260914/`；生产证据在发布工作树`artifacts/stock-count-batch-release-20260914/`，包含preflight/deploy日志、ready/config回读、OSS验证摘要及完整发布状态。标准清单位于`.runtime/deploy/v1.0.0-rc.200/deployment/deployment-manifest.json`。
+
+使用方式：刷新员工网页，由另一名有盘点审批权限的同事进入“库存 → 盘点复核”，勾选或全选当前页，点击批量通过/批量退回。已变化旧单只能退回；本人单据不可自审。没有代替门店批准、退回或重盘任何真实生产单据，实际两名岗位批量操作仍待现场验收。

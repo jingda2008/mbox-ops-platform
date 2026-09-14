@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { settlementDisplayNumber } from './settlement-display-number.js'
 import {
   createPrintTicketSnapshot,
   inferPrintTicketOutputProfile,
@@ -31,6 +32,31 @@ function ticket(kind: 'cashier_settlement' | 'cashier_payment' | 'cashier_refund
 }
 
 describe('print ticket layout', () => {
+  it('keeps the OCR number across serialization and pages while preserving the full trace at the footer', () => {
+    const number = settlementDisplayNumber('2026-09-14T16:01:02Z', 'tenant', 'store', 'session')
+    expect(number).toMatch(/^20260915-000102-\d{6}$/)
+    expect(settlementDisplayNumber('2026-09-14T16:01:02Z', 'tenant', 'store', 'session-0')).toBe('20260915-000102-066794')
+    expect(()=>settlementDisplayNumber('invalid', 'tenant', 'store', 'session')).toThrow('开票时间')
+    expect(settlementDisplayNumber('2026-09-15T00:01:02+08:00', 'tenant', 'store', 'session')).toBe(number)
+    const source = createPrintTicketSnapshot({...ticket('cashier_payment'), kind:'table_settlement',
+      issuedAt:'2026-09-14T16:01:02Z',businessDate:'2026-09-14',displayNumber:number,
+      ticketReference:'original-session-trace',lines:Array.from({length:60},()=>({name:'啤酒',quantity:1}))})
+    expect(parsePrintTicketSnapshot(ticketToJson(source))).toEqual(source)
+    const pages=paginatePrintTicket({...source,lines:[...source.lines,...source.lines]})
+    expect(pages.map(page=>page.displayNumber)).toEqual([number,number])
+    for (const page of pages) {
+      const html=renderPrintTicketHtml(page)
+      expect(html).toContain(`单号：${number}`)
+      expect(html).toContain('<footer>原始追溯码：original-session-trace<br>')
+    }
+    const legacy=ticketToJson({...source,displayNumber:undefined})
+    expect(legacy).not.toHaveProperty('displayNumber')
+    expect(parsePrintTicketSnapshot(legacy)).not.toHaveProperty('displayNumber')
+    expect(renderPrintTicketHtml(parsePrintTicketSnapshot(legacy))).not.toContain('原始追溯码：')
+    expect(()=>createPrintTicketSnapshot({...source,displayNumber:'20260915-1-123456'})).toThrow('展示单号')
+    expect(()=>createPrintTicketSnapshot({...source,kind:'cashier_payment'})).toThrow('票种')
+  })
+
   it('renders historical unit prices without deriving them from discounted totals', () => {
     const source = createPrintTicketSnapshot({...ticket('cashier_settlement'), lines: [
       {name:'啤酒',quantity:4,unitAmountMinor:4000,totalAmountMinor:12000},

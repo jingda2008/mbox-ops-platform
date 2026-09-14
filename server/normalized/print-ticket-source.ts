@@ -1,3 +1,4 @@
+import { settlementDisplayNumber } from './settlement-display-number.js'
 import {orderReceivableSql} from './order-collection-sql.js'
 import { buildDailyReportLines, DEFAULT_DAILY_REPORT, type DailyReportOptions } from './daily-report-format.js'
 import {readOperatingHistory} from './operating-history-query.js'
@@ -327,7 +328,17 @@ export class PrintTicketSourceRepository {
     [this.transaction.scope.tenantId,this.transaction.scope.storeId,sessionId])).rows[0]!
     lines.push({name:'累计成功收款',quantity:1,totalAmountMinor:Number(amounts.received)},
       {name:'累计成功退款',quantity:1,totalAmountMinor:Number(amounts.refunded)})
+    const existing = (await this.transaction.query<{print_snapshot: JsonObject}>(`
+      SELECT print_snapshot FROM mbox.print_jobs
+      WHERE tenant_id=$1 AND store_id=$2 AND source_outbox_message_id=$3
+        AND print_snapshot->>'kind'='table_settlement'
+      ORDER BY created_at,id LIMIT 1`,
+    [this.transaction.scope.tenantId,this.transaction.scope.storeId,sourceId])).rows[0]
+    const displayNumber = existing
+      ? existing.print_snapshot.displayNumber
+      : settlementDisplayNumber(session.closed_at, this.transaction.scope.tenantId, this.transaction.scope.storeId, sessionId)
     return this.materializeDocument(sourceId, sessionId, {
+      ...(typeof displayNumber === 'string' ? {displayNumber} : {}),
       kind:'table_settlement',subtitle:'M-BOX · 已关桌，合计为净收款；以生成时财务记录为准',test:false,
       issuedAt:session.closed_at,businessDate:session.business_date,ticketReference:session.public_id,
       tableCode:session.code,guestCount:session.guest_count,operatorLabel:null,note:null,payment:null,

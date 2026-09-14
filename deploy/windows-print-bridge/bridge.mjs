@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { mkdir, open, readFile, rename, writeFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
 
-const VERSION = '1.0.4'
+const VERSION = '1.0.5'
 const execFileAsync = promisify(execFile)
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const dataDirectory = process.env.MBOX_PRINT_BRIDGE_DATA
@@ -195,6 +195,7 @@ function renderTicket(value) {
     throw new Error('unsupported_ticket_snapshot')
   }
   const title = requiredText(value.title, 'ticket.title')
+  const displayNumber = value.kind === 'table_settlement' && /^\d{8}-\d{6}-\d{6}$/.test(value.displayNumber || '') ? value.displayNumber : null
   const lines = [
     'M-BOX · SHANGHAI',
     value.test === true ? '【系统打印测试】' : '',
@@ -203,7 +204,7 @@ function renderTicket(value) {
     divider(),
     value.tableCode ? `桌台：${value.tableCode}` : '',
     value.guestCount ? `人数：${value.guestCount}` : '',
-    `单号：${requiredText(value.ticketReference, 'ticket.ticketReference')}`,
+    `单号：${displayNumber || requiredText(value.ticketReference, 'ticket.ticketReference')}`,
     `营业日：${requiredText(value.businessDate, 'ticket.businessDate')}`,
     value.issuedAt ? `时间：${new Date(value.issuedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}` : '',
     `打印时间：${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}`,
@@ -226,6 +227,7 @@ function renderTicket(value) {
   if (value.payment) lines.push(`支付方式：${paymentLabel(value.payment)}`)
   if (Number.isSafeInteger(value.totalAmountMinor)) lines.push(`合计：${formatCny(value.totalAmountMinor)}`)
   if (value.note) lines.push(`备注：${String(value.note)}`)
+  if (displayNumber) lines.push(`原始追溯码：${requiredText(value.ticketReference, 'ticket.ticketReference')}`)
   lines.push('', '请按票据内容执行；异常请联系当班负责人。', '')
   return lines.join('\r\n')
 }

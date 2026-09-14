@@ -5,6 +5,7 @@ import { runNormalizedMigrations } from '../migrate-normalized.js'
 import { appendOutboxMessage,NormalizedCommandExecutor } from './command-executor.js'
 import Fastify from 'fastify'
 import {hardwareApiPlugin} from './hardware-api.js'
+import { HardwareRepository } from './hardware-repository.js'
 import { PrintSourceWorker } from './print-source-worker.js'
 import { PrintTicketSourceRepository } from './print-ticket-source.js'
 import {DeliveryBatchRepository} from './delivery-batch-repository.js'
@@ -173,9 +174,36 @@ integration('asynchronous print sources: committed events, isolation and recover
     await pool.query("UPDATE mbox.table_sessions SET status='closed',closed_at=clock_timestamp() WHERE id=$1",[session])
     await transactions.run(scope,tx=>appendOutboxMessage(tx,{aggregateType:'table_session',aggregateId:session,aggregateVersion:3,eventType:'table_session.closed.v1',payload:{status:'closed'}}))
     expect((await worker.runBatch(scope,'table-close-test')).completed).toBe(1)
-    const final=(await pool.query("SELECT print_snapshot FROM mbox.print_jobs WHERE tenant_id=$1 AND print_snapshot->>'kind'='table_settlement'",[scope.tenantId])).rows
+    const final=(await pool.query("SELECT id,source_outbox_message_id,print_snapshot FROM mbox.print_jobs WHERE tenant_id=$1 AND print_snapshot->>'kind'='table_settlement'",[scope.tenantId])).rows
     expect(final).toHaveLength(1)
     expect(final[0].print_snapshot.totalAmountMinor).toBe(1500)
+    expect(final[0].print_snapshot.displayNumber).toMatch(/^\d{8}-\d{6}-\d{6}$/)
+    expect(final[0].print_snapshot.ticketReference).toBe('async-print-session')
+    const again=await transactions.run(scope,tx=>new PrintTicketSourceRepository(tx).materializeTableSettlement(final[0].source_outbox_message_id,session))
+    expect(again[0].id).toBe(final[0].id)
+    expect(again[0].printSnapshot).toEqual(final[0].print_snapshot)
+    const reprintEmployee=randomUUID()
+    await pool.query("INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($1,$2,$3,'reprint-test','补打员工')",[reprintEmployee,scope.tenantId,scope.storeId])
+    let parent=final[0].id
+    for(let i=0;i<2;i++) {
+      await pool.query("UPDATE mbox.print_jobs SET status='printed',printed_at=clock_timestamp() WHERE id=$1",[parent])
+      const copy=await transactions.run(scope,async tx=>{
+        await tx.query('SET LOCAL ROLE mbox_runtime')
+        return new HardwareRepository(tx).reprintPrintJob(parent,reprintEmployee,'原票遗失核对后补打',`settlement-reprint-${i}`)
+      })
+      expect(copy.printSnapshot.displayNumber).toBe(final[0].print_snapshot.displayNumber)
+      expect(copy.printSnapshot.ticketReference).toBe(final[0].print_snapshot.ticketReference)
+      expect(copy.printSnapshot.issuedAt).toBe(final[0].print_snapshot.issuedAt)
+      expect(copy.printSnapshot.lines).toEqual(final[0].print_snapshot.lines)
+      expect(copy.printSnapshot.note).toContain('补打')
+      parent=copy.id
+    }
+    // A pre-upgrade saved ticket is still replayed with its original number.
+    await pool.query("UPDATE mbox.print_jobs SET print_snapshot=print_snapshot-'displayNumber' WHERE id=$1",[final[0].id])
+    const old=await transactions.run(scope,tx=>new PrintTicketSourceRepository(tx).materializeTableSettlement(final[0].source_outbox_message_id,session))
+    expect(old[0].id).toBe(final[0].id)
+    expect(old[0].printSnapshot).not.toHaveProperty('displayNumber')
+
     expect(final[0].print_snapshot.lines.map((l:{name:string})=>l.name)).toEqual(expect.arrayContaining(['测试酒','测试小食','累计成功收款','累计成功退款']))
     await pool.query("INSERT INTO mbox.print_ticket_policies(tenant_id,store_id,ticket_kind,enabled,copies) VALUES($1,$2,'order_summary',false,1) ON CONFLICT(tenant_id,store_id,ticket_kind) DO UPDATE SET enabled=false,copies=1",[scope.tenantId,scope.storeId])
     const manual=await transactions.run(scope,async tx=>{

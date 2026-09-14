@@ -37,6 +37,7 @@ export interface PrintTicketSnapshot {
   issuedAt: string
   businessDate: string
   ticketReference: string
+  displayNumber?: string
   tableCode: string | null
   guestCount: number | null
   operatorLabel: string | null
@@ -64,6 +65,9 @@ export function createPrintTicketSnapshot(input: Readonly<Omit<PrintTicketSnapsh
   assertTicketKind(input.kind)
   assertShortText(input.subtitle, 'subtitle', 1, 80)
   assertShortText(input.ticketReference, 'ticketReference', 3, 120)
+  if (input.displayNumber !== undefined && (input.kind !== 'table_settlement' || !/^\d{8}-\d{6}-\d{6}$/.test(input.displayNumber))) {
+    throw new TypeError('结账展示单号格式或票种无效')
+  }
   assertDateTime(input.issuedAt, 'issuedAt')
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.businessDate)) throw new TypeError('businessDate格式无效')
   if (input.tableCode !== null) assertShortText(input.tableCode, 'tableCode', 1, 32)
@@ -89,6 +93,7 @@ export function createPrintTicketSnapshot(input: Readonly<Omit<PrintTicketSnapsh
     issuedAt: input.issuedAt,
     businessDate: input.businessDate,
     ticketReference: input.ticketReference.trim(),
+    ...(input.displayNumber === undefined ? {} : { displayNumber: input.displayNumber }),
     tableCode: input.tableCode?.trim() ?? null,
     guestCount: input.guestCount,
     operatorLabel: input.operatorLabel?.trim() ?? null,
@@ -131,6 +136,7 @@ export function parsePrintTicketSnapshot(value: unknown): PrintTicketSnapshot {
     issuedAt: readString(value.issuedAt, 'issuedAt'),
     businessDate: readString(value.businessDate, 'businessDate'),
     ticketReference: readString(value.ticketReference, 'ticketReference'),
+    ...(value.displayNumber === undefined ? {} : { displayNumber: readString(value.displayNumber, 'displayNumber') }),
     tableCode: nullableString(value.tableCode, 'tableCode'),
     guestCount: nullableGuestCount(value.guestCount),
     operatorLabel: nullableString(value.operatorLabel, 'operatorLabel'),
@@ -152,6 +158,7 @@ export function ticketToJson(ticket: Readonly<PrintTicketSnapshot>): JsonObject 
     issuedAt: ticket.issuedAt,
     businessDate: ticket.businessDate,
     ticketReference: ticket.ticketReference,
+    ...(ticket.displayNumber === undefined ? {} : { displayNumber: ticket.displayNumber }),
     tableCode: ticket.tableCode,
     guestCount: ticket.guestCount,
     operatorLabel: ticket.operatorLabel,
@@ -230,8 +237,8 @@ export function renderPrintTicketHtml(
     main.paper-58 .item-head, main.paper-58 li { grid-template-columns:minmax(0,1fr) 7mm 14mm; gap:1mm; }
     main.paper-58 li em { grid-column:auto; font-size:8pt; } main.paper-58 .table-hero strong { font-size:25pt; }
     main.paper-58 .total strong { font-size:21pt; } main.paper-58.production li b { font-size:12pt; }
-    footer { margin-top:3mm; } .dash { margin-top:3mm; border-color:#000; }
-  </style></head><body><main class="${production ? 'production' : 'cashier'} paper-${profile.paper.replace('mm', '')}"><div class="brand">M-BOX · SHANGHAI</div><div class="center">${ticket.test ? '<span class="test">系统打印测试</span>' : ''}</div>${venue}<h1>${escapeHtml(ticket.title)}</h1><p class="subtitle">${escapeHtml(ticket.subtitle)}</p>${table}${guest}<section class="meta"><div class="meta-line"><span>${escapeHtml(ticket.ticketReference)}</span><span>${escapeHtml(ticket.businessDate)} ${escapeHtml(formatTime(ticket.issuedAt))}</span></div><div class="meta-line">${operator}</div></section>${columns}<ul>${lines}</ul>${payment}${note}${amount}<div class="dash"></div><footer>请按票据内容执行；如有异常请联系当班负责人。<br>此票据为${ticket.test ? '测试' : '系统'}留痕，不替代支付凭证。</footer></main></body></html>`
+    footer { margin-top:3mm; overflow-wrap:anywhere; } .dash { margin-top:3mm; border-color:#000; }
+  </style></head><body><main class="${production ? 'production' : 'cashier'} paper-${profile.paper.replace('mm', '')}"><div class="brand">M-BOX · SHANGHAI</div><div class="center">${ticket.test ? '<span class="test">系统打印测试</span>' : ''}</div>${venue}<h1>${escapeHtml(ticket.title)}</h1><p class="subtitle">${escapeHtml(ticket.subtitle)}</p>${table}${guest}<section class="meta"><div class="meta-line"><span>${ticket.displayNumber ? `单号：${escapeHtml(ticket.displayNumber)}` : escapeHtml(ticket.ticketReference)}</span><span>${escapeHtml(ticket.businessDate)} ${escapeHtml(formatTime(ticket.issuedAt))}</span></div><div class="meta-line">${operator}</div></section>${columns}<ul>${lines}</ul>${payment}${note}${amount}<div class="dash"></div><footer>${ticket.displayNumber ? `原始追溯码：${escapeHtml(ticket.ticketReference)}<br>` : ''}请按票据内容执行；如有异常请联系当班负责人。<br>此票据为${ticket.test ? '测试' : '系统'}留痕，不替代支付凭证。</footer></main></body></html>`
 }
 
 export function normalizePrintTicketOutputProfile(value: Readonly<PrintTicketOutputProfile>): PrintTicketOutputProfile {

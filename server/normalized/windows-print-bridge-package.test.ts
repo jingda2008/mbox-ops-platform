@@ -23,6 +23,27 @@ describe('Windows print bridge package', () => {
     expect(text).toContain('经办：收银员')
     expect(text).not.toContain('测试支付')
   })
+  it('changes only numbered table settlements and keeps the entire trace after amounts and reprint notes', async () => {
+    const source=await readFile(join(directory,'bridge.mjs'),'utf8')
+    const render=vm.runInNewContext(`${source.slice(source.indexOf('function renderTicket(value)'),source.indexOf('async function authenticatedRequest'))}; renderTicket`, {
+      requiredText:(value:string)=>value,positiveInteger:(value:number)=>value,
+      divider:()=> '---',center:(value:string)=>value,formatCny:(value:number)=>`¥${(value/100).toFixed(2)}`,
+    })
+    const ticket={schemaVersion:1,kind:'table_settlement',title:'整桌结账归档单',ticketReference:'session-original-full-trace',
+      displayNumber:'20260914-213508-004271',businessDate:'2026-09-14',note:'补打：原票遗失',totalAmountMinor:100,
+      lines:[{name:'啤酒',quantity:1,totalAmountMinor:100}]}
+    const text=render(ticket)
+    expect(text.split('\r\n')).toContain('单号：20260914-213508-004271')
+    expect(text).toContain('原始追溯码：session-original-full-trace')
+    expect(text.indexOf('原始追溯码：')).toBeGreaterThan(text.indexOf('备注：补打'))
+    for(const kind of ['cashier_settlement','cashier_payment','cashier_refund','bar_production','kitchen_production','order_summary','delivery','daily_settlement','production_notice']) {
+      const other=render({...ticket,kind})
+      expect(other).toContain('单号：session-original-full-trace')
+      expect(other).not.toContain('004271')
+      expect(other).not.toContain('原始追溯码：')
+    }
+    expect(render({...ticket,displayNumber:undefined})).toContain('单号：session-original-full-trace')
+  })
   it('retains venue RAW transport, GBK and cutting instead of Windows font rendering', async () => {
     const source = await readFile(join(directory, 'print-ticket.ps1'), 'utf8')
     expect(source).toContain('di.pDatatype = "RAW"')

@@ -8,3 +8,8 @@
 .inventory-stock-counts input, .inventory-stock-counts button { min-height: 44px; max-width: 100%; box-sizing: border-box; font: inherit; }
 .inventory-stock-counts input { width: 100%; min-width: 0; }
 .inventory-stock-counts button[aria-pressed="true"] { background: #176c4d; color: white; }
+.inventory-stock-count-batch { display: grid; gap: 10px; padding: 12px; border: 1px solid #b9d3c7; border-radius: 8px; background: #eaf5ee; }
+.inventory-stock-count-select { display: flex; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; }
+.inventory-stock-counts .inventory-stock-count-select input { width: 22px; height: 22px; min-height: 22px; flex: 0 0 22px; }
+.inventory-stock-counts h3 { margin: 0; font-size: 1rem; }
+.inventory-stock-counts li { overflow-wrap: anywhere; margin-block: 8px; }

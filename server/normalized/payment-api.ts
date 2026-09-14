@@ -1573,6 +1573,15 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
     || error instanceof StaffNotFoundError
     || error instanceof ProviderPaymentStatusAccessError
   ) {
+    if (error instanceof PaymentAuthorizationError && error.refundReviewBlock) {
+      const messages = {
+        self: '发起人不能审核或驳回自己的退款，请交给另一名已配置复核权限和额度的员工处理',
+        permission: '当前员工没有退款复核权限，请联系管理员在“退款复核”中配置权限和额度',
+        limit_missing: '当前员工未配置有效退款复核额度，请联系管理员在“退款复核”中配置所属岗位的单次额度',
+        limit_exceeded: '本次退款超过当前员工的复核额度，请交给额度足够的其他员工处理，或由管理员调整额度',
+      }
+      return apiError(403, 'FINANCIAL_ACTION_FORBIDDEN', messages[error.refundReviewBlock])
+    }
     return apiError(403, 'FINANCIAL_ACTION_FORBIDDEN', '当前员工无权执行此财务操作')
   }
   if (error instanceof TrustedStoreScopeError || error instanceof NormalizedStoreUnavailableError) {

@@ -17,7 +17,9 @@ import { Pool } from 'pg'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
 import { NormalizedCommandExecutor, type AuditActor } from './command-executor.js'
 import { PaymentCommandService } from './payment-command-service.js'
-import type { PaymentCapabilityAuthorizationPort } from './payment-security-policy.js'
+import { NormalizedPaymentCapabilityAuthorization, type PaymentCapabilityAuthorizationPort } from './payment-security-policy.js'
+import { StaffAccessManagementService } from './staff-access-management-service.js'
+import type { StaffPermissionDeploymentChange } from '../../src/shared/normalized-contracts.js'
 import {
   NormalizedProviderObservationAuthority,
   VerifiedProviderObservationService,
@@ -843,6 +845,59 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
       expect((await send('finance-case-revoked-1',false)).statusCode).toBe(403)
       expect((await app.inject({method:'GET',url:'/payments/finance-review'})).statusCode).toBe(403)
     }finally{await app.close()}
+  })
+
+
+  it('configures another reviewer atomically, preserves self-review and amount guards, and supports rejection', async () => {
+    const runner = new ScopedPostgresTransactionRunner(asPool(pool))
+    const commands = new NormalizedCommandExecutor(runner)
+    const management = new StaffAccessManagementService(runner, commands)
+    const guarded = new PaymentCommandService(commands, new NormalizedPaymentCapabilityAuthorization(), new NormalizedProviderObservationAuthority())
+    const reviewerRole = randomUUID(), administratorRole = randomUUID()
+    await pool.query(`INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name)
+      VALUES($1,$2,'refund.approve','复核退款'),($1,$2,'staff.access.configure','配置权限')
+      ON CONFLICT(tenant_id,store_id,code) DO NOTHING`, [tenantId,storeId])
+    await pool.query(`INSERT INTO mbox.roles(id,tenant_id,store_id,code,name)
+      VALUES($1,$3,$4,'CONFIG_REVIEWER','可配置审核人'),($2,$3,$4,'CONFIG_ADMIN','配置管理员')`, [reviewerRole,administratorRole,tenantId,storeId])
+    await pool.query(`INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id)
+      VALUES($1,$2,$3,$5),($1,$2,$4,$5),($1,$2,$3,$6)`, [tenantId,storeId,approverId,cashierId,reviewerRole,administratorRole])
+    await pool.query(`INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id)
+      SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code='staff.access.configure'`, [tenantId,storeId,administratorRole])
+    const deploy = (changes: StaffPermissionDeploymentChange[]) => management.deployPermissions({
+      scope, actorEmployeeId: approverId, businessDate, idempotencyKey: randomUUID(), requestFingerprint: JSON.stringify(changes), reason: '隔离退款复核配置验证', changes,
+    })
+    const grant: StaffPermissionDeploymentChange = { kind:'role_permission',roleId:reviewerRole,permissionCode:'refund.approve',enabled:true }
+    const limit = (amountMinor: number | null, enabled = true): StaffPermissionDeploymentChange => ({
+      kind:'role_approval_limit',roleId:reviewerRole,approvalCode:'refund.approve',amountMinor,currency:'CNY',enabled,rules:{requiresReason:true,requiresSecondActor:true},
+    })
+    await expect(deploy([grant])).rejects.toThrow('缺少有效退款复核额度')
+    for (const amount of [null,0]) await expect(deploy([grant,limit(amount)])).rejects.toThrow('必须配置大于0')
+    const before = await management.getOverview({scope,actorEmployeeId:approverId})
+    expect(before.roles.find(role=>role.id===reviewerRole)?.permissionCodes).not.toContain('refund.approve')
+    const saved = await deploy([grant,limit(3000)])
+    expect(saved.changes.every(change=>change.applied)).toBe(true)
+    expect(saved.overview.roles.find(role=>role.id===reviewerRole)?.approvalLimits).toContainEqual(expect.objectContaining({code:'refund.approve',amountMinor:3000,enabled:true}))
+    const fixture = await createOrder(pool,[6001])
+    const payment = await captureOnlinePayment(service,fixture.orderId)
+    const request = (amountMinor: number) => service.requestRefund({ ...metadata(randomUUID(),actor(cashierId)),
+      paymentId:payment.id,publicId:randomUUID(),reason:'收银发起由其他人复核',allocations:[{orderItemId:fixture.itemIds[0]!,amountMinor}],
+    }).then(result=>result.value)
+    const refund = await request(3000)
+    await expect(guarded.approveRefund({...metadata(randomUUID(),actor(cashierId)),refundId:refund.id,decisionReason:'不能自审'})).rejects.toMatchObject({refundReviewBlock:'self'})
+    await expect(guarded.rejectRefund({...metadata(randomUUID(),actor(cashierId)),refundId:refund.id,decisionReason:'不能自拒'})).rejects.toMatchObject({refundReviewBlock:'self'})
+    await deploy([{kind:'employee_override',employeeId:approverId,permissionCode:'refund.approve',effect:'deny'}])
+    await expect(rejectRefund(guarded,refund.id)).rejects.toMatchObject({refundReviewBlock:'permission'})
+    await deploy([{kind:'employee_override',employeeId:approverId,permissionCode:'refund.approve',effect:null}])
+    expect((await rejectRefund(guarded,refund.id)).status).toBe('rejected')
+    const tooLarge = await request(3001)
+    await expect(approveRefund(guarded,tooLarge.id)).rejects.toMatchObject({refundReviewBlock:'limit_exceeded'})
+    await expect(rejectRefund(guarded,tooLarge.id)).rejects.toMatchObject({refundReviewBlock:'limit_exceeded'})
+    await deploy([limit(3001)])
+    expect((await approveRefund(guarded,tooLarge.id)).status).toBe('processing')
+    const remaining = await request(3000)
+    await deploy([limit(3001,false)])
+    await expect(rejectRefund(guarded,remaining.id)).rejects.toMatchObject({refundReviewBlock:'limit_missing'})
+    expect((await pool.query('SELECT status FROM mbox.refunds WHERE id=$1',[remaining.id])).rows[0].status).toBe('requested')
   })
 
 })

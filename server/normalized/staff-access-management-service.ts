@@ -8,6 +8,7 @@ import type {
   StaffPermissionDeploymentChange,
   StaffPermissionDeploymentResult,
 } from '../../src/shared/normalized-contracts.js'
+import { validRefundApprovalLimit } from '../../src/shared/refund-review-configuration.js'
 import type { JsonCodec, JsonObject, JsonValue } from './command-executor.js'
 import { NormalizedCommandExecutor } from './command-executor.js'
 import { StaffAccessRepository } from './staff-access-repository.js'
@@ -161,6 +162,7 @@ export class StaffAccessManagementService {
         }
       }
       await assertConfigurationPrerequisites(transaction, input.changes)
+      await assertRefundReviewGrantsConfigured(transaction, repository, input.changes)
       for (const change of input.changes) {
         const authority = authorityKey(change)
         if (authority === null) continue
@@ -706,6 +708,31 @@ async function assertConfigurationPrerequisites(
   }
 }
 
+async function assertRefundReviewGrantsConfigured(
+  transaction: ScopedTransaction,
+  repository: StaffAccessRepository,
+  changes: StaffPermissionDeploymentChange[],
+) {
+  for (const change of changes) {
+    if (change.kind === 'role_permission' && change.permissionCode === 'refund.approve' && change.enabled) {
+      const limits = await transaction.query<{ amount_minor: string | null }>(`
+        SELECT amount_minor FROM mbox.role_approval_limits
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND role_id=$3::uuid
+          AND approval_code='refund.approve' AND currency='CNY' AND enabled=true
+      `, [transaction.scope.tenantId, transaction.scope.storeId, change.roleId])
+      if (!limits.rows.some((row) => row.amount_minor !== null && validRefundApprovalLimit(Number(row.amount_minor)))) {
+        throw new TypeError('所选岗位缺少有效退款复核额度，请在“退款复核”中同时配置权限和额度')
+      }
+    }
+    if (change.kind === 'employee_override' && change.permissionCode === 'refund.approve' && change.effect === 'grant') {
+      const access = await repository.resolve(change.employeeId, await databaseTimestamp(transaction))
+      if (!access.approvalLimits.some((limit) => limit.code === 'refund.approve' && limit.currency === 'CNY' && validRefundApprovalLimit(limit.amountMinor))) {
+        throw new TypeError('该员工所属岗位缺少有效退款复核额度，请先在“退款复核”中配置岗位额度')
+      }
+    }
+  }
+}
+
 async function assertConfigurationChangesKnown(
   transaction: ScopedTransaction,
   changes: StaffPermissionDeploymentChange[],
@@ -733,6 +760,9 @@ async function assertConfigurationChangesKnown(
       throw new TypeError(`岗位入口地址与服务端目录不一致：${code}`)
     }
     if (change.kind === 'role_approval_limit') {
+      if (change.approvalCode === 'refund.approve' && change.enabled && !validRefundApprovalLimit(change.amountMinor)) {
+        throw new TypeError('启用退款复核时必须配置大于0的单次额度，请在“退款复核”中同时配置权限和额度')
+      }
       const currency = stringConfig(definition.config, 'currency') ?? 'CNY'
       if (change.currency !== currency) throw new TypeError(`审批额度币种与服务端目录不一致：${code}`)
       if (change.rules.requiresReason !== true) throw new TypeError(`审批额度必须保留操作原因：${code}`)

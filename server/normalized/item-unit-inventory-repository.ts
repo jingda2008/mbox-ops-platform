@@ -1,3 +1,4 @@
+import {readPackagedReturnEligibility} from './packaged-return-evidence.js'
 import {QuantityRemakeRepository} from './quantity-remake-repository.js'
 import {restoreQuantityInventoryBalance} from './quantity-inventory-return-balance.js'
 import {lockQuantityOrder} from './item-quantity-lock.js'
@@ -161,12 +162,9 @@ export class ItemUnitInventoryRepository {
     const terminal=input.disposition==='used_loss'?'used_loss':'returned'
     if(stocks.some(stock=>!['consumed',terminal].includes(stock.status)))throw new ItemQuantityConflict('QUANTITY_FACTS_CONFLICT','这些物料已按另一结果处置，不能重复回库或再次扣减')
     if(input.disposition==='returned_unopened'&&originalIds.length){
-      const packaged=(await this.tx.query<{ok:boolean}>(`SELECT count(*)=$4::integer AND count(DISTINCT stock.unit_id)=$4::integer AND bool_and(
-        CASE WHEN inventory.base_unit='ml' AND inventory.item_type='bottle' THEN inventory.package_volume_ml>0 AND mod(stock.quantity,inventory.package_volume_ml)=0
-        WHEN inventory.base_unit IN ('bottle','piece') AND inventory.item_type IN ('bottle','food') THEN stock.quantity>=1 AND mod(stock.quantity,1)=0 ELSE false END) AS ok
-        FROM mbox.order_item_unit_inventory stock JOIN mbox.inventory_items inventory ON inventory.tenant_id=stock.tenant_id AND inventory.store_id=stock.store_id AND inventory.id=stock.inventory_item_id
-        WHERE stock.tenant_id=$1 AND stock.store_id=$2 AND stock.unit_id=ANY($3::uuid[])`,[...this.scope,originalIds,originalIds.length])).rows[0]?.ok
-      if(!packaged)throw new ItemQuantityConflict('PRODUCTION_REVIEW_REQUIRED','仅可核对的单一整包装商品能退回原库存，配方成品不能恢复为原料')
+      const eligibility=await readPackagedReturnEligibility(this.tx,originalIds,false)
+      const blocked=[...eligibility.values()].find(value=>!value.canReturn)
+      if(blocked)throw new ItemQuantityConflict('PRODUCTION_REVIEW_REQUIRED',blocked.reason!)
     }
     let disposed=0
     for(const stock of stocks){

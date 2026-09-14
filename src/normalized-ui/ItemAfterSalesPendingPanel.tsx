@@ -57,6 +57,7 @@ export function ItemAfterSalesPendingPanel({employeeId}:{employeeId:string}){
       <strong>{item.tableCode} · {item.productName} ×{item.selectedQuantity}</strong>
       {item.orderPublicId&&<p title={item.orderPublicId}>原单尾号 {item.orderPublicId.slice(-8)}{item.orderBusinessDate&&` · ${item.orderBusinessDate}`}{item.createdAt&&Number.isFinite(Date.parse(item.createdAt))&&` · 申请 ${new Date(item.createdAt).toLocaleTimeString('zh-CN',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit'})}`}</p>}
       <p>{item.businessDate} · {item.requesterName}申请 · {item.physicalOnly?(item.heldQuantity>0?`实物待核对 ${item.heldQuantity} 份`:'岗位通知待知悉'):item.awaitingCashPayout?'待确认现金实退':item.refundFailed?'退款失败待处理':item.refundNeedsReview?'渠道待核对':item.heldQuantity>0?`暂停 ${item.heldQuantity} 份`:item.unconfirmedNoticeCount>0?'岗位通知待知悉':'资金待处理'}</p>
+      <p>资金：{item.status==='rejected'?'申请已拒绝，按原资金记录':item.status==='withdrawn'?'申请已撤回，按原资金记录':item.moneyComplete?(item.succeededMinor?`已退款 ¥${(item.succeededMinor/100).toFixed(2)}`:'已处理完成'):item.refundFailed?'退款失败待处理':item.refundNeedsReview?'结果待核对':item.awaitingCashPayout?'待确认现金实退':'待审核或处理'}；实物：{item.physicalComplete?'已处理':item.heldQuantity>0?`待处理 ${item.heldQuantity} 份`:'待核对'}；岗位通知：{item.unconfirmedNoticeCount>0?`待知悉 ${item.unconfirmedNoticeCount} 条`:'已知悉'}。</p>
       <button onClick={()=>setSelected(item.orderItemId)}>处理商品</button>
     </article>)}
     {data?.nextCursor&&<button disabled={busy} onClick={()=>void load(true)}>继续查看待处理商品</button>}

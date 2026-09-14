@@ -45,6 +45,7 @@ export type CashierRefundProviderSubmissionState =
   | 'manual_review'
 
 export interface CashierWorkbenchRefund {
+  afterSalesCase?: {caseId:string;orderItemId:string;status:string} | null
   purpose?: import('./refund-purpose.js').RefundPurpose
   id: string
   publicId: string

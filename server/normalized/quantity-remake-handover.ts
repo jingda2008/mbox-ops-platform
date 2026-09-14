@@ -1,3 +1,4 @@
+import {readPackagedReturnEligibility} from './packaged-return-evidence.js'
 import type {ScopedPostgresTransactionRunner,ScopedTransaction,StoreScope} from './transaction-runner.js'
 import {StaffAccessRepository,StaffAccessDeniedError} from './staff-access-repository.js'
 import {assertEmployeeEffectivePermission} from './employee-table-access.js'
@@ -32,7 +33,8 @@ export class QuantityRemakeHandoverQuery {
           AND ($3::timestamptz IS NULL OR (batch.created_at,batch.id)>($3::timestamptz,$4::uuid))
         GROUP BY batch.id,item.id,original.id,venue.code ORDER BY batch.created_at,batch.id LIMIT $5`,[input.scope.tenantId,input.scope.storeId,input.cursor?.createdAt??null,input.cursor?.id??null,limit+1])).rows
       const page=rows.slice(0,limit),last=page.at(-1)
-      return {items:page.map(row=>({...row,canReceive,canRecordUsed})),nextCursor:rows.length>limit&&last?{id:last.batchId,createdAt:last.createdAt}:null}
+      const eligibility=await readPackagedReturnEligibility(tx,page.flatMap(row=>row.unitIds),true)
+      return {items:page.map(row=>({...row,canReceive,canRecordUsed,returnEligibility:Object.fromEntries(row.unitIds.map(id=>[id,eligibility.get(id)!]))})),nextCursor:rows.length>limit&&last?{id:last.batchId,createdAt:last.createdAt}:null}
     },{isolation:'repeatable-read',readOnly:true})
   }
 }

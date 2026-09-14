@@ -58,6 +58,8 @@ export function RemakePhysicalHandoverPanel({employeeId}:{employeeId:string}){
     {pendingItem&&<p>上次实物登记结果待确认。<button disabled={busy} onClick={()=>void run(pendingItem,()=>api.recover(pendingItem))}>恢复上次实物登记</button></p>}
     {data?.items.map(row=>{
       const count=Number(counts[row.batchId]??'1'),valid=Number.isSafeInteger(count)&&count>0&&count<=row.unitIds.length
+      const selected=row.unitIds.slice(0,count).map(id=>row.returnEligibility?.[id]),canReturn=selected.length>0&&selected.every(value=>value?.canReturn===true)
+      const blocked=selected.find(value=>value?.canReturn===false)?.reason
       const act=(disposition:'used_loss'|'returned_unopened')=>run(row.itemId,()=>api.act(row.itemId,`/api/commerce/item-after-sales/remakes/${row.batchId}/after-visit-physical`,{
         unitIds:row.unitIds.slice(0,count),disposition,unopenedReceived:disposition==='returned_unopened'&&received[row.batchId]===true,
         reason:disposition==='returned_unopened'?'离店后本批实物已收回且未开封':'离店后本批实际已耗用或损耗，不退回原料',
@@ -66,7 +68,8 @@ export function RemakePhysicalHandoverPanel({employeeId}:{employeeId:string}){
         <strong>{row.tableCode} · {row.productName} · 待处理 {row.pendingQuantity} 份</strong>
         <p>原订单 {row.orderPublicId}</p>
         <label>本次实物份数 <input type="number" min="1" max={row.unitIds.length} value={counts[row.batchId]??'1'} disabled={locked} onChange={event=>setCounts(value=>({...value,[row.batchId]:event.target.value}))}/></label>
-        {row.canReceive&&<><label><input type="checkbox" disabled={locked} checked={received[row.batchId]??false} onChange={event=>setReceived(value=>({...value,[row.batchId]:event.target.checked}))}/>本批实物已收回且未开封</label><button disabled={locked||!valid||!received[row.batchId]} onClick={()=>void act('returned_unopened')}>登记本批实物退回</button></>}
+        {row.canReceive&&!canReturn&&<p role="note">库存记录待核对：{blocked??'原包装证据尚未读回，请刷新或联系库存负责人核对；无需为清待办登记损耗。'}</p>}
+        {row.canReceive&&canReturn&&<><label><input type="checkbox" disabled={locked} checked={received[row.batchId]??false} onChange={event=>setReceived(value=>({...value,[row.batchId]:event.target.checked}))}/>本批实物已收回且未开封</label><button disabled={locked||!valid||!received[row.batchId]} onClick={()=>void act('returned_unopened')}>登记本批实物退回</button></>}
         {row.canRecordUsed&&<button disabled={locked||!valid} onClick={()=>void act('used_loss')}>确认本批已耗用或损耗</button>}
       </article>
     })}

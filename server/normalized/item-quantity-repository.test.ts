@@ -1,3 +1,4 @@
+import {readPackagedReturnEligibility} from './packaged-return-evidence.js'
 import {RecollectionAuthorizationRepository} from './recollection-authorization-repository.js'
 import {NormalizedKdsAuthorization} from './kds-authorization-policy.js'
 import {QuantityRemakeCommandService} from './quantity-remake-command-service.js'
@@ -1337,6 +1338,11 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await expect(service.decide({...input,funding:[{paymentId:cash,amountMinor:1601}]})).rejects.toThrow('合计必须等于')
     expect((await runner.run(scope,tx=>new ItemAfterSalesProgressRepository(tx).read(created.value.caseId))).refunds).toHaveLength(0)
     const funding=[{paymentId:cash,amountMinor:800},{paymentId:online,amountMinor:800}]
+    const failing=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),{apply:async()=>{throw new Error('forced approval effect failure')}})
+    await expect(failing.decide({...input,funding})).rejects.toThrow('forced approval effect failure')
+    expect((await pool.query('SELECT status FROM mbox.item_after_sales_cases WHERE id=$1',[created.value.caseId])).rows[0].status).toBe('requested')
+    expect((await pool.query('SELECT count(*)::int n FROM mbox.item_after_sales_case_refunds WHERE case_id=$1',[created.value.caseId])).rows[0].n).toBe(0)
+    expect((await pool.query("SELECT count(*)::int n FROM mbox.refunds WHERE order_id=$1 AND auto_execute_requested_at IS NOT NULL",[row.orderId])).rows[0].n).toBe(0)
     const approved=await service.decide({...input,funding})
     expect(approved.value).toMatchObject({stoppedQuantity:2,physicalComplete:true,moneyComplete:false,awaitingCashPayout:true})
     expect(approved.value.refunds).toHaveLength(2)
@@ -2156,6 +2162,81 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const final=await runner.run(scope,tx=>executeQuantityKdsAction(tx,{task,action:'deliver',employeeId,eventKey:`quantity-final-${randomUUID()}`}))
     expect(final).toMatchObject({quantity:2,fulfillmentStatus:'delivered'})
     expect((await query.getStaffWorkQueue(scope,employeeId,businessDate)).workItems.some(work=>work.taskId===row.taskId)).toBe(false)
+  })
+
+  it('routes a linked refund through the original case while retaining the database decision guard',async()=>{
+    await grantActor(employeeId,['refund.request']);await grantActor(reviewerId,['refund.approve','refund.execute'],100000)
+    const row=await item('ready');await stock(row,'direct_sale');await payment(row.orderId)
+    const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
+    const request=await service.request({scope,employeeId,businessDate,orderItemId:row.itemId,quantity:1,reason:'原售后入口分流验证',idempotencyKey:randomUUID()})
+    const caseId=request.value.caseId
+    const refundId=(await pool.query('SELECT refund_id FROM mbox.item_after_sales_case_refunds WHERE case_id=$1',[caseId])).rows[0].refund_id
+    await expect(financialService().approveRefund({...financialMetadata(),actor:{type:'employee',employeeId},refundId,decisionReason:'自审不能看到原单关联'})).rejects.not.toHaveProperty('caseId')
+    for(const decide of ['approveRefund','rejectRefund'] as const)await expect(financialService()[decide]({...financialMetadata(),refundId,decisionReason:'原售后入口分流验证'})).rejects.toMatchObject({code:'REFUND_REQUIRES_CASE_DECISION',refundId,caseId})
+    await expect(pool.query("UPDATE mbox.refunds SET status='approved',approved_by_employee_id=$2,decision_reason='绕过测试' WHERE id=$1",[refundId,reviewerId])).rejects.toMatchObject({code:'23514'})
+    expect((await pool.query('SELECT status FROM mbox.refunds WHERE id=$1',[refundId])).rows[0].status).toBe('requested')
+    const workbench=await new PostgresCashierWorkbenchQuery(runner).get({scope,employeeId:reviewerId,businessDate,capabilities:['refund.request','refund.approve','refund.execute'],query:`quantity-${row.orderId}`,limit:20})
+    expect(workbench.orders.find(order=>order.id===row.orderId)?.payments[0].refunds.find(refund=>refund.id===refundId)?.afterSalesCase).toEqual({caseId,orderItemId:row.itemId,status:'requested'})
+    const input={scope,employeeId:reviewerId,businessDate,caseId,decision:'approved' as const,reason:'原售后整体批准验证',idempotencyKey:randomUUID()}
+    const result=await service.decide(input)
+    expect(result.value.status).toBe('approved')
+    const workspace=await new ItemAfterSalesQuery(runner).item({scope,employeeId:reviewerId,itemId:row.itemId})
+    expect(workspace.cases[0].notices.map(notice=>notice.phase)).toEqual(['request','approved'])
+    expect((await service.decide(input)).replayed).toBe(true)
+  })
+  async function bottledStock(volume:string){
+    const row=await item('ready'),stockId=randomUUID()
+    await pool.query(`UPDATE mbox.order_items SET product_snapshot=product_snapshot||'{"inventoryControlMode":"tracked","source":{"salesSpecificationType":"whole_bottle"}}'::jsonb WHERE id=$1`,[row.itemId])
+    await pool.query("INSERT INTO mbox.inventory_items(id,tenant_id,store_id,sku,name,item_type,base_unit,package_volume_ml) VALUES($1,$2,$3,$4,'整瓶水','bottle','ml',$5)",[stockId,tenantId,storeId,`bottle-${stockId}`,volume])
+    await pool.query('INSERT INTO mbox.inventory_balances(tenant_id,store_id,inventory_item_id,on_hand_quantity) VALUES($1,$2,$3,5000)',[tenantId,storeId,stockId])
+    await pool.query("INSERT INTO mbox.inventory_movements(tenant_id,store_id,inventory_item_id,movement_type,quantity_delta,reference_type,reference_id,order_item_id,unit_cost_minor) VALUES($1,$2,$3,'sale',-2500,'order_item',$4,$4,100)",[tenantId,storeId,stockId,row.itemId])
+    await payment(row.orderId)
+    const created=await hold(row.itemId,1)
+    await runner.run(scope,tx=>new ItemUnitInventoryRepository(tx).initialize(row.itemId))
+    await runner.run(scope,tx=>new ItemQuantityRefundRepository(tx).prepare(created.caseId))
+    await runner.run(scope,tx=>new ItemQuantityRefundRepository(tx).decide({caseId:created.caseId,employeeId:reviewerId,decision:'approved',reason:'实物核对测试'}))
+    return {...row,...created,stockId}
+  }
+  it('returns the original captured package once even after the current catalogue capacity changes',async()=>{
+    const row=await bottledStock('500')
+    await pool.query('UPDATE mbox.inventory_items SET package_volume_ml=330 WHERE id=$1',[row.stockId])
+    const read=await new ItemAfterSalesQuery(runner).item({scope,employeeId:reviewerId,itemId:row.itemId})
+    expect(read.units.find(unit=>unit.id===row.unitIds[0])?.returnEligibility).toMatchObject({canReturn:true})
+    const dispose=()=>runner.run(scope,tx=>new ItemUnitInventoryRepository(tx).disposeMadeUnits({itemId:row.itemId,caseId:row.caseId,unitIds:row.unitIds,employeeId:reviewerId,disposition:'returned_unopened',unopenedReceived:true,reason:'原包装500ml未开封收回'}))
+    const attempts=await Promise.allSettled([dispose(),dispose()])
+    expect(attempts.some(result=>result.status==='fulfilled')).toBe(true)
+    expect(await balance(row.stockId)).toEqual({on_hand:'5500.000000',reserved:'0.000000'})
+    expect((await pool.query("SELECT count(*)::int n FROM mbox.inventory_movements WHERE inventory_item_id=$1 AND movement_type='return'",[row.stockId])).rows[0].n).toBe(1)
+  })
+  it('blocks contradictory 500 ml consumption and 330 ml packaging in both preview and execution without moving stock',async()=>{
+    const row=await bottledStock('330')
+    const preview=await runner.run(scope,tx=>readPackagedReturnEligibility(tx,row.unitIds))
+    expect(preview.get(row.unitIds[0])!).toMatchObject({canReturn:false,reason:expect.stringMatching(/500.*330/)})
+    await expect(runner.run(scope,tx=>new ItemUnitInventoryRepository(tx).disposeMadeUnits({itemId:row.itemId,caseId:row.caseId,unitIds:row.unitIds,employeeId:reviewerId,disposition:'returned_unopened',unopenedReceived:true,reason:'不允许规格冲突误回库'}))).rejects.toThrow(preview.get(row.unitIds[0])!.reason!)
+    expect(await balance(row.stockId)).toEqual({on_hand:'5000.000000',reserved:'0.000000'})
+    expect((await pool.query("SELECT count(*)::int n FROM mbox.inventory_movements WHERE inventory_item_id=$1 AND movement_type='return'",[row.stockId])).rows[0].n).toBe(0)
+  })
+  it('captures immutable reservation packaging and rejects contradictory whole-bottle edits while allowing glass recipes',async()=>{
+    const row=await item(),stockId=await stock(row,'reserved')
+    const before=(await pool.query('SELECT packaging_snapshot FROM mbox.inventory_order_reservations WHERE inventory_item_id=$1',[stockId])).rows[0].packaging_snapshot
+    expect(before).toMatchObject({baseUnit:'piece',itemType:'food',packageVolumeMl:null})
+    await expect(pool.query("UPDATE mbox.inventory_order_reservations SET packaging_snapshot='{}' WHERE inventory_item_id=$1",[stockId])).rejects.toMatchObject({code:'23514'})
+    async function recipe(spec:string,quantity:number){
+      const id=randomUUID(),recipeId=randomUUID(),inventoryId=randomUUID()
+      await runner.run(scope,async tx=>{
+        await tx.query("INSERT INTO mbox.products(id,tenant_id,store_id,code,name,category_code,fulfillment_station,product_snapshot) VALUES($1,$2,$3,$4,$4,'drink','bar',$5::jsonb)",[id,tenantId,storeId,`bottle-${id}`,JSON.stringify({salesSpecificationType:spec})])
+        await tx.query("INSERT INTO mbox.inventory_items(id,tenant_id,store_id,sku,name,item_type,base_unit,package_volume_ml) VALUES($1,$2,$3,$4,'瓶装500','bottle','ml',500)",[inventoryId,tenantId,storeId,`bottle-${inventoryId}`])
+        await tx.query("INSERT INTO mbox.recipes(id,tenant_id,store_id,product_id,version,status,effective_at) VALUES($1,$2,$3,$4,1,'active',clock_timestamp())",[recipeId,tenantId,storeId,id])
+        await tx.query('INSERT INTO mbox.recipe_items(tenant_id,store_id,recipe_id,inventory_item_id,quantity) VALUES($1,$2,$3,$4,$5)',[tenantId,storeId,recipeId,inventoryId,quantity])
+      })
+      return {id,inventoryId}
+    }
+    const valid=await recipe('whole_bottle',500)
+    await expect(pool.query('UPDATE mbox.inventory_items SET package_volume_ml=330 WHERE id=$1',[valid.inventoryId])).rejects.toMatchObject({code:'23514',constraint:'inventory_packaging_recipe_ck'})
+    await expect(recipe('whole_bottle',330)).rejects.toMatchObject({constraint:'inventory_packaging_recipe_ck'})
+    const glass=await recipe('glass',45)
+    await expect(pool.query('UPDATE mbox.inventory_items SET package_volume_ml=330 WHERE id=$1',[glass.inventoryId])).resolves.toBeDefined()
+    expect((await pool.query('SELECT packaging_snapshot FROM mbox.inventory_order_reservations WHERE inventory_item_id=$1',[stockId])).rows[0].packaging_snapshot).toEqual(before)
   })
 
 })

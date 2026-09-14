@@ -848,7 +848,7 @@ Page({
     const session = getTableSession()
     const request = this.beginTableRequest(session)
     this.orderLoadStartedAt = Date.now()
-    this.setData({ orderReady: false })
+    this.setData({ orderReady: false, paymentStateReady: false })
     const scopeChanged = this.visibleTableScope !== request.scope
     this.visibleTableScope = request.scope
     if (scopeChanged) {
@@ -991,15 +991,15 @@ Page({
   },
 
   async loadActiveData(request) {
-    // Only these authoritative reads are prerequisites for this table's writes.
-    // Render the complete menu as soon as it arrives, even if cart/payment reads are slow.
+    // Selection requires the verified menu/cart. Read the bill in parallel,
+    // but keep payment confirmation as a separate prerequisite for checkout.
+    const tableOrdersPromise = getTableOrders().catch(() => null)
     const results = await Promise.all([
       getMenu({}).then(menu => { this.showMenuBeforeCart(menu, request); return menu }).catch(error => {
         if (!request || this.isCurrentTableRequest(request)) this.recordOrderTiming('menu', this.orderLoadStartedAt, false)
         throw error
       }),
       getSharedCart(),
-      getTableOrders().catch(() => null),
     ])
     if (request && !this.isCurrentTableRequest(request)) return false
     const products = menuProducts(results[0])
@@ -1016,8 +1016,56 @@ Page({
       && recommendations.some((item) => item.productId === this.data.recommendationAttribution.selectedProductId)
       ? this.data.recommendationAttribution
       : null
-    const tableOrdersAvailable = Array.isArray(results[2])
-    const tableOrders = tableOrdersAvailable ? results[2] : []
+    // Restore local checkout locks before enabling cart actions, without
+    // treating an unavailable bill as an empty, verified payment history.
+    this.applyOrderPaymentState(null)
+    this.setData({
+      loading: false,
+      orderReady: true,
+      browseOnly: false,
+      products,
+      ...categoryState,
+      recommendations,
+      recommendationAttribution,
+      membershipInviteVisible: false,
+    })
+    this.updateCart(cart, sharedCart)
+    this.applyFilters()
+    this.recordOrderTiming('ready', this.orderLoadStartedAt, true)
+    this.loadOrderExtras(request)
+    this.startSharedCartPolling(request)
+    this.startServicePolling(request)
+    void this.refreshOrderPaymentState(request, tableOrdersPromise)
+    return true
+  },
+
+  refreshOrderPaymentState(request, ordersPromise) {
+    const expected = request || this.currentTableRequest()
+    if (!expected || !this.isCurrentTableRequest(expected)) return Promise.resolve(false)
+    if (this.orderPaymentRead && this.orderPaymentRead.request === expected) {
+      return this.orderPaymentRead.promise
+    }
+    const read = { request: expected, promise: null }
+    this.orderPaymentRead = read
+    read.promise = (async () => {
+      try {
+        const orders = await (ordersPromise || getTableOrders())
+        // A rescan, reload or checkout recovery may have superseded this read.
+        if (this.orderPaymentRead !== read || !this.isCurrentTableRequest(expected)) return false
+        this.applyOrderPaymentState(orders)
+        return Array.isArray(orders)
+      } catch (_error) {
+        return false
+      } finally {
+        if (this.orderPaymentRead === read) this.orderPaymentRead = null
+      }
+    })()
+    return read.promise
+  },
+
+  applyOrderPaymentState(orders) {
+    const tableOrdersAvailable = Array.isArray(orders)
+    const tableOrders = tableOrdersAvailable ? orders : []
     const paymentScope = tableSessionCacheScope()
     let storedAbandonment = wx.getStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY) || null
     if (storedAbandonment && storedAbandonment.tableScope !== paymentScope) {
@@ -1102,33 +1150,18 @@ Page({
     })()
     const checkoutLocked = Boolean(pendingCheckout)
     this.setData({
-      loading: false,
-      orderReady: true,
       paymentStateReady: tableOrdersAvailable,
-      browseOnly: false,
-      products,
-      ...categoryState,
-      recommendations,
-      recommendationAttribution,
       pendingPayment,
       paymentResult: completedPayment || this.data.paymentResult,
       success: completedPayment ? completedPayment.title : this.data.success,
       checkoutLocked,
-      membershipInviteVisible: false,
     })
-    this.updateCart(cart, sharedCart)
-    this.applyFilters()
-    this.recordOrderTiming('ready', this.orderLoadStartedAt, true)
-    this.loadOrderExtras(request)
-    this.startSharedCartPolling(request)
-    this.startServicePolling(request)
     const abandonmentOrder = storedAbandonment && tableOrders.find((item) => item.publicId === storedAbandonment.orderPublicId)
     if (isRetryableGuestPaymentAbandonment(storedAbandonment, paymentScope, abandonmentOrder)) {
       void this.executePendingGuestPaymentAbandonment(storedAbandonment)
     } else if (storedAbandonment && tableOrdersAvailable) {
       wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
     }
-    return true
   },
 
   loadOrderExtras(request) {
@@ -1950,12 +1983,10 @@ Page({
   async submitOrder(offerPublicId, allowBusy, previousAttempt, request) {
     if (!previousAttempt && this.data.paymentStateReady === false) {
       const expected = request || this.currentTableRequest()
-      try {
-        const orders = await getTableOrders()
-        if (!this.isCurrentTableRequest(expected) || !Array.isArray(orders)) return
-        this.setData({ paymentStateReady: true })
-      } catch (_error) {
-        if (this.isCurrentTableRequest(expected)) this.setData({ error: '付款状态暂未确认，请稍后重试；购物车已保留。' })
+      const confirmed = await this.refreshOrderPaymentState(expected)
+      if (!this.isCurrentTableRequest(expected)) return
+      if (!confirmed) {
+        this.setData({ error: '付款状态暂未确认，请稍后重试；购物车已保留。' })
         return
       }
     }
@@ -1980,6 +2011,9 @@ Page({
       createdAt: new Date().toISOString(),
     }
     if (attempt.tableScope !== tableSessionCacheScope()) return
+    // An in-flight pre-checkout bill must not overwrite the new order's
+    // payment recovery record, including when retrying a persisted checkout.
+    this.orderPaymentRead = null
     wx.setStorageSync(CHECKOUT_ATTEMPT_KEY, attempt)
     this.setData({
       busy: true,

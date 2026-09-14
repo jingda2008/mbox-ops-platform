@@ -60,3 +60,215 @@ for(const platform of ['miniprogram','alipay-miniprogram']) {
 test('Alipay retains its real payment-disabled guard while menu and selection remain available',async()=>{
  const h=createOrderPage({platform:'alipay-miniprogram',alipayPaymentEnabled:false});try{await h.page.preparePage();await h.page.addProduct({currentTarget:{dataset:{id:'p-0'}}});assert.equal(h.page.data.cartCount,1);await h.page.submitOrder(null,false);assert.equal(h.state.calls.includes('submit'),false);assert.match(h.page.data.error,/支付宝在线支付后端适配尚未接通/)}finally{h.dispose()}
 })
+
+// Hold the bill promise unresolved: a rejected request alone cannot reproduce SYS-211.
+async function prepareWechatWithoutBill(h) {
+  await Promise.race([
+    h.page.preparePage(),
+    sleep(200).then(() => { throw new Error('selection is still waiting for the table bill') }),
+  ])
+}
+const addFirstProduct = h => h.page.addProduct({ currentTarget: { dataset: { id: 'p-0' } } })
+const paymentKey = 'mbox.pending.guest.payment.v1'
+const checkoutKey = 'mbox.pending.guest.checkout.v1'
+const paymentScope = h => `${h.state.session.tableToken}:${h.state.session.cartScope}`
+const pendingOrder = (publicId, extra = {}) => ({
+  publicId, isMine: true, channel: 'guest_qr', payableAmountMinor: 800,
+  paymentStatus: 'pending', paymentAccess: 'status_review', ...extra,
+})
+
+test('WeChat SYS-211: slow bill permits adding; concurrent submit reuses the read and sends one checkout', async () => {
+  const bill = deferred()
+  const checkout = deferred()
+  let reads = 0
+  const h = createOrderPage({ overrides: {
+    getTableOrders: () => { reads++; return bill.promise },
+    checkoutSharedCart: async () => { h.state.calls.push('submit'); return checkout.promise },
+  } })
+  try {
+    await prepareWechatWithoutBill(h)
+    assert.equal(h.page.data.orderReady, true)
+    assert.equal(h.page.data.paymentStateReady, false)
+    await addFirstProduct(h)
+    assert.equal(h.page.data.cartCount, 1)
+    const first = h.page.submitOrder(null, false)
+    const second = h.page.submitOrder(null, false)
+    await sleep(0)
+    assert.equal(reads, 1)
+    assert.equal(h.state.calls.includes('submit'), false)
+    bill.resolve([])
+    await sleep(0)
+    assert.equal(h.state.calls.filter(x => x === 'submit').length, 1)
+    checkout.resolve({ data: { order: { publicId: 'new-checkout' }, settlement: { payableAmountMinor: 800 }, sharedCart: { generation: 2, version: 0, lines: [] } } })
+    await Promise.all([first, second])
+    assert.equal(h.state.calls.filter(x => x === 'submit').length, 1)
+  } finally { h.dispose() }
+})
+
+test('WeChat SYS-211: delayed bill failure preserves cart and checkout retries after payment recovery', async () => {
+  const bill = deferred()
+  let recovered = false
+  const h = createOrderPage({ overrides: { getTableOrders: () => recovered ? Promise.resolve([]) : bill.promise } })
+  try {
+    await prepareWechatWithoutBill(h)
+    await addFirstProduct(h)
+    const submit = h.page.submitOrder(null, false)
+    bill.reject(new Error('timeout'))
+    await submit
+    assert.equal(h.page.data.paymentStateReady, false)
+    assert.equal(h.page.data.cartCount, 1)
+    assert.equal(h.state.calls.includes('submit'), false)
+    assert.match(h.page.data.error, /付款状态暂未确认/)
+    recovered = true
+    await h.page.submitOrder(null, false)
+    assert.equal(h.state.calls.filter(x => x === 'submit').length, 1)
+  } finally { h.dispose() }
+})
+
+for (const reload of ['new table', 'same table']) {
+  test(`WeChat SYS-211: late bill from ${reload} reload cannot overwrite current payment or cart`, async () => {
+    const oldBill = deferred()
+    let reads = 0
+    const h = createOrderPage({ overrides: { getTableOrders: () => ++reads === 1 ? oldBill.promise : Promise.resolve([pendingOrder('current-order')]) } })
+    try {
+      await prepareWechatWithoutBill(h)
+      const oldRead = h.page.orderPaymentRead.promise
+      if (reload === 'new table') h.state.session = { tableCode: 'B02', tableToken: 'test-b', cartScope: 'scope-b', scanNonce: 'scan-b' }
+      await h.page.preparePage()
+      if (h.page.orderPaymentRead) await h.page.orderPaymentRead.promise
+      await addFirstProduct(h)
+      oldBill.resolve([pendingOrder('old-order')])
+      await oldRead
+      assert.equal(h.page.data.pendingPayment.orderPublicId, 'current-order')
+      assert.equal(h.page.data.cartCount, 1)
+      assert.equal(h.page.data.paymentStateReady, true)
+    } finally { h.dispose() }
+  })
+}
+
+test('WeChat SYS-211: a confirmed old bill does not authorize checkout during a new table load', async () => {
+  const bill = deferred()
+  let reads = 0
+  const h = createOrderPage({ overrides: { getTableOrders: () => ++reads === 1 ? Promise.resolve([]) : bill.promise } })
+  try {
+    await h.page.preparePage()
+    if (h.page.orderPaymentRead) await h.page.orderPaymentRead.promise
+    assert.equal(h.page.data.paymentStateReady, true)
+    h.state.session = { tableCode: 'B02', tableToken: 'test-b', cartScope: 'scope-b', scanNonce: 'scan-b' }
+    await prepareWechatWithoutBill(h)
+    assert.equal(h.page.data.paymentStateReady, false)
+    await addFirstProduct(h)
+    const submit = h.page.submitOrder(null, false)
+    await sleep(0)
+    assert.equal(h.state.calls.includes('submit'), false)
+    bill.reject(new Error('timeout'))
+    await submit
+    assert.equal(h.state.calls.includes('submit'), false)
+  } finally { h.dispose() }
+})
+
+for (const access of ['payment_in_progress', 'status_review']) {
+  test(`WeChat SYS-211: delayed ${access} restores own payment without losing new cart items`, async () => {
+    const bill = deferred()
+    const h = createOrderPage({ overrides: { getTableOrders: () => bill.promise } })
+    try {
+      const stored = { orderPublicId: 'own-order', tableScope: paymentScope(h), amountText: '¥8.00', paymentPresentationState: 'result_unknown' }
+      h.state.storage.set(paymentKey, stored)
+      await prepareWechatWithoutBill(h)
+      const read = h.page.orderPaymentRead.promise
+      assert.equal(h.state.storage.get(paymentKey), stored)
+      assert.equal(h.page.data.pendingPayment.canContinue, false)
+      await addFirstProduct(h)
+      bill.resolve([pendingOrder('neighbor-order', { isMine: false }), pendingOrder('own-order', { paymentAccess: access })])
+      await read
+      assert.equal(h.page.data.pendingPayment.orderPublicId, 'own-order')
+      assert.equal(h.page.data.pendingPayment.canContinue, false)
+      assert.equal(h.page.data.cartCount, 1)
+      assert.equal(h.page.data.cartVersion, 1)
+    } finally { h.dispose() }
+  })
+}
+
+test('WeChat SYS-211: delayed paid result clears recovery only after confirmation and retains selection', async () => {
+  const bill = deferred()
+  const h = createOrderPage({ overrides: { getTableOrders: () => bill.promise } })
+  try {
+    h.state.storage.set(paymentKey, { orderPublicId: 'paid-order', tableScope: paymentScope(h), amountText: '¥8.00' })
+    await prepareWechatWithoutBill(h)
+    const read = h.page.orderPaymentRead.promise
+    assert.ok(h.state.storage.has(paymentKey))
+    await addFirstProduct(h)
+    bill.resolve([pendingOrder('paid-order', { paymentStatus: 'paid', paymentAccess: 'not_required', payableAmountMinor: 0 })])
+    await read
+    assert.equal(h.state.storage.has(paymentKey), false)
+    assert.equal(h.page.data.pendingPayment, null)
+    assert.equal(h.page.data.paymentResult.kind, 'success')
+    assert.equal(h.page.data.cartCount, 1)
+  } finally { h.dispose() }
+})
+
+test('WeChat SYS-211: checkout recovery keeps its idempotency key and a late empty bill cannot erase the new payment', async () => {
+  const bill = deferred()
+  const keys = []
+  const h = createOrderPage({ overrides: {
+    getTableOrders: () => bill.promise,
+    checkoutSharedCart: async (_input, key) => {
+      keys.push(key)
+      return { data: { order: { publicId: 'test-order' }, settlement: { payableAmountMinor: 800 }, sharedCart: { generation: 2, version: 0, lines: [] } } }
+    },
+  } })
+  try {
+    const attempt = { expectedGeneration: 1, expectedVersion: 0, tableScope: paymentScope(h), idempotencyKey: 'original-checkout-attempt' }
+    h.state.storage.set(checkoutKey, attempt)
+    await prepareWechatWithoutBill(h)
+    const read = h.page.orderPaymentRead.promise
+    assert.equal(h.page.data.checkoutLocked, true)
+    await h.page.retryCheckout()
+    assert.deepEqual(keys, ['original-checkout-attempt'])
+    const pending = h.state.storage.get(paymentKey)
+    assert.equal(pending.orderPublicId, 'test-order')
+    bill.resolve([])
+    await read
+    assert.equal(h.state.storage.get(paymentKey), pending)
+    assert.equal(h.page.data.pendingPayment.orderPublicId, 'test-order')
+  } finally { h.dispose() }
+})
+
+test('WeChat SYS-211: frozen cart remains read only while bill is pending', async () => {
+  const bill = deferred()
+  const h = createOrderPage({ overrides: { getTableOrders: () => bill.promise } })
+  h.state.cart.guestWritesFrozen = true
+  try {
+    await prepareWechatWithoutBill(h)
+    await addFirstProduct(h)
+    assert.equal(h.page.data.cartWritesFrozen, true)
+    assert.equal(h.state.calls.includes('add'), false)
+  } finally { h.dispose() }
+})
+
+test('WeChat SYS-211: a failed cart read cannot be unlocked by a successful bill', async () => {
+  const bill = deferred()
+  const h = createOrderPage({ overrides: { getTableOrders: () => bill.promise, getSharedCart: async () => { throw new Error('cart unavailable') } } })
+  try {
+    await h.page.preparePage()
+    bill.resolve([])
+    await sleep(0)
+    await addFirstProduct(h)
+    assert.equal(h.page.data.orderReady, false)
+    assert.equal(h.state.calls.includes('add'), false)
+  } finally { h.dispose() }
+})
+
+test('WeChat SYS-211: leaving the page discards a late bill response', async () => {
+  const bill = deferred()
+  const h = createOrderPage({ overrides: { getTableOrders: () => bill.promise } })
+  try {
+    await prepareWechatWithoutBill(h)
+    const read = h.page.orderPaymentRead.promise
+    h.page.onHide()
+    bill.resolve([pendingOrder('hidden-page-order')])
+    await read
+    assert.equal(h.page.data.paymentStateReady, false)
+    assert.equal(h.page.data.pendingPayment, null)
+  } finally { h.dispose() }
+})

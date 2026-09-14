@@ -50,13 +50,13 @@ Page({
     loading: true, saving: false, error: '', profile: null, avatarUrl: '',
     displayName: '', seats: SEATS, service: SERVICE, alcohol: alcoholChips(['mixed']), birthdays: birthdayOptions(),
     seatValue: 'no_preference', serviceValue: 'balanced', birthdayIndex: 0,
-    tasteNotes: '', musicStyles: '', dietaryNotes: '',
+    tasteNotes: '', musicStyles: '', dietaryNotes: '', dietaryConsent: false,
   },
 
   onLoad() { this.load() },
 
   async load() {
-    this.setData({ loading: true, error: '' })
+    this.setData({ loading: true, error: '', dietaryConsent: false })
     try {
       const profile = await getCustomerProfile()
       const preferences = profile.preferences || {}
@@ -89,7 +89,11 @@ Page({
   onNameInput(event) { this.setData({ displayName: event.detail.value }) },
   onTasteInput(event) { this.setData({ tasteNotes: event.detail.value }) },
   onMusicInput(event) { this.setData({ musicStyles: event.detail.value }) },
-  onDietaryInput(event) { this.setData({ dietaryNotes: event.detail.value }) },
+  onDietaryInput(event) { this.setData({ dietaryNotes: event.detail.value, dietaryConsent: false }) },
+  onDietaryConsentChange(event) {
+    const values = event && event.detail && event.detail.value
+    this.setData({ dietaryConsent: Array.isArray(values) && values.includes('dietary') })
+  },
   onBirthdayChange(event) { this.setData({ birthdayIndex: Number(event.detail.value) }) },
   toggleSeat(event) { this.setData({ seatValue: event.currentTarget.dataset.value }) },
   toggleService(event) { this.setData({ serviceValue: event.currentTarget.dataset.value }) },
@@ -109,6 +113,9 @@ Page({
 
   async save() {
     if (this.data.saving) return
+    if (this.data.loading || !this.data.profile) return this.setData({ error: '请先重新读取偏好，再保存修改' })
+    const dietaryNotes = String(this.data.dietaryNotes || '').trim()
+    if (dietaryNotes && !this.data.dietaryConsent) return this.setData({ error: '请单独同意保存饮食说明，或清空后再保存其他偏好' })
     const displayName = String(this.data.displayName || '').trim()
     if (displayName.length > 80) return this.setData({ error: '昵称请控制在80个字以内' })
     const selectedAlcohol = this.data.alcohol.filter((item) => item.selected).map((item) => item.value)
@@ -121,11 +128,13 @@ Page({
       preferredAlcoholChoices: selectedAlcohol,
       tasteNotes: String(this.data.tasteNotes || '').trim(),
       musicStyles: String(this.data.musicStyles || '').trim(),
-      dietaryNotes: String(this.data.dietaryNotes || '').trim(),
+      dietaryNotes,
     }
     this.setData({ saving: true, error: '' })
     try {
-      await updatePreferences(preferences, displayName || null)
+      await updatePreferences(preferences, displayName || null, {
+        version: 'wechat-dietary-v1', granted: Boolean(dietaryNotes && this.data.dietaryConsent),
+      })
       const priorBirthday = this.data.profile && this.data.profile.preferences
         ? this.data.profile.preferences.birthdayMonthDay : ''
       if (birthdayMonthDay) {

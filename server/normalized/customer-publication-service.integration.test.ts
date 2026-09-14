@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
+import Fastify from 'fastify'
+import { customerExperienceApiPlugin } from './customer-experience-api.js'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
 import { NormalizedCommandExecutor } from './command-executor.js'
 import { CustomerExperienceRequestError } from './customer-experience-repository.js'
@@ -87,6 +89,15 @@ integration('customer-publication PostgreSQL integration', () => {
       dataRetentionPolicyVersion: 'retention-v1', thirdPartyRegisterVersion: 'third-party-v1',
       reason: '录入已获批准的隐私政策正文', idempotencyKey: `privacy-draft-${randomUUID()}`,
     })
+    const app = Fastify()
+    const scope = {tenantId:ids.tenant,storeId:ids.store}
+    await app.register(customerExperienceApiPlugin,{
+      publishedContentScope:scope,transactions:new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool),service,
+      resolvePublicContext:()=>{throw new Error('Published copy must not authenticate a customer')},
+      resolveGuestContext:()=>{throw new Error('not used')},resolveStaffContext:()=>{throw new Error('not used')},protectContact:()=>{throw new Error('not used')},
+    })
+    try {
+    expect((await app.inject({method:'GET',url:'/public/mini/privacy-policy'})).json()).toEqual({data:null,meta:{published:false}})
     await expect(service.publishPrivacyPolicy(staff(ids.drafter), {
       policyVersion, approvedBy: '法务复核人', approvalReference: 'LEGAL-2026-0824-001',
       effectiveAt: new Date().toISOString(), reason: '本人不能发布',
@@ -105,6 +116,13 @@ integration('customer-publication PostgreSQL integration', () => {
       content_sha256: createHash('sha256').update(content).digest('hex'),
       approval_reference: 'LEGAL-2026-0824-001',
     })
+    const publicResponse=await app.inject({method:'GET',url:'/public/mini/privacy-policy?storeId=forged',headers:{'x-mbox-store-id':'forged'}})
+    expect(publicResponse.statusCode, publicResponse.body).toBe(200)
+    expect(publicResponse.json()).toMatchObject({data:{version:policyVersion,content,contentSha256:createHash('sha256').update(content).digest('hex')},meta:{published:true}})
+    expect(publicResponse.body).not.toContain('LEGAL-2026-0824-001')
+    await service.withdrawPrivacyPolicy(staff(ids.publisher),{policyVersion,reason:'隔离测试撤下政策',idempotencyKey:randomUUID()})
+    expect((await app.inject({method:'GET',url:'/public/mini/privacy-policy'})).json()).toEqual({data:null,meta:{published:false}})
+    } finally {await app.close()}
   })
 })
 

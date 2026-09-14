@@ -114,6 +114,7 @@ describe('staffAuthApiPlugin', () => {
       businessDate: '2026-08-10',
       credential: 'TEST_STORE_GATE',
       deviceKey: 'device-tablet-001',
+      sourceKey: '127.0.0.1',
     })
   })
 
@@ -145,6 +146,7 @@ describe('staffAuthApiPlugin', () => {
       deviceAccessToken: leaseToken,
       employeeCode: 'LIYAN',
       pin: '2468',
+      sourceKey: '127.0.0.1',
     })
   })
 
@@ -163,8 +165,20 @@ describe('staffAuthApiPlugin', () => {
       currentSessionToken: sessionToken,
       employeeCode: 'TOM',
       pin: '1048',
+      sourceKey: '127.0.0.1',
     })
     expect(value.auth.verifyDailyStoreCredential).not.toHaveBeenCalled()
+  })
+
+  it('uses the peer address and ignores forged forwarding headers and body source keys', async () => {
+    const value = fixture()
+    const response = await value.app.inject({
+      method: 'POST', url: '/api/auth/login', remoteAddress: '203.0.113.7',
+      headers: { cookie: `${DEVICE_ACCESS_COOKIE}=${leaseToken}`, 'x-forwarded-for': '198.51.100.9' },
+      payload: { employeeCode: 'LIYAN', pin: '2468', sourceKey: '198.51.100.10' },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(value.auth.login).toHaveBeenCalledWith(expect.objectContaining({ sourceKey: '203.0.113.7' }))
   })
 
   it('supports session lookup, heartbeat and logout with bearer or secure cookie', async () => {

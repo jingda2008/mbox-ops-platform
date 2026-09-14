@@ -26,17 +26,22 @@ Page({
   },
 
   onShow() { this.loadPrivacyPolicy() },
+  onHide() { this.policyReadGeneration = (this.policyReadGeneration || 0) + 1 },
+  onUnload() { this.policyReadGeneration = (this.policyReadGeneration || 0) + 1 },
 
   async loadPrivacyPolicy() {
+    const generation = this.policyReadGeneration = (this.policyReadGeneration || 0) + 1
     this.setData({ policyLoading: true, policyMessage: '' })
     try {
       const policy = await getPrivacyPolicy()
+      if (generation !== this.policyReadGeneration) return
       this.setData({
         policyLoading: false,
         policy: policy || null,
         policyMessage: policy ? '' : '隐私政策暂时无法读取，请稍后重试或联系门店。',
       })
     } catch (error) {
+      if (generation !== this.policyReadGeneration) return
       this.setData({
         policyLoading: false,
         policy: null,

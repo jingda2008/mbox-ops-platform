@@ -66,6 +66,7 @@ export const staffAuthApiPlugin: FastifyPluginAsync<StaffAuthApiOptions> = async
       businessDate: businessDay.businessDate,
       credential: readString(body.credential, '门店口令', 128, 6),
       deviceKey: readString(body.deviceKey, '设备标识', 256, 8),
+      sourceKey: request.ip,
     })
     setSecureCookie(reply, DEVICE_ACCESS_COOKIE, grant.leaseToken, grant.expiresAt)
     return reply.send({
@@ -84,6 +85,7 @@ export const staffAuthApiPlugin: FastifyPluginAsync<StaffAuthApiOptions> = async
       deviceAccessToken: readRequestToken(request, DEVICE_ACCESS_COOKIE),
       employeeCode: readString(body.employeeCode, '员工账号', 64),
       pin: readString(body.pin, '员工PIN', 4, 4),
+      sourceKey: request.ip,
     })
     setSecureCookie(reply, STAFF_SESSION_COOKIE, result.sessionToken, result.session.expiresAt)
     return reply.send({ data: staffLoginResponse(result.session, result.access) })
@@ -97,6 +99,7 @@ export const staffAuthApiPlugin: FastifyPluginAsync<StaffAuthApiOptions> = async
       currentSessionToken: readRequestToken(request, STAFF_SESSION_COOKIE),
       employeeCode: readString(body.employeeCode, '员工账号', 64),
       pin: readString(body.pin, '员工PIN', 4, 4),
+      sourceKey: request.ip,
     })
     setSecureCookie(reply, STAFF_SESSION_COOKIE, result.sessionToken, result.session.expiresAt)
     return reply.send({ data: staffLoginResponse(result.session, result.access) })

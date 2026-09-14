@@ -15,6 +15,7 @@ interface Fixture {
   staffUrl: string
   dailyCredential: string
   employeePin: string
+  orderableProductUnitPriceMinor: number
   orderableProductName: string
   kitchenProductName: string
   bundleProductName:string
@@ -928,7 +929,7 @@ for(const pauseNew of (process.env.NORMALIZED_E2E_RECOVERY_PEER==='true'?[true]:
   await pending.locator('article').filter({hasText:`${tableCode} ·`}).getByRole('button',{name:'处理商品'}).first().click()
   const workspace=reviewer.page.getByRole('dialog',{name:'商品停止与退款'})
   const approvedResponse=reviewer.page.waitForResponse(response=>response.url().includes('/api/commerce/item-after-sales/')&&response.url().endsWith('/decision')&&response.request().method()==='POST')
-  await workspace.getByRole('button',{name:'批准 ¥88.00'}).click()
+  await workspace.getByRole('button',{name:`批准 ¥${(data.orderableProductUnitPriceMinor / 100).toFixed(2)}`}).click()
   const approvedFacts=(await (await approvedResponse).json()).data
   await expect(workspace).toContainText('待确认现金实际退付')
   await expect(workspace).toContainText('暂停 0 · 已停止 1')
@@ -938,19 +939,19 @@ for(const pauseNew of (process.env.NORMALIZED_E2E_RECOVERY_PEER==='true'?[true]:
   const failedResult=await reviewer.page.request.post(`/api/refunds/${failedRefund}/manual-result`,{headers:{'idempotency-key':`qa-failed-cash-result-${Date.now()}`},data:{succeeded:false}})
   expect(failedResult.ok(),await failedResult.text()).toBe(true)
   // Background completion becomes visible without closing or reloading the page.
-  await expect(workspace.getByRole('button',{name:'重试已确认失败的现金退款 ¥88.00'})).toBeVisible()
+  await expect(workspace.getByRole('button',{name:`重试已确认失败的现金退款 ¥${(data.orderableProductUnitPriceMinor / 100).toFixed(2)}`})).toBeVisible()
   const retryCalls:Array<{key:string;body:unknown}>=[];let loseRetry=true
   await reviewer.page.route('**/api/commerce/item-after-sales/*/refund-retry',async route=>{
     retryCalls.push({key:route.request().headers()['idempotency-key'],body:route.request().postDataJSON()})
     const response=await route.fetch({url:backendUrl(route.request().url())});expect(response.ok(),await response.text()).toBe(true)
     if(loseRetry){loseRetry=false;await route.abort('failed')}else await route.fulfill({response})
   })
-  await workspace.getByRole('button',{name:'重试已确认失败的现金退款 ¥88.00'}).click()
+  await workspace.getByRole('button',{name:`重试已确认失败的现金退款 ¥${(data.orderableProductUnitPriceMinor / 100).toFixed(2)}`}).click()
   await expect(workspace.getByRole('button',{name:'恢复上次商品处理'})).toBeVisible()
   await workspace.getByRole('button',{name:'恢复上次商品处理'}).click()
   await expect(workspace.getByRole('button',{name:/^批准 ¥/})).toHaveCount(0)
   expect(retryCalls).toHaveLength(2);expect(retryCalls[1]).toEqual(retryCalls[0])
-  await workspace.getByRole('checkbox',{name:'现金 ¥88.00 已实际退给客人'}).check()
+  await workspace.getByRole('checkbox',{name:`现金 ¥${(data.orderableProductUnitPriceMinor / 100).toFixed(2)} 已实际退给客人`}).check()
   const sent:Array<{url:string;key:string;body:unknown}>=[];let drop=true
   await reviewer.page.route('**/api/refunds/*/manual-result',async route=>{
     sent.push({url:route.request().url(),key:route.request().headers()['idempotency-key'],body:route.request().postDataJSON()})
@@ -993,6 +994,8 @@ test('修改退款份数丢回执后恢复同一新版本，减少份数明确�
   expect(collected.ok(),await collected.text()).toBe(true)
   await expect(order).toHaveCount(0)
   const details=manager.page.getByRole('region',{name:`${tableCode}本桌点单详情`})
+  if(!await details.isVisible())await manager.page.locator('.staff-table-tile').filter({has:manager.page.getByText(tableCode,{exact:true})}).click()
+  await expect(details).toBeVisible()
   await details.getByRole('button',{name:'停止 / 退款'}).first().click()
   const panel=manager.page.getByRole('dialog',{name:'商品停止与退款'})
   await panel.getByLabel('本次停止份数').fill('2')
@@ -1032,8 +1035,8 @@ test('修改退款份数丢回执后恢复同一新版本，减少份数明确�
   await reviewer.page.getByRole('region',{name:'商品售后待办'}).locator(`[data-after-sales-case-id="${revisedCaseId}"]`).getByRole('button',{name:'处理商品'}).click()
   const review=reviewer.page.getByRole('dialog',{name:'商品停止与退款'})
   await expect(review.getByRole('button',{name:/^批准/})).toHaveCount(1)
-  await review.getByRole('button',{name:'批准 ¥88.00'}).click()
-  await review.getByRole('checkbox',{name:'现金 ¥88.00 已实际退给客人'}).check()
+  await review.getByRole('button',{name:`批准 ¥${(data.orderableProductUnitPriceMinor / 100).toFixed(2)}`}).click()
+  await review.getByRole('checkbox',{name:`现金 ¥${(data.orderableProductUnitPriceMinor / 100).toFixed(2)} 已实际退给客人`}).check()
   await review.getByRole('button',{name:'登记现金已退'}).click()
   await expect(review.locator('article').filter({hasText:'修改后的申请'})).toContainText('1 份 · 已完成')
   await expect(review.getByRole('button',{name:/^批准/})).toHaveCount(0)
@@ -1073,7 +1076,10 @@ test('关桌后撤回退款仍能登记实际耗用，原操作恢复不重复�
   await expect(card).toBeVisible();await card.getByRole('spinbutton').fill('2')
   await card.getByRole('button',{name:'制作完成',exact:true}).click()
   await expect(card).toHaveCount(0);await bartender.context.close()
-  await manager.page.getByRole('region',{name:`${tableCode}本桌点单详情`}).getByRole('button',{name:'停止 / 退款'}).first().click()
+  const details=manager.page.getByRole('region',{name:`${tableCode}本桌点单详情`})
+  if(!await details.isVisible())await manager.page.locator('.staff-table-tile').filter({has:manager.page.getByText(tableCode,{exact:true})}).click()
+  await expect(details).toBeVisible()
+  await details.getByRole('button',{name:'停止 / 退款'}).first().click()
   const workspace=manager.page.getByRole('dialog',{name:'商品停止与退款'})
   await workspace.getByLabel('本次停止份数').fill('2')
   await workspace.getByRole('button',{name:'停止 / 申请退款'}).click()
@@ -1449,7 +1455,10 @@ for(const decision of ['approved','rejected'] as const)test(`未付已制作商�
   await expect(card).toBeVisible();await card.getByRole('spinbutton').fill('2')
   await card.getByRole('button',{name:'制作完成',exact:true}).click()
   await expect(card).toHaveCount(0);await bartender.context.close()
-  await manager.page.getByRole('region',{name:`${tableCode}本桌点单详情`}).getByRole('button',{name:'停止 / 退款'}).first().click()
+  const details=manager.page.getByRole('region',{name:`${tableCode}本桌点单详情`})
+  if(!await details.isVisible())await manager.page.locator('.staff-table-tile').filter({has:manager.page.getByText(tableCode,{exact:true})}).click()
+  await expect(details).toBeVisible()
+  await details.getByRole('button',{name:'停止 / 退款'}).first().click()
   const workspace=manager.page.getByRole('dialog',{name:'商品停止与退款'})
   await workspace.getByLabel('本次停止份数').fill('1')
   await workspace.getByRole('button',{name:'停止 / 申请退款'}).click()
@@ -1461,7 +1470,7 @@ for(const decision of ['approved','rejected'] as const)test(`未付已制作商�
     const response=await route.fetch();expect(response.ok(),await response.text()).toBe(true)
     if(lose){lose=false;await route.abort('failed')}else await route.fulfill({response})
   })
-  await workspace.getByRole('button',{name:decision==='approved'?'确认停止并免收 ¥88.00':'拒绝停止'}).click()
+  await workspace.getByRole('button',{name:decision==='approved'?`确认停止并免收 ¥${(data.orderableProductUnitPriceMinor / 100).toFixed(2)}`:'拒绝停止'}).click()
   await expect(workspace.getByRole('button',{name:'恢复上次商品处理'})).toBeVisible()
   await workspace.getByRole('button',{name:'恢复上次商品处理'}).click()
   expect(sent).toHaveLength(2);expect(sent[1]).toEqual(sent[0])

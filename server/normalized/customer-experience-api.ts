@@ -67,6 +67,8 @@ interface GuestExperienceContext {
 }
 
 interface CustomerExperienceApiOptions {
+  // Server-configured scope for published copy only; never taken from client headers.
+  publishedContentScope?: Readonly<StoreScope>
   transactions: Pick<ScopedPostgresTransactionRunner, 'run'>
   service: CustomerExperienceService
   resolvePublicContext(request: FastifyRequest): Promise<PublicCustomerExperienceContext> | PublicCustomerExperienceContext
@@ -155,17 +157,17 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
   }))
 
   app.get('/public/mini/privacy-policy', async (request, reply) => handle(reply, async () => {
-    const context = await options.resolvePublicContext(request)
-    const policy = await options.transactions.run(context.scope, async (transaction) => {
+    const scope = options.publishedContentScope ?? (await options.resolvePublicContext(request)).scope
+    const policy = await options.transactions.run(scope, async (transaction) => {
       const result = await transaction.query<PrivacyPolicyReleaseRow>(`
         SELECT policy_version,content_markdown,content_sha256,operator_name,contact,
-          data_retention_policy_version,third_party_register_version,effective_at
+          data_retention_policy_version,third_party_register_version,effective_at::text AS effective_at
         FROM mbox.privacy_policy_releases
         WHERE tenant_id=$1::uuid AND store_id=$2::uuid
           AND status='published' AND effective_at<=clock_timestamp() AND withdrawn_at IS NULL
         ORDER BY effective_at DESC,id DESC
         LIMIT 1
-      `, [context.scope.tenantId, context.scope.storeId])
+      `, [scope.tenantId, scope.storeId])
       const row = result.rows[0]
       return row === undefined ? null : {
         version: row.policy_version,
@@ -177,9 +179,19 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
         thirdPartyRegisterVersion: row.third_party_register_version,
         effectiveAt: timestamp(row.effective_at, '隐私政策生效时间'),
       }
-    })
+    }, { readOnly: true })
     reply.header('cache-control', 'no-store')
     return reply.send({ data: policy, meta: { published: policy !== null } })
+  }))
+
+  app.get('/public/mini/membership-terms', async (request, reply) => handle(reply, async () => {
+    const scope = options.publishedContentScope ?? (await options.resolvePublicContext(request)).scope
+    if (options.membershipTerms === undefined) throw new CustomerExperienceRequestError(
+      '当前条款暂时无法读取，请稍后重试', 'MEMBERSHIP_TERMS_NOT_AVAILABLE', 503,
+    )
+    const terms = await options.membershipTerms.current(scope)
+    reply.header('cache-control', 'no-store')
+    return reply.send({ data: terms, meta: { published: terms !== null } })
   }))
 
   app.get('/staff/customer-publication/employees', async (request, reply) => handle(reply, async () => {
@@ -681,6 +693,33 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
       ...(body.displayName === undefined ? {} : { displayName: optionalText(body.displayName, '称呼', 80) }),
       preferences: publicPreferences(body.preferences),
       idempotencyKey: idempotencyKey(request),
+    })
+    return reply.send({ data: result.value, meta: { replayed: result.replayed } })
+  }))
+
+  // Versioned WeChat contract: legacy platforms retain their existing endpoint.
+  // Consent is written atomically with the preference by the existing audited
+  // profile command. Its database observation time is the authoritative time.
+  app.patch('/public/mini/wechat-preferences', async (request, reply) => handle(reply, async () => {
+    const context = await options.resolvePublicContext(request)
+    const body = objectBody(request.body)
+    const preferences = { ...publicPreferences(body.preferences) }
+    const dietaryNotes = optionalText(preferences.dietaryNotes, '饮食说明', 80) ?? ''
+    if (preferences.dietaryNotes !== undefined || body.dietaryConsent !== undefined) {
+      const consent = object(body.dietaryConsent, '饮食说明授权')
+      if (consent.version !== 'wechat-dietary-v1' || typeof consent.granted !== 'boolean'
+        || consent.granted !== Boolean(dietaryNotes)) {
+        throw new CustomerExperienceRequestError('请单独同意保存饮食说明，或清空后撤回授权')
+      }
+      preferences.dietaryNotes = dietaryNotes
+      preferences.dietaryNotesConsent = {
+        version: 'wechat-dietary-v1', decision: dietaryNotes ? 'granted' : 'withdrawn',
+        purpose: 'in_store_dietary_service', source: 'wechat_preferences',
+      }
+    }
+    const result = await options.service.updatePreferences(context, {
+      ...(body.displayName === undefined ? {} : { displayName: optionalText(body.displayName, '称呼', 80) }),
+      preferences, idempotencyKey: idempotencyKey(request),
     })
     return reply.send({ data: result.value, meta: { replayed: result.replayed } })
   }))

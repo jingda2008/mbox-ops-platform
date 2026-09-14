@@ -104,6 +104,15 @@ const wechatTabs = wechatApp.tabBar.list.map(({ pagePath, text }) => ({ pagePath
 const alipayTabs = alipayApp.tabBar.items.map(({ pagePath, name }) => ({ pagePath, name }))
 assert(JSON.stringify(alipayTabs) === JSON.stringify(wechatTabs), '支付宝 tabBar 页面或文案与微信不一致')
 
+// The 2026-09-14 policy-readability fix is WeChat-only by explicit scope.
+// Freeze both reviewed templates for these three divergences; any further change
+// must be reviewed again. Alipay syntax, handlers, styles and package checks still run.
+const wechatPolicyTemplateDivergences = {
+  'pages/profile-preferences/index': { wechat: '821b839de36340872e068bcef174a1f58d63c285160f3e2fa048d7be69508276', alipay: 'a842657e97e011a6b76259dd9c9281e8878836d42e70d3ef32a5ae06b9ff9303' },
+  'pages/membership-terms/index': { wechat: 'd06727683d41d9d85ff540ad3e0c8bfb04f59c5d2cb1e11a5265401b43189926', alipay: 'e283016560ab6f27f4ec8a46825fdc748874f54e9316384314b2bb18b3f48b81' },
+  'pages/privacy/index': { wechat: '58e1413de61a146c5b61c903649c2f790e7d52f2f18d24c3a150218c26eb9fc8', alipay: '5676e96092f9fb099021f9fc3fc1f726ccabae90ab849492ce507af6e6477b31' },
+}
+
 for (const page of wechatApp.pages) {
   const alipayBase = join(alipayRoot, page)
   for (const extension of ['.js', '.json', '.axml']) {
@@ -114,13 +123,15 @@ for (const page of wechatApp.pages) {
   const wechatTemplate = await readFile(join(wechatRoot, `${page}.wxml`), 'utf8')
   const alipayTemplate = await readFile(`${alipayBase}.axml`, 'utf8')
   const alipayScript = await readFile(`${alipayBase}.js`, 'utf8')
-  assert(tagSignature(alipayTemplate) === tagSignature(wechatTemplate), `${page} 的标签布局与微信不一致`)
+  const divergence = wechatPolicyTemplateDivergences[page]
+  const reviewedDivergence = Boolean(divergence && digest(wechatTemplate) === divergence.wechat && digest(alipayTemplate) === divergence.alipay)
+  assert(reviewedDivergence || tagSignature(alipayTemplate) === tagSignature(wechatTemplate), `${page} 的标签布局与微信不一致`)
 
   const wechatHandlers = [...wechatTemplate.matchAll(/\b(?:bind|catch)[A-Za-z:]*="([A-Za-z_$][\w$]*)"/g)]
     .map((match) => match[1].replace(/Wechat/g, 'Alipay'))
   const alipayHandlers = [...alipayTemplate.matchAll(/\b(?:on|catch)[A-Z][A-Za-z]*="([A-Za-z_$][\w$]*)"/g)]
     .map((match) => match[1])
-  assert(JSON.stringify(alipayHandlers) === JSON.stringify(wechatHandlers), `${page} 的交互处理函数与微信不一致`)
+  assert(reviewedDivergence || JSON.stringify(alipayHandlers) === JSON.stringify(wechatHandlers), `${page} 的交互处理函数与微信不一致`)
   for (const handler of new Set(alipayHandlers)) {
     const escaped = handler.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     assert(new RegExp(`\\b${escaped}\\s*\\(`).test(alipayScript), `${page} 缺少模板事件处理函数 ${handler}`)

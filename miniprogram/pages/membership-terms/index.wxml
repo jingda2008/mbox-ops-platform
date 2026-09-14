@@ -3,9 +3,9 @@
     <view class="terms-scroll__content">
       <state-panel wx:if="{{loading}}" type="loading" title="正在读取当前入会条款" />
       <block wx:else>
-        <view wx:if="{{error}}" class="error-banner">{{error}}</view>
-        <state-panel wx:if="{{!terms}}" type="empty" title="当前入会条款尚未发布" message="新入会暂未开放；点单、预约和找回原会员不受影响" />
-        <block wx:else>
+        <view wx:if="{{error}}" class="error-banner">{{error}}<button bindtap="load">重新读取</button></view>
+        <state-panel wx:if="{{!terms && !error}}" type="empty" title="当前入会条款尚未发布" message="新入会暂未开放；点单、预约和找回原会员不受影响" />
+        <block wx:if="{{terms}}">
           <view class="terms-head">
             <text class="terms-kicker">M-BOX 会员条款</text>
             <text class="terms-title">{{terms.title}}</text>
@@ -19,6 +19,8 @@
     </view>
   </scroll-view>
   <view wx:if="{{terms && allowEnrollment && !membership}}" class="terms-dock">
+    <view wx:if="{{enrollmentError}}" class="error-banner">{{enrollmentError}}<button bindtap="load">重新读取</button></view>
+    <text wx:elif="{{!enrollmentReady}}">正在核对会员身份…</text>
     <checkbox-group bindchange="onAgreementChange">
       <label class="agree-row">
         <checkbox value="agree" checked="{{agreedToPolicies}}" color="#2d2925" />
@@ -28,8 +30,8 @@
     <view class="agree-links">
       <text bindtap="openPrivacy">查看《隐私政策》</text>
     </view>
-    <button wx:if="{{agreedToPolicies}}" class="accept-button wx-phone-button" open-type="getPhoneNumber" bindgetphonenumber="acceptAndEnroll" hover-class="none" loading="{{busy}}">授权手机号并加入</button>
-    <button wx:else class="accept-button accept-button--pending" bindtap="remindAgreement" hover-class="none">授权手机号并加入</button>
+    <button wx:if="{{agreedToPolicies && enrollmentReady}}" class="accept-button wx-phone-button" open-type="getPhoneNumber" bindgetphonenumber="acceptAndEnroll" hover-class="none" loading="{{busy}}">授权手机号并加入</button>
+    <button wx:else disabled="{{!enrollmentReady}}" class="accept-button accept-button--pending" bindtap="remindAgreement" hover-class="none">授权手机号并加入</button>
     <text class="terms-note">须先自行勾选同意后再授权手机号加入；未勾选或拒绝授权都不会入会。不会开启短信或营销。老客请回「我的」用「授权手机号找回会员」。</text>
   </view>
 </view>

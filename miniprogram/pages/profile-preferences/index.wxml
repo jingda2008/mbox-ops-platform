@@ -6,7 +6,7 @@
   </view>
   <state-panel wx:if="{{loading}}" type="loading" title="正在读取偏好" />
   <block wx:else>
-    <view wx:if="{{error}}" class="error-banner">{{error}}</view>
+    <view wx:if="{{error}}" class="error-banner">{{error}}<button wx:if="{{!profile}}" bindtap="load">重新读取</button></view>
 
     <view class="preference-card identity-card">
       <view class="avatar-row">
@@ -57,6 +57,14 @@
       <label><text>饮食说明</text><input value="{{dietaryNotes}}" maxlength="80" placeholder="与点单推荐有关即可" bindinput="onDietaryInput" /></label>
     </view>
 
-    <button class="save-button" loading="{{saving}}" disabled="{{saving}}" bindtap="save">确定保存</button>
+    <view class="preference-card">
+      <text class="field-label">饮食说明的单独授权 · 可选</text>
+      <text class="field-note">饮食说明可能包含过敏等健康信息，仅填写本店到店服务所需内容，不要填写病史或诊断。授权后本店会保存并用于服务提醒；这不能替代点单时向员工核对原料。可清空饮食说明并保存，撤回后停止使用；不填写不影响点单及其他会员服务。</text>
+      <checkbox-group bindchange="onDietaryConsentChange">
+        <label class="field-note"><checkbox value="dietary" checked="{{dietaryConsent}}" color="#315d46" />我单独同意本店保存和处理上述饮食说明</label>
+      </checkbox-group>
+    </view>
+
+    <button class="save-button" loading="{{saving}}" disabled="{{saving || loading || !profile}}" bindtap="save">确定保存</button>
   </block>
 </view>

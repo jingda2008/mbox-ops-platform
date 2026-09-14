@@ -115,7 +115,13 @@ async function publicRequest(path, options) {
 }
 
 async function getMiniBootstrap() { return (await publicRequest('/api/public/mini/bootstrap')).data }
-async function getPrivacyPolicy() { return (await publicRequest('/api/public/mini/privacy-policy')).data }
+// Published agreements remain readable when customer login or renewal is unavailable.
+async function getPrivacyPolicy() {
+  return (await request('/api/public/mini/privacy-policy', { requireTableSession: false, credentialDomain: 'none' })).data
+}
+async function getMembershipTerms() {
+  return (await request('/api/public/mini/membership-terms', { requireTableSession: false, credentialDomain: 'none' })).data
+}
 async function getMiniLoyalty() { return (await publicRequest('/api/public/mini/loyalty')).data }
 async function getMiniLoyaltyLedger() { return (await publicRequest('/api/public/mini/loyalty/ledger')).data }
 async function recordBirthdayBenefitConsent(birthdayMonthDay) {
@@ -472,10 +478,10 @@ async function verifyMembershipRecovery(challengePublicId, phoneAuthorizationCod
     throw error
   }
 }
-async function updatePreferences(preferences, displayName) {
-  return (await publicRequest('/api/public/mini/preferences', {
+async function updatePreferences(preferences, displayName, dietaryConsent) {
+  return (await publicRequest('/api/public/mini/wechat-preferences', {
     method: 'PATCH', headers: { 'idempotency-key': randomId('member-preferences') },
-    data: { preferences, displayName: displayName || null },
+    data: { preferences, displayName: displayName || null, dietaryConsent },
   })).data
 }
 async function registerActivity(
@@ -1026,7 +1032,7 @@ async function logoutWechatIdentity() {
 module.exports = {
   getCustomerOrderHistory,
   getMemberCards, submitMemberCardAction, getMemberGiftJobs, getMarketingPreferences, updateMarketingPreferences,
-  getGuestSession, getMiniBootstrap, getPrivacyPolicy, getMiniLoyalty, getMiniLoyaltyLedger,
+  getGuestSession, getMiniBootstrap, getPrivacyPolicy, getMembershipTerms, getMiniLoyalty, getMiniLoyaltyLedger,
   recordBirthdayBenefitConsent, withdrawBirthdayBenefitConsent,
   getNotificationConsent, recordNotificationConsent,
   getWechatNotificationAuthorizations, recordWechatNotificationAuthorization,

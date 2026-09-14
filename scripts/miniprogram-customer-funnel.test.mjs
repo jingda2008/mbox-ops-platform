@@ -169,7 +169,7 @@ test('membership consent stays unchecked and phone authorization appears only af
 
   assert.match(termsLogic, /agreedToPolicies: false/)
   assert.match(termsView, /checked="\{\{agreedToPolicies\}\}"/)
-  assert.match(termsView, /wx:if="\{\{agreedToPolicies\}\}"[^>]*class="accept-button wx-phone-button"[^>]*open-type="getPhoneNumber"/)
+  assert.match(termsView, /wx:if="\{\{agreedToPolicies && enrollmentReady\}\}"[^>]*class="accept-button wx-phone-button"[^>]*open-type="getPhoneNumber"/)
 })
 
 test('customer pages avoid duplicate status labels and backstage implementation copy', async () => {

@@ -726,3 +726,17 @@
 
 .staff-fulfillment-field { display: grid; gap: 5px; min-width: 0; }
 .staff-fulfillment-field input { min-width: 44px; min-height: 44px; max-width: 100%; box-sizing: border-box; padding: 0 10px; border: 1px solid var(--staff-line); border-radius: 6px; font: inherit; }
+
+.staff-fulfillment-history { min-width: 0; display: grid; gap: 12px; }
+.staff-fulfillment-history form { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); gap: 10px; align-items: end; }
+.staff-fulfillment-history label { display: grid; min-width: 0; gap: 5px; }
+.staff-fulfillment-history input { width: 100%; min-width: 0; box-sizing: border-box; }
+.staff-fulfillment-history input, .staff-fulfillment-history button { min-height: 44px; max-width: 100%; font: inherit; }
+.staff-actions-panel .staff-fulfillment-history-order { display: grid; grid-template-columns: minmax(0, 1fr); align-items: stretch; gap: 10px; }
+.staff-fulfillment-history-order header { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.staff-fulfillment-history-order header small { color: var(--staff-muted); }
+.staff-fulfillment-history-items { display: grid; gap: 10px; min-width: 0; }
+.staff-fulfillment-history-item { display: grid; gap: 8px; min-width: 0; overflow-wrap: anywhere; padding-top: 10px; border-top: 1px solid var(--staff-line); }
+.staff-fulfillment-history-item p { margin: 0; color: var(--staff-muted); }
+.staff-fulfillment-history-item button { justify-self: start; }
+.staff-fulfillment-history nav { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }

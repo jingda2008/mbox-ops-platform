@@ -1138,6 +1138,9 @@ integration("normalized inventory API PostgreSQL integration", () => {
     expect(after.rows).toEqual(before.rows);
     expect((await pool.query(`SELECT status FROM mbox.inventory_stock_counts WHERE id=$1`, [countId])).rows[0].status).toBe("submitted");
     expect((await pool.query(`SELECT count(*)::int AS n FROM mbox.inventory_movements WHERE reference_id=$1`, [countId])).rows[0].n).toBe(0);
+    const review = await app.inject({ method: 'GET', url: '/api/inventory/stock-counts', headers: headers(approverId, 'read-stale-count') });
+    expect(review.statusCode).toBe(200);
+    expect(review.json().data.counts.find((count: {id:string})=>count.id===countId).lines[0].stale).toBe(true);
   });
 
   it("requires independent stock-count approval and enforces integer snack counts in PostgreSQL", async () => {
@@ -1440,6 +1443,45 @@ integration("normalized inventory API PostgreSQL integration", () => {
     expect(result.statusCode).toBe(201);
     return result.json().data as { id: string };
   }
+
+  it('lists bounded reviewable counts, scopes counter visibility, and preserves independent decisions', async () => {
+    const denied = await app.inject({ method: 'GET', url: '/api/inventory/stock-counts', headers: headers(viewerId,'list-no-count-permission') });
+    expect(denied.statusCode).toBe(403);
+    for (const query of ['page=-1','pageSize=51','status=draft']) {
+      expect((await app.inject({ method:'GET',url:`/api/inventory/stock-counts?${query}`,headers:headers(managerId,'list-invalid') })).statusCode).toBe(400);
+    }
+    await grant(pool,viewerRoleId,['inventory.count']);
+    const createCount = async (employeeId:string, countedQuantity:string) => {
+      const created = await app.inject({method:'POST',url:'/api/inventory/stock-counts',headers:headers(employeeId,`list-create-${randomUUID()}`),
+        payload:{lines:[{inventoryItemId:snackItemId,countedQuantity,reason:'现场复盘'}]}});
+      expect(created.statusCode).toBe(201);
+      const countId=created.json().data.id as string;
+      expect((await app.inject({method:'POST',url:`/api/inventory/stock-counts/${countId}/submit`,headers:headers(employeeId,`list-submit-${countId}`)})).statusCode).toBe(200);
+      return countId;
+    };
+    const first=await createCount(managerId,'1'), second=await createCount(managerId,'2'), own=await createCount(viewerId,'3');
+    const page0=await app.inject({method:'GET',url:'/api/inventory/stock-counts?pageSize=2',headers:headers(approverId,'list-approver-0')});
+    expect(page0.statusCode).toBe(200);
+    expect(page0.json().data).toMatchObject({canApprove:true,hasMore:true,page:0});
+    expect(page0.json().data.counts.map((count:{id:string})=>count.id)).toEqual([own,second]);
+    const record=page0.json().data.counts[0];
+    expect(record).toMatchObject({createdByEmployeeId:viewerId,createdByName:'Viewer',canReview:true,status:'submitted',
+      lines:[{inventoryItemId:snackItemId,itemName:expect.any(String),countedQuantity:'3.000000',reason:'现场复盘',stale:false}]});
+    expect(record.lines[0]).not.toHaveProperty('unitCostMinor');
+    const page1=await app.inject({method:'GET',url:'/api/inventory/stock-counts?page=1&pageSize=2',headers:headers(approverId,'list-approver-1')});
+    expect(page1.json().data.counts[0].id).toBe(first);
+    const mine=await app.inject({method:'GET',url:`/api/inventory/stock-counts?employeeId=${managerId}&storeId=${randomUUID()}`,headers:headers(viewerId,'list-own')});
+    expect(mine.json().data).toMatchObject({canApprove:false,hasMore:false,counts:[{id:own,canReview:false}]});
+    expect(mine.json().data.counts).toHaveLength(1);
+    const self=await app.inject({method:'GET',url:'/api/inventory/stock-counts',headers:headers(managerId,'list-self')});
+    expect(self.json().data.counts.find((count:{id:string})=>count.id===first).canReview).toBe(false);
+    const before=(await pool.query('SELECT on_hand_quantity::text AS quantity FROM mbox.inventory_balances WHERE inventory_item_id=$1',[snackItemId])).rows;
+    const rejected=await app.inject({method:'POST',url:`/api/inventory/stock-counts/${second}/reject`,headers:headers(approverId,'list-reject'),payload:{reason:'重新核对实物'}});
+    expect(rejected.statusCode).toBe(200);
+    const processed=await app.inject({method:'GET',url:'/api/inventory/stock-counts?status=processed',headers:headers(managerId,'list-processed')});
+    expect(processed.json().data.counts.find((count:{id:string})=>count.id===second)).toMatchObject({status:'rejected',decidedByName:'Approver',decisionReason:'重新核对实物',canReview:false});
+    expect((await pool.query('SELECT on_hand_quantity::text AS quantity FROM mbox.inventory_balances WHERE inventory_item_id=$1',[snackItemId])).rows).toEqual(before);
+  });
 
   async function receiveStock(
     itemId: string,

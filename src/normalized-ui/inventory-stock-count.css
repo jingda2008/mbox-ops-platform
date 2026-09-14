@@ -1,0 +1,10 @@
+.inventory-stock-counts { display: grid; gap: 12px; min-width: 0; padding: 14px; border: 1px solid #b9d3c7; border-radius: 12px; background: #f6fbf8; }
+.inventory-stock-counts header, .inventory-stock-counts nav { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.inventory-stock-counts h2, .inventory-stock-counts p { margin: 0; }
+.inventory-stock-counts article { display: grid; gap: 10px; min-width: 0; padding: 12px; border: 1px solid #c8d5ce; border-radius: 8px; background: white; overflow-wrap: anywhere; }
+.inventory-stock-count-line { display: grid; gap: 5px; min-width: 0; border-top: 1px solid #e0e8e2; padding-top: 10px; }
+.inventory-stock-count-actions { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
+.inventory-stock-count-actions label { display: grid; flex: 1 1 180px; min-width: 0; gap: 5px; }
+.inventory-stock-counts input, .inventory-stock-counts button { min-height: 44px; max-width: 100%; box-sizing: border-box; font: inherit; }
+.inventory-stock-counts input { width: 100%; min-width: 0; }
+.inventory-stock-counts button[aria-pressed="true"] { background: #176c4d; color: white; }

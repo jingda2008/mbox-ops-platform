@@ -51,7 +51,7 @@ import { isLiquidInventoryCategory } from '../../src/shared/inventory-unit-polic
 
 export interface InventoryApiOptions {
   commands: Pick<NormalizedCommandExecutor, "execute">;
-  query: Pick<InventoryQueryService, "getDashboard" | "getActiveRecipe" | "getRecipeCostPreview">;
+  query: Pick<InventoryQueryService, "getDashboard" | "getActiveRecipe" | "getRecipeCostPreview" | "getStockCounts">;
   resolveContext(
     request: FastifyRequest,
   ):
@@ -570,6 +570,16 @@ export const inventoryApiPlugin: FastifyPluginAsync<
         );
         return reply.send(response(execution));
       }),
+  );
+
+  app.get<{ Querystring: { status?: string; page?: string; pageSize?: string } }>("/inventory/stock-counts", async (request, reply) =>
+    handleRoute(reply, async () => {
+      const context = await options.resolveContext(request);
+      const status = readEnum(request.query.status ?? 'submitted', 'status', ['submitted', 'processed']);
+      const page = readInteger(Number(request.query.page ?? 0), 'page', 0, 10000);
+      const pageSize = readInteger(Number(request.query.pageSize ?? 20), 'pageSize', 1, 50);
+      return reply.send({ data: await options.query.getStockCounts(context.scope, context.employeeId, { status, page, pageSize }) });
+    }),
   );
 
   app.post("/inventory/stock-counts", async (request, reply) =>

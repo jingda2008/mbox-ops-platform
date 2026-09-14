@@ -524,6 +524,81 @@ test('店长可在经营配置中修改桌台容量资料并读回', async ({ br
 })
 
 
+test('我的已制作多商品长单号在窄屏逐项显示，保留商品处理入口', async ({browser},testInfo) => {
+  const data=await fixture(), bartender=await staffPage(browser,data,'lengyanzhi'), page=bartender.page
+  await page.setViewportSize({width:375,height:812})
+  const names=['内格罗尼','大吉利','威士忌酸','长商品名称用于核对多行文字是否完整显示']
+  await page.route('**/api/operations/history?**', async route => route.fulfill({json:{data:{businessDate:'2026-09-14',page:0,hasMore:false,receipts:[],generatedAt:new Date().toISOString(),orders:[{
+    id:'history-order',publicId:'order-5f44bda47ae16fd5d2ab19970000000000000000',tableCode:'W02',employeeName:'冷言志',submittedAt:new Date().toISOString(),status:'fulfilled',paymentStatus:'paid',totalMinor:1000,
+    items:names.map((name,index)=>({id:`history-item-${index}`,name,quantity:1,unitPriceMinor:250,totalMinor:250,status:'prepared',note:'少冰，完成后按桌号交接',preparedBy:'冷言志',preparedAt:new Date().toISOString()}))
+  }]}}}))
+  await page.goto('/staff/fulfillment')
+  await page.getByRole('button',{name:'我的已制作',exact:true}).click()
+  const history=page.getByRole('region',{name:'我的历史制作'})
+  await expect(history.getByRole('button',{name:'商品处理',exact:true})).toHaveCount(4)
+  await expectNoHorizontalOverflow(page)
+  const boxes=await history.locator('.staff-fulfillment-history-item').evaluateAll(items=>items.map(item=>{const b=item.getBoundingClientRect();return {top:b.top,bottom:b.bottom,left:b.left,right:b.right}}))
+  for(let i=0;i<boxes.length;i++) {
+    expect(boxes[i].right).toBeLessThanOrEqual(375)
+    expect(boxes[i].left).toBeGreaterThanOrEqual(0)
+    if(i) expect(boxes[i].top).toBeGreaterThanOrEqual(boxes[i-1].bottom)
+  }
+  await page.evaluate(() => window.scrollTo(0, 0))
+  await page.screenshot({path:testInfo.outputPath('prepared-history-375.png'),fullPage:true})
+  await bartender.context.close()
+})
+
+test('盘点复核让有权限同事通过或退回，提交人能查结果，失败读取可重试', async ({browser},testInfo) => {
+  test.setTimeout(120_000)
+  const data=await fixture(), counter=await staffPage(browser,data,'lengyanzhi'), reviewer=await staffPage(browser,data,'hugu')
+  const create=await reviewer.page.request.post('/api/inventory/items',{headers:{'idempotency-key':`review-item-${Date.now()}`},data:{sku:`REVIEW-${Date.now()}`,name:'复核测试酒水',itemType:'bottle',baseUnit:'ml',categoryCode:'spirits.gin',packageVolumeMl:'750'}})
+  expect(create.status(),await create.text()).toBe(201)
+  const itemId=(await create.json()).data.id
+  const makeCount=async(quantity:string)=>{
+    const created=await counter.page.request.post('/api/inventory/stock-counts',{headers:{'idempotency-key':`count-create-${crypto.randomUUID()}`},data:{lines:[{inventoryItemId:itemId,countedQuantity:quantity,reason:'手机端实物复核'}]}})
+    expect(created.status(),await created.text()).toBe(201)
+    const count=(await created.json()).data
+    const submitted=await counter.page.request.post(`/api/inventory/stock-counts/${count.id}/submit`,{headers:{'idempotency-key':`count-submit-${count.id}`},data:{}})
+    expect(submitted.status(),await submitted.text()).toBe(200)
+    return count as {id:string;publicId:string}
+  }
+  const first=await makeCount('500')
+  await counter.page.goto('/staff/inventory')
+  const mine=counter.page.getByRole('region',{name:'盘点复核'})
+  await expect(mine).toContainText(first.publicId)
+  await expect(mine.getByRole('button',{name:'审核通过',exact:true})).toHaveCount(0)
+  await reviewer.page.setViewportSize({width:375,height:812})
+  await reviewer.page.route('**/api/inventory/stock-counts?**',route=>route.fulfill({status:503,json:{error:{code:'unavailable',message:'盘点服务暂时不可用'}}}),{times:1})
+  await reviewer.page.goto('/staff/inventory')
+  const reviews=reviewer.page.getByRole('region',{name:'盘点复核'})
+  await expect(reviews.getByRole('alert')).toContainText('盘点服务暂时不可用')
+  await expect(reviews.getByText('当前没有待复核盘点',{exact:true})).toHaveCount(0)
+  await reviews.getByRole('button',{name:'刷新盘点',exact:true}).click()
+  const row=reviews.getByRole('article',{name:`盘点 ${first.publicId}`,exact:true})
+  await expect(row).toContainText('实盘 500 毫升')
+  await row.getByRole('button',{name:'审核通过',exact:true}).click()
+  await reviewer.page.getByRole('alertdialog', { name: '确认盘点差异' }).getByRole('button',{name:'核对通过',exact:true}).click()
+  await expect(reviews).toContainText('盘点已审核通过，库存已按差异更新')
+  await expect(row).toHaveCount(0)
+  await reviews.getByRole('button',{name:'已处理',exact:true}).click()
+  await expect(row).toContainText('已通过')
+  await counter.page.reload()
+  await mine.getByRole('button',{name:'已处理',exact:true}).click()
+  await expect(mine.getByRole('article',{name:`盘点 ${first.publicId}`,exact:true})).toContainText('已通过')
+  const second=await makeCount('400')
+  await reviews.getByRole('button',{name:'待复核',exact:true}).click()
+  const rejectRow=reviews.getByRole('article',{name:`盘点 ${second.publicId}`,exact:true})
+  await rejectRow.getByLabel('退回原因').fill('数量需再次核对')
+  await rejectRow.getByRole('button',{name:'退回盘点',exact:true}).click()
+  await expect(reviews).toContainText('盘点已退回，库存未改变')
+  await reviews.getByRole('button',{name:'已处理',exact:true}).click()
+  await expect(rejectRow).toContainText('数量需再次核对')
+  await expect(rejectRow).toContainText('当前账面 500 毫升')
+  await expectNoHorizontalOverflow(reviewer.page)
+  await reviews.screenshot({path:testInfo.outputPath('stock-count-reviewed-375.png')})
+  await counter.context.close(); await reviewer.context.close()
+})
+
 test('快捷盘点提交丢失回执后复用原单，不直接改变库存', async ({ browser }) => {
   const data=await fixture(),manager=await staffPage(browser,data,'liyan'),page=manager.page
   await page.setViewportSize({width:390,height:844})

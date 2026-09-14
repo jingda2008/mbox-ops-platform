@@ -32,6 +32,7 @@ export interface PrintTicketSnapshot {
   schemaVersion: typeof PRINT_TICKET_SCHEMA_VERSION
   kind: PrintTicketKind
   title: string
+  documentRole?: 'checkout'
   subtitle: string
   test: boolean
   issuedAt: string
@@ -63,6 +64,9 @@ const TICKET_TITLES: Record<PrintTicketKind, string> = {
 
 export function createPrintTicketSnapshot(input: Readonly<Omit<PrintTicketSnapshot, 'schemaVersion' | 'title'>>): PrintTicketSnapshot {
   assertTicketKind(input.kind)
+  if (input.documentRole !== undefined && (input.documentRole !== 'checkout' || input.kind !== 'order_summary')) {
+    throw new TypeError('结账单用途或票种无效')
+  }
   assertShortText(input.subtitle, 'subtitle', 1, 80)
   assertShortText(input.ticketReference, 'ticketReference', 3, 120)
   if (input.displayNumber !== undefined && (input.kind !== 'table_settlement' || !/^\d{8}-\d{6}-\d{6}$/.test(input.displayNumber))) {
@@ -87,7 +91,8 @@ export function createPrintTicketSnapshot(input: Readonly<Omit<PrintTicketSnapsh
   return Object.freeze({
     schemaVersion: PRINT_TICKET_SCHEMA_VERSION,
     kind: input.kind,
-    title: TICKET_TITLES[input.kind],
+    title: input.documentRole === 'checkout' ? '结账单' : TICKET_TITLES[input.kind],
+    ...(input.documentRole === undefined ? {} : { documentRole: input.documentRole }),
     subtitle: input.subtitle.trim(),
     test: input.test,
     issuedAt: input.issuedAt,
@@ -131,6 +136,7 @@ export function parsePrintTicketSnapshot(value: unknown): PrintTicketSnapshot {
   if (value.schemaVersion !== PRINT_TICKET_SCHEMA_VERSION) throw new TypeError('不支持的打印票据版本')
   return createPrintTicketSnapshot({
     kind: readKind(value.kind),
+    ...(value.documentRole === undefined ? {} : { documentRole: readDocumentRole(value.documentRole) }),
     subtitle: readString(value.subtitle, 'subtitle'),
     test: value.test === true,
     issuedAt: readString(value.issuedAt, 'issuedAt'),
@@ -153,6 +159,7 @@ export function ticketToJson(ticket: Readonly<PrintTicketSnapshot>): JsonObject 
     schemaVersion: ticket.schemaVersion,
     kind: ticket.kind,
     title: ticket.title,
+    ...(ticket.documentRole === undefined ? {} : { documentRole: ticket.documentRole }),
     subtitle: ticket.subtitle,
     test: ticket.test,
     issuedAt: ticket.issuedAt,
@@ -189,7 +196,8 @@ export function renderPrintTicketHtml(
   const payment = ticket.payment === null
     ? (ticket.kind === 'cashier_settlement' ? `<section class="payment"><span>支付方式</span><strong>待选择</strong></section>` : '')
     : `<section class="payment"><span>支付方式</span><strong>${escapeHtml(paymentLabel(ticket.payment))}</strong></section>`
-  const venue = ticket.kind === 'cashier_settlement' ? '<p class="venue">陆家嘴中心 L+MALL</p>' : ''
+  const subtitle = ticket.documentRole === 'checkout' ? ticket.subtitle.replace(/^陆家嘴中心 L\+MALL\s*·\s*/, '') : ticket.subtitle
+  const venue = ticket.kind === 'cashier_settlement' || ticket.documentRole === 'checkout' ? '<p class="venue">陆家嘴中心 L+MALL</p>' : ''
   const note = ticket.note === null ? '' : `<section class="note"><b>备注</b>${escapeHtml(ticket.note)}</section>`
   const columns = '<div class="item-head"><span>品名 / 单价</span><span>数量</span><span>小计</span></div>'
   const lines = ticket.lines.map((line) => `<li><div><b>${escapeHtml(line.name)}</b>${line.unitAmountMinor == null ? '' : `<small>单价 ${escapeHtml(formatCny(line.unitAmountMinor))}</small>`}${line.note ? `<small>${escapeHtml(line.note)}</small>` : ''}</div><strong>×${line.quantity}</strong><em>${line.totalAmountMinor == null ? '—' : escapeHtml(formatCny(line.totalAmountMinor))}</em></li>`).join('')
@@ -238,7 +246,7 @@ export function renderPrintTicketHtml(
     main.paper-58 li em { grid-column:auto; font-size:8pt; } main.paper-58 .table-hero strong { font-size:25pt; }
     main.paper-58 .total strong { font-size:21pt; } main.paper-58.production li b { font-size:12pt; }
     footer { margin-top:3mm; overflow-wrap:anywhere; } .dash { margin-top:3mm; border-color:#000; }
-  </style></head><body><main class="${production ? 'production' : 'cashier'} paper-${profile.paper.replace('mm', '')}"><div class="brand">M-BOX · SHANGHAI</div><div class="center">${ticket.test ? '<span class="test">系统打印测试</span>' : ''}</div>${venue}<h1>${escapeHtml(ticket.title)}</h1><p class="subtitle">${escapeHtml(ticket.subtitle)}</p>${table}${guest}<section class="meta"><div class="meta-line"><span>${ticket.displayNumber ? `单号：${escapeHtml(ticket.displayNumber)}` : escapeHtml(ticket.ticketReference)}</span><span>${escapeHtml(ticket.businessDate)} ${escapeHtml(formatTime(ticket.issuedAt))}</span></div><div class="meta-line">${operator}</div></section>${columns}<ul>${lines}</ul>${payment}${note}${amount}<div class="dash"></div><footer>${ticket.displayNumber ? `原始追溯码：${escapeHtml(ticket.ticketReference)}<br>` : ''}请按票据内容执行；如有异常请联系当班负责人。<br>此票据为${ticket.test ? '测试' : '系统'}留痕，不替代支付凭证。</footer></main></body></html>`
+  </style></head><body><main class="${production ? 'production' : 'cashier'} paper-${profile.paper.replace('mm', '')}"><div class="brand">M-BOX · SHANGHAI</div><div class="center">${ticket.test ? '<span class="test">系统打印测试</span>' : ''}</div>${venue}<h1>${escapeHtml(ticket.title)}</h1><p class="subtitle">${escapeHtml(subtitle)}</p>${table}${guest}<section class="meta"><div class="meta-line"><span>${ticket.displayNumber ? `单号：${escapeHtml(ticket.displayNumber)}` : escapeHtml(ticket.ticketReference)}</span><span>${escapeHtml(ticket.businessDate)} ${escapeHtml(formatTime(ticket.issuedAt))}</span></div><div class="meta-line">${operator}</div></section>${columns}<ul>${lines}</ul>${payment}${note}${amount}<div class="dash"></div><footer>${ticket.displayNumber ? `原始追溯码：${escapeHtml(ticket.ticketReference)}<br>` : ''}请按票据内容执行；如有异常请联系当班负责人。<br>此票据为${ticket.test ? '测试' : '系统'}留痕，不替代支付凭证。</footer></main></body></html>`
 }
 
 export function normalizePrintTicketOutputProfile(value: Readonly<PrintTicketOutputProfile>): PrintTicketOutputProfile {
@@ -347,3 +355,8 @@ function escapeHtml(value: string): string { return value.replace(/[&<>"']/g, (c
 
 export function jsonTicketSnapshot(ticket: Readonly<PrintTicketSnapshot>): JsonObject { return ticketToJson(ticket) }
 export function ticketJsonValue(ticket: Readonly<PrintTicketSnapshot>): JsonValue { return ticketToJson(ticket) }
+
+function readDocumentRole(value: unknown): 'checkout' {
+  if (value !== 'checkout') throw new TypeError('结账单用途无效')
+  return value
+}

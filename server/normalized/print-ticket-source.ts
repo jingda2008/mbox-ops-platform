@@ -145,7 +145,7 @@ export class PrintTicketSourceRepository {
       if(stopped!==0)lines.push({name:stopped>0?'退菜减额（已扣除）':'套餐按单点价补差（已计入）',quantity:1,totalAmountMinor:Math.abs(stopped)},{name:'退菜重算后应付',quantity:1,totalAmountMinor:original-stopped})
     }
     lines.push({name:'桌次实际收款',quantity:1,totalAmountMinor:numeric(totals.received,'received')},{name:'桌次实际退款',quantity:1,totalAmountMinor:numeric(totals.refunded,'refunded')},{name:'桌次实际净收',quantity:1,totalAmountMinor:numeric(totals.received,'received')-numeric(totals.refunded,'refunded')})
-    return this.materializeDocument(sourceId,sessionId,{kind:'order_summary',subtitle:'M-BOX · 本桌次完整消费账单',test:false,issuedAt:source.occurred_at,businessDate:context.business_date,ticketReference:sessionId,tableCode:context.table_code,guestCount:context.guest_count,operatorLabel,note:'整桌次完整快照，包含列表其他分页的订单。取消商品保留记录，不表示重新消费。',payment:null,lines,totalAmountMinor:null,currency:currency(context.currency)})
+    return this.materializeDocument(sourceId,sessionId,{kind:'order_summary',documentRole:'checkout',subtitle:'陆家嘴中心 L+MALL · 本桌次完整消费账单',test:false,issuedAt:source.occurred_at,businessDate:context.business_date,ticketReference:sessionId,tableCode:context.table_code,guestCount:context.guest_count,operatorLabel,note:'整桌次完整快照，包含列表其他分页的订单。取消商品保留记录，不表示重新消费。',payment:null,lines,totalAmountMinor:null,currency:currency(context.currency)})
   }
 
   async materializeManualOrderBill(sourceId:string,orderId:string,operatorLabel:string):Promise<readonly PrintJob[]> {

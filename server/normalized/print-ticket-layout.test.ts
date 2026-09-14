@@ -57,6 +57,34 @@ describe('print ticket layout', () => {
     expect(()=>createPrintTicketSnapshot({...source,kind:'cashier_payment'})).toThrow('票种')
   })
 
+  it('brands new checkout snapshots while retaining historical summaries and financial facts', () => {
+    const original = createPrintTicketSnapshot({...ticket('cashier_payment'), kind:'order_summary', test:false,
+      subtitle:'M-BOX · 本桌次完整消费账单', payment:null, totalAmountMinor:null,
+      lines:[{name:'原订单应付',quantity:1,totalAmountMinor:40800},
+        {name:'桌次实际收款',quantity:1,totalAmountMinor:10800}]})
+    const checkout = createPrintTicketSnapshot({...original,documentRole:'checkout',
+      subtitle:'陆家嘴中心 L+MALL · 本桌次完整消费账单'})
+    expect(parsePrintTicketSnapshot(ticketToJson(checkout))).toEqual(checkout)
+    expect(checkout.title).toBe('结账单')
+    expect(checkout.lines).toEqual(original.lines)
+    expect(checkout.totalAmountMinor).toBeNull()
+    expect(parsePrintTicketSnapshot(ticketToJson(original)).title).toBe('订单汇总单（非制作指令）')
+    expect(ticketToJson(original)).not.toHaveProperty('documentRole')
+    for (const paper of ['58mm','80mm'] as const) {
+      const html = renderPrintTicketHtml(checkout,{paper,thermal:true})
+      expect(html).toContain('<p class="venue">陆家嘴中心 L+MALL</p><h1>结账单</h1>')
+      expect(html.match(/陆家嘴中心 L\+MALL/g)).toHaveLength(1)
+      expect(html).not.toContain('非制作')
+      expect(html).not.toContain('系统打印测试')
+      expect(html).toContain('¥408.00')
+      expect(html).toContain('¥108.00')
+    }
+    const pages = paginatePrintTicket({...checkout,lines:Array.from({length:61},()=>original.lines[0])})
+    expect(pages.map(page=>parsePrintTicketSnapshot(ticketToJson(page)).title)).toEqual(['结账单','结账单'])
+    expect(()=>createPrintTicketSnapshot({...checkout,kind:'bar_production'})).toThrow('票种')
+    expect(()=>parsePrintTicketSnapshot({...ticketToJson(checkout),documentRole:'unknown'})).toThrow('用途')
+  })
+
   it('renders historical unit prices without deriving them from discounted totals', () => {
     const source = createPrintTicketSnapshot({...ticket('cashier_settlement'), lines: [
       {name:'啤酒',quantity:4,unitAmountMinor:4000,totalAmountMinor:12000},

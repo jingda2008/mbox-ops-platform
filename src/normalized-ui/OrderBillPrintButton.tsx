@@ -39,7 +39,7 @@ function BillPrintAction({api,orderId,employeeId,businessDate,endDate,tableSessi
     finally{active.current=false;setBusy(false)}
   }
   return <div><button type="button" disabled={busy||queued} aria-busy={busy} onClick={()=>void request()}>
-    {queued?'已生成打印任务':busy?'正在确认打印任务':message?'核对本次打印请求':tableSessionId?'打印整桌次完整账单':businessDate?'扎账 · 打印所选期间全店账单':'手动打印本单账单'}
+    {queued?'已生成打印任务':busy?'正在确认打印任务':message?'核对本次打印请求':tableSessionId?'打印结账单（整桌）':businessDate?'扎账 · 打印所选期间全店账单':'手动打印本单账单'}
   </button>{message&&<p role="status">{message}</p>}{receipt&&<details><summary>本次打印任务</summary><p>请求号：{receipt.requestId}</p>{receipt.jobIds?.map(id=><p key={id}>{id}</p>)}<button type="button" disabled={busy} onClick={()=>void checkProgress()}>核对任务进度</button></details>}{queued&&<button type="button" disabled={busy} onClick={()=>{if(active.current)return;key.current=null;try{sessionStorage.removeItem(storageKey)}catch{/* Optional storage. */}setReceipt(null);setQueued(false);setMessage('下次点击将生成新的金额快照和新票，请先确认上一张打印结果。')}}>按最新金额生成新账单</button>}</div>
 }
 

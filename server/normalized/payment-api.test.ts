@@ -1,5 +1,7 @@
 import {RefundRequiresCaseDecisionError} from './refund-case-decision.js'
-import { createHash } from 'node:crypto'
+import { createHash, generateKeyPairSync, constants, privateEncrypt } from 'node:crypto'
+import { PostarRsaPaymentProviderVerifier, canonicalPostarSignString } from './postar-provider-verifier.js'
+import type { JsonObject } from './command-executor.js'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { IdempotencyConflictError } from './command-executor.js'
@@ -309,6 +311,94 @@ function fixture(overrides: Partial<PaymentApiOptions> = {}, logs?:string[]) {
 }
 
 describe('paymentApiPlugin', () => {
+  const callbackKeys = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  function signedCallback(fields: JsonObject) {
+    const digest = createHash('sha256').update(canonicalPostarSignString(fields)).digest('hex')
+    return { ...fields, sign: privateEncrypt({ key: callbackKeys.privateKey, padding: constants.RSA_PKCS1_PADDING }, Buffer.from(digest)).toString('base64') }
+  }
+  function callbackFixture(logs?: string[]) {
+    const recordFee = vi.fn(async () => 'verified-fee-receipt')
+    const recordPayment = vi.fn(async () => verifiedPaymentObservationId)
+    const recordRefund = vi.fn(async () => verifiedRefundObservationId)
+    return { ...fixture({ providerVerifier: new PostarRsaPaymentProviderVerifier({ bindings: [{
+      agencyId: trustedMerchant.agencyId, merchantId: trustedMerchant.merchantId,
+      scope: trustedMerchant.scope, publicKey: callbackKeys.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+    }] }), providerObservations: { recordFee, recordPayment, recordRefund } }, logs), recordFee, recordPayment, recordRefund }
+  }
+  const callbackFields = { AGET_ID: trustedMerchant.agencyId, CUST_ID: trustedMerchant.merchantId,
+    THREE_ORDER_NO: payment.publicId, ORDER_NO: 'POSTAR-TX-0001', TXAMT: '8800',
+    NETR_AMT: '8800', CUST_FEE: '0', ORDER_TIME: '20260811200506', NOTIFY_TYPE: '01' }
+
+  it.each(['payments', 'refunds'])('persists signed fees on the %s URL without issuing a financial command', async (route) => {
+    const value = callbackFixture()
+    const payload = signedCallback(callbackFields)
+    for (let n = 0; n < 2; n++) {
+      const response = await value.app.inject({ method: 'POST', url: `/api/${route}/providers/postar/callback`, payload })
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toEqual({ rspCod: '000000', rspMsg: 'success' })
+    }
+    expect(value.recordFee).toHaveBeenCalledTimes(2)
+    expect(value.recordFee.mock.calls[0]).toEqual(value.recordFee.mock.calls[1])
+    expect(value.commands.recordSucceededCallback).not.toHaveBeenCalled()
+    expect(value.commands.recordProviderRefundResult).not.toHaveBeenCalled()
+    expect(value.recordPayment).not.toHaveBeenCalled()
+    expect(value.recordRefund).not.toHaveBeenCalled()
+  })
+
+  it('does not acknowledge a fee when durable storage fails', async () => {
+    const value = callbackFixture()
+    value.recordFee.mockRejectedValueOnce(new Error('database unavailable'))
+    const response = await value.app.inject({ method: 'POST', url: '/api/payments/providers/postar/callback', payload: signedCallback(callbackFields) })
+    expect(response.statusCode).toBe(500)
+    expect(response.json()).not.toHaveProperty('rspMsg')
+    expect(value.commands.recordSucceededCallback).not.toHaveBeenCalled()
+  })
+
+  it.each(['3', '4', '5'])('routes refund status %s from the payment URL to refund authority only', async (status) => {
+    const value = callbackFixture()
+    const response = await value.app.inject({ method: 'POST', url: '/api/payments/providers/postar/callback', payload: signedCallback({
+      ...callbackFields, NOTIFY_TYPE: '00', ORDER_STATUS: status, TXAMT: '-1000',
+      THREE_ORDER_NO: refund.publicId, ORDER_NO: 'POSTAR-REFUND-0001', OLD_ORDER_NO: 'POSTAR-TX-0001',
+    }) })
+    expect(response.statusCode).toBe(200)
+    expect(value.recordRefund).toHaveBeenCalledWith(expect.objectContaining({ status: status === '5' ? 'processing' : status === '4' ? 'succeeded' : 'failed' }))
+    expect(value.commands.recordProviderRefundResult).toHaveBeenCalledTimes(status === '5' ? 0 : 1)
+    expect(value.commands.recordSucceededCallback).not.toHaveBeenCalled()
+  })
+
+  it('continues to process signed successful payments on the shared dispatcher', async () => {
+    const value = callbackFixture()
+    const response = await value.app.inject({ method: 'POST', url: '/api/payments/providers/postar/callback', payload: signedCallback({
+      ...callbackFields, NOTIFY_TYPE: '00', ORDER_STATUS: '1', PAY_CHANNEL: '2',
+    }) })
+    expect(response.statusCode).toBe(200)
+    expect(value.commands.recordSucceededCallback).toHaveBeenCalledTimes(1)
+    expect(value.recordFee).not.toHaveBeenCalled()
+  })
+
+  it('classifies malformed signed notifications separately and logs only redacted diagnostics', async () => {
+    const logs: string[] = []
+    const value = callbackFixture(logs)
+    const payload = signedCallback({ ...callbackFields, NOTIFY_TYPE: 'unknown', OPEN_ID: 'private-openid' })
+    const response = await value.app.inject({ method: 'POST', url: '/api/payments/providers/postar/callback', payload })
+    expect(response.statusCode).toBe(400)
+    expect(response.json().error.code).toBe('PROVIDER_NOTIFICATION_INVALID')
+    expect(logs.join('')).toContain('provider_notification_rejected')
+    expect(logs.join('')).toContain('invalid_payload')
+    expect(logs.join('')).not.toContain('private-openid')
+    expect(logs.join('')).not.toContain(payload.sign)
+    expect(value.recordFee).not.toHaveBeenCalled()
+  })
+
+  it('rejects tampered fee data with 401 and unsupported signed states with 422', async () => {
+    const value = callbackFixture()
+    const url = '/api/payments/providers/postar/callback'
+    expect((await value.app.inject({ method: 'POST', url, payload: { ...signedCallback(callbackFields), CUST_FEE: '99' } })).statusCode).toBe(401)
+    expect((await value.app.inject({ method: 'POST', url, payload: signedCallback({ ...callbackFields, NOTIFY_TYPE: '00', ORDER_STATUS: 'unknown' }) })).statusCode).toBe(422)
+    expect(value.recordFee).not.toHaveBeenCalled()
+    expect(value.commands.recordSucceededCallback).not.toHaveBeenCalled()
+  })
+
   it('releases an unresolved online attempt locally without depending on provider query or close', async () => {
     const query = vi.fn(async () => { throw new Error('provider query must not run') })
     const close = vi.fn(async () => { throw new Error('provider close must not run') })

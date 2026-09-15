@@ -168,7 +168,26 @@ export interface VerifiedRefundCallback {
   evidence?: JsonObject
 }
 
+export interface VerifiedFeeNotification {
+  merchant: TrustedProviderMerchantIdentity
+  eventId: string
+  merchantOrderId: string
+  providerOrderId: string
+  amountMinor: number
+  netAmountMinor: number
+  feeMinor: number
+  occurredAt: string
+  evidenceHash: string
+}
+
+export type VerifiedProviderNotification =
+  | { kind: 'payment'; value: VerifiedPaymentCallback }
+  | { kind: 'refund'; value: VerifiedRefundCallback }
+  | { kind: 'refund_processing'; value: VerifiedRefundCallback }
+  | { kind: 'fee'; value: VerifiedFeeNotification }
+
 export interface PaymentProviderVerifier {
+  verifyNotification?(input: Readonly<ProviderVerificationInput>): Promise<VerifiedProviderNotification>
   verifyPaymentCallback(input: Readonly<ProviderVerificationInput>): Promise<VerifiedPaymentCallback>
   verifyRefundCallback(input: Readonly<ProviderVerificationInput>): Promise<VerifiedRefundCallback>
 }
@@ -231,7 +250,8 @@ interface ApiErrorBody {
 }
 
 export class PaymentProviderVerificationError extends Error {
-  constructor(message = '支付机构通知验签失败') {
+  constructor(message = '支付机构通知验签失败',
+    readonly reason: 'signature_invalid' | 'merchant_unbound' | 'invalid_payload' | 'unsupported_notification' = 'signature_invalid') {
     super(message)
     this.name = 'PaymentProviderVerificationError'
   }
@@ -560,57 +580,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
     '/payments/providers/:provider/callback',
     async (request, reply) => handleRoute(reply, async () => {
       const provider = readCallbackProvider(request.params.provider)
-      const verified = await verifyPaymentCallback(options, request, provider)
-      assertVerifiedMerchantProvider(verified.merchant, provider)
-      const context = await verifiedProviderContext(options, verified.merchant)
-      const idempotencyKey = providerIdempotencyKey(provider, 'payment', verified.businessIdentity)
-      const actor: AuditActor = { type: 'integration', ref: verified.merchant.integrationRef }
-      const providerSnapshot = verifiedSnapshot(verified.evidence, verified.eventId, verified.occurredAt)
-      const verifiedObservationId = await options.providerObservations.recordPayment({
-        scope: context.scope,
-        provider,
-        verificationKind: 'callback_signature',
-        providerEventId: verified.eventId,
-        integrationRef: verified.merchant.integrationRef,
-        paymentPublicId: verified.paymentPublicId,
-        providerTransactionId: verified.providerTransactionId,
-        reportedAmountMinor: verified.amountMinor,
-        reportedCurrency: verified.currency,
-        status: 'succeeded',
-        settlementChannel: verified.settlementChannel,
-        occurredAt: verified.occurredAt,
-        evidence: providerSnapshot,
-      })
-      await options.commands.recordSucceededCallback({
-        ...metadata(request, { ...context, actor }, idempotencyKey, {
-          paymentPublicId: verified.paymentPublicId,
-          provider,
-          providerTransactionId: verified.providerTransactionId,
-          reportedAmountMinor: verified.amountMinor,
-          reportedCurrency: verified.currency,
-          occurredAt: verified.occurredAt,
-          providerSnapshot,
-          verifiedObservationId,
-        }),
-        verifiedObservationId,
-        paymentPublicId: readString(verified.paymentPublicId, 'paymentPublicId', 128, 8),
-        provider,
-        providerTransactionId: readString(
-          verified.providerTransactionId,
-          'providerTransactionId',
-          256,
-        ),
-        reportedAmountMinor: readPositiveMinor(verified.amountMinor, 'amountMinor'),
-        reportedCurrency: readCurrency(verified.currency),
-        settlementChannel: verified.settlementChannel,
-        providerSnapshot,
-        occurredAt: readTimestamp(verified.occurredAt, 'occurredAt'),
-      }).catch((error: unknown) => {
-        reply.log.error({event:'verified_payment_callback_apply_failed',paymentPublicId:verified.paymentPublicId,
-          verifiedObservationId,errorCode:safePaymentErrorCode(error),errorLocation:safePaymentErrorLocation(error)}, 'Verified payment callback could not be applied')
-        throw error
-      })
-      return reply.send(providerAcknowledgement())
+      return receiveProviderNotification(options, request, reply, provider, 'payment')
     }),
   )
 
@@ -763,57 +733,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
     '/refunds/providers/:provider/callback',
     async (request, reply) => handleRoute(reply, async () => {
       const provider = readCallbackProvider(request.params.provider)
-      const verified = await verifyRefundCallback(options, request, provider)
-      assertVerifiedMerchantProvider(verified.merchant, provider)
-      if (verified.provider !== provider) throw new PaymentProviderVerificationError()
-      const context = await verifiedProviderContext(options, verified.merchant)
-      const idempotencyKey = providerIdempotencyKey(provider, 'refund', verified.businessIdentity)
-      const actor: AuditActor = { type: 'integration', ref: verified.merchant.integrationRef }
-      const providerSnapshot = verifiedSnapshot(verified.evidence, verified.eventId, verified.occurredAt)
-      const verifiedObservationId = await options.providerObservations.recordRefund({
-        scope: context.scope,
-        provider,
-        verificationKind: 'callback_signature',
-        providerEventId: verified.eventId,
-        integrationRef: verified.merchant.integrationRef,
-        refundPublicId: verified.refundPublicId,
-        providerTransactionId: verified.providerRefundId,
-        originalProviderTransactionId: verified.originalProviderTransactionId,
-        reportedAmountMinor: verified.amountMinor,
-        reportedCurrency: verified.currency,
-        status: verified.succeeded ? 'succeeded' : 'failed',
-        occurredAt: verified.occurredAt,
-        evidence: providerSnapshot,
-      })
-      await options.commands.recordProviderRefundResult({
-        ...metadata(request, { ...context, actor }, idempotencyKey, {
-          refundPublicId: verified.refundPublicId,
-          provider,
-          succeeded: verified.succeeded,
-          providerRefundId: verified.providerRefundId,
-          originalProviderTransactionId: verified.originalProviderTransactionId,
-          reportedAmountMinor: verified.amountMinor,
-          reportedCurrency: verified.currency,
-          providerSnapshot,
-          verifiedObservationId,
-          occurredAt: verified.occurredAt,
-        }),
-        verifiedObservationId,
-        refundPublicId: readString(verified.refundPublicId, 'refundPublicId', 128, 8),
-        provider,
-        succeeded: verified.succeeded,
-        providerRefundId: readString(verified.providerRefundId, 'providerRefundId', 256),
-        originalProviderTransactionId: readString(
-          verified.originalProviderTransactionId,
-          'originalProviderTransactionId',
-          256,
-        ),
-        reportedAmountMinor: readPositiveMinor(verified.amountMinor, 'amountMinor'),
-        reportedCurrency: readCurrency(verified.currency),
-        providerSnapshot,
-        occurredAt: readTimestamp(verified.occurredAt, 'occurredAt'),
-      })
-      return reply.send(providerAcknowledgement())
+      return receiveProviderNotification(options, request, reply, provider, 'refund')
     }),
   )
 
@@ -1546,6 +1466,13 @@ async function handleRoute(
     return await operation()
   } catch (error) {
     const mapped = mapError(error)
+    if (error instanceof PaymentProviderVerificationError) {
+      const raw = (reply.request as RequestWithRawBody)[rawBodySymbol]
+      reply.log.warn({ event: 'provider_notification_rejected', reason: error.reason,
+        detail: error.message, requestId: reply.request.id, route: reply.request.routeOptions.url,
+        bodyBytes: raw?.length, bodySha256: raw ? createHash('sha256').update(raw).digest('hex') : undefined,
+      }, 'Provider notification rejected')
+    }
     if(error instanceof RefundRequiresCaseDecisionError) reply.log.info({event:"refund_case_decision_required",command:reply.request.routeOptions.url,tenantId:error.scope.tenantId,storeId:error.scope.storeId,stage:"refund_decision_guard",refundId:error.refundId,caseId:error.caseId,errorCode:error.code,requestId:reply.request.id},"Refund decision belongs to the original after-sales case")
     if (mapped.statusCode >= 500) reply.log.error({
       event: 'payment_command_failed', requestId:reply.request.id, command:reply.request.routeOptions.url, constraint:safePaymentConstraint(error), errorCode: safePaymentErrorCode(error),errorLocation:safePaymentErrorLocation(error),
@@ -1565,7 +1492,14 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
     return apiError(401, 'AUTH_REQUIRED', '登录信息无效或已过期，请重新登录')
   }
   if (error instanceof PaymentProviderVerificationError) {
-    return apiError(401, 'PROVIDER_SIGNATURE_INVALID', '支付机构通知验签失败')
+    const errors = {
+      signature_invalid: [401, 'PROVIDER_SIGNATURE_INVALID', '支付机构通知验签失败'],
+      merchant_unbound: [401, 'PROVIDER_MERCHANT_UNBOUND', '支付机构商户未绑定'],
+      invalid_payload: [400, 'PROVIDER_NOTIFICATION_INVALID', '支付机构通知字段或格式无效'],
+      unsupported_notification: [422, 'PROVIDER_NOTIFICATION_UNSUPPORTED', '暂不支持该支付机构通知类型或状态'],
+    } as const
+    const [status, code, message] = errors[error.reason]
+    return apiError(status, code, message)
   }
   if (
     error instanceof PaymentAuthorizationError
@@ -1708,4 +1642,138 @@ function safePaymentConstraint(error:unknown):string|undefined{
   if(typeof error!=="object"||error===null||!("constraint" in error))return undefined
   const value=error.constraint
   return typeof value==='string'&&/^[a-z][a-z0-9_]{0,95}$/.test(value)?value:undefined
+}
+
+async function applyVerifiedPayment(options: PaymentApiOptions, request: FastifyRequest, reply: FastifyReply, provider: Extract<OnlinePaymentProvider, 'wechat' | 'postar'>, verified: VerifiedPaymentCallback): Promise<FastifyReply> {
+  assertVerifiedMerchantProvider(verified.merchant, provider)
+  const context = await verifiedProviderContext(options, verified.merchant)
+  const idempotencyKey = providerIdempotencyKey(provider, 'payment', verified.businessIdentity)
+  const actor: AuditActor = { type: 'integration', ref: verified.merchant.integrationRef }
+  const providerSnapshot = verifiedSnapshot(verified.evidence, verified.eventId, verified.occurredAt)
+  const verifiedObservationId = await options.providerObservations.recordPayment({
+    scope: context.scope,
+    provider,
+    verificationKind: 'callback_signature',
+    providerEventId: verified.eventId,
+    integrationRef: verified.merchant.integrationRef,
+    paymentPublicId: verified.paymentPublicId,
+    providerTransactionId: verified.providerTransactionId,
+    reportedAmountMinor: verified.amountMinor,
+    reportedCurrency: verified.currency,
+    status: 'succeeded',
+    settlementChannel: verified.settlementChannel,
+    occurredAt: verified.occurredAt,
+    evidence: providerSnapshot,
+  })
+  await options.commands.recordSucceededCallback({
+    ...metadata(request, { ...context, actor }, idempotencyKey, {
+      paymentPublicId: verified.paymentPublicId,
+      provider,
+      providerTransactionId: verified.providerTransactionId,
+      reportedAmountMinor: verified.amountMinor,
+      reportedCurrency: verified.currency,
+      occurredAt: verified.occurredAt,
+      providerSnapshot,
+      verifiedObservationId,
+    }),
+    verifiedObservationId,
+    paymentPublicId: readString(verified.paymentPublicId, 'paymentPublicId', 128, 8),
+    provider,
+    providerTransactionId: readString(
+      verified.providerTransactionId,
+      'providerTransactionId',
+      256,
+    ),
+    reportedAmountMinor: readPositiveMinor(verified.amountMinor, 'amountMinor'),
+    reportedCurrency: readCurrency(verified.currency),
+    settlementChannel: verified.settlementChannel,
+    providerSnapshot,
+    occurredAt: readTimestamp(verified.occurredAt, 'occurredAt'),
+  }).catch((error: unknown) => {
+    reply.log.error({event:'verified_payment_callback_apply_failed',paymentPublicId:verified.paymentPublicId,
+      verifiedObservationId,errorCode:safePaymentErrorCode(error),errorLocation:safePaymentErrorLocation(error)}, 'Verified payment callback could not be applied')
+    throw error
+  })
+  return reply.send(providerAcknowledgement())
+}
+
+async function applyVerifiedRefund(options: PaymentApiOptions, request: FastifyRequest, reply: FastifyReply, provider: Extract<OnlinePaymentProvider, 'wechat' | 'postar'>, verified: VerifiedRefundCallback, processing = false): Promise<FastifyReply> {
+  assertVerifiedMerchantProvider(verified.merchant, provider)
+  if (verified.provider !== provider) throw new PaymentProviderVerificationError()
+  const context = await verifiedProviderContext(options, verified.merchant)
+  const idempotencyKey = providerIdempotencyKey(provider, 'refund', verified.businessIdentity)
+  const actor: AuditActor = { type: 'integration', ref: verified.merchant.integrationRef }
+  const providerSnapshot = verifiedSnapshot(verified.evidence, verified.eventId, verified.occurredAt)
+  const verifiedObservationId = await options.providerObservations.recordRefund({
+    scope: context.scope,
+    provider,
+    verificationKind: 'callback_signature',
+    providerEventId: verified.eventId,
+    integrationRef: verified.merchant.integrationRef,
+    refundPublicId: verified.refundPublicId,
+    providerTransactionId: verified.providerRefundId,
+    originalProviderTransactionId: verified.originalProviderTransactionId,
+    reportedAmountMinor: verified.amountMinor,
+    reportedCurrency: verified.currency,
+    status: processing ? 'processing' : verified.succeeded ? 'succeeded' : 'failed',
+    occurredAt: verified.occurredAt,
+    evidence: providerSnapshot,
+  })
+  if (processing) return reply.send(providerAcknowledgement())
+  await options.commands.recordProviderRefundResult({
+    ...metadata(request, { ...context, actor }, idempotencyKey, {
+      refundPublicId: verified.refundPublicId,
+      provider,
+      succeeded: verified.succeeded,
+      providerRefundId: verified.providerRefundId,
+      originalProviderTransactionId: verified.originalProviderTransactionId,
+      reportedAmountMinor: verified.amountMinor,
+      reportedCurrency: verified.currency,
+      providerSnapshot,
+      verifiedObservationId,
+      occurredAt: verified.occurredAt,
+    }),
+    verifiedObservationId,
+    refundPublicId: readString(verified.refundPublicId, 'refundPublicId', 128, 8),
+    provider,
+    succeeded: verified.succeeded,
+    providerRefundId: readString(verified.providerRefundId, 'providerRefundId', 256),
+    originalProviderTransactionId: readString(
+      verified.originalProviderTransactionId,
+      'originalProviderTransactionId',
+      256,
+    ),
+    reportedAmountMinor: readPositiveMinor(verified.amountMinor, 'amountMinor'),
+    reportedCurrency: readCurrency(verified.currency),
+    providerSnapshot,
+    occurredAt: readTimestamp(verified.occurredAt, 'occurredAt'),
+  })
+  return reply.send(providerAcknowledgement())
+}
+
+async function receiveProviderNotification(
+  options: PaymentApiOptions, request: FastifyRequest, reply: FastifyReply,
+  provider: Extract<OnlinePaymentProvider, 'wechat' | 'postar'>, routeKind: 'payment' | 'refund',
+): Promise<FastifyReply> {
+  const notification = options.providerVerifier.verifyNotification
+    ? await options.providerVerifier.verifyNotification({
+      provider, headers: request.headers, rawBody: readCapturedRawBody(request), body: request.body,
+    })
+    : routeKind === 'payment'
+      ? { kind: 'payment' as const, value: await verifyPaymentCallback(options, request, provider) }
+      : { kind: 'refund' as const, value: await verifyRefundCallback(options, request, provider) }
+  if (notification.kind === 'payment') {
+    return applyVerifiedPayment(options, request, reply, provider, notification.value)
+  }
+  if (notification.kind === 'refund' || notification.kind === 'refund_processing') {
+    return applyVerifiedRefund(options, request, reply, provider, notification.value, notification.kind === 'refund_processing')
+  }
+  const fee = notification.value
+  assertVerifiedMerchantProvider(fee.merchant, provider)
+  if (!options.providerObservations.recordFee) throw new Error('Fee notification persistence unavailable')
+  const receiptId = await options.providerObservations.recordFee({ ...fee, scope: fee.merchant.scope,
+    integrationRef: fee.merchant.integrationRef })
+  reply.log.info({ event: 'provider_fee_notification_recorded', receiptId, eventId: fee.eventId,
+    requestId: request.id }, 'Verified fee receipt persisted without changing payment status')
+  return reply.send(providerAcknowledgement())
 }

@@ -108,6 +108,29 @@ integration('verified provider observation PostgreSQL authority', () => {
 
   afterAll(async () => pool?.end())
 
+  it('durably deduplicates concurrent fee receipts before a payment exists without creating payment authority', async () => {
+    const input = { scope: { tenantId, storeId }, eventId: 'fee-event-before-payment', integrationRef: 'postar-test',
+      merchantOrderId: 'unseen-payment-0001', providerOrderId: 'FEE-PROVIDER-TX', amountMinor: 10800,
+      netAmountMinor: 10735, feeMinor: 65, occurredAt: '2026-09-15T16:27:02.000Z', evidenceHash: 'a'.repeat(64) }
+    const ids = await Promise.all(Array.from({ length: 8 }, () => observations.recordFee(input)))
+    expect(new Set(ids).size).toBe(1)
+    expect(await observations.recordFee(input)).toBe(ids[0])
+    await expect(observations.recordFee({ ...input, feeMinor: 99 })).rejects.toThrow('Conflicting')
+    expect((await pool.query(`SELECT count(*)::int n FROM mbox.provider_fee_notifications WHERE tenant_id=$1 AND provider_event_id=$2`, [tenantId, input.eventId])).rows[0].n).toBe(1)
+    expect((await pool.query(`SELECT count(*)::int n FROM mbox.verified_provider_observations WHERE tenant_id=$1 AND provider_event_id=$2`, [tenantId, input.eventId])).rows[0].n).toBe(0)
+    expect((await pool.query(`SELECT count(*)::int n FROM mbox.payments WHERE tenant_id=$1 AND public_id=$2`, [tenantId, input.merchantOrderId])).rows[0].n).toBe(0)
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      await client.query('SET LOCAL ROLE mbox_runtime')
+      await client.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.store_id',$2,true)", [tenantId, otherStoreId])
+      expect((await client.query('SELECT id FROM mbox.provider_fee_notifications WHERE id=$1', [ids[0]])).rowCount).toBe(0)
+      await client.query("SELECT set_config('app.store_id',$1,true)", [storeId])
+      expect((await client.query('SELECT id FROM mbox.provider_fee_notifications WHERE id=$1', [ids[0]])).rowCount).toBe(1)
+      await expect(client.query('UPDATE mbox.provider_fee_notifications SET fee_minor=0 WHERE id=$1', [ids[0]])).rejects.toMatchObject({ code: '42501' })
+    } finally { await client.query('ROLLBACK'); client.release() }
+  })
+
   it('records, exactly binds and consumes a callback observation once', async () => {
     const observationId = await observations.recordPayment({
       scope: { tenantId, storeId }, provider: 'postar',

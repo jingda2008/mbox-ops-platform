@@ -26,6 +26,57 @@ function verifier() {
 }
 
 describe('PostarRsaPaymentProviderVerifier', () => {
+  const feeFields = {
+    AGET_ID: agencyId, CUST_ID: merchantId, THREE_ORDER_NO: 'payment-public-0001',
+    ORDER_NO: 'POSTAR-TX-0001', TXAMT: '10800', NETR_AMT: '10735', CUST_FEE: '65',
+    NOTIFY_TYPE: '01', ORDER_TIME: '20260916002702',
+  }
+
+  it('recognizes the official fee notification without ORDER_STATUS and never treats it as payment authority', async () => {
+    const fields = signedNotification({ ...feeFields, OPEN_ID: 'private-customer', FUTURE_FIELD: 'supported' })
+    const result = await verifier().verifyNotification(request(fields))
+    expect(result).toMatchObject({ kind: 'fee', value: { amountMinor: 10800, netAmountMinor: 10735, feeMinor: 65 } })
+    expect(JSON.stringify(result)).not.toContain('private-customer')
+    expect(JSON.stringify(result)).not.toContain(String(fields.sign))
+    expect(await verifier().verifyNotification(request(fields))).toEqual(result)
+    await expect(verifier().verifyPaymentCallback(request(fields))).rejects.toMatchObject({ reason: 'unsupported_notification' })
+    await expect(verifier().verifyRefundCallback(request(fields))).rejects.toMatchObject({ reason: 'unsupported_notification' })
+  })
+
+  it('preserves signed refund fees and zero fees without inventing a financial terminal state', async () => {
+    expect(await verifier().verifyNotification(request(signedNotification({ ...feeFields,
+      TXAMT: '-10800', NETR_AMT: '-10800', CUST_FEE: '0' }))))
+      .toMatchObject({ kind: 'fee', value: { amountMinor: -10800, netAmountMinor: -10800, feeMinor: 0 } })
+  })
+
+  it.each(['NETR_AMT', 'CUST_FEE', 'TXAMT'])('rejects malformed %s even with a valid signature', async (field) => {
+    await expect(verifier().verifyNotification(request(signedNotification({ ...feeFields, [field]: '1.5' }))))
+      .rejects.toMatchObject({ reason: 'invalid_payload' })
+  })
+
+  it('rejects tampered fees before type dispatch and distinguishes unbound merchants', async () => {
+    const fields = signedNotification(feeFields)
+    await expect(verifier().verifyNotification(request({ ...fields, CUST_FEE: '1' })))
+      .rejects.toMatchObject({ reason: 'signature_invalid' })
+    await expect(verifier().verifyNotification(request(signedNotification({ ...feeFields, CUST_ID: 'unknown' }))))
+      .rejects.toMatchObject({ reason: 'merchant_unbound' })
+  })
+
+  it.each(['3', '4', '5'])('dispatches signed refund status %s on the shared notification contract', async (status) => {
+    const result = await verifier().verifyNotification(request(signedNotification({
+      ...feeFields, NOTIFY_TYPE: 'other', ORDER_STATUS: status, TXAMT: '-10800', OLD_ORDER_NO: 'ORIGINAL-TX',
+    })))
+    expect(result.kind).toBe(status === '5' ? 'refund_processing' : 'refund')
+    expect(result.value).toMatchObject({ amountMinor: 10800, succeeded: status === '4' })
+  })
+
+  it('does not acknowledge unknown or missing transaction states as fees', async () => {
+    await expect(verifier().verifyNotification(request(signedNotification({ ...feeFields, NOTIFY_TYPE: '99' }))))
+      .rejects.toMatchObject({ reason: 'invalid_payload' })
+    await expect(verifier().verifyNotification(request(signedNotification({ ...feeFields, NOTIFY_TYPE: '99', ORDER_STATUS: 'unknown' }))))
+      .rejects.toMatchObject({ reason: 'unsupported_notification' })
+  })
+
   it('verifies a real RSA payment callback and returns only the configured merchant binding', async () => {
     const fields = signedNotification({
       AGET_ID: agencyId,

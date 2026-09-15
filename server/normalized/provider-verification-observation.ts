@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import type { VerifiedFeeNotification } from './payment-api.js'
 import type { ChannelPaymentStatus } from '../../src/shared/payment-contracts.js'
 import type { JsonObject, JsonValue } from './command-executor.js'
 import type {
@@ -71,7 +72,13 @@ export interface ProviderObservationAuthorityPort {
   consume(input: Readonly<ConsumeVerifiedProviderObservationInput>): Promise<void>
 }
 
+export type RecordVerifiedFeeInput = Omit<VerifiedFeeNotification, 'merchant'> & {
+  scope: Readonly<StoreScope>
+  integrationRef: string
+}
+
 export interface ProviderObservationRecorderPort {
+  recordFee?(input: Readonly<RecordVerifiedFeeInput>): Promise<string>
   recordPayment(input: Readonly<RecordVerifiedPaymentObservationInput>): Promise<string>
   recordRefund(input: Readonly<RecordVerifiedRefundObservationInput>): Promise<string>
 }
@@ -132,6 +139,41 @@ export class ProviderObservationAuthorizationError extends Error {
 
 export class VerifiedProviderObservationService implements ProviderObservationRecorderPort {
   constructor(private readonly transactions: Pick<ScopedPostgresTransactionRunner, 'run'>) {}
+
+  // Deliberately separate from observations that authorize financial transitions.
+  // Persist before acknowledging, including fees arriving before the local result.
+  recordFee(input: Readonly<RecordVerifiedFeeInput>): Promise<string> {
+    requireText(input.eventId, 'eventId', 256)
+    requireText(input.integrationRef, 'integrationRef', 256)
+    requireText(input.merchantOrderId, 'merchantOrderId', 128)
+    requireText(input.providerOrderId, 'providerOrderId', 256)
+    if (![input.amountMinor, input.netAmountMinor, input.feeMinor].every(Number.isSafeInteger)
+      || input.amountMinor === 0 || !/^[0-9a-f]{64}$/.test(input.evidenceHash)
+      || !Number.isFinite(Date.parse(input.occurredAt))) {
+      throw new ProviderObservationAuthorizationError('Invalid verified fee receipt')
+    }
+    return this.transactions.run(input.scope, async (transaction) => {
+      const values = [input.scope.tenantId, input.scope.storeId, input.eventId, input.integrationRef,
+        input.merchantOrderId, input.providerOrderId, input.amountMinor, input.netAmountMinor,
+        input.feeMinor, input.occurredAt, input.evidenceHash]
+      const inserted = await transaction.query<{ id: string }>(`
+        INSERT INTO mbox.provider_fee_notifications
+          (tenant_id, store_id, provider_event_id, integration_ref, merchant_order_id,
+           provider_order_id, amount_minor, net_amount_minor, fee_minor, occurred_at, evidence_sha256)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        ON CONFLICT (tenant_id, store_id, provider_event_id) DO NOTHING RETURNING id
+      `, values)
+      if (inserted.rows[0]) return inserted.rows[0].id
+      const existing = await transaction.query<{ id: string }>(`
+        SELECT id FROM mbox.provider_fee_notifications
+        WHERE tenant_id=$1 AND store_id=$2 AND provider_event_id=$3 AND integration_ref=$4
+          AND merchant_order_id=$5 AND provider_order_id=$6 AND amount_minor=$7
+          AND net_amount_minor=$8 AND fee_minor=$9 AND occurred_at=$10 AND evidence_sha256=$11
+      `, values)
+      if (!existing.rows[0]) throw new ProviderObservationAuthorizationError('Conflicting verified fee receipt')
+      return existing.rows[0].id
+    })
+  }
 
   recordPayment(input: Readonly<RecordVerifiedPaymentObservationInput>): Promise<string> {
     validateMetadata(input)

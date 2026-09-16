@@ -23,3 +23,16 @@ schema205–220新增表、策略、权限目录和不可改证据；默认存�
 PR数据库CI发现先关注后登录流程依赖pgcrypto扩展函数的搜索路径。关联SQL改用内置sha256(convert_to(...))，回归测试在pg_catalog限定搜索路径下执行，并使用Node独立生成SHA-256身份样本。
 
 补齐线上容器中的两份微信域名校验文件。生产旧运行镜像与rc.204归档平台镜像身份不一致，且有订阅/CSP可写层补丁；源码归档不自动解除标准发布的旧镜像身份门禁。保持原发布清单，不将部署准备冒充实际切换。
+
+## 2026-09-16 23:34 CST 实际交付状态
+
+- 代码已推送并合并：[PR #245](https://github.com/jingda2008/mbox-ops-platform/pull/245)，合并提交`d3ee5bee31411039747090b605017299aba860e6`。合并树与通过PR CI的`92621e51b1fee4426ffea90b55b14eb48b513c6d`内容完全一致。
+- [最终PR CI 35114200568](https://github.com/jingda2008/mbox-ops-platform/actions/runs/35114200568)全部通过：完整质量、271个数据库测试文件/2259项测试、HTTP业务流程、移动端流程、持续负载和质量证据汇总。本地最终数据库2258通过/1项无容器恢复条件跳过，由该远端测试补齐；小程序脚本358通过。
+- 微信开发版`1.0.0-rc.205`通过官方开发者工具CLI上传，退出码0、显示`✔ upload`，包体988602字节；正式AppID `wxdb9f2dc413484f2d`，API `https://mbox.shmbox.com`，关闭开发数据兜底。154文件候选清单SHA256为`44721dc0a17a2e0a0655455d123ab155065be1e6a2deab4a29fb6712ae3d50f5`。上传后完整性复核通过；CLI附件仅提供包体信息，没有独立上传编号，不编造回执编号。未提交审核、未正式发布，未宣称真机/外部签名验收通过。
+- 支付宝源码未修改，未上传支付宝版本。
+- **后台未部署**。只读预检复现`activate-release.sh`的旧镜像身份检查失败：归档平台镜像`sha256:3ef29e0c316aecc3fd325cd318d51193b01d8e161f5e7816c0a564537f5ce0d8`；当前热修复镜像`sha256:838dd43e7227e791e158a318db611da0cb4b546c5a66b0a2338bc6a38afd01ab`。可写层另有订阅页/CSP补丁。不能通过改写原发布清单或关闭比较来解除门禁；需要先建立可核验的热修复回退基线，再走标准发布入口。本轮未创建推送rc.205后台标签、未调用替换部署、未改canonical环境配置、未迁移数据库、未切流，也没有新版本OSS备份/部署完成回读的声明。
+- 线上仍是rc.204热修复运行态，`/api/ready`为ready、schema204、commit `aa5e4f5b045756599c2fd5fc3bf61b6221f4a7b3`。前后8张菜单/套餐/权限表与支付、微信、支付宝、联系方式保护配置摘要一致。源开发目录107文件与发布前快照一致。
+
+本机证据位于独立发布目录`artifacts/v9-release/`：`delivery-summary.json`、`SHA256SUMS`、`pr-ci-final.json`、`pr-database-success.log`、`wechat-upload.log`、`wechat-upload-info.json`、`wechat-post-upload-integrity.json`、`previous-runtime-gate.log`、`preservation-before.json`及`preservation-after-review.json`。该目录不进入Git，不能把本地验收附件冒充平台审核或真实送达证据。
+
+SYS-236三款套餐配置、未知付款IP案例、服务号/企微实际资格与验证码送达、X5/iPhone真机、相机及实体打印仍开放。新微信开发版依赖的后台新增接口需后台部署后联调，不应提前当作已上线功能使用。

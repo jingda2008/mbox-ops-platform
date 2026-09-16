@@ -1,3 +1,4 @@
+import { customerCustodyApiPlugin } from './customer-custody-api.js'
 import {wechatServiceAccountSubscribePlugin} from './wechat-service-account-subscribe.js'
 import {socialBroadcastApiPlugin} from './social-broadcast-api.js'
 import { launchPopupApiPlugin } from './launch-popup-api.js'
@@ -854,6 +855,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     instance.register(memberNumberApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext })
     instance.register(socialBroadcastApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext })
     instance.register(launchPopupApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext, resolveSelfContext: memberSelfContext })
+    instance.register(customerCustodyApiPlugin, { prefix: '/api', transactions, resolveSelfContext: memberSelfContext, protection: activityContactProtection })
     instance.register(bottleCustodyApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext, protection: activityContactProtection })
     instance.register(socialAccountApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext, protection: activityContactProtection, scope })
     instance.register(memberGiftCampaignApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveSelfContext: memberSelfContext, resolveStaffContext: staffReservationContext })

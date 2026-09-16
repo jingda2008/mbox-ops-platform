@@ -1,6 +1,10 @@
 // Customer pages must never render a backend/WeChat error string directly.
 // Error codes are stable contracts; the fallback remains local Chinese copy.
 const CODE_MESSAGES = Object.freeze({
+  CUSTOMER_AUTHENTICATION_REQUIRED: '请先返回会员中心登录，再查看我的存酒',
+  CUSTODY_NOT_FOUND: '这张存酒单不存在或不属于当前会员，请返回存酒列表核对',
+  CUSTODY_PHOTO_NOT_FOUND: '本次存酒照片暂不可用，请联系门店核对',
+  CUSTODY_CONTACT_UNAVAILABLE: '存酒联系号码暂时无法读取，请稍后重试',
   CHECKOUT_COUPON_RECONFIRM_REQUIRED: '优惠条件已变化，请重新选券或不用券继续，本次没有创建订单',
   COUPON_UPGRADE_REQUOTE_REQUIRED: '套餐已变更，请重新确认商品和优惠报价',
   NETWORK_ERROR: '网络暂时不可用，请检查网络后重试',

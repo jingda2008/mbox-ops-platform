@@ -952,6 +952,15 @@ async function getCustomerBenefitWallet(cursor) {
   const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''
   return (await publicRequest(`/api/public/mini/customer/benefit-wallet?limit=30${suffix}`)).data
 }
+async function getCustomerBottles(cursor) {
+  return (await publicRequest('/api/public/mini/customer/bottle-custody' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : ''))).data
+}
+async function getCustomerBottle(id) {
+  return (await publicRequest('/api/public/mini/customer/bottle-custody/' + encodeURIComponent(id))).data
+}
+async function getCustomerBottlePhoto(id, depositId) {
+  return (await publicRequest('/api/public/mini/customer/bottle-custody/' + encodeURIComponent(id) + '/photos/' + encodeURIComponent(depositId))).data
+}
 async function getCustomerProfile() {
   return (await publicRequest('/api/public/mini/customer/profile')).data
 }
@@ -1030,6 +1039,7 @@ async function logoutWechatIdentity() {
 }
 
 module.exports = {
+  getCustomerBottles, getCustomerBottle, getCustomerBottlePhoto,
   getCustomerOrderHistory,
   getMemberCards, submitMemberCardAction, getMemberGiftJobs, getMarketingPreferences, updateMarketingPreferences,
   getGuestSession, getMiniBootstrap, getPrivacyPolicy, getMembershipTerms, getMiniLoyalty, getMiniLoyaltyLedger,

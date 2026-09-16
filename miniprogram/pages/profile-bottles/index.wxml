@@ -1,0 +1,17 @@
+<view class="page custody-page">
+  <view class="custody-heading"><text class="custody-eyebrow">M-BOX · 会员酒藏</text><text class="custody-title">我的存酒</text><text class="custody-copy">每一次相聚，余兴留待下次。</text></view>
+  <view class="custody-note">查看存酒单、现场照片与取存记录。取酒请联系门店工作人员。</view>
+  <view wx:if="{{error}}" class="custody-error"><text>{{error}}</text><button class="custody-button" bindtap="retry">重新读取</button><button wx:if="{{!loaded}}" class="custody-link" bindtap="openMembership">返回会员中心</button></view>
+  <button wx:for="{{items}}" wx:key="id" class="custody-card custody-list-card" data-id="{{item.id}}" bindtap="openDetail" hover-class="custody-card--hover">
+    <view class="custody-row"><text class="custody-category">{{item.category_name}}</text><text class="custody-status {{item.tone}}">{{item.statusText}}</text></view>
+    <text class="custody-item-name">{{item.item_name}}</text>
+    <view class="custody-quantity"><text class="custody-copy">剩余</text><text class="custody-number">{{item.remainingText}}</text><text class="custody-unit">{{item.unit}}</text><text class="custody-original">原存 {{item.originalText}}{{item.unit}}</text></view>
+    <view class="custody-divider"></view>
+    <view class="custody-row"><text class="custody-copy">有效至 {{item.expiryText}}</text><text class="custody-arrow">查看详情 ›</text></view>
+    <text class="custody-reference">{{item.public_id}}</text>
+  </button>
+  <view wx:if="{{loading}}" class="custody-empty">正在读取存酒记录…</view>
+  <view wx:elif="{{loaded && !items.length}}" class="custody-card custody-empty"><image class="custody-empty-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" /><text class="custody-section-title">还没有存酒记录</text><text class="custody-copy">门店完成存酒登记后，可在这里查看。</text></view>
+  <button wx:if="{{nextCursor && !loading}}" class="custody-button" bindtap="loadMore">查看更多存酒</button>
+  <text wx:if="{{loaded && items.length && !nextCursor}}" class="custody-end">已显示全部存酒记录</text>
+</view>

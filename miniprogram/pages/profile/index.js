@@ -520,6 +520,7 @@ Page({
       reservations: ['/pages/reservations/index', 'switchTab'],
       points: ['/pages/points/index', 'navigateTo'],
       orders: ['/pages/account/index', 'navigateTo'],
+      bottles: ['/pages/profile-bottles/index', 'navigateTo'],
       preferences: ['/pages/profile-preferences/index', 'navigateTo'],
       contact: ['/pages/profile-contact/index', 'navigateTo'],
       coupons: ['/pages/profile-coupons/index', 'navigateTo'],
@@ -975,6 +976,10 @@ Page({
   openPreferenceSettings() {
     if (!this.requireMembership('preferences')) return
     wx.navigateTo({ url: '/pages/profile-preferences/index' })
+  },
+  openBottles() {
+    if (!this.requireMembership('bottles')) return
+    wx.navigateTo({ url: '/pages/profile-bottles/index' })
   },
   openMarketingPreferences() {
     wx.navigateTo({ url: '/pages/profile-marketing/index' })

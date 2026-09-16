@@ -23,7 +23,8 @@ integration('v9 authoritative social card and incremental menu',()=>{
  const scope={tenantId:randomUUID(),storeId:randomUUID()},employee=randomUUID(),reviewer=randomUUID(),deniedEmployee=randomUUID(),customer=randomUUID(),other=randomUUID(),role=randomUUID(),product=randomUUID()
  const protection=createActivityContactProtectionKeyring(null,'v9-social-local-test-secret-only')
  let pool:Pool,runner:ScopedPostgresTransactionRunner,serviceId:string,wecomId:string
- const run=<T>(fn:(repo:SocialAccountRepository)=>Promise<T>)=>runner.run(scope,async tx=>{await tx.query('SET LOCAL ROLE mbox_runtime');return fn(new SocialAccountRepository(tx,protection))})
+ // Restrict lookup so a locally installed pgcrypto extension cannot hide SQL portability bugs.
+ const run=<T>(fn:(repo:SocialAccountRepository)=>Promise<T>)=>runner.run(scope,async tx=>{await tx.query('SET LOCAL ROLE mbox_runtime');await tx.query('SET LOCAL search_path = pg_catalog');return fn(new SocialAccountRepository(tx,protection))})
  beforeAll(async()=>{
   await runNormalizedMigrations(url!);pool=new Pool({connectionString:url,max:4});runner=new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool)
   await pool.query("INSERT INTO mbox.tenants(id,code,name) VALUES($1,$2,'social')",[scope.tenantId,`social-${scope.tenantId}`]);await pool.query("INSERT INTO mbox.stores(id,tenant_id,code,name) VALUES($1,$2,'social','social')",[scope.storeId,scope.tenantId])
@@ -158,9 +159,9 @@ integration('v9 authoritative social card and incremental menu',()=>{
   const union='local-union-after-follow',principal='local-principal-after-follow',externalId='follow-before-login'
   await run(repo=>repo.applyRelationship({accountId:serviceId,externalId,staffId:'',active:true,unionId:union,occurredAt:new Date().toISOString()}))
   expect((await pool.query('SELECT customer_id FROM mbox.social_relationships WHERE external_hash=$1 AND account_id=$2',[protection.protect(externalId).hash,serviceId])).rows[0].customer_id).toBeNull()
-  await pool.query("INSERT INTO mbox.customer_identities(tenant_id,store_id,customer_id,identity_kind,identity_hash) VALUES($1,$2,$3,'wechat',encode(digest('wechat:'||$4,'sha256'),'hex'))",[scope.tenantId,scope.storeId,other,principal])
+  await pool.query("INSERT INTO mbox.customer_identities(tenant_id,store_id,customer_id,identity_kind,identity_hash) VALUES($1,$2,$3,'wechat',$4)",[scope.tenantId,scope.storeId,other,createHash('sha256').update('wechat:'+principal).digest('hex')])
   await pool.query(`INSERT INTO mbox.wechat_identities(tenant_id,store_id,external_identity_id,principal_type,principal_id,channel,app_id,openid_sha256,openid_ciphertext,openid_key_version,unionid_sha256,unionid_ciphertext,unionid_key_version,consent_version,consented_at,last_authenticated_at)
-   VALUES($1,$2,'local-follow-before-login','guest',$3,'mini_program','wxLocalMiniTest',encode(digest('local-openid','sha256'),'hex'),decode(repeat('00',29),'hex'),1,encode(digest($4,'sha256'),'hex'),decode(repeat('00',29),'hex'),1,'login-v1',clock_timestamp(),clock_timestamp())`,[scope.tenantId,scope.storeId,principal,union])
+   VALUES($1,$2,'local-follow-before-login','guest',$3,'mini_program','wxLocalMiniTest',encode(sha256(convert_to('local-openid','UTF8')),'hex'),decode(repeat('00',29),'hex'),1,$4,decode(repeat('00',29),'hex'),1,'login-v1',clock_timestamp(),clock_timestamp())`,[scope.tenantId,scope.storeId,principal,createHash('sha256').update(union).digest('hex')])
   await run(repo=>repo.relinkVerifiedRelationships())
   expect(await run(repo=>repo.recipient(serviceId,other))).toBe(externalId)
  })

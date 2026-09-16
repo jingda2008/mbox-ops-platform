@@ -197,6 +197,21 @@ cp "${bundle_dir}/${catalog_config_name}" "${release_metadata}/"
 while IFS=$'\t' read -r script_name _; do
   cp "${bundle_dir}/${script_name}" "${release_metadata}/"
 done <<< "${deployment_script_rows}"
+# Explicit, release-bound reconciliation of an operator-authorized hotfix.
+# Never modify the previous immutable release manifest or reuse a stale approval.
+reconcile_previous_runtime=0
+attestation_output=${bundle_dir}/previous-runtime-attestation.json
+if [ -n "${MBOX_PREVIOUS_RUNTIME_ATTESTATION:-}" ]; then
+  test "${MBOX_PREVIOUS_RUNTIME_ATTESTATION}" != "${attestation_output}"
+  jq -e --arg sha "${release_sha}" \
+    '.targetReleaseSha == $sha and .authorization == "user-authorized-hotfix-replacement"' \
+    "${MBOX_PREVIOUS_RUNTIME_ATTESTATION}" >/dev/null
+  reconcile_previous_runtime=1
+  cp "${MBOX_PREVIOUS_RUNTIME_ATTESTATION}" "${attestation_output}"
+  cp "${attestation_output}" "${release_metadata}/"
+else
+  rm -f "${attestation_output}"
+fi
 evidence_dir=${bundle_dir}/oss-ready-evidence
 node scripts/build-aliyun-evidence-bundle.mjs \
   --output "${evidence_dir}" \
@@ -390,7 +405,7 @@ if [ "${uses_evidence_relay}" = 1 ]; then
   (
     set +e
     ssh "${ssh_options[@]}" "${ssh_target}" \
-      "'${remote_release_dir}/activate-release.sh' '${remote_release_dir}' '${deployment_tier}' '${public_url}' '${backup_max_age_minutes}'" \
+      "'${remote_release_dir}/activate-release.sh' '${remote_release_dir}' '${deployment_tier}' '${public_url}' '${backup_max_age_minutes}' '${reconcile_previous_runtime}'" \
       > "${activation_log}" 2>&1
     printf '%s\n' "$?" > "${activation_status}"
   ) &
@@ -479,7 +494,7 @@ if [ "${uses_evidence_relay}" = 1 ]; then
   trap - EXIT INT TERM
 else
   ssh "${ssh_options[@]}" "${ssh_target}" \
-    "'${remote_release_dir}/activate-release.sh' '${remote_release_dir}' '${deployment_tier}' '${public_url}' '${backup_max_age_minutes}'"
+    "'${remote_release_dir}/activate-release.sh' '${remote_release_dir}' '${deployment_tier}' '${public_url}' '${backup_max_age_minutes}' '${reconcile_previous_runtime}'"
 fi
 
 if ! MBOX_RELEASE_SMOKE_URL="${public_url}" \

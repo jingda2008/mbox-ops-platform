@@ -1,0 +1,34 @@
+<view class="page custody-page">
+  <view wx:if="{{loading}}" class="custody-empty">正在读取存酒单…</view>
+  <view wx:if="{{error}}" class="custody-error"><text>{{error}}</text><button class="custody-button" bindtap="load">重新读取</button><button class="custody-link" bindtap="openMembership">返回会员中心</button></view>
+  <block wx:if="{{loaded}}">
+    <view class="custody-hero"><view class="custody-row"><text class="custody-eyebrow">M-BOX · 存酒凭证</text><text class="custody-status {{order.tone}}">{{order.statusText}}</text></view><text class="custody-title">{{order.item_name}}</text><text class="custody-copy">{{order.category_name}}</text><view class="custody-quantity"><text class="custody-copy">剩余</text><text class="custody-number">{{order.remainingText}}</text><text class="custody-unit">{{order.unit}}</text><text class="custody-original">原存 {{order.originalText}}{{order.unit}}</text></view><text class="custody-hero-expiry">有效至 {{order.expiryText}}</text></view>
+    <view class="custody-card"><text class="custody-section-title">存酒单信息</text>
+      <view class="custody-field"><text>存酒编号</text><text user-select="true">{{order.public_id}}</text></view>
+      <view class="custody-field"><text>会员号</text><text user-select="true">{{order.member_no}}</text></view>
+      <view class="custody-field"><text>存入时间</text><text>{{order.storedText}}</text></view>
+      <view class="custody-field"><text>到期时间</text><text>{{order.expiryText}}</text></view>
+      <view class="custody-field"><text>存放位置</text><text>{{order.location || '未登记'}}</text></view>
+      <view class="custody-field"><text>来源凭证</text><text user-select="true">{{order.source_reference || '未登记'}}</text></view>
+      <view wx:if="{{order.source_order_number}}" class="custody-field"><text>来源订单</text><text user-select="true">{{order.source_order_number}}</text></view>
+      <view class="custody-field"><text>登记价值</text><text>{{order.valueText}}</text></view>
+      <text wx:if="{{order.declared_value_minor !== null}}" class="custody-footnote">登记价值为存酒登记信息。</text>
+      <view wx:for="{{order.extraRows}}" wx:key="key" class="custody-field"><text>{{item.label}}</text><text user-select="true">{{item.value}}</text></view>
+      <view class="custody-field"><text>备注</text><text user-select="true">{{order.note || '无'}}</text></view>
+    </view>
+    <view class="custody-section-head"><text class="custody-section-title">存酒照片</text><text class="custody-copy">{{deposits.length}}次登记 · 点击放大</text></view>
+    <view wx:if="{{!deposits.length}}" class="custody-card custody-copy">该存酒单尚无照片记录。</view>
+    <view wx:for="{{deposits}}" wx:key="id" class="custody-card custody-deposit">
+      <view class="custody-row"><text class="custody-deposit-quantity">存入 {{item.quantityText}}{{order.unit}}<text wx:if="{{item.fraction_label}}"> · {{item.fraction_label}}瓶</text></text><text class="custody-copy">{{item.timeText}}</text></view>
+      <button class="custody-photo-button" data-id="{{item.id}}" bindtap="photoAction" loading="{{item.photoLoading}}" aria-label="查看存酒照片">
+        <image wx:if="{{item.photoPath}}" class="custody-photo" src="{{item.photoPath}}" mode="widthFix" data-id="{{item.id}}" binderror="photoFailed" />
+        <view wx:else class="custody-photo-placeholder"><text>{{item.photoLoading ? '正在读取现场照片…' : item.photoError || '查看本次存酒照片'}}</text></view>
+      </button>
+      <view class="custody-field"><text>联系手机号</text><text user-select="true">{{item.phone || '未登记'}}</text></view>
+      <text class="custody-footnote" user-select="true">{{item.watermark}}</text>
+    </view>
+    <view wx:if="{{collections.length}}" class="custody-card"><text class="custody-section-title">取酒记录</text><view wx:for="{{collections}}" wx:key="id" class="custody-collection"><view class="custody-row"><text>取出 {{item.quantityText}}{{order.unit}}</text><text class="custody-status muted">{{item.statusText}}</text></view><text class="custody-copy">{{item.timeText}}</text><text wx:if="{{item.returned_quantity !== null}}" class="custody-copy">再存 {{item.returnedText}}{{order.unit}}</text><text wx:if="{{item.restored_order_number}}" class="custody-copy" user-select="true">再存单号：{{item.restored_order_number}}</text></view></view>
+    <view class="custody-card"><text class="custody-section-title">存酒动态</text><view wx:for="{{events}}" wx:key="key" class="custody-timeline"><view class="custody-dot"></view><view class="custody-timeline-content"><view class="custody-row"><text>{{item.title}}<text wx:if="{{item.quantityText}}"> · {{item.quantityText}}{{order.unit}}</text></text><text class="custody-copy">{{item.timeText}}</text></view><text wx:if="{{item.employee_name}}" class="custody-copy">经办人：{{item.employee_name}}</text><text wx:if="{{item.reason}}" class="custody-record-note">{{item.reason}}</text></view></view><text wx:if="{{!events.length}}" class="custody-copy">暂无动态记录</text></view>
+    <view class="custody-note">到店取酒请联系工作人员，并按门店流程完成核验。页面时间均为北京时间。</view>
+  </block>
+</view>

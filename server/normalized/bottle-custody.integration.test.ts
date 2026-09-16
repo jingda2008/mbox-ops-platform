@@ -1,4 +1,5 @@
 import sharp from 'sharp'
+import {CustomerCustodyRepository} from './customer-custody-repository.js'
 import {custodyReport} from './custody-report.js'
 import {SocialCustodyWorker} from './social-custody-worker.js'
 import {randomUUID} from 'node:crypto'
@@ -34,6 +35,41 @@ integration('v9 member custody with real PostgreSQL transactions',()=>{
  },30000)
  afterAll(async()=>pool?.end())
  const create=()=>run(repo=>repo.create(input({memberNo:'100001',categoryId:category,itemName:'测试寄存酒',unit:'瓶',quantity:'2'}),employee))
+ const self=<T>(fn:(repo:CustomerCustodyRepository)=>Promise<T>,activeScope=scope)=>runner.run(activeScope,async tx=>{await tx.query('SET LOCAL ROLE mbox_runtime');return fn(new CustomerCustodyRepository(tx,protector))},{readOnly:true})
+ it('customer list, full contact and watermarked photos remain owner and store scoped',async()=>{
+  const {order,deposits}=await create()
+  const mine=await self(repo=>repo.list(customer));expect(mine.items.some(o=>o.id===order.id)).toBe(true)
+  const detail=await self(repo=>repo.detail(customer,order.id))
+  expect(detail.order.public_id).toBe(order.public_id)
+  expect(detail.deposits[0]).toMatchObject({phone:'+8613800012345'})
+  expect(detail.deposits[0]!.watermark).toContain('M-BOX')
+  expect(detail.events[0]).toMatchObject({event_type:'stored',employee_name:'bar'})
+  expect(detail).not.toHaveProperty('challenges');expect(detail).not.toHaveProperty('reminders')
+  expect(JSON.stringify(detail)).not.toMatch(/encrypted_phone|phone_hash|phone_key_id|customer_id|employee_id|provider_reference/)
+  expect((await self(repo=>repo.photo(customer,order.id,String(deposits[0]!.id)))).length).toBeGreaterThan(100)
+  const stranger=randomUUID()
+  await pool.query('INSERT INTO mbox.customers(id,tenant_id,store_id,public_id) VALUES($1,$2,$3,$4)',[stranger,scope.tenantId,scope.storeId,`CUST-${stranger}`])
+  expect((await self(repo=>repo.list(stranger))).items).toEqual([])
+  await expect(self(repo=>repo.detail(stranger,order.id))).rejects.toMatchObject({statusCode:404})
+  await expect(self(repo=>repo.photo(stranger,order.id,String(deposits[0]!.id)))).rejects.toMatchObject({statusCode:404})
+  await expect(self(repo=>repo.detail(customer,order.id),{...scope,storeId:randomUUID()})).rejects.toMatchObject({statusCode:404})
+  const alias=randomUUID()
+  await pool.query("INSERT INTO mbox.customers(id,tenant_id,store_id,public_id,status,merged_into_customer_id) VALUES($1,$2,$3,$4,'merged',$5)",[alias,scope.tenantId,scope.storeId,`CUST-${alias}`,customer])
+  expect((await self(repo=>repo.list(alias))).items.some(o=>o.id===order.id)).toBe(true)
+  expect((await self(repo=>repo.detail(alias,order.id))).deposits[0]!.phone).toBe('+8613800012345')
+  const other=await create()
+  await expect(self(repo=>repo.photo(customer,order.id,String(other.deposits[0]!.id)))).rejects.toMatchObject({statusCode:404})
+ })
+ it('customer pagination has no duplicate or missing rows',async()=>{
+  for(let i=0;i<21;i++)await create()
+  const seen=new Set<string>();let cursor:string|undefined
+  do{const page=await self(repo=>repo.list(customer,cursor));expect(page.items.length).toBeLessThanOrEqual(20)
+   for(const row of page.items){expect(seen.has(row.id)).toBe(false);seen.add(row.id)}cursor=page.nextCursor??undefined
+  }while(cursor)
+  const count=(await pool.query('SELECT count(*)::int AS n FROM mbox.bottle_custody_orders WHERE tenant_id=$1 AND store_id=$2 AND customer_id=$3',[scope.tenantId,scope.storeId,customer])).rows[0].n
+  expect(seen.size).toBe(count)
+  expect((await self(repo=>repo.list(customer,randomUUID()))).items).toEqual([])
+ })
  async function delivered(orderId:string,quantity='2'){
   const result=await run(repo=>repo.requestCode(orderId,quantity,employee))
   const row=(await pool.query('UPDATE mbox.bottle_custody_challenges SET delivery_status=\'accepted\' WHERE id=$1 RETURNING encrypted_code,code_hash,key_id',[result.challengeId])).rows[0]
@@ -79,6 +115,8 @@ integration('v9 member custody with real PostgreSQL transactions',()=>{
   await run(repo=>repo.verify(order.id,challenge.challengeId,challenge.code,employee));const collected=await run(repo=>repo.collect(order.id,challenge.challengeId,employee))
   const archived=await run(repo=>repo.resolveCollection(order.id,collected.collections[0]!.id as string,null,employee,'顾客确认不再存'))
   expect(archived.order).toMatchObject({status:'archived',remaining_quantity:'0.000000'})
+  expect((await self(repo=>repo.detail(customer,order.id))).order.status).toBe('archived')
+  expect((await self(repo=>repo.list(customer))).items.some(item=>item.id===order.id&&item.status==='archived')).toBe(true)
   expect(archived.events.map(event=>event.event_type)).toEqual(['stored','code_requested','code_verified','collected','collection_closed','archived'])
   await expect(runner.run(scope,tx=>tx.query('DELETE FROM mbox.bottle_custody_events WHERE order_id=$1',[order.id]))).rejects.toThrow()
  })
@@ -117,6 +155,9 @@ integration('v9 member custody with real PostgreSQL transactions',()=>{
   const result=await run(repo=>repo.detail(order.id)),nextId=String(result.collections[0]!.restored_order_id)
   expect(result.order.status).toBe('archived');expect(nextId).not.toBe(order.id)
   const next=await run(repo=>repo.detail(nextId));expect(next.order.remaining_quantity).toBe('2.000000');expect(next.events.some(e=>e.collection_id===collection)).toBe(true)
+  const selfDetail=await self(repo=>repo.detail(customer,order.id))
+  expect(selfDetail.collections[0]!.restored_order_number).toBe(next.order.public_id)
+  expect(JSON.stringify(selfDetail.events)).not.toContain(nextId)
  })
  it('configures no-restorage and manual archive without skipping verification or discarding remaining stock',async()=>{
   const config=await run(repo=>repo.policy());await run(repo=>repo.savePolicy({...config.policy,remindersEnabled:false,allowRestorage:false,archiveMode:'manual'},config.version))

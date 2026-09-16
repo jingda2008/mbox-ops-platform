@@ -204,7 +204,7 @@ attestation_output=${bundle_dir}/previous-runtime-attestation.json
 if [ -n "${MBOX_PREVIOUS_RUNTIME_ATTESTATION:-}" ]; then
   test "${MBOX_PREVIOUS_RUNTIME_ATTESTATION}" != "${attestation_output}"
   jq -e --arg sha "${release_sha}" \
-    '.targetReleaseSha == $sha and .authorization == "user-authorized-hotfix-replacement"' \
+    '.targetReleaseSha == $sha and .operatorDecision == "user-authorized-hotfix-replacement"' \
     "${MBOX_PREVIOUS_RUNTIME_ATTESTATION}" >/dev/null
   reconcile_previous_runtime=1
   cp "${MBOX_PREVIOUS_RUNTIME_ATTESTATION}" "${attestation_output}"

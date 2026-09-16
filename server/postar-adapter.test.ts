@@ -258,6 +258,8 @@ describe('Postar JSAPI payment creation', () => {
     ['WX01', 'appid与openid不匹配', 'APPID_OPENID_MISMATCH'],
     ['WX02', '无效的openid', 'OPENID_INVALID'],
     ['RISK01', 'IP 地址异常，拒绝交易', 'IP_RISK_REJECTED'],
+    ['RISK02', 'IP风控拒绝交易', 'IP_RISK_REJECTED'],
+    ['UNKNOWN', '异地交易，需要核验', 'PROVIDER_REJECTED'],
     ['WX03', '小程序违规，已关闭支付权限', 'MINIPROGRAM_PAYMENT_RESTRICTED'],
   ] as const)('keeps safe diagnostic detail for a rejected JSAPI order: %s', async (
     code,

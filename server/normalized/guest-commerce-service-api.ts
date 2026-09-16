@@ -109,7 +109,7 @@ export interface GuestCommerceServiceApiOptions {
   onlinePayments: Pick<OnlinePaymentService, 'create' | 'assertGuestJsapiReady' | 'assertGuestAlipayJsapiReady' | 'assertAvailable' | 'resolveActivePayment'>
     & Partial<Pick<OnlinePaymentService, 'close'>>
   resolveGuestContext(request: FastifyRequest): Promise<GuestRequestContext> | GuestRequestContext
-  resolvePublicContext(request: FastifyRequest): Promise<{ scope: Readonly<StoreScope> }> | { scope: Readonly<StoreScope> }
+  resolvePublicContext(request: FastifyRequest): Promise<{ scope: Readonly<StoreScope>; customerId?:string }> | { scope: Readonly<StoreScope>; customerId?:string }
   resolveDeviceFingerprint(request: FastifyRequest): string
   paymentMode: GuestCheckoutPaymentMode
   resolvePaymentMode?: (
@@ -202,10 +202,11 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
   const createPublicId = options.createPublicId ?? deterministicPublicId
 
   app.get('/public/mini/menu/products', async (request, reply) => handleRoute(reply, async () => {
+    reply.header('Cache-Control','private, no-store')
     const context = await options.resolvePublicContext(request)
     const query = readMenuQuery(request.query)
     const products = await options.transactions.run(context.scope, (transaction) => (
-      searchGuestCatalog(transaction, null, query)
+      searchGuestCatalog(transaction, null, query, context.customerId??null)
     ))
     return reply.send({
       data: products.map(publicCatalogProduct),
@@ -215,13 +216,14 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
   }))
 
   app.get('/guest/menu/products', async (request, reply) => handleRoute(reply, async () => {
+    reply.header('Cache-Control','private, no-store')
     const context = await requireTableContext(options, request, 'guest.menu.read')
     const query = readMenuQuery(request.query)
     const products = await options.transactions.run(context.scope, async (transaction) => {
       if (!await lockBoundGuestTablePosition(transaction, context)) {
         throw new GuestAuthenticationRequiredError()
       }
-      return searchGuestCatalog(transaction, context.tableSessionId, query)
+      return searchGuestCatalog(transaction, context.tableSessionId, query, context.customerId)
     })
     return reply.send({
       data: products.map(publicCatalogProduct),
@@ -307,7 +309,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
     const cart = await options.transactions.run(context.scope, async (transaction) => {
       if (!await lockBoundGuestTablePosition(transaction, context)) throw new GuestAuthenticationRequiredError()
       await requireGuestCartProtocol(transaction, context.tableSessionId, 2)
-      return new GuestSharedCartRepository(transaction).readOpen(
+      return new GuestSharedCartRepository(transaction, context.customerId).readOpen(
         context.tableSessionId,
         createSharedCartPublicId(),
       )
@@ -323,7 +325,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
     const cart = await options.transactions.run(context.scope, async (transaction) => {
       if (!await lockBoundGuestTablePosition(transaction, context)) throw new GuestAuthenticationRequiredError()
       await requireGuestCartProtocol(transaction, context.tableSessionId, 2)
-      return new GuestSharedCartRepository(transaction).adjust(context.tableSessionId, createSharedCartPublicId(), {
+      return new GuestSharedCartRepository(transaction, context.customerId).adjust(context.tableSessionId, createSharedCartPublicId(), {
         ...input,
         operationId,
         actorSessionRef: context.actorRef,
@@ -342,7 +344,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
       const cart=await options.transactions.run(context.scope,async(transaction)=>{
         if(!await lockBoundGuestTablePosition(transaction,context))throw new GuestAuthenticationRequiredError()
         await requireGuestCartProtocol(transaction,context.tableSessionId,2)
-        return new GuestSharedCartRepository(transaction).replaceBundleSelection(
+        return new GuestSharedCartRepository(transaction, context.customerId).replaceBundleSelection(
           context.tableSessionId,createSharedCartPublicId(),{
             ...input,
             productId:readUuid(request.params.productId,'productId'),
@@ -364,7 +366,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
       const cart=await options.transactions.run(context.scope,async (transaction) => {
         if (!await lockBoundGuestTablePosition(transaction,context)) throw new GuestAuthenticationRequiredError()
         await requireGuestCartProtocol(transaction,context.tableSessionId,2)
-        return new GuestSharedCartRepository(transaction).removeLine(
+        return new GuestSharedCartRepository(transaction, context.customerId).removeLine(
           context.tableSessionId,createSharedCartPublicId(),{
             ...input,productId:readUuid(request.params.productId,'productId'),operationId,
             actorSessionRef:context.actorRef,
@@ -383,7 +385,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
     const cart = await options.transactions.run(context.scope, async (transaction) => {
       if (!await lockBoundGuestTablePosition(transaction, context)) throw new GuestAuthenticationRequiredError()
       await requireGuestCartProtocol(transaction, context.tableSessionId, 2)
-      return new GuestSharedCartRepository(transaction).clear(context.tableSessionId, createSharedCartPublicId(), {
+      return new GuestSharedCartRepository(transaction, context.customerId).clear(context.tableSessionId, createSharedCartPublicId(), {
         ...input,
         operationId,
         actorSessionRef: context.actorRef,
@@ -496,7 +498,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
         const quote=await new CheckoutCouponQuoteRepository(transaction).find(input.couponQuoteId,context.customerId)
         if(!quote.current||quote.tableSessionId!==context.tableSessionId||quote.generation!==input.expectedGeneration||quote.version!==input.expectedVersion)throw new CheckoutCartPricingError('优惠报价已失效，请重新选择优惠或按原价提交')
       }
-      const repository = new GuestSharedCartRepository(transaction)
+      const repository = new GuestSharedCartRepository(transaction, context.customerId)
       const cart = await repository.beginCheckout(context.tableSessionId, createSharedCartPublicId(), {
         expectedGeneration: input.expectedGeneration,
         expectedVersion: input.expectedVersion,
@@ -988,10 +990,11 @@ async function requireGuestCartProtocol(
   if (result.rows[0] === undefined) throw new GuestCartProtocolVersionError(expectedVersion)
 }
 
-async function searchGuestCatalog(
+export async function searchGuestCatalog(
   transaction: ScopedTransaction,
   tableSessionId: string | null,
-  query: Readonly<{ search: string; categoryCode: string | null; limit: number; offset: number }>,
+  query: Readonly<{ search: string; categoryCode: string | null; limit: number; offset: number; productIds?: readonly string[] }>,
+  customerId: string | null = null,
 ): Promise<CatalogMenuRow[]> {
   const searchPattern = `%${escapeLike(query.search)}%`
   const result = await transaction.query<CatalogMenuRow>(`
@@ -1052,7 +1055,7 @@ async function searchGuestCatalog(
       COALESCE(choice_group_list.items, '[]'::jsonb) AS bundle_choice_groups,
       component_list.separate_amount_minor AS fixed_separate_amount_minor,
       choice_group_list.minimum_choice_amount_minor,
-      product.product_snapshot, product.guest_visible, product.search_text,
+      product.product_snapshot, (product.guest_visible OR mbox.customer_has_card_menu_item(product.tenant_id,product.store_id,product.id,$9::uuid)) AS guest_visible, product.search_text,
       product.recommendation_beverage_family,
       product.recommendation_enabled, product.recommendation_min_guests,
       product.recommendation_max_guests, product.recommendation_priority,
@@ -1072,7 +1075,7 @@ async function searchGuestCatalog(
           OR (clock_timestamp() AT TIME ZONE store.timezone)::time < product.available_until
       END AS within_availability,
       product.cost_amount_minor::text, product.status,
-      price.amount_minor::text, price.currency,
+      LEAST(price.amount_minor,mbox.customer_card_price(product.tenant_id,product.store_id,product.id,$9::uuid))::text AS amount_minor, price.currency,
       COALESCE(current_session.guest_count, 2) AS guest_count,
       COALESCE(current_session.guest_profile_snapshot, '{}'::jsonb) AS guest_profile_snapshot,
       COALESCE(inventory_readiness.configuration_complete, false) AS inventory_configuration_complete,
@@ -1409,7 +1412,7 @@ async function searchGuestCatalog(
       AND product.store_id = $2::uuid
       AND ($3::uuid IS NULL OR current_session.id IS NOT NULL)
       AND product.status = 'active'
-      AND product.guest_visible
+      AND (product.guest_visible OR mbox.customer_has_card_menu_item(product.tenant_id,product.store_id,product.id,$9::uuid))
       -- Unconfigured legacy codes stay visible until staff explicitly map
       -- them.  Once configured, parent and child visibility is authoritative
       -- for the customer menu without altering the product itself.
@@ -1419,6 +1422,7 @@ async function searchGuestCatalog(
       ))
       AND 'guest_qr'=ANY(product.allowed_channels)
       AND price.amount_minor IS NOT NULL
+      AND ($10::uuid[] IS NULL OR product.id=ANY($10::uuid[]))
       AND ($4::text IS NULL OR product.category_code = $4)
       AND (
         $5 = ''
@@ -1437,7 +1441,7 @@ async function searchGuestCatalog(
         ELSE 2
       END,
       product.recommendation_priority DESC,
-      product.menu_sort_order,
+      COALESCE((SELECT min(mi.sort_order) FROM mbox.member_card_menu_items mi JOIN mbox.member_cards card ON card.tenant_id=mi.tenant_id AND card.store_id=mi.store_id AND card.project_id=mi.project_id JOIN mbox.member_card_projects cp ON cp.tenant_id=card.tenant_id AND cp.store_id=card.store_id AND cp.id=card.project_id WHERE mi.tenant_id=product.tenant_id AND mi.store_id=product.store_id AND mi.product_id=product.id AND mi.active AND mi.exclusive AND card.status='active' AND card.valid_from<=clock_timestamp() AND card.valid_until>clock_timestamp() AND cp.status='open' AND mbox.canonical_customer_id(card.tenant_id,card.store_id,card.customer_id)=mbox.canonical_customer_id(product.tenant_id,product.store_id,$9::uuid) AND mbox.card_social_conditions_met(card.tenant_id,card.store_id,card.project_id,card.customer_id)),product.menu_sort_order),
       CASE WHEN product.product_kind = 'bundle' THEN 0 ELSE 1 END,
       CASE
         WHEN product.cost_amount_minor IS NOT NULL AND price.amount_minor > product.cost_amount_minor
@@ -1455,11 +1459,13 @@ async function searchGuestCatalog(
     searchPattern,
     query.limit,
     query.offset,
+    customerId,
+    query.productIds??null,
   ])
   return result.rows
 }
 
-function publicCatalogProduct(row: CatalogMenuRow) {
+export function publicCatalogProduct(row: CatalogMenuRow) {
   const source = jsonObject(row.product_snapshot.source)
   const amountMinor = publicMinorAmount(row.amount_minor)
   const bundleChoiceGroups=publicBundleChoiceGroups(row.bundle_choice_groups)
@@ -1975,7 +1981,7 @@ async function recordSharedCartWriteAttempt(
   const allowed=await options.transactions.run(context.scope,async transaction=>{
     if(!await lockBoundGuestTablePosition(transaction,context))throw new GuestAuthenticationRequiredError()
     await requireGuestCartProtocol(transaction,context.tableSessionId,2)
-    return new GuestSharedCartRepository(transaction).recordWriteAttempt({
+    return new GuestSharedCartRepository(transaction, context.customerId).recordWriteAttempt({
       tableSessionId:context.tableSessionId,
       actorSessionRef:context.actorRef,
       operationId,

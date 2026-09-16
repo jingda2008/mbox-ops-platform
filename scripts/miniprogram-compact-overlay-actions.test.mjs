@@ -24,7 +24,7 @@ test('all overlay dismiss controls and the custom activity share control use the
   ])
 
   assert.match(order, /class="recommend-question__close compact-text-action"/)
-  assert.match(order, /class="product-detail-close compact-icon-action"/)
+  assert.match(order, /class="product-detail-close"/)
   assert.match(order, /class="checkout-confirm__close compact-text-action"[^>]*>关闭<\/button>/)
   assert.match(order, /class="payment-result__close compact-text-action"[^>]*>关闭<\/button>/)
   assert.doesNotMatch(order, /取消并关闭付款提示|取消并关闭订单明细/)

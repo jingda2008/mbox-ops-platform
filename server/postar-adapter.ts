@@ -128,7 +128,7 @@ function classifyPaymentRejection(
   if (value.includes('appid与openid不匹配') || value.includes('sub_appid和sub_openid不匹配')
     || value.includes('sub_appid与sub_openid不匹配')) return 'APPID_OPENID_MISMATCH'
   if (value.includes('无效的openid') || value.includes('openid不存在')) return 'OPENID_INVALID'
-  if (value.includes('ip 地址异常') || value.includes('ip地址异常') || value.includes('异地交易')) return 'IP_RISK_REJECTED'
+  if (value.includes('ip 地址异常') || value.includes('ip地址异常') || value.includes('ip风控') || value.includes('ip 风控') || value.includes('ip异常') || value.includes('ip 异常')) return 'IP_RISK_REJECTED'
   if (value.includes('小程序违规') || value.includes('关闭支付权限') || value.includes('支付权限关闭')) {
     return 'MINIPROGRAM_PAYMENT_RESTRICTED'
   }

@@ -1,0 +1,27 @@
+<view wx:if="{{visible}}" class="launch-popup-mask" bindtap="close" catchtouchmove="stop">
+ <view class="launch-popup-shell" catchtap="stop" role="dialog" aria-label="{{popup.title}}">
+  <swiper wx:if="{{popup.products.length}}" class="launch-popup-swiper" current="{{currentIndex}}" bindchange="changeSlide" indicator-dots="{{false}}" autoplay="{{false}}">
+   <swiper-item wx:for="{{popup.products}}" wx:key="id">
+    <view class="launch-popup-poster" bindtap="order" role="button" aria-label="查看{{item.name}}的菜单">
+     <view class="launch-popup-hero">
+      <image wx:if="{{item.imageUrl && !item.imageFailed}}" class="launch-popup-image" src="{{item.imageUrl}}" mode="aspectFit" data-index="{{index}}" binderror="imageFailed"/>
+      <view wx:else class="launch-popup-placeholder">图片暂不可用</view>
+      <view class="launch-popup-heading"><text class="launch-popup-title">{{popup.title}}</text></view>
+     </view>
+     <scroll-view class="launch-popup-caption" scroll-y catchtap="stop">
+      <view class="launch-popup-product-line" bindtap="order"><text class="launch-popup-product-name">{{item.name}}</text><text class="launch-popup-product-price">{{item.priceText}}</text></view>
+      <text wx:if="{{item.available === false}}" class="launch-popup-status">暂不可点</text>
+      <text wx:if="{{popup.content}}" class="launch-popup-copy">{{popup.content}}</text>
+     </scroll-view>
+    </view>
+   </swiper-item>
+  </swiper>
+  <view wx:else class="launch-popup-empty">
+   <text class="launch-popup-empty-title">{{popup.title}}</text>
+   <scroll-view class="launch-popup-empty-copy" scroll-y><text class="launch-popup-copy">{{popup.content}}</text></scroll-view>
+   <button class="launch-popup-menu" bindtap="order">查看菜单</button>
+  </view>
+  <view wx:if="{{popup.products.length > 1}}" class="launch-popup-pagination" aria-label="第{{currentIndex + 1}}张，共{{popup.products.length}}张推荐"><view wx:for="{{popup.products}}" wx:key="id" class="launch-popup-dot {{index === currentIndex ? 'is-current' : ''}}"></view></view>
+  <button class="launch-popup-close" bindtap="close" hover-class="launch-popup-close--pressed" aria-label="关闭推荐"><view class="launch-popup-close-ring"></view><view class="launch-popup-close-line launch-popup-close-line--first"></view><view class="launch-popup-close-line launch-popup-close-line--second"></view></button>
+ </view>
+</view>

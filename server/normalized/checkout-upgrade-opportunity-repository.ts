@@ -85,7 +85,7 @@ export class CheckoutUpgradeOpportunityRepository{
   if(row.table_session_id!==input.tableSessionId)throw new CheckoutCartPricingError('推荐不属于当前桌次')
   if(opportunity.status==='accepted'){
    if(input.variantId&&input.variantId!==opportunity.acceptedVariantId)throw new CheckoutCartPricingError('此前已按另一选项完成升级，请核对实际购物车')
-   return{opportunity,cart:await new GuestSharedCartRepository(this.tx).findCurrentOpen(input.tableSessionId),replayed:true}
+   return{opportunity,cart:await new GuestSharedCartRepository(this.tx,input.customerId).findCurrentOpen(input.tableSessionId),replayed:true}
   }
   if(opportunity.status!=='offered')throw new CheckoutCartPricingError('推荐已结束，请保留当前购物车继续下单')
   const enabled=(await this.tx.query<{enabled:boolean}>(`SELECT EXISTS(SELECT 1 FROM mbox.customer_experience_features WHERE tenant_id=$1 AND store_id=$2 AND feature_code='checkout_upgrade' AND rollout_state IN('pilot','enabled') AND (effective_from IS NULL OR effective_from<=clock_timestamp()) AND (effective_until IS NULL OR effective_until>clock_timestamp())) AS enabled`,this.scope)).rows[0]?.enabled
@@ -100,7 +100,7 @@ export class CheckoutUpgradeOpportunityRepository{
   const selections=(await this.tx.query<{portion_id:string;benefit_id:string}>('SELECT portion_id,benefit_id FROM mbox.checkout_upgrade_opportunity_coupons WHERE tenant_id=$1 AND store_id=$2 AND opportunity_id=$3 ORDER BY portion_id',[...this.scope,id])).rows.map(c=>({portionId:c.portion_id,benefitId:c.benefit_id}))
   const evaluation=await new CheckoutUpgradeEvaluationRepository(this.tx).evaluate({ruleId:opportunity.ruleId,tableSessionId:input.tableSessionId,customerId:input.customerId,portionId:opportunity.sourcePortionId,expectedGeneration:opportunity.generation,expectedVersion:opportunity.version,occasion:row.occasion,alcoholPreference:row.alcohol_preference,bundleSelection,selections})
   if(!evaluation.eligible||upgradeQuoteFingerprint(evaluation)!==(variant?.quote_fingerprint??row.quote_fingerprint))throw new CheckoutCartPricingError('套餐、价格或可售条件已变化，未更改原购物车，请重新确认订单')
-  const carts=new GuestSharedCartRepository(this.tx),before=await carts.findCurrentOpen(input.tableSessionId)
+  const carts=new GuestSharedCartRepository(this.tx,input.customerId),before=await carts.findCurrentOpen(input.tableSessionId)
   if(!before||before.id!==opportunity.cartId)throw new CheckoutCartPricingError('购物车已变化，未执行升级')
   const oldIds=new Set(before.lines.flatMap(line=>line.portionIds??[])),operationId=`upgrade-${id}`
   const cart=await carts.replacePortionProduct(input.tableSessionId,before.publicId,{productId:opportunity.sourceProductId,portionId:opportunity.sourcePortionId,targetProductId:opportunity.targetProductId,bundleSelection,expectedGeneration:opportunity.generation,expectedVersion:opportunity.version,operationId,actorSessionRef:input.actorSessionRef})

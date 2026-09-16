@@ -10,7 +10,7 @@ interface ProjectRow extends Record<string,unknown> {
   available_from:string;available_until:string;cooperation_confirmed:boolean;cooperation_valid_until:string|null;created_by_employee_id:string
 }
 interface ApplicationRow extends Record<string,unknown> {id:string;project_id:string;customer_id:string;status:CardApplicationState;accepted_project_version:number}
-const projectColumns='id,code,name,terms,kind,status,version,available_from::text,available_until::text,cooperation_confirmed,cooperation_valid_until::text,created_by_employee_id'
+const projectColumns='social_configuration_required,artist_name,icon_url,service_account_id,wecom_account_id,require_social_conditions,auto_restore,id,code,name,terms,kind,status,version,available_from::text,available_until::text,cooperation_confirmed,cooperation_valid_until::text,created_by_employee_id'
 function uuid(value:string){if(typeof value!=='string'||!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value))throw new MemberCardPolicyError('记录编号不正确')}
 function text(value:string,label:string,max:number){if(typeof value!=='string'||value.trim().length<2||value.length>max)throw new MemberCardPolicyError(`${label}须为2至${max}字`);return value.trim()}
 function eligibility(row:ProjectRow):CardProjectEligibility{return{state:row.status,kind:row.kind,availableFrom:new Date(row.available_from).toISOString(),availableUntil:new Date(row.available_until).toISOString(),cooperationConfirmed:row.cooperation_confirmed,cooperationValidUntil:row.cooperation_valid_until?new Date(row.cooperation_valid_until).toISOString():null}}
@@ -29,13 +29,17 @@ export class MemberCardRepository {
       AND mbox.canonical_customer_id(tenant_id,store_id,customer_id)=$3 ORDER BY (customer_id=$3) DESC,joined_at DESC,id LIMIT 1`,[...this.scope,customerId])
     return result.rows[0]?.status==='active'
   }
+  private async assertSocialConditions(projectId:string,customerId:string){
+    const result=await this.tx.query<{eligible:boolean}>('SELECT mbox.card_social_conditions_met($1,$2,$3,$4) AS eligible',[...this.scope,projectId,customerId])
+    if(!result.rows[0]?.eligible)throw new MemberCardPolicyError('请先完成本卡绑定的企业微信添加与服务号关注，并等待平台核验')
+  }
   private async now(){return new Date((await this.tx.query<{now:string}>('SELECT clock_timestamp()::text AS now')).rows[0]!.now)}
   private async audit(action:string,objectId:string,input:{customerId?:string;employeeId?:string;businessDate:string;reason?:string}){
     await appendAuditEvent(this.tx,{actor:input.employeeId?{type:'employee',employeeId:input.employeeId}:{type:'guest',ref:`customer:${input.customerId}`},
       businessDate:input.businessDate,action:`member_card.${action}`,objectType:'member_card',objectId,reason:input.reason,
       afterData:{operation:action,customerId:input.customerId??null}})
   }
-  async createProject(input:{code:string;name:string;terms:string;kind:'interest'|'cobrand';availableFrom:string;availableUntil:string;cooperationConfirmed:boolean;cooperationValidUntil:string|null;cooperationReference:string|null;employeeId:string;businessDate:string}){
+  async createProject(input:{requireSocialConfiguration?:boolean;code:string;name:string;terms:string;kind:'interest'|'cobrand';availableFrom:string;availableUntil:string;cooperationConfirmed:boolean;cooperationValidUntil:string|null;cooperationReference:string|null;employeeId:string;businessDate:string}){
     await new StaffAccessRepository(this.tx).assertPermission(input.employeeId,'member.card.manage')
     if(typeof input.code!=='string'||!/^[A-Z][A-Z0-9_]{1,39}$/.test(input.code)||!['interest','cobrand'].includes(input.kind)||typeof input.cooperationConfirmed!=='boolean')throw new MemberCardPolicyError('卡项目定义不正确')
     const name=text(input.name,'名称',60),terms=text(input.terms,'申请条款',6000)
@@ -45,8 +49,8 @@ export class MemberCardRepository {
     for(const date of [input.availableFrom,input.availableUntil,...(input.cooperationValidUntil?[input.cooperationValidUntil]:[])])if(typeof date!=='string'||!/(?:Z|[+-]\d{2}:\d{2})$/i.test(date)||!Number.isFinite(Date.parse(date)))throw new MemberCardPolicyError('卡项目时间须包含明确时区')
     if(Date.parse(input.availableUntil)<=Math.max(Date.parse(input.availableFrom),now.getTime()))throw new MemberCardPolicyError('卡项目须有未来有效期')
     if(input.kind==='cobrand'&&(!input.cooperationReference||input.cooperationReference.trim().length<2))throw new MemberCardPolicyError('联名项目须记录合作依据；未确认不能开放')
-    const result=await this.tx.query<{id:string}>(`INSERT INTO mbox.member_card_projects(tenant_id,store_id,code,name,terms,kind,available_from,available_until,cooperation_confirmed,cooperation_valid_until,cooperation_reference,created_by_employee_id)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,[...this.scope,input.code,name,terms,input.kind,input.availableFrom,input.availableUntil,input.cooperationConfirmed,input.cooperationValidUntil,input.cooperationReference,input.employeeId])
+    const result=await this.tx.query<{id:string}>(`INSERT INTO mbox.member_card_projects(tenant_id,store_id,code,name,terms,kind,available_from,available_until,cooperation_confirmed,cooperation_valid_until,cooperation_reference,created_by_employee_id,social_configuration_required)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,[...this.scope,input.code,name,terms,input.kind,input.availableFrom,input.availableUntil,input.cooperationConfirmed,input.cooperationValidUntil,input.cooperationReference,input.employeeId,input.requireSocialConfiguration??false])
     await this.audit('project_created',result.rows[0]!.id,input)
     return{projectId:result.rows[0]!.id,status:'draft' as const}
   }
@@ -58,6 +62,7 @@ export class MemberCardRepository {
     if(project.status===input.state)return{projectId:project.id,status:project.status}
     if(project.status==='closed')throw new MemberCardPolicyError('已关闭项目不能重新发卡，请新建项目')
     if(input.state==='open'){
+      if(project.social_configuration_required&&!project.require_social_conditions)throw new MemberCardPolicyError('请先在专属卡配置中绑定企业微信与服务号，完成双条件门槛后再开放')
       if(project.created_by_employee_id===input.employeeId)throw new MemberCardPolicyError('卡项目创建人不能自行开放本人项目')
       const now=await this.now(),rule=eligibility(project)
       assertCardProjectOpen({...rule,state:'open'},new Date(Math.max(now.getTime(),Date.parse(rule.availableFrom))))
@@ -68,6 +73,7 @@ export class MemberCardRepository {
   }
   async apply(input:{projectId:string;customerId:string;acceptedProjectVersion:number;businessDate:string}){
     const customerId=await this.identity(input.customerId),project=await this.project(input.projectId)
+    await this.assertSocialConditions(project.id,customerId)
     assertCardProjectOpen(eligibility(project),await this.now())
     if(!await this.member(customerId))throw new MemberCardPolicyError('请先完成正常会员入会；不要求同意额外营销')
     if(input.acceptedProjectVersion!==project.version)throw new MemberCardPolicyError('请阅读当前卡项目说明后再申请')
@@ -95,6 +101,7 @@ export class MemberCardRepository {
     const result=decideCardApplication({state:application.status,decision:input.decision,reviewerAuthorized:true,project:eligibility(project),now:await this.now(),activeMember:await this.member(customerId),alreadyHoldsCard:!!card})
     let cardId=card?.id??null
     if(result.createCard){
+      await this.assertSocialConditions(project.id,customerId)
       const issued=await this.tx.query<{id:string}>('INSERT INTO mbox.member_cards(tenant_id,store_id,project_id,customer_id,application_id,valid_until) VALUES($1,$2,$3,$4,$5,$6) RETURNING id',[...this.scope,project.id,customerId,application.id,project.available_until]);cardId=issued.rows[0]!.id
     }
     await this.tx.query('UPDATE mbox.member_card_applications SET status=$4,reviewed_by_employee_id=$5,review_reason=$6,resolved_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND id=$3',[...this.scope,application.id,result.applicationState,input.employeeId,input.reason.trim()])
@@ -111,8 +118,9 @@ export class MemberCardRepository {
     await this.project(row.project_id)
     const current=(await this.tx.query<{status:MemberCardState}>('SELECT status FROM mbox.member_cards WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE',[...this.scope,row.id])).rows[0]!
     const status=transitionMemberCard(current.status,input.action)
+    if(input.action==='resume')await this.assertSocialConditions(row.project_id,canonical)
     if(input.action==='resume'&&new Date(row.valid_until).getTime()<=(await this.now()).getTime())throw new MemberCardPolicyError('已到期卡不能恢复')
-    await this.tx.query('UPDATE mbox.member_cards SET status=$4,updated_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND id=$3',[...this.scope,row.id,status])
+    await this.tx.query('UPDATE mbox.member_cards SET status=$4,social_suspended=false,updated_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND id=$3',[...this.scope,row.id,status])
     await this.audit(input.action,row.id,input)
     return{cardId:row.id,status}
   }
@@ -132,12 +140,12 @@ export class MemberCardRepository {
   async selfView(customerId:string,cursors:Partial<Record<'projects'|'cards'|'applications',string>>={}){
     for(const cursor of Object.values(cursors))uuid(cursor)
     uuid(customerId);const canonical=(await new CustomerRepository(this.tx).resolveCanonical(customerId)).id
-    const projects=await this.tx.query<{id:string}>(`SELECT p.id,p.code,p.name,p.kind,p.terms,p.version,p.available_from,p.available_until,
+    const projects=await this.tx.query<{id:string}>(`SELECT p.id,p.code,p.name,p.kind,p.terms,p.version,p.artist_name,p.icon_url,p.require_social_conditions,p.service_account_id,p.wecom_account_id,(SELECT name FROM mbox.social_accounts sa WHERE sa.tenant_id=p.tenant_id AND sa.store_id=p.store_id AND sa.id=p.service_account_id) AS service_account_name,(SELECT name FROM mbox.social_accounts sa WHERE sa.tenant_id=p.tenant_id AND sa.store_id=p.store_id AND sa.id=p.wecom_account_id) AS wecom_account_name,mbox.card_social_conditions_met(p.tenant_id,p.store_id,p.id,$3) AS social_conditions_met,p.available_from,p.available_until,
       (p.available_from<=clock_timestamp() AND (p.kind='interest' OR (p.cooperation_confirmed AND p.cooperation_valid_until>clock_timestamp()))) AS accepting_applications,
       EXISTS(SELECT 1 FROM mbox.member_cards c WHERE c.tenant_id=p.tenant_id AND c.store_id=p.store_id AND c.project_id=p.id AND mbox.canonical_customer_id(c.tenant_id,c.store_id,c.customer_id)=$3 AND c.status IN('active','suspended') AND c.valid_until>clock_timestamp()) AS has_current_card,
       EXISTS(SELECT 1 FROM mbox.member_card_applications a WHERE a.tenant_id=p.tenant_id AND a.store_id=p.store_id AND a.project_id=p.id AND mbox.canonical_customer_id(a.tenant_id,a.store_id,a.customer_id)=$3 AND a.status='pending') AS has_pending_application
       FROM mbox.member_card_projects p WHERE p.tenant_id=$1 AND p.store_id=$2 AND p.status='open' AND p.available_until>clock_timestamp() AND ($4::uuid IS NULL OR p.id>$4::uuid) ORDER BY p.id LIMIT 51`,[...this.scope,canonical,cursors.projects??null])
-    const cards=await this.tx.query<{id:string}>(`SELECT c.id,c.project_id,p.name,p.kind,c.status,c.valid_from,c.valid_until,(c.valid_until<=clock_timestamp()) AS expired
+    const cards=await this.tx.query<{id:string}>(`SELECT c.id,c.project_id,p.name,p.kind,p.artist_name,p.icon_url,p.require_social_conditions,c.social_suspended,mbox.card_social_conditions_met(c.tenant_id,c.store_id,c.project_id,c.customer_id) AS social_conditions_met,c.status,c.valid_from,c.valid_until,(c.valid_until<=clock_timestamp()) AS expired
       FROM mbox.member_cards c JOIN mbox.member_card_projects p ON p.tenant_id=c.tenant_id AND p.store_id=c.store_id AND p.id=c.project_id
       WHERE c.tenant_id=$1 AND c.store_id=$2 AND mbox.canonical_customer_id(c.tenant_id,c.store_id,c.customer_id)=$3 AND ($4::uuid IS NULL OR c.id>$4::uuid) ORDER BY c.id LIMIT 51`,[...this.scope,canonical,cursors.cards??null])
     const applications=await this.tx.query<{id:string}>(`SELECT a.id,a.project_id,p.name,a.status,a.requested_at,a.resolved_at,a.review_reason

@@ -1,3 +1,4 @@
+import type {WechatServiceAccountSubscribeConfig} from './wechat-service-account-subscribe.js'
 import { isAbsolute } from 'node:path'
 import type { GuestCheckoutPaymentMode } from './guest-commerce-service-api.js'
 import type { GuestOrderSafetyPolicy } from './guest-order-safety.js'
@@ -42,6 +43,7 @@ export interface NormalizedWechatNotificationRuntimeConfig {
 }
 
 export interface NormalizedWechatServiceAccountCallbackRuntimeConfig {
+  officialAccountAppId?:string
   appId: string
   token: string
   encodingAesKey: string
@@ -69,6 +71,7 @@ export interface NormalizedRuntimeConfig {
   payment: NormalizedPaymentRuntimeConfig | null
   wechatIdentity: NormalizedWechatIdentityRuntimeConfig | null
   wechatNotification: NormalizedWechatNotificationRuntimeConfig | null
+  wechatServiceAccountSubscribe?: WechatServiceAccountSubscribeConfig | null
   wechatServiceAccountCallback?: NormalizedWechatServiceAccountCallbackRuntimeConfig | null
   alipayPhone: NormalizedAlipayPhoneRuntimeConfig | null
   personalContactProtection?: NormalizedPersonalContactRuntimeConfig | null
@@ -127,6 +130,7 @@ export function loadNormalizedRuntimeConfig(
   const payment = readPayment(environment, integrations.modes.payment, errors)
   const wechatIdentity = readWechatIdentity(environment, errors)
   const wechatNotification = readWechatNotification(environment, errors)
+  const wechatServiceAccountSubscribe = readWechatServiceAccountSubscribe(environment, secret, errors)
   const wechatServiceAccountCallback = readWechatServiceAccountCallback(environment, errors)
   const alipayPhone = readAlipayPhone(environment, errors)
   const personalContactProtection = readPersonalContactProtection(
@@ -229,6 +233,7 @@ export function loadNormalizedRuntimeConfig(
     wechatIdentity,
     wechatNotification,
     wechatServiceAccountCallback,
+    wechatServiceAccountSubscribe,
     alipayPhone,
     personalContactProtection,
     guestPaymentMode,
@@ -377,7 +382,9 @@ function readWechatServiceAccountCallback(
     errors.push('MBOX_WECHAT_SERVICE_ACCOUNT_ENCODING_AES_KEY')
   }
   if (appId === null || token === null || encodingAesKey === null) return null
-  return Object.freeze({ appId, token, encodingAesKey })
+  const officialAccountAppId=optional(environment.MBOX_WECHAT_OFFICIAL_ACCOUNT_APP_ID)
+  if(officialAccountAppId!==null&&(!/^wx[A-Za-z0-9_-]{4,126}$/.test(officialAccountAppId)||officialAccountAppId===appId))errors.push('MBOX_WECHAT_OFFICIAL_ACCOUNT_APP_ID')
+  return Object.freeze({ appId, token, encodingAesKey,...(officialAccountAppId?{officialAccountAppId}:{}) })
 }
 
 function readWechatIdentity(
@@ -659,4 +666,47 @@ function readBoolean(
 function optional(value: string | undefined): string | null {
   const normalized = value?.trim()
   return normalized ? normalized : null
+}
+
+function readWechatServiceAccountSubscribe(environment:NodeJS.ProcessEnv, stateSecret:string|null, errors:string[]) {
+    const appId = optional(environment.MBOX_WECHAT_SERVICE_ACCOUNT_APP_ID);
+    const appSecret = optional(environment.MBOX_WECHAT_SERVICE_ACCOUNT_APP_SECRET);
+    const activityTemplateId = optional(environment.MBOX_WECHAT_SERVICE_ACCOUNT_ACTIVITY_SUBSCRIBE_TEMPLATE_ID);
+    const couponTemplateId = optional(environment.MBOX_WECHAT_SERVICE_ACCOUNT_COUPON_SUBSCRIBE_TEMPLATE_ID);
+    const miniProgramAppId = optional(environment.MBOX_WECHAT_APP_ID)
+        ?? optional(environment.MBOX_WECHAT_SERVICE_ACCOUNT_MINI_PROGRAM_APP_ID);
+    const publicOrigin = optional(environment.MBOX_PUBLIC_ORIGIN) ?? 'https://mbox.shmbox.com';
+    if (appSecret === null && activityTemplateId === null && couponTemplateId === null)
+        return null;
+    if (appId === null || !/^wx[A-Za-z0-9_-]{4,126}$/.test(appId)) {
+        errors.push('MBOX_WECHAT_SERVICE_ACCOUNT_APP_ID');
+    }
+    if (appSecret === null || appSecret.length < 16) {
+        errors.push('MBOX_WECHAT_SERVICE_ACCOUNT_APP_SECRET');
+    }
+    if (activityTemplateId === null || activityTemplateId.length < 8) {
+        errors.push('MBOX_WECHAT_SERVICE_ACCOUNT_ACTIVITY_SUBSCRIBE_TEMPLATE_ID');
+    }
+    if (couponTemplateId === null || couponTemplateId.length < 8) {
+        errors.push('MBOX_WECHAT_SERVICE_ACCOUNT_COUPON_SUBSCRIBE_TEMPLATE_ID');
+    }
+    if (miniProgramAppId === null || !/^wx[A-Za-z0-9_-]{4,126}$/.test(miniProgramAppId)) {
+        errors.push('MBOX_WECHAT_APP_ID');
+    }
+    if (stateSecret === null || stateSecret.length < 16) {
+        errors.push('MBOX_NORMALIZED_SECRET');
+    }
+    if (appId === null || appSecret === null || activityTemplateId === null
+        || couponTemplateId === null || miniProgramAppId === null || stateSecret === null) {
+        return null;
+    }
+    return Object.freeze({
+        appId,
+        appSecret,
+        activityTemplateId,
+        couponTemplateId,
+        miniProgramAppId,
+        publicOrigin: publicOrigin.replace(/\/$/, ''),
+        stateSecret,
+    });
 }

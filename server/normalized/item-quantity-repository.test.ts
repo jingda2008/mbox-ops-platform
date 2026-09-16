@@ -79,7 +79,9 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
   async function grantActor(id:string,codes:string[],limit:number|null=null){
     const roleId=randomUUID()
     await pool.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,$4,'Quantity actor')",[roleId,tenantId,storeId,`Q_${roleId.replaceAll('-','').toUpperCase()}`])
-    await pool.query('INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id) VALUES($1,$2,$3,$4)',[tenantId,storeId,id,roleId])
+    // This fixture represents an already-active grant. PostgreSQL stores microseconds,
+    // while the read-model authorization instant is a JavaScript millisecond.
+    await pool.query("INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id,starts_at) VALUES($1,$2,$3,$4,clock_timestamp()-interval '1 minute')",[tenantId,storeId,id,roleId])
     for(const code of codes){
       const permissionId=(await pool.query(`INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name,category) VALUES($1,$2,$3,$3,'operations') ON CONFLICT(tenant_id,store_id,code) DO UPDATE SET name=EXCLUDED.name RETURNING id`,[tenantId,storeId,code])).rows[0].id
       await pool.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[tenantId,storeId,roleId,permissionId])

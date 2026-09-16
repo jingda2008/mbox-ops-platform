@@ -70,7 +70,8 @@
     ]
   },
   "usingComponents": {
-    "state-panel": "/components/state-panel/index"
+    "state-panel": "/components/state-panel/index",
+    "launch-popup": "/components/launch-popup/index"
   },
   "style": "v2",
   "sitemapLocation": "sitemap.json",

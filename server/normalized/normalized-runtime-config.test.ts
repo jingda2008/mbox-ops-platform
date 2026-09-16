@@ -454,3 +454,11 @@ describe('loadNormalizedRuntimeConfig', () => {
     })).toThrowError(NormalizedRuntimeConfigurationError)
   })
 })
+
+it('preserves explicitly configured subscribe templates without enabling absent configuration',()=>{
+ expect(loadNormalizedRuntimeConfig(base).wechatServiceAccountSubscribe).toBeNull();
+ const env={...base,MBOX_WECHAT_SERVICE_ACCOUNT_APP_ID:'wxServiceTest1',MBOX_WECHAT_SERVICE_ACCOUNT_APP_SECRET:'test-secret-value-123',MBOX_WECHAT_SERVICE_ACCOUNT_CALLBACK_TOKEN:'callbackToken',MBOX_WECHAT_SERVICE_ACCOUNT_ENCODING_AES_KEY:Buffer.alloc(32,7).toString('base64').slice(0,-1),MBOX_WECHAT_SERVICE_ACCOUNT_ACTIVITY_SUBSCRIBE_TEMPLATE_ID:'activity-template',MBOX_WECHAT_SERVICE_ACCOUNT_COUPON_SUBSCRIBE_TEMPLATE_ID:'coupon-template',MBOX_WECHAT_SERVICE_ACCOUNT_MINI_PROGRAM_APP_ID:'wxMiniTest1',MBOX_PUBLIC_ORIGIN:'https://mbox.example.test',MBOX_WECHAT_OFFICIAL_ACCOUNT_APP_ID:'wxOfficialTest1'};
+ expect(loadNormalizedRuntimeConfig(env).wechatServiceAccountSubscribe).toMatchObject({activityTemplateId:'activity-template',publicOrigin:'https://mbox.example.test'});
+ expect(loadNormalizedRuntimeConfig(env).wechatServiceAccountCallback?.officialAccountAppId).toBe('wxOfficialTest1');
+ expect(()=>loadNormalizedRuntimeConfig({...env,MBOX_WECHAT_SERVICE_ACCOUNT_APP_SECRET:''})).toThrow();
+})

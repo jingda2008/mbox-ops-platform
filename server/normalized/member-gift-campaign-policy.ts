@@ -4,6 +4,8 @@ export class MemberGiftCampaignError extends Error {
   constructor(message:string){super(message);this.name='MemberGiftCampaignError'}
 }
 export interface MemberGiftCampaignRule {
+  dessertProductId?:string|null
+  highlightMetrics?:Array<'issued'|'redeemed'|'remaining'|'cost'>
   pricingKind:'free'|'fixed_price'
   fixedPriceMinor:number|null
   stackingVersionId:string|null
@@ -39,6 +41,9 @@ function instant(value:unknown):string{
 export function parseMemberGiftCampaign(value:unknown):MemberGiftCampaignRule{
   if(!value||typeof value!=='object'||Array.isArray(value))throw new MemberGiftCampaignError('发券活动规则无效')
   const input=value as Record<string,unknown>
+  const dessertProductId=input.dessertProductId==null?null:uuid(input.dessertProductId,'组合甜点')
+  const highlightMetrics=input.highlightMetrics??['issued','redeemed','remaining']
+  if(!Array.isArray(highlightMetrics)||highlightMetrics.some(m=>!['issued','redeemed','remaining','cost'].includes(String(m)))||new Set(highlightMetrics).size!==highlightMetrics.length)throw new MemberGiftCampaignError('亮点统计指标无效')
   const pricingKind=input.pricingKind??'free'
   if(pricingKind!=='free'&&pricingKind!=='fixed_price')throw new MemberGiftCampaignError('券价格方式无效')
   const fixedPriceMinor=pricingKind==='fixed_price'?integer(input.fixedPriceMinor,'单份固定兑换价（分）',Number.MAX_SAFE_INTEGER,1):null
@@ -67,6 +72,8 @@ export function parseMemberGiftCampaign(value:unknown):MemberGiftCampaignRule{
     maximumDailyQuantity:integer(input.maximumDailyQuantity,'每日总份数',1_000_000,1),maximumCostMinor:integer(input.maximumCostMinor,'活动成本预算',Number.MAX_SAFE_INTEGER),
     maximumDailyCostMinor:integer(input.maximumDailyCostMinor,'每日成本预算',Number.MAX_SAFE_INTEGER),maximumUnitCostMinor:integer(input.maximumUnitCostMinor,'单份最高成本',Number.MAX_SAFE_INTEGER),
     currency:'CNY',budgetDateBasis:input.budgetDateBasis,budgetDayStartMinute,availableFrom,availableUntil,couponCalendarVersionId:uuid(input.couponCalendarVersionId,'券时间规则'),productIds}
+  if(dessertProductId){result.dessertProductId=dessertProductId;if(result.quantityPerCustomer!==1)throw new MemberGiftCampaignError('组合赠送每人限一套：一张券和一份甜点')}
+  if(input.highlightMetrics!==undefined)result.highlightMetrics=highlightMetrics as MemberGiftCampaignRule['highlightMetrics']
   if(result.quantityPerCustomer>result.maximumDailyQuantity||result.maximumDailyQuantity>result.maximumQuantity||result.maximumDailyCostMinor>result.maximumCostMinor)throw new MemberGiftCampaignError('每人、每日和活动总上限互相矛盾')
   return result
 }

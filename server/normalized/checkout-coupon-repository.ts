@@ -58,7 +58,7 @@ export class CheckoutCouponRepository{
     // must enforce exactly the same rule as selecting the coupon beforehand.
     const accepted=(await this.tx.query<{replacement_portion_id:string}>(`SELECT c.replacement_portion_id FROM mbox.checkout_upgrade_opportunity_closures c JOIN mbox.checkout_upgrade_opportunities o ON o.tenant_id=c.tenant_id AND o.store_id=c.store_id AND o.id=c.opportunity_id WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.cart_id=$3 AND c.action='accepted' AND c.replacement_portion_id=ANY($4::uuid[])`,[this.tx.scope.tenantId,this.tx.scope.storeId,input.cart.id,input.cart.lines.flatMap(line=>line.portionIds??[])])).rows
     const upgradedPortionIds=[...new Set([...(input.upgradedPortionIds??[]),...accepted.map(row=>row.replacement_portion_id)])]
-    const quote=await quoteCheckoutCart(new OrderRepository(this.tx),input.cart,{...input,upgradedPortionIds,policy:intersectCouponPolicies([...policies.values()]),effects})
+    const quote=await quoteCheckoutCart(new OrderRepository(this.tx,input.customerId),input.cart,{...input,upgradedPortionIds,policy:intersectCouponPolicies([...policies.values()]),effects})
     if(quote.price.discountMinor<=0)throw new CheckoutCartPricingError('当前商品没有可兑现的券优惠，请按原价下单')
     return{...quote,customerId:customer.id,selections:input.selections.map(s=>({...s})),stackingVersionIds:[...policies.keys()]}
   }

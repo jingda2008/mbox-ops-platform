@@ -72,7 +72,7 @@ export function MemberCardManagementPanel({api,auth}:{api:NormalizedApiClient;au
       await command(`${path}/projects`,{...form,availableFrom:`${form.availableFrom}:00+08:00`,availableUntil:`${form.availableUntil}:00+08:00`,cooperationReference:form.kind==='cobrand'?form.cooperationReference:null,
         cooperationValidUntil:form.kind==='cobrand'&&form.cooperationValidUntil?`${form.cooperationValidUntil}:00+08:00`:null,cooperationConfirmed:form.kind==='cobrand'&&form.cooperationConfirmed})
       if(!mounted.current)return
-      await load();setMessage('已保存草稿，尚未开放申请、发卡或发券。')
+      await load();setMessage('已保存草稿，尚未开放申请；请先配置企业微信与服务号加入门槛、发卡或发券。')
     }catch(error){if(mounted.current)setMessage(error instanceof Error?error.message:'保存结果未确认，请核对后重试')}
     finally{if(mounted.current)setBusy(false)}
   }

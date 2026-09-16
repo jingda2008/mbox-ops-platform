@@ -24,7 +24,7 @@ export async function authorizeCheckoutCouponQuote(tx:ScopedTransaction,context:
   if(!await lockBoundGuestTablePosition(tx,{tableSessionId:context.tableSessionId,customerId:row.customer_id,actorRef:context.actor.ref}))throw new PricingAuthorizationDeniedError('原会员已不在此桌，请重新扫码确认会员与桌台')
   const quote=await new CheckoutCouponQuoteRepository(tx).find(context.request.sourceId,row.customer_id)
   const allocations=verifyPricingLineAllocations(quote.lines.map(line=>({requestIndex:line.requestIndex,productId:line.productId,quantity:1,unitPriceMinor:line.standardMinor,discountAmountMinor:line.discountMinor,lineFingerprint:line.lineFingerprint})),context.lines,quote.discountMinor)
-  const standard=await new OrderRepository(tx).quoteCurrent(context.lines,context.channel)
+  const standard=await new OrderRepository(tx,row.customer_id).quoteCurrent(context.lines,context.channel,false)
   if(standard.currency!==quote.currency||standard.items.length!==allocations.length||standard.items.some((item,index)=>item.unitPriceMinor!==allocations[index]!.unitPriceMinor||item.quantity!==1))throw new PricingAuthorizationDeniedError('商品价格已变化，请重新确认报价')
   const benefits=[...new Set(quote.lines.flatMap(line=>line.benefitId?[line.benefitId]:[]))].sort()
   for(const benefitId of benefits){

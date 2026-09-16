@@ -23,6 +23,7 @@ function hasTableScanLaunch(options) {
 App({
   globalData: {
     config: null,
+    foregroundSequence: 0,
     tableSession: null,
   },
 
@@ -45,6 +46,7 @@ App({
   },
 
   onShow(options) {
+    this.globalData.foregroundSequence += 1
     if (this.skipInitialShow) { this.skipInitialShow = false; return }
     if (!hasTableScanLaunch(options)) return
     try {

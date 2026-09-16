@@ -30,7 +30,7 @@ export async function quoteCheckoutCart(
   if(lines.length>MAX_CART_QUANTITY)throw new CheckoutCartPricingError('本次商品份数超出结算范围')
   const upgraded=input.upgradedPortionIds??[]
   if(new Set(upgraded).size!==upgraded.length||upgraded.some(id=>!portionIds.includes(id)))throw new CheckoutCartPricingError('升级份次不属于当前购物车')
-  const standard=await orders.quoteCurrent(lines,input.channel)
+  const standard=await orders.quoteCurrent(lines,input.channel,false)
   if(standard.items.length!==lines.length)throw new CheckoutCartPricingError('报价明细不完整')
   const units=standard.items.map((item,index)=>{
     if(item.requestIndex!==index||item.productId!==lines[index]!.productId||item.quantity!==1)throw new CheckoutCartPricingError('报价与具体份次不一致')

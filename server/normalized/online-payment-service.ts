@@ -1,3 +1,4 @@
+import {normalizePaymentClientIp} from './payment-client-network.js'
 import type {
   PaymentProviderSecretSource,
   ProviderPaymentObservation,
@@ -1248,9 +1249,7 @@ function unsupportedBillSource(): PostarSftpBillSource {
 }
 
 function trustedIp(value: string): string {
-  const normalized = value.trim().replace(/^::ffff:/, '')
-  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(normalized) || /^[0-9a-f:]+$/i.test(normalized)) return normalized
-  throw new OnlinePaymentUnavailableError('无法确认支付终端网络地址')
+  try{return normalizePaymentClientIp(value)}catch{throw new OnlinePaymentUnavailableError('无法确认支付终端网络地址')}
 }
 
 function clientNetworkSnapshot(value: string): Readonly<Record<string, string>> {

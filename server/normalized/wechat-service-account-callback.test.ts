@@ -124,3 +124,15 @@ function encrypt(message: string, target: WechatServiceAccountCallbackConfig): s
   cipher.setAutoPadding(false)
   return Buffer.concat([cipher.update(padded), cipher.final()]).toString('base64')
 }
+
+it('preserves signed plaintext URL verification while rejecting unsigned challenges',async()=>{
+ const app=Fastify();await app.register(wechatServiceAccountCallbackPlugin,{config,now:()=>NOW});
+ const plainSignature=createHash('sha1').update([config.token,TIMESTAMP,NONCE].sort().join('')).digest('hex');
+ const query=`?timestamp=${TIMESTAMP}&nonce=${NONCE}&echostr=plain-echo`;
+ expect((await app.inject('/wechat/service-account/callback'+query+'&signature='+plainSignature)).body).toBe('plain-echo');
+ expect((await app.inject('/wechat/service-account/callback'+query)).statusCode).toBe(403);await app.close();
+})
+it('accepts only an explicitly configured additional callback account',async()=>{
+ const app=Fastify();const official='wxConfiguredOfficial';await app.register(wechatServiceAccountCallbackPlugin,{config:{...config,officialAccountAppId:official},now:()=>NOW});
+ for(const [appId,status] of [[official,200],['wxUnconfiguredOther',403]] as const){const echo=encrypt('echo',{...config,appId});const response=await app.inject(`/wechat/service-account/callback?timestamp=${TIMESTAMP}&nonce=${NONCE}&echostr=${encodeURIComponent(echo)}&msg_signature=${signature(echo)}`);expect(response.statusCode).toBe(status)}await app.close();
+})

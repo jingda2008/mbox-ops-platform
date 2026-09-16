@@ -46,7 +46,7 @@ export const staffModuleAccessDefinitions: readonly StaffModuleAccessDefinition[
     permissionCodes: [
       'inventory.view', 'inventory.manage', 'inventory.cost.view', 'inventory.receive',
       'inventory.count', 'inventory.waste', 'inventory.barcode.bind', 'catalog.product.manage',
-      'catalog.price.manage', 'media.asset.menu.manage',
+      'catalog.price.manage', 'media.asset.menu.manage', 'bottle.manage.all', 'bottle.custody.export',
     ],
   },
   {

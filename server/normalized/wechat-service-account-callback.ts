@@ -12,9 +12,12 @@ export interface WechatServiceAccountCallbackConfig {
   appId: string
   token: string
   encodingAesKey: string
+  officialAccountAppId?: string
+  receiverKind?: 'service_account' | 'wecom'
 }
 
 interface CallbackQuery {
+  signature?: unknown
   msg_signature?: unknown
   timestamp?: unknown
   nonce?: unknown
@@ -71,11 +74,12 @@ export class WechatServiceAccountCallbackVerifier {
     private readonly config: Readonly<WechatServiceAccountCallbackConfig>,
     now: (() => number) | undefined = undefined,
   ) {
-    if (!/^wx[A-Za-z0-9_-]{4,126}$/.test(config.appId)) throw new TypeError('WeChat service account appId is invalid')
+    if (!(config.receiverKind === 'wecom' ? /^ww[A-Za-z0-9_-]{4,126}$/ : /^wx[A-Za-z0-9_-]{4,126}$/).test(config.appId)) throw new TypeError('WeChat service account appId is invalid')
     if (!/^[A-Za-z0-9]{3,32}$/.test(config.token)) throw new TypeError('WeChat service account callback token is invalid')
     if (!/^[A-Za-z0-9]{43}$/.test(config.encodingAesKey)) {
       throw new TypeError('WeChat service account EncodingAESKey is invalid')
     }
+    if(config.officialAccountAppId && (config.receiverKind==='wecom'||!/^wx[A-Za-z0-9_-]{4,126}$/.test(config.officialAccountAppId)||config.officialAccountAppId===config.appId))throw new TypeError('Official account identity invalid')
     this.key = Buffer.from(`${config.encodingAesKey}=`, 'base64')
     if (this.key.length !== 32) throw new TypeError('WeChat service account EncodingAESKey is invalid')
     this.iv = this.key.subarray(0, 16)
@@ -84,8 +88,10 @@ export class WechatServiceAccountCallbackVerifier {
 
   verifyChallenge(query: Readonly<CallbackQuery>): string {
     const encryptedEcho = field(query.echostr, 'echostr', 1, 8_192)
-    this.verifySignature(query, encryptedEcho)
-    return this.decrypt(encryptedEcho)
+    if(typeof query.msg_signature==='string'&&query.msg_signature){this.verifySignature(query,encryptedEcho);return this.decrypt(encryptedEcho)}
+    if(this.config.receiverKind==='wecom')throw new TypeError('Encrypted challenge required')
+    this.verifySignature(query, '')
+    return encryptedEcho
   }
 
   verifyMessage(query: Readonly<CallbackQuery>, body: unknown): string {
@@ -98,7 +104,7 @@ export class WechatServiceAccountCallbackVerifier {
   }
 
   private verifySignature(query: Readonly<CallbackQuery>, encrypted: string): void {
-    const signature = field(query.msg_signature, 'msg_signature', 40, 40)
+    const signature = field(encrypted ? query.msg_signature : query.signature, 'signature', 40, 40)
     if (!/^[0-9a-f]{40}$/i.test(signature)) throw new TypeError('WeChat callback signature is invalid')
     const timestamp = field(query.timestamp, 'timestamp', 1, 16)
     if (!/^[0-9]{1,16}$/.test(timestamp)) throw new TypeError('WeChat callback timestamp is invalid')
@@ -109,7 +115,7 @@ export class WechatServiceAccountCallbackVerifier {
     }
     const nonce = field(query.nonce, 'nonce', 1, 256)
     const expected = createHash('sha1')
-      .update([this.config.token, timestamp, nonce, encrypted].sort().join(''))
+      .update([this.config.token, timestamp, nonce, ...(encrypted?[encrypted]:[])].sort().join(''))
       .digest('hex')
     if (!safeEqual(signature.toLowerCase(), expected)) throw new TypeError('WeChat callback signature is invalid')
   }
@@ -129,7 +135,7 @@ export class WechatServiceAccountCallbackVerifier {
     const messageEnd = 20 + messageLength
     if (messageLength < 1 || messageEnd > plaintext.length) throw new TypeError('WeChat callback plaintext is invalid')
     const appId = plaintext.subarray(messageEnd).toString('utf8')
-    if (!safeEqual(appId, this.config.appId)) throw new TypeError('WeChat callback appId does not match')
+    if (!safeEqual(appId, this.config.appId) && !(this.config.officialAccountAppId && safeEqual(appId,this.config.officialAccountAppId))) throw new TypeError('WeChat callback appId does not match')
     return plaintext.subarray(20, messageEnd).toString('utf8')
   }
 }

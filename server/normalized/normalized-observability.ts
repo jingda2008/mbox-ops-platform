@@ -19,14 +19,31 @@ const CONTENT_SECURITY_POLICY = [
   "manifest-src 'self'",
 ].join('; ')
 
+const SUBSCRIBE_CONTENT_SECURITY_POLICY = [
+    "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:",
+    "base-uri 'self'",
+    "object-src 'none'",
+    "frame-ancestors 'none'",
+    "script-src * 'unsafe-inline' 'unsafe-eval'",
+    "style-src * 'unsafe-inline'",
+    "img-src * data: blob:",
+    "font-src * data:",
+    "connect-src *",
+    "media-src * blob:",
+    "worker-src * blob:",
+    "frame-src *",
+    "child-src *",
+].join('; ');
+
 export function registerNormalizedObservability(
   app: FastifyInstance,
   config: Readonly<NormalizedRuntimeConfig>,
   transactions: ScopedPostgresTransactionRunner,
 ): void {
   app.addHook('onSend', async (request, reply, payload) => {
+    const subscribePage=request.url.split('?',1)[0]==='/api/wechat/service-account/subscribe'
     reply.headers({
-      'content-security-policy': CONTENT_SECURITY_POLICY,
+      'content-security-policy': subscribePage?SUBSCRIBE_CONTENT_SECURITY_POLICY:CONTENT_SECURITY_POLICY,
       'cross-origin-embedder-policy': 'credentialless',
       'cross-origin-opener-policy': 'same-origin-allow-popups',
       'cross-origin-resource-policy': crossOriginResourcePolicy(request),
@@ -35,6 +52,7 @@ export function registerNormalizedObservability(
       'x-content-type-options': 'nosniff',
       'x-frame-options': 'DENY',
     })
+    if(subscribePage){reply.removeHeader('cross-origin-embedder-policy');reply.removeHeader('cross-origin-opener-policy')}
     if (config.nodeEnv === 'production') {
       reply.header('strict-transport-security', 'max-age=31536000; includeSubDomains')
     }

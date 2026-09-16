@@ -74,7 +74,7 @@ export const memberCardApiPlugin:FastifyPluginAsync<Options>=async(app,options)=
     if(typeof input.cooperationConfirmed!=='boolean')throw new MemberCardPolicyError('须明确记录合作确认状态')
     const data={code:string(input.code,'编号'),name:string(input.name,'名称'),terms:string(input.terms,'说明'),kind:input.kind,availableFrom:string(input.availableFrom,'开始时间'),availableUntil:string(input.availableUntil,'结束时间'),cooperationConfirmed:input.cooperationConfirmed,
       cooperationValidUntil:input.cooperationValidUntil===null?null:string(input.cooperationValidUntil,'合作到期时间'),cooperationReference:input.cooperationReference===null?null:string(input.cooperationReference,'合作依据'),employeeId:context.employeeId,businessDate:context.businessDate} as const
-    const result=await write(request,context.scope,'project_create',data,repo=>repo.createProject(data));return{data:result.value,meta:{replayed:result.replayed}}
+    const result=await write(request,context.scope,'project_create',data,repo=>repo.createProject({...data,requireSocialConfiguration:true}));return{data:result.value,meta:{replayed:result.replayed}}
   })
   app.post<{Params:{id:string}}>('/staff/member-cards/projects/:id/state',{bodyLimit:4096},async request=>{
     const input=body(request,['state','reason']),context=await staff(request,input.state==='open'?'loyalty.policy.publish':'member.card.manage')

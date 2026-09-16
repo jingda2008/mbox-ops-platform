@@ -417,7 +417,7 @@ if [ "${reconcile_previous_runtime}" = 1 ]; then
     --arg target "${release_sha}" --arg previous "${previous_release_sha}" \
     --arg archived "${previous_archived_platform_image_digest}" \
     --arg runtime "${active_platform_image_digest}" --arg container "${active_container_id}" \
-    '.schemaVersion == 1 and .authorization == "user-authorized-hotfix-replacement"
+    '.schemaVersion == 1 and .operatorDecision == "user-authorized-hotfix-replacement"
       and .targetReleaseSha == $target and .previousReleaseSha == $previous
       and .archivedPlatformImageDigest == $archived and .runtimePlatformImageDigest == $runtime
       and .containerId == $container

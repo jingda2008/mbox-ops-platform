@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
+import { inspectEvidenceDirectory } from './verify-sensitive-artifacts.mjs'
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8')
 
@@ -364,7 +365,7 @@ test('hotfix replacement requires explicit approval bound to both images, contai
   const digest = (value) => `sha256:${value.repeat(64)}`
   const approval = {
     schemaVersion: 1,
-    authorization: 'user-authorized-hotfix-replacement',
+    operatorDecision: 'user-authorized-hotfix-replacement',
     targetReleaseSha: 'a'.repeat(40), previousReleaseSha: 'b'.repeat(40),
     archivedPlatformImageDigest: digest('c'), runtimePlatformImageDigest: digest('d'),
     containerId: 'e'.repeat(64), observedAt: '2026-09-17T00:00:00Z',
@@ -383,11 +384,12 @@ test('hotfix replacement requires explicit approval bound to both images, contai
   try {
     assert.throws(() => run())
     write(approval)
+    assert.deepEqual(await inspectEvidenceDirectory(directory), [])
     assert.equal(run(), approval.runtimePlatformImageDigest)
     assert.throws(() => run({ reconcile_previous_runtime: '0' }))
     assert.equal(run({ reconcile_previous_runtime: '0', active_platform_image_digest: digest('c') }), digest('c'))
     for (const key of ['targetReleaseSha', 'previousReleaseSha', 'archivedPlatformImageDigest',
-      'runtimePlatformImageDigest', 'containerId', 'authorization', 'observedAt', 'schemaVersion']) {
+      'runtimePlatformImageDigest', 'containerId', 'operatorDecision', 'observedAt', 'schemaVersion']) {
       write({ ...approval, [key]: 'incorrect' })
       assert.throws(() => run(), key)
     }

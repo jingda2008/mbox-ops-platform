@@ -1,3 +1,4 @@
+import { allocateMemberNumber } from './member-number-policy.js'
 import { createHash, randomUUID } from 'node:crypto'
 import type { JsonObject } from './command-executor.js'
 import type { ScopedTransaction } from './transaction-runner.js'
@@ -1444,7 +1445,7 @@ export class CustomerExperienceRepository {
     return Object.fromEntries(result.rows.map((row) => [row.preference_key, row.preference_value])) as JsonObject
   }
 
-  async enrollMembership(customerId: string, memberNo: string): Promise<{ membership: PublicMembership; created: boolean }> {
+  async enrollMembership(customerId: string, memberNo?: string): Promise<{ membership: PublicMembership; created: boolean }> {
     await this.transaction.query(`
       SELECT id FROM mbox.customers
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid
@@ -1453,6 +1454,7 @@ export class CustomerExperienceRepository {
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, customerId])
     const existing = await this.findMembership(customerId)
     if (existing !== null) return { membership: membershipView(existing), created: false }
+    memberNo ??= await allocateMemberNumber(this.transaction)
     const inserted = await this.transaction.query<MembershipRow>(`
       WITH membership AS (
         INSERT INTO mbox.customer_memberships (

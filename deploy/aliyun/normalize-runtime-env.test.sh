@@ -132,3 +132,15 @@ for tier in validation production; do
     done
   done
 done
+
+# Preserve the already deployed service-account subscribe configuration.
+for tier in validation production; do
+  cp "${postar_env_file}" "${env_file}"
+  for key in MBOX_WECHAT_SERVICE_ACCOUNT_APP_SECRET MBOX_WECHAT_SERVICE_ACCOUNT_ACTIVITY_SUBSCRIBE_TEMPLATE_ID MBOX_WECHAT_SERVICE_ACCOUNT_COUPON_SUBSCRIBE_TEMPLATE_ID MBOX_WECHAT_SERVICE_ACCOUNT_MINI_PROGRAM_APP_ID MBOX_PUBLIC_ORIGIN MBOX_WECHAT_OFFICIAL_ACCOUNT_APP_ID; do
+    printf '%s=preserved-test-value\n' "${key}" >> "${env_file}"
+  done
+  "${root}/deploy/aliyun/normalize-runtime-env.sh" "${env_file}" "${tier}"
+  for key in MBOX_WECHAT_SERVICE_ACCOUNT_APP_SECRET MBOX_WECHAT_SERVICE_ACCOUNT_ACTIVITY_SUBSCRIBE_TEMPLATE_ID MBOX_WECHAT_SERVICE_ACCOUNT_COUPON_SUBSCRIBE_TEMPLATE_ID MBOX_WECHAT_SERVICE_ACCOUNT_MINI_PROGRAM_APP_ID MBOX_PUBLIC_ORIGIN MBOX_WECHAT_OFFICIAL_ACCOUNT_APP_ID; do
+    grep -qx "${key}=preserved-test-value" "${env_file}"
+  done
+done

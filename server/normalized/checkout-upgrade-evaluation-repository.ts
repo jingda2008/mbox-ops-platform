@@ -14,7 +14,7 @@ export class CheckoutUpgradeEvaluationRepository{
  constructor(private readonly tx:ScopedTransaction){}
  async evaluate(input:{ruleId:string;tableSessionId:string;customerId:string;portionId:string;expectedGeneration:number;expectedVersion:number;occasion:string|null;alcoholPreference:string|null;bundleSelection?:BundleUnitSelectionInput;selections:readonly CheckoutCouponSelection[]}){
   const scope=[this.tx.scope.tenantId,this.tx.scope.storeId]
-  const cart=await new GuestSharedCartRepository(this.tx).findCurrentOpen(input.tableSessionId)
+  const cart=await new GuestSharedCartRepository(this.tx,input.customerId).findCurrentOpen(input.tableSessionId)
   if(!cart||cart.guestWritesFrozen||cart.generation!==input.expectedGeneration||cart.version!==input.expectedVersion)return{eligible:false as const,reason:'cart_changed'}
   const source=cart.lines.find(line=>line.portionIds?.includes(input.portionId))
   if(!source)return{eligible:false as const,reason:'portion_missing'}

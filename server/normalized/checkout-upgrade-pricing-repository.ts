@@ -17,7 +17,7 @@ export class CheckoutUpgradePricingRepository{
   const quote=async(cart:GuestSharedCart,upgradedPortionIds:string[])=>{
    const state={expectedGeneration:input.cart.generation,expectedVersion:input.cart.version,channel:input.channel,upgradedPortionIds}
    if(input.selections.length)return new CheckoutCouponRepository(this.tx).quote({...state,cart,customerId:input.customerId,selections:input.selections})
-   return quoteCheckoutCart(new OrderRepository(this.tx),cart,{...state,policy:DEFAULT_STACKING_POLICY,effects:[]})
+   return quoteCheckoutCart(new OrderRepository(this.tx,input.customerId),cart,{...state,policy:DEFAULT_STACKING_POLICY,effects:[]})
   }
   const before=await quote(input.cart,[]),after=await quote(proposed,[input.portionId])
   if(before.currency!==after.currency)throw new CheckoutCartPricingError('升级前后币种不一致')

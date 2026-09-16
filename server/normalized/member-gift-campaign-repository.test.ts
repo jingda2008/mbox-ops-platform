@@ -73,6 +73,20 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL
     expect(rows).toHaveLength(2);expect(rows.every(r=>r.quantity_total===1&&r.seconds===259200)).toBe(true)
     expect((await pool.query('SELECT count(*)::int AS n FROM mbox.orders WHERE tenant_id=$1 AND store_id=$2',[tenantId,storeId])).rows[0].n).toBe(0)
   })
+  it('issues coupon and dessert atomically once per customer and includes both in the budget',async()=>{
+    const versionId=await campaign({dessertProductId:productId,maximumUnitCostMinor:200,maximumCostMinor:400,maximumDailyCostMinor:400,highlightMetrics:['issued','redeemed','remaining','cost']}),id=await customer()
+    const job=await run(repo=>repo.enqueue({versionId,customerId:id,cycleKey:'first'})),issued=await run(repo=>repo.deliver(job.jobId))
+    expect(issued.status).toBe('issued');expect('dessertBenefitId' in issued&&issued.dessertBenefitId).toBeTruthy()
+    expect((await pool.query('SELECT quantity_total FROM mbox.benefits WHERE customer_id=$1',[id])).rows).toHaveLength(2)
+    const repeated=await run(repo=>repo.enqueue({versionId,customerId:id,cycleKey:'different-batch'}));expect(repeated.jobId).toBe(job.jobId)
+    await run(repo=>repo.deliver(job.jobId));expect((await pool.query('SELECT count(*)::int AS n FROM mbox.benefits WHERE customer_id=$1',[id])).rows[0].n).toBe(2)
+    expect((await run(repo=>repo.find(versionId))).highlights).toMatchObject({issued:'1',redeemed:'0',remaining:'1',cost:'200'})
+    const id2=await customer(),job2=await run(repo=>repo.enqueue({versionId,customerId:id2,cycleKey:'test-rollback'}))
+    await expect(runner.run(scope,async tx=>{await new MemberGiftCampaignRepository(tx).deliver(job2.jobId);throw new Error('injected transaction failure')})).rejects.toThrow('injected')
+    expect((await pool.query('SELECT count(*)::int AS n FROM mbox.benefits WHERE customer_id=$1',[id2])).rows[0].n).toBe(0)
+    expect((await run(repo=>repo.deliver(job2.jobId))).status).toBe('issued')
+    await expect(campaign({dessertProductId:productId,maximumUnitCostMinor:100})).rejects.toThrow('预算不足')
+  })
   it('budgets the costliest concrete bundle choice and rechecks cost increases before issuance',async()=>{
     const bundle=randomUUID(),base=randomUUID(),cheap=randomUUID(),expensive=randomUUID(),group=randomUUID()
     for(const [id,kind,cost] of [[bundle,'bundle',100],[base,'single',100],[cheap,'single',200],[expensive,'single',800]] as const){

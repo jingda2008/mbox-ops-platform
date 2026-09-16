@@ -12,7 +12,7 @@ import {parseMemberGiftCampaign,assessGiftBudget,giftBudgetDate,MemberGiftCampai
 
 interface Campaign extends Record<string,unknown>{id:string;code:string;name:string;status:string;created_by_employee_id:string;approved_by_employee_id:string|null;rule:MemberGiftCampaignRule}
 interface Product extends Record<string,unknown>{id:string;product_kind:'single'|'bundle';cost:string|null;price:string|null;currency:string|null}
-interface Job extends Record<string,unknown>{id:string;campaign_version_id:string;campaign_code:string;cycle_key:string;customer_id:string;status:string;quantity:number;benefit_id:string|null;attempts:number}
+interface Job extends Record<string,unknown>{id:string;campaign_version_id:string;campaign_code:string;cycle_key:string;customer_id:string;status:string;quantity:number;benefit_id:string|null;dessert_benefit_id:string|null;attempts:number}
 const hash=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex')
 function id(value:string){if(typeof value!=='string'||!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value))throw new MemberGiftCampaignError('记录编号无效')}
 function reason(value:string){if(typeof value!=='string'||value.trim().length<2||value.length>500)throw new MemberGiftCampaignError('请输入2至500字的操作原因')}
@@ -57,13 +57,13 @@ export class MemberGiftCampaignRepository{
   }
   async jobs(employeeId:string,cursor:string|null=null){
     await new StaffAccessRepository(this.tx).assertPermission(employeeId,'loyalty.configuration.view');if(cursor)id(cursor)
-    const rows=(await this.tx.query<Record<string,unknown>&{id:string}>(`SELECT j.id,j.campaign_code,v.name,j.status,j.benefit_id,j.quantity,j.estimated_cost_minor::text,j.attempts,j.next_attempt_at::text,j.last_error_code,j.created_at::text,j.completed_at::text,c.public_id AS customer_reference FROM mbox.member_gift_delivery_jobs j JOIN mbox.member_gift_campaign_versions v ON v.tenant_id=j.tenant_id AND v.store_id=j.store_id AND v.id=j.campaign_version_id JOIN mbox.customers c ON c.tenant_id=j.tenant_id AND c.store_id=j.store_id AND c.id=j.customer_id WHERE j.tenant_id=$1 AND j.store_id=$2 AND ($3::uuid IS NULL OR j.id>$3) ORDER BY j.id LIMIT 51`,[...this.scope,cursor])).rows
+    const rows=(await this.tx.query<Record<string,unknown>&{id:string}>(`SELECT j.id,j.campaign_code,v.name,j.status,j.benefit_id,j.dessert_benefit_id,j.quantity,j.estimated_cost_minor::text,j.attempts,j.next_attempt_at::text,j.last_error_code,j.created_at::text,j.completed_at::text,c.public_id AS customer_reference FROM mbox.member_gift_delivery_jobs j JOIN mbox.member_gift_campaign_versions v ON v.tenant_id=j.tenant_id AND v.store_id=j.store_id AND v.id=j.campaign_version_id JOIN mbox.customers c ON c.tenant_id=j.tenant_id AND c.store_id=j.store_id AND c.id=j.customer_id WHERE j.tenant_id=$1 AND j.store_id=$2 AND ($3::uuid IS NULL OR j.id>$3) ORDER BY j.id LIMIT 51`,[...this.scope,cursor])).rows
     return{items:rows.slice(0,50),nextCursor:rows.length>50?rows[49]!.id:null}
   }
   async selfJobs(customerId:string,cursor:string|null=null){
     id(customerId);if(cursor)id(cursor)
     const canonical=(await new CustomerRepository(this.tx).resolveCanonical(customerId)).id
-    const rows=(await this.tx.query<Record<string,unknown>&{id:string}>(`SELECT j.id,v.name,j.status,j.benefit_id,j.quantity,j.created_at::text,j.completed_at::text FROM mbox.member_gift_delivery_jobs j JOIN mbox.member_gift_campaign_versions v ON v.tenant_id=j.tenant_id AND v.store_id=j.store_id AND v.id=j.campaign_version_id WHERE j.tenant_id=$1 AND j.store_id=$2 AND mbox.canonical_customer_id(j.tenant_id,j.store_id,j.customer_id)=$3 AND ($4::uuid IS NULL OR j.id>$4) ORDER BY j.id LIMIT 51`,[...this.scope,canonical,cursor])).rows
+    const rows=(await this.tx.query<Record<string,unknown>&{id:string}>(`SELECT j.id,v.name,j.status,j.benefit_id,j.dessert_benefit_id,j.quantity,j.created_at::text,j.completed_at::text FROM mbox.member_gift_delivery_jobs j JOIN mbox.member_gift_campaign_versions v ON v.tenant_id=j.tenant_id AND v.store_id=j.store_id AND v.id=j.campaign_version_id WHERE j.tenant_id=$1 AND j.store_id=$2 AND mbox.canonical_customer_id(j.tenant_id,j.store_id,j.customer_id)=$3 AND ($4::uuid IS NULL OR j.id>$4) ORDER BY j.id LIMIT 51`,[...this.scope,canonical,cursor])).rows
     return{items:rows.slice(0,50),nextCursor:rows.length>50?rows[49]!.id:null}
   }
   async target(input:{versionId:string;customerIds:string[];cycleKey:string;employeeId:string;businessDate:string;reason:string}){
@@ -96,10 +96,16 @@ export class MemberGiftCampaignRepository{
     if(!row)throw new MemberGiftCampaignError('活动不存在或不属于当前门店')
     const products=await this.tx.query<{product_id:string;name:string;unit_cost_minor:string}>(`SELECT pool.product_id,p.name,pool.unit_cost_minor::text FROM mbox.member_gift_campaign_products pool JOIN mbox.products p ON p.tenant_id=pool.tenant_id AND p.store_id=pool.store_id AND p.id=pool.product_id WHERE pool.tenant_id=$1 AND pool.store_id=$2 AND pool.campaign_version_id=$3 ORDER BY pool.product_id`,[...this.scope,versionId])
     return{...row,products:products.rows,id:String(row.id),code:String(row.code),name:String(row.name),status:String(row.status),created_by_employee_id:String(row.created_by_employee_id),approved_by_employee_id:row.approved_by_employee_id?String(row.approved_by_employee_id):null,
-      rule:parseMemberGiftCampaign({trigger:row.trigger_kind,cardProjectId:row.card_project_id,audience:{minimumTier:row.minimum_tier,cardCodes:row.card_codes,cardMatch:row.card_match,tierAndCards:row.tier_and_cards},
+      highlights:await this.highlights(versionId,row.highlight_metrics as string[]),
+      rule:parseMemberGiftCampaign({dessertProductId:row.dessert_product_id,highlightMetrics:row.highlight_metrics,trigger:row.trigger_kind,cardProjectId:row.card_project_id,audience:{minimumTier:row.minimum_tier,cardCodes:row.card_codes,cardMatch:row.card_match,tierAndCards:row.tier_and_cards},
         pricingKind:row.pricing_kind,fixedPriceMinor:row.fixed_price_minor===null?null:Number(row.fixed_price_minor),stackingVersionId:row.stacking_version_id,
         quantityPerCustomer:Number(row.quantity_per_customer),maximumQuantity:Number(row.maximum_quantity),maximumDailyQuantity:Number(row.maximum_daily_quantity),maximumCostMinor:Number(row.maximum_cost_minor),maximumDailyCostMinor:Number(row.maximum_daily_cost_minor),maximumUnitCostMinor:Number(row.maximum_unit_cost_minor),budgetDateBasis:row.budget_date_basis,budgetDayStartMinute:Number(row.budget_day_start_minute),currency:row.currency,
         availableFrom:new Date(row.available_from as string).toISOString(),availableUntil:new Date(row.available_until as string).toISOString(),couponCalendarVersionId:row.coupon_calendar_version_id,productIds:products.rows.map(p=>p.product_id)})}
+  }
+  private async highlights(versionId:string,metrics:string[]){
+    const r=(await this.tx.query<{issued:string;redeemed:string;cost:string;maximum_quantity:string}>(`SELECT COALESCE(sum(j.quantity) FILTER(WHERE j.status='issued'),0)::text AS issued,COALESCE(sum(b.quantity_redeemed),0)::text AS redeemed,COALESCE(sum(j.estimated_cost_minor) FILTER(WHERE j.status='issued'),0)::text AS cost,(SELECT maximum_quantity::text FROM mbox.member_gift_campaign_versions WHERE tenant_id=$1 AND store_id=$2 AND id=$3) AS maximum_quantity FROM mbox.member_gift_delivery_jobs j LEFT JOIN mbox.benefits b ON b.tenant_id=j.tenant_id AND b.store_id=j.store_id AND b.id=j.dessert_benefit_id WHERE j.tenant_id=$1 AND j.store_id=$2 AND j.campaign_code=(SELECT code FROM mbox.member_gift_campaign_versions WHERE tenant_id=$1 AND store_id=$2 AND id=$3)`,[...this.scope,versionId])).rows[0]!
+    const values:Record<string,string>={issued:r.issued,redeemed:r.redeemed,cost:r.cost,remaining:String(Math.max(0,Number(r.maximum_quantity)-Number(r.issued)))}
+    return Object.fromEntries((metrics??['issued','redeemed','remaining']).map(key=>[key,values[key]]))
   }
   private async products(productIds:string[]){
     const result=await this.tx.query<Product>(`SELECT p.id,p.product_kind,p.cost_amount_minor::text AS cost,price.amount_minor::text AS price,price.currency FROM mbox.products p
@@ -124,16 +130,16 @@ export class MemberGiftCampaignRepository{
       const cards=await this.tx.query('SELECT id FROM mbox.member_card_projects WHERE tenant_id=$1 AND store_id=$2 AND code=ANY($3::text[])',[...this.scope,rule.audience.cardCodes])
       if(cards.rows.length!==rule.audience.cardCodes.length)throw new MemberGiftCampaignError('目标兴趣卡包含不存在或其他门店的项目')
     }
-    const products=await this.products(rule.productIds)
+    const products=await this.products(rule.productIds),dessert=rule.dessertProductId?(await this.products([rule.dessertProductId]))[0]:null
     if(rule.pricingKind==='fixed_price'){
       await new StackingPricingDraftRepository(this.tx).find(rule.stackingVersionId!)
       if(products.some(p=>Number(p.price)<=rule.fixedPriceMinor!))throw new MemberGiftCampaignError('固定兑换价须低于商品池内每款商品的标准价')
     }
-    if(!assessGiftBudget(rule,{quantity:0,dailyQuantity:0,costMinor:0,dailyCostMinor:0},Math.max(...products.map(p=>Number(p.cost)))).allowed)throw new MemberGiftCampaignError('预算不足以兑现单人赠送承诺')
+    if(!assessGiftBudget(rule,{quantity:0,dailyQuantity:0,costMinor:0,dailyCostMinor:0},Math.max(...products.map(p=>Number(p.cost)))+Number(dessert?.cost??0)).allowed)throw new MemberGiftCampaignError('预算不足以兑现单人赠送承诺')
     await new CouponCalendarRepository(this.tx).find(rule.couponCalendarVersionId)
     const version=Number((await this.tx.query<{n:number}>('SELECT COALESCE(max(version),0)+1 AS n FROM mbox.member_gift_campaign_versions WHERE tenant_id=$1 AND store_id=$2 AND code=$3',[...this.scope,input.code])).rows[0]!.n)
-    const row=(await this.tx.query<{id:string}>(`INSERT INTO mbox.member_gift_campaign_versions(tenant_id,store_id,code,version,name,trigger_kind,card_project_id,minimum_tier,card_codes,card_match,tier_and_cards,quantity_per_customer,maximum_quantity,maximum_daily_quantity,maximum_cost_minor,maximum_daily_cost_minor,maximum_unit_cost_minor,budget_date_basis,budget_day_start_minute,available_from,available_until,coupon_calendar_version_id,created_by_employee_id,reason,request_key,request_fingerprint,pricing_kind,fixed_price_minor,stacking_version_id)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29) RETURNING id`,[...this.scope,input.code,version,input.name.trim(),rule.trigger,rule.cardProjectId,rule.audience.minimumTier,rule.audience.cardCodes,rule.audience.cardMatch,rule.audience.tierAndCards,rule.quantityPerCustomer,rule.maximumQuantity,rule.maximumDailyQuantity,rule.maximumCostMinor,rule.maximumDailyCostMinor,rule.maximumUnitCostMinor,rule.budgetDateBasis,rule.budgetDayStartMinute,rule.availableFrom,rule.availableUntil,rule.couponCalendarVersionId,input.employeeId,input.reason.trim(),input.requestKey,fingerprint,rule.pricingKind,rule.fixedPriceMinor,rule.stackingVersionId])).rows[0]!
+    const row=(await this.tx.query<{id:string}>(`INSERT INTO mbox.member_gift_campaign_versions(tenant_id,store_id,code,version,name,trigger_kind,card_project_id,minimum_tier,card_codes,card_match,tier_and_cards,quantity_per_customer,maximum_quantity,maximum_daily_quantity,maximum_cost_minor,maximum_daily_cost_minor,maximum_unit_cost_minor,budget_date_basis,budget_day_start_minute,available_from,available_until,coupon_calendar_version_id,created_by_employee_id,reason,request_key,request_fingerprint,pricing_kind,fixed_price_minor,stacking_version_id,dessert_product_id,highlight_metrics)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31) RETURNING id`,[...this.scope,input.code,version,input.name.trim(),rule.trigger,rule.cardProjectId,rule.audience.minimumTier,rule.audience.cardCodes,rule.audience.cardMatch,rule.audience.tierAndCards,rule.quantityPerCustomer,rule.maximumQuantity,rule.maximumDailyQuantity,rule.maximumCostMinor,rule.maximumDailyCostMinor,rule.maximumUnitCostMinor,rule.budgetDateBasis,rule.budgetDayStartMinute,rule.availableFrom,rule.availableUntil,rule.couponCalendarVersionId,input.employeeId,input.reason.trim(),input.requestKey,fingerprint,rule.pricingKind,rule.fixedPriceMinor,rule.stackingVersionId,rule.dessertProductId??null,rule.highlightMetrics??['issued','redeemed','remaining']])).rows[0]!
     for(const p of products)await this.tx.query('INSERT INTO mbox.member_gift_campaign_products(tenant_id,store_id,campaign_version_id,product_id,unit_cost_minor,unit_price_minor) VALUES($1,$2,$3,$4,$5,$6)',[...this.scope,row.id,p.id,p.cost,p.price])
     await this.audit('created',row.id,input.employeeId,input.businessDate,input.reason)
     return{versionId:row.id,replayed:false}
@@ -150,6 +156,7 @@ export class MemberGiftCampaignRepository{
     if(input.action!=='stop'){
       if(campaign.created_by_employee_id===input.employeeId||(input.action==='publish'&&campaign.approved_by_employee_id===input.employeeId))throw new MemberGiftCampaignError('规则创建、审核、发布须由不同授权人员操作')
       const products=await this.products(campaign.rule.productIds)
+      if(campaign.rule.dessertProductId)await this.products([campaign.rule.dessertProductId])
       if(campaign.rule.pricingKind==='fixed_price'&&products.some(p=>Number(p.price)<=campaign.rule.fixedPriceMinor!))throw new MemberGiftCampaignError('商品现价已不高于固定兑换价，请重新配置活动')
       if(Date.parse(campaign.rule.availableUntil)<=(await this.now()).getTime())throw new MemberGiftCampaignError('活动发放期限已结束')
       if(input.action==='publish'&&(await new CouponCalendarRepository(this.tx).find(campaign.rule.couponCalendarVersionId)).status!=='published')throw new MemberGiftCampaignError('券时间规则尚未发布或已停止发放')
@@ -166,7 +173,7 @@ export class MemberGiftCampaignRepository{
       LEFT JOIN LATERAL(SELECT tier FROM mbox.membership_tier_periods WHERE tenant_id=m.tenant_id AND store_id=m.store_id AND membership_id=m.id AND starts_at<=clock_timestamp() AND status IN('active','grace') AND CASE WHEN status='grace' THEN grace_ends_at>clock_timestamp() ELSE ends_at IS NULL OR ends_at>clock_timestamp() END ORDER BY starts_at DESC,id DESC LIMIT 1) period ON account.id IS NOT NULL
       WHERE m.tenant_id=$1 AND m.store_id=$2 AND mbox.canonical_customer_id(m.tenant_id,m.store_id,m.customer_id)=$3 AND EXISTS(SELECT 1 FROM mbox.customers c WHERE c.tenant_id=m.tenant_id AND c.store_id=m.store_id AND c.id=$3 AND c.status='active') ORDER BY (m.customer_id=$3) DESC,m.joined_at DESC,m.id LIMIT 1`,[...this.scope,customerId])).rows[0]
     if(!row||row.status!=='active'||row.account_status!=='active')return false
-    const cards=await this.tx.query<{code:string}>(`SELECT p.code FROM mbox.member_cards c JOIN mbox.member_card_projects p ON p.tenant_id=c.tenant_id AND p.store_id=c.store_id AND p.id=c.project_id WHERE c.tenant_id=$1 AND c.store_id=$2 AND mbox.canonical_customer_id(c.tenant_id,c.store_id,c.customer_id)=$3 AND c.status='active' AND c.valid_until>clock_timestamp()`,[...this.scope,customerId])
+    const cards=await this.tx.query<{code:string}>(`SELECT p.code FROM mbox.member_cards c JOIN mbox.member_card_projects p ON p.tenant_id=c.tenant_id AND p.store_id=c.store_id AND p.id=c.project_id WHERE c.tenant_id=$1 AND c.store_id=$2 AND mbox.canonical_customer_id(c.tenant_id,c.store_id,c.customer_id)=$3 AND c.status='active' AND c.valid_until>clock_timestamp() AND mbox.card_social_conditions_met(c.tenant_id,c.store_id,c.project_id,c.customer_id)`,[...this.scope,customerId])
     return matchesCardAudience(rule.audience,{tier:row.tier,activeCardCodes:cards.rows.map(c=>c.code)})
   }
   async enqueue(input:{versionId:string;customerId:string;cycleKey:string;applicationId?:string}){
@@ -175,6 +182,7 @@ export class MemberGiftCampaignRepository{
     if(!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$/.test(input.cycleKey))throw new MemberGiftCampaignError('发放批次编号无效')
     // Campaign code, not version, owns once-per-cycle eligibility after upgrades
     // and identity merges. A cancelled/blocked job is not a fresh entitlement.
+    if(campaign.rule.dessertProductId&&campaign.rule.trigger==='targeted')input={...input,cycleKey:'paired-once'}
     const existing=(await this.tx.query<{id:string;status:string}>(`SELECT id,status FROM mbox.member_gift_delivery_jobs WHERE tenant_id=$1 AND store_id=$2 AND campaign_code=$3 AND cycle_key=$4 AND mbox.canonical_customer_id(tenant_id,store_id,customer_id)=$5 ORDER BY created_at,id LIMIT 1`,[...this.scope,campaign.code,input.cycleKey,customerId])).rows[0]
     if(existing)return{jobId:existing.id,status:existing.status,replayed:true}
     const now=await this.now()
@@ -192,7 +200,7 @@ export class MemberGiftCampaignRepository{
     if(!found)throw new MemberGiftCampaignError('发券任务不存在')
     const customerId=await this.identity(found.customer_id);await this.lock(found.campaign_code)
     const job=(await this.tx.query<Job>('SELECT * FROM mbox.member_gift_delivery_jobs WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE',[...this.scope,jobId])).rows[0]!
-    if(['issued','cancelled','duplicate'].includes(job.status))return{jobId,status:job.status,benefitId:job.benefit_id,replayed:true}
+    if(['issued','cancelled','duplicate'].includes(job.status))return{jobId,status:job.status,benefitId:job.benefit_id,dessertBenefitId:job.dessert_benefit_id,replayed:true}
     const campaign=await this.find(job.campaign_version_id),now=await this.now(),date=giftBudgetDate(campaign.rule,now)
     const blocked=async(code:string)=>{
       const delay=['campaign_closed','coupon_calendar_closed','campaign_quantity_exceeded','campaign_cost_exceeded'].includes(code)?30*86400:Math.min(86400,900*2**Math.min(job.attempts,7))
@@ -203,18 +211,19 @@ export class MemberGiftCampaignRepository{
     if(!await this.eligible(customerId,campaign.rule))return blocked('audience_changed')
     const duplicate=(await this.tx.query<{id:string}>(`SELECT id FROM mbox.member_gift_delivery_jobs WHERE tenant_id=$1 AND store_id=$2 AND campaign_code=$3 AND cycle_key=$4 AND id<>$5 AND status='issued' AND mbox.canonical_customer_id(tenant_id,store_id,customer_id)=$6 LIMIT 1`,[...this.scope,campaign.code,job.cycle_key,jobId,customerId])).rows[0]
     if(duplicate){await this.tx.query("UPDATE mbox.member_gift_delivery_jobs SET status='duplicate',completed_at=clock_timestamp(),last_error_code='same_family_already_issued' WHERE tenant_id=$1 AND store_id=$2 AND id=$3",[...this.scope,jobId]);return{jobId,status:'duplicate',replayed:false}}
-    let products:Product[]
-    try{products=await this.products(campaign.rule.productIds)}catch(error){if(error instanceof MemberGiftCampaignError)return blocked('product_unavailable_or_cost_unknown');throw error}
+    let products:Product[],dessert:Product|null=null
+    try{products=await this.products(campaign.rule.productIds);dessert=campaign.rule.dessertProductId?(await this.products([campaign.rule.dessertProductId]))[0]!:null}catch(error){if(error instanceof MemberGiftCampaignError)return blocked('product_unavailable_or_cost_unknown');throw error}
     const usage=(await this.tx.query<{quantity:string;daily_quantity:string;cost:string;daily_cost:string}>(`SELECT COALESCE(sum(quantity),0)::text AS quantity,COALESCE(sum(quantity) FILTER(WHERE budget_date=$4::date),0)::text AS daily_quantity,COALESCE(sum(estimated_cost_minor),0)::text AS cost,COALESCE(sum(estimated_cost_minor) FILTER(WHERE budget_date=$4::date),0)::text AS daily_cost FROM mbox.member_gift_delivery_jobs WHERE tenant_id=$1 AND store_id=$2 AND campaign_code=$3 AND status='issued'`,[...this.scope,campaign.code,date])).rows[0]!
-    const budget=assessGiftBudget(campaign.rule,{quantity:Number(usage.quantity),dailyQuantity:Number(usage.daily_quantity),costMinor:Number(usage.cost),dailyCostMinor:Number(usage.daily_cost)},Math.max(...products.map(p=>Number(p.cost))))
+    const budget=assessGiftBudget(campaign.rule,{quantity:Number(usage.quantity),dailyQuantity:Number(usage.daily_quantity),costMinor:Number(usage.cost),dailyCostMinor:Number(usage.daily_cost)},Math.max(...products.map(p=>Number(p.cost)))+Number(dessert?.cost??0))
     if(!budget.allowed)return blocked(budget.reason)
     if((await new CouponCalendarRepository(this.tx).find(campaign.rule.couponCalendarVersionId)).status!=='published')return blocked('coupon_calendar_closed')
     if(campaign.rule.pricingKind==='fixed_price'&&(await new StackingPricingDraftRepository(this.tx).find(campaign.rule.stackingVersionId!)).status!=='published')return blocked('stacking_policy_closed')
     const benefit=await new BenefitRepository(this.tx).issue({customerId,benefitCode:campaign.code,quantity:job.quantity,couponCalendarVersionId:campaign.rule.couponCalendarVersionId,
       ...(campaign.rule.pricingKind==='fixed_price'?{benefitType:'discount' as const,valueAmountMinor:0,currency:'CNY',couponPriceCampaignVersionId:campaign.id}:{benefitType:'gift_product' as const,allowedProductIds:campaign.rule.productIds}),
       benefitSnapshot:{name:campaign.name},authorizationSource:{kind:'member_gift_campaign',campaignVersionId:campaign.id,jobId},reason:'已审核发布的活动发放',issuanceIdempotencyKey:`member-gift:${jobId}`,issuanceFingerprint:hash({jobId,campaignVersionId:campaign.id})})
-    await this.tx.query("UPDATE mbox.member_gift_delivery_jobs SET status='issued',benefit_id=$4,budget_date=$5,estimated_cost_minor=$6,attempts=attempts+1,last_error_code=NULL,completed_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND id=$3",[...this.scope,jobId,benefit.id,date,budget.estimatedCostMinor])
+    const dessertBenefit=campaign.rule.dessertProductId?await new BenefitRepository(this.tx).issue({customerId,benefitCode:campaign.code,quantity:job.quantity,couponCalendarVersionId:campaign.rule.couponCalendarVersionId,benefitType:'gift_product',allowedProductIds:[campaign.rule.dessertProductId],benefitSnapshot:{name:`${campaign.name} · 小甜点`},authorizationSource:{kind:'member_gift_campaign',campaignVersionId:campaign.id,jobId,pairedWithBenefitId:benefit.id},reason:'组合赠送的小甜点权益；实际领取另行核销',issuanceIdempotencyKey:`member-gift-dessert:${jobId}`,issuanceFingerprint:hash({jobId,campaignVersionId:campaign.id,dessertProductId:campaign.rule.dessertProductId})}):null
+    await this.tx.query("UPDATE mbox.member_gift_delivery_jobs SET status='issued',benefit_id=$4,budget_date=$5,estimated_cost_minor=$6,dessert_benefit_id=$7,attempts=attempts+1,last_error_code=NULL,completed_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND id=$3",[...this.scope,jobId,benefit.id,date,budget.estimatedCostMinor,dessertBenefit?.id??null])
     await this.audit('issued',jobId,undefined,date,'发券成功，记录预算承诺，不计营业收入')
-    return{jobId,status:'issued',benefitId:benefit.id,replayed:false}
+    return{jobId,status:'issued',benefitId:benefit.id,dessertBenefitId:dessertBenefit?.id??null,replayed:false}
   }
 }

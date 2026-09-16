@@ -1217,7 +1217,7 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
   app.get('/staff/loyalty/accounts', async (request, reply) => handle(reply, async () => {
     const context = await staffContextWithPermission(options, request, 'loyalty.account.view')
     const query = objectBody(request.query)
-    const memberNo = text(query.memberNo, '会员号', 3, 64)
+    const memberNo = text(query.memberNo, '会员号', 1, 64)
     const account = await options.transactions.run(context.scope, async (transaction) => {
       const accountResult = await transaction.query<StaffMemberAccountRow>(`
         SELECT membership.id AS membership_id,membership.member_no,
@@ -1514,7 +1514,7 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
     )
     const body = objectBody(request.body)
     return reply.code(201).send({ data: await options.membershipRecovery.recordStaffVerifiedContact(context, {
-      memberNo: text(body.memberNo, '会员号', 8, 64),
+      memberNo: text(body.memberNo, '会员号', 1, 64),
       e164Phone: text(body.phone, '已人工核验手机号', 8, 24),
       reason: text(body.reason, '核验说明', 2, 500),
       idempotencyKey: idempotencyKey(request),

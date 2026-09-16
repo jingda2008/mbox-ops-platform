@@ -82,6 +82,7 @@ try {
     if (!result.rows[0]) throw new Error('normalized browser fixture employee is missing')
     return result.rows[0].id
   }, { readOnly: true })
+  if(process.env.NORMALIZED_E2E_REQUIREMENTS_V9==='true')await runtime.transactions.run(scope,async transaction=>{const access=new StaffAccessRepository(transaction);for(const permissionCode of ['bottle.manage.all','bottle.custody.export'])await access.setEmployeePermissionOverride({employeeId,permissionCode,effect:'grant',reason:'v9隔离浏览器验收',configuredByEmployeeId:employeeId,startsAt:new Date(Date.now()-60000).toISOString()})})
   // Opt-in, throwaway database only. Never add these grants to the real store
   // configuration merely to make a new feature visible during acceptance.
   const memberCardFixture = process.env.NORMALIZED_E2E_MEMBER_CARDS === 'true'

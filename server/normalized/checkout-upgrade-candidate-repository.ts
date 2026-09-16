@@ -20,7 +20,7 @@ export class CheckoutUpgradeCandidateRepository{
   const scope=[this.tx.scope.tenantId,this.tx.scope.storeId]
   const enabled=(await this.tx.query<{enabled:boolean}>(`SELECT EXISTS(SELECT 1 FROM mbox.customer_experience_features WHERE tenant_id=$1 AND store_id=$2 AND feature_code='checkout_upgrade' AND rollout_state IN('pilot','enabled') AND (effective_from IS NULL OR effective_from<=clock_timestamp()) AND (effective_until IS NULL OR effective_until>clock_timestamp())) AS enabled`,scope)).rows[0]?.enabled
   if(!enabled)return none('feature_unavailable')
-  const cart=await new GuestSharedCartRepository(this.tx).findCurrentOpen(input.tableSessionId)
+  const cart=await new GuestSharedCartRepository(this.tx,input.customerId).findCurrentOpen(input.tableSessionId)
   if(!cart||cart.guestWritesFrozen||cart.generation!==input.expectedGeneration||cart.version!==input.expectedVersion)return none('cart_changed')
   const prior=(await this.tx.query<{id:string;request_key:string}>('SELECT id,request_key FROM mbox.checkout_upgrade_opportunities WHERE tenant_id=$1 AND store_id=$2 AND cart_id=$3',[...scope,cart.id])).rows[0]
   if(prior){

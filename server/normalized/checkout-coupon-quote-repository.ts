@@ -18,7 +18,7 @@ export class CheckoutCouponQuoteRepository{
     if(!lock.rows[0]?.ok)throw new CheckoutCartPricingError('同一报价正在处理，请稍后核对')
     const previous=(await this.tx.query<{id:string;request_fingerprint:string}>('SELECT id,request_fingerprint FROM mbox.checkout_coupon_quotes WHERE tenant_id=$1 AND store_id=$2 AND customer_id=$3 AND request_key=$4',[...this.scope,customer.id,input.requestKey])).rows[0]
     if(previous){if(previous.request_fingerprint!==fingerprint)throw new CheckoutCartPricingError('同一报价请求的选择已改变，请重新确认');return{...await this.find(previous.id,customer.id),replayed:true}}
-    const cart=await new GuestSharedCartRepository(this.tx).readOpen(input.tableSessionId,`GSC${randomUUID().replaceAll('-','').toUpperCase()}`)
+    const cart=await new GuestSharedCartRepository(this.tx,input.customerId).readOpen(input.tableSessionId,`GSC${randomUUID().replaceAll('-','').toUpperCase()}`)
     const quote=await new CheckoutCouponRepository(this.tx).quote({...input,customerId:customer.id,cart,channel:'guest_qr'})
     const row=(await this.tx.query<{id:string}>(`INSERT INTO mbox.checkout_coupon_quotes(tenant_id,store_id,cart_id,cart_generation,cart_version,table_session_id,customer_id,subtotal_minor,discount_minor,payable_minor,currency,expires_at,request_key,request_fingerprint)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,clock_timestamp()+interval '2 minutes',$12,$13) RETURNING id`,[...this.scope,cart.id,cart.generation,cart.version,cart.tableSessionId,customer.id,quote.price.subtotalMinor,quote.price.discountMinor,quote.price.payableMinor,quote.currency,input.requestKey,fingerprint])).rows[0]!

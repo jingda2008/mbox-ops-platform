@@ -6,16 +6,16 @@ const QR_OPTIONS = {
   errorCorrectionLevel: 'M' as const,
 }
 
-function identificationValue(value: string, label: string): string {
+function identificationValue(value: string, label: string, minimum = 3): string {
   const normalized = value.trim()
-  if (normalized.length < 3 || normalized.length > 128) {
+  if (normalized.length < minimum || normalized.length > 128) {
     throw new Error(`${label}不符合二维码生成规则`)
   }
   return normalized
 }
 
 export function memberIdentificationPayload(memberNo: string): string {
-  return `MBOX_MEMBER_V1:${identificationValue(memberNo, '会员号')}`
+  return `MBOX_MEMBER_V1:${identificationValue(memberNo, '会员号', 1)}`
 }
 
 export function benefitClaimPayload(claimCode: string): string {

@@ -130,6 +130,7 @@ interface ProductPriceRow extends Record<string, unknown> {
   loyalty_eligible: boolean
   product_updated_at: string
   price_type: string
+  standard_amount_minor?:string|number
   amount_minor: string | number
   currency: string
   store_timezone: string
@@ -262,14 +263,15 @@ export class OrderDeliveryBlockedError extends Error {
 }
 
 export class OrderRepository {
-  constructor(private readonly transaction: ScopedTransaction) {}
+  constructor(private readonly transaction: ScopedTransaction, private readonly customerId:string|null=null) {}
 
   /** Read-only business quote using the exact price, choice expansion and
    * cost functions used by createSubmitted. Does not create an order, reserve
    * stock or consume a coupon. Additional pricing must be authorized separately;
-   * this result deliberately identifies itself as standard-price only. */
-  async quoteCurrent(lines:readonly SubmitOrderLineInput[],channel:OrderChannel){
-    const requested=normalizeRequestedLines(lines),priced=await this.loadCurrentPrices(requested,false)
+   * card pricing uses the lowest live card price. Coupon/other authorized pricing
+   * explicitly requests standard prices, so discounts never compound. */
+  async quoteCurrent(lines:readonly SubmitOrderLineInput[],channel:OrderChannel,useCardPrice=true){
+    const requested=normalizeRequestedLines(lines),priced=await this.loadCurrentPrices(requested,false,this.customerId,useCardPrice)
     const currency=requireSingleCurrency(priced)
     const gross=priced.map((price,index)=>{assertProductOrderable(price,requested[index]!,channel);return buildItem(price,requested[index]!)})
     const components=await this.loadBundleComponents(requested,priced,channel,false)
@@ -289,7 +291,7 @@ export class OrderRepository {
       fulfillmentStation:item.fulfillmentStation,
       consumesInventory:item.parentOrderItemId!==null||item.fulfillmentStation!=='none',
     }))
-    return{pricingBasis:'standard_only' as const,currency,subtotalAmountMinor:sumSafe(items.map(item=>item.amountMinor)),costAmountMinor:items.some(item=>item.costMinor===null)?null:sumSafe(items.map(item=>item.costMinor!)),items,operationalPortions}
+    return{pricingBasis:priced.some(p=>p.price_type==='member_card')?'member_card_or_standard' as const:'standard_only' as const,currency,subtotalAmountMinor:sumSafe(items.map(item=>item.amountMinor)),costAmountMinor:items.some(item=>item.costMinor===null)?null:sumSafe(items.map(item=>item.costMinor!)),items,operationalPortions}
   }
 
   /**
@@ -317,7 +319,7 @@ export class OrderRepository {
     if (pricingAuthorization) assertVerifiedPricingAuthorization(pricingAuthorization)
     const requested = normalizeRequestedLines(input.lines)
     await this.lockOpenTableSession(input.tableSessionId)
-    const priced = await this.loadCurrentPrices(requested)
+    const priced = await this.loadCurrentPrices(requested,true,input.createdByCustomerId??this.customerId,!pricingAuthorization)
     const currency = requireSingleCurrency(priced)
     const grossItems = priced.map((price, index) => {
       assertProductOrderable(price, requested[index]!, input.channel)
@@ -542,7 +544,7 @@ export class OrderRepository {
     if (locked.rowCount !== 1) throw new TableSessionUnavailableForOrderError(tableSessionId)
   }
 
-  private async loadCurrentPrices(requested: readonly RequestedLineRecord[],lock=true): Promise<ProductPriceRow[]> {
+  private async loadCurrentPrices(requested: readonly RequestedLineRecord[],lock=true,customerId=this.customerId,useCardPrice=true): Promise<ProductPriceRow[]> {
     const result = await this.transaction.query<ProductPriceRow>(`
       WITH requested AS (
         SELECT request_index, product_id
@@ -552,15 +554,16 @@ export class OrderRepository {
       SELECT requested.request_index, product.id AS product_id,
         product.code AS product_code, product.name AS product_name,
         product.category_code, product.product_kind, product.fulfillment_station,
-        product.product_snapshot, product.inventory_control_mode, product.guest_visible, product.allowed_channels,
+        product.product_snapshot, product.inventory_control_mode, (product.guest_visible OR mbox.customer_has_card_menu_item(product.tenant_id,product.store_id,product.id,$4::uuid)) AS guest_visible, product.allowed_channels,
         product.max_order_quantity,
         to_char(product.available_from, 'HH24:MI') AS available_from,
         to_char(product.available_until, 'HH24:MI') AS available_until,
         product.kds_priority, product.fulfillment_sla_seconds,
         product.cost_amount_minor, product.loyalty_eligible,
         product.updated_at::text AS product_updated_at,
-        price.price_type,
-        price.amount_minor, price.currency, store.timezone AS store_timezone,
+        CASE WHEN $5 AND mbox.customer_card_price(product.tenant_id,product.store_id,product.id,$4::uuid)<price.amount_minor THEN 'member_card' ELSE price.price_type END AS price_type,
+        price.amount_minor AS standard_amount_minor,
+        CASE WHEN $5 THEN LEAST(price.amount_minor,mbox.customer_card_price(product.tenant_id,product.store_id,product.id,$4::uuid)) ELSE price.amount_minor END AS amount_minor, price.currency, store.timezone AS store_timezone,
         to_char(clock_timestamp() AT TIME ZONE store.timezone, 'HH24:MI') AS store_local_time,
         extract(isodow FROM clock_timestamp() AT TIME ZONE store.timezone)::integer AS store_iso_weekday
       FROM requested
@@ -585,6 +588,7 @@ export class OrderRepository {
         ORDER BY candidate.valid_from DESC, candidate.id DESC
         LIMIT 1
       ) AS price ON true
+      WHERE product.guest_visible OR NOT EXISTS(SELECT 1 FROM mbox.member_card_menu_items mi WHERE mi.tenant_id=product.tenant_id AND mi.store_id=product.store_id AND mi.product_id=product.id AND mi.exclusive) OR mbox.customer_has_card_menu_item(product.tenant_id,product.store_id,product.id,$4::uuid)
       ORDER BY requested.request_index
       ${lock?'FOR SHARE OF product':''}
     `, [
@@ -594,6 +598,7 @@ export class OrderRepository {
         request_index: line.requestIndex,
         product_id: line.productId,
       }))),
+      customerId,useCardPrice,
     ])
     if (result.rows.length !== requested.length) {
       const found = new Set(result.rows.map((row) => row.request_index))
@@ -914,6 +919,7 @@ function buildItem(price: ProductPriceRow, requested: RequestedLineRecord) {
       categoryCode: price.category_code,
       ...(price.inventory_control_mode ? { inventoryControlMode: price.inventory_control_mode } : {}),
       priceType: price.price_type,
+      ...(price.price_type==='member_card'?{standardAmountMinor:asSafeMoney(price.standard_amount_minor!,'standard price'),cardPriceMinor:unitPriceMinor,discountPolicy:'exclusive_lowest_card_price'}:{}),
       productKind: price.product_kind,
       source: toJsonObject(price.product_snapshot),
       ...(requested.bundleSelections.length > 0 ? { bundleSelections: bundleSelectionsToJson(requested.bundleSelections) } : {}),

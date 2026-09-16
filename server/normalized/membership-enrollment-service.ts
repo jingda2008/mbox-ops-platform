@@ -74,11 +74,12 @@ export class MembershipEnrollmentService {
         idempotencyKey: input.idempotencyKey,
       })
       const enrolled = await new CustomerExperienceRepository(transaction)
-        .enrollMembership(context.customerId, memberNo)
+        .enrollMembership(context.customerId)
+      const assignedMemberNo = enrolled.membership!.memberNo
       if (enrolled.created) {
         await new MembershipTermsRepository(transaction).acceptCurrentEnrollment({
           customerId: context.customerId,
-          memberNo,
+          memberNo: assignedMemberNo,
           termsVersion: input.termsVersion,
           acknowledgementSource: input.acknowledgementSource,
         })
@@ -89,7 +90,7 @@ export class MembershipEnrollmentService {
         verifiedPhone,
       }
       const afterData: JsonObject = {
-        memberNo,
+        memberNo: assignedMemberNo,
         created: enrolled.created,
         verifiedPhoneRecorded: true,
         ...(enrolled.created ? {

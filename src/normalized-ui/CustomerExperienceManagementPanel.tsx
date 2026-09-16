@@ -1,3 +1,9 @@
+import {SocialBroadcastPanel} from './SocialBroadcastPanel'
+import { LaunchPopupPanel } from './LaunchPopupPanel'
+import { SocialAccountPanel } from './SocialAccountPanel'
+import { BottleCustodyPanel } from './BottleCustodyPanel'
+import './bottle-custody-panel.css'
+import { MemberNumberPolicyPanel } from './MemberNumberPolicyPanel'
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Clock3, UsersRound } from 'lucide-react'
 import type { NormalizedApiClient, StaffAuthView } from '../normalized-api'
@@ -229,6 +235,9 @@ export function CustomerExperienceManagementPanel({ api, auth, dashboard, mode =
     <MemberAccountLookupPanel api={api} auth={auth} />
   </div>
   if (mode === 'member-management') return <div className="staff-module-body customer-experience-management">
+    <BottleCustodyPanel key={auth.employee.id} api={api} auth={auth} />
+    <SocialBroadcastPanel key={auth.employee.id} api={api} auth={auth} /><LaunchPopupPanel key={auth.employee.id} api={api} auth={auth} /><SocialAccountPanel key={auth.employee.id} api={api} auth={auth} />
+    <MemberNumberPolicyPanel key={auth.employee.id} api={api} auth={auth} />
     <MemberCardManagementPanel api={api} auth={auth} />
     <MarketingContactPanel api={api} auth={auth} />
     <section className="customer-experience-publishing-intro"><strong>其他会员经营配置</strong><small>年度礼遇、兑换目录、活动、会员条款与账户恢复按各自最终权限显示。</small></section>
@@ -288,7 +297,7 @@ function MemberAccountLookupPanel({ api, auth }: { api: NormalizedApiClient; aut
 
   async function submit(event: FormEvent) {
     event.preventDefault()
-    if (memberNo.trim().length < 3 || busy) return
+    if (memberNo.trim().length < 1 || busy) return
     setBusy(true); setNotice(''); setAccount(null)
     try {
       const response = await api.getEndpoint<{ data: StaffMemberAccountView }>(`/api/staff/loyalty/accounts?memberNo=${encodeURIComponent(memberNo.trim())}`)
@@ -302,7 +311,7 @@ function MemberAccountLookupPanel({ api, auth }: { api: NormalizedApiClient; aut
     <strong>会员账户查询</strong><small>按完整会员号查询积分、三种成长值口径和最近流水；本入口不显示手机号或微信身份。</small>
     <form className="staff-module-form" onSubmit={(event) => void submit(event)}>
       <label>会员号<input minLength={3} maxLength={64} value={memberNo} placeholder="请输入完整会员号" onChange={(event) => setMemberNo(event.target.value)} /></label>
-      <button type="submit" disabled={busy || memberNo.trim().length < 3}>{busy ? '正在查询' : '查询账户'}</button>
+      <button type="submit" disabled={busy || memberNo.trim().length < 1}>{busy ? '正在查询' : '查询账户'}</button>
     </form>
     {notice && <p className="staff-module-notice" role="status">{notice}</p>}
     {account !== null && <>

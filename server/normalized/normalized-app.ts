@@ -1,3 +1,10 @@
+import {wechatServiceAccountSubscribePlugin} from './wechat-service-account-subscribe.js'
+import {socialBroadcastApiPlugin} from './social-broadcast-api.js'
+import { launchPopupApiPlugin } from './launch-popup-api.js'
+import { socialAccountApiPlugin } from './social-account-api.js'
+import { SocialCustodyWorker } from './social-custody-worker.js'
+import { bottleCustodyApiPlugin } from './bottle-custody-api.js'
+import { memberNumberApiPlugin } from './member-number-api.js'
 import {itemAfterSalesApiPlugin} from './item-after-sales-api.js'
 import {paymentFinanceApiPlugin} from './payment-finance-api.js'
 import { createHash, randomUUID } from 'node:crypto'
@@ -195,7 +202,7 @@ export const NORMALIZED_LOG_REDACTION_PATHS = Object.freeze([
   'payment.publicKey',
 ])
 
-export const NORMALIZED_MIN_SCHEMA_VERSION = '114'
+export const NORMALIZED_MIN_SCHEMA_VERSION = '220'
 export const NORMALIZED_INJECTABLE_PLUGIN_PORTS = Object.freeze([
   'customer-table-side',
 ] as const)
@@ -382,6 +389,22 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     throw new NormalizedRuntimeConfigurationError(['MBOX_START_WORKERS'])
   }
 
+  const socialCustodyWorker = new SocialCustodyWorker(transactions, activityContactProtection)
+  let socialTimer: ReturnType<typeof setInterval> | undefined
+  let socialFlight: Promise<void> | null = null
+  lifecycleControllers.push({
+    start: async () => {
+      socialTimer = setInterval(() => {
+        if (socialFlight) return
+        socialFlight = socialCustodyWorker.runBatch(scope)
+          .catch(() => { app.log.error({event:'social_custody_worker_failed'}, '存酒与微信任务处理失败，待处理记录已保留') })
+          .finally(() => { socialFlight = null })
+      }, 15000)
+      socialTimer.unref()
+    },
+    stop: async () => { if (socialTimer) clearInterval(socialTimer); await socialFlight },
+  })
+
   registerStaffAuthenticationErrorClassification(app, transactions, scope)
 
   let startedControllerCount = 0
@@ -410,6 +433,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
         config: options.config.wechatServiceAccountCallback,
       })
     }
+    if (options.config.wechatServiceAccountSubscribe) { await app.register(wechatServiceAccountSubscribePlugin,{prefix:'/api',config:options.config.wechatServiceAccountSubscribe}) }
     if (options.config.wechatIdentity !== null && wechatIdentity !== null) {
       const repositoryOptions = {
         pool: pool as unknown as WechatPostgresPool,
@@ -827,6 +851,11 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       return { scope, customerId: session.customerId, tableSessionId: null, businessDate, actorRef: session.actorRef }
     }
     instance.register(memberCardApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveSelfContext: memberSelfContext, resolveStaffContext: staffReservationContext })
+    instance.register(memberNumberApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext })
+    instance.register(socialBroadcastApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext })
+    instance.register(launchPopupApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext, resolveSelfContext: memberSelfContext })
+    instance.register(bottleCustodyApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext, protection: activityContactProtection })
+    instance.register(socialAccountApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext, protection: activityContactProtection, scope })
     instance.register(memberGiftCampaignApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveSelfContext: memberSelfContext, resolveStaffContext: staffReservationContext })
     instance.register(marketingContactApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveSelfContext: memberSelfContext, resolveStaffContext: staffReservationContext })
     instance.register(customerBenefitApiPlugin, {
@@ -885,8 +914,8 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       onlinePayments,
       resolveGuestContext: (request) => guestContext.resolve(request),
       resolvePublicContext: async (request) => {
-        await authenticateReservationGuest(request)
-        return { scope }
+        const identity = await authenticateReservationGuest(request)
+        return { scope, customerId: identity.customerId }
       },
       resolveDeviceFingerprint: (request) => guestDevices.resolve(request),
       paymentMode: options.config.guestPaymentMode,

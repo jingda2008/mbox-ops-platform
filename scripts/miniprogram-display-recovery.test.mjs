@@ -20,7 +20,7 @@ test('expired, exact-boundary, malformed and unpublished activities are not adve
 })
 test('bundle sheet reserves footer and keeps full names and two-column choices on narrow screens', async () => {
   const css=await readFile(new URL('../miniprogram/pages/order/index.wxss',import.meta.url),'utf8')
-  assert.match(css,/\.product-detail-scroll\s*\{[^}]*height: 0;[^}]*min-height: 0;[^}]*flex: 1 1 60vh;/)
+  assert.match(css,/\.product-detail-scroll\s*\{[^}]*height: 0;[^}]*min-height: 0;[^}]*flex: 1 1 auto;/)
   assert.match(css,/\.product-detail-footer\s*\{[^}]*flex: 0 0 auto;/)
   const name=css.match(/\.product-detail-choice view text:first-child\s*\{([^}]+)\}/)[1]
   assert.match(name,/white-space:normal/)

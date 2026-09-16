@@ -110,7 +110,7 @@ export class GuestSharedCartFrozenError extends Error {
 const MAX_WRITES_PER_TEN_SECONDS = 12
 
 export class GuestSharedCartRepository {
-  constructor(private readonly transaction: ScopedTransaction) {}
+  constructor(private readonly transaction: ScopedTransaction,private readonly customerId:string|null=null) {}
 
   async recordWriteAttempt(input:Readonly<{
     tableSessionId:string
@@ -250,7 +250,7 @@ export class GuestSharedCartRepository {
       throw new GuestSharedCartLimitError(`单个商品最多可加入${MAX_LINE_QUANTITY}件`)
     }
     if (nextQuantity > 0) {
-      await new OrderRepository(this.transaction).assertCurrentOrderable([
+      await new OrderRepository(this.transaction,this.customerId).assertCurrentOrderable([
         { productId: input.productId, quantity: nextQuantity, bundleSelections:nextSelections },
       ], 'guest_qr')
     }
@@ -304,7 +304,7 @@ export class GuestSharedCartRepository {
     const targetQuantity=(target?.quantity??0)+1
     if(targetQuantity>MAX_LINE_QUANTITY)throw new GuestSharedCartLimitError(`单个商品最多可加入${MAX_LINE_QUANTITY}件`)
     const targetSelections=[...(target?.bundleSelections??[]),...(input.bundleSelection?[input.bundleSelection]:[])]
-    await new OrderRepository(this.transaction).assertCurrentOrderable([{productId:input.targetProductId,quantity:targetQuantity,bundleSelections:targetSelections}],'guest_qr')
+    await new OrderRepository(this.transaction,this.customerId).assertCurrentOrderable([{productId:input.targetProductId,quantity:targetQuantity,bundleSelections:targetSelections}],'guest_qr')
     const scope=[this.transaction.scope.tenantId,this.transaction.scope.storeId,cart.id]
     await this.transaction.query(`UPDATE mbox.guest_shared_cart_portions SET removed_at=clock_timestamp()
       WHERE tenant_id=$1 AND store_id=$2 AND cart_id=$3 AND id=$4 AND removed_at IS NULL`,[...scope,input.portionId])
@@ -372,7 +372,7 @@ export class GuestSharedCartRepository {
     const nextSelections=currentSelections.map((selection,index)=>(
       index===input.unitIndex?input.bundleSelection:selection
     ))
-    await new OrderRepository(this.transaction).assertCurrentOrderable([{
+    await new OrderRepository(this.transaction,this.customerId).assertCurrentOrderable([{
       productId:input.productId,quantity,bundleSelections:nextSelections,
     }],'guest_qr')
     await this.transaction.query(`
@@ -564,10 +564,10 @@ export class GuestSharedCartRepository {
     const lines = await this.transaction.query<LineRow>(`
       SELECT line.product_id,line.quantity,line.bundle_selections,product.name AS product_name,
         ARRAY(SELECT portion.id::text FROM mbox.guest_shared_cart_portions portion WHERE portion.tenant_id=line.tenant_id AND portion.store_id=line.store_id AND portion.line_id=line.id AND portion.removed_at IS NULL ORDER BY portion.ordinal) AS portion_ids,
-        price.amount_minor AS unit_price_minor,price.currency,
+        LEAST(price.amount_minor,mbox.customer_card_price(product.tenant_id,product.store_id,product.id,$4::uuid)) AS unit_price_minor,price.currency,
         CASE
           WHEN product.id IS NULL OR product.status<>'active' THEN '商品已下架'
-          WHEN NOT product.guest_visible OR NOT ('guest_qr'=ANY(product.allowed_channels)) THEN '当前商品暂不对顾客开放'
+          WHEN NOT (product.guest_visible OR mbox.customer_has_card_menu_item(product.tenant_id,product.store_id,product.id,$4::uuid)) OR NOT ('guest_qr'=ANY(product.allowed_channels)) THEN '当前商品暂不对顾客开放'
           WHEN price.amount_minor IS NULL THEN '商品价格待确认'
           WHEN product.product_kind='bundle' AND NOT selection_state.valid
             THEN '套餐选择已变更，请重新选择'
@@ -587,7 +587,7 @@ export class GuestSharedCartRepository {
           ELSE NULL
         END AS unavailable_reason,
         COALESCE(product.status='active'
-          AND product.guest_visible
+          AND (product.guest_visible OR mbox.customer_has_card_menu_item(product.tenant_id,product.store_id,product.id,$4::uuid))
           AND 'guest_qr'=ANY(product.allowed_channels)
           AND price.amount_minor IS NOT NULL
           AND (product.product_kind<>'bundle' OR selection_state.valid)
@@ -876,7 +876,7 @@ export class GuestSharedCartRepository {
       ) inventory_state ON true
       WHERE line.tenant_id=$1::uuid AND line.store_id=$2::uuid AND line.cart_id=$3::uuid
       ORDER BY line.created_at,line.id
-    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, cart.id])
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, cart.id,this.customerId])
     const cartWideInventoryShortages=await this.cartWideInventoryShortageProductIds(cart.id)
     const mappedLines = lines.rows.map((line) => {
       const unitPriceMinor = line.unit_price_minor === null ? null : Number(line.unit_price_minor)

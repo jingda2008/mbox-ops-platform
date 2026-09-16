@@ -355,3 +355,47 @@ test('post-cutover evidence uses the external relay before activation can comple
   assert.ok(deploy.indexOf('wait "${activation_pid}"', atomicReportPublish) > atomicReportPublish)
   assert.ok(deploy.indexOf('relay_post_cutover_evidence \\\n+    completion') < deploy.indexOf('wait "${activation_pid}"'))
 })
+
+test('hotfix replacement requires explicit approval bound to both images, container and release', async () => {
+  const activate = await read('../deploy/aliyun/activate-release.sh')
+  const gate = activate.split('# BEGIN explicit previous-runtime reconciliation gate')[1]
+    .split('# END explicit previous-runtime reconciliation gate')[0]
+  const directory = mkdtempSync(join(tmpdir(), 'mbox-runtime-attestation-'))
+  const digest = (value) => `sha256:${value.repeat(64)}`
+  const approval = {
+    schemaVersion: 1,
+    authorization: 'user-authorized-hotfix-replacement',
+    targetReleaseSha: 'a'.repeat(40), previousReleaseSha: 'b'.repeat(40),
+    archivedPlatformImageDigest: digest('c'), runtimePlatformImageDigest: digest('d'),
+    containerId: 'e'.repeat(64), observedAt: '2026-09-17T00:00:00Z',
+  }
+  const env = {
+    ...process.env, release_dir: directory, release_sha: approval.targetReleaseSha,
+    previous_release_sha: approval.previousReleaseSha,
+    previous_archived_platform_image_digest: approval.archivedPlatformImageDigest,
+    previous_platform_image_digest: approval.archivedPlatformImageDigest,
+    active_platform_image_digest: approval.runtimePlatformImageDigest,
+    active_container_id: approval.containerId, reconcile_previous_runtime: '1',
+  }
+  const run = (overrides = {}) => execFileSync('bash', ['-ec', gate + '\nprintf "%s" "$previous_platform_image_digest"'],
+    { env: { ...env, ...overrides }, stdio: ['ignore', 'pipe', 'pipe'] }).toString()
+  const write = (value) => writeFileSync(join(directory, 'previous-runtime-attestation.json'), JSON.stringify(value))
+  try {
+    assert.throws(() => run())
+    write(approval)
+    assert.equal(run(), approval.runtimePlatformImageDigest)
+    assert.throws(() => run({ reconcile_previous_runtime: '0' }))
+    assert.equal(run({ reconcile_previous_runtime: '0', active_platform_image_digest: digest('c') }), digest('c'))
+    for (const key of ['targetReleaseSha', 'previousReleaseSha', 'archivedPlatformImageDigest',
+      'runtimePlatformImageDigest', 'containerId', 'authorization', 'observedAt', 'schemaVersion']) {
+      write({ ...approval, [key]: 'incorrect' })
+      assert.throws(() => run(), key)
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
+  const deploy = await read('../deploy/aliyun/deploy-release.sh')
+  assert.equal((deploy.match(/'\$\{backup_max_age_minutes\}' '\$\{reconcile_previous_runtime\}'/g) ?? []).length, 2)
+  assert.match(activate, /previousArchivedPlatformImageDigest: \$previousArchivedPlatformImageDigest/)
+  assert.match(activate, /previousRuntimeAttestation: \$previousRuntimeAttestation/)
+})

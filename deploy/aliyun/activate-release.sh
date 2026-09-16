@@ -5,6 +5,8 @@ release_dir=${1:?release directory is required}
 deployment_tier=${2:?deployment tier is required}
 public_url=${3:?public URL is required}
 backup_max_age_minutes=${4:?backup age is required}
+reconcile_previous_runtime=${5:-0}
+[[ "${reconcile_previous_runtime}" =~ ^[01]$ ]]
 
 install_root=/opt/mbox
 network=mbox-net
@@ -399,6 +401,8 @@ case "${previous_deployment_tier}" in validation|production) ;; *) exit 1 ;; esa
 test "$(docker inspect "${active_container}" \
   --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "${previous_release_sha}"
 active_platform_image_digest=$(docker inspect "${active_container}" --format '{{.Image}}')
+active_container_id=$(docker inspect "${active_container}" --format '{{.Id}}')
+previous_archived_platform_image_digest=${previous_platform_image_digest}
 if [ -z "${previous_platform_image_digest}" ]; then
   # Releases before manifest schema 6 did not freeze the loaded platform image
   # ID. The running container is accepted only together with its immutable
@@ -406,7 +410,28 @@ if [ -z "${previous_platform_image_digest}" ]; then
   previous_platform_image_digest=${active_platform_image_digest}
 fi
 [[ "${previous_platform_image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+# BEGIN explicit previous-runtime reconciliation gate
+previous_runtime_attestation=null
+if [ "${reconcile_previous_runtime}" = 1 ]; then
+  jq -e \
+    --arg target "${release_sha}" --arg previous "${previous_release_sha}" \
+    --arg archived "${previous_archived_platform_image_digest}" \
+    --arg runtime "${active_platform_image_digest}" --arg container "${active_container_id}" \
+    '.schemaVersion == 1 and .authorization == "user-authorized-hotfix-replacement"
+      and .targetReleaseSha == $target and .previousReleaseSha == $previous
+      and .archivedPlatformImageDigest == $archived and .runtimePlatformImageDigest == $runtime
+      and .containerId == $container
+      and ($archived | test("^sha256:[0-9a-f]{64}$"))
+      and ($runtime | test("^sha256:[0-9a-f]{64}$"))
+      and ($container | test("^[0-9a-f]{64}$"))
+      and (.observedAt | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))' \
+    "${release_dir}/previous-runtime-attestation.json" >/dev/null
+  previous_runtime_attestation=$(cat "${release_dir}/previous-runtime-attestation.json")
+  # Rollback preserves this exact existing container, including its writable layer.
+  previous_platform_image_digest=${active_platform_image_digest}
+fi
 test "${active_platform_image_digest}" = "${previous_platform_image_digest}"
+# END explicit previous-runtime reconciliation gate
 previous_ready_file=$(mktemp "${release_dir}/.previous-ready.XXXXXX")
 fetch_active_ready_response "${previous_release_sha}" "${previous_release_digest}" \
   "" "${previous_deployment_tier}" "${previous_ready_file}" 12
@@ -1206,6 +1231,8 @@ jq -n \
   --arg previousReleaseDir "${previous_release_dir}" \
   --arg previousReleaseSha "${previous_release_sha}" \
   --arg previousPlatformImageDigest "${previous_platform_image_digest}" \
+  --arg previousArchivedPlatformImageDigest "${previous_archived_platform_image_digest}" \
+  --argjson previousRuntimeAttestation "${previous_runtime_attestation}" \
   --arg previousDeploymentTier "${previous_deployment_tier}" \
   --arg storeConfigSha256 "${store_config_sha}" \
   --arg catalogConfigSha256 "${catalog_config_sha}" \
@@ -1236,6 +1263,8 @@ jq -n \
     previousReleaseDir: (if $previousReleaseDir == "" then null else $previousReleaseDir end),
     previousReleaseSha: (if $previousReleaseSha == "" then null else $previousReleaseSha end),
     previousPlatformImageDigest: $previousPlatformImageDigest,
+    previousArchivedPlatformImageDigest: $previousArchivedPlatformImageDigest,
+    previousRuntimeAttestation: $previousRuntimeAttestation,
     previousDeploymentTier: $previousDeploymentTier,
     previousManifestSchemaVersion: $previousManifestSchemaVersion,
     previousRuntimeSchemaVersion: $previousRuntimeSchemaVersion,

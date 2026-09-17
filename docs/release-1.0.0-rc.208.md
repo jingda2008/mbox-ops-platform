@@ -6,4 +6,6 @@
 
 ## 验证与发布状态
 
-本文件建立时本地以合并提交为基线准备标签；完整 `npm run check`、标签 CI、不可变包、OSS 备份与 `deploy-release.sh` 生产切换结果按实际执行补记。不以本机缺完整 Node 工具链代替 CI。
+- 功能已快进合并 `main`：`b75237da`；发布准备与清单恢复后标签提交 `31811033`。
+- 标签 `v1.0.0-rc.208` CI `35191220609` 与 release `35191220603` 均成功；GitHub pre-release 已发布。
+- **生产切流尚未完成**：本机对运营机/跳板 SSH 无可用私钥（直连超时 / 跳板公钥拒绝）。线上 `/api/ready` 仍回报 rc.207 提交 `3c6304f1`。须在有部署密钥的环境执行标准 `deploy/aliyun/deploy-release.sh`（`MBOX_RELEASE_TAG=v1.0.0-rc.208`）完成备份、候选与切流。

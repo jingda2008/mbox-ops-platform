@@ -32,6 +32,26 @@ function ticket(kind: 'cashier_settlement' | 'cashier_payment' | 'cashier_refund
 }
 
 describe('print ticket layout', () => {
+  it('preserves payment-state titles and the enlarged final total through serialization and pagination', () => {
+    for (const checkoutState of ['unpaid','partial','paid'] as const) {
+      const source = createPrintTicketSnapshot({...ticket('cashier_payment'),kind:'order_summary',
+        documentRole:'checkout',checkoutState,payment:null,totalAmountMinor:314400})
+      const expectedTitle=checkoutState==='paid'?'结账单':'预结账单'
+      expect(parsePrintTicketSnapshot(ticketToJson(source))).toEqual(source)
+      expect(source.title).toBe(expectedTitle)
+      for (const paper of ['58mm','80mm'] as const) {
+        const html=renderPrintTicketHtml(source,{paper,thermal:true})
+        expect(html).toContain(`<h1>${expectedTitle}</h1>`)
+        expect(html).toContain('<section class="total"><span>应付合计</span><strong>¥3144.00</strong></section>')
+      }
+      const pages=paginatePrintTicket({...source,lines:Array.from({length:125},()=>({name:'测试商品',quantity:1}))})
+      expect(pages.map(page=>page.title)).toEqual([expectedTitle,expectedTitle,expectedTitle])
+      expect(pages.map(page=>page.totalAmountMinor)).toEqual([null,null,314400])
+      expect(pages.map(page=>parsePrintTicketSnapshot(ticketToJson(page)).checkoutState)).toEqual([checkoutState,checkoutState,checkoutState])
+      expect(()=>createPrintTicketSnapshot({...source,documentRole:undefined,kind:'bar_production'})).toThrow('收款状态')
+      expect(()=>parsePrintTicketSnapshot({...ticketToJson(source),checkoutState:'pending'})).toThrow('收款状态')
+    }
+  })
   it('keeps the OCR number across serialization and pages while preserving the full trace at the footer', () => {
     const number = settlementDisplayNumber('2026-09-14T16:01:02Z', 'tenant', 'store', 'session')
     expect(number).toMatch(/^20260915-000102-\d{6}$/)
@@ -118,7 +138,7 @@ describe('print ticket layout', () => {
     expect(ticket('bar_production').title).toBe('吧台调酒制作单')
     expect(ticket('kitchen_production').title).toBe('后厨制作单')
     expect(renderPrintTicketHtml(ticket('cashier_settlement'))).toContain('陆家嘴中心 L+MALL')
-    expect(renderPrintTicketHtml(ticket('cashier_payment'))).not.toContain('陆家嘴中心 L+MALL')
+    expect(renderPrintTicketHtml(ticket('cashier_payment'))).toContain('陆家嘴中心 L+MALL')
   })
 
   it('serializes a safe snapshot and renders an 80mm brand-green ticket', () => {

@@ -117,7 +117,8 @@ function New-EscPosTicketBytes {
     $label = $line.TrimStart()
     [byte]$size = 0
     [byte]$bold = 0
-    if ($label -match '^(桌台|桌号)：') { $size=0x22; $bold=1 }
+    if ($label -eq '陆家嘴中心 L+MALL') { $size=0; $bold=1 }
+    elseif ($label -match '^(桌台|桌号)：') { $size=0x22; $bold=1 }
     elseif ($label -match '^(合计|净收|应收|应付)：') { $size=0x11; $bold=1 }
     elseif ($label -match '×\d+\s*$') { $size=0x11; $bold=1 }
     elseif ($label -match '^备注：') { $bold=1 }

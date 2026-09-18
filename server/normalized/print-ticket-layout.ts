@@ -33,6 +33,8 @@ export interface PrintTicketSnapshot {
   kind: PrintTicketKind
   title: string
   documentRole?: 'checkout'
+  /** Captured when a new bill is generated; reprints keep the original state. */
+  checkoutState?: 'unpaid' | 'partial' | 'paid'
   subtitle: string
   test: boolean
   issuedAt: string
@@ -67,6 +69,11 @@ export function createPrintTicketSnapshot(input: Readonly<Omit<PrintTicketSnapsh
   if (input.documentRole !== undefined && (input.documentRole !== 'checkout' || input.kind !== 'order_summary')) {
     throw new TypeError('结账单用途或票种无效')
   }
+  if (input.checkoutState !== undefined &&
+    (!['unpaid', 'partial', 'paid'].includes(input.checkoutState) ||
+      !['order_summary', 'cashier_settlement'].includes(input.kind))) {
+    throw new TypeError('结账收款状态或票种无效')
+  }
   assertShortText(input.subtitle, 'subtitle', 1, 80)
   assertShortText(input.ticketReference, 'ticketReference', 3, 120)
   if (input.displayNumber !== undefined && (input.kind !== 'table_settlement' || !/^\d{8}-\d{6}-\d{6}$/.test(input.displayNumber))) {
@@ -91,8 +98,10 @@ export function createPrintTicketSnapshot(input: Readonly<Omit<PrintTicketSnapsh
   return Object.freeze({
     schemaVersion: PRINT_TICKET_SCHEMA_VERSION,
     kind: input.kind,
-    title: input.documentRole === 'checkout' ? '结账单' : TICKET_TITLES[input.kind],
+    title: input.checkoutState !== undefined ? (input.checkoutState === 'paid' ? '结账单' : '预结账单')
+      : input.documentRole === 'checkout' ? '结账单' : TICKET_TITLES[input.kind],
     ...(input.documentRole === undefined ? {} : { documentRole: input.documentRole }),
+    ...(input.checkoutState === undefined ? {} : { checkoutState: input.checkoutState }),
     subtitle: input.subtitle.trim(),
     test: input.test,
     issuedAt: input.issuedAt,
@@ -137,6 +146,7 @@ export function parsePrintTicketSnapshot(value: unknown): PrintTicketSnapshot {
   return createPrintTicketSnapshot({
     kind: readKind(value.kind),
     ...(value.documentRole === undefined ? {} : { documentRole: readDocumentRole(value.documentRole) }),
+    ...(value.checkoutState === undefined ? {} : { checkoutState: readCheckoutState(value.checkoutState) }),
     subtitle: readString(value.subtitle, 'subtitle'),
     test: value.test === true,
     issuedAt: readString(value.issuedAt, 'issuedAt'),
@@ -160,6 +170,7 @@ export function ticketToJson(ticket: Readonly<PrintTicketSnapshot>): JsonObject 
     kind: ticket.kind,
     title: ticket.title,
     ...(ticket.documentRole === undefined ? {} : { documentRole: ticket.documentRole }),
+    ...(ticket.checkoutState === undefined ? {} : { checkoutState: ticket.checkoutState }),
     subtitle: ticket.subtitle,
     test: ticket.test,
     issuedAt: ticket.issuedAt,
@@ -189,15 +200,17 @@ export function renderPrintTicketHtml(
 ): string {
   const profile = normalizePrintTicketOutputProfile(requestedProfile)
   const production = ticket.kind === 'bar_production' || ticket.kind === 'kitchen_production' || ticket.kind === 'production_notice' || ticket.kind === 'delivery'
-  const amount = ticket.totalAmountMinor === null ? '' : `<section class="total"><span>合计</span><strong>${escapeHtml(formatCny(ticket.totalAmountMinor))}</strong></section>`
+  const amount = ticket.totalAmountMinor === null ? '' : `<section class="total"><span>${ticket.checkoutState === undefined ? '合计' : '应付合计'}</span><strong>${escapeHtml(formatCny(ticket.totalAmountMinor))}</strong></section>`
   const table = ticket.tableCode === null ? '' : `<section class="table-hero"><span>桌台</span><strong>${escapeHtml(ticket.tableCode)}</strong></section>`
   const guest = production || ticket.guestCount === null ? '' : `<p class="guest-count"><span>消费人数</span><strong>${ticket.guestCount} 位</strong></p>`
   const operator = ticket.operatorLabel === null ? '' : `<span>${escapeHtml(ticket.operatorLabel)}</span>`
   const payment = ticket.payment === null
     ? (ticket.kind === 'cashier_settlement' ? `<section class="payment"><span>支付方式</span><strong>待选择</strong></section>` : '')
     : `<section class="payment"><span>支付方式</span><strong>${escapeHtml(paymentLabel(ticket.payment))}</strong></section>`
-  const subtitle = ticket.documentRole === 'checkout' ? ticket.subtitle.replace(/^陆家嘴中心 L\+MALL\s*·\s*/, '') : ticket.subtitle
-  const venue = ticket.kind === 'cashier_settlement' || ticket.documentRole === 'checkout' ? '<p class="venue">陆家嘴中心 L+MALL</p>' : ''
+  const checkoutVenue = ['cashier_settlement', 'cashier_payment', 'table_settlement'].includes(ticket.kind) || ticket.documentRole === 'checkout' || ticket.checkoutState !== undefined
+  const subtitle = checkoutVenue ? ticket.subtitle.replace(/^陆家嘴中心 L\+MALL(?:\s*·\s*|$)/, '').split('·').map(part => part.trim()).filter(part => !/^(?:本桌次完整消费账单|未确认收款|已确认收款|不代表(?:已经|已)付款)$/.test(part)).join(' · ') : ticket.subtitle
+  const displayTitle = checkoutVenue ? ticket.title.replace(/[（(]未确认收款[）)]/, '') : ticket.title
+  const venue = checkoutVenue ? '<p class="venue">陆家嘴中心 L+MALL</p>' : ''
   const note = ticket.note === null ? '' : `<section class="note"><b>备注</b>${escapeHtml(ticket.note)}</section>`
   const columns = '<div class="item-head"><span>品名 / 单价</span><span>数量</span><span>小计</span></div>'
   const lines = ticket.lines.map((line) => `<li><div><b>${escapeHtml(line.name)}</b>${line.unitAmountMinor == null ? '' : `<small>单价 ${escapeHtml(formatCny(line.unitAmountMinor))}</small>`}${line.note ? `<small>${escapeHtml(line.note)}</small>` : ''}</div><strong>×${line.quantity}</strong><em>${line.totalAmountMinor == null ? '—' : escapeHtml(formatCny(line.totalAmountMinor))}</em></li>`).join('')
@@ -209,7 +222,7 @@ export function renderPrintTicketHtml(
     .brand { color: var(--brand); font-size: 9pt; font-weight: 800; letter-spacing: .16em; text-align: center; }
     h1 { margin: 3mm 0 1mm; color: #102d20; font-size: 17pt; line-height: 1.2; text-align: center; }
     .test { display: inline-block; margin: 1mm auto 3mm; padding: 1mm 3mm; border-radius: 99px; color: #fff; background: var(--brand); font-size: 7.5pt; font-weight: 800; letter-spacing: .08em; }
-    .center { text-align: center; } .venue { margin: 2mm 0 -1mm; color: var(--brand); font-size: 9pt; font-weight: 800; letter-spacing: .18em; text-align: center; } .subtitle { margin: 0 0 4mm; color: #668072; font-size: 8.5pt; text-align: center; }
+    .center { text-align: center; } .venue { margin: 2mm 0 -1mm; color: var(--brand); font-size: 12pt; font-weight: 600; letter-spacing: 0; text-align: center; white-space: nowrap; } .subtitle { margin: 0 0 4mm; color: #668072; font-size: 8.5pt; text-align: center; }
     .table-hero { display:flex; align-items:baseline; justify-content:center; gap:2mm; margin:1mm 0 1.4mm; padding:2.6mm 3mm 2.8mm; border: .45mm solid var(--brand); border-radius:2mm; color:var(--brand); background:var(--brand-soft); } .table-hero span { font-size:8pt; font-weight:700; letter-spacing:.1em; } .table-hero strong { font-size:24pt; line-height:1; letter-spacing:.02em; } .guest-count { display:flex; justify-content:center; gap:2mm; margin:0 0 3.2mm; color:#5b7465; font-size:8pt; letter-spacing:.05em; } .guest-count strong { color:var(--brand); font-size:10pt; }
     .meta { display: grid; gap: 1.4mm; padding: 3mm 0; border-top: .35mm solid #d9e6df; border-bottom: .35mm solid #d9e6df; color: #3f584b; font-size: 8pt; }
     .meta-line { display:flex; justify-content:space-between; gap: 3mm; } ul { margin: 3mm 0; padding: 0; list-style: none; } li { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap: 2mm; align-items:start; padding: 2.2mm 0; border-bottom: .2mm solid #edf1ee; font-size: 10pt; } li b { display:block; } li small { display:block; margin-top: .8mm; color:#6a7b71; font-size:7.5pt; line-height:1.4; } li strong { color:#176a4a; } li em { min-width:15mm; color:#304438; font-style:normal; text-align:right; }
@@ -218,7 +231,7 @@ export function renderPrintTicketHtml(
     .total { display:flex; align-items:end; justify-content:space-between; margin-top:4mm; padding-top:3mm; border-top:.6mm solid var(--brand); color:#244936; } .total strong { color:var(--brand); font-size:18pt; line-height:1; }
     footer { margin-top:5mm; color:#829287; font-size:7pt; line-height:1.5; text-align:center; } .dash { margin:4mm 0 0; border-top:.35mm dashed #8da99a; }
     main.production .table-hero { margin-top:0; border-width:.65mm; background:#eaf5ef; } main.production .table-hero strong { font-size:30pt; } main.production ul { margin-top:4mm; } main.production li { padding:3.5mm 0; font-size:12pt; } main.production li b { font-size:16pt; line-height:1.25; } main.production li small { font-size:9pt; } main.production li strong { font-size:14pt; }
-    main.paper-58 .brand { font-size:7.5pt; } main.paper-58 h1 { font-size:15pt; } main.paper-58 .subtitle { font-size:7.5pt; } main.paper-58 .table-hero strong { font-size:20pt; } main.paper-58 .meta, main.paper-58 .payment, main.paper-58 .note { font-size:7pt; } main.paper-58 li { grid-template-columns:minmax(0,1fr) auto; font-size:9pt; } main.paper-58 li em { grid-column:2; min-width:0; } main.paper-58 li b { font-size:10pt; } main.paper-58 .total strong { font-size:16pt; } main.paper-58.production .table-hero strong { font-size:25pt; } main.paper-58.production li b { font-size:13pt; } main.paper-58.production li { font-size:10pt; }
+    main.paper-58 .venue { font-size:10.5pt; } main.paper-58 .brand { font-size:7.5pt; } main.paper-58 h1 { font-size:15pt; } main.paper-58 .subtitle { font-size:7.5pt; } main.paper-58 .table-hero strong { font-size:20pt; } main.paper-58 .meta, main.paper-58 .payment, main.paper-58 .note { font-size:7pt; } main.paper-58 li { grid-template-columns:minmax(0,1fr) auto; font-size:9pt; } main.paper-58 li em { grid-column:2; min-width:0; } main.paper-58 li b { font-size:10pt; } main.paper-58 .total strong { font-size:16pt; } main.paper-58.production .table-hero strong { font-size:25pt; } main.paper-58.production li b { font-size:13pt; } main.paper-58.production li { font-size:10pt; }
 
     /* High contrast receipt layout: hierarchy comes from type, not backgrounds. */
     main { min-height:0; padding-bottom:5mm; }
@@ -246,7 +259,7 @@ export function renderPrintTicketHtml(
     main.paper-58 li em { grid-column:auto; font-size:8pt; } main.paper-58 .table-hero strong { font-size:25pt; }
     main.paper-58 .total strong { font-size:21pt; } main.paper-58.production li b { font-size:12pt; }
     footer { margin-top:3mm; overflow-wrap:anywhere; } .dash { margin-top:3mm; border-color:#000; }
-  </style></head><body><main class="${production ? 'production' : 'cashier'} paper-${profile.paper.replace('mm', '')}"><div class="brand">M-BOX · SHANGHAI</div><div class="center">${ticket.test ? '<span class="test">系统打印测试</span>' : ''}</div>${venue}<h1>${escapeHtml(ticket.title)}</h1><p class="subtitle">${escapeHtml(subtitle)}</p>${table}${guest}<section class="meta"><div class="meta-line"><span>${ticket.displayNumber ? `单号：${escapeHtml(ticket.displayNumber)}` : escapeHtml(ticket.ticketReference)}</span><span>${escapeHtml(ticket.businessDate)} ${escapeHtml(formatTime(ticket.issuedAt))}</span></div><div class="meta-line">${operator}</div></section>${columns}<ul>${lines}</ul>${payment}${note}${amount}<div class="dash"></div><footer>${ticket.displayNumber ? `原始追溯码：${escapeHtml(ticket.ticketReference)}<br>` : ''}请按票据内容执行；如有异常请联系当班负责人。<br>此票据为${ticket.test ? '测试' : '系统'}留痕，不替代支付凭证。</footer></main></body></html>`
+  </style></head><body><main class="${production ? 'production' : 'cashier'} paper-${profile.paper.replace('mm', '')}"><div class="brand">M-BOX · SHANGHAI</div><div class="center">${ticket.test ? '<span class="test">系统打印测试</span>' : ''}</div>${venue}<h1>${escapeHtml(displayTitle)}</h1>${subtitle ? `<p class="subtitle">${escapeHtml(subtitle)}</p>` : ''}${table}${guest}<section class="meta"><div class="meta-line"><span>${ticket.displayNumber ? `单号：${escapeHtml(ticket.displayNumber)}` : escapeHtml(ticket.ticketReference)}</span><span>${escapeHtml(ticket.businessDate)} ${escapeHtml(formatTime(ticket.issuedAt))}</span></div><div class="meta-line">${operator}</div></section>${columns}<ul>${lines}</ul>${payment}${note}${amount}<div class="dash"></div><footer>${ticket.displayNumber ? `原始追溯码：${escapeHtml(ticket.ticketReference)}<br>` : ''}请按票据内容执行；如有异常请联系当班负责人。<br>此票据为${ticket.test ? '测试' : '系统'}留痕，不替代支付凭证。</footer></main></body></html>`
 }
 
 export function normalizePrintTicketOutputProfile(value: Readonly<PrintTicketOutputProfile>): PrintTicketOutputProfile {
@@ -336,6 +349,10 @@ function assertTicketKind(value: unknown): asserts value is PrintTicketKind {
 }
 
 function readKind(value: unknown): PrintTicketKind { assertTicketKind(value); return value }
+function readCheckoutState(value: unknown): NonNullable<PrintTicketSnapshot['checkoutState']> {
+  if (value !== 'unpaid' && value !== 'partial' && value !== 'paid') throw new TypeError('结账收款状态无效')
+  return value
+}
 function readString(value: unknown, field: string): string { if (typeof value !== 'string') throw new TypeError(`${field}必须是文本`); return value }
 function nullableString(value: unknown, field: string): string | null { if (value === null) return null; return readString(value, field) }
 function readInteger(value: unknown, field: string): number { if (typeof value !== 'number' || !Number.isSafeInteger(value)) throw new TypeError(`${field}必须是整数`); return value }

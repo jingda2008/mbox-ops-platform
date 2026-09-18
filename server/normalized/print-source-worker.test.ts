@@ -224,7 +224,7 @@ integration('asynchronous print sources: committed events, isolation and recover
       return first
     })
     expect(tableBill[0].printSnapshot).toMatchObject({kind:'order_summary',documentRole:'checkout',title:'结账单',
-      subtitle:'陆家嘴中心 L+MALL · 本桌次完整消费账单',test:false,totalAmountMinor:null})
+      subtitle:'陆家嘴中心 L+MALL · 本桌次完整消费账单 · 已确认收款',test:false,totalAmountMinor:1500})
     expect(tableBill[0].printSnapshot.ticketReference).toMatch(/^\d{8}-\d{6}-\d{6}$/)
     expect(tableBill[0].printSnapshot.note).toContain(`原始桌次追溯码：${session}`)
     expect(tableBill[0].sourceReference).toBe(`${session}:page1`)
@@ -251,7 +251,7 @@ integration('asynchronous print sources: committed events, isolation and recover
     })
     expect(freshBill[0].printSnapshot.ticketReference).not.toBe(tableBill[0].printSnapshot.ticketReference)
     expect(manual).toHaveLength(1)
-    expect(manual[0].printSnapshot).toMatchObject({operatorLabel:'测试收银员',totalAmountMinor:null})
+    expect(manual[0].printSnapshot).toMatchObject({operatorLabel:'测试收银员',title:'结账单',totalAmountMinor:1500})
     expect(manual[0].printSnapshot.lines).toEqual(expect.arrayContaining([
       expect.objectContaining({name:'测试酒',unitAmountMinor:1000,totalAmountMinor:1000}),
       expect.objectContaining({name:'已确认实际收款',totalAmountMinor:1500}),

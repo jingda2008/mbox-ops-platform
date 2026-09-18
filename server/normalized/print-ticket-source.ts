@@ -1,4 +1,5 @@
 import { settlementDisplayNumber } from './settlement-display-number.js'
+import { readCheckoutPrintSummary } from './checkout-print-summary.js'
 import {orderReceivableSql} from './order-collection-sql.js'
 import { buildDailyReportLines, DEFAULT_DAILY_REPORT, type DailyReportOptions } from './daily-report-format.js'
 import {readOperatingHistory} from './operating-history-query.js'
@@ -135,7 +136,7 @@ export class PrintTicketSourceRepository {
     if(orders.length>1000)throw new Error('本桌次超过1000单，请按订单分批打印，避免截断账单')
     const context=await this.loadOrderContext(orders[0]!.id)
     const source=(await this.transaction.query<{occurred_at:string}>('SELECT occurred_at::text FROM mbox.outbox_messages WHERE tenant_id=$1 AND store_id=$2 AND id=$3',[this.transaction.scope.tenantId,this.transaction.scope.storeId,sourceId])).rows[0]!
-    const totals=(await this.transaction.query<{received:string;refunded:string}>(`SELECT COALESCE((SELECT sum(p.amount_minor) FROM mbox.order_payment_facts p WHERE p.tenant_id=$1 AND p.store_id=$2 AND p.order_id=ANY($3::uuid[]) AND p.status IN ('succeeded','partially_refunded','refunded')),0)::text received,COALESCE((SELECT sum(r.amount_minor) FROM mbox.order_refund_facts r WHERE r.tenant_id=$1 AND r.store_id=$2 AND r.order_id=ANY($3::uuid[]) AND r.status='succeeded'),0)::text refunded`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,orders.map(o=>o.id)])).rows[0]!
+    const totals=await readCheckoutPrintSummary(this.transaction,orders.map(o=>o.id))
     const lines:PrintTicketLine[]=[]
     const reductions=new Map((await this.transaction.query<{order_id:string;amount:string}>(`SELECT order_id,sum(amount_minor)::text AS amount FROM mbox.item_receivable_adjustment_facts WHERE tenant_id=$1 AND store_id=$2 AND order_id=ANY($3::uuid[]) GROUP BY order_id`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,orders.map(order=>order.id)])).rows.map(row=>[row.order_id,signedAdjustment(row.amount)]))
     for(const order of orders){
@@ -144,11 +145,16 @@ export class PrintTicketSourceRepository {
       lines.push({name:`订单 ${order.public_id}${order.status==='cancelled'?'（已取消）':''}`,quantity:1},...(await this.loadItems(order.id,false,true)).map(toCashierLine),{name:'原订单应付',quantity:1,totalAmountMinor:original})
       if(stopped!==0)lines.push({name:stopped>0?'退菜减额（已扣除）':'套餐按单点价补差（已计入）',quantity:1,totalAmountMinor:Math.abs(stopped)},{name:'退菜重算后应付',quantity:1,totalAmountMinor:original-stopped})
     }
-    lines.push({name:'桌次实际收款',quantity:1,totalAmountMinor:numeric(totals.received,'received')},{name:'桌次实际退款',quantity:1,totalAmountMinor:numeric(totals.refunded,'refunded')},{name:'桌次实际净收',quantity:1,totalAmountMinor:numeric(totals.received,'received')-numeric(totals.refunded,'refunded')})
+    lines.push({name:'桌次实际收款',quantity:1,totalAmountMinor:totals.received},
+      {name:'桌次实际退款',quantity:1,totalAmountMinor:totals.refunded},
+      {name:'桌次实际净收',quantity:1,totalAmountMinor:totals.net},
+      {name:'尚未收款',quantity:1,totalAmountMinor:totals.due})
+    if(totals.pending>0)lines.push({name:'渠道待确认金额（不计入实收）',quantity:1,totalAmountMinor:totals.pending})
     // A manually generated bill is a document of its own. Keep the source UUID
     // for job idempotency and table tracing; older bridges print ticketReference directly.
     const billNumber=settlementDisplayNumber(source.occurred_at,this.transaction.scope.tenantId,this.transaction.scope.storeId,sourceId)
-    return this.materializeDocument(sourceId,sessionId,{kind:'order_summary',documentRole:'checkout',subtitle:'陆家嘴中心 L+MALL · 本桌次完整消费账单',test:false,issuedAt:source.occurred_at,businessDate:context.business_date,ticketReference:billNumber,tableCode:context.table_code,guestCount:context.guest_count,operatorLabel,note:`整桌次完整快照，包含列表其他分页的订单。取消商品保留记录，不表示重新消费。原始桌次追溯码：${sessionId}`,payment:null,lines,totalAmountMinor:null,currency:currency(context.currency)})
+    const statusLabel=totals.state==='paid'?'已确认收款':totals.state==='partial'?'部分收款 · 尚未结清':'未确认收款 · 不代表已付款'
+    return this.materializeDocument(sourceId,sessionId,{kind:'order_summary',documentRole:'checkout',checkoutState:totals.state,subtitle:`陆家嘴中心 L+MALL · 本桌次完整消费账单 · ${statusLabel}`,test:false,issuedAt:source.occurred_at,businessDate:context.business_date,ticketReference:billNumber,tableCode:context.table_code,guestCount:context.guest_count,operatorLabel,note:`合计为整桌应付，实收及退款另列。取消订单不计入应付。付款后请重新生成账单；补打保留原快照。原始桌次追溯码：${sessionId}`,payment:null,lines,totalAmountMinor:totals.receivable,currency:currency(context.currency)})
   }
 
   async materializeManualOrderBill(sourceId:string,orderId:string,operatorLabel:string):Promise<readonly PrintJob[]> {
@@ -160,17 +166,10 @@ export class PrintTicketSourceRepository {
     const context=await this.loadOrderContext(orderId)
     if(context.order_status==='draft')throw new Error('草稿不能生成消费账单')
     const items=await this.loadItems(orderId,false,true)
-    const amounts=(await this.transaction.query<{received:string;refunded:string;pending:string}>(`
-      SELECT COALESCE(sum(p.amount_minor) FILTER(WHERE p.status IN ('succeeded','partially_refunded','refunded')),0)::text received,
-        COALESCE(sum((SELECT COALESCE(sum(r.amount_minor),0) FROM mbox.refunds r
-          WHERE r.tenant_id=p.tenant_id AND r.store_id=p.store_id AND r.payment_id=p.id AND (r.order_id IS NULL OR r.order_id=p.order_id) AND r.status='succeeded')),0)::text refunded,
-        COALESCE(sum(p.amount_minor) FILTER(WHERE p.status='pending'),0)::text pending
-      FROM mbox.order_payment_facts p WHERE p.tenant_id=$1 AND p.store_id=$2 AND p.order_id=$3`,
-    [this.transaction.scope.tenantId,this.transaction.scope.storeId,orderId])).rows[0]!
-    const received=numeric(amounts.received,'received'),refunded=numeric(amounts.refunded,'refunded')
-    const total=numeric(context.total_amount_minor,'total'),pending=numeric(amounts.pending,'pending')
-    const unsettled=context.order_status!=='cancelled'&&total>0&&['unpaid','pending','partially_paid'].includes(context.payment_status)
-    const due=unsettled?Math.max(0,total-received):0
+    const amounts=await readCheckoutPrintSummary(this.transaction,[orderId])
+    const {received,refunded,pending,due}=amounts
+    const total=amounts.receivable
+    const unsettled=amounts.state!=='paid'
     const consumedAt=new Date(context.submitted_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})
     const packageComparisons:PrintTicketLine[]=[]
     for(const parent of items.filter(item=>item.productKind==='bundle'&&item.parentOrderItemId===null)){
@@ -196,12 +195,12 @@ export class PrintTicketSourceRepository {
       {name:'尚未收款',quantity:1,totalAmountMinor:due},
       {name:'渠道待确认金额（不计入实收）',quantity:1,totalAmountMinor:pending}]
     return this.materializeDocument(sourceId,orderId,{
-      kind:unsettled?'cashier_settlement':'order_summary',
-      subtitle:context.order_status==='cancelled'?'订单已取消 · 历史收退款核对':unsettled?'订单预结账 · 不代表已付款':'单笔订单账单 · 非整桌汇总',
+      kind:unsettled?'cashier_settlement':'order_summary',checkoutState:amounts.state,
+      subtitle:context.order_status==='cancelled'?'订单已取消 · 历史收退款核对':unsettled?(amounts.state==='partial'?'订单预结账 · 部分收款，尚未结清':'订单预结账 · 不代表已付款'):'单笔订单账单 · 非整桌汇总',
       test:false,issuedAt:source.occurred_at,businessDate:context.business_date,
       ticketReference:context.order_public_id,tableCode:context.table_code,guestCount:context.guest_count,
       operatorLabel,note:context.order_note,
-      payment:null,lines,totalAmountMinor:null,currency:currency(context.currency),
+      payment:null,lines,totalAmountMinor:total,currency:currency(context.currency),
     })
   }
 

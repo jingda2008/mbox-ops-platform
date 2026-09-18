@@ -195,12 +195,17 @@ function renderTicket(value) {
     throw new Error('unsupported_ticket_snapshot')
   }
   const title = requiredText(value.title, 'ticket.title')
+  const checkoutVenue = ['cashier_settlement', 'cashier_payment', 'table_settlement'].includes(value.kind) || value.documentRole === 'checkout' || value.checkoutState !== undefined
+  const subtitle = checkoutVenue
+    ? String(value.subtitle || '').replace(/^陆家嘴中心 L\+MALL(?:\s*·\s*|$)/, '').split('·').map(part => part.trim()).filter(part => !/^(?:本桌次完整消费账单|未确认收款|已确认收款|不代表(?:已经|已)付款)$/.test(part)).join(' · ')
+    : String(value.subtitle || '')
   const displayNumber = value.kind === 'table_settlement' && /^\d{8}-\d{6}-\d{6}$/.test(value.displayNumber || '') ? value.displayNumber : null
   const lines = [
     'M-BOX · SHANGHAI',
     value.test === true ? '【系统打印测试】' : '',
-    center(title, 24),
-    String(value.subtitle || ''),
+    checkoutVenue ? center('陆家嘴中心 L+MALL', 24) : '',
+    center(checkoutVenue ? title.replace(/[（(]未确认收款[）)]/, '') : title, 24),
+    subtitle,
     divider(),
     value.tableCode ? `桌台：${value.tableCode}` : '',
     value.guestCount ? `人数：${value.guestCount}` : '',

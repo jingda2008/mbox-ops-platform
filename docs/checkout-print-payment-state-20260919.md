@@ -21,7 +21,7 @@ VIP3 的未收款整桌账单以固定“结账单”为标题，且没有传入
 
 ## 交付状态
 
-本地代码与验证完成；尚未提交、推送、合并、生产部署或执行门店实际打印。生产现状不会因本地修改而改变。发布后须用原打印机验收未付款、部分付款、全部付清的票据标题和总合计；不需要重收款或更改VIP3历史账本。
+当前：代码已提交并合并PR #251，后台rc.209已正式部署并验收；门店打印桥1.0.10仍待Windows安装及实体试打，详见文末发布记录。发布后须用原打印机验收未付款、部分付款、全部付清的票据标题和总合计；不需要重收款或更改VIP3历史账本。
 
 ## 预览与出纸的核验路径
 
@@ -84,3 +84,16 @@ VIP3 的未收款整桌账单以固定“结账单”为标题，且没有传入
 首次PR CI在支付宝差异校验失败：主线2ceb18a已修改微信菜单折叠/展开、社区现场运营卡片及对应样式，但冻结指纹未同步。本次逐项复核该提交后更新这两页精确模板及社区样式指纹；支付宝源码不变，仍检查所有共享页面、语法、事件、样式及平台实现。23页检查和13项平台测试通过，未绕过CI或上传小程序。
 
 完整check另发现主线存酒发码入口使用window.confirm，违反既有confirmation-dialog-contract。改为复用ConfirmationDialog，在perform忙碌区间等待确认后才发码，取消不发码；保留原服务号授权说明。
+
+## rc.209 生产发布结果（2026-09-19 02:25 CST）
+
+- PR #251已合并；标签`v1.0.0-rc.209`，部署提交`6c076ddef187149f4081b57c5859e5dd7b8ea2bf`。PR CI 35376596365、标签CI 35377966901、发布工作流35377967085全部通过。
+- 镜像OCI摘要`sha256:0b2013e1858f65a3b37563b205108edf814fb2fb034f0038b9d3ae80dea60d65`；运行平台镜像摘要`sha256:e69f70ecce58ce143cf579bb00fa033b1192a49dc30ac005bfb1613afa3278a9`。
+- 通过标准`deploy/aliyun/deploy-release.sh`发布；数据库schema保持220，没有新增迁移。线上`/api/ready`为ready，SHA/摘要/production与发布清单一致；`/`、`/guest?table=W01`、`/reserve`、`/staff/live`通过HTTP及真实Chromium页面渲染验收。
+- 备份`/opt/mbox/backups/mbox-20260918T182327Z-NrPOpK.dump`已上传OSS并读回；deployment证据8对象、completion证据3对象验证通过，发布状态completed。回退容器`mbox-app-rollback-6c076dd-20260919-022452`保留。
+- 首轮上线后本地发布目录缺少`@playwright/test`，公网HTTP验证通过，但浏览器验证无法启动，标准脚本自动回退rc.208。已在独立发布目录执行`npm ci`，先以原版本验证4条浏览器路由通过，再完整重跑部署并成功。首轮失败/回退记录保留，未跳过门禁或改写不可变标签。
+- 上线只读核对：G1/G2仍为室外区域、4人、available；新的收款汇总与checkoutState代码均已在运行镜像内。数量售后开关true和服务号存酒提醒模板在配置源、规范化输出、容器、解析配置中一致。
+- VIP3原桌次4单只读汇总：应付/确认收款/净收均3144元，退款0、待收0；既有星驿渠道pending分摊仍合计3144元，与发布前审计一致，未算作第二次实收。本次未改写现金记录或擅自关闭渠道，实际资金核对仍以原审计为准。
+- 1.0.10安装包及构建输入已上传rc.209发布资产并重新下载核验SHA256；门店最后报告版本仍1.0.9，未执行Windows安装或实体出纸验收，SYS-241保持现场验收待完成。
+
+证据：独立发布工作树`artifacts/rc209-deployment/`及`.runtime/deploy/v1.0.0-rc.209/deployment/deployment-manifest.json`；实现工作树`artifacts/checkout-print/release-preflight/`。发布页：https://github.com/jingda2008/mbox-ops-platform/releases/tag/v1.0.0-rc.209 。

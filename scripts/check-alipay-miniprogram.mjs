@@ -117,11 +117,13 @@ assert(JSON.stringify(alipayTabs) === JSON.stringify(wechatTabs), '支付宝 tab
 // must be reviewed again. Alipay syntax, handlers, styles and package checks still run.
 // User explicitly excluded Alipay from the v9 release on 2026-09-16.
 // Bind the reviewed WeChat-only templates to exact hashes; do not skip syntax checks.
+// Reviewed 2ceb18a's WeChat-only category expansion and community operations cards;
+// Alipay remains at its separately frozen template and is not part of this release.
 const wechatPolicyTemplateDivergences = {
   'pages/home/index': {"wechat": "8b80b0ffe480a6b5bd27b9a2a28343a5c3e3fe0895a8dcaa4255e98559776960", "alipay": "5d0b08ce22d6e10ef63e443e04f29c99c8027e59c833e645cb6fc64145a5f725"},
-  'pages/order/index': {"wechat": "40dac1e11d1d64c19b1b8ae5eb337f9f7379d7fdf9fe8e538831a02b1b09d24a", "alipay": "546b3d9ca186fcf10a1ccf24170bb203fd0ef21775422ac38168333f5bb1ef07"},
+  'pages/order/index': {"wechat": "6fe80eba47b215d81b90d00eeedffd1631be93af8b2cd3852f62f97d2995e0a1", "alipay": "546b3d9ca186fcf10a1ccf24170bb203fd0ef21775422ac38168333f5bb1ef07"},
   'pages/profile/index': {"wechat": "f5688a3ba8ea664b78092960a610407dcaed785fdbb1d7640893488077ec8041", "alipay": "d201aaa6b4afef2375e261e8fe498b9cd3855fad075cb23b32eb249b5fb15031"},
-  'pages/community/index': {"wechat": "5df842ec3b82204a5aac22756bdd8310d32f61650358efd5ff40a4695f585412", "alipay": "31652fbffa072e0ab56f52acd7fb99793ccab3066bdd39c045d2669ee25c8d2f"},
+  'pages/community/index': {"wechat": "5a14159c03ef432959c0acc82794b9636bb34f31c9e882266bb3a9b9334d23cf", "alipay": "31652fbffa072e0ab56f52acd7fb99793ccab3066bdd39c045d2669ee25c8d2f"},
   'pages/reservations/index': {"wechat": "0ba7c6c6ba1e21ad983f4be42b65ff483eff8d255f421aa729bf6d8c9d327f1e", "alipay": "8e8e666661e7ac33df6eeb2393707c0c3ba1eb7462c3534a9dbaeb4c588c5675"},
   'pages/profile-cards/index': {"wechat": "35bcb245d3e93abe560a9e770a2009bb6fd08a6deda4f740bb91d1b7ac08d43b", "alipay": "385a7e6a8cc313d852944e5a17bdde388f54b573122c019e0eb45ae20c789a07"},
 
@@ -160,7 +162,7 @@ for (const page of sharedPages) {
     readFile(wechatStylePath, 'utf8').catch(() => ''),
     readFile(alipayStylePath, 'utf8').catch(() => ''),
   ])
-  const reviewedStyleDivergence = page === 'pages/order/index' && digest(wechatStyle) === '21fad3da45aad7b45ec3eaaf2c4ddd373c967773e26cce46c6f6343b469366f9' && digest(alipayStyle) === '4225c235d5e13f4a6552f4273dae0758f511c9306b487e1d2b9ed2e7f32fb6a3'
+  const reviewedStyleDivergence = (page === 'pages/community/index' && digest(wechatStyle) === '6032cf7b488b1e35ca141e4d1933440b73c18659aed690d1d2d77065d40e2fdf' && digest(alipayStyle) === '8aed83c1c0b9df23001dd5119425e0ab777e5748795746c55269947d6fec7b63') || page === 'pages/order/index' && digest(wechatStyle) === '21fad3da45aad7b45ec3eaaf2c4ddd373c967773e26cce46c6f6343b469366f9' && digest(alipayStyle) === '4225c235d5e13f4a6552f4273dae0758f511c9306b487e1d2b9ed2e7f32fb6a3'
   assert(reviewedStyleDivergence || cssSignature(alipayStyle) === cssSignature(wechatStyle), `${page} 的布局样式与微信不一致`)
 
   const wechatConfig = JSON.parse(await readFile(join(wechatRoot, `${page}.json`), 'utf8').catch(() => '{}'))

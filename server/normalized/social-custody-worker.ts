@@ -3,6 +3,15 @@ import type {ScopedPostgresTransactionRunner,StoreScope} from './transaction-run
 import type {ActivityContactProtectionKeyring} from './personal-contact-protection.js'
 import {SocialAccountRepository,processSocialEvent} from './social-account-repository.js'
 import {OfficialSocialAccountAdapter,type SocialDeliveryResult} from './social-account-adapter.js'
+function clipThing(value:string){return Array.from(value.trim()||'—').slice(0,20).join('')}
+function clipCharacter(value:string){return Array.from(value.trim()||'—').slice(0,32).join('')}
+function formatWechatTime(ms:number){
+ if(!Number.isFinite(ms))return '待确认'
+ const date=new Date(ms)
+ const parts=new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).formatToParts(date)
+ const pick=(type:Intl.DateTimeFormatPartTypes)=>parts.find(part=>part.type===type)?.value??''
+ return `${pick('year')}年${pick('month')}月${pick('day')}日 ${pick('hour')}:${pick('minute')}`
+}
 /** Database claims precede network calls. A crash after claim is unknown, never
  * automatically resent: duplicate messages cannot be ruled out. */
 export class SocialCustodyWorker{
@@ -45,7 +54,7 @@ export class SocialCustodyWorker{
  private async sendNext(scope:StoreScope,kind:'code'|'reminder'){
   const table=kind==='code'?'bottle_custody_challenges':'bottle_custody_reminders',status=kind==='code'?'delivery_status':'status'
   const job=await this.transactions.run(scope,async tx=>{
-   const rows=await tx.query<Record<string,unknown>&{id:string;order_id:string;customer_id:string;account_id:string|null;encrypted_code?:Buffer;code_hash?:string;key_id?:string;reminder_text:string;expires_at:string}>(`SELECT j.*,o.customer_id,o.expires_at::text,p.service_account_id AS account_id,p.reminder_text FROM mbox.${table} j JOIN mbox.bottle_custody_orders o ON o.tenant_id=j.tenant_id AND o.store_id=j.store_id AND o.id=j.order_id JOIN mbox.bottle_custody_policies p ON p.tenant_id=j.tenant_id AND p.store_id=j.store_id WHERE j.tenant_id=$1 AND j.store_id=$2 AND j.${status}='pending' AND o.status='stored' AND ${kind==='code'?"j.expires_at>clock_timestamp() AND j.invalidated_at IS NULL AND j.order_version=o.version":"p.reminders_enabled AND j.expiry_snapshot=o.expires_at AND j.due_at<=clock_timestamp() AND (clock_timestamp() AT TIME ZONE 'Asia/Shanghai')::date=(j.due_at AT TIME ZONE 'Asia/Shanghai')::date AND date_trunc('minute',clock_timestamp() AT TIME ZONE 'Asia/Shanghai')::time BETWEEN time '16:00' AND time '17:00'"} ORDER BY j.created_at,j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1`,[scope.tenantId,scope.storeId])
+   const rows=await tx.query<Record<string,unknown>&{id:string;order_id:string;customer_id:string;account_id:string|null;encrypted_code?:Buffer;code_hash?:string;key_id?:string;reminder_text:string;expires_at:string;stored_at:string;public_id:string;item_name:string}>(`SELECT j.*,o.customer_id,o.expires_at::text,o.stored_at::text,o.public_id,o.item_name,p.service_account_id AS account_id,p.reminder_text FROM mbox.${table} j JOIN mbox.bottle_custody_orders o ON o.tenant_id=j.tenant_id AND o.store_id=j.store_id AND o.id=j.order_id JOIN mbox.bottle_custody_policies p ON p.tenant_id=j.tenant_id AND p.store_id=j.store_id WHERE j.tenant_id=$1 AND j.store_id=$2 AND j.${status}='pending' AND o.status='stored' AND ${kind==='code'?"j.expires_at>clock_timestamp() AND j.invalidated_at IS NULL AND j.order_version=o.version":"p.reminders_enabled AND j.expiry_snapshot=o.expires_at AND j.due_at<=clock_timestamp() AND (clock_timestamp() AT TIME ZONE 'Asia/Shanghai')::date=(j.due_at AT TIME ZONE 'Asia/Shanghai')::date AND date_trunc('minute',clock_timestamp() AT TIME ZONE 'Asia/Shanghai')::time BETWEEN time '16:00' AND time '17:00'"} ORDER BY j.created_at,j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1`,[scope.tenantId,scope.storeId])
    const row=rows.rows[0];if(!row)return null
    await tx.query(`UPDATE mbox.${table} SET ${status}='sending',claimed_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[scope.tenantId,scope.storeId,row.id]);return row
   });if(!job)return false
@@ -66,9 +75,13 @@ export class SocialCustodyWorker{
      else result.errorCode='TEMPLATE_NOT_CONFIGURED'
     }else{
      const template=delivery.account.reminder_template_id
-     const key=delivery.account.reminder_data_key
-     const value=job.reminder_text.replaceAll('{expiry}',new Date(job.expires_at).toLocaleDateString('zh-CN',{timeZone:'Asia/Shanghai'}))
-     if(template)result=await adapter.sendTemplate(delivery.recipient,template,{[key]:value})
+     if(template)result=await adapter.sendSubscribe(delivery.recipient,template,{
+      thing1:clipThing('超嗨M-BOX陆家嘴店'),
+      character_string2:clipCharacter(String(job.public_id)),
+      thing3:clipThing(String(job.item_name)),
+      time4:formatWechatTime(Date.parse(String(job.stored_at))),
+      time5:formatWechatTime(Date.parse(String(job.expires_at))),
+     },'pages/profile/index')
      else result.errorCode='TEMPLATE_NOT_CONFIGURED'
     }
    }

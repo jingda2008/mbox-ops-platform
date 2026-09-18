@@ -288,6 +288,62 @@
   font-weight: 700;
 }
 
+.ops-section { margin-top: 8rpx; }
+.ops-list { display: flex; flex-direction: column; gap: 16rpx; }
+.ops-card {
+  margin-bottom: 16rpx;
+  padding: 24rpx 22rpx;
+  border: 1rpx solid rgba(49, 93, 70, 0.16);
+  border-radius: 22rpx;
+  background: #fff;
+}
+.ops-card--hover { opacity: 0.92; }
+.ops-card--static { background: #f7faf8; }
+.ops-card__kicker {
+  display: block;
+  color: #315d46;
+  font-size: 20rpx;
+  font-weight: 700;
+  letter-spacing: 2rpx;
+}
+.ops-card__title {
+  display: block;
+  margin-top: 10rpx;
+  color: #1a241e;
+  font-size: 30rpx;
+  font-weight: 700;
+}
+.ops-card__copy {
+  display: block;
+  margin-top: 10rpx;
+  color: #66756c;
+  font-size: 24rpx;
+  line-height: 1.55;
+}
+.ops-card__link {
+  display: block;
+  margin-top: 16rpx;
+  color: #315d46;
+  font-size: 22rpx;
+  font-weight: 700;
+}
+.ops-card__button {
+  margin-top: 18rpx;
+  padding: 0 28rpx;
+  height: 64rpx;
+  line-height: 64rpx;
+  border-radius: 999rpx;
+  background: #315d46;
+  color: #fff;
+  font-size: 24rpx;
+}
+.ops-note {
+  margin: 8rpx 0 28rpx;
+  color: #8a968e;
+  font-size: 22rpx;
+  line-height: 1.5;
+}
+
 @media (max-width: 390px) {
   .community-hero { margin-right: -22rpx; margin-left: -22rpx; padding: 28rpx 22rpx 30rpx; }
   .community-hero__logo { width: 78%; }

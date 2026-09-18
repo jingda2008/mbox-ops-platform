@@ -46,7 +46,37 @@
         </view>
       </view>
     </view>
-    <state-panel wx:else type="empty" title="下一场正在准备" message="新活动会第一时间出现在这里" />
+
+    <view class="ops-section">
+      <view class="activity-section-head"><view><text>今晚现场</text></view></view>
+      <view wx:if="{{performances.length}}" class="ops-list">
+        <view wx:for="{{performances}}" wx:key="key" class="ops-card" bindtap="openPerformances" hover-class="ops-card--hover">
+          <text class="ops-card__kicker">演出</text>
+          <text class="ops-card__title">{{item.name}}</text>
+          <text class="ops-card__copy">{{item.timeText}} · {{item.stageText}}</text>
+          <text class="ops-card__link">查看本月演出安排 →</text>
+        </view>
+      </view>
+      <view wx:else class="ops-card ops-card--static">
+        <text class="ops-card__kicker">演出</text>
+        <text class="ops-card__title">陆家嘴店夜间现场</text>
+        <text class="ops-card__copy">驻唱歌手与主题场次按日更新，可查看本月完整安排。</text>
+        <button class="ops-card__button" bindtap="openPerformances">查看演出安排</button>
+      </view>
+      <view class="ops-card" bindtap="openReservations" hover-class="ops-card--hover">
+        <text class="ops-card__kicker">预约</text>
+        <text class="ops-card__title">到店预约留座</text>
+        <text class="ops-card__copy">选择到店时间与人数，到店后扫码点单，继续现场服务。</text>
+        <text class="ops-card__link">去预约 →</text>
+      </view>
+      <view class="ops-card" bindtap="openOrder" hover-class="ops-card--hover">
+        <text class="ops-card__kicker">点单</text>
+        <text class="ops-card__title">今晚菜单与套餐</text>
+        <text class="ops-card__copy">浏览真实酒水、套餐组合与现价；到店扫码后即可下单。</text>
+        <text class="ops-card__link">去点单 →</text>
+      </view>
+    </view>
+    <view wx:if="{{!activities.length}}" class="ops-note">会员专属城市活动与主题场次开放后，会显示在上方「本期活动」。</view>
   </block>
 
   <view wx:if="{{membershipInviteVisible}}" class="community-member-mask">

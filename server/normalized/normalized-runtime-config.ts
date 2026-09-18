@@ -673,10 +673,11 @@ function readWechatServiceAccountSubscribe(environment:NodeJS.ProcessEnv, stateS
     const appSecret = optional(environment.MBOX_WECHAT_SERVICE_ACCOUNT_APP_SECRET);
     const activityTemplateId = optional(environment.MBOX_WECHAT_SERVICE_ACCOUNT_ACTIVITY_SUBSCRIBE_TEMPLATE_ID);
     const couponTemplateId = optional(environment.MBOX_WECHAT_SERVICE_ACCOUNT_COUPON_SUBSCRIBE_TEMPLATE_ID);
+    const codeTemplateId = optional(environment.MBOX_WECHAT_SERVICE_ACCOUNT_CODE_SUBSCRIBE_TEMPLATE_ID);
     const miniProgramAppId = optional(environment.MBOX_WECHAT_APP_ID)
         ?? optional(environment.MBOX_WECHAT_SERVICE_ACCOUNT_MINI_PROGRAM_APP_ID);
     const publicOrigin = optional(environment.MBOX_PUBLIC_ORIGIN) ?? 'https://mbox.shmbox.com';
-    if (appSecret === null && activityTemplateId === null && couponTemplateId === null)
+    if (appSecret === null && activityTemplateId === null && couponTemplateId === null && codeTemplateId === null)
         return null;
     if (appId === null || !/^wx[A-Za-z0-9_-]{4,126}$/.test(appId)) {
         errors.push('MBOX_WECHAT_SERVICE_ACCOUNT_APP_ID');
@@ -690,6 +691,9 @@ function readWechatServiceAccountSubscribe(environment:NodeJS.ProcessEnv, stateS
     if (couponTemplateId === null || couponTemplateId.length < 8) {
         errors.push('MBOX_WECHAT_SERVICE_ACCOUNT_COUPON_SUBSCRIBE_TEMPLATE_ID');
     }
+    if (codeTemplateId === null || codeTemplateId.length < 8) {
+        errors.push('MBOX_WECHAT_SERVICE_ACCOUNT_CODE_SUBSCRIBE_TEMPLATE_ID');
+    }
     if (miniProgramAppId === null || !/^wx[A-Za-z0-9_-]{4,126}$/.test(miniProgramAppId)) {
         errors.push('MBOX_WECHAT_APP_ID');
     }
@@ -697,7 +701,7 @@ function readWechatServiceAccountSubscribe(environment:NodeJS.ProcessEnv, stateS
         errors.push('MBOX_NORMALIZED_SECRET');
     }
     if (appId === null || appSecret === null || activityTemplateId === null
-        || couponTemplateId === null || miniProgramAppId === null || stateSecret === null) {
+        || couponTemplateId === null || codeTemplateId === null || miniProgramAppId === null || stateSecret === null) {
         return null;
     }
     return Object.freeze({
@@ -705,6 +709,7 @@ function readWechatServiceAccountSubscribe(environment:NodeJS.ProcessEnv, stateS
         appSecret,
         activityTemplateId,
         couponTemplateId,
+        codeTemplateId,
         miniProgramAppId,
         publicOrigin: publicOrigin.replace(/\/$/, ''),
         stateSecret,

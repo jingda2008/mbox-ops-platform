@@ -1446,13 +1446,25 @@ export class CustomerExperienceRepository {
   }
 
   async enrollMembership(customerId: string, memberNo?: string): Promise<{ membership: PublicMembership; created: boolean }> {
+    const canonical = await this.transaction.query<{ id: string }>(`
+      WITH RECURSIVE ancestry AS (
+        SELECT id, merged_into_customer_id FROM mbox.customers
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+        UNION ALL
+        SELECT parent.id, parent.merged_into_customer_id
+        FROM mbox.customers parent JOIN ancestry child ON child.merged_into_customer_id=parent.id
+        WHERE parent.tenant_id=$1::uuid AND parent.store_id=$2::uuid
+      )
+      SELECT id FROM ancestry WHERE merged_into_customer_id IS NULL LIMIT 1
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, customerId])
+    const activeCustomerId = canonical.rows[0]?.id ?? customerId
     await this.transaction.query(`
       SELECT id FROM mbox.customers
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND id = $3::uuid AND status = 'active'
       FOR UPDATE
-    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, customerId])
-    const existing = await this.findMembership(customerId)
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, activeCustomerId])
+    const existing = await this.findMembership(activeCustomerId)
     if (existing !== null) return { membership: membershipView(existing), created: false }
     memberNo ??= await allocateMemberNumber(this.transaction)
     const inserted = await this.transaction.query<MembershipRow>(`
@@ -1492,7 +1504,7 @@ export class CustomerExperienceRepository {
         NULL::bigint AS growth_carry_remainder,
         account.updated_at::text AS updated_at
       FROM membership JOIN account ON account.membership_id=membership.id
-    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, customerId, memberNo])
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, activeCustomerId, memberNo])
     const row = requiredRow(inserted.rows[0], 'membership')
     await this.transaction.query(`
       INSERT INTO mbox.customer_events (
@@ -1501,7 +1513,7 @@ export class CustomerExperienceRepository {
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
-      customerId,
+      activeCustomerId,
       JSON.stringify({ memberNo }),
     ])
     return { membership: membershipView(row), created: true }

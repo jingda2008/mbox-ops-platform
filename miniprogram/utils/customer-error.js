@@ -59,12 +59,27 @@ const CODE_MESSAGES = Object.freeze({
   ACTIVITY_PAYMENT_PROVIDER_REJECTED: '支付通道未能受理本次付款，本次没有扣款，请稍后重新报名或联系门店',
   ACTIVITY_PAYMENT_RESULT_UNKNOWN: '付款结果确认中，请先查询付款状态，不要重复报名或重复付款',
   AUTH_REQUIRED: '登录状态已失效，请重新进入后重试',
+  AUTHENTICATION_REQUIRED: '登录状态已失效，请重新进入后重试',
   PUBLIC_RESERVATION_REQUEST_INVALID: '请求格式有误，请刷新页面后重试',
+  PUBLIC_RESERVATION_RATE_LIMITED: '操作有点快，请稍后再试',
   RESERVATION_NOT_FOUND: '找不到这条预约，请刷新后重试',
   RESERVATION_CANCEL_REQUIRES_STAFF: '该预约需要联系门店协助取消',
   RESERVATION_STATE_CONFLICT: '预约状态已变化，请刷新后重试',
   RESERVATION_SESSION_INVALID: '登录状态已失效，请重新进入后重试',
   HTTP_ERROR: '服务暂时未能确认，请稍后重试',
+  WECHAT_PHONE_AUTHORIZATION_INVALID: '微信手机号授权无效或已过期，请重新点击授权',
+  WECHAT_PHONE_PROVIDER_UNAVAILABLE: '微信手机号服务暂时不可用，请稍后重试',
+  WECHAT_PHONE_PROVIDER_CONFIGURATION: '微信手机号服务配置异常，请联系门店',
+  MEMBERSHIP_ENROLLMENT_PHONE_NOT_CONFIGURED: '手机号入会尚未接通，请稍后重试或联系门店',
+  MEMBERSHIP_ENROLLMENT_CLIENT_UPGRADE_REQUIRED: '请更新小程序后重新授权手机号加入会员',
+  MEMBERSHIP_ENROLLMENT_CONFLICT: '本次入会请求与之前不一致，请关闭后重新授权手机号',
+  MEMBERSHIP_ENROLLMENT_IN_PROGRESS: '入会正在确认中，请稍候再试',
+  MEMBERSHIP_ENROLLMENT_RESULT_UNCONFIRMED: '入会结果确认中，请稍后在「我的」查看',
+  MEMBERSHIP_IDENTITY_CONFLICT: '会员身份正在同步，请重新授权手机号完成登录',
+  MEMBERSHIP_RECOVERY_PHONE_NOT_CONFIGURED: '会员手机号校验暂时不可用，请稍后重试或联系门店',
+  MEMBERSHIP_RECOVERY_NOT_CONFIGURED: '历史会员找回尚未启用，请联系门店协助',
+  CUSTOMER_EXPERIENCE_FAILED: '会员服务暂时没有接上，请稍后重试',
+  ROUTE_NOT_FOUND: '会员服务接口暂时不可用，请稍后重试或联系门店',
 })
 
 function customerErrorCode(error) {
@@ -73,7 +88,16 @@ function customerErrorCode(error) {
 }
 
 function customerErrorMessage(error, fallback) {
-  return CODE_MESSAGES[customerErrorCode(error)] || String(fallback || '服务暂时繁忙，请稍后重试').trim()
+  const code = customerErrorCode(error)
+  if (code && CODE_MESSAGES[code]) return CODE_MESSAGES[code]
+  const serverMessage = String((error && error.message) || '').trim()
+  // 后端已返回稳定中文时直接展示，避免未登记错误码被统一盖成“服务暂时繁忙”。
+  if (serverMessage && /^[\u4e00-\u9fffA-Za-z0-9]/.test(serverMessage)
+    && !/Error:|at |stack|ECONN|ETIMEDOUT|undefined/i.test(serverMessage)
+    && serverMessage.length <= 96) {
+    return serverMessage
+  }
+  return String(fallback || '服务暂时繁忙，请稍后重试').trim()
 }
 
 function isWechatCancellation(error) {

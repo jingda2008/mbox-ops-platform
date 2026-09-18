@@ -53,11 +53,24 @@ export class SocialCustodyWorker{
   try{
    const delivery=job.account_id?await this.transactions.run(scope,async tx=>{const valid=await tx.query(`SELECT j.id FROM mbox.${table} j JOIN mbox.bottle_custody_orders o ON o.tenant_id=j.tenant_id AND o.store_id=j.store_id AND o.id=j.order_id WHERE j.tenant_id=$1 AND j.store_id=$2 AND j.id=$3 AND j.${status}='sending' AND o.status='stored' AND ${kind==='code'?"j.expires_at>clock_timestamp() AND j.invalidated_at IS NULL AND j.consumed_at IS NULL AND j.order_version=o.version":"j.expiry_snapshot=o.expires_at AND o.remaining_quantity>0 AND EXISTS(SELECT 1 FROM mbox.bottle_custody_policies p WHERE p.tenant_id=j.tenant_id AND p.store_id=j.store_id AND p.reminders_enabled)"}`,[scope.tenantId,scope.storeId,job.id]);if(!valid.rows.length)return null;const repo=new SocialAccountRepository(tx,this.protection);return{...await repo.account(job.account_id!),recipient:await repo.recipient(job.account_id!,job.customer_id)}},{readOnly:true}):null
    if(delivery?.recipient&&delivery.account.enabled){
-    const template=kind==='code'?delivery.account.code_template_id:delivery.account.reminder_template_id
-    const key=kind==='code'?delivery.account.code_data_key:delivery.account.reminder_data_key
-    const value=kind==='code'?this.protection.reveal({encryptedContact:job.encrypted_code!,contactHash:job.code_hash!,encryptionKeyId:job.key_id!}).split(':')[1]!:job.reminder_text.replaceAll('{expiry}',new Date(job.expires_at).toLocaleDateString('zh-CN',{timeZone:'Asia/Shanghai'}))
-    if(template)result=await new OfficialSocialAccountAdapter(delivery.account,delivery.credentials).sendTemplate(delivery.recipient,template,{[key]:value})
-    else result.errorCode='TEMPLATE_NOT_CONFIGURED'
+    const adapter=new OfficialSocialAccountAdapter(delivery.account,delivery.credentials)
+    if(kind==='code'){
+     const template=delivery.account.code_template_id
+     const code=this.protection.reveal({encryptedContact:job.encrypted_code!,contactHash:job.code_hash!,encryptionKeyId:job.key_id!}).split(':')[1]!
+     const ttlMinutes=Math.max(1,Math.ceil((Date.parse(job.expires_at)-Date.now())/60_000))
+     if(template)result=await adapter.sendSubscribe(delivery.recipient,template,{
+      number1:code,
+      thing3:`${ttlMinutes}分钟`,
+      thing2:'寄存取走',
+     },'pages/profile/index')
+     else result.errorCode='TEMPLATE_NOT_CONFIGURED'
+    }else{
+     const template=delivery.account.reminder_template_id
+     const key=delivery.account.reminder_data_key
+     const value=job.reminder_text.replaceAll('{expiry}',new Date(job.expires_at).toLocaleDateString('zh-CN',{timeZone:'Asia/Shanghai'}))
+     if(template)result=await adapter.sendTemplate(delivery.recipient,template,{[key]:value})
+     else result.errorCode='TEMPLATE_NOT_CONFIGURED'
+    }
    }
   }catch{result={status:'rejected',providerReference:null,errorCode:'PRE_SEND_CONFIGURATION_UNAVAILABLE'}}
   await this.transactions.run(scope,tx=>tx.query(`UPDATE mbox.${table} SET ${status}=$4,provider_reference=$5,error_code=$6 WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND ${status}='sending'`,[scope.tenantId,scope.storeId,job.id,result.status,result.providerReference,result.errorCode]))

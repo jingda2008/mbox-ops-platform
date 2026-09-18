@@ -589,7 +589,7 @@ Page({
     if (this.data.logoutBusy || !this.data.membership) return
     const confirmed = await new Promise((resolve) => wx.showModal({
       title: '退出登录',
-      content: '退出后需要重新授权手机号登录',
+      content: '退出后需重新授权手机号登录；同一手机号会回到已有的 6 位会员号',
       confirmText: '退出',
       cancelText: '取消',
       success: (result) => resolve(Boolean(result.confirm)),
@@ -607,6 +607,7 @@ Page({
       this.pendingMembershipAction = ''
       wx.removeStorageSync('mbox.membership.enroll.attempt.v1')
       wx.removeStorageSync('mbox.membership.recovery.attempt.v1')
+      // 进入显式退出态（匿名浏览），在再次授权手机号前不要用微信身份自动拉回会员。
       await restartAnonymousCustomerSession()
       this.setData({
         agreedToPolicies: false,
@@ -666,18 +667,23 @@ Page({
     }
     this.setData({ busy: true, error: '' })
     try {
-      await enrollMembership(terms.version, 'mini_profile', authorization.code)
-      this.setData({ loginSheetVisible: false })
+      const result = await enrollMembership(terms.version, 'mini_profile', authorization.code)
+      const membership = result && result.membership ? membershipView(result.membership) : null
+      if (!membership) throw new Error('会员状态暂时未刷新，请再试一次')
+      this.setData({ loginSheetVisible: false, error: '', membership })
       wx.showToast({ title: '登录成功', icon: 'success', duration: 1200 })
-      await this.load()
+      try {
+        await this.load()
+      } catch (_error) {
+        // 入会已成功；刷新失败不能把登录打回失败态。
+      }
+      if (!this.data.membership) this.setData({ membership })
       this.continuePendingMembershipAction()
     } catch (error) {
       this.pendingMembershipAction = ''
-      const friendly = customerErrorCode(error) === 'ROUTE_NOT_FOUND'
-        ? '会员登录服务暂时不可用，请稍后重试或联系门店'
-        : customerErrorMessage(error, '登录暂时没有完成')
-      this.setData({ error: friendly })
-      wx.showToast({ title: friendly, icon: 'none' })
+      const friendly = customerErrorMessage(error, '登录暂时没有完成')
+      this.setData({ error: friendly, loginSheetVisible: true })
+      wx.showToast({ title: friendly, icon: 'none', duration: 2800 })
     } finally {
       this.setData({ busy: false })
     }
@@ -735,9 +741,20 @@ Page({
       const result = await verifyMembershipRecovery(challenge.challengePublicId, authorization.code)
       this.setData({ recoveryMessage: result.message || '找回申请已经提交' })
       if (result.status === 'completed') {
-        this.setData({ loginSheetVisible: false })
+        const membership = result.membership ? membershipView(result.membership) : null
+        this.setData({
+          loginSheetVisible: false,
+          error: '',
+          ...(membership ? { membership } : {}),
+        })
         wx.showToast({ title: '会员已找回', icon: 'success' })
-        await this.load()
+        try {
+          await this.load()
+        } catch (_error) {
+          // 找回已成功；刷新失败不能把登录打回失败态。
+        }
+        if (membership && !this.data.membership) this.setData({ membership })
+        this.continuePendingMembershipAction()
       }
     } catch (error) {
       const code = String((error && error.code) || '')
@@ -746,7 +763,7 @@ Page({
         : customerErrorCode(error) === 'ROUTE_NOT_FOUND'
           ? '会员找回服务暂时不可用。请稍后重试；若仍失败，请联系门店协助找回。'
           : customerErrorMessage(error, '历史会员找回暂时没有完成')
-      this.setData({ recoveryMessage: friendly })
+      this.setData({ recoveryMessage: friendly, loginSheetVisible: true })
       wx.showToast({ title: friendly, icon: 'none', duration: 3500 })
     } finally {
       this.setData({ recoveryBusy: false })

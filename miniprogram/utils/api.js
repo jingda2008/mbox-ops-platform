@@ -3,7 +3,7 @@ const { randomId } = require('./id')
 const { recoverableGuestCommand } = require('./recoverable-command')
 const { getTableSession, rememberTableConnection, clearTableConnection } = require('./session')
 const { tableRequestScope } = require('./table-request-scope')
-const { ensureCustomerSession, renewReservationSessionOnly, isCustomerSessionInvalid, isWechatIdentityUnavailable } = require('./auth')
+const { ensureCustomerSession, renewReservationSessionOnly, isCustomerSessionInvalid, isWechatIdentityUnavailable, clearMembershipLoggedOut } = require('./auth')
 const { checkoutRecommendationAttribution } = require('./recommendation-attribution')
 
 async function loadGuestSession() {
@@ -421,9 +421,15 @@ async function enrollMembership(termsVersion, acknowledgementSource, phoneAuthor
       method: 'POST', headers: { 'idempotency-key': attempt.idempotencyKey }, data: payload,
     })).data
     wx.removeStorageSync(storageKey)
+    // 入会已落在当前预约会话顾客上。只清登出态，不要强制切微信身份：
+    // 清会话再升级失败会抛成「登录暂时没有完成」；升级成功也可能落到未绑手机号的微信顾客，会员状态丢失。
+    clearMembershipLoggedOut()
     return result
   } catch (error) {
     if (error && error.code !== 'NETWORK_ERROR') wx.removeStorageSync(storageKey)
+    if (error && /WECHAT_PHONE_|ALIPAY_PHONE_/.test(String(error.code || ''))) {
+      wx.removeStorageSync(storageKey)
+    }
     throw error
   }
 }
@@ -470,6 +476,8 @@ async function verifyMembershipRecovery(challengePublicId, phoneAuthorizationCod
       data: { challengePublicId, phoneAuthorizationCode },
     })).data
     if (!idempotencyKey) wx.removeStorageSync(MEMBERSHIP_RECOVERY_ATTEMPT_KEY)
+    // 找回已落在当前预约会话顾客上；同样不要强制切微信身份，避免成功被后续会话升级冲掉。
+    clearMembershipLoggedOut()
     return result
   } catch (error) {
     if (!idempotencyKey && error && error.code !== 'NETWORK_ERROR') {

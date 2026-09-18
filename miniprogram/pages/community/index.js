@@ -1,4 +1,4 @@
-const { getActivities, getActivityRegistrations, getMiniBootstrap, enrollMembership } = require('../../utils/api')
+const { getActivities, getActivityRegistrations, getMiniBootstrap, enrollMembership, getReservationPerformances } = require('../../utils/api')
 const { money, dateInput } = require('../../utils/format')
 const { currentActivities, activityTimeText } = require('../../utils/activity-display')
 const { publicImageUrl } = require('../../utils/media')
@@ -26,9 +26,28 @@ function dateText(value) {
   return date.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', weekday: 'short', hour: '2-digit', minute: '2-digit' })
 }
 
+function shanghaiDate() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date())
+}
+
+function performanceViews(raw) {
+  const items = Array.isArray(raw)
+    ? raw
+    : (raw && Array.isArray(raw.performances) ? raw.performances : [])
+  return items.filter(Boolean).map((item, index) => ({
+    key: item.publicId || item.id || `performance-${index}`,
+    name: item.name || item.title || '现场演出',
+    timeText: item.timeText || item.startTimeText || (item.startsAt ? dateText(item.startsAt) : '今晚场次'),
+    stageText: item.stageName || item.areaName || item.location || 'M-BOX 陆家嘴店',
+  }))
+}
+
 Page({
   data: {
-    loading: true, error: '', activities: [], membership: null, membershipTerms: null,
+    loading: true, error: '', activities: [], performances: [],
+    membership: null, membershipTerms: null,
     membershipInviteVisible: false, membershipInviteAgreed: false, membershipInviteBusy: false,
     pendingActivityId: '',
   },
@@ -52,10 +71,11 @@ Page({
   async load() {
     this.setData({ loading: true, error: '' })
     try {
-      const [rawActivities, rawRegistrations, bootstrap] = await Promise.all([
+      const [rawActivities, rawRegistrations, bootstrap, rawPerformances] = await Promise.all([
         getActivities(),
         getActivityRegistrations().catch(() => []),
         getMiniBootstrap(),
+        getReservationPerformances(shanghaiDate()).catch(() => null),
       ])
       const registrations = new Map((rawRegistrations || []).map((item) => [item.activityPublicId, item]))
       const activities = currentActivities(rawActivities).map((item) => {
@@ -80,6 +100,7 @@ Page({
       this.setData({
         loading: false,
         activities,
+        performances: performanceViews(rawPerformances),
         membership: bootstrap.membership || null,
         membershipTerms: bootstrap.membershipTerms || null,
         membershipInviteVisible: false,
@@ -105,6 +126,10 @@ Page({
   navigateToActivity(activityId) {
     wx.navigateTo({ url: `/pages/community-detail/index?id=${encodeURIComponent(activityId)}` })
   },
+
+  openReservations() { wx.switchTab({ url: '/pages/reservations/index' }) },
+  openOrder() { wx.switchTab({ url: '/pages/order/index' }) },
+  openPerformances() { wx.navigateTo({ url: '/pages/performances/index' }) },
 
   dismissMembershipInvite() {
     this.setData({ membershipInviteVisible: false, membershipInviteAgreed: false, pendingActivityId: '' })

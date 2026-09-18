@@ -8,7 +8,20 @@ const EXPIRY_KEY = 'mbox.public.session.expiresAt'
 const ASSERTION_KEY = 'mbox.public.identity.assertion'
 const WECHAT_EXPIRY_KEY = 'mbox.wechat.identity.expiresAt.v1'
 const WECHAT_PRINCIPAL_KEY = 'mbox.wechat.identity.principal.v1'
+const MEMBER_LOGGED_OUT_KEY = 'mbox.membership.loggedOut.v1'
 let inFlightSession = null
+
+function isMembershipLoggedOut() {
+  return wx.getStorageSync(MEMBER_LOGGED_OUT_KEY) === '1'
+}
+
+function markMembershipLoggedOut() {
+  wx.setStorageSync(MEMBER_LOGGED_OUT_KEY, '1')
+}
+
+function clearMembershipLoggedOut() {
+  wx.removeStorageSync(MEMBER_LOGGED_OUT_KEY)
+}
 
 function anonymousAssertion() {
   let value = wx.getStorageSync(ASSERTION_KEY)
@@ -124,33 +137,20 @@ async function openReservationSession(force) {
   let provider = 'anonymous'
   let providerAssertion = anonymousAssertion()
 
-  if (config.wechatIdentityEnabled) {
-    try {
-      const identityExpiry = Date.parse(wx.getStorageSync(WECHAT_EXPIRY_KEY) || '')
-      const savedToken = wx.getStorageSync('mbox.wechat.identity.accessToken.v1')
-      providerAssertion = !force && identityExpiry > Date.now() + 60_000
-        && typeof savedToken === 'string' && savedToken.length >= 32
-        ? savedToken
-        : await authenticateWechat(config)
-      provider = 'wechat'
-    } catch (error) {
-      // 现网若未挂载 /api/wechat/*，回退匿名预约会话，避免把已有会员凭证清掉后卡死。
-      if (!isWechatIdentityUnavailable(error)) throw error
-      provider = 'anonymous'
-      providerAssertion = anonymousAssertion()
-    }
-  } else if (!config.isDevelopment) {
+  // 会员主动退出后保持匿名浏览，直到再次授权手机号入会；避免微信身份立刻把旧会员拉回来导致“退不出去”。
+  if (config.wechatIdentityEnabled && !isMembershipLoggedOut()) {
+    const identityExpiry = Date.parse(wx.getStorageSync(WECHAT_EXPIRY_KEY) || '')
+    const savedToken = wx.getStorageSync('mbox.wechat.identity.accessToken.v1')
+    providerAssertion = !force && identityExpiry > Date.now() + 60_000
+      && typeof savedToken === 'string' && savedToken.length >= 32
+      ? savedToken
+      : await authenticateWechat(config)
+    provider = 'wechat'
+  } else if (!config.isDevelopment && !isMembershipLoggedOut()) {
     throw new Error('正式小程序尚未启用微信身份，已停止匿名访问')
   }
 
-  try {
-    return await issueReservationSession(provider, providerAssertion)
-  } catch (error) {
-    if (provider === 'wechat' && (isCustomerSessionInvalid(error) || isWechatIdentityUnavailable(error))) {
-      return issueReservationSession('anonymous', anonymousAssertion())
-    }
-    throw error
-  }
+  return issueReservationSession(provider, providerAssertion)
 }
 
 function ensureCustomerSession(force) {
@@ -179,6 +179,7 @@ function rotateAnonymousAssertion() {
 async function restartAnonymousCustomerSession() {
   clearCustomerSession()
   rotateAnonymousAssertion()
+  markMembershipLoggedOut()
   await issueReservationSession('anonymous', anonymousAssertion())
 }
 
@@ -194,4 +195,7 @@ module.exports = {
   renewReservationSessionOnly,
   isCustomerSessionInvalid,
   isWechatIdentityUnavailable,
+  isMembershipLoggedOut,
+  markMembershipLoggedOut,
+  clearMembershipLoggedOut,
 }

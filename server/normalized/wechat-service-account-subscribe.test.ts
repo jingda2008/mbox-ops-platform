@@ -3,7 +3,7 @@ import {createHmac} from 'node:crypto'
 import {expect,it,vi} from 'vitest'
 import {wechatServiceAccountSubscribePlugin} from './wechat-service-account-subscribe.js'
 const now=1789570000000
-const config={appId:'wxTestService01',appSecret:'test-secret-value-123',activityTemplateId:'activity-template-test',couponTemplateId:'coupon-template-test',miniProgramAppId:'wxTestMini01',publicOrigin:'https://mbox.example.test',stateSecret:'test-state-secret-value-123'}
+const config={appId:'wxTestService01',appSecret:'test-secret-value-123',activityTemplateId:'activity-template-test',couponTemplateId:'coupon-template-test',codeTemplateId:'code-template-test',miniProgramAppId:'wxTestMini01',publicOrigin:'https://mbox.example.test',stateSecret:'test-state-secret-value-123'}
 function signed(value:string){const body=Buffer.from(value).toString('base64url');return body+'.'+createHmac('sha256',config.stateSecret).update(body).digest('base64url')}
 it('preserves subscribe entry and OAuth page with private signed identity and no send side effect',async()=>{
  const app=Fastify(),fetchImpl=vi.fn(async()=>new Response(JSON.stringify({openid:'openid-test-12345'})))

@@ -59,4 +59,17 @@ export class OfficialSocialAccountAdapter{
    return{status:'accepted',providerReference:reference,errorCode:null}
   }catch(error){return error instanceof SocialProviderError&&error.code.startsWith('WECHAT_')?{status:'rejected',providerReference:null,errorCode:error.code}:{status:'unknown',providerReference:null,errorCode:'DELIVERY_OUTCOME_UNKNOWN'}}
  }
+ /** Service-account one-time subscription notice (`bizsend`), not legacy template/send. */
+ async sendSubscribe(openId:string,templateId:string,data:Record<string,string>,page='pages/profile/index'):Promise<SocialDeliveryResult>{
+  if(this.account.kind!=='service_account'||!this.account.enabled)return{status:'rejected',providerReference:null,errorCode:'ACCOUNT_DISABLED'}
+  let token:string;try{token=await this.accessToken()}catch{return{status:'rejected',providerReference:null,errorCode:'TOKEN_UNAVAILABLE'}}
+  try{
+   const result=await this.json(`https://api.weixin.qq.com/cgi-bin/message/subscribe/bizsend?access_token=${encodeURIComponent(token)}`,{
+    touser:openId,template_id:templateId,page,miniprogram_state:'formal',lang:'zh_CN',
+    data:Object.fromEntries(Object.entries(data).map(([key,value])=>[key,{value}])),
+   })
+   const reference=messageReference(result.msgid);if(reference===null)return{status:'unknown',providerReference:null,errorCode:'MISSING_RECEIPT'}
+   return{status:'accepted',providerReference:reference,errorCode:null}
+  }catch(error){return error instanceof SocialProviderError&&error.code.startsWith('WECHAT_')?{status:'rejected',providerReference:null,errorCode:error.code}:{status:'unknown',providerReference:null,errorCode:'DELIVERY_OUTCOME_UNKNOWN'}}
+ }
 }

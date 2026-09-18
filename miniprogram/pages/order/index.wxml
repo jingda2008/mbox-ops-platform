@@ -31,12 +31,13 @@
       <view class="browse-menu__heading"><view><text>今晚菜单</text><text>价格透明 · {{connectionState === 'waiting' ? '开台后即可下单' : '到店后即可下单'}}</text></view><text>{{visibleProducts.length}} 款</text></view>
       <view id="browse-menu-anchor"></view>
 <view class="menu-tools menu-tools--browse">
-      <view class="category-grid">
+      <view wx:if="{{!categoriesExpanded}}" class="category-grid">
         <button wx:for="{{categoryPreview}}" wx:key="code" class="category-chip {{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectCategory">{{item.name}}</button>
-        <button wx:if="{{categories.length > 8}}" class="category-chip category-more" bindtap="toggleCategories">{{categoriesExpanded ? '收起分类' : '全部分类 ⌄'}}</button>
+        <button wx:if="{{categories.length > 8}}" class="category-chip category-more" bindtap="toggleCategories">全部分类 ⌄</button>
       </view>
-      <scroll-view wx:if="{{categoriesExpanded}}" scroll-y class="category-options"><view class="category-grid">
+      <scroll-view wx:else scroll-y class="category-options"><view class="category-grid">
         <button wx:for="{{categories}}" wx:key="code" class="category-chip {{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectCategory">{{item.name}}</button>
+        <button class="category-chip category-more" bindtap="toggleCategories">收起分类</button>
       </view></scroll-view>
       <view class="menu-filter-line">
         <button wx:if="{{subcategories.length}}" class="subcategory-trigger {{subcategoriesExpanded ? 'is-active' : ''}}" hover-class="menu-filter-pressed" bindtap="toggleSubcategories"><view class="menu-filter-surface">{{selectedSubcategory === 'all' ? '细分类' : selectedSubcategoryName}} {{subcategoriesExpanded ? '⌃' : '⌄'}}</view></button>
@@ -94,12 +95,13 @@
 
     <view id="connected-menu-anchor"></view>
 <view class="menu-tools">
-      <view class="category-grid">
+      <view wx:if="{{!categoriesExpanded}}" class="category-grid">
         <button wx:for="{{categoryPreview}}" wx:key="code" class="category-chip {{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectCategory">{{item.name}}</button>
-        <button wx:if="{{categories.length > 8}}" class="category-chip category-more" bindtap="toggleCategories">{{categoriesExpanded ? '收起分类' : '全部分类 ⌄'}}</button>
+        <button wx:if="{{categories.length > 8}}" class="category-chip category-more" bindtap="toggleCategories">全部分类 ⌄</button>
       </view>
-      <scroll-view wx:if="{{categoriesExpanded}}" scroll-y class="category-options"><view class="category-grid">
+      <scroll-view wx:else scroll-y class="category-options"><view class="category-grid">
         <button wx:for="{{categories}}" wx:key="code" class="category-chip {{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectCategory">{{item.name}}</button>
+        <button class="category-chip category-more" bindtap="toggleCategories">收起分类</button>
       </view></scroll-view>
       <view class="menu-filter-line">
         <button wx:if="{{subcategories.length}}" class="subcategory-trigger {{subcategoriesExpanded ? 'is-active' : ''}}" hover-class="menu-filter-pressed" bindtap="toggleSubcategories"><view class="menu-filter-surface">{{selectedSubcategory === 'all' ? '细分类' : selectedSubcategoryName}} {{subcategoriesExpanded ? '⌃' : '⌄'}}</view></button>

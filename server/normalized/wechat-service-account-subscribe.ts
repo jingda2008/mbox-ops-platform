@@ -1,7 +1,16 @@
 import type { FastifyPluginAsync } from 'fastify';
-export interface WechatServiceAccountSubscribeConfig { appId:string; appSecret:string; activityTemplateId:string; couponTemplateId:string; miniProgramAppId:string; publicOrigin:string; stateSecret:string }
+export interface WechatServiceAccountSubscribeConfig {
+  appId:string
+  appSecret:string
+  activityTemplateId:string
+  couponTemplateId:string
+  codeTemplateId:string
+  miniProgramAppId:string
+  publicOrigin:string
+  stateSecret:string
+}
 interface Options {config:WechatServiceAccountSubscribeConfig; now?:()=>number; fetchImpl?:typeof fetch}
-type Payload={access_token?:string; expires_in?:number; ticket?:string; openid?:string; errcode?:number; errmsg?:string};
+type Payload={access_token?:string; expires_in?:number; ticket?:string; openid?:string; errcode?:number; errmsg?:string; error?:{message?:string}};
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 const TOKEN_URL = 'https://api.weixin.qq.com/cgi-bin/token';
 const TICKET_URL = 'https://api.weixin.qq.com/cgi-bin/ticket/getticket';
@@ -38,6 +47,7 @@ export const wechatServiceAccountSubscribePlugin: FastifyPluginAsync<Options> = 
             appId: config.appId,
             activityTemplateId: config.activityTemplateId,
             couponTemplateId: config.couponTemplateId,
+            codeTemplateId: config.codeTemplateId,
             openIdToken,
             configUrl: `${config.publicOrigin}/api/wechat/service-account/subscribe/jssdk-config`,
             sendUrl: `${config.publicOrigin}/api/wechat/service-account/subscribe/send-test`
@@ -58,56 +68,16 @@ export const wechatServiceAccountSubscribePlugin: FastifyPluginAsync<Options> = 
             sessionOpenId=verifyOpenIdToken(config.stateSecret,reserved,now());
             if(sessionOpenId!==openId)throw new Error('Identity mismatch');
         }catch { return reply.code(403).type('text/html; charset=utf-8').send(errorPage('授权身份无效，请重新进入页面。')); }
-        const accepted = [
-            templateId
-        ];
         const sends = [];
         try {
             const accessToken = await tokens.accessToken();
-            for (const id of accepted){
-                if (id !== config.activityTemplateId && id !== config.couponTemplateId) continue;
+            if (isConfiguredTemplate(config, templateId)) {
                 try {
-                    await bizSend(fetchImpl, accessToken, {
-                        touser: sessionOpenId,
-                        template_id: id,
-                        page: id === config.couponTemplateId ? 'pages/profile-coupons/index' : 'pages/community/index',
-                        miniprogram_state: 'formal',
-                        lang: 'zh_CN',
-                        data: id === config.couponTemplateId ? {
-                            thing1: {
-                                value: '欢迎饮品兑换凭证'
-                            },
-                            time2: {
-                                value: formatWechatTime(now() + 14 * 24 * 3600_000)
-                            },
-                            thing3: {
-                                value: '到店出示会员码核销'
-                            },
-                            thing4: {
-                                value: '欢迎饮品兑换凭证'
-                            }
-                        } : {
-                            thing1: {
-                                value: '超嗨M-BOX陆家嘴店'
-                            },
-                            thing2: {
-                                value: '周五现场驻唱'
-                            },
-                            time3: {
-                                value: formatWechatTime(now() + 2 * 3600_000)
-                            },
-                            thing4: {
-                                value: '请提前到店入座'
-                            }
-                        }
-                    });
-                    sends.push({
-                        templateId: id,
-                        ok: true
-                    });
+                    await bizSend(fetchImpl, accessToken, buildBizSendBody(config, sessionOpenId, templateId, now()));
+                    sends.push({ templateId, ok: true });
                 } catch (error) {
                     sends.push({
-                        templateId: id,
+                        templateId,
                         ok: false,
                         error: error instanceof Error ? error.message : 'send failed'
                     });
@@ -181,42 +151,9 @@ export const wechatServiceAccountSubscribePlugin: FastifyPluginAsync<Options> = 
         const sends = [];
         const accessToken = await tokens.accessToken();
         for (const templateId of accepted){
-            if (templateId !== config.activityTemplateId && templateId !== config.couponTemplateId) continue;
+            if (!isConfiguredTemplate(config, templateId)) continue;
             try {
-                await bizSend(fetchImpl, accessToken, {
-                    touser: openId,
-                    template_id: templateId,
-                    page: templateId === config.couponTemplateId ? 'pages/profile-coupons/index' : 'pages/community/index',
-                    miniprogram_state: 'formal',
-                    lang: 'zh_CN',
-                    data: templateId === config.couponTemplateId ? {
-                        thing1: {
-                            value: '欢迎饮品兑换凭证'
-                        },
-                        time2: {
-                            value: formatWechatTime(now() + 14 * 24 * 3600_000)
-                        },
-                        thing3: {
-                            value: '到店出示会员码核销'
-                        },
-                        thing4: {
-                            value: '欢迎饮品兑换凭证'
-                        }
-                    } : {
-                        thing1: {
-                            value: '超嗨M-BOX陆家嘴店'
-                        },
-                        thing2: {
-                            value: '周五现场驻唱'
-                        },
-                        time3: {
-                            value: formatWechatTime(now() + 2 * 3600_000)
-                        },
-                        thing4: {
-                            value: '请提前到店入座'
-                        }
-                    }
-                });
+                await bizSend(fetchImpl, accessToken, buildBizSendBody(config, openId, templateId, now()));
                 sends.push({
                     templateId,
                     ok: true
@@ -297,11 +234,61 @@ async function bizSend(fetchImpl:typeof fetch, accessToken:string, body:Record<s
         throw new Error(`${payload.errcode ?? 'unknown'}:${payload.errmsg ?? 'bizsend failed'}`);
     }
 }
+function isConfiguredTemplate(config:WechatServiceAccountSubscribeConfig, templateId:string) {
+    return templateId === config.activityTemplateId
+        || templateId === config.couponTemplateId
+        || templateId === config.codeTemplateId;
+}
+function buildBizSendBody(config:WechatServiceAccountSubscribeConfig, openId:string, templateId:string, nowMs:number) {
+    if (templateId === config.couponTemplateId) {
+        return {
+            touser: openId,
+            template_id: templateId,
+            page: 'pages/profile-coupons/index',
+            miniprogram_state: 'formal',
+            lang: 'zh_CN',
+            data: {
+                thing1: { value: '欢迎饮品兑换凭证' },
+                time2: { value: formatWechatTime(nowMs + 14 * 24 * 3600_000) },
+                thing3: { value: '到店出示会员码核销' },
+                thing4: { value: '欢迎饮品兑换凭证' },
+            },
+        };
+    }
+    if (templateId === config.codeTemplateId) {
+        return {
+            touser: openId,
+            template_id: templateId,
+            page: 'pages/profile/index',
+            miniprogram_state: 'formal',
+            lang: 'zh_CN',
+            data: {
+                number1: { value: '482916' },
+                thing3: { value: '5分钟' },
+                thing2: { value: '寄存取走' },
+            },
+        };
+    }
+    return {
+        touser: openId,
+        template_id: templateId,
+        page: 'pages/community/index',
+        miniprogram_state: 'formal',
+        lang: 'zh_CN',
+        data: {
+            thing1: { value: '超嗨M-BOX陆家嘴店' },
+            thing2: { value: '周五现场驻唱' },
+            time3: { value: formatWechatTime(nowMs + 2 * 3600_000) },
+            thing4: { value: '请提前到店入座' },
+        },
+    };
+}
 function assertConfig(config:WechatServiceAccountSubscribeConfig) {
     if (!/^wx[A-Za-z0-9_-]{4,126}$/.test(config.appId)) throw new TypeError('service account appId invalid');
     if (config.appSecret.length < 16) throw new TypeError('service account appSecret invalid');
     if (config.activityTemplateId.length < 8) throw new TypeError('activity template invalid');
     if (config.couponTemplateId.length < 8) throw new TypeError('coupon template invalid');
+    if (config.codeTemplateId.length < 8) throw new TypeError('code template invalid');
     if (!/^wx[A-Za-z0-9_-]{4,126}$/.test(config.miniProgramAppId)) throw new TypeError('mini program appId invalid');
     if (!/^https:\/\/[A-Za-z0-9.-]+/.test(config.publicOrigin)) throw new TypeError('publicOrigin invalid');
     if (config.stateSecret.length < 16) throw new TypeError('stateSecret invalid');
@@ -350,13 +337,22 @@ function errorPage(message:string) {
 <title>订阅提醒</title></head><body style="font-family:sans-serif;padding:24px;color:#222">
 <h1 style="font-size:20px">订阅提醒</h1><p>${escapeHtml(message)}</p></body></html>`;
 }
-function subscribePage(input:{appId:string;activityTemplateId:string;couponTemplateId:string;openIdToken:string;configUrl:string;sendUrl:string}) {
+function subscribePage(input:{
+  appId:string
+  activityTemplateId:string
+  couponTemplateId:string
+  codeTemplateId:string
+  openIdToken:string
+  configUrl:string
+  sendUrl:string
+}) {
   const clientScript = [
     'const openIdToken = ' + JSON.stringify(input.openIdToken) + ';',
     'const sendUrl = ' + JSON.stringify(input.sendUrl) + ';',
     'const configUrl = ' + JSON.stringify(input.configUrl) + ';',
     'const activityTemplateId = ' + JSON.stringify(input.activityTemplateId) + ';',
     'const couponTemplateId = ' + JSON.stringify(input.couponTemplateId) + ';',
+    'const codeTemplateId = ' + JSON.stringify(input.codeTemplateId) + ';',
     'const expectedAppId = ' + JSON.stringify(input.appId) + ';',
     'const status = document.getElementById("status");',
     'const actions = document.getElementById("actions");',
@@ -421,8 +417,10 @@ function subscribePage(input:{appId:string;activityTemplateId:string;couponTempl
     '  actions.innerHTML = "";',
     '  actions.appendChild(buildTag("subscribe-activity", activityTemplateId, "订阅活动通知"));',
     '  actions.appendChild(buildTag("subscribe-coupon", couponTemplateId, "订阅优惠通知"));',
+    '  actions.appendChild(buildTag("subscribe-code", codeTemplateId, "订阅取酒验证码"));',
     '  bindSubscribe("subscribe-activity");',
     '  bindSubscribe("subscribe-coupon");',
+    '  bindSubscribe("subscribe-code");',
     '}',
     'function diagnoseButtons(){',
     '  const nodes = document.querySelectorAll("wx-open-subscribe");',
@@ -445,7 +443,7 @@ function subscribePage(input:{appId:string;activityTemplateId:string;couponTempl
     '    const timer = setTimeout(function(){ controller.abort(); }, 8000);',
     '    const response = await fetch(configUrl + "?url=" + encodeURIComponent(pageUrl), { signal: controller.signal });',
     '    clearTimeout(timer);',
-    '    const config = await response.json() as Payload;',
+    '    const config = await response.json();',
     '    if(!response.ok){ throw new Error((config.error && config.error.message) || "配置失败"); }',
     '    setStatus("正在注入微信配置...");',
     '    wx.config({ debug:false, appId:config.appId, timestamp:config.timestamp, nonceStr:config.nonceStr, signature:config.signature, jsApiList:["checkJsApi"], openTagList:["wx-open-subscribe"] });',
@@ -468,7 +466,7 @@ function subscribePage(input:{appId:string;activityTemplateId:string;couponTempl
     '<html><head>',
     '<meta charset="utf-8"/>',
     '<meta name="viewport" content="width=device-width,initial-scale=1"/>',
-    '<title>订阅活动与优惠提醒</title>',
+    '<title>订阅活动、优惠与取酒验证码</title>',
     '<script src="https://res.wx.qq.com/open/js/jweixin-1.6.0.js"></script>',
     '<style>',
     'body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0f1a14;color:#f4f7f3}',
@@ -483,9 +481,9 @@ function subscribePage(input:{appId:string;activityTemplateId:string;couponTempl
     '</style></head><body>',
     '<div class="wrap">',
     '<h1>订阅提醒</h1>',
-    '<p>开启后可接收活动开始与优惠到账通知。每次授权可发送一次，可随时再次订阅。</p>',
+    '<p>开启后可接收活动开始、优惠到账与取酒验证码通知。每次授权可发送一次，可随时再次订阅。</p>',
     '<div class="card">',
-    '<div class="hint">请点击下方绿色按钮，在微信弹窗中选择允许。两个都点一次即可各收一条测试通知。</div>',
+    '<div class="hint">请点击下方绿色按钮，在微信弹窗中选择允许。三个都点一次即可各收一条测试通知。取酒前请先点「订阅取酒验证码」。</div>',
     '<div class="actions" id="actions"></div>',
     '<div class="status" id="status">正在准备授权组件...</div>',
     '</div></div>',

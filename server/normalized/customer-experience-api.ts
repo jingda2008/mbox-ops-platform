@@ -39,6 +39,7 @@ import {
   TrustedStoreScopeError,
 } from './normalized-request-context.js'
 import { ReservationGuestSessionInvalidError } from './reservation-guest-session.js'
+import { CustomerMergeConflictError } from './customer-repository.js'
 import { StaffAccessDeniedError, StaffAccessRepository } from './staff-access-repository.js'
 import { StaffSessionNotFoundError } from './staff-session-repository.js'
 import type { ScopedPostgresTransactionRunner, StoreScope } from './transaction-runner.js'
@@ -1749,6 +1750,42 @@ function knownErrorResponse(error: unknown): { statusCode: number; code: string;
   if (error instanceof GuestDeviceBindingError || error instanceof GuestStoreScopeError
     || error instanceof NormalizedStoreUnavailableError || error instanceof TrustedStoreScopeError) {
     return { statusCode: 403, code: 'SCOPE_DENIED', message: '当前门店或设备身份不匹配' }
+  }
+  if (error instanceof IdempotencyConflictError) {
+    return {
+      statusCode: 409,
+      code: 'MEMBERSHIP_ENROLLMENT_CONFLICT',
+      message: '本次入会请求与之前不一致，请关闭后重新授权手机号',
+    }
+  }
+  if (error instanceof IdempotencyInProgressError) {
+    return {
+      statusCode: 425,
+      code: 'MEMBERSHIP_ENROLLMENT_IN_PROGRESS',
+      message: '入会正在确认中，请稍候再试',
+    }
+  }
+  if (error instanceof IdempotencyRecordError || error instanceof OutboxMessageConflictError) {
+    return {
+      statusCode: 503,
+      code: 'MEMBERSHIP_ENROLLMENT_RESULT_UNCONFIRMED',
+      message: '入会结果确认中，请稍后在「我的」查看',
+    }
+  }
+  if (error instanceof CustomerMergeConflictError) {
+    return {
+      statusCode: 409,
+      code: 'MEMBERSHIP_IDENTITY_CONFLICT',
+      message: '会员身份正在同步，请重新授权手机号完成登录',
+    }
+  }
+  if (error instanceof Error
+    && /multiple active verified phones in one family/i.test(error.message)) {
+    return {
+      statusCode: 409,
+      code: 'MEMBERSHIP_IDENTITY_CONFLICT',
+      message: '会员身份正在同步，请重新授权手机号完成登录',
+    }
   }
   return null
 }

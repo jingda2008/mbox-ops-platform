@@ -172,9 +172,10 @@ Page({
     guestCountText: '人数待确认',
   },
 
-  onLoad(options) {
-    const app = getApp()
-    const session = app.refreshRuntime({ query: options })
+  onLoad() {
+    // App owns launch/rescan parameters. A tab's empty or older onLoad query
+    // must not clear or replace the table already established by App.
+    const session = getTableSession()
     const config = getRuntimeConfig()
     this.setData({
       tableCode: session.tableCode,

@@ -146,6 +146,7 @@ describe('stale guest immediate payment worker', () => {
       onlinePayments: {
         listStalePendingPostarPaymentIds: listGeneral,
         querySystem,
+        recordAutomaticPaymentQueryOutcome: vi.fn(async () => undefined),
         listStaleGuestImmediateCheckoutPaymentCandidates: vi.fn(async () => []),
         closeSystem: vi.fn(),
       } as never,
@@ -153,11 +154,33 @@ describe('stale guest immediate payment worker', () => {
       reconciliation: { commitTerminal: vi.fn(), abandonUnresolved: vi.fn() } as never,
     })
 
-    await worker.runBatch(scope, 'worker-test', businessDate, { now: () => 90_000 })
+    const batch = await worker.runBatch(scope, 'worker-test', businessDate, { now: () => 90_000 })
 
     expect(listGeneral).toHaveBeenCalledWith(scope, 15, 20)
     expect(querySystem).toHaveBeenCalledWith(expect.objectContaining({ paymentId: 'payment-general' }))
     expect(recordProviderQueryResult).toHaveBeenCalledWith(expect.objectContaining({ paymentPublicId: 'PAY-general' }))
+    expect(batch.failedPaymentIds).toEqual([])
+    expect(batch.generalReconciledPaymentIds).toEqual(['payment-general'])
+  })
+
+  it.each(['query','apply','list'] as const)('surfaces general %s failure while continuing guest retirement', async (stage) => {
+    const log=vi.spyOn(console,'error').mockImplementation(()=>{})
+    const fail=async():Promise<never>=>{throw new Error('test failure')}
+    const commitTerminal=vi.fn(async()=>({replayed:false,value:{}}))
+    try {
+      const worker=new StaleGuestImmediatePaymentWorker({onlinePayments:{
+        listStalePendingPostarPaymentIds:stage==='list'?fail:async()=>['general'],
+        querySystem:stage==='query'?fail:async()=>observed('general','failed'),
+        recordAutomaticPaymentQueryOutcome:async()=>undefined,
+        listStaleGuestImmediateCheckoutPaymentCandidates:async()=>[{id:'guest',createdAt:'2026-08-29T03:00:00Z',operationallyAbandoned:false}],
+        closeSystem:async()=>observed('guest','closed'),
+      } as never,payments:{recordProviderQueryResult:stage==='apply'?fail:async()=>({})} as never,
+      reconciliation:{commitTerminal,abandonUnresolved:vi.fn()} as never})
+      const batch=await worker.runBatch(scope,'w'.repeat(17)+':stale-guest-immediate-payment-reconciliation',businessDate)
+      expect(batch.generalReconciliationFailed).toBe(stage==='list')
+      if(stage!=='list')expect(batch.failedPaymentIds).toContain('general')
+      expect(commitTerminal).toHaveBeenCalledOnce()
+    } finally {log.mockRestore()}
   })
 
   it('queries then retires only an unpaid terminal guest checkout', async () => {

@@ -4,6 +4,19 @@ const account:SocialAccount={id:'local',kind:'service_account',app_id:'wxLocalTe
 const credentials={secret:'local-secret',token:'localToken',encodingAesKey:'x'.repeat(43)}
 const token=()=>new Response(JSON.stringify({access_token:'test-access-token',expires_in:7200}),{status:200})
 describe('WeChat message delivery result boundaries',()=>{
+ it.each([
+  [{errcode:0,errmsg:'ok'},'accepted',null],
+  [{errcode:43101,errmsg:'quota unavailable'},'rejected','WECHAT_43101'],
+  [{},'unknown','INVALID_ACCEPTANCE'],
+ ] as const)('uses the explicit bizsend acceptance contract %j',async(body,status,errorCode)=>{
+  const request=vi.fn<typeof fetch>().mockResolvedValueOnce(token()).mockResolvedValueOnce(new Response(JSON.stringify(body)))
+  expect(await new OfficialSocialAccountAdapter(account,credentials,request).sendSubscribe('recipient','template',{number1:'1234'})).toEqual({status,providerReference:null,errorCode})
+  expect(request).toHaveBeenCalledTimes(2)
+ })
+ it('never interprets a malformed user lookup as an unsubscribe',async()=>{
+  const request=vi.fn<typeof fetch>().mockResolvedValueOnce(token()).mockResolvedValueOnce(new Response('{}'))
+  await expect(new OfficialSocialAccountAdapter(account,credentials,request).user('recipient')).rejects.toMatchObject({code:'INVALID_USER_RESPONSE'})
+ })
  it.each([new Response('upstream unavailable',{status:503}),new Response('not json',{status:200}),new Response('{}',{status:200})])('keeps uncertain send responses unknown without retrying',async(response)=>{
   const request=vi.fn<typeof fetch>().mockResolvedValueOnce(token()).mockResolvedValueOnce(response)
   const result=await new OfficialSocialAccountAdapter(account,credentials,request).sendTemplate('recipient','template',{thing1:'text'})

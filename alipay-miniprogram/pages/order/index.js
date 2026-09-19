@@ -860,6 +860,7 @@ Page({
     if (scopeChanged) {
       this.stopShakeRecommendation()
       this.initialRecommendationRequested = false
+      this.recommendationFeatureDisabled = false
       this.setData({
         busy: false, cartSyncing: false, clearingCart: false, quickServiceBusy: '',
         checkoutLocked: false, pendingPayment: null, paymentResult: null, cart: [], cartVersion: 0, cartGeneration: 0,
@@ -875,6 +876,7 @@ Page({
     if (this.recommendationScopeKey !== recommendationScopeKey) {
       this.recommendationScopeKey = recommendationScopeKey
       this.initialRecommendationRequested = false
+      this.recommendationFeatureDisabled = false
       this.setData({ recommendations: [], recommendationPublicId: '', recommendationAttribution: null, recommendationEmpty: false, recommendationError: '', recommendationConfiguration: EMPTY_RECOMMENDATION_CONFIGURATION, recommendationQuestionVisible: false, recommendationQuestionIndex: 0, recommendationQuestion: null, recommendationAnswers: {} })
     }
     const config = getRuntimeConfig()
@@ -1160,11 +1162,17 @@ Page({
       this.setData(update)
       if (name === 'order_checkout') rememberPresentationOptions(name, update.alipayNotificationPromptOptions)
       if (name === 'order_selection') rememberPresentationOptions(name, update.alipayOrderSelectionPromptOptions)
-      if (name === 'recommendation') this.ensureInitialRecommendations(request)
+      if (name === 'recommendation') { this.recommendationFeatureDisabled = false; this.ensureInitialRecommendations(request) }
       if (this.orderExtraErrors) delete this.orderExtraErrors[name]
     } catch (_error) {
       if (!current()) return
       if (!this.orderExtraErrors) this.orderExtraErrors = {}
+      if (name === 'recommendation' && _error && _error.code === 'RECOMMENDATION_FEATURE_NOT_ENABLED') {
+        this.recommendationFeatureDisabled = true
+        delete this.orderExtraErrors[name]
+        this.setData({ recommendationError: '门店暂未开放推荐，请直接从菜单选择。', recommendationQuestionVisible: false })
+        return
+      }
       this.orderExtraErrors[name] = true
       if (name === 'recommendation') this.setData({ recommendationError: '推荐暂时无法读取，点此重试；菜单仍可正常点单。' })
     }
@@ -1293,6 +1301,7 @@ Page({
   },
 
   ensureInitialRecommendations(request) {
+    if (this.recommendationFeatureDisabled) return
     if (request && !this.isCurrentTableRequest(request)) return
     if (this.initialRecommendationRequested || this.data.recommendations.length || this.data.recommendationBusy) return
     this.initialRecommendationRequested = true
@@ -1304,6 +1313,7 @@ Page({
   showRecommendationSurface(onReady) { return onReady() },
 
   onRecommend() {
+    if (this.recommendationFeatureDisabled) return
     if (this.data.recommendationBusy) return
     if (this.orderExtraErrors && this.orderExtraErrors.recommendation) {
       return this.loadOrderExtra('recommendation', this.currentTableRequest())
@@ -1339,6 +1349,7 @@ Page({
   },
 
   async recommend(intent, request) {
+    if (this.recommendationFeatureDisabled) return
     const expected = request || this.currentTableRequest()
     if (!expected || !this.isCurrentTableRequest(expected)) return
     if (this.data.recommendationBusy) return

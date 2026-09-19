@@ -43,11 +43,11 @@ FastifyPluginAsync<ReservationPerformanceNotificationApiOptions> = async (app, o
   app.post('/public/reservation/performance-notification-authorizations', async (request, reply) => handle(
     reply,
     async () => {
+    const context = await options.resolveCustomerContext(request)
     if (!options.channelConfigured) return reply.status(503).send({
       code: 'RESERVATION_NOTIFICATION_NOT_CONFIGURED',
       message: '正式微信预约提醒尚未完整配置',
     })
-    const context = await options.resolveCustomerContext(request)
     const body = object(request.body)
     rejectClaims(body, ['customerId','canonicalCustomerId','reservationId','identityExternalId','scope'])
     const input = {

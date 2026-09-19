@@ -1,7 +1,7 @@
 {
   "name": "@mbox/ops-platform",
   "private": true,
-  "version": "1.0.0-rc.209",
+  "version": "1.0.0-rc.210",
   "type": "module",
   "packageManager": "npm@11.12.1",
   "engines": {
@@ -34,7 +34,7 @@
     "qr:render:alipay-mini": "tsx server/normalized/render-alipay-table-mini-codes.ts",
     "qr:render:normalized": "node scripts/render-normalized-table-qr-pdfs.mjs",
     "pilot:access": "node scripts/print-pilot-access.mjs",
-    "check": "npm run release:metadata && npm run architecture:normalized:test && npm run architecture:normalized:verify && npm run architecture:normalized:new && npm run architecture:normalized:zero && npm run ci:classifier:test && npm run quality:evidence:test && npm run quality:model:verify && npm run tc:verify && npm run check:miniprogram && npm run check:alipay-miniprogram && npm run release:miniprogram:test && npm run typecheck:web && npm run lint && npm test && npm run build",
+    "check": "npm run checklist:verify && npm run release:metadata && npm run architecture:normalized:test && npm run architecture:normalized:verify && npm run architecture:normalized:new && npm run architecture:normalized:zero && npm run ci:classifier:test && npm run quality:evidence:test && npm run quality:model:verify && npm run tc:verify && npm run check:miniprogram && npm run check:alipay-miniprogram && npm run release:miniprogram:test && npm run typecheck:web && npm run lint && npm test && npm run build",
     "architecture:normalized:test": "node --test scripts/normalized-architecture-policy.test.mjs scripts/normalized-import-closure.test.mjs",
     "architecture:normalized:verify": "node scripts/verify-normalized-architecture.mjs",
     "architecture:normalized:new": "node scripts/verify-normalized-new-code.mjs",
@@ -72,7 +72,7 @@
     "release:miniprogram:test": "node --test scripts/miniprogram-custody.test.mjs scripts/miniprogram-launch-popup.test.mjs scripts/miniprogram-policy-readability.test.mjs scripts/miniprogram-order-performance.test.mjs scripts/miniprogram-checkout-upgrade.test.mjs scripts/miniprogram-checkout-coupons.test.mjs scripts/miniprogram-cart-portions.test.mjs scripts/miniprogram-marketing-preferences.test.mjs scripts/miniprogram-member-cards.test.mjs scripts/miniprogram-benefit-wallet.test.mjs scripts/miniprogram-session-launch.test.mjs scripts/miniprogram-table-scope-race.test.mjs scripts/miniprogram-invalid-scan-recovery.test.mjs scripts/miniprogram-customer-funnel.test.mjs scripts/miniprogram-menu-pagination.test.mjs scripts/miniprogram-compact-overlay-actions.test.mjs scripts/miniprogram-viewport-layout.test.mjs scripts/build-miniprogram-release-candidate.test.mjs scripts/verify-miniprogram-release.test.mjs",
     "release:config:generate": "tsx scripts/generate-normalized-runtime-config.ts",
     "release:config:test": "vitest run server/normalized/normalized-runtime-config.test.ts server/verify-normalized-runtime-config.test.ts && node --test scripts/generate-normalized-runtime-config.test.mjs && bash deploy/aliyun/release-lock.test.sh && bash deploy/aliyun/release-state.test.sh && bash deploy/aliyun/normalize-runtime-env.test.sh",
-    "release:system:test": "npm run release:config:test && node scripts/verify-release-incident-register.mjs && node --test scripts/release-system-policy.test.mjs scripts/payment-ingress-contract.test.mjs scripts/contract-recovery-faults.test.mjs && node --test scripts/write-release-bundle-manifest.test.mjs && node --test scripts/run-release-chain-drills.test.mjs",
+    "release:system:test": "npm run release:config:test && node scripts/verify-release-incident-register.mjs && node --test scripts/release-system-policy.test.mjs scripts/payment-ingress-contract.test.mjs scripts/contract-recovery-faults.test.mjs && node --test scripts/write-release-bundle-manifest.test.mjs && node --test scripts/run-release-chain-drills.test.mjs && node --test scripts/verify-release-browser-prerequisites.test.mjs",
     "release:drills": "tsx scripts/run-release-chain-drills.ts",
     "logs:audit": "node scripts/analyze-runtime-logs.mjs",
     "metrics:verify": "node scripts/verify-runtime-metrics.mjs",
@@ -86,7 +86,8 @@
     "ios:open": "cap open ios",
     "ios:test:simulator": "bash scripts/test-ios-simulator.sh",
     "ios:build:validation": "bash scripts/build-ios-validation.sh",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "checklist:verify": "node scripts/verify-commercialization-checklist.mjs && node --test scripts/verify-commercialization-checklist.test.mjs"
   },
   "dependencies": {
     "@capacitor/core": "^8.4.2",

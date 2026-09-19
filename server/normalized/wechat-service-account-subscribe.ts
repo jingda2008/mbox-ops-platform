@@ -10,13 +10,12 @@ export interface WechatServiceAccountSubscribeConfig {
   publicOrigin:string
   stateSecret:string
 }
-interface Options {config:WechatServiceAccountSubscribeConfig; now?:()=>number; fetchImpl?:typeof fetch}
+interface Options {config:WechatServiceAccountSubscribeConfig; now?:()=>number; fetchImpl?:typeof fetch; recordAuthorization?:(input:{appId:string;openId:string;authorizationRef:string;acceptedTemplateIds:readonly string[]})=>Promise<void>}
 type Payload={access_token?:string; expires_in?:number; ticket?:string; openid?:string; errcode?:number; errmsg?:string; error?:{message?:string}};
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 const TOKEN_URL = 'https://api.weixin.qq.com/cgi-bin/token';
 const TICKET_URL = 'https://api.weixin.qq.com/cgi-bin/ticket/getticket';
 const OAUTH_TOKEN_URL = 'https://api.weixin.qq.com/sns/oauth2/access_token';
-const BIZSEND_URL = 'https://api.weixin.qq.com/cgi-bin/message/subscribe/bizsend';
 export const wechatServiceAccountSubscribePlugin: FastifyPluginAsync<Options> = async (app, options)=>{
     const config = options.config;
     assertConfig(config);
@@ -52,7 +51,7 @@ export const wechatServiceAccountSubscribePlugin: FastifyPluginAsync<Options> = 
             reminderTemplateId: config.reminderTemplateId,
             openIdToken,
             configUrl: `${config.publicOrigin}/api/wechat/service-account/subscribe/jssdk-config`,
-            sendUrl: `${config.publicOrigin}/api/wechat/service-account/subscribe/send-test`
+            authorizationUrl: `${config.publicOrigin}/api/wechat/service-account/subscribe/authorize`
         }));
     });
     app.get<{Querystring: Record<string,unknown>}>('/wechat/service-account/subscribe/result', async (request, reply)=>{
@@ -70,27 +69,8 @@ export const wechatServiceAccountSubscribePlugin: FastifyPluginAsync<Options> = 
             sessionOpenId=verifyOpenIdToken(config.stateSecret,reserved,now());
             if(sessionOpenId!==openId)throw new Error('Identity mismatch');
         }catch { return reply.code(403).type('text/html; charset=utf-8').send(errorPage('授权身份无效，请重新进入页面。')); }
-        const sends = [];
-        try {
-            const accessToken = await tokens.accessToken();
-            if (isConfiguredTemplate(config, templateId)) {
-                try {
-                    await bizSend(fetchImpl, accessToken, buildBizSendBody(config, sessionOpenId, templateId, now()));
-                    sends.push({ templateId, ok: true });
-                } catch (error) {
-                    sends.push({
-                        templateId,
-                        ok: false,
-                        error: error instanceof Error ? error.message : 'send failed'
-                    });
-                }
-            }
-        } catch (error) {
-            return reply.type('text/html; charset=utf-8').send(errorPage(error instanceof Error ? error.message : '发送失败，请稍后重试'));
-        }
-        const ok = sends.some((item)=>item.ok);
-        const message = ok ? '授权成功，测试通知已发送，请返回微信查看。' : `授权已记录，但发送失败：${sends[0]?.error ?? '未知错误'}`;
-        return reply.type('text/html; charset=utf-8').send(errorPage(message));
+        if (!isConfiguredTemplate(config, templateId)) return reply.code(400).type('text/html; charset=utf-8').send(errorPage('订阅类型无效，请重新进入页面。'));
+        return reply.type('text/html; charset=utf-8').send(errorPage('订阅授权已完成，提醒会在相应业务发生时发送。'));
     });
     app.get<{Querystring: Record<string,unknown>}>('/wechat/service-account/subscribe/jssdk-config', async (request, reply)=>{
         const query = request.query;
@@ -127,7 +107,8 @@ export const wechatServiceAccountSubscribePlugin: FastifyPluginAsync<Options> = 
             });
         }
     });
-    app.post<{Body: Record<string,unknown>}>('/wechat/service-account/subscribe/send-test', async (request, reply)=>{
+    app.post('/wechat/service-account/subscribe/send-test', async (_request, reply)=>reply.code(410).send({error:{code:'SUBSCRIBE_PAGE_UPDATED',message:'订阅页面已更新，请重新进入；授权后不再发送示例通知'}}));
+    app.post<{Body: Record<string,unknown>}>('/wechat/service-account/subscribe/authorize', {bodyLimit:4096}, async (request, reply)=>{
         const body = request.body ?? {};
         const openIdToken = asString(body.openIdToken);
         const accepted = Array.isArray(body.acceptedTemplateIds) ? body.acceptedTemplateIds.filter((item)=>typeof item === 'string') : [];
@@ -150,28 +131,11 @@ export const wechatServiceAccountSubscribePlugin: FastifyPluginAsync<Options> = 
                 }
             });
         }
-        const sends = [];
-        const accessToken = await tokens.accessToken();
-        for (const templateId of accepted){
-            if (!isConfiguredTemplate(config, templateId)) continue;
-            try {
-                await bizSend(fetchImpl, accessToken, buildBizSendBody(config, openId, templateId, now()));
-                sends.push({
-                    templateId,
-                    ok: true
-                });
-            } catch (error) {
-                sends.push({
-                    templateId,
-                    ok: false,
-                    error: error instanceof Error ? error.message : 'send failed'
-                });
-            }
-        }
-        return {
-            openIdBound: true,
-            sends
-        };
+        const acceptedTemplateIds = [...new Set(accepted.filter(id=>isConfiguredTemplate(config,id)))];
+        if (!acceptedTemplateIds.length) return reply.code(400).send({error:{code:'SUBSCRIPTION_NOT_ACCEPTED',message:'请在微信弹窗中选择需要的通知'}});
+        if (!options.recordAuthorization) return reply.code(503).send({error:{code:'SUBSCRIPTION_STORAGE_UNAVAILABLE',message:'授权结果暂未保存，请稍后重试'}});
+        await options.recordAuthorization({appId:config.appId,openId,authorizationRef:createHash('sha256').update(openIdToken).digest('hex'),acceptedTemplateIds});
+        return {reported:true,acceptedTemplateCount:acceptedTemplateIds.length};
     });
 };
 class TokenHelper {
@@ -222,85 +186,11 @@ async function exchangeOpenId(config:WechatServiceAccountSubscribeConfig, code:s
     if (!payload.openid) throw new Error(payload.errmsg ?? 'openid missing');
     return payload.openid;
 }
-async function bizSend(fetchImpl:typeof fetch, accessToken:string, body:Record<string,unknown>) {
-    const response = await fetchImpl(`${BIZSEND_URL}?access_token=${encodeURIComponent(accessToken)}`, {
-        method: 'POST',
-        signal:AbortSignal.timeout(8000),
-        headers: {
-            'content-type': 'application/json'
-        },
-        body: JSON.stringify(body)
-    });
-    const payload = await response.json() as Payload;
-    if ((payload.errcode ?? 0) !== 0) {
-        throw new Error(`${payload.errcode ?? 'unknown'}:${payload.errmsg ?? 'bizsend failed'}`);
-    }
-}
 function isConfiguredTemplate(config:WechatServiceAccountSubscribeConfig, templateId:string) {
     return templateId === config.activityTemplateId
         || templateId === config.couponTemplateId
         || templateId === config.codeTemplateId
         || templateId === config.reminderTemplateId;
-}
-function buildBizSendBody(config:WechatServiceAccountSubscribeConfig, openId:string, templateId:string, nowMs:number) {
-    if (templateId === config.couponTemplateId) {
-        return {
-            touser: openId,
-            template_id: templateId,
-            page: 'pages/profile-coupons/index',
-            miniprogram_state: 'formal',
-            lang: 'zh_CN',
-            data: {
-                thing1: { value: '欢迎饮品兑换凭证' },
-                time2: { value: formatWechatTime(nowMs + 14 * 24 * 3600_000) },
-                thing3: { value: '到店出示会员码核销' },
-                thing4: { value: '欢迎饮品兑换凭证' },
-            },
-        };
-    }
-    if (templateId === config.codeTemplateId) {
-        return {
-            touser: openId,
-            template_id: templateId,
-            page: 'pages/profile/index',
-            miniprogram_state: 'formal',
-            lang: 'zh_CN',
-            data: {
-                number1: { value: '482916' },
-                thing3: { value: '5分钟' },
-                thing2: { value: '寄存取走' },
-            },
-        };
-    }
-    if (templateId === config.reminderTemplateId) {
-        return {
-            touser: openId,
-            template_id: templateId,
-            page: 'pages/profile/index',
-            miniprogram_state: 'formal',
-            lang: 'zh_CN',
-            data: {
-                thing1: { value: '超嗨M-BOX陆家嘴店' },
-                character_string2: { value: 'CJ20260918001' },
-                thing3: { value: '示例威士忌' },
-                time4: { value: formatWechatTime(nowMs - 30 * 24 * 3600_000) },
-                time5: { value: formatWechatTime(nowMs + 3 * 24 * 3600_000) },
-            },
-        };
-    }
-    return {
-        touser: openId,
-        template_id: templateId,
-        page: 'pages/community/index',
-        miniprogram_state: 'formal',
-        lang: 'zh_CN',
-        data: {
-            thing1: { value: '超嗨M-BOX陆家嘴店' },
-            thing2: { value: '周五现场驻唱' },
-            time3: { value: formatWechatTime(nowMs + 2 * 3600_000) },
-            thing4: { value: '请提前到店入座' },
-        },
-    };
 }
 function assertConfig(config:WechatServiceAccountSubscribeConfig) {
     if (!/^wx[A-Za-z0-9_-]{4,126}$/.test(config.appId)) throw new TypeError('service account appId invalid');
@@ -343,15 +233,6 @@ function verifyOpenIdToken(secret:string, token:string, nowMs:number) {
     }
     return match[1]!;
 }
-function formatWechatTime(ms:number) {
-    const date = new Date(ms);
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
-    const hh = String(date.getHours()).padStart(2, '0');
-    const mm = String(date.getMinutes()).padStart(2, '0');
-    return `${y}年${m}月${d}日 ${hh}:${mm}`;
-}
 function errorPage(message:string) {
     return `<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>订阅提醒</title></head><body style="font-family:sans-serif;padding:24px;color:#222">
@@ -365,11 +246,11 @@ function subscribePage(input:{
   reminderTemplateId:string
   openIdToken:string
   configUrl:string
-  sendUrl:string
+  authorizationUrl:string
 }) {
   const clientScript = [
     'const openIdToken = ' + JSON.stringify(input.openIdToken) + ';',
-    'const sendUrl = ' + JSON.stringify(input.sendUrl) + ';',
+    'const authorizationUrl = ' + JSON.stringify(input.authorizationUrl) + ';',
     'const configUrl = ' + JSON.stringify(input.configUrl) + ';',
     'const activityTemplateId = ' + JSON.stringify(input.activityTemplateId) + ';',
     'const couponTemplateId = ' + JSON.stringify(input.couponTemplateId) + ';',
@@ -396,23 +277,24 @@ function subscribePage(input:{
     '    return statusText === "accept";',
     '  });',
     '}',
-    'async function sendAccepted(accepted){',
+    'let saving = false;',
+    'async function recordAccepted(accepted){',
+    '  if(saving) return;',
     '  if(accepted.length === 0){ setStatus("未选择允许，授权未完成"); return; }',
-    '  setStatus("授权成功，正在发送测试通知...");',
-    '  const sendResponse = await fetch(sendUrl, { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ openIdToken: openIdToken, acceptedTemplateIds: accepted }) });',
-    '  const result = await sendResponse.json();',
-    '  if(!sendResponse.ok){ throw new Error((result.error && result.error.message) || "发送失败"); }',
-    '  const okCount = (result.sends || []).filter(function(item){ return item.ok; }).length;',
-    '  const fail = (result.sends || []).filter(function(item){ return !item.ok; });',
-    '  if(okCount > 0 && fail.length === 0){ setStatus("已发送 " + okCount + " 条测试通知，请返回微信查看"); }',
-    '  else if(okCount > 0){ setStatus("部分发送成功：" + fail.map(function(item){ return item.error; }).join("；")); }',
-    '  else { setStatus("发送失败：" + (fail[0] && fail[0].error || "未知错误")); }',
+    '  saving = true;',
+    '  try {',
+    '    setStatus("正在保存授权结果...");',
+    '    const response = await fetch(authorizationUrl, { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ openIdToken: openIdToken, acceptedTemplateIds: accepted }) });',
+    '    const result = await response.json();',
+    '    if(!response.ok){ throw new Error((result.error && result.error.message) || "保存失败，请重新进入后重试"); }',
+    '    setStatus("授权结果已记录，提醒将在相应业务发生时发送。");',
+    '  } finally { saving = false; }',
     '}',
     'function bindSubscribe(id){',
     '  const button = document.getElementById(id);',
     '  if(!button) return;',
     '  button.addEventListener("success", async function(event){',
-    '    try { await sendAccepted(parseAccepted((event && event.detail) || {})); }',
+    '    try { await recordAccepted(parseAccepted((event && event.detail) || {})); }',
     '    catch(error){ setStatus(error && error.message ? error.message : "处理失败"); }',
     '  });',
     '  button.addEventListener("error", function(event){',
@@ -502,7 +384,7 @@ function subscribePage(input:{
     '<h1>订阅提醒</h1>',
     '<p>开启后可接收活动、优惠、取酒验证码与存酒到期通知。每次授权可发送一次，可随时再次订阅。</p>',
     '<div class="card">',
-    '<div class="hint">请点击下方绿色按钮，在微信弹窗中勾选需要的通知并允许。一次可授权活动、优惠、取酒验证码与存酒到期；授权成功后各发一条测试通知。</div>',
+    '<div class="hint">请点击下方绿色按钮，在微信弹窗中勾选需要的通知并允许。一次可授权活动、优惠、取酒验证码与存酒到期；授权后，提醒会在相应业务发生时发送。</div>',
     '<div class="actions" id="actions"></div>',
     '<div class="status" id="status">正在准备授权组件...</div>',
     '</div></div>',

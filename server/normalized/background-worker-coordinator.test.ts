@@ -7,13 +7,18 @@ const scope = {
 }
 
 describe('NormalizedBackgroundWorkerCoordinator', () => {
-  it('runs independent normalized workers and contains one worker failure', async () => {
+  it.each(['payment','batch'] as const)('contains independent failures and exposes general payment %s failure', async (failure) => {
     const errors: string[] = []
     const coordinator = new NormalizedBackgroundWorkerCoordinator(scope, {
       serviceSla: { runBatch: vi.fn(async () => ({ workerId: 'sla', claimed: 0, processed: [] })) },
       reservationExpiry: {
         runBatch: vi.fn(async () => { throw new Error('reservation worker unavailable') }),
       },
+      staleGuestImmediatePaymentReconciliation: {runBatch:vi.fn(async()=>({
+        workerId:'general',claimed:0,queriedPaymentIds:[],paidPaymentIds:[],terminalAbandonedPaymentIds:[],unresolvedAbandonedPaymentIds:[],deferredPaymentIds:[],
+        failedPaymentIds:failure==='payment'?['general-payment']:[],generalReconciliationFailed:failure==='batch',
+        queriedRefundIds:[],terminalRefundIds:[],deferredRefundIds:[],failedRefundIds:[],
+      }))},
       paymentReservationExpiry: { runBatch: vi.fn(async () => paymentReservationResult()) },
       activityRegistrationExpiry: { runBatch: vi.fn(async () => activityRegistrationResult()) },
       experienceCueDispatch: { runBatch: vi.fn(async () => experienceCueResult()) },
@@ -43,7 +48,7 @@ describe('NormalizedBackgroundWorkerCoordinator', () => {
 
     const result = await coordinator.runOnce()
 
-    expect(result.failures).toEqual(['reservation-expiry'])
+    expect(result.failures).toEqual(['reservation-expiry','stale-guest-immediate-payment-reconciliation'])
     expect(result.workers.serviceSla).not.toBeNull()
     expect(result.workers.reservationExpiry).toBeNull()
     expect(result.workers.staffLoginRateLimitCleanup).toBe(2)
@@ -54,7 +59,7 @@ describe('NormalizedBackgroundWorkerCoordinator', () => {
     expect(result.workers.aiScheduled).not.toBeNull()
     expect(result.workers.print).not.toBeNull()
     expect(result.workers.outbox).not.toBeNull()
-    expect(errors).toEqual(['reservation-expiry'])
+    expect(errors).toEqual(['reservation-expiry','stale-guest-immediate-payment-reconciliation'])
   })
 
   it('coalesces overlapping in-process ticks without creating a global business queue', async () => {

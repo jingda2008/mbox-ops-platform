@@ -1,9 +1,10 @@
+import {SocialAccountRepository} from './social-account-repository.js'
 import sharp from 'sharp'
 import {CustomerCustodyRepository} from './customer-custody-repository.js'
 import {custodyReport} from './custody-report.js'
 import {SocialCustodyWorker} from './social-custody-worker.js'
 import {randomUUID} from 'node:crypto'
-import {afterAll,beforeAll,describe,expect,it} from 'vitest'
+import {afterAll,beforeAll,describe,expect,it,vi} from 'vitest'
 import {Pool} from 'pg'
 import {runNormalizedMigrations} from '../migrate-normalized.js'
 import {ScopedPostgresTransactionRunner,type PostgresPool} from './transaction-runner.js'
@@ -36,6 +37,34 @@ integration('v9 member custody with real PostgreSQL transactions',()=>{
  afterAll(async()=>pool?.end())
  const create=()=>run(repo=>repo.create(input({memberNo:'100001',categoryId:category,itemName:'测试寄存酒',unit:'瓶',quantity:'2'}),employee))
  const self=<T>(fn:(repo:CustomerCustodyRepository)=>Promise<T>,activeScope=scope)=>runner.run(activeScope,async tx=>{await tx.query('SET LOCAL ROLE mbox_runtime');return fn(new CustomerCustodyRepository(tx,protector))},{readOnly:true})
+ it('accepts bizsend without msgid, displays code TTL rather than custody expiry and collects only once',async()=>{
+  const service=await runner.run(scope,tx=>new SocialAccountRepository(tx,protector).save({kind:'service_account',appId:'wxCustodyAudit',name:'本地验证',enabled:true,credentials:{secret:'local-custody-provider-secret',token:'CustodyTestToken',encodingAesKey:Buffer.alloc(32,7).toString('base64').slice(0,-1)},codeTemplateId:'local-code-template',codeDataKey:'number1',reminderTemplateId:'local-reminder-template',reminderDataKey:'thing1'},employee))
+  await runner.run(scope,tx=>new SocialAccountRepository(tx,protector).applyRelationship({accountId:service.id,externalId:'custody-local-recipient',staffId:'',active:true,unionId:null,occurredAt:new Date().toISOString()}))
+  await pool.query('UPDATE mbox.social_relationships SET customer_id=$2 WHERE account_id=$1',[service.id,customer])
+  await pool.query('UPDATE mbox.bottle_custody_policies SET service_account_id=$3 WHERE tenant_id=$1 AND store_id=$2',[scope.tenantId,scope.storeId,service.id])
+  const request=vi.fn<typeof fetch>().mockImplementation(async url=>new Response(JSON.stringify(String(url).includes('/token?')?{access_token:'local-token',expires_in:7200}:{errcode:0,errmsg:'ok'})))
+  vi.stubGlobal('fetch',request)
+  try{
+   const {order}=await create()
+   await pool.query("UPDATE mbox.bottle_custody_orders SET expires_at=clock_timestamp()+interval '90 days' WHERE id=$1",[order.id])
+   const issued=await run(repo=>repo.requestCode(order.id,'2',employee)),worker=new SocialCustodyWorker(runner,protector)
+   await worker.runBatch(scope);await worker.runBatch(scope)
+   const sends=request.mock.calls.filter(([url])=>String(url).includes('/message/'))
+   expect(sends).toHaveLength(1)
+   const payload=JSON.parse(String(sends[0]![1]!.body))
+   expect(payload.data.thing3.value).toBe('5分钟')
+   const delivery=(await pool.query('SELECT delivery_status,provider_reference FROM mbox.bottle_custody_challenges WHERE id=$1',[issued.challengeId])).rows[0]
+   expect(delivery).toEqual({delivery_status:'accepted',provider_reference:null})
+   expect(await run(repo=>repo.verify(order.id,issued.challengeId,payload.data.number1.value,employee))).toMatchObject({verified:true})
+   await run(repo=>repo.collect(order.id,issued.challengeId,employee))
+   await expect(run(repo=>repo.collect(order.id,issued.challengeId,employee))).rejects.toThrow()
+   const expired=await create(),code=await run(repo=>repo.requestCode(expired.order.id,'2',employee))
+   await pool.query("UPDATE mbox.bottle_custody_challenges SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",[code.challengeId])
+   await worker.runBatch(scope)
+   expect(request.mock.calls.filter(([url])=>String(url).includes('/message/'))).toHaveLength(1)
+   expect((await pool.query('SELECT error_code FROM mbox.bottle_custody_challenges WHERE id=$1',[code.challengeId])).rows[0].error_code).toBe('EXPIRED_OR_INVALIDATED')
+  }finally{vi.unstubAllGlobals();await pool.query('UPDATE mbox.bottle_custody_policies SET service_account_id=NULL WHERE tenant_id=$1 AND store_id=$2',[scope.tenantId,scope.storeId])}
+ })
  it('customer list, full contact and watermarked photos remain owner and store scoped',async()=>{
   const {order,deposits}=await create()
   const mine=await self(repo=>repo.list(customer));expect(mine.items.some(o=>o.id===order.id)).toBe(true)

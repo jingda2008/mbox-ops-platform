@@ -46,6 +46,16 @@ for(const platform of ['miniprogram','alipay-miniprogram']) {
   let calls=0;const h=createOrderPage({platform,overrides:{getTodayPerformances:async()=>{if(!calls++)throw Error('temporary');return null}}});try{await h.page.preparePage();await h.page.orderExtrasPending;assert.ok(h.page.data.performanceError);const cartReads=h.state.calls.filter(x=>x==='cart').length;await h.page.retryPerformance();assert.equal(h.page.data.performanceError,'');assert.equal(h.state.calls.filter(x=>x==='cart').length,cartReads)
   }finally{h.dispose()}
  })
+ test(`${platform}: disabled recommendations stay quiet while normal ordering remains usable`,async()=>{
+  let calls=0,sends=0;const h=createOrderPage({platform,overrides:{getRecommendationConfiguration:async()=>{calls++;throw Object.assign(new Error('disabled'),{code:'RECOMMENDATION_FEATURE_NOT_ENABLED'})},recommendExperience:async()=>{sends++;return {recommendations:[]}}}})
+  try{
+   await h.page.preparePage();await h.page.orderExtrasPending
+   assert.equal(h.page.recommendationFeatureDisabled,true);assert.equal(Boolean(h.page.orderExtraErrors.recommendation),false)
+   await h.page.onRecommend();await h.page.recommend('shake')
+   assert.equal(calls,1);assert.equal(sends,0);assert.equal(h.page.data.orderReady,true)
+   await h.page.addProduct({currentTarget:{dataset:{id:'p-0'}}});assert.equal(h.page.data.cartCount,1)
+  }finally{h.dispose()}
+ })
  test(`${platform}: recommendation configuration retries without reloading essential data`,async()=>{
   let n=0;const h=createOrderPage({platform,overrides:{getRecommendationConfiguration:async()=>{if(!n++)throw Error('temporary');return {inputConfiguration:{version:1,questions:[]}}}}});try{await h.page.preparePage();await h.page.orderExtrasPending;assert.equal(h.page.orderExtraErrors.recommendation,true);const reads=h.state.calls.filter(x=>['menu','cart','orders'].includes(x)).length;await h.page.onRecommend();assert.equal(Boolean(h.page.orderExtraErrors.recommendation),false);assert.equal(h.state.calls.filter(x=>['menu','cart','orders'].includes(x)).length,reads)}finally{h.dispose()}
  })

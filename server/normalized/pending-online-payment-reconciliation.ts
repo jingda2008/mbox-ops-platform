@@ -1,7 +1,7 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { AuditActor } from './command-executor.js'
 import type { PaymentCommandService } from './payment-command-service.js'
-import type { OnlinePaymentService } from './online-payment-service.js'
+import { OnlinePaymentUnknownError, type OnlinePaymentService } from './online-payment-service.js'
 import { sanitizeProviderSnapshot } from './payment-security-policy.js'
 import type { StoreScope } from './transaction-runner.js'
 
@@ -30,6 +30,8 @@ export interface PendingOnlinePaymentReconciliationResult {
   attempted: number
   reconciled: number
   paymentIds: readonly string[]
+  attemptedPaymentIds: readonly string[]
+  failedPaymentIds: readonly string[]
 }
 
 export async function reconcileStalePendingOnlinePayments(
@@ -39,6 +41,7 @@ export async function reconcileStalePendingOnlinePayments(
   queryBindingPrefix: string,
 ): Promise<PendingOnlinePaymentReconciliationResult> {
   const reconciled: string[] = []
+  const failedPaymentIds: string[] = []
   for (const paymentId of paymentIds) {
     try {
       const applied = await reconcileStalePendingOnlinePayment(
@@ -49,20 +52,25 @@ export async function reconcileStalePendingOnlinePayments(
       )
       if (applied) reconciled.push(paymentId)
     } catch (error) {
-      const application = error instanceof ConfirmedPaymentApplicationError
+      failedPaymentIds.push(paymentId)
+      const application = error instanceof VerifiedPaymentApplicationError
+      const cause = application ? error.cause : error
       console.error(JSON.stringify({
         event: 'payment_reconciliation_failed', paymentId,
-        stage: application ? 'apply_verified_success' : 'query_provider',
-        errorCode: safePaymentErrorCode(application ? error.cause : error),
-        errorLocation: safePaymentErrorLocation(application ? error.cause : error),
+        stage: application ? 'apply_verified_observation' : 'query_provider',
+        observedStatus: application ? error.observedStatus : undefined,
+        errorCode: safePaymentErrorCode(cause),
+        errorLocation: safePaymentErrorLocation(cause),
+        providerDiagnostic: cause instanceof OnlinePaymentUnknownError ? cause.diagnostic : undefined,
       }))
       await deps.onlinePayments.recordAutomaticPaymentQueryOutcome(
-        context.scope,paymentId,'error',application ? 'succeeded' : undefined,false,
+        context.scope,paymentId,'error',application ? error.observedStatus : undefined,false,
       ).catch(() => {})
       // A single stale payment must not block workbench/status reads for the rest.
     }
   }
-  return { attempted: paymentIds.length, reconciled: reconciled.length, paymentIds: reconciled }
+  return { attempted: paymentIds.length, reconciled: reconciled.length, paymentIds: reconciled,
+    attemptedPaymentIds: paymentIds, failedPaymentIds }
 }
 
 export async function reconcileStalePendingOnlinePaymentsForStore(
@@ -87,6 +95,9 @@ export async function reconcileStalePendingOnlinePayment(
   queryBindingId: string,
   principal?: Parameters<OnlinePaymentService['query']>[0]['principal'],
 ): Promise<boolean> {
+  // Preserve existing short identities, but hash the entire long identity rather
+  // than truncating it. The provider observation and command share this binding.
+  queryBindingId = boundedPaymentQueryBinding(queryBindingId)
   const queried = principal === undefined
     ? await deps.onlinePayments.querySystem({
       scope: context.scope,
@@ -102,10 +113,7 @@ export async function reconcileStalePendingOnlinePayment(
   try {
     await applyProviderQueryObservation(deps.commands, context, queried, queryBindingId)
   } catch (cause) {
-    if (queried.observation.status === 'succeeded' && queried.verifiedObservationId !== null) {
-      throw new ConfirmedPaymentApplicationError(cause)
-    }
-    throw cause
+    throw new VerifiedPaymentApplicationError(cause, queried.observation.status)
   }
   await deps.onlinePayments.recordAutomaticPaymentQueryOutcome(
     context.scope,paymentId,
@@ -137,7 +145,7 @@ export async function applyProviderQueryObservation(
     scope: context.scope,
     actor,
     businessDate: queried.businessDate ?? context.businessDate,
-    idempotencyKey: queried.reusedVerifiedSuccess ? `verified-payment:${queried.verifiedObservationId}` : idempotencyKey,
+    idempotencyKey: queried.reusedVerifiedSuccess ? `verified-payment:${queried.verifiedObservationId}` : boundedPaymentQueryBinding(idempotencyKey),
     requestFingerprint: JSON.stringify({
       method: 'POST',
       path: '/internal/payments/provider-query',
@@ -187,10 +195,14 @@ export function reconciliationQueryBinding(prefix: string): string {
   return `${prefix}-${randomUUID()}`
 }
 
-class ConfirmedPaymentApplicationError extends Error {
-  constructor(cause: unknown) {
-    super('Verified payment success could not be applied', { cause })
-    this.name = 'ConfirmedPaymentApplicationError'
+export function boundedPaymentQueryBinding(identity: string): string {
+  return identity.length <= 128 ? identity : `payment-query:${createHash('sha256').update(identity).digest('hex')}`
+}
+
+class VerifiedPaymentApplicationError extends Error {
+  constructor(cause: unknown, readonly observedStatus: string) {
+    super('Verified payment observation could not be applied', { cause })
+    this.name = 'VerifiedPaymentApplicationError'
   }
 }
 

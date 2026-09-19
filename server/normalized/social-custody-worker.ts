@@ -54,7 +54,7 @@ export class SocialCustodyWorker{
  private async sendNext(scope:StoreScope,kind:'code'|'reminder'){
   const table=kind==='code'?'bottle_custody_challenges':'bottle_custody_reminders',status=kind==='code'?'delivery_status':'status'
   const job=await this.transactions.run(scope,async tx=>{
-   const rows=await tx.query<Record<string,unknown>&{id:string;order_id:string;customer_id:string;account_id:string|null;encrypted_code?:Buffer;code_hash?:string;key_id?:string;reminder_text:string;expires_at:string;stored_at:string;public_id:string;item_name:string}>(`SELECT j.*,o.customer_id,o.expires_at::text,o.stored_at::text,o.public_id,o.item_name,p.service_account_id AS account_id,p.reminder_text FROM mbox.${table} j JOIN mbox.bottle_custody_orders o ON o.tenant_id=j.tenant_id AND o.store_id=j.store_id AND o.id=j.order_id JOIN mbox.bottle_custody_policies p ON p.tenant_id=j.tenant_id AND p.store_id=j.store_id WHERE j.tenant_id=$1 AND j.store_id=$2 AND j.${status}='pending' AND o.status='stored' AND ${kind==='code'?"j.expires_at>clock_timestamp() AND j.invalidated_at IS NULL AND j.order_version=o.version":"p.reminders_enabled AND j.expiry_snapshot=o.expires_at AND j.due_at<=clock_timestamp() AND (clock_timestamp() AT TIME ZONE 'Asia/Shanghai')::date=(j.due_at AT TIME ZONE 'Asia/Shanghai')::date AND date_trunc('minute',clock_timestamp() AT TIME ZONE 'Asia/Shanghai')::time BETWEEN time '16:00' AND time '17:00'"} ORDER BY j.created_at,j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1`,[scope.tenantId,scope.storeId])
+   const rows=await tx.query<Record<string,unknown>&{id:string;order_id:string;customer_id:string;account_id:string|null;encrypted_code?:Buffer;code_hash?:string;key_id?:string;reminder_text:string;challenge_expires_at:string|null;custody_expires_at:string;stored_at:string;public_id:string;item_name:string}>(`SELECT j.*,o.customer_id,${kind==='code'?'j.expires_at::text':'NULL::text'} AS challenge_expires_at,o.expires_at::text AS custody_expires_at,o.stored_at::text,o.public_id,o.item_name,p.service_account_id AS account_id,p.reminder_text FROM mbox.${table} j JOIN mbox.bottle_custody_orders o ON o.tenant_id=j.tenant_id AND o.store_id=j.store_id AND o.id=j.order_id JOIN mbox.bottle_custody_policies p ON p.tenant_id=j.tenant_id AND p.store_id=j.store_id WHERE j.tenant_id=$1 AND j.store_id=$2 AND j.${status}='pending' AND o.status='stored' AND ${kind==='code'?"j.expires_at>clock_timestamp() AND j.invalidated_at IS NULL AND j.order_version=o.version":"p.reminders_enabled AND j.expiry_snapshot=o.expires_at AND j.due_at<=clock_timestamp() AND (clock_timestamp() AT TIME ZONE 'Asia/Shanghai')::date=(j.due_at AT TIME ZONE 'Asia/Shanghai')::date AND date_trunc('minute',clock_timestamp() AT TIME ZONE 'Asia/Shanghai')::time BETWEEN time '16:00' AND time '17:00'"} ORDER BY j.created_at,j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1`,[scope.tenantId,scope.storeId])
    const row=rows.rows[0];if(!row)return null
    await tx.query(`UPDATE mbox.${table} SET ${status}='sending',claimed_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[scope.tenantId,scope.storeId,row.id]);return row
   });if(!job)return false
@@ -66,7 +66,7 @@ export class SocialCustodyWorker{
     if(kind==='code'){
      const template=delivery.account.code_template_id
      const code=this.protection.reveal({encryptedContact:job.encrypted_code!,contactHash:job.code_hash!,encryptionKeyId:job.key_id!}).split(':')[1]!
-     const ttlMinutes=Math.max(1,Math.ceil((Date.parse(job.expires_at)-Date.now())/60_000))
+     const ttlMinutes=Math.max(1,Math.ceil((Date.parse(job.challenge_expires_at??'')-Date.now())/60_000))
      if(template)result=await adapter.sendSubscribe(delivery.recipient,template,{
       number1:code,
       thing3:`${ttlMinutes}分钟`,
@@ -80,7 +80,7 @@ export class SocialCustodyWorker{
       character_string2:clipCharacter(String(job.public_id)),
       thing3:clipThing(String(job.item_name)),
       time4:formatWechatTime(Date.parse(String(job.stored_at))),
-      time5:formatWechatTime(Date.parse(String(job.expires_at))),
+      time5:formatWechatTime(Date.parse(job.custody_expires_at)),
      },'pages/profile/index')
      else result.errorCode='TEMPLATE_NOT_CONFIGURED'
     }

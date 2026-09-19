@@ -1,6 +1,7 @@
 import type { ScopedTransaction } from './transaction-runner.js'
 
 export type MediaPurpose = 'community_activity' | 'home_content' | 'menu' | 'performer' | 'support_contact'
+export interface MediaAssetListOptions { purpose?: MediaPurpose; before?: string; limit?: number }
 
 export interface MediaAssetView {
   publicId: string
@@ -29,14 +30,19 @@ interface BytesRow extends AssetRow { bytes: Buffer }
 export class MediaAssetRepository {
   constructor(private readonly transaction: ScopedTransaction) {}
 
-  async list(): Promise<MediaAssetView[]> {
+  async list(options: Readonly<MediaAssetListOptions> = {}): Promise<MediaAssetView[]> {
     const result = await this.transaction.query<AssetRow>(`
       SELECT public_id,purpose,original_file_name,mime_type,byte_length,sha256,created_at::text
-      FROM mbox.media_assets
+      FROM mbox.media_assets AS asset
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        AND ($3::text IS NULL OR purpose=$3)
+        AND ($4::text IS NULL OR (asset.created_at,asset.id)<(
+          SELECT cursor.created_at,cursor.id FROM mbox.media_assets AS cursor
+          WHERE cursor.tenant_id=$1 AND cursor.store_id=$2 AND cursor.public_id=$4
+        ))
       ORDER BY created_at DESC,id DESC
-      LIMIT 100
-    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId])
+      LIMIT $5
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, options.purpose ?? null, options.before ?? null, options.limit ?? 100])
     return result.rows.map(view)
   }
 
@@ -127,6 +133,15 @@ export class MediaAssetRepository {
     `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,publicId])
     const row = result.rows[0]
     return row === undefined ? null : { mimeType: row.mime_type, bytes: row.bytes, sha256: row.sha256 }
+  }
+
+  async staffMetadata(publicId: string): Promise<{ mimeType: MediaAssetView['mimeType']; sha256: string } | null> {
+    const result = await this.transaction.query<{mime_type:MediaAssetView['mimeType'];sha256:string}>(
+      'SELECT mime_type,sha256 FROM mbox.media_assets WHERE tenant_id=$1 AND store_id=$2 AND public_id=$3',
+      [this.transaction.scope.tenantId,this.transaction.scope.storeId,publicId],
+    )
+    const row=result.rows[0]
+    return row ? {mimeType:row.mime_type,sha256:row.sha256} : null
   }
 }
 

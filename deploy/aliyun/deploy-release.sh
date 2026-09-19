@@ -6,6 +6,8 @@ cd "${repo_root}"
 
 : "${MBOX_RELEASE_TAG:?MBOX_RELEASE_TAG is required, for example v1.0.0-rc.48}"
 
+node scripts/verify-release-browser-prerequisites.mjs
+
 deployment_tier=${MBOX_DEPLOYMENT_TIER:-validation}
 if [ "${deployment_tier}" = production ]; then
   : "${MBOX_SSH_HOST:?MBOX_SSH_HOST is required for a production deployment}"

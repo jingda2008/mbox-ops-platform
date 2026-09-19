@@ -15,7 +15,7 @@ describe('BusinessDayRolloverWorker', () => {
       query: vi.fn(async (sql: string) => {
         queries.push(sql)
         if (sql.includes('business_day_cutoff::text')) {
-          return { rows: [{ business_date: '2026-08-11', timezone: 'Asia/Shanghai', cutoff: '06:00:00' }], rowCount: 1 }
+          return { rows: [{ business_date: '2026-08-11', timezone: 'Asia/Shanghai', cutoff: '06:00:00', may_open: true }], rowCount: 1 }
         }
         if (sql.includes('UPDATE mbox.business_days AS day')) {
           return { rows: [{ id: 'a1000000-0000-4000-8000-000000000010', business_date: '2026-08-10', status: 'awaiting_close' }], rowCount: 1 }
@@ -55,7 +55,7 @@ describe('BusinessDayRolloverWorker', () => {
       scope,
       query: vi.fn(async (sql: string) => {
         if (sql.includes('business_day_cutoff::text')) {
-          return { rows: [{ business_date: '2026-08-11', timezone: 'Asia/Shanghai', cutoff: '06:00:00' }], rowCount: 1 }
+          return { rows: [{ business_date: '2026-08-11', timezone: 'Asia/Shanghai', cutoff: '06:00:00', may_open: true }], rowCount: 1 }
         }
         return { rows: [], rowCount: 0 }
       }),
@@ -69,4 +69,30 @@ describe('BusinessDayRolloverWorker', () => {
       closure: { closedBusinessDayCount: 0,closedTableSessionCount: 0,blockedTableSessionCount: 0 },
     })
   })
+  it('closes the previous day during the morning break without automatically opening today', async () => {
+    const queries: string[] = []
+    const transaction: ScopedTransaction = {
+      scope,
+      query: vi.fn(async (sql: string) => {
+        queries.push(sql)
+        if (sql.includes('business_day_cutoff::text')) return { rows: [{
+          business_date: '2026-09-20', timezone: 'Asia/Shanghai', cutoff: '06:00:00', may_open: false,
+        }], rowCount: 1 }
+        if (sql.includes('UPDATE mbox.business_days AS day')) return { rows: [{
+          id: 'a1000000-0000-4000-8000-000000000010', business_date: '2026-09-19', status: 'awaiting_close',
+        }], rowCount: 1 }
+        return { rows: [], rowCount: 0 }
+      }),
+    }
+    const worker = new BusinessDayRolloverWorker({
+      run: async (_scope, operation) => operation(transaction),
+    } as never)
+    const result = await worker.run(scope, 'worker:business-day')
+    expect(result.created).toBe(false)
+    expect(result.rolledOverBusinessDayIds).toHaveLength(1)
+    expect(queries.some(sql => sql.includes('INSERT INTO mbox.business_days'))).toBe(false)
+    expect(queries.filter(sql => sql.includes('INSERT INTO mbox.audit_events'))).toHaveLength(1)
+    expect(queries.some(sql => sql.includes("status='awaiting_close'"))).toBe(true)
+  })
+
 })

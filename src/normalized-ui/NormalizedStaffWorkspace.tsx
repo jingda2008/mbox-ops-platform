@@ -1,3 +1,4 @@
+import { businessOperatingHoursLabel } from '../shared/business-operating-hours'
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
 import {
   AlertCircle,
@@ -470,7 +471,7 @@ function EmptyInline({ text }: { text: string }) {
 
 function businessDayLabel(bootstrap: StaffBootstrapView): string {
   const status = bootstrap.businessDay.status === 'open' ? '营业中' : '未营业'
-  return `${bootstrap.businessDay.date} · ${status}`
+  return `${bootstrap.businessDay.date} · ${status} · ${businessOperatingHoursLabel(bootstrap.store.businessDayCutoff)}`
 }
 
 function formatGeneratedAt(value: string): string {

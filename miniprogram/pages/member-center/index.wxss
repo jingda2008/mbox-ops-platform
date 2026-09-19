@@ -100,3 +100,11 @@
 @media (max-width: 390px) { .member-center-head { margin-right: -22rpx; margin-left: -22rpx; padding-right: 22rpx; padding-left: 22rpx; } }
 @media (max-width: 360px) { .member-center-head { margin-right: -18rpx; margin-left: -18rpx; padding-right: 18rpx; padding-left: 18rpx; } .member-code-panel { gap: 14rpx; } .member-code-qr { width: 144rpx; height: 144rpx; flex-basis: 144rpx; } }
 .member-card--silver .member-card__corner,.member-card--gold .member-card__corner{width:180rpx;height:180rpx;right:-126rpx;bottom:-126rpx;opacity:.65}
+
+.member-code-preview-mask { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; box-sizing: border-box; padding: 32rpx; background: rgba(0, 0, 0, .68); }
+.member-code-preview { box-sizing: border-box; width: 620rpx; max-width: 100%; padding: 32rpx; border-radius: 24rpx; background: #fff; text-align: center; }
+.member-code-preview__title { display: block; color: #24382c; font-size: 32rpx; font-weight: 700; }
+.member-code-preview__image { display: block; width: 520rpx; height: 520rpx; max-width: 65vh; max-height: 65vh; margin: 24rpx auto; background: #fff; }
+.member-code-preview__number { display: block; color: #24382c; font-size: 28rpx; overflow-wrap: anywhere; }
+.member-code-preview__hint { display: block; margin-top: 12rpx; color: #6a756d; font-size: 24rpx; }
+.member-code-preview button.member-code-preview__close { margin-top: 28rpx; width: 100%; min-height: 88rpx; border-radius: 16rpx; background: #315d46; color: #fff; font-size: 30rpx; line-height: 88rpx; }

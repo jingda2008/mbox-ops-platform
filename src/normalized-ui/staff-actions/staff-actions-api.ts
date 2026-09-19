@@ -309,12 +309,13 @@ export interface StaffActionsApiPort {
   completeServiceTask(taskId: string, note?: string): Promise<void>
   runKdsAction(taskId: string, action: 'complete' | 'deliver' | 'remake', quantity?:number): Promise<void>
   loadItemAfterSalesAccess?():Promise<{enabled:boolean;recoveryAvailable?:boolean;employeeId:string}>
+  unattributedKdsTaskIds?():string[]
   pendingKdsActions?():Array<{taskId:string;action:'complete'|'deliver'|'remake';quantity?:number}>
   recoverKdsResults?():Promise<void>
   cancelKdsTask(taskId: string, reasonNote: string): Promise<void>
   actOnReservation(reservationId: string, action: 'confirm' | 'arrive' | 'complete'): Promise<void>
   loadAssistedOrderAccess(signal?: AbortSignal): Promise<AssistedOrderAccess>
-  loadFulfillmentHistory?(input: {kind:'prepared'|'delivered';date:string;table:string;page:number}):Promise<OperatingHistory>
+  loadFulfillmentHistory?(input: {kind:'prepared'|'delivered';date:string;table:string;page:number}, signal?: AbortSignal):Promise<OperatingHistory>
   loadTableOrderDetails?(tableSessionId: string, signal?: AbortSignal): Promise<StaffTableOrderDetail[]>
   loadTablePaymentOrders?(tableSessionId: string, signal?: AbortSignal): Promise<StaffTablePaymentOrder[]>
   loadAssistedOrderCatalog(signal?: AbortSignal): Promise<AssistedOrderCatalogProduct[]>
@@ -417,8 +418,10 @@ export class StaffActionsApi implements StaffActionsApiPort {
     this.createIdempotencyKey = options.createIdempotencyKey ?? (() => crypto.randomUUID())
   }
 
-  loadOperations(signal?: AbortSignal): Promise<StaffOperationsData> {
-    return this.getData('/api/operations', signal)
+  async loadOperations(signal?: AbortSignal): Promise<StaffOperationsData> {
+    const data = await this.getData<StaffOperationsData>('/api/operations', signal)
+    if (!signal?.aborted && data.actor?.id) this.employeeId = data.actor.id
+    return data
   }
 
   async loadFulfillment(signal?: AbortSignal): Promise<StaffFulfillmentData> {
@@ -633,13 +636,15 @@ export class StaffActionsApi implements StaffActionsApiPort {
   }
 
   async runKdsAction(taskId: string, action: 'complete' | 'deliver' | 'remake', quantity?:number): Promise<void> {
-    const fingerprint = `${this.employeeId}:${taskId}:${action}`
+    const employeeId = this.employeeId
+    if (employeeId !== 'current-session' && this.unattributedKdsTaskIds().includes(taskId)) throw new StaffActionsApiError('此设备有旧版待确认操作但未记录员工，请由值班经理核对原订单后处理；不会自动重放或创建新操作', 'KDS_LEGACY_OWNER_UNKNOWN', 409)
+    const fingerprint = `${employeeId}:${taskId}:${action}`
     this.readPendingKds()
     const pending=this.pendingKdsCommands.get(fingerprint)
     if(pending&&pending.quantity!==quantity)throw new StaffActionsApiError('上次操作尚未确认，请先按原数量恢复结果，再处理下一批','KDS_ORIGINAL_COMMAND_PENDING',409)
     const key=pending?.key??`staff-action-${this.createIdempotencyKey()}`
     this.pendingKdsCommands.set(fingerprint,{key,quantity})
-    this.persistPendingKds()
+    this.persistPendingKds(employeeId)
 
     try {
       if(action==='remake')await this.command(`/api/commerce/kds/${encodeURIComponent(taskId)}/remake`,
@@ -655,12 +660,12 @@ export class StaffActionsApi implements StaffActionsApiPort {
         'INVENTORY_INSUFFICIENT','INVENTORY_RECIPE_MISSING','INVENTORY_BALANCE_MISSING',
       ].includes(error.code??'')){
         this.pendingKdsCommands.delete(fingerprint)
-        this.persistPendingKds()
+        this.persistPendingKds(employeeId)
       }
       throw error
     }
     this.pendingKdsCommands.delete(fingerprint)
-    this.persistPendingKds()
+    this.persistPendingKds(employeeId)
   }
 
   private readPendingKds(){
@@ -671,11 +676,22 @@ export class StaffActionsApi implements StaffActionsApiPort {
         &&(value.quantity===undefined||Number.isSafeInteger(value.quantity)&&Number(value.quantity)>0))this.pendingKdsCommands.set(fingerprint,{key:value.key,...(value.quantity===undefined?{}:{quantity:Number(value.quantity)})})
     }catch{/* Keep the in-memory recovery when storage is unavailable. */}
   }
-  private persistPendingKds(){
-    const entries=[...this.pendingKdsCommands].filter(([key])=>key.startsWith(`${this.employeeId}:`))
+  private persistPendingKds(employeeId = this.employeeId){
+    const entries=[...this.pendingKdsCommands].filter(([key])=>key.startsWith(`${employeeId}:`))
     try{
-      this.commandStorage?.setItem(`mbox-kds-pending-v2:${this.employeeId}`,JSON.stringify(Object.fromEntries(entries)))
+      this.commandStorage?.setItem(`mbox-kds-pending-v2:${employeeId}`,JSON.stringify(Object.fromEntries(entries)))
     }catch{/* Private browsing may disallow storage. */}
+  }
+  unattributedKdsTaskIds(): string[] {
+    try {
+      const stored = JSON.parse(this.commandStorage?.getItem('mbox-kds-pending-v2:current-session') ?? '{}')
+      if (!isObject(stored)) return []
+      return Object.entries(stored).flatMap(([fingerprint, value]) => {
+        const [actor, taskId, action] = fingerprint.split(':')
+        return actor === 'current-session' && taskId && ['complete', 'deliver', 'remake'].includes(action ?? '')
+          && isObject(value) && typeof value.key === 'string' ? [taskId] : []
+      })
+    } catch { return [] }
   }
   pendingKdsActions(){
     this.readPendingKds()
@@ -687,7 +703,11 @@ export class StaffActionsApi implements StaffActionsApiPort {
   async recoverKdsResults():Promise<void>{
     // Replays the original payload and key. It never creates a new batch from
     // whatever quantities happen to be visible after a page reload.
-    for(const pending of this.pendingKdsActions())await this.runKdsAction(pending.taskId,pending.action,pending.quantity)
+    const employeeId = this.employeeId
+    for (const pending of this.pendingKdsActions()) {
+      if (this.employeeId !== employeeId) throw new StaffActionsApiError('账号已切换，请用原员工账号恢复未确认操作', 'KDS_ACTOR_CHANGED', 409)
+      await this.runKdsAction(pending.taskId,pending.action,pending.quantity)
+    }
   }
 
   async createDeliveryBatch(items:Array<{taskId:string;quantity:number}>):Promise<void>{
@@ -718,10 +738,10 @@ export class StaffActionsApi implements StaffActionsApiPort {
     return access
   }
 
-  async loadFulfillmentHistory(input: {kind:'prepared'|'delivered';date:string;table:string;page:number}):Promise<OperatingHistory> {
+  async loadFulfillmentHistory(input: {kind:'prepared'|'delivered';date:string;table:string;page:number}, signal?: AbortSignal):Promise<OperatingHistory> {
     const params=new URLSearchParams({workKind:input.kind,table:input.table,page:String(input.page)})
     if(input.date)params.set('businessDate',input.date)
-    return this.getData<OperatingHistory>(`/api/operations/history?${params}`)
+    return this.getData<OperatingHistory>(`/api/operations/history?${params}`, signal)
   }
 
   async loadTableOrderDetails(tableSessionId: string, signal?: AbortSignal): Promise<StaffTableOrderDetail[]> {

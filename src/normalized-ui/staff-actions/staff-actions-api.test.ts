@@ -576,3 +576,76 @@ describe('StaffActionsApi', () => {
     })
   })
 })
+
+it('isolates pending kitchen commands between employees without requiring assisted ordering', async () => {
+  const stored = new Map<string, string>()
+  const storage = { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => { stored.set(key, value) } }
+  let actor = 'chef-a', offline = true
+  const sent: Array<{ key: string | null; body: string }> = []
+  const send = vi.fn<typeof fetch>(async (url, init) => {
+    if (url === '/api/operations') return new Response(JSON.stringify({ data: { actor: { id: actor }, tasks: [], tables: [] } }))
+    sent.push({ key: new Headers(init?.headers).get('idempotency-key'), body: String(init?.body) })
+    if (offline) throw new Error('lost response')
+    return new Response('{}')
+  })
+  const a = new StaffActionsApi({ fetch: send, commandStorage: storage, createIdempotencyKey: () => 'original' })
+  await a.loadOperations(); await expect(a.runKdsAction('task-1', 'complete', 1)).rejects.toThrow()
+  actor = 'chef-b'
+  const b = new StaffActionsApi({ fetch: send, commandStorage: storage })
+  await b.loadOperations(); expect(b.pendingKdsActions()).toEqual([]); await b.recoverKdsResults()
+  expect(sent).toHaveLength(1)
+  actor = 'chef-a'; offline = false
+  const restored = new StaffActionsApi({ fetch: send, commandStorage: storage })
+  await restored.loadOperations(); expect(restored.pendingKdsActions()).toMatchObject([{ taskId: 'task-1', quantity: 1 }])
+  await restored.recoverKdsResults(); expect(sent[1]).toEqual(sent[0]); expect(restored.pendingKdsActions()).toEqual([])
+})
+
+it('settles a late command under its original employee after a session identity changes', async () => {
+  const stored = new Map<string, string>()
+  let actor = 'chef-a', finish!: (value: Response) => void
+  const send = vi.fn<typeof fetch>(async url => url === '/api/operations'
+    ? new Response(JSON.stringify({ data: { actor: { id: actor }, tables: [], tasks: [] } }))
+    : new Promise<Response>(resolve => { finish = resolve }))
+  const api = new StaffActionsApi({ fetch: send, commandStorage: { getItem: key => stored.get(key) ?? null, setItem: (key, value) => { stored.set(key, value) } } })
+  await api.loadOperations(); const command = api.runKdsAction('task-1', 'complete', 1)
+  actor = 'chef-b'; await api.loadOperations(); finish(new Response('{}')); await command
+  expect(api.pendingKdsActions()).toEqual([])
+  expect(JSON.parse(stored.get('mbox-kds-pending-v2:chef-a')!)).toEqual({})
+  expect(stored.has('mbox-kds-pending-v2:chef-b')).toBe(false)
+})
+
+it('keeps unowned legacy recovery evidence and blocks automatic replays or a new command for that task', async () => {
+  const legacy = JSON.stringify({ 'current-session:old-task:complete': { key: 'old-key', quantity: 1 } })
+  const send = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ data: { actor: { id: 'chef-a' }, tasks: [], tables: [] } })))
+  const setItem = vi.fn()
+  const api = new StaffActionsApi({ fetch: send, commandStorage: { getItem: key => key.endsWith(':current-session') ? legacy : null, setItem } })
+  await api.loadOperations(); expect(api.pendingKdsActions()).toEqual([])
+  expect(api.unattributedKdsTaskIds()).toEqual(['old-task'])
+  await api.recoverKdsResults()
+  await expect(api.runKdsAction('old-task', 'complete', 1)).rejects.toMatchObject({ code: 'KDS_LEGACY_OWNER_UNKNOWN' })
+  expect(send).toHaveBeenCalledTimes(1); expect(setItem).not.toHaveBeenCalled()
+})
+
+it('stops a multi-command recovery when the employee changes between responses', async () => {
+  const stored = new Map<string, string>()
+  let actor = 'chef-a', offline = true, finish!: (value: Response) => void
+  const commands: string[] = []
+  const api = new StaffActionsApi({ commandStorage: { getItem: key => stored.get(key) ?? null, setItem: (key, value) => { stored.set(key, value) } },
+    fetch: vi.fn<typeof fetch>(async url => {
+      if (url === '/api/operations') return new Response(JSON.stringify({ data: { actor: { id: actor }, tasks: [], tables: [] } }))
+      commands.push(String(url))
+      if (offline) throw new Error('lost response')
+      return new Promise<Response>(resolve => { finish = resolve })
+    }) })
+  await api.loadOperations()
+  for (const task of ['one', 'two']) await expect(api.runKdsAction(task, 'complete', 1)).rejects.toThrow()
+  offline = false
+  const recovering = api.recoverKdsResults()
+  const rejected = expect(recovering).rejects.toMatchObject({ code: 'KDS_ACTOR_CHANGED' })
+  actor = 'chef-b'; await api.loadOperations()
+  finish(new Response('{}')); await rejected
+  expect(commands).toHaveLength(3)
+  expect(api.pendingKdsActions()).toEqual([])
+  actor = 'chef-a'; await api.loadOperations()
+  expect(api.pendingKdsActions()).toEqual([{ taskId: 'two', action: 'complete', quantity: 1 }])
+})

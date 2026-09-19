@@ -9,7 +9,7 @@ export function DeliveryBatchComposer({items,onSubmit,onChanged}:{items:StaffFul
   const selected=available.filter(item=>(quantities[item.taskId]??0)>0).map(item=>({taskId:item.taskId,quantity:quantities[item.taskId]!}))
   if(!selected.length){setNotice('先填写本批需要配送的数量');return}
   lock.current=true;setBusy(true)
-  try{await onSubmit(selected);setQuantities({});setNotice('本批已确认，配送票后台生成；打印失败不影响送达操作。');void onChanged()}
+  try{await onSubmit(selected);setQuantities({});setNotice('本批已确认，配送票后台生成；打印失败不影响送达操作。');await onChanged()}
   catch(error){setNotice(error instanceof Error?error.message:'本批未确认，请核对后重试')}
   finally{lock.current=false;setBusy(false)}
  }

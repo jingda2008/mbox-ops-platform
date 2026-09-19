@@ -52,7 +52,7 @@ export async function readOperatingHistory(tx: ScopedTransaction, input: Operati
   if(input.exportAll&&orders.rows.length>5000)throw new TypeError('筛选结果超过5000单，请缩小日期或桌台范围后导出；不会只导出部分数据')
   const page=input.exportAll?orders.rows:orders.rows.slice(0,50)
   const items=page.length?await tx.query<{id:string;order_id:string;name:string;quantity:number;unit_price_minor:string;
-    stock_return_capability?:import('../../src/shared/operating-history.js').StockReturnCapability|null;product_id?:string;category_label?:string|null;unit_label?:string|null;returned_quantity?:number;quantity_facts?:{total:number;held:number;stopped:number;ready:number;delivered:number;usedLoss:number}|null;total_amount_minor:string;parent_order_item_id:string|null;status:string;note:string|null;delivered_at:string|null;delivered_by:string|null;prepared_at:string|null;prepared_by:string|null}>(`
+    stock_return_capability?:import('../../src/shared/operating-history.js').StockReturnCapability|null;product_id?:string;category_label?:string|null;unit_label?:string|null;returned_quantity?:number;quantity_facts?:{total:number;held:number;stopped:number;ready:number;delivered:number;usedLoss:number}|null;total_amount_minor:string;parent_order_item_id:string|null;status:string;note:string|null;delivered_at:string|null;delivered_by:string|null;prepared_at:string|null;prepared_by:string|null;work_quantity:number|null}>(`
     SELECT item.id,item.order_id,item.product_id,
       NULLIF(item.product_snapshot->>'categoryName','') AS category_label,
       COALESCE(NULLIF(item.product_snapshot->>'unitName',''),NULLIF(item.product_snapshot->>'unit','')) AS unit_label,COALESCE(NULLIF(item.product_snapshot->>'name',''),product.name) AS name,
@@ -64,7 +64,7 @@ export async function readOperatingHistory(tx: ScopedTransaction, input: Operati
         OR EXISTS(SELECT 1 FROM mbox.inventory_movements movement WHERE movement.tenant_id=item.tenant_id AND movement.store_id=item.store_id
           AND movement.order_item_id=item.id AND movement.reference_type='refund_unmade' AND movement.movement_type='return')
       ) THEN item.quantity ELSE (SELECT COALESCE(sum(stock_return.quantity),0)::integer FROM mbox.order_stock_returns stock_return WHERE stock_return.tenant_id=item.tenant_id AND stock_return.store_id=item.store_id AND stock_return.order_item_id=item.id) END END AS returned_quantity,
-      delivery.delivered_at,delivery.delivered_by,preparation.prepared_at,preparation.prepared_by
+      delivery.delivered_at,delivery.delivered_by,preparation.prepared_at,preparation.prepared_by,work_result.quantity AS work_quantity
     FROM mbox.order_items item JOIN mbox.products product
       ON product.tenant_id=item.tenant_id AND product.store_id=item.store_id AND product.id=item.product_id
     LEFT JOIN LATERAL (${input.includeStockReturnWork?legacyStockReturnCapabilitySql('item'):'SELECT NULL::jsonb AS capability'}) stock_return_read ON true
@@ -85,7 +85,8 @@ export async function readOperatingHistory(tx: ScopedTransaction, input: Operati
         ON audit.tenant_id=task.tenant_id AND audit.store_id=task.store_id
           AND audit.object_type='kds_task' AND audit.object_id=task.id::text AND audit.action='kds.deliver'
       LEFT JOIN mbox.employees employee ON employee.tenant_id=audit.tenant_id AND employee.store_id=audit.store_id AND employee.id=audit.actor_employee_id
-      WHERE task.tenant_id=item.tenant_id AND task.store_id=item.store_id AND task.order_item_id=item.id AND item.status='delivered'
+      WHERE task.tenant_id=item.tenant_id AND task.store_id=item.store_id AND task.order_item_id=item.id AND (item.status='delivered' OR $4::text='delivered')
+        AND ($4::text IS DISTINCT FROM 'delivered' OR $5::uuid IS NULL OR audit.actor_employee_id=$5)
       ORDER BY audit.occurred_at DESC,audit.id DESC LIMIT 1
     ) delivery ON true
     LEFT JOIN LATERAL (
@@ -95,8 +96,19 @@ export async function readOperatingHistory(tx: ScopedTransaction, input: Operati
         AND audit.object_type='kds_task' AND audit.object_id=task.id::text AND audit.action='kds.complete'
       LEFT JOIN mbox.employees employee ON employee.tenant_id=audit.tenant_id AND employee.store_id=audit.store_id AND employee.id=audit.actor_employee_id
       WHERE task.tenant_id=item.tenant_id AND task.store_id=item.store_id AND task.order_item_id=item.id
+        AND ($4::text IS DISTINCT FROM 'prepared' OR $5::uuid IS NULL OR audit.actor_employee_id=$5)
+        AND ($4::text IS DISTINCT FROM 'prepared' OR $6::text[] IS NULL OR task.station_code=ANY($6))
       ORDER BY audit.occurred_at DESC,audit.id DESC LIMIT 1
     ) preparation ON true
+    LEFT JOIN LATERAL (
+      SELECT sum(COALESCE((audit.after_snapshot->>'affectedQuantity')::integer,task.quantity))::integer AS quantity
+      FROM mbox.kds_tasks task JOIN mbox.audit_events audit
+        ON audit.tenant_id=task.tenant_id AND audit.store_id=task.store_id
+        AND audit.object_type='kds_task' AND audit.object_id=task.id::text
+        AND audit.action=CASE $4 WHEN 'prepared' THEN 'kds.complete' ELSE 'kds.deliver' END
+      WHERE $4::text IS NOT NULL AND task.tenant_id=item.tenant_id AND task.store_id=item.store_id AND task.order_item_id=item.id
+        AND ($5::uuid IS NULL OR audit.actor_employee_id=$5) AND ($6::text[] IS NULL OR task.station_code=ANY($6))
+    ) work_result ON true
     WHERE item.tenant_id=$1::uuid AND item.store_id=$2::uuid AND item.order_id=ANY($3::uuid[])
       AND ($4::text IS NULL OR EXISTS(SELECT 1 FROM mbox.kds_tasks ht JOIN mbox.audit_events he
         ON he.tenant_id=ht.tenant_id AND he.store_id=ht.store_id AND he.object_type='kds_task' AND he.object_id=ht.id::text
@@ -133,7 +145,7 @@ export async function readOperatingHistory(tx: ScopedTransaction, input: Operati
     orders:page.map(row=>({id:row.id,businessDate:row.business_date,publicId:row.public_id,tableCode:row.table_code,employeeName:row.employee_name,
       tableSessionId:row.table_session_id,sessionPublicId:row.session_public_id,areaName:row.area_name,
       submittedAt:row.submitted_at,status:row.status,paymentStatus:row.payment_status,totalMinor:minor(row.total_amount_minor),effectiveAmountMinor:minor(row.effective_amount_minor??row.total_amount_minor),stoppedAmountMinor:Math.max(0,minor(row.total_amount_minor)-minor(row.effective_amount_minor??row.total_amount_minor)),...(minor(row.effective_amount_minor??row.total_amount_minor)>minor(row.total_amount_minor)?{receivableIncreaseMinor:minor(row.effective_amount_minor??row.total_amount_minor)-minor(row.total_amount_minor)}:{}),
-      items:items.rows.filter(item=>item.order_id===row.id).map(item=>({id:item.id,name:item.name,quantity:item.quantity,productId:item.product_id,categoryLabel:item.category_label??null,unitLabel:item.unit_label??null,bundleParentId:item.parent_order_item_id,
+      items:items.rows.filter(item=>item.order_id===row.id).map(item=>({id:item.id,name:item.name,quantity:item.quantity,...(item.work_quantity==null?{}:{workQuantity:item.work_quantity}),productId:item.product_id,categoryLabel:item.category_label??null,unitLabel:item.unit_label??null,bundleParentId:item.parent_order_item_id,
         unitPriceMinor:minor(item.unit_price_minor),totalMinor:minor(item.total_amount_minor),includedInBundle:item.parent_order_item_id!=null,status:item.status,note:item.note,returnedQuantity:item.returned_quantity??0,...(item.stock_return_capability?{stockReturn:item.stock_return_capability}:{}),...(item.quantity_facts?{quantities:item.quantity_facts}:{}),
         deliveredAt:item.delivered_at??null,deliveredBy:item.delivered_by??null,preparedAt:item.prepared_at??null,preparedBy:item.prepared_by??null}))}))}
 }

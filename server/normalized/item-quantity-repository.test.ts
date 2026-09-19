@@ -98,6 +98,27 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await pool.query(`INSERT INTO mbox.kds_tasks(id,tenant_id,store_id,order_item_id,station_code,quantity,status) VALUES($1,$2,$3,$4,'bar',5,$5)`,[taskId,tenantId,storeId,itemId,state])
     return {orderId,itemId,taskId}
   }
+  it('keeps personal fulfillment history on the current actor and actual partial quantities', async () => {
+    const row = await item()
+    const early = '2026-09-19T10:00:00Z', late = '2026-09-19T10:05:00Z'
+    for (const action of ['kds.complete', 'kds.deliver']) {
+      for (const [actor, quantity, time] of [[employeeId, 2, early], [reviewerId, 3, late]] as const) {
+        await pool.query(`INSERT INTO mbox.audit_events(tenant_id,store_id,actor_type,actor_employee_id,action,object_type,object_id,business_date,after_snapshot,occurred_at)
+          VALUES($1,$2,'employee',$3,$4,'kds_task',$5,$6,jsonb_build_object('affectedQuantity',$7::integer),$8::timestamptz)`,
+          [tenantId,storeId,actor,action,row.taskId,businessDate,quantity,time])
+      }
+    }
+    for (const workKind of ['prepared', 'delivered'] as const) {
+      const history = await runner.run(scope, tx => readOperatingHistory(tx, {
+        businessDate, table:'', employee:'', page:0, search:`quantity-${row.orderId}`, allowFinancialSummary:false,
+        workKind, workEmployeeId:employeeId, workStations:['bar'],
+      }), {readOnly:true})
+      const entry = history.orders[0]!.items[0]!
+      expect(entry.quantity).toBe(5); expect(entry.workQuantity).toBe(2)
+      expect(workKind === 'prepared' ? entry.preparedBy : entry.deliveredBy).toBe('Q01')
+      expect(new Date((workKind === 'prepared' ? entry.preparedAt : entry.deliveredAt)! ).toISOString()).toBe('2026-09-19T10:00:00.000Z')
+    }
+  })
   function hold(itemId:string,quantity:number,kind:'unpaid_stop'|'paid_return'='paid_return'){
     return runner.run(scope,tx=>new ItemQuantityRepository(tx).hold({orderItemId:itemId,quantity,kind,employeeId,businessDate:businessDate,reason:'客人停止所选数量'}),{isolation:'read-committed'})
   }

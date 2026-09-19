@@ -244,7 +244,7 @@ test('one business-day order and guest requests flow through bartender, kitchen,
   await expect(bartender.page.locator('.staff-action-card').filter({ hasText: '未付款订单不得出品' })).toHaveCount(0)
   await expect(barCard).toContainText('营业日验收：酒水小食一起上')
   await barCard.getByRole('button', { name: '制作完成' }).click()
-  await expect(bartender.page.locator('.staff-actions-notice')).toContainText('配送岗位已收到')
+  await expect(bartender.page.locator('.staff-actions-notice')).toContainText('已确认制作完成')
   await bartender.context.close()
 
   const kitchen = await staffPage(browser, data, 'shenliangliang')
@@ -255,7 +255,7 @@ test('one business-day order and guest requests flow through bartender, kitchen,
   await expect(kitchen.page.locator('.staff-action-card').filter({ hasText: '未付款订单不得出品' })).toHaveCount(0)
   await expect(kitchenCard).toContainText('营业日验收：酒水小食一起上')
   await kitchenCard.getByRole('button', { name: '制作完成' }).click()
-  await expect(kitchen.page.locator('.staff-actions-notice')).toContainText('配送岗位已收到')
+  await expect(kitchen.page.locator('.staff-actions-notice')).toContainText('已确认制作完成')
   await kitchen.context.close()
 
   const server = await staffPage(browser, data, 'tom')
@@ -265,7 +265,7 @@ test('one business-day order and guest requests flow through bartender, kitchen,
     await expect(delivery).toBeVisible()
     await expect(delivery).toContainText('待配送')
     await delivery.getByRole('button', { name: '已送达' }).click()
-    await expect(server.page.locator('.staff-actions-notice')).toContainText('已送达')
+    await expect(server.page.locator('.staff-actions-notice')).toContainText('已确认送达')
   }
   await server.page.getByRole('button', { name: /工作台/ }).click()
   await server.page.getByRole('button', { name: '任务', exact: true }).first().click()

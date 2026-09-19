@@ -198,13 +198,22 @@ Page({
   data: {
     loading: true, error: '', membership: null, benefits: [], points: [], growth: [], processing: [], annualCalendar: [],
     calendarFilters: CALENDAR_FILTERS, calendarFilterIndex: 0, calendarItems: [], dailySnackBusy: false,
-    dailySnackClaim: null,
+    dailySnackClaim: null, memberCodePreviewVisible: false,
   },
 
   onShow() { this.load() },
+  onHide() { this.closeMemberCodePreview() },
+
+  openMemberCodePreview() {
+    if (this.data.loading || this.data.error || !this.data.membership || !this.data.membership.memberCodeQrDataUrl) return
+    this.setData({ memberCodePreviewVisible: true })
+  },
+
+  closeMemberCodePreview() { this.setData({ memberCodePreviewVisible: false }) },
+  keepMemberCodePreviewOpen() {},
 
   async load() {
-    this.setData({ loading: true, error: '' })
+    this.setData({ loading: true, error: '', memberCodePreviewVisible: false })
     try {
       const bootstrap = await getMiniBootstrap()
       const benefits = (bootstrap.benefits || []).map(benefitView)

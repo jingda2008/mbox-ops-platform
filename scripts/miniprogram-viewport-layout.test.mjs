@@ -97,6 +97,7 @@ test('only modal masks remain fixed across mini-program pages', async () => {
     'miniprogram/pages/home/index.wxss: .editorial-panel-mask',
     'miniprogram/pages/home/index.wxss: .member-invite-mask',
     'miniprogram/pages/home/index.wxss: .performance-panel-mask',
+    'miniprogram/pages/member-center/index.wxss: .member-code-preview-mask',
     'miniprogram/pages/order/index.wxss: .sheet-mask',
     'miniprogram/pages/profile/index.wxss: .login-sheet-mask',
     'miniprogram/pages/profile/index.wxss: .login-sheet-mask',

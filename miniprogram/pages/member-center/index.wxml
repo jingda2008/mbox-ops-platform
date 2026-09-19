@@ -15,8 +15,8 @@
       <view class="member-card__progress"><view class="member-card__progress-copy"><text>{{membership.cardGrowthText}}</text><text>{{membership.cardDifferenceText}}</text></view><view wx:if="{{membership.cardProgressAvailable}}" class="member-card__track"><view style="width: {{membership.cardProgressPercent}}%;"></view></view><view class="member-card__foot"><view wx:if="{{membership.cardProgressAvailable}}"><text>{{membership.cardCurrentTierText}}</text><text>{{membership.cardNextTierText}}</text></view><text>{{membership.cardBenefitText}}</text></view></view>
     </view>
     <view class="member-code-panel panel">
-      <view><text>我的会员码</text><text>向服务人员出示此码，便于确认会员身份。</text></view>
-      <image wx:if="{{membership.memberCodeQrDataUrl}}" class="member-code-qr" src="{{membership.memberCodeQrDataUrl}}" mode="aspectFit" show-menu-by-longpress="{{true}}" />
+      <view><text>我的会员码</text><text>向服务人员出示此码，便于确认会员身份。</text><text wx:if="{{membership.memberCodeQrDataUrl}}">点击二维码放大</text></view>
+      <image wx:if="{{membership.memberCodeQrDataUrl}}" class="member-code-qr" bindtap="openMemberCodePreview" aria-role="button" aria-label="放大会员二维码" src="{{membership.memberCodeQrDataUrl}}" mode="aspectFit" show-menu-by-longpress="{{true}}" />
       <text wx:else class="member-code-unavailable">会员码暂时无法生成，请向服务人员出示会员号 {{membership.memberNo}}</text>
     </view>
     <view class="member-status panel">
@@ -55,4 +55,13 @@
     </block>
     <state-panel wx:else type="empty" title="当前身份还没有会员账户" message="请返回“我的”查看入会或找回会员说明。" />
   </block>
+  <view wx:if="{{memberCodePreviewVisible && membership && membership.memberCodeQrDataUrl && !loading && !error}}" class="member-code-preview-mask" bindtap="closeMemberCodePreview" catchtouchmove="keepMemberCodePreviewOpen">
+    <view class="member-code-preview" catchtap="keepMemberCodePreviewOpen">
+      <text class="member-code-preview__title">我的会员码</text>
+      <image class="member-code-preview__image" src="{{membership.memberCodeQrDataUrl}}" mode="aspectFit" show-menu-by-longpress="{{true}}" />
+      <text class="member-code-preview__number">会员号 {{membership.memberNo}}</text>
+      <text class="member-code-preview__hint">请向服务人员出示此码</text>
+      <button class="member-code-preview__close" bindtap="closeMemberCodePreview" aria-label="关闭会员二维码">关闭</button>
+    </view>
+  </view>
 </view>

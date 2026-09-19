@@ -1,3 +1,4 @@
+import { BUSINESS_DAY_OPENING_TIME } from '../../src/shared/business-operating-hours.js'
 import { appendAuditEvent, appendOutboxMessage, type JsonObject } from './command-executor.js'
 import { closeAwaitingBusinessDays, type BusinessDayClosureResult } from './business-day-closure.js'
 import {
@@ -10,6 +11,7 @@ interface StoreClockRow extends Record<string, unknown> {
   business_date: string
   timezone: string
   cutoff: string
+  may_open: boolean
 }
 
 interface BusinessDayRow extends Record<string, unknown> {
@@ -35,7 +37,9 @@ export class BusinessDayRolloverWorker {
     return this.transactions.run(scope, async (transaction) => {
       const clock = await readStoreClock(transaction)
       const stale = await claimStaleOpenDays(transaction, clock.business_date)
-      const created = await ensureCurrentBusinessDay(transaction, clock.business_date)
+      const created = clock.may_open
+        ? await ensureCurrentBusinessDay(transaction, clock.business_date)
+        : null
 
       for (const row of stale) {
         await writeAudit(transaction, {
@@ -92,11 +96,17 @@ async function readStoreClock(transaction: ScopedTransaction): Promise<StoreCloc
       mbox.current_operating_business_date(tenant_id,id)::text
         AS business_date,
       timezone,
-      business_day_cutoff::text AS cutoff
+      business_day_cutoff::text AS cutoff,
+      statement_timestamp() >= (
+        mbox.current_operating_business_date(tenant_id,id)::timestamp + $3::time
+      ) AT TIME ZONE timezone
+      AND statement_timestamp() < (
+        (mbox.current_operating_business_date(tenant_id,id) + 1)::timestamp + business_day_cutoff
+      ) AT TIME ZONE timezone AS may_open
     FROM mbox.stores
     WHERE tenant_id = $1::uuid AND id = $2::uuid AND status = 'active'
     FOR KEY SHARE
-  `, [transaction.scope.tenantId, transaction.scope.storeId])
+  `, [transaction.scope.tenantId, transaction.scope.storeId, BUSINESS_DAY_OPENING_TIME])
   const row = result.rows[0]
   if (!row) throw new Error('当前门店不可用')
   return row

@@ -65,6 +65,8 @@ export interface StaleGuestImmediatePaymentBatch {
   terminalRefundIds: readonly string[]
   deferredRefundIds: readonly string[]
   failedRefundIds: readonly string[]
+  generalReconciliationFailed?: boolean
+  generalReconciledPaymentIds?: readonly string[]
 }
 
 /**
@@ -116,6 +118,8 @@ export class StaleGuestImmediatePaymentWorker {
     const terminalRefundIds: string[] = []
     const deferredRefundIds: string[] = []
     const failedRefundIds: string[] = []
+    let generalReconciliationFailed = false
+    const generalReconciledPaymentIds: string[] = []
     const context: PendingOnlinePaymentReconciliationContext = {
       scope,
       businessDate: resolvedBusinessDate,
@@ -129,7 +133,7 @@ export class StaleGuestImmediatePaymentWorker {
     if (this.deps.onlinePayments.querySystem !== undefined
       && this.deps.onlinePayments.listStalePendingPostarPaymentIds !== undefined) {
       try {
-        await reconcileStalePendingOnlinePaymentsForStore(
+        const general = await reconcileStalePendingOnlinePaymentsForStore(
           {
             onlinePayments: this.deps.onlinePayments as Pick<OnlinePaymentService,
               'query' | 'querySystem' | 'listStalePendingPostarPaymentIds' | 'recordAutomaticPaymentQueryOutcome'>,
@@ -138,7 +142,11 @@ export class StaleGuestImmediatePaymentWorker {
           context,
           `pending-payment-worker:${workerId}:${Math.floor(now() / 30_000)}`,
         )
+        queriedPaymentIds.push(...general.attemptedPaymentIds)
+        generalReconciledPaymentIds.push(...general.paymentIds)
+        failedPaymentIds.push(...general.failedPaymentIds)
       } catch {
+        generalReconciliationFailed = true
         // A provider/list failure is financial follow-up only. Guest checkout
         // retirement below must still run and the physical table stays usable.
       }
@@ -355,6 +363,7 @@ export class StaleGuestImmediatePaymentWorker {
     return {
       workerId, claimed: candidates.length, queriedPaymentIds, paidPaymentIds,
       terminalAbandonedPaymentIds, unresolvedAbandonedPaymentIds, deferredPaymentIds, failedPaymentIds,
+      generalReconciliationFailed, generalReconciledPaymentIds,
       queriedRefundIds, terminalRefundIds, deferredRefundIds, failedRefundIds,
     }
   }

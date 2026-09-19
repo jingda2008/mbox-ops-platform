@@ -74,15 +74,27 @@ test('creates a missing evidence directory before writing a CLI report', async (
   const root = await mkdtemp(join(tmpdir(), 'mbox-normalized-load-'))
   const output = join(root, 'nested', 'evidence', 'report.json')
   try {
-    await execFileAsync(process.execPath, [
+    const result = await execFileAsync(process.execPath, [
       resolve(import.meta.dirname, 'normalized-load-acceptance.mjs'),
       '--mock',
       '--duration-seconds=0.4',
       '--requests-per-scenario=2',
       `--output=${output}`,
-    ])
+    ]).then(() => ({ exitCode: 0 }), error => {
+      // This test checks evidence I/O. Two scheduled requests are deliberately
+      // too short for a stable rate measurement on a busy CI worker; exit 1 is
+      // allowed only with a complete report and exclusively timing failures.
+      if (error.code !== 1) throw error
+      return { exitCode: 1 }
+    })
     const report = JSON.parse(await readFile(output, 'utf8'))
-    assert.equal(report.gate.passed, true)
+    assert.equal(report.schemaVersion, 'normalized-load-acceptance-v2')
+    assert.equal(report.scenarios.tableOpen.summary.requests, 2)
+    for (const scenario of Object.values(report.scenarios)) assert.equal(scenario.summary.errors, 0)
+    for (const failure of report.gate.failures) {
+      assert.match(failure, /\.(achieved_rps|completion_throughput|scheduling_delay_p95|scheduling_delay_p99)$/)
+    }
+    assert.equal(result.exitCode, report.gate.passed ? 0 : 1)
   } finally {
     await rm(root, { recursive: true, force: true })
   }

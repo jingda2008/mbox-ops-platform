@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { AuditEvent, JsonCodec, JsonValue, NormalizedCommandExecutor } from './command-executor.js'
-import { MediaAssetRepository, type MediaAssetView } from './media-asset-repository.js'
+import { MediaAssetRepository, type MediaAssetView, type MediaAssetListOptions } from './media-asset-repository.js'
 import type { ActivityOperationsStaffContext } from './activity-operations-service.js'
 import type { ScopedPostgresTransactionRunner } from './transaction-runner.js'
 
@@ -10,8 +10,8 @@ export class MediaAssetService {
     private readonly commands: NormalizedCommandExecutor,
   ) {}
 
-  list(context: ActivityOperationsStaffContext) {
-    return this.transactions.run(context.scope, (transaction) => new MediaAssetRepository(transaction).list(), { readOnly: true })
+  list(context: ActivityOperationsStaffContext, options: Readonly<MediaAssetListOptions> = {}) {
+    return this.transactions.run(context.scope, (transaction) => new MediaAssetRepository(transaction).list(options), { readOnly: true })
   }
 
   upload(context: ActivityOperationsStaffContext, input: Readonly<{

@@ -93,6 +93,19 @@ integration('media asset publication PostgreSQL integration', () => {
 
   afterAll(async () => pool?.end())
 
+  it('pages by purpose without the former global 100-row truncation or duplicate timestamps',async()=>{
+    await pool.query(`INSERT INTO mbox.media_assets(tenant_id,store_id,public_id,purpose,original_file_name,mime_type,byte_length,sha256,bytes,created_by_employee_id,created_at)
+      SELECT $1,$2,'MA'||upper(md5(n::text)),CASE WHEN n<=105 THEN 'home_content' ELSE 'performer' END,'page.png','image/png',8,lpad(n::text,64,'0'),$3,$4,'2026-09-19T01:00:00Z' FROM generate_series(1,130) n`,[integrationScope.tenantId,integrationScope.storeId,Buffer.from([137,80,78,71,13,10,26,10]),integrationIds.employeeId])
+    const seen=new Set<string>();let before:string|undefined
+    do{
+      const page=await transactions.run(integrationScope,tx=>new MediaAssetRepository(tx).list({purpose:'performer',before,limit:12}),{readOnly:true})
+      for(const item of page){expect(item.purpose).toBe('performer');expect(seen.has(item.publicId)).toBe(false);seen.add(item.publicId)}
+      before=page.length===12?page.at(-1)!.publicId:undefined
+    }while(before)
+    expect(seen.size).toBe(25)
+    expect(await transactions.run({...integrationScope,storeId:randomUUID()},tx=>new MediaAssetRepository(tx).list({purpose:'performer'}),{readOnly:true})).toEqual([])
+  })
+
   it('returns an image for a published menu product and hides it immediately when the product is stopped', async () => {
     const available = await transactions.run(integrationScope, (transaction) => (
       new MediaAssetRepository(transaction).publicBytes(integrationAssetId)

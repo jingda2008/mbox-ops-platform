@@ -5,6 +5,7 @@ import { RefundFulfillmentRepository } from './refund-fulfillment-repository.js'
 import { readTables } from './operations-query-service.js'
 import { listTableOrderDetailsForSession } from './commerce-kds-api.js'
 import { OnlinePaymentService } from './online-payment-service.js'
+import { StaleGuestImmediatePaymentWorker } from './stale-guest-immediate-payment-worker.js'
 import {PaymentProviderActionRepository} from './payment-provider-action-repository.js'
 import { applyProviderQueryObservation, reconcileStalePendingOnlinePayment } from './pending-online-payment-reconciliation.js'
 import {historicalPaymentDisplayAllowlist,repairHistoricalPaymentDisplays} from '../../scripts/repair-five-historical-payment-displays.mjs'
@@ -93,6 +94,32 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
   const scope = { tenantId, storeId }
   const run = <T,>(work: (tx: import('./transaction-runner.js').ScopedTransaction) => Promise<T>) => new ScopedPostgresTransactionRunner(asPool(pool)).run(scope, work)
   const tableState = async (sessionId: string) => (await run(tx => readTables(tx, cashierId, true))).find(table => table.activeSession?.id === sessionId)?.activeSession
+
+  it.each(['failed','closed','succeeded'] as const)('applies %s through the production-length worker identity and real command transaction',async status=>{
+    const fixture=await createOrder(pool,[1200]),payment=await initiateOnlinePayment(service,fixture.orderId)
+    const runner=new ScopedPostgresTransactionRunner(asPool(pool))
+    const online=new OnlinePaymentService(runner,'worker-test-secret-at-least-thirty-two-bytes',{
+      provider:'postar',environment:'test',agencyId:'TESTAGENCY',merchantId:'TESTMERCHANT',publicKey:'TESTPUBLICKEY',
+      callbackUrl:'https://example.test/callback',timeoutMs:1000,wechat:null,
+    },{createPayment:async()=>{throw new Error('unexpected create')},closePayment:async()=>{throw new Error('unexpected close')},
+      requestRefund:async()=>{throw new Error('unexpected refund')},queryRefund:async()=>{throw new Error('unexpected refund query')},
+      queryPayment:async()=>({paymentIntentId:payment.publicId,providerTransactionId:`worker-tx-${payment.id}`,status,
+        amount:1200,currency:'CNY',merchantId:'TESTMERCHANT',occurredAt:'2026-08-12T12:00:00Z'})})
+    const worker=new StaleGuestImmediatePaymentWorker({onlinePayments:{
+      listStaleGuestImmediateCheckoutPaymentCandidates:async()=>[],listStalePendingPostarPaymentIds:async()=>(await pool.query("SELECT id FROM mbox.payments WHERE id=$1 AND status IN('created','pending')",[payment.id])).rows.map(row=>row.id),
+      closeSystem:input=>online.closeSystem(input),querySystem:input=>online.querySystem(input),
+      recordAutomaticPaymentQueryOutcome:(...args)=>online.recordAutomaticPaymentQueryOutcome(...args),
+    },payments:service,reconciliation:{commitTerminal:async()=>{throw new Error('unexpected retire')},abandonUnresolved:async()=>{throw new Error('unexpected abandon')}}})
+    const workerId='w'.repeat(17)+':stale-guest-immediate-payment-reconciliation'
+    for(let attempt=0;attempt<2;attempt++){
+      const batch=await worker.runBatch(scope,workerId,businessDate,{now:()=>1789780800000})
+      expect(batch.failedPaymentIds).toEqual([])
+      expect(batch.generalReconciliationFailed).toBe(false)
+    }
+    expect((await pool.query('SELECT status FROM mbox.payments WHERE id=$1',[payment.id])).rows[0].status).toBe(status)
+    expect((await pool.query('SELECT count(*)::int count FROM mbox.reconciliation_entries WHERE payment_id=$1',[payment.id])).rows[0].count).toBe(status==='succeeded'?1:0)
+    expect((await pool.query('SELECT count(*)::int count FROM mbox.verified_provider_observations WHERE payment_id=$1 AND consumed_at IS NULL',[payment.id])).rows[0].count).toBe(0)
+  })
 
   it('persists typed pre-dispatch failure without receipts and preserves an already captured payment',async()=>{
     const fixture=await createOrder(pool,[1000])
@@ -716,7 +743,7 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
       callbackUrl:'https://example.test/callback',timeoutMs:1000,wechat:null,
     },{createPayment:unavailable,queryPayment:unavailable,closePayment:unavailable,requestRefund:unavailable,queryRefund:unavailable})
     const context = {scope:{tenantId,storeId},businessDate,actor:{type:'integration' as const,ref:'postar-active-query'}}
-    await expect(reconcileStalePendingOnlinePayment({onlinePayments,commands:recoveryCommands},context,payment.id,'recover-attempt-1')).rejects.toThrow('Verified payment success could not be applied')
+    await expect(reconcileStalePendingOnlinePayment({onlinePayments,commands:recoveryCommands},context,payment.id,'recover-attempt-1')).rejects.toThrow('Verified payment observation could not be applied')
     expect((await pool.query('SELECT count(*)::int count FROM mbox.reconciliation_entries WHERE payment_id=$1',[payment.id])).rows[0].count).toBe(0)
     expect((await pool.query('SELECT consumed_at FROM mbox.verified_provider_observations WHERE id=$1',[observationId])).rows[0].consumed_at).toBeNull()
     const [firstReader, secondReader] = await Promise.all([

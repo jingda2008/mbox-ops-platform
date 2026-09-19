@@ -2268,7 +2268,7 @@ export class CustomerExperienceRepository {
         503,
       )
     }
-    const policy = await this.currentRecommendationPolicy()
+    const policy = await this.currentRecommendationPolicy(false)
     return {
       policyPublicId: policy.public_id,
       policyVersion: policy.version,
@@ -3916,7 +3916,7 @@ export class CustomerExperienceRepository {
     return result.rows
   }
 
-  private async currentRecommendationPolicy(): Promise<RecommendationPolicyRow> {
+  private async currentRecommendationPolicy(lock = true): Promise<RecommendationPolicyRow> {
     const result = await this.transaction.query<RecommendationPolicyRow>(`
       SELECT id, public_id, policy_code, version, preference_weight, scene_weight,
         margin_weight, priority_weight, performance_weight, inventory_weight,
@@ -3927,7 +3927,7 @@ export class CustomerExperienceRepository {
         AND effective_from<=clock_timestamp()
         AND (effective_until IS NULL OR effective_until>clock_timestamp())
       ORDER BY effective_from DESC,version DESC,id DESC LIMIT 1
-      FOR KEY SHARE
+      ${lock ? 'FOR KEY SHARE' : ''}
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId])
     const row = result.rows[0]
     if (!row) throw new CustomerExperienceRequestError('推荐规则尚未发布，请联系经营负责人', 'RECOMMENDATION_POLICY_UNAVAILABLE', 503)

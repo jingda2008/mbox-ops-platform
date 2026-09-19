@@ -27,11 +27,11 @@ export const wechatMemberServiceNotificationApiPlugin: FastifyPluginAsync<Option
     return reply.send({data:{available:options.channelConfigured&&authorizations.length>0,authorizations}})
   })
   app.post('/public/mini/wechat-member-service-notification-authorizations',async(request,reply)=>{
+    const context=await options.resolvePublicContext(request)
     if(!options.channelConfigured)return reply.status(503).send({
       error:{code:'WECHAT_MEMBER_SERVICE_NOTIFICATION_NOT_CONFIGURED',message:'正式微信订阅消息配置尚未完整启用'},
     })
     try {
-      const context=await options.resolvePublicContext(request)
       const body=object(request.body)
       const input={
         notificationType: enumValue(body.notificationType,WECHAT_MEMBER_SERVICE_NOTIFICATION_TYPES,'通知类型'),

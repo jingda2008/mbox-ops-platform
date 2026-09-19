@@ -74,6 +74,13 @@ integration('recommendation policy operational release PostgreSQL authority',()=
       SET rollout_state='pilot',reason='经营参数已三人复核，限定影子样本门店试点'
       WHERE tenant_id=$1 AND store_id=$2 AND feature_code='recommendation.engine'`,[id.tenant,id.store])
     expect((await configuration()).feature.rolloutState).toBe('pilot')
+    for(const state of ['enabled','pilot','disabled','pilot']){
+      await pool.query(`UPDATE mbox.customer_experience_features SET rollout_state=$3
+        WHERE tenant_id=$1 AND store_id=$2 AND feature_code='recommendation.engine'`,[id.tenant,id.store,state])
+      const read=runner.run(scope,tx=>new CustomerExperienceRepository(tx).recommendationInputConfiguration(),{readOnly:true})
+      if(state==='disabled')await expect(read).rejects.toMatchObject({code:'RECOMMENDATION_FEATURE_NOT_ENABLED'})
+      else expect(await read).toMatchObject({policyPublicId:first.publicId,policyVersion:1})
+    }
   })
 
   it('schedules exact future cut-over without a gap and rejects a concurrent overlapping release',async()=>{

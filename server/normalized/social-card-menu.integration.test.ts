@@ -1,3 +1,4 @@
+import {recordServiceAccountSubscription} from './social-subscription-service.js'
 import {readLaunchPopup} from './launch-popup-api.js'
 import {PricingAuthorizationPolicy} from './pricing-authorization-policy.js'
 import {GuestSharedCartRepository} from './guest-shared-cart-repository.js'
@@ -179,6 +180,31 @@ integration('v9 authoritative social card and incremental menu',()=>{
   expect((await pool.query('SELECT status FROM mbox.social_broadcasts WHERE id=$1',[receipt.id])).rows[0].status).toBe('accepted')
   await runner.run(scope,tx=>new SocialBroadcastRepository(tx).recordReceipt(serviceId,'receipt-local','send success'))
   expect((await pool.query('SELECT status FROM mbox.social_broadcasts WHERE id=$1',[receipt.id])).rows[0].status).toBe('delivered')
+ })
+ it('persists fixed-route events only for the verified enabled account and revokes synchronously',async()=>{
+  const stamp=String(Math.floor(Date.now()/1000)),xml=`<xml><CreateTime>${stamp}</CreateTime><MsgType>event</MsgType><Event>unsubscribe</Event><FromUserName>fixed-route-test</FromUserName></xml>`
+  expect(await run(repo=>repo.ingestConfiguredEvent('wxWrongAccount',xml))).toBe(false)
+  for(let i=0;i<2;i++)expect(await run(repo=>repo.ingestConfiguredEvent('wxSocialTest01',xml))).toBe(true)
+  expect((await pool.query('SELECT count(*)::int n FROM mbox.social_callback_events WHERE account_id=$1 AND fingerprint=$2',[serviceId,createHash('sha256').update(xml).digest('hex')])).rows[0].n).toBe(1)
+  expect((await pool.query('SELECT active FROM mbox.social_relationships WHERE account_id=$1 AND external_hash=$2',[serviceId,protection.protect('fixed-route-test').hash])).rows[0].active).toBe(false)
+  await pool.query('UPDATE mbox.social_accounts SET enabled=false WHERE id=$1',[serviceId])
+  try{expect(await run(repo=>repo.ingestConfiguredEvent('wxSocialTest01',xml))).toBe(false)}finally{await pool.query('UPDATE mbox.social_accounts SET enabled=true WHERE id=$1',[serviceId])}
+ })
+ it('deduplicates signed client reports and refreshes official follow facts without sending a message',async()=>{
+  const input={appId:'wxSocialTest01',openId:'subscription-report-test',authorizationRef:'a'.repeat(64),acceptedTemplateIds:['test-code-template','test-code-template']}
+  const request=vi.fn<typeof fetch>().mockImplementation(async url=>new Response(JSON.stringify(String(url).includes('/token?')?{access_token:'test-token',expires_in:7200}:{subscribe:1,openid:input.openId})))
+  for(let i=0;i<2;i++)await recordServiceAccountSubscription(runner,scope,protection,input,request)
+  expect((await pool.query('SELECT count(*)::int n FROM mbox.social_subscription_reports WHERE account_id=$1 AND authorization_ref=$2',[serviceId,input.authorizationRef])).rows[0].n).toBe(1)
+  expect(request.mock.calls.every(([url])=>!String(url).includes('/message/'))).toBe(true)
+  const relation=()=>pool.query('SELECT active,customer_id FROM mbox.social_relationships WHERE account_id=$1 AND external_hash=$2',[serviceId,protection.protect(input.openId).hash])
+  expect((await relation()).rows[0]).toEqual({active:true,customer_id:null})
+  const broken=vi.fn<typeof fetch>().mockRejectedValue(new Error('provider unavailable'))
+  await recordServiceAccountSubscription(runner,scope,protection,{...input,authorizationRef:'b'.repeat(64)},broken)
+  expect((await relation()).rows[0].active).toBe(true)
+  const unsubscribe=vi.fn<typeof fetch>().mockImplementation(async url=>new Response(JSON.stringify(String(url).includes('/token?')?{access_token:'test-token',expires_in:7200}:{subscribe:0,openid:input.openId})))
+  await recordServiceAccountSubscription(runner,scope,protection,{...input,authorizationRef:'c'.repeat(64)},unsubscribe)
+  expect((await relation()).rows[0].active).toBe(false)
+  await expect(runner.run(scope,tx=>tx.query('DELETE FROM mbox.social_subscription_reports WHERE authorization_ref=$1',[input.authorizationRef]))).rejects.toThrow()
  })
  it('never exposes stored credentials through the configuration read model',async()=>{
   const rows=await run(repo=>repo.list());expect(JSON.stringify(rows)).not.toMatch(/test-only-social-secret|SocialToken|encrypted_credentials|credential_hash/)

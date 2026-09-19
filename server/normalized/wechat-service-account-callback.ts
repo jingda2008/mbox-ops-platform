@@ -27,7 +27,7 @@ interface CallbackQuery {
 interface Options {
   config: Readonly<WechatServiceAccountCallbackConfig>
   now?: () => number
-  handleEvent?: (xml: string) => Promise<boolean>
+  handleEvent?: (xml: string, verifiedAppId: string) => Promise<boolean>
 }
 
 export const wechatServiceAccountCallbackPlugin: FastifyPluginAsync<Options> = async (app, options) => {
@@ -49,14 +49,14 @@ export const wechatServiceAccountCallbackPlugin: FastifyPluginAsync<Options> = a
   })
 
   app.post<{ Querystring: CallbackQuery; Body: string }>('/wechat/service-account/callback', async (request, reply) => {
-    let xml: string
+    let event: { xml: string; appId: string }
     try {
-      xml = verifier.verifyMessage(request.query, request.body)
+      event = verifier.verifyMessageWithReceiver(request.query, request.body)
     } catch {
       return reply.code(403).type('text/plain; charset=utf-8').send('forbidden')
     }
     try {
-      const accepted = options.handleEvent === undefined ? false : await options.handleEvent(xml)
+      const accepted = options.handleEvent === undefined ? false : await options.handleEvent(event.xml, event.appId)
       if (!accepted) throw new Error('WeChat event handler unavailable')
       return reply.type('text/plain; charset=utf-8').send('success')
     } catch {
@@ -95,12 +95,16 @@ export class WechatServiceAccountCallbackVerifier {
   }
 
   verifyMessage(query: Readonly<CallbackQuery>, body: unknown): string {
+    return this.verifyMessageWithReceiver(query, body).xml
+  }
+
+  verifyMessageWithReceiver(query: Readonly<CallbackQuery>, body: unknown): { xml: string; appId: string } {
     if (typeof body !== 'string' || Buffer.byteLength(body, 'utf8') > MAX_XML_BYTES) {
       throw new TypeError('WeChat callback body is invalid')
     }
     const encrypted = extractXmlCdata(body, 'Encrypt')
     this.verifySignature(query, encrypted)
-    return this.decrypt(encrypted)
+    return this.decryptPayload(encrypted)
   }
 
   private verifySignature(query: Readonly<CallbackQuery>, encrypted: string): void {
@@ -121,6 +125,10 @@ export class WechatServiceAccountCallbackVerifier {
   }
 
   private decrypt(encrypted: string): string {
+    return this.decryptPayload(encrypted).xml
+  }
+
+  private decryptPayload(encrypted: string): { xml: string; appId: string } {
     if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encrypted)) throw new TypeError('WeChat callback ciphertext is invalid')
     const ciphertext = Buffer.from(encrypted, 'base64')
     if (ciphertext.length === 0 || ciphertext.length % 16 !== 0) {
@@ -136,7 +144,7 @@ export class WechatServiceAccountCallbackVerifier {
     if (messageLength < 1 || messageEnd > plaintext.length) throw new TypeError('WeChat callback plaintext is invalid')
     const appId = plaintext.subarray(messageEnd).toString('utf8')
     if (!safeEqual(appId, this.config.appId) && !(this.config.officialAccountAppId && safeEqual(appId,this.config.officialAccountAppId))) throw new TypeError('WeChat callback appId does not match')
-    return plaintext.subarray(20, messageEnd).toString('utf8')
+    return { xml: plaintext.subarray(20, messageEnd).toString('utf8'), appId }
   }
 }
 

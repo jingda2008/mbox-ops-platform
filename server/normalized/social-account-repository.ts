@@ -47,6 +47,26 @@ export class SocialAccountRepository{
   await this.tx.query(`INSERT INTO mbox.social_callback_events(tenant_id,store_id,account_id,fingerprint,event_type,provider_occurred_at,payload_hash,encrypted_payload,key_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING`,[...this.scope,accountId,fingerprint,type,new Date(seconds*1000).toISOString(),payload.hash,Buffer.from(payload.encryptedBase64,'base64'),payload.keyId])
   return true
  }
+ async ingestConfiguredEvent(verifiedAppId:string,xml:string){
+  // The receiver comes from authenticated ciphertext, never from a client
+  // query parameter or a fallback account selected by display order.
+  const matches=await this.tx.query<{id:string}>("SELECT id FROM mbox.social_accounts WHERE tenant_id=$1 AND store_id=$2 AND app_id=$3 AND kind='service_account' AND enabled FOR KEY SHARE",[...this.scope,verifiedAppId])
+  if(matches.rows.length!==1)return false
+  const id=matches.rows[0]!.id
+  await this.ingestVerified(id,xml)
+  if(xmlValue(xml,'Event',false)==='unsubscribe')await processSocialEvent(this,id,xml)
+  return true
+ }
+ async enabledServiceAccount(appId:string){
+  const rows=await this.tx.query<{id:string}>("SELECT id FROM mbox.social_accounts WHERE tenant_id=$1 AND store_id=$2 AND app_id=$3 AND kind='service_account' AND enabled",[...this.scope,appId])
+  if(rows.rows.length!==1)throw new BottleCustodyError('当前服务号尚未完成配置','SOCIAL_ACCOUNT_UNAVAILABLE',503)
+  return this.account(rows.rows[0]!.id)
+ }
+ async recordSubscriptionReport(input:{appId:string;openId:string;authorizationRef:string;acceptedTemplateIds:readonly string[]}){
+  const {account}=await this.enabledServiceAccount(input.appId)
+  const external=this.protection.protect(input.openId)
+  for(const templateId of new Set(input.acceptedTemplateIds))await this.tx.query(`INSERT INTO mbox.social_subscription_reports(tenant_id,store_id,account_id,authorization_ref,external_hash,template_id,reported_decision) VALUES($1,$2,$3,$4,$5,$6,'granted') ON CONFLICT DO NOTHING`,[...this.scope,account.id,input.authorizationRef,external.hash,templateId])
+ }
  async applyRelationship(input:{accountId:string;externalId:string;staffId:string;active:boolean;unionId:string|null;occurredAt:string}){
   const external=this.protection.protect(input.externalId),unionHash=input.unionId?createHash('sha256').update(input.unionId).digest('hex'):null
   let customerId:string|null=null

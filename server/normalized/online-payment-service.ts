@@ -166,9 +166,13 @@ export class OnlinePaymentUnavailableError extends Error {
 }
 
 export class OnlinePaymentUnknownError extends Error {
-  constructor() {
+  readonly diagnostic: Readonly<ProviderFailureDiagnostic> | undefined
+  constructor(cause?: unknown, operation: 'query' | 'close' = 'query') {
     super('支付结果暂时无法确认，请先查单，不要重复收款')
     this.name = 'OnlinePaymentUnknownError'
+    // Keep only safe diagnostics, never the original message, URL, response or
+    // nested error object that Fastify/loggers might otherwise serialize.
+    this.diagnostic = cause === undefined ? undefined : providerFailureDiagnostic(cause, operation)
   }
 }
 
@@ -401,7 +405,7 @@ export class OnlinePaymentService {
           merchantId: config.merchantId,
         },
         { secrets },
-      ))
+      ), 'close')
       if (!close.closed || close.paymentIntentId !== context.publicId) throw new OnlinePaymentUnknownError()
       observation = { ...queried, status: 'closed', occurredAt: close.occurredAt }
     }
@@ -1209,6 +1213,7 @@ async function queryPaymentWithUnknownBoundary(
 
 async function providerOperationWithUnknownBoundary<Result>(
   operation: () => Promise<Result>,
+  kind: 'query' | 'close' = 'query',
 ): Promise<Result> {
   try {
     return await operation()
@@ -1218,8 +1223,35 @@ async function providerOperationWithUnknownBoundary<Result>(
     // callers and the background worker can release operations without
     // inventing a result.
     if (error instanceof OnlinePaymentUnknownError) throw error
-    throw new OnlinePaymentUnknownError()
+    throw new OnlinePaymentUnknownError(error, kind)
   }
+}
+
+interface ProviderFailureDiagnostic {
+  operation: 'query' | 'close'
+  category: 'timeout' | 'network' | 'http' | 'provider_rejected' | 'invalid_response' | 'unknown'
+  errorCode: string
+  source?: string
+  providerCode?: string
+  httpStatus?: number
+}
+
+function providerFailureDiagnostic(error: unknown, operation: 'query' | 'close'): ProviderFailureDiagnostic {
+  const outer = error instanceof Error ? error : new Error()
+  const nested = outer.cause instanceof Error ? outer.cause : outer
+  const rawCode = 'code' in nested && typeof nested.code === 'string' ? nested.code : ''
+  const networkCode = /^(?:ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EPIPE|ABORT_ERR|UND_ERR_[A-Z_]+)$/.test(rawCode) ? rawCode : ''
+  const timeout = /TIMEOUT|TIMEDOUT/.test(networkCode) || [outer.name,nested.name].some(name=>['TimeoutError','AbortError'].includes(name))
+  const httpStatus = Number(outer.message.match(/^星驿HTTP响应异常: ([1-5][0-9]{2})$/)?.[1]) || undefined
+  const rejected = outer instanceof PostarPaymentRejectedError
+  const invalid = outer instanceof SyntaxError || /签名|缺失|无效|JSON|不匹配|必须|unmappable|未知星驿.*状态/i.test(outer.message)
+  const source = outer.stack?.split('\n').slice(1).flatMap(line => (
+    line.match(/\/server\/[A-Za-z0-9_./-]+\.(?:js|ts):[0-9]+:[0-9]+/g) ?? []
+  )).slice(0,3).join(' <- ') || undefined
+  return { operation, category: timeout ? 'timeout' : networkCode ? 'network' : httpStatus ? 'http' : rejected ? 'provider_rejected' : invalid ? 'invalid_response' : 'unknown',
+    errorCode: networkCode || (httpStatus ? `HTTP_${httpStatus}` : rejected ? 'PROVIDER_REJECTED' : outer instanceof SyntaxError ? 'INVALID_JSON' : invalid ? 'INVALID_PROVIDER_RESPONSE' : 'PROVIDER_ERROR'), source,
+    ...(httpStatus ? { httpStatus } : {}),
+    ...(rejected ? { providerCode: outer.providerCode } : {}) }
 }
 
 function refundQueryEvidence(observation: Readonly<ProviderRefundObservation>) {

@@ -159,6 +159,11 @@ import { wechatLoyaltyNotificationApiPlugin } from './wechat-loyalty-notificatio
 import { wechatMemberServiceNotificationApiPlugin } from './wechat-member-service-notification-api.js'
 import { wechatNotificationPromptApiPlugin } from './wechat-notification-prompt-api.js'
 import { wechatServiceAccountCallbackPlugin } from './wechat-service-account-callback.js'
+import { SocialAccountRepository } from './social-account-repository.js'
+import { recordServiceAccountSubscription } from './social-subscription-service.js'
+import { isStaffAuthenticationRequiredError, STAFF_AUTHENTICATION_REQUIRED_ERROR } from './staff-api-authentication.js'
+import { GuestAuthenticationRequiredError, GuestCapabilityDeniedError } from './guest-request-context.js'
+import { StaffAccessDeniedError } from './staff-access-repository.js'
 import { MembershipTermsService } from './membership-terms-service.js'
 import { memberContentCardApiPlugin } from './member-content-card-api.js'
 import { MemberContentCardService } from './member-content-card-service.js'
@@ -203,7 +208,7 @@ export const NORMALIZED_LOG_REDACTION_PATHS = Object.freeze([
   'payment.publicKey',
 ])
 
-export const NORMALIZED_MIN_SCHEMA_VERSION = '220'
+export const NORMALIZED_MIN_SCHEMA_VERSION = '221'
 export const NORMALIZED_INJECTABLE_PLUGIN_PORTS = Object.freeze([
   'customer-table-side',
 ] as const)
@@ -310,6 +315,15 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     }
   })
   app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof ReservationGuestSessionInvalidError || error instanceof GuestAuthenticationRequiredError) {
+      return reply.code(401).send({ error: { code: 'AUTHENTICATION_REQUIRED', message: '登录状态已失效，请重新进入' } })
+    }
+    if (isStaffAuthenticationRequiredError(error)) {
+      return reply.code(401).send({ error: STAFF_AUTHENTICATION_REQUIRED_ERROR })
+    }
+    if (error instanceof StaffAccessDeniedError || error instanceof GuestCapabilityDeniedError) {
+      return reply.code(403).send({ error: { code: 'PERMISSION_DENIED', message: '当前账号没有这项权限' } })
+    }
     if (error instanceof Error && 'code' in error && error.code === 'REQUEST_JSON_INVALID') {
       return reply.code(400).send({ error: { code: error.code, message: error.message } })
     }
@@ -432,9 +446,16 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       await app.register(wechatServiceAccountCallbackPlugin, {
         prefix: '/api',
         config: options.config.wechatServiceAccountCallback,
+        handleEvent: (xml, verifiedAppId) => transactions.run(scope, transaction => (
+          new SocialAccountRepository(transaction, activityContactProtection).ingestConfiguredEvent(verifiedAppId, xml)
+        )),
       })
     }
-    if (options.config.wechatServiceAccountSubscribe) { await app.register(wechatServiceAccountSubscribePlugin,{prefix:'/api',config:options.config.wechatServiceAccountSubscribe}) }
+    if (options.config.wechatServiceAccountSubscribe) {
+      await app.register(wechatServiceAccountSubscribePlugin, { prefix: '/api', config: options.config.wechatServiceAccountSubscribe,
+        recordAuthorization: input => recordServiceAccountSubscription(transactions, scope, activityContactProtection, input),
+      })
+    }
     if (options.config.wechatIdentity !== null && wechatIdentity !== null) {
       const repositoryOptions = {
         pool: pool as unknown as WechatPostgresPool,

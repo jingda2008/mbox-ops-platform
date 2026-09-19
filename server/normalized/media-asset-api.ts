@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { performance } from 'node:perf_hooks'
 import { createMenuThumbnailer, readLegacyMenuImage } from './menu-thumbnail.js'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type { ActivityOperationsStaffContext } from './activity-operations-service.js'
@@ -15,6 +16,8 @@ const MAX_IMAGE_BASE64_LENGTH = Math.ceil(MAX_IMAGE_BYTES / 3) * 4
 // Base64 and the JSON envelope are larger than the source image. This is a
 // transport allowance only; the decoded image remains limited to 200 KiB.
 const MEDIA_UPLOAD_BODY_LIMIT_BYTES = 300_000
+const MEDIA_READ_PERMISSIONS = ['community.activity.view', 'community.activity.manage', 'community.activity.publish',
+  'customer.experience.feature.manage', 'media.asset.menu.manage'] as const
 
 export interface MediaAssetApiOptions {
   staticDirectory?: string
@@ -27,6 +30,13 @@ export interface MediaAssetApiOptions {
 
 export const mediaAssetApiPlugin: FastifyPluginAsync<MediaAssetApiOptions> = async (app, options) => {
   const thumbnail = createMenuThumbnailer()
+  const staffThumbnail = createMenuThumbnailer({maxQueued:24,preserveJpeg:true})
+  const timing=new WeakMap<FastifyRequest,{started:number;ready:number;phases:Record<string,number>;thumbnail:boolean}>()
+  app.addHook('onResponse',async request=>{
+    const value=timing.get(request)
+    if(value&&performance.now()-value.started>500)request.log.info({event:'staff_media_read_slow',requestId:request.id,
+      ...value.phases,sendMs:performance.now()-value.ready,totalMs:performance.now()-value.started,thumbnail:value.thumbnail},'Staff image read exceeded 500ms')
+  })
   app.get<{ Querystring: { path?: string } }>('/public/menu-thumbnail', async (request, reply) => {
     const original = await readLegacyMenuImage(options.staticDirectory, request.query.path)
     if (!original) return reply.code(404).send({ error: { code: 'MENU_IMAGE_NOT_FOUND', message: '图片不存在' } })
@@ -35,12 +45,14 @@ export const mediaAssetApiPlugin: FastifyPluginAsync<MediaAssetApiOptions> = asy
     if (request.headers['if-none-match'] === `"${image.sha256}"`) return reply.code(304).send()
     return reply.type(image.mimeType).send(image.bytes)
   })
-  app.get('/staff/media-assets', async (request, reply) => handle(reply, async () => {
-    const context = await authorizedAny(options, request, [
-      'community.activity.view', 'community.activity.manage', 'community.activity.publish',
-      'customer.experience.feature.manage', 'media.asset.menu.manage',
-    ])
-    return reply.send({ data: await options.service.list(context) })
+  app.get<{Querystring:{purpose?:string;before?:string;limit?:string}}>('/staff/media-assets', async (request, reply) => handle(reply, async () => {
+    const context = await authorizedAny(options, request, MEDIA_READ_PERMISSIONS)
+    const purpose=request.query.purpose===undefined?undefined:enumeration(request.query.purpose,'图片用途',['community_activity','home_content','menu','performer','support_contact'] as const)
+    const before=request.query.before===undefined?undefined:assetPublicId(request.query.before)
+    const limit=request.query.limit===undefined?12:Number(request.query.limit)
+    if(!Number.isSafeInteger(limit)||limit<1||limit>50)throw invalid('图片每页数量应为 1 至 50')
+    const items=await options.service.list(context,{purpose,before,limit:limit+1})
+    return reply.send({data:items.slice(0,limit),meta:{nextCursor:items.length>limit?items[limit-1]!.publicId:null}})
   }))
 
   app.post('/staff/media-assets', { bodyLimit: MEDIA_UPLOAD_BODY_LIMIT_BYTES }, async (request, reply) => handle(reply, async () => {
@@ -63,18 +75,40 @@ export const mediaAssetApiPlugin: FastifyPluginAsync<MediaAssetApiOptions> = asy
     return reply.code(result.replayed ? 200 : 201).send({ data: result.value, meta: { replayed: result.replayed } })
   }))
 
-  app.get<{ Params: { publicId: string } }>('/staff/media-assets/:publicId', async (request, reply) => handle(reply, async () => {
-    const context = await authorizedAny(options, request, [
-      'community.activity.view', 'community.activity.manage', 'community.activity.publish',
-      'customer.experience.feature.manage', 'media.asset.menu.manage',
-    ])
-    const value = await options.transactions.run(context.scope, (transaction) => (
-      new MediaAssetRepository(transaction).staffBytes(assetPublicId(request.params.publicId))
-    ), { readOnly: true })
-    if (value === null) return reply.code(404).send({ error: { code: 'MEDIA_ASSET_NOT_FOUND', message: '图片不存在' } })
-    reply.header('cache-control', 'private, no-store')
-    reply.header('pragma', 'no-cache')
-    return reply.type(value.mimeType).send(value.bytes)
+  app.get<{ Params: { publicId: string }; Querystring:{size?:string} }>('/staff/media-assets/:publicId', async (request, reply) => handle(reply, async () => {
+    const started=performance.now()
+    const context=await options.resolveStaffContext(request)
+    const authenticated=performance.now()
+    const isThumbnail=request.query.size==='thumbnail'
+    if(request.query.size!==undefined&&!isThumbnail)throw invalid('图片尺寸无效')
+    const publicId=assetPublicId(request.params.publicId)
+    let acquired=authenticated,permitted=authenticated,metadataRead=authenticated
+    const value=await options.transactions.run(context.scope,async transaction=>{
+      acquired=performance.now()
+      await assertAnyMediaPermission(options,transaction,context.employeeId,MEDIA_READ_PERMISSIONS)
+      permitted=performance.now()
+      const repo=new MediaAssetRepository(transaction),metadata=await repo.staffMetadata(publicId)
+      metadataRead=performance.now()
+      if(!metadata)return null
+      // A thumbnail may fall back to the original under bounded CPU pressure;
+      // use a weak validator for that semantically equivalent representation.
+      const etag=`${isThumbnail?'W/':''}"${metadata.sha256}${isThumbnail?':thumbnail-v1':''}"`
+      // A conditional read must still authenticate and check current authority.
+      if(request.headers['if-none-match']===etag)return{etag,image:null}
+      const image=await repo.staffBytes(publicId)
+      return image?{etag,image}:null
+    },{readOnly:true})
+    const read=performance.now()
+    if(!value)return reply.code(404).send({error:{code:'MEDIA_ASSET_NOT_FOUND',message:'图片不存在'}})
+    const image=value.image && isThumbnail?await staffThumbnail(value.image):value.image
+    const transformed=performance.now()
+    const phases={authMs:authenticated-started,poolAndSetupMs:acquired-authenticated,permissionMs:permitted-acquired,
+      metadataMs:metadataRead-permitted,bytesAndCommitMs:read-metadataRead,transformMs:transformed-read}
+    timing.set(request,{started,ready:transformed,phases,thumbnail:isThumbnail})
+    reply.header('cache-control','private, no-cache').header('vary','Cookie, Authorization').header('etag',value.etag)
+      .header('server-timing',Object.entries(phases).map(([name,duration])=>`media_${name.replace(/Ms$/,'')};dur=${duration.toFixed(2)}`).join(', '))
+    if(!image)return reply.code(304).send()
+    return reply.type(image.mimeType).send(image.bytes)
   }))
 
   app.get<{ Params: { publicId: string } }>('/public/media-assets/:publicId', async (request, reply) => {
@@ -105,16 +139,18 @@ async function authorized(options: MediaAssetApiOptions, request: FastifyRequest
 
 async function authorizedAny(options: MediaAssetApiOptions, request: FastifyRequest, permissions: readonly string[]) {
   const context = await options.resolveStaffContext(request)
-  await options.transactions.run(context.scope, async (transaction) => {
+  await options.transactions.run(context.scope, transaction=>assertAnyMediaPermission(options,transaction,context.employeeId,permissions), { readOnly: true })
+  return context
+}
+
+async function assertAnyMediaPermission(options:MediaAssetApiOptions,transaction:ScopedTransaction,employeeId:string,permissions:readonly string[]){
     const access = options.createStaffAccessRepository?.(transaction) ?? new StaffAccessRepository(transaction)
     let denied: unknown = new StaffAccessDeniedError('当前岗位没有图片读取权限')
     for (const permission of permissions) {
-      try { await access.assertPermission(context.employeeId, permission); return }
+      try { await access.assertPermission(employeeId, permission); return }
       catch (error) { if (!(error instanceof StaffAccessDeniedError)) throw error; denied = error }
     }
     throw denied
-  }, { readOnly: true })
-  return context
 }
 
 async function handle(reply: FastifyReply, execute: () => Promise<unknown>) { try { return await execute() } catch (error) {

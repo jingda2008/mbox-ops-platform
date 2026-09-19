@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { mediaAssetApiPlugin } from './media-asset-api.js'
 import { StaffAccessDeniedError } from './staff-access-repository.js'
 import { StaffSessionNotFoundError } from './staff-session-repository.js'
+import { MediaAssetRepository } from './media-asset-repository.js'
+import sharp from 'sharp'
 
 const scope = {
   tenantId: '10000000-0000-4000-8000-000000000001',
@@ -16,6 +18,38 @@ const context = {
 const pngHeader = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString('base64')
 
 describe('media asset API', () => {
+  it('checks current permission before conditional 304 and avoids rereading image bytes',async()=>{
+    const source=await sharp({create:{width:1000,height:700,channels:3,background:'#315d46'}}).png().toBuffer()
+    const metadata=vi.spyOn(MediaAssetRepository.prototype,'staffMetadata').mockResolvedValue({mimeType:'image/png',sha256:'a'.repeat(64)})
+    const bytes=vi.spyOn(MediaAssetRepository.prototype,'staffBytes').mockResolvedValue({mimeType:'image/png',bytes:source,sha256:'a'.repeat(64)})
+    let allowed=true
+    const app=await application(serviceMock(),{assertPermission:async()=>{if(!allowed)throw new StaffAccessDeniedError('denied')}})
+    try{
+      const url='/staff/media-assets/'+asset().publicId+'?size=thumbnail'
+      const initial=await app.inject(url)
+      expect(initial.statusCode).toBe(200);expect(initial.headers['cache-control']).toBe('private, no-cache')
+      expect(initial.headers['server-timing']).toContain('media_auth')
+      expect((await sharp(initial.rawPayload).metadata()).width).toBeLessThanOrEqual(320)
+      const etag=String(initial.headers.etag)
+      expect((await app.inject({url,headers:{'if-none-match':etag}})).statusCode).toBe(304)
+      expect(bytes).toHaveBeenCalledTimes(1)
+      allowed=false
+      expect((await app.inject({url,headers:{'if-none-match':etag}})).statusCode).toBe(403)
+      expect(metadata).toHaveBeenCalledTimes(2)
+      expect(bytes).toHaveBeenCalledTimes(1)
+    }finally{await app.close();metadata.mockRestore();bytes.mockRestore()}
+  })
+  it('passes purpose and keyset pagination to the service and validates bounds',async()=>{
+    const service=serviceMock();service.list.mockResolvedValue(Array.from({length:3},(_,i)=>({...asset(),publicId:'MA'+String(i).padStart(32,'0')})))
+    const app=await application(service)
+    try{
+      const response=await app.inject('/staff/media-assets?purpose=menu&limit=2&before='+asset().publicId)
+      expect(response.statusCode).toBe(200);expect(response.json().data).toHaveLength(2)
+      expect(response.json().meta.nextCursor).toBe('MA'+String(1).padStart(32,'0'))
+      expect(service.list).toHaveBeenCalledWith(context,{purpose:'menu',limit:3,before:asset().publicId})
+      for(const query of ['limit=0','limit=51','purpose=private','before=bad'])expect((await app.inject('/staff/media-assets?'+query)).statusCode).toBe(400)
+    }finally{await app.close()}
+  })
   it('returns 401 instead of a false image-service failure after session expiry', async () => {
     const service = serviceMock()
     const app = await application(

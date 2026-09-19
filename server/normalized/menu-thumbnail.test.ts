@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -12,6 +12,23 @@ const image = (bytes: Buffer) => ({ bytes, mimeType:'image/png',sha256:createHas
 async function source(size=960) {return image(await sharp({create:{width:size,height:size,channels:3,background:'#ca9845'}}).png().toBuffer())}
 
 describe('bounded public menu thumbnails', () => {
+ it('reduces already compressed JPEG staff previews without changing the original',async()=>{
+  const bytes=await sharp(randomBytes(400*400*3),{raw:{width:400,height:400,channels:3}}).jpeg({quality:70}).toBuffer()
+  const original={...image(bytes),mimeType:'image/jpeg'}
+  const result=await createMenuThumbnailer({maxQueued:24,preserveJpeg:true})(original)
+  expect(result.mimeType).toBe('image/jpeg');expect(result.bytes.length).toBeLessThan(bytes.length*0.75)
+  expect((await sharp(result.bytes).metadata()).width).toBe(320)
+  expect((await sharp(original.bytes).metadata()).width).toBe(400)
+ })
+ it('queues staff conversions within a fixed bound and deduplicates queued requests',async()=>{
+  const images=await Promise.all([950,951,952,953].map(source)),make=createMenuThumbnailer({maxQueued:1})
+  const a=make(images[0]!),b=make(images[1]!),c=make(images[2]!),duplicate=make(images[2]!)
+  expect(await make(images[3]!)).toBe(images[3])
+  const converted=await Promise.all([a,b,c,duplicate])
+  for(let index=0;index<3;index++)expect(converted[index]!.bytes.length).toBeLessThan(images[index]!.bytes.length)
+  expect(converted[2]).toBe(converted[3])
+  expect((await make(images[3]!)).bytes.length).toBeLessThan(images[3]!.bytes.length)
+ })
  it('shrinks list images, retains original bytes, reuses completed and in-flight results',async()=>{
   const original=await source();const make=createMenuThumbnailer();const [a,b]=await Promise.all([make(original),make(original)]);expect(a).toBe(b);expect(await make(original)).toBe(a)
   expect(a.bytes.length).toBeLessThan(original.bytes.length);expect(a.mimeType).toBe('image/webp');const metadata=await sharp(a.bytes).metadata();expect(metadata.width).toBe(320);expect(metadata.height).toBe(320);expect((await sharp(original.bytes).metadata()).width).toBe(960)

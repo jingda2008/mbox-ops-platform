@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   safePaymentErrorLocation,
+  boundedPaymentQueryBinding,
   PENDING_PAYMENT_RECONCILE_MIN_AGE_SECONDS,
   reconcileStalePendingOnlinePaymentsForStore,
   shouldReconcilePaymentContext,
@@ -51,9 +52,19 @@ describe('pending online payment reconciliation', () => {
     {scope:{tenantId:'tenant',storeId:'store'},businessDate:'2026-09-11',actor:{type:'integration',ref:'test'}},'application-failure')
     expect(result).toMatchObject({attempted:2,reconciled:1})
     expect(recordAutomaticPaymentQueryOutcome).toHaveBeenCalledWith({tenantId:'tenant',storeId:'store'},'pay-1','error','succeeded',false)
-    expect(JSON.parse(log.mock.calls[0]![0])).toMatchObject({event:'payment_reconciliation_failed',paymentId:'pay-1',stage:'apply_verified_success',errorCode:'23514'})
+    expect(result.failedPaymentIds).toEqual(['pay-1'])
+    expect(JSON.parse(log.mock.calls[0]![0])).toMatchObject({event:'payment_reconciliation_failed',paymentId:'pay-1',stage:'apply_verified_observation',observedStatus:'succeeded',errorCode:'23514'})
     expect(JSON.stringify(log.mock.calls)).not.toContain('private SQL')
     log.mockRestore()
+  })
+
+  it('bounds the complete query identity without truncation collisions', () => {
+    const prefix = 'pending-payment-worker:' + 'w'.repeat(128) + ':stale-guest-immediate-payment-reconciliation:'
+    expect(boundedPaymentQueryBinding('existing-short-binding')).toBe('existing-short-binding')
+    const first = boundedPaymentQueryBinding(prefix + 'payment-one')
+    expect(first.length).toBeLessThanOrEqual(128)
+    expect(first).toBe(boundedPaymentQueryBinding(prefix + 'payment-one'))
+    expect(first).not.toBe(boundedPaymentQueryBinding(prefix + 'payment-two'))
   })
 
   it('reconciles each stale payment without aborting the batch', async () => {

@@ -36,6 +36,7 @@ export class OfficialSocialAccountAdapter{
   const token=await this.accessToken()
   if(this.account.kind==='service_account'){
    const result=await this.json(`https://api.weixin.qq.com/cgi-bin/user/info?access_token=${encodeURIComponent(token)}&openid=${encodeURIComponent(externalId)}&lang=zh_CN`)
+   if((result.subscribe!==0&&result.subscribe!==1)||(result.openid!==undefined&&result.openid!==externalId))throw new SocialProviderError('INVALID_USER_RESPONSE')
    return{unionId:typeof result.unionid==='string'?result.unionid:null,active:result.subscribe===1}
   }
   const result=await this.json(`https://qyapi.weixin.qq.com/cgi-bin/externalcontact/get?access_token=${encodeURIComponent(token)}&external_userid=${encodeURIComponent(externalId)}`)
@@ -68,8 +69,10 @@ export class OfficialSocialAccountAdapter{
     touser:openId,template_id:templateId,page,miniprogram_state:'formal',lang:'zh_CN',
     data:Object.fromEntries(Object.entries(data).map(([key,value])=>[key,{value}])),
    })
-   const reference=messageReference(result.msgid);if(reference===null)return{status:'unknown',providerReference:null,errorCode:'MISSING_RECEIPT'}
-   return{status:'accepted',providerReference:reference,errorCode:null}
+   // bizsend acknowledges acceptance with errcode=0, unlike template/send it
+   // does not promise a message ID. Never invent a provider receipt.
+   if(result.errcode!==0)return{status:'unknown',providerReference:null,errorCode:'INVALID_ACCEPTANCE'}
+   return{status:'accepted',providerReference:messageReference(result.msgid),errorCode:null}
   }catch(error){return error instanceof SocialProviderError&&error.code.startsWith('WECHAT_')?{status:'rejected',providerReference:null,errorCode:error.code}:{status:'unknown',providerReference:null,errorCode:'DELIVERY_OUTCOME_UNKNOWN'}}
  }
 }

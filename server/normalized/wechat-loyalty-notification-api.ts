@@ -41,11 +41,11 @@ export const wechatLoyaltyNotificationApiPlugin: FastifyPluginAsync<WechatLoyalt
   })
 
   app.post('/public/mini/wechat-notification-authorizations', async (request, reply) => {
+    const context = await options.resolvePublicContext(request)
     if (!options.channelConfigured) return reply.status(503).send({
       code: 'WECHAT_NOTIFICATION_NOT_CONFIGURED',
       message: '正式微信订阅消息配置尚未完整启用',
     })
-    const context = await options.resolvePublicContext(request)
     const body = object(request.body)
     const input = {
       notificationType: enumValue(body.notificationType, WECHAT_LOYALTY_NOTIFICATION_TYPES, '通知类型'),

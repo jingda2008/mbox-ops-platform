@@ -1,3 +1,5 @@
+import {createHash,createCipheriv} from 'node:crypto'
+import {SocialAccountRepository} from './social-account-repository.js'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
@@ -52,6 +54,40 @@ const config: NormalizedRuntimeConfig = {
 }
 
 describe('createNormalizedApp', () => {
+  it('wires the fixed callback to the durable handler using the verified receiver',async()=>{
+    const appId='wxServiceMain01',key=Buffer.alloc(32,7),token='CallbackToken',stamp=String(Math.floor(Date.now()/1000)),nonce='main-callback'
+    const xml=`<xml><CreateTime>${stamp}</CreateTime><MsgType>event</MsgType><Event>unsubscribe</Event><FromUserName>test-recipient</FromUserName></xml>`
+    const data=Buffer.from(xml),length=Buffer.alloc(4);length.writeUInt32BE(data.length)
+    const raw=Buffer.concat([Buffer.alloc(16,3),length,data,Buffer.from(appId)]),padding=32-raw.length%32,cipher=createCipheriv('aes-256-cbc',key,key.subarray(0,16));cipher.setAutoPadding(false)
+    const encrypted=Buffer.concat([cipher.update(Buffer.concat([raw,Buffer.alloc(padding,padding)])),cipher.final()]).toString('base64')
+    const signature=createHash('sha1').update([token,stamp,nonce,encrypted].sort().join('')).digest('hex')
+    const durable=vi.spyOn(SocialAccountRepository.prototype,'ingestConfiguredEvent').mockResolvedValue(true)
+    const runtime=await createNormalizedApp({config:{...config,wechatServiceAccountCallback:{appId,token,encodingAesKey:key.toString('base64').slice(0,-1)}},pool:fakePool(),logger:false})
+    try{
+      const request={method:'POST' as const,url:`/api/wechat/service-account/callback?timestamp=${stamp}&nonce=${nonce}&msg_signature=${signature}`,headers:{'content-type':'text/xml'},payload:`<xml><Encrypt><![CDATA[${encrypted}]]></Encrypt></xml>`}
+      expect((await runtime.app.inject(request)).body).toBe('success');expect(durable).toHaveBeenCalledWith(appId,xml)
+      durable.mockRejectedValueOnce(new Error('storage unavailable'))
+      expect((await runtime.app.inject(request)).statusCode).toBe(503)
+      expect((await runtime.app.inject({...request,url:request.url.replace(signature,'0'.repeat(40))})).statusCode).toBe(403)
+      expect(durable).toHaveBeenCalledTimes(2)
+    }finally{await runtime.app.close();durable.mockRestore()}
+  })
+
+  it('maps missing or expired notification sessions to 401 on the actual registered routes',async()=>{
+    const runtime=await createNormalizedApp({config:{...config,wechatIdentity:{appId:'wxformalidentity',appSecret:'wechat-app-secret-for-test-only',stateSecret:'wechat-state-secret-for-test-only-1234567890',encryptionKeyVersion:1,encryptionKey:Buffer.alloc(32,7)}},pool:fakePool(),logger:false})
+    try{
+      for(const route of ['/public/mini/wechat-notification-authorizations','/public/mini/wechat-member-service-notification-authorizations',
+        '/public/mini/wechat-notification-prompt?context=order_checkout','/public/reservation/performance-notification-authorizations']){
+        for(const cookie of ['', 'mbox_reservation_session=expired']){
+          for(const method of route.includes('prompt?')?['GET'] as const:['GET','POST'] as const){
+            const response=await runtime.app.inject({method,url:'/api'+route,headers:{cookie},...(method==='POST'?{payload:{}}:{})})
+            expect(response.statusCode,`${method} ${route} ${response.body}`).toBe(401)
+            expect(response.json().error.code).toBe('AUTHENTICATION_REQUIRED')
+          }
+        }
+      }
+    }finally{await runtime.app.close()}
+  })
   it('classifies malformed JSON without exposing the payload and preserves empty-body compatibility', async () => {
     const received = vi.fn()
     const probe: FastifyPluginAsync<Record<string, unknown>> = async (app) => {
@@ -397,7 +433,7 @@ describe('createNormalizedApp', () => {
   })
 
   it('does not report ready when normalized migrations are older than registered plugins', async () => {
-    expect(NORMALIZED_MIN_SCHEMA_VERSION).toBe('220')
+    expect(NORMALIZED_MIN_SCHEMA_VERSION).toBe('221')
     const pool = fakePool({
       ready: { schema_flavor: NORMALIZED_SCHEMA_FLAVOR, schema_version: '096', store_active: true },
     })

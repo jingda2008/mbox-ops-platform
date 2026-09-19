@@ -260,6 +260,8 @@ Page({
     this.visibleTableScope = request.scope
     if (scopeChanged) this.resetTableScope(session)
     this.setData({ loading: true, error: '', tableCode: session.tableCode || '', hasTableSession: Boolean(session.tableToken) })
+    // Resolve a scanned table independently of optional homepage content.
+    const tableState = session.tableToken ? this.loadTableState(false, request) : null
     const [bootstrap, reservations, performances, benefits] = await Promise.all([
       settled(() => getMiniBootstrap(), { membership: null, activities: [] }),
       settled(() => getReservations(), { reservations: [] }),
@@ -287,7 +289,7 @@ Page({
       this.setData({ loading: false, visitState: 'prearrival', canEnter: false, table: null })
       return
     }
-    await this.loadTableState(false, request)
+    await tableState
   },
 
   async loadTableState(silent, request) {

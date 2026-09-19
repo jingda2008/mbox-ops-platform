@@ -78,7 +78,7 @@ async function loadApiModule() {
       if (specifier === './table-request-scope') {
         return { tableRequestScope: (session) => `${String(session?.tableToken || '')}:${String(session?.tableCode || '').trim().toUpperCase()}` }
       }
-      if (specifier === './auth') return { ensureCustomerSession: async () => true }
+      if (specifier === './auth') return { ensureWechatIdentity: async () => true, ensureCustomerSession: async () => true }
       if (specifier === './recommendation-attribution') {
         return { checkoutRecommendationAttribution: () => null }
       }

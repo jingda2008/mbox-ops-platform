@@ -12,7 +12,7 @@ for(const platform of ['miniprogram','alipay-miniprogram']){
   const calls=[],connections=[];let finish
   const fn=vm.runInNewContext(source.slice(start,end)+';getGuestSession',{
    wx:runtime,runtime,getTableSession:()=>session,tableRequestScope:s=>s.tableToken+':'+s.scanNonce,
-   ensureCustomerSession:async()=>{},deviceKey:()=> 'device',
+   ensureWechatIdentity:async()=>{},ensureCustomerSession:async()=>{},deviceKey:()=> 'device',
    request:(path,options)=>{calls.push({path,options});return new Promise(resolve=>{finish=resolve})},
    rememberTableConnection:data=>connections.push(data),clearTableConnection:()=>{},
   })
@@ -56,7 +56,7 @@ for(const platform of ['miniprogram','alipay-miniprogram']){
   let restores=0,connections=0,requests=0
   const fn=vm.runInNewContext(source.slice(start,end)+';loadGuestSession',{
     wx:runtime,runtime,getTableSession:()=>session,tableRequestScope:s=>s.tableToken+':'+s.scanNonce,
-    ensureCustomerSession:async()=>{},deviceKey:()=> 'device',
+    ensureWechatIdentity:async()=>{},ensureCustomerSession:async()=>{},deviceKey:()=> 'device',
     request:async()=>{requests++;throw Object.assign(new Error('invalid'),{code:'TABLE_QR_INVALID'})},
     restoreRejectedTableScan:()=>{restores++;return true},rememberTableConnection:()=>{connections++},clearTableConnection:()=>{},
   })

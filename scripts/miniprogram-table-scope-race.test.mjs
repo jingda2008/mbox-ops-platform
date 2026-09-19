@@ -143,7 +143,7 @@ async function loadApiRaceModule(state) {
       }
       if (specifier === './table-request-scope') return { tableRequestScope: scope }
       if (specifier === './auth') return {
-        ensureCustomerSession: async () => true, renewReservationSessionOnly: () => undefined,
+        ensureWechatIdentity: async () => true, ensureCustomerSession: async () => true, renewReservationSessionOnly: () => undefined,
         isCustomerSessionInvalid: () => false, isWechatIdentityUnavailable: () => false,
       }
       if (specifier === './recommendation-attribution') return { checkoutRecommendationAttribution: () => null }
@@ -188,7 +188,7 @@ async function loadHomePage(state) {
   let definition = null
   const guard = requestGuard()
   const api = {
-    getMiniBootstrap: async () => ({ membership: null, membershipTerms: null, activities: [], content: [] }),
+    getMiniBootstrap: async () => state.bootstrapDeferred ? state.bootstrapDeferred.promise : ({ membership: null, membershipTerms: null, activities: [], content: [] }),
     getReservations: async () => ({ reservations: [] }),
     getReservationPerformances: async () => null,
     getCustomerBenefits: async () => [],
@@ -1123,3 +1123,19 @@ for (const platform of ['miniprogram', 'alipay-miniprogram']) {
     assert.deepEqual(Array.from(page.data.selectedPublicIds), ['replacement-table'])
   })
 }
+
+
+test('WeChat home table scan does not wait for optional homepage content', async () => {
+  const content = deferred()
+  const state = { session: { tableCode: 'A01', tableToken: 'token-a', scanNonce: 'scan-a' }, storage: new Map(), guestSessionReads: 0, bootstrapDeferred: content }
+  const page = await loadHomePage(state)
+  const loading = page.loadData()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(state.guestSessionReads, 1)
+  assert.equal(page.data.canEnter, true)
+  assert.equal(page.data.loading, false)
+  content.resolve({ membership: null, activities: [], content: [] })
+  await loading
+  assert.equal(page.data.table.code, 'A01')
+  assert.equal(state.guestSessionReads, 1)
+})

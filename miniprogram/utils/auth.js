@@ -10,6 +10,7 @@ const WECHAT_EXPIRY_KEY = 'mbox.wechat.identity.expiresAt.v1'
 const WECHAT_PRINCIPAL_KEY = 'mbox.wechat.identity.principal.v1'
 const MEMBER_LOGGED_OUT_KEY = 'mbox.membership.loggedOut.v1'
 let inFlightSession = null
+let inFlightIdentity = null
 
 function isMembershipLoggedOut() {
   return wx.getStorageSync(MEMBER_LOGGED_OUT_KEY) === '1'
@@ -75,7 +76,7 @@ async function authenticateWechat(config) {
   assertWechatIdentityConfig(config)
   try {
     const challengeAttemptId = randomId('wechat-challenge')
-    const challenge = await request('/api/wechat/challenges', {
+    const [challenge, code] = await Promise.all([request('/api/wechat/challenges', {
       method: 'POST',
       requireTableSession: false,
       data: {
@@ -84,8 +85,7 @@ async function authenticateWechat(config) {
         appId: config.wechatAppId,
         idempotencyKey: challengeAttemptId,
       },
-    })
-    const code = await wxLogin()
+    }), wxLogin()])
     const authenticated = await request('/api/wechat/code-authentication', {
       method: 'POST',
       requireTableSession: false,
@@ -111,6 +111,23 @@ async function authenticateWechat(config) {
     }
     throw error
   }
+}
+
+// Table scans need the verified WeChat bearer, not the separate reservation
+// cookie. Share authentication with app startup without waiting for that cookie.
+function ensureWechatIdentity(force) {
+  const config = getRuntimeConfig()
+  if (!config.wechatIdentityEnabled || isMembershipLoggedOut()) return Promise.resolve(null)
+  if (inFlightIdentity && !force) return inFlightIdentity
+  const expiry = Date.parse(wx.getStorageSync(WECHAT_EXPIRY_KEY) || '')
+  const token = wx.getStorageSync('mbox.wechat.identity.accessToken.v1')
+  if (!force && expiry > Date.now() + 60_000 && typeof token === 'string' && token.length >= 32) return Promise.resolve(token)
+  const pending = authenticateWechat(config)
+  inFlightIdentity = pending
+  pending.finally(() => {
+    if (inFlightIdentity === pending) inFlightIdentity = null
+  }).catch(() => undefined)
+  return pending
 }
 
 async function issueReservationSession(provider, providerAssertion) {
@@ -139,12 +156,7 @@ async function openReservationSession(force) {
 
   // 会员主动退出后保持匿名浏览，直到再次授权手机号入会；避免微信身份立刻把旧会员拉回来导致“退不出去”。
   if (config.wechatIdentityEnabled && !isMembershipLoggedOut()) {
-    const identityExpiry = Date.parse(wx.getStorageSync(WECHAT_EXPIRY_KEY) || '')
-    const savedToken = wx.getStorageSync('mbox.wechat.identity.accessToken.v1')
-    providerAssertion = !force && identityExpiry > Date.now() + 60_000
-      && typeof savedToken === 'string' && savedToken.length >= 32
-      ? savedToken
-      : await authenticateWechat(config)
+    providerAssertion = await ensureWechatIdentity(force)
     provider = 'wechat'
   } else if (!config.isDevelopment && !isMembershipLoggedOut()) {
     throw new Error('正式小程序尚未启用微信身份，已停止匿名访问')
@@ -190,6 +202,7 @@ function renewReservationSessionOnly() {
 
 module.exports = {
   ensureCustomerSession,
+  ensureWechatIdentity,
   clearCustomerSession,
   restartAnonymousCustomerSession,
   renewReservationSessionOnly,

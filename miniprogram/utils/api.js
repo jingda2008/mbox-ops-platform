@@ -3,7 +3,7 @@ const { randomId } = require('./id')
 const { recoverableGuestCommand } = require('./recoverable-command')
 const { getTableSession, rememberTableConnection, clearTableConnection } = require('./session')
 const { tableRequestScope } = require('./table-request-scope')
-const { ensureCustomerSession, renewReservationSessionOnly, isCustomerSessionInvalid, isWechatIdentityUnavailable, clearMembershipLoggedOut } = require('./auth')
+const { ensureCustomerSession, ensureWechatIdentity, renewReservationSessionOnly, isCustomerSessionInvalid, isWechatIdentityUnavailable, clearMembershipLoggedOut } = require('./auth')
 const { checkoutRecommendationAttribution } = require('./recommendation-attribution')
 
 async function loadGuestSession() {
@@ -41,7 +41,7 @@ async function loadGuestSession() {
     // route receives the identity bearer only to bind this new table session
     // to the canonical WeChat customer for JSAPI; all later guest calls use
     // the HttpOnly guest credential alone.
-    await ensureCustomerSession(false).catch(() => undefined)
+    await ensureWechatIdentity(false).catch(() => undefined)
     let connected
     try { connected = await request('/api/guest/session/scan', {
       method: 'POST',

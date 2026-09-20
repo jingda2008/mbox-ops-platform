@@ -16,6 +16,9 @@ describe('permission-derived staff modules', () => {
     expect(effectiveStaffNavigation(['community.activity.cashier'], [])).toEqual([
       expect.objectContaining({ code: 'payments', label: '收银与退款', route: '/staff/payments' }),
     ])
+    expect(effectiveStaffNavigation(['commercial.voucher.redeem'], [])).toEqual([
+      expect.objectContaining({ code: 'payments', label: '收银与退款', route: '/staff/payments' }),
+    ])
     expect(effectiveStaffNavigation(['privacy.policy.publish'], [])).toEqual([
       expect.objectContaining({ code: 'settings', label: '系统配置', route: '/staff/settings' }),
     ])
@@ -35,6 +38,8 @@ describe('permission-derived staff modules', () => {
   it('binds direct routes and permission impact previews to the same registry', () => {
     expect(staffModuleForPermission('refund.approve')).toMatchObject({ code: 'payments' })
     expect(staffModuleForPermission('community.activity.cashier')).toMatchObject({ code: 'payments' })
+    expect(staffModuleForPermission('commercial.voucher.view')).toMatchObject({ code: 'payments' })
+    expect(staffModuleForPermission('commercial.voucher.redeem')).toMatchObject({ code: 'payments' })
     expect(staffModuleForPermission('inventory.manage')).toMatchObject({ code: 'inventory' })
     expect(staffModuleForRoute('/staff/devices')).toMatchObject({ code: 'devices' })
     expect(staffModuleForRoute('https://example.com')).toBeNull()

@@ -18,6 +18,7 @@ import {
   SalesAttributionNotAllowedError,
   SalesRuleOverlapError,
   VoucherAlreadyRedeemedError,
+  maskVoucher,
   voucherCodeDigest,
   type CostAllocationPeriod,
   type CostCategory,
@@ -47,6 +48,19 @@ import type {
   ScopedPostgresTransactionRunner,
   ScopedTransaction,
 } from './transaction-runner.js'
+import {
+  GroupVoucherPlatformError,
+  parseGroupVoucherPlatform,
+  prepareHandleExpiryMs,
+  readGroupVoucherPrepareHandle,
+  signGroupVoucherPrepareHandle,
+  type GroupVoucherFailureCode,
+  type GroupVoucherPlatformRegistry,
+} from './group-voucher-platforms.js'
+import {
+  groupVoucherPlatformLabel,
+  type GroupVoucherPlatformCode,
+} from '../../src/shared/group-voucher-contracts.js'
 
 type CommandExecutorPort = Pick<NormalizedCommandExecutor, 'execute'>
 type TransactionRunnerPort = Pick<ScopedPostgresTransactionRunner, 'run'>
@@ -64,6 +78,11 @@ export interface CommercialOpsApiOptions {
   createRepository?(transaction: ScopedTransaction): CommercialOpsRepository
   createStaffAccessRepository?(transaction: ScopedTransaction): StaffAccessRepository
   createPublicId?(kind: 'cost' | 'sales-rule' | 'voucher'): string
+  voucherVerification?: {
+    registry: GroupVoucherPlatformRegistry
+    signingSecret: string
+    now?(): number
+  }
 }
 
 interface CostResult extends JsonObject {
@@ -123,12 +142,15 @@ interface VoucherResult extends JsonObject {
   id: string
   publicId: string
   platform: string
+  platformCode: string | null
   campaignName: string
   voucherCodeMasked: string
   faceValueMinor: number
   settlementAmountMinor: number
   currency: string
   isSettled: boolean
+  providerCertificateId: string | null
+  providerVerifyId: string | null
   redeemedBusinessDate: string
   redeemedAt: string
 }
@@ -357,34 +379,149 @@ export const commercialOpsApiPlugin: FastifyPluginAsync<CommercialOpsApiOptions>
     return reply.send({ data: rows.map(toVoucherSummaryDto) })
   }))
 
+  app.get('/commercial-ops/vouchers/platforms', async (request, reply) => handleRoute(reply, async () => {
+    const context = await options.resolveContext(request)
+    await assertLivePermission(options.transactions, createAccess, context, 'commercial.voucher.view')
+    const status = options.voucherVerification?.registry.status() ?? [
+      disabledPlatform('dianping'), disabledPlatform('meituan'),
+      disabledPlatform('douyin'), disabledPlatform('kuaishou'),
+    ]
+    return reply.send({ data: status })
+  }))
+
+  app.post('/commercial-ops/vouchers/prepare', async (request, reply) => handleRoute(reply, async () => {
+    const context = await options.resolveContext(request)
+    const body = readObject(request.body)
+    const platform = readPlatform(body.platform)
+    const voucherCode = readString(body.voucherCode, 'voucherCode', 256, 4)
+    await assertLivePermission(options.transactions, createAccess, context, 'commercial.voucher.redeem')
+    const verification = requireVoucherVerification(options.voucherVerification)
+    try {
+      const prepared = await verification.registry.adapter(platform).prepare({ voucherCode })
+      await recordAttempt(options, context, {
+        platformCode: platform, action: 'prepare', outcome: 'success', voucherCode,
+        campaignName: prepared.campaignName, message: '平台查询成功，待员工确认核销',
+      })
+      const nowMs = verification.now?.() ?? Date.now()
+      const prepareHandle = signGroupVoucherPrepareHandle({
+        platform, codeHash: voucherCodeDigest(voucherCode),
+        prepareToken: prepared.prepareToken, campaignName: prepared.campaignName,
+        faceValueMinor: prepared.faceValueMinor, settlementAmountMinor: prepared.settlementAmountMinor,
+        currency: prepared.currency, certificateId: prepared.certificateId,
+        expiresAtMs: prepareHandleExpiryMs(nowMs),
+      }, verification.signingSecret)
+      return reply.send({
+        data: {
+          platform: prepared.platform, platformLabel: groupVoucherPlatformLabel(prepared.platform),
+          campaignName: prepared.campaignName, voucherCodeMasked: maskVoucher(voucherCode),
+          faceValueMinor: prepared.faceValueMinor, settlementAmountMinor: prepared.settlementAmountMinor,
+          currency: prepared.currency, quantity: prepared.quantity,
+          statusLabel: prepared.statusLabel, expiresAt: prepared.expiresAt, prepareHandle,
+        },
+      })
+    } catch (error) {
+      await recordAttempt(options, context, {
+        platformCode: platform, action: 'prepare',
+        outcome: attemptOutcome(error), voucherCode, message: attemptMessage(error),
+        providerCode: error instanceof GroupVoucherPlatformError ? error.code : null,
+      })
+      throw error
+    }
+  }))
+
   app.post('/commercial-ops/vouchers/redeem', async (request, reply) => handleRoute(reply, async () => {
     const context = await options.resolveContext(request)
     const body = readObject(request.body)
     const voucherCode = readString(body.voucherCode, 'voucherCode', 256, 4)
+    const verification = options.voucherVerification
+    let platformCode: GroupVoucherPlatformCode | null = body.platform === undefined
+      ? null : parseGroupVoucherPlatform(readString(body.platform, 'platform', 64))
+    let campaignName = readOptionalString(body.campaignName, 'campaignName', 128)
+    let faceValueMinor = body.faceValueMinor === undefined ? 0 : readInteger(body.faceValueMinor, 'faceValueMinor', 0)
+    let settlementAmountMinor = body.settlementAmountMinor === undefined
+      ? 0 : readInteger(body.settlementAmountMinor, 'settlementAmountMinor', 0)
+    let currency = body.currency === undefined ? 'CNY' : readCurrency(body.currency)
+    let providerCertificateId: string | null = null
+    let providerVerifyId: string | null = null
+    let prepareToken: string | null = null
+    if (verification) {
+      const handle = readGroupVoucherPrepareHandle(
+        readString(body.prepareHandle, 'prepareHandle', 8_192, 16),
+        verification.signingSecret,
+        verification.now?.() ?? Date.now(),
+      )
+      if (voucherCodeDigest(voucherCode) !== handle.codeHash) {
+        throw new CommercialApiRequestError('券码与查询结果不一致，请重新查询')
+      }
+      if (platformCode !== null && platformCode !== handle.platform) {
+        throw new CommercialApiRequestError('核销平台与查询结果不一致，请重新查询')
+      }
+      platformCode = handle.platform
+      campaignName = handle.campaignName
+      faceValueMinor = handle.faceValueMinor
+      settlementAmountMinor = handle.settlementAmountMinor
+      currency = handle.currency
+      providerCertificateId = handle.certificateId
+      prepareToken = handle.prepareToken
+    }
+    if (platformCode === null) throw new CommercialApiRequestError('platform is invalid')
+    const platformLabel = groupVoucherPlatformLabel(platformCode)
     const input = {
       publicId: readOptionalString(body.publicId, 'publicId', 128, 8) ?? createPublicId('voucher'),
-      platform: readString(body.platform, 'platform', 64),
-      campaignName: readString(body.campaignName, 'campaignName', 128),
+      platform: platformLabel,
+      platformCode,
+      campaignName: campaignName ?? platformLabel,
       voucherCode,
-      faceValueMinor: readInteger(body.faceValueMinor, 'faceValueMinor', 0),
-      settlementAmountMinor: readInteger(body.settlementAmountMinor, 'settlementAmountMinor', 0),
-      currency: readCurrency(body.currency),
+      faceValueMinor,
+      settlementAmountMinor,
+      currency,
       orderId: body.orderId === undefined ? null : readUuid(body.orderId, 'orderId'),
       tableSessionId: body.tableSessionId === undefined ? null : readUuid(body.tableSessionId, 'tableSessionId'),
       reconciliationEntryId: body.reconciliationEntryId === undefined
         ? null : readUuid(body.reconciliationEntryId, 'reconciliationEntryId'),
+      providerCertificateId,
+      providerVerifyId: null as string | null,
+      providerStatus: 'consumed' as const,
       redeemedByEmployeeId: context.employeeId,
       redeemedBusinessDate: context.businessDate,
     }
     const voucherHash = voucherCodeDigest(voucherCode)
     const idempotencyKey = readIdempotencyKey(request)
+    try {
+      if (verification && prepareToken !== null) {
+        const consumed = await verification.registry.adapter(platformCode).consume({
+          voucherCode, prepareToken, requestId: idempotencyKey,
+        })
+        input.campaignName = consumed.campaignName || input.campaignName
+        input.faceValueMinor = consumed.faceValueMinor || input.faceValueMinor
+        input.settlementAmountMinor = consumed.settlementAmountMinor || input.settlementAmountMinor
+        input.providerCertificateId = consumed.certificateId
+        input.providerVerifyId = consumed.verifyId
+      }
+    } catch (error) {
+      await recordAttempt(options, context, {
+        platformCode, action: 'consume', outcome: attemptOutcome(error),
+        voucherCode, campaignName: input.campaignName, message: attemptMessage(error),
+        providerCode: error instanceof GroupVoucherPlatformError ? error.code : null,
+      })
+      throw error
+    }
     const execution = await options.commandExecutor.execute({
       scope: context.scope, operationScope: 'commercial.voucher.redeem', idempotencyKey,
-      requestFingerprint: fingerprint({ ...input, publicId: body.publicId ?? null, voucherCode: voucherHash, actor: context.employeeId }),
+      requestFingerprint: fingerprint({
+        ...input, publicId: body.publicId ?? null, voucherCode: voucherHash, actor: context.employeeId,
+      }),
       resultCodec: jsonCodec<VoucherResult>(),
     }, async (transaction) => {
       await createAccess(transaction).assertPermission(context.employeeId, 'commercial.voucher.redeem')
       const voucher = await createRepository(transaction).redeemVoucher(input)
+      if (verification) {
+        await createRepository(transaction).recordVoucherVerificationAttempt({
+          platformCode, action: 'consume', outcome: 'success', voucherCode,
+          campaignName: voucher.campaignName, message: '平台核销成功并已留痕',
+          employeeId: context.employeeId,
+        })
+      }
       const result = toVoucherResult(voucher)
       return {
         result,
@@ -552,9 +689,12 @@ function toAttributionResult(event: EmployeeSalesAttributionEvent): AttributionR
 function toVoucherResult(value: GroupVoucherRedemption): VoucherResult {
   return {
     id: value.id, publicId: value.publicId, platform: value.platform,
-    campaignName: value.campaignName, voucherCodeMasked: value.voucherCodeMasked,
+    platformCode: value.platformCode ?? null, campaignName: value.campaignName,
+    voucherCodeMasked: value.voucherCodeMasked,
     faceValueMinor: value.faceValueMinor, settlementAmountMinor: value.settlementAmountMinor,
     currency: value.currency, isSettled: value.reconciliationEntryId !== null,
+    providerCertificateId: value.providerCertificateId ?? null,
+    providerVerifyId: value.providerVerifyId ?? null,
     redeemedBusinessDate: value.redeemedBusinessDate, redeemedAt: value.redeemedAt,
   }
 }
@@ -571,6 +711,64 @@ function toEmployeeSalesDto(value: EmployeeSalesRow) {
     refundReversalAmountMinor: value.refundReversalAmountMinor,
     costCoverageComplete: value.costCoverageComplete, currency: value.currency,
   }
+}
+
+function readPlatform(value: unknown): GroupVoucherPlatformCode {
+  const parsed = parseGroupVoucherPlatform(readString(value, 'platform', 64))
+  if (parsed === null) throw new CommercialApiRequestError('platform is invalid')
+  return parsed
+}
+
+function disabledPlatform(code: GroupVoucherPlatformCode) {
+  return { code, label: groupVoucherPlatformLabel(code), enabled: false, mode: 'disabled' as const }
+}
+
+function requireVoucherVerification(
+  value: CommercialOpsApiOptions['voucherVerification'],
+): NonNullable<CommercialOpsApiOptions['voucherVerification']> {
+  if (!value) {
+    throw new GroupVoucherPlatformError('团购核销未启用，请在运行配置中设置 MBOX_VOUCHER_MODE', 'unavailable')
+  }
+  return value
+}
+
+async function recordAttempt(
+  options: CommercialOpsApiOptions,
+  context: NormalizedOperationsRequestContext,
+  input: {
+    platformCode: GroupVoucherPlatformCode
+    action: 'prepare' | 'consume'
+    outcome: GroupVoucherFailureCode | 'success'
+    voucherCode: string
+    campaignName?: string | null
+    providerCode?: string | null
+    message: string
+  },
+): Promise<void> {
+  const createRepository = options.createRepository ?? ((transaction) => new CommercialOpsRepository(transaction))
+  try {
+    await options.transactions.run(context.scope, async (transaction) => {
+      const repository = createRepository(transaction)
+      if (typeof repository.recordVoucherVerificationAttempt !== 'function') return
+      await repository.recordVoucherVerificationAttempt({
+        platformCode: input.platformCode, action: input.action,
+        outcome: input.outcome === 'success' ? 'success' : input.outcome,
+        voucherCode: input.voucherCode, campaignName: input.campaignName ?? null,
+        providerCode: input.providerCode ?? null, message: input.message,
+        employeeId: context.employeeId,
+      })
+    })
+  } catch {
+    // Diagnostic history must not hide a completed or failed platform outcome.
+  }
+}
+
+function attemptOutcome(error: unknown): GroupVoucherFailureCode {
+  return error instanceof GroupVoucherPlatformError ? error.code : 'unavailable'
+}
+
+function attemptMessage(error: unknown): string {
+  return error instanceof Error ? error.message.slice(0, 240) : '核销未完成'
 }
 
 function readRange(value: unknown, fallbackDate: string) {
@@ -687,6 +885,15 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<Fastify
     }
     if (error instanceof StaffNotFoundError) {
       return reply.code(401).send({ error: { code: 'COMMERCIAL_SESSION_INVALID', message: '员工登录状态无效' } })
+    }
+    if (error instanceof GroupVoucherPlatformError) {
+      return reply.code(error.retryable ? 503 : error.code === 'already_used' ? 409 : 400).send({
+        error: {
+          code: `VOUCHER_${error.code.toUpperCase()}`,
+          message: error.message,
+          retryable: error.retryable,
+        },
+      })
     }
     if (error instanceof CommercialRecordNotFoundError) {
       return reply.code(404).send({ error: { code: 'COMMERCIAL_NOT_FOUND', message: error.message } })

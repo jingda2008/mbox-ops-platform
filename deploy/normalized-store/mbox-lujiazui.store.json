@@ -1,5 +1,5 @@
 {
-  "version": "2026.09.13-v24",
+  "version": "2026.09.20-v25",
   "tenant": {
     "id": "10000000-0000-4000-8000-000000000001",
     "code": "superhigh",
@@ -1029,6 +1029,8 @@
         "commercial.payroll.manage",
         "commercial.payroll.post",
         "commercial.sales.view_all",
+        "commercial.voucher.view",
+        "commercial.voucher.redeem",
         "song.view",
         "song.manage",
         "performance.phase.manage",
@@ -1449,6 +1451,8 @@
         "catalog.price.manage",
         "commercial.profit.view",
         "commercial.sales.view_all",
+        "commercial.voucher.view",
+        "commercial.voucher.redeem",
         "song.view",
         "song.manage",
         "performance.phase.manage",
@@ -1899,6 +1903,8 @@
         "payment.manual.external.record",
         "payment.recollect.authorize",
         "community.activity.cashier",
+        "commercial.voucher.view",
+        "commercial.voucher.redeem",
         "refund.approve",
         "refund.execute",
         "reconciliation.view",

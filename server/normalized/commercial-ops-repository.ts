@@ -132,6 +132,7 @@ export interface GroupVoucherRedemption {
   id: string
   publicId: string
   platform: string
+  platformCode: string | null
   campaignName: string
   voucherCodeMasked: string
   faceValueMinor: number
@@ -140,6 +141,9 @@ export interface GroupVoucherRedemption {
   orderId: string | null
   tableSessionId: string | null
   reconciliationEntryId: string | null
+  providerCertificateId: string | null
+  providerVerifyId: string | null
+  providerStatus: string | null
   redeemedByEmployeeId: string
   redeemedBusinessDate: string
   redeemedAt: string
@@ -148,6 +152,7 @@ export interface GroupVoucherRedemption {
 export interface RedeemGroupVoucherInput {
   publicId: string
   platform: string
+  platformCode?: string | null
   campaignName: string
   voucherCode: string
   faceValueMinor: number
@@ -156,9 +161,23 @@ export interface RedeemGroupVoucherInput {
   orderId?: string | null
   tableSessionId?: string | null
   reconciliationEntryId?: string | null
+  providerCertificateId?: string | null
+  providerVerifyId?: string | null
+  providerStatus?: string | null
   redeemedByEmployeeId: string
   redeemedBusinessDate: string
   redeemedAt?: string
+}
+
+export interface GroupVoucherVerificationAttemptInput {
+  platformCode: string
+  action: 'prepare' | 'consume'
+  outcome: 'success' | 'not_found' | 'already_used' | 'expired' | 'rejected' | 'unavailable' | 'invalid'
+  voucherCode: string
+  campaignName?: string | null
+  providerCode?: string | null
+  message: string
+  employeeId: string
 }
 
 interface CostRow extends Record<string, unknown> {
@@ -263,6 +282,7 @@ interface VoucherRow extends Record<string, unknown> {
   id: string
   public_id: string
   platform: string
+  platform_code: string | null
   campaign_name: string
   voucher_code_masked: string
   face_value_minor: string | number
@@ -271,6 +291,9 @@ interface VoucherRow extends Record<string, unknown> {
   order_id: string | null
   table_session_id: string | null
   reconciliation_entry_id: string | null
+  provider_certificate_id: string | null
+  provider_verify_id: string | null
+  provider_status: string | null
   redeemed_by_employee_id: string
   redeemed_business_date: string
   redeemed_at: string
@@ -563,22 +586,25 @@ export class CommercialOpsRepository {
     try {
       const result = await this.transaction.query<VoucherRow>(`
         INSERT INTO mbox.group_voucher_redemptions (
-          tenant_id, store_id, public_id, platform, campaign_name,
+          tenant_id, store_id, public_id, platform, platform_code, campaign_name,
           voucher_code_hash, voucher_code_masked, face_value_minor,
           settlement_amount_minor, currency, order_id, table_session_id,
-          reconciliation_entry_id, redeemed_by_employee_id,
+          reconciliation_entry_id, provider_certificate_id, provider_verify_id,
+          provider_status, redeemed_by_employee_id,
           redeemed_business_date, redeemed_at
         ) VALUES (
-          $1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8::bigint, $9::bigint, $10,
-          $11::uuid, $12::uuid, $13::uuid, $14::uuid, $15::date,
-          COALESCE($16::timestamptz, clock_timestamp())
+          $1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9::bigint, $10::bigint, $11,
+          $12::uuid, $13::uuid, $14::uuid, $15, $16, $17, $18::uuid, $19::date,
+          COALESCE($20::timestamptz, clock_timestamp())
         ) RETURNING ${VOUCHER_COLUMNS}
       `, [
         this.transaction.scope.tenantId, this.transaction.scope.storeId,
-        input.publicId, input.platform.trim(), input.campaignName.trim(), codeHash,
+        input.publicId, input.platform.trim(), input.platformCode?.trim() || null, input.campaignName.trim(), codeHash,
         maskVoucher(normalizedCode), input.faceValueMinor, input.settlementAmountMinor,
         input.currency, input.orderId ?? null, input.tableSessionId ?? null,
-        input.reconciliationEntryId ?? null, input.redeemedByEmployeeId,
+        input.reconciliationEntryId ?? null, input.providerCertificateId?.trim() || null,
+        input.providerVerifyId?.trim() || null, input.providerStatus?.trim() || null,
+        input.redeemedByEmployeeId,
         input.redeemedBusinessDate, input.redeemedAt ?? null,
       ])
       return mapVoucher(required(result.rows[0], 'Voucher redemption was not inserted'))
@@ -586,6 +612,27 @@ export class CommercialOpsRepository {
       if (isUniqueViolation(error)) throw new VoucherAlreadyRedeemedError('Voucher has already been redeemed')
       throw error
     }
+  }
+
+  async recordVoucherVerificationAttempt(
+    input: Readonly<GroupVoucherVerificationAttemptInput>,
+  ): Promise<void> {
+    const normalizedCode = normalizeVoucherCode(input.voucherCode)
+    await this.transaction.query(`
+      INSERT INTO mbox.group_voucher_verification_attempts (
+        tenant_id, store_id, platform_code, action, outcome,
+        voucher_code_hash, voucher_code_masked, campaign_name,
+        provider_code, message, employee_id
+      ) VALUES (
+        $1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11::uuid
+      )
+    `, [
+      this.transaction.scope.tenantId, this.transaction.scope.storeId,
+      input.platformCode, input.action, input.outcome,
+      voucherCodeDigest(normalizedCode), maskVoucher(normalizedCode),
+      input.campaignName?.trim() || null, input.providerCode?.trim() || null,
+      input.message.trim().slice(0, 240), input.employeeId,
+    ])
   }
 
   private async insertCost(
@@ -750,9 +797,10 @@ const ATTRIBUTION_COLUMNS = `
   recorded_by_employee_id, occurred_at::text
 `
 const VOUCHER_COLUMNS = `
-  id, public_id, platform, campaign_name, voucher_code_masked,
+  id, public_id, platform, platform_code, campaign_name, voucher_code_masked,
   face_value_minor::text, settlement_amount_minor::text, currency,
   order_id, table_session_id, reconciliation_entry_id,
+  provider_certificate_id, provider_verify_id, provider_status,
   redeemed_by_employee_id, redeemed_business_date::text, redeemed_at::text
 `
 
@@ -805,11 +853,14 @@ function mapAttribution(row: AttributionRow): EmployeeSalesAttributionEvent {
 function mapVoucher(row: VoucherRow): GroupVoucherRedemption {
   return {
     id: row.id, publicId: row.public_id, platform: row.platform,
-    campaignName: row.campaign_name, voucherCodeMasked: row.voucher_code_masked,
+    platformCode: row.platform_code, campaignName: row.campaign_name,
+    voucherCodeMasked: row.voucher_code_masked,
     faceValueMinor: safeMinor(row.face_value_minor, 'voucher face value'),
     settlementAmountMinor: safeMinor(row.settlement_amount_minor, 'voucher settlement'),
     currency: row.currency, orderId: row.order_id, tableSessionId: row.table_session_id,
     reconciliationEntryId: row.reconciliation_entry_id,
+    providerCertificateId: row.provider_certificate_id,
+    providerVerifyId: row.provider_verify_id, providerStatus: row.provider_status,
     redeemedByEmployeeId: row.redeemed_by_employee_id,
     redeemedBusinessDate: row.redeemed_business_date, redeemedAt: row.redeemed_at,
   }
@@ -904,7 +955,7 @@ function decimalProduct(quantity: number, numerator: number, denominator: number
   return (quantity * numerator / denominator).toFixed(6)
 }
 
-function maskVoucher(value: string): string {
+export function maskVoucher(value: string): string {
   const normalized = value.trim()
   if (normalized.length <= 4) return `${normalized[0] ?? '*'}**${normalized.at(-1) ?? '*'}`
   return `${normalized.slice(0, 2)}${'*'.repeat(Math.min(8, normalized.length - 4))}${normalized.slice(-2)}`

@@ -104,7 +104,7 @@ describe('normalized store provisioning config', () => {
       'utf8',
     )) as unknown
     const config = parseStoreProvisionConfig(source)
-    expect(config.version).toBe('2026.09.13-v24')
+    expect(config.version).toBe('2026.09.20-v25')
     for (const candidate of config.roles) {
       expect(candidate.permissions).toContain('refund.request')
       expect(candidate.approvalLimits?.some(limit=>limit.code==='refund.request')).not.toBe(true)
@@ -124,6 +124,8 @@ describe('normalized store provisioning config', () => {
     }))
     const cashierPermissions = new Set(role('CASHIER')?.permissions)
     expect(cashierPermissions.has('printer.manage')).toBe(true)
+    expect(cashierPermissions.has('commercial.voucher.view')).toBe(true)
+    expect(cashierPermissions.has('commercial.voucher.redeem')).toBe(true)
     expect(cashierPermissions.has('payment.collect.all_tables')).toBe(true)
     expect(cashierPermissions.has('order.create')).toBe(true)
     expect(cashierPermissions.has('table.view_all')).toBe(true)

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { commercialOpsApiPlugin, type CommercialOpsApiOptions } from './commercial-ops-api.js'
+import { createGroupVoucherPlatformRegistry } from './group-voucher-platforms.js'
 import { StaffAccessDeniedError, type EffectiveStaffAccess } from './staff-access-repository.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
@@ -53,6 +54,83 @@ describe('commercialOpsApiPlugin', () => {
     expect(response.json()).toMatchObject({ data: { voucherCodeMasked: 'MT********99' } })
   })
 
+  it('prepares then consumes a simulated platform voucher and never returns the raw code', async () => {
+    const fixture = buildFixture({ voucherVerification: simulationVerification() })
+    const prepared = await fixture.app.inject({
+      method: 'POST', url: '/api/commercial-ops/vouchers/prepare',
+      payload: { platform: 'meituan', voucherCode: 'MT-OK-778899' },
+    })
+    expect(prepared.statusCode).toBe(200)
+    expect(JSON.stringify(prepared.json())).not.toContain('MT-OK-778899')
+    expect(prepared.json()).toMatchObject({
+      data: { platform: 'meituan', platformLabel: '美团', campaignName: '美团门店团购券' },
+    })
+    const handle = prepared.json().data.prepareHandle as string
+    expect(handle.length).toBeGreaterThan(16)
+
+    const redeemed = await fixture.app.inject({
+      method: 'POST', url: '/api/commercial-ops/vouchers/redeem',
+      headers: { 'idempotency-key': 'commercial-voucher-api-0002' },
+      payload: { platform: 'meituan', voucherCode: 'MT-OK-778899', prepareHandle: handle },
+    })
+    expect(redeemed.statusCode).toBe(201)
+    expect(JSON.stringify(redeemed.json())).not.toContain('MT-OK-778899')
+    expect(redeemed.json()).toMatchObject({
+      data: { platform: '美团', platformCode: 'meituan', voucherCodeMasked: 'MT********99' },
+    })
+    expect(fixture.recordAttempt).toHaveBeenCalled()
+  })
+
+  it('rejects already used, missing and mismatched prepare handles before consuming', async () => {
+    const fixture = buildFixture({ voucherVerification: simulationVerification() })
+    const used = await fixture.app.inject({
+      method: 'POST', url: '/api/commercial-ops/vouchers/prepare',
+      payload: { platform: 'dianping', voucherCode: 'USED-123456' },
+    })
+    expect(used.statusCode).toBe(409)
+    expect(used.json()).toMatchObject({ error: { code: 'VOUCHER_ALREADY_USED' } })
+
+    const missing = await fixture.app.inject({
+      method: 'POST', url: '/api/commercial-ops/vouchers/prepare',
+      payload: { platform: 'douyin', voucherCode: 'MISS-000001' },
+    })
+    expect(missing.statusCode).toBe(400)
+    expect(missing.json()).toMatchObject({ error: { code: 'VOUCHER_NOT_FOUND' } })
+
+    const prepared = await fixture.app.inject({
+      method: 'POST', url: '/api/commercial-ops/vouchers/prepare',
+      payload: { platform: 'kuaishou', voucherCode: 'KS-OK-123456' },
+    })
+    const mismatched = await fixture.app.inject({
+      method: 'POST', url: '/api/commercial-ops/vouchers/redeem',
+      headers: { 'idempotency-key': 'commercial-voucher-api-0003' },
+      payload: {
+        platform: 'kuaishou', voucherCode: 'OTHER-CODE-99',
+        prepareHandle: prepared.json().data.prepareHandle,
+      },
+    })
+    expect(mismatched.statusCode).toBe(400)
+    expect(mismatched.json().error.message).toMatch(/券码与查询结果不一致/)
+  })
+
+  it('lists only the four platforms and refuses prepare when verification is not wired', async () => {
+    const listed = await buildFixture({ voucherVerification: simulationVerification() }).app.inject({
+      method: 'GET', url: '/api/commercial-ops/vouchers/platforms',
+    })
+    expect(listed.json().data).toEqual([
+      expect.objectContaining({ code: 'dianping', label: '大众点评', enabled: true, mode: 'test' }),
+      expect.objectContaining({ code: 'meituan', label: '美团', enabled: true, mode: 'test' }),
+      expect.objectContaining({ code: 'douyin', label: '抖音', enabled: true, mode: 'test' }),
+      expect.objectContaining({ code: 'kuaishou', label: '快手', enabled: true, mode: 'test' }),
+    ])
+    const disabled = await buildFixture().app.inject({
+      method: 'POST', url: '/api/commercial-ops/vouchers/prepare',
+      payload: { platform: 'meituan', voucherCode: 'MT-OK-778899' },
+    })
+    expect(disabled.statusCode).toBe(503)
+    expect(disabled.json()).toMatchObject({ error: { code: 'VOUCHER_UNAVAILABLE' } })
+  })
+
   it('limits employee statistics to live own/data-scope access and removes internal employee ids', async () => {
     const fixture = buildFixture({
       access: effectiveAccess({
@@ -96,6 +174,7 @@ describe('commercialOpsApiPlugin', () => {
 function buildFixture(overrides: {
   access?: EffectiveStaffAccess
   denyPermission?: boolean
+  voucherVerification?: CommercialOpsApiOptions['voucherVerification']
 } = {}) {
   const transaction = {
     scope: { tenantId, storeId },
@@ -130,13 +209,16 @@ function buildFixture(overrides: {
     correctsCostEntryId: null, correctionReason: null, recordedBusinessDate: '2026-08-11',
     recordedByEmployeeId: employeeId, recordedAt: '2026-08-11T12:00:00.000Z',
   } as const))
-  const redeemVoucher = vi.fn(async () => ({
-    id: voucherId, publicId: 'voucher-api-public-0001', platform: '美团', campaignName: '双人组合',
+  const redeemVoucher = vi.fn(async (input: { platform: string; platformCode?: string | null }) => ({
+    id: voucherId, publicId: 'voucher-api-public-0001', platform: input.platform,
+    platformCode: input.platformCode ?? null, campaignName: '双人组合',
     voucherCodeMasked: 'MT********99', faceValueMinor: 20_000, settlementAmountMinor: 18_800,
     currency: 'CNY', orderId: null, tableSessionId: null, reconciliationEntryId: null,
+    providerCertificateId: null, providerVerifyId: 'sim-verify', providerStatus: 'consumed',
     redeemedByEmployeeId: employeeId, redeemedBusinessDate: '2026-08-11',
     redeemedAt: '2026-08-11T12:00:00.000Z',
-  } as const))
+  }))
+  const recordVoucherVerificationAttempt = vi.fn(async () => undefined)
   const listEmployeeSales = vi.fn(async () => [{
     employeeId: scopedEmployeeId, employeeCode: 'TOM', employeeDisplayName: 'Tom',
     productId: randomUUID(), productCode: 'BEER', productName: '啤酒', categoryCode: 'beer',
@@ -160,10 +242,23 @@ function buildFixture(overrides: {
     createRepository: () => ({
       createCost, correctCost: vi.fn(), createSalesRule: vi.fn(),
       recordSaleAttribution: vi.fn(), reverseSalesForRefund: vi.fn(), redeemVoucher,
+      recordVoucherVerificationAttempt,
     } as never),
     createPublicId: (kind) => `${kind}-api-generated-0001`,
+    voucherVerification: overrides.voucherVerification,
   })
-  return { app, commands, outcomes, assertPermission, createCost, listEmployeeSales }
+  return { app, commands, outcomes, assertPermission, createCost, listEmployeeSales, recordAttempt: recordVoucherVerificationAttempt }
+}
+
+function simulationVerification(): NonNullable<CommercialOpsApiOptions['voucherVerification']> {
+  return {
+    registry: createGroupVoucherPlatformRegistry({
+      mode: 'test', timeoutMs: 8_000,
+      platforms: { dianping: null, meituan: null, douyin: null, kuaishou: null },
+    }, { now: () => Date.parse('2026-09-20T04:00:00.000Z') }),
+    signingSecret: '0123456789abcdef0123456789abcdef',
+    now: () => Date.parse('2026-09-20T04:00:00.000Z'),
+  }
 }
 
 function effectiveAccess(overrides: Partial<EffectiveStaffAccess> = {}): EffectiveStaffAccess {

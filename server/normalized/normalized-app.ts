@@ -38,6 +38,7 @@ import { appendAuditEvent, appendOutboxMessage, NormalizedCommandExecutor, type 
 import { CommerceCommandService } from './commerce-command-service.js'
 import { commerceKdsApiPlugin } from './commerce-kds-api.js'
 import { commercialOpsApiPlugin } from './commercial-ops-api.js'
+import { createGroupVoucherPlatformRegistry } from './group-voucher-platforms.js'
 import { ownerFinanceApiPlugin } from './owner-finance-api.js'
 import { customerBenefitApiPlugin } from './customer-benefit-api.js'
 import { customerExperienceAnalyticsApiPlugin } from './customer-experience-analytics-api.js'
@@ -208,7 +209,7 @@ export const NORMALIZED_LOG_REDACTION_PATHS = Object.freeze([
   'payment.publicKey',
 ])
 
-export const NORMALIZED_MIN_SCHEMA_VERSION = '221'
+export const NORMALIZED_MIN_SCHEMA_VERSION = '222'
 export const NORMALIZED_INJECTABLE_PLUGIN_PORTS = Object.freeze([
   'customer-table-side',
 ] as const)
@@ -903,6 +904,10 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       commandExecutor,
       queryService: new ProfitQueryService(transactions),
       resolveContext: operationsContext,
+      voucherVerification: {
+        registry: createGroupVoucherPlatformRegistry(config.voucher ?? null),
+        signingSecret: config.secret,
+      },
     })
     instance.register(ownerFinanceApiPlugin, {
       prefix: '/api',

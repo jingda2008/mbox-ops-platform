@@ -93,7 +93,7 @@ function customerErrorMessage(error, fallback) {
   const serverMessage = String((error && error.message) || '').trim()
   // 后端已返回稳定中文时直接展示，避免未登记错误码被统一盖成“服务暂时繁忙”。
   if (serverMessage && /^[\u4e00-\u9fffA-Za-z0-9]/.test(serverMessage)
-    && !/Error:|at |stack|ECONN|ETIMEDOUT|undefined/i.test(serverMessage)
+    && !/Error:|at |stack|ECONN|ETIMEDOUT|undefined|is not defined/i.test(serverMessage)
     && serverMessage.length <= 96) {
     return serverMessage
   }

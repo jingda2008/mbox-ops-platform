@@ -339,7 +339,8 @@ function menuCategoryIdentity(item) {
   const topCategorySortOrder = Number.isFinite(Number(item && item.topCategorySortOrder))
     ? Number(item.topCategorySortOrder) : categorySortOrder
   const legacyCategory = LEGACY_MENU_CATEGORY_HIERARCHY[normalizedCategoryCode]
-  // Presentation only: preserve operational IDs and custom parent categories.
+  // Only synthesize customer groups for old responses without category configuration.
+  // Explicit names and parent codes are authoritative, including the default food/drinks roots.
   const customerGroups = {
     cocktail: ['cocktails', '鸡尾酒', 10], beer: ['beers', '啤酒', 20],
     wine: ['wines', '葡萄酒与起泡酒', 30], sparkling: ['wines', '葡萄酒与起泡酒', 30],
@@ -348,14 +349,13 @@ function menuCategoryIdentity(item) {
     snack: ['food_menu', '小食与果盘', 50], non_alcoholic: ['soft_drinks', '无酒精饮品', 60],
   }
   const customerGroup = customerGroups[normalizedCategoryCode]
-  if (customerGroup && ['', 'drinks', 'food'].includes(parentCode)
-    && (!rawCategoryName || rawCategoryName.toLowerCase() === normalizedCategoryCode
-      || (legacyCategory && rawCategoryName === legacyCategory.name))) {
+  if (customerGroup && parentCode === ''
+    && (!rawCategoryName || rawCategoryName.toLowerCase() === normalizedCategoryCode)) {
     return { topCode: customerGroup[0], topName: customerGroup[1], topSortOrder: customerGroup[2],
       childCode: normalizedCategoryCode, childName: categoryName, childSortOrder: categorySortOrder }
   }
   const legacyUnparentedCategory = parentCode === '' && legacyCategory
-    && (!rawCategoryName || rawCategoryName.toLowerCase() === normalizedCategoryCode || rawCategoryName === legacyCategory.name)
+    && (!rawCategoryName || rawCategoryName.toLowerCase() === normalizedCategoryCode)
   if (legacyUnparentedCategory) {
     return {
       topCode: legacyCategory.parentCode,

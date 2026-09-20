@@ -15,15 +15,18 @@ test('customer navigation promotes familiar choices without mutating custom or o
     const { identity, state } = vm.runInNewContext(source.slice(legacyStart, legacyEnd) + '\n' + source.slice(start, end)
       + ';({identity:menuCategoryIdentity,state:menuCategoryState})')
     const products = [
-      { productId:'a', categoryCode:'cocktail', categoryName:'鸡尾酒', categoryParentCode:'drinks' },
-      { productId:'b', categoryCode:'snack', categoryName:'小食', categoryParentCode:'food' },
-      { productId:'c', categoryCode:'non_alcoholic', categoryName:'无酒精', categoryParentCode:'drinks' },
+      { productId:'a', categoryCode:'cocktail', categoryName:'鸡尾酒', categoryParentCode:'drinks', categoryParentName:'酒水' },
+      { productId:'b', categoryCode:'snack', categoryName:'小食', categoryParentCode:'food', categoryParentName:'鲜果与冷食' },
+      { productId:'c', categoryCode:'non_alcoholic', categoryName:'无酒精', categoryParentCode:'drinks', categoryParentName:'酒水' },
       { productId:'d', categoryCode:'wine', categoryName:'联名红酒', categoryParentCode:'collaboration', categoryParentName:'联名专区' },
       { productId:'e', categoryCode:'new_code', categoryName:'新分类' },
       { productId:'f', productKind:'bundle', categoryCode:'cocktail', available:false },
     ]
     const before = JSON.stringify(products)
-    assert.deepEqual(Array.from(products, p => identity(p).topName), ['鸡尾酒','小食与果盘','无酒精饮品','联名专区','新分类','套餐组合'])
+    const expectedNames = platform === 'miniprogram'
+      ? ['酒水','鲜果与冷食','酒水','联名专区','新分类','套餐组合']
+      : ['鸡尾酒','小食与果盘','无酒精饮品','联名专区','新分类','套餐组合']
+    assert.deepEqual(Array.from(products, p => identity(p).topName), expectedNames)
     const browse = state(products,'all','all',false)
     const scanned = state(products,'all','all',true)
     assert.equal(JSON.stringify(browse.categories), JSON.stringify(scanned.categories))
@@ -60,6 +63,40 @@ test('customer navigation promotes familiar choices without mutating custom or o
     assert.equal(data.searchText,'')
     assert.equal(data.selectedCategory,'bundles')
   }
+})
+
+test('WeChat configured food parent and snack child share one category and filter without losing products', async () => {
+  const source = await read('miniprogram/pages/order/index.js')
+  const legacyStart = source.indexOf('const LEGACY_MENU_CATEGORY_HIERARCHY =')
+  const legacyEnd = source.indexOf('\nconst ', legacyStart + 1)
+  const start = source.indexOf('function categoryText(')
+  const end = source.indexOf('function publicServiceName(', start)
+  const filterStart = source.indexOf('  applyFilters(onVisible) {')
+  const filterEnd = source.indexOf('  ensureInitialRecommendations(', filterStart)
+  const { identity, state, page } = vm.runInNewContext(source.slice(legacyStart, legacyEnd) + '\n' + source.slice(start, end)
+    + ';({identity:menuCategoryIdentity,state:menuCategoryState,page:{' + source.slice(filterStart, filterEnd) + '}})')
+  const products = [
+    {productId:'fruit-platter',name:'果盘',categoryCode:'food',categoryName:'鲜果与冷食',categorySortOrder:4,topCategorySortOrder:4},
+    {productId:'snack',name:'小食',categoryCode:'snack',categoryName:'小食',categoryParentCode:'food',categoryParentName:'鲜果与冷食',categorySortOrder:30,topCategorySortOrder:4},
+  ]
+  const original = JSON.stringify(products)
+  for (const connected of [false,true]) {
+    const result = state(products,'food','all',connected)
+    assert.deepEqual(Array.from(result.categories,c=>[c.code,c.name]),[['all','全部'],['food','鲜果与冷食']])
+    assert.deepEqual(Array.from(result.subcategories,c=>[c.code,c.name]),[['all','全部'],['snack','小食']])
+    page.data = {...result,products,searchText:''}
+    page.setData = patch => Object.assign(page.data,patch)
+    page.applyFilters()
+    assert.deepEqual(Array.from(page.data.visibleProducts,p=>p.productId),['fruit-platter','snack'])
+    page.data.selectedSubcategory='snack';page.applyFilters()
+    assert.deepEqual(Array.from(page.data.visibleProducts,p=>p.productId),['snack'])
+    assert.equal(state(products,'food_menu','snack',connected).selectedCategory,'all')
+  }
+  assert.equal(JSON.stringify(products),original)
+  assert.equal(identity({categoryCode:'beer',categoryName:'啤酒'}).topCode,'beer','configured top-level name is authoritative')
+  assert.equal(identity({categoryCode:'fruit',categoryName:'艾雷岛烟熏泥煤威士忌',categoryParentCode:'weishiji',categoryParentName:'威士忌'}).topCode,'weishiji')
+  assert.equal(identity({categoryCode:'snack'}).topName,'小食与果盘','missing configuration retains legacy fallback')
+  assert.equal(identity({categoryCode:'snack',categoryName:'snack'}).topName,'小食与果盘')
 })
 
 test('bundle catalogue remains exhaustive and separate from scanned recommendations', async () => {
@@ -259,17 +296,18 @@ test('activity cards are horizontal brand-green surfaces and profile actions exp
 })
 
 test('activity-list dates use the shared iOS-safe time parser', async () => {
-  const [communityLogic, formatLogic] = await Promise.all([
+  const [communityLogic, formatLogic, activityDisplay] = await Promise.all([
     read('miniprogram/pages/community/index.js'),
     read('miniprogram/utils/format.js'),
+    read('miniprogram/utils/activity-display.js'),
   ])
   const formatModule = { exports: {} }
   vm.runInNewContext(formatLogic, { module: formatModule, exports: formatModule.exports })
   const { dateInput } = formatModule.exports
 
   assert.equal(dateInput('2026-08-30 19:30:00+08'), '2026-08-30T19:30:00+08:00')
-  assert.match(communityLogic, /const \{ money, dateInput \} = require\('\.\.\/\.\.\/utils\/format'\)/)
-  assert.match(communityLogic, /new Date\(dateInput\(value\)\)/)
+  assert.match(communityLogic, /dateText: activityTimeText\(item\)/)
+  assert.match(activityDisplay, /new Date\(dateInput\(item.startsAt\)\)/)
 })
 
 test('activity registration distinguishes confirmed, payment-pending, and waitlist states', async () => {
@@ -1154,4 +1192,54 @@ test('subscription messages are requested from customer actions, not a settings-
   assert.match(paymentActionSource, /wx\.requestPayment[\s\S]*?offerOrderNotifications\('order_checkout', activeRequest\)[\s\S]*?confirmPaymentOutcome/)
   assert.match(profileLogic, /getWechatNotificationPrompt\('coupon_open'\)/)
   assert.match(profileLogic, /async openCoupons\(\)[\s\S]{0,900}?requestWechatSubscription/)
+})
+
+test('WeChat community loads actual activities without Intl or a performance dependency', async () => {
+  const format = {exports:{}}
+  vm.runInNewContext(await read('miniprogram/utils/format.js'),{module:format})
+  const display = {exports:{}}
+  vm.runInNewContext(await read('miniprogram/utils/activity-display.js'),{module:display,require:()=>format.exports})
+  const errors = {exports:{}}
+  vm.runInNewContext(await read('miniprogram/utils/customer-error.js'),{module:errors})
+  let page, performanceCalls=0, fail=false
+  const activity={publicId:'community-test',title:'城市漫游',kind:'city_walk',status:'published',startsAt:'2099-01-01T10:00:00+08:00',endsAt:'2099-01-01T12:00:00+08:00',feeAmountMinor:0,assemblyLocation:'集合点'}
+  const context=vm.createContext({
+    Page(value){page=value;page.setData=patch=>Object.assign(page.data,patch)},
+    require(name){
+      if(name.endsWith('/api'))return {
+        getActivities:async()=>{if(fail)throw new Error('Intl is not defined');return [activity]},
+        getActivityRegistrations:async()=>[{activityPublicId:'community-test',status:'confirmed'}],
+        getMiniBootstrap:async()=>({membership:{memberNo:'test'},membershipTerms:{version:1}}),
+        getReservationPerformances:async()=>{performanceCalls++;return []},
+      }
+      if(name.endsWith('/format'))return format.exports
+      if(name.endsWith('/activity-display'))return display.exports
+      if(name.endsWith('/customer-error'))return errors.exports
+      if(name.endsWith('/media'))return {publicImageUrl:()=>''}
+      return {}
+    },
+  })
+  vm.runInContext('delete globalThis.Intl',context)
+  vm.runInContext(await read('miniprogram/pages/community/index.js'),context)
+  await page.load()
+  assert.equal(page.data.error,'')
+  assert.equal(page.data.activities[0].publicId,'community-test')
+  assert.equal(page.data.activities[0].registrationText,'已报名')
+  assert.equal(performanceCalls,0)
+  fail=true;await page.load()
+  assert.equal(page.data.loading,false)
+  assert.equal(page.data.error,'活动或会员服务暂时没有接上')
+  fail=false;await page.load();assert.equal(page.data.error,'')
+  const template=await read('miniprogram/pages/community/index.wxml')
+  assert.doesNotMatch(template,/ops-section|openPerformances|openReservations|openOrder|今晚现场|今晚菜单与套餐/)
+  assert.match(template,/wx:elif="\{\{error\}\}"[^>]*action-text="重新加载"[^>]*bindaction="load"/)
+  assert.match(template,/wx:if="\{\{!activities.length\}\}"[^>]*type="empty"/)
+})
+
+test('WeChat customer errors hide JavaScript reference failures while preserving business messages',async()=>{
+  const module={exports:{}}
+  vm.runInNewContext(await read('miniprogram/utils/customer-error.js'),{module})
+  const message=module.exports.customerErrorMessage
+  assert.equal(message({message:'Intl is not defined'},'活动暂时无法读取'),'活动暂时无法读取')
+  assert.equal(message({message:'当前活动已结束'},'活动暂时无法读取'),'当前活动已结束')
 })

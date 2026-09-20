@@ -1,0 +1,526 @@
+normalized_browser	Run normalized mobile commercial flows against an isolated database	﻿2026-09-20T17:04:47.7427520Z ##[group]Run npm run test:e2e:normalized
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:04:47.7427876Z ^[[36;1mnpm run test:e2e:normalized^[[0m
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:04:47.7464634Z shell: /usr/bin/bash -e {0}
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:04:47.7464884Z env:
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:04:47.7465858Z   TEST_NORMALIZED_ADMIN_URL: ***127.0.0.1:5432/postgres
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:04:47.7466497Z   APP_COMMIT_SHA: 777efb1e4ad3c0047192a1cd13beb1f8024d8d29
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:04:47.7466824Z ##[endgroup]
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:04:47.8448010Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:04:47.8448706Z > @mbox/ops-platform@1.0.0-rc.215 test:e2e:normalized
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:04:47.8449570Z > playwright test --config playwright.normalized.config.ts
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:04:47.8450020Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:05:00.0966538Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:05:00.0970483Z [WebServer] [INEFFECTIVE_DYNAMIC_IMPORT] src/normalized-ui/PerformanceRevisionPanel.tsx is dynamically imported by src/normalized-ui/StaffModulePanel.tsx but also statically imported by src/normalized-ui/MonthlySchedulePanel.tsx, dynamic import will not move module into another chunk.
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:05:00.0972619Z [WebServer]
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:05:00.0973441Z [WebServer] [plugin builtin:vite-reporter]
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:05:00.0974354Z [WebServer] (!) Some chunks are larger than 500 kB after minification. Consider:
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:05:00.0975384Z [WebServer] - Using dynamic import() to code-split the application
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:05:00.0977119Z [WebServer] - Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:05:00.0978606Z [WebServer] - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:05:00.0979096Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:05:13.0282799Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:05:13.0283439Z Running 110 tests using 1 worker
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:05:13.0303098Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:05:13.4406593Z [1/110] tests/normalized-e2e/normalized-after-sales-access-recovery.spec.ts:4:1 › initial after-sales access failure remains visible and retry reads the original pending queue
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:05:17.8010118Z [2/110] tests/normalized-e2e/normalized-aftersales-exit.spec.ts:31:1 › after-sales exit remains visible during long errors, polling, small views and enlarged text
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:05:20.4520428Z [3/110] tests/normalized-e2e/normalized-aftersales-exit.spec.ts:58:1 › after-sales load failure and stock conflict both allow exit without a business write
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:05:22.8766326Z [4/110] tests/normalized-e2e/normalized-aftersales-exit.spec.ts:71:1 › closing an in-flight after-sales write preserves its original recovery key
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:05:25.2525889Z [5/110] tests/normalized-e2e/normalized-aftersales-exit.spec.ts:89:1 › Escape closes only the replacement layer before the parent after-sales dialog
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:05:27.8333727Z [6/110] tests/normalized-e2e/normalized-aftersales-exit.spec.ts:98:1 › cashier opens the linked original case and keeps ordinary refund controls separate
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:05:31.7506885Z [7/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:96:1 › all real employees enter role-scoped mobile workspaces and every high-frequency entry is live
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:06:31.5193454Z [8/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:175:1 › one business-day order and guest requests flow through bartender, kitchen, service and manager roles
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:06:50.7069772Z [9/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:327:1 › future public reservation is confirmed by marketing and kept out of today arrival queue
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:06:54.6058803Z [10/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:366:1 › manager completes a walk-in table lifecycle without leaving the mobile operations page
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:06:59.1786808Z [11/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:405:1 › 李艳可由授权管理页批量安排为主服务员并安全结束责任
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:02.2930871Z [12/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:441:1 › 店长可在经营配置中修改商品推荐字段并从服务端读回
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:06.6600003Z [13/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:469:1 › 店长可关闭并重新开放线上支付且策略即时读回
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:09.3246955Z [14/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:511:1 › 店长可在经营配置中修改桌台容量资料并读回
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:11.7509846Z [15/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:530:1 › 我的已制作多商品长单号在窄屏逐项显示，保留商品处理入口
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:13.7014585Z [16/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:555:1 › 盘点复核让有权限同事通过或退回，提交人能查结果，失败读取可重试
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:17.7386698Z [17/110] (retries) tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:555:1 › 盘点复核让有权限同事通过或退回，提交人能查结果，失败读取可重试 (retry #1)
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4591135Z   1) tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:555:1 › 盘点复核让有权限同事通过或退回，提交人能查结果，失败读取可重试
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4591986Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4592313Z     Error: expect(locator).toContainText(expected) failed
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4592772Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4593160Z     Locator: getByRole('region', { name: '盘点复核' })
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4594006Z     Expected substring: "stock-count-1264f9a2-b69a-4253-80a6-6e458d4c8786"
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4595214Z     Error: strict mode violation: getByRole('region', { name: '盘点复核' }) resolved to 2 elements:
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4597138Z         1) <section aria-label="盘点复核" class="inventory-stock-counts">…</section> aka getByRole('region', { name: '盘点复核' }).first()
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4598897Z         2) <section aria-label="盘点复核" class="inventory-stock-counts">…</section> aka getByRole('region', { name: '盘点复核' }).nth(1)
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4599718Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4599903Z     Call log:
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4600412Z       - Expect "toContainText" with timeout 12000ms
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4601244Z       - waiting for getByRole('region', { name: '盘点复核' })
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4601663Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4601675Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4601970Z       570 |   await counter.page.goto('/staff/inventory')
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4602873Z       571 |   const mine=counter.page.getByRole('region',{name:'盘点复核'})
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4603645Z     > 572 |   await expect(mine).toContainText(first.publicId)
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4604293Z           |                      ^
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4605220Z       573 |   await expect(mine.getByRole('button',{name:'审核通过',exact:true})).toHaveCount(0)
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4606579Z       574 |   await reviewer.page.setViewportSize({width:375,height:812})
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4608451Z       575 |   await reviewer.page.route('**/api/inventory/stock-counts?**',route=>route.fulfill({status:503,json:{error:{code:'unavailable',message:'盘点服务暂时不可用'}}}),{times:1})
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4610569Z         at /home/runner/work/mbox-ops-platform/mbox-ops-platform/tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:572:22
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4611352Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4611915Z     attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4613048Z     artifacts/normalized-browser/results/normalized-all-roles-busin-fa39d-让有权限同事通过或退回，提交人能查结果，失败读取可重试/test-failed-2.png
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4613936Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4614246Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4614644Z     attachment #2: screenshot (image/png) ──────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4615769Z     artifacts/normalized-browser/results/normalized-all-roles-busin-fa39d-让有权限同事通过或退回，提交人能查结果，失败读取可重试/test-failed-1.png
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4617062Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4617361Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4617978Z     Error Context: artifacts/normalized-browser/results/normalized-all-roles-busin-fa39d-让有权限同事通过或退回，提交人能查结果，失败读取可重试/error-context.md
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4618488Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4618883Z     attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4619721Z     artifacts/normalized-browser/results/normalized-all-roles-busin-fa39d-让有权限同事通过或退回，提交人能查结果，失败读取可重试/trace.zip
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4620240Z     Usage:
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4620526Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4621183Z         npx playwright show-trace artifacts/normalized-browser/results/normalized-all-roles-busin-fa39d-让有权限同事通过或退回，提交人能查结果，失败读取可重试/trace.zip
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4621718Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4622097Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4622388Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4622763Z     Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4623057Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4623239Z     Error: expect(locator).toContainText(expected) failed
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4623467Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4623670Z     Locator: getByRole('region', { name: '盘点复核' })
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4624119Z     Expected substring: "stock-count-acd3d097-5977-43af-8145-84f9ef9404f3"
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4624788Z     Error: strict mode violation: getByRole('region', { name: '盘点复核' }) resolved to 2 elements:
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4625936Z         1) <section aria-label="盘点复核" class="inventory-stock-counts">…</section> aka getByRole('region', { name: '盘点复核' }).first()
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4626938Z         2) <section aria-label="盘点复核" class="inventory-stock-counts">…</section> aka getByRole('region', { name: '盘点复核' }).nth(1)
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4627397Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4627482Z     Call log:
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4627752Z       - Expect "toContainText" with timeout 12000ms
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4628195Z       - waiting for getByRole('region', { name: '盘点复核' })
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4628417Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4628423Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4628597Z       570 |   await counter.page.goto('/staff/inventory')
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4629090Z       571 |   const mine=counter.page.getByRole('region',{name:'盘点复核'})
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4629529Z     > 572 |   await expect(mine).toContainText(first.publicId)
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4629866Z           |                      ^
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4630379Z       573 |   await expect(mine.getByRole('button',{name:'审核通过',exact:true})).toHaveCount(0)
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4630932Z       574 |   await reviewer.page.setViewportSize({width:375,height:812})
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4631921Z       575 |   await reviewer.page.route('**/api/inventory/stock-counts?**',route=>route.fulfill({status:503,json:{error:{code:'unavailable',message:'盘点服务暂时不可用'}}}),{times:1})
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4633149Z         at /home/runner/work/mbox-ops-platform/mbox-ops-platform/tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:572:22
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4633666Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4634071Z     attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4635032Z     artifacts/normalized-browser/results/normalized-all-roles-busin-fa39d-让有权限同事通过或退回，提交人能查结果，失败读取可重试-retry1/test-failed-2.png
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4636190Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4636499Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4636898Z     attachment #2: screenshot (image/png) ──────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4637981Z     artifacts/normalized-browser/results/normalized-all-roles-busin-fa39d-让有权限同事通过或退回，提交人能查结果，失败读取可重试-retry1/test-failed-1.png
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4638830Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4639111Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4639778Z     Error Context: artifacts/normalized-browser/results/normalized-all-roles-busin-fa39d-让有权限同事通过或退回，提交人能查结果，失败读取可重试-retry1/error-context.md
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4640313Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4640706Z     attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4641557Z     artifacts/normalized-browser/results/normalized-all-roles-busin-fa39d-让有权限同事通过或退回，提交人能查结果，失败读取可重试-retry1/trace.zip
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4642096Z     Usage:
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4642208Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4642861Z         npx playwright show-trace artifacts/normalized-browser/results/normalized-all-roles-busin-fa39d-让有权限同事通过或退回，提交人能查结果，失败读取可重试-retry1/trace.zip
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4643435Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4643789Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4644084Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.4644090Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:21.9449886Z [18/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:628:1 › 制作队列在线资格失效后先续期再核验，无需手动退出登录
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:24.2499016Z [19/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:656:1 › 快捷盘点提交丢失回执后复用原单，不直接改变库存
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:27.4267772Z [20/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:690:1 › 图片上传与月度排班成功回执在页面正确展示
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:34.1594473Z [21/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:725:1 › 出品页面六十项待制作全部可达，取送单独展示且末项可搜索
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:36.2279107Z [22/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:761:91 › 数量制作按实际份数配送，刷新后恢复原操作不重复完成余量
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:45.9751991Z [23/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:835:32 › 套餐停止一份按原单点价重算，其余份数照常制作（未付直接停止）
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:07:51.9536828Z [24/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:835:32 › 套餐停止一份按原单点价重算，其余份数照常制作（已付一次审核）
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:08:00.7404976Z [25/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:903:41 › 商品售后入口停止部分未付数量并在响应丢失后恢复原申请（liyan）
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:08:14.8247125Z [26/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:903:41 › 商品售后入口停止部分未付数量并在响应丢失后恢复原申请（tom）
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:08:30.9876150Z [27/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:991:136 › 已付商品在桌时一次审核并确认现金实退，丢失回执不重复登记
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:08:49.2792788Z [28/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:991:136 › 已付商品关桌后一次审核并确认现金实退，丢失回执不重复登记
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:09:07.9120500Z [29/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:1101:1 › 修改退款份数丢回执后恢复同一新版本，减少份数明确继续且只审核新申请
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:09:16.7413967Z [30/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:1175:1 › 关桌后撤回退款仍能登记实际耗用，原操作恢复不重复处置
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:09:25.7832509Z [31/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:1253:1 › 旧退库表单成功后读回失败只刷新数量，未知结果跨页面恢复原登记
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:09:31.6708254Z [32/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:1321:1 › 换品新单丢回执后从原商品读回关联，不重复建单且旧退款与新价格分别保留
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:09:38.8401364Z [33/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:1402:1 › 原实物补送丢回执恢复原任务，手机按份数确认并取消余量
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:09:49.4196834Z [34/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:1472:1 › 离店重做实物分份登记，最后一份丢回执仍可刷新恢复
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:09:49.4325440Z [35/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:1497:1 › 岗位按份重做丢回执恢复，新批逐份完成并保留原金额
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:10:02.1957525Z [36/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:1556:56 › 未付已制作商品本人按原权限免收，丢回执恢复后实物单独处理
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:10:10.3870730Z [37/110] tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:1556:56 › 未付已制作商品本人按原权限拒绝停止，丢回执恢复后实物单独处理
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:10:18.2012175Z [38/110] tests/normalized-e2e/normalized-auto-only-day-end.spec.ts:4:1 › manual day end is unavailable in the page and retired API, including for a manager
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:10:22.5077343Z [39/110] tests/normalized-e2e/normalized-business-rule-inputs.spec.ts:4:1 › switching rule drafts clears unsaved amount text and its validity without changing either rule
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:10:24.4555800Z [40/110] tests/normalized-e2e/normalized-commercial-flows.spec.ts:111:1 › mobile guest scans a fixed table QR, searches, orders and sees payment result
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:10:33.1504150Z [41/110] tests/normalized-e2e/normalized-commercial-flows.spec.ts:177:1 › desktop guest keeps recommendations comparable without turning the cart into a dark bill bar
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:10:35.0098077Z [42/110] tests/normalized-e2e/normalized-commercial-flows.spec.ts:202:1 › narrow mobile guest keeps mood and service controls compact above the menu
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:10:39.1796896Z [43/110] tests/normalized-e2e/normalized-commercial-flows.spec.ts:259:1 › mobile guest, reservation and staff work surfaces have no serious accessibility violations
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:10:45.6518707Z [44/110] tests/normalized-e2e/normalized-commercial-flows.spec.ts:297:1 › mobile public reservation uses preferences without exposing exact table selection
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:10:46.4408667Z [45/110] tests/normalized-e2e/normalized-commercial-flows.spec.ts:319:1 › member page never invents a development member when identity is missing
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:10:46.8495445Z [46/110] tests/normalized-e2e/normalized-commercial-flows.spec.ts:327:1 › authenticated member page stays focused on benefits and does not expose notification settings
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:10:47.5177568Z [47/110] tests/normalized-e2e/normalized-commercial-flows.spec.ts:344:1 › mobile public reservation silently renews one expired session before submit
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:10:48.3217126Z [48/110] tests/normalized-e2e/normalized-commercial-flows.spec.ts:381:1 › confirmed reservation starts its ten-minute arrival retention only at the scheduled arrival time
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:10:49.0536740Z [49/110] tests/normalized-e2e/normalized-commercial-flows.spec.ts:414:1 › submitted reservation keeps its receipt and gives actionable guidance if status lookup is unavailable
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:10:50.1428197Z [50/110] tests/normalized-e2e/normalized-commercial-flows.spec.ts:470:1 › opening a missing reservation link reports once without creating a 4xx polling loop
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:10:50.7308275Z [51/110] tests/normalized-e2e/normalized-commercial-flows.spec.ts:497:1 › reservation actions keep mobile touch targets at least 44px through confirm and cancel states
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:10:52.6702035Z [52/110] tests/normalized-e2e/normalized-commercial-flows.spec.ts:527:1 › reservation status polling stops after one session renewal is still rejected
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:10:53.5332457Z [53/110] tests/normalized-e2e/normalized-commercial-flows.spec.ts:563:1 › mobile manager completes device verification and reaches role-scoped workspace
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:10:56.5628310Z [54/110] tests/normalized-e2e/normalized-commercial-flows.spec.ts:597:1 › mobile manager can initiate but cannot review cashier refund work
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:11:01.1272913Z [55/110] tests/normalized-e2e/normalized-commercial-flows.spec.ts:628:1 › mobile cashier can review but cannot initiate manager refund work
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:11:06.1806545Z [56/110] tests/normalized-e2e/normalized-commercial-flows.spec.ts:665:1 › mobile administrator publishes a permission and sees server-verified feedback in view
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:11:16.3744111Z [57/110] tests/normalized-e2e/normalized-commercial-flows.spec.ts:717:1 › mobile manager payment choices stay synchronized with two guests at the same table
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:11:23.6071565Z [58/110] tests/normalized-e2e/normalized-commercial-flows.spec.ts:853:1 › two guests see the same server cart before either one checks out
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:11:28.4400223Z [59/110] tests/normalized-e2e/normalized-coupon-refund-review.spec.ts:4:30 › coupon refund review explicit decision and layout 320px
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:11:28.6425004Z [60/110] tests/normalized-e2e/normalized-coupon-refund-review.spec.ts:4:30 › coupon refund review explicit decision and layout 360px
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:11:28.8702828Z [61/110] tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts:47:1 › 后厨短暂读取失败保留旧列表，禁止操作，恢复不误报新增
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:11:30.9314734Z [62/110] tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts:58:1 › 后厨超过轮询间隔的请求不会被取消，出品不等待慢桌台读取
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:11:37.4655091Z [63/110] tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts:74:1 › 按份制作确认后锁住旧数量，读回失败也不会再次制作剩余份数
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:11:39.2163945Z [64/110] tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts:93:1 › 遗留整单完成也等待权威读回，不把部分份数隐藏后再当新单弹出
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:11:40.7566401Z [65/110] tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts:104:1 › 未知制作结果跨刷新恢复原数量原编号，新队列不能解锁重复操作
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:11:42.8144647Z [66/110] tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts:123:1 › 顶部刷新更新本人历史，筛选变化不会显示旧桌台记录
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:11:44.5055924Z [67/110] tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts:144:1 › 制作前发出的旧响应不能解除成功后的同步锁
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:11:46.2516966Z [68/110] tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts:166:1 › 不同菜品的并发确认独立锁定，不回滚别人的更新且通知不跳页
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:11:48.6337848Z [69/110] tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts:204:1 › 历史出品取消失败不恢复整份旧列表覆盖其他员工的进度
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:11:50.9305165Z [70/110] tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts:228:1 › 出品批次确认后等候读回，旧可配送份数不能再次提交
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:11:53.0118273Z [71/110] tests/normalized-e2e/normalized-guest-gate.spec.ts:3:1 › fixed QR waiting state is compact, self-updating and does not ask the guest to scan again
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:11:54.2516863Z [72/110] tests/normalized-e2e/normalized-guest-gate.spec.ts:56:1 › invalid unsigned entry gives one precise recovery instruction and no ineffective retry
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:11:54.7184884Z [73/110] tests/normalized-e2e/normalized-guest-gate.spec.ts:69:1 › waiting refresh respects retryAt and resumes the availability check without another scan
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:11:55.4530833Z [74/110] tests/normalized-e2e/normalized-kitchen-batch.spec.ts:23:1 › 60单180份：低高度双板、真实开批、跨页草稿、出锅释放及取送状态
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:11:55.7309975Z [75/110] tests/normalized-e2e/normalized-kitchen-batch.spec.ts:70:1 › 真实提交成功但响应丢失：刷新后原凭据恢复，不重复开批
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:11:56.0151484Z [76/110] tests/normalized-e2e/normalized-kitchen-batch.spec.ts:88:1 › 服务员读取真实备齐数量并送达；厨师操作不冒充送达
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:11:56.3007531Z [77/110] tests/normalized-e2e/normalized-late-capture-refund.spec.ts:4:1 › late captured stopped goods expose a funds-only request without restoring production
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:12:00.4053962Z [78/110] tests/normalized-e2e/normalized-marketing.spec.ts:3:30 › marketing independent approvals, queue and refusal at 320px
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:12:00.6451389Z [79/110] tests/normalized-e2e/normalized-marketing.spec.ts:3:30 › marketing independent approvals, queue and refusal at 360px
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:12:00.9160024Z [80/110] tests/normalized-e2e/normalized-media-library.spec.ts:6:1 › 员工图库按用途分页、选中不重载、权限缓存及正常网和弱网图片对照
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:12:14.5214472Z [81/110] tests/normalized-e2e/normalized-member-cards.spec.ts:4:33 › ordinary member card review and lifecycle at 320px
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:12:14.7499268Z [82/110] tests/normalized-e2e/normalized-member-cards.spec.ts:4:33 › ordinary member card review and lifecycle at 360px
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:12:15.0224249Z [83/110] tests/normalized-e2e/normalized-member-gifts.spec.ts:3:30 › gift campaign drafting and full review layout at 320px
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:12:15.2299782Z [84/110] tests/normalized-e2e/normalized-member-gifts.spec.ts:3:30 › gift campaign drafting and full review layout at 360px
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:12:15.4697372Z [85/110] tests/normalized-e2e/normalized-mini-program-acceptance.spec.ts:87:1 › five-tab customer preview keeps pre-scan menu browsing, three-step reservation, activities and benefits usable at 320/390
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:12:24.1328073Z [86/110] tests/normalized-e2e/normalized-mini-program-acceptance.spec.ts:159:1 › waiting_for_table resumes the same trusted QR into the real menu without another scan
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:12:25.1329428Z [87/110] tests/normalized-e2e/normalized-mini-program-acceptance.spec.ts:188:1 › employee table observation is text-only and customer surfaces have no voice entry
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:12:27.3187350Z [88/110] tests/normalized-e2e/normalized-mobile-adaptation.spec.ts:82:1 › public guest and reservation layouts hold across compact, large and landscape phones
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:12:29.5596605Z [89/110] tests/normalized-e2e/normalized-mobile-adaptation.spec.ts:103:1 › large text and dark preference keep public pages readable without clipping
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:12:30.1341716Z [90/110] tests/normalized-e2e/normalized-mobile-adaptation.spec.ts:114:1 › slow or offline connections keep the last useful mobile state and offer recovery
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:12:32.5570440Z [91/110] tests/normalized-e2e/normalized-mobile-adaptation.spec.ts:134:1 › focused fields remain usable when the mobile visual viewport is reduced
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:12:33.2657917Z [92/110] tests/normalized-e2e/normalized-mobile-adaptation.spec.ts:152:1 › manager mobile pages prioritize current actions and keep low-frequency detail on demand
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:12:38.0551074Z [93/110] tests/normalized-e2e/normalized-mobile-adaptation.spec.ts:206:1 › manager operational routes remain usable in phone landscape
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:12:41.5971582Z [94/110] tests/normalized-e2e/normalized-payment-finance-alert.spec.ts:4:1 › finance alert remains visible while collapsed and identifies confirmed unapplied payment
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:12:43.8691028Z [95/110] tests/normalized-e2e/normalized-print-recovery.spec.ts:4:33 › printer recovery is isolated and readable at 320px
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:12:56.2677288Z [96/110] tests/normalized-e2e/normalized-print-recovery.spec.ts:4:33 › printer recovery is isolated and readable at 390px
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:13:10.2647669Z [97/110] tests/normalized-e2e/normalized-stacking-pricing.spec.ts:4:41 › staff previews stacking and calendar at 320px without changing prices
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:13:26.3904051Z [98/110] tests/normalized-e2e/normalized-stacking-pricing.spec.ts:4:41 › staff previews stacking and calendar at 360px without changing prices
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:13:42.7964455Z [99/110] tests/normalized-e2e/normalized-staff-workflow-navigation.spec.ts:17:1 › table primary actions, more actions and return navigation preserve the list at 390px
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:13:48.0660830Z [100/110] tests/normalized-e2e/normalized-staff-workflow-navigation.spec.ts:68:1 › shared refund todo is counted once, opens its original record and preserves failed-read evidence
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:13:51.2410818Z [101/110] tests/normalized-e2e/normalized-staff-workflow-navigation.spec.ts:99:1 › member workspace uses existing authorized routes and retains the last business section
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:13:53.5279243Z [102/110] tests/normalized-e2e/normalized-staff-workflow-navigation.spec.ts:127:1 › return-state memory is cleared when another employee signs in
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:13:56.2563825Z [103/110] tests/normalized-e2e/normalized-startup-performance.spec.ts:42:1 › normalized employee and guest pages satisfy the real-browser startup gate
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:14:55.3170254Z [104/110] tests/normalized-e2e/normalized-stock-count-batch.spec.ts:26:1 › batch approvals exclude self and stale counts, retain each conflict and continue other counts
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:14:58.1793525Z [105/110] (retries) tests/normalized-e2e/normalized-stock-count-batch.spec.ts:26:1 › batch approvals exclude self and stale counts, retain each conflict and continue other counts (retry #1)
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5723288Z   2) tests/normalized-e2e/normalized-stock-count-batch.spec.ts:26:1 › batch approvals exclude self and stale counts, retain each conflict and continue other counts
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5724019Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5725258Z     Error: locator.check: Error: strict mode violation: getByRole('region', { name: '盘点复核', exact: true }).getByLabel('全选当前页可复核单据') resolved to 2 elements:
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5726826Z         1) <input type="checkbox"/> aka getByRole('checkbox', { name: '全选当前页可复核单据' }).first()
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5727777Z         2) <input type="checkbox"/> aka getByRole('checkbox', { name: '全选当前页可复核单据' }).nth(1)
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5728683Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5728854Z     Call log:
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5729802Z       - waiting for getByRole('region', { name: '盘点复核', exact: true }).getByLabel('全选当前页可复核单据')
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5730690Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5730707Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5730980Z       37 |   const panel=await open(page,counts)
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5732084Z       38 |   await expect(panel.getByRole('article',{name:'盘点 batch-self'}).getByRole('checkbox')).toHaveCount(0)
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5733099Z     > 39 |   await panel.getByLabel('全选当前页可复核单据').check()
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5733674Z          |                                        ^
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5734363Z       40 |   await expect(panel).toContainText('已选 4 张')
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5735310Z       41 |   await expect(panel.getByRole('button',{name:'批量通过',exact:true})).toBeDisabled()
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5736548Z       42 |   await panel.getByRole('button',{name:'选中可通过'}).click()
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5737764Z         at /home/runner/work/mbox-ops-platform/mbox-ops-platform/tests/normalized-e2e/normalized-stock-count-batch.spec.ts:39:40
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5738646Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5739347Z     attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5740350Z     artifacts/normalized-browser/results/normalized-stock-count-bat-9e4ba-t-and-continue-other-counts/test-failed-1.png
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5741282Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5741577Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5741965Z     attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5742716Z     artifacts/normalized-browser/results/normalized-stock-count-bat-9e4ba-t-and-continue-other-counts/video.webm
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5743521Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5743801Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5744315Z     Error Context: artifacts/normalized-browser/results/normalized-stock-count-bat-9e4ba-t-and-continue-other-counts/error-context.md
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5744846Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5745231Z     attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5746339Z     artifacts/normalized-browser/results/normalized-stock-count-bat-9e4ba-t-and-continue-other-counts/trace.zip
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5746894Z     Usage:
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5747005Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5747542Z         npx playwright show-trace artifacts/normalized-browser/results/normalized-stock-count-bat-9e4ba-t-and-continue-other-counts/trace.zip
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5748103Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5748463Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5748747Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5749096Z     Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5749594Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5750227Z     Error: locator.check: Error: strict mode violation: getByRole('region', { name: '盘点复核', exact: true }).getByLabel('全选当前页可复核单据') resolved to 2 elements:
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5751090Z         1) <input type="checkbox"/> aka getByRole('checkbox', { name: '全选当前页可复核单据' }).first()
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5751862Z         2) <input type="checkbox"/> aka getByRole('checkbox', { name: '全选当前页可复核单据' }).nth(1)
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5752169Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5752252Z     Call log:
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5752720Z       - waiting for getByRole('region', { name: '盘点复核', exact: true }).getByLabel('全选当前页可复核单据')
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5753054Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5753060Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5753200Z       37 |   const panel=await open(page,counts)
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5753843Z       38 |   await expect(panel.getByRole('article',{name:'盘点 batch-self'}).getByRole('checkbox')).toHaveCount(0)
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5754441Z     > 39 |   await panel.getByLabel('全选当前页可复核单据').check()
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5754880Z          |                                        ^
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5755682Z       40 |   await expect(panel).toContainText('已选 4 张')
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5756638Z       41 |   await expect(panel.getByRole('button',{name:'批量通过',exact:true})).toBeDisabled()
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5757600Z       42 |   await panel.getByRole('button',{name:'选中可通过'}).click()
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5758759Z         at /home/runner/work/mbox-ops-platform/mbox-ops-platform/tests/normalized-e2e/normalized-stock-count-batch.spec.ts:39:40
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5759560Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5760218Z     attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5761614Z     artifacts/normalized-browser/results/normalized-stock-count-bat-9e4ba-t-and-continue-other-counts-retry1/test-failed-1.png
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5763117Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5763589Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5764253Z     attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5765813Z     artifacts/normalized-browser/results/normalized-stock-count-bat-9e4ba-t-and-continue-other-counts-retry1/video.webm
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5767320Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5767864Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5768861Z     Error Context: artifacts/normalized-browser/results/normalized-stock-count-bat-9e4ba-t-and-continue-other-counts-retry1/error-context.md
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5769849Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5770536Z     attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5771805Z     artifacts/normalized-browser/results/normalized-stock-count-bat-9e4ba-t-and-continue-other-counts-retry1/trace.zip
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5772705Z     Usage:
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5772865Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5773773Z         npx playwright show-trace artifacts/normalized-browser/results/normalized-stock-count-bat-9e4ba-t-and-continue-other-counts-retry1/trace.zip
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5774894Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5775452Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5776255Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:00.5776264Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:01.0092542Z [106/110] tests/normalized-e2e/normalized-stock-count-batch.spec.ts:54:1 › stale counts can be returned together with one reason and ambiguous retries retain original keys
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:03.8273873Z [107/110] (retries) tests/normalized-e2e/normalized-stock-count-batch.spec.ts:54:1 › stale counts can be returned together with one reason and ambiguous retries retain original keys (retry #1)
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1862723Z   3) tests/normalized-e2e/normalized-stock-count-batch.spec.ts:54:1 › stale counts can be returned together with one reason and ambiguous retries retain original keys
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1863883Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1865227Z     Error: locator.click: Error: strict mode violation: getByRole('region', { name: '盘点复核', exact: true }).getByRole('button', { name: '选中需重盘' }) resolved to 2 elements:
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1867238Z         1) <button type="button">选中需重盘</button> aka getByRole('button', { name: '选中需重盘' }).first()
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1868491Z         2) <button type="button">选中需重盘</button> aka getByRole('button', { name: '选中需重盘' }).nth(1)
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1869090Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1869255Z     Call log:
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1870257Z       - waiting for getByRole('region', { name: '盘点复核', exact: true }).getByRole('button', { name: '选中需重盘' })
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1870946Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1870963Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1871115Z       63 |   })
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1871564Z       64 |   const panel=await open(page,counts)
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1872403Z     > 65 |   await panel.getByRole('button',{name:'选中需重盘'}).click()
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1873095Z          |                                                  ^
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1874049Z       66 |   await panel.getByRole('button',{name:'批量退回',exact:true}).click()
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1875276Z       67 |   await expect(panel).toContainText('至少2字的批量退回原因');expect(calls).toHaveLength(0)
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1876568Z       68 |   await panel.getByLabel('批量退回原因').fill('库存已变化，请重新清点')
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1877341Z         at /home/runner/work/mbox-ops-platform/mbox-ops-platform/tests/normalized-e2e/normalized-stock-count-batch.spec.ts:65:50
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1877835Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1878266Z     attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1879088Z     artifacts/normalized-browser/results/normalized-stock-count-bat-eb99d-etries-retain-original-keys/test-failed-1.png
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1879933Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1880238Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1880626Z     attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1881396Z     artifacts/normalized-browser/results/normalized-stock-count-bat-eb99d-etries-retain-original-keys/video.webm
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1882204Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1882764Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1883273Z     Error Context: artifacts/normalized-browser/results/normalized-stock-count-bat-eb99d-etries-retain-original-keys/error-context.md
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1883815Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1884208Z     attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1884958Z     artifacts/normalized-browser/results/normalized-stock-count-bat-eb99d-etries-retain-original-keys/trace.zip
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1885861Z     Usage:
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1887517Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1888234Z         npx playwright show-trace artifacts/normalized-browser/results/normalized-stock-count-bat-eb99d-etries-retain-original-keys/trace.zip
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1889267Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1889688Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1889980Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1890345Z     Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1890673Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1891350Z     Error: locator.click: Error: strict mode violation: getByRole('region', { name: '盘点复核', exact: true }).getByRole('button', { name: '选中需重盘' }) resolved to 2 elements:
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1892268Z         1) <button type="button">选中需重盘</button> aka getByRole('button', { name: '选中需重盘' }).first()
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1892940Z         2) <button type="button">选中需重盘</button> aka getByRole('button', { name: '选中需重盘' }).nth(1)
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1893259Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1893342Z     Call log:
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1893865Z       - waiting for getByRole('region', { name: '盘点复核', exact: true }).getByRole('button', { name: '选中需重盘' })
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1894247Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1894253Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1894339Z       63 |   })
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1894600Z       64 |   const panel=await open(page,counts)
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1895049Z     > 65 |   await panel.getByRole('button',{name:'选中需重盘'}).click()
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1895442Z          |                                                  ^
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1896206Z       66 |   await panel.getByRole('button',{name:'批量退回',exact:true}).click()
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1896843Z       67 |   await expect(panel).toContainText('至少2字的批量退回原因');expect(calls).toHaveLength(0)
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1897417Z       68 |   await panel.getByLabel('批量退回原因').fill('库存已变化，请重新清点')
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1898112Z         at /home/runner/work/mbox-ops-platform/mbox-ops-platform/tests/normalized-e2e/normalized-stock-count-batch.spec.ts:65:50
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1898616Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1899006Z     attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1899860Z     artifacts/normalized-browser/results/normalized-stock-count-bat-eb99d-etries-retain-original-keys-retry1/test-failed-1.png
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1900731Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1901181Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1901565Z     attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1902344Z     artifacts/normalized-browser/results/normalized-stock-count-bat-eb99d-etries-retain-original-keys-retry1/video.webm
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1903180Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1903653Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1904549Z     Error Context: artifacts/normalized-browser/results/normalized-stock-count-bat-eb99d-etries-retain-original-keys-retry1/error-context.md
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1905711Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1906383Z     attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1907883Z     artifacts/normalized-browser/results/normalized-stock-count-bat-eb99d-etries-retain-original-keys-retry1/trace.zip
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1908837Z     Usage:
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1909030Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1909987Z         npx playwright show-trace artifacts/normalized-browser/results/normalized-stock-count-bat-eb99d-etries-retain-original-keys-retry1/trace.zip
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1910974Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1911572Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1912045Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.1912053Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:06.6328167Z [108/110] tests/normalized-e2e/normalized-stock-count-batch.spec.ts:82:1 › batch selection never carries unseen counts across pages or a refreshed view
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:09.4571527Z [109/110] (retries) tests/normalized-e2e/normalized-stock-count-batch.spec.ts:82:1 › batch selection never carries unseen counts across pages or a refreshed view (retry #1)
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8473530Z   4) tests/normalized-e2e/normalized-stock-count-batch.spec.ts:82:1 › batch selection never carries unseen counts across pages or a refreshed view
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8474556Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8475984Z     Error: locator.check: Error: strict mode violation: getByRole('region', { name: '盘点复核', exact: true }).getByLabel('全选当前页可复核单据') resolved to 2 elements:
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8476964Z         1) <input type="checkbox"/> aka getByRole('checkbox', { name: '全选当前页可复核单据' }).first()
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8477637Z         2) <input type="checkbox"/> aka getByRole('checkbox', { name: '全选当前页可复核单据' }).nth(1)
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8477946Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8478036Z     Call log:
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8478533Z       - waiting for getByRole('region', { name: '盘点复核', exact: true }).getByLabel('全选当前页可复核单据')
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8478873Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8478880Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8479260Z       82 | test('batch selection never carries unseen counts across pages or a refreshed view',async({page})=>{
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8479914Z       83 |   const panel=await open(page,[count('page1')],[count('page2')])
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8480570Z     > 84 |   await panel.getByLabel('全选当前页可复核单据').check();await expect(panel).toContainText('已选 1 张')
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8481310Z          |                                        ^
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8481744Z       85 |   await panel.getByRole('button',{name:'下一页'}).click()
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8482349Z       86 |   await expect(panel.getByRole('article',{name:'盘点 batch-page2'})).toBeVisible()
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8482898Z       87 |   await expect(panel).toContainText('已选 0 张')
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8483899Z         at /home/runner/work/mbox-ops-platform/mbox-ops-platform/tests/normalized-e2e/normalized-stock-count-batch.spec.ts:84:40
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8484731Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8485982Z     attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8487306Z     artifacts/normalized-browser/results/normalized-stock-count-bat-49706-s-pages-or-a-refreshed-view/test-failed-1.png
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8488262Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8488580Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8488968Z     attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8489717Z     artifacts/normalized-browser/results/normalized-stock-count-bat-49706-s-pages-or-a-refreshed-view/video.webm
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8490527Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8490805Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8491320Z     Error Context: artifacts/normalized-browser/results/normalized-stock-count-bat-49706-s-pages-or-a-refreshed-view/error-context.md
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8491864Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8492263Z     attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8493054Z     artifacts/normalized-browser/results/normalized-stock-count-bat-49706-s-pages-or-a-refreshed-view/trace.zip
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8493592Z     Usage:
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8493699Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8494231Z         npx playwright show-trace artifacts/normalized-browser/results/normalized-stock-count-bat-49706-s-pages-or-a-refreshed-view/trace.zip
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8494799Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8495147Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8495441Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8496316Z     Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8496635Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8497283Z     Error: locator.check: Error: strict mode violation: getByRole('region', { name: '盘点复核', exact: true }).getByLabel('全选当前页可复核单据') resolved to 2 elements:
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8498152Z         1) <input type="checkbox"/> aka getByRole('checkbox', { name: '全选当前页可复核单据' }).first()
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8498819Z         2) <input type="checkbox"/> aka getByRole('checkbox', { name: '全选当前页可复核单据' }).nth(1)
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8499128Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8499214Z     Call log:
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8499687Z       - waiting for getByRole('region', { name: '盘点复核', exact: true }).getByLabel('全选当前页可复核单据')
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8500198Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8500211Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8500577Z       82 | test('batch selection never carries unseen counts across pages or a refreshed view',async({page})=>{
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8501196Z       83 |   const panel=await open(page,[count('page1')],[count('page2')])
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8501853Z     > 84 |   await panel.getByLabel('全选当前页可复核单据').check();await expect(panel).toContainText('已选 1 张')
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8502316Z          |                                        ^
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8502737Z       85 |   await panel.getByRole('button',{name:'下一页'}).click()
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8503310Z       86 |   await expect(panel.getByRole('article',{name:'盘点 batch-page2'})).toBeVisible()
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8503982Z       87 |   await expect(panel).toContainText('已选 0 张')
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8504663Z         at /home/runner/work/mbox-ops-platform/mbox-ops-platform/tests/normalized-e2e/normalized-stock-count-batch.spec.ts:84:40
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8505167Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8505908Z     attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8506774Z     artifacts/normalized-browser/results/normalized-stock-count-bat-49706-s-pages-or-a-refreshed-view-retry1/test-failed-1.png
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8507656Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8507946Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8508322Z     attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8509095Z     artifacts/normalized-browser/results/normalized-stock-count-bat-49706-s-pages-or-a-refreshed-view-retry1/video.webm
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8509943Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8510222Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8510764Z     Error Context: artifacts/normalized-browser/results/normalized-stock-count-bat-49706-s-pages-or-a-refreshed-view-retry1/error-context.md
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8511344Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8511765Z     attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8512550Z     artifacts/normalized-browser/results/normalized-stock-count-bat-49706-s-pages-or-a-refreshed-view-retry1/trace.zip
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8513113Z     Usage:
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8513223Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8513794Z         npx playwright show-trace artifacts/normalized-browser/results/normalized-stock-count-bat-49706-s-pages-or-a-refreshed-view-retry1/trace.zip
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8514384Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8514737Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8515039Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:11.8515045Z
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:12.2809747Z [110/110] tests/normalized-e2e/normalized-upgrade-qualification.spec.ts:4:30 › upgrade qualification real draft persists and fits 320px
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:12.6996165Z [111/110] tests/normalized-e2e/normalized-upgrade-qualification.spec.ts:4:30 › upgrade qualification real draft persists and fits 360px
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:12.9674233Z [112/110] tests/normalized-e2e/refund-review-configuration.spec.ts:5:1 › administrator configures refund review and cents in one publish on mobile, with persisted readback and revocation
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:23.6999360Z [113/110] tests/normalized-e2e/normalized-requirements-v9.spec.ts:4:31 › v9 custody, export and launch configuration at 360px
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:24.1332579Z [114/110] tests/normalized-e2e/normalized-requirements-v9.spec.ts:4:31 › v9 custody, export and launch configuration at 1280px
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:24.4894830Z   4 failed
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:24.4896984Z     tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:555:1 › 盘点复核让有权限同事通过或退回，提交人能查结果，失败读取可重试
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:24.4898904Z     tests/normalized-e2e/normalized-stock-count-batch.spec.ts:26:1 › batch approvals exclude self and stale counts, retain each conflict and continue other counts
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:24.4900295Z     tests/normalized-e2e/normalized-stock-count-batch.spec.ts:54:1 › stale counts can be returned together with one reason and ambiguous retries retain original keys
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:24.4901524Z     tests/normalized-e2e/normalized-stock-count-batch.spec.ts:82:1 › batch selection never carries unseen counts across pages or a refreshed view
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:24.4902155Z   16 skipped
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:24.4902369Z   90 passed (10.6m)
+normalized_browser	Run normalized mobile commercial flows against an isolated database	2026-09-20T17:15:24.7918352Z ##[error]Process completed with exit code 1.
+verify	Verify immutable CI quality ledger	﻿2026-09-20T17:15:40.8891439Z ##[group]Run node scripts/verify-quality-evidence.mjs --input artifacts/quality-evidence/ci-quality-evidence.json --policy docs/quality-policy-mbox-v1.json --output artifacts/quality-evidence/verification-report.json --require-immutable --require-release-pass
+verify	Verify immutable CI quality ledger	2026-09-20T17:15:40.8893752Z ^[[36;1mnode scripts/verify-quality-evidence.mjs --input artifacts/quality-evidence/ci-quality-evidence.json --policy docs/quality-policy-mbox-v1.json --output artifacts/quality-evidence/verification-report.json --require-immutable --require-release-pass^[[0m
+verify	Verify immutable CI quality ledger	2026-09-20T17:15:40.8930504Z shell: /usr/bin/bash -e {0}
+verify	Verify immutable CI quality ledger	2026-09-20T17:15:40.8931022Z ##[endgroup]
+verify	Verify immutable CI quality ledger	2026-09-20T17:15:40.9316251Z {
+verify	Verify immutable CI quality ledger	2026-09-20T17:15:40.9316641Z   "passed": false,
+verify	Verify immutable CI quality ledger	2026-09-20T17:15:40.9316934Z   "failures": [
+verify	Verify immutable CI quality ledger	2026-09-20T17:15:40.9317295Z     "release-pass verification requires decision ALLOW",
+verify	Verify immutable CI quality ledger	2026-09-20T17:15:40.9318003Z     "release-pass verification requires every required gate to pass",
+verify	Verify immutable CI quality ledger	2026-09-20T17:15:40.9318715Z     "policy-required performance gate normalized_employee_startup is missing",
+verify	Verify immutable CI quality ledger	2026-09-20T17:15:40.9319616Z     "policy-required performance gate normalized_guest_session_startup is missing",
+verify	Verify immutable CI quality ledger	2026-09-20T17:15:40.9320388Z     "policy-required performance gate normalized_employee_startup_api is missing",
+verify	Verify immutable CI quality ledger	2026-09-20T17:15:40.9321471Z     "policy-required performance gate normalized_guest_session_api is missing"
+verify	Verify immutable CI quality ledger	2026-09-20T17:15:40.9322000Z   ],
+verify	Verify immutable CI quality ledger	2026-09-20T17:15:40.9322230Z   "warnings": []
+verify	Verify immutable CI quality ledger	2026-09-20T17:15:40.9322480Z }
+verify	Verify immutable CI quality ledger	2026-09-20T17:15:40.9369274Z ##[error]Process completed with exit code 1.
+verify	Enforce the selected release gate	﻿2026-09-20T17:15:42.0456700Z ##[group]Run test "${CLASSIFY_RESULT}" = success
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0457148Z ^[[36;1mtest "${CLASSIFY_RESULT}" = success^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0457482Z ^[[36;1mif [ "${SCOPE}" = docs ]; then^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0457801Z ^[[36;1m  test "${DOCS_RESULT}" = success^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0458130Z ^[[36;1m  test "${QUALITY_RESULT}" = skipped^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0458491Z ^[[36;1m  test "${FAST_QUALITY_RESULT}" = skipped^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0458886Z ^[[36;1m  test "${NORMALIZED_DATABASE_RESULT}" = skipped^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0459286Z ^[[36;1m  test "${NORMALIZED_BROWSER_RESULT}" = skipped^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0459669Z ^[[36;1m  test "${PERFORMANCE_RESULT}" = skipped^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0460019Z ^[[36;1m  test "${IMAGE_RESULT}" = skipped^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0460337Z ^[[36;1melif [ "${SCOPE}" = ui ]; then^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0460641Z ^[[36;1m  test "${DOCS_RESULT}" = skipped^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0461607Z ^[[36;1m  test "${QUALITY_RESULT}" = skipped^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0461982Z ^[[36;1m  test "${FAST_QUALITY_RESULT}" = success^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0462404Z ^[[36;1m  test "${NORMALIZED_DATABASE_RESULT}" = skipped^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0462802Z ^[[36;1m  test "${NORMALIZED_BROWSER_RESULT}" = success^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0463182Z ^[[36;1m  test "${PERFORMANCE_RESULT}" = skipped^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0463528Z ^[[36;1m  test "${IMAGE_RESULT}" = skipped^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0463860Z ^[[36;1melif [ "${SCOPE}" = frontend ]; then^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0464186Z ^[[36;1m  test "${DOCS_RESULT}" = skipped^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0464514Z ^[[36;1m  test "${QUALITY_RESULT}" = skipped^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0465106Z ^[[36;1m  test "${FAST_QUALITY_RESULT}" = success^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0465486Z ^[[36;1m  test "${NORMALIZED_DATABASE_RESULT}" = skipped^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0465878Z ^[[36;1m  test "${NORMALIZED_BROWSER_RESULT}" = success^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0466257Z ^[[36;1m  test "${PERFORMANCE_RESULT}" = skipped^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0466600Z ^[[36;1m  test "${IMAGE_RESULT}" = skipped^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0466902Z ^[[36;1melse^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0467136Z ^[[36;1m  test "${SCOPE}" = full^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0467442Z ^[[36;1m  test "${DOCS_RESULT}" = skipped^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0467767Z ^[[36;1m  test "${QUALITY_RESULT}" = success^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0468116Z ^[[36;1m  test "${FAST_QUALITY_RESULT}" = skipped^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0468500Z ^[[36;1m  test "${NORMALIZED_DATABASE_RESULT}" = success^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0468890Z ^[[36;1m  test "${NORMALIZED_BROWSER_RESULT}" = success^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0469258Z ^[[36;1m  test "${PERFORMANCE_RESULT}" = success^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0469637Z ^[[36;1m  if [ "${RELEASE_ARTIFACT_REQUIRED}" = true ]; then^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0470012Z ^[[36;1m    test "${IMAGE_RESULT}" = success^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0470321Z ^[[36;1m  else^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0470559Z ^[[36;1m    test "${IMAGE_RESULT}" = skipped^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0471139Z ^[[36;1m  fi^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0471344Z ^[[36;1mfi^[[0m
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0506992Z shell: /usr/bin/bash -e {0}
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0507289Z env:
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0507485Z   SCOPE: full
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0507707Z   CLASSIFY_RESULT: success
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0507968Z   DOCS_RESULT: skipped
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0508212Z   QUALITY_RESULT: success
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0508468Z   FAST_QUALITY_RESULT: skipped
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0508748Z   NORMALIZED_DATABASE_RESULT: success
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0509049Z   NORMALIZED_BROWSER_RESULT: failure
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0509347Z   PERFORMANCE_RESULT: success
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0509607Z   IMAGE_RESULT: skipped
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0509858Z   RELEASE_ARTIFACT_REQUIRED: false
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0510135Z ##[endgroup]
+verify	Enforce the selected release gate	2026-09-20T17:15:42.0567974Z ##[error]Process completed with exit code 1.

@@ -20,6 +20,7 @@ async function open(page:Page,counts:StockCountReview[],second:StockCountReview[
   await page.getByRole('button',{name:/进入工作台/}).click()
   await expect(page.getByTestId('normalized-workspace')).toBeVisible()
   await page.goto('/staff/inventory')
+  await expect(page.getByRole('region',{name:'盘点复核',exact:true})).toHaveCount(1)
   return page.getByRole('region',{name:'盘点复核',exact:true})
 }
 
@@ -87,6 +88,7 @@ test('batch selection never carries unseen counts across pages or a refreshed vi
   await expect(panel).toContainText('已选 0 张')
   await panel.getByLabel('全选当前页可复核单据').check()
   await panel.getByRole('button',{name:'刷新盘点'}).click()
+  await expect(panel).toHaveCount(1)
   await expect(panel).toContainText('已选 0 张')
   await expect(panel.getByRole('button',{name:'批量通过',exact:true})).toBeDisabled()
 })

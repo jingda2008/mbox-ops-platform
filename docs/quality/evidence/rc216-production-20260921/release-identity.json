@@ -1,0 +1,14 @@
+{
+  "releaseVersion": "1.0.0-rc.216",
+  "releaseSha": "5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe",
+  "deployedAt": "2026-09-20T18:16:04Z",
+  "tier": "production",
+  "targetSchemaVersion": 224,
+  "imageTag": "mbox-normalized:1.0.0-rc.216-5b9d929",
+  "imageDigest": "sha256:66c0cbce9543dca4f25487058af16fc2274ec80485c3c2270e8c4e5ee8e050ad",
+  "platformImageDigest": "sha256:7c7826a20f38069786fea6a71a847e785760b7a62005cabdd68b30a176b733ec",
+  "backupPath": "/opt/mbox/backups/mbox-20260920T181427Z-zrewTr.dump",
+  "rollbackContainer": "mbox-app-rollback-5b9d929-20260921-021602",
+  "previousReleaseSha": "887461043e521463f73b9bd17efa381e4eeea6ad",
+  "rollbackMode": "application_image"
+}

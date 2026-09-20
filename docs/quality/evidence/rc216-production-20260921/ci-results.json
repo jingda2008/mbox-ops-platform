@@ -1,0 +1,134 @@
+{
+  "runs": [
+    {
+      "status": "completed",
+      "conclusion": "success",
+      "headSha": "a654888ead3c2189dce1b4d44a511f81f0f40bd6",
+      "url": "https://github.com/jingda2008/mbox-ops-platform/actions/runs/35526838367",
+      "jobs": [
+        {
+          "name": "classify",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "normalized_browser",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "normalized_database",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "performance",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "quality",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "fast_quality",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "verify",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "image",
+          "status": "completed",
+          "conclusion": "skipped"
+        }
+      ]
+    },
+    {
+      "status": "completed",
+      "conclusion": "success",
+      "headSha": "5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe",
+      "url": "https://github.com/jingda2008/mbox-ops-platform/actions/runs/35527526985",
+      "jobs": [
+        {
+          "name": "classify",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "normalized_database",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "normalized_browser",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "performance",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "quality",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "fast_quality",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "image",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "verify",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "status": "completed",
+      "conclusion": "success",
+      "headSha": "5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe",
+      "url": "https://github.com/jingda2008/mbox-ops-platform/actions/runs/35527526954",
+      "jobs": [
+        {
+          "name": "Publish staff, service and database release",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    }
+  ],
+  "tagTests": {
+    "postgres": {
+      "passed": 2331,
+      "failed": 0
+    },
+    "browser": {
+      "passed": 94,
+      "skipped": 16,
+      "failed": 0
+    }
+  }
+}

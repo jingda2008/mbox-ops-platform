@@ -1,0 +1,3 @@
+canonical_backup=/opt/mbox/secrets/app.env.pre-rc216-20260920T181233Z
+other_configuration_unchanged=true
+MBOX_KITCHEN_BATCH_BOARD_ENABLED=true

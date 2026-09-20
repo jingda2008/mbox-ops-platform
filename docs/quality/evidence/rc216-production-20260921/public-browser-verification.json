@@ -1,0 +1,26 @@
+[
+  {
+    "verified": true,
+    "url": "https://mbox.shmbox.com",
+    "releaseSha": "5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe",
+    "digest": "sha256:66c0cbce9543dca4f25487058af16fc2274ec80485c3c2270e8c4e5ee8e050ad",
+    "schemaVersion": "224",
+    "browserRoutes": [
+      "/",
+      "/guest?table=W01",
+      "/reserve",
+      "/staff/live"
+    ]
+  },
+  {
+    "verified": true,
+    "url": "https://mbox.shmbox.com",
+    "releaseSha": "5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe",
+    "routes": [
+      "/",
+      "/guest?table=W01",
+      "/reserve",
+      "/staff/live"
+    ]
+  }
+]

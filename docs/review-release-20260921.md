@@ -55,3 +55,37 @@ SYS-308修复为不同业务前缀的员工key，并在既有批量流程加入�
 SYS-309改用 `statement_timestamp()`，在同一语句中保持时间一致，不放宽约束、不删除测试或重跑掩盖原始失败。生产 `StaffSessionRepository.createSession` 使用传入的时间参数，此次不修改生产代码和SQL。rc.215发布流程取消，标签保留且未部署；重新准备rc.216元数据与完整检查。原始失败日志保存在本轮输出目录的 `tag-ci-database-attempt1.log`。
 
 2026-09-21 01:44 CST：rc.216修后新建隔离数据库的9项后厨真实事务全部通过（4.37秒），元数据、清单、专项lint和diff检查通过。完整PR与新标签检查继续执行。
+
+## 2026-09-21 01:59 CST rc.216合并与发布准备
+
+[PR271](https://github.com/jingda2008/mbox-ops-platform/pull/271) 已合并为 `5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe`，与最后分支提交 `a654888ead3c2189dce1b4d44a511f81f0f40bd6` 文件树一致。[PR完整检查35526838367](https://github.com/jingda2008/mbox-ops-platform/actions/runs/35526838367) 全部必需门禁通过，数据库2331项通过，浏览器94项通过、16条件跳过，HTTP、质量及性能检查通过。
+
+`v1.0.0-rc.216` 标签已指向最终合并提交；新建干净的正式发布工作区 `mbox-release-rc216-20260921`，重新执行npm ci、浏览器依赖、版本元数据及当时线上rc.214完整SHA的4路由浏览器预检，全部通过。[标签CI35527526985](https://github.com/jingda2008/mbox-ops-platform/actions/runs/35527526985) 与 [发布工作流35527526954](https://github.com/jingda2008/mbox-ops-platform/actions/runs/35527526954) 正在运行；此时生产尚未切换。
+
+## 2026-09-21 02:19 CST rc.216生产交付完成
+
+[最终标签CI35527526985](https://github.com/jingda2008/mbox-ops-platform/actions/runs/35527526985) 和 [发布工作流35527526954](https://github.com/jingda2008/mbox-ops-platform/actions/runs/35527526954) 均成功。标签数据库2331项通过，浏览器94项通过、16条件跳过，质量、HTTP和持续5 RPS性能检查通过。[发布版本](https://github.com/jingda2008/mbox-ops-platform/releases/tag/v1.0.0-rc.216) 为已发布RC。
+
+| 核验项 | 实际结果 |
+|---|---|
+| 最终提交 | `5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe` |
+| 生产切换时间 | 2026-09-21 02:16:04 CST |
+| 镜像 | `mbox-normalized:1.0.0-rc.216-5b9d929` |
+| 镜像摘要 | `sha256:66c0cbce9543dca4f25487058af16fc2274ec80485c3c2270e8c4e5ee8e050ad` |
+| 平台镜像ID | `sha256:7c7826a20f38069786fea6a71a847e785760b7a62005cabdd68b30a176b733ec` |
+| 数据库与环境 | schema 224、production、严格库存、normal可写 |
+| 当前健康 | readiness ready；容器healthy、0重启；后台任务healthy、失败列表为空 |
+| 浏览器 | /、/guest?table=W01、/reserve、/staff/live全部通过 |
+| 后厨开关 | canonical配置、发布配置、容器环境、解析后运行时均为true；原数量售后开关仍为true |
+| 认证边界 | 未登录GET后厨工作台返回401 AUTH_REQUIRED，无生产业务写入 |
+| 发布状态 | completed；包含备份验证、迁移、候选健康、切换验证、evidence_archived完整状态历史 |
+| OSS回读 | 上线前证据24对象、镜像4、备份4、部署8、完成3全部verified |
+| 数据库备份 | `/opt/mbox/backups/mbox-20260920T181427Z-zrewTr.dump` |
+| 回退 | `mbox-app-rollback-5b9d929-20260921-021602`，旧SHA `887461043e521463f73b9bd17efa381e4eeea6ad`及平台镜像ID均匹配 |
+| 原工作区 | 139文件重新逐一SHA-256核对，无改动 |
+
+部署仅使用最终合并提交的 `deploy/aliyun/deploy-release.sh`。配置变更前已在服务器以受限权限备份，只新增后厨开关，其余配置内容哈希一致；发布成功后再次核对所有配置层。源码标签工作区保持干净。
+
+精选证据见 [发布身份](quality/evidence/rc216-production-20260921/release-identity.json)、[线上健康](quality/evidence/rc216-production-20260921/public-ready.json)、[运行时与OSS](quality/evidence/rc216-production-20260921/runtime-and-oss-verification.txt)、[CI结果](quality/evidence/rc216-production-20260921/ci-results.json)、[浏览器结果](quality/evidence/rc216-production-20260921/public-browser-verification.json)。原始操作日志保存在本轮本地输出目录，不把含员工配置明细的原始部署日志复制入代码库。
+
+SYS-307和SYS-308已修复并部署，门店混合流程和库存岗位验收仍开放；SYS-309已通过最终完整标签检查。未执行真实收退款、库存损耗、制作或消息发送作为验证；未上传小程序或安装Windows PrintBridge。真实平板、设备产能、实物交接、渠道资金及实体票据仍需按原清单验收。

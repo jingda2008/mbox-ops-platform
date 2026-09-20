@@ -1,0 +1,123 @@
+{"parsedRuntime":{"kitchenBatchBoardEnabled":true,"quantityAfterSalesEnabled":true,"deploymentTier":"production"}}
+{
+  "containerFlags": [
+    "MBOX_QUANTITY_AFTER_SALES_ENABLED=true",
+    "MBOX_KITCHEN_BATCH_BOARD_ENABLED=true"
+  ]
+}
+{
+  "evidence": "predeployment",
+  "verified": true,
+  "releaseSha": "5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe",
+  "evidencePrefix": "mbox/evidence/rc/v1.0.0-rc.216/5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe",
+  "imagePrefix": "mbox/images/20260920T181409Z-1.0.0-rc.216-5b9d929",
+  "evidenceObjects": 24,
+  "imageObjects": 4
+}
+{
+  "evidence": "oss-backup-verification",
+  "verified": true,
+  "authMode": "EcsRamRole",
+  "prefix": "mbox/backups/2026-09-20/5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe",
+  "completionMarker": "mbox/backups/2026-09-20/5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe/_COMPLETE.json",
+  "objectCount": 4
+}
+{
+  "evidence": "oss-deployment-verification",
+  "verified": true,
+  "authMode": "EcsRamRole",
+  "prefix": "mbox/evidence/rc/v1.0.0-rc.216/5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe/deployment",
+  "completionMarker": "mbox/evidence/rc/v1.0.0-rc.216/5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe/deployment/_COMPLETE.json",
+  "objectCount": 8
+}
+{
+  "evidence": "oss-completion-verification",
+  "verified": true,
+  "authMode": "EcsRamRole",
+  "prefix": "mbox/evidence/rc/v1.0.0-rc.216/5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe/completion",
+  "completionMarker": "mbox/evidence/rc/v1.0.0-rc.216/5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe/completion/_COMPLETE.json",
+  "objectCount": 3
+}
+{
+  "releaseSha": "5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe",
+  "releaseVersion": "1.0.0-rc.216",
+  "imageTag": "mbox-normalized:1.0.0-rc.216-5b9d929",
+  "imageDigest": "sha256:66c0cbce9543dca4f25487058af16fc2274ec80485c3c2270e8c4e5ee8e050ad",
+  "platformImageDigest": "sha256:7c7826a20f38069786fea6a71a847e785760b7a62005cabdd68b30a176b733ec",
+  "deployedAt": "2026-09-20T18:16:04Z",
+  "tier": "production",
+  "targetSchemaVersion": 224,
+  "backupPath": "/opt/mbox/backups/mbox-20260920T181427Z-zrewTr.dump",
+  "rollbackContainer": "mbox-app-rollback-5b9d929-20260921-021602",
+  "previousReleaseSha": "887461043e521463f73b9bd17efa381e4eeea6ad",
+  "rollbackMode": "application_image",
+  "previousRuntimeAttestation": null
+}
+{
+  "releaseSha": "5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe",
+  "current": "completed",
+  "history": [
+    {
+      "state": "frozen",
+      "at": "2026-09-20T18:15:33Z"
+    },
+    {
+      "state": "artifact_verified",
+      "at": "2026-09-20T18:15:33Z"
+    },
+    {
+      "state": "config_preflight_passed",
+      "at": "2026-09-20T18:15:36Z"
+    },
+    {
+      "state": "external_preflight_passed",
+      "at": "2026-09-20T18:15:36Z"
+    },
+    {
+      "state": "migration_compatible",
+      "at": "2026-09-20T18:15:38Z"
+    },
+    {
+      "state": "backup_verified",
+      "at": "2026-09-20T18:15:40Z"
+    },
+    {
+      "state": "migrated",
+      "at": "2026-09-20T18:15:40Z"
+    },
+    {
+      "state": "provisioned",
+      "at": "2026-09-20T18:15:45Z"
+    },
+    {
+      "state": "candidate_healthy",
+      "at": "2026-09-20T18:16:01Z"
+    },
+    {
+      "state": "candidate_deep_verified",
+      "at": "2026-09-20T18:16:01Z"
+    },
+    {
+      "state": "cutover_started",
+      "at": "2026-09-20T18:16:02Z"
+    },
+    {
+      "state": "cutover_verified",
+      "at": "2026-09-20T18:16:04Z"
+    },
+    {
+      "state": "evidence_archived",
+      "at": "2026-09-20T18:16:16Z"
+    },
+    {
+      "state": "completed",
+      "at": "2026-09-20T18:16:25Z"
+    }
+  ]
+}
+container=/mbox-app health=healthy restarts=0
+A /data
+C /app
+A /app/worker-adapters
+canonical_and_release_flags_verified=true
+rollback_identity_verified=true

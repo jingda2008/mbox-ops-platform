@@ -442,7 +442,6 @@ export const commercialOpsApiPlugin: FastifyPluginAsync<CommercialOpsApiOptions>
       ? 0 : readInteger(body.settlementAmountMinor, 'settlementAmountMinor', 0)
     let currency = body.currency === undefined ? 'CNY' : readCurrency(body.currency)
     let providerCertificateId: string | null = null
-    let providerVerifyId: string | null = null
     let prepareToken: string | null = null
     if (verification) {
       const handle = readGroupVoucherPrepareHandle(

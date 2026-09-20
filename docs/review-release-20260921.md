@@ -1,4 +1,4 @@
-# 2026-09-21 代码审查与rc.215交付
+# 2026-09-21 代码审查与rc.216交付
 
 授权范围：检查代码、提交、合并、部署。来源：`mbox-kitchen-batch-board-20260920`，基线 `5c4bde7de5ed154ab3dd9227a64751dcc65293eb`。139个改动文件经过SHA-256核对后复制到独立 `mbox-review-release-20260921`，不覆盖原工作区。
 
@@ -39,3 +39,19 @@ CI `35524662266` 的质量、数据库/HTTP和性能通过，浏览器90通过�
 SYS-308修复为不同业务前缀的员工key，并在既有批量流程加入进入/刷新后面板数量恰好为1的断言。保留不自批、过期盘点拒绝、部分失败继续、重试原凭据与跨页清除选择的全部断言；不使用first定位或增加超时。修后复测和新提交完整CI结果后补。源码和SQL未因该修复修改库存审核权限。
 
 2026-09-21 01:20 CST：修后原4项浏览器用例全部通过，进入和刷新后面板唯一；网页类型、专项lint和清单检查通过。仅修改前端组件标识和浏览器断言，后端与SQL不变。提交后重新执行完整PR检查。
+
+## 2026-09-21 01:36 CST 合并与正式发布准备
+
+- [PR270](https://github.com/jingda2008/mbox-ops-platform/pull/270) 已合并，最后分支提交 `99222de26e179d22615fc8c4245af4fcd606acf0`，主线合并提交 `462577dc32e0b5fd4aa7647f28b024c94c0555bc`；两者文件树比较无差异。
+- [最终PR检查35525589287](https://github.com/jingda2008/mbox-ops-platform/actions/runs/35525589287) 全部必需检查通过。Linux数据库为2331项通过（包含本地按条件跳过的专项），浏览器94通过、16条件跳过；质量、HTTP及持续5 RPS性能检查通过。该负载不等同于真实门店混合峰值验收。
+- 标签 `v1.0.0-rc.215` 指向完整合并提交，正式发布工作区 `mbox-release-rc215-20260921` 为该提交的干净detached worktree；`npm ci`和发布元数据检查通过，依赖审计未发现漏洞。
+- 正式发布工作区的Chromium依赖检查通过，对当时线上rc.214完整SHA的 `/`、`/guest?table=W01`、`/reserve`、`/staff/live` 浏览器预检通过。
+- [标签CI35526277171](https://github.com/jingda2008/mbox-ops-platform/actions/runs/35526277171) 与 [发布工作流35526277213](https://github.com/jingda2008/mbox-ops-platform/actions/runs/35526277213) 的结果、不可变镜像身份及实际生产验证另记于下文。
+
+## 2026-09-21 01:42 CST rc.215标签失败及rc.216修复
+
+标签数据库检查在 `kitchen-production.test.ts:40` 的会话数据初始化失败，约束名 `staff_sessions_check`。迁移009要求 `expires_at = issued_at + interval '6 hours'`，但测试对两者分别调用 `clock_timestamp()`，微秒差会导致失败。该次2322项通过、后厨9项因初始化失败跳过；预期的备份恢复反例日志并非本次失败根因。
+
+SYS-309改用 `statement_timestamp()`，在同一语句中保持时间一致，不放宽约束、不删除测试或重跑掩盖原始失败。生产 `StaffSessionRepository.createSession` 使用传入的时间参数，此次不修改生产代码和SQL。rc.215发布流程取消，标签保留且未部署；重新准备rc.216元数据与完整检查。原始失败日志保存在本轮输出目录的 `tag-ci-database-attempt1.log`。
+
+2026-09-21 01:44 CST：rc.216修后新建隔离数据库的9项后厨真实事务全部通过（4.37秒），元数据、清单、专项lint和diff检查通过。完整PR与新标签检查继续执行。

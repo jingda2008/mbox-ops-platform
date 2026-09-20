@@ -1,0 +1,15 @@
+Fresh disposable PostgreSQL database; original log: outputs/review-release-20260921/rc216-kitchen-fixture.log
+ ✓ server/normalized/kitchen-production.test.ts > kitchen production real transaction boundary > freezes cross-table originals, consumes exact inventory once, releases equipment independently and creates delivery notices without delivery 409ms
+ ✓ server/normalized/kitchen-production.test.ts > kitchen production real transaction boundary > rejects incompatible notes and rolls the whole batch back when inventory for a later item fails 120ms
+ ✓ server/normalized/kitchen-production.test.ts > kitchen production real transaction boundary > concurrent stale starts cannot consume the next portions and bound portions cannot be completed by the legacy whole-item action 83ms
+ ✓ server/normalized/kitchen-production.test.ts > kitchen production real transaction boundary > direct readiness selects only the requested unmade portions when legacy work is already started 103ms
+ ✓ server/normalized/kitchen-production.test.ts > kitchen production real transaction boundary > completes exact selections, rejects held portions and does not silently choose another portion 144ms
+ ✓ server/normalized/kitchen-production.test.ts > kitchen production real transaction boundary > requires current table location even after a transfer returns to the same table 192ms
+ ✓ server/normalized/kitchen-production.test.ts > kitchen production real transaction boundary > full actual readiness releases equipment without a redundant unload and immutable bindings remain protected 270ms
+ ✓ server/normalized/kitchen-production.test.ts > kitchen production real transaction boundary > pausing new admission preserves batch visibility, readiness and replay of the original operation 332ms
+ ✓ server/normalized/kitchen-production.test.ts > kitchen production real transaction boundary > direct ready creates no fake heating timestamp, validates actor and denies revoked session including replay 119ms
+
+ Test Files  1 passed (1)
+      Tests  9 passed (9)
+   Start at  01:43:24
+   Duration  4.37s (transform 161ms, setup 0ms, import 241ms, tests 4.04s, environment 0ms)

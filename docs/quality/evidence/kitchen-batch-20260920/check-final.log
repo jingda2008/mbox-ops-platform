@@ -1,0 +1,771 @@
+
+> @mbox/ops-platform@1.0.0-rc.214 check
+> npm run checklist:verify && npm run release:metadata && npm run architecture:normalized:test && npm run architecture:normalized:verify && npm run architecture:normalized:new && npm run architecture:normalized:zero && npm run ci:classifier:test && npm run quality:evidence:test && npm run quality:model:verify && npm run tc:verify && npm run check:miniprogram && npm run check:alipay-miniprogram && npm run release:miniprogram:test && npm run typecheck:web && npm run lint && npm test && npm run build
+
+
+> @mbox/ops-platform@1.0.0-rc.214 checklist:verify
+> node scripts/verify-commercialization-checklist.mjs && node --test scripts/verify-commercialization-checklist.test.mjs
+
+{"verified":true,"historicalIssueCount":306}
+✔ preserves complete readable historical records and fails on truncation or corrupt encoding (6.887708ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 70.269084
+
+> @mbox/ops-platform@1.0.0-rc.214 release:metadata
+> node scripts/verify-release-metadata.mjs
+
+Release metadata verified: v1.0.0-rc.214, docs/release-1.0.0-rc.214.md, 2 quality registers, 25 legacy migrations, 224 normalized migrations.
+
+> @mbox/ops-platform@1.0.0-rc.214 architecture:normalized:test
+> node --test scripts/normalized-architecture-policy.test.mjs scripts/normalized-import-closure.test.mjs
+
+▶ normalized architecture ratchet
+  ✔ counts findings by rule (1.13825ms)
+  ✔ allows architectural debt to decrease (0.082625ms)
+  ✔ rejects new architectural debt (0.050292ms)
+  ✔ rejects an untracked rule (0.047417ms)
+  ✔ keeps the normalized candidate production closure free of legacy state patterns (109.840417ms)
+✔ normalized architecture ratchet (111.972792ms)
+✔ normalized default entry cannot reach the legacy API or offline runtime (67.106292ms)
+ℹ tests 6
+ℹ suites 1
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 178.238417
+
+> @mbox/ops-platform@1.0.0-rc.214 architecture:normalized:verify
+> node scripts/verify-normalized-architecture.mjs
+
+{
+  "mode": "ratchet",
+  "scope": "whole-repository-legacy-ratchet",
+  "counts": {
+    "repository-mutate": 147,
+    "runtime-state-table": 22,
+    "runtime-state-type": 488,
+    "operational-projection": 6,
+    "global-mutation-tail": 3,
+    "whole-store-cas": 2
+  }
+}
+
+> @mbox/ops-platform@1.0.0-rc.214 architecture:normalized:new
+> node scripts/verify-normalized-new-code.mjs
+
+{
+  "normalizedCodeCounts": {
+    "repository-mutate": 0,
+    "runtime-state-table": 0,
+    "runtime-state-type": 0,
+    "operational-projection": 0,
+    "global-mutation-tail": 0,
+    "whole-store-cas": 0
+  },
+  "normalizedFrontendImportFiles": 200,
+  "forbiddenFrontendDependencies": [
+    "src/api.ts",
+    "src/offline.ts"
+  ],
+  "migrationFiles": 224
+}
+
+> @mbox/ops-platform@1.0.0-rc.214 architecture:normalized:zero
+> node scripts/verify-normalized-architecture.mjs --require-zero
+
+{
+  "mode": "zero",
+  "scope": "normalized-candidate-production",
+  "counts": {
+    "repository-mutate": 0,
+    "runtime-state-table": 0,
+    "runtime-state-type": 0,
+    "operational-projection": 0,
+    "global-mutation-tail": 0,
+    "whole-store-cas": 0
+  }
+}
+
+> @mbox/ops-platform@1.0.0-rc.214 ci:classifier:test
+> node --test scripts/ci-change-scope.test.mjs
+
+✔ documentation paths stay on the fast lane (1.217708ms)
+✔ presentation-only files use the UI lane and can include documentation (0.473958ms)
+✔ only explicit frontend shells use the frontend lane (0.061125ms)
+✔ critical, configuration, workflow and unknown changes always receive full verification (0.076708ms)
+✔ database migrations are explicitly identified (0.045667ms)
+✔ unknown diffs and release tags fail closed to full verification (0.036125ms)
+✔ manual CI is diagnostic while only version tags request a deployable artifact (2.928458ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 70.545917
+
+> @mbox/ops-platform@1.0.0-rc.214 quality:evidence:test
+> node --test scripts/verify-quality-evidence.test.mjs scripts/write-ci-quality-evidence.test.mjs scripts/release-evidence-eligibility.test.mjs scripts/store-configuration-version-ledger.test.mjs
+
+✔ accepts only a clean worktree whose HEAD matches the evidence SHA (1.256958ms)
+✔ rejects a dirty worktree even when the supplied SHA matches HEAD (0.142958ms)
+✔ rejects a SHA that does not match the checked-out commit (0.072584ms)
+✔ rejects shortened or descriptive commit identifiers (0.042042ms)
+✔ accepts the tracked configuration only at its immutable version checksum (3.877917ms)
+✔ rejects changed content that reuses an existing configuration version (1.148083ms)
+✔ accepts changed content after allocating a new version and checksum (1.930208ms)
+✔ accepts internally consistent immutable release and deployment evidence (3.345292ms)
+✔ rejects false pass claims, under-sampled performance and dirty sources (0.2285ms)
+✔ does not allow a required blocked gate to be released (0.124708ms)
+✔ rejects missing gates, duplicate IDs, placeholder evidence and future timestamps (0.0905ms)
+✔ rejects fail status with zero failed cases and deployment without immutable source (0.121666ms)
+✔ rejects a green performance gate without workload details (0.066375ms)
+✔ rejects performance evidence without environment and workload identity (0.119666ms)
+✔ reports malformed performance data instead of crashing (0.098666ms)
+✔ rejects a release that deletes policy-required gates or weakens performance limits (0.101125ms)
+✔ release-pass automatically rejects mutable source and zero-case passes (0.116792ms)
+✔ rejects inconsistent environment and impossible percentile ordering (0.068666ms)
+✔ does not let a PR-sized sample claim production capacity (0.056875ms)
+✔ accepts a separately identified representative peak conclusion (0.040541ms)
+✔ release rejects missing or unverified artifacts independently from execution status (0.061875ms)
+✔ invalid observability or source drift is machine-readable and cannot release (0.075625ms)
+✔ binds release evidence to the exact policy identity and digest (0.096917ms)
+file:///Users/jingda/mbox/mbox-kitchen-batch-board-20260920/scripts/write-ci-quality-evidence.mjs:102
+    throw new Error(`规范化启动性能证据提交 ${report.run?.sourceCommitSha ?? '(missing)'} 与检出提交不一致`)
+          ^
+
+Error: 规范化启动性能证据提交 0000000000000000000000000000000000000000 与检出提交不一致
+    at browserStartupRecords (file:///Users/jingda/mbox/mbox-kitchen-batch-board-20260920/scripts/write-ci-quality-evidence.mjs:102:11)
+    at file:///Users/jingda/mbox/mbox-kitchen-batch-board-20260920/scripts/write-ci-quality-evidence.mjs:70:23
+
+Node.js v26.0.0
+file:///Users/jingda/mbox/mbox-kitchen-batch-board-20260920/scripts/write-ci-quality-evidence.mjs:113
+    if (!metric || metric.samples < 30 || metric.failures !== 0) throw new Error(`${id} 启动性能证据不完整`)
+                                                                       ^
+
+Error: normalized_guest_session_startup 启动性能证据不完整
+    at file:///Users/jingda/mbox/mbox-kitchen-batch-board-20260920/scripts/write-ci-quality-evidence.mjs:113:72
+    at Array.map (<anonymous>)
+    at browserStartupRecords (file:///Users/jingda/mbox/mbox-kitchen-batch-board-20260920/scripts/write-ci-quality-evidence.mjs:112:18)
+    at file:///Users/jingda/mbox/mbox-kitchen-batch-board-20260920/scripts/write-ci-quality-evidence.mjs:70:23
+
+Node.js v26.0.0
+file:///Users/jingda/mbox/mbox-kitchen-batch-board-20260920/scripts/write-ci-quality-evidence.mjs:180
+      throw new Error('规范化性能证据缺少已通过的服务端数据库门禁')
+            ^
+
+Error: 规范化性能证据缺少已通过的服务端数据库门禁
+    at performanceRecords (file:///Users/jingda/mbox/mbox-kitchen-batch-board-20260920/scripts/write-ci-quality-evidence.mjs:180:13)
+    at file:///Users/jingda/mbox/mbox-kitchen-batch-board-20260920/scripts/write-ci-quality-evidence.mjs:82:23
+
+Node.js v26.0.0
+✔ preserves failed route metrics instead of replacing them with missing evidence (79.266625ms)
+✔ converts normalized isolated load evidence into release performance records (80.380917ms)
+✔ rejects normalized browser startup evidence from another commit (78.710541ms)
+✔ rejects normalized browser startup evidence with too few samples (76.877167ms)
+✔ rejects normalized evidence that omits server database telemetry (79.891583ms)
+✔ distinguishes cancelled work from work that never ran (77.764541ms)
+✔ requires the normalized database gate for a full release decision (75.2695ms)
+✔ requires the normalized real-browser gate for a full release decision (75.699833ms)
+✔ uses the normalized real-browser gate for UI and frontend changes (149.229833ms)
+ℹ tests 32
+ℹ suites 0
+ℹ pass 32
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 851.44475
+
+> @mbox/ops-platform@1.0.0-rc.214 quality:model:verify
+> node scripts/verify-quality-model.mjs --state-machine docs/quality/mbox-kds-state-machine-v1.json --invariants docs/quality/mbox-invariant-register-v1.csv
+
+{
+  "passed": true,
+  "stateMachine": {
+    "passed": true,
+    "failures": [],
+    "states": 5,
+    "transitions": 4
+  },
+  "invariants": {
+    "passed": true,
+    "failures": [],
+    "rows": 5
+  }
+}
+
+> @mbox/ops-platform@1.0.0-rc.214 tc:verify
+> node scripts/build-tc-execution-register.mjs --check
+
+{
+  "mode": "check",
+  "version": "1.0.0-rc.214",
+  "total": 213,
+  "qualitySupplementTotal": 63,
+  "counts": {
+    "未执行": 196,
+    "阻塞": 17
+  },
+  "operatingReleaseBlocking": 207,
+  "supplementalReleaseBlocking": 38,
+  "normalizedReleaseBlocking": 10,
+  "routeReleaseBlocking": 9,
+  "releaseBlocking": 264,
+  "reportPath": "/Users/jingda/mbox/mbox-kitchen-batch-board-20260920/docs/tc-execution-report-1.0.0-rc.214.md",
+  "csvPath": "/Users/jingda/mbox/mbox-kitchen-batch-board-20260920/docs/tc-execution-register-1.0.0-rc.214.csv",
+  "blockersPath": "/Users/jingda/mbox/mbox-kitchen-batch-board-20260920/docs/tc-release-blockers-1.0.0-rc.214.csv"
+}
+
+> @mbox/ops-platform@1.0.0-rc.214 check:miniprogram
+> node scripts/check-miniprogram.mjs
+
+mini-program static verification passed (166 files)
+
+> @mbox/ops-platform@1.0.0-rc.214 check:alipay-miniprogram
+> node scripts/check-alipay-miniprogram.mjs && node --test scripts/alipay-miniprogram-platform.test.mjs
+
+Alipay Mini Program parity verification passed (23 pages, 5 tabs, 1119314 bytes)
+✔ normalizes Alipay synchronous storage to the shared page contract (1.320625ms)
+✔ missing account-info API defaults to release rather than development (0.073167ms)
+✔ defaults unknown clients to production and cannot override locked server capabilities (0.5765ms)
+✔ scan is camera-only and does not admit album replay (0.106334ms)
+✔ normalizes request headers and response status without changing the business URL (0.163416ms)
+✔ turns Alipay http status error into a normal HTTP response so 201 enroll can succeed (0.1215ms)
+✔ surfaces Alipay 4xx http status error body instead of a fake network failure (0.106084ms)
+✔ keeps real transport failures on the fail path (0.079834ms)
+✔ maps shared toast and phone-call options to Alipay parameter names (0.094959ms)
+✔ only presents a server-created Alipay trade number (0.128333ms)
+✔ missing trade number fails closed before invoking Alipay (0.058125ms)
+✔ maps Alipay result code 6001 to an explicit cancellation (0.082ms)
+✔ getAuthorize callback always calls getPhoneNumber unless the event already has ciphertext (0.340166ms)
+ℹ tests 13
+ℹ suites 0
+ℹ pass 13
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 72.197541
+
+> @mbox/ops-platform@1.0.0-rc.214 release:miniprogram:test
+> node --test scripts/miniprogram-home-launch-state.test.mjs scripts/miniprogram-scan-startup.test.mjs scripts/miniprogram-custody.test.mjs scripts/miniprogram-launch-popup.test.mjs scripts/miniprogram-policy-readability.test.mjs scripts/miniprogram-order-performance.test.mjs scripts/miniprogram-checkout-upgrade.test.mjs scripts/miniprogram-checkout-coupons.test.mjs scripts/miniprogram-cart-portions.test.mjs scripts/miniprogram-marketing-preferences.test.mjs scripts/miniprogram-member-cards.test.mjs scripts/miniprogram-benefit-wallet.test.mjs scripts/miniprogram-session-launch.test.mjs scripts/miniprogram-table-scope-race.test.mjs scripts/miniprogram-invalid-scan-recovery.test.mjs scripts/miniprogram-customer-funnel.test.mjs scripts/miniprogram-menu-pagination.test.mjs scripts/miniprogram-compact-overlay-actions.test.mjs scripts/miniprogram-viewport-layout.test.mjs scripts/build-miniprogram-release-candidate.test.mjs scripts/verify-miniprogram-release.test.mjs
+
+✔ builds an isolated non-secret upload candidate with formal identity and URL checks enabled (181.638958ms)
+✔ rejects empty identity, IP origins, development fallback and output overwrite (8.140333ms)
+✔ omits developer-private files from the upload package (287.001459ms)
+✔ miniprogram: fixed selling price is not rendered as a deduction or a free gift (11.063208ms)
+✔ miniprogram: shows server calendar and shared frequency without claiming weekly grants (2.671541ms)
+✔ miniprogram: future status and Beijing date, no fake gift cash balance (3.215083ms)
+✔ miniprogram: pagination retry keeps existing wallet and deduplicates overlapping rows (4.36075ms)
+✔ miniprogram: hidden page rejects late response; next identity load clears old data (2.832167ms)
+✔ alipay-miniprogram: fixed selling price is not rendered as a deduction or a free gift (3.509416ms)
+✔ alipay-miniprogram: shows server calendar and shared frequency without claiming weekly grants (3.689792ms)
+✔ alipay-miniprogram: future status and Beijing date, no fake gift cash balance (1.207958ms)
+✔ alipay-miniprogram: pagination retry keeps existing wallet and deduplicates overlapping rows (1.424833ms)
+✔ alipay-miniprogram: hidden page rejects late response; next identity load clears old data (1.723917ms)
+✔ miniprogram: editing binds the original portion and cart version across remote refresh (13.565875ms)
+✔ miniprogram: version conflict refreshes without pretending selection was saved (8.791791ms)
+✔ alipay-miniprogram: editing binds the original portion and cart version across remote refresh (5.090625ms)
+✔ alipay-miniprogram: version conflict refreshes without pretending selection was saved (5.291583ms)
+✔ miniprogram: two identical products have independent coupon choices, not one quantity-wide discount (4.524ms)
+✔ miniprogram: only a matching server quote permits discounted confirmation (4.46175ms)
+✔ miniprogram: choosing original price invalidates an in-flight discounted response (1.11975ms)
+✔ miniprogram: remote cart changes require review, never silently fall back to full price (0.868167ms)
+✔ miniprogram: changing table ignores a delayed wallet response (0.675541ms)
+✔ miniprogram: wallet pagination failures preserve selected items and original-price escape (0.729542ms)
+✔ alipay-miniprogram: two identical products have independent coupon choices, not one quantity-wide discount (0.778709ms)
+✔ alipay-miniprogram: only a matching server quote permits discounted confirmation (0.557917ms)
+✔ alipay-miniprogram: choosing original price invalidates an in-flight discounted response (0.546375ms)
+✔ alipay-miniprogram: remote cart changes require review, never silently fall back to full price (0.580125ms)
+✔ alipay-miniprogram: changing table ignores a delayed wallet response (0.885667ms)
+✔ alipay-miniprogram: wallet pagination failures preserve selected items and original-price escape (0.793375ms)
+✔ miniprogram: once per cart, optional request never marks checkout busy (5.023333ms)
+✔ miniprogram: failed recommendation leaves original confirmation open (1.981209ms)
+✔ miniprogram: stale table, quote version or changed coupon selection cannot display delayed offer (2.244458ms)
+✔ miniprogram: acceptance refreshes actual cart and maps only replaced coupon portion (1.473875ms)
+✔ miniprogram: unknown acceptance refreshes without starting payment or trapping busy (0.849542ms)
+✔ miniprogram: accepting on old table cannot overwrite a new table (0.793959ms)
+✔ miniprogram: unknown write plus failed refresh cannot submit the old cart (0.842333ms)
+✔ miniprogram: required choices do not mutate until selection and explicit confirmation (0.924833ms)
+✔ miniprogram: cancelling required choices retains original cart and coupons (1.132791ms)
+✔ alipay-miniprogram: once per cart, optional request never marks checkout busy (1.734625ms)
+✔ alipay-miniprogram: failed recommendation leaves original confirmation open (0.566542ms)
+✔ alipay-miniprogram: stale table, quote version or changed coupon selection cannot display delayed offer (1.7815ms)
+✔ alipay-miniprogram: acceptance refreshes actual cart and maps only replaced coupon portion (0.413167ms)
+✔ alipay-miniprogram: unknown acceptance refreshes without starting payment or trapping busy (0.713459ms)
+✔ alipay-miniprogram: accepting on old table cannot overwrite a new table (0.630625ms)
+✔ alipay-miniprogram: unknown write plus failed refresh cannot submit the old cart (1.100584ms)
+✔ alipay-miniprogram: required choices do not mutate until selection and explicit confirmation (0.9925ms)
+✔ alipay-miniprogram: cancelling required choices retains original cart and coupons (0.400834ms)
+✔ overlay close and share controls keep an 88rpx hit target with compact visual surfaces (5.998791ms)
+✔ all overlay dismiss controls and the custom activity share control use the compact visual system (2.639041ms)
+✔ order headers reclaim the space previously reserved for oversized dismiss controls (4.079541ms)
+✔ quantities, Beijing time, expiry and historical extra fields preserve business meaning (4.910333ms)
+✔ list pagination failure is retryable without losing rows; retries deduplicate (2.3875ms)
+✔ failed first read is not an empty successful list; hidden-page replies are discarded (2.61875ms)
+✔ photo failures preserve full detail and allow retry and native preview; unload clears temporary photos (2.05575ms)
+✔ late photos cannot restore another session data or persist new files (6.05275ms)
+✔ customer navigation promotes familiar choices without mutating custom or operational categories (25.105708ms)
+✔ WeChat configured food parent and snack child share one category and filter without losing products (8.7845ms)
+✔ bundle catalogue remains exhaustive and separate from scanned recommendations (4.841833ms)
+✔ miniprogram: stopped admissions preserve payment facts but block new registration (1.467084ms)
+✔ alipay-miniprogram: stopped admissions preserve payment facts but block new registration (0.992125ms)
+✔ home offers menu browsing and an explicit opt-in membership invitation (0.866292ms)
+✔ home menu entry stays a compact full-width horizontal control (1.486458ms)
+✔ membership consent stays unchecked and phone authorization appears only after the customer checks it (0.533625ms)
+✔ customer pages avoid duplicate status labels and backstage implementation copy (2.181125ms)
+✔ customer checkout keeps cancellation recovery and offers explicit current-table batch payment (6.004208ms)
+✔ activity cards are horizontal brand-green surfaces and profile actions expose their destinations (4.536292ms)
+✔ activity-list dates use the shared iOS-safe time parser (3.841209ms)
+✔ activity registration distinguishes confirmed, payment-pending, and waitlist states (3.092292ms)
+✔ a required paid activity opens WeChat payment as part of one registration action (5.303042ms)
+✔ activity registration asks only for a phone number and guides a missed field into view (7.105084ms)
+✔ tonight ordering keeps live service separate from recommendation and delegates ranking to the server (9.129166ms)
+✔ Superhigh activity access invites non-members to join with native WeChat phone authorization (4.781792ms)
+✔ profile membership invitation enrolls after one explicit checkbox and one confirmation button (7.244459ms)
+✔ profile opens the configured WeCom customer-service conversation through the native WeChat API (1.107416ms)
+✔ native tab bar uses a consistent icon system with a restrained green selected state (3.612417ms)
+✔ official M-BOX artwork replaces temporary letter marks with restrained circular badges (2.0445ms)
+✔ every packaged mini-program image stays within the 200KB asset budget (4.473375ms)
+✔ every public menu image available to the mini-program stays within the 200KB budget (60.870333ms)
+✔ customers can browse a read-only menu before scanning, but the browse view cannot add products (1.240208ms)
+✔ customer menu categories come from the editable backend hierarchy and reveal a configured second level only when needed (1.591208ms)
+✔ customer pages use Chinese release copy and the table cart is server-authoritative (3.518709ms)
+✔ recommendations stay inside the current table menu and never bypass guest ordering gates (0.634958ms)
+✔ customer-facing primary controls keep a comfortable touch target and checkout uses M-BOX brand green (1.134083ms)
+✔ monthly performance calendar starts at today and keeps date choices compact (1.852166ms)
+✔ customer surfaces keep neutral browsing, meaningful activity labels, and reachable membership controls (1.701792ms)
+✔ customer-only reservations stay executable, performances use the public schedule, and store contact is opt-in configured (4.736083ms)
+✔ subscription messages are requested from customer actions, not a settings-page application flow (5.766125ms)
+✔ WeChat community loads actual activities without Intl or a performance dependency (4.457459ms)
+✔ WeChat customer errors hide JavaScript reference failures while preserving business messages (1.089791ms)
+✔ first Home tab visit preserves the scan established by a direct Order launch (12.588709ms)
+✔ Home creation does not replace a newer warm scan with stale page options (3.542042ms)
+✔ Home preserves a verified table visit and its guest cookie across first tab creation (5.337625ms)
+✔ cold unscanned Home launch still does not revive a previous active table from storage (5.42925ms)
+✔ miniprogram waiting polls coalesce and an actual new scan bypasses the waiting flow (7.089667ms)
+✔ miniprogram a wait result arriving after a new scan cannot bind the previous table (4.522708ms)
+✔ miniprogram invalid rescan never reinstates old credentials or cart (3.916459ms)
+✔ alipay-miniprogram waiting polls coalesce and an actual new scan bypasses the waiting flow (2.940417ms)
+✔ alipay-miniprogram a wait result arriving after a new scan cannot bind the previous table (1.970041ms)
+✔ alipay-miniprogram invalid rescan never reinstates old credentials or cart (1.560542ms)
+✔ daily uses Shanghai day supplied by component; navigation and reopening same day do not repeat (0.71075ms)
+✔ session and foreground frequency differ, disabled/unknown configuration remains silent (0.108708ms)
+✔ recommendation uses API price/image, handles missing price and uses full image and falls back to placeholder (1.818084ms)
+✔ miniprogram: contact support stays independent and page routes are unique (11.032458ms)
+✔ miniprogram: default unselected and explicit scoped choices without platform authorization calls (4.889709ms)
+✔ miniprogram: joint activities need a separate choice and reopening resets native checkbox state (2.282833ms)
+✔ miniprogram: stop-all works after failed preference read and sends no notice or contact identity (2.408042ms)
+✔ miniprogram: late initial read cannot overwrite an in-flight stop-all or re-enable actions (1.171416ms)
+✔ miniprogram: unknown write is retryable and double taps cannot submit a second command (2.373083ms)
+✔ alipay-miniprogram: contact support stays independent and page routes are unique (2.762958ms)
+✔ alipay-miniprogram: default unselected and explicit scoped choices without platform authorization calls (1.574042ms)
+✔ alipay-miniprogram: joint activities need a separate choice and reopening resets native checkbox state (1.547417ms)
+✔ alipay-miniprogram: stop-all works after failed preference read and sends no notice or contact identity (1.630541ms)
+✔ alipay-miniprogram: late initial read cannot overwrite an in-flight stop-all or re-enable actions (2.221125ms)
+✔ alipay-miniprogram: unknown write is retryable and double taps cannot submit a second command (1.330875ms)
+✔ miniprogram: gift progress failure does not clear cards or invent an empty successful gift history (10.629541ms)
+✔ miniprogram: gift history is paginated, retryable, deduplicated and stale responses ignored (2.152834ms)
+✔ miniprogram: failed identity read stays unknown rather than claiming no membership or cards (2.991417ms)
+✔ miniprogram: pagination failure preserves rows and cursor, retry deduplicates (1.838583ms)
+✔ miniprogram: server pending and held flags prevent duplicate entry outside loaded history (4.155959ms)
+✔ miniprogram: explicit terms acceptance only, no implicit marketing or grade mutation (2.771667ms)
+✔ miniprogram: pending, held and nonmembers cannot open a new application (2.675333ms)
+✔ miniprogram: unknown result allows explicit recovery without pretending success (0.9235ms)
+✔ miniprogram: hidden page ignores late reads and clears previous identity data (1.220625ms)
+✔ miniprogram: old confirmation cannot withdraw after navigation (2.21525ms)
+✔ miniprogram: double tap during submission does not send a second command (0.976667ms)
+✔ alipay-miniprogram: gift progress failure does not clear cards or invent an empty successful gift history (0.780083ms)
+✔ alipay-miniprogram: gift history is paginated, retryable, deduplicated and stale responses ignored (1.480167ms)
+✔ alipay-miniprogram: failed identity read stays unknown rather than claiming no membership or cards (2.360125ms)
+✔ alipay-miniprogram: pagination failure preserves rows and cursor, retry deduplicates (3.142583ms)
+✔ alipay-miniprogram: server pending and held flags prevent duplicate entry outside loaded history (1.489959ms)
+✔ alipay-miniprogram: explicit terms acceptance only, no implicit marketing or grade mutation (2.736292ms)
+✔ alipay-miniprogram: pending, held and nonmembers cannot open a new application (5.245375ms)
+✔ alipay-miniprogram: unknown result allows explicit recovery without pretending success (4.042417ms)
+✔ alipay-miniprogram: hidden page ignores late reads and clears previous identity data (0.82025ms)
+✔ alipay-miniprogram: old confirmation cannot withdraw after navigation (0.989084ms)
+✔ alipay-miniprogram: double tap during submission does not send a second command (0.936917ms)
+✔ public menu loads every page beyond 100 and deduplicates a boundary repeat (22.950958ms)
+✔ guest menu preserves filters and table scope across all pages (8.629125ms)
+✔ menu page retries two transient failures and then completes (8.974791ms)
+✔ menu never reports a partial catalog as complete after retries are exhausted (3.1865ms)
+✔ menu stops immediately when the table changes during a page request (1.738125ms)
+✔ customer copy distinguishes an incomplete menu from an expired table session (1.6675ms)
+✔ miniprogram: stalled optional content and images do not block menu, adding or authority submit (59.354291ms)
+✔ miniprogram: menu is visible before cart but cannot mutate until cart is confirmed (29.306875ms)
+✔ miniprogram: old table menu and optional responses cannot replace a new scan (22.547958ms)
+✔ miniprogram: image failures preserve all products, searchable last item, price and valid writes (13.21175ms)
+✔ miniprogram: delayed old-table image errors do not alter the new menu (21.103459ms)
+✔ miniprogram: failed bill read permits selection but blocks new payment until recovery (11.327541ms)
+✔ miniprogram: failed optional module retries alone without reloading cart (11.774416ms)
+✔ miniprogram: disabled recommendations stay quiet while normal ordering remains usable (12.942875ms)
+✔ miniprogram: recommendation configuration retries without reloading essential data (12.296334ms)
+✔ miniprogram: uncompleted first-screen images count as failures without storing identifiers in statistics (9.590041ms)
+✔ miniprogram: diagnostics are bounded numerical summaries without customer or table identifiers (7.184667ms)
+✔ alipay-miniprogram: stalled optional content and images do not block menu, adding or authority submit (14.237417ms)
+✔ alipay-miniprogram: menu is visible before cart but cannot mutate until cart is confirmed (28.132083ms)
+✔ alipay-miniprogram: old table menu and optional responses cannot replace a new scan (22.245291ms)
+✔ alipay-miniprogram: image failures preserve all products, searchable last item, price and valid writes (11.735625ms)
+✔ alipay-miniprogram: delayed old-table image errors do not alter the new menu (16.004541ms)
+✔ alipay-miniprogram: failed bill read permits selection but blocks new payment until recovery (9.322583ms)
+✔ alipay-miniprogram: failed optional module retries alone without reloading cart (10.343834ms)
+✔ alipay-miniprogram: disabled recommendations stay quiet while normal ordering remains usable (12.85575ms)
+✔ alipay-miniprogram: recommendation configuration retries without reloading essential data (8.832ms)
+✔ alipay-miniprogram: uncompleted first-screen images count as failures without storing identifiers in statistics (7.541208ms)
+✔ alipay-miniprogram: diagnostics are bounded numerical summaries without customer or table identifiers (4.119917ms)
+✔ Alipay retains its real payment-disabled guard while menu and selection remain available (12.086708ms)
+✔ WeChat SYS-211: slow bill permits adding; concurrent submit reuses the read and sends one checkout (12.63325ms)
+✔ WeChat SYS-211: delayed bill failure preserves cart and checkout retries after payment recovery (12.037625ms)
+✔ WeChat SYS-211: late bill from new table reload cannot overwrite current payment or cart (14.931583ms)
+✔ WeChat SYS-211: late bill from same table reload cannot overwrite current payment or cart (13.190667ms)
+✔ WeChat SYS-211: a confirmed old bill does not authorize checkout during a new table load (13.644166ms)
+✔ WeChat SYS-211: delayed payment_in_progress restores own payment without losing new cart items (7.903292ms)
+✔ WeChat SYS-211: delayed status_review restores own payment without losing new cart items (9.526125ms)
+✔ WeChat SYS-211: delayed paid result clears recovery only after confirmation and retains selection (9.183875ms)
+✔ WeChat SYS-211: checkout recovery keeps its idempotency key and a late empty bill cannot erase the new payment (7.865541ms)
+✔ WeChat SYS-211: frozen cart remains read only while bill is pending (7.120917ms)
+✔ WeChat SYS-211: a failed cart read cannot be unlocked by a successful bill (6.954ms)
+✔ WeChat SYS-211: leaving the page discards a late bill response (8.545084ms)
+✔ WeChat agreements remain readable with broken login and never send member, table or identity credentials (12.857ms)
+✔ WeChat privacy retries and old failed response cannot erase the newer published policy (9.434084ms)
+✔ WeChat privacy failure is visible and reopening the page recovers without login (2.966667ms)
+✔ WeChat service agreement viewing does not load personal membership (3.532833ms)
+✔ WeChat enrollment identity can stall or fail without hiding terms or authorizing enrollment (3.586166ms)
+✔ WeChat enrollment recovery requires a new explicit agreement and preserves existing members (5.920875ms)
+✔ WeChat policy and terms ignore responses after leaving the page (23.266834ms)
+✔ WeChat agreement pages expose retries and do not label a network failure as unpublished (0.471667ms)
+✔ WeChat dietary consent defaults off and editing the text cancels earlier selection (5.2885ms)
+✔ WeChat dietary notes cannot be saved without separate consent and clear-to-withdraw remains available (3.089083ms)
+✔ WeChat failed initial preference read cannot overwrite the stored profile (4.2985ms)
+✔ cold scan overlaps wx.login and challenge instead of serial round trips (7.562334ms)
+✔ scan waits for verified identity but not the unrelated reservation session (2.694917ms)
+✔ valid cached identity scans without waiting for reservation renewal (3.068667ms)
+✔ identity failure retains existing scan fallback and a later attempt can retry (2.854125ms)
+✔ explicit member logout does not silently authenticate again on table scan (1.835584ms)
+{"name":"all-native-page-bindings","evidence":[{"route":"pages/home/index","bindings":34,"handlers":20,"missing":[]},{"route":"pages/brand-story/index","bindings":1,"handlers":1,"missing":[]},{"route":"pages/reservations/index","bindings":22,"handlers":20,"missing":[]},{"route":"pages/order/index","bindings":79,"handlers":54,"missing":[]},{"route":"pages/community/index","bindings":7,"handlers":7,"missing":[]},{"route":"pages/community-detail/index","bindings":19,"handlers":17,"missing":[]},{"route":"pages/profile/index","bindings":41,"handlers":31,"missing":[]},{"route":"pages/profile-preferences/index","bindings":13,"handlers":12,"missing":[]},{"route":"pages/profile-contact/index","bindings":3,"handlers":3,"missing":[]},{"route":"pages/profile-coupons/index","bindings":2,"handlers":2,"missing":[]},{"route":"pages/profile-cards/index","bindings":14,"handlers":10,"missing":[]},{"route":"pages/profile-marketing/index","bindings":8,"handlers":8,"missing":[]},{"route":"pages/profile-bottles/index","bindings":4,"handlers":4,"missing":[]},{"route":"pages/profile-bottle-detail/index","bindings":4,"handlers":4,"missing":[]},{"route":"pages/profile-notifications/index","bindings":1,"handlers":1,"missing":[]},{"route":"pages/performances/index","bindings":6,"handlers":5,"missing":[]},{"route":"pages/points/index","bindings":4,"handlers":3,"missing":[]},{"route":"pages/member-center/index","bindings":13,"handlers":9,"missing":[]},{"route":"pages/membership-terms/index","bindings":6,"handlers":5,"missing":[]},{"route":"pages/account/index","bindings":3,"handlers":3,"missing":[]},{"route":"pages/service/index","bindings":6,"handlers":6,"missing":[]},{"route":"pages/status/index","bindings":3,"handlers":2,"missing":[]},{"route":"pages/complaint/index","bindings":3,"handlers":3,"missing":[]},{"route":"pages/songs/index","bindings":5,"handlers":5,"missing":[]},{"route":"pages/privacy/index","bindings":8,"handlers":8,"missing":[]}]}
+✔ body-less DELETE requests do not send application/json content-type (6.282042ms)
+✔ POST requests still send application/json content-type (0.655834ms)
+✔ an ended guest table session clears only the current local table binding (0.896167ms)
+✔ public requests send only the reservation session and never inherit WeChat bearer or caller cookies (0.811791ms)
+✔ guest scan starts without another domain credential, then sends only the issued guest session (0.931709ms)
+✔ all Set-Cookie values are parsed without splitting the comma in Expires (0.707875ms)
+✔ table-session switching and cookie clearing never overwrite the reservation domain (0.795542ms)
+✔ legacy one-slot cookies migrate by their exact name and cannot cross domains (1.86775ms)
+✔ WeChat bearer is opt-in for a dedicated identity call and rejected on public or guest routes (0.634291ms)
+✔ only redemption creation can explicitly combine reservation and guest sessions without a bearer (0.746917ms)
+✔ an anonymous shared activity preview does not initialize a member session before its public read (1.0195ms)
+✔ an anonymous share preview sends and stores no member, guest, device, or table credential (0.579083ms)
+✔ the mini-program API opts into the combined credential only for redemption creation (1.409375ms)
+✔ an anonymous activity preview uses the narrow preview endpoint and keeps a local package choice through membership refresh (3.224ms)
+✔ WeChat friend and timeline shares contain only the public activity identifier and share source (0.972208ms)
+✔ activity payment identity recovery forces a new identity and resumes the preserved next action (0.9305ms)
+✔ a share launch reaches the preview without creating a reservation session until the recipient requests member access (0.969ms)
+✔ malformed and missing activity-share links do not create a reservation session before the preview returns its neutral not-found result (1.096292ms)
+✔ the activity detail exposes the standard friend share control and the public-preview membership handoff (0.640625ms)
+✔ public sharing exposes only approved public routes and strips unsafe query state (0.882583ms)
+✔ public pages explicitly expose WeChat friend and timeline sharing while private pages remain excluded (3.848833ms)
+✔ the native share menu enables both recipient surfaces without a share ticket (0.569125ms)
+✔ shared performance links preserve a future selected date but never revive a past date (0.280333ms)
+✔ miniprogram never awaits prior order release to review a separate cart (0.757417ms)
+✔ alipay-miniprogram never awaits prior order release to review a separate cart (0.477333ms)
+✔ a changed table token clears only the guest cookie and prior table connection (1.097334ms)
+✔ an explicit rescan of the same fixed QR clears the prior cart generation before requesting the next turn (0.853709ms)
+✔ wrong-table payment recovery has a direct rescan instruction (1.247958ms)
+✔ a delayed A guest-session response cannot overwrite B connection state or connected token (2.537417ms)
+✔ a fixed QR rescan keeps B when B resolves before the prior A turnover response (2.089625ms)
+✔ a delayed ordinary guest-order response cannot replace B guest cookie and cannot clear reservation cookie (0.697875ms)
+✔ a delayed A response from the same fixed QR cannot replace B turnover guest cookie (0.803875ms)
+✔ Home refreshes from an unscanned launch after a table scan and displays only the current table (2.240541ms)
+✔ a token-only scan stays current when the guest-session response resolves its table code (1.372042ms)
+✔ Order keeps a token-only scan active and clears an unscoped A pending payment during a weak B-table refresh (3.888375ms)
+✔ Order does not reopen payment after WeChat accepted it while the server is still confirming (1.568875ms)
+✔ Order renders only the server-owned three questions and sends exactly those answers for guided recommendations (2.819208ms)
+✔ Order cancels a legacy pending checkout instead of retrying its old payment (3.215458ms)
+✔ Order permits a fresh cart while previous payment release is slow, retaining its financial recovery (2.985791ms)
+✔ Order permits a fresh cart while previous payment release is rejected, retaining its financial recovery (1.692667ms)
+✔ A late terminal payment release cannot remove another table recovery record (1.440875ms)
+✔ Account drops an A pending-payment record and late A orders after a B table switch (1.243583ms)
+✔ Account clears an unscoped legacy pending-payment record before showing a table bill (0.457542ms)
+✔ Account permits an explicit batch payment for a current-table unpaid order (0.478208ms)
+✔ miniprogram loads own history without a table and leaves pending payment recovery untouched (0.590292ms)
+✔ miniprogram retains paid order totals, frozen item prices and independent selections (0.875708ms)
+✔ alipay-miniprogram loads own history without a table and leaves pending payment recovery untouched (1.186208ms)
+✔ alipay-miniprogram retains paid order totals, frozen item prices and independent selections (1.071417ms)
+✔ guest cart opens a review sheet before it creates an order or starts payment (2.205625ms)
+✔ a prior payment confirmation never freezes cart edits and a new cart still opens its review sheet (1.489292ms)
+✔ shared cart checkout launches WeChat payment immediately after the single confirmation (1.898208ms)
+✔ definite pre-order checkout rejection unlocks the cart and explains that no order was created (1.741ms)
+✔ the previous online-payment-unavailable response also unlocks without creating a second attempt (1.280667ms)
+✔ CHECKOUT_COUPON_RECONFIRM_REQUIRED reopens price confirmation without retaining a locked checkout attempt (2.22575ms)
+✔ COUPON_UPGRADE_REQUOTE_REQUIRED reopens price confirmation without retaining a locked checkout attempt (1.585709ms)
+✔ unknown checkout result preserves and retries the same idempotent attempt without a blocking sheet (1802.572334ms)
+✔ miniprogram: quantity after-sales keeps original prices and separates unresolved orders from payable balance (0.914375ms)
+✔ alipay-miniprogram: quantity after-sales keeps original prices and separates unresolved orders from payable balance (0.741333ms)
+{"name":"preference-multiple-selection-roundtrip","evidence":{"selectedBefore":["cocktail","wine"],"saved":"mixed","selectedAfter":["cocktail","wine"]}}
+{"name":"notification-errors-visible","evidence":{"loading":false,"error":"积分提醒：读取失败；会员提醒：读取失败","options":[]}}
+{"name":"order-same-table-hide-return-service-recovered","evidence":{"writesAfterSecondClick":2,"quickServiceBusy":""}}
+{"name":"order-same-table-hide-return-cart-recovered","evidence":{"cartSyncing":false,"requestsAfterSecondClick":2}}
+{"name":"reservation-date-request-response-race","evidence":{"selectedDate":"2026-09-11","showId":"NEW-DAY","acceptingReservations":false}}
+✔ WeChat home table scan does not wait for optional homepage content (2.769209ms)
+✔ SYS-092/096/097/098 page lifecycle and response ownership regression (10.588958ms)
+✔ guest writes retain the same attempt after lost responses and reload, isolate table/member, and allow deliberate repeats (1.142458ms)
+✔ reads the official mini-program code token from launchOptions.query.scene (0.473292ms)
+✔ reads encoded scene parameters and accepts matching explicit aliases (0.416375ms)
+✔ scopes local table records to the scanned credential, not a reusable table code (0.517875ms)
+✔ rebases the verified scan response but drops a delayed response from an earlier fixed-QR turnover (0.510416ms)
+✔ a cold launch of the same fixed QR starts a fresh generation and keeps the new turn after an old response (1.17225ms)
+✔ rejects conflicting, malformed or unknown scene values instead of choosing one credential (0.517375ms)
+✔ the in-mini-program scanner accepts official mini-program codes without allowing album replay (0.443292ms)
+✔ published activity and home images resolve against the reviewed API host in the mini-program (2.775666ms)
+✔ miniprogram never awaits prior order release to review a separate cart (6.081375ms)
+✔ alipay-miniprogram never awaits prior order release to review a separate cart (2.126167ms)
+✔ a changed table token clears only the guest cookie and prior table connection (1.890541ms)
+✔ an explicit rescan of the same fixed QR clears the prior cart generation before requesting the next turn (0.733833ms)
+✔ wrong-table payment recovery has a direct rescan instruction (0.857167ms)
+✔ a delayed A guest-session response cannot overwrite B connection state or connected token (3.426708ms)
+✔ a fixed QR rescan keeps B when B resolves before the prior A turnover response (4.057625ms)
+✔ a delayed ordinary guest-order response cannot replace B guest cookie and cannot clear reservation cookie (1.193417ms)
+✔ a delayed A response from the same fixed QR cannot replace B turnover guest cookie (0.958666ms)
+✔ Home refreshes from an unscanned launch after a table scan and displays only the current table (3.57525ms)
+✔ a token-only scan stays current when the guest-session response resolves its table code (1.65075ms)
+✔ Order keeps a token-only scan active and clears an unscoped A pending payment during a weak B-table refresh (3.484541ms)
+✔ Order does not reopen payment after WeChat accepted it while the server is still confirming (4.832292ms)
+✔ Order renders only the server-owned three questions and sends exactly those answers for guided recommendations (3.093834ms)
+✔ Order cancels a legacy pending checkout instead of retrying its old payment (2.72975ms)
+✔ Order permits a fresh cart while previous payment release is slow, retaining its financial recovery (3.597167ms)
+✔ Order permits a fresh cart while previous payment release is rejected, retaining its financial recovery (1.717333ms)
+✔ A late terminal payment release cannot remove another table recovery record (2.503ms)
+✔ Account drops an A pending-payment record and late A orders after a B table switch (1.195792ms)
+✔ Account clears an unscoped legacy pending-payment record before showing a table bill (0.959166ms)
+✔ Account permits an explicit batch payment for a current-table unpaid order (0.644333ms)
+✔ miniprogram loads own history without a table and leaves pending payment recovery untouched (1.212042ms)
+✔ miniprogram retains paid order totals, frozen item prices and independent selections (0.939542ms)
+✔ alipay-miniprogram loads own history without a table and leaves pending payment recovery untouched (1.331833ms)
+✔ alipay-miniprogram retains paid order totals, frozen item prices and independent selections (1.448333ms)
+✔ guest cart opens a review sheet before it creates an order or starts payment (2.405084ms)
+✔ a prior payment confirmation never freezes cart edits and a new cart still opens its review sheet (1.743667ms)
+✔ shared cart checkout launches WeChat payment immediately after the single confirmation (2.203583ms)
+✔ definite pre-order checkout rejection unlocks the cart and explains that no order was created (2.199083ms)
+✔ the previous online-payment-unavailable response also unlocks without creating a second attempt (2.350416ms)
+✔ CHECKOUT_COUPON_RECONFIRM_REQUIRED reopens price confirmation without retaining a locked checkout attempt (2.892666ms)
+✔ COUPON_UPGRADE_REQUOTE_REQUIRED reopens price confirmation without retaining a locked checkout attempt (3.636917ms)
+✔ unknown checkout result preserves and retries the same idempotent attempt without a blocking sheet (1805.111542ms)
+✔ miniprogram: quantity after-sales keeps original prices and separates unresolved orders from payable balance (0.82225ms)
+✔ alipay-miniprogram: quantity after-sales keeps original prices and separates unresolved orders from payable balance (1.278041ms)
+✔ WeChat home table scan does not wait for optional homepage content (3.387041ms)
+✔ membership and consent actions override native half-width without overflowing action groups (4.839416ms)
+✔ persistent customer actions occupy layout rows instead of covering scrollable content (2.694708ms)
+✔ tab pages do not double-count the native tab-bar safe area or force viewport width (1.337917ms)
+✔ non-tab detail actions retain the physical device safe area and flexible narrow-screen buttons (0.994209ms)
+✔ only modal masks remain fixed across mini-program pages (9.712125ms)
+✔ blocks source placeholders, fake AppIDs and absent candidate evidence (5.258792ms)
+✔ keeps candidate, upload and release as separate trust claims (389.20525ms)
+✔ does not treat arbitrary local files plus SHA256 as platform authenticity evidence (78.330917ms)
+✔ rejects an upload attestation reused for release and a signature from another key (164.968167ms)
+✔ rejects tampered candidate, unapproved domain and duplicate official table entry (81.773083ms)
+ℹ tests 308
+ℹ suites 0
+ℹ pass 308
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2493.171333
+
+> @mbox/ops-platform@1.0.0-rc.214 typecheck:web
+> tsc -p tsconfig.normalized-web.json
+
+
+> @mbox/ops-platform@1.0.0-rc.214 lint
+> oxlint server/normalized server/normalized-server.ts server/migrate-normalized.ts server/provision-normalized-store.ts server/provision-normalized-catalog.ts server/provision-normalized-release.ts server/verify-normalized-commercial-readiness.ts src/main.tsx src/normalized-api.ts src/normalized-ui src/components/MenuOrderingWorkspace.tsx src/shared/normalized-contracts.ts src/shared/order-contracts.ts src/shared/payment-contracts.ts src/shared/payment-provider-contracts.ts src/shared/postar-contracts.ts src/shared/product-display-snapshot.ts
+
+src/normalized-ui/guest/GuestApp.tsx:994:17: warning react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+src/components/MenuOrderingWorkspace.tsx:45:17: warning react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+src/components/MenuOrderingWorkspace.tsx:185:17: warning react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+server/normalized/database-maintenance-restore.integration.test.ts:62:11: warning eslint(no-unused-vars): Variable 'targetUrl' is declared but never used. Unused variables should start with a '_'. help: Consider removing this declaration.
+src/normalized-ui/StaffTodoPanel.tsx:16:67: warning react-hooks(exhaustive-deps): React Hook useMemo has unnecessary dependency: signature help: Either include it or remove the dependency array.
+src/normalized-ui/NormalizedStaffApp.tsx:242:17: warning react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+src/normalized-ui/CouponRefundReviewPanel.tsx:16:71: warning react-hooks(exhaustive-deps): The ref's value `.current` is accessed directly in the effect cleanup function. help: The ref value will likely have changed by the time this effect cleanup function runs. If this ref points to a node rendered by react, copy it to a variable inside the effect and use that variable in the cleanup function.
+src/normalized-ui/MembershipConfigurationCenterPanel.tsx:61:101: warning react-hooks(exhaustive-deps): React Hook useEffect has a missing dependency: 'open' help: Either include it or remove the dependency array.
+src/normalized-ui/RemakePhysicalHandoverPanel.tsx:34:16: warning react-hooks(exhaustive-deps): The ref's value `.current` is accessed directly in the effect cleanup function. help: The ref value will likely have changed by the time this effect cleanup function runs. If this ref points to a node rendered by react, copy it to a variable inside the effect and use that variable in the cleanup function.
+src/normalized-ui/RemakePhysicalHandoverPanel.tsx:34:33: warning react-hooks(exhaustive-deps): The ref's value `.current` is accessed directly in the effect cleanup function. help: The ref value will likely have changed by the time this effect cleanup function runs. If this ref points to a node rendered by react, copy it to a variable inside the effect and use that variable in the cleanup function.
+src/normalized-ui/CustodyDepositCapture.tsx:4:14: warning react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+src/normalized-ui/CustodyDepositCapture.tsx:12:399: warning react-hooks(exhaustive-deps): The ref's value `.current` is accessed directly in the effect cleanup function. help: The ref value will likely have changed by the time this effect cleanup function runs. If this ref points to a node rendered by react, copy it to a variable inside the effect and use that variable in the cleanup function.
+src/normalized-ui/ConfirmationDialog.tsx:216:17: warning react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+server/normalized/experience-plan-activation-repository.ts:63:12: warning eslint(no-unused-vars): Catch parameter 'error' is caught but never used. help: Consider handling this error.
+server/normalized/experience-plan-activation-repository.ts:79:12: warning eslint(no-unused-vars): Catch parameter 'error' is caught but never used. help: Consider handling this error.
+server/normalized/experience-plan-activation-repository.ts:95:12: warning eslint(no-unused-vars): Catch parameter 'error' is caught but never used. help: Consider handling this error.
+server/normalized/experience-plan-activation-repository.ts:153:12: warning eslint(no-unused-vars): Catch parameter 'error' is caught but never used. help: Consider handling this error.
+src/normalized-ui/OperatingHistoryPanel.tsx:52:127: warning react-hooks(exhaustive-deps): The ref's value `.current` is accessed directly in the effect cleanup function. help: The ref value will likely have changed by the time this effect cleanup function runs. If this ref points to a node rendered by react, copy it to a variable inside the effect and use that variable in the cleanup function.
+src/normalized-ui/OperatingHistoryPanel.tsx:52:34: warning react-hooks(exhaustive-deps): React Hook useEffect has missing dependencies: 'initialData', 'read', 'saved.page', and 'saved' help: Either include it or remove the dependency array.
+src/normalized-ui/MemberGiftCampaignPanel.tsx:33:72: warning react-hooks(exhaustive-deps): The ref's value `.current` is accessed directly in the effect cleanup function. help: The ref value will likely have changed by the time this effect cleanup function runs. If this ref points to a node rendered by react, copy it to a variable inside the effect and use that variable in the cleanup function.
+src/normalized-ui/MediaAssetPicker.tsx:46:16: warning react-hooks(exhaustive-deps): The ref's value `.current` is accessed directly in the effect cleanup function. help: The ref value will likely have changed by the time this effect cleanup function runs. If this ref points to a node rendered by react, copy it to a variable inside the effect and use that variable in the cleanup function.
+src/normalized-ui/InventoryWastePanel.tsx:49:201: warning react-hooks(exhaustive-deps): The ref's value `.current` is accessed directly in the effect cleanup function. help: The ref value will likely have changed by the time this effect cleanup function runs. If this ref points to a node rendered by react, copy it to a variable inside the effect and use that variable in the cleanup function.
+src/normalized-ui/ItemAfterSalesPendingPanel.tsx:20:16: warning react-hooks(exhaustive-deps): The ref's value `.current` is accessed directly in the effect cleanup function. help: The ref value will likely have changed by the time this effect cleanup function runs. If this ref points to a node rendered by react, copy it to a variable inside the effect and use that variable in the cleanup function.
+server/normalized/menu-thumbnail.ts:65:34: warning eslint(no-control-regex): Unexpected control characters help: Avoid matching control characters in regular expressions. If intentional, consider using a Unicode escape instead.
+server/normalized/media-asset-api.ts:171:95: warning eslint(no-control-regex): Unexpected control characters help: Avoid matching control characters in regular expressions. If intentional, consider using a Unicode escape instead.
+src/normalized-ui/ItemAfterSalesPanel.tsx:21:52: warning react-hooks(exhaustive-deps): React Hook useMemo has unnecessary dependency: employeeId help: Either include it or remove the dependency array.
+src/normalized-ui/ItemAfterSalesPanel.tsx:37:156: warning react-hooks(exhaustive-deps): The ref's value `.current` is accessed directly in the effect cleanup function. help: The ref value will likely have changed by the time this effect cleanup function runs. If this ref points to a node rendered by react, copy it to a variable inside the effect and use that variable in the cleanup function.
+src/normalized-ui/miniprogram-mobile-contract.test.ts:440:105: warning eslint(no-useless-escape): Unnecessary escape character '"' help: Replace `\"` with `"`.
+server/normalized/normalized-app.ts:314:14: warning eslint(no-unused-vars): Catch parameter '_error' is caught but never used. help: Consider handling this error.
+src/normalized-ui/MarketingContactPanel.tsx:31:72: warning react-hooks(exhaustive-deps): The ref's value `.current` is accessed directly in the effect cleanup function. help: The ref value will likely have changed by the time this effect cleanup function runs. If this ref points to a node rendered by react, copy it to a variable inside the effect and use that variable in the cleanup function.
+src/normalized-ui/membership-business-inputs.tsx:6:17: warning react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+src/normalized-ui/membership-business-inputs.tsx:12:17: warning react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+src/normalized-ui/membership-business-inputs.tsx:39:17: warning react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+src/normalized-ui/membership-business-inputs.tsx:54:17: warning react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+src/normalized-ui/staff-view-state.tsx:17:17: warning react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+src/normalized-ui/staff-view-state.tsx:77:17: warning react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+src/normalized-ui/MemberCardManagementPanel.tsx:19:72: warning react-hooks(exhaustive-deps): The ref's value `.current` is accessed directly in the effect cleanup function. help: The ref value will likely have changed by the time this effect cleanup function runs. If this ref points to a node rendered by react, copy it to a variable inside the effect and use that variable in the cleanup function.
+src/normalized-ui/CashierAfterSalesWorkbench.tsx:1602:17: warning react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+src/normalized-ui/CashierAfterSalesWorkbench.tsx:1638:17: warning react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+src/normalized-ui/customer-preference-mini-contract.test.ts:54:45: warning eslint(no-useless-escape): Unnecessary escape character '{' help: Replace `\{` with `{`.
+src/normalized-ui/PrintSourceRecoveryPanel.tsx:22:44: warning react-hooks(exhaustive-deps): The ref's value `.current` is accessed directly in the effect cleanup function. help: The ref value will likely have changed by the time this effect cleanup function runs. If this ref points to a node rendered by react, copy it to a variable inside the effect and use that variable in the cleanup function.
+src/normalized-ui/staff-actions/StaffActionsPanel.tsx:108:17: warning react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+src/normalized-ui/staff-actions/StaffActionsPanel.tsx:1518:17: warning react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+src/normalized-ui/staff-actions/StaffActionsPanel.tsx:1535:17: warning react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+src/normalized-ui/staff-actions/StaffActionsPanel.tsx:1539:17: warning react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+src/normalized-ui/staff-actions/StaffActionsPanel.tsx:1543:17: warning react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+src/normalized-ui/staff-actions/StaffActionsPanel.tsx:1575:17: warning react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+src/normalized-ui/staff-actions/StaffActionsPanel.tsx:1581:17: warning react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+src/normalized-ui/staff-actions/StaffActionsPanel.tsx:481:7: warning react-hooks(exhaustive-deps): React Hook useEffect has a missing dependency: 'setFulfillmentHistory' help: Either include it or remove the dependency array.
+src/normalized-ui/staff-actions/StaffActionsPanel.tsx:515:5: warning react-hooks(exhaustive-deps): React Hook useEffect has missing dependencies: 'setTableQuery', and 'setTableScope' help: Either include it or remove the dependency array.
+server/normalized/guest-service-repository.test.ts:9:3: warning eslint(no-unused-vars): Identifier 'GuestServiceSessionUnavailableError' is imported but never used. help: Consider removing this import.
+src/normalized-ui/TaskSections.tsx:41:17: warning react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+src/normalized-ui/OrderBillPrintButton.tsx:81:261: warning react-hooks(exhaustive-deps): React Hook useEffect has a missing dependency: 'selection' help: Either include it or remove the dependency array.
+src/normalized-ui/CustomerExperienceManagementPanel.tsx:1128:17: warning react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+server/normalized/customer-experience-api.ts:2035:12: warning eslint(no-unused-vars): Catch parameter 'error' is caught but never used. help: Consider handling this error.
+server/normalized/customer-experience-repository.ts:1110:12: warning eslint(no-unused-vars): Catch parameter '_error' is caught but never used. help: Consider handling this error.
+server/normalized/customer-experience-repository.ts:6059:12: warning eslint(no-unused-vars): Catch parameter '_error' is caught but never used. help: Consider handling this error.
+
+> @mbox/ops-platform@1.0.0-rc.214 test
+> npm run test:normalized
+
+
+> @mbox/ops-platform@1.0.0-rc.214 test:normalized
+> vitest run server/migrate-normalized.test.ts server/provision-normalized-store.test.ts server/normalized src/normalized-ui --reporter=dot && node --test scripts/normalized-load-acceptance.test.mjs
+
+
+ RUN  v4.1.11 /Users/jingda/mbox/mbox-kitchen-batch-board-20260920
+
+···························································································-······································································································································································································································································---------·····································-----------------------··········································································---------···············································································------············································································································································································································································································································································································································································································---····························································································································----------------------·····························································------------································-······································stderr | server/normalized/alipay-phone-authorization.test.ts > official Alipay phone authorization provider > rejects tampered ciphertext
+ALIPAY_PHONE_VERIFY_FAILED {"stage":"decrypt","candidateCount":2,"payloadKind":"short","payloadLength":16}
+
+stderr | server/normalized/alipay-phone-authorization.test.ts > official Alipay phone authorization provider > maps Alipay platform config errors instead of treating them as bad ciphertext
+ALIPAY_PHONE_VERIFY_FAILED {"stage":"parse","candidateCount":1,"payloadKind":"json-wrapper","payloadLength":187,"decryptedKind":"object","decryptedKeys":["code","msg","subCode","subMsg"],"providerCode":"40001","providerSubCode":"isv.missing-encrypt-key","providerMsg":"缺少加密配置","mobileRawLength":0,"mobileLooksNumeric":false,"parseError":"支付宝开放平台仍缺接口内容加密、接口加签或应用网关配置。后台已能解密，但支付宝返回的是配置错误而不是手机号。请在开放平台补齐这三项后，在小程序里解除用户信息授权"}
+
+····································································································--·······-------······································································-·······stderr | server/normalized/pending-online-payment-reconciliation.test.ts > pending online payment reconciliation > reconciles each stale payment without aborting the batch
+{"event":"payment_reconciliation_failed","paymentId":"pay-2","stage":"query_provider","errorCode":"Error","errorLocation":"/server/normalized/pending-online-payment-reconciliation.test.ts:78:30"}
+
+··················································································································-····---································································································································-··········---·······················--····················································------··············································----·---------··--··········------------········----····-·········------········-----········--········----------·····-········----·············-----···········································------············--····---·-····-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+ Test Files  268 passed | 77 skipped (345)
+      Tests  1967 passed | 766 skipped (2733)
+   Start at  00:40:19
+   Duration  12.28s (transform 13.81s, setup 0ms, import 36.75s, tests 14.23s, environment 30ms)
+
+✔ calculates nearest-rank percentiles and operation summaries (1.519542ms)
+✔ classifies idempotency replay and conflict causes without request data (0.171542ms)
+✔ passes a complete built-in mock run at sustained 5 RPS (1621.107167ms)
+✔ creates a missing evidence directory before writing a CLI report (907.050625ms)
+✔ records immutable evidence identity only when the isolated runner opts in (803.189625ms)
+✔ keeps best-effort session cleanup for shared test environments (800.591ms)
+✔ fails gates for lag, latency, errors, KDS inconsistency, and unknown idempotency conflicts (0.163583ms)
+✔ detects a duplicated KDS task id returned for different orders (799.275375ms)
+✔ does not expose an authorization token in the report (800.978542ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5806.300125
+
+> @mbox/ops-platform@1.0.0-rc.214 build
+> npm run build:normalized
+
+
+> @mbox/ops-platform@1.0.0-rc.214 build:normalized
+> tsc -p tsconfig.normalized-server.json && vite build
+
+vite v8.1.4 building client environment for production...
+[2K
+transforming...✓ 2226 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                                         1.21 kB │ gzip:   0.59 kB
+dist/assets/mbox-logo-badge-B44vqkCj.png               30.39 kB
+dist/assets/NumberInputWithUnit-GKI1qpf-.css            0.62 kB │ gzip:   0.35 kB
+dist/assets/GroupVoucherRedemptionPanel-DcTIhAmA.css    1.64 kB │ gzip:   0.62 kB
+dist/assets/OperatingHistoryPanel-CtF0GnL-.css          1.96 kB │ gzip:   0.63 kB
+dist/assets/index-Du1lnRp4.css                          4.27 kB │ gzip:   1.57 kB
+dist/assets/OwnerFinancePanel-MLRrPNuS.css              4.81 kB │ gzip:   1.17 kB
+dist/assets/ItemAfterSalesPendingPanel-8eNl5DDn.css     4.89 kB │ gzip:   1.36 kB
+dist/assets/MemberPortal-DOhu3_fg.css                   5.78 kB │ gzip:   1.49 kB
+dist/assets/StaffAccessManagementPanel-B02nKwH5.css    13.98 kB │ gzip:   2.63 kB
+dist/assets/CashierAfterSalesWorkbench-DflPrk7L.css    16.03 kB │ gzip:   3.56 kB
+dist/assets/reservation-D0Lp-Qjc.css                   17.09 kB │ gzip:   3.76 kB
+dist/assets/guest-CC_Aq7jX.css                         26.47 kB │ gzip:   6.12 kB
+dist/assets/NormalizedStaffApp--Fd_NGM0.css            29.32 kB │ gzip:   6.34 kB
+dist/assets/MiniProgramPreview-CCEryapU.css            32.39 kB │ gzip:   6.61 kB
+dist/assets/MenuOrderingWorkspace-D-tz8jD2.css         47.73 kB │ gzip:   8.46 kB
+dist/assets/staff-actions-D3MpmSXb.css                 65.63 kB │ gzip:  11.55 kB
+dist/assets/StaffModulePanel-Bmu11XwK.css             131.53 kB │ gzip:  19.59 kB
+dist/assets/mbox-logo-badge-DtADFhkb.js                 0.06 kB │ gzip:   0.08 kB
+dist/assets/PerformanceRevisionPanel-BMxB69Ie.js        0.08 kB │ gzip:   0.10 kB
+dist/assets/public-reference-y8nin-sr.js                0.11 kB │ gzip:   0.13 kB
+dist/assets/reservation-identity-DTcd3fzC.js            0.40 kB │ gzip:   0.27 kB
+dist/assets/cashier-mutation-_c4nlhjJ.js                0.47 kB │ gzip:   0.32 kB
+dist/assets/rolldown-runtime-Bh1tDfsg.js                0.56 kB │ gzip:   0.36 kB
+dist/assets/NumberInputWithUnit-DfpsC_Um.js             0.58 kB │ gzip:   0.37 kB
+dist/assets/OrderCenterPanel-tg3IMPzM.js                0.93 kB │ gzip:   0.62 kB
+dist/assets/staff-notice-controller-CsDGWCUt.js         1.00 kB │ gzip:   0.43 kB
+dist/assets/recoverable-command-DR8q0MNV.js             1.47 kB │ gzip:   0.93 kB
+dist/assets/staff-business-labels-DZ-3dW4P.js           1.97 kB │ gzip:   1.11 kB
+dist/assets/GroupVoucherRedemptionPanel-Dt-OnhF1.js     6.40 kB │ gzip:   2.74 kB
+dist/assets/staff-module-access-BGBEiZVj.js             6.99 kB │ gzip:   2.23 kB
+dist/assets/MemberPortal-BN5cPvG9.js                    7.16 kB │ gzip:   2.78 kB
+dist/assets/normalized-api-CBMCuFo0.js                  7.18 kB │ gzip:   2.60 kB
+dist/assets/MediaAssetPicker-Dn_SlE_q.js                7.77 kB │ gzip:   3.67 kB
+dist/assets/VenueManagementPanel-jV_0N31r.js            9.32 kB │ gzip:   2.81 kB
+dist/assets/CustomerPublicationPanel-BQfETWoh.js       13.47 kB │ gzip:   4.23 kB
+dist/assets/index-DrssJ_3u.js                          13.83 kB │ gzip:   5.10 kB
+dist/assets/browser-Nztc4jrW.js                        23.47 kB │ gzip:   8.85 kB
+dist/assets/MiniProgramPreview-BimTYQSi.js             26.02 kB │ gzip:   6.17 kB
+dist/assets/esm-8OZgnPlk.js                            26.25 kB │ gzip:   6.78 kB
+dist/assets/icon-vendor-C5SrR5T5.js                    26.38 kB │ gzip:   8.67 kB
+dist/assets/OperatingHistoryPanel-ZOgDXwpQ.js          27.60 kB │ gzip:   9.92 kB
+dist/assets/staff-actions-api-CpWRFq_P.js              31.03 kB │ gzip:   8.59 kB
+dist/assets/OwnerFinancePanel-ne8QlayC.js              31.12 kB │ gzip:   9.01 kB
+dist/assets/StaffAccessManagementPanel-D6RfKp4O.js     35.94 kB │ gzip:  11.63 kB
+dist/assets/reservation-Cg2tMmBa.js                    36.70 kB │ gzip:  11.67 kB
+dist/assets/NormalizedStaffApp-DPLzA4SW.js             45.67 kB │ gzip:  14.12 kB
+dist/assets/guest-D-NBxIZC.js                          50.75 kB │ gzip:  14.98 kB
+dist/assets/MenuOrderingWorkspace-Bbu0m3qR.js          53.90 kB │ gzip:  16.71 kB
+dist/assets/CatalogManagementPanel-9zP8Hy_S.js         62.74 kB │ gzip:  18.35 kB
+dist/assets/CashierAfterSalesWorkbench-Bvl0-eZv.js     73.65 kB │ gzip:  20.24 kB
+dist/assets/ItemAfterSalesPendingPanel-BMUn1dlp.js     77.88 kB │ gzip:  24.93 kB
+dist/assets/staff-actions-Fh0Eaz4H.js                 150.81 kB │ gzip:  43.59 kB
+dist/assets/react-vendor-CnQ8cts2.js                  189.63 kB │ gzip:  59.65 kB
+dist/assets/esm-BPiLmMLA.js                           451.89 kB │ gzip: 119.23 kB
+dist/assets/StaffModulePanel-cSYYWz-e.js              539.03 kB │ gzip: 138.62 kB
+
+[33m[INEFFECTIVE_DYNAMIC_IMPORT] [0msrc/normalized-ui/PerformanceRevisionPanel.tsx is dynamically imported by src/normalized-ui/StaffModulePanel.tsx but also statically imported by src/normalized-ui/MonthlySchedulePanel.tsx, dynamic import will not move module into another chunk.
+
+[plugin builtin:vite-reporter]
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 332ms

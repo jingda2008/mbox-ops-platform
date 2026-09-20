@@ -1,3 +1,4 @@
+import type {WasteRequest} from '../../src/shared/inventory-waste.js';
 import type { JsonObject } from "./command-executor.js";
 import {
   StaffAccessDeniedError,
@@ -156,6 +157,27 @@ interface BottleRow extends Record<string, unknown> {
 
 export class InventoryQueryService {
   constructor(private readonly transactions: ScopedPostgresTransactionRunner) {}
+
+  getWasteRequests(scope:Readonly<StoreScope>,employeeId:string,page:number){
+    return this.transactions.run(scope,async transaction=>{
+      const access=await new StaffAccessRepository(transaction).resolve(employeeId);
+      const reviewer=access.permissions.includes('inventory.count.approve');
+      if(!reviewer)assertInventoryPermission(access.permissions,'inventory.waste');
+      const result=await transaction.query<{record:WasteRequest}>(`SELECT jsonb_build_object(
+        'id',r.id,'itemName',i.name,'quantity',r.quantity::text,'baseUnit',i.base_unit,'wasteType',r.waste_type,'reason',r.reason,
+        'requestedByEmployeeId',r.requested_by_employee_id,'requestedByName',creator.display_name,'createdAt',r.created_at::text,
+        'status',r.status,'decidedByName',decider.display_name,'decisionReason',r.decision_reason,
+        'canReview',$3::boolean AND r.status='pending' AND r.requested_by_employee_id<>$4::uuid) AS record
+        FROM mbox.inventory_waste_requests r
+        JOIN mbox.inventory_items i ON (i.tenant_id,i.store_id,i.id)=(r.tenant_id,r.store_id,r.inventory_item_id)
+        JOIN mbox.employees creator ON (creator.tenant_id,creator.store_id,creator.id)=(r.tenant_id,r.store_id,r.requested_by_employee_id)
+        LEFT JOIN mbox.employees decider ON (decider.tenant_id,decider.store_id,decider.id)=(r.tenant_id,r.store_id,r.decided_by_employee_id)
+        WHERE r.tenant_id=$1::uuid AND r.store_id=$2::uuid AND ($3::boolean OR r.requested_by_employee_id=$4::uuid)
+        ORDER BY (r.status='pending') DESC,r.created_at DESC,r.id DESC LIMIT 31 OFFSET $5`,
+        [scope.tenantId,scope.storeId,reviewer,employeeId,(page-1)*30]);
+      return {items:result.rows.slice(0,30).map(row=>row.record),hasMore:result.rows.length>30};
+    },{readOnly:true});
+  }
 
   getStockCounts(scope: Readonly<StoreScope>, employeeId: string,
     input: { status: 'submitted' | 'processed'; page: number; pageSize: number }): Promise<StockCountReviewPage> {
@@ -513,7 +535,7 @@ export function assertInventoryPermission(
 export function assertInventoryDashboardAccess(permissions: readonly string[]): void {
   const dashboardPermissions = [
     'inventory.view', 'inventory.manage', 'inventory.cost.view', 'inventory.receive',
-    'inventory.count', 'inventory.waste', 'inventory.barcode.bind', 'inventory.cost.correct',
+    'inventory.count', 'inventory.count.approve', 'inventory.waste', 'inventory.barcode.bind', 'inventory.cost.correct',
   ]
   if (!dashboardPermissions.some((permission) => permissions.includes(permission))) {
     throw new StaffAccessDeniedError('Employee does not have inventory dashboard access')

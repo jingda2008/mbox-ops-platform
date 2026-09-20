@@ -1,33 +1,39 @@
-import { useCallback,useEffect,useMemo,useState } from 'react'
+import {MembershipPublicationForm} from './MembershipPublicationForm'
+import {beijingDateTimeInput,beijingDateTimeIso} from './membership-workflow'
+import { useCallback,useEffect,useMemo,useRef,useState } from 'react'
 import { ChevronDown,FileCheck2,RefreshCw,Save,ShieldCheck } from 'lucide-react'
 import type { NormalizedApiClient,StaffAuthView } from '../normalized-api'
 import { useConfirmationDialog } from './ConfirmationDialog'
 import './membership-configuration-center-panel.css'
-import { BusinessRatioFields, isRatioField, isReferenceField, MoneyField, ReferenceField, type ConfigurationReference } from './membership-business-inputs'
+import { BusinessRatioFields, isRatioField, isReferenceField, MoneyField, NullableIntegerField, ReferenceField, type ConfigurationReference } from './membership-business-inputs'
 import { StackingPricePreviewPanel } from './StackingPricePreviewPanel'
 import { CouponCalendarPreviewPanel } from './CouponCalendarPreviewPanel'
 import { MemberGiftCampaignPanel } from './MemberGiftCampaignPanel'
 
 type Domain='base_points'|'tier_policy'|'tier_benefits'|'redemption_catalog'|'promotion_points'|'membership_terms'|'wechat_notifications'
 type ConfigurationContent={domain:Domain}&Record<string,unknown>
-interface Summary{domain:Domain;configurationId:string;status:string;revision:number;version:number;title:string;updatedAt:string}
+interface Summary{domain:Domain;configurationId:string;status:string;revision:number;version:number;title:string;updatedAt:string;effectiveFrom?:string|null;effectiveUntil?:string|null;approvedByEmployeeId?:string|null}
 interface Draft{publicId:string;domain:Domain;status:string;revision:number;makerEmployeeIds:string[];content:ConfigurationContent;updatedAt:string}
 interface Preview{generatedAt?:string;fulfillment?:Array<{referenceCode:string;expectedDemand:number;availableAfterReservations:number;shortage:number;openFulfillmentTasks:number}>;publicId:string;draftRevision:number;expiresAt:string;historicalMembership:{activeMembers:number;availablePointsLiability:number};estimatedPointsIssued:number;estimatedPointsCostAmountMinor:number;estimatedBenefitCostAmountMinor:number;estimatedRedemptionCostAmountMinor:number;affectedExistingMembers:number;warnings:string[]}
 
 const domainLabels:Record<Domain,string>={base_points:'基础积分',tier_policy:'会员等级',tier_benefits:'等级权益',redemption_catalog:'积分兑换',promotion_points:'促销积分',membership_terms:'入会条款',wechat_notifications:'微信服务通知'}
-const statusLabels:Record<string,string>={draft:'待编辑/审批',approved:'已审批待发布',published:'运行中',paused:'已暂停',retired:'已退役'}
+const statusLabels:Record<string,string>={draft:'待编辑/审批',approved:'已审批待发布',published:'已发布（按生效时间执行）',paused:'已暂停',retired:'已退役'}
 const warningLabels:Record<string,string>={inventory_shortage:'库存可能不足',fulfillment_capacity_review:'需要复核人工履约能力',points_cost_review:'需要复核积分成本',benefit_cost_review:'需要复核权益成本',redemption_cost_review:'需要复核兑换成本',terms_reacceptance_not_forced:'不强迫既有会员重新同意'}
 const fieldLabels:Record<string,string>={pointsNumerator:'获得积分',pointsDenominatorMinor:'消费金额（元）',growthNumerator:'获得成长值',growthDenominatorMinor:'消费金额（元）',roundingMode:'取整方式',pointsValidityMonths:'积分有效月数',evaluationWindowMonths:'评估周期（月）',tierPeriodMonths:'等级周期（月）',downgradeGraceDays:'降级宽限天数',silverUpgradeGrowth:'银卡升级值',silverRetainGrowth:'银卡保级值',goldUpgradeGrowth:'金卡升级值',goldRetainGrowth:'金卡保级值',silverPointsMultiplierNumerator:'银卡获得积分',silverPointsMultiplierDenominator:'银卡基础积分',goldPointsMultiplierNumerator:'金卡获得积分',goldPointsMultiplierDenominator:'金卡基础积分',tierPolicyVersionId:'适用等级规则',rules:'规则',items:'兑换项',ruleCode:'规则编号',eligibleTier:'适用等级',inheritToHigherTiers:'向更高等级继承',grantOnEntry:'入级发放',grantOnRetention:'保级发放',benefitDefinitionId:'发放权益',quantity:'数量',validityDays:'有效天数',revocationPolicy:'降级处理',enabled:'启用',publicId:'公开编号',itemCode:'兑换项编号',name:'名称',fulfillmentKind:'履约类型',productId:'兑换商品',activityId:'关联活动',pointsRequired:'所需积分',costAmountMinor:'成本（元）',currency:'币种',totalInventory:'总库存',dailyInventory:'日库存',memberDailyLimit:'每人每日上限',memberRolling30DayLimit:'每人30日上限',memberLifetimeLimit:'每人终身上限',minimumTier:'最低等级',requiresTableSession:'需在已开台的桌位使用',requiresEmployeeFulfillment:'需由员工交付',cancellationAllowedBeforeFulfillment:'交付前允许取消',restoreExpiredPointsDays:'退回过期积分天数',availableFrom:'可用开始时间',availableUntil:'可用结束时间',fulfillmentTimeoutMinutes:'履约时限（分钟）',status:'状态',campaignCode:'活动积分编号',stackingGroup:'叠加组',stackingMode:'叠加方式',priority:'优先级',storeBudgetPoints:'门店总预算积分',perMemberPointsLimit:'每会员上限',pointValidityDays:'积分有效天数',refundPolicy:'退款冲回规则',budgetReuseAfterRefund:'退款后释放预算',memberLimitReuseAfterRefund:'退款后释放个人限额',eligibleMemberLevels:'适用会员等级',triggerKind:'触发事实',points:'奖励积分',perMemberAwardLimit:'每人奖励次数',minimumPaidAmountMinor:'最低付款金额（元）',title:'标题',summary:'摘要',content:'正文',notificationType:'通知类型',authorizationPurpose:'授权用途',authorizationContext:'授权场景',templateId:'微信模板ID',pagePath:'到达页面',pointsDataKey:'积分字段',balanceDataKey:'余额字段',occurredAtDataKey:'发生时间字段',expiresAtDataKey:'到期时间字段',expiryLeadDays:'提前提醒天数',maxPerCustomerPer24h:'每人24小时上限',minimumIntervalMinutes:'最短发送间隔',quietHoursStart:'静默开始',quietHoursEnd:'静默结束'}
 
-export function MembershipConfigurationCenterPanel({api,auth}:{api:NormalizedApiClient;auth:StaffAuthView}){
+export function MembershipConfigurationCenterPanel({api,auth,mode='all'}:{api:NormalizedApiClient;auth:StaffAuthView;mode?:'all'|'drafts'|'approvals'|'publish'}){
   const { confirmAction } = useConfirmationDialog()
   const canView=auth.permissions.includes('loyalty.configuration.view')
-  const canEdit=auth.permissions.includes('loyalty.configuration.edit')
+  const canEdit=(mode==='all'||mode==='drafts')&&auth.permissions.includes('loyalty.configuration.edit')
   const canPreview=auth.permissions.includes('loyalty.configuration.preview')
-  const canApprove=auth.permissions.includes('loyalty.configuration.approve')
-  const [expanded,setExpanded]=useState(false)
+  const canApprove=(mode==='all'||mode==='approvals')&&auth.permissions.includes('loyalty.configuration.approve')
+  const [expanded,setExpanded]=useState(mode!=='all'||new URLSearchParams(window.location.search).has('configuration'))
+  const selectionGeneration=useRef(0),listGeneration=useRef(0),linkedTarget=useRef('')
+  const [readError,setReadError]=useState(''),[loading,setLoading]=useState(false)
+  useEffect(()=>()=>{selectionGeneration.current++;listGeneration.current++},[api,auth.employee.id])
   const [summaries,setSummaries]=useState<Summary[]>([])
   const [selected,setSelected]=useState<Draft|null>(null)
+  const [openingTarget,setOpeningTarget]=useState<Summary|null>(null)
   const [editing,setEditing]=useState<ConfigurationContent|null>(null)
   const [preview,setPreview]=useState<Preview|null>(null)
   const [reason,setReason]=useState('')
@@ -42,23 +48,30 @@ export function MembershipConfigurationCenterPanel({api,auth}:{api:NormalizedApi
   useEffect(()=>{if(expanded&&canView)void loadReferences()},[expanded,canView,loadReferences])
 
   const load=useCallback(async()=>{if(!canView)return
-    setBusy('load');setNotice('')
-    try{const response=await api.getEndpoint<{data:Summary[]}>('/api/staff/loyalty/configuration-center');setSummaries(response.data)}
-    catch(error){setNotice(message(error,'经营配置暂时无法读取'))}finally{setBusy('')}
+    const generation=++listGeneration.current;setLoading(true)
+    try{const response=await api.getEndpoint<{data:Summary[]}>('/api/staff/loyalty/configuration-center');if(generation===listGeneration.current){setSummaries(response.data);setReadError('')}}
+    catch(error){if(generation===listGeneration.current)setReadError(message(error,'配置列表暂时无法读取，请重新读取'))}
+    finally{if(generation===listGeneration.current)setLoading(false)}
   },[api,canView])
   useEffect(()=>{if(expanded)void load()},[expanded,load])
-  useEffect(()=>{const open=()=>{setExpanded(true);requestAnimationFrame(()=>(
-    document.getElementById('membership-configuration-center')?.scrollIntoView({behavior:'smooth',block:'start'})
-  ))};window.addEventListener('mbox:open-membership-configuration',open)
-    return()=>window.removeEventListener('mbox:open-membership-configuration',open)},[])
+  useEffect(()=>{
+    const query=new URLSearchParams(window.location.search),id=query.get('configuration'),domain=query.get('domain')
+    const match=summaries.find(item=>item.configurationId===id&&item.domain===domain)
+    const identity=`${domain}:${id}`
+    if(match&&linkedTarget.current!==identity){linkedTarget.current=identity;setExpanded(true);void open(match)}
+  },[summaries])
   const selectedSummary=useMemo(()=>summaries.find((item)=>item.configurationId===selected?.publicId)??null,[selected,summaries])
   if(!canView)return null
 
-  async function open(item:Summary){setBusy(item.configurationId);setNotice('');setPreview(null)
-    try{const response=await api.getEndpoint<{data:Draft}>(path(item));setSelected(response.data);setEditing(clone(response.data.content));setReason('')}
-    catch(error){setNotice(message(error,'配置详情暂时无法读取'))}finally{setBusy('')}
+  async function open(item:Summary){
+    if(['save','approve','preview','publish'].includes(busy))return
+    const generation=++selectionGeneration.current
+    setBusy(`open:${item.configurationId}`);setNotice('');setPreview(null);setSelected(null);setEditing(null);setOpeningTarget(item)
+    try{const response=await api.getEndpoint<{data:Draft}>(path(item));if(generation!==selectionGeneration.current)return;setSelected(response.data);setEditing(clone(response.data.content));setReason('');setOpeningTarget(null)}
+    catch(error){if(generation===selectionGeneration.current)setNotice(message(error,'配置详情暂时无法读取，请重新选择读取'))}
+    finally{if(generation===selectionGeneration.current)setBusy('')}
   }
-  async function save(){if(!selected||!editing||busy)return;if(reason.trim().length<2)return setNotice('请填写本次修改原因。')
+  async function save(){if(!selected||!editing||busy)return;if(!(document.getElementById('membership-rule-editor') as HTMLFormElement|null)?.reportValidity())return;if(reason.trim().length<2)return setNotice('请填写本次修改原因。')
     setBusy('save');setNotice('');setPreview(null)
     try{const result=await api.putEndpoint<Draft>(`${path(selected)}/draft`,{expectedRevision:selected.revision,reason:reason.trim(),content:editing});setSelected(result);setEditing(clone(result.content));setNotice('草稿已保存；此前影响预览已失效，请重新生成。');await load()}
     catch(error){setNotice(message(error,'草稿没有保存，请刷新后重试'))}finally{setBusy('')}
@@ -67,8 +80,9 @@ export function MembershipConfigurationCenterPanel({api,auth}:{api:NormalizedApi
     try{const result=await api.postEndpoint<Preview>(`${path(selected)}/impact-preview`,{});setPreview(result);setNotice('已按当前会员、成本、库存与待交付事项计算，预览15分钟内有效。')}
     catch(error){setNotice(message(error,'影响预览生成失败'))}finally{setBusy('')}
   }
-  async function approve(){if(!selected||!preview||busy)return;if(reason.trim().length<2)return setNotice('请填写独立审批说明。')
+  async function approve(){if(!selected||!preview||busy)return;const generation=selectionGeneration.current;if(reason.trim().length<2)return setNotice('请填写独立审批说明。')
     if(!(await confirmAction({title:'确认独立审批',description:'将依据当前修改影响审批。审批后内容不可直接修改，仍需第三人发布。',confirmLabel:'确认审批'})))return
+    if(generation!==selectionGeneration.current)return
     setBusy('approve');setNotice('')
     try{const result=await api.postEndpoint<Draft>(`${path(selected)}/approve`,{expectedRevision:selected.revision,impactPreviewPublicId:preview.publicId,reason:reason.trim()});setSelected(result);setEditing(clone(result.content));setPreview(null);setNotice('独立审批已记录；配置尚未生效，等待第三位授权人员发布。');await load()}
     catch(error){setNotice(message(error,'审批未完成，请重新生成影响预览'))}finally{setBusy('')}
@@ -79,26 +93,27 @@ export function MembershipConfigurationCenterPanel({api,auth}:{api:NormalizedApi
       <span><ShieldCheck size={18}/></span><div><strong>会员经营配置中心</strong><small>保存草稿、计算影响、独立审批；修改内容会在审核通过并发布后生效。</small></div><em>{summaries.filter((item)=>item.status==='draft').length} 个待处理</em><ChevronDown size={17}/>
     </button>
     {expanded&&<div className="membership-configuration-body">
-      {canPreview && <StackingPricePreviewPanel key={auth.employee.id} api={api} auth={auth} />}
-      {canPreview && <CouponCalendarPreviewPanel key={`calendar:${auth.employee.id}`} api={api} auth={auth} />}
-      <MemberGiftCampaignPanel key={`gifts:${auth.employee.id}`} api={api} auth={auth} />
-      {notice&&<p role="status">{notice}</p>}
+      {mode==='all'&&canPreview && <StackingPricePreviewPanel key={auth.employee.id} api={api} auth={auth} />}
+      {mode==='all'&&canPreview && <CouponCalendarPreviewPanel key={`calendar:${auth.employee.id}`} api={api} auth={auth} />}
+      {mode==='all'&&<MemberGiftCampaignPanel key={`gifts:${auth.employee.id}`} api={api} auth={auth} />}
+      {notice&&<p role="status">{notice}</p>}{readError&&<p role="alert">{readError}<button type="button" disabled={loading} onClick={()=>void load()}>重新读取列表</button></p>}
       <div className="membership-configuration-layout">
-        <nav aria-label="配置列表"><header><strong>配置版本</strong><button type="button" disabled={busy!==''} onClick={()=>void load()} aria-label="刷新配置"><RefreshCw size={15}/></button></header>
-          {summaries.map((item)=><button key={`${item.domain}-${item.configurationId}`} type="button" data-active={selected?.publicId===item.configurationId} onClick={()=>void open(item)}><span><strong>{domainLabels[item.domain]}</strong><small>{item.title} · 第{item.version}版</small></span><em>{statusLabels[item.status]??'状态待核对'}</em></button>)}
+        <nav aria-label="配置列表"><header><strong>配置版本</strong><button type="button" disabled={loading||busy!==''} onClick={()=>void load()} aria-label="刷新配置"><RefreshCw size={15}/></button></header>
+          {summaries.filter(item=>mode==='publish'?['approved','published'].includes(item.status):mode==='approvals'?item.status==='draft':true).map((item)=><button key={`${item.domain}-${item.configurationId}`} type="button" disabled={['save','approve','preview','publish'].includes(busy)} data-active={(openingTarget?.configurationId??selected?.publicId)===item.configurationId} onClick={()=>void open(item)}><span><strong>{domainLabels[item.domain]}</strong><small>{item.title} · 第{item.version}版</small></span><em>{statusLabels[item.status]??'状态待核对'}</em></button>)}
           {summaries.length===0&&<small>尚无可管理的配置版本。</small>}
         </nav>
         <div className="membership-configuration-workspace">
-          {!selected||!editing?<div className="membership-configuration-empty"><FileCheck2 size={24}/><strong>选择一个配置版本</strong><small>运行中的版本只读；待审批草稿可继续保存。</small></div>:<>
+          {!selected||!editing?<div className="membership-configuration-empty"><FileCheck2 size={24}/><strong>{openingTarget?`${domainLabels[openingTarget.domain]} · ${openingTarget.title} · 第${openingTarget.version}版`:"选择一个配置版本"}</strong><small>{openingTarget?"详情读取完成后才能操作；其他版本的内容不会代替当前选择。":"已发布版本只读；待审批草稿可继续保存。"}</small>{openingTarget&&<button type="button" disabled={busy!==''} onClick={()=>void open(openingTarget)}>重新读取所选版本</button>}</div>:<>
             <header><div><strong>{domainLabels[selected.domain]}</strong><small>{selectedSummary?.title??'配置版本'} · 修订 {selected.revision}</small></div><em>{statusLabels[selected.status]??'状态待核对'}</em></header>
-            <p className="membership-configuration-separation">草稿由另一位管理者审核，再交给有发布权限的人员发布。修改后需要重新查看影响。</p>
+            {selectedSummary?.effectiveFrom&&<p>生效时间：{new Date(selectedSummary.effectiveFrom).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})}（北京时间）{selectedSummary.effectiveUntil?`，结束 ${new Date(selectedSummary.effectiveUntil).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})}`:''}</p>}{selected.status==='published'&&<p>需调整或回退时，请按目标内容<a href="/staff/member-rule-drafts">建立新草稿</a>，重新审批并安排生效；历史版本会保留。需要暂停积分、兑换或通知时，由授权管理者在<a href="/staff/member-management#work=member-rules">会员运行开关</a>处理。</p>}<p className="membership-configuration-separation">草稿由另一位管理者审核，再交给有发布权限的人员发布。修改后需要重新查看影响。</p>
             <form key={`${selected.domain}:${selected.publicId}:${selected.revision}`} id="membership-rule-editor" onSubmit={event=>{event.preventDefault();void save()}}><fieldset disabled={selected.status!=='draft'||!canEdit||busy!==''} className="membership-configuration-fields">{referenceError&&<p role="alert">{referenceError}<button type="button" onClick={()=>void loadReferences()}>重新读取选项</button></p>}<BusinessRatioFields content={editing} onChange={next=>{setEditing(next as ConfigurationContent);setPreview(null)}}/>{fields(editing,(next)=>{setEditing(next);setPreview(null)},references)}</fieldset></form>
-            <label className="membership-configuration-reason">本次修改或审批说明<textarea minLength={2} maxLength={500} value={reason} onChange={(event)=>setReason(event.target.value)} placeholder="说明改什么、为什么，以及核对了哪些经营影响"/></label>
+            {selected.status==='draft'&&(canEdit||canApprove)&&<label className="membership-configuration-reason">本次修改或审批说明<textarea minLength={2} maxLength={500} value={reason} onChange={(event)=>setReason(event.target.value)} placeholder="说明改什么、为什么，以及核对了哪些经营影响"/></label>}
             <div className="membership-configuration-actions">
               {selected.status==='draft'&&canEdit&&<button type="submit" form="membership-rule-editor" disabled={busy!==''||references===null}><Save size={15}/>保存草稿</button>}
-              {selected.status==='draft'&&canPreview&&<button type="button" disabled={busy!==''} onClick={()=>void generatePreview()}><FileCheck2 size={15}/>查看修改影响</button>}
+              {mode!=='publish'&&selected.status==='draft'&&canPreview&&<button type="button" disabled={busy!==''} onClick={()=>void generatePreview()}><FileCheck2 size={15}/>查看修改影响</button>}
               {selected.status==='draft'&&canApprove&&preview&&<button className="primary" type="button" disabled={busy!==''} onClick={()=>void approve()}><ShieldCheck size={15}/>独立审批</button>}
             </div>
+            {(mode==='all'||mode==='publish')&&selectedSummary&&<MembershipPublicationForm key={`${auth.employee.id}:${selected.domain}:${selected.publicId}`} api={api} auth={auth} draft={selected} summary={selectedSummary} onBusy={value=>setBusy(value?'publish':'')} onPublished={async()=>{const response=await api.getEndpoint<{data:Draft}>(path(selected));setSelected(response.data);setEditing(clone(response.data.content));await load()}}/>}
             {preview&&<article className="membership-impact-preview"><header><strong>影响预览</strong><small>{new Date(preview.expiresAt).toLocaleTimeString('zh-CN')} 前有效</small></header><dl>
               <div><dt>现有会员</dt><dd>{preview.historicalMembership.activeMembers}</dd></div><div><dt>受影响会员</dt><dd>{preview.affectedExistingMembers}</dd></div><div><dt>预计积分</dt><dd>{preview.estimatedPointsIssued}</dd></div><div><dt>积分成本</dt><dd>¥{minor(preview.estimatedPointsCostAmountMinor)}</dd></div><div><dt>权益成本</dt><dd>¥{minor(preview.estimatedBenefitCostAmountMinor)}</dd></div><div><dt>兑换成本</dt><dd>¥{minor(preview.estimatedRedemptionCostAmountMinor)}</dd></div>
             </dl><p>以上为按当前会员与配置推算的影响，非已发生费用。预览数据时点：{preview.generatedAt?new Date(preview.generatedAt).toLocaleString('zh-CN'):'原预览未留存'}。</p>{preview.fulfillment?.length? <ul>{preview.fulfillment.map(fact=><li key={fact.referenceCode}>{fact.referenceCode}：预计需求 {fact.expectedDemand}，扣除暂留后可用 {fact.availableAfterReservations}，预计缺口 {fact.shortage}，当前未完成履约 {fact.openFulfillmentTasks}。人工承接能力未由此数字证明，需岗位负责人核对。</li>)}</ul>:<p>本预览没有商品履约明细；不能据此判定现场库存或人手足够。</p>}{preview.warnings.length>0&&<ul>{preview.warnings.map((warning)=><li key={warning}>{warningLabels[warning]??'有一项影响需要管理者进一步核对'}</li>)}</ul>}</article>}
@@ -112,6 +127,8 @@ export function MembershipConfigurationCenterPanel({api,auth}:{api:NormalizedApi
 function fields(content:ConfigurationContent,onChange:(value:ConfigurationContent)=>void,references:ConfigurationReference[]|null){return Object.entries(content).filter(([key])=>key!=='domain'&&!isRatioField(key)).map(([key,value])=><Field key={key} fieldKey={key} value={value} references={references} onChange={(next)=>onChange({...content,[key]:next})}/>)}
 function Field({fieldKey,value,onChange,references}:{fieldKey:string;value:unknown;references:ConfigurationReference[]|null;onChange(value:unknown):void}){
   const label=fieldLabels[fieldKey]??'其他设置'
+  if(['totalInventory','dailyInventory','memberLifetimeLimit','expiryLeadDays'].includes(fieldKey))return <NullableIntegerField label={label} value={typeof value==='number'?value:null} minimum={['memberLifetimeLimit','expiryLeadDays'].includes(fieldKey)?1:0} blankLabel={fieldKey==='expiryLeadDays'?'留空不提前提醒':'留空不限'} onChange={onChange}/>
+  if(['availableFrom','availableUntil'].includes(fieldKey))return <label>{label}（北京时间）<input type="datetime-local" value={typeof value==='string'?beijingDateTimeInput(value):''} onChange={event=>{try{onChange(event.target.value?beijingDateTimeIso(event.target.value):null);event.target.setCustomValidity('')}catch{event.target.setCustomValidity('请选择有效日期')}}}/></label>
   if(isReferenceField(fieldKey))return <ReferenceField fieldKey={fieldKey} value={value} references={references} onChange={onChange}/>
   if(fieldKey.endsWith('AmountMinor')&&typeof value==='number')return <MoneyField label={fieldKey==='costAmountMinor'?'成本（元）':'最低付款金额（元）'} value={value} onChange={onChange}/>
   if(fieldKey==='publicId'||fieldKey==='currency')return null
@@ -124,7 +141,7 @@ function Field({fieldKey,value,onChange,references}:{fieldKey:string;value:unkno
   if(fieldKey==='content'||fieldKey==='summary')return <label className="membership-wide">{label}<textarea value={String(value)} onChange={(event)=>onChange(event.target.value)}/></label>
   return <label>{label}<input value={String(value)} onChange={(event)=>onChange(event.target.value)}/></label>
 }
-const choices:Record<string,readonly (readonly [string,string])[]>={roundingMode:[['floor','向下取整'],['nearest','四舍五入']],eligibleTier:[['member','普通会员'],['silver','银卡'],['gold','金卡']],minimumTier:[['member','普通会员'],['silver','银卡'],['gold','金卡']],revocationPolicy:[['revoke_unreserved','撤回未使用权益'],['protect_until_expiry','保留至到期']],fulfillmentKind:[['product','商品'],['benefit','权益'],['activity','活动'],['service','服务']],status:[['active','启用'],['paused','暂停'],['retired','退役']],stackingMode:[['stackable','可叠加'],['exclusive_highest','同组取最高'],['exclusive_first','同组取最先']],refundPolicy:[['reverse_on_any_refund','任一退款冲回'],['reverse_on_full_refund','全额退款冲回']],triggerKind:[['activity_payment','付款成功'],['activity_check_in','完成签到'],['activity_completion','活动完成']]}
+const choices:Record<string,readonly (readonly [string,string])[]>={notificationType:[['loyalty_points_credited','积分到账'],['loyalty_points_reversed','积分退回或扣回'],['loyalty_points_expiring','积分即将到期']],authorizationPurpose:[['loyalty_balance_change','积分余额变动'],['loyalty_expiry_reminder','积分到期提醒']],authorizationContext:[['loyalty_accrual','消费积分到账'],['loyalty_refund','退款积分调整'],['loyalty_expiry','积分到期']],roundingMode:[['floor','向下取整'],['nearest','四舍五入']],eligibleTier:[['member','普通会员'],['silver','银卡'],['gold','金卡']],minimumTier:[['member','普通会员'],['silver','银卡'],['gold','金卡']],revocationPolicy:[['revoke_unreserved','撤回未使用权益'],['protect_until_expiry','保留至到期']],fulfillmentKind:[['product','商品'],['benefit','权益'],['activity','活动'],['service','服务']],status:[['active','启用'],['paused','暂停'],['retired','退役']],stackingMode:[['stackable','可叠加'],['exclusive_highest','同组取最高'],['exclusive_first','同组取最先']],refundPolicy:[['reverse_on_any_refund','任一退款冲回'],['reverse_on_full_refund','全额退款冲回']],triggerKind:[['activity_payment','付款成功'],['activity_check_in','完成签到'],['activity_completion','活动完成']]}
 function path(item:{domain:Domain;configurationId?:string;publicId?:string}){return `/api/staff/loyalty/configuration-center/${item.domain}/${encodeURIComponent(item.configurationId??item.publicId??'')}`}
 function clone<T>(value:T):T{return structuredClone(value)}
 function message(error:unknown,fallback:string){return error instanceof Error?error.message:fallback}

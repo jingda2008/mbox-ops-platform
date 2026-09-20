@@ -132,7 +132,7 @@ export function CustomerExperienceAnalyticsPanel({ api, auth }: {
       <div>
         <p className="ce-analytics__eyebrow">客户体验与商品观察</p>
         <h2 id="ce-analytics-title">经营分析</h2>
-        <p>按权威订单、退款、冻结成本和已确认观察计算，不用展示快照推断金额。</p>
+        <p>金额按订单、退款和成交时成本计算；服务观察仅使用已确认记录。</p>
       </div>
       <div className="ce-analytics__actions">
         <label>观察周期
@@ -152,7 +152,7 @@ export function CustomerExperienceAnalyticsPanel({ api, auth }: {
           {productOptions.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
         </select>
       </label>
-      <label>套餐（强订单行）
+      <label>套餐（按成交订单统计）
         <select value={draftFilters.packageProductId} onChange={(event) => setDraftFilters({
           ...draftFilters,packageProductId:event.target.value,
         })}>
@@ -176,7 +176,7 @@ export function CustomerExperienceAnalyticsPanel({ api, auth }: {
         <input type="number" min="1" max="100" inputMode="numeric" value={draftFilters.partySize}
           onChange={(event) => setDraftFilters({ ...draftFilters,partySize:event.target.value })} placeholder="全部" />
       </label>
-      <label>来店场景（同桌事实）
+      <label>同桌客人的来店场景
         <select value={draftFilters.occasion}
           onChange={(event) => setDraftFilters({ ...draftFilters,occasion:event.target.value })}>
           <option value="">全部场景</option><option value="business">商务</option><option value="friends">朋友聚会</option>
@@ -186,7 +186,7 @@ export function CustomerExperienceAnalyticsPanel({ api, auth }: {
       </label>
       <label>客群（暂不可用）
         <select value="" disabled aria-describedby="ce-analytics-segment-boundary">
-          <option value="">缺事件时点分群事实</option>
+          <option value="">部分记录缺少当时的客群信息</option>
         </select>
       </label>
       <label>演出阶段
@@ -228,7 +228,7 @@ export function CustomerExperienceAnalyticsPanel({ api, auth }: {
       <div className="ce-analytics__quality-gaps" aria-label="推荐归因数据缺口">
         <Metric label="推荐未记录展示" value={view.dataQuality.missingFacts.recommendationWithoutExposureCount}
           helper="无法计算真实选择率" />
-        <Metric label="实付推荐缺冻结成本" value={view.dataQuality.missingFacts.paidRecommendationCostUnavailableCount}
+        <Metric label="已付款推荐缺少成交时成本" value={view.dataQuality.missingFacts.paidRecommendationCostUnavailableCount}
           helper="不计算销售后贡献" />
         <Metric label="投诉未关联本人订单" value={view.dataQuality.missingFacts.complaintWithoutOrderLinkCount}
           helper="不归因到推荐商品" />
@@ -244,7 +244,7 @@ export function CustomerExperienceAnalyticsPanel({ api, auth }: {
       </AnalyticsSection>
       <AnalyticsSection title="推荐效果" empty="所选周期内暂无推荐数据。" hasData={view.recommendation.length>0}>
         <p className="ce-analytics__fact-note">
-          “同桌后续付款”和“后续同品复购”只是订单事实，不代表由本次推荐造成；只有明确关联本人订单的投诉才计入。
+          同桌后续付款和后续同品复购不代表本次推荐促成；只有明确关联本人订单的投诉才计入。
         </p>
         <div className="ce-analytics__table-wrap"><table className="ce-analytics__recommendation-table"><thead><tr>
           <th>方案</th><th>展示</th><th>选择率</th><th>移除/拒绝</th><th>员工调整</th><th>成交率</th>
@@ -285,7 +285,7 @@ export function CustomerExperienceAnalyticsPanel({ api, auth }: {
           <small>{item.employeeName} · {eventLabel(item.eventType)} · 置信度 {percent(item.confidence)}{item.corrected ? ` · 已追加修订至第${item.revisionNo}版` : ''}</small>
         </article>)}</div>
       </AnalyticsSection> : null}
-    </> : busy ? <p className="ce-analytics__empty">正在读取经营事实…</p> : null}
+    </> : busy ? <p className="ce-analytics__empty">正在读取经营数据…</p> : null}
   </section>
 }
 

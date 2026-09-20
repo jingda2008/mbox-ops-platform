@@ -85,7 +85,7 @@ export function OperatingHistoryPanel({api,businessDate,standalone=false,initial
     setTimeout(()=>URL.revokeObjectURL(url),1000)
   }
   return <details className="operating-history-panel" open={standalone?true:undefined} aria-label="营业日账务与历史订单"><summary>{standalone?'订单中心 · 当前与历史':'营业日账务与历史订单'}</summary>
-    <p>按营业日查询；超期未结和退款待办保留可见。权限由服务端校验，查看不等于获得退款或打印授权。</p>
+    <p>按营业日查询；超期未结和退款待办保留可见。查看历史记录不会增加退款或打印权限。</p>
     <nav aria-label="常用营业日"><button type="button" disabled={busy} onClick={()=>selectDay(businessDate)}>当前营业日</button><button type="button" disabled={busy} onClick={()=>selectDay(new Date(Date.parse(`${businessDate}T00:00:00Z`)-86400000).toISOString().slice(0,10))}>上一营业日</button><span>{date} 至 {endDate}</span></nav>
     <form onSubmit={event=>{event.preventDefault();void read()}}>
       <label>搜索<input value={search} maxLength={80} placeholder="桌号、订单号或金额（如136）" onChange={event=>{reset();setSearch(event.target.value)}} /></label>
@@ -106,7 +106,7 @@ export function OperatingHistoryPanel({api,businessDate,standalone=false,initial
       {standalone&&printEmployeeId&&data.financialSummaryVisible!==false&&<><p>扎账打印使用所选营业日期间的全店数据，不套用下方桌号、员工或搜索筛选。</p><OrderBillPrintButton api={api} employeeId={printEmployeeId} orderId="" businessDate={data.businessDate} endDate={data.endDate}/></>}
       {data.financialSummaryVisible!==false&&<><h4>{data.businessDate}{data.endDate&&data.endDate!==data.businessDate?` 至 ${data.endDate}`:''} 全店已入账资金</h4>
       <p>按流水记账营业日统计，包含活动收退款；不受桌号和员工筛选影响。不将未确认支付算作收入，也不将零元赠送算作收款。</p>
-      {data.summary&&<p>所选期间销售 ¥{money(Number(data.summary.orderAmountMinor))} · 这些订单当前尚待收款 ¥{money(Number(data.summary.outstandingMinor))}。历史未完事项不计入这两项；打印时读取最新快照，后续入账可能改变金额。</p>}
+      {data.summary&&<p>所选期间销售 ¥{money(Number(data.summary.orderAmountMinor))} · 这些订单当前尚待收款 ¥{money(Number(data.summary.outstandingMinor))}。历史未完事项不计入这两项；打印使用当时最新金额，后续到账可能改变金额。</p>}
       {data.financialStartDate&&data.financialStartDate!==data.businessDate&&<p>岗位权限限制：资金统计仅包含 {data.financialStartDate} 起至所选结束日；更早待处理订单仅保留个案查询。</p>}
       {data.receipts.length===0?<p>所选期间没有已入账收退款流水；不代表没有订单或渠道待核对款项。</p>:data.receipts.map(row=><article key={row.provider}>
         <strong>{provider(row.provider)}</strong><span>收款 ¥{money(row.receivedMinor)} · 退款 ¥{money(row.refundedMinor)} · 净收 ¥{money(row.netMinor)}</span>
@@ -125,7 +125,7 @@ export function OperatingHistoryPanel({api,businessDate,standalone=false,initial
         {order.items.map(item=><article key={item.id}><strong>{item.name} ×{item.quantity}</strong><span>{historyItemPriceLabel(item)} · {status(item.status)}</span>{item.quantities&&<p>暂停 {item.quantities.held} · 停止 {item.quantities.stopped} · 已备齐 {item.quantities.ready} · 已送达 {item.quantities.delivered} · 库存恢复 {item.returnedQuantity??0} · 已消耗不回库 {item.quantities.usedLoss} 份</p>}{item.note&&<p>商品备注：{item.note}</p>}{item.preparedAt&&<p>制作完成：{item.preparedBy??'员工信息未留存'} · {time(item.preparedAt)}</p>}{item.status==='delivered'&&<p>{item.deliveredAt?`送达：${item.deliveredBy??'员工信息未留存'} · ${time(item.deliveredAt)}`:'已送达，历史送达凭据未留存'}</p>}</article>)}
       </details>)}</section>)}
       <nav><button disabled={busy||data.page===0} onClick={()=>void read(data.page-1)}>上一页</button><span>第{data.page+1}页</span><button disabled={busy||!data.hasMore} onClick={()=>void read(data.page+1)}>下一页</button><button disabled={busy||data.orders.length===0} onClick={()=>download()}>导出本页明细</button><button disabled={busy||data.orders.length===0} onClick={()=>void exportAll()}>导出全部筛选结果</button></nav>
-      <p>全部导出使用同一账务快照，最多5000单；超过范围会明确提示缩小筛选，不会静默截断。</p>
+      <p>本次导出按同一查询时点统计；最多5000单，超出请缩小范围。</p>
     </>}
   </details>
 }

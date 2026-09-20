@@ -54,3 +54,5 @@ export class StaffNoticeController {
     }, notice.kind === 'attention' ? 12_000 : notice.kind === 'guidance' ? 6_000 : 3_200)
   }
 }
+
+export function fulfillmentNoticeKey(item:{taskId:string;readyForDelivery:boolean;deliveryNoticeVersion?:number}):string{return item.readyForDelivery?`fulfillment:${item.taskId}:ready:${item.deliveryNoticeVersion??0}`:`fulfillment:${item.taskId}`}

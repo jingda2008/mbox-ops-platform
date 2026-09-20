@@ -88,7 +88,7 @@ describe('customer experience management reachability contract', () => {
     for (const field of ['productId','employeeId','tableCode','partySize','occasion','performancePhase']) {
       expect(analyticsSource).toContain(field)
     }
-    expect(analyticsSource).toContain('来店场景（同桌事实）')
+    expect(analyticsSource).toContain('同桌客人的来店场景')
     expect(analyticsSource).toContain('应用筛选')
     expect(analyticsSource).toContain('view.decisionBoundary')
     expect(analyticsSource).not.toMatch(/自动(?:改价|修改菜单|处分员工)/)

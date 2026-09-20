@@ -25,6 +25,7 @@ export interface FulfillmentWorkItem {
   failureReason?:string|null
   priority: number
   overdue: boolean
+  deliveryNoticeVersion?:number
   readyForDelivery: boolean
   deliveryUnbatchedQuantity?:number
   canPrepare: boolean
@@ -68,6 +69,7 @@ export interface FulfillmentStaffView {
     permissions: string[]
     allowedStations: FulfillmentStation[]
     canViewAll: boolean
+    kitchenBatchBoardEnabled?:boolean
     actionSessionValid?: boolean
   }
   generatedAt: string
@@ -85,6 +87,7 @@ interface FulfillmentRow extends Record<string, unknown> {
   kds_status: FulfillmentKdsStatus
   priority: number
   overdue: boolean
+  delivery_notice_version?:number
   ready_for_delivery: boolean
   can_prepare: boolean
   can_deliver: boolean
@@ -114,7 +117,7 @@ interface FulfillmentRow extends Record<string, unknown> {
 }
 
 export class FulfillmentQueryService {
-  constructor(private readonly transactions: ScopedPostgresTransactionRunner) {}
+  constructor(private readonly transactions: ScopedPostgresTransactionRunner,private readonly kitchenBatchBoardEnabled=false) {}
 
   getStaffWorkQueue(
     scope: Readonly<StoreScope>,
@@ -135,6 +138,13 @@ export class FulfillmentQueryService {
       const canManageAllTables = canViewAll || access.permissions.includes('table.view_all')
       const scopedStations = resolveFulfillmentAllowedStations(access.dataScopes)
       const allowedStations = canPrepare ? scopedStations : []
+      const kitchenRecovery=canPrepare&&allowedStations.includes('kitchen')&&!this.kitchenBatchBoardEnabled
+        && (await transaction.query<{found:boolean}>(`SELECT EXISTS(SELECT 1 FROM mbox.kitchen_production_batches batch
+          WHERE batch.tenant_id=$1 AND batch.store_id=$2 AND (batch.released_at IS NULL OR EXISTS(
+            SELECT 1 FROM mbox.kitchen_production_units part JOIN mbox.order_item_quantity_units unit
+              ON (unit.tenant_id,unit.store_id,unit.id)=(part.tenant_id,part.store_id,part.unit_id)
+            WHERE (part.tenant_id,part.store_id,part.batch_id)=(batch.tenant_id,batch.store_id,batch.id)
+              AND unit.production_state='started' AND NOT unit.operationally_stopped))) AS found`,[scope.tenantId,scope.storeId])).rows[0]?.found===true
       const rows = await readFulfillmentRows(transaction, {
         employeeId,
         businessDate,
@@ -148,7 +158,7 @@ export class FulfillmentQueryService {
       })
 
       return {
-        actor: {...mapActor(access, allowedStations, canViewAll), ...(actionSession ? {actionSessionValid} : {})},
+        actor: {...mapActor(access, allowedStations, canViewAll), kitchenBatchBoardEnabled:canPrepare&&allowedStations.includes('kitchen')&&(this.kitchenBatchBoardEnabled||kitchenRecovery), ...(actionSession ? {actionSessionValid} : {})},
         generatedAt: rows[0]?.generated_at ?? new Date().toISOString(),
         workItems: rows.map(row => { const item = mapWorkItem(row); return actionSessionValid ? item : { ...item, canPrepare:false, canDeliver:false, canRemake:false, attentionMessages:[...item.attentionMessages,'当前设备会话已失效，请恢复登录后继续原任务'] } }),
       }
@@ -173,6 +183,8 @@ async function readFulfillmentRows(
   const result = await transaction.query<FulfillmentRow>(`
     SELECT
       task.id AS task_id,
+      (SELECT count(*)::integer FROM mbox.delivery_batch_items notice
+        WHERE notice.tenant_id=task.tenant_id AND notice.store_id=task.store_id AND notice.kds_task_id=task.id) AS delivery_notice_version,
       remake.id AS remake_batch_id,
       (SELECT COALESCE(e.metadata->>'reasonNote',e.metadata->>'reason',e.metadata->>'reasonCode')
        FROM mbox.kds_task_events e WHERE e.tenant_id=task.tenant_id AND e.store_id=task.store_id AND e.kds_task_id=task.id AND e.to_status='failed'
@@ -403,6 +415,7 @@ function mapWorkItem(row: FulfillmentRow): FulfillmentWorkItem {
     priority: row.priority,
     overdue: row.overdue,
     readyForDelivery: row.ready_for_delivery,
+    deliveryNoticeVersion:row.delivery_notice_version,
     deliveryUnbatchedQuantity:row.delivery_unbatched_quantity,
     canPrepare: row.can_prepare,
     canDeliver: row.can_deliver,

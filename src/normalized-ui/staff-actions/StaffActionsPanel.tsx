@@ -1,6 +1,7 @@
+import {KitchenProductionBoard} from './KitchenProductionBoard'
 import { useStaffViewState } from '../staff-view-state'
 import { RefreshQueue } from './refresh-queue'
-import { StaffNoticeController } from './staff-notice-controller'
+import { StaffNoticeController, fulfillmentNoticeKey } from './staff-notice-controller'
 import {ItemAfterSalesPanel} from '../ItemAfterSalesPanel'
 import {ItemAfterSalesPendingPanel} from '../ItemAfterSalesPendingPanel'
 import {FulfillmentHistoryPanel} from './FulfillmentHistoryPanel'
@@ -131,6 +132,7 @@ export function StaffActionsPanel({
   const [tab, setTab] = useState<StaffActionsTab>(initialTab)
   const [operations, setOperations] = useState<StaffOperationsData | null>(null)
   const [fulfillment, setFulfillment] = useState<StaffFulfillmentData | null>(null)
+  const [kitchenLegacyIds,setKitchenLegacyIds]=useState<string[]|null>(null)
   const [memberBenefits,setMemberBenefits]=useState<StaffMemberBenefitTasks|null>(null)
   const [memberBenefitQuery,setMemberBenefitQuery]=useState('')
   const [memberScannerOpen,setMemberScannerOpen]=useState(false)
@@ -171,6 +173,7 @@ export function StaffActionsPanel({
   const [pendingFulfillment, setPendingFulfillment] = useState<ReadonlyMap<string, 'submitting' | 'syncing' | 'unknown'>>(new Map())
   const pendingFulfillmentRef = useRef(new Map<string, 'submitting' | 'syncing' | 'unknown'>())
   const [fulfillmentStale, setFulfillmentStale] = useState(false)
+  useEffect(()=>{window.dispatchEvent(new CustomEvent('mbox:fulfillment-read',{detail:fulfillmentStale?null:fulfillment}))},[fulfillment,fulfillmentStale])
   const fulfillmentStaleRef = useRef(false)
   const [historyRefreshRevision, setHistoryRefreshRevision] = useState(0)
   const operationsRef = useRef<StaffOperationsData | null>(null)
@@ -454,9 +457,10 @@ export function StaffActionsPanel({
   const visibleServiceActions = useMemo(() => prioritizeActionFact(
     serviceActions, initialFactId, (task) => task.id,
   ), [initialFactId, serviceActions])
+  const kitchenEnabled=fulfillment?.actor.kitchenBatchBoardEnabled===true&&!!api.loadKitchenBoard&&!!api.runKitchenCommand&&permissions.includes('kds.prepare')&&fulfillment?.actor.allowedStations.includes('kitchen')===true
   const filteredFulfillmentItems = useMemo(() => filterFulfillmentQueue(
-    fulfillmentVisibleItems, fulfillmentHistory === 'delivery' ? 'delivery' : 'production', fulfillmentSearch,
-  ), [fulfillmentVisibleItems, fulfillmentHistory, fulfillmentSearch])
+    kitchenEnabled&&kitchenLegacyIds!==null&&fulfillmentHistory==='active'?fulfillmentVisibleItems.filter(item=>item.stationCode!=='kitchen'||kitchenLegacyIds.includes(item.taskId)):fulfillmentVisibleItems, fulfillmentHistory === 'delivery' ? 'delivery' : 'production', fulfillmentSearch,
+  ), [fulfillmentVisibleItems, fulfillmentHistory, fulfillmentSearch, kitchenEnabled, kitchenLegacyIds])
   const visibleFulfillmentCards = useMemo(() => prioritizeActionFact(
     filteredFulfillmentItems, initialFactId, (item) => item.taskId, fulfillmentLimit,
   ), [filteredFulfillmentItems, initialFactId, fulfillmentLimit])
@@ -499,7 +503,7 @@ export function StaffActionsPanel({
   const tableRefundProcessingCount = tableFinancialSummary.refundsProcessing
   const currentActionKeys = useMemo(() => [
     ...serviceActions.map((task) => `service:${task.id}`),
-    ...fulfillmentActions.map((item) => `fulfillment:${item.taskId}`),
+    ...fulfillmentActions.map((item) => fulfillmentNoticeKey(item)),
   ], [fulfillmentActions, serviceActions])
 
   useEffect(() => {
@@ -535,15 +539,15 @@ export function StaffActionsPanel({
     const current = new Set(currentActionKeys)
     const previous = knownActionKeysRef.current
     knownActionKeysRef.current = current
-    if (previous === null || pendingAction !== null) return
+    if (previous === null) return
     const hasNewAttention = serviceActions.some((task) => (
       !previous.has(`service:${task.id}`)
       && (task.priority === 'urgent' || task.interactionMode === 'manager_resolution')
     )) || fulfillmentActions.some((item) => (
-      !previous.has(`fulfillment:${item.taskId}`) && (item.readyForDelivery || item.overdue)
+      !previous.has(fulfillmentNoticeKey(item)) && (item.readyForDelivery || item.overdue)
     ))
     if (hasNewAttention && typeof navigator.vibrate === 'function') navigator.vibrate([18, 45, 18])
-    const newFulfillment = fulfillmentActions.filter((item) => !previous.has(`fulfillment:${item.taskId}`))
+    const newFulfillment = fulfillmentActions.filter((item) => !previous.has(fulfillmentNoticeKey(item)))
     const newService = serviceActions.filter((task) => !previous.has(`service:${task.id}`))
     if (newFulfillment.length > 0) {
       showNotice({ kind: 'attention', message: `新增 ${newFulfillment.length} 项出品，请立即进入“出品”查看制作与配送。` })
@@ -1286,7 +1290,10 @@ export function StaffActionsPanel({
       )}
 
       {tab === 'fulfillment' && operations !== null && (
-        <>{(api.pendingKdsActions?.().length??0)>0&&<p role="status" data-action-reveal="off">有制作/送达操作结果待确认。<button type="button" disabled={pendingAction==='kds:recover'} onClick={()=>void recoverKdsResults()}>{pendingAction==='kds:recover'?'正在恢复…':'恢复上次结果'}</button></p>}{fulfillment?.actor.actionSessionValid===false&&<p role="alert">当前设备会话已失效，恢复登录后可继续原任务。{onLoginRequired&&<button type="button" onClick={onLoginRequired}>恢复登录</button>}</p>}<nav className="staff-history-tabs"><button type="button" aria-pressed={fulfillmentHistory==='active'} onClick={()=>setFulfillmentHistory('active')}>待制作（{fulfillmentVisibleItems.filter(item => item.quantities?item.quantities.unmade+item.quantities.started+item.quantities.held>0:!item.readyForDelivery).length}）</button><button type="button" aria-pressed={fulfillmentHistory==='delivery'} onClick={()=>setFulfillmentHistory('delivery')}>待取送（{fulfillmentVisibleItems.filter(item => item.readyForDelivery).length}）</button>{permissions.some(permission=>['order.history.view','order.history.all'].includes(permission))&&<>{permissions.includes('kds.prepare')&&<button type="button" aria-pressed={fulfillmentHistory==='prepared'} onClick={()=>setFulfillmentHistory('prepared')}>我的已制作</button>}{permissions.includes('kds.deliver')&&<button type="button" aria-pressed={fulfillmentHistory==='delivered'} onClick={()=>setFulfillmentHistory('delivered')}>我的已送达</button>}</>}</nav>
+        <>{kitchenEnabled&&fulfillmentHistory==='active'&&<KitchenProductionBoard key={operations.actor.id} api={api} employeeId={operations.actor.id}
+          blocked={fulfillmentStale||pendingFulfillment.size>0||pendingKds.length>0||legacyKdsTaskIds.length>0}
+          onChanged={()=>load(true)} onLegacy={setKitchenLegacyIds} onLoginRequired={onLoginRequired}/>}
+        {(api.pendingKdsActions?.().length??0)>0&&<p role="status" data-action-reveal="off">有制作/送达操作结果待确认。<button type="button" disabled={pendingAction==='kds:recover'} onClick={()=>void recoverKdsResults()}>{pendingAction==='kds:recover'?'正在恢复…':'恢复上次结果'}</button></p>}{fulfillment?.actor.actionSessionValid===false&&<p role="alert">当前设备会话已失效，恢复登录后可继续原任务。{onLoginRequired&&<button type="button" onClick={onLoginRequired}>恢复登录</button>}</p>}<nav className="staff-history-tabs"><button type="button" aria-pressed={fulfillmentHistory==='active'} onClick={()=>setFulfillmentHistory('active')}>待制作（{fulfillmentVisibleItems.filter(item => item.quantities?item.quantities.unmade+item.quantities.started+item.quantities.held>0:!item.readyForDelivery).length}）</button><button type="button" aria-pressed={fulfillmentHistory==='delivery'} onClick={()=>setFulfillmentHistory('delivery')}>待取送（{fulfillmentVisibleItems.filter(item => item.readyForDelivery).length}）</button>{permissions.some(permission=>['order.history.view','order.history.all'].includes(permission))&&<>{permissions.includes('kds.prepare')&&<button type="button" aria-pressed={fulfillmentHistory==='prepared'} onClick={()=>setFulfillmentHistory('prepared')}>我的已制作</button>}{permissions.includes('kds.deliver')&&<button type="button" aria-pressed={fulfillmentHistory==='delivered'} onClick={()=>setFulfillmentHistory('delivered')}>我的已送达</button>}</>}</nav>
         {(fulfillmentHistory==='prepared'||fulfillmentHistory==='delivered')&&<FulfillmentHistoryPanel api={api} kind={fulfillmentHistory} refreshRevision={historyRefreshRevision} onOpenItem={(quantityBatchEnabled||quantityRecoveryAvailable)&&permissions.includes('refund.request')?setRedeliveryItemId:undefined}/>}
         <div hidden={fulfillmentHistory==='prepared'||fulfillmentHistory==='delivered'}>
         {legacyKdsTaskIds.length > 0 && <p role="alert">此设备有旧版待确认操作，但未记录操作员工。相关任务已暂停确认，请由值班经理核对原订单；原记录已保留。</p>}

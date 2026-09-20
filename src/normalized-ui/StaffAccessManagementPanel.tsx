@@ -270,7 +270,7 @@ export function StaffAccessManagementPanel({ api, currentEmployeeId }: { api: No
           <button type="button" disabled={pendingChanges.length === 0 || reason.trim().length < 2 || publishing || refundError !== null} onClick={() => void deploy()}>
             {publishing ? <LoaderCircle className="is-spinning" /> : <ShieldCheck />}{publishing ? '正在发布并复核' : `发布${pendingChanges.length}项修改`}
           </button>
-          <small>未发布不会改变员工权限；服务端整批写入、重新读取并留痕，任何一项失败都会全部回滚。</small>
+          <small>发布后统一生效；任一项失败，本次权限调整不会生效。请核对发布结果。</small>
         </div>
       </>}
     </section>

@@ -7,7 +7,7 @@ const read = (path: string) => readFileSync(new URL(path, root), 'utf8')
 describe('activity operations staff and customer contract', () => {
   it('keeps published promises immutable and exposes the full draft configuration surface', () => {
     const panel = read('src/normalized-ui/ActivityOperationsPanel.tsx')
-    expect(panel).toContain('发布后不可静默修改')
+    expect(panel).toContain('发布后修改需重新确认')
     expect(panel).toContain('保存草稿并读回')
     expect(panel).toContain('费用、权益和客群')
     expect(panel).toContain('退款、安全和参与承诺')
@@ -110,7 +110,7 @@ describe('activity operations staff and customer contract', () => {
     const api = read('server/normalized/customer-experience-api.ts')
     expect(detail).not.toContain('完成积分')
     expect(detail).not.toContain('activity.pointsReward')
-    expect(staff).toContain('旧字段没有规则版本、预算和发放状态机')
+    expect(staff).toContain('活动积分请在会员规则中设置；当前表单不发放积分。')
     expect(staff).toContain('pointsReward: 0')
     expect(api).not.toContain("app.post('/staff/community-activities'")
   })

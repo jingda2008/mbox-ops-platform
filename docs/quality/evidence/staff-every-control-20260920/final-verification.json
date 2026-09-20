@@ -1,0 +1,16 @@
+{
+  "productSourceChanged": false,
+  "newIssues": 17,
+  "checklistVerified": true,
+  "registeredRowsVerified": true,
+  "sourceHashesVerified": 146,
+  "localBuildPassed": true,
+  "auditScriptsSyntaxPassed": true,
+  "ownedFixtureServersStopped": true,
+  "ownedDatabasesDropped": true,
+  "ownedPostgresContainerRemoved": true,
+  "realPaymentsOrBroadcastsSent": false,
+  "productionPermissionsOrInventoryChanged": false,
+  "committed": false,
+  "deployed": false
+}

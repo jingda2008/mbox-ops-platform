@@ -23,6 +23,14 @@ export const socialAccountApiPlugin:FastifyPluginAsync<Options>=async(app,option
   if(error instanceof IdempotencyConflictError||error instanceof IdempotencyInProgressError)return reply.code(409).send({error:{code:'SOCIAL_ACCOUNT_CONFLICT',message:'请求正在处理或内容已变化，请刷新核对'}})
   throw error
  })
+ app.get('/staff/member-cards/product-options',async request=>{
+  const ctx=await options.resolveStaffContext(request),query=z.object({offset:z.coerce.number().int().min(0).max(1000000).default(0)}).parse(request.query)
+  return{data:await options.transactions.run(ctx.scope,async tx=>{
+   await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'member.card.manage')
+   const rows=(await tx.query<{id:string;name:string}>(`SELECT id,name FROM mbox.products WHERE tenant_id=$1 AND store_id=$2 AND status='active' ORDER BY name,id LIMIT 101 OFFSET $3`,[ctx.scope.tenantId,ctx.scope.storeId,query.offset])).rows
+   return{items:rows.slice(0,100),nextOffset:rows.length>100?query.offset+100:null}
+  },{readOnly:true})}
+ })
  app.get('/staff/social-accounts',async(request,reply)=>{reply.header('Cache-Control','private, no-store');const ctx=await options.resolveStaffContext(request);return{data:await options.transactions.run(ctx.scope,async tx=>{await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'member.card.manage');return new SocialAccountRepository(tx,options.protection).list()},{readOnly:true})}})
  app.get('/staff/social-accounts/events',async request=>{const ctx=await options.resolveStaffContext(request);return{data:await options.transactions.run(ctx.scope,async tx=>{await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'member.card.manage');return(await tx.query('SELECT e.id,a.name AS account_name,e.event_type,e.status,e.error_code,e.received_at::text FROM mbox.social_callback_events e JOIN mbox.social_accounts a ON a.tenant_id=e.tenant_id AND a.store_id=e.store_id AND a.id=e.account_id WHERE e.tenant_id=$1 AND e.store_id=$2 ORDER BY e.received_at DESC,e.id DESC LIMIT 100',[ctx.scope.tenantId,ctx.scope.storeId])).rows},{readOnly:true})}})
  app.post<{Params:{id:string}}>('/staff/social-accounts/events/:id/retry',async request=>{

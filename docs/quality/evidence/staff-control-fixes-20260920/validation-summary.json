@@ -1,0 +1,164 @@
+{
+  "verifiedAtBeijing": "2026-09-20 23:44 CST",
+  "baseCommit": "5c4bde7de5ed154ab3dd9227a64751dcc65293eb",
+  "candidateSourceSha256": "1b66c43e2df6d930edaab6733f6895c49d6f975485c23d6f5dcfa5d0066c26a7",
+  "scope": {
+    "findings": 17,
+    "ids": "SYS-287 through SYS-303",
+    "copyDecisions": 60,
+    "deployment": "not deployed; no commit or merge in this repair turn"
+  },
+  "checks": {
+    "npm run check": {
+      "exitCode": 0,
+      "vitestPassed": 1961,
+      "testFilesPassed": 267,
+      "miniProgramPassed": 308,
+      "alipayParity": "passed",
+      "typecheckLintBuild": "passed",
+      "vitestConditionallySkipped": 758,
+      "testFilesConditionallySkipped": 76
+    },
+    "npm run test:normalized:postgres": {
+      "exitCode": 0,
+      "passed": 2320,
+      "skipped": 1,
+      "testFilesPassed": 274,
+      "skippedCase": "server/normalized/database-maintenance-restore.integration.test.ts: TEST_POSTGRES_CONTAINER was not enabled for the independent recovery drill",
+      "schema": "223",
+      "sourceBoundary": "No server/database changes after this passing run; the later change persists browser command recovery across tab closure"
+    },
+    "playwright": {
+      "distinctLatestPassed": 107,
+      "unresolvedFailedCases": 0,
+      "runs": [
+        {
+          "name": "default first",
+          "passed": 89,
+          "failed": 5,
+          "skipped": 13
+        },
+        {
+          "name": "affected and optional fixtures",
+          "passed": 18,
+          "failed": 2,
+          "skipped": 0
+        },
+        {
+          "name": "member card after automatic code assertion correction",
+          "passed": 2,
+          "failed": 0,
+          "skipped": 0
+        },
+        {
+          "name": "remaining optional fixtures",
+          "passed": 3,
+          "failed": 0,
+          "skipped": 0
+        }
+      ],
+      "basis": "Per-case latest results across four batches, not one uninterrupted green run. After the final browser persistence patch, all 12 repair probes were rerun."
+    },
+    "repairBrowserProbes": {
+      "passed": 12,
+      "failed": 0,
+      "includesClosedTabRecovery": true,
+      "uiResponseFixtures": [
+        "seven-domain publication entry points",
+        "cost navigation capability",
+        "eleven business report states"
+      ],
+      "realDatabaseWorkflows": [
+        "lost-reply stock write and replay",
+        "zero allowance request",
+        "draft creation/readback",
+        "yuan and percentage save/readback"
+      ]
+    },
+    "recoveryAndWorkflowUnitTests": {
+      "passed": 9,
+      "includesClosedTabAndEmployeeIsolation": true
+    },
+    "copyReview": {
+      "decisions": 60,
+      "anchorsVerified": 60
+    },
+    "documentationAndIdentity": {
+      "checklistVerify": "passed; preserves 303 historical issues",
+      "diffWhitespace": "passed",
+      "sourceAndBuildHashes": "unchanged",
+      "copyLineReferences": "60 exact-line matches",
+      "credentialFixtureKeys": "not present in repair evidence"
+    }
+  },
+  "artifacts": {
+    "repairProbes": "browser-fix-results.json",
+    "perBrowserCase": "browser-case-results.json",
+    "source": "source-candidate-manifest.json",
+    "priorFailures": "initial-failures.json"
+  },
+  "localLogs": [
+    {
+      "name": "check-final",
+      "localPath": "artifacts/staff-control-fixes-20260920/check-final.log",
+      "sha256": "c872511c05d79853be56bb410ed127f86030f2544db390ab8bd95c4a748c716a"
+    },
+    {
+      "name": "postgres-verified",
+      "localPath": "artifacts/staff-control-fixes-20260920/postgres-verified.log",
+      "sha256": "f09838306eb89c3aa34818d91add8b33ba843648151338a2aec0060c3c02d648"
+    },
+    {
+      "name": "browser-suite",
+      "localPath": "artifacts/staff-control-fixes-20260920/browser-suite.log",
+      "sha256": "749af9cecf27ae43b8bf3a764ce4756cc1f609837f2c9f3d921b13336d5360ca"
+    },
+    {
+      "name": "browser-verified",
+      "localPath": "artifacts/staff-control-fixes-20260920/browser-verified.log",
+      "sha256": "8a7d59c71c2534f9b0de07cb4f56e2841eefe21c619c938ace703d3f97e261e5"
+    },
+    {
+      "name": "member-cards-verified",
+      "localPath": "artifacts/staff-control-fixes-20260920/member-cards-verified.log",
+      "sha256": "e361d740f1f46a5e5d08ffe9edf605808d876e35e50587bd0ba83f8cbf5df98f"
+    },
+    {
+      "name": "browser-optin-final",
+      "localPath": "artifacts/staff-control-fixes-20260920/browser-optin-final.log",
+      "sha256": "b603562dcbd643911e0c801c24a1bcf280d6682dc1a86ff79f90bd4ada36b114"
+    },
+    {
+      "name": "browser-all12-final",
+      "localPath": "artifacts/staff-control-fixes-20260920/browser-all12-final.log",
+      "sha256": "fb38d68d67d49159c62bfb1413d26df3a93dcd528ef4b5556ba78612a9c612d8"
+    },
+    {
+      "name": "unit-verified",
+      "localPath": "artifacts/staff-control-fixes-20260920/unit-verified.log",
+      "sha256": "b00faaa2810cdf756552a9248419fb28a2aa074c5acae165d10ff77abe646c5a"
+    },
+    {
+      "name": "closed-tab-before",
+      "localPath": "artifacts/staff-control-fixes-20260920/closed-tab-before.log",
+      "sha256": "5cbd5efde2720de0d5308a544ad560527ec065cdd4c089c818f2b0d74ee456b1"
+    },
+    {
+      "name": "closed-tab-unit-before",
+      "localPath": "artifacts/staff-control-fixes-20260920/closed-tab-unit-before.log",
+      "sha256": "024752f6befd72214ba0c3a6418a6c3d00d52d9d6897f779a07e454c11f75364"
+    }
+  ],
+  "acceptanceBoundary": [
+    "No production database, authorization, stock or money changed",
+    "No real WeChat delivery, payment, refund or physical print",
+    "Native App and actual device/onsite acceptance remain separate",
+    "An automated passing scope does not establish every possible role/state/network combination"
+  ],
+  "testEnvironment": {
+    "type": "owned isolated localhost fixtures",
+    "runtimePort": 18898,
+    "postgresPort": 55444,
+    "cleanup": "runtime stopped and owned PostgreSQL container removed"
+  }
+}

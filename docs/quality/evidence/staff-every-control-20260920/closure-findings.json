@@ -1,0 +1,233 @@
+[
+  {
+    "id": "catalog-cost-form-hidden",
+    "result": "confirmed",
+    "evidence": {
+      "button": "核对 莫吉托浏览器验收原料 的库存成本",
+      "selected": "商品与上架",
+      "formExists": true,
+      "formVisible": false,
+      "hash": "#work=products",
+      "scope": "Read-only UI capability fixture; default store roles lack cost-correction permission"
+    }
+  },
+  {
+    "id": "configuration-selection-race",
+    "result": "confirmed",
+    "evidence": {
+      "lastUserSelection": "基础积分\nBASE · 第1版\n待编辑/审批",
+      "finalDisplayedSelection": "基础积分\nBASE · 第3版\n待编辑/审批",
+      "network": "First real GET response delivered after second real GET response; no response content was changed"
+    }
+  },
+  {
+    "id": "default-waste-denied",
+    "result": "confirmed",
+    "evidence": {
+      "status": 409,
+      "error": {
+        "error": {
+          "code": "INVENTORY_CONFLICT",
+          "message": "库存记录与本次操作条件不一致，请刷新记录核对后重试"
+        }
+      },
+      "request": {
+        "quantity": "1",
+        "wasteType": "other",
+        "reason": "逐键审计：默认限额的损耗申请"
+      },
+      "notice": [
+        "库存记录与本次操作条件不一致，请刷新记录核对后重试"
+      ],
+      "approvalButtons": 0
+    }
+  },
+  {
+    "id": "mobile-notification-overflow",
+    "result": "confirmed",
+    "evidence": {
+      "width": 320,
+      "scrollWidth": 385,
+      "overflowElements": [
+        {
+          "tag": "P",
+          "text": "回调地址需加本站正式域名。已有密钥不回显；留空保留原密钥。取酒验证码与存酒到期提醒均填服务号一次性订阅模板 ID：验证码用「验证码下放通知」（number1/thing3/thing2），到期提醒用「存酒到期提醒」（thing1/character_string2/thing3/time4/time5）。不要再填已拒审的模板消息 ID。",
+          "left": 25,
+          "right": 295,
+          "scroll": 360,
+          "width": 270
+        }
+      ]
+    }
+  },
+  {
+    "id": "nullable-inventory-input-rejected",
+    "result": "confirmed",
+    "evidence": {
+      "requestValue": "10",
+      "requestValueType": "string",
+      "status": 409,
+      "error": {
+        "error": {
+          "code": "MEMBERSHIP_CONFIGURATION_INVALID",
+          "message": "配置数值必须为非负整数"
+        }
+      },
+      "visibleStatus": [
+        "配置数值必须为非负整数"
+      ]
+    }
+  },
+  {
+    "id": "overview-is-editable",
+    "result": "confirmed",
+    "evidence": {
+      "disclaimer": "会员等级与权益\n只读查看当前已发布的积分、成长值、等级与等级权益规则；本入口不能起草、审批或发布。",
+      "responseStatus": 201,
+      "saved": {
+        "data": {
+          "id": "b1068a9e-08d2-483c-a4d9-ba7aee51124e",
+          "policyCode": "BASE",
+          "version": 1,
+          "status": "draft"
+        },
+        "meta": {
+          "replayed": false
+        }
+      },
+      "status": [
+        "新规则已保存为草稿，必须由另一名授权人员复核后才会生效。"
+      ]
+    }
+  },
+  {
+    "id": "approval-link-no-destination",
+    "result": "confirmed",
+    "evidence": {
+      "before": "/staff/member-overview",
+      "after": "/staff/member-overview",
+      "centerCount": 0,
+      "notice": "审批已移至上方“会员经营配置中心”：必须使用服务端持久化的限时影响预览。"
+    }
+  },
+  {
+    "id": "member-fulfillment-shows-configuration",
+    "result": "confirmed",
+    "evidence": {
+      "introduction": "当前桌次会员权益待办\n只显示当前岗位可确认的赠送、核销与出品事项；每次操作记录当前员工并执行防重复校验。",
+      "configurationButtons": [
+        "规则草稿",
+        "待发布",
+        "保存等级草稿",
+        "保存完整目录草稿",
+        "保存年度礼遇草稿"
+      ]
+    }
+  },
+  {
+    "id": "waste-response-loss-duplicates-stock",
+    "result": "confirmed",
+    "evidence": {
+      "itemId": "d0887601-ccf9-46cd-8e3b-4d4fc689da76",
+      "option": "4份调饮搭配浏览器验收原料 · 当前 1000 件",
+      "allowanceFixture": {
+        "database": "mbox_normalized_browser_1624_70fa5777",
+        "before": "0.000000",
+        "after": "10",
+        "note": "Only synthetic material allowance was seeded; no employee permissions changed"
+      },
+      "firstNotice": [
+        "网络连接失败，请检查网络后重试"
+      ],
+      "writes": [
+        {
+          "requestKey": "inventory-waste-291d0d80-18e5-44ab-beac-110af51850a3",
+          "body": {
+            "quantity": "1",
+            "wasteType": "other",
+            "reason": "逐键审计：模拟服务已登记但浏览器没有收到结果"
+          },
+          "status": 200,
+          "response": {
+            "data": {
+              "movementId": "e0c91382-c06d-45e4-87b1-e86d96f48683",
+              "remainingQuantity": "999.000000",
+              "baseUnit": "piece",
+              "wasteType": "other",
+              "unitCostMinor": null,
+              "wasteCostMinor": null
+            },
+            "meta": {
+              "replayed": false
+            }
+          }
+        },
+        {
+          "requestKey": "inventory-waste-22c61c63-c291-474d-896f-5bfcea5b8730",
+          "body": {
+            "quantity": "1",
+            "wasteType": "other",
+            "reason": "逐键审计：模拟服务已登记但浏览器没有收到结果"
+          },
+          "status": 200,
+          "response": {
+            "data": {
+              "movementId": "a9ab8cb1-f5ae-4b5f-bd0e-5a7aad40b22b",
+              "remainingQuantity": "998.000000",
+              "baseUnit": "piece",
+              "wasteType": "other",
+              "unitCostMinor": null,
+              "wasteCostMinor": null
+            },
+            "meta": {
+              "replayed": false
+            }
+          }
+        }
+      ],
+      "finalNotice": [
+        "损耗已登记，库存余量已更新为 998 件；当前成本待补，损耗金额暂不确认"
+      ]
+    }
+  },
+  {
+    "id": "tier-validation-no-feedback",
+    "result": "confirmed",
+    "evidence": {
+      "errors": [
+        "银卡积分倍率最多保留三位小数"
+      ],
+      "visibleStatus": [],
+      "fieldValue": ""
+    }
+  },
+  {
+    "id": "configuration-success-cleared",
+    "result": "confirmed",
+    "evidence": {
+      "status": 200,
+      "saved": {
+        "data": {
+          "publicId": "b1068a9e-08d2-483c-a4d9-ba7aee51124e",
+          "domain": "base_points",
+          "status": "draft",
+          "revision": 2,
+          "makerEmployeeIds": [
+            "223a23d3-892c-4433-85df-c79c4fb98e53"
+          ],
+          "content": {
+            "domain": "base_points",
+            "pointsNumerator": 1,
+            "pointsDenominatorMinor": 100,
+            "growthNumerator": 1,
+            "growthDenominatorMinor": 100,
+            "roundingMode": "floor",
+            "pointsValidityMonths": 18
+          },
+          "updatedAt": "2026-09-20 13:34:56.463071+00"
+        }
+      },
+      "messages": []
+    }
+  }
+]

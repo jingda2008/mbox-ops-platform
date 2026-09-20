@@ -15,6 +15,12 @@ const base = {
 }
 
 describe('loadNormalizedRuntimeConfig', () => {
+  it('enables the kitchen independently of quantity after-sales and rejects an invalid switch',()=>{
+    expect(loadNormalizedRuntimeConfig(base).kitchenBatchBoardEnabled).toBe(false)
+    const config=loadNormalizedRuntimeConfig({...base,MBOX_KITCHEN_BATCH_BOARD_ENABLED:'true'})
+    expect(config.kitchenBatchBoardEnabled).toBe(true);expect(config.quantityAfterSalesEnabled).toBe(false)
+    expect(()=>loadNormalizedRuntimeConfig({...base,MBOX_KITCHEN_BATCH_BOARD_ENABLED:'typo'})).toThrow(/MBOX_KITCHEN_BATCH_BOARD_ENABLED/)
+  })
   it('requires an explicit valid quantity after-sales switch and keeps it disabled by default', () => {
     expect(loadNormalizedRuntimeConfig(base).quantityAfterSalesEnabled).toBe(false)
     expect(loadNormalizedRuntimeConfig({...base, MBOX_QUANTITY_AFTER_SALES_ENABLED:'true'}).quantityAfterSalesEnabled).toBe(true)

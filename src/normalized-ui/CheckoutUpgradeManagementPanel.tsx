@@ -1,3 +1,4 @@
+import {ScaledNumberField} from './ScaledNumberField'
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { ChevronDown, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import type { NormalizedApiClient, StaffAuthView } from '../normalized-api'
@@ -49,6 +50,7 @@ export function CheckoutUpgradeManagementPanel({ api, auth }: { api: NormalizedA
   const [products, setProducts] = useState<ProductOption[]>([])
   const [busy, setBusy] = useState('')
   const [notice, setNotice] = useState('')
+  const [readError,setReadError]=useState('')
   const [rule, setRule] = useState({
     code:'',name:'',sourceProductId:'',targetProductId:'',minimumPartySize:'2',maximumPartySize:'8',
     occasionTags:'friends',alcoholPreferenceTags:'mixed',promptTitle:'升级今晚体验',
@@ -63,7 +65,7 @@ export function CheckoutUpgradeManagementPanel({ api, auth }: { api: NormalizedA
   const [limitProduct,setLimitProduct]=useState(''),[limitQuantity,setLimitQuantity]=useState('1')
 
   const load = useCallback(async () => {
-    setBusy('load'); setNotice('')
+    setBusy('load'); setReadError('')
     try {
       const [ruleResponse,outcomeResponse,capacityResponse,productResponse] = await Promise.all([
         canViewRules ? api.getEndpoint<{ data:RuleView[] }>('/api/staff/customer-experience/checkout-upgrade-rules') : Promise.resolve({data:[]}),
@@ -78,7 +80,7 @@ export function CheckoutUpgradeManagementPanel({ api, auth }: { api: NormalizedA
         sourceProductId:current.sourceProductId || loadedProducts.find((item)=>item.productKind==='single')?.id || '',
         targetProductId:current.targetProductId || loadedProducts.find((item)=>item.productKind==='bundle')?.id || '',
       }))
-    } catch (error) { setNotice(message(error,'升级与产能配置暂时无法读取')) }
+    } catch (error) { setReadError(message(error,'列表暂未读到；已完成的保存或审批结果不变，请刷新列表')) }
     finally { setBusy('') }
   }, [api, canDraftRule, canViewCapacity, canViewRules])
 
@@ -107,7 +109,7 @@ export function CheckoutUpgradeManagementPanel({ api, auth }: { api: NormalizedA
         occasionTags:tags(rule.occasionTags),alcoholPreferenceTags:tags(rule.alcoholPreferenceTags),
         promptTitle:rule.promptTitle.trim(),promptBody:rule.promptBody.trim(),callToAction:rule.callToAction.trim(),
         priority:number(rule.priority,'优先级',0),offerValidMinutes:number(rule.offerValidMinutes,'报价有效分钟',2),
-        minimumGrossMarginBasisPoints:number(rule.minimumGrossMarginBasisPoints,'最低毛利基点',0),status:'draft',
+        minimumGrossMarginBasisPoints:number(rule.minimumGrossMarginBasisPoints,'最低毛利率',0),status:'draft',
       }, { idempotencyKey:operationKey('checkout-rule-draft') })
       setNotice('规则草稿已保存。须由另一人审批、第三人发布；保存草稿不会开启升级推荐。'); await load()
     } catch (error) { setNotice(message(error,'规则草稿没有保存')) }
@@ -144,7 +146,7 @@ export function CheckoutUpgradeManagementPanel({ api, auth }: { api: NormalizedA
           capacityLimitUnits:number(item.capacityLimitUnits,'产能上限',1),
         })),
       }, { idempotencyKey:operationKey('fulfillment-capacity-draft') })
-      setNotice('产能草稿已保存。须由另一人审批、第三人发布后才成为运行事实。'); await load()
+      setNotice('产能草稿已保存，经另一人审批和第三人发布后生效。'); await load()
     } catch (error) { setNotice(message(error,'产能草稿没有保存')) }
     finally { setBusy('') }
   }
@@ -169,7 +171,7 @@ export function CheckoutUpgradeManagementPanel({ api, auth }: { api: NormalizedA
   return <section className="checkout-upgrade-management" aria-label="付款前升级与履约产能配置">
     <header><div><strong>付款前升级与产能</strong><small>规则、报价、成交和出品上限统一管理；三人分离发布，功能默认关闭。</small></div><button type="button" aria-expanded={expanded} onClick={()=>setExpanded((value)=>!value)}>{expanded?'收起':'配置'}<ChevronDown size={17}/></button></header>
     {expanded && <div className="checkout-upgrade-content">
-      {notice && <p className="checkout-upgrade-notice" role="status">{notice}</p>}
+      {readError&&<p role="alert">{readError}<button type="button" onClick={()=>void load()}>重新读取列表</button></p>}{notice && <p className="checkout-upgrade-notice" role="status">{notice}</p>}
       <div className="checkout-upgrade-toolbar"><span>建议 {outcomes.length} · 已接受 {summary.accepted} · 已提交 {summary.converted} · 已付款 {summary.paid} · 投诉 {summary.complaints}</span><button type="button" disabled={busy==='load'} onClick={()=>void load()}><RefreshCw size={15}/>刷新</button></div>
       <p>统计最近300次建议，生成建议不等于顾客已看到；接受后删除该份套餐不计提交。付款与退款为关联订单口径，不代表升级带来的增量收入；已付款包含后来退款的订单。</p>
       {canDraftRule && <details><summary>新建规则草稿</summary><form className="checkout-upgrade-form" onSubmit={(event)=>void saveRule(event)}>
@@ -180,7 +182,7 @@ export function CheckoutUpgradeManagementPanel({ api, auth }: { api: NormalizedA
         <label>人数范围<div className="inline-fields"><input type="number" min={1} max={200} value={rule.minimumPartySize} onChange={(event)=>setRule({...rule,minimumPartySize:event.target.value})}/><span>至</span><input type="number" min={1} max={200} value={rule.maximumPartySize} onChange={(event)=>setRule({...rule,maximumPartySize:event.target.value})}/></div></label>
         <label>优先级<input type="number" min={0} max={10000} value={rule.priority} onChange={(event)=>setRule({...rule,priority:event.target.value})}/></label>
         <label>报价有效分钟<input type="number" min={2} max={30} value={rule.offerValidMinutes} onChange={(event)=>setRule({...rule,offerValidMinutes:event.target.value})}/></label>
-        <label>最低毛利（基点）<input type="number" min={0} max={9999} value={rule.minimumGrossMarginBasisPoints} onChange={(event)=>setRule({...rule,minimumGrossMarginBasisPoints:event.target.value})}/></label>
+        <ScaledNumberField label="最低毛利率" unit="%" required maxValue={9999} value={rule.minimumGrossMarginBasisPoints} onChange={value=>setRule({...rule,minimumGrossMarginBasisPoints:value})}/>
         <label>场景标签<input value={rule.occasionTags} onChange={(event)=>setRule({...rule,occasionTags:event.target.value})} placeholder="friends,birthday"/></label>
         <label>酒水标签<input value={rule.alcoholPreferenceTags} onChange={(event)=>setRule({...rule,alcoholPreferenceTags:event.target.value})} placeholder="mixed,whisky"/></label>
         <label className="wide">顾客标题<input required value={rule.promptTitle} onChange={(event)=>setRule({...rule,promptTitle:event.target.value})}/></label>
@@ -188,10 +190,10 @@ export function CheckoutUpgradeManagementPanel({ api, auth }: { api: NormalizedA
         <label>确认按钮<input required value={rule.callToAction} onChange={(event)=>setRule({...rule,callToAction:event.target.value})}/></label>
         <fieldset className="wide upgrade-qualification-fields"><legend>高度匹配准入条件</legend>
           <p>先满足全部条件，再按优先级排序。贡献额为成交额减商品成本，不是扣除房租工资后的净利润；未填写、成本未知或不适配时不能主动推荐。</p>
-          <label>最多加价<NumberInputWithUnit required inputMode="numeric" unit="分" min={0} step={1} value={qualification.maximumAddMinor} onChange={event=>setQualification({...qualification,maximumAddMinor:event.target.value})}/></label>
-          <label>相对加价上限（可留空，仅用绝对上限）<NumberInputWithUnit inputMode="numeric" unit="万分比" min={0} max={1000000} step={1} value={qualification.maximumAddBasisPoints} onChange={event=>setQualification({...qualification,maximumAddBasisPoints:event.target.value})}/></label>
-          <label>升级后最低贡献额<NumberInputWithUnit required inputMode="numeric" unit="分" min={0} step={1} value={qualification.minimumContributionMinor} onChange={event=>setQualification({...qualification,minimumContributionMinor:event.target.value})}/></label>
-          <label>最低新增贡献额<NumberInputWithUnit required inputMode="numeric" unit="分" min={0} step={1} value={qualification.minimumIncrementalContributionMinor} onChange={event=>setQualification({...qualification,minimumIncrementalContributionMinor:event.target.value})}/></label>
+          <ScaledNumberField label="最多加价" unit="元" required value={qualification.maximumAddMinor} onChange={value=>setQualification({...qualification,maximumAddMinor:value})}/>
+          <ScaledNumberField label="相对加价上限（留空仅用绝对上限）" unit="%" maxValue={1000000} value={qualification.maximumAddBasisPoints} onChange={value=>setQualification({...qualification,maximumAddBasisPoints:value})}/>
+          <ScaledNumberField label="升级后最低贡献额" unit="元" required value={qualification.minimumContributionMinor} onChange={value=>setQualification({...qualification,minimumContributionMinor:value})}/>
+          <ScaledNumberField label="最低新增贡献额" unit="元" required value={qualification.minimumIncrementalContributionMinor} onChange={value=>setQualification({...qualification,minimumIncrementalContributionMinor:value})}/>
           <label>适配依据<textarea required minLength={2} maxLength={500} value={qualification.positiveFitReason} onChange={event=>setQualification({...qualification,positiveFitReason:event.target.value})} placeholder="说明保留什么、增加什么，以及为什么适合此人数和场景"/></label>
           <label>新增商品<select aria-label="份量上限商品" value={limitProduct} onChange={event=>setLimitProduct(event.target.value)}><option value="">选择需要限定份量的商品</option>{products.map(item=><option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
           <label>该商品每人最多<NumberInputWithUnit inputMode="numeric" unit="份 / 人" min={1} max={100} step={1} value={limitQuantity} onChange={event=>setLimitQuantity(event.target.value)}/></label>

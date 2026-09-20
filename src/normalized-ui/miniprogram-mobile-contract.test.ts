@@ -265,7 +265,7 @@ describe('mini-program mobile business flow contract', () => {
     expect(panel).not.toContain('entry as PerformancePhaseEvent')
     expect(catalog).toContain("auth.permissions.includes('recommendation.phase.configure')")
     expect(catalog).toContain('/performance-phases`')
-    expect(catalog).toContain('未选择任何阶段表示不受演出阶段限制')
+    expect(catalog).toContain('只在所选演出阶段提供；不选择则不限阶段。')
     expect(catalog).toContain('单独保存阶段配置')
     expect(catalog).toContain('performancePhaseReason.trim().length < 2')
     expect(catalog).toContain('{ phaseCodes: performancePhaseCodes, reason }')

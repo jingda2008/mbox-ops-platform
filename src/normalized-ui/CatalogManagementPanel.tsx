@@ -229,6 +229,7 @@ export function CatalogManagementPanel({
   const [recipeCost, setRecipeCost] = useState<RecipeCostPreview | null>(null)
   const [notice, setNotice] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
   const performancePhaseRequest = useRef(0)
+  const consumedOpenRequest = useRef(0)
 
   const load = useCallback(async () => {
     setPhase('loading')
@@ -251,8 +252,17 @@ export function CatalogManagementPanel({
   }, [expanded, load, phase])
 
   useEffect(() => {
-    if (openRequest > 0) setExpanded(true)
-  }, [openRequest])
+    if (openRequest <= consumedOpenRequest.current) return
+    consumedOpenRequest.current = openRequest
+    setExpanded(true)
+    const productId = draft?.id
+    if (!productId || !canViewInventoryCost) return
+    let current = true
+    void api.getEndpoint<{ data: unknown }>(`/api/inventory/products/${productId}/recipe-cost`)
+      .then(response => { if (current) setRecipeCost(readRecipeCostPreview(response.data, productId)) })
+      .catch(() => { if (current) setNotice({ kind: 'error', text: '原商品成本暂未读到，请点击重新核算成本；未保存内容已保留。' }) })
+    return () => { current = false }
+  }, [api, canViewInventoryCost, draft?.id, openRequest])
 
   const visibleProducts = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase('zh-CN')
@@ -868,7 +878,7 @@ export function CatalogManagementPanel({
 
   return <section className={`catalog-management ${isInventoryFlow ? 'is-inventory-flow ' : ''}${expanded ? 'is-expanded' : ''}`} aria-label={isInventoryFlow ? '酒水上架流程' : '商品与推荐配置'}>
     <button type="button" className="catalog-management-trigger" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
-      <span><PackageOpen size={19} /><strong>{isInventoryFlow ? '酒水上架流程' : '商品、售价与推荐'}</strong><small>{isInventoryFlow ? '第 4–5 步：商品、售价、配方与可售校验' : '上架、搜索、人数范围、优先级、成本和组合'}</small></span>
+      <span><PackageOpen size={19} /><strong>{isInventoryFlow ? '酒水上架流程' : '商品、售价与推荐'}</strong><small>{isInventoryFlow ? '第 2–4 步：销售规格、预览与上架核对' : '上架、搜索、人数范围、优先级、成本和组合'}</small></span>
       <span>{products.length > 0 ? `${products.length}项` : '经营配置'} <ChevronDown size={17} /></span>
     </button>
     {expanded && <div className="catalog-management-body">
@@ -876,7 +886,7 @@ export function CatalogManagementPanel({
       {notice !== null && <p className={`catalog-management-notice is-${notice.kind}`} role="status">{notice.kind === 'success' && <Check size={17} />}{notice.text}</p>}
       {phase === 'error' && <button type="button" onClick={() => void load()}>重新读取商品</button>}
       {phase === 'ready' && <>
-        {isInventoryFlow && <section className="catalog-selling-flow" aria-label="酒水上架步骤说明"><header><strong>第 2–4 步：销售规格、配方成本与发布</strong><small>选择整瓶、单杯、Shot、鸡尾酒或自定义规格，保存售价与真实扣减配方，再回到入库卡生成发布预览。</small></header><ol><li><b>2</b><span><strong>销售规格</strong><small>同一库存物料可被多个销售规格共同引用。</small></span></li><li><b>3</b><span><strong>配方与预览</strong><small>配置每份用量、损耗、售价和渠道。</small></span></li><li><b>4</b><span><strong>确认发布</strong><small>核对本次成本后，确认入库并上架</small></span></li></ol><p>“在售”仅是商品状态；顾客可点还要通过配方和实时库存校验，系统不会因方便操作而跳过。</p></section>}
+        {isInventoryFlow && <section className="catalog-selling-flow" aria-label="酒水上架步骤说明"><header><strong>第 2 步：选择销售规格并配置配方</strong><small>选择整瓶、单杯、Shot、鸡尾酒或自定义规格，保存售价与真实扣减配方，再回到入库卡生成发布预览。</small></header><ol><li><b>2</b><span><strong>销售规格</strong><small>同一库存物料可被多个销售规格共同引用。</small></span></li><li><b>3</b><span><strong>生成完整预览</strong><small>配置每份用量、损耗、售价和渠道。</small></span></li><li><b>4</b><span><strong>确认入库并发布</strong><small>核对本次成本后，确认入库并上架</small></span></li></ol><p>“在售”仅是商品状态；顾客可点还要通过配方和实时库存校验，系统不会因方便操作而跳过。</p></section>}
         <section className="catalog-menu-categories" aria-label="顾客菜单分类">
           <header><div><strong>顾客菜单分类</strong><small>一级入口和二级分类都在这里配置；小程序只显示名称、顺序和可见性，不再把内部分类编号给顾客看。</small></div><button type="button" onClick={startCreateCategory}><CirclePlus size={16} /> 新增分类</button></header>
           {categoryDraft !== null && <form className="catalog-menu-category-form" onSubmit={(event) => void saveMenuCategory(event)}>
@@ -927,12 +937,12 @@ export function CatalogManagementPanel({
             <label>推荐优先级<NumberInputWithUnit inputMode="numeric" unit="级" value={draft.recommendationPriority} onChange={(event) => updateDraft('recommendationPriority', event.target.value)} /></label>
             <label className="catalog-check"><input type="checkbox" checked={draft.guestVisible} onChange={(event) => updateDraft('guestVisible', event.target.checked)} />顾客菜单可见</label>
             <label className="catalog-check"><input type="checkbox" checked={draft.recommendationEnabled} onChange={(event) => updateDraft('recommendationEnabled', event.target.checked)} />参与商品推荐</label>
-            {isInventoryFlow && <section className={`catalog-sale-readiness catalog-wide${currentSaleBlockers.length === 0 && currentProduct !== null ? ' is-ready' : ''}`} aria-label="酒水小程序可售检查"><header><div><strong>第 5 步：小程序可售检查</strong><small>{draft.id === null ? '新酒水先保存为停用；保存后可配置配方并读取真实可售状态。' : currentSaleBlockers.length === 0 ? '该商品已通过当前的售价、配方、库存和小程序菜单校验。' : '请按以下提示完成；保存商品状态不等于顾客已经可以下单。'}</small></div><em>{draft.id === null ? '待建档' : currentSaleBlockers.length === 0 ? '小程序可售' : '待完成'}</em></header>{currentProduct !== null && currentSaleBlockers.length > 0 && <ul>{currentSaleBlockers.map((item) => <li key={item}>{item}</li>)}</ul>}</section>}
+            {isInventoryFlow && <section className={`catalog-sale-readiness catalog-wide${currentSaleBlockers.length === 0 && currentProduct !== null ? ' is-ready' : ''}`} aria-label="酒水小程序可售检查"><header><div><strong>第 4 步：小程序可售检查</strong><small>{draft.id === null ? '新酒水先保存为停用；保存后可配置配方并读取真实可售状态。' : currentSaleBlockers.length === 0 ? '该商品已通过当前的售价、配方、库存和小程序菜单校验。' : '请按以下提示完成；保存商品状态不等于顾客已经可以下单。'}</small></div><em>{draft.id === null ? '待建档' : currentSaleBlockers.length === 0 ? '小程序可售' : '待完成'}</em></header>{currentProduct !== null && currentSaleBlockers.length > 0 && <ul>{currentSaleBlockers.map((item) => <li key={item}>{item}</li>)}</ul>}</section>}
             {canManagePrice && <label className="catalog-wide">调价原因<input maxLength={500} value={draft.priceReason} onChange={(event) => updateDraft('priceReason', event.target.value)} /></label>}
             {canViewInventoryCost && draft.inventoryControlMode !== 'tracked' && draft.productKind !== 'bundle' && draft.id !== null && currentProduct !== null
               && moneyToMinor(draft.costYuan, true) !== currentProduct.costAmountMinor
               && <label className="catalog-wide">成本变更原因<input required minLength={2} maxLength={500} value={draft.costChangeReason} placeholder="例如：供应商进价调整，按本次采购单更新" onChange={(event) => updateDraft('costChangeReason', event.target.value)} /></label>}
-            <button type="button" className="catalog-advanced-toggle catalog-wide" aria-expanded={showAdvanced} onClick={() => setShowAdvanced((value) => !value)}>{showAdvanced ? '收起高级字段' : '显示高级字段（供应、标签与渠道）'}<ChevronDown size={17} /></button>
+            <button type="button" className="catalog-advanced-toggle catalog-wide" aria-expanded={showAdvanced} onClick={() => setShowAdvanced((value) => !value)}>{showAdvanced ? '收起更多设置' : '更多设置（供应、标签与渠道）'}<ChevronDown size={17} /></button>
             {showAdvanced && <>
               <label>菜单排序<NumberInputWithUnit inputMode="numeric" min={0} max={100000} unit="序号" value={draft.sortOrder} onChange={(event) => updateDraft('sortOrder', event.target.value)} /></label>
               <label>单笔最大数量<NumberInputWithUnit inputMode="numeric" min={1} max={9999} unit="份/单" value={draft.maxOrderQuantity} onChange={(event) => updateDraft('maxOrderQuantity', event.target.value)} /></label>
@@ -946,7 +956,7 @@ export function CatalogManagementPanel({
               <label className="catalog-wide">场景标签（英文逗号分隔）<input value={draft.recommendationSceneTags} placeholder="date,friends,celebration" onChange={(event) => updateDraft('recommendationSceneTags', event.target.value)} /></label>
               <label>意图标签<input value={draft.recommendationIntentTags} placeholder="relaxed,energetic" onChange={(event) => updateDraft('recommendationIntentTags', event.target.value)} /></label>
               <label>口味标签<input value={draft.recommendationTasteTags} placeholder="refreshing,layered" onChange={(event) => updateDraft('recommendationTasteTags', event.target.value)} /></label>
-              <label>停留标签<input value={draft.recommendationDwellTags} placeholder="one_set,stay_longer" onChange={(event) => updateDraft('recommendationDwellTags', event.target.value)} /></label>
+              <fieldset><legend>客人预计停留</legend>{([['one_set','听一场演出'],['stay_longer','多待一会'],['no_rush','不限时间']] as const).map(([code,label])=><label key={code}><input type="checkbox" checked={draft.recommendationDwellTags.split(',').includes(code)} onChange={event=>updateDraft('recommendationDwellTags',(event.target.checked?[...new Set([...draft.recommendationDwellTags.split(',').filter(Boolean),code])]:draft.recommendationDwellTags.split(',').filter(value=>value!==code)).join(','))}/>{label}</label>)}</fieldset>
               <label className="catalog-wide">商品文案<input maxLength={1000} value={draft.description} onChange={(event) => updateDraft('description', event.target.value)} /></label>
               <label>酸度<select value={draft.acidity} onChange={event=>updateDraft('acidity',event.target.value)}><option value="">未评价</option>{[0,1,2,3,4,5].map(level=><option key={level} value={level}>{level}/5</option>)}</select></label>
               <label>甜度<select value={draft.sweetness} onChange={event=>updateDraft('sweetness',event.target.value)}><option value="">未评价</option>{[0,1,2,3,4,5].map(level=><option key={level} value={level}>{level}/5</option>)}</select></label>
@@ -959,7 +969,7 @@ export function CatalogManagementPanel({
             </>}
             {canConfigurePerformancePhase && draft.id === null && <p className="catalog-performance-phase-note catalog-wide">请先创建商品，再配置适用演出阶段；新商品默认不受阶段限制。</p>}
             {canConfigurePerformancePhase && draft.id !== null && <section className="catalog-performance-phase catalog-wide" aria-label="商品适用演出阶段">
-              <header><div><strong>适用演出阶段</strong><small>强类型运行门禁；未选择任何阶段表示不受演出阶段限制。</small></div><em>{performancePhaseCodes.length === 0 ? '不限阶段' : `已选 ${performancePhaseCodes.length} 项`}</em></header>
+              <header><div><strong>适用演出阶段</strong><small>只在所选演出阶段提供；不选择则不限阶段。</small></div><em>{performancePhaseCodes.length === 0 ? '不限阶段' : `已选 ${performancePhaseCodes.length} 项`}</em></header>
               {performancePhaseState === 'loading' && <p><LoaderCircle className="is-spinning" size={17} /> 正在读取当前配置</p>}
               {performancePhaseState === 'error' && <button type="button" onClick={() => void loadProductPerformancePhases(draft.id!)}>重新读取阶段配置</button>}
               {performancePhaseState === 'ready' && <>

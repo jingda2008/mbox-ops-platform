@@ -117,24 +117,26 @@ grep -qx 'MBOX_MEITUAN_SHOP_ID=demo-shop' "${postar_env_file}"
 # Release normalization must preserve the explicit aftersales rollout decision.
 # Missing means the runtime default, and invalid values must reach the runtime
 # validator instead of being silently erased into a disabled feature.
+for feature_key in MBOX_QUANTITY_AFTER_SALES_ENABLED MBOX_KITCHEN_BATCH_BOARD_ENABLED; do
 for tier in validation production; do
   for value in missing true false typo; do
     cp "${postar_env_file}" "${env_file}"
     if [ "${value}" != missing ]; then
-      printf 'MBOX_QUANTITY_AFTER_SALES_ENABLED=%s\n' "${value}" >> "${env_file}"
+      printf '%s=%s\n' "${feature_key}" "${value}" >> "${env_file}"
     fi
     for pass in 1 2; do
       "${root}/deploy/aliyun/normalize-runtime-env.sh" "${env_file}" "${tier}"
       if [ "${value}" = missing ]; then
-        ! grep -q '^MBOX_QUANTITY_AFTER_SALES_ENABLED=' "${env_file}"
+        ! grep -q "^${feature_key}=" "${env_file}"
       else
-        grep -qx "MBOX_QUANTITY_AFTER_SALES_ENABLED=${value}" "${env_file}"
-        test "$(grep -c '^MBOX_QUANTITY_AFTER_SALES_ENABLED=' "${env_file}")" = 1
+        grep -qx "${feature_key}=${value}" "${env_file}"
+        test "$(grep -c "^${feature_key}=" "${env_file}")" = 1
       fi
       grep -qx 'POSTAR_MERCHANT_ID=merchant' "${env_file}"
       grep -qx 'MBOX_GUEST_PAYMENT_MODE=wechat_native_qr' "${env_file}"
     done
   done
+done
 done
 
 # Preserve the already deployed service-account subscribe configuration.

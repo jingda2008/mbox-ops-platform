@@ -1,0 +1,67 @@
+[
+  {
+    "run": "first-postgres",
+    "pass": 2317,
+    "skip": 1,
+    "fail": 2,
+    "failures": [
+      "migration list omitted new 223",
+      "pre-existing item-quantity recovery test exceeded 5000ms"
+    ],
+    "response": "added migration to fixed list; retained timeout and original test assertions"
+  },
+  {
+    "run": "second-postgres",
+    "pass": 2319,
+    "skip": 1,
+    "fail": 1,
+    "failures": [
+      "new seven-domain list test expected 7 rows but fixture had 9"
+    ],
+    "response": "assert the seven target configuration ids; additional fixture rows remain"
+  },
+  {
+    "run": "third-postgres",
+    "pass": 2319,
+    "skip": 1,
+    "fail": 1,
+    "failures": [
+      "new workbook test expected only 2 member rows but earlier cases created 39"
+    ],
+    "response": "assert exactly the two amount-test rows and values 50.00/70.00; preserve business state and non-revenue labels"
+  },
+  {
+    "run": "first-check",
+    "response": "fixed nullable product selection in cost readback; updated obsolete source-copy assertions to business wording; retained behavior and authorization assertions"
+  },
+  {
+    "run": "browser-harness",
+    "response": "fixed strict selectors, text whitespace, normalized error message assertion and confirmation dialog role; retained original failed result files"
+  },
+  {
+    "run": "default-browser-first",
+    "pass": 89,
+    "skip": 13,
+    "fail": 5,
+    "response": "updated three stale labels; added explicit link from the draft route to retained stacking/calendar/gift workspace; rerun the affected flows with their original business assertions"
+  },
+  {
+    "run": "affected-and-optin-browser-first",
+    "pass": 18,
+    "skip": 0,
+    "fail": 2,
+    "response": "member-card browser test still filled the removed internal code field; now asserts automatic CARD identifier reaches the save API, retaining approval/freeze/resume/revoke assertions; scoped rerun passed both widths"
+  },
+  {
+    "run": "closed-tab-unit-before",
+    "pass": 6,
+    "fail": 1,
+    "response": "fresh module and empty session storage exposed loss of the unresolved intent after tab closure; switched the employee-scoped durable command to localStorage; nine recovery/workflow tests passed"
+  },
+  {
+    "run": "closed-tab-browser-before",
+    "pass": 0,
+    "fail": 1,
+    "response": "after a committed write lost its reply, closing and reopening the tab removed the recovery button; preserved this actual failure and added tab-close recovery to the browser probe"
+  }
+]

@@ -1,0 +1,24 @@
+[WebServer] (node:50185) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] [INEFFECTIVE_DYNAMIC_IMPORT] src/normalized-ui/PerformanceRevisionPanel.tsx is dynamically imported by src/normalized-ui/StaffModulePanel.tsx but also statically imported by src/normalized-ui/MonthlySchedulePanel.tsx, dynamic import will not move module into another chunk.
+[WebServer]
+[WebServer] [plugin builtin:vite-reporter]
+[WebServer] (!) Some chunks are larger than 500 kB after minification. Consider:
+[WebServer] - Using dynamic import() to code-split the application
+[WebServer] - Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+[WebServer] - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+[WebServer] (node:50190) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] (node:50191) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+Running 4 tests using 1 worker
+
+(node:50248) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 tests/normalized-e2e/normalized-all-roles-business-day.spec.ts:555:1 › 盘点复核让有权限同事通过或退回，提交人能查结果，失败读取可重试 (3.8s)
+  ✓  2 tests/normalized-e2e/normalized-stock-count-batch.spec.ts:27:1 › batch approvals exclude self and stale counts, retain each conflict and continue other counts (988ms)
+  ✓  3 tests/normalized-e2e/normalized-stock-count-batch.spec.ts:55:1 › stale counts can be returned together with one reason and ambiguous retries retain original keys (1.1s)
+  ✓  4 tests/normalized-e2e/normalized-stock-count-batch.spec.ts:83:1 › batch selection never carries unseen counts across pages or a refreshed view (844ms)
+
+  4 passed (16.1s)

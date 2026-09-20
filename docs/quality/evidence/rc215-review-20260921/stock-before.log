@@ -1,0 +1,161 @@
+[WebServer] (node:49856) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] [INEFFECTIVE_DYNAMIC_IMPORT] src/normalized-ui/PerformanceRevisionPanel.tsx is dynamically imported by src/normalized-ui/StaffModulePanel.tsx but also statically imported by src/normalized-ui/MonthlySchedulePanel.tsx, dynamic import will not move module into another chunk.
+[WebServer]
+[WebServer] [plugin builtin:vite-reporter]
+[WebServer] (!) Some chunks are larger than 500 kB after minification. Consider:
+[WebServer] - Using dynamic import() to code-split the application
+[WebServer] - Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+[WebServer] - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+[WebServer] (node:49864) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] (node:49865) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+Running 3 tests using 1 worker
+
+(node:49886) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  1 tests/normalized-e2e/normalized-stock-count-batch.spec.ts:26:1 › batch approvals exclude self and stale counts, retain each conflict and continue other counts (1.1s)
+(node:49893) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  2 tests/normalized-e2e/normalized-stock-count-batch.spec.ts:54:1 › stale counts can be returned together with one reason and ambiguous retries retain original keys (1.1s)
+(node:49900) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  3 tests/normalized-e2e/normalized-stock-count-batch.spec.ts:82:1 › batch selection never carries unseen counts across pages or a refreshed view (951ms)
+
+
+  1) tests/normalized-e2e/normalized-stock-count-batch.spec.ts:26:1 › batch approvals exclude self and stale counts, retain each conflict and continue other counts
+
+    Error: locator.check: Clicking the checkbox did not change its state
+    Call log:
+      - waiting for getByRole('region', { name: '盘点复核', exact: true }).getByLabel('全选当前页可复核单据')
+        - locator resolved to <input type="checkbox"/>
+      - attempting click action
+        - waiting for element to be visible, enabled and stable
+        - element is visible, enabled and stable
+        - scrolling into view if needed
+        - done scrolling
+        - performing click action
+        - click action done
+        - waiting for scheduled navigations to finish
+        - navigations have finished
+
+
+      37 |   const panel=await open(page,counts)
+      38 |   await expect(panel.getByRole('article',{name:'盘点 batch-self'}).getByRole('checkbox')).toHaveCount(0)
+    > 39 |   await panel.getByLabel('全选当前页可复核单据').check()
+         |                                        ^
+      40 |   await expect(panel).toContainText('已选 4 张')
+      41 |   await expect(panel.getByRole('button',{name:'批量通过',exact:true})).toBeDisabled()
+      42 |   await panel.getByRole('button',{name:'选中可通过'}).click()
+        at /Users/jingda/mbox/mbox-review-release-20260921/tests/normalized-e2e/normalized-stock-count-batch.spec.ts:39:40
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    artifacts/normalized-browser/results/normalized-stock-count-bat-9e4ba-t-and-continue-other-counts/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    artifacts/normalized-browser/results/normalized-stock-count-bat-9e4ba-t-and-continue-other-counts/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: artifacts/normalized-browser/results/normalized-stock-count-bat-9e4ba-t-and-continue-other-counts/error-context.md
+
+    attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+    artifacts/normalized-browser/results/normalized-stock-count-bat-9e4ba-t-and-continue-other-counts/trace.zip
+    Usage:
+
+        npx playwright show-trace artifacts/normalized-browser/results/normalized-stock-count-bat-9e4ba-t-and-continue-other-counts/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2) tests/normalized-e2e/normalized-stock-count-batch.spec.ts:54:1 › stale counts can be returned together with one reason and ambiguous retries retain original keys
+
+    Error: expect(locator).toContainText(expected) failed
+
+    Locator: getByRole('region', { name: '盘点复核', exact: true })
+    Expected substring: "本批2张：1张已退回，1张未完成"
+    Error: strict mode violation: getByRole('region', { name: '盘点复核', exact: true }) resolved to 2 elements:
+        1) <section aria-label="盘点复核" class="inventory-stock-counts">…</section> aka getByText('盘点复核刷新盘点核对实盘数量后，可勾选批量通过或退回；本人提交的盘点须由另一名有审批权限的同事复核。待复核已处理正在处理 1/2全选当前页可复核单据已选 2')
+        2) <section aria-label="盘点复核" class="inventory-stock-counts">…</section> aka getByText('盘点复核刷新盘点这里显示本人提交的盘点。请由有盘点审批权限的同事在“库存 → 盘点复核”处理。待复核已处理正在读取盘点记录上一页第1页下一页')
+
+    Call log:
+      - Expect "toContainText" with timeout 12000ms
+      - waiting for getByRole('region', { name: '盘点复核', exact: true })
+
+
+      72 |   }
+      73 |   await reject()
+    > 74 |   await expect(panel).toContainText('本批2张：1张已退回，1张未完成')
+         |                       ^
+      75 |   await panel.getByRole('button',{name:'选中需重盘'}).click();await reject()
+      76 |   await expect(panel).toContainText('本批1张：1张已退回，0张未完成')
+      77 |   expect(calls.map(c=>c.id)).toEqual(['old1','old2','old2'])
+        at /Users/jingda/mbox/mbox-review-release-20260921/tests/normalized-e2e/normalized-stock-count-batch.spec.ts:74:23
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    artifacts/normalized-browser/results/normalized-stock-count-bat-eb99d-etries-retain-original-keys/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    artifacts/normalized-browser/results/normalized-stock-count-bat-eb99d-etries-retain-original-keys/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: artifacts/normalized-browser/results/normalized-stock-count-bat-eb99d-etries-retain-original-keys/error-context.md
+
+    attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+    artifacts/normalized-browser/results/normalized-stock-count-bat-eb99d-etries-retain-original-keys/trace.zip
+    Usage:
+
+        npx playwright show-trace artifacts/normalized-browser/results/normalized-stock-count-bat-eb99d-etries-retain-original-keys/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  3) tests/normalized-e2e/normalized-stock-count-batch.spec.ts:82:1 › batch selection never carries unseen counts across pages or a refreshed view
+
+    Error: locator.check: Clicking the checkbox did not change its state
+    Call log:
+      - waiting for getByRole('region', { name: '盘点复核', exact: true }).getByLabel('全选当前页可复核单据')
+        - locator resolved to <input type="checkbox"/>
+      - attempting click action
+        - waiting for element to be visible, enabled and stable
+        - element is visible, enabled and stable
+        - scrolling into view if needed
+        - done scrolling
+        - performing click action
+        - click action done
+        - waiting for scheduled navigations to finish
+        - navigations have finished
+
+
+      86 |   await expect(panel.getByRole('article',{name:'盘点 batch-page2'})).toBeVisible()
+      87 |   await expect(panel).toContainText('已选 0 张')
+    > 88 |   await panel.getByLabel('全选当前页可复核单据').check()
+         |                                        ^
+      89 |   await panel.getByRole('button',{name:'刷新盘点'}).click()
+      90 |   await expect(panel).toContainText('已选 0 张')
+      91 |   await expect(panel.getByRole('button',{name:'批量通过',exact:true})).toBeDisabled()
+        at /Users/jingda/mbox/mbox-review-release-20260921/tests/normalized-e2e/normalized-stock-count-batch.spec.ts:88:40
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    artifacts/normalized-browser/results/normalized-stock-count-bat-49706-s-pages-or-a-refreshed-view/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    artifacts/normalized-browser/results/normalized-stock-count-bat-49706-s-pages-or-a-refreshed-view/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: artifacts/normalized-browser/results/normalized-stock-count-bat-49706-s-pages-or-a-refreshed-view/error-context.md
+
+    attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+    artifacts/normalized-browser/results/normalized-stock-count-bat-49706-s-pages-or-a-refreshed-view/trace.zip
+    Usage:
+
+        npx playwright show-trace artifacts/normalized-browser/results/normalized-stock-count-bat-49706-s-pages-or-a-refreshed-view/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  3 failed
+    tests/normalized-e2e/normalized-stock-count-batch.spec.ts:26:1 › batch approvals exclude self and stale counts, retain each conflict and continue other counts
+    tests/normalized-e2e/normalized-stock-count-batch.spec.ts:54:1 › stale counts can be returned together with one reason and ambiguous retries retain original keys
+    tests/normalized-e2e/normalized-stock-count-batch.spec.ts:82:1 › batch selection never carries unseen counts across pages or a refreshed view

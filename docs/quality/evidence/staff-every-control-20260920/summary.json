@@ -1,0 +1,47 @@
+{
+  "baseline": "5c4bde7de5ed154ab3dd9227a64751dcc65293eb",
+  "generatedAt": "2026-09-20T13:59:32.113Z",
+  "routes": 21,
+  "sourceFiles": 146,
+  "controlSourceFiles": 71,
+  "controls": 1669,
+  "buttons": 757,
+  "forms": 68,
+  "functions": 380,
+  "copyCandidates": 6057,
+  "terminologyCandidates": 88,
+  "copyDecisions": 60,
+  "findings": 17,
+  "priorities": {
+    "P1": 2,
+    "P2": 13,
+    "P3": 2
+  },
+  "readOnlyVisits": 214,
+  "readOnlyStates": 526,
+  "confirmedProbes": 11,
+  "runs": [
+    {
+      "run": "default-390",
+      "visits": 144,
+      "states": 341,
+      "employeeCount": 13,
+      "width": 390
+    },
+    {
+      "run": "default-1280",
+      "visits": 51,
+      "states": 133,
+      "employeeCount": 3,
+      "width": 1280
+    },
+    {
+      "run": "optin-320",
+      "visits": 19,
+      "states": 52,
+      "employeeCount": 1,
+      "width": 320
+    }
+  ],
+  "coverageCaveat": "Source definitions and read-only rendered states are distinct from end-to-end acceptance. Unobserved runtime variants and physical/provider outcomes are not passed."
+}

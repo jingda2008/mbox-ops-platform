@@ -1,3 +1,5 @@
+import { staffErrorMessage, staffUnavailableMessage } from './shared/staff-error-message'
+import { STAFF_SESSION_BINDING_HEADER, STAFF_SESSION_CHANGE_KEY } from './shared/staff-session-binding'
 import type {
   NormalizedApiErrorBody,
   NormalizedApiSuccessBody,
@@ -60,6 +62,15 @@ export interface StaffAuthView {
 }
 
 export class NormalizedApiClient {
+  private staffSessionId: string | null = null
+
+  private rememberSession(session: StaffAuthView, announce = false): StaffAuthView {
+    this.staffSessionId = session.session.id
+    if (announce) {
+      try { localStorage.setItem(STAFF_SESSION_CHANGE_KEY, JSON.stringify({ sessionId: session.session.id, changedAt: Date.now() })) } catch { /* Server binding still rejects stale pages. */ }
+    }
+    return session
+  }
   private readonly send: typeof fetch
   private readonly defaultTimeoutMs: number
 
@@ -69,11 +80,13 @@ export class NormalizedApiClient {
   }
 
   async getStaffSession(options: Readonly<NormalizedRequestOptions> = {}): Promise<StaffAuthView> {
-    return this.getDataEndpoint<StaffAuthView>('/api/auth/session', options)
+    return this.rememberSession(await this.getDataEndpoint<StaffAuthView>('/api/auth/session', options))
   }
 
   async heartbeatStaff(): Promise<StaffAuthView> {
-    return this.postDataEndpoint<StaffAuthView>('/api/auth/heartbeat', {})
+    const session = await this.postDataEndpoint<StaffAuthView>('/api/auth/heartbeat', {})
+    if (this.staffSessionId !== null && this.staffSessionId !== session.session.id) throw new NormalizedApiError('当前员工已切换，请重新登录', 'http', 'login', 401)
+    return this.rememberSession(session)
   }
 
   async grantDeviceAccess(input: Readonly<{ credential: string; deviceKey: string }>): Promise<{ businessDate: string; expiresAt: string }> {
@@ -81,16 +94,18 @@ export class NormalizedApiClient {
   }
 
   async loginStaff(input: Readonly<{ employeeCode: string; pin: string }>): Promise<StaffAuthView> {
-    return this.postDataEndpoint('/api/auth/login', input)
+    return this.rememberSession(await this.postDataEndpoint<StaffAuthView>('/api/auth/login', input), true)
   }
 
   async switchStaff(input: Readonly<{ employeeCode: string; pin: string }>): Promise<StaffAuthView> {
-    return this.postDataEndpoint('/api/auth/switch', input)
+    return this.rememberSession(await this.postDataEndpoint<StaffAuthView>('/api/auth/switch', input), true)
   }
 
   async logoutStaff(): Promise<void> {
     const response = await this.request('/api/auth/logout', { method: 'POST' })
     if (response.status !== 204) throw new NormalizedApiError('退出结果无法确认，请重试', 'invalid_response', 'retry')
+    this.staffSessionId = null
+    try { localStorage.setItem(STAFF_SESSION_CHANGE_KEY, JSON.stringify({ sessionId: null, changedAt: Date.now() })) } catch { /* Cookie revocation remains authoritative. */ }
   }
 
   async getStaffBootstrap(options: Readonly<NormalizedRequestOptions> = {}): Promise<StaffBootstrapLoadResult> {
@@ -255,16 +270,18 @@ export class NormalizedApiClient {
       controller.abort()
     }, timeoutMs)
 
+    const headers = new Headers(request.headers ?? { accept: 'application/json' })
+    if (this.staffSessionId !== null && !['/api/auth/login', '/api/auth/device-access'].includes(url)) headers.set(STAFF_SESSION_BINDING_HEADER, this.staffSessionId)
     try {
       const response = await this.send(url, {
         method: request.method,
         credentials: 'include',
-        headers: request.headers ?? new Headers({ accept: 'application/json' }),
+        headers,
         ...(request.body === undefined ? {} : { body: request.body }),
         signal: controller.signal,
       })
       if (response.status === 304) return response
-      if (!response.ok) throw await responseError(response)
+      if (!response.ok) throw await responseError(response, request.method)
       return response
     } catch (error) {
       if (error instanceof NormalizedApiError) throw error
@@ -282,15 +299,15 @@ export class NormalizedApiClient {
   }
 }
 
-async function responseError(response: Response): Promise<NormalizedApiError> {
+async function responseError(response: Response, method: string): Promise<NormalizedApiError> {
   let code = 'HTTP_ERROR'
-  let message = response.status===401?'登录已失效，请重新登录':response.status===403?'当前账号无此操作权限，请联系店长核对授权':response.status===404?'请求的记录或接口不存在，请刷新后重试':response.status===429?'请求过于频繁，请稍后重试':response.status>=500?'服务暂未正常响应，本次操作结果尚未确认，请用原请求重试':'请求未通过，请检查填写内容后重试'
+  let message = response.status===401?'登录已失效，请重新登录':response.status===403?'当前账号无此操作权限，请联系店长核对授权':response.status===404?'请求的记录或接口不存在，请刷新后重试':response.status===429?'请求过于频繁，请稍后重试':response.status>=500?staffUnavailableMessage(method):'请求未通过，请检查填写内容后重试'
   let requestId=response.headers.get('x-request-id')||''
   let bodyRetryable: boolean | undefined
   try {
     const body = await response.json() as Partial<NormalizedApiErrorBody>
     if (typeof body.error?.code === 'string') code = body.error.code
-    if (typeof body.error?.message === 'string') message = body.error.message
+    message = staffErrorMessage(body.error?.message, message, response.status)
     const detail=body.error as unknown as Record<string,unknown>|undefined
     if(typeof detail?.requestId==='string')requestId=detail.requestId
     if (typeof body.error?.retryable === 'boolean') bodyRetryable = body.error.retryable

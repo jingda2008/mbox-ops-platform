@@ -128,7 +128,7 @@ export function ParticipantMovementSheet(props:Readonly<{
             <li>预计目标桌：{preview?.projectedGuestCount} / 容量{preview?.targetCapacity}人{preview?.requiresCapacityOverride?'（已填写加座说明）':''}</li>
             {preview?.roleAdjustments.map((adjustment) => <li key={adjustment.participantPublicId}>角色调整：{adjustment.reason}</li>)}
             <li>现场原因：{reason.trim()}</li>{needsCapacityReason && <li>加座说明：{capacityReason.trim()}</li>}
-            <li>被移动顾客的旧桌会话立即失效，必须扫描目标桌二维码</li></ul>
+            <li>转桌后请让顾客扫描新桌二维码</li></ul>
           <button className="staff-primary-action" type="button" disabled={phase==='saving' || (preview?.blockers.length ?? 0)>0} onClick={() => void execute()}>
             {phase==='saving'?<LoaderCircle className="is-spinning" size={17}/>:<Check size={17}/>}确认执行</button>
           <button type="button" disabled={phase==='saving'} onClick={() => setPhase('edit')}>返回修改</button>

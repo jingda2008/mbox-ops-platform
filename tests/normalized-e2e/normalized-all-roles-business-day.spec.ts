@@ -381,6 +381,7 @@ test('manager completes a walk-in table lifecycle without leaving the mobile ope
   await expect(manager.page.getByRole('status')).toContainText(`${sourceCode} 已开台，2人`)
   await expect(manager.page.locator('.staff-table-tile').filter({ hasText: sourceCode }).first()).toContainText('已开台')
 
+  await manager.page.locator('.staff-table-more > summary').click()
   await manager.page.getByRole('button', { name: '转桌', exact: true }).click()
   const target = manager.page.locator('.staff-transfer-targets > div > button').first()
   await expect(target).toBeVisible()
@@ -391,6 +392,7 @@ test('manager completes a walk-in table lifecycle without leaving the mobile ope
   await expect(manager.page.getByRole('status')).toContainText(`${sourceCode} 已转至 ${targetCode}`)
   await expect(manager.page.locator('.staff-table-tile').filter({ hasText: targetCode }).first()).toContainText('已开台')
 
+  if (!await manager.page.getByRole('button', { name: '准备结台' }).isVisible()) await manager.page.locator('.staff-table-more > summary').click()
   await manager.page.getByRole('button', { name: '准备结台' }).click()
   await expect(manager.page.getByRole('status')).toContainText('请再次确认结台')
   await manager.page.getByRole('button', { name: '确认结台' }).click()
@@ -412,7 +414,7 @@ test('李艳可由授权管理页批量安排为主服务员并安全结束责�
   await expect(manager.page.getByRole('heading', { name: '找到桌台，直接处理' })).toBeVisible()
   await manager.page.getByRole('button', { name: /人员与责任桌/ }).click()
 
-  await expect(manager.page.getByText(/区域批量发布使用同一事务/)).toBeVisible()
+  await expect(manager.page.getByText(/所选桌台将一起安排/)).toBeVisible()
   await manager.page.getByLabel('员工').selectOption({ label: '李艳 · liyan' })
   await manager.page.getByLabel('本次岗位').selectOption({ label: '店长 · MANAGER' })
   await manager.page.getByLabel('责任类型').selectOption('primary')
@@ -443,6 +445,7 @@ test('店长可在经营配置中修改商品推荐字段并从服务端读回',
   await manager.page.setViewportSize({ width: 430, height: 880 })
   await manager.page.goto('/staff/inventory')
   await expect(manager.page.getByRole('heading', { name: '库存与酒水上架' })).toBeVisible()
+  await manager.page.getByRole('button', { name: '商品与上架', exact: true }).click()
   await manager.page.getByRole('button', { name: /酒水上架流程/ }).click()
   await expect(manager.page.getByLabel('搜索配置商品')).toBeVisible()
   await manager.page.getByLabel('搜索配置商品').fill(data.orderableProductName)
@@ -572,7 +575,7 @@ test('盘点复核让有权限同事通过或退回，提交人能查结果，�
   await reviewer.page.route('**/api/inventory/stock-counts?**',route=>route.fulfill({status:503,json:{error:{code:'unavailable',message:'盘点服务暂时不可用'}}}),{times:1})
   await reviewer.page.goto('/staff/inventory')
   const reviews=reviewer.page.getByRole('region',{name:'盘点复核'})
-  await expect(reviews.getByRole('alert')).toContainText('盘点服务暂时不可用')
+  await expect(reviews.getByRole('alert')).toContainText('读取失败，请刷新重试')
   await expect(reviews.getByText('当前没有待复核盘点',{exact:true})).toHaveCount(0)
   await reviews.getByRole('button',{name:'刷新盘点',exact:true}).click()
   const row=reviews.getByRole('article',{name:`盘点 ${first.publicId}`,exact:true})
@@ -1480,7 +1483,7 @@ test('离店重做实物分份登记，最后一份丢回执仍可刷新恢复',
   await page.route(url,async route=>{const response=await route.fetch();expect(response.ok(),await response.text()).toBe(true);committed();await route.abort('failed')},{times:1})
   await row.getByRole('button',{name:'确认本批已耗用或损耗'}).click();await finished
   await expect(panel.getByRole('button',{name:'恢复上次实物登记'})).toBeVisible()
-  await page.reload();await page.getByRole('button',{name:'任务',exact:true}).first().click()
+  await page.reload();await expect(panel).toBeVisible()
   await expect(panel.getByRole('article',{name:'离店重做实物批次'})).toHaveCount(0)
   await expect(panel.getByRole('button',{name:'恢复上次实物登记'})).toBeVisible()
   await panel.getByRole('button',{name:'恢复上次实物登记'}).click()

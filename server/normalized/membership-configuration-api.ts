@@ -53,6 +53,25 @@ export const membershipConfigurationApiPlugin:FastifyPluginAsync<MembershipConfi
     return reply.send({data:rows})
   }))
 
+  app.get('/staff/loyalty/configuration-center/references',async(request,reply)=>handle(reply,async()=>{
+    const context=await authorized(options,request,'loyalty.configuration.view')
+    const data=await options.transactions.run(context.scope,async(transaction)=>{
+      const result=await transaction.query<{kind:string;id:string;name:string;status:string}>(`
+        SELECT 'tierPolicyVersionId'::text kind,id,'会员等级 第' || version || '版' AS name,status
+          FROM mbox.loyalty_tier_policy_versions WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        UNION ALL SELECT 'benefitDefinitionId',id,name,status FROM mbox.loyalty_benefit_definitions
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        UNION ALL SELECT 'productId',id,name,status FROM mbox.products
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        UNION ALL SELECT 'activityId',id,title,status FROM mbox.community_activities
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        ORDER BY kind,name,id
+      `,[transaction.scope.tenantId,transaction.scope.storeId])
+      return result.rows
+    },{readOnly:true})
+    return reply.send({data})
+  }))
+
   app.get<{Params:{domain:string;configurationId:string}}>(
     '/staff/loyalty/configuration-center/:domain/:configurationId',
     async(request,reply)=>handle(reply,async()=>{

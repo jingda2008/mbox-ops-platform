@@ -897,9 +897,11 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<Fastify
     if (error instanceof CommercialRecordNotFoundError) {
       return reply.code(404).send({ error: { code: 'COMMERCIAL_NOT_FOUND', message: error.message } })
     }
+    if (error instanceof VoucherAlreadyRedeemedError) {
+      return reply.code(409).send({ error: { code: 'COMMERCIAL_CONFLICT', message: '此券已核销，请查看核销记录，无需再次办理' } })
+    }
     if (error instanceof CostAlreadyCorrectedError
       || error instanceof SalesRuleOverlapError
-      || error instanceof VoucherAlreadyRedeemedError
       || error instanceof IdempotencyConflictError
       || error instanceof IdempotencyInProgressError) {
       return reply.code(409).send({ error: { code: 'COMMERCIAL_CONFLICT', message: error.message } })

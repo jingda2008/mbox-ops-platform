@@ -197,6 +197,8 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
     const context = await authorizedContext(options, request)
     const body = readObject(request.body)
     const execution = await options.commands.transfer(commandBase(request, context, body, '现场转桌', {
+      expectedSourceTableId: readUuid(body.expectedSourceTableId, '原桌台'),
+      expectedLocationVersion: readInteger(body.expectedLocationVersion, '桌台位置版本', 0, Number.MAX_SAFE_INTEGER),
       tableSessionId: readUuid(readParams(request).tableSessionId, 'tableSessionId'),
       targetTableId: readUuid(body.targetTableId, 'targetTableId'),
       capacityOverrideReason: optionalString(body.capacityOverrideReason, 'capacityOverrideReason', 1000),

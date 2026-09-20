@@ -14,7 +14,7 @@ for (const width of [320, 360]) test(`ordinary member card review and lifecycle 
   await page.getByLabel('四位 PIN').fill(fixture.employeePin)
   await page.getByRole('button', { name: /进入工作台/ }).click()
   await expect(page.getByTestId('normalized-workspace')).toBeVisible()
-  await page.goto('/staff/member-management')
+  await page.goto('/staff/member-management#work=member-cards')
   const panel=page.locator('.member-card-management')
   await panel.getByRole('button',{name:'读取 / 刷新',exact:true}).click()
   const application=panel.locator('article').filter({hasText:`MBX-CARD${width}`})

@@ -99,7 +99,9 @@ describe('activity operations staff and customer contract', () => {
     expect(panel).toContain('付款跟进')
     expect(panel).toContain('setRevealedContacts({})')
     expect(panel).toContain('expiresAt')
-    expect(panel).not.toMatch(/localStorage|sessionStorage/)
+    expect(panel).not.toMatch(/(?:localStorage|sessionStorage)\.setItem\([^;]*(?:revealedContacts|contactValue|response\.data)/)
+    expect(panel).toContain('JSON.stringify(attempt)')
+    expect(panel).toContain("{ key: operationKey('activity-draft-create'), draft }")
   })
 
   it('does not promise the dead unversioned activity points field to customers', () => {

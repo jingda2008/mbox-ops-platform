@@ -7,7 +7,7 @@ describe('participant movement mobile contract',() => {
   it('keeps split and merge as a three-step, permission-gated staff action',() => {
     const panel=read('./staff-actions/StaffActionsPanel.tsx')
     const sheet=read('./staff-actions/ParticipantMovementSheet.tsx')
-    expect(panel).toContain("hasPermission(props.permissions,'table.participation.manage')")
+    expect(panel).toMatch(/hasPermission\(props\.permissions,\s*'table\.participation\.manage'\)/)
     expect(sheet).toContain('下一步：执行前预检')
     expect(sheet).toContain('基础条件已核对，提交时仍检查未结业务')
     expect(sheet).toContain('确认执行')

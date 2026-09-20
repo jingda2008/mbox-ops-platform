@@ -182,7 +182,7 @@ export function ResponsibilityAssignmentPanel({ api, tables }: ResponsibilityAss
       {message !== null && <p className={`staff-assignment-message is-${message.kind}`} role="status">{message.kind === 'success' && <Check size={17} />}{message.text}</p>}
       {phase === 'error' && <button type="button" onClick={() => void load()}>重新读取</button>}
       {phase === 'ready' && options !== null && <>
-        <div className="staff-assignment-boundary"><ShieldCheck size={18} /><span>仅有“分配责任桌台”权限的岗位可发布。区域批量发布使用同一事务，任一桌冲突时整批回滚。</span></div>
+        <div className="staff-assignment-boundary"><ShieldCheck size={18} /><span>仅有“分配责任桌台”权限的岗位可发布。所选桌台将一起安排；如有冲突，本次安排不会生效</span></div>
         <div className="staff-assignment-fields">
           <label>员工<select value={employeeId} onChange={(event) => setEmployeeId(event.target.value)}>{options.employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName} · {employee.code}</option>)}</select></label>
           <label>本次岗位<select value={roleId} onChange={(event) => setRoleId(event.target.value)}>{options.roles.map((role) => <option key={role.id} value={role.id}>{role.name} · {role.code}</option>)}</select></label>

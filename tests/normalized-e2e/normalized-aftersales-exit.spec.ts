@@ -63,7 +63,7 @@ test('after-sales load failure and stock conflict both allow exit without a busi
   await visibleExit(page);await page.keyboard.press('Escape');await expect(dialog).toHaveCount(0)
   await page.route('**/api/commerce/item-after-sales/items/item',route=>route.fulfill({status:503,json:{error:{code:'READ_FAILED',message:'原记录暂未读回'}}}))
   await page.getByRole('button',{name:'处理商品',exact:true}).click()
-  await expect(dialog.getByRole('alert')).toContainText('原记录暂未读回');await visibleExit(page)
+  await expect(dialog.getByRole('alert')).toContainText('读取失败，请刷新重试');await visibleExit(page)
   await dialog.getByRole('button',{name:'关闭商品处理'}).click();expect(writes).toBe(0)
   await expect(page.getByRole('region',{name:'商品售后待办'})).toContainText('已退款 ¥78.00')
   await expect(page.getByRole('region',{name:'商品售后待办'})).toContainText('待处理 1 份')

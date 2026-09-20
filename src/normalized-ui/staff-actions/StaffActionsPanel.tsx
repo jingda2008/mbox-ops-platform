@@ -1,4 +1,6 @@
+import { useStaffViewState } from '../staff-view-state'
 import { RefreshQueue } from './refresh-queue'
+import { StaffNoticeController } from './staff-notice-controller'
 import {ItemAfterSalesPanel} from '../ItemAfterSalesPanel'
 import {ItemAfterSalesPendingPanel} from '../ItemAfterSalesPendingPanel'
 import {FulfillmentHistoryPanel} from './FulfillmentHistoryPanel'
@@ -73,6 +75,7 @@ import type {
 import './staff-actions-panel.css'
 
 export interface StaffActionsPanelProps {
+  staffSessionId?: string
   api?: StaffActionsApiPort
   initialTab?: StaffActionsTab
   initialTableSessionId?: string | null
@@ -115,6 +118,7 @@ export function tableFinancialLabel(state: StaffTableFinancialState): string {
 
 export function StaffActionsPanel({
   api: suppliedApi,
+  staffSessionId,
   initialTab = 'tasks',
   initialTableSessionId = null,
   initialFactId = null,
@@ -122,7 +126,7 @@ export function StaffActionsPanel({
   onLoginRequired,
   onNavigate,
 }: StaffActionsPanelProps) {
-  const api = useMemo(() => suppliedApi ?? new StaffActionsApi(), [suppliedApi])
+  const api = useMemo(() => suppliedApi ?? new StaffActionsApi({ staffSessionId }), [suppliedApi, staffSessionId])
   const { confirmAction, promptAction } = useConfirmationDialog()
   const [tab, setTab] = useState<StaffActionsTab>(initialTab)
   const [operations, setOperations] = useState<StaffOperationsData | null>(null)
@@ -130,18 +134,19 @@ export function StaffActionsPanel({
   const [memberBenefits,setMemberBenefits]=useState<StaffMemberBenefitTasks|null>(null)
   const [memberBenefitQuery,setMemberBenefitQuery]=useState('')
   const [memberScannerOpen,setMemberScannerOpen]=useState(false)
-  const [fulfillmentHistory,setFulfillmentHistory]=useState<'active'|'delivery'|'prepared'|'delivered'>('active')
-  const [fulfillmentLimit, setFulfillmentLimit] = useState(24)
-  const [fulfillmentSearch, setFulfillmentSearch] = useState('')
+  const [fulfillmentHistory,setFulfillmentHistory]=useStaffViewState<'active'|'delivery'|'prepared'|'delivered'>('fulfillment:history', 'active')
+  const [fulfillmentLimit, setFulfillmentLimit] = useStaffViewState('fulfillment:limit', 24)
+  const [fulfillmentSearch, setFulfillmentSearch] = useStaffViewState('fulfillment:search', '')
   const [giftSelections,setGiftSelections]=useState<Record<string,{productId:string;reason:string}>>({})
   const [reservations, setReservations] = useState<StaffReservation[] | null>(null)
   const [priorityQueue, setPriorityQueue] = useState<StaffReservationIntakeEntry[] | null>(null)
   const [reservationMessage, setReservationMessage] = useState<string | null>(null)
-  const [reservationRange, setReservationRange] = useState<'current' | 'carryover' | 'history'>('current')
-  const [reservationHistoryFrom, setReservationHistoryFrom] = useState('')
-  const [reservationHistoryTo, setReservationHistoryTo] = useState('')
+  const [reservationRange, setReservationRange] = useStaffViewState<'current' | 'carryover' | 'history'>('reservations:range', 'current')
+  const [reservationHistoryFrom, setReservationHistoryFrom] = useStaffViewState('reservations:from', '')
+  const [reservationHistoryTo, setReservationHistoryTo] = useStaffViewState('reservations:to', '')
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading')
   const [notice, setNotice] = useState<StaffActionNotice>(null)
+  const noticeController = useMemo(() => new StaffNoticeController(setNotice), [])
   const [selectedTableId, setSelectedTableId] = useState<string | null>(null)
   const [tableActionDialogOpen, setTableActionDialogOpen] = useState(false)
   const [focusedActionId,setFocusedActionId]=useState<string|null>(initialFactId)
@@ -175,11 +180,10 @@ export function StaffActionsPanel({
   const [observationOpen, setObservationOpen] = useState(false)
   const [recommendationOpen, setRecommendationOpen] = useState(false)
   const [participantMovementOpen,setParticipantMovementOpen]=useState(false)
-  const [tableScope, setTableScope] = useState<StaffTableScope>('attention')
-  const [tableQuery, setTableQuery] = useState('')
-  const [tableAreaId, setTableAreaId] = useState('all')
+  const [tableScope, setTableScope] = useStaffViewState<StaffTableScope>('tables:scope', 'attention')
+  const [tableQuery, setTableQuery] = useStaffViewState('tables:query', '')
+  const [tableAreaId, setTableAreaId] = useStaffViewState('tables:area', 'all')
   const noticeRef = useRef<HTMLDivElement | null>(null)
-  const noticeTimerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null)
   const reservationRequestRef = useRef<AbortController | null>(null)
   const knownActionKeysRef = useRef<Set<string> | null>(null)
   const actionLocksRef = useRef(new Set<string>())
@@ -190,13 +194,8 @@ export function StaffActionsPanel({
   const selectedTable = operations?.tables.find((table) => table.id === selectedTableId) ?? null
 
   const showNotice = useCallback((nextNotice: Exclude<StaffActionNotice, null>) => {
-    if (noticeTimerRef.current !== null) globalThis.clearTimeout(noticeTimerRef.current)
-    setNotice(nextNotice)
-    noticeTimerRef.current = globalThis.setTimeout(() => {
-      setNotice(null)
-      noticeTimerRef.current = null
-    }, nextNotice.kind === 'attention' ? 12_000 : nextNotice.kind === 'guidance' ? 6_000 : 3_200)
-  }, [])
+    noticeController.show(nextNotice)
+  }, [noticeController])
 
   const markFulfillmentPending = useCallback((taskId: string, state: 'submitting' | 'syncing' | 'unknown' | null) => {
     if (state === null) {
@@ -359,10 +358,11 @@ export function StaffActionsPanel({
     return () => {
       refreshQueue.cancel()
       reservationRequestRef.current?.abort()
-      if (noticeTimerRef.current !== null) globalThis.clearTimeout(noticeTimerRef.current)
       secondaryTableSessionIdRef.current = null
     }
   }, [load, refreshQueue])
+
+  useEffect(() => () => noticeController.dispose(), [noticeController])
 
   const resetTableActionState = useCallback((clearSelection = false) => {
     secondaryTableSessionIdRef.current = null
@@ -460,14 +460,14 @@ export function StaffActionsPanel({
   const visibleFulfillmentCards = useMemo(() => prioritizeActionFact(
     filteredFulfillmentItems, initialFactId, (item) => item.taskId, fulfillmentLimit,
   ), [filteredFulfillmentItems, initialFactId, fulfillmentLimit])
-  const initializedQueueActor = useRef<string | null>(null)
+  const [initializedQueueActor, setInitializedQueueActor] = useStaffViewState<string | null>('fulfillment:initialized-actor', null)
   useEffect(() => {
-    if (operations && initializedQueueActor.current !== operations.actor.id) {
-      initializedQueueActor.current = operations.actor.id
+    if (operations && initializedQueueActor !== operations.actor.id) {
+      setInitializedQueueActor(operations.actor.id)
       if (!initialFactId) setFulfillmentHistory(operations.actor.capabilities.includes('kds.deliver')
         && !operations.actor.capabilities.includes('kds.prepare') ? 'delivery' : 'active')
     }
-  }, [operations,initialFactId])
+  }, [operations, initialFactId, initializedQueueActor, setInitializedQueueActor, setFulfillmentHistory])
   const selectedInitialFact = useRef<string | null>(null)
   const scrolledInitialFact = useRef<string | null>(null)
   useEffect(() => {
@@ -564,7 +564,7 @@ export function StaffActionsPanel({
     setCloseConfirm(false)
     setCustomerLeftConfirm(false)
     setCloseIssue(null)
-    setNotice(null)
+    noticeController.clear()
     setOrderSheetMode(null)
     setTablePaymentOpen(false)
     setObservationOpen(false)
@@ -778,6 +778,8 @@ export function StaffActionsPanel({
     try {
       await api.transferTable({
         tableSessionId: session.id,
+        expectedSourceTableId: selectedTable.id,
+        expectedLocationVersion: session.locationVersion ?? 0,
         targetTableId: target.id,
         ...(needsReason ? { capacityOverrideReason: transferReason.trim() } : {}),
       })
@@ -1053,7 +1055,7 @@ export function StaffActionsPanel({
       {redeliveryItemId&&operations&&<ItemAfterSalesPanel itemId={redeliveryItemId} employeeId={operations.actor.id} onClose={()=>setRedeliveryItemId(null)} onChanged={()=>void load(true)}/>}
       <header className="staff-actions-header">
         <div>
-          <p>{tab === 'tables' ? '现场调度' : tab === 'tasks' ? '服务执行' : tab === 'fulfillment' ? '出品履约' : '预约接待'}</p>
+          <p>{tab === 'tables' ? '现场调度' : tab === 'tasks' ? '服务执行' : tab === 'fulfillment' ? '制作与送达' : '预约接待'}</p>
           <h1>{tab === 'tables' ? '找到桌台，直接处理' : tab === 'tasks' ? '只看需要服务的事' : tab === 'fulfillment' ? '只做当前下一步' : '确认预约与到店'}</h1>
         </div>
         <button type="button" className="staff-actions-icon" aria-label="刷新现场" onClick={() => void load()}>
@@ -1064,7 +1066,7 @@ export function StaffActionsPanel({
       <div ref={noticeRef} className={`staff-actions-notice ${notice === null ? 'is-hidden' : `is-${notice.kind}`}`} role="status" data-action-reveal={tab === 'fulfillment' ? 'off' : undefined}>
         {notice?.kind === 'error' || notice?.kind === 'attention' ? <CircleAlert size={18} /> : notice?.kind === 'guidance' ? <AlertTriangle size={18} /> : <Check size={18} />}
         <span>{notice?.message}</span>
-        {notice !== null && <button type="button" aria-label="关闭提示" onClick={() => setNotice(null)}>×</button>}
+        {notice !== null && <button type="button" aria-label="关闭提示" onClick={() => noticeController.clear()}>×</button>}
       </div>
 
       {phase === 'error' && operations !== null && <p className="staff-actions-stale">刷新失败，当前显示上次成功数据。</p>}
@@ -1093,8 +1095,8 @@ export function StaffActionsPanel({
               tableRefundActionCount > 0 ? `${tableRefundActionCount} 张桌退款待处理` : '',
               tableRefundProcessingCount > 0 ? `${tableRefundProcessingCount} 张桌退款由系统核对中` : '',
             ].filter(Boolean).join(' · ')}</strong><span>{tableRefundProcessingCount > 0
-              ? '退款提交不等于成功；系统会自动查渠道终态，期间不阻塞桌台列表。'
-              : '桌台颜色和角标来自本地账务状态，支付渠道查询不会阻塞桌台列表。'}</span></div>
+              ? '退款正在处理，到账后会更新结果。'
+              : '有待核对的款项，请进入收银查看详情并继续处理。'}</span></div>
             {tablePaymentDueCount > 0 && <button type="button" onClick={() => setTableScope('unpaid')}>查看待支付</button>}
             {tableRefundCount > 0 && onNavigate !== undefined && <button type="button" className={tableRefundActionCount > 0 ? 'is-danger' : ''} onClick={() => onNavigate('/staff/payments')}>{tableRefundActionCount > 0 ? '处理退款' : '查看退款进度'}</button>}
           </div>}
@@ -1237,6 +1239,7 @@ export function StaffActionsPanel({
               className={`staff-action-card priority-${task.priority}${focusedActionId===task.id?' is-focused':''}`}
               key={task.id}
               data-action-fact-id={task.id}
+              data-staff-todo-id={`service:${task.id}`}
               tabIndex={0}
               aria-label={`查看${task.tableCode}${task.title}详情`}
               onClick={(event)=>{
@@ -1415,8 +1418,8 @@ export function StaffActionsPanel({
           }}
         />
       )}
-      {tablePaymentOpen && selectedTable?.activeSession !== null && selectedTable !== null && (
-        <TablePaymentSheet api={api} table={{ code: selectedTable.code, activeSession: selectedTable.activeSession }}
+      {tablePaymentOpen && operations !== null && selectedTable?.activeSession !== null && selectedTable !== null && (
+        <TablePaymentSheet api={api} employeeId={operations.actor.id} table={{ code: selectedTable.code, activeSession: selectedTable.activeSession }}
           onClose={() => returnToTableActionDialog(() => setTablePaymentOpen(false))} onUpdated={(message) => {
             showNotice({ kind: 'success', message })
             void load(true)
@@ -1757,6 +1760,15 @@ function TableActionSheet(props: TableActionSheetProps) {
   const { table, onDismiss } = props
   const dialogRef = useRef<HTMLElement | null>(null)
   const closeButtonRef = useRef<HTMLButtonElement | null>(null)
+  const [moreOpen, setMoreOpen] = useState(false)
+  useEffect(() => setMoreOpen(false), [table.id])
+  const closeInPrimary = table.activeSession?.status === 'closing'
+    || (table.activeSession !== null && ['paid', 'refunded', 'partially_refunded', 'cancelled'].includes(table.activeSession.financialState))
+  const closeAction = hasPermission(props.permissions, 'table.close') ? (
+    <button type="button" className="is-danger" onClick={props.onClose} disabled={props.pending}>
+      {props.pending ? '正在结台…' : props.closeConfirm ? table.activeSession?.status === 'closing' ? '确认完成结台' : '确认结台' : table.activeSession?.status === 'closing' ? '继续结台' : '准备结台'}
+    </button>
+  ) : <button type="button" onClick={() => props.onPermissionGuidance('table.close')}>关台说明</button>
   const guestNumber = /^\d+$/.test(props.guestCount) ? Number(props.guestCount) : null
   const transferTarget = props.allTables.find((candidate) => candidate.id === props.transferTargetId) ?? null
   const transferNeedsReason = transferTarget !== null && table.activeSession !== null
@@ -1775,8 +1787,8 @@ function TableActionSheet(props: TableActionSheetProps) {
       }
       if (event.key !== 'Tab') return
       const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href]',
-      ) ?? [])
+        'button:not([disabled]), summary, input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href]',
+      ) ?? []).filter(element => element.getClientRects().length > 0)
       if (focusable.length === 0) return
       const first = focusable[0]
       const last = focusable[focusable.length - 1]
@@ -1878,54 +1890,49 @@ function TableActionSheet(props: TableActionSheetProps) {
               {props.customerLeftConfirm && <button type="button" className="staff-turnover-exception-cancel" onClick={props.onCancelClose}>暂不翻台</button>}
             </section>
           )}
-          {props.orderStatusPanel}
-          {props.memberBenefitsPanel}
-          <div className="staff-session-actions">
+          <div className="staff-session-actions staff-session-primary" role="group" aria-label="本桌常用操作">
             {hasTableCollectionPermission(props.permissions) && (
               <button type="button" className="is-payment" onClick={props.onPayment}><QrCode size={17} /> 本桌收款</button>
-            )}
-            {hasPermission(props.permissions, 'observation.record') && (
-              <button type="button" className="is-observation" onClick={props.onObservation}><MessageSquareText size={17} /> 记录桌台情况</button>
-            )}
-            {hasPermission(props.permissions, 'recommendation.staff.modify') && (
-              <button type="button" className="is-recommendation" onClick={props.onRecommendation}>
-                <Sparkles size={17} /> 查看/调整推荐
-              </button>
             )}
             {hasPermission(props.permissions, 'order.create') && (
               <button type="button" className="is-commerce" onClick={props.onOrder}><ShoppingCart size={17} /> 协助点单</button>
             )}
-            {hasPermission(props.permissions, 'order.create') && hasPermission(props.permissions, 'order.gift') && (
-              <button type="button" className="is-gift" onClick={props.onGift}><Gift size={17} /> 赠送商品</button>
+            {hasPermission(props.permissions, 'observation.record') && (
+              <button type="button" className="is-observation" onClick={props.onObservation}><MessageSquareText size={17} /> 记录桌台情况</button>
             )}
-            {hasPermission(props.permissions, 'table.transfer') ? (
-              <button type="button" onClick={() => props.onTransferTarget(props.transferTargetId === null ? '' : null)}><ArrowRightLeft size={17} /> 转桌</button>
-            ) : (
-              <button type="button" onClick={() => props.onPermissionGuidance('table.transfer')}>转桌说明</button>
-            )}
-            {hasPermission(props.permissions,'table.participation.manage') && (
-              <button type="button" onClick={props.onParticipantMovement}><Users size={17}/> 人员拆并桌</button>
-            )}
-            {hasPermission(props.permissions, 'guest.cart.freeze') && (
-              <button type="button" onClick={props.onGuestCartFreeze} disabled={props.pending}>
-                {table.activeSession.guestCartWritesFrozen
-                  ? <><LockKeyholeOpen size={17} /> 恢复顾客修改</>
-                  : <><LockKeyhole size={17} /> 锁定顾客购物车</>}
-              </button>
-            )}
-            {hasPermission(props.permissions, 'table.close') ? (
-              <button type="button" className="is-danger" onClick={props.onClose} disabled={props.pending}>
-                {props.pending ? '正在结台…' : props.closeConfirm ? table.activeSession.status === 'closing' ? '确认完成结台' : '确认结台' : table.activeSession.status === 'closing' ? '继续结台' : '准备结台'}
-              </button>
-            ) : (
-              <button type="button" onClick={() => props.onPermissionGuidance('table.close')}>关台说明</button>
-            )}
-            {props.closeIssue === null && hasPermission(props.permissions, 'table.close') && hasPermission(props.permissions, 'table.turnover_unsettled') && (
-              <button type="button" className="is-danger" onClick={props.onCloseAfterCustomerLeft} disabled={props.pending}>
-                {props.pending ? '正在处理…' : props.customerLeftConfirm ? '确认立即翻台' : '顾客离店，立即翻台'}
-              </button>
+            {closeInPrimary && closeAction}
+            {table.activeSession.guestCartWritesFrozen && hasPermission(props.permissions, 'guest.cart.freeze') && (
+              <button type="button" onClick={props.onGuestCartFreeze} disabled={props.pending}><LockKeyholeOpen size={17} /> 恢复顾客修改</button>
             )}
           </div>
+          <details className="staff-table-more" open={moreOpen || props.transferTargetId !== null || props.closeConfirm || props.customerLeftConfirm} onToggle={event => setMoreOpen(event.currentTarget.open)}>
+            <summary>更多操作 <small>赠送、推荐、转桌与结台</small></summary>
+            <div className="staff-session-actions" role="group" aria-label="更多桌台操作">
+              {hasPermission(props.permissions, 'recommendation.staff.modify') && (
+                <button type="button" onClick={props.onRecommendation}><Sparkles size={17} /> 查看/调整推荐</button>
+              )}
+              {hasPermission(props.permissions, 'order.create') && hasPermission(props.permissions, 'order.gift') && (
+                <button type="button" onClick={props.onGift}><Gift size={17} /> 赠送商品</button>
+              )}
+              {hasPermission(props.permissions, 'table.transfer') ? (
+                <button type="button" onClick={() => props.onTransferTarget(props.transferTargetId === null ? '' : null)}><ArrowRightLeft size={17} /> 转桌</button>
+              ) : <button type="button" onClick={() => props.onPermissionGuidance('table.transfer')}>转桌说明</button>}
+              {hasPermission(props.permissions, 'table.participation.manage') && (
+                <button type="button" onClick={props.onParticipantMovement}><Users size={17} /> 人员拆并桌</button>
+              )}
+              {!table.activeSession.guestCartWritesFrozen && hasPermission(props.permissions, 'guest.cart.freeze') && (
+                <button type="button" onClick={props.onGuestCartFreeze} disabled={props.pending}><LockKeyhole size={17} /> 锁定顾客购物车</button>
+              )}
+              {!closeInPrimary && closeAction}
+              {props.closeIssue === null && hasPermission(props.permissions, 'table.close') && hasPermission(props.permissions, 'table.turnover_unsettled') && (
+                <button type="button" className="is-danger" onClick={props.onCloseAfterCustomerLeft} disabled={props.pending}>
+                  {props.pending ? '正在处理…' : props.customerLeftConfirm ? '确认立即翻台' : '顾客离店，立即翻台'}
+                </button>
+              )}
+            </div>
+          </details>
+          {props.closeConfirm && <p className="staff-close-issue">确认后核对付款和制作送达情况；全部处理完才会结束本桌。仍有未结事项时保留桌台。</p>}
+          {props.customerLeftConfirm && props.closeIssue === null && <p className="staff-close-issue">确认后释放桌台并取消未履约部分。未结付款、退款继续由收银跟进，不代表账务结清。</p>}
           {(props.closeConfirm || (props.customerLeftConfirm && props.closeIssue === null)) && <button type="button" className="staff-cancel-confirm" data-action-reveal onClick={props.onCancelClose}>取消关台</button>}
           {props.transferTargetId !== null && (
             <div className="staff-transfer-targets" data-action-reveal>
@@ -1947,6 +1954,8 @@ function TableActionSheet(props: TableActionSheetProps) {
               <button className="staff-primary-action" type="button" onClick={props.onTransfer} disabled={props.pending || transferTarget === null}>确认转桌</button>
             </div>
           )}
+          {props.orderStatusPanel}
+          {props.memberBenefitsPanel}
         </div>
       )}
     </section>

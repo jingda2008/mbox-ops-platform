@@ -1,5 +1,7 @@
 import type {ItemAfterSalesWorkspace,ItemAfterSalesPending,RemakePhysicalHandover} from '../shared/item-after-sales'
 import {StaffActionsApiError} from './staff-actions/staff-actions-api'
+import {STAFF_EMPLOYEE_BINDING_HEADER} from '../shared/staff-session-binding'
+import {staffErrorMessage,staffUnavailableMessage} from '../shared/staff-error-message'
 
 type Pending={key:string;url:string;body:Record<string,unknown>}
 /** One outstanding command per product and employee; recovery retains the actual
@@ -57,9 +59,14 @@ export class ItemAfterSalesApi {
   private async request<T>(url:string,init:RequestInit={}):Promise<T>{
     if(!url.startsWith('/api/commerce/item-after-sales/')&&!isRemakeCommandUrl(url)&&!/^\/api\/refunds\/[0-9a-f-]+\/(execute|manual-result)$/.test(url))throw new Error('商品处理接口无效')
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),25_000)
+    const headers=new Headers(init.headers)
+    headers.set(STAFF_EMPLOYEE_BINDING_HEADER,this.employeeId)
     try{
-      const response=await this.send(url,{...init,credentials:'include',signal:controller.signal}),body=await response.json()
-      if(!response.ok)throw new StaffActionsApiError(body?.error?.message??'处理未完成',body?.error?.code??'HTTP_ERROR',response.status)
+      const response=await this.send(url,{...init,headers,credentials:'include',signal:controller.signal}),body=await response.json()
+      if(!response.ok){
+        const fallback=response.status>=500?staffUnavailableMessage(init.method??'GET'):response.status===401?'当前员工已切换或登录失效，请重新登录':'处理未完成，请核对原记录'
+        throw new StaffActionsApiError(staffErrorMessage(body?.error?.message,fallback,response.status),body?.error?.code??'HTTP_ERROR',response.status)
+      }
       if(!body||typeof body!=='object'||!('data' in body))throw new StaffActionsApiError('处理结果未能读取，请恢复原结果','INVALID_RESPONSE',null)
       return body.data as T
     }catch(error){if(error instanceof StaffActionsApiError)throw error;throw new StaffActionsApiError('处理结果待确认，请恢复原结果',controller.signal.aborted?'TIMEOUT':'NETWORK_ERROR',null)}

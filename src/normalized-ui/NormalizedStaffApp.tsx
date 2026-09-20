@@ -1,3 +1,7 @@
+import { StaffObjectFocus } from './StaffObjectFocus'
+import { StaffViewStateProvider, StaffRouteRestoration } from './staff-view-state'
+import { StaffMemberNavigation } from './StaffMemberNavigation'
+import { STAFF_SESSION_CHANGE_KEY } from '../shared/staff-session-binding'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { ArrowLeft, ArrowRight, KeyRound, LoaderCircle, LogOut, Repeat2, ShieldCheck, UserRound, X } from 'lucide-react'
 import { NormalizedApiClient, NormalizedApiError, type StaffAuthView } from '../normalized-api'
@@ -24,7 +28,10 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
   const [phase, setPhase] = useState<'checking' | 'credential' | 'login' | 'ready'>('checking')
   const [message, setMessage] = useState<string | null>(null)
   const [initialBootstrap, setInitialBootstrap] = useState<StaffBootstrapView | null>(null)
-  const [staffRoute, setStaffRoute] = useState(() => normalizedStaffRoute(window.location.pathname))
+  const [staffLocation, setStaffLocation] = useState(() => window.location.pathname + window.location.search)
+  const staffRoute = normalizedStaffRoute(new URL(staffLocation, window.location.origin).pathname)
+  const [navigationError, setNavigationError] = useState<string | null>(null)
+  const [navigationAttempt, setNavigationAttempt] = useState(0)
   const [staffNavigation, setStaffNavigation] = useState<StaffBootstrapView['navigation'] | null>(null)
   const authenticatedSessionId = auth?.session.id ?? null
   const authenticatedEmployeeId = auth?.employee.id ?? null
@@ -60,6 +67,20 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
   }, [api])
 
   useEffect(() => { void checkSession() }, [checkSession])
+  useEffect(() => {
+    if (authenticatedSessionId === null) return
+    const changed = (event: StorageEvent) => {
+      if (event.key !== STAFF_SESSION_CHANGE_KEY || event.newValue === null) return
+      try {
+        const value: unknown = JSON.parse(event.newValue)
+        if (typeof value !== 'object' || value === null || !('sessionId' in value) || value.sessionId === authenticatedSessionId) return
+        setAuth(null); setStaffNavigation(null); setInitialBootstrap(null)
+        setMessage('其他页面已切换员工，请重新登录后继续'); setPhase('login')
+      } catch { /* Invalid notifications do not change authentication. */ }
+    }
+    window.addEventListener('storage', changed)
+    return () => window.removeEventListener('storage', changed)
+  }, [authenticatedSessionId])
   useEffect(() => {
     if (phase !== 'ready' || authenticatedSessionId === null) return
     let stopped = false
@@ -97,23 +118,28 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
     }
   }, [api, authenticatedSessionId, phase])
   useEffect(() => {
-    const syncRoute = () => setStaffRoute(normalizedStaffRoute(window.location.pathname))
+    const syncRoute = () => { window.dispatchEvent(new Event('mbox:before-staff-navigation')); setStaffLocation(window.location.pathname + window.location.search) }
     window.addEventListener('popstate', syncRoute)
     return () => window.removeEventListener('popstate', syncRoute)
   }, [])
   useEffect(() => {
-    if (phase !== 'ready' || auth === null || staffRoute === null || staffNavigation !== null) return
+    if (phase !== 'ready' || authenticatedEmployeeId === null || staffRoute === null || staffNavigation !== null) return
     const controller = new AbortController()
+    setNavigationError(null)
     void api.getStaffBootstrap({ signal: controller.signal }).then((result) => {
-      if (result.data !== null) setStaffNavigation(result.data.navigation)
+      if (controller.signal.aborted) return
+      if (result.data !== null && result.data.staff.id === authenticatedEmployeeId) setStaffNavigation(result.data.navigation)
+      else setNavigationError('工作台资料暂未读到，请重新读取')
     }).catch((error) => {
+      if (controller.signal.aborted) return
+      setNavigationError(displayError(error, '工作台资料读取失败，请重试'))
       if (error instanceof NormalizedApiError && error.recovery === 'login') {
         setAuth(null)
         setPhase('login')
       }
     })
     return () => controller.abort()
-  }, [api, auth, phase, staffNavigation, staffRoute])
+  }, [api, authenticatedEmployeeId, authenticatedSessionId, phase, staffNavigation, staffRoute, navigationAttempt])
 
   if (phase === 'checking') return <StaffGateLoading />
   if (phase === 'credential') {
@@ -128,7 +154,7 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
   const loginRequired = () => { setAuth(null); setStaffNavigation(null); setInitialBootstrap(null); setPhase('login') }
   const switchReady = (session: StaffAuthView) => {
     window.history.replaceState({}, '', '/')
-    setStaffRoute(null)
+    setStaffLocation('/')
     setMessage(null)
     setStaffNavigation(null)
     setInitialBootstrap(null)
@@ -136,20 +162,22 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
   }
   const logoutReady = () => {
     window.history.replaceState({}, '', '/')
-    setStaffRoute(null)
+    setStaffLocation('/')
     setMessage(null)
     loginRequired()
   }
   const navigate = (route: string, context?: BusinessDayNavigationContext) => {
     const target = new URL(route, window.location.origin)
     const next = normalizedStaffRoute(target.pathname)
-    if (next === null) {
-      setMessage('这个岗位入口仍在规范化改造中，当前版本不会打开旧系统页面。')
+    if (target.origin !== window.location.origin || (next === null && target.pathname !== '/')) {
+      setMessage('当前入口不可用，请从工作台选择已授权的功能。')
       return
     }
-    window.history.pushState(context ?? {}, '', `${target.pathname}${target.search}`)
+    window.dispatchEvent(new Event('mbox:before-staff-navigation'))
+    window.history.pushState({ ...context, staffReturnTo: window.location.pathname + window.location.search + window.location.hash, staffSession: auth.session.id }, '', `${target.pathname}${target.search}${target.hash}`)
     setMessage(null)
-    setStaffRoute(next)
+    setStaffLocation(target.pathname + target.search)
+    window.dispatchEvent(new Event('hashchange'))
   }
   const sessionControls = <StaffSessionMenu
     api={api}
@@ -160,16 +188,19 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
   const content = staffRoute !== null ? (
     <main className="normalized-staff-action-shell">
       <header>
-        <button type="button" onClick={() => {
-          window.history.pushState({}, '', '/')
-          setStaffRoute(null)
-        }}><ArrowLeft size={18} /> 工作台</button>
+        <div className="staff-return-actions">
+          {window.history.state?.staffSession === auth.session.id && window.history.state?.staffReturnTo && <button type="button" onClick={() => window.history.back()}><ArrowLeft size={18} /> 返回上一页</button>}
+          <button type="button" onClick={() => navigate('/')}><ArrowLeft size={18} /> 工作台</button>
+        </div>
         {sessionControls}
       </header>
-      {staffNavigation === null ? <StaffGateLoading /> : !staffNavigation.some((item) => item.code === normalizedStaffNavigationCode(window.location.pathname))
+      <StaffObjectFocus route={staffLocation} />
+      {staffNavigation !== null && window.location.pathname.startsWith('/staff/member-') && <StaffMemberNavigation entries={staffNavigation} activeRoute={window.location.pathname} onNavigate={navigate} />}
+      {staffNavigation === null ? navigationError === null ? <StaffGateLoading /> : <div className="normalized-route-notice" role="alert"><p>{navigationError}</p><button type="button" onClick={() => setNavigationAttempt(value => value + 1)}>重新读取工作台</button></div> : !staffNavigation.some((item) => item.code === normalizedStaffNavigationCode(window.location.pathname))
         ? <div className="normalized-route-notice" role="alert">当前账号没有这个页面的有效权限。请由管理员授权后刷新；直接输入页面地址不会绕过权限。</div>
         : isStaffActionsTab(staffRoute)
-        ? <Suspense fallback={<StaffGateLoading />}><StaffActionsPanel
+        ? <Suspense fallback={<StaffGateLoading />}><StaffActionsPanel key={`${staffWorkspaceIdentityKey(auth)}:${staffLocation}`}
+            staffSessionId={auth.session.id}
             initialTab={staffRoute}
             initialTableSessionId={new URLSearchParams(window.location.search).get('tableSessionId')}
             initialFactId={new URLSearchParams(window.location.search).get('factId')}
@@ -177,7 +208,7 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
             onLoginRequired={loginRequired}
             onNavigate={navigate}
           /></Suspense>
-        : <Suspense fallback={<StaffGateLoading />}><StaffModulePanel key={staffWorkspaceIdentityKey(auth)} api={api} auth={auth} module={staffRoute}
+        : <Suspense fallback={<StaffGateLoading />}><StaffModulePanel key={`${staffWorkspaceIdentityKey(auth)}:${staffLocation}`} api={api} auth={auth} module={staffRoute}
             initialBlockerFact={businessDayBlockerFactFromHistory(window.history.state)}
             onLoginRequired={loginRequired} onNavigate={navigate} /></Suspense>}
     </main>
@@ -194,14 +225,16 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
         sessionControls={sessionControls}
       />
     </>)
-  return <>
+  return <StaffViewStateProvider key={staffWorkspaceIdentityKey(auth)}>
+    <StaffRouteRestoration route={staffLocation} />
     {content}
     {staffNavigation !== null && <StaffBottomNavigation
       entries={staffNavigation}
+      roleCodes={auth?.employee.roleCodes}
       activeRoute={staffRoute === null ? null : window.location.pathname}
       onNavigate={navigate}
     />}
-  </>
+  </StaffViewStateProvider>
 }
 
 export function businessDayBlockerFactFromHistory(value: unknown) {

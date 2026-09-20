@@ -64,6 +64,7 @@ try {
     MBOX_STORE_ID: store.store.id,
     MBOX_NORMALIZED_SECRET: secret,
     MBOX_GUEST_PAYMENT_MODE: 'simulation',
+    MBOX_VOUCHER_MODE: process.env.NORMALIZED_E2E_VOUCHER_TEST==='true'?'test':'disabled',
     MBOX_START_WORKERS: 'false',
     MBOX_QUANTITY_AFTER_SALES_ENABLED: 'true',
     MBOX_STATIC_DIR: resolve(process.env.MBOX_STATIC_DIR ?? 'dist'),

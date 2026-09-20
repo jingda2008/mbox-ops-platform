@@ -695,7 +695,7 @@ export class CustomerExperienceService {
       })
       return commandOutcome(
         result, guestActor(context), 'loyalty.redemption.created', 'member_redemption',
-        result.publicId, context.businessDate,
+        await experienceAggregateId(transaction, 'member_redemption', result.publicId), context.businessDate,
         { publicId: result.publicId, catalogItemPublicId: result.catalogItemPublicId,
           pointsUsed: result.pointsUsed, status: result.status },
       )
@@ -722,7 +722,7 @@ export class CustomerExperienceService {
       })
       return commandOutcome(
         result, guestActor(context), 'loyalty.redemption.cancelled', 'member_redemption',
-        result.publicId, context.businessDate,
+        await experienceAggregateId(transaction, 'member_redemption', result.publicId), context.businessDate,
         { publicId: result.publicId, pointsRestored: result.pointsUsed, status: result.status, reason: input.reason },
       )
     }).catch(mapRedemptionError)
@@ -749,7 +749,7 @@ export class CustomerExperienceService {
       })
       return commandOutcome(
         result, staffActor(context), 'loyalty.redemption.fulfilled', 'member_redemption',
-        result.publicId, context.businessDate,
+        await experienceAggregateId(transaction, 'member_redemption', result.publicId), context.businessDate,
         { publicId: result.publicId, status: result.status, reason: input.reason },
       )
     }).catch(mapRedemptionError)
@@ -780,7 +780,7 @@ export class CustomerExperienceService {
       })
       return commandOutcome(
         result,staffActor(context),'loyalty.redemption.failed','member_redemption',
-        result.publicId,context.businessDate,
+        await experienceAggregateId(transaction, 'member_redemption', result.publicId),context.businessDate,
         { publicId: result.publicId,status: result.status,failureCode: input.failureCode,
           pointsRestored: result.pointsRestored,reason: input.reason },
       )
@@ -2224,7 +2224,7 @@ export class CustomerExperienceService {
         guestActor(context),
         'customer.product-restriction.withdrawn',
         'customer_product_restriction',
-        result.publicId,
+        await experienceAggregateId(transaction, 'customer_product_restriction', result.publicId),
         context.businessDate,
         { productId: result.productId, restrictionType: result.restrictionType },
       )
@@ -2309,7 +2309,7 @@ export class CustomerExperienceService {
         staffActor(context),
         'performance.phase.started',
         'schedule_performance_phase_event',
-        result.publicId,
+        await experienceAggregateId(transaction, 'schedule_performance_phase_event', result.publicId),
         context.businessDate,
         { scheduleId: result.scheduleId, phaseCode: result.phaseCode, reason: input.reason },
       )
@@ -2343,7 +2343,7 @@ export class CustomerExperienceService {
         staffActor(context),
         `performance.phase.${input.action === 'end' ? 'ended' : 'cancelled'}`,
         'schedule_performance_phase_event',
-        result.publicId,
+        await experienceAggregateId(transaction, 'schedule_performance_phase_event', result.publicId),
         context.businessDate,
         { scheduleId: result.scheduleId, phaseCode: result.phaseCode, reason: input.reason },
       )
@@ -2376,7 +2376,7 @@ export class CustomerExperienceService {
         guestActor(context),
         'customer.experience.recommended',
         'recommendation_session',
-        publicId,
+        await experienceAggregateId(transaction, 'recommendation_session', publicId),
         context.businessDate,
         {
           answers: {
@@ -2440,7 +2440,7 @@ export class CustomerExperienceService {
         guestActor(context),
         'customer.experience.recommendation.behavior.recorded',
         'recommendation_session',
-        input.recommendationPublicId,
+        await experienceAggregateId(transaction, 'recommendation_session', input.recommendationPublicId),
         context.businessDate,
         { eventType: input.eventType, productId: input.productId },
       )
@@ -2482,7 +2482,7 @@ export class CustomerExperienceService {
         guestActor(context),
         'customer.experience.intent.selected',
         'recommendation_session',
-        publicId,
+        await experienceAggregateId(transaction, 'recommendation_session', publicId),
         context.businessDate,
         {
           tableSessionId: context.tableSessionId,
@@ -2529,7 +2529,7 @@ export class CustomerExperienceService {
         guestActor(context),
         'customer.checkout.upgrade.prepared',
         'checkout_upgrade_offer',
-        result?.publicId ?? context.tableSessionId,
+        result === null ? context.tableSessionId : await experienceAggregateId(transaction, 'checkout_upgrade_offer', result.publicId),
         context.businessDate,
         { available: result !== null, publicId: result?.publicId ?? null },
       )
@@ -2570,7 +2570,7 @@ export class CustomerExperienceService {
         guestActor(context),
         `customer.checkout.upgrade.${input.eventType}`,
         'checkout_upgrade_offer',
-        input.publicId,
+        await experienceAggregateId(transaction, 'checkout_upgrade_offer', input.publicId),
         context.businessDate,
         { eventType: input.eventType, status: value.status, reasonCode: input.reasonCode },
       )
@@ -3358,7 +3358,7 @@ export class CustomerExperienceService {
         staffActor(context),
         'customer.followup.created',
         'customer_followup_task',
-        publicId,
+        await experienceAggregateId(transaction, 'customer_followup_task', publicId),
         context.businessDate,
         { ownerEmployeeId: input.ownerEmployeeId, action: input.action },
       )
@@ -3396,7 +3396,7 @@ export class CustomerExperienceService {
         staffActor(context),
         'customer.observation.parsed',
         'observation_input',
-        publicId,
+        await experienceAggregateId(transaction, 'observation_input', publicId),
         context.businessDate,
         {
           tableSessionId: input.tableSessionId,
@@ -3456,7 +3456,7 @@ export class CustomerExperienceService {
         staffActor(context),
         'customer.observation.confirmed',
         'observation_input',
-        input.publicId,
+        await experienceAggregateId(transaction, 'observation_input', input.publicId),
         context.businessDate,
         { eventCount: result.events.length, serviceTaskId: result.serviceTaskId },
       )
@@ -3495,7 +3495,7 @@ export class CustomerExperienceService {
         staffActor(context),
         'customer.observation.revised',
         'observation_input',
-        input.publicId,
+        await experienceAggregateId(transaction, 'observation_input', input.publicId),
         context.businessDate,
         { previousEventId: input.previousEventId, reason: input.reason },
       )
@@ -3542,7 +3542,7 @@ export class CustomerExperienceService {
         staffActor(context),
         'customer.recommendation.policy.created',
         'recommendation_policy_version',
-        publicId,
+        await experienceAggregateId(transaction, 'recommendation_policy_version', publicId),
         context.businessDate,
         { code: input.code, version: result.version },
       )
@@ -3572,7 +3572,7 @@ export class CustomerExperienceService {
         staffActor(context),
         'customer.recommendation.policy.cloned',
         'recommendation_policy_version',
-        publicId,
+        await experienceAggregateId(transaction, 'recommendation_policy_version', publicId),
         context.businessDate,
         { sourcePublicId: input.sourcePublicId, code: result.code, version: result.version },
       )
@@ -3624,7 +3624,7 @@ export class CustomerExperienceService {
         staffActor(context),
         `customer.recommendation.policy.${transition}d`,
         'recommendation_policy_version',
-        input.publicId,
+        await experienceAggregateId(transaction, 'recommendation_policy_version', input.publicId),
         context.businessDate,
         { status: result.status, reason: input.reason, effectiveFrom: input.effectiveFrom ?? null },
       )
@@ -3740,6 +3740,30 @@ async function assertBoundGuestTableMutation(
       '当前桌次位置已经变化，请重新扫描所在桌二维码','TABLE_CUSTOMER_MISMATCH',403,
     )
   }
+}
+
+const experienceAggregateTables = {
+  member_redemption: 'member_redemptions',
+  customer_product_restriction: 'customer_product_restrictions',
+  schedule_performance_phase_event: 'schedule_performance_phase_events',
+  recommendation_session: 'recommendation_sessions',
+  checkout_upgrade_offer: 'checkout_upgrade_offers',
+  customer_followup_task: 'customer_followup_tasks',
+  observation_input: 'observation_inputs',
+  recommendation_policy_version: 'recommendation_policy_versions',
+} as const
+
+async function experienceAggregateId(
+  transaction: ScopedTransaction,
+  kind: keyof typeof experienceAggregateTables,
+  publicId: string,
+): Promise<string> {
+  // Public references remain in DTOs; outbox aggregates use the actual scoped row UUID.
+  const row = await transaction.query<{ id: string }>(`
+    SELECT id FROM mbox.${experienceAggregateTables[kind]}
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND public_id=$3
+  `, [transaction.scope.tenantId, transaction.scope.storeId, publicId])
+  return requiredRow(row.rows[0], kind).id
 }
 
 function commandOutcome<Result>(

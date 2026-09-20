@@ -226,6 +226,8 @@ export interface OpenManagedTableCommand extends TableManagementCommandBase {
 }
 
 export interface TransferTableCommand extends TableManagementCommandBase {
+  expectedSourceTableId?: string
+  expectedLocationVersion?: number
   tableSessionId: string
   targetTableId: string
   capacityOverrideReason?: string | null
@@ -320,6 +322,7 @@ interface AssignmentRow extends Record<string, unknown> {
 }
 
 interface SessionRow extends Record<string, unknown> {
+  location_version?: number
   id: string
   table_id: string
   table_code: string
@@ -755,7 +758,7 @@ export class TableManagementRepository {
       return value
     }
     const sessionResult = await this.transaction.query<SessionRow>(`
-      SELECT session.id, session.table_id, source.code AS table_code, session.public_id,
+      SELECT session.id, session.table_id, session.location_version, source.code AS table_code, session.public_id,
         session.business_date::text, session.guest_count, session.capacity_at_open,
         session.capacity_override_reason, session.capacity_overridden_by_employee_id,
         session.guest_profile_snapshot, session.status, session.opened_by_employee_id,
@@ -770,6 +773,11 @@ export class TableManagementRepository {
     const session = mapSession(requiredRow(sessionResult.rows[0], '桌次'))
     if (session.status !== 'open') throw new TableManagementConflictError('只有营业中的桌次可以转桌')
     if (session.tableId === input.targetTableId) throw new TableManagementConflictError('目标桌台不能与当前桌台相同')
+
+    if ((input.expectedSourceTableId !== undefined && input.expectedSourceTableId !== session.tableId)
+      || (input.expectedLocationVersion !== undefined && input.expectedLocationVersion !== Number(sessionResult.rows[0]!.location_version))) {
+      throw new TableManagementConflictError(`本桌位置已变化，当前在${session.tableCode}，请刷新后重新确认转桌`)
+    }
 
     const tableIds = [session.tableId, input.targetTableId].toSorted()
     const tableResult = await this.transaction.query<{

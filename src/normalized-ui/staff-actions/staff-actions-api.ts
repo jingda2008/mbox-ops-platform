@@ -1,3 +1,5 @@
+import { staffErrorMessage, staffUnavailableMessage } from '../../shared/staff-error-message'
+import { STAFF_SESSION_BINDING_HEADER } from '../../shared/staff-session-binding'
 import type {OperatingHistory} from '../../shared/operating-history'
 import type {
   StaffFulfillmentData,
@@ -283,6 +285,8 @@ export interface StaffActionsApiPort {
   setGuestCartFreeze(sessionId: string, frozen: boolean, reason?: string): Promise<void>
   transferTable(input: Readonly<{
     tableSessionId: string
+    expectedSourceTableId: string
+    expectedLocationVersion: number
     targetTableId: string
     capacityOverrideReason?: string
   }>): Promise<void>
@@ -397,6 +401,7 @@ export interface StaffReservationListOptions {
 }
 
 export interface StaffActionsApiOptions {
+  staffSessionId?: string
   commandStorage?: Pick<Storage,'getItem'|'setItem'|'removeItem'>
   fetch?: typeof fetch
   timeoutMs?: number
@@ -407,11 +412,13 @@ export class StaffActionsApi implements StaffActionsApiPort {
   private readonly pendingKdsCommands = new Map<string, {key:string;quantity?:number}>()
   private readonly commandStorage:StaffActionsApiOptions['commandStorage']
   private employeeId = 'current-session'
+  private readonly staffSessionId: string | undefined
   private readonly send: typeof fetch
   private readonly timeoutMs: number
   private readonly createIdempotencyKey: () => string
 
   constructor(options: Readonly<StaffActionsApiOptions> = {}) {
+    this.staffSessionId = options.staffSessionId
     this.commandStorage=options.commandStorage??safeCommandStorage()
     this.send = options.fetch ?? globalThis.fetch.bind(globalThis)
     this.timeoutMs = options.timeoutMs ?? 8_000
@@ -576,12 +583,14 @@ export class StaffActionsApi implements StaffActionsApiPort {
 
   async transferTable(input: Readonly<{
     tableSessionId: string
+    expectedSourceTableId: string
+    expectedLocationVersion: number
     targetTableId: string
     capacityOverrideReason?: string
   }>): Promise<void> {
     await this.command(
       `/api/table-management/sessions/${encodeURIComponent(input.tableSessionId)}/transfer`,
-      { targetTableId: input.targetTableId, capacityOverrideReason: input.capacityOverrideReason },
+      { targetTableId: input.targetTableId, expectedSourceTableId: input.expectedSourceTableId, expectedLocationVersion: input.expectedLocationVersion, capacityOverrideReason: input.capacityOverrideReason },
       'x-idempotency-key',
     )
   }
@@ -1114,9 +1123,11 @@ export class StaffActionsApi implements StaffActionsApiPort {
     if (callerSignal?.aborted) abort()
     else callerSignal?.addEventListener('abort', abort, { once: true })
     const timer = globalThis.setTimeout(() => controller.abort(), this.timeoutMs)
+    const headers = new Headers(init.headers)
+    if (this.staffSessionId !== undefined) headers.set(STAFF_SESSION_BINDING_HEADER, this.staffSessionId)
     try {
-      const response = await this.send(url, { ...init, signal: controller.signal, credentials: 'include' })
-      if (!response.ok) throw await apiError(response)
+      const response = await this.send(url, { ...init, headers, signal: controller.signal, credentials: 'include' })
+      if (!response.ok) throw await apiError(response, init.method ?? 'GET')
       return response
     } catch (error) {
       if (error instanceof StaffActionsApiError) throw error
@@ -1130,14 +1141,15 @@ export class StaffActionsApi implements StaffActionsApiPort {
   }
 }
 
-async function apiError(response: Response): Promise<StaffActionsApiError> {
+async function apiError(response: Response, method: string): Promise<StaffActionsApiError> {
+  const fallback=response.status>=500?staffUnavailableMessage(method):response.status===401?'当前员工已切换或登录失效，请重新登录':'操作未完成，请核对当前状态后重试'
   const body = await readJson(response).catch(() => null)
   if (isObject(body) && isObject(body.error)) {
     const referenceId = typeof body.error.referenceId === 'string'
       && /^[A-Za-z0-9._:-]{1,64}$/.test(body.error.referenceId)
       ? body.error.referenceId
       : null
-    const message = typeof body.error.message === 'string' ? body.error.message : '操作未完成'
+    const message = staffErrorMessage(body.error.message, fallback, response.status)
     return new StaffActionsApiError(
       message,
       typeof body.error.code === 'string' ? body.error.code : 'HTTP_ERROR',
@@ -1146,7 +1158,7 @@ async function apiError(response: Response): Promise<StaffActionsApiError> {
       referenceId,
     )
   }
-  return new StaffActionsApiError('操作未完成，请重试', 'HTTP_ERROR', response.status)
+  return new StaffActionsApiError(fallback, 'HTTP_ERROR', response.status)
 }
 
 function observationDraft(value: Record<string, unknown>, status: number): ObservationDraft {

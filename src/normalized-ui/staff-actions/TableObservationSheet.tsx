@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Check, ChevronDown, History, LoaderCircle, MessageSquareText, Pencil, X } from 'lucide-react'
 import type {
   ObservationCandidate,
@@ -25,6 +25,8 @@ export function TableObservationSheet({ api, tableCode, tableSessionId, onClose,
   onClose(): void
   onSaved(message: string): void
 }) {
+  const inputVersion = useRef(0)
+  useEffect(() => () => { inputVersion.current++ }, [tableSessionId])
   const [rawContent, setRawContent] = useState('')
   const [needsImmediateAction, setNeedsImmediateAction] = useState(false)
   const [draft, setDraft] = useState<ObservationDraft | null>(null)
@@ -36,7 +38,8 @@ export function TableObservationSheet({ api, tableCode, tableSessionId, onClose,
   const loadHistory = useCallback(async (signal?: AbortSignal) => {
     setHistoryLoading(true); setHistoryError('')
     try {
-      setHistory(await api.loadRecentObservations(tableSessionId, signal))
+      const result = await api.loadRecentObservations(tableSessionId, signal)
+      if (!signal?.aborted) setHistory(result)
     } catch (cause) {
       if (signal?.aborted) return
       setHistoryError(cause instanceof Error ? cause.message : '最近记录暂时无法读取')
@@ -53,15 +56,17 @@ export function TableObservationSheet({ api, tableCode, tableSessionId, onClose,
 
   async function parse() {
     if (rawContent.trim().length < 2 || busy !== null) return
+    const version = inputVersion.current
     setBusy('parse'); setError('')
     try {
-      setDraft(await api.parseObservation({
+      const result = await api.parseObservation({
         tableSessionId,
         rawContent: rawContent.trim(),
         needsImmediateAction,
-      }))
+      })
+      if (version === inputVersion.current) setDraft(result)
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : '记录暂时无法解析，请稍后重试')
+      if (version === inputVersion.current) setError(cause instanceof Error ? cause.message : '记录暂时无法解析，请稍后重试')
     } finally {
       setBusy(null)
     }
@@ -69,6 +74,7 @@ export function TableObservationSheet({ api, tableCode, tableSessionId, onClose,
 
   async function confirm(input: Confirmation) {
     if (draft === null || busy !== null) return
+    const version = inputVersion.current
     setBusy('confirm'); setError('')
     try {
       const result = await api.confirmObservation({
@@ -81,7 +87,10 @@ export function TableObservationSheet({ api, tableCode, tableSessionId, onClose,
         degree: input.degree,
       })
       onSaved(result.serviceTaskId === null ? `${tableCode}桌台情况已记录` : `${tableCode}已记录，并生成现场处理任务`)
-      setRawContent(''); setNeedsImmediateAction(false); setDraft(null)
+      if (version === inputVersion.current) {
+        inputVersion.current++
+        setRawContent(''); setNeedsImmediateAction(false); setDraft(null)
+      }
       await loadHistory()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '记录尚未确认，请重试')
@@ -127,10 +136,10 @@ export function TableObservationSheet({ api, tableCode, tableSessionId, onClose,
       <div className="staff-observation-body">
         <section className="staff-observation-entry" aria-label="新增桌台记录">
           <p>直接写看到的事实、客人原话或你的判断。系统只从本桌真实订单寻找商品，不确定时会保留“不确定”。</p>
-          <label className="staff-observation-input"><span>一句话记录</span><textarea autoFocus maxLength={500} value={rawContent} onChange={(event) => { setRawContent(event.target.value); setDraft(null) }} placeholder="例如：客人说红色那杯太甜，薯条剩了一大半，我感觉可能上晚了。" /></label>
-          <label className="staff-observation-urgent"><input type="checkbox" checked={needsImmediateAction} onChange={(event) => { setNeedsImmediateAction(event.target.checked); setDraft(null) }} /><span><strong>需要马上处理</strong><small>确认后同时生成现场服务任务；退款、赠送、换酒仍需有权限人员审批。</small></span></label>
+          <label className="staff-observation-input"><span>一句话记录</span><textarea autoFocus maxLength={500} value={rawContent} onChange={(event) => { inputVersion.current++; setRawContent(event.target.value); setDraft(null) }} placeholder="例如：客人说红色那杯太甜，薯条剩了一大半，我感觉可能上晚了。" /></label>
+          <label className="staff-observation-urgent"><input type="checkbox" checked={needsImmediateAction} onChange={(event) => { inputVersion.current++; setNeedsImmediateAction(event.target.checked); setDraft(null) }} /><span><strong>需要马上处理</strong><small>确认后同时生成现场服务任务；退款、赠送、换酒仍需有权限人员审批。</small></span></label>
           {error !== '' && <div className="staff-observation-error" role="alert"><AlertTriangle size={17} />{error}</div>}
-          {draft === null ? <button type="button" className="staff-observation-primary" disabled={rawContent.trim().length < 2 || busy !== null} onClick={() => void parse()}>{busy === 'parse' ? <LoaderCircle className="is-spinning" /> : <MessageSquareText />}识别并核对</button> : <ObservationReview draft={draft} busy={busy !== null} onConfirm={(input) => void confirm(input)} onRevise={() => setDraft(null)} />}
+          {draft === null ? <button type="button" className="staff-observation-primary" disabled={rawContent.trim().length < 2 || busy !== null} onClick={() => void parse()}>{busy === 'parse' ? <LoaderCircle className="is-spinning" /> : <MessageSquareText />}识别并核对</button> : <ObservationReview key={draft.publicId} draft={draft} busy={busy !== null} onConfirm={(input) => void confirm(input)} onRevise={() => setDraft(null)} />}
         </section>
         <RecentObservations history={history} loading={historyLoading} error={historyError} busy={busy === 'revise'} onReload={() => void loadHistory()} onRevise={(...args) => void revise(...args)} />
       </div>

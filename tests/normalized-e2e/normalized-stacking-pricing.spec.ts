@@ -92,7 +92,7 @@ for (const viewportWidth of [320, 360]) test(`staff previews stacking and calend
       await reviewer.getByLabel('四位 PIN').fill(fixture.employeePin)
       await reviewer.getByRole('button', { name: /进入工作台/ }).click()
       await expect(reviewer.getByTestId('normalized-workspace')).toBeVisible()
-      await reviewer.goto(`${origin}/staff/member-management`)
+      await reviewer.goto(`${origin}/staff/member-management#work=member-rules`)
       await reviewer.getByRole('button', { name: /会员经营配置中心/ }).click()
       if(previousStatus!=='已发布'){
       const stacking=reviewer.locator('details').filter({has:reviewer.locator('summary').filter({hasText:/^优惠叠加规则试算$/})})

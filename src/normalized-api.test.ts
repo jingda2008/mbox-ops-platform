@@ -41,6 +41,13 @@ function bootstrap(): StaffBootstrapResponse {
 }
 
 describe('NormalizedApiClient', () => {
+  it('distinguishes an unavailable read from an uncertain write without exposing server details', async () => {
+    const send = vi.fn(async () => new Response(JSON.stringify({error:{code:'INTERNAL_ERROR',message:'查询失败：SELECT secret FROM staff'}}), {status:503}))
+    const client = new NormalizedApiClient({fetch:send})
+    await expect(client.getEndpoint('/api/operations')).rejects.toMatchObject({message:'读取失败，请刷新重试',status:503})
+    await expect(client.postEndpoint('/api/table-management/sessions/open', {})).rejects.toMatchObject({message:'本次操作结果尚未确认，请核对原操作后重试',status:503})
+  })
+
   it('binds the native browser fetch receiver before storing it on the client', async () => {
     const nativeLikeFetch = vi.fn(function (this: typeof globalThis) {
       if (this !== globalThis) throw new TypeError('Illegal invocation')

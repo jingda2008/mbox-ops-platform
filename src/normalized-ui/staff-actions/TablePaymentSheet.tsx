@@ -1,3 +1,4 @@
+import { completeCashCollection, readPendingCashCollection, rememberCashCollection, type PendingCashCollection } from './pending-cash-collection'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Banknote, Check, LoaderCircle, QrCode, RefreshCcw, ScanLine, X } from 'lucide-react'
 import { CustomerPaymentCodeScanner } from '../../components/CustomerPaymentCodeScanner'
@@ -12,6 +13,7 @@ import { createCashReceiptReference, shortPaymentOrderLabel } from './table-paym
 
 export interface TablePaymentSheetProps {
   api: StaffActionsApiPort
+  employeeId?: string
   table: Readonly<{ code: string; activeSession: { id: string } }>
   onClose(): void
   onUpdated(message: string): void
@@ -23,7 +25,7 @@ export interface TablePaymentSheetProps {
  * current-table scope check.  This keeps the common “再出二维码/再扫付款码”
  * operation on the table page without turning the page into a cashier ledger.
  */
-export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePaymentSheetProps) {
+export function TablePaymentSheet({ api, table, employeeId = 'current-session', onClose, onUpdated }: TablePaymentSheetProps) {
   const { confirmAction } = useConfirmationDialog()
   const [access, setAccess] = useState<AssistedOrderAccess | null>(null)
   const [orders, setOrders] = useState<StaffTablePaymentOrder[]>([])
@@ -43,7 +45,7 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
   const [interactionEpoch, setInteractionEpoch] = useState(0)
   const advanceGeneration = () => { generation.current += 1; setInteractionEpoch(generation.current); return generation.current }
   const writing = useRef(false)
-  const cashAttempt = useRef<{signature:string;receipt:string} | null>(null)
+  const [cashRecovery, setCashRecovery] = useState(() => readPendingCashCollection(table.activeSession.id))
   const actionOrderId = useRef<string | null>(null)
   useEffect(() => () => { generation.current += 1 }, [])
 
@@ -187,41 +189,44 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
     }
   }
 
-  const recordCashPayment = async () => {
-    if (selected === null || !canCollect || access?.manualCollection.canRecordCash !== true || writing.current) return
+  const sendCashCollection = async (attempt: PendingCashCollection) => {
+    if (writing.current || attempt.employeeId !== employeeId) return
     const requestGeneration = generation.current
-    const confirmed = await confirmAction({
-      title: `确认 ${table.code} 已收到现金`,
-      description: `请确认已经实际收到 ${money(enteredMinor, selected.currency)} 现金。确认后会立即计入收款、日结和小票，不可把“准备收钱”提前登记成到账。`,
-      confirmLabel: '确认已收到现金',
-      cancelLabel: '暂未收到',
-    })
-    if (!confirmed || requestGeneration !== generation.current || writing.current) return
-    writing.current = true
-    setBusy(true)
-    setError(null)
+    writing.current = true; setBusy(true); setError(null)
     try {
-      const signature=JSON.stringify([table.activeSession.id,selectedOrders.map(order=>order.id).sort(),enteredMinor])
-      if(cashAttempt.current?.signature!==signature)cashAttempt.current={signature,receipt:createCashReceiptReference(table.code)}
-      await api.recordManualPayment({
-        orderId: selectedOrders[0]!.id,
-        orderIds:selectedOrders.map(order=>order.id),amountMinor:enteredMinor,
-        provider: 'cash',
-        receiptReference: cashAttempt.current.receipt,
-        idempotencyKey: `staff-cash-${cashAttempt.current.receipt}`,
-      })
+      rememberCashCollection(table.activeSession.id, attempt)
+      setCashRecovery({ attempt, error: null })
+      const { employeeId: _employeeId, ...body } = attempt
+      await api.recordManualPayment(body)
+      // The acknowledgement consumes this exact attempt even if its sheet closed.
+      completeCashCollection(table.activeSession.id, attempt)
       if (requestGeneration !== generation.current) return
-      cashAttempt.current=null
+      setCashRecovery({ attempt: null, error: null })
       onUpdated(`${table.code} 现金收款已登记并进入日结对账。`)
       onClose()
     } catch (reason) {
       if (requestGeneration !== generation.current) return
-      setError(reason instanceof Error ? reason.message : '现金收款未完成，请核对后重试')
-    } finally {
-      writing.current = false
-      setBusy(false)
-    }
+      setError(reason instanceof Error ? reason.message : '现金登记结果尚未确认，请核对上次登记')
+      setCashRecovery(readPendingCashCollection(table.activeSession.id))
+    } finally { writing.current = false; setBusy(false) }
   }
+  const recordCashPayment = async () => {
+    if (selected === null || !canCollect || access?.manualCollection.canRecordCash !== true || writing.current) return
+    const pending = readPendingCashCollection(table.activeSession.id)
+    if (pending.attempt || pending.error) { setCashRecovery(pending); return }
+    const requestGeneration = generation.current
+    const confirmed = await confirmAction({
+      title: `确认 ${table.code} 已收到现金`,
+      description: `请确认已经实际收到 ${money(enteredMinor, selected.currency)} 现金。确认后会立即计入收款、日结和小票，不可把“准备收钱”提前登记成到账。`,
+      confirmLabel: '确认已收到现金', cancelLabel: '暂未收到',
+    })
+    if (!confirmed || requestGeneration !== generation.current || writing.current) return
+    const receiptReference = createCashReceiptReference(table.code)
+    await sendCashCollection({ employeeId, orderId: selectedOrders[0]!.id,
+      orderIds: selectedOrders.map(order => order.id), amountMinor: enteredMinor, provider: 'cash',
+      receiptReference, idempotencyKey: `staff-cash-${receiptReference}` })
+  }
+
 
 
   const qrValue = ownedAction?.presentation === 'qr' && typeof ownedAction.payload?.qrCodeUrl === 'string'
@@ -235,6 +240,15 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
         <button type="button" aria-label="关闭本桌收款" onClick={onClose}><X size={21} /></button>
       </header>
       <p className="staff-order-payment-note">默认合并本桌未结订单，可取消勾选或填写本次部分收款金额。原支付未知不阻塞再次收款；退款后的重新收款仍需收银授权。</p>
+      {cashRecovery.error && <p role="alert">{cashRecovery.error}</p>}
+      {cashRecovery.attempt && <section className="staff-order-error" aria-label="上次现金登记待核对">
+        <strong>上次 {money(cashRecovery.attempt.amountMinor, 'CNY')} 现金登记结果待核对</strong>
+        <p>核对会沿用原登记，不会再记一笔。确认结果后再办理下一笔真实收款。</p>
+        {cashRecovery.attempt.employeeId === employeeId
+          ? <button type="button" disabled={busy || access?.manualCollection.canRecordCash !== true} onClick={() => void sendCashCollection(cashRecovery.attempt!)}>核对上次现金登记</button>
+          : <p>请由原经办员工登录核对；也可到收银页面按凭证查询。当前账号不会代为重发。</p>}
+        <details><summary>登记凭证</summary>{cashRecovery.attempt.receiptReference}</details>
+      </section>}
       {error !== null && <p className="staff-order-error" role="alert">{error}</p>}
       {!loading && error !== null && orders.length === 0 && <button type="button" className="staff-payment-reload" onClick={() => setLoadAttempt((current) => current + 1)}><RefreshCcw size={18} />重新读取本桌收款</button>}
       {loading ? <p className="staff-order-loading"><LoaderCircle className="is-spinning" /> 正在读取本桌未结订单</p> : orders.length === 0 ? error === null && <p className="staff-actions-empty">本桌没有需要再次收款的订单。</p> : <>
@@ -257,7 +271,7 @@ export function TablePaymentSheet({ api, table, onClose, onUpdated }: TablePayme
           {!canCollect&&<p role="alert">请选择订单，金额须大于0且不超过所选待收金额，最多两位小数。</p>}
           <details><summary>查看本次分摊顺序</summary><p>按下单时间从早到晚分摊，先付清较早订单，剩余用于下一单；原订单及退款归属分别保留。</p></details>
           {paymentStatus === 'succeeded' && <span className="staff-payment-result is-succeeded"><Check /><strong>支付成功，订单余额已刷新</strong></span>}
-          {paymentStatus !== 'succeeded' && <PaymentButtons busy={busy||!canCollect} onlineDisabled={access?.canInitiatePayment !== true} canRecordCash={access?.manualCollection.canRecordCash === true} onQr={() => void createPayment('native_qr')} onScan={() => setScannerOpen(true)} onCash={() => void recordCashPayment()} />}
+          {paymentStatus !== 'succeeded' && <PaymentButtons busy={busy||!canCollect} onlineDisabled={access?.canInitiatePayment !== true} canRecordCash={access?.manualCollection.canRecordCash === true && cashRecovery.attempt === null && cashRecovery.error === null} onQr={() => void createPayment('native_qr')} onScan={() => setScannerOpen(true)} onCash={() => void recordCashPayment()} />}
           {qrValue !== null && <TablePaymentQr key={activePaymentId} value={qrValue} />}
           {activePaymentId !== null && <details className="staff-payment-history"><summary>原支付记录</summary>
             <p>{paymentStatus === 'pending' ? '本次结果尚未确认，可继续收款；后台会继续核对实际到账。' : paymentStatus === 'succeeded' ? '本次已确认到账' : '渠道已确认本次未成功，可再次收款。'}</p>

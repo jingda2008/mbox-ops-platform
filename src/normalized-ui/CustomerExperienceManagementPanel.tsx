@@ -1,3 +1,5 @@
+import { useStaffViewState } from './staff-view-state'
+import { TaskSections } from './TaskSections'
 import {SocialBroadcastPanel} from './SocialBroadcastPanel'
 import { LaunchPopupPanel } from './LaunchPopupPanel'
 import { SocialAccountPanel } from './SocialAccountPanel'
@@ -5,7 +7,6 @@ import { BottleCustodyPanel } from './BottleCustodyPanel'
 import './bottle-custody-panel.css'
 import { MemberNumberPolicyPanel } from './MemberNumberPolicyPanel'
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { Clock3, UsersRound } from 'lucide-react'
 import type { NormalizedApiClient, StaffAuthView } from '../normalized-api'
 import { useConfirmationDialog } from './ConfirmationDialog'
 import { loadCompleteActiveCatalog } from './complete-catalog'
@@ -234,22 +235,14 @@ export function CustomerExperienceManagementPanel({ api, auth, dashboard, mode =
     <section className="customer-experience-publishing-intro"><strong>会员账户查询</strong><small>按会员号读取积分、成长值和流水；不显示手机号、微信身份或其他无关个人资料。</small></section>
     <MemberAccountLookupPanel api={api} auth={auth} />
   </div>
-  if (mode === 'member-management') return <div className="staff-module-body customer-experience-management">
-    <BottleCustodyPanel key={auth.employee.id} api={api} auth={auth} />
-    <SocialBroadcastPanel key={auth.employee.id} api={api} auth={auth} /><LaunchPopupPanel key={auth.employee.id} api={api} auth={auth} /><SocialAccountPanel key={auth.employee.id} api={api} auth={auth} />
-    <MemberNumberPolicyPanel key={auth.employee.id} api={api} auth={auth} />
-    <MemberCardManagementPanel api={api} auth={auth} />
-    <MarketingContactPanel api={api} auth={auth} />
-    <section className="customer-experience-publishing-intro"><strong>其他会员经营配置</strong><small>年度礼遇、兑换目录、活动、会员条款与账户恢复按各自最终权限显示。</small></section>
-    <LoyaltyEmergencyControlPanel api={api} auth={auth} />
-    <MembershipConfigurationCenterPanel api={api} auth={auth} />
-    <PromotionalLoyaltyPanel api={api} auth={auth} />
-    <LoyaltyTierAndRedemptionPanel api={api} auth={auth} />
-    <TierBenefitPolicyPanel api={api} auth={auth} />
-    <AnnualBenefitManagementPanel api={api} auth={auth} />
-    <MembershipTermsManagementPanel api={api} auth={auth} />
-    <MembershipRecoveryPanel api={api} auth={auth} />
-  </div>
+  if (mode === 'member-management') return <div className="staff-module-body customer-experience-management"><TaskSections label="会员办理与管理" sections={[
+    {id:'custody',label:'存酒办理',visible:auth.permissions.some(p=>p.startsWith('bottle.')),content:<BottleCustodyPanel key={auth.employee.id} api={api} auth={auth} />},
+    {id:'member-cards',label:'会员卡',visible:auth.permissions.some(p=>p.startsWith('member.card.')),content:<><MemberCardManagementPanel api={api} auth={auth} /><MemberNumberPolicyPanel key={auth.employee.id} api={api} auth={auth} /></>},
+    {id:'member-benefits',label:'权益与兑换',visible:auth.permissions.some(p=>p.startsWith('loyalty.')),content:<><LoyaltyTierAndRedemptionPanel api={api} auth={auth} /><AnnualBenefitManagementPanel api={api} auth={auth} /><TierBenefitPolicyPanel api={api} auth={auth} /></>},
+    {id:'member-marketing',label:'会员通知',visible:auth.permissions.some(p=>p.startsWith('marketing.')||p==='community.activity.manage'||p==='member.card.manage'),content:<><MarketingContactPanel api={api} auth={auth} /><SocialBroadcastPanel key={auth.employee.id} api={api} auth={auth} /><LaunchPopupPanel key={auth.employee.id} api={api} auth={auth} /><SocialAccountPanel key={auth.employee.id} api={api} auth={auth} /></>},
+    {id:'member-rules',label:'规则与条款',visible:auth.permissions.some(p=>p.startsWith('loyalty.')||p.startsWith('membership.terms.')),content:<><MembershipConfigurationCenterPanel api={api} auth={auth} /><PromotionalLoyaltyPanel api={api} auth={auth} /><MembershipTermsManagementPanel api={api} auth={auth} /><LoyaltyEmergencyControlPanel api={api} auth={auth} /></>},
+    {id:'member-recovery',label:'账户恢复',visible:auth.permissions.some(p=>p.startsWith('customer.membership.')),content:<MembershipRecoveryPanel api={api} auth={auth} />},
+  ]}/></div>
   return <div className="staff-module-body customer-experience-management">
     {dashboard !== null && <div className="staff-metric-grid">
       <article><small>进行中的桌台体验</small><strong>{dashboard.activePlanCount}</strong></article>
@@ -257,18 +250,13 @@ export function CustomerExperienceManagementPanel({ api, auth, dashboard, mode =
       <article><small>待跟进客户</small><strong>{dashboard.followups.length}</strong></article>
       <article><small>待办/已发布活动</small><strong>{dashboard.activities.length}</strong></article>
     </div>}
-    <section className="customer-experience-publishing-intro">
-      <strong>超嗨发布工作台</strong>
-      <small>先上传并选择图片，再保存草稿；活动和首页内容都必须由拥有发布权限的员工复核后才会在小程序展示。</small>
-    </section>
-    <ActivityOperationsPanel api={api} auth={auth} />
-    <HomeContentManagementPanel api={api} auth={auth} />
-    <CustomerExperienceAnalyticsPanel api={api} auth={auth} />
-    <CheckoutUpgradeManagementPanel api={api} auth={auth} />
-    <RecommendationPolicyManagementPanel api={api} auth={auth} />
-    <PersonalContactGovernancePanel api={api} auth={auth} />
-    <section className="staff-module-summary"><span><Clock3 size={18} /></span><div><strong>待付款名额自动释放</strong><small>达到付款时限后，未创建付款或付款已关闭的报名自动取消；支付结果仍未知时保持人工复核，不擅自释放。</small></div></section>
-    <section className="staff-module-summary"><span><UsersRound size={18} /></span><div><strong>权限分开</strong><small>活动管理者可以建草稿；只有拥有活动发布权限的人可以让客户看到，避免一线人员随意承诺定金与退款。</small></div></section>
+    <TaskSections label="客户运营工作" sections={[
+      {id:'activities',label:'活动报名',visible:auth.permissions.some(p=>p.startsWith('community.activity.')),content:<ActivityOperationsPanel api={api} auth={auth} />},
+      {id:'home-content',label:'首页内容',visible:auth.permissions.some(p=>p.startsWith('community.activity.')||p==='customer.experience.feature.manage'),content:<HomeContentManagementPanel api={api} auth={auth} />},
+      {id:'experience-analysis',label:'体验分析',visible:auth.permissions.some(p=>p.includes('analytics.')||p==='observation.view.raw'),content:<CustomerExperienceAnalyticsPanel api={api} auth={auth} />},
+      {id:'experience-rules',label:'推荐与升级规则',visible:auth.permissions.some(p=>p.startsWith('recommendation.rule.')||p.startsWith('checkout.upgrade.')||p.startsWith('fulfillment.capacity.')),content:<><CheckoutUpgradeManagementPanel api={api} auth={auth} /><RecommendationPolicyManagementPanel api={api} auth={auth} /></>},
+      {id:'contact-rules',label:'联系方式管理',visible:auth.permissions.some(p=>p.startsWith('privacy.contact.')),content:<PersonalContactGovernancePanel api={api} auth={auth} />},
+    ]}/>
   </div>
 }
 
@@ -289,7 +277,7 @@ interface StaffMemberAccountView {
 
 function MemberAccountLookupPanel({ api, auth }: { api: NormalizedApiClient; auth: StaffAuthView }) {
   const canView = auth.permissions.includes('loyalty.account.view')
-  const [memberNo, setMemberNo] = useState('')
+  const [memberNo, setMemberNo] = useStaffViewState('member:lookup', '')
   const [account, setAccount] = useState<StaffMemberAccountView | null>(null)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
@@ -320,10 +308,10 @@ function MemberAccountLookupPanel({ api, auth }: { api: NormalizedApiClient; aut
         <article><small>可用积分</small><strong>{account.availablePoints}</strong></article>
         <article><small>资格成长值</small><strong>{account.qualificationGrowth}</strong></article>
         <article><small>累计成长值</small><strong>{account.lifetimeGrowth}</strong></article>
-        <article><small>等级周期资格快照</small><strong>{account.tierQualificationGrowth ?? '暂无'}</strong></article>
+        <article><small>本等级周期评定时的成长值</small><strong>{account.tierQualificationGrowth ?? '暂无'}</strong></article>
         <article><small>待追回积分</small><strong>{account.pendingRecoveryPoints}</strong></article>
       </div>
-      <p className="staff-module-footnote">会员号 {account.memberNo} · {({active:'有效会员',suspended:'会员已暂停',expired:'会员已过期',cancelled:'会员已注销',inactive:'会员未启用'} as Record<string,string>)[account.membershipStatus] ?? `会员状态：${account.membershipStatus}`} · 数据更新 {new Date(account.updatedAt).toLocaleString('zh-CN')}</p>
+      <p className="staff-module-footnote">会员号 {account.memberNo} · {({active:'有效会员',suspended:'会员已暂停',expired:'会员已过期',cancelled:'会员已注销',inactive:'会员未启用'} as Record<string,string>)[account.membershipStatus] ?? '会员状态待确认'} · 数据更新 {new Date(account.updatedAt).toLocaleString('zh-CN')}</p>
       <div className="activity-admin-list"><header><strong>最近积分流水</strong><small>最多20条</small></header>{account.pointEntries.length === 0 ? <p>暂无积分流水。</p> : account.pointEntries.map((entry, index) => <article key={`point-${entry.occurredAt}-${index}`}><div><strong>{entry.delta > 0 ? '+' : ''}{entry.delta}积分 · 余额{entry.balanceAfter}</strong><small>{entry.reason} · {new Date(entry.occurredAt).toLocaleString('zh-CN')}</small></div></article>)}</div>
       <div className="activity-admin-list"><header><strong>最近成长值流水</strong><small>最多20条</small></header>{account.growthEntries.length === 0 ? <p>暂无成长值流水。</p> : account.growthEntries.map((entry, index) => <article key={`growth-${entry.occurredAt}-${index}`}><div><strong>{entry.delta > 0 ? '+' : ''}{entry.delta}成长值 · 累计{entry.balanceAfter}</strong><small>{entry.reason} · {new Date(entry.occurredAt).toLocaleString('zh-CN')}</small></div></article>)}</div>
     </>}
@@ -956,7 +944,7 @@ function LoyaltyTierAndRedemptionPanel({ api, auth }: { api: NormalizedApiClient
       {config?.versions.map((version) => <article key={version.id}><div><strong>目录版本 {version.version} · {releaseStatusLabel(version.status)}</strong><small>{version.itemCount}项 · {version.reason}</small></div><div className="staff-inline-actions">{version.status === 'draft' && canApproveCatalog && version.draftedByEmployeeId !== auth.employee.id && <button type="button" onClick={() => void approveCatalog(version)}>前往配置中心审批</button>}{version.status === 'approved' && canPublishCatalog && version.draftedByEmployeeId !== auth.employee.id && version.approvedByEmployeeId !== auth.employee.id && <button type="button" onClick={() => void publishCatalog(version)}>排期发布</button>}</div></article>)}
       {canControl && <div className="staff-module-actions"><button type="button" onClick={() => void setControl('pilot')}>试点开放</button><button type="button" onClick={() => void setControl('enabled')}>正式开放</button><button type="button" onClick={() => void setControl('paused')}>暂停</button><button type="button" onClick={() => void setControl('disabled')}>关闭</button></div>}
     </div>
-    {(canFulfill || canHandleException) && <div className="activity-admin-list"><header><strong>待实际交付</strong><small>商品须到KDS完成；确认尚未履约的门店失败才允许按原积分批次返还</small></header>{pending.length === 0 && <p>当前没有待交付兑换。</p>}{pending.map((item) => <article key={item.publicId}><div><strong>{item.memberNo} · {item.itemName}</strong><small>{item.pointsUsed}积分 · {item.fulfillmentKind} · 截止{new Date(item.expiresAt).toLocaleString('zh-CN')}</small></div><div className="staff-inline-actions">{canFulfill && <button type="button" disabled={Boolean(busy)} onClick={() => void fulfill(item.publicId)}>确认已交付</button>}{canHandleException && <button type="button" className="is-danger" disabled={Boolean(busy)} onClick={() => void failRedemption(item)}>确认未履约并返还</button>}</div></article>)}</div>}
+    {(canFulfill || canHandleException) && <div className="activity-admin-list"><header><strong>待实际交付</strong><small>商品需在制作与送达页面完成交付；确认尚未履约的门店失败才允许按原积分批次返还</small></header>{pending.length === 0 && <p>当前没有待交付兑换。</p>}{pending.map((item) => <article key={item.publicId} data-staff-todo-id={`redemption:${item.publicId}`}><div><strong>{item.memberNo} · {item.itemName}</strong><small>{item.pointsUsed}积分 · {({ product: '商品', benefit: '会员权益', activity: '活动名额', service: '现场服务' } as Record<string, string>)[item.fulfillmentKind] ?? '交付方式待确认'} · 截止{new Date(item.expiresAt).toLocaleString('zh-CN')}</small></div><div className="staff-inline-actions">{canFulfill && <button type="button" disabled={Boolean(busy)} onClick={() => void fulfill(item.publicId)}>确认已交付</button>}{canHandleException && <button type="button" className="is-danger" disabled={Boolean(busy)} onClick={() => void failRedemption(item)}>确认尚未交付，退回积分</button>}</div></article>)}</div>}
   </div></section>
 }
 
@@ -1169,7 +1157,7 @@ function releaseStatusLabel(value: string) {
   return ({
     draft: '草稿', approved: '已审批', published: '已发布/已排期',
     paused: '已暂停', retired: '已停用',
-  } as Record<string, string>)[value] ?? value
+  } as Record<string, string>)[value] ?? '状态待核对'
 }
 function positiveInteger(value: string, label: string) { const number = Number(value); if (!Number.isSafeInteger(number) || number < 1) throw new Error(`${label}必须是正整数`); return number }
 function nonNegativeIntegerText(value: string, label: string) { const number = Number(value); if (!Number.isSafeInteger(number) || number < 0) throw new Error(`${label}必须是非负整数`); return number }

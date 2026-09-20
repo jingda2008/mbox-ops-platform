@@ -1,3 +1,5 @@
+import { StaffTodoPanel } from './StaffTodoPanel'
+import { defaultStaffWorkMode, quickStaffEntries, staffWorkModes, type StaffWorkMode } from './staff-navigation-model'
 import { businessOperatingHoursLabel } from '../shared/business-operating-hours'
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
 import {
@@ -171,6 +173,7 @@ export function NormalizedStaffWorkspace({
   return (
     <NormalizedStaffWorkspaceView
       state={state}
+      api={api}
       onRefresh={() => void loadBootstrap()}
       onNavigate={onNavigate}
       onLoginRequired={onLoginRequired}
@@ -182,6 +185,7 @@ export function NormalizedStaffWorkspace({
 
 export interface NormalizedStaffWorkspaceViewProps {
   state: NormalizedWorkspaceState
+  api?: NormalizedApiClient
   onRefresh: () => void
   onNavigate?: (route: string) => void
   onLoginRequired?: () => void
@@ -191,12 +195,19 @@ export interface NormalizedStaffWorkspaceViewProps {
 
 export function NormalizedStaffWorkspaceView({
   state,
+  api,
   onRefresh,
   onNavigate,
   onLoginRequired,
   showMobileNavigation = true,
   sessionControls,
 }: NormalizedStaffWorkspaceViewProps) {
+  const [online, setOnline] = useState(() => typeof navigator === 'undefined' || navigator.onLine)
+  useEffect(() => {
+    const update = () => setOnline(navigator.onLine)
+    window.addEventListener('online', update); window.addEventListener('offline', update)
+    return () => { window.removeEventListener('online', update); window.removeEventListener('offline', update) }
+  }, [])
   if (state.bootstrap === null) {
     return <WorkspaceGate
       state={state}
@@ -211,9 +222,7 @@ export function NormalizedStaffWorkspaceView({
     summary.activeCount > 0 || summary.attentionCount > 0 || summary.readyCount > 0
       || (summary.carryoverCount ?? 0) > 0
   ))
-  const taskSummaries = bootstrap.domainSummaries.filter((summary) => (
-    summary.attentionCount > 0 || (summary.carryoverCount ?? 0) > 0
-  ))
+
   return (
     <main className="normalized-workspace" data-testid="normalized-workspace">
       <header className="normalized-topbar">
@@ -247,11 +256,11 @@ export function NormalizedStaffWorkspaceView({
               <h1 id="workspace-title">{bootstrap.staff.displayName}</h1>
               <p>{bootstrap.staff.roleNames.join(' · ') || '已授权员工'}</p>
             </div>
-            <span className="normalized-freshness"><b><span /> 连接正常</b><small>数据更新于 {formatGeneratedAt(bootstrap.generatedAt)}</small></span>
+            <span className={`normalized-freshness${!online || state.phase === 'error' ? ' is-stale' : ''}`}><b><span /> {!online ? '已离线，显示上次数据' : state.phase === 'error' ? '更新失败，显示上次数据' : state.phase === 'loading' ? '正在更新' : '连接正常'}</b><small>上次更新 {formatGeneratedAt(bootstrap.generatedAt)}</small></span>
           </section>
 
           {state.phase === 'error' && (
-            <InlineNotice message={state.message ?? '刷新失败，当前仍显示上次成功数据'} onRetry={onRefresh} />
+            <InlineNotice message={state.message ?? '刷新失败，当前显示上次数据，请核对上方更新时间'} onRetry={onRefresh} />
           )}
 
           <section className="normalized-section" aria-labelledby="quick-title">
@@ -281,7 +290,10 @@ export function NormalizedStaffWorkspaceView({
             )}
           </section>
 
-          <section className="normalized-section" aria-labelledby="summary-title">
+          {api && <StaffTodoPanel api={api} bootstrap={bootstrap} onNavigate={onNavigate} onLoginRequired={onLoginRequired} />}
+          <details className="normalized-section staff-operating-summary">
+            <summary>营业概况</summary>
+          <section aria-labelledby="summary-title">
             <div className="normalized-section-heading">
               <div>
                 <p className="normalized-eyebrow">现场摘要</p>
@@ -326,33 +338,15 @@ export function NormalizedStaffWorkspaceView({
               })}
             </div> : <div className="normalized-clear-state">
               <ShieldCheck size={20} aria-hidden="true" />
-              <span><strong>当前没有待处理事项</strong><small>新任务和异常出现后会自动进入对应岗位工作面</small></span>
+              <span><strong>当前摘要没有异常</strong><small>具体待办以上方已读取的业务记录为准</small></span>
             </div>}
           </section>
+          </details>
 
-          <section className="normalized-section normalized-task-queue" aria-labelledby="task-queue-title">
-            <div className="normalized-section-heading">
-              <div><p className="normalized-eyebrow">待办入口</p><h2 id="task-queue-title">下一步先处理什么</h2></div>
-            </div>
-            {taskSummaries.length === 0 ? <div className="normalized-clear-state"><ShieldCheck size={20} aria-hidden="true" /><span><strong>当前没有异常待办</strong><small>进行中和已就绪事项仍可从上方状态卡进入查看</small></span></div> : <div className="normalized-task-list">
-              {taskSummaries.map((summary) => {
-                const Icon = domainIcon[summary.key]
-                const carryoverCount = summary.carryoverCount ?? 0
-                return <button type="button" key={summary.key} onClick={() => onNavigate?.(domainRoute[summary.key])} disabled={onNavigate === undefined}>
-                  <span><Icon size={18} aria-hidden="true" /></span>
-                  <strong>{summary.label}</strong>
-                  <small>{carryoverCount > 0
-                    ? `${carryoverCount} 项交班遗留${summary.attentionCount > 0 ? ` · ${summary.attentionCount} 项今日待办` : ''}`
-                    : `${summary.attentionCount} 项需要处理`}</small>
-                  <ChevronRight size={18} aria-hidden="true" />
-                </button>
-              })}
-            </div>}
-          </section>
         </div>
       </div>
 
-      {showMobileNavigation && <StaffBottomNavigation entries={bootstrap.navigation} onNavigate={onNavigate} />}
+      {showMobileNavigation && <StaffBottomNavigation entries={bootstrap.navigation} roleCodes={bootstrap.staff.roleCodes} onNavigate={onNavigate} />}
     </main>
   )
 }
@@ -360,16 +354,22 @@ export function NormalizedStaffWorkspaceView({
 export function StaffBottomNavigation({
   entries,
   activeRoute = null,
+  roleCodes = [],
   onNavigate,
 }: {
   entries: StaffBootstrapView['navigation']
   activeRoute?: string | null
+  roleCodes?: readonly string[]
   onNavigate?: (route: string) => void
 }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [workMode, setWorkMode] = useState<StaffWorkMode>(()=>defaultStaffWorkMode(roleCodes))
+  const defaultMode=defaultStaffWorkMode(roleCodes)
+  useEffect(()=>setWorkMode(defaultMode),[defaultMode])
+  useEffect(()=>{if(!mobileMenuOpen)return;const previous=document.activeElement as HTMLElement|null;const menu=document.querySelector<HTMLElement>('.normalized-mobile-menu');menu?.querySelector<HTMLElement>('button')?.focus();const key=(event:KeyboardEvent)=>{if(event.key==='Escape')setMobileMenuOpen(false);if(event.key==='Tab'&&menu){const items=[...menu.querySelectorAll<HTMLElement>('button,summary')].filter(item=>item.getClientRects().length>0);const first=items[0],last=items[items.length-1];if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus()}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus()}}};document.addEventListener('keydown',key);return()=>{document.removeEventListener('keydown',key);previous?.focus()}},[mobileMenuOpen])
   return <>
     <nav className="normalized-mobile-nav" aria-label="岗位快捷功能">
-      {entries.slice(0, 4).map((entry) => {
+      {quickStaffEntries(entries, workMode).map((entry) => {
         const active = entry.route === activeRoute
         return <button
           type="button"
@@ -389,7 +389,10 @@ export function StaffBottomNavigation({
       <button className="normalized-mobile-menu-backdrop" type="button" aria-label="关闭全部岗位入口" onClick={() => setMobileMenuOpen(false)} />
       <aside className="normalized-mobile-menu" role="dialog" aria-modal="true" aria-labelledby="mobile-menu-title">
         <header><div><small>当前岗位</small><h2 id="mobile-menu-title">全部工作入口</h2></div><button type="button" aria-label="关闭" onClick={() => setMobileMenuOpen(false)}><X size={20} /></button></header>
-        <div>{entries.map((entry) => <button type="button" key={entry.code} onClick={() => { setMobileMenuOpen(false); onNavigate?.(entry.route) }} disabled={onNavigate === undefined}><span className="normalized-nav-icon"><StaffNavigationIcon code={entry.code} size={19} /></span><strong>{entry.label}</strong><ChevronRight size={17} /></button>)}</div>
+        <div className="staff-work-mode" aria-label="兼岗快捷入口">{staffWorkModes.map(mode=><button key={mode.id} type="button" aria-pressed={mode.id===workMode} onClick={()=>setWorkMode(mode.id)}>{mode.label}</button>)}</div>
+        <p>快捷入口按工作内容排序，实际操作权限由当前账号决定。</p>
+        <NavigationGroups entries={entries} onNavigate={route=>{setMobileMenuOpen(false);onNavigate?.(route)}}/>
+
       </aside>
     </>}
   </>
@@ -408,19 +411,15 @@ function RoleNavigation({
       <strong>我的工作面</strong>
       <small>仅显示当前岗位已授权功能</small>
     </div>
-    <div className="normalized-role-nav-list">
-      {entries.map((entry) => <button
-        type="button"
-        key={entry.code}
-        onClick={() => onNavigate?.(entry.route)}
-        disabled={onNavigate === undefined}
-      >
-        <span className="normalized-nav-icon"><StaffNavigationIcon code={entry.code} size={18} /></span>
-        <strong>{entry.label}</strong>
-        <ChevronRight size={16} aria-hidden="true" />
-      </button>)}
-    </div>
+    <NavigationGroups entries={entries} onNavigate={onNavigate}/>
+
   </aside>
+}
+
+function NavigationGroups({entries,onNavigate}:{entries:StaffBootstrapView['navigation'];onNavigate?: (route:string)=>void}) {
+  const members=entries.filter(entry=>entry.code.startsWith('member-'))
+  const item=(entry:StaffBootstrapView['navigation'][number])=><button type="button" key={entry.code} onClick={()=>onNavigate?.(entry.route)} disabled={!onNavigate}><span className="normalized-nav-icon"><StaffNavigationIcon code={entry.code} size={19}/></span><strong>{entry.label}</strong><ChevronRight size={17}/></button>
+  return <div className="normalized-role-nav-list">{entries.filter(entry=>!entry.code.startsWith('member-')).map(item)}{members.length>0&&<button type="button" className="staff-member-navigation" onClick={()=>onNavigate?.((members.find(entry=>entry.code==='member-accounts')??members[0]).route)} disabled={!onNavigate}><span className="normalized-nav-icon"><Gift size={19}/></span><strong>会员服务与管理</strong><ChevronRight size={17}/></button>}</div>
 }
 
 function WorkspaceGate({

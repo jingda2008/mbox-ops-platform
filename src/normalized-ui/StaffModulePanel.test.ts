@@ -31,7 +31,7 @@ describe('paymentPolicyPresentation', () => {
   it('keeps the exact cross-day blocker fact visible after entering another module',()=>{
     const source=readFileSync(new URL('./StaffModulePanel.tsx',import.meta.url),'utf8')
     expect(source).toContain('data-blocker-fact-id={initialBlockerFact.id}')
-    expect(source).toContain('上一营业日阻断的具体事实')
+    expect(source).toContain('上一营业日尚未完成的事项')
     expect(source).toContain('任何处理仍按当前权限和服务端状态复验')
   })
 

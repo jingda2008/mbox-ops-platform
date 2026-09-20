@@ -5,6 +5,27 @@ const item='11111111-1111-4111-8111-111111111111',refund='22222222-2222-4222-822
 function storage(){const values=new Map<string,string>();return {getItem:(key:string)=>values.get(key)??null,setItem:(key:string,value:string)=>{values.set(key,value)},removeItem:(key:string)=>{values.delete(key)}}}
 const response=(data:unknown)=>new Response(JSON.stringify({data}),{status:200})
 describe('quantity after-sales recovery',()=>{
+  it('binds reads, writes and recovered cash phases to the employee shown in this client',async()=>{
+    const send=vi.fn<typeof fetch>().mockResolvedValue(response({}))
+    // A fresh response is required for every JSON read.
+    send.mockImplementation(async()=>response({}))
+    const api=new ItemAfterSalesApi('employee-original',send,storage())
+    await api.access()
+    await api.act(item,`/api/refunds/${refund}/manual-result`,{succeeded:true})
+    expect(send).toHaveBeenCalledTimes(3)
+    for(const [,init] of send.mock.calls)expect(new Headers(init?.headers).get('x-mbox-staff-employee-id')).toBe('employee-original')
+  })
+  it('keeps the original attempt after identity rejection and hides technical errors',async()=>{
+    const send=vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({error:{code:'AUTH_REQUIRED',message:'当前员工已切换，请重新登录后确认操作'}}),{status:401}))
+      .mockResolvedValueOnce(new Response(JSON.stringify({error:{code:'INTERNAL_ERROR',message:'数据库失败：SELECT secret FROM staff'}}),{status:500}))
+    const api=new ItemAfterSalesApi('employee-original',send,storage())
+    await expect(api.act(item,'/api/commerce/item-after-sales/requests',{orderItemId:item,quantity:1,reason:'重复点单'})).rejects.toMatchObject({status:401})
+    const original=api.pending(item)
+    expect(original).not.toBeNull()
+    await expect(api.recover(item)).rejects.toMatchObject({message:'本次操作结果尚未确认，请核对原操作后重试'})
+    expect(api.pending(item)?.key).toBe(original?.key)
+  })
   it('restores the original payload across a new page and blocks a different selection while the outcome is unknown',async()=>{
     const store=storage(),body={orderItemId:item,quantity:2,reason:'重复点单'}
     const send=vi.fn<typeof fetch>().mockRejectedValueOnce(new Error('lost response')).mockResolvedValueOnce(response({caseId:'original'}))

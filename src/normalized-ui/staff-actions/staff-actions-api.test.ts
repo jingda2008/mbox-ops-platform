@@ -2,6 +2,15 @@ import { describe, expect, it, vi } from 'vitest'
 import { StaffActionsApi, StaffActionsApiError } from './staff-actions-api'
 
 describe('StaffActionsApi', () => {
+  it('gives the same safe read recovery for JSON and non-JSON server failures', async () => {
+    const send = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({error:{code:'INTERNAL_ERROR',message:'数据库连接异常'}}),{status:503}))
+      .mockResolvedValueOnce(new Response('<h1>Gateway failure</h1>',{status:502}))
+    const api = new StaffActionsApi({fetch:send})
+    await expect(api.loadOperations()).rejects.toMatchObject({message:'读取失败，请刷新重试',status:503})
+    await expect(api.loadOperations()).rejects.toMatchObject({message:'读取失败，请刷新重试',status:502})
+  })
+
   it.each(['QUANTITY_UNAVAILABLE','QUANTITY_BATCH_NOT_ENABLED'])('clears definite %s without losing an in-progress original result',async(code)=>{
     const send=vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify({error:{code,message:'本次数量未执行'}}),{status:409}))
@@ -84,7 +93,7 @@ describe('StaffActionsApi', () => {
       code: 'INTERNAL_ERROR',
       status: 500,
       referenceId: 'req-order-17',
-      message: '服务暂时不可用，请稍后重试',
+      message: '本次操作结果尚未确认，请核对原操作后重试',
     })
   })
 

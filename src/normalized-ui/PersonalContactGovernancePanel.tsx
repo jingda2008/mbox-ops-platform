@@ -99,8 +99,8 @@ export function PersonalContactGovernancePanel({api,auth}:{api:NormalizedApiClie
     }catch(error){setNotice(message(error,'法定保留未能释放'))}finally{setBusy('')}
   }
 
-  return <section className="personal-contact-governance" aria-label="联系方式隐私治理">
-    <header><div><ShieldCheck size={18}/><span><strong>联系方式隐私治理</strong><small>只显示掩码、策略和处置证据；密文、哈希与内部编号不在页面出现。</small></span></div><button type="button" aria-expanded={expanded} onClick={()=>setExpanded((value)=>!value)}>{expanded?'收起':'打开'}<ChevronDown size={17}/></button></header>
+  return <section className="personal-contact-governance" aria-label="联系方式保留与清理">
+    <header><div><ShieldCheck size={18}/><span><strong>联系方式保留与清理</strong><small>只显示掩码、策略和处置证据；密文、哈希与内部编号不在页面出现。</small></span></div><button type="button" aria-expanded={expanded} onClick={()=>setExpanded((value)=>!value)}>{expanded?'收起':'打开'}<ChevronDown size={17}/></button></header>
     {expanded&&<div className="personal-contact-governance-body">
       {notice&&<p role="status">{notice}</p>}
       <div className="personal-contact-governance-toolbar"><span>{policies.length} 个策略版本 · {holds.filter((hold)=>hold.status==='active').length} 个有效保留</span><button type="button" disabled={busy==='load'} onClick={()=>void load()}><RefreshCw size={16}/>刷新</button></div>

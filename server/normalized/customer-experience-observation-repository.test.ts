@@ -1,3 +1,5 @@
+import { CustomerExperienceService } from './customer-experience-service.js'
+import { NormalizedCommandExecutor } from './command-executor.js'
 import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -353,6 +355,42 @@ integration('observation confirmation privacy with PostgreSQL', () => {
     `, [tenantId, storeId, draft.publicId])
     expect(state.rows[0]).toEqual({ status: 'draft', task_count: '1' })
   })
+  it('commits real service commands, UUID outbox aggregates and idempotent replay together', async () => {
+    await pool.query(`INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id,starts_at)
+      VALUES($1,$2,$3,$4,clock_timestamp()-interval '1 day')`,[tenantId,storeId,employeeId,roleId])
+    await pool.query(`INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name)
+      VALUES($1,$2,'observation.record','记录'),($1,$2,'observation.confirm','确认') ON CONFLICT(tenant_id,store_id,code) DO NOTHING`,[tenantId,storeId])
+    await pool.query(`INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id)
+      SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2
+      AND code IN ('observation.record','observation.confirm')`,[tenantId,storeId,roleId])
+    const service=new CustomerExperienceService(transactions,new NormalizedCommandExecutor(transactions),{updateProfile:async()=>{throw new Error('unused')}})
+    const context={scope:integrationScope,employeeId,businessDate:new Date().toISOString().slice(0,10)}
+    const input={tableSessionId,rawContent:'客人需要立即加水',inputKind:'text' as const,needsImmediateAction:true,idempotencyKey:randomUUID()}
+    const parsed=await service.parseObservation(context,input)
+    expect((await service.parseObservation(context,input)).value).toEqual(parsed.value)
+    const confirmed=await service.confirmObservation(context,{publicId:parsed.value.publicId,idempotencyKey:randomUUID(),events:[{
+      expressionKind:'staff_judgement',scopeKind:'table',eventType:'complaint',degree:'unknown',
+      reasonCode:null,seatLabel:null,customerId:null,candidateId:null,productId:null,confidence:0.9,rawExcerpt:'需要加水',
+    }]})
+    expect(confirmed.value.serviceTaskId).not.toBeNull()
+    const rows=await pool.query(`SELECT outbox.aggregate_id::text,observation.id::text, outbox.message_type AS event_type
+      FROM mbox.observation_inputs observation JOIN mbox.outbox_messages outbox
+        ON outbox.tenant_id=observation.tenant_id AND outbox.store_id=observation.store_id
+        AND outbox.aggregate_id=observation.id WHERE observation.public_id=$1`,[parsed.value.publicId])
+    expect(rows.rows).toHaveLength(2)
+    expect(rows.rows.every(row=>row.aggregate_id===row.id)).toBe(true)
+    expect(rows.rows.map(row=>row.event_type).sort()).toEqual(['customer.observation.confirmed.v1','customer.observation.parsed.v1'])
+    const policy=await service.createRecommendationPolicy(context,{code:'DEFAULT',preferenceWeight:100,sceneWeight:60,marginWeight:50,priorityWeight:50,
+      performanceWeight:50,inventoryWeight:50,capacityWeight:50,minimumGrossMarginBasisPoints:1500,
+      preferenceHalfLifeDays:90,preferenceMaxAgeDays:730,preferenceMinEffectiveScore:1000,
+      preferenceMinConfidenceBasisPoints:2500,explanationTemplate:'按人数和场景提供建议',displayConfiguration:{},draftReason:'服务事务回归',idempotencyKey:randomUUID()})
+    const policyRows=await pool.query(`SELECT outbox.aggregate_id::text FROM mbox.recommendation_policy_versions policy
+      JOIN mbox.outbox_messages outbox ON outbox.tenant_id=policy.tenant_id AND outbox.store_id=policy.store_id AND outbox.aggregate_id=policy.id
+      WHERE policy.public_id=$1`,[policy.value.publicId])
+    expect(policyRows.rows).toHaveLength(1)
+  })
+
+
 })
 
 function asPool(pool: Pool): PostgresPool {

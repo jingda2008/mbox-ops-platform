@@ -1,3 +1,4 @@
+import { STAFF_EMPLOYEE_BINDING_HEADER, STAFF_SESSION_BINDING_HEADER } from '../../src/shared/staff-session-binding.js'
 import type { FastifyRequest } from 'fastify'
 import type {
   AuthenticatedStaffSession,
@@ -98,6 +99,7 @@ export class NormalizedRequestContextResolver {
       this.authentication.authenticateSession(scope, token),
       this.businessClock.current(scope),
     ])
+    assertStaffSessionBinding(request, authenticated.session)
     return toOperationsContext(scope, authenticated, businessDay.businessDate)
   }
 
@@ -105,6 +107,15 @@ export class NormalizedRequestContextResolver {
     const scope = await this.scopeResolver.resolve(request)
     if (!isUuid(scope.tenantId) || !isUuid(scope.storeId)) throw new TrustedStoreScopeError()
     return Object.freeze({ tenantId: scope.tenantId, storeId: scope.storeId })
+  }
+}
+
+export function assertStaffSessionBinding(request: FastifyRequest, session: { id: string; employeeId: string }): void {
+  const expected = request.headers[STAFF_SESSION_BINDING_HEADER]
+  const expectedEmployee = request.headers[STAFF_EMPLOYEE_BINDING_HEADER]
+  if ((expected !== undefined && expected !== session.id)
+    || (expectedEmployee !== undefined && expectedEmployee !== session.employeeId)) {
+    throw new NormalizedAuthenticationRequiredError('当前员工已切换，请重新登录后确认操作')
   }
 }
 

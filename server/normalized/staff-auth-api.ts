@@ -14,6 +14,7 @@ import {
 import {
   DEVICE_ACCESS_COOKIE,
   NormalizedAuthenticationRequiredError,
+  assertStaffSessionBinding,
   NormalizedRequestContextResolver,
   NormalizedStoreUnavailableError,
   STAFF_SESSION_COOKIE,
@@ -92,6 +93,7 @@ export const staffAuthApiPlugin: FastifyPluginAsync<StaffAuthApiOptions> = async
   }))
 
   app.post('/switch', async (request, reply) => handleRoute(reply, async () => {
+    if (request.headers['x-mbox-staff-session-id'] !== undefined) await options.requestContext.resolve(request)
     const body = readObject(request.body)
     const scope = await options.requestContext.resolveTrustedScope(request)
     const result = await options.auth.switchEmployee({
@@ -111,6 +113,7 @@ export const staffAuthApiPlugin: FastifyPluginAsync<StaffAuthApiOptions> = async
       scope,
       readRequestToken(request, STAFF_SESSION_COOKIE),
     )
+    assertStaffSessionBinding(request, authenticated.session)
     const businessDay = await options.businessClock.current(scope)
     return reply.send({
       data: {
@@ -122,6 +125,7 @@ export const staffAuthApiPlugin: FastifyPluginAsync<StaffAuthApiOptions> = async
   }))
 
   app.post('/heartbeat', async (request, reply) => handleRoute(reply, async () => {
+    if (request.headers['x-mbox-staff-session-id'] !== undefined) await options.requestContext.resolve(request)
     const scope = await options.requestContext.resolveTrustedScope(request)
     const result = await options.auth.heartbeat(
       scope,

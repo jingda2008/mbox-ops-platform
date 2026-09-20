@@ -23,7 +23,7 @@ for(const width of [320,360])test(`coupon refund review explicit decision and la
  await page.setViewportSize({width,height:700});await page.goto(fixture.staffUrl)
  await page.getByLabel('门店口令').fill(fixture.dailyCredential);await page.getByRole('button',{name:/验证设备/}).click()
  await page.getByLabel('员工账号').fill('chenfangyu');await page.getByLabel('四位 PIN').fill(fixture.employeePin);await page.getByRole('button',{name:/进入工作台/}).click()
- await expect(page.getByTestId('normalized-workspace')).toBeVisible();await page.goto('/staff/member-management');await page.getByRole('button',{name:/会员经营配置中心/}).click()
+ await expect(page.getByTestId('normalized-workspace')).toBeVisible();await page.goto('/staff/member-management#work=member-rules');await page.getByRole('button',{name:/会员经营配置中心/}).click()
  const panel=page.locator('.coupon-refund-reviews');await panel.locator('summary').click()
  await panel.getByRole('button',{name:'读取待复核权益',exact:true}).click()
  await expect(panel).toContainText(row.benefit_code)

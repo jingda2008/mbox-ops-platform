@@ -25,6 +25,7 @@ export interface StaffActionActor {
 }
 
 export interface StaffActionTableSession {
+  locationVersion?: number
   id: string
   guestCount: number
   capacityAtOpen: number

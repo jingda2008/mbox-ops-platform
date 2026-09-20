@@ -867,3 +867,47 @@
     color: var(--nw-green);
   }
 }
+
+.normalized-freshness.is-stale b { color: #8b4b10; }
+.normalized-freshness.is-stale b > span { background: #b57526; box-shadow: none; }
+
+.staff-task-section-nav,.staff-work-mode{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px}
+.staff-task-section-nav button,.staff-work-mode button{min-height:44px;padding:10px 16px;border:1px solid #d8ded9;border-radius:12px;background:#fff;color:#263d30}
+.staff-task-section-nav [aria-current=page],.staff-work-mode [aria-pressed=true]{background:#315d46;color:#fff}
+.staff-task-sections>div[hidden]{display:none}
+.staff-member-navigation>summary{cursor:pointer;min-height:44px;padding:14px;font-weight:650}
+.staff-member-navigation>button{width:100%}
+.membership-business-ratio{display:grid;grid-template-columns:1fr 1fr;gap:12px;border:1px solid #d8ded9;border-radius:12px;padding:12px}
+.membership-business-ratio small{grid-column:1/-1}
+.membership-configuration-fields{min-width:0;border:0;padding:0}
+:is(.staff-module-body,.staff-actions-panel,.normalized-workspace) :is(button,select,input):focus-visible{outline:3px solid #315d46;outline-offset:3px}
+@media(max-width:600px){
+  :is(.staff-module-body,.staff-actions-panel,.normalized-workspace) :is(button,select,input){min-height:44px}
+  :is(.staff-module-body,.staff-actions-panel) :is(input,textarea,select){font-size:16px}
+  .staff-task-section-nav{position:sticky;top:0;z-index:3;background:#f6f8f5;padding:8px 0}
+  .staff-member-navigation>summary{font-size:16px}
+}
+.inventory-selling-guide>summary,.staff-finance-management>summary{min-height:44px;padding:12px 8px;cursor:pointer;font-weight:650;box-sizing:border-box}
+
+.staff-member-workspace { display:grid; gap:12px; margin:12px 0; padding:16px; background:#fff; border:1px solid #dce5df; border-radius:16px; }
+.staff-member-workspace > div { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+.staff-member-workspace small { flex-basis:100%; color:#5c6c62; }
+.staff-member-workspace button, .staff-todo-filters button, .staff-unified-todos button { min-height:44px; border:1px solid #dce5df; border-radius:10px; background:#fff; color:#315d46; padding:8px 12px; cursor:pointer; }
+.staff-member-workspace button[aria-current=page], .staff-todo-filters button[aria-pressed=true] { color:white; background:#315d46; }
+.staff-return-actions { display:flex; gap:8px; flex-wrap:wrap; }
+.staff-unified-todos .normalized-section-heading { gap:12px; }
+.staff-unified-todos small { color:#596b60; }
+.staff-todo-filters { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; margin:16px 0; }
+.staff-todo-filters > div { display:flex; gap:8px; }
+.staff-todo-filters label { display:flex; align-items:center; gap:8px; }
+.staff-todo-filters select { min-height:44px; font-size:16px; }
+.staff-todo-list { display:grid; gap:10px; }
+.staff-todo-list article { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px; border:1px solid #dce5df; border-radius:12px; }
+.staff-todo-list article > div { min-width:0; overflow-wrap:anywhere; }
+.staff-todo-list strong { display:block; margin-top:6px; }
+.staff-todo-list p { margin:6px 0; color:#596b60; }
+.staff-todo-list button { flex-shrink:0; }
+.staff-unified-todos details, .staff-operating-summary > summary { margin-top:12px; }
+.staff-unified-todos summary, .staff-operating-summary > summary { cursor:pointer; min-height:44px; padding:12px 0; }
+.staff-todo-target { outline:3px solid #315d46; outline-offset:4px; scroll-margin-top:20px; }
+@media(max-width:480px) { .staff-todo-list article { align-items:stretch; flex-direction:column; gap:6px; } .staff-todo-list button { align-self:flex-start; } }

@@ -20,6 +20,7 @@ export function TableRecommendationSheet({ api,tableCode,tableSessionId,onClose,
   onClose(): void
   onSaved(message: string): void
 }) {
+  const [loadAttempt,setLoadAttempt] = useState(0)
   const [session,setSession] = useState<StaffRecommendationSession | null>(null)
   const [loading,setLoading] = useState(true)
   const [busy,setBusy] = useState(false)
@@ -30,15 +31,16 @@ export function TableRecommendationSheet({ api,tableCode,tableSessionId,onClose,
 
   useEffect(() => {
     const controller = new AbortController()
-    setLoading(true);setError('')
+    setLoading(true);setError('');setSession(null)
     api.loadTableRecommendation(tableSessionId,controller.signal).then((value) => {
+      if (controller.signal.aborted) return
       setSession(value)
       setSourceProductId(value?.options[0]?.productId ?? '')
       setTargetProductId(value?.options[1]?.productId ?? '')
-    }).catch((cause) => setError(cause instanceof Error ? cause.message : '桌台推荐暂时无法读取'))
-      .finally(() => setLoading(false))
+    }).catch((cause) => { if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : '桌台推荐暂时无法读取') })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
     return () => controller.abort()
-  }, [api,tableSessionId])
+  }, [api,tableSessionId,loadAttempt])
 
   const targetOptions = useMemo(
     () => session?.options.filter((option) => option.productId!==sourceProductId) ?? [],
@@ -87,7 +89,7 @@ export function TableRecommendationSheet({ api,tableCode,tableSessionId,onClose,
           <button type="button" className="staff-primary-action" disabled={busy || !targetProductId}
             onClick={() => void submit()}>{busy ? '正在确认…' : '确认记录调整'}</button>
         </div> : null}
-        {error ? <p className="staff-recommendation-error" role="alert">{error}</p> : null}
+        {error ? <div className="staff-recommendation-error" role="alert"><p>{error}</p>{session === null && <button type="button" disabled={loading} onClick={() => setLoadAttempt(value => value + 1)}>重新读取本桌推荐</button>}</div> : null}
       </div>
     </section>
   </div>

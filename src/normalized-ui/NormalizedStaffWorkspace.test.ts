@@ -145,7 +145,8 @@ describe('NormalizedStaffWorkspaceView', () => {
     expect(html).not.toContain('按需加载')
     expect(html).not.toContain('available')
     expect(html).toContain('项已就绪')
-    expect(html).toContain('下一步先处理什么')
+    expect(html).toContain('营业状态与待处理')
+    expect(html).not.toContain('normalized-task-queue')
   })
 
   it('shows active work instead of a misleading zero ready count', () => {

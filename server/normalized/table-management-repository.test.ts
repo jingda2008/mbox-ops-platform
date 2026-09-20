@@ -295,12 +295,22 @@ integration('normalized table management PostgreSQL concurrency', () => {
 
   it('locks source and target, transfers the session, and preserves ownership through the session id', async () => {
     const opened = await commands.open(openCommand(transferSourceId, 2, 'transfer-source'))
-    const transferred = await commands.transfer({
-      ...base('transfer-session'),
-      tableSessionId: opened.value.id,
-      targetTableId: transferTargetId,
+    const command = {
+      ...base('transfer-session'), tableSessionId: opened.value.id,
+      targetTableId: transferTargetId, expectedSourceTableId: transferSourceId, expectedLocationVersion: 0,
       reason: '客人希望更靠近舞台，目标桌已确认空闲',
-    })
+    }
+    const transferred = await commands.transfer(command)
+    const replay = await commands.transfer(command)
+    expect(replay.value).toEqual(transferred.value)
+    await expect(commands.transfer({ ...command, ...base('stale-transfer'), targetTableId: transferSourceId }))
+      .rejects.toBeInstanceOf(TableManagementConflictError)
+    // A -> B -> A is still a changed location; source id alone cannot detect it.
+    await commands.transfer({ ...base('move-back'), tableSessionId: opened.value.id,
+      targetTableId: transferSourceId, expectedSourceTableId: transferTargetId, expectedLocationVersion: 1 })
+    await expect(commands.transfer({ ...command, ...base('aba-stale-transfer') }))
+      .rejects.toBeInstanceOf(TableManagementConflictError)
+    await commands.transfer({ ...command, ...base('fresh-transfer'), expectedLocationVersion: 2 })
     expect(transferred.value).toMatchObject({
       tableSessionId: opened.value.id,
       sourceTableId: transferSourceId,

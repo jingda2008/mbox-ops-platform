@@ -111,7 +111,7 @@ export function OperatingHistoryPanel({api,businessDate,standalone=false,initial
       {data.receipts.length===0?<p>所选期间没有已入账收退款流水；不代表没有订单或渠道待核对款项。</p>:data.receipts.map(row=><article key={row.provider}>
         <strong>{provider(row.provider)}</strong><span>收款 ¥{money(row.receivedMinor)} · 退款 ¥{money(row.refundedMinor)} · 净收 ¥{money(row.netMinor)}</span>
       </article>)}</>}
-      <h4>历史订单与送达状态</h4><p>每页50单；送达员工与时间取自正式送达操作记录，缺失凭据不推测。此处为查询快照，不是已扎账确认。</p>
+      <h4>历史订单与送达状态</h4><p>每页50单；送达员工与时间取自正式送达操作记录，缺失凭据不推测。当前为查询结果，营业日是否已结账请查看日结状态</p>
       {data.orders.length===0&&<p>没有符合筛选条件的订单。</p>}
       {groupOrdersBySession(data.orders).map(group=><section key={group.key}>
         <h4>{group.orders[0].tableCode} · {group.orders[0].areaName??''} · 桌次 {group.orders[0].sessionPublicId??group.key}</h4>

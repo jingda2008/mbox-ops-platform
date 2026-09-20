@@ -34,6 +34,7 @@ export interface OperationsTableView {
   status: 'available' | 'paused' | 'retired'
   assignedToActor: boolean
   activeSession: null | {
+    locationVersion: number
     id: string
     publicId: string
     businessDate: string
@@ -113,6 +114,7 @@ interface TableRow extends Record<string, unknown> {
   capacity: number
   status: OperationsTableView['status']
   assigned_to_actor: boolean
+  location_version: number | null
   session_id: string | null
   session_public_id: string | null
   business_date: string | null
@@ -268,7 +270,7 @@ export async function readTables(
           AND assignment.starts_at <= clock_timestamp()
           AND (assignment.ends_at IS NULL OR assignment.ends_at > clock_timestamp())
       ) AS assigned_to_actor,
-      session.id AS session_id, session.public_id AS session_public_id,
+      session.location_version, session.id AS session_id, session.public_id AS session_public_id,
       session.business_date::text, session.guest_count, session.capacity_at_open,
       session.guest_profile_snapshot, session.guest_cart_writes_frozen,
       latest_mood.mood_code, latest_mood.mood_occurred_at,
@@ -505,6 +507,7 @@ function mapTable(row: TableRow): OperationsTableView {
     status: row.status,
     assignedToActor: row.assigned_to_actor,
     activeSession: row.session_id === null ? null : {
+      locationVersion: Number(row.location_version ?? 0),
       id: row.session_id,
       publicId: row.session_public_id!,
       businessDate: row.business_date!,

@@ -192,6 +192,7 @@ test('manager mobile pages prioritize current actions and keep low-frequency det
   }
 
   await page.goto('/staff/inventory')
+  await page.getByRole('button', { name: '商品与上架', exact: true }).click()
   await page.getByRole('button', { name: /酒水上架流程/ }).click()
   await page.getByLabel('搜索配置商品').fill(data.orderableProductName)
   await page.locator('.catalog-management-list article').filter({ hasText: data.orderableProductName }).first().getByRole('button', { name: '编辑' }).click()

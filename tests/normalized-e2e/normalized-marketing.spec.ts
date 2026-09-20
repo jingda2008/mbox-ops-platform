@@ -4,7 +4,7 @@ for(const width of [320,360])test(`marketing independent approvals, queue and re
   const fixture=JSON.parse(await readFile('artifacts/normalized-browser/fixture.json','utf8'))
   test.skip(!fixture.memberCardFixture,'Requires isolated fixture; no external marketing')
   const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message))
-  async function login(target:Page,employee:string){await target.goto(fixture.staffUrl);await target.getByLabel('门店口令').fill(fixture.dailyCredential);await target.getByRole('button',{name:/验证设备/}).click();await target.getByLabel('员工账号').fill(employee);await target.getByLabel('四位 PIN').fill(fixture.employeePin);await target.getByRole('button',{name:/进入工作台/}).click();await expect(target.getByTestId('normalized-workspace')).toBeVisible();await target.goto('/staff/member-management')}
+  async function login(target:Page,employee:string){await target.goto(fixture.staffUrl);await target.getByLabel('门店口令').fill(fixture.dailyCredential);await target.getByRole('button',{name:/验证设备/}).click();await target.getByLabel('员工账号').fill(employee);await target.getByLabel('四位 PIN').fill(fixture.employeePin);await target.getByRole('button',{name:/进入工作台/}).click();await expect(target.getByTestId('normalized-workspace')).toBeVisible();await target.goto('/staff/member-management#work=member-marketing')}
   await page.setViewportSize({width,height:800});await login(page,fixture.employeeCode)
   const panel=page.getByRole('region',{name:'营销联系管理'}),code=`BROWSER_NOTICE_${width}_${Date.now()}`
   await panel.getByLabel('营销操作原因',{exact:true}).fill('隔离营销管理验收')

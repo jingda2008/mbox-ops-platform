@@ -86,6 +86,16 @@ describe('NormalizedRequestContextResolver', () => {
       businessDate: '2026-08-10',
       capabilities: ['dashboard.view'],
     })
+    const stale = await app.inject({ method:'GET',url:'/context',headers:{authorization:`Bearer ${token}`,'x-mbox-staff-session-id':'another-session'} })
+    expect(stale.statusCode).toBe(401)
+    const bound = await app.inject({ method:'GET',url:'/context',headers:{authorization:`Bearer ${token}`,'x-mbox-staff-session-id':session.id} })
+    expect(bound.statusCode).toBe(200)
+    expect(bound.json().employeeId).toBe(employeeId)
+    const staleEmployee = await app.inject({method:'GET',url:'/context',headers:{authorization:`Bearer ${token}`,'x-mbox-staff-employee-id':'previous-employee'}})
+    expect(staleEmployee.statusCode).toBe(401)
+    const boundEmployee = await app.inject({method:'GET',url:'/context',headers:{authorization:`Bearer ${token}`,'x-mbox-staff-employee-id':employeeId}})
+    expect(boundEmployee.statusCode).toBe(200)
+    expect(boundEmployee.json().employeeId).toBe(employeeId)
     expect(authenticateSession).toHaveBeenCalledWith({ tenantId, storeId }, token)
     expect(businessClock.current).toHaveBeenCalledWith({ tenantId, storeId })
   })

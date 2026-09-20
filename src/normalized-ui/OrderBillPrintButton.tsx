@@ -88,7 +88,7 @@ function DailyReportPrintChoices(props: BillProps) {
   const [legacyChecked,setLegacyChecked] = useState(!hasLegacyRequest)
   return <section aria-label="扎账打印内容">
     {!legacyChecked&&<div><p>这个期间保留了一次旧版打印请求。先核对原任务和出纸情况，再生成新版票据。</p><BillPrintAction {...props} legacyReport/><button type="button" onClick={()=>setLegacyChecked(true)}>已核对旧票，准备新版打印</button></div>}
-    {pending&&<p role="status">原打印回执尚未确认，先核对这一次；原格式已保留，不影响其他日期或订单打印。</p>}
+    {pending&&<p role="status">尚未确认上一张是否打印，先核对这一次；原格式已保留，不影响其他日期或订单打印。</p>}
     <label>打印内容<select value={mode} disabled={pending!==null} onChange={event=>{if(!pendingRef.current)setMode(event.target.value as typeof mode)}}><option value="summary">紧凑汇总（默认）</option><option value="details">逐单明细</option><option value="both">汇总和明细</option></select></label>
     <label>附加汇总<select value={grouping} disabled={pending!==null} onChange={event=>{if(!pendingRef.current)setGrouping(event.target.value as typeof grouping)}}><option value="none">不附加</option><option value="categories">分类</option><option value="products">商品</option><option value="bundles">套餐与套餐内出品</option></select></label>
     {error?<p role="alert">{error}<button type="button" onClick={()=>setRevision(value=>value+1)}>重试预览</button></p>:!preview||preview.selection!==selection?<p role="status">正在准备打印预览</p>:<>

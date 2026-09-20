@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { BadgeCheck, CircleAlert, Gift, LoaderCircle, ScanLine } from 'lucide-react'
 import {
   GROUP_VOUCHER_PLATFORM_CODES,
@@ -25,6 +25,11 @@ export function GroupVoucherRedemptionPanel({
   const canRedeem = auth.permissions.includes('commercial.voucher.redeem')
   const canView = canRedeem || auth.permissions.includes('commercial.voucher.view')
   const { confirmAction } = useConfirmationDialog()
+  const inputVersion = useRef(0)
+  const [loadError, setLoadError] = useState('')
+  const [loaded, setLoaded] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+  useEffect(() => () => { inputVersion.current++ }, [api, auth.employee.id])
   const [platforms, setPlatforms] = useState<GroupVoucherPlatformStatus[]>([])
   const [recent, setRecent] = useState<GroupVoucherRedemptionResult[]>([])
   const [platform, setPlatform] = useState<GroupVoucherPlatformCode>('meituan')
@@ -35,19 +40,23 @@ export function GroupVoucherRedemptionPanel({
   const [scannerOpen, setScannerOpen] = useState(false)
 
   const load = useCallback(async () => {
+    setRefreshing(true)
+    try {
     const [platformResponse, voucherResponse] = await Promise.all([
       api.getEndpoint<{ data: GroupVoucherPlatformStatus[] }>('/api/commercial-ops/vouchers/platforms'),
       api.getEndpoint<{ data: GroupVoucherRedemptionResult[] }>('/api/commercial-ops/vouchers'),
     ])
     setPlatforms(platformResponse.data)
     setRecent(voucherResponse.data.slice(0, 20))
+    setLoaded(true); setLoadError('')
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : '核销记录暂时无法读取')
+    } finally { setRefreshing(false) }
   }, [api])
 
   useEffect(() => {
     if (!canView) return
-    void load().catch((error: unknown) => {
-      setNotice({ tone: 'error', text: error instanceof Error ? error.message : '团购核销数据暂时无法读取' })
-    })
+    void load()
   }, [canView, load])
 
   if (!canView) return null
@@ -58,6 +67,7 @@ export function GroupVoucherRedemptionPanel({
   async function lookup() {
     const voucherCode = code.trim()
     if (!canRedeem || !enabled || voucherCode.length < 4 || busy) return
+    const version = inputVersion.current
     setBusy('prepare')
     setNotice(null)
     setPreview(null)
@@ -66,10 +76,11 @@ export function GroupVoucherRedemptionPanel({
         '/api/commercial-ops/vouchers/prepare',
         { platform, voucherCode },
       )
+      if (version !== inputVersion.current) return
       setPreview(prepared)
       setNotice({ tone: 'success', text: `已查询到${prepared.platformLabel}券，请核对后确认核销。` })
     } catch (error) {
-      setNotice({ tone: 'error', text: error instanceof NormalizedApiError ? error.message : '查询失败，券尚未核销' })
+      if (version === inputVersion.current) setNotice({ tone: 'error', text: error instanceof NormalizedApiError ? error.message : '查询失败，券尚未核销' })
     } finally {
       setBusy('')
     }
@@ -77,15 +88,17 @@ export function GroupVoucherRedemptionPanel({
 
   async function consume() {
     if (!preview || !canRedeem || busy) return
+    const version = inputVersion.current
+    const body = { platform, voucherCode: code.trim(), prepareHandle: preview.prepareHandle }
     if (!(await confirmAction({
       title: '确认核销团购券',
       description: `${preview.platformLabel} · ${preview.campaignName}\n券码 ${preview.voucherCodeMasked}\n面额 ¥${yuan(preview.faceValueMinor)} · 结算 ¥${yuan(preview.settlementAmountMinor)}\n确认后将向平台核销，不能撤销。`,
       confirmLabel: '确认核销',
     }))) return
+    if (version !== inputVersion.current) return
     setBusy('consume')
     setNotice(null)
     try {
-      const body = { platform, voucherCode: code.trim(), prepareHandle: preview.prepareHandle }
       const redeemed = await executeRecoverableCommand(
         `${auth.employee.id}:voucher-redeem:${preview.prepareHandle}`,
         body,
@@ -96,9 +109,8 @@ export function GroupVoucherRedemptionPanel({
           { idempotencyKey },
         ),
       )
-      setPreview(null)
-      setCode('')
-      setNotice({ tone: 'success', text: `${redeemed.platform}券 ${redeemed.voucherCodeMasked} 已核销。` })
+      if (version === inputVersion.current) { setPreview(null); setCode(''); inputVersion.current++ }
+      setNotice({ tone: 'success', text: `${GROUP_VOUCHER_PLATFORM_LABELS[redeemed.platform as GroupVoucherPlatformCode]??'团购'}券 ${redeemed.voucherCodeMasked} 已核销。` })
       await load()
     } catch (error) {
       setNotice({ tone: 'error', text: error instanceof NormalizedApiError ? error.message : '核销未完成，请按平台结果核对' })
@@ -122,10 +134,11 @@ export function GroupVoucherRedemptionPanel({
     {canRedeem && <form className="staff-module-form" onSubmit={(event) => { event.preventDefault(); void lookup() }}>
       <header>
         <strong>查询待核销券</strong>
-        <small>{enabled ? `${selected?.label}当前可核销` : `${GROUP_VOUCHER_PLATFORM_LABELS[platform]}尚未配置，请先设置运行环境变量。`}</small>
+        <small>{enabled ? `${selected?.label}当前可核销` : `${GROUP_VOUCHER_PLATFORM_LABELS[platform]}尚未开通，请联系管理者。`}</small>
       </header>
       <label>平台
-        <select value={platform} onChange={(event) => {
+        <select disabled={busy === 'consume'} value={platform} onChange={(event) => {
+          inputVersion.current++
           setPlatform(event.target.value as GroupVoucherPlatformCode)
           setPreview(null)
         }}>
@@ -139,10 +152,10 @@ export function GroupVoucherRedemptionPanel({
       </label>
       <label className="inventory-code-field">券码或付款码
         <div>
-          <input required minLength={4} maxLength={256} value={code} autoComplete="off"
+          <input disabled={busy === 'consume'} required minLength={4} maxLength={256} value={code} autoComplete="off"
             placeholder="输入或扫描顾客出示的券码"
-            onChange={(event) => { setCode(event.target.value); setPreview(null) }} />
-          <button type="button" onClick={() => setScannerOpen(true)}><ScanLine size={16} />扫码</button>
+            onChange={(event) => { inputVersion.current++; setCode(event.target.value); setPreview(null) }} />
+          <button type="button" disabled={busy === 'consume'} onClick={() => setScannerOpen(true)}><ScanLine size={16} />扫码</button>
         </div>
       </label>
       <button type="submit" disabled={!enabled || code.trim().length < 4 || Boolean(busy)}>
@@ -160,12 +173,13 @@ export function GroupVoucherRedemptionPanel({
       </button>}
     </article>}
     <div className="staff-module-list" aria-label="最近核销">
-      {recent.length === 0
-        ? <p className="staff-module-empty">本营业日还没有团购核销记录</p>
+      {loadError && <div role="alert"><p>核销记录更新失败。已确认的核销结果仍然有效，请勿重复办理。</p><button type="button" disabled={refreshing} onClick={() => void load()}>重新读取核销记录</button></div>}
+      {!loaded ? <p className="staff-module-empty">{refreshing ? '正在读取核销记录' : '核销记录尚未读到'}</p> : recent.length === 0
+        ? !loadError && <p className="staff-module-empty">本营业日还没有团购核销记录</p>
         : recent.map((item) => <article key={item.id}>
           <div>
             <strong>{item.campaignName}</strong>
-            <small>{item.platform} · {item.voucherCodeMasked}</small>
+            <small>{GROUP_VOUCHER_PLATFORM_LABELS[item.platform as GroupVoucherPlatformCode]??'团购平台'} · {item.voucherCodeMasked}</small>
           </div>
           <b>¥{yuan(item.faceValueMinor)}</b>
         </article>)}
@@ -174,7 +188,7 @@ export function GroupVoucherRedemptionPanel({
       title="扫描团购券码或二维码"
       cameraLabel="团购券扫码摄像头画面"
       onClose={() => setScannerOpen(false)}
-      onDetected={(value) => { setCode(value); setPreview(null); setScannerOpen(false) }}
+      onDetected={(value) => { inputVersion.current++; setCode(value); setPreview(null); setScannerOpen(false) }}
     />}
   </section>
 }

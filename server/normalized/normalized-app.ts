@@ -87,6 +87,7 @@ import {
   STAFF_SESSION_COOKIE,
   RESERVATION_SESSION_HEADER,
   NormalizedRequestContextResolver,
+  assertStaffSessionBinding,
   fixedStoreScopeResolver,
   readRequestToken,
 } from './normalized-request-context.js'
@@ -524,6 +525,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
         staffAuth.authenticateSession(trusted, token),
         businessClock.current(trusted),
       ])
+      assertStaffSessionBinding(request, authenticated.session)
       return {
         scope: trusted,
         employeeId: authenticated.session.employeeId,

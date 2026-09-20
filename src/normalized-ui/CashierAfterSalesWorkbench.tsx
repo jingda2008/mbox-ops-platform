@@ -1,3 +1,4 @@
+import { useStaffViewState, staffLocationSearch } from './staff-view-state'
 import {ItemAfterSalesPanel} from './ItemAfterSalesPanel'
 import {PaymentFinanceReviewPanel} from './PaymentFinanceReviewPanel'
 import {REFUND_PURPOSE_LABELS} from '../shared/refund-purpose'
@@ -89,9 +90,9 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
   const [message, setMessage] = useState<string | null>(null)
   const [refreshDelayed,setRefreshDelayed]=useState(false)
   const [view, setView] = useState<CashierWorkbenchView | null>(null)
-  const [query, setQuery] = useState('')
-  const [areaId, setAreaId] = useState('all')
-  const [paymentState, setPaymentState] = useState<'all' | 'unpaid' | 'processing' | 'completed' | 'refunded'>('all')
+  const [query, setQuery] = useStaffViewState(`cashier:${staffLocationSearch()}:query`, () => new URLSearchParams(staffLocationSearch()).get('query') ?? '')
+  const [areaId, setAreaId] = useStaffViewState(`cashier:${staffLocationSearch()}:area`, 'all')
+  const [paymentState, setPaymentState] = useStaffViewState<'all' | 'unpaid' | 'processing' | 'completed' | 'refunded'>(`cashier:${staffLocationSearch()}:payment-state`, 'all')
   const [areaOptions, setAreaOptions] = useState<Array<{ id: string; name: string }>>([])
   const [busyKey, setBusyKey] = useState<string | null>(null)
   const [notice, setNotice] = useState<WorkbenchNotice | null>(null)
@@ -284,6 +285,7 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
 
   return <>{refreshDelayed&&<p role="status" data-action-reveal="off">收银状态更新暂时延迟，已有记录保留，请刷新核对；不要因显示未变重复收退款。</p>}{view && auth.permissions.includes('reconciliation.view') && <CashierDaySummary api={api} businessDate={view.businessDate} revision={view} printEmployeeId={auth.permissions.includes('order.bill.print')?auth.employee.id:undefined}/>}{auth.permissions.includes('reconciliation.view')&&<PaymentFinanceReviewPanel api={api} canManage={auth.permissions.includes('reconciliation.manage')}/>} {view && auth.permissions.includes('reconciliation.view') && <OperatingHistoryPanel key={auth.employee.id} api={api} businessDate={view.businessDate} />}
     <CashierAfterSalesWorkbenchView
+      initialExpandedOrderId={new URLSearchParams(staffLocationSearch()).get('orderId')}
     auth={auth}
     view={view}
     phase={phase}
@@ -357,7 +359,7 @@ export function CashierAfterSalesWorkbenchView({
   const [cancellationDraft, setCancellationDraft] = useState<CancellationDraft | null>(null)
   const [kdsCancellationDraft, setKdsCancellationDraft] = useState<KdsCancellationDraft | null>(null)
   const [settlementExceptionDraft, setSettlementExceptionDraft] = useState<SettlementExceptionDraft | null>(null)
-  const [summaryFilter, setSummaryFilter] = useState<'all' | 'requested' | 'processing'>('all')
+  const [summaryFilter, setSummaryFilter] = useStaffViewState<'all' | 'requested' | 'processing'>(`cashier:${staffLocationSearch()}:summary-filter`, 'all')
   const [focusedBusinessDayOrderId, setFocusedBusinessDayOrderId] = useState<string | null>(null)
 
   useEffect(() => {
@@ -513,7 +515,7 @@ export function CashierAfterSalesWorkbenchView({
           </summary>
           <div className="cashier-business-day-facts" aria-label={`${blocker.tableCode}${blocker.label}明细`}>
             {blocker.facts.length === 0
-              ? <p>权威事实正在确认，请刷新后重试；系统不会把读取失败解释成已经处理。</p>
+              ? <p>正在确认处理结果，请刷新后重试；系统不会把读取失败解释成已经处理。</p>
               : blocker.facts.map((fact) => {
                 const access = businessDayFactRouteAccess(fact.actionRoute, auth.permissions)
                 return <article
@@ -537,7 +539,7 @@ export function CashierAfterSalesWorkbenchView({
                   </dl>
                   {access.allowed
                     ? <button type="button" onClick={(event) => {event.stopPropagation();openBusinessDayFact(fact)}}>打开{access.moduleLabel}核对</button>
-                    : <p>请交给具备“{access.moduleLabel}”入口权限的同事继续处理；本账号只能查看日结阻断事实。</p>}
+                    : <p>请交给具备“{access.moduleLabel}”入口权限的同事继续处理；本账号只能查看影响营业日结账的待办。</p>}
                 </article>
               })}
           </div>
@@ -1002,7 +1004,7 @@ function ActivityCashierPanel({ registrations, auth, actions, busyKey, onMutatio
   busyKey: string | null
   onMutation(key: string, endpoint: string, body: unknown, successMessage: string): Promise<boolean>
 }) {
-  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [expandedId, setExpandedId] = useState<string | null>(() => new URLSearchParams(staffLocationSearch()).get('registrationId'))
   return <section className="cashier-activity-worklist" aria-label="活动收银工作台">
     <header>
       <span><b>活动收银</b><small>仅显示报名、支付、退款和库存名额恢复状态；不显示顾客联系方式。</small></span>
@@ -1095,12 +1097,12 @@ function ActivityCashierRegistrationCard({ registration, auth, actions, busyKey,
     </button>
     {expanded && <div className="cashier-order-detail">
       <section>
-        <h3>活动报名事实</h3>
+        <h3>活动报名记录</h3>
         <div className="cashier-line"><span><b>活动编号</b><small>{shortReference(registration.activityPublicId)} · 报名状态：{registration.status}</small></span><strong>{registration.partySize} 人</strong></div>
         <p className="cashier-workbench-boundary">本页不显示或导出顾客联系方式。活动退款只能由店内收银处理，顾客端没有自助退款入口。</p>
       </section>
       <section>
-        <h3>收款、退款与受控重收</h3>
+        <h3>收款、退款与再次收款</h3>
         {hasUnrefundedLateSuccess && <div className="cashier-channel-pending">
           <strong>旧报名付款晚到成功，需先退款处理</strong>
           <p>以下旧周期收款不会记入当前报名，也不能被忽略。所有仍有可退余额的旧款完成退款前，系统会阻止当前报名继续收款。</p>
@@ -1412,7 +1414,7 @@ function RefundBlock({
     || (!manualProvider && refund.status === 'processing' && refund.providerSubmissionState === 'not_started'))
     && actions.canExecuteRefund
   const canRecordManual = refund.status === 'processing' && actions.canExecuteRefund && manualProvider
-  return <div className={`cashier-refund-row is-${refund.status}`}>
+  return <div className={`cashier-refund-row is-${refund.status}`} data-staff-todo-id={`refund:${refund.id}`}>
     {refund.afterSalesCase&&<section aria-label="原商品售后">
       <p>商品售后退款 · 请通过原售后单统一处理。</p>
       <button type="button" onClick={()=>setCaseOpen(true)} disabled={!refund.afterSalesCase.orderItemId}>处理原售后单</button>

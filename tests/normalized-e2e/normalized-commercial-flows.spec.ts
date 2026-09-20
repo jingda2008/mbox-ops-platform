@@ -578,6 +578,7 @@ test('mobile manager completes device verification and reaches role-scoped works
     await expect(page.getByRole('heading', { name: '现在要做什么' })).toBeVisible()
     await expect(page.locator('.normalized-mobile-nav')).toBeVisible()
   }
+  await page.locator('.staff-operating-summary > summary').click()
   const liveSummary = page.getByRole('button', { name: /营业桌台/ })
   await expect(liveSummary).toBeVisible()
   await expect(liveSummary).toContainText(/[1-9]\d* 项进行中/)
@@ -727,6 +728,8 @@ test('mobile manager payment choices stay synchronized with two guests at the sa
   const tableActions = page.getByRole('dialog', { name: 'W01桌台操作' })
   await expect(tableActions).toBeVisible()
   await expect(tableActions.getByRole('button', { name: '协助点单' })).toBeVisible()
+  await expect(tableActions.getByRole('button', { name: '赠送商品' })).toBeHidden()
+  await tableActions.locator('.staff-table-more > summary').click()
   await expect(tableActions.getByRole('button', { name: '赠送商品' })).toBeVisible()
   const memberBenefitTasks = tableActions.getByRole('region', { name: 'W01会员权益' })
   await expect(memberBenefitTasks).toBeVisible()
@@ -804,6 +807,7 @@ test('mobile manager payment choices stay synchronized with two guests at the sa
   await expect(barcodeSheet.getByText('测试付款动作已建立')).toBeVisible()
   await barcodeSheet.getByRole('button', { name: '完成演练' }).click()
 
+  if (!await tableActions.getByRole('button', { name: '赠送商品' }).isVisible()) await tableActions.locator('.staff-table-more > summary').click()
   await tableActions.getByRole('button', { name: '赠送商品' }).click()
   const giftSheet = page.getByRole('dialog', { name: 'W01赠送商品' })
   await expect(giftSheet).toContainText('按本人岗位额度执行，赠送原因全程留痕')

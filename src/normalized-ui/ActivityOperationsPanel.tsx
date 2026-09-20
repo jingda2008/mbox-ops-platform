@@ -3,6 +3,7 @@ import { CheckCircle2, ChevronDown, RefreshCw, UserCheck, XCircle } from 'lucide
 import type { NormalizedApiClient, StaffAuthView } from '../normalized-api'
 import { useConfirmationDialog } from './ConfirmationDialog'
 import { inventoryUnitLabel } from './inventory-presentation'
+import { executeRecoverableCommand } from './recoverable-command'
 import { MediaAssetPicker } from './MediaAssetPicker'
 import { NumberInputWithUnit } from './NumberInputWithUnit'
 import './activity-operations-panel.css'
@@ -100,6 +101,9 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
   const detailGeneration=useRef(0)
   useEffect(()=>()=>{detailGeneration.current++},[api])
   const closeAttempt=useRef<{fingerprint:string;key:string}|null>(null)
+  const createRecoveryKey = `mbox.activity-create.v1:${auth.employee.id}`
+  const createAttempt = useRef<{ key: string; draft: DraftForm } | null>(null)
+  const [createUncertain, setCreateUncertain] = useState(false)
   const [notice, setNotice] = useState('')
   const [componentCatalog, setComponentCatalog] = useState<ActivityPackageComponentCatalogItem[]>([])
   const [componentCatalogState, setComponentCatalogState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
@@ -166,7 +170,7 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
   async function loadDetail(publicId: string) {
     const generation=++detailGeneration.current
     setRevealedContacts({})
-    setDetail(null);setDraft(null);setReason('')
+    setDetail(null);setDraft(null);setReason('');setCreateUncertain(false);createAttempt.current=null
     setBusy('detail'); setNotice('')
     try {
       const response = await api.getEndpoint<{ data: unknown }>(`/api/staff/activity-operations/${encodeURIComponent(publicId)}`)
@@ -181,28 +185,40 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
   async function saveDraft(event: FormEvent) {
     event.preventDefault()
     if (!draft || !detail || busy) return
+    const isNew = detail.activity.publicId === ''
+    const wasUncertain = createUncertain
     setBusy('draft'); setNotice('')
     try {
-      const isNew = detail.activity.publicId === ''
-      const response = isNew
-        ? await api.postEndpoint<unknown>('/api/staff/activity-operations', draftPayload(draft), {
-          idempotencyKey: operationKey('activity-draft-create'),
-        })
-        : await api.putEndpoint<unknown>(
-          `/api/staff/activity-operations/${encodeURIComponent(detail.activity.publicId)}/draft`,
-          draftPayload(draft),
-          { idempotencyKey: operationKey('activity-draft-update') },
-        )
-      const saved = activityDetail(response)
+      let saved: ActivityDetail
+      if (isNew) {
+        const attempt = createAttempt.current ?? { key: operationKey('activity-draft-create'), draft }
+        const body = draftPayload(attempt.draft)
+        // Validate first, then preserve the exact attempt before any server write.
+        sessionStorage.setItem(createRecoveryKey, JSON.stringify(attempt))
+        createAttempt.current = attempt; setCreateUncertain(true)
+        saved = await executeRecoverableCommand(`${auth.employee.id}:activity-create`, body, attempt.key,
+          async idempotencyKey => activityDetail(await api.postEndpoint('/api/staff/activity-operations', body, { idempotencyKey })))
+        sessionStorage.removeItem(createRecoveryKey)
+        createAttempt.current = null; setCreateUncertain(false)
+      } else {
+        const body = draftPayload(draft)
+        saved = await executeRecoverableCommand(`${auth.employee.id}:activity-update:${detail.activity.publicId}`, body, operationKey('activity-draft-update'),
+          async idempotencyKey => activityDetail(await api.putEndpoint(`/api/staff/activity-operations/${encodeURIComponent(detail.activity.publicId)}/draft`, body, { idempotencyKey })))
+      }
       setSelected(saved.publicId)
       setDetail({ activity: saved, registrations: [] })
       setDraft(draftFromActivity(saved))
+      await loadActivities()
       setNotice(isNew
         ? '活动草稿已建立并读回。请由另一位有发布权限的人员复核后发布。'
         : '活动草稿已保存并读回。发布后这些客户承诺将锁定。')
-      await loadActivities()
-    } catch (error) { setNotice(message(error, '活动草稿没有保存')) }
-    finally { setBusy('') }
+    } catch (error) {
+      const status = typeof error === 'object' && error !== null && 'status' in error ? error.status : null
+      if (isNew && !wasUncertain && typeof status === 'number' && status >= 400 && status < 500 && ![408,409,429].includes(status)) {
+        sessionStorage.removeItem(createRecoveryKey); createAttempt.current = null; setCreateUncertain(false)
+      }
+      setNotice(message(error, '草稿结果尚未确认，请核对上次建立结果'))
+    } finally { setBusy('') }
   }
 
   async function registrationAction(registration: Registration, action: 'check-in' | 'fulfill-package' | 'no-show' | 'cancel') {
@@ -311,11 +327,20 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
     if(busy||closeInFlight.current)return
     detailGeneration.current++
     setRevealedContacts({});setReason('')
-    const nextDraft = emptyDraft()
+    let nextDraft: DraftForm
+    try {
+      const stored = sessionStorage.getItem(createRecoveryKey)
+      if (stored) {
+        const value: unknown = JSON.parse(stored)
+        if (typeof value !== 'object' || value === null || !('key' in value) || typeof value.key !== 'string' || !('draft' in value) || typeof value.draft !== 'object' || value.draft === null || !('title' in value.draft) || typeof value.draft.title !== 'string') throw new Error('待核对的活动草稿无法读取，请联系管理者核对原记录')
+        createAttempt.current = value as { key: string; draft: DraftForm }
+        nextDraft = createAttempt.current.draft; setCreateUncertain(true)
+      } else { nextDraft = emptyDraft(); createAttempt.current = null; setCreateUncertain(false) }
+    } catch (error) { setNotice(message(error, '无法读取本机草稿，请核对原记录')); return }
     setSelected(null)
     setDetail({ activity: draftShell(nextDraft), registrations: [] })
     setDraft(nextDraft)
-    setNotice('正在建立新活动草稿。费用、权益、退款和安全承诺请一次填写完整。')
+    setNotice(createAttempt.current ? '上次建立结果待核对，已恢复原资料。点击核对会沿用原操作，不会另建活动。' : '正在建立新活动草稿。费用、权益、退款和安全承诺请一次填写完整。')
   }
 
   async function stopRegistration(activity:ActivityDetail) {
@@ -428,7 +453,7 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
     </header>
     {expanded && <>
       {notice && <p className="activity-operations-notice" role="status">{notice}</p>}
-      <div className="activity-operations-toolbar"><span>{activities.length} 个活动</span><div>{canManage && <button type="button" onClick={startCreate}>新建活动草稿</button>}<button type="button" disabled={phase === 'loading'} onClick={() => void loadActivities()}><RefreshCw size={16} />刷新</button></div></div>
+      <div className="activity-operations-toolbar"><span>{activities.length} 个活动</span><div>{canManage && <button type="button" disabled={!!busy} onClick={startCreate}>新建活动草稿</button>}<button type="button" disabled={phase === 'loading'} onClick={() => void loadActivities()}><RefreshCw size={16} />刷新</button></div></div>
       {phase === 'error' && <button type="button" onClick={() => void loadActivities()}>重新读取</button>}
       <div className="activity-operations-list">{activities.map((activity) => <button type="button" disabled={!!busy} className={selected === activity.publicId ? 'is-selected' : ''} key={activity.publicId} onClick={() => {if(!closeInFlight.current)void loadDetail(activity.publicId)}}>
         <strong>{activity.title}</strong><span>{statusLabel(activity.status)} · {dateText(activity.startsAt)}</span><small>{activity.occupiedSeats}/{activity.capacity} 人 · 候补 {activity.waitlistedSeats} 人</small>
@@ -438,7 +463,7 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
         <div className="activity-operations-metrics"><span><strong>{detail.activity.occupiedSeats}</strong>已占名额</span><span><strong>{detail.activity.waitlistedSeats}</strong>候补人数</span><span><strong>{detail.activity.capacity}</strong>人数上限</span></div>
         {detail.activity.pointsReward > 0 && <p className="activity-operations-warning">历史活动配置了未版本化积分奖励，当前不会自动发放或对顾客展示；发布前必须改为0。</p>}
         {draft && canManage && <details className="activity-draft-editor" open={detail.activity.publicId === ''}><summary>{detail.activity.publicId === '' ? '填写活动草稿' : '编辑草稿'}（发布后不可静默修改）</summary><form onSubmit={(event) => void saveDraft(event)}>
-          <fieldset><legend>活动与时间</legend>
+          <fieldset disabled={busy === 'draft' || createUncertain}><legend>活动与时间</legend>
             <label>活动名称<input required minLength={2} maxLength={120} value={draft.title} onChange={(event) => updateDraft('title', event.target.value)} /></label>
             <label>活动类型<select value={draft.kind} onChange={(event) => updateDraft('kind', event.target.value)}><option value="member_night">会员音乐夜</option><option value="city_walk">城市漫步</option><option value="hike">徒步</option><option value="camping">露营</option><option value="music_picnic">音乐野餐</option><option value="proposal">求婚活动</option><option value="other">其他</option></select></label>
             <label className="wide">列表摘要<textarea rows={2} value={draft.summary} onChange={(event) => updateDraft('summary', event.target.value)} /></label>
@@ -450,7 +475,7 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
             <label className="wide">封面图片（可选）<input readOnly value={draft.coverUrl} placeholder="请通过下方图片库上传或选择（单张不超过 200KB）" /></label>
             <div className="wide"><MediaAssetPicker api={api} purpose="community_activity" value={draft.coverUrl} onChange={(coverUrl)=>updateDraft('coverUrl',coverUrl)} label="上传活动封面" /></div>
           </fieldset>
-          <fieldset><legend>费用、权益和客群</legend>
+          <fieldset disabled={busy === 'draft' || createUncertain}><legend>费用、权益和客群</legend>
             <label>计价方式<select value={draft.feeBasis} onChange={(event) => updateDraft('feeBasis', event.target.value)}><option value="per_registration">每次报名/每组</option><option value="per_person">每人</option></select></label>
             <label>预付方式<select value={draft.paymentMode} onChange={(event) => updateDraft('paymentMode', event.target.value as ActivityPaymentMode)}><option value="none">无需预付</option><option value="deposit_optional">订金可选</option><option value="deposit_required">必须付订金</option><option value="full_required">必须全额预付</option></select></label>
             <label>活动费用<NumberInputWithUnit inputMode="decimal" unit="元" value={draft.feeYuan} onChange={(event) => updateDraft('feeYuan', event.target.value)} /></label>
@@ -463,7 +488,7 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
             <label className="wide">会员权益或赠送<textarea rows={3} value={draft.memberBenefitText} onChange={(event) => updateDraft('memberBenefitText', event.target.value)} placeholder="没有则留空；已配置内容会在顾客详情可见" /></label>
             <p className="wide activity-operations-warning">活动积分奖励暂不开放：旧字段没有规则版本、预算和发放状态机，本页固定为0，不会在签到时静默发分。</p>
           </fieldset>
-          <fieldset><legend>活动套餐（活动票之外最多选一档）</legend>
+          <fieldset disabled={busy === 'draft' || createUncertain}><legend>活动套餐（活动票之外最多选一档）</legend>
             <label className="wide activity-package-required"><input type="checkbox" checked={draft.packageSelectionRequired} onChange={(event) => updateDraft('packageSelectionRequired', event.target.checked)} />报名必须选择套餐</label>
             <p className="wide activity-operations-warning">套餐价格为活动票的加购价；报名时冻结。库存物料只会暂留；签到只生成待交付记录，实际交付后才实扣，不会生成桌台订单。</p>
             <div className="wide activity-package-editor-list">{draft.packages.map((activityPackage,index)=><article key={index} className="activity-package-editor">
@@ -493,7 +518,7 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
             </article>)}</div>
             <button type="button" onClick={addPackage}>新增套餐</button>
           </fieldset>
-          <fieldset><legend>退款、安全和参与承诺</legend>
+          <fieldset disabled={busy === 'draft' || createUncertain}><legend>退款、安全和参与承诺</legend>
             <label>退款规则版本<input value={draft.refundPolicyVersion} onChange={(event) => updateDraft('refundPolicyVersion', event.target.value)} /></label>
             <label>安全规则版本<input value={draft.safetyPolicyVersion} onChange={(event) => updateDraft('safetyPolicyVersion', event.target.value)} /></label>
             <label className="wide">退款说明<textarea rows={3} value={draft.refundPolicySummary} onChange={(event) => updateDraft('refundPolicySummary', event.target.value)} /></label>
@@ -504,7 +529,7 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
             <label className="wide">联系与集合说明<textarea rows={3} value={draft.contactInstructions} onChange={(event) => updateDraft('contactInstructions', event.target.value)} /></label>
             <label className="wide">修改原因<input minLength={2} maxLength={500} required value={draft.reason} onChange={(event) => updateDraft('reason', event.target.value)} /></label>
           </fieldset>
-          <button type="submit" disabled={busy === 'draft'}>{busy === 'draft' ? '保存中' : detail.activity.publicId === '' ? '建立草稿并读回' : '保存草稿并读回'}</button>
+          <button type="submit" disabled={busy === 'draft'}>{busy === 'draft' ? '保存中' : detail.activity.publicId === '' ? createUncertain ? '核对上次建立结果' : '建立草稿并读回' : '保存草稿并读回'}</button>
         </form></details>}
         {canManage && detail.activity.publicId !== '' && !['cancelled','completed'].includes(detail.activity.status) && <section aria-label="活动结束处理">
           {detail.activity.registrationClosedAt?<p>已停止新报名和候补递补；原名单与收退款继续处理。</p>:<button type="button" disabled={!!busy||detail.activity.status==='draft'} onClick={()=>void stopRegistration(detail.activity)}>先停止新报名</button>}
@@ -667,7 +692,7 @@ function PackageComponentSelector({
     }]))
   }
   return <div className="wide activity-package-component-selector">
-    <header><strong>库存履约物料（可选）</strong><small>只列出启用物料；不显示库存数量、成本或供应商。留空即为纯票务/非实物套餐。</small></header>
+    <header><strong>活动所需库存物料（选填）</strong><small>只列出启用物料；不显示库存数量、成本或供应商。留空即为纯票务/非实物套餐。</small></header>
     {components.length === 0 && <p>当前为纯票务/非实物套餐，不产生库存暂留或扣减。</p>}
     {components.map((component, index) => {
       const selected = catalog.find((item) => item.id === component.inventoryItemId)

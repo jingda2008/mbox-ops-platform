@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
+import type { StaffOperationsData } from '../../src/normalized-ui/staff-actions/types'
 
 async function login(page: Page) {
   const fixture = JSON.parse(await readFile(process.env.NORMALIZED_E2E_FIXTURE_FILE ?? 'artifacts/normalized-browser/fixture.json', 'utf8'))
@@ -16,7 +17,17 @@ async function login(page: Page) {
 test('table primary actions, more actions and return navigation preserve the list at 390px', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await login(page)
+  // Keep the existing financial alert present without creating a real payment.
+  // Otherwise a fresh fixture misses the alert that interrupted restoration in CI.
+  await page.route('**/api/operations', async route => {
+    const response = await route.fetch()
+    const body = await response.json()
+    const table = (body.data as StaffOperationsData).tables.find(table => table.code === 'W01')
+    if (table?.activeSession) table.activeSession.unpaidOrderCount = Math.max(1, table.activeSession.unpaidOrderCount)
+    await route.fulfill({ response, json: body })
+  })
   await page.getByRole('button', { name: '现场', exact: true }).first().click()
+  await expect(page.locator('.staff-table-financial-alert')).toContainText('待收款')
   await page.getByRole('group', { name: '桌台显示范围' }).getByRole('button', { name: /^全部/ }).click()
   await page.getByLabel('搜索桌号或区域').fill('W01')
   await page.locator('.staff-table-tile').first().click()
@@ -42,6 +53,15 @@ test('table primary actions, more actions and return navigation preserve the lis
   await page.getByRole('button', { name: '返回上一页', exact: true }).click()
   await expect(page.getByLabel('搜索桌号或区域')).toBeVisible()
   await expect.poll(async () => Math.abs(await page.evaluate(() => window.scrollY) - originalY)).toBeLessThan(4)
+  const restoredPositions = await page.evaluate(async () => {
+    const positions = []
+    for (let frame = 0; frame < 40; frame++) {
+      await new Promise(requestAnimationFrame)
+      positions.push(window.scrollY)
+    }
+    return positions
+  })
+  expect(Math.max(...restoredPositions.map(position => Math.abs(position - originalY)))).toBeLessThan(4)
   expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1)
 })
 
@@ -91,15 +111,16 @@ test('member workspace uses existing authorized routes and retains the last busi
   await expect(page.getByRole('heading', { name: '会员账户查询', exact: true })).toBeVisible()
   await membership.getByRole('button', { name: '会员办理与活动', exact: true }).click()
   const sections = page.getByRole('navigation', { name: '会员办理与管理', exact: true })
-  await sections.getByRole('button', { name: '存酒办理', exact: true }).click()
+  // This section is authorized in both the default and opt-in acceptance fixtures.
+  await sections.getByRole('button', { name: '权益与兑换', exact: true }).click()
   await page.route('**/api/auth/heartbeat', async route => {
     const response = await route.fetch()
     const body = await response.json()
-    body.data.permissions = body.data.permissions.filter((permission: string) => !permission.startsWith('bottle.'))
+    body.data.permissions = body.data.permissions.filter((permission: string) => !permission.startsWith('loyalty.'))
     await route.fulfill({ response, json: body })
   })
   await page.evaluate(() => window.dispatchEvent(new Event('online')))
-  await expect(sections.getByRole('button', { name: '存酒办理', exact: true })).toHaveCount(0)
+  await expect(sections.getByRole('button', { name: '权益与兑换', exact: true })).toHaveCount(0)
   await expect(sections.locator('button[aria-current="page"]')).toHaveCount(1)
 })
 

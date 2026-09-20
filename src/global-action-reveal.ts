@@ -89,12 +89,20 @@ export function installGlobalActionReveal(
     activeTimer = windowRef.setTimeout(stopWatching, REVEAL_WINDOW_MS)
   }
 
+  // Staff navigation restores its own position or focuses a requested record.
+  // Initial alerts on the destination are not results of the preceding click.
+  const handleStaffNavigation = () => {
+    operation += 1
+    stopWatching()
+  }
   documentRef.addEventListener('click', handleClick, true)
+  windowRef.addEventListener('mbox:before-staff-navigation', handleStaffNavigation)
   return {
     dispose() {
       operation += 1
       stopWatching()
       documentRef.removeEventListener('click', handleClick, true)
+      windowRef.removeEventListener('mbox:before-staff-navigation', handleStaffNavigation)
     },
   }
 }

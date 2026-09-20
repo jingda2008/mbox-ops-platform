@@ -39,6 +39,6 @@ function StockReturnForm({api,itemId,quantity,employeeId,capability,label,onChan
  <label>核对说明<input value={reason} maxLength={1000} disabled={locked} onChange={event=>setReason(event.target.value)}/></label>
  <label><input type="checkbox" checked={confirmed} disabled={locked} onChange={event=>setConfirmed(event.target.checked)}/>我已核实上述情况和实际数量</label>
  <button type="button" disabled={locked||!confirmed} onClick={()=>void run()}>{busy?'正在核对…':'确认实际退库'}</button>
- {pending?.recordId?<p>本次退库已登记，记录号：{pending.recordId}。<button type="button" disabled={busy} onClick={()=>void refresh()}>刷新剩余数量</button></p>:pending&&<p>上次登记结果待确认。<button type="button" disabled={busy} onClick={()=>void run(true)}>恢复原退库结果</button></p>}
+ {pending?.recordId?<div><details><summary>退库记录详情</summary><p>{pending.recordId}</p></details><p>本次退库已登记。<button type="button" disabled={busy} onClick={()=>void refresh()}>刷新剩余数量</button></p></div>:pending&&<p>上次登记结果待确认。<button type="button" disabled={busy} onClick={()=>void run(true)}>恢复原退库结果</button></p>}
  {notice&&<p role="status">{notice}</p>}</details>
 }

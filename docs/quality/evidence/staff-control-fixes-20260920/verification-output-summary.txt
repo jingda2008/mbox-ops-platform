@@ -1,0 +1,23 @@
+[check-final]
+mini-program static verification passed (166 files)
+Alipay Mini Program parity verification passed (23 pages, 5 tabs, 1119314 bytes)
+ℹ pass 308
+ Test Files  267 passed | 76 skipped (343)
+      Tests  1961 passed | 758 skipped (2719)
+   Start at  23:40:25
+   Duration  10.45s (transform 9.56s, setup 0ms, import 29.00s, tests 14.12s, environment 26ms)
+✓ built in 302ms
+[postgres-verified]
+ Test Files  274 passed | 1 skipped (275)
+      Tests  2320 passed | 1 skipped (2321)
+   Start at  23:11:10
+   Duration  165.06s (transform 2.53s, setup 0ms, import 9.58s, tests 131.44s, environment 11ms)
+[member-cards-verified]
+  2 passed (22.6s)
+[browser-optin-final]
+  3 passed (17.2s)
+[unit-verified]
+ Test Files  2 passed (2)
+      Tests  9 passed (9)
+   Start at  23:40:00
+   Duration  114ms (transform 29ms, setup 0ms, import 40ms, tests 9ms, environment 0ms)

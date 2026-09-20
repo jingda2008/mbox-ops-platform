@@ -27,6 +27,7 @@ export interface PublicMembershipTerms {
 }
 
 export interface MembershipTermsVersionView {
+  id:string
   publicId: string
   version: number
   status: 'draft' | 'approved' | 'published'
@@ -342,7 +343,7 @@ function publicView(row: TermsRow): PublicMembershipTerms {
 
 function versionView(row: TermsRow): MembershipTermsVersionView {
   return {
-    publicId: row.public_id, version: Number(row.version), status: row.status,
+    id:row.id, publicId: row.public_id, version: Number(row.version), status: row.status,
     title: row.title, summary: row.summary, content: row.content,
     effectiveFrom: row.effective_from, effectiveUntil: row.effective_until,
     draftedByEmployeeId: row.drafted_by_employee_id,

@@ -125,7 +125,7 @@ for (const width of [320, 390]) test(`printer recovery is isolated and readable 
   await expect(preview.getByRole('combobox',{name:'打印内容',exact:true})).toBeEnabled()
   await page.unroute('**/api/hardware/business-days/*/report-preview')
   await preview.getByText('本次打印任务',{exact:true}).click()
-  await expect(preview.getByText(`请求号：${firstReceipt!.requestId}`,{exact:true})).toBeVisible()
+  await expect(preview.getByText(`打印记录编号：${firstReceipt!.requestId}`,{exact:true})).toBeVisible()
   await preview.getByRole('button',{name:'核对任务进度'}).click()
   await expect(preview.getByText(/系统状态不证明纸张已正常输出/)).toBeVisible()
   const historyDay=page.getByRole('navigation',{name:'常用营业日'})

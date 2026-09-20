@@ -1,0 +1,33 @@
+[WebServer] (node:31651) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] [INEFFECTIVE_DYNAMIC_IMPORT] src/normalized-ui/PerformanceRevisionPanel.tsx is dynamically imported by src/normalized-ui/StaffModulePanel.tsx but also statically imported by src/normalized-ui/MonthlySchedulePanel.tsx, dynamic import will not move module into another chunk.
+[WebServer]
+[WebServer] [plugin builtin:vite-reporter]
+[WebServer] (!) Some chunks are larger than 500 kB after minification. Consider:
+[WebServer] - Using dynamic import() to code-split the application
+[WebServer] - Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+[WebServer] - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+[WebServer] (node:31656) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] (node:31657) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+Running 13 tests using 1 worker
+
+(node:31681) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts:47:1 › 后厨短暂读取失败保留旧列表，禁止操作，恢复不误报新增 (1.7s)
+  ✓   2 tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts:58:1 › 后厨超过轮询间隔的请求不会被取消，出品不等待慢桌台读取 (6.7s)
+  ✓   3 tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts:74:1 › 按份制作确认后锁住旧数量，读回失败也不会再次制作剩余份数 (981ms)
+  ✓   4 tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts:93:1 › 遗留整单完成也等待权威读回，不把部分份数隐藏后再当新单弹出 (874ms)
+  ✓   5 tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts:104:1 › 未知制作结果跨刷新恢复原数量原编号，新队列不能解锁重复操作 (1.1s)
+  ✓   6 tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts:123:1 › 顶部刷新更新本人历史，筛选变化不会显示旧桌台记录 (951ms)
+  ✓   7 tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts:144:1 › 制作前发出的旧响应不能解除成功后的同步锁 (1.0s)
+  ✓   8 tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts:166:1 › 不同菜品的并发确认独立锁定，不回滚别人的更新且通知不跳页 (1.3s)
+  ✓   9 tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts:204:1 › 历史出品取消失败不恢复整份旧列表覆盖其他员工的进度 (1.3s)
+  ✓  10 tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts:228:1 › 出品批次确认后等候读回，旧可配送份数不能再次提交 (1.3s)
+  ✓  11 tests/normalized-e2e/normalized-kitchen-batch.spec.ts:23:1 › 60单180份：低高度双板、真实开批、跨页草稿、出锅释放及取送状态 (4.7s)
+  ✓  12 tests/normalized-e2e/normalized-kitchen-batch.spec.ts:64:1 › 真实提交成功但响应丢失：刷新后原凭据恢复，不重复开批 (1.2s)
+  ✓  13 tests/normalized-e2e/normalized-kitchen-batch.spec.ts:82:1 › 服务员读取真实备齐数量并送达；厨师操作不冒充送达 (7.2s)
+
+  13 passed (41.9s)

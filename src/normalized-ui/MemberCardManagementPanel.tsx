@@ -14,7 +14,7 @@ export function MemberCardManagementPanel({api,auth}:{api:NormalizedApiClient;au
   const [busy,setBusy]=useState(false),[message,setMessage]=useState(''),[reason,setReason]=useState('符合申请条件')
   const [holdings,setHoldings]=useState<Holding[]>([]),[holdingCursor,setHoldingCursor]=useState<string|null>(null),[cardReason,setCardReason]=useState('')
   const [projectCursor,setProjectCursor]=useState<string|null>(null),[applicationCursor,setApplicationCursor]=useState<string|null>(null)
-  const [form,setForm]=useState({code:'',name:'',terms:'',kind:'interest',availableFrom:'',availableUntil:'',cooperationReference:'',cooperationValidUntil:'',cooperationConfirmed:false})
+  const [form,setForm]=useState({code:`CARD_${crypto.randomUUID().replaceAll('-','').toUpperCase()}`,name:'',terms:'',kind:'interest',availableFrom:'',availableUntil:'',cooperationReference:'',cooperationValidUntil:'',cooperationConfirmed:false})
   const generation=useRef(0),mounted=useRef(true),{confirmAction}=useConfirmationDialog()
   useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;generation.current++}},[])
   const path='/api/staff/member-cards'
@@ -72,7 +72,7 @@ export function MemberCardManagementPanel({api,auth}:{api:NormalizedApiClient;au
       await command(`${path}/projects`,{...form,availableFrom:`${form.availableFrom}:00+08:00`,availableUntil:`${form.availableUntil}:00+08:00`,cooperationReference:form.kind==='cobrand'?form.cooperationReference:null,
         cooperationValidUntil:form.kind==='cobrand'&&form.cooperationValidUntil?`${form.cooperationValidUntil}:00+08:00`:null,cooperationConfirmed:form.kind==='cobrand'&&form.cooperationConfirmed})
       if(!mounted.current)return
-      await load();setMessage('已保存草稿，尚未开放申请；请先配置企业微信与服务号加入门槛、发卡或发券。')
+      setForm(current=>({...current,code:`CARD_${crypto.randomUUID().replaceAll('-','').toUpperCase()}`,name:'',terms:''}));await load();setMessage('已保存草稿，尚未开放申请；请先配置企业微信与服务号加入门槛、发卡或发券。')
     }catch(error){if(mounted.current)setMessage(error instanceof Error?error.message:'保存结果未确认，请核对后重试')}
     finally{if(mounted.current)setBusy(false)}
   }
@@ -115,7 +115,7 @@ export function MemberCardManagementPanel({api,auth}:{api:NormalizedApiClient;au
       {holdingCursor&&<button type="button" disabled={busy} onClick={()=>void loadHoldings(true)}>加载更多持卡</button>}
     </details>}
     {manage&&<details><summary>卡项目配置与开放</summary><fieldset disabled={busy}><div className="member-card-management__grid">
-      <label>项目编号<input value={form.code} maxLength={40} placeholder="如 FAN_MUSIC" onChange={event=>setForm({...form,code:event.target.value.toUpperCase()})}/></label>
+      <p>项目编号自动生成，请填写会员卡名称。</p>
       <label>名称<input value={form.name} maxLength={60} onChange={event=>setForm({...form,name:event.target.value})}/></label>
       <label>类型<select value={form.kind} onChange={event=>setForm({...form,kind:event.target.value,cooperationConfirmed:false})}><option value="interest">免费兴趣卡</option><option value="cobrand">免费联名卡</option></select></label>
       <label>开始时间（北京时间）<input type="datetime-local" value={form.availableFrom} onChange={event=>setForm({...form,availableFrom:event.target.value})}/></label>

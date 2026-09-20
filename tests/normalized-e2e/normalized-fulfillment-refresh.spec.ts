@@ -16,6 +16,8 @@ async function kitchen(page: Page, quantity = true, employee = 'liyan') {
   const original = await page.request.get('/api/commerce/fulfillment')
   expect(original.ok()).toBe(true)
   const queue = (await original.json()).data
+  // This suite preserves the legacy station/exception workflow; the new board has real-backend tests.
+  queue.actor.kitchenBatchBoardEnabled = false
   const now = new Date().toISOString()
   // Synthetic read model/command acknowledgements only. Never send these IDs to the real command handler.
   const item = { taskId, businessDate: now.slice(0, 10), carryover: false, stationCode: 'kitchen',

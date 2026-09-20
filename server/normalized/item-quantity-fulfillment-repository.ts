@@ -27,7 +27,7 @@ export class ItemQuantityFulfillmentRepository {
     return {quantity:ids.length,unitIds:ids,replayed:false}
   }
 
-  async complete(input:{itemId:string;taskId:string;employeeId:string;quantity:number;eventKey:string}){
+  async complete(input:{itemId:string;taskId:string;employeeId:string;quantity:number;eventKey:string;unitIds?:string[]}){
     const ledger=new ItemQuantityRepository(this.tx),{units}=await ledger.initialize(input.itemId)
     this.requireQuantity(input.quantity)
     const replay=await this.previous(input.taskId,input.eventKey,'quantity.ready',input.quantity,input.employeeId)
@@ -36,7 +36,13 @@ export class ItemQuantityFulfillmentRepository {
     // Existing started units go first; newly available units follow. Held units
     // cannot consume inventory or be reported as completed by this command.
     const remade=await this.remadeUnits(input.itemId)
-    const selectable=units.filter(unit=>!remade.has(unit.id)&&!unit.held_by_case_id&&!unit.operationally_stopped&&['unmade','started'].includes(unit.production_state))
+    const bound=new Set((await this.tx.query<{unit_id:string}>(
+      'SELECT unit_id FROM mbox.kitchen_production_units WHERE tenant_id=$1 AND store_id=$2 AND unit_id=ANY($3::uuid[])',
+      [...this.scope,units.map(unit=>unit.id)])).rows.map(row=>row.unit_id))
+    const exact=input.unitIds ? new Set(input.unitIds) : null
+    if(exact && (exact.size!==input.quantity || input.unitIds?.length!==input.quantity))throw new ItemQuantityConflict('QUANTITY_INVALID','本次分盘份数与原批次不一致')
+    const selectable=units.filter(unit=>!remade.has(unit.id)&&!unit.held_by_case_id&&!unit.operationally_stopped&&['unmade','started'].includes(unit.production_state)
+      && (exact ? exact.has(unit.id) : !bound.has(unit.id)))
       .sort((a,b)=>Number(a.production_state==='unmade')-Number(b.production_state==='unmade')||a.unit_index-b.unit_index)
     if(input.quantity>selectable.length)throw new ItemQuantityConflict('QUANTITY_UNAVAILABLE',`当前最多可完成${selectable.length}份，其余已完成、暂停或停止`)
     const ids=selectable.slice(0,input.quantity).map(unit=>unit.id)

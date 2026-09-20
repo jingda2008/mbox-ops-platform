@@ -5,7 +5,7 @@ import {createIdempotencyKey} from './cashier-mutation'
 import {useConfirmationDialog} from './ConfirmationDialog'
 interface Broadcast{id:string;account_id:string;title:string;content:string;scheduled_at:string;status:string;provider_reference:string|null;error_code:string|null}
 interface Account{id:string;name:string;enabled?:boolean}
-const statuses:Record<string,string>={draft:'草稿',scheduled:'等待发送',sending:'正在提交',accepted:'平台已受理，待最终回执',rejected:'平台拒绝',unknown:'结果待核对，禁止自动重发',cancelled:'已取消',delivered:'平台回执发送完成',delivery_failed:'平台回执发送失败'}
+const statuses:Record<string,string>={draft:'草稿',scheduled:'等待发送',sending:'正在提交',accepted:'微信已受理，等待发送结果',rejected:'平台拒绝',unknown:'结果待核对，禁止自动重发',cancelled:'已取消',delivered:'微信发送完成',delivery_failed:'微信发送失败'}
 function toShanghaiIso(date:string,time:string){
  if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||!/^\d{2}:\d{2}$/.test(time))throw new Error('请选择发送日期和时间')
  return `${date}T${time}:00+08:00`
@@ -66,7 +66,7 @@ export function SocialBroadcastPanel({api,auth}:{api:NormalizedApiClient;auth:St
  <button disabled={busy||accounts.length===0} type="submit">保存群发草稿</button>
  <button disabled={busy||accounts.length===0} type="button" onClick={()=>void saveDraft(true)}>保存并安排发送</button>
  </form>
- {rows.map(row=><article key={row.id}><h4>{row.title} · {statuses[row.status]??row.status}</h4><p>{row.content}</p><p>{new Date(row.scheduled_at).toLocaleString('zh-CN')} · {accounts.find(a=>a.id===row.account_id)?.name}</p>{row.provider_reference&&<p>平台回执：{row.provider_reference}</p>}{row.error_code&&<p>结果代码：{row.error_code}</p>}{row.status==='draft'&&<button disabled={busy} onClick={()=>void action(row,'schedule')}>预览并安排发送</button>}{['draft','scheduled'].includes(row.status)&&<button disabled={busy} onClick={()=>void action(row,'cancel')}>取消任务</button>}</article>)}
+ {rows.map(row=><article key={row.id}><h4>{row.title} · {statuses[row.status]??'发送状态待核对，请刷新或联系管理员'}</h4><p>{row.content}</p><p>{new Date(row.scheduled_at).toLocaleString('zh-CN')} · {accounts.find(a=>a.id===row.account_id)?.name}</p>{(row.provider_reference||row.error_code)&&<details><summary>微信发送结果详情</summary>{row.provider_reference&&<p>微信任务编号：{row.provider_reference}</p>}{row.error_code&&<p>排查代码：{row.error_code}</p>}</details>}{row.status==='draft'&&<button disabled={busy} onClick={()=>void action(row,'schedule')}>预览并安排发送</button>}{['draft','scheduled'].includes(row.status)&&<button disabled={busy} onClick={()=>void action(row,'cancel')}>取消任务</button>}</article>)}
  {rows.length>=100&&<button disabled={busy} onClick={()=>void perform(async()=>{const next=await api.getEndpoint<{data:Broadcast[]}>(`/api/staff/social-broadcasts?cursor=${rows.at(-1)!.id}`);setRows([...rows,...next.data])})}>加载更早任务</button>}
  </section>
 }

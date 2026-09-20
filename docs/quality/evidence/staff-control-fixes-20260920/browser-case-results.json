@@ -1,0 +1,664 @@
+{
+  "basis": "Latest result per named case across the default run and scoped reruns; not a single uninterrupted green run",
+  "runs": {
+    "browser-suite": {
+      "passed": 89,
+      "skipped": 13,
+      "failed": 5
+    },
+    "browser-verified": {
+      "passed": 18,
+      "failed": 2
+    },
+    "member-cards-verified": {
+      "passed": 2
+    },
+    "browser-optin-final": {
+      "passed": 3
+    }
+  },
+  "cases": [
+    {
+      "file": "tests/normalized-e2e/normalized-after-sales-access-recovery.spec.ts",
+      "test": "initial after-sales access failure remains visible and retry reads the original pending queue",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-aftersales-exit.spec.ts",
+      "test": "after-sales exit remains visible during long errors, polling, small views and enlarged text",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-aftersales-exit.spec.ts",
+      "test": "after-sales load failure and stock conflict both allow exit without a business write",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-aftersales-exit.spec.ts",
+      "test": "closing an in-flight after-sales write preserves its original recovery key",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-aftersales-exit.spec.ts",
+      "test": "Escape closes only the replacement layer before the parent after-sales dialog",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-aftersales-exit.spec.ts",
+      "test": "cashier opens the linked original case and keeps ordinary refund controls separate",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "all real employees enter role-scoped mobile workspaces and every high-frequency entry is live",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "one business-day order and guest requests flow through bartender, kitchen, service and manager roles",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "future public reservation is confirmed by marketing and kept out of today arrival queue",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "manager completes a walk-in table lifecycle without leaving the mobile operations page",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "李艳可由授权管理页批量安排为主服务员并安全结束责任",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "店长可在经营配置中修改商品推荐字段并从服务端读回",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "店长可关闭并重新开放线上支付且策略即时读回",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "店长可在经营配置中修改桌台容量资料并读回",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "我的已制作多商品长单号在窄屏逐项显示，保留商品处理入口",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "盘点复核让有权限同事通过或退回，提交人能查结果，失败读取可重试",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "制作队列在线资格失效后先续期再核验，无需手动退出登录",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "快捷盘点提交丢失回执后复用原单，不直接改变库存",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "图片上传与月度排班成功回执在页面正确展示",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "出品页面六十项待制作全部可达，取送单独展示且末项可搜索",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "数量制作按实际份数配送，刷新后恢复原操作不重复完成余量",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "套餐停止一份按原单点价重算，其余份数照常制作（未付直接停止）",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "套餐停止一份按原单点价重算，其余份数照常制作（已付一次审核）",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "商品售后入口停止部分未付数量并在响应丢失后恢复原申请（liyan）",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "商品售后入口停止部分未付数量并在响应丢失后恢复原申请（tom）",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "已付商品在桌时一次审核并确认现金实退，丢失回执不重复登记",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "已付商品关桌后一次审核并确认现金实退，丢失回执不重复登记",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "修改退款份数丢回执后恢复同一新版本，减少份数明确继续且只审核新申请",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "关桌后撤回退款仍能登记实际耗用，原操作恢复不重复处置",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "旧退库表单成功后读回失败只刷新数量，未知结果跨页面恢复原登记",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "换品新单丢回执后从原商品读回关联，不重复建单且旧退款与新价格分别保留",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "原实物补送丢回执恢复原任务，手机按份数确认并取消余量",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "离店重做实物分份登记，最后一份丢回执仍可刷新恢复",
+      "result": "passed",
+      "lastRun": "browser-optin-final"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "岗位按份重做丢回执恢复，新批逐份完成并保留原金额",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "未付已制作商品本人按原权限免收，丢回执恢复后实物单独处理",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-all-roles-business-day.spec.ts",
+      "test": "未付已制作商品本人按原权限拒绝停止，丢回执恢复后实物单独处理",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-auto-only-day-end.spec.ts",
+      "test": "manual day end is unavailable in the page and retired API, including for a manager",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-business-rule-inputs.spec.ts",
+      "test": "switching rule drafts clears unsaved amount text and its validity without changing either rule",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-commercial-flows.spec.ts",
+      "test": "mobile guest scans a fixed table QR, searches, orders and sees payment result",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-commercial-flows.spec.ts",
+      "test": "desktop guest keeps recommendations comparable without turning the cart into a dark bill bar",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-commercial-flows.spec.ts",
+      "test": "narrow mobile guest keeps mood and service controls compact above the menu",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-commercial-flows.spec.ts",
+      "test": "mobile guest, reservation and staff work surfaces have no serious accessibility violations",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-commercial-flows.spec.ts",
+      "test": "mobile public reservation uses preferences without exposing exact table selection",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-commercial-flows.spec.ts",
+      "test": "member page never invents a development member when identity is missing",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-commercial-flows.spec.ts",
+      "test": "authenticated member page stays focused on benefits and does not expose notification settings",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-commercial-flows.spec.ts",
+      "test": "mobile public reservation silently renews one expired session before submit",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-commercial-flows.spec.ts",
+      "test": "confirmed reservation starts its ten-minute arrival retention only at the scheduled arrival time",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-commercial-flows.spec.ts",
+      "test": "submitted reservation keeps its receipt and gives actionable guidance if status lookup is unavailable",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-commercial-flows.spec.ts",
+      "test": "opening a missing reservation link reports once without creating a 4xx polling loop",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-commercial-flows.spec.ts",
+      "test": "reservation actions keep mobile touch targets at least 44px through confirm and cancel states",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-commercial-flows.spec.ts",
+      "test": "reservation status polling stops after one session renewal is still rejected",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-commercial-flows.spec.ts",
+      "test": "mobile manager completes device verification and reaches role-scoped workspace",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-commercial-flows.spec.ts",
+      "test": "mobile manager can initiate but cannot review cashier refund work",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-commercial-flows.spec.ts",
+      "test": "mobile cashier can review but cannot initiate manager refund work",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-commercial-flows.spec.ts",
+      "test": "mobile administrator publishes a permission and sees server-verified feedback in view",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-commercial-flows.spec.ts",
+      "test": "mobile manager payment choices stay synchronized with two guests at the same table",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-commercial-flows.spec.ts",
+      "test": "two guests see the same server cart before either one checks out",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-coupon-refund-review.spec.ts",
+      "test": "coupon refund review explicit decision and layout 320px",
+      "result": "passed",
+      "lastRun": "browser-optin-final"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-coupon-refund-review.spec.ts",
+      "test": "coupon refund review explicit decision and layout 360px",
+      "result": "passed",
+      "lastRun": "browser-optin-final"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts",
+      "test": "后厨短暂读取失败保留旧列表，禁止操作，恢复不误报新增",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts",
+      "test": "后厨超过轮询间隔的请求不会被取消，出品不等待慢桌台读取",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts",
+      "test": "按份制作确认后锁住旧数量，读回失败也不会再次制作剩余份数",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts",
+      "test": "遗留整单完成也等待权威读回，不把部分份数隐藏后再当新单弹出",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts",
+      "test": "未知制作结果跨刷新恢复原数量原编号，新队列不能解锁重复操作",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts",
+      "test": "顶部刷新更新本人历史，筛选变化不会显示旧桌台记录",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts",
+      "test": "制作前发出的旧响应不能解除成功后的同步锁",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts",
+      "test": "不同菜品的并发确认独立锁定，不回滚别人的更新且通知不跳页",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts",
+      "test": "历史出品取消失败不恢复整份旧列表覆盖其他员工的进度",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-fulfillment-refresh.spec.ts",
+      "test": "出品批次确认后等候读回，旧可配送份数不能再次提交",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-guest-gate.spec.ts",
+      "test": "fixed QR waiting state is compact, self-updating and does not ask the guest to scan again",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-guest-gate.spec.ts",
+      "test": "invalid unsigned entry gives one precise recovery instruction and no ineffective retry",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-guest-gate.spec.ts",
+      "test": "waiting refresh respects retryAt and resumes the availability check without another scan",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-late-capture-refund.spec.ts",
+      "test": "late captured stopped goods expose a funds-only request without restoring production",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-marketing.spec.ts",
+      "test": "marketing independent approvals, queue and refusal at 320px",
+      "result": "passed",
+      "lastRun": "browser-verified"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-marketing.spec.ts",
+      "test": "marketing independent approvals, queue and refusal at 360px",
+      "result": "passed",
+      "lastRun": "browser-verified"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-media-library.spec.ts",
+      "test": "员工图库按用途分页、选中不重载、权限缓存及正常网和弱网图片对照",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-member-cards.spec.ts",
+      "test": "ordinary member card review and lifecycle at 320px",
+      "result": "passed",
+      "lastRun": "member-cards-verified"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-member-cards.spec.ts",
+      "test": "ordinary member card review and lifecycle at 360px",
+      "result": "passed",
+      "lastRun": "member-cards-verified"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-member-gifts.spec.ts",
+      "test": "gift campaign drafting and full review layout at 320px",
+      "result": "passed",
+      "lastRun": "browser-verified"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-member-gifts.spec.ts",
+      "test": "gift campaign drafting and full review layout at 360px",
+      "result": "passed",
+      "lastRun": "browser-verified"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-mini-program-acceptance.spec.ts",
+      "test": "five-tab customer preview keeps pre-scan menu browsing, three-step reservation, activities and benefits usable at 320/390",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-mini-program-acceptance.spec.ts",
+      "test": "waiting_for_table resumes the same trusted QR into the real menu without another scan",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-mini-program-acceptance.spec.ts",
+      "test": "employee table observation is text-only and customer surfaces have no voice entry",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-mobile-adaptation.spec.ts",
+      "test": "public guest and reservation layouts hold across compact, large and landscape phones",
+      "result": "passed",
+      "lastRun": "browser-verified"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-mobile-adaptation.spec.ts",
+      "test": "large text and dark preference keep public pages readable without clipping",
+      "result": "passed",
+      "lastRun": "browser-verified"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-mobile-adaptation.spec.ts",
+      "test": "slow or offline connections keep the last useful mobile state and offer recovery",
+      "result": "passed",
+      "lastRun": "browser-verified"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-mobile-adaptation.spec.ts",
+      "test": "focused fields remain usable when the mobile visual viewport is reduced",
+      "result": "passed",
+      "lastRun": "browser-verified"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-mobile-adaptation.spec.ts",
+      "test": "manager mobile pages prioritize current actions and keep low-frequency detail on demand",
+      "result": "passed",
+      "lastRun": "browser-verified"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-mobile-adaptation.spec.ts",
+      "test": "manager operational routes remain usable in phone landscape",
+      "result": "passed",
+      "lastRun": "browser-verified"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-payment-finance-alert.spec.ts",
+      "test": "finance alert remains visible while collapsed and identifies confirmed unapplied payment",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-print-recovery.spec.ts",
+      "test": "printer recovery is isolated and readable at 320px",
+      "result": "passed",
+      "lastRun": "browser-verified"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-print-recovery.spec.ts",
+      "test": "printer recovery is isolated and readable at 390px",
+      "result": "passed",
+      "lastRun": "browser-verified"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-stacking-pricing.spec.ts",
+      "test": "staff previews stacking and calendar at 320px without changing prices",
+      "result": "passed",
+      "lastRun": "browser-verified"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-stacking-pricing.spec.ts",
+      "test": "staff previews stacking and calendar at 360px without changing prices",
+      "result": "passed",
+      "lastRun": "browser-verified"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-staff-workflow-navigation.spec.ts",
+      "test": "table primary actions, more actions and return navigation preserve the list at 390px",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-staff-workflow-navigation.spec.ts",
+      "test": "shared refund todo is counted once, opens its original record and preserves failed-read evidence",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-staff-workflow-navigation.spec.ts",
+      "test": "member workspace uses existing authorized routes and retains the last business section",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-staff-workflow-navigation.spec.ts",
+      "test": "return-state memory is cleared when another employee signs in",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-startup-performance.spec.ts",
+      "test": "normalized employee and guest pages satisfy the real-browser startup gate",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-stock-count-batch.spec.ts",
+      "test": "batch approvals exclude self and stale counts, retain each conflict and continue other counts",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-stock-count-batch.spec.ts",
+      "test": "stale counts can be returned together with one reason and ambiguous retries retain original keys",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-stock-count-batch.spec.ts",
+      "test": "batch selection never carries unseen counts across pages or a refreshed view",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-upgrade-qualification.spec.ts",
+      "test": "upgrade qualification real draft persists and fits 320px",
+      "result": "passed",
+      "lastRun": "browser-verified"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-upgrade-qualification.spec.ts",
+      "test": "upgrade qualification real draft persists and fits 360px",
+      "result": "passed",
+      "lastRun": "browser-verified"
+    },
+    {
+      "file": "tests/normalized-e2e/refund-review-configuration.spec.ts",
+      "test": "administrator configures refund review and cents in one publish on mobile, with persisted readback and revocation",
+      "result": "passed",
+      "lastRun": "browser-suite"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-requirements-v9.spec.ts",
+      "test": "v9 custody, export and launch configuration at 360px",
+      "result": "passed",
+      "lastRun": "browser-verified"
+    },
+    {
+      "file": "tests/normalized-e2e/normalized-requirements-v9.spec.ts",
+      "test": "v9 custody, export and launch configuration at 1280px",
+      "result": "passed",
+      "lastRun": "browser-verified"
+    }
+  ]
+}

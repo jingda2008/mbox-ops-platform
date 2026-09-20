@@ -52,3 +52,14 @@ const ratioDefinitions = [
   { numerator: 'goldPointsMultiplierNumerator', denominator: 'goldPointsMultiplierDenominator', label: '金卡积分奖励', award: '实际记入积分', unit: '积分', money: false },
 ]
 export function isRatioField(key: string) { return ratioDefinitions.some(pair => pair.numerator === key || pair.denominator === key) }
+
+export function NullableIntegerField({label,value,minimum,onChange,blankLabel='留空不限'}:{label:string;value:number|null;minimum:number;onChange(value:number|null):void;blankLabel?:string}){
+  const [text,setText]=useState(value===null?'':String(value))
+  useEffect(()=>{setText(value===null?'':String(value))},[value])
+  return <label>{label}（{blankLabel}）<input type="number" min={minimum} step={1} value={text} onChange={event=>{
+    const raw=event.currentTarget.value;setText(raw)
+    const number=Number(raw),valid=raw===''||/^\d+$/.test(raw)&&Number.isSafeInteger(number)&&number>=minimum
+    event.currentTarget.setCustomValidity(valid?'':`请输入不小于 ${minimum} 的整数，或留空`)
+    if(valid)onChange(raw===''?null:number)
+  }}/></label>
+}

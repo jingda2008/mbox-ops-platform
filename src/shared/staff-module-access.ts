@@ -46,7 +46,7 @@ export const staffModuleAccessDefinitions: readonly StaffModuleAccessDefinition[
     code: 'inventory', label: '库存与酒水上架', route: '/staff/inventory', sortOrder: 260,
     permissionCodes: [
       'inventory.view', 'inventory.manage', 'inventory.cost.view', 'inventory.receive',
-      'inventory.count', 'inventory.waste', 'inventory.barcode.bind', 'catalog.product.manage',
+      'inventory.count', 'inventory.count.approve', 'inventory.waste', 'inventory.barcode.bind', 'catalog.product.manage',
       'catalog.price.manage', 'media.asset.menu.manage', 'bottle.manage.all', 'bottle.custody.export',
     ],
   },

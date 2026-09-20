@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { StaffNoticeController } from './staff-notice-controller'
+import { StaffNoticeController,fulfillmentNoticeKey } from './staff-notice-controller'
 
 describe('action results and background reminders', () => {
   beforeEach(() => vi.useFakeTimers())
@@ -56,4 +56,11 @@ describe('action results and background reminders', () => {
     expect(publish).toHaveBeenCalledTimes(calls)
     if (method === 'clear') expect(publish).toHaveBeenLastCalledWith(null)
   })
+})
+
+it('identifies each partial ready batch even when the same task is still awaiting delivery',()=>{
+  const item={taskId:'original',readyForDelivery:true,deliveryNoticeVersion:1}
+  expect(fulfillmentNoticeKey(item)).not.toBe(fulfillmentNoticeKey({...item,deliveryNoticeVersion:2}))
+  expect(fulfillmentNoticeKey(item)).not.toBe(fulfillmentNoticeKey({...item,readyForDelivery:false}))
+  expect(fulfillmentNoticeKey({...item})).toBe(fulfillmentNoticeKey(item))
 })

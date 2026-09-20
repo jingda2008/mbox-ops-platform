@@ -12,7 +12,7 @@ describe('promotional loyalty management reachability',()=>{
     expect(source).toContain("auth.permissions.includes('loyalty.promotion.publish')")
     expect(source).toContain('/api/staff/loyalty/promotion-policies')
     expect(source).not.toContain('/approve')
-    expect(source).toContain('审批已移至“会员经营配置中心”')
+    expect(source).toContain('前往规则审批，核对预算、会员上限、退款和活动付款、签到、完成记录。')
     expect(source).toContain('/publish')
   })
 

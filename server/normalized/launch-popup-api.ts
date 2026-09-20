@@ -31,6 +31,14 @@ export const launchPopupApiPlugin:FastifyPluginAsync<Options>=async(app,options)
  })
  app.get('/public/mini/launch-popup',async request=>{const ctx=await options.resolveSelfContext(request);return{data:await options.transactions.run(ctx.scope,tx=>readLaunchPopup(tx,true,ctx.customerId),{readOnly:true})}})
  app.get('/staff/launch-popup',async request=>{const ctx=await options.resolveStaffContext(request);return{data:await options.transactions.run(ctx.scope,async tx=>{await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'community.activity.manage');return readLaunchPopup(tx)},{readOnly:true})}})
+ app.get('/staff/launch-popup/product-options',async request=>{
+  const ctx=await options.resolveStaffContext(request),query=z.object({offset:z.coerce.number().int().min(0).max(1000000).default(0)}).parse(request.query)
+  return {data:await options.transactions.run(ctx.scope,async tx=>{
+   await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'community.activity.manage')
+   const rows=(await tx.query<{id:string;name:string}>(`SELECT p.id,p.name FROM mbox.products p WHERE p.tenant_id=$1 AND p.store_id=$2 AND p.status='active' AND p.guest_visible AND 'guest_qr'=ANY(p.allowed_channels) AND NOT EXISTS(SELECT 1 FROM mbox.member_card_menu_items mi WHERE mi.tenant_id=p.tenant_id AND mi.store_id=p.store_id AND mi.product_id=p.id AND mi.active AND mi.exclusive) ORDER BY p.name,p.id LIMIT 101 OFFSET $3`,[ctx.scope.tenantId,ctx.scope.storeId,query.offset])).rows
+   return {items:rows.slice(0,100),nextOffset:rows.length>100?query.offset+100:null}
+  },{readOnly:true})}
+ })
  app.post('/staff/launch-popup',{bodyLimit:8192},async request=>{
   const ctx=await options.resolveStaffContext(request),input=schema.parse(request.body),key=z.string().regex(/^[A-Za-z0-9:_-]{8,128}$/).parse(request.headers['idempotency-key'])
   await options.transactions.run(ctx.scope,tx=>new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'community.activity.manage'),{readOnly:true})
@@ -39,7 +47,7 @@ export const launchPopupApiPlugin:FastifyPluginAsync<Options>=async(app,options)
    const s=[ctx.scope.tenantId,ctx.scope.storeId],inserted=await tx.query('INSERT INTO mbox.launch_popup_policies(tenant_id,store_id) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING store_id',s)
    const row=(await tx.query<{version:number}>('SELECT version FROM mbox.launch_popup_policies WHERE tenant_id=$1 AND store_id=$2 FOR UPDATE',s)).rows[0]!
    if((inserted.rows.length?0:row.version)!==input.version)throw new Error('POPUP_CONFLICT')
-   const valid=await tx.query("SELECT id FROM mbox.products WHERE tenant_id=$1 AND store_id=$2 AND id=ANY($3::uuid[]) AND status='active' AND guest_visible",[...s,input.productIds])
+   const valid=await tx.query("SELECT p.id FROM mbox.products p WHERE p.tenant_id=$1 AND p.store_id=$2 AND p.id=ANY($3::uuid[]) AND p.status='active' AND p.guest_visible AND 'guest_qr'=ANY(p.allowed_channels) AND NOT EXISTS(SELECT 1 FROM mbox.member_card_menu_items mi WHERE mi.tenant_id=p.tenant_id AND mi.store_id=p.store_id AND mi.product_id=p.id AND mi.active AND mi.exclusive)",[...s,input.productIds])
    if(valid.rows.length!==input.productIds.length)throw new z.ZodError([])
    await tx.query('UPDATE mbox.launch_popup_policies SET enabled=$3,title=$4,content=$5,frequency=$6,version=version+1,updated_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2', [...s,input.enabled,input.title,input.content,input.frequency])
    await tx.query('DELETE FROM mbox.launch_popup_products WHERE tenant_id=$1 AND store_id=$2',s)

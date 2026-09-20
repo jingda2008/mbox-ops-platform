@@ -1,0 +1,33 @@
+{
+  "run": "default-1280",
+  "width": 1280,
+  "employeeCount": 3,
+  "routes": [
+    "/",
+    "/staff/live",
+    "/staff/payments",
+    "/staff/reservations",
+    "/staff/performance",
+    "/staff/inventory",
+    "/staff/devices",
+    "/staff/operations",
+    "/staff/customer-experience",
+    "/staff/settings",
+    "/staff/tasks",
+    "/staff/fulfillment",
+    "/staff/orders",
+    "/staff/member-fulfillment",
+    "/staff/member-exceptions",
+    "/staff/member-overview",
+    "/staff/member-rule-publish",
+    "/staff/member-accounts",
+    "/staff/member-management",
+    "/staff/member-rule-approvals"
+  ],
+  "visits": 51,
+  "states": 133,
+  "failures": [],
+  "pageErrors": [],
+  "httpErrors": [],
+  "overflow": []
+}

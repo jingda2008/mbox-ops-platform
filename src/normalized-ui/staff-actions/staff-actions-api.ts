@@ -1,3 +1,4 @@
+import type {KitchenBoardData,KitchenCommand,KitchenCommandResult} from '../../shared/kitchen-production'
 import { staffErrorMessage, staffUnavailableMessage } from '../../shared/staff-error-message'
 import { STAFF_SESSION_BINDING_HEADER } from '../../shared/staff-session-binding'
 import type {OperatingHistory} from '../../shared/operating-history'
@@ -244,6 +245,8 @@ export interface ObservationEventReplacement {
 }
 
 export interface StaffActionsApiPort {
+  loadKitchenBoard?(signal?:AbortSignal):Promise<KitchenBoardData>
+  runKitchenCommand?(employeeId:string,command:KitchenCommand,key:string):Promise<KitchenCommandResult>
   createDeliveryBatch?(items:Array<{taskId:string;quantity:number}>):Promise<void>
   loadOperations(signal?: AbortSignal): Promise<StaffOperationsData>
   loadFulfillment(signal?: AbortSignal): Promise<StaffFulfillmentData>
@@ -429,6 +432,19 @@ export class StaffActionsApi implements StaffActionsApiPort {
     const data = await this.getData<StaffOperationsData>('/api/operations', signal)
     if (!signal?.aborted && data.actor?.id) this.employeeId = data.actor.id
     return data
+  }
+
+  async loadKitchenBoard(signal?:AbortSignal):Promise<KitchenBoardData>{
+    return this.getData('/api/commerce/kitchen-board',signal)
+  }
+  async runKitchenCommand(employeeId:string,command:KitchenCommand,key:string):Promise<KitchenCommandResult>{
+    const response=await this.request('/api/commerce/kitchen-board/commands',{
+      method:'POST',body:JSON.stringify({employeeId,command}),
+      headers:new Headers({'content-type':'application/json','idempotency-key':key}),
+    })
+    const body=await readJson(response)
+    if(!isObject(body)||!isObject(body.data))throw new StaffActionsApiError('操作结果未能读取，请恢复原操作','INVALID_RESPONSE',response.status)
+    return body.data as unknown as KitchenCommandResult
   }
 
   async loadFulfillment(signal?: AbortSignal): Promise<StaffFulfillmentData> {

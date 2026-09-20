@@ -37,3 +37,9 @@ export function TaskSections({ label, sections }: { label: string; sections: { i
     {available.filter(section => visited.has(section.id)).map(section => <div key={section.id} id={`${scope}-${section.id}`} hidden={selected !== section.id}>{section.content}</div>)}
   </section>
 }
+
+export function openTaskSection(id:string){
+  const hash=new URLSearchParams(window.location.hash.slice(1));hash.set('work',id)
+  window.history.replaceState(window.history.state,'',`${window.location.pathname}${window.location.search}#${hash}`)
+  window.dispatchEvent(new Event('hashchange'))
+}

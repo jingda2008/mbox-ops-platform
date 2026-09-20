@@ -1,3 +1,4 @@
+import {businessStatus} from '../shared/staff-business-labels'
 import { useStaffViewState, staffLocationSearch } from './staff-view-state'
 import {ItemAfterSalesPanel} from './ItemAfterSalesPanel'
 import {PaymentFinanceReviewPanel} from './PaymentFinanceReviewPanel'
@@ -762,7 +763,7 @@ export function CashierAfterSalesWorkbenchView({
                             confirmed: false,
                           })}
                         /></label>
-                        <p className="cashier-guidance">这不是收款：系统只留存异常结清事实。已送达商品、库存和原营业日记录不会删除。</p>
+                        <p className="cashier-guidance">这不是收款：系统只留存异常结清记录。已送达商品、库存和原营业日记录不会删除。</p>
                         <div className="cashier-form-actions">
                           <button type="button" className="is-secondary" onClick={() => setSettlementExceptionDraft(null)}>返回</button>
                           <button
@@ -808,7 +809,7 @@ export function CashierAfterSalesWorkbenchView({
                                 confirmed: false,
                               })}
                             /></label>
-                            <p className="cashier-guidance">此操作只终止未开始制作的出品任务；退款、原订单、库存和原营业日事实不会被改写。</p>
+                            <p className="cashier-guidance">此操作只终止未开始制作的出品任务；退款、原订单、库存和原营业日记录不会被改写。</p>
                             <div className="cashier-form-actions">
                               <button type="button" className="is-secondary" onClick={() => setKdsCancellationDraft(null)}>返回</button>
                               <button
@@ -1098,7 +1099,7 @@ function ActivityCashierRegistrationCard({ registration, auth, actions, busyKey,
     {expanded && <div className="cashier-order-detail">
       <section>
         <h3>活动报名记录</h3>
-        <div className="cashier-line"><span><b>活动编号</b><small>{shortReference(registration.activityPublicId)} · 报名状态：{registration.status}</small></span><strong>{registration.partySize} 人</strong></div>
+        <div className="cashier-line"><span><b>活动编号</b><small>{shortReference(registration.activityPublicId)} · 报名状态：{businessStatus(registration.status,'registration')}</small></span><strong>{registration.partySize} 人</strong></div>
         <p className="cashier-workbench-boundary">本页不显示或导出顾客联系方式。活动退款只能由店内收银处理，顾客端没有自助退款入口。</p>
       </section>
       <section>

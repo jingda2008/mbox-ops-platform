@@ -1,0 +1,1820 @@
+﻿"源文件","行","函数","直接识别的API调用","状态/反馈调用","所属文件问题","证据边界"
+"src/components/CustomerPaymentCodeScanner.tsx","42","accept","","setCode(value)
+setCameraState('detected')
+setCameraDetail('请核对本次收款金额，再确认发起收款。')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/components/CustomerPaymentCodeScanner.tsx","52","startFallback","","setCameraDetail('已启用兼容识码；请出示顾客付款码，不是个人收款二维码。')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/components/CustomerPaymentCodeScanner.tsx","69","unavailable","","setCameraState('unavailable')
+setCameraDetail(name === 'NotAllowedError' || name === 'SecurityError' ? '摄像头未获授权，请允许后重新打开；也可使用扫码枪或改用其他收款方式。' : name === 'NotReadableError' ? '摄像头可能被其他应用占用；请关闭占用应用后重试，或使用扫码枪。' : '当前设备无法启动识码；请使用扫码枪、输入顾客付款码或改用其他收款方式。')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/components/CustomerPaymentCodeScanner.tsx","81","startCamera","","setCameraState('ready')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/components/CustomerPaymentCodeScanner.tsx","135","submit","","setError('请重新扫描有效的微信、支付宝或云闪付付款码')
+setError('')
+setSubmitting(true)
+setCode('')
+setError(submitError instanceof Error ? submitError.message : '付款码收款发起失败')
+setSubmitting(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/components/GuestRecommendationTools.tsx","218","closeSheet","","setActiveSheet(null)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/components/GuestRecommendationTools.tsx","223","openQuickSelection","","setDraftContext(context)
+setQuestionIndex(0)
+setActiveSheet('quick')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/components/GuestRecommendationTools.tsx","230","openShake","","setActiveSheet('shake')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/components/GuestRecommendationTools.tsx","240","answerQuestion","","setDraftContext(nextContext)
+setQuestionIndex((current) => current + 1)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/components/MenuOrderingWorkspace.tsx","279","updateClock","","setClock(Date.now() + clockOffsetMs)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/components/MenuOrderingWorkspace.tsx","513","changeGuestMenuView","","setGuestMenuView(view)
+setSearchQuery('')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/components/MenuOrderingWorkspace.tsx","519","updateRecommendationContext","","setRecommendationFeedback('收到，正在按你的选择重新安排')
+setRecommendationContext(context)
+setRecommendationUpdateVersion((current) => current + 1)
+setGuestMenuView('recommend')
+setShakeProductId('')
+setShakeProductIds([])","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/components/MenuOrderingWorkspace.tsx","538","requestShakeRecommendation","","setShakeProductId(selected.product.id)
+setShakeProductIds((current) => [...current, selected.product.id].slice(-3))","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/components/MenuOrderingWorkspace.tsx","549","openProductDetail","","setEditingBundleUnit(null)
+setDetailProductId(product.id)
+setDetailChoiceSelections({})","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/components/MenuOrderingWorkspace.tsx","562","changeQuantity","","setPendingProductId(productId)
+setPendingBundleSelections([])
+setConfirmationError('')
+setConfirmation('continue')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/components/MenuOrderingWorkspace.tsx","585","applyQuantityChange","","setProductQuantity(productId, (cart[productId] ?? 0) + delta, delta > 0 ? 'product_added' : 'product_removed')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/components/MenuOrderingWorkspace.tsx","590","setProductQuantity","","setCartMutating(true)
+setCartAdjustmentError('')
+setCartAdjustmentError(error instanceof Error ? error.message : '购物车暂时没有更新，请稍后再试。')
+setCartMutating(false)
+setPersistedCart((current) => { if (nextQuantity === 0) { const next = { ...current } delete next[productId] return next } return { ...current, [productId]: nextQuantity } })
+setLocalBundleSelections((current)=>{ const existing=current[productId]??[] const selections=delta>0?[...existing,...addedBundleSelections]:existing.slice(0,Math.max(0,existing.length+delta)) if(selections.length===0){ const next={...current};delete next[productId];return next } return { ...current,[productId]:selections } })
+setItemNotes((current) => { const next = { ...current } delete next[productId] return next })
+setUpgradePromptProductId(product.recommendation.upgradeProductId)
+setUpgradeSourceProductId(product.id)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/components/MenuOrderingWorkspace.tsx","656","addConfiguredBundle","","setCartMutating(true)
+setCartAdjustmentError('')
+setLocalBundleSelections((current)=>({ ...current,[product.id]:(current[product.id]??[]).map( (selection,index)=>index===editingBundleUnit.unitIndex?unit:selection, ) }))
+setDetailProductId('')
+setDetailChoiceSelections({})
+setEditingBundleUnit(null)
+setCartAdjustmentError(error instanceof Error?error.message:'套餐选择暂时没有更新，请稍后再试。')
+setCartMutating(false)
+setPendingProductId(product.id)
+setPendingBundleSelections(addedSelections)
+setConfirmationError('')
+setConfirmation('continue')
+setProductQuantity(product.id,(cart[product.id]??0)+1,'product_added',addedSelections)
+setDetailProductId('')
+setDetailChoiceSelections({})","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/components/MenuOrderingWorkspace.tsx","695","editBundleUnit","","setDetailChoiceSelections(Object.fromEntries(unit.groups.map((group)=>[group.groupId,[...group.productIds]])))
+setEditingBundleUnit({ productId:product.id,unitIndex })
+setDetailProductId(product.id)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/components/MenuOrderingWorkspace.tsx","703","toggleDetailChoice","","setDetailChoiceSelections((current)=>{ const selected=current[groupId]??[] if(selected.includes(productId))return { ...current,[groupId]:selected.filter((id)=>id!==productId) } if(selectionCount===1)return { ...current,[groupId]:[productId] } if(selected.length>=selectionCount)return current return { ...current,[groupId]:[...selected,productId] } })","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/components/MenuOrderingWorkspace.tsx","713","removeProduct","","setProductQuantity(productId,0,'product_removed')
+setCartMutating(true)
+setCartAdjustmentError('')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/components/MenuOrderingWorkspace.tsx","728","submit","","setConfirmationError('')
+setConfirmation('submit')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/components/MenuOrderingWorkspace.tsx","738","executeSubmit","","setPersistedCart({})
+setLocalBundleSelections({})
+setFulfillmentNote('')
+setItemNotes({})
+setCartOpen(false)
+setLastSubmittedAt(Date.now())
+setConfirmation(null)
+setConfirmationError('')
+setConfirmedDuplicateOrderId('')
+setConfirmedDuplicateOrderId(typeof conflictingOrderId === 'string' ? conflictingOrderId : '')
+setConfirmationError(error.message)
+setConfirmation('duplicate')
+setConfirmationError(error instanceof Error ? error.message : '订单没有提交，请核对后再试一次')
+setConfirmation('submit')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/components/MenuOrderingWorkspace.tsx","776","confirmContinuation","","setProductQuantity( pendingProductId, (cart[pendingProductId] ?? 0) + 1, 'product_added', pendingBundleSelections, )
+setDetailProductId('')
+setDetailChoiceSelections({})
+setProductQuantity(pendingProductId,(cart[pendingProductId]??0)+1,'product_added')
+setPendingProductId('')
+setPendingBundleSelections([])
+setConfirmation(null)
+setConfirmationError('')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/ActivityOperationsPanel.tsx","157","loadActivities","api.getEndpoint<{ data: unknown }>('/api/staff/activity-operations')","setPhase('loading')
+setNotice('')
+setActivities(loaded)
+setPhase('ready')
+setNotice(message(error, '活动运营数据读取失败'))
+setPhase('error')","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/ActivityOperationsPanel.tsx","170","loadDetail","api.getEndpoint<{ data: unknown }>(`/api/staff/activity-operations/${encodeURIComponent(publicId)}`)","setRevealedContacts({})
+setDetail(null)
+setDraft(null)
+setReason('')
+setCreateUncertain(false)
+setBusy('detail')
+setNotice('')
+setSelected(publicId)
+setDetail(loaded)
+setDraft(loaded.activity.status === 'draft' ? draftFromActivity(loaded.activity) : null)
+setNotice(message(error, '活动详情读取失败'))
+setBusy('')","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/ActivityOperationsPanel.tsx","185","saveDraft","","setBusy('draft')
+setNotice('')
+setCreateUncertain(true)
+setCreateUncertain(false)
+setSelected(saved.publicId)
+setDetail({ activity: saved, registrations: [] })
+setDraft(draftFromActivity(saved))
+setNotice(isNew ? '活动草稿已建立并读回。请由另一位有发布权限的人员复核后发布。' : '活动草稿已保存并读回。发布后这些客户承诺将锁定。')
+setCreateUncertain(false)
+setNotice(message(error, '草稿结果尚未确认，请核对上次建立结果'))
+setBusy('')","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/ActivityOperationsPanel.tsx","224","registrationAction","api.postEndpoint( `/api/staff/activity-operations/registrations/${encodeURIComponent(registration.publicId)}/${action}`, { reason: normalizedReason }, { idempotencyKey: operationKey(`activity-${action}`) }, )","setNotice('请先填写本次操作原因（至少2个字）')
+setBusy(`${registration.publicId}:${action}`)
+setNotice('')
+setReason('')
+setNotice(action === 'check-in' ? '签到已确认；如有套餐，库存仍为暂留，待实际交付后再登记出库。' : action === 'fulfill-package' ? '套餐交付已登记，库存已按暂留数量实扣并写入流水。' : action === 'no-show' ? '已标记未到。' : '报名已取消；仅明确释放的名额会进入候补递补。')
+setNotice(message(error, '报名操作没有完成'))
+setBusy('')","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/ActivityOperationsPanel.tsx","243","setPackageAvailability","api.postEndpoint( `/api/staff/activity-operations/${encodeURIComponent(activity.publicId)}/packages/${encodeURIComponent(activityPackage.publicId)}/${operation}`, { reason: normalizedReason }, { idempotencyKey: operationKey(`activity-package-${operation}`) }, )","setNotice('请先填写套餐上下架原因（至少2个字）')
+setBusy(`package:${activityPackage.publicId}:${operation}`)
+setNotice('')
+setReason('')
+setNotice(operation === 'pause' ? '套餐已暂停，新报名不可再选择；既有报名承诺不受影响。' : '套餐已恢复展示；顾客端仍会按名额、售卖窗口和库存逐项判断可订状态。')
+setNotice(message(error, '套餐上下架没有完成'))
+setBusy('')","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/ActivityOperationsPanel.tsx","266","refundAction","api.postEndpoint(endpoint, action === 'approve' || action === 'reject' || action === 'request' ? { reason: normalizedReason } : {}, { idempotencyKey: operationKey(`activity-refund-${action}`) })","setNotice('请先填写退款原因或复核说明（至少2个字）')
+setBusy(`${registration.publicId}:refund-${action}`)
+setNotice('')
+setReason('')
+setNotice(action === 'request' ? '退款已由店长发起，等待收银复核。' : action === 'approve' ? '退款已复核通过，仍需执行并等待渠道确认。' : action === 'reject' ? '退款申请已驳回。' : action === 'execute' ? '退款已提交渠道，尚未确认成功前不会标记已退款。' : '已向渠道查询退款状态。')
+setNotice(message(error, '退款操作没有完成'))
+setBusy('')","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/ActivityOperationsPanel.tsx","292","queryPayment","api.postEndpoint(`/api/payments/${registration.paymentId}/provider-query`, {}, { idempotencyKey: operationKey('activity-payment-query'), })","setBusy(`${registration.publicId}:payment-query`)
+setNotice('')
+setNotice('已向渠道查单，请按权威结果继续处理。')
+setNotice(message(error, '支付查单没有完成'))
+setBusy('')","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/ActivityOperationsPanel.tsx","304","revealContact","api.postEndpoint<unknown>( `/api/staff/activity-contacts/${encodeURIComponent(registration.contactVersionPublicId)}/reveal`, {purpose},{idempotencyKey:operationKey(`activity-contact-${purpose}`)}, )","setBusy(`${registration.publicId}:contact`)
+setNotice('')
+setContactClock(Date.now())
+setRevealedContacts((contacts)=>({...contacts,[registration.publicId]:{value:contactValue,expiresAt}}))
+setNotice('联系方式仅在当前页面短暂显示，离开或到期后自动清除。')
+setNotice(message(error,'联系方式未能安全读取'))
+setBusy('')","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/ActivityOperationsPanel.tsx","326","startCreate","","setRevealedContacts({})
+setReason('')
+setCreateUncertain(true)
+setCreateUncertain(false)
+setNotice(message(error, '无法读取本机草稿，请核对原记录'))
+setSelected(null)
+setDetail({ activity: draftShell(nextDraft), registrations: [] })
+setDraft(nextDraft)
+setNotice(createAttempt.current ? '上次建立结果待核对，已恢复原资料。点击核对会沿用原操作，不会另建活动。' : '正在建立新活动草稿。费用、权益、退款和安全承诺请一次填写完整。')","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/ActivityOperationsPanel.tsx","346","stopRegistration","api.postEndpoint(`/api/staff/activity-operations/${encodeURIComponent(activity.publicId)}/stop-registration`,{reason:submittedReason},{idempotencyKey:closeAttempt.current.key})","setNotice('请先填写至少2个字的操作原因')
+setBusy('stop-registration')
+setNotice('已停止新报名；请继续处理原有名单与收退款，处理完毕后再结束活动。')
+setNotice(message(error,'停止报名结果尚未确认，请刷新核对'))
+setBusy('')","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/ActivityOperationsPanel.tsx","364","closeActivity","api.postEndpoint(`/api/staff/activity-operations/${encodeURIComponent(activity.publicId)}/close`, {status,reason:submittedReason},{idempotencyKey:closeAttempt.current.key})","setNotice('请先填写至少2个字的操作原因')
+setBusy('close')
+setNotice('')
+setNotice('活动已结束并保留原报名与资金记录。')
+setNotice(message(error,'活动尚未结束，请检查剩余待办'))
+setBusy('')","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/ActivityOperationsPanel.tsx","384","publishActivity","api.postEndpoint(`/api/staff/activity-operations/${encodeURIComponent(activity.publicId)}/publish`, {}, { idempotencyKey: operationKey('activity-publish'), })
+api.getEndpoint<{ data: unknown }>('/api/staff/activity-operations')","setBusy('publish')
+setNotice('')
+setNotice('活动已由发布人员复核发布，顾客端将按当前承诺展示。')
+setActivities(activityList(response.data))
+setNotice(message(error, '活动没有发布'))
+setBusy('')","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/ActivityOperationsPanel.tsx","403","retryWaitlistPromotion","api.postEndpoint<{ activityPublicId: string; state: 'queued' | 'not_required' }>( `/api/staff/activity-operations/${encodeURIComponent(activity.publicId)}/waitlist-retry`, { reason: normalizedReason }, { idempotencyKey: operationKey('activity-waitlist-retry') }, )","setNotice('请先填写候补任务重试原因（至少2个字）')
+setBusy('waitlist-retry')
+setNotice('')
+setReason('')
+setNotice(result.state === 'queued' ? '候补任务已进入下一轮系统处理；系统仍会按报名时间和可用名额自动递补。' : '当前没有待重试的候补任务；有名额释放时系统会自动建立并处理候补任务。')
+setNotice(message(error, '候补任务没有进入重试队列'))
+setBusy('')","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/ActivityOperationsPanel.tsx","427","refreshSelected","api.getEndpoint<{ data: unknown }>('/api/staff/activity-operations')","setActivities(activityList(response.data))","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/ActivityOperationsPanel.tsx","433","updateDraft","","setDraft((current) => ( current === null ? null : { ...current, [key]: value } ))","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/ActivityOperationsPanel.tsx","436","updatePackage","","setDraft((current) => { if (current === null) return null return { ...current, packages: current.packages.map((activityPackage, currentIndex) => ( currentIndex === index ? { ...activityPackage, [key]: value } : activityPackage )) } })","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/ActivityOperationsPanel.tsx","442","addPackage","","setDraft((current) => current === null ? null : { ...current, packages: [...current.packages, emptyPackage(current.capacity)], })","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/ActivityOperationsPanel.tsx","445","removePackage","","setDraft((current) => current === null ? null : { ...current, packages: current.packages.filter((_, currentIndex) => currentIndex !== index), })","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/AnnualBenefitManagementPanel.tsx","130","updateRule","","setDraftRule((current) => ({ ...current, ...patch }))","SYS-291、SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/AnnualBenefitManagementPanel.tsx","131","changeKind","","setDraftRule((current) => ruleForKind({ ...current, ruleKind }))","SYS-291、SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/AnnualBenefitManagementPanel.tsx","132","addRule","","setDraftRules((current) => [...current, draftRule])
+setDraftRule((current) => ({ ...blankRule(), benefitDefinitionId: current.benefitDefinitionId }))
+setNotice('规则已加入草稿；保存后还需要独立审批和发布。')
+setNotice(error instanceof Error ? error.message : '规则格式不正确')","SYS-291、SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/AnnualBenefitManagementPanel.tsx","141","saveDraft","api.postEndpoint('/api/staff/loyalty/annual-benefit-policies', { policyCode: policyCode.trim(), timezone: 'Asia/Shanghai', reason: reason.trim(), rules: draftRules, }, { idempotencyKey: `annual-benefit-draft-${crypto.randomUUID()}` })","setNotice('请填写有效政策编号、起草说明，并至少加入一条完整规则。')
+setBusy('draft')
+setNotice('')
+setDraftRules([])
+setReason('')
+setNotice('年度礼遇草稿已保存，审批人与发布人必须分别独立。')
+setNotice(error instanceof Error ? error.message : '年度礼遇草稿未保存')
+setBusy('')","SYS-291、SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/AnnualBenefitManagementPanel.tsx","156","approve","api.postEndpoint(`/api/staff/loyalty/annual-benefit-policies/${policy.id}/approve`, { reason: approvalReason }, { idempotencyKey: `annual-benefit-approve-${crypto.randomUUID()}` })","setNotice('审批说明不足，未审批。')
+setBusy(`approve-${policy.id}`)
+setNotice('')
+setNotice('年度礼遇草稿已完成独立审批，仍未向顾客生效。')
+setNotice(error instanceof Error ? error.message : '年度礼遇审批未完成')
+setBusy('')","SYS-291、SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/AnnualBenefitManagementPanel.tsx","166","publish","api.postEndpoint(`/api/staff/loyalty/annual-benefit-policies/${policy.id}/publish`, { effectiveFrom: new Date(effectiveFrom).toISOString(), effectiveUntil: null, reason: publicationReason, }, { idempotencyKey: `annual-benefit-publish-${crypto.randomUUID()}` })","setNotice('必须填写未来生效时间和发布说明，未发布。')
+setBusy(`publish-${policy.id}`)
+setNotice('')
+setNotice('年度礼遇已排期发布；未来礼遇只展示预览，进入实际窗口才可能生成权益。')
+setNotice(error instanceof Error ? error.message : '年度礼遇未发布')
+setBusy('')","SYS-291、SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/AnnualBenefitManagementPanel.tsx","181","confirmOccurrence","api.postEndpoint('/api/staff/loyalty/annual-benefit-occurrences', { ...occurrence, cycleYear: Number(occurrence.cycleYear), confirmationReference: occurrence.confirmationReference.trim(), }, { idempotencyKey: `annual-benefit-occurrence-${crypto.randomUUID()}` })","setNotice('请填写节日规则、同一年内的日期和确认依据。')
+setBusy('occurrence')
+setNotice('')
+setNotice('节日日期已确认；顾客端只会基于该确认结果展示对应窗口。')
+setNotice(error instanceof Error ? error.message : '节日日期未确认')
+setBusy('')","SYS-291、SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/AnnualBenefitManagementPanel.tsx","197","redeemDailySnack","api.postEndpoint(`/api/staff/annual-daily-snack-claims/${encodeURIComponent(claim.claimCode)}/redeem`, {}, { idempotencyKey: `annual-daily-snack-redeem-${crypto.randomUUID()}`, })","setBusy(`daily-snack-${claim.id}`)
+setNotice('')
+setNotice('每日点心已核销；请在后厨任务或打印回执中确认实际出品。')
+setNotice(error instanceof Error ? error.message : '每日点心未核销')
+setBusy('')","SYS-291、SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/AnnualBenefitManagementPanel.tsx","210","redeemAnnualGift","api.postEndpoint(`/api/benefit-reservations/${reservation.reservationId}/redeem`, { benefitId:reservation.benefitId,customerId:reservation.customerId,tableSessionId:reservation.tableSessionId, selectedProductId:product.productId,substitutionReason:reason, }, { idempotencyKey:`annual-gift-redeem-${crypto.randomUUID()}` })","setNotice('请选择这项礼遇已发布的原商品或合规替代品。')
+setNotice('使用替代品必须填写至少2个字的替换原因。')
+setBusy(`annual-gift-${reservation.reservationId}`)
+setNotice('')
+setNotice('礼遇已核销并进入“待出品”；只有制作送达完成后才会显示“已完成”。')
+setNotice(error instanceof Error ? error.message : '年度礼遇未完成核销')
+setBusy('')","SYS-291、SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/AnnualBenefitManagementPanel.tsx","234","cancelAnnualGift","api.postEndpoint(`/api/staff/annual-benefit-reservations/${reservation.reservationId}/cancel`,{ customerId:reservation.customerId,tableSessionId:reservation.tableSessionId,reason:cancelReason, },{idempotencyKey:`annual-gift-cancel-${crypto.randomUUID()}`})","setNotice('必须填写取消原因，礼遇暂留未释放。')
+setBusy(`annual-gift-cancel-${reservation.reservationId}`)
+setNotice('')
+setNotice('生日或节日礼遇暂留已取消并释放；顾客端会更新状态。')
+setNotice(error instanceof Error?error.message:'年度礼遇暂留未取消')
+setBusy('')","SYS-291、SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/AnnualBenefitManagementPanel.tsx","248","cancelDailySnack","api.postEndpoint(`/api/staff/annual-daily-snack-claims/${encodeURIComponent(claim.claimCode)}/cancel`, { reason }, { idempotencyKey: `annual-daily-snack-cancel-${crypto.randomUUID()}`, })","setNotice(`取消原因至少2字，当前${reason.length}字，还差${2-reason.length}字；暂留尚未释放。`)
+setBusy(`daily-snack-cancel-${claim.id}`)
+setNotice('')
+setNotice('每日点心暂留已取消并释放；顾客端会更新为“已取消”。')
+setNotice(error instanceof Error ? error.message : '每日点心暂留未取消')
+setBusy('')","SYS-291、SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/AnnualBenefitManagementPanel.tsx","263","retryComplimentaryFulfillment","api.postEndpoint(`/api/staff/complimentary-fulfillment-exceptions/${item.id}/retry`,{ reason:retryReason, },{ idempotencyKey:`complimentary-fulfillment-retry-${crypto.randomUUID()}` })","setNotice('必须填写复核原因，未重新派发。')
+setBusy(`fulfillment-retry-${item.id}`)
+setNotice('')
+setNotice('已记录当前员工和复核原因，系统将可靠重试出品与打印任务。')
+setNotice(error instanceof Error?error.message:'礼遇履约未能重新派发')
+setBusy('')","SYS-291、SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/AnnualBenefitManagementPanel.tsx","278","resolveComplimentaryCancellation","api.postEndpoint(`/api/staff/complimentary-fulfillment-exceptions/${item.id}/resolve`,{ action:'cancel_release',reason, },{ idempotencyKey:`complimentary-fulfillment-cancel-${crypto.randomUUID()}` })","setNotice('必须填写核对原因，未取消礼遇出品。')
+setBusy(`fulfillment-cancel-${item.id}`)
+setNotice('')
+setNotice('礼遇异常已取消结案；系统订单、库存预留和制作容量已在同一事务释放。')
+setNotice(error instanceof Error?error.message:'礼遇异常未能取消结案')
+setBusy('')","SYS-291、SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/AnnualBenefitManagementPanel.tsx","294","resolveComplimentaryCompensation","api.postEndpoint(`/api/staff/complimentary-fulfillment-exceptions/${item.id}/resolve`,{ action:'external_compensation',reason,compensationReference, },{ idempotencyKey:`complimentary-fulfillment-compensate-${crypto.randomUUID()}` })","setNotice('必须填写可追溯的补偿凭证，未结案。')
+setNotice('必须填写补偿说明，未结案。')
+setBusy(`fulfillment-compensate-${item.id}`)
+setNotice('')
+setNotice('线下补偿已凭证化结案；原系统订单及预留已释放，顾客礼遇更新为已完成。')
+setNotice(error instanceof Error?error.message:'线下补偿未能结案')
+setBusy('')","SYS-291、SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/BottleCustodyPanel.tsx","32","perform","","setBusy(true)
+setMessage('')
+setMessage(error instanceof Error?error.message:'操作结果未确认，请刷新核对')
+setBusy(false)","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/BottleCustodyPanel.tsx","33","config","api.getEndpoint<{data:{policy:Policy;version:number;categories:Category[];accounts:{id:string;name:string}[]}}>(`${path}/policy`)","setPolicy(result.policy)
+setVersion(result.version)
+setCategories(result.categories)
+setAccounts(result.accounts)","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/BottleCustodyPanel.tsx","34","list","api.getEndpoint<{data:{items:Order[];nextCursor:string|null;summary:{count:string;stored:string;collected:string;archived:string;categoryCounts:{name:string;count:string}[]}}}>(`${path}?${params}`)","setOrders(previous=>more?[...previous,...result.items]:result.items)
+setCursor(result.nextCursor)
+setSummary(result.summary)","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/BottleCustodyPanel.tsx","35","clearDetailDrafts","","setQuantity('')
+setCode('')
+setPhotos({})
+setExpiry('')
+setReason('')
+setReturnQuantity('')
+setReturnEvidence({})
+setRestorageMode('new')","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/BottleCustodyPanel.tsx","36","inspect","api.getEndpoint<{data:Detail}>(`${path}/${id}`)","setSelectedRecord(id)
+setDetail(null)
+setDetail(result)
+setQuantity(result.order.remaining_quantity)","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/BottleCustodyPanel.tsx","37","refreshSaved","","setMessage(success)
+setRefreshError('')
+setRefreshError('办理结果已保存，最新记录暂未读到。请刷新核对，无需再次办理。')","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/BottleCustodyPanel.tsx","41","patch","","setPolicy(previous=>previous?{...previous,...value}:previous)","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CashierAfterSalesWorkbench.tsx","377","openBusinessDayFact","","setSearchDraft(decision.query)
+setFocusedBusinessDayOrderId(decision.orderId)","SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CashierAfterSalesWorkbench.tsx","392","openRefund","","setRefundDraft({ paymentId: payment.id, reason: '', amounts: {}, purpose:payment.refundableItems.some(item=>item.fundsOnly&&item.remainingRefundableMinor>0)?'price_adjustment':'return_goods' })","SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CashierAfterSalesWorkbench.tsx","396","toggleRefundItem","","setRefundDraft((current) => { if (current === null) return current const next = { ...current.amounts } if (next[itemId] === undefined) next[itemId] = formatAmount(remainingMinor) else delete next[itemId] return { ...current, amounts: next } })","SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CashierAfterSalesWorkbench.tsx","406","updateRefundAmount","","setRefundDraft((current) => current === null ? current : { ...current, amounts: { ...current.amounts, [itemId]: value } })","SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CashierAfterSalesWorkbench.tsx","412","submitRefund","","setRefundDraft(null)","SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CashierAfterSalesWorkbench.tsx","430","submitCancellation","","setCancellationDraft({ ...cancellationDraft, confirmed: true })
+setCancellationDraft(null)","SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CashierAfterSalesWorkbench.tsx","446","submitSettlementException","","setSettlementExceptionDraft({ ...settlementExceptionDraft, confirmed: true })
+setSettlementExceptionDraft(null)","SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CashierAfterSalesWorkbench.tsx","462","submitKdsCancellation","","setKdsCancellationDraft({ ...kdsCancellationDraft, confirmed: true })
+setKdsCancellationDraft(null)","SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CashierAfterSalesWorkbench.tsx","875","authorize","","setRecollectionConfirmed(true)
+setRecollectionReason('')
+setRecollectionConfirmed(false)","SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CashierAfterSalesWorkbench.tsx","902","createPayment","","setOnlineError(null)
+setOnlineError('收款没有发起成功，请核对上方提示。')
+setOnlineAction(action)
+setShowScanner(false)","SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CashierAfterSalesWorkbench.tsx","920","submit","","setConfirmed(true)
+setProvider(null)
+setReceiptReference('')
+setTerminalId('')
+setCollectionNote('')
+setConfirmed(false)","SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CashierAfterSalesWorkbench.tsx","1071","submitCollection","","setProvider(null)
+setReceiptReference('')
+setTerminalId('')
+setCollectionNote('')
+setCollectionConfirmed(false)","SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CatalogManagementPanel.tsx","315","resetPerformancePhaseEditor","","setPerformancePhaseState('idle')
+setPerformancePhaseCodes([])
+setSavedPerformancePhaseCodes([])
+setPerformancePhaseReason('')
+setPerformancePhaseBusy(false)","SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CatalogManagementPanel.tsx","324","resetRecipeEditor","","setRecipeState('idle')
+setInventoryItems([])
+setRecipeVersion(null)
+setRecipeYield('1')
+setRecipeComponents({})
+setRecipeInstructionsSnapshot({})
+setRecipeCategoryFilter('')
+setRecipeBusy(false)
+setRecipeCost(null)","SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CatalogManagementPanel.tsx","336","loadRecipeEditor","api.getEndpoint<{ data: unknown }>('/api/inventory')
+api.getEndpoint<{ data: unknown }>(`/api/inventory/products/${productId}/recipe`)
+api.getEndpoint<{ data: unknown }>(`/api/inventory/products/${productId}/recipe-cost`)","setRecipeState('loading')
+setInventoryItems(items)
+setRecipeVersion(recipe?.version ?? null)
+setRecipeYield(recipe === null ? '1' : String(recipe.yieldQuantity))
+setRecipeInstructionsSnapshot(recipe?.instructionsSnapshot ?? {})
+setRecipeComponents(Object.fromEntries((recipe?.components ?? []).map((component) => { const item = itemById.get(component.inventoryItemId) if (item === undefined) throw new Error(`配方引用物料 ${component.inventoryItemId}，但当前库存列表未返回该物料；请核对停用状态和查看权限，不要删除原配方记录`) const quantity = inventoryQuantityForEmployee( component.quantity, item.categoryCode, item.baseUnit, item.packageVolumeMl, ) const expectedWasteQuantity = inventoryQuantityForEmployee( component.expectedWasteQuantity, item.categoryCode, item.baseUnit, item.packageVolumeMl, ) if (quantity === null || expectedWasteQuantity === null) { throw new Error(`“${item.name}”缺少有效的单瓶净含量，无法换算为毫升`) } retur
+setRecipeCost(readRecipeCostPreview(costResponse.data, productId))
+setRecipeCost(null)
+setRecipeState('ready')
+setRecipeState('error')
+setNotice({ kind: 'error', text: error instanceof Error ? error.message : '商品库存配方读取失败' })","SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CatalogManagementPanel.tsx","376","loadProductPerformancePhases","api.getEndpoint<{ data: unknown }>( `/api/staff/customer-experience/products/${productId}/performance-phases`, )","setPerformancePhaseState('loading')
+setPerformancePhaseReason('')
+setPerformancePhaseCodes(configuration.phaseCodes)
+setSavedPerformancePhaseCodes(configuration.phaseCodes)
+setPerformancePhaseState('ready')
+setPerformancePhaseState('error')
+setNotice({ kind: 'error', text: error instanceof Error ? error.message : '商品演出阶段读取失败' })","SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CatalogManagementPanel.tsx","399","startCreate","","setDraft(emptyDraft(menuCategories))
+setShowAdvanced(false)
+setNotice(null)","SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CatalogManagementPanel.tsx","407","startCreateCategory","","setCategoryDraft(emptyMenuCategoryDraft(menuCategories))
+setNotice(null)","SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CatalogManagementPanel.tsx","412","startEditCategory","","setCategoryDraft({ id: category.id, code: category.code, displayName: category.displayName, parentCode: category.parentCode ?? '', sortOrder: String(category.sortOrder), guestVisible: category.guestVisible, })
+setNotice(null)","SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CatalogManagementPanel.tsx","424","saveMenuCategory","api.postEndpoint<MenuCategory>('/api/catalog/menu-categories', payload, { idempotencyKey: operationKey('menu-category-create') })
+api.patchEndpoint<MenuCategory>(`/api/catalog/menu-categories/${encodeURIComponent(categoryDraft.code)}`, payload, { idempotencyKey: operationKey('menu-category-update') })","setNotice({ kind: 'error', text: '请填写分类编号、顾客显示名称和0至100000的排序数字' })
+setCategoryBusy(true)
+setNotice(null)
+setCategoryDraft(null)
+setNotice({ kind: 'success', text: `${saved.displayName} 已保存；顾客菜单会按新层级显示` })
+setNotice({ kind: 'error', text: error instanceof Error ? error.message : '菜单分类未保存' })
+setCategoryBusy(false)","SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CatalogManagementPanel.tsx","458","startEdit","","setDraft({ id: product.id, code: product.code, name: product.name, categoryCode: product.categoryCode, fulfillmentStation: product.fulfillmentStation, productKind: product.productKind, inventoryControlMode: product.inventoryControlMode, salesSpecificationType: readSalesSpecificationType(product.productSnapshot.salesSpecificationType), status: product.status, guestVisible: product.guestVisible, searchText: product.searchText, recommendationEnabled: product.recommendationEnabled, recommendationMinGuests: integerText(product.recommendationMinGuests, '1'), recommendationMaxGuests: integerText(product.recommendationMaxGuests, '100'), recommendatio
+setShowAdvanced(false)
+setNotice(null)","SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CatalogManagementPanel.tsx","515","startSalesCompanion","","setDraft({ ...draft, id: null, code: companionProductCode(draft.code, salesSpecificationType, products), name: `${draft.name}（${label}）`, salesSpecificationType, status: 'inactive', // A whole bottle and a glass have distinct recipes and yields. Never // carry a manual whole-bottle cost into the companion product. costYuan: '', priceYuan: '', priceReason: `新增${label}销售规格`, costChangeReason: '', componentQuantities: {},choiceGroups:[], })
+setNotice({ kind: 'success', text: `已预填${label}销售商品。商品编号已使用内部编号，避免与库存条码冲突；保存后为它配置售价，并在配方中引用同一库存物料。` })","SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CatalogManagementPanel.tsx","538","closeDraft","","setDraft(null)","SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CatalogManagementPanel.tsx","544","updateDraft","","setDraft((current) => current === null ? null : { ...current, [key]: value })","SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CatalogManagementPanel.tsx","548","updateCategory","","setDraft((current) => current === null ? null : { ...current, categoryCode, })","SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CatalogManagementPanel.tsx","563","addChoiceGroup","","setDraft((current)=>current===null?null:{ ...current,choiceGroups:[...current.choiceGroups,{ id:null,code:`choice_${current.choiceGroups.length+1}`,name:'任选一款',selectionCount:'1',optionQuantities:{}, }] })","SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CatalogManagementPanel.tsx","567","updateChoiceGroup","","setDraft((current)=>{ if(current===null)return null return { ...current,choiceGroups:current.choiceGroups.map((group,position)=>position===index?{ ...group,...patch }:group) } })","SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CatalogManagementPanel.tsx","572","toggleChoiceOption","","setDraft((current)=>{ if(current===null)return null return { ...current,choiceGroups:current.choiceGroups.map((group,index)=>{ if(index!==groupIndex)return group const optionQuantities={...group.optionQuantities} if(productId in optionQuantities)delete optionQuantities[productId] else optionQuantities[productId]='1' return { ...group,optionQuantities } }) } })","SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CatalogManagementPanel.tsx","583","toggleRecipeComponent","","setRecipeComponents((current) => { const next = { ...current } if (inventoryItemId in next) delete next[inventoryItemId] else next[inventoryItemId] = { quantity: '1', expectedWasteQuantity: '0' } return next })","SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CatalogManagementPanel.tsx","592","updateRecipeComponent","","setRecipeComponents((current) => ({ ...current, [inventoryItemId]: { ...current[inventoryItemId], [key]: value }, }))","SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CatalogManagementPanel.tsx","603","saveRecipe","api.putEndpoint( `/api/inventory/products/${draft.id}/recipe`, { yieldQuantity, instructionsSnapshot: recipeInstructionsSnapshot, components: storedComponents }, { idempotencyKey: operationKey('inventory-recipe') }, )","setNotice({ kind: 'error', text: '配方至少选择一项物料；产出量、用量和损耗必须是有效数字' })
+setNotice({ kind: 'error', text: '所选液体物料缺少有效的单瓶净含量，无法把毫升安全换算为历史库存数量；请先补全物料资料' })
+setRecipeBusy(true)
+setNotice(null)
+setNotice({ kind: 'success', text: `${draft.name} 的库存配方已保存并读回核对` })
+setNotice({ kind: 'error', text: error instanceof Error ? error.message : '商品库存配方未保存' })
+setRecipeBusy(false)","SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CatalogManagementPanel.tsx","652","togglePerformancePhase","","setPerformancePhaseCodes((current) => current.includes(phaseCode) ? current.filter((item) => item !== phaseCode) : [...current, phaseCode])","SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CatalogManagementPanel.tsx","658","savePerformancePhases","api.putEndpoint<unknown>( `/api/staff/customer-experience/products/${draft.id}/performance-phases`, { phaseCodes: performancePhaseCodes, reason }, { idempotencyKey: operationKey('catalog-performance-phases') }, )","setNotice({ kind: 'error', text: '请填写2至240字的阶段配置原因' })
+setPerformancePhaseBusy(true)
+setNotice(null)
+setPerformancePhaseCodes(configuration.phaseCodes)
+setSavedPerformancePhaseCodes(configuration.phaseCodes)
+setPerformancePhaseReason('')
+setNotice({ kind: 'success', text: performancePhaseCodes.length === 0 ? `${draft.name} 已取消演出阶段限制` : `${draft.name} 的适用演出阶段已保存并读回`, })
+setNotice({ kind: 'error', text: error instanceof Error ? error.message : '商品演出阶段未保存' })
+setPerformancePhaseBusy(false)","SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CatalogManagementPanel.tsx","692","save","api.postEndpoint<CatalogProduct>('/api/catalog/products', payload, { idempotencyKey: operationKey('catalog-create') })
+api.patchEndpoint<CatalogProduct>(`/api/catalog/products/${draft.id}`, payload, { idempotencyKey: operationKey('catalog-update') })","setNotice({kind:'error',text:fieldProblems.join('；')})
+setNotice({ kind: 'error', text: '当前岗位不能查看或填写成本，不能直接创建在售商品；请先保存为停用，或由具备成本权限的员工完成上架。' })
+setNotice({ kind: 'error', text: '新建跟踪库存商品请先保存为停用；完成配方和入库后，再切换为在售。' })
+setNotice({ kind: 'error', text: '请先保存库存扣减配方；没有配方的跟踪库存酒水不能切换为在售。' })
+setNotice({ kind: 'error', text: '组合商品至少选择一个固定组成单品或必选组' })
+setNotice({ kind: 'error', text: '当前岗位没有标准售价权限。新商品请先保存为停用，或由具备定价权限的员工一次完成商品与售价配置。' })
+setNotice({ kind: 'error', text: '在售新商品必须同时填写标准售价；系统不会先创建未定价商品。' })
+setNotice({ kind: 'error', text: '组合商品数量必须为1至100' })
+setNotice({ kind:'error',text:'请填写必选组编号和名称，并确保候选菜品不少于必选数量' })
+setNotice({ kind:'error',text:`必选组“${group.name}”在${channel==='guest_qr'?'顾客点单':'员工协助点单'}渠道没有足够的已启用且配方完整菜品` })
+setNotice({ kind: 'error', text: '修改成本时请填写至少2个字的成本变更原因' })
+setBusy(true)
+setNotice(null)
+setNotice({ kind: 'success', text: `${saved.name} 已保存并从服务端读回${standardPrice === undefined ? '' : '，包含标准售价'}` })
+setNotice({ kind: 'error', text: error instanceof Error ? error.message : '商品配置未保存' })
+setBusy(false)","SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CatalogManagementPanel.tsx","1018","loadAllProducts","api.getEndpoint<{ data: unknown }>( `/api/catalog/products?status=all&limit=${pageSize}&offset=${offset}`, )","","SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CheckoutUpgradeManagementPanel.tsx","96","saveRule","api.putEndpoint(`/api/staff/customer-experience/checkout-upgrade-rules/${encodeURIComponent(code)}`, { qualification:{maximumAddMinor:number(qualification.maximumAddMinor,'最多加价',0),maximumAddBasisPoints:qualification.maximumAddBasisPoints.trim()?number(qualification.maximumAddBasisPoints,'相对加价上限',0):null, minimumContributionMinor:number(qualification.minimumContributionMinor,'升级后最低贡献额',0),minimumIncrementalContributionMinor:number(qualification.minimumIncrementalContributionMinor,'最低新增贡献额',0),positiveFitReason:qualification.positiveFitReason.trim(),maximumQuantitiesPerPerson:portionLimits,excludedProductIds:excludedProducts}, name:rule.name.t","setBusy('rule-draft')
+setNotice('')
+setNotice('规则草稿已保存。须由另一人审批、第三人发布；保存草稿不会开启升级推荐。')
+setNotice(message(error,'规则草稿没有保存'))
+setBusy('')","SYS-295、SYS-298","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CheckoutUpgradeManagementPanel.tsx","117","ruleAction","api.postEndpoint(endpoint,{reason},{idempotencyKey:operationKey(`checkout-rule-${action}`)})","setBusy(`${item.id}:${action}`)
+setNotice('')
+setNotice(action==='approve'?'审批完成，仍需第三人发布。':action==='publish'?'新规则版本已发布；此操作不改变升级功能开关。':'已从历史版本复制新草稿，不会覆盖当前版本。')
+setNotice(message(error,'规则操作没有完成'))
+setBusy('')","SYS-295、SYS-298","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CheckoutUpgradeManagementPanel.tsx","137","saveCapacity","api.postEndpoint('/api/staff/customer-experience/fulfillment-capacity-policies', { stationCode:capacity.stationCode,reason:capacity.reason.trim(),windows:capacity.windows.map((item)=>({ startsAt:localIso(item.startsAt,'开始时间'),endsAt:localIso(item.endsAt,'结束时间'), capacityLimitUnits:number(item.capacityLimitUnits,'产能上限',1), })), }, { idempotencyKey:operationKey('fulfillment-capacity-draft') })","setBusy('capacity-draft')
+setNotice('')
+setNotice('产能草稿已保存。须由另一人审批、第三人发布后才成为运行事实。')
+setNotice(message(error,'产能草稿没有保存'))
+setBusy('')","SYS-295、SYS-298","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CheckoutUpgradeManagementPanel.tsx","152","capacityAction","api.postEndpoint(`/api/staff/customer-experience/fulfillment-capacity-policies/${encodeURIComponent(item.id)}/${action}`, {reason},{idempotencyKey:operationKey(`fulfillment-capacity-${action}`)})","setBusy(`${item.id}:${action}`)
+setNotice('')
+setNotice(action==='approve'?'产能版本已审批，仍需第三人发布。':'产能版本已发布。')
+setNotice(message(error,'产能操作没有完成'))
+setBusy('')","SYS-295、SYS-298","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/complete-catalog.ts","7","loadCompleteActiveCatalog","api.getEndpoint<{ data: unknown }>( `/api/catalog/products?status=active&limit=${CATALOG_PAGE_SIZE}&offset=${offset}`, { signal }, )","","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CouponCalendarPreviewPanel.tsx","33","invalidate","","setInputRevision(previous => previous + 1)
+setBusy(false)
+setResult(null)
+setError('')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CouponCalendarPreviewPanel.tsx","34","change","","setForm(previous => ({ ...previous, [key]: value }))","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CouponCalendarPreviewPanel.tsx","48","loadRule","","setBusy(false)
+setResult(null)
+setError('')
+setForm({ from: rule.dateFrom, through: rule.dateThrough, until: localInstant(rule.validUntil), absoluteFrom: localInstant(rule.validFrom), basis: rule.dateBasis, cutoff: clock(rule.businessDayStartMinute), allDay: false, excluded: rule.excludedDates.join('\n'), weekStartsOn: String(rule.weekStartsOn),relativeDays:rule.relativeValidity?String(rule.relativeValidity.days):'',relativeBasis:rule.relativeValidity?.basis??'elapsed',issuedAt:'' })
+setWindows(rule.windows.map(window => ({ start: clock(window.startMinute), end: clock(window.endMinute) })))
+setWeekdays(rule.weekdays)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CouponCalendarPreviewPanel.tsx","57","preview","api.postEndpoint<CalendarPreview>('/api/staff/loyalty/coupon-calendar-preview', { rule, previewFrom, days: 31,issuedAt })","setBusy(true)
+setError('')
+setResult(next)
+setResult(null)
+setError(failure instanceof Error ? failure.message : '日历暂时无法生成，请重试')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CouponCalendarVersionPanel.tsx","35","load","api.getEndpoint<{ data: CalendarVersion[] }>(path)","setBusy(true)
+setMessage('')
+setItems(result.data)
+setMessage(error instanceof Error ? error.message : '读取失败，请重试')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CouponCalendarVersionPanel.tsx","41","open","","setSelected(item)
+setCode(item.code)
+setVersion(item.version)
+setReason('')
+setMessage('')
+setLimits({ perCustomerDay: String(item.limits.perCustomerDay ?? ''), perCustomerWeek: String(item.limits.perCustomerWeek ?? ''), perCustomerCampaign: String(item.limits.perCustomerCampaign ?? '') })","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CouponCalendarVersionPanel.tsx","46","remember","","setSelected(item)
+setVersion(item.version)
+setItems(previous => [item, ...previous.filter(old => old.id !== item.id)].slice(0,30))","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CouponCalendarVersionPanel.tsx","47","save","","setBusy(true)
+setMessage('')
+setMessage(`已保存 ${result.code} 第${result.version}版草稿，未发布、未发券。`)
+setMessage(error instanceof Error ? error.message : '保存结果未确认，可重试核对')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CouponCalendarVersionPanel.tsx","60","decide","api.postEndpoint<CalendarVersion>(`${path}/${target.id}/decisions`, { action, reason })","setBusy(true)
+setMessage('')
+setMessage(`${target.code} 第${target.version}版${label}已记录。`)
+setMessage(error instanceof Error ? error.message : '操作结果未确认，请重新读取')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CouponRefundReviewPanel.tsx","17","load","api.getEndpoint<{data:{items:Review[];nextCursor:string|null}}>(`/api/staff/member-gifts/refund-reviews?${query}`)","setBusy(true)
+setMessage('')
+setRows(previous=>more?[...new Map([...previous,...response.data.items].map(row=>[key(row),row])).values()]:response.data.items)
+setCursor(response.data.nextCursor)
+setState(nextState)
+setLoaded(true)
+setSelected(null)
+setMessage(error instanceof Error?error.message:'读取失败，不能判定没有待办')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CouponRefundReviewPanel.tsx","24","loadReplacements","api.getEndpoint<{data:{items:Replacement[];nextCursor:string|null}}>(`/api/staff/member-gifts/refund-replacement-options?${query}`)","setBusy(true)
+setMessage('')
+setReplacements(previous=>more?[...new Map([...previous,...response.data.items].map(item=>[item.id,item])).values()]:response.data.items)
+setReplacementCursor(response.data.nextCursor)
+setMessage(error instanceof Error?error.message:'补偿券读取失败，请重试')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CouponRefundReviewPanel.tsx","32","decide","","setBusy(true)
+setMessage('')
+setMessage(error instanceof Error?error.message:'结果尚未确认，请读取记录核对后重试')
+setBusy(false)
+setMessage(refreshed?'权益复核已记录，可在已处理记录查看；未改动收退款金额。':'权益复核已记录，但列表刷新失败，请重新读取核对。未改动收退款金额。')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustodyDepositCapture.tsx","11","stop","","setCamera(false)
+setReady(false)
+setStarting(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustodyDepositCapture.tsx","15","start","","setError('')
+setStarting(true)
+setCamera(true)
+setError(e instanceof Error?`摄像头未就绪：${e.message}`:'摄像头无法使用，请检查授权')
+setStarting(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustodyDepositCapture.tsx","16","capture","","setError(e instanceof Error?e.message:'拍照失败')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustodyReportPanel.tsx","9","run","","setBusy(true)
+setMessage('')
+setMessage(e instanceof Error?e.message:'查询失败')
+setBusy(false)","SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustodyReportPanel.tsx","10","query","api.getEndpoint<{data:Report}>(`/api/staff/bottle-custody/report?${new URLSearchParams({...input(),offset:String(offset)})}`)","setResult(data)","SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceAnalyticsPanel.tsx","101","load","api.getEndpoint<{ data: AnalyticsView }>(`/api/staff/customer-experience/analytics?${query}`)
+api.getEndpoint<{ data: ObservationEvidence[] }>( `/api/staff/customer-experience/analytics/observations?${query}&limit=50`, )","setBusy(true)
+setNotice('')
+setView(response.data)
+setEvidence(evidenceResponse.data)
+setProductOptions((current) => mergeOptions(current,[ ...response.data.products.map((item) => ({ id: item.productId,name: item.productName })), ...response.data.recommendation.map((item) => ({ id: item.productId,name: item.productName })), ]))
+setEmployeeOptions((current) => mergeOptions(current,response.data.dataQuality.staff.map((item) => ({ id: item.employeeId,name: item.employeeName, }))))
+setNotice(error instanceof Error ? error.message : '经营分析暂时无法读取')
+setBusy(false)","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceManagementPanel.tsx","286","submit","api.getEndpoint<{ data: StaffMemberAccountView }>(`/api/staff/loyalty/accounts?memberNo=${encodeURIComponent(memberNo.trim())}`)","setBusy(true)
+setNotice('')
+setAccount(null)
+setAccount(response.data)
+setNotice(error instanceof Error ? error.message : '会员账户暂时无法读取')
+setBusy(false)","SYS-289、SYS-291、SYS-292、SYS-298、SYS-299、SYS-300、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceManagementPanel.tsx","356","addRule","","setNotice('规则代码需为3至64位大写字母、数字或下划线。')
+setNotice('请选择权益定义。')
+setNotice('请至少选择“进入等级发放”或“保级发放”。')
+setNotice('规则代码不能重复。')
+setNotice('发放数量不能超过100，有效期不能超过366天。')
+setRules((current) => [...current, { ruleCode: code, eligibleTier: form.eligibleTier, inheritToHigherTiers: form.inheritToHigherTiers, grantOnEntry: form.grantOnEntry, grantOnRetention: form.grantOnRetention, benefitDefinitionId: form.benefitDefinitionId, quantity, validityDays, revocationPolicy: form.revocationPolicy, enabled: form.enabled, }])
+setForm((current) => ({ ...current, ruleCode: '' }))
+setNotice('已加入待保存规则。')","SYS-289、SYS-291、SYS-292、SYS-298、SYS-299、SYS-300、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceManagementPanel.tsx","376","saveDraft","api.postEndpoint('/api/staff/loyalty/tier-benefit-policies', { tierPolicyVersionId: form.tierPolicyVersionId, reason: form.reason.trim(), rules, }, { idempotencyKey: `tier-benefit-draft-${crypto.randomUUID()}` })","setNotice('请选择已发布等级规则、加入至少一条权益规则并填写起草原因。')
+setBusy('draft')
+setNotice('')
+setRules([])
+setForm((current) => ({ ...current, reason: '' }))
+setNotice('等级权益政策已保存为草稿，必须独立审批后再发布。')
+setNotice(error instanceof Error ? error.message : '等级权益政策草稿未保存')
+setBusy('')","SYS-289、SYS-291、SYS-292、SYS-298、SYS-299、SYS-300、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceManagementPanel.tsx","394","approve","","setNotice('审批已移至上方“会员经营配置中心”：先生成服务端影响预览，再由未参与编辑的人审批。')","SYS-289、SYS-291、SYS-292、SYS-298、SYS-299、SYS-300、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceManagementPanel.tsx","399","publish","api.postEndpoint(`/api/staff/loyalty/tier-benefit-policies/${policy.id}/publish`, { effectiveFrom: new Date(effectiveFrom).toISOString(), effectiveUntil: null, reason, }, { idempotencyKey: `tier-benefit-publish-${crypto.randomUUID()}` })","setNotice('生效时间格式不正确，未发布。')
+setNotice('发布说明不足，未发布。')
+setBusy(`publish-${policy.id}`)
+setNotice('')
+setNotice('等级权益政策已排期发布，到期回收由后台定时任务独立处理。')
+setNotice(error instanceof Error ? error.message : '等级权益政策未发布')
+setBusy('')","SYS-289、SYS-291、SYS-292、SYS-298、SYS-299、SYS-300、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceManagementPanel.tsx","473","createDraft","api.postEndpoint('/api/staff/membership-terms/drafts', { title: form.title.trim(), summary: form.summary.trim(), content: form.content.trim(), reason: form.reason.trim(), }, { idempotencyKey: `membership-terms-draft-${crypto.randomUUID()}` })","setBusy('draft')
+setNotice('')
+setForm({ title: '', summary: '', content: '', reason: '' })
+setNotice('条款草稿已保存，须由其他授权人员审批，再由第三人发布。')
+setNotice(error instanceof Error ? error.message : '入会条款草稿未保存')
+setBusy('')","SYS-289、SYS-291、SYS-292、SYS-298、SYS-299、SYS-300、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceManagementPanel.tsx","489","approve","","setNotice('审批已移至上方“会员经营配置中心”：服务端会核对条款影响和全部编辑者。')","SYS-289、SYS-291、SYS-292、SYS-298、SYS-299、SYS-300、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceManagementPanel.tsx","494","publish","api.postEndpoint(`/api/staff/membership-terms/${version.version}/publish`, { effectiveFrom: requestedTime ? new Date(requestedTime).toISOString() : null, reason, }, { idempotencyKey: `membership-terms-publish-${crypto.randomUUID()}` })","setNotice('生效时间格式不正确，未发布。')
+setNotice('发布说明不足，未发布。')
+setBusy(`publish-${version.version}`)
+setNotice('')
+setNotice('条款已发布；未到生效时间前，当前版本依然有效。')
+setNotice(error instanceof Error ? error.message : '入会条款未发布')
+setBusy('')","SYS-289、SYS-291、SYS-292、SYS-298、SYS-299、SYS-300、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceManagementPanel.tsx","569","saveVerifiedContact","api.postEndpoint('/api/staff/membership-recovery/verified-contacts', { memberNo: contact.memberNo.trim(), phone: contact.phone.trim(), reason: contact.reason.trim(), }, { idempotencyKey: `membership-recovery-contact-${crypto.randomUUID()}` })","setBusy('contact')
+setNotice('')
+setContact({ memberNo: '', phone: '', reason: '' })
+setNotice('历史会员联系方式已按受控流程核验；不会因此开启营销通知。')
+setNotice(error instanceof Error ? error.message : '联系方式核验没有完成')
+setBusy('')","SYS-289、SYS-291、SYS-292、SYS-298、SYS-299、SYS-300、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceManagementPanel.tsx","583","loadCandidates","api.getEndpoint<{ data: MembershipRecoveryCandidateView[] }>( `/api/staff/membership-recovery/cases/${encodeURIComponent(item.casePublicId)}/candidates`, )","setBusy(`candidates-${item.casePublicId}`)
+setNotice('')
+setCandidates((current) => ({ ...current, [item.casePublicId]: response.data }))
+setNotice(error instanceof Error ? error.message : '候选会员暂时无法读取')
+setBusy('')","SYS-289、SYS-291、SYS-292、SYS-298、SYS-299、SYS-300、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceManagementPanel.tsx","594","selectCandidate","api.postEndpoint(`/api/staff/membership-recovery/cases/${encodeURIComponent(item.casePublicId)}/select`, { candidatePublicId: candidate.candidatePublicId, reason, }, { idempotencyKey: `membership-recovery-select-${crypto.randomUUID()}` })","setNotice('核验依据不足，未选择候选。')
+setBusy(`select-${item.casePublicId}`)
+setNotice('')
+setNotice('候选已核验，须由另一名有合并复核权限的员工处理。')
+setNotice(error instanceof Error ? error.message : '候选没有选定')
+setBusy('')","SYS-289、SYS-291、SYS-292、SYS-298、SYS-299、SYS-300、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceManagementPanel.tsx","613","decide","api.postEndpoint(`/api/staff/membership-recovery/cases/${encodeURIComponent(item.casePublicId)}/${decision}`, { reason, }, { idempotencyKey: `membership-recovery-${decision}-${crypto.randomUUID()}` })","setNotice(`${label}不足，未处理。`)
+setBusy(`${decision}-${item.casePublicId}`)
+setNotice('')
+setNotice(decision === 'approve' ? '会员关系已合并；来源账户、积分流水和权益历史仍保留。' : '找回申请已驳回并留存审计。')
+setNotice(error instanceof Error ? error.message : '找回申请没有处理')
+setBusy('')","SYS-289、SYS-291、SYS-292、SYS-298、SYS-299、SYS-300、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceManagementPanel.tsx","720","draftTier","api.postEndpoint('/api/staff/loyalty/tier-policies', { evaluationWindowMonths: positiveInteger(tierForm.evaluationWindowMonths, '评估窗口'), tierPeriodMonths: positiveInteger(tierForm.tierPeriodMonths, '等级周期'), downgradeGraceDays: nonNegativeIntegerText(tierForm.downgradeGraceDays, '降级宽限'), silverUpgradeGrowth: positiveInteger(tierForm.silverUpgradeGrowth, '银卡升级值'), silverRetainGrowth: nonNegativeIntegerText(tierForm.silverRetainGrowth, '银卡保级值'), goldUpgradeGrowth: positiveInteger(tierForm.goldUpgradeGrowth, '金卡升级值'), goldRetainGrowth: nonNegativeIntegerText(tierForm.goldRetainGrowth, '金卡保级值'), silverPointsMultiplierNumerator: silver.numerator, s","setBusy('tier-draft')
+setNotice('')
+setNotice('等级规则已保存为草稿，需另一名授权人员复核。')
+setNotice(error instanceof Error ? error.message : '等级规则草稿未保存')
+setBusy('')","SYS-289、SYS-291、SYS-292、SYS-298、SYS-299、SYS-300、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceManagementPanel.tsx","745","approveTier","","setNotice('审批已移至上方“会员经营配置中心”：客户端勾选“已看影响”不再具有审批效力。')","SYS-289、SYS-291、SYS-292、SYS-298、SYS-299、SYS-300、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceManagementPanel.tsx","750","publishTier","api.postEndpoint(`/api/staff/loyalty/tier-policies/${encodeURIComponent(policy.id)}/publish`, { effectiveFrom: new Date(effectiveFrom).toISOString(), effectiveUntil: null, reason, }, { idempotencyKey: `loyalty-tier-publish-${crypto.randomUUID()}` })","setNotice('生效时间或复核说明不正确。')
+setBusy(`tier-${policy.id}`)
+setNotice('')
+setNotice('等级规则已由第三名发布人排期；生效前旧规则继续运行。')
+setNotice(error instanceof Error ? error.message : '等级规则未发布')
+setBusy('')","SYS-289、SYS-291、SYS-292、SYS-298、SYS-299、SYS-300、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceManagementPanel.tsx","776","draftCatalog","api.postEndpoint('/api/staff/loyalty/redemption-catalogs', { reason: itemForm.reason.trim(), items, }, { idempotencyKey: `loyalty-redemption-catalog-${crypto.randomUUID()}` })","setNotice('请选择有效商品。')
+setBusy('catalog-draft')
+setNotice('')
+setNotice('已生成包含现有兑换项的新目录草稿，旧发布版本未改变。')
+setNotice(error instanceof Error ? error.message : '兑换目录草稿未保存')
+setBusy('')","SYS-289、SYS-291、SYS-292、SYS-298、SYS-299、SYS-300、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceManagementPanel.tsx","811","approveCatalog","","setNotice('审批已移至上方“会员经营配置中心”：系统会重新计算成本、库存和履约影响。')","SYS-289、SYS-291、SYS-292、SYS-298、SYS-299、SYS-300、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceManagementPanel.tsx","816","publishCatalog","api.postEndpoint(`/api/staff/loyalty/redemption-catalogs/${encodeURIComponent(version.id)}/publish`, { effectiveFrom: new Date(effectiveFrom).toISOString(), effectiveUntil: null, reason, }, { idempotencyKey: `loyalty-redemption-publish-${crypto.randomUUID()}` })","setNotice('生效时间或复核说明不正确。')
+setBusy(`catalog-${version.id}`)
+setNotice('')
+setNotice('兑换目录已由第三名发布人排期，仍需单独开放运行开关。')
+setNotice(error instanceof Error ? error.message : '兑换目录未发布')
+setBusy('')","SYS-289、SYS-291、SYS-292、SYS-298、SYS-299、SYS-300、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceManagementPanel.tsx","842","setControl","api.putEndpoint('/api/staff/loyalty/redemption-control', { state, pilotStartsAt: pilotStartsAt ? new Date(pilotStartsAt).toISOString() : null, pilotEndsAt: pilotEndsAt ? new Date(pilotEndsAt).toISOString() : null, reason, }, { idempotencyKey: `loyalty-redemption-control-${crypto.randomUUID()}` })","setNotice('变更原因不足。')
+setNotice('试点时间不正确。')
+setBusy(`control-${state}`)
+setNotice('')
+setNotice('兑换运行状态已更新，历史兑换记录不受影响。')
+setNotice(error instanceof Error ? error.message : '兑换状态未更新')
+setBusy('')","SYS-289、SYS-291、SYS-292、SYS-298、SYS-299、SYS-300、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceManagementPanel.tsx","869","fulfill","api.postEndpoint(`/api/staff/loyalty/redemptions/${encodeURIComponent(publicId)}/fulfill`, { reason }, { idempotencyKey: `loyalty-redemption-fulfill-${crypto.randomUUID()}`, })","setNotice('交付说明不足。')
+setBusy(`fulfill-${publicId}`)
+setNotice('')
+setNotice('已记录实际交付及对应商品、活动、服务或权益事实。')
+setNotice(error instanceof Error ? error.message : '兑换未完成交付')
+setBusy('')","SYS-289、SYS-291、SYS-292、SYS-298、SYS-299、SYS-300、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceManagementPanel.tsx","887","failRedemption","api.postEndpoint(`/api/staff/loyalty/redemptions/${encodeURIComponent(item.publicId)}/fail`, { failureCode, reason, confirmedUnfulfilled: true, }, { idempotencyKey: `loyalty-redemption-fail-${crypto.randomUUID()}` })","setNotice('失败说明不足，未处理。')
+setBusy(`fail-${item.publicId}`)
+setNotice('')
+setNotice('已记录门店无法履约；只有确认尚未履约的兑换会按原批次返还。')
+setNotice(error instanceof Error ? error.message : '兑换失败处理没有完成')
+setBusy('')","SYS-289、SYS-291、SYS-292、SYS-298、SYS-299、SYS-300、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceManagementPanel.tsx","994","draft","api.postEndpoint('/api/staff/loyalty/policies', { policyCode: 'BASE', pointsNumerator: nonNegativeIntegerText(form.pointsNumerator, '积分比例分子'), pointsDenominatorMinor: positiveInteger(form.pointsDenominatorMinor, '积分比例分母'), growthNumerator: nonNegativeIntegerText(form.growthNumerator, '成长值比例分子'), growthDenominatorMinor: positiveInteger(form.growthDenominatorMinor, '成长值比例分母'), roundingMode: form.roundingMode, pointsValidityMonths: positiveInteger(form.pointsValidityMonths, '积分有效月数'), reason: form.reason.trim(), }, { idempotencyKey: `loyalty-policy-draft-${crypto.randomUUID()}` })","setBusy('draft')
+setNotice('')
+setNotice('新规则已保存为草稿，必须由另一名授权人员复核后才会生效。')
+setNotice(error instanceof Error ? error.message : '会员规则草稿未保存')
+setBusy('')","SYS-289、SYS-291、SYS-292、SYS-298、SYS-299、SYS-300、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceManagementPanel.tsx","1015","approve","","setNotice('审批已移至上方“会员经营配置中心”：必须使用服务端持久化的限时影响预览。')","SYS-289、SYS-291、SYS-292、SYS-298、SYS-299、SYS-300、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceManagementPanel.tsx","1020","publish","api.postEndpoint(`/api/staff/loyalty/policies/${encodeURIComponent(policy.id)}/publish`, { effectiveFrom: new Date(effectiveFrom).toISOString(), effectiveUntil: null, reason, }, { idempotencyKey: `loyalty-policy-publish-${crypto.randomUUID()}` })","setNotice('生效时间格式不正确，未发布。')
+setNotice('发布说明不足，未发布。')
+setBusy(policy.id)
+setNotice('')
+setNotice('规则已由第三名发布人排期；生效前旧规则继续运行，历史订单仍使用原规则版本。')
+setNotice(error instanceof Error ? error.message : '会员规则未发布')
+setBusy('')","SYS-289、SYS-291、SYS-292、SYS-298、SYS-299、SYS-300、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceManagementPanel.tsx","1047","requestSupplement","api.postEndpoint(`/api/staff/loyalty/accrual-exceptions/${encodeURIComponent(item.orderPublicId)}/requests`, { reason, }, { idempotencyKey: `loyalty-supplement-request-${crypto.randomUUID()}` })","setNotice('申请原因不足，未提交。')
+setBusy(`request-${item.orderPublicId}`)
+setNotice('')
+setNotice('补发申请已提交，必须由另一名授权人员复核。')
+setNotice(error instanceof Error ? error.message : '补发申请未提交')
+setBusy('')","SYS-289、SYS-291、SYS-292、SYS-298、SYS-299、SYS-300、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerExperienceManagementPanel.tsx","1066","decideSupplement","api.postEndpoint(`/api/staff/loyalty/supplement-requests/${encodeURIComponent(item.publicId)}/${decision}`, { reason, }, { idempotencyKey: `loyalty-supplement-${decision}-${crypto.randomUUID()}` })","setNotice(`${label}不足，未处理。`)
+setBusy(`${decision}-${item.publicId}`)
+setNotice('')
+setNotice(decision === 'approve' ? '补发已复核并原子入账。' : '补发申请已驳回。')
+setNotice(error instanceof Error ? error.message : '补发申请未处理')
+setBusy('')","SYS-289、SYS-291、SYS-292、SYS-298、SYS-299、SYS-300、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerPublicationPanel.tsx","115","submitProfileDraft","","setNotice({ tone: 'error', text: '请选择员工，并填写顾客公开服务名和草拟说明' })","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerPublicationPanel.tsx","131","publishProfile","","setNotice({ tone: 'error', text: '请先填写不少于8位的门店或人事确认编号' })","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerPublicationPanel.tsx","147","withdrawProfile","","setNotice({ tone: 'error', text: '撤下原因至少需要2个字' })","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerPublicationPanel.tsx","161","submitPolicyDraft","","setNotice({ tone: 'error', text: '请完整填写正式版本号、正文、主体、联系方式、规则版本和草拟说明' })","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerPublicationPanel.tsx","182","publishPolicy","","setNotice({ tone: 'error', text: '请填写法务或运营批准人，以及不少于8位的批准材料编号' })","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerPublicationPanel.tsx","199","withdrawPolicy","","setNotice({ tone: 'error', text: '撤下原因至少需要2个字' })","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/CustomerPublicationPanel.tsx","213","mutate","","setBusy(true)
+setNotice(null)
+setNotice({ tone: 'success', text: await action() })
+setNotice({ tone: 'error', text: message(error, '操作未完成，原数据保持不变') })
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/GroupVoucherRedemptionPanel.tsx","67","lookup","api.postEndpoint<GroupVoucherPreparePreview>( '/api/commercial-ops/vouchers/prepare', { platform, voucherCode }, )","setBusy('prepare')
+setNotice(null)
+setPreview(null)
+setPreview(prepared)
+setNotice({ tone: 'success', text: `已查询到${prepared.platformLabel}券，请核对后确认核销。` })
+setNotice({ tone: 'error', text: error instanceof NormalizedApiError ? error.message : '查询失败，券尚未核销' })
+setBusy('')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/GroupVoucherRedemptionPanel.tsx","89","consume","","setBusy('consume')
+setNotice(null)
+setPreview(null)
+setCode('')
+setNotice({ tone: 'success', text: `${GROUP_VOUCHER_PLATFORM_LABELS[redeemed.platform as GroupVoucherPlatformCode]??'团购'}券 ${redeemed.voucherCodeMasked} 已核销。` })
+setNotice({ tone: 'error', text: error instanceof NormalizedApiError ? error.message : '核销未完成，请按平台结果核对' })
+setBusy('')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/HomeContentManagementPanel.tsx","54","create","","setSelected('')
+setDraft(emptyDraft())
+setNotice('正在建立首页精选内容草稿。未发布前顾客端不可见。')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/HomeContentManagementPanel.tsx","55","edit","","setSelected(card.code)
+setDraft(toDraft(card))
+setNotice(card.status==='published'?'已发布内容需先暂停展示，再修改。':'正在编辑草稿。')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/HomeContentManagementPanel.tsx","56","update","","setDraft(current=>current===null?null:{...current,[key]:value})","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/HomeContentManagementPanel.tsx","57","save","api.putEndpoint<unknown>(endpoint,body,{idempotencyKey:key('home-content-update')})
+api.postEndpoint<unknown>(endpoint,body,{idempotencyKey:key('home-content-create')})","setBusy('save')
+setNotice('')
+setSelected(saved.code)
+setDraft(toDraft(saved))
+setNotice('草稿已保存，发布前不会出现在小程序首页。')
+setNotice(message(error,'草稿没有保存'))
+setBusy('')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/HomeContentManagementPanel.tsx","70","action","api.postEndpoint(`/api/staff/home-content-cards/${encodeURIComponent(card.code)}/${operation}`,{ reason:operation==='publish'?'管理人员确认内容、链接与展示排期后发布':'管理人员暂停首页展示', },{idempotencyKey:key(`home-content-${operation}`)})","setBusy(`${operation}:${card.code}`)
+setNotice('')
+setNotice(operation==='publish'?'内容已发布；无需重新发版。':'内容已从首页撤下，可修改后重新发布。')
+setNotice(message(error,operation==='publish'?'内容没有发布':'内容没有撤下'))
+setBusy('')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/HomeContentManagementPanel.tsx","88","updateSupport","","setSupportDraft(current=>current===null?null:{...current,[key]:value})","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/HomeContentManagementPanel.tsx","89","saveSupport","api.putEndpoint('/api/staff/customer-experience/support-contact',{rolloutState:supportDraft.rolloutState,configuration:{phone:supportDraft.phone,phoneLabel:supportDraft.phoneLabel,wecomName:supportDraft.wecomName,wecomQrImageUrl:supportDraft.wecomQrImageUrl||null},reason:supportDraft.reason},{idempotencyKey:key('support-contact-update')})","setBusy('support')
+setNotice('')
+setNotice(supportDraft.rolloutState==='enabled'?'门店联系信息已发布到小程序“我的”页面。':'门店联系信息已保存为关闭状态，顾客端不会显示。')
+setNotice(message(error,'门店联系信息没有保存'))
+setBusy('')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/InventoryBarcodeScanner.tsx","43","accept","","setDetectedCode(code)
+setCameraState('detected')
+setDetail('')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/InventoryBarcodeScanner.tsx","53","cameraFailure","","setDetail(message)
+setCameraState('unavailable')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/InventoryBarcodeScanner.tsx","67","startFallbackDecoder","","setDetail('已启用兼容识别，可扫描条形码或二维码。')
+setDetail('摄像头已打开，但当前设备的本地识别不可用；请手工输入条码。')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/InventoryBarcodeScanner.tsx","118","start","","setCameraState('ready')
+setDetail('将条形码或二维码放入框内。')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/InventoryStockCountPanel.tsx","42","decideBatch","","setNotice('请填写至少2字的批量退回原因')
+setBusy(true)
+setResults([])
+setNotice('')
+setNotice(`正在处理 ${completed.length + 1}/${counts.length}`)
+setResults([...completed])
+setNotice(`本批${counts.length}张：${succeeded}张已${action === 'approve' ? '通过' : '退回'}，${counts.length - succeeded}张未完成。具体结果见下方。`)
+setSelected([])
+setRevision(value => value + 1)
+setNotice(current => `${current} 库存汇总暂未刷新，请刷新核对。`)
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/InventoryStockCountPanel.tsx","78","decide","","setNotice('请填写至少2字的退回原因')
+setBusy(true)
+setNotice(action === 'approve' ? '盘点已审核通过，库存已按差异更新' : '盘点已退回，库存未改变')
+setReasons(current => { const next = { ...current }; delete next[count.id]; return next })
+setRevision(value => value + 1)
+setNotice(current => `${current}；库存汇总暂未刷新，请刷新核对。`)
+setNotice(reason instanceof Error ? reason.message : '审核结果尚未确认，请刷新核对；再次操作沿用原请求')
+setRevision(value => value + 1)
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/item-after-sales-api.ts","59","request","","setTimeout(()=>controller.abort(),25_000)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/ItemAfterSalesPanel.tsx","11","ItemAfterSalesPanel","api.pending(itemId)","","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/ItemAfterSalesPanel.tsx","41","refresh","api.pending(itemId)","setRefreshDelayed(false)
+setRefreshDelayed(true)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/ItemAfterSalesPanel.tsx","51","run","","setBusy(true)
+setError('')
+setNotice('')
+setNeedsRefresh(true)
+setNotice('处理结果已确认，正在更新商品')
+setNotice('商品处理进度已更新')
+setError(committed?'操作已经成功，最新商品状态暂未读回。请刷新商品状态，不用再次提交。':error instanceof Error?error.message:'结果待确认，请恢复原操作')
+setNeedsRefresh(true)
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/ItemAfterSalesPendingPanel.tsx","21","load","api.listPending(more?data?.nextCursor??undefined:undefined)","setBusy(true)
+setError('')
+setData(current=>more&&current?{...value,items:[...current.items,...value.items.filter(item=>!current.items.some(existing=>existing.caseId===item.caseId))]}:value)
+setExpanded(more)
+setRefreshDelayed(false)
+setError(error instanceof Error?error.message:'待处理商品暂未读取')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/ItemAfterSalesPendingPanel.tsx","32","refresh","api.listPending()","setData(value)
+setRefreshDelayed(false)
+setRefreshDelayed(true)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/LaunchPopupPanel.tsx","9","load","api.getEndpoint<{data:Policy}>('/api/staff/launch-popup')","setValue(response.data)
+setProducts(catalog as {id:string;name:string}[])","SYS-296","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/LaunchPopupPanel.tsx","10","perform","","setBusy(true)
+setMessage(e instanceof Error?e.message:'操作未确认，请刷新核对')
+setBusy(false)","SYS-296","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/LoyaltyEmergencyControlPanel.tsx","40","change","api.putEndpoint(`/api/staff/loyalty/operational-controls/${item.capability}`,{ operation,reason,reviewAt,expectedVersion:item.version, },{ idempotencyKey:`loyalty-operation-${crypto.randomUUID()}` })","setNotice('复核时间必须晚于当前时间。')
+setBusy(item.capability)
+setNotice('')
+setNotice(operation==='pause'?'已暂停；付款、订单和退款仍正常运行。':'已恢复；待处理事项会由后台安全重算。')
+setNotice(error instanceof Error?error.message:'运行状态没有改变，请刷新后重试')
+setBusy(null)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MarketingContactPanel.tsx","34","change","","setForm(previous=>({...previous,[key]:value}))","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MarketingContactPanel.tsx","35","read","api.getEndpoint<{data:Page<Notice>|Page<Job>}>(`${root}/${kind}${more&&cursor?`?cursor=${encodeURIComponent(cursor)}`:''}`)","setNotices(previous=>more?[...new Map([...previous,...data.items].map(r=>[r.id,r])).values()]:data.items)
+setNoticeCursor(data.nextCursor)
+setJobs(previous=>more?[...new Map([...previous,...data.items].map(r=>[r.id,r])).values()]:data.items)
+setJobCursor(data.nextCursor)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MarketingContactPanel.tsx","42","operate","","setBusy(true)
+setMessage('')
+setMessage(error instanceof Error?error.message:'暂未完成，请刷新核对')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MarketingContactPanel.tsx","60","save","","setMessage(error instanceof Error?error.message:'请核对告知内容')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MediaAssetPicker.tsx","48","upload","api.postEndpoint<unknown>('/api/staff/media-assets', { purpose,fileName:file.name,mimeType:file.type,base64, }, { idempotencyKey: `media-upload-${crypto.randomUUID()}` })","setMessage('请使用 JPG、PNG 或 WebP 图片')
+setMessage('请先把图片压缩到 200KB 以内再上传')
+setBusy(true)
+setMessage('')
+setAssets((current)=>[asset,...current.filter((item)=>item.publicId!==asset.publicId)])
+setMessage('图片已上传并选中；保存当前内容后才会正式绑定。')
+setMessage(error instanceof Error ? error.message : '图片没有上传')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MemberCardManagementPanel.tsx","22","load","api.getEndpoint<{data:{items:Project[];nextCursor:string|null}}>(`${path}/projects`)
+api.getEndpoint<{data:{items:Application[];nextCursor:string|null}}>(`${path}/applications`)","setBusy(true)
+setMessage('')
+setProjects(response.data.items)
+setProjectCursor(response.data.nextCursor)
+setApplications(response.data.items)
+setApplicationCursor(response.data.nextCursor)
+setSelected([])
+setMessage(error instanceof Error?error.message:'读取失败，请重试')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MemberCardManagementPanel.tsx","31","loadMore","api.getEndpoint<{data:{items:Project[];nextCursor:string|null}}>(`${path}/projects?cursor=${encodeURIComponent(cursor)}`)
+api.getEndpoint<{data:{items:Application[];nextCursor:string|null}}>(`${path}/applications?cursor=${encodeURIComponent(cursor)}`)","setBusy(true)
+setProjects(previous=>[...new Map([...previous,...response.data.items].map(item=>[item.id,item])).values()])
+setProjectCursor(response.data.nextCursor)
+setApplications(previous=>[...new Map([...previous,...response.data.items].map(item=>[item.id,item])).values()])
+setApplicationCursor(response.data.nextCursor)
+setMessage(error instanceof Error?error.message:'翻页失败，可重试；已读记录保留')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MemberCardManagementPanel.tsx","46","loadHoldings","api.getEndpoint<{data:{items:Holding[];nextCursor:string|null}}>(`${path}/holdings${more&&holdingCursor?`?cursor=${encodeURIComponent(holdingCursor)}`:''}`)","setBusy(true)
+setHoldings(previous=>more?[...new Map([...previous,...result.data.items].map(item=>[item.id,item])).values()]:result.data.items)
+setHoldingCursor(result.data.nextCursor)
+setMessage(error instanceof Error?error.message:'读取失败，请重试')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MemberCardManagementPanel.tsx","55","changeHolding","","setMessage('请先填写持卡状态变更原因')
+setBusy(true)
+setHoldings(previous=>previous.map(item=>item.id===card.id?{...item,status:result.status}:item))
+setMessage(`持卡已${label}。`)
+setMessage(error instanceof Error?error.message:'结果未确认，请刷新核对')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MemberCardManagementPanel.tsx","68","save","","setBusy(true)
+setMessage('')
+setMessage('已保存草稿，尚未开放申请；请先配置企业微信与服务号加入门槛、发卡或发券。')
+setMessage(error instanceof Error?error.message:'保存结果未确认，请核对后重试')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MemberCardManagementPanel.tsx","79","decide","","setMessage('请选择或填写简短审核原因')
+setBusy(true)
+setMessage('')
+setMessage(results.join('\n'))
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MemberCardManagementPanel.tsx","92","state","","setBusy(true)
+setMessage('项目状态已更新。')
+setMessage(error instanceof Error?error.message:'状态未确认，请刷新')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MemberGiftCampaignPanel.tsx","18","load","api.getEndpoint<{data:Page<Option>}>(`/api/staff/member-gifts/options?${query}`)","setBusy(true)
+setError('')
+setRows(previous=>more?[...new Map([...previous,...response.data.items].map(r=>[r.id,r])).values()]:response.data.items)
+setCursor(response.data.nextCursor)
+setError(error instanceof Error?error.message:'读取失败，可重试')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MemberGiftCampaignPanel.tsx","37","change","","setForm(previous=>({...previous,[key]:value}))","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MemberGiftCampaignPanel.tsx","38","load","api.getEndpoint<{data:Page<Campaign>|Page<Job>}>(`${path}/${kind}${more&&cursor?`?cursor=${encodeURIComponent(cursor)}`:''}`)","setBusy(true)
+setCampaigns(previous=>more?[...new Map([...previous,...data.items].map(r=>[r.id,r])).values()]:data.items)
+setCampaignCursor(data.nextCursor)
+setJobs(previous=>more?[...new Map([...previous,...data.items].map(r=>[r.id,r])).values()]:data.items)
+setJobCursor(data.nextCursor)
+setMessage(error instanceof Error?error.message:'读取失败，已读记录保留')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MemberGiftCampaignPanel.tsx","47","command","","setMessage('请填写本次操作原因')
+setBusy(true)
+setMessage('')
+setMessage('操作已记录。请读取最新活动或任务核对；任务提交不等于已发券或已发送提醒。')
+setMessage(error instanceof Error?error.message:'结果未确认，请读取核对；重试不会重复执行同一操作')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MemberGiftCampaignPanel.tsx","59","save","","setMessage(error instanceof Error?error.message:'请核对规则')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MemberNumberPolicyPanel.tsx","10","load","api.getEndpoint<{data:View}>('/api/staff/member-number-policy')","setBusy(true)
+setView((await api.getEndpoint<{data:View}>('/api/staff/member-number-policy')).data)
+setMessage('')
+setMessage(error instanceof Error?error.message:'读取失败，可重试')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MemberNumberPolicyPanel.tsx","14","change","","setView(value=>value?{...value,policy:{...value.policy,...patch}}:value)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MemberNumberPolicyPanel.tsx","15","save","","setBusy(true)
+setMessage('号段配置已保存，已发会员号保持不变。')
+setMessage(error instanceof Error?error.message:'保存结果未确认，请刷新核对')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MembershipConfigurationCenterPanel.tsx","50","open","","setExpanded(true)","SYS-289、SYS-293、SYS-294、SYS-295、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MembershipConfigurationCenterPanel.tsx","57","open","api.getEndpoint<{data:Draft}>(path(item))","setBusy(item.configurationId)
+setNotice('')
+setPreview(null)
+setSelected(response.data)
+setEditing(clone(response.data.content))
+setReason('')
+setNotice(message(error,'配置详情暂时无法读取'))
+setBusy('')","SYS-289、SYS-293、SYS-294、SYS-295、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MembershipConfigurationCenterPanel.tsx","61","save","api.putEndpoint<Draft>(`${path(selected)}/draft`,{expectedRevision:selected.revision,reason:reason.trim(),content:editing})","setNotice('请填写本次修改原因。')
+setBusy('save')
+setNotice('')
+setPreview(null)
+setSelected(result)
+setEditing(clone(result.content))
+setNotice('草稿已保存；此前影响预览已失效，请重新生成。')
+setNotice(message(error,'草稿没有保存，请刷新后重试'))
+setBusy('')","SYS-289、SYS-293、SYS-294、SYS-295、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MembershipConfigurationCenterPanel.tsx","66","generatePreview","api.postEndpoint<Preview>(`${path(selected)}/impact-preview`,{})","setBusy('preview')
+setNotice('')
+setPreview(result)
+setNotice('已按当前会员、成本、库存与待交付事项计算，预览15分钟内有效。')
+setNotice(message(error,'影响预览生成失败'))
+setBusy('')","SYS-289、SYS-293、SYS-294、SYS-295、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MembershipConfigurationCenterPanel.tsx","70","approve","api.postEndpoint<Draft>(`${path(selected)}/approve`,{expectedRevision:selected.revision,impactPreviewPublicId:preview.publicId,reason:reason.trim()})","setNotice('请填写独立审批说明。')
+setBusy('approve')
+setNotice('')
+setSelected(result)
+setEditing(clone(result.content))
+setPreview(null)
+setNotice('独立审批已记录；配置尚未生效，等待第三位授权人员发布。')
+setNotice(message(error,'审批未完成，请重新生成影响预览'))
+setBusy('')","SYS-289、SYS-293、SYS-294、SYS-295、SYS-301","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MonthlySchedulePanel.tsx","23","loadPublished","api.getEndpoint<{data:PerformanceRevisionSchedule[]}>(`/api/staff/schedules/monthly?month=${month}`)","setPublished(response.data)","SYS-303","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MonthlySchedulePanel.tsx","25","invalidate","","setPreview(null)
+setMessage('')","SYS-303","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MonthlySchedulePanel.tsx","26","generate","","setMessage('请选择月份')
+setMessage('每条规则都需要选择歌手和起止时间')
+setSlots(next.sort((a,b)=>a.startsAt.localeCompare(b.startsAt)))
+setMessage(`已生成 ${next.length} 场草稿。可逐场修改歌手、时间或移除例外日期，预览通过后发布。`)","SYS-303","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MonthlySchedulePanel.tsx","40","check","api.postEndpoint<Preview[]>('/api/staff/schedules/monthly/preview',{month,slots})","setBusy(true)
+setPreview(result)
+setMessage(error instanceof Error?error.message:'预览未完成')
+setBusy(false)","SYS-303","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MonthlySchedulePanel.tsx","41","publish","api.postEndpoint<{createdCount:number;existingCount:number}>('/api/staff/schedules/monthly/publish',payload,{idempotencyKey:attempt.current.key})","setBusy(true)
+setMessage(`已发布 ${result.createdCount} 场，${result.existingCount} 场已存在并保留。`)
+setPreview(null)
+setMessage(error instanceof Error?error.message:'发布结果未确认，再次点击会核对同一请求')
+setBusy(false)","SYS-303","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/MonthlySchedulePanel.tsx","49","changeSlot","","setSlots(current=>current.map((slot,i)=>i===index?{...slot,...patch}:slot))","SYS-303","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/NormalizedStaffApp.tsx","72","changed","","setAuth(null)
+setStaffNavigation(null)
+setInitialBootstrap(null)
+setMessage('其他页面已切换员工，请重新登录后继续')
+setPhase('login')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/NormalizedStaffApp.tsx","88","heartbeat","api.heartbeatStaff()","setAuth(next)
+setAuth(null)
+setStaffNavigation(null)
+setInitialBootstrap(null)
+setMessage('登录状态已结束，请重新登录')
+setPhase('login')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/NormalizedStaffApp.tsx","121","syncRoute","","setStaffLocation(window.location.pathname + window.location.search)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/NormalizedStaffApp.tsx","154","loginRequired","","setAuth(null)
+setStaffNavigation(null)
+setInitialBootstrap(null)
+setPhase('login')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/NormalizedStaffApp.tsx","155","switchReady","","setStaffLocation('/')
+setMessage(null)
+setStaffNavigation(null)
+setInitialBootstrap(null)
+setAuth(session)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/NormalizedStaffApp.tsx","163","logoutReady","","setStaffLocation('/')
+setMessage(null)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/NormalizedStaffApp.tsx","169","navigate","","setMessage('当前入口不可用，请从工作台选择已授权的功能。')
+setMessage(null)
+setStaffLocation(target.pathname + target.search)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/NormalizedStaffApp.tsx","261","close","","setOpen(false)
+setPin('')
+setError(null)
+setLogoutArmed(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/NormalizedStaffApp.tsx","268","submitSwitch","api.switchStaff({ employeeCode: employeeCode.trim(), pin })","setPending(true)
+setError(null)
+setLogoutArmed(false)
+setEmployeeCode('')
+setPin('')
+setOpen(false)
+setError('账号、PIN或当前登录状态无效，请核对后重试')
+setError(displayError(reason, '员工切换暂时没有完成，请重试'))
+setPending(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/NormalizedStaffApp.tsx","290","logout","api.logoutStaff()","setLogoutArmed(true)
+setError(null)
+setPending(true)
+setError(null)
+setOpen(false)
+setLogoutArmed(false)
+setError(displayError(reason, '退出结果无法确认，请重试'))
+setPending(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/NormalizedStaffApp.tsx","400","submit","api.grantDeviceAccess({ credential, deviceKey: getOrCreateDeviceKey() })","setPending(true)
+setError(null)
+setCredential('')
+setError(displayError(reason, '门店口令没有通过，请核对后重试'))
+setPending(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/NormalizedStaffApp.tsx","432","submit","api.loginStaff({ employeeCode: employeeCode.trim(), pin })","setPending(true)
+setError(null)
+setError('账号、PIN或设备验证无效，请核对后重试')
+setError(displayError(reason, '登录暂时没有完成，请重试'))
+setPending(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/NormalizedStaffWorkspace.tsx","207","update","","setOnline(navigator.onLine)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/NormalizedStaffWorkspace.tsx","369","key","","setMobileMenuOpen(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/OperatingHistoryPanel.tsx","50","selectDay","","setDate(day)
+setEndDate(day)","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/OperatingHistoryPanel.tsx","53","read","api.getEndpoint<{data:OperatingHistory}>(`/api/operations/history?${params}`)","setBusy(true)
+setError('')
+setData(response.data)
+setError(reason instanceof Error?reason.message:'账务历史暂未读取成功')
+setBusy(false)","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/OperatingHistoryPanel.tsx","65","reset","","setData(null)
+setBusy(false)
+setError('')","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/OperatingHistoryPanel.tsx","66","exportAll","api.getEndpoint<{data:OperatingHistory}>(`/api/operations/history?${params}`)","setBusy(true)
+setError('')
+setError(reason instanceof Error?reason.message:'导出未完成，请重试')
+setBusy(false)","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/OperatingHistoryPanel.tsx","76","download","","setTimeout(()=>URL.revokeObjectURL(url),1000)","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/order-stock-return-recovery.ts","34","submit","executeRecoverableCommand(this.namespace,attempt.body,attempt.key,async key=>{ // Also migrates an older same-body recoverable-command key before sending. attempt.key=key;this.save(attempt) const result=await this.api.postEndpoint<{id:string}>(this.endpoint,attempt.body,{idempotencyKey:key}) if(!result||typeof result.id!=='string')throw new Error('退库回执暂未读全，请恢复原登记结果') return result.id }).then(id=>{this.save({...attempt,recordId:id});return id}).catch((error:unknown)=>{ const status=error&&typeof error==='object'&&'status' in error?error.status:null // Authorization/validation refusals are definite; conflict and unknown // results retain the or
+executeRecoverableCommand(this.namespace,attempt.body,attempt.key,async key=>{ // Also migrates an older same-body recoverable-command key before sending. attempt.key=key;this.save(attempt) const result=await this.api.postEndpoint<{id:string}>(this.endpoint,attempt.body,{idempotencyKey:key}) if(!result||typeof result.id!=='string')throw new Error('退库回执暂未读全，请恢复原登记结果') return result.id }).then(id=>{this.save({...attempt,recordId:id});return id}).catch((error:unknown)=>{ const status=error&&typeof error==='object'&&'status' in error?error.status:null // Authorization/validation refusals are definite; conflict and unknown // results retain the or
+executeRecoverableCommand(this.namespace,attempt.body,attempt.key,async key=>{ // Also migrates an older same-body recoverable-command key before sending. attempt.key=key;this.save(attempt) const result=await this.api.postEndpoint<{id:string}>(this.endpoint,attempt.body,{idempotencyKey:key}) if(!result||typeof result.id!=='string')throw new Error('退库回执暂未读全，请恢复原登记结果') return result.id }).then(id=>{this.save({...attempt,recordId:id});return id})","","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/order-stock-return-recovery.ts","66","save","","notifyChanged()","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/order-stock-return-recovery.ts","67","clear","","notifyChanged()","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/OrderBillPrintButton.tsx","14","request","api.postEndpoint<{requestId:string;jobIds?:string[]}>(tableSessionId?`/api/hardware/table-sessions/${encodeURIComponent(tableSessionId)}/bill`:businessDate?`/api/hardware/business-days/${encodeURIComponent(businessDate)}/report`:`/api/hardware/orders/${encodeURIComponent(orderId)}/bill`,businessDate?(legacyReport?{endDate:endDate??businessDate}:{endDate:endDate??businessDate,mode:reportMode,grouping:reportGrouping}):{}, {idempotencyKey:key.current})","setBusy(true)
+setReceipt(response)
+setQueued(true)
+setMessage('打印任务已生成，不代表已出纸。未出纸请核对打印任务，不要重复补打。')
+setMessage(`${reason instanceof Error?reason.message:'打印请求暂未确认'}；再次点击仅核对同一请求，订单和收款不受影响。`)
+setBusy(false)","SYS-299、SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/OrderBillPrintButton.tsx","31","checkProgress","api.getEndpoint<{data:Array<{id:string;status:string;stationCode:string}>}>(`/api/hardware/print-requests/${receipt.requestId}`)","setBusy(true)
+setMessage(response.data.length?response.data.map((job,index)=>`任务${index+1}：${labels[job.status]??'待核对'}`).join('；')+'。系统状态不证明纸张已正常输出。':'暂未读到任务，请保留请求号核对，不要重复打印。')
+setMessage('任务状态暂未读取，请稍后再核对；原打印请求保留。')
+setBusy(false)","SYS-299、SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/OrderBillPrintButton.tsx","69","requestStateChanged","","setPending(value)
+setActionSelection(`${mode}:${grouping}`)","SYS-299、SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/OrderStockReturnForm.tsx","12","refreshRemaining","","setConfirmed(false)
+setReason('')
+setUnits(1)
+setNotice('已核对剩余数量。本次退库完成，没有再次退款或出品。')","SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/OrderStockReturnForm.tsx","17","run","","setNotice('请核实数量、填写原因，并确认商品处理事实')
+setBusy(true)
+setNotice('退库登记已成功，正在核对剩余数量。')
+setNotice(recovery.pending()?.recordId?'退库已经成功，剩余数量暂未读回。只需刷新数量，不要再次登记。':error instanceof Error?error.message:'退库结果未确认，请恢复原登记结果')
+setBusy(false)","SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/OrderStockReturnForm.tsx","29","refresh","","setBusy(true)
+setNotice('退库已经成功，剩余数量仍未读回，请稍后刷新数量。')
+setBusy(false)","SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/OwnerFinancePanel.tsx","313","run","","setBusy(key)
+setNotice("""")
+setNotice(success)
+setNotice(errorMessage(error, ""操作没有完成，请核对后重试""))
+setBusy("""")","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/OwnerFinancePanel.tsx","335","submitCost","","setNotice(""请选择费用分类"")
+setCorrectingCost(null)
+setCorrectionReason("""")
+setCost((value) => ({ ...value, name: """", amount: """", tax: ""0"", start: businessDate, end: businessDate, paid: true, paidOn: businessDate, counterparty: """", note: """", }))","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/OwnerFinancePanel.tsx","390","beginCostCorrection","","setCorrectingCost(item)
+setCorrectionReason("""")
+setCost({ name: item.name, categoryId: item.categoryDefinitionId ?? fallbackCategory?.id ?? """", centerId: item.costCenterId ?? overview?.costCenters[0]?.id ?? """", amount: fromMinor(item.netAmountMinor), tax: fromMinor(item.taxAmountMinor), start: item.serviceStartDate, end: item.serviceEndDate, paid: item.cashPaidOn !== null, paidOn: item.cashPaidOn ?? overview?.businessDate ?? today, counterparty: item.counterparty ?? """", note: item.note ?? """", })","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/OwnerFinancePanel.tsx","413","cancelCostCorrection","","setCorrectingCost(null)
+setCorrectionReason("""")","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/OwnerFinancePanel.tsx","417","submitRecurring","","setNotice(""请选择费用分类"")","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/OwnerFinancePanel.tsx","524","submitPayroll","","setNotice(""请先为该员工建立有效的薪资标准"")
+setNotice(""编辑对象与当前周期或员工不一致，请取消编辑后重新选择"")
+setEditingPayrollLine(null)","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/OwnerFinancePanel.tsx","564","editPayrollLine","","setEditingPayrollLine(line)
+setPayroll({ employeeId: line.employeeId, periodStart: draft.periodStart, periodEnd: draft.periodEnd, units: String(line.units), base: fromMinor(line.basePayMinor), overtime: fromMinor(line.overtimeMinor), bonus: fromMinor(line.bonusMinor), commission: fromMinor(line.commissionMinor), allowance: fromMinor(line.allowanceMinor), deduction: fromMinor(line.deductionMinor), employerContribution: fromMinor(line.employerContributionMinor), note: line.note ?? """" })","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/PaymentFinanceReviewPanel.tsx","9","load","api.getEndpoint<{data:Row[];hasMore:boolean;urgentCount:number}>(`/api/payments/finance-review?page=${open?page:0}`)","setRows(result.data)
+setMore(result.hasMore)
+setUrgentCount(result.urgentCount)
+setMessage('')
+setMessage(error instanceof Error?error.message:'财务核对暂未读取')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/PaymentFinanceReviewPanel.tsx","19","save","api.postEndpoint(`/api/payments/${row.id}/finance-review`,body,{idempotencyKey:attempts.current.get(row.id)!.key})","setMessage('请填写至少3字的核对结果或后续安排')
+setBusy(row.id)
+setRevision(value=>value+1)
+setMessage(resolve?'财务核对已结案':'核对进展已保存，本人已登记为负责人')
+setMessage(error instanceof Error?error.message:'保存结果未确认，请使用原内容重试')
+setBusy(null)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/PerformanceRevisionPanel.tsx","47","submit","api.postEndpoint('/api/staff/performance-revisions', request, { idempotencyKey: pendingAttempt.current.key, })
+api.getEndpoint<unknown>( `/api/staff/performance-revisions/${encodeURIComponent(revisionPublicId)}/impacts`, )","setNotice('请填写可复核的调整原因')
+setNotice('改期必须填写有效的新开始和结束时间')
+setNotice('换场必须选择另一场已排期演出')
+setBusy(true)
+setNotice('')
+setNotice(affected === null ? '演出调整已保存，受影响预约将等待顾客重新确认' : `演出调整已保存，${affected}条预约等待顾客重新确认`)
+setReason('')
+setStartsAt('')
+setEndsAt('')
+setReplacementScheduleId('')
+setLatestImpacts(record(payload) && Array.isArray(payload.impacts) ? payload.impacts.filter(isImpactView) : [])
+setLatestImpacts([])
+setNotice((current) => `${current}；受影响清单暂时未读到，可刷新后复核`)
+setNotice(error instanceof Error ? `${error.message}；内容已保留，可核对后重试` : '调整未完成；内容已保留，可核对后重试')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/PersonalContactGovernancePanel.tsx","47","draft","api.postEndpoint('/api/staff/personal-contact-governance/policies',{ resourceKind:policyForm.resourceKind, retentionDaysAfterPurposeEnd:integer(policyForm.days,'保留天数'), legalBasisReference:policyForm.basis.trim(),reason:policyForm.reason.trim(), })","setBusy('draft')
+setNotice('')
+setPolicyForm((value)=>({...value,basis:'',reason:''}))
+setNotice('保留策略草稿已建立，须由另一人审批、第三人发布。')
+setNotice(message(error,'策略草稿未保存'))
+setBusy('')","SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/PersonalContactGovernancePanel.tsx","59","transition","api.postEndpoint(`/api/staff/personal-contact-governance/policies/${encodeURIComponent(policy.publicId)}/${action}`, action==='approve'?{reason}:{reason,effectiveFrom:new Date().toISOString()})","setBusy(`${policy.publicId}:${action}`)
+setNotice('')
+setNotice(action==='approve'?'已审批，等待第三人发布。':'策略已发布；不会自动修改法定期限，仍按门店核准内容执行。')
+setNotice(message(error,action==='approve'?'策略未能审批':'策略未能发布'))
+setBusy('')","SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/PersonalContactGovernancePanel.tsx","75","createHold","api.postEndpoint('/api/staff/personal-contact-governance/legal-holds',{ resourceKind:holdForm.resourceKind,resourcePublicId:holdForm.resourcePublicId.trim(), legalBasisReference:holdForm.basis.trim(),reason:holdForm.reason.trim(), holdUntil:holdForm.holdUntil?new Date(holdForm.holdUntil).toISOString():null, })","setBusy('hold')
+setNotice('')
+setHoldForm((value)=>({...value,resourcePublicId:'',basis:'',reason:'',holdUntil:''}))
+setNotice('已建立法定保留；仅阻止旧版本清除，不影响顾客更正新联系方式。')
+setNotice(message(error,'法定保留未能建立'))
+setBusy('')","SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/PersonalContactGovernancePanel.tsx","87","release","api.postEndpoint(`/api/staff/personal-contact-governance/legal-holds/${encodeURIComponent(hold.publicId)}/release`,{reason})","setBusy(`${hold.publicId}:release`)
+setNotice('')
+setNotice('法定保留已释放；符合已发布期限的旧版本将由清除任务处理。')
+setNotice(message(error,'法定保留未能释放'))
+setBusy('')","SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/PrintSourceRecoveryPanel.tsx","23","retry","api.postEndpoint(`/api/hardware/print-sources/${row.id}/retry`,{reason:attempt.reason},{idempotencyKey:attempt.key})","setConfirmId(row.id)
+setBusy(true)
+setConfirmId('')
+setError(error instanceof NormalizedApiError&&error.kind==='http'&&error.status!==null&&error.status<500&&error.status!==425 ? `${error.message}；本次请求被拒绝，请按提示处理后重试。` : '操作结果未确认，请刷新核对；再次操作沿用原编号，不重复生成')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/PrintTicketPolicyPanel.tsx","17","save","api.postEndpoint('/api/hardware/print-ticket-policies',pending.current.body,{idempotencyKey:pending.current.key})
+api.getEndpoint<{data:PrintTicketPolicy[]}>('/api/hardware/print-ticket-policies')","setBusy(true)
+setRows(current=>current.map(r=>r.ticketKind===actual.ticketKind?actual:r))
+setNotice('已保存；只影响后续生成的票据，已排队票据请在打印任务中处理。')
+setNotice('保存结果未确认，请点击重试；保持原操作编号，不会重复修改。')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/PromotionalLoyaltyPanel.tsx","73","submitDraft","api.postEndpoint('/api/staff/loyalty/promotion-policies',payload,{ idempotencyKey:`loyalty-promotion-draft-${crypto.randomUUID()}`, })","setBusy('draft')
+setNotice('')
+setDraft(null)
+setNotice('草稿已建立；规则尚未生效，等待独立审批。')
+setNotice(message(error,'促销积分草稿没有保存'))
+setBusy('')","SYS-289、SYS-292、SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/PromotionalLoyaltyPanel.tsx","86","approve","","setNotice('审批已移至“会员经营配置中心”：系统将依据预算、会员上限、叠加、退款和权威活动事实生成影响预览。')","SYS-289、SYS-292、SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/PromotionalLoyaltyPanel.tsx","91","publish","api.postEndpoint(`/api/staff/loyalty/promotion-policies/${encodeURIComponent(policy.id)}/publish`,{ effectiveFrom:new Date(parsedStart).toISOString(), effectiveUntil:parsedUntil===null?null:new Date(parsedUntil).toISOString(),reason, },{idempotencyKey:`loyalty-promotion-publish-${crypto.randomUUID()}`})","setNotice('生效时间格式无效。')
+setNotice('失效时间必须晚于生效时间。')
+setBusy(policy.id)
+setNotice('')
+setNotice('已安排发布；系统只按权威付款、签到或完成事实发放。')
+setNotice(message(error,'促销积分规则没有发布'))
+setBusy('')","SYS-289、SYS-292、SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/PromotionalLoyaltyPanel.tsx","111","changeRule","","setDraft((current)=>current?{...current,rules:current.rules.map((rule,position)=>position===index?{...rule,...patch}:rule)}:current)","SYS-289、SYS-292、SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/RecommendationPolicyManagementPanel.tsx","59","create","api.postEndpoint('/api/staff/customer-experience/recommendation-policies',{ code:'DEFAULT',preferenceWeight:integer(draft.preferenceWeight,'偏好权重',-1000,1000), sceneWeight:integer(draft.sceneWeight,'场景权重',-1000,1000), marginWeight:integer(draft.marginWeight,'毛利权重',-1000,1000), priorityWeight:integer(draft.priorityWeight,'经营优先级权重',-1000,1000), performanceWeight:0,inventoryWeight:0,capacityWeight:0, minimumGrossMarginBasisPoints:integer(draft.minimumGrossMarginBasisPoints,'最低毛利基点',0,9999), preferenceHalfLifeDays:integer(draft.preferenceHalfLifeDays,'偏好半衰期',7,730), preferenceMaxAgeDays:integer(draft.preferenceMaxAgeDays,'偏好最长有效期',30,3650), prefer","setBusy('create')
+setNotice('')
+setDraft(null)
+setNotice('草稿已保存；顾客推荐仍按原版本和独立开关运行。')
+setNotice(message(error,'推荐规则草稿没有保存'))
+setBusy('')","SYS-298","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/RecommendationPolicyManagementPanel.tsx","81","approve","api.postEndpoint(`/api/staff/customer-experience/recommendation-policies/${encodeURIComponent(policy.publicId)}/approve`,{reason},{idempotencyKey:key('recommendation-policy-approve')})","setBusy(policy.publicId)
+setNotice('')
+setNotice('审批完成；规则仍未发布，也不会自动开放顾客推荐。')
+setNotice(message(error,'推荐规则没有通过审批'))
+setBusy('')","SYS-298","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/RecommendationPolicyManagementPanel.tsx","91","publish","api.postEndpoint(`/api/staff/customer-experience/recommendation-policies/${encodeURIComponent(policy.publicId)}/publish`,{ effectiveFrom:new Date(parsed).toISOString(),reason, },{idempotencyKey:key('recommendation-policy-publish')})","setNotice('生效时间格式无效。')
+setBusy(policy.publicId)
+setNotice('')
+setNotice('版本已排期；顾客推荐开关保持原状态，需另行确认试点。')
+setNotice(message(error,'推荐规则没有发布'))
+setBusy('')","SYS-298","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/RecommendationPolicyManagementPanel.tsx","107","clone","api.postEndpoint(`/api/staff/customer-experience/recommendation-policies/${encodeURIComponent(policy.publicId)}/clone-draft`,{reason},{idempotencyKey:key('recommendation-policy-clone')})","setBusy(policy.publicId)
+setNotice('')
+setNotice('已复制为新草稿；当前运行版本不受影响。')
+setNotice(message(error,'历史版本没有复制成功'))
+setBusy('')","SYS-298","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/RecommendationPolicyManagementPanel.tsx","117","setRollout","api.putEndpoint('/api/staff/customer-experience/features/recommendation.engine',{ rolloutState,configuration:{},reason, },{idempotencyKey:key('recommendation-rollout')})","setBusy('rollout')
+setNotice('')
+setNotice(`顾客推荐已调整为“${rolloutLabel[rolloutState]}”。`)
+setNotice(message(error,'推荐开放状态没有改变'))
+setBusy('')","SYS-298","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/RemakePhysicalHandoverPanel.tsx","36","refresh","","setBusy(true)
+setError('')
+setError(error instanceof Error?error.message:'实物待办暂未更新')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/RemakePhysicalHandoverPanel.tsx","40","run","api.pending(itemId)
+api.pending(itemId)","setError('原商品还有未确认的处理，请先恢复原商品记录')
+setOriginalItem(itemId)
+setBusy(true)
+setError('')
+setNotice('')
+setNeedsRefresh(true)
+setNotice('实物登记已确认，原收款和退款不变')
+setError(committed?'登记已成功，待办暂未读回。请刷新，不用再次提交。':error instanceof Error?error.message:'结果待确认，请恢复原登记')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/SocialAccountPanel.tsx","13","perform","","setBusy(true)
+setMessage('')
+setMessage(error instanceof Error?error.message:'操作结果未确认，请刷新核对')
+setBusy(false)","SYS-297、SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/SocialAccountPanel.tsx","15","load","api.getEndpoint<{data:Account[]}>('/api/staff/social-accounts')
+api.getEndpoint<{data:{items:Project[];nextCursor:string|null}}>(`/api/staff/member-cards/projects${cursor?`?cursor=${cursor}`:''}`)
+api.getEndpoint<{data:typeof events}>('/api/staff/social-accounts/events')","setAccounts(a.data)
+setProjects(all)
+setEvents((await api.getEndpoint<{data:typeof events}>('/api/staff/social-accounts/events')).data)
+setProducts(await loadCompleteActiveCatalog(api) as {id:string;name:string}[])","SYS-297、SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/SocialAccountPanel.tsx","16","menuList","api.getEndpoint<{data:MenuItem[]}>(`/api/staff/member-cards/projects/${id}/menu`)","setItems((await api.getEndpoint<{data:MenuItem[]}>(`/api/staff/member-cards/projects/${id}/menu`)).data)","SYS-297、SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/SocialAccountPanel.tsx","17","beginEdit","","setForm({...empty,id:a.id,kind:a.kind,name:a.name,appId:a.app_id,enabled:a.enabled,codeTemplateId:a.code_template_id??'',codeDataKey:a.code_data_key,reminderTemplateId:a.reminder_template_id??'',reminderDataKey:a.reminder_data_key})
+setAccountEditorOpen(true)","SYS-297、SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/SocialAccountPanel.tsx","18","beginCreate","","setForm(empty)
+setAccountEditorOpen(true)","SYS-297、SYS-299","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/SocialBroadcastPanel.tsx","15","perform","","setBusy(true)
+setMessage(e instanceof Error?e.message:'结果未确认，请刷新核对')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/SocialBroadcastPanel.tsx","22","loadAccounts","api.getEndpoint<{data:Account[]}>('/api/staff/social-broadcasts/accounts')","setAccounts(account.data)
+setForm(current=>({...current,accountId:pickAccount(account.data,current.accountId)}))","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/SocialBroadcastPanel.tsx","28","load","api.getEndpoint<{data:Broadcast[]}>('/api/staff/social-broadcasts')","setRows(result.data)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/SocialBroadcastPanel.tsx","40","saveDraft","","setMessage(error instanceof Error?error.message:'请选择发送日期和时间')
+setMessage('请选择服务号')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StackingPricePreviewPanel.tsx","45","change","","setBusy(false)
+setResult(null)
+setError('')
+setForm(current => ({ ...current, [key]: value, ...(key === 'other' ? { maxCoupons: value ? '2' : '1' } : {}) }))","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StackingPricePreviewPanel.tsx","52","loadDrafts","api.getEndpoint<{ data: Draft[] }>('/api/staff/loyalty/stacking-price-drafts')","setBusy(true)
+setError('')
+setDrafts(response.data)
+setError(failure instanceof Error ? failure.message : '草稿读取失败')
+setBusy(false)","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StackingPricePreviewPanel.tsx","61","openDraft","","setSelected(draft)
+setBusy(false)
+setError('')
+setResult(null)
+setNotice('')
+setCode(draft.code)
+setVersion(draft.version)
+setForm(current => ({ ...current, member: draft.policy.allowMemberPrice, bundle: draft.policy.allowBundlePrice, other: draft.policy.allowOtherCoupons, points: draft.policy.allowPoints,upgrade:draft.policy.allowCheckoutUpgrade===true, maxCoupons: String(draft.policy.maxCoupons), order: draft.policy.calculationOrder.join(','), maximum: draft.policy.maximumDiscountMinor === null ? '' : (draft.policy.maximumDiscountMinor / 100).toFixed(2), minimum: (draft.policy.minimumPayableMinor / 100).toFixed(2) }))","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StackingPricePreviewPanel.tsx","68","saveDraft","","setSaving(true)
+setBusy(false)
+setError('')
+setNotice('')
+setVersion(saved.version)
+setDrafts(currentDrafts => [saved, ...currentDrafts.filter(item => item.id !== saved.id)].slice(0, 50))
+setSelected(saved)
+setNotice(`已保存 ${saved.code} 第${saved.version}版草稿，尚未发布，不改变订单价格。`)
+setError(failure instanceof Error ? failure.message : '草稿保存结果未确认，请重试核对')
+setSaving(false)","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StackingPricePreviewPanel.tsx","86","decide","","setSaving(true)
+setError('')
+setNotice('')
+setSelected(saved)
+setDrafts(previous=>previous.map(row=>row.id===saved.id?saved:row))
+setNotice('决定已保存；不会改变已发券的原承诺。')
+setError(failure instanceof Error?failure.message:'决定结果未确认，请刷新核对')
+setSaving(false)","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StackingPricePreviewPanel.tsx","98","preview","api.postEndpoint<Preview>('/api/staff/loyalty/stacking-price-preview', { policy: policy(), scenario: { units: [{ id: 'portion', amountMinor: minor(form.price), costMinor: form.cost === '' ? null : minor(form.cost), bundle: form.bundle }], effects }, })","setBusy(true)
+setError('')
+setResult(null)
+setResult(value)
+setError(reason instanceof Error ? reason.message : '试算失败，请重试')
+setBusy(false)","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/AssistedOrderSheet.tsx","59","advancePayment","","setPaymentEpoch(generation)
+setPaymentQueryBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/AssistedOrderSheet.tsx","100","synchronize","api.loadOnlinePaymentStatus(paymentAction.paymentId, controller.signal)","setPaymentStatus(status)
+setError('支付机构已确认本次未成功，可以重新发起收款。')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/AssistedOrderSheet.tsx","154","changeQuantity","","setItemNotes(current => { const next = { ...current } delete next[productId] return next })
+setQuantities((current) => { const next = Math.max(0, Math.min(99, (current[productId] ?? 0) + delta)) return { ...current, [productId]: next } })","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/AssistedOrderSheet.tsx","169","submit","api.issueAssistedOrderContext({ tableSessionId: table.activeSession.id })
+api.submitAssistedOrder({ tableSessionId: table.activeSession.id, assistedOrderContextToken: token, orderMode: mode, items: selected.map((item) => ({ productId: item.product.id, quantity: item.quantity, ...(itemNotes[item.product.id]?.trim() ? { note: itemNotes[item.product.id]!.trim() } : {}), })), ...(note.trim().length > 0 ? { fulfillmentNote: note.trim() } : {}), ...(mode === 'gift' ? { giftReason: giftReason.trim() } : {}), settlementMode: mode === 'gift' ? 'table_tab' : settlementMode, })","setPhase('submitting')
+setError(null)
+setError(reason instanceof Error ? reason.message : '订单没有提交成功，请重试')
+setPhase('ready')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/AssistedOrderSheet.tsx","200","submitPaidOrder","api.issueAssistedOrderContext({ tableSessionId: table.activeSession.id })
+api.submitAssistedOrder({ tableSessionId: table.activeSession.id, assistedOrderContextToken: token, orderMode: 'paid', ...(replacementCaseId?{replacementCaseId,...(replacementPreviousOrderId?{replacementPreviousOrderId}:{})}:{}), items, ...(options.fulfillmentNote.trim().length > 0 ? { fulfillmentNote: options.fulfillmentNote.trim() } : {}), settlementMode, })","setError('当前岗位没有可用的线上或现场收款权限，请先挂桌账或联系收银负责人。')
+setPhase('submitting')
+setError(null)
+setPaymentOrder(result)
+setPhase('ready')
+setError(reason instanceof Error ? reason.message : '订单没有提交成功，请重试')
+setPhase('ready')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/AssistedOrderSheet.tsx","234","createPayment","api.createOnlinePayment({ orderId: paymentOrder.paymentNextStep.orderId, provider: access.onlinePaymentProvider, method, ...(customerAuthCode === undefined ? {} : { customerAuthCode }), })","setError(paymentInitiationMessage(access))
+setError('本店当前没有启用线上收款，请改为挂桌账或联系收银员。')
+setPaymentBusy(true)
+setError(null)
+setPaymentAction(action)
+setManualPaymentRecorded(false)
+setPaymentStatus(action.status === 'failed' ? 'failed' : 'pending')
+setPaymentWaitingLong(false)
+setShowPaymentScanner(false)
+setError(reason instanceof Error ? reason.message : '付款没有发起成功，请到收银页面核对')
+setPaymentBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/AssistedOrderSheet.tsx","275","queryPayment","api.queryOnlinePayment(paymentAction.paymentId)","setPaymentQueryBusy(true)
+setError(null)
+setPaymentStatus('succeeded')
+setPaymentStatus(status)
+setError('支付机构已确认本次未成功，可以重新发起收款。')
+setError(reason instanceof Error ? reason.message : '暂时无法核对到账，请到收银页面查看')
+setPaymentQueryBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/AssistedOrderSheet.tsx","302","releasePayment","api.releaseUnresolvedPaymentForRetry(paymentAction.paymentId, '员工保留原支付待核对，继续收款')","setPaymentBusy(true)
+setError(null)
+setPaymentAction(null)
+setPaymentStatus('pending')
+setError(reason instanceof Error ? reason.message : '暂未释放，请重试；其他桌台不受影响')
+setPaymentBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/AssistedOrderSheet.tsx","320","recordManualPayment","api.recordManualPayment({ orderId: paymentOrder.paymentNextStep.orderId, ...input })","setPaymentBusy(true)
+setError(null)
+setManualPaymentRecorded(true)
+setPaymentStatus('succeeded')
+setError(reason instanceof Error ? reason.message : '现场收款没有登记成功，请到收银页面核对')
+setPaymentBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/AssistedOrderSheet.tsx","603","resetConfirmation","","setConfirmed(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/AssistedOrderSheet.tsx","604","submit","","setConfirmed(true)
+setProvider(null)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/DeliveryBatchComposer.tsx","7","submit","","setNotice('先填写本批需要配送的数量')
+setBusy(true)
+setQuantities({})
+setNotice('本批已确认，配送票后台生成；打印失败不影响送达操作。')
+setNotice(error instanceof Error?error.message:'本批未确认，请核对后重试')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/ParticipantMovementSheet.tsx","52","previewAction","props.api.previewParticipantMovement(input())","setError('请选择目标桌并填写实际移动人数')
+setError(`目标桌容量${targetCapacity}人，请填写现场加座与通道安全说明`)
+setError('拆桌至少选择一名已识别顾客')
+setError('人员并桌需要选择顾客；如需全员并桌，请点击“选择全部”并确认整桌人数')
+setError('移动人数不能少于已选择的顾客人数')
+setError('拆桌后源桌必须至少保留一人；全员移动请使用人员并桌')
+setError('移动人数不能超过源桌当前人数')
+setError('全员并桌必须选择源桌全部已识别顾客')
+setPhase('loading')
+setError(null)
+setPreview(await props.api.previewParticipantMovement(input()))
+setPhase('preview')
+setError(message(cause))
+setPhase('edit')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/ParticipantMovementSheet.tsx","80","execute","props.api.moveParticipants({ ...input(),reason:reason.trim() })","setPhase('saving')
+setError(null)
+setError(message(cause))
+setPhase('preview')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/ParticipantMovementSheet.tsx","87","resetSelection","","setTargetId('')
+setPreview(null)
+setSelected([])
+setGuestCount('1')
+setCapacityReason('')
+setPhase('edit')
+setError(null)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/ResponsibilityAssignmentPanel.tsx","64","load","api.loadTableAssignmentOptions()
+api.loadTableAssignments()","setPhase('loading')
+setMessage(null)
+setOptions(nextOptions)
+setAssignments(nextAssignments)
+setEmployeeId((current) => current || nextOptions.employees[0]?.id || '')
+setRoleId((current) => current || nextOptions.roles[0]?.id || '')
+setPhase('ready')
+setPhase('error')
+setMessage({ kind: 'error', text: assignmentError(error, '责任桌安排暂时无法读取') })","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/ResponsibilityAssignmentPanel.tsx","83","toggleExpanded","","setExpanded(next)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/ResponsibilityAssignmentPanel.tsx","89","toggleTable","","setSelectedTableIds((current) => { const next = new Set(current) if (next.has(tableId)) next.delete(tableId) else next.add(tableId) return next })","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/ResponsibilityAssignmentPanel.tsx","98","toggleArea","","setSelectedTableIds((current) => { const next = new Set(current) const allSelected = areaTableIds.every((id) => next.has(id)) for (const id of areaTableIds) { if (allSelected) next.delete(id) else next.add(id) } return next })","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/ResponsibilityAssignmentPanel.tsx","110","toggleAreaOpen","","setOpenAreaIds((current) => { const next = new Set(current) if (next.has(areaId)) next.delete(areaId) else next.add(areaId) return next })","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/ResponsibilityAssignmentPanel.tsx","119","submit","api.assignTables({ tableIds: [...selectedTableIds], employeeId, roleId, assignmentType, startsAt: startTimestamp, endsAt: endTimestamp, reason: reason.trim(), })
+api.loadTableAssignments()","setMessage({ kind: 'error', text: '请选择员工和本次责任岗位' })
+setMessage({ kind: 'error', text: '至少选择一个桌台或一个区域' })
+setMessage({ kind: 'error', text: '请填写本次安排原因' })
+setMessage({ kind: 'error', text: '班次起止时间无效' })
+setMessage({ kind: 'error', text: '结束时间必须晚于开始时间' })
+setBusy(true)
+setMessage(null)
+setMessage({ kind: 'success', text: `${employee} 已安排 ${selectedTableIds.size} 张责任桌；全部桌台已一次生效` })
+setSelectedTableIds(new Set())
+setAssignments(await api.loadTableAssignments())
+setMessage({ kind: 'error', text: assignmentError(error, '责任桌未生效；本批次没有留下部分结果') })
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/ResponsibilityAssignmentPanel.tsx","155","endAssignment","api.endTableAssignment(assignment.id, `结束责任分配：${assignment.employeeName} / ${assignment.tableCode}`)
+api.loadTableAssignments()","setEndingId(assignment.id)
+setMessage(null)
+setBusy(true)
+setAssignments(await api.loadTableAssignments())
+setEndingId(null)
+setMessage({ kind: 'success', text: `${assignment.employeeName} 对 ${assignment.tableCode} 的责任已结束` })
+setMessage({ kind: 'error', text: assignmentError(error, '责任结束操作未完成') })
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/StaffActionsPanel.tsx","119","StaffActionsPanel","api.pendingKdsActions?.()
+api.unattributedKdsTaskIds?.()
+api.pendingKdsActions?.()","","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/StaffActionsPanel.tsx","211","denySession","","setOperations(null)
+setFulfillment(null)
+setMemberBenefits(null)
+setFulfillmentStale(true)
+setPhase('error')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/StaffActionsPanel.tsx","224","readFulfillment","api.loadFulfillment(signal)","setFulfillment(next)
+setFulfillmentStale(false)
+setFulfillmentStale(true)
+setFulfillment(null)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/StaffActionsPanel.tsx","528","focusActionCard","","setFocusedActionId(factId)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/StaffActionsPanel.tsx","555","selectTable","","setSelectedTableId(table.id)
+setTableActionDialogOpen(openDialog)
+setGuestCount('')
+setOpenTableRecommendationScene('unsure')
+setCapacityReason('')
+setTransferTargetId(null)
+setTransferReason('')
+setCloseConfirm(false)
+setCustomerLeftConfirm(false)
+setCloseIssue(null)
+setOrderSheetMode(null)
+setTablePaymentOpen(false)
+setObservationOpen(false)
+setRecommendationOpen(false)
+setParticipantMovementOpen(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/StaffActionsPanel.tsx","575","openTable","api.openTable({ tableId: selectedTable.id, ...validated, guestProfileSnapshot: recommendationSceneSnapshot(openTableRecommendationScene), })","showNotice({ kind: 'error', message: validated.error })
+setPendingAction(`table:${selectedTable.id}`)
+setOperations(replaceTableSession(snapshot, selectedTable.id, optimisticSession))
+showNotice({ kind: 'success', message: `${selectedTable.code} 已开台，${validated.guestCount}人` })
+setOperations(snapshot)
+showNotice({ kind: 'error', message: actionError(error, '开台未完成，桌台状态已恢复') })
+setPendingAction(null)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/StaffActionsPanel.tsx","614","closeTable","api.closeTable(sessionId, selectedTable.activeSession.status)","setCloseConfirm(true)
+showNotice({ kind: 'guidance', message: '请再次确认结台。系统会先核对付款和出品；有未结事项时会保留桌台并说明原因。' })
+setPendingAction(`table:${selectedTable.id}`)
+setOperations(replaceTableSession(snapshot, selectedTable.id, null))
+showNotice({ kind: 'success', message: `${selectedTable.code} 已关台，可安排下一桌客人` })
+setCloseConfirm(false)
+setCloseIssue(null)
+setOperations(snapshot)
+setCloseConfirm(false)
+setCloseIssue(issue)
+showNotice({ kind: 'error', message: issue })
+setPendingAction(null)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/StaffActionsPanel.tsx","648","closeAfterCustomerLeft","api.closeTableAfterCustomerLeft(sessionId, '顾客已离店，财务后续处理不阻断物理翻台')","setCustomerLeftConfirm(true)
+showNotice({ kind: 'guidance', message: '请再次确认：顾客已离店。系统会释放物理桌台，取消未履约部分；付款、退款和对账后续会原样保留给收银处理。' })
+setPendingAction(`table:${selectedTable.id}`)
+setOperations(replaceTableSession(snapshot, selectedTable.id, null))
+showNotice({ kind: 'success', message: `${selectedTable.code} 已释放桌台；付款、退款和对账后续已保留到收银处理。` })
+setCustomerLeftConfirm(false)
+setCloseConfirm(false)
+setCloseIssue(null)
+setOperations(snapshot)
+setCustomerLeftConfirm(false)
+setCloseIssue(issue)
+showNotice({ kind: 'error', message: issue })
+setPendingAction(null)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/StaffActionsPanel.tsx","684","setGuestCartFreeze","api.setGuestCartFreeze( selectedTable.activeSession.id, frozen, frozen ? '服务人员核对本桌点单' : undefined, )","setPendingAction(`table:${selectedTable.id}`)
+setOperations(replaceGuestCartFreeze(snapshot, selectedTable.id, frozen))
+showNotice({ kind: 'success', message: frozen ? `${selectedTable.code} 顾客购物车已锁定；顾客仍可查看，暂不能增减或付款` : `${selectedTable.code} 顾客购物车已恢复共同修改`, })
+setOperations(snapshot)
+showNotice({ kind: 'error', message: actionError(error, '共享购物车状态未更新，请重试') })
+setPendingAction(null)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/StaffActionsPanel.tsx","716","actOnReservation","api.actOnReservation(reservation.id, action)","setPendingAction(actionKey)
+setReservations((current) => current?.map((item) => item.id === reservation.id ? { ...item, status: action === 'confirm' ? 'confirmed' : action === 'arrive' ? 'arrived' : 'completed' } : item) ?? null)
+showNotice({ kind: 'success', message: action === 'confirm' ? `${reservation.customerName} 的预约已确认` : action === 'arrive' ? `${reservation.customerName} 已登记到店` : `${reservation.customerName} 的预约已完成归档`, })
+setReservations(snapshot)
+showNotice({ kind: 'error', message: actionError(error, '预约状态未更新，请重试') })
+setPendingAction(null)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/StaffActionsPanel.tsx","745","overridePriority","api.overrideReservationPriority({ kind: entry.kind, publicId: entry.publicId, mode, reason })","showNotice({ kind: 'guidance', message: '请填写至少2个字的队列调整原因。' })
+setPendingAction(actionKey)
+showNotice({ kind: 'success', message: '优先安排顺序已调整；不会绕过门店容量，也不承诺固定桌位。' })
+showNotice({ kind: 'error', message: actionError(error, '优先安排顺序未调整，请重试') })
+setPendingAction(null)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/StaffActionsPanel.tsx","765","transferTable","api.transferTable({ tableSessionId: session.id, expectedSourceTableId: selectedTable.id, expectedLocationVersion: session.locationVersion ?? 0, targetTableId: target.id, ...(needsReason ? { capacityOverrideReason: transferReason.trim() } : {}), })","showNotice({ kind: 'error', message: '请选择有效的目标桌台' })
+showNotice({ kind: 'error', message: `人数超过${target.code}容量${target.capacity}人，请填写加座说明` })
+setPendingAction(`table:${selectedTable.id}`)
+setOperations(transferSession(snapshot, selectedTable.id, target.id, session))
+showNotice({ kind: 'success', message: `${selectedTable.code} 已转至 ${target.code}` })
+setSelectedTableId(target.id)
+setTransferTargetId(null)
+setTransferReason('')
+setOperations(snapshot)
+showNotice({ kind: 'error', message: actionError(error, '转桌未完成，桌台状态已恢复') })
+setPendingAction(null)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/StaffActionsPanel.tsx","799","completeServiceTask","api.completeServiceTask(task.id, resolutionNote)","showNotice({ kind: 'guidance', message: '投诉需要值班经理简要记录现场处理结果后再完成' })
+setPendingAction(`service:${task.id}`)
+setOperations({ ...snapshot, tasks: snapshot.tasks.filter((item) => item.id !== task.id) })
+setResolutionNotes((current) => { const next = { ...current } delete next[task.id] return next })
+showNotice({ kind: 'success', message: `${task.tableCode} 的“${task.title}”已完成` })
+setOperations(snapshot)
+showNotice({ kind: 'error', message: actionError(error, '服务任务未完成，任务已恢复') })
+setPendingAction(null)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/StaffActionsPanel.tsx","826","runFulfillmentAction","api.unattributedKdsTaskIds?.().includes(item.taskId)
+api.unattributedKdsTaskIds?.()
+api.pendingKdsActions?.().some(pending => pending.taskId === item.taskId)
+api.pendingKdsActions?.()
+api.runKdsAction(item.taskId, action, quantity)
+api.pendingKdsActions?.().some(pending => pending.taskId === item.taskId)
+api.pendingKdsActions?.()","setQuantitySelections(current => { const next = { ...current }; delete next[`${item.taskId}:${action}`]; return next })
+setHistoryRefreshRevision(value => value + 1)
+showNotice({ kind: 'success', message: action === 'remake' ? `${item.item.productName} 已确认重新制作，正在更新待办` : `${item.table.code} · ${item.item.productName}${quantity === undefined ? '' : ` 本次 ${quantity} 份`}${action === 'deliver' ? '已确认送达' : '已确认制作完成'}，正在更新待办` })
+setFulfillmentStale(true)
+showNotice({ kind: 'error', message: actionError(error, '尚未确认操作结果，请刷新核对；重试将沿用本次操作编号') })","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/StaffActionsPanel.tsx","863","recoverKdsResults","api.pendingKdsActions?.()
+api.recoverKdsResults()
+api.pendingKdsActions?.().map(item => item.taskId)
+api.pendingKdsActions?.()","setPendingAction('kds:recover')
+showNotice({ kind: 'success', message: '原制作/送达操作结果已恢复' })
+showNotice({ kind: 'error', message: actionError(error, '原操作结果仍待确认，恢复会沿用原数量和编号') })
+setHistoryRefreshRevision(value => value + 1)
+setPendingAction(null)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/StaffActionsPanel.tsx","887","cancelCarryoverFulfillment","api.pendingKdsActions?.().some(pending => pending.taskId === item.taskId)
+api.pendingKdsActions?.()
+api.unattributedKdsTaskIds?.().includes(item.taskId)
+api.unattributedKdsTaskIds?.()
+api.cancelKdsTask(item.taskId, reasonNote)","showNotice({ kind: 'guidance', message: '跨营业日遗留取消需要出品异常处理权限，请交给值班经理。' })
+showNotice({ kind: 'guidance', message: '请记录遗留原因和现场核对结果，至少4个字。' })
+setCarryoverCancelConfirmTaskId(item.taskId)
+showNotice({ kind: 'guidance', message: '请再次确认：只取消这项历史出品，不会改写原营业日收入。' })
+setPendingAction(`kds-cancel:${item.taskId}`)
+setCarryoverCancelNotes((current) => { const next = { ...current } delete next[item.taskId] return next })
+setCarryoverCancelConfirmTaskId(null)
+showNotice({ kind: 'success', message: `${item.table.code} · ${item.item.productName} 的历史出品已受控取消` })
+setFulfillmentStale(true)
+showNotice({ kind: 'error', message: actionError(error, '历史出品取消结果未确认，请读取最新任务核对') })
+setPendingAction(null)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/StaffActionsPanel.tsx","925","cancelAllCarryoverFulfillment","api.pendingKdsActions?.()
+api.unattributedKdsTaskIds?.()
+api.pendingKdsActions?.()
+api.cancelKdsTask(item.taskId,reason)","showNotice({kind:'guidance',message:'批量处理前请填写至少4个字的现场核对原因。'})
+setPendingAction('kds-cancel:all-carryover')
+setFulfillmentStale(true)
+setCarryoverBulkReason('')
+setPendingAction(null)
+showNotice(completed===carryover.length ? {kind:'success',message:`${completed} 项历史出品均已受控结案。`} : {kind:'attention',message:`已结案 ${completed} 项，另有 ${carryover.length-completed} 项未结案。${failures.join('；')}`})","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/StaffActionsPanel.tsx","970","redeemAnnualGift","api.redeemAnnualGift({reservationId:item.reservationId,benefitId:item.benefitId, customerId:item.customerId,tableSessionId:item.tableSessionId,selectedProductId:product.productId, substitutionReason:reason})","showNotice({kind:'guidance',message:'请选择已发布的原礼遇商品或合规替代品'})
+showNotice({kind:'guidance',message:'使用替代品必须填写至少2个字的替换原因'})
+setPendingAction(`member-gift:${item.reservationId}`)
+showNotice({kind:'success',message:'会员礼遇已核销并进入待出品；制作送达后才会完成'})
+showNotice({kind:'error',message:actionError(error,'会员礼遇未核销')})
+setPendingAction(null)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/StaffActionsPanel.tsx","995","redeemDailySnack","api.redeemDailySnack(item.claimCode)","setPendingAction(`member-snack:${item.id}`)
+showNotice({kind:'success',message:'每日点心已核销并进入待出品'})
+showNotice({kind:'error',message:actionError(error,'每日点心未核销')})
+setPendingAction(null)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/StaffActionsPanel.tsx","1011","cancelAnnualGift","api.cancelAnnualGift({reservationId:item.reservationId,customerId:item.customerId, tableSessionId:item.tableSessionId,reason})","showNotice({kind:'guidance',message:'必须填写取消原因，礼遇暂留未释放'})
+setPendingAction(`member-gift-cancel:${item.reservationId}`)
+showNotice({kind:'success',message:'生日或节日礼遇暂留已取消并释放'})
+showNotice({kind:'error',message:actionError(error,'会员礼遇暂留未取消')})
+setPendingAction(null)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/StaffActionsPanel.tsx","1025","cancelDailySnack","api.cancelDailySnack(item.claimCode,reason)","showNotice({kind:'guidance',message:'必须填写取消原因，暂留未释放'})
+setPendingAction(`member-snack-cancel:${item.id}`)
+showNotice({kind:'success',message:'每日点心暂留已取消并释放'})
+showNotice({kind:'error',message:actionError(error,'每日点心暂留未取消')})
+setPendingAction(null)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/StaffActionsPanel.tsx","1038","acceptMemberCode","","setMemberScannerOpen(false)
+setMemberBenefitQuery(normalized)
+setTab('tasks')
+showNotice(matched>0 ? {kind:'success',message:`已定位 ${matched} 项会员权益待办`} : {kind:'guidance',message:'当前负责桌台没有与该会员码或核销码匹配的待办'})","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/table-order-refresh.ts","15","run","","setTimeout(()=>{void run()},failures ? Math.min(60000,10000*2**failures):10000)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/TableObservationSheet.tsx","57","parse","api.parseObservation({ tableSessionId, rawContent: rawContent.trim(), needsImmediateAction, })","setBusy('parse')
+setError('')
+setDraft(result)
+setError(cause instanceof Error ? cause.message : '记录暂时无法解析，请稍后重试')
+setBusy(null)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/TableObservationSheet.tsx","75","confirm","api.confirmObservation({ observationPublicId: draft.publicId, candidateId: input.candidate?.id ?? null, confidence: input.candidate?.confidence ?? Math.min(draft.parseConfidence, 0.5), rawExcerpt: draft.rawContent.slice(0, 1000), expressionKind: input.expressionKind, eventType: input.eventType, degree: input.degree, })","setBusy('confirm')
+setError('')
+setRawContent('')
+setNeedsImmediateAction(false)
+setDraft(null)
+setError(cause instanceof Error ? cause.message : '记录尚未确认，请重试')
+setBusy(null)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/TableObservationSheet.tsx","102","revise","api.reviseObservation({ observationPublicId, eventId: event.id, reason, replacement: { expressionKind: replacement.expressionKind, scopeKind: event.scopeKind, eventType: replacement.eventType, degree: replacement.degree, reasonCode: event.reasonCode, seatLabel: event.seatLabel, customerId: event.customerId, candidateId: event.selectedCandidateId, productId: event.productId, confidence: event.confidence, rawExcerpt: event.rawExcerpt, }, })","setBusy('revise')
+setHistoryError('')
+setHistoryError(cause instanceof Error ? cause.message : '修订尚未保存，请重试')
+setBusy(null)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/TablePaymentSheet.tsx","46","advanceGeneration","","setInteractionEpoch(generation.current)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/TablePaymentSheet.tsx","99","synchronize","api.loadOnlinePaymentStatus(activePaymentId, controller.signal)","setPaymentStatus(status)
+setAction(null)
+setPaymentStatus('pending')
+setError('支付渠道已确认本次未成功，可以重新发起收款。')","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/TablePaymentSheet.tsx","126","createPayment","api.createOnlinePayment({ orderId: selectedOrders[0]!.id, orderIds:selectedOrders.map(order=>order.id),amountMinor:enteredMinor, provider: access.onlinePaymentProvider, method, ...(customerAuthCode === undefined ? {} : { customerAuthCode }), })","setError(paymentEntryMessage(access))
+setQuerying(false)
+setBusy(true)
+setError(null)
+setAction(nextAction)
+setPaymentStatus(nextAction.status === 'failed' ? 'failed' : 'pending')
+setScannerOpen(false)
+setError(reason instanceof Error ? reason.message : '无法发起本次收款，请到收银页面核对')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/TablePaymentSheet.tsx","164","queryPayment","api.queryOnlinePayment(activePaymentId)","setQuerying(true)
+setError(null)
+setPaymentStatus(status)
+setAction(null)
+setPaymentStatus('pending')
+setError('支付渠道已确认本次未成功，可以重新发起收款。')
+setError(reason instanceof Error ? reason.message : '暂时无法核对支付状态，请由收银处理')
+setQuerying(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/TablePaymentSheet.tsx","192","sendCashCollection","api.recordManualPayment(body)","setBusy(true)
+setError(null)
+setCashRecovery({ attempt, error: null })
+setCashRecovery({ attempt: null, error: null })
+setError(reason instanceof Error ? reason.message : '现金登记结果尚未确认，请核对上次登记')
+setCashRecovery(readPendingCashCollection(table.activeSession.id))
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/TablePaymentSheet.tsx","213","recordCashPayment","","setCashRecovery(pending)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/staff-actions/TableRecommendationSheet.tsx","55","submit","api.modifyTableRecommendation({ recommendationPublicId: session.recommendationPublicId,sourceProductId,targetProductId,reasonCode, })","setBusy(true)
+setError('')
+setError(cause instanceof Error ? cause.message : '推荐调整未完成，请重试')
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffAccessManagementPanel.tsx","115","chooseMode","","setMode(nextMode)
+setTargetId('')
+setNotice(null)","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffAccessManagementPanel.tsx","118","chooseTarget","","setTargetId(nextTargetId)
+setNotice(null)
+setCategory('all')
+setQuery('')","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffAccessManagementPanel.tsx","121","resetDrafts","","setPermissionDraft({})
+setApprovalDraft({})
+setScopeDraft({})
+setNavigationDraft({})
+setRefundDraft(null)","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffAccessManagementPanel.tsx","125","applyBeverageLaunchPackage","","setPermissionDraft((current) => ({ ...current, ...Object.fromEntries(beverageLaunchPermissionPackage.flatMap((permissionCode) => ( denied.has(permissionCode) || rolePermissions.has(permissionCode) || selectedEmployee.overrides.some((override) => override.permissionCode === permissionCode && override.effect === 'grant') ? [] : [[permissionCode, 'grant' as const]] ))), }))
+setNotice({ tone: 'success', title: '已预览“酒水上架管理员”权限包', detail: `已组合扫码入库、库存成本、商品、配方、定价、渠道、图片和发布能力；${blocked > 0 ? `${blocked}项个人明确拒绝保持不变，` : ''}点击下方发布后才会生效。高风险盘点审批、异常增库和自批权限未包含。`, })","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffAccessManagementPanel.tsx","149","deploy","api.postEndpoint<StaffPermissionDeploymentResult>('/api/staff-access/deploy', { reason: reason.trim(), changes: pendingChanges, }, { idempotencyKey: `staff-access-${crypto.randomUUID()}`, timeoutMs: 20_000 })","setPublishing(true)
+setNotice(null)
+setOverview(result.overview)
+setNotice({ tone: 'success', title: `${result.changes.length}项配置已发布并复核生效`, detail: `服务端已重新读取数据库；涉及${effective}人次当前有效配置${affectedModules.length === 0 ? '' : `，入口联动：${affectedModules.join('、')}`}，发布记录已留痕。`, })
+setNotice({ tone: 'error', title: '配置没有发布成功', detail: `${message(error)}；原配置保持不变，请核对后重试。` })
+setPublishing(false)","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffAccessManagementPanel.tsx","173","createEmployee","api.postEndpoint<{ overview: StaffAccessManagementOverview; replayed: boolean }>('/api/staff-access/employees', employeeDraft, { idempotencyKey: `staff-employee-${crypto.randomUUID()}`, timeoutMs: 20_000 })","setEmployeeBusy(true)
+setNotice(null)
+setOverview(result.overview)
+setEmployeeDraft((current) => ({ ...current, employeeCode: '', displayName: '', pin: '', reason: '新员工入职并分配岗位' }))
+setNotice({ tone: 'success', title: '员工账号已建立并复核', detail: '初始岗位和4位PIN已保存；请线下安全告知员工，并要求避免与他人共用。' })
+setNotice({ tone: 'error', title: '员工账号没有建立成功', detail: message(error) })
+setEmployeeBusy(false)","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffAccessManagementPanel.tsx","187","changeEmployeeStatus","api.postEndpoint<{ overview: StaffAccessManagementOverview }>(`/api/staff-access/employees/${employee.id}/status`, { status, reason: `管理员确认${action}员工账号` }, { idempotencyKey: `staff-employee-status-${crypto.randomUUID()}`, timeoutMs: 20_000 })","setEmployeeBusy(true)
+setNotice(null)
+setOverview(result.overview)
+setNotice({ tone: 'success', title: `员工账号已${action}并复核`, detail: status === 'suspended' ? '该员工后续无法登录，历史业务和工资记录保持可追溯。' : '该员工已恢复登录资格，原岗位权限重新生效。' })
+setNotice({ tone: 'error', title: `员工账号未能${action}`, detail: message(error) })
+setEmployeeBusy(false)","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffAccessManagementPanel.tsx","322","updateApproval","","setApprovalDraft((current) => ({ ...current, [definition.code]: { ...approvalValue(role, definition), ...current[definition.code], ...patch }, }))","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffAccessManagementPanel.tsx","325","updateScope","","setScopeDraft((current) => ({ ...current, [definition.code]: { ...scopeDefault(definition), ...current[definition.code], ...patch }, }))","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffAccessManagementPanel.tsx","377","update","","setDraft((current) => ({ ...current, [definition.code]: { ...navigationValue(role, definition), ...current[definition.code], ...patch }, }))","SYS-300","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","633","run","","setBusyKey(key)
+setNotice('')
+setNotice(success)
+setNotice(`${success}；列表刷新失败，请重新读取，不必再次提交`)
+setNotice(error instanceof Error ? error.message : '操作未完成，请核对后重试')
+setBusyKey(null)","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","652","createPerformer","","setPerformerCode('')
+setStageName('')
+setGenres('')","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","666","openPerformerEdit","","setNotice('请先建立演员资料')
+setEditPerformerName(selectedPerformer.stageName)
+setEditPerformerGenres(Array.isArray(rawGenres) ? rawGenres.filter((value): value is string => typeof value === 'string').join('，') : '')
+setEditPerformerStatus(selectedPerformer.status === 'inactive' ? 'inactive' : 'active')
+setForm(form === 'performer-edit' ? null : 'performer-edit')","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","685","importSongs","","setNotice('请选择演员')
+setNotice(error instanceof Error ? error.message : '歌单格式无效')
+setNotice('追加导入至少需要一首歌曲')
+setCatalogRows('')","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","705","beginSongEdit","","setEditingSong(song)
+setEditSongCode(song.code ?? '')
+setEditSongTitle(song.title)
+setEditSongAliases(song.aliases.join('，'))","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","713","updateSong","","setEditingSong(null)","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","735","createSchedule","","setNotice('请先建立演员资料')
+setNotice(error instanceof Error ? error.message : '演出时间无效')
+setNotice('结束时间必须晚于开始时间')
+setStartsAt('')
+setEndsAt('')","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","781","transitionSong","","setNotice('请填写有效的点歌报价；免费可填0')","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","916","chooseMode","","setMode(next)
+setNotice(next === null ? `已收起“${modeLabel[nextMode]}”` : `已切换至“${modeLabel[nextMode]}”，请填写并确认后再提交`)
+setPendingReceipt(null)","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","923","acceptScan","","setScanCode(code)
+setReceiptInventoryItemId('')
+setScannerOpen(false)
+setNotice('条码已识别，请核对后继续')","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","930","createInventoryItem","api.postEndpoint<InventoryItemView>('/api/inventory/items', { sku, name, itemType: newItemUsesMillilitres ? 'bottle' : newItemBaseUnit === 'g' ? 'ingredient' : newItemCategoryCode.startsWith('food.') ? 'food' : 'consumable', baseUnit: newItemBaseUnit, categoryCode: newItemCategoryCode, lowStockThreshold: threshold === '' ? null : threshold, packageVolumeMl: packageVolumeMl === '' ? null : packageVolumeMl, wholeUnitCount: newItemBaseUnit === 'piece', reasonableWasteQuantity: '0', }, { idempotencyKey: operationIdempotency('inventory-item-create') })","setNotice('物料编号需为1至64位字母、数字、点、下划线或连字符')
+setNotice('请填写2至200字的酒水物料名称')
+setNotice('安全库存必须是非负数字')
+setNotice('净含量必须是大于0的毫升数')
+setBusy(true)
+setNotice('')
+setItemId(item.id)
+setNewItemSku('')
+setNewItemName('')
+setNewItemPackageVolumeMl('')
+setNewItemLowStockThreshold('')
+setMode('bind')
+setNotice(`${item.name} 已建立。下一步请绑定条码，随后即可扫码建立待收货单。`)
+setNotice(inventoryActionMessage(error, '酒水物料未建立'))
+setBusy(false)","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","976","startQuickCount","","setItemId(item.id)
+setMode('count')
+setQuantity('')
+setReason('')
+setNotice(`录入“${item.name}”的实际库存，提交后仍由原审批岗位复核。`)","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","986","startEditInventoryItem","","setItemId(item.id)
+setNewItemName(item.name)
+setNewItemCategoryCode(item.categoryCode)
+setNewItemPackageVolumeMl(item.packageVolumeMl ?? '')
+setNewItemLowStockThreshold(item.lowStockThreshold ?? '')
+setMode('edit')
+setNotice(`正在编辑“${item.name}”；物料编号和库存单位在已有流水后不允许直接改写。`)","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","996","updateInventoryItem","api.patchEndpoint<InventoryItemView>(`/api/inventory/items/${item.id}`, { name, categoryCode: newItemCategoryCode, lowStockThreshold: threshold === '' ? null : threshold, packageVolumeMl: packageVolumeMl === '' ? null : packageVolumeMl, }, { idempotencyKey: operationIdempotency('inventory-item-update') })","setNotice('库存数据暂时不可用，请刷新后重试')
+setNotice('请选择要编辑的库存物料')
+setNotice('请填写2至200字的物料名称')
+setNotice('安全库存必须是非负数字')
+setNotice('净含量必须是大于0的毫升数')
+setBusy(true)
+setNotice('')
+setMode(null)
+setNotice(`${saved.name} 的品类、净含量和安全库存已保存并从服务端读回。`)
+setNotice(inventoryActionMessage(error, '物料资料未保存'))
+setBusy(false)","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","1027","submitInventoryAction","api.postEndpoint<{ remainingQuantity: string baseUnit: string wasteCostMinor?: string | null }>(`/api/inventory/items/${itemId}/waste`, { quantity: storedQuantity, wasteType, reason: reason.trim(), }, { idempotencyKey: operationIdempotency('inventory-waste') })","setNotice('请选择物料并填写有效数量')
+setNotice('所选物料已不可用，请重新选择')
+setNotice(`“${selectedItem.name}”缺少有效的单瓶净含量，无法把毫升安全换算为历史库存数量；请先补全物料资料`)
+setNotice('损耗必须填写原因')
+setBusy(true)
+setNotice('')
+setNotice('盘点已提交，等待有审批权限的岗位复核')
+setNotice(result.wasteCostMinor === undefined ? `损耗已登记，库存余量已更新为 ${remaining}` : result.wasteCostMinor === null ? `损耗已登记，库存余量已更新为 ${remaining}；当前成本待补，损耗金额暂不确认` : `损耗已登记，库存余量已更新为 ${remaining}；对应成本 ¥${formatInventoryMinorString(result.wasteCostMinor)}`)
+setQuantity('')
+setReason('')
+setWasteType('other')
+setNotice(error instanceof Error ? error.message : '库存操作未完成')
+setBusy(false)","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","1099","submitCostCorrection","api.postEndpoint<{ previousWeightedUnitCostMinor: string | null weightedUnitCostMinor: string differenceWeightedUnitCostMinor: string | null }>(`/api/inventory/items/${item.id}/cost-corrections`, { weightedUnitCostMinor: unitCostMinor, reason: correctionReason, }, { idempotencyKey: operationIdempotency('inventory-cost-correction') })","setNotice('请选择要核对成本的库存物料')
+setNotice('请填写有效的当前单位成本，最多保留八位小数')
+setNotice('请填写2至500字的更正原因')
+setBusy(true)
+setNotice('')
+setCostCorrectionYuan('')
+setCostCorrectionReason('')
+setNotice(`${item.name} 的当前单位成本已由 ${result.previousWeightedUnitCostMinor === null ? '待补' : `¥${formatInventoryUnitCostMinor(result.previousWeightedUnitCostMinor, item.baseUnit)}/${unitLabel}`} 更正为 ¥${formatInventoryUnitCostMinor(result.weightedUnitCostMinor, item.baseUnit)}/${unitLabel}${result.differenceWeightedUnitCostMinor === null ? '' : `（变动 ${formatSignedInventoryMinorDecimal(result.differenceWeightedUnitCostMinor)}/${unitLabel}）`}；后续配方和组合成本已自动重算，历史订单成本不变。`)
+setNotice(inventoryActionMessage(error, '库存成本更正未保存'))
+setBusy(false)","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","1137","createReceipt","api.postEndpoint<PurchaseReceiptCommandView>('/api/inventory/receipts', { supplierSnapshot: supplierName.trim() === '' ? {} : { name: supplierName.trim() }, currency: 'CNY', invoiceTotalMinor: totalCostMinor, note: '员工手机扫码创建，待实物验收确认', lines: [{ ...(normalizedCode === '' ? { inventoryItemId: receiptInventoryItemId } : { scanCode: normalizedCode }), batchCode: optionalBatchCode === '' ? undefined : optionalBatchCode, ...(usesPackageQuantity ? { packages } : { quantity: packages }), totalCostMinor, metadata: { entryMethod: normalizedCode === '' ? 'staff_mobile_selection' : 'staff_mobile_camera' }, }], }, { idempotencyKey: operationIdempotency('i","setNotice('请扫描或输入有效条码')
+setNotice('请扫描条码或选择已建档酒款')
+setNotice(`请填写有效的${usesPackageQuantity ? '包装数量' : `实际入库数量（${inventoryUnitLabel(directItem?.baseUnit ?? '')}）`}`)
+setNotice('本次总额最多保留两位小数')
+setBusy(true)
+setNotice('')
+setPendingReceipt(receipt)
+setNotice('收货单已建立，库存尚未增加。请核对实物后进行第二次确认。')
+setNotice(inventoryActionMessage(error, '收货单未建立；若提示条码未绑定，请由库存管理员先绑定'))
+setBusy(false)","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","1175","confirmReceipt","api.postEndpoint<PurchaseReceiptCommandView>(`/api/inventory/receipts/${receipt.id}/receive`, {}, { idempotencyKey: operationIdempotency('inventory-receipt-confirm'), })","setBusy(true)
+setNotice('')
+setNotice('实物已确认入库，库存数量已更新')
+setPublishPreview(null)
+setPendingReceipt(null)
+setScanCode('')
+setReceiptInventoryItemId('')
+setBatchCode('')
+setPackages('1')
+setTotalCostYuan('')
+setSupplierName('')
+setNotice(inventoryActionMessage(error, '入库确认未完成'))
+setBusy(false)","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","1202","previewReceiptAndPublish","api.postEndpoint<InventoryPublishPreview>(`/api/inventory/receipts/${receipt.id}/receive-and-publish-preview`, { productId: publishProductId, }, { idempotencyKey: operationIdempotency('inventory-receipt-publish-preview') })","setNotice('请先选择这次入库要关联发布的酒水商品和销售规格')
+setBusy(true)
+setNotice('')
+setPublishPreview(result)
+setNotice('发布预览已按本次收货成本、正式配方、实时库存和渠道生成；请逐项核对后再确认。')
+setPublishPreview(null)
+setNotice(inventoryActionMessage(error, '发布预览未生成；入库与商品状态均未改变'))
+setBusy(false)","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","1219","confirmReceiptAndPublish","api.postEndpoint<{ productName: string; costAmountMinor: number; standardPriceMinor: number; grossProfitMinor: number }>(`/api/inventory/receipts/${receipt.id}/receive-and-publish`, { productId: publishProductId, }, { idempotencyKey: operationIdempotency('inventory-receipt-publish') })","setNotice('请先选择这次入库要关联发布的酒水商品')
+setNotice('请先为当前收货单和商品生成发布预览，再确认入库发布')
+setBusy(true)
+setNotice('')
+setNotice(`${result.productName} 已按本次收货成本 ¥${formatInventoryMinor(result.costAmountMinor)}/份完成入库发布；售价 ¥${formatInventoryMinor(result.standardPriceMinor)}，单份毛利 ¥${formatInventoryMinor(result.grossProfitMinor)}。`)
+setPendingReceipt(null)
+setScanCode('')
+setReceiptInventoryItemId('')
+setBatchCode('')
+setPackages('1')
+setTotalCostYuan('')
+setSupplierName('')
+setPublishProductId('')
+setPublishPreview(null)
+setNotice(inventoryActionMessage(error, '确认入库并发布上架未完成；库存和商品状态已整体回滚'))
+setBusy(false)","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","1246","bindCode","api.postEndpoint(`/api/inventory/items/${itemId}/barcodes`, { code: normalizedCode, codeType, packageQuantity, }, { idempotencyKey: operationIdempotency('inventory-barcode-bind') })","setNotice('请选择酒水物料并扫描有效条码')
+setNotice('请填写每个条码包装包含的有效数量')
+setBusy(true)
+setNotice('')
+setNotice('条码已绑定。以后收货人员可直接扫码建立收货单。')
+setNotice(inventoryActionMessage(error, '条码绑定未完成'))
+setBusy(false)","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","1432","run","","setNotice('请填写至少3个字的操作原因')
+setBusyKey(key)
+setNotice('')
+setNotice(success)
+setNotice(error instanceof Error ? error.message : '设备操作未完成')
+setBusyKey(null)","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","1482","clearPrinterForm","","setEditingPrinterId(null)
+setPrinterCode('')
+setPrinterName('')
+setPrinterStation('cashier')
+setPrintBridgeId('')
+setWindowsQueueName('')
+setPrintProfile('escpos_80')","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","1487","openPrinter","","setEditingPrinterId(device.id)
+setPrinterCode(device.code)
+setPrinterName(device.name)
+setPrinterStation(device.stationCode === 'bar' || device.stationCode === 'kitchen' ? device.stationCode : 'cashier')
+setPrintBridgeId(device.printBridgeId ?? '')
+setWindowsQueueName(device.windowsQueueName ?? '')
+setPrintProfile(device.printProfile ?? 'escpos_80')
+setMode('printer')","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","1498","savePrinter","","setNotice('Windows打印必须同时选择打印桥和打印机队列')","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","1532","saveRoute","","setNotice('请选择打印机，份数必须为1至5')","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","1545","openRoute","","setEditingRouteCode(null)
+setRouteCode('')
+setRouteName('')
+setRouteStation('cashier')
+setRoutePrinterId('')
+setRouteCopies('1')
+setEditingRouteCode(route.code)
+setRouteCode(route.code)
+setRouteName(route.name)
+setRouteStation(route.stationCode)
+setRoutePrinterId(route.printerDeviceId)
+setRouteCopies(String(route.copies))
+setMode('route')","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","1633","togglePayment","api.patchEndpoint('/api/store/commerce-policy/online-payment', { enabled: target, expectedVersion: policy.policyVersion, reason: reason.trim(), }, { idempotencyKey: operationIdempotency('payment-policy') })","setNotice('请填写至少3个字的调整原因')
+setBusy(true)
+setNotice('')
+setReason('')
+setNotice(`线上支付已${target ? '开放' : '关闭'}`)
+setNotice(error instanceof Error ? error.message : '支付策略未更新')
+setBusy(false)","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","1656","saveReservationPolicy","api.patchEndpoint('/api/store/commerce-policy/payment-reservation', { paymentReservationMinutes: minutes, expectedVersion: policy.policyVersion, reason: reason.trim(), }, { idempotencyKey: operationIdempotency('payment-reservation-policy') })","setNotice('库存保留时间必须是2至30分钟的整数')
+setNotice('请填写至少3个字的调整原因')
+setBusy(true)
+setNotice('')
+setReason('')
+setNotice(`待付款库存保留时间已调整为${minutes}分钟`)
+setNotice(error instanceof Error ? error.message : '库存保留策略未更新')
+setBusy(false)","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffModulePanel.tsx","1947","loadAllCatalogProductsForInventory","api.getEndpoint<{ data: unknown }>( `/api/catalog/products?status=all&limit=${pageSize}&offset=${offset}`, )","","SYS-287、SYS-288、SYS-290、SYS-300、SYS-302","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/StaffObjectFocus.tsx","11","focus","","setMissing(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/TaskSections.tsx","15","restore","","setSelected(id)
+setVisited(previous => new Set([...previous, id]))","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/VenueManagementPanel.tsx","57","editArea","","setAreaDraft({ id: area.id, code: area.code, name: area.name, areaType: area.areaType, sortOrder: String(area.sortOrder), status: area.status })
+setTableDraft(null)
+setNotice(null)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/VenueManagementPanel.tsx","63","editTable","","setTableDraft({ id: table.id, code: table.code, displayName: table.displayName, areaId: table.areaId, capacity: String(table.capacity), minimumSpendYuan: table.minimumSpendMinor === null ? '' : (table.minimumSpendMinor / 100).toFixed(2), status: table.status })
+setAreaDraft(null)
+setNotice(null)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/VenueManagementPanel.tsx","70","saveArea","api.postEndpoint('/api/table-management/areas', payload, { idempotencyKey: key('area-create') })
+api.patchEndpoint(`/api/table-management/areas/${areaDraft.id}`, payload, { idempotencyKey: key('area-update') })","setNotice({ kind: 'error', text: '区域排序必须是有效整数' })
+setBusy(true)
+setAreaDraft(null)
+setNotice({ kind: 'success', text: `${payload.name} 已保存并从服务端读回` })
+setNotice({ kind: 'error', text: error instanceof Error ? error.message : '区域配置未保存' })
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"
+"src/normalized-ui/VenueManagementPanel.tsx","89","saveTable","api.postEndpoint('/api/table-management/tables', payload, { idempotencyKey: key('table-create') })
+api.patchEndpoint(`/api/table-management/tables/${tableDraft.id}`, payload, { idempotencyKey: key('table-update') })","setNotice({ kind: 'error', text: '请核对桌台容量和最低消费' })
+setBusy(true)
+setTableDraft(null)
+setNotice({ kind: 'success', text: `${payload.displayName} 已保存并从服务端读回` })
+setNotice({ kind: 'error', text: error instanceof Error ? error.message : '桌台配置未保存' })
+setBusy(false)","","命名函数索引；共享包装器、内联回调和派生状态仍须结合源文件及所属流程，API数组为空不等于没有写操作"

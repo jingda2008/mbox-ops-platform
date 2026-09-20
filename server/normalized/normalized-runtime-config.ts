@@ -90,6 +90,7 @@ export interface NormalizedRuntimeConfig {
   trustProxyHops: number
   staticDir: string | null
   startWorkers: boolean
+  kitchenBatchBoardEnabled?: boolean
   quantityAfterSalesEnabled?: boolean
   workerId: string | null
   workerIntervalMs: number
@@ -194,6 +195,7 @@ export function loadNormalizedRuntimeConfig(
   const commitSha = readCommitSha(environment.APP_COMMIT_SHA ?? environment.GITHUB_SHA)
   const releaseImageDigest = readImageDigest(environment.MBOX_RELEASE_IMAGE_DIGEST, errors)
   const staticDir = optional(environment.MBOX_STATIC_DIR)
+  const kitchenBatchBoardEnabled = readBoolean(environment.MBOX_KITCHEN_BATCH_BOARD_ENABLED, false, 'MBOX_KITCHEN_BATCH_BOARD_ENABLED', errors)
   const quantityAfterSalesEnabled = readBoolean(
     environment.MBOX_QUANTITY_AFTER_SALES_ENABLED, false, 'MBOX_QUANTITY_AFTER_SALES_ENABLED', errors,
   )
@@ -253,6 +255,7 @@ export function loadNormalizedRuntimeConfig(
     trustProxyHops,
     staticDir,
     startWorkers,
+    kitchenBatchBoardEnabled,
     quantityAfterSalesEnabled,
     workerId,
     workerIntervalMs,

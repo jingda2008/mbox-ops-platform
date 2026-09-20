@@ -1,3 +1,4 @@
+import {openMembershipConfiguration} from './membership-workflow'
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { BadgePercent, CheckCircle2, ChevronDown, Plus, Rocket, Trash2 } from 'lucide-react'
 import type { NormalizedApiClient, StaffAuthView } from '../normalized-api'
@@ -46,7 +47,7 @@ const triggerLabels:Record<TriggerKind,string>={
 const stackingLabels:Record<StackingMode,string>={
   stackable:'可与同组规则叠加',exclusive_highest:'同组只取积分最高',exclusive_first:'同组只取优先级最高',
 }
-const statusLabels={ draft:'待审批',approved:'待发布',published:'运行中',retired:'已结束' } as const
+const statusLabels={ draft:'待审批',approved:'待发布',published:'已发布',retired:'已结束' } as const
 
 export function PromotionalLoyaltyPanel({api,auth}:{api:NormalizedApiClient;auth:StaffAuthView}) {
   const { confirmAction, promptAction } = useConfirmationDialog()
@@ -72,10 +73,10 @@ export function PromotionalLoyaltyPanel({api,auth}:{api:NormalizedApiClient;auth
 
   async function submitDraft(event:FormEvent){
     event.preventDefault();if(!draft||busy)return
-    const payload=draftPayload(draft)
-    if(!(await confirmAction({title:'确认建立促销积分草稿',description:`建立“${draft.name}”草稿不会立即发积分，仍需他人审批和最高管理人员发布。`,confirmLabel:'建立草稿'})))return
+        if(!(await confirmAction({title:'确认建立促销积分草稿',description:`建立“${draft.name}”草稿不会立即发积分，仍需他人审批和最高管理人员发布。`,confirmLabel:'建立草稿'})))return
     setBusy('draft');setNotice('')
     try{
+      const payload=draftPayload(draft)
       await api.postEndpoint('/api/staff/loyalty/promotion-policies',payload,{
         idempotencyKey:`loyalty-promotion-draft-${crypto.randomUUID()}`,
       })
@@ -84,16 +85,16 @@ export function PromotionalLoyaltyPanel({api,auth}:{api:NormalizedApiClient;auth
   }
 
   function approve(_policy:PromotionPolicy){
-    setNotice('审批已移至“会员经营配置中心”：系统将依据预算、会员上限、叠加、退款和权威活动事实生成影响预览。')
-    window.dispatchEvent(new Event('mbox:open-membership-configuration'))
+    setNotice('前往规则审批，核对预算、会员上限、退款和活动付款、签到、完成记录。')
+    openMembershipConfiguration('promotion_points', _policy.id)
   }
 
   async function publish(policy:PromotionPolicy){
-    const start=(await promptAction({title:'填写促销积分生效时间',description:'例如 2026-08-20 18:00。',label:'生效时间',confirmLabel:'继续',multiline:false}))?.trim()
+    const start=(await promptAction({title:'填写促销积分生效时间',description:'请选择北京时间。',inputType:'datetime-local',label:'生效时间',confirmLabel:'继续',multiline:false}))?.trim()
     if(!start)return
     const parsedStart=Date.parse(start)
     if(!Number.isFinite(parsedStart))return setNotice('生效时间格式无效。')
-    const until=(await promptAction({title:'填写失效时间（可选）',description:'留空表示由下一版本准确接替。',label:'失效时间',confirmLabel:'继续',multiline:false}))?.trim()??''
+    const until=(await promptAction({title:'填写失效时间（可选）',description:'请选择北京时间；留空表示由下一版本接替。',inputType:'datetime-local',label:'失效时间',confirmLabel:'继续',multiline:false}))?.trim()??''
     const parsedUntil=until?Date.parse(until):null
     if(parsedUntil!==null&&(!Number.isFinite(parsedUntil)||parsedUntil<=parsedStart))return setNotice('失效时间必须晚于生效时间。')
     const reason=(await promptAction({title:'填写发布说明',description:'说明会保留在规则审计中。',label:'发布说明',defaultValue:'已确认预算、叠加、触发证据和退款冲回策略',confirmLabel:'继续'}))?.trim()
@@ -104,7 +105,7 @@ export function PromotionalLoyaltyPanel({api,auth}:{api:NormalizedApiClient;auth
         effectiveFrom:new Date(parsedStart).toISOString(),
         effectiveUntil:parsedUntil===null?null:new Date(parsedUntil).toISOString(),reason,
       },{idempotencyKey:`loyalty-promotion-publish-${crypto.randomUUID()}`})
-      setNotice('已安排发布；系统只按权威付款、签到或完成事实发放。');await load()
+      setNotice('已安排发布；只按已确认的付款、签到或完成记录发放。');await load()
     }catch(error){setNotice(message(error,'促销积分规则没有发布'))}finally{setBusy('')}
   }
 
@@ -115,7 +116,7 @@ export function PromotionalLoyaltyPanel({api,auth}:{api:NormalizedApiClient;auth
   return <section className="promotion-loyalty-panel" aria-label="促销积分规则">
     <button className="promotion-loyalty-summary" type="button" aria-expanded={expanded} onClick={()=>setExpanded((value)=>!value)}>
       <span><BadgePercent size={18}/></span><div><strong>促销积分</strong><small>按活动付款、签到或完成事实发放；预算、上限和退款冲回均受控。</small></div>
-      <em>{configuration.policies.filter((item)=>item.status==='published').length} 个运行中</em><ChevronDown size={17}/>
+      <em>{configuration.policies.filter((item)=>item.status==='published').length} 个已发布</em><ChevronDown size={17}/>
     </button>
     {expanded&&<div className="promotion-loyalty-body">
       {notice&&<p role="status">{notice}</p>}
@@ -125,7 +126,7 @@ export function PromotionalLoyaltyPanel({api,auth}:{api:NormalizedApiClient;auth
         <dl><div><dt>已发 / 预算</dt><dd>{policy.awardedPoints} / {policy.storeBudgetPoints}</dd></div><div><dt>个人上限</dt><dd>{policy.perMemberPointsLimit}</dd></div><div><dt>有效期</dt><dd>{policy.pointValidityDays}天</dd></div></dl>
         <small>{stackingLabels[policy.stackingMode]} · {policy.refundPolicy==='reverse_on_any_refund'?'任一退款即冲回':'全额退款才冲回'} · {policy.budgetReuseAfterRefund?'释放预算':'不释放预算'} · {policy.memberLimitReuseAfterRefund?'释放个人限额':'不释放个人限额'}</small>
         <div className="promotion-rule-chips">{policy.rules.filter((rule)=>rule.enabled).map((rule)=><span key={rule.id??rule.ruleCode}>{triggerLabels[rule.triggerKind]} +{rule.points}</span>)}</div>
-        {policy.deferredTriggerCount>0&&<b>{policy.deferredTriggerCount} 条触发事实因总闸暂停待处理</b>}
+        {policy.deferredTriggerCount>0&&<div><b>{policy.deferredTriggerCount} 笔积分奖励因暂停发放而待处理</b><p>恢复积分发放后会自动补算，请先由授权管理者核对暂停原因。</p><a href="/staff/member-management#work=member-rules">查看积分发放开关与恢复入口</a></div>}
         <footer>{policy.status==='draft'&&canApprove&&<button type="button" disabled={busy!==''} onClick={()=>void approve(policy)}><CheckCircle2 size={15}/>前往配置中心审批</button>}
           {policy.status==='approved'&&canPublish&&<button type="button" disabled={busy!==''} onClick={()=>void publish(policy)}><Rocket size={15}/>安排发布</button>}</footer>
       </article>)}</div>
@@ -167,7 +168,7 @@ function emptyDraft(activityId:string):DraftForm{return{
   campaignCode:'',name:'',activityId,stackingGroup:'ACTIVITY',stackingMode:'exclusive_highest',priority:'100',
   storeBudgetPoints:'10000',perMemberPointsLimit:'200',pointValidityDays:'180',
   refundPolicy:'reverse_on_any_refund',budgetReuseAfterRefund:false,memberLimitReuseAfterRefund:false,eligibleMemberLevels:['member','silver','gold'],
-  reason:'限定预算试运行，按活动权威事实发放并观察效果',rules:[emptyRule(1)],
+  reason:'限定预算试运行，核对活动付款、签到和完成记录后发放并观察效果',rules:[emptyRule(1)],
 }}
 function emptyRule(index:number):DraftRule{return{ruleCode:`RULE-${index}`,triggerKind:'activity_check_in',points:'60',perMemberAwardLimit:'1',minimumPaidYuan:'0',enabled:true}}
 function draftPayload(draft:DraftForm){

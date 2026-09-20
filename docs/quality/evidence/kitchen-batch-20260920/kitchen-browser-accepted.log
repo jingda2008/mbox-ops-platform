@@ -1,0 +1,23 @@
+[WebServer] (node:38861) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] [INEFFECTIVE_DYNAMIC_IMPORT] src/normalized-ui/PerformanceRevisionPanel.tsx is dynamically imported by src/normalized-ui/StaffModulePanel.tsx but also statically imported by src/normalized-ui/MonthlySchedulePanel.tsx, dynamic import will not move module into another chunk.
+[WebServer]
+[WebServer] [plugin builtin:vite-reporter]
+[WebServer] (!) Some chunks are larger than 500 kB after minification. Consider:
+[WebServer] - Using dynamic import() to code-split the application
+[WebServer] - Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+[WebServer] - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+[WebServer] (node:38867) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] (node:38868) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+Running 3 tests using 1 worker
+
+(node:38891) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 tests/normalized-e2e/normalized-kitchen-batch.spec.ts:23:1 › 60单180份：低高度双板、真实开批、跨页草稿、出锅释放及取送状态 (16.1s)
+  ✓  2 tests/normalized-e2e/normalized-kitchen-batch.spec.ts:70:1 › 真实提交成功但响应丢失：刷新后原凭据恢复，不重复开批 (1.2s)
+  ✓  3 tests/normalized-e2e/normalized-kitchen-batch.spec.ts:88:1 › 服务员读取真实备齐数量并送达；厨师操作不冒充送达 (7.2s)
+
+  3 passed (34.0s)

@@ -8,6 +8,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type {
   CommandExecution,
+  CommandOutcome,
   JsonCodec,
   JsonObject,
   NormalizedCommandExecutor,
@@ -139,6 +140,7 @@ interface KdsCommandTarget {
 }
 
 interface KdsActionResult {
+  affectedUnitIds?:string[]
   affectedQuantity?:number
   task: KdsTask
   target: KdsCommandTarget
@@ -191,7 +193,7 @@ interface KdsTargetDetailRow extends Record<string, unknown> {
   fulfillment_note: string | null
 }
 
-class CommerceKdsRequestError extends Error {
+export class CommerceKdsRequestError extends Error {
   constructor(
     public readonly code: string,
     message: string,
@@ -460,7 +462,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
   app,
   options,
 ) => {
-  app.get('/commerce/assisted-order-access', async (request, reply) => handleRoute(reply, async () => {
+  app.get('/commerce/assisted-order-access', async (request, reply) => handleCommerceRoute(reply, async () => {
     const context = await resolveContext(options, request)
     const access = await resolveStaffAccess(options, context)
     const canCreateOrder = access.permissions.includes('order.create')
@@ -506,7 +508,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
   // payment command repeats both the capability and table-scope checks in its
   // write transaction; this route only makes the correct existing order easy
   // to select from the table page.
-  app.get('/commerce/table-sessions/:tableSessionId/payment-orders', async (request, reply) => handleRoute(reply, async () => {
+  app.get('/commerce/table-sessions/:tableSessionId/payment-orders', async (request, reply) => handleCommerceRoute(reply, async () => {
     const context = await resolveContext(options, request)
     const collectionPermissions = [
       'payment.initiate.staff',
@@ -535,7 +537,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
   // or guest identity is returned.  Any employee allowed to execute service
   // may inspect an active table's delivery progress; mutations keep their
   // stricter table responsibility checks.
-  app.get('/commerce/table-sessions/:tableSessionId/order-details', async (request, reply) => handleRoute(reply, async () => {
+  app.get('/commerce/table-sessions/:tableSessionId/order-details', async (request, reply) => handleCommerceRoute(reply, async () => {
     const context = await resolveContext(options, request)
     await requireAnyPermission(options, context, ['service.execute', 'order.view'])
     const tableSessionId = readUuid(
@@ -554,7 +556,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
     return reply.send({ data })
   }))
 
-  app.post('/commerce/assisted-order-contexts', async (request, reply) => handleRoute(reply, async () => {
+  app.post('/commerce/assisted-order-contexts', async (request, reply) => handleCommerceRoute(reply, async () => {
     const context = await resolveContext(options, request)
     const body = readObject(request.body, '请求正文')
     assertActorBinding(body, context.employeeId)
@@ -570,7 +572,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
     return reply.code(201).send({ data: issued })
   }))
 
-  app.post('/commerce/orders', async (request, reply) => handleRoute(reply, async () => {
+  app.post('/commerce/orders', async (request, reply) => handleCommerceRoute(reply, async () => {
     const context = await resolveContext(options, request)
     await requirePermission(options, context, 'order.create')
     const body = readObject(request.body, '请求正文')
@@ -610,7 +612,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
     return reply.code(execution.replayed ? 200 : 201).send(commerceResponse(execution, input.orderMode))
   }))
 
-  app.get('/commerce/fulfillment', async (request, reply) => handleRoute(reply, async () => {
+  app.get('/commerce/fulfillment', async (request, reply) => handleCommerceRoute(reply, async () => {
     const context = await resolveContext(options, request)
     await requireAnyPermission(options, context, [
       'order.view',
@@ -630,7 +632,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
 
   app.post<{ Params: { taskId: string } }>(
     '/commerce/kds/:taskId/actions',
-    async (request, reply) => handleRoute(reply, async () => {
+    async (request, reply) => handleCommerceRoute(reply, async () => {
       const context = await resolveContext(options, request)
       const body = readObject(request.body, '请求正文')
       assertActorBinding(body, context.employeeId)
@@ -676,7 +678,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
 
   app.post<{ Params: { taskId: string } }>(
     '/commerce/kds/:taskId/manager-cancel',
-    async (request, reply) => handleRoute(reply, async () => {
+    async (request, reply) => handleCommerceRoute(reply, async () => {
       const context = await resolveContext(options, request)
       const body = readObject(request.body, '请求正文')
       assertActorBinding(body, context.employeeId)
@@ -701,7 +703,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
   // than reopening and rewriting the failed historical task.
   app.post<{ Params: { taskId: string } }>(
     '/commerce/kds/:taskId/remake',
-    async (request, reply) => handleRoute(reply, async () => {
+    async (request, reply) => handleCommerceRoute(reply, async () => {
       const context = await resolveContext(options, request)
       const body = readObject(request.body, '请求正文')
       assertActorBinding(body, context.employeeId)
@@ -743,7 +745,22 @@ async function executeKdsAction(
     idempotencyKey,
     requestFingerprint: JSON.stringify({ taskId, action, employeeId: context.employeeId, reason, ...(quantity===undefined?{}:{quantity}) }),
     resultCodec: kdsActionResultCodec,
-  }, async (transaction) => {
+  }, transaction => performKdsAction(transaction, options, context, taskId, action, idempotencyKey, requestId, reason, quantity))
+}
+
+/** Shared atomic transition; callers must acquire all parent locks before a multi-order action. */
+export async function performKdsAction(
+  transaction: ScopedTransaction,
+  options: Pick<CommerceKdsApiOptions, 'createKdsRepository' | 'createOrderRepository' | 'quantityActionsEnabled'>,
+  context: CommerceKdsRequestContext,
+  taskId: string,
+  action: Exclude<KdsAction, 'completeAndDeliver' | 'pickUp'>,
+  idempotencyKey: string,
+  requestId: string,
+  reason: KdsExceptionReason | null,
+  quantity?: number,
+  unitIds?: string[],
+): Promise<CommandOutcome<KdsActionResult>> {
     const target = await lockKdsCommandTarget(transaction, taskId)
     await new NormalizedKdsAuthorization().assertCanActOnTask({
       transaction,
@@ -770,7 +787,7 @@ async function executeKdsAction(
     if(quantity!==undefined&&options.quantityActionsEnabled===false&&!target.quantityManaged)throw new CommerceKdsRequestError('QUANTITY_BATCH_NOT_ENABLED','暂不新增数量制作批次，已有批次可继续原操作',409)
     if((target.quantityManaged||quantity!==undefined)&&action==='fail')throw new ItemQuantityConflict('QUANTITY_UNAVAILABLE','该商品已按份数处理，请保留当前数量并从商品售后记录实际处置，不能整行作废')
     if((target.quantityManaged||quantity!==undefined)&&['start','complete','deliver','pickupAndDeliver'].includes(action)){
-      quantityOutcome=await executeQuantityKdsAction(transaction,{task,action:action as 'start'|'complete'|'deliver'|'pickupAndDeliver',employeeId:context.employeeId,quantity,eventKey:`${idempotencyKey}:quantity`})
+      quantityOutcome=await executeQuantityKdsAction(transaction,{task,action:action as 'start'|'complete'|'deliver'|'pickupAndDeliver',employeeId:context.employeeId,quantity,unitIds,eventKey:`${idempotencyKey}:quantity`})
       task=quantityOutcome.task
     } else if (action === 'accept') {
       task = await kds.accept(transitionInput('accept'))
@@ -856,7 +873,7 @@ async function executeKdsAction(
       target,
       orderItem,
       fulfillmentStatus: quantityOutcome?.fulfillmentStatus??fulfillmentStatus(task, orderItem),
-      ...(quantityOutcome?{affectedQuantity:quantityOutcome.quantity}:{}),
+      ...(quantityOutcome?{affectedQuantity:quantityOutcome.quantity,affectedUnitIds:quantityOutcome.unitIds}:{}),
       exceptionEvidence,
     }
     const actionName = action === 'pickupAndDeliver' ? 'deliver' : action
@@ -881,7 +898,7 @@ async function executeKdsAction(
         headers: { requestId },
       }],
     }
-  })
+
 }
 
 async function executeManagerCancellation(
@@ -1521,6 +1538,7 @@ function kdsResponse(execution: CommandExecution<KdsActionResult>) {
     specification: result.target.specification,
     quantity: task.quantity,
     ...(result.affectedQuantity===undefined?{}:{affectedQuantity:result.affectedQuantity}),
+    ...(result.affectedUnitIds ? {affectedUnitIds:result.affectedUnitIds} : {}),
     fulfillmentNote: result.target.fulfillmentNote,
     status: compatibleKdsStatus(result),
     normalizedStatus: task.status,
@@ -1590,6 +1608,7 @@ const kdsActionResultCodec: JsonCodec<KdsActionResult> = {
 function kdsActionResultToJson(result: KdsActionResult): JsonObject {
   return {
     ...(result.affectedQuantity===undefined?{}:{affectedQuantity:result.affectedQuantity}),
+    ...(result.affectedUnitIds ? {affectedUnitIds:result.affectedUnitIds} : {}),
     task: kdsTaskToJson(result.task),
     target: {
       orderItemId: result.target.orderItemId,
@@ -1806,7 +1825,7 @@ function readUuid(value: string, name: string): string {
   return value
 }
 
-async function handleRoute(
+export async function handleCommerceRoute(
   reply: FastifyReply,
   operation: () => Promise<FastifyReply>,
 ): Promise<FastifyReply> {

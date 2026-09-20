@@ -1,3 +1,6 @@
+import {z} from 'zod'
+import {publishMembershipNotification} from './membership-notification-publication.js'
+import {IdempotencyConflictError,IdempotencyInProgressError,type NormalizedCommandExecutor,type JsonObject} from './command-executor.js'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type { StaffCustomerExperienceContext } from './customer-experience-service.js'
 import { CustomerExperienceRequestError } from './customer-experience-repository.js'
@@ -23,32 +26,43 @@ export interface MembershipConfigurationApiOptions {
   createStaffAccessRepository?(transaction:ScopedTransaction):Pick<StaffAccessRepository,'assertPermission'>
 }
 
-export const membershipConfigurationApiPlugin:FastifyPluginAsync<MembershipConfigurationApiOptions>=async(app,options)=>{
+export const membershipConfigurationApiPlugin:FastifyPluginAsync<MembershipConfigurationApiOptions & {commands:Pick<NormalizedCommandExecutor,'execute'>}>=async(app,options)=>{
+  app.post<{Params:{configurationId:string}}>('/staff/loyalty/configuration-center/wechat_notifications/:configurationId/publish',async(request,reply)=>handle(reply,async()=>{
+    const context=await authorized(options,request,'loyalty.policy.publish')
+    const id=z.uuid().parse(request.params.configurationId)
+    const input=z.object({expectedRevision:z.number().int().positive(),effectiveFrom:z.iso.datetime({offset:true}),effectiveUntil:z.iso.datetime({offset:true}).nullable(),reason:z.string().trim().min(2).max(500)}).strict().parse(request.body)
+    const key=z.string().regex(/^[A-Za-z0-9:_-]{8,128}$/).parse(request.headers['idempotency-key'])
+    const result=await options.commands.execute<JsonObject>({scope:context.scope,operationScope:'membership.notification.publish',idempotencyKey:key,requestFingerprint:JSON.stringify({employeeId:context.employeeId,id,input}),resultCodec:{encode:value=>value,decode:value=>value as JsonObject}},async transaction=>{
+      const value=await publishMembershipNotification(transaction,id,context.employeeId,input)
+      return {result:value,auditEvents:[{actor:{type:'employee',employeeId:context.employeeId},action:'membership.notification.publish',objectType:'wechat_notification_policy',objectId:id,businessDate:context.businessDate,afterData:{...value,reason:input.reason}}],outboxMessages:[]}
+    })
+    return reply.send({data:result.value,meta:{replayed:result.replayed}})
+  }))
   app.get('/staff/loyalty/configuration-center',async(request,reply)=>handle(reply,async()=>{
     const context=await authorized(options,request,'loyalty.configuration.view')
     const rows=await options.transactions.run(context.scope,async(transaction)=>{
       const result=await transaction.query<ConfigurationListRow>(`
         SELECT * FROM (
           SELECT 'base_points'::text domain,id,status,draft_revision,version,
-            policy_code AS title,updated_at FROM mbox.loyalty_policy_versions
+            policy_code AS title,updated_at,effective_from,effective_until,approved_by_employee_id FROM mbox.loyalty_policy_versions
           WHERE tenant_id=$1::uuid AND store_id=$2::uuid
-          UNION ALL SELECT 'tier_policy',id,status,draft_revision,version,'会员等级',updated_at
+          UNION ALL SELECT 'tier_policy',id,status,draft_revision,version,'会员等级',updated_at,effective_from,effective_until,approved_by_employee_id
             FROM mbox.loyalty_tier_policy_versions WHERE tenant_id=$1::uuid AND store_id=$2::uuid
-          UNION ALL SELECT 'tier_benefits',id,status,draft_revision,version,'等级权益',updated_at
+          UNION ALL SELECT 'tier_benefits',id,status,draft_revision,version,'等级权益',updated_at,effective_from,effective_until,approved_by_employee_id
             FROM mbox.loyalty_tier_benefit_policy_versions WHERE tenant_id=$1::uuid AND store_id=$2::uuid
-          UNION ALL SELECT 'redemption_catalog',id,status,draft_revision,version,'积分兑换',updated_at
+          UNION ALL SELECT 'redemption_catalog',id,status,draft_revision,version,'积分兑换',updated_at,effective_from,effective_until,approved_by_employee_id
             FROM mbox.redemption_catalog_versions WHERE tenant_id=$1::uuid AND store_id=$2::uuid
-          UNION ALL SELECT 'promotion_points',id,status,draft_revision,version,name,updated_at
+          UNION ALL SELECT 'promotion_points',id,status,draft_revision,version,name,updated_at,effective_from,effective_until,approved_by_employee_id
             FROM mbox.loyalty_promotion_policy_versions WHERE tenant_id=$1::uuid AND store_id=$2::uuid
-          UNION ALL SELECT 'membership_terms',id,status,draft_revision,version,title,updated_at
+          UNION ALL SELECT 'membership_terms',id,status,draft_revision,version,title,updated_at,effective_from,effective_until,approved_by_employee_id
             FROM mbox.membership_terms_versions WHERE tenant_id=$1::uuid AND store_id=$2::uuid
-          UNION ALL SELECT 'wechat_notifications',id,status,draft_revision,policy_version,notification_type,updated_at
+          UNION ALL SELECT 'wechat_notifications',id,status,draft_revision,policy_version,notification_type,updated_at,effective_from,effective_until,approved_by_employee_id
             FROM mbox.wechat_notification_policies WHERE tenant_id=$1::uuid AND store_id=$2::uuid
               AND governance_mode='managed'
         ) configuration ORDER BY updated_at DESC,domain,version DESC,id
       `,[transaction.scope.tenantId,transaction.scope.storeId])
       return result.rows.map((row)=>({domain:row.domain,configurationId:row.id,status:row.status,
-        revision:row.draft_revision,version:row.version,title:row.title,updatedAt:row.updated_at}))
+        revision:row.draft_revision,version:row.version,title:row.title,updatedAt:row.updated_at,effectiveFrom:row.effective_from,effectiveUntil:row.effective_until,approvedByEmployeeId:row.approved_by_employee_id}))
     },{readOnly:true})
     return reply.send({data:rows})
   }))
@@ -122,7 +136,7 @@ export const membershipConfigurationApiPlugin:FastifyPluginAsync<MembershipConfi
   )
 }
 
-interface ConfigurationListRow extends Record<string,unknown>{domain:MembershipConfigurationDomain;id:string;status:string;draft_revision:number;version:number;title:string;updated_at:string}
+interface ConfigurationListRow extends Record<string,unknown>{domain:MembershipConfigurationDomain;id:string;status:string;draft_revision:number;version:number;title:string;updated_at:string;effective_from:string|null;effective_until:string|null;approved_by_employee_id:string|null}
 
 function service(options:MembershipConfigurationApiOptions,context:StaffCustomerExperienceContext){
   return new MembershipConfigurationDraftService(
@@ -137,6 +151,8 @@ async function authorized(options:MembershipConfigurationApiOptions,request:Fast
   return context
 }
 async function handle(reply:FastifyReply,execute:()=>Promise<unknown>){try{return await execute()}catch(error){
+  if(error instanceof z.ZodError)return reply.code(400).send({error:{code:'MEMBERSHIP_PUBLICATION_INVALID',message:'请核对生效时间和发布说明'}})
+  if(error instanceof IdempotencyConflictError||error instanceof IdempotencyInProgressError)return reply.code(409).send({error:{code:'IDEMPOTENCY_IN_PROGRESS',message:'请恢复原发布操作，核对处理结果'}})
   if(isStaffAuthenticationRequiredError(error))return reply.code(401).send({error:STAFF_AUTHENTICATION_REQUIRED_ERROR})
   if(error instanceof StaffAccessDeniedError)return reply.code(403).send({error:{code:'STAFF_ACCESS_DENIED',message:'没有执行该操作的权限'}})
   if(error instanceof MembershipConfigurationDraftError)return reply.code(409).send({error:{code:error.code,message:error.message}})

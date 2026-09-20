@@ -1,3 +1,4 @@
+import {beijingDateTimeIso} from './membership-workflow'
 import {
   createContext,
   useCallback,
@@ -29,6 +30,7 @@ export type InputPromptRequest = Readonly<{
   confirmLabel?: string
   cancelLabel?: string
   multiline?: boolean
+  inputType?: 'text' | 'datetime-local'
 }>
 
 type PendingConfirmation = Readonly<{
@@ -62,6 +64,7 @@ function normalizeInputPrompt(request: InputPromptRequest): InputPromptRequest {
     confirmLabel: request.confirmLabel?.trim() || '继续',
     cancelLabel: request.cancelLabel?.trim() || '返回',
     multiline: request.multiline !== false,
+    inputType: request.inputType ?? 'text',
   }
 }
 
@@ -163,11 +166,11 @@ function InputPromptDialog({
           <span>{request.label}</span>
           {request.multiline
             ? <textarea id={inputId} ref={(node) => { input.current = node }} value={value} onChange={(event) => setValue(event.target.value)} />
-            : <input id={inputId} ref={(node) => { input.current = node }} value={value} onChange={(event) => setValue(event.target.value)} />}
+            : <input type={request.inputType??'text'} id={inputId} ref={(node) => { input.current = node }} value={value} onChange={(event) => {event.target.setCustomValidity('');setValue(event.target.value)}} />}
         </label>
         <footer>
           <button type="button" className="normalized-confirmation-cancel" onClick={() => onResolve(null)}>{request.cancelLabel}</button>
-          <button type="button" className="normalized-confirmation-primary" onClick={() => onResolve(value)}>{request.confirmLabel}</button>
+          <button type="button" className="normalized-confirmation-primary" onClick={() => {if(request.inputType==='datetime-local'&&value){try{onResolve(beijingDateTimeIso(value))}catch(error){input.current?.setCustomValidity(error instanceof Error?error.message:'日期无效');input.current?.reportValidity()}}else onResolve(value)}}>{request.confirmLabel}</button>
         </footer>
       </section>
     </div>

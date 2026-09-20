@@ -1,0 +1,5 @@
+.social-account-panel,.social-account-panel details,.social-account-panel form,.social-account-panel p,.social-account-panel .custody-fields{min-width:0;max-width:100%;box-sizing:border-box}
+.social-account-panel p,.social-account-panel strong,.social-account-panel label{overflow-wrap:anywhere}
+.social-account-panel input,.social-account-panel select,.social-account-panel textarea{min-width:0;max-width:100%;box-sizing:border-box}
+.social-account-panel summary{min-height:44px;align-content:center;cursor:pointer}
+@media(max-width:480px){.social-account-panel .custody-fields{grid-template-columns:minmax(0,1fr)}}

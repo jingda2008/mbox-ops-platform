@@ -8,7 +8,7 @@ import {DeliveryBatchRepository} from './delivery-batch-repository.js'
 import {ItemQuantityConflict} from './order-item-quantity-plan.js'
 
 /** Called only after the normal employee/device/station authorization succeeds. */
-export async function executeQuantityKdsAction(tx:ScopedTransaction,input:{task:KdsTask;action:'start'|'complete'|'deliver'|'pickupAndDeliver';employeeId:string;quantity?:number;eventKey:string}){
+export async function executeQuantityKdsAction(tx:ScopedTransaction,input:{task:KdsTask;action:'start'|'complete'|'deliver'|'pickupAndDeliver';employeeId:string;quantity?:number;unitIds?:string[];eventKey:string}){
   const scope=[tx.scope.tenantId,tx.scope.storeId],itemId=input.task.orderItemId
   const bundle=(await tx.query<{found:boolean}>(`SELECT EXISTS(SELECT 1 FROM mbox.order_items WHERE tenant_id=$1 AND store_id=$2 AND parent_order_item_id=$3) AS found`,[...scope,itemId])).rows[0]?.found
   if(input.task.remakeOfTaskId&&!bundle){
@@ -35,7 +35,7 @@ export async function executeQuantityKdsAction(tx:ScopedTransaction,input:{task:
   const available=units.filter(unit=>!remade.has(unit.id)&&!unit.held_by_case_id&&!unit.operationally_stopped&&(action==='deliver'?unit.production_state==='ready':action==='start'?unit.production_state==='unmade':['unmade','started'].includes(unit.production_state))).length
   const quantity=input.quantity??previous?.quantity??available
   if(!Number.isSafeInteger(quantity)||quantity<1||!previous&&quantity>available)throw new ItemQuantityConflict('QUANTITY_UNAVAILABLE',`当前可${action==='deliver'?'送达':action==='start'?'开始':'完成'}${available}份，请读取当前数量`)
-  const fulfilled=await new ItemQuantityFulfillmentRepository(tx)[action]({itemId,taskId:input.task.id,employeeId:input.employeeId,quantity,eventKey:input.eventKey})
+  const fulfilled=await new ItemQuantityFulfillmentRepository(tx)[action]({itemId,taskId:input.task.id,employeeId:input.employeeId,quantity,eventKey:input.eventKey,unitIds:input.unitIds})
   // Preparing a delivery slip is not an assertion that anything was delivered.
   const deliveries=new DeliveryBatchRepository(tx)
   const batch=action==='complete'?(fulfilled.replayed?await deliveries.originalForUnits(input.task.id,fulfilled.unitIds):await deliveries.create(input.employeeId,[{taskId:input.task.id,quantity,unitIds:fulfilled.unitIds}])):null

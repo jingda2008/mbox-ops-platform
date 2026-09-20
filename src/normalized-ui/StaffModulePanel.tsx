@@ -1,3 +1,5 @@
+import {InventoryWastePanel,InventoryWasteReviewPanel} from './InventoryWastePanel'
+import {openTaskSection} from './TaskSections'
 import { useStaffViewState } from './staff-view-state'
 import { TaskSections } from './TaskSections'
 import { BottleCustodyPanel } from './BottleCustodyPanel'
@@ -138,6 +140,7 @@ interface PerformancePhaseEvent {
 }
 
 interface InventoryItemView {
+  reasonableWasteQuantity:string
   id: string
   sku: string
   name: string
@@ -392,7 +395,7 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
       } else if (module === 'inventory') {
         const canReadInventory = auth.permissions.some((permission) => [
           'inventory.view', 'inventory.manage', 'inventory.cost.view', 'inventory.receive',
-          'inventory.count', 'inventory.waste', 'inventory.barcode.bind', 'inventory.cost.correct',
+          'inventory.count', 'inventory.count.approve', 'inventory.waste', 'inventory.barcode.bind', 'inventory.cost.correct',
         ].includes(permission))
         if (canReadInventory) {
           const response = await api.getEndpoint<{ data: unknown }>('/api/inventory')
@@ -538,7 +541,7 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
       <strong>{initialBlockerFact.title}</strong>
       <p>{initialBlockerFact.orderPublicId ? `订单 ${shortPublicReference(initialBlockerFact.orderPublicId)} · ` : ''}{initialBlockerFact.reference}</p>
       <span>{initialBlockerFact.statusLabel}{initialBlockerFact.quantityText ? ` · ${initialBlockerFact.quantityText}` : ''}{initialBlockerFact.amountMinor !== null ? ` · ¥${formatAmount(initialBlockerFact.amountMinor)}` : ''}</span>
-      <em>下方是对应业务模块的实时数据；任何处理仍按当前权限和服务端状态复验。</em>
+      <em>按本页任务直接办理；处理结果在对应记录中查看。</em>
     </aside>}
     {phase === 'loading' && <div className="staff-module-state" role="status"><LoaderCircle className="is-spinning" /><strong>正在读取最新状态</strong></div>}
     {phase === 'error' && <div className="staff-module-state is-error" role="alert"><strong>暂时没有接上</strong><p>{message}</p><button type="button" onClick={() => void load()}>重试</button></div>}
@@ -836,7 +839,6 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
   const [itemId, setItemId] = useState('')
   const [quantity, setQuantity] = useState('')
   const [reason, setReason] = useState('')
-  const [wasteType, setWasteType] = useState<'mixing_failure' | 'discarded' | 'expired' | 'tasting' | 'complimentary' | 'count_difference' | 'other'>('other')
   const [scanCode, setScanCode] = useState('')
   const [receiptInventoryItemId, setReceiptInventoryItemId] = useState('')
   const [scannerOpen, setScannerOpen] = useState(false)
@@ -1040,7 +1042,6 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
       setNotice(`“${selectedItem.name}”缺少有效的单瓶净含量，无法把毫升安全换算为历史库存数量；请先补全物料资料`)
       return
     }
-    if (mode === 'waste' && reason.trim().length < 1) { setNotice('损耗必须填写原因'); return }
     setBusy(true)
     setNotice('')
     try {
@@ -1057,37 +1058,9 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
               { idempotencyKey: `${key}:submit` })
           })
         setNotice('盘点已提交，等待有审批权限的岗位复核')
-      } else {
-        const result = await api.postEndpoint<{
-          remainingQuantity: string
-          baseUnit: string
-          wasteCostMinor?: string | null
-        }>(`/api/inventory/items/${itemId}/waste`, {
-          quantity: storedQuantity,
-          wasteType,
-          reason: reason.trim(),
-        }, { idempotencyKey: operationIdempotency('inventory-waste') })
-        const employeeRemaining = inventoryQuantityForEmployee(
-          result.remainingQuantity,
-          selectedItem.categoryCode,
-          result.baseUnit,
-          selectedItem.packageVolumeMl,
-        )
-        const remaining = employeeRemaining === null
-          ? formatInventoryQuantityWithUnit(result.remainingQuantity, result.baseUnit)
-          : formatInventoryQuantityWithUnit(
-              employeeRemaining,
-              inventoryEmployeeUnit(selectedItem.categoryCode, result.baseUnit),
-            )
-        setNotice(result.wasteCostMinor === undefined
-          ? `损耗已登记，库存余量已更新为 ${remaining}`
-          : result.wasteCostMinor === null
-            ? `损耗已登记，库存余量已更新为 ${remaining}；当前成本待补，损耗金额暂不确认`
-            : `损耗已登记，库存余量已更新为 ${remaining}；对应成本 ¥${formatInventoryMinorString(result.wasteCostMinor)}`)
       }
       setQuantity('')
       setReason('')
-      setWasteType('other')
       await onChanged()
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '库存操作未完成')
@@ -1318,8 +1291,10 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
       <header><strong>最近已确认收货</strong><small>金额和自动换算的单位成本会从服务端重新读取；刷新页面后仍可核对。</small></header>
       {receivedReceipts.map((receipt) => <article key={receipt.id}><div><strong>{formatReceiptReference(receipt.publicId)}</strong><small>{receipt.lineCount} 项 · 已确认 {receipt.receivedAt === null ? formatDateTime(receipt.createdAt) : formatDateTime(receipt.receivedAt)}</small>{canViewInventoryCost && receipt.invoiceTotalMinor !== undefined && <small>本单采购总额 ¥{formatInventoryMinorString(receipt.invoiceTotalMinor)}</small>}{receipt.lines.map((line) => <span key={`${line.inventoryItemId}:${line.batchCode}`}>{receiptLineSummary(line, canViewInventoryCost)}</span>)}</div></article>)}
     </section>}
-    {(mode === 'count' || mode === 'waste') && <form id="inventory-quick-count" className="staff-module-form" onSubmit={(event) => void submitInventoryAction(event)}><header><strong>{mode === 'count' ? '单项盘点' : '登记损耗'}</strong><small>{mode === 'count' ? '提交后由有审批权限的岗位复核差异。液体统一填写毫升。' : '提交后立即形成库存流水；液体统一填写毫升。'}</small></header><label>物料<select required value={itemId} onChange={(event) => setItemId(event.target.value)}><option value="">请选择</option>{operationalItems.map((item) => <option value={item.id} key={item.id}>{item.name} · 当前 {formatEmployeeInventoryQuantity(item)}</option>)}</select></label><label>{mode === 'count' ? '实盘数量' : '损耗数量'}<NumberInputWithUnit required inputMode="decimal" unit={inventoryUnitLabel(inventoryEmployeeUnit(selectedOperationalItem?.categoryCode ?? '', selectedOperationalItem?.baseUnit ?? ''))} value={quantity} onChange={(event) => setQuantity(event.target.value)} /></label>{mode === 'waste' && <label>损耗类型<select value={wasteType} onChange={(event) => setWasteType(event.target.value as typeof wasteType)}><option value="mixing_failure">调酒失败</option><option value="discarded">报废</option><option value="expired">过期</option><option value="tasting">试饮</option><option value="complimentary">赠送</option><option value="count_difference">盘点差异</option><option value="other">其他</option></select></label>}<label>{mode === 'count' ? '差异说明（选填）' : '损耗原因'}<input required={mode === 'waste'} maxLength={500} value={reason} onChange={(event) => setReason(event.target.value)} /></label><button type="submit" disabled={busy}>{busy ? '提交中' : mode === 'count' ? '提交盘点复核' : '确认登记损耗'}</button></form>}
-    {mode === 'cost-correct' && <form id="inventory-cost-correction" className="staff-module-form" onSubmit={(event) => void submitCostCorrection(event)}><header><strong>核对后更正当前成本</strong><small>仅用于历史库存、盘点差异等无法由收货单自动恢复成本的情况。日常采购请继续只填数量和本批总额。</small></header><label>物料<select required value={itemId} onChange={(event) => setItemId(event.target.value)}><option value="">请选择</option>{view.items.map((item) => <option value={item.id} key={item.id}>{item.name} · 当前 {formatInventoryQuantityWithUnit(item.availableQuantity, item.baseUnit)}{item.costStatus === 'needs_review' ? ' · 成本待核对' : ''}</option>)}</select></label><label>核对后的当前单位成本<NumberInputWithUnit required inputMode="decimal" unit={`元/${inventoryUnitLabel(selectedCostCorrectionItem?.baseUnit ?? '')}`} value={costCorrectionYuan} onChange={(event) => setCostCorrectionYuan(event.target.value)} placeholder="例如 0.1286" /><small>{selectedCostCorrectionItem?.weightedUnitCostMinor === null || selectedCostCorrectionItem?.weightedUnitCostMinor === undefined ? '当前为待补成本；保存后会建立可追溯的当前成本。' : `当前为 ¥${formatInventoryUnitCostMinor(selectedCostCorrectionItem.weightedUnitCostMinor, selectedCostCorrectionItem.baseUnit)}/${inventoryUnitLabel(selectedCostCorrectionItem.baseUnit)}，请按凭证核对后填写新值。`} 按毫升管理的酒水填写每毫升成本；系统会保存精确值，并自动更新后续配方和组合成本。</small></label><label>更正原因<input required minLength={2} maxLength={500} value={costCorrectionReason} onChange={(event) => setCostCorrectionReason(event.target.value)} placeholder="例如：盘点后核对到原始进货单" /></label><button type="submit" disabled={busy}>{busy ? '正在保存' : '保存更正并自动重算'}</button></form>}
+    {canWaste && <div hidden={mode!=='waste'}><InventoryWastePanel key={auth.employee.id} api={api} auth={auth} items={view.items} onChanged={onChanged}/></div>}
+    {(canWaste||auth.permissions.includes('inventory.count.approve'))&&<InventoryWasteReviewPanel key={auth.employee.id} api={api} auth={auth} items={view.items} onChanged={onChanged}/>}
+    {mode === 'count' && <form id="inventory-quick-count" className="staff-module-form" onSubmit={event=>void submitInventoryAction(event)}><header><strong>单项盘点</strong><small>提交后由有审批权限的岗位复核差异。液体统一填写毫升。</small></header><label>物料<select required value={itemId} onChange={event=>setItemId(event.target.value)}><option value="">请选择</option>{operationalItems.map(item=><option value={item.id} key={item.id}>{item.name} · 当前 {formatEmployeeInventoryQuantity(item)}</option>)}</select></label><label>实盘数量<NumberInputWithUnit required inputMode="decimal" unit={inventoryUnitLabel(inventoryEmployeeUnit(selectedOperationalItem?.categoryCode??'',selectedOperationalItem?.baseUnit??''))} value={quantity} onChange={event=>setQuantity(event.target.value)}/></label><label>差异说明（选填）<input maxLength={500} value={reason} onChange={event=>setReason(event.target.value)}/></label><button type="submit" disabled={busy}>{busy?'提交中':'提交盘点复核'}</button></form>}
+    {mode === 'cost-correct' && <form id="inventory-cost-correction" className="staff-module-form" onSubmit={(event) => void submitCostCorrection(event)}><header><strong>核对后更正当前成本</strong><small>仅用于历史库存、盘点差异等无法由收货单自动恢复成本的情况。日常采购请继续只填数量和本批总额。</small></header><label>物料<select required value={itemId} onChange={(event) => setItemId(event.target.value)}><option value="">请选择</option>{view.items.map((item) => <option value={item.id} key={item.id}>{item.name} · 当前 {formatInventoryQuantityWithUnit(item.availableQuantity, item.baseUnit)}{item.costStatus === 'needs_review' ? ' · 成本待核对' : ''}</option>)}</select></label><label>核对后的当前单位成本<NumberInputWithUnit required inputMode="decimal" unit={`元/${inventoryUnitLabel(selectedCostCorrectionItem?.baseUnit ?? '')}`} value={costCorrectionYuan} onChange={(event) => setCostCorrectionYuan(event.target.value)} placeholder="例如 0.1286" /><small>{selectedCostCorrectionItem?.weightedUnitCostMinor === null || selectedCostCorrectionItem?.weightedUnitCostMinor === undefined ? '当前为待补成本；保存后会建立可追溯的当前成本。' : `当前为 ¥${formatInventoryUnitCostMinor(selectedCostCorrectionItem.weightedUnitCostMinor, selectedCostCorrectionItem.baseUnit)}/${inventoryUnitLabel(selectedCostCorrectionItem.baseUnit)}，请按凭证核对后填写新值。`} 按毫升管理的酒水填写每毫升成本；系统会保存精确值，并自动更新后续配方和组合成本。</small></label><label>更正原因<input required minLength={2} maxLength={500} value={costCorrectionReason} onChange={(event) => setCostCorrectionReason(event.target.value)} placeholder="例如：盘点后核对到原始进货单" /></label><button type="submit" disabled={busy}>{busy ? '正在保存' : '保存更正并自动重算'}</button><button type="button" onClick={()=>{openTaskSection('products');setCatalogOpenRequest(value=>value+1)}}>返回原商品并刷新成本</button></form>}
     {mode === 'receive' && pendingReceipt === null && <form className="staff-module-form inventory-receipt-form" onSubmit={(event) => void createReceipt(event)}>
       <header><strong>手机扫码建立收货单</strong><small>常规操作只需扫码或选择物料、填写数量和本批实际采购成本；第一步不会改变库存。</small></header>
       <label className="inventory-code-field">商品包装条形码或二维码<div><input autoComplete="off" maxLength={128} value={scanCode} onChange={(event) => { const code = event.target.value.replace(/\s/g, ''); setScanCode(code); if (code !== '') setReceiptInventoryItemId('') }} placeholder="扫码优先；也可在下方选择物料" /><button type="button" onClick={() => setScannerOpen(true)}><ScanLine size={17} />扫码</button></div></label>
@@ -1345,7 +1320,7 @@ function InventoryModule({ api, auth, view, onChanged }: { api: NormalizedApiCli
 
     {scannerOpen && <InventoryBarcodeScanner onClose={() => setScannerOpen(false)} onDetected={acceptScan} />}
 </>},
-    {id:'products',label:'商品与上架',visible:canManageCatalog,content:<>    {canManageCatalog && <CatalogManagementPanel api={api} auth={auth} placement="inventory" openRequest={catalogOpenRequest} onOpenInventoryCost={canCorrectInventoryCost ? id=>{setItemId(id);setMode('cost-correct');setNotice('已定位所选物料；更正后返回下方原商品，点击重新核算成本。');window.setTimeout(()=>document.getElementById('inventory-cost-correction')?.scrollIntoView({behavior:'smooth',block:'center'}),0)} : undefined} />}</>},
+    {id:'products',label:'商品与上架',visible:canManageCatalog,content:<>    {canManageCatalog && <CatalogManagementPanel api={api} auth={auth} placement="inventory" openRequest={catalogOpenRequest} onOpenInventoryCost={canCorrectInventoryCost ? id=>{setItemId(id);setMode('cost-correct');setNotice('已定位所选物料；更正后可返回原商品核对成本。');openTaskSection('stock');window.setTimeout(()=>document.getElementById('inventory-cost-correction')?.scrollIntoView({behavior:'smooth',block:'center'}),0)} : undefined} />}</>},
     {id:'custody',label:'会员存酒',visible:auth.permissions.includes('bottle.manage.all'),content:<BottleCustodyPanel key={auth.employee.id} api={api} auth={auth}/>},
   ]}/></div>
 }
@@ -1700,7 +1675,7 @@ function SettingsModule({ api, auth, policy, onChanged }: { api: NormalizedApiCl
       || auth.permissions.includes('customer.public-profile.publish')
       || auth.permissions.includes('privacy.policy.view')
       || auth.permissions.includes('privacy.policy.manage')
-      || auth.permissions.includes('privacy.policy.publish')) && <CustomerPublicationPanel api={api} permissions={auth.permissions} />}
+      || auth.permissions.includes('privacy.policy.publish')) && <details className="staff-module-disclosure"><summary>管理员发布设置</summary><CustomerPublicationPanel api={api} permissions={auth.permissions} /></details>}
   </div>
 }
 

@@ -201,6 +201,7 @@ export interface StaffFulfillmentItem {
   kdsStatus: FulfillmentStatus
   priority: number
   overdue: boolean
+  deliveryNoticeVersion?:number
   readyForDelivery: boolean
   canPrepare: boolean
   canDeliver: boolean
@@ -231,6 +232,7 @@ export interface StaffFulfillmentItem {
 
 export interface StaffFulfillmentData {
   actor: {
+    kitchenBatchBoardEnabled?:boolean
     actionSessionValid?: boolean
     employeeId: string
     permissions: string[]

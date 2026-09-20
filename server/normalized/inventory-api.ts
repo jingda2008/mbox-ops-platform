@@ -1,3 +1,5 @@
+import {InventoryWasteRepository} from './inventory-waste-repository.js';
+import type {WasteResult} from '../../src/shared/inventory-waste.js';
 import { createHash, randomUUID } from "node:crypto";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import type {
@@ -51,7 +53,7 @@ import { isLiquidInventoryCategory } from '../../src/shared/inventory-unit-polic
 
 export interface InventoryApiOptions {
   commands: Pick<NormalizedCommandExecutor, "execute">;
-  query: Pick<InventoryQueryService, "getDashboard" | "getActiveRecipe" | "getRecipeCostPreview" | "getStockCounts">;
+  query: Pick<InventoryQueryService, "getDashboard" | "getActiveRecipe" | "getRecipeCostPreview" | "getStockCounts" | "getWasteRequests">;
   resolveContext(
     request: FastifyRequest,
   ):
@@ -676,38 +678,22 @@ export const inventoryApiPlugin: FastifyPluginAsync<
           options,
           context,
           request,
-          "inventory.waste.record",
+          body.requestApproval === true ? "inventory.waste.submit" : "inventory.waste.record",
           "inventory.waste",
-          codec<{
-            movementId: string;
-            remainingQuantity: string;
-            baseUnit: string;
-            wasteType: string;
-            unitCostMinor?: string | null;
-            wasteCostMinor?: string | null;
-          }>(),
+          codec<WasteResult | Awaited<ReturnType<InventoryRepository['recordWaste']>>>(),
           async (transaction, permissions) => {
-            const result = await createInventory(transaction).recordWaste(
-              itemId,
-              readDecimal(body.quantity, "quantity", false),
-              context.employeeId,
-              readString(body.reason, "reason", 500),
-              permissions.includes("inventory.count.approve"),
-              readEnum(body.wasteType ?? "other", "wasteType", [
-                "mixing_failure",
-                "discarded",
-                "expired",
-                "tasting",
-                "complimentary",
-                "count_difference",
-                "other",
-              ]),
-            );
+            const quantity=readDecimal(body.quantity, 'quantity', false);
+            const reason=readString(body.reason, 'reason', 500);
+            const wasteType=readEnum(body.wasteType ?? 'other', 'wasteType', ['mixing_failure','discarded','expired','tasting','complimentary','count_difference','other'] as const);
+            const result = body.requestApproval === true
+              ? await new InventoryWasteRepository(transaction).submit(itemId,quantity,context.employeeId,reason,wasteType)
+              : await createInventory(transaction).recordWaste(itemId,quantity,context.employeeId,reason,false,wasteType);
             // A waste operator may record a real event without being allowed
             // to see its financial valuation.  Do not leak either the unit
             // cost or the calculated total through the response.
-            if (!permissions.includes("inventory.cost.view")) {
-              const { unitCostMinor: _unitCostMinor, wasteCostMinor: _wasteCostMinor, ...redacted } = result;
+            if (!permissions.includes("inventory.cost.view") && 'remainingQuantity' in result) {
+              const { wasteCostMinor: _wasteCostMinor, ...rest } = result;
+              const { unitCostMinor: _unitCostMinor, ...redacted } = rest as typeof rest & {unitCostMinor?:string|null};
               return redacted;
             }
             return result;
@@ -716,6 +702,34 @@ export const inventoryApiPlugin: FastifyPluginAsync<
         return reply.send(response(execution));
       }),
   );
+
+  app.post<{Params:{itemId:string}}>('/inventory/items/:itemId/waste-allowance',async(request,reply)=>handleRoute(reply,async()=>{
+    const context=await options.resolveContext(request),body=readObject(request.body),id=readUuid(request.params.itemId,'itemId');
+    const quantity=readDecimal(body.quantity,'quantity',true),reason=readString(body.reason,'reason',500);
+    if(reason.length<2)throw new TypeError('请填写至少两个字的调整原因');
+    const execution=await execute(options,context,request,'inventory.waste-allowance.configure','inventory.count.approve',codec<{id:string;quantity:string;reason:string}>(),async transaction=>{
+      const result=await transaction.query(`UPDATE mbox.inventory_items SET reasonable_waste_quantity=$4::numeric,updated_at=clock_timestamp()
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND status='active' RETURNING id`,[context.scope.tenantId,context.scope.storeId,id,quantity]);
+      if(!result.rows[0])throw new InventoryNotFoundError('inventory item',id);
+      return {id,quantity,reason};
+    });return reply.send(response(execution));
+  }));
+  app.get('/inventory/waste-requests',async(request,reply)=>handleRoute(reply,async()=>{
+    const context=await options.resolveContext(request);
+    const query=request.query as Record<string,unknown>;
+    const page=Number(query.page??1);
+    if(!Number.isSafeInteger(page)||page<1)throw new TypeError('页码无效');
+    return reply.send({data:await options.query.getWasteRequests(context.scope,context.employeeId,page)});
+  }));
+  for(const decision of ['approve','reject'] as const){
+    app.post<{Params:{requestId:string}}>(`/inventory/waste-requests/:requestId/${decision}`,async(request,reply)=>handleRoute(reply,async()=>{
+      const context=await options.resolveContext(request),body=readObject(request.body);
+      const execution=await execute(options,context,request,`inventory.waste-request.${decision}`,'inventory.count.approve',
+        codec<{id:string;status:string;movementId:string|null}>(),transaction=>new InventoryWasteRepository(transaction).decide(
+          readUuid(request.params.requestId,'requestId'),context.employeeId,decision,readString(body.reason,'reason',500)));
+      return reply.send(response(execution));
+    }));
+  }
 
   app.post("/inventory/stored-bottles", async (request, reply) =>
     handleRoute(reply, async () => {
@@ -1046,13 +1060,16 @@ async function execute<Result>(
       if (!isJsonObject(json))
         throw new TypeError("Inventory command result must be a JSON object");
       const objectId = readResultId(result);
+      const objectType = operationScope === 'inventory.waste.submit' && json.status === 'pending'
+        ? 'inventory_waste_request' : operationScope === 'inventory.waste-allowance.configure'
+          ? 'inventory_item' : inventoryObjectType(operationScope);
       return {
         result,
         auditEvents: [
           {
             actor: { type: "employee", employeeId: context.employeeId },
             action: operationScope,
-            objectType: inventoryObjectType(operationScope),
+            objectType,
             objectId,
             businessDate: context.businessDate,
             afterData: json,
@@ -1061,7 +1078,7 @@ async function execute<Result>(
         outboxMessages: [
           {
             businessEventKey: eventKey(operationScope, idempotencyKey),
-            aggregateType: inventoryObjectType(operationScope),
+            aggregateType: objectType,
             aggregateId: readUuid(objectId, "result.id"),
             aggregateVersion: 1,
             eventType: `${operationScope}.v1`,
@@ -1279,6 +1296,7 @@ function inventoryObjectType(operation: string): string {
   if (operation.includes("bottle")) return "stored_bottle";
   if (operation.includes("recipe")) return "recipe";
   if (operation.includes("barcode")) return "inventory_barcode";
+  if (operation.includes("waste-request")) return "inventory_waste_request";
   if (operation.includes("waste")) return "inventory_movement";
   return "inventory_item";
 }

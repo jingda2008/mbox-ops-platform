@@ -1,3 +1,4 @@
+import {businessStatus,businessCurrency} from '../../src/shared/staff-business-labels.js'
 import {custodyPhoto,custodyPhone,depositEvidenceSchema,validateDepositFraction,type DepositEvidence} from './custody-deposit-evidence.js'
 import {custodyReport,type CustodyReportFilter} from './custody-report.js'
 import {tabularWorkbook} from './custody-document.js'
@@ -98,7 +99,7 @@ export class BottleCustodyRepository{
   if(input.scope!=='custody')await new StaffAccessRepository(this.tx).assertPermission(employeeId,'order.history.all')
   const result=await custodyReport(this.tx,{...input,offset:0},10000)
   if(result.nextOffset!==null)throw new BottleCustodyError('结果超过一万笔，请缩小日期范围')
-  const rows:unknown[][]=[['类型','编号','会员号','品类','内容','时间（北京时间）','状态','单笔金额（元）','金额口径','币种'],...result.items.map(r=>[r.type==='custody'?'存酒':'消费',r.public_id,r.member_no,r.category,r.item_name,new Date(r.occurred_at).toLocaleString('sv-SE',{timeZone:'Asia/Shanghai'}),r.status,r.amount_minor==null?'未登记':(Number(r.amount_minor)/100).toFixed(2),r.amount_basis,r.currency])]
+  const rows:unknown[][]=[['类型','编号','会员号','品类','内容','时间（北京时间）','状态','单笔金额（元）','金额口径','币种'],...result.items.map(r=>[r.type==='custody'?'存酒':'消费',r.public_id,r.member_no,r.category,r.item_name,new Date(r.occurred_at).toLocaleString('sv-SE',{timeZone:'Asia/Shanghai'}),businessStatus(r.status,r.type==='custody'?'custody':'sales'),r.amount_minor==null?'未登记':(Number(r.amount_minor)/100).toFixed(2),r.amount_basis,businessCurrency(r.currency)])]
   return{base64:tabularWorkbook(rows,'可选范围报表').toString('base64'),filename:'MBOX-可选范围报表.xlsx',count:result.items.length,summary:result.summary}
  }
  async detail(id:string){uuid.parse(id);const order=(await this.tx.query<CustodyOrder>(`SELECT ${fields} FROM mbox.bottle_custody_orders o JOIN mbox.bottle_custody_categories c ON c.tenant_id=o.tenant_id AND c.store_id=o.store_id AND c.id=o.category_id WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.id=$3`,[...this.scope,id])).rows[0];if(!order)throw new BottleCustodyError('存酒单不存在','CUSTODY_NOT_FOUND',404)

@@ -1,0 +1,589 @@
+{
+  "baseline": "5c4bde7de5ed154ab3dd9227a64751dcc65293eb",
+  "files": [
+    {
+      "file": "src/normalized-ui/NormalizedStaffApp.tsx",
+      "sha256": "7037a45686765a71ce10f5a2ae85c77ee5d59ccbe55215223c2afc8ae3b6daa8"
+    },
+    {
+      "file": "src/normalized-ui/ConfirmationDialog.tsx",
+      "sha256": "1843ee1a55591f9828531c27cf2cde2760585c74764edcab9457341d99198756"
+    },
+    {
+      "file": "src/components/MenuOrderingWorkspace.tsx",
+      "sha256": "c6168a35b42dcc33fe8021e1e8588156dff0debc27bd42af080875f00b8e9be8"
+    },
+    {
+      "file": "src/normalized-ui/StaffObjectFocus.tsx",
+      "sha256": "7864cb100117c41e27e4da17d86131737516d9230ae1c5b91e027ca62e11e180"
+    },
+    {
+      "file": "src/normalized-ui/staff-view-state.tsx",
+      "sha256": "77cd28ce319f42baaf1d3ab8f45cb43a59a94ed2c8249b8b2e1a9e9531a9d53f"
+    },
+    {
+      "file": "src/normalized-ui/StaffMemberNavigation.tsx",
+      "sha256": "b6094bd6516c1ea50621cf39c4566bc6238ddf2c9b5f5c003142e47a11aec093"
+    },
+    {
+      "file": "src/shared/staff-session-binding.ts",
+      "sha256": "45687515209c475f60ed9465f0c5720c5657568ef68cb8e9d955a2ce1d484081"
+    },
+    {
+      "file": "src/normalized-api.ts",
+      "sha256": "42080c44c1d8ac18b47c02df71f75fbbbcc6c736fb14ba566abe4c8e1c41b70a"
+    },
+    {
+      "file": "src/shared/normalized-contracts.ts",
+      "sha256": "d2f1ee56cb8a1c739cc5fe836257f54945cbfde8ba1e8f355d22d0bcb6640127"
+    },
+    {
+      "file": "src/shared/business-day-closure-contracts.ts",
+      "sha256": "a3cdf8ccd6321a96bcfcbc94fd17a25698be25212103e952e53fe49395eda698"
+    },
+    {
+      "file": "src/normalized-ui/NormalizedStaffWorkspace.tsx",
+      "sha256": "2430399460cfa2290f9db04f17a4c1aeabbb34975b82d6a4f6f1f2c5118a31df"
+    },
+    {
+      "file": "src/normalized-ui/staff-actions/types.ts",
+      "sha256": "80541ebc270f0af391303ea87f9827e7edd79b4ebb29ed627f456159e33f87d7"
+    },
+    {
+      "file": "src/normalized-ui/normalized-staff-routes.ts",
+      "sha256": "6cc14966f8621f21485550471cfca2f46630455f20c7d8d4e12ba1f1f264aacc"
+    },
+    {
+      "file": "src/normalized-ui/staff-workspace-identity.ts",
+      "sha256": "d4265534bb5a4bcf3f8d80410d7b5c82576d4eb174a08021a93f5625a907df1d"
+    },
+    {
+      "file": "src/normalized-ui/staff-device.ts",
+      "sha256": "7c089807f6814300b6ce0695bee9cb388bd6b839106c874836ecedeff80dc875"
+    },
+    {
+      "file": "src/normalized-ui/staff-actions/index.ts",
+      "sha256": "4db92efddb718c5bfe748e4b24018ed6a67e028d265f8755978b6f416f85b3db"
+    },
+    {
+      "file": "src/normalized-ui/StaffModulePanel.tsx",
+      "sha256": "c9b33ca4676da4be261b210b52c5cff3abec5e90fe562717cdcfa2d2f5971dd9"
+    },
+    {
+      "file": "src/shared/api-error.ts",
+      "sha256": "5ca1ca55c72ba9ffadab40494b7240921a1583619c9b94eb82576bf8d69e288e"
+    },
+    {
+      "file": "src/shared/commercial-ops-contracts.ts",
+      "sha256": "dc1366742070a6e3ec6130bb8768e6480c6b629869118a893c9450257fd6df96"
+    },
+    {
+      "file": "src/shared/contracts.ts",
+      "sha256": "0acc45b7500377af0752726fc68665d818f94676bf2733bdd3735114685e452e"
+    },
+    {
+      "file": "src/shared/guest-insight-contracts.ts",
+      "sha256": "17f21663c6521e2a4b0efa93adab76f40709e5bd09776a2d0453f0be3b8196ab"
+    },
+    {
+      "file": "src/shared/menu-recommendation.ts",
+      "sha256": "6b1d8cddd38d6cfad8c221510e8d5573b8cd737680dc927dc0c9fb417b0a28c6"
+    },
+    {
+      "file": "src/shared/menu-product-classification.ts",
+      "sha256": "37408c9efc5040128121841963c4b5d538d1ad299e0ad33783d1d3bdd2d54266"
+    },
+    {
+      "file": "src/shared/product-availability.ts",
+      "sha256": "d2ecfd99fa3112e074e31eb04bab70b145767d6876eb6659db43f5dbf346091c"
+    },
+    {
+      "file": "src/components/GuestRecommendationTools.tsx",
+      "sha256": "afd7bf3d8b83273328a1fb097a5c0c8378a333bb445cbe133058477712351579"
+    },
+    {
+      "file": "src/components/menu-search.ts",
+      "sha256": "abf230f2f6f1100731fb8184642c34f9eaa4c611e6b88abdf77b2991e7abf21c"
+    },
+    {
+      "file": "src/components/menu-cart-storage.ts",
+      "sha256": "820d9c98e6accc7ed4ab2b1524d2b5f593518c575d2b5c43468ab223a64c1a7c"
+    },
+    {
+      "file": "src/components/staff-order-draft.ts",
+      "sha256": "ac85b59d74c80022719e3db818f1dd7c22ed7444c8689971096924aa301bf1e9"
+    },
+    {
+      "file": "src/components/menu-recommendation-availability.ts",
+      "sha256": "750da7d37aa11af00370855d7cf0fc3d69c02ec669ce1c0cd0e3c616d6b422a9"
+    },
+    {
+      "file": "src/shared/staff-error-message.ts",
+      "sha256": "d443ea5290be0c5536652126dee7d8916804fb893026b4d0cc0436eb9617318b"
+    },
+    {
+      "file": "src/shared/staff-module-access.ts",
+      "sha256": "4759d6ea14d6dfa66d4ac5bc8e6c3463a622a867129a5ba4d41812f942d48fc0"
+    },
+    {
+      "file": "src/normalized-ui/StaffTodoPanel.tsx",
+      "sha256": "45d0c3e71bfc3d4f01d826e55b838a38e89ed886cf8e0bba29d6f4406f5ea311"
+    },
+    {
+      "file": "src/normalized-ui/staff-navigation-model.ts",
+      "sha256": "8007bfa1511667a6d5db3f6703d6393f12e418efe75dfeea1f39db26238d45da"
+    },
+    {
+      "file": "src/shared/business-operating-hours.ts",
+      "sha256": "57f8eebb9bc78d3aab0386dd9c613b4fa2db3f38e539bf8704762818e5ccfbe6"
+    },
+    {
+      "file": "src/normalized-ui/workspace-model.ts",
+      "sha256": "2c28c3c913d01c170272dec12a795f1adfa689d983a18608fd767ab9218076ec"
+    },
+    {
+      "file": "src/normalized-ui/staff-actions/StaffActionsPanel.tsx",
+      "sha256": "db364483b0d75ffe9db9e291b688d34e426f34d681eff3e87041eb6f30313c00"
+    },
+    {
+      "file": "src/normalized-ui/staff-actions/staff-actions-api.ts",
+      "sha256": "e942022a33c41e1678feb27e74269b2a246e27910af489e58f8f890b1a930afe"
+    },
+    {
+      "file": "src/normalized-ui/TaskSections.tsx",
+      "sha256": "6e0a723e5044c44f43546be105da733fd9d648ebe817094998a4c8cfca3b6561"
+    },
+    {
+      "file": "src/normalized-ui/BottleCustodyPanel.tsx",
+      "sha256": "8a0bd3cf56165ae1458f3b71cf43bea1f9ace60269161cc7e61c1981b8f0a0b8"
+    },
+    {
+      "file": "src/normalized-ui/ItemAfterSalesPendingPanel.tsx",
+      "sha256": "7055c2f3518f3fb1a938b20d12a66f90b9b21007b9e12444f003f055813ef0e1"
+    },
+    {
+      "file": "src/normalized-ui/print-failure-presentation.ts",
+      "sha256": "e85ef7aeb710e9a8bd3c5e7f0a5ceef69a69f413a43414b89420c76e1a7959c0"
+    },
+    {
+      "file": "src/normalized-ui/MonthlySchedulePanel.tsx",
+      "sha256": "d1c87e30a93898ab1f659e4ab81ac053ba6d162212f1e8d02b9e359812f866d7"
+    },
+    {
+      "file": "src/normalized-ui/recoverable-command.ts",
+      "sha256": "e7df9bc1e4fdeec60bcbb67cefa5dada08dd23ce1b66d0f1c8e5bd69be8e66e9"
+    },
+    {
+      "file": "src/normalized-ui/CustomerExperienceManagementPanel.tsx",
+      "sha256": "6e9a50c846e8b5c553f75505a4bcbbc88015e22fdea3eb7a5aafe3c86ef1972e"
+    },
+    {
+      "file": "src/normalized-ui/payment-policy-presentation.ts",
+      "sha256": "707cea85bfb444fbbf818e987a98dbb8ab81f0c65403f2782897f433dd072e69"
+    },
+    {
+      "file": "src/normalized-ui/public-reference.ts",
+      "sha256": "10fed96daf1648dad1d7e22e11e48b40a4f5cb08762621a1fb5caa104be267f8"
+    },
+    {
+      "file": "src/normalized-ui/PrintSourceRecoveryPanel.tsx",
+      "sha256": "4214e932b3383449d30acf1832e89f9654f5318e71b524f343dce18aa7a6ebdb"
+    },
+    {
+      "file": "src/normalized-ui/inventory-presentation.ts",
+      "sha256": "9aad967ae7d72aed5db1fb13d1fd7258c2befcb49f4b687873155274f7f79436"
+    },
+    {
+      "file": "src/normalized-ui/NumberInputWithUnit.tsx",
+      "sha256": "a2d64c796a0d84f3574e6e4a12d5c7781e9010845e739750d15b23fb4be3b4c6"
+    },
+    {
+      "file": "src/normalized-ui/InventoryBarcodeScanner.tsx",
+      "sha256": "8c65e88651e849775830ff837a0e7ba11032d468bbe6ace6307a379058cf615c"
+    },
+    {
+      "file": "src/normalized-ui/InventoryStockCountPanel.tsx",
+      "sha256": "8eb07e53dc23445fb0bce0ec36d36f5abe9558f12db235b2551733057f6f507d"
+    },
+    {
+      "file": "src/normalized-ui/CashierAfterSalesWorkbench.tsx",
+      "sha256": "010198ca27b7b2314bd093aa38b453be20c5507fd12400cce73a6bfd3fcae630"
+    },
+    {
+      "file": "src/normalized-ui/GroupVoucherRedemptionPanel.tsx",
+      "sha256": "6ed6a1fa8bb046fcc97569be6a1949a59bf9ddebd4524a195943c30b42679f6d"
+    },
+    {
+      "file": "src/normalized-ui/OrderCenterPanel.tsx",
+      "sha256": "4dca796bb6252a37a94c0e1eda819e26fddf0c75725d8434bde2f3f5a91e9f74"
+    },
+    {
+      "file": "src/normalized-ui/CatalogManagementPanel.tsx",
+      "sha256": "3606d9b53c0065c08bc91f22c422d1944ce6d3e70f7dcd6e2625290f133f0684"
+    },
+    {
+      "file": "src/normalized-ui/VenueManagementPanel.tsx",
+      "sha256": "4924f6ecf44df7e9263d2006edcd2ef54bb98ac4f68760b42713fcce40238406"
+    },
+    {
+      "file": "src/normalized-ui/StaffAccessManagementPanel.tsx",
+      "sha256": "96385b4b97c64fbdbc97174b685caa2ffa45307b6ebd17ea1d0b557376bbb4ff"
+    },
+    {
+      "file": "src/normalized-ui/OwnerFinancePanel.tsx",
+      "sha256": "c56efbefa45d2adee4da0cac11e978b55543cee64780e3c9f97926e327fc1ec1"
+    },
+    {
+      "file": "src/normalized-ui/CustomerPublicationPanel.tsx",
+      "sha256": "510eb1e15da8e728a8e1791fce1469ab16227e559b1d72a300949f82797a2b3a"
+    },
+    {
+      "file": "src/normalized-ui/PerformanceRevisionPanel.tsx",
+      "sha256": "defb5e9155d4ac59f1f0b03e8e0d77a5435baee08cec6d6325912238113a003d"
+    },
+    {
+      "file": "src/shared/staff-navigation.ts",
+      "sha256": "014838237ba6bafeab6edaa6ef4e12c672e46523d3e4cd6866b218c643c73ca2"
+    },
+    {
+      "file": "src/shared/order-contracts.ts",
+      "sha256": "f5b9edda0c125ffbcaa58f281f6c4247dbf2014c9d2ed56834cfbe71a37fcc89"
+    },
+    {
+      "file": "src/shared/payment-contracts.ts",
+      "sha256": "fb50651d376444996318a46b462a459aecfcacf7316d9e77bdc32848fe016b7f"
+    },
+    {
+      "file": "src/shared/inventory-contracts.ts",
+      "sha256": "0563cf98faa4ca5ee81cb8fc5db3521fec0a9330406c4c8a315397bd8f448e2b"
+    },
+    {
+      "file": "src/shared/benefit-contracts.ts",
+      "sha256": "04b4fb601301a52020e514f7aec25be77cd291c8b1d911a750a87f89dbf76bfe"
+    },
+    {
+      "file": "src/shared/benefit-redemption-contracts.ts",
+      "sha256": "5f262f62a601a3c814ba2758af99e36732216b4a0a87d70ad27001b50b65318e"
+    },
+    {
+      "file": "src/shared/config-versioning-contracts.ts",
+      "sha256": "b73393e2170ddf27c58a9ff2c3a815773807be750f266d3d8302df5206429c29"
+    },
+    {
+      "file": "src/shared/song-contracts.ts",
+      "sha256": "0e217130b1091bff2070d331c19e67118a8359a88ca9a29e238a9a79d4028ecc"
+    },
+    {
+      "file": "src/shared/reservation-contracts.ts",
+      "sha256": "0aee2e775809e91ca041a9632622af92157c8bbcf19c1d73277bc461891a0a11"
+    },
+    {
+      "file": "src/shared/assistant-contracts.ts",
+      "sha256": "2bb31cd2437a8e88e62fc8f22aab8ad79e1f42273cd7ce31f6ee9b1fa924e4b5"
+    },
+    {
+      "file": "src/shared/assistant-tool-contracts.ts",
+      "sha256": "c52aa9fd0dfddb4fbb5bef820dd525a4d2a48de12101ee5af4ee8f665041c78c"
+    },
+    {
+      "file": "src/shared/hardware-contracts.ts",
+      "sha256": "50587620004c1eb63442ec1908b3511c86a0d4fa5c0c023cb1ae6bdf5e94662f"
+    },
+    {
+      "file": "src/shared/sop-contracts.ts",
+      "sha256": "66db8e4402a65465a27015de87f32c2f80b2f69e38d0ed1067c54b42a5029fc3"
+    },
+    {
+      "file": "src/normalized-ui/staff-todo-model.ts",
+      "sha256": "308b08b563d051bdff9c3d09f6ffafb1d175af4161c2f9562c41dd42ef013741"
+    },
+    {
+      "file": "src/normalized-ui/staff-actions/refresh-queue.ts",
+      "sha256": "0c5b942211179dfa4c635e9bfa64cc9681b45862187e75ea2770fcc6b149232e"
+    },
+    {
+      "file": "src/normalized-ui/staff-actions/staff-notice-controller.ts",
+      "sha256": "a3e1c2ae018222d692525775e7262dece58b37a5410f2dd44ee5c49a88c334ea"
+    },
+    {
+      "file": "src/normalized-ui/ItemAfterSalesPanel.tsx",
+      "sha256": "f1c150b7a6a4b77787509c3afab26f9df83e23d655ddd2c098975e2add819e1b"
+    },
+    {
+      "file": "src/normalized-ui/staff-actions/FulfillmentHistoryPanel.tsx",
+      "sha256": "cb5ca4ab6b4b7019673faea9285fb62045573cdd54bdb14280245b5ede0e54c2"
+    },
+    {
+      "file": "src/normalized-ui/staff-actions/DeliveryBatchComposer.tsx",
+      "sha256": "1f6acd20542a74511ec134ef4d21a7b199c4cdf2c9f49cda3dc651179f4ac39a"
+    },
+    {
+      "file": "src/normalized-ui/staff-actions/AssistedOrderSheet.tsx",
+      "sha256": "afc441fc7c51c9772ad44aaa27785569ad8f517bec0f268557d99f5fa28b17a1"
+    },
+    {
+      "file": "src/normalized-ui/staff-actions/TablePaymentSheet.tsx",
+      "sha256": "98811e1d218507e045302637e07675d388fa171b833d64b63db109c20ad3e390"
+    },
+    {
+      "file": "src/normalized-ui/staff-actions/ResponsibilityAssignmentPanel.tsx",
+      "sha256": "57367eeebc0da52259e81a93cadf89ea4232082cd3431e68b5632c01885a363b"
+    },
+    {
+      "file": "src/normalized-ui/staff-actions/TableObservationSheet.tsx",
+      "sha256": "ff551cbdeb3d5c73393b86e5fa8c3422a17f6b9201555d2a5b508e769c2f963c"
+    },
+    {
+      "file": "src/normalized-ui/staff-actions/TableRecommendationSheet.tsx",
+      "sha256": "68ceeda613be43f28256df5e69d9332105c45418996c9c0f29326088bbbc1f1d"
+    },
+    {
+      "file": "src/normalized-ui/staff-actions/TableOrderStatusPanel.tsx",
+      "sha256": "eef48260a6af4b04b0a7f914c54618ec800c244878d26600f6996750942b0192"
+    },
+    {
+      "file": "src/normalized-ui/staff-actions/ParticipantMovementSheet.tsx",
+      "sha256": "65b7d9cc0e34234cf6d5f2dcad0d8494d197667826fa51e4694e3b7a248e8e2a"
+    },
+    {
+      "file": "src/normalized-ui/staff-actions/staff-actions-model.ts",
+      "sha256": "a2e0ef693ec8feb3b1f3c3ca575f8258d512f62988d9f280b66aabd1223ee1ed"
+    },
+    {
+      "file": "src/shared/operating-history.ts",
+      "sha256": "6f2c7d3c5c3a771e0988bdd49d06c913df56e48377901c81fdeb197d939f03c2"
+    },
+    {
+      "file": "src/shared/online-payment-contracts.ts",
+      "sha256": "d5744886c9d28a9030a5ba1036716eabfa9407206b20bde9137b5f35f10c29df"
+    },
+    {
+      "file": "src/normalized-ui/CustodyDepositCapture.tsx",
+      "sha256": "378b4e9ca65824c4a3187f899dfbddedf13d34c6a4592fd6937fc09037b07083"
+    },
+    {
+      "file": "src/normalized-ui/CustodyReportPanel.tsx",
+      "sha256": "b5662df52a88363cbcc02912da0db03f616d92df5712a608b74bc5d19a8e94a9"
+    },
+    {
+      "file": "src/normalized-ui/cashier-mutation.ts",
+      "sha256": "9e6a12fc598812f54982b251946711eabe2ca254aa18d2d7e04098668ab58002"
+    },
+    {
+      "file": "src/normalized-ui/RemakePhysicalHandoverPanel.tsx",
+      "sha256": "6aebf9770debd1a31f1e051ddf245821fb345bbc5dfad272f6a773c011373faa"
+    },
+    {
+      "file": "src/normalized-ui/item-after-sales-api.ts",
+      "sha256": "cbe32885f7ceaa6e709b5dc3bf2ef29f08b664a1f800906c9f699e9b9a1abbdb"
+    },
+    {
+      "file": "src/shared/item-after-sales.ts",
+      "sha256": "68ccbfc49096e5d91741980bb6c1e9a72f0dd0f1104a1c86a45345a15cc4f89b"
+    },
+    {
+      "file": "src/normalized-ui/SocialBroadcastPanel.tsx",
+      "sha256": "689b31063bd0a8373722d36d19c8e3306574ee3e35127864b80bedc430b1d7aa"
+    },
+    {
+      "file": "src/normalized-ui/LaunchPopupPanel.tsx",
+      "sha256": "a5dbbe673786f18e41660b592b211fbb7e88d01b98c174599a8f00a37d56100d"
+    },
+    {
+      "file": "src/normalized-ui/SocialAccountPanel.tsx",
+      "sha256": "9bf10bfb841e7e7fd990664dc6c78535f1c70c8b6c9b18acdf41fa15c0aae314"
+    },
+    {
+      "file": "src/normalized-ui/MemberNumberPolicyPanel.tsx",
+      "sha256": "5b7cb59eb99b44a3ac2d3af316c1d16a2a8b4512b719705a4ad77d54525aa5bc"
+    },
+    {
+      "file": "src/normalized-ui/complete-catalog.ts",
+      "sha256": "af2272e5faf7a2468ba3c85afade257af10b6d4fdad747468c661bb1099056e8"
+    },
+    {
+      "file": "src/normalized-ui/ActivityOperationsPanel.tsx",
+      "sha256": "d11deff6a6f728a7bce3f4470038fefdefe1700d73dbb175ef6682a960a712db"
+    },
+    {
+      "file": "src/normalized-ui/CustomerExperienceAnalyticsPanel.tsx",
+      "sha256": "638aca09cc8868ddd1b20546064dbaa34cf41cb6e8f8baef805f2538ae749f50"
+    },
+    {
+      "file": "src/normalized-ui/LoyaltyEmergencyControlPanel.tsx",
+      "sha256": "11227aba15b04623488c377a44cd2f76617bff3b81f52387690e8b5f9b5296ae"
+    },
+    {
+      "file": "src/normalized-ui/PromotionalLoyaltyPanel.tsx",
+      "sha256": "2c7c473090b2151576497ee519d7c5807cb4f5946e02f927a3f020ba6c513895"
+    },
+    {
+      "file": "src/normalized-ui/CheckoutUpgradeManagementPanel.tsx",
+      "sha256": "2ea711e5d4eea7ecbe6ca4062b1054ca0641660dc9aebd26a84623e6e9c4d8f3"
+    },
+    {
+      "file": "src/normalized-ui/RecommendationPolicyManagementPanel.tsx",
+      "sha256": "f7f453d1552953f97d8c0e59f85f8daa64f8522e882b1fc3cfbd524253219e65"
+    },
+    {
+      "file": "src/normalized-ui/MembershipConfigurationCenterPanel.tsx",
+      "sha256": "739b0b546ee78d17c88e457ace6f0537021f66f3d708355ed1ee9c90907522b7"
+    },
+    {
+      "file": "src/normalized-ui/MemberCardManagementPanel.tsx",
+      "sha256": "bcc7c2ddd2358ef950beee5609ed11a0c438f7c5e8c23ba6aace4606ac616a0e"
+    },
+    {
+      "file": "src/normalized-ui/MarketingContactPanel.tsx",
+      "sha256": "9ece619db230b1ac2990a4681065922d08670b19b04703d657bb2bb08abef30a"
+    },
+    {
+      "file": "src/normalized-ui/PersonalContactGovernancePanel.tsx",
+      "sha256": "bdb3981c021e73b7784a3c8ca722172995fe4d3ec32639a3dba759bfb2bafd8c"
+    },
+    {
+      "file": "src/normalized-ui/HomeContentManagementPanel.tsx",
+      "sha256": "9165c09de5456216f24ba1d087ba694dbc758b7b293886e77a90120445f3bac9"
+    },
+    {
+      "file": "src/normalized-ui/AnnualBenefitManagementPanel.tsx",
+      "sha256": "77705be33b44494ecc64ab9a6fd6166acc5124cf6585eac60b33faaaa09b4114"
+    },
+    {
+      "file": "src/normalized-ui/PrintTicketPolicyPanel.tsx",
+      "sha256": "09415ccaaf28d1ef974172c6ec765e1b8a2e755d6df32c146f3ac2dc3994e2f6"
+    },
+    {
+      "file": "src/shared/inventory-unit-policy.ts",
+      "sha256": "6f43e107e7ea4105924ea65fd0845ede3554cfcb347299922db07822c9c754bf"
+    },
+    {
+      "file": "src/shared/inventory-stock-count.ts",
+      "sha256": "ff427ffd4bbb8180d6b6d53acf995258ae0f97d17dda7f3c2373cb6ad03c0f9f"
+    },
+    {
+      "file": "src/normalized-ui/PaymentFinanceReviewPanel.tsx",
+      "sha256": "23846ef41b3c26bf49f498da029f6c7d66c4b01be3c999b5d64f6a1730f03fba"
+    },
+    {
+      "file": "src/shared/refund-purpose.ts",
+      "sha256": "0cb660bdcc10100ec0e87d25efd19ff061223f60c43528da464c537a83c7ded4"
+    },
+    {
+      "file": "src/normalized-ui/CashierDaySummary.tsx",
+      "sha256": "f60570e6434ad0fd1bcb8ab5c70d6c313352e3f2cd36943bcd630cc742cae52c"
+    },
+    {
+      "file": "src/shared/cashier-workbench-contracts.ts",
+      "sha256": "bbeac3a0622ae1ff1bfbd3a7a29c6813c1e794e80ae1c2aba068fc44e70d650d"
+    },
+    {
+      "file": "src/components/CustomerPaymentCodeScanner.tsx",
+      "sha256": "b0b5f790290605022520c7e487c0a6affe6528d8890554280db31bfa5adb807d"
+    },
+    {
+      "file": "src/normalized-ui/OperatingHistoryPanel.tsx",
+      "sha256": "04348fb3ebb2361458b60e3a2d526436dcc76fd4d6df40480c250d6d672c6455"
+    },
+    {
+      "file": "src/shared/group-voucher-contracts.ts",
+      "sha256": "14ea9644aed4c47ce36a60abe3666115569406d4e5e182ffd599a9c99d345119"
+    },
+    {
+      "file": "src/normalized-ui/MediaAssetPicker.tsx",
+      "sha256": "8c4bc7989063e7a6761aa84b49bf1b75139a06cbe6a5448be5a53b7f81ccdd34"
+    },
+    {
+      "file": "src/normalized-ui/menu-image-library.ts",
+      "sha256": "52d36343161ed62bca863b561fe23a4c77794631640f6f173fd344555e10a1c4"
+    },
+    {
+      "file": "src/shared/product-display-snapshot.ts",
+      "sha256": "65abada38e9ef22e33788d904fad383a34a7502bf3d415298c091f5679e6fcb6"
+    },
+    {
+      "file": "src/shared/product-taste-profile.ts",
+      "sha256": "5b194be2e44a9dc8fc276eb3c31c259bb9c6900cc42805f31d2d807f869cdf63"
+    },
+    {
+      "file": "src/shared/bundle-cost-range.ts",
+      "sha256": "1adeb9297165d1ffdea26fa60867af13b7b4de2d5efa6d22da6c0cae284240cd"
+    },
+    {
+      "file": "src/shared/refund-review-configuration.ts",
+      "sha256": "5262183c605c6f9e9ae44a809b7640ab066801a4177f5a52f6bbae422933df10"
+    },
+    {
+      "file": "src/normalized-ui/RefundReviewConfiguration.tsx",
+      "sha256": "efac14086b064612b20c4b7d611a63312ff3ae01b289d78cecc68774ed95efd4"
+    },
+    {
+      "file": "src/shared/analytics-contracts.ts",
+      "sha256": "8da09ebe0f499ac63239aee88cab476fdf87df8c802831ff361c9f5f18c9a572"
+    },
+    {
+      "file": "src/normalized-ui/staff-actions/assisted-order-product.ts",
+      "sha256": "548c0c1f67816f978c11b199bd40560f96c76538d0f0ff7bbadcc2edf5263eb0"
+    },
+    {
+      "file": "src/normalized-ui/staff-actions/pending-cash-collection.ts",
+      "sha256": "0fd7ce32c52a0bc7782cc66ca6191381443c537f4111ef863ce8c8d4af59878b"
+    },
+    {
+      "file": "src/normalized-ui/staff-actions/table-payment-model.ts",
+      "sha256": "7443c55275825c658266ae434ae85bb403e52812e061a9064beafefc4c9a6e6b"
+    },
+    {
+      "file": "src/normalized-ui/staff-actions/table-order-refresh.ts",
+      "sha256": "0eaa4aaf18266e3238fb96b923b32ce8f0bd2164dfa53cf4627e37241cbf8e93"
+    },
+    {
+      "file": "src/normalized-ui/membership-business-inputs.tsx",
+      "sha256": "bf20be592dc5a74df7c832f5a28c7806aa85e7b6fb7565b30697249e589a5ff7"
+    },
+    {
+      "file": "src/normalized-ui/StackingPricePreviewPanel.tsx",
+      "sha256": "a321eaa971e20ec159a153c9a0f12cc7f1d1b5f81bd1bf74c979188990c1cb1a"
+    },
+    {
+      "file": "src/normalized-ui/CouponCalendarPreviewPanel.tsx",
+      "sha256": "9bee157273b2e377227f00423573ec7a225833adacfaa774e556e86334018b84"
+    },
+    {
+      "file": "src/normalized-ui/MemberGiftCampaignPanel.tsx",
+      "sha256": "bd3c4ab1607f4eee4f3d7f18e0d33bc573ae09eed7ab18c83f17594fe85d44eb"
+    },
+    {
+      "file": "src/shared/print-ticket-policy.ts",
+      "sha256": "1e8ce685f5c3c794365d54b9541f88af0b2c847fac1145e48789bfb7f7ba344d"
+    },
+    {
+      "file": "src/normalized-ui/OrderBillPrintButton.tsx",
+      "sha256": "e0d7e522a37ebb40ca917fbe8930c2f8d0dec927e3246be3ad4edbe3fc83001b"
+    },
+    {
+      "file": "src/normalized-ui/OrderStockReturnPending.tsx",
+      "sha256": "80d0f10a93da6d13df9613617e75e15e03cacd6e51d159c68381c273e48ba623"
+    },
+    {
+      "file": "src/shared/order-history-presentation.ts",
+      "sha256": "7e373d8c4ceb70057ec8c11145bc4127c2cd28e81aee5f29825650d26fb04756"
+    },
+    {
+      "file": "src/normalized-ui/OrderStockReturnForm.tsx",
+      "sha256": "5ced7240e8eac98bbef078542a5f6ab708b201498a732c32a0fdc6c049d6dfe1"
+    },
+    {
+      "file": "src/normalized-ui/CouponCalendarVersionPanel.tsx",
+      "sha256": "df55ed15be43425ce42fa8ccf9c1f28410018d712e7c319e095d4967b5ff7190"
+    },
+    {
+      "file": "src/normalized-ui/CouponRefundReviewPanel.tsx",
+      "sha256": "e7703582d674414b9040fd597647cb7e003bf6cbbadc879bd8421c1290a015f3"
+    },
+    {
+      "file": "src/normalized-ui/order-stock-return-recovery.ts",
+      "sha256": "fdf544438e1bccb1b40ab24a21d04aca3a083a39086cc1736e0e5c0546d7ee95"
+    }
+  ]
+}

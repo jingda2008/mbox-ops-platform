@@ -1,0 +1,348 @@
+{
+  "baseline": "5c4bde7de5ed154ab3dd9227a64751dcc65293eb",
+  "status": "audit_only_no_product_fixes",
+  "findings": [
+    {
+      "id": "SYS-287",
+      "priority": "P1",
+      "title": "损耗登记丢失返回后重试，再次扣库存",
+      "routes": [
+        "/staff/inventory"
+      ],
+      "files": [
+        "StaffModulePanel.tsx"
+      ],
+      "line": 1065,
+      "evidence": "真实隔离接口两次200、两个不同操作编号、两条各减1的库存流水；库存1000→999→998。首次提交实际成功，浏览器被注入连接中断。允许损耗量10仅为隔离物料夹具，未改员工权限。",
+      "probe": "waste-response-loss-duplicates-stock",
+      "fix": "冻结原员工、物料、数量、原因及操作编号；结果未知时恢复原登记。确认完成后才能开始另一笔。",
+      "acceptance": "丢失返回、关窗、刷新后重试均只有一条损耗流水；真正的新损耗可再次登记；切换员工不可接手旧提交。",
+      "primaryFile": "src/normalized-ui/StaffModulePanel.tsx"
+    },
+    {
+      "id": "SYS-288",
+      "priority": "P1",
+      "title": "新物料损耗限额为0，超限后没有审批办理路径",
+      "routes": [
+        "/staff/inventory"
+      ],
+      "files": [
+        "StaffModulePanel.tsx"
+      ],
+      "line": 959,
+      "evidence": "新建物料固定reasonableWasteQuantity=0。默认店长有inventory.waste但无inventory.count.approve；老板/运营有后者却无前者。未改限额的隔离物料登记1件返回409，只提示刷新；当前表单没有配置限额或提交损耗审批入口。不能据此断言现网每个物料均失败。",
+      "probe": "default-waste-denied",
+      "fix": "明确合理损耗限额的管理入口，并提供超限申请→独立复核→只扣一次的流程；提示说明超限及交给谁处理。不能通过扩大所有员工权限解决。",
+      "acceptance": "普通、超限、驳回、独立批准及重复点击五种场景均有明确结果与库存证据。",
+      "primaryFile": "src/normalized-ui/StaffModulePanel.tsx"
+    },
+    {
+      "id": "SYS-289",
+      "priority": "P2",
+      "title": "前往配置中心审批按钮没有可见目的地",
+      "routes": [
+        "/staff/member-overview",
+        "/staff/member-management",
+        "/staff/member-fulfillment",
+        "/staff/member-exceptions"
+      ],
+      "files": [
+        "CustomerExperienceManagementPanel.tsx",
+        "MembershipConfigurationCenterPanel.tsx",
+        "PromotionalLoyaltyPanel.tsx"
+      ],
+      "line": 1015,
+      "evidence": "运营账号从会员概览点击该按钮：URL不变，配置中心DOM数量0，只出现“审批已移至上方”提示。会员管理的权益分区与配置中心还分属不同懒加载分区；只发自定义事件不能保证切换分区或定位原草稿。",
+      "probe": "approval-link-no-destination",
+      "fix": "使用明确页面/分区导航，并携带规则类型与草稿编号；目标无权限时说明原因。",
+      "acceptance": "从每个旧审批入口一次点击到达可见的同一草稿；从未打开过目标分区及已打开过两种情况均验证。",
+      "primaryFile": "src/normalized-ui/CustomerExperienceManagementPanel.tsx"
+    },
+    {
+      "id": "SYS-290",
+      "priority": "P2",
+      "title": "核对库存成本打开的是隐藏分区中的表单",
+      "routes": [
+        "/staff/inventory"
+      ],
+      "files": [
+        "StaffModulePanel.tsx",
+        "CatalogManagementPanel.tsx"
+      ],
+      "line": 1348,
+      "evidence": "商品→莫吉托→核对库存成本，表单已存在但不可见，仍停在#work=products。此复现使用只读身份响应补入cost.correct的界面能力夹具；默认门店角色没有该权限，未授予真实或数据库权限，未提交成本更正。",
+      "probe": "catalog-cost-form-hidden",
+      "fix": "先切换收货与库存分区，再定位指定物料和成本更正表单；完成后提供返回原商品并重算入口。",
+      "acceptance": "有正确授权的账号可见并完成入口衔接，无授权账号不能操作；分区返回保留原商品。",
+      "primaryFile": "src/normalized-ui/StaffModulePanel.tsx"
+    },
+    {
+      "id": "SYS-291",
+      "priority": "P2",
+      "title": "只读概览、权益待办和异常页的说明与实际内容不符",
+      "routes": [
+        "/staff/member-overview",
+        "/staff/member-fulfillment",
+        "/staff/member-exceptions"
+      ],
+      "files": [
+        "CustomerExperienceManagementPanel.tsx",
+        "AnnualBenefitManagementPanel.tsx"
+      ],
+      "line": 206,
+      "evidence": "概览写“本入口不能起草、审批或发布”，店长实际保存草稿返回201。待办写“只显示当前岗位可确认的赠送、核销与出品事项”，却有等级、兑换和年度礼遇草稿表单。默认店长待办和异常页各有63个可见控件。系已授权组件混放，不是已证的越权。",
+      "probe": "overview-is-editable;member-fulfillment-shows-configuration",
+      "fix": "按页面目的限定展示与可操作能力：概览只读，待办只办当前任务，异常只办异常，规则编辑集中到规则页。",
+      "acceptance": "逐角色核对每个入口的说明、可见控件和请求；只读页没有写入口，待办不再混入规则表单。",
+      "primaryFile": "src/normalized-ui/CustomerExperienceManagementPanel.tsx"
+    },
+    {
+      "id": "SYS-292",
+      "priority": "P2",
+      "title": "输入校验抛错后页面没有提示",
+      "routes": [
+        "/staff/member-fulfillment",
+        "/staff/member-management"
+      ],
+      "files": [
+        "CustomerExperienceManagementPanel.tsx",
+        "PromotionalLoyaltyPanel.tsx"
+      ],
+      "line": 720,
+      "evidence": "清空银卡积分倍率后保存，浏览器出现未捕获的“银卡积分倍率最多保留三位小数”，页面status/alert为空。decimalRatio在try之前执行。addRule、兑换目录和促销草稿也存在try外构造/校验，应同批核对；这些扩展分支未逐一注入。",
+      "probe": "tier-validation-no-feedback",
+      "fix": "将全部输入校验纳入统一可见错误处理，定位到对应输入；必填、范围及格式均用员工可理解的提示。",
+      "acceptance": "空值、非法小数、负数、超限、未选择项目均有就地反馈，不出现未捕获异常，不发送无效写请求。",
+      "primaryFile": "src/normalized-ui/CustomerExperienceManagementPanel.tsx"
+    },
+    {
+      "id": "SYS-293",
+      "priority": "P2",
+      "title": "快速切换规则时旧响应覆盖最后选中的规则",
+      "routes": [
+        "/staff/member-rule-drafts",
+        "/staff/member-rule-approvals",
+        "/staff/member-rule-publish",
+        "/staff/member-management"
+      ],
+      "files": [
+        "MembershipConfigurationCenterPanel.tsx"
+      ],
+      "line": 57,
+      "evidence": "先点第3版再点第1版，延迟第3版的真实GET响应；第1版已显示后又自动回到第3版。没有修改响应内容。",
+      "probe": "configuration-selection-race",
+      "fix": "按请求序号或取消信号只接纳最后一次选择的结果；保存绑定实际选中规则与修订。",
+      "acceptance": "A→B乱序响应仍停留B，失败保留B上下文；旧响应不能改变待保存对象。",
+      "primaryFile": "src/normalized-ui/MembershipConfigurationCenterPanel.tsx"
+    },
+    {
+      "id": "SYS-294",
+      "priority": "P2",
+      "title": "不限库存改为数量时提交成文字，保存被拒绝",
+      "routes": [
+        "/staff/member-rule-drafts",
+        "/staff/member-management"
+      ],
+      "files": [
+        "MembershipConfigurationCenterPanel.tsx"
+      ],
+      "line": 121,
+      "evidence": "实际创建不限库存的兑换目录草稿，在配置中心将总库存填10，请求中totalInventory为字符串“10”，服务返回409 MEMBERSHIP_CONFIGURATION_INVALID。页面提示“必须为非负整数”，员工已经输入整数却无法解决。",
+      "probe": "nullable-inventory-input-rejected",
+      "fix": "按业务字段类型处理空值：可选数量转换为number或null，日期和文字仍保留各自类型。",
+      "acceptance": "不限→10→不限、0及非法数值都可正确处理；总/日库存、终身上限分别验证，不能用Number统一转换所有空值字段。",
+      "primaryFile": "src/normalized-ui/MembershipConfigurationCenterPanel.tsx"
+    },
+    {
+      "id": "SYS-295",
+      "priority": "P2",
+      "title": "草稿保存成功提示被随后的刷新清空",
+      "routes": [
+        "/staff/member-rule-drafts",
+        "/staff/member-rule-approvals",
+        "/staff/member-management",
+        "/staff/customer-experience"
+      ],
+      "files": [
+        "MembershipConfigurationCenterPanel.tsx",
+        "CheckoutUpgradeManagementPanel.tsx"
+      ],
+      "line": 61,
+      "evidence": "配置中心保存返回200、修订已变2，但可见status为空。save先setNotice成功再load，而load立即清空notice。升级规则/产能的相同调用模式需一并修复。",
+      "probe": "configuration-success-cleared",
+      "fix": "将提交结果与读取状态分别保存；刷新失败明确“已保存，最新列表暂未读到”，保留只读重试。",
+      "acceptance": "保存成功、保存成功后读取失败及真正保存失败呈现不同结果，不能诱导再次写入。",
+      "primaryFile": "src/normalized-ui/MembershipConfigurationCenterPanel.tsx"
+    },
+    {
+      "id": "SYS-296",
+      "priority": "P2",
+      "title": "有活动配置权限的副店长打不开小程序弹窗表单",
+      "routes": [
+        "/staff/member-management"
+      ],
+      "files": [
+        "LaunchPopupPanel.tsx"
+      ],
+      "line": 8,
+      "evidence": "默认副店长进入会员通知分区，/api/catalog/products返回403，页面显示缺少商品或价格配置权限。弹窗入口按community.activity.manage放行，但加载同时依赖需要另一组权限的商品管理接口，Promise.all使整个表单不可用。",
+      "probe": "default-390:lengyanzhi/member-management/member-marketing",
+      "fix": "使用按任务授权的可选商品查询接口，或精确说明权限缺项并隔离商品读取错误；不要额外授予定价/商品管理权来绕过。",
+      "acceptance": "现有副店长权限能完成被授权的弹窗配置；未授权商品修改和价格接口仍拒绝；单个依赖失败不伪装成整个模块无数据。",
+      "primaryFile": "src/normalized-ui/LaunchPopupPanel.tsx"
+    },
+    {
+      "id": "SYS-297",
+      "priority": "P2",
+      "title": "窄屏会员通知页出现横向溢出",
+      "routes": [
+        "/staff/member-management"
+      ],
+      "files": [
+        "SocialAccountPanel.tsx",
+        "normalized-staff-workspace.css"
+      ],
+      "line": 24,
+      "evidence": "320像素移动视口，增补会员能力夹具的会员通知展开态，页面宽度多出65像素；390默认岗位和1280桌面未出现该问题。",
+      "probe": "optin-320:member-management/member-marketing",
+      "fix": "定位不可断行的平台模板说明/控件宽度，保证长串可换行且底部导航始终适配视口；不能以隐藏溢出掩盖被裁切的按钮。",
+      "acceptance": "320/360/390横竖屏、展开微信账号配置及键盘弹出时，内容和全部入口仍可见可点。",
+      "primaryFile": "src/normalized-ui/SocialAccountPanel.tsx"
+    },
+    {
+      "id": "SYS-298",
+      "priority": "P2",
+      "title": "同类经营设置混用元、分、基点和万分比",
+      "routes": [
+        "/staff/member-overview",
+        "/staff/member-rule-drafts",
+        "/staff/customer-experience"
+      ],
+      "files": [
+        "CustomerExperienceManagementPanel.tsx",
+        "CheckoutUpgradeManagementPanel.tsx",
+        "RecommendationPolicyManagementPanel.tsx"
+      ],
+      "line": 1095,
+      "evidence": "基础积分旧草稿要求填“每多少分消费”；升级草稿使用分/万分比/基点，其他经营页面已使用元/百分比。当前单位标注确实存在，不把它写成已发生100倍错账；问题是手工换算和同类表单不一致。",
+      "probe": "source+rendered-labels",
+      "fix": "金额统一元，比例统一百分比，显示换算例子；仅在接口边界精确换算分/基点。",
+      "acceptance": "所有同类表单往返数值一致，1元=100分、1%=100基点，保存回读与审批预览相同，边界舍入不丢精度。",
+      "primaryFile": "src/normalized-ui/CustomerExperienceManagementPanel.tsx"
+    },
+    {
+      "id": "SYS-299",
+      "priority": "P2",
+      "title": "仍有内部状态值、类型值和记录编号直接显示",
+      "routes": [
+        "/staff/member-management",
+        "/staff/member-fulfillment",
+        "/staff/payments",
+        "/staff/customer-experience"
+      ],
+      "files": [
+        "CustodyReportPanel.tsx",
+        "CustomerExperienceManagementPanel.tsx",
+        "AnnualBenefitManagementPanel.tsx",
+        "CashierAfterSalesWorkbench.tsx",
+        "PersonalContactGovernancePanel.tsx",
+        "SocialAccountPanel.tsx",
+        "OrderStockReturnForm.tsx",
+        "OrderBillPrintButton.tsx"
+      ],
+      "line": 16,
+      "evidence": "存酒报表直接显示状态值r.status和CNY；兑换开关默认显示disabled；年度权益选项显示benefitKind；部分活动/治理/微信事件直接显示status。退库与打印直接显示内部记录ID。amount_basis经核实已由接口给出中文，不列为漏翻译。订单号、桌号及可对账业务编号需要保留，不能一概删除。",
+      "probe": "source-contract-and-render",
+      "fix": "为每种状态/类型建立业务名称及未知值兜底；内部诊断编号放到可展开详情，业务编号仍可复制。",
+      "acceptance": "逐状态截图核对，不出现裸枚举；未知状态显示“待核对”及可执行下一步，导出报表同步处理。",
+      "primaryFile": "src/normalized-ui/CustodyReportPanel.tsx"
+    },
+    {
+      "id": "SYS-300",
+      "priority": "P2",
+      "title": "面向员工的说明仍混入大量实现术语",
+      "routes": [
+        "/staff/inventory",
+        "/staff/customer-experience",
+        "/staff/member-management",
+        "/staff/member-rule-drafts",
+        "/staff/payments",
+        "/staff/operations",
+        "/staff/settings"
+      ],
+      "files": [
+        "ActivityOperationsPanel.tsx",
+        "CatalogManagementPanel.tsx",
+        "StaffModulePanel.tsx",
+        "CustomerExperienceAnalyticsPanel.tsx",
+        "CustomerExperienceManagementPanel.tsx",
+        "PromotionalLoyaltyPanel.tsx",
+        "StaffAccessManagementPanel.tsx",
+        "OwnerFinancePanel.tsx",
+        "StackingPricePreviewPanel.tsx",
+        "OperatingHistoryPanel.tsx",
+        "OrderBillPrintButton.tsx",
+        "BottleCustodyPanel.tsx"
+      ],
+      "line": 541,
+      "evidence": "存在“强类型运行门禁”“服务端状态复验”“发放状态机”“成为运行事实”“客户端勾选不再具有审批效力”等可见原文。技术解释不是员工完成动作所需信息。逐条替换和应保留例外见文案表。",
+      "probe": "copy-register+rendered-text",
+      "fix": "采用动作、结果、下一步的说明；平台接入所必需的AppID、模板ID、密钥仅放管理员接入设置。财务口径和实物核对要求保留其业务含义。",
+      "acceptance": "逐页和弹窗核对统一词表；保存、审批、发布、执行、到账、送达各状态不能混写。",
+      "primaryFile": "src/normalized-ui/StaffModulePanel.tsx"
+    },
+    {
+      "id": "SYS-301",
+      "priority": "P2",
+      "title": "会员发布页未承载其他规则的发布动作",
+      "routes": [
+        "/staff/member-rule-publish"
+      ],
+      "files": [
+        "CustomerExperienceManagementPanel.tsx",
+        "MembershipConfigurationCenterPanel.tsx"
+      ],
+      "line": 222,
+      "evidence": "该路由只挂配置中心与基础积分LoyaltyPolicyPanel。配置中心能列出多种规则，但仅有保存/预览/审批按钮；等级、权益、目录、促销、条款的发布函数仍散在未挂载的其他面板。此项为组件挂载与处理路径审计，未伪称完成所有类型三人发布实测。",
+      "probe": "source-route-mounts",
+      "fix": "按规则类型提供明确的发布入口，或在统一中心连接各自受保护发布接口；显示生效时间、发布后状态与回退办法。",
+      "acceptance": "每一种可发布规则都从待发布列表完成第三人发布，并可核对实际生效状态；草稿和已审批不能显示为已生效。",
+      "primaryFile": "src/normalized-ui/CustomerExperienceManagementPanel.tsx"
+    },
+    {
+      "id": "SYS-302",
+      "priority": "P3",
+      "title": "酒水上架步骤编号互相矛盾",
+      "routes": [
+        "/staff/inventory"
+      ],
+      "files": [
+        "CatalogManagementPanel.tsx",
+        "StaffModulePanel.tsx"
+      ],
+      "line": 873,
+      "evidence": "外层“酒水四步入库发布”，展开按钮“第4–5步”，正文“第2–4步”，保存区又叫“第5步”。",
+      "probe": "source+rendered-text",
+      "fix": "统一为建物料→收货→配方/售价→核对并上架，步骤只保留一套编号，并显示当前进度。",
+      "acceptance": "从新建到顾客可售按同一顺序走通；没有不存在的第五步或已入库等于已上架的误导。",
+      "primaryFile": "src/normalized-ui/CatalogManagementPanel.tsx"
+    },
+    {
+      "id": "SYS-303",
+      "priority": "P3",
+      "title": "月度演出表折叠入口触控高度偏小",
+      "routes": [
+        "/staff/performance"
+      ],
+      "files": [
+        "MonthlySchedulePanel.tsx"
+      ],
+      "line": 51,
+      "evidence": "390像素岗位巡检记录该summary高22像素，而普通按钮多已做44像素以上。此为App使用易触达性建议，不作法规符合性结论。",
+      "probe": "default-390:performance/disclosures",
+      "fix": "把折叠入口整体触控区增加到至少44像素，并保留清晰的展开状态和键盘焦点。",
+      "acceptance": "手机实际点击无需瞄准文字；键盘和读屏能识别名称及展开状态。",
+      "primaryFile": "src/normalized-ui/MonthlySchedulePanel.tsx"
+    }
+  ]
+}

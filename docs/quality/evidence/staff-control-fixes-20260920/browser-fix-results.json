@@ -1,0 +1,256 @@
+[
+  {
+    "id": "SYS-291-page-responsibility",
+    "result": "passed",
+    "evidence": {
+      "overviewReadOnly": true,
+      "fulfillmentAndExceptionsHideConfiguration": true
+    }
+  },
+  {
+    "id": "SYS-292-validation-and-289-navigation",
+    "result": "passed",
+    "evidence": {
+      "validationVisible": true,
+      "uncaughtErrors": [],
+      "approvalSelectsCreatedDraft": true
+    }
+  },
+  {
+    "id": "SYS-293-295-rule-race-and-save-feedback",
+    "result": "passed",
+    "evidence": {
+      "lastSelectionPreserved": true,
+      "writeSuccessSurvivesReadFailure": true
+    }
+  },
+  {
+    "id": "SYS-294-nullable-inventory",
+    "result": "passed",
+    "evidence": {
+      "integerAccepted": 10,
+      "zeroAccepted": 0,
+      "clearRestoresNull": true
+    }
+  },
+  {
+    "id": "SYS-296-popup-role-access",
+    "result": "passed",
+    "evidence": {
+      "unauthorizedResponses": [],
+      "productOptionsLoaded": true
+    }
+  },
+  {
+    "id": "SYS-297-mobile-admin-integration",
+    "result": "passed",
+    "evidence": {
+      "sizes": [
+        {
+          "width": 320,
+          "scroll": 320
+        },
+        {
+          "width": 360,
+          "scroll": 360
+        },
+        {
+          "width": 390,
+          "scroll": 390
+        },
+        {
+          "width": 844,
+          "scroll": 844
+        }
+      ]
+    }
+  },
+  {
+    "id": "SYS-287-288-waste-recovery-and-review",
+    "result": "passed",
+    "evidence": {
+      "survivesReloadAndClosedTab": true,
+      "sameKey": true,
+      "sameMovement": true,
+      "replayed": true,
+      "defaultLimitCreatesPendingRequest": true,
+      "writes": [
+        {
+          "key": "700151cd-8e10-4687-a11f-ad86d7aed9a6",
+          "body": {
+            "quantity": "1",
+            "reason": "修复验证：回执丢失且刷新页面恢复",
+            "wasteType": "other",
+            "requestApproval": true
+          },
+          "status": 200,
+          "response": {
+            "data": {
+              "status": "recorded",
+              "movementId": "139efacb-1402-43c9-a04f-9de4a0344880",
+              "remainingQuantity": "997.000000",
+              "baseUnit": "piece",
+              "wasteType": "other",
+              "unitCostMinor": null,
+              "wasteCostMinor": null
+            },
+            "meta": {
+              "replayed": false
+            }
+          }
+        },
+        {
+          "key": "700151cd-8e10-4687-a11f-ad86d7aed9a6",
+          "body": {
+            "quantity": "1",
+            "reason": "修复验证：回执丢失且刷新页面恢复",
+            "wasteType": "other",
+            "requestApproval": true
+          },
+          "status": 200,
+          "response": {
+            "data": {
+              "status": "recorded",
+              "baseUnit": "piece",
+              "wasteType": "other",
+              "movementId": "139efacb-1402-43c9-a04f-9de4a0344880",
+              "unitCostMinor": null,
+              "wasteCostMinor": null,
+              "remainingQuantity": "997.000000"
+            },
+            "meta": {
+              "replayed": true
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "SYS-290-cost-navigation",
+    "result": "passed",
+    "evidence": {
+      "costFormVisible": true,
+      "returnPreservesEditing": true,
+      "scope": "read-only UI capability fixture; no grant or cost write"
+    }
+  },
+  {
+    "id": "SYS-298-money-and-percentage",
+    "result": "passed",
+    "evidence": {
+      "money": {
+        "yuan": 1,
+        "minor": 100,
+        "oneCent": 1,
+        "decimal29Cents": 29
+      },
+      "percentage": {
+        "percent": 1,
+        "basisPoints": 100
+      },
+      "excessPrecisionRejected": true,
+      "serverReadback": true
+    }
+  },
+  {
+    "id": "SYS-301-seven-publication-ui",
+    "result": "passed",
+    "evidence": {
+      "domains": [
+        "base_points",
+        "tier_policy",
+        "tier_benefits",
+        "redemption_catalog",
+        "promotion_points",
+        "membership_terms",
+        "wechat_notifications"
+      ],
+      "writes": [
+        {
+          "path": "/api/staff/loyalty/policies/7d546c58-53ad-4fa4-bcb9-08df113f3693/publish",
+          "body": {
+            "effectiveFrom": "2026-09-21T15:41:00.000Z",
+            "effectiveUntil": null,
+            "reason": "界面路由夹具：三人流程由数据库测试另行验证",
+            "expectedRevision": 2
+          }
+        },
+        {
+          "path": "/api/staff/loyalty/tier-policies/3c2d7bf6-613e-4a11-a763-5834940af32c/publish",
+          "body": {
+            "effectiveFrom": "2026-09-21T15:41:00.000Z",
+            "effectiveUntil": null,
+            "reason": "界面路由夹具：三人流程由数据库测试另行验证",
+            "expectedRevision": 2
+          }
+        },
+        {
+          "path": "/api/staff/loyalty/tier-benefit-policies/3d86782d-59a3-4430-885d-b6d5fda602dd/publish",
+          "body": {
+            "effectiveFrom": "2026-09-21T15:41:00.000Z",
+            "effectiveUntil": null,
+            "reason": "界面路由夹具：三人流程由数据库测试另行验证",
+            "expectedRevision": 2
+          }
+        },
+        {
+          "path": "/api/staff/loyalty/redemption-catalogs/4d06950b-d031-4bc5-92cd-b25062cd66cf/publish",
+          "body": {
+            "effectiveFrom": "2026-09-21T15:41:00.000Z",
+            "effectiveUntil": null,
+            "reason": "界面路由夹具：三人流程由数据库测试另行验证",
+            "expectedRevision": 2
+          }
+        },
+        {
+          "path": "/api/staff/loyalty/promotion-policies/24b10e07-d0c9-4a3e-a1ed-776d014c023a/publish",
+          "body": {
+            "effectiveFrom": "2026-09-21T15:41:00.000Z",
+            "effectiveUntil": null,
+            "reason": "界面路由夹具：三人流程由数据库测试另行验证",
+            "expectedRevision": 2
+          }
+        },
+        {
+          "path": "/api/staff/membership-terms/6/publish",
+          "body": {
+            "effectiveFrom": "2026-09-21T15:41:00.000Z",
+            "effectiveUntil": null,
+            "reason": "界面路由夹具：三人流程由数据库测试另行验证",
+            "expectedRevision": 2
+          }
+        },
+        {
+          "path": "/api/staff/loyalty/configuration-center/wechat_notifications/82aac8ea-d4fa-4544-a6c4-28f926361da9/publish",
+          "body": {
+            "effectiveFrom": "2026-09-21T15:41:00.000Z",
+            "effectiveUntil": null,
+            "reason": "界面路由夹具：三人流程由数据库测试另行验证",
+            "expectedRevision": 2
+          }
+        }
+      ],
+      "scope": "UI route and input fixture only; real database publication and role checks are separately tested"
+    }
+  },
+  {
+    "id": "SYS-299-business-status-report",
+    "result": "passed",
+    "evidence": {
+      "states": 11,
+      "unknownHasNextStep": true,
+      "financialBasisPreserved": true,
+      "scope": "all report state rendering fixtures; workbook export uses a separate PostgreSQL integration test"
+    }
+  },
+  {
+    "id": "SYS-302-303-guidance-and-touch",
+    "result": "passed",
+    "evidence": {
+      "guideSteps": 4,
+      "summaryHeight": 44,
+      "keyboardOpenAndClose": true
+    }
+  }
+]

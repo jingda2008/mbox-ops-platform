@@ -1059,7 +1059,35 @@ integration("normalized inventory API PostgreSQL integration", () => {
     expect(authoritative.rows[0]?.version_id).toMatch(/^[0-9a-f-]{36}$/i);
   });
 
+  it('routes zero-allowance waste to independent approval, replays lost replies once and leaves rejected or insufficient requests undeducted',async()=>{
+    const itemId=randomUUID();
+    await pool.query(`INSERT INTO mbox.inventory_items(tenant_id,store_id,id,sku,name,item_type,base_unit,category_code,reasonable_waste_quantity,status)
+      VALUES($1,$2,$3,'REVIEW-WASTE','损耗复核测试物料','other','piece','uncategorized',0,'active')`,[tenantId,storeId,itemId]);
+    await pool.query(`INSERT INTO mbox.inventory_balances(tenant_id,store_id,inventory_item_id,on_hand_quantity,reserved_quantity) VALUES($1,$2,$3,10,0)`,[tenantId,storeId,itemId]);
+    const submit=async(key:string,quantity='2')=>app.inject({method:'POST',url:`/api/inventory/items/${itemId}/waste`,headers:headers(managerId,key),payload:{quantity,wasteType:'discarded',reason:'杯具破损登记',requestApproval:true}});
+    const first=await submit('waste-review-submit-01'),replay=await submit('waste-review-submit-01');
+    expect(first.statusCode,first.body).toBe(200);expect(first.json().data.status).toBe('pending');expect(replay.json().data.id).toBe(first.json().data.id);expect(replay.json().meta.replayed).toBe(true);
+    const id=first.json().data.id;
+    const before=await pool.query('SELECT on_hand_quantity::text AS n FROM mbox.inventory_balances WHERE inventory_item_id=$1',[itemId]);expect(before.rows[0].n).toBe('10.000000');
+    const decide=(requestId:string,employeeId:string,decision='approve',key=randomUUID())=>app.inject({method:'POST',url:`/api/inventory/waste-requests/${requestId}/${decision}`,headers:headers(employeeId,key),payload:{reason:'已核对实物'}});
+    expect((await decide(id,managerId)).statusCode).toBe(409);
+    expect((await decide(id,viewerId)).statusCode).toBe(403);
+    const accepted=await decide(id,approverId,'approve','waste-review-decision-01');expect(accepted.statusCode,accepted.body).toBe(200);
+    expect((await decide(id,approverId,'approve','waste-review-decision-01')).json().meta.replayed).toBe(true);
+    expect((await decide(id,approverId)).statusCode).toBe(409);
+    const rejected=(await submit('waste-review-reject-02')).json().data.id;expect((await decide(rejected,approverId,'reject')).statusCode).toBe(200);
+    const insufficient=(await submit('waste-review-insufficient-03','99')).json().data.id;
+    const failed=await decide(insufficient,approverId);expect(failed.statusCode).toBe(409);expect(failed.json().error.code).toBe('INVENTORY_INSUFFICIENT');
+    const state=await pool.query(`SELECT (SELECT on_hand_quantity::text FROM mbox.inventory_balances WHERE inventory_item_id=$1) AS n,
+      (SELECT count(*)::int FROM mbox.inventory_movements WHERE inventory_item_id=$1 AND movement_type='waste') AS movements,
+      (SELECT status FROM mbox.inventory_waste_requests WHERE id=$2) AS pending`,[itemId,insufficient]);
+    expect(state.rows[0]).toEqual({n:'8.000000',movements:1,pending:'pending'});
+    const list=await app.inject({method:'GET',url:'/api/inventory/waste-requests',headers:headers(approverId,'waste-review-list-01')});expect(list.statusCode,list.body).toBe(200);expect(list.json().data.items.some((r:{id:string;canReview:boolean})=>r.id===insufficient&&r.canReview)).toBe(true);
+    expect((await app.inject({method:'GET',url:'/api/inventory/waste-requests',headers:headers(viewerId,'waste-review-denied-list')})).statusCode).toBe(403);
+  });
+
   it("serializes competing deductions so stock cannot be overdrawn or rolled back by a stale click", async () => {
+    await pool.query("UPDATE mbox.inventory_items SET reasonable_waste_quantity=30 WHERE tenant_id=$1 AND store_id=$2 AND id=$3",[tenantId,storeId,spiritItemId]);
     const requests = [
       "waste-concurrent-one-0001",
       "waste-concurrent-two-0002",

@@ -1,3 +1,5 @@
+import {openMembershipConfiguration} from './membership-workflow'
+import {BusinessRatioFields} from './membership-business-inputs'
 import { useStaffViewState } from './staff-view-state'
 import { TaskSections } from './TaskSections'
 import {SocialBroadcastPanel} from './SocialBroadcastPanel'
@@ -147,6 +149,7 @@ interface MembershipRecoveryCandidateView {
 }
 
 interface MembershipTermsVersionView {
+  id:string
   publicId: string
   version: number
   status: 'draft' | 'approved' | 'published'
@@ -205,30 +208,32 @@ export function CustomerExperienceManagementPanel({ api, auth, dashboard, mode =
   mode?: CustomerExperiencePanelMode
 }) {
   if (mode === 'member-fulfillment') return <div className="staff-module-body customer-experience-management">
-    <section className="customer-experience-publishing-intro"><strong>当前桌次会员权益待办</strong><small>只显示当前岗位可确认的赠送、核销与出品事项；每次操作记录当前员工并执行防重复校验。</small></section>
-    <LoyaltyTierAndRedemptionPanel api={api} auth={auth} />
-    <AnnualBenefitManagementPanel api={api} auth={auth} />
+    <section className="customer-experience-publishing-intro"><strong>当前桌次会员权益待办</strong><small>办理当前岗位负责的赠送、核销与交付事项；完成后可在对应记录中核对。</small></section>
+    <LoyaltyTierAndRedemptionPanel viewMode="fulfillment" api={api} auth={auth} />
+    <AnnualBenefitManagementPanel viewMode="fulfillment" api={api} auth={auth} />
   </div>
   if (mode === 'member-exceptions') return <div className="staff-module-body customer-experience-management">
-    <section className="customer-experience-publishing-intro"><strong>会员权益异常</strong><small>处理过期、缺货、结果未知和已制作后的补偿；终态记录不能直接改回可用。</small></section>
-    <LoyaltyTierAndRedemptionPanel api={api} auth={auth} />
-    <AnnualBenefitManagementPanel api={api} auth={auth} />
+    <section className="customer-experience-publishing-intro"><strong>会员权益异常</strong><small>处理过期、缺货、结果未知和已制作后的补偿；已完成或已取消的记录不能直接恢复使用。</small></section>
+    <LoyaltyTierAndRedemptionPanel viewMode="exceptions" api={api} auth={auth} />
+    <AnnualBenefitManagementPanel viewMode="exceptions" api={api} auth={auth} />
   </div>
   if (mode === 'member-overview') return <div className="staff-module-body customer-experience-management">
     <section className="customer-experience-publishing-intro"><strong>会员等级与权益</strong><small>只读查看当前已发布的积分、成长值、等级与等级权益规则；本入口不能起草、审批或发布。</small></section>
-    <LoyaltyPolicyPanel api={api} auth={auth} />
-    <TierBenefitPolicyPanel api={api} auth={auth} />
+    <LoyaltyPolicyPanel viewMode="overview" api={api} auth={auth} />
+    <LoyaltyTierAndRedemptionPanel viewMode="overview" api={api} auth={auth} />
+    <TierBenefitPolicyPanel viewMode="overview" api={api} auth={auth} />
   </div>
   if (mode === 'member-rule-drafts' || mode === 'member-rule-approvals' || mode === 'member-rule-publish') {
     const presentation = mode === 'member-rule-drafts'
-      ? ['会员规则草稿', '建立规则草稿并查看服务端影响预览；保存不会直接生效。']
+      ? ['会员规则草稿', '建立规则草稿并查看修改影响；保存不会直接生效。']
       : mode === 'member-rule-approvals'
         ? ['待审批会员规则', '复核他人起草且影响预览仍有效的会员规则；审批人与起草人必须不同。']
         : ['会员规则发布', '为已独立审批的规则安排生效时间；发布人与起草、审批人员必须不同。']
     return <div className="staff-module-body customer-experience-management">
       <section className="customer-experience-publishing-intro"><strong>{presentation[0]}</strong><small>{presentation[1]}</small></section>
-      <MembershipConfigurationCenterPanel api={api} auth={auth} />
-      <LoyaltyPolicyPanel api={api} auth={auth} />
+      {mode==='member-rule-drafts'&&auth.permissions.includes('loyalty.configuration.view')&&<p><a href="/staff/member-management#work=member-rules">优惠叠加、券日历与会员赠礼规则</a></p>}
+      <MembershipConfigurationCenterPanel api={api} auth={auth} mode={mode==='member-rule-drafts'?'drafts':mode==='member-rule-approvals'?'approvals':'publish'} />
+      {mode==='member-rule-drafts'&&<><LoyaltyPolicyPanel viewMode="drafts" api={api} auth={auth}/><LoyaltyTierAndRedemptionPanel viewMode="drafts" api={api} auth={auth}/><TierBenefitPolicyPanel viewMode="drafts" api={api} auth={auth}/><MembershipTermsManagementPanel api={api} auth={auth}/><PromotionalLoyaltyPanel api={api} auth={auth}/></>}
     </div>
   }
   if (mode === 'member-accounts') return <div className="staff-module-body customer-experience-management">
@@ -239,7 +244,8 @@ export function CustomerExperienceManagementPanel({ api, auth, dashboard, mode =
     {id:'custody',label:'存酒办理',visible:auth.permissions.some(p=>p.startsWith('bottle.')),content:<BottleCustodyPanel key={auth.employee.id} api={api} auth={auth} />},
     {id:'member-cards',label:'会员卡',visible:auth.permissions.some(p=>p.startsWith('member.card.')),content:<><MemberCardManagementPanel api={api} auth={auth} /><MemberNumberPolicyPanel key={auth.employee.id} api={api} auth={auth} /></>},
     {id:'member-benefits',label:'权益与兑换',visible:auth.permissions.some(p=>p.startsWith('loyalty.')),content:<><LoyaltyTierAndRedemptionPanel api={api} auth={auth} /><AnnualBenefitManagementPanel api={api} auth={auth} /><TierBenefitPolicyPanel api={api} auth={auth} /></>},
-    {id:'member-marketing',label:'会员通知',visible:auth.permissions.some(p=>p.startsWith('marketing.')||p==='community.activity.manage'||p==='member.card.manage'),content:<><MarketingContactPanel api={api} auth={auth} /><SocialBroadcastPanel key={auth.employee.id} api={api} auth={auth} /><LaunchPopupPanel key={auth.employee.id} api={api} auth={auth} /><SocialAccountPanel key={auth.employee.id} api={api} auth={auth} /></>},
+    {id:'member-marketing',label:'会员通知',visible:auth.permissions.some(p=>p.startsWith('marketing.')||p==='community.activity.manage'||p==='member.card.manage'),content:<><MarketingContactPanel api={api} auth={auth} /><SocialBroadcastPanel key={auth.employee.id} api={api} auth={auth} /><LaunchPopupPanel key={auth.employee.id} api={api} auth={auth} /></>},
+    {id:'member-integrations',label:'管理员接入',visible:auth.permissions.includes('member.card.manage'),content:<SocialAccountPanel key={auth.employee.id} api={api} auth={auth}/>},
     {id:'member-rules',label:'规则与条款',visible:auth.permissions.some(p=>p.startsWith('loyalty.')||p.startsWith('membership.terms.')),content:<><MembershipConfigurationCenterPanel api={api} auth={auth} /><PromotionalLoyaltyPanel api={api} auth={auth} /><MembershipTermsManagementPanel api={api} auth={auth} /><LoyaltyEmergencyControlPanel api={api} auth={auth} /></>},
     {id:'member-recovery',label:'账户恢复',visible:auth.permissions.some(p=>p.startsWith('customer.membership.')),content:<MembershipRecoveryPanel api={api} auth={auth} />},
   ]}/></div>
@@ -318,12 +324,12 @@ function MemberAccountLookupPanel({ api, auth }: { api: NormalizedApiClient; aut
   </div></section>
 }
 
-function TierBenefitPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth: StaffAuthView }) {
+function TierBenefitPolicyPanel({ api, auth, viewMode='all' }: { api: NormalizedApiClient; auth: StaffAuthView; viewMode?:'all'|'overview'|'drafts' }) {
   const { promptAction } = useConfirmationDialog()
   const canView = auth.permissions.includes('loyalty.policy.view')
-  const canManage = auth.permissions.includes('loyalty.policy.manage')
-  const canApprove = auth.permissions.includes('loyalty.policy.approve')
-  const canPublish = auth.permissions.includes('loyalty.policy.publish')
+  const canManage = (viewMode==='all'||viewMode==='drafts') && auth.permissions.includes('loyalty.policy.manage')
+  const canApprove = viewMode==='all' && auth.permissions.includes('loyalty.policy.approve')
+  const canPublish = viewMode==='all' && auth.permissions.includes('loyalty.policy.publish')
   const canRead = canView || canManage || canApprove || canPublish
   const [configuration, setConfiguration] = useState<TierBenefitConfigurationView | null>(null)
   const [rules, setRules] = useState<TierBenefitRuleAdmin[]>([])
@@ -354,7 +360,8 @@ function TierBenefitPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth:
   if (!canView && !canManage && !canApprove && !canPublish) return null
 
   function addRule() {
-    const code = form.ruleCode.trim().toUpperCase()
+    try {
+    const code = `BENEFIT_${crypto.randomUUID().replaceAll('-','').toUpperCase()}`
     if (!/^[A-Z][A-Z0-9_]{2,63}$/.test(code)) return setNotice('规则代码需为3至64位大写字母、数字或下划线。')
     if (!form.benefitDefinitionId) return setNotice('请选择权益定义。')
     if (!form.grantOnEntry && !form.grantOnRetention) return setNotice('请至少选择“进入等级发放”或“保级发放”。')
@@ -371,6 +378,7 @@ function TierBenefitPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth:
     }])
     setForm((current) => ({ ...current, ruleCode: '' }))
     setNotice('已加入待保存规则。')
+    } catch(error) {setNotice(error instanceof Error?error.message:'请核对权益数量和有效期')}
   }
 
   async function saveDraft(event: FormEvent) {
@@ -392,14 +400,13 @@ function TierBenefitPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth:
   }
 
   function approve(_policy: TierBenefitConfigurationView['policies'][number]) {
-    setNotice('审批已移至上方“会员经营配置中心”：先生成服务端影响预览，再由未参与编辑的人审批。')
-    window.dispatchEvent(new Event('mbox:open-membership-configuration'))
+    openMembershipConfiguration('tier_benefits', _policy.id)
   }
 
   async function publish(policy: TierBenefitConfigurationView['policies'][number]) {
     const effectiveFrom = (await promptAction({
       title: '排期发布等级权益',
-      description: '请输入 ISO 格式的生效时间。',
+      description: '请选择北京时间。', inputType: 'datetime-local',
       label: '生效时间',
       confirmLabel: '继续',
       multiline: false,
@@ -427,7 +434,7 @@ function TierBenefitPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth:
     {notice && <p className="staff-module-notice" role="status">{notice}</p>}
     {canManage && <form className="staff-module-form" onSubmit={(event) => void saveDraft(event)}>
       <label>关联已发布等级规则<select required value={form.tierPolicyVersionId} onChange={(event) => setForm({ ...form, tierPolicyVersionId: event.target.value })}><option value="">请选择</option>{configuration?.tierPolicies.map((item) => <option key={item.id} value={item.id}>第{item.version}版</option>)}</select></label>
-      <label>规则代码<input value={form.ruleCode} onChange={(event) => setForm({ ...form, ruleCode: event.target.value.toUpperCase() })} placeholder="SILVER_WELCOME" /></label>
+      <p>规则编号自动生成，以所选权益名称和适用等级识别。</p>
       <label>适用等级<select value={form.eligibleTier} onChange={(event) => setForm({ ...form, eligibleTier: event.target.value as TierBenefitRuleAdmin['eligibleTier'] })}><option value="member">普通会员</option><option value="silver">银卡</option><option value="gold">金卡</option></select></label>
       <label>权益定义<select required value={form.benefitDefinitionId} onChange={(event) => setForm({ ...form, benefitDefinitionId: event.target.value })}><option value="">请选择</option>{configuration?.definitions.filter((item) => item.status === 'active').map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
       <label>发放数量<input type="number" min="1" max="100" value={form.quantity} onChange={(event) => setForm({ ...form, quantity: event.target.value })} /></label>
@@ -441,9 +448,9 @@ function TierBenefitPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth:
       <div className="activity-wide tier-benefit-draft-list">{rules.length === 0 ? <small>还没有待保存规则</small> : rules.map((item) => <span key={item.ruleCode}>{item.ruleCode} · {item.eligibleTier} · {item.quantity}份/{item.validityDays}天 <button type="button" onClick={() => setRules((current) => current.filter((candidate) => candidate.ruleCode !== item.ruleCode))}>移除</button></span>)}</div>
       <button type="submit" disabled={Boolean(busy)}>保存政策草稿</button>
     </form>}
-    <div className="activity-admin-list"><header><strong>政策版本</strong><small>生效运行完全使用强类型规则</small></header>
+    <div className="activity-admin-list"><header><strong>政策版本</strong><small>已发布规则及生效时间</small></header>
       {(configuration?.policies.length ?? 0) === 0 && <p>尚未配置等级自动权益。</p>}
-      {configuration?.policies.map((policy) => <article key={policy.id}><div><strong>等级策略{policy.tierPolicyVersion}·权益版本{policy.version} · {releaseStatusLabel(policy.status)}</strong><small>{policy.rules.map((rule) => `${rule.benefitName || rule.ruleCode}×${rule.quantity}`).join(' · ')}</small><small>{policy.reason}</small></div><div className="staff-inline-actions">{policy.status === 'draft' && canApprove && policy.draftedByEmployeeId !== auth.employee.id && <button type="button" disabled={Boolean(busy)} onClick={() => void approve(policy)}>前往配置中心审批</button>}{policy.status === 'approved' && canPublish && policy.draftedByEmployeeId !== auth.employee.id && policy.approvedByEmployeeId !== auth.employee.id && <button type="button" disabled={Boolean(busy)} onClick={() => void publish(policy)}>排期发布</button>}</div></article>)}
+      {configuration?.policies.filter(policy=>viewMode!=='overview'||policy.status==='published').map((policy) => <article key={policy.id}><div><strong>等级策略{policy.tierPolicyVersion}·权益版本{policy.version} · {releaseStatusLabel(policy.status)}</strong><small>{policy.rules.map((rule) => `${rule.benefitName || rule.ruleCode}×${rule.quantity}`).join(' · ')}</small><small>{policy.reason}</small></div><div className="staff-inline-actions">{policy.status === 'draft' && canApprove && policy.draftedByEmployeeId !== auth.employee.id && <button type="button" disabled={Boolean(busy)} onClick={() => void approve(policy)}>前往配置中心审批</button>}{policy.status === 'approved' && canPublish && policy.draftedByEmployeeId !== auth.employee.id && policy.approvedByEmployeeId !== auth.employee.id && <button type="button" disabled={Boolean(busy)} onClick={() => void publish(policy)}>排期发布</button>}</div></article>)}
     </div>
   </div></section>
 }
@@ -487,14 +494,13 @@ function MembershipTermsManagementPanel({ api, auth }: { api: NormalizedApiClien
   }
 
   function approve(_version: MembershipTermsVersionView) {
-    setNotice('审批已移至上方“会员经营配置中心”：服务端会核对条款影响和全部编辑者。')
-    window.dispatchEvent(new Event('mbox:open-membership-configuration'))
+    openMembershipConfiguration('membership_terms', _version.id)
   }
 
   async function publish(version: MembershipTermsVersionView) {
     const requestedTimeValue = await promptAction({
       title: '发布入会条款',
-      description: '填写 ISO 格式生效时间；留空表示立即生效。',
+      description: '请选择北京时间。', inputType: 'datetime-local',
       label: '生效时间（可留空）',
       confirmLabel: '继续',
       multiline: false,
@@ -658,18 +664,18 @@ function MembershipRecoveryPanel({ api, auth }: { api: NormalizedApiClient; auth
   </section>
 }
 
-function LoyaltyTierAndRedemptionPanel({ api, auth }: { api: NormalizedApiClient; auth: StaffAuthView }) {
+function LoyaltyTierAndRedemptionPanel({ api, auth, viewMode='all' }: { api: NormalizedApiClient; auth: StaffAuthView; viewMode?:'all'|'overview'|'drafts'|'fulfillment'|'exceptions' }) {
   const { confirmAction, promptAction } = useConfirmationDialog()
-  const canView = auth.permissions.includes('loyalty.policy.view')
-  const canManage = auth.permissions.includes('loyalty.policy.manage')
-  const canApprove = auth.permissions.includes('loyalty.policy.approve')
-  const canPublish = auth.permissions.includes('loyalty.policy.publish')
-  const canManageCatalog = auth.permissions.includes('loyalty.redemption.catalog.manage')
-  const canApproveCatalog = auth.permissions.includes('loyalty.redemption.catalog.approve')
-  const canPublishCatalog = auth.permissions.includes('loyalty.redemption.catalog.publish')
-  const canControl = auth.permissions.includes('loyalty.redemption.control')
-  const canFulfill = auth.permissions.includes('loyalty.redemption.fulfill')
-  const canHandleException = auth.permissions.includes('loyalty.redemption.exception')
+  const canView = !['fulfillment','exceptions'].includes(viewMode) && auth.permissions.includes('loyalty.policy.view')
+  const canManage = (viewMode==='all'||viewMode==='drafts') && auth.permissions.includes('loyalty.policy.manage')
+  const canApprove = viewMode==='all' && auth.permissions.includes('loyalty.policy.approve')
+  const canPublish = viewMode==='all' && auth.permissions.includes('loyalty.policy.publish')
+  const canManageCatalog = (viewMode==='all'||viewMode==='drafts') && auth.permissions.includes('loyalty.redemption.catalog.manage')
+  const canApproveCatalog = viewMode==='all' && auth.permissions.includes('loyalty.redemption.catalog.approve')
+  const canPublishCatalog = viewMode==='all' && auth.permissions.includes('loyalty.redemption.catalog.publish')
+  const canControl = viewMode==='all' && auth.permissions.includes('loyalty.redemption.control')
+  const canFulfill = (viewMode==='all'||viewMode==='fulfillment') && auth.permissions.includes('loyalty.redemption.fulfill')
+  const canHandleException = (viewMode==='all'||viewMode==='exceptions') && auth.permissions.includes('loyalty.redemption.exception')
   const canReadConfiguration = canView || canManageCatalog || canApproveCatalog || canPublishCatalog || canControl
   const canReadPending = canFulfill || canHandleException
   const [tiers, setTiers] = useState<LoyaltyTierPolicyView[]>([])
@@ -719,10 +725,10 @@ function LoyaltyTierAndRedemptionPanel({ api, auth }: { api: NormalizedApiClient
 
   async function draftTier(event: FormEvent) {
     event.preventDefault(); if (busy) return
-    const silver = decimalRatio(tierForm.silverMultiplier, '银卡积分倍率')
-    const gold = decimalRatio(tierForm.goldMultiplier, '金卡积分倍率')
     setBusy('tier-draft'); setNotice('')
     try {
+      const silver = decimalRatio(tierForm.silverMultiplier, '银卡积分倍率')
+      const gold = decimalRatio(tierForm.goldMultiplier, '金卡积分倍率')
       await api.postEndpoint('/api/staff/loyalty/tier-policies', {
         evaluationWindowMonths: positiveInteger(tierForm.evaluationWindowMonths, '评估窗口'),
         tierPeriodMonths: positiveInteger(tierForm.tierPeriodMonths, '等级周期'),
@@ -743,14 +749,13 @@ function LoyaltyTierAndRedemptionPanel({ api, auth }: { api: NormalizedApiClient
   }
 
   function approveTier(_policy: LoyaltyTierPolicyView) {
-    setNotice('审批已移至上方“会员经营配置中心”：客户端勾选“已看影响”不再具有审批效力。')
-    window.dispatchEvent(new Event('mbox:open-membership-configuration'))
+    openMembershipConfiguration('tier_policy', _policy.id)
   }
 
   async function publishTier(policy: LoyaltyTierPolicyView) {
     const effectiveFrom = (await promptAction({
       title: '排期发布等级规则',
-      description: '请输入 ISO 格式的生效时间。',
+      description: '请选择北京时间。', inputType: 'datetime-local',
       label: '生效时间',
       confirmLabel: '继续',
       multiline: false,
@@ -777,6 +782,8 @@ function LoyaltyTierAndRedemptionPanel({ api, auth }: { api: NormalizedApiClient
     event.preventDefault(); if (!config || busy) return
     const product = products.find((item) => item.id === itemForm.productId)
     if (!product) return setNotice('请选择有效商品。')
+    setBusy('catalog-draft'); setNotice('')
+    try {
     const latestVersion = Math.max(0, ...config.items.map((item) => item.catalogVersion))
     const previous = config.items.filter((item) => item.catalogVersion === latestVersion && item.productId !== product.id)
     const now = new Date().toISOString()
@@ -798,8 +805,6 @@ function LoyaltyTierAndRedemptionPanel({ api, auth }: { api: NormalizedApiClient
       availableUntil: itemForm.availableUntil ? localDateTimeIso(itemForm.availableUntil, '结束时间') : null,
       fulfillmentTimeoutMinutes: 240, display: { description: itemForm.description.trim() },
     }]
-    setBusy('catalog-draft'); setNotice('')
-    try {
       await api.postEndpoint('/api/staff/loyalty/redemption-catalogs', {
         reason: itemForm.reason.trim(), items,
       }, { idempotencyKey: `loyalty-redemption-catalog-${crypto.randomUUID()}` })
@@ -809,14 +814,13 @@ function LoyaltyTierAndRedemptionPanel({ api, auth }: { api: NormalizedApiClient
   }
 
   function approveCatalog(_version: RedemptionConfigurationView['versions'][number]) {
-    setNotice('审批已移至上方“会员经营配置中心”：系统会重新计算成本、库存和履约影响。')
-    window.dispatchEvent(new Event('mbox:open-membership-configuration'))
+    openMembershipConfiguration('redemption_catalog', _version.id)
   }
 
   async function publishCatalog(version: RedemptionConfigurationView['versions'][number]) {
     const effectiveFrom = (await promptAction({
       title: '排期发布兑换目录',
-      description: '请输入 ISO 格式的目录生效时间。',
+      description: '请选择北京时间。', inputType: 'datetime-local',
       label: '生效时间',
       confirmLabel: '继续',
       multiline: false,
@@ -849,10 +853,10 @@ function LoyaltyTierAndRedemptionPanel({ api, auth }: { api: NormalizedApiClient
     }))?.trim() ?? ''
     if (reason.length < 2) return setNotice('变更原因不足。')
     const pilotStartsAt = state === 'pilot' ? (await promptAction({
-      title: '设置试点开始时间', description: '请输入 ISO 格式的时间。', label: '开始时间', confirmLabel: '继续', multiline: false,
+      title: '设置试点开始时间', description: '请选择北京时间。', inputType: 'datetime-local', label: '开始时间', confirmLabel: '继续', multiline: false,
     }))?.trim() ?? '' : null
     const pilotEndsAt = state === 'pilot' ? (await promptAction({
-      title: '设置试点结束时间', description: '请输入 ISO 格式的时间。', label: '结束时间', confirmLabel: '确认变更', multiline: false,
+      title: '设置试点结束时间', description: '请选择北京时间。', inputType: 'datetime-local', label: '结束时间', confirmLabel: '确认变更', multiline: false,
     }))?.trim() ?? '' : null
     if (state === 'pilot' && (!Number.isFinite(Date.parse(pilotStartsAt!)) || !Number.isFinite(Date.parse(pilotEndsAt!)))) return setNotice('试点时间不正确。')
     setBusy(`control-${state}`); setNotice('')
@@ -879,7 +883,7 @@ function LoyaltyTierAndRedemptionPanel({ api, auth }: { api: NormalizedApiClient
       await api.postEndpoint(`/api/staff/loyalty/redemptions/${encodeURIComponent(publicId)}/fulfill`, { reason }, {
         idempotencyKey: `loyalty-redemption-fulfill-${crypto.randomUUID()}`,
       })
-      setNotice('已记录实际交付及对应商品、活动、服务或权益事实。'); await load()
+      setNotice('交付已登记，可在记录中查看商品、活动或权益明细。'); await load()
     } catch (error) { setNotice(error instanceof Error ? error.message : '兑换未完成交付') }
     finally { setBusy('') }
   }
@@ -909,8 +913,8 @@ function LoyaltyTierAndRedemptionPanel({ api, auth }: { api: NormalizedApiClient
   }
 
   return <section className="staff-module-summary loyalty-policy-panel"><div>
-    <strong>等级与积分兑换</strong>
-    <small>店长起草、运营复核、老板发布；未来版本生效前旧规则继续运行。兑换开关和实际交付另行控制。</small>
+    <strong>{viewMode==='fulfillment'?'积分兑换待交付':viewMode==='exceptions'?'积分兑换异常处理':'等级与积分兑换'}</strong>
+    <small>{viewMode==='fulfillment'?'核对兑换内容和现场交付情况后，登记交付结果。':viewMode==='exceptions'?'核对未交付原因；确认尚未履约后，按原积分批次返还。':viewMode==='overview'?'查看已发布规则与生效时间，未来版本生效前仍按原规则执行。':'由不同人员完成起草、审批和发布；未来版本生效前仍按原规则执行。兑换开关和实际交付另行办理。'}</small>
     {notice && <p className="staff-module-notice" role="status">{notice}</p>}
     {canManage && <form className="staff-module-form" onSubmit={(event) => void draftTier(event)}>
       <label>银卡升级成长值<input type="number" min="1" value={tierForm.silverUpgradeGrowth} onChange={(event) => setTierForm({ ...tierForm, silverUpgradeGrowth: event.target.value })} /></label>
@@ -925,7 +929,7 @@ function LoyaltyTierAndRedemptionPanel({ api, auth }: { api: NormalizedApiClient
       <label>配置原因<input required minLength={2} maxLength={500} value={tierForm.reason} onChange={(event) => setTierForm({ ...tierForm, reason: event.target.value })} /></label>
       <button type="submit" disabled={Boolean(busy)}>保存等级草稿</button>
     </form>}
-    <div className="activity-admin-list">{tiers.map((policy) => <article key={policy.id}><div><strong>等级版本 {policy.version} · {releaseStatusLabel(policy.status)}</strong><small>银卡 {policy.silverUpgradeGrowth}/{policy.silverRetainGrowth}；金卡 {policy.goldUpgradeGrowth}/{policy.goldRetainGrowth}；宽限 {policy.downgradeGraceDays} 天</small><small>{policy.effectiveFrom ? `生效 ${new Date(policy.effectiveFrom).toLocaleString('zh-CN')} · ` : ''}{policy.reason}</small></div><div className="staff-inline-actions">{policy.status === 'draft' && canApprove && policy.draftedByEmployeeId !== auth.employee.id && <button type="button" onClick={() => void approveTier(policy)}>前往配置中心审批</button>}{policy.status === 'approved' && canPublish && policy.draftedByEmployeeId !== auth.employee.id && policy.approvedByEmployeeId !== auth.employee.id && <button type="button" onClick={() => void publishTier(policy)}>排期发布</button>}</div></article>)}</div>
+    <div className="activity-admin-list">{tiers.filter(policy=>viewMode!=='overview'||policy.status==='published').map((policy) => <article key={policy.id}><div><strong>等级版本 {policy.version} · {releaseStatusLabel(policy.status)}</strong><small>银卡 {policy.silverUpgradeGrowth}/{policy.silverRetainGrowth}；金卡 {policy.goldUpgradeGrowth}/{policy.goldRetainGrowth}；宽限 {policy.downgradeGraceDays} 天</small><small>{policy.effectiveFrom ? `生效 ${new Date(policy.effectiveFrom).toLocaleString('zh-CN')} · ` : ''}{policy.reason}</small></div><div className="staff-inline-actions">{policy.status === 'draft' && canApprove && policy.draftedByEmployeeId !== auth.employee.id && <button type="button" onClick={() => void approveTier(policy)}>前往配置中心审批</button>}{policy.status === 'approved' && canPublish && policy.draftedByEmployeeId !== auth.employee.id && policy.approvedByEmployeeId !== auth.employee.id && <button type="button" onClick={() => void publishTier(policy)}>排期发布</button>}</div></article>)}</div>
     {canManageCatalog && <form className="staff-module-form" onSubmit={(event) => void draftCatalog(event)}>
       <label>兑换商品<select required value={itemForm.productId} onChange={(event) => setItemForm({ ...itemForm, productId: event.target.value })}><option value="">请选择</option>{products.map((product) => <option key={product.id} value={product.id}>{product.name} · 成本{money(product.costAmountMinor)}</option>)}</select></label>
       <label>所需积分<input required type="number" min="1" value={itemForm.pointsRequired} onChange={(event) => setItemForm({ ...itemForm, pointsRequired: event.target.value })} /></label>
@@ -940,24 +944,24 @@ function LoyaltyTierAndRedemptionPanel({ api, auth }: { api: NormalizedApiClient
       <label>配置原因<input required minLength={2} maxLength={500} value={itemForm.reason} onChange={(event) => setItemForm({ ...itemForm, reason: event.target.value })} /></label>
       <button type="submit" disabled={Boolean(busy)}>保存完整目录草稿</button>
     </form>}
-    <div className="activity-admin-list"><header><strong>兑换目录与开关</strong><small>当前状态：{config?.control.state ?? 'disabled'}；{config?.control.reason ?? '尚未配置'}</small></header>
-      {config?.versions.map((version) => <article key={version.id}><div><strong>目录版本 {version.version} · {releaseStatusLabel(version.status)}</strong><small>{version.itemCount}项 · {version.reason}</small></div><div className="staff-inline-actions">{version.status === 'draft' && canApproveCatalog && version.draftedByEmployeeId !== auth.employee.id && <button type="button" onClick={() => void approveCatalog(version)}>前往配置中心审批</button>}{version.status === 'approved' && canPublishCatalog && version.draftedByEmployeeId !== auth.employee.id && version.approvedByEmployeeId !== auth.employee.id && <button type="button" onClick={() => void publishCatalog(version)}>排期发布</button>}</div></article>)}
+    {canReadConfiguration && <div className="activity-admin-list"><header><strong>兑换目录与开关</strong><small>当前状态：{({disabled:'关闭',pilot:'试点开放',enabled:'正式开放',paused:'已暂停'} as Record<string,string>)[config?.control.state??'disabled']??'状态待核对'}；{config?.control.reason ?? '尚未配置'}</small></header>
+      {config?.versions.filter(version=>viewMode!=='overview'||version.status==='published').map((version) => <article key={version.id}><div><strong>目录版本 {version.version} · {releaseStatusLabel(version.status)}</strong><small>{version.itemCount}项 · {version.reason}</small></div><div className="staff-inline-actions">{version.status === 'draft' && canApproveCatalog && version.draftedByEmployeeId !== auth.employee.id && <button type="button" onClick={() => void approveCatalog(version)}>前往配置中心审批</button>}{version.status === 'approved' && canPublishCatalog && version.draftedByEmployeeId !== auth.employee.id && version.approvedByEmployeeId !== auth.employee.id && <button type="button" onClick={() => void publishCatalog(version)}>排期发布</button>}</div></article>)}
       {canControl && <div className="staff-module-actions"><button type="button" onClick={() => void setControl('pilot')}>试点开放</button><button type="button" onClick={() => void setControl('enabled')}>正式开放</button><button type="button" onClick={() => void setControl('paused')}>暂停</button><button type="button" onClick={() => void setControl('disabled')}>关闭</button></div>}
-    </div>
-    {(canFulfill || canHandleException) && <div className="activity-admin-list"><header><strong>待实际交付</strong><small>商品需在制作与送达页面完成交付；确认尚未履约的门店失败才允许按原积分批次返还</small></header>{pending.length === 0 && <p>当前没有待交付兑换。</p>}{pending.map((item) => <article key={item.publicId} data-staff-todo-id={`redemption:${item.publicId}`}><div><strong>{item.memberNo} · {item.itemName}</strong><small>{item.pointsUsed}积分 · {({ product: '商品', benefit: '会员权益', activity: '活动名额', service: '现场服务' } as Record<string, string>)[item.fulfillmentKind] ?? '交付方式待确认'} · 截止{new Date(item.expiresAt).toLocaleString('zh-CN')}</small></div><div className="staff-inline-actions">{canFulfill && <button type="button" disabled={Boolean(busy)} onClick={() => void fulfill(item.publicId)}>确认已交付</button>}{canHandleException && <button type="button" className="is-danger" disabled={Boolean(busy)} onClick={() => void failRedemption(item)}>确认尚未交付，退回积分</button>}</div></article>)}</div>}
+    </div>}
+    {(canFulfill || canHandleException) && <div className="activity-admin-list"><header><strong>{viewMode==='exceptions'?'兑换异常处理':'待实际交付'}</strong><small>商品需在制作与送达页面完成交付；确认尚未履约的门店失败才允许按原积分批次返还</small></header>{pending.length === 0 && <p>当前没有待交付兑换。</p>}{pending.map((item) => <article key={item.publicId} data-staff-todo-id={`redemption:${item.publicId}`}><div><strong>{item.memberNo} · {item.itemName}</strong><small>{item.pointsUsed}积分 · {({ product: '商品', benefit: '会员权益', activity: '活动名额', service: '现场服务' } as Record<string, string>)[item.fulfillmentKind] ?? '交付方式待确认'} · 截止{new Date(item.expiresAt).toLocaleString('zh-CN')}</small></div><div className="staff-inline-actions">{canFulfill && <button type="button" disabled={Boolean(busy)} onClick={() => void fulfill(item.publicId)}>确认已交付</button>}{canHandleException && <button type="button" className="is-danger" disabled={Boolean(busy)} onClick={() => void failRedemption(item)}>确认尚未交付，退回积分</button>}</div></article>)}</div>}
   </div></section>
 }
 
-function LoyaltyPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth: StaffAuthView }) {
+function LoyaltyPolicyPanel({ api, auth, viewMode='all' }: { api: NormalizedApiClient; auth: StaffAuthView; viewMode?:'all'|'overview'|'drafts'|'exceptions' }) {
   const { promptAction } = useConfirmationDialog()
   const canView = auth.permissions.includes('loyalty.policy.view')
-  const canManage = auth.permissions.includes('loyalty.policy.manage')
-  const canApprove = auth.permissions.includes('loyalty.policy.approve')
-  const canPublish = auth.permissions.includes('loyalty.policy.publish')
+  const canManage = (viewMode==='all'||viewMode==='drafts') && auth.permissions.includes('loyalty.policy.manage')
+  const canApprove = viewMode==='all' && auth.permissions.includes('loyalty.policy.approve')
+  const canPublish = viewMode==='all' && auth.permissions.includes('loyalty.policy.publish')
   const canRead = canView || canManage || canApprove || canPublish
-  const canViewExceptions = auth.permissions.includes('loyalty.accrual.exception.view')
-  const canRequestSupplement = auth.permissions.includes('loyalty.accrual.request')
-  const canApproveSupplement = auth.permissions.includes('loyalty.accrual.approve')
+  const canViewExceptions = (viewMode==='all'||viewMode==='exceptions') && auth.permissions.includes('loyalty.accrual.exception.view')
+  const canRequestSupplement = (viewMode==='all'||viewMode==='exceptions') && auth.permissions.includes('loyalty.accrual.request')
+  const canApproveSupplement = (viewMode==='all'||viewMode==='exceptions') && auth.permissions.includes('loyalty.accrual.approve')
   const [policies, setPolicies] = useState<LoyaltyPolicyView[]>([])
   const [reconciliation, setReconciliation] = useState<LoyaltyReconciliationView[]>([])
   const [supplements, setSupplements] = useState<LoyaltySupplementView[]>([])
@@ -1006,21 +1010,20 @@ function LoyaltyPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth: Sta
         pointsValidityMonths: positiveInteger(form.pointsValidityMonths, '积分有效月数'),
         reason: form.reason.trim(),
       }, { idempotencyKey: `loyalty-policy-draft-${crypto.randomUUID()}` })
-      setNotice('新规则已保存为草稿，必须由另一名授权人员复核后才会生效。')
+      setNotice('新规则已保存为草稿，还需另一名授权人员审批、第三人发布后按生效时间执行。')
       await load()
     } catch (error) { setNotice(error instanceof Error ? error.message : '会员规则草稿未保存') }
     finally { setBusy('') }
   }
 
   function approve(_policy: LoyaltyPolicyView) {
-    setNotice('审批已移至上方“会员经营配置中心”：必须使用服务端持久化的限时影响预览。')
-    window.dispatchEvent(new Event('mbox:open-membership-configuration'))
+    openMembershipConfiguration('base_points', _policy.id)
   }
 
   async function publish(policy: LoyaltyPolicyView) {
     const effectiveFrom = (await promptAction({
       title: '排期发布积分规则',
-      description: '请输入 ISO 格式的生效时间，例如 2026-08-20T12:00:00+08:00。',
+      description: '请选择北京时间。', inputType: 'datetime-local',
       label: '生效时间',
       confirmLabel: '继续',
       multiline: false,
@@ -1077,7 +1080,7 @@ function LoyaltyPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth: Sta
       await api.postEndpoint(`/api/staff/loyalty/supplement-requests/${encodeURIComponent(item.publicId)}/${decision}`, {
         reason,
       }, { idempotencyKey: `loyalty-supplement-${decision}-${crypto.randomUUID()}` })
-      setNotice(decision === 'approve' ? '补发已复核并原子入账。' : '补发申请已驳回。')
+      setNotice(decision === 'approve' ? '补发已复核，积分已入账。' : '补发申请已驳回。')
       await load()
     } catch (error) { setNotice(error instanceof Error ? error.message : '补发申请未处理') }
     finally { setBusy('') }
@@ -1089,18 +1092,16 @@ function LoyaltyPolicyPanel({ api, auth }: { api: NormalizedApiClient; auth: Sta
       <small>积分与成长值分账；起草、审批、发布由不同人员完成，未来排期不会让当前规则提前失效。</small>
       {notice && <p className="staff-module-notice" role="status">{notice}</p>}
       {canManage && <form className="staff-module-form" onSubmit={(event) => void draft(event)}>
-        <label>每多少分消费<input type="number" min="1" value={form.pointsDenominatorMinor} onChange={(event) => setForm({ ...form, pointsDenominatorMinor: event.target.value })} /></label>
-        <label>获得积分<input type="number" min="0" value={form.pointsNumerator} onChange={(event) => setForm({ ...form, pointsNumerator: event.target.value })} /></label>
-        <label>每多少分消费获得成长值<input type="number" min="1" value={form.growthDenominatorMinor} onChange={(event) => setForm({ ...form, growthDenominatorMinor: event.target.value })} /></label>
-        <label>成长值<input type="number" min="0" value={form.growthNumerator} onChange={(event) => setForm({ ...form, growthNumerator: event.target.value })} /></label>
+        <BusinessRatioFields content={{pointsNumerator:Number(form.pointsNumerator),pointsDenominatorMinor:Number(form.pointsDenominatorMinor),growthNumerator:Number(form.growthNumerator),growthDenominatorMinor:Number(form.growthDenominatorMinor)}} onChange={next=>setForm(current=>({...current,pointsNumerator:String(next.pointsNumerator),pointsDenominatorMinor:String(next.pointsDenominatorMinor),growthNumerator:String(next.growthNumerator),growthDenominatorMinor:String(next.growthDenominatorMinor)}))}/>
+
         <label>取整方式<select value={form.roundingMode} onChange={(event) => setForm({ ...form, roundingMode: event.target.value })}><option value="floor">向下取整</option><option value="nearest">四舍五入</option></select></label>
         <label>积分有效期（月）<input type="number" min="1" max="120" value={form.pointsValidityMonths} onChange={(event) => setForm({ ...form, pointsValidityMonths: event.target.value })} /></label>
         <label>配置原因<input required minLength={2} maxLength={500} value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} /></label>
         <button type="submit" disabled={busy === 'draft'}>{busy === 'draft' ? '正在保存' : '保存新版本草稿'}</button>
       </form>}
       <div className="activity-admin-list">
-        {policies.map((policy) => <article key={policy.id}>
-          <div><strong>版本 {policy.version} · {releaseStatusLabel(policy.status)}</strong><small>{policy.pointsDenominatorMinor}分消费得{policy.pointsNumerator}积分；{policy.growthDenominatorMinor}分消费得{policy.growthNumerator}成长值；有效{policy.pointsValidityMonths}个月</small><small>{policy.effectiveFrom ? `生效 ${new Date(policy.effectiveFrom).toLocaleString('zh-CN')} · ` : ''}{policy.reason}</small></div>
+        {policies.filter(policy=>viewMode!=='overview'||policy.status==='published').map((policy) => <article key={policy.id}>
+          <div><strong>版本 {policy.version} · {releaseStatusLabel(policy.status)}</strong><small>{money(policy.pointsDenominatorMinor)}消费得{policy.pointsNumerator}积分；{money(policy.growthDenominatorMinor)}消费得{policy.growthNumerator}成长值；有效{policy.pointsValidityMonths}个月</small><small>{policy.effectiveFrom ? `生效 ${new Date(policy.effectiveFrom).toLocaleString('zh-CN')} · ` : ''}{policy.reason}</small></div>
           <div className="staff-inline-actions">{policy.status === 'draft' && canApprove && policy.draftedByEmployeeId !== auth.employee.id && <button type="button" disabled={Boolean(busy)} onClick={() => void approve(policy)}>前往配置中心审批</button>}{policy.status === 'approved' && canPublish && policy.draftedByEmployeeId !== auth.employee.id && policy.approvedByEmployeeId !== auth.employee.id && <button type="button" disabled={Boolean(busy)} onClick={() => void publish(policy)}>排期发布</button>}</div>
         </article>)}
       </div>

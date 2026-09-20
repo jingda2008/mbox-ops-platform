@@ -1063,7 +1063,7 @@ export function OwnerFinancePanel({
             <header>
               <strong>{editingPayrollLine ? "编辑员工工资明细" : currentDraft ? "追加员工到本期草稿" : "建立工资草稿"}</strong>
               <small>
-                基本工资由服务端薪资标准×计薪数量计算；应发=基本工资+加班+奖金+提成+补贴；实发=应发−员工代扣；经营成本=应发+雇主承担。缺勤应减少计薪数量，不要填入员工代扣。
+                基本工资按薪资标准×计薪数量计算；应发=基本工资+加班+奖金+提成+补贴；实发=应发−员工代扣；经营成本=应发+雇主承担。缺勤应减少计薪数量，不要填入员工代扣。
               </small>
             </header>
             <SelectEmployee

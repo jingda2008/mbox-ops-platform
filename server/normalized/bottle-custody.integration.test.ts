@@ -1,4 +1,5 @@
 import {SocialAccountRepository} from './social-account-repository.js'
+import {readSheet} from 'read-excel-file/node'
 import sharp from 'sharp'
 import {CustomerCustodyRepository} from './customer-custody-repository.js'
 import {custodyReport} from './custody-report.js'
@@ -209,6 +210,14 @@ integration('v9 member custody with real PostgreSQL transactions',()=>{
   expect(result.summary.find(s=>s.type==='custody')?.amount_minor).toBe('12000')
   const sales=await runner.run(scope,tx=>custodyReport(tx,{scope:'sales',offset:0}));expect(sales.items).toHaveLength(1)
   await expect(run(repo=>repo.exportReport({scope:'all'},employee))).rejects.toThrow()
+  const workbook=await run(repo=>repo.exportReport({scope:'custody',memberNo:'100001'},employee))
+  const exported=await readSheet(Buffer.from(workbook.base64,'base64'))
+  const amountRows=exported.slice(1).filter(row=>row[4]==='金额测试')
+  expect(amountRows).toHaveLength(2)
+  expect(amountRows.map(row=>row[7]).sort()).toEqual(['50.00','70.00'])
+  for(const row of amountRows){
+   expect(row[6]).toBe('在存');expect(row[8]).toBe('存酒登记价值（非收入）');expect(row[9]).toBe('人民币（元）')
+  }
  })
  it('enforces store isolation for runtime access',async()=>{
   const {order}=await create()

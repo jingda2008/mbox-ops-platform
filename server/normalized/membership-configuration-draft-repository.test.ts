@@ -1,3 +1,6 @@
+import Fastify from 'fastify'
+import {membershipConfigurationApiPlugin} from './membership-configuration-api.js'
+import {NormalizedCommandExecutor} from './command-executor.js'
 import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
 import { afterAll,beforeAll,describe,expect,it } from 'vitest'
@@ -204,6 +207,24 @@ integration('membership configuration saved drafts and server impact evidence',(
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND configuration_id=ANY($3::uuid[])
     `,[ids.tenant,ids.store,domains.map(configurationId)])
     expect(approvals.rows[0]?.count).toBe(7)
+  })
+
+  it('publishes managed notifications through the third-person endpoint exactly once and returns scheduling data for all domains',async()=>{
+    const role=randomUUID();
+    await pool.query(`INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,'NOTIFICATION_TEST','通知规则发布测试')`,[role,ids.tenant,ids.store]);
+    await pool.query(`INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id)
+      SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code IN ('loyalty.policy.publish','loyalty.configuration.view')`,[ids.tenant,ids.store,role]);
+    for(const employee of [ids.drafter,ids.editor,ids.approver,ids.publisher])await pool.query(`INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id) VALUES($1,$2,$3,$4)`,[ids.tenant,ids.store,employee,role]);
+    const app=Fastify();await app.register(membershipConfigurationApiPlugin,{commands:new NormalizedCommandExecutor(runner),transactions:runner,resolveStaffContext:request=>({scope:{tenantId:ids.tenant,storeId:ids.store},employeeId:String(request.headers['x-employee-id']),businessDate:'2026-09-20'})});
+    try{
+      const draft=await service.get('wechat_notifications',ids.notification),start=new Date(Date.now()+3600_000).toISOString();
+      const publish=(employee:string,key:string)=>app.inject({method:'POST',url:`/staff/loyalty/configuration-center/wechat_notifications/${ids.notification}/publish`,headers:{'x-employee-id':employee,'idempotency-key':key},payload:{expectedRevision:draft.revision,effectiveFrom:start,effectiveUntil:null,reason:'三人复核后排期发布'}});
+      for(const employee of [ids.drafter,ids.editor,ids.approver]){const response=await publish(employee,randomUUID());expect(response.statusCode,response.body).toBe(409)}
+      const response=await publish(ids.publisher,'notification-publish-review-01');expect(response.statusCode,response.body).toBe(200);expect(response.json().data).toMatchObject({status:'published',effectiveFrom:start});
+      expect((await publish(ids.publisher,'notification-publish-review-01')).json().meta.replayed).toBe(true);
+      const count=await pool.query(`SELECT count(*)::int AS n FROM mbox.audit_events WHERE tenant_id=$1 AND store_id=$2 AND action='membership.notification.publish'`,[ids.tenant,ids.store]);expect(count.rows[0].n).toBe(1);
+      const list=await app.inject({method:'GET',url:'/staff/loyalty/configuration-center',headers:{'x-employee-id':ids.publisher}});expect(list.statusCode,list.body).toBe(200);expect(list.json().data.filter((entry:{configurationId:string})=>domains.map(configurationId).includes(entry.configurationId))).toHaveLength(7);expect(list.json().data.find((entry:{domain:string})=>entry.domain==='wechat_notifications')).toMatchObject({status:'published',effectiveFrom:start,approvedByEmployeeId:ids.approver});
+    }finally{await app.close()}
   })
 
   it('enforces publisher separation in PostgreSQL after approval',async()=>{

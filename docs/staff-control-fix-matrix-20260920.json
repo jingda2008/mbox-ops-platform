@@ -1,0 +1,261 @@
+[
+  {
+    "id": "SYS-287",
+    "priority": "P1",
+    "title": "损耗登记丢失返回后重试，再次扣库存",
+    "implementation": "冻结损耗内容和原请求编号，按员工隔离恢复；已成功但列表读取失败时只刷新结果。",
+    "verification": "丢返回→刷新页面→关闭页面再进入→恢复原登记，流水编号相同且仅一次扣减；恢复模块7项单测，导航/北京时间2项单测。",
+    "status": "已修复，本地逐项验证通过；待发布及岗位验收",
+    "production": "未部署；岗位/实物验收未关闭",
+    "verifiedAtBeijing": "2026-09-20 23:44 CST",
+    "implementationFiles": [
+      "src/normalized-ui/InventoryWastePanel.tsx",
+      "src/normalized-ui/durable-staff-command.ts"
+    ],
+    "evidence": "docs/quality/evidence/staff-control-fixes-20260920/validation-summary.json"
+  },
+  {
+    "id": "SYS-288",
+    "priority": "P1",
+    "title": "新物料损耗限额为0，超限后没有审批办理路径",
+    "implementation": "零限额及超限损耗生成待复核申请；申请人不能自批；独立通过时重新核对库存，驳回不扣库存。",
+    "verification": "PostgreSQL提交、重放、自批拒绝、无权限拒绝、独立批准、驳回、库存不足；浏览器默认0限额。",
+    "status": "已修复，本地逐项验证通过；待发布及岗位验收",
+    "production": "未部署；岗位/实物验收未关闭",
+    "verifiedAtBeijing": "2026-09-20 23:44 CST",
+    "implementationFiles": [
+      "database/normalized-migrations/223_inventory_waste_review.sql",
+      "server/normalized/inventory-waste-repository.ts",
+      "server/normalized/inventory-api.ts"
+    ],
+    "evidence": "docs/quality/evidence/staff-control-fixes-20260920/validation-summary.json"
+  },
+  {
+    "id": "SYS-289",
+    "priority": "P2",
+    "title": "前往配置中心审批按钮没有可见目的地",
+    "implementation": "原审批按钮导航到专用审批页，携带规则类型和同一草稿编号并自动选中。",
+    "verification": "浏览器真实创建等级草稿后，以另一岗位一次点击定位；六类旧入口均接同一导航函数。",
+    "status": "已修复，本地逐项验证通过；待发布及岗位验收",
+    "production": "未部署；岗位/实物验收未关闭",
+    "verifiedAtBeijing": "2026-09-20 23:44 CST",
+    "implementationFiles": [
+      "src/normalized-ui/membership-workflow.ts",
+      "src/normalized-ui/CustomerExperienceManagementPanel.tsx"
+    ],
+    "evidence": "docs/quality/evidence/staff-control-fixes-20260920/validation-summary.json"
+  },
+  {
+    "id": "SYS-290",
+    "priority": "P2",
+    "title": "核对库存成本打开的是隐藏分区中的表单",
+    "implementation": "先切到库存分区再打开成本核对；返回原商品时仅刷新成本，保留商品未保存内容并拒收旧商品的迟到成本。",
+    "verification": "具有界面能力的隔离夹具验证入口可见、返回保留编辑；服务端原成本更正权限/数据库用例保留。",
+    "status": "已修复，本地逐项验证通过；待发布及岗位验收",
+    "production": "未部署；岗位/实物验收未关闭",
+    "verifiedAtBeijing": "2026-09-20 23:44 CST",
+    "implementationFiles": [
+      "src/normalized-ui/StaffModulePanel.tsx",
+      "src/normalized-ui/CatalogManagementPanel.tsx",
+      "src/normalized-ui/TaskSections.tsx"
+    ],
+    "evidence": "docs/quality/evidence/staff-control-fixes-20260920/validation-summary.json"
+  },
+  {
+    "id": "SYS-291",
+    "priority": "P2",
+    "title": "只读概览、权益待办和异常页的说明与实际内容不符",
+    "implementation": "概览只读，规则起草/审批/发布各自限定动作；待交付与异常页仅呈现对应办理动作和说明。",
+    "verification": "浏览器检查概览零写表单、零保存/审批/发布入口；待办和异常无等级/目录编辑表单。",
+    "status": "已修复，本地逐项验证通过；待发布及岗位验收",
+    "production": "未部署；岗位/实物验收未关闭",
+    "verifiedAtBeijing": "2026-09-20 23:44 CST",
+    "implementationFiles": [
+      "src/normalized-ui/CustomerExperienceManagementPanel.tsx",
+      "src/normalized-ui/AnnualBenefitManagementPanel.tsx"
+    ],
+    "evidence": "docs/quality/evidence/staff-control-fixes-20260920/validation-summary.json"
+  },
+  {
+    "id": "SYS-292",
+    "priority": "P2",
+    "title": "输入校验抛错后页面没有提示",
+    "implementation": "把倍率、数量和日期校验纳入错误反馈，非法值不产生未捕获异常；金额精度由输入控件直接校验。",
+    "verification": "空倍率、负数/非整数边界约束、金额第三位小数、非法库存与终身上限；浏览器与精确数值单测。",
+    "status": "已修复，本地逐项验证通过；待发布及岗位验收",
+    "production": "未部署；岗位/实物验收未关闭",
+    "verifiedAtBeijing": "2026-09-20 23:44 CST",
+    "implementationFiles": [
+      "src/normalized-ui/CustomerExperienceManagementPanel.tsx",
+      "src/normalized-ui/PromotionalLoyaltyPanel.tsx",
+      "src/normalized-ui/ScaledNumberField.tsx"
+    ],
+    "evidence": "docs/quality/evidence/staff-control-fixes-20260920/validation-summary.json"
+  },
+  {
+    "id": "SYS-293",
+    "priority": "P2",
+    "title": "快速切换规则时旧响应覆盖最后选中的规则",
+    "implementation": "每次选取规则递增读取序号，迟到响应不能覆盖最后选择；失败保留目标并提供重读。",
+    "verification": "浏览器延迟A响应后选择B，最终仍为B；原草稿切换输入有效性测试继续运行。",
+    "status": "已修复，本地逐项验证通过；待发布及岗位验收",
+    "production": "未部署；岗位/实物验收未关闭",
+    "verifiedAtBeijing": "2026-09-20 23:44 CST",
+    "implementationFiles": [
+      "src/normalized-ui/MembershipConfigurationCenterPanel.tsx"
+    ],
+    "evidence": "docs/quality/evidence/staff-control-fixes-20260920/validation-summary.json"
+  },
+  {
+    "id": "SYS-294",
+    "priority": "P2",
+    "title": "不限库存改为数量时提交成文字，保存被拒绝",
+    "implementation": "可空库存、日库存和终身上限使用明确整数输入，清空恢复null；提前提醒单独解释为空的含义。",
+    "verification": "浏览器总量10、每日0、终身5及清空回null；终身0被阻止，后端数据库字段仍为整数/null。",
+    "status": "已修复，本地逐项验证通过；待发布及岗位验收",
+    "production": "未部署；岗位/实物验收未关闭",
+    "verifiedAtBeijing": "2026-09-20 23:44 CST",
+    "implementationFiles": [
+      "src/normalized-ui/membership-business-inputs.tsx",
+      "src/normalized-ui/MembershipConfigurationCenterPanel.tsx"
+    ],
+    "evidence": "docs/quality/evidence/staff-control-fixes-20260920/validation-summary.json"
+  },
+  {
+    "id": "SYS-295",
+    "priority": "P2",
+    "title": "草稿保存成功提示被随后的刷新清空",
+    "implementation": "区分已完成写入和随后读取失败；成功信息不被列表刷新清空，发布结果也保留明确反馈。",
+    "verification": "真实保存后回读；注入503仅显示读取失败，仍保留草稿已保存；七类发布结果可见。",
+    "status": "已修复，本地逐项验证通过；待发布及岗位验收",
+    "production": "未部署；岗位/实物验收未关闭",
+    "verifiedAtBeijing": "2026-09-20 23:44 CST",
+    "implementationFiles": [
+      "src/normalized-ui/MembershipConfigurationCenterPanel.tsx",
+      "src/normalized-ui/MembershipPublicationForm.tsx"
+    ],
+    "evidence": "docs/quality/evidence/staff-control-fixes-20260920/validation-summary.json"
+  },
+  {
+    "id": "SYS-296",
+    "priority": "P2",
+    "title": "有活动配置权限的副店长打不开小程序弹窗表单",
+    "implementation": "弹窗及会员卡接入按各自业务权限读取最小商品选项，采用分页；一个依赖失败不清掉已读配置。",
+    "verification": "原副店长账号弹窗加载无403且可选择商品；原商品编辑/价格权限没有放宽。",
+    "status": "已修复，本地逐项验证通过；待发布及岗位验收",
+    "production": "未部署；岗位/实物验收未关闭",
+    "verifiedAtBeijing": "2026-09-20 23:44 CST",
+    "implementationFiles": [
+      "server/normalized/launch-popup-api.ts",
+      "server/normalized/social-account-api.ts",
+      "src/normalized-ui/LaunchPopupPanel.tsx"
+    ],
+    "evidence": "docs/quality/evidence/staff-control-fixes-20260920/validation-summary.json"
+  },
+  {
+    "id": "SYS-297",
+    "priority": "P2",
+    "title": "窄屏会员通知页出现横向溢出",
+    "implementation": "微信接入移到管理员分区；长文字换行，容器及表单允许收窄，手机单列。",
+    "verification": "320/360/390/844浏览器无横向溢出；真机软键盘与原生壳仍需设备验收。",
+    "status": "已修复，本地逐项验证通过；待发布及岗位验收",
+    "production": "未部署；岗位/实物验收未关闭",
+    "verifiedAtBeijing": "2026-09-20 23:44 CST",
+    "implementationFiles": [
+      "src/normalized-ui/social-account-panel.css",
+      "src/normalized-ui/SocialAccountPanel.tsx"
+    ],
+    "evidence": "docs/quality/evidence/staff-control-fixes-20260920/validation-summary.json"
+  },
+  {
+    "id": "SYS-298",
+    "priority": "P2",
+    "title": "同类经营设置混用元、分、基点和万分比",
+    "implementation": "界面金额用元、比例用百分比；仅在接口边界精确换成分和基点，不使用浮点四舍五入掩盖额外精度。",
+    "verification": "真实保存回读1元=100分、1%=100基点、0.01元=1分、0.29元=29分；升级及推荐草稿。",
+    "status": "已修复，本地逐项验证通过；待发布及岗位验收",
+    "production": "未部署；岗位/实物验收未关闭",
+    "verifiedAtBeijing": "2026-09-20 23:44 CST",
+    "implementationFiles": [
+      "src/normalized-ui/ScaledNumberField.tsx",
+      "src/normalized-ui/CheckoutUpgradeManagementPanel.tsx",
+      "src/normalized-ui/RecommendationPolicyManagementPanel.tsx"
+    ],
+    "evidence": "docs/quality/evidence/staff-control-fixes-20260920/validation-summary.json"
+  },
+  {
+    "id": "SYS-299",
+    "priority": "P2",
+    "title": "仍有内部状态值、类型值和记录编号直接显示",
+    "implementation": "按存酒、消费、报名、联系方式和微信处理分别翻译状态；未知值给出核对入口；诊断编号折叠；报表导出同步。",
+    "verification": "11种报表状态界面夹具；实际PostgreSQL报表生成XLSX并解析；币种/非实收口径保留。",
+    "status": "已修复，本地逐项验证通过；待发布及岗位验收",
+    "production": "未部署；岗位/实物验收未关闭",
+    "verifiedAtBeijing": "2026-09-20 23:44 CST",
+    "implementationFiles": [
+      "src/shared/staff-business-labels.ts",
+      "src/normalized-ui/CustodyReportPanel.tsx",
+      "server/normalized/bottle-custody-repository.ts"
+    ],
+    "evidence": "docs/quality/evidence/staff-control-fixes-20260920/validation-summary.json"
+  },
+  {
+    "id": "SYS-300",
+    "priority": "P2",
+    "title": "面向员工的说明仍混入大量实现术语",
+    "implementation": "按60项处置表替换或保留文案；中文选择替代代码输入，规则/登记项目/会员卡编号自动生成，技术接入参数保留在管理分区。",
+    "verification": "60/60源码锚点核对，详见独立CSV/JSON；保留观察事实与推测、收入与应付、受理与发送完成的区别。",
+    "status": "已修复，本地逐项验证通过；待发布及岗位验收",
+    "production": "未部署；岗位/实物验收未关闭",
+    "verifiedAtBeijing": "2026-09-20 23:44 CST",
+    "implementationFiles": [
+      "docs/staff-copy-fixes-20260920.csv"
+    ],
+    "evidence": "docs/quality/evidence/staff-control-fixes-20260920/validation-summary.json"
+  },
+  {
+    "id": "SYS-301",
+    "priority": "P2",
+    "title": "会员发布页未承载其他规则的发布动作",
+    "implementation": "统一中心提供全部七类规则发布，显示生效时间及后续调整路径；补齐受保护的微信通知发布命令，三人分离和原请求重放。",
+    "verification": "七类界面路由/北京时间/反馈夹具；既有六类真实数据库发布测试，加新增通知发布/防自批/重放集成测试。",
+    "status": "已修复，本地逐项验证通过；待发布及岗位验收",
+    "production": "未部署；岗位/实物验收未关闭",
+    "verifiedAtBeijing": "2026-09-20 23:44 CST",
+    "implementationFiles": [
+      "src/normalized-ui/MembershipPublicationForm.tsx",
+      "server/normalized/membership-notification-publication.ts",
+      "server/normalized/membership-configuration-api.ts"
+    ],
+    "evidence": "docs/quality/evidence/staff-control-fixes-20260920/validation-summary.json"
+  },
+  {
+    "id": "SYS-302",
+    "priority": "P3",
+    "title": "酒水上架步骤编号互相矛盾",
+    "implementation": "以现有原子收货发布流程统一四步：建物料/收货草稿→销售规格与配方→生成完整预览→确认入库并发布。",
+    "verification": "浏览器主指引四步，无第五步；商品说明对应第2—4步；原数据库收货与发布原子性测试保留。",
+    "status": "已修复，本地逐项验证通过；待发布及岗位验收",
+    "production": "未部署；岗位/实物验收未关闭",
+    "verifiedAtBeijing": "2026-09-20 23:44 CST",
+    "implementationFiles": [
+      "src/normalized-ui/StaffModulePanel.tsx",
+      "src/normalized-ui/CatalogManagementPanel.tsx"
+    ],
+    "evidence": "docs/quality/evidence/staff-control-fixes-20260920/validation-summary.json"
+  },
+  {
+    "id": "SYS-303",
+    "priority": "P3",
+    "title": "月度演出表折叠入口触控高度偏小",
+    "implementation": "月度演出表折叠入口触控高度44像素，保留原生details/summary键盘与展开语义。",
+    "verification": "浏览器实测44px，Enter展开、Space收起；真实手机触感与读屏另验。",
+    "status": "已修复，本地逐项验证通过；待发布及岗位验收",
+    "production": "未部署；岗位/实物验收未关闭",
+    "verifiedAtBeijing": "2026-09-20 23:44 CST",
+    "implementationFiles": [
+      "src/normalized-ui/performance-revision-panel.css"
+    ],
+    "evidence": "docs/quality/evidence/staff-control-fixes-20260920/validation-summary.json"
+  }
+]

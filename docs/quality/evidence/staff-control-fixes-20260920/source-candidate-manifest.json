@@ -1,0 +1,1281 @@
+{
+  "baseCommit": "5c4bde7de5ed154ab3dd9227a64751dcc65293eb",
+  "branch": "audit/staff-every-control-20260920",
+  "dirtyCandidate": true,
+  "candidateSourceSha256": "1b66c43e2df6d930edaab6733f6895c49d6f975485c23d6f5dcfa5d0066c26a7",
+  "trackedSourceDiffSha256": "f779aea1e04a0bab696f6a985a013ccc2be552423689ae27495dad4ce96e8cc9",
+  "scope": "Baseline commit plus modified/new non-document files. This is a local uncommitted candidate, not an immutable release SHA.",
+  "files": [
+    {
+      "path": "database/normalized-migrations/223_inventory_waste_review.sql",
+      "sha256": "2b9cb8471dfe89263b5bf6b87c19877c73a24db6250b5995bfdab755e399e650",
+      "bytes": 3341
+    },
+    {
+      "path": "scripts/audit-staff-closure.mjs",
+      "sha256": "5db0090038d8d31be5a7ecb0cb43d737c140461ac2ebf62ed71f04d71a801637",
+      "bytes": 19252
+    },
+    {
+      "path": "scripts/audit-staff-controls.mjs",
+      "sha256": "622e516910fb72c22305768b1142b17345806c9fca25da74131e6651c1ef7528",
+      "bytes": 11800
+    },
+    {
+      "path": "scripts/audit-staff-pages.mjs",
+      "sha256": "ae8bdcb485531b1b56a405bef69d4dbf793bb5e0bbbb948caa8b158d516b61b2",
+      "bytes": 8636
+    },
+    {
+      "path": "scripts/export-staff-audit.mjs",
+      "sha256": "737e540e68781ea06a35500ba74c338a77be8c437fa998dad7d980244373e2bd",
+      "bytes": 7386
+    },
+    {
+      "path": "scripts/verify-staff-control-fixes.mjs",
+      "sha256": "fb66fcb22ba181c128347fdbbc7504e96a1b7de1e92f9d0164b3c0e550872393",
+      "bytes": 28036
+    },
+    {
+      "path": "server/migrate-normalized.test.ts",
+      "sha256": "aba01ab91c4f7becf25a9290c3f5ecca05080434b5978af91b74a02198bc7531",
+      "bytes": 84644
+    },
+    {
+      "path": "server/normalized/bottle-custody-repository.ts",
+      "sha256": "68e844bcd1b41b7b45adc92f396b53acab7bd5c2e5e39b7b7bf0eb09eec1a3d3",
+      "bytes": 29177
+    },
+    {
+      "path": "server/normalized/bottle-custody.integration.test.ts",
+      "sha256": "21f4d9852a3ccd28c85c7fa8ba4fc2a287ba6f07c05a3a5ad54b1e3b157eff70",
+      "bytes": 26320
+    },
+    {
+      "path": "server/normalized/inventory-api.test.ts",
+      "sha256": "49ed5703549c76dc1a6772757bb921fa8c9a035437916fd1452690bdbc002ade",
+      "bytes": 72463
+    },
+    {
+      "path": "server/normalized/inventory-api.ts",
+      "sha256": "4e9e574896606d6ad89775f8e119e2807914a4d66109e3597bf4d7b2fae8579c",
+      "bytes": 62327
+    },
+    {
+      "path": "server/normalized/inventory-query-service.ts",
+      "sha256": "acbfbef81c63ae70e3f077f252d4a009647f38a634e51d157bf16a2913fc2963",
+      "bytes": 23577
+    },
+    {
+      "path": "server/normalized/inventory-waste-repository.ts",
+      "sha256": "46fcb824078c94ef701743a1d6017ff4ef33c83667bdd7546b8e68c71c82ecfd",
+      "bytes": 3288
+    },
+    {
+      "path": "server/normalized/launch-popup-api.ts",
+      "sha256": "33935b90266735ede92d5cd6f6a05a667959fc0293ea7d04c1f27d627f02ac08",
+      "bytes": 7833
+    },
+    {
+      "path": "server/normalized/membership-configuration-api.ts",
+      "sha256": "2c6b43317774da919b79c52e1cc709f2002c04d38d5e57629d62417708a33b59",
+      "bytes": 12704
+    },
+    {
+      "path": "server/normalized/membership-configuration-draft-repository.test.ts",
+      "sha256": "47b4bd2f9ebd348f275bb801f90f2a7dd43ccc4a7e6614f1f36e1ae9ec85342c",
+      "bytes": 32101
+    },
+    {
+      "path": "server/normalized/membership-notification-publication.ts",
+      "sha256": "c50822013773eb749795d2370a28d44aa34daf27aeba0f9b6d9070a7885320c5",
+      "bytes": 3566
+    },
+    {
+      "path": "server/normalized/membership-terms-service.ts",
+      "sha256": "7bdc7158fd26a706df9890c5210b01e47927ec49a3c04e7038ee36bfa4565f1f",
+      "bytes": 17553
+    },
+    {
+      "path": "server/normalized/normalized-app.ts",
+      "sha256": "d63a43fe3974cafe87ee1642a05bbab7277d4a31fc195089cc584888cd6227f0",
+      "bytes": 82535
+    },
+    {
+      "path": "server/normalized/social-account-api.ts",
+      "sha256": "707c437b0cb6c87343d12c9447ac309f049960a703a9236e10fc72371bed4054",
+      "bytes": 16280
+    },
+    {
+      "path": "src/normalized-ui/ActivityOperationsPanel.tsx",
+      "sha256": "3c412469ff158be088db9cf1af5c62b660a1d83ff102e4aa55c363da8c719f1e",
+      "bytes": 74431
+    },
+    {
+      "path": "src/normalized-ui/AnnualBenefitManagementPanel.tsx",
+      "sha256": "e970a7d79720ce7d5dcd3328c1ffe3906c144974b4ccb282cb7a2d187576753a",
+      "bytes": 40346
+    },
+    {
+      "path": "src/normalized-ui/BottleCustodyPanel.tsx",
+      "sha256": "7b42976f1989792ca93d05ae3affb55898a438239f9630c44af678bf29ecdf30",
+      "bytes": 27902
+    },
+    {
+      "path": "src/normalized-ui/CashierAfterSalesWorkbench.tsx",
+      "sha256": "23b5212d23389e9915a1e7b64b44f76cb900ef69ebb6a15ea8c9988d0d8d0a37",
+      "bytes": 101343
+    },
+    {
+      "path": "src/normalized-ui/CatalogManagementPanel.tsx",
+      "sha256": "605fc6205e221361eee2180de199184019b4404d42520d2843bb8c571daddbc5",
+      "bytes": 92804
+    },
+    {
+      "path": "src/normalized-ui/CheckoutUpgradeManagementPanel.tsx",
+      "sha256": "9e2d1a5f4b46d349343e13ef9b25c3e29cd099d375b09e9f9c426e9adfda181a",
+      "bytes": 26611
+    },
+    {
+      "path": "src/normalized-ui/ConfirmationDialog.tsx",
+      "sha256": "d7664472274745bb87f19d7d7c55e30ca3a44b6ae9c0b26fdcdf147b4d6514e0",
+      "bytes": 7915
+    },
+    {
+      "path": "src/normalized-ui/CustodyReportPanel.tsx",
+      "sha256": "5aee3ed73748889a1938eb48d8596f6e26e968dae1c383a29771236322252c7c",
+      "bytes": 4594
+    },
+    {
+      "path": "src/normalized-ui/CustomerExperienceAnalyticsPanel.tsx",
+      "sha256": "cf53592abf2e8b45281d8a3f7803421c7c4530b0d4d8a40fb3fab049214bd672",
+      "bytes": 19063
+    },
+    {
+      "path": "src/normalized-ui/CustomerExperienceManagementPanel.tsx",
+      "sha256": "e7684e82a2c4b53df689027eb96970b1ff5e19c75e9358f412d0159f90a279b4",
+      "bytes": 87232
+    },
+    {
+      "path": "src/normalized-ui/InventoryWastePanel.tsx",
+      "sha256": "160b67ff14b6caf71198280cb7f95e48e1b44d8fbe478fbd5aacdb938179dd93",
+      "bytes": 11280
+    },
+    {
+      "path": "src/normalized-ui/LaunchPopupPanel.tsx",
+      "sha256": "aa4722ceec5982996d7471aaf5709ff0bddc997d338c74f4306143dc4b22e07a",
+      "bytes": 4184
+    },
+    {
+      "path": "src/normalized-ui/MemberCardManagementPanel.tsx",
+      "sha256": "bf0156e60f812b1c71bd31768c470aa1094bc612850bbfa68ad32dcab7e560a6",
+      "bytes": 15874
+    },
+    {
+      "path": "src/normalized-ui/MembershipConfigurationCenterPanel.tsx",
+      "sha256": "2aa797b3257b1091f9b604920088d29ab48f6140c21db2fe1fdbd44ced28e3d7",
+      "bytes": 24722
+    },
+    {
+      "path": "src/normalized-ui/MembershipPublicationForm.tsx",
+      "sha256": "3546d9e5f803e9b2f16fc71f507c1d9312905b307ab40fcc8d2ebb63aeec6754",
+      "bytes": 3948
+    },
+    {
+      "path": "src/normalized-ui/OperatingHistoryPanel.tsx",
+      "sha256": "94eff42920715e78c7895511f82e8659df41ae220c0f7dcecd7edf7cfbc72f5d",
+      "bytes": 16258
+    },
+    {
+      "path": "src/normalized-ui/OrderBillPrintButton.tsx",
+      "sha256": "948e69f1dd0d8dcb4fc6beeaba3a22e0cde9264bada269ef7186665fd6610faf",
+      "bytes": 11013
+    },
+    {
+      "path": "src/normalized-ui/OrderStockReturnForm.tsx",
+      "sha256": "bfd91335b5e748c2079ca8d4a84690f53028a89af09f64c94366876afe777b48",
+      "bytes": 4404
+    },
+    {
+      "path": "src/normalized-ui/OwnerFinancePanel.tsx",
+      "sha256": "0d9cf6fd3bfb2dead283ac85a930987123a6cddaabecd060b4a284214b4001c9",
+      "bytes": 56971
+    },
+    {
+      "path": "src/normalized-ui/PersonalContactGovernancePanel.tsx",
+      "sha256": "049197f18cd2f595c69efa6394c8b572886cd29108bbda603bd01a93d6bdc4c2",
+      "bytes": 15794
+    },
+    {
+      "path": "src/normalized-ui/PromotionalLoyaltyPanel.tsx",
+      "sha256": "023cf63ef07f741a05a0d0666280eab6ec4a8e8c1f055fe256286c7ec91b78f0",
+      "bytes": 17439
+    },
+    {
+      "path": "src/normalized-ui/RecommendationPolicyManagementPanel.tsx",
+      "sha256": "4d67e7c51b536cc44b25733c14444f465ba8df2305b0edfd12b76ad06d296326",
+      "bytes": 16901
+    },
+    {
+      "path": "src/normalized-ui/ScaledNumberField.tsx",
+      "sha256": "4456192dddaa5794e652a566a731a99f231478f43da1d84de2dc4c8837fc3a9d",
+      "bytes": 1120
+    },
+    {
+      "path": "src/normalized-ui/SocialAccountPanel.tsx",
+      "sha256": "dfdd13a7de3a3b9f5f299325a8abce3212d57282b7efc3a5fa75acf31561157b",
+      "bytes": 11841
+    },
+    {
+      "path": "src/normalized-ui/SocialBroadcastPanel.tsx",
+      "sha256": "5910244742256067c0d2b0c0cde4caa16e2ca5de27916e8bce2113f6b20fc887",
+      "bytes": 7489
+    },
+    {
+      "path": "src/normalized-ui/StackingPricePreviewPanel.tsx",
+      "sha256": "4cc2fe845dbe740547c09cf6cb76c43f4a48d5d097728a4a58102a9d6f6919e5",
+      "bytes": 14974
+    },
+    {
+      "path": "src/normalized-ui/StaffAccessManagementPanel.tsx",
+      "sha256": "58dcec68bc03a1cc52cf8f8226d8b0d5813e13a546dcb59365af2fff79cb4ca5",
+      "bytes": 47472
+    },
+    {
+      "path": "src/normalized-ui/StaffModulePanel.test.ts",
+      "sha256": "c5b091667fc4bfeba7a6c1aa48fa28fafe505e3272c11c4742412e18de14d392",
+      "bytes": 2398
+    },
+    {
+      "path": "src/normalized-ui/StaffModulePanel.tsx",
+      "sha256": "1eb8a7e5821056ab58e9980ee67b8b666dd80e093be1d04138c81ae93d25bb1a",
+      "bytes": 150555
+    },
+    {
+      "path": "src/normalized-ui/TaskSections.tsx",
+      "sha256": "269d518ed8712011ca5087e4857e00c5b66a2e02f432e9cf7a79f493e670065f",
+      "bytes": 2870
+    },
+    {
+      "path": "src/normalized-ui/activity-operations-contract.test.ts",
+      "sha256": "bd70136c62ee5e2d6fc578fb2ee909e9e5336c875e4f54b03430def47d53a7eb",
+      "bytes": 7736
+    },
+    {
+      "path": "src/normalized-ui/customer-experience-analytics-contract.test.ts",
+      "sha256": "74bb870a6fbc589f26314c9cf3a9cbadb4ae8d35cd89880e3eb9c776133a0546",
+      "bytes": 3125
+    },
+    {
+      "path": "src/normalized-ui/customer-experience-management-contract.test.ts",
+      "sha256": "380d920186f1cd3c47e06272fdb67629f03de568c7c8515ff15e199c4a12e42b",
+      "bytes": 8593
+    },
+    {
+      "path": "src/normalized-ui/durable-staff-command.test.ts",
+      "sha256": "6490d7b09309c9d873907b7c3eba94164ad18f44f44b1e98cdd3db15eb93992e",
+      "bytes": 3860
+    },
+    {
+      "path": "src/normalized-ui/durable-staff-command.ts",
+      "sha256": "f5b54544bd7b84811a194dc4b84b177b45c084b4c86d6e5f002783a6ff110d0b",
+      "bytes": 3020
+    },
+    {
+      "path": "src/normalized-ui/inventory-selling-flow-contract.test.ts",
+      "sha256": "5f1900bc933ec95f05daca7f5c339e358a22820db1ba4d27d9b66c0234c23588",
+      "bytes": 3720
+    },
+    {
+      "path": "src/normalized-ui/membership-business-inputs.tsx",
+      "sha256": "1aced45e0b80dcd220570fea8a77c0207b785a89ee10d80df0602a15504eca36",
+      "bytes": 5859
+    },
+    {
+      "path": "src/normalized-ui/membership-configuration-center-panel.test.ts",
+      "sha256": "451d1adc3ceeac3ada4c080a5741f33f1a745827272e24ac855d3e7a3355c5ed",
+      "bytes": 2886
+    },
+    {
+      "path": "src/normalized-ui/membership-workflow.test.ts",
+      "sha256": "e1bbc0d3c0cb7be96b2bce1c546eebac621ff76fbbb222ff4b75162017c958e1",
+      "bytes": 1014
+    },
+    {
+      "path": "src/normalized-ui/membership-workflow.ts",
+      "sha256": "c514daf9d6bd6f5c5ffe87355e7495d309e5f42b219aa669fc6e65de65c77911",
+      "bytes": 2112
+    },
+    {
+      "path": "src/normalized-ui/miniprogram-mobile-contract.test.ts",
+      "sha256": "a58eb4cd4eeb1f5965fe529272461880322127a98ccc24f3028e508dbb0fd45f",
+      "bytes": 28909
+    },
+    {
+      "path": "src/normalized-ui/performance-revision-panel.css",
+      "sha256": "4801d0097050ba907e7bcb9a6b3e04028a329163a6e66031af5501f10dc5e6d2",
+      "bytes": 3752
+    },
+    {
+      "path": "src/normalized-ui/promotional-loyalty-panel.test.ts",
+      "sha256": "70ad7711ca81cab91f5287dff7599a97771231a7273fa63482561de90f1b0e5f",
+      "bytes": 2055
+    },
+    {
+      "path": "src/normalized-ui/social-account-panel.css",
+      "sha256": "371c4386491ca97d83b8c271a8bf582aefd5e0a1dcd2a3efbc4f7a66f29176dd",
+      "bytes": 617
+    },
+    {
+      "path": "src/shared/inventory-waste.ts",
+      "sha256": "b6bfa6b772a54c8603187d5c96a79a343caa5f112354284f8c365b06355b722a",
+      "bytes": 832
+    },
+    {
+      "path": "src/shared/staff-business-labels.ts",
+      "sha256": "af4b6517697a0325d517840eb80cc0db60b0d6c30e14220ebe7fd6548774fb61",
+      "bytes": 2268
+    },
+    {
+      "path": "src/shared/staff-module-access.ts",
+      "sha256": "eb47a599a0826976146b734032af4c5e3c252f0f96bca29fd2befc6628fe3cb3",
+      "bytes": 10593
+    },
+    {
+      "path": "tests/normalized-e2e/normalized-member-cards.spec.ts",
+      "sha256": "c7dd0efbdcdb2607793969e07c0fa1b28d27785d6c350ea427af3ce4de8477d3",
+      "bytes": 3903
+    },
+    {
+      "path": "tests/normalized-e2e/normalized-mobile-adaptation.spec.ts",
+      "sha256": "2347a4460586a441c87cdd62b2b6f13af3f839743f0c658017bab27f353523c6",
+      "bytes": 11434
+    },
+    {
+      "path": "tests/normalized-e2e/normalized-print-recovery.spec.ts",
+      "sha256": "17998c6ff444b802da229ea6a5378977541fea482b37d58da3ba9ff503edb924",
+      "bytes": 12005
+    },
+    {
+      "path": "tests/normalized-e2e/normalized-requirements-v9.spec.ts",
+      "sha256": "477a14df96aface8692be34ff22b64ddd9248eb956608640736aaaa9cc7f6660",
+      "bytes": 7174
+    },
+    {
+      "path": "tests/normalized-e2e/normalized-stacking-pricing.spec.ts",
+      "sha256": "9b1c1cedb61fe67e96d2e0edb4bf132a43b1c516ca037dc4ef645d8145cc52fb",
+      "bytes": 12230
+    },
+    {
+      "path": "tests/normalized-e2e/normalized-upgrade-qualification.spec.ts",
+      "sha256": "8d4cc80615368b761bd5c08e73e21cf829b3aeb8f9f5b1274412e39e1a35c3e9",
+      "bytes": 5315
+    }
+  ],
+  "buildFiles": [
+    {
+      "path": "dist/.well-known/assetlinks.json",
+      "sha256": "71b99dc56051bbe62b0b65a37275e6b9de746091cab703b129b454e7ca07f98c"
+    },
+    {
+      "path": "dist/MP_verify_5OK1MZLXrbfZkIkh.txt",
+      "sha256": "a89eaadcbfe11e810bc171dfb2c85aebb66684dc6f0c16279951a12784461f12"
+    },
+    {
+      "path": "dist/MP_verify_B47KFn2npxkKsVww.txt",
+      "sha256": "fc2979b4d1af4f9f9357578fe7c08d4db38db4cd8d86f35bb2564505b54ae27b"
+    },
+    {
+      "path": "dist/assets/CashierAfterSalesWorkbench-DflPrk7L.css",
+      "sha256": "345116d95197a8cf5f03075e3767d794b802d5e9dae4202c1601e32c1c0b1459"
+    },
+    {
+      "path": "dist/assets/CashierAfterSalesWorkbench-Qv9cK1sH.js",
+      "sha256": "31b723ad811d334c7f09c0cf73d4075936ce6d10088c658827a8bb740be9a2da"
+    },
+    {
+      "path": "dist/assets/CatalogManagementPanel-Bg1Wllw_.js",
+      "sha256": "6725961ab9a40cee20249d52a2f8811eab01d1464bc99ace4d82b8ae9873313b"
+    },
+    {
+      "path": "dist/assets/CustomerPublicationPanel-D1ESPcYS.js",
+      "sha256": "5d4f3d48202477183e0c918335e4286f284d7bdce74636c5e26db9aabee9089a"
+    },
+    {
+      "path": "dist/assets/GroupVoucherRedemptionPanel-BHHkqG1X.js",
+      "sha256": "c87221e4f093152a10f8eb8cdd88c2f4c1406184481702a454d21aa84f679284"
+    },
+    {
+      "path": "dist/assets/GroupVoucherRedemptionPanel-DcTIhAmA.css",
+      "sha256": "643b66af2e5bcf6711f61fa8cd6efbd2fce2707e2d0f791c9e500115c9af9683"
+    },
+    {
+      "path": "dist/assets/ItemAfterSalesPendingPanel-8eNl5DDn.css",
+      "sha256": "ec5b3c470b262238534846802852aa135a7163f04962386366bef9ad46d1fb8e"
+    },
+    {
+      "path": "dist/assets/ItemAfterSalesPendingPanel-jHI-makE.js",
+      "sha256": "3f3f02a836e834a626b2037516123ced99e03963dc80dc6b8884337df7dce2a3"
+    },
+    {
+      "path": "dist/assets/MediaAssetPicker-Dn_SlE_q.js",
+      "sha256": "9a428c4f5ae9f0c9da202163d23d11451dadd9692c630bd833c73e56dd5e2583"
+    },
+    {
+      "path": "dist/assets/MemberPortal-BN5cPvG9.js",
+      "sha256": "09461f218fea4a4c1d6b7711d03f1ce44ff76f67e6e345f1c26c04abdb71545d"
+    },
+    {
+      "path": "dist/assets/MemberPortal-DOhu3_fg.css",
+      "sha256": "99bc7a7032c539fda93fd64d129d9e8dc569e75f7beab7b607da9c72fc0c8cd5"
+    },
+    {
+      "path": "dist/assets/MenuOrderingWorkspace-Bbu0m3qR.js",
+      "sha256": "406ae7d22e5dae202c2f0ef3d4fd44f2fd091df98ecbad1c0089341f27a22dfb"
+    },
+    {
+      "path": "dist/assets/MenuOrderingWorkspace-D-tz8jD2.css",
+      "sha256": "96c8caaface09bfd45655f3fbd150574ccdf4a6ea91671654ef23666be6cf925"
+    },
+    {
+      "path": "dist/assets/MiniProgramPreview-BimTYQSi.js",
+      "sha256": "0dc62c50b6f90b1b7c30d43a18c965771e10294c7230583dc9883b58f7990851"
+    },
+    {
+      "path": "dist/assets/MiniProgramPreview-CCEryapU.css",
+      "sha256": "34dae59e4aadb5c8c0dd293e8dd456b4a16d4a0721035c865c4df0a8dd8615db"
+    },
+    {
+      "path": "dist/assets/NormalizedStaffApp-D72DnabJ.css",
+      "sha256": "508a23697f8bd8d6579e7552ad2d01f1acd61a8d69b1dc13f9c086c757fb6a4a"
+    },
+    {
+      "path": "dist/assets/NormalizedStaffApp-ddKAUelE.js",
+      "sha256": "32c4e401b1e243d967d4122a1ea5a142dd067b5e578b03debca7b6ab81bfd1fd"
+    },
+    {
+      "path": "dist/assets/NumberInputWithUnit-DfpsC_Um.js",
+      "sha256": "46925bf75e471173d578197891b9c14238b7ec4978de627fc286377a4561678b"
+    },
+    {
+      "path": "dist/assets/NumberInputWithUnit-GKI1qpf-.css",
+      "sha256": "38d9d8b94da21e22b062b3458de83c543a9120f50538fddc1d57bedece784980"
+    },
+    {
+      "path": "dist/assets/OperatingHistoryPanel-BQG9pVc9.js",
+      "sha256": "89357068eb698733b61b786b5beed752132cc7603d9c1d1c04ae339609d369d3"
+    },
+    {
+      "path": "dist/assets/OperatingHistoryPanel-CtF0GnL-.css",
+      "sha256": "e73b1970892639f169330acbbf55726e9cac2a9b356dafd67f6d0b39f3be2538"
+    },
+    {
+      "path": "dist/assets/OrderCenterPanel-DsNA1Jj7.js",
+      "sha256": "6d9c56c551e35c3dabc68e3f1e12ed329b5e90daef7ba954ccd79433c7dc51cc"
+    },
+    {
+      "path": "dist/assets/OwnerFinancePanel-DR42Wo9_.js",
+      "sha256": "a99e5122e1dfd634cbb93a286006df3d7af97a5aa9a039c7f9a08a77b9dd3d0b"
+    },
+    {
+      "path": "dist/assets/OwnerFinancePanel-MLRrPNuS.css",
+      "sha256": "8fe9ea2d510a4ade811f83c23d910c40a4353f29ef18bb7a289573bdd5c47ba0"
+    },
+    {
+      "path": "dist/assets/PerformanceRevisionPanel-Dp5Os50V.js",
+      "sha256": "6ea54b2b16fb93a9e1553ab19d2ec92939a09ae764c8d08ef082134fef6a99b1"
+    },
+    {
+      "path": "dist/assets/StaffAccessManagementPanel-B02nKwH5.css",
+      "sha256": "16601fd23dab457085b123f7c61ac30db77da278f49531c079dc5440ce7f0fd8"
+    },
+    {
+      "path": "dist/assets/StaffAccessManagementPanel-BigcLDnR.js",
+      "sha256": "97fc46bd6226f25f2afdcec606ba159f7cfeda921aab36a1b619b37ef1548b3f"
+    },
+    {
+      "path": "dist/assets/StaffModulePanel-B30m2aR5.js",
+      "sha256": "c785337fa5ddb01b88364f21c5d6fb28d769e67bfe88aa87b8855d231044fc18"
+    },
+    {
+      "path": "dist/assets/StaffModulePanel-Bmu11XwK.css",
+      "sha256": "3b49dba57f1a650c882b6c91e06158ad52f54ca6aaa0f2fa8502a130b3b8d388"
+    },
+    {
+      "path": "dist/assets/VenueManagementPanel-jV_0N31r.js",
+      "sha256": "caad1aa1fee83b812bfcaa8003a0bac1beeab17458a8abe291653eb7bbf48955"
+    },
+    {
+      "path": "dist/assets/browser-Nztc4jrW.js",
+      "sha256": "f11647fbfed5e632c8a5d69a37689c44456338f289fafdd6f654ec5af9c04737"
+    },
+    {
+      "path": "dist/assets/cashier-mutation-_c4nlhjJ.js",
+      "sha256": "efef33f31911c0f4541474f86ea70a848a0633994028a917d8a3531cd08155f8"
+    },
+    {
+      "path": "dist/assets/esm-8OZgnPlk.js",
+      "sha256": "319ec009d6ef8fdaa9fe9b15faeb1f64cfadaa2797980b88f0891586f6fc1407"
+    },
+    {
+      "path": "dist/assets/esm-BPiLmMLA.js",
+      "sha256": "642ea8134a56b665a233a129fdffbc8a49ed97f027928cc573237ae14036ac72"
+    },
+    {
+      "path": "dist/assets/guest-CC_Aq7jX.css",
+      "sha256": "056384f91454492a356aa1e1bd6e62bbeaaf990d23c65a1a486c88ac9ad1698f"
+    },
+    {
+      "path": "dist/assets/guest-D-NBxIZC.js",
+      "sha256": "7d18f755fea09460123892a8efb6381563ed02477aa56f710a07db499520d790"
+    },
+    {
+      "path": "dist/assets/icon-vendor-C5SrR5T5.js",
+      "sha256": "5f69ecb38dd14dc8a24c9f178b4e4c84ec0c870ecdc890f283552a84311294fc"
+    },
+    {
+      "path": "dist/assets/index-DrrewXow.js",
+      "sha256": "8dd149bb200305d5a4512dc25ce378e4730d5bb4f9778b801417adb7fb8cfbbe"
+    },
+    {
+      "path": "dist/assets/index-Du1lnRp4.css",
+      "sha256": "26e3af4383beb0ce85abb70d59e00d83ee1082919c397ba2f3b8863e5e8ef88a"
+    },
+    {
+      "path": "dist/assets/mbox-floorplan-2026.webp",
+      "sha256": "c8087a5cf074e419c259bb099f8eaed425af310486b34b724eefe709ae782de5"
+    },
+    {
+      "path": "dist/assets/mbox-floorplan.png",
+      "sha256": "4df4b1dcb81badba40494a246f14766c3f17bb58f8c134d6dd970a5014de2015"
+    },
+    {
+      "path": "dist/assets/mbox-logo-badge-B44vqkCj.png",
+      "sha256": "df558077e06d0d3d7a7c79363281b4ce51adc7d853bcba2f1a4b0e39c667f545"
+    },
+    {
+      "path": "dist/assets/mbox-logo-badge-DtADFhkb.js",
+      "sha256": "fb349e71f630c81fd8bd9c8fd725f77737b082bc0b44fd01d0e10b493088874a"
+    },
+    {
+      "path": "dist/assets/normalized-api-DW852Ucb.js",
+      "sha256": "b27f65be6941520d2a5998e11f31005817bee3900bdbb293d92b760a8bd360cf"
+    },
+    {
+      "path": "dist/assets/public-reference-y8nin-sr.js",
+      "sha256": "0322e0034a7102770f94a3335b287f8b8baed18a1748ac6131cf35bbf1e9bd7c"
+    },
+    {
+      "path": "dist/assets/react-vendor-CnQ8cts2.js",
+      "sha256": "a4932778ca5e91eb739d5df053cd7d6cd1fd178441a2ae2941316d6f91564f1e"
+    },
+    {
+      "path": "dist/assets/reservation-Cg2tMmBa.js",
+      "sha256": "ce105cac6cc9381183da83405f89ecd74d17528b1c7c99afe990ca85b0954f22"
+    },
+    {
+      "path": "dist/assets/reservation-D0Lp-Qjc.css",
+      "sha256": "46d2c9ea91623a5f42d54f084b92f12d296ef81581f59de32d62762bc16d4d3a"
+    },
+    {
+      "path": "dist/assets/reservation-identity-DTcd3fzC.js",
+      "sha256": "0980b49d38bafc966692ebcc505e6878e6a1c0098bd8f2490598309215b71e58"
+    },
+    {
+      "path": "dist/assets/rolldown-runtime-Bh1tDfsg.js",
+      "sha256": "1b13387cb23dc39bf70e31677c21f6db5cad3377b96f286b6ee444496e5bfea7"
+    },
+    {
+      "path": "dist/assets/staff-actions-Bt_f5CWD.js",
+      "sha256": "10a6656cd7272c3b65d68c682cddde722d9c915a24f3501b159e98ff7650d35a"
+    },
+    {
+      "path": "dist/assets/staff-actions-DTpgy25b.css",
+      "sha256": "610c2e9c117dbdedab11e1587a99d5e927380999dc7179b4b33fa6c436667fc8"
+    },
+    {
+      "path": "dist/assets/staff-business-labels-DZ-3dW4P.js",
+      "sha256": "540240f3cbd227d183532a0aebc8e236bdfd3c979c0c1f72f6135da5546aa308"
+    },
+    {
+      "path": "dist/assets/staff-module-access-BGBEiZVj.js",
+      "sha256": "995b5255e89be04be3804f337fe5bc847cfba5eea8ecb5e1ccea2ae0de305f25"
+    },
+    {
+      "path": "dist/assets/staff-session-binding-eaYVIPPc.js",
+      "sha256": "dd2af649cc7d600e05de2319a08194d6c881d27e6b007cca01a47439f941c464"
+    },
+    {
+      "path": "dist/assets/staff-view-state-RUDMjbZQ.js",
+      "sha256": "42f2406c66e96d2de60f5dfecb138e78478a52ca784f4c11b1abc3482b429c3c"
+    },
+    {
+      "path": "dist/brand/moods-v2/celebrate.png",
+      "sha256": "9497b16f9f2afc862b9d933057fb3d75b0fb3a1ca5b943aa0a2286e71de3b631"
+    },
+    {
+      "path": "dist/brand/moods-v2/celebrate.webp",
+      "sha256": "9b3c83189a547629f6f252c3336671f92b365aada132096675a0c092ca34806c"
+    },
+    {
+      "path": "dist/brand/moods-v2/happy.png",
+      "sha256": "dc1536d79d9315590af46dc6680c59f403db852f9d82f3c7795040d56580775f"
+    },
+    {
+      "path": "dist/brand/moods-v2/happy.webp",
+      "sha256": "2028ba45417d478b35ac1e3992835e20b9e713774388b3150fd1984b254e2c02"
+    },
+    {
+      "path": "dist/brand/moods-v2/interactive.png",
+      "sha256": "08be668112bd61a5a2efdc3a75fca275bc96c12f5ecbedcc5abd75764fcbf5c1"
+    },
+    {
+      "path": "dist/brand/moods-v2/interactive.webp",
+      "sha256": "f0cf3683716cb185f20685f2778c360b5fa331487e1bcaf55ae0ac70bc2e8834"
+    },
+    {
+      "path": "dist/brand/moods-v2/listen.png",
+      "sha256": "14741dc49a1d1dc2123122a80cdd1b5887d813ba84abb6c7a40b3756c259892c"
+    },
+    {
+      "path": "dist/brand/moods-v2/listen.webp",
+      "sha256": "fbda7764b6e9b73d1b434748616b213c74e0ef131215136ec444e6e678a92a60"
+    },
+    {
+      "path": "dist/brand/moods-v2/quiet.png",
+      "sha256": "2b21157f7fcfbdde6c17fed39655a3d104e6988373e2dd5ec68c0162213c124f"
+    },
+    {
+      "path": "dist/brand/moods-v2/quiet.webp",
+      "sha256": "6a6f25d868dbda997f2bcdd9a748e7719d2f0d1465f03ebd1a9e3d277cc97dc1"
+    },
+    {
+      "path": "dist/brand/moods-v2/tipsy.png",
+      "sha256": "c1e38ce468c07086f1d5232dd2e0e4560daa22e48e1fa31384f98e706aa43a6d"
+    },
+    {
+      "path": "dist/brand/moods-v2/tipsy.webp",
+      "sha256": "67429867016a02e047ffac3e17663139408892687f3d2f5bd9336141fac30585"
+    },
+    {
+      "path": "dist/brand/superhigh-horizontal.png",
+      "sha256": "49ea11a8c53894c70960bac33d1088fb7f0b41e62e6925ca1c3cf4511496d501"
+    },
+    {
+      "path": "dist/brand/superhigh-mark.png",
+      "sha256": "1cef878a0b7da344800d1f347cbc741c8ffa6b9dd914846903eb960477518951"
+    },
+    {
+      "path": "dist/downloads/MBOX-Ops-Validation-1.0.0-rc.14-validation.1.apk",
+      "sha256": "23d85defe58544f245d61ff4d1e8a30e02a2e73395663de4d781b4e3bd9516dc"
+    },
+    {
+      "path": "dist/downloads/MBOX-Ops-Validation-1.0.0-rc.14-validation.1.apk.sha256",
+      "sha256": "7ca946103541fd07c9e8a1df30343f9e5dd29a0373eb72a9af8b61e74380c0d0"
+    },
+    {
+      "path": "dist/downloads/MBOX-Ops-Validation.mobileconfig",
+      "sha256": "c1b52257e69216c16ac8c0b1f6bdd9f10cb52625468b4784c4486253ac08b67b"
+    },
+    {
+      "path": "dist/downloads/MBOX-Ops-Validation.mobileconfig.sha256",
+      "sha256": "41ff8d34702c20877ae07b8fe06a4fd133e28604a7cb2faef680ecca89daa2d7"
+    },
+    {
+      "path": "dist/favicon.svg",
+      "sha256": "3a7b9a165500e1b4e7b2f5267abe4ef636fe134a55496d7efd4eab2e17a008f6"
+    },
+    {
+      "path": "dist/icons/app-icon-192.png",
+      "sha256": "c5f94b8e4cff4b6211c9eca3fa5ee27fd3cd117232deeb24f64042e7476a8703"
+    },
+    {
+      "path": "dist/icons/app-icon-512.png",
+      "sha256": "5fa1b2b14c2b026e0488c04bd46dc5fa636789466fc0686dd5ca1b0fd994b9f7"
+    },
+    {
+      "path": "dist/icons/app-icon-maskable-512.png",
+      "sha256": "acbc50c36fbe6f35c76e94180499b0589c9a535e060bf52b3a0590f96a22eb0a"
+    },
+    {
+      "path": "dist/icons/apple-touch-icon-180.png",
+      "sha256": "8706cfde47e8d07edc640b1d700bd76af23140fb11b48e4145bde984e8ef2a77"
+    },
+    {
+      "path": "dist/icons.svg",
+      "sha256": "b45fa506195cfcdef406ba9f0c77b36ddc1a7c224040926ec70abc2fdea7b93a"
+    },
+    {
+      "path": "dist/index.html",
+      "sha256": "cfbcd276790115691d53c8f7cd807f17dd0c9d82aa0e9c0470fba2e7d5bb7ad4"
+    },
+    {
+      "path": "dist/install/android.html",
+      "sha256": "ee8a2779707cbe2d06b7725a58e5eaf4cee10cbba3364aef04711755e97b260c"
+    },
+    {
+      "path": "dist/install/ios.html",
+      "sha256": "023fe8130cee2cd6dec5a714afec9c6fef2dd3377f254981ca8a9db7d0c3c790"
+    },
+    {
+      "path": "dist/manifest.webmanifest",
+      "sha256": "76ecdc918cb9b1ed23817c262166884455b90f38100d42809ccfbc4f9b9a09cc"
+    },
+    {
+      "path": "dist/menu/2026-08/items/classic-01.jpg",
+      "sha256": "0a7c5658e159080c3d0fbd3689a0d02c3ad3f575e3391397f9616e06e1a8e6b2"
+    },
+    {
+      "path": "dist/menu/2026-08/items/classic-02.jpg",
+      "sha256": "eead51f2f202d9d827c669bc770939abf64aa18d16d6021129cb454829b8858d"
+    },
+    {
+      "path": "dist/menu/2026-08/items/classic-03.jpg",
+      "sha256": "77d934d2d0fd70804d0ae47b1f3b5fac3ebd57d971e3051af9f7e654170ab819"
+    },
+    {
+      "path": "dist/menu/2026-08/items/classic-04.jpg",
+      "sha256": "65b478a220640793659bb3dc85e6ecb230847f953ab60e285ef06c4cb028c1d6"
+    },
+    {
+      "path": "dist/menu/2026-08/items/classic-05.jpg",
+      "sha256": "15f35bc5634ef4c261fb6505f0660a44943fb79b83df7ab837fd848e3d1991f8"
+    },
+    {
+      "path": "dist/menu/2026-08/items/classic-06.jpg",
+      "sha256": "99b4ef5d3525ac86475674d8d4e96cb65d2770a00c7652e6d1f6b6f1bd7a7672"
+    },
+    {
+      "path": "dist/menu/2026-08/items/classic-07.jpg",
+      "sha256": "7ac7f80e4df7e4b0bf1e3e6ac567fa00f0198cedd6477f290e43a7054cb1a951"
+    },
+    {
+      "path": "dist/menu/2026-08/items/classic-08.jpg",
+      "sha256": "dc39804ea9132147ab63d2f0e9191cfa30888b2af2606c7d078221e5c21022c9"
+    },
+    {
+      "path": "dist/menu/2026-08/items/classic-09.jpg",
+      "sha256": "1dfd1473cc1e607874f23d5f8ae7c74b59196a991fc541232c3e48931bc0fbc0"
+    },
+    {
+      "path": "dist/menu/2026-08/items/classic-10.jpg",
+      "sha256": "6955283903a2e645ccaf97a7b611d557b73ee679763f1f1fe6910d0149a3342e"
+    },
+    {
+      "path": "dist/menu/2026-08/items/classic-11.jpg",
+      "sha256": "2f7c54470f2bfa9ba4778b71b773a964bb8470805d5ad7c466df3d5d524fd4f8"
+    },
+    {
+      "path": "dist/menu/2026-08/items/classic-12.jpg",
+      "sha256": "00512b1ef2737e4e8d9de1a02bdc43c605787c221ff38a8b75857362af4c5825"
+    },
+    {
+      "path": "dist/menu/2026-08/items/package-01.jpg",
+      "sha256": "f21700d3d53659609445b45c06bd26ce9aea2cc5797dea802128a3801ead97fa"
+    },
+    {
+      "path": "dist/menu/2026-08/items/package-02.jpg",
+      "sha256": "e2c55624b7e0c04cc76d6eb8e3dc3210813662ff3171b8d66b47643d47a41a71"
+    },
+    {
+      "path": "dist/menu/2026-08/items/package-03.jpg",
+      "sha256": "5a5aba1b30a77c8ccb2d7feb36fa5a70b146d36b0f2a7bd9cf1f9bcd57f04123"
+    },
+    {
+      "path": "dist/menu/2026-08/items/package-04.jpg",
+      "sha256": "22256774dfe2c18bb4f161b20e39ac14a8ae9cd433c3a5813a0978b1e2bc29ed"
+    },
+    {
+      "path": "dist/menu/2026-08/items/package-05.jpg",
+      "sha256": "79f41564391347291a63062de08d9f369c1215ac928d3693d68dfec949ce8595"
+    },
+    {
+      "path": "dist/menu/2026-08/items/package-06.jpg",
+      "sha256": "cbf0235c931a1a4ab62dd297e0f209677f98f19d685e8c0d792ee57e0222d43b"
+    },
+    {
+      "path": "dist/menu/2026-08/items/package-07.jpg",
+      "sha256": "5fc79bdb1687fa4592c1937ab1ea81ea73e82682468311bbb4ff5d9a1a6dfe5e"
+    },
+    {
+      "path": "dist/menu/2026-08/items/package-08.jpg",
+      "sha256": "b3872e1b9b202c5ce833be788d9c4a3f4e7f5e0cb78b1b6b532792c8f2b50c60"
+    },
+    {
+      "path": "dist/menu/2026-08/items/package-09.jpg",
+      "sha256": "00b46ccaf6140e865a8ba31e7a2ed03d145cbe95da3b2b5b1e3d96723b25659d"
+    },
+    {
+      "path": "dist/menu/2026-08/items/package-10.jpg",
+      "sha256": "a469b754ab254e8cf47ce589068412a23c9d4261cc076775039c1ca05a5b18f7"
+    },
+    {
+      "path": "dist/menu/2026-08/items/package-11.jpg",
+      "sha256": "5165405ab20ffaa8066c5c79f3c447d15c58dfae8dd32a03b30d9f32b39bfc27"
+    },
+    {
+      "path": "dist/menu/2026-08/items/package-12.jpg",
+      "sha256": "ed47972130f081d71bfa3fd7e9fccd5fd63322299e96dbefd26c3f21f0f68324"
+    },
+    {
+      "path": "dist/menu/2026-08/items/signature-01.jpg",
+      "sha256": "c95cb3bc2b96dcbd40b4ea327401c789ee4a806dda0962842486fe9ea63bdb02"
+    },
+    {
+      "path": "dist/menu/2026-08/items/signature-02.jpg",
+      "sha256": "c31c03927de3b357677889c6de497e47ac73de6404e88ef750a9d39bf0decf76"
+    },
+    {
+      "path": "dist/menu/2026-08/items/signature-03.jpg",
+      "sha256": "76a03773a57d711fee49d74aca2393ffe7bd1abcc9645532a229f4ac00435c73"
+    },
+    {
+      "path": "dist/menu/2026-08/items/signature-04.jpg",
+      "sha256": "7f1a5e673fc4dfe6fb1d4990a4108c9820fb352cc3ef245ee61deb061cc7ba13"
+    },
+    {
+      "path": "dist/menu/2026-08/items/signature-05.jpg",
+      "sha256": "c6e522bb5cde6c969c6fef67977070b005dabc6654f4f1d2c4c5b96fd596555d"
+    },
+    {
+      "path": "dist/menu/2026-08/items/signature-06.jpg",
+      "sha256": "b287e8091d4d0bd6941ad58f56ee12e99b46586d1bc4b17b2c80eb7ee4fd12b9"
+    },
+    {
+      "path": "dist/menu/2026-08/items/signature-07.jpg",
+      "sha256": "bd64c5171fe38b281224bfd018145a7fc288881c813a45363c2d18731cadb57d"
+    },
+    {
+      "path": "dist/menu/2026-08/items/signature-08.jpg",
+      "sha256": "a7450fbd69e7e9fb527b0e8d3fb72907a573978fca14ba73e6fe4d7a6a7f4148"
+    },
+    {
+      "path": "dist/menu/2026-08/items/signature-09.jpg",
+      "sha256": "324b302771462854496913735133d7ff0635e0e95426992c615701bf2610231b"
+    },
+    {
+      "path": "dist/menu/2026-08/items/signature-10.jpg",
+      "sha256": "33318c2c778338b15293511bfb5d00ca596172e974e663412671614bf91531a6"
+    },
+    {
+      "path": "dist/menu/2026-08/items/signature-11.jpg",
+      "sha256": "7f45074859d0bb6d4cf45e64f547312636f588ff494087443883600ac53bcbce"
+    },
+    {
+      "path": "dist/menu/2026-08/items/signature-12.jpg",
+      "sha256": "d55e5ced4b8ab35b93fe0e73edbabeae34ee00967cf754023a3d12df82abc073"
+    },
+    {
+      "path": "dist/menu/2026-08/items/signature-13.jpg",
+      "sha256": "08304ae458034854a45aaf7a12f88061479e2a1ea17c737abbd4a06de71e41bc"
+    },
+    {
+      "path": "dist/menu/2026-08/items/signature-14.jpg",
+      "sha256": "69174d78300949aaaea71cf28989fa3dbb397c68bc14d3fce59b30f57c8ea920"
+    },
+    {
+      "path": "dist/menu/2026-08/items/signature-15.jpg",
+      "sha256": "77b0b245be7f68deef02f7c47d48a6288088639c968ef4bd006cd738d3c20d27"
+    },
+    {
+      "path": "dist/menu/2026-08/items/signature-16.jpg",
+      "sha256": "4cb7eb8e4d9646da53153d4928a03c871d929df42f6a1b8d44288a216b8bc7e7"
+    },
+    {
+      "path": "dist/menu/2026-08/items/snack-01.jpg",
+      "sha256": "76961a1e7b38db51af496162e78d495b3b81d3b882d2debe233c32216395d290"
+    },
+    {
+      "path": "dist/menu/2026-08/items/snack-02.jpg",
+      "sha256": "b8379909bd5e00b9ab19dd3096bad8f06504d1033671b63fdb5af2bb20d4fcdc"
+    },
+    {
+      "path": "dist/menu/2026-08/items/snack-03.jpg",
+      "sha256": "4d70a955424966f0ff4ffdc2d37a19154f9b94fa64b7a69bd43f9328d8a9aa84"
+    },
+    {
+      "path": "dist/menu/2026-08/items/snack-04.jpg",
+      "sha256": "606122fa5a0651100e5fbdd6f96d22b6a42f66981e11efe89e3aa6f4b0aa3fe4"
+    },
+    {
+      "path": "dist/menu/2026-08/items/snack-05.jpg",
+      "sha256": "c15451db7bfa3498c7e65b256ef5f93cee826407101af02e49c35297183fe0f6"
+    },
+    {
+      "path": "dist/menu/2026-08/items/snack-06.jpg",
+      "sha256": "72bea222d91ef9257b7daa1fdc6555becc1158a7f13af7319ee04e28d4127ffd"
+    },
+    {
+      "path": "dist/menu/2026-08/items/snack-07.jpg",
+      "sha256": "822f1387b026e725dc45ba310982e340b3a5f4a9a76810f3ca8519643667126a"
+    },
+    {
+      "path": "dist/menu/2026-08/items/snack-08.jpg",
+      "sha256": "9d76dd79a8ec297b12500873939ad2f66dd8c08f86fd2492b52591e7c20ce07a"
+    },
+    {
+      "path": "dist/menu/2026-08/items/snack-09.jpg",
+      "sha256": "b6bf2dba9fd5da6ee08d6f553875a68f45d7f43e644423ff38c0f996f1f09e8f"
+    },
+    {
+      "path": "dist/menu/2026-08/items/snack-10.jpg",
+      "sha256": "5b3372b6801328d11278309a7f7e0d835fa40edf6eb748f9ebf383a2c71ee6e7"
+    },
+    {
+      "path": "dist/menu/2026-08/items/snack-11.jpg",
+      "sha256": "9ed08d8f75087c07dd65d4ba20a844345fb6da8f76e3437be042086d803fd256"
+    },
+    {
+      "path": "dist/menu/2026-08/items/snack-12.jpg",
+      "sha256": "c7d07e7f9a3e86992128fa401ad1c2ea5b57e07c4c1f97c5a64fa4f6829cca2f"
+    },
+    {
+      "path": "dist/menu/2026-08/items/snack-13.jpg",
+      "sha256": "eba041ba85758729d21dd4eed776634214c9c951d39b08ea5693be02d6fbe481"
+    },
+    {
+      "path": "dist/menu/2026-08/items/snack-14.jpg",
+      "sha256": "ab29b11b39989316deb7a477b3cb092009d17c92d2bcca0bd003a50a4e7bcfbc"
+    },
+    {
+      "path": "dist/menu/2026-08/items/snack-15.jpg",
+      "sha256": "794640587df8f682cd3ede47f87ce9bbebaca8355ebeaae91c10cfebd2fcffcd"
+    },
+    {
+      "path": "dist/menu/2026-08/items/snack-16.jpg",
+      "sha256": "8c05609269d3ff8489614ebcc297835624f3b3691f89cebfa4a9422eeb23e725"
+    },
+    {
+      "path": "dist/menu/README.md",
+      "sha256": "2e35270f1614401a1597bb6d1660a650c139110ad7434a014c1145b338064f67"
+    },
+    {
+      "path": "dist/menu/beer.jpg",
+      "sha256": "6f455bbaecbfb83fb28f295b2e48474837c922959738ca81db74add21816fe6d"
+    },
+    {
+      "path": "dist/menu/cocktail.jpg",
+      "sha256": "ed273b1794093945d734c81b3029442f2c78304036d7f612b1adcf7aa00b003b"
+    },
+    {
+      "path": "dist/menu/fruit.jpg",
+      "sha256": "bc7b8b96d52f96a004b0f171496379de3928ccc75ad4a59b1e374022346b1d3c"
+    },
+    {
+      "path": "dist/menu/snack.jpg",
+      "sha256": "dd7fdc7d78fb0a8f666c223ea01daa83b03623725bbff866504907d8df8d0467"
+    },
+    {
+      "path": "dist/menu/v2-pilot/beer-selection.jpg",
+      "sha256": "bfb61e6451f5236e70048c39b40474868b5cac1cbe96564ed41d151d15d0a91b"
+    },
+    {
+      "path": "dist/menu/v2-pilot/cocktail-mocktail.jpg",
+      "sha256": "5ee07328ad3919392cdc57ee6e36bf41c91e8de8895c011d92d27650661033ad"
+    },
+    {
+      "path": "dist/menu/v2-pilot/fruit-cold-food.jpg",
+      "sha256": "f0c1770971bfc320f0ea8e58019e3bfda56560a68d9d5b21c1f647f3348da0d9"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-beer-corona.jpg",
+      "sha256": "76673b7837f469f9bcbe46608445038635aeb4976dd796c6941561d23a821ecc"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-beer-guinness.jpg",
+      "sha256": "714ff16b085b2c5cc42800b7901d1fb8c14c382785864b51ce021b452d48c2a0"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-beer-hoegaarden.jpg",
+      "sha256": "4842f42749ee65ad025e3a53bb7052d3548a1e3741b6256e9c56503e777e30fc"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-beer-stella.jpg",
+      "sha256": "df0b7bf6139fb4894ecfb3204099f9a2de5ab6dbf3f190ccde980a6bde22ac57"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-bundle-beer-2.jpg",
+      "sha256": "deeced38347b2146f50a5a80e59c6886a8990efa6835ccf41cbfb8126e3e9d41"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-bundle-beer-3.jpg",
+      "sha256": "e4f20746d6df572bc61d6646247975932b31aea6af0029ceb42b4f839baa6ab2"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-bundle-beer-4.jpg",
+      "sha256": "f50f8b46ec97ae6060d926cb7c6cabbae8ba978d3053a98ebfae34af5e683edb"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-bundle-business.jpg",
+      "sha256": "54058cd254f3e94530b3a25f28a9f7f721d9c3e8191ab477445db0eacbb84c4d"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-bundle-celebration.jpg",
+      "sha256": "f4b812859eb17540b95b38bf512e0ba65fd0c3194313269eb545a1c8ebc31181"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-bundle-cocktail-2.jpg",
+      "sha256": "a27ddc962cfb3082aa88c16a1e19702588ea386333aef6b9de954117619abce9"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-bundle-cocktail-3.jpg",
+      "sha256": "ff084929f806c1b4b89b2f8edd88767b1e0324d25dec8d116b5d0403552d3b27"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-bundle-cocktail-4.jpg",
+      "sha256": "56f1dcd8e88adf2eb0cd65cb0039ad9f838d41615858edbd4864900b4ea89e19"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-bundle-sparkling-2.jpg",
+      "sha256": "381cd9d3eff0b0a0e42a925db9c33f4e54c3a117ef6012b5c98a7bbbdbdc4b04"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-bundle-sparkling-3.jpg",
+      "sha256": "38774379bbb0aa38a005ebc4b71d983bb52b60d25dbd7647a6e43ff825de853e"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-bundle-sparkling-4.jpg",
+      "sha256": "ceae83485be3822461798d1d330435316cb0a18eb49f0ea37244e0feed451ec7"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-bundle-spirits-2.jpg",
+      "sha256": "a4f12aa0c3ec01820de61cc9ee79331b38646d069e3611100fd5ea7b8f327f20"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-bundle-spirits-3.jpg",
+      "sha256": "5136152766ec736fe25bdeaf654e78f37df9805f93a610c6579742215be8f7e5"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-bundle-spirits-4.jpg",
+      "sha256": "48ff6f7c8918b02819d04a4678d529f83f489c81bca85434aba0e6dc9aace3a8"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-bundle-wine-2.jpg",
+      "sha256": "663b83869a5e3877737e5ebb20d2893058ef5b16a549dd2f24a8200ff0be8e3e"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-bundle-wine-3.jpg",
+      "sha256": "9508f122d9d9f8c7b5788b1d338c8100bfda9d1c44f54a62397caf267c3bf6aa"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-bundle-wine-4.jpg",
+      "sha256": "142115cc3b5dea7bc84427cab6818fe1ecc5fbddf7a5807f2df3bef8a8c69172"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-champagne-moet.jpg",
+      "sha256": "444376d1849a967d8eb16eb92381925464d056c59f69958fc5ffdebf08bbdd6a"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-champagne-perrier.jpg",
+      "sha256": "80f482553c8b2865fc46f027a7dc8213f31a07b4079cb350865b5c68b7abe6ca"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-cocktail-gin-tonic.jpg",
+      "sha256": "d2c0bc1d80b1788eb5e270839dfea1d16a581b8993e3aef530c5a482097ef0ea"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-cocktail-long-island.jpg",
+      "sha256": "34a4d0265ece4ef1ccf61040aca3c8acb623c79147d22ee1c75bf4e09ed8746e"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-cocktail-mojito.jpg",
+      "sha256": "ceb8780aa95ee552f557461db6eeba40cf04fc3a57cf0cd40e71ea63242b3f11"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-cocktail-pina-colada.jpg",
+      "sha256": "af7218cc0139339fca1d485f1faf5615b1860724c0bc3b811f4247d727412e53"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-cocktail-sunrise.jpg",
+      "sha256": "bafc7fd90e3ef3f1c0d4a06036921a23d0d2b092fc56de61081ac62040a6fcc3"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-cocktail-whiskey-sour.jpg",
+      "sha256": "f89089b6eec21c8c5759875d6019dca144a6aa5db936694a3e045a71062ca061"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-food-booth-fruit.jpg",
+      "sha256": "c63b0d24a4c0bdf643c1522a2b566632b65c7c3867dee1eae1d31deb17f26449"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-food-cold-platter.jpg",
+      "sha256": "14a49f081a0ca43eed5be2affd38905f1537c790f2b9c3d639bf39a683e67a31"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-food-dessert.jpg",
+      "sha256": "97a4010f0ec2f0d400cc408795a2d923df74ef0b05c563585e509bc3a82353ef"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-food-friend-fruit.jpg",
+      "sha256": "eecb5fdc69ffaf3291d6a912978e1286810c4a0e88d1d95fe0b64a98adc1d1f9"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-food-river-fruit.jpg",
+      "sha256": "8b1b7481de7dfae181f805d3fea9b17af98b921a105da76f37b8219f3bcc0990"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-food-salty.jpg",
+      "sha256": "61666eac0a8a259c3b9e741806dcb0c0a3b2de9b7f62af8f5c03e9724137abaf"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-mbox-signature.jpg",
+      "sha256": "f084eb9f592baaac4975ce95c2ff873061adbcc090587fa09036905544e8d53d"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-mocktail-cinderella.jpg",
+      "sha256": "359831a270c186f6e4f61ff490ca4970f12cf381672e93d194ad4ead533f1bb4"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-mocktail-island.jpg",
+      "sha256": "e64cebefa52e994e06091ff55e149a90d34714aa793a6d960a81d14e9ba9400a"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-mocktail-tea-citrus.jpg",
+      "sha256": "6a4d71fc55253e50fb978135c3416ff754ed2a8e4035ffd361f2dceaac180eeb"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-sparkling-prosecco.jpg",
+      "sha256": "34f94616c694e210beecd077ab8f20d3abe5c521b371472c1b2a0746deeac27b"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-spirit-entry-1.jpg",
+      "sha256": "9157486cd364dd77a21386f3fd6dd4dc9edeb618e70a0ac1c5ff8f409d4cd4d4"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-spirit-entry-2.jpg",
+      "sha256": "def7c045701183802407bedd5ce1c9fa4bccddc05c0df0a5f882c83e9fe227e3"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-spirit-entry-3.jpg",
+      "sha256": "faa04470a337d785982ce41507931a3bc3c5e4a7260a9bdfda2e413a55a25825"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-spirit-entry-4.jpg",
+      "sha256": "7430d6d5b0a76c0729d8b6456a5c7d2a28665e4b157213acec5e5b88984998b4"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-spirit-macallan-blue.jpg",
+      "sha256": "ad34e631f71d326e8f339d2db3ff63b5d926cdbd0f322411a95158649e473945"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-spirit-macallan-sherry.jpg",
+      "sha256": "2ef17ea93a4a8f452e4beca5e7169920e13cdb3f7a968a21f659794b0a5dfe4f"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-wine-caesar-red.jpg",
+      "sha256": "4d15eac4c2e879fe0466357b98bb109f5801e62a7517927ebf3921b6cc8cd387"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-wine-caesar-white.jpg",
+      "sha256": "3c1d4722b16560210b979003215bddd38535ae1ef06d79be7cf7dee02c685bf6"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-wine-oyster-bay.jpg",
+      "sha256": "552ceaeec2a130a6304be4ecb66eb36203ce7d5f54f6793afa166d3c3d68e847"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-wine-penfolds-128.jpg",
+      "sha256": "b640af11781b0f509d40e1a2ec228fc1586331b93a0e884d2769619a2264ebae"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-wine-penfolds-28.jpg",
+      "sha256": "02dc28b8cafe861808160c8866a2e39e6bbc99979121369ebdc3a6b05ba57638"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-wine-riesling-dry.jpg",
+      "sha256": "58b34cfec6b2bcdcc639b01678e0e3390f6f3cc746103fe1d0418fb19b12fd97"
+    },
+    {
+      "path": "dist/menu/v2-pilot/items/v2-wine-riesling-semi.jpg",
+      "sha256": "46e738525fbef0c80143621074eed5c5cf7f130b12365cfb0b9fec99375cf427"
+    },
+    {
+      "path": "dist/menu/v2-pilot/spirits-service.jpg",
+      "sha256": "773b40ef3d3416553a32b990790617b7167ffe44ac32f5c68fcc34eb3a9166ce"
+    },
+    {
+      "path": "dist/menu/v2-pilot/wine-sparkling.jpg",
+      "sha256": "0d6abe6c6d3f217dd65a9fde96f8f872a66ec0789603cd606941a4d74a97b74a"
+    },
+    {
+      "path": "dist/menu/v3-pilot/items/v3-cognac-hennessy-vsop.jpg",
+      "sha256": "3b46ff6934b50b3fbc58e336fdc76fd1a5ae9fedce867b76cbe516828f0cecc7"
+    },
+    {
+      "path": "dist/menu/v3-pilot/items/v3-cognac-martell-cordon-bleu.jpg",
+      "sha256": "95eb4429cdfb00fdd75cda6fe8905255e0c842b87a2e6549bfa79118218bd56d"
+    },
+    {
+      "path": "dist/menu/v3-pilot/items/v3-food-fruit-refill.jpg",
+      "sha256": "9f98206eacf0f0829eb90046e70894a31a32aacd589b663b7f1f48f45c13d49c"
+    },
+    {
+      "path": "dist/menu/v3-pilot/items/v3-limited-ruins.jpg",
+      "sha256": "2ed4690810bb72d17261d443d58642510ef87dc08a8ae90a850e6e7c3c0dacdc"
+    },
+    {
+      "path": "dist/menu/v3-pilot/items/v3-music-pairing.jpg",
+      "sha256": "4bd693434e879218f40b913bc81b8297ffcf60deeb101e6bcfa0e2fc7d886f1f"
+    },
+    {
+      "path": "dist/menu/v3-pilot/items/v3-signature-forest-whisper.jpg",
+      "sha256": "a364560613e2f88b9a424a28abf21c21b8776ad037d6ad16df55fef6419d7771"
+    },
+    {
+      "path": "dist/menu/v3-pilot/items/v3-signature-garden-walk.jpg",
+      "sha256": "bcc58d03e94cda5268afce523d4e9e8452b4a03c121cb5ab0cf163acf59fc4fd"
+    },
+    {
+      "path": "dist/menu/v3-pilot/items/v3-signature-grapefruit-sour.jpg",
+      "sha256": "051033a5e6571d874fcec4bf269841114cf1d08da4658eb6601fa955f547ce49"
+    },
+    {
+      "path": "dist/menu/v3-pilot/items/v3-signature-melon-gin-tonic.jpg",
+      "sha256": "33b3dfd8f18c162ccddfe6be2cad2d976483b9dea9a9f1816709fc280786cf25"
+    },
+    {
+      "path": "dist/menu/v3-pilot/items/v3-signature-urban-oasis.jpg",
+      "sha256": "47edc7f78af2d4907224ef3296488454d0ddd3632edd8ff7e75dfbfa6d643ef9"
+    },
+    {
+      "path": "dist/menu/v3-pilot/items/v3-sparkling-rose.jpg",
+      "sha256": "ebeacfec51455043c7775999e5ac79bb64d92f1915e4924d277ea4f25f78d2f7"
+    },
+    {
+      "path": "dist/menu/v3-pilot/items/v3-spirit-buffalo-trace.jpg",
+      "sha256": "27c94adf9c1481aabda2ae693c801125173994c12b9792d3856b2ffce4dcd0ee"
+    },
+    {
+      "path": "dist/menu/v3-pilot/items/v3-spirit-chivas-18.jpg",
+      "sha256": "6a1ee8ba31bcd1d079c681d07b9f77c2080c4d2d23cbadb1096b2bcb18d878de"
+    },
+    {
+      "path": "dist/menu/v3-pilot/items/v3-spirit-glenlivet-12.jpg",
+      "sha256": "e571e55f2b0911d192fe024fbe695983f39c3b109caffd1b0f09f1d7798795f4"
+    },
+    {
+      "path": "dist/menu/v3-pilot/items/v3-spirit-jack-daniels.jpg",
+      "sha256": "fe45cf6df0f2d5190c5b74e8e4fec9fce626d40b87fe4bfd9556689b6e60d371"
+    },
+    {
+      "path": "dist/menu/v3-pilot/items/v3-visual-grape-fizz.jpg",
+      "sha256": "7a06d6544de35031c3a1cbb0cb4ecf0131f40c9f0e6c90a09e2d739ce9c1b829"
+    },
+    {
+      "path": "dist/menu/v3-pilot/items/v3-visual-sunset-dusk.jpg",
+      "sha256": "370acd208a85e1ed93aaa18c3dfeff1751de347e170133378431b49fc547296f"
+    },
+    {
+      "path": "dist/singers/lin-xiaoman.jpg",
+      "sha256": "4fb4cd583ba3ddb1ebe853ec7ec694ddda65c1479ab810316d49d73b5efe056f"
+    },
+    {
+      "path": "dist/singers/zhou-yichen.jpg",
+      "sha256": "ba458dd657b49f0aa4498963e8d0b3600d785749f51ea977ecd9dd082bda49f7"
+    },
+    {
+      "path": "dist/sw.js",
+      "sha256": "8fecd81b6a228ae476ed313e58166966430ffeb1164ca10a917b913108bb7605"
+    }
+  ]
+}

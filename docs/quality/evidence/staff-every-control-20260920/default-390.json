@@ -1,0 +1,45 @@
+{
+  "run": "default-390",
+  "width": 390,
+  "employeeCount": 13,
+  "routes": [
+    "/",
+    "/staff/live",
+    "/staff/payments",
+    "/staff/reservations",
+    "/staff/performance",
+    "/staff/inventory",
+    "/staff/devices",
+    "/staff/operations",
+    "/staff/customer-experience",
+    "/staff/settings",
+    "/staff/tasks",
+    "/staff/fulfillment",
+    "/staff/orders",
+    "/staff/member-fulfillment",
+    "/staff/member-exceptions",
+    "/staff/member-overview",
+    "/staff/member-rule-publish",
+    "/staff/member-accounts",
+    "/staff/member-management",
+    "/staff/member-rule-approvals",
+    "/staff/member-rule-drafts"
+  ],
+  "visits": 144,
+  "states": 341,
+  "failures": [],
+  "pageErrors": [],
+  "httpErrors": [
+    {
+      "employee": "lengyanzhi",
+      "route": "/staff/member-management",
+      "errors": [
+        {
+          "path": "/api/catalog/products",
+          "status": 403
+        }
+      ]
+    }
+  ],
+  "overflow": []
+}

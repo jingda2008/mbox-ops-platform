@@ -1,3 +1,4 @@
+import {kitchenProductionApiPlugin} from './kitchen-production-api.js'
 import { customerCustodyApiPlugin } from './customer-custody-api.js'
 import {wechatServiceAccountSubscribePlugin} from './wechat-service-account-subscribe.js'
 import {socialBroadcastApiPlugin} from './social-broadcast-api.js'
@@ -791,11 +792,18 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       paymentProviderConfigured,
       onlinePaymentProvider,
     )
+    instance.register(kitchenProductionApiPlugin, {
+      enabled:options.config.kitchenBatchBoardEnabled===true,
+      prefix: '/api', resolveContext: commerceContext, commandExecutor,
+      staffAccessTransactions: transactions,
+      createKdsRepository: transaction => new KdsRepository(transaction),
+      createOrderRepository: transaction => new OrderRepository(transaction),
+    })
     instance.register(commerceKdsApiPlugin, {
       quantityActionsEnabled:(options.quantityAfterSalesEnabled ?? options.config.quantityAfterSalesEnabled)===true,
       prefix: '/api',
       commerce,
-      fulfillmentQuery: new FulfillmentQueryService(transactions),
+      fulfillmentQuery: new FulfillmentQueryService(transactions,options.config.kitchenBatchBoardEnabled===true),
       commandExecutor,
       staffAccessTransactions: transactions,
       resolveContext: commerceContext,
@@ -1002,6 +1010,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     })
     instance.register(membershipConfigurationApiPlugin, {
       prefix: '/api',
+      commands:commandExecutor,
       transactions,
       resolveStaffContext: staffReservationContext,
     })

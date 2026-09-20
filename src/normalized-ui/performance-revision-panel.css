@@ -6,3 +6,6 @@
 .monthly-schedule-panel input,.monthly-schedule-panel select,.monthly-schedule-panel button { min-height: 44px; max-width: 100%; }
 .monthly-schedule-days { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,320px),1fr)); gap: 12px; }
 .monthly-schedule-panel article { padding: 10px 0; border-bottom: 1px solid #d2dfd9; }
+
+.monthly-schedule-panel>summary{min-height:44px;align-content:center;padding:8px 0;box-sizing:border-box;cursor:pointer}
+.monthly-schedule-panel>summary:focus-visible{outline:2px solid #315d46;outline-offset:3px}

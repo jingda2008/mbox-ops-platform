@@ -1,0 +1,23 @@
+{
+  "movements": [
+    {
+      "id": "e0c91382-c06d-45e4-87b1-e86d96f48683",
+      "movement_type": "waste",
+      "quantity_delta": "-1.000000",
+      "reason": "逐键审计：模拟服务已登记但浏览器没有收到结果",
+      "created_by_employee_id": "223a23d3-892c-4433-85df-c79c4fb98e53"
+    },
+    {
+      "id": "a9ab8cb1-f5ae-4b5f-bd0e-5a7aad40b22b",
+      "movement_type": "waste",
+      "quantity_delta": "-1.000000",
+      "reason": "逐键审计：模拟服务已登记但浏览器没有收到结果",
+      "created_by_employee_id": "223a23d3-892c-4433-85df-c79c4fb98e53"
+    }
+  ],
+  "balance": [
+    {
+      "on_hand_quantity": "998.000000"
+    }
+  ]
+}

@@ -198,7 +198,7 @@ test('manager mobile pages prioritize current actions and keep low-frequency det
   await page.locator('.catalog-management-list article').filter({ hasText: data.orderableProductName }).first().getByRole('button', { name: '编辑' }).click()
   await expect(page.getByLabel('推荐优先级')).toBeVisible()
   await expect(page.getByLabel('菜单排序')).toHaveCount(0)
-  await page.getByRole('button', { name: /显示高级字段/ }).click()
+  await page.getByRole('button', { name: /更多设置（供应、标签与渠道）/ }).click()
   await expect(page.getByLabel('菜单排序')).toBeVisible()
   await expectNoHorizontalOverflow(page, 'catalog advanced settings')
 })

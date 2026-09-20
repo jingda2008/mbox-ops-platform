@@ -1,3 +1,4 @@
+import {seedKitchenBrowserFixture} from './fixtures/kitchen-browser-fixture.js'
 import {QuantityRemakeRepository} from '../server/normalized/quantity-remake-repository.js'
 import {QuantityRemakeFulfillmentRepository} from '../server/normalized/quantity-remake-fulfillment-repository.js'
 import {PostgresTableCustomerLeftTurnoverRepository} from '../server/normalized/table-customer-left-turnover-repository.js'
@@ -67,6 +68,7 @@ try {
     MBOX_VOUCHER_MODE: process.env.NORMALIZED_E2E_VOUCHER_TEST==='true'?'test':'disabled',
     MBOX_START_WORKERS: 'false',
     MBOX_QUANTITY_AFTER_SALES_ENABLED: 'true',
+    MBOX_KITCHEN_BATCH_BOARD_ENABLED:process.env.NORMALIZED_E2E_KITCHEN==='true'?'true':'false',
     MBOX_STATIC_DIR: resolve(process.env.MBOX_STATIC_DIR ?? 'dist'),
     HOST: '127.0.0.1',
     PORT: String(port),
@@ -218,9 +220,11 @@ try {
     }
   })
 
+  const kitchenBatchFixture=process.env.NORMALIZED_E2E_KITCHEN==='true'?await seedKitchenBrowserFixture(testUrl,scope.tenantId,scope.storeId,businessDate):undefined
   await mkdir(dirname(fixturePath), { recursive: true })
   await writeFile(fixturePath, `${JSON.stringify({
     schemaVersion: 1,
+    kitchenBatchFixture,
     guestUrl: `/guest?table=W01#token=${tableQrToken}`,
     reservationUrl: '/reserve',
     staffUrl: '/',

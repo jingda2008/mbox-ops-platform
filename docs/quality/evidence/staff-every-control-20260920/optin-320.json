@@ -1,0 +1,39 @@
+{
+  "run": "optin-320",
+  "width": 320,
+  "employeeCount": 1,
+  "routes": [
+    "/",
+    "/staff/reservations",
+    "/staff/live",
+    "/staff/tasks",
+    "/staff/fulfillment",
+    "/staff/payments",
+    "/staff/performance",
+    "/staff/inventory",
+    "/staff/operations",
+    "/staff/customer-experience",
+    "/staff/settings",
+    "/staff/orders",
+    "/staff/member-fulfillment",
+    "/staff/member-exceptions",
+    "/staff/member-overview",
+    "/staff/member-rule-drafts",
+    "/staff/member-accounts",
+    "/staff/member-management",
+    "/staff/devices"
+  ],
+  "visits": 19,
+  "states": 52,
+  "failures": [],
+  "pageErrors": [],
+  "httpErrors": [],
+  "overflow": [
+    {
+      "employee": "liyan",
+      "route": "/staff/member-management",
+      "state": "section:会员通知",
+      "pixels": 65
+    }
+  ]
+}

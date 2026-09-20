@@ -1,3 +1,4 @@
+import {ScaledNumberField} from './ScaledNumberField'
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { ChevronDown, Copy, FileCheck2, Plus, Rocket, ShieldCheck } from 'lucide-react'
 import type { NormalizedApiClient, StaffAuthView } from '../normalized-api'
@@ -67,7 +68,7 @@ export function RecommendationPolicyManagementPanel({api,auth}:{api:NormalizedAp
         marginWeight:integer(draft.marginWeight,'毛利权重',-1000,1000),
         priorityWeight:integer(draft.priorityWeight,'经营优先级权重',-1000,1000),
         performanceWeight:0,inventoryWeight:0,capacityWeight:0,
-        minimumGrossMarginBasisPoints:integer(draft.minimumGrossMarginBasisPoints,'最低毛利基点',0,9999),
+        minimumGrossMarginBasisPoints:integer(draft.minimumGrossMarginBasisPoints,'最低毛利率',0,9999),
         preferenceHalfLifeDays:integer(draft.preferenceHalfLifeDays,'偏好半衰期',7,730),
         preferenceMaxAgeDays:integer(draft.preferenceMaxAgeDays,'偏好最长有效期',30,3650),
         preferenceMinEffectiveScore:integer(draft.preferenceMinEffectiveScore,'偏好最低有效分',1,10000),
@@ -117,7 +118,7 @@ export function RecommendationPolicyManagementPanel({api,auth}:{api:NormalizedAp
   async function setRollout(rolloutState:RolloutState){
     const reason=(await promptAction({title:'填写推荐开放调整原因',description:`将顾客推荐调整为“${rolloutLabel[rolloutState]}”。`,label:'调整原因',defaultValue:rolloutState==='disabled'?'停止顾客曝光，保留原点单流程':rolloutState==='pilot'?'当前已发布规则用于可随时关闭的门店试运行':'已完成规则、岗位和样本复核',confirmLabel:'继续'}))?.trim()??''
     if(reason.length<2||busy)return
-    if((rolloutState==='pilot'||rolloutState==='enabled')&&!(await confirmAction({title:'确认开放顾客推荐',description:rolloutState==='pilot'?'试运行可使用当前已发布规则，随时可关闭；可售、库存、产能与支付门禁不变。':'正式启用仍需要当前生效的三人分离版本。',confirmLabel:'确认开放'})))return
+    if((rolloutState==='pilot'||rolloutState==='enabled')&&!(await confirmAction({title:'确认开放顾客推荐',description:rolloutState==='pilot'?'试运行可使用当前已发布规则，随时可关闭；仍需满足上架、库存、出品能力与付款条件。':'正式启用仍需要当前生效的三人分离版本。',confirmLabel:'确认开放'})))return
     setBusy('rollout');setNotice('')
     try{
       await api.putEndpoint('/api/staff/customer-experience/features/recommendation.engine',{
@@ -138,7 +139,7 @@ export function RecommendationPolicyManagementPanel({api,auth}:{api:NormalizedAp
       <div className="recommendation-rollout-card"><div><strong>顾客开放状态：{configuration?rolloutLabel[configuration.feature.rolloutState]:'—'}</strong><small>{configuration?.feature.reason??'正在读取门店状态'}{active?` · 当前第 ${active.version} 版`:' · 当前没有已生效的发布版本'}</small></div>
         {canPublish&&<div>{(['disabled','shadow','pilot','enabled'] as const).map((state)=><button type="button" key={state} disabled={busy!==''||configuration?.feature.rolloutState===state} onClick={()=>void setRollout(state)}>{rolloutLabel[state]}</button>)}</div>}
       </div>
-      <p className="recommendation-policy-boundary">演出、库存、产能已作为硬性可售门禁，但尚未成为可调评分项，因此对应权重固定为 0；不得用虚假分值影响排序。</p>
+      <p className="recommendation-policy-boundary">仅推荐当前演出阶段、库存和出品能力允许的商品；这三项不参与权重设置。匹配把握低于设定比例时，不采用该偏好作推荐依据。</p>
       <div className="recommendation-policy-grid">{configuration?.policies.map((policy)=><article key={policy.publicId} data-status={policy.status}>
         <header><div><strong>{policy.code} · 第 {policy.version} 版</strong><small>{policy.publicationMode==='legacy_unverified'?'历史版本，未补造三人证据':'三人分离受控版本'}</small></div><em>{statusLabel[policy.status]}</em></header>
         <dl><div><dt>偏好 / 场景</dt><dd>{policy.preferenceWeight} / {policy.sceneWeight}</dd></div><div><dt>毛利 / 优先级</dt><dd>{policy.marginWeight} / {policy.priorityWeight}</dd></div><div><dt>最低毛利</dt><dd>{(policy.minimumGrossMarginBasisPoints/100).toFixed(2)}%</dd></div></dl>
@@ -152,8 +153,8 @@ export function RecommendationPolicyManagementPanel({api,auth}:{api:NormalizedAp
       {configuration?.policies.length===0&&<p className="recommendation-policy-empty">尚无推荐规则；顾客推荐保持关闭，原点单流程不受影响。</p>}
       {canDraft&&!draft&&<button className="recommendation-policy-create" type="button" onClick={()=>setDraft(emptyDraft(configuration?.policies[0]))}><Plus size={16}/>新建推荐规则草稿</button>}
       {draft&&<form className="recommendation-policy-draft" onSubmit={(event)=>void create(event)}>
-        <header><div><strong>新建 DEFAULT 推荐规则草稿</strong><small>仅保存强类型经营参数；保存、审批、发布必须由三名不同员工完成。</small></div><button type="button" onClick={()=>setDraft(null)}>取消</button></header>
-        <div>{field('偏好权重','preferenceWeight',draft,setDraft,-1000,1000)}{field('场景权重','sceneWeight',draft,setDraft,-1000,1000)}{field('毛利权重','marginWeight',draft,setDraft,-1000,1000)}{field('经营优先级权重','priorityWeight',draft,setDraft,-1000,1000)}{field('最低毛利基点','minimumGrossMarginBasisPoints',draft,setDraft,0,9999)}{field('偏好半衰期（天）','preferenceHalfLifeDays',draft,setDraft,7,730)}{field('偏好最长有效期（天）','preferenceMaxAgeDays',draft,setDraft,30,3650)}{field('偏好最低有效分','preferenceMinEffectiveScore',draft,setDraft,1,10000)}{field('最低置信度基点','preferenceMinConfidenceBasisPoints',draft,setDraft,0,10000)}</div>
+        <header><div><strong>新建推荐规则草稿</strong><small>保存草稿后，由其他人员审核，再由第三人发布。</small></div><button type="button" onClick={()=>setDraft(null)}>取消</button></header>
+        <div>{field('偏好权重','preferenceWeight',draft,setDraft,-1000,1000)}{field('场景权重','sceneWeight',draft,setDraft,-1000,1000)}{field('毛利权重','marginWeight',draft,setDraft,-1000,1000)}{field('经营优先级权重','priorityWeight',draft,setDraft,-1000,1000)}{field('最低毛利率','minimumGrossMarginBasisPoints',draft,setDraft,0,9999)}{field('偏好半衰期（天）','preferenceHalfLifeDays',draft,setDraft,7,730)}{field('偏好最长有效期（天）','preferenceMaxAgeDays',draft,setDraft,30,3650)}{field('偏好最低有效分','preferenceMinEffectiveScore',draft,setDraft,1,10000)}{field('最低匹配把握','preferenceMinConfidenceBasisPoints',draft,setDraft,0,10000)}</div>
         <label>顾客可见解释<textarea required minLength={2} maxLength={500} value={draft.explanationTemplate} onChange={(event)=>setDraft({...draft,explanationTemplate:event.target.value})}/></label>
         <label>起草原因<textarea required minLength={2} maxLength={500} value={draft.draftReason} onChange={(event)=>setDraft({...draft,draftReason:event.target.value})}/></label>
         <button className="recommendation-policy-submit" type="submit" disabled={busy!==''}>保存草稿，交由另一人审批</button>
@@ -162,7 +163,7 @@ export function RecommendationPolicyManagementPanel({api,auth}:{api:NormalizedAp
   </section>
 }
 
-function field(label:string,keyName:keyof Draft,draft:Draft,setDraft:(value:Draft)=>void,min:number,max:number){return <label key={keyName}>{label}<input type="number" min={min} max={max} required value={draft[keyName]} onChange={(event)=>setDraft({...draft,[keyName]:event.target.value})}/></label>}
+function field(label:string,keyName:keyof Draft,draft:Draft,setDraft:(value:Draft)=>void,min:number,max:number){if(keyName.endsWith('BasisPoints'))return <ScaledNumberField key={keyName} label={keyName==='minimumGrossMarginBasisPoints'?'最低毛利率':'最低匹配把握'} unit="%" required maxValue={max} value={String(draft[keyName])} onChange={value=>setDraft({...draft,[keyName]:value})}/>;return <label key={keyName}>{label}<input type="number" min={min} max={max} required value={draft[keyName]} onChange={(event)=>setDraft({...draft,[keyName]:event.target.value})}/></label>}
 function emptyDraft(source?:PolicyView):Draft{return{
   preferenceWeight:String(source?.preferenceWeight??100),sceneWeight:String(source?.sceneWeight??60),
   marginWeight:String(source?.marginWeight??50),priorityWeight:String(source?.priorityWeight??50),

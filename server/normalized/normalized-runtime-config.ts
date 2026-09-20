@@ -7,6 +7,7 @@ import {
   readNormalizedIntegrationContract,
   type NormalizedIntegrationContract,
 } from './normalized-runtime-config-contract.js'
+import type { GroupVoucherRuntimeConfig } from './group-voucher-platforms.js'
 
 export const NORMALIZED_SCHEMA_FLAVOR = 'normalized-core-v1'
 
@@ -75,6 +76,7 @@ export interface NormalizedRuntimeConfig {
   wechatServiceAccountCallback?: NormalizedWechatServiceAccountCallbackRuntimeConfig | null
   alipayPhone: NormalizedAlipayPhoneRuntimeConfig | null
   personalContactProtection?: NormalizedPersonalContactRuntimeConfig | null
+  voucher?: GroupVoucherRuntimeConfig
   guestPaymentMode: GuestCheckoutPaymentMode
   inventoryEnforcementMode: 'strict' | 'audit_only'
   guestOrderSafetyPolicy: Readonly<GuestOrderSafetyPolicy>
@@ -133,6 +135,7 @@ export function loadNormalizedRuntimeConfig(
   const wechatServiceAccountSubscribe = readWechatServiceAccountSubscribe(environment, secret, errors)
   const wechatServiceAccountCallback = readWechatServiceAccountCallback(environment, errors)
   const alipayPhone = readAlipayPhone(environment, errors)
+  const voucher = readVoucher(environment, deploymentTier, errors)
   const personalContactProtection = readPersonalContactProtection(
     environment,commercialProduction,errors,
   )
@@ -235,6 +238,7 @@ export function loadNormalizedRuntimeConfig(
     wechatServiceAccountCallback,
     wechatServiceAccountSubscribe,
     alipayPhone,
+    voucher,
     personalContactProtection,
     guestPaymentMode,
     inventoryEnforcementMode,
@@ -321,6 +325,129 @@ function decodeContactKey(value: string | null, field: string, errors: string[])
     return null
   }
   return key
+}
+
+function readVoucher(
+  environment: Readonly<Record<string, string | undefined>>,
+  deploymentTier: 'validation' | 'production',
+  errors: string[],
+): GroupVoucherRuntimeConfig {
+  const modeRaw = optional(environment.MBOX_VOUCHER_MODE)
+  let mode: GroupVoucherRuntimeConfig['mode'] = 'disabled'
+  if (modeRaw === null) mode = 'disabled'
+  else if (modeRaw === 'disabled' || modeRaw === 'test' || modeRaw === 'uat' || modeRaw === 'production') {
+    mode = modeRaw
+  } else {
+    errors.push('MBOX_VOUCHER_MODE')
+  }
+  if (deploymentTier === 'production' && mode === 'test') errors.push('MBOX_VOUCHER_MODE')
+  if (deploymentTier === 'validation' && mode === 'production') errors.push('MBOX_VOUCHER_MODE')
+  const timeoutMs = readInteger(
+    environment.MBOX_VOUCHER_HTTP_TIMEOUT_MS, 'MBOX_VOUCHER_HTTP_TIMEOUT_MS', 8_000, 1_000, 30_000, errors,
+  )
+  const meituan = readMeituanVoucher(environment, mode, errors)
+  const dianping = readDianpingVoucher(environment, mode, errors)
+  const douyin = readDouyinVoucher(environment, mode, errors)
+  const kuaishou = readKuaishouVoucher(environment, mode, errors)
+  return Object.freeze({
+    mode,
+    timeoutMs,
+    platforms: Object.freeze({ dianping, meituan, douyin, kuaishou }),
+  })
+}
+
+function readMeituanVoucher(
+  environment: Readonly<Record<string, string | undefined>>,
+  mode: GroupVoucherRuntimeConfig['mode'],
+  errors: string[],
+): GroupVoucherRuntimeConfig['platforms']['meituan'] {
+  return readPlatformGroup(mode, errors, [
+    ['MBOX_MEITUAN_APP_KEY', environment.MBOX_MEITUAN_APP_KEY, 4],
+    ['MBOX_MEITUAN_APP_SECRET', environment.MBOX_MEITUAN_APP_SECRET, 8],
+    ['MBOX_MEITUAN_SHOP_ID', environment.MBOX_MEITUAN_SHOP_ID, 2],
+    ['MBOX_MEITUAN_ACCESS_TOKEN', environment.MBOX_MEITUAN_ACCESS_TOKEN, 8],
+  ], environment.MBOX_MEITUAN_API_BASE, 'MBOX_MEITUAN_API_BASE', 'https://api-open-cater.meituan.com',
+  (values, apiBase) => ({
+    appKey: values[0]!, appSecret: values[1]!, shopId: values[2]!, accessToken: values[3]!, apiBase,
+  }))
+}
+
+function readDianpingVoucher(
+  environment: Readonly<Record<string, string | undefined>>,
+  mode: GroupVoucherRuntimeConfig['mode'],
+  errors: string[],
+): GroupVoucherRuntimeConfig['platforms']['dianping'] {
+  return readPlatformGroup(mode, errors, [
+    ['MBOX_DIANPING_APP_KEY', environment.MBOX_DIANPING_APP_KEY, 4],
+    ['MBOX_DIANPING_APP_SECRET', environment.MBOX_DIANPING_APP_SECRET, 8],
+    ['MBOX_DIANPING_SESSION', environment.MBOX_DIANPING_SESSION, 8],
+    ['MBOX_DIANPING_SHOP_ID', environment.MBOX_DIANPING_SHOP_ID, 2],
+  ], environment.MBOX_DIANPING_API_BASE, 'MBOX_DIANPING_API_BASE', 'https://openapi.dianping.com',
+  (values, apiBase) => ({
+    appKey: values[0]!, appSecret: values[1]!, session: values[2]!, shopId: values[3]!, apiBase,
+  }))
+}
+
+function readDouyinVoucher(
+  environment: Readonly<Record<string, string | undefined>>,
+  mode: GroupVoucherRuntimeConfig['mode'],
+  errors: string[],
+): GroupVoucherRuntimeConfig['platforms']['douyin'] {
+  return readPlatformGroup(mode, errors, [
+    ['MBOX_DOUYIN_CLIENT_KEY', environment.MBOX_DOUYIN_CLIENT_KEY, 4],
+    ['MBOX_DOUYIN_CLIENT_SECRET', environment.MBOX_DOUYIN_CLIENT_SECRET, 8],
+    ['MBOX_DOUYIN_POI_ID', environment.MBOX_DOUYIN_POI_ID, 2],
+    ['MBOX_DOUYIN_ACCOUNT_ID', environment.MBOX_DOUYIN_ACCOUNT_ID, 2],
+  ], environment.MBOX_DOUYIN_API_BASE, 'MBOX_DOUYIN_API_BASE', 'https://open.douyin.com',
+  (values, apiBase) => ({
+    clientKey: values[0]!, clientSecret: values[1]!, poiId: values[2]!, accountId: values[3]!, apiBase,
+  }))
+}
+
+function readKuaishouVoucher(
+  environment: Readonly<Record<string, string | undefined>>,
+  mode: GroupVoucherRuntimeConfig['mode'],
+  errors: string[],
+): GroupVoucherRuntimeConfig['platforms']['kuaishou'] {
+  return readPlatformGroup(mode, errors, [
+    ['MBOX_KUAISHOU_APP_ID', environment.MBOX_KUAISHOU_APP_ID, 4],
+    ['MBOX_KUAISHOU_APP_SECRET', environment.MBOX_KUAISHOU_APP_SECRET, 8],
+    ['MBOX_KUAISHOU_MERCHANT_ID', environment.MBOX_KUAISHOU_MERCHANT_ID, 2],
+    ['MBOX_KUAISHOU_POI_ID', environment.MBOX_KUAISHOU_POI_ID, 2],
+  ], environment.MBOX_KUAISHOU_API_BASE, 'MBOX_KUAISHOU_API_BASE', 'https://open.kuaishou.com',
+  (values, apiBase) => ({
+    appId: values[0]!, appSecret: values[1]!, merchantId: values[2]!, poiId: values[3]!, apiBase,
+  }))
+}
+
+function readPlatformGroup<T>(
+  mode: GroupVoucherRuntimeConfig['mode'],
+  errors: string[],
+  fields: ReadonlyArray<readonly [string, string | undefined, number]>,
+  apiBaseRaw: string | undefined,
+  apiBaseField: string,
+  defaultBase: string,
+  build: (values: string[], apiBase: string) => T,
+): T | null {
+  const values = fields.map(([, value]) => optional(value))
+  const present = values.some((value) => value !== null)
+  const apiBase = optional(apiBaseRaw)
+  if (mode === 'disabled' || mode === 'test') {
+    if (present || apiBase !== null) {
+      for (const [field, value] of fields) if (optional(value) !== null) errors.push(field)
+      if (apiBase !== null) errors.push(apiBaseField)
+    }
+    return null
+  }
+  if (!present && apiBase === null) return null
+  const complete = values.every((value, index) => value !== null && value.length >= fields[index]![2])
+  values.forEach((value, index) => {
+    if (value === null || value.length < fields[index]![2]) errors.push(fields[index]![0])
+  })
+  const resolvedBase = apiBase ?? defaultBase
+  if (!isHttpsUrl(resolvedBase)) errors.push(apiBaseField)
+  if (!complete || !isHttpsUrl(resolvedBase)) return null
+  return Object.freeze(build(values as string[], resolvedBase))
 }
 
 function readAlipayPhone(

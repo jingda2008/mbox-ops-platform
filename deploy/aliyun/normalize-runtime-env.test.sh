@@ -88,6 +88,8 @@ MBOX_WECHAT_SERVICE_ACCOUNT_CALLBACK_TOKEN=MBoxCallbackToken2026
 MBOX_WECHAT_SERVICE_ACCOUNT_ENCODING_AES_KEY=BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc
 MBOX_ALIPAY_APP_ID=2021006196615276
 MBOX_ALIPAY_AES_KEY=alipay-aes-key-16
+MBOX_VOUCHER_MODE=test
+MBOX_MEITUAN_SHOP_ID=demo-shop
 MBOX_AI_MODE=disabled
 MBOX_PRINT_MODE=disabled
 MBOX_HEADSET_MODE=disabled
@@ -109,6 +111,8 @@ grep -qx 'MBOX_WECHAT_SERVICE_ACCOUNT_CALLBACK_TOKEN=MBoxCallbackToken2026' "${p
 grep -qx 'MBOX_WECHAT_SERVICE_ACCOUNT_ENCODING_AES_KEY=BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc' "${postar_env_file}"
 grep -qx 'MBOX_ALIPAY_APP_ID=2021006196615276' "${postar_env_file}"
 grep -qx 'MBOX_ALIPAY_AES_KEY=alipay-aes-key-16' "${postar_env_file}"
+grep -qx 'MBOX_VOUCHER_MODE=test' "${postar_env_file}"
+grep -qx 'MBOX_MEITUAN_SHOP_ID=demo-shop' "${postar_env_file}"
 
 # Release normalization must preserve the explicit aftersales rollout decision.
 # Missing means the runtime default, and invalid values must reach the runtime

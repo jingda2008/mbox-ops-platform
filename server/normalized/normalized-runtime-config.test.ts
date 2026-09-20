@@ -453,6 +453,37 @@ describe('loadNormalizedRuntimeConfig', () => {
       MBOX_WORKER_ID: 'mbox-worker-production-01',
     })).toThrowError(NormalizedRuntimeConfigurationError)
   })
+
+  it('keeps group voucher verification off until a complete platform group is configured', () => {
+    expect(loadNormalizedRuntimeConfig(base).voucher).toMatchObject({
+      mode: 'disabled',
+      platforms: { dianping: null, meituan: null, douyin: null, kuaishou: null },
+    })
+    expect(loadNormalizedRuntimeConfig({
+      ...base, MBOX_VOUCHER_MODE: 'test',
+    }).voucher?.mode).toBe('test')
+    expect(() => loadNormalizedRuntimeConfig({
+      ...base, MBOX_VOUCHER_MODE: 'test', MBOX_MEITUAN_APP_KEY: 'leftover-key',
+    })).toThrowError(/MBOX_MEITUAN_APP_KEY/)
+    expect(() => loadNormalizedRuntimeConfig({
+      ...base, MBOX_VOUCHER_MODE: 'production',
+    })).toThrowError(/MBOX_VOUCHER_MODE/)
+    const uat = loadNormalizedRuntimeConfig({
+      ...base,
+      MBOX_VOUCHER_MODE: 'uat',
+      MBOX_MEITUAN_APP_KEY: 'mt-key',
+      MBOX_MEITUAN_APP_SECRET: 'mt-secret-value',
+      MBOX_MEITUAN_SHOP_ID: 'shop-1',
+      MBOX_MEITUAN_ACCESS_TOKEN: 'mt-access-token',
+    })
+    expect(uat.voucher?.platforms.meituan).toMatchObject({
+      appKey: 'mt-key', shopId: 'shop-1', apiBase: 'https://api-open-cater.meituan.com',
+    })
+    expect(uat.voucher?.platforms.dianping).toBeNull()
+    expect(() => loadNormalizedRuntimeConfig({
+      ...base, MBOX_VOUCHER_MODE: 'uat', MBOX_MEITUAN_APP_KEY: 'mt-key',
+    })).toThrowError(NormalizedRuntimeConfigurationError)
+  })
 })
 
 it('preserves explicitly configured subscribe templates without enabling absent configuration',()=>{

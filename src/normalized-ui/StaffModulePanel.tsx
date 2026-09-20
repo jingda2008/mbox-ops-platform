@@ -53,6 +53,9 @@ import './staff-module-panel.css'
 const CashierAfterSalesWorkbench = lazy(() => import('./CashierAfterSalesWorkbench').then((module) => ({
   default: module.CashierAfterSalesWorkbench,
 })))
+const GroupVoucherRedemptionPanel = lazy(() => import('./GroupVoucherRedemptionPanel').then((module) => ({
+  default: module.GroupVoucherRedemptionPanel,
+})))
 const OrderCenterPanel = lazy(() => import('./OrderCenterPanel').then(module=>({default:module.OrderCenterPanel})))
 const CatalogManagementPanel = lazy(() => import('./CatalogManagementPanel').then((module) => ({
   default: module.CatalogManagementPanel,
@@ -467,7 +470,10 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
   const content = useMemo(() => {
     if(module==='orders')return <OrderCenterPanel key={orderRefreshToken} api={api} onLoginRequired={onLoginRequired} printEmployeeId={auth.permissions.includes('order.bill.print')?auth.employee.id:undefined} inventoryEmployeeId={auth.permissions.includes('inventory.receive')?auth.employee.id:undefined}/>
     if (module === 'payments') {
-      return <><ItemAfterSalesPendingPanel employeeId={auth.employee.id}/><CashierAfterSalesWorkbench
+      return <><ItemAfterSalesPendingPanel employeeId={auth.employee.id}/><GroupVoucherRedemptionPanel
+        api={api}
+        auth={auth}
+      /><CashierAfterSalesWorkbench
         api={api}
         auth={auth}
         onLoginRequired={onLoginRequired}

@@ -70,7 +70,7 @@ describe('normalized migration baseline', () => {
       '192',
       '193',
       '194',
-      '195', '196', '197', '198', '199', '200', '201', '202', '203', '204', '205', '206', '207', '208', '209', '210', '211', '212', '213', '214', '215', '216', '217', '218', '219', '220', '221',
+      '195', '196', '197', '198', '199', '200', '201', '202', '203', '204', '205', '206', '207', '208', '209', '210', '211', '212', '213', '214', '215', '216', '217', '218', '219', '220', '221', '222',
     ])
     for (const migration of migrations) {
       expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/)
@@ -1059,6 +1059,7 @@ describe('normalized migration baseline', () => {
       'inventory_stock_count_lines', 'stored_bottles', 'stored_bottle_events',
       'operating_cost_entries', 'employee_sales_rules',
       'employee_sales_attribution_events', 'group_voucher_redemptions',
+      'group_voucher_verification_attempts',
       'table_session_transfer_events', 'sop_rules', 'sop_rule_versions',
       'sop_rule_steps', 'sop_instances', 'sop_step_executions',
       'ai_execution_requests', 'guest_behavior_events', 'guest_service_request_groups',
@@ -1262,5 +1263,16 @@ describe('normalized migration baseline', () => {
       hasNormalizedMigrations: true,
       schemaFlavor: 'another-product',
     })).toThrow('flavor')
+  })
+
+  it('adds Dianping, Meituan, Douyin and Kuaishou voucher verification without rewriting local redemptions', async () => {
+    const migration = (await loadNormalizedMigrations()).find((entry) => entry.version === '222')
+    expect(migration?.filename).toBe('222_group_voucher_platform_verification.sql')
+    expect(migration?.sql).toMatch(/ADD COLUMN platform_code text/)
+    expect(migration?.sql).toMatch(/'dianping', 'meituan', 'douyin', 'kuaishou'/)
+    expect(migration?.sql).toMatch(/CREATE TABLE mbox\.group_voucher_verification_attempts/)
+    expect(migration?.sql).toMatch(/commercial\.voucher\.view/)
+    expect(migration?.sql).toMatch(/commercial\.voucher\.redeem/)
+    expect(migration?.sql).toMatch(/schema_version = '222'/)
   })
 })

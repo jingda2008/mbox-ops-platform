@@ -14,6 +14,9 @@ const provisioningFields = [
 const provisioningTemplate = provisioningFields.map((field) =>
   `${field}=<${field === storeConfig.dailyCredentialEnv ? 'store-daily-credential' : 'unique-four-digit-pin'}>`)
 
+// Optional group-buy voucher verification (Dianping/Meituan/Douyin/Kuaishou).
+// Credentials stay in the protected env file; never commit live secrets.
+// MBOX_VOUCHER_MODE=disabled|test|uat|production
 const common = [
   `MBOX_RUNTIME_CONFIG_VERSION=${NORMALIZED_RUNTIME_CONFIG_VERSION}`,
   'NODE_ENV=production',

@@ -35,6 +35,13 @@ describe('paymentPolicyPresentation', () => {
     expect(source).toContain('任何处理仍按当前权限和服务端状态复验')
   })
 
+  it('keeps Dianping, Meituan, Douyin and Kuaishou voucher redemption on the cashier page', () => {
+    const source = readFileSync(new URL('./StaffModulePanel.tsx', import.meta.url), 'utf8')
+    expect(source).toContain("import('./GroupVoucherRedemptionPanel')")
+    expect(source).toContain('<GroupVoucherRedemptionPanel')
+    expect(source).toContain('module === \'payments\'')
+  })
+
   it('starts a new tier draft from the documented silver and gold thresholds',()=>{
     const source=readFileSync(new URL('./CustomerExperienceManagementPanel.tsx',import.meta.url),'utf8')
     expect(source).toContain("silverUpgradeGrowth: '5000', silverRetainGrowth: '3000'")

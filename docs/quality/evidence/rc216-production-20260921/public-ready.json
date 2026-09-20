@@ -1,0 +1,24 @@
+{
+  "status": "ready",
+  "schemaVersion": "224",
+  "commitSha": "5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe",
+  "releaseImageDigest": "sha256:66c0cbce9543dca4f25487058af16fc2274ec80485c3c2270e8c4e5ee8e050ad",
+  "deploymentTier": "production",
+  "inventoryEnforcementMode": "strict",
+  "runtimeRole": "normal",
+  "writeEnabled": true,
+  "workers": {
+    "status": "healthy",
+    "lastCompletedAt": "2026-09-20T18:16:52.559Z",
+    "failures": [],
+    "integrationWorkersEnabled": true,
+    "adapterCapabilities": [
+      "outbox.deliver",
+      "notification.deliver",
+      "print.deliver",
+      "sop.execute",
+      "payment.create.postar",
+      "refund.execute.postar"
+    ]
+  }
+}

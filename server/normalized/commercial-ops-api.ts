@@ -887,7 +887,7 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<Fastify
       return reply.code(401).send({ error: { code: 'COMMERCIAL_SESSION_INVALID', message: '员工登录状态无效' } })
     }
     if (error instanceof GroupVoucherPlatformError) {
-      return reply.code(error.retryable ? 503 : error.code === 'already_used' ? 409 : 400).send({
+      return reply.code(error.retryable || error.code === 'unavailable' ? 503 : error.code === 'already_used' ? 409 : 400).send({
         error: {
           code: `VOUCHER_${error.code.toUpperCase()}`,
           message: error.message,

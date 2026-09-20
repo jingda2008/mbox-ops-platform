@@ -905,8 +905,8 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       queryService: new ProfitQueryService(transactions),
       resolveContext: operationsContext,
       voucherVerification: {
-        registry: createGroupVoucherPlatformRegistry(config.voucher ?? null),
-        signingSecret: config.secret,
+        registry: createGroupVoucherPlatformRegistry(options.config.voucher ?? null),
+        signingSecret: options.config.secret,
       },
     })
     instance.register(ownerFinanceApiPlugin, {

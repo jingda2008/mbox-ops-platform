@@ -34,6 +34,7 @@ callback_log=(logs/'callback.log').open('w');callback=subprocess.Popen(['node',f
 def entry(mode,label,expected):
  (root/'fault-mode').write_text(mode);code=run(['bash',root/'formal-entry.sh'],label,timeout=900,success=False)
  entries.append({'label':label,'exitCode':code,'expectedSuccess':expected,'sourceSha':c['targetSha']})
+ (root/'entry-results.json').write_text(json.dumps(entries,indent=2)+'\n')
  assert (code==0)==expected,label+' unexpected result'
  if not expected:
   state=json.loads((directory/'maintenance-operator-state.json').read_text()) if (directory/'maintenance-operator-state.json').exists() else json.loads((Path('/opt/mbox/releases')/c['targetSha'][:7]/'maintenance-operator-state.json').read_text())

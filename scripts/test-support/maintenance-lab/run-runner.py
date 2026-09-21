@@ -25,7 +25,20 @@ metadata=root/'initial-build.json';initial_tag='audit-maintenance-initial:ce9c52
 run(['docker','buildx','build','--load','--build-arg','APP_COMMIT_SHA='+initial,'--build-arg','APP_RELEASE_VERSION=1.0.0-rc.217','--metadata-file',metadata,'-t',initial_tag,'.'],cwd=assets/'source-ce9c526')
 build=json.loads(metadata.read_text());config=text(['docker','image','inspect',initial_tag,'--format','{{.Id}}']);assert build['containerimage.config.digest']==config
 run(['docker','save','--output',assets/'initial-image.tar',initial_tag]);shutil.copyfile(final_dir/final_manifest['archive'],assets/'final-image.tar.gz')
-images={initial:{'tag':initial_tag,'digest':build['containerimage.digest'],'config':config,'archive':'initial-image.tar'},final:{'tag':'audit-maintenance-final:ab8b237','digest':final_manifest['imageDigest'],'config':final_manifest['platformImageDigest'],'archive':'final-image.tar.gz'}};(assets/'images.json').write_text(json.dumps(images));(artifacts/'input-identities.json').write_text(json.dumps({'source':old_manifest['releaseSha'],'images':images,'nativeArchitecture':os.uname().machine,'productionCredentialsUsed':False},indent=2)+'\n')
+# Docker export may change the manifest representation while preserving its
+# config. Bind the actual immutable exported bytes, not a builder cache digest.
+with tarfile.open(assets/'initial-image.tar') as archive:
+ index=json.load(archive.extractfile('index.json'))
+ refs=[x for x in index['manifests'] if x.get('annotations',{}).get('org.opencontainers.image.ref.name')]
+ assert len(refs)==1
+ exported_digest=refs[0]['digest'];blob=archive.extractfile('blobs/sha256/'+exported_digest.split(':')[1]).read()
+ assert 'sha256:'+hashlib.sha256(blob).hexdigest()==exported_digest
+ reference=json.loads(blob)
+ if 'manifests' in reference:
+  platforms=[m for m in reference['manifests'] if m.get('platform',{}).get('os')=='linux' and m.get('platform',{}).get('architecture')=='amd64'];assert len(platforms)==1
+  platform_digest=platforms[0]['digest'];blob=archive.extractfile('blobs/sha256/'+platform_digest.split(':')[1]).read();assert 'sha256:'+hashlib.sha256(blob).hexdigest()==platform_digest;reference=json.loads(blob)
+ assert reference['config']['digest']==config
+images={initial:{'tag':initial_tag,'digest':exported_digest,'config':config,'archive':'initial-image.tar'},final:{'tag':'audit-maintenance-final:ab8b237','digest':final_manifest['imageDigest'],'config':final_manifest['platformImageDigest'],'archive':'final-image.tar.gz'}};(assets/'images.json').write_text(json.dumps(images));(artifacts/'input-identities.json').write_text(json.dumps({'source':old_manifest['releaseSha'],'images':images,'nativeArchitecture':os.uname().machine,'productionCredentialsUsed':False},indent=2)+'\n')
 run(['docker','build','-t','audit-maintenance-full-entry:rc217',fixture]);run(['docker','pull','postgres:16-alpine']);run(['docker','pull','caddy:2.10.2-alpine'])
 inner_images=root/'inner-images.tar';run(['docker','save','-o',inner_images,'audit-maintenance-source-live:5b9d929',initial_tag,'audit-maintenance-final:ab8b237','caddy:2.10.2-alpine'])
 for scenario in ['success','forward']:

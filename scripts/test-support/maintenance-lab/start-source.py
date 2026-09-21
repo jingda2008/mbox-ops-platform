@@ -1,4 +1,4 @@
-import pathlib,subprocess,json,os,time
+import pathlib,subprocess,json,os,time,shutil
 P=pathlib.Path;root=P('/opt/mbox');state=json.loads((root/'lab-state.json').read_text());release=P(state['oldRelease']);image=state['oldImage'];sha='5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe'
 def run(args,input=None):
  r=subprocess.run([str(x) for x in args],input=input,text=True,capture_output=True)
@@ -13,6 +13,10 @@ platform=run(['docker','image','inspect',image,'--format','{{.Id}}'])
 manifest=json.loads(P('/root/LAB-final/old-release/release-manifest.json').read_text());assert manifest['releaseSha']==sha and manifest['platformImageDigest']==platform and manifest['migration']['count']==224;manifest['imageTag']=image
 
 (release/'release-manifest.json').write_text(json.dumps(manifest));(root/'current').symlink_to(release)
+# Reproduce the existing release layout required by the unchanged activator.
+for target in (root/'secrets/app.env',release/'app.env'):
+ shutil.copyfile(root/'secrets/old.env',target);os.chmod(target,0o600)
+(root/'.env').symlink_to(release/'app.env')
 (root/'data').mkdir(exist_ok=True);os.chown(root/'data',1000,1000)
 container=run(['docker','run','-d','--name','mbox-app','--restart=unless-stopped','--network','mbox-net','--env-file',root/'secrets/old.env','--mount','type=bind,src='+str(root/'data')+',dst=/data','--mount','type=bind,src='+str(release/'worker-adapters')+',dst=/app/worker-adapters,readonly',image])
 (root/'caddy-data/mbox-ingress').mkdir(parents=True,exist_ok=True)

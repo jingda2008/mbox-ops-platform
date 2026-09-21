@@ -35,7 +35,7 @@ const meta=(f:Fx,employeeId=f.cashier)=>({scope:f.scope,actor:{type:'employee' a
     const identity=(await runtimePool.query("SELECT session_user,current_user,rolsuper,rolbypassrls,rolcanlogin,pg_has_role(current_user,'mbox_runtime','MEMBER') AS runtime_member FROM pg_roles WHERE rolname=session_user")).rows[0]
     expect(identity).toMatchObject({rolsuper:false,rolbypassrls:false,rolcanlogin:true,runtime_member:true});expect(identity.session_user).toBe(identity.current_user)
     const schema=(await pool.query('SELECT schema_version FROM mbox.normalized_schema_metadata')).rows[0].schema_version
-    observations.push({schema});expect(schema).toBe('240')
+    observations.push({schema});expect(schema).toBe('241')
     money=new PaymentCommandService(new NormalizedCommandExecutor(runner),new NormalizedPaymentCapabilityAuthorization(),new NormalizedProviderObservationAuthority())
   })
   afterAll(async()=>{await runtimePool?.end();await pool?.end()})

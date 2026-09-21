@@ -6,7 +6,7 @@ assert os.uname().machine=='x86_64' and Path('/.dockerenv').exists()
 assert socket.gethostname().startswith('mbox-maint-lab-')
 assert not any(row.split()[1]=='00000000' for row in Path('/proc/net/route').read_text().splitlines()[1:])
 scenario=sys.argv[1];assert scenario in ('success','forward')
-constants=json.loads((root/'images.json').read_text());initial='5cd9f2993e845a2049484a5e1eab6d5b67718d26';final='34360ceb974e9d15475ed9523b2e5b4c2f43bbbd'
+constants=json.loads((root/'images.json').read_text());initial='da0c2498931b16c1916af1756e3b0f79e801660e';final='ddb9a71b5913d89c510bd3faf07f328acc4946ed'
 phase='setup';entries=[]
 def run(args,label,timeout=300,success=True,env=None):
  with (logs/(label+'.log')).open('w') as f:
@@ -21,11 +21,16 @@ service=Path('/opt/mbox/secrets/pg_service.conf').read_text();gateway=json.loads
 (root/'pg_service.conf').write_text(service.replace('host='+gateway,'host=127.0.0.1'))
 (root/'pgpass').write_text(Path('/opt/mbox/secrets/pgpass').read_text().replace(gateway+':','127.0.0.1:'));os.chmod(root/'pgpass',0o600)
 transition='local-entry-20260921-a';directory=Path('/opt/mbox/maintenance')/transition
-marker={'labId':'rc219-'+scenario,'controllerHostname':socket.gethostname(),'isolatedNestedDocker':True,'externalNetwork':False};(root/'isolated-lab.json').write_text(json.dumps(marker))
+marker={'labId':'rc220-'+scenario,'controllerHostname':socket.gethostname(),'isolatedNestedDocker':True,'externalNetwork':False};(root/'isolated-lab.json').write_text(json.dumps(marker))
 def prepare(sha):
  image=constants[sha];c=json.loads((fixture/'parameterized/config.template.json').read_text())
- c.update(version='1.0.0-rc.219',labId=marker['labId'],controllerHostname=marker['controllerHostname'],targetSha=sha,sourceSha='5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe',backupOriginSha=initial if scenario=='forward' else final,imageTag=image['tag'],imageDigest=image['digest'],platformImageDigest=image['config'],platform='linux/amd64',schema=242,sourceDirectory=str(root/('source-'+sha[:7])),bundleDirectory=str(root/('bundle-'+sha[:7])),sourceReleaseDirectory='/opt/mbox/releases/5b9d929',imageArchive=str(root/image['archive']),sourceShaFile=str(root/('sha-'+sha[:7])),formalEntryScript=str(root/'formal-entry.sh'),sshKeyFile='/root/.ssh/lab_release',transitionId=transition,labCiRunId='9000000001',callbackBodyFile='/root/lab-callback-body.json')
+ c.update(version='1.0.0-rc.220',labId=marker['labId'],controllerHostname=marker['controllerHostname'],targetSha=sha,sourceSha='5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe',backupOriginSha=initial if scenario=='forward' else final,imageTag=image['tag'],imageDigest=image['digest'],platformImageDigest=image['config'],platform='linux/amd64',schema=242,sourceDirectory=str(root/('source-'+sha[:7])),bundleDirectory=str(root/('bundle-'+sha[:7])),sourceReleaseDirectory='/opt/mbox/releases/5b9d929',imageArchive=str(root/image['archive']),sourceShaFile=str(root/('sha-'+sha[:7])),formalEntryScript=str(root/'formal-entry.sh'),sshKeyFile='/root/.ssh/lab_release',transitionId=transition,labCiRunId='9000000001',callbackBodyFile='/root/lab-callback-body.json')
  (root/('sha-'+sha[:7])).write_text(sha+'\n');(root/'active-config.json').write_text(json.dumps(c));run(['python3',fixture/'parameterized/prepare-bundle-parameterized.py','--config',root/'active-config.json','--execute-lab'],'prepare-'+sha[:7]);
+ # Reproduce a non-root publisher and a previously copied wrong-owner plan.
+ # Only disposable LAB paths are changed; formal scripts remain unmodified.
+ for path in [Path(c['bundleDirectory']),Path(c['bundleDirectory'])/'maintenance-plan.json',Path('/opt/mbox/releases')/sha[:7]/'maintenance-plan.json']:
+  os.chown(path,12345,12346)
+ os.chmod(c['bundleDirectory'],0o775)
  Path('/usr/local/bin/ossutil').rename('/usr/local/bin/ossutil.lab-base');shutil.copyfile(fixture/'object-fault.py','/usr/local/bin/ossutil');os.chmod('/usr/local/bin/ossutil',0o755)
  return c
 c=prepare(initial if scenario=='forward' else final)
@@ -33,7 +38,14 @@ env={'NODE_EXTRA_CA_CERTS':'/usr/local/share/ca-certificates/mbox-lab-ca.crt'}
 callback_log=(logs/'callback.log').open('w');callback=subprocess.Popen(['node',fixture/'send-delayed-callback.mjs'],stdout=callback_log,stderr=subprocess.STDOUT,env={**os.environ,**env})
 def entry(mode,label,expected):
  (root/'fault-mode').write_text(mode);code=run(['bash',root/'formal-entry.sh'],label,timeout=900,success=False)
- entries.append({'label':label,'exitCode':code,'expectedSuccess':expected,'sourceSha':c['targetSha']})
+ destination=Path('/opt/mbox/releases')/c['targetSha'][:7]
+ plan=destination/'maintenance-plan.json';plan_stat=plan.stat();directory_stat=destination.stat()
+ assert plan_stat.st_uid==0 and plan_stat.st_gid==0 and plan_stat.st_mode&0o777==0o600
+ assert directory_stat.st_uid==0 and directory_stat.st_mode&0o777==0o700
+ assert (Path(c['bundleDirectory'])/'maintenance-plan.json').stat().st_uid==12345
+ entries.append({'label':label,'exitCode':code,'expectedSuccess':expected,'sourceSha':c['targetSha'],
+                 'publisherUid':12345,'publisherGid':12346,'publisherDirectoryMode':'0775',
+                 'receiverPlanRoot0600':True,'receiverDirectoryRoot0700':True,'sourceOwnerUnchanged':True})
  (root/'entry-results.json').write_text(json.dumps(entries,indent=2)+'\n')
  assert (code==0)==expected,label+' unexpected result'
  if not expected:

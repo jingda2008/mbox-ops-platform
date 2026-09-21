@@ -311,14 +311,26 @@ if [ "${dry_run}" = 1 ]; then
   exit 0
 fi
 
-ssh "${ssh_options[@]}" "${ssh_target}" "install -d -m 0700 '${remote_release_dir}'"
+# Refuse an unsafe existing target before rsync can enter it. Ownership flags
+# preserve receiver ownership; they do not repair an old untrusted directory.
+verify_remote_release_directory() {
+  ssh "${ssh_options[@]}" "${ssh_target}" \
+    "set -eu; for path in / /opt /opt/mbox /opt/mbox/releases '${remote_release_dir}'; do if [ \"\$path\" = '${remote_release_dir}' ] && [ ! -e \"\$path\" ] && [ ! -L \"\$path\" ]; then continue; fi; test -d \"\$path\" && test ! -L \"\$path\" && test \"\$(stat -c %u \"\$path\")\" = 0 && mode=\$(stat -c %a \"\$path\") && (( (8#\$mode & 8#022) == 0 )) || { echo 'unsafe release directory ownership or permissions' >&2; exit 1; }; done"
+}
+verify_remote_release_directory
+ssh "${ssh_options[@]}" "${ssh_target}" \
+  "test ! -L '${remote_release_dir}' && install -d -m 0700 '${remote_release_dir}'"
+verify_remote_release_directory
 rsync_resume_option=--append
 if rsync --help 2>&1 | grep -q -- '--append-verify'; then
   rsync_resume_option=--append-verify
 fi
-rsync -a --no-owner --no-group --partial "${rsync_resume_option}" \
+rsync -a --no-owner --no-group --chmod=go-w --partial "${rsync_resume_option}" \
   -e "ssh -i '${ssh_key}' -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p '${ssh_port}'" \
   "${bundle_dir}/" "${ssh_target}:${remote_release_dir}/"
+
+ssh "${ssh_options[@]}" "${ssh_target}" "chmod 0700 '${remote_release_dir}'"
+verify_remote_release_directory
 
 # Archive mode must not import publisher UID/GID into the privileged host.
 # Also repair the exact plan on retries after an older publisher copied it.
@@ -340,7 +352,7 @@ else
   evidence_release_dir="/opt/mbox/releases/${short_sha}-evidence-relay"
   ssh "${evidence_ssh_options[@]}" "${evidence_ssh_target}" \
     "install -d -m 0700 '${evidence_release_dir}'"
-  rsync -a --no-owner --no-group --partial "${rsync_resume_option}" \
+  rsync -a --no-owner --no-group --chmod=go-w --partial "${rsync_resume_option}" \
     -e "ssh -i '${evidence_ssh_key}' -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p '${evidence_ssh_port}'" \
     "${bundle_dir}/" "${evidence_ssh_target}:${evidence_release_dir}/"
   ssh "${evidence_ssh_options[@]}" "${evidence_ssh_target}" \
@@ -401,7 +413,7 @@ if [ "${uses_evidence_relay}" = 1 ] && [ "${maintenance_mode}" != 1 ]; then
   relay_backup_local=$(mktemp -d "${bundle_dir}/.backup-relay.XXXXXX")
   ssh "${ssh_options[@]}" "${ssh_target}" \
     "'${remote_release_dir}/backup-postgres.sh' prepare-relay '${remote_release_dir}' '${release_sha}'"
-  rsync -a --no-owner --no-group --partial "${rsync_resume_option}" \
+  rsync -a --no-owner --no-group --chmod=go-w --partial "${rsync_resume_option}" \
     -e "ssh -i '${ssh_key}' -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p '${ssh_port}'" \
     "${ssh_target}:${remote_release_dir}/relay-backup-ready/" "${relay_backup_local}/"
   relay_backup_preparation=${relay_backup_local}/backup-preparation.json
@@ -414,7 +426,7 @@ if [ "${uses_evidence_relay}" = 1 ] && [ "${maintenance_mode}" != 1 ]; then
   (cd "${relay_backup_local}" && shasum -a 256 -c SHA256SUMS >/dev/null)
   ssh "${evidence_ssh_options[@]}" "${evidence_ssh_target}" \
     "rm -rf '${evidence_release_dir}/relay-backup-ready' && install -d -m 0700 '${evidence_release_dir}/relay-backup-ready'"
-  rsync -a --no-owner --no-group --partial "${rsync_resume_option}" \
+  rsync -a --no-owner --no-group --chmod=go-w --partial "${rsync_resume_option}" \
     -e "ssh -i '${evidence_ssh_key}' -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p '${evidence_ssh_port}'" \
     "${relay_backup_local}/" "${evidence_ssh_target}:${evidence_release_dir}/relay-backup-ready/"
   ssh "${evidence_ssh_options[@]}" "${evidence_ssh_target}" \
@@ -481,7 +493,7 @@ if [ "${uses_evidence_relay}" = 1 ]; then
       "test -f '${remote_release_dir}/${marker_name}' && jq -e --arg sha '${release_sha}' --arg prefix '${object_prefix}' --arg directory '${source_directory}' --arg report '${remote_release_dir}/${report_name}' '.releaseSha == \$sha and .prefix == \$prefix and .evidenceDirectory == \$directory and .report == \$report' '${remote_release_dir}/${marker_name}' >/dev/null"
 
     relay_local=$(mktemp -d "${bundle_dir}/.${evidence_kind}-relay.XXXXXX")
-    rsync -a --no-owner --no-group --partial "${rsync_resume_option}" \
+    rsync -a --no-owner --no-group --chmod=go-w --partial "${rsync_resume_option}" \
       -e "ssh -i '${ssh_key}' -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p '${ssh_port}'" \
       "${ssh_target}:${source_directory}/" "${relay_local}/"
     (cd "${relay_local}" && shasum -a 256 -c SHA256SUMS >/dev/null)
@@ -489,7 +501,7 @@ if [ "${uses_evidence_relay}" = 1 ]; then
     relay_remote="${evidence_release_dir}/post-cutover-${evidence_kind}"
     ssh "${evidence_ssh_options[@]}" "${evidence_ssh_target}" \
       "rm -rf '${relay_remote}' && install -d -m 0700 '${relay_remote}'"
-    rsync -a --no-owner --no-group --partial "${rsync_resume_option}" \
+    rsync -a --no-owner --no-group --chmod=go-w --partial "${rsync_resume_option}" \
       -e "ssh -i '${evidence_ssh_key}' -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p '${evidence_ssh_port}'" \
       "${relay_local}/" "${evidence_ssh_target}:${relay_remote}/"
     ssh "${evidence_ssh_options[@]}" "${evidence_ssh_target}" \

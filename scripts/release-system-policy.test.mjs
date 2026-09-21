@@ -427,7 +427,7 @@ test('publisher UID/GID cannot cross release transfers and plan normalization pr
   const deploy = await read('../deploy/aliyun/deploy-release.sh')
   const transfers = deploy.split('\n').filter(line => /^\s*rsync -a /.test(line))
   assert.equal(transfers.length, 6)
-  for (const line of transfers) assert.match(line, /rsync -a --no-owner --no-group --partial/)
+  for (const line of transfers) assert.match(line, /rsync -a --no-owner --no-group --chmod=go-w --partial/)
   assert.ok(deploy.indexOf('chown 0:0') < deploy.indexOf('uses_evidence_relay=0'))
   const bootstrap = await read('../deploy/aliyun/maintenance-bootstrap.sh')
   assert.match(bootstrap, /test "\$\(stat -c '%u:%a' "\$\{plan\}"\)" = 0:600/)
@@ -439,6 +439,8 @@ test('real rsync repairs a non-root publisher plan without accepting symlinks', 
   const deploy = await read('../deploy/aliyun/deploy-release.sh')
   const transfer = deploy.split('\n').find(line => /^rsync -a /.test(line)).replace(/\s*\\$/, '')
   const normalization = deploy.slice(deploy.indexOf('# Archive mode must not import'), deploy.indexOf('\nssh "${ssh_options[@]}"', deploy.indexOf('# Archive mode must not import')))
+  const directoryGuard = deploy.slice(deploy.indexOf('verify_remote_release_directory() {'), deploy.indexOf('\nverify_remote_release_directory\n', deploy.indexOf('verify_remote_release_directory() {')))
+    .replace('for path in / /opt /opt/mbox /opt/mbox/releases ', 'for path in ')
   const dir = mkdtempSync(join(tmpdir(), 'mbox-transfer-owner-'))
   const fixture = join(dir, 'verify.sh')
   writeFileSync(fixture, `#!/bin/bash
@@ -460,6 +462,18 @@ maintenance_mode=1
 ssh_options=()
 ssh_target=synthetic-local-host
 ssh() { test "$1" = synthetic-local-host; bash -c "$2"; }
+${directoryGuard}
+verify_remote_release_directory
+chmod 0775 "$root/destination"
+if verify_remote_release_directory; then exit 1; fi
+chmod 0700 "$root/destination"
+chown 12345:12346 "$root/destination"
+if verify_remote_release_directory; then exit 1; fi
+chown 0:0 "$root/destination"
+chmod 0775 "$root/source"
+${transfer} "$root/source/" "$root/destination/"
+test "$(stat -c %a "$root/destination")" = 755
+verify_remote_release_directory
 ${normalization}
 test "$(stat -c '%u:%g:%a' "$root/destination/maintenance-plan.json")" = 0:0:600
 test "$(sha256sum "$root/destination/maintenance-plan.json" | cut -d' ' -f1)" = "$original"

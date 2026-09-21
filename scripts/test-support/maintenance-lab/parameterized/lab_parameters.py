@@ -101,9 +101,15 @@ def assert_isolated_lab(config):
     # host source/production directories into this privileged disposable host.
     for row in mounts:
         mountpoint = row.split()[4]
-        require(mountpoint in ('/', '/etc/hosts', '/etc/hostname', '/etc/resolv.conf') or
+        # Nested dockerd creates its own per-container /dev/shm tmpfs here.
+        # This is kernel-created RAM, not a host bind mount. Outer inspection
+        # separately rejects every bind mount into the disposable host.
+        fields = row.split(); separator = fields.index('-')
+        nested_shm = (re.fullmatch(r'/var/lib/docker/containers/[a-f0-9]{64}/mounts/shm', mountpoint)
+                      and fields[separator + 1:separator + 3] == ['tmpfs', 'shm'])
+        require(mountpoint in ('/', '/etc/hosts', '/etc/hostname', '/etc/resolv.conf') or nested_shm or
                 any(mountpoint == prefix or mountpoint.startswith(prefix + '/') for prefix in ('/proc', '/sys', '/dev', '/run', '/tmp')),
-                'unexpected mounted directory; LAB must not expose host data')
+                'unexpected mounted directory: ' + mountpoint + ' (' + fields[separator + 1] + '); LAB must not expose host data')
     routes = pathlib.Path('/proc/net/route').read_text().splitlines()[1:]
     require(not any(row.split()[1] == '00000000' for row in routes if len(row.split()) > 1), 'LAB must have no IPv4 default route')
     ipv6_routes = pathlib.Path('/proc/net/ipv6_route').read_text().splitlines()

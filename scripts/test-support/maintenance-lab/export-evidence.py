@@ -6,8 +6,8 @@ secrets=[]
 for p in Path('/opt/mbox/secrets').glob('*.env'):
  for line in p.read_text().splitlines():
   if '=' in line:
-   value=line.split('=',1)[1]
-   if len(value)>=10:secrets.append(value)
+   key,value=line.split('=',1)
+   if re.search(r'SECRET|TOKEN|PASSWORD|KEY|CREDENTIAL|DATABASE_URL|PIN',key) and len(value)>=4:secrets.append(value)
 for p in [Path('/opt/mbox/secrets/pgpass'),root/'pgpass']:
  if p.exists():
   for line in p.read_text().splitlines():

@@ -4,6 +4,7 @@ on:
     branches: [audit/rc217-maintenance-lab]
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: rc218-native-maintenance-rehearsal
   cancel-in-progress: false
@@ -24,6 +25,11 @@ jobs:
         run: |
           python3 scripts/test-support/maintenance-lab/parameterized/test-parameters.py
           python3 scripts/test-support/maintenance-lab/parameterized/v240/test-financial-240.py
+      - name: Wait for the bound official rc218 release
+        timeout-minutes: 25
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run watch 35586408182 --exit-status --interval 30
       - name: Run disposable native x86_64 maintenance scenarios
         env:
           GH_TOKEN: ${{ github.token }}

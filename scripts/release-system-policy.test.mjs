@@ -422,3 +422,61 @@ test('hotfix replacement requires explicit approval bound to both images, contai
   assert.match(activate, /previousArchivedPlatformImageDigest: \$previousArchivedPlatformImageDigest/)
   assert.match(activate, /previousRuntimeAttestation: \$previousRuntimeAttestation/)
 })
+
+test('publisher UID/GID cannot cross release transfers and plan normalization precedes activation', async () => {
+  const deploy = await read('../deploy/aliyun/deploy-release.sh')
+  const transfers = deploy.split('\n').filter(line => /^\s*rsync -a /.test(line))
+  assert.equal(transfers.length, 6)
+  for (const line of transfers) assert.match(line, /rsync -a --no-owner --no-group --partial/)
+  assert.ok(deploy.indexOf('chown 0:0') < deploy.indexOf('uses_evidence_relay=0'))
+  const bootstrap = await read('../deploy/aliyun/maintenance-bootstrap.sh')
+  assert.match(bootstrap, /test "\$\(stat -c '%u:%a' "\$\{plan\}"\)" = 0:600/)
+})
+
+test('real rsync repairs a non-root publisher plan without accepting symlinks', {
+  skip: process.platform !== 'linux' || (!process.env.CI && process.getuid() !== 0),
+}, async () => {
+  const deploy = await read('../deploy/aliyun/deploy-release.sh')
+  const transfer = deploy.split('\n').find(line => /^rsync -a /.test(line)).replace(/\s*\\$/, '')
+  const normalization = deploy.slice(deploy.indexOf('# Archive mode must not import'), deploy.indexOf('\nssh "${ssh_options[@]}"', deploy.indexOf('# Archive mode must not import')))
+  const dir = mkdtempSync(join(tmpdir(), 'mbox-transfer-owner-'))
+  const fixture = join(dir, 'verify.sh')
+  writeFileSync(fixture, `#!/bin/bash
+set -euo pipefail
+root=$(mktemp -d)
+trap 'rm -rf "$root"' EXIT
+mkdir "$root/source" "$root/destination"
+printf '{"synthetic":true}\\n' > "$root/source/maintenance-plan.json"
+chmod 0600 "$root/source/maintenance-plan.json"
+chown 12345:12346 "$root/source/maintenance-plan.json"
+original=$(sha256sum "$root/source/maintenance-plan.json" | cut -d' ' -f1)
+# Reproduce the original failure with genuine rsync and a root receiver.
+rsync -a "$root/source/" "$root/destination/"
+test "$(stat -c '%u:%g:%a' "$root/destination/maintenance-plan.json")" = 12345:12346:600
+rsync_resume_option=--append
+${transfer} "$root/source/" "$root/destination/"
+remote_release_dir="$root/destination"
+maintenance_mode=1
+ssh_options=()
+ssh_target=synthetic-local-host
+ssh() { test "$1" = synthetic-local-host; bash -c "$2"; }
+${normalization}
+test "$(stat -c '%u:%g:%a' "$root/destination/maintenance-plan.json")" = 0:0:600
+test "$(sha256sum "$root/destination/maintenance-plan.json" | cut -d' ' -f1)" = "$original"
+test "$(stat -c '%u:%g:%a' "$root/source/maintenance-plan.json")" = 12345:12346:600
+rm "$root/destination/maintenance-plan.json"
+${transfer} "$root/source/" "$root/destination/"
+test "$(stat -c '%u:%g:%a' "$root/destination/maintenance-plan.json")" = 0:0:600
+# Existing symlinks must fail before ownership or mode mutation.
+rm "$root/destination/maintenance-plan.json"
+ln -s "$root/source/maintenance-plan.json" "$root/destination/maintenance-plan.json"
+if ( ${normalization} ); then exit 1; fi
+test "$(stat -c '%u:%g:%a' "$root/source/maintenance-plan.json")" = 12345:12346:600
+printf 'real-rsync-owner-regression=passed\\n'
+`)
+  try {
+    const command = process.getuid() === 0 ? 'bash' : 'sudo'
+    const args = process.getuid() === 0 ? [fixture] : ['-n', 'bash', fixture]
+    assert.match(execFileSync(command, args, {encoding: 'utf8', timeout: 30000}), /real-rsync-owner-regression=passed/)
+  } finally { rmSync(dir, {recursive: true, force: true}) }
+})

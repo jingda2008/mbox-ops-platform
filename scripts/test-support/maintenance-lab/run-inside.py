@@ -6,7 +6,7 @@ assert os.uname().machine=='x86_64' and Path('/.dockerenv').exists()
 assert socket.gethostname().startswith('mbox-maint-lab-')
 assert not any(row.split()[1]=='00000000' for row in Path('/proc/net/route').read_text().splitlines()[1:])
 scenario=sys.argv[1];assert scenario in ('success','forward')
-constants=json.loads((root/'images.json').read_text());initial='5cd9f2993e845a2049484a5e1eab6d5b67718d26';final=initial
+constants=json.loads((root/'images.json').read_text());initial='5cd9f2993e845a2049484a5e1eab6d5b67718d26';final='34360ceb974e9d15475ed9523b2e5b4c2f43bbbd'
 phase='setup';entries=[]
 def run(args,label,timeout=300,success=True,env=None):
  with (logs/(label+'.log')).open('w') as f:

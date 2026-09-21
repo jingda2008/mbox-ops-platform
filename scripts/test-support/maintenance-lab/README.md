@@ -1,8 +1,8 @@
-# rc.219 preliminary candidate maintenance rehearsal
+# rc.219 final artifact maintenance rehearsal
 
 This branch-only workflow runs on a disposable GitHub-hosted x86_64 runner with synthetic data and generated local secrets. No host socket or arbitrary directory is mounted into the nested LAB. Its external network is disabled and PostgreSQL shares only that isolated namespace. Cleanup removes the exact created container IDs.
 
-This revision runs only the normal scenario on a genuine image built from candidate 5cd9f2993e845a2049484a5e1eab6d5b67718d26. Both target identities equal that actual SHA; the source is the official rc.216 image. No different-SHA forward recovery is claimed. This preliminary pass runs alongside PR CI to catch formal-entry defects before final release. The final official merged image still requires separate normal and different-SHA forward scenarios after publication.
+Candidate normal entry 35590979705 passed on reviewed 5cd9f2993e845a2049484a5e1eab6d5b67718d26. This revision runs both normal maintenance and backup-readback failure, same-SHA reentry, post-financial-fact failure, then different-SHA forward recovery. The initial image is built from that reviewed commit; the final image is the actual official rc.219 artifact at merge 34360ceb974e9d15475ed9523b2e5b4c2f43bbbd. The source is the official rc.216 image. Candidate and final SHAs are distinct and their source trees identical.
 
 Formal deploy/activate/maintenance/backup/restore scripts remain byte-identical to the target source. The plan uses the exact target controller inventory helper. Synthetic object-store adapters exercise copy/readback but are not real OSS/RAM evidence. A signed synthetic delayed callback, six nonempty immutable financial fact tables, actual restricted API/worker LOGINs, retired-login/restart fences and actual staff/closure definer ownership are verified. Positive seed cases reuse existing tests; their historical input is synthetic repository composition, not old-binary history proof.
 

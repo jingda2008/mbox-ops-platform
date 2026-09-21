@@ -13,6 +13,13 @@ def require(value, message):
 
 def canonical(value): return json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
 def sha(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+def systemd_inventory_sha256(output):
+    # systemd 219 includes PAM login scopes in list-unit-files. Each new SSH
+    # connection gets another numeric session id; these cannot restart a writer.
+    # Keep every other row byte-exact, including persistent units and states.
+    rows=[row for row in output.splitlines() if not re.fullmatch(r'session-[0-9]+\.scope\s+static\s*',row)]
+    return hashlib.sha256('\n'.join(rows).encode()).hexdigest()
+
 def atomic(path, value):
     path=Path(path); path.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
     temporary=path.with_name(path.name+'.next-'+secrets.token_hex(6))
@@ -422,10 +429,10 @@ class Host:
         require(configured in self.plan['callbackUrls'] and configured.replace('/payments/','/refunds/') in self.plan['callbackUrls'],'configured payment/refund callbacks not covered')
         require(self.plan.get('systemdUnits') and all(re.fullmatch(r'[A-Za-z0-9_.@-]+\.(service|timer)',x) for x in self.plan['systemdUnits']),'explicit writer/cron service inventory required')
         require(any(x in self.plan['systemdUnits'] for x in ('cron.service','crond.service')),'cron daemon must be fenced')
-        # Binding the whole inventory catches newly installed watchdogs between
+        # Binding the persistent inventory catches newly installed watchdogs between
         # the operator's read-only inventory and the stop operation.
         inventory=self.run(['systemctl','list-unit-files','--no-legend','--no-pager'])
-        if not self.reentry: require(hashlib.sha256(inventory.encode()).hexdigest()==self.plan['systemdInventorySha256'],'systemd inventory changed')
+        if not self.reentry: require(systemd_inventory_sha256(inventory)==self.plan['systemdInventorySha256'],'systemd inventory changed')
         else:
             for unit in self.plan['systemdUnits']:
                 require(self.run(['systemctl','is-enabled',unit],check=False)=='masked','writer restart fence changed during recovery')
@@ -909,7 +916,7 @@ def inventory(release):
     adapter=Path(adapters[0]); tree=[(str(p.relative_to(adapter)),sha(p)) for p in sorted(adapter.rglob('*')) if p.is_file()]
     containers=json.loads(run(['docker','inspect',*run(['docker','ps','--no-trunc','-q']).splitlines()]))
     callback=env.get('POSTAR_CALLBACK_URL','');require(callback,'configured callback URL required')
-    plan={'mode':'planned-maintenance-forward-only','transitionId':'maintenance-'+time.strftime('%Y%m%d%H%M%S'),'targetReleaseSha':manifest['releaseSha'],'targetImageDigest':manifest['imageDigest'],'sourceLive':{'containerId':source['Id'],'platformImageDigest':source['Image'],'releaseSha':source['Config']['Labels']['org.opencontainers.image.revision'],'environmentSha256':hashlib.sha256(canonical(sorted(source['Config']['Env']))).hexdigest(),'releaseDirectory':str(Path('/opt/mbox/current').resolve())},'retiredLogins':[actual['login']],'persistentMounts':[{'type':x['Type'],'source':x.get('Name') if x['Type']=='volume' else x['Source'],'target':x['Destination'],'readOnly':not x['RW']} for x in source['Mounts'] if x['Destination']!='/app/worker-adapters'],'writerContainerIds':[c['Id'] for c in containers if c['Name']!='/mbox-caddy'],'workerAdapterDirectory':str(adapter),'workerAdapterTreeSha256':hashlib.sha256(canonical(tree)).hexdigest(),'systemdUnits':selected,'systemdInventorySha256':hashlib.sha256(units.encode()).hexdigest(),'callbackUrls':sorted({callback,callback.replace('/payments/','/refunds/')}),'controllerPython':str(Path(sys.executable).resolve()),'clusterAdminService':'REPLACE_WITH_PREPARED_CLUSTER_ADMIN_SERVICE'}
+    plan={'mode':'planned-maintenance-forward-only','transitionId':'maintenance-'+time.strftime('%Y%m%d%H%M%S'),'targetReleaseSha':manifest['releaseSha'],'targetImageDigest':manifest['imageDigest'],'sourceLive':{'containerId':source['Id'],'platformImageDigest':source['Image'],'releaseSha':source['Config']['Labels']['org.opencontainers.image.revision'],'environmentSha256':hashlib.sha256(canonical(sorted(source['Config']['Env']))).hexdigest(),'releaseDirectory':str(Path('/opt/mbox/current').resolve())},'retiredLogins':[actual['login']],'persistentMounts':[{'type':x['Type'],'source':x.get('Name') if x['Type']=='volume' else x['Source'],'target':x['Destination'],'readOnly':not x['RW']} for x in source['Mounts'] if x['Destination']!='/app/worker-adapters'],'writerContainerIds':[c['Id'] for c in containers if c['Name']!='/mbox-caddy'],'workerAdapterDirectory':str(adapter),'workerAdapterTreeSha256':hashlib.sha256(canonical(tree)).hexdigest(),'systemdUnits':selected,'systemdInventorySha256':systemd_inventory_sha256(units),'callbackUrls':sorted({callback,callback.replace('/payments/','/refunds/')}),'controllerPython':str(Path(sys.executable).resolve()),'clusterAdminService':'REPLACE_WITH_PREPARED_CLUSTER_ADMIN_SERVICE'}
     print(json.dumps(plan,indent=2))
 
 def main():

@@ -2,6 +2,17 @@
 import importlib.util, tempfile, pathlib, json, unittest, os, subprocess
 spec=importlib.util.spec_from_file_location('bootstrap',pathlib.Path(__file__).with_name('maintenance-bootstrap.py'));m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 class PersistentTests(unittest.TestCase):
+ def test_systemd_inventory_ignores_only_static_numeric_login_scopes(self):
+  persistent='crond.service enabled\nmbox-health-watchdog.timer enabled'
+  first='session-119.scope static\nsession-60929.scope static\n'+persistent
+  second='session-119.scope static\nsession-60930.scope static\n'+persistent
+  self.assertNotEqual(m.hashlib.sha256(first.encode()).hexdigest(),m.hashlib.sha256(second.encode()).hexdigest())
+  self.assertEqual(m.systemd_inventory_sha256(first),m.systemd_inventory_sha256(second))
+  self.assertNotEqual(m.systemd_inventory_sha256('session-1.scope static\n writer.service enabled'),m.systemd_inventory_sha256('session-2.scope static\nwriter.service enabled'))
+  for changed in (persistent+'\nnew-writer.service enabled',persistent.replace('crond.service enabled','crond.service disabled'),
+                  persistent+'\nsession-60930.service enabled',persistent+'\nsession-custom.scope static',
+                  persistent+'\nsession-60930.scope enabled',persistent.replace('enabled','masked')):
+   self.assertNotEqual(m.systemd_inventory_sha256(first),m.systemd_inventory_sha256(changed))
  def binding(self,sha='a',schema=229): return {'sourceLive':{'releaseSha':'s'},'forwardRecoveryTarget':{'releaseSha':sha,'schema':schema},'planSha256':sha}
  def row(self,id='a',fingerprint='1',classification='baseline_candidate:stopped_payment_finance_review'):
   return {'kind':'payment','tenant_id':'t','store_id':'s','id':id,'facts_sha256':fingerprint,'classification':classification}

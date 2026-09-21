@@ -1,0 +1,41 @@
+name: rc217-native-maintenance-rehearsal
+on:
+  push:
+    branches: [audit/rc217-maintenance-lab]
+permissions:
+  contents: read
+concurrency:
+  group: rc217-native-maintenance-rehearsal
+  cancel-in-progress: false
+jobs:
+  isolated-maintenance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: npm ci
+      - name: Verify pure fixture contracts
+        run: |
+          python3 scripts/test-support/maintenance-lab/parameterized/test-parameters.py
+          python3 scripts/test-support/maintenance-lab/parameterized/v240/test-financial-240.py
+      - name: Run disposable native x86_64 maintenance scenarios
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/test-support/maintenance-lab/run-runner.py
+      - name: Check exported evidence for sensitive values
+        id: sensitive
+        if: always()
+        run: node scripts/verify-sensitive-artifacts.mjs artifacts/maintenance-native
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.sensitive.outcome == 'success'
+        with:
+          name: rc217-native-maintenance-${{ github.run_id }}
+          path: artifacts/maintenance-native
+          if-no-files-found: error
+          retention-days: 7

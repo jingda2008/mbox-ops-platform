@@ -1,0 +1,55 @@
+{
+  "labId": "REPLACE-LAB-ID",
+  "controllerHostname": "mbox-maint-lab-REPLACE",
+  "targetSha": "REPLACE_40_CHARACTER_FINAL_SHA",
+  "sourceSha": "REPLACE_40_CHARACTER_SOURCE_SHA",
+  "backupOriginSha": "REPLACE_ACTUAL_BACKUP_VERIFIED_ORIGIN_FULL_SHA",
+  "imageTag": "audit-maintenance:REPLACE-final",
+  "imageDigest": "sha256:REPLACE_64_CHARACTER_OCI_DIGEST",
+  "platformImageDigest": "sha256:REPLACE_64_CHARACTER_CONFIG_DIGEST",
+  "platform": "linux/amd64",
+  "version": "1.0.0-rc.217",
+  "schema": 238,
+  "runtimeRoot": "/opt/mbox",
+  "sourceDirectory": "/root/LAB-final/source",
+  "bundleDirectory": "/root/LAB-final/bundle",
+  "sourceReleaseDirectory": "/opt/mbox/releases/REPLACE_SOURCE_SHORT_SHA",
+  "imageArchive": "/root/LAB-final/candidate-image.tar",
+  "sourceShaFile": "/root/LAB-final/source-full-sha",
+  "formalEntryScript": "/root/LAB-final/run-formal-entry.sh",
+  "playwrightModule": "/usr/local/lib/node_modules/@playwright/test",
+  "playwrightBrowsers": "/opt/playwright-browsers",
+  "tlsCaFile": "/usr/local/share/ca-certificates/mbox-lab-ca.crt",
+  "sshKeyFile": "/root/LAB-final/ssh/lab_release",
+  "pgServiceFile": "/root/LAB-final/pg_service.conf",
+  "pgPassFile": "/root/LAB-final/pgpass",
+  "labMarkerFile": "/root/LAB-final/isolated-lab.json",
+  "labBinDirectory": "/usr/local/bin",
+  "objectStoreDirectory": "/root/LAB-final/object-store",
+  "objectTransferLog": "/root/LAB-final/object-transfers.jsonl",
+  "callbackBodyFile": "/root/LAB-final/callback-body.json",
+  "financialBaselineFile": "/root/LAB-final/recovery-facts-before-forward.json",
+  "resultFile": "/root/LAB-final/final-verification.json",
+  "transitionId": "local-REPLACE-transition",
+  "sourceContainerName": "mbox-app",
+  "runtimeLogin": "lab_runtime",
+  "retiredLogin": "lab_old",
+  "migrationService": "migration",
+  "clusterAdminService": "cluster",
+  "labCiRunId": "9000000001",
+  "callbackUrls": [
+    "https://payments.localhost/api/payments/providers/postar/callback",
+    "https://payments.localhost/api/refunds/providers/postar/callback"
+  ],
+  "systemdUnits": [
+    "cron.service"
+  ],
+  "persistentMounts": [
+    {
+      "type": "bind",
+      "source": "/opt/mbox/data",
+      "target": "/data",
+      "readOnly": false
+    }
+  ]
+}

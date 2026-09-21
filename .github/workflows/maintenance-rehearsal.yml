@@ -1,11 +1,11 @@
-name: rc217-native-maintenance-rehearsal
+name: rc218-native-maintenance-rehearsal
 on:
   push:
     branches: [audit/rc217-maintenance-lab]
 permissions:
   contents: read
 concurrency:
-  group: rc217-native-maintenance-rehearsal
+  group: rc218-native-maintenance-rehearsal
   cancel-in-progress: false
 jobs:
   isolated-maintenance:
@@ -35,7 +35,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always() && steps.sensitive.outcome == 'success'
         with:
-          name: rc217-native-maintenance-${{ github.run_id }}
+          name: rc218-native-maintenance-${{ github.run_id }}
           path: artifacts/maintenance-native
           if-no-files-found: error
           retention-days: 7

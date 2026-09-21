@@ -6,7 +6,7 @@ assert os.uname().machine=='x86_64' and Path('/.dockerenv').exists()
 assert socket.gethostname().startswith('mbox-maint-lab-')
 assert not any(row.split()[1]=='00000000' for row in Path('/proc/net/route').read_text().splitlines()[1:])
 scenario=sys.argv[1];assert scenario in ('success','forward')
-constants=json.loads((root/'images.json').read_text());initial='ce9c52640e3034d03c6c0929057ae7ee6095f6f4';final='ab8b23713e7a52dace2933132d15d8f2ffc02150'
+constants=json.loads((root/'images.json').read_text());initial='0de13804c9060a1108bc5f6dedea9c4b65a50da8';final='51fc2fba25d38389202733c1f441bea051b0240b'
 phase='setup';entries=[]
 def run(args,label,timeout=300,success=True,env=None):
  with (logs/(label+'.log')).open('w') as f:
@@ -21,10 +21,10 @@ service=Path('/opt/mbox/secrets/pg_service.conf').read_text();gateway=json.loads
 (root/'pg_service.conf').write_text(service.replace('host='+gateway,'host=127.0.0.1'))
 (root/'pgpass').write_text(Path('/opt/mbox/secrets/pgpass').read_text().replace(gateway+':','127.0.0.1:'));os.chmod(root/'pgpass',0o600)
 transition='local-entry-20260921-a';directory=Path('/opt/mbox/maintenance')/transition
-marker={'labId':'rc217-'+scenario,'controllerHostname':socket.gethostname(),'isolatedNestedDocker':True,'externalNetwork':False};(root/'isolated-lab.json').write_text(json.dumps(marker))
+marker={'labId':'rc218-'+scenario,'controllerHostname':socket.gethostname(),'isolatedNestedDocker':True,'externalNetwork':False};(root/'isolated-lab.json').write_text(json.dumps(marker))
 def prepare(sha):
  image=constants[sha];c=json.loads((fixture/'parameterized/config.template.json').read_text())
- c.update(labId=marker['labId'],controllerHostname=marker['controllerHostname'],targetSha=sha,sourceSha='5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe',backupOriginSha=initial if scenario=='forward' else final,imageTag=image['tag'],imageDigest=image['digest'],platformImageDigest=image['config'],platform='linux/amd64',schema=240,sourceDirectory=str(root/('source-'+sha[:7])),bundleDirectory=str(root/('bundle-'+sha[:7])),sourceReleaseDirectory='/opt/mbox/releases/5b9d929',imageArchive=str(root/image['archive']),sourceShaFile=str(root/('sha-'+sha[:7])),formalEntryScript=str(root/'formal-entry.sh'),sshKeyFile='/root/.ssh/lab_release',transitionId=transition,labCiRunId='9000000001',callbackBodyFile='/root/lab-callback-body.json')
+ c.update(version='1.0.0-rc.218',labId=marker['labId'],controllerHostname=marker['controllerHostname'],targetSha=sha,sourceSha='5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe',backupOriginSha=initial if scenario=='forward' else final,imageTag=image['tag'],imageDigest=image['digest'],platformImageDigest=image['config'],platform='linux/amd64',schema=241,sourceDirectory=str(root/('source-'+sha[:7])),bundleDirectory=str(root/('bundle-'+sha[:7])),sourceReleaseDirectory='/opt/mbox/releases/5b9d929',imageArchive=str(root/image['archive']),sourceShaFile=str(root/('sha-'+sha[:7])),formalEntryScript=str(root/'formal-entry.sh'),sshKeyFile='/root/.ssh/lab_release',transitionId=transition,labCiRunId='9000000001',callbackBodyFile='/root/lab-callback-body.json')
  (root/('sha-'+sha[:7])).write_text(sha+'\n');(root/'active-config.json').write_text(json.dumps(c));run(['python3',fixture/'parameterized/prepare-bundle-parameterized.py','--config',root/'active-config.json','--execute-lab'],'prepare-'+sha[:7]);
  Path('/usr/local/bin/ossutil').rename('/usr/local/bin/ossutil.lab-base');shutil.copyfile(fixture/'object-fault.py','/usr/local/bin/ossutil');os.chmod('/usr/local/bin/ossutil',0o755)
  return c
@@ -53,6 +53,26 @@ else:
 assert callback.wait(timeout=15)==0;callback_log.close()
 phase='final-verification';run(['python3',fixture/'parameterized/v240/verify-financial-240.py','--config',root/'active-config.json','--execute-lab'],'final-verification')
 result=json.loads((root/'final-verification.json').read_text());assert result['verified']
+# Record the real post-upgrade definer and table owner. This synthetic local
+# PostgreSQL administrator is not proof of RDS provider-role capabilities.
+query="""BEGIN READ ONLY; SET LOCAL statement_timeout='8000ms';
+ SELECT json_build_object('sessionLogin',session_user,'currentLogin',current_user,
+   'functionOwner',owner.rolname,'ownerSuper',owner.rolsuper,'ownerBypassRls',owner.rolbypassrls,
+   'securityDefiner',proc.prosecdef,'searchPath',proc.proconfig,
+   'tableOwner',tab.relowner::regrole::text,'tableForceRls',tab.relforcerowsecurity,
+   'oldSeedOwner',(SELECT proowner::regrole::text FROM pg_proc WHERE oid='mbox.seed_member_card_permission_definitions()'::regprocedure),
+   'runtimeExecute',has_function_privilege('lab_runtime','mbox.advance_staff_access_revision()','EXECUTE'))
+ FROM pg_proc proc JOIN pg_roles owner ON owner.oid=proc.proowner
+ JOIN pg_class tab ON tab.oid='mbox.staff_access_revisions'::regclass
+ WHERE proc.oid='mbox.advance_staff_access_revision()'::regprocedure; COMMIT;"""
+owner_env={**os.environ,'PGSERVICEFILE':str(root/'pg_service.conf'),'PGPASSFILE':str(root/'pgpass')}
+owner=json.loads(subprocess.check_output(['psql','-XqAt','--dbname=service=migration','-v','ON_ERROR_STOP=1','-c',query],env=owner_env,text=True))
+assert owner['functionOwner']==owner['tableOwner']==owner['currentLogin']==owner['sessionLogin']
+assert owner['securityDefiner'] and owner['tableForceRls'] and (owner['ownerSuper'] or owner['ownerBypassRls'])
+assert owner['oldSeedOwner']=='lab_old' and owner['runtimeExecute'] is False
+assert [value.replace(' ','') for value in owner['searchPath']]==['search_path=pg_catalog,mbox']
+result['staffRevisionOwner']=owner
+result['limits'].append('LAB migration login is its local PostgreSQL administrator; RDS provider-role authority needs separate production verification')
 result['formalEntries']=entries;result['faultEvents']=[json.loads(x) for x in (root/'fault-events.jsonl').read_text().splitlines()];result['scenario']=scenario;result['formalScriptsUnmodified']=True
 (root/'report.json').write_text(json.dumps(result,indent=2)+'\n')
-print(json.dumps({'scenario':scenario,'verified':True,'formalEntries':entries,'schema':240}))
+print(json.dumps({'scenario':scenario,'verified':True,'formalEntries':entries,'schema':241}))

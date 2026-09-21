@@ -10,7 +10,7 @@ import sys
 HERE = pathlib.Path(__file__).resolve().parent
 LEGACY = HERE.parent
 INPUT_HASHES = {
-    'lab_parameters.py': '0c73ae13f401ae801d1e08948d5d7322d3f2cd1c0060994ca7ef2c5b51bda2ca',
+    'lab_parameters.py': 'f0614dbe7226fc7727d8ed8da0e500d4c19014a8f2e8c17940a5badcc7e553fa',
     'verify-final-parameterized.py': '5aa0b2a0755a132dae566a25ebbacd16a4072e131ffeff35041e86206930c34a',
 }
 

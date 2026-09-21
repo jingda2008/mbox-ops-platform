@@ -88,6 +88,26 @@ def cli(description, capture=False):
     return config, args
 
 
+def allowed_lab_mount(row, root_row):
+    fields, root_fields = row.split(), root_row.split()
+    mountpoint = fields[4]
+    separator, root_separator = fields.index('-'), root_fields.index('-')
+    if mountpoint in ('/', '/etc/hosts', '/etc/hostname', '/etc/resolv.conf') or any(
+            mountpoint == prefix or mountpoint.startswith(prefix + '/') for prefix in ('/proc', '/sys', '/dev', '/run', '/tmp')):
+        return True
+    # Dockerd creates this private self-bind in its own root filesystem.
+    # Require identical device, filesystem/source/options and exact subtree;
+    # a different filesystem or arbitrary host subtree must fail closed.
+    if mountpoint == '/var/lib/docker':
+        return (fields[2] == root_fields[2]
+                and fields[3] == root_fields[3].rstrip('/') + '/var/lib/docker'
+                and fields[separator + 1:] == root_fields[root_separator + 1:])
+    # The only other nested data mount admitted is a generated per-container
+    # shared-memory tmpfs. Outer Docker inspection still forbids all binds.
+    return bool(re.fullmatch(r'/var/lib/docker/containers/[a-f0-9]{64}/mounts/shm', mountpoint)
+                and fields[separator + 1:separator + 3] == ['tmpfs', 'shm'])
+
+
 def assert_isolated_lab(config):
     require(pathlib.Path('/.dockerenv').is_file(), 'execution requires an isolated disposable LAB container')
     require(socket.gethostname() == config['controllerHostname'], 'LAB hostname mismatch')
@@ -99,17 +119,11 @@ def assert_isolated_lab(config):
     require(not any('docker.sock' in line for line in mounts), 'host-mounted Docker socket is forbidden')
     # Original handoff copies assets with docker cp; it does not bind arbitrary
     # host source/production directories into this privileged disposable host.
+    roots = [row for row in mounts if row.split()[4] == '/']
+    require(len(roots) == 1, 'ambiguous LAB root filesystem')
     for row in mounts:
-        mountpoint = row.split()[4]
-        # Nested dockerd creates its own per-container /dev/shm tmpfs here.
-        # This is kernel-created RAM, not a host bind mount. Outer inspection
-        # separately rejects every bind mount into the disposable host.
-        fields = row.split(); separator = fields.index('-')
-        nested_shm = (re.fullmatch(r'/var/lib/docker/containers/[a-f0-9]{64}/mounts/shm', mountpoint)
-                      and fields[separator + 1:separator + 3] == ['tmpfs', 'shm'])
-        require(mountpoint in ('/', '/etc/hosts', '/etc/hostname', '/etc/resolv.conf') or nested_shm or
-                any(mountpoint == prefix or mountpoint.startswith(prefix + '/') for prefix in ('/proc', '/sys', '/dev', '/run', '/tmp')),
-                'unexpected mounted directory: ' + mountpoint + ' (' + fields[separator + 1] + '); LAB must not expose host data')
+        require(allowed_lab_mount(row, roots[0]),
+                'unexpected mounted directory: ' + row.split()[4] + '; LAB must not expose host data')
     routes = pathlib.Path('/proc/net/route').read_text().splitlines()[1:]
     require(not any(row.split()[1] == '00000000' for row in routes if len(row.split()) > 1), 'LAB must have no IPv4 default route')
     ipv6_routes = pathlib.Path('/proc/net/ipv6_route').read_text().splitlines()

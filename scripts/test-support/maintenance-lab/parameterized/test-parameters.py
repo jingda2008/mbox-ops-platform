@@ -73,6 +73,18 @@ class ParametersTest(unittest.TestCase):
                 self.assertEqual(json.loads(result.stdout)['executed'], False)
                 self.assertEqual(set(pathlib.Path(directory).iterdir()), {config})
 
+    def test_nested_docker_mounts_require_exact_local_filesystem_identity(self):
+        root = '1 0 0:42 / / rw - overlay overlay rw,lowerdir=synthetic,upperdir=local'
+        own = '2 1 0:42 /var/lib/docker /var/lib/docker rw - overlay overlay rw,lowerdir=synthetic,upperdir=local'
+        self.assertTrue(parameters.allowed_lab_mount(own, root))
+        for bad in (own.replace('0:42', '8:1'), own.replace('/var/lib/docker /var/lib/docker', '/host-data /var/lib/docker'),
+                    own.replace('upperdir=local', 'upperdir=other'), own.replace('/var/lib/docker rw', '/var/lib/docker2 rw')):
+            self.assertFalse(parameters.allowed_lab_mount(bad, root))
+        shm = '3 1 0:43 / /var/lib/docker/containers/' + 'a' * 64 + '/mounts/shm rw - tmpfs shm rw,size=65536k'
+        self.assertTrue(parameters.allowed_lab_mount(shm, root))
+        self.assertFalse(parameters.allowed_lab_mount(shm.replace('tmpfs shm', 'ext4 /dev/sda'), root))
+        self.assertFalse(parameters.allowed_lab_mount(shm.replace('a' * 64, 'arbitrary'), root))
+
     def test_actual_backup_position_wins_over_failed_initial_bound(self):
         spec = importlib.util.spec_from_file_location('verify_parameters', HERE / 'verify-final-parameterized.py')
         module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)

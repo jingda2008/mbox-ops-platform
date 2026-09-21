@@ -77,7 +77,7 @@ def prepare(c):
             'releaseSha': c['sourceSha'], 'environmentSha256': hashlib.sha256(module.canonical(sorted(source_env))).hexdigest(), 'releaseDirectory': str(old)},
             'retiredLogins': [c['retiredLogin']], 'persistentMounts': c['persistentMounts'], 'writerContainerIds': [source['Id']],
             'workerAdapterDirectory': str(adapter), 'workerAdapterTreeSha256': hashlib.sha256(module.canonical(tree)).hexdigest(),
-            'systemdUnits': c['systemdUnits'], 'systemdInventorySha256': hashlib.sha256(units.encode()).hexdigest(),
+            'systemdUnits': c['systemdUnits'], 'systemdInventorySha256': module.systemd_inventory_sha256(units),
             'callbackUrls': c['callbackUrls'], 'controllerPython': os.sys.executable, 'clusterAdminService': c['clusterAdminService']}
     journal = root / 'maintenance' / c['transitionId'] / 'journal.jsonl'
     if journal.exists():

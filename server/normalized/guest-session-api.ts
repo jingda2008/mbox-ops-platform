@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import {
   GuestSessionInvalidError,
+  GuestSessionBusyError,
   GuestCustomerAtAnotherTableError,
   GuestSessionRateLimitError,
   GuestSessionService,
@@ -191,6 +192,12 @@ function mapError(error: unknown): {
   body: ApiErrorBody
   clearCookie?: boolean
 } {
+  if (error instanceof GuestSessionBusyError) {
+    return {
+      statusCode: 503,
+      body: { error: { code: 'GUEST_SESSION_BUSY', message: error.message, retryAt: error.retryAt } },
+    }
+  }
   if (error instanceof GuestSessionRateLimitError) {
     return {
       statusCode: 429,

@@ -750,7 +750,9 @@ class MemoryIdempotentExecutor {
   async execute<Result>(
     command: Readonly<IdempotentCommand<Result>>,
     handler: (transaction: ScopedTransaction) => Promise<CommandOutcome<Result>>,
+    beforeClaim?: (transaction: ScopedTransaction) => Promise<void>,
   ): Promise<CommandExecution<Result>> {
+    await beforeClaim?.(this.transactionForKey(command.idempotencyKey))
     const key = `${command.operationScope}:${command.idempotencyKey}`
     const cached = this.cache.get(key)
     if (cached !== undefined) {
@@ -800,6 +802,7 @@ class PaymentFlowTransaction implements ScopedTransaction {
     await Promise.resolve()
 
     if (sql.includes('pg_advisory_xact_lock_shared')) return result([])
+    if (sql.includes('SELECT mbox.order_consumption_settled')) return result([{settled: this.mode === 'callback'}])
     if (sql.startsWith('SELECT capability FROM mbox.loyalty_operational_control_states')) return result([])
     if (sql.includes("FROM (VALUES('points_accrual')")) return result([
       operationalState('points_accrual'),operationalState('points_redemption'),operationalState('wechat_notification'),
@@ -824,8 +827,8 @@ class PaymentFlowTransaction implements ScopedTransaction {
     }
     if (sql.includes('AS gross_paid_minor')) {
       return result([this.mode === 'callback'
-        ? { gross_paid_minor: '8800', refunded_minor: '0', has_pending: false }
-        : { gross_paid_minor: '0', refunded_minor: '0', has_pending: this.paymentStaged }])
+        ? { collection_due_minor: '0', gross_paid_minor: '8800', refunded_minor: '0', has_pending: false }
+        : { collection_due_minor: '8800', gross_paid_minor: '0', refunded_minor: '0', has_pending: this.paymentStaged }])
     }
     if (sql.includes('INSERT INTO mbox.payments')) {
       this.paymentStaged = true
@@ -860,6 +863,16 @@ class PaymentFlowTransaction implements ScopedTransaction {
       return result([reconciliationRow(this.paymentId)])
     }
     if (sql.includes('INSERT INTO mbox.recommendation_behavior_events')) return result([])
+    if (sql.startsWith('INSERT INTO mbox.order_recollection_item_restorations (')
+      && sql.includes('FROM mbox.order_recollection_refund_obligations obligation JOIN mbox.refund_items item')
+      && sql.includes('AND mbox.order_recollection_item_restoration_valid(')
+      && sql.endsWith('ON CONFLICT (tenant_id,store_id,order_id,refund_id,order_item_id) DO NOTHING RETURNING refund_id')) {
+      // This first-payment fixture has refunded_minor=0 and no ordinary refund
+      // obligation/items. The new INSERT...SELECT therefore appends no recovery.
+      expect(this.mode).toBe('callback')
+      expect(values.slice(0, 4)).toEqual([tenantId, storeId, this.paymentId, this.orderId])
+      return result([])
+    }
     if (sql.includes('UPDATE mbox.orders')) {
       return result([{ payment_status: this.mode === 'callback' ? 'paid' : 'pending' }])
     }
@@ -911,7 +924,7 @@ class RollbackClient implements PostgresPoolClient {
       }])
     }
     if (sql.includes('AS gross_paid_minor')) {
-      return result([{ gross_paid_minor: '0', refunded_minor: '0', has_pending: this.paymentStaged }])
+      return result([{ collection_due_minor: '8800', gross_paid_minor: '0', refunded_minor: '0', has_pending: this.paymentStaged }])
     }
     if (sql.includes('INSERT INTO mbox.payments')) {
       this.paymentStaged = true

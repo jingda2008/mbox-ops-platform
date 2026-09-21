@@ -226,9 +226,9 @@ function request(path, options) {
         }
         if (response.statusCode >= 200 && response.statusCode < 300) return resolve(response.data)
         const body = response.data || {}
-        const detail = body.error || body
+        const detail = body.error || (response.statusCode === 429 && body.data && body.data.status === 'rate_limited' ? body.data : body)
         const error = new Error(detail.message || `请求失败（${response.statusCode}）`)
-        error.code = detail.code || 'HTTP_ERROR'
+        error.code = detail.code || (detail.status === 'rate_limited' ? 'GUEST_SERVICE_RATE_LIMITED' : 'HTTP_ERROR')
         error.statusCode = response.statusCode
         if (typeof detail.retryAt === 'string') error.retryAt = detail.retryAt
         // A rejected guest call is the first reliable evidence that this

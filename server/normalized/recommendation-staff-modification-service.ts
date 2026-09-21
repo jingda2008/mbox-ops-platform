@@ -97,6 +97,13 @@ export class RecommendationStaffModificationService {
         }],
         outboxMessages: [],
       }
+    }, async (transaction) => {
+      // A stored success is still private to an employee who currently has
+      // this capability; the command journal must not bypass revocation.
+      const access = await this.createAccess(transaction).resolve(context.employeeId)
+      if (!access.permissions.includes('recommendation.staff.modify')) throw new StaffAccessDeniedError(
+        `Employee ${context.employeeId} does not have permission recommendation.staff.modify`,
+      )
     })
   }
 }

@@ -103,6 +103,9 @@ integration('contract database maintenance recovery', () => {
       await client.connect()
       const migrations = (await loadNormalizedMigrations()).filter((migration) => migration.version <= '095')
       await client.query('CREATE SCHEMA mbox')
+      // Exercise extensions in an archive-owned schema even when the database
+      // administrator's name differs from mbox.
+      await client.query('SET search_path=mbox,public')
       await client.query(`CREATE TABLE mbox.normalized_schema_metadata(
         singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),schema_flavor text NOT NULL,
         schema_version text NOT NULL,created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
@@ -141,6 +144,9 @@ integration('contract database maintenance recovery', () => {
       runChecked(resolve('deploy/aliyun/restore-postgres.sh'), ['capture', evidence], {
         env: { ...environment, DATABASE_SERVICE: backupService, MBOX_EXPECTED_RESTORE_DATABASE: databaseName },
       })
+      expect(JSON.parse(readFileSync(evidence, 'utf8')).extensions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'pgcrypto', schema: 'mbox' }),
+      ]))
       const backup = runChecked(resolve('deploy/aliyun/backup-postgres.sh'), [], {
         encoding: 'utf8',
         env: { ...environment, DATABASE_SERVICE: backupService, BACKUP_DIR: backupDirectory },

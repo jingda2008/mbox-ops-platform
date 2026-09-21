@@ -1,3 +1,4 @@
+import {lockClosedDebtRecovery,lockClosedDebtPaymentTargets,assertClosedDebtWritable} from './closed-debt-recovery.js'
 import {assertStandaloneRefundDecision} from './refund-case-decision.js'
 import {ItemAfterSalesProgressRepository} from './item-after-sales-progress-repository.js'
 import { RefundFulfillmentRepository } from './refund-fulfillment-repository.js'
@@ -47,6 +48,7 @@ import {
 } from './provider-verification-observation.js'
 import {
   RecollectionAuthorizationRepository,
+  RecollectionAuthorizationConflictError,
   type OrderRecollectionAuthorization,
 } from './recollection-authorization-repository.js'
 import {
@@ -324,6 +326,27 @@ export class PaymentCommandService {
     })
   }
 
+  closeUnpresentedClosedDebtPayment(input:Readonly<AuthorizeProviderCloseForReplacementCommand>):Promise<CommandExecution<Payment>>{
+    const employeeId=requireEmployee(input.actor,'Close unpresented historical payment')
+    return this.commands.execute(command(input,'payment.closed-debt-local-close',paymentCodec),async transaction=>{
+      const targets=await lockClosedDebtPaymentTargets(transaction,input.paymentId)
+      if(targets.orders.some(order=>!order.eligible||order.outstandingAmountMinor<0)||!targets.orders.some(order=>order.outstandingAmountMinor>0))throw new RecollectionAuthorizationConflictError('原付款全部订单没有共同满足条件的历史欠款')
+      const payments=new PaymentRepository(transaction)
+      const payment=await payments.closeUnpresentedClosedDebtPayment(input.paymentId)
+      for(const order of targets.orders)await payments.syncOrderPaymentStatus(order.orderId)
+      return {result:payment,auditEvents:[{actor:input.actor,action:'payment.closed_debt_local_attempt_closed',objectType:'payment',objectId:payment.id,
+        businessDate:input.businessDate,reason:input.reason,afterData:{...(payment.payableKind==='order'?{orderId:targets.orders[0]!.orderId,originalBusinessDate:targets.orders[0]!.originalBusinessDate}:{}),
+          tableSessionId:targets.tableSessionId,closedAt:targets.orders[0]!.closedAt,payableKind:payment.payableKind,
+          orders:targets.orders.map(order=>({orderId:order.orderId,publicId:order.publicId,originalBusinessDate:order.originalBusinessDate,allocationAmountMinor:order.allocationAmountMinor,outstandingAmountMinor:order.outstandingAmountMinor})),
+          localOnly:true,providerContacted:false,amountMinor:payment.amountMinor,currency:payment.currency}}],outboxMessages:[]}
+    },async transaction=>{
+      for(const capability of ['payment.initiate.staff','reconciliation.view','payment.collect.all_tables','payment.recollect.authorize'] as const)await this.authorization.assertEmployeeCapability({transaction,employeeId,capability})
+      // Current scoped permissions are checked even for exact receipt recovery;
+      // current outstanding/provider state are mutation-only requirements.
+      await lockClosedDebtPaymentTargets(transaction,input.paymentId)
+    })
+  }
+
   recordManual(input: Readonly<RecordManualPaymentCommand>): Promise<CommandExecution<Payment>> {
     const employeeId = requireEmployee(input.actor, 'Manual payment recording')
     const evidence = sanitizeProviderSnapshot(input.evidence)
@@ -331,23 +354,14 @@ export class PaymentCommandService {
       throw new TypeError('Manual payment evidence collector must match the acting employee')
     }
     return this.commands.execute(command(input, 'payment.manual-record', paymentCodec), async (transaction) => {
-      await this.authorization.assertEmployeeCapability({
-        transaction,
-        employeeId,
-        capability: input.provider === 'cash'
-          ? 'payment.manual.cash.record'
-          : input.provider === 'physical_pos'
-            ? 'payment.manual.pos.record'
-            : 'payment.manual.external.record',
-      })
       const orderIds=input.orderIds??[input.orderId]
-      for(const orderId of orderIds)await this.authorization.assertEmployeeOrderAccess({
-        transaction,
-        employeeId,
-        orderId,
-      })
+      for(const orderId of orderIds)await this.authorization.assertEmployeeOrderAccess({transaction,employeeId,orderId,allowClosedDebtRecovery:input.orderIds===undefined})
+      const recovery=input.orderIds===undefined?await lockClosedDebtRecovery(transaction,input.orderId):null
+      if(recovery){
+        assertClosedDebtWritable(recovery)
+      }
       const fulfillment = new PaymentFulfillmentRepository(transaction)
-      for(const orderId of orderIds)await fulfillment.ensureReservationBeforePayment(orderId)
+      if(!recovery)for(const orderId of orderIds)await fulfillment.ensureReservationBeforePayment(orderId)
       const payments = new PaymentRepository(transaction)
       const reference = requiredEvidenceString(evidence, 'receiptReference')
       const payment = await (input.orderIds?payments.createForOrders.bind(payments):payments.createForOrder.bind(payments))({
@@ -376,8 +390,8 @@ export class PaymentCommandService {
       })
       if(payment.payableKind==='order_batch')return this.batchPaymentOutcome(transaction,input,payment,'payment.manual_recorded',1,undefined,occurredAt)
       if (payment.orderId === null) throw new Error('Manual payment lost its order target')
-      const orderPaymentStatus = await payments.syncOrderPaymentStatus(payment.orderId)
-      if (orderPaymentStatus === 'paid') {
+      await payments.syncOrderPaymentStatus(payment.orderId)
+      if (await payments.hasSettledConsumption(payment.orderId)) {
         await new RecommendationFinancialAttributionRepository(transaction).recordPaidForOrder({
           paymentId: payment.id,
           orderId: payment.orderId,
@@ -389,7 +403,7 @@ export class PaymentCommandService {
           occurredAt,
         })
       }
-      const activation = await fulfillment.activatePaidOrder(payment.orderId, {
+      const activation = recovery?undefined:await fulfillment.activatePaidOrder(payment.orderId, {
         createdByEmployeeId: employeeId,
         metadata: { paymentId: payment.id, paymentProvider: payment.provider },
         paymentId: payment.id,
@@ -404,7 +418,42 @@ export class PaymentCommandService {
         activation,
         this.options.printTicketSources === true,
       )
+      if(recovery)return {...outcome,auditEvents:[...outcome.auditEvents,{actor:input.actor,action:'payment.closed_debt_recovered',objectType:'payment',objectId:payment.id,businessDate:input.businessDate,
+        afterData:{orderId:recovery.orderId,tableSessionId:recovery.tableSessionId,originalBusinessDate:recovery.originalBusinessDate,closedAt:recovery.closedAt,
+          authorizationId:recovery.authorizationId,amountMinor:payment.amountMinor,currency:payment.currency,collectionBusinessDate:input.businessDate}}]}
       return outcome
+    },async transaction=>{
+      await this.authorization.assertEmployeeCapability({
+        transaction,
+        employeeId,
+        capability: input.provider === 'cash'
+          ? 'payment.manual.cash.record'
+          : input.provider === 'physical_pos'
+            ? 'payment.manual.pos.record'
+            : 'payment.manual.external.record',
+      })
+      const orderIds=input.orderIds??[input.orderId]
+      for(const orderId of orderIds){
+        // A current collector may recover their exact prior receipt even after
+        // ordinary table closure. This grants no new write: the handler below
+        // independently requires the closed-debt qualifications.
+        const ownReceipt=await transaction.query<{historical:boolean}>(`SELECT EXISTS(SELECT 1 FROM mbox.audit_events audit
+            WHERE audit.tenant_id=payment.tenant_id AND audit.store_id=payment.store_id AND audit.object_id=payment.id::text
+              AND audit.action='payment.closed_debt_recovered') AS historical FROM mbox.order_payment_facts payment
+          JOIN mbox.payments original ON (original.tenant_id,original.store_id,original.id)=(payment.tenant_id,payment.store_id,payment.id)
+          WHERE payment.tenant_id=$1 AND payment.store_id=$2 AND payment.order_id=$3 AND payment.public_id=$4
+            AND original.provider_snapshot->>'collectedByEmployeeId'=$5`,[input.scope.tenantId,input.scope.storeId,orderId,input.publicId,employeeId])
+        if(ownReceipt.rowCount){
+          if(ownReceipt.rows[0]?.historical)for(const capability of ['payment.collect.all_tables','payment.recollect.authorize'] as const)await this.authorization.assertEmployeeCapability({transaction,employeeId,capability})
+          continue
+        }
+        await this.authorization.assertEmployeeOrderAccess({
+        transaction,
+        employeeId,
+        orderId,
+        allowClosedDebtRecovery: input.orderIds === undefined,
+      })
+      }
     })
   }
 
@@ -511,11 +560,8 @@ export class PaymentCommandService {
   ): Promise<CommandExecution<OrderRecollectionAuthorization>> {
     const employeeId = requireEmployee(input.actor, 'Refund recollection authorization')
     return this.commands.execute(command(input, 'payment.recollection.authorize', recollectionCodec), async (transaction) => {
-      await this.authorization.assertEmployeeCapability({
-        transaction,
-        employeeId,
-        capability: 'payment.recollect.authorize',
-      })
+      const recovery=await lockClosedDebtRecovery(transaction,input.orderId)
+      if(recovery)assertClosedDebtWritable(recovery)
       const authorization = await new RecollectionAuthorizationRepository(transaction).authorize({
         orderId: input.orderId,
         employeeId,
@@ -540,6 +586,13 @@ export class PaymentCommandService {
           payload: recollectionToJson(authorization),
         }],
       }
+    },async transaction=>{
+      await this.authorization.assertEmployeeCapability({
+        transaction,
+        employeeId,
+        capability: 'payment.recollect.authorize',
+      })
+      if(await lockClosedDebtRecovery(transaction,input.orderId))await this.authorization.assertEmployeeOrderAccess({transaction,employeeId,orderId:input.orderId,allowClosedDebtRecovery:true})
     })
   }
 
@@ -633,7 +686,7 @@ export class PaymentCommandService {
       if (payment.orderId === null) {
         await payments.syncActivityRegistrationPaymentStatus(payment)
       } else {
-        const orderPaymentStatus = await payments.syncOrderPaymentStatus(payment.orderId)
+        await payments.syncOrderPaymentStatus(payment.orderId)
         activation = await new PaymentFulfillmentRepository(transaction).activatePaidOrder(payment.orderId, {
           metadata: { paymentId: payment.id, paymentProvider: payment.provider },
           paymentId: payment.id,
@@ -643,7 +696,7 @@ export class PaymentCommandService {
         // attribution or a fulfilment task for an operationally cancelled
         // order. Table-tab orders remain financially attributable even though
         // no immediate-payment fulfilment transition is required.
-        if (orderPaymentStatus === 'paid' && activation.financialAttributionEligible) {
+        if (activation.financialAttributionEligible && await payments.hasSettledConsumption(payment.orderId)) {
           await new RecommendationFinancialAttributionRepository(transaction).recordPaidForOrder({
             paymentId: payment.id,
             orderId: payment.orderId,
@@ -731,7 +784,7 @@ export class PaymentCommandService {
       if (payment.orderId === null) {
         await payments.syncActivityRegistrationPaymentStatus(payment)
       } else {
-        const orderPaymentStatus = await payments.syncOrderPaymentStatus(payment.orderId)
+        await payments.syncOrderPaymentStatus(payment.orderId)
         const fulfillment = new PaymentFulfillmentRepository(transaction)
         fulfillmentResult = input.status === 'succeeded'
           ? await fulfillment.activatePaidOrder(payment.orderId, {
@@ -744,7 +797,7 @@ export class PaymentCommandService {
                 `verified provider result: ${input.status}`,
               )
             : undefined
-        if (input.status === 'succeeded' && orderPaymentStatus === 'paid'
+        if (input.status === 'succeeded' && await payments.hasSettledConsumption(payment.orderId)
           && fulfillmentResult !== undefined
           && 'financialAttributionEligible' in fulfillmentResult
           && fulfillmentResult.financialAttributionEligible) {
@@ -782,13 +835,19 @@ export class PaymentCommandService {
 
   private async batchPaymentOutcome(transaction:ScopedTransaction,input:Readonly<CommandMetadata>,payment:Payment,action:string,version:number,businessKey:string|undefined,occurredAt:string):Promise<CommandOutcome<Payment>> {
     if(!payment.orderBatchId)throw new Error('Batch payment missing batch target')
-    const orders=(await transaction.query<{order_id:string}>('SELECT order_id FROM mbox.order_payment_allocations WHERE tenant_id=$1 AND store_id=$2 AND batch_id=$3 ORDER BY order_id',[transaction.scope.tenantId,transaction.scope.storeId,payment.orderBatchId])).rows
+    const orders=(await transaction.query<{order_id:string;session_status:string;order_status:string;fulfillment_state:string}>(`SELECT allocation.order_id,session.status session_status,orders.status order_status,orders.fulfillment_state
+      FROM mbox.order_payment_allocations allocation JOIN mbox.orders orders ON (orders.tenant_id,orders.store_id,orders.id)=(allocation.tenant_id,allocation.store_id,allocation.order_id)
+      JOIN mbox.table_sessions session ON (session.tenant_id,session.store_id,session.id)=(orders.tenant_id,orders.store_id,orders.table_session_id)
+      WHERE allocation.tenant_id=$1 AND allocation.store_id=$2 AND allocation.batch_id=$3 ORDER BY allocation.order_id`,[transaction.scope.tenantId,transaction.scope.storeId,payment.orderBatchId])).rows
     const result=await paymentOutcome(transaction,input,payment,action,version,businessKey)
     for(const row of orders){
-      const status=await new PaymentRepository(transaction).syncOrderPaymentStatus(row.order_id)
+      await new PaymentRepository(transaction).syncOrderPaymentStatus(row.order_id)
       const fulfillment=new PaymentFulfillmentRepository(transaction)
-      const activation=payment.status==='succeeded'?await fulfillment.activatePaidOrder(row.order_id,{paymentId:payment.id,metadata:{paymentId:payment.id,paymentProvider:payment.provider},...(input.actor.type==='employee'?{createdByEmployeeId:input.actor.employeeId}:{})}):payment.status==='failed'||payment.status==='closed'?await fulfillment.releaseAfterDefinitiveFailure(row.order_id,`verified provider result: ${payment.status}`):undefined
-      if(payment.status==='succeeded'&&status==='paid'&&activation&&'financialAttributionEligible' in activation&&activation.financialAttributionEligible){
+      // A closed table's late capture remains money, but cannot reactivate
+      // production, inventory or an experience already fulfilled on the table.
+      const activation=row.session_status==='closed'?undefined:payment.status==='succeeded'?await fulfillment.activatePaidOrder(row.order_id,{paymentId:payment.id,metadata:{paymentId:payment.id,paymentProvider:payment.provider},...(input.actor.type==='employee'?{createdByEmployeeId:input.actor.employeeId}:{})}):payment.status==='failed'||payment.status==='closed'?await fulfillment.releaseAfterDefinitiveFailure(row.order_id,`verified provider result: ${payment.status}`):undefined
+      const financiallyEligible=row.session_status==='closed'?row.order_status!=='draft'&&row.order_status!=='cancelled'&&row.fulfillment_state!=='cancelled':activation&&'financialAttributionEligible' in activation&&activation.financialAttributionEligible
+      if(payment.status==='succeeded'&&financiallyEligible&&await new PaymentRepository(transaction).hasSettledConsumption(row.order_id)){
         await new RecommendationFinancialAttributionRepository(transaction).recordPaidForOrder({paymentId:payment.id,orderId:row.order_id,actorRef:`payment:${payment.id}`})
         await new LoyaltyAccrualRepository(transaction).recordPaidOrder({paymentId:payment.id,orderId:row.order_id,occurredAt})
       }
@@ -952,24 +1011,25 @@ export class PaymentCommandService {
         if (refund.orderId === null) await payments.syncActivityRegistrationRefundStatus(refund.paymentId)
         else {
           const orderPaymentStatus = await payments.syncOrderPaymentStatus(refund.orderId)
+          await new LoyaltyAccrualRepository(transaction).reverseSucceededRefund({
+            refundId: refund.id,
+            paymentId: refund.paymentId,
+            orderId: refund.orderId,
+            occurredAt: input.occurredAt,
+          })
+
           // Returning an overcollection leaves the order fully paid.  The
           // payment/refund ledgers still record both money movements, but the
-          // sale, recommendation, loyalty and experience facts must remain a
+          // sale, recommendation and experience facts must remain a
           // single fulfilled order regardless of which duplicate payment was
           // chosen for the refund.
+          await new RecommendationFinancialAttributionRepository(transaction).recordRefundedForOrder({
+            refundId: refund.id,
+            paymentId: refund.paymentId,
+            orderId: refund.orderId,
+            actorRef: `refund:${refund.id}`,
+          })
           if (orderPaymentStatus !== 'paid') {
-            await new RecommendationFinancialAttributionRepository(transaction).recordRefundedForOrder({
-              refundId: refund.id,
-              paymentId: refund.paymentId,
-              orderId: refund.orderId,
-              actorRef: `refund:${refund.id}`,
-            })
-            await new LoyaltyAccrualRepository(transaction).reverseSucceededRefund({
-              refundId: refund.id,
-              paymentId: refund.paymentId,
-              orderId: refund.orderId,
-              occurredAt: input.occurredAt,
-            })
             await new ExperiencePlanActivationRepository(transaction)
               .cancelAfterFullRefund(refund.orderId,refund.paymentId)
             await new RefundFulfillmentRepository(transaction).synchronize(refund.orderId, refund.id)
@@ -1030,19 +1090,20 @@ export class PaymentCommandService {
         if (refund.orderId === null) await payments.syncActivityRegistrationRefundStatus(refund.paymentId)
         else {
           const orderPaymentStatus = await payments.syncOrderPaymentStatus(refund.orderId)
+          await new LoyaltyAccrualRepository(transaction).reverseSucceededRefund({
+            refundId: refund.id,
+            paymentId: refund.paymentId,
+            orderId: refund.orderId,
+            occurredAt,
+          })
+
+          await new RecommendationFinancialAttributionRepository(transaction).recordRefundedForOrder({
+            refundId: refund.id,
+            paymentId: refund.paymentId,
+            orderId: refund.orderId,
+            actorRef: `refund:${refund.id}`,
+          })
           if (orderPaymentStatus !== 'paid') {
-            await new RecommendationFinancialAttributionRepository(transaction).recordRefundedForOrder({
-              refundId: refund.id,
-              paymentId: refund.paymentId,
-              orderId: refund.orderId,
-              actorRef: `refund:${refund.id}`,
-            })
-            await new LoyaltyAccrualRepository(transaction).reverseSucceededRefund({
-              refundId: refund.id,
-              paymentId: refund.paymentId,
-              orderId: refund.orderId,
-              occurredAt,
-            })
             await new ExperiencePlanActivationRepository(transaction)
               .cancelAfterFullRefund(refund.orderId,refund.paymentId)
             await new RefundFulfillmentRepository(transaction).synchronize(refund.orderId, refund.id)

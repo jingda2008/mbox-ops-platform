@@ -476,6 +476,7 @@ function parsePaymentObservation(
   }
   const data = requireDataObject(response)
   assertAgency(data, agencyId)
+  assertMerchant(data, request.merchantId)
   const paymentIntentId = requiredString(data, 'threeOrderNo')
   if (paymentIntentId !== request.paymentIntentId) throw new Error('星驿支付查询三方订单号不匹配')
   const status = paymentStatus(requiredString(data, 'orderStatus'))

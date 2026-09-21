@@ -1,3 +1,5 @@
+export type ProductionStation = 'kitchen' | 'bar'
+
 export interface KitchenDestination {
   taskId: string
   tableSessionId: string
@@ -37,6 +39,10 @@ export interface KitchenProductionBatch {
   orderNote: string
   employeeId: string
   employeeName: string
+  stationCode: ProductionStation
+  createdByEmployeeId: string
+  createdByEmployeeName: string
+  ownershipVersion: number
   createdAt: string
   startedAt: string | null
   anchorAt: string
@@ -50,9 +56,12 @@ export interface KitchenProductionBatch {
 export interface KitchenBoardData {
   canStart:boolean
   employeeId: string
+  stationCode: ProductionStation
+  canHandoff: boolean
   canPrepare: boolean
   actionSessionValid: boolean
   generatedAt: string
+  pickupSummary: {awaitingPickup:number;pickedUpThisShift:number}
   pending: KitchenPendingItem[]
   batches: KitchenProductionBatch[]
   equipmentLabels: string[]
@@ -77,10 +86,38 @@ export type KitchenCommand = {
 } | {
   action: 'release'
   batchId: string
+  expectedOwnershipVersion?: number
 } | {
   action: 'ready'
   batchId: string
+  expectedOwnershipVersion?: number
   items: Array<Omit<KitchenStartSelection, 'quantity' | 'expectedUnmade'> & {unitIds: string[]}>
+} | {
+  action: 'handoff'
+  batchId: string
+  expectedBatches: KitchenHandoffBatch[]
+  expectedTasks: KitchenHandoffTask[]
+  physicalChecked: true
+  reason: string
+}
+
+export interface KitchenHandoffBatch {
+  batchId: string
+  expectedCurrentOwnerId: string
+  expectedOwnershipVersion: number
+}
+
+export interface KitchenHandoffTask {
+  taskId: string
+  expectedEmployeeId: string | null
+}
+
+export interface KitchenHandoffPreview {
+  stationCode: ProductionStation
+  anchorBatchId: string
+  batches: KitchenHandoffBatch[]
+  tasks: KitchenHandoffTask[]
+  displayLines: Array<{batchId:string;productName:string;specification:string;itemNote:string;orderNote:string;tableCodes:string[];remaining:number;equipment:string|null;released:boolean}>
 }
 
 export interface KitchenCommandResult {
@@ -88,6 +125,8 @@ export interface KitchenCommandResult {
   action: KitchenCommand['action']
   quantity: number
   released: boolean
+  affectedBatchIds?: string[]
+  ownershipVersions?: Record<string,number>
 }
 
 export function kitchenCompatibilityKey(item: Pick<KitchenPendingItem, 'productId' | 'specification' | 'itemNote' | 'orderNote'>): string {

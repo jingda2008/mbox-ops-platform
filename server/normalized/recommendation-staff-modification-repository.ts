@@ -161,7 +161,9 @@ export class RecommendationStaffModificationRepository {
        AND target_product.id=target_option.product_id
       WHERE recommendation.tenant_id=$1::uuid AND recommendation.store_id=$2::uuid
         AND recommendation.public_id=$3
-      FOR KEY SHARE OF recommendation,table_session,source_option,target_option
+      -- Option facts are SELECT/INSERT-only for the runtime role. Source and
+      -- target are bound to this same recommendation by the strong event FKs.
+      FOR KEY SHARE OF recommendation,table_session
     `, [
       this.transaction.scope.tenantId,this.transaction.scope.storeId,input.recommendationPublicId,
       input.sourceProductId,input.targetProductId,

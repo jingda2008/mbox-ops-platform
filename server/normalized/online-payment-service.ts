@@ -1,3 +1,4 @@
+import { IdempotencyConflictError } from './command-executor.js'
 import {normalizePaymentClientIp} from './payment-client-network.js'
 import type {
   PaymentProviderSecretSource,
@@ -5,7 +6,7 @@ import type {
   ProviderRefundObservation,
 } from '../../src/shared/payment-provider-contracts.js'
 import type { RefundItem, SettlementChannel } from '../../src/shared/payment-contracts.js'
-import type { OnlinePaymentAction } from '../../src/shared/online-payment-contracts.js'
+import type { OnlinePaymentAction, TerminalOnlinePaymentStatus } from '../../src/shared/online-payment-contracts.js'
 import type { PostarHttpClient, PostarTransactionMetadataSource, PostarSftpBillSource } from '../../src/shared/postar-contracts.js'
 import { PostarPaymentProviderAdapter, PostarPaymentRejectedError, PostarPaymentNotSubmittedError } from '../postar-adapter.js'
 import type { NormalizedPaymentRuntimeConfig } from './normalized-runtime-config.js'
@@ -26,6 +27,13 @@ import {
 } from './provider-verification-observation.js'
 
 export type { OnlinePaymentAction } from '../../src/shared/online-payment-contracts.js'
+
+export class OnlinePaymentAlreadyResolvedError extends Error {
+  constructor(readonly context: ProviderPaymentContext, readonly paymentStatus: TerminalOnlinePaymentStatus) {
+    super('原付款已经结束，请读取原订单的最新状态')
+    this.name = 'OnlinePaymentAlreadyResolvedError'
+  }
+}
 
 export interface CreateOnlinePaymentInput {
   scope: Readonly<StoreScope>
@@ -79,6 +87,8 @@ export interface OnlinePaymentQueryResult {
   // verified-observation ledger on every poll.
   verifiedObservationId: string | null
   reusedVerifiedSuccess?: boolean
+  /** A query does not reopen a locally closed historical attempt. */
+  localPaymentStatus?: 'closed'
   businessDate?: string
 }
 
@@ -298,7 +308,32 @@ export class OnlinePaymentService {
     if (context.provider !== 'postar') {
       throw new OnlinePaymentUnavailableError('当前付款不支持星驿主动查单')
     }
-    if (!['created', 'pending'].includes(context.status)) {
+    const localHistoryClosed = context.status === 'closed' && input.principal.type === 'employee'
+      && await this.transactions.run(input.scope, async transaction => {
+        const result = await transaction.query<{ local_closed: boolean }>(`
+          SELECT (payment.provider_snapshot->'localUnpresentedHistoryClosed'='true'::jsonb
+            AND EXISTS(SELECT 1 FROM mbox.audit_events audit
+              WHERE (audit.tenant_id,audit.store_id)=(payment.tenant_id,payment.store_id)
+                AND audit.object_type='payment' AND audit.object_id=payment.id::text
+                AND audit.action='payment.closed_debt_local_attempt_closed'
+                AND audit.actor_type='employee')) AS local_closed
+          FROM mbox.payments payment
+          WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid AND payment.id=$3::uuid
+            AND payment.status='closed' AND payment.payable_kind IN ('order','order_batch')
+        `, [input.scope.tenantId,input.scope.storeId,input.paymentId])
+        return result.rows[0]?.local_closed === true
+      }, { readOnly: true })
+    // Only the staff entry may recover a completed query or inspect a proven
+    // local historical close. Guest and other closed-payment admission stays
+    // unchanged. The HTTP entry checks current reconciliation permission first.
+    if (input.principal.type === 'employee') {
+      const saved = await this.recoverStaffQuery(input, context, localHistoryClosed || ['created', 'pending'].includes(context.status))
+      if (saved !== null) return saved
+      if (['succeeded', 'partially_refunded', 'refunded'].includes(context.status)) {
+        throw new OnlinePaymentAlreadyResolvedError(context, context.status as TerminalOnlinePaymentStatus)
+      }
+    }
+    if (!['created', 'pending'].includes(context.status) && !localHistoryClosed) {
       throw new OnlinePaymentUnavailableError('这笔付款已有明确结果，无需重复查单')
     }
     const observation = await queryPaymentWithUnknownBoundary(this.adapter, {
@@ -312,7 +347,8 @@ export class OnlinePaymentService {
     if (observation.amount !== context.amountMinor || observation.currency !== context.currency) {
       throw new OnlinePaymentUnknownError()
     }
-    const verifiedObservationId = isTerminalPaymentObservation(observation.status)
+    const applyObservation = !localHistoryClosed || observation.status === 'succeeded'
+    const verifiedObservationId = applyObservation && isTerminalPaymentObservation(observation.status)
       ? await this.providerObservations.recordPayment({
         scope: input.scope,
         provider: 'postar',
@@ -332,7 +368,61 @@ export class OnlinePaymentService {
         evidence: paymentQueryEvidence(observation),
       })
       : null
-    return { context, observation, verifiedObservationId }
+    return { context, observation, verifiedObservationId,
+      ...(localHistoryClosed && !applyObservation ? { localPaymentStatus: 'closed' as const } : {}) }
+  }
+
+  private async recoverStaffQuery(
+    input: Readonly<QueryOnlinePaymentInput>, context: ProviderPaymentContext, allowUnconsumedSuccess: boolean,
+  ): Promise<OnlinePaymentQueryResult | null> {
+    const saved = await this.transactions.run(input.scope, async transaction => {
+      const receipt = await transaction.query<{ payment_id: string | null }>(`
+        SELECT response_snapshot->'result'->>'id' AS payment_id
+        FROM mbox.idempotency_records
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND operation_scope='payment.provider-query'
+          AND idempotency_key=$3 AND status='completed' AND expires_at>clock_timestamp()
+      `, [input.scope.tenantId,input.scope.storeId,input.queryBindingId])
+      if (receipt.rows[0] !== undefined && receipt.rows[0].payment_id !== context.id) {
+        throw new IdempotencyConflictError('payment.provider-query', input.queryBindingId)
+      }
+      const result = await transaction.query<{
+        id: string; observed_status: 'payment_succeeded' | 'payment_failed' | 'payment_closed'
+        provider_transaction_id: string; reported_amount_minor: string | number; reported_currency: string
+        settlement_channel: ProviderPaymentObservation['settlementChannel'] | null; occurred_at: string
+      }>(`
+        SELECT observation.id,observation.observed_status,observation.provider_transaction_id,
+          observation.reported_amount_minor,observation.reported_currency,
+          observation.settlement_channel,observation.occurred_at::text
+        FROM mbox.verified_provider_observations observation
+        LEFT JOIN mbox.idempotency_records receipt ON receipt.tenant_id=observation.tenant_id
+          AND receipt.store_id=observation.store_id AND receipt.operation_scope='payment.provider-query'
+          AND receipt.idempotency_key=observation.consumed_idempotency_key
+          AND receipt.status='completed' AND receipt.expires_at>clock_timestamp()
+          AND receipt.response_snapshot->'result'->>'id'=observation.payment_id::text
+        WHERE observation.tenant_id=$1::uuid AND observation.store_id=$2::uuid
+          AND observation.payment_id=$3::uuid AND observation.provider='postar'
+          AND observation.verification_kind='active_query_binding' AND observation.integration_ref='postar-active-query'
+          AND ((observation.consumed_operation='payment.provider-query' AND observation.consumed_at IS NOT NULL
+            AND observation.consumed_idempotency_key=$4 AND receipt.id IS NOT NULL
+            AND observation.observed_status IN ('payment_succeeded','payment_failed','payment_closed'))
+          OR ($5::boolean AND observation.consumed_at IS NULL AND observation.observed_status='payment_succeeded'))
+        ORDER BY (observation.consumed_at IS NOT NULL) DESC,observation.recorded_at,observation.id LIMIT 1
+      `, [input.scope.tenantId,input.scope.storeId,input.paymentId,input.queryBindingId,allowUnconsumedSuccess])
+      return result.rows[0]
+    }, { readOnly: true })
+    if (saved === undefined || Number(saved.reported_amount_minor)!==context.amountMinor
+      || saved.reported_currency!==context.currency) return null
+    // Return the exact immutable observation to the existing command journal;
+    // it still validates the original HTTP fingerprint and decodes its receipt.
+    // A previously verified, unconsumed success remains recoverable offline.
+    return { context, verifiedObservationId: saved.id, observation: {
+      paymentIntentId: context.publicId, providerTransactionId: saved.provider_transaction_id,
+      status: saved.observed_status==='payment_succeeded' ? 'succeeded'
+        : saved.observed_status==='payment_failed' ? 'failed' : 'closed',
+      amount: Number(saved.reported_amount_minor), currency: saved.reported_currency,
+      merchantId: this.config!.merchantId, occurredAt: new Date(saved.occurred_at).toISOString(),
+      ...(saved.settlement_channel===null ? {} : { settlementChannel: saved.settlement_channel }),
+    } }
   }
 
   /**
@@ -752,6 +842,11 @@ export class OnlinePaymentService {
       const repository = new PaymentProviderActionRepository(transaction, this.secret)
       const context = await repository.resolvePaymentContext(input.paymentId, input.principal)
       if (context.status !== 'pending' && context.status !== 'created') {
+        if (['succeeded', 'partially_refunded', 'refunded', 'failed', 'closed'].includes(context.status)) {
+          // The committed checkout receipt can contain an older pending snapshot.
+          // Authorization has completed; do not claim or create another provider action.
+          throw new OnlinePaymentAlreadyResolvedError(context, context.status as TerminalOnlinePaymentStatus)
+        }
         throw new Error('这笔订单已经不处于待付款状态')
       }
       if (context.provider === 'simulation') {

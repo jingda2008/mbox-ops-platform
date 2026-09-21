@@ -122,6 +122,7 @@ afterEach(async () => {
 
 function fixture(input: {
   permissions?: string[]
+  activePickupDevice?:boolean
   kdsStatus?: KdsTask['status']
   replayed?: boolean
   commerceError?: Error
@@ -275,6 +276,7 @@ function fixture(input: {
     query: async <Row extends Record<string, unknown>>(text: string): Promise<PostgresQueryResult<Row>> => {
       const sql = text.replace(/\s+/g, ' ').trim()
       commandQueries.push(sql)
+      if(sql.includes('FROM mbox.pickup_devices'))return rows([{found:input.activePickupDevice===true}]) as PostgresQueryResult<Row>
       if(sql.includes('AS task_id'))return rows([{task_id:taskId,order_id:orderId,session_id:tableSessionId}]) as PostgresQueryResult<Row>
       if(sql.startsWith('SELECT id FROM mbox.table_sessions'))return rows([{id:tableSessionId}]) as PostgresQueryResult<Row>
       if(sql.startsWith('SELECT id,table_session_id FROM mbox.orders'))return rows([{id:orderId,table_session_id:tableSessionId}]) as PostgresQueryResult<Row>
@@ -971,6 +973,15 @@ describe('commerceKdsApiPlugin', () => {
     expect(value.kdsRepository.markReady).toHaveBeenCalledOnce()
   })
 
+  it('keeps legacy phone delivery blocked while a shared pickup device remains enabled',async()=>{
+    const value=fixture({permissions:['kds.deliver'],kdsStatus:'ready',activePickupDevice:true})
+    const response=await value.app.inject({method:'POST',url:`/api/commerce/kds/${taskId}/actions`,
+      headers:{'idempotency-key':'shared-pickup-required'},payload:{action:'deliver'}})
+    expect(response.statusCode).toBe(409)
+    expect(response.json()).toMatchObject({error:{code:'SHARED_PICKUP_REQUIRED'}})
+    expect(value.orderRepository.markDelivered).not.toHaveBeenCalled()
+  })
+
   it('delivers only a ready item with kds.deliver permission and keeps financial actions out of scope', async () => {
     const value = fixture({ permissions: ['kds.deliver'], kdsStatus: 'ready' })
     const response = await value.app.inject({
@@ -989,9 +1000,9 @@ describe('commerceKdsApiPlugin', () => {
     })
     expect(value.orderRepository.markDelivered).toHaveBeenCalledWith(orderItemId, employeeId)
     expect(value.kdsRepository.markReady).not.toHaveBeenCalled()
-    expect(value.commandQueries[3]).toContain('mbox.kds_tasks')
-    expect(value.commandQueries[3]).not.toContain('mbox.order_items')
-    expect(value.commandQueries[4]).toContain('mbox.order_items')
+    expect(value.commandQueries[4]).toContain('mbox.kds_tasks')
+    expect(value.commandQueries[4]).not.toContain('mbox.order_items')
+    expect(value.commandQueries[5]).toContain('mbox.order_items')
   })
 
   it('removes ordinary cancel and requires failure reasons with actionable audit evidence', async () => {

@@ -398,16 +398,25 @@ export class PrintTicketSourceRepository {
     let ticket=parsePrintTicketSnapshot(source.payload.ticket)
     if(ticket.kind!=='production_notice')throw new Error('商品处理通知不得冒充原制作单')
     if(source.payload.remakeBatchId){
-      const current=(await this.transaction.query<{quantity:number;table_code:string;guest_count:number}>(`SELECT count(*)::int AS quantity,venue.code AS table_code,visit.guest_count
-        FROM mbox.quantity_remake_batches batch JOIN mbox.quantity_remake_units physical ON physical.tenant_id=batch.tenant_id AND physical.store_id=batch.store_id AND physical.batch_id=batch.id
+      // Count the selected batch before table-context joins. Under RLS, poor
+      // cardinality estimates otherwise repeat unit scans for unrelated orders.
+      const current=(await this.transaction.query<{quantity:number;table_code:string;guest_count:number}>(`WITH eligible_remake AS MATERIALIZED (
+        SELECT batch.tenant_id,batch.store_id,batch.order_item_id,count(*)::int AS quantity
+        FROM mbox.quantity_remake_batches batch
+        JOIN mbox.quantity_remake_units physical ON physical.tenant_id=batch.tenant_id AND physical.store_id=batch.store_id AND physical.batch_id=batch.id
         JOIN mbox.order_item_quantity_units unit ON unit.tenant_id=physical.tenant_id AND unit.store_id=physical.store_id AND unit.id=physical.unit_id
-        JOIN mbox.order_items item ON item.tenant_id=batch.tenant_id AND item.store_id=batch.store_id AND item.id=batch.order_item_id
+        WHERE batch.tenant_id=$1 AND batch.store_id=$2 AND batch.id=$3
+          AND physical.cancelled_at IS NULL AND physical.production_state IN ('unmade','started')
+          AND unit.held_by_case_id IS NULL AND NOT unit.operationally_stopped
+        GROUP BY batch.tenant_id,batch.store_id,batch.order_item_id
+       )
+       SELECT eligible.quantity,venue.code AS table_code,visit.guest_count
+        FROM eligible_remake eligible
+        JOIN mbox.order_items item ON item.tenant_id=eligible.tenant_id AND item.store_id=eligible.store_id AND item.id=eligible.order_item_id
         JOIN mbox.orders original ON original.tenant_id=item.tenant_id AND original.store_id=item.store_id AND original.id=item.order_id
         JOIN mbox.table_sessions visit ON visit.tenant_id=original.tenant_id AND visit.store_id=original.store_id AND visit.id=original.table_session_id
         JOIN mbox.tables venue ON venue.tenant_id=visit.tenant_id AND venue.store_id=visit.store_id AND venue.id=visit.table_id
-        WHERE batch.tenant_id=$1 AND batch.store_id=$2 AND batch.id=$3 AND physical.cancelled_at IS NULL AND physical.production_state IN ('unmade','started')
-          AND unit.held_by_case_id IS NULL AND NOT unit.operationally_stopped AND original.status<>'cancelled' AND visit.status IN ('open','closing')
-        GROUP BY venue.code,visit.guest_count`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,source.payload.remakeBatchId])).rows[0]
+        WHERE original.status<>'cancelled' AND visit.status IN ('open','closing')`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,source.payload.remakeBatchId])).rows[0]
       if(!current?.quantity){this.explicitSkipReason='print_remake_no_remaining_quantity';return []}
       if(ticket.lines.length!==1)throw new Error('重做通知必须对应一个实际商品批次')
       ticket={...ticket,lines:[{...ticket.lines[0]!,quantity:current.quantity}],tableCode:current.table_code,guestCount:current.guest_count}

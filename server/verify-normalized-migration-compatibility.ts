@@ -1,6 +1,7 @@
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Client } from 'pg'
+import {maintenanceDatabaseUrlForCommand} from './normalized/database-maintenance-connection.js'
 import {
   assertNormalizedMigrationTarget,
   inspectTargetDatabase,
@@ -61,7 +62,6 @@ export async function verifyNormalizedMigrationCompatibility(databaseUrl: string
 
 const isDirectRun = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])
 if (isDirectRun) {
-  const databaseUrl = process.env.DATABASE_URL
-  if (!databaseUrl) throw new Error('迁移兼容性预检必须配置DATABASE_URL')
+  const databaseUrl = await maintenanceDatabaseUrlForCommand()
   process.stdout.write(`${JSON.stringify(await verifyNormalizedMigrationCompatibility(databaseUrl), null, 2)}\n`)
 }

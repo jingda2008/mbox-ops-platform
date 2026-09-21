@@ -386,6 +386,9 @@ class ActionTransaction implements ScopedTransaction {
     values: readonly unknown[] = [],
   ): Promise<{ rows: Row[]; rowCount: number }> {
     const sql = text.replace(/\s+/g, ' ').trim()
+    if (sql.startsWith('SELECT status FROM mbox.payments')) {
+      return { rows: [{ status: 'pending' } as unknown as Row], rowCount: 1 }
+    }
     if (sql.startsWith('INSERT INTO mbox.payment_provider_actions')) {
       if (this.persisted !== null) return { rows: [], rowCount: 0 }
       this.persisted = {

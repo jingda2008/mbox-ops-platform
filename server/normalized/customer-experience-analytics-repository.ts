@@ -410,7 +410,8 @@ export class CustomerExperienceAnalyticsRepository {
           count(DISTINCT event.id) FILTER (WHERE event.event_type='ordered')::bigint AS ordered,
           count(DISTINCT event.id) FILTER (WHERE event.event_type='paid')::bigint AS paid,
           count(DISTINCT event.id) FILTER (WHERE event.event_type='refunded')::bigint AS refunded,
-          COALESCE(sum(event.attributed_amount_minor) FILTER (WHERE event.event_type='paid'),0)::bigint AS paid_amount_minor,
+          (COALESCE(sum(event.attributed_amount_minor) FILTER (WHERE event.event_type='paid'),0)
+            +COALESCE(sum(restoration.amount_minor),0))::bigint AS paid_amount_minor,
           COALESCE(sum(event.attributed_amount_minor) FILTER (WHERE event.event_type='refunded'),0)::bigint AS refunded_amount_minor,
           cost.frozen_cost_minor,cost.unavailable_cost_count,
           complaint.complaint_order_count,follow_on.follow_on_paid_order_count,
@@ -428,6 +429,20 @@ export class CustomerExperienceAnalyticsRepository {
          AND (event.recommendation_option_id=option.id OR (
            event.recommendation_option_id IS NULL AND event.event_type IN ('generated','exposed')
          ))
+        -- One restoration per original refund event preserves the cohort,
+        -- conversion counts, and the existing once-per-sale frozen cost.
+        LEFT JOIN mbox.order_recollection_item_restorations restoration
+          ON event.event_type='refunded'
+          AND (restoration.tenant_id,restoration.store_id,restoration.order_id,restoration.refund_id,
+               restoration.order_item_id,restoration.currency,restoration.amount_minor)
+            =(event.tenant_id,event.store_id,event.order_id,event.refund_id,
+               event.order_item_id,event.attributed_currency,event.attributed_amount_minor)
+          AND EXISTS (SELECT 1 FROM mbox.recommendation_behavior_events paid_source
+            WHERE paid_source.event_type='paid'
+              AND (paid_source.tenant_id,paid_source.store_id,paid_source.recommendation_session_id,
+                   paid_source.recommendation_option_id,paid_source.order_id,paid_source.order_item_id,paid_source.attributed_currency)
+                =(event.tenant_id,event.store_id,event.recommendation_session_id,
+                   event.recommendation_option_id,event.order_id,event.order_item_id,event.attributed_currency))
         LEFT JOIN LATERAL (
           SELECT COALESCE(sum(item.total_cost_minor_at_submission),0)::bigint AS frozen_cost_minor,
             count(*) FILTER (
@@ -553,7 +568,7 @@ export class CustomerExperienceAnalyticsRepository {
       WITH paid_sales AS (
         SELECT item.product_id,count(DISTINCT ordering.id)::bigint AS paid_order_count,
           COALESCE(sum(item.quantity),0)::bigint AS sold_quantity,
-          COALESCE(sum(item.total_amount_minor),0)::bigint AS paid_revenue_minor,
+          COALESCE(sum(item.total_amount_minor+COALESCE(restoration.amount_minor,0)),0)::bigint AS paid_revenue_minor,
           COALESCE(sum(item.total_cost_minor_at_submission)
             FILTER (WHERE item.cost_source<>'unavailable'),0)::bigint AS frozen_cost_minor,
           count(*) FILTER (WHERE item.cost_source='unavailable')::bigint AS unavailable_cost_count
@@ -567,6 +582,12 @@ export class CustomerExperienceAnalyticsRepository {
         JOIN mbox.order_items item
           ON item.tenant_id=ordering.tenant_id AND item.store_id=ordering.store_id
          AND item.order_id=ordering.id AND item.status<>'cancelled'
+        LEFT JOIN LATERAL (
+          SELECT sum(fact.amount_minor)::bigint amount_minor
+          FROM mbox.order_recollection_item_restorations fact
+          WHERE (fact.tenant_id,fact.store_id,fact.order_id,fact.order_item_id)
+            =(item.tenant_id,item.store_id,item.order_id,item.id)
+        ) restoration ON true
         LEFT JOIN mbox.order_items parent_item
           ON parent_item.tenant_id=item.tenant_id AND parent_item.store_id=item.store_id
          AND parent_item.order_id=item.order_id AND parent_item.id=item.parent_order_item_id
@@ -650,8 +671,8 @@ export class CustomerExperienceAnalyticsRepository {
           ORDER BY recommendation.created_at DESC,recommendation.id DESC LIMIT 1
         ) table_occasion ON true
         WHERE refund.tenant_id=$1::uuid AND refund.store_id=$2::uuid
-          AND refund.status='succeeded' AND refund.completed_at>=$3::timestamptz
-          AND refund.completed_at<$4::timestamptz
+          AND refund.status='succeeded' AND ordering.submitted_at>=$3::timestamptz
+          AND ordering.submitted_at<$4::timestamptz
           AND ($5::uuid IS NULL OR item.product_id=$5::uuid)
           AND ($7::integer IS NULL OR table_session.guest_count=$7::integer)
           AND ($8::text IS NULL OR table_occasion.occasion=$8::text)

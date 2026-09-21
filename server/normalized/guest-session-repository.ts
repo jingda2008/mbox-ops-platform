@@ -157,6 +157,14 @@ export class GuestSessionRateLimitError extends Error {
   }
 }
 
+export class GuestSessionBusyError extends Error {
+  readonly retryAt = new Date(Date.now() + 1_000).toISOString()
+  constructor() {
+    super('桌台状态正在更新，请稍后用原二维码重试')
+    this.name = 'GuestSessionBusyError'
+  }
+}
+
 export class GuestSessionRepository {
   constructor(private readonly transaction: ScopedTransaction) {}
 
@@ -241,7 +249,6 @@ export class GuestSessionRepository {
         AND qr.status = 'active'
         AND qr.qr_version = table_record.qr_version
         AND table_record.status = 'available'
-      FOR KEY SHARE OF qr, table_record
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, credentialHash])
     const credential = credentialResult.rows[0]
     if (!credential) return null
@@ -253,7 +260,6 @@ export class GuestSessionRepository {
         AND store_id = $2::uuid
         AND table_id = $3::uuid
         AND status = 'open'
-      FOR KEY SHARE
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, credential.table_id])
     const tableSession = tableSessionResult.rows[0]
     return {
@@ -673,7 +679,15 @@ export class GuestSessionService {
     const issuedAt = this.now()
     const expiresAt = new Date(issuedAt.getTime() + this.sessionTtlMs)
 
-    return this.transactions.run(input.scope, async (transaction) => {
+    return this.transactions.run(input.scope, async (transaction): Promise<TableScanResult> => {
+      // Share the existing movement/identity-merge gate. Scans may run together,
+      // while a canonical-family rewrite or employee table movement is exclusive.
+      // The rate counters, device identity and current customer are serialized
+      // by their own locks; broad SSI predicate scans need not serialize a store.
+      if (!input.availabilityOnly) await transaction.query(
+        'SELECT pg_advisory_xact_lock_shared(hashtextextended($1, 0))',
+        [`table-customer-movement:${input.scope.tenantId}:${input.scope.storeId}`],
+      )
       const repository = new GuestSessionRepository(transaction)
       const deviceRate = await repository.consumeRateLimit(
         'table_scan', ratePrincipal, input.availabilityOnly ? 30 : 10, 60_000,
@@ -727,11 +741,20 @@ export class GuestSessionService {
         publicId: this.randomPublicId(),
         businessDate: input.businessDate,
       })).customerId
+      const canonical = (await transaction.query<{ id: string | null }>(
+        'SELECT mbox.canonical_customer_id($1::uuid,$2::uuid,$3::uuid) AS id',
+        [input.scope.tenantId, input.scope.storeId, customerId],
+      )).rows[0]?.id
+      if (!canonical) throw new GuestSessionInvalidError()
+      // One identity scanning two different tables must not hold both table
+      // locks before it serializes its current location and old-token revocation.
+      await transaction.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [`guest-scan-customer:${input.scope.tenantId}:${input.scope.storeId}:${canonical}`])
       let issuance: Awaited<ReturnType<GuestSessionRepository['issueTableSession']>>
       try {
         issuance = await repository.issueTableSession({
           credential,
-          customerId,
+          customerId: canonical,
           tokenHash,
           deviceHash,
           issuedAt: issuedAt.toISOString(),
@@ -745,7 +768,11 @@ export class GuestSessionService {
         return { status: 'already_active', session: issuance.session }
       }
       return { status: 'active', sessionToken: rawToken, session: issuance.session }
-    }, { isolation: 'serializable', retryOnConflict: 2 })
+    }, { isolation: 'read-committed', retryOnConflict: 2 }).catch((error: unknown) => {
+      if (typeof error === 'object' && error !== null && 'code' in error
+        && (error.code === '40001' || error.code === '40P01')) throw new GuestSessionBusyError()
+      throw error
+    })
   }
 
   async authenticate(input: Readonly<{

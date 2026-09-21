@@ -412,6 +412,9 @@ export class RefundRepository {
     if (current.status !== 'requested') {
       throw new RefundTransitionError(current.id, current.status, 'rejected')
     }
+    if (current.requested_by_employee_id === approverEmployeeId) {
+      throw new RefundTransitionError(current.id, current.status, 'rejected')
+    }
     return this.transition(current, 'rejected', approverEmployeeId, decisionReason)
   }
 
@@ -567,6 +570,11 @@ export class RefundRepository {
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId])
     const row = result.rows[0]
     if (row === undefined) throw new RefundNotFoundError(paymentId)
+    if (row.payable_kind !== target.payable_kind || row.order_id !== target.order_id
+      || row.activity_registration_id !== target.activity_registration_id
+      || (row.order_batch_id ?? null) !== (target.order_batch_id ?? null)) {
+      throw new RefundLimitError('退款原付款归属已变化，请重新核对')
+    }
     return row
   }
 
@@ -604,9 +612,9 @@ export class RefundRepository {
 
   private async lockRefund(refundId: string): Promise<RefundRow> {
     const reference = await this.transaction.query<{
-      order_batch_id?:string|null; payable_kind: 'order' | 'activity_registration' | 'order_batch'; order_id: string | null; activity_registration_id: string | null
+      payment_id:string; order_batch_id?:string|null; payable_kind: 'order' | 'activity_registration' | 'order_batch'; order_id: string | null; activity_registration_id: string | null
     }>(`
-      SELECT p.payable_kind, p.order_batch_id, p.order_id, p.activity_registration_id
+      SELECT p.id AS payment_id, p.payable_kind, p.order_batch_id, p.order_id, p.activity_registration_id
       FROM mbox.refunds AS r
       JOIN mbox.payments AS p
         ON p.tenant_id = r.tenant_id
@@ -629,8 +637,13 @@ export class RefundRepository {
       WHERE r.tenant_id = $1::uuid
         AND r.store_id = $2::uuid
         AND r.id = $3::uuid
+        AND p.id=$4::uuid AND p.payable_kind=$5
+        AND p.order_batch_id IS NOT DISTINCT FROM $6::uuid
+        AND p.order_id IS NOT DISTINCT FROM $7::uuid
+        AND p.activity_registration_id IS NOT DISTINCT FROM $8::uuid
       FOR UPDATE OF r, p
-    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, refundId])
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, refundId,
+      target.payment_id,target.payable_kind,target.order_batch_id??null,target.order_id,target.activity_registration_id])
     const row = result.rows[0]
     if (row === undefined) throw new RefundNotFoundError(refundId)
     return row
@@ -654,8 +667,20 @@ export class RefundRepository {
   }
 
   private async lockOrder(orderId: string): Promise<void> {
-    const locked = await this.transaction.query<{ id: string }>(`
-      SELECT id
+    // A refund's later status projection takes this closure-fact SHARE lock.
+    // Take it before the order, matching batch capture and table closure's
+    // parent-first order. SHARE is sufficient: refunds do not mutate a session.
+    const session = await this.transaction.query<{ id: string }>(`
+      SELECT session.id FROM mbox.orders ordering
+      JOIN mbox.table_sessions session
+        ON (session.tenant_id,session.store_id,session.id)
+          =(ordering.tenant_id,ordering.store_id,ordering.table_session_id)
+      WHERE ordering.tenant_id=$1::uuid AND ordering.store_id=$2::uuid
+        AND ordering.id=$3::uuid FOR SHARE OF session
+    `,[this.transaction.scope.tenantId,this.transaction.scope.storeId,orderId])
+    if (session.rowCount !== 1) throw new RefundNotFoundError(orderId)
+    const locked = await this.transaction.query<{ id: string; table_session_id: string }>(`
+      SELECT id, table_session_id
       FROM mbox.orders
       WHERE tenant_id = $1::uuid
         AND store_id = $2::uuid
@@ -663,14 +688,24 @@ export class RefundRepository {
       FOR UPDATE
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
     if (locked.rowCount !== 1) throw new RefundNotFoundError(orderId)
+    if (locked.rows[0]?.table_session_id !== session.rows[0]?.id) {
+      throw new RefundLimitError('退款原订单桌次已变化，请重新核对原付款')
+    }
   }
 
   private async lockPaymentTarget(target: Readonly<{
     order_batch_id?:string|null; payable_kind: 'order' | 'activity_registration' | 'order_batch'; order_id: string | null; activity_registration_id: string | null
   }>): Promise<void> {
     if(target.payable_kind==='order_batch'&&target.order_batch_id){
-      const orders=await this.transaction.query(`SELECT o.id FROM mbox.orders o JOIN mbox.order_payment_allocations a ON a.tenant_id=o.tenant_id AND a.store_id=o.store_id AND a.order_id=o.id WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.batch_id=$3 ORDER BY o.id FOR UPDATE OF o`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,target.order_batch_id])
+      const session=await this.transaction.query<{id:string}>(`SELECT session.id FROM mbox.order_payment_batches batch
+        JOIN mbox.table_sessions session ON (session.tenant_id,session.store_id,session.id)=(batch.tenant_id,batch.store_id,batch.table_session_id)
+        WHERE batch.tenant_id=$1 AND batch.store_id=$2 AND batch.id=$3 FOR SHARE OF session`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,target.order_batch_id])
+      if(session.rowCount!==1)throw new RefundNotFoundError('batch session missing')
+      const orders=await this.transaction.query<{id:string;table_session_id:string}>(`SELECT o.id,o.table_session_id FROM mbox.orders o JOIN mbox.order_payment_allocations a ON a.tenant_id=o.tenant_id AND a.store_id=o.store_id AND a.order_id=o.id WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.batch_id=$3 ORDER BY o.id FOR UPDATE OF o`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,target.order_batch_id])
       if(!orders.rowCount)throw new RefundNotFoundError('batch allocation missing')
+      if(orders.rows.some(order=>order.table_session_id!==session.rows[0]?.id)){
+        throw new RefundLimitError('退款原批次存在不同桌次的订单，请重新核对原付款')
+      }
       return
     }
     if (target.payable_kind === 'order' && target.order_id !== null) {

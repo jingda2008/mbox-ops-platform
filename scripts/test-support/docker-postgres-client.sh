@@ -13,6 +13,16 @@ fi
 docker_env=()
 container_service_file=
 container_pass_file=
+container_list_file=
+cleanup_client_files() {
+  local temporary_file
+  for temporary_file in "${container_service_file}" "${container_pass_file}" "${container_list_file}"; do
+    if [ -n "${temporary_file}" ]; then
+      docker exec "${TEST_POSTGRES_CONTAINER}" rm -f "${temporary_file}" >/dev/null 2>&1 || true
+    fi
+  done
+}
+trap cleanup_client_files EXIT
 if [ -n "${PGOPTIONS:-}" ]; then
   docker_env+=(--env "PGOPTIONS=${PGOPTIONS}")
 fi
@@ -26,11 +36,6 @@ if [ -n "${PGSERVICEFILE:-}" ] || [ -n "${PGPASSFILE:-}" ]; then
   docker exec "${TEST_POSTGRES_CONTAINER}" chmod 0600 \
     "${container_service_file}" "${container_pass_file}"
   docker_env+=(--env "PGSERVICEFILE=${container_service_file}" --env "PGPASSFILE=${container_pass_file}")
-  cleanup_libpq_files() {
-    docker exec "${TEST_POSTGRES_CONTAINER}" rm -f \
-      "${container_service_file}" "${container_pass_file}" >/dev/null 2>&1 || true
-  }
-  trap cleanup_libpq_files EXIT
 fi
 
 case "${client}" in
@@ -81,7 +86,20 @@ case "${client}" in
     host_file=${!#}
     test -f "${host_file}"
     docker cp "${host_file}" "${TEST_POSTGRES_CONTAINER}:${container_file}" >/dev/null
-    arguments=("${@:1:$#-1}" "${container_file}")
+    arguments=()
+    for argument in "${@:1:$#-1}"; do
+      case "${argument}" in
+        --use-list=*)
+          host_list_file=${argument#--use-list=}
+          test -f "${host_list_file}"
+          container_list_file="/tmp/mbox-restore-list-$$"
+          docker cp "${host_list_file}" "${TEST_POSTGRES_CONTAINER}:${container_list_file}" >/dev/null
+          arguments+=("--use-list=${container_list_file}")
+          ;;
+        *) arguments+=("${argument}") ;;
+      esac
+    done
+    arguments+=("${container_file}")
     status=0
     docker exec "${docker_env[@]}" "${TEST_POSTGRES_CONTAINER}" pg_restore "${arguments[@]}" || status=$?
     docker exec "${TEST_POSTGRES_CONTAINER}" rm -f "${container_file}"

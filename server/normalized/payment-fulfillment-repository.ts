@@ -8,7 +8,7 @@ import {
 import { KdsRepository, type KdsTask } from './kds-repository.js'
 import { FulfillmentCapacityRepository } from './fulfillment-capacity-repository.js'
 import { OrderRepository, type OrderItem, type SubmittedOrder } from './order-repository.js'
-import { OrderNotPayableError } from './payment-repository.js'
+import { OrderNotPayableError, PaymentRepository } from './payment-repository.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 import {
   ExperiencePlanActivationRepository,
@@ -34,10 +34,9 @@ interface PlannedItemRow extends Record<string, unknown> {
 export interface PaymentFulfillmentActivation {
   activated: boolean
   /**
-   * Financial attribution is allowed for normal table-tab/active orders even
-   * when no new KDS work is created. It is deliberately false only for an
-   * operationally cancelled self-checkout that later receives a provider
-   * success result.
+   * Financial attribution requires settled consumption and a live order.
+   * A table-tab/active order may qualify without creating new KDS work.
+   * A late receipt for cancelled checkout remains a money fact only.
    */
   financialAttributionEligible: boolean
   orderId: string
@@ -120,7 +119,8 @@ export class PaymentFulfillmentRepository {
     }> = {},
   ): Promise<PaymentFulfillmentActivation> {
     const state = await this.lockOrder(orderId)
-    if(state.status==='cancelled'||state.fulfillment_state==='cancelled'||state.payment_status==='partially_paid')return {
+    const settled=await new PaymentRepository(this.transaction).hasSettledConsumption(orderId)
+    if(state.status==='cancelled'||state.fulfillment_state==='cancelled'||!settled)return {
       activated:false,financialAttributionEligible:false,orderId,inventoryConsumptions:[],kdsTasks:[],experiencePlan:absentPlan(),
     }
     if (state.settlement_mode !== 'immediate_payment') {
@@ -137,7 +137,7 @@ export class PaymentFulfillmentRepository {
         inventoryConsumptions: [], kdsTasks: [], experiencePlan,
       }
     }
-    if (state.fulfillment_state !== 'awaiting_payment' || state.payment_status !== 'paid') {
+    if (state.fulfillment_state !== 'awaiting_payment' || !settled) {
       throw new OrderNotPayableError(orderId, 'trusted full payment is required before fulfillment')
     }
     const activated = await this.transaction.query(`
@@ -145,7 +145,7 @@ export class PaymentFulfillmentRepository {
       SET fulfillment_state = 'active', fulfillment_expires_at = NULL,
           fulfillment_activated_at = clock_timestamp(), updated_at = clock_timestamp()
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid
-        AND id = $3::uuid AND fulfillment_state = 'awaiting_payment' AND payment_status = 'paid'
+        AND id = $3::uuid AND fulfillment_state = 'awaiting_payment' AND mbox.order_consumption_settled(tenant_id,store_id,id)
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
     if (activated.rowCount !== 1) throw new Error(`Order ${orderId} lost its fulfillment activation transition`)
     await new CheckoutCouponLifecycleRepository(this.transaction).redeemPaidOrder(orderId)

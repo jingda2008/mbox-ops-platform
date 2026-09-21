@@ -1,4 +1,6 @@
+import {registerOrderFinancialRecoveryRoutes} from './order-financial-recovery-api.js'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
+import {registerLoyaltyRefundReviewRoutes} from './loyalty-refund-review-api.js'
 import {UpgradeQualificationError} from './checkout-upgrade-eligibility.js'
 import {
   IdempotencyConflictError,
@@ -127,6 +129,8 @@ interface StaffMemberLedgerRow extends Record<string, unknown> {
 }
 
 export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceApiOptions> = async (app, options) => {
+  registerLoyaltyRefundReviewRoutes(app, options)
+  registerOrderFinancialRecoveryRoutes(app, options)
   app.get('/public/mini/bootstrap', async (request, reply) => handle(reply, async () => {
     const context = await options.resolvePublicContext(request)
     const portal = await options.service.portal(context)

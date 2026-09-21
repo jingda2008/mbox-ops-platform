@@ -42,6 +42,7 @@ import {
 import { guestGatePresentation, type GuestGateReason } from './guest-gate-model'
 import { guestMenuProductToMenuProduct } from './menu-product-adapter'
 import { shortPublicReference } from '../public-reference'
+import { GuestServiceRecovery, type GuestServiceIntent } from './guest-service-recovery'
 import './guest-app.css'
 
 type GuestApiPort = Pick<GuestApiClient, 'waitForTable' | 'scanTable' | 'loadSession' | 'searchMenu' | 'submitOrder' | 'loadSharedCart' | 'adjustSharedCart' | 'replaceSharedCartBundleSelection' | 'removeSharedCartLine' | 'checkoutSharedCart' | 'loadTableOrders' | 'loadTodayPerformance' | 'payTableOrder' | 'abandonCheckout' | 'requestService' | 'recordMood'>
@@ -94,6 +95,8 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const [panel, setPanel] = useState<Panel>(null)
   const [serviceDetail, setServiceDetail] = useState('')
   const [pendingService, setPendingService] = useState<ServiceType | null>(null)
+  const [serviceIntent, setServiceIntent] = useState<GuestServiceIntent | null>(null)
+  const [serviceRecoveryError, setServiceRecoveryError] = useState<string | null>(null)
   const [selectedMood, setSelectedMood] = useState<GuestMood | null>(null)
   const [pendingMood, setPendingMood] = useState<GuestMood | null>(null)
   const [moodExpanded, setMoodExpanded] = useState(false)
@@ -116,6 +119,8 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const sharedCartNextPollAt = useRef(0)
   const orderSubmittingRef = useRef(false)
   const serviceSubmittingRef = useRef(false)
+  const serviceRecoveryRef = useRef<GuestServiceRecovery | null>(null)
+  const serviceDeviceRef = useRef('')
   const paymentSubmittingRef = useRef(new Set<string>())
   const connectingRef = useRef(false)
   const toastSequence = useRef(0)
@@ -241,6 +246,11 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       const action = await api.payTableOrder(orderPublicId, {
         idempotencyKey: safeIdempotencyKey(`guest-pay-${orderPublicId}`),
       })
+      if (action.status === 'resolved') {
+        notify('已找回原付款记录，正在刷新本桌订单，无需重复支付。', 'info')
+        await loadTableOrders(true)
+        return
+      }
       if (action.status === 'failed') {
         notify('支付机构刚才没有受理，订单仍在本桌，可以重新发起付款。', 'info')
         await loadTableOrders(true)
@@ -293,6 +303,11 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       return false
     }
     setTable(session.table)
+    serviceRecoveryRef.current = null
+    setServiceIntent(null)
+    setPendingService(null)
+    serviceSubmittingRef.current = false
+    setServiceRecoveryError(null)
     setSharedCart(null)
     setSharedCartError(null)
     if (session.status === 'waiting_for_table') {
@@ -303,6 +318,11 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       setGateMessage(session.message ?? '座位正在准备中，请稍候。')
       return false
     }
+    try {
+      const recovery = new GuestServiceRecovery(window.localStorage, session.cartScope ?? '', serviceDeviceRef.current)
+      setServiceIntent(recovery.pending())
+      serviceRecoveryRef.current = recovery
+    } catch { setServiceRecoveryError('服务恢复记录暂时无法读取，请重新连接或联系服务员。') }
     const protocolVersion = session.cartProtocolVersion === 2 ? 2 : 1
     setCartProtocolVersion(protocolVersion)
     setCartStorageKey(protocolVersion === 1 ? guestCartStorageKey(session) : undefined)
@@ -372,6 +392,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       return
     }
     const deviceKey = resolveDeviceKey(window.sessionStorage)
+    serviceDeviceRef.current = deviceKey
     apiRef.current = apiFactory?.(deviceKey) ?? new GuestApiClient(deviceKey)
     void connectTable()
     return () => { menuRequest.current += 1 }
@@ -428,27 +449,33 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     return () => window.clearTimeout(timer)
   }, [toast])
 
-  const requestService = useCallback(async (requestType: ServiceType, detail: string | null) => {
+  const requestService = useCallback(async (requestType: ServiceType | null, detail: string | null) => {
     const api = apiRef.current
-    if (api === null || pendingService !== null || serviceSubmittingRef.current) return
+    const recovery = serviceRecoveryRef.current
+    if (api === null || recovery === null || pendingService !== null || serviceSubmittingRef.current) return
     serviceSubmittingRef.current = true
-    setPendingService(requestType)
+    setPendingService(requestType ?? serviceIntent?.input.requestType ?? 'custom')
     haptic(8)
     try {
-      const result = await api.requestService(
-        { requestType, detail },
-        { idempotencyKey: safeIdempotencyKey(`guest-service-${requestType}`) },
-      )
+      const result = await recovery.execute(requestType === null ? null : { requestType, detail }, api.requestService.bind(api))
+      if (serviceRecoveryRef.current !== recovery) return
       notify(result.message, result.status === 'rate_limited' ? 'info' : 'success')
-      setPanel(null)
-      setServiceDetail('')
+      if (result.status !== 'rate_limited') {
+        setPanel(null)
+        setServiceDetail('')
+      }
     } catch (error) {
-      if (!blockForSession(error)) notify(errorMessage(error, '这次没有送达，请再试一次。'), 'error')
+      if (serviceRecoveryRef.current === recovery && !blockForSession(error)) {
+        notify(error instanceof Error ? error.message : '结果尚未确认，请恢复本次请求。', 'error')
+      }
     } finally {
       serviceSubmittingRef.current = false
-      setPendingService(null)
+      if (serviceRecoveryRef.current === recovery) {
+        try { setServiceIntent(recovery.pending()) } catch { setServiceRecoveryError('服务恢复记录暂时无法读取，请联系服务员。') }
+        setPendingService(null)
+      }
     }
-  }, [blockForSession, notify, pendingService])
+  }, [blockForSession, notify, pendingService, serviceIntent])
 
   const selectMood = useCallback(async (mood: GuestMood) => {
     const api = apiRef.current
@@ -673,14 +700,19 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
         </div>}
       </section>
 
+      {serviceIntent !== null && <div className="guest-inline-error" role="status">
+        <AlertCircle /><span>有一条{serviceIntent.input.requestType === 'complaint' ? '投诉' : '服务'}请求待确认{serviceIntent.input.detail ? `：${serviceIntent.input.detail}` : ''}。{serviceIntent.retryAt ? '尚未受理，请稍后恢复原请求。' : '请恢复原请求确认结果。'}</span>
+        <button type="button" disabled={pendingService !== null} onClick={() => void requestService(null, null)}>恢复本次请求</button>
+      </div>}
+      {serviceRecoveryError !== null && <div className="guest-inline-error" role="alert">{serviceRecoveryError}</div>}
       <section className="guest-service-strip" aria-label="桌边服务">
-        <button type="button" disabled={pendingService !== null} onClick={() => void requestService('call_staff', null)}>
+        <button type="button" disabled={pendingService !== null || serviceIntent !== null || serviceRecoveryError !== null} onClick={() => void requestService('call_staff', null)}>
           {pendingService === 'call_staff' ? <LoaderCircle className="is-spinning" /> : <Bell />}<span>呼叫服务员</span>
         </button>
-        <button type="button" disabled={pendingService !== null} onClick={() => { setServiceDetail(''); setPanel('complaint') }}>
+        <button type="button" disabled={pendingService !== null || serviceIntent !== null || serviceRecoveryError !== null} onClick={() => { setServiceDetail(''); setPanel('complaint') }}>
           <MessageCircleWarning /><span>投诉 / 不满意</span>
         </button>
-        <button type="button" disabled={pendingService !== null} onClick={() => { setServiceDetail(''); setPanel('custom') }}>
+        <button type="button" disabled={pendingService !== null || serviceIntent !== null || serviceRecoveryError !== null} onClick={() => { setServiceDetail(''); setPanel('custom') }}>
           <Send /><span>个性需求</span>
         </button>
       </section>
@@ -724,7 +756,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
         {(panel === 'complaint' || panel === 'custom') && <ServicePanel
           kind={panel}
           detail={serviceDetail}
-          pending={pendingService !== null}
+          pending={pendingService !== null || serviceIntent !== null || serviceRecoveryError !== null}
           onDetailChange={setServiceDetail}
           onSubmit={() => void requestService(panel, serviceDetail.trim() || null)}
         />}
@@ -994,6 +1026,15 @@ async function presentOnlinePayment(action: OnlinePaymentAction): Promise<void> 
 export function paymentStatusCopy(result: GuestOrderResult, tableOrder: GuestTableOrder | null): { title: string; detail: string } {
   if (tableOrder?.paymentStatus === 'paid') return { title: '支付已经完成', detail: '吧台与收银已经收到付款状态。' }
   if (tableOrder?.paymentAccess === 'status_review') return { title: '订单已建立，付款状态待核对', detail: '系统正在向支付机构核对结果，请勿重复付款。' }
+  if (result.payment.providerAction.status === 'resolved') {
+    if (result.payment.simulated) return { title: '测试订单已恢复', detail: '这是测试付款记录，未产生真实收款；请查看本桌订单的最新状态。' }
+    const status = result.payment.providerAction.terminalPaymentStatus
+    return status === 'succeeded'
+      ? { title: '已找回原付款记录', detail: '原付款已经成功。请查看本桌订单的最新状态，无需重复支付。' }
+      : { title: '已找回原订单', detail: status === 'refunded' || status === 'partially_refunded'
+        ? '原付款已有退款记录，请查看本桌订单明细。'
+        : '原付款已经结束，请查看本桌订单的最新状态后再操作。' }
+  }
   if (result.payment.status === 'paid') return { title: '支付已经完成', detail: '吧台与收银已经收到付款状态。' }
   if (result.payment.simulated) return { title: '测试订单已建立', detail: '当前是测试支付，仍待人工测试确认，没有产生真实收款。' }
   if (result.payment.providerAction.status === 'failed') return { title: '订单已建立，付款尚未发起', detail: '支付机构刚才没有受理，可在本桌订单中重新发起，不需要重复下单。' }

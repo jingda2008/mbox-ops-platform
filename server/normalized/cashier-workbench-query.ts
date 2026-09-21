@@ -1,3 +1,4 @@
+import {closedDebtEligibilitySql,localUnpresentedPaymentSql} from './closed-debt-recovery.js'
 import {approvedFailedRefundReservesSql} from './refund-attempt-sql.js'
 import {fullyWaivedQuantityItemSql,unreservedOrderExcessSql} from './quantity-late-capture-refund.js'
 import { orderNeedsCollectionSql, orderReceivableSql } from './order-collection-sql.js'
@@ -7,6 +8,7 @@ import type {
   CashierPaymentStatus as PaymentStatus,
   CashierRefundStatus as RefundStatus,
   CashierWorkbenchItem,
+  CashierClosableUnpresentedPayment,
   CashierWorkbenchActivityRegistration,
   CashierWorkbenchKdsStatus,
   CashierWorkbenchKdsTask,
@@ -30,6 +32,10 @@ export interface CashierWorkbenchQueryInput {
 }
 
 interface OrderRow extends Record<string, unknown> {
+  closed_debt_eligible?:boolean
+  closed_debt_pending_payment_ids?:string[]
+  closable_unpresented_payments?:CashierClosableUnpresentedPayment[]
+  persistent_due_minor?:string|number
   coupon_refund_review_count?:number
   id: string
   public_id: string
@@ -41,6 +47,7 @@ interface OrderRow extends Record<string, unknown> {
   channel: string
   status: string
   payment_status: string
+  collection_due_minor: string | number
   effective_amount_minor?: string | number
   total_amount_minor: string | number
   currency: string
@@ -232,7 +239,31 @@ export class PostgresCashierWorkbenchQuery {
           area.id AS area_id,area.name AS area_name,
           session.id AS table_session_id, session.status AS table_session_status,
           orders.channel, orders.status, orders.payment_status,
+          CASE WHEN session.status='closed' THEN ${closedDebtEligibilitySql()} ELSE false END AS closed_debt_eligible,
+          ARRAY(SELECT payment.id FROM mbox.order_payment_facts payment WHERE (payment.tenant_id,payment.store_id,payment.order_id)=(orders.tenant_id,orders.store_id,orders.id)
+            AND (payment.status IN ('created','pending') OR EXISTS(SELECT 1 FROM mbox.verified_provider_observations observation WHERE (observation.tenant_id,observation.store_id,observation.payment_id)=(payment.tenant_id,payment.store_id,payment.id)
+              AND observation.observed_status='payment_succeeded' AND observation.consumed_at IS NULL))) AS closed_debt_pending_payment_ids,
+          COALESCE((SELECT jsonb_agg(jsonb_build_object(
+            'paymentId',payment.id,'payableKind',payment.payable_kind,
+            'totalAmountMinor',payment.amount_minor,'currency',payment.currency,
+            'orderIds',CASE WHEN payment.payable_kind='order' THEN jsonb_build_array(orders.id) ELSE (
+              SELECT jsonb_agg(allocation.order_id ORDER BY allocation.position)
+              FROM mbox.order_payment_allocations allocation
+              WHERE (allocation.tenant_id,allocation.store_id,allocation.batch_id)=(payment.tenant_id,payment.store_id,payment.order_batch_id)) END,
+            'orderPublicIds',CASE WHEN payment.payable_kind='order' THEN jsonb_build_array(orders.public_id) ELSE (
+              SELECT jsonb_agg(original.public_id ORDER BY allocation.position)
+              FROM mbox.order_payment_allocations allocation
+              JOIN mbox.orders original ON (original.tenant_id,original.store_id,original.id)=(allocation.tenant_id,allocation.store_id,allocation.order_id)
+              WHERE (allocation.tenant_id,allocation.store_id,allocation.batch_id)=(payment.tenant_id,payment.store_id,payment.order_batch_id)) END
+            ) ORDER BY payment.id)
+            FROM mbox.order_payment_facts fact
+            JOIN mbox.payments payment ON (payment.tenant_id,payment.store_id,payment.id)=(fact.tenant_id,fact.store_id,fact.id)
+            WHERE (fact.tenant_id,fact.store_id,fact.order_id)=(orders.tenant_id,orders.store_id,orders.id)
+              AND session.status='closed' AND ${localUnpresentedPaymentSql()}
+          ),'[]'::jsonb) AS closable_unpresented_payments,
+          mbox.order_collection_due_amount(orders.tenant_id,orders.store_id,orders.id) AS persistent_due_minor,
           orders.total_amount_minor, ${orderReceivableSql('orders')} AS effective_amount_minor, orders.currency,
+          mbox.order_collection_due_amount_for_mode(orders.tenant_id,orders.store_id,orders.id,true) AS collection_due_minor,
           orders.submitted_at::text, orders.created_at::text,
           orders.business_date::text,${cashierCouponRefundReviewCountSql} AS coupon_refund_review_count
         FROM mbox.orders AS orders
@@ -653,6 +684,7 @@ export class PostgresCashierWorkbenchQuery {
           FROM mbox.order_recollection_authorizations
           WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND order_id=ANY($3::uuid[])
             AND status='active' AND expires_at>clock_timestamp()
+            AND amount_minor=mbox.order_collection_due_amount_for_mode(tenant_id,store_id,order_id,true)
           ORDER BY created_at DESC,id DESC
         `, [input.scope.tenantId, input.scope.storeId, orderIds])
 
@@ -732,6 +764,8 @@ function assembleView(
         method: payment.method,
         providerTransactionId: payment.provider_transaction_id,
         providerActionState: payment.provider_action_state,
+        ...(payment.provider_snapshot?.localUnpresentedHistoryClosed === true
+          ? { localUnpresentedHistoryClosed: true } : {}),
         retryReleasedAt: payment.retry_released_at,
         retryReleaseReason: payment.retry_release_reason,
         amountMinor: asSafeMinor(payment.amount_minor, 'payment amount'),
@@ -775,6 +809,16 @@ function assembleView(
       areaName: order.area_name,
       tableSessionId: order.table_session_id,
       tableSessionStatus: order.table_session_status,
+      ...(order.table_session_status==='closed'?{closedDebtRecovery:{
+        status:!order.closed_debt_eligible?'ineligible':Number(order.persistent_due_minor)<=0?'settled':
+          (order.closed_debt_pending_payment_ids?.length??0)>0?'pending_payment':
+          !['payment.collect.all_tables','payment.recollect.authorize'].every(capability=>input.capabilities.includes(capability))?'permission_required':
+          recollectionByOrder.has(order.id)?'available':'authorization_required',
+        originalBusinessDate:order.business_date,
+        closableUnpresentedPaymentIds:order.closed_debt_eligible&&['payment.initiate.staff','reconciliation.view','payment.collect.all_tables','payment.recollect.authorize'].every(capability=>input.capabilities.includes(capability))?(order.closable_unpresented_payments??[]).map(payment=>payment.paymentId):[],
+        closableUnpresentedPayments:order.closed_debt_eligible&&['payment.initiate.staff','reconciliation.view','payment.collect.all_tables','payment.recollect.authorize'].every(capability=>input.capabilities.includes(capability))?order.closable_unpresented_payments??[]:[],
+        pendingPaymentIds:order.closed_debt_pending_payment_ids??[],
+      } satisfies NonNullable<CashierWorkbenchOrder['closedDebtRecovery']>}:{}),
       channel: order.channel,
       status: order.status,
       paymentStatus: netCollectedMinor >= totalAmountMinor && order.status !== 'cancelled' ? 'paid' : order.payment_status === 'pending' ? (refundedMinor > 0 ? (netCollectedMinor > 0 ? 'partially_refunded' : 'refunded') : grossPaidMinor > 0 ? 'partially_paid' : 'unpaid') : order.payment_status,
@@ -782,7 +826,7 @@ function assembleView(
       originalAmountMinor,
       stoppedAmountMinor: Math.max(0,originalAmountMinor - totalAmountMinor),
       ...(totalAmountMinor>originalAmountMinor?{receivableIncreaseMinor:totalAmountMinor-originalAmountMinor}:{}),
-      outstandingAmountMinor: Math.max(0, totalAmountMinor - netCollectedMinor),
+      outstandingAmountMinor: asSafeMinor(order.collection_due_minor, 'collectible balance'),
       overCollectedAmountMinor: Math.max(0, netCollectedMinor - totalAmountMinor),
       currency: order.currency,
       submittedAt: order.submitted_at,

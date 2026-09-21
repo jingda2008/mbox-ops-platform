@@ -2,6 +2,21 @@ import { describe, expect, it, vi } from 'vitest'
 import { StaffActionsApi, StaffActionsApiError } from './staff-actions-api'
 
 describe('StaffActionsApi', () => {
+  it('isolates bar requests while preserving the original kitchen command body for recovery',async()=>{
+    const send=vi.fn<typeof fetch>().mockImplementation(async()=>new Response(JSON.stringify({data:{batchId:'batch',action:'release',quantity:0,released:true}}),{status:200}))
+    const api=new StaffActionsApi({fetch:send,staffSessionId:'session'})
+    const command={action:'release' as const,batchId:'batch',expectedOwnershipVersion:2}
+    await api.runKitchenCommand('employee',command,'same-original-key')
+    await api.runKitchenCommand('employee',command,'same-original-key','bar')
+    expect(JSON.parse(String(send.mock.calls[0][1]?.body))).toEqual({employeeId:'employee',command})
+    expect(JSON.parse(String(send.mock.calls[1][1]?.body))).toEqual({employeeId:'employee',command,stationCode:'bar'})
+    expect(new Headers(send.mock.calls[1][1]?.headers).get('idempotency-key')).toBe('same-original-key')
+    await api.loadKitchenBoard(undefined,'bar')
+    expect(String(send.mock.calls[2][0])).toContain('/kitchen-board?station=bar')
+    await api.loadKitchenHandoffPreview('batch','bar')
+    expect(String(send.mock.calls[3][0])).toContain('/handoff-preview?batchId=batch&station=bar')
+  })
+
   it('gives the same safe read recovery for JSON and non-JSON server failures', async () => {
     const send = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify({error:{code:'INTERNAL_ERROR',message:'数据库连接异常'}}),{status:503}))
@@ -11,16 +26,17 @@ describe('StaffActionsApi', () => {
     await expect(api.loadOperations()).rejects.toMatchObject({message:'读取失败，请刷新重试',status:502})
   })
 
-  it.each(['QUANTITY_UNAVAILABLE','QUANTITY_BATCH_NOT_ENABLED'])('clears definite %s without losing an in-progress original result',async(code)=>{
+  it.each(['QUANTITY_UNAVAILABLE','QUANTITY_BATCH_NOT_ENABLED','SHARED_PICKUP_REQUIRED'])('clears definite %s without losing an in-progress original result',async(code)=>{
     const send=vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify({error:{code,message:'本次数量未执行'}}),{status:409}))
       .mockResolvedValueOnce(new Response(JSON.stringify({error:{code:'IDEMPOTENCY_IN_PROGRESS',message:'处理中'}}),{status:409}))
       .mockResolvedValueOnce(new Response('{}',{status:200}))
+    const action=code==='SHARED_PICKUP_REQUIRED'?'deliver':'complete'
     let sequence=0
     const api=new StaffActionsApi({fetch:send,createIdempotencyKey:()=>`correction-${++sequence}`})
-    await expect(api.runKdsAction('task-1','complete',2)).rejects.toMatchObject({code})
+    await expect(api.runKdsAction('task-1',action,2)).rejects.toMatchObject({code})
     expect(api.pendingKdsActions()).toHaveLength(0)
-    await expect(api.runKdsAction('task-1','complete',1)).rejects.toMatchObject({code:'IDEMPOTENCY_IN_PROGRESS'})
+    await expect(api.runKdsAction('task-1',action,1)).rejects.toMatchObject({code:'IDEMPOTENCY_IN_PROGRESS'})
     expect(api.pendingKdsActions()).toMatchObject([{quantity:1}])
     await api.recoverKdsResults()
     const keys=send.mock.calls.map(([,init])=>new Headers(init?.headers).get('idempotency-key'))

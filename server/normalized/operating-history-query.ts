@@ -2,10 +2,12 @@ import {currentRefundAttemptSql} from './refund-attempt-sql.js'
 import {legacyStockReturnCapabilitySql,orderHasLegacyStockReturnSql} from './order-stock-return-capability.js'
 import {orderNeedsCollectionSql,orderReceivableSql} from './order-collection-sql.js'
 import type { ScopedTransaction } from './transaction-runner.js'
-import type { OperatingHistory } from '../../src/shared/operating-history.js'
+import type { OperatingHistory,SharedDeliveryHistory } from '../../src/shared/operating-history.js'
+import type { PickupUnit } from '../../src/shared/pickup-workflow.js'
 import type { OperatingDaySummary } from '../../src/shared/operating-history.js'
 export interface OperatingHistoryFilter { businessDate: string; endDate?: string; table: string; employee: string; page: number; exportAll?:boolean;
   workKind?:'prepared'|'delivered'; workEmployeeId?:string; workStations?:string[];
+  sharedDeliveryScope?:{employeeId:string;canViewAllTables:boolean};
   search?:string; paymentStatus?:string; area?:string;
   earliestBusinessDate?:string|null; allowFinancialSummary?:boolean; includeStockReturnWork?:boolean }
 
@@ -138,7 +140,9 @@ export async function readOperatingHistory(tx: ScopedTransaction, input: Operati
           FROM generate_series($3::date::timestamp,$4::date::timestamp,interval '1 day') day
         `,[tx.scope.tenantId,tx.scope.storeId,financialStartDate,financialEndDate])).rows.map(row=>row.summary))
     :undefined
-  return {businessDate:input.businessDate,endDate:input.endDate??input.businessDate,summary,generatedAt:new Date().toISOString(),page:input.exportAll?0:input.page,hasMore:!input.exportAll&&orders.rows.length>50,
+  const shared=input.workKind==='delivered'&&input.sharedDeliveryScope?await readSharedDeliveryHistory(tx,input):undefined
+  return {businessDate:input.businessDate,endDate:input.endDate??input.businessDate,summary,generatedAt:new Date().toISOString(),page:input.exportAll?0:input.page,hasMore:!input.exportAll&&(orders.rows.length>50||shared?.hasMore===true),
+    ...(shared?{sharedDeliveries:shared.records}:{}),
     financialSummaryVisible:input.allowFinancialSummary!==false,
     financialStartDate:input.earliestBusinessDate&&input.businessDate<input.earliestBusinessDate?input.earliestBusinessDate:input.businessDate,
     receipts:receipts.rows.map(row=>({provider:row.provider,receivedMinor:minor(row.received),refundedMinor:minor(row.refunded),netMinor:minor(row.net)})),
@@ -148,6 +152,37 @@ export async function readOperatingHistory(tx: ScopedTransaction, input: Operati
       items:items.rows.filter(item=>item.order_id===row.id).map(item=>({id:item.id,name:item.name,quantity:item.quantity,...(item.work_quantity==null?{}:{workQuantity:item.work_quantity}),productId:item.product_id,categoryLabel:item.category_label??null,unitLabel:item.unit_label??null,bundleParentId:item.parent_order_item_id,
         unitPriceMinor:minor(item.unit_price_minor),totalMinor:minor(item.total_amount_minor),includedInBundle:item.parent_order_item_id!=null,status:item.status,note:item.note,returnedQuantity:item.returned_quantity??0,...(item.stock_return_capability?{stockReturn:item.stock_return_capability}:{}),...(item.quantity_facts?{quantities:item.quantity_facts}:{}),
         deliveredAt:item.delivered_at??null,deliveredBy:item.delivered_by??null,preparedAt:item.prepared_at??null,preparedBy:item.prepared_by??null}))}))}
+}
+async function readSharedDeliveryHistory(tx:ScopedTransaction,input:OperatingHistoryFilter):Promise<{records:SharedDeliveryHistory[];hasMore:boolean}> {
+  const scope=input.sharedDeliveryScope!
+  const result=await tx.query<{id:string;business_date:string;table_session_id:string;table_code:string;pickup_table_code:string;taken_at:string;units:PickupUnit[]}>(`
+    SELECT receipt.id,receipt.business_date::text,receipt.table_session_id,venue.code AS table_code,
+      receipt.snapshot->>'tableCode' AS pickup_table_code,receipt.taken_at::text,receipt.snapshot->'units' AS units
+    FROM mbox.pickup_receipts receipt JOIN mbox.table_sessions session
+      ON (session.tenant_id,session.store_id,session.id)=(receipt.tenant_id,receipt.store_id,receipt.table_session_id)
+    JOIN mbox.tables venue ON (venue.tenant_id,venue.store_id,venue.id)=(session.tenant_id,session.store_id,session.table_id)
+    WHERE receipt.tenant_id=$1 AND receipt.store_id=$2
+      AND receipt.business_date BETWEEN $3::date AND $4::date
+      AND ($5::date IS NULL OR receipt.business_date>=$5::date)
+      AND ($6='' OR venue.code ILIKE '%'||$6||'%' OR receipt.snapshot->>'tableCode' ILIKE '%'||$6||'%')
+      AND NOT EXISTS(SELECT 1 FROM mbox.pickup_undos undo
+        WHERE (undo.tenant_id,undo.store_id,undo.receipt_id)=(receipt.tenant_id,receipt.store_id,receipt.id))
+      AND ($7::boolean OR EXISTS(SELECT 1 FROM mbox.table_assignments assignment
+        WHERE (assignment.tenant_id,assignment.store_id,assignment.table_id)=(session.tenant_id,session.store_id,session.table_id)
+          AND assignment.employee_id=$8::uuid AND assignment.assignment_type IN ('primary','backup')
+          AND assignment.starts_at<=transaction_timestamp() AND (assignment.ends_at IS NULL OR assignment.ends_at>transaction_timestamp())))
+    ORDER BY receipt.taken_at DESC,receipt.id DESC LIMIT ${input.exportAll?5001:51} OFFSET $9
+  `,[tx.scope.tenantId,tx.scope.storeId,input.businessDate,input.endDate??input.businessDate,input.earliestBusinessDate??null,input.table,
+    scope.canViewAllTables,scope.employeeId,input.exportAll?0:input.page*50])
+  if(input.exportAll&&result.rows.length>5000)throw new TypeError('筛选结果超过5000条送达记录，请缩小日期或桌台范围后导出；不会只导出部分数据')
+  return {hasMore:result.rows.length>50,records:(input.exportAll?result.rows:result.rows.slice(0,50)).map(row=>{
+    const items=new Map<string,SharedDeliveryHistory['items'][number]>()
+    for(const unit of row.units){const key=JSON.stringify([unit.itemId,unit.kind,unit.specification,unit.itemNote,unit.orderNote]);const found=items.get(key)
+      if(found)found.quantity++
+      else items.set(key,{itemId:unit.itemId,name:unit.productName,quantity:1,specification:unit.specification,itemNote:unit.itemNote,orderNote:unit.orderNote,kind:unit.kind})}
+    return {receiptId:row.id,businessDate:row.business_date,tableSessionId:row.table_session_id,tableCode:row.table_code,pickupTableCode:row.pickup_table_code,
+      deliveredAt:new Date(row.taken_at).toISOString(),source:'shared_pickup_device',items:[...items.values()]}
+  })}
 }
 function combineOperatingSummaries(rows:OperatingDaySummary[]):OperatingDaySummary|undefined {
   if(rows.length===0)return undefined

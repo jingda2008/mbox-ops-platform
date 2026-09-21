@@ -1,0 +1,5 @@
+.normalized-staff-action-shell.three-screen-shell{padding:0;min-height:100dvh;background:#f7f3ec}
+.three-screen-production{height:100dvh;overflow:hidden}
+.three-screen-toolbar{height:48px;box-sizing:border-box;display:flex;align-items:center;gap:14px;padding:0 12px;background:#fff;border-bottom:1px solid #d6ddd5}
+.three-screen-toolbar strong{font-size:18px;flex:1}
+.three-screen-toolbar button{min-height:44px;padding:0 14px;border:1px solid #b9c8be;border-radius:8px;background:#f4f7f3;color:#254c38;font-size:15px}

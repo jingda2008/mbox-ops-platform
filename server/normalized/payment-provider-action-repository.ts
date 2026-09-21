@@ -135,7 +135,8 @@ export class PaymentProviderActionRepository {
     options: Readonly<{ lock?: boolean }> = {},
   ): Promise<ProviderPaymentContext> {
     const lockClause = options.lock === false ? '' : 'FOR SHARE OF payment'
-    const result = await this.transaction.query<ContextRow>(`
+    const readContext = async (paymentLock: string): Promise<ContextRow> => {
+      const result = await this.transaction.query<ContextRow>(`
       SELECT payment.id, payment.payable_kind, payment.order_id,
         ordering.public_id AS order_public_id,
         payment.activity_registration_id,
@@ -167,10 +168,21 @@ export class PaymentProviderActionRepository {
       WHERE payment.tenant_id = $1::uuid
         AND payment.store_id = $2::uuid
         AND payment.id = $3::uuid
-      ${lockClause}
+      ${paymentLock}
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId])
-    const row = result.rows[0]
-    if (row === undefined) throw new Error('支付记录不存在')
+      const row = result.rows[0]
+      if (row === undefined) throw new Error('支付记录不存在')
+      return row
+    }
+    if (principal.type === 'guest' && options.lock !== false) {
+      // Guest authority takes participation/session locks. Taking a payment
+      // SHARE first lets a concurrent creator hold that SHARE while waiting
+      // for our participation lock, preventing complete() from updating it.
+      // The pre-read locates authority only; never return its payment state.
+      await this.assertAccess(await readContext(''), principal)
+    }
+    const row = await readContext(lockClause)
+    // Recheck the association from the locked read; a pre-read is not authority.
     await this.assertAccess(row, principal)
     return mapContext(row)
   }
@@ -686,6 +698,8 @@ export class PaymentProviderActionRepository {
     sensitiveRequestBinding?: string,
     clientNetworkSnapshot: Readonly<Record<string, string>> = {},
   ): Promise<{ claimed: true } | { claimed: false; payload: ProviderActionPayload; expiresAt: string }> {
+    const payment=await this.transaction.query<{status:string}>(`SELECT status FROM mbox.payments WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR SHARE`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,paymentId])
+    if(!payment.rows[0]||!['created','pending'].includes(payment.rows[0].status))throw new ProviderPaymentMethodConflictError('付款已结束，不能创建渠道动作')
     if (idempotencyKey !== undefined && (idempotencyKey.length < 8 || idempotencyKey.length > 128)) {
       throw new TypeError('payment action idempotency key must contain between 8 and 128 characters')
     }

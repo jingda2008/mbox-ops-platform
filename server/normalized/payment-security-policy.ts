@@ -1,3 +1,4 @@
+import {lockClosedDebtRecovery} from './closed-debt-recovery.js'
 import { createHash } from 'node:crypto'
 import type { JsonObject, JsonValue } from './command-executor.js'
 import type { ScopedTransaction } from './transaction-runner.js'
@@ -13,6 +14,7 @@ export type PaymentCapability =
   | 'payment.manual.pos.record'
   | 'payment.manual.external.record'
   | 'payment.recollect.authorize'
+  | 'payment.collect.all_tables'
   | 'community.activity.cashier'
   | 'refund.request'
   | 'refund.approve'
@@ -25,6 +27,7 @@ export interface EmployeeCapabilityAuthorization {
 }
 
 export interface EmployeeOrderAccessAuthorization {
+  allowClosedDebtRecovery?: boolean
   transaction: ScopedTransaction
   employeeId: string
   orderId: string
@@ -168,7 +171,6 @@ implements PaymentCapabilityAuthorizationPort {
       FROM mbox.orders ordering
       WHERE ordering.tenant_id=$1::uuid AND ordering.store_id=$2::uuid
         AND ordering.id=$3::uuid
-      FOR SHARE OF ordering
     `, [
       input.transaction.scope.tenantId,
       input.transaction.scope.storeId,
@@ -186,8 +188,29 @@ implements PaymentCapabilityAuthorizationPort {
         includeTableViewAll: false,
         lockTableSession: true,
       })
+      // Locate without locking, then use the same session -> order order as
+      // fulfillment and table movements. Locking the order before the session
+      // deadlocks with a kitchen completion or shared pickup on that table.
+      const lockedOrder = await input.transaction.query<{ table_session_id: string }>(`
+        SELECT ordering.table_session_id
+        FROM mbox.orders ordering
+        WHERE ordering.tenant_id=$1::uuid AND ordering.store_id=$2::uuid
+          AND ordering.id=$3::uuid
+        FOR SHARE OF ordering
+      `, [input.transaction.scope.tenantId, input.transaction.scope.storeId, input.orderId])
+      if (lockedOrder.rows[0]?.table_session_id !== tableSessionId) {
+        throw new PaymentAuthorizationError('Order table changed; reload before collecting payment')
+      }
     } catch (error) {
       if (error instanceof EmployeeTableAccessDeniedError) {
+        if (input.allowClosedDebtRecovery) {
+          const recovery=await lockClosedDebtRecovery(input.transaction,input.orderId)
+          if(recovery?.hasPreCloseObligation){
+            await this.assertEmployeeCapability({...input,capability:'payment.collect.all_tables'})
+            await this.assertEmployeeCapability({...input,capability:'payment.recollect.authorize'})
+            return
+          }
+        }
         throw new PaymentAuthorizationError('Employee is not responsible for the order table')
       }
       throw error
@@ -317,7 +340,9 @@ implements PaymentCapabilityAuthorizationPort {
       WHERE refund.tenant_id = $1::uuid
         AND refund.store_id = $2::uuid
         AND refund.id = $3::uuid
-      FOR UPDATE OF refund
+      -- Payment/amount/currency are immutable refund facts. The repository
+      -- locks the parent before the refund and rechecks state/self-approval.
+      -- Taking this child lock first would invert that order during execution.
     `, [
       input.transaction.scope.tenantId,
       input.transaction.scope.storeId,
@@ -353,8 +378,10 @@ const PROVIDER_EVIDENCE_FIELDS = new Set([
   'bankType',
   'channel',
   'collectedByEmployeeId',
+  'collectionNote',
   'errorCode',
   'eventId',
+  'externalMethodCode',
   'lateSuccessAfterClose',
   'merchantOrderId',
   'merchantRefundId',

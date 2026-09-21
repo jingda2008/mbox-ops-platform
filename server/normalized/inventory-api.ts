@@ -13,6 +13,7 @@ import {
   IdempotencyConflictError,
   IdempotencyInProgressError,
   IdempotencyRecordError,
+  hashRequestFingerprint,
 } from "./command-executor.js";
 import type {
   InventoryDashboard,
@@ -48,10 +49,11 @@ import {
   StaffAccessRepository,
   StaffNotFoundError,
 } from "./staff-access-repository.js";
-import type { ScopedTransaction } from "./transaction-runner.js";
+import type { ScopedTransaction, ScopedPostgresTransactionRunner } from "./transaction-runner.js";
 import { isLiquidInventoryCategory } from '../../src/shared/inventory-unit-policy.js';
 
 export interface InventoryApiOptions {
+  transactions: Pick<ScopedPostgresTransactionRunner, 'run'>;
   commands: Pick<NormalizedCommandExecutor, "execute">;
   query: Pick<InventoryQueryService, "getDashboard" | "getActiveRecipe" | "getRecipeCostPreview" | "getStockCounts" | "getWasteRequests">;
   resolveContext(
@@ -1042,12 +1044,21 @@ async function execute<Result>(
   ) => Promise<Result>,
 ): Promise<CommandExecution<Result>> {
   const idempotencyKey = readIdempotencyKey(request);
-  return options.commands.execute(
+  const durableWaste = ['inventory.waste.record', 'inventory.waste.submit',
+    'inventory.waste-request.approve', 'inventory.waste-request.reject'].includes(operationScope);
+  // Even a transport-cache replay must require current employee permission.
+  const currentPermissions = durableWaste ? await options.transactions.run(context.scope, async transaction => (
+    await (options.createStaffAccessRepository?.(transaction) ?? new StaffAccessRepository(transaction))
+      .assertPermission(context.employeeId, permission)
+  ).permissions, { readOnly: true }) : null;
+  const requestFingerprint = fingerprint(request, context);
+  let domainReplayed = false;
+  const execution = await options.commands.execute(
     {
       scope: context.scope,
       operationScope,
       idempotencyKey,
-      requestFingerprint: fingerprint(request, context),
+      requestFingerprint,
       resultCodec,
     },
     async (transaction) => {
@@ -1055,10 +1066,37 @@ async function execute<Result>(
         options.createStaffAccessRepository?.(transaction) ??
         new StaffAccessRepository(transaction)
       ).assertPermission(context.employeeId, permission);
+      if (durableWaste) {
+        // The generic command's row lock serializes this key, including after
+        // cache expiry/deletion. The immutable domain result never expires.
+        const receipt = await transaction.query<{ request_sha256: string; result: unknown }>(`
+          SELECT request_sha256,result FROM mbox.inventory_waste_receipts
+          WHERE tenant_id=$1 AND store_id=$2 AND operation_scope=$3 AND idempotency_key=$4
+        `, [context.scope.tenantId, context.scope.storeId, operationScope, idempotencyKey]);
+        if (receipt.rows[0]) {
+          if (receipt.rows[0].request_sha256 !== hashRequestFingerprint(requestFingerprint)) {
+            throw new IdempotencyConflictError(operationScope, idempotencyKey);
+          }
+          domainReplayed = true;
+          return { result: resultCodec.decode(receipt.rows[0].result), auditEvents: [], outboxMessages: [] };
+        }
+        const legacy = await transaction.query(`SELECT id FROM mbox.outbox_messages
+          WHERE tenant_id=$1 AND store_id=$2 AND message_key=$3`,
+        [context.scope.tenantId, context.scope.storeId, eventKey(operationScope, idempotencyKey)]);
+        if (legacy.rowCount) {
+          throw new InventoryConflictError('该历史报损操作已有成功记录，但原请求回执已清理。请联系有权人员核对原记录，不要重新报损。');
+        }
+      }
       const result = await handler(transaction, access.permissions);
       const json = resultCodec.encode(result);
       if (!isJsonObject(json))
         throw new TypeError("Inventory command result must be a JSON object");
+      if (durableWaste) {
+        await transaction.query(`INSERT INTO mbox.inventory_waste_receipts
+          (tenant_id,store_id,operation_scope,idempotency_key,request_sha256,result)
+          VALUES($1,$2,$3,$4,$5,$6::jsonb)`, [context.scope.tenantId, context.scope.storeId,
+          operationScope, idempotencyKey, hashRequestFingerprint(requestFingerprint), JSON.stringify(json)]);
+      }
       const objectId = readResultId(result);
       const objectType = operationScope === 'inventory.waste.submit' && json.status === 'pending'
         ? 'inventory_waste_request' : operationScope === 'inventory.waste-allowance.configure'
@@ -1088,6 +1126,13 @@ async function execute<Result>(
       };
     },
   );
+  // A cached receipt must not restore a cost field after cost access is revoked.
+  const encoded = resultCodec.encode(execution.value);
+  if (currentPermissions !== null && !currentPermissions.includes('inventory.cost.view') && isJsonObject(encoded)) {
+    const { wasteCostMinor: _cost, unitCostMinor: _unitCost, ...visible } = encoded;
+    return { value: resultCodec.decode(visible), replayed: execution.replayed || domainReplayed };
+  }
+  return { ...execution, replayed: execution.replayed || domainReplayed };
 }
 
 async function executeBottleCommand(

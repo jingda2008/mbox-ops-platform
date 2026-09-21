@@ -8,7 +8,8 @@ import { ExperiencePlanActivationRepository } from './experience-plan-activation
 import { ScopedPostgresTransactionRunner, type PostgresPool } from './transaction-runner.js'
 
 const databaseUrl=process.env.TEST_NORMALIZED_DATABASE_URL
-const integration=databaseUrl?describe:describe.skip
+const runtimeDatabaseUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
+const integration=databaseUrl&&runtimeDatabaseUrl?describe:describe.skip
 const id={
   tenant:randomUUID(),store:randomUUID(),otherStore:randomUUID(),canonical:randomUUID(),merged:randomUUID(),
   area:randomUUID(),tableTabTable:randomUUID(),paymentTable:randomUUID(),
@@ -22,14 +23,25 @@ const suffix=id.tenant.replaceAll('-','').slice(0,12)
 
 integration('canonical preference and experience plan activation PostgreSQL authority',()=>{
   let pool:Pool
+  let runtimePool:Pool
   let runner:ScopedPostgresTransactionRunner
+  let originalOptions:unknown[]
   beforeAll(async()=>{
     await runNormalizedMigrations(databaseUrl!)
     pool=new Pool({connectionString:databaseUrl,max:8})
-    runner=new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool)
+    runtimePool=new Pool({connectionString:runtimeDatabaseUrl,max:8})
+    const identity=await runtimePool.query(`SELECT current_user=session_user AS direct_login,
+      rolcanlogin,rolsuper,rolbypassrls,rolcreatedb,rolcreaterole,rolreplication,
+      has_table_privilege(current_user,'mbox.recommendation_options','SELECT') AS can_read,
+      has_any_column_privilege(current_user,'mbox.recommendation_options','UPDATE') AS can_update
+      FROM pg_roles WHERE rolname=current_user`)
+    expect(identity.rows[0]).toEqual({direct_login:true,rolcanlogin:true,rolsuper:false,
+      rolbypassrls:false,rolcreatedb:false,rolcreaterole:false,rolreplication:false,can_read:true,can_update:false})
+    runner=new ScopedPostgresTransactionRunner(runtimePool as unknown as PostgresPool)
     await seed(pool)
+    originalOptions=(await pool.query('SELECT to_jsonb(option) AS fact FROM mbox.recommendation_options option WHERE tenant_id=$1 ORDER BY id',[id.tenant])).rows
   })
-  afterAll(async()=>pool?.end())
+  afterAll(async()=>{await runtimePool?.end();await pool?.end()})
 
   it('aggregates only explicit canonical-family evidence with decay, contrary evidence and withdrawal',async()=>{
     const support=await run((transaction)=>new CustomerPreferenceRepository(transaction).declare({
@@ -148,6 +160,20 @@ integration('canonical preference and experience plan activation PostgreSQL auth
     expect(own.declarations).toBe(2)
     expect(own.activationEvents).toBeGreaterThan(0)
     expect(other).toEqual({declarations:0,activationEvents:0})
+  })
+
+  it('keeps original option facts and their restricted write privileges unchanged through selection, order and payment',async()=>{
+    await expect(run(transaction=>transaction.query(`UPDATE mbox.recommendation_options
+      SET amount_minor=amount_minor+1 WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,
+    [id.tenant,id.store,id.tableTabOption]))).rejects.toMatchObject({code:'42501'})
+    await expect(run(transaction=>transaction.query(`DELETE FROM mbox.recommendation_options
+      WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,
+    [id.tenant,id.store,id.tableTabOption]))).rejects.toMatchObject({code:'42501'})
+    const after=(await pool.query('SELECT to_jsonb(option) AS fact FROM mbox.recommendation_options option WHERE tenant_id=$1 ORDER BY id',[id.tenant])).rows
+    expect(after).toEqual(originalOptions)
+    const other=await runner.run({tenantId:id.tenant,storeId:id.otherStore},transaction=>transaction.query(
+      'SELECT id FROM mbox.recommendation_options WHERE id=$1',[id.tableTabOption]),{readOnly:true})
+    expect(other.rows).toEqual([])
   })
 
   function run<Result>(operation:(transaction:Parameters<Parameters<ScopedPostgresTransactionRunner['run']>[1]>[0])=>Promise<Result>){

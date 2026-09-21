@@ -128,6 +128,14 @@ describe('GuestApp', () => {
       .not.toBe(guestCartStorageKey({ ...base, cartScope: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' }))
   })
 
+  it.each(['succeeded','closed','refunded'])('shows recovered %s checkout without inviting another payment', status => {
+    const result = {payment:{status,simulated:false,providerAction:{status:'resolved',terminalPaymentStatus:status,payload:null}}} as GuestOrderResult
+    const copy = paymentStatusCopy(result,null)
+    expect(copy.title).toContain('已找回原')
+    expect(copy.detail).not.toContain('重新发起')
+    expect(copy.detail).not.toContain('没有受理')
+  })
+
   it('lets the authoritative table order replace a stale initial payment result', () => {
     const result = {
       payment: {

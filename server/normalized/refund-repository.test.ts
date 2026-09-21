@@ -11,6 +11,7 @@ import type { ScopedTransaction } from './transaction-runner.js'
 
 const tenantId = '11111111-1111-4111-8111-111111111111'
 const storeId = '22222222-2222-4222-8222-222222222222'
+const sessionId = '99999999-9999-4999-8999-999999999999'
 const orderId = '33333333-3333-4333-8333-333333333333'
 const paymentId = '44444444-4444-4444-8444-444444444444'
 const refundId = '55555555-5555-4555-8555-555555555555'
@@ -22,7 +23,8 @@ describe('RefundRepository', () => {
   it('stores item allocations and derives the refund amount from them', async () => {
     const transaction = new ScriptedTransaction([
       rows([paymentTargetRow()]),
-      rows([{ id: orderId }]),
+      rows([{ id: sessionId }]),
+      rows([{ id: orderId, table_session_id: sessionId }]),
       rows([paymentRow('succeeded', 10000)]),
       rows([{ id: itemId, total_amount_minor: '6000', currency: 'CNY', status: 'delivered' }]),
       rows([{ reserved_total_minor: '0' }]),
@@ -41,20 +43,23 @@ describe('RefundRepository', () => {
 
     expect(refund.amountMinor).toBe(2500)
     expect(refund.allocations).toEqual([{ orderItemId: itemId, amountMinor: 2500 }])
-    expect(transaction.calls[1]?.sql).toContain('FROM mbox.orders')
-    expect(transaction.calls[1]?.sql).toContain('FOR UPDATE')
-    expect(transaction.calls[2]?.sql).toContain('FROM mbox.payments')
+    expect(transaction.calls[1]?.sql).toContain('JOIN mbox.table_sessions session')
+    expect(transaction.calls[1]?.sql).toContain('FOR SHARE OF session')
+    expect(transaction.calls[2]?.sql).toContain('FROM mbox.orders')
     expect(transaction.calls[2]?.sql).toContain('FOR UPDATE')
-    expect(transaction.calls[3]?.sql).toContain('FROM mbox.order_items')
+    expect(transaction.calls[3]?.sql).toContain('FROM mbox.payments')
     expect(transaction.calls[3]?.sql).toContain('FOR UPDATE')
-    expect(transaction.calls[6]?.values[4]).toBe(2500)
-    expect(transaction.calls[7]?.sql).toContain('INSERT INTO mbox.refund_items')
+    expect(transaction.calls[4]?.sql).toContain('FROM mbox.order_items')
+    expect(transaction.calls[4]?.sql).toContain('FOR UPDATE')
+    expect(transaction.calls[7]?.values[4]).toBe(2500)
+    expect(transaction.calls[8]?.sql).toContain('INSERT INTO mbox.refund_items')
   })
 
   it('rejects cumulative refunds above the captured payment', async () => {
     const transaction = new ScriptedTransaction([
       rows([paymentTargetRow()]),
-      rows([{ id: orderId }]),
+      rows([{ id: sessionId }]),
+      rows([{ id: orderId, table_session_id: sessionId }]),
       rows([paymentRow('partially_refunded', 10000)]),
       rows([{ id: itemId, total_amount_minor: '10000', currency: 'CNY', status: 'delivered' }]),
       rows([{ reserved_total_minor: '9500' }]),
@@ -69,13 +74,14 @@ describe('RefundRepository', () => {
       allocations: [{ orderItemId: itemId, amountMinor: 1000 }],
     })).rejects.toBeInstanceOf(RefundLimitError)
 
-    expect(transaction.calls).toHaveLength(6)
+    expect(transaction.calls).toHaveLength(7)
   })
 
   it('rejects cumulative item refunds above that order item even when payment total remains available', async () => {
     const transaction = new ScriptedTransaction([
       rows([paymentTargetRow()]),
-      rows([{ id: orderId }]),
+      rows([{ id: sessionId }]),
+      rows([{ id: orderId, table_session_id: sessionId }]),
       rows([paymentRow('partially_refunded', 20000)]),
       rows([{ id: itemId, total_amount_minor: '6000', currency: 'CNY', status: 'delivered' }]),
       rows([{ reserved_total_minor: '5000' }]),
@@ -94,30 +100,37 @@ describe('RefundRepository', () => {
   it('allows cashier to retry execution when provider submission never started', async () => {
     const transaction = new ScriptedTransaction([
       rows([paymentTargetRow()]),
-      rows([{ id: orderId }]),
+      rows([{ id: sessionId }]),
+      rows([{ id: orderId, table_session_id: sessionId }]),
       rows([{ ...refundJoinedRow('processing', 2500, approverId), provider_submission_state: 'not_started' }]),
     ])
     const refund = await new RefundRepository(transaction).beginExecution(refundId)
     expect(refund.status).toBe('processing')
-    expect(transaction.calls).toHaveLength(3)
+    expect(transaction.calls).toHaveLength(4)
+    expect(transaction.calls[1]?.sql).toContain('FOR SHARE OF session')
+    expect(transaction.calls[2]?.sql).toContain('FOR UPDATE')
+    expect(transaction.calls[3]?.sql).toContain('FOR UPDATE OF r, p')
+    expect(transaction.calls[3]?.values.slice(3)).toEqual([paymentId,'order',null,orderId,null])
   })
 
   it('does not allow a requested refund to execute before human approval', async () => {
     const transaction = new ScriptedTransaction([
       rows([paymentTargetRow()]),
-      rows([{ id: orderId }]),
+      rows([{ id: sessionId }]),
+      rows([{ id: orderId, table_session_id: sessionId }]),
       rows([refundJoinedRow('requested', 2500)]),
     ])
 
     await expect(new RefundRepository(transaction).beginExecution(refundId))
       .rejects.toBeInstanceOf(RefundApprovalRequiredError)
-    expect(transaction.calls).toHaveLength(3)
+    expect(transaction.calls).toHaveLength(4)
   })
 
   it('keeps request and approval duties separated', async () => {
     const samePerson = new ScriptedTransaction([
       rows([paymentTargetRow()]),
-      rows([{ id: orderId }]),
+      rows([{ id: sessionId }]),
+      rows([{ id: orderId, table_session_id: sessionId }]),
       rows([refundJoinedRow('requested', 2500)]),
     ])
     await expect(new RefundRepository(samePerson).approve(refundId, requesterId, '申请人不能自批'))
@@ -125,7 +138,8 @@ describe('RefundRepository', () => {
 
     const differentPerson = new ScriptedTransaction([
       rows([paymentTargetRow()]),
-      rows([{ id: orderId }]),
+      rows([{ id: sessionId }]),
+      rows([{ id: orderId, table_session_id: sessionId }]),
       rows([refundJoinedRow('requested', 2500)]),
       rows([refundJoinedRow('approved', 2500, approverId)]),
     ])
@@ -138,7 +152,8 @@ describe('RefundRepository', () => {
   it('never permits a manual result to close an online-provider refund', async () => {
     const transaction = new ScriptedTransaction([
       rows([paymentTargetRow()]),
-      rows([{ id: orderId }]),
+      rows([{ id: sessionId }]),
+      rows([{ id: orderId, table_session_id: sessionId }]),
       rows([refundJoinedRow('processing', 2500, approverId)]),
     ])
     await expect(new RefundRepository(transaction).completeManualExecution({
@@ -274,13 +289,14 @@ function providerCallbackTransaction(row: Record<string, unknown>): ScriptedTran
   return new ScriptedTransaction([
     rows([{ id: refundId }]),
     rows([paymentTargetRow()]),
-    rows([{ id: orderId }]),
+    rows([{ id: sessionId }]),
+    rows([{ id: orderId, table_session_id: sessionId }]),
     rows([row]),
   ])
 }
 
 function paymentTargetRow(): Record<string, unknown> {
-  return { payable_kind: 'order', order_id: orderId, activity_registration_id: null }
+  return { payment_id: paymentId, payable_kind: 'order', order_batch_id: null, order_id: orderId, activity_registration_id: null }
 }
 
 function normalizeSql(value: string): string {

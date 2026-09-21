@@ -1,4 +1,4 @@
-import { orderNeedsCollectionSql, orderReceivableSql } from './order-collection-sql.js'
+import { orderCollectionDueSql, orderNeedsCollectionSql, orderReceivableSql } from './order-collection-sql.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
 /** Read confirmed, per-order allocations; a pending channel attempt is never cash. */
@@ -9,7 +9,7 @@ export async function readCheckoutPrintSummary(tx: ScopedTransaction, orderIds: 
     SELECT CASE WHEN ordering.status='cancelled' THEN 0 ELSE ${orderReceivableSql('ordering')} END::text AS receivable,
       amounts.received::text, amounts.refunded::text, amounts.pending::text,
       CASE WHEN ${orderNeedsCollectionSql('ordering')}
-        THEN GREATEST(0,${orderReceivableSql('ordering')}-amounts.received+amounts.refunded)
+        THEN ${orderCollectionDueSql('ordering')}
         ELSE 0 END::text AS due,
       ${orderNeedsCollectionSql('ordering')} AS needs_collection
     FROM mbox.orders ordering

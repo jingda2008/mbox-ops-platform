@@ -224,6 +224,7 @@ export interface NormalizedWorkerCycleResult {
     checkoutCouponRecovery:CheckoutCouponRecoveryBatch|null
     printSource?: PrintSourceBatch|null
   }
+  /** Failures remain active across skipped ticks until that worker actually succeeds. */
   failures: NormalizedWorkerName[]
 }
 
@@ -233,6 +234,7 @@ export class NormalizedBackgroundWorkerCoordinator {
   private readonly intervalMs: number
   private readonly cadenceMs: Readonly<Record<NormalizedWorkerName, number>>
   private readonly lastStartedAt = new Map<NormalizedWorkerName, number>()
+  private readonly unresolvedFailures = new Set<NormalizedWorkerName>()
   private readonly now: () => number
 
   constructor(
@@ -548,6 +550,17 @@ export class NormalizedBackgroundWorkerCoordinator {
       failures.push('member-gift-delivery')
       this.options.onError?.('member-gift-delivery',new Error('member_gift_delivery_items_failed'))
     }
+    // A fulfilled null is a scheduling skip or a disabled worker, not recovery.
+    // Include partial-batch failures above before acknowledging real successes.
+    const cycleFailures = new Set(failures)
+    executions.forEach((execution, index) => {
+      const worker = names[index]
+      if (worker === undefined) return
+      if (cycleFailures.has(worker)) this.unresolvedFailures.add(worker)
+      else if (execution.status === 'fulfilled' && execution.value !== null) {
+        this.unresolvedFailures.delete(worker)
+      }
+    })
     const result: NormalizedWorkerCycleResult = {
       startedAt,
       completedAt: new Date().toISOString(),
@@ -586,7 +599,7 @@ export class NormalizedBackgroundWorkerCoordinator {
         checkoutCouponRecovery,
         printSource,
       },
-      failures,
+      failures: names.filter(worker => this.unresolvedFailures.has(worker)),
     }
     this.options.onCycle?.(result)
     return result

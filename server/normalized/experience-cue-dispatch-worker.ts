@@ -1,3 +1,4 @@
+import {ExperiencePlanLifecycleRepository} from './experience-plan-lifecycle-repository.js'
 import { createHash } from 'node:crypto'
 import type { JsonObject } from './command-executor.js'
 import { ServiceTaskRepository, type ServiceTask } from './service-task-repository.js'
@@ -36,8 +37,11 @@ export class ExperienceCueDispatchWorker {
     validateWorkerId(workerId)
     validateBatchSize(batchSize)
     return this.transactions.run(scope, async (transaction) => {
-      const skippedCueIds = await skipClosedPlans(transaction, batchSize)
-      const due = await claimDue(transaction, batchSize)
+      const planIds = await lockWorkerPlans(transaction, batchSize)
+      const lifecycle = new ExperiencePlanLifecycleRepository(transaction)
+      for (const planId of planIds) await lifecycle.reconcileLockedPlan(planId, workerId)
+      const skippedCueIds = await skipClosedPlans(transaction, batchSize, planIds)
+      const due = await claimDue(transaction, batchSize, planIds)
       const tasks = this.createTasks(transaction)
       const dispatchedCueIds: string[] = []
       for (const cue of due) {
@@ -70,7 +74,38 @@ export class ExperienceCueDispatchWorker {
   }
 }
 
-async function skipClosedPlans(transaction: ScopedTransaction, batchSize: number): Promise<string[]> {
+// Every worker batch acquires parents before cue/task locks. The bounded
+// session set is materialized so PostgreSQL cannot reorder those lock stages.
+async function lockWorkerPlans(transaction: ScopedTransaction, batchSize: number): Promise<string[]> {
+  const result=await transaction.query<{id:string}>(`
+    WITH parent_sessions AS MATERIALIZED (
+      SELECT session.id FROM mbox.table_sessions session
+      WHERE session.tenant_id=$1 AND session.store_id=$2
+        AND EXISTS(SELECT 1 FROM mbox.customer_experience_plans plan
+          WHERE (plan.tenant_id,plan.store_id,plan.table_session_id)=(session.tenant_id,session.store_id,session.id)
+            AND (
+              EXISTS(SELECT 1 FROM mbox.experience_plan_cues cue WHERE (cue.tenant_id,cue.store_id,cue.experience_plan_id)=(plan.tenant_id,plan.store_id,plan.id)
+                AND ((cue.status IN ('pending','ready') AND (plan.plan_state IN ('completed','cancelled') OR session.status NOT IN ('open','closing')
+                  OR (plan.plan_state='active' AND cue.due_at<=clock_timestamp())))
+                  OR (plan.plan_state='active' AND session.status IN ('open','closing') AND cue.status='dispatched'
+                    AND EXISTS(SELECT 1 FROM mbox.service_tasks task WHERE (task.tenant_id,task.store_id,task.id)=(cue.tenant_id,cue.store_id,cue.service_task_id) AND task.status='completed' AND task.completed_at IS NOT NULL
+                      AND task.table_session_id=plan.table_session_id AND EXISTS(SELECT 1 FROM mbox.service_task_events event
+                        WHERE (event.tenant_id,event.store_id,event.service_task_id)=(task.tenant_id,task.store_id,task.id)
+                          AND event.event_type='task.completed' AND event.to_status='completed' AND event.actor_type='employee' AND event.actor_employee_id IS NOT NULL)))))
+              OR (plan.plan_state='active' AND session.status IN ('open','closing')
+                AND EXISTS(SELECT 1 FROM mbox.experience_plan_cues cue WHERE (cue.tenant_id,cue.store_id,cue.experience_plan_id)=(plan.tenant_id,plan.store_id,plan.id))
+                AND NOT EXISTS(SELECT 1 FROM mbox.experience_plan_cues cue WHERE (cue.tenant_id,cue.store_id,cue.experience_plan_id)=(plan.tenant_id,plan.store_id,plan.id) AND (cue.status<>'completed' OR cue.completed_at IS NULL)))
+            ))
+      ORDER BY session.id FOR SHARE OF session SKIP LOCKED LIMIT $3
+    )
+    SELECT plan.id FROM mbox.customer_experience_plans plan JOIN parent_sessions parent ON parent.id=plan.table_session_id
+    WHERE plan.tenant_id=$1 AND plan.store_id=$2
+    ORDER BY plan.id FOR UPDATE OF plan SKIP LOCKED
+  `,[transaction.scope.tenantId,transaction.scope.storeId,batchSize])
+  return result.rows.map(row=>row.id)
+}
+
+async function skipClosedPlans(transaction: ScopedTransaction, batchSize: number, planIds: readonly string[]): Promise<string[]> {
   const result = await transaction.query<{ id: string }>(`
     WITH candidates AS (
       SELECT cue.id
@@ -82,9 +117,9 @@ async function skipClosedPlans(transaction: ScopedTransaction, batchSize: number
         ON session.tenant_id = plan.tenant_id AND session.store_id = plan.store_id
        AND session.id = plan.table_session_id
       WHERE cue.tenant_id = $1::uuid AND cue.store_id = $2::uuid
-        AND cue.status IN ('pending', 'ready')
+        AND plan.id=ANY($4::uuid[]) AND cue.status IN ('pending', 'ready')
         AND (plan.plan_state IN ('completed', 'cancelled') OR session.status NOT IN ('open', 'closing'))
-      ORDER BY cue.created_at, cue.id
+      ORDER BY cue.id
       FOR UPDATE OF cue SKIP LOCKED
       LIMIT $3
     )
@@ -94,11 +129,11 @@ async function skipClosedPlans(transaction: ScopedTransaction, batchSize: number
     FROM candidates
     WHERE cue.tenant_id = $1::uuid AND cue.store_id = $2::uuid AND cue.id = candidates.id
     RETURNING cue.id
-  `, [transaction.scope.tenantId, transaction.scope.storeId, batchSize])
+  `, [transaction.scope.tenantId, transaction.scope.storeId, batchSize, planIds])
   return result.rows.map((row) => row.id)
 }
 
-async function claimDue(transaction: ScopedTransaction, batchSize: number): Promise<DueExperienceCue[]> {
+async function claimDue(transaction: ScopedTransaction, batchSize: number, planIds: readonly string[]): Promise<DueExperienceCue[]> {
   const result = await transaction.query<DueExperienceCue>(`
     SELECT cue.id, cue.cue_code, cue.action_kind, cue.station,
       cue.action_payload, cue.due_at::text,
@@ -112,13 +147,13 @@ async function claimDue(transaction: ScopedTransaction, batchSize: number): Prom
       ON session.tenant_id = plan.tenant_id AND session.store_id = plan.store_id
      AND session.id = plan.table_session_id
     WHERE cue.tenant_id = $1::uuid AND cue.store_id = $2::uuid
-      AND cue.status IN ('pending', 'ready')
+      AND plan.id=ANY($4::uuid[]) AND cue.status IN ('pending', 'ready')
       AND cue.due_at IS NOT NULL AND cue.due_at <= clock_timestamp()
       AND plan.plan_state = 'active' AND session.status IN ('open', 'closing')
     ORDER BY cue.due_at, cue.sequence_no, cue.id
     FOR UPDATE OF cue SKIP LOCKED
     LIMIT $3
-  `, [transaction.scope.tenantId, transaction.scope.storeId, batchSize])
+  `, [transaction.scope.tenantId, transaction.scope.storeId, batchSize, planIds])
   return result.rows
 }
 
@@ -132,7 +167,7 @@ async function markDispatched(
     UPDATE mbox.experience_plan_cues
     SET status = 'dispatched', service_task_id = $4::uuid,
       updated_at = clock_timestamp(),
-      action_payload = action_payload || jsonb_build_object('dispatchedBy', $5, 'dispatchedAt', clock_timestamp())
+      action_payload = action_payload || jsonb_build_object('dispatchedBy', $5::text, 'dispatchedAt', clock_timestamp())
     WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
       AND status IN ('pending', 'ready')
   `, [transaction.scope.tenantId, transaction.scope.storeId, cue.id, task.id, workerId])
@@ -144,8 +179,8 @@ async function markDispatched(
       $1::uuid, $2::uuid, $3, 'experience_plan_cue', $4::uuid,
       1, 'customer.experience.cue.dispatched.v1',
       jsonb_build_object(
-        'cueId', $4::uuid, 'cueCode', $5, 'serviceTaskPublicId', $6,
-        'experiencePlanPublicId', $7, 'station', $8, 'workerId', $9
+        'cueId', $4::uuid, 'cueCode', $5::text, 'serviceTaskPublicId', $6::text,
+        'experiencePlanPublicId', $7::text, 'station', $8::text, 'workerId', $9::text
       )
     ) ON CONFLICT (tenant_id, store_id, message_key) DO NOTHING
   `, [

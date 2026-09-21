@@ -58,4 +58,16 @@ describe('operating history',()=>{
     expect(reads.some(sql=>sql.includes('operating_day_summary'))).toBe(false)
     expect(reads.some(sql=>sql.includes('reconciliation_entries'))).toBe(true)
   })
+  it('paginates shared facts independently and never reads them without an explicit authorized delivery scope',async()=>{
+    const calls:Array<{sql:string;values:unknown[]|undefined}>=[]
+    const rows=Array.from({length:51},(_,index)=>({id:`receipt-${index}`,business_date:'2026-09-21',table_session_id:'visit',table_code:'A2',pickup_table_code:'A1',taken_at:'2026-09-21T01:23:45Z',units:[]}))
+    const tx={scope:{tenantId:'tenant',storeId:'store'},query:async(sql:string,values?:unknown[])=>{calls.push({sql,values});return {rows:sql.includes('FROM mbox.pickup_receipts receipt')?rows:[]}}} as unknown as ScopedTransaction
+    const filter={businessDate:'2026-09-21',table:'A',employee:'',page:2,allowFinancialSummary:false,workKind:'delivered' as const,workEmployeeId:'reader'}
+    expect((await readOperatingHistory(tx,filter)).sharedDeliveries).toBeUndefined()
+    expect(calls.some(call=>call.sql.includes('FROM mbox.pickup_receipts receipt'))).toBe(false)
+    const result=await readOperatingHistory(tx,{...filter,sharedDeliveryScope:{employeeId:'reader',canViewAllTables:false}})
+    expect(result.orders).toEqual([]);expect(result.hasMore).toBe(true);expect(result.sharedDeliveries).toHaveLength(50)
+    expect(result.sharedDeliveries![0]).toMatchObject({source:'shared_pickup_device',tableCode:'A2',pickupTableCode:'A1',deliveredAt:'2026-09-21T01:23:45.000Z'})
+    expect(calls.find(call=>call.sql.includes('FROM mbox.pickup_receipts receipt'))?.values).toEqual(['tenant','store','2026-09-21','2026-09-21',null,'A',false,'reader',100])
+  })
 })

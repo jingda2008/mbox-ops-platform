@@ -1,3 +1,4 @@
+import { lockStaffAccessConfiguration } from './staff-access-version.js'
 import type { JsonObject, JsonValue } from './command-executor.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 import { effectiveStaffNavigation } from '../../src/shared/staff-module-access.js'
@@ -261,6 +262,7 @@ export class StaffAccessRepository {
   }
 
   async upsertPermissionDefinition(input: Readonly<PermissionDefinitionInput>) {
+    await lockStaffAccessConfiguration(this.transaction)
     const result = await this.transaction.query<{ id: string }>(`
       INSERT INTO mbox.staff_permission_definitions (
         tenant_id, store_id, code, name, category, description, status
@@ -282,6 +284,7 @@ export class StaffAccessRepository {
   }
 
   async setRolePermission(input: Readonly<RolePermissionInput>) {
+    await lockStaffAccessConfiguration(this.transaction)
     const permissionId = await this.permissionId(input.permissionCode)
     await this.assertRole(input.roleId)
     if (input.enabled) {
@@ -310,6 +313,7 @@ export class StaffAccessRepository {
   }
 
   async setEmployeePermissionOverride(input: Readonly<EmployeePermissionOverrideInput>) {
+    await lockStaffAccessConfiguration(this.transaction)
     const permissionId = await this.permissionId(input.permissionCode)
     await this.assertEmployee(input.employeeId)
     await this.transaction.query(`
@@ -350,6 +354,7 @@ export class StaffAccessRepository {
   }
 
   async setRoleDataScope(input: Readonly<RoleDataScopeInput>) {
+    await lockStaffAccessConfiguration(this.transaction)
     await this.assertRole(input.roleId)
     const strongValue = strongScopeValue(input.scopeValue)
     const result = await this.transaction.query<{ id: string }>(`
@@ -385,6 +390,7 @@ export class StaffAccessRepository {
   }
 
   async setRoleApprovalLimit(input: Readonly<RoleApprovalLimitInput>) {
+    await lockStaffAccessConfiguration(this.transaction)
     await this.assertRole(input.roleId)
     const strongRules = strongApprovalRules(input.rules ?? {})
     const result = await this.transaction.query<{ id: string }>(`
@@ -428,6 +434,7 @@ export class StaffAccessRepository {
   }
 
   async setRoleNavigation(input: Readonly<RoleNavigationInput>) {
+    await lockStaffAccessConfiguration(this.transaction)
     await this.assertRole(input.roleId)
     const result = await this.transaction.query<{ id: string }>(`
       INSERT INTO mbox.role_navigation_items (

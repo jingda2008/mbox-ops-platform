@@ -1,12 +1,17 @@
 import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
+import Fastify from 'fastify'
+import {NormalizedCommandExecutor} from './command-executor.js'
+import {RecommendationStaffModificationService} from './recommendation-staff-modification-service.js'
+import {recommendationStaffModificationApiPlugin} from './recommendation-staff-modification-api.js'
 import { afterAll,beforeAll,describe,expect,it } from 'vitest'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
 import { RecommendationStaffModificationRepository } from './recommendation-staff-modification-repository.js'
 import { ScopedPostgresTransactionRunner,type PostgresPool } from './transaction-runner.js'
 
 const databaseUrl=process.env.TEST_NORMALIZED_DATABASE_URL
-const integration=databaseUrl?describe:describe.skip
+const runtimeDatabaseUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
+const integration=databaseUrl&&runtimeDatabaseUrl?describe:describe.skip
 
 integration('recommendation staff modification PostgreSQL authority',()=>{
   const tenantId=randomUUID();const storeId=randomUUID();const otherStoreId=randomUUID()
@@ -15,15 +20,26 @@ integration('recommendation staff modification PostgreSQL authority',()=>{
   const areaId=randomUUID();const tableId=randomUUID();const tableSessionId=randomUUID();const customerId=randomUUID()
   const policyId=randomUUID();const recommendationId=randomUUID();const sourceProductId=randomUUID();const targetProductId=randomUUID()
   const recommendationPublicId=`staff-modification-${recommendationId}`
-  let pool:Pool;let runner:ScopedPostgresTransactionRunner
+  const wrongRecommendationId=randomUUID(),wrongCandidateProductId=randomUUID()
+  let pool:Pool;let runtimePool:Pool;let runner:ScopedPostgresTransactionRunner;let app:ReturnType<typeof Fastify>;let originalOptions:unknown[]
 
   beforeAll(async()=>{
     await runNormalizedMigrations(databaseUrl!)
     pool=new Pool({ connectionString:databaseUrl,max:4 })
-    runner=new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool)
+    runtimePool=new Pool({connectionString:runtimeDatabaseUrl,max:8,application_name:'staff-modification-low-login'})
+    expect((await runtimePool.query(`SELECT current_user=session_user direct_login,rolcanlogin,rolsuper,rolbypassrls,rolcreatedb,rolcreaterole,
+      has_any_column_privilege(current_user,'mbox.recommendation_options','UPDATE') can_update,
+      has_table_privilege(current_user,'mbox.recommendation_options','DELETE') can_delete FROM pg_roles WHERE rolname=current_user`)).rows[0]).toEqual({direct_login:true,rolcanlogin:true,rolsuper:false,rolbypassrls:false,rolcreatedb:false,rolcreaterole:false,can_update:false,can_delete:false})
+    runner=new ScopedPostgresTransactionRunner(runtimePool as unknown as PostgresPool)
     await seed()
+    originalOptions=(await pool.query('SELECT to_jsonb(option) fact FROM mbox.recommendation_options option WHERE tenant_id=$1 ORDER BY id',[tenantId])).rows
+    await pool.query('INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id) VALUES($1,$2,$3,$4)',[tenantId,storeId,employeeId,roleId])
+    await pool.query("INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code='recommendation.staff.modify' ON CONFLICT DO NOTHING",[tenantId,storeId,roleId])
+    const service=new RecommendationStaffModificationService(runner,new NormalizedCommandExecutor(runner))
+    app=Fastify()
+    await app.register(recommendationStaffModificationApiPlugin,{service,resolveStaffContext:()=>({scope:{tenantId,storeId},employeeId,businessDate:new Date().toISOString().slice(0,10)})})
   },30_000)
-  afterAll(async()=>{ await pool?.end() })
+  afterAll(async()=>{ await app?.close();await runtimePool?.end();await pool?.end() })
 
   it('records one strongly linked modification and rejects an idempotency-key replay outside the command journal',async()=>{
     const view=await run((repository)=>repository.latestForTable(tableSessionId,employeeId,false))
@@ -68,12 +84,50 @@ integration('recommendation staff modification PostgreSQL authority',()=>{
     expect(other).toBe(0)
   })
 
+  const modify=(key:string,body:Record<string,unknown>={sourceProductId,targetProductId,reasonCode:'customer_request'})=>app.inject({method:'POST',url:`/staff/customer-experience/recommendations/${recommendationPublicId}/modifications`,headers:{'idempotency-key':key},payload:body})
+  it('concurrent same-key HTTP requests append one event/audit and reject changed candidates under the original key',async()=>{
+    const key=randomUUID(),barrier=await pool.connect();let requests:Array<ReturnType<typeof modify>>=[]
+    try{
+      await barrier.query('BEGIN');await barrier.query('SELECT id FROM mbox.table_sessions WHERE id=$1 FOR UPDATE',[tableSessionId])
+      requests=[modify(key),modify(key)]
+      let waiters=0;for(let attempt=0;attempt<80;attempt++){waiters=Number((await pool.query("SELECT count(*) n FROM pg_stat_activity WHERE datname=current_database() AND application_name='staff-modification-low-login' AND wait_event_type='Lock'")).rows[0].n);if(waiters>=2)break;await new Promise(resolve=>setTimeout(resolve,20))}
+      expect(waiters).toBeGreaterThanOrEqual(2)
+      await barrier.query('COMMIT')
+      const responses=await Promise.all(requests);expect(responses.map(response=>response.statusCode).sort()).toEqual([200,201])
+      expect(responses[0]!.json().data).toEqual(responses[1]!.json().data)
+      expect((await modify(key,{sourceProductId,targetProductId:sourceProductId,reasonCode:'customer_request'})).statusCode).toBe(409)
+      const counts=(await pool.query(`SELECT
+        (SELECT count(*)::int FROM mbox.recommendation_behavior_events WHERE tenant_id=$1 AND staff_modification_idempotency_key=$2) events,
+        (SELECT count(*)::int FROM mbox.audit_events WHERE tenant_id=$1 AND action='customer.experience.recommendation.staff_modified') audits`,[tenantId,key])).rows[0]
+      expect(counts).toEqual({events:1,audits:1})
+      console.info(JSON.stringify({evidence:'staff-modification-same-key-lock-wait',lowLoginLockWaiters:waiters}))
+    }finally{await barrier.query('ROLLBACK');barrier.release();await Promise.allSettled(requests)}
+  })
+  it('requires current modification permission before replaying an already successful HTTP request',async()=>{
+    const key=randomUUID(),first=await modify(key);expect(first.statusCode,first.body).toBe(201)
+    await pool.query(`INSERT INTO mbox.employee_permission_overrides(tenant_id,store_id,employee_id,permission_id,effect,reason,configured_by_employee_id)
+      SELECT $1,$2,$3,id,'deny','test current modification withdrawal',$3 FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code='recommendation.staff.modify'`,[tenantId,storeId,employeeId])
+    try{const replay=await modify(key);expect(replay.statusCode,replay.body).toBe(403)}finally{await pool.query('DELETE FROM mbox.employee_permission_overrides WHERE tenant_id=$1 AND store_id=$2 AND employee_id=$3',[tenantId,storeId,employeeId])}
+    expect((await modify(key)).json().meta.replayed).toBe(true)
+  })
+  it('rejects a missing candidate and another store without appending behavior or changing original options',async()=>{
+    const behaviorCount=async()=>Number((await pool.query('SELECT count(*) n FROM mbox.recommendation_behavior_events WHERE tenant_id=$1',[tenantId])).rows[0].n)
+    const beforeCount=await behaviorCount()
+    for(const target of [randomUUID(),wrongCandidateProductId]){
+      const invalid=await modify(randomUUID(),{sourceProductId,targetProductId:target,reasonCode:'staff_judgement'})
+      expect(invalid.statusCode,invalid.body).toBe(409)
+    }
+    await expect(runner.run({tenantId,storeId:otherStoreId},tx=>new RecommendationStaffModificationRepository(tx).record({recommendationPublicId,sourceProductId,targetProductId,reasonCode:'customer_request',employeeId,allowAllTables:true,idempotencyKey:randomUUID(),requestSha256:'c'.repeat(64)}))).rejects.toMatchObject({code:'RECOMMENDATION_STAFF_MODIFICATION_INVALID'})
+    for(const sql of ["UPDATE mbox.recommendation_options SET amount_minor=amount_minor+1 WHERE tenant_id=$1",'DELETE FROM mbox.recommendation_options WHERE tenant_id=$1'])await expect(runner.run({tenantId,storeId},tx=>tx.query(sql,[tenantId]))).rejects.toMatchObject({code:'42501'})
+    expect((await pool.query('SELECT to_jsonb(option) fact FROM mbox.recommendation_options option WHERE tenant_id=$1 ORDER BY id',[tenantId])).rows).toEqual(originalOptions)
+    expect(await behaviorCount()).toBe(beforeCount)
+  })
+
   async function run<Result>(operation:(repository:RecommendationStaffModificationRepository)=>Promise<Result>) {
     return runner.run({ tenantId,storeId },(transaction)=>operation(new RecommendationStaffModificationRepository(transaction)))
   }
   async function runtimeCount(scopedStoreId:string) {
     return runner.run({ tenantId,storeId:scopedStoreId },async(transaction)=>{
-      await transaction.query('SET LOCAL ROLE mbox_runtime')
       const result=await transaction.query<{count:string}>('SELECT count(*)::text AS count FROM mbox.recommendation_behavior_events WHERE event_type=\'staff_modified\'')
       return Number(result.rows[0]?.count??-1)
     },{ readOnly:true })
@@ -120,5 +174,10 @@ integration('recommendation staff modification PostgreSQL authority',()=>{
       ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,1,'comfortable',6800,1000,'CNY',100,'原推荐'),
       ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$6::uuid,2,'enhanced',8800,1200,'CNY',90,'调整推荐')`,
     [tenantId,storeId,recommendationId,policyId,sourceProductId,targetProductId])
+    await pool.query("INSERT INTO mbox.products(id,tenant_id,store_id,code,name,category_code,fulfillment_station,product_kind) VALUES($1,$2,$3,'OTHER_CANDIDATE','另一真实推荐候选','test','none','bundle')",[wrongCandidateProductId,tenantId,storeId])
+    await pool.query(`INSERT INTO mbox.recommendation_sessions(id,tenant_id,store_id,public_id,customer_id,table_session_id,business_date,source,party_size,occasion,alcohol_preference,experience_level,service_intensity,created_at)
+      VALUES($1,$2,$3,$4,$5,$6,current_date,'guest_table',2,'friends','mixed','enhanced','balanced',clock_timestamp()-interval '1 minute')`,[wrongRecommendationId,tenantId,storeId,`other-${wrongRecommendationId}`,customerId,tableSessionId])
+    await pool.query(`INSERT INTO mbox.recommendation_options(tenant_id,store_id,recommendation_session_id,policy_version_id,product_id,rank,tier,amount_minor,cost_amount_minor,currency,total_score,explanation)
+      VALUES($1,$2,$3,$4,$5,1,'enhanced',9900,1000,'CNY',80,'不同推荐的真实候选')`,[tenantId,storeId,wrongRecommendationId,policyId,wrongCandidateProductId])
   }
 })

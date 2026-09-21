@@ -16,7 +16,7 @@ export function DeliveryBatchComposer({items,onSubmit,onChanged}:{items:StaffFul
  if(!available.length)return null
  return <details><summary>合并本批配送单</summary><p>只选同一桌次、同一工作站；填2即本批送2，剩余数量可留到下一批。本批备齐不代表送达；分批配送时，必须等该项所有数量都送到后再点“全部已送达”。打印失败不妨碍现场配送。</p>
   {available.map(item=><label key={item.taskId} style={{display:'flex',gap:8,alignItems:'center',marginBlock:8}}>
-    <span style={{flex:1,minWidth:0}}>{item.table.code} · {item.stationCode==='kitchen'?'后厨':'吧台'} · {item.item.productName}{item.item.note?`（${item.item.note}）`:''} · 未合单 {item.deliveryUnbatchedQuantity}</span>
+    <span style={{flex:1,minWidth:0}}>{item.table.code} · {item.stationCode==='kitchen'?'后厨':'吧台'} · {item.item.productName} · 未合单 {item.deliveryUnbatchedQuantity}{item.item.note&&<span className="staff-action-note">备注：{item.item.note}</span>}</span>
     <input aria-label={`${item.item.productName}本批数量`} type="number" min={0} max={item.deliveryUnbatchedQuantity} step={1} disabled={busy} value={quantities[item.taskId]??0} style={{width:72}} onChange={event=>setQuantities(current=>({...current,[item.taskId]:Number(event.target.value)}))}/>
   </label>)}
   <button type="button" disabled={busy} onClick={()=>void submit()}>{busy?'正在确认本批…':'确认本批备齐并生成配送单'}</button>{notice&&<p role="status">{notice}</p>}

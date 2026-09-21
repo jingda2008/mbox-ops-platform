@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "version": "1.0.0-rc.217",
+  "explanation": "PKC-010、AR79-003、AR79-008沿用已确认的首次维护升级规则：失败保持停写和维护，保留持久事实并向前修复；不启动不兼容旧镜像。通用回退门禁的历史通过保留在原基线，本版维护路径仍为未执行。",
+  "cases": [
+    {
+      "id": "PKC-010",
+      "reviewedDefinitionSha256": "5adcc1916d58e8ced2172e56f5a7d4ad1d7a8206947a525cfab9ef4598d91e81",
+      "expected": "在隔离环境恢复最近备份、验证关键对象与审计；本版首次维护升级失败保持停写并向前修复，不回滚已发生资金和经营事实或启动不兼容旧版本"
+    },
+    {
+      "id": "AR79-003",
+      "reviewedDefinitionSha256": "74c6dd23c80ffafb5ddc72c8854f7790832b9f0fdab19b85bfc1a9c8d5799594",
+      "expected": "切流前停止发布；本版首次维护升级失败保持维护、封锁旧写入者并按持久记录向前修复，不启动不兼容旧镜像；只有另获兼容性验证的常规发布才适用旧回退门禁",
+      "status": "未执行",
+      "engineeringCoverage": "通用门禁历史通过；本版首次维护待复验",
+      "evidence": "见 docs/runtime-database-isolation-20260921.md 和 docs/recent-consolidation-20260921.md；原通用门禁历史见 docs/tc-release-route-gate-1.0.0-rc.79.md"
+    },
+    {
+      "id": "AR79-008",
+      "reviewedDefinitionSha256": "1ace987189f5f00b68f0dd65292245f4933ac34982ad2aba2d8f94edf022e3c2",
+      "expected": "INT返回130、TERM返回143；本版首次维护升级中断须保留维护、已验证身份及恢复记录，后续向前修复，不复活旧特权版本，不得报告假成功",
+      "status": "未执行",
+      "engineeringCoverage": "通用门禁历史通过；本版首次维护待复验",
+      "evidence": "见 docs/runtime-database-isolation-20260921.md 和 docs/recent-consolidation-20260921.md；原通用门禁历史见 docs/tc-release-route-gate-1.0.0-rc.79.md"
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+import { StaffAccessVersionConflictError } from './staff-access-version.js'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type { StaffPermissionDeploymentChange } from '../../src/shared/normalized-contracts.js'
 import { IdempotencyConflictError, IdempotencyInProgressError } from './command-executor.js'
@@ -65,14 +66,17 @@ export const staffAccessManagementApiPlugin: FastifyPluginAsync<{
     const changes = changeArray(body.changes)
     const reason = text(body.reason, '发布原因', 200, 2)
     const idempotencyKey = idempotency(request)
+    const expectedVersion = text(body.expectedVersion, '配置版本', 64, 64)
+    if (!/^[0-9a-f]{64}$/.test(expectedVersion)) throw new RequestError('请重新读取权限配置后发布')
     const data = await options.service.deployPermissions({
       scope: context.scope,
       actorEmployeeId: context.employeeId,
       businessDate: context.businessDate,
       idempotencyKey,
-      requestFingerprint: JSON.stringify({ actorEmployeeId: context.employeeId, reason, changes }),
+      requestFingerprint: JSON.stringify({ actorEmployeeId: context.employeeId, reason, changes, expectedVersion }),
       reason,
       changes,
+      expectedVersion,
     })
     return reply.send({ data, meta: { generatedAt: data.verifiedAt } })
   }))
@@ -86,6 +90,9 @@ async function handle(reply: FastifyReply, operation: () => Promise<FastifyReply
     if (error instanceof StaffAccessDeniedError || error instanceof StaffNotFoundError) {
       return reply.code(403).send({ error: { code: 'STAFF_ACCESS_FORBIDDEN', message: '当前账号没有权限管理授权配置', retryable: false } })
     }
+    if (error instanceof StaffAccessVersionConflictError) {
+      return reply.code(409).send({ error: { code: 'STAFF_ACCESS_VERSION_CONFLICT', message: error.message, retryable: false } })
+    }
     if (error instanceof IdempotencyConflictError || error instanceof IdempotencyInProgressError) {
       return reply.code(409).send({ error: { code: 'PERMISSION_DEPLOYMENT_CONFLICT', message: '这次发布正在处理或与另一项修改冲突，请刷新确认', retryable: true } })
     }
@@ -93,7 +100,7 @@ async function handle(reply: FastifyReply, operation: () => Promise<FastifyReply
       return reply.code(400).send({ error: { code: 'PERMISSION_DEPLOYMENT_INVALID', message: error.message, retryable: false } })
     }
     requestLog(reply, error)
-    return reply.code(500).send({ error: { code: 'PERMISSION_DEPLOYMENT_FAILED', message: '权限没有发布成功，原配置保持不变，请重试', retryable: true } })
+    return reply.code(500).send({ error: { code: 'PERMISSION_DEPLOYMENT_FAILED', message: '权限发布结果尚未确认，请保留原操作并恢复结果', retryable: true } })
   }
 }
 

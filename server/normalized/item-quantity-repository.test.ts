@@ -266,6 +266,20 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
   async function remake<T>(operation:(repository:QuantityRemakeRepository,tx:import('./transaction-runner.js').ScopedTransaction)=>Promise<T>){
     return runner.run(scope,async tx=>{await tx.query('SET LOCAL ROLE mbox_runtime');return operation(new QuantityRemakeRepository(tx),tx)})
   }
+  async function remakeNotice(batchId:string){
+    const aggregateId=randomUUID()
+    const sourceId=await runner.run(scope,tx=>appendOutboxMessage(tx,{aggregateType:'item_after_sales_notice',aggregateId,aggregateVersion:1,eventType:'item.after_sales.production_notice.v1',payload:{
+      remakeBatchId:batchId,stationCode:'bar',categoryCode:null,ticket:{schemaVersion:1,kind:'production_notice',title:'重做通知',subtitle:'仅制作本批数量',test:false,
+        issuedAt:new Date().toISOString(),businessDate,ticketReference:batchId,tableCode:'original snapshot',guestCount:1,operatorLabel:'Quantity fixture',
+        lines:[{name:'重做：水',quantity:1,unitAmountMinor:null,totalAmountMinor:null,note:null}],payment:null,totalAmountMinor:null,currency:'CNY',note:'核对实际剩余商品份数'}}}))
+    const materialize=()=>remake(async(_repo,tx)=>{const printer=new PrintTicketSourceRepository(tx);const jobs=await printer.materializeProductionNotice(sourceId,aggregateId);return {jobs,skipReason:printer.skipReason}})
+    return {sourceId,materialize}
+  }
+  async function expectRemakeNoticeSkipped(batchId:string){
+    const notice=await remakeNotice(batchId)
+    expect(await notice.materialize()).toEqual({jobs:[],skipReason:'print_remake_no_remaining_quantity'})
+    expect((await pool.query('SELECT count(*)::int n FROM mbox.print_jobs WHERE source_outbox_message_id=$1',[notice.sourceId])).rows[0].n).toBe(0)
+  }
   it('reserves a separate remake batch, consumes only actual new portions and releases unmade remainder without refunding old loss',async()=>{
     await grantActor(employeeId,['kds.exception.manage'])
     const row=await deliveredOriginal()
@@ -441,6 +455,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     expect((await pool.query('SELECT status FROM mbox.quantity_remake_stocks WHERE remake_unit_id=$1',[part.id])).rows[0].status).toBe(made?'returned':'released')
     expect((await pool.query('SELECT status FROM mbox.kds_tasks WHERE id=$1',[batch.taskId])).rows[0].status).toBe('cancelled')
     expect((await pool.query('SELECT operationally_stopped,production_state FROM mbox.order_item_quantity_units WHERE id=$1',[part.unit_id])).rows[0]).toMatchObject({operationally_stopped:true,production_state:'delivered'})
+    await expectRemakeNoticeSkipped(batch.id)
     expect((await pool.query("SELECT count(*)::int n FROM mbox.inventory_movements WHERE inventory_item_id=$1 AND movement_type='return'",[row.stockId])).rows[0].n).toBe(made?1:0)
   })
   it('recovers the exact remake KDS batch and delivery slip without changing the original delivered item',async()=>{
@@ -494,6 +509,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     }
     const key=randomUUID(),close=()=>kind==='order_cancel'?new PostgresOrderCancellationRepository(runtimeTransactions).cancel({scope,employeeId,orderId:row.orderId,businessDate:businessDate,reasonCode:'guest_left',reasonNote:'客人离店，保留实际新批实物记录',idempotencyKey:key}):runtimeTransactions.run(scope,tx=>kind==='customer_left'?new PostgresTableCustomerLeftTurnoverRepository(tx).close({scope,employeeId,tableSessionId:source.id,businessDate:businessDate,reasonNote:'客人离店，保留实际新批实物记录',idempotencyKey:key}):new PostgresAutomaticTableTurnoverRepository(tx).close({scope,tableSessionId:source.id,businessDate:businessDate,reasonNote:'营业结束，原批及新批实物交接',idempotencyKey:key}))
     const first=await close();expect(await close()).toMatchObject({eventId:first.eventId,replayed:true})
+    await expectRemakeNoticeSkipped(batch.id)
     if(kind!=='order_cancel')expect(first).toMatchObject({deliveredUnpaidAmountMinor:800})
     expect(await balance(stockId)).toEqual({on_hand:'3.000000',reserved:'0.000000'})
     const current=await remake(repo=>repo.read(batch.id))
@@ -1995,6 +2011,20 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     expect((await new QuantityRemakeCommandService(executor,false).create({...input,businessDate:nextBusinessDate})).value).toEqual(first.value)
     await expect(new QuantityRemakeCommandService(executor,false).create({...input,idempotencyKey:randomUUID()})).rejects.toThrow('暂不新增')
     expect((await pool.query('SELECT count(*)::int n FROM mbox.quantity_remake_batches WHERE order_item_id=$1',[row.itemId])).rows[0].n).toBe(1)
+  })
+
+  it('prints only remaining remake shares, suppresses held or released notices, and replays the original print once',async()=>{
+    await grantActor(employeeId,['kds.exception.manage'])
+    const row=await deliveredOriginal(),batch=await remake(repo=>repo.create({itemId:row.itemId,employeeId,quantity:1,originalGoodsLost:true,reason:'仅重新准备实际一瓶',eventKey:randomUUID()}))
+    const held=await hold(row.itemId,5)
+    await expectRemakeNoticeSkipped(batch.id)
+    await runner.run(scope,async tx=>{const repo=new ItemQuantityRepository(tx);await repo.decide({caseId:held.caseId,employeeId,decision:'withdrawn',reason:'继续原商品实际制作'});await repo.resume({caseId:held.caseId,employeeId})})
+    const notice=await remakeNotice(batch.id),first=await notice.materialize(),replayed=await notice.materialize()
+    expect(first.jobs).toHaveLength(1);expect(replayed.jobs.map(job=>job.id)).toEqual(first.jobs.map(job=>job.id))
+    const printed=(await pool.query('SELECT print_snapshot FROM mbox.print_jobs WHERE source_outbox_message_id=$1',[notice.sourceId])).rows
+    expect(printed).toHaveLength(1);expect(printed[0].print_snapshot).toMatchObject({tableCode:'Q01',guestCount:2,lines:[{quantity:1}]})
+    await remake(repo=>repo.releaseUnmade({batchId:batch.id,unitIds:batch.units.map(unit=>unit.id),reason:'余下未制作商品不再需要'}))
+    await expectRemakeNoticeSkipped(batch.id)
   })
 
   it('same after-sales command records separate physical batches without second approval or duplicate stock',async()=>{

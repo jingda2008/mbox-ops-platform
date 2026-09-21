@@ -20,6 +20,106 @@ connection_reference() {
   fi
 }
 
+verify_restore_owner_authority() {
+  local connection=$1 owner=$2 membership
+  membership=$(psql -XAt --set=ON_ERROR_STOP=1 --dbname="${connection}" \
+    --set=database_owner="${owner}" <<'SQL'
+SELECT pg_has_role(current_user, :'database_owner', 'MEMBER');
+SQL
+) || return 1
+  if [ "${membership}" = t ]; then
+    printf '%s\n' membership
+    return 0
+  fi
+  # Some managed providers implement owner restoration without granting
+  # membership in the original account. Prove the exact DDL capability in a
+  # rolled-back random namespace; a role flag or provider name alone is not proof.
+  psql -Xq --set=ON_ERROR_STOP=1 --dbname="${connection}" \
+    --set=database_owner="${owner}" >/dev/null <<'SQL' || return 1
+BEGIN;
+SET LOCAL lock_timeout='5s';
+SET LOCAL statement_timeout='15s';
+SELECT set_config('mbox.restore_probe_owner', :'database_owner', true);
+DO $restore_owner_probe$
+DECLARE
+  requested_owner text := current_setting('mbox.restore_probe_owner');
+  owner_oid oid;
+  probe_schema text := 'mbox_restore_owner_probe_' || pg_backend_pid() || '_' ||
+    substr(md5(clock_timestamp()::text || random()::text),1,12);
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_roles role JOIN pg_roles provider_role
+      ON provider_role.rolname='pg_rds_superuser'
+    WHERE role.rolname=current_user AND role.rolcreatedb AND role.rolcreaterole
+      AND role.rolbypassrls AND pg_has_role(role.oid,provider_role.oid,'member')
+  ) THEN
+    RAISE EXCEPTION 'owner membership absent and verified provider capability unavailable'
+      USING ERRCODE='42501';
+  END IF;
+  SELECT oid INTO STRICT owner_oid FROM pg_roles WHERE rolname=requested_owner;
+  EXECUTE format('CREATE SCHEMA %I AUTHORIZATION %I',probe_schema,requested_owner);
+  EXECUTE format('CREATE TABLE %I.owner_capability_probe (id integer)',probe_schema);
+  EXECUTE format('ALTER TABLE %I.owner_capability_probe OWNER TO %I',probe_schema,requested_owner);
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_namespace namespace JOIN pg_class relation
+      ON relation.relnamespace=namespace.oid
+    WHERE namespace.nspname=probe_schema AND namespace.nspowner=owner_oid
+      AND relation.relname='owner_capability_probe' AND relation.relowner=owner_oid
+  ) THEN
+    RAISE EXCEPTION 'provider owner restoration proof did not preserve exact owners';
+  END IF;
+END
+$restore_owner_probe$;
+ROLLBACK;
+SQL
+  printf '%s\n' provider_transaction_probe
+}
+
+prepare_restore_extensions() {
+  local connection=$1 evidence=$2 row extension_name extension_schema extension_version extension_owner state
+  # pg_dump does not emit ALTER EXTENSION OWNER. A separate administrator must
+  # create each missing extension as its original owner before restoring the
+  # archive; exact source version/schema/owner remain part of the final compare.
+  jq -e '.extensions | type == "array" and length > 0 and all(.[];
+    (.name|type)=="string" and (.schema|type)=="string" and
+    (.version|type)=="string" and (.owner|type)=="string")' "${evidence}" >/dev/null || return 1
+  while IFS= read -r row; do
+    extension_name=$(printf '%s' "${row}" | base64 --decode | jq -er '.name') || return 1
+    extension_schema=$(printf '%s' "${row}" | base64 --decode | jq -er '.schema') || return 1
+    extension_version=$(printf '%s' "${row}" | base64 --decode | jq -er '.version') || return 1
+    extension_owner=$(printf '%s' "${row}" | base64 --decode | jq -er '.owner') || return 1
+    state=$(psql -XAt --set=ON_ERROR_STOP=1 --dbname="${connection}" \
+      --set=extension_name="${extension_name}" --set=extension_schema="${extension_schema}" \
+      --set=extension_version="${extension_version}" --set=extension_owner="${extension_owner}" <<'SQL'
+SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname=:'extension_name')
+  THEN CASE WHEN EXISTS (SELECT 1 FROM pg_namespace WHERE nspname=:'extension_schema')
+    THEN 'absent' ELSE 'schema-missing' END
+  WHEN EXISTS (SELECT 1 FROM pg_extension extension JOIN pg_namespace namespace
+    ON namespace.oid=extension.extnamespace
+    WHERE extension.extname=:'extension_name' AND namespace.nspname=:'extension_schema'
+      AND extension.extversion=:'extension_version'
+      AND pg_get_userbyid(extension.extowner)=:'extension_owner') THEN 'exact'
+  ELSE 'mismatch' END;
+SQL
+) || return 1
+    case "${state}" in
+      exact) ;;
+      absent)
+        # This runs on the real maintenance LOGIN connection. A probe started
+        # by the original owner and SET ROLE'd to another role is not evidence.
+        psql -X --set=ON_ERROR_STOP=1 --dbname="${connection}" \
+          --set=extension_name="${extension_name}" --set=extension_schema="${extension_schema}" \
+          --set=extension_version="${extension_version}" --set=extension_owner="${extension_owner}" >/dev/null <<'SQL' || return 1
+SET ROLE :"extension_owner";
+CREATE EXTENSION :"extension_name" WITH SCHEMA :"extension_schema" VERSION :'extension_version';
+RESET ROLE;
+SQL
+        ;;
+      *) echo 'extension owner/version/schema cannot be restored exactly' >&2; return 1 ;;
+    esac
+  done < <(jq -r '.extensions[] | @base64' "${evidence}")
+}
+
 write_database_evidence() {
   local source_url=$1 output=$2 temporary
   temporary=$(mktemp "${output}.XXXXXX")
@@ -90,6 +190,10 @@ WITH object_owners AS (
 )
 SELECT jsonb_build_object(
   'clusterSystemIdentifier',(SELECT system_identifier::text FROM pg_control_system()),
+  'extensions',(SELECT jsonb_agg(jsonb_build_object('name',extension.extname,
+    'schema',namespace.nspname,'version',extension.extversion,
+    'owner',pg_get_userbyid(extension.extowner)) ORDER BY extension.extname)
+    FROM pg_extension extension JOIN pg_namespace namespace ON namespace.oid=extension.extnamespace),
   'database',(SELECT jsonb_build_object('name',current_database(),
     'owner',pg_get_userbyid(database.datdba),'encoding',pg_encoding_to_char(database.encoding),
     'collate',database.datcollate,'ctype',database.datctype,'connectionLimit',database.datconnlimit,
@@ -198,13 +302,23 @@ SQL
   exit 0
 fi
 
-test "${mode}" = restore
+case "${mode}" in restore|verify) ;; *) exit 1 ;; esac
 : "${MBOX_EXPECTED_RESTORE_DATABASE:?MBOX_EXPECTED_RESTORE_DATABASE is required}"
 : "${MBOX_EXPECTED_RESTORE_SCHEMA_VERSION:?MBOX_EXPECTED_RESTORE_SCHEMA_VERSION is required}"
 : "${MBOX_EXPECTED_RESTORE_MANIFEST:?MBOX_EXPECTED_RESTORE_MANIFEST is required}"
 : "${MBOX_EXPECTED_RESTORE_EVIDENCE:?MBOX_EXPECTED_RESTORE_EVIDENCE is required}"
 : "${MBOX_RESTORE_REPORT:?MBOX_RESTORE_REPORT is required}"
-test "${MBOX_CONFIRM_RESTORE:-}" = RESTORE
+if [ "${mode}" = restore ]; then
+  test "${MBOX_CONFIRM_RESTORE:-}" = RESTORE
+  # Maintenance upgrades use forward recovery. Do not let this lower-level
+  # restore tool erase facts behind a persistent maintenance journal.
+  if find "${MBOX_INSTALL_ROOT:-/opt/mbox}/maintenance" -name journal.jsonl -type f -print 2>/dev/null | grep -q .; then
+    echo "maintenance journal exists: database replacement requires separate audited recovery; automatic restore forbidden" >&2
+    exit 1
+  fi
+else
+  test "${MBOX_CONFIRM_RESTORE:-}" = VERIFY
+fi
 : "${DATABASE_SERVICE:?DATABASE_SERVICE is required}"
 : "${ADMIN_DATABASE_SERVICE:?ADMIN_DATABASE_SERVICE is required}"
 database_connection=$(connection_reference "${DATABASE_SERVICE}")
@@ -244,8 +358,6 @@ SELECT CASE WHEN role.rolsuper OR (
 FROM pg_roles AS role WHERE role.rolname=current_user;
 SQL
 )" = authorized
-test "$(psql -XAt --dbname="${admin_connection}" --command='SELECT current_user')" = \
-  "$(jq -er '.database.owner' "${MBOX_EXPECTED_RESTORE_EVIDENCE}")"
 admin_cluster_identity=$(psql -XAt --dbname="${admin_connection}" <<'SQL'
 SELECT COALESCE(inet_server_addr()::text,'local') || '|' || current_setting('port') || '|' ||
   pg_postmaster_start_time()::text || '|' || current_setting('server_version_num');
@@ -255,6 +367,9 @@ test "${admin_cluster_identity}" = "${target_cluster_identity}"
 test "$(psql -XAt --dbname="${admin_connection}" \
   --command='SELECT system_identifier::text FROM pg_control_system()')" = \
   "$(jq -er '.clusterSystemIdentifier' "${MBOX_EXPECTED_RESTORE_EVIDENCE}")"
+
+owner_authorization=$(verify_restore_owner_authority "${admin_connection}" \
+  "$(jq -er '.database.owner' "${MBOX_EXPECTED_RESTORE_EVIDENCE}")")
 
 token=$(sha256sum "${backup}" | awk '{print substr($1,1,10)}')_$$
 staging_database=mbox_restore_${token}
@@ -370,6 +485,7 @@ CREATE DATABASE :"staging_database" WITH OWNER=:"database_owner" TEMPLATE=templa
   CONNECTION LIMIT :database_connection_limit;
 SQL
 staging_created=1
+prepare_restore_extensions "${staging_connection}" "${MBOX_EXPECTED_RESTORE_EVIDENCE}"
 pg_restore --dbname="${staging_connection}" --exit-on-error --single-transaction "${backup}"
 psql -X --set=ON_ERROR_STOP=1 --dbname="${admin_connection}" \
   --set=staging_database="${staging_database}" --set=database_owner="${database_owner}" \
@@ -426,9 +542,27 @@ if ! test "$(jq -cS 'del(.database.name)' "${staging_evidence}")" = \
     <(jq -S 'del(.database.name)' "${MBOX_EXPECTED_RESTORE_EVIDENCE}") >&2 || true
   false
 fi
-test "$(psql -XAt --dbname="${staging_connection}" \
-  --command="SELECT to_regclass('mbox.table_customer_movement_events') IS NULL")" = t
+if [ "$((10#${MBOX_EXPECTED_RESTORE_SCHEMA_VERSION}))" -lt 96 ]; then
+  test "$(psql -XAt --dbname="${staging_connection}" \
+    --command="SELECT to_regclass('mbox.table_customer_movement_events') IS NULL")" = t
+fi
 rm -f "${staging_evidence}"
+if [ "${mode}" = verify ]; then
+  psql -X --set=ON_ERROR_STOP=1 --dbname="${admin_connection}" \
+    --set=staging_database="${staging_database}" >/dev/null <<'SQL'
+DROP DATABASE :"staging_database";
+SQL
+  jq -n --arg database "${MBOX_EXPECTED_RESTORE_DATABASE}" \
+    --arg ownerAuthorization "${owner_authorization}" \
+    --arg schema "${MBOX_EXPECTED_RESTORE_SCHEMA_VERSION}" \
+    --arg backupSha256 "$(sha256sum "${backup}" | awk '{print $1}')" \
+    --arg evidenceSha256 "$(sha256sum "${MBOX_EXPECTED_RESTORE_EVIDENCE}" | awk '{print $1}')" \
+    '{status:"restore-verified",ownerAuthorization:$ownerAuthorization,database:$database,schema:$schema,backupSha256:$backupSha256,
+      evidenceSha256:$evidenceSha256,sourceDatabaseReplaced:false,stagingDatabaseDeleted:true}' > "${MBOX_RESTORE_REPORT}"
+  chmod 0600 "${MBOX_RESTORE_REPORT}"
+  trap - ERR INT TERM
+  exit 0
+fi
 
 psql -X --set=ON_ERROR_STOP=1 --dbname="${admin_connection}" \
   --set=target_database="${MBOX_EXPECTED_RESTORE_DATABASE}" \

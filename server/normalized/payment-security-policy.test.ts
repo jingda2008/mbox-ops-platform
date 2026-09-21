@@ -124,6 +124,19 @@ describe('NormalizedPaymentCapabilityAuthorization', () => {
     expect(first).not.toContain('provider-transaction-001')
   })
 
+  it('keeps scalar external manual receipt evidence while rejecting credentials and nested metadata', () => {
+    expect(sanitizeProviderSnapshot({
+      externalMethodCode: 'bank_transfer', collectionNote: '核对银行回单',
+      receiptReference: 'BANK-20260921-001', collectedByEmployeeId: employeeId,
+      signature: 'secret', token: 'secret', payer: { name: 'private' },
+    })).toEqual({
+      externalMethodCode: 'bank_transfer', collectionNote: '核对银行回单',
+      receiptReference: 'BANK-20260921-001', collectedByEmployeeId: employeeId,
+    })
+    expect(sanitizeProviderSnapshot({ externalMethodCode: { raw: 'untrusted' }, collectionNote: ['nested'] })).toEqual({})
+    expect(sanitizeClientPaymentHints({ externalMethodCode: 'bank_transfer', collectionNote: 'untrusted' })).toEqual({})
+  })
+
   it('never promotes client payment hints into trusted provider evidence', () => {
     expect(sanitizeClientPaymentHints({
       channel: 'QR',

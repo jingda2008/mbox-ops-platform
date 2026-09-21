@@ -690,9 +690,13 @@ test('mobile administrator publishes a permission and sees server-verified feedb
   await page.getByLabel('发布原因').fill('浏览器验收岗位职责调整')
   await page.getByRole('button', { name: '发布1项修改' }).click()
 
-  const feedback = page.getByRole('status').filter({ hasText: '配置已发布并复核生效' })
+  const feedback = page.getByRole('status').filter({ hasText: '配置已发布并复核' })
   await expect(feedback).toBeVisible()
-  await expect(feedback).toContainText('服务端已重新读取数据库')
+  await expect(feedback).toContainText('下方展示当前权限')
+  const publishedPermissions = await page.request.get('/api/staff-access/overview')
+  expect(publishedPermissions.ok()).toBe(true)
+  const publishedOverview = (await publishedPermissions.json()).data
+  expect(publishedOverview.roles.find((role: { code: string; permissionCodes: string[] }) => role.code === 'ADMIN')?.permissionCodes).toContain('order.discount')
   await expect.poll(() => feedback.evaluate((element) => {
     const rect = element.getBoundingClientRect()
     return rect.top >= 0 && rect.bottom <= window.innerHeight
@@ -703,13 +707,13 @@ test('mobile administrator publishes a permission and sees server-verified feedb
   await page.getByLabel('订单折扣启用').check()
   await page.getByLabel('订单折扣单次上限').fill('1000')
   await page.getByRole('button', { name: '发布1项修改' }).click()
-  await expect(page.getByRole('status').filter({ hasText: '1项配置已发布并复核生效' })).toBeVisible()
+  await expect(page.getByRole('status').filter({ hasText: '1项配置已发布并复核' })).toBeVisible()
 
   await page.getByRole('button', { name: /入口与设备/ }).click()
   await page.getByLabel('选择岗位').selectOption({ label: '系统管理员（1人）' })
   await page.getByLabel('设备高频入口').check()
   await page.getByRole('button', { name: '发布1项修改' }).click()
-  await expect(page.getByRole('status').filter({ hasText: '1项配置已发布并复核生效' })).toBeVisible()
+  await expect(page.getByRole('status').filter({ hasText: '1项配置已发布并复核' })).toBeVisible()
   await expectNoHorizontalOverflow(page)
   await page.screenshot({ path: 'artifacts/normalized-browser/staff-access-admin-mobile.png', fullPage: true })
 })

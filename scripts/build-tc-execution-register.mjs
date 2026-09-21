@@ -135,6 +135,54 @@ for (const testCase of currentCriticalCases) {
   if (reviewed.digest !== reviewedDefinitionDigest(testCase)) throw new Error(`Required reviewed TC ${testCase.id} definition changed`)
 }
 
+// A release-specific acceptance plan must not rewrite the independently reviewed
+// historical baseline. Validate that baseline above, then bind each override to
+// its original definition. Versions without a profile keep the original output.
+const profileReference = `docs/quality/tc-execution-profiles/${versionSlug}.json`
+const profilePath = resolve(root, profileReference)
+const executionOverrides = new Map()
+let executionProfile = null
+if (existsSync(profilePath)) {
+  const profile = JSON.parse(readFileSync(profilePath, 'utf8'))
+  if (profile.schemaVersion !== 1 || profile.version !== version
+    || typeof profile.explanation !== 'string' || !profile.explanation.trim()
+    || !Array.isArray(profile.cases) || profile.cases.length === 0) {
+    throw new Error(`Invalid TC execution profile: ${profileReference}`)
+  }
+  for (const override of profile.cases) {
+    const operatingCase = testCases.find((testCase) => testCase.id === override?.id)
+    const routeCase = releaseRouteGateCases.find((testCase) => testCase.id === override?.id)
+    const allowedFields = new Set(['id', 'reviewedDefinitionSha256', 'expected',
+      ...(routeCase ? ['status', 'engineeringCoverage', 'evidence'] : [])])
+    if (!override || Object.keys(override).some((key) => !allowedFields.has(key))
+      || executionOverrides.has(override.id)) throw new Error('Invalid or duplicate TC execution profile override')
+    const original = operatingCase ?? routeCase
+    const reviewed = reviewedById.get(override.id)
+    if (!original || !reviewed || override.reviewedDefinitionSha256 !== reviewed.digest
+      || reviewedDefinitionDigest(original) !== override.reviewedDefinitionSha256) {
+      throw new Error(`TC execution profile is not bound to the reviewed definition: ${override.id}`)
+    }
+    if (typeof override.expected !== 'string' || !override.expected.trim()
+      || (override.status !== undefined && override.status !== '未执行')
+      || ['engineeringCoverage', 'evidence'].some((key) => override[key] !== undefined
+        && (typeof override[key] !== 'string' || !override[key].trim()))) {
+      throw new Error(`Invalid TC execution profile fields: ${override.id}`)
+    }
+    executionOverrides.set(override.id, override)
+  }
+  executionProfile = profile
+}
+
+function executionCase(testCase) {
+  const override = executionOverrides.get(testCase.id)
+  if (!override) return testCase
+  const result = { ...testCase, expected: override.expected }
+  for (const key of ['status', 'engineeringCoverage', 'evidence']) {
+    if (override[key] !== undefined) result[key] = override[key]
+  }
+  return result
+}
+
 function ids(prefix, ranges) {
   return ranges.flatMap(([start, end = start]) =>
     Array.from({ length: end - start + 1 }, (_, index) => `${prefix}-${String(start + index).padStart(3, '0')}`),
@@ -300,7 +348,7 @@ function pendingReason(testCase, result) {
   return '必须由对应真实岗位在门店设备和网络下执行，记录业务对象ID、审计事件和脱敏截图'
 }
 
-const rows = testCases.map((testCase) => {
+const rows = testCases.map(executionCase).map((testCase) => {
   const result = resultFor(testCase)
   const historicalResult = historicalResultFor(testCase)
   const domain = testCase.id.slice(0, 3)
@@ -328,7 +376,7 @@ const supplementalReleaseBlocking = qualitySupplementCases.filter((item) => (
   item.status !== '通过' && (item.priority === 'P0' || item.priority === 'P1')
 ))
 const normalizedReleaseBlocking = normalizedCoreCases.filter((item) => item.status !== '通过')
-const routeReleaseBlocking = releaseRouteGateCases.filter((item) => item.status !== '通过')
+const routeReleaseBlocking = releaseRouteGateCases.map(executionCase).filter((item) => item.status !== '通过')
 const p0p1Breakdown = releaseBlocking.reduce((summary, row) => {
   const key = `${row.priority}-${row.result}`
   summary[key] = (summary[key] ?? 0) + 1
@@ -368,8 +416,8 @@ const blockersCsv = csvDocument(
       row.scenario, row.expected, `见 ${normalizedCoreReference}`,
     ]),
     ...routeReleaseBlocking.map((row) => [
-      row.id, row.priority, row.status, '发布入口门禁', '发布负责人',
-      row.scenario, row.expected, `见 ${releaseRouteGateReference}`,
+      row.id, row.priority, row.status, row.engineeringCoverage ?? '发布入口门禁', '发布负责人',
+      row.scenario, row.expected, row.evidence ?? `见 ${releaseRouteGateReference}`,
     ]),
   ],
 )
@@ -387,7 +435,7 @@ const report = `# M-BOX 213条经营TC执行报告
 
 ## 结论
 
-本轮基线共 **213条**，没有删除或放宽原始预期。下表保留既有经营验收状态，但**不把历史通过自动等同于\`${version}\`当前候选已经重新执行**：
+本轮基线共 **213条**，没有删除或放宽原始预期。下表保留既有经营验收状态，但**不把历史通过自动等同于\`${version}\`当前候选已经重新执行**：${executionProfile ? `\n\n本版专项验收口径来自 [${profileReference}](quality/tc-execution-profiles/${versionSlug}.json)：${executionProfile.explanation} 原历史定义、必需TC编号、优先级和SHA256校验仍先于本版覆盖执行；覆盖不作为已执行或通过的证据。` : ''}
 
 另有 **${qualitySupplementCases.length}条** \`TME/CAP/RPF/DAT\` 增量专项TC；其失败、未通过、未执行、待执行或阻塞项同样阻止商业生产发布，状态以专项文件和不可变运行证据为准。
 

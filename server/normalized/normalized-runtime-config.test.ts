@@ -8,13 +8,28 @@ import { NORMALIZED_RUNTIME_CONFIG_VERSION } from './normalized-runtime-config-c
 
 const base = {
   NODE_ENV: 'test',
-  DATABASE_URL: 'postgresql://localhost/mbox_normalized_test',
+  DATABASE_URL: 'postgresql://mbox_app@localhost/mbox_normalized_test',
   MBOX_TENANT_ID: '11111111-1111-4111-8111-111111111111',
   MBOX_STORE_ID: '22222222-2222-4222-8222-222222222222',
   MBOX_NORMALIZED_SECRET: '0123456789abcdef0123456789abcdef',
 }
 
 describe('loadNormalizedRuntimeConfig', () => {
+  it('requires an explicit production database login and rejects maintenance credentials in app environment',()=>{
+    for(const override of [{DATABASE_URL:'postgresql://localhost/mbox'}, {PGPASSFILE:'/run/admin-pass'},
+      {PGPASSWORD:'maintenance-secret'}, {ADMIN_DATABASE_URL:'postgresql://admin:secret@db/mbox'}]){
+      try{loadNormalizedRuntimeConfig({...base,MBOX_DEPLOYMENT_TIER:'production',...override});throw new Error('accepted')}
+      catch(error){expect(error).toBeInstanceOf(NormalizedRuntimeConfigurationError)
+        expect((error as NormalizedRuntimeConfigurationError).fields).toContain(Object.keys(override)[0])
+        expect(String(error)).not.toContain('maintenance-secret');expect(String(error)).not.toContain('admin:secret')}
+    }
+  })
+  it('keeps shared pickup and bar admission separate from the existing kitchen switch',()=>{
+    expect(loadNormalizedRuntimeConfig(base).threeScreenWorkflowEnabled).toBe(false)
+    expect(loadNormalizedRuntimeConfig({...base,MBOX_KITCHEN_BATCH_BOARD_ENABLED:'true'}).threeScreenWorkflowEnabled).toBe(false)
+    expect(loadNormalizedRuntimeConfig({...base,MBOX_THREE_SCREEN_WORKFLOW_ENABLED:'true'}).threeScreenWorkflowEnabled).toBe(true)
+    expect(()=>loadNormalizedRuntimeConfig({...base,MBOX_THREE_SCREEN_WORKFLOW_ENABLED:'typo'})).toThrow(/MBOX_THREE_SCREEN_WORKFLOW_ENABLED/)
+  })
   it('enables the kitchen independently of quantity after-sales and rejects an invalid switch',()=>{
     expect(loadNormalizedRuntimeConfig(base).kitchenBatchBoardEnabled).toBe(false)
     const config=loadNormalizedRuntimeConfig({...base,MBOX_KITCHEN_BATCH_BOARD_ENABLED:'true'})

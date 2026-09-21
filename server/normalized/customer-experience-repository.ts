@@ -303,6 +303,7 @@ export interface PublicAnnualBenefitCalendarItem {
   windowEndsOn: string
   status: PublicAnnualBenefitStatus
   factState: AnnualBenefitFactState
+  currentFulfillmentStatus?: 'pending' | 'ready' | 'delivered' | 'cancelled' | null
   benefitId: string | null
   redeemable: boolean
   claimable: boolean
@@ -625,6 +626,7 @@ interface AnnualBenefitCalendarRow extends Record<string, unknown> {
   benefit_id: string | null
   benefit_status: string | null
   fulfillment_intent_status: 'pending' | 'retry' | 'dispatched' | 'failed' | 'cancelled' | 'compensated' | null
+  current_fulfillment_status?: PublicAnnualBenefitCalendarItem['currentFulfillmentStatus']
   daily_snack_claim_status: 'reserved' | 'redeemed' | 'fulfilled' | 'cancelled' | 'expired'
     | 'cancelled_after_redemption' | 'compensated' | null
   benefit_valid_from: string | null
@@ -1003,6 +1005,7 @@ export class CustomerExperienceRepository {
         benefit.status AS benefit_status,benefit.valid_from::text AS benefit_valid_from,
         benefit.valid_until::text AS benefit_valid_until,
         daily_snack_claim.status AS daily_snack_claim_status,
+        daily_snack_claim.current_fulfillment_status,
         fulfillment_intent.status AS fulfillment_intent_status,
         GREATEST(policy.updated_at,rule.updated_at,definition.updated_at,
           COALESCE(product.updated_at,'epoch'::timestamptz),
@@ -1010,6 +1013,7 @@ export class CustomerExperienceRepository {
           COALESCE(grant_row.updated_at,'epoch'::timestamptz),
           COALESCE(benefit.updated_at,'epoch'::timestamptz),
           COALESCE(daily_snack_claim.updated_at,'epoch'::timestamptz),
+          COALESCE(daily_snack_claim.fulfillment_updated_at,'epoch'::timestamptz),
           COALESCE(fulfillment_intent.updated_at,'epoch'::timestamptz))::text AS source_updated_at
       FROM mbox.loyalty_annual_benefit_policy_versions policy
       JOIN mbox.stores store
@@ -1065,7 +1069,14 @@ export class CustomerExperienceRepository {
         ON benefit.tenant_id=policy.tenant_id AND benefit.store_id=policy.store_id
        AND benefit.id=grant_row.benefit_id
       LEFT JOIN LATERAL (
-        SELECT claim.status,claim.updated_at
+        SELECT claim.status,claim.updated_at,
+          mbox.pickup_order_current_fulfillment(claim.tenant_id,claim.store_id,claim.gift_order_id) AS current_fulfillment_status,
+          (SELECT greatest(max(part.updated_at),max(remake.updated_at))
+            FROM mbox.order_items item JOIN mbox.order_item_quantity_units part
+              ON (part.tenant_id,part.store_id,part.order_item_id)=(item.tenant_id,item.store_id,item.id)
+            LEFT JOIN mbox.quantity_remake_units remake
+              ON (remake.tenant_id,remake.store_id,remake.unit_id)=(part.tenant_id,part.store_id,part.id)
+            WHERE (item.tenant_id,item.store_id,item.order_id)=(claim.tenant_id,claim.store_id,claim.gift_order_id)) AS fulfillment_updated_at
         FROM mbox.annual_daily_snack_claims claim
         WHERE rule.rule_kind='daily_snack' AND claim.tenant_id=policy.tenant_id AND claim.store_id=policy.store_id
           AND claim.benefit_id=grant_row.benefit_id
@@ -2446,7 +2457,9 @@ export class CustomerExperienceRepository {
        AND product.id=option.product_id
       WHERE option.tenant_id=$1::uuid AND option.store_id=$2::uuid
         AND option.recommendation_session_id=$3::uuid AND option.product_id=$4::uuid
-      FOR UPDATE OF option
+      -- Options are INSERT/SELECT-only facts for runtime. The parent
+      -- recommendation row above serializes selection; locking this fact
+      -- would incorrectly require UPDATE permission on the original option.
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -3488,7 +3501,9 @@ export class CustomerExperienceRepository {
           AND session.public_id=$3 AND session.customer_id=$5::uuid
           AND session.table_session_id=$6::uuid
           AND session.business_date=$9::date AND session.abandoned_at IS NULL
-        FOR KEY SHARE OF session, option
+        -- Preserve the mutable parent reference; options cannot be updated
+        -- or deleted by runtime and their identity is also protected by FKs.
+        FOR KEY SHARE OF session
       )
       INSERT INTO mbox.recommendation_behavior_events (
         tenant_id, store_id, recommendation_session_id, recommendation_option_id,
@@ -5913,6 +5928,7 @@ function annualBenefitCalendarView(
     windowEndsOn: window.endsOn,
     status,
     factState,
+    ...(row.current_fulfillment_status===undefined?{}:{currentFulfillmentStatus:row.current_fulfillment_status}),
     benefitId: row.benefit_id,
     redeemable,
     claimable,

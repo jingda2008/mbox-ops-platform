@@ -184,6 +184,8 @@ function annualBenefitView(item) {
 }
 
 function annualBenefitStatusText(item) {
+  if (item.kind === 'daily_snack' && item.currentFulfillmentStatus === 'ready') return '已核销，出品待取；无需重新申请'
+  if (item.kind === 'daily_snack' && item.currentFulfillmentStatus === 'pending') return '已核销，正在制作；无需重新申请'
   if (item.claimable) return '入座后可申请，等待服务人员确认'
   if (item.factState === 'continuous_qualification') return '根据现场可用座位优先安排，不承诺固定桌位；无需一次性核销'
   if (item.kind === 'daily_snack' && item.factState === 'reserved') return '已暂留，等待服务人员确认'

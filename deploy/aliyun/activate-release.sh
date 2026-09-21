@@ -69,19 +69,21 @@ verify_deployment_scripts() {
   local script_name
   local expected_sha
   while IFS=$'\t' read -r script_name expected_sha; do
-    [[ "${script_name}" =~ ^[a-z0-9-]+\.sh$ ]]
+    [[ "${script_name}" =~ ^[a-z0-9-]+\.(sh|py|mjs)$ ]]
     [[ "${expected_sha}" =~ ^[0-9a-f]{64}$ ]]
     test -f "${release_dir}/${script_name}"
     test "$(sha256sum "${release_dir}/${script_name}" | awk '{print $1}')" = "${expected_sha}"
     count=$((count + 1))
   done < <(jq -er '.deploymentScripts | to_entries[] | [.value.file,.value.sha256] | @tsv' "${manifest}")
-  test "${count}" = 12
+  test "${count}" = 15
 }
 verify_deployment_scripts
 command -v flock >/dev/null
 docker network inspect "${network}" >/dev/null
 docker inspect "${caddy_container}" >/dev/null
-docker inspect "${active_container}" >/dev/null
+if [ ! -f "${release_dir}/maintenance-plan.json" ]; then
+  docker inspect "${active_container}" >/dev/null
+fi
 
 release_sha=$(jq -er '.releaseSha' "${manifest}")
 release_version=$(jq -er '.releaseVersion' "${manifest}")
@@ -190,6 +192,21 @@ test "${actual_sha}" = "${release_sha}"
 test "${actual_version}" = "${release_version}"
 test "${source_branch}" = main
 test "${runtime_config_version}" = normalized-runtime-config/v1
+# Planned maintenance has its own persistent journal outside the application
+# database. sourceLive is an audit identity, never an eligible rollback target.
+if [ -f "${release_dir}/maintenance-plan.json" ]; then
+  MBOX_VERIFIED_MAINTENANCE_ENTRY=1 "${release_dir}/maintenance-bootstrap.sh" \
+    "${release_dir}" "${deployment_tier}" "${public_url}"
+  exit $?
+fi
+# An unfinished maintenance transition cannot be bypassed through ordinary
+# activation (including a different release directory).
+while IFS= read -r journal; do
+  if ! jq -se 'length>0 and (all(.[];has("event"))) and ((any(.[];.event=="drain-intent")|not) or .[-1].event=="completed")' "${journal}" >/dev/null; then
+    echo 'unfinished or invalid maintenance journal; explicit recovery plan required' >&2
+    exit 1
+  fi
+done < <(find "${install_root}/maintenance" -mindepth 2 -maxdepth 2 -name journal.jsonl -type f 2>/dev/null || true)
 rm -f "${state_file}"
 release_state_init "${state_file}" "${release_sha}" "${expected_digest}"
 release_state_transition "${state_file}" frozen artifact_verified
@@ -363,7 +380,7 @@ docker run --rm \
   --security-opt no-new-privileges \
   --cap-drop ALL \
   "${image_tag}" \
-  node dist-normalized/server/verify-normalized-runtime-config.js --store=/run/mbox-config/store.json \
+  node dist-normalized/server/verify-normalized-runtime-config.js --database --store=/run/mbox-config/store.json \
   > "${release_dir}/config-preflight.json"
 release_state_transition "${state_file}" artifact_verified config_preflight_passed
 
@@ -402,6 +419,7 @@ test "$(docker inspect "${active_container}" \
   --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "${previous_release_sha}"
 active_platform_image_digest=$(docker inspect "${active_container}" --format '{{.Image}}')
 active_container_id=$(docker inspect "${active_container}" --format '{{.Id}}')
+previous_environment_sha=$(docker inspect "${active_container}" --format '{{json .Config.Env}}' | sha256sum | awk '{print $1}')
 previous_archived_platform_image_digest=${previous_platform_image_digest}
 if [ -z "${previous_platform_image_digest}" ]; then
   # Releases before manifest schema 6 did not freeze the loaded platform image
@@ -504,6 +522,7 @@ load_database_maintenance_secrets() {
   for secret_file in "${database_pgservice_file}" "${database_pgpass_file}"; do
     case "${secret_file}" in /opt/mbox/secrets/*) ;; *) exit 1 ;; esac
     test -f "${secret_file}"
+    test ! -L "${secret_file}"
     test "$(stat -c '%u:%a' "${secret_file}")" = 0:600
   done
   ! grep -Eiq '^[[:space:]]*(password|passfile)[[:space:]]*=' "${database_pgservice_file}"
@@ -511,6 +530,40 @@ load_database_maintenance_secrets() {
   backup_database_url="service=${backup_database_service}"
   contract_admin_database_url="service=${admin_database_service}"
   database_maintenance_loaded=1
+}
+
+# Privileged credentials are mounted only into these short-lived maintenance
+# commands. They are never copied into app.env or supplied to the API/worker.
+run_database_maintenance_container() {
+  load_database_maintenance_secrets
+  local rootcert
+  local certificate_mount=()
+  rootcert=$(awk -F= -v target="${admin_database_service}" '
+    /^\[/ { section=$0; sub(/^\[/,"",section); sub(/\][[:space:]]*$/,"",section); next }
+    section==target && $1 ~ /^[[:space:]]*sslrootcert[[:space:]]*$/ {
+      sub(/^[^=]*=[[:space:]]*/,""); sub(/[[:space:]]*$/,""); print
+    }' "${database_pgservice_file}")
+  if [ -n "${rootcert}" ]; then
+    case "${rootcert}" in "${install_root}"/secrets/*) ;; *) return 1 ;; esac
+    test -f "${rootcert}"
+    test ! -L "${rootcert}"
+    test "$(stat -c '%u' "${rootcert}")" = 0
+    certificate_mount+=(--mount "type=bind,src=${rootcert},dst=${rootcert},readonly")
+  fi
+  docker run --rm --user 0:0 \
+    --env-file "${release_env}" \
+    --env "PGSERVICEFILE=${database_pgservice_file}" \
+    --env "PGPASSFILE=${database_pgpass_file}" \
+    --env "APP_COMMIT_SHA=${release_sha}" \
+    --network "${network}" --read-only \
+    --tmpfs /tmp:rw,noexec,nosuid,size=32m \
+    --security-opt no-new-privileges --cap-drop ALL \
+    --mount "type=bind,src=${database_pgservice_file},dst=${database_pgservice_file},readonly" \
+    --mount "type=bind,src=${database_pgpass_file},dst=${database_pgpass_file},readonly" \
+    --mount "type=bind,src=${store_config},dst=/run/mbox-config/store.json,readonly" \
+    --mount "type=bind,src=${catalog_config},dst=/run/mbox-config/catalog.json,readonly" \
+    "${certificate_mount[@]}" "${image_tag}" node "$@" \
+    "--maintenance-service=${admin_database_service}"
 }
 
 hash_worker_adapter_tree() {
@@ -590,6 +643,7 @@ prepare_worker_adapter_mount
 
 assert_backup_targets_application_database() {
   local application_database_identity backup_database_identity running
+  local candidate_login backup_login admin_login
   running=$(docker inspect "${active_container}" --format '{{.State.Running}}')
   if [ "${running}" = true ]; then
     runtime_database_identity=$(docker exec -i "${active_container}" node <<'NODE'
@@ -616,6 +670,17 @@ NODE
   test -n "${candidate_database_identity}"
   test "${application_database_identity}" = "${candidate_database_identity}"
   test "${backup_database_identity}" = "${application_database_identity}"
+  candidate_login=$(jq -er '.databaseIdentity.login' "${release_dir}/config-preflight.json")
+  backup_login=$(PGSERVICEFILE="${database_pgservice_file}" PGPASSFILE="${database_pgpass_file}" \
+    PGOPTIONS='-c default_transaction_read_only=on' psql -XAt --dbname="${backup_database_url}" \
+    --command="SELECT session_user WHERE session_user=current_user")
+  admin_login=$(PGSERVICEFILE="${database_pgservice_file}" PGPASSFILE="${database_pgpass_file}" \
+    PGOPTIONS='-c default_transaction_read_only=on' psql -XAt --dbname="${contract_admin_database_url}" \
+    --command="SELECT session_user WHERE session_user=current_user")
+  test -n "${candidate_login}" && test -n "${backup_login}" && test -n "${admin_login}"
+  test "${candidate_login}" != "${backup_login}"
+  test "${candidate_login}" != "${admin_login}"
+  test "${backup_login}" != "${admin_login}"
 }
 
 restore_contract_database_and_previous_app() {
@@ -697,6 +762,9 @@ restore_contract_database_and_previous_app() {
     docker update --restart=unless-stopped "${active_container}" >/dev/null 2>&1 || rollback_ok=0
   fi
   if [ "${rollback_ok}" = 1 ]; then
+    verify_previous_runtime_database_identity > "${release_dir}/rollback-database-identity-restored.json" 2>/dev/null || rollback_ok=0
+  fi
+  if [ "${rollback_ok}" = 1 ]; then
     previous_private_ready=$(docker exec "${active_container}" \
       wget -q -O - http://127.0.0.1:8787/api/ready 2>/dev/null) || rollback_ok=0
   fi
@@ -751,16 +819,34 @@ rollback_contract_on_error() {
   restore_contract_database_and_previous_app "${1:-$?}"
 }
 
+# Execute the candidate's identity guard inside the previous container. Its
+# own runtime credentials stay there. Legacy images without the isolation
+# contract cannot become the rollback baseline, even if their URL was edited.
+assert_previous_runtime_container_binding() {
+  test "$(docker inspect "${active_container}" --format '{{.Id}}')" = "${active_container_id}" || return 1
+  test "$(docker inspect "${active_container}" --format '{{.Image}}')" = "${previous_platform_image_digest}" || return 1
+  test "$(docker inspect "${active_container}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "${previous_release_sha}" || return 1
+  test "$(docker inspect "${active_container}" --format '{{json .Config.Env}}' | sha256sum | awk '{print $1}')" = "${previous_environment_sha}" || return 1
+}
+
+verify_previous_runtime_database_identity() {
+  assert_previous_runtime_container_binding || return 1
+  docker run --rm --read-only --network none --cap-drop ALL --security-opt no-new-privileges \
+    "${image_tag}" node dist-normalized/server/verify-normalized-runtime-config.js --emit-container-probe \
+    | docker exec -i "${active_container}" node --input-type=module \
+    | jq --arg containerId "${active_container_id}" --arg releaseSha "${previous_release_sha}" \
+      --arg imageDigest "${previous_platform_image_digest}" --arg environmentSha "${previous_environment_sha}" \
+      '. + {containerId:$containerId,releaseSha:$releaseSha,imageDigest:$imageDigest,environmentSha:$environmentSha}'
+}
+
 release_state_require "${state_file}" external_preflight_passed
-docker run --rm \
-  --env-file "${release_env}" \
-  --network "${network}" \
-  --read-only \
-  --tmpfs /tmp:rw,noexec,nosuid,size=16m \
-  --security-opt no-new-privileges \
-  --cap-drop ALL \
-  "${image_tag}" \
-  node dist-normalized/server/verify-normalized-migration-compatibility.js \
+if ! verify_previous_runtime_database_identity > "${release_dir}/rollback-database-identity-preflight.json"; then
+  echo "release blocked: prepare and validate a restricted rollback baseline; existing application is unchanged" >&2
+  exit 1
+fi
+# Older schemas may not yet grant runtime metadata reads. Compatibility is an
+# administrative read-only check, using the same isolated maintenance service.
+run_database_maintenance_container dist-normalized/server/verify-normalized-migration-compatibility.js \
   > "${release_dir}/migration-preflight.json"
 previous_schema_version=$(reconcile_previous_runtime_schema \
   "${previous_manifest_schema_version}" "${previous_ready_file}" \
@@ -775,6 +861,11 @@ candidate_database_identity=$(jq -er \
 test -n "${candidate_database_identity}"
 release_state_transition "${state_file}" external_preflight_passed migration_compatible
 
+# Verify independent restricted runtime and maintenance logins on the same
+# database before recording any database write or changing the active service.
+run_database_maintenance_container dist-normalized/server/migrate-normalized.js --verify-only \
+  > "${release_dir}/database-maintenance-preflight.json"
+
 backup_path=
 relay_backup_verified=0
 relay_backup_stage=${release_dir}/relay-backup-ready
@@ -783,6 +874,7 @@ relay_backup_report=${release_dir}/preverified-backup-upload.json
 release_state_require "${state_file}" migration_compatible
 recent_backup=
 if [ "${contract_migration}" = 1 ]; then
+  verify_previous_runtime_database_identity > "${release_dir}/rollback-database-identity-drain.json"
   command -v pg_restore >/dev/null
   command -v psql >/dev/null
   load_database_maintenance_secrets
@@ -946,11 +1038,7 @@ if [ "${migration_changed}" = 1 ]; then
     release_state_require "${state_file}" backup_verified
   fi
   : > "${release_dir}/.database-write-started"
-  docker run --rm \
-    --env-file "${release_env}" \
-    --network "${network}" \
-    "${image_tag}" \
-    node dist-normalized/server/migrate-normalized.js
+  run_database_maintenance_container dist-normalized/server/migrate-normalized.js
 fi
 if [ "${contract_migration}" = 1 ]; then
   release_state_transition "${state_file}" post_drain_backup_verified migrated
@@ -960,18 +1048,7 @@ fi
 
 release_state_require "${state_file}" migrated
 : > "${release_dir}/.database-write-started"
-docker run --rm \
-  --env-file "${release_env}" \
-  --env "APP_COMMIT_SHA=${release_sha}" \
-  --network "${network}" \
-  --read-only \
-  --tmpfs /tmp:rw,noexec,nosuid,size=32m \
-  --security-opt no-new-privileges \
-  --cap-drop ALL \
-  --mount "type=bind,src=${store_config},dst=/run/mbox-config/store.json,readonly" \
-  --mount "type=bind,src=${catalog_config},dst=/run/mbox-config/catalog.json,readonly" \
-  "${image_tag}" \
-  node dist-normalized/server/provision-normalized-release.js \
+run_database_maintenance_container dist-normalized/server/provision-normalized-release.js \
     --store=/run/mbox-config/store.json \
     --catalog=/run/mbox-config/catalog.json
 release_state_transition "${state_file}" migrated provisioned
@@ -1025,6 +1102,14 @@ rollback_on_error() {
     docker update --restart=unless-stopped "${active_container}" >/dev/null 2>&1
   else
     rollback_ok=0
+  fi
+
+  if [ "${rollback_ok}" = 1 ]; then
+    verify_previous_runtime_database_identity > "${release_dir}/rollback-database-identity-restored.json" 2>/dev/null || rollback_ok=0
+  fi
+  if [ "${rollback_ok}" != 1 ]; then
+    docker update --restart=no "${active_container}" >/dev/null 2>&1
+    docker stop -t 20 "${active_container}" >/dev/null 2>&1
   fi
 
   # Reload the canonical upstream unconditionally. This is harmless before
@@ -1187,6 +1272,17 @@ docker cp "${cutover_candidate_caddy}" "${caddy_container}:/tmp/Caddyfile.cutove
 docker exec "${caddy_container}" caddy validate \
   --config /tmp/Caddyfile.cutover-candidate --adapter caddyfile >/dev/null
 
+# Recheck after migration/provisioning and before any public cutover; a changed
+# container or privilege drift cannot silently invalidate the retained baseline.
+if [ "${contract_migration}" = 1 ]; then
+  # Writers stay stopped; bind the pre-drain proof to the unchanged container.
+  assert_previous_runtime_container_binding
+  test "$(docker inspect "${active_container}" --format '{{.State.Running}}')" = false
+  jq '. + {verificationStage:"before-writer-drain",unchangedContainerStopped:true}' \
+    "${release_dir}/rollback-database-identity-drain.json" > "${release_dir}/rollback-database-identity-cutover.json"
+else
+  verify_previous_runtime_database_identity > "${release_dir}/rollback-database-identity-cutover.json"
+fi
 release_state_transition "${state_file}" candidate_deep_verified cutover_started
 : > "${release_dir}/.cutover-started"
 rollback_container="mbox-app-rollback-${short_sha}-$(date +%Y%m%d-%H%M%S)"
@@ -1292,6 +1388,9 @@ cp "${release_dir}/deployment-manifest.json" "${deployment_evidence}/"
 cp "${release_dir}/predeployment-oss-verification.json" "${deployment_evidence}/"
 cp "${release_dir}/oss-backup-verification.json" "${deployment_evidence}/"
 cp "${release_dir}/config-preflight.json" "${deployment_evidence}/"
+cp "${release_dir}/database-maintenance-preflight.json" "${deployment_evidence}/"
+cp "${release_dir}/rollback-database-identity-preflight.json" "${deployment_evidence}/"
+cp "${release_dir}/rollback-database-identity-cutover.json" "${deployment_evidence}/"
 cp "${release_dir}/external-preflight.json" "${deployment_evidence}/"
 cp "${release_dir}/migration-preflight.json" "${deployment_evidence}/"
 cp "${state_file}" "${deployment_evidence}/release-state-before-evidence.json"

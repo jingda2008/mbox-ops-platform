@@ -62,6 +62,18 @@ test('deployment manifest and both activation boundaries enforce the backend-onl
   }
 })
 
+test('old container credentials and isolation contract must pass before migration and cutover', async () => {
+  const activate=await read('../deploy/aliyun/activate-release.sh')
+  const preflight=activate.indexOf('if ! verify_previous_runtime_database_identity')
+  const migration=activate.indexOf('run_database_maintenance_container dist-normalized/server/verify-normalized-migration-compatibility.js')
+  const recheck=activate.indexOf('verify_previous_runtime_database_identity > "${release_dir}/rollback-database-identity-cutover.json"')
+  const cutover=activate.indexOf('candidate_deep_verified cutover_started')
+  assert.ok(preflight>0 && preflight<migration && recheck>migration && recheck<cutover)
+  assert.match(activate,/--emit-container-probe[\s\S]*\| docker exec -i "\$\{active_container\}" node --input-type=module/)
+  assert.match(activate,/test "\$\(docker inspect "\$\{active_container\}" --format '\{\{\.Id\}\}'\)" = "\$\{active_container_id\}"/)
+  assert.match(activate,/release blocked: prepare and validate a restricted rollback baseline/)
+})
+
 test('configuration and migration checks precede every database write and application candidate', async () => {
   const activate = await read('../deploy/aliyun/activate-release.sh')
   const deploy = await read('../deploy/aliyun/deploy-release.sh')
@@ -72,10 +84,19 @@ test('configuration and migration checks precede every database write and applic
   const databaseIdentityGate = activate.indexOf('assert_backup_targets_application_database', candidateDatabaseIdentity)
   const writerDrain = activate.indexOf('migration_compatible writer_drained')
   const backup = activate.indexOf('backup_path=$(DATABASE_SERVICE=', writerDrain)
-  const migrate = activate.indexOf('migrate-normalized.js')
+  const maintenancePreflight = activate.indexOf('migrate-normalized.js --verify-only')
+  const migrate = activate.indexOf('run_database_maintenance_container dist-normalized/server/migrate-normalized.js\n')
   const provision = activate.indexOf('provision-normalized-release.js')
   const candidate = activate.indexOf('docker "${candidate_docker_args[@]}"', provision)
   assert.ok(config > 0 && config < migrationCompatibility)
+  assert.ok(maintenancePreflight > migrationCompatibility && maintenancePreflight < backup)
+  assert.match(activate.slice(config,config+150),/--database/)
+  assert.match(activate,/run_database_maintenance_container[\s\S]*--user 0:0/)
+  assert.match(activate,/--mount "type=bind,src=\$\{database_pgpass_file\},dst=\$\{database_pgpass_file\},readonly"/)
+  assert.match(activate,/run_database_maintenance_container dist-normalized\/server\/verify-normalized-migration-compatibility\.js/)
+  assert.match(activate,/test "\$\{candidate_login\}" != "\$\{backup_login\}"/)
+  assert.match(activate,/test "\$\{candidate_login\}" != "\$\{admin_login\}"/)
+  assert.match(activate,/test "\$\{backup_login\}" != "\$\{admin_login\}"/)
   assert.ok(migrationCompatibility < runtimeSchemaReconciliation
     && runtimeSchemaReconciliation < candidateDatabaseIdentity
     && candidateDatabaseIdentity < databaseIdentityGate && databaseIdentityGate < writerDrain
@@ -150,7 +171,7 @@ test('database maintenance credentials stay root-only and the frozen backup pres
   assert.match(restore, /role\.rolsuper OR \([\s\S]*role\.rolcreatedb[\s\S]*role\.rolcreaterole[\s\S]*role\.rolbypassrls/)
   assert.match(restore, /provider_role\.rolname='pg_rds_superuser'[\s\S]*pg_has_role\(role\.oid,provider_role\.oid,'member'\)/)
   assert.match(restore, /NOT role\.rolsuper AND role\.rolbypassrls[\s\S]*pg_read_all_data[\s\S]*provider_role\.rolname='pg_rds_superuser'/)
-  assert.match(restore, /SELECT current_user[\s\S]*\.database\.owner/)
+  assert.match(restore, /database_owner[\s\S]*pg_has_role\(current_user, :'database_owner', 'MEMBER'\)/)
   assert.doesNotMatch(`${backup}\n${restore}`, /--dbname="\$\{(?:DATABASE_URL|ADMIN_DATABASE_URL)\}"/)
   assert.doesNotMatch(`${backup}\n${restore}`, /passwordless DATABASE_URL|test-only/)
   assert.match(ci, /Run every normalized PostgreSQL transaction and RLS test\n\s+env:\n\s+TEST_POSTGRES_CONTAINER: \$\{\{ job\.services\.postgres\.id \}\}\n\s+run: npm run test:normalized:postgres/)

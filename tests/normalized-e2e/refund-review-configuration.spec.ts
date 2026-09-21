@@ -26,7 +26,7 @@ test('administrator configures refund review and cents in one publish on mobile,
   await page.getByRole('button', { name: '发布2项修改' }).click()
   const response = await deployment
   expect(response.status()).toBe(200)
-  await expect(page.getByRole('status').filter({ hasText: '2项配置已发布并复核生效' })).toBeVisible()
+  await expect(page.getByRole('status').filter({ hasText: '2项配置已发布并复核' })).toBeVisible()
   const saved = (await response.json()).data.overview as StaffAccessManagementOverview
   expect(saved.roles.find((role) => role.id === manager.id)?.permissionCodes).toContain('refund.approve')
   expect(saved.roles.find((role) => role.id === manager.id)?.approvalLimits).toContainEqual(expect.objectContaining({ code: 'refund.approve', amountMinor: 3001, enabled: true }))
@@ -43,7 +43,7 @@ test('administrator configures refund review and cents in one publish on mobile,
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.getByLabel('允许复核退款').uncheck()
   await page.getByRole('button', { name: '发布2项修改' }).click()
-  await expect(page.getByRole('status').filter({ hasText: '2项配置已发布并复核生效' })).toBeVisible()
+  await expect(page.getByRole('status').filter({ hasText: '2项配置已发布并复核' })).toBeVisible()
   const disabled = (await (await page.request.get('/api/staff-access/overview')).json()).data as StaffAccessManagementOverview
   expect(disabled.roles.find((role) => role.id === manager.id)?.permissionCodes).not.toContain('refund.approve')
   expect(disabled.roles.find((role) => role.id === manager.id)?.approvalLimits).toContainEqual(expect.objectContaining({ code: 'refund.approve', enabled: false }))

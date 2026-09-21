@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   GuestCustomerAtAnotherTableError,
+  GuestSessionBusyError,
   type GuestSessionRecord,
   type TableScanResult,
 } from './guest-session-repository.js'
@@ -245,6 +246,17 @@ describe('guestSessionApiPlugin', () => {
       },
     })
     expect(JSON.stringify(response.json())).not.toContain(tableQrToken)
+  })
+
+  it('returns a bounded retry for exhausted scan conflicts without clearing the current session', async () => {
+    const value = fixture()
+    const error = new GuestSessionBusyError()
+    value.scanTable.mockRejectedValueOnce(error)
+    const response = await value.app.inject({ method: 'POST', url: '/api/guest/session/scan',
+      headers: { [GUEST_DEVICE_HEADER]: deviceKey }, payload: { tableQrToken, deviceKey } })
+    expect(response.statusCode).toBe(503)
+    expect(response.json()).toEqual({ error: { code: 'GUEST_SESSION_BUSY', message: error.message, retryAt: error.retryAt } })
+    expect(response.headers['set-cookie']).toBeUndefined()
   })
 
   it('returns a private conflict when the customer is already active at another table',async () => {

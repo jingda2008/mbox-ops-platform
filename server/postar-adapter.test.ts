@@ -372,6 +372,19 @@ describe('Postar customer payment code collection', () => {
 })
 
 describe('Postar active payment query', () => {
+  it.each(['MERCHANT001', undefined, 'OTHER_MERCHANT'])('binds a signed query response merchant when returned (%s)', async (custId) => {
+    const adapter = new PostarPaymentProviderAdapter(testOptions(async () => signedResponse({
+      code: '000000', msg: 'signed synthetic query',
+      data: { agetId: 'AGENCY001', ...(custId === undefined ? {} : { custId }),
+        orderNo: 'POSTAR202607140001', orderStatus: '1', orderTime: '20260714120506',
+        threeOrderNo: 'PaymentABC123', txamt: '3000' },
+    })))
+    const result = adapter.queryPayment({merchantId:'MERCHANT001',paymentIntentId:'PaymentABC123',
+      amount:3000,currency:'CNY',providerTransactionId:null},context)
+    if (custId === 'OTHER_MERCHANT') await expect(result).rejects.toThrow('商户号不匹配')
+    else await expect(result).resolves.toMatchObject({status:'succeeded',merchantId:'MERCHANT001',amount:3000})
+  })
+
   it('uses the whitelisted endpoint, injected HTTP/key/metadata sources and validates response binding', async () => {
     const post = vi.fn(async (_request: PostarHttpRequest) => response({
       code: '000000',

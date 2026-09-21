@@ -1,3 +1,4 @@
+import {ExperiencePlanLifecycleRepository,ExperiencePlanLifecycleConflict} from './experience-plan-lifecycle-repository.js'
 import {QuantityRedeliveryRepository} from './quantity-redelivery-repository.js'
 import {ItemQuantityConflict} from './order-item-quantity-plan.js'
 import { randomUUID } from 'node:crypto'
@@ -659,6 +660,9 @@ async function executeTaskTransition(
       note,
       eventIdempotencyKey: `${idempotencyKey}:${transition}`,
     }
+    const lifecycle = currentTask.taskType.startsWith('experience.') ? new ExperiencePlanLifecycleRepository(transaction) : null
+    const experienceCue = lifecycle ? await lifecycle.lockByTask(currentTask) : null
+    if (experienceCue && transition === 'complete') lifecycle!.assertActionable(experienceCue)
     const redelivery = currentTask.taskType === 'goods.redelivery' ? new QuantityRedeliveryRepository(transaction) : null
     const original = redelivery ? await redelivery.lockForTask(taskId) : null
     let task: ServiceTask
@@ -666,6 +670,7 @@ async function executeTaskTransition(
       await redelivery.complete({redeliveryId:original.id,employeeId:context.employeeId,reason:note?.trim()||'确认原实物已补送给客人',eventKey:`${idempotencyKey}:complete`})
       task = (await repository.findById(taskId))!
     } else task = await repository[transition](transitionInput)
+    if (experienceCue && transition === 'complete') await lifecycle!.complete(experienceCue, { employeeId: context.employeeId, note, task })
     return {
       result: task,
       auditEvents: [{
@@ -1095,6 +1100,7 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   if (error instanceof CustomerLeftTableTurnoverConflictError) {
     return apiError(409, 'TABLE_CUSTOMER_LEFT_TURNOVER_CONFLICT', error.message)
   }
+  if (error instanceof ExperiencePlanLifecycleConflict) return apiError(409,error.code,error.message)
   if (error instanceof ItemQuantityConflict) return apiError(409,error.code,error.message)
   if (error instanceof ServiceTaskTransitionError) {
     return apiError(409, 'SERVICE_TASK_TRANSITION_CONFLICT', error.message)

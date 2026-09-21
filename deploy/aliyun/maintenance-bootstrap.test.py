@@ -8,6 +8,7 @@ class PersistentTests(unittest.TestCase):
   second='session-119.scope static\nsession-60930.scope static\n'+persistent
   self.assertNotEqual(m.hashlib.sha256(first.encode()).hexdigest(),m.hashlib.sha256(second.encode()).hexdigest())
   self.assertEqual(m.systemd_inventory_sha256(first),m.systemd_inventory_sha256(second))
+  self.assertNotEqual(m.systemd_inventory_sha256('session-1.scope static\n writer.service enabled'),m.systemd_inventory_sha256('session-2.scope static\nwriter.service enabled'))
   for changed in (persistent+'\nnew-writer.service enabled',persistent.replace('crond.service enabled','crond.service disabled'),
                   persistent+'\nsession-60930.service enabled',persistent+'\nsession-custom.scope static',
                   persistent+'\nsession-60930.scope enabled',persistent.replace('enabled','masked')):

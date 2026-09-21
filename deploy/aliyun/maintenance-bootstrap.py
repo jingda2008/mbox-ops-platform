@@ -18,7 +18,7 @@ def systemd_inventory_sha256(output):
     # connection gets another numeric session id; these cannot restart a writer.
     # Keep every other row byte-exact, including persistent units and states.
     rows=[row for row in output.splitlines() if not re.fullmatch(r'session-[0-9]+\.scope\s+static\s*',row)]
-    return hashlib.sha256('\n'.join(rows).strip().encode()).hexdigest()
+    return hashlib.sha256('\n'.join(rows).encode()).hexdigest()
 
 def atomic(path, value):
     path=Path(path); path.parent.mkdir(mode=0o700,parents=True,exist_ok=True)

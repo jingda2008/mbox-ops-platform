@@ -85,6 +85,17 @@ class ParametersTest(unittest.TestCase):
         self.assertFalse(parameters.allowed_lab_mount(shm.replace('tmpfs shm', 'ext4 /dev/sda'), root))
         self.assertFalse(parameters.allowed_lab_mount(shm.replace('a' * 64, 'arbitrary'), root))
 
+    def test_formal_entry_allows_only_exact_loopback_ssh_environment(self):
+        for value in ('', '127.0.0.1 40123 127.0.0.1 22', '::1 40123 ::1 22'):
+            self.assertTrue(parameters.allowed_lab_environment({'SSH_CONNECTION':value}))
+        for value in ('10.0.0.1 40123 127.0.0.1 22', '127.0.0.1 40123 10.0.0.1 22',
+                      '::1 40123 2001:db8::1 22', 'localhost 40123 localhost 22',
+                      '127.0.0.1 0 127.0.0.1 22', '127.0.0.1 65536 127.0.0.1 22',
+                      '127.0.0.1 x 127.0.0.1 22', '127.0.0.1 22', '127.0.0.1 22 127.0.0.1 22 extra'):
+            self.assertFalse(parameters.allowed_lab_environment({'SSH_CONNECTION':value}))
+        for key in ('DOCKER_HOST','DOCKER_CONTEXT'):
+            self.assertFalse(parameters.allowed_lab_environment({key:'remote','SSH_CONNECTION':'127.0.0.1 40123 127.0.0.1 22'}))
+
     def test_actual_backup_position_wins_over_failed_initial_bound(self):
         spec = importlib.util.spec_from_file_location('verify_parameters', HERE / 'verify-final-parameterized.py')
         module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)

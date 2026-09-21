@@ -2,6 +2,7 @@
 import argparse
 import configparser
 import hashlib
+import ipaddress
 import json
 import os
 import pathlib
@@ -108,13 +109,31 @@ def allowed_lab_mount(row, root_row):
                 and fields[separator + 1:separator + 3] == ['tmpfs', 'shm'])
 
 
+def allowed_lab_environment(environ):
+    if environ.get('DOCKER_HOST') or environ.get('DOCKER_CONTEXT'):
+        return False
+    connection = environ.get('SSH_CONNECTION')
+    if not connection:
+        return True
+    # The formal entry uses SSH to this same isolated host. Both actual numeric
+    # endpoints must be loopback; remote endpoints and malformed ports fail.
+    fields = connection.split()
+    if len(fields) != 4:
+        return False
+    try:
+        return (all(ipaddress.ip_address(fields[i]).is_loopback for i in (0, 2))
+                and all(re.fullmatch(r'[0-9]{1,5}', fields[i]) and 1 <= int(fields[i]) <= 65535 for i in (1, 3)))
+    except ValueError:
+        return False
+
+
 def assert_isolated_lab(config):
     require(pathlib.Path('/.dockerenv').is_file(), 'execution requires an isolated disposable LAB container')
     require(socket.gethostname() == config['controllerHostname'], 'LAB hostname mismatch')
     marker = json.loads(pathlib.Path(config['labMarkerFile']).read_text())
     require(marker == {'labId': config['labId'], 'controllerHostname': config['controllerHostname'],
                        'isolatedNestedDocker': True, 'externalNetwork': False}, 'LAB marker does not match explicit isolation inventory')
-    require(not any(os.environ.get(k) for k in ('DOCKER_HOST', 'DOCKER_CONTEXT', 'SSH_CONNECTION')), 'remote Docker/SSH execution environment is not allowed')
+    require(allowed_lab_environment(os.environ), 'remote Docker/SSH execution environment is not allowed')
     mounts = pathlib.Path('/proc/self/mountinfo').read_text().splitlines()
     require(not any('docker.sock' in line for line in mounts), 'host-mounted Docker socket is forbidden')
     # Original handoff copies assets with docker cp; it does not bind arbitrary

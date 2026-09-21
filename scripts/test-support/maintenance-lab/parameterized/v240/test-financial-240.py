@@ -135,6 +135,24 @@ class Financial240Test(unittest.TestCase):
         self.assertIn('approval.consumed_payment_id=admission.payment_id', observed[0])
         self.assertIn('(payment.tenant_id,payment.store_id,payment.id)=(admission.tenant_id,admission.store_id,admission.payment_id)', observed[0])
 
+    def test_actual_baseline_writer_is_exclusive_and_preserves_original_facts(self):
+        with tempfile.TemporaryDirectory(prefix='mbox-baseline-writer-') as td:
+            root=pathlib.Path(td); c=config(); c['schema']=242
+            c['runtimeRoot']=td; c['financialBaselineFile']=str(root/'baseline.json')
+            directory=root/'maintenance'/c['transitionId']; directory.mkdir(parents=True)
+            epoch=directory/'business-write-epoch.json'; epoch.write_text('{"reason":"synthetic"}')
+            row={'sequence':0,'previous':'0'*64,'event':'bound','data':{
+                'forwardRecoveryTarget':{'releaseSha':c['targetSha']},'sourceLive':{'releaseSha':c['sourceSha']}}}
+            row['hash']=v.legacy.hashlib.sha256(v.legacy.canonical(row)).hexdigest()
+            (directory/'journal.jsonl').write_text(json.dumps(row)+'\n')
+            with patch.object(v.legacy,'sql',return_value=242),patch.object(v.legacy,'financial_snapshot',return_value=facts()),contextlib.redirect_stdout(io.StringIO()):
+                v.legacy.capture(c)
+                baseline=pathlib.Path(c['financialBaselineFile']); original=baseline.read_bytes()
+                self.assertEqual(json.loads(original)['financialFacts'],facts())
+                self.assertEqual(baseline.stat().st_mode & 0o777,0o600)
+                with self.assertRaises(FileExistsError): v.legacy.capture(c)
+                self.assertEqual(baseline.read_bytes(),original)
+
     def test_python_syntax_and_valid_execute_cannot_bypass_existing_lab_gate(self):
         ast.parse((HERE / 'verify-financial-240.py').read_text())
         with self.assertRaisesRegex(AssertionError, 'LAB execution forbidden'):

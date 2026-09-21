@@ -12,7 +12,8 @@ trigger=(mode=='backup' and '/maintenance-backup/' in args[1]) or (mode in ('epo
 if not trigger:raise SystemExit(0)
 (root/'fault-mode').write_text('none')
 if mode in ('epoch','seed'):
- subprocess.run(['python3',root/'fixture/seed-financial.py'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+ with (root/'private-logs/financial-seed-driver.log').open('w') as log:
+  subprocess.run(['python3',root/'fixture/seed-financial.py'],check=True,stdout=log,stderr=subprocess.STDOUT)
 if mode!='seed':
  with Path(args[2]).open('ab') as f:f.write(b'LAB-READBACK-CORRUPTION')
 with (root/'fault-events.jsonl').open('a') as f:f.write(json.dumps({'mode':mode,'copiedBeforeInjection':True,'corruptedReadback':mode!='seed','businessFactsCreated':mode in ('epoch','seed')})+'\n')

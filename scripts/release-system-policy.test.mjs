@@ -427,7 +427,7 @@ test('publisher UID/GID cannot cross release transfers and plan normalization pr
   const deploy = await read('../deploy/aliyun/deploy-release.sh')
   const transfers = deploy.split('\n').filter(line => /^\s*rsync -a /.test(line))
   assert.equal(transfers.length, 6)
-  for (const line of transfers) assert.match(line, /rsync -a --no-owner --no-group --chmod=go-w --partial/)
+  for (const line of transfers) assert.match(line, /rsync -a --no-owner --no-group --no-perms --rsync-path=/)
   assert.ok(deploy.indexOf('chown 0:0') < deploy.indexOf('uses_evidence_relay=0'))
   const bootstrap = await read('../deploy/aliyun/maintenance-bootstrap.sh')
   assert.match(bootstrap, /test "\$\(stat -c '%u:%a' "\$\{plan\}"\)" = 0:600/)
@@ -445,6 +445,7 @@ test('real rsync repairs a non-root publisher plan without accepting symlinks', 
   const fixture = join(dir, 'verify.sh')
   writeFileSync(fixture, `#!/bin/bash
 set -euo pipefail
+umask 077
 root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT
 mkdir "$root/source" "$root/destination"
@@ -472,7 +473,7 @@ if verify_remote_release_directory; then exit 1; fi
 chown 0:0 "$root/destination"
 chmod 0775 "$root/source"
 ${transfer} "$root/source/" "$root/destination/"
-test "$(stat -c %a "$root/destination")" = 755
+test "$(stat -c %a "$root/destination")" = 700
 verify_remote_release_directory
 ${normalization}
 test "$(stat -c '%u:%g:%a' "$root/destination/maintenance-plan.json")" = 0:0:600

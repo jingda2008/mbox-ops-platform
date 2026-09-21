@@ -146,7 +146,10 @@ test('restore prepares exact original extension owners and refuses unavailable S
    const result=spawnSync('bash',['-c',program],{encoding:'utf8',env:{...process.env,STATE:state,ROLE_EXIT:String(roleExit),EVIDENCE:evidence}})
    assert.equal(result.status,expected,`${state}/${roleExit}: ${result.stderr}`)
   }
-  assert.ok(source.indexOf('prepare_restore_extensions "${staging_connection}"')<source.indexOf('pg_restore --dbname="${staging_connection}"'))
+  const schemaRestore=source.indexOf('--use-list="${restore_archive_directory}/schemas.list"')
+  const extensionPrepare=source.indexOf('prepare_restore_extensions "${staging_connection}"')
+  const remainingRestore=source.indexOf('--use-list="${restore_archive_directory}/remaining.list"')
+  assert.ok(schemaRestore>=0 && schemaRestore<extensionPrepare && extensionPrepare<remainingRestore)
   assert.match(source,/RESTORE_EVIDENCE_MISMATCH staging_vs_source/)
  }finally{await rm(dir,{recursive:true,force:true})}
 })

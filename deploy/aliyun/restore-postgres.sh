@@ -407,6 +407,7 @@ SQL
 )" = 0
 
 staging_created=0
+restore_archive_directory=
 restore_original_database_name() {
   local target_exists preserved_exists staging_exists failed_exists
   target_exists=$(psql -XAt --dbname="${admin_connection}" \
@@ -464,6 +465,9 @@ SQL
 cleanup_restore() {
   local exit_code=${1:-$?}
   trap - ERR INT TERM
+  if [ -n "${restore_archive_directory}" ]; then
+    rm -rf -- "${restore_archive_directory}"
+  fi
   restore_original_database_name || true
   psql -X --set=ON_ERROR_STOP=1 --dbname="${admin_connection}" \
     --set=staging_database="${staging_database}" >/dev/null <<'SQL' || true
@@ -485,8 +489,24 @@ CREATE DATABASE :"staging_database" WITH OWNER=:"database_owner" TEMPLATE=templa
   CONNECTION LIMIT :database_connection_limit;
 SQL
 staging_created=1
+# Extensions may live in a schema supplied by the archive (for example mbox).
+# Restore only the archive's schema definitions and their original owners first;
+# leave schema ACLs/comments and every other object in the main restore list.
+restore_archive_directory=$(mktemp -d)
+pg_restore --list "${backup}" > "${restore_archive_directory}/archive.list"
+awk '/^[0-9]+; [0-9]+ [0-9]+ SCHEMA /' \
+  "${restore_archive_directory}/archive.list" > "${restore_archive_directory}/schemas.list"
+awk '!/^[0-9]+; [0-9]+ [0-9]+ SCHEMA /' \
+  "${restore_archive_directory}/archive.list" > "${restore_archive_directory}/remaining.list"
+if [ -s "${restore_archive_directory}/schemas.list" ]; then
+  pg_restore --dbname="${staging_connection}" --exit-on-error --single-transaction \
+    --use-list="${restore_archive_directory}/schemas.list" "${backup}"
+fi
 prepare_restore_extensions "${staging_connection}" "${MBOX_EXPECTED_RESTORE_EVIDENCE}"
-pg_restore --dbname="${staging_connection}" --exit-on-error --single-transaction "${backup}"
+pg_restore --dbname="${staging_connection}" --exit-on-error --single-transaction \
+  --use-list="${restore_archive_directory}/remaining.list" "${backup}"
+rm -rf -- "${restore_archive_directory}"
+restore_archive_directory=
 psql -X --set=ON_ERROR_STOP=1 --dbname="${admin_connection}" \
   --set=staging_database="${staging_database}" --set=database_owner="${database_owner}" \
   >/dev/null <<'SQL'

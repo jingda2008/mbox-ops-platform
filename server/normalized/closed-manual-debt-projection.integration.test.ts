@@ -29,7 +29,7 @@ const permission=(provider:Provider)=>provider==='cash'?'payment.manual.cash.rec
     runner=new ScopedPostgresTransactionRunner(runtime)
     const identity=(await runtime.query("SELECT session_user,current_user,current_database(),rolsuper,rolbypassrls,rolcreaterole,rolcreatedb FROM pg_roles WHERE rolname=session_user")).rows[0]
     expect(identity).toMatchObject({session_user:new URL(runtimeUrl!).username,current_user:new URL(runtimeUrl!).username,rolsuper:false,rolbypassrls:false,rolcreaterole:false,rolcreatedb:false})
-    expect(Number((await admin.query('SELECT max(version) version FROM mbox.normalized_schema_migrations')).rows[0].version)).toBe(240)
+    expect(Number((await admin.query('SELECT max(version) version FROM mbox.normalized_schema_migrations')).rows[0].version)).toBe(241)
     evidence.push({identity,migrations:(await admin.query("SELECT version,checksum FROM mbox.normalized_schema_migrations WHERE version IN ('239','240') ORDER BY version")).rows})
     money=service(runner)
     await admin.query("INSERT INTO mbox.tenants(id,code,name) VALUES($1,$2,'SYS342 projection fixture')",[scope.tenantId,scope.tenantId])

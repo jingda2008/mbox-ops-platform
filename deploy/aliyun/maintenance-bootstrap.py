@@ -1051,7 +1051,9 @@ class Host:
         # empty worker tick is conservatively treated as a new write domain.
         self.journal.epoch('before-first-worker-or-callback-replay')
         stage=self.release/'oss-maintenance-epoch'; stage.mkdir(mode=0o700,exist_ok=True)
-        for source in (self.directory/'journal.jsonl',self.directory/'business-write-epoch.json'): shutil.copy2(source,stage/source.name)
+        epoch_sources=[self.directory/'journal.jsonl',self.directory/'business-write-epoch.json']
+        if (self.directory/'historical-payment-review.json').exists(): epoch_sources.append(protected(self.directory/'historical-payment-review.json'))
+        for source in epoch_sources: shutil.copy2(source,stage/source.name)
         self.archive('maintenance-epoch',stage)
         self.start_candidate(False); self.control('target','POST','http://'+self.ip(self.candidate)+':8787')
         stable=0

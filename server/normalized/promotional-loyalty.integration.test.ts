@@ -1,3 +1,4 @@
+import {assertRuntimeDatabasePool} from './runtime-database-identity.js'
 import { randomUUID } from 'node:crypto'
 import { afterAll,beforeAll,describe,expect,it } from 'vitest'
 import { Pool } from 'pg'
@@ -11,7 +12,8 @@ import { PromotionalLoyaltyWorker } from './promotional-loyalty-worker.js'
 import { ScopedPostgresTransactionRunner,type PostgresPool } from './transaction-runner.js'
 
 const databaseUrl=process.env.TEST_NORMALIZED_DATABASE_URL
-const integration=databaseUrl?describe:describe.skip
+const runtimeDatabaseUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
+const integration=databaseUrl&&runtimeDatabaseUrl?describe:describe.skip
 const id={
   tenant:randomUUID(),store:randomUUID(),manager:randomUUID(),ops:randomUUID(),owner:randomUUID(),
   managerRole:randomUUID(),opsRole:randomUUID(),ownerRole:randomUUID(),activity:randomUUID(),
@@ -24,6 +26,7 @@ const scope={tenantId:id.tenant,storeId:id.store}
 
 integration('promotional loyalty PostgreSQL authority',()=>{
   let pool:Pool
+  let runtime:Pool
   let runner:ScopedPostgresTransactionRunner
   let service:PromotionalLoyaltyService
   let configuration:MembershipConfigurationDraftService
@@ -34,6 +37,11 @@ integration('promotional loyalty PostgreSQL authority',()=>{
   beforeAll(async()=>{
     await runNormalizedMigrations(databaseUrl!)
     pool=new Pool({connectionString:databaseUrl,max:8})
+    runtime=new Pool({connectionString:runtimeDatabaseUrl,max:8})
+    await assertRuntimeDatabasePool(runtime,runtimeDatabaseUrl!)
+    // Governance fixtures still expose a separate schema permission defect;
+    // this suite verifies delivery/refund workers with the production role.
+    // Do not infer runtime configuration publication from these admin fixtures.
     runner=new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool)
     const commands=new NormalizedCommandExecutor(runner)
     service=new PromotionalLoyaltyService(runner,commands)
@@ -41,11 +49,11 @@ integration('promotional loyalty PostgreSQL authority',()=>{
       new PostgresMembershipConfigurationDraftRepository(runner,scope),
     )
     controls=new LoyaltyOperationalControlService(runner,commands)
-    worker=new PromotionalLoyaltyWorker(runner)
+    worker=new PromotionalLoyaltyWorker(new ScopedPostgresTransactionRunner(runtime as unknown as PostgresPool))
     await seed(pool)
     effectiveFrom=new Date(Date.now()+60_000).toISOString()
   })
-  afterAll(async()=>pool?.end())
+  afterAll(async()=>{await runtime?.end();await pool?.end()})
 
   it('uses configurable default roles and enforces independent draft, approve and publish',async()=>{
     const assigned=await pool.query(`

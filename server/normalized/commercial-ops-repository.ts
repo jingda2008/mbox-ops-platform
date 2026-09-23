@@ -321,11 +321,14 @@ export class CommercialOpsRepository {
   ): Promise<OperatingCostEntry> {
     validateCost(replacement)
     nonBlank(correctionReason, 'correctionReason')
+    // Cost history is append-only; serialize corrections without UPDATE privilege.
+    await this.transaction.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
+      `cost-correction:${this.transaction.scope.tenantId}:${this.transaction.scope.storeId}:${correctedEntryId}`,
+    ])
     const target = await this.transaction.query<CostRow>(`
       SELECT ${COST_COLUMNS}
       FROM mbox.operating_cost_entries AS cost
       WHERE cost.tenant_id = $1::uuid AND cost.store_id = $2::uuid AND cost.id = $3::uuid
-      FOR UPDATE
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, correctedEntryId])
     const current = target.rows[0]
     if (!current) throw new CommercialRecordNotFoundError('Cost entry was not found')
@@ -400,7 +403,6 @@ export class CommercialOpsRepository {
       FROM mbox.employee_sales_attribution_events
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND order_item_id = $3::uuid AND event_type = 'sale'
-      FOR UPDATE
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, source.order_item_id])
     if (existing.rows[0]) {
       if (existing.rows[0].employee_id !== employeeId) {
@@ -504,13 +506,17 @@ export class CommercialOpsRepository {
     }
     const reversed: EmployeeSalesAttributionEvent[] = []
     for (const allocation of allocations.rows) {
+      // Share the mutable item lock with attribution creation and other refunds.
+      // Runtime can append attribution facts but cannot UPDATE existing history.
+      await this.transaction.query(`SELECT id FROM mbox.order_items
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid FOR UPDATE`,
+      [this.transaction.scope.tenantId, this.transaction.scope.storeId, allocation.order_item_id])
       const saleRows = await this.transaction.query<AttributionRow>(`
         SELECT ${ATTRIBUTION_COLUMNS}
         FROM mbox.employee_sales_attribution_events
         WHERE tenant_id = $1::uuid AND store_id = $2::uuid
           AND order_item_id = $3::uuid AND event_type = 'sale'
         ORDER BY employee_id, id
-        FOR UPDATE
       `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, allocation.order_item_id])
       for (const sale of saleRows.rows) {
         const existing = await this.transaction.query<AttributionRow>(`

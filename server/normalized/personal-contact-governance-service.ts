@@ -576,9 +576,11 @@ export class PersonalContactGovernanceService {
     execute: (transaction: ScopedTransaction, policy: { id: string; resource_kind: ResourceKind }) => Promise<Result>,
   ): Promise<Result> {
     return this.transactions.run(context.scope, async (transaction) => {
+      // The scoped definer transition owns its row lock and validates role/status.
+      // Runtime can read policy identities but cannot UPDATE the policy table.
       const selected = await transaction.query<{ id: string; resource_kind: ResourceKind }>(`
         SELECT id,resource_kind FROM mbox.personal_contact_retention_policy_versions
-        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND public_id=$3 FOR UPDATE
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND public_id=$3
       `, [transaction.scope.tenantId, transaction.scope.storeId, publicId])
       if (!selected.rows[0]) throw error('CONTACT_RETENTION_POLICY_NOT_FOUND', '保留策略不存在', 404)
       return execute(transaction, selected.rows[0])

@@ -23,11 +23,13 @@ if r.returncode:raise RuntimeError(r.stderr)
 # with two synthetic system attempts, one with an unknown provider action.
 import sys
 if len(sys.argv)>1 and sys.argv[1]=='forward':
- h={k:str(uuid.uuid4()) for k in ('session','order','receipt','attempt1','attempt2')}
+ h={k:str(uuid.uuid4()) for k in ('table','session','order','receipt','attempt1','attempt2')}
  q="""BEGIN;
  SELECT set_config('app.tenant_id','{t}',true),set_config('app.store_id','{s}',true);
+ INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity)
+ SELECT '{table}','{t}','{s}',area_id,'LAB-HIST','Historical fixture',4 FROM mbox.tables WHERE tenant_id='{t}' AND store_id='{s}' LIMIT 1;
  INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count,status)
- SELECT '{session}','{t}','{s}',tables.id,'lab-settled-session',CURRENT_DATE,2,'open' FROM mbox.tables tables WHERE tenant_id='{t}' AND store_id='{s}' AND NOT EXISTS(SELECT 1 FROM mbox.table_sessions occupied WHERE occupied.table_id=tables.id AND occupied.status='open') LIMIT 1;
+ VALUES('{session}','{t}','{s}','{table}','lab-settled-session',CURRENT_DATE,2,'open');
  INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,subtotal_amount_minor,total_amount_minor,currency)
  VALUES('{order}','{t}','{s}','{session}','lab-settled-order','staff_assisted','submitted','paid',100,100,'CNY');
  INSERT INTO mbox.payments(id,tenant_id,store_id,order_id,public_id,provider,provider_transaction_id,method,amount_minor,currency,status,succeeded_at)

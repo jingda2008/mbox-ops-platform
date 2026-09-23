@@ -1,3 +1,4 @@
+import {loadGiftBenefitProducts} from './gift-benefit-products.js'
 import {kitchenProductionApiPlugin} from './kitchen-production-api.js'
 import {assertRuntimeDatabasePool, RuntimeDatabaseIdentityError} from './runtime-database-identity.js'
 import { customerCustodyApiPlugin } from './customer-custody-api.js'
@@ -212,7 +213,7 @@ export const NORMALIZED_LOG_REDACTION_PATHS = Object.freeze([
   'payment.publicKey',
 ])
 
-export const NORMALIZED_MIN_SCHEMA_VERSION = '242'
+export const NORMALIZED_MIN_SCHEMA_VERSION = '245'
 export const NORMALIZED_INJECTABLE_PLUGIN_PORTS = Object.freeze([
   'customer-table-side',
 ] as const)
@@ -656,27 +657,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
         if (input.redeemedByEmployeeId === null || !/^\d{4}-\d{2}-\d{2}$/.test(input.businessDate)) {
           throw new Error('Gift benefit fulfillment requires an authenticated employee and business date')
         }
-        const products = await transaction.query<{
-          product_id: string; original_product_id: string | null; configured_reason: string | null
-        }>(`
-          SELECT allowed.product_id,definition.product_id AS original_product_id,
-            substitute.reason AS configured_reason
-          FROM mbox.benefit_allowed_products allowed
-          LEFT JOIN mbox.membership_annual_benefit_grants grant_row
-            ON grant_row.tenant_id=allowed.tenant_id AND grant_row.store_id=allowed.store_id
-           AND grant_row.benefit_id=allowed.benefit_id
-          LEFT JOIN mbox.loyalty_annual_benefit_rules rule
-            ON rule.tenant_id=grant_row.tenant_id AND rule.store_id=grant_row.store_id AND rule.id=grant_row.rule_id
-          LEFT JOIN mbox.loyalty_benefit_definitions definition
-            ON definition.tenant_id=rule.tenant_id AND definition.store_id=rule.store_id
-           AND definition.id=rule.benefit_definition_id
-          LEFT JOIN mbox.loyalty_annual_benefit_rule_substitutes substitute
-            ON substitute.tenant_id=rule.tenant_id AND substitute.store_id=rule.store_id
-           AND substitute.rule_id=rule.id AND substitute.product_id=allowed.product_id
-          WHERE allowed.tenant_id=$1::uuid AND allowed.store_id=$2::uuid AND allowed.benefit_id=$3::uuid
-          ORDER BY (allowed.product_id=definition.product_id) DESC,substitute.priority,allowed.product_id
-          FOR KEY SHARE OF allowed
-        `, [transaction.scope.tenantId, transaction.scope.storeId, input.benefitId])
+        const products = await loadGiftBenefitProducts(transaction,input.benefitId)
         const selected = input.selectedProductId === null
           ? (products.rows.length === 1 ? products.rows[0] : undefined)
           : products.rows.find((row) => row.product_id === input.selectedProductId)

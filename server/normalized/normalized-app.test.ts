@@ -459,7 +459,7 @@ describe('createNormalizedApp', () => {
   })
 
   it('does not report ready when normalized migrations are older than registered plugins', async () => {
-    expect(NORMALIZED_MIN_SCHEMA_VERSION).toBe('242')
+    expect(NORMALIZED_MIN_SCHEMA_VERSION).toBe('245')
     const pool = fakePool({
       ready: { schema_flavor: NORMALIZED_SCHEMA_FLAVOR, schema_version: '227', store_active: true },
     })

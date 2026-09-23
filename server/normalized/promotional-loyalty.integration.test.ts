@@ -37,19 +37,16 @@ integration('promotional loyalty PostgreSQL authority',()=>{
   beforeAll(async()=>{
     await runNormalizedMigrations(databaseUrl!)
     pool=new Pool({connectionString:databaseUrl,max:8})
-    runtime=new Pool({connectionString:runtimeDatabaseUrl,max:8})
+    runtime=new Pool({connectionString:runtimeDatabaseUrl,options:'-c search_path=pg_catalog',max:8})
     await assertRuntimeDatabasePool(runtime,runtimeDatabaseUrl!)
-    // Governance fixtures still expose a separate schema permission defect;
-    // this suite verifies delivery/refund workers with the production role.
-    // Do not infer runtime configuration publication from these admin fixtures.
-    runner=new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool)
+    runner=new ScopedPostgresTransactionRunner(runtime as unknown as PostgresPool)
     const commands=new NormalizedCommandExecutor(runner)
     service=new PromotionalLoyaltyService(runner,commands)
     configuration=new MembershipConfigurationDraftService(
       new PostgresMembershipConfigurationDraftRepository(runner,scope),
     )
     controls=new LoyaltyOperationalControlService(runner,commands)
-    worker=new PromotionalLoyaltyWorker(new ScopedPostgresTransactionRunner(runtime as unknown as PostgresPool))
+    worker=new PromotionalLoyaltyWorker(runner)
     await seed(pool)
     effectiveFrom=new Date(Date.now()+60_000).toISOString()
   })

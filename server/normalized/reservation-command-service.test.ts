@@ -1,3 +1,4 @@
+import { assertRuntimeDatabasePool } from './runtime-database-identity.js'
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
@@ -17,7 +18,8 @@ import {
 } from './transaction-runner.js'
 
 const databaseUrl = process.env.TEST_NORMALIZED_DATABASE_URL
-const integration = databaseUrl ? describe : describe.skip
+const runtimeDatabaseUrl = process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
+const integration = databaseUrl && runtimeDatabaseUrl ? describe : describe.skip
 
 integration('normalized reservation, customer and benefit transactions', () => {
   const tenantId = randomUUID()
@@ -30,6 +32,7 @@ integration('normalized reservation, customer and benefit transactions', () => {
   const paymentTableSessionId = randomUUID()
   const benefitProductId = randomUUID()
   const reservationWindow = nextShanghaiCrossMidnightWindow()
+  let runtime: Pool
   let nativePool: Pool
   let commands: NormalizedCommandExecutor
   let reservations: ReservationCommandService
@@ -39,7 +42,9 @@ integration('normalized reservation, customer and benefit transactions', () => {
   beforeAll(async () => {
     await runNormalizedMigrations(databaseUrl!)
     nativePool = new Pool({ connectionString: databaseUrl, max: 8 })
-    commands = new NormalizedCommandExecutor(new ScopedPostgresTransactionRunner(asPool(nativePool)))
+    runtime = new Pool({ connectionString: runtimeDatabaseUrl, options: '-c search_path=pg_catalog', max: 16 })
+    await assertRuntimeDatabasePool(runtime, runtimeDatabaseUrl!)
+    commands = new NormalizedCommandExecutor(new ScopedPostgresTransactionRunner(asPool(runtime)))
     reservations = new ReservationCommandService(commands)
     customers = new CustomerCommandService(commands)
     benefits = new BenefitCommandService(commands, {
@@ -109,6 +114,7 @@ integration('normalized reservation, customer and benefit transactions', () => {
   })
 
   afterAll(async () => {
+    await runtime?.end()
     await nativePool?.end()
   })
 

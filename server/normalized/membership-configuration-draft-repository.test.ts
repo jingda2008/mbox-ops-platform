@@ -1,3 +1,4 @@
+import {assertRuntimeDatabasePool} from './runtime-database-identity.js'
 import Fastify from 'fastify'
 import {membershipConfigurationApiPlugin} from './membership-configuration-api.js'
 import {NormalizedCommandExecutor} from './command-executor.js'
@@ -14,7 +15,8 @@ import {
 import { ScopedPostgresTransactionRunner,type PostgresPool } from './transaction-runner.js'
 
 const databaseUrl=process.env.TEST_NORMALIZED_DATABASE_URL
-const integration=databaseUrl?describe:describe.skip
+const runtimeDatabaseUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
+const integration=databaseUrl&&runtimeDatabaseUrl?describe:describe.skip
 const ids={
   tenant:randomUUID(),store:randomUUID(),drafter:randomUUID(),editor:randomUUID(),
   approver:randomUUID(),publisher:randomUUID(),base:randomUUID(),tier:randomUUID(),
@@ -25,6 +27,7 @@ const ids={
 
 integration('membership configuration saved drafts and server impact evidence',()=>{
   let pool:Pool
+  let runtime:Pool
   let runner:ScopedPostgresTransactionRunner
   let now=new Date()
   let service:MembershipConfigurationDraftService
@@ -32,11 +35,13 @@ integration('membership configuration saved drafts and server impact evidence',(
   beforeAll(async()=>{
     await runNormalizedMigrations(databaseUrl!)
     pool=new Pool({connectionString:databaseUrl,max:8})
-    runner=new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool)
+    runtime=new Pool({connectionString:runtimeDatabaseUrl,options:'-c search_path=pg_catalog',max:8})
+    await assertRuntimeDatabasePool(runtime,runtimeDatabaseUrl!)
+    runner=new ScopedPostgresTransactionRunner(runtime as unknown as PostgresPool)
     service=new MembershipConfigurationDraftService(repository(),()=>now)
     await seed(pool)
   },30_000)
-  afterAll(async()=>pool?.end())
+  afterAll(async()=>{await runtime?.end();await pool?.end()})
 
   it('captures the original drafter, hides legacy notification rows and enforces draft CAS',async()=>{
     const contributors=await pool.query<{configuration_domain:string;employee_id:string}>(`
@@ -240,6 +245,34 @@ integration('membership configuration saved drafts and server impact evidence',(
     const row=await pool.query(`SELECT status,published_by_employee_id::text publisher
       FROM mbox.loyalty_policy_versions WHERE id=$1::uuid`,[ids.base])
     expect(row.rows[0]).toMatchObject({status:'published',publisher:ids.publisher})
+  })
+
+  it('keeps direct writes, legacy policies, cross-store commands and approved child deletion forbidden',async()=>{
+    const scope={tenantId:ids.tenant,storeId:ids.store}
+    await expect(runner.run(scope,tx=>tx.query('UPDATE mbox.wechat_notification_policies SET reason=$1 WHERE id=$2',['forbidden',ids.notification]))).rejects.toMatchObject({code:'42501'})
+    await expect(runner.run(scope,tx=>tx.query('DELETE FROM mbox.loyalty_tier_benefit_rules WHERE policy_version_id=$1',[ids.benefit]))).rejects.toMatchObject({code:'42501'})
+    for(const id of [ids.notification,ids.legacyNotification]){
+      const result=await runner.run(scope,tx=>tx.query('SELECT * FROM mbox.replace_managed_notification_draft($1,1,$2::jsonb,$3)',[id,JSON.stringify({...contents.wechat_notifications,status:'published',governance_mode:'managed'}),'forbidden']))
+      expect(result.rows).toHaveLength(0)
+    }
+    const hidden=await runner.run({tenantId:ids.tenant,storeId:randomUUID()},tx=>tx.query('SELECT * FROM mbox.lock_managed_notification_policy($1)',[ids.notification]))
+    expect(hidden.rows).toHaveLength(0)
+    const legacy=await runner.run(scope,tx=>tx.query('SELECT * FROM mbox.lock_managed_notification_policy($1)',[ids.legacyNotification]))
+    expect(legacy.rows).toHaveLength(0)
+    for(const [sql,id] of [['SELECT mbox.clear_draft_tier_benefit_rules($1)',ids.benefit],['SELECT mbox.remove_absent_draft_redemption_items($1,ARRAY[]::text[])',ids.redemption]]){
+      await expect(runner.run(scope,tx=>tx.query(sql,[id]))).rejects.toMatchObject({code:'42501'})
+    }
+    await expect(runner.run(scope,tx=>tx.query('SELECT mbox.publish_managed_notification_policy($1,1,$2,clock_timestamp()+interval \'1 hour\',NULL,$3)',[ids.notification,randomUUID(),'forbidden']))).rejects.toMatchObject({code:'42501'})
+    const unreviewed=randomUUID()
+    await pool.query(`INSERT INTO mbox.wechat_notification_policies(id,tenant_id,store_id,notification_type,
+      authorization_purpose,authorization_context,policy_version,template_id,page_path,points_data_key,
+      balance_data_key,occurred_at_data_key,reason,governance_mode,drafted_by_employee_id)
+      VALUES($1,$2,$3,'loyalty_points_credited','loyalty_balance_change','loyalty_accrual',9,
+        'unreviewed-template','pages/points/index','points_value','balance_value','occurred_at','未审核草稿','managed',$4)`,
+      [unreviewed,ids.tenant,ids.store,ids.drafter])
+    await expect(runner.run(scope,tx=>tx.query('SELECT * FROM mbox.approve_managed_notification_draft($1,1,$2,$3)',[unreviewed,ids.approver,'未经影响审核']))).rejects.toThrow(/immutable server impact approval fact/)
+    await expect(runner.run(scope,tx=>tx.query('SELECT * FROM mbox.replace_managed_notification_draft($1,1,$2::jsonb,$3)',[unreviewed,JSON.stringify(contents.wechat_notifications),'缺少编辑事实']))).rejects.toThrow(/strong contributor fact/)
+    expect((await pool.query('SELECT governance_mode,status,template_id FROM mbox.wechat_notification_policies WHERE id=$1',[ids.legacyNotification])).rows[0]).toMatchObject({governance_mode:'legacy_unattributed',status:'draft',template_id:'legacy-template-094'})
   })
 
   function repository(){return new PostgresMembershipConfigurationDraftRepository(runner,{tenantId:ids.tenant,storeId:ids.store})}

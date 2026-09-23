@@ -1,3 +1,4 @@
+import {lockReservationPolicy} from './reservation-policy-lock.js'
 import { createHash, randomUUID } from 'node:crypto'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type { JsonCodec, JsonObject } from './command-executor.js'
@@ -944,13 +945,13 @@ async function ownedReservationInTransaction(
 }
 
 async function readPolicy(transaction: ScopedTransaction, lock = false): Promise<ReservationPolicyRow> {
+  if (lock) await lockReservationPolicy(transaction)
   const result = await transaction.query<ReservationPolicyRow>(`
     SELECT policy_version, hold_minutes, arrival_grace_minutes, max_advance_days, default_duration_minutes,
       customer_cancel_cutoff_minutes, deposit_mode, deposit_minor,
       deposit_ratio_bps, deposit_rule_text
     FROM mbox.public_reservation_policies
     WHERE tenant_id = $1::uuid AND store_id = $2::uuid
-    ${lock ? 'FOR UPDATE' : ''}
   `, [transaction.scope.tenantId, transaction.scope.storeId])
   const row = result.rows[0]
   if (!row) throw new Error('门店预约规则尚未配置')

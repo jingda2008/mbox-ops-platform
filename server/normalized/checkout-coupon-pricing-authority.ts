@@ -12,11 +12,12 @@ import {BenefitRepository} from './benefit-repository.js'
 export async function authorizeCheckoutCouponQuote(tx:ScopedTransaction,context:Readonly<PricingAuthorityContext>):Promise<Readonly<PricingAuthorityDecision>>{
   const scope=[tx.scope.tenantId,tx.scope.storeId]
   if(context.actor.type!=='guest'||context.channel!=='guest_qr')throw new PricingAuthorizationDeniedError('此报价只能由原会员在桌边结算时确认')
+  // The sealed quote is immutable; serialize consumption on its mutable cart.
   const row=(await tx.query<{customer_id:string;table_session_id:string;unexpired:boolean;cart_matches:boolean}>(`SELECT q.customer_id,q.table_session_id,q.expires_at>clock_timestamp() AS unexpired,
       (c.status='submitting' AND c.generation=q.cart_generation AND c.version=q.cart_version+1) AS cart_matches
     FROM mbox.checkout_coupon_quotes q JOIN mbox.guest_shared_carts c ON c.tenant_id=q.tenant_id AND c.store_id=q.store_id AND c.id=q.cart_id
     WHERE q.tenant_id=$1 AND q.store_id=$2 AND q.id=$3
-    FOR UPDATE OF q`,[...scope,context.request.sourceId])).rows[0]
+    FOR UPDATE OF c`,[...scope,context.request.sourceId])).rows[0]
   if(!row)throw new PricingAuthorizationDeniedError('该结算报价不存在，请重新确认购物车')
   if(row.table_session_id!==context.tableSessionId)throw new PricingAuthorizationDeniedError('该报价属于原桌次，请在当前桌重新确认购物车')
   if(!row.unexpired)throw new PricingAuthorizationDeniedError('结算报价已过期，请重新确认当前价格与优惠')

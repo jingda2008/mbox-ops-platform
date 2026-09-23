@@ -40,7 +40,7 @@ export class CheckoutCouponLifecycleRepository{
     const scope=[this.tx.scope.tenantId,this.tx.scope.storeId]
     const link=(await this.tx.query<{quote_id:string}>('SELECT quote_id FROM mbox.checkout_coupon_order_links WHERE tenant_id=$1 AND store_id=$2 AND order_id=$3',[...scope,orderId])).rows[0]
     if(!link)return{redeemed:0}
-    const paid=(await this.tx.query<{id:string;public_id:string}>(`SELECT o.id,o.public_id FROM mbox.orders o WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.id=$3 AND o.payment_status='paid' AND o.fulfillment_state<>'cancelled'
+    const paid=(await this.tx.query<{id:string;public_id:string}>(`SELECT o.id,o.public_id FROM mbox.orders o WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.id=$3 AND mbox.order_consumption_settled(o.tenant_id,o.store_id,o.id) AND o.fulfillment_state<>'cancelled'
       AND o.total_amount_minor<=(SELECT COALESCE(sum(p.amount_minor),0) FROM mbox.order_payment_facts p WHERE p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.order_id=o.id AND p.status IN('succeeded','partially_refunded','refunded')) FOR UPDATE`,[...scope,orderId])).rows[0]
     if(!paid)throw new Error('Coupon redemption requires confirmed paid order and non-cancelled fulfillment')
     const holds=(await this.tx.query<{id:string;benefit_id:string;customer_id:string;table_session_id:string;quantity:number;status:string}>(`SELECT r.id,r.benefit_id,r.customer_id,r.table_session_id,r.quantity,r.status FROM mbox.checkout_coupon_quote_reservations h JOIN mbox.benefit_reservations r ON r.tenant_id=h.tenant_id AND r.store_id=h.store_id AND r.id=h.reservation_id WHERE h.tenant_id=$1 AND h.store_id=$2 AND h.quote_id=$3 ORDER BY r.benefit_id FOR UPDATE OF r`,[...scope,link.quote_id])).rows

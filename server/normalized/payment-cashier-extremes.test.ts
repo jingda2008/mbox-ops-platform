@@ -15,7 +15,7 @@ import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
-import { runNormalizedMigrations } from '../migrate-normalized.js'
+import { runNormalizedMigrations, unwrapNormalizedMigrationTransaction } from '../migrate-normalized.js'
 import { NormalizedCommandExecutor, type AuditActor } from './command-executor.js'
 import { PaymentCommandService } from './payment-command-service.js'
 import { NormalizedPaymentCapabilityAuthorization, type PaymentCapabilityAuthorizationPort } from './payment-security-policy.js'
@@ -817,17 +817,23 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
     }finally{await client.query('ROLLBACK');client.release()}
   })
   it('backfills finance management only to finance roles already allowed to view, without changing payment authority',async()=>{
-    const financeRole=randomUUID(),serverRole=randomUUID()
-    await pool.query("INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name) VALUES($1,$2,'reconciliation.view','查看财务') ON CONFLICT(tenant_id,store_id,code) DO NOTHING",[tenantId,storeId])
-    await pool.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$3,$4,'CASHIER','收银'),($2,$3,$4,'SERVER','服务员')",[financeRole,serverRole,tenantId,storeId])
-    await pool.query("INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) SELECT $1,$2,r.id,p.id FROM mbox.roles r JOIN mbox.staff_permission_definitions p ON p.tenant_id=r.tenant_id AND p.store_id=r.store_id WHERE r.id=ANY($3::uuid[]) AND p.code='reconciliation.view'",[tenantId,storeId,[financeRole,serverRole]])
-    const before=(await pool.query("SELECT role_id,permission_id FROM mbox.role_permission_assignments WHERE role_id=ANY($1::uuid[]) ORDER BY role_id,permission_id",[[financeRole,serverRole]])).rows
-    const migration=await readFile(new URL('../../database/normalized-migrations/197_payment_finance_management_permission.sql',import.meta.url),'utf8')
-    await pool.query(migration);await pool.query(migration)
-    const grants=(await pool.query("SELECT r.code,p.code permission FROM mbox.role_permission_assignments a JOIN mbox.roles r ON r.id=a.role_id JOIN mbox.staff_permission_definitions p ON p.id=a.permission_id WHERE r.id=ANY($1::uuid[]) ORDER BY r.code,p.code",[[financeRole,serverRole]])).rows
-    expect(grants.filter(row=>row.permission==='reconciliation.manage')).toEqual([{code:'CASHIER',permission:'reconciliation.manage'}])
-    const after=(await pool.query("SELECT a.role_id,a.permission_id FROM mbox.role_permission_assignments a JOIN mbox.staff_permission_definitions p ON p.id=a.permission_id WHERE a.role_id=ANY($1::uuid[]) AND p.code<>'reconciliation.manage' ORDER BY a.role_id,a.permission_id",[[financeRole,serverRole]])).rows
-    expect(after).toEqual(before)
+    const schemaBefore=(await pool.query('SELECT schema_version FROM mbox.normalized_schema_metadata WHERE singleton=true')).rows
+    const client=await pool.connect()
+    try{
+      await client.query('BEGIN')
+      const financeRole=randomUUID(),serverRole=randomUUID()
+      await client.query("INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name) VALUES($1,$2,'reconciliation.view','查看财务') ON CONFLICT(tenant_id,store_id,code) DO NOTHING",[tenantId,storeId])
+      await client.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$3,$4,'CASHIER','收银'),($2,$3,$4,'SERVER','服务员')",[financeRole,serverRole,tenantId,storeId])
+      await client.query("INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) SELECT $1,$2,r.id,p.id FROM mbox.roles r JOIN mbox.staff_permission_definitions p ON p.tenant_id=r.tenant_id AND p.store_id=r.store_id WHERE r.id=ANY($3::uuid[]) AND p.code='reconciliation.view'",[tenantId,storeId,[financeRole,serverRole]])
+      const before=(await client.query("SELECT role_id,permission_id FROM mbox.role_permission_assignments WHERE role_id=ANY($1::uuid[]) ORDER BY role_id,permission_id",[[financeRole,serverRole]])).rows
+      const migration=await readFile(new URL('../../database/normalized-migrations/197_payment_finance_management_permission.sql',import.meta.url),'utf8')
+      await client.query(unwrapNormalizedMigrationTransaction(migration));await client.query(unwrapNormalizedMigrationTransaction(migration))
+      const grants=(await client.query("SELECT r.code,p.code permission FROM mbox.role_permission_assignments a JOIN mbox.roles r ON r.id=a.role_id JOIN mbox.staff_permission_definitions p ON p.id=a.permission_id WHERE r.id=ANY($1::uuid[]) ORDER BY r.code,p.code",[[financeRole,serverRole]])).rows
+      expect(grants.filter(row=>row.permission==='reconciliation.manage')).toEqual([{code:'CASHIER',permission:'reconciliation.manage'}])
+      const after=(await client.query("SELECT a.role_id,a.permission_id FROM mbox.role_permission_assignments a JOIN mbox.staff_permission_definitions p ON p.id=a.permission_id WHERE a.role_id=ANY($1::uuid[]) AND p.code<>'reconciliation.manage' ORDER BY a.role_id,a.permission_id",[[financeRole,serverRole]])).rows
+      expect(after).toEqual(before)
+    }finally{await client.query('ROLLBACK');client.release()}
+    expect((await pool.query('SELECT schema_version FROM mbox.normalized_schema_metadata WHERE singleton=true')).rows).toEqual(schemaBefore)
   })
   it('separates finance case ownership from collection and refuses to resolve an unknown payment',async()=>{
     const fixture=await createOrder(pool,[7300]),pending=await initiateOnlinePayment(service,fixture.orderId)
@@ -890,8 +896,9 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
       VALUES($1,$2,$3,$5),($1,$2,$4,$5),($1,$2,$3,$6)`, [tenantId,storeId,approverId,cashierId,reviewerRole,administratorRole])
     await pool.query(`INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id)
       SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code='staff.access.configure'`, [tenantId,storeId,administratorRole])
-    const deploy = (changes: StaffPermissionDeploymentChange[]) => management.deployPermissions({
+    const deploy = async (changes: StaffPermissionDeploymentChange[]) => management.deployPermissions({
       scope, actorEmployeeId: approverId, businessDate, idempotencyKey: randomUUID(), requestFingerprint: JSON.stringify(changes), reason: '隔离退款复核配置验证', changes,
+      expectedVersion: (await management.getOverview({scope,actorEmployeeId:approverId})).configurationVersion,
     })
     const grant: StaffPermissionDeploymentChange = { kind:'role_permission',roleId:reviewerRole,permissionCode:'refund.approve',enabled:true }
     const limit = (amountMinor: number | null, enabled = true): StaffPermissionDeploymentChange => ({

@@ -27,6 +27,7 @@ export class RecollectionAuthorizationConflictError extends Error {
 }
 
 interface BalanceRow extends Record<string, unknown> {
+  collection_due_minor: string | number
   total_amount_minor: string | number
   gross_paid_minor: string | number
   refunded_minor: string | number
@@ -64,7 +65,7 @@ export class RecollectionAuthorizationRepository {
     const reason = requireReason(input.reason)
     const ttlMinutes = boundedTtl(input.ttlMinutes ?? 30)
     const balance = await this.lockBalance(input.orderId)
-    const outstandingMinor = outstanding(balance)
+    const outstandingMinor = balance.collection_due_minor
     if (balance.status === 'draft' || balance.status === 'cancelled' || balance.refunded_minor <= 0 || outstandingMinor <= 0) {
       throw new RecollectionAuthorizationConflictError('当前订单没有可授权的退款后重新收款余额')
     }
@@ -143,10 +144,11 @@ export class RecollectionAuthorizationRepository {
   }
 
   private async lockBalance(orderId: string): Promise<{
-    total_amount_minor: number; gross_paid_minor: number; refunded_minor: number; currency: string; status: string
+    collection_due_minor: number; total_amount_minor: number; gross_paid_minor: number; refunded_minor: number; currency: string; status: string
   }> {
     const result = await this.transaction.query<BalanceRow>(`
       SELECT ${orderReceivableSql('ordering')} AS total_amount_minor,ordering.currency,ordering.status,
+        mbox.order_collection_due_amount_for_mode(ordering.tenant_id,ordering.store_id,ordering.id,true) AS collection_due_minor,
         COALESCE((
           SELECT SUM(payment.amount_minor) FROM mbox.order_payment_facts payment
           WHERE payment.tenant_id=ordering.tenant_id AND payment.store_id=ordering.store_id
@@ -164,6 +166,7 @@ export class RecollectionAuthorizationRepository {
     const row = result.rows[0]
     if (!row) throw new RecollectionAuthorizationConflictError('订单不存在')
     return {
+      collection_due_minor: safeMinor(row.collection_due_minor),
       total_amount_minor: safeMinor(row.total_amount_minor),
       gross_paid_minor: safeMinor(row.gross_paid_minor),
       refunded_minor: safeMinor(row.refunded_minor),
@@ -171,10 +174,6 @@ export class RecollectionAuthorizationRepository {
       status: row.status,
     }
   }
-}
-
-function outstanding(balance: { total_amount_minor: number; gross_paid_minor: number; refunded_minor: number }): number {
-  return Math.max(0, balance.total_amount_minor - balance.gross_paid_minor + balance.refunded_minor)
 }
 
 function mapAuthorization(row: AuthorizationRow): OrderRecollectionAuthorization {

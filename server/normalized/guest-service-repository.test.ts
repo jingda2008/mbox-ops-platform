@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto'
+import Fastify from 'fastify'
+import { guestCommerceServiceApiPlugin } from './guest-commerce-service-api.js'
+import { NormalizedCommandExecutor } from './command-executor.js'
 import { Pool, type PoolClient } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
@@ -214,6 +217,7 @@ integration('normalized guest service requests with PostgreSQL', () => {
       requestType: 'call_staff',
       status: 'pending',
       publicServiceName: '李艳',
+      guestConfirmedAt: null,
       requestCount: 4,
     })
     expect(visible[0]).not.toHaveProperty('detail')
@@ -283,6 +287,70 @@ integration('normalized guest service requests with PostgreSQL', () => {
         AND task.public_id = $3
     `, [tenantId, storeId, publicId])
     expect(evidence.rows[0]).toEqual({ escalations: '1', confirmations: '1' })
+  })
+
+  it('reads confirmed facts on a second device after lost feedback receipts and repeated requests', async () => {
+    const scope = { tenantId, storeId }
+    const created = await transactions.run(scope, (transaction) => new GuestServiceRepository(transaction, {
+      deviceLimitPerMinute: 20, tableLimitPerMinute: 40,
+    }).request({ tableSessionId, customerId, actorRef: guestActorRefs.get(customerId)!,
+      deviceFingerprint: 'confirmation-readback-device', requestType: 'custom', detail: '确认读回回归',
+    }))
+    if (created.status === 'rate_limited') throw new Error('Unexpected fixture rate limit')
+    await transactions.run(scope, (transaction) => new ServiceTaskRepository(transaction).complete({
+      taskId: created.task.id, actor: { type: 'system' }, eventIdempotencyKey: 'confirmation-readback-complete',
+    }))
+    const app = Fastify()
+    await app.register(guestCommerceServiceApiPlugin, {
+      transactions, commandExecutor: new NormalizedCommandExecutor(transactions),
+      commerce: {} as never, payments: {} as never, onlinePayments: {} as never,
+      resolveGuestContext: async (request) => {
+        const actorCustomerId = request.headers['x-test-device'] === 'second' ? otherCustomerId : customerId
+        return { scope, sessionKind: 'table' as const, customerId: actorCustomerId, tableSessionId,
+          reservationId: null, tableCode: 'VIP2', tableDisplayName: 'VIP 2', businessDate: '2026-08-11',
+          expiresAt: new Date(Date.now() + 60_000).toISOString(), capabilities: ['guest.session.read', 'guest.service.create'],
+          actorRef: guestActorRefs.get(actorCustomerId)!,
+        }
+      },
+      resolvePublicContext: async () => ({ scope }), resolveDeviceFingerprint: () => 'confirmation-device',
+      paymentMode: 'simulation', paymentActionSecret: 'confirmation-readback-test-secret-32',
+    })
+    try {
+      const read = async (device: string) => {
+        const response = await app.inject({ method: 'GET', url: '/guest/service-requests', headers: { 'x-test-device': device } })
+        expect(response.statusCode).toBe(200)
+        return response.json().data.find((task: { publicId: string }) => task.publicId === created.task.publicId)
+      }
+      expect(await read('second')).toMatchObject({ status: 'completed', guestConfirmedAt: null })
+      const confirm = (key: string, device: string) => app.inject({ method: 'POST',
+        url: `/guest/service-requests/${created.task.publicId}/feedback`,
+        headers: { 'idempotency-key': key, 'x-test-device': device }, payload: { action: 'confirm' },
+      })
+      // The first committed response is intentionally not consumed by the client.
+      expect((await confirm('confirmation-lost-receipt', 'first')).statusCode).toBe(200)
+      const secondDevice = await read('second')
+      expect(secondDevice).toMatchObject({ status: 'completed', guestConfirmedAt: expect.any(String) })
+      expect(Number.isFinite(Date.parse(secondDevice.guestConfirmedAt))).toBe(true)
+      const repeated = await Promise.all([
+        confirm('confirmation-lost-receipt', 'first'), confirm('confirmation-new-device-key', 'second'),
+      ])
+      expect(repeated.map((response) => response.statusCode)).toEqual([200, 200])
+      expect(await read('first')).toEqual(secondDevice)
+      expect(await read('second')).toEqual(secondDevice)
+      const events = await pool.query(`SELECT count(*)::int AS count FROM mbox.service_task_events
+        WHERE service_task_id=$1 AND event_type='guest.confirmed'`, [created.task.id])
+      expect(events.rows[0].count).toBe(1)
+      const next = await transactions.run(scope, (transaction) => new GuestServiceRepository(transaction, {
+        deviceLimitPerMinute: 20, tableLimitPerMinute: 40,
+      }).request({ tableSessionId, customerId, actorRef: guestActorRefs.get(customerId)!,
+        deviceFingerprint: 'confirmation-readback-device', requestType: 'custom', detail: '确认读回回归',
+      }))
+      if (next.status === 'rate_limited') throw new Error('Unexpected fixture rate limit')
+      expect(next.task.id).not.toBe(created.task.id)
+      const refreshed = await app.inject({ method: 'GET', url: '/guest/service-requests' })
+      expect(refreshed.json().data.find((task: { publicId: string }) => task.publicId === next.task.publicId))
+        .toMatchObject({ status: 'pending', guestConfirmedAt: null })
+    } finally { await app.close() }
   })
 
   it('binds a complaint to an authoritative order from the same table only', async () => {

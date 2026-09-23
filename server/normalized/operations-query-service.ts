@@ -189,6 +189,7 @@ export class OperationsQueryService {
       if (!clock.rows[0]) throw new Error('门店营业日暂不可用')
       const stations=resolveFulfillmentAllowedStations(access.dataScopes)
       return readOperatingHistory(transaction,{...filter,...orderHistoryAccess(access.permissions,clock.rows[0].business_date),includeStockReturnWork:access.permissions.includes('inventory.receive')&&!filter.workKind,
+        sharedDeliveryScope:filter.workKind==='delivered'?{employeeId,canViewAllTables:access.permissions.includes('table.view_all')||access.permissions.includes('fulfillment.view_all')}:undefined,
         ...(filter.workKind?{allowFinancialSummary:false,workEmployeeId:employeeId,workStations:filter.workKind==='prepared'?stations:undefined}:{})})
     },{isolation:'repeatable-read',readOnly:true})
   }

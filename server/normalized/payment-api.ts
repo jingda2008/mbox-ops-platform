@@ -53,6 +53,7 @@ import type {
 } from './online-payment-service.js'
 import type { OnlineRefundResult } from './online-payment-service.js'
 import {
+  OnlinePaymentAlreadyResolvedError,
   OnlinePaymentUnavailableError,
   OnlinePaymentUnknownError,
   OnlineRefundStatusUnknownError,
@@ -107,6 +108,7 @@ type PaymentCommandPort = Pick<
   | 'authorizeActivityRecollection'
   | 'releaseUnresolvedForRetry'
   | 'authorizeProviderCloseForReplacement'
+  | 'closeUnpresentedClosedDebtPayment'
 >
 
 type OnlinePaymentProvider = Extract<PaymentProvider, 'wechat' | 'postar' | 'simulation'>
@@ -349,6 +351,14 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
     return reply.code(execution.replayed ? 200 : 201).send(paymentExecutionResponse(execution, action))
   }))
 
+  app.post<{Params:{paymentId:string}}>('/payments/:paymentId/close-unpresented-history',async(request,reply)=>handleRoute(reply,async()=>{
+    const context=await resolveStaffContext(options,request)
+    const body=readObject(request.body,'请求正文');assertActorBinding(body,context.actor)
+    const paymentId=readUuid(request.params.paymentId,'paymentId'),reason=readString(body.reason,'reason',500,4),key=readIdempotencyKey(request)
+    const execution=await options.commands.closeUnpresentedClosedDebtPayment({...metadata(request,context,key,{paymentId,reason}),paymentId,reason})
+    return reply.code(execution.replayed?200:201).send(executionResponse(execution))
+  }))
+
   app.post('/payments/manual', async (request, reply) => handleRoute(reply, async () => {
     const context = await resolveStaffContext(options, request)
     const body = readObject(request.body, '请求正文')
@@ -526,12 +536,22 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       const paymentId = readUuid(request.params.paymentId, 'paymentId')
       const idempotencyKey = readIdempotencyKey(request)
       const principal = paymentInitiationPrincipal(context)
-      const queried = await options.onlinePayments.query({
-        scope: context.scope,
-        paymentId,
-        queryBindingId: idempotencyKey,
-        principal,
-      })
+      let queried: OnlinePaymentQueryResult
+      try {
+        queried = await options.onlinePayments.query({
+          scope: context.scope, paymentId, queryBindingId: idempotencyKey, principal,
+        })
+      } catch (error) {
+        if (!(error instanceof OnlinePaymentAlreadyResolvedError) || context.actor.type !== 'employee') throw error
+        // This is a current local read, not a new provider observation or a
+        // command receipt. Expired/new keys must never be labelled replayed.
+        return reply.send({
+          data: { id: error.context.id, publicId: error.context.publicId,
+            status: error.paymentStatus, amountMinor: error.context.amountMinor, currency: error.context.currency,
+            queryResultSource: 'local_payment' },
+          meta: { replayed: false, resultSource: 'local_payment', providerQueried: false },
+        })
+      }
       const execution = await recordOnlinePaymentObservation(
         options,
         request,
@@ -542,8 +562,11 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       )
       if (execution !== null) return reply.send(executionResponse(execution))
       return reply.send({
-        data: { publicId: queried.context.publicId, status: 'pending' },
-        meta: { replayed: false },
+        data: { publicId: queried.context.publicId, status: queried.localPaymentStatus ?? 'pending',
+          ...(queried.localPaymentStatus === undefined ? {} : {
+            queryObservation: { status: queried.observation.status, occurredAt: queried.observation.occurredAt },
+          }) },
+        meta: { replayed: false, ...(queried.localPaymentStatus === undefined ? {} : { localStatusRetained: true }) },
         provider: {
           status: queried.observation.status,
           occurredAt: queried.observation.occurredAt,

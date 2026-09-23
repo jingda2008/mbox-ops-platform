@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
 import { CustomerRepository } from './customer-repository.js'
 import { GuestSessionService, hashTableQrCredential } from './guest-session-repository.js'
+import { assertRuntimeDatabasePool } from './runtime-database-identity.js'
 import { ScopedPostgresTransactionRunner } from './transaction-runner.js'
 
 const adminUrl = process.env.TEST_NORMALIZED_DATABASE_URL
@@ -16,7 +17,7 @@ integration('guest scans preserve identity and location under contention', () =>
     await runNormalizedMigrations(adminUrl!)
     admin = new Pool({ connectionString: adminUrl, max: 4 })
     runtime = new Pool({ connectionString: runtimeUrl, max: 16, application_name: 'mbox-scan-concurrency-regression' })
-    expect((await runtime.query('SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname=session_user')).rows[0]).toEqual({rolsuper:false,rolbypassrls:false})
+    await assertRuntimeDatabasePool(runtime, runtimeUrl!)
     runner = new ScopedPostgresTransactionRunner(runtime)
     service = new GuestSessionService(runner, { resolveAnonymous: async ({ transaction, identityHash, publicId }) => {
       const value = await new CustomerRepository(transaction).createAnonymous({ identityHash, publicId })
@@ -95,17 +96,14 @@ integration('guest scans preserve identity and location under contention', () =>
     expect((await admin.query('SELECT count(*)::int AS n FROM mbox.guest_sessions WHERE tenant_id=$1 AND store_id=$2',[f.scope.tenantId,f.scope.storeId])).rows[0]?.n).toBe(0)
   })
 
-  it('waits for a legacy-authorized canonical merge before issuing restricted concurrent table sessions', async () => {
+  it('waits for an actual canonical identity merge before issuing concurrent table sessions', async () => {
     const f=await fixture(2,2),source=f.customers[0]!,target=f.customers[1]!
     for(const customer of [source,target])await admin.query("INSERT INTO mbox.customer_tags(tenant_id,store_id,customer_id,tag,visibility) VALUES($1,$2,$3,'staff-note','staff'),($1,$2,$3,'shared-tag',$4)",[f.scope.tenantId,f.scope.storeId,customer,customer===source?'staff':'public'])
     await admin.query("INSERT INTO mbox.customer_preferences(tenant_id,store_id,customer_id,preference_key,preference_value) VALUES($1,$2,$3,'quiet','true'::jsonb)",[f.scope.tenantId,f.scope.storeId,source])
     await admin.query("INSERT INTO mbox.customer_identities(tenant_id,store_id,customer_id,identity_kind,identity_hash) VALUES($1,$2,$3,'anonymous',$4)",[f.scope.tenantId,f.scope.storeId,source,'a'.repeat(64)])
     let locked!:()=>void,release!:()=>void
     const lockHeld=new Promise<void>(r=>{locked=r}),continueMerge=new Promise<void>(r=>{release=r})
-    // Schema224 cannot merge customer tags through the future restricted LOGIN.
-    // Production still uses its legacy privileged connection; model only that
-    // merge lane with the fixture administrator. Scans retain their real LOGIN.
-    const merge=new ScopedPostgresTransactionRunner(admin).run(f.scope,async tx=>{
+    const merge=runner.run(f.scope,async tx=>{
       await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`table-customer-movement:${f.scope.tenantId}:${f.scope.storeId}`])
       locked();await continueMerge
       return new CustomerRepository(tx).merge(source,target)
@@ -147,11 +145,9 @@ integration('guest scans preserve identity and location under contention', () =>
     await expect(runner.run(f.scope,tx=>tx.query("UPDATE mbox.table_qr_credentials SET status='revoked',retired_at=clock_timestamp() WHERE table_id=$1",[f.tables[0]!.tableId]))).rejects.toMatchObject({code:'42501'})
     await expect(runner.run(f.scope,tx=>tx.query('UPDATE mbox.customer_tags SET customer_id=$1',[f.customers[0]]))).rejects.toMatchObject({code:'42501'})
     await runner.run(other.scope,async tx=>{
-      for(const table of ['customers','table_qr_credentials'])expect((await tx.query(`SELECT id FROM mbox.${table} WHERE tenant_id=$1 AND store_id=$2`,[f.scope.tenantId,f.scope.storeId])).rows).toEqual([])
-      expect((await tx.query('SELECT id FROM mbox.customer_tags')).rows).toEqual([])
+      for(const table of ['customers','customer_tags','table_qr_credentials'])expect((await tx.query(`SELECT id FROM mbox.${table} WHERE tenant_id=$1 AND store_id=$2`,[f.scope.tenantId,f.scope.storeId])).rows).toEqual([])
+      expect((await tx.query("UPDATE mbox.customer_tags SET source='forbidden' WHERE tenant_id=$1 AND store_id=$2",[f.scope.tenantId,f.scope.storeId])).rowCount).toBe(0)
     })
-    // Schema224 denies this update altogether (migration232 is deferred).
-    await expect(runner.run(other.scope,tx=>tx.query("UPDATE mbox.customer_tags SET source='forbidden' WHERE tenant_id=$1 AND store_id=$2",[f.scope.tenantId,f.scope.storeId]))).rejects.toMatchObject({code:'42501'})
     await expect(runner.run(other.scope,tx=>new CustomerRepository(tx).merge(f.customers[0]!,other.customers[0]!))).rejects.toThrow()
     expect((await admin.query('SELECT source FROM mbox.customer_tags WHERE tenant_id=$1 AND store_id=$2',[f.scope.tenantId,f.scope.storeId])).rows).toEqual([{source:'profile'}])
   })

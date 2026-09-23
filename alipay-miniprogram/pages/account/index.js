@@ -180,7 +180,7 @@ Page({
       const storedAbandonment = this.historyMode ? null : runtime.getStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY) || null
       const storedPending = this.historyMode ? null : this.clearForeignPendingPayment(paymentScope)
       const storedOrder = storedPending && (rawOrders || []).find((item) => item.publicId === storedPending.orderPublicId)
-      if (storedPending && (!storedOrder || Number(storedOrder.payableAmountMinor || 0) === 0)) {
+      if (storedPending && storedOrder && storedOrder.payableAmountMinor === 0 && storedOrder.paymentAccess === 'not_required') {
         runtime.removeStorageSync(PENDING_PAYMENT_KEY)
       }
       const orders = (rawOrders || []).map((order) => ({

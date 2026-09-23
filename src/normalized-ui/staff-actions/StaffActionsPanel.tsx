@@ -1,7 +1,7 @@
 import {KitchenProductionBoard} from './KitchenProductionBoard'
 import { useStaffViewState } from '../staff-view-state'
 import { RefreshQueue } from './refresh-queue'
-import { StaffNoticeController, fulfillmentNoticeKey } from './staff-notice-controller'
+import { StaffNoticeController, fulfillmentNoticeKey, fulfillmentNeedsPhoneAttention } from './staff-notice-controller'
 import {ItemAfterSalesPanel} from '../ItemAfterSalesPanel'
 import {ItemAfterSalesPendingPanel} from '../ItemAfterSalesPendingPanel'
 import {FulfillmentHistoryPanel} from './FulfillmentHistoryPanel'
@@ -130,6 +130,7 @@ export function StaffActionsPanel({
   const api = useMemo(() => suppliedApi ?? new StaffActionsApi({ staffSessionId }), [suppliedApi, staffSessionId])
   const { confirmAction, promptAction } = useConfirmationDialog()
   const [tab, setTab] = useState<StaffActionsTab>(initialTab)
+  const [serviceLimit, setServiceLimit] = useState(8)
   const [operations, setOperations] = useState<StaffOperationsData | null>(null)
   const [fulfillment, setFulfillment] = useState<StaffFulfillmentData | null>(null)
   const [kitchenLegacyIds,setKitchenLegacyIds]=useState<string[]|null>(null)
@@ -455,12 +456,13 @@ export function StaffActionsPanel({
     memberBenefitQuery,memberBenefits,
   ])
   const visibleServiceActions = useMemo(() => prioritizeActionFact(
-    serviceActions, initialFactId, (task) => task.id,
-  ), [initialFactId, serviceActions])
+    serviceActions, initialFactId, (task) => task.id, serviceLimit,
+  ), [initialFactId, serviceActions, serviceLimit])
+  const threeScreenEnabled=fulfillment?.actor.threeScreenWorkflowEnabled===true||fulfillment?.actor.sharedPickupActive===true
   const kitchenEnabled=fulfillment?.actor.kitchenBatchBoardEnabled===true&&!!api.loadKitchenBoard&&!!api.runKitchenCommand&&permissions.includes('kds.prepare')&&fulfillment?.actor.allowedStations.includes('kitchen')===true
   const filteredFulfillmentItems = useMemo(() => filterFulfillmentQueue(
-    kitchenEnabled&&kitchenLegacyIds!==null&&fulfillmentHistory==='active'?fulfillmentVisibleItems.filter(item=>item.stationCode!=='kitchen'||kitchenLegacyIds.includes(item.taskId)):fulfillmentVisibleItems, fulfillmentHistory === 'delivery' ? 'delivery' : 'production', fulfillmentSearch,
-  ), [fulfillmentVisibleItems, fulfillmentHistory, fulfillmentSearch, kitchenEnabled, kitchenLegacyIds])
+    !threeScreenEnabled&&kitchenEnabled&&kitchenLegacyIds!==null&&fulfillmentHistory==='active'?fulfillmentVisibleItems.filter(item=>item.stationCode!=='kitchen'||kitchenLegacyIds.includes(item.taskId)):fulfillmentVisibleItems, fulfillmentHistory === 'delivery' ? 'delivery' : 'production', fulfillmentSearch,
+  ), [fulfillmentVisibleItems, fulfillmentHistory, fulfillmentSearch, kitchenEnabled, kitchenLegacyIds, threeScreenEnabled])
   const visibleFulfillmentCards = useMemo(() => prioritizeActionFact(
     filteredFulfillmentItems, initialFactId, (item) => item.taskId, fulfillmentLimit,
   ), [filteredFulfillmentItems, initialFactId, fulfillmentLimit])
@@ -544,17 +546,17 @@ export function StaffActionsPanel({
       !previous.has(`service:${task.id}`)
       && (task.priority === 'urgent' || task.interactionMode === 'manager_resolution')
     )) || fulfillmentActions.some((item) => (
-      !previous.has(fulfillmentNoticeKey(item)) && (item.readyForDelivery || item.overdue)
+      !previous.has(fulfillmentNoticeKey(item)) && fulfillmentNeedsPhoneAttention(item,threeScreenEnabled) && (item.readyForDelivery || item.overdue)
     ))
     if (hasNewAttention && typeof navigator.vibrate === 'function') navigator.vibrate([18, 45, 18])
-    const newFulfillment = fulfillmentActions.filter((item) => !previous.has(fulfillmentNoticeKey(item)))
+    const newFulfillment = fulfillmentActions.filter((item) => !previous.has(fulfillmentNoticeKey(item))&&fulfillmentNeedsPhoneAttention(item,threeScreenEnabled))
     const newService = serviceActions.filter((task) => !previous.has(`service:${task.id}`))
     if (newFulfillment.length > 0) {
-      showNotice({ kind: 'attention', message: `新增 ${newFulfillment.length} 项出品，请立即进入“出品”查看制作与配送。` })
+      showNotice({ kind: 'attention', message: `新增 ${newFulfillment.length} 项出品，请查看待制作或待取情况。` })
     } else if (newService.length > 0) {
       showNotice({ kind: 'attention', message: `新增 ${newService.length} 项桌台服务，请及时处理。` })
     }
-  }, [currentActionKeys, fulfillment, fulfillmentActions, operations, pendingAction, serviceActions, showNotice])
+  }, [currentActionKeys, fulfillment, fulfillmentActions, operations, pendingAction, serviceActions, showNotice, threeScreenEnabled])
 
   const selectTable = (table: StaffActionTable, openDialog = true) => {
     secondaryTableSessionIdRef.current = null
@@ -833,6 +835,7 @@ export function StaffActionsPanel({
     if (api.unattributedKdsTaskIds?.().includes(item.taskId) || actionLocksRef.current.has(actionKey) || pendingFulfillmentRef.current.has(item.taskId)
       || api.pendingKdsActions?.().some(pending => pending.taskId === item.taskId)) return
     const action = fulfillmentAction(item, fulfillmentHistory === 'delivery' ? 'delivery' : 'production')
+    if (threeScreenEnabled && action === 'deliver') { showNotice({kind:'success',message:'请在吧台取餐屏确认取走，这里会自动同步'}); return }
     if (action === null) return revealPermissionGuidance(item.readyForDelivery ? 'kds.deliver' : 'kds.prepare')
     actionLocksRef.current.add(actionKey)
     markFulfillmentPending(item.taskId, 'submitting')
@@ -1284,22 +1287,28 @@ export function StaffActionsPanel({
             </article>
           ))}
           {serviceActions.length > visibleServiceActions.length && (
-            <p className="staff-actions-more">还有 {serviceActions.length - visibleServiceActions.length} 项，完成当前事项后自动补入</p>
+            <button type="button" className="staff-actions-more" onClick={() => setServiceLimit((limit) => limit + 24)}>显示更多服务事项（还有 {serviceActions.length - visibleServiceActions.length} 项）</button>
           )}
         </ActionList></>
       )}
 
       {tab === 'fulfillment' && operations !== null && (
-        <>{kitchenEnabled&&fulfillmentHistory==='active'&&<KitchenProductionBoard key={operations.actor.id} api={api} employeeId={operations.actor.id}
+        <>{(threeScreenEnabled||fulfillment?.actor.threeScreenRecoveryAvailable)&&<nav className="staff-history-tabs" aria-label="吧台与后厨屏幕">
+          {permissions.includes('kds.prepare')&&fulfillment?.actor.allowedStations.includes('bar')&&<button type="button" onClick={()=>onNavigate?.('/staff/fulfillment?screen=bar')}>酒水制作屏</button>}
+          {permissions.includes('kds.prepare')&&fulfillment?.actor.allowedStations.includes('kitchen')&&<button type="button" onClick={()=>onNavigate?.('/staff/fulfillment?screen=kitchen')}>后厨制作屏</button>}
+          {(permissions.includes('kds.deliver')||permissions.includes('staff.access.configure'))&&<button type="button" onClick={()=>onNavigate?.('/staff/fulfillment?screen=pickup')}>吧台取餐屏</button>}
+        </nav>}
+        {threeScreenEnabled&&fulfillmentHistory==='delivery'&&<p role="status">在吧台取餐屏确认取走后，这里自动更新，无需手机再次确认。</p>}
+        {!threeScreenEnabled&&kitchenEnabled&&fulfillmentHistory==='active'&&<KitchenProductionBoard key={operations.actor.id} api={api} employeeId={operations.actor.id}
           blocked={fulfillmentStale||pendingFulfillment.size>0||pendingKds.length>0||legacyKdsTaskIds.length>0}
           onChanged={()=>load(true)} onLegacy={setKitchenLegacyIds} onLoginRequired={onLoginRequired}/>}
-        {(api.pendingKdsActions?.().length??0)>0&&<p role="status" data-action-reveal="off">有制作/送达操作结果待确认。<button type="button" disabled={pendingAction==='kds:recover'} onClick={()=>void recoverKdsResults()}>{pendingAction==='kds:recover'?'正在恢复…':'恢复上次结果'}</button></p>}{fulfillment?.actor.actionSessionValid===false&&<p role="alert">当前设备会话已失效，恢复登录后可继续原任务。{onLoginRequired&&<button type="button" onClick={onLoginRequired}>恢复登录</button>}</p>}<nav className="staff-history-tabs"><button type="button" aria-pressed={fulfillmentHistory==='active'} onClick={()=>setFulfillmentHistory('active')}>待制作（{fulfillmentVisibleItems.filter(item => item.quantities?item.quantities.unmade+item.quantities.started+item.quantities.held>0:!item.readyForDelivery).length}）</button><button type="button" aria-pressed={fulfillmentHistory==='delivery'} onClick={()=>setFulfillmentHistory('delivery')}>待取送（{fulfillmentVisibleItems.filter(item => item.readyForDelivery).length}）</button>{permissions.some(permission=>['order.history.view','order.history.all'].includes(permission))&&<>{permissions.includes('kds.prepare')&&<button type="button" aria-pressed={fulfillmentHistory==='prepared'} onClick={()=>setFulfillmentHistory('prepared')}>我的已制作</button>}{permissions.includes('kds.deliver')&&<button type="button" aria-pressed={fulfillmentHistory==='delivered'} onClick={()=>setFulfillmentHistory('delivered')}>我的已送达</button>}</>}</nav>
+        {(api.pendingKdsActions?.().length??0)>0&&<p role="status" data-action-reveal="off">有制作/送达操作结果待确认。<button type="button" disabled={pendingAction==='kds:recover'} onClick={()=>void recoverKdsResults()}>{pendingAction==='kds:recover'?'正在恢复…':'恢复上次结果'}</button></p>}{fulfillment?.actor.actionSessionValid===false&&<p role="alert">当前设备会话已失效，恢复登录后可继续原任务。{onLoginRequired&&<button type="button" onClick={onLoginRequired}>恢复登录</button>}</p>}<nav className="staff-history-tabs"><button type="button" aria-pressed={fulfillmentHistory==='active'} onClick={()=>setFulfillmentHistory('active')}>待制作（{fulfillmentVisibleItems.filter(item => item.quantities?item.quantities.unmade+item.quantities.started+item.quantities.held>0:!item.readyForDelivery).length}）</button><button type="button" aria-pressed={fulfillmentHistory==='delivery'} onClick={()=>setFulfillmentHistory('delivery')}>待取（{fulfillmentVisibleItems.filter(item => item.readyForDelivery).length}）</button>{permissions.some(permission=>['order.history.view','order.history.all'].includes(permission))&&<>{permissions.includes('kds.prepare')&&<button type="button" aria-pressed={fulfillmentHistory==='prepared'} onClick={()=>setFulfillmentHistory('prepared')}>我的已制作</button>}{permissions.includes('kds.deliver')&&<button type="button" aria-pressed={fulfillmentHistory==='delivered'} onClick={()=>setFulfillmentHistory('delivered')}>已送达</button>}</>}</nav>
         {(fulfillmentHistory==='prepared'||fulfillmentHistory==='delivered')&&<FulfillmentHistoryPanel api={api} kind={fulfillmentHistory} refreshRevision={historyRefreshRevision} onOpenItem={(quantityBatchEnabled||quantityRecoveryAvailable)&&permissions.includes('refund.request')?setRedeliveryItemId:undefined}/>}
         <div hidden={fulfillmentHistory==='prepared'||fulfillmentHistory==='delivered'}>
         {legacyKdsTaskIds.length > 0 && <p role="alert">此设备有旧版待确认操作，但未记录操作员工。相关任务已暂停确认，请由值班经理核对原订单；原记录已保留。</p>}
         {fulfillmentStale && <p role="status" data-action-reveal="off" className="staff-actions-stale">出品更新失败，保留上次列表；恢复后才能继续确认。<button type="button" onClick={() => void load(true)}>重新读取出品</button></p>}
         <label className="staff-fulfillment-field">查找待办<input aria-label="按桌号或品名查找出品" value={fulfillmentSearch} placeholder="桌号或品名" onChange={event=>{setFulfillmentSearch(event.target.value);setFulfillmentLimit(24)}} /></label>
-        {!fulfillmentStale&&pendingFulfillment.size===0&&pendingKds.length===0&&legacyKdsTaskIds.length===0&&fulfillment?.actor.actionSessionValid!==false&&permissions.includes('kds.deliver')&&api.createDeliveryBatch&&<DeliveryBatchComposer items={fulfillmentVisibleItems} onSubmit={items=>api.createDeliveryBatch!(items)} onChanged={()=>load(true)}/>}
+        {!threeScreenEnabled&&!fulfillmentStale&&pendingFulfillment.size===0&&pendingKds.length===0&&legacyKdsTaskIds.length===0&&fulfillment?.actor.actionSessionValid!==false&&permissions.includes('kds.deliver')&&api.createDeliveryBatch&&<DeliveryBatchComposer items={fulfillmentVisibleItems} onSubmit={items=>api.createDeliveryBatch!(items)} onChanged={()=>load(true)}/>}
         {fulfillmentVisibleItems.some((item)=>item.carryover)
           && permissions.includes('kds.exception.manage')
           && <div className="staff-carryover-bulk-panel">
@@ -1307,7 +1316,7 @@ export function StaffActionsPanel({
             <input value={carryoverBulkReason} maxLength={500} placeholder="填写共同的现场核对原因（至少4字）" aria-label="历史遗留批量结案原因" onChange={(event)=>setCarryoverBulkReason(event.target.value)}/>
             <button type="button" disabled={pendingAction!==null || fulfillmentStale || pendingFulfillment.size>0 || pendingKds.length>0 || legacyKdsTaskIds.length>0} onClick={()=>void cancelAllCarryoverFulfillment()}>{pendingAction==='kds-cancel:all-carryover'?'正在逐项结案':'批量标记不再出品'}</button>
           </div>}
-        <ActionList empty={fulfillment === null ? '出品队列暂时无法读取，请刷新后重试' : (fulfillmentSearch ? '没有匹配的待办' : fulfillmentHistory === 'delivery' ? '当前没有待取送的出品' : '当前没有待制作的出品')}>
+        <ActionList empty={fulfillment === null ? '出品队列暂时无法读取，请刷新后重试' : (fulfillmentSearch ? '没有匹配的待办' : fulfillmentHistory === 'delivery' ? '当前没有待取的出品' : '当前没有待制作的出品')}>
           {visibleFulfillmentCards.map((item) => {
             const fulfillmentCommand = fulfillmentAction(item,fulfillmentHistory==='delivery'?'delivery':'production')
             const missingPermission = item.kdsStatus === 'failed' ? 'kds.exception.manage' : item.readyForDelivery ? 'kds.deliver' : 'kds.prepare'
@@ -1329,14 +1338,14 @@ export function StaffActionsPanel({
               >
                 <div className="staff-action-card-main">
                   <strong>{item.table.code} · {item.item.productName} × {item.item.quantity}</strong>
-                  <p>{item.stationCode === 'bar' ? '吧台' : item.stationCode === 'kitchen' ? '后厨' : '收银'} · {item.kdsStatus === 'failed' ? `制作失败：${item.failureReason||'历史失败原因未留存，请向当班制作人员核对'}；核对后选择重做或不再出品` : item.readyForDelivery ? '待配送' : '待制作'}</p>
+                  <p>{item.stationCode === 'bar' ? '吧台' : item.stationCode === 'kitchen' ? '后厨' : '收银'} · {item.kdsStatus === 'failed' ? `制作失败：${item.failureReason||'历史失败原因未留存，请向当班制作人员核对'}；核对后选择重做或不再出品` : item.readyForDelivery ? '待取' : '待制作'}</p>
                   {item.item.unitPriceMinor !== undefined && item.item.totalAmountMinor !== undefined && <small>
                     {item.item.includedInBundle ? '套餐内菜品，不另计价' : `单价 ¥${(item.item.unitPriceMinor / 100).toFixed(2)} · 优惠后小计 ¥${(item.item.totalAmountMinor / 100).toFixed(2)}`}
                   </small>}
                   {pendingFulfillment.get(item.taskId) === 'syncing' && <small role="status">操作已确认，正在同步最新数量，请勿重复制作或送达。</small>}
                   {item.quantities&&<small>待制作 {item.quantities.unmade+item.quantities.started} · 已备齐 {item.quantities.ready} · 暂停 {item.quantities.held} · 已停止 {item.quantities.stopped} · 已送达 {item.quantities.delivered}</small>}
                   {item.carryover && <small className="staff-action-carryover">前营业日遗留 · 原营业日 {item.businessDate}，处理结果仍归原订单</small>}
-                  {item.attentionMessages.map((message) => <small className="staff-action-note" key={message}>备注：{message}</small>)}
+                  {item.attentionMessages.map((message) => <p className="staff-action-note" key={message}>备注：{message}</p>)}
                   {item.overdue && <small className="staff-action-overdue">已超时，优先处理</small>}
                   {fulfillmentCommand === null && <small className="staff-action-readonly">当前账号可查看，不能确认{item.kdsStatus === 'failed' ? '重新制作' : item.readyForDelivery ? '送达' : '制作'}。</small>}
                   {item.carryover && permissions.includes('kds.exception.manage') && (
@@ -1355,16 +1364,17 @@ export function StaffActionsPanel({
                 </div>
                 <div className="staff-action-card-actions">
                   {(quantityBatchEnabled||quantityRecoveryAvailable)&&permissions.includes('refund.request')&&item.item.id&&<button type="button" disabled={fulfillmentBlocked(item.taskId)} onClick={()=>setRedeliveryItemId(item.item.id!)}>商品处理</button>}
-                  {(quantityBatchEnabled||item.quantities)&&fulfillmentCommand!==null&&fulfillmentCommand!=='remake'&&item.item.quantity>1&&<label className="staff-fulfillment-field">本次份数<input type="number" min="1" max={item.quantities?(fulfillmentCommand==='deliver'?item.quantities.ready:item.quantities.unmade+item.quantities.started):item.item.quantity}
+                  {!(threeScreenEnabled&&fulfillmentCommand==='deliver')&&(quantityBatchEnabled||item.quantities)&&fulfillmentCommand!==null&&fulfillmentCommand!=='remake'&&item.item.quantity>1&&<label className="staff-fulfillment-field">本次份数<input type="number" min="1" max={item.quantities?(fulfillmentCommand==='deliver'?item.quantities.ready:item.quantities.unmade+item.quantities.started):item.item.quantity}
                     aria-label={`${item.table.code}${item.item.productName}本次${fulfillmentCommand==='deliver'?'送达':'完成'}份数`}
                     value={quantitySelections[`${item.taskId}:${fulfillmentCommand}`]??(item.quantities?(fulfillmentCommand==='deliver'?item.quantities.ready:item.quantities.unmade+item.quantities.started):item.item.quantity)}
                     disabled={fulfillmentBlocked(item.taskId)} onChange={event=>setQuantitySelections(current=>({...current,[`${item.taskId}:${fulfillmentCommand}`]:event.target.value}))}/></label>}
-                  {fulfillmentCommand !== null && (
+                  {fulfillmentCommand !== null && !(threeScreenEnabled&&fulfillmentCommand==='deliver') && (
                     <button type="button" onClick={() => void runFulfillmentAction(item)} disabled={fulfillmentBlocked(item.taskId)} aria-busy={pendingFulfillment.has(item.taskId)}>
                       {fulfillmentCommand === 'deliver' ? <Send size={18} /> : <ChefHat size={18} />}
                       {pendingFulfillment.get(item.taskId) === 'syncing' ? '已确认，等待同步' : pendingFulfillment.get(item.taskId) === 'submitting' ? '正在确认…' : pendingKds.some(pending => pending.taskId === item.taskId) ? '结果待确认' : fulfillmentCommand === 'deliver' ? ((item.quantities||quantitySelections[`${item.taskId}:${fulfillmentCommand}`]!==undefined)?'本次已送达':'全部已送达') : fulfillmentCommand === 'remake' ? '重新制作' : '制作完成'}
                     </button>
                   )}
+                  {threeScreenEnabled&&fulfillmentCommand==='deliver'&&<span>吧台待取 · 取走后自动同步</span>}
                   {fulfillmentCommand === null && (
                     <button type="button" className="is-readonly" onClick={() => revealPermissionGuidance(missingPermission)}>查看权限说明</button>
                   )}
@@ -1409,7 +1419,7 @@ export function StaffActionsPanel({
         /></>
       )}
 
-      <span className="staff-actions-announcer" aria-live="polite">
+      <span className="staff-actions-announcer" aria-live="polite" data-action-reveal="off">
         {pendingAction === null ? '' : '操作正在后台确认'}
       </span>
 

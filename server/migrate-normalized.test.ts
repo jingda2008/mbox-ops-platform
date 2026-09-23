@@ -70,7 +70,7 @@ describe('normalized migration baseline', () => {
       '192',
       '193',
       '194',
-      '195', '196', '197', '198', '199', '200', '201', '202', '203', '204', '205', '206', '207', '208', '209', '210', '211', '212', '213', '214', '215', '216', '217', '218', '219', '220', '221', '222', '223', '224',
+      '195', '196', '197', '198', '199', '200', '201', '202', '203', '204', '205', '206', '207', '208', '209', '210', '211', '212', '213', '214', '215', '216', '217', '218', '219', '220', '221', '222', '223', '224', '225', '226', '227', '228', '229', '230', '231', '232', '233', '234', '235', '236', '237', '238', '239', '240', '241', '242',
     ])
     for (const migration of migrations) {
       expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/)
@@ -1154,7 +1154,9 @@ describe('normalized migration baseline', () => {
     expect(sql).toMatch(/customer_experience_feedback_append_only/)
     expect(sql).toMatch(/benefit_redemptions[\s\S]*authorization_source/)
     expect(sql).toMatch(/'order\.create'[\s\S]*'kds\.prepare'[\s\S]*'payment\.initiate\.staff'/)
-    expect(sql).not.toMatch(/\b(?:real|double precision)\b/i)
+    // Standalone SQL comments describe facts; their prose is not a column type.
+    // Keep every executable line in the floating-point type invariant.
+    expect(sql.replace(/^\s*--[^\n]*(?:\n|$)/gm, '')).not.toMatch(/\b(?:real|double precision)\b/i)
   })
 
   it('keeps an explicitly released online payment auditable while permitting a staff replacement attempt', async () => {

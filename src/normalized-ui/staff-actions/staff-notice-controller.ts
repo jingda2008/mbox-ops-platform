@@ -56,3 +56,8 @@ export class StaffNoticeController {
 }
 
 export function fulfillmentNoticeKey(item:{taskId:string;readyForDelivery:boolean;deliveryNoticeVersion?:number}):string{return item.readyForDelivery?`fulfillment:${item.taskId}:ready:${item.deliveryNoticeVersion??0}`:`fulfillment:${item.taskId}`}
+
+/** Shared pickup needs a quiet phone projection; unfinished production and exceptions still need attention. */
+export function fulfillmentNeedsPhoneAttention(item:{readyForDelivery:boolean;canPrepare?:boolean;canRemake?:boolean},sharedPickup:boolean):boolean{
+  return !sharedPickup||!item.readyForDelivery||item.canPrepare===true||item.canRemake===true
+}

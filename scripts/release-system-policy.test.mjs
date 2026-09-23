@@ -62,6 +62,18 @@ test('deployment manifest and both activation boundaries enforce the backend-onl
   }
 })
 
+test('old container credentials and isolation contract must pass before migration and cutover', async () => {
+  const activate=await read('../deploy/aliyun/activate-release.sh')
+  const preflight=activate.indexOf('if ! verify_previous_runtime_database_identity')
+  const migration=activate.indexOf('run_database_maintenance_container dist-normalized/server/verify-normalized-migration-compatibility.js')
+  const recheck=activate.indexOf('verify_previous_runtime_database_identity > "${release_dir}/rollback-database-identity-cutover.json"')
+  const cutover=activate.indexOf('candidate_deep_verified cutover_started')
+  assert.ok(preflight>0 && preflight<migration && recheck>migration && recheck<cutover)
+  assert.match(activate,/--emit-container-probe[\s\S]*\| docker exec -i "\$\{active_container\}" node --input-type=module/)
+  assert.match(activate,/test "\$\(docker inspect "\$\{active_container\}" --format '\{\{\.Id\}\}'\)" = "\$\{active_container_id\}"/)
+  assert.match(activate,/release blocked: prepare and validate a restricted rollback baseline/)
+})
+
 test('configuration and migration checks precede every database write and application candidate', async () => {
   const activate = await read('../deploy/aliyun/activate-release.sh')
   const deploy = await read('../deploy/aliyun/deploy-release.sh')
@@ -72,10 +84,19 @@ test('configuration and migration checks precede every database write and applic
   const databaseIdentityGate = activate.indexOf('assert_backup_targets_application_database', candidateDatabaseIdentity)
   const writerDrain = activate.indexOf('migration_compatible writer_drained')
   const backup = activate.indexOf('backup_path=$(DATABASE_SERVICE=', writerDrain)
-  const migrate = activate.indexOf('migrate-normalized.js')
+  const maintenancePreflight = activate.indexOf('migrate-normalized.js --verify-only')
+  const migrate = activate.indexOf('run_database_maintenance_container dist-normalized/server/migrate-normalized.js\n')
   const provision = activate.indexOf('provision-normalized-release.js')
   const candidate = activate.indexOf('docker "${candidate_docker_args[@]}"', provision)
   assert.ok(config > 0 && config < migrationCompatibility)
+  assert.ok(maintenancePreflight > migrationCompatibility && maintenancePreflight < backup)
+  assert.match(activate.slice(config,config+150),/--database/)
+  assert.match(activate,/run_database_maintenance_container[\s\S]*--user 0:0/)
+  assert.match(activate,/--mount "type=bind,src=\$\{database_pgpass_file\},dst=\$\{database_pgpass_file\},readonly"/)
+  assert.match(activate,/run_database_maintenance_container dist-normalized\/server\/verify-normalized-migration-compatibility\.js/)
+  assert.match(activate,/test "\$\{candidate_login\}" != "\$\{backup_login\}"/)
+  assert.match(activate,/test "\$\{candidate_login\}" != "\$\{admin_login\}"/)
+  assert.match(activate,/test "\$\{backup_login\}" != "\$\{admin_login\}"/)
   assert.ok(migrationCompatibility < runtimeSchemaReconciliation
     && runtimeSchemaReconciliation < candidateDatabaseIdentity
     && candidateDatabaseIdentity < databaseIdentityGate && databaseIdentityGate < writerDrain
@@ -150,7 +171,7 @@ test('database maintenance credentials stay root-only and the frozen backup pres
   assert.match(restore, /role\.rolsuper OR \([\s\S]*role\.rolcreatedb[\s\S]*role\.rolcreaterole[\s\S]*role\.rolbypassrls/)
   assert.match(restore, /provider_role\.rolname='pg_rds_superuser'[\s\S]*pg_has_role\(role\.oid,provider_role\.oid,'member'\)/)
   assert.match(restore, /NOT role\.rolsuper AND role\.rolbypassrls[\s\S]*pg_read_all_data[\s\S]*provider_role\.rolname='pg_rds_superuser'/)
-  assert.match(restore, /SELECT current_user[\s\S]*\.database\.owner/)
+  assert.match(restore, /database_owner[\s\S]*pg_has_role\(current_user, :'database_owner', 'MEMBER'\)/)
   assert.doesNotMatch(`${backup}\n${restore}`, /--dbname="\$\{(?:DATABASE_URL|ADMIN_DATABASE_URL)\}"/)
   assert.doesNotMatch(`${backup}\n${restore}`, /passwordless DATABASE_URL|test-only/)
   assert.match(ci, /Run every normalized PostgreSQL transaction and RLS test\n\s+env:\n\s+TEST_POSTGRES_CONTAINER: \$\{\{ job\.services\.postgres\.id \}\}\n\s+run: npm run test:normalized:postgres/)
@@ -400,4 +421,77 @@ test('hotfix replacement requires explicit approval bound to both images, contai
   assert.equal((deploy.match(/'\$\{backup_max_age_minutes\}' '\$\{reconcile_previous_runtime\}'/g) ?? []).length, 2)
   assert.match(activate, /previousArchivedPlatformImageDigest: \$previousArchivedPlatformImageDigest/)
   assert.match(activate, /previousRuntimeAttestation: \$previousRuntimeAttestation/)
+})
+
+test('publisher UID/GID cannot cross release transfers and plan normalization precedes activation', async () => {
+  const deploy = await read('../deploy/aliyun/deploy-release.sh')
+  const transfers = deploy.split('\n').filter(line => /^\s*rsync -a /.test(line))
+  assert.equal(transfers.length, 6)
+  for (const line of transfers) assert.match(line, /rsync -a --no-owner --no-group --no-perms --rsync-path=/)
+  assert.ok(deploy.indexOf('chown 0:0') < deploy.indexOf('uses_evidence_relay=0'))
+  const bootstrap = await read('../deploy/aliyun/maintenance-bootstrap.sh')
+  assert.match(bootstrap, /test "\$\(stat -c '%u:%a' "\$\{plan\}"\)" = 0:600/)
+})
+
+test('real rsync repairs a non-root publisher plan without accepting symlinks', {
+  skip: process.platform !== 'linux' || (!process.env.CI && process.getuid() !== 0),
+}, async () => {
+  const deploy = await read('../deploy/aliyun/deploy-release.sh')
+  const transfer = deploy.split('\n').find(line => /^rsync -a /.test(line)).replace(/\s*\\$/, '')
+  const normalization = deploy.slice(deploy.indexOf('# Archive mode must not import'), deploy.indexOf('\nssh "${ssh_options[@]}"', deploy.indexOf('# Archive mode must not import')))
+  const directoryGuard = deploy.slice(deploy.indexOf('verify_remote_release_directory() {'), deploy.indexOf('\nverify_remote_release_directory\n', deploy.indexOf('verify_remote_release_directory() {')))
+    .replace('for path in / /opt /opt/mbox /opt/mbox/releases ', 'for path in ')
+  const dir = mkdtempSync(join(tmpdir(), 'mbox-transfer-owner-'))
+  const fixture = join(dir, 'verify.sh')
+  writeFileSync(fixture, `#!/bin/bash
+set -euo pipefail
+umask 077
+root=$(mktemp -d)
+trap 'rm -rf "$root"' EXIT
+mkdir "$root/source" "$root/destination"
+printf '{"synthetic":true}\\n' > "$root/source/maintenance-plan.json"
+chmod 0600 "$root/source/maintenance-plan.json"
+chown 12345:12346 "$root/source/maintenance-plan.json"
+original=$(sha256sum "$root/source/maintenance-plan.json" | cut -d' ' -f1)
+# Reproduce the original failure with genuine rsync and a root receiver.
+rsync -a "$root/source/" "$root/destination/"
+test "$(stat -c '%u:%g:%a' "$root/destination/maintenance-plan.json")" = 12345:12346:600
+rsync_resume_option=--append
+${transfer} "$root/source/" "$root/destination/"
+remote_release_dir="$root/destination"
+maintenance_mode=1
+ssh_options=()
+ssh_target=synthetic-local-host
+ssh() { test "$1" = synthetic-local-host; bash -c "$2"; }
+${directoryGuard}
+verify_remote_release_directory
+chmod 0775 "$root/destination"
+if verify_remote_release_directory; then exit 1; fi
+chmod 0700 "$root/destination"
+chown 12345:12346 "$root/destination"
+if verify_remote_release_directory; then exit 1; fi
+chown 0:0 "$root/destination"
+chmod 0775 "$root/source"
+${transfer} "$root/source/" "$root/destination/"
+test "$(stat -c %a "$root/destination")" = 700
+verify_remote_release_directory
+${normalization}
+test "$(stat -c '%u:%g:%a' "$root/destination/maintenance-plan.json")" = 0:0:600
+test "$(sha256sum "$root/destination/maintenance-plan.json" | cut -d' ' -f1)" = "$original"
+test "$(stat -c '%u:%g:%a' "$root/source/maintenance-plan.json")" = 12345:12346:600
+rm "$root/destination/maintenance-plan.json"
+${transfer} "$root/source/" "$root/destination/"
+test "$(stat -c '%u:%g:%a' "$root/destination/maintenance-plan.json")" = 0:0:600
+# Existing symlinks must fail before ownership or mode mutation.
+rm "$root/destination/maintenance-plan.json"
+ln -s "$root/source/maintenance-plan.json" "$root/destination/maintenance-plan.json"
+if ( ${normalization} ); then exit 1; fi
+test "$(stat -c '%u:%g:%a' "$root/source/maintenance-plan.json")" = 12345:12346:600
+printf 'real-rsync-owner-regression=passed\\n'
+`)
+  try {
+    const command = process.getuid() === 0 ? 'bash' : 'sudo'
+    const args = process.getuid() === 0 ? [fixture] : ['-n', 'bash', fixture]
+    assert.match(execFileSync(command, args, {encoding: 'utf8', timeout: 30000}), /real-rsync-owner-regression=passed/)
+  } finally { rmSync(dir, {recursive: true, force: true}) }
 })

@@ -1,10 +1,17 @@
 export interface StockReturnCapability {remainingQuantity:number;canReturnUnmade:boolean;canReturnUnopened:boolean;reason:string}
+/** Shared pickup is a delivery fact, never an employee's personal work quantity. */
+export interface SharedDeliveryHistory {
+  receiptId:string;businessDate:string;tableSessionId:string;tableCode:string;pickupTableCode:string
+  deliveredAt:string;source:'shared_pickup_device'
+  items:Array<{itemId:string;name:string;quantity:number;specification:string;itemNote:string;orderNote:string;kind:'original'|'remake'}>
+}
 export interface OperatingHistory {
   financialSummaryVisible?:boolean
   financialStartDate?:string
   summary?: OperatingDaySummary
   businessDate: string; endDate?: string; generatedAt: string; page: number; hasMore: boolean
   receipts: Array<{ provider: string; receivedMinor: number; refundedMinor: number; netMinor: number }>
+  sharedDeliveries?:SharedDeliveryHistory[]
   orders: Array<{
     id: string; businessDate?: string; publicId: string; tableCode: string; employeeName: string | null
     tableSessionId?:string;sessionPublicId?:string;areaName?:string

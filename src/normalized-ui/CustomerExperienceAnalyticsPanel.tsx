@@ -260,9 +260,10 @@ export function CustomerExperienceAnalyticsPanel({ api, auth }: {
         </tr>)}</tbody></table></div>
       </AnalyticsSection>
       <AnalyticsSection title="商品体验" empty="所选周期内暂无可分析商品。" hasData={view.products.length>0}>
+        <p className="ce-analytics__fact-note">统计所选下单周期的商品，累计计入关联退款和已完成的补收。观察按记录日期统计。</p>
         <div className="ce-analytics__cards">{view.products.map((row) => <article key={row.productId}>
           <div className="ce-analytics__card-title"><strong>{row.productName}</strong><span>{row.soldQuantity} 份</span></div>
-          <dl><div><dt>实付销售</dt><dd>{money(row.paidRevenueMinor,'CNY')}</dd></div>
+          <dl><div><dt>商品成交金额（含补收）</dt><dd>{money(row.paidRevenueMinor,'CNY')}</dd></div>
             <div><dt>冻结成本</dt><dd>{row.frozenCostMinor===null ? '数据不足' : money(row.frozenCostMinor,'CNY')}</dd></div>
             <div><dt>销售后贡献</dt><dd>{row.contributionAmountMinor===null ? '数据不足' : money(row.contributionAmountMinor,'CNY')}</dd></div>
             <div><dt>成功退款</dt><dd>{money(row.refundedAmountMinor,'CNY')}</dd></div>

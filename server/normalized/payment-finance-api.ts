@@ -15,7 +15,10 @@ export const paymentFinanceApiPlugin:FastifyPluginAsync<Options>=async(app,optio
    await new StaffAccessRepository(tx).assertPermission(context.employeeId,'reconciliation.view')
    return (await tx.query(`SELECT p.id,p.public_id AS "publicId",p.amount_minor::text AS "amountMinor",p.status,p.created_at::text AS "createdAt",
     s.phase,s.stop_reason AS "stopReason",s.next_query_at::text AS "nextQueryAt",s.total_query_count AS "queryCount",
-    c.status AS "caseStatus",c.note,e.display_name AS "ownerName",c.owner_employee_id AS "ownerEmployeeId",
+    c.status AS "caseStatus",c.note,
+    (SELECT jsonb_build_object('orders',h.after_snapshot->'association'->'orders') FROM mbox.audit_events h WHERE h.tenant_id=p.tenant_id AND h.store_id=p.store_id
+      AND h.object_type='payment' AND h.object_id=p.id::text AND h.action='payment.historical_attempt.held'
+      ORDER BY h.occurred_at,h.id LIMIT 1) AS "historicalAssociation",e.display_name AS "ownerName",c.owner_employee_id AS "ownerEmployeeId",
     o.public_id AS "orderPublicId",t.code AS "tableCode",financial.signals AS "financialSignals",count(*) FILTER(WHERE financial.signals IS NOT NULL) OVER()::int AS "urgentCount"
     FROM mbox.payments p LEFT JOIN mbox.payment_reconciliation_states s ON s.tenant_id=p.tenant_id AND s.store_id=p.store_id AND s.payment_id=p.id
     LEFT JOIN mbox.payment_finance_cases c ON c.tenant_id=p.tenant_id AND c.store_id=p.store_id AND c.payment_id=p.id

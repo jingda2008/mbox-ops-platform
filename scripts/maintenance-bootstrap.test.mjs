@@ -153,3 +153,29 @@ test('restore prepares exact original extension owners and refuses unavailable S
   assert.match(source,/RESTORE_EVIDENCE_MISMATCH staging_vs_source/)
  }finally{await rm(dir,{recursive:true,force:true})}
 })
+
+test('reviewed historical attempts preserve the frozen baseline and never waive unrelated or changed facts',()=>{
+ execFileSync('python3',['-c',String.raw`
+import runpy
+m=runpy.run_path('deploy/aliyun/maintenance-bootstrap.py')
+identity={'tenant_id':'11111111-1111-4111-8111-111111111111','store_id':'22222222-2222-4222-8222-222222222222','id':'33333333-3333-4333-8333-333333333333'}
+payment=dict(identity,kind='payment',classification='block:unresolved_payment',facts_sha256='a'*64)
+action=dict(identity,kind='provider_action',classification='block:payment_action_unknown',facts_sha256='b'*64)
+proof=dict(identity,eligible=True,fingerprint='c'*64)
+approved=[dict(identity,fingerprint='c'*64)]
+held=m['historical_review_matches']([payment,action],[proof],approved)
+assert len(held)==2
+baseline=[]
+assert m['funds_delta']([payment,action],baseline,set(),held)['blockingCount']==0
+assert baseline==[]
+unrelated=dict(payment,id='44444444-4444-4444-8444-444444444444')
+assert m['funds_delta']([payment,action,unrelated],baseline,set(),held)['blockingCount']==1
+assert m['funds_delta']([dict(payment,facts_sha256='d'*64),action],baseline,set(),held)['blockingCount']==1
+for evidence,approval in [([dict(proof,eligible=False)],approved),([dict(proof,fingerprint='d'*64)],approved),([],approved),([proof],approved+approved)]:
+ try: m['historical_review_matches']([payment,action],evidence,approval)
+ except m['Blocked']: pass
+ else: raise AssertionError('invalid historical proof was accepted')
+# A missing original baseline subject remains blocking even with other holds.
+assert m['funds_delta']([payment,action],[unrelated],set(),held)['blockingCount']==1
+`],{cwd:process.cwd(),stdio:'pipe'})
+})

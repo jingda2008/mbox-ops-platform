@@ -99,7 +99,7 @@ const meta=(f:Fx,employeeId=f.cashier)=>({scope:f.scope,actor:{type:'employee' a
     expect(f.pending).toMatchObject({payableKind:singlePayment?'order':'order_batch',amountMinor:singlePayment?2000:4000,status:'pending'})
     if(withSecondAttempt){
       for(const orderId of f.orders)expect((await post(f,`/orders/${orderId}/recollection-authorizations`,{reason:'原桌未关桌再次明确原款待核与重收'})).statusCode).toBe(201)
-      f.otherPending=(await money.initiate({...meta(f),orderId:f.order,orderIds:f.orders,publicId:randomUUID().replaceAll('-',''),provider:'postar',method:'native_qr',principal:{type:'employee',employeeId:f.cashier}})).value
+      f.otherPending=(await money.initiate({...meta(f),orderId:f.order,orderIds:f.orders,publicId:randomUUID().replaceAll('-',''),provider:'postar',method:'auth_code',principal:{type:'employee',employeeId:f.cashier}})).value
     }
     // Synthetic historical guard fixture ONLY: not a normal closing route or an actual schema234 upgrade.
     // Money/refunds/reservation/activation above are real commands using the restricted LOGIN.

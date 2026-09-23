@@ -578,6 +578,8 @@ export class PaymentProviderActionRepository {
         stop_reason=CASE WHEN $5::boolean THEN 'finance_review_required' ELSE NULL END,
         updated_at=clock_timestamp()
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND payment_id=$3::uuid
+        AND NOT EXISTS(SELECT 1 FROM mbox.audit_events h WHERE h.tenant_id=$1 AND h.store_id=$2
+          AND h.object_type='payment' AND h.object_id=$3::text AND h.action='payment.historical_attempt.held')
     `, [
       this.transaction.scope.tenantId,this.transaction.scope.storeId,paymentId,
       stop ? 'stopped' : released ? 'released' : 'interactive',stop,delay,
@@ -698,7 +700,11 @@ export class PaymentProviderActionRepository {
     sensitiveRequestBinding?: string,
     clientNetworkSnapshot: Readonly<Record<string, string>> = {},
   ): Promise<{ claimed: true } | { claimed: false; payload: ProviderActionPayload; expiresAt: string }> {
-    const payment=await this.transaction.query<{status:string}>(`SELECT status FROM mbox.payments WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR SHARE`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,paymentId])
+    const payment=await this.transaction.query<{status:string;historical_hold:boolean}>(`SELECT status,
+      EXISTS(SELECT 1 FROM mbox.audit_events h WHERE h.tenant_id=$1 AND h.store_id=$2
+        AND h.object_type='payment' AND h.object_id=$3::text AND h.action='payment.historical_attempt.held') AS historical_hold
+      FROM mbox.payments WHERE tenant_id=$1 AND store_id=$2 AND id=$3::uuid FOR SHARE`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,paymentId])
+    if(payment.rows[0]?.historical_hold)throw new ProviderPaymentMethodConflictError('历史重复尝试已停止使用，请查看原订单收款及财务核对记录')
     if(!payment.rows[0]||!['created','pending'].includes(payment.rows[0].status))throw new ProviderPaymentMethodConflictError('付款已结束，不能创建渠道动作')
     if (idempotencyKey !== undefined && (idempotencyKey.length < 8 || idempotencyKey.length > 128)) {
       throw new TypeError('payment action idempotency key must contain between 8 and 128 characters')

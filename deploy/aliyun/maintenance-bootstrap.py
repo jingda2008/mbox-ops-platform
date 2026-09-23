@@ -87,6 +87,98 @@ class Journal:
         try: os.fsync(fd)
         finally: os.close(fd)
 
+# Historical holds are operator-reviewed associations, never terminal payment
+# results. The original pre-drain baseline stays immutable. This separate proof
+# is scope/ID/fingerprint-bound and is invalidated by any changed financial fact.
+HISTORICAL_ATTEMPT_EVIDENCE_SQL = r'''
+WITH links AS (
+ SELECT f.id payment_id,f.tenant_id,f.store_id,f.order_id,f.amount_minor
+ FROM mbox.order_payment_facts f WHERE f.status IN ('created','pending') AND f.provider IN ('postar','wechat')
+), order_facts AS (
+ SELECT o.id,o.tenant_id,o.store_id,
+   jsonb_build_object('order',jsonb_build_object('id',o.id,'publicId',o.public_id,'status',o.status,
+     'paymentStatus',o.payment_status,'totalMinor',o.total_amount_minor,'currency',o.currency),
+     'session',jsonb_build_object('id',v.id,'status',v.status),
+     'dueMinor',mbox.order_collection_due_amount(o.tenant_id,o.store_id,o.id),
+     'receipts',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',p.id,'publicId',p.public_id,
+       'amountMinor',f.amount_minor,'totalReceiptMinor',p.amount_minor,'currency',p.currency,
+       'provider',p.provider,'reference',p.provider_transaction_id,'status',p.status,
+       'ledger',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',e.id,'entryType',e.entry_type,'amountMinor',e.amount_minor,'currency',e.currency,'reference',e.provider_reference,'factsSha256',encode(sha256(convert_to(to_jsonb(e)::text,'UTF8')),'hex')) ORDER BY e.id) FROM mbox.reconciliation_entries e
+          WHERE (e.tenant_id,e.store_id,e.payment_id)=(p.tenant_id,p.store_id,p.id)),'[]'::jsonb)) ORDER BY p.id)
+       FROM mbox.order_payment_facts f JOIN mbox.payments p ON (p.tenant_id,p.store_id,p.id)=(f.tenant_id,f.store_id,f.id)
+       WHERE (f.tenant_id,f.store_id,f.order_id)=(o.tenant_id,o.store_id,o.id)
+         AND f.status IN ('succeeded','partially_refunded','refunded')),'[]'::jsonb),
+     'refunds',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',r.id,'paymentId',r.payment_id,
+       'amountMinor',r.amount_minor,'currency',r.currency,'status',r.status) ORDER BY r.id)
+       FROM mbox.order_refund_facts r WHERE (r.tenant_id,r.store_id,r.order_id)=(o.tenant_id,o.store_id,o.id)),'[]'::jsonb)) AS facts,
+   v.status='closed' AND o.status<>'draft' AND (o.status='cancelled' OR o.payment_status IN ('paid','partially_refunded','refunded'))
+     AND mbox.order_collection_due_amount(o.tenant_id,o.store_id,o.id)=0
+     AND NOT EXISTS (SELECT 1 FROM mbox.order_payment_facts f JOIN mbox.payments p
+       ON (p.tenant_id,p.store_id,p.id)=(f.tenant_id,f.store_id,f.id)
+       WHERE (f.tenant_id,f.store_id,f.order_id)=(o.tenant_id,o.store_id,o.id)
+         AND f.status IN ('succeeded','partially_refunded','refunded') AND NOT EXISTS (
+           SELECT 1 FROM mbox.reconciliation_entries e WHERE (e.tenant_id,e.store_id,e.payment_id)=(p.tenant_id,p.store_id,p.id)
+             AND e.entry_type='payment' AND e.amount_minor=p.amount_minor AND e.currency=p.currency
+             AND e.provider=p.provider AND e.provider_reference IS NOT DISTINCT FROM p.provider_transaction_id
+             AND (SELECT count(*) FROM mbox.reconciliation_entries exact WHERE (exact.tenant_id,exact.store_id,exact.payment_id)=(p.tenant_id,p.store_id,p.id) AND exact.entry_type='payment')=1))
+     AND NOT EXISTS (SELECT 1 FROM mbox.order_refund_facts r
+       WHERE (r.tenant_id,r.store_id,r.order_id)=(o.tenant_id,o.store_id,o.id) AND r.status='succeeded'
+         AND NOT EXISTS (SELECT 1 FROM mbox.reconciliation_entries e
+           WHERE (e.tenant_id,e.store_id,e.refund_id)=(r.tenant_id,r.store_id,r.id)
+             AND e.entry_type='refund' AND e.payment_id=r.payment_id AND e.amount_minor=-r.amount_minor
+             AND e.currency=r.currency AND e.provider_reference=(SELECT original.provider_refund_id FROM mbox.refunds original
+               WHERE (original.tenant_id,original.store_id,original.id)=(r.tenant_id,r.store_id,r.id))))
+     AND NOT EXISTS (SELECT 1 FROM mbox.payment_financial_monitoring_signals f
+       WHERE (f.tenant_id,f.store_id,f.subject_id)=(o.tenant_id,o.store_id,o.id)
+         AND f.signal IN ('order_overcollected','cancelled_order_captured')) AS eligible
+ FROM mbox.orders o JOIN mbox.table_sessions v ON (v.tenant_id,v.store_id,v.id)=(o.tenant_id,o.store_id,o.table_session_id)
+ WHERE EXISTS (SELECT 1 FROM links l WHERE (l.tenant_id,l.store_id,l.order_id)=(o.tenant_id,o.store_id,o.id))
+), evidence AS (
+ SELECT p.id,p.tenant_id,p.store_id,
+   jsonb_build_object('payment',jsonb_build_object('id',p.id,'publicId',p.public_id,'status',p.status,
+     'provider',p.provider,'amountMinor',p.amount_minor,'currency',p.currency,
+     'factsSha256',encode(sha256(convert_to(to_jsonb(p)::text,'UTF8')),'hex')),
+     'allocations',jsonb_agg(jsonb_build_object('orderId',l.order_id,'amountMinor',l.amount_minor) ORDER BY l.order_id),
+     'orders',jsonb_agg(o.facts ORDER BY l.order_id)) AS facts,
+   bool_and(o.eligible AND o.facts->'order'->>'currency'=p.currency AND l.amount_minor>0) AND sum(l.amount_minor)=p.amount_minor
+     AND NOT EXISTS (SELECT 1 FROM mbox.payment_provider_actions a
+       WHERE (a.tenant_id,a.store_id,a.payment_id)=(p.tenant_id,p.store_id,p.id) AND a.state='creating')
+     AND NOT EXISTS (SELECT 1 FROM mbox.reconciliation_entries e
+       WHERE (e.tenant_id,e.store_id,e.payment_id)=(p.tenant_id,p.store_id,p.id))
+     AND NOT EXISTS (SELECT 1 FROM mbox.verified_provider_observations v
+       WHERE (v.tenant_id,v.store_id,v.payment_id)=(p.tenant_id,p.store_id,p.id)
+         AND v.observed_status IN ('payment_succeeded','payment_failed','payment_closed') AND v.consumed_at IS NULL) AS eligible
+ FROM mbox.payments p JOIN links l ON (l.tenant_id,l.store_id,l.payment_id)=(p.tenant_id,p.store_id,p.id)
+ JOIN order_facts o ON (o.tenant_id,o.store_id,o.id)=(l.tenant_id,l.store_id,l.order_id)
+ GROUP BY p.id
+)
+SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id,'tenant_id',tenant_id,'store_id',store_id,
+  'eligible',eligible,'fingerprint',encode(sha256(convert_to(facts::text,'UTF8')),'hex'),'facts',facts) ORDER BY tenant_id,store_id,id),'[]'::jsonb)
+FROM evidence;
+'''
+
+def historical_review_sql(approved):
+    require(isinstance(approved,list) and 0<len(approved)<=1000,'historical review requires explicit attempt identities')
+    identities=[]
+    for row in approved:
+        require(all(isinstance(row.get(k),str) and re.fullmatch('[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',row[k]) for k in ('tenant_id','store_id','id')),'invalid historical review scope')
+        identities.append("("+",".join("'"+row[k]+"'::uuid" for k in ('tenant_id','store_id','id'))+")")
+    return HISTORICAL_ATTEMPT_EVIDENCE_SQL.replace("WHERE f.status IN", "WHERE (f.tenant_id,f.store_id,f.id) IN ("+",".join(identities)+") AND f.status IN",1)
+
+def historical_review_matches(rows, evidence, approved):
+    require(isinstance(approved,list) and 0<len(approved)<=1000,'historical review requires 1-1000 explicit attempts')
+    expected={('payment',r['tenant_id'],r['store_id'],r['id']):r for r in approved}
+    require(len(expected)==len(approved),'duplicate historical review identity')
+    actual={('payment',r['tenant_id'],r['store_id'],r['id']):r for r in evidence}
+    for key,entry in expected.items():
+        require(all(re.fullmatch('[0-9a-f-]{36}',entry[k]) for k in ('tenant_id','store_id','id')),'invalid historical review identity')
+        require(re.fullmatch('[0-9a-f]{64}',entry['fingerprint']) is not None,'invalid historical evidence fingerprint')
+        require(key in actual and actual[key]['eligible'] is True and actual[key]['fingerprint']==entry['fingerprint'],
+          'historical attempt association changed or is not eligible; retain maintenance')
+    selected=[r for r in rows if r['kind'] in ('payment','provider_action') and ('payment',r['tenant_id'],r['store_id'],r['id']) in expected]
+    require({('payment',r['tenant_id'],r['store_id'],r['id']) for r in selected}==set(expected),'historical review subject missing')
+    return selected
+
 FUNDS_CLASSIFICATION_SQL = r'''
 -- Read-only classification proposal, verified against source schema 233.
 -- Run inside a REPEATABLE READ READ ONLY transaction with an authorized audit
@@ -249,12 +341,13 @@ FUNDS_RESOLVED_SQL = {'payment':r'''SELECT EXISTS (
 ) AS original_refund_resolved'''}
 
 def funds_key(row): return (row['kind'],row['tenant_id'],row['store_id'],row['id'])
-def funds_delta(rows, baseline, resolved):
+def funds_delta(rows, baseline, resolved, reviewed=()):
     current={funds_key(row):row for row in rows}; original={funds_key(row):row for row in baseline}
     require(len(current)==len(rows) and len(original)==len(baseline),'duplicate provider fact identity')
+    held={funds_key(row):row for row in reviewed}
     preserved=[]; blockers=[]
     for key,row in current.items():
-        if key in original and row==original[key]: preserved.append(row)
+        if (key in original and row==original[key]) or (key in held and row==held[key]): preserved.append(row)
         else: blockers.append(row)
     missing=[row for key,row in original.items() if key not in current and key not in resolved]
     return {'blockingCount':len(blockers)+len(missing),'preservedHistoricalCount':len(preserved),'resolvedHistoricalCount':len(set(original)&resolved),'blockers':blockers,'missingOriginalFacts':missing}
@@ -817,6 +910,56 @@ class Host:
         permitted={funds_key(r):r for r in json.loads((self.directory/'provider-funds-preview.json').read_text())['rows'] if r['classification'].startswith('baseline_candidate:')}
         require(all(permitted.get(funds_key(r))==r for r in saved['rows']),'unjournaled provider baseline contains unreviewed facts')
         self.journal.append('provider-baseline',{'sha256':sha(path)})
+    def historical_evidence(self):
+        return json.loads(self.run(['psql','-XqAt','--set=ON_ERROR_STOP=1','--dbname=service='+self.clusteradmin+' dbname='+self.database],
+          input="BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET LOCAL row_security=off; SET LOCAL TIME ZONE 'UTC'; SET LOCAL DateStyle='ISO,YMD'; SET LOCAL statement_timeout='8s'; "+historical_review_sql(self.plan['historicalPaymentReview']['attempts'])+" COMMIT;",env=self.pg_env))
+    def apply_historical_review(self):
+        review=self.plan.get('historicalPaymentReview')
+        if review is None: return
+        require(review.get('reason')=='business-confirmed-system-duplicate-settled-orders','explicit historical review reason required')
+        evidence=self.historical_evidence()
+        historical_review_matches(self.funds_snapshot(),evidence,review['attempts'])
+        preview=self.directory/'provider-funds-preview.json'
+        record=next((r['data'] for r in self.journal.records if r['event']=='provider-preview'),None)
+        require(record and sha(protected(preview))==record['sha256'],'original review preview changed')
+        historical_review_matches(json.loads(preview.read_text())['rows'],evidence,review['attempts'])
+        path=self.directory/'historical-payment-review.json'
+        if path.exists():
+            saved=json.loads(protected(path).read_text())
+            require(saved['review']==review and saved['rows']==historical_review_matches(self.funds_snapshot(),evidence,review['attempts']),
+              'historical review receipt no longer matches current facts')
+            if not self.journal.has('historical-payment-review'):
+                self.journal.append('historical-payment-review',{'sha256':sha(path),'count':len(review['attempts'])})
+            self.reviewed_funds(self.funds_snapshot())
+            return
+        self.assert_zero()
+        # One fenced transaction; no payment/refund/receipt/ledger mutation and
+        # no provider I/O. SQL literals are JSON-encoded then hex-encoded.
+        selected={(r['tenant_id'],r['store_id'],r['id']) for r in review['attempts']}
+        statements=["BEGIN; SET LOCAL row_security=off; SET LOCAL statement_timeout='8s';"]
+        for row in evidence:
+            if (row['tenant_id'],row['store_id'],row['id']) not in selected: continue
+            t,s,p=row['tenant_id'],row['store_id'],row['id']
+            payload=canonical({'version':1,'fingerprint':row['fingerprint'],'association':row['facts']}).hex()
+            statements.append("SELECT set_config('app.tenant_id','{t}',true),set_config('app.store_id','{s}',true);".format(t=t,s=s))
+            statements.append("DO $review$ BEGIN IF EXISTS(SELECT 1 FROM mbox.audit_events WHERE tenant_id='{t}' AND store_id='{s}' AND object_type='payment' AND object_id='{p}' AND action='payment.historical_attempt.held' AND (after_snapshot->>'fingerprint' IS DISTINCT FROM '{fingerprint}' OR after_snapshot->>'version' IS DISTINCT FROM '1')) THEN RAISE EXCEPTION 'existing historical association does not match current approved evidence'; END IF; END $review$;".format(t=t,s=s,p=p,fingerprint=row['fingerprint']))
+            statements.append("INSERT INTO mbox.audit_events(tenant_id,store_id,actor_type,actor_ref,action,object_type,object_id,after_snapshot,reason,business_date) SELECT '{t}','{s}','system','approved-maintenance-review','payment.historical_attempt.held','payment','{p}',convert_from(decode('{payload}','hex'),'UTF8')::jsonb,'business-confirmed-system-duplicate-settled-orders',mbox.current_operating_business_date('{t}','{s}') WHERE NOT EXISTS (SELECT 1 FROM mbox.audit_events WHERE tenant_id='{t}' AND store_id='{s}' AND object_id='{p}' AND action='payment.historical_attempt.held');".format(t=t,s=s,p=p,payload=payload))
+            statements.append("INSERT INTO mbox.payment_reconciliation_states(payment_id,tenant_id,store_id,phase,automatic_query_stopped_at,stop_reason) VALUES('{p}','{t}','{s}','stopped',clock_timestamp(),'historical_system_attempt_review') ON CONFLICT(payment_id) DO UPDATE SET phase='stopped',next_query_at=NULL,lease_until=NULL,automatic_query_stopped_at=COALESCE(mbox.payment_reconciliation_states.automatic_query_stopped_at,clock_timestamp()),stop_reason='historical_system_attempt_review',updated_at=clock_timestamp();".format(t=t,s=s,p=p))
+        statements.append('COMMIT;')
+        self.run(['psql','-XqAt','--set=ON_ERROR_STOP=1','--dbname=service='+self.clusteradmin+' dbname='+self.database],input='\n'.join(statements),env=self.pg_env)
+        rows=historical_review_matches(self.funds_snapshot(),self.historical_evidence(),review['attempts'])
+        atomic(path,{'review':review,'rows':rows})
+        self.journal.append('historical-payment-review',{'sha256':sha(path),'count':len(review['attempts'])})
+    def reviewed_funds(self,rows):
+        path=self.directory/'historical-payment-review.json'
+        if not path.exists(): return []
+        record=next((r['data'] for r in reversed(self.journal.records) if r['event']=='historical-payment-review'),None)
+        require(record and sha(protected(path))==record['sha256'],'historical review receipt changed')
+        value=json.loads(path.read_text())
+        require(value['review']==self.plan.get('historicalPaymentReview'),'historical review plan changed')
+        current=historical_review_matches(rows,self.historical_evidence(),value['review']['attempts'])
+        require(current==value['rows'],'historical attempt changed after review')
+        return current
     def pending_funds(self):
         path=self.directory/'provider-funds-baseline.json'
         record=next((r['data'] for r in self.journal.records if r['event']=='provider-baseline'),None)
@@ -834,7 +977,7 @@ class Host:
             for index,keyname in enumerate(('tenant_id','store_id','id'),1):query=query.replace('$'+str(index),"'"+row[keyname]+"'")
             value=self.run(['psql','-XqAt','--set=ON_ERROR_STOP=1','--dbname=service='+self.clusteradmin+' dbname='+self.database],input="BEGIN READ ONLY; SET LOCAL row_security=off; "+query+"; COMMIT;",env=self.pg_env)
             if value=='t': resolved.add(key)
-        result=funds_delta(rows,baseline,resolved)
+        result=funds_delta(rows,baseline,resolved,self.reviewed_funds(rows))
         # Even permitted manual-review payments may have late provider success.
         potential=self.sql("SELECT (SELECT count(*) FROM mbox.payments WHERE provider IN ('postar','wechat') AND status IN ('created','pending'))+(SELECT count(*) FROM mbox.refunds WHERE status='processing' AND (provider_submission_state IN ('submitting','submitted') OR auto_execute_requested_at IS NOT NULL))+(SELECT count(*) FROM mbox.payment_provider_actions WHERE state IN ('creating','unknown'))",database=self.database)
         result['hasPotentialExternalChange']=int(potential)>0
@@ -901,13 +1044,16 @@ class Host:
         self.maintenance_command('dist-normalized/server/migrate-normalized.js')
         self.maintenance_command('dist-normalized/server/provision-normalized-release.js','--store=/run/mbox-config/store.json','--catalog=/run/mbox-config/catalog.json')
         self.journal.append('schema-provisioned')
+        self.apply_historical_review()
         self.restricted(); self.assert_zero(); self.start_candidate(True)
         self.run(['docker','stop','-t','60',self.candidate]); self.assert_zero()
         # No public GET or business smoke before this durable epoch. Even an
         # empty worker tick is conservatively treated as a new write domain.
         self.journal.epoch('before-first-worker-or-callback-replay')
         stage=self.release/'oss-maintenance-epoch'; stage.mkdir(mode=0o700,exist_ok=True)
-        for source in (self.directory/'journal.jsonl',self.directory/'business-write-epoch.json'): shutil.copy2(source,stage/source.name)
+        epoch_sources=[self.directory/'journal.jsonl',self.directory/'business-write-epoch.json']
+        if (self.directory/'historical-payment-review.json').exists(): epoch_sources.append(protected(self.directory/'historical-payment-review.json'))
+        for source in epoch_sources: shutil.copy2(source,stage/source.name)
         self.archive('maintenance-epoch',stage)
         self.start_candidate(False); self.control('target','POST','http://'+self.ip(self.candidate)+':8787')
         stable=0

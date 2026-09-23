@@ -237,6 +237,7 @@ export class PaymentCommandService {
         initialStatus: 'pending',
         principal: input.principal,
       })
+      if (payments.didReuseOnlineAttempt) return noOpOutcome(payment)
       for(const orderId of orderIds)await payments.syncOrderPaymentStatus(orderId)
       return paymentOutcome(transaction, input, payment, 'payment.initiated', 1, undefined, undefined, this.options.printTicketSources === true)
   }

@@ -13,7 +13,19 @@ def unpack_source(commit,destination):
  with tarfile.open(archive) as t:t.extractall(destination,filter='data')
  shutil.copytree(repo/'node_modules',destination/'node_modules',symlinks=True)
 def fetch(version,commit):
- dest=root/('release-'+version);dest.mkdir();run(['gh','release','download','v'+version,'--pattern','release-manifest.json','--pattern','migration-manifest.json','--pattern','mbox-normalized-*.tar.gz','--dir',dest],stdout=subprocess.DEVNULL)
+ dest=root/('release-'+version);dest.mkdir()
+ # The tag response can temporarily omit assets immediately after publish.
+ # Read the exact release's asset collection and verify the original bytes.
+ release=json.loads(text(['gh','api','repos/jingda2008/mbox-ops-platform/releases/tags/v'+version]))
+ assert release['tag_name']=='v'+version and release['draft'] is False
+ assets=json.loads(text(['gh','api','repos/jingda2008/mbox-ops-platform/releases/'+str(release['id'])+'/assets?per_page=100']))
+ selected=[a for a in assets if a['name'] in ('release-manifest.json','migration-manifest.json') or (a['name'].startswith('mbox-normalized-') and a['name'].endswith('.tar.gz'))]
+ assert len(selected)==3 and len({a['name'] for a in selected})==3
+ for asset in selected:
+  assert asset['state']=='uploaded' and Path(asset['name']).name==asset['name']
+  path=dest/asset['name']
+  with path.open('wb') as stream:run(['gh','api','repos/jingda2008/mbox-ops-platform/releases/assets/'+str(asset['id']),'-H','Accept: application/octet-stream'],stdout=stream)
+  assert path.stat().st_size==asset['size'] and 'sha256:'+sha(path)==asset['digest']
  m=json.loads((dest/'release-manifest.json').read_text());assert m['releaseSha']==commit and sha(dest/m['archive'])==m['archiveSha256'];run(['docker','load','-i',dest/m['archive']],stdout=subprocess.DEVNULL)
  assert text(['docker','image','inspect',m['imageTag'],'--format','{{.Id}}'])==m['platformImageDigest']
  assert text(['docker','image','inspect',m['imageTag'],'--format','{{.Architecture}}'])=='amd64'

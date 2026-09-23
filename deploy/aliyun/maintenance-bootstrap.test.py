@@ -2,6 +2,49 @@
 import importlib.util, tempfile, pathlib, json, unittest, os, subprocess
 spec=importlib.util.spec_from_file_location('bootstrap',pathlib.Path(__file__).with_name('maintenance-bootstrap.py'));m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 class PersistentTests(unittest.TestCase):
+ def test_completed_withdrawal_validation_is_read_only_and_bound_to_live_schema(self):
+  with tempfile.TemporaryDirectory() as d:
+   root=pathlib.Path(d);release=root/'releases'/'done';release.mkdir(parents=True)
+   (root/'current').symlink_to(release);directory=root/'maintenance'/'completed'
+   manifest={'releaseSha':'done','imageDigest':'digest','platformImageDigest':'platform','migration':{'count':242,'digest':'migration'}}
+   m.atomic(release/'release-manifest.json',manifest)
+   plan={'transitionId':'completed','sourceLive':{'releaseSha':'old'}};m.atomic(release/'maintenance-plan.json',plan)
+   binding={'transitionId':'completed','sourceLive':plan['sourceLive'],'forwardRecoveryTarget':{'releaseSha':'done','imageDigest':'digest','schema':242,'migrationDigest':'migration'},'planSha256':m.sha(release/'maintenance-plan.json')}
+   journal=m.Journal(directory,binding);journal.append('schema-provisioned');journal.append('completed')
+   prior=m.Journal(root/'maintenance'/'withdrawn',{'sourceLive':{}});prior.append('drain-intent')
+   h=object.__new__(m.Host);h.root=root;h.release=release;h.directory=directory;h.plan=plan;h.manifest=manifest;h.sha='done';h.schema=242;h.public='https://example.test'
+   live={'State':{'Running':True},'Image':'platform','Config':{'Labels':{'org.opencontainers.image.revision':'done'}}}
+   ready={'status':'ready','writeEnabled':True,'commitSha':'done','releaseImageDigest':'digest','schemaVersion':'242'}
+   h.inspect=lambda _:live;h.request=lambda _: (200,ready)
+   calls=[]
+   def verify(path,records,record=True):
+    self.assertFalse(record);self.assertEqual(path,prior.path);calls.append(path)
+   h.verify_withdrawn_transition=verify
+   original=m.protected;m.protected=lambda p:pathlib.Path(p)
+   try:
+    before={str(p):p.read_bytes() for p in root.rglob('*') if p.is_file()}
+    self.assertEqual(h.verify_completed_withdrawals()['withdrawnTransitions'],['withdrawn'])
+    self.assertEqual(before,{str(p):p.read_bytes() for p in root.rglob('*') if p.is_file()})
+    # A later ordinary release remains eligible only with exactly the same schema.
+    next_release=root/'releases'/'next';next_release.mkdir();next_manifest={**manifest,'releaseSha':'next','imageDigest':'next-digest','platformImageDigest':'next-platform'}
+    m.atomic(next_release/'release-manifest.json',next_manifest);(root/'current').unlink();(root/'current').symlink_to(next_release)
+    live['Image']='next-platform';live['Config']['Labels']['org.opencontainers.image.revision']='next';ready.update(commitSha='next',releaseImageDigest='next-digest')
+    h.verify_completed_withdrawals()
+    for change in ({'writeEnabled':False},{'commitSha':'wrong'},{'schemaVersion':'243'}):
+     saved=ready.copy();ready.update(change)
+     with self.assertRaises(m.Blocked):h.verify_completed_withdrawals()
+     ready.clear();ready.update(saved)
+    next_manifest['migration']={'count':242,'digest':'wrong'};m.atomic(next_release/'release-manifest.json',next_manifest)
+    with self.assertRaises(m.Blocked):h.verify_completed_withdrawals()
+    next_manifest['migration']=manifest['migration'];m.atomic(next_release/'release-manifest.json',next_manifest)
+    plan['changed']=True;m.atomic(release/'maintenance-plan.json',plan)
+    with self.assertRaises(m.Blocked):h.verify_completed_withdrawals()
+    plan.pop('changed');m.atomic(release/'maintenance-plan.json',plan)
+    prior.path.write_text(prior.path.read_text().replace('drain-intent','other-event'))
+    with self.assertRaises(m.Blocked):h.verify_completed_withdrawals()
+    m.atomic(prior.path,{})
+    with self.assertRaises(m.Blocked):h.verify_completed_withdrawals()
+   finally:m.protected=original
  def test_unmigrated_withdrawal_requires_bound_evidence_and_stopped_controls(self):
   with tempfile.TemporaryDirectory() as d:
    root=pathlib.Path(d);directory=root/'maintenance-original';release=root/'source';release.mkdir()

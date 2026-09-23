@@ -45,6 +45,16 @@ def env_file(path):
         values[key]=value
     return values
 
+def read_verified_journal(path):
+    records=[json.loads(line) for line in protected(path).read_text().splitlines()]
+    require(records,'empty maintenance journal')
+    previous='0'*64
+    for index,row in enumerate(records):
+        body={key:value for key,value in row.items() if key!='hash'}
+        require(row.get('sequence')==index and row.get('previous')==previous and isinstance(row.get('event'),str) and hashlib.sha256(canonical(body)).hexdigest()==row.get('hash'),'maintenance journal corruption')
+        previous=row['hash']
+    return records
+
 class Journal:
     def __init__(self, directory, binding, recovery_from=None):
         self.directory=Path(directory); self.directory.mkdir(parents=True,exist_ok=True,mode=0o700)
@@ -545,7 +555,7 @@ class Host:
         self.save('maintenance-target-identity.json',application)
         self.caddy_sources() # reject unsupported imports before touching public routes
         self.funds_preview()
-    def verify_withdrawn_transition(self,path,records):
+    def verify_withdrawn_transition(self,path,records,record=True):
         """Accept only an explicitly bound, unmigrated operator withdrawal."""
         entries=self.plan.get('withdrawnTransitions',[])
         entries=[entry for entry in entries if entry.get('transitionId')==path.parent.name]
@@ -588,7 +598,32 @@ class Host:
         require(values.get('MainPID')=='0' and values.get('ActiveState') in ('inactive','failed') and values.get('UnitFileState') in ('disabled','masked'),'withdrawn maintenance guard remains active')
         ingress=self.optional_container('mbox-maintenance-ingress-'+path.parent.name[-12:])
         require(ingress is None or (not ingress['State']['Running'] and ingress['HostConfig']['RestartPolicy']['Name']=='no'),'withdrawn ingress may restart')
-        self.save('maintenance-withdrawal-'+path.parent.name+'.json',{'verified':True,**entry})
+        if record: self.save('maintenance-withdrawal-'+path.parent.name+'.json',{'verified':True,**entry})
+    def verify_completed_withdrawals(self):
+        # Ordinary releases may retain a withdrawal only with the completed
+        # plan that validated it and the unchanged live schema. Read-only: never
+        # append a journal, rewrite a receipt, fence a writer or recover a target.
+        current=(self.root/'current').resolve()
+        require(current.parent==(self.root/'releases').resolve(),'current release path is invalid')
+        current_manifest=json.loads(protected(current/'release-manifest.json').read_text())
+        require(current_manifest['migration']==self.manifest['migration'],'current schema differs from completed maintenance')
+        records=read_verified_journal(self.directory/'journal.jsonl')
+        require(records[-1]['event']=='completed','current maintenance did not complete')
+        binding=next(row['data'] for row in reversed(records) if row['event'] in ('bound','forward-target'))
+        require(binding=={'transitionId':self.plan['transitionId'],'sourceLive':self.plan['sourceLive'],'forwardRecoveryTarget':{'releaseSha':self.sha,'imageDigest':self.manifest['imageDigest'],'schema':self.schema,'migrationDigest':self.manifest['migration']['digest']},'planSha256':sha(self.release/'maintenance-plan.json')},'completed maintenance binding mismatch')
+        live=self.inspect('mbox-app')
+        require(live['State']['Running'] and live['Image']==current_manifest['platformImageDigest'] and live['Config']['Labels']['org.opencontainers.image.revision']==current_manifest['releaseSha'],'completed maintenance runtime mismatch')
+        status,ready=self.request(self.public+'/api/ready')
+        require(status==200 and ready.get('status')=='ready' and ready.get('writeEnabled') is True and ready.get('commitSha')==current_manifest['releaseSha'] and ready.get('releaseImageDigest')==current_manifest['imageDigest'] and str(ready.get('schemaVersion'))==str(self.schema),'completed maintenance readiness mismatch')
+        self.journal=argparse.Namespace(records=records);self.reentry=True
+        verified=[]
+        for path in (self.root/'maintenance').glob('*/journal.jsonl'):
+            if path.parent==self.directory: continue
+            prior=read_verified_journal(path)
+            if prior[-1]['event']=='completed' or not any(row['event']=='drain-intent' for row in prior): continue
+            self.verify_withdrawn_transition(path,prior,record=False)
+            verified.append(path.parent.name)
+        return {'verified':True,'completedTransitionId':self.plan['transitionId'],'withdrawnTransitions':verified,'productionWrites':0}
     def caddy_sources(self):
         caddy=self.inspect('mbox-caddy')
         mounts=caddy['Mounts']
@@ -1115,10 +1150,14 @@ def inventory(release):
     print(json.dumps(plan,indent=2))
 
 def main():
-    parser=argparse.ArgumentParser(); parser.add_argument('release'); parser.add_argument('tier'); parser.add_argument('public'); parser.add_argument('--hold',action='store_true'); parser.add_argument('--watchdog',action='store_true'); parser.add_argument('--inventory',action='store_true'); args=parser.parse_args()
+    parser=argparse.ArgumentParser(); parser.add_argument('release'); parser.add_argument('tier'); parser.add_argument('public'); parser.add_argument('--hold',action='store_true'); parser.add_argument('--watchdog',action='store_true'); parser.add_argument('--inventory',action='store_true'); parser.add_argument('--verify-completed-withdrawals',action='store_true'); args=parser.parse_args()
     os.umask(0o077)
     if args.inventory:
         inventory(args.release); return 0
+    if args.verify_completed_withdrawals:
+        try: print(json.dumps(Host(args.release,args.tier,args.public).verify_completed_withdrawals())); return 0
+        except Exception as error:
+            print(str(error) if isinstance(error,Blocked) else type(error).__name__,file=sys.stderr); return 1
     host=None
     def interrupted(signum,frame): raise Blocked('interrupted '+str(signum))
     signal.signal(signal.SIGTERM,interrupted); signal.signal(signal.SIGINT,interrupted); signal.signal(signal.SIGHUP,interrupted)

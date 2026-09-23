@@ -203,8 +203,30 @@ fi
 # activation (including a different release directory).
 while IFS= read -r journal; do
   if ! jq -se 'length>0 and (all(.[];has("event"))) and ((any(.[];.event=="drain-intent")|not) or .[-1].event=="completed")' "${journal}" >/dev/null; then
-    echo 'unfinished or invalid maintenance journal; explicit recovery plan required' >&2
-    exit 1
+    # Revalidate retained withdrawal evidence through the exact completed
+    # maintenance plan of the currently running release. Never clear journals.
+    completed_sha=$(find "${install_root}/maintenance" -mindepth 2 -maxdepth 2 -name journal.jsonl -type f -exec \
+      jq -ser 'if .[-1].event=="completed" then [.[-1].at,(map(select(.event=="bound" or .event=="forward-target"))|last).data.forwardRecoveryTarget.releaseSha]|@tsv else empty end' {} \; | sort -n | tail -1 | cut -f2)
+    [[ "${completed_sha}" =~ ^[0-9a-f]{40}$ ]]
+    completed_release=${install_root}/releases/${completed_sha:0:7}
+    completed_plan=${completed_release}/maintenance-plan.json
+    test -f "${completed_plan}" && test ! -L "${completed_plan}"
+    test "$(stat -c '%u:%a' "${completed_plan}")" = 0:600
+    controller_python=$(jq -er '.controllerPython' "${completed_plan}")
+    [[ "${controller_python}" =~ ^/[A-Za-z0-9_./-]+$ ]]
+    controller_python=$(readlink -f "${controller_python}")
+    test -f "${controller_python}" && test -x "${controller_python}"
+    check_path=${controller_python}
+    while :; do
+      test "$(stat -c %u "${check_path}")" = 0
+      mode=$(stat -c %a "${check_path}")
+      (( (8#${mode} & 8#022) == 0 ))
+      test "${check_path}" != / || break
+      check_path=$(dirname "${check_path}")
+    done
+    "${controller_python}" "${release_dir}/maintenance-bootstrap.py" \
+      "${completed_release}" "${deployment_tier}" "${public_url}" --verify-completed-withdrawals
+    break
   fi
 done < <(find "${install_root}/maintenance" -mindepth 2 -maxdepth 2 -name journal.jsonl -type f 2>/dev/null || true)
 rm -f "${state_file}"

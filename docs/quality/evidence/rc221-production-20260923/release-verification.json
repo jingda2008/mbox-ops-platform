@@ -1,0 +1,27 @@
+{
+  "releaseSha": "c8d989f21757f2da8211a9852eac87f127bfcd5f",
+  "officialEntrypointCompleted": true,
+  "publicSmokeVerified": true,
+  "publicBrowserRoutes": [
+    "/",
+    "/guest?table=W01",
+    "/reserve",
+    "/staff/live"
+  ],
+  "backupOssUploadAndReadbackVerified": true,
+  "completionOssUploadAndReadbackVerified": true,
+  "runtimePlatformDigestVerified": true,
+  "originalApplicationDatabaseConnectionPreserved": true,
+  "temporaryProbeConfigurationRestored": true,
+  "previousApplicationRetainedForRollback": true,
+  "localPostgres": {
+    "passed": 2354,
+    "skipped": 1
+  },
+  "localBrowser": {
+    "passed": 94,
+    "skipped": 16
+  },
+  "localPostarTestsPassed": 37,
+  "scope": "schema224 compatible repairs; migrations225-242 and their dependent changes deferred"
+}

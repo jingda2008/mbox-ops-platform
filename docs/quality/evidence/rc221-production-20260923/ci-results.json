@@ -1,0 +1,31 @@
+{
+  "releaseSha": "c8d989f21757f2da8211a9852eac87f127bfcd5f",
+  "pullRequest": 277,
+  "pullRequestSourceSha": "b86e210d7e8bbd202a2286603372fad4453db1fb",
+  "runs": [
+    {
+      "kind": "pull-request-ci",
+      "runId": 35806067536,
+      "conclusion": "success",
+      "url": "https://github.com/jingda2008/mbox-ops-platform/actions/runs/35806067536"
+    },
+    {
+      "kind": "main-ci",
+      "runId": 35807012720,
+      "conclusion": "success",
+      "url": "https://github.com/jingda2008/mbox-ops-platform/actions/runs/35807012720"
+    },
+    {
+      "kind": "tag-ci",
+      "runId": 35807074897,
+      "conclusion": "success",
+      "url": "https://github.com/jingda2008/mbox-ops-platform/actions/runs/35807074897"
+    },
+    {
+      "kind": "release",
+      "runId": 35807074951,
+      "conclusion": "success",
+      "url": "https://github.com/jingda2008/mbox-ops-platform/actions/runs/35807074951"
+    }
+  ]
+}

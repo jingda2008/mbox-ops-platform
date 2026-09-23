@@ -1,0 +1,17 @@
+{
+  "deployedAt": "2026-09-23T01:56:19Z",
+  "tier": "production",
+  "publicUrl": "https://mbox.shmbox.com",
+  "releaseSha": "c8d989f21757f2da8211a9852eac87f127bfcd5f",
+  "releaseVersion": "1.0.0-rc.221",
+  "imageTag": "mbox-normalized:1.0.0-rc.221-c8d989f",
+  "imageDigest": "sha256:708e477615d6f28be83c0d34a672051c81388cab0b738614bfa293e8cadde70a",
+  "platformImageDigest": "sha256:0092379b64f40d70bdf6f6c9fee2a993718093241b4290eea252a37a64773e91",
+  "migrationDigest": "sha256:bde95725b04d8ca0ee555cf19bbdc2ba42d8003e4843e759acc5e96a5d460f1c",
+  "migrationChanged": false,
+  "previousReleaseSha": "5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe",
+  "previousSchemaVersion": 224,
+  "targetSchemaVersion": 224,
+  "rollbackMode": "application_image",
+  "previousIdentityComplete": true
+}

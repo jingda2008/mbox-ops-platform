@@ -192,6 +192,15 @@ test "${actual_sha}" = "${release_sha}"
 test "${actual_version}" = "${release_version}"
 test "${source_branch}" = main
 test "${runtime_config_version}" = normalized-runtime-config/v1
+
+# Verify bind-mounted public configuration as the immutable image's real USER,
+# without credentials, network access or database writes, before either path.
+docker run --rm --network none --read-only --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --mount "type=bind,src=${store_config},dst=/run/mbox-config/store.json,readonly" \
+  --mount "type=bind,src=${catalog_config},dst=/run/mbox-config/catalog.json,readonly" \
+  "${image_tag}" node --input-type=module -e \
+  'import {readFileSync} from "node:fs"; for (const name of ["store","catalog"]) JSON.parse(readFileSync(`/run/mbox-config/${name}.json`,"utf8"));'
 # Planned maintenance has its own persistent journal outside the application
 # database. sourceLive is an audit identity, never an eligible rollback target.
 if [ -f "${release_dir}/maintenance-plan.json" ]; then
@@ -225,7 +234,7 @@ while IFS= read -r journal; do
       check_path=$(dirname "${check_path}")
     done
     "${controller_python}" "${release_dir}/maintenance-bootstrap.py" \
-      "${completed_release}" "${deployment_tier}" "${public_url}" --verify-completed-withdrawals
+      "${completed_release}" "${deployment_tier}" "${public_url}" --verify-completed-withdrawals --ordinary-release "${release_dir}"
     break
   fi
 done < <(find "${install_root}/maintenance" -mindepth 2 -maxdepth 2 -name journal.jsonl -type f 2>/dev/null || true)

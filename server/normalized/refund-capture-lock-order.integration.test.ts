@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto'
 import {mkdirSync,writeFileSync} from 'node:fs'
 import {Pool} from 'pg'
-import {runNormalizedMigrations} from '../migrate-normalized.js'
+import {loadNormalizedMigrations,runNormalizedMigrations} from '../migrate-normalized.js'
 import {afterAll,beforeAll,describe,expect,it} from 'vitest'
 import {ScopedPostgresTransactionRunner,type PostgresPool,type PostgresPoolClient,type PostgresQueryResult} from './transaction-runner.js'
 import {NormalizedCommandExecutor} from './command-executor.js'
@@ -31,7 +31,7 @@ const settled=<T>(p:Promise<T>)=>p.then(value=>({status:'fulfilled' as const,val
     runner=new ScopedPostgresTransactionRunner(runtime)
     identity=(await runtime.query("SELECT session_user,current_user,current_database(),rolsuper,rolbypassrls,rolcreaterole,rolcreatedb FROM pg_roles WHERE rolname=session_user")).rows[0]
     expect(identity).toMatchObject({session_user:new URL(runtimeUrl!).username,current_user:new URL(runtimeUrl!).username,rolsuper:false,rolbypassrls:false,rolcreaterole:false,rolcreatedb:false})
-    expect(Number((await admin.query('SELECT max(version) version FROM mbox.normalized_schema_migrations')).rows[0].version)).toBe(242)
+    expect(Number((await admin.query('SELECT max(version) version FROM mbox.normalized_schema_migrations')).rows[0].version)).toBe(Number((await loadNormalizedMigrations()).at(-1)!.version))
     if(output)mkdirSync(output,{recursive:true})
     money=service(runner)
     await admin.query("INSERT INTO mbox.tenants(id,code,name) VALUES($1,$2,'independent SYS331 race')",[scope.tenantId,scope.tenantId])

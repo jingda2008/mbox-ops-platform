@@ -176,7 +176,7 @@ export class ReservationPerformanceNotificationRepository {
          AND customer_identity.store_id=wechat_identity.store_id
          AND customer_identity.identity_kind='wechat'
          AND customer_identity.identity_hash=encode(
-           digest('wechat:'||wechat_identity.principal_id,'sha256'),'hex'
+           sha256(convert_to('wechat:'||wechat_identity.principal_id,'UTF8')),'hex'
          )
          AND customer_identity.status='active'
          AND mbox.canonical_customer_id(
@@ -207,7 +207,8 @@ export class ReservationPerformanceNotificationRepository {
         )=mbox.canonical_customer_id(reservation.tenant_id,reservation.store_id,$3::uuid)
         AND reservation.preferred_schedule_id IS NOT NULL
         AND reservation.status IN ('pending','confirmed','arrived','seated')
-      FOR KEY SHARE OF reservation,policy
+      -- The policy is SELECT-only; its exact template/version is FK-bound and rechecked before delivery.
+      FOR KEY SHARE OF reservation
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,

@@ -902,6 +902,8 @@ export class TableManagementRepository {
       Object.defineProperty(value,'movementStoreReplayed',{ value:true,enumerable:false })
       return value
     }
+    // The scoped movement lock above and the definer command below serialize
+    // participant changes; runtime must not acquire UPDATE rights on evidence.
     const participants=await this.transaction.query<{
       id:string; public_id:string; participation_role:string; confirmation_state:string
     }>(`
@@ -915,7 +917,7 @@ export class TableManagementRepository {
       WHERE session.tenant_id=$1::uuid AND session.store_id=$2::uuid
         AND session.id=$3::uuid AND session.status='open'
         AND participation.public_id=ANY($4::text[])
-      ORDER BY participation.id FOR UPDATE OF session,participation
+      ORDER BY participation.id FOR UPDATE OF session
     `,[this.transaction.scope.tenantId,this.transaction.scope.storeId,
       input.sourceTableSessionId,input.participantPublicIds])
     if (participants.rowCount!==input.participantPublicIds.length) {

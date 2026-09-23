@@ -1,3 +1,4 @@
+import { assertRuntimeDatabasePool } from './runtime-database-identity.js'
 import { CustomerExperienceService } from './customer-experience-service.js'
 import { NormalizedCommandExecutor } from './command-executor.js'
 import { randomUUID } from 'node:crypto'
@@ -228,10 +229,12 @@ function result<Row extends Record<string, unknown>>(rows: Row[]) {
 }
 
 const databaseUrl = process.env.TEST_NORMALIZED_DATABASE_URL
-const integration = databaseUrl ? describe : describe.skip
+const runtimeDatabaseUrl = process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
+const integration = databaseUrl && runtimeDatabaseUrl ? describe : describe.skip
 
 integration('observation confirmation privacy with PostgreSQL', () => {
   let pool: Pool
+  let runtime: Pool
   let transactions: ScopedPostgresTransactionRunner
   const tenantId = randomUUID()
   const storeId = randomUUID()
@@ -244,7 +247,9 @@ integration('observation confirmation privacy with PostgreSQL', () => {
   beforeAll(async () => {
     await runNormalizedMigrations(databaseUrl!)
     pool = new Pool({ connectionString: databaseUrl, max: 4 })
-    transactions = new ScopedPostgresTransactionRunner(asPool(pool))
+    runtime = new Pool({ connectionString: runtimeDatabaseUrl, max: 16 })
+    await assertRuntimeDatabasePool(runtime, runtimeDatabaseUrl!)
+    transactions = new ScopedPostgresTransactionRunner(asPool(runtime))
     const areaId = randomUUID()
     await pool.query(`INSERT INTO mbox.tenants (id, code, name) VALUES ($1, $2, 'Observation privacy tenant')`, [
       tenantId, `observation-${tenantId.slice(0, 8)}`,
@@ -283,6 +288,7 @@ integration('observation confirmation privacy with PostgreSQL', () => {
   })
 
   afterAll(async () => {
+    await runtime?.end()
     await pool?.end()
   })
 
@@ -325,6 +331,33 @@ integration('observation confirmation privacy with PostgreSQL', () => {
       eventCount: 1, eventTypes: ['complaint'], scopeKinds: ['table'],
     })
     expect(JSON.stringify(task.rows[0])).not.toContain(rawContent)
+  })
+
+  it('serializes revisions through the confirmed input while preserving immutable event history', async () => {
+    const replacement = {
+      expressionKind: 'staff_judgement' as const, scopeKind: 'table' as const, eventType: 'complaint' as const,
+      degree: 'unknown' as const, reasonCode: null, seatLabel: null, customerId: null,
+      candidateId: null, productId: null, confidence: 0.9, rawExcerpt: '更正服务记录',
+    }
+    const draft = await transactions.run(integrationScope, tx => new CustomerExperienceObservationRepository(tx).parse({
+      publicId: 'observation-revision-runtime', tableSessionId, employeeId, rawContent: '服务记录',
+      inputKind: 'text', needsImmediateAction: false, allowAllTables: false, idempotencyKey: randomUUID(),
+    }))
+    await transactions.run(integrationScope, tx => new CustomerExperienceObservationRepository(tx).confirm({
+      publicId: draft.publicId, employeeId, allowAllTables: false, events: [replacement],
+    }))
+    const original = (await pool.query(`SELECT event.id,event.raw_excerpt FROM mbox.observation_events event
+      JOIN mbox.observation_inputs input ON input.id=event.observation_input_id WHERE input.public_id=$1`, [draft.publicId])).rows[0]!
+    const revise = (reason: string) => transactions.run(integrationScope, tx => new CustomerExperienceObservationRepository(tx).revise({
+      publicId: draft.publicId, previousEventId: original.id, employeeId, allowAllTables: false, reason, replacement,
+    }))
+    const outcomes = await Promise.allSettled([revise('第一次更正'), revise('同版本并发更正')])
+    expect(outcomes.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+    const rejected = outcomes.find(result => result.status === 'rejected')
+    expect(rejected?.status === 'rejected' && rejected.reason).toMatchObject({code: 'OBSERVATION_REVISION_CONFLICT'})
+    expect((await pool.query('SELECT raw_excerpt FROM mbox.observation_events WHERE id=$1', [original.id])).rows[0]?.raw_excerpt).toBe(original.raw_excerpt)
+    await expect(transactions.run(integrationScope, tx => tx.query('UPDATE mbox.observation_events SET raw_excerpt=$2 WHERE id=$1', [original.id, '改写历史'])))
+      .rejects.toMatchObject({code: '42501'})
   })
 
   it('rolls back before task creation when a confirmed product was not ordered by this table', async () => {

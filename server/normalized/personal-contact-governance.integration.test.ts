@@ -1,3 +1,4 @@
+import {assertRuntimeDatabasePool} from './runtime-database-identity.js'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { afterAll,beforeAll,describe,expect,it } from 'vitest'
 import { Pool,type PoolClient } from 'pg'
@@ -11,7 +12,8 @@ import { createActivityContactProtectionKeyring } from './personal-contact-prote
 import { ScopedPostgresTransactionRunner,type PostgresPool } from './transaction-runner.js'
 
 const databaseUrl=process.env.TEST_NORMALIZED_DATABASE_URL
-const integration=databaseUrl?describe:describe.skip
+const runtimeDatabaseUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
+const integration=databaseUrl&&runtimeDatabaseUrl?describe:describe.skip
 const id={
   tenant:randomUUID(),store:randomUUID(),verifier:randomUUID(),approver:randomUUID(),
   ops:randomUUID(),owner:randomUUID(),
@@ -24,6 +26,7 @@ const contactProtection=createActivityContactProtectionKeyring(null,'personal-co
 
 integration('095 personal-contact governance PostgreSQL boundaries',()=>{
   let pool:Pool
+  let runtime:Pool
   let service:MembershipRecoveryService
   let governance:PersonalContactGovernanceService
   let disposition:PersonalContactDispositionWorker
@@ -33,7 +36,9 @@ integration('095 personal-contact governance PostgreSQL boundaries',()=>{
   beforeAll(async()=>{
     await runNormalizedMigrations(databaseUrl!)
     pool=new Pool({connectionString:databaseUrl,max:8})
-    const transactions=new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool)
+    runtime=new Pool({connectionString:runtimeDatabaseUrl,max:8})
+    await assertRuntimeDatabasePool(runtime,runtimeDatabaseUrl!)
+    const transactions=new ScopedPostgresTransactionRunner(runtime as unknown as PostgresPool)
     service=new MembershipRecoveryService(
       transactions,
       createMembershipRecoveryPhoneProtector('personal-contact-governance-test-secret'),
@@ -43,7 +48,7 @@ integration('095 personal-contact governance PostgreSQL boundaries',()=>{
     disposition=new PersonalContactDispositionWorker(transactions)
     await seed(pool)
   })
-  afterAll(async()=>pool?.end())
+  afterAll(async()=>{await runtime?.end();await pool?.end()})
 
   it('keeps the exact 079 upsert usable while preventing direct evidence mutation',async()=>{
     const first=await legacyUpsert({

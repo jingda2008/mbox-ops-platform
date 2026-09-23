@@ -126,6 +126,8 @@ export class WechatLoyaltyNotificationRepository {
     await this.transaction.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
       `wechat-notification-authorization:${this.transaction.scope.tenantId}:${this.transaction.scope.storeId}:${input.customerId}:${input.policyId}`,
     ])
+    // The policy is SELECT-only. Its exact version/template is FK-bound; the worker
+    // rechecks publication before sending. Keep the membership lock and authorization advisory lock.
     const selected = await this.transaction.query<{
       policy_id: string
       notification_type: WechatLoyaltyNotificationType
@@ -152,7 +154,7 @@ export class WechatLoyaltyNotificationRepository {
           ON customer_identity.tenant_id=wechat_identity.tenant_id
          AND customer_identity.store_id=wechat_identity.store_id
          AND customer_identity.identity_kind='wechat'
-         AND customer_identity.identity_hash=encode(digest('wechat:'||wechat_identity.principal_id,'sha256'),'hex')
+         AND customer_identity.identity_hash=encode(sha256(convert_to('wechat:'||wechat_identity.principal_id,'UTF8')),'hex')
          AND customer_identity.status='active' AND customer_identity.customer_id=membership.customer_id
         WHERE wechat_identity.tenant_id=policy.tenant_id
           AND wechat_identity.store_id=policy.store_id
@@ -172,7 +174,7 @@ export class WechatLoyaltyNotificationRepository {
         AND policy.id=$4::uuid AND policy.notification_type=$5
         AND policy.status='published' AND policy.effective_from<=clock_timestamp()
         AND (policy.effective_until IS NULL OR policy.effective_until>clock_timestamp())
-      FOR KEY SHARE OF policy,membership
+      FOR KEY SHARE OF membership
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,

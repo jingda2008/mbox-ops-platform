@@ -620,10 +620,12 @@ export class PromotionalLoyaltyWorker {
     fact: RefundFactRow,
     award: RefundAwardRow,
   ): Promise<{ applied: boolean; reversedPoints: number }> {
+    // The caller already locks refund, payment and loyalty account. Applications
+    // are immutable facts; account serialization also protects different refunds.
     const existing = await transaction.query(`
       SELECT 1 FROM mbox.loyalty_promotion_refund_applications
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid
-        AND promotion_award_id=$3::uuid AND refund_id=$4::uuid FOR UPDATE
+        AND promotion_award_id=$3::uuid AND refund_id=$4::uuid
     `, [transaction.scope.tenantId, transaction.scope.storeId, award.award_id, fact.refund_id])
     if (existing.rowCount === 1) return { applied: false, reversedPoints: 0 }
     const prior = (await transaction.query<{ reversed_points: string | number }>(`

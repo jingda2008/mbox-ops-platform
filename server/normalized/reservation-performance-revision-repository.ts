@@ -213,7 +213,7 @@ export class ReservationPerformanceRevisionRepository {
         impact_kind
       )
       SELECT reservation.tenant_id,reservation.store_id,
-        'reservation-impact-'||encode(digest($3||':'||reservation.id::text,'sha256'),'hex'),
+        'reservation-impact-'||encode(sha256(convert_to($3||':'||reservation.id::text,'UTF8')),'hex'),
         $4::uuid,reservation.id,reservation.customer_id,
         CASE WHEN reservation.customer_id IS NULL THEN NULL
           ELSE mbox.canonical_customer_id(reservation.tenant_id,reservation.store_id,reservation.customer_id)
@@ -348,7 +348,8 @@ export class ReservationPerformanceRevisionRepository {
        AND acknowledgement.impact_id=impact.id
       WHERE impact.tenant_id=$1::uuid AND impact.store_id=$2::uuid
         AND impact.public_id=$3
-      FOR UPDATE OF reservation,impact
+      -- Serialize acknowledgements on the mutable parent; impacts are append-only and SELECT/INSERT-only.
+      FOR UPDATE OF reservation
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.impactPublicId])
     const impact = selected.rows[0]
     if (impact === undefined || impact.canonical_customer_id !== canonical) {

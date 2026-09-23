@@ -1,3 +1,4 @@
+import { assertRuntimeDatabasePool } from './runtime-database-identity.js'
 import { createHash, randomUUID } from 'node:crypto'
 import Fastify from 'fastify'
 import { Pool, type PoolClient } from 'pg'
@@ -9,7 +10,8 @@ import { TableManagementCommandService } from './table-management-repository.js'
 import { ScopedPostgresTransactionRunner,type PostgresPool } from './transaction-runner.js'
 
 const databaseUrl = process.env.TEST_NORMALIZED_DATABASE_URL
-const integration = databaseUrl ? describe : describe.skip
+const runtimeDatabaseUrl = process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
+const integration = databaseUrl && runtimeDatabaseUrl ? describe : describe.skip
 
 integration('table customer location movements', () => {
   const tenantId=randomUUID()
@@ -20,10 +22,13 @@ integration('table customer location movements', () => {
   const roleId=randomUUID()
   const tables=Array.from({ length: 43 }, () => randomUUID())
   let pool: Pool
+  let runtime: Pool
 
   beforeAll(async () => {
     await runNormalizedMigrations(databaseUrl!)
     pool=new Pool({ connectionString: databaseUrl, max: 8 })
+    runtime = new Pool({ connectionString: runtimeDatabaseUrl, max: 16 })
+    await assertRuntimeDatabasePool(runtime, runtimeDatabaseUrl!)
     await pool.query(`INSERT INTO mbox.tenants(id,code,name) VALUES($1,$2,'Location Tenant')`,
       [tenantId,`location-${tenantId.slice(0,8)}`])
     await pool.query(`INSERT INTO mbox.stores(id,tenant_id,code,name) VALUES($1,$2,$3,'Location Store')`,
@@ -54,7 +59,7 @@ integration('table customer location movements', () => {
     ])
   })
 
-  afterAll(async () => { await pool?.end() })
+  afterAll(async () => { await runtime?.end(); await pool?.end() })
 
   it('moves an unscanned whole table and rejects direct runtime evidence or location writes', async () => {
     const source=await createSession(tables[0]!,2)
@@ -541,7 +546,7 @@ integration('table customer location movements', () => {
   })
 
   it('keeps merge preview capacity aligned with capacity_at_open and rejects inactive target areas', async () => {
-    const runner=new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool)
+    const runner=new ScopedPostgresTransactionRunner(runtime as unknown as PostgresPool)
     const app=Fastify()
     await app.register(tableManagementApiPlugin,{
       transactions:runner,
@@ -605,7 +610,7 @@ integration('table customer location movements', () => {
     const participation=await linkParticipant(source,customer,'guest')
     await createGuestSession(source,customer,tables[36]!)
     const commandService=new TableManagementCommandService(new NormalizedCommandExecutor(
-      new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool),
+      new ScopedPostgresTransactionRunner(runtime as unknown as PostgresPool),
     ))
     const idempotencyKey=`delayed-replay-${randomUUID()}`
     const command={ scope:{ tenantId,storeId },actor:{ type:'employee' as const,employeeId },
@@ -642,7 +647,7 @@ integration('table customer location movements', () => {
 
   it('namespaces cross-route movement keys and preserves every over-capacity event snapshot', async () => {
     const commandService=new TableManagementCommandService(new NormalizedCommandExecutor(
-      new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool),
+      new ScopedPostgresTransactionRunner(runtime as unknown as PostgresPool),
     ))
     const sharedKey=`shared-route-${randomUUID()}`
     const transferSource=await createSession(tables[38]!,1)

@@ -2,19 +2,21 @@ import { randomUUID } from 'node:crypto'
 import { afterAll,beforeAll,describe,expect,it,vi } from 'vitest'
 import { Pool } from 'pg'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
+import { assertRuntimeDatabasePool } from './runtime-database-identity.js'
 import { ScopedPostgresTransactionRunner,type PostgresPool } from './transaction-runner.js'
 import { WechatMemberServiceNotificationRepository } from './wechat-member-service-notification-repository.js'
 import { WechatMemberServiceNotificationWorker } from './wechat-member-service-notification-worker.js'
 
 const databaseUrl=process.env.TEST_NORMALIZED_DATABASE_URL
-const integration=databaseUrl?describe:describe.skip
+const runtimeDatabaseUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
+const integration=databaseUrl&&runtimeDatabaseUrl?describe:describe.skip
 const ids=Object.freeze({tenant:randomUUID(),store:randomUUID(),customer:randomUUID(),membership:randomUUID(),policy:randomUUID()})
 const scope={tenantId:ids.tenant,storeId:ids.store}
 
 integration('typed WeChat member-service notification delivery',()=>{
-  let pool:Pool;let transactions:ScopedPostgresTransactionRunner
-  beforeAll(async()=>{await runNormalizedMigrations(databaseUrl!);pool=new Pool({connectionString:databaseUrl,max:4});transactions=new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool);await seed(pool)})
-  afterAll(async()=>pool?.end())
+  let pool:Pool;let runtime:Pool;let transactions:ScopedPostgresTransactionRunner
+  beforeAll(async()=>{await runNormalizedMigrations(databaseUrl!);pool=new Pool({connectionString:databaseUrl,max:4});runtime=new Pool({connectionString:runtimeDatabaseUrl,max:4,options:'-c search_path=pg_catalog'});await assertRuntimeDatabasePool(runtime,runtimeDatabaseUrl!);transactions=new ScopedPostgresTransactionRunner(runtime as unknown as PostgresPool);await seed(pool)})
+  afterAll(async()=>{await runtime?.end();await pool?.end()})
 
   it('records the exact customer choice, queues only a newly issued benefit, and consumes it once',async()=>{
     const available=await transactions.run(scope,(transaction)=>(new WechatMemberServiceNotificationRepository(transaction).authorizationOptions(ids.customer,true)),{readOnly:true})
@@ -45,7 +47,19 @@ integration('typed WeChat member-service notification delivery',()=>{
     `,[ids.tenant,ids.store,benefitId])
     expect(delivered.rows).toEqual([{status:'sent',outcome:'accepted'}])
   })
-  it.each(['revoke','expire','crash'] as const)('does not send after %s invalidates the original attempt',async(change)=>{
+  it('does not grant runtime policy writes and serializes competing customer choices',async()=>{
+    await expect(transactions.run(scope,tx=>tx.query('UPDATE mbox.wechat_member_service_notification_policies SET reason=reason WHERE id=$1',[ids.policy]))).rejects.toMatchObject({code:'42501'})
+    const isolated={tenant:randomUUID(),store:randomUUID(),customer:randomUUID(),membership:randomUUID(),policy:randomUUID()}
+    await seed(pool,isolated)
+    const currentScope={tenantId:isolated.tenant,storeId:isolated.store}
+    const attempts=await Promise.allSettled(['accept','reject'].map(platformResult=>transactions.run(currentScope,tx=>
+      new WechatMemberServiceNotificationRepository(tx).recordAuthorization({customerId:isolated.customer,
+        notificationType:'member_benefit_issued',policyId:isolated.policy,policyVersion:1,templateId:'wechat-template-benefit-001',
+        expectedVersion:0,platformResult:platformResult as 'accept'|'reject',platformEventReference:'concurrent-choice-'+platformResult}))))
+    expect(attempts.filter(r=>r.status==='fulfilled')).toHaveLength(1)
+    expect(attempts.find(r=>r.status==='rejected')).toMatchObject({reason:{code:'WECHAT_MEMBER_SERVICE_NOTIFICATION_VERSION_CONFLICT'}})
+  })
+  it.each(['revoke','retire','expire','crash'] as const)('does not send after %s invalidates the original attempt',async(change)=>{
     const isolated={tenant:randomUUID(),store:randomUUID(),customer:randomUUID(),membership:randomUUID(),policy:randomUUID()}
     await seed(pool,isolated)
     const currentScope={tenantId:isolated.tenant,storeId:isolated.store}
@@ -60,6 +74,7 @@ integration('typed WeChat member-service notification delivery',()=>{
     const sendTemplate=vi.fn(async()=>({outcome:'accepted' as const,providerReference:'must-not-send'}))
     const worker=new WechatMemberServiceNotificationWorker(transactions,{resolveMiniProgramNotificationRecipient:async()=>{
       if(change==='revoke')await transactions.run(currentScope,tx=>new WechatMemberServiceNotificationRepository(tx).recordAuthorization({...authorization,expectedVersion:1,platformResult:'revoke',platformEventReference:'member-service-during-resolve-revoke'}))
+      else if(change==='retire')await pool.query("UPDATE mbox.wechat_member_service_notification_policies SET status='retired' WHERE id=$1",[isolated.policy])
       else await pool.query("UPDATE mbox.benefits SET valid_until=clock_timestamp()-interval '1 minute' WHERE id=$1",[benefitId])
       return{identityExternalId:'member-service-identity',openId:'openid-member-service'}
     }},{sendTemplate})

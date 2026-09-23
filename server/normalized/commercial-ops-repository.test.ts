@@ -1,3 +1,4 @@
+import { assertRuntimeDatabasePool } from './runtime-database-identity.js'
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
@@ -15,7 +16,8 @@ import {
 } from './transaction-runner.js'
 
 const databaseUrl = process.env.TEST_NORMALIZED_DATABASE_URL
-const integration = databaseUrl ? describe : describe.skip
+const runtimeDatabaseUrl = process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
+const integration = databaseUrl && runtimeDatabaseUrl ? describe : describe.skip
 
 integration('CommercialOpsRepository PostgreSQL integrity', () => {
   const tenantId = randomUUID()
@@ -32,18 +34,21 @@ integration('CommercialOpsRepository PostgreSQL integrity', () => {
   const paymentId = randomUUID()
   const paymentReconciliationId = randomUUID()
   let pool: Pool
+  let runtime: Pool
   let transactions: ScopedPostgresTransactionRunner
   let commands: NormalizedCommandExecutor
 
   beforeAll(async () => {
     await runNormalizedMigrations(databaseUrl!)
     pool = new Pool({ connectionString: databaseUrl, max: 16 })
-    transactions = new ScopedPostgresTransactionRunner(asPool(pool))
+    runtime = new Pool({ connectionString: runtimeDatabaseUrl, max: 16 })
+    await assertRuntimeDatabasePool(runtime, runtimeDatabaseUrl!)
+    transactions = new ScopedPostgresTransactionRunner(asPool(runtime))
     commands = new NormalizedCommandExecutor(transactions)
     await seedStore()
   })
 
-  afterAll(async () => pool?.end())
+  afterAll(async () => { await runtime?.end(); await pool?.end() })
 
   it('writes a cost, audit and outbox atomically and allows only one immutable correction', async () => {
     const created = await commands.execute({

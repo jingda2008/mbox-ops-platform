@@ -499,6 +499,7 @@ export class CustomerExperienceObservationRepository {
     reason: string
     replacement: ObservationEventInput
   }>): Promise<JsonObject> {
+    // Serialize revisions on the mutable parent; event history is append-only.
     const observation = await this.loadConfirmed(input.publicId)
     await this.assertEmployeeTableAccess(observation.table_session_id, input.employeeId, input.allowAllTables)
     const previousResult = await this.transaction.query<ObservationEventRow>(`
@@ -509,13 +510,12 @@ export class CustomerExperienceObservationRepository {
       FROM mbox.observation_events
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
         AND observation_input_id=$4::uuid
-      FOR KEY SHARE
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.previousEventId, observation.id])
     const previous = required(previousResult.rows[0], 'previous observation event')
     const latest = await this.transaction.query<{ revision_no: number }>(`
       SELECT revision_no FROM mbox.observation_events
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND event_group_id=$3::uuid
-      ORDER BY revision_no DESC LIMIT 1 FOR UPDATE
+      ORDER BY revision_no DESC LIMIT 1
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, previous.event_group_id])
     if (latest.rows[0]?.revision_no !== previous.revision_no) {
       throw new CustomerExperienceRequestError('这条记录已有更新版本，请刷新后再修正', 'OBSERVATION_REVISION_CONFLICT', 409)
@@ -694,7 +694,7 @@ export class CustomerExperienceObservationRepository {
         needs_immediate_action, service_task_id, parse_confidence, status
       FROM mbox.observation_inputs
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND public_id=$3 AND status='confirmed'
-      FOR KEY SHARE
+      FOR UPDATE
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, publicId])
     const row = result.rows[0]
     if (!row) throw new CustomerExperienceRequestError('已确认观察记录不存在', 'OBSERVATION_NOT_CONFIRMED', 404)

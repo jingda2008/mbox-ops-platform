@@ -1,5 +1,5 @@
 """Export only synthetic LAB reports and logs with temporary secrets removed."""
-import json,re,shutil
+import json,re,shutil,hashlib
 from pathlib import Path
 root=Path('/root/LAB-final');out=root/'safe-evidence';out.mkdir(exist_ok=True)
 secrets=[]
@@ -27,3 +27,13 @@ for p in (root/'private-logs').glob('*.log'):
 for release in Path('/opt/mbox/releases').iterdir():
  p=release/'maintenance-operator-state.json'
  if p.is_file():(out/(release.name+'-operator-state.json')).write_text(clean(p.read_text()))
+ comparisons=[]
+ for receipt_path in release.glob('oss-*-verification.json'):
+  receipt=json.loads(receipt_path.read_text())
+  kind=receipt_path.name[len('oss-'):-len('-verification.json')]
+  stage=release/('oss-'+kind)
+  if not stage.is_dir():continue
+  expected={receipt['prefix']+'/'+p.name:[hashlib.sha256(p.read_bytes()).hexdigest(),p.stat().st_size,True] for p in stage.iterdir() if p.is_file()}
+  actual={o['key']:[o['sha256'],o['bytes'],o['verified']] for o in receipt['objects']}
+  comparisons.append({'kind':kind,'equal':actual==expected,'actual':actual,'expected':expected})
+ if comparisons:(out/(release.name+'-archive-comparisons.json')).write_text(clean(json.dumps(comparisons,indent=2)+'\n'))

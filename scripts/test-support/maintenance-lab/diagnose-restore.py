@@ -10,6 +10,8 @@ assert pathlib.Path('/.dockerenv').exists()
 assert socket.gethostname().startswith('mbox-maint-lab-')
 assert not any(row.split()[1] == '00000000' for row in pathlib.Path('/proc/net/route').read_text().splitlines()[1:])
 config = json.loads((root / 'active-config.json').read_text())
+if not any('restore-postgres.sh (exit ' in p.read_text(errors='replace') for p in (root / 'private-logs').glob('*.log')):
+    raise SystemExit(0)
 release = pathlib.Path('/opt/mbox/releases') / config['targetSha'][:7]
 evidence = release / 'maintenance-restore-source.json'
 backups = sorted(pathlib.Path('/opt/mbox/backups').glob('*.dump'), key=lambda p: p.stat().st_mtime)

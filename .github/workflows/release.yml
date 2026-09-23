@@ -16,7 +16,7 @@ jobs:
   publish-pre-release:
     name: Publish staff, service and database release
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 55
     environment:
       name: production
     steps:
@@ -49,7 +49,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           run_id=
-          for _ in $(seq 1 90); do
+          for _ in $(seq 1 270); do
             run_id=$(gh run list \
               --workflow ci.yml \
               --branch "${GITHUB_REF_NAME}" \

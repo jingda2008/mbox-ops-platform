@@ -31,7 +31,7 @@ export async function readKitchenSources(tx:ScopedTransaction, employeeId:string
         OR EXISTS(SELECT 1 FROM mbox.order_items child WHERE child.tenant_id=item.tenant_id AND child.store_id=item.store_id AND child.parent_order_item_id=item.id)
     ) AS value
     FROM mbox.kds_tasks task
-    -- Keep scoped primary-key lookups dependent on each task. With fresh RLS statistics,
+    -- Keep scoped primary-key lookups dependent on each task. Under RLS, underestimated row counts mean
     -- flattening these joins can repeatedly scan every order/item/task combination.
     JOIN LATERAL (SELECT item.* FROM mbox.order_items item
       WHERE item.tenant_id=$1 AND item.store_id=$2 AND item.id=task.order_item_id OFFSET 0) item ON true
@@ -92,12 +92,19 @@ export async function readKitchenBatches(tx:ScopedTransaction, batchId?:string, 
         AND task.status NOT IN ('failed','cancelled') AND session.status IN ('open','closing')
         AND NOT EXISTS(SELECT 1 FROM mbox.quantity_remake_units remake WHERE (remake.tenant_id,remake.store_id,remake.unit_id)=(unit.tenant_id,unit.store_id,unit.id))) AS unfinished
       FROM mbox.kitchen_production_units part
-      JOIN mbox.order_item_quantity_units unit ON (unit.tenant_id,unit.store_id,unit.id)=(part.tenant_id,part.store_id,part.unit_id)
-      JOIN mbox.kds_tasks task ON (task.tenant_id,task.store_id,task.id)=(part.tenant_id,part.store_id,part.kds_task_id)
-      JOIN mbox.order_items item ON (item.tenant_id,item.store_id,item.id)=(unit.tenant_id,unit.store_id,unit.order_item_id)
-      JOIN mbox.orders original ON (original.tenant_id,original.store_id,original.id)=(item.tenant_id,item.store_id,item.order_id)
-      JOIN mbox.table_sessions session ON (session.tenant_id,session.store_id,session.id)=(original.tenant_id,original.store_id,original.table_session_id)
-      JOIN mbox.tables venue ON (venue.tenant_id,venue.store_id,venue.id)=(session.tenant_id,session.store_id,session.table_id)
+      -- Apply the same bounded lookups after batches accumulate during a burst.
+      JOIN LATERAL (SELECT unit.* FROM mbox.order_item_quantity_units unit
+        WHERE unit.tenant_id=$1 AND unit.store_id=$2 AND unit.id=part.unit_id OFFSET 0) unit ON true
+      JOIN LATERAL (SELECT task.* FROM mbox.kds_tasks task
+        WHERE task.tenant_id=$1 AND task.store_id=$2 AND task.id=part.kds_task_id OFFSET 0) task ON true
+      JOIN LATERAL (SELECT item.* FROM mbox.order_items item
+        WHERE item.tenant_id=$1 AND item.store_id=$2 AND item.id=unit.order_item_id OFFSET 0) item ON true
+      JOIN LATERAL (SELECT original.* FROM mbox.orders original
+        WHERE original.tenant_id=$1 AND original.store_id=$2 AND original.id=item.order_id OFFSET 0) original ON true
+      JOIN LATERAL (SELECT session.* FROM mbox.table_sessions session
+        WHERE session.tenant_id=$1 AND session.store_id=$2 AND session.id=original.table_session_id OFFSET 0) session ON true
+      JOIN LATERAL (SELECT venue.* FROM mbox.tables venue
+        WHERE venue.tenant_id=$1 AND venue.store_id=$2 AND venue.id=session.table_id OFFSET 0) venue ON true
       WHERE (part.tenant_id,part.store_id,part.batch_id)=(batch.tenant_id,batch.store_id,batch.id)
     ) parts ON true
     WHERE batch.tenant_id=$1 AND batch.store_id=$2 AND batch.station_code=$4

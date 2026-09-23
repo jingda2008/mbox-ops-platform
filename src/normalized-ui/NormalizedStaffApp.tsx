@@ -1,5 +1,4 @@
 import {StaffReadyNotice} from './staff-actions/StaffReadyNotice'
-import {threeScreenMode} from './staff-actions/three-screen-route'
 import { StaffObjectFocus } from './StaffObjectFocus'
 import { StaffViewStateProvider, StaffRouteRestoration } from './staff-view-state'
 import { StaffMemberNavigation } from './StaffMemberNavigation'
@@ -23,7 +22,6 @@ const StaffActionsPanel = lazy(() => import('./staff-actions').then((module) => 
 const StaffModulePanel = lazy(() => import('./StaffModulePanel').then((module) => ({
   default: module.StaffModulePanel,
 })))
-const ThreeScreenWorkspace=lazy(()=>import('./staff-actions/ThreeScreenWorkspace').then(module=>({default:module.ThreeScreenWorkspace})))
 
 export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiClient }) {
   const api = useMemo(() => suppliedApi ?? new NormalizedApiClient(), [suppliedApi])
@@ -33,7 +31,6 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
   const [initialBootstrap, setInitialBootstrap] = useState<StaffBootstrapView | null>(null)
   const [staffLocation, setStaffLocation] = useState(() => window.location.pathname + window.location.search)
   const staffRoute = normalizedStaffRoute(new URL(staffLocation, window.location.origin).pathname)
-  const dedicatedScreen=threeScreenMode(new URL(staffLocation,window.location.origin).pathname,new URL(staffLocation,window.location.origin).search)
   const [navigationError, setNavigationError] = useState<string | null>(null)
   const [navigationAttempt, setNavigationAttempt] = useState(0)
   const [staffNavigation, setStaffNavigation] = useState<StaffBootstrapView['navigation'] | null>(null)
@@ -132,9 +129,7 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
     setNavigationError(null)
     void api.getStaffBootstrap({ signal: controller.signal }).then((result) => {
       if (controller.signal.aborted) return
-      if (result.data !== null && result.data.staff.id === authenticatedEmployeeId) {
-        setInitialBootstrap(result.data); setStaffNavigation(result.data.navigation)
-      }
+      if (result.data !== null && result.data.staff.id === authenticatedEmployeeId) setStaffNavigation(result.data.navigation)
       else setNavigationError('工作台资料暂未读到，请重新读取')
     }).catch((error) => {
       if (controller.signal.aborted) return
@@ -192,20 +187,18 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
     onLoggedOut={logoutReady}
   />
   const content = staffRoute !== null ? (
-    <main className={`normalized-staff-action-shell${dedicatedScreen?' three-screen-shell':''}`}>
-      {!dedicatedScreen&&<header>
+    <main className="normalized-staff-action-shell">
+      <header>
         <div className="staff-return-actions">
           {window.history.state?.staffSession === auth.session.id && window.history.state?.staffReturnTo && <button type="button" onClick={() => window.history.back()}><ArrowLeft size={18} /> 返回上一页</button>}
           <button type="button" onClick={() => navigate('/')}><ArrowLeft size={18} /> 工作台</button>
         </div>
         {sessionControls}
-      </header>}
-      {!dedicatedScreen&&<StaffObjectFocus route={staffLocation} />}
+      </header>
+      <StaffObjectFocus route={staffLocation} />
       {staffNavigation !== null && window.location.pathname.startsWith('/staff/member-') && <StaffMemberNavigation entries={staffNavigation} activeRoute={window.location.pathname} onNavigate={navigate} />}
       {staffNavigation === null ? navigationError === null ? <StaffGateLoading /> : <div className="normalized-route-notice" role="alert"><p>{navigationError}</p><button type="button" onClick={() => setNavigationAttempt(value => value + 1)}>重新读取工作台</button></div> : !staffNavigation.some((item) => item.code === normalizedStaffNavigationCode(window.location.pathname))
-        ? <div className="normalized-route-notice" role="alert">当前账号没有这个页面的有效权限。请由管理员授权后刷新；</div>
-        : dedicatedScreen
-        ? <Suspense fallback={<StaffGateLoading/>}><ThreeScreenWorkspace key={`${staffWorkspaceIdentityKey(auth)}:${dedicatedScreen}`} mode={dedicatedScreen} employeeId={auth.employee.id} staffSessionId={auth.session.id} onExit={()=>navigate('/staff/fulfillment')} onLoginRequired={loginRequired}/></Suspense>
+        ? <div className="normalized-route-notice" role="alert">当前账号没有这个页面的有效权限。请由管理员授权后刷新；直接输入页面地址不会绕过权限。</div>
         : isStaffActionsTab(staffRoute)
         ? <Suspense fallback={<StaffGateLoading />}><StaffActionsPanel key={`${staffWorkspaceIdentityKey(auth)}:${staffLocation}`}
             staffSessionId={auth.session.id}
@@ -235,9 +228,9 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
     </>)
   return <StaffViewStateProvider key={staffWorkspaceIdentityKey(auth)}>
     <StaffRouteRestoration route={staffLocation} />
-    {!dedicatedScreen&&<StaffReadyNotice key={staffWorkspaceIdentityKey(auth)} employeeId={auth.employee.id} sessionId={auth.session.id} canDeliver={initialBootstrap?.access.permissions.includes('kds.deliver')===true} usesActionQueue={staffRoute!==null&&isStaffActionsTab(staffRoute)} onNavigate={navigate}/>}
+    <StaffReadyNotice key={staffWorkspaceIdentityKey(auth)} employeeId={auth.employee.id} sessionId={auth.session.id} canDeliver={initialBootstrap?.access.permissions.includes('kds.deliver')===true} usesActionQueue={staffRoute!==null&&isStaffActionsTab(staffRoute)} onNavigate={navigate}/>
     {content}
-    {staffNavigation !== null && !dedicatedScreen && <StaffBottomNavigation
+    {staffNavigation !== null && <StaffBottomNavigation
       entries={staffNavigation}
       roleCodes={auth?.employee.roleCodes}
       activeRoute={staffRoute === null ? null : window.location.pathname}

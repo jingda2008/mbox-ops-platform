@@ -2,7 +2,6 @@ import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Client } from 'pg'
-import {maintenanceDatabaseUrlForCommand} from './normalized/database-maintenance-connection.js'
 import { parseNormalizedCatalog, provisionNormalizedCatalog } from './provision-normalized-catalog.js'
 import { parseStoreProvisionConfig, provisionNormalizedStore } from './provision-normalized-store.js'
 
@@ -49,7 +48,7 @@ const isDirectRun = process.argv[1] && fileURLToPath(import.meta.url) === resolv
 if (isDirectRun) {
   const storePath = process.argv.find((entry) => entry.startsWith('--store='))?.slice('--store='.length)
   const catalogPath = process.argv.find((entry) => entry.startsWith('--catalog='))?.slice('--catalog='.length)
-  const databaseUrl = await maintenanceDatabaseUrlForCommand()
+  const databaseUrl = process.env.DATABASE_URL
   if (!storePath || !catalogPath || !databaseUrl) {
     throw new Error('DATABASE_URL, --store and --catalog are required')
   }

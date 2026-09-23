@@ -4,9 +4,6 @@ import { readFile } from 'node:fs/promises'
 import { connect } from 'node:tls'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
-import {Pool} from 'pg'
-import {buildRuntimeDatabaseContainerProbe} from './normalized/runtime-database-container-probe.js'
-import {assertRuntimeDatabasePool} from './normalized/runtime-database-identity.js'
 import { loadNormalizedRuntimeConfig } from './normalized/normalized-runtime-config.js'
 import {
   parseStoreProvisionConfig,
@@ -25,7 +22,6 @@ export interface RuntimePreflightReport {
   modes: Record<string, string>
   externalHosts: string[]
   provisioning: { employeePinCount: number; dailyCredentialConfigured: boolean } | null
-  databaseIdentity?: {status:'restricted';login:string}
 }
 
 export async function verifyNormalizedRuntimeConfig(
@@ -96,22 +92,11 @@ async function verifyDnsAndTls(hostname: string) {
 }
 
 const isDirectRun = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])
-if (isDirectRun && process.argv.includes('--emit-container-probe')) {
-  const compiledGuard=await readFile(new URL('./normalized/runtime-database-identity.js',import.meta.url),'utf8')
-  process.stdout.write(buildRuntimeDatabaseContainerProbe(compiledGuard))
-} else if (isDirectRun) {
+if (isDirectRun) {
   const storeArgument = process.argv.find((argument) => argument.startsWith('--store='))
   const storeConfig = storeArgument
     ? parseStoreProvisionConfig(JSON.parse(await readFile(storeArgument.slice('--store='.length), 'utf8')))
     : undefined
   const report = await verifyNormalizedRuntimeConfig(process.env, process.argv.includes('--external'), storeConfig)
-  if (process.argv.includes('--database')) {
-    const config=loadNormalizedRuntimeConfig()
-    const pool=new Pool({connectionString:config.databaseUrl,max:1,connectionTimeoutMillis:5000})
-    try {
-      const identity=await assertRuntimeDatabasePool(pool,config.databaseUrl)
-      report.databaseIdentity={status:'restricted',login:identity.session_user}
-    } finally {await pool.end()}
-  }
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
 }

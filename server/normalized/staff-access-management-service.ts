@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto'
-import { lockStaffAccessConfiguration, StaffAccessVersionConflictError } from './staff-access-version.js'
 import type {
   StaffAccessEmployeeOverrideView,
   StaffAccessEmployeeView,
@@ -12,7 +10,7 @@ import type {
 } from '../../src/shared/normalized-contracts.js'
 import { validRefundApprovalLimit } from '../../src/shared/refund-review-configuration.js'
 import type { JsonCodec, JsonObject, JsonValue } from './command-executor.js'
-import { IdempotencyConflictError, NormalizedCommandExecutor } from './command-executor.js'
+import { NormalizedCommandExecutor } from './command-executor.js'
 import { StaffAccessRepository } from './staff-access-repository.js'
 import { ScryptCredentialHasher, type CredentialHasher } from './staff-auth-command-service.js'
 import { ScopedPostgresTransactionRunner, type ScopedTransaction, type StoreScope } from './transaction-runner.js'
@@ -93,7 +91,6 @@ export class StaffAccessManagementService {
 
   getOverview(input: Readonly<{ scope: StoreScope; actorEmployeeId: string }>): Promise<StaffAccessManagementOverview> {
     return this.transactions.run(input.scope, async (transaction) => {
-      await lockStaffAccessConfiguration(transaction)
       await requireAdministrator(transaction, input.actorEmployeeId)
       return readOverview(transaction)
     })
@@ -107,39 +104,16 @@ export class StaffAccessManagementService {
     requestFingerprint: string
     reason: string
     changes: StaffPermissionDeploymentChange[]
-    expectedVersion: string
   }>): Promise<StaffPermissionDeploymentResult> {
     assertDeployment(input)
-    if (!/^[0-9a-f]{64}$/.test(input.expectedVersion)) throw new TypeError('请重新读取权限配置后发布')
-    // Authorize before a generic cached replay, and again inside the write transaction.
-    await this.transactions.run(input.scope, async (transaction) => {
-      await lockStaffAccessConfiguration(transaction)
-      await requireAdministrator(transaction, input.actorEmployeeId)
-    })
-    const fingerprint = stableConfigurationJson({ actorEmployeeId: input.actorEmployeeId,
-      expectedVersion: input.expectedVersion, reason: input.reason, changes: input.changes })
-    const requestHash = createHash('sha256').update(fingerprint).digest('hex')
-    const operationKey = createHash('sha256').update(`${input.actorEmployeeId}:${input.idempotencyKey}`).digest('hex')
-    let recovered = false
     const execution = await this.commands.execute({
       scope: input.scope,
       operationScope: 'staff.permission-deployment',
-      idempotencyKey: operationKey,
-      requestFingerprint: fingerprint,
+      idempotencyKey: input.idempotencyKey,
+      requestFingerprint: input.requestFingerprint,
       resultCodec: deploymentCodec,
     }, async (transaction) => {
-      await lockStaffAccessConfiguration(transaction)
       await requireAdministrator(transaction, input.actorEmployeeId)
-      const receipt = await transaction.query<{ request_sha256: string; result: unknown }>(`
-        SELECT request_sha256,result FROM mbox.staff_permission_deployment_receipts
-        WHERE tenant_id=$1 AND store_id=$2 AND actor_employee_id=$3 AND operation_key=$4`,
-      [input.scope.tenantId,input.scope.storeId,input.actorEmployeeId,input.idempotencyKey])
-      if (receipt.rows[0]) {
-        if (receipt.rows[0].request_sha256 !== requestHash) throw new IdempotencyConflictError('staff.permission-deployment', input.idempotencyKey)
-        recovered = true
-        return { result: deploymentCodec.decode(receipt.rows[0].result), auditEvents: [], outboxMessages: [] }
-      }
-      if ((await readOverview(transaction)).configurationVersion !== input.expectedVersion) throw new StaffAccessVersionConflictError()
       const repository = new StaffAccessRepository(transaction)
       await assertConfigurationChangesKnown(transaction, input.changes)
       for (const change of input.changes) {
@@ -211,10 +185,6 @@ export class StaffAccessManagementService {
       }
       const overview = await readOverview(transaction)
       const result: PermissionDeploymentValue = { verifiedAt, changes, overview }
-      await transaction.query(`INSERT INTO mbox.staff_permission_deployment_receipts
-        (tenant_id,store_id,actor_employee_id,operation_key,request_sha256,result)
-        VALUES($1,$2,$3,$4,$5,$6::jsonb)`, [input.scope.tenantId,input.scope.storeId,input.actorEmployeeId,
-        input.idempotencyKey,requestHash,JSON.stringify(deploymentCodec.encode(result))])
       const evidence = { verifiedAt, changes }
       return {
         result,
@@ -228,7 +198,7 @@ export class StaffAccessManagementService {
           afterData: evidence,
         }],
         outboxMessages: [{
-          eventId: `staff-permission-deployment:${operationKey}`,
+          eventId: `staff-permission-deployment:${input.idempotencyKey}`,
           aggregateType: 'staff_permission_deployment',
           aggregateId: input.actorEmployeeId,
           aggregateVersion: 1,
@@ -240,9 +210,9 @@ export class StaffAccessManagementService {
     return {
       status: 'verified',
       verifiedAt: execution.value.verifiedAt,
-      replayed: execution.replayed || recovered,
+      replayed: execution.replayed,
       changes: execution.value.changes,
-      overview: await this.getOverview({ scope: input.scope, actorEmployeeId: input.actorEmployeeId }),
+      overview: execution.value.overview,
     }
   }
 
@@ -264,7 +234,6 @@ export class StaffAccessManagementService {
       scope: input.scope, operationScope: 'staff.employee.create', idempotencyKey: input.idempotencyKey,
       requestFingerprint: input.requestFingerprint, resultCodec: employeeLifecycleCodec,
     }, async (transaction) => {
-      await lockStaffAccessConfiguration(transaction)
       await requireAdministrator(transaction, input.actorEmployeeId)
       const role = await transaction.query<{ code: string }>(`
         SELECT code FROM mbox.roles
@@ -310,7 +279,6 @@ export class StaffAccessManagementService {
       scope: input.scope, operationScope: 'staff.employee.status', idempotencyKey: input.idempotencyKey,
       requestFingerprint: input.requestFingerprint, resultCodec: employeeLifecycleCodec,
     }, async (transaction) => {
-      await lockStaffAccessConfiguration(transaction)
       await requireAdministrator(transaction, input.actorEmployeeId)
       const updated = await transaction.query<{ status: 'active' | 'suspended'; lifecycle_version: number }>(`
         UPDATE mbox.employees SET status=$4,lifecycle_version=lifecycle_version+1,updated_at=clock_timestamp()
@@ -451,24 +419,14 @@ async function readOverview(transaction: ScopedTransaction): Promise<StaffAccess
     WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND status='active'
     ORDER BY sort_order, definition_kind, code
   `, [transaction.scope.tenantId, transaction.scope.storeId])
-  const view = {
+  return {
+    generatedAt: new Date().toISOString(),
     roles: roleResult.rows.map(roleView),
     employees: employeeResult.rows.map(employeeView),
     permissions: permissionResult.rows.map(permissionView),
     areas: areaResult.rows.map((row) => ({ id: row.id, code: row.code, name: row.name })),
     configurationDefinitions: definitionResult.rows.map(configurationDefinitionView),
   }
-  const revision = (await transaction.query<{ revision: string }>(
-    'SELECT revision::text FROM mbox.staff_access_revisions WHERE tenant_id=$1 AND store_id=$2',
-    [transaction.scope.tenantId, transaction.scope.storeId])).rows[0]?.revision ?? '0'
-  return { ...view, generatedAt: new Date().toISOString(),
-    scopeKey: `${transaction.scope.tenantId}:${transaction.scope.storeId}`,
-    configurationVersion: createHash('sha256').update(stableConfigurationJson({ revision, view })).digest('hex'),
-  }
-}
-
-function stableConfigurationJson(value: unknown): string {
-  return JSON.stringify(canonicalJson(value))
 }
 
 async function verifyChange(

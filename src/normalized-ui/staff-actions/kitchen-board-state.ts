@@ -9,10 +9,6 @@ export function kitchenGroups(items:KitchenPendingItem[]){
   }
   return [...groups.values()]
 }
-export function kitchenPreferredBatchQuantity(items:KitchenPendingItem[],preferred?:number){
-  const available=items.filter(item=>item.canPrepare)
-  return Math.min(999,available.reduce((sum,item)=>sum+item.unmade,0),preferred??available[0]?.unmade??0)
-}
 /** Allocation is saved at selection time. Polls never replace the original intent. */
 export function kitchenAllocation(items:KitchenPendingItem[],quantity:number):KitchenStartSelection[]{
   if(!Number.isSafeInteger(quantity)||quantity<1)return []
@@ -25,15 +21,6 @@ export function kitchenAllocation(items:KitchenPendingItem[],quantity:number):Ki
   return remaining===0?chosen:[]
 }
 export type KitchenReadySelection=Extract<KitchenCommand,{action:'ready'}>['items'][number]
-/** Superseded originals must never contribute to live preparation or its pages. */
-export function kitchenActivePortions(units:KitchenBatchUnit[]){return units.filter(unit=>unit.state==='started'&&!unit.stopped)}
-export function kitchenInitialReadyDraft(units:KitchenBatchUnit[]):Record<string,KitchenReadySelection>{
-  const selections=[...new Set(kitchenActivePortions(units).map(unit=>unit.taskId))].map(taskId=>{
-    const originals=units.filter(unit=>unit.taskId===taskId)
-    return kitchenReadySelection(originals,originals.filter(unit=>unit.state==='started'&&!unit.stopped&&!unit.held).length)
-  }).filter((selection):selection is KitchenReadySelection=>selection!==null)
-  return Object.fromEntries(selections.map(selection=>[selection.taskId,selection]))
-}
 export function kitchenReadySelection(units:KitchenBatchUnit[],quantity:number):KitchenReadySelection|null{
   const valid=units.filter(unit=>unit.state==='started'&&!unit.held&&!unit.stopped)
   if(!Number.isSafeInteger(quantity)||quantity<1||quantity>valid.length)return null

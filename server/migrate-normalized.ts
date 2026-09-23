@@ -3,7 +3,6 @@ import { readdir, readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Client } from 'pg'
-import {maintenanceDatabaseUrlForCommand} from './normalized/database-maintenance-connection.js'
 
 export const NORMALIZED_SCHEMA_FLAVOR = 'normalized-core-v1'
 export const NORMALIZED_MIGRATIONS_DIRECTORY = fileURLToPath(
@@ -230,8 +229,7 @@ export async function runNormalizedMigrations(databaseUrl: string) {
 
 const isDirectRun = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])
 if (isDirectRun) {
-  const databaseUrl = await maintenanceDatabaseUrlForCommand()
-  if (process.argv.includes('--verify-only')) {
-    process.stdout.write(`${JSON.stringify({status:'pass',runtimeIdentity:'restricted',maintenanceIdentity:'separate',sameDatabase:true})}\n`)
-  } else await runNormalizedMigrations(databaseUrl)
+  const databaseUrl = process.env.DATABASE_URL
+  if (!databaseUrl) throw new Error('执行规范化数据库迁移必须配置DATABASE_URL')
+  await runNormalizedMigrations(databaseUrl)
 }

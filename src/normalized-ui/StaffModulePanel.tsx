@@ -1,4 +1,3 @@
-import {OrderFinancialRecoveryPanel} from './OrderFinancialRecoveryPanel'
 import {InventoryWastePanel,InventoryWasteReviewPanel} from './InventoryWastePanel'
 import {openTaskSection} from './TaskSections'
 import { useStaffViewState } from './staff-view-state'
@@ -485,7 +484,7 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
         onLoginRequired={onLoginRequired}
         onNavigate={onNavigate}
         refreshToken={paymentRefreshToken}
-      /><OrderFinancialRecoveryPanel api={api} auth={auth}/></>
+      /></>
     }
     if (module === 'performance') return <PerformanceModule api={api} auth={auth} view={data.performance} performers={data.performers} requests={data.songRequests} phases={data.performancePhases} onChanged={refresh} />
     if (module === 'inventory') return <InventoryModule api={api} auth={auth} view={data.inventory} onChanged={refresh} />

@@ -10,7 +10,7 @@ export const KDS_PRIORITY_OVERRIDE_CAPABILITY = 'kds.priority.override'
 // `cancel` remains only for the repository's manager-exception transition.
 // It is deliberately not exposed by the ordinary KDS HTTP action union.
 export type KdsEmployeeAction = 'claim' | 'accept' | 'start' | 'complete' | 'fail' | 'cancel'
-export type KdsScopedAction = KdsEmployeeAction | 'deliver' | 'manager_cancel' | 'manager_remake' | 'quantity_remake' | 'production_handoff'
+export type KdsScopedAction = KdsEmployeeAction | 'deliver' | 'manager_cancel' | 'manager_remake' | 'quantity_remake'
 
 export type KdsAuthorizationErrorCode =
   | 'KDS_ACTOR_INACTIVE'
@@ -236,7 +236,7 @@ function permissionSql(): string {
 
 function requiredCapability(action: KdsScopedAction): string {
   if (action === 'deliver') return KDS_DELIVER_CAPABILITY
-  if (action === 'manager_cancel' || action === 'manager_remake' || action === 'quantity_remake' || action === 'cancel' || action === 'production_handoff') return KDS_EXCEPTION_MANAGE_CAPABILITY
+  if (action === 'manager_cancel' || action === 'manager_remake' || action === 'quantity_remake' || action === 'cancel') return KDS_EXCEPTION_MANAGE_CAPABILITY
   return KDS_PREPARE_CAPABILITY
 }
 
@@ -248,7 +248,7 @@ function errorForCapability(capability: string): KdsAuthorizationErrorCode {
 
 function isProductionAction(action: KdsScopedAction): boolean {
   return action === 'claim' || action === 'accept' || action === 'start'
-    || action === 'complete' || action === 'fail' || action === 'manager_remake' || action === 'quantity_remake' || action === 'production_handoff'
+    || action === 'complete' || action === 'fail' || action === 'manager_remake' || action === 'quantity_remake'
 }
 
 function stationAllowed(

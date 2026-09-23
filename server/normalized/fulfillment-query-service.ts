@@ -1,4 +1,3 @@
-import {readKitchenBatches} from './kitchen-production-query.js'
 import { StaffAccessRepository, type EffectiveStaffAccess } from './staff-access-repository.js'
 import {
   ScopedPostgresTransactionRunner,
@@ -71,9 +70,6 @@ export interface FulfillmentStaffView {
     allowedStations: FulfillmentStation[]
     canViewAll: boolean
     kitchenBatchBoardEnabled?:boolean
-    threeScreenWorkflowEnabled?:boolean
-    sharedPickupActive?:boolean
-    threeScreenRecoveryAvailable?:boolean
     actionSessionValid?: boolean
   }
   generatedAt: string
@@ -121,7 +117,7 @@ interface FulfillmentRow extends Record<string, unknown> {
 }
 
 export class FulfillmentQueryService {
-  constructor(private readonly transactions: ScopedPostgresTransactionRunner,private readonly kitchenBatchBoardEnabled=false,private readonly threeScreenWorkflowEnabled=false) {}
+  constructor(private readonly transactions: ScopedPostgresTransactionRunner,private readonly kitchenBatchBoardEnabled=false) {}
 
   getStaffWorkQueue(
     scope: Readonly<StoreScope>,
@@ -143,12 +139,12 @@ export class FulfillmentQueryService {
       const scopedStations = resolveFulfillmentAllowedStations(access.dataScopes)
       const allowedStations = canPrepare ? scopedStations : []
       const kitchenRecovery=canPrepare&&allowedStations.includes('kitchen')&&!this.kitchenBatchBoardEnabled
-        && (await readKitchenBatches(transaction,undefined,'kitchen')).length>0
-      const barRecovery=canPrepare&&allowedStations.includes('bar')&&!this.threeScreenWorkflowEnabled
-        && (await readKitchenBatches(transaction,undefined,'bar')).length>0
-      const sharedPickupActive=this.threeScreenWorkflowEnabled||(await transaction.query<{found:boolean}>(
-        `SELECT EXISTS(SELECT 1 FROM mbox.pickup_devices WHERE tenant_id=$1 AND store_id=$2 AND enabled) AS found`,
-        [scope.tenantId,scope.storeId])).rows[0]?.found===true
+        && (await transaction.query<{found:boolean}>(`SELECT EXISTS(SELECT 1 FROM mbox.kitchen_production_batches batch
+          WHERE batch.tenant_id=$1 AND batch.store_id=$2 AND (batch.released_at IS NULL OR EXISTS(
+            SELECT 1 FROM mbox.kitchen_production_units part JOIN mbox.order_item_quantity_units unit
+              ON (unit.tenant_id,unit.store_id,unit.id)=(part.tenant_id,part.store_id,part.unit_id)
+            WHERE (part.tenant_id,part.store_id,part.batch_id)=(batch.tenant_id,batch.store_id,batch.id)
+              AND unit.production_state='started' AND NOT unit.operationally_stopped))) AS found`,[scope.tenantId,scope.storeId])).rows[0]?.found===true
       const rows = await readFulfillmentRows(transaction, {
         employeeId,
         businessDate,
@@ -162,7 +158,7 @@ export class FulfillmentQueryService {
       })
 
       return {
-        actor: {...mapActor(access, allowedStations, canViewAll), threeScreenWorkflowEnabled:this.threeScreenWorkflowEnabled, sharedPickupActive, threeScreenRecoveryAvailable:barRecovery||sharedPickupActive, kitchenBatchBoardEnabled:canPrepare&&allowedStations.includes('kitchen')&&(this.kitchenBatchBoardEnabled||kitchenRecovery), ...(actionSession ? {actionSessionValid} : {})},
+        actor: {...mapActor(access, allowedStations, canViewAll), kitchenBatchBoardEnabled:canPrepare&&allowedStations.includes('kitchen')&&(this.kitchenBatchBoardEnabled||kitchenRecovery), ...(actionSession ? {actionSessionValid} : {})},
         generatedAt: rows[0]?.generated_at ?? new Date().toISOString(),
         workItems: rows.map(row => { const item = mapWorkItem(row); return actionSessionValid ? item : { ...item, canPrepare:false, canDeliver:false, canRemake:false, attentionMessages:[...item.attentionMessages,'当前设备会话已失效，请恢复登录后继续原任务'] } }),
       }

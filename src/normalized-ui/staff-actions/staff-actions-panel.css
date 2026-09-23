@@ -383,7 +383,7 @@
 .staff-action-card-main { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
 .staff-action-card-main strong { line-height: 1.35; }
 .staff-action-card-main p, .staff-action-card-main small { margin: 0; color: var(--staff-muted); font-size: 12px; line-height: 1.4; }
-.staff-actions-panel .staff-action-note { display: block; margin: 6px 0; padding: 6px 8px; border-left: 3px solid #9a6b13; border-radius: 4px; background: #fff1c2; color: #382c16; font-size: 20px; font-weight: 700; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.staff-action-card-main .staff-action-note { color: #7d5d14; font-weight: 700; }
 .staff-action-card-main .staff-action-carryover { color: #76540b; font-weight: 800; }
 .staff-action-card-main .staff-action-overdue { color: var(--staff-red); font-weight: 700; }
 .staff-action-card-main .staff-action-readonly { color: #735516; font-weight: 700; }

@@ -17,7 +17,6 @@ import { GuestImmediateCheckoutReconciliationService } from './normalized/guest-
 import { PostgresWechatIdentityRepository } from './wechat-production-adapters.js'
 import type { PostgresPool as WechatPostgresPool } from './postgres-repository.js'
 import { OfficialWechatSubscriptionMessageAdapter } from './normalized/wechat-subscription-message-adapter.js'
-import {assertRuntimeDatabasePool} from './normalized/runtime-database-identity.js'
 
 async function main(): Promise<void> {
   const config = loadNormalizedRuntimeConfig()
@@ -70,7 +69,6 @@ async function main(): Promise<void> {
         runtime.app.log.error({ errorCode: safeErrorCode(error) }, 'normalized worker database pool idle client failed')
       })
       workerPool = nativeWorkerPool as unknown as PostgresPool
-      if (config.deploymentTier === 'production') await assertRuntimeDatabasePool(workerPool, config.databaseUrl)
       const workerTransactions = new ScopedPostgresTransactionRunner(workerPool)
       const workerPaymentCommands = new PaymentCommandService(
         new NormalizedCommandExecutor(workerTransactions),

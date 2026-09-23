@@ -12,7 +12,6 @@ import {
   businessDayFactNavigation,
   CashierAfterSalesWorkbenchView,
   mayRequestLateSuccessRefund,
-  paymentQueryNotice,
 } from './CashierAfterSalesWorkbench'
 import { CashierMutationCoordinator, createIdempotencyKey, mutationSignature } from './cashier-mutation'
 
@@ -221,138 +220,6 @@ describe('CashierAfterSalesWorkbenchView', () => {
     expect(html).toContain('出示付款二维码')
     expect(html).toContain('登记现金收款')
     expect(html).not.toContain('保留旧单待核对，继续收款')
-  })
-
-  it('offers only manual collection for eligible closed debt and distinguishes the current receipt day from the original order', () => {
-    const view = closedDebtWorkbench('available')
-    const html = render(view)
-    expect(html).toContain('已关桌订单补收')
-    expect(html).toContain('原营业日 2026-08-12')
-    expect(html).toContain('按当前营业日入账')
-    expect(html).toContain('原桌次保持关闭')
-    for (const label of ['登记现金收款', '登记实体POS收款', '登记其他线下收款']) expect(html).toContain(label)
-    expect(html).not.toContain('出示付款二维码')
-    expect(html).not.toContain('扫顾客付款码')
-    expect(html).not.toContain('不会并入今日营业额')
-    expect(html).not.toContain('顾客已离店，去翻台')
-  })
-
-  it.each([null, 'failed', 'ready'] as const)('queries the original closed-debt pending payment with action %s even after retry release', (providerActionState) => {
-    const pending = payment('postar', [])
-    Object.assign(pending, { status: 'pending', succeededAt: null, providerActionState,
-      retryReleasedAt: '2026-08-13T12:03:00.000Z' })
-    const view = closedDebtWorkbench('pending_payment', [pending])
-    // A refund or an old authorization must not bypass the pending-payment gate.
-    pending.refunds = [refund('closed-original-refund', 'succeeded', otherEmployeeId)]
-    view.actions.canAuthorizeRecollection = true
-    const html = render(view)
-    expect(html).toContain('已放开重试的原付款也必须先核对')
-    expect(html).toContain('查询渠道结果')
-    expect(html).toContain('不会再次扣款')
-    for (const label of ['登记现金收款', '登记实体POS收款', '登记其他线下收款', '出示付款二维码', '扫顾客付款码', '重新收款原因', '可直接继续收款']) expect(html).not.toContain(label)
-    view.actions.canQueryOnlinePayment = false
-    const denied = render(view)
-    expect(denied).not.toContain('查询渠道结果</button>')
-    expect(denied).toContain('交给具备渠道查单权限的财务核对')
-  })
-
-  it('shows historical local-close query only for its exact marker and existing staff query permissions', () => {
-    const original = payment('postar', [])
-    Object.assign(original, {status:'closed',providerActionState:null,localUnpresentedHistoryClosed:true})
-    const view = closedDebtWorkbench('authorization_required',[original])
-    expect(render(view)).toContain('仍可核对渠道迟到结果')
-    expect(render(view)).toContain('查询渠道结果')
-    expect(render(view)).not.toContain('出示付款二维码')
-    original.localUnpresentedHistoryClosed=false
-    expect(render(view)).not.toContain('查询渠道结果')
-    original.localUnpresentedHistoryClosed=true;view.actions.canQueryOnlinePayment=false
-    expect(render(view)).not.toContain('查询渠道结果')
-    view.actions.canQueryOnlinePayment=true;view.actions.canViewReconciliation=false
-    expect(render(view)).not.toContain('查询渠道结果')
-  })
-
-  it('distinguishes local readback and unresolved channel observations from a new receipt', () => {
-    expect(paymentQueryNotice({queryResultSource:'local_payment',status:'succeeded'},'fallback')).toContain('本次未重新请求渠道')
-    expect(paymentQueryNotice({status:'closed',queryObservation:{status:'processing'}},'fallback')).toContain('原付款保持本地作废，渠道仍在处理中')
-    expect(paymentQueryNotice({status:'closed',queryObservation:{status:'failed'}},'fallback')).toContain('未执行退款或新增收款')
-    expect(paymentQueryNotice({status:'succeeded'},'fallback')).toBe('fallback')
-  })
-
-  it.each([
-    ['permission_required', '当前账号没有处理已关桌欠款的权限'],
-    ['ineligible', '本单不在受控历史补收范围'],
-    [undefined, '历史补收资格尚未确认'],
-  ] as const)('fails closed with a clear handoff when recovery is %s', (status, guidance) => {
-    const view = closedDebtWorkbench('available')
-    if (status === undefined) delete view.orders[0]!.closedDebtRecovery
-    else view.orders[0]!.closedDebtRecovery!.status = status
-    const html = render(view)
-    expect(html).toContain(guidance)
-    for (const label of ['登记现金收款', '登记实体POS收款', '登记其他线下收款', '出示付款二维码', '扫顾客付款码']) expect(html).not.toContain(label)
-  })
-
-  it('requires a historical authorization before exposing collection and preserves each manual-method permission', () => {
-    const view = closedDebtWorkbench('authorization_required')
-    view.orders[0]!.recollectionAuthorization = null
-    view.actions.canAuthorizeRecollection = true
-    const html = render(view)
-    expect(html).toContain('已关桌订单补收授权')
-    expect(html).toContain('重新收款原因')
-    expect(html).not.toContain('登记现金收款')
-    expect(html).not.toContain('出示付款二维码')
-
-    view.orders[0]!.closedDebtRecovery!.status = 'available'
-    view.actions.canRecordManualCash = false
-    view.actions.canRecordManualExternal = false
-    const posOnly = render(view)
-    expect(posOnly).toContain('登记实体POS收款')
-    expect(posOnly).not.toContain('登记现金收款')
-    expect(posOnly).not.toContain('登记其他线下收款')
-    view.actions.canRecordManualPos = false
-    expect(render(view)).toContain('当前账号没有人工收款登记权限')
-    view.orders[0]!.closedDebtRecovery!.status = 'settled'
-    view.orders[0]!.outstandingAmountMinor = 0
-    expect(render(view)).not.toContain('登记现金收款')
-  })
-
-  it('offers local void for the exact server-approved historical payment independently of provider query permission', () => {
-    const pending = payment('postar', [])
-    Object.assign(pending, { status: 'pending', succeededAt: null, providerActionState: null, providerTransactionId: null })
-    const view = closedDebtWorkbench('pending_payment', [pending])
-    expect(render(view)).not.toContain('作废未外送付款</button>')
-    view.orders[0]!.closedDebtRecovery!.closableUnpresentedPaymentIds = ['another-payment']
-    expect(render(view)).not.toContain('作废未外送付款</button>')
-    view.orders[0]!.closedDebtRecovery!.closableUnpresentedPaymentIds = [pending.id]
-    const allowed = render(view)
-    expect(allowed).toContain('作废未外送付款</button>')
-    expect(allowed).toContain('只作废本地付款记录，不会退款')
-    expect(allowed).not.toContain('登记现金收款')
-    view.actions.canQueryOnlinePayment = false
-    expect(render(view)).toContain('作废未外送付款</button>')
-    view.orders[0]!.closedDebtRecovery!.closableUnpresentedPaymentIds = []
-    expect(render(view)).not.toContain('作废未外送付款</button>')
-    view.orders[0]!.closedDebtRecovery!.closableUnpresentedPaymentIds = [pending.id]
-    view.actions.canQueryOnlinePayment = true
-    view.orders[0]!.tableSessionStatus = 'open'
-    expect(render(view)).not.toContain('作废未外送付款</button>')
-  })
-
-  it.each([1,2])('shows the entire server-approved %s-order historical batch, not just this allocation', (count) => {
-    const pending = payment('postar', [])
-    Object.assign(pending, { status: 'pending', succeededAt: null, providerActionState: null, amountMinor: 1000 })
-    const view = closedDebtWorkbench('pending_payment', [pending])
-    Object.assign(view.orders[0]!.closedDebtRecovery!, {
-      closableUnpresentedPaymentIds: [pending.id],
-      closableUnpresentedPayments: [{paymentId:pending.id,payableKind:'order_batch',totalAmountMinor:count===1?1000:3000,currency:'CNY',orderIds:['order-1','other-original-order'].slice(0,count),orderPublicIds:['ORDER-VIP1-0001','ORDER-VIP1-0002'].slice(0,count)}],
-    })
-    const html = render(view)
-    expect(html).toContain(count===1?'整笔合并付款 ¥10.00':'整笔合并付款 ¥30.00')
-    expect(html).toContain('ORDER-VIP1-0001')
-    if(count===2)expect(html).toContain('ORDER-VIP1-0002')
-    expect(html).toContain('作废整个合并付款')
-    expect(html).not.toContain('登记现金收款')
-    view.orders[0]!.closedDebtRecovery!.closableUnpresentedPaymentIds = []
-    expect(render(view)).not.toContain('作废整个合并付款</button>')
   })
 
   it('keeps every remaining late activity payment visible as a collection blocker and lets terminal refund attempts be requested again', () => {
@@ -629,17 +496,6 @@ function workbench(payments: CashierWorkbenchPayment[]): CashierWorkbenchView {
       payments,
     }],
   }
-}
-
-function closedDebtWorkbench(status: NonNullable<CashierWorkbenchView['orders'][number]['closedDebtRecovery']>['status'], payments: CashierWorkbenchPayment[] = []): CashierWorkbenchView {
-  const view = workbench(payments)
-  Object.assign(view.orders[0]!, {
-    tableSessionStatus: 'closed', tableSessionId: 'closed-original-session', businessDate: '2026-08-12', carryover: true,
-    outstandingAmountMinor: 1_000, paymentStatus: 'unpaid',
-    recollectionAuthorization: { id: 'closed-auth', amountMinor: 1_000, expiresAt: '2026-08-13T12:30:00.000Z' },
-    closedDebtRecovery: { status, originalBusinessDate: '2026-08-12', pendingPaymentIds: payments.filter(payment => payment.status === 'pending' || payment.status === 'created').map(payment => payment.id) },
-  })
-  return view
 }
 
 function payment(

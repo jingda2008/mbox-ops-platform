@@ -1,4 +1,4 @@
-import type {KitchenBoardData,KitchenCommand,KitchenCommandResult,KitchenHandoffPreview} from '../../shared/kitchen-production'
+import type {KitchenBoardData,KitchenCommand,KitchenCommandResult} from '../../shared/kitchen-production'
 import { staffErrorMessage, staffUnavailableMessage } from '../../shared/staff-error-message'
 import { STAFF_SESSION_BINDING_HEADER } from '../../shared/staff-session-binding'
 import type {OperatingHistory} from '../../shared/operating-history'
@@ -245,9 +245,8 @@ export interface ObservationEventReplacement {
 }
 
 export interface StaffActionsApiPort {
-  loadKitchenBoard?(signal?:AbortSignal,stationCode?:'bar'|'kitchen'):Promise<KitchenBoardData>
-  runKitchenCommand?(employeeId:string,command:KitchenCommand,key:string,stationCode?:'bar'|'kitchen'):Promise<KitchenCommandResult>
-  loadKitchenHandoffPreview?(batchId:string,stationCode?:'bar'|'kitchen',signal?:AbortSignal):Promise<KitchenHandoffPreview>
+  loadKitchenBoard?(signal?:AbortSignal):Promise<KitchenBoardData>
+  runKitchenCommand?(employeeId:string,command:KitchenCommand,key:string):Promise<KitchenCommandResult>
   createDeliveryBatch?(items:Array<{taskId:string;quantity:number}>):Promise<void>
   loadOperations(signal?: AbortSignal): Promise<StaffOperationsData>
   loadFulfillment(signal?: AbortSignal): Promise<StaffFulfillmentData>
@@ -435,15 +434,12 @@ export class StaffActionsApi implements StaffActionsApiPort {
     return data
   }
 
-  async loadKitchenBoard(signal?:AbortSignal,stationCode:'bar'|'kitchen'='kitchen'):Promise<KitchenBoardData>{
-    return this.getData(`/api/commerce/kitchen-board?station=${stationCode}`,signal)
+  async loadKitchenBoard(signal?:AbortSignal):Promise<KitchenBoardData>{
+    return this.getData('/api/commerce/kitchen-board',signal)
   }
-  async loadKitchenHandoffPreview(batchId:string,stationCode:'bar'|'kitchen'='kitchen',signal?:AbortSignal):Promise<KitchenHandoffPreview>{
-    return this.getData(`/api/commerce/kitchen-board/handoff-preview?batchId=${encodeURIComponent(batchId)}&station=${stationCode}`,signal)
-  }
-  async runKitchenCommand(employeeId:string,command:KitchenCommand,key:string,stationCode:'bar'|'kitchen'='kitchen'):Promise<KitchenCommandResult>{
+  async runKitchenCommand(employeeId:string,command:KitchenCommand,key:string):Promise<KitchenCommandResult>{
     const response=await this.request('/api/commerce/kitchen-board/commands',{
-      method:'POST',body:JSON.stringify({employeeId,command,...(stationCode==='bar'?{stationCode}:{})}),
+      method:'POST',body:JSON.stringify({employeeId,command}),
       headers:new Headers({'content-type':'application/json','idempotency-key':key}),
     })
     const body=await readJson(response)
@@ -685,7 +681,7 @@ export class StaffActionsApi implements StaffActionsApiPort {
       // has rolled back. Unknown results and in-progress commands retain the key.
       if(error instanceof StaffActionsApiError&&[400,409].includes(error.status??0)&&[
         'REQUEST_INVALID','QUANTITY_INVALID','QUANTITY_UNAVAILABLE','QUANTITY_FACTS_CONFLICT','QUANTITY_BATCH_NOT_ENABLED',
-        'KDS_TRANSITION_CONFLICT','ORDER_ITEM_NOT_READY','TABLE_SESSION_UNAVAILABLE','SHARED_PICKUP_REQUIRED',
+        'KDS_TRANSITION_CONFLICT','ORDER_ITEM_NOT_READY','TABLE_SESSION_UNAVAILABLE',
         'INVENTORY_INSUFFICIENT','INVENTORY_RECIPE_MISSING','INVENTORY_BALANCE_MISSING',
       ].includes(error.code??'')){
         this.pendingKdsCommands.delete(fingerprint)

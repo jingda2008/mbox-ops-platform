@@ -19,9 +19,6 @@ class CueClient implements PostgresPoolClient {
     this.calls.push(normalized)
     if (normalized.startsWith('BEGIN') || normalized === 'COMMIT' || normalized === 'ROLLBACK'
       || normalized.startsWith("SELECT set_config('app.tenant_id'")) return result([])
-    if (normalized.startsWith('WITH parent_sessions AS MATERIALIZED')) return result([{id:'83000000-0000-4000-8000-000000000007'}])
-    if (normalized.startsWith('SELECT plan.id')) return result([{id:'83000000-0000-4000-8000-000000000007',table_session_id:'83000000-0000-4000-8000-000000000006',plan_state:'active',business_date:'2026-08-15',session_status:'open'}])
-    if (normalized.startsWith('SELECT id cue_id') || normalized.startsWith('UPDATE mbox.customer_experience_plans')) return result([])
     if (normalized.startsWith('WITH candidates AS')) return result([])
     if (normalized.startsWith('SELECT cue.id')) return result([{
       id: cueId,

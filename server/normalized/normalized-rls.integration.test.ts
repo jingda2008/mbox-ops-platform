@@ -113,7 +113,6 @@ integration('normalized runtime role and RLS integration', () => {
       schema_usage: boolean
       schema_create: boolean
       metadata_select: boolean
-      metadata_update: boolean
       audit_insert: boolean
       audit_update: boolean
       outbox_update: boolean
@@ -127,7 +126,6 @@ integration('normalized runtime role and RLS integration', () => {
         has_schema_privilege('mbox_runtime', 'mbox', 'USAGE') AS schema_usage,
         has_schema_privilege('mbox_runtime', 'mbox', 'CREATE') AS schema_create,
         has_table_privilege('mbox_runtime', 'mbox.normalized_schema_migrations', 'SELECT') AS metadata_select,
-        has_table_privilege('mbox_runtime', 'mbox.normalized_schema_migrations', 'UPDATE') AS metadata_update,
         has_table_privilege('mbox_runtime', 'mbox.audit_events', 'INSERT') AS audit_insert,
         has_table_privilege('mbox_runtime', 'mbox.audit_events', 'UPDATE') AS audit_update,
         has_table_privilege('mbox_runtime', 'mbox.outbox_messages', 'UPDATE') AS outbox_update,
@@ -164,8 +162,7 @@ integration('normalized runtime role and RLS integration', () => {
     expect(privileges.rows[0]).toEqual({
       schema_usage: true,
       schema_create: false,
-      metadata_select: true,
-      metadata_update: false,
+      metadata_select: false,
       audit_insert: true,
       audit_update: false,
       outbox_update: true,

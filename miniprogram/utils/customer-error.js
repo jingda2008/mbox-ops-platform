@@ -12,7 +12,6 @@ const CODE_MESSAGES = Object.freeze({
   GUEST_ORDER_ACCESS_FORBIDDEN: '这笔订单不属于当前桌位，请重新扫描当前桌面的二维码',
   TABLE_SESSION_ENDED: '本桌服务已结束，请重新扫描当前桌面的二维码',
   CUSTOMER_AT_OTHER_TABLE: '当前设备已连接到另一桌，请先联系服务人员处理',
-  GUEST_SERVICE_RATE_LIMITED: '请求较多，这次尚未受理；请稍后重试，仍会恢复原请求',
   GUEST_AUTH_RATE_LIMITED: '操作有点快，请稍后再试',
   GUEST_SCAN_RATE_LIMITED: '操作有点快，请稍后再试',
   STORE_ACCESS_FORBIDDEN: '当前门店访问入口无效，请从小程序重新进入',

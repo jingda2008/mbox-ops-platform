@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { inspectEvidenceDirectory } from './verify-sensitive-artifacts.mjs'
@@ -79,20 +79,4 @@ test('rejects unknown file types instead of silently skipping them', async () =>
     { file: 'opaque', rule: 'unapproved-artifact-extension' },
     { file: 'opaque.bin', rule: 'unapproved-artifact-extension' },
   ])
-})
-
-
-test('release bundle accepts the actual Python maintenance controller while scanning its credential content', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'mbox-python-controller-evidence-'))
-  try {
-    const controller = await readFile(new URL('../deploy/aliyun/maintenance-bootstrap.py', import.meta.url), 'utf8')
-    const path = join(root, 'maintenance-bootstrap.py')
-    await writeFile(path, controller)
-    assert.deepEqual(await inspectEvidenceDirectory(root), [])
-    await writeFile(path, controller + `\nfixture = "postgresql://local:must-be-rejected@database.invalid/app"\n`)
-    const findings = await inspectEvidenceDirectory(root)
-    assert.equal(findings.length, 1)
-    assert.equal(findings[0].rule, 'database-password')
-    assert.equal(JSON.stringify(findings).includes('must-be-rejected'), false)
-  } finally { await rm(root, {recursive: true, force: true}) }
 })

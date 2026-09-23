@@ -189,7 +189,6 @@ integration('normalized staff authentication PostgreSQL integration', () => {
     ]))
 
     const result = await accessManagement.deployPermissions({
-      expectedVersion: (await accessManagement.getOverview({ scope: { tenantId, storeId }, actorEmployeeId: adminId })).configurationVersion,
       scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
       idempotencyKey: 'staff-access-integration-0001',
       requestFingerprint: 'tom-order-create-deny-v1',
@@ -207,7 +206,6 @@ integration('normalized staff authentication PostgreSQL integration', () => {
     ])
 
     const replay = await accessManagement.deployPermissions({
-      expectedVersion: before.configurationVersion,
       scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
       idempotencyKey: 'staff-access-integration-0001',
       requestFingerprint: 'tom-order-create-deny-v1',
@@ -230,99 +228,8 @@ integration('normalized staff authentication PostgreSQL integration', () => {
     expect(evidence.rows[0]).toEqual({ audits: '1', outbox: '1' })
   })
 
-  it('recovers an original permission deployment after cache deletion without replacing a later correction', async () => {
-    const scope = { tenantId, storeId }
-    const version = (await accessManagement.getOverview({ scope, actorEmployeeId: adminId })).configurationVersion
-    const original = { scope, actorEmployeeId: adminId, businessDate, expectedVersion: version,
-      idempotencyKey: 'permission-durable-original', requestFingerprint: 'fixture-original', reason: '原页面授权',
-      changes: [{ kind: 'employee_override' as const, employeeId: employeeOneId, permissionCode: 'order.create', effect: 'grant' as const }],
-    }
-    await accessManagement.deployPermissions(original)
-    // A second authorized administrator corrects the same permission.
-    await pool.query(`INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id)
-      VALUES($1,$2,$3,$4)`, [tenantId,storeId,employeeTwoId,adminRoleId])
-    try {
-      const latest = await accessManagement.getOverview({ scope, actorEmployeeId: employeeTwoId })
-      await accessManagement.deployPermissions({ ...original, actorEmployeeId: employeeTwoId,
-        idempotencyKey: 'permission-durable-correction', expectedVersion: latest.configurationVersion,
-        reason: '另一个管理员纠正', changes: [{ ...original.changes[0]!, effect: 'deny' }],
-      })
-      await pool.query("DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND operation_scope='staff.permission-deployment'", [tenantId,storeId])
-      const restored = await accessManagement.deployPermissions(original)
-      expect(restored.replayed).toBe(true)
-      expect(restored.overview.employees.find((employee) => employee.id === employeeOneId)?.overrides)
-        .toEqual([expect.objectContaining({ permissionCode: 'order.create', effect: 'deny' })])
-      await expect(accessManagement.deployPermissions({ ...original, idempotencyKey: 'permission-new-key-stale' }))
-        .rejects.toThrow('权限配置已发生变化')
-      await expect(accessManagement.deployPermissions({ ...original, reason: '更改原请求内容' })).rejects.toThrow('Idempotency key conflicts')
-      const evidence = await pool.query(`SELECT count(*)::int AS count FROM mbox.staff_permission_deployment_receipts
-        WHERE tenant_id=$1 AND store_id=$2 AND operation_key LIKE 'permission-durable-%'`, [tenantId,storeId])
-      expect(evidence.rows[0].count).toBe(2)
-      // Losing management rights must block cached recovery before any overview is returned.
-      await runner.run(scope, (transaction) => new StaffAccessRepository(transaction).setEmployeePermissionOverride({
-        employeeId: adminId, permissionCode: 'staff.access.configure', effect: 'deny', reason: '撤销管理员权限', configuredByEmployeeId: employeeTwoId,
-      }))
-      await expect(accessManagement.deployPermissions(original)).rejects.toBeInstanceOf(StaffAccessDeniedError)
-    } finally {
-      await pool.query('DELETE FROM mbox.employee_roles WHERE tenant_id=$1 AND store_id=$2 AND employee_id=$3 AND role_id=$4', [tenantId,storeId,employeeTwoId,adminRoleId])
-    }
-  })
-
-  it('rejects one of two stale pages and detects legacy permission ABA changes', async () => {
-    const scope = { tenantId, storeId }
-    const current = () => accessManagement.getOverview({ scope, actorEmployeeId: adminId })
-    const version = (await current()).configurationVersion
-    const input = { scope, actorEmployeeId: adminId, businessDate, expectedVersion: version,
-      idempotencyKey: 'permission-parallel-first', requestFingerprint: 'parallel', reason: '并发页面核对',
-      changes: [{ kind: 'employee_override' as const, employeeId: employeeOneId, permissionCode: 'order.create', effect: 'deny' as const }],
-    }
-    const results = await Promise.allSettled([accessManagement.deployPermissions(input),
-      accessManagement.deployPermissions({ ...input, idempotencyKey: 'permission-parallel-second' })])
-    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
-    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1)
-    const beforeLegacy = await current()
-    for (const enabled of [false, true]) {
-      await service.setRolePermission({ scope, actorEmployeeId: adminId, businessDate, idempotencyKey: `legacy-aba-${enabled}`,
-        requestFingerprint: `legacy-${enabled}`, reason: '旧入口并发核对', roleId: serverRoleId, permissionCode: 'order.create', enabled, configuredByEmployeeId: adminId,
-      })
-    }
-    const afterLegacy = await current()
-    expect(afterLegacy.roles).toEqual(beforeLegacy.roles)
-    expect(afterLegacy.configurationVersion).not.toBe(beforeLegacy.configurationVersion)
-    await expect(accessManagement.deployPermissions({ ...input, idempotencyKey: 'permission-after-legacy-aba', expectedVersion: beforeLegacy.configurationVersion }))
-      .rejects.toThrow('权限配置已发生变化')
-  })
-
-  it('publishes and restores durable receipts with the restricted runtime role and preserves RLS', async () => {
-    const restricted = new Pool({ connectionString: databaseUrl, max: 2 })
-    const port = asPool(restricted)
-    const restrictedRunner = new ScopedPostgresTransactionRunner({ ...port, connect: async () => {
-      const client = await port.connect()
-      await client.query('SET ROLE mbox_runtime')
-      return client
-    } })
-    const management = new StaffAccessManagementService(restrictedRunner, new NormalizedCommandExecutor(restrictedRunner))
-    const scope = { tenantId, storeId }
-    try {
-      const overview = await management.getOverview({ scope, actorEmployeeId: adminId })
-      const input = { scope, actorEmployeeId: adminId, businessDate, expectedVersion: overview.configurationVersion,
-        idempotencyKey: 'permission-restricted-runtime', requestFingerprint: 'restricted', reason: '受限运行身份回归',
-        changes: [{ kind: 'employee_override' as const, employeeId: employeeOneId, permissionCode: 'order.create', effect: 'deny' as const }],
-      }
-      expect((await management.deployPermissions(input)).status).toBe('verified')
-      await pool.query("DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND operation_scope='staff.permission-deployment'", [tenantId,storeId])
-      expect((await management.deployPermissions(input)).replayed).toBe(true)
-      const wrongScope = { tenantId: '00000000-0000-4000-8000-000000000001', storeId: '00000000-0000-4000-8000-000000000002' }
-      const hidden = await restrictedRunner.run(wrongScope, async (transaction) => transaction.query(`
-        SELECT (SELECT count(*)::int FROM mbox.staff_permission_deployment_receipts) AS receipts,
-          (SELECT count(*)::int FROM mbox.staff_access_revisions) AS revisions`), { readOnly: true })
-      expect(hidden.rows[0]).toEqual({ receipts: 0, revisions: 0 })
-    } finally { await restricted.end() }
-  })
-
   it('publishes approval, data-scope, and navigation configuration in one verified transaction', async () => {
     const result = await accessManagement.deployPermissions({
-      expectedVersion: (await accessManagement.getOverview({ scope: { tenantId, storeId }, actorEmployeeId: adminId })).configurationVersion,
       scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
       idempotencyKey: 'staff-access-policy-integration-0001',
       requestFingerprint: 'server-access-policy-v1', reason: '服务员岗位边界验收',
@@ -347,7 +254,6 @@ integration('normalized staff authentication PostgreSQL integration', () => {
 
   it('rolls back an entry that the role cannot actually use', async () => {
     await expect(accessManagement.deployPermissions({
-      expectedVersion: (await accessManagement.getOverview({ scope: { tenantId, storeId }, actorEmployeeId: adminId })).configurationVersion,
       scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
       idempotencyKey: 'staff-access-route-lockout-0001',
       requestFingerprint: 'server-inventory-route-v1', reason: '入口越权验证',
@@ -359,7 +265,6 @@ integration('normalized staff authentication PostgreSQL integration', () => {
 
   it('rejects configuration codes and routes that are not registered by the server catalog', async () => {
     await expect(accessManagement.deployPermissions({
-      expectedVersion: (await accessManagement.getOverview({ scope: { tenantId, storeId }, actorEmployeeId: adminId })).configurationVersion,
       scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
       idempotencyKey: 'staff-access-unknown-config-0001',
       requestFingerprint: 'unknown-config-v1', reason: '伪造配置验证',
@@ -367,7 +272,6 @@ integration('normalized staff authentication PostgreSQL integration', () => {
     })).rejects.toThrow('未登记的配置能力')
 
     await expect(accessManagement.deployPermissions({
-      expectedVersion: (await accessManagement.getOverview({ scope: { tenantId, storeId }, actorEmployeeId: adminId })).configurationVersion,
       scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
       idempotencyKey: 'staff-access-route-tamper-0001',
       requestFingerprint: 'route-tamper-v1', reason: '伪造入口验证',
@@ -377,7 +281,6 @@ integration('normalized staff authentication PostgreSQL integration', () => {
 
   it('rejects forged scope values and approval policies outside the server catalog', async () => {
     await expect(accessManagement.deployPermissions({
-      expectedVersion: (await accessManagement.getOverview({ scope: { tenantId, storeId }, actorEmployeeId: adminId })).configurationVersion,
       scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
       idempotencyKey: 'staff-access-scope-value-tamper-0001',
       requestFingerprint: 'scope-value-tamper-v1', reason: '伪造范围验证',
@@ -388,7 +291,6 @@ integration('normalized staff authentication PostgreSQL integration', () => {
     })).rejects.toThrow('数据范围包含未登记选项')
 
     await expect(accessManagement.deployPermissions({
-      expectedVersion: (await accessManagement.getOverview({ scope: { tenantId, storeId }, actorEmployeeId: adminId })).configurationVersion,
       scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
       idempotencyKey: 'staff-access-approval-currency-tamper-0001',
       requestFingerprint: 'approval-currency-tamper-v1', reason: '伪造额度验证',
@@ -399,7 +301,6 @@ integration('normalized staff authentication PostgreSQL integration', () => {
     })).rejects.toThrow('审批额度币种与服务端目录不一致')
 
     await expect(accessManagement.deployPermissions({
-      expectedVersion: (await accessManagement.getOverview({ scope: { tenantId, storeId }, actorEmployeeId: adminId })).configurationVersion,
       scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
       idempotencyKey: 'staff-access-approval-reason-tamper-0001',
       requestFingerprint: 'approval-reason-tamper-v1', reason: '赠送留痕验证',
@@ -421,7 +322,6 @@ integration('normalized staff authentication PostgreSQL integration', () => {
     `, [tenantId, storeId, serverRoleId])
 
     await expect(accessManagement.deployPermissions({
-      expectedVersion: (await accessManagement.getOverview({ scope: { tenantId, storeId }, actorEmployeeId: adminId })).configurationVersion,
       scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
       idempotencyKey: 'staff-access-approval-prerequisite-0001',
       requestFingerprint: 'approval-prerequisite-v1', reason: '缺少权限验证',
@@ -451,7 +351,6 @@ integration('normalized staff authentication PostgreSQL integration', () => {
     for (let index = 0; index < 8; index += 1) {
       const effect = index % 2 === 0 ? 'deny' : 'grant'
       const result = await accessManagement.deployPermissions({
-      expectedVersion: (await accessManagement.getOverview({ scope: { tenantId, storeId }, actorEmployeeId: adminId })).configurationVersion,
         scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
         idempotencyKey: `staff-access-legacy-route-exception-${String(index).padStart(4, '0')}`,
         requestFingerprint: `tom-legacy-route-exception-${effect}-${index}`, reason: '员工例外独立发布',
@@ -467,7 +366,6 @@ integration('normalized staff authentication PostgreSQL integration', () => {
 
   it('rolls back a deployment that would remove the final access administrator', async () => {
     await expect(accessManagement.deployPermissions({
-      expectedVersion: (await accessManagement.getOverview({ scope: { tenantId, storeId }, actorEmployeeId: adminId })).configurationVersion,
       scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
       idempotencyKey: 'staff-access-lockout-0001',
       requestFingerprint: 'remove-final-admin-v1',
@@ -505,7 +403,6 @@ integration('normalized staff authentication PostgreSQL integration', () => {
     `)
     try {
       await expect(accessManagement.deployPermissions({
-      expectedVersion: (await accessManagement.getOverview({ scope: { tenantId, storeId }, actorEmployeeId: adminId })).configurationVersion,
         scope: { tenantId, storeId }, actorEmployeeId: adminId, businessDate,
         idempotencyKey: 'staff-access-post-write-verification-0001',
         requestFingerprint: 'server-order-create-disable-v1', reason: '写入后复核回滚验证',

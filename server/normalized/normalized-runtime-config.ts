@@ -8,7 +8,6 @@ import {
   type NormalizedIntegrationContract,
 } from './normalized-runtime-config-contract.js'
 import type { GroupVoucherRuntimeConfig } from './group-voucher-platforms.js'
-import {runtimeDatabaseLogin} from './runtime-database-identity.js'
 
 export const NORMALIZED_SCHEMA_FLAVOR = 'normalized-core-v1'
 
@@ -92,7 +91,6 @@ export interface NormalizedRuntimeConfig {
   staticDir: string | null
   startWorkers: boolean
   kitchenBatchBoardEnabled?: boolean
-  threeScreenWorkflowEnabled?: boolean
   quantityAfterSalesEnabled?: boolean
   workerId: string | null
   workerIntervalMs: number
@@ -122,13 +120,6 @@ export function loadNormalizedRuntimeConfig(
   const commercialProduction = deploymentTier === 'production'
   const runtimeRole = readRuntimeRole(environment.MBOX_RUNTIME_ROLE,errors)
   const databaseUrl = required(environment.DATABASE_URL, 'DATABASE_URL', errors)
-  if (commercialProduction) {
-    try {runtimeDatabaseLogin(databaseUrl)} catch {errors.push('DATABASE_URL')}
-    for (const key of ['ADMIN_DATABASE_URL','BACKUP_DATABASE_URL','MBOX_MIGRATION_DATABASE_URL',
-      'MBOX_DATABASE_ADMIN_URL','PGPASSWORD','PGPASSFILE','PGSERVICEFILE','PGSERVICE']) {
-      if (environment[key]?.trim()) errors.push(key)
-    }
-  }
   const tenantId = requiredUuid(environment.MBOX_TENANT_ID, 'MBOX_TENANT_ID', errors)
   const storeId = requiredUuid(environment.MBOX_STORE_ID, 'MBOX_STORE_ID', errors)
   const secret = requiredSecret(environment.MBOX_NORMALIZED_SECRET, errors)
@@ -205,7 +196,6 @@ export function loadNormalizedRuntimeConfig(
   const releaseImageDigest = readImageDigest(environment.MBOX_RELEASE_IMAGE_DIGEST, errors)
   const staticDir = optional(environment.MBOX_STATIC_DIR)
   const kitchenBatchBoardEnabled = readBoolean(environment.MBOX_KITCHEN_BATCH_BOARD_ENABLED, false, 'MBOX_KITCHEN_BATCH_BOARD_ENABLED', errors)
-  const threeScreenWorkflowEnabled = readBoolean(environment.MBOX_THREE_SCREEN_WORKFLOW_ENABLED, false, 'MBOX_THREE_SCREEN_WORKFLOW_ENABLED', errors)
   const quantityAfterSalesEnabled = readBoolean(
     environment.MBOX_QUANTITY_AFTER_SALES_ENABLED, false, 'MBOX_QUANTITY_AFTER_SALES_ENABLED', errors,
   )
@@ -266,7 +256,6 @@ export function loadNormalizedRuntimeConfig(
     staticDir,
     startWorkers,
     kitchenBatchBoardEnabled,
-    threeScreenWorkflowEnabled,
     quantityAfterSalesEnabled,
     workerId,
     workerIntervalMs,

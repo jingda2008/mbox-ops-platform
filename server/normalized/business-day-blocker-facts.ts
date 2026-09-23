@@ -1,4 +1,3 @@
-import {orderCollectionDueSql} from './order-collection-sql.js'
 import type { BusinessDayBlockerFact } from '../../src/shared/business-day-closure-contracts.js'
 import type { TableSessionClosureBlockerCode } from './table-session-closure-blockers.js'
 import type { ScopedTransaction } from './transaction-runner.js'
@@ -54,7 +53,21 @@ function factQuery(code: TableSessionClosureBlockerCode): string {
       WHERE ordering.tenant_id=$1::uuid AND ordering.store_id=$2::uuid
         AND ordering.table_session_id=$3::uuid
     ), order_facts AS (
-      SELECT ordering.*,${orderCollectionDueSql('ordering')} AS outstanding_amount_minor
+      SELECT ordering.*,GREATEST(
+        CASE
+          WHEN ordering.has_settlement_exception THEN 0::bigint
+          WHEN ordering.status='cancelled' THEN COALESCE((
+            SELECT sum(item.total_amount_minor) FROM mbox.order_items item
+            WHERE item.tenant_id=ordering.tenant_id AND item.store_id=ordering.store_id
+              AND item.order_id=ordering.id AND item.status='delivered'
+          ),0)::bigint
+          ELSE ordering.effective_amount_minor
+        END-COALESCE((
+          SELECT sum(payment.amount_minor) FROM mbox.order_payment_facts payment
+          WHERE payment.tenant_id=ordering.tenant_id AND payment.store_id=ordering.store_id
+            AND payment.order_id=ordering.id
+            AND payment.status IN ('succeeded','partially_refunded','refunded')
+        ),0)::bigint,0::bigint) AS outstanding_amount_minor
       FROM scoped_orders ordering
     )`
   if (code === 'ORDER_UNSETTLED') return `${prefix}
@@ -66,7 +79,7 @@ function factQuery(code: TableSessionClosureBlockerCode): string {
     FROM order_facts ordering
     LEFT JOIN mbox.employees employee ON employee.tenant_id=ordering.tenant_id
       AND employee.store_id=ordering.store_id AND employee.id=ordering.created_by_employee_id
-    WHERE ordering.outstanding_amount_minor>0 OR NOT ((ordering.payment_status IN ('unpaid','pending','partially_paid') AND ordering.outstanding_amount_minor=0)
+    WHERE NOT ((ordering.payment_status IN ('unpaid','pending','partially_paid') AND ordering.outstanding_amount_minor=0)
       OR (ordering.status NOT IN ('draft','cancelled') AND ordering.effective_amount_minor=0)
       OR (ordering.status<>'cancelled' AND ordering.payment_status IN ('paid','partially_refunded','refunded'))
       OR (ordering.status='cancelled' AND ordering.payment_status='refunded')

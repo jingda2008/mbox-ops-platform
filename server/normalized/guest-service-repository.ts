@@ -46,7 +46,6 @@ export interface GuestServiceRequestView {
   requestType: GuestServiceRequestType
   status: ServiceTask['status']
   publicServiceName: string | null
-  guestConfirmedAt: string | null
   requestCount: number
   createdAt: string
 }
@@ -91,7 +90,6 @@ interface GuestServiceViewRow extends Record<string, unknown> {
   request_type: GuestServiceRequestType
   status: ServiceTask['status']
   public_service_name: string | null
-  guest_confirmed_at: string | null
   request_count: number
   created_at: string
 }
@@ -241,10 +239,7 @@ export class GuestServiceRepository {
     const result = await this.transaction.query<GuestServiceViewRow>(`
       SELECT task.public_id, request_group.request_type, task.status,
         public_profile.public_display_name AS public_service_name,
-        request_group.request_count, task.created_at::text,
-        (SELECT min(event.occurred_at)::text FROM mbox.service_task_events AS event
-          WHERE event.tenant_id = task.tenant_id AND event.store_id = task.store_id
-            AND event.service_task_id = task.id AND event.event_type = 'guest.confirmed') AS guest_confirmed_at
+        request_group.request_count, task.created_at::text
       FROM mbox.guest_service_request_groups AS request_group
       JOIN mbox.service_tasks AS task
         ON task.tenant_id = request_group.tenant_id
@@ -271,7 +266,6 @@ export class GuestServiceRepository {
       requestType: row.request_type,
       status: row.status,
       publicServiceName: row.public_service_name,
-      guestConfirmedAt: row.guest_confirmed_at ? timestamp(row.guest_confirmed_at) : null,
       requestCount: Number(row.request_count),
       createdAt: timestamp(row.created_at),
     }))

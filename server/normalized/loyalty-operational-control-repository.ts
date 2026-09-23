@@ -106,25 +106,14 @@ export class LoyaltyOperationalControlRepository {
        AND payment.order_id=ordering.id
       WHERE ordering.tenant_id=$1::uuid AND ordering.store_id=$2::uuid
         AND ordering.id=$3::uuid AND payment.id=$4::uuid
-        AND mbox.order_consumption_settled(ordering.tenant_id,ordering.store_id,ordering.id) AND payment.status='succeeded'
+        AND ordering.payment_status='paid' AND payment.status='succeeded'
         AND payment.succeeded_at IS NOT NULL
-        AND (NOT EXISTS(
+        AND NOT EXISTS(
           SELECT 1 FROM mbox.loyalty_order_awards award
           WHERE award.tenant_id=ordering.tenant_id AND award.store_id=ordering.store_id
             AND award.order_id=ordering.id
-        ) OR EXISTS (
-          SELECT 1 FROM mbox.loyalty_award_refund_applications application
-          JOIN mbox.order_recollection_item_restorations restored
-            ON (restored.tenant_id,restored.store_id,restored.order_id,restored.refund_id)=
-              (application.tenant_id,application.store_id,application.order_id,application.refund_id)
-          WHERE application.tenant_id=ordering.tenant_id AND application.store_id=ordering.store_id
-            AND application.order_id=ordering.id AND application.eligible_refund_amount_minor>0
-            AND NOT EXISTS(SELECT 1 FROM mbox.loyalty_recollection_restorations applied
-              WHERE applied.tenant_id=application.tenant_id AND applied.store_id=application.store_id AND applied.application_id=application.id)
-        ))
-      ON CONFLICT (tenant_id,store_id,order_id) DO UPDATE
-        SET status='pending',worker_id=NULL,claimed_at=NULL,resolved_at=NULL,resolution_code=NULL,updated_at=clock_timestamp()
-        WHERE loyalty_accrual_deferred_orders.status IN ('applied','not_applicable')
+        )
+      ON CONFLICT (tenant_id,store_id,order_id) DO NOTHING
       RETURNING id
     `, [
       this.transaction.scope.tenantId,
@@ -137,8 +126,8 @@ export class LoyaltyOperationalControlRepository {
     const existing = await this.transaction.query(`
       SELECT 1 FROM mbox.loyalty_accrual_deferred_orders
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid
-        AND order_id=$3::uuid
-    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,input.orderId])
+        AND order_id=$3::uuid AND payment_id=$4::uuid
+    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,input.orderId,input.paymentId])
     return existing.rowCount===1
   }
 

@@ -77,9 +77,6 @@ export interface IdempotentCommand<Result> {
   resultCodec: JsonCodec<Result>
   ttlMs?: number
   lockMs?: number
-  // Only explicitly non-final outcomes may resume, under the original row lock
-  // and fingerprint. The database clock decides when retry becomes eligible.
-  retryCompletedAfter?: (result: Result) => string | null
 }
 
 export interface CommandExecution<Result> {
@@ -93,7 +90,6 @@ interface IdempotencyRow extends Record<string, unknown> {
   status: 'processing' | 'completed' | 'failed'
   response_snapshot: unknown
   is_expired: boolean
-  database_now: string
 }
 
 interface StoredResultEnvelope {
@@ -203,7 +199,7 @@ async function claimIdempotency<Result>(
 
     const selected = await transaction.query<IdempotencyRow>(`
       SELECT id, request_sha256, status, response_snapshot,
-        expires_at <= clock_timestamp() AS is_expired, clock_timestamp()::text AS database_now
+        expires_at <= clock_timestamp() AS is_expired
       FROM mbox.idempotency_records
       WHERE tenant_id = $1::uuid
         AND store_id = $2::uuid
@@ -245,21 +241,7 @@ async function claimIdempotency<Result>(
     if (record.request_sha256 !== requestHash) {
       throw new IdempotencyConflictError(command.operationScope, command.idempotencyKey)
     }
-    if (record.status === 'completed') {
-      const retryAt = command.retryCompletedAfter?.(command.resultCodec.decode(readStoredResult(record.response_snapshot)))
-      if (retryAt && Number.isFinite(Date.parse(retryAt)) && Date.parse(retryAt) <= Date.parse(record.database_now)) {
-        const resumed = await transaction.query(`
-          UPDATE mbox.idempotency_records
-          SET status = 'processing', locked_until = clock_timestamp() + ($6::bigint * interval '1 millisecond'),
-              updated_at = clock_timestamp()
-          WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND operation_scope = $3
-            AND idempotency_key = $4 AND id = $5::uuid AND status = 'completed'
-        `, [values[0], values[1], values[2], values[3], record.id, values[5]])
-        if (resumed.rowCount !== 1) throw new IdempotencyRecordError('Non-final idempotency result could not be resumed')
-        return { kind: 'acquired' }
-      }
-      return { kind: 'replay', responseBody: record.response_snapshot }
-    }
+    if (record.status === 'completed') return { kind: 'replay', responseBody: record.response_snapshot }
     if (record.status === 'processing') {
       throw new IdempotencyInProgressError(command.operationScope, command.idempotencyKey)
     }

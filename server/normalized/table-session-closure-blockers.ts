@@ -1,4 +1,3 @@
-import {orderCollectionDueSql} from './order-collection-sql.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
 export type TableSessionClosureBlockerCode =
@@ -90,7 +89,7 @@ export async function readTableSessionClosureState(
 ): Promise<TableSessionClosureState> {
   const result = await transaction.query<ClosureCountRow>(`
     WITH scoped_orders AS (
-      SELECT ordering.id,ordering.tenant_id,ordering.store_id,ordering.status,ordering.payment_status,mbox.order_receivable_amount(ordering.tenant_id,ordering.store_id,ordering.id) AS total_amount_minor,
+      SELECT ordering.id,ordering.status,ordering.payment_status,mbox.order_receivable_amount(ordering.tenant_id,ordering.store_id,ordering.id) AS total_amount_minor,
         EXISTS (
           SELECT 1 FROM mbox.order_settlement_exception_events settlement_exception
           WHERE settlement_exception.tenant_id=ordering.tenant_id
@@ -108,11 +107,28 @@ export async function readTableSessionClosureState(
       WHERE ordering.tenant_id=$1::uuid AND ordering.store_id=$2::uuid
         AND ordering.table_session_id=$3::uuid
     ), payable_orders AS (
-      SELECT ordering.id,${orderCollectionDueSql('ordering')} AS outstanding_amount_minor
+      SELECT ordering.id,GREATEST(
+        CASE
+          WHEN ordering.has_settlement_exception THEN 0::bigint
+          WHEN ordering.status='cancelled' THEN COALESCE((
+            SELECT sum(item.total_amount_minor)
+            FROM mbox.order_items item
+            WHERE item.tenant_id=$1::uuid AND item.store_id=$2::uuid
+              AND item.order_id=ordering.id AND item.status='delivered'
+          ),0)::bigint
+          ELSE ordering.total_amount_minor
+        END-COALESCE((
+          SELECT sum(payment.amount_minor)
+          FROM mbox.order_payment_facts payment
+          WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid
+            AND payment.order_id=ordering.id
+            AND payment.status IN ('succeeded','partially_refunded','refunded')
+        ),0)::bigint,0::bigint) AS outstanding_amount_minor
       FROM scoped_orders ordering
+      WHERE ordering.payment_status IN ('unpaid','pending','partially_paid')
     ) SELECT
       (SELECT count(*)::text FROM scoped_orders ordering
-        WHERE EXISTS(SELECT 1 FROM payable_orders due WHERE due.id=ordering.id AND due.outstanding_amount_minor>0) OR NOT (EXISTS (SELECT 1 FROM payable_orders due WHERE due.id=ordering.id AND due.outstanding_amount_minor=0 AND ordering.payment_status IN ('unpaid','pending','partially_paid'))
+        WHERE NOT (EXISTS (SELECT 1 FROM payable_orders due WHERE due.id=ordering.id AND due.outstanding_amount_minor=0)
           OR (ordering.status NOT IN ('draft','cancelled') AND ordering.total_amount_minor=0)
           OR (ordering.status<>'cancelled'
             AND ordering.payment_status IN ('paid','partially_refunded','refunded'))
@@ -137,13 +153,7 @@ export async function readTableSessionClosureState(
         WHERE task.tenant_id=$1::uuid AND task.store_id=$2::uuid
           AND item.order_id=ANY(SELECT id FROM scoped_orders)
           AND (task.status IN ('pending','accepted','preparing')
-            OR (task.status='ready' AND (item.status<>'delivered' OR EXISTS(
-              SELECT 1 FROM mbox.quantity_remake_batches batch JOIN mbox.quantity_remake_units part
-                ON (part.tenant_id,part.store_id,part.batch_id)=(batch.tenant_id,batch.store_id,batch.id)
-              JOIN mbox.order_item_quantity_units original_unit ON (original_unit.tenant_id,original_unit.store_id,original_unit.id)=(part.tenant_id,part.store_id,part.unit_id)
-              WHERE (batch.tenant_id,batch.store_id,batch.kds_task_id)=(task.tenant_id,task.store_id,task.id)
-                AND part.cancelled_at IS NULL AND part.production_state<>'delivered' AND NOT original_unit.operationally_stopped
-                AND NOT EXISTS(SELECT 1 FROM mbox.quantity_remake_units later WHERE (later.tenant_id,later.store_id,later.unit_id)=(part.tenant_id,part.store_id,part.unit_id) AND later.generation>part.generation))))
+            OR (task.status='ready' AND item.status<>'delivered')
             OR (task.status='failed' AND item.status<>'cancelled'))) AS kds_active,
       '0'::text AS payment_pending, -- Financial uncertainty is separate from unsettled consumption.
       (SELECT count(*)::text FROM mbox.inventory_order_reservations reservation

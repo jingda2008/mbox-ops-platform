@@ -263,9 +263,9 @@ function request(path, options) {
           }
         }
         if (response.statusCode >= 200 && response.statusCode < 300) return resolve(body)
-        const detail = body.error || (response.statusCode === 429 && body.data && body.data.status === 'rate_limited' ? body.data : body)
+        const detail = body.error || body
         const error = new Error(detail.message || `请求失败（${response.statusCode}）`)
-        error.code = detail.code || (detail.status === 'rate_limited' ? 'GUEST_SERVICE_RATE_LIMITED' : 'HTTP_ERROR')
+        error.code = detail.code || 'HTTP_ERROR'
         error.statusCode = response.statusCode
         if (typeof detail.retryAt === 'string') error.retryAt = detail.retryAt
         // A rejected guest call is the first reliable evidence that this
@@ -286,11 +286,10 @@ function request(path, options) {
           || Number(error && error.error) === 19
         if (httpError) {
           const body = parseAlipayFailBody(error)
-          const detail = body.error || (statusCode === 429 && body.data && body.data.status === 'rate_limited' ? body.data : body)
+          const detail = body.error || body
           const requestError = new Error(detail.message || `请求失败（${statusCode || 'http'}）`)
-          requestError.code = detail.code || (detail.status === 'rate_limited' ? 'GUEST_SERVICE_RATE_LIMITED' : 'HTTP_ERROR')
+          requestError.code = detail.code || 'HTTP_ERROR'
           requestError.statusCode = statusCode
-          if (typeof detail.retryAt === 'string') requestError.retryAt = detail.retryAt
           reject(requestError)
           return
         }

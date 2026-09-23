@@ -179,7 +179,7 @@ Page({
       const storedAbandonment = this.historyMode ? null : wx.getStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY) || null
       const storedPending = this.historyMode ? null : this.clearForeignPendingPayment(paymentScope)
       const storedOrder = storedPending && (rawOrders || []).find((item) => item.publicId === storedPending.orderPublicId)
-      if (storedPending && storedOrder && storedOrder.payableAmountMinor === 0 && storedOrder.paymentAccess === 'not_required') {
+      if (storedPending && (!storedOrder || Number(storedOrder.payableAmountMinor || 0) === 0)) {
         wx.removeStorageSync(PENDING_PAYMENT_KEY)
       }
       const orders = (rawOrders || []).map((order) => ({

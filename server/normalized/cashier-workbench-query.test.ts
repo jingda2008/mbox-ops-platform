@@ -266,8 +266,8 @@ describe('PostgresCashierWorkbenchQuery', () => {
 
     expect(view.summary.carryoverOrderCount).toBe(1)
     expect(view.orders[0]).toMatchObject({ businessDate: '2026-08-12', carryover: true })
-    expect(runner.calls[0]?.sql).toContain('mbox.order_collection_due_amount(')
-    expect(runner.calls[0]?.sql).toContain('mbox.order_collection_due_amount(')
+    expect(runner.calls[0]?.sql).toContain("collected.status IN ('succeeded','partially_refunded','refunded')")
+    expect(runner.calls[0]?.sql).toContain('order_settlement_exception_events settled')
     expect(runner.calls[0]?.sql).not.toContain('carryover_payment.retry_released_at IS NULL')
     expect(runner.calls[0]?.sql).toContain("carryover_refund.status IN ('requested','approved','processing')")
   })
@@ -788,7 +788,6 @@ function orderRow(): Record<string, unknown> {
     status: 'submitted',
     payment_status: 'paid',
     total_amount_minor: '8800',
-    collection_due_minor: '0',
     currency: 'CNY',
     submitted_at: '2026-08-13T12:00:00.000Z',
     created_at: '2026-08-13T11:59:00.000Z',

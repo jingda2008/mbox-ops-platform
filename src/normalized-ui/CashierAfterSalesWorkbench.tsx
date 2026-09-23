@@ -22,7 +22,6 @@ import {
 } from 'lucide-react'
 import type {
   CashierWorkbenchPayment,
-  CashierClosableUnpresentedPayment,
   CashierWorkbenchActivityRegistration,
   CashierWorkbenchOrder,
   CashierWorkbenchRefund,
@@ -185,10 +184,9 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
     setNotice(null)
     const attempt = mutationCoordinator.current.prepare(key, body)
     try {
-      const result = await api.postEndpoint(endpoint, attempt.body, { idempotencyKey: attempt.idempotencyKey })
+      await api.postEndpoint(endpoint, attempt.body, { idempotencyKey: attempt.idempotencyKey })
       mutationCoordinator.current.complete(attempt.signature)
-      setNotice({ kind: 'success', text: key.startsWith('payment-provider-query-')
-        ? paymentQueryNotice(result, successMessage) : successMessage })
+      setNotice({ kind: 'success', text: successMessage })
       await load(query)
       return true
     } catch (error) {
@@ -633,9 +631,7 @@ export function CashierAfterSalesWorkbenchView({
                 <ChevronDown size={18} className={expanded ? 'is-open' : ''} />
               </button>
               {expanded && <div className="cashier-order-detail">
-                {order.carryover && <p className="cashier-guidance">{order.tableSessionStatus === 'closed'
-                  ? '这是原营业日的已关桌订单；补收继续关联原订单，实际收到的款项按当前营业日入账，原桌次不会重开。'
-                  : '这是前一营业日尚未闭环的收款或退款事项；处理结果继续记在原订单，不会并入今日营业额。'}</p>}
+                {order.carryover && <p className="cashier-guidance">这是前一营业日尚未闭环的收款或退款事项；处理结果继续记在原订单，不会并入今日营业额。</p>}
                 {order.carryover
                   && (order.tableSessionStatus === 'open' || order.tableSessionStatus === 'closing')
                   && auth.permissions.includes('table.close')
@@ -669,10 +665,6 @@ export function CashierAfterSalesWorkbenchView({
                     : order.payments.map((payment) => <PaymentBlock
                         key={payment.id}
                         payment={payment}
-                        closedTableSession={order.tableSessionStatus === 'closed'}
-                        closableUnpresentedPayment={order.closedDebtRecovery?.closableUnpresentedPayments?.find(candidate => candidate.paymentId === payment.id)}
-                        canCloseUnpresentedHistory={order.closedDebtRecovery?.status === 'pending_payment'
-                          && order.closedDebtRecovery.closableUnpresentedPaymentIds?.includes(payment.id) === true}
                         auth={auth}
                         actions={view.actions}
                         busyKey={busyKey}
@@ -863,14 +855,6 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOn
   const [onlineError, setOnlineError] = useState<string | null>(null)
   const [recollectionReason, setRecollectionReason] = useState('')
   const [recollectionConfirmed, setRecollectionConfirmed] = useState(false)
-  const closedTableSession = order.tableSessionStatus === 'closed'
-  const recovery = order.closedDebtRecovery
-  const recoveryDescription = `原营业日 ${recovery?.originalBusinessDate ?? order.businessDate ?? '待核对'}；仅登记当前实际收到的款项，按当前营业日入账并关联原订单，原桌次保持关闭。`
-  const selectedProviderAllowed = !closedTableSession || provider === null
-    || (provider === 'cash' ? actions.canRecordManualCash : provider === 'physical_pos' ? actions.canRecordManualPos : actions.canRecordManualExternal)
-  useEffect(() => {
-    if (!selectedProviderAllowed) { setProvider(null); setConfirmed(false) }
-  }, [selectedProviderAllowed])
   const activeOnlinePayment = order.payments.find((payment) => (
     (payment.provider === 'postar' || payment.provider === 'wechat')
     && (payment.status === 'created' || payment.status === 'pending')
@@ -879,30 +863,14 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOn
       || (payment.providerActionState !== null && payment.providerActionState !== 'failed'))
   ))
   const canCreateOnline = actions.canInitiateOnlinePayment
-    && !closedTableSession
     && actions.onlinePaymentProvider !== null
     && onCreateOnlinePayment !== undefined
   const hasCompletedRefund = order.payments.some((payment) => payment.refunds.some((refund) => refund.status === 'succeeded'))
-  const requiresRecollectionAuthorization = closedTableSession
-    ? recovery?.status === 'authorization_required'
-    : hasCompletedRefund && order.outstandingAmountMinor > 0
+  const requiresRecollectionAuthorization = hasCompletedRefund && order.outstandingAmountMinor > 0
   const canCollect = order.status !== 'cancelled' && order.outstandingAmountMinor > 0
-    && (closedTableSession ? recovery?.status === 'available' : !requiresRecollectionAuthorization || order.recollectionAuthorization !== null)
+    && (!requiresRecollectionAuthorization || order.recollectionAuthorization !== null)
     && (canCreateOnline || actions.canRecordManualCash || actions.canRecordManualPos || actions.canRecordManualExternal)
-  if (closedTableSession && order.outstandingAmountMinor > 0 && recovery?.status !== 'available' && recovery?.status !== 'authorization_required') {
-    const guidance = recovery?.status === 'pending_payment'
-      ? '原付款结果尚未确认，暂不能补收或发起新线上付款。请在下方原付款记录查询渠道结果；没有查询入口或权限时，请交给具备渠道查单权限的财务核对。已放开重试的原付款也必须先核对。'
-      : recovery?.status === 'permission_required'
-        ? '当前账号没有处理已关桌欠款的权限，请交给具备全桌订单和退款后重新收款权限的财务处理。'
-        : recovery?.status === 'ineligible'
-          ? '本单不在受控历史补收范围，请交财务核对原订单、关桌前欠款和收退款记录。'
-          : '历史补收资格尚未确认，请刷新后核对；仍无法确认时交财务处理。'
-    return <div className="cashier-manual-collection is-blocked" aria-label="已关桌订单补收">
-      <div><strong>已关桌订单补收</strong><small>{recoveryDescription}</small></div>
-      <p className="cashier-guidance" role="status">{guidance}</p>
-    </div>
-  }
-  if (requiresRecollectionAuthorization && (closedTableSession || order.recollectionAuthorization === null)) {
+  if (requiresRecollectionAuthorization && order.recollectionAuthorization === null) {
     const canAuthorize = actions.canAuthorizeRecollection === true
     const authorizationKey = `refund-recollection-authorize-${order.id}`
     const authorize = async () => {
@@ -912,30 +880,24 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOn
         authorizationKey,
         `/api/orders/${encodeURIComponent(order.id)}/recollection-authorizations`,
         { reason: recollectionReason.trim() },
-        closedTableSession
-          ? '已授权本单历史欠款补收，请登记实际收到的款项。授权限时有效，原桌次保持关闭。'
-          : '已授权本单重新收款。服务补偿保持有效；授权仅适用于当前余额且会自动过期，请选择实际收款方式。',
+        '已授权本单重新收款。授权仅适用于当前余额且会自动过期；请在下方选择实际收款方式。',
       )
       if (completed) { setRecollectionReason(''); setRecollectionConfirmed(false) }
     }
-    return <div className="cashier-manual-collection is-blocked" aria-label={closedTableSession ? '已关桌订单补收授权' : '退款后重新收款授权'}>
-      <div><strong>{closedTableSession ? '已关桌订单补收授权' : '退款后重新收款'}</strong><small>{closedTableSession ? recoveryDescription : '已完成退款不会自动恢复收款。需由收银确认客人仍要支付，再开启一次性收款。服务补偿不在本次收取，也不会被本授权撤销。'}</small></div>
+    return <div className="cashier-manual-collection is-blocked" aria-label="退款后重新收款授权">
+      <div><strong>退款后重新收款</strong><small>已完成退款不会自动恢复收款。需由收银确认客人仍要支付，再开启一次性收款。</small></div>
       {canAuthorize ? <div className="cashier-manual-result">
         <label className="cashier-field"><span>重新收款原因</span><textarea value={recollectionReason} maxLength={500}
           placeholder="至少4个字，例如：原渠道退款后，顾客确认改用实体POS付款"
           onChange={(event) => { setRecollectionReason(event.target.value); setRecollectionConfirmed(false) }} /></label>
-        {recollectionConfirmed && <p className="cashier-guidance">请再次确认：退款已完成，顾客明确同意重新支付 ¥{formatAmount(order.outstandingAmountMinor)}；服务补偿保持有效。本授权仅限本单、限时且只可使用一次。</p>}
+        {recollectionConfirmed && <p className="cashier-guidance">请再次确认：退款已完成，顾客明确同意重新支付 ¥{formatAmount(order.outstandingAmountMinor)}；本授权仅限本单、限时且只可使用一次。</p>}
         <div className="cashier-action-row"><button type="button" className="cashier-primary-action"
           disabled={busyKey !== null || recollectionReason.trim().length < 4}
           onClick={() => void authorize()}>{busyKey === authorizationKey ? <LoaderCircle className="is-spinning" size={17} /> : null}{recollectionConfirmed ? '确认授权重新收款' : '核对并继续'}</button></div>
-      </div> : <p className="cashier-guidance">{closedTableSession
-        ? '当前账号无“授权退款后重新收款”权限，请交给具备全桌订单和退款后重新收款权限的财务处理。'
-        : '当前账号无“授权退款后重新收款”权限，请交给具备退款复核权限的收银处理。'}</p>}
+      </div> : <p className="cashier-guidance">当前账号无“授权退款后重新收款”权限，请交给具备退款复核权限的收银处理。</p>}
     </div>
   }
-  if (!canCollect) return closedTableSession && recovery?.status === 'available' && order.outstandingAmountMinor > 0
-    ? <div className="cashier-manual-collection is-blocked" aria-label="已关桌订单补收"><div><strong>已关桌订单补收</strong><small>{recoveryDescription}</small></div><p className="cashier-guidance">当前账号没有人工收款登记权限，请交给具备对应收款方式权限的财务处理。</p></div>
-    : null
+  if (!canCollect) return null
   const mutationKey = provider === null ? '' : `manual-payment-${provider}-${order.id}`
 
   async function createPayment(method: 'native_qr' | 'auth_code', customerAuthCode?: string) {
@@ -957,7 +919,7 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOn
   }
 
   async function submit() {
-    if (!canCollect || !selectedProviderAllowed || provider === null || (provider !== 'cash' && receiptReference.trim().length < 3)) return
+    if (provider === null || (provider !== 'cash' && receiptReference.trim().length < 3)) return
     if (provider === 'physical_pos' && terminalId.trim().length < 2) return
     if (provider === 'external_manual' && collectionNote.trim().length < 2) return
     if (!confirmed) { setConfirmed(true); return }
@@ -975,9 +937,7 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOn
           collectionNote: collectionNote.trim(),
         } : {}),
       },
-      closedTableSession
-        ? '历史欠款补收已登记，实际收款按当前营业日入账并关联原订单；原桌次保持关闭。'
-        : provider === 'cash'
+      provider === 'cash'
         ? '现金收款已登记，订单支付状态已刷新；已配置收银打印路由时会生成支付凭条。'
         : provider === 'physical_pos'
           ? '实体POS收款已登记，订单支付状态已刷新；已配置收银打印路由时会生成支付凭条。'
@@ -992,15 +952,15 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOn
     && typeof onlineAction.payload?.qrCodeUrl === 'string' ? onlineAction.payload.qrCodeUrl : null
 
   return <div className="cashier-manual-collection">
-    <div><strong>{closedTableSession ? '已关桌订单补收' : '现场收款'}</strong><small>剩余应收 ¥{formatAmount(order.outstandingAmountMinor)}；{closedTableSession ? recoveryDescription : order.recollectionAuthorization !== null ? '退款后重新收款授权已生效，请在到期前完成一次实际收款。' : '可让顾客扫二维码、扫顾客付款码，或登记已实际收到的现金/POS/其他款项。'}</small></div>
-    {!closedTableSession && onlineAction !== null && onlineAction.status !== 'failed' ? <div className="cashier-manual-result" aria-live="polite">
+    <div><strong>现场收款</strong><small>剩余应收 ¥{formatAmount(order.outstandingAmountMinor)}；{order.recollectionAuthorization !== null ? '退款后重新收款授权已生效，请在到期前完成一次实际收款。' : '可让顾客扫二维码、扫顾客付款码，或登记已实际收到的现金/POS/其他款项。'}</small></div>
+    {onlineAction !== null && onlineAction.status !== 'failed' ? <div className="cashier-manual-result" aria-live="polite">
       {qrValue !== null ? <><CashierPaymentQr value={qrValue} /><strong>请顾客扫码付款</strong><p>实际到账以渠道回传为准；长时间无结果时可保留本次待核对并重新收款。</p></>
         : <><strong>顾客付款码已受理</strong><p>实际到账以支付渠道回传为准；长时间无结果时可放开新的收款尝试。</p></>}
       <button type="button" className="cashier-quiet-action" onClick={() => setOnlineAction(null)}>暂时收起</button>
     </div> : null}
-    {!closedTableSession && activeOnlinePayment !== undefined && <p className="cashier-guidance">原支付结果尚未确认，可直接继续收款；原记录保留在订单详情，后台继续核对。</p>}
+    {activeOnlinePayment !== undefined && <p className="cashier-guidance">原支付结果尚未确认，可直接继续收款；原记录保留在订单详情，后台继续核对。</p>}
     <>
-      {provider === null || !selectedProviderAllowed ? <div className="cashier-action-row">
+      {provider === null ? <div className="cashier-action-row">
         {canCreateOnline && <button type="button" className="cashier-primary-action" disabled={busyKey !== null} onClick={() => void createPayment('native_qr')}><QrCode size={17} />出示付款二维码</button>}
         {canCreateOnline && <button type="button" className="cashier-secondary-action" disabled={busyKey !== null} onClick={() => setShowScanner(true)}><ScanLine size={17} />扫顾客付款码</button>}
         {actions.canRecordManualCash && <button type="button" className="cashier-primary-action" disabled={busyKey !== null} onClick={() => setProvider('cash')}>登记现金收款</button>}
@@ -1013,7 +973,7 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOn
         {provider === 'cash' ? <p className="cashier-guidance">现金记账编号由系统自动生成，无需填写。</p> : <label className="cashier-field"><span>{provider === 'physical_pos' ? 'POS小票/交易号' : '外部交易号或凭证号'}</span><input value={receiptReference} maxLength={256} placeholder={provider === 'physical_pos' ? '例如 POS-20260824-0001' : '填写可供日结核对的真实凭证号'} onChange={(event) => { setReceiptReference(event.target.value); setConfirmed(false) }} /></label>}
         {provider === 'physical_pos' && <label className="cashier-field"><span>POS终端编号</span><input value={terminalId} maxLength={128} placeholder="例如 POS-01" onChange={(event) => { setTerminalId(event.target.value); setConfirmed(false) }} /></label>}
         {provider === 'external_manual' && <label className="cashier-field"><span>收款说明</span><textarea value={collectionNote} maxLength={500} placeholder="说明收款平台、核对对象或其他可复核信息" onChange={(event) => { setCollectionNote(event.target.value); setConfirmed(false) }} /></label>}
-        {confirmed && <p className="cashier-guidance">请再次核对：已经实际收到{manualCollectionAmountLabel(provider)} ¥{formatAmount(order.outstandingAmountMinor)}，{provider === 'cash' ? '记账编号将自动生成' : `凭证号为“${receiptReference.trim()}”`}。{closedTableSession ? '确认后按当前营业日计入收款和对账，并关联原订单；原桌次保持关闭。' : '确认后将计入收款和对账，并在订单收清后允许继续结台。'}</p>}
+        {confirmed && <p className="cashier-guidance">请再次核对：已经实际收到{manualCollectionAmountLabel(provider)} ¥{formatAmount(order.outstandingAmountMinor)}，{provider === 'cash' ? '记账编号将自动生成' : `凭证号为“${receiptReference.trim()}”`}。确认后将计入收款和对账，并在订单收清后允许继续结台。</p>}
         <div className="cashier-action-row">
           <button type="button" className="cashier-quiet-action" disabled={busyKey !== null} onClick={() => { setProvider(null); setConfirmed(false) }}>返回</button>
           <button type="button" className="cashier-primary-action" disabled={busyKey !== null || (provider !== 'cash' && receiptReference.trim().length < 3) || (provider === 'physical_pos' && terminalId.trim().length < 2) || (provider === 'external_manual' && collectionNote.trim().length < 2)} onClick={() => void submit()}>
@@ -1021,10 +981,10 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOn
           </button>
         </div>
       </div>}
-      {!closedTableSession && onlineAction?.status === 'failed' && <p className="cashier-guidance">上一次线上收款未成功，可重新生成二维码、重新扫码或改用现场收款。</p>}
-      {!closedTableSession && onlineError !== null && <p className="cashier-guidance" role="alert">{onlineError}</p>}
+      {onlineAction?.status === 'failed' && <p className="cashier-guidance">上一次线上收款未成功，可重新生成二维码、重新扫码或改用现场收款。</p>}
+      {onlineError !== null && <p className="cashier-guidance" role="alert">{onlineError}</p>}
     </>
-    {showScanner && canCreateOnline && <CustomerPaymentCodeScanner
+    {showScanner && <CustomerPaymentCodeScanner
       tableCode={order.tableCode}
       amountLabel={`¥${formatAmount(order.outstandingAmountMinor)}`}
       onClose={() => setShowScanner(false)}
@@ -1262,9 +1222,6 @@ function CashierPaymentQr({ value }: { value: string }) {
 
 function PaymentBlock({
   payment,
-  closedTableSession = false,
-  canCloseUnpresentedHistory = false,
-  closableUnpresentedPayment,
   auth,
   actions,
   busyKey,
@@ -1283,9 +1240,6 @@ function PaymentBlock({
   onMutation,
 }: {
   payment: CashierWorkbenchPayment
-  closedTableSession?: boolean
-  canCloseUnpresentedHistory?: boolean
-  closableUnpresentedPayment?: CashierClosableUnpresentedPayment
   auth: StaffAuthView
   actions: CashierWorkbenchView['actions']
   busyKey: string | null
@@ -1303,24 +1257,6 @@ function PaymentBlock({
   onManualReceipt(refundId: string, receipt: string): void
   onMutation(key: string, endpoint: string, body: unknown, successMessage: string): Promise<boolean>
 }) {
-  const [closeHistoryReason, setCloseHistoryReason] = useState<string | null>(null)
-  const [closeHistoryConfirmed, setCloseHistoryConfirmed] = useState(false)
-  const mayCloseHistory = closedTableSession && canCloseUnpresentedHistory
-    && actions.canViewReconciliation
-    && (payment.status === 'created' || payment.status === 'pending')
-  const closedBatch = closableUnpresentedPayment?.payableKind === 'order_batch' ? closableUnpresentedPayment : null
-  const closeHistoryKey = `payment-close-unpresented-history-${payment.id}`
-  async function closeUnpresentedHistory() {
-    if (!mayCloseHistory || (closeHistoryReason?.trim().length ?? 0) < 4) return
-    if (!closeHistoryConfirmed) { setCloseHistoryConfirmed(true); return }
-    const completed = await onMutation(closeHistoryKey,
-      `/api/payments/${encodeURIComponent(payment.id)}/close-unpresented-history`,
-      { reason: closeHistoryReason!.trim() },
-      '原未外送付款已在本地作废，未执行渠道退款；请按刷新后的原订单状态继续核对历史欠款。')
-    if (completed) { setCloseHistoryReason(null); setCloseHistoryConfirmed(false) }
-  }
-  const locallyClosedHistory = closedTableSession && payment.status === 'closed'
-    && payment.localUnpresentedHistoryClosed === true
   const drafting = refundDraft?.paymentId === payment.id
   const selectedTotal = drafting
     ? Object.values(refundDraft.amounts).reduce((sum, value) => sum + (yuanToMinor(value) ?? 0), 0)
@@ -1352,14 +1288,10 @@ function PaymentBlock({
     </button>}
 
     {actions.canViewReconciliation && payment.provider === 'postar'
-      && (payment.status === 'created' || payment.status === 'pending' || locallyClosedHistory)
-      && (closedTableSession
-        ? actions.canQueryOnlinePayment
-        : payment.providerActionState !== null && payment.providerActionState !== 'failed')
+      && (payment.status === 'created' || payment.status === 'pending')
+      && payment.providerActionState !== null && payment.providerActionState !== 'failed'
       && <div className="cashier-provider-query">
-      <p>{locallyClosedHistory
-        ? '这笔原付款仅在本地作废。仍可核对渠道迟到结果，查询不会再次扣款或重开原桌。'
-        : '这笔线上付款尚无明确结果。查询只读取支付渠道的签名结果，不会再次扣款。'}</p>
+      <p>这笔线上付款尚无明确结果。查询只读取支付渠道的签名结果，不会再次扣款。</p>
       <button
         type="button"
         className="cashier-secondary-action"
@@ -1368,28 +1300,9 @@ function PaymentBlock({
           `payment-provider-query-${payment.id}`,
           `/api/payments/${encodeURIComponent(payment.id)}/provider-query`,
           {},
-          '已读取原付款核对结果，请以最新付款状态及渠道观察为准。',
+          '已完成渠道查单，结果已按渠道回传更新。',
         )}
       >{busyKey === `payment-provider-query-${payment.id}` ? <LoaderCircle className="is-spinning" size={17} /> : null}查询渠道结果</button>
-    </div>}
-
-    {mayCloseHistory && <div className="cashier-provider-query" aria-label="作废原未外送付款">
-      {closedBatch && <div>
-        <p><strong>{`整笔合并付款 ¥${formatAmount(closedBatch.totalAmountMinor)}`}</strong> · {closedBatch.currency}</p>
-        <p>本订单分摊 ¥{formatAmount(payment.amountMinor)}。将作废整个合并付款，影响以下全部 {closedBatch.orderIds.length} 笔原订单；已结清订单不会因此获得补收资格。</p>
-        <ul>{closedBatch.orderPublicIds.map((publicId, index) => <li key={closedBatch.orderIds[index] ?? publicId} style={{ overflowWrap: 'anywhere' }}>{publicId}</li>)}</ul>
-      </div>}
-      <p>服务器已核对这笔付款从未外送。本操作只作废本地付款记录，不会退款，也不会把未知渠道结果改为失败。</p>
-      {closeHistoryReason === null
-        ? <button type="button" className="cashier-secondary-action" disabled={busyKey !== null} onClick={() => setCloseHistoryReason('')}>{closedBatch ? '作废整个合并付款' : '作废未外送付款'}</button>
-        : <>
-          <label className="cashier-field"><span>作废核对依据</span><textarea value={closeHistoryReason} maxLength={500} placeholder="至少4个字，记录本次核对依据" onChange={event => { setCloseHistoryReason(event.target.value); setCloseHistoryConfirmed(false) }} /></label>
-          {closeHistoryConfirmed && <p className="cashier-guidance">请确认{closedBatch ? `作废整个合并付款 ¥${formatAmount(closedBatch.totalAmountMinor)}，涉及以上全部 ${closedBatch.orderIds.length} 笔原订单` : `仅作废原付款 ${shortReference(payment.publicId)} 的本地记录`}；没有执行退款，后续补收仍需核对原欠款和授权。</p>}
-          <div className="cashier-action-row">
-            <button type="button" className="cashier-quiet-action" disabled={busyKey !== null} onClick={() => { setCloseHistoryReason(null); setCloseHistoryConfirmed(false) }}>返回</button>
-            <button type="button" className="cashier-secondary-action" disabled={busyKey !== null || closeHistoryReason.trim().length < 4} onClick={() => void closeUnpresentedHistory()}>{closeHistoryConfirmed ? (closedBatch ? '确认作废整个合并付款' : '确认作废本地付款') : '核对并作废'}</button>
-          </div>
-        </>}
     </div>}
 
     {actions.canExecuteRefund && payment.provider === 'postar' && payment.refunds
@@ -1748,16 +1661,4 @@ function itemStatusLabel(value: string): string {
 }
 function kdsStatusLabel(value: CashierWorkbenchKdsTask['status']): string {
   return ({ pending: '待接单', accepted: '已接单未制作', preparing: '制作中', ready: '制作完成', cancelled: '已取消', failed: '制作异常' } as Record<CashierWorkbenchKdsTask['status'], string>)[value]
-}
-
-/** The API keeps a local close distinct from what the provider just reported. */
-export function paymentQueryNotice(result: unknown, fallback: string): string {
-  if (result === null || typeof result !== 'object') return fallback
-  const row = result as Record<string, unknown>
-  if (row.queryResultSource === 'local_payment') return '原付款已有本地已知结果，本次未重新请求渠道；请核对最新付款状态。'
-  if (row.status !== 'closed' || row.queryObservation === null || typeof row.queryObservation !== 'object') return fallback
-  const observed = (row.queryObservation as Record<string, unknown>).status
-  if (observed === 'pending' || observed === 'processing') return '原付款保持本地作废，渠道仍在处理中；请继续核对原付款，不把本次查询当作到账。'
-  if (observed === 'failed' || observed === 'closed') return '渠道返回未成功结果，原付款保持本地作废；本次未执行退款或新增收款。'
-  return fallback
 }

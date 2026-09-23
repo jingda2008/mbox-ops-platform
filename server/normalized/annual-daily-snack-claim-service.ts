@@ -35,8 +35,6 @@ export interface AnnualDailySnackClaim {
   redeemedByEmployeeName: string | null
   redeemedAt: string | null
   fulfilledAt: string | null
-  /** Current order fulfillment can be ready again after pickup correction; redemption history stays consumed. */
-  currentFulfillmentStatus?: 'pending' | 'ready' | 'delivered' | 'cancelled' | null
   title: string
   tableCode?: string
   tableSessionId?: string
@@ -81,7 +79,6 @@ interface ClaimRow extends Record<string, unknown> {
   redeemed_by_employee_name: string | null
   redeemed_at: string | null
   fulfilled_at: string | null
-  current_fulfillment_status?: AnnualDailySnackClaim['currentFulfillmentStatus']
   title: string
   table_code?: string
   table_session_id?: string
@@ -265,8 +262,7 @@ export class AnnualDailySnackClaimService {
         SELECT claim.id,claim.claim_code,claim.benefit_id,claim.benefit_reservation_id,claim.gift_order_id,claim.attempt_no,
           claim.quantity,claim.status,claim.expires_at::text,claim.redeemed_by_employee_id,
           employee.display_name AS redeemed_by_employee_name,claim.redeemed_at::text,claim.fulfilled_at::text,
-          rule.title,claim.customer_id,claim.table_session_id,
-          mbox.pickup_order_current_fulfillment(claim.tenant_id,claim.store_id,claim.gift_order_id) AS current_fulfillment_status
+          rule.title,claim.customer_id,claim.table_session_id
         FROM mbox.annual_daily_snack_claims claim
         JOIN mbox.loyalty_annual_benefit_rules rule
           ON rule.tenant_id=claim.tenant_id AND rule.store_id=claim.store_id AND rule.id=claim.rule_id
@@ -295,8 +291,7 @@ export class AnnualDailySnackClaimService {
         SELECT claim.id,claim.claim_code,claim.benefit_id,claim.benefit_reservation_id,claim.gift_order_id,claim.attempt_no,
           claim.quantity,claim.status,claim.expires_at::text,claim.redeemed_by_employee_id,
           employee.display_name AS redeemed_by_employee_name,claim.redeemed_at::text,claim.fulfilled_at::text,
-          rule.title,claim.customer_id,claim.table_session_id,
-          mbox.pickup_order_current_fulfillment(claim.tenant_id,claim.store_id,claim.gift_order_id) AS current_fulfillment_status
+          rule.title,claim.customer_id,claim.table_session_id
         FROM mbox.annual_daily_snack_claims claim
         JOIN mbox.loyalty_annual_benefit_rules rule
           ON rule.tenant_id=claim.tenant_id AND rule.store_id=claim.store_id AND rule.id=claim.rule_id
@@ -501,7 +496,6 @@ function claimSelectSql() {
     claim.quantity,claim.status,claim.expires_at::text,claim.redeemed_by_employee_id,
     employee.display_name AS redeemed_by_employee_name,claim.redeemed_at::text,claim.fulfilled_at::text,
     rule.title,venue_table.code AS table_code,claim.table_session_id,
-    mbox.pickup_order_current_fulfillment(claim.tenant_id,claim.store_id,claim.gift_order_id) AS current_fulfillment_status,
     membership.member_no,profile.display_name AS customer_name
     FROM mbox.annual_daily_snack_claims claim
     JOIN mbox.loyalty_annual_benefit_rules rule
@@ -528,7 +522,6 @@ function mapClaim(row: ClaimRow | undefined): AnnualDailySnackClaim | null {
     giftOrderId: row.gift_order_id, attemptNo: row.attempt_no, quantity: row.quantity, status: row.status, expiresAt: row.expires_at,
     redeemedByEmployeeId: row.redeemed_by_employee_id, redeemedByEmployeeName: row.redeemed_by_employee_name,
     redeemedAt: row.redeemed_at, fulfilledAt: row.fulfilled_at, title: row.title,
-    ...(row.current_fulfillment_status===undefined?{}:{currentFulfillmentStatus:row.current_fulfillment_status}),
     ...(row.table_code === undefined ? {} : { tableCode: row.table_code }),
     ...(row.table_session_id === undefined ? {} : { tableSessionId: row.table_session_id }),
     ...(row.member_no === undefined ? {} : { memberNo: row.member_no }),

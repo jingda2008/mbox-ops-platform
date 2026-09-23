@@ -375,7 +375,6 @@ jobs:
           cp deploy/normalized-store/mbox-lujiazui.store.json release-artifact/
           cp config/menu-catalog-2026-07-27.json release-artifact/
           cp deploy/aliyun/{deploy-release,activate-release,rollback-activated-release,verify-public-app,stage-release-evidence,upload-oss-verified,send-sls-events,prune-oss-images,release-state,normalize-runtime-env,backup-postgres,restore-postgres}.sh release-artifact/
-          cp deploy/aliyun/maintenance-bootstrap.{sh,py} deploy/aliyun/maintenance-ingress.mjs release-artifact/
           MBOX_BUNDLE_ARCHIVE="${archive}" \
           MBOX_BUNDLE_SHA="${GITHUB_SHA}" \
           MBOX_BUNDLE_VERSION="${VERSION}" \

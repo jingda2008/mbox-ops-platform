@@ -263,7 +263,7 @@ test('one business-day order and guest requests flow through bartender, kitchen,
   for (const productName of [data.orderableProductName, data.kitchenProductName]) {
     const delivery = server.page.locator('.staff-action-card').filter({ hasText: productName }).first()
     await expect(delivery).toBeVisible()
-    await expect(delivery).toContainText('待取')
+    await expect(delivery).toContainText('待配送')
     await delivery.getByRole('button', { name: '已送达' }).click()
     await expect(server.page.locator('.staff-actions-notice')).toContainText('已确认送达')
   }
@@ -750,7 +750,7 @@ test('出品页面六十项待制作全部可达，取送单独展示且末项�
   await page.getByRole('textbox',{name:'按桌号或品名查找出品'}).fill('隔离队列60')
   await expect(cards).toHaveCount(1);await expect(cards).toContainText('隔离队列60')
   await page.getByRole('textbox',{name:'按桌号或品名查找出品'}).fill('')
-  await page.getByRole('button',{name:'待取（10）',exact:true}).click()
+  await page.getByRole('button',{name:'待取送（10）',exact:true}).click()
   await expect(cards).toHaveCount(10)
   await expect(cards.first()).toContainText('隔离队列61')
   await expectNoHorizontalOverflow(page)

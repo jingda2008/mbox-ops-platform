@@ -1,6 +1,5 @@
 import { LoyaltyAccrualRepository } from './loyalty-accrual-repository.js'
 import { LoyaltyOperationalControlRepository } from './loyalty-operational-control-repository.js'
-import { LoyaltyRecollectionRepository } from './loyalty-recollection-repository.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction, StoreScope } from './transaction-runner.js'
 
 interface DeferredRow extends Record<string,unknown> {
@@ -63,12 +62,8 @@ export class LoyaltyAccrualDeferredWorker {
           }
           const before = await awardExists(transaction,row.order_id)
           await new LoyaltyAccrualRepository(transaction).recordPaidOrder({
-            orderId:row.order_id,paymentId:row.payment_id,occurredAt:row.payment_succeeded_at,recoverDeferred:true,
+            orderId:row.order_id,paymentId:row.payment_id,occurredAt:row.payment_succeeded_at,
           })
-          const recovery=await new LoyaltyRecollectionRepository(transaction).previewOrderRecovery({orderId:row.order_id})
-          if(recovery.status!=='not_required') {
-            throw new Error('Deferred loyalty recollection still requires an explicit recovery decision')
-          }
           const after = await awardExists(transaction,row.order_id)
           const status = after ? 'applied' : 'not_applicable'
           const code = after ? (before ? 'already_awarded' : 'award_applied') : 'not_loyalty_eligible'

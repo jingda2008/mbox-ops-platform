@@ -50,7 +50,6 @@ integration("normalized inventory API PostgreSQL integration", () => {
     app = Fastify();
     await app.register(inventoryApiPlugin, {
       prefix: "/api",
-      transactions: runner,
       commands: new NormalizedCommandExecutor(runner),
       query: new InventoryQueryService(runner),
       resolveContext(request) {
@@ -1060,81 +1059,6 @@ integration("normalized inventory API PostgreSQL integration", () => {
     expect(authoritative.rows[0]?.version_id).toMatch(/^[0-9a-f-]{36}$/i);
   });
 
-  it('migration 226 retains pre-upgrade expired receipts and captures old-app completions during cutover', async () => {
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      // Recreate the exact pre-226 boundary only inside this isolated test transaction.
-      await client.query('DROP TRIGGER retain_inventory_waste_receipt ON mbox.idempotency_records');
-      await client.query('DROP FUNCTION mbox.retain_inventory_waste_receipt()');
-      await client.query('DROP TABLE mbox.inventory_waste_receipts');
-      const result = {id:randomUUID(),status:'pending'};
-      await client.query(`INSERT INTO mbox.idempotency_records(tenant_id,store_id,operation_scope,idempotency_key,
-        request_sha256,status,response_status,response_snapshot,created_at,expires_at)
-        VALUES($1,$2,'inventory.waste.submit','pre-upgrade-waste-receipt',$3,'completed',200,$4::jsonb,
-        clock_timestamp()-interval '3 days',clock_timestamp()-interval '2 days')`,
-      [tenantId,storeId,'a'.repeat(64),JSON.stringify({result})]);
-      const migration = (await loadNormalizedMigrations()).find(entry => entry.version === '226')!;
-      await client.query(unwrapNormalizedMigrationTransaction(migration.sql));
-      const retained = await client.query(`SELECT request_sha256,result FROM mbox.inventory_waste_receipts
-        WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key='pre-upgrade-waste-receipt'`,[tenantId,storeId]);
-      expect(retained.rows).toEqual([{request_sha256:'a'.repeat(64),result}]);
-      await client.query(`INSERT INTO mbox.idempotency_records(tenant_id,store_id,operation_scope,idempotency_key,
-        request_sha256,status,response_status,response_snapshot,expires_at)
-        VALUES($1,$2,'inventory.waste.submit','old-app-during-cutover',$3,'completed',200,$4::jsonb,
-        clock_timestamp()+interval '1 day')`,[tenantId,storeId,'b'.repeat(64),JSON.stringify({result})]);
-      await client.query(`DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2
-        AND idempotency_key IN ('pre-upgrade-waste-receipt','old-app-during-cutover')`,[tenantId,storeId]);
-      const surviving = await client.query(`SELECT count(*)::int AS n FROM mbox.inventory_waste_receipts
-        WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key IN ('pre-upgrade-waste-receipt','old-app-during-cutover')`,[tenantId,storeId]);
-      expect(surviving.rows[0].n).toBe(2);
-    } finally {await client.query('ROLLBACK');client.release();}
-  });
-
-  it.each(['expired', 'deleted'] as const)('recovers direct and approved waste after the command cache is %s without repeating stock or events', async cacheState => {
-    const itemId = randomUUID();
-    await pool.query(`INSERT INTO mbox.inventory_items(tenant_id,store_id,id,sku,name,item_type,base_unit,category_code,reasonable_waste_quantity,status)
-      VALUES($1,$2,$3,$4,'永久回执测试','other','piece','uncategorized',10,'active')`, [tenantId,storeId,itemId,`DURABLE-${cacheState}`]);
-    await pool.query(`INSERT INTO mbox.inventory_balances(tenant_id,store_id,inventory_item_id,on_hand_quantity,reserved_quantity)
-      VALUES($1,$2,$3,10,0)`,[tenantId,storeId,itemId]);
-    const key = `durable-waste-${cacheState}`;
-    const direct = { method: 'POST' as const, url: `/api/inventory/items/${itemId}/waste`,
-      headers: headers(managerId,key), payload: {quantity:'2',wasteType:'discarded',reason:'损坏核实'} };
-    const first = await app.inject(direct);
-    expect(first.statusCode,first.body).toBe(200);
-    const clearCache = async () => {
-      if (cacheState === 'deleted') await pool.query(`DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key LIKE $3`,[tenantId,storeId,`${key}%`]);
-      else await pool.query(`UPDATE mbox.idempotency_records SET created_at=clock_timestamp()-interval '3 days',expires_at=clock_timestamp()-interval '2 days'
-        WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key LIKE $3`,[tenantId,storeId,`${key}%`]);
-    };
-    await clearCache();
-    const replays = await Promise.all([app.inject(direct),app.inject(direct)]);
-    for (const replay of replays) { expect(replay.statusCode,replay.body).toBe(200);expect(replay.json().data).toEqual(first.json().data);expect(replay.json().meta.replayed).toBe(true); }
-    await clearCache();
-    const changed = await app.inject({...direct,payload:{...direct.payload,quantity:'3'}});
-    expect(changed.statusCode,changed.body).toBe(409);
-    expect((await app.inject({...direct,headers:headers(viewerId,key)})).statusCode).toBe(403);
-    await pool.query('UPDATE mbox.inventory_items SET reasonable_waste_quantity=0 WHERE id=$1',[itemId]);
-    const submit = {...direct,headers:headers(managerId,`${key}-approval`),payload:{...direct.payload,requestApproval:true}};
-    const submitted = await app.inject(submit);
-    expect(submitted.statusCode,submitted.body).toBe(200);
-    const decision = {method:'POST' as const,url:`/api/inventory/waste-requests/${submitted.json().data.id}/approve`,headers:headers(approverId,`${key}-decision`),payload:{reason:'实物核实通过'}};
-    const accepted = await app.inject(decision);
-    expect(accepted.statusCode,accepted.body).toBe(200);
-    await clearCache();
-    const repeatedSubmit = await app.inject(submit), repeatedDecision = await app.inject(decision);
-    expect(repeatedSubmit.json().data).toEqual(submitted.json().data);
-    expect(repeatedDecision.json().data).toEqual(accepted.json().data);
-    expect(repeatedSubmit.json().meta.replayed).toBe(true);
-    expect(repeatedDecision.json().meta.replayed).toBe(true);
-    const state = await pool.query(`SELECT
-      (SELECT on_hand_quantity::text FROM mbox.inventory_balances WHERE inventory_item_id=$1) AS quantity,
-      (SELECT count(*)::int FROM mbox.inventory_movements WHERE inventory_item_id=$1 AND movement_type='waste') AS movements,
-      (SELECT count(*)::int FROM mbox.inventory_waste_requests WHERE inventory_item_id=$1) AS requests,
-      (SELECT count(*)::int FROM mbox.inventory_waste_receipts WHERE tenant_id=$2 AND store_id=$3 AND idempotency_key LIKE $4) AS receipts`,[itemId,tenantId,storeId,`${key}%`]);
-    expect(state.rows[0]).toEqual({quantity:'6.000000',movements:2,requests:1,receipts:3});
-  });
-
   it('routes zero-allowance waste to independent approval, replays lost replies once and leaves rejected or insufficient requests undeducted',async()=>{
     const itemId=randomUUID();
     await pool.query(`INSERT INTO mbox.inventory_items(tenant_id,store_id,id,sku,name,item_type,base_unit,category_code,reasonable_waste_quantity,status)
@@ -1484,7 +1408,15 @@ integration("normalized inventory API PostgreSQL integration", () => {
     try {
       await client.query("BEGIN");
       await client.query(unwrapNormalizedMigrationTransaction(migration!.sql));
-      const evidence = await client.query<{
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    const evidence = await pool.query<{
       product_cost: string | null;
       product_source: string;
       bundle_cost: string | null;
@@ -1510,11 +1442,6 @@ integration("normalized inventory API PostgreSQL integration", () => {
       bundle_source: "incomplete",
       historical_cost: "4200",
     });
-    } finally {
-      // Historical migration assertions must not downgrade shared test metadata.
-      await client.query("ROLLBACK");
-      client.release();
-    }
   });
 
   async function createItem(

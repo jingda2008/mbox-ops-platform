@@ -2,6 +2,75 @@
 import importlib.util, tempfile, pathlib, json, unittest, os, subprocess
 spec=importlib.util.spec_from_file_location('bootstrap',pathlib.Path(__file__).with_name('maintenance-bootstrap.py'));m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 class PersistentTests(unittest.TestCase):
+ def migration_manifest(self,count):
+  files=[{'filename':'%03d_change.sql'%index,'sha256':m.hashlib.sha256(str(index).encode()).hexdigest()} for index in range(1,count+1)]
+  digest=m.hashlib.sha256(''.join(row['filename']+'\0'+row['sha256']+'\n' for row in files).encode()).hexdigest()
+  return {'migration':{'count':count,'digest':'sha256:'+digest,'files':files}}
+ def migration_snapshot(self,count):
+  return {'schemaVersion':str(count),'schemaFlavor':'normalized-core-v1','applied':[{'version':'%03d'%i, 'filename':row['filename'],'checksum':row['sha256']} for i,row in enumerate(self.migration_manifest(count)['migration']['files'],1)]}
+ def test_ordinary_ancestry_requires_exact_applied_files_not_just_larger_schema(self):
+  base,current,target=self.migration_manifest(2),self.migration_manifest(3),self.migration_manifest(4)
+  self.assertEqual(m.verify_ordinary_migration_ancestry(base,current,target,self.migration_snapshot(3)),3)
+  # Old compatible app retained after a failed ordinary cutover, schema ahead.
+  self.assertEqual(m.verify_ordinary_migration_ancestry(base,base,target,self.migration_snapshot(3)),3)
+  for snapshot in (self.migration_snapshot(1),self.migration_snapshot(5),{**self.migration_snapshot(3),'schemaVersion':'4'},
+                   {**self.migration_snapshot(3),'schemaFlavor':'legacy'}):
+   with self.assertRaises(m.Blocked):m.verify_ordinary_migration_ancestry(base,current,target,snapshot)
+  for field,value in (('version','004'),('filename','003_other.sql'),('checksum','a'*64)):
+   snapshot=self.migration_snapshot(3);snapshot['applied'][-1][field]=value
+   with self.assertRaises(m.Blocked):m.verify_ordinary_migration_ancestry(base,current,target,snapshot)
+  changed=self.migration_manifest(4);changed['migration']['files'][0]['sha256']='f'*64
+  with self.assertRaises(m.Blocked):m.verify_ordinary_migration_ancestry(base,current,changed,self.migration_snapshot(3))
+  # Even a recomputed aggregate cannot replace an older immutable migration.
+  changed['migration']['digest']='sha256:'+m.hashlib.sha256(''.join(row['filename']+'\0'+row['sha256']+'\n' for row in changed['migration']['files']).encode()).hexdigest()
+  with self.assertRaises(m.Blocked):m.verify_ordinary_migration_ancestry(base,current,changed,self.migration_snapshot(3))
+  for field,value in (('count',4),('files',[]),('digest','sha256:'+'a'*64)):
+   changed=self.migration_manifest(3);changed['migration'][field]=value
+   with self.assertRaises(m.Blocked):m.verified_migration_files(changed)
+ def test_completed_withdrawals_accept_checked_successors_and_app_rollback_without_writes(self):
+  with tempfile.TemporaryDirectory() as d:
+   root=pathlib.Path(d);release=root/'releases'/'base';release.mkdir(parents=True)
+   current=root/'releases'/'live';current.mkdir();target=root/'releases'/('c'*7);target.mkdir()
+   (root/'current').symlink_to(current);directory=root/'maintenance'/'completed'
+   manifest={**self.migration_manifest(2),'releaseSha':'base','imageDigest':'base-image','platformImageDigest':'base-platform'}
+   live_manifest={**self.migration_manifest(3),'releaseSha':'live','imageDigest':'live-image','platformImageDigest':'live-platform'}
+   candidate={**self.migration_manifest(4),'releaseSha':'c'*40}
+   for path,value in ((release,manifest),(current,live_manifest),(target,candidate)):m.atomic(path/'release-manifest.json',value)
+   plan={'transitionId':'completed','sourceLive':{'releaseSha':'old'}};m.atomic(release/'maintenance-plan.json',plan)
+   binding={'transitionId':'completed','sourceLive':plan['sourceLive'],'forwardRecoveryTarget':{'releaseSha':'base','imageDigest':'base-image','schema':2,'migrationDigest':manifest['migration']['digest']},'planSha256':m.sha(release/'maintenance-plan.json')}
+   journal=m.Journal(directory,binding);journal.append('schema-provisioned');journal.append('completed')
+   prior=m.Journal(root/'maintenance'/'withdrawn',{'sourceLive':{}});prior.append('drain-intent')
+   h=object.__new__(m.Host);h.root=root;h.release=release;h.directory=directory;h.plan=plan;h.manifest=manifest;h.sha='base';h.schema=2;h.public='https://example.test';h.adminservice='admin';h.pg_env={}
+   live={'State':{'Running':True},'Image':'live-platform','Config':{'Labels':{'org.opencontainers.image.revision':'live'}}}
+   ready={'status':'ready','writeEnabled':True,'commitSha':'live','releaseImageDigest':'live-image','schemaVersion':'3'}
+   h.inspect=lambda _:live;h.request=lambda _: (200,ready);queries=[]
+   def run(args,input=None,env=None):
+    self.assertIn('-XqAt',args);self.assertTrue(input.startswith('BEGIN READ ONLY;'));self.assertIn("statement_timeout='8s'",input);self.assertTrue(input.endswith('ROLLBACK;'));queries.append(input)
+    return json.dumps(self.migration_snapshot(3))
+   h.run=run;calls=[]
+   def verify(path,records,record=True):
+    self.assertFalse(record);self.assertEqual(h.ordinary_schema_evidence,{'baseline':2,'current':3});calls.append(path)
+   h.verify_withdrawn_transition=verify
+   original=m.protected;m.protected=lambda p:pathlib.Path(p)
+   try:
+    before={str(p):p.read_bytes() for p in root.rglob('*') if p.is_file()}
+    self.assertEqual(h.verify_completed_withdrawals(target)['withdrawnTransitions'],['withdrawn'])
+    self.assertEqual(before,{str(p):p.read_bytes() for p in root.rglob('*') if p.is_file()})
+    self.assertEqual(len(queries),1);self.assertEqual(len(calls),1)
+    # Application rollback leaves schema3. Its immutable prefix and live
+    # readiness must both prove that state; completed evidence stays schema2.
+    live_manifest['migration']=manifest['migration'];m.atomic(current/'release-manifest.json',live_manifest)
+    h.verify_completed_withdrawals(target)
+    ready['schemaVersion']='2'
+    with self.assertRaises(m.Blocked):h.verify_completed_withdrawals(target)
+    ready['schemaVersion']='3';ready['writeEnabled']=False
+    with self.assertRaises(m.Blocked):h.verify_completed_withdrawals(target)
+    ready['writeEnabled']=True;candidate['releaseSha']='d'*40;m.atomic(target/'release-manifest.json',candidate)
+    with self.assertRaises(m.Blocked):h.verify_completed_withdrawals(target)
+    candidate['releaseSha']='c'*40;m.atomic(target/'release-manifest.json',candidate)
+    prior.append('schema-provisioned');prior.path.write_text(prior.path.read_text().replace('schema-provisioned','tampered'))
+    with self.assertRaises(m.Blocked):h.verify_completed_withdrawals(target)
+   finally:m.protected=original
  def test_completed_withdrawal_validation_is_read_only_and_bound_to_live_schema(self):
   with tempfile.TemporaryDirectory() as d:
    root=pathlib.Path(d);release=root/'releases'/'done';release.mkdir(parents=True)
@@ -81,6 +150,13 @@ class PersistentTests(unittest.TestCase):
     with self.assertRaises(m.Blocked):h.verify_withdrawn_transition(journal.path,journal.records)
     h.sql=lambda *a:'241'
     with self.assertRaises(m.Blocked):h.verify_withdrawn_transition(journal.path,journal.records)
+    h.sql=lambda *a:'243';h.journal.append('completed')
+    h.ordinary_schema_evidence={'baseline':242,'current':243}
+    h.verify_withdrawn_transition(journal.path,journal.records,record=False)
+    with self.assertRaises(m.Blocked):h.verify_withdrawn_transition(journal.path,journal.records)
+    h.sql=lambda *a:'244'
+    with self.assertRaises(m.Blocked):h.verify_withdrawn_transition(journal.path,journal.records,record=False)
+    h.ordinary_schema_evidence=None
     h.sql=lambda *a:'242';h.reentry=False
     with self.assertRaises(m.Blocked):h.verify_withdrawn_transition(journal.path,journal.records)
     h.reentry=True;h.plan['sourceLive']={'releaseDirectory':str(release),'releaseSha':'wrong'}

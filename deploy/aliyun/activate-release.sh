@@ -234,7 +234,7 @@ while IFS= read -r journal; do
       check_path=$(dirname "${check_path}")
     done
     "${controller_python}" "${release_dir}/maintenance-bootstrap.py" \
-      "${completed_release}" "${deployment_tier}" "${public_url}" --verify-completed-withdrawals
+      "${completed_release}" "${deployment_tier}" "${public_url}" --verify-completed-withdrawals --ordinary-release "${release_dir}"
     break
   fi
 done < <(find "${install_root}/maintenance" -mindepth 2 -maxdepth 2 -name journal.jsonl -type f 2>/dev/null || true)

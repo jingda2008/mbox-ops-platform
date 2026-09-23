@@ -55,6 +55,30 @@ def read_verified_journal(path):
         previous=row['hash']
     return records
 
+def verified_migration_files(manifest):
+    migration=manifest.get('migration',{}); files=migration.get('files')
+    require(isinstance(files,list) and files and type(migration.get('count')) is int and migration['count']==len(files),'invalid migration manifest count')
+    digest=hashlib.sha256()
+    for index,row in enumerate(files,1):
+        require(isinstance(row,dict) and set(row)=={'filename','sha256'},'invalid migration manifest entry')
+        require(isinstance(row['filename'],str) and re.fullmatch(r'%03d_[a-z0-9_]+\.sql'%index,row['filename']) and isinstance(row['sha256'],str) and re.fullmatch('[0-9a-f]{64}',row['sha256']),'invalid migration manifest sequence')
+        digest.update((row['filename']+'\0'+row['sha256']+'\n').encode())
+    require(migration.get('digest')=='sha256:'+digest.hexdigest(),'migration manifest digest mismatch')
+    return files
+
+def verify_ordinary_migration_ancestry(baseline,current,candidate,snapshot):
+    # Exact immutable ancestry, not schema >= baseline. This also admits a
+    # compatible app rollback after a transactional ordinary migration: every
+    # applied file still has to belong to the verified incoming artifact.
+    base=verified_migration_files(baseline); live=verified_migration_files(current); target=verified_migration_files(candidate)
+    require(len(base)<=len(live)<=len(target) and base==live[:len(base)] and live==target[:len(live)],'ordinary release changed historical migrations')
+    applied=snapshot.get('applied'); version=snapshot.get('schemaVersion')
+    require(snapshot.get('schemaFlavor')=='normalized-core-v1' and isinstance(applied,list) and isinstance(version,str) and re.fullmatch('[0-9]+',version),'invalid live migration metadata')
+    require(len(live)<=len(applied)<=len(target) and int(version)==len(applied),'ordinary live schema has no exact artifact ancestry')
+    for index,row in enumerate(applied):
+        require(row=={'version':'%03d'%(index+1),'filename':target[index]['filename'],'checksum':target[index]['sha256']},'ordinary applied migration checksum mismatch')
+    return int(version)
+
 class Journal:
     def __init__(self, directory, binding, recovery_from=None):
         self.directory=Path(directory); self.directory.mkdir(parents=True,exist_ok=True,mode=0o700)
@@ -591,6 +615,10 @@ class Host:
                 elif event['event']=='schema-provisioned':
                     require(active and active['sourceLive']==self.plan['sourceLive'],'provisioned schema source binding changed')
                     expected_schema=int(active['forwardRecoveryTarget']['schema'])
+        ancestry=getattr(self,'ordinary_schema_evidence',None)
+        if ancestry is not None:
+            require(record is False and self.reentry and self.journal.records[-1]['event']=='completed' and expected_schema==ancestry['baseline'],'ordinary ancestry cannot authorize maintenance recovery')
+            expected_schema=ancestry['current']
         require(int(current_schema)==expected_schema,'database schema differs from withdrawal and verified provisioned targets')
         unit='mbox-maintenance-guard-'+path.parent.name+'.service'
         state=self.run(['systemctl','show',unit,'--property=MainPID','--property=ActiveState','--property=UnitFileState'])
@@ -599,14 +627,30 @@ class Host:
         ingress=self.optional_container('mbox-maintenance-ingress-'+path.parent.name[-12:])
         require(ingress is None or (not ingress['State']['Running'] and ingress['HostConfig']['RestartPolicy']['Name']=='no'),'withdrawn ingress may restart')
         if record: self.save('maintenance-withdrawal-'+path.parent.name+'.json',{'verified':True,**entry})
-    def verify_completed_withdrawals(self):
+    def verify_completed_withdrawals(self,ordinary_release=None):
         # Ordinary releases may retain a withdrawal only with the completed
-        # plan that validated it and the unchanged live schema. Read-only: never
+        # plan that validated it and an exactly verified migration ancestry. Read-only: never
         # append a journal, rewrite a receipt, fence a writer or recover a target.
         current=(self.root/'current').resolve()
         require(current.parent==(self.root/'releases').resolve(),'current release path is invalid')
         current_manifest=json.loads(protected(current/'release-manifest.json').read_text())
-        require(current_manifest['migration']==self.manifest['migration'],'current schema differs from completed maintenance')
+        self.ordinary_schema_evidence=None
+        current_schema=self.schema
+        if ordinary_release is None:
+            require(current_manifest['migration']==self.manifest['migration'],'current schema differs from completed maintenance')
+        else:
+            target=Path(ordinary_release)
+            require(not target.is_symlink() and target.resolve().parent==(self.root/'releases').resolve(),'ordinary release path is invalid')
+            candidate=json.loads(protected(target/'release-manifest.json').read_text())
+            require(re.fullmatch('[0-9a-f]{40}',candidate.get('releaseSha','')) and target.name==candidate['releaseSha'][:7],'ordinary release identity mismatch')
+            snapshot=json.loads(self.run(['psql','-XqAt','--set=ON_ERROR_STOP=1','--dbname=service='+self.adminservice],input="""BEGIN READ ONLY;
+SET LOCAL statement_timeout='8s'; SET LOCAL lock_timeout='1s';
+SELECT json_build_object('schemaVersion',schema_version,'schemaFlavor',schema_flavor,
+'applied',(SELECT COALESCE(json_agg(row_to_json(m) ORDER BY version),'[]'::json) FROM
+(SELECT version,filename,checksum FROM mbox.normalized_schema_migrations) m))
+FROM mbox.normalized_schema_metadata WHERE singleton=true;
+ROLLBACK;""",env=self.pg_env))
+            current_schema=verify_ordinary_migration_ancestry(self.manifest,current_manifest,candidate,snapshot)
         records=read_verified_journal(self.directory/'journal.jsonl')
         require(records[-1]['event']=='completed','current maintenance did not complete')
         binding=next(row['data'] for row in reversed(records) if row['event'] in ('bound','forward-target'))
@@ -614,8 +658,10 @@ class Host:
         live=self.inspect('mbox-app')
         require(live['State']['Running'] and live['Image']==current_manifest['platformImageDigest'] and live['Config']['Labels']['org.opencontainers.image.revision']==current_manifest['releaseSha'],'completed maintenance runtime mismatch')
         status,ready=self.request(self.public+'/api/ready')
-        require(status==200 and ready.get('status')=='ready' and ready.get('writeEnabled') is True and ready.get('commitSha')==current_manifest['releaseSha'] and ready.get('releaseImageDigest')==current_manifest['imageDigest'] and str(ready.get('schemaVersion'))==str(self.schema),'completed maintenance readiness mismatch')
+        require(status==200 and ready.get('status')=='ready' and ready.get('writeEnabled') is True and ready.get('commitSha')==current_manifest['releaseSha'] and ready.get('releaseImageDigest')==current_manifest['imageDigest'] and str(ready.get('schemaVersion'))==str(current_schema),'completed maintenance readiness mismatch')
         self.journal=argparse.Namespace(records=records);self.reentry=True
+        if ordinary_release is not None:
+            self.ordinary_schema_evidence={'baseline':self.schema,'current':current_schema}
         verified=[]
         for path in (self.root/'maintenance').glob('*/journal.jsonl'):
             if path.parent==self.directory: continue
@@ -623,7 +669,7 @@ class Host:
             if prior[-1]['event']=='completed' or not any(row['event']=='drain-intent' for row in prior): continue
             self.verify_withdrawn_transition(path,prior,record=False)
             verified.append(path.parent.name)
-        return {'verified':True,'completedTransitionId':self.plan['transitionId'],'withdrawnTransitions':verified,'productionWrites':0}
+        return {'verified':True,'completedTransitionId':self.plan['transitionId'],'withdrawnTransitions':verified,'schemaVersion':current_schema,'productionWrites':0}
     def caddy_sources(self):
         caddy=self.inspect('mbox-caddy')
         mounts=caddy['Mounts']
@@ -1150,12 +1196,13 @@ def inventory(release):
     print(json.dumps(plan,indent=2))
 
 def main():
-    parser=argparse.ArgumentParser(); parser.add_argument('release'); parser.add_argument('tier'); parser.add_argument('public'); parser.add_argument('--hold',action='store_true'); parser.add_argument('--watchdog',action='store_true'); parser.add_argument('--inventory',action='store_true'); parser.add_argument('--verify-completed-withdrawals',action='store_true'); args=parser.parse_args()
+    parser=argparse.ArgumentParser(); parser.add_argument('release'); parser.add_argument('tier'); parser.add_argument('public'); parser.add_argument('--hold',action='store_true'); parser.add_argument('--watchdog',action='store_true'); parser.add_argument('--inventory',action='store_true'); parser.add_argument('--verify-completed-withdrawals',action='store_true'); parser.add_argument('--ordinary-release'); args=parser.parse_args()
+    require(args.ordinary_release is None or args.verify_completed_withdrawals,'ordinary release is only valid for read-only completed verification')
     os.umask(0o077)
     if args.inventory:
         inventory(args.release); return 0
     if args.verify_completed_withdrawals:
-        try: print(json.dumps(Host(args.release,args.tier,args.public).verify_completed_withdrawals())); return 0
+        try: print(json.dumps(Host(args.release,args.tier,args.public).verify_completed_withdrawals(args.ordinary_release))); return 0
         except Exception as error:
             print(str(error) if isinstance(error,Blocked) else type(error).__name__,file=sys.stderr); return 1
     host=None

@@ -750,7 +750,7 @@ export class PostgresWechatIdentityRepository
       ? this.encryptJson(identity.unionId, 'identity-unionid', unionIdHash)
       : null
     await this.transaction(false, async (client) => {
-      await client.query(
+      const saved = await client.query(
         `/* wechat:identity-save */
          INSERT INTO mbox.wechat_identities (
            tenant_id, store_id, external_identity_id, principal_type, principal_id,
@@ -764,7 +764,6 @@ export class PostgresWechatIdentityRepository
          ON CONFLICT (tenant_id, store_id, channel, app_id, openid_sha256)
          DO UPDATE SET
            principal_type = EXCLUDED.principal_type,
-           principal_id = EXCLUDED.principal_id,
            openid_ciphertext = EXCLUDED.openid_ciphertext,
            openid_key_version = EXCLUDED.openid_key_version,
            unionid_sha256 = EXCLUDED.unionid_sha256,
@@ -776,7 +775,9 @@ export class PostgresWechatIdentityRepository
              THEN mbox.wechat_identities.consented_at ELSE EXCLUDED.consented_at END,
            revoked_at = NULL,
            last_authenticated_at = EXCLUDED.last_authenticated_at,
-           updated_at = clock_timestamp()`,
+           updated_at = clock_timestamp()
+         WHERE mbox.wechat_identities.principal_id = EXCLUDED.principal_id
+           AND mbox.wechat_identities.external_identity_id = EXCLUDED.external_identity_id`,
         [
           this.tenantId,
           this.storeId,
@@ -795,6 +796,9 @@ export class PostgresWechatIdentityRepository
           asDate(identity.lastAuthenticatedAt),
         ],
       )
+      // Login refreshes credentials; it cannot reassign an existing identity.
+      // A concurrent first login with another binding must retry its lookup.
+      if (rowCount(saved) !== 1) throw new Error('WeChat identity binding conflict; retry authentication')
     })
   }
 

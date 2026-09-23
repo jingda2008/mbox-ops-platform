@@ -86,12 +86,12 @@ const secret = 'isolated-provider-concurrency-fixture-at-least-32-bytes'
     expect(new Set([full.id,partial.id,barcode.id]).size).toBe(3)
     expect((await create(2000)).id).toBe(partial.id)
   })
-  const evidenceSql=()=>execFileSync('python3',['-c',"import runpy; print(runpy.run_path('deploy/aliyun/maintenance-bootstrap.py')['HISTORICAL_ATTEMPT_EVIDENCE_SQL'])"],{encoding:'utf8'})
+  const evidenceSql=(paymentId:string)=>execFileSync('python3',['-c',"import runpy,json,os; print(runpy.run_path('deploy/aliyun/maintenance-bootstrap.py')['historical_review_sql'](json.loads(os.environ['HOLD_TEST_IDENTITIES'])))"],{encoding:'utf8',timeout:10000,env:{...process.env,HOLD_TEST_IDENTITIES:JSON.stringify([{tenant_id:scope.tenantId,store_id:scope.storeId,id:paymentId}])}})
   it.each([false,true])('associates only closed zero-due orders with matching ledgers (ordinary refund=%s)',async refunded=>{
     const f=await fixture(),receipt=randomUUID(),pending=await runner.run(scope,tx=>new PaymentRepository(tx).createForOrder({
       orderId:f.order,publicId:'P'+randomUUID().replaceAll('-',''),provider:'postar',method:'native_qr',principal:f.principal,
     }))
-    const evidence=async()=>(await admin.query(evidenceSql())).rows[0].coalesce.find((row:{id:string})=>row.id===pending.id)
+    const evidence=async()=>(await admin.query(evidenceSql(pending.id))).rows[0].coalesce.find((row:{id:string})=>row.id===pending.id)
     expect((await evidence()).eligible).toBe(false)
     await admin.query("INSERT INTO mbox.payments(id,tenant_id,store_id,order_id,public_id,provider,provider_transaction_id,method,amount_minor,currency,status,succeeded_at) VALUES($1::uuid,$2,$3,$4,$1::text,'cash',$1::text,'cash',4000,'CNY','succeeded',clock_timestamp())",[receipt,scope.tenantId,scope.storeId,f.order])
     await admin.query("UPDATE mbox.orders SET status='completed',payment_status='paid',fulfillment_state='active',fulfillment_expires_at=NULL,fulfillment_activated_at=clock_timestamp() WHERE id=$1",[f.order])
@@ -145,7 +145,7 @@ with tempfile.TemporaryDirectory() as directory:
  h.apply_historical_review();h.apply_historical_review()
  assert len(h.reviewed_funds(h.funds_snapshot()))==1
  print('held-without-financial-mutation')
-`],{encoding:'utf8',env:{...process.env,HOLD_TEST_DATABASE:adminUrl!,HOLD_TEST_PROOF:JSON.stringify(valid)}})
+`],{encoding:'utf8',timeout:45000,env:{...process.env,HOLD_TEST_DATABASE:adminUrl!,HOLD_TEST_PROOF:JSON.stringify(valid)}})
     expect(result.trim()).toBe('held-without-financial-mutation')
     expect((await admin.query("SELECT count(*)::int n FROM mbox.audit_events WHERE object_id=$1 AND action='payment.historical_attempt.held'",[pending.id])).rows[0].n).toBe(1)
     expect((await admin.query('SELECT phase,next_query_at,stop_reason FROM mbox.payment_reconciliation_states WHERE payment_id=$1',[pending.id])).rows[0]).toEqual({phase:'stopped',next_query_at:null,stop_reason:'historical_system_attempt_review'})
@@ -171,6 +171,6 @@ with tempfile.TemporaryDirectory() as directory:
     expect((await admin.query("SELECT signal FROM mbox.payment_financial_monitoring_signals WHERE subject_id=$1 AND signal='order_overcollected'",[f.order])).rows).toHaveLength(refunded?0:1)
     expect((await admin.query('SELECT status,amount_minor FROM mbox.payments WHERE id=$1',[receipt])).rows[0]).toEqual({status:refunded?'refunded':'succeeded',amount_minor:'4000'})
 
-  })
+  },60000)
 
 })

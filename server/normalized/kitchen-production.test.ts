@@ -10,6 +10,7 @@ import {OrderRepository} from './order-repository.js'
 import {ItemQuantityRepository} from './item-quantity-repository.js'
 import {ItemQuantityFulfillmentRepository} from './item-quantity-fulfillment-repository.js'
 import {FulfillmentQueryService} from './fulfillment-query-service.js'
+import {readKitchenSources} from './kitchen-production-query.js'
 import {kitchenProductionApiPlugin} from './kitchen-production-api.js'
 import {kitchenCompatibilityKey,type KitchenBoardData,type KitchenCommand} from '../../src/shared/kitchen-production.js'
 
@@ -161,4 +162,27 @@ integration('kitchen production real transaction boundary',()=>{
     await pool.query('UPDATE mbox.staff_sessions SET revoked_at=clock_timestamp() WHERE id=$1',[staffSessionId])
     expect((await command(body,key)).statusCode).toBe(403)
   })
+  it('bounds kitchen source lookups for a 120-order burst under RLS and preserves station/scope isolation',async()=>{
+    const rows=[]
+    for(let index=0;index<120;index++)rows.push(await item(`burst-${index}`))
+    const expected=new Set(rows.map(row=>row.taskId))
+    await runtime.run(scope,async tx=>{
+      await tx.query("SET LOCAL statement_timeout='5s'")
+      let sql='',values:readonly unknown[]=[]
+      await readKitchenSources({scope,query:async(text,args)=>{sql=text;values=args??[];return {rows:[],rowCount:0}}},employeeId,businessDate)
+      const result=await tx.query<{"QUERY PLAN":Array<{Plan:Record<string,unknown>}>}>(`EXPLAIN (ANALYZE,FORMAT JSON) ${sql}`,values)
+      const scans:Array<Record<string,unknown>>=[]
+      const visit=(node:Record<string,unknown>)=>{if(node['Relation Name']==='kds_tasks')scans.push(node);for(const child of (node.Plans??[]) as Array<Record<string,unknown>>)visit(child)}
+      visit(result.rows[0]!['QUERY PLAN'][0]!.Plan)
+      // The incident rescanned tasks 864,000 times for 120 orders. Reject that work amplification.
+      expect(scans.length).toBeGreaterThan(0)
+      expect(scans.every(scan=>Number(scan['Actual Loops'])<=1)).toBe(true)
+      const sources=(await readKitchenSources(tx,employeeId,businessDate)).filter(row=>expected.has(row.taskId))
+      expect(sources).toHaveLength(120)
+      expect(sources.every(row=>row.eligible&&row.unmade===5&&row.canPrepare)).toBe(true)
+      expect(await readKitchenSources(tx,employeeId,businessDate,'bar')).toEqual([])
+    },{readOnly:true})
+    expect(await runtime.run({...scope,storeId:randomUUID()},tx=>readKitchenSources(tx,employeeId,businessDate),{readOnly:true})).toEqual([])
+  },30000)
+
 })

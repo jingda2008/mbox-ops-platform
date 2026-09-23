@@ -1,5 +1,5 @@
 import pathlib,subprocess,json,os,time,shutil
-P=pathlib.Path;root=P('/opt/mbox');state=json.loads((root/'lab-state.json').read_text());release=P(state['oldRelease']);image=state['oldImage'];sha='5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe'
+P=pathlib.Path;root=P('/opt/mbox');state=json.loads((root/'lab-state.json').read_text());release=P(state['oldRelease']);image=state['oldImage'];sha='c8d989f21757f2da8211a9852eac87f127bfcd5f'
 def run(args,input=None):
  r=subprocess.run([str(x) for x in args],input=input,text=True,capture_output=True)
  if r.returncode:raise RuntimeError('lab command failed '+str(args[0])+': '+r.stderr[-2000:])

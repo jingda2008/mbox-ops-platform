@@ -1,8 +1,10 @@
-# rc.219 final artifact maintenance rehearsal
+# rc.222 full finance and three-screen maintenance rehearsal
 
 This branch-only workflow runs on a disposable GitHub-hosted x86_64 runner with synthetic data and generated local secrets. No host socket or arbitrary directory is mounted into the nested LAB. Its external network is disabled and PostgreSQL shares only that isolated namespace. Cleanup removes the exact created container IDs.
 
-Candidate normal entry 35590979705 passed on reviewed 5cd9f2993e845a2049484a5e1eab6d5b67718d26. This revision runs both normal maintenance and backup-readback failure, same-SHA reentry, post-financial-fact failure, then different-SHA forward recovery. The initial image is built from that reviewed commit; the final image is the actual official rc.219 artifact at merge 34360ceb974e9d15475ed9523b2e5b4c2f43bbbd. The source is the official rc.216 image. Candidate and final SHAs are distinct and their source trees identical.
+This revision runs normal maintenance, backup-readback failure, same-SHA reentry, post-financial-fact failure, and different-SHA forward recovery. The initial image uses the fixed reviewed candidate; the final image is the official rc.222 artifact at its merged SHA. The source is the official rc.221 image at schema224. Both target sources include schema242 and the complete finance and three-screen implementation. Fixed identities are recorded in run-runner.py and run-inside.py.
+
+The PostgreSQL clients run in separate read-only containers with only the /opt/mbox and synthetic LAB configuration mounts. Their /tmp is separate from the host, matching the production failure. Service password entries match exact database names; no wildcard entry masks the random restore-database credential requirement. Runtime enables quantity after-sales, kitchen batches and the three-screen workflow.
 
 Formal deploy/activate/maintenance/backup/restore scripts remain byte-identical to the target source. The plan uses the exact target controller inventory helper. Synthetic object-store adapters exercise copy/readback but are not real OSS/RAM evidence. A signed synthetic delayed callback, six nonempty immutable financial fact tables, actual restricted API/worker LOGINs, retired-login/restart fences and actual staff/closure definer ownership are verified. Positive seed cases reuse existing tests; their historical input is synthetic repository composition, not old-binary history proof.
 

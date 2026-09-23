@@ -17,10 +17,10 @@ query="CREATE ROLE lab_old LOGIN CREATEDB CREATEROLE BYPASSRLS REPLICATION PASSW
 run(['psql','-h','127.0.0.1','-U','lab_admin','-d','postgres','-v','ON_ERROR_STOP=1'],query)
 service='';passfile=''
 for name,db,user,password in [('application','lab_business','lab_runtime',pw['runtime']),('migration','lab_business','lab_admin',admin),('cluster','postgres','lab_admin',admin),('backup','lab_business','lab_backup',pw['backup'])]:
- service+='[%s]\nhost=%s\nport=5432\nsslmode=disable\ndbname=%s\nuser=%s\n'%(name,gateway,db,user);passfile+='%s:5432:*:%s:%s\n'%(gateway,user,password)
+ service+='[%s]\nhost=%s\nport=5432\nsslmode=disable\ndbname=%s\nuser=%s\n'%(name,gateway,db,user);passfile+='%s:5432:%s:%s:%s\n'%(gateway,db,user,password)
 private(secret/'pg_service.conf',service);private(secret/'pgpass',passfile)
 private(secret/'database-maintenance.env','APPLICATION_DATABASE_SERVICE=application\nBACKUP_DATABASE_SERVICE=backup\nADMIN_DATABASE_SERVICE=migration\nPGSERVICEFILE=/opt/mbox/secrets/pg_service.conf\nPGPASSFILE=/opt/mbox/secrets/pgpass\n')
-oldsha='5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe';oldrelease=root/'releases'/oldsha[:7];oldrelease.mkdir(parents=True,exist_ok=True)
+oldsha='c8d989f21757f2da8211a9852eac87f127bfcd5f';oldrelease=root/'releases'/oldsha[:7];oldrelease.mkdir(parents=True,exist_ok=True)
 adapter=oldrelease/'worker-adapters';adapter.mkdir()
 adapter.joinpath('local.mjs').write_text("export function createNormalizedWorkerAdapters(){const deny=async()=>{throw new Error('LAB external delivery forbidden')};return {capabilities:['outbox.deliver','notification.deliver','print.deliver','sop.execute','payment.create.postar','refund.execute.postar'],preflight:async()=>{},outbox:async()=>{},notification:deny,print:{print:deny},sop:{execute:deny}}}\n")
 for p in adapter.iterdir():os.chmod(p,0o644)
@@ -36,8 +36,9 @@ env={'NODE_ENV':'production','PORT':'8787','HOST':'0.0.0.0','MBOX_STATIC_DIR':'/
 for kind,user in [('old','lab_old'),('runtime','lab_runtime')]:
  values={**env,'DATABASE_URL':'postgresql://'+user+':'+pw[kind]+'@'+gateway+':5432/lab_business'}
  if kind=='old':values.update({'APP_COMMIT_SHA':oldsha,'MBOX_RELEASE_SHA':oldsha})
+ else:values.update({'MBOX_QUANTITY_AFTER_SALES_ENABLED':'true','MBOX_KITCHEN_BATCH_BOARD_ENABLED':'true','MBOX_THREE_SCREEN_WORKFLOW_ENABLED':'true'})
  private(secret/('old.env' if kind=='old' else 'maintenance-runtime.env'),''.join(k+'='+v+'\n' for k,v in values.items()))
-(root/'lab-state.json').write_text(json.dumps({'gateway':gateway,'scope':{'tenantId':tenant,'storeId':store},'oldRelease':str(oldrelease),'oldImage':'audit-maintenance-source-live:5b9d929'}))
+(root/'lab-state.json').write_text(json.dumps({'gateway':gateway,'scope':{'tenantId':tenant,'storeId':store},'oldRelease':str(oldrelease),'oldImage':'audit-maintenance-source-live:c8d989f'}))
 # Real SSH to this isolated namespace, no external target and no password auth.
 P('/root/.ssh').mkdir(mode=0o700,exist_ok=True);run(['ssh-keygen','-q','-t','ed25519','-N','','-f','/root/.ssh/lab_release'])
 private('/root/.ssh/authorized_keys',P('/root/.ssh/lab_release.pub').read_text())

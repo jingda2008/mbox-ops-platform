@@ -1,12 +1,12 @@
-name: rc220-final-native-maintenance-rehearsal
+name: rc222-final-native-maintenance-rehearsal
 on:
   push:
-    branches: [audit/rc217-maintenance-lab]
+    branches: [audit/full-release-native-20260923]
 permissions:
   contents: read
   actions: read
 concurrency:
-  group: rc220-final-native-maintenance-rehearsal
+  group: rc222-final-native-maintenance-rehearsal
   cancel-in-progress: false
 jobs:
   isolated-maintenance:
@@ -25,11 +25,11 @@ jobs:
         run: |
           python3 scripts/test-support/maintenance-lab/parameterized/test-parameters.py
           python3 scripts/test-support/maintenance-lab/parameterized/v240/test-financial-240.py
-      - name: Wait for exact rc220 official release
+      - name: Wait for exact rc222 official release
         timeout-minutes: 25
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh run watch 35605753119 --exit-status --interval 30
+        run: gh run watch 35820397085 --exit-status --interval 30
       - name: Run disposable native x86_64 maintenance scenarios
         env:
           GH_TOKEN: ${{ github.token }}
@@ -41,7 +41,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always() && steps.sensitive.outcome == 'success'
         with:
-          name: rc220-final-native-maintenance-${{ github.run_id }}
+          name: rc222-final-native-maintenance-${{ github.run_id }}
           path: artifacts/maintenance-native
           if-no-files-found: error
           retention-days: 7

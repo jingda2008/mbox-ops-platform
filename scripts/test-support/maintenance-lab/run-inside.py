@@ -6,7 +6,7 @@ assert os.uname().machine=='x86_64' and Path('/.dockerenv').exists()
 assert socket.gethostname().startswith('mbox-maint-lab-')
 assert not any(row.split()[1]=='00000000' for row in Path('/proc/net/route').read_text().splitlines()[1:])
 scenario=sys.argv[1];assert scenario in ('success','forward')
-constants=json.loads((root/'images.json').read_text());initial='da0c2498931b16c1916af1756e3b0f79e801660e';final='ddb9a71b5913d89c510bd3faf07f328acc4946ed'
+constants=json.loads((root/'images.json').read_text());initial='f49f2b4a0b6ff2e329a5302a8e595077a33a9bce';final='198b96ccd337cbfdee19649c1c9a2e3776e14ba7'
 phase='setup';entries=[]
 def run(args,label,timeout=300,success=True,env=None):
  with (logs/(label+'.log')).open('w') as f:
@@ -16,15 +16,16 @@ def run(args,label,timeout=300,success=True,env=None):
 run(['python3',fixture/'setup-host.py'],'setup')
 run(['python3',fixture/'start-source.py'],'old-source')
 run(['python3',fixture/'seed-inflight.py'],'inflight')
+run(['bash',fixture/'install-container-clients.sh'],'container-client-wrapper')
 # Verifier uses loopback; application containers retain the separate bridge route.
 service=Path('/opt/mbox/secrets/pg_service.conf').read_text();gateway=json.loads(Path('/opt/mbox/lab-state.json').read_text())['gateway']
 (root/'pg_service.conf').write_text(service.replace('host='+gateway,'host=127.0.0.1'))
 (root/'pgpass').write_text(Path('/opt/mbox/secrets/pgpass').read_text().replace(gateway+':','127.0.0.1:'));os.chmod(root/'pgpass',0o600)
 transition='local-entry-20260921-a';directory=Path('/opt/mbox/maintenance')/transition
-marker={'labId':'rc220-'+scenario,'controllerHostname':socket.gethostname(),'isolatedNestedDocker':True,'externalNetwork':False};(root/'isolated-lab.json').write_text(json.dumps(marker))
+marker={'labId':'rc222-'+scenario,'controllerHostname':socket.gethostname(),'isolatedNestedDocker':True,'externalNetwork':False};(root/'isolated-lab.json').write_text(json.dumps(marker))
 def prepare(sha):
  image=constants[sha];c=json.loads((fixture/'parameterized/config.template.json').read_text())
- c.update(version='1.0.0-rc.220',labId=marker['labId'],controllerHostname=marker['controllerHostname'],targetSha=sha,sourceSha='5b9d929499b1d8cb0eb3a0c0668604e9a398f1fe',backupOriginSha=initial if scenario=='forward' else final,imageTag=image['tag'],imageDigest=image['digest'],platformImageDigest=image['config'],platform='linux/amd64',schema=242,sourceDirectory=str(root/('source-'+sha[:7])),bundleDirectory=str(root/('bundle-'+sha[:7])),sourceReleaseDirectory='/opt/mbox/releases/5b9d929',imageArchive=str(root/image['archive']),sourceShaFile=str(root/('sha-'+sha[:7])),formalEntryScript=str(root/'formal-entry.sh'),sshKeyFile='/root/.ssh/lab_release',transitionId=transition,labCiRunId='9000000001',callbackBodyFile='/root/lab-callback-body.json')
+ c.update(version='1.0.0-rc.222',labId=marker['labId'],controllerHostname=marker['controllerHostname'],targetSha=sha,sourceSha='c8d989f21757f2da8211a9852eac87f127bfcd5f',backupOriginSha=initial if scenario=='forward' else final,imageTag=image['tag'],imageDigest=image['digest'],platformImageDigest=image['config'],platform='linux/amd64',schema=242,sourceDirectory=str(root/('source-'+sha[:7])),bundleDirectory=str(root/('bundle-'+sha[:7])),sourceReleaseDirectory='/opt/mbox/releases/c8d989f',imageArchive=str(root/image['archive']),sourceShaFile=str(root/('sha-'+sha[:7])),formalEntryScript=str(root/'formal-entry.sh'),sshKeyFile='/root/.ssh/lab_release',transitionId=transition,labCiRunId='9000000001',callbackBodyFile='/root/lab-callback-body.json')
  (root/('sha-'+sha[:7])).write_text(sha+'\n');(root/'active-config.json').write_text(json.dumps(c));run(['python3',fixture/'parameterized/prepare-bundle-parameterized.py','--config',root/'active-config.json','--execute-lab'],'prepare-'+sha[:7]);
  # Reproduce a non-root publisher and a previously copied wrong-owner plan.
  # Only disposable LAB paths are changed; formal scripts remain unmodified.

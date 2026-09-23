@@ -110,7 +110,7 @@ class FakePostgres implements PostgresPool, PostgresPoolClient {
         revoked_at: null,
       })
       if (!existing) this.identities.push(identity)
-      return result() as PostgresQueryResult<Row>
+      return result([], 1) as PostgresQueryResult<Row>
     }
     if (sql.includes('wechat:identity-by-openid')) {
       const row = this.identities.find((candidate) => candidate.openid_sha256 === values[3])

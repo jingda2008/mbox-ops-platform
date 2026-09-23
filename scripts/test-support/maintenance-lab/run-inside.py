@@ -22,7 +22,7 @@ service=Path('/opt/mbox/secrets/pg_service.conf').read_text();gateway=json.loads
 (root/'pg_service.conf').write_text(service.replace('host='+gateway,'host=127.0.0.1'))
 (root/'pgpass').write_text(Path('/opt/mbox/secrets/pgpass').read_text().replace(gateway+':','127.0.0.1:'));os.chmod(root/'pgpass',0o600)
 transition='local-entry-20260921-a';directory=Path('/opt/mbox/maintenance')/transition
-marker={'labId':'rc223-'+('candidate-' if identities['candidateOnly'] else '')+scenario,'controllerHostname':socket.gethostname(),'isolatedNestedDocker':True,'externalNetwork':False};(root/'isolated-lab.json').write_text(json.dumps(marker))
+marker={'labId':'rc224-'+('candidate-' if identities['candidateOnly'] else '')+scenario,'controllerHostname':socket.gethostname(),'isolatedNestedDocker':True,'externalNetwork':False};(root/'isolated-lab.json').write_text(json.dumps(marker))
 def prepare(sha):
  image=constants[sha];c=json.loads((fixture/'parameterized/config.template.json').read_text())
  c.update(version=identities['version'],labId=marker['labId'],controllerHostname=marker['controllerHostname'],targetSha=sha,sourceSha='c8d989f21757f2da8211a9852eac87f127bfcd5f',backupOriginSha=initial if scenario=='forward' else final,imageTag=image['tag'],imageDigest=image['digest'],platformImageDigest=image['config'],platform='linux/amd64',schema=242,sourceDirectory=str(root/('source-'+sha[:7])),bundleDirectory=str(root/('bundle-'+sha[:7])),sourceReleaseDirectory='/opt/mbox/releases/c8d989f',imageArchive=str(root/image['archive']),sourceShaFile=str(root/('sha-'+sha[:7])),formalEntryScript=str(root/'formal-entry.sh'),sshKeyFile='/root/.ssh/lab_release',transitionId=transition,labCiRunId='9000000001',callbackBodyFile='/root/lab-callback-body.json')
@@ -103,6 +103,7 @@ assert closure['ownerSuper'] or closure['ownerBypassRls']
 assert [value.replace(' ','') for value in closure['searchPath']]==['search_path=pg_catalog,mbox']
 result['closureGuardOwner']=closure
 result['limits'].append('LAB migration login is its local PostgreSQL administrator; RDS provider-role authority needs separate production verification')
+result['previousUnmigratedWithdrawalRetained']=True
 result['candidateOnly']=identities['candidateOnly'];result['officialReleaseImageUsed']=not identities['candidateOnly'];result['formalEntries']=entries;result['faultEvents']=[json.loads(x) for x in (root/'fault-events.jsonl').read_text().splitlines()];result['scenario']=scenario;result['formalScriptsUnmodified']=True
 (root/'report.json').write_text(json.dumps(result,indent=2)+'\n')
 print(json.dumps({'scenario':scenario,'verified':True,'formalEntries':entries,'schema':242}))

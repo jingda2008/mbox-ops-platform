@@ -79,6 +79,26 @@ def prepare(c):
             'workerAdapterDirectory': str(adapter), 'workerAdapterTreeSha256': hashlib.sha256(module.canonical(tree)).hexdigest(),
             'systemdUnits': c['systemdUnits'], 'systemdInventorySha256': module.systemd_inventory_sha256(units),
             'callbackUrls': c['callbackUrls'], 'controllerPython': os.sys.executable, 'clusterAdminService': c['clusterAdminService']}
+    # Model the exact production history: a previous unmigrated withdrawal
+    # remains on disk while this newer transition migrates and later re-enters.
+    withdrawn = root / 'maintenance' / 'lab-withdrawn-20260921'
+    receipt_path = withdrawn / 'operator-cancelled-unmigrated.json'
+    if not receipt_path.exists():
+        binding = {'sourceLive': plan['sourceLive'], 'forwardRecoveryTarget': {'releaseSha': 'f'*40, 'schema': 224}}
+        history = module.Journal(withdrawn, binding)
+        history.append('drain-intent'); history.append('maintenance-required')
+        module.atomic(receipt_path, {'at': module.time.time(), 'status': 'original-production-restored',
+            'databaseReplaced': False, 'sourceEvidenceUnchangedBeforeRestart': True,
+            'journalAndEpochPreserved': True, 'maintenanceGuardDisabled': True, 'maintenanceIngressStopped': True,
+            'callbackQueue': {'pending': 0, 'active': 0, 'replaying': False},
+            'sourceReleaseSha': c['sourceSha'], 'deploymentCancelled': 'f'*40, 'schemaVersion': 224})
+        unit = P('/etc/systemd/system/mbox-maintenance-guard-lab-withdrawn-20260921.service')
+        unit.write_text('[Unit]\nDescription=Inactive synthetic old withdrawal guard\n[Service]\nType=oneshot\nExecStart=/bin/true\n[Install]\nWantedBy=multi-user.target\n')
+        run(['systemctl', 'daemon-reload'])
+        run(['systemctl', 'disable', unit.name])
+    plan['withdrawnTransitions'] = [{'transitionId': withdrawn.name,
+        'journalSha256': digest(withdrawn / 'journal.jsonl'), 'receiptSha256': digest(receipt_path)}]
+    plan['systemdInventorySha256'] = module.systemd_inventory_sha256(run(['systemctl', 'list-unit-files', '--no-legend', '--no-pager']))
     journal = root / 'maintenance' / c['transitionId'] / 'journal.jsonl'
     if journal.exists():
         plan['recoveryFromJournalHash'] = json.loads(journal.read_text().splitlines()[-1])['hash']

@@ -11,7 +11,7 @@ class PersistentTests(unittest.TestCase):
    receipt={'at':m.time.time()+1,'status':'original-production-restored','databaseReplaced':False,'sourceEvidenceUnchangedBeforeRestart':True,'journalAndEpochPreserved':True,'maintenanceGuardDisabled':True,'maintenanceIngressStopped':True,'callbackQueue':{'pending':0,'active':0,'replaying':False},'sourceReleaseSha':'old','deploymentCancelled':'cancelled','schemaVersion':224}
    receipt_path=directory/'operator-cancelled-unmigrated.json';m.atomic(receipt_path,receipt)
    entry={'transitionId':directory.name,'journalSha256':m.sha(journal.path),'receiptSha256':m.sha(receipt_path)}
-   h=object.__new__(m.Host);h.plan={'withdrawnTransitions':[entry],'sourceLive':{'releaseDirectory':str(release)}};h.adminservice='admin'
+   h=object.__new__(m.Host);h.plan={'withdrawnTransitions':[entry],'sourceLive':{'releaseDirectory':str(release)}};h.adminservice='admin';h.reentry=False
    h.sql=lambda *a:'224';h.optional_container=lambda _: {'State':{'Running':False},'HostConfig':{'RestartPolicy':{'Name':'no'}}}
    h.run=lambda *a:'MainPID=0\nActiveState=inactive\nUnitFileState=disabled';h.save=lambda *a:None
    original=m.protected;m.protected=lambda p:pathlib.Path(p)
@@ -21,6 +21,28 @@ class PersistentTests(unittest.TestCase):
     with self.assertRaises(m.Blocked):h.verify_withdrawn_transition(journal.path,journal.records)
     h.plan['withdrawnTransitions']=[entry];h.sql=lambda *a:'225'
     with self.assertRaises(m.Blocked):h.verify_withdrawn_transition(journal.path,journal.records)
+    # The old withdrawal remains schema224; this transition has genuinely
+    # provisioned242. Re-entry and a later target may retain that exact state.
+    h.reentry=True;current_binding={'sourceLive':h.plan['sourceLive'],'forwardRecoveryTarget':{'releaseSha':'new','schema':242}}
+    h.journal=m.Journal(root/'current',current_binding);h.journal.append('drain-intent')
+    h.sql=lambda *a:'242'
+    with self.assertRaises(m.Blocked):h.verify_withdrawn_transition(journal.path,journal.records)
+    h.journal.append('schema-provisioned')
+    h.verify_withdrawn_transition(journal.path,journal.records)
+    next_binding={**current_binding,'forwardRecoveryTarget':{'releaseSha':'next','schema':243}}
+    h.journal=m.Journal(root/'current',next_binding,h.journal.records[-1]['hash'])
+    h.verify_withdrawn_transition(journal.path,journal.records)
+    h.sql=lambda *a:'243'
+    with self.assertRaises(m.Blocked):h.verify_withdrawn_transition(journal.path,journal.records)
+    h.sql=lambda *a:'224'
+    with self.assertRaises(m.Blocked):h.verify_withdrawn_transition(journal.path,journal.records)
+    h.sql=lambda *a:'241'
+    with self.assertRaises(m.Blocked):h.verify_withdrawn_transition(journal.path,journal.records)
+    h.sql=lambda *a:'242';h.reentry=False
+    with self.assertRaises(m.Blocked):h.verify_withdrawn_transition(journal.path,journal.records)
+    h.reentry=True;h.plan['sourceLive']={'releaseDirectory':str(release),'releaseSha':'wrong'}
+    with self.assertRaises(m.Blocked):h.verify_withdrawn_transition(journal.path,journal.records)
+    h.plan['sourceLive']=current_binding['sourceLive'];h.reentry=False
     h.sql=lambda *a:'224';h.run=lambda *a:'MainPID=23\nActiveState=active\nUnitFileState=disabled'
     with self.assertRaises(m.Blocked):h.verify_withdrawn_transition(journal.path,journal.records)
     h.run=lambda *a:'MainPID=0\nActiveState=inactive\nUnitFileState=disabled'

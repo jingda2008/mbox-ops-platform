@@ -476,7 +476,19 @@ class Host:
         source_manifest=json.loads((Path(self.plan['sourceLive']['releaseDirectory'])/'release-manifest.json').read_text())
         require(int(source_manifest['migration']['count'])==receipt.get('schemaVersion'),'source schema changed since unmigrated withdrawal')
         current_schema=self.sql('SELECT schema_version FROM mbox.normalized_schema_metadata WHERE singleton=true',self.adminservice)
-        require(int(current_schema)==receipt['schemaVersion'],'database schema differs from withdrawal')
+        expected_schema=receipt['schemaVersion']
+        if self.reentry:
+            # The withdrawal describes the old source, not a later completed
+            # migration in this hash-verified transition. Only an actual
+            # schema-provisioned event admits that event's bound target schema.
+            active=None
+            for event in self.journal.records:
+                if event['event'] in ('bound','forward-target'):
+                    active=event['data']
+                elif event['event']=='schema-provisioned':
+                    require(active and active['sourceLive']==self.plan['sourceLive'],'provisioned schema source binding changed')
+                    expected_schema=int(active['forwardRecoveryTarget']['schema'])
+        require(int(current_schema)==expected_schema,'database schema differs from withdrawal and verified provisioned targets')
         unit='mbox-maintenance-guard-'+path.parent.name+'.service'
         state=self.run(['systemctl','show',unit,'--property=MainPID','--property=ActiveState','--property=UnitFileState'])
         values=dict(line.split('=',1) for line in state.splitlines() if '=' in line)

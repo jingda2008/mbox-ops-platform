@@ -110,9 +110,24 @@ SQL
         psql -X --set=ON_ERROR_STOP=1 --dbname="${connection}" \
           --set=extension_name="${extension_name}" --set=extension_schema="${extension_schema}" \
           --set=extension_version="${extension_version}" --set=extension_owner="${extension_owner}" >/dev/null <<'SQL' || return 1
+BEGIN;
+SELECT current_database() AS restore_database,
+  has_database_privilege(:'extension_owner',current_database(),'CREATE') AS restore_owner_had_create \gset
+-- The disposable database initially belongs to the maintenance administrator.
+-- A trusted extension still needs database CREATE for its original owner.
+-- Grant and revoke inside this transaction; no other session sees the grant.
+\if :restore_owner_had_create
+\else
+GRANT CREATE ON DATABASE :"restore_database" TO :"extension_owner";
+\endif
 SET ROLE :"extension_owner";
 CREATE EXTENSION :"extension_name" WITH SCHEMA :"extension_schema" VERSION :'extension_version';
 RESET ROLE;
+\if :restore_owner_had_create
+\else
+REVOKE CREATE ON DATABASE :"restore_database" FROM :"extension_owner";
+\endif
+COMMIT;
 SQL
         ;;
       *) echo 'extension owner/version/schema cannot be restored exactly' >&2; return 1 ;;

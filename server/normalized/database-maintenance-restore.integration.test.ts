@@ -45,6 +45,7 @@ integration('contract database maintenance recovery', () => {
     const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
     const databaseName = `mbox_restore_${suffix}`
     const backupRole = `mbox_backup_${suffix}`
+    const extensionRole = `mbox_extension_${suffix}`
     const root = mkdtempSync(join(tmpdir(), 'mbox-db-restore-'))
     const bin = join(root, 'bin')
     const wrapper = resolve('scripts/test-support/docker-postgres-client.sh')
@@ -97,13 +98,22 @@ integration('contract database maintenance recovery', () => {
     await admin.connect()
     try {
       await admin.query(`CREATE DATABASE ${quoteIdentifier(databaseName)} TEMPLATE template0`)
+      await admin.query(`CREATE ROLE ${quoteIdentifier(extensionRole)} NOLOGIN`)
       await admin.query(`CREATE ROLE ${quoteIdentifier(backupRole)} LOGIN PASSWORD 'backup-test' BYPASSRLS`)
       await admin.query(`GRANT pg_monitor,pg_read_all_data TO ${quoteIdentifier(backupRole)}`)
       await admin.query(`GRANT CONNECT ON DATABASE ${quoteIdentifier(databaseName)} TO ${quoteIdentifier(backupRole)}`)
       const client = new Client({ connectionString: target.toString() })
       await client.connect()
       const migrations = (await loadNormalizedMigrations()).filter((migration) => migration.version <= '095')
-      await client.query('CREATE SCHEMA mbox')
+      await client.query(`CREATE SCHEMA mbox AUTHORIZATION ${quoteIdentifier(extensionRole)}`)
+      // The archived extension owner is not the restoring administrator and
+      // no longer has database CREATE. Restoring must preserve that boundary.
+      await client.query(`GRANT CREATE ON DATABASE ${quoteIdentifier(databaseName)} TO ${quoteIdentifier(extensionRole)}`)
+      await client.query(`SET ROLE ${quoteIdentifier(extensionRole)}`)
+      await client.query('CREATE EXTENSION pgcrypto WITH SCHEMA mbox')
+      await client.query('CREATE EXTENSION btree_gist WITH SCHEMA mbox')
+      await client.query('RESET ROLE')
+      await client.query(`REVOKE CREATE ON DATABASE ${quoteIdentifier(databaseName)} FROM ${quoteIdentifier(extensionRole)}`)
       // Exercise extensions in an archive-owned schema even when the database
       // administrator's name differs from mbox.
       await client.query('SET search_path=mbox,public')
@@ -146,7 +156,8 @@ integration('contract database maintenance recovery', () => {
         env: { ...environment, DATABASE_SERVICE: backupService, MBOX_EXPECTED_RESTORE_DATABASE: databaseName },
       })
       expect(JSON.parse(readFileSync(evidence, 'utf8')).extensions).toEqual(expect.arrayContaining([
-        expect.objectContaining({ name: 'pgcrypto', schema: 'mbox' }),
+        expect.objectContaining({ name: 'pgcrypto', schema: 'mbox', owner: extensionRole }),
+        expect.objectContaining({ name: 'btree_gist', schema: 'mbox', owner: extensionRole }),
       ]))
       const backup = runChecked(resolve('deploy/aliyun/backup-postgres.sh'), [], {
         encoding: 'utf8',
@@ -208,6 +219,12 @@ integration('contract database maintenance recovery', () => {
       })
       const restored = new Client({ connectionString: target.toString() })
       await restored.connect()
+      expect((await restored.query(`SELECT has_database_privilege($1,current_database(),'CREATE') AS allowed`,
+        [extensionRole])).rows[0]?.allowed).toBe(false)
+      expect((await restored.query(`SELECT extname,pg_get_userbyid(extowner) AS owner FROM pg_extension
+        WHERE extname IN ('pgcrypto','btree_gist') ORDER BY extname`)).rows).toEqual([
+        { extname: 'btree_gist', owner: extensionRole }, { extname: 'pgcrypto', owner: extensionRole },
+      ])
       expect((await restored.query(`SELECT schema_version FROM mbox.normalized_schema_metadata
         WHERE singleton=true`)).rows[0]?.schema_version).toBe('095')
       expect((await restored.query(`SELECT to_regclass('mbox.table_customer_movement_events') AS name`))
@@ -334,6 +351,7 @@ integration('contract database maintenance recovery', () => {
         await admin.query(`DROP DATABASE IF EXISTS ${quoteIdentifier(name)}`).catch(() => undefined)
       }
       await admin.query(`DROP ROLE IF EXISTS ${quoteIdentifier(backupRole)}`).catch(() => undefined)
+      await admin.query(`DROP ROLE IF EXISTS ${quoteIdentifier(extensionRole)}`).catch(() => undefined)
       await admin.end()
     }
   }, 180_000)

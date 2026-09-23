@@ -154,7 +154,7 @@ export class WechatLoyaltyNotificationRepository {
           ON customer_identity.tenant_id=wechat_identity.tenant_id
          AND customer_identity.store_id=wechat_identity.store_id
          AND customer_identity.identity_kind='wechat'
-         AND customer_identity.identity_hash=encode(digest('wechat:'||wechat_identity.principal_id,'sha256'),'hex')
+         AND customer_identity.identity_hash=encode(sha256(convert_to('wechat:'||wechat_identity.principal_id,'UTF8')),'hex')
          AND customer_identity.status='active' AND customer_identity.customer_id=membership.customer_id
         WHERE wechat_identity.tenant_id=policy.tenant_id
           AND wechat_identity.store_id=policy.store_id

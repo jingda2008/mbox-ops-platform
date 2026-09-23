@@ -118,7 +118,7 @@ async function claim(transaction: ScopedTransaction, workerId: string, batchSize
             ON customer_identity.tenant_id=identity.tenant_id
            AND customer_identity.store_id=identity.store_id
            AND customer_identity.identity_kind='wechat'
-           AND customer_identity.identity_hash=encode(digest('wechat:'||identity.principal_id,'sha256'),'hex')
+           AND customer_identity.identity_hash=encode(sha256(convert_to('wechat:'||identity.principal_id,'UTF8')),'hex')
            AND customer_identity.status='active'
            AND mbox.canonical_customer_id(
              customer_identity.tenant_id,customer_identity.store_id,customer_identity.customer_id

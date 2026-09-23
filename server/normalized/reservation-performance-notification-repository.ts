@@ -176,7 +176,7 @@ export class ReservationPerformanceNotificationRepository {
          AND customer_identity.store_id=wechat_identity.store_id
          AND customer_identity.identity_kind='wechat'
          AND customer_identity.identity_hash=encode(
-           digest('wechat:'||wechat_identity.principal_id,'sha256'),'hex'
+           sha256(convert_to('wechat:'||wechat_identity.principal_id,'UTF8')),'hex'
          )
          AND customer_identity.status='active'
          AND mbox.canonical_customer_id(

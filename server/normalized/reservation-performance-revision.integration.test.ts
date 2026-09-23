@@ -39,7 +39,7 @@ integration('reservation performance revision PostgreSQL integration', () => {
   beforeAll(async () => {
     await runNormalizedMigrations(databaseUrl!)
     pool = new Pool({ connectionString: databaseUrl, max: 8 })
-    runtime = new Pool({ connectionString: runtimeDatabaseUrl, max: 4 })
+    runtime = new Pool({ connectionString: runtimeDatabaseUrl, max: 4, options: '-c search_path=pg_catalog' })
     await assertRuntimeDatabasePool(runtime, runtimeDatabaseUrl!)
     runner = new ScopedPostgresTransactionRunner(asPool(runtime))
     service = new ReservationPerformanceRevisionService(runner, new NormalizedCommandExecutor(runner))

@@ -172,7 +172,7 @@ async function claim(
             ON customer_identity.tenant_id=identity.tenant_id
            AND customer_identity.store_id=identity.store_id
            AND customer_identity.identity_kind='wechat'
-           AND customer_identity.identity_hash=encode(digest('wechat:'||identity.principal_id,'sha256'),'hex')
+           AND customer_identity.identity_hash=encode(sha256(convert_to('wechat:'||identity.principal_id,'UTF8')),'hex')
            AND customer_identity.status='active'
            AND customer_identity.customer_id=active_auth.customer_id
           WHERE active_auth.tenant_id=job.tenant_id AND active_auth.store_id=job.store_id

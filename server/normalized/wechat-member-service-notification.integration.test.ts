@@ -15,7 +15,7 @@ const scope={tenantId:ids.tenant,storeId:ids.store}
 
 integration('typed WeChat member-service notification delivery',()=>{
   let pool:Pool;let runtime:Pool;let transactions:ScopedPostgresTransactionRunner
-  beforeAll(async()=>{await runNormalizedMigrations(databaseUrl!);pool=new Pool({connectionString:databaseUrl,max:4});runtime=new Pool({connectionString:runtimeDatabaseUrl,max:4});await assertRuntimeDatabasePool(runtime,runtimeDatabaseUrl!);transactions=new ScopedPostgresTransactionRunner(runtime as unknown as PostgresPool);await seed(pool)})
+  beforeAll(async()=>{await runNormalizedMigrations(databaseUrl!);pool=new Pool({connectionString:databaseUrl,max:4});runtime=new Pool({connectionString:runtimeDatabaseUrl,max:4,options:'-c search_path=pg_catalog'});await assertRuntimeDatabasePool(runtime,runtimeDatabaseUrl!);transactions=new ScopedPostgresTransactionRunner(runtime as unknown as PostgresPool);await seed(pool)})
   afterAll(async()=>{await runtime?.end();await pool?.end()})
 
   it('records the exact customer choice, queues only a newly issued benefit, and consumes it once',async()=>{

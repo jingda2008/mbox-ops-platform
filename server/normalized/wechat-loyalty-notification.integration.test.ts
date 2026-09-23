@@ -33,7 +33,7 @@ integration('typed WeChat loyalty notification authorization and delivery', () =
   beforeAll(async () => {
     await runNormalizedMigrations(databaseUrl!)
     pool = new Pool({ connectionString: databaseUrl, max: 4 })
-    runtime = new Pool({ connectionString: runtimeDatabaseUrl, max: 4 })
+    runtime = new Pool({ connectionString: runtimeDatabaseUrl, max: 4, options: '-c search_path=pg_catalog' })
     await assertRuntimeDatabasePool(runtime, runtimeDatabaseUrl!)
     transactions = new ScopedPostgresTransactionRunner(runtime as unknown as PostgresPool)
     await seed(pool)

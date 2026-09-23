@@ -213,7 +213,7 @@ export class ReservationPerformanceRevisionRepository {
         impact_kind
       )
       SELECT reservation.tenant_id,reservation.store_id,
-        'reservation-impact-'||encode(digest($3||':'||reservation.id::text,'sha256'),'hex'),
+        'reservation-impact-'||encode(sha256(convert_to($3||':'||reservation.id::text,'UTF8')),'hex'),
         $4::uuid,reservation.id,reservation.customer_id,
         CASE WHEN reservation.customer_id IS NULL THEN NULL
           ELSE mbox.canonical_customer_id(reservation.tenant_id,reservation.store_id,reservation.customer_id)

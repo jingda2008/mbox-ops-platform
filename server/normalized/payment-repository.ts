@@ -549,6 +549,8 @@ export class PaymentRepository {
       SELECT ${PAYMENT_COLUMNS} FROM mbox.payments p
       WHERE tenant_id=$1 AND store_id=$2 AND provider=$3 AND method=$4
         AND status IN ('created','pending') AND retry_released_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM mbox.audit_events h WHERE h.tenant_id=p.tenant_id AND h.store_id=p.store_id
+          AND h.object_type='payment' AND h.object_id=p.id::text AND h.action='payment.historical_attempt.held')
         AND currency=$5 AND amount_minor=$6
         AND (order_id=ANY($7::uuid[]) OR EXISTS (
           SELECT 1 FROM mbox.order_payment_allocations a

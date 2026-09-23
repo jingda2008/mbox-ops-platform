@@ -98,8 +98,10 @@ const secret = 'isolated-provider-concurrency-fixture-at-least-32-bytes'
     await admin.query("UPDATE mbox.table_sessions SET status='closed',closed_at=clock_timestamp() WHERE id=$1",[f.session])
     expect((await evidence()).eligible).toBe(false)
     await admin.query("INSERT INTO mbox.reconciliation_entries(tenant_id,store_id,payment_id,entry_type,provider,provider_reference,amount_minor,currency,business_date,occurred_at) VALUES($1,$2,$3::uuid,'payment','cash',$3::text,4000,'CNY',$4,clock_timestamp())",[scope.tenantId,scope.storeId,receipt,date])
+    let refundOperator: string | undefined
     if(refunded){
       const requester=randomUUID(),approver=randomUUID(),refund=randomUUID()
+      refundOperator=approver
       for(const id of [requester,approver])await admin.query('INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($1::uuid,$2,$3,$1::text,$1::text)',[id,scope.tenantId,scope.storeId])
       await admin.query("INSERT INTO mbox.refunds(id,tenant_id,store_id,payment_id,order_id,public_id,provider_refund_id,amount_minor,currency,status,reason,requested_by_employee_id,approved_by_employee_id,decision_reason,completed_at,purpose) VALUES($1::uuid,$2,$3,$4,$5,$1::text,$1::text,4000,'CNY','succeeded','原商品普通退款',$6,$7,'已核对原款',clock_timestamp(),'price_adjustment')",[refund,scope.tenantId,scope.storeId,receipt,f.order,requester,approver])
       expect((await evidence()).eligible).toBe(false)
@@ -149,6 +151,10 @@ with tempfile.TemporaryDirectory() as directory:
     expect((await admin.query('SELECT phase,next_query_at,stop_reason FROM mbox.payment_reconciliation_states WHERE payment_id=$1',[pending.id])).rows[0]).toEqual({phase:'stopped',next_query_at:null,stop_reason:'historical_system_attempt_review'})
     await expect(runner.run(scope,tx=>new PaymentProviderActionRepository(tx,secret).claim(pending.id,'qr',new Date(Date.now()+60000).toISOString(),f.principal))).rejects.toThrow('历史重复尝试已停止使用')
     expect((await evidence()).fingerprint).toBe(valid.fingerprint)
+    if(refunded)await expect(runner.run(scope,tx=>new PaymentRepository(tx).createForOrder({orderId:f.order,
+      publicId:'P'+randomUUID().replaceAll('-',''),provider:'postar',method:'native_qr',principal:{type:'employee',employeeId:refundOperator!}})))
+      .rejects.toThrow('重新收款') // A historical hold is never reused to bypass fresh recollection authority.
+
     expect((await admin.query('SELECT status FROM mbox.payments WHERE id=$1',[pending.id])).rows[0].status).toBe('created')
     const callback={scope,actor:{type:'integration' as const,ref:'postar-callback'},businessDate:date,
       idempotencyKey:'late-'+randomUUID(),requestFingerprint:'late-proof-'+randomUUID(),

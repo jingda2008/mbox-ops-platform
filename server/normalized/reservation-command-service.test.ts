@@ -42,7 +42,7 @@ integration('normalized reservation, customer and benefit transactions', () => {
   beforeAll(async () => {
     await runNormalizedMigrations(databaseUrl!)
     nativePool = new Pool({ connectionString: databaseUrl, max: 8 })
-    runtime = new Pool({ connectionString: runtimeDatabaseUrl, max: 16 })
+    runtime = new Pool({ connectionString: runtimeDatabaseUrl, options: '-c search_path=pg_catalog', max: 16 })
     await assertRuntimeDatabasePool(runtime, runtimeDatabaseUrl!)
     commands = new NormalizedCommandExecutor(new ScopedPostgresTransactionRunner(asPool(runtime)))
     reservations = new ReservationCommandService(commands)

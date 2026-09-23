@@ -38,7 +38,7 @@ const runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
   let pool:Pool,runner:ScopedPostgresTransactionRunner,calendarId:string
   const run=<T>(action:(repo:MemberGiftCampaignRepository)=>Promise<T>)=>runner.run(scope,tx=>action(new MemberGiftCampaignRepository(tx)))
   beforeAll(async()=>{
-    await runNormalizedMigrations(url!);pool=new Pool({connectionString:url,max:8});runtime=new Pool({connectionString:runtimeUrl,max:8});await assertRuntimeDatabasePool(runtime,runtimeUrl!);runner=new ScopedPostgresTransactionRunner(runtime as unknown as PostgresPool)
+    await runNormalizedMigrations(url!);pool=new Pool({connectionString:url,max:8});runtime=new Pool({connectionString:runtimeUrl,options:'-c search_path=pg_catalog',max:8});await assertRuntimeDatabasePool(runtime,runtimeUrl!);runner=new ScopedPostgresTransactionRunner(runtime as unknown as PostgresPool)
     await pool.query("INSERT INTO mbox.tenants(id,code,name) VALUES($1,$2,'Gift test')",[tenantId,`gift-${tenantId.slice(0,8)}`])
     await pool.query("INSERT INTO mbox.stores(id,tenant_id,code,name) VALUES($1,$2,'gift-test','Gift test')",[storeId,tenantId])
     for(const [id,code] of [[editor,'EDITOR'],[approver,'APPROVER'],[publisher,'PUBLISHER'],[denied,'DENIED']])await pool.query('INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($1,$2,$3,$4,$4)',[id,tenantId,storeId,code])

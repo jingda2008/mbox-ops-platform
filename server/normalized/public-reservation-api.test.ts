@@ -40,7 +40,7 @@ integration('public reservation API with PostgreSQL', () => {
   beforeAll(async () => {
     await runNormalizedMigrations(databaseUrl!)
     pool = new Pool({ connectionString: databaseUrl, max: 16 })
-    runtime = new Pool({ connectionString: runtimeDatabaseUrl, max: 16 })
+    runtime = new Pool({ connectionString: runtimeDatabaseUrl, options: '-c search_path=pg_catalog', max: 16 })
     await assertRuntimeDatabasePool(runtime, runtimeDatabaseUrl!)
     const transactions = new ScopedPostgresTransactionRunner(asPool(runtime))
     const commands = new NormalizedCommandExecutor(transactions)

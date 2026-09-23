@@ -37,7 +37,7 @@ integration('promotional loyalty PostgreSQL authority',()=>{
   beforeAll(async()=>{
     await runNormalizedMigrations(databaseUrl!)
     pool=new Pool({connectionString:databaseUrl,max:8})
-    runtime=new Pool({connectionString:runtimeDatabaseUrl,max:8})
+    runtime=new Pool({connectionString:runtimeDatabaseUrl,options:'-c search_path=pg_catalog',max:8})
     await assertRuntimeDatabasePool(runtime,runtimeDatabaseUrl!)
     runner=new ScopedPostgresTransactionRunner(runtime as unknown as PostgresPool)
     const commands=new NormalizedCommandExecutor(runner)

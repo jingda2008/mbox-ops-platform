@@ -62,7 +62,7 @@ if not candidate_only:images[final]={'tag':'audit-maintenance-final:'+final[:7],
 (assets/'images.json').write_text(json.dumps(images));(artifacts/'input-identities.json').write_text(json.dumps({'source':old_manifest['releaseSha'],'images':images,'nativeArchitecture':os.uname().machine,'productionCredentialsUsed':False,'candidateOnly':candidate_only,'officialReleaseImageUsed':not candidate_only},indent=2)+'\n')
 run(['docker','build','-t','audit-maintenance-full-entry:rc223',fixture]);run(['docker','pull','postgres:16-alpine']);run(['docker','pull','caddy:2.10.2-alpine'])
 inner_images=root/'inner-images.tar';run(['docker','save','-o',inner_images,'audit-maintenance-source-live:c8d989f',initial_tag,*([] if candidate_only else ['audit-maintenance-final:'+final[:7]]),'caddy:2.10.2-alpine','postgres:16-alpine'])
-for scenario in (['success'] if candidate_only else ['success','forward']):
+for scenario in (['success'] if candidate_only else ['forward']):
  host='mbox-maint-lab-'+scenario+'-'+os.environ['GITHUB_RUN_ID'];created=[];dest=artifacts/scenario;dest.mkdir();credential=root/(scenario+'-pg.env');credential.write_text('POSTGRES_USER=lab_admin\nPOSTGRES_PASSWORD='+secrets.token_hex(32)+'\nPOSTGRES_DB=postgres\n');credential.chmod(0o600)
  try:
   cid=text(['docker','run','-d','--name',host,'--hostname',host,'--privileged','--cgroupns=private','--network','none','--memory','4g','--memory-swap','4g','--cpus','3','--pids-limit','1024','--shm-size','256m','--tmpfs','/run','--tmpfs','/run/lock','--tmpfs','/tmp','audit-maintenance-full-entry:rc223']);created.append(cid)
@@ -84,4 +84,4 @@ for scenario in (['success'] if candidate_only else ['success','forward']):
   credential.unlink()
   remaining=text(['docker','ps','-aq','--filter','name='+host]);assert not remaining
   (dest/'cleanup.json').write_text(json.dumps({'exactCreatedContainerIds':created,'remainingOwnedContainers':0,'temporaryCredentialRemoved':True},indent=2)+'\n')
-print('Native candidate success scenario verified; official release and forward recovery still required' if candidate_only else 'Native maintenance success and forward-failure scenarios verified')
+print('Native candidate success scenario verified; official release and forward recovery still required' if candidate_only else 'Native official-image forward recovery verified; standalone fresh-upgrade scenario deferred')

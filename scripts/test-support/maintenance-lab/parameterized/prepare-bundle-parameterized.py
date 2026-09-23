@@ -102,6 +102,18 @@ def prepare(c):
     journal = root / 'maintenance' / c['transitionId'] / 'journal.jsonl'
     if journal.exists():
         plan['recoveryFromJournalHash'] = json.loads(journal.read_text().splitlines()[-1])['hash']
+    historical=root/'lab-historical-attempts.json'
+    # The first attempts deliberately fail before/after migration. On the final
+    # forward target, bind a fresh proof for the exact original pre-drain IDs.
+    run_ids=json.loads(P('/root/LAB-final/run-identities.json').read_text())
+    if historical.exists() and c['targetSha']==run_ids['finalSha']:
+        h=json.loads(historical.read_text())
+        attempts=[{'tenant_id':h['tenant_id'],'store_id':h['store_id'],'id':h[key]} for key in ('attempt1','attempt2')]
+        query="BEGIN READ ONLY; SET LOCAL row_security=off; SET LOCAL TIME ZONE 'UTC'; SET LOCAL DateStyle='ISO,YMD'; "+module.historical_review_sql(attempts)+" COMMIT;"
+        evidence=json.loads(run(['psql','-XqAt','--dbname=service='+c['migrationService'],'-v','ON_ERROR_STOP=1','-c',query],env={'PGSERVICEFILE':c['pgServiceFile'],'PGPASSFILE':c['pgPassFile']}))
+        require(len(evidence)==2 and all(row['eligible'] for row in evidence),'synthetic historical associations not eligible')
+        plan['historicalPaymentReview']={'reason':'business-confirmed-system-duplicate-settled-orders',
+          'attempts':[{key:row[key] for key in ('tenant_id','store_id','id','fingerprint')} for row in evidence]}
     module.atomic(bundle / 'maintenance-plan.json', plan)
     module.atomic(release / 'maintenance-plan.json', plan)
     env = {'PLAYWRIGHT_BROWSERS_PATH': c['playwrightBrowsers'], 'NODE_EXTRA_CA_CERTS': c['tlsCaFile'],

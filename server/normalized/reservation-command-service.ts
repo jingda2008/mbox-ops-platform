@@ -1,3 +1,4 @@
+import {lockReservationPolicy} from './reservation-policy-lock.js'
 import type {
   AuditActor,
   CommandExecution,
@@ -58,11 +59,11 @@ export class ReservationCommandService {
       const anonymous = input.anonymousCustomer === undefined
         ? null
         : await new CustomerRepository(transaction).createAnonymous(input.anonymousCustomer)
+      await lockReservationPolicy(transaction)
       const policy = await transaction.query<{ policy_version: number; arrival_grace_minutes: number }>(`
         SELECT policy_version, arrival_grace_minutes
         FROM mbox.public_reservation_policies
         WHERE tenant_id=$1::uuid AND store_id=$2::uuid
-        FOR KEY SHARE
       `, [transaction.scope.tenantId, transaction.scope.storeId])
       const policyRow = policy.rows[0]
       if (policyRow === undefined) throw new Error('Reservation policy is not configured')

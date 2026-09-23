@@ -1,3 +1,6 @@
+import {lockReservationPolicy} from './reservation-policy-lock.js'
+import type {ScopedTransaction} from './transaction-runner.js'
+import { assertRuntimeDatabasePool } from './runtime-database-identity.js'
 import { createHash, randomUUID } from 'node:crypto'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { Pool, type PoolClient } from 'pg'
@@ -13,9 +16,11 @@ import {
 } from './transaction-runner.js'
 
 const databaseUrl = process.env.TEST_NORMALIZED_DATABASE_URL
-const integration = databaseUrl ? describe : describe.skip
+const runtimeDatabaseUrl = process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
+const integration = databaseUrl && runtimeDatabaseUrl ? describe : describe.skip
 
 integration('public reservation API with PostgreSQL', () => {
+  let runtime: Pool
   let pool: Pool
   let app: FastifyInstance
   let tenantId: string
@@ -35,7 +40,9 @@ integration('public reservation API with PostgreSQL', () => {
   beforeAll(async () => {
     await runNormalizedMigrations(databaseUrl!)
     pool = new Pool({ connectionString: databaseUrl, max: 16 })
-    const transactions = new ScopedPostgresTransactionRunner(asPool(pool))
+    runtime = new Pool({ connectionString: runtimeDatabaseUrl, max: 16 })
+    await assertRuntimeDatabasePool(runtime, runtimeDatabaseUrl!)
+    const transactions = new ScopedPostgresTransactionRunner(asPool(runtime))
     const commands = new NormalizedCommandExecutor(transactions)
     tenantId = randomUUID()
     storeId = randomUUID()
@@ -135,7 +142,30 @@ integration('public reservation API with PostgreSQL', () => {
 
   afterAll(async () => {
     await app?.close()
+    await runtime?.end()
     await pool?.end()
+  })
+
+  it('keeps administrative policy changes outside an active reservation snapshot without granting policy writes', async () => {
+    const reader = await runtime.connect()
+    const writer = await pool.connect()
+    try {
+      await reader.query('BEGIN')
+      await reader.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.store_id',$2,true)", [tenantId,storeId])
+      await lockReservationPolicy({scope:{tenantId,storeId},query:reader.query.bind(reader)} as unknown as ScopedTransaction)
+      await writer.query('BEGIN')
+      await writer.query("SET LOCAL lock_timeout='100ms'")
+      await expect(writer.query('UPDATE mbox.public_reservation_policies SET hold_minutes=hold_minutes WHERE tenant_id=$1 AND store_id=$2', [tenantId,storeId]))
+        .rejects.toMatchObject({code:'55P03'})
+      await writer.query('ROLLBACK')
+      await expect(reader.query('UPDATE mbox.public_reservation_policies SET hold_minutes=hold_minutes WHERE tenant_id=$1 AND store_id=$2', [tenantId,storeId]))
+        .rejects.toMatchObject({code:'42501'})
+    } finally {
+      await reader.query('ROLLBACK'); reader.release()
+      await writer.query('ROLLBACK'); writer.release()
+    }
+    const released = await pool.query('UPDATE mbox.public_reservation_policies SET hold_minutes=hold_minutes WHERE tenant_id=$1 AND store_id=$2 RETURNING policy_version', [tenantId,storeId])
+    expect(released.rowCount).toBe(1)
   })
 
   it('scopes the HttpOnly session cookie to the public reservation API', async () => {

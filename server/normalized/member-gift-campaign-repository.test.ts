@@ -1,3 +1,4 @@
+import {assertRuntimeDatabasePool} from './runtime-database-identity.js'
 import {randomUUID} from 'node:crypto'
 import {beforeAll,afterAll,describe,it,expect} from 'vitest'
 import {Pool} from 'pg'
@@ -28,13 +29,15 @@ import {PaymentRepository} from './payment-repository.js'
 import {CheckoutCouponRecoveryWorker} from './checkout-coupon-recovery-worker.js'
 import {CheckoutCouponRefundReviewRepository,cashierCouponRefundReviewCountSql} from './checkout-coupon-refund-review-repository.js'
 const url=process.env.TEST_NORMALIZED_DATABASE_URL
-;(url?describe:describe.skip)('published member gift campaign delivery',()=>{
+const runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
+;(url&&runtimeUrl?describe:describe.skip)('published member gift campaign delivery',()=>{
   const tenantId=randomUUID(),storeId=randomUUID(),editor=randomUUID(),approver=randomUUID(),publisher=randomUUID(),denied=randomUUID(),role=randomUUID(),productId=randomUUID()
   const scope={tenantId,storeId},businessDate='2026-09-09'
+  let runtime:Pool
   let pool:Pool,runner:ScopedPostgresTransactionRunner,calendarId:string
   const run=<T>(action:(repo:MemberGiftCampaignRepository)=>Promise<T>)=>runner.run(scope,tx=>action(new MemberGiftCampaignRepository(tx)))
   beforeAll(async()=>{
-    await runNormalizedMigrations(url!);pool=new Pool({connectionString:url,max:8});runner=new ScopedPostgresTransactionRunner({connect:()=>pool.connect(),end:()=>pool.end()} as PostgresPool)
+    await runNormalizedMigrations(url!);pool=new Pool({connectionString:url,max:8});runtime=new Pool({connectionString:runtimeUrl,max:8});await assertRuntimeDatabasePool(runtime,runtimeUrl!);runner=new ScopedPostgresTransactionRunner(runtime as unknown as PostgresPool)
     await pool.query("INSERT INTO mbox.tenants(id,code,name) VALUES($1,$2,'Gift test')",[tenantId,`gift-${tenantId.slice(0,8)}`])
     await pool.query("INSERT INTO mbox.stores(id,tenant_id,code,name) VALUES($1,$2,'gift-test','Gift test')",[storeId,tenantId])
     for(const [id,code] of [[editor,'EDITOR'],[approver,'APPROVER'],[publisher,'PUBLISHER'],[denied,'DENIED']])await pool.query('INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($1,$2,$3,$4,$4)',[id,tenantId,storeId,code])
@@ -51,7 +54,7 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL
     calendarId=saved.id
     for(const [action,employeeId] of [['approve',approver],['publish',publisher]] as const)await runner.run(scope,tx=>new CouponCalendarRepository(tx).decide({versionId:calendarId,action,employeeId,businessDate,reason:'隔离发券测试'}))
   })
-  afterAll(async()=>pool?.end())
+  afterAll(async()=>{await runtime?.end();await pool?.end()})
   async function customer(){const id=randomUUID();await pool.query('INSERT INTO mbox.customers(id,tenant_id,store_id,public_id) VALUES($1,$2,$3,$4)',[id,tenantId,storeId,`gift-${id}`]);await pool.query("INSERT INTO mbox.customer_memberships(tenant_id,store_id,customer_id,member_no,level) VALUES($1,$2,$3,$4,'gold')",[tenantId,storeId,id,`MBX-${id.slice(0,18).toUpperCase()}`]);return id}
   async function campaign(overrides:Record<string,unknown>={}){
     const rule={trigger:'targeted',cardProjectId:null,audience:{minimumTier:'member',cardCodes:[],cardMatch:'any',tierAndCards:'and'},quantityPerCustomer:1,maximumQuantity:2,maximumDailyQuantity:2,maximumCostMinor:200,maximumDailyCostMinor:200,maximumUnitCostMinor:100,budgetDateBasis:'natural',budgetDayStartMinute:0,currency:'CNY',availableFrom:new Date(Date.now()-3600000).toISOString(),availableUntil:new Date(Date.now()+86400000).toISOString(),couponCalendarVersionId:calendarId,productIds:[productId],...overrides}

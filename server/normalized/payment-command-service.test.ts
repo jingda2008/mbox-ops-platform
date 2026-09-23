@@ -832,7 +832,7 @@ class PaymentFlowTransaction implements ScopedTransaction {
     }
     if (sql.includes('INSERT INTO mbox.payments')) {
       this.paymentStaged = true
-      return result([paymentRow(this.orderId, this.paymentId, 'pending')])
+      return result([{...paymentRow(this.orderId, this.paymentId, 'pending'),public_id:values[3]}])
     }
     if (sql.includes('FROM mbox.payments') && sql.includes('FOR UPDATE')) {
       const payment = paymentRow(this.orderId, this.paymentId, this.paymentStatus)
@@ -928,7 +928,7 @@ class RollbackClient implements PostgresPoolClient {
     }
     if (sql.includes('INSERT INTO mbox.payments')) {
       this.paymentStaged = true
-      return result([paymentRow(orderOneId, paymentOneId, 'pending')])
+      return result([{...paymentRow(orderOneId, paymentOneId, 'pending'),public_id:values[3]}])
     }
     if (sql.includes('UPDATE mbox.orders')) return result([{ payment_status: 'pending' }])
     if (sql.includes('INSERT INTO mbox.audit_events')) throw new Error('audit insertion failed')

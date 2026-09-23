@@ -370,9 +370,9 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
     ])
     const succeeded = attempts.filter((attempt) => attempt.status === 'fulfilled')
     const rejected = attempts.filter((attempt) => attempt.status === 'rejected')
-    expect(succeeded).toHaveLength(1)
-    expect(rejected).toHaveLength(1)
-    expect(rejected[0]).toMatchObject({ reason: expect.objectContaining({ message: expect.stringContaining('重新收款') }) })
+    expect(succeeded).toHaveLength(2)
+    expect(rejected).toHaveLength(0)
+    expect(new Set(succeeded.map(result => (result as PromiseFulfilledResult<Awaited<ReturnType<typeof initiateOnlinePayment>>>).value.id)).size).toBe(1)
     expect((succeeded[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof initiateOnlinePayment>>>).value.amountMinor)
       .toBe(fixture.total)
     expect(await financialSnapshot(pool, fixture.orderId)).toMatchObject({
@@ -428,24 +428,23 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
     })).rejects.toThrow(/Idempotency key conflicts/)
   })
 
-  it('allows concurrent explicit attempts without release and blocks new collection after confirmed full payment', async () => {
+  it('reuses concurrent equivalent attempts and blocks new collection after confirmed full payment', async () => {
     const fixture = await createOrder(pool, [8800])
     const [first, second] = await Promise.all([initiateOnlinePayment(service, fixture.orderId), initiateOnlinePayment(service, fixture.orderId)])
-    expect(first.id).not.toBe(second.id)
+    expect(first.id).toBe(second.id)
     const original = await pool.query('SELECT status,retry_released_at FROM mbox.payments WHERE order_id=$1', [fixture.orderId])
-    expect(original.rows).toHaveLength(2)
+    expect(original.rows).toHaveLength(1)
     expect(original.rows.every(row => ['created','pending'].includes(row.status) && row.retry_released_at === null)).toBe(true)
     await succeedPaymentCallback(service, first)
     await expect(initiateOnlinePayment(service, fixture.orderId)).rejects.toThrow('the order has no outstanding balance')
-    await succeedPaymentCallback(service, second)
-    expect(await financialSnapshot(pool, fixture.orderId)).toMatchObject({ payment_status: 'paid', gross_paid_minor: '17600', payment_entries: '2' })
+    expect(await financialSnapshot(pool, fixture.orderId)).toMatchObject({ payment_status: 'paid', gross_paid_minor: '8800', payment_entries: '1' })
     expect((await pool.query('SELECT total_amount_minor::text FROM mbox.orders WHERE id=$1', [fixture.orderId])).rows[0].total_amount_minor).toBe('8800')
   })
 
   it('records an unreleased attempt that succeeds late as overcollection without reopening payment', async () => {
     const fixture = await createOrder(pool, [8800])
     const original = await initiateOnlinePayment(service, fixture.orderId)
-    const replacement = await initiateOnlinePayment(service, fixture.orderId)
+    const replacement = await initiateOnlinePayment(service, fixture.orderId, 'auth_code')
     const settledReplacement = await succeedPaymentCallback(service, replacement)
     await succeedPaymentCallback(service, original)
 
@@ -770,8 +769,8 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
   })
   it('serializes competing batch captures and retains both real receipts without reopening collection',async()=>{
     const first=await createOrder(pool,[1300]),second=await createOrder(pool,[1700],first.sessionId)
-    const make=()=>service.initiate({...metadata(`batch-race-${randomUUID()}`,actor(cashierId)),orderId:first.orderId,orderIds:[first.orderId,second.orderId],publicId:`batch-race-${randomUUID()}`,provider:'postar',method:'native_qr',principal:{type:'employee',employeeId:cashierId}})
-    const attempts=await Promise.all([make(),make()])
+    const make=(method:'native_qr'|'auth_code'='native_qr')=>service.initiate({...metadata(`batch-race-${randomUUID()}`,actor(cashierId)),orderId:first.orderId,orderIds:[first.orderId,second.orderId],publicId:`batch-race-${randomUUID()}`,provider:'postar',method,principal:{type:'employee',employeeId:cashierId}})
+    const attempts=await Promise.all([make(),make('auth_code')])
     await Promise.all(attempts.map(attempt=>succeedPaymentCallback(service,attempt.value)))
     const rows=(await pool.query('SELECT order_id,sum(amount_minor)::int amount FROM mbox.order_payment_facts WHERE id=ANY($1::uuid[]) GROUP BY order_id ORDER BY amount',[attempts.map(value=>value.value.id)])).rows
     expect(rows).toEqual([{order_id:first.orderId,amount:2600},{order_id:second.orderId,amount:3400}])
@@ -1004,7 +1003,7 @@ async function createOrder(pool: Pool, totals: number[],existingSessionId?:strin
   return { orderId, itemIds, totals, total, sessionId }
 }
 
-async function initiateOnlinePayment(service: PaymentCommandService, orderId: string) {
+async function initiateOnlinePayment(service: PaymentCommandService, orderId: string, method:'native_qr'|'auth_code'='native_qr') {
   const publicId = `pay-${randomUUID()}`
   const key = `init-${randomUUID()}`
   return (await service.initiate({
@@ -1012,7 +1011,7 @@ async function initiateOnlinePayment(service: PaymentCommandService, orderId: st
     orderId,
     publicId,
     provider: 'postar',
-    method: 'native_qr',
+    method,
     principal: { type: 'employee', employeeId: cashierId },
   })).value
 }

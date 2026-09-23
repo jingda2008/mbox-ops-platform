@@ -223,6 +223,9 @@ export class ActivityPaymentLateSuccessRefundRequiredError extends Error {
 }
 
 export class PaymentRepository {
+  private reusedOnlineAttempt = false
+  get didReuseOnlineAttempt(): boolean { return this.reusedOnlineAttempt }
+
   constructor(private readonly transaction: ScopedTransaction) {}
 
   async findOrderIdForRetry(paymentId: string): Promise<string> {
@@ -425,6 +428,7 @@ export class PaymentRepository {
   }
 
   async createForOrder(input: Readonly<CreatePaymentForOrderInput>): Promise<Payment> {
+    this.reusedOnlineAttempt = false
     validateCreateInput(input)
     const order = await this.lockOrder(input.orderId)
     await this.assertOrderAccess(order, input.principal)
@@ -439,6 +443,10 @@ export class PaymentRepository {
     const outstandingMinor = toSafeMinor(settlement.collection_due_minor, 'collectible balance')
     if (outstandingMinor <= 0) {
       throw new OrderNotPayableError(order.id, 'the order has no outstanding balance')
+    }
+    if (settlement.has_pending) {
+      const existing = await this.findReusableOnlineAttempt(input, [{ orderId: order.id, amountMinor: outstandingMinor }], order.currency)
+      if (existing) return existing
     }
     // A refund records money leaving the venue. It must not by itself reopen a
     // customer payment link: an explicit, short-lived cashier authorization is
@@ -487,6 +495,7 @@ export class PaymentRepository {
    * the rail is never replaced by cash/POS/manual collection.
    */
   async createForOrders(input:Readonly<CreatePaymentForOrdersInput>):Promise<Payment> {
+    this.reusedOnlineAttempt = false
     if(!input.orderIds.length||input.orderIds.length>100||new Set(input.orderIds).size!==input.orderIds.length)throw new TypeError('请选择1至100笔不重复的同桌次订单')
     validateCreateInput({...input,orderId:input.orderIds[0]!})
     for(const id of input.orderIds)if(!/^[0-9a-f-]{36}$/i.test(id))throw new TypeError('订单编号无效')
@@ -503,10 +512,14 @@ export class PaymentRepository {
       const balance=await this.readSettlement(order.id)
       assertUnpaidStopsSettled(order.id,balance)
       const refunded=toSafeMinor(balance.refunded_minor,'refunded')
-      balances.push({id:order.id,submittedAt:order.submitted_at,outstandingMinor:toSafeMinor(balance.collection_due_minor,'collectible balance'),refundedMinor:refunded})
+      balances.push({id:order.id,submittedAt:order.submitted_at,outstandingMinor:toSafeMinor(balance.collection_due_minor,'collectible balance'),refundedMinor:refunded,hasPending:balance.has_pending})
     }
     const amount=input.amountMinor??balances.reduce((sum,row)=>sum+row.outstandingMinor,0)
     const allocations=allocateOrderPayment(balances,amount)
+    if (balances.some(balance => balance.hasPending)) {
+      const existing = await this.findReusableOnlineAttempt(input, allocations, orders[0]!.currency)
+      if (existing) return existing
+    }
     const authorizations=[]
     const recollections=new RecollectionAuthorizationRepository(this.transaction)
     for(const allocation of allocations){const balance=balances.find(row=>row.id===allocation.orderId)!;authorizations.push(await recollections.prepareForPayment({orderId:allocation.orderId,outstandingMinor:balance.outstandingMinor,refundedMinor:balance.refundedMinor,currency:orders[0]!.currency}))}
@@ -518,6 +531,40 @@ export class PaymentRepository {
     const payment=onePayment(inserted,'Creating batch payment did not insert one row')
     for(const authorization of authorizations)await recollections.consume(authorization.authorizationId,payment.id)
     return payment
+  }
+
+  private async findReusableOnlineAttempt(
+    input: Readonly<CreatePaymentForOrderInput | CreatePaymentForOrdersInput>,
+    allocations: readonly { orderId: string; amountMinor: number }[],
+    currency: string,
+  ): Promise<Payment | null> {
+    if (!['postar', 'wechat'].includes(input.provider) || input.initialStatus === 'succeeded') return null
+    // All selected orders are already locked in callback order. Compare the
+    // immutable allocations, not just the table or total: partial/batch payments
+    // must never reuse a QR for a different allocation. Explicit retry release
+    // remains the audited way to replace an unresolved attempt.
+    const expected = allocations.map(a => ({ order_id: a.orderId, amount_minor: a.amountMinor }))
+      .sort((a, b) => a.order_id.localeCompare(b.order_id))
+    const result = await this.transaction.query<PaymentRow>(`
+      SELECT ${PAYMENT_COLUMNS} FROM mbox.payments p
+      WHERE tenant_id=$1 AND store_id=$2 AND provider=$3 AND method=$4
+        AND status IN ('created','pending') AND retry_released_at IS NULL
+        AND currency=$5 AND amount_minor=$6
+        AND (order_id=ANY($7::uuid[]) OR EXISTS (
+          SELECT 1 FROM mbox.order_payment_allocations a
+          WHERE (a.tenant_id,a.store_id,a.batch_id)=(p.tenant_id,p.store_id,p.order_batch_id)
+            AND a.order_id=ANY($7::uuid[])))
+        AND (CASE WHEN order_id IS NOT NULL THEN jsonb_build_array(
+          jsonb_build_object('order_id',order_id,'amount_minor',amount_minor))
+          ELSE (SELECT jsonb_agg(jsonb_build_object('order_id',a.order_id,'amount_minor',a.amount_minor) ORDER BY a.order_id)
+            FROM mbox.order_payment_allocations a
+            WHERE (a.tenant_id,a.store_id,a.batch_id)=(p.tenant_id,p.store_id,p.order_batch_id)) END)=$8::jsonb
+      ORDER BY created_at,id LIMIT 1
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.provider, input.method,
+      currency, allocations.reduce((sum, a) => sum + a.amountMinor, 0),
+      allocations.map(a => a.orderId), JSON.stringify(expected)])
+    this.reusedOnlineAttempt = result.rows[0] !== undefined
+    return result.rows[0] ? mapPayment(result.rows[0]) : null
   }
 
   async recordManualForActivityRegistration(

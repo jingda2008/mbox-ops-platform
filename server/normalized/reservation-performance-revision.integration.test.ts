@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
+import { assertRuntimeDatabasePool } from './runtime-database-identity.js'
 import { NormalizedCommandExecutor } from './command-executor.js'
 import { ReservationPerformanceNotificationRepository } from './reservation-performance-notification-repository.js'
 import { ReservationPerformanceNotificationWorker } from './reservation-performance-notification-worker.js'
@@ -10,7 +11,8 @@ import { ReservationPerformanceRevisionService } from './reservation-performance
 import { ScopedPostgresTransactionRunner, type PostgresPool } from './transaction-runner.js'
 
 const databaseUrl = process.env.TEST_NORMALIZED_DATABASE_URL
-const integration = databaseUrl ? describe : describe.skip
+const runtimeDatabaseUrl = process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
+const integration = databaseUrl && runtimeDatabaseUrl ? describe : describe.skip
 const tenantId = randomUUID()
 const storeId = randomUUID()
 const otherStoreId = randomUUID()
@@ -29,6 +31,7 @@ const policyId = randomUUID()
 const suffix = tenantId.replaceAll('-', '').slice(0, 12)
 
 integration('reservation performance revision PostgreSQL integration', () => {
+  let runtime: Pool
   let pool: Pool
   let runner: ScopedPostgresTransactionRunner
   let service: ReservationPerformanceRevisionService
@@ -36,12 +39,14 @@ integration('reservation performance revision PostgreSQL integration', () => {
   beforeAll(async () => {
     await runNormalizedMigrations(databaseUrl!)
     pool = new Pool({ connectionString: databaseUrl, max: 8 })
-    runner = new ScopedPostgresTransactionRunner(asPool(pool))
+    runtime = new Pool({ connectionString: runtimeDatabaseUrl, max: 4 })
+    await assertRuntimeDatabasePool(runtime, runtimeDatabaseUrl!)
+    runner = new ScopedPostgresTransactionRunner(asPool(runtime))
     service = new ReservationPerformanceRevisionService(runner, new NormalizedCommandExecutor(runner))
     await seed(pool)
   })
 
-  afterAll(async () => { await pool?.end() })
+  afterAll(async () => { await runtime?.end(); await pool?.end() })
 
   it('requires an exact append-only revision and keeps the affected reservation active', async () => {
     await expect(pool.query(`

@@ -127,6 +127,8 @@ export class WechatMemberServiceNotificationRepository {
     await this.transaction.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
       `wechat-member-service-authorization:${this.transaction.scope.tenantId}:${this.transaction.scope.storeId}:${input.customerId}:${input.policyId}`,
     ])
+    // The policy is SELECT-only. Its exact version/template is FK-bound; the worker
+    // rechecks publication before sending. Keep the membership lock and authorization advisory lock.
     const selected = await this.transaction.query<{
       policy_id: string
       notification_type: WechatMemberServiceNotificationType
@@ -172,7 +174,7 @@ export class WechatMemberServiceNotificationRepository {
         AND policy.id=$4::uuid AND policy.notification_type=$5
         AND policy.status='published' AND policy.effective_from<=clock_timestamp()
         AND (policy.effective_until IS NULL OR policy.effective_until>clock_timestamp())
-      FOR KEY SHARE OF policy,membership
+      FOR KEY SHARE OF membership
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.customerId, input.policyId, input.notificationType])
     const row = selected.rows[0]
     if (!row) throw new WechatMemberServiceAuthorizationError(

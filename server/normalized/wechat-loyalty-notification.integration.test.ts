@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { Pool } from 'pg'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
+import { assertRuntimeDatabasePool } from './runtime-database-identity.js'
 import { ScopedPostgresTransactionRunner, type PostgresPool } from './transaction-runner.js'
 import {
   WechatLoyaltyNotificationRepository,
@@ -10,7 +11,8 @@ import {
 import { WechatLoyaltyNotificationWorker } from './wechat-loyalty-notification-worker.js'
 
 const databaseUrl = process.env.TEST_NORMALIZED_DATABASE_URL
-const integration = databaseUrl ? describe : describe.skip
+const runtimeDatabaseUrl = process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
+const integration = databaseUrl && runtimeDatabaseUrl ? describe : describe.skip
 const ids = Object.freeze({
   tenant: randomUUID(), store: randomUUID(), customer: randomUUID(), otherCustomer: randomUUID(),
   membership: randomUUID(), otherMembership: randomUUID(), identity: randomUUID(), otherIdentity: randomUUID(),
@@ -24,17 +26,20 @@ const ids = Object.freeze({
 const scope = { tenantId: ids.tenant, storeId: ids.store }
 
 integration('typed WeChat loyalty notification authorization and delivery', () => {
+  let runtime: Pool
   let pool: Pool
   let transactions: ScopedPostgresTransactionRunner
 
   beforeAll(async () => {
     await runNormalizedMigrations(databaseUrl!)
     pool = new Pool({ connectionString: databaseUrl, max: 4 })
-    transactions = new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool)
+    runtime = new Pool({ connectionString: runtimeDatabaseUrl, max: 4 })
+    await assertRuntimeDatabasePool(runtime, runtimeDatabaseUrl!)
+    transactions = new ScopedPostgresTransactionRunner(runtime as unknown as PostgresPool)
     await seed(pool)
   })
 
-  afterAll(async () => pool?.end())
+  afterAll(async () => { await runtime?.end(); await pool?.end() })
 
   it('requires the exact current purpose, type, context, template and customer-owned identity', async () => {
     const options = await transactions.run(scope, (transaction) => (

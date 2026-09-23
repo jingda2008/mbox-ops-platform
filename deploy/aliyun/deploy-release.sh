@@ -125,6 +125,7 @@ test "${MBOX_RELEASE_TAG}" = "v${release_version}"
 test -f "${bundle_dir}/${archive_name}"
 for config_name in "${store_config_name}" "${catalog_config_name}"; do
   [[ "${config_name}" != */* ]]
+  [[ "${config_name}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*\.json$ ]]
   test -f "${bundle_dir}/${config_name}"
 done
 test "$(shasum -a 256 "${bundle_dir}/${store_config_name}" | awk '{print $1}')" = "${store_config_sha}"
@@ -284,6 +285,13 @@ evidence_scp_options=(
 ssh "${ssh_options[@]}" "${ssh_target}" \
   "test ! -f /opt/mbox/observability/legacy-runtime-retired.json || { echo 'application deployment refused: target is a retired payment runtime; use the primary application host' >&2; exit 1; }"
 
+# Fail before upload/backup if the selected remote shell cannot expand an empty
+# array under nounset. Do not replace the host's shell or silently select one.
+ssh "${ssh_options[@]}" "${ssh_target}" \
+  'bash -uc '\''probe=(); set -- "${probe[@]}"; test "$#" -eq 0'\'' || { echo "release preflight: selected remote Bash does not support empty arrays under nounset" >&2; exit 1; }'
+node scripts/verify-release-public-preflight.mjs \
+  "${public_url}" "${public_origin_ip}" "${deployment_tier}" "${maintenance_mode}"
+
 # This deployment script only owns a direct public origin. Refuse to touch a
 # database when the public hostname resolves to another server: an unmanaged
 # external edge cannot be switched atomically by this release transaction.
@@ -342,6 +350,15 @@ fi
 
 ssh "${ssh_options[@]}" "${ssh_target}" \
   "cd '${remote_release_dir}' && test \"\$(jq -r '.deploymentScripts | length' release-manifest.json)\" = 15 && jq -er '.deploymentScripts | to_entries[] | [.value.file,.value.sha256] | @tsv' release-manifest.json | while IFS=\$'\\t' read -r file sha; do test \"\$(sha256sum \"\$file\" | awk '{print \$1}')\" = \"\$sha\" || exit 1; done && chmod 0700 ./*.sh"
+
+# Only the two manifest-bound public JSON files are readable by the image's
+# node group. Plans, credentials and release evidence retain their 0600 mode.
+for public_config in "${store_config_name}:${store_config_sha}" "${catalog_config_name}:${catalog_config_sha}"; do
+  config_file=${public_config%:*}
+  config_hash=${public_config##*:}
+  ssh "${ssh_options[@]}" "${ssh_target}" \
+    "file='${remote_release_dir}/${config_file}'; test -f \"\$file\" && test ! -L \"\$file\" && test \"\$(sha256sum \"\$file\" | awk '{print \$1}')\" = '${config_hash}' && chown 0:1000 \"\$file\" && chmod 0440 \"\$file\" && test \"\$(stat -c '%u:%g:%a' \"\$file\")\" = 0:1000:440"
+done
 
 uses_evidence_relay=0
 if [ "${evidence_ssh_host}:${evidence_ssh_port}:${evidence_ssh_user}:${evidence_ssh_key}" \

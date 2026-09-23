@@ -1,3 +1,4 @@
+import {localUnpresentedPaymentSql} from './closed-debt-recovery.js'
 import {allocateOrderPayment} from '../../src/shared/order-payment-allocation.js'
 import { randomUUID } from 'node:crypto'
 import type { JsonObject } from './command-executor.js'
@@ -140,6 +141,7 @@ interface OrderRow extends Record<string, unknown> {
 }
 
 interface SettlementRow extends Record<string, unknown> {
+  collection_due_minor: string | number
   receivable_reduction_minor?: string | number
   has_unresolved_unpaid_stop?: boolean
   gross_paid_minor: string | number
@@ -405,6 +407,23 @@ export class PaymentRepository {
     return released
   }
 
+  async closeUnpresentedClosedDebtPayment(paymentId:string):Promise<Payment>{
+    // The caller holds session -> order. This row lock conflicts with the
+    // provider preparation SHARE lock; no provider action can be sent halfway.
+    const args=[this.transaction.scope.tenantId,this.transaction.scope.storeId,paymentId]
+    await this.transaction.query(`SELECT id FROM mbox.payments WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE`,args)
+    const proof=await this.transaction.query<{safe:boolean}>(`SELECT ${localUnpresentedPaymentSql()} AS safe FROM mbox.payments payment
+      LEFT JOIN mbox.orders orders ON (orders.tenant_id,orders.store_id,orders.id)=(payment.tenant_id,payment.store_id,payment.order_id)
+      LEFT JOIN mbox.order_payment_batches batch ON (batch.tenant_id,batch.store_id,batch.id)=(payment.tenant_id,payment.store_id,payment.order_batch_id)
+      JOIN mbox.table_sessions session ON (session.tenant_id,session.store_id,session.id)=(payment.tenant_id,payment.store_id,COALESCE(batch.table_session_id,orders.table_session_id))
+      WHERE payment.tenant_id=$1 AND payment.store_id=$2 AND payment.id=$3 AND session.status='closed'`,args)
+    if(!proof.rows[0]?.safe)throw new OrderNotPayableError(paymentId,'原付款可能已外送或存在渠道结果，不能按本地未外送作废；请查询原付款')
+    const result=await this.transaction.query<PaymentRow>(`UPDATE mbox.payments SET status='closed',
+      provider_snapshot=provider_snapshot||'{"localUnpresentedHistoryClosed":true}'::jsonb,updated_at=clock_timestamp()
+      WHERE tenant_id=$1 AND store_id=$2 AND id=$3 RETURNING ${PAYMENT_COLUMNS}`,args)
+    return mapPayment(result.rows[0]!)
+  }
+
   async createForOrder(input: Readonly<CreatePaymentForOrderInput>): Promise<Payment> {
     validateCreateInput(input)
     const order = await this.lockOrder(input.orderId)
@@ -417,9 +436,7 @@ export class PaymentRepository {
     assertUnpaidStopsSettled(order.id, settlement)
     // An unresolved attempt is a financial reconciliation concern, not a lock
     // on collection. The order lock and confirmed settlement still bound new attempts.
-    const outstandingMinor = effectiveOrderTotal(order, settlement)
-      - (toSafeMinor(settlement.gross_paid_minor, 'gross paid')
-        - toSafeMinor(settlement.refunded_minor, 'refunded'))
+    const outstandingMinor = toSafeMinor(settlement.collection_due_minor, 'collectible balance')
     if (outstandingMinor <= 0) {
       throw new OrderNotPayableError(order.id, 'the order has no outstanding balance')
     }
@@ -486,7 +503,7 @@ export class PaymentRepository {
       const balance=await this.readSettlement(order.id)
       assertUnpaidStopsSettled(order.id,balance)
       const refunded=toSafeMinor(balance.refunded_minor,'refunded')
-      balances.push({id:order.id,submittedAt:order.submitted_at,outstandingMinor:Math.max(0,effectiveOrderTotal(order,balance)-toSafeMinor(balance.gross_paid_minor,'paid')+refunded),refundedMinor:refunded})
+      balances.push({id:order.id,submittedAt:order.submitted_at,outstandingMinor:toSafeMinor(balance.collection_due_minor,'collectible balance'),refundedMinor:refunded})
     }
     const amount=input.amountMinor??balances.reduce((sum,row)=>sum+row.outstandingMinor,0)
     const allocations=allocateOrderPayment(balances,amount)
@@ -1135,6 +1152,13 @@ export class PaymentRepository {
     return { payment, applied: true }
   }
 
+  async hasSettledConsumption(orderId:string):Promise<boolean> {
+    const result=await this.transaction.query<{settled:boolean}>(
+      'SELECT mbox.order_consumption_settled($1::uuid,$2::uuid,$3::uuid) AS settled',
+      [this.transaction.scope.tenantId,this.transaction.scope.storeId,orderId])
+    return result.rows[0]?.settled===true
+  }
+
   async consumeProviderAction(paymentId: string): Promise<void> {
     await this.transaction.query(`
       UPDATE mbox.payment_provider_actions
@@ -1317,8 +1341,16 @@ export class PaymentRepository {
     order_batch_id?:string|null; payable_kind: Payment['payableKind']; order_id: string | null; activity_registration_id: string | null
   }>): Promise<void> {
     if(reference.payable_kind==='order_batch'&&reference.order_batch_id){
-      const locked=await this.transaction.query(`SELECT o.id FROM mbox.orders o JOIN mbox.order_payment_allocations a ON a.tenant_id=o.tenant_id AND a.store_id=o.store_id AND a.order_id=o.id WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.batch_id=$3 ORDER BY o.id FOR UPDATE OF o`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,reference.order_batch_id])
+      // Staff recovery and table operations lock the session before orders.
+      // Provider results must use that order too: syncing payment_status later
+      // takes the closure-fact session lock inside the database trigger.
+      const session=await this.transaction.query<{id:string}>(`SELECT session.id FROM mbox.order_payment_batches batch
+        JOIN mbox.table_sessions session ON (session.tenant_id,session.store_id,session.id)=(batch.tenant_id,batch.store_id,batch.table_session_id)
+        WHERE batch.tenant_id=$1 AND batch.store_id=$2 AND batch.id=$3 FOR UPDATE OF session`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,reference.order_batch_id])
+      if(session.rowCount!==1)throw new PaymentNotFoundError('batch session missing')
+      const locked=await this.transaction.query<{id:string;table_session_id:string}>(`SELECT o.id,o.table_session_id FROM mbox.orders o JOIN mbox.order_payment_allocations a ON a.tenant_id=o.tenant_id AND a.store_id=o.store_id AND a.order_id=o.id WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.batch_id=$3 ORDER BY o.id FOR UPDATE OF o`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,reference.order_batch_id])
       if(!locked.rowCount)throw new PaymentNotFoundError('batch allocation missing')
+      if(locked.rows.some(order=>!session.rows.some(row=>row.id===order.table_session_id)))throw new OrderNotPayableError(reference.order_batch_id,'order table changed; retry the verified payment result')
       return
     }
     if (reference.payable_kind === 'order' && reference.order_id !== null) {
@@ -1369,6 +1401,7 @@ export class PaymentRepository {
   private async readSettlement(orderId: string): Promise<SettlementRow> {
     const result = await this.transaction.query<SettlementRow>(`
       SELECT
+        mbox.order_collection_due_amount_for_mode($1::uuid,$2::uuid,$3::uuid,true)::text AS collection_due_minor,
         -- Read after the order lock, in the same fresh statement as payment facts.
         -- A concurrent partial stop must commit before this amount is collected.
         COALESCE((SELECT SUM(adjustment.amount_minor) FROM mbox.item_receivable_adjustment_facts adjustment
@@ -1395,7 +1428,7 @@ export class PaymentRepository {
         AND p.store_id = $2::uuid
         AND p.order_id = $3::uuid
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
-    return result.rows[0] ?? { gross_paid_minor: '0', refunded_minor: '0', has_pending: false }
+    return result.rows[0] ?? { collection_due_minor: '0', gross_paid_minor: '0', refunded_minor: '0', has_pending: false }
   }
 }
 

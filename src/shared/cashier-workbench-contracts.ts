@@ -99,6 +99,8 @@ export interface CashierWorkbenchPayment {
    * safely superseded by an in-person collection inside one transaction.
    */
   providerActionState: 'creating' | 'ready' | 'unknown' | 'failed' | 'consumed' | null
+  /** Staff-only projection of the exact local historical close marker. */
+  localUnpresentedHistoryClosed?: boolean
   /**
    * A staff member explicitly opened a replacement collection because the
    * provider had not returned a success. The original attempt stays visible
@@ -155,7 +157,25 @@ export interface CashierWorkbenchActivityRegistration {
   } | null
 }
 
+/** Whole original payment; its amount is not the allocation shown on an order card. */
+export interface CashierClosableUnpresentedPayment {
+  paymentId: string
+  payableKind: 'order' | 'order_batch'
+  totalAmountMinor: number
+  currency: string
+  orderIds: string[]
+  orderPublicIds: string[]
+}
+
 export interface CashierWorkbenchOrder {
+  /** Closed sessions retain their original table/day; only proven old debt may be collected. */
+  closedDebtRecovery?: {
+    status:'available'|'authorization_required'|'pending_payment'|'permission_required'|'ineligible'|'settled'
+    originalBusinessDate:string
+    pendingPaymentIds:string[]
+    closableUnpresentedPaymentIds?:string[]
+    closableUnpresentedPayments?:CashierClosableUnpresentedPayment[]
+  }
   /** Separate benefit review, never a new payment or table blocker. */
   couponRefundReviewCount?: number
   id: string

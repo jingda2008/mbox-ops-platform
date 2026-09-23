@@ -71,8 +71,9 @@ integration('contract database maintenance recovery', () => {
       `user=${backupRole}`, '',
     ].join('\n'))
     writeFileSync(passFile, [
-      `127.0.0.1:5432:*:${escapePassField(decodeURIComponent(adminCredentials.username))}:${escapePassField(decodeURIComponent(adminCredentials.password))}`,
-      `127.0.0.1:5432:*:${escapePassField(backupRole)}:backup-test`, '',
+      ...['postgres', databaseName].map(database =>
+        `127.0.0.1:5432:${database}:${escapePassField(decodeURIComponent(adminCredentials.username))}:${escapePassField(decodeURIComponent(adminCredentials.password))}`),
+      `127.0.0.1:5432:${databaseName}:${escapePassField(backupRole)}:backup-test`, '',
     ].join('\n'))
     chmodSync(serviceFile, 0o600)
     chmodSync(passFile, 0o600)
@@ -103,6 +104,9 @@ integration('contract database maintenance recovery', () => {
       await client.connect()
       const migrations = (await loadNormalizedMigrations()).filter((migration) => migration.version <= '095')
       await client.query('CREATE SCHEMA mbox')
+      // Exercise extensions in an archive-owned schema even when the database
+      // administrator's name differs from mbox.
+      await client.query('SET search_path=mbox,public')
       await client.query(`CREATE TABLE mbox.normalized_schema_metadata(
         singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),schema_flavor text NOT NULL,
         schema_version text NOT NULL,created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
@@ -141,6 +145,9 @@ integration('contract database maintenance recovery', () => {
       runChecked(resolve('deploy/aliyun/restore-postgres.sh'), ['capture', evidence], {
         env: { ...environment, DATABASE_SERVICE: backupService, MBOX_EXPECTED_RESTORE_DATABASE: databaseName },
       })
+      expect(JSON.parse(readFileSync(evidence, 'utf8')).extensions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'pgcrypto', schema: 'mbox' }),
+      ]))
       const backup = runChecked(resolve('deploy/aliyun/backup-postgres.sh'), [], {
         encoding: 'utf8',
         env: { ...environment, DATABASE_SERVICE: backupService, BACKUP_DIR: backupDirectory },
@@ -149,6 +156,32 @@ integration('contract database maintenance recovery', () => {
         count: migrations.length,
         files: migrations.map((migration) => ({ filename: migration.filename, sha256: migration.checksum })),
       } }))
+      const verificationEnvironment = {
+        ...environment, DATABASE_SERVICE: backupService, ADMIN_DATABASE_SERVICE: adminService,
+        MBOX_EXPECTED_RESTORE_DATABASE: databaseName, MBOX_EXPECTED_RESTORE_SCHEMA_VERSION: '095',
+        MBOX_EXPECTED_RESTORE_MANIFEST: manifest, MBOX_EXPECTED_RESTORE_EVIDENCE: evidence,
+        MBOX_RESTORE_REPORT: report, MBOX_CONFIRM_RESTORE: 'VERIFY',
+      }
+      const operatingClient = new Client({ connectionString: target.toString() })
+      await operatingClient.connect()
+      try {
+        const passwordBefore = readFileSync(passFile)
+        runChecked(resolve('deploy/aliyun/restore-postgres.sh'), ['verify', backup], {
+          env: verificationEnvironment,
+        })
+        expect(JSON.parse(readFileSync(report, 'utf8'))).toMatchObject({
+          status: 'restore-verified', sourceDatabaseReplaced: false, stagingDatabaseDeleted: true,
+        })
+        expect(readFileSync(passFile)).toEqual(passwordBefore)
+        expect(() => execFileSync(resolve('deploy/aliyun/restore-postgres.sh'), ['verify', backup], {
+          env: { ...verificationEnvironment, TEST_PSQL_FAIL_PATTERN: 'ALTER DATABASE :"staging_database" OWNER' },
+          stdio: 'pipe',
+        })).toThrow()
+        expect((await operatingClient.query(`SELECT datallowconn FROM pg_database
+          WHERE datname=current_database()`)).rows[0]?.datallowconn).toBe(true)
+        expect((await operatingClient.query('SELECT schema_version FROM mbox.normalized_schema_metadata')).rows[0]?.schema_version).toBe('095')
+        expect(readFileSync(passFile)).toEqual(passwordBefore)
+      } finally { await operatingClient.end() }
       const upgraded = new Client({ connectionString: target.toString() })
       await upgraded.connect()
       const migration096 = (await loadNormalizedMigrations()).find((migration) => migration.version === '096')!

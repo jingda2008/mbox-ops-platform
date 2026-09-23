@@ -73,7 +73,7 @@ describe('PaymentRepository', () => {
       rows([{ id: tableSessionId }]),
       rows([{ ...paymentRow('pending', 8800), retry_released_at: releasedAt, retry_release_reason: '顾客未确认到账，改用另一种方式收款' }]),
       rows([orderRow(8800)]),
-      rows([{ gross_paid_minor: '0', refunded_minor: '0', has_pending: false }]),
+      rows([{ collection_due_minor: '8800', gross_paid_minor: '0', refunded_minor: '0', has_pending: false }]),
       rows([{ payment_status: 'pending' }]),
     ])
 
@@ -99,7 +99,7 @@ describe('PaymentRepository', () => {
   it('derives the payment amount only from the locked order and existing database settlement', async () => {
     const transaction = new ScriptedTransaction([
       rows([orderRow(12800)]),
-      rows([{ gross_paid_minor: '3000', refunded_minor: '500', has_pending: false }]),
+      rows([{ collection_due_minor: '10300', gross_paid_minor: '3000', refunded_minor: '500', has_pending: false }]),
       rows([{
         id: '44444444-4444-4444-8444-444444444445', public_id: 'recollect-test-0001', order_id: orderId,
         amount_minor: '10300', currency: 'CNY', reason: '客人确认改用另一种付款方式',
@@ -126,7 +126,7 @@ describe('PaymentRepository', () => {
   it('does not treat a completed refund as automatic permission to charge the table again', async () => {
     const transaction = new ScriptedTransaction([
       rows([orderRow(8800)]),
-      rows([{ gross_paid_minor: '8800', refunded_minor: '8800', has_pending: false }]),
+      rows([{ collection_due_minor: '8800', gross_paid_minor: '8800', refunded_minor: '8800', has_pending: false }]),
       rows([]),
     ])
 
@@ -355,7 +355,7 @@ describe('PaymentRepository', () => {
   it('stores only allowlisted provider evidence and excludes credentials and customer identifiers', async () => {
     const transaction = new ScriptedTransaction([
       rows([orderRow(8800)]),
-      rows([{ gross_paid_minor: '0', refunded_minor: '0', has_pending: false }]),
+      rows([{ collection_due_minor: '8800', gross_paid_minor: '0', refunded_minor: '0', has_pending: false }]),
       rows([{
         ...paymentRow('created', 8800),
         provider_snapshot: { tradeState: 'SUCCESS' },
@@ -437,7 +437,7 @@ describe('PaymentRepository', () => {
     }
     const transaction = new ScriptedTransaction([
       rows([orderRow(6800)]),
-      rows([{ gross_paid_minor: '0', refunded_minor: '0', has_pending: false }]),
+      rows([{ collection_due_minor: '6800', gross_paid_minor: '0', refunded_minor: '0', has_pending: false }]),
       rows([{
         ...paymentRow('succeeded', 6800, evidence.receiptReference),
         provider: 'physical_pos',
@@ -466,7 +466,7 @@ describe('PaymentRepository', () => {
     const allowed = new ScriptedTransaction([
       rows([orderRow(8800)]),
       rows([{ participation_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }]),
-      rows([{ gross_paid_minor: '0', refunded_minor: '0', has_pending: false }]),
+      rows([{ collection_due_minor: '8800', gross_paid_minor: '0', refunded_minor: '0', has_pending: false }]),
       rows([paymentRow('created', 8800)]),
     ])
     await expect(new PaymentRepository(allowed).createForOrder({

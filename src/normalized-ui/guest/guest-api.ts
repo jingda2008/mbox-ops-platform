@@ -710,8 +710,10 @@ function isOnlinePaymentAction(value: unknown): value is OnlinePaymentAction {
     && typeof value.paymentId === 'string'
     && typeof value.paymentPublicId === 'string'
     && typeof value.orderPublicId === 'string'
-    && (value.status === 'pending' || value.status === 'unknown' || value.status === 'failed')
-    && ['jsapi', 'qr', 'barcode'].includes(String(value.presentation))
+    && (value.status === 'pending' || value.status === 'unknown' || value.status === 'failed'
+      || value.status === 'resolved' && value.payload === null
+        && ['succeeded', 'partially_refunded', 'refunded', 'failed', 'closed'].includes(String(value.terminalPaymentStatus)))
+    && ['jsapi', 'alipay_jsapi', 'qr', 'barcode'].includes(String(value.presentation))
     && typeof value.expiresAt === 'string'
     && (value.payload === null || isObject(value.payload))
 }

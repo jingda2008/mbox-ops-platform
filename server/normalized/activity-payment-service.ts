@@ -451,6 +451,7 @@ function resolution(row: Readonly<ActivityPaymentRow>): ActivityPaymentResolutio
 }
 
 function publicProviderAction(action: Readonly<OnlinePaymentAction>): PublicActivityProviderAction {
+  if (action.status === 'resolved') throw invalidActivityPayment('原付款已经结束，请刷新报名付款状态')
   if (action.presentation !== 'jsapi') throw invalidActivityPayment('活动顾客入口仅支持微信小程序支付')
   if (action.status !== 'pending') return {
     paymentPublicId: action.paymentPublicId,

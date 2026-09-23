@@ -1,3 +1,4 @@
+import { StaffAccessVersionConflictError } from './staff-access-version.js'
 import Fastify from 'fastify'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { StaffAccessManagementService } from './staff-access-management-service.js'
@@ -19,13 +20,13 @@ describe('staff access management API', () => {
     service.deployPermissions.mockResolvedValue({
       status: 'verified', verifiedAt: '2026-08-13T00:00:00.000Z', replayed: false,
       changes: [{ kind: 'role_permission', targetId: roleId, configurationCode: 'order.create', applied: true, effectiveEmployeeCount: 2, affectedEmployeeCount: 2 }],
-      overview: { generatedAt: '2026-08-13T00:00:00.000Z', roles: [], employees: [], permissions: [], areas: [], configurationDefinitions: [] },
+      overview: { generatedAt: '2026-08-13T00:00:00.000Z', scopeKey: `${tenantId}:${storeId}`, configurationVersion: 'a'.repeat(64), roles: [], employees: [], permissions: [], areas: [], configurationDefinitions: [] },
     })
     const app = await build(service)
     const response = await app.inject({
       method: 'POST', url: '/staff-access/deploy',
       headers: { 'idempotency-key': 'permission-release-0001' },
-      payload: { reason: '调整服务员职责', changes: [{ kind: 'role_permission', roleId, permissionCode: 'order.create', enabled: true }] },
+      payload: { expectedVersion: 'a'.repeat(64), reason: '调整服务员职责', changes: [{ kind: 'role_permission', roleId, permissionCode: 'order.create', enabled: true }] },
     })
 
     expect(response.statusCode).toBe(200)
@@ -41,23 +42,36 @@ describe('staff access management API', () => {
     const app = await build(service)
     const response = await app.inject({
       method: 'POST', url: '/staff-access/deploy',
-      payload: { reason: '调整服务员职责', changes: [{ kind: 'role_permission', roleId, permissionCode: 'order.create', enabled: true }] },
+      payload: { expectedVersion: 'a'.repeat(64), reason: '调整服务员职责', changes: [{ kind: 'role_permission', roleId, permissionCode: 'order.create', enabled: true }] },
     })
     expect(response.statusCode).toBe(400)
     expect(response.json().error.code).toBe('PERMISSION_DEPLOYMENT_INVALID')
     expect(service.deployPermissions).not.toHaveBeenCalled()
   })
 
+  it('requires a configuration version and returns a definitive stale-version rejection', async () => {
+    const service = servicePort()
+    const app = await build(service)
+    const payload = { reason: '核对配置版本', changes: [{ kind: 'role_permission', roleId, permissionCode: 'order.create', enabled: true }] }
+    const missing = await app.inject({ method: 'POST', url: '/staff-access/deploy', headers: { 'idempotency-key': 'permission-version-required' }, payload })
+    expect(missing.statusCode).toBe(400)
+    expect(service.deployPermissions).not.toHaveBeenCalled()
+    service.deployPermissions.mockRejectedValue(new StaffAccessVersionConflictError())
+    const stale = await app.inject({ method: 'POST', url: '/staff-access/deploy', headers: { 'idempotency-key': 'permission-version-stale' }, payload: { ...payload, expectedVersion: 'a'.repeat(64) } })
+    expect(stale.statusCode).toBe(409)
+    expect(stale.json().error).toMatchObject({ code: 'STAFF_ACCESS_VERSION_CONFLICT', retryable: false })
+  })
+
   it('accepts domain-safe approval, data-scope, and navigation changes in one batch', async () => {
     const service = servicePort()
     service.deployPermissions.mockResolvedValue({
       status: 'verified', verifiedAt: '2026-08-13T00:00:00.000Z', replayed: false,
-      changes: [], overview: { generatedAt: '2026-08-13T00:00:00.000Z', roles: [], employees: [], permissions: [], areas: [], configurationDefinitions: [] },
+      changes: [], overview: { generatedAt: '2026-08-13T00:00:00.000Z', scopeKey: `${tenantId}:${storeId}`, configurationVersion: 'a'.repeat(64), roles: [], employees: [], permissions: [], areas: [], configurationDefinitions: [] },
     })
     const app = await build(service)
     const response = await app.inject({
       method: 'POST', url: '/staff-access/deploy', headers: { 'idempotency-key': 'access-policy-release-0001' },
-      payload: { reason: '调整店长审批与入口', changes: [
+      payload: { expectedVersion: 'a'.repeat(64), reason: '调整店长审批与入口', changes: [
         { kind: 'role_approval_limit', roleId, approvalCode: 'order.gift', amountMinor: 30_000, currency: 'CNY', rules: { requiresReason: true }, enabled: true },
         { kind: 'role_data_scope', roleId, scopeKey: 'kds.station_codes', effect: 'include', scopeValue: ['bar'], enabled: true },
         { kind: 'role_navigation', roleId, navigationCode: 'live', label: '现场', route: '/staff/live', icon: null, sortOrder: 10, enabled: true, displayConfig: { highFrequency: true } },
@@ -78,7 +92,7 @@ describe('staff access management API', () => {
     const app = await build(service)
     const response = await app.inject({
       method: 'POST', url: '/staff-access/deploy', headers: { 'idempotency-key': 'access-route-release-0001' },
-      payload: { reason: '错误入口验证', changes: [{
+      payload: { expectedVersion: 'a'.repeat(64), reason: '错误入口验证', changes: [{
         kind: 'role_navigation', roleId, navigationCode: 'outside', label: '外部', route: 'https://example.com',
         icon: null, sortOrder: 10, enabled: true, displayConfig: {},
       }] },
@@ -92,12 +106,12 @@ describe('staff access management API', () => {
     const service = servicePort()
     service.deployPermissions.mockResolvedValue({
       status: 'verified', verifiedAt: '2026-08-13T00:00:00.000Z', replayed: false,
-      changes: [], overview: { generatedAt: '2026-08-13T00:00:00.000Z', roles: [], employees: [], permissions: [], areas: [], configurationDefinitions: [] },
+      changes: [], overview: { generatedAt: '2026-08-13T00:00:00.000Z', scopeKey: `${tenantId}:${storeId}`, configurationVersion: 'a'.repeat(64), roles: [], employees: [], permissions: [], areas: [], configurationDefinitions: [] },
     })
     const app = await build(service)
     const response = await app.inject({
       method: 'POST', url: '/staff-access/deploy', headers: { 'idempotency-key': 'catalog-route-release-0001' },
-      payload: { reason: '服务端目录验证', changes: [{
+      payload: { expectedVersion: 'a'.repeat(64), reason: '服务端目录验证', changes: [{
         kind: 'role_navigation', roleId, navigationCode: 'future', label: '未来入口', route: '/staff/future',
         icon: null, sortOrder: 10, enabled: true, displayConfig: {},
       }] },
@@ -165,5 +179,5 @@ function servicePort() {
 }
 
 function emptyOverview() {
-  return { generatedAt: '2026-09-08T00:00:00.000Z', roles: [], employees: [], permissions: [], areas: [], configurationDefinitions: [] }
+  return { generatedAt: '2026-09-08T00:00:00.000Z', scopeKey: `${tenantId}:${storeId}`, configurationVersion: 'a'.repeat(64), roles: [], employees: [], permissions: [], areas: [], configurationDefinitions: [] }
 }

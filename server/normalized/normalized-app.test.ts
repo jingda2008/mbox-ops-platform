@@ -1,5 +1,6 @@
-import {createHash,createCipheriv} from 'node:crypto'
+import {createHash,createCipheriv,generateKeyPairSync} from 'node:crypto'
 import {SocialAccountRepository} from './social-account-repository.js'
+import type {RuntimeDatabaseIdentity} from './runtime-database-identity.js'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
@@ -53,7 +54,32 @@ const config: NormalizedRuntimeConfig = {
   startWorkers: false,
 }
 
+const productionConfig = {...config, deploymentTier: 'production' as const,
+  personalContactProtection: {activeKeyId:'test-key',activeKey:Buffer.alloc(32,7),lookupKey:Buffer.alloc(32,8),legacyPhoneLookupKey:Buffer.alloc(32,9),previousKeys:[]},
+  payment: {provider:'postar' as const,environment:'test' as const,agencyId:'test-agency',merchantId:'test-merchant',
+    publicKey:generateKeyPairSync('rsa',{modulusLength:2048}).publicKey.export({type:'spki',format:'pem'}).toString(),
+    callbackUrl:'https://example.invalid/payment',timeoutMs:1000,wechat:null},
+}
+
 describe('createNormalizedApp', () => {
+  it('rejects an unsafe production login before registering routes and closes its pool',async()=>{
+    const pool=fakePool({databaseIdentity:{session_user:'postgres',current_user:'postgres',login:true,runtime_member:true,
+      row_security:true,unsafe_attributes:true,unexpected_membership:true,owns_objects:true,can_create:true,unsafe_definer:true}})
+    await expect(createNormalizedApp({config:{...productionConfig,databaseUrl:'postgresql://postgres:secret@db/mbox'},pool,logger:false})).rejects.toMatchObject({code:'RUNTIME_DATABASE_IDENTITY_UNSAFE'})
+    expect(pool.end).toHaveBeenCalledOnce()
+  })
+  it('rechecks a verified production identity in readiness after unsafe privilege drift',async()=>{
+    const identity:RuntimeDatabaseIdentity={session_user:'mbox_app',current_user:'mbox_app',login:true,runtime_member:true,
+      row_security:true,unsafe_attributes:false,unexpected_membership:false,owns_objects:false,can_create:false,unsafe_definer:false}
+    const runtime=await createNormalizedApp({config:{...productionConfig,databaseUrl:'postgresql://mbox_app:secret@db/mbox'},pool:fakePool({databaseIdentity:identity}),logger:false})
+    try{
+      expect((await runtime.app.inject('/api/ready')).statusCode).toBe(200)
+      identity.unsafe_attributes=true
+      const response=await runtime.app.inject('/api/ready')
+      expect(response.statusCode).toBe(503);expect(response.json().reason).toBe('database_identity_unsafe')
+      expect(response.body).not.toContain('mbox_app');expect(response.body).not.toContain('secret')
+    }finally{await runtime.app.close()}
+  })
   it('wires the fixed callback to the durable handler using the verified receiver',async()=>{
     const appId='wxServiceMain01',key=Buffer.alloc(32,7),token='CallbackToken',stamp=String(Math.floor(Date.now()/1000)),nonce='main-callback'
     const xml=`<xml><CreateTime>${stamp}</CreateTime><MsgType>event</MsgType><Event>unsubscribe</Event><FromUserName>test-recipient</FromUserName></xml>`
@@ -433,9 +459,9 @@ describe('createNormalizedApp', () => {
   })
 
   it('does not report ready when normalized migrations are older than registered plugins', async () => {
-    expect(NORMALIZED_MIN_SCHEMA_VERSION).toBe('222')
+    expect(NORMALIZED_MIN_SCHEMA_VERSION).toBe('242')
     const pool = fakePool({
-      ready: { schema_flavor: NORMALIZED_SCHEMA_FLAVOR, schema_version: '096', store_active: true },
+      ready: { schema_flavor: NORMALIZED_SCHEMA_FLAVOR, schema_version: '227', store_active: true },
     })
     const runtime = await createNormalizedApp({ config, pool, logger: false })
     const response = await runtime.app.inject({ method: 'GET', url: '/api/ready' })
@@ -643,6 +669,7 @@ describe('createNormalizedApp', () => {
 })
 
 interface FakePoolOptions {
+  databaseIdentity?:RuntimeDatabaseIdentity
   ready?: { schema_flavor: string; schema_version: string; store_active: boolean }
   failure?: Error
   events?: string[]
@@ -659,6 +686,7 @@ function fakePool(options: FakePoolOptions = {}): InspectablePool {
       text: string,
     ): Promise<PostgresQueryResult<Row>> {
       queries.push(text)
+      if(text.includes('WITH reachable AS MATERIALIZED'))return {rows:options.databaseIdentity?[options.databaseIdentity as Row]:[],rowCount:options.databaseIdentity?1:0}
       if (options.queryDelayMs) await new Promise((resolveDelay) => setTimeout(resolveDelay, options.queryDelayMs))
       if (text.includes('normalized_schema_metadata')) {
         if (options.failure) throw options.failure

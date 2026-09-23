@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { IdempotencyConflictError, IdempotencyInProgressError } from './command-executor.js'
+import { GuestServiceReceiptUnattributedError, readGuestServiceReceipt, saveGuestServiceReceipt } from './guest-service-command-receipt.js'
 import { publicProductTasteProfile } from '../../src/shared/product-taste-profile.js'
 import { checkoutLinesWithNotes, type CheckoutLineNote } from './checkout-line-notes.js'
 import {CheckoutCouponQuoteRepository} from './checkout-coupon-quote-repository.js'
@@ -71,6 +73,7 @@ import { FulfillmentCapacityUnavailableError } from './fulfillment-capacity-repo
 import type { OnlinePaymentAction, OnlinePaymentService } from './online-payment-service.js'
 import { AlipayPaymentIdentityRequiredError } from './online-payment-service.js'
 import {
+  OnlinePaymentAlreadyResolvedError,
   OnlinePaymentUnavailableError,
   OnlinePaymentUnknownError,
 } from './online-payment-service.js'
@@ -458,11 +461,35 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
 
   app.post('/guest/shared-cart/checkout', async (request, reply) => handleRoute(reply, async () => {
     const context = await requireTableContext(options, request, 'guest.order.create')
+    const input = readSharedCartCheckout(request.body)
+    const idempotencyKey = readIdempotencyKey(request)
+    const requestFingerprint = stableJson({
+        tableSessionId: context.tableSessionId,
+        customerId: context.customerId,
+        expectedGeneration: input.expectedGeneration,
+        expectedVersion: input.expectedVersion,
+        note: input.note,
+        ...(input.lineNotes.length ? { lineNotes: input.lineNotes } : {}),
+        confirmedDuplicateOrderId: input.confirmedDuplicateOrderId,
+        checkoutUpgradeOfferPublicId: input.checkoutUpgradeOfferPublicId,
+        recommendationPublicId: input.recommendationPublicId,
+        selectedRecommendationProductId: input.selectedRecommendationProductId,
+        ...(input.couponQuoteId?{couponQuoteId:input.couponQuoteId}:{}),
+      })
+    // A committed terminal checkout is a readback, even after new online sales
+    // have been paused or the customer's payment identity has expired.
+    const recovered = await recoverTerminalSharedCheckout(options, context, idempotencyKey, requestFingerprint)
+    if (recovered) {
+      const mode: GuestCheckoutPaymentMode = recovered.value.payment.provider === 'simulation' ? 'simulation'
+        : String(request.headers['x-mbox-client-platform'] ?? '').toLowerCase() === 'alipay' ? 'alipay_jsapi' : 'wechat_jsapi'
+      const action = resolvedPaymentAction(recovered.payment, recovered.value.order.order.publicId, mode)
+      const response = checkoutResponse({value:recovered.value.order,replayed:true},
+        {value:recovered.value.payment,replayed:true},mode,action)
+      return reply.send({...response,data:{...response.data,sharedCart:publicSharedCart(recovered.value.cart)}})
+    }
     const paymentMode = await effectivePaymentMode(options, context.scope, request)
     assertGuestSelfPaymentMode(paymentMode)
     options.onlinePayments.assertAvailable(paymentMode === 'simulation' ? 'simulation' : 'postar')
-    const input = readSharedCartCheckout(request.body)
-    const idempotencyKey = readIdempotencyKey(request)
     await recordSharedCartWriteAttempt(options,context,idempotencyKey,'checkout')
     const paymentMethod = await guestCheckoutPaymentMethod(options, context, paymentMode)
     const paymentCommand = await guestPaymentCommand(
@@ -477,19 +504,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
       scope: context.scope,
       operationScope: 'guest.shared-cart.checkout',
       idempotencyKey,
-      requestFingerprint: stableJson({
-        tableSessionId: context.tableSessionId,
-        customerId: context.customerId,
-        expectedGeneration: input.expectedGeneration,
-        expectedVersion: input.expectedVersion,
-        note: input.note,
-        ...(input.lineNotes.length ? { lineNotes: input.lineNotes } : {}),
-        confirmedDuplicateOrderId: input.confirmedDuplicateOrderId,
-        checkoutUpgradeOfferPublicId: input.checkoutUpgradeOfferPublicId,
-        recommendationPublicId: input.recommendationPublicId,
-        selectedRecommendationProductId: input.selectedRecommendationProductId,
-        ...(input.couponQuoteId?{couponQuoteId:input.couponQuoteId}:{}),
-      }),
+      requestFingerprint,
       resultCodec: sharedCartCheckoutCodec,
     }, async (transaction) => {
       if (!await lockBoundGuestCheckoutPosition(transaction, context)) throw new GuestAuthenticationRequiredError()
@@ -746,17 +761,25 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
     const input = readServiceRequest(request.body)
     const deviceFingerprint = options.resolveDeviceFingerprint(request)
     const idempotencyKey = readIdempotencyKey(request)
+    const requestFingerprint = stableJson({ requestType: input.requestType, detail: input.detail, relatedOrderPublicId: input.relatedOrderPublicId })
+    const receiptIdentity = { idempotencyKey, tableSessionId: context.tableSessionId, customerId: context.customerId,
+      actorRef: context.actorRef, deviceFingerprint, requestFingerprint }
+    const permanent = await options.transactions.run(context.scope, transaction => readGuestServiceReceipt(transaction, receiptIdentity, guestServiceResultCodec))
+    if (permanent !== null) return reply.send({ data: serviceResponse(permanent), meta: { replayed: true } })
+    let permanentReplayed = false
     const execution = await options.commandExecutor.execute({
       scope: context.scope,
       operationScope: 'guest.service.request',
       idempotencyKey,
-      requestFingerprint: stableJson({
-        requestType: input.requestType,
-        detail: input.detail,
-        relatedOrderPublicId: input.relatedOrderPublicId,
-      }),
+      requestFingerprint,
       resultCodec: guestServiceResultCodec,
+      retryCompletedAfter: (result) => result.status === 'rate_limited' ? result.retryAt : null,
     }, async (transaction) => {
+      const accepted = await readGuestServiceReceipt(transaction, receiptIdentity, guestServiceResultCodec)
+      if (accepted !== null) {
+        permanentReplayed = true
+        return { result: accepted, auditEvents: [], outboxMessages: [] }
+      }
       const service = new GuestServiceRepository(transaction, {
         deviceLimitPerMinute: options.deviceServiceLimitPerMinute,
         tableLimitPerMinute: options.tableServiceLimitPerMinute,
@@ -772,6 +795,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
         relatedOrderPublicId: input.relatedOrderPublicId,
       })
       const commandResult = toGuestServiceCommandResult(result, input.requestType)
+      if (result.status !== 'rate_limited') await saveGuestServiceReceipt(transaction, receiptIdentity, commandResult, guestServiceResultCodec)
       const behaviorType = result.status === 'rate_limited'
         ? 'guest.service.rate_limited'
         : result.status === 'merged'
@@ -811,12 +835,18 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
         }],
       }
     })
+    // A concurrent completion can make the transport executor replay directly.
+    // Recheck its permanent identity before exposing that result to this caller.
+    if (execution.replayed && execution.value.status !== 'rate_limited') {
+      const accepted = await options.transactions.run(context.scope, transaction => readGuestServiceReceipt(transaction, receiptIdentity, guestServiceResultCodec))
+      if (accepted === null) throw new GuestApiRequestError('GUEST_SERVICE_RECEIPT_REVIEW_REQUIRED', '原服务记录需由服务员核对，请勿重复提交。', 409)
+    }
     const statusCode = execution.value.status === 'rate_limited'
       ? 429
-      : execution.replayed || execution.value.status === 'merged' ? 200 : 201
+      : execution.replayed || permanentReplayed || execution.value.status === 'merged' ? 200 : 201
     return reply.code(statusCode).send({
       data: serviceResponse(execution.value),
-      meta: { replayed: execution.replayed },
+      meta: { replayed: execution.replayed || permanentReplayed },
     })
   }))
 
@@ -2076,6 +2106,9 @@ async function createGuestProviderAction(
       jsapiPayWay: paymentMode === 'alipay_jsapi' ? 'alipay' : 'wechat',
     })
   } catch (error) {
+    if (error instanceof OnlinePaymentAlreadyResolvedError) {
+      return resolvedPaymentAction(error, orderPublicId, paymentMode)
+    }
     if (error instanceof PostarPaymentRejectedError) {
       return unavailablePaymentAction(payment, orderPublicId, 'failed', paymentFailureCode(error))
     }
@@ -2100,6 +2133,52 @@ async function createGuestProviderAction(
     }
     throw error
   }
+}
+
+
+function resolvedPaymentAction(
+  resolved: OnlinePaymentAlreadyResolvedError, orderPublicId: string, paymentMode: GuestCheckoutPaymentMode,
+): OnlinePaymentAction {
+  return {
+    paymentId: resolved.context.id, paymentPublicId: resolved.context.publicId,
+    payableKind: resolved.context.payableKind, orderPublicId: resolved.context.orderPublicId ?? orderPublicId,
+    status: 'resolved', terminalPaymentStatus: resolved.paymentStatus,
+    presentation: paymentMode === 'alipay_jsapi' ? 'alipay_jsapi' : resolved.context.method === 'jsapi' ? 'jsapi' : 'qr',
+    expiresAt: new Date().toISOString(), payload: null,
+  }
+}
+
+async function recoverTerminalSharedCheckout(
+  options: GuestCommerceServiceApiOptions, context: GuestRequestContext & {tableSessionId:string},
+  key: string, fingerprint: string,
+): Promise<{value:SharedCartCheckoutResult;payment:OnlinePaymentAlreadyResolvedError}|null> {
+  return options.transactions.run(context.scope, async transaction => {
+    const receipt = (await transaction.query<{request_sha256:string;response_snapshot:{result:unknown}}>(`
+      SELECT request_sha256,response_snapshot FROM mbox.idempotency_records
+      WHERE tenant_id=$1 AND store_id=$2 AND operation_scope='guest.shared-cart.checkout'
+        AND idempotency_key=$3 AND status='completed'
+    `,[context.scope.tenantId,context.scope.storeId,key])).rows[0]
+    if (!receipt) return null
+    if (receipt.request_sha256 !== createHash('sha256').update(fingerprint).digest('hex')) {
+      throw new GuestApiRequestError('IDEMPOTENCY_CONFLICT','原结账标识不能用于不同的请求，请恢复原操作',409)
+    }
+    if (!await lockBoundGuestTablePosition(transaction,context)) throw new GuestAuthenticationRequiredError()
+    const value = sharedCartCheckoutCodec.decode(receipt.response_snapshot.result)
+    const payment = await new PaymentProviderActionRepository(transaction,options.paymentActionSecret)
+      .resolvePaymentContext(value.payment.id,guestPaymentPrincipal(context))
+    if (!['succeeded','partially_refunded','refunded','failed','closed'].includes(payment.status)) return null
+    const currentOrder = (await transaction.query<{status:typeof value.order.order.status;payment_status:typeof value.order.order.paymentStatus}>(`
+      SELECT status,payment_status FROM mbox.orders
+      WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND table_session_id=$4
+    `,[context.scope.tenantId,context.scope.storeId,value.order.order.id,context.tableSessionId])).rows[0]
+    if (!currentOrder) throw new GuestAuthenticationRequiredError()
+    // Do not replace a later cart generation with the original empty receipt.
+    const cart = await new GuestSharedCartRepository(transaction,context.customerId)
+      .readOpen(context.tableSessionId,createSharedCartPublicId())
+    return {value:{...value,cart,order:{...value.order,order:{...value.order.order,
+      status:currentOrder.status,paymentStatus:currentOrder.payment_status}}},
+      payment:new OnlinePaymentAlreadyResolvedError(payment,payment.status as NonNullable<OnlinePaymentAction['terminalPaymentStatus']>)}
+  })
 }
 
 function unavailablePaymentAction(
@@ -2184,7 +2263,8 @@ function checkoutResponse(
             : mode === 'simulation' ? 'simulation' : 'wechat_native_qr',
         provider: payment.provider,
         method: payment.method,
-        status: providerAction.status === 'failed' ? 'failed' : payment.status,
+        status: providerAction.status === 'resolved' ? providerAction.terminalPaymentStatus
+          : providerAction.status === 'failed' ? 'failed' : payment.status,
         simulated: mode === 'simulation',
         providerAction,
       },
@@ -2241,7 +2321,7 @@ function serviceResponse(result: GuestServiceCommandResult) {
   if (result.status === 'rate_limited') {
     return {
       status: result.status,
-      message: '我们已经收到啦，伙伴正在赶来，请稍等一下',
+      message: '请求较多，这次尚未受理；请稍后恢复本次请求。',
       retryAt: result.retryAt,
     }
   }
@@ -2604,6 +2684,15 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<unknown
   try {
     return await operation()
   } catch (error) {
+    if (error instanceof GuestServiceReceiptUnattributedError) {
+      return reply.code(409).send({ error: { code: 'GUEST_SERVICE_RECEIPT_REVIEW_REQUIRED', message: error.message } })
+    }
+    if (error instanceof IdempotencyConflictError || error instanceof IdempotencyInProgressError) {
+      return reply.code(409).send({ error: {
+        code: error instanceof IdempotencyConflictError ? 'IDEMPOTENCY_CONFLICT' : 'IDEMPOTENCY_IN_PROGRESS',
+        message: '原请求正在确认或内容不一致，请恢复原请求，不要重复提交。',
+      } })
+    }
     if(error instanceof CheckoutCartPricingError||error instanceof CouponCalendarError||error instanceof StackingPricingError||error instanceof PricingAuthorizationDeniedError||error instanceof BenefitUnavailableError||error instanceof BenefitOwnershipError){
       return reply.code(409).send({error:{code:'CHECKOUT_COUPON_RECONFIRM_REQUIRED',message:error instanceof BenefitOwnershipError?'优惠券不属于当前会员，请重新选择':error.message}})
     }

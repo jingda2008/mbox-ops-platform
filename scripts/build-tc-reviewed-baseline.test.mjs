@@ -85,6 +85,12 @@ test('Alibaba Cloud deployment prefers release evidence and keeps Actions artifa
 
 test('Alibaba Cloud activation runs only the migrator shipped by the normalized image', async () => {
   const activation = await readFile(new URL('../deploy/aliyun/activate-release.sh', import.meta.url), 'utf8')
-  assert.match(activation, /node dist-normalized\/server\/migrate-normalized\.js/)
-  assert.doesNotMatch(activation, /node dist-server\/server\/migrate\.js/)
+  const maintenanceHelper = activation.match(/^run_database_maintenance_container\(\) \{\n([\s\S]*?)^\}/m)?.[1]
+  assert.ok(maintenanceHelper, 'maintenance helper must exist')
+  assert.match(maintenanceHelper, /docker run --rm[\s\S]*"\$\{image_tag\}" node "\$@"/)
+  const migrationCalls = activation.match(/^\s*run_database_maintenance_container dist-normalized\/server\/migrate-normalized\.js[^\n]*$/gm) ?? []
+  assert.equal(migrationCalls.length, 2, 'both preflight and migration must use the published image helper')
+  assert.ok(migrationCalls.some((call) => /--verify-only\s*\\$/.test(call)))
+  assert.ok(migrationCalls.some((call) => /migrate-normalized\.js\s*$/.test(call)))
+  assert.doesNotMatch(activation, /dist-server\/server\/migrate\.js/)
 })

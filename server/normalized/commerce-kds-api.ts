@@ -1,4 +1,5 @@
 import {QuantityRemakeCommandService} from './quantity-remake-command-service.js'
+import {pickupWorkflowApiPlugin} from './pickup-workflow-api.js'
 import {orderReceivableSql} from './order-collection-sql.js'
 import {lockQuantityTaskOrders} from './quantity-task-lock.js'
 import {executeQuantityKdsAction} from './quantity-kds-action.js'
@@ -97,6 +98,7 @@ type KdsRepositoryPort = Pick<KdsRepository, 'accept' | 'startPreparing' | 'mark
 type OrderRepositoryPort = Pick<OrderRepository, 'markDelivered'>
 
 export interface CommerceKdsApiOptions {
+  threeScreenWorkflowEnabled?:boolean
   quantityActionsEnabled?:boolean
   commerce: CommerceCommandPort
   fulfillmentQuery: FulfillmentQueryPort
@@ -396,20 +398,11 @@ export async function listTablePaymentOrdersForSession(
     unresolved_online_payment_id: string | null
   }>(`
     SELECT order_header.id,order_header.public_id,order_header.currency,order_header.payment_status,
-      GREATEST(0,(${orderReceivableSql('order_header')})-paid.captured_amount_minor+refund.refunded_amount_minor)
+      mbox.order_collection_due_amount_for_mode(order_header.tenant_id,order_header.store_id,order_header.id,true)
         AS outstanding_amount_minor,
       pending.has_online_payment_in_progress,
       pending.unresolved_online_payment_id
     FROM mbox.orders order_header
-    LEFT JOIN LATERAL (
-      SELECT COALESCE(SUM(payment.amount_minor) FILTER (
-        WHERE payment.status IN ('succeeded','partially_refunded','refunded')
-      ),0)::bigint
-        AS captured_amount_minor
-      FROM mbox.order_payment_facts payment
-      WHERE payment.tenant_id=order_header.tenant_id AND payment.store_id=order_header.store_id
-        AND payment.order_id=order_header.id
-    ) paid ON true
     LEFT JOIN LATERAL (
       SELECT COALESCE(SUM(refund_row.amount_minor) FILTER (WHERE refund_row.status='succeeded'),0)::bigint
         AS refunded_amount_minor
@@ -436,11 +429,12 @@ export async function listTablePaymentOrdersForSession(
           AND recollection_authorization.order_id=order_header.id
           AND recollection_authorization.status='active'
           AND recollection_authorization.expires_at>clock_timestamp()
+          AND recollection_authorization.amount_minor=mbox.order_collection_due_amount_for_mode(order_header.tenant_id,order_header.store_id,order_header.id,true)
       ) AS active
     ) recollection ON true
     WHERE order_header.tenant_id=$1::uuid AND order_header.store_id=$2::uuid
       AND order_header.table_session_id=$3::uuid AND order_header.status<>'cancelled'
-      AND GREATEST(0,(${orderReceivableSql('order_header')})-paid.captured_amount_minor+refund.refunded_amount_minor)>0
+      AND mbox.order_collection_due_amount_for_mode(order_header.tenant_id,order_header.store_id,order_header.id,true)>0
       -- A server can collect only an ordinary unpaid balance, or a balance
       -- that a cashier explicitly reopened after a completed refund.
       AND (refund.refunded_amount_minor=0 OR recollection.active)
@@ -462,6 +456,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
   app,
   options,
 ) => {
+  await app.register(pickupWorkflowApiPlugin,{resolveContext:options.resolveContext,staffAccessTransactions:options.staffAccessTransactions,commandExecutor:options.commandExecutor,enabled:options.threeScreenWorkflowEnabled===true})
   app.get('/commerce/assisted-order-access', async (request, reply) => handleCommerceRoute(reply, async () => {
     const context = await resolveContext(options, request)
     const access = await resolveStaffAccess(options, context)
@@ -745,7 +740,15 @@ async function executeKdsAction(
     idempotencyKey,
     requestFingerprint: JSON.stringify({ taskId, action, employeeId: context.employeeId, reason, ...(quantity===undefined?{}:{quantity}) }),
     resultCodec: kdsActionResultCodec,
-  }, transaction => performKdsAction(transaction, options, context, taskId, action, idempotencyKey, requestId, reason, quantity))
+  }, async transaction => {
+    // A previously committed command can still recover through the executor.
+    // New delivery facts must use the shared pickup receipt and its exact parts.
+    const sharedPickupRequired=(action==='deliver'||action==='pickupAndDeliver')&&(options.threeScreenWorkflowEnabled||(await transaction.query<{found:boolean}>(`SELECT EXISTS(SELECT 1 FROM mbox.pickup_devices WHERE tenant_id=$1 AND store_id=$2 AND enabled) AS found`,[context.scope.tenantId,context.scope.storeId])).rows[0]?.found===true)
+    if(sharedPickupRequired) {
+      throw new CommerceKdsRequestError('SHARED_PICKUP_REQUIRED','请在吧台取餐屏确认取走，手机会自动同步，无需再次确认',409)
+    }
+    return performKdsAction(transaction, options, context, taskId, action, idempotencyKey, requestId, reason, quantity)
+  })
 }
 
 /** Shared atomic transition; callers must acquire all parent locks before a multi-order action. */

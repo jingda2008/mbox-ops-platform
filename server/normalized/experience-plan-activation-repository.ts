@@ -312,7 +312,9 @@ export class ExperiencePlanActivationRepository{
        AND product.id=option.product_id
       WHERE session.tenant_id=$1::uuid AND session.store_id=$2::uuid AND session.id=$3::uuid
       FOR UPDATE OF session,ordered,item
-      FOR KEY SHARE OF option,product
+      -- Runtime only appends recommendation options; mutable parent/order
+      -- locks serialize activation without granting UPDATE on option facts.
+      FOR KEY SHARE OF product
     `,[this.transaction.scope.tenantId,this.transaction.scope.storeId,
       reference.recommendationSessionId,reference.recommendationOptionId,orderId,reference.orderItemId])
     const row=result.rows[0]
@@ -331,8 +333,9 @@ export class ExperiencePlanActivationRepository{
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND order_id=$3::uuid
         AND event_type='ordered' AND recommendation_option_id IS NOT NULL
         AND order_item_id IS NOT NULL
+      -- The append-only event and its scoped foreign keys preserve the reference.
+      -- Mutable plan/order rows are locked by the state transition below.
       ORDER BY occurred_at,id LIMIT 1
-      FOR KEY SHARE
     `,[this.transaction.scope.tenantId,this.transaction.scope.storeId,orderId])
     const row=result.rows[0]
     return row?{

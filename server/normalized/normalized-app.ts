@@ -1,4 +1,5 @@
 import {kitchenProductionApiPlugin} from './kitchen-production-api.js'
+import {assertRuntimeDatabasePool, RuntimeDatabaseIdentityError} from './runtime-database-identity.js'
 import { customerCustodyApiPlugin } from './customer-custody-api.js'
 import {wechatServiceAccountSubscribePlugin} from './wechat-service-account-subscribe.js'
 import {socialBroadcastApiPlugin} from './social-broadcast-api.js'
@@ -211,7 +212,7 @@ export const NORMALIZED_LOG_REDACTION_PATHS = Object.freeze([
   'payment.publicKey',
 ])
 
-export const NORMALIZED_MIN_SCHEMA_VERSION = '222'
+export const NORMALIZED_MIN_SCHEMA_VERSION = '242'
 export const NORMALIZED_INJECTABLE_PLUGIN_PORTS = Object.freeze([
   'customer-table-side',
 ] as const)
@@ -346,6 +347,10 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
   pool.on?.('error', (error) => {
     app.log.error({ errorCode: safeErrorCode(error) }, 'normalized database pool idle client failed')
   })
+  if (options.config.deploymentTier === 'production') {
+    try {await assertRuntimeDatabasePool(pool, options.config.databaseUrl)}
+    catch (error) {await pool.end(); await app.close(); throw error}
+  }
   const transactions = new ScopedPostgresTransactionRunner(pool)
   const activityContactProtection = createActivityContactProtectionKeyring(
     options.config.personalContactProtection ?? null,
@@ -442,7 +447,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
 
   try {
     registerSystemRoutes(
-      app,options.config,transactions,scope,activityContactProtection,options.workerHealth,
+      app,options.config,transactions,scope,activityContactProtection,options.workerHealth,pool,
     )
     if (options.config.wechatServiceAccountCallback !== null
       && options.config.wechatServiceAccountCallback !== undefined) {
@@ -793,17 +798,19 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       onlinePaymentProvider,
     )
     instance.register(kitchenProductionApiPlugin, {
-      enabled:options.config.kitchenBatchBoardEnabled===true,
+      enabled:options.config.kitchenBatchBoardEnabled===true||options.config.threeScreenWorkflowEnabled===true,
+      barEnabled:options.config.threeScreenWorkflowEnabled===true,
       prefix: '/api', resolveContext: commerceContext, commandExecutor,
       staffAccessTransactions: transactions,
       createKdsRepository: transaction => new KdsRepository(transaction),
       createOrderRepository: transaction => new OrderRepository(transaction),
     })
     instance.register(commerceKdsApiPlugin, {
+      threeScreenWorkflowEnabled:options.config.threeScreenWorkflowEnabled===true,
       quantityActionsEnabled:(options.quantityAfterSalesEnabled ?? options.config.quantityAfterSalesEnabled)===true,
       prefix: '/api',
       commerce,
-      fulfillmentQuery: new FulfillmentQueryService(transactions,options.config.kitchenBatchBoardEnabled===true),
+      fulfillmentQuery: new FulfillmentQueryService(transactions,options.config.kitchenBatchBoardEnabled===true||options.config.threeScreenWorkflowEnabled===true,options.config.threeScreenWorkflowEnabled===true),
       commandExecutor,
       staffAccessTransactions: transactions,
       resolveContext: commerceContext,
@@ -904,6 +911,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     })
     instance.register(inventoryApiPlugin, {
       prefix: '/api',
+      transactions,
       commands: commandExecutor,
       query: new InventoryQueryService(transactions),
       resolveContext: operationsContext,
@@ -1507,6 +1515,7 @@ function registerSystemRoutes(
   scope: Readonly<StoreScope>,
   activityContactProtection: ReturnType<typeof createActivityContactProtectionKeyring>,
   workerHealth?: NormalizedAppOptions['workerHealth'],
+  identityPool?: PostgresPool,
 ): void {
   let personalContactKeyReadiness:
     | { status:'ready' }
@@ -1540,6 +1549,10 @@ function registerSystemRoutes(
   })
   app.get('/api/ready', async (_request, reply) => {
     try {
+      if (config.deploymentTier === 'production') {
+        if (!identityPool) throw new RuntimeDatabaseIdentityError()
+        await assertRuntimeDatabasePool(identityPool, config.databaseUrl)
+      }
       const row = await queryReadinessOnce(transactions, scope)
       if (!row || row.schema_flavor !== NORMALIZED_SCHEMA_FLAVOR || row.store_active !== true) {
         return reply.code(503).send({ status: 'not_ready', reason: 'normalized_schema_unavailable', ...version })
@@ -1558,7 +1571,10 @@ function registerSystemRoutes(
         return reply.code(503).send({ status: 'not_ready', reason: 'workers_unavailable', workers, ...version })
       }
       return reply.send({ status: 'ready', schemaVersion: row.schema_version, ...(workers === undefined ? {} : { workers }), ...version })
-    } catch {
+    } catch (error) {
+      if (error instanceof RuntimeDatabaseIdentityError) {
+        return reply.code(503).send({status:'not_ready',reason:'database_identity_unsafe',...version})
+      }
       return reply.code(503).send({ status: 'not_ready', reason: 'database_unavailable', ...version })
     }
   })

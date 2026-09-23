@@ -10,6 +10,7 @@ import {OrderRepository} from './order-repository.js'
 import {ItemQuantityRepository} from './item-quantity-repository.js'
 import {ItemQuantityFulfillmentRepository} from './item-quantity-fulfillment-repository.js'
 import {FulfillmentQueryService} from './fulfillment-query-service.js'
+import {readKitchenSources,readKitchenBatches} from './kitchen-production-query.js'
 import {kitchenProductionApiPlugin} from './kitchen-production-api.js'
 import {kitchenCompatibilityKey,type KitchenBoardData,type KitchenCommand} from '../../src/shared/kitchen-production.js'
 
@@ -161,4 +162,63 @@ integration('kitchen production real transaction boundary',()=>{
     await pool.query('UPDATE mbox.staff_sessions SET revoked_at=clock_timestamp() WHERE id=$1',[staffSessionId])
     expect((await command(body,key)).statusCode).toBe(403)
   })
+  it('bounds kitchen source lookups for a 120-order burst under RLS and preserves station/scope isolation',async()=>{
+    const rows=[]
+    for(let index=0;index<120;index++)rows.push(await item(`burst-${index}`))
+    const expected=new Set(rows.map(row=>row.taskId))
+    await runtime.run(scope,async tx=>{
+      await tx.query("SET LOCAL statement_timeout='5s'")
+      let sql='',values:readonly unknown[]=[]
+      await readKitchenSources({scope,query:async(text,args)=>{sql=text;values=args??[];return {rows:[],rowCount:0}}},employeeId,businessDate)
+      const result=await tx.query<{"QUERY PLAN":Array<{Plan:Record<string,unknown>}>}>(`EXPLAIN (ANALYZE,FORMAT JSON) ${sql}`,values)
+      const scans:Array<Record<string,unknown>>=[]
+      const visit=(node:Record<string,unknown>)=>{if(node['Relation Name']==='kds_tasks')scans.push(node);for(const child of (node.Plans??[]) as Array<Record<string,unknown>>)visit(child)}
+      visit(result.rows[0]!['QUERY PLAN'][0]!.Plan)
+      // The incident rescanned tasks 864,000 times for 120 orders. Reject that work amplification.
+      expect(scans.length).toBeGreaterThan(0)
+      expect(scans.every(scan=>Number(scan['Actual Loops'])<=1)).toBe(true)
+      const sources=(await readKitchenSources(tx,employeeId,businessDate)).filter(row=>expected.has(row.taskId))
+      expect(sources).toHaveLength(120)
+      expect(sources.every(row=>row.eligible&&row.unmade===5&&row.canPrepare)).toBe(true)
+      expect(await readKitchenSources(tx,employeeId,businessDate,'bar')).toEqual([])
+    },{readOnly:true})
+    expect(await runtime.run({...scope,storeId:randomUUID()},tx=>readKitchenSources(tx,employeeId,businessDate),{readOnly:true})).toEqual([])
+  },30000)
+
+  it('bounds physical batch lookups after 120 batches accumulate under RLS',async()=>{
+    const batchIds:string[]=[]
+    for(let index=0;index<120;index++){
+      const row=await item(`batch-${index}`)
+      await runtime.run(scope,async tx=>{
+        const {units}=await new ItemQuantityRepository(tx).initialize(row.itemId),unit=units[0]!
+        await tx.query("UPDATE mbox.order_item_quantity_units SET production_state='started' WHERE tenant_id=$1 AND store_id=$2 AND id=$3",[tenantId,storeId,unit.id])
+        const batchId=(await tx.query<{id:string}>(`INSERT INTO mbox.kitchen_production_batches(tenant_id,store_id,product_id,product_name,created_by_employee_id,anchor_at,original_quantity)
+          VALUES($1,$2,$3,'burst fixture',$4,clock_timestamp(),1) RETURNING id`,[tenantId,storeId,productId,employeeId])).rows[0]!.id
+        await tx.query(`INSERT INTO mbox.kitchen_production_units(tenant_id,store_id,batch_id,unit_id,kds_task_id,original_table_code)
+          VALUES($1,$2,$3,$4,$5,'burst fixture')`,[tenantId,storeId,batchId,unit.id,row.taskId])
+        batchIds.push(batchId)
+      })
+    }
+    await runtime.run(scope,async tx=>{
+      await tx.query("SET LOCAL statement_timeout='5s'")
+      let sql='',values:readonly unknown[]=[]
+      await readKitchenBatches({scope,query:async(text,args)=>{sql=text;values=args??[];return {rows:[],rowCount:0}}})
+      const result=await tx.query<{"QUERY PLAN":Array<{Plan:Record<string,unknown>}>}>(`EXPLAIN (ANALYZE,FORMAT JSON) ${sql}`,values)
+      const scans:Array<Record<string,unknown>>=[]
+      const visit=(node:Record<string,unknown>)=>{if(['kitchen_production_units','order_item_quantity_units','kds_tasks','order_items','orders','table_sessions','tables'].includes(String(node['Relation Name'])))scans.push(node);for(const child of (node.Plans??[]) as Array<Record<string,unknown>>)visit(child)}
+      visit(result.rows[0]!['QUERY PLAN'][0]!.Plan)
+      const portions=Number((await tx.query<{count:string}>('SELECT count(*) FROM mbox.kitchen_production_units')).rows[0]!.count)
+      expect(scans.length).toBeGreaterThan(0)
+      for(const relation of new Set(scans.map(scan=>scan['Relation Name']))){
+        expect(scans.filter(scan=>scan['Relation Name']===relation).reduce((total,scan)=>total+Number(scan['Actual Rows'])*Number(scan['Actual Loops']),0),String(relation)).toBeLessThanOrEqual(portions)
+      }
+      const batches=(await readKitchenBatches(tx)).filter(row=>batchIds.includes(row.id))
+      expect(batches).toHaveLength(120)
+      expect(batches.every(row=>row.units.length===1&&row.units[0]!.state==='started')).toBe(true)
+      expect(await readKitchenBatches(tx,batchIds[0])).toEqual([batches.find(row=>row.id===batchIds[0])])
+      expect(await readKitchenBatches(tx,undefined,'bar')).toEqual([])
+    },{readOnly:true})
+    expect(await runtime.run({...scope,storeId:randomUUID()},tx=>readKitchenBatches(tx),{readOnly:true})).toEqual([])
+  },30000)
+
 })

@@ -104,8 +104,7 @@ const deferred = () => { let resolve!: () => void; const promise = new Promise<v
       await admin.query("UPDATE mbox.payments SET status='closed' WHERE id=$1",[f.payment])
     } finally { release.resolve() }
     await blocker
-    // Keep the schema224 API contract; terminal-action recovery belongs to the deferred newer flow.
-    expect((await result).error).toMatchObject({message:'这笔订单已经不处于待付款状态'})
+    expect((await result).error?.name).toBe('OnlinePaymentAlreadyResolvedError')
     expect((await admin.query('SELECT count(*)::int n FROM mbox.payment_provider_actions WHERE payment_id=$1',[f.payment])).rows[0].n).toBe(0)
   }, 15_000)
 

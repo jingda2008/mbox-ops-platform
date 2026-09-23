@@ -26,10 +26,11 @@ import type {
   StaffPermissionDeploymentChange,
   StaffPermissionDeploymentResult,
 } from '../shared/normalized-contracts'
-import { staffModuleForPermission, staffPermissionImpactLabel } from '../shared/staff-module-access'
+import { staffPermissionImpactLabel } from '../shared/staff-module-access'
 import { useConfirmationDialog } from './ConfirmationDialog'
 import { refundReviewChanges, refundReviewDraft, refundReviewAmount, type RefundReviewDraft } from '../shared/refund-review-configuration'
 import { RefundReviewConfiguration } from './RefundReviewConfiguration'
+import { StaffPermissionRecovery, type PermissionDeploymentIntent } from './staff-permission-recovery'
 import './staff-access-management.css'
 
 type EditorMode = 'role' | 'employee' | 'policy' | 'navigation' | 'refund'
@@ -59,6 +60,8 @@ export function StaffAccessManagementPanel({ api, currentEmployeeId }: { api: No
   const [category, setCategory] = useState('all')
   const [reason, setReason] = useState('调整岗位与员工实际职责')
   const [publishing, setPublishing] = useState(false)
+  const [pendingDeployment, setPendingDeployment] = useState<PermissionDeploymentIntent | null>(null)
+  const [recoveryError, setRecoveryError] = useState('')
   const [employeeBusy, setEmployeeBusy] = useState(false)
   const [employeeDraft, setEmployeeDraft] = useState({ employeeCode: '', displayName: '', pin: '', roleId: '', reason: '新员工入职并分配岗位' })
   const [notice, setNotice] = useState<Notice | null>(null)
@@ -68,12 +71,14 @@ export function StaffAccessManagementPanel({ api, currentEmployeeId }: { api: No
     try {
       const next = await api.getEndpoint<{ data: StaffAccessManagementOverview }>('/api/staff-access/overview')
       setOverview(next.data)
+      try { setPendingDeployment(new StaffPermissionRecovery(next.data.scopeKey, currentEmployeeId, localStorage).pending()); setRecoveryError('') }
+      catch (error) { setRecoveryError(message(error)) }
       setEmployeeDraft((current) => ({ ...current, roleId: current.roleId || next.data.roles.find((role) => role.status === 'active' && role.code !== 'OWNER')?.id || next.data.roles.find((role) => role.status === 'active')?.id || '' }))
       setPhase('ready')
     } catch (error) {
       setPhase('error'); setNotice({ tone: 'error', title: '权限状态没有读取成功', detail: message(error) })
     }
-  }, [api])
+  }, [api, currentEmployeeId])
 
   useEffect(() => { void load() }, [load])
 
@@ -146,28 +151,42 @@ export function StaffAccessManagementPanel({ api, currentEmployeeId }: { api: No
     })
   }
 
-  const deploy = async () => {
-    if (pendingChanges.length === 0 || reason.trim().length < 2 || publishing) return
+  const deploy = async (recover = false) => {
+    if (!overview || publishing || recoveryError || (!recover && (pendingChanges.length === 0 || reason.trim().length < 2))) return
     setPublishing(true); setNotice(null)
+    let recovery: StaffPermissionRecovery | null = null
     try {
-      const result = await api.postEndpoint<StaffPermissionDeploymentResult>('/api/staff-access/deploy', {
-        reason: reason.trim(), changes: pendingChanges,
-      }, { idempotencyKey: `staff-access-${crypto.randomUUID()}`, timeoutMs: 20_000 })
-      const failed = result.changes.filter((change) => !change.applied)
-      if (failed.length > 0) throw new Error(`${failed.length}项配置写入后复核不一致`)
+      recovery = new StaffPermissionRecovery(overview.scopeKey, currentEmployeeId, localStorage)
+      const existing = recovery.pending()
+      const result = await recovery.execute(recover ? null : {
+        expectedVersion: overview.configurationVersion, reason: reason.trim(), changes: pendingChanges,
+      }, (intent) => {
+        setPendingDeployment(intent)
+        return api.postEndpoint<StaffPermissionDeploymentResult>('/api/staff-access/deploy', intent.body,
+          { idempotencyKey: intent.key, timeoutMs: 20_000 })
+      })
       setOverview(result.overview); resetDrafts()
-      const effective = result.changes.reduce((sum, change) => sum + change.effectiveEmployeeCount, 0)
-      const affectedModules = [...new Set(result.changes.flatMap((change) => {
-        const module = staffModuleForPermission(change.configurationCode)
-        return module === null ? [] : [module.label]
-      }))]
-      setNotice({
-        tone: 'success', title: `${result.changes.length}项配置已发布并复核生效`,
-        detail: `服务端已重新读取数据库；涉及${effective}人次当前有效配置${affectedModules.length === 0 ? '' : `，入口联动：${affectedModules.join('、')}`}，发布记录已留痕。`,
+      setNotice({ tone: 'success',
+        title: recover || existing || result.replayed ? '原权限发布已确认，当前配置已重新读取' : `${result.changes.length}项配置已发布并复核`,
+        detail: '下方展示当前权限；原发布后的其他管理员修改不会被恢复操作覆盖。发布记录已留痕。',
       })
     } catch (error) {
-      setNotice({ tone: 'error', title: '配置没有发布成功', detail: `${message(error)}；原配置保持不变，请核对后重试。` })
-    } finally { setPublishing(false) }
+      const code = error && typeof error === 'object' && 'code' in error ? error.code : null
+      const rejected = code === 'STAFF_ACCESS_VERSION_CONFLICT' || code === 'PERMISSION_DEPLOYMENT_INVALID'
+      if (rejected) {
+        resetDrafts()
+        try {
+          const fresh = await api.getEndpoint<{ data: StaffAccessManagementOverview }>('/api/staff-access/overview')
+          setOverview(fresh.data)
+        } catch { setPhase('error') }
+      }
+      setNotice({ tone: 'error', title: rejected ? '本次修改未写入，请重新核对当前配置' : '权限发布结果尚未确认',
+        detail: `${message(error)}；${rejected ? '重新读取后再选择需要的修改。' : '请恢复原发布结果；不要新建或重复发布同一修改。'}` })
+    } finally {
+      try { if (recovery) setPendingDeployment(recovery.pending()) }
+      catch (error) { setRecoveryError(message(error)) }
+      setPublishing(false)
+    }
   }
 
   const createEmployee = async (event: React.FormEvent) => {
@@ -207,6 +226,9 @@ export function StaffAccessManagementPanel({ api, currentEmployeeId }: { api: No
       {notice.tone === 'success' ? <CheckCircle2 /> : <CircleAlert />}
       <div><strong>{notice.title}</strong><span>{notice.detail}</span></div>
     </div>}
+
+    {recoveryError && <div role="alert" className="staff-access-notice is-error">{recoveryError}；权限发布已暂停，请核对浏览器保存的原操作。</div>}
+    {pendingDeployment && <div role="status" className="staff-access-notice is-error"><div><strong>有权限发布结果待确认</strong><span>原发布包含 {pendingDeployment.body.changes.length} 项修改，原因：{pendingDeployment.body.reason}。恢复仅核对原操作。</span></div><button type="button" disabled={publishing} onClick={() => void deploy(true)}>{publishing ? '正在核对原发布' : '恢复原发布结果'}</button></div>}
 
     <div className="staff-access-overview" aria-label="权限管理摘要">
       <article><UsersRound /><span><strong>{employees.length}</strong><small>在岗员工</small></span></article>
@@ -267,10 +289,10 @@ export function StaffAccessManagementPanel({ api, currentEmployeeId }: { api: No
         />}
         <div className="staff-access-publish">
           <label><span>发布原因</span><input aria-label="发布原因" value={reason} maxLength={200} onChange={(event) => setReason(event.target.value)} /></label>
-          <button type="button" disabled={pendingChanges.length === 0 || reason.trim().length < 2 || publishing || refundError !== null} onClick={() => void deploy()}>
+          <button type="button" disabled={Boolean(pendingDeployment) || Boolean(recoveryError) || phase !== 'ready' || pendingChanges.length === 0 || reason.trim().length < 2 || publishing || refundError !== null} onClick={() => void deploy()}>
             {publishing ? <LoaderCircle className="is-spinning" /> : <ShieldCheck />}{publishing ? '正在发布并复核' : `发布${pendingChanges.length}项修改`}
           </button>
-          <small>发布后统一生效；任一项失败，本次权限调整不会生效。请核对发布结果。</small>
+          <small>发布后统一生效；结果未知时先恢复原操作。配置已变化时需重新核对。</small>
         </div>
       </>}
     </section>

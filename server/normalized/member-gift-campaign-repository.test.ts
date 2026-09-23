@@ -1,3 +1,4 @@
+import {loadGiftBenefitProducts} from './gift-benefit-products.js'
 import {assertRuntimeDatabasePool} from './runtime-database-identity.js'
 import {randomUUID} from 'node:crypto'
 import {beforeAll,afterAll,describe,it,expect} from 'vitest'
@@ -75,6 +76,24 @@ const runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
     const rows=(await pool.query('SELECT quantity_total,EXTRACT(epoch FROM(valid_until-valid_from))::int AS seconds FROM mbox.benefits WHERE tenant_id=$1 AND store_id=$2 AND customer_id=ANY($3::uuid[])',[tenantId,storeId,customers])).rows
     expect(rows).toHaveLength(2);expect(rows.every(r=>r.quantity_total===1&&r.seconds===259200)).toBe(true)
     expect((await pool.query('SELECT count(*)::int AS n FROM mbox.orders WHERE tenant_id=$1 AND store_id=$2',[tenantId,storeId])).rows[0].n).toBe(0)
+  })
+  it('locks authoritative gift products without direct UPDATE rights and keeps other scopes invisible',async()=>{
+    const versionId=await campaign(),id=await customer()
+    const job=await run(repo=>repo.enqueue({versionId,customerId:id,cycleKey:'key-share-proof'}))
+    await run(repo=>repo.deliver(job.jobId))
+    const benefit=(await pool.query('SELECT id FROM mbox.benefits WHERE tenant_id=$1 AND store_id=$2 AND customer_id=$3',[tenantId,storeId,id])).rows[0].id
+    await expect(runner.run(scope,tx=>tx.query('UPDATE mbox.benefit_allowed_products SET product_id=product_id WHERE benefit_id=$1',[benefit]))).rejects.toMatchObject({code:'42501'})
+    expect((await runner.run({tenantId,storeId:randomUUID()},tx=>loadGiftBenefitProducts(tx,benefit))).rows).toHaveLength(0)
+    await runner.run(scope,async tx=>{
+      const products=await loadGiftBenefitProducts(tx,benefit)
+      expect(products.rows).toEqual([{product_id:productId,original_product_id:null,configured_reason:null}])
+      const admin=await pool.connect()
+      try{
+        await admin.query('BEGIN');await admin.query("SET LOCAL lock_timeout='100ms'")
+        await expect(admin.query('DELETE FROM mbox.benefit_allowed_products WHERE benefit_id=$1',[benefit])).rejects.toMatchObject({code:'55P03'})
+      }finally{await admin.query('ROLLBACK');admin.release()}
+    })
+    expect((await pool.query('SELECT count(*)::int n FROM mbox.benefit_allowed_products WHERE benefit_id=$1',[benefit])).rows[0].n).toBe(1)
   })
   it('issues coupon and dessert atomically once per customer and includes both in the budget',async()=>{
     const versionId=await campaign({dessertProductId:productId,maximumUnitCostMinor:200,maximumCostMinor:400,maximumDailyCostMinor:400,highlightMetrics:['issued','redeemed','remaining','cost']}),id=await customer()

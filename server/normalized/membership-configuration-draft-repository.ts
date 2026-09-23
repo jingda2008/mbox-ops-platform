@@ -304,7 +304,10 @@ class PostgresMembershipConfigurationDraftSession implements MembershipConfigura
       input.expectedRevision, preview.id, input.impactFingerprint, input.approverEmployeeId, input.reason])
     const table = versionTable(this.domain)
     const reasonColumn = this.domain === 'membership_terms' ? 'approval_reason' : 'reason'
-    const updated = await this.transaction.query(`
+    const updated = this.domain === 'wechat_notifications'
+      ? await this.transaction.query('SELECT * FROM mbox.approve_managed_notification_draft($1::uuid,$2::integer,$3::uuid,$4)',
+        [id,input.expectedRevision,input.approverEmployeeId,input.reason])
+      : await this.transaction.query(`
       UPDATE mbox.${table}
       SET status='approved',approved_by_employee_id=$4::uuid,approved_at=clock_timestamp(),${reasonColumn}=$5
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
@@ -437,9 +440,8 @@ class PostgresMembershipConfigurationDraftSession implements MembershipConfigura
         authorization_context,template_id,page_path,points_data_key,balance_data_key,
         occurred_at_data_key,expires_at_data_key,expiry_lead_days,max_per_customer_per_24h,
         minimum_interval_minutes,quiet_hours_start::text,quiet_hours_end::text
-      FROM mbox.wechat_notification_policies
-      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
-        AND governance_mode='managed' FOR UPDATE
+      FROM mbox.lock_managed_notification_policy($3::uuid)
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, id])).rows[0]
     return row ? record(row, 'wechat_notifications', makers, { domain: 'wechat_notifications',
       notificationType: row.notification_type, authorizationPurpose: row.authorization_purpose,
@@ -458,9 +460,7 @@ class PostgresMembershipConfigurationDraftSession implements MembershipConfigura
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND status='draft' AND draft_revision=$7`,
     [this.transaction.scope.tenantId,this.transaction.scope.storeId,id,content.tierPolicyVersionId,
       input.nextRevision,input.reason,input.expectedRevision])
-    await this.transaction.query(`DELETE FROM mbox.loyalty_tier_benefit_rules
-      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND policy_version_id=$3::uuid`,
-    [this.transaction.scope.tenantId,this.transaction.scope.storeId,id])
+    await this.transaction.query('SELECT mbox.clear_draft_tier_benefit_rules($1::uuid)',[id])
     for (const rule of content.rules) await this.transaction.query(`INSERT INTO mbox.loyalty_tier_benefit_rules(
       tenant_id,store_id,policy_version_id,rule_code,eligible_tier,inherit_to_higher_tiers,
       grant_on_entry,grant_on_retention,benefit_definition_id,quantity,validity_days,revocation_policy,enabled
@@ -475,10 +475,8 @@ class PostgresMembershipConfigurationDraftSession implements MembershipConfigura
       updated_at=clock_timestamp() WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
       AND status='draft' AND draft_revision=$6`, [this.transaction.scope.tenantId,this.transaction.scope.storeId,id,
       input.nextRevision,input.reason,input.expectedRevision])
-    await this.transaction.query(`DELETE FROM mbox.redemption_catalog_items
-      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND catalog_version_id=$3::uuid
-        AND NOT (public_id=ANY($4::text[]))`, [this.transaction.scope.tenantId,this.transaction.scope.storeId,id,
-      content.items.map((item)=>item.publicId)])
+    await this.transaction.query('SELECT mbox.remove_absent_draft_redemption_items($1::uuid,$2::text[])',
+      [id,content.items.map((item)=>item.publicId)])
     for (const item of content.items) await this.transaction.query(`
       INSERT INTO mbox.redemption_catalog_items(
         tenant_id,store_id,catalog_version_id,public_id,item_code,name,fulfillment_kind,product_id,
@@ -538,18 +536,8 @@ class PostgresMembershipConfigurationDraftSession implements MembershipConfigura
   }
 
   private async replaceNotification(id: string, input: Parameters<MembershipConfigurationDraftSession['replaceDraft']>[0], content: Extract<MembershipConfigurationContent,{domain:'wechat_notifications'}>) {
-    await changed(this.transaction, `UPDATE mbox.wechat_notification_policies SET notification_type=$4,
-      authorization_purpose=$5,authorization_context=$6,template_id=$7,page_path=$8,points_data_key=$9,
-      balance_data_key=$10,occurred_at_data_key=$11,expires_at_data_key=$12,expiry_lead_days=$13,
-      max_per_customer_per_24h=$14,minimum_interval_minutes=$15,quiet_hours_start=$16::time,
-      quiet_hours_end=$17::time,draft_revision=$18,reason=$19,updated_at=clock_timestamp()
-      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND status='draft'
-        AND governance_mode='managed' AND draft_revision=$20`, [this.transaction.scope.tenantId,
-      this.transaction.scope.storeId,id,content.notificationType,content.authorizationPurpose,
-      content.authorizationContext,content.templateId,content.pagePath,content.pointsDataKey,
-      content.balanceDataKey,content.occurredAtDataKey,content.expiresAtDataKey,content.expiryLeadDays,
-      content.maxPerCustomerPer24h,content.minimumIntervalMinutes,content.quietHoursStart,
-      content.quietHoursEnd,input.nextRevision,input.reason,input.expectedRevision])
+    await changed(this.transaction, 'SELECT * FROM mbox.replace_managed_notification_draft($1::uuid,$2::integer,$3::jsonb,$4)',
+      [id,input.expectedRevision,JSON.stringify(content),input.reason])
   }
 
   private async benefitFacts(content: Extract<MembershipConfigurationContent,{domain:'tier_benefits'}>) {

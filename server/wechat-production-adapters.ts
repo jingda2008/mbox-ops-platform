@@ -599,7 +599,7 @@ export class PostgresWechatIdentityRepository
           ON customer_identity.tenant_id=identity.tenant_id
          AND customer_identity.store_id=identity.store_id
          AND customer_identity.identity_kind='wechat'
-         AND customer_identity.identity_hash=encode(digest('wechat:'||identity.principal_id,'sha256'),'hex')
+         AND customer_identity.identity_hash=encode(sha256(convert_to('wechat:'||identity.principal_id,'UTF8')),'hex')
          AND customer_identity.status='active'
         WHERE identity.tenant_id=$1::uuid AND identity.store_id=$2::uuid
           AND identity.app_id=$4 AND identity.channel='mini_program'
@@ -633,7 +633,7 @@ export class PostgresWechatIdentityRepository
           ON customer_identity.tenant_id=identity.tenant_id
          AND customer_identity.store_id=identity.store_id
          AND customer_identity.identity_kind='wechat'
-         AND customer_identity.identity_hash=encode(digest('wechat:'||identity.principal_id,'sha256'),'hex')
+         AND customer_identity.identity_hash=encode(sha256(convert_to('wechat:'||identity.principal_id,'UTF8')),'hex')
          AND customer_identity.status='active'
         WHERE identity.tenant_id=$1::uuid AND identity.store_id=$2::uuid
           AND identity.app_id=$3 AND identity.channel='mini_program'

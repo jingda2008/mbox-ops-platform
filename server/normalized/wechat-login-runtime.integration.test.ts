@@ -20,7 +20,7 @@ integration('WeChat login with the production runtime column permissions', () =>
   beforeAll(async () => {
     await runNormalizedMigrations(adminUrl!)
     admin = new Pool({ connectionString: adminUrl })
-    runtime = new Pool({ connectionString: runtimeUrl })
+    runtime = new Pool({ connectionString: runtimeUrl, options: '-c search_path=pg_catalog' })
     await assertRuntimeDatabasePool(runtime, runtimeUrl!)
     await admin.query("INSERT INTO mbox.tenants(id,code,name) VALUES($1::uuid,$1::text,'Login fixture')", [scope.tenantId])
     await admin.query("INSERT INTO mbox.stores(id,tenant_id,code,name) VALUES($1::uuid,$2::uuid,$1::text,'Login fixture')", [scope.storeId, scope.tenantId])
@@ -64,6 +64,9 @@ integration('WeChat login with the production runtime column permissions', () =>
     })
     expect(await repository.resolveMiniProgramPaymentPayer(customerId, scope.appId)).toBe(openId)
     expect(await repository.resolveMiniProgramPaymentPayer(customerId, 'wrong-app')).toBeNull()
+    const identity = (await repository.findByAppOpenId(scope.tenantId, scope.appId, openId))!
+    expect(await repository.resolveMiniProgramNotificationRecipient(customerId, identity.id)).toEqual({ identityExternalId: identity.id, openId })
+    expect(await repository.resolveMiniProgramNotificationRecipient(randomUUID(), identity.id)).toBeNull()
   })
 
   it('does not grant runtime permission to reassign or delete an identity', async () => {

@@ -35,7 +35,6 @@ function cachedRequests(scope) {
 
 function normalizeTask(task) {
   const status = task.status || task.taskStatus || 'pending'
-  const guestConfirmed = status === 'completed' && Boolean(task.guestConfirmedAt)
   return {
     publicId: task.publicId || task.taskPublicId || task.id,
     name: task.name || task.serviceName || task.requestTypeName || REQUEST_TYPE_NAMES[task.requestType] || '桌边服务',
@@ -45,9 +44,9 @@ function normalizeTask(task) {
       : '等待服务人员接单',
     requestCountText: Number(task.requestCount || 1) > 1 ? `已合并 ${Number(task.requestCount)} 次同类请求` : '',
     status,
-    statusText: guestConfirmed ? '已解决' : SERVICE_STATUS_NAMES[status] || TASK_STATUS[status] || '状态待确认',
+    statusText: SERVICE_STATUS_NAMES[status] || TASK_STATUS[status] || '状态待确认',
     createdAtText: dateTime(task.createdAt),
-    canConfirm: status === 'completed' && !guestConfirmed,
+    canConfirm: status === 'completed',
     canEscalate: ACTIVE_SERVICE_STATUSES.includes(status),
   }
 }

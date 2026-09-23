@@ -154,11 +154,11 @@ const LEGACY_MENU_CATEGORY_HIERARCHY = Object.freeze({
   snack: { name: '小食', parentCode: 'food', parentName: '鲜果与冷食', parentSortOrder: 30, sortOrder: 30 },
 })
 const SERVICE_STATUS_NAMES = {
-  pending: '等待接单', acknowledged: '服务人员已接单', accepted: '服务人员已接单', arrived: '服务人员已到桌',
+  pending: '等待接单', accepted: '服务人员已接单', arrived: '服务人员已到桌',
   in_progress: '正在处理', completed: '等待您确认', confirmed: '已解决',
   reopened: '正在继续处理', escalated: '已升级处理', cancelled: '已取消', expired: '已失效',
 }
-const ACTIVE_SERVICE_STATUSES = ['pending', 'acknowledged', 'accepted', 'arrived', 'in_progress', 'completed', 'reopened', 'escalated']
+const ACTIVE_SERVICE_STATUSES = ['pending', 'accepted', 'arrived', 'in_progress', 'completed', 'reopened', 'escalated']
 const QUICK_SERVICE_REQUESTS = {
   call: { requestType: 'call_staff', detail: '顾客请求服务人员到桌协助', pendingText: '正在通知服务人员' },
   celebration: { requestType: 'custom', detail: '【生日/个性化需求】请服务人员到桌沟通确认', pendingText: '正在安排沟通' },
@@ -288,10 +288,7 @@ function serviceSummaryView(response, serviceStaffName) {
     status: 'unavailable', label: '服务进展暂时不可用', detail: '点击查看服务进展', live: false,
   }
   const items = Array.isArray(response) ? response : (response.tasks || [])
-  const active = items.filter((item) => {
-    const status = String(item.status || item.taskStatus || 'pending')
-    return ACTIVE_SERVICE_STATUSES.includes(status) && !(status === 'completed' && item.guestConfirmedAt)
-  })
+  const active = items.filter((item) => ACTIVE_SERVICE_STATUSES.includes(String(item.status || item.taskStatus || 'pending')))
     .toSorted((left, right) => String(right.updatedAt || right.createdAt || '').localeCompare(String(left.updatedAt || left.createdAt || '')))
   const latest = active[0]
   if (latest) {
@@ -1090,10 +1087,7 @@ Page({
     if (storedPending && tableOrdersAvailable && storedOrder
       && (Number(storedOrder.payableAmountMinor || 0) === 0
         || ['paid', 'partially_refunded', 'refunded'].includes(storedOrder.paymentStatus))) {
-      completedPayment = storedPending.paymentPresentationState === 'resolved' ? {
-        kind: 'pending', mark: '✓', title: '原订单账单已更新',
-        copy: '请查看本桌账单中的最新收付款及退款记录。', canRetry: false,
-      } : {
+      completedPayment = {
         kind: 'success',
         mark: '✓',
         title: '付款成功',
@@ -1104,7 +1098,7 @@ Page({
       wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
       storedAbandonment = null
       storedPending = null
-    } else if (storedPending && storedPending.paymentPresentationState !== 'resolved' && tableOrdersAvailable && !storedOrder) {
+    } else if (storedPending && tableOrdersAvailable && !storedOrder) {
       wx.removeStorageSync(PENDING_PAYMENT_KEY)
       wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
       storedAbandonment = null
@@ -1122,7 +1116,6 @@ Page({
       ? Object.assign({}, storedPending, {
           canContinue: Boolean(!storedPending.wechatAcceptedAt
             && storedPending.paymentPresentationState !== 'result_unknown'
-            && storedPending.paymentPresentationState !== 'resolved'
             && storedPending.paymentPresentationInFlight !== true
             && tableOrdersAvailable && storedOrder
             && ['available', 'payment_in_progress'].includes(storedOrder.paymentAccess)),
@@ -2121,10 +2114,6 @@ Page({
   async handlePaymentAction(action, request) {
     const tableRequest = request || this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
-    if (action && action.status === 'resolved') {
-      await this.restoreResolvedPayment(action, tableRequest)
-      return
-    }
     if (!isPresentableWechatJsapiAction(action)) {
       const waitingForResult = Boolean(action && (
         action.status === 'unknown' || (action.status === 'pending' && !action.payload)
@@ -2221,51 +2210,6 @@ Page({
         },
       })
     }
-  },
-
-  async restoreResolvedPayment(action, tableRequest) {
-    const original = this.data.pendingPayment
-    if (!original || !original.orderPublicId || original.tableScope !== tableSessionCacheScope()) {
-      this.setData({ error: '已找到原结账结果，请在本桌账单核对原订单。' })
-      return
-    }
-    const pendingPayment = Object.assign({}, original, {
-      terminalPaymentStatus: action.terminalPaymentStatus,
-      paymentPresentationState: 'resolved', paymentPresentationInFlight: false, canContinue: false,
-      statusText: '已找到原订单，正在刷新付款状态',
-    })
-    wx.setStorageSync(PENDING_PAYMENT_KEY, pendingPayment)
-    const checkout = wx.getStorageSync(CHECKOUT_ATTEMPT_KEY)
-    if (checkout && checkout.tableScope === original.tableScope) wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
-    const abandonment = wx.getStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
-    if (abandonment && abandonment.tableScope === original.tableScope && abandonment.orderPublicId === original.orderPublicId) {
-      wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
-    }
-    this.setData({ pendingPayment, checkoutLocked: false, paymentStateReady: false, error: '', success: '' })
-    // Replace older payment reads. A late pre-checkout response cannot erase this original order.
-    const read = { request: tableRequest, promise: null }
-    this.orderPaymentRead = read
-    read.promise = (async () => {
-      try {
-        const orders = await getTableOrders()
-        if (this.orderPaymentRead !== read || !this.isCurrentTableRequest(tableRequest)) return false
-        const order = Array.isArray(orders) && orders.find((item) => item.publicId === original.orderPublicId)
-        if (!order) throw new Error('original order readback unavailable')
-        const resolvedPayment = Object.assign({}, pendingPayment, { statusText: '已恢复原订单，请查看本桌账单' })
-        wx.setStorageSync(PENDING_PAYMENT_KEY, resolvedPayment)
-        this.setData({ pendingPayment: resolvedPayment, paymentStateReady: true, paymentResult: {
-          kind: 'pending', mark: '✓', title: '已恢复原订单',
-          copy: '已重新读取原订单。请查看本桌账单中的最新收付款和出品进度，本次没有再次发起支付。', canRetry: false,
-        } })
-        return true
-      } catch (_error) {
-        if (this.orderPaymentRead !== read || !this.isCurrentTableRequest(tableRequest)) return false
-        this.setData({ paymentResult: { kind: 'pending', mark: '…', title: '已找到原订单，正在核对状态',
-          copy: '最新账单暂时无法读取，原订单恢复信息已保留。请刷新或查看本桌账单核对，不要重复支付。', canRetry: false } })
-        return false
-      } finally { if (this.orderPaymentRead === read) this.orderPaymentRead = null }
-    })()
-    await read.promise
   },
 
   async confirmPaymentOutcome(pendingPayment, request) {

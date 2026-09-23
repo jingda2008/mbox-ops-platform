@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { Pool, type PoolClient } from 'pg'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -20,11 +20,10 @@ import {
 } from './guest-request-context.js'
 import type { Payment } from './payment-repository.js'
 import {
-  OnlinePaymentService,
   OnlinePaymentUnavailableError,
   OnlinePaymentUnknownError,
 } from './online-payment-service.js'
-import { PaymentProviderActionRepository, WechatPaymentIdentityRequiredError } from './payment-provider-action-repository.js'
+import { WechatPaymentIdentityRequiredError } from './payment-provider-action-repository.js'
 import { PostarPaymentRejectedError } from '../postar-adapter.js'
 import { FulfillmentCapacityUnavailableError } from './fulfillment-capacity-repository.js'
 import { ServiceTaskRepository } from './service-task-repository.js'
@@ -37,7 +36,6 @@ import {CheckoutUpgradeOpportunityRepository} from './checkout-upgrade-opportuni
 import {CheckoutCartPricingError} from './checkout-cart-pricing.js'
 import { ReservationGuestSessionInvalidError } from './reservation-guest-session.js'
 import { GuestSessionInvalidError, GuestTableSessionEndedError } from './guest-session-repository.js'
-import { GuestSharedCartRepository } from './guest-shared-cart-repository.js'
 import {
   ScopedPostgresTransactionRunner,
   type PostgresPool,
@@ -78,80 +76,6 @@ afterEach(async () => {
 })
 
 describe('guest commerce/service API trust boundaries', () => {
-  it.each(['paused','unavailable','identity_expired','changed_request','lost_table_position'])(
-    'authorizes original terminal checkout recovery before new-payment preflights: %s', async scenario => {
-      const resolveMode = vi.fn(async () => null);
-      const value = fixture({resolvePaymentMode:resolveMode,onlinePayments:{
-        assertAvailable:vi.fn(()=>{throw new OnlinePaymentUnavailableError()}),
-        assertGuestJsapiReady:vi.fn(async()=>{throw new WechatPaymentIdentityRequiredError()}),
-      } as never});
-      const originalQuery = value.query.getMockImplementation()!;
-      const fingerprint = JSON.stringify({checkoutUpgradeOfferPublicId:null,confirmedDuplicateOrderId:null,customerId,
-        expectedGeneration:1,expectedVersion:2,note:null,recommendationPublicId:null,selectedRecommendationProductId:null,tableSessionId});
-      const savedCart = {publicId:'original-next-cart',status:'open',generation:2,version:1,lines:[],guestWritesFrozen:false,totalAmountMinor:0,currency:'CNY',updatedAt:new Date().toISOString()};
-      const saved = {order:commerceResult(),payment:paymentResult('postar','jsapi'),cart:savedCart};
-      value.query.mockImplementation((async(sql:string)=>{
-        if(sql.includes('FROM mbox.idempotency_records')) return {rows:[{request_sha256:createHash('sha256').update(fingerprint).digest('hex'),response_snapshot:{result:saved}}],rowCount:1};
-        if(sql.includes('SELECT status,payment_status FROM mbox.orders')) return {rows:[{status:'submitted',payment_status:'paid'}],rowCount:1};
-        if(scenario==='lost_table_position' && sql.includes('lock_active_table_guest_session_position')) return {rows:[{participation_id:null}],rowCount:1};
-        return originalQuery(sql);
-      }) as never);
-      const contextRead = vi.spyOn(PaymentProviderActionRepository.prototype,'resolvePaymentContext').mockResolvedValue({
-        id:paymentId,publicId:'guest-payment-public-0001',payableKind:'order',orderPublicId:'guest-order-public-0001',
-        provider:'postar',method:'jsapi',status:'succeeded',amountMinor:13600,currency:'CNY',
-      } as never);
-      const cartRead = vi.spyOn(GuestSharedCartRepository.prototype,'readOpen').mockResolvedValue({...savedCart,publicId:'current-cart',generation:3,version:7} as never);
-      try {
-        const response = await value.app.inject({method:'POST',url:'/api/guest/shared-cart/checkout',
-          headers:{'idempotency-key':'original-checkout-recovery'},payload:{expectedGeneration:1,expectedVersion:scenario==='changed_request'?3:2}});
-        if(scenario==='changed_request') {expect(response.statusCode,response.body).toBe(409);expect(contextRead).not.toHaveBeenCalled();}
-        else if(scenario==='lost_table_position') {expect(response.statusCode,response.body).toBe(401);expect(contextRead).not.toHaveBeenCalled();}
-        else {
-          expect(response.statusCode,response.body).toBe(200);
-          expect(response.json()).toMatchObject({data:{order:{publicId:'guest-order-public-0001',paymentStatus:'paid'},
-            payment:{status:'succeeded',providerAction:{status:'resolved',terminalPaymentStatus:'succeeded',payload:null}},
-            sharedCart:{cartPublicId:'current-cart',generation:3,version:7}},meta:{replayed:true}});
-        }
-        expect(resolveMode).not.toHaveBeenCalled();
-        expect(value.onlinePayments.assertAvailable).not.toHaveBeenCalled();
-        expect(value.onlinePayments.assertGuestJsapiReady).not.toHaveBeenCalled();
-        expect(value.onlinePayments.create).not.toHaveBeenCalled();
-        expect(value.options.commandExecutor.execute).not.toHaveBeenCalled();
-      } finally {contextRead.mockRestore();cartRead.mockRestore();}
-    },
-  );
-  it.each(['succeeded','partially_refunded','refunded','failed','closed'] as const)(
-    'recovers a committed shared checkout against current %s payment without another provider action', async status => {
-      const submit = vi.fn(), initiate = vi.fn();
-      const value = fixture({
-        commerce: { submitOrderInTransaction: submit } as never,
-        payments: { initiateInTransaction: initiate } as never,
-        commandExecutor: {execute:vi.fn(async()=>({replayed:true,value:{
-          order:commerceResult(),payment:paymentResult('postar','jsapi'),
-          cart:{publicId:'next-cart',status:'open',generation:2,version:1,lines:[],guestWritesFrozen:false,totalAmountMinor:0,currency:'CNY',updatedAt:new Date().toISOString()},
-        }}))} as never,
-      });
-      const load = vi.spyOn(PaymentProviderActionRepository.prototype,'resolvePaymentContext').mockResolvedValue({
-        id:paymentId,publicId:'guest-payment-public-0001',payableKind:'order',orderPublicId:'guest-order-public-0001',
-        provider:'postar',method:'jsapi',status,amountMinor:13600,currency:'CNY',
-      } as never);
-      const claim = vi.spyOn(PaymentProviderActionRepository.prototype,'claim');
-      const createProvider = vi.fn();
-      const online = new OnlinePaymentService(value.transactions as never,'terminal-test-secret-at-least-32-bytes',null,{createPayment:createProvider} as never);
-      value.onlinePayments.create.mockImplementation(input => online.create(input) as never);
-      try {
-        const response = await value.app.inject({method:'POST',url:'/api/guest/shared-cart/checkout',
-          headers:{'idempotency-key':`shared-terminal-${status}`},payload:{expectedGeneration:1,expectedVersion:2}});
-        expect(response.statusCode,response.body).toBe(200);
-        expect(response.json()).toMatchObject({data:{order:{publicId:'guest-order-public-0001'},payment:{
-          publicId:'guest-payment-public-0001',status,providerAction:{status:'resolved',terminalPaymentStatus:status,payload:null},
-        }},meta:{replayed:true}});
-        expect(submit).not.toHaveBeenCalled(); expect(initiate).not.toHaveBeenCalled();
-        expect(claim).not.toHaveBeenCalled(); expect(createProvider).not.toHaveBeenCalled();
-        expect(load).toHaveBeenCalledWith(paymentId,expect.objectContaining({type:'guest',customerId,tableSessionId}));
-      } finally {load.mockRestore();claim.mockRestore();}
-    },
-  );
   it.each([
     [{ portionId: 'not-a-uuid', note: '少冰' }],
     [{ portionId: productId, note: 'a'.repeat(301) }],
@@ -1526,7 +1450,7 @@ integration('guest service and mood API with PostgreSQL', () => {
     const limited = await submit('guest-service-api-limited-0003')
     expect(limited.statusCode).toBe(429)
     expect(limited.json()).toMatchObject({
-      data: { status: 'rate_limited', message: '请求较多，这次尚未受理；请稍后恢复本次请求。' },
+      data: { status: 'rate_limited', message: '我们已经收到啦，伙伴正在赶来，请稍等一下' },
     })
     const evidence = await pool.query<{ tasks: string; groups: string; behaviors: string; audits: string; outbox: string }>(`
       SELECT
@@ -1651,7 +1575,7 @@ function fixture(
 ) {
   const { onlinePayments: onlinePaymentOverrides, ...optionOverrides } = overrides
   const paymentMode = overrides.paymentMode ?? 'wechat_jsapi'
-  const query = vi.fn(async (sql: string) => sql.includes('FROM mbox.idempotency_records') ? ({rows:[],rowCount:0}) : sql.includes('lock_active_table_guest_session_position') ? ({
+  const query = vi.fn(async (sql: string) => sql.includes('lock_active_table_guest_session_position') ? ({
     rows:[{ participation_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }],rowCount:1,
   }) : sql.includes('order_balances AS (') ? ({
     rows: [{

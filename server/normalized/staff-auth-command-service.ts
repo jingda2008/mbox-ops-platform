@@ -1,4 +1,3 @@
-import { lockStaffAccessConfiguration } from './staff-access-version.js'
 import { randomBytes, scrypt as nodeScrypt, timingSafeEqual } from 'node:crypto'
 import type { AuditActor, CommandExecution, JsonCodec, JsonObject } from './command-executor.js'
 import { NormalizedCommandExecutor } from './command-executor.js'
@@ -159,7 +158,6 @@ export class StaffAuthCommandService {
       requestFingerprint: input.requestFingerprint,
       resultCodec: jsonObjectCodec,
     }, async (transaction) => {
-      await lockStaffAccessConfiguration(transaction)
       await requireAccessAdministrator(transaction, input.actorEmployeeId)
       const credential = await new StaffSessionRepository(transaction).replaceDailyCredential({
         businessDate: input.businessDate,
@@ -192,7 +190,6 @@ export class StaffAuthCommandService {
       requestFingerprint: input.requestFingerprint,
       resultCodec: jsonObjectCodec,
     }, async (transaction) => {
-      await lockStaffAccessConfiguration(transaction)
       await requireAccessAdministrator(transaction, input.actorEmployeeId)
       await new StaffSessionRepository(transaction).updateEmployeePinHash(input.employeeId, pinHash)
       const result: JsonObject = { employeeId: input.employeeId, pinConfigured: true }
@@ -581,7 +578,6 @@ export class StaffAuthCommandService {
       requestFingerprint: input.requestFingerprint,
       resultCodec: jsonObjectCodec,
     }, async (transaction) => {
-      await lockStaffAccessConfiguration(transaction)
       await requireAccessAdministrator(transaction, input.actorEmployeeId)
       const result = await handler(new StaffAccessRepository(transaction))
       const objectId = typeof result.id === 'string' ? result.id : input.actorEmployeeId

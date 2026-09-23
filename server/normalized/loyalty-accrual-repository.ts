@@ -2,7 +2,6 @@ import type { ScopedTransaction } from './transaction-runner.js'
 import { WechatLoyaltyNotificationRepository } from './wechat-loyalty-notification-repository.js'
 import { LoyaltyTierBenefitRepository } from './loyalty-tier-benefit-repository.js'
 import { LoyaltyOperationalControlRepository } from './loyalty-operational-control-repository.js'
-import { LoyaltyRecollectionRepository } from './loyalty-recollection-repository.js'
 
 interface AwardContextRow extends Record<string, unknown> {
   order_id: string
@@ -39,9 +38,6 @@ interface AwardRow extends Record<string, unknown> {
   reversed_amount_minor: string | number
   reversed_points: number
   reversed_growth: number
-  restored_amount_minor: string | number
-  restored_points: number
-  restored_growth: number
   currency: string
   available_points: number
   pending_recovery_points: number
@@ -101,13 +97,6 @@ export interface LoyaltySupplementExecutionResult extends LoyaltyAccrualResult {
   status: 'executed' | 'not_required'
 }
 
-export class LoyaltyRefundReviewRequiredError extends Error {
-  constructor() {
-    super('Loyalty supplement requires resolution of the order refund review')
-    this.name = 'LoyaltyRefundReviewRequiredError'
-  }
-}
-
 const NO_OP: LoyaltyAccrualResult = Object.freeze({
   applied: false,
   membershipId: null,
@@ -123,7 +112,6 @@ export class LoyaltyAccrualRepository {
     orderId: string
     paymentId: string
     occurredAt: string
-    recoverDeferred?: boolean
   }>): Promise<LoyaltyAccrualResult> {
     if (await new LoyaltyOperationalControlRepository(this.transaction).deferPaidOrderIfPaused({
       orderId: input.orderId,
@@ -150,10 +138,17 @@ export class LoyaltyAccrualRepository {
         SELECT child.id FROM mbox.customers child JOIN family parent ON child.merged_into_customer_id=parent.id
         WHERE child.tenant_id=$1::uuid AND child.store_id=$2::uuid
       ), eligible AS (
-        SELECT COALESCE(SUM(item.amount_minor), 0)::bigint AS amount_minor
-        FROM mbox.loyalty_order_item_basis item
+        SELECT COALESCE(SUM(item.total_amount_minor), 0)::bigint AS amount_minor
+        FROM mbox.order_items item
         WHERE item.tenant_id=$1::uuid AND item.store_id=$2::uuid AND item.order_id=$3::uuid
-          AND item.loyalty_eligible
+          AND item.parent_order_item_id IS NULL AND item.status <> 'cancelled'
+          AND item.total_amount_minor > 0 AND item.loyalty_eligible_at_submission
+          AND NOT EXISTS (
+            SELECT 1 FROM mbox.pricing_authorizations authz
+            WHERE authz.tenant_id=item.tenant_id AND authz.store_id=item.store_id
+              AND authz.order_id=item.order_id AND authz.status='consumed'
+              AND authz.kind='gift'
+          )
       )
       SELECT ordering.id AS order_id, ordering.created_by_customer_id AS customer_id,
         payment.id AS payment_id, ordering.loyalty_policy_version_id AS policy_version_id,
@@ -168,7 +163,7 @@ export class LoyaltyAccrualRepository {
       FROM mbox.orders ordering
       JOIN mbox.payments payment
         ON payment.tenant_id=ordering.tenant_id AND payment.store_id=ordering.store_id
-       AND payment.id=$4::uuid AND (payment.order_id=ordering.id OR EXISTS(SELECT 1 FROM mbox.order_payment_allocations batch_allocation WHERE batch_allocation.tenant_id=payment.tenant_id AND batch_allocation.store_id=payment.store_id AND batch_allocation.batch_id=payment.order_batch_id AND batch_allocation.order_id=ordering.id)) AND payment.succeeded_at IS NOT NULL AND payment.status IN ('succeeded','partially_refunded','refunded')
+       AND payment.id=$4::uuid AND (payment.order_id=ordering.id OR EXISTS(SELECT 1 FROM mbox.order_payment_allocations batch_allocation WHERE batch_allocation.tenant_id=payment.tenant_id AND batch_allocation.store_id=payment.store_id AND batch_allocation.batch_id=payment.order_batch_id AND batch_allocation.order_id=ordering.id)) AND payment.status='succeeded'
       JOIN mbox.loyalty_policy_versions policy
         ON policy.tenant_id=ordering.tenant_id AND policy.store_id=ordering.store_id
        AND policy.id=ordering.loyalty_policy_version_id
@@ -180,14 +175,10 @@ export class LoyaltyAccrualRepository {
        AND account.membership_id=membership.id
       CROSS JOIN eligible
       WHERE ordering.tenant_id=$1::uuid AND ordering.store_id=$2::uuid
-        AND ordering.id=$3::uuid AND (mbox.order_consumption_settled(ordering.tenant_id,ordering.store_id,ordering.id) OR ($5::boolean AND EXISTS (
-          SELECT 1 FROM mbox.loyalty_accrual_deferred_orders deferred
-          WHERE deferred.tenant_id=ordering.tenant_id AND deferred.store_id=ordering.store_id
-            AND deferred.order_id=ordering.id AND deferred.payment_id=payment.id
-        )))
+        AND ordering.id=$3::uuid AND ordering.payment_status='paid'
       ORDER BY membership.joined_at, membership.id LIMIT 1
       FOR UPDATE OF ordering, payment, policy, membership, account
-    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.orderId, input.paymentId, input.recoverDeferred === true])
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.orderId, input.paymentId])
     const row = selected.rows[0]
     if (!row || row.customer_id == null || row.policy_version_id == null
       || row.membership_id == null || row.account_id == null
@@ -203,18 +194,7 @@ export class LoyaltyAccrualRepository {
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND order_id=$3::uuid
       FOR UPDATE
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.orderId])
-    if (existing.rowCount === 1) {
-      const repository = new LoyaltyRecollectionRepository(this.transaction)
-      const preview = await repository.previewOrderRecovery({orderId: input.orderId})
-      if (preview.status !== 'ready' || !preview.recoveryPaymentId) return NO_OP
-      const recovery = await repository.applyApprovedRecovery({
-        ...input, paymentId: preview.recoveryPaymentId, occurredAt: new Date().toISOString(), actorRef: `payment:${input.paymentId}`,
-      })
-      if (!recovery.applied) return NO_OP
-      return { applied: recovery.applied, membershipId: recovery.membershipId,
-        pointsDelta: recovery.availablePointsDelta, growthDelta: recovery.growthDelta,
-        pendingRecoveryPoints: row.pending_recovery_points + recovery.pendingRecoveryPointsDelta }
-    }
+    if (existing.rowCount === 1) return NO_OP
 
     const eligibleAmountMinor = money(row.eligible_amount_minor)
     const pointsSpec = exactRewardSpec(
@@ -342,6 +322,7 @@ export class LoyaltyAccrualRepository {
         row.order_id, row.payment_id, `loyalty:order:${row.order_id}:growth`, input.occurredAt,
       ])
     }
+    await this.evaluateMembershipTier(row.membership_id, input.occurredAt, row.order_id)
     if (creditedPoints > 0) {
       await new WechatLoyaltyNotificationRepository(this.transaction).enqueuePointsCredited({
         awardId,
@@ -350,12 +331,7 @@ export class LoyaltyAccrualRepository {
         occurredAt: input.occurredAt,
       })
     }
-    const historical = await this.applyHistoricalRefunds(row.order_id, row.payment_id, input.occurredAt, input.recoverDeferred === true)
-    await this.evaluateMembershipTier(row.membership_id, input.occurredAt, row.order_id)
-    return { applied: true, membershipId: row.membership_id,
-      pointsDelta: creditedPoints + historical.pointsDelta, growthDelta: growth + historical.growthDelta,
-      pendingRecoveryPoints: historical.pendingRecoveryPoints ?? pendingRecoveryPoints }
-
+    return { applied: true, membershipId: row.membership_id, pointsDelta: creditedPoints, growthDelta: growth, pendingRecoveryPoints }
   }
 
   async reverseSucceededRefund(input: Readonly<{
@@ -386,7 +362,7 @@ export class LoyaltyAccrualRepository {
        AND payment.status IN ('succeeded','partially_refunded','refunded')
       JOIN mbox.refunds refund
         ON refund.tenant_id=payment.tenant_id AND refund.store_id=payment.store_id
-       AND refund.id=$5::uuid AND refund.payment_id=payment.id AND COALESCE(refund.order_id,payment.order_id)=ordering.id AND refund.status='succeeded'
+       AND refund.id=$5::uuid AND refund.payment_id=payment.id AND refund.status='succeeded'
       WHERE ordering.tenant_id=$1::uuid AND ordering.store_id=$2::uuid
         AND ordering.id=$3::uuid
       FOR UPDATE OF ordering, payment, refund
@@ -402,6 +378,7 @@ export class LoyaltyAccrualRepository {
     const existingApplication = await this.transaction.query<{ id: string }>(`
       SELECT id FROM mbox.loyalty_award_refund_applications
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND refund_id=$3::uuid
+      FOR UPDATE
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.refundId])
     if (existingApplication.rowCount === 1) return NO_OP
 
@@ -413,14 +390,13 @@ export class LoyaltyAccrualRepository {
           ON item.tenant_id=refund_item.tenant_id AND item.store_id=refund_item.store_id
          AND item.id=refund_item.order_item_id AND item.order_id=$3::uuid
         WHERE refund_item.tenant_id=$1::uuid AND refund_item.store_id=$2::uuid
-          AND refund_item.refund_id=$4::uuid AND item.parent_order_item_id IS NULL
+          AND refund_item.refund_id=$5::uuid AND item.parent_order_item_id IS NULL
           AND item.loyalty_eligible_at_submission
       )
       SELECT award.id, award.membership_id, award.customer_id, award.order_id, award.payment_id,
         award.policy_version_id, award.eligible_amount_minor, award.awarded_points,
         award.awarded_growth, award.reversed_amount_minor, award.reversed_points,
-        award.reversed_growth, award.restored_amount_minor, award.restored_points, award.restored_growth,
-        award.currency, award.calculation_model, account.available_points,
+        award.reversed_growth, award.currency, award.calculation_model, account.available_points,
         account.pending_recovery_points, account.growth_value,
         eligible_refund.amount_minor AS refund_amount_minor
       FROM mbox.loyalty_order_awards award
@@ -429,24 +405,20 @@ export class LoyaltyAccrualRepository {
        AND account.membership_id=award.membership_id
       CROSS JOIN eligible_refund
       WHERE award.tenant_id=$1::uuid AND award.store_id=$2::uuid
-        AND award.order_id=$3::uuid
+        AND award.order_id=$3::uuid AND award.payment_id=$4::uuid
       FOR UPDATE OF award, account
     `, [
       this.transaction.scope.tenantId, this.transaction.scope.storeId,
-      input.orderId, input.refundId,
+      input.orderId, input.paymentId, input.refundId,
     ])
     const row = selected.rows[0]
     if (!row) return NO_OP
     if (row.currency !== refundFact.refund_currency) {
       throw new Error('Succeeded refund currency does not match its loyalty award')
     }
-    const economicAmount = await this.eligibleSalesRefundAmount(input, money(row.refund_amount_minor))
-    if (economicAmount === null) return NO_OP
-    row.refund_amount_minor = economicAmount
     const eligible = money(row.eligible_amount_minor)
     const targetAmount = money(row.reversed_amount_minor) + money(row.refund_amount_minor)
-    const netTargetAmount = targetAmount - money(row.restored_amount_minor)
-    if (netTargetAmount > eligible) {
+    if (targetAmount > eligible) {
       throw new Error('Succeeded eligible refunds exceed the authoritative loyalty award amount')
     }
     let targetPoints: number
@@ -494,8 +466,8 @@ export class LoyaltyAccrualRepository {
         this.transaction.scope.tenantId, this.transaction.scope.storeId, row.order_id, targetAmount,
       ])
     } else {
-      targetPoints = row.restored_points + (eligible === 0 ? 0 : proportional(row.awarded_points, netTargetAmount, eligible))
-      targetGrowth = row.restored_growth + (eligible === 0 ? 0 : proportional(row.awarded_growth, netTargetAmount, eligible))
+      targetPoints = eligible === 0 ? 0 : proportional(row.awarded_points, targetAmount, eligible)
+      targetGrowth = eligible === 0 ? 0 : proportional(row.awarded_growth, targetAmount, eligible)
       pointsToReverse = Math.max(0, targetPoints - row.reversed_points)
       growthToReverse = Math.max(0, targetGrowth - row.reversed_growth)
     }
@@ -510,7 +482,7 @@ export class LoyaltyAccrualRepository {
       RETURNING id
     `, [
       this.transaction.scope.tenantId, this.transaction.scope.storeId,
-      row.id, input.refundId, row.order_id, input.paymentId,
+      row.id, input.refundId, row.order_id, row.payment_id,
       money(row.refund_amount_minor), pointsToReverse, growthToReverse, input.occurredAt,
     ])
     const refundApplicationId = applicationInserted.rows[0]?.id
@@ -571,7 +543,7 @@ export class LoyaltyAccrualRepository {
       `, [
         this.transaction.scope.tenantId, this.transaction.scope.storeId,
         row.membership_id, row.customer_id, -pointsToReverse, availablePoints,
-        input.refundId, row.policy_version_id, row.order_id, input.paymentId,
+        input.refundId, row.policy_version_id, row.order_id, row.payment_id,
         input.refundId, `loyalty:refund:${input.refundId}:points`, input.occurredAt,
       ])
     }
@@ -588,7 +560,7 @@ export class LoyaltyAccrualRepository {
       `, [
         this.transaction.scope.tenantId, this.transaction.scope.storeId,
         row.membership_id, row.customer_id, -growthToReverse, growthValue,
-        row.policy_version_id, row.order_id, input.paymentId, input.refundId,
+        row.policy_version_id, row.order_id, row.payment_id, input.refundId,
         `loyalty:refund:${input.refundId}:growth`, input.occurredAt,
       ])
     }
@@ -612,119 +584,7 @@ export class LoyaltyAccrualRepository {
     }
   }
 
-  private async applyHistoricalRefunds(orderId: string, awardPaymentId: string, occurredAt: string, deferred = false): Promise<{
-    pointsDelta: number; growthDelta: number; pendingRecoveryPoints?: number
-  }> {
-    // A refund before this receipt can already have been repaid before the
-    // order first became fully paid. Quantity returns and retained service
-    // compensation remain sale reductions regardless of the settlement receipt.
-    const refunds = await this.transaction.query<{ id: string; payment_id: string; completed_at: string | null }>(`
-      SELECT refund.id,refund.payment_id,refund.completed_at::text FROM mbox.refunds refund
-      JOIN mbox.payments payment ON payment.tenant_id=refund.tenant_id AND payment.store_id=refund.store_id
-        AND payment.id=refund.payment_id
-      WHERE refund.tenant_id=$1::uuid AND refund.store_id=$2::uuid
-        AND COALESCE(refund.order_id,payment.order_id)=$3::uuid AND refund.status='succeeded'
-        AND ($6::boolean OR refund.completed_at<=$5::timestamptz)
-        AND (refund.completed_at>=(SELECT succeeded_at FROM mbox.payments anchor
-          WHERE anchor.tenant_id=$1::uuid AND anchor.store_id=$2::uuid AND anchor.id=$4::uuid)
-          OR refund.purpose='service_compensation'
-          OR EXISTS(SELECT 1 FROM mbox.item_after_sales_case_refunds link
-            WHERE link.tenant_id=refund.tenant_id AND link.store_id=refund.store_id AND link.refund_id=refund.id))
-      ORDER BY refund.completed_at,refund.id FOR UPDATE OF refund
-    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId, awardPaymentId, occurredAt, deferred])
-    const result: { pointsDelta: number; growthDelta: number; pendingRecoveryPoints?: number } = {
-      pointsDelta: 0, growthDelta: 0,
-    }
-    for (const refund of refunds.rows) {
-      if (!refund.completed_at) throw new Error('Succeeded historical refund is missing its authoritative completion time')
-      const applied = await this.applySucceededRefund({
-        orderId, paymentId: refund.payment_id, refundId: refund.id, occurredAt: refund.completed_at,
-      }, false)
-      result.pointsDelta += applied.pointsDelta
-      result.growthDelta += applied.growthDelta
-      if (applied.applied) result.pendingRecoveryPoints = applied.pendingRecoveryPoints
-    }
-    return result
-  }
-
-  async refundEconomicFacts(input: Readonly<{ orderId: string; paymentId: string; refundId: string }>) {
-    const result = await this.transaction.query<{
-      amount_minor: string; excess_minor: string; quantity_return: boolean; prior_review: boolean
-    }>(`
-      SELECT current.amount_minor::text,
-        EXISTS(SELECT 1 FROM mbox.item_after_sales_case_refunds link
-          WHERE link.tenant_id=current.tenant_id AND link.store_id=current.store_id
-            AND link.refund_id=current.id) AS quantity_return,
-        EXISTS(SELECT 1 FROM mbox.loyalty_unresolved_refund_reviews review
-          WHERE review.tenant_id=current.tenant_id AND review.store_id=current.store_id
-            AND review.order_id=current.order_id) AS prior_review,
-        GREATEST(0,
-          COALESCE((SELECT SUM(receipt.amount_minor) FROM mbox.order_payment_facts receipt
-            WHERE receipt.tenant_id=current.tenant_id AND receipt.store_id=current.store_id
-              AND receipt.order_id=current.order_id AND receipt.succeeded_at<=current.completed_at
-              AND receipt.status IN ('succeeded','partially_refunded','refunded')),0)
-          - COALESCE((SELECT SUM(basis.amount_minor) FROM mbox.loyalty_order_item_basis basis
-            WHERE basis.tenant_id=current.tenant_id AND basis.store_id=current.store_id
-              AND basis.order_id=current.order_id),0)
-          - COALESCE((SELECT SUM(previous.amount_minor) FROM mbox.order_refund_facts previous
-            WHERE previous.tenant_id=current.tenant_id AND previous.store_id=current.store_id
-              AND previous.order_id=current.order_id AND previous.status='succeeded'
-              AND previous.id<>current.id
-              AND ((previous.completed_at,previous.id)<(current.completed_at,current.id) OR EXISTS (
-                SELECT 1 FROM mbox.loyalty_award_refund_applications applied
-                WHERE applied.tenant_id=previous.tenant_id AND applied.store_id=previous.store_id
-                  AND applied.refund_id=previous.id
-                  AND applied.created_at<COALESCE((SELECT current_application.created_at
-                    FROM mbox.loyalty_award_refund_applications current_application
-                    WHERE current_application.tenant_id=current.tenant_id
-                      AND current_application.store_id=current.store_id
-                      AND current_application.refund_id=current.id),'infinity'::timestamptz)
-              ))
-              AND NOT EXISTS(SELECT 1 FROM mbox.item_after_sales_case_refunds link
-                WHERE link.tenant_id=previous.tenant_id AND link.store_id=previous.store_id
-                  AND link.refund_id=previous.id)),0)
-        )::text AS excess_minor
-      FROM mbox.order_refund_facts current
-      WHERE current.tenant_id=$1::uuid AND current.store_id=$2::uuid
-        AND current.id=$3::uuid AND current.order_id=$4::uuid AND current.payment_id=$5::uuid
-        AND current.status='succeeded'
-    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.refundId, input.orderId, input.paymentId])
-    const row = result.rows[0]
-    if (!row) throw new Error('Loyalty refund lost its authoritative economic facts')
-    const total = money(row.amount_minor)
-    return { total, excess: row.quantity_return ? 0 : Math.min(total, money(row.excess_minor)),
-      quantityReturn: row.quantity_return, priorReview: row.prior_review }
-  }
-
-  private async eligibleSalesRefundAmount(input: Readonly<{
-    orderId: string; paymentId: string; refundId: string
-  }>, allocatedEligible: number): Promise<number | null> {
-    const approved = await this.transaction.query<{ eligible_amount_minor: string }>(`
-      SELECT request.eligible_amount_minor::text FROM mbox.loyalty_refund_review_decisions decision
-      JOIN mbox.loyalty_refund_review_requests request
-        ON (request.tenant_id,request.store_id,request.id)=(decision.tenant_id,decision.store_id,decision.request_id)
-      WHERE decision.tenant_id=$1::uuid AND decision.store_id=$2::uuid
-        AND decision.refund_id=$3::uuid AND decision.decision='approved'
-    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,input.refundId])
-    if (approved.rows[0]) return money(approved.rows[0].eligible_amount_minor)
-    const { total, excess, priorReview } = await this.refundEconomicFacts(input)
-    const mixed = excess > 0 && excess < total && allocatedEligible > 0 && allocatedEligible < total
-    if (priorReview || mixed) {
-      await this.transaction.query(`
-        INSERT INTO mbox.loyalty_refund_reviews(tenant_id,store_id,order_id,refund_id,payment_id,reason)
-        VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6)
-        ON CONFLICT(tenant_id,store_id,refund_id) DO NOTHING
-      `, [this.transaction.scope.tenantId, this.transaction.scope.storeId,
-        input.orderId, input.refundId, input.paymentId,
-        mixed ? 'mixed_eligibility_overcollection' : 'prior_refund_review'])
-      return null
-    }
-    // Refund items define eligibility; only an economically proven excess can
-    // be exempted. Never infer a money fact from the user-selected purpose.
-    return excess === total || allocatedEligible === 0 ? 0 : allocatedEligible - excess
-  }
-
-  async applyExactCarry(input: Readonly<{
+  private async applyExactCarry(input: Readonly<{
     membershipId: string
     policyVersionId: string
     currency: string
@@ -808,13 +668,20 @@ export class LoyaltyAccrualRepository {
         SELECT child.id FROM mbox.customers child JOIN family parent ON child.merged_into_customer_id=parent.id
         WHERE child.tenant_id=$1::uuid AND child.store_id=$2::uuid
       ), eligible AS (
-        SELECT COALESCE(SUM(item.amount_minor),0)::bigint AS amount_minor
+        SELECT COALESCE(SUM(item.total_amount_minor),0)::bigint AS amount_minor
         FROM mbox.loyalty_supplement_requests request
-        JOIN mbox.loyalty_order_item_basis item
+        JOIN mbox.order_items item
           ON item.tenant_id=request.tenant_id AND item.store_id=request.store_id
          AND item.order_id=request.order_id
         WHERE request.tenant_id=$1::uuid AND request.store_id=$2::uuid
-          AND request.id=$3::uuid AND item.loyalty_eligible
+          AND request.id=$3::uuid AND item.parent_order_item_id IS NULL
+          AND item.status<>'cancelled' AND item.total_amount_minor>0
+          AND item.loyalty_eligible_at_submission
+          AND NOT EXISTS (
+            SELECT 1 FROM mbox.pricing_authorizations authz
+            WHERE authz.tenant_id=item.tenant_id AND authz.store_id=item.store_id
+              AND authz.order_id=item.order_id AND authz.status='consumed' AND authz.kind='gift'
+          )
       )
       SELECT request.id AS request_id, request.public_id,
         request.membership_id AS requested_membership_id,
@@ -856,41 +723,28 @@ export class LoyaltyAccrualRepository {
       throw new Error('Approved loyalty supplement anchors no longer match the authoritative order')
     }
 
-    // The order lock serializes this check with refund completion. A request may
-    // predate the review, so validating only when it is requested is insufficient.
-    const refundReview = await this.transaction.query(`
-      SELECT 1 FROM mbox.loyalty_unresolved_refund_reviews
-      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND order_id=$3::uuid
-      LIMIT 1
-    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, row.order_id])
-    if (refundReview.rowCount) throw new LoyaltyRefundReviewRequiredError()
-
     const payments = await this.transaction.query<{ id: string }>(`
-      SELECT payment.id FROM mbox.payments payment
-      JOIN mbox.order_payment_facts fact ON fact.tenant_id=payment.tenant_id AND fact.store_id=payment.store_id
-        AND fact.id=payment.id AND fact.order_id=$3::uuid
-      WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid
-        AND payment.succeeded_at IS NOT NULL
-        AND payment.status IN ('succeeded','partially_refunded','refunded')
-      ORDER BY payment.succeeded_at DESC, payment.id DESC
-      FOR UPDATE OF payment
-    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, row.order_id])
-    if (!payments.rows[0]) {
-      throw new Error('Approved loyalty supplement requires authoritative succeeded payment facts')
-    }
-    let paymentId = payments.rows[0].id
-    const deferred = await this.transaction.query<{ payment_id: string }>(`
-      SELECT payment_id FROM mbox.loyalty_accrual_deferred_orders
+      SELECT id FROM mbox.payments
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND order_id=$3::uuid
+        AND succeeded_at IS NOT NULL
+        AND status IN ('succeeded','partially_refunded','refunded')
+      ORDER BY succeeded_at, id
+      FOR UPDATE
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, row.order_id])
-    const deferredSettlement = deferred.rows[0]
-    if (deferredSettlement) {
-      // Preserve the first completed settlement when later excess receipts arrive.
-      // Otherwise the historical refund lower bound would skip earlier sales refunds.
-      if (!payments.rows.some((payment) => payment.id === deferredSettlement.payment_id)) {
-        throw new Error('Deferred loyalty settlement has no authoritative captured payment')
-      }
-      paymentId = deferredSettlement.payment_id
+    if (payments.rowCount !== 1 || !payments.rows[0]) {
+      throw new Error('Approved loyalty supplement requires exactly one authoritative succeeded payment')
+    }
+    const paymentId = payments.rows[0].id
+    const refunds = await this.transaction.query<{ id: string; completed_at: string | null }>(`
+      SELECT id, completed_at::text
+      FROM mbox.refunds
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND payment_id=$3::uuid
+        AND status='succeeded'
+      ORDER BY completed_at, id
+      FOR UPDATE
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId])
+    if (refunds.rows.some((refund) => refund.completed_at === null)) {
+      throw new Error('Succeeded historical refund is missing its authoritative completion time')
     }
 
     const accountSelected = await this.transaction.query<LoyaltyAccountRow>(`
@@ -917,7 +771,6 @@ export class LoyaltyAccrualRepository {
       FOR UPDATE
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, row.order_id])
     const award = existingAward.rows[0]
-    if (award && payments.rows.some((payment) => payment.id === award.payment_id)) paymentId = award.payment_id
     const eligibleAmountMinor = money(row.eligible_amount_minor)
     const expectedPoints = applyMultiplier(calculateReward(
       eligibleAmountMinor, row.points_numerator, row.points_denominator_minor, row.rounding_mode,
@@ -1071,8 +924,16 @@ export class LoyaltyAccrualRepository {
       ])
     }
 
-    const historical = await this.applyHistoricalRefunds(row.order_id, paymentId, input.occurredAt)
-    const tierRelevantChange = growthToAward > 0 || historical.growthDelta !== 0
+    let tierRelevantChange = growthToAward > 0
+    for (const refund of refunds.rows) {
+      const refundApplication = await this.applySucceededRefund({
+        orderId: row.order_id,
+        paymentId,
+        refundId: refund.id,
+        occurredAt: refund.completed_at!,
+      }, false)
+      tierRelevantChange ||= refundApplication.growthDelta !== 0
+    }
 
     const status = alreadyComplete ? 'not_required' : 'executed'
     const executed = await this.transaction.query(`
@@ -1240,7 +1101,7 @@ export class LoyaltyAccrualRepository {
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, membershipId, points, growth])
   }
 
-  async createPointLot(input: Readonly<{
+  private async createPointLot(input: Readonly<{
     membershipId: string
     customerId: string
     sourceLedgerEntryId: string

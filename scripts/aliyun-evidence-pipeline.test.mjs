@@ -221,7 +221,7 @@ test('formal deployment requires OSS evidence before activation and uploads data
   assert.match(deploy, /predeployment-oss-verification\.json/)
   assert.ok(deploy.indexOf('stage-release-evidence.sh') < deploy.indexOf('activate-release.sh'))
   assert.match(activate, /mbox\/backups/)
-  assert.ok(activate.indexOf('upload-oss-verified.sh') < activate.indexOf('run_database_maintenance_container dist-normalized/server/migrate-normalized.js'))
+  assert.ok(activate.indexOf('upload-oss-verified.sh') < activate.indexOf('node dist-normalized/server/migrate-normalized.js'))
   assert.doesNotMatch(activate, /node dist-server\/server\/migrate\.js/)
   assert.match(activate, /tar -xOf "\$\{archive\}" index\.json/)
   assert.match(activate, /archive_reference_media_type=/)
@@ -445,9 +445,6 @@ test('external rollback starts and verifies the previous SHA before candidate-IP
     'stage-release-evidence.sh', 'upload-oss-verified.sh', 'send-sls-events.sh',
     'prune-oss-images.sh', 'release-state.sh', 'normalize-runtime-env.sh', 'backup-postgres.sh',
     'restore-postgres.sh',
-  'maintenance-bootstrap.sh',
-  'maintenance-bootstrap.py',
-  'maintenance-ingress.mjs',
   ]
   await Promise.all([
     mkdir(failedRelease, { recursive: true }),

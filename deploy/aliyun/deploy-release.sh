@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
-umask 077
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "${repo_root}"
@@ -28,11 +27,6 @@ public_origin_ip=${MBOX_PUBLIC_ORIGIN_IP:-}
 backup_max_age_minutes=${MBOX_BACKUP_MAX_AGE_MINUTES:-720}
 bundle_dir=${MBOX_RELEASE_BUNDLE_DIR:-${repo_root}/.runtime/deploy/${MBOX_RELEASE_TAG}}
 dry_run=${MBOX_DEPLOY_DRY_RUN:-0}
-maintenance_mode=0
-if [ -n "${MBOX_MAINTENANCE_PLAN:-}" ]; then
-  maintenance_mode=1
-  test -f "${MBOX_MAINTENANCE_PLAN}"
-fi
 
 case "${deployment_tier}" in
   validation|production) ;;
@@ -134,9 +128,9 @@ deployment_script_rows=$(node -e "
   const fs=require('node:fs');
   const manifest=JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
   const scripts=manifest.deploymentScripts;
-  if (!scripts || Object.keys(scripts).length !== 15) throw new Error('deployment script manifest is incomplete');
+  if (!scripts || Object.keys(scripts).length !== 12) throw new Error('deployment script manifest is incomplete');
   for (const entry of Object.values(scripts)) {
-    if (!entry || !/^[a-z0-9-]+\\.(sh|py|mjs)$/.test(entry.file) || !/^[0-9a-f]{64}$/.test(entry.sha256)) {
+    if (!entry || !/^[a-z0-9-]+\\.sh$/.test(entry.file) || !/^[0-9a-f]{64}$/.test(entry.sha256)) {
       throw new Error('deployment script identity is invalid');
     }
     process.stdout.write(entry.file + '\\t' + entry.sha256 + '\\n');
@@ -146,19 +140,6 @@ while IFS=$'\t' read -r script_name script_sha; do
   test -f "${bundle_dir}/${script_name}"
   test "$(shasum -a 256 "${bundle_dir}/${script_name}" | awk '{print $1}')" = "${script_sha}"
 done <<< "${deployment_script_rows}"
-# The choice is explicit on every invocation, including recovery. A stale
-# plan copied by an earlier run must never silently change ordinary activation.
-if [ "${maintenance_mode}" = 1 ]; then
-  jq -e --arg sha "${release_sha}" --arg digest "${image_digest}" \
-    '.mode == "planned-maintenance-forward-only" and .targetReleaseSha == $sha and .targetImageDigest == $digest' \
-    "${MBOX_MAINTENANCE_PLAN}" >/dev/null
-  if [ "${MBOX_MAINTENANCE_PLAN}" != "${bundle_dir}/maintenance-plan.json" ]; then
-    install -m 0600 "${MBOX_MAINTENANCE_PLAN}" "${bundle_dir}/maintenance-plan.json"
-  fi
-else
-  test ! -f "${bundle_dir}/maintenance-plan.json"
-fi
-
 expected_deploy_sha=$(node -e "const fs=require('node:fs');const m=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(m.deploymentScripts.deploy_release.sha256)" "${manifest}")
 test "$(shasum -a 256 "${BASH_SOURCE[0]}" | awk '{print $1}')" = "${expected_deploy_sha}"
 
@@ -312,36 +293,17 @@ if [ "${dry_run}" = 1 ]; then
   exit 0
 fi
 
-# Refuse an unsafe existing target before rsync can enter it. Ownership flags
-# preserve receiver ownership; they do not repair an old untrusted directory.
-verify_remote_release_directory() {
-  ssh "${ssh_options[@]}" "${ssh_target}" \
-    "set -eu; for path in / /opt /opt/mbox /opt/mbox/releases '${remote_release_dir}'; do if [ \"\$path\" = '${remote_release_dir}' ] && [ ! -e \"\$path\" ] && [ ! -L \"\$path\" ]; then continue; fi; test -d \"\$path\" && test ! -L \"\$path\" && test \"\$(stat -c %u \"\$path\")\" = 0 && mode=\$(stat -c %a \"\$path\") && (( (8#\$mode & 8#022) == 0 )) || { echo 'unsafe release directory ownership or permissions' >&2; exit 1; }; done"
-}
-verify_remote_release_directory
-ssh "${ssh_options[@]}" "${ssh_target}" \
-  "test ! -L '${remote_release_dir}' && install -d -m 0700 '${remote_release_dir}'"
-verify_remote_release_directory
+ssh "${ssh_options[@]}" "${ssh_target}" "install -d -m 0700 '${remote_release_dir}'"
 rsync_resume_option=--append
 if rsync --help 2>&1 | grep -q -- '--append-verify'; then
   rsync_resume_option=--append-verify
 fi
-rsync -a --no-owner --no-group --no-perms --rsync-path='umask 077 && rsync' --partial "${rsync_resume_option}" \
+rsync -a --partial "${rsync_resume_option}" \
   -e "ssh -i '${ssh_key}' -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p '${ssh_port}'" \
   "${bundle_dir}/" "${ssh_target}:${remote_release_dir}/"
 
-ssh "${ssh_options[@]}" "${ssh_target}" "chmod 0700 '${remote_release_dir}'"
-verify_remote_release_directory
-
-# Archive mode must not import publisher UID/GID into the privileged host.
-# Also repair the exact plan on retries after an older publisher copied it.
-if [ "${maintenance_mode}" = 1 ]; then
-  ssh "${ssh_options[@]}" "${ssh_target}" \
-    "test -f '${remote_release_dir}/maintenance-plan.json' && test ! -L '${remote_release_dir}/maintenance-plan.json' && chown 0:0 '${remote_release_dir}/maintenance-plan.json' && chmod 0600 '${remote_release_dir}/maintenance-plan.json' && test \"\$(stat -c '%u:%a' '${remote_release_dir}/maintenance-plan.json')\" = 0:600"
-fi
-
 ssh "${ssh_options[@]}" "${ssh_target}" \
-  "cd '${remote_release_dir}' && test \"\$(jq -r '.deploymentScripts | length' release-manifest.json)\" = 15 && jq -er '.deploymentScripts | to_entries[] | [.value.file,.value.sha256] | @tsv' release-manifest.json | while IFS=\$'\\t' read -r file sha; do test \"\$(sha256sum \"\$file\" | awk '{print \$1}')\" = \"\$sha\" || exit 1; done && chmod 0700 ./*.sh"
+  "cd '${remote_release_dir}' && test \"\$(jq -r '.deploymentScripts | length' release-manifest.json)\" = 12 && jq -er '.deploymentScripts | to_entries[] | [.value.file,.value.sha256] | @tsv' release-manifest.json | while IFS=\$'\\t' read -r file sha; do test \"\$(sha256sum \"\$file\" | awk '{print \$1}')\" = \"\$sha\" || exit 1; done && chmod 0700 ./*.sh"
 
 uses_evidence_relay=0
 if [ "${evidence_ssh_host}:${evidence_ssh_port}:${evidence_ssh_user}:${evidence_ssh_key}" \
@@ -353,7 +315,7 @@ else
   evidence_release_dir="/opt/mbox/releases/${short_sha}-evidence-relay"
   ssh "${evidence_ssh_options[@]}" "${evidence_ssh_target}" \
     "install -d -m 0700 '${evidence_release_dir}'"
-  rsync -a --no-owner --no-group --no-perms --rsync-path='umask 077 && rsync' --partial "${rsync_resume_option}" \
+  rsync -a --partial "${rsync_resume_option}" \
     -e "ssh -i '${evidence_ssh_key}' -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p '${evidence_ssh_port}'" \
     "${bundle_dir}/" "${evidence_ssh_target}:${evidence_release_dir}/"
   ssh "${evidence_ssh_options[@]}" "${evidence_ssh_target}" \
@@ -386,13 +348,6 @@ for _ in $(seq 1 12); do
     -H 'Accept: application/json' -H 'User-Agent: mbox-release-operator/1.0' \
     -o "${pre_activation_temporary}" -w '%{http_code}' \
     "${public_url}/api/ready" 2>/dev/null || true)
-  if [ "${maintenance_mode}" = 1 ] && [ "${pre_activation_status}" = 503 ] \
-    && jq -e '.reason == "planned_maintenance_upgrade"' "${pre_activation_temporary}" >/dev/null 2>&1; then
-    # The host controller must still bind the persistent journal/source identity.
-    mv "${pre_activation_temporary}" "${pre_activation_ready}"
-    pre_activation_verified=1
-    break
-  fi
   if [ "${pre_activation_status}" = 200 ] \
     && jq -e --arg tier "${deployment_tier}" \
       '.status == "ready" and .deploymentTier == $tier' \
@@ -410,11 +365,11 @@ test "${pre_activation_verified}" = 1
 # read-only database snapshot, while the separately authenticated evidence host
 # uploads and reads it back from OSS. Activation accepts only the resulting
 # release-bound verification report and rechecks the database identity itself.
-if [ "${uses_evidence_relay}" = 1 ] && [ "${maintenance_mode}" != 1 ]; then
+if [ "${uses_evidence_relay}" = 1 ]; then
   relay_backup_local=$(mktemp -d "${bundle_dir}/.backup-relay.XXXXXX")
   ssh "${ssh_options[@]}" "${ssh_target}" \
     "'${remote_release_dir}/backup-postgres.sh' prepare-relay '${remote_release_dir}' '${release_sha}'"
-  rsync -a --no-owner --no-group --no-perms --rsync-path='umask 077 && rsync' --partial "${rsync_resume_option}" \
+  rsync -a --partial "${rsync_resume_option}" \
     -e "ssh -i '${ssh_key}' -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p '${ssh_port}'" \
     "${ssh_target}:${remote_release_dir}/relay-backup-ready/" "${relay_backup_local}/"
   relay_backup_preparation=${relay_backup_local}/backup-preparation.json
@@ -427,7 +382,7 @@ if [ "${uses_evidence_relay}" = 1 ] && [ "${maintenance_mode}" != 1 ]; then
   (cd "${relay_backup_local}" && shasum -a 256 -c SHA256SUMS >/dev/null)
   ssh "${evidence_ssh_options[@]}" "${evidence_ssh_target}" \
     "rm -rf '${evidence_release_dir}/relay-backup-ready' && install -d -m 0700 '${evidence_release_dir}/relay-backup-ready'"
-  rsync -a --no-owner --no-group --no-perms --rsync-path='umask 077 && rsync' --partial "${rsync_resume_option}" \
+  rsync -a --partial "${rsync_resume_option}" \
     -e "ssh -i '${evidence_ssh_key}' -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p '${evidence_ssh_port}'" \
     "${relay_backup_local}/" "${evidence_ssh_target}:${evidence_release_dir}/relay-backup-ready/"
   ssh "${evidence_ssh_options[@]}" "${evidence_ssh_target}" \
@@ -447,9 +402,6 @@ fi
 
 if [ "${uses_evidence_relay}" = 1 ]; then
   activation_log=$(mktemp "${bundle_dir}/.activation-log.XXXXXX")
-  if [ "${maintenance_mode}" = 1 ]; then
-    ssh "${ssh_options[@]}" "${ssh_target}" "install -m 0600 /dev/null '${remote_release_dir}/.maintenance-evidence-relay'"
-  fi
   activation_status=$(mktemp "${bundle_dir}/.activation-status.XXXXXX")
   rm -f "${activation_status}"
   (
@@ -494,7 +446,7 @@ if [ "${uses_evidence_relay}" = 1 ]; then
       "test -f '${remote_release_dir}/${marker_name}' && jq -e --arg sha '${release_sha}' --arg prefix '${object_prefix}' --arg directory '${source_directory}' --arg report '${remote_release_dir}/${report_name}' '.releaseSha == \$sha and .prefix == \$prefix and .evidenceDirectory == \$directory and .report == \$report' '${remote_release_dir}/${marker_name}' >/dev/null"
 
     relay_local=$(mktemp -d "${bundle_dir}/.${evidence_kind}-relay.XXXXXX")
-    rsync -a --no-owner --no-group --no-perms --rsync-path='umask 077 && rsync' --partial "${rsync_resume_option}" \
+    rsync -a --partial "${rsync_resume_option}" \
       -e "ssh -i '${ssh_key}' -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p '${ssh_port}'" \
       "${ssh_target}:${source_directory}/" "${relay_local}/"
     (cd "${relay_local}" && shasum -a 256 -c SHA256SUMS >/dev/null)
@@ -502,7 +454,7 @@ if [ "${uses_evidence_relay}" = 1 ]; then
     relay_remote="${evidence_release_dir}/post-cutover-${evidence_kind}"
     ssh "${evidence_ssh_options[@]}" "${evidence_ssh_target}" \
       "rm -rf '${relay_remote}' && install -d -m 0700 '${relay_remote}'"
-    rsync -a --no-owner --no-group --no-perms --rsync-path='umask 077 && rsync' --partial "${rsync_resume_option}" \
+    rsync -a --partial "${rsync_resume_option}" \
       -e "ssh -i '${evidence_ssh_key}' -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p '${evidence_ssh_port}'" \
       "${relay_local}/" "${evidence_ssh_target}:${relay_remote}/"
     ssh "${evidence_ssh_options[@]}" "${evidence_ssh_target}" \
@@ -525,18 +477,6 @@ if [ "${uses_evidence_relay}" = 1 ]; then
     rm -rf "${relay_local}"
   }
 
-  if [ "${maintenance_mode}" = 1 ]; then
-    relay_post_cutover_evidence \
-      maintenance-backup .maintenance-backup-evidence-relay-ready.json \
-      "${remote_release_dir}/oss-maintenance-backup" \
-      "mbox/evidence/rc/v${release_version}/${release_sha}/maintenance-backup" \
-      oss-maintenance-backup-verification.json
-    relay_post_cutover_evidence \
-      maintenance-epoch .maintenance-epoch-evidence-relay-ready.json \
-      "${remote_release_dir}/oss-maintenance-epoch" \
-      "mbox/evidence/rc/v${release_version}/${release_sha}/maintenance-epoch" \
-      oss-maintenance-epoch-verification.json
-  fi
   relay_post_cutover_evidence \
     deployment .deployment-evidence-relay-ready.json \
     "${remote_release_dir}/oss-deployment" \

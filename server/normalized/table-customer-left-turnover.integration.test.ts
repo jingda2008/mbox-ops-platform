@@ -1,10 +1,4 @@
 import { randomUUID } from 'node:crypto'
-import Fastify from 'fastify'
-import { ServiceTaskRepository } from './service-task-repository.js'
-import { OperationsQueryService } from './operations-query-service.js'
-import { NormalizedCommandExecutor } from './command-executor.js'
-import { normalizedOperationsApiPlugin } from './normalized-operations-api.js'
-import { TableSessionRepository, TableSessionCommandService } from './table-session-repository.js'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
@@ -228,71 +222,6 @@ integration('customer-left table turnover', () => {
         AND payload->>'tableSessionId'=$1`, [fixture.sessionId]))
       .resolves.toMatchObject({ rows: [{ count: 1 }] })
   })
-
-  for (const mode of ['customer-left', 'automatic-cutoff'] as const) {
-    it(`preserves a complaint through ${mode} for authorized manager resolution`, async () => {
-      const runtimeUrl = process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
-      if (!runtimeUrl) throw new Error('This acceptance requires a real restricted LOGIN')
-      const lowPool = new Pool({ connectionString: runtimeUrl, max: 4 })
-      const runner = new ScopedPostgresTransactionRunner(lowPool)
-      const scope = { tenantId, storeId }
-      const fixture = await createFixture()
-      const task = await runner.run(scope, tx => new ServiceTaskRepository(tx).create({
-        tableId, tableSessionId: fixture.sessionId, publicId: randomUUID(),
-        taskType: 'guest.complaint', title: '顾客离开后仍须跟进的食品投诉', priority: 'urgent',
-        source: 'guest', requestedRoleCode: 'MANAGER', actor: { type: 'guest' },
-      }))
-      const managerRole = randomUUID()
-      await pool.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,$4,'Complaint manager')", [managerRole,tenantId,storeId,`REVIEW_${managerRole.replaceAll('-','').toUpperCase()}`])
-      await pool.query('INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id) VALUES($1,$2,$3,$4)', [tenantId,storeId,approverId,managerRole])
-      for (const code of ['service.manage','service.execute','table.view_all']) {
-        await pool.query("INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name,status) VALUES($1,$2,$3,$3,'active') ON CONFLICT(tenant_id,store_id,code) DO NOTHING", [tenantId,storeId,code])
-        await pool.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code=$4', [tenantId,storeId,managerRole,code])
-      }
-      expect((await runner.run(scope, tx => tx.query("SELECT mbox.employee_has_effective_permission($1,$2,$3,'service.manage') AS allowed", [tenantId,storeId,employeeId]))).rows[0]?.allowed).toBe(false)
-      const key = randomUUID()
-      const input = { scope, tableSessionId: fixture.sessionId, employeeId, businessDate,
-        reasonNote: '顾客已离店，保留投诉继续处理', idempotencyKey: key }
-      const close = () => runner.run(scope, tx => mode === 'customer-left'
-        ? new PostgresTableCustomerLeftTurnoverRepository(tx).close(input)
-        : new PostgresAutomaticTableTurnoverRepository(tx).close(input))
-      if (mode === 'automatic-cutoff') await pool.query('UPDATE mbox.table_sessions SET business_date=$2::date-1 WHERE id=$1', [fixture.sessionId,businessDate])
-      const result = await close()
-      expect(result.cancelledServiceTaskCount).toBe(1) // ordinary service only
-      expect((await close()).replayed).toBe(true)
-      expect((await runner.run(scope, tx => new ServiceTaskRepository(tx).findById(task.id)))?.status).toBe('pending')
-      expect((await new OperationsQueryService(runner).getStaffView(scope,approverId)).tasks.some(row => row.id === task.id)).toBe(true)
-      const app = Fastify()
-      let actorId = employeeId
-      await app.register(normalizedOperationsApiPlugin, {
-        prefix: '/api', operationsQuery: new OperationsQueryService(runner),
-        tableSessions: new TableSessionCommandService(new NormalizedCommandExecutor(runner)),
-        commandExecutor: new NormalizedCommandExecutor(runner),
-        resolveContext: async () => ({ scope, employeeId: actorId, businessDate,
-          capabilities: actorId === approverId ? ['service.manage','service.execute'] : ['service.execute'] }),
-        createTableSessionRepository: tx => new TableSessionRepository(tx),
-        createServiceTaskRepository: tx => new ServiceTaskRepository(tx),
-      })
-      try {
-        const request = () => app.inject({ method: 'POST', url: `/api/service-tasks/${task.id}/complete`,
-          headers: { 'idempotency-key': `resolve-${key}` }, payload: { employeeId: actorId, note: '经理已核实并答复顾客，保留处理结果' } })
-        expect((await request()).statusCode).toBe(403)
-        actorId = approverId
-        for(const mutation of ["title='rewritten'", "request_snapshot='{"+ '"tampered":true' +"}'::jsonb", "table_session_id=gen_random_uuid()"]) {
-          await expect(runner.run(scope,tx=>tx.query(`UPDATE mbox.service_tasks SET ${mutation} WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[tenantId,storeId,task.id]))).rejects.toMatchObject({code:'23514'})
-        }
-        await runner.run(scope,tx=>tx.query("UPDATE mbox.service_tasks SET worker_locked_by='complaint-regression',worker_locked_at=clock_timestamp(),next_action_at=clock_timestamp()+interval '30 minutes' WHERE tenant_id=$1 AND store_id=$2 AND id=$3",[tenantId,storeId,task.id]))
-        const completed = await request()
-        expect(completed.statusCode,completed.body).toBe(200)
-        expect((await request()).statusCode).toBe(200)
-        expect((await runner.run(scope, tx => new ServiceTaskRepository(tx).findById(task.id)))?.status).toBe('completed')
-        const events = (await pool.query('SELECT event_type FROM mbox.service_task_events WHERE service_task_id=$1 ORDER BY occurred_at', [task.id])).rows.map(row => row.event_type)
-        expect(events).toEqual(['task.created','task.completed'])
-        await expect(runner.run(scope, tx => tx.query("UPDATE mbox.service_tasks SET status='pending',completed_at=NULL WHERE tenant_id=$1 AND store_id=$2 AND id=$3", [tenantId,storeId,task.id]))).rejects.toMatchObject({ code: '55000' })
-        await expect(runner.run(scope, tx => new ServiceTaskRepository(tx).create({ tableId,tableSessionId:fixture.sessionId,publicId:randomUUID(),taskType:'guest.complaint',title:'不能在旧桌次建立新工作',priority:'urgent',source:'guest',actor:{type:'guest'} }))).rejects.toThrow()
-      } finally { await app.close(); await lowPool.end() }
-    }, 30_000)
-  }
 
   async function createSettledHistory(sessionId: string) {
     const orderId = randomUUID()

@@ -127,7 +127,30 @@ async function loadOrderDetails(transaction: ScopedTransaction, tableSessionId: 
          WHERE payment.tenant_id=ordering.tenant_id AND payment.store_id=ordering.store_id
            AND payment.order_id=ordering.id AND payment.status IN ('succeeded','partially_refunded','refunded')) AS paid_at,
         COALESCE(pricing_authorization.kind, 'none') AS pricing_kind,
-        mbox.order_collection_due_amount_for_mode(ordering.tenant_id,ordering.store_id,ordering.id,true) AS payable_amount_minor,
+        GREATEST(
+          ${orderReceivableSql('ordering')}
+          - COALESCE((
+              SELECT SUM(payment.amount_minor)
+              FROM mbox.order_payment_facts payment
+              WHERE payment.tenant_id = ordering.tenant_id
+                AND payment.store_id = ordering.store_id
+                AND payment.order_id = ordering.id
+                AND payment.status IN ('succeeded', 'partially_refunded', 'refunded')
+            ), 0)
+          + COALESCE((
+              SELECT SUM(refund.amount_minor)
+              FROM mbox.refunds refund
+              JOIN mbox.order_payment_facts paid
+                ON paid.tenant_id = refund.tenant_id
+               AND paid.store_id = refund.store_id
+               AND paid.id = refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=paid.order_id)
+              WHERE paid.tenant_id = ordering.tenant_id
+                AND paid.store_id = ordering.store_id
+                AND paid.order_id = ordering.id
+                AND refund.status = 'succeeded'
+            ), 0),
+          0
+        ) AS payable_amount_minor,
         COALESCE((
           SELECT SUM(refund.amount_minor)
           FROM mbox.refunds refund
@@ -183,7 +206,6 @@ async function loadOrderDetails(transaction: ScopedTransaction, tableSessionId: 
           WHERE recollection_authorization.tenant_id=ordering.tenant_id AND recollection_authorization.store_id=ordering.store_id
             AND recollection_authorization.order_id=ordering.id AND recollection_authorization.status='active'
             AND recollection_authorization.expires_at>clock_timestamp()
-            AND recollection_authorization.amount_minor=ordering.payable_amount_minor
         ) AS active
       ) recollection ON true
     ), visible_orders_unbounded AS (
@@ -194,7 +216,7 @@ async function loadOrderDetails(transaction: ScopedTransaction, tableSessionId: 
       SELECT *
       FROM visible_orders_unbounded AS ordering
       ORDER BY ordering.created_at DESC, ordering.id DESC
-      LIMIT CASE WHEN $3::uuid IS NULL THEN 30 ELSE 2147483647 END
+      LIMIT 30
     )
     SELECT ordering.public_id, ordering.original_table_code, ordering.business_date::text, ordering.round_number,
       ordering.channel, ordering.status AS order_status,

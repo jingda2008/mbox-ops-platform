@@ -1,4 +1,3 @@
-import {ExperiencePlanLifecycleRepository} from './experience-plan-lifecycle-repository.js'
 import { createHash, randomUUID } from 'node:crypto'
 import type {
   AuditActor,
@@ -40,7 +39,7 @@ import { ServiceTaskRepository } from './service-task-repository.js'
 import { StaffAccessRepository } from './staff-access-repository.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction, StoreScope } from './transaction-runner.js'
 import type { PaymentMethod } from './payment-repository.js'
-import { LoyaltyAccrualRepository, LoyaltyRefundReviewRequiredError } from './loyalty-accrual-repository.js'
+import { LoyaltyAccrualRepository } from './loyalty-accrual-repository.js'
 import { LoyaltyPositiveAccrualPausedError } from './loyalty-operational-control-repository.js'
 import { CustomerNotificationConsentRepository } from './customer-notification-consent-repository.js'
 import {
@@ -54,7 +53,6 @@ import { lockBoundGuestTablePosition } from './guest-table-authority.js'
 import { isPublicMediaAssetUrl } from './media-asset-url.js'
 import {
   EmployeeTableAccessDeniedError,
-  assertEmployeeEffectivePermission,
   assertEmployeeTableSessionAccess,
 } from './employee-table-access.js'
 
@@ -1634,7 +1632,6 @@ export class CustomerExperienceService {
         existing_points: number
         existing_growth: number
         status: string
-        review_refund_public_ids: string[]
       }>(`
         WITH RECURSIVE paid_orders AS (
           SELECT ordering.id, ordering.public_id, ordering.created_by_customer_id,
@@ -1647,7 +1644,7 @@ export class CustomerExperienceService {
             AND ordering.created_by_customer_id IS NOT NULL
             AND ordering.loyalty_policy_version_id IS NOT NULL
             AND EXISTS (
-              SELECT 1 FROM mbox.order_payment_facts payment
+              SELECT 1 FROM mbox.payments payment
               WHERE payment.tenant_id=ordering.tenant_id AND payment.store_id=ordering.store_id
                 AND payment.order_id=ordering.id AND payment.succeeded_at IS NOT NULL
                 AND payment.status IN ('succeeded','partially_refunded','refunded')
@@ -1682,9 +1679,16 @@ export class CustomerExperienceService {
           ORDER BY family.order_id, membership.joined_at, membership.id
         ), eligible AS (
           SELECT paid.id AS order_id,
-            COALESCE(SUM(item.amount_minor) FILTER (WHERE item.loyalty_eligible),0)::bigint AS eligible_amount_minor
+            CASE WHEN EXISTS (
+              SELECT 1 FROM mbox.pricing_authorizations authz
+              WHERE authz.tenant_id=$1::uuid AND authz.store_id=$2::uuid
+                AND authz.order_id=paid.id AND authz.status='consumed' AND authz.kind='gift'
+            ) THEN 0 ELSE COALESCE(SUM(item.total_amount_minor) FILTER (
+              WHERE item.parent_order_item_id IS NULL AND item.status<>'cancelled'
+                AND item.total_amount_minor>0 AND item.loyalty_eligible_at_submission
+            ),0)::bigint END AS eligible_amount_minor
           FROM paid_orders paid
-          LEFT JOIN mbox.loyalty_order_item_basis item
+          LEFT JOIN mbox.order_items item
             ON item.tenant_id=$1::uuid AND item.store_id=$2::uuid AND item.order_id=paid.id
           GROUP BY paid.id
         ), base_rewards AS (
@@ -1720,17 +1724,9 @@ export class CustomerExperienceService {
         )
         SELECT expected.public_id AS order_public_id, expected.member_no,
           expected.eligible_amount_minor, expected.expected_points, expected.expected_growth,
-          ARRAY(SELECT refund.public_id FROM mbox.loyalty_unresolved_refund_reviews review
-            JOIN mbox.refunds refund ON refund.tenant_id=review.tenant_id AND refund.store_id=review.store_id
-              AND refund.id=review.refund_id
-            WHERE review.tenant_id=$1::uuid AND review.store_id=$2::uuid AND review.order_id=expected.id
-            ORDER BY review.created_at,review.refund_id) AS review_refund_public_ids,
           COALESCE(award.awarded_points,0) AS existing_points,
           COALESCE(award.awarded_growth,0) AS existing_growth,
-          CASE WHEN EXISTS(SELECT 1 FROM mbox.loyalty_unresolved_refund_reviews review
-            WHERE review.tenant_id=$1::uuid AND review.store_id=$2::uuid AND review.order_id=expected.id)
-            THEN 'refund_review_required'
-            WHEN award.id IS NULL THEN 'missing'
+          CASE WHEN award.id IS NULL THEN 'missing'
             WHEN award.calculation_model='exact_carry' THEN 'matched'
             WHEN award.awarded_points<>expected.expected_points
               OR award.awarded_growth<>expected.expected_growth
@@ -1750,7 +1746,6 @@ export class CustomerExperienceService {
         existingPoints: row.existing_points,
         existingGrowth: row.existing_growth,
         status: row.status,
-        reviewRefundPublicIds: row.review_refund_public_ids,
       }))
     }, { readOnly: true })
   }
@@ -1823,14 +1818,6 @@ export class CustomerExperienceService {
       requestFingerprint: fingerprint(input),
       resultCodec: objectCodec<{ publicId: string; status: string; requestedPoints: number; requestedGrowth: number }>(),
     }, async (transaction) => {
-      const pendingReview = await transaction.query(`
-        SELECT 1 FROM mbox.loyalty_unresolved_refund_reviews review JOIN mbox.orders ordering
-          ON ordering.tenant_id=review.tenant_id AND ordering.store_id=review.store_id AND ordering.id=review.order_id
-        WHERE review.tenant_id=$1::uuid AND review.store_id=$2::uuid AND ordering.public_id=$3 LIMIT 1
-      `, [transaction.scope.tenantId, transaction.scope.storeId, input.orderPublicId])
-      if (pendingReview.rowCount) throw new CustomerExperienceRequestError(
-        '该订单退款分摊待核，请先核对原订单、收款与退款，不能直接补发', 'LOYALTY_REFUND_REVIEW_REQUIRED', 409,
-      )
       const selected = await transaction.query<{
         order_id: string
         membership_id: string
@@ -1853,7 +1840,7 @@ export class CustomerExperienceService {
             AND ordering.created_by_customer_id IS NOT NULL
             AND ordering.loyalty_policy_version_id IS NOT NULL
             AND EXISTS (
-              SELECT 1 FROM mbox.order_payment_facts payment
+              SELECT 1 FROM mbox.payments payment
               WHERE payment.tenant_id=ordering.tenant_id AND payment.store_id=ordering.store_id
                 AND payment.order_id=ordering.id AND payment.succeeded_at IS NOT NULL
                 AND payment.status IN ('succeeded','partially_refunded','refunded')
@@ -1877,9 +1864,16 @@ export class CustomerExperienceService {
             ON child.merged_into_customer_id=parent.id
           WHERE child.tenant_id=$1::uuid AND child.store_id=$2::uuid
         ), eligible AS (
-          SELECT COALESCE(SUM(item.amount_minor) FILTER (WHERE item.loyalty_eligible),0)::bigint AS amount_minor
+          SELECT CASE WHEN EXISTS (
+            SELECT 1 FROM mbox.pricing_authorizations authz
+            WHERE authz.tenant_id=$1::uuid AND authz.store_id=$2::uuid
+              AND authz.order_id=target.order_id AND authz.status='consumed' AND authz.kind='gift'
+          ) THEN 0 ELSE COALESCE(SUM(item.total_amount_minor) FILTER (
+            WHERE item.parent_order_item_id IS NULL AND item.status<>'cancelled'
+              AND item.total_amount_minor>0 AND item.loyalty_eligible_at_submission
+          ),0)::bigint END AS amount_minor
           FROM target
-          LEFT JOIN mbox.loyalty_order_item_basis item
+          LEFT JOIN mbox.order_items item
             ON item.tenant_id=$1::uuid AND item.store_id=$2::uuid AND item.order_id=target.order_id
           GROUP BY target.order_id
         ), calculated AS (
@@ -2009,13 +2003,6 @@ export class CustomerExperienceService {
           occurredAt: new Date().toISOString(),
         })
       } catch (error) {
-        if (error instanceof LoyaltyRefundReviewRequiredError) {
-          throw new CustomerExperienceRequestError(
-            '这笔订单存在退款积分待核记录，请先核对订单和退款归属',
-            'LOYALTY_REFUND_REVIEW_REQUIRED',
-            409,
-          )
-        }
         if (error instanceof LoyaltyPositiveAccrualPausedError) {
           throw new CustomerExperienceRequestError(
             '新积分和成长值发放已由最高管理人员暂停，本次补发未执行',
@@ -2495,7 +2482,7 @@ export class CustomerExperienceService {
         guestActor(context),
         'customer.experience.intent.selected',
         'recommendation_session',
-        await experienceAggregateId(transaction, 'recommendation_session', input.recommendationPublicId),
+        await experienceAggregateId(transaction, 'recommendation_session', publicId),
         context.businessDate,
         {
           tableSessionId: context.tableSessionId,
@@ -3655,29 +3642,42 @@ export class CustomerExperienceService {
       requestFingerprint: fingerprint(input),
       resultCodec: objectCodec<{ cueId: string; status: 'completed' }>(),
     }, async (transaction) => {
-      const lifecycle = new ExperiencePlanLifecycleRepository(transaction)
-      const cue = await lifecycle.lockByCue(input.cueId)
-      lifecycle.assertActionable(cue)
-      const tasks = new ServiceTaskRepository(transaction)
-      let task = cue.service_task_id === null ? null : await tasks.findById(cue.service_task_id)
-      if (cue.service_task_id !== null && task?.status !== 'completed') {
-        task = await tasks.complete({
-          taskId: cue.service_task_id, actor: { type: 'employee', employeeId: context.employeeId },
-          note: input.note, eventIdempotencyKey: `${input.idempotencyKey}:task`,
+      const result = await transaction.query<{ id: string; service_task_id: string | null }>(`
+        UPDATE mbox.experience_plan_cues
+        SET status = 'completed', completed_by_employee_id = $4::uuid,
+          completed_at = clock_timestamp(),
+          action_payload = action_payload || jsonb_build_object('completionNote', $5)
+        WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
+          AND status IN ('ready', 'dispatched')
+        RETURNING id, service_task_id
+      `, [
+        transaction.scope.tenantId,
+        transaction.scope.storeId,
+        input.cueId,
+        context.employeeId,
+        input.note,
+      ])
+      const row = result.rows[0]
+      if (!row) throw new CustomerExperienceRequestError('这个体验节点已经处理或尚未到执行时间', 'EXPERIENCE_CUE_NOT_ACTIONABLE', 409)
+      if (row.service_task_id !== null) {
+        await new ServiceTaskRepository(transaction).complete({
+          taskId: row.service_task_id,
+          actor: { type: 'employee', employeeId: context.employeeId },
+          note: input.note,
+          eventIdempotencyKey: `${input.idempotencyKey}:task`,
         })
       }
-      await lifecycle.complete(cue, { employeeId: context.employeeId, note: input.note, task })
-      const output = { cueId: cue.cue_id, status: 'completed' as const }
+      const output = { cueId: row.id, status: 'completed' as const }
       return commandOutcome(
         output,
         staffActor(context),
         'customer.experience.cue.completed',
         'experience_plan_cue',
-        cue.cue_id,
+        row.id,
         context.businessDate,
         { note: input.note },
       )
-    }, transaction => assertEmployeeEffectivePermission(transaction, context.employeeId, 'customer.experience.manage'))
+    })
   }
 }
 

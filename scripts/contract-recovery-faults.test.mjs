@@ -239,10 +239,6 @@ emit_release_audit() { printf 'audit %s\\n' "$*" >> "\${OPERATIONS_LOG}"; }
 write_release_failure() { printf 'failure %s\\n' "$*" >> "\${OPERATIONS_LOG}"; }
 release_state_transition() { printf 'state %s\\n' "$*" >> "\${OPERATIONS_LOG}"; }
 psql() { printf '095\\n'; }
-verify_previous_runtime_database_identity() {
-  printf 'restored-identity-check\\n' >> "\${OPERATIONS_LOG}"
-  [ "${options.identityFails ? 'true' : 'false'}" = false ]
-}
 docker() {
   printf 'docker %s\\n' "$*" >> "\${OPERATIONS_LOG}"
   if [ "$1" = inspect ]; then
@@ -294,13 +290,6 @@ test('old private readiness failure returns to maintenance and stops the old app
   assert.match(log, /docker start mbox-app/)
   assert.match(log, /Caddyfile\.contract-maintenance/)
   assert.match(log, /docker stop -t 20 mbox-app/)
-  assert.doesNotMatch(log, /caddy reload --config \/etc\/caddy\/Caddyfile/)
-})
-
-test('restored database identity drift keeps maintenance before publishing the old app', () => {
-  const log = runScenario('identity-fail', { identityFails: true })
-  assert.match(log, /restored-identity-check/)
-  assert.match(log, /Caddyfile\.contract-maintenance/)
   assert.doesNotMatch(log, /caddy reload --config \/etc\/caddy\/Caddyfile/)
 })
 

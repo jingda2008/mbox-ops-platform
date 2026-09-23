@@ -10,29 +10,3 @@
 .kitchen-more>summary{list-style:none;min-width:44px;min-height:48px;padding:12px 6px;cursor:pointer;border:1px solid #c6d1c8;border-radius:8px}.kitchen-more>div{position:absolute;bottom:100%;right:10px;width:min(360px,90%);background:#fff;padding:12px;border:1px solid #879d87;box-shadow:0 6px 24px #17261a24;z-index:2}.kitchen-more button{width:100%;background:#315d46;color:#fff}.kitchen-more p{margin:0 0 8px}
 
 .kitchen-pane[aria-label="待制作"] .kitchen-actions>button:first-child{background:#315d46;color:#fff;flex:1;border-color:#315d46}.kitchen-pane[aria-label="待制作"] .kitchen-actions>button:nth-child(2){background:white;color:#315d46;flex:initial;border-color:#c6d1c8}
-
-/* Dedicated tablet shell contributes its own 48px toolbar. Keep primary actions
-   and pagination outside the scroll regions, including the 552px usable height. */
-.three-screen-production .kitchen-board{position:relative;inset:auto;height:calc(100dvh - 48px);z-index:1}
-.three-screen-production .kitchen-top>div>strong,.three-screen-production .kitchen-top>button:last-child{display:none}
-.three-screen-production .kitchen-top>div{min-width:0}
-.kitchen-board .kitchen-production-note{display:block;margin:6px 0;padding:6px 8px;border-left:3px solid #9a6b13;border-radius:4px;background:#fff1c2;color:#382c16;font-size:20px;font-weight:700;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
-.kitchen-board .kitchen-cards{grid-auto-rows:max-content;align-items:start}
-.kitchen-batch-title{flex-wrap:wrap}.kitchen-batch-title h3{min-width:0;flex:1 1 260px;overflow-wrap:anywhere}
-.kitchen-pagination{flex:none;padding:4px 10px;margin:0;border-top:1px solid #e1e7e0;background:#fff}
-.kitchen-paused{margin:0;font-size:13px}
-.kitchen-owner{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
-.kitchen-actions>button{min-width:0;white-space:normal}
-.kitchen-handoff-backdrop{position:absolute;inset:0;background:#14271ec9;z-index:5;display:flex;align-items:center;justify-content:center;padding:12px}
-.kitchen-handoff{width:min(620px,100%);max-height:100%;background:#fff;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px;min-height:0}
-.kitchen-handoff h2,.kitchen-handoff p{margin:0}.kitchen-handoff h2{font-size:22px}
-.kitchen-handoff-lines{min-height:40px;overflow:auto;flex:1}.kitchen-handoff-lines p{padding:8px;border-bottom:1px solid #d7dfd7}
-.kitchen-handoff label:not(.kitchen-physical-check){display:grid;gap:4px}.kitchen-physical-check{display:flex;align-items:center;gap:10px}.kitchen-physical-check input{width:28px;height:28px;flex:none}
-.kitchen-handoff footer{display:flex;gap:10px;justify-content:flex-end}.kitchen-handoff footer button:last-child{background:#315d46;color:white}
-.kitchen-start-fields{grid-template-columns:minmax(174px,.9fr) minmax(190px,1.1fr);align-items:start}
-.kitchen-quantity-field>label{font-size:14px}.kitchen-quantity-stepper{display:flex;gap:4px;margin-top:4px}.kitchen-quantity-stepper input{width:68px;min-width:0;text-align:center;margin:0}
-.kitchen-quantity-stepper button{width:48px;min-width:48px;min-height:48px;font-size:22px;padding:4px}
-.kitchen-settings>summary{min-height:48px;cursor:pointer;display:flex;align-items:center;font-size:14px;overflow-wrap:anywhere}
-.kitchen-settings>div{display:grid;grid-template-columns:minmax(85px,1fr) 80px;gap:6px}.kitchen-settings>div input{width:100%}
-.kitchen-pickup-summary{font-size:16px;font-weight:700;color:#315d46}
-@media(max-height:680px) and (min-width:761px){.kitchen-top small{font-size:13px}.kitchen-cards{flex-basis:20%;min-height:58px}.kitchen-top label{font-size:13px}.kitchen-actions{padding:5px 8px;gap:5px}.kitchen-pagination{padding:2px 8px}.kitchen-notice{min-height:24px;font-size:12px}}

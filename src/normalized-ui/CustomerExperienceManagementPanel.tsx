@@ -1,6 +1,4 @@
-import {OrderFinancialRecoveryPanel} from './OrderFinancialRecoveryPanel'
 import {openMembershipConfiguration} from './membership-workflow'
-import { LoyaltyRefundReviewPanel } from './LoyaltyRefundReviewPanel'
 import {BusinessRatioFields} from './membership-business-inputs'
 import { useStaffViewState } from './staff-view-state'
 import { TaskSections } from './TaskSections'
@@ -74,7 +72,6 @@ interface LoyaltyReconciliationView {
   existingPoints: number
   existingGrowth: number
   status: string
-  reviewRefundPublicIds?: string[]
 }
 
 interface LoyaltySupplementView {
@@ -219,8 +216,6 @@ export function CustomerExperienceManagementPanel({ api, auth, dashboard, mode =
     <section className="customer-experience-publishing-intro"><strong>会员权益异常</strong><small>处理过期、缺货、结果未知和已制作后的补偿；已完成或已取消的记录不能直接恢复使用。</small></section>
     <LoyaltyTierAndRedemptionPanel viewMode="exceptions" api={api} auth={auth} />
     <AnnualBenefitManagementPanel viewMode="exceptions" api={api} auth={auth} />
-    <LoyaltyRefundReviewPanel api={api} auth={auth} />
-    <OrderFinancialRecoveryPanel api={api} auth={auth} />
   </div>
   if (mode === 'member-overview') return <div className="staff-module-body customer-experience-management">
     <section className="customer-experience-publishing-intro"><strong>会员等级与权益</strong><small>只读查看当前已发布的积分、成长值、等级与等级权益规则；本入口不能起草、审批或发布。</small></section>
@@ -252,7 +247,6 @@ export function CustomerExperienceManagementPanel({ api, auth, dashboard, mode =
     {id:'member-marketing',label:'会员通知',visible:auth.permissions.some(p=>p.startsWith('marketing.')||p==='community.activity.manage'||p==='member.card.manage'),content:<><MarketingContactPanel api={api} auth={auth} /><SocialBroadcastPanel key={auth.employee.id} api={api} auth={auth} /><LaunchPopupPanel key={auth.employee.id} api={api} auth={auth} /></>},
     {id:'member-integrations',label:'管理员接入',visible:auth.permissions.includes('member.card.manage'),content:<SocialAccountPanel key={auth.employee.id} api={api} auth={auth}/>},
     {id:'member-rules',label:'规则与条款',visible:auth.permissions.some(p=>p.startsWith('loyalty.')||p.startsWith('membership.terms.')),content:<><MembershipConfigurationCenterPanel api={api} auth={auth} /><PromotionalLoyaltyPanel api={api} auth={auth} /><MembershipTermsManagementPanel api={api} auth={auth} /><LoyaltyEmergencyControlPanel api={api} auth={auth} /></>},
-    {id:'refund-reviews',label:'退款积分核对',visible:auth.permissions.includes('reconciliation.view')&&auth.permissions.includes('loyalty.accrual.exception.view'),content:<LoyaltyRefundReviewPanel api={api} auth={auth} />},
     {id:'member-recovery',label:'账户恢复',visible:auth.permissions.some(p=>p.startsWith('customer.membership.')),content:<MembershipRecoveryPanel api={api} auth={auth} />},
   ]}/></div>
   return <div className="staff-module-body customer-experience-management">
@@ -1115,8 +1109,8 @@ function LoyaltyPolicyPanel({ api, auth, viewMode='all' }: { api: NormalizedApiC
         <header><strong>自动积分对账</strong><small>只按已付款订单、冻结计分资格和原规则版本计算</small></header>
         {reconciliation.filter((item) => item.status !== 'matched').length === 0 && <p>当前没有待补发差异。</p>}
         {reconciliation.filter((item) => item.status !== 'matched').map((item) => <article key={item.orderPublicId}>
-          <div><strong>{item.memberNo} · {shortPublicReference(item.orderPublicId)}</strong><small>应发 {item.expectedPoints} 积分 / {item.expectedGrowth} 成长值；已发 {item.existingPoints} / {item.existingGrowth}</small>{item.status === 'refund_review_required' && <small>退款分摊待核，积分冲回未自动处理。请由会员与财务负责人在财务对账中核对订单 {item.orderPublicId}、退款 {(item.reviewRefundPublicIds ?? []).join('、')} 及原收款。<a href="/staff/member-exceptions#loyalty-refund-reviews">前往退款积分核对</a>，由财务按真实退货商品申请、另一人复核。</small>}</div>
-          <div>{canRequestSupplement && item.status !== 'refund_review_required' && <button type="button" disabled={busy === `request-${item.orderPublicId}`} onClick={() => void requestSupplement(item)}>申请补发</button>}</div>
+          <div><strong>{item.memberNo} · {shortPublicReference(item.orderPublicId)}</strong><small>应发 {item.expectedPoints} 积分 / {item.expectedGrowth} 成长值；已发 {item.existingPoints} / {item.existingGrowth}</small></div>
+          <div>{canRequestSupplement && <button type="button" disabled={busy === `request-${item.orderPublicId}`} onClick={() => void requestSupplement(item)}>申请补发</button>}</div>
         </article>)}
       </div>}
       {canViewExceptions && <div className="activity-admin-list">

@@ -84,11 +84,11 @@ export function actionableServiceTasks(
   return tasks
     .filter((task) => task.status === 'pending' || task.status === 'acknowledged' || task.status === 'in_progress')
     .toSorted((left, right) => {
-      const priority = SERVICE_PRIORITY[right.priority] - SERVICE_PRIORITY[left.priority]
-      if (priority !== 0) return priority
       const leftMine = left.assignedToActor || left.assignedEmployeeId === actorId || left.backupEmployeeId === actorId ? 1 : 0
       const rightMine = right.assignedToActor || right.assignedEmployeeId === actorId || right.backupEmployeeId === actorId ? 1 : 0
       if (leftMine !== rightMine) return rightMine - leftMine
+      const priority = SERVICE_PRIORITY[right.priority] - SERVICE_PRIORITY[left.priority]
+      if (priority !== 0) return priority
       return eventTime(left.dueAt ?? left.createdAt) - eventTime(right.dueAt ?? right.createdAt)
     })
 }

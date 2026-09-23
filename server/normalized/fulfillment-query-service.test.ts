@@ -330,8 +330,6 @@ class ScriptedClient implements PostgresPoolClient {
     this.calls.push({ sql, values })
     if (/^(BEGIN|COMMIT|ROLLBACK)/.test(sql)) return { rows: [], rowCount: 0 }
     if (sql.includes("set_config('app.tenant_id'")) return { rows: [], rowCount: 1 }
-    if (sql.includes('FROM mbox.pickup_devices')) return { rows: [{found:false} as unknown as Row], rowCount:1 }
-    if (sql.includes('FROM mbox.kitchen_production_batches batch')) return {rows:[],rowCount:0}
     const response = this.responses.shift()
     if (response === undefined) throw new Error(`Unexpected query: ${sql}`)
     return response as PostgresQueryResult<Row>

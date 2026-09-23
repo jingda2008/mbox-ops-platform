@@ -34,9 +34,6 @@ const deploymentScriptNames = [
   'normalize-runtime-env.sh',
   'backup-postgres.sh',
   'restore-postgres.sh',
-  'maintenance-bootstrap.sh',
-  'maintenance-bootstrap.py',
-  'maintenance-ingress.mjs',
 ]
 
 if (!/^[0-9a-f]{40}$/.test(releaseSha)) throw new Error('MBOX_BUNDLE_SHA must be a full commit SHA')

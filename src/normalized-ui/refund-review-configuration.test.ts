@@ -31,7 +31,7 @@ describe('refund review configuration', () => {
     for (const amount of ['', '-1', '0.001', '1e5']) expect(refundReviewAmount(amount)).toBeNull()
   })
   it('reports permission gaps, missing limits, personal denials, inactive roles and multi-role maxima', () => {
-    const overview: StaffAccessManagementOverview = { generatedAt: '', scopeKey: 'test', configurationVersion: 'a'.repeat(64), configurationDefinitions: [], areas: [],
+    const overview: StaffAccessManagementOverview = { generatedAt: '', configurationDefinitions: [], areas: [],
       permissions: [{ code: 'refund.approve', name: '复核退款', category: 'payment', description: null }],
       roles: [role, { ...role, id: 'cashier', code: 'CASHIER', permissionCodes: ['refund.approve'], approvalLimits: [limit] },
         { ...role, id: 'owner', code: 'OWNER', permissionCodes: ['refund.approve'] },

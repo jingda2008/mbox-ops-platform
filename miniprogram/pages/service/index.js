@@ -65,14 +65,12 @@ Page({
       const orders = await getTableOrders()
       if (!this.isCurrentTableRequest(request)) return
       const complaintOrders = [{ publicId: '', label: '整桌问题（不指定订单）' }].concat(
-        (orders || []).map((order) => ({
+        (orders || []).slice(0, 8).map((order) => ({
           publicId: order.publicId,
           label: `${String(order.publicId || '').slice(-8)} · ${(order.items || []).slice(0, 2).map((item) => item.name).join('、') || '订单'}`,
         })),
       )
-      const selected = this.data.complaintOrders[this.data.complaintOrderIndex]
-      const complaintOrderIndex = Math.max(0, complaintOrders.findIndex((order) => order.publicId === (selected && selected.publicId)))
-      this.setData({ tableCode: getTableSession().tableCode, complaintOrders, complaintOrderIndex })
+      this.setData({ tableCode: getTableSession().tableCode, complaintOrders, complaintOrderIndex: 0 })
     } catch (_) {}
   },
 

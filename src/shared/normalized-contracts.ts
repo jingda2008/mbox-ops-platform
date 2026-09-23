@@ -189,8 +189,6 @@ export interface StaffAccessEmployeeView {
 
 export interface StaffAccessManagementOverview {
   generatedAt: string
-  scopeKey: string
-  configurationVersion: string
   roles: StaffAccessRoleView[]
   employees: StaffAccessEmployeeView[]
   permissions: StaffAccessPermissionView[]

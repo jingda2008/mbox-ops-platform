@@ -29,23 +29,16 @@ verify_deployment_scripts() {
   local script_name
   local expected_sha
   while IFS=$'\t' read -r script_name expected_sha; do
-    [[ "${script_name}" =~ ^[a-z0-9-]+\.(sh|py|mjs)$ ]]
+    [[ "${script_name}" =~ ^[a-z0-9-]+\.sh$ ]]
     [[ "${expected_sha}" =~ ^[0-9a-f]{64}$ ]]
     test -f "${release_dir}/${script_name}"
     test "$(sha256sum "${release_dir}/${script_name}" | awk '{print $1}')" = "${expected_sha}"
     count=$((count + 1))
   done < <(jq -er '.deploymentScripts | to_entries[] | [.value.file,.value.sha256] | @tsv' "${release_dir}/release-manifest.json")
-  test "${count}" = 15
+  test "${count}" = 12
 }
 verify_deployment_scripts
 rollback_mode=$(jq -r '.rollbackMode // "application_image"' "${manifest}")
-if [ "${rollback_mode}" = planned_maintenance_forward_only ]; then
-  # A post-cutover browser failure closes routing and all writers. It never
-  # reactivates sourceLive or erases the external write epoch.
-  MBOX_VERIFIED_MAINTENANCE_ENTRY=1 "${release_dir}/maintenance-bootstrap.sh" "${release_dir}" \
-    "$(jq -er '.tier' "${manifest}")" "${public_url}" --hold
-  exit 2
-fi
 if [ "${rollback_mode}" = forward_only_after_contract_cutover ]; then
   echo "contract migration cutover has resumed writes; application-only rollback is forbidden" >&2
   exit 2

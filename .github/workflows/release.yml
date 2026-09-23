@@ -133,9 +133,9 @@ jobs:
               if (digest !== item.sha256) throw new Error('release configuration digest mismatch');
             }
             const scripts = Object.values(manifest.deploymentScripts ?? {});
-            if (scripts.length !== 15) throw new Error('deployment script manifest is incomplete');
+            if (scripts.length !== 12) throw new Error('deployment script manifest is incomplete');
             for (const item of scripts) {
-              if (!item || !/^[a-z0-9-]+\.(sh|py|mjs)$/.test(item.file) || !/^[0-9a-f]{64}$/.test(item.sha256)) throw new Error('deployment script identity is invalid');
+              if (!item || !/^[a-z0-9-]+\.sh$/.test(item.file) || !/^[0-9a-f]{64}$/.test(item.sha256)) throw new Error('deployment script identity is invalid');
               const path = 'release-artifact/' + item.file;
               if (!fs.existsSync(path)) throw new Error('deployment script is missing');
               const digest = require('node:crypto').createHash('sha256').update(fs.readFileSync(path)).digest('hex');
@@ -156,7 +156,6 @@ jobs:
           cp release-artifact/mbox-lujiazui.store.json release-metadata/
           cp release-artifact/menu-catalog-2026-07-27.json release-metadata/
           cp release-artifact/{deploy-release,activate-release,rollback-activated-release,verify-public-app,stage-release-evidence,upload-oss-verified,send-sls-events,prune-oss-images,release-state,normalize-runtime-env,backup-postgres,restore-postgres}.sh release-metadata/
-          cp release-artifact/maintenance-bootstrap.{sh,py} release-artifact/maintenance-ingress.mjs release-metadata/
           node scripts/build-aliyun-evidence-bundle.mjs \
             --output oss-ready-evidence \
             --channel rc \

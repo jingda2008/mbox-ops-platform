@@ -40,24 +40,14 @@ describe('staff actions model', () => {
     expect(recommendationSceneSnapshot('unsure')).toEqual({ recommendationScene: 'other' })
   })
 
-  it('puts urgent service work before assigned ordinary work while hiding terminal work', () => {
+  it('puts assigned and urgent service work first while hiding terminal work', () => {
     const tasks: StaffServiceTask[] = [
       serviceTask({ id: 'normal', priority: 'normal', assignedEmployeeId: null }),
       serviceTask({ id: 'table-mine', priority: 'low', assignedToActor: true }),
       serviceTask({ id: 'mine', priority: 'low', assignedEmployeeId: 'employee-1' }),
       serviceTask({ id: 'urgent', priority: 'urgent', assignedEmployeeId: null }),
     ]
-    expect(actionableServiceTasks(tasks, 'employee-1').map((task) => task.id)).toEqual(['urgent', 'normal', 'table-mine', 'mine'])
-  })
-
-  it('keeps an urgent complaint first in a 120-task backlog without filtering ordinary work or changing task authority', () => {
-    const tasks = Array.from({ length: 119 }, (_, index) => serviceTask({ id: `normal-${index}`, priority: 'normal', assignedEmployeeId: 'employee-1', assignedToActor: true }))
-    const complaint = serviceTask({ id: 'urgent-complaint', taskType: 'guest.complaint', interactionMode: 'manager_resolution', priority: 'urgent', assignedEmployeeId: null, assignedToActor: false })
-    const ordered = actionableServiceTasks([...tasks, complaint], 'employee-1')
-    expect(ordered).toHaveLength(120)
-    expect(ordered[0]).toBe(complaint)
-    expect(new Set(ordered.map(task => task.id)).size).toBe(120)
-    expect(ordered[1]).toBe(tasks[0])
+    expect(actionableServiceTasks(tasks, 'employee-1').map((task) => task.id)).toEqual(['table-mine', 'mine', 'urgent', 'normal'])
   })
 
   it('keeps every visible KDS item inspectable while reserving the action queue for executable work', () => {

@@ -104,20 +104,6 @@ describe('OnlinePaymentService payment query uncertainty boundary', () => {
     expect(recordPayment).not.toHaveBeenCalled()
   })
 
-  it('does not extend a resolved guest principal to local historical close queries', async () => {
-    const resolve=vi.spyOn(PaymentProviderActionRepository.prototype,'resolvePaymentContext').mockResolvedValue({
-      id:paymentId,status:'closed',publicId:'LOCALPAY0001',provider:'postar',amountMinor:800,currency:'CNY',payableKind:'order',
-    } as never)
-    const queryPayment=vi.fn()
-    try{
-      const service=new OnlinePaymentService(runner(),'test-secret-at-least-thirty-two-bytes',config,
-        {createPayment:vi.fn(),queryPayment,closePayment:vi.fn(),requestRefund:vi.fn(),queryRefund:vi.fn()})
-      await expect(service.query({scope,paymentId,queryBindingId:'guest-closed-original-query',
-        principal:{type:'guest',customerId:paymentContext.customer_id,tableSessionId:paymentContext.table_session_id}})).rejects.toBeInstanceOf(OnlinePaymentUnavailableError)
-      expect(queryPayment).not.toHaveBeenCalled()
-    }finally{resolve.mockRestore()}
-  })
-
   it.each(['query', 'querySystem', 'closeSystem'] as const)(
     'maps an unmappable provider response to unknown for %s',
     async (operation) => {
@@ -181,7 +167,6 @@ function runner(saved?: Record<string, unknown>) {
       if (sql.startsWith('SELECT payment.id')) {
         return { rows: [paymentContext as Row], rowCount: 1 }
       }
-      if (sql.includes('FROM mbox.idempotency_records')) return { rows: [], rowCount: 0 }
       if (sql.includes('FROM mbox.verified_provider_observations')) return { rows: saved ? [saved as Row] : [], rowCount: saved ? 1 : 0 }
       throw new Error(`Unexpected payment query: ${sql}`)
     },

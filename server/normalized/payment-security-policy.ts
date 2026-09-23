@@ -1,4 +1,3 @@
-import {lockClosedDebtRecovery} from './closed-debt-recovery.js'
 import { createHash } from 'node:crypto'
 import type { JsonObject, JsonValue } from './command-executor.js'
 import type { ScopedTransaction } from './transaction-runner.js'
@@ -14,7 +13,6 @@ export type PaymentCapability =
   | 'payment.manual.pos.record'
   | 'payment.manual.external.record'
   | 'payment.recollect.authorize'
-  | 'payment.collect.all_tables'
   | 'community.activity.cashier'
   | 'refund.request'
   | 'refund.approve'
@@ -27,7 +25,6 @@ export interface EmployeeCapabilityAuthorization {
 }
 
 export interface EmployeeOrderAccessAuthorization {
-  allowClosedDebtRecovery?: boolean
   transaction: ScopedTransaction
   employeeId: string
   orderId: string
@@ -203,14 +200,6 @@ implements PaymentCapabilityAuthorizationPort {
       }
     } catch (error) {
       if (error instanceof EmployeeTableAccessDeniedError) {
-        if (input.allowClosedDebtRecovery) {
-          const recovery=await lockClosedDebtRecovery(input.transaction,input.orderId)
-          if(recovery?.hasPreCloseObligation){
-            await this.assertEmployeeCapability({...input,capability:'payment.collect.all_tables'})
-            await this.assertEmployeeCapability({...input,capability:'payment.recollect.authorize'})
-            return
-          }
-        }
         throw new PaymentAuthorizationError('Employee is not responsible for the order table')
       }
       throw error

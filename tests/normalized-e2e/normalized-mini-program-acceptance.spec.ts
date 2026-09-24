@@ -197,7 +197,7 @@ test('employee table observation is text-only and customer surfaces have no voic
   await expect(page.getByTestId('normalized-workspace')).toBeVisible()
   await page.goto('/staff/live')
   await page.getByLabel('搜索桌号或区域').fill('W1')
-  await page.locator('.staff-table-tile').filter({ hasText: 'W1' }).click()
+  await page.locator('.staff-table-tile').filter({ hasText: /\bW1\b/ }).click()
   await page.getByRole('button', { name: '记录桌台情况' }).click()
   const observation = page.getByRole('dialog', { name: 'W1记录桌台情况' })
   await expect(observation).toBeVisible()

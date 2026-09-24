@@ -125,14 +125,14 @@ const wechatPolicyTemplateDivergences = {
   'pages/member-center/index': { wechat: '8b8d5d05b2906778ea2d95b0ed48bf625f95e3a08affab528d07647824cd511e', alipay: '5afe636e2c9af6d55cedb46b42366e8e112b4bcb7f9fd9bffd0686bc8e687a57', wechatStyle: 'c3d7ec9e9ee19eae360de1bc551c0e5f184555761979a539244939cdbab635cf', alipayStyle: '157828f7389db7d329e85c40d7e6903508ad7571aae2f48cb3509447f4f7aa29' },
   'pages/home/index': {"wechat": "8b80b0ffe480a6b5bd27b9a2a28343a5c3e3fe0895a8dcaa4255e98559776960", "alipay": "5d0b08ce22d6e10ef63e443e04f29c99c8027e59c833e645cb6fc64145a5f725"},
   'pages/order/index': {"wechat": "6fe80eba47b215d81b90d00eeedffd1631be93af8b2cd3852f62f97d2995e0a1", "alipay": "546b3d9ca186fcf10a1ccf24170bb203fd0ef21775422ac38168333f5bb1ef07"},
-  'pages/profile/index': {"wechat": "f5688a3ba8ea664b78092960a610407dcaed785fdbb1d7640893488077ec8041", "alipay": "d201aaa6b4afef2375e261e8fe498b9cd3855fad075cb23b32eb249b5fb15031"},
+  'pages/profile/index': {"wechat": "e5f41736e60d97a70656cab7a39866f311c4aa2bb2ca3a3f33c17a59c6fe2dba", "alipay": "d201aaa6b4afef2375e261e8fe498b9cd3855fad075cb23b32eb249b5fb15031", "wechatStyle": "e76f5064443057e0ef4399ce4cb1fc4f187e512cf7e6815e5ab0c66bc9752902", "alipayStyle": "84354389b7d14cd38cae1d65e306055254fdfe264c940824bda1db9fae602e21"},
   'pages/community/index': {"wechat": "94a74035ef9f9b5602985232e32432dde0e1765e2a366b7e8d4a3819e85f2316", "alipay": "31652fbffa072e0ab56f52acd7fb99793ccab3066bdd39c045d2669ee25c8d2f"},
   'pages/reservations/index': {"wechat": "0ba7c6c6ba1e21ad983f4be42b65ff483eff8d255f421aa729bf6d8c9d327f1e", "alipay": "8e8e666661e7ac33df6eeb2393707c0c3ba1eb7462c3534a9dbaeb4c588c5675"},
   'pages/profile-cards/index': {"wechat": "35bcb245d3e93abe560a9e770a2009bb6fd08a6deda4f740bb91d1b7ac08d43b", "alipay": "385a7e6a8cc313d852944e5a17bdde388f54b573122c019e0eb45ae20c789a07"},
 
   'pages/profile-preferences/index': { wechat: '821b839de36340872e068bcef174a1f58d63c285160f3e2fa048d7be69508276', alipay: 'a842657e97e011a6b76259dd9c9281e8878836d42e70d3ef32a5ae06b9ff9303' },
   'pages/membership-terms/index': { wechat: 'd06727683d41d9d85ff540ad3e0c8bfb04f59c5d2cb1e11a5265401b43189926', alipay: 'e283016560ab6f27f4ec8a46825fdc748874f54e9316384314b2bb18b3f48b81' },
-  'pages/privacy/index': { wechat: '58e1413de61a146c5b61c903649c2f790e7d52f2f18d24c3a150218c26eb9fc8', alipay: '5676e96092f9fb099021f9fc3fc1f726ccabae90ab849492ce507af6e6477b31' },
+  'pages/privacy/index': { wechat: '1930001a804ff2d1d259f17c5e95fabfd18698ba3390c34f7f5d7cfe57dc2c82', alipay: '5676e96092f9fb099021f9fc3fc1f726ccabae90ab849492ce507af6e6477b31', wechatStyle: '9b030ff109761feaef95c8acb23d6777562e19562c252436877afb94e84462c0', alipayStyle: '3df911f6d207652fe382af8abe70c740c7b775179a85ce080f8e4edf7c2273c0' },
 }
 
 for (const page of sharedPages) {
@@ -168,7 +168,14 @@ for (const page of sharedPages) {
   const reviewedStyleDivergence = (page === 'pages/community/index' && digest(wechatStyle) === 'c486eeedc11bb12747bef53bb0d3cb17ba8a06630e9c28a4534e343fae83a4ac' && digest(alipayStyle) === '8aed83c1c0b9df23001dd5119425e0ab777e5748795746c55269947d6fec7b63') || page === 'pages/order/index' && digest(wechatStyle) === '21fad3da45aad7b45ec3eaaf2c4ddd373c967773e26cce46c6f6343b469366f9' && digest(alipayStyle) === '4225c235d5e13f4a6552f4273dae0758f511c9306b487e1d2b9ed2e7f32fb6a3'
   const reviewedMemberQrStyle = page === 'pages/member-center/index' && reviewedDivergence
     && digest(wechatStyle) === divergence.wechatStyle && digest(alipayStyle) === divergence.alipayStyle
-  assert(reviewedMemberQrStyle || reviewedStyleDivergence || cssSignature(alipayStyle) === cssSignature(wechatStyle), `${page} 的布局样式与微信不一致`)
+  const reviewedPinnedStyle = Boolean(
+    divergence
+    && typeof divergence.wechatStyle === 'string'
+    && typeof divergence.alipayStyle === 'string'
+    && digest(wechatStyle) === divergence.wechatStyle
+    && digest(alipayStyle) === divergence.alipayStyle
+  )
+  assert(reviewedMemberQrStyle || reviewedStyleDivergence || reviewedPinnedStyle || cssSignature(alipayStyle) === cssSignature(wechatStyle), `${page} 的布局样式与微信不一致`)
 
   const wechatConfig = JSON.parse(await readFile(join(wechatRoot, `${page}.json`), 'utf8').catch(() => '{}'))
   const alipayConfig = JSON.parse(await readFile(`${alipayBase}.json`, 'utf8'))

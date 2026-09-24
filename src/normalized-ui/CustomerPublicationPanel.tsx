@@ -168,9 +168,10 @@ export function CustomerPublicationPanel({ api, permissions }: {
       return
     }
     await mutate(async () => {
-      const contentSha256 = await sha256(policyContent)
+      const content = policyContent.trim()
+      const contentSha256 = await sha256(content)
       await api.postEndpoint('/api/staff/customer-publication/privacy-policies/drafts', {
-        policyVersion, content: policyContent, contentSha256,
+        policyVersion, content, contentSha256,
         operatorName: operatorName.trim(), contact: contact.trim(),
         dataRetentionPolicyVersion: retentionVersion.trim(), thirdPartyRegisterVersion: thirdPartyVersion.trim(),
         reason: policyReason.trim(),
@@ -251,7 +252,7 @@ export function CustomerPublicationPanel({ api, permissions }: {
     </form>}
 
     {canPublishPrivacy && <div className="customer-publication-approval-grid"><label>法务或运营批准人<input value={approvedBy} maxLength={200} onChange={(event) => setApprovedBy(event.target.value)} placeholder="已实际复核的姓名或主体" /></label><label>批准材料编号<input value={policyApprovalReference} maxLength={240} onChange={(event) => setPolicyApprovalReference(event.target.value)} placeholder="例如：LEGAL-2026-0824-001" /></label></div>}
-    {canReadPrivacy && <section className="customer-publication-list"><header><strong>隐私政策版本</strong><small>未发布版本不对顾客显示；撤下当前版本会触发生产发布门禁。</small></header>{policies.length === 0 ? <p>暂无隐私政策版本，顾客端会保持不展示。</p> : policies.map((policy) => <article key={policy.id}><div><strong>{policy.policyVersion}</strong><small>{profileStatus(policy.status)} · 摘要 {policy.contentSha256.slice(0, 12)}…{policy.effectiveAt === null ? '' : ` · 生效 ${formatDateTime(policy.effectiveAt)}`}</small></div><div>{policy.status === 'draft' && canPublishPrivacy && <button type="button" disabled={busy} onClick={() => void publishPolicy(policy)}>独立发布</button>}{policy.status === 'published' && canPublishPrivacy && <button type="button" className="is-danger" disabled={busy} onClick={() => void withdrawPolicy(policy)}>撤下</button>}</div></article>)}</section>}
+    {canReadPrivacy && <section className="customer-publication-list"><header><strong>隐私政策版本</strong><small>没有当前已发布版本、且没有撤回记录时，顾客端阅读仓库内已送审正文。独立发布后以发布稿为准；撤下后不再用送审稿顶上。</small></header>{policies.length === 0 ? <p>暂无门店隐私政策版本。顾客端在没有发布、也没有撤回时仍可阅读已送审正文。这里不会自动写入发布行。</p> : policies.map((policy) => <article key={policy.id}><div><strong>{policy.policyVersion}</strong><small>{profileStatus(policy.status)} · 摘要 {policy.contentSha256.slice(0, 12)}…{policy.effectiveAt === null ? '' : ` · 生效 ${formatDateTime(policy.effectiveAt)}`}</small></div><div>{policy.status === 'draft' && canPublishPrivacy && <button type="button" disabled={busy} onClick={() => void publishPolicy(policy)}>独立发布</button>}{policy.status === 'published' && canPublishPrivacy && <button type="button" className="is-danger" disabled={busy} onClick={() => void withdrawPolicy(policy)}>撤下</button>}</div></article>)}</section>}
     <p className="staff-module-footnote"><ShieldCheck /> 这里记录的是发布链和材料编号，不替代真实员工确认、法务批准、微信平台审核或现场验收。尚未提交这些材料时，生产发布门禁仍会阻止部署。</p>
   </section>
 }

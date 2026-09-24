@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { selectPublicPrivacyPolicy, type PublicPrivacyPolicyView } from './approved-privacy-policy.js'
 import {registerOrderFinancialRecoveryRoutes} from './order-financial-recovery-api.js'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
@@ -274,10 +275,11 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
   app.post('/staff/customer-publication/privacy-policies/drafts', async (request, reply) => handle(reply, async () => {
     const context = await staffContextWithPermission(options, request, 'privacy.policy.manage')
     const body = objectBody(request.body)
+    const drafted = canonicalPrivacyDraft(body.content, sha256(body.contentSha256, '隐私政策内容摘要'))
     const result = await options.service.draftPrivacyPolicy(context, {
       policyVersion: privacyPolicyVersion(body.policyVersion),
-      content: text(body.content, '隐私政策正文', 80, 50_000),
-      contentSha256: sha256(body.contentSha256, '隐私政策内容摘要'),
+      content: drafted.content,
+      contentSha256: drafted.contentSha256,
       operatorName: text(body.operatorName, '运营主体', 2, 200),
       contact: text(body.contact, '联系渠道', 2, 500),
       dataRetentionPolicyVersion: text(body.dataRetentionPolicyVersion, '数据保留规则版本', 2, 80),
@@ -2099,6 +2101,18 @@ function sha256(value: unknown, label: string): string {
   const result = text(value, label, 64, 64)
   if (!/^[0-9a-f]{64}$/.test(result)) throw new CustomerExperienceRequestError(`${label}不正确`)
   return result
+}
+function canonicalPrivacyDraft(raw: unknown, presentedHash: string): { content: string; contentSha256: string } {
+  // Staff pages used to hash the textarea as pasted. The stored body is trimmed,
+  // and schema 246 checks that stored hash with builtin sha256(). Accept either
+  // digest, then persist the trimmed body and its own digest.
+  const content = text(raw, '隐私政策正文', 80, 50_000)
+  const contentSha256 = createHash('sha256').update(content).digest('hex')
+  const rawDigest = typeof raw === 'string' ? createHash('sha256').update(raw).digest('hex') : ''
+  if (presentedHash !== contentSha256 && presentedHash !== rawDigest) {
+    throw new CustomerExperienceRequestError('政策内容摘要与正文不一致', 'PRIVACY_POLICY_HASH_MISMATCH', 409)
+  }
+  return { content, contentSha256 }
 }
 function redemptionItemCode(value: unknown): string {
   if (typeof value !== 'string' || !/^[A-Z][A-Z0-9_]{2,63}$/.test(value)) {

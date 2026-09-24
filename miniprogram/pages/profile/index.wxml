@@ -209,8 +209,8 @@
     </view>
   </block>
   <view class="profile-legal-links">
-    <button bindtap="showMembershipTerms" hover-class="none">用户服务协议</button>
-    <button bindtap="openPrivacy" hover-class="none">隐私政策</button>
+    <text class="profile-legal-link" bindtap="showMembershipTerms">用户服务协议</text>
+    <text class="profile-legal-link" bindtap="openPrivacy">隐私政策</text>
   </view>
   <view wx:if="{{loginSheetVisible}}" class="login-sheet-mask" bindtap="closeLoginSheet">
     <scroll-view scroll-y class="login-sheet" catchtap="noop">

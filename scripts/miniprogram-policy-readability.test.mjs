@@ -75,9 +75,27 @@ test('WeChat privacy retries and old failed response cannot erase the newer publ
   assert.equal(h.page.data.policyMessage, '')
 })
 
+test('WeChat privacy page keeps the approved review copy readable as separate paragraphs', async () => {
+  const content = `${'甲'.repeat(500)}\n\n第二段正文。\n仍在第二段。`
+  const h = fixture('privacy', {
+    getPrivacyPolicy: async () => ({
+      version: 'MBOX-PRIVACY-20260914-V2',
+      content,
+      effectiveAt: '2026-09-14T00:00:00.000+08:00',
+    }),
+  })
+  await h.page.loadPrivacyPolicy()
+  assert.equal(h.page.data.policy.version, 'MBOX-PRIVACY-20260914-V2')
+  assert.equal(h.page.data.policyMessage, '')
+  assert.equal(h.page.data.policyEffectiveLabel, '2026-09-14 00:00')
+  const shown = h.page.data.policyParagraphs.map((item) => String(item.text))
+  assert.equal(shown.join('\n\n'), `${'甲'.repeat(480)}\n\n${'甲'.repeat(20)}\n\n第二段正文。\n仍在第二段。`)
+  assert.ok(shown.every((item) => item.length <= 480))
+})
+
 test('WeChat privacy failure is visible and reopening the page recovers without login', async () => {
   let failed = true
-  const h = fixture('privacy', { getPrivacyPolicy: async () => { if (failed) throw new Error('offline'); return { version: 'restored' } } })
+  const h = fixture('privacy', { getPrivacyPolicy: async () => { if (failed) throw new Error('offline'); return { version: 'restored', content: 'restored copy' } } })
   await h.page.loadPrivacyPolicy()
   assert.equal(h.page.data.policy, null)
   assert.ok(h.page.data.policyMessage)

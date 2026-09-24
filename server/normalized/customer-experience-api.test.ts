@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { customerExperienceApiPlugin } from './customer-experience-api.js'
@@ -794,6 +795,9 @@ describe('customer experience activity contact API', () => {
       withdrawPrivacyPolicy,
     })
     const content = 'M-BOX 顾客隐私政策正式正文。'.repeat(8)
+    const rawContent = `${content}\n`
+    const rawHash = createHash('sha256').update(rawContent).digest('hex')
+    const canonicalHash = createHash('sha256').update(content).digest('hex')
 
     expect((await app.inject({ method: 'GET', url: '/staff/customer-publication/employees' })).statusCode).toBe(200)
     expect((await app.inject({ method: 'GET', url: '/staff/customer-publication/profiles' })).statusCode).toBe(200)
@@ -817,7 +821,7 @@ describe('customer experience activity contact API', () => {
       method: 'POST', url: '/staff/customer-publication/privacy-policies/drafts',
       headers: { 'idempotency-key': 'privacy-policy-draft-api-0001' },
       payload: {
-        policyVersion: privacy.policyVersion, content, contentSha256: 'a'.repeat(64),
+        policyVersion: privacy.policyVersion, content: rawContent, contentSha256: rawHash,
         operatorName: 'M-BOX 运营主体', contact: 'privacy@example.test',
         dataRetentionPolicyVersion: 'retention-v1', thirdPartyRegisterVersion: 'third-party-v1',
         reason: '录入法务提供的正式政策正文',
@@ -845,7 +849,7 @@ describe('customer experience activity contact API', () => {
     expect(listCustomerPublicationEmployees).toHaveBeenCalledTimes(1)
     expect(draftCustomerPublicProfile).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ employeeId, publicDisplayName: '小林' }))
     expect(publishCustomerPublicProfile).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ approvalReference: 'HR-2026-0824-001' }))
-    expect(draftPrivacyPolicy).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contentSha256: 'a'.repeat(64), content }))
+    expect(draftPrivacyPolicy).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contentSha256: canonicalHash, content }))
     expect(publishPrivacyPolicy).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ approvedBy: '法务复核人' }))
     expect(withdrawPrivacyPolicy).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ policyVersion: privacy.policyVersion }))
   })

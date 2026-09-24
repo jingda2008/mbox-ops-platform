@@ -2,7 +2,7 @@
 
 历史版本说明（2026-09-08阶段，后续发布见分时记录；非当前部署结论）：当时最近一次已留存生产发布证据为 `1.0.0-rc.178`（提交 `90d3cfb077c1bb3b22236abcbba595eb9f2a65e6`）、schema `158`、门店配置 `2026.09.07-v20`；当前远端主线已包含自选套餐 schema `159`、老板经营费用与工资 schema `160`及门店配置候选 `2026.09.08-v21`，本地发布候选在其上新增支付/退款持久化退避和运营反馈修复 schema `161`。本轮尚未提交、合并、部署或上传小程序。真实资金、工资发放、退款、对账与门店岗位验收未完成，商业发布继续为`DENY`
 形成日期：`2026-07-27`
-最后更新：`2026-09-24 16:29 CST`
+最后更新：`2026-09-24 18:30 CST`
 
 适用范围：上海 M-BOX 陆家嘴店验证环境、门店试运行和商业生产发布
 清单负责人：乌鸦（系统管理员）
@@ -4238,3 +4238,25 @@ PR #296 已合入 `39148473ad86686df00554f1f79209c02009290b`。本记录只准�
 | 时间 | 变更 | 边界 |
 | --- | --- | --- |
 | 2026-09-24 16:29 CST | 准备 rc.232 发布元数据，范围仅 #296 的隐私回退、微信手机号平台标识、资料页条款与 schema 246 | 未打生产标签前不能当作已发布；未关闭 SYS-201；未上传微信小程序；未部署 |
+
+### 2026-09-24 18:10 CST 入会手机号释放列权限
+
+生产 `POST /api/public/mini/membership/enroll-with-phone` 返回 500，日志为 `permission denied for table customer_verified_contacts`，栈在 `releaseSourcePhonesForMerge`。迁移 095 收回整表 UPDATE，只授予部分列；入会释放手机号还要写 `processing_status` 与 `revocation_reason_code`，因此被拒绝。界面红字「会员服务暂时没有接上，请稍后重试」是未映射 500 的顾客文案，不是隐私条款读失败。
+
+schema 247 把同一条 `GRANT UPDATE (processing_status, revocation_reason_code) ON TABLE mbox.customer_verified_contacts TO mbox_runtime` 留在仓库里。2026-09-24 18:02 CST 已在生产对 `mbox_runtime` 执行该 GRANT（日志 `/opt/mbox/hotfixes/grant-customer-verified-contacts-enroll-20260924T100231Z.sql.log`）。复查 `mbox_app_rc217`：`processing_status`、`revocation_reason_code`、`revoked_at` 三列 UPDATE 均为 true。迁移再执行是空操作，不收回 `revoked_at`，也不恢复整表 UPDATE。生产 schema 版本仍要等 247 随发布写入，避免以后重建库丢掉这次授权。不写入隐私发布行。SYS-201 继续开放。微信「我的」页协议入口改回服务卡下方并排纯文字「用户服务协议」「隐私政策」。小程序不在服务端 tar 内，页脚须另行上传。
+
+| 编号 | 优先级 / 状态 | 负责人 / 目标 | 问题与证据 | 关闭条件 |
+| --- | --- | --- | --- | --- |
+| SYS-378 | P1列权限热修已复核，迁移留档与真机入会未关闭 | Codex；合并后随标准发布迁移 schema 247；微信小程序另行上传 | rc.232 入会 500。热修前 `mbox_app_rc217` 缺两列 UPDATE。2026-09-24 18:02 CST 已对 `mbox_runtime` 执行同一 GRANT，复查三列 UPDATE 为 true。日志见 hotfix 路径 | 仓库迁移 247 进入后续发布且重建库仍带这两列授权；微信授权手机号成功时不再出现该 500 与「会员服务暂时没有接上」。列权限复查不能代替真机入会 |
+
+| 时间 | 变更 | 边界 |
+| --- | --- | --- |
+| 2026-09-24 18:20 CST | 记录生产热修：`mbox_runtime` 已获两列 UPDATE，`mbox_app_rc217` 复查三列均为 true；schema 247 保持同一 GRANT 以便以后部署不丢失 | 热修日志已核列权限，未把真机入会或 schema 247 发布记成完成；未关闭 SYS-201；未上传微信小程序 |
+
+### 2026-09-24 18:30 CST 隐私正文可读与员工发布摘要
+
+生产只读 `GET /api/public/mini/privacy-policy` 已返回 `MBOX-PRIVACY-20260914-V2`，`meta.published=false`、`source=approved-review-copy`，正文约 6367 字。没有向 `privacy_policy_releases` 写入发布行。schema 246 已把库内校验改成内建 SHA256。员工草稿仍会先裁剪正文；页面若按粘贴原文（常见末尾换行）计算摘要，会被 `PRIVACY_POLICY_HASH_MISMATCH` 挡住，真实发布走不完。本候选接受裁剪前或裁剪后的摘要，入库时保存裁剪后正文及其摘要。微信隐私页把全文拆成段落，避免单段文本被截断。SYS-201 继续开放：这不是三名员工独立发布，也没有真机复验客人已读完。
+
+| 时间 | 变更 | 边界 |
+| --- | --- | --- |
+| 2026-09-24 18:30 CST | 隐私页按段落展示送审正文；员工草稿摘要按裁剪后正文保存 | 未关闭 SYS-201；未伪造发布行；未把生产列权限复查或接口 200 记成真机已读；未上传微信小程序 |

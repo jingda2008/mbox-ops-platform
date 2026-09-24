@@ -6,6 +6,37 @@ const {
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 const { customerErrorMessage } = require('../../utils/customer-error')
 
+function policyParagraphs(content) {
+  const source = String(content || '').replace(/\r\n/g, '\n').trim()
+  if (!source) return []
+  const pieces = []
+  for (const block of source.split(/\n{2,}/)) {
+    let rest = block.trim()
+    while (rest.length > 480) {
+      const splitAt = rest.lastIndexOf('\n', 480)
+      const cut = splitAt > 160 ? splitAt : 480
+      const piece = rest.slice(0, cut).trim()
+      if (piece) pieces.push(piece)
+      rest = rest.slice(cut).trim()
+    }
+    if (rest) pieces.push(rest)
+  }
+  return pieces.map((text, index) => ({ id: `p${index}`, text }))
+}
+
+function formatPolicyTime(value) {
+  const parsed = Date.parse(String(value || ''))
+  if (!Number.isFinite(parsed)) return String(value || '')
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(new Date(parsed))
+  const pick = (type) => (parts.find((part) => part.type === type) || {}).value || ''
+  const hour = pick('hour') === '24' ? '00' : pick('hour')
+  return `${pick('year')}-${pick('month')}-${pick('day')} ${hour}:${pick('minute')}`
+}
+
 const REGISTRATION_STATUS_TEXT = {
   reserved: '名额已暂留',
   payment_pending: '待付款处理',
@@ -22,7 +53,8 @@ Page({
   data: {
     contactToolsOpen: false, loadingContacts: false, contactBusy: '', contactMessage: '',
     verifiedPhones: [], activityRegistrations: [], editingRegistrationPublicId: '',
-    editingContactValue: '', policyLoading: true, policy: null, policyMessage: '',
+    editingContactValue: '', policyLoading: true, policy: null, policyParagraphs: [],
+    policyEffectiveLabel: '', policyMessage: '',
   },
 
   onShow() { this.loadPrivacyPolicy() },
@@ -35,16 +67,21 @@ Page({
     try {
       const policy = await getPrivacyPolicy()
       if (generation !== this.policyReadGeneration) return
+      const readable = Boolean(policy && String(policy.content || '').trim())
       this.setData({
         policyLoading: false,
-        policy: policy || null,
-        policyMessage: policy ? '' : '隐私政策暂时无法读取，请稍后重试或联系门店。',
+        policy: readable ? policy : null,
+        policyParagraphs: readable ? policyParagraphs(policy.content) : [],
+        policyEffectiveLabel: readable ? formatPolicyTime(policy.effectiveAt) : '',
+        policyMessage: readable ? '' : '隐私政策暂时无法读取，请稍后重试或联系门店。',
       })
     } catch (error) {
       if (generation !== this.policyReadGeneration) return
       this.setData({
         policyLoading: false,
         policy: null,
+        policyParagraphs: [],
+        policyEffectiveLabel: '',
         policyMessage: customerErrorMessage(error, '隐私政策暂时无法读取，请稍后重试或联系门店。'),
       })
     }

@@ -59,6 +59,14 @@ describe('normalized store provisioning config', () => {
     expect(() => parseStoreProvisionConfig({ ...base, bootstrapAdminEmployeeCode: undefined })).toThrow(/bootstrapAdminEmployeeCode/)
   })
 
+  it('rejects ambiguous rename sources and target chains', () => {
+    const table = base.tables[0]!
+    expect(parseStoreProvisionConfig({ ...base, tables: [{ ...table, code: 'L1', renameFrom: 'L01' }] }).tables[0]?.renameFrom).toBe('L01')
+    expect(() => parseStoreProvisionConfig({ ...base, tables: [{ ...table, renameFrom: 'L01' }] })).toThrow(/overlaps/)
+    expect(() => parseStoreProvisionConfig({ ...base, tables: [{ ...table, code: 'L1', renameFrom: 'L01' }, { ...table, code: 'L2', renameFrom: 'L01' }] })).toThrow(/duplicate table rename source/)
+    expect(() => parseStoreProvisionConfig({ ...base, tables: [{ ...table, code: 'L1', renameFrom: 'L01' }, table] })).toThrow(/overlaps/)
+  })
+
   it('rejects inconsistent deposit settings and unversioned configuration', () => {
     expect(() => parseStoreProvisionConfig({ ...base, version: undefined })).toThrow(/version/)
     expect(() => parseStoreProvisionConfig({
@@ -104,7 +112,7 @@ describe('normalized store provisioning config', () => {
       'utf8',
     )) as unknown
     const config = parseStoreProvisionConfig(source)
-    expect(config.version).toBe('2026.09.25-v26')
+    expect(config.version).toBe('2026.09.25-v27')
     expect(config.tables).toHaveLength(68)
     expect(config.tables.map(table=>table.code)).toContain('W1')
     expect(config.tables.map(table=>table.code)).not.toContain('W01')

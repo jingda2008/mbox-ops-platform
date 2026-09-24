@@ -1,6 +1,7 @@
+import { readFile } from 'node:fs/promises'
 import { expect, test } from '@playwright/test'
 
-test('fixed QR waiting state is compact, self-updating and does not ask the guest to scan again', async ({ page }) => {
+test('legacy W01 QR hint accepts verified W1 and waiting state is compact, self-updating and does not ask the guest to scan again', async ({ page }) => {
   let scanCount = 0, waitCount = 0
   await page.route('**/api/guest/session/wait', async route => {
     waitCount++
@@ -21,7 +22,7 @@ test('fixed QR waiting state is compact, self-updating and does not ask the gues
     })
   })
 
-  await page.goto(`/guest?table=W1#token=${'a'.repeat(48)}`)
+  await page.goto(`/guest?table=W01#token=${'a'.repeat(48)}`)
 
   await expect(page.getByRole('status')).toContainText('室外 W1 · 桌位已识别')
   await expect(page.getByRole('heading', { name: '欢迎入座，请联系服务人员开台' })).toBeVisible()
@@ -83,4 +84,18 @@ test('waiting refresh respects retryAt and resumes the availability check withou
   await page.clock.runFor(17000);await expect.poll(()=>waits).toBe(2)
   expect(scans).toBe(1)
   await expect(page.getByRole('heading',{name:'欢迎入座，请联系服务人员开台'})).toBeVisible()
+})
+
+
+test('old printed W01 hint with the real W1 credential opens the active menu; another table hint is rejected', async ({ page }) => {
+  const fixture = JSON.parse(await readFile(process.env.NORMALIZED_E2E_FIXTURE_FILE ?? 'artifacts/normalized-browser/fixture.json', 'utf8'))
+  const oldUrl = new URL(fixture.guestUrl, 'http://localhost')
+  oldUrl.searchParams.set('table', 'W01')
+  await page.goto(oldUrl.pathname + oldUrl.search + oldUrl.hash)
+  await expect(page.getByTestId('normalized-guest-app')).toBeVisible()
+  await expect(page.getByRole('button', { name: /历史已下单.*W1/ })).toBeVisible()
+  oldUrl.searchParams.set('table', 'W2')
+  await page.goto(oldUrl.pathname + oldUrl.search + oldUrl.hash)
+  await expect(page.getByTestId('normalized-guest-app')).toHaveCount(0)
+  await expect(page.getByRole('alert')).toBeVisible()
 })

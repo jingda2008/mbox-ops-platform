@@ -315,7 +315,7 @@ test('one business-day order and guest requests flow through bartender, kitchen,
   await expect(cashier.page.getByRole('heading', { name: '收银与退款' })).toBeVisible()
   await expect(cashier.page.getByLabel('本营业日售后摘要')).toContainText('2订单')
   await expect(cashier.page.getByLabel('本营业日售后摘要')).toContainText('0已收款')
-  const pendingOrder = cashier.page.locator('.cashier-order').filter({ hasText: /\bW1\b/ }).first()
+  const pendingOrder = cashier.page.locator('.cashier-order').filter({ has: cashier.page.getByText('W1', { exact: true }) }).first()
   await expect(pendingOrder).toBeVisible()
   await expect(pendingOrder).toContainText('未支付')
   await pendingOrder.getByRole('button').click()
@@ -421,7 +421,7 @@ test('李艳可由授权管理页批量安排为主服务员并安全结束责�
 
   const tableCode = 'W1'
   await manager.page.getByLabel('搜索责任区域或桌台').fill(tableCode)
-  const matchingTable = manager.page.locator('.staff-assignment-area label').filter({ hasText: tableCode })
+  const matchingTable = manager.page.locator('.staff-assignment-area label').filter({ has: manager.page.getByText(tableCode, { exact: true }) })
   await expect(matchingTable).toHaveCount(1)
   await matchingTable.getByRole('checkbox').check()
   await manager.page.getByLabel('安排原因').fill('浏览器验收：李艳负责本桌晚班服务')
@@ -915,7 +915,7 @@ for(const staffCode of ['liyan','tom']) test(`商品售后入口停止部分未�
     await scheduler.page.getByLabel('本次岗位').selectOption({label:'服务员 · SERVER'})
     await scheduler.page.getByLabel('责任类型').selectOption('backup')
     await scheduler.page.getByLabel('搜索责任区域或桌台').fill('W1')
-    await scheduler.page.locator('.staff-assignment-area label').filter({hasText:/\bW1\b/}).getByRole('checkbox').check()
+    await scheduler.page.locator('.staff-assignment-area label').filter({has: scheduler.page.getByText('W1', {exact:true})}).getByRole('checkbox').check()
     await scheduler.page.getByLabel('安排原因').fill('隔离验证普通服务员停止本人责任桌未付款商品')
     await scheduler.page.getByRole('button',{name:'发布 1 张桌台'}).click()
     await expect(scheduler.page.getByRole('status').filter({hasText:'Tom 已安排'})).toContainText('Tom 已安排 1 张责任桌')

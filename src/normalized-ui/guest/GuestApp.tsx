@@ -1,3 +1,4 @@
+import { sameGuestTableCode } from './table-code-alias'
 import {
   AlertCircle,
   Bell,
@@ -296,7 +297,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   }, [blockForSession, cartProtocolVersion, loadSharedCart, loadTableOrders, notify])
 
   const acceptSession = useCallback((session: GuestSessionView, expectedTable: string) => {
-    if (session.table.code.toUpperCase() !== expectedTable.toUpperCase()) {
+    if (!sameGuestTableCode(session.table.code, expectedTable)) {
       setPhase('blocked')
       setGateReason('table_mismatch')
       setGateMessage('当前会话与桌号不一致，请重新扫描所在桌面的二维码。')
@@ -349,7 +350,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       const credential = qrCredentialRef.current
       if (credential !== null && waitingCredentialRef.current === credential) {
         const availability = await api.waitForTable(credential)
-        if (availability.table.code.toUpperCase() !== expectedTable.toUpperCase()) {
+        if (!sameGuestTableCode(availability.table.code, expectedTable)) {
           throw new GuestApiError('桌位核对结果不一致，请重新扫描所在桌面的二维码。', 'invalid_response')
         }
         nextTableRetryRef.current = 0

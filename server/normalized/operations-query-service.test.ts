@@ -40,7 +40,7 @@ describe('OperationsQueryService', () => {
   it('builds a repeatable normalized staff view without a RuntimeState aggregate', async () => {
     const fixture = service([
       { rows: [{ id: storeId, code: 'lujiazui', name: 'M-BOX', timezone: 'Asia/Shanghai', business_day_cutoff: '06:00:00' }], rowCount: 1 },
-      { rows: [{ id: employeeId, employee_code: 'LIYAN', display_name: '李艳', status: 'active' }], rowCount: 1 },
+      { rows: [{ id: employeeId, employee_code: 'LIYAN', display_name: '李艳', status: 'active', resolved_at: '2026-08-11T10:00:00.123456Z' }], rowCount: 1 },
       { rows: [{ code: 'MANAGER', name: '店长' }], rowCount: 1 },
       { rows: [{ code: 'table.view_all', role_granted: true, override_granted: false, override_denied: false }], rowCount: 1 },
       { rows: [], rowCount: 0 },

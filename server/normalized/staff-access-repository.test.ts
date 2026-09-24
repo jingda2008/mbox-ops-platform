@@ -10,6 +10,11 @@ const storeId = '22222222-2222-4222-8222-222222222222'
 const employeeId = '33333333-3333-4333-8333-333333333333'
 
 describe('StaffAccessRepository', () => {
+  it('keeps the database evaluation instant without rounding its microseconds', async () => {
+    const access = await new StaffAccessRepository(new AccessFixtureTransaction()).resolve(employeeId)
+    expect(access.resolvedAt).toBe('2026-08-11T10:00:00.123456Z')
+  })
+
   it('applies an active employee deny override before role and employee grants', async () => {
     const transaction = new AccessFixtureTransaction()
     const access = await new StaffAccessRepository(transaction).resolve(
@@ -67,6 +72,7 @@ class AccessFixtureTransaction implements ScopedTransaction {
         employee_code: 'tom',
         display_name: 'Tom',
         status: this.status,
+        resolved_at: '2026-08-11T10:00:00.123456Z',
       }])
     }
     if (sql.includes('SELECT DISTINCT r.code')) return result<Row>([{ code: 'SERVER', name: '服务员' }])

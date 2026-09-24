@@ -22,6 +22,12 @@ const storeId = '71000000-0000-4000-8000-000000000002'
 const actorId = '71000000-0000-4000-8000-000000000003'
 
 describe('FulfillmentQueryService', () => {
+  it('does not present an enabled feature as a configured physical pickup device',async()=>{
+    const fixture=scriptedService([employeeRow(actorId,'BAR01','调酒师'),rows([]),permissionRows(KDS_DELIVER_PERMISSION),rows([]),rows([]),rows([]),rows([])],true)
+    const result=await fixture.service.getStaffWorkQueue({tenantId,storeId},actorId,'2026-08-11')
+    expect(result.actor).toMatchObject({threeScreenWorkflowEnabled:true,pickupDeviceConfigured:false})
+  })
+
   it.each([true,false])('retains authorized rows but matches action session availability (%s)',async valid=>{
     const fixture=scriptedService([
       employeeRow(actorId,'BAR01','调酒师'),rows([{code:'BARTENDER',name:'调酒师'}]),
@@ -342,12 +348,12 @@ class ScriptedClient implements PostgresPoolClient {
   }
 }
 
-function scriptedService(responses: PostgresQueryResult[]) {
+function scriptedService(responses: PostgresQueryResult[], threeScreenEnabled=false) {
   const client = new ScriptedClient(responses)
   const pool: PostgresPool = { connect: async () => client, end: async () => undefined }
   return {
     client,
-    service: new FulfillmentQueryService(new ScopedPostgresTransactionRunner(pool)),
+    service: new FulfillmentQueryService(new ScopedPostgresTransactionRunner(pool),false,threeScreenEnabled),
   }
 }
 
@@ -358,7 +364,7 @@ function fulfillmentCall(client: ScriptedClient) {
 }
 
 function employeeRow(id: string, employeeCode: string, displayName: string) {
-  return rows([{ id, employee_code: employeeCode, display_name: displayName, status: 'active' }])
+  return rows([{ id, employee_code: employeeCode, display_name: displayName, status: 'active', resolved_at: '2026-08-11T10:00:00.123456Z' }])
 }
 
 function permissionRows(...codes: string[]) {

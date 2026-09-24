@@ -5,6 +5,16 @@
 .privacy-section text { display: block; }
 .privacy-section text:first-child { color: #25282e; font-size: 28rpx; font-weight: 700; }
 .privacy-section text:last-child { margin-top: 14rpx; color: #5f6772; font-size: 25rpx; line-height: 1.75; }
+.privacy-body .privacy-paragraph {
+  display: block;
+  margin-top: 18rpx;
+  color: #3e4642;
+  font-size: 26rpx;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
 .privacy-release-note { margin-top: 18rpx; padding: 24rpx; border: 1rpx solid #d9b978; border-radius: 16rpx; background: #fff8e8; }
 .privacy-contact-tools { margin: 28rpx 0 40rpx; border: 1rpx solid #d8d5ca; border-radius: 18rpx; background: #faf9f5; overflow: hidden; }
 .privacy-contact-toggle.privacy-contact-toggle { box-sizing:border-box; margin:0; line-height:1.4; padding:20rpx; min-height: 88rpx; width: 100%; border: 0; border-radius: 0; background: #2f332f; color: #fff; font-size: 27rpx; font-weight: 700; }

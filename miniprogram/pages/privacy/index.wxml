@@ -10,8 +10,11 @@
     <view class="privacy-section"><text>联系渠道</text><text>{{policy.contact}}</text></view>
     <view class="privacy-section"><text>数据保留规则版本</text><text>{{policy.dataRetentionPolicyVersion}}</text></view>
     <view class="privacy-section"><text>第三方服务清单版本</text><text>{{policy.thirdPartyRegisterVersion}}</text></view>
-    <view class="privacy-section"><text>生效时间</text><text>{{policy.effectiveAt}}</text></view>
-    <view class="privacy-section"><text>政策全文</text><text>{{policy.content}}</text></view>
+    <view class="privacy-section"><text>生效时间</text><text>{{policyEffectiveLabel || policy.effectiveAt}}</text></view>
+    <view class="privacy-section privacy-body">
+      <text class="privacy-label">政策全文</text>
+      <text wx:for="{{policyParagraphs}}" wx:key="id" class="privacy-paragraph" user-select="true">{{item.text}}</text>
+    </view>
   </block>
   <view wx:else class="privacy-section privacy-release-note"><text>隐私政策暂时无法读取</text><text>{{policyMessage}}</text><button bindtap="loadPrivacyPolicy">重新读取</button></view>
   <view class="privacy-contact-tools">

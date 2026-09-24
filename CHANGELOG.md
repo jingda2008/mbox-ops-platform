@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0-rc.233 - 2026-09-24
+
+- 入会释放手机号补上 `processing_status` 与 `revocation_reason_code` 的列级 UPDATE，schema 247 固化给 `mbox_runtime`；不恢复整表 UPDATE，也不收回已有的 `revoked_at`。
+- 员工隐私草稿接受裁剪前或裁剪后的摘要，入库保存裁剪后正文及其摘要。不写入隐私发布行。
+- 不关闭 SYS-201 与 SYS-378。本候选不等于已部署；微信小程序不在服务端包内，上传不作为本标签条件。
+
 ## 1.0.0-rc.232 - 2026-09-24
 
 - 门店没有当前隐私发布、也没有撤回记录时，公开接口回退到已送审正文；schema 246 用内建 SHA256 校验隐私内容，不再依赖未限定 schema 的 pgcrypto digest()。

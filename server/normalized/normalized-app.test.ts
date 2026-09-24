@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import type { FastifyPluginAsync } from 'fastify'
 import { describe, expect, it, vi } from 'vitest'
+import { approvedReviewPrivacyPolicy } from './approved-privacy-policy.js'
 import {
   NORMALIZED_LOG_REDACTION_PATHS,
   NORMALIZED_MIN_SCHEMA_VERSION,
@@ -154,14 +155,20 @@ describe('createNormalizedApp', () => {
     const pool = fakePool()
     const runtime = await createNormalizedApp({ config, pool, logger: false })
     try {
-      for (const path of ['privacy-policy', 'membership-terms']) {
-        const response = await runtime.app.inject({ method: 'GET', url: `/api/public/mini/${path}?storeId=other-store`,
-          headers: { 'x-mbox-store-id': 'other-store', cookie: 'mbox_reservation_session=expired' } })
-        expect(response.statusCode).toBe(200)
-        expect(response.json()).toEqual({ data: null, meta: { published: false } })
-        expect(response.headers['cache-control']).toBe('no-store')
-        expect(response.headers['set-cookie']).toBeUndefined()
-      }
+      const headers = { 'x-mbox-store-id': 'other-store', cookie: 'mbox_reservation_session=expired' }
+      const privacy = await runtime.app.inject({ method: 'GET', url: '/api/public/mini/privacy-policy?storeId=other-store', headers })
+      expect(privacy.statusCode).toBe(200)
+      expect(privacy.json()).toEqual({
+        data: approvedReviewPrivacyPolicy(),
+        meta: { published: false, source: 'approved-review-copy' },
+      })
+      expect(privacy.headers['cache-control']).toBe('no-store')
+      expect(privacy.headers['set-cookie']).toBeUndefined()
+      const terms = await runtime.app.inject({ method: 'GET', url: '/api/public/mini/membership-terms?storeId=other-store', headers })
+      expect(terms.statusCode).toBe(200)
+      expect(terms.json()).toEqual({ data: null, meta: { published: false } })
+      expect(terms.headers['cache-control']).toBe('no-store')
+      expect(terms.headers['set-cookie']).toBeUndefined()
       expect(pool.queries.some(query => query.includes('privacy_policy_releases'))).toBe(true)
       expect(pool.queries.some(query => query.includes('membership_terms_versions'))).toBe(true)
       for (const path of ['bootstrap', 'loyalty']) {
@@ -459,7 +466,7 @@ describe('createNormalizedApp', () => {
   })
 
   it('does not report ready when normalized migrations are older than registered plugins', async () => {
-    expect(NORMALIZED_MIN_SCHEMA_VERSION).toBe('245')
+    expect(NORMALIZED_MIN_SCHEMA_VERSION).toBe('246')
     const pool = fakePool({
       ready: { schema_flavor: NORMALIZED_SCHEMA_FLAVOR, schema_version: '227', store_active: true },
     })

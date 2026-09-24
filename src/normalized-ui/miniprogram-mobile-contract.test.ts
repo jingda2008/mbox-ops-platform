@@ -327,6 +327,8 @@ describe('mini-program mobile business flow contract', () => {
     expect(api).toContain("mbox.membership.enroll.attempt.v1")
     expect(api).toContain("'/api/public/mini/membership/enroll-with-phone'")
     expect(api).toContain('phoneAuthorizationCode')
+    expect(api).toContain("phoneAuthorizationProvider: 'wechat'")
+    expect(read('miniprogram/pages/profile/index.js')).toContain('getMembershipTerms')
     expect(api).toContain("error.code !== 'NETWORK_ERROR'")
     expect(config).toContain('membershipInviteCooldownHours: 24')
     const privacy = read('miniprogram/pages/privacy/index.wxml')

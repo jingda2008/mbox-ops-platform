@@ -1,3 +1,4 @@
+import { selectPublicPrivacyPolicy, type PublicPrivacyPolicyView } from './approved-privacy-policy.js'
 import {registerOrderFinancialRecoveryRoutes} from './order-financial-recovery-api.js'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import {registerLoyaltyRefundReviewRoutes} from './loyalty-refund-review-api.js'
@@ -174,7 +175,7 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
         LIMIT 1
       `, [scope.tenantId, scope.storeId])
       const row = result.rows[0]
-      return row === undefined ? null : {
+      const published: PublicPrivacyPolicyView | null = row === undefined ? null : {
         version: row.policy_version,
         content: row.content_markdown,
         contentSha256: row.content_sha256,
@@ -184,9 +185,16 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
         thirdPartyRegisterVersion: row.third_party_register_version,
         effectiveAt: timestamp(row.effective_at, '隐私政策生效时间'),
       }
+      if (published !== null) return selectPublicPrivacyPolicy({ published, withdrawn: false })
+      const withdrawn = await transaction.query(`
+        SELECT 1 FROM mbox.privacy_policy_releases
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND status='withdrawn'
+        LIMIT 1
+      `, [scope.tenantId, scope.storeId])
+      return selectPublicPrivacyPolicy({ published: null, withdrawn: withdrawn.rows.length > 0 })
     }, { readOnly: true })
     reply.header('cache-control', 'no-store')
-    return reply.send({ data: policy, meta: { published: policy !== null } })
+    return reply.send(policy)
   }))
 
   app.get('/public/mini/membership-terms', async (request, reply) => handle(reply, async () => {

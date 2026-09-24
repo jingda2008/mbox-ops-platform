@@ -20,6 +20,7 @@ const {
   getWechatNotificationPrompt,
   recordWechatNotificationAuthorization,
   enrollMembership,
+  getMembershipTerms,
   logoutWechatIdentity,
 } = require('../../utils/api')
 const { restartAnonymousCustomerSession } = require('../../utils/auth')
@@ -451,9 +452,15 @@ Page({
       const soft = /预约会话已失效|重新进入预约|登录状态已失效|登录或桌边会话已过期/.test(message)
         ? ''
         : customerErrorMessage(error, '会员信息暂时无法读取')
+      let membershipTerms = null
+      try {
+        membershipTerms = await getMembershipTerms()
+      } catch (_termsError) {
+        membershipTerms = null
+      }
       this.setData({
         loading: false,error:soft,
-        membership:null,membershipTerms:null,supportContact:null,points:[],benefits:[],benefitCount:null,
+        membership:null,membershipTerms,supportContact:null,points:[],benefits:[],benefitCount:null,
         reservations:[],registrations:[],redemptionItems:[],redemptions:[],productRestrictions:[],contentCards:[],
         expiryNotificationOption:null,wechatNotificationAuthorizations:[],wechatNotificationPromptOptions:[],showRedemptions:false,
         preferenceFacts:[],preferenceSources:[],preferenceSourceCount:0,preferenceActiveCount:0,

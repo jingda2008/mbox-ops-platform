@@ -381,7 +381,7 @@ async function replaceVerifiedPhone(phoneAuthorizationCode) {
   try {
     const result = (await publicRequest('/api/public/mini/membership/verified-phones/replace', {
       method: 'POST', headers: { 'idempotency-key': attempt.idempotencyKey },
-      data: { phoneAuthorizationCode: attempt.phoneAuthorizationCode },
+      data: { phoneAuthorizationCode: attempt.phoneAuthorizationCode, phoneAuthorizationProvider: 'wechat' },
     })).data
     wx.removeStorageSync(storageKey)
     return result
@@ -407,12 +407,18 @@ async function revokeVerifiedPhone(contactPublicId) {
 }
 async function enrollMembership(termsVersion, acknowledgementSource, phoneAuthorizationCode) {
   const storageKey = 'mbox.membership.enroll.attempt.v1'
-  const payload = { termsVersion: Number(termsVersion), acknowledgementSource, phoneAuthorizationCode }
+  const payload = {
+    termsVersion: Number(termsVersion),
+    acknowledgementSource,
+    phoneAuthorizationCode,
+    phoneAuthorizationProvider: 'wechat',
+  }
   const stored = wx.getStorageSync(storageKey)
   const attempt = stored && typeof stored === 'object'
     && stored.termsVersion === payload.termsVersion
     && stored.acknowledgementSource === payload.acknowledgementSource
     && stored.phoneAuthorizationCode === payload.phoneAuthorizationCode
+    && stored.phoneAuthorizationProvider === payload.phoneAuthorizationProvider
     && typeof stored.idempotencyKey === 'string' && stored.idempotencyKey.length >= 8
     ? stored : Object.assign({}, payload, { idempotencyKey: randomId('membership-enroll') })
   wx.setStorageSync(storageKey, attempt)
@@ -473,7 +479,7 @@ async function verifyMembershipRecovery(challengePublicId, phoneAuthorizationCod
   try {
     const result = (await publicRequest('/api/public/mini/membership/recovery/verify', {
       method: 'POST', headers: { 'idempotency-key': requestKey },
-      data: { challengePublicId, phoneAuthorizationCode },
+      data: { challengePublicId, phoneAuthorizationCode, phoneAuthorizationProvider: 'wechat' },
     })).data
     if (!idempotencyKey) wx.removeStorageSync(MEMBERSHIP_RECOVERY_ATTEMPT_KEY)
     // 找回已落在当前预约会话顾客上；同样不要强制切微信身份，避免成功被后续会话升级冲掉。

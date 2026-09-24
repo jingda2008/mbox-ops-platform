@@ -97,7 +97,11 @@ integration('customer-publication PostgreSQL integration', () => {
       resolveGuestContext:()=>{throw new Error('not used')},resolveStaffContext:()=>{throw new Error('not used')},protectContact:()=>{throw new Error('not used')},
     })
     try {
-    expect((await app.inject({method:'GET',url:'/public/mini/privacy-policy'})).json()).toEqual({data:null,meta:{published:false}})
+    const unpublished = await app.inject({method:'GET',url:'/public/mini/privacy-policy'})
+    expect(unpublished.statusCode).toBe(200)
+    expect(unpublished.json().data.version).toBe('MBOX-PRIVACY-20260914-V2')
+    expect(unpublished.json().meta).toEqual({ published: false, source: 'approved-review-copy' })
+    expect(unpublished.body).not.toContain(content.slice(0, 24))
     await expect(service.publishPrivacyPolicy(staff(ids.drafter), {
       policyVersion, approvedBy: '法务复核人', approvalReference: 'LEGAL-2026-0824-001',
       effectiveAt: new Date().toISOString(), reason: '本人不能发布',

@@ -117,7 +117,9 @@ async function publicRequest(path, options) {
 }
 
 async function getMiniBootstrap() { return (await publicRequest('/api/public/mini/bootstrap')).data }
-async function getPrivacyPolicy() { return (await publicRequest('/api/public/mini/privacy-policy')).data }
+async function getPrivacyPolicy() {
+  return (await request('/api/public/mini/privacy-policy', { requireTableSession: false, credentialDomain: 'none' })).data
+}
 async function getMiniLoyalty() { return (await publicRequest('/api/public/mini/loyalty')).data }
 async function getMiniLoyaltyLedger() { return (await publicRequest('/api/public/mini/loyalty/ledger')).data }
 async function recordBirthdayBenefitConsent(birthdayMonthDay) {

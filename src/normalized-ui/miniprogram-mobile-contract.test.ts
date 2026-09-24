@@ -358,6 +358,14 @@ describe('mini-program mobile business flow contract', () => {
     expect(profileView).toContain('我已阅读并同意')
     expect(profileView).toContain('《用户服务协议》')
     expect(profileView).toContain('《隐私政策》')
+    const legalFooter = profileView.slice(
+      profileView.indexOf('class="profile-legal-links"'),
+      profileView.indexOf('login-sheet-mask'),
+    )
+    expect(legalFooter).toContain('用户服务协议')
+    expect(legalFooter).toContain('隐私政策')
+    expect(legalFooter).not.toContain('<button')
+    expect(legalFooter).not.toContain('《用户服务协议》和《隐私政策》')
     expect(profileView).not.toContain('disabled="{{!membershipTerms}}"')
     expect(profileView).toContain('wx:if="{{agreedToPolicies}}"')
     expect(profileView).toContain('login-action-link--pending')

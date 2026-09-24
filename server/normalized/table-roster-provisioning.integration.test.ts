@@ -51,6 +51,7 @@ integration('versioned table rename preserves identity and rolls back ambiguity'
         .toEqual(original.map(t => ({ id: t.id, code: t.code })))
       // Only after frontend activation: finalize codes atomically and audit them.
       await client.query('BEGIN')
+      await client.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.store_id',$2,true)", [tenantId, storeId])
       await reconcileTableRoster(client, { tenantId, storeId }, renamed.tables)
       await client.query('COMMIT')
       await provisionNormalizedStore({ ...input, config: renamed })

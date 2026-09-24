@@ -44,7 +44,8 @@ describe('FulfillmentQueryService', () => {
     expect(result.workItems[0]?.canPrepare).toBe(valid)
     const query=fixture.client.calls.find(call=>call.sql.includes('FROM mbox.staff_sessions AS session'))!
     expect(query.sql).toContain('online_lease_until > clock_timestamp()')
-    expect(query.sql).toContain('credential.valid_until > clock_timestamp()')
+    expect(query.sql).toContain('lease.expires_at > clock_timestamp()')
+    expect(query.sql).not.toContain('store_daily_credentials')
     expect(query.sql).not.toContain('FOR KEY SHARE')
     if(!valid)expect(result.workItems[0]?.attentionMessages.join('')).toContain('恢复登录')
   })

@@ -125,6 +125,9 @@ export class NormalizedKdsAuthorization implements KdsAuthorizationPort {
 export async function hasActiveKdsSession(input: Readonly<{
   transaction: ScopedTransaction; employeeId: string; staffSessionId: string; deviceAccessLeaseId: string;
 }>, lock = false): Promise<boolean> {
+  // Store credentials admit new logins. Issued six-hour sessions survive their
+  // rotation, as in StaffSessionRepository.requireSession; explicit session or
+  // device revocation, expiry and online presence still stop KDS actions.
   const session = await input.transaction.query<{ id: string }>(`
       SELECT session.id
       FROM mbox.staff_sessions AS session
@@ -132,10 +135,6 @@ export async function hasActiveKdsSession(input: Readonly<{
         ON lease.tenant_id = session.tenant_id
        AND lease.store_id = session.store_id
        AND lease.id = session.device_access_lease_id
-      JOIN mbox.store_daily_credentials AS credential
-        ON credential.tenant_id = lease.tenant_id
-       AND credential.store_id = lease.store_id
-       AND credential.id = lease.daily_credential_id
       WHERE session.tenant_id = $1::uuid
         AND session.store_id = $2::uuid
         AND session.id = $3::uuid
@@ -146,10 +145,7 @@ export async function hasActiveKdsSession(input: Readonly<{
         AND session.online_lease_until > clock_timestamp()
         AND lease.revoked_at IS NULL
         AND lease.expires_at > clock_timestamp()
-        AND credential.revoked_at IS NULL
-        AND credential.valid_from <= clock_timestamp()
-        AND credential.valid_until > clock_timestamp()
-      ${lock ? 'FOR KEY SHARE OF session, lease, credential' : ''}
+      ${lock ? 'FOR KEY SHARE OF session, lease' : ''}
     `, [
       input.transaction.scope.tenantId,
       input.transaction.scope.storeId,

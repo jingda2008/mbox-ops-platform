@@ -150,7 +150,7 @@ try {
     scope,
     businessDate,
     actorEmployeeId: employeeId,
-    tableCodes: ['W01'],
+    tableCodes: ['W1'],
     reason: '隔离浏览器验收签发',
   })
   const tableQrToken = qr[0]?.tableQrToken
@@ -158,14 +158,14 @@ try {
   const tableSession = await new TableSessionCommandService(runtime.commandExecutor).open({
     scope,
     actor: { type: 'employee', employeeId },
-    table: { kind: 'code', value: 'W01' },
+    table: { kind: 'code', value: 'W1' },
     publicId: `browser-session-${randomBytes(8).toString('hex')}`,
     businessDate,
     guestCount: 2,
     guestProfileSnapshot: { scene: 'friends', source: 'browser_acceptance' },
     openedByEmployeeId: employeeId,
     idempotencyKey: `browser-open-${randomBytes(12).toString('hex')}`,
-    requestFingerprint: JSON.stringify({ table: 'W01', guestCount: 2, businessDate }),
+    requestFingerprint: JSON.stringify({ table: 'W1', guestCount: 2, businessDate }),
   })
   await seedPerformance(testUrl, scope.tenantId, scope.storeId, tableSession.value.id)
   const orderableProducts = await seedOrderableInventory(testUrl, scope.tenantId, scope.storeId)
@@ -177,7 +177,7 @@ try {
   if(process.env.NORMALIZED_E2E_REMAKE_HANDOVER==='true'){
     // Opt-in fixture only: publicly creating remake batches remains disabled.
     // No printer/provider worker runs in this throwaway browser database.
-    const opened=await new TableSessionCommandService(runtime.commandExecutor).open({scope,actor:{type:'employee',employeeId},table:{kind:'code',value:'W02'},publicId:`remake-fixture-${randomUUID()}`,businessDate,guestCount:2,guestProfileSnapshot:{source:'browser_remake_fixture'},openedByEmployeeId:employeeId,idempotencyKey:randomUUID(),requestFingerprint:'isolated-remake-handover'})
+    const opened=await new TableSessionCommandService(runtime.commandExecutor).open({scope,actor:{type:'employee',employeeId},table:{kind:'code',value:'W2'},publicId:`remake-fixture-${randomUUID()}`,businessDate,guestCount:2,guestProfileSnapshot:{source:'browser_remake_fixture'},openedByEmployeeId:employeeId,idempotencyKey:randomUUID(),requestFingerprint:'isolated-remake-handover'})
     const ids=await runtime.transactions.run(scope,async tx=>{
       const productId=randomUUID(),orderId=randomUUID(),itemId=randomUUID(),taskId=randomUUID(),productName='隔离重做实物'
       await tx.query(`INSERT INTO mbox.products(id,tenant_id,store_id,code,name,category_code,fulfillment_station,inventory_control_mode) VALUES($1,$2,$3,'QA-REMAKE-HANDOVER',$4,'test','bar','not_managed')`,[productId,scope.tenantId,scope.storeId,productName])
@@ -186,7 +186,7 @@ try {
       await tx.query(`INSERT INTO mbox.kds_tasks(id,tenant_id,store_id,order_item_id,station_code,quantity,status,ready_at) VALUES($1,$2,$3,$4,'bar',3,'ready',clock_timestamp())`,[taskId,scope.tenantId,scope.storeId,itemId])
       const batch=await new QuantityRemakeRepository(tx).create({itemId,employeeId,quantity:3,originalGoodsLost:true,reason:'隔离测试原实物无法交付',eventKey:randomUUID()})
       await new QuantityRemakeFulfillmentRepository(tx).act({taskId:batch.taskId,employeeId,action:'complete',quantity:2,eventKey:randomUUID()})
-      return {batchId:batch.id,itemId,productName,tableCode:'W02'}
+      return {batchId:batch.id,itemId,productName,tableCode:'W2'}
     })
     await runtime.transactions.run(scope,tx=>new PostgresTableCustomerLeftTurnoverRepository(tx).close({scope,employeeId,tableSessionId:opened.value.id,businessDate,reasonNote:'隔离测试离店，实物留待处理',idempotencyKey:randomUUID()}))
     remakeHandoverFixture=ids
@@ -229,7 +229,7 @@ try {
     schemaVersion: 1,
     kitchenBatchFixture,
     threeScreenFixture,
-    guestUrl: `/guest?table=W01#token=${tableQrToken}`,
+    guestUrl: `/guest?table=W1#token=${tableQrToken}`,
     reservationUrl: '/reserve',
     staffUrl: '/',
     dailyCredential,

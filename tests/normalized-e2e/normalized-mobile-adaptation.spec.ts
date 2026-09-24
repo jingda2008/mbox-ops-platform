@@ -162,7 +162,7 @@ test('manager mobile pages prioritize current actions and keep low-frequency det
   const areas = page.locator('.staff-assignment-area')
   expect(await areas.count()).toBeGreaterThanOrEqual(6)
   expect(await page.locator('.staff-assignment-area label').count()).toBeLessThanOrEqual(10)
-  await page.getByLabel('搜索责任区域或桌台').fill('W01')
+  await page.getByLabel('搜索责任区域或桌台').fill('W1')
   await expect(page.locator('.staff-assignment-area label')).toHaveCount(1)
   await expectNoHorizontalOverflow(page, 'responsibility assignment')
   await expectTouchTargets(page, '.staff-assignment-panel', 'responsibility assignment')

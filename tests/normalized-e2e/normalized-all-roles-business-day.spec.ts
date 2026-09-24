@@ -211,9 +211,9 @@ test('one business-day order and guest requests flow through bartender, kitchen,
 
   const orderManager = await staffPage(browser, data, 'liyan')
   await orderManager.page.getByRole('button', { name: '现场', exact: true }).first().click()
-  await orderManager.page.getByRole('button', { name: /^W01 \d+人 · / }).click()
+  await orderManager.page.getByRole('button', { name: /^W1 \d+人 · / }).click()
   await orderManager.page.getByRole('button', { name: '协助点单' }).click()
-  const assistedOrder = orderManager.page.getByRole('dialog', { name: 'W01协助点单' })
+  const assistedOrder = orderManager.page.getByRole('dialog', { name: 'W1协助点单' })
   for (const productName of [data.orderableProductName, data.kitchenProductName]) {
     await assistedOrder.getByLabel('搜索菜单商品').fill(productName)
     await assistedOrder.getByRole('button', { name: `加入${productName}` }).click()
@@ -224,14 +224,14 @@ test('one business-day order and guest requests flow through bartender, kitchen,
   await assistedCart.getByPlaceholder('如：少冰、不放香菜').first().fill('草稿恢复逐行备注')
   await orderManager.page.reload()
   await orderManager.page.getByRole('button', { name: '现场', exact: true }).first().click()
-  await orderManager.page.getByRole('button', { name: /^W01 \d+人 · / }).click()
+  await orderManager.page.getByRole('button', { name: /^W1 \d+人 · / }).click()
   await orderManager.page.getByRole('button', { name: '协助点单' }).click()
   await assistedOrder.getByRole('button', { name: '查看已选' }).click()
   await expect(assistedCart.getByPlaceholder('如：少冰、不要香菜、酒水和小食一起上')).toHaveValue('营业日验收：酒水小食一起上')
   await expect(assistedCart.getByPlaceholder('如：少冰、不放香菜').first()).toHaveValue('草稿恢复逐行备注')
   await assistedCart.getByRole('button', { name: '核对无误，确认下单' }).click()
   await assistedOrder.getByRole('dialog', { name: '确认上单' }).getByRole('button', { name: '确认上单' }).click()
-  await expect(orderManager.page.getByRole('status')).toContainText('W01 订单已挂桌并发送出品')
+  await expect(orderManager.page.getByRole('status')).toContainText('W1 订单已挂桌并发送出品')
   await orderManager.context.close()
 
   const bartender = await staffPage(browser, data, 'lengyanzhi')
@@ -303,11 +303,11 @@ test('one business-day order and guest requests flow through bartender, kitchen,
   await cashier.page.goto('/staff/live')
   await expect(cashier.page.getByRole('heading', { name: '找到桌台，直接处理' })).toBeVisible()
   await expect(cashier.page.getByRole('alert')).toContainText('1 张桌待收款')
-  const cashierTable = cashier.page.getByRole('button', { name: /^W01 \d+人 · / })
+  const cashierTable = cashier.page.getByRole('button', { name: /^W1 \d+人 · / })
   await expect(cashierTable).toContainText(/待支付|支付确认中|支付异常/)
   await cashierTable.click()
   await cashier.page.getByRole('button', { name: '协助点单' }).click()
-  const cashierAssistedOrder = cashier.page.getByRole('dialog', { name: 'W01协助点单' })
+  const cashierAssistedOrder = cashier.page.getByRole('dialog', { name: 'W1协助点单' })
   await cashierAssistedOrder.getByLabel('搜索菜单商品').fill(data.kitchenProductName)
   await expect(cashierAssistedOrder.getByRole('button', { name: `加入${data.kitchenProductName}` })).toBeVisible()
   await cashierAssistedOrder.getByRole('button', { name: '关闭点单' }).click()
@@ -315,7 +315,7 @@ test('one business-day order and guest requests flow through bartender, kitchen,
   await expect(cashier.page.getByRole('heading', { name: '收银与退款' })).toBeVisible()
   await expect(cashier.page.getByLabel('本营业日售后摘要')).toContainText('2订单')
   await expect(cashier.page.getByLabel('本营业日售后摘要')).toContainText('0已收款')
-  const pendingOrder = cashier.page.locator('.cashier-order').filter({ hasText: 'W01' }).first()
+  const pendingOrder = cashier.page.locator('.cashier-order').filter({ hasText: 'W1' }).first()
   await expect(pendingOrder).toBeVisible()
   await expect(pendingOrder).toContainText('未支付')
   await pendingOrder.getByRole('button').click()
@@ -419,7 +419,7 @@ test('李艳可由授权管理页批量安排为主服务员并安全结束责�
   await manager.page.getByLabel('本次岗位').selectOption({ label: '店长 · MANAGER' })
   await manager.page.getByLabel('责任类型').selectOption('primary')
 
-  const tableCode = 'W01'
+  const tableCode = 'W1'
   await manager.page.getByLabel('搜索责任区域或桌台').fill(tableCode)
   const matchingTable = manager.page.locator('.staff-assignment-area label').filter({ hasText: tableCode })
   await expect(matchingTable).toHaveCount(1)
@@ -514,14 +514,14 @@ test('店长可在经营配置中修改桌台容量资料并读回', async ({ br
   await manager.page.setViewportSize({ width: 430, height: 880 })
   await manager.page.goto('/staff/settings')
   await manager.page.getByRole('button', { name: /区域、桌台与容量/ }).click()
-  const table = manager.page.locator('.venue-management-list > section').nth(1).locator('article').filter({ hasText: 'W01' }).first()
+  const table = manager.page.locator('.venue-management-list > section').nth(1).locator('article').filter({ hasText: 'W1' }).first()
   await expect(table).toBeVisible()
   await table.getByRole('button', { name: '编辑' }).click()
-  await manager.page.getByLabel('显示名称').fill('W01验收桌')
+  await manager.page.getByLabel('显示名称').fill('W1验收桌')
   await manager.page.getByLabel('标准容量').fill('4')
   await manager.page.getByRole('button', { name: '保存桌台' }).click()
-  await expect(manager.page.getByRole('status')).toContainText('W01验收桌 已保存并从服务端读回')
-  await expect(manager.page.locator('.venue-management-list > section').nth(1).locator('article').filter({ hasText: 'W01验收桌' }).first()).toBeVisible()
+  await expect(manager.page.getByRole('status')).toContainText('W1验收桌 已保存并从服务端读回')
+  await expect(manager.page.locator('.venue-management-list > section').nth(1).locator('article').filter({ hasText: 'W1验收桌' }).first()).toBeVisible()
   await expectNoHorizontalOverflow(manager.page)
   await manager.context.close()
 })
@@ -532,7 +532,7 @@ test('我的已制作多商品长单号在窄屏逐项显示，保留商品处�
   await page.setViewportSize({width:375,height:812})
   const names=['内格罗尼','大吉利','威士忌酸','长商品名称用于核对多行文字是否完整显示']
   await page.route('**/api/operations/history?**', async route => route.fulfill({json:{data:{businessDate:'2026-09-14',page:0,hasMore:false,receipts:[],generatedAt:new Date().toISOString(),orders:[{
-    id:'history-order',publicId:'order-5f44bda47ae16fd5d2ab19970000000000000000',tableCode:'W02',employeeName:'冷言志',submittedAt:new Date().toISOString(),status:'fulfilled',paymentStatus:'paid',totalMinor:1000,
+    id:'history-order',publicId:'order-5f44bda47ae16fd5d2ab19970000000000000000',tableCode:'W2',employeeName:'冷言志',submittedAt:new Date().toISOString(),status:'fulfilled',paymentStatus:'paid',totalMinor:1000,
     items:names.map((name,index)=>({id:`history-item-${index}`,name,quantity:1,unitPriceMinor:250,totalMinor:250,status:'prepared',note:'少冰，完成后按桌号交接',preparedBy:'冷言志',preparedAt:new Date().toISOString()}))
   }]}}}))
   await page.goto('/staff/fulfillment')
@@ -763,9 +763,9 @@ for(const pauseNew of (process.env.NORMALIZED_E2E_RECOVERY_PEER==='true'?[true]:
   const data=await fixture(),note=`数量联验-${Date.now()}`
   const manager=await staffPage(browser,data,'liyan')
   await manager.page.getByRole('button',{name:'现场',exact:true}).first().click()
-  await manager.page.getByRole('button',{name:/^W01 \d+人 · /}).click()
+  await manager.page.getByRole('button',{name:/^W1 \d+人 · /}).click()
   await manager.page.getByRole('button',{name:'协助点单'}).click()
-  const dialog=manager.page.getByRole('dialog',{name:'W01协助点单'})
+  const dialog=manager.page.getByRole('dialog',{name:'W1协助点单'})
   await dialog.getByLabel('搜索菜单商品').fill(data.orderableProductName)
   await dialog.getByRole('button',{name:`加入${data.orderableProductName}`}).click()
   for(let n=0;n<2;n++)await dialog.getByRole('button',{name:`增加${data.orderableProductName}`}).click()
@@ -837,9 +837,9 @@ for(const paid of [false,true])test(`套餐停止一份按原单点价重算，�
   const data=await fixture(),manager=await staffPage(browser,data,'liyan'),note=`套餐暂停-${Date.now()}`
   await manager.page.setViewportSize({width:390,height:844})
   await manager.page.getByRole('button',{name:'现场',exact:true}).first().click()
-  await manager.page.getByRole('button',{name:/^W01 \d+人 · /}).click()
+  await manager.page.getByRole('button',{name:/^W1 \d+人 · /}).click()
   await manager.page.getByRole('button',{name:'协助点单'}).click()
-  const order=manager.page.getByRole('dialog',{name:'W01协助点单'})
+  const order=manager.page.getByRole('dialog',{name:'W1协助点单'})
   await order.getByLabel('搜索菜单商品').fill(data.bundleProductName)
   await order.getByRole('button',{name:`加入${data.bundleProductName}`}).click()
   await order.getByRole('dialog',{name:`${data.bundleProductName}商品详情`}).getByRole('button',{name:'加入购物车'}).click()
@@ -855,7 +855,7 @@ for(const paid of [false,true])test(`套餐停止一份按原单点价重算，�
     expect(collected.ok(),await collected.text()).toBe(true)
   }
   await expect(order).toHaveCount(0)
-  const details=manager.page.getByRole('region',{name:'W01本桌点单详情'})
+  const details=manager.page.getByRole('region',{name:'W1本桌点单详情'})
   const child=details.locator('.staff-table-order-status-item').filter({hasText:'吧台'}).filter({has:manager.page.getByRole('button',{name:'处理套餐内商品'})}).first()
   const loaded=manager.page.waitForResponse(response=>response.url().includes('/api/commerce/item-after-sales/items/')&&response.request().method()==='GET')
   await child.getByRole('button',{name:'处理套餐内商品'}).click()
@@ -914,8 +914,8 @@ for(const staffCode of ['liyan','tom']) test(`商品售后入口停止部分未�
     await scheduler.page.getByLabel('员工').selectOption({label:'Tom · tom'})
     await scheduler.page.getByLabel('本次岗位').selectOption({label:'服务员 · SERVER'})
     await scheduler.page.getByLabel('责任类型').selectOption('backup')
-    await scheduler.page.getByLabel('搜索责任区域或桌台').fill('W01')
-    await scheduler.page.locator('.staff-assignment-area label').filter({hasText:'W01'}).getByRole('checkbox').check()
+    await scheduler.page.getByLabel('搜索责任区域或桌台').fill('W1')
+    await scheduler.page.locator('.staff-assignment-area label').filter({hasText:'W1'}).getByRole('checkbox').check()
     await scheduler.page.getByLabel('安排原因').fill('隔离验证普通服务员停止本人责任桌未付款商品')
     await scheduler.page.getByRole('button',{name:'发布 1 张桌台'}).click()
     await expect(scheduler.page.getByRole('status').filter({hasText:'Tom 已安排'})).toContainText('Tom 已安排 1 张责任桌')
@@ -924,12 +924,12 @@ for(const staffCode of ['liyan','tom']) test(`商品售后入口停止部分未�
   }
   await manager.page.setViewportSize({width:390,height:844})
   await manager.page.getByRole('button',{name:'现场',exact:true}).first().click()
-  await manager.page.getByRole('button',{name:/^W01 \d+人 · /}).click()
-  const initialDetails=manager.page.getByRole('region',{name:'W01本桌点单详情'})
+  await manager.page.getByRole('button',{name:/^W1 \d+人 · /}).click()
+  const initialDetails=manager.page.getByRole('region',{name:'W1本桌点单详情'})
   await expect(initialDetails).toContainText(/未上 \d+ 份|本桌暂时没有已提交的商品/)
   const initialUndelivered=Number((await initialDetails.innerText()).match(/未上 (\d+) 份/)?.[1]??0)
   await manager.page.getByRole('button',{name:'协助点单'}).click()
-  const order=manager.page.getByRole('dialog',{name:'W01协助点单'})
+  const order=manager.page.getByRole('dialog',{name:'W1协助点单'})
   await order.getByLabel('搜索菜单商品').fill(data.orderableProductName)
   await order.getByRole('button',{name:`加入${data.orderableProductName}`}).click()
   for(let n=0;n<2;n++)await order.getByRole('button',{name:`增加${data.orderableProductName}`}).click()
@@ -937,7 +937,7 @@ for(const staffCode of ['liyan','tom']) test(`商品售后入口停止部分未�
   await order.getByRole('dialog',{name:'购物车明细'}).getByRole('button',{name:'核对无误，确认下单'}).click()
   await order.getByRole('dialog',{name:'确认上单'}).getByRole('button',{name:'确认上单'}).click()
   await expect(order).toHaveCount(0)
-  const details=manager.page.getByRole('region',{name:'W01本桌点单详情'})
+  const details=manager.page.getByRole('region',{name:'W1本桌点单详情'})
   await details.getByRole('button',{name:'停止 / 退款'}).first().click()
   const workspace=manager.page.getByRole('dialog',{name:'商品停止与退款'})
   await expect(workspace).toContainText('原订单 3 份')
@@ -1260,7 +1260,7 @@ test('旧退库表单成功后读回失败只刷新数量，未知结果跨页�
   await manager.page.route('**/api/operations/history**',async route=>{
     if(readFails){await route.abort('failed');return}
     await route.fulfill({json:{data:{businessDate:'2026-09-13',generatedAt:new Date().toISOString(),page:0,hasMore:false,financialSummaryVisible:false,receipts:[],orders:returned===3?[]:[{
-      id:orderId,publicId:'QA-STOCK-READBACK',tableCode:'W01',employeeName:'隔离退库界面用例',submittedAt:new Date().toISOString(),status:'completed',paymentStatus:'partially_refunded',totalMinor:2400,
+      id:orderId,publicId:'QA-STOCK-READBACK',tableCode:'W1',employeeName:'隔离退库界面用例',submittedAt:new Date().toISOString(),status:'completed',paymentStatus:'partially_refunded',totalMinor:2400,
       items:[{id:itemId,name:'退库恢复测试水',quantity:3,returnedQuantity:returned,unitPriceMinor:800,totalMinor:2400,status:'delivered',note:null}],
     }]}}})
   })

@@ -1,5 +1,5 @@
 {
-  "version": "2026.09.20-v25",
+  "version": "2026.09.25-v26",
   "tenant": {
     "id": "10000000-0000-4000-8000-000000000001",
     "code": "superhigh",
@@ -73,11 +73,11 @@
       "capacity": 8,
       "minimumSpendMinor": 0,
       "layout": {
-        "mapVersion": 1,
         "xPct": 68.1,
         "yPct": 31,
         "widthPct": 10,
-        "heightPct": 5
+        "heightPct": 5,
+        "mapVersion": 1
       }
     },
     {
@@ -87,11 +87,11 @@
       "capacity": 8,
       "minimumSpendMinor": 0,
       "layout": {
-        "mapVersion": 1,
         "xPct": 54.7,
         "yPct": 31.2,
         "widthPct": 10,
-        "heightPct": 5
+        "heightPct": 5,
+        "mapVersion": 1
       }
     },
     {
@@ -101,25 +101,11 @@
       "capacity": 10,
       "minimumSpendMinor": 0,
       "layout": {
-        "mapVersion": 1,
         "xPct": 14.3,
         "yPct": 27.9,
         "widthPct": 10,
-        "heightPct": 5
-      }
-    },
-    {
-      "code": "VIP4",
-      "name": "VIP4",
-      "areaCode": "vip",
-      "capacity": 8,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 13.6,
-        "yPct": 20.4,
-        "widthPct": 10,
-        "heightPct": 5
+        "heightPct": 5,
+        "mapVersion": 1
       }
     },
     {
@@ -129,683 +115,147 @@
       "capacity": 6,
       "minimumSpendMinor": 0,
       "layout": {
-        "mapVersion": 1,
         "xPct": 14.6,
         "yPct": 14.1,
         "widthPct": 10,
-        "heightPct": 5
+        "heightPct": 5,
+        "mapVersion": 1
       }
     },
     {
-      "code": "L01",
-      "name": "L01",
-      "areaCode": "lounge",
-      "capacity": 4,
+      "code": "VIP6",
+      "name": "VIP6",
+      "areaCode": "vip",
+      "capacity": 6,
       "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 41.8,
-        "yPct": 30.5,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
+      "layout": {}
     },
     {
-      "code": "L02",
-      "name": "L02",
-      "areaCode": "lounge",
-      "capacity": 4,
+      "code": "VIP7",
+      "name": "VIP7",
+      "areaCode": "vip",
+      "capacity": 6,
       "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 33.9,
-        "yPct": 29.4,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
+      "layout": {}
     },
     {
-      "code": "L03",
-      "name": "L03",
-      "areaCode": "lounge",
-      "capacity": 4,
+      "code": "VIP8",
+      "name": "VIP8",
+      "areaCode": "vip",
+      "capacity": 6,
       "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 29.8,
-        "yPct": 28.5,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
+      "layout": {}
     },
     {
-      "code": "L04",
-      "name": "L04",
-      "areaCode": "lounge",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 66.2,
-        "yPct": 27,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "L05",
-      "name": "L05",
-      "areaCode": "lounge",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 57.9,
-        "yPct": 26.9,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "L06",
-      "name": "L06",
-      "areaCode": "lounge",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 40.3,
-        "yPct": 25.8,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "L07",
-      "name": "L07",
-      "areaCode": "lounge",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 32,
-        "yPct": 24.5,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "666",
-      "name": "666",
-      "areaCode": "lounge",
-      "capacity": 8,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 14,
-        "yPct": 34.5,
-        "widthPct": 6.5,
-        "heightPct": 4
-      }
-    },
-    {
-      "code": "888",
-      "name": "888",
-      "areaCode": "lounge",
-      "capacity": 8,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 14,
-        "yPct": 39.5,
-        "widthPct": 6.5,
-        "heightPct": 4
-      }
-    },
-    {
-      "code": "A01",
-      "name": "A01",
-      "areaCode": "main",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 61.2,
-        "yPct": 37.1,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "A02",
-      "name": "A02",
-      "areaCode": "main",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 57,
-        "yPct": 37.1,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "A03",
-      "name": "A03",
-      "areaCode": "main",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 51.6,
-        "yPct": 37.1,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "A04",
-      "name": "A04",
-      "areaCode": "main",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 47.2,
-        "yPct": 37.1,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "A05",
-      "name": "A05",
-      "areaCode": "main",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 42.6,
-        "yPct": 37.1,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "A06",
-      "name": "A06",
-      "areaCode": "main",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 37.9,
-        "yPct": 37.1,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "A07",
-      "name": "A07",
-      "areaCode": "main",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 32.8,
-        "yPct": 37.1,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "A08",
-      "name": "A08",
-      "areaCode": "main",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 28.2,
-        "yPct": 37.1,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "B01",
-      "name": "B01",
-      "areaCode": "main",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 61.2,
-        "yPct": 41.6,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "B02",
-      "name": "B02",
-      "areaCode": "main",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 57,
-        "yPct": 41.6,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "B03",
-      "name": "B03",
-      "areaCode": "main",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 51.6,
-        "yPct": 41.6,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "B04",
-      "name": "B04",
-      "areaCode": "main",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 47.2,
-        "yPct": 41.6,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "B05",
-      "name": "B05",
-      "areaCode": "main",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 42.6,
-        "yPct": 41.6,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "B06",
-      "name": "B06",
-      "areaCode": "main",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 37.9,
-        "yPct": 41.6,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "B07",
-      "name": "B07",
-      "areaCode": "main",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 32.8,
-        "yPct": 41.6,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "B08",
-      "name": "B08",
-      "areaCode": "main",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 28.2,
-        "yPct": 41.6,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "C01",
-      "name": "C01",
-      "areaCode": "main",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 61.5,
-        "yPct": 49.6,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "C02",
-      "name": "C02",
-      "areaCode": "main",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 57.5,
-        "yPct": 49.6,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "C03",
-      "name": "C03",
-      "areaCode": "main",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 47.4,
-        "yPct": 49.6,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "C04",
-      "name": "C04",
-      "areaCode": "main",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 43.3,
-        "yPct": 49.6,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "C05",
-      "name": "C05",
-      "areaCode": "main",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 39.2,
-        "yPct": 49.6,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "C06",
-      "name": "C06",
-      "areaCode": "main",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 32.9,
-        "yPct": 49.6,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "C07",
-      "name": "C07",
-      "areaCode": "main",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 28.9,
-        "yPct": 49.6,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "S1",
-      "name": "S1",
-      "areaCode": "stage",
-      "capacity": 3,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 73.2,
-        "yPct": 38.9,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "S2",
-      "name": "S2",
-      "areaCode": "stage",
-      "capacity": 3,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 73.3,
-        "yPct": 42.9,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "S3",
-      "name": "S3",
-      "areaCode": "stage",
-      "capacity": 3,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 73.3,
-        "yPct": 47,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "S4",
-      "name": "S4",
-      "areaCode": "stage",
-      "capacity": 3,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 67.8,
-        "yPct": 36.8,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "S5",
-      "name": "S5",
-      "areaCode": "stage",
-      "capacity": 3,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 67.8,
-        "yPct": 40.9,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "S6",
-      "name": "S6",
-      "areaCode": "stage",
-      "capacity": 3,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 67.8,
-        "yPct": 45,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "S7",
-      "name": "S7",
-      "areaCode": "stage",
-      "capacity": 3,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 67.8,
-        "yPct": 49.3,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "W01",
-      "name": "W01",
+      "code": "W1",
+      "name": "W1",
       "areaCode": "outdoor",
       "capacity": 4,
       "minimumSpendMinor": 0,
       "layout": {
-        "mapVersion": 1,
         "xPct": 29.2,
         "yPct": 57.1,
         "widthPct": 4.5,
-        "heightPct": 3
+        "heightPct": 3,
+        "mapVersion": 1
       }
     },
     {
-      "code": "W02",
-      "name": "W02",
+      "code": "W2",
+      "name": "W2",
       "areaCode": "outdoor",
       "capacity": 4,
       "minimumSpendMinor": 0,
       "layout": {
-        "mapVersion": 1,
         "xPct": 39.7,
         "yPct": 57.1,
         "widthPct": 4.5,
-        "heightPct": 3
+        "heightPct": 3,
+        "mapVersion": 1
       }
     },
     {
-      "code": "W03",
-      "name": "W03",
+      "code": "W3",
+      "name": "W3",
       "areaCode": "outdoor",
       "capacity": 4,
       "minimumSpendMinor": 0,
       "layout": {
-        "mapVersion": 1,
         "xPct": 45.6,
         "yPct": 57.1,
         "widthPct": 4.5,
-        "heightPct": 3
+        "heightPct": 3,
+        "mapVersion": 1
       }
     },
     {
-      "code": "W04",
-      "name": "W04",
+      "code": "W5",
+      "name": "W5",
       "areaCode": "outdoor",
       "capacity": 4,
       "minimumSpendMinor": 0,
       "layout": {
-        "mapVersion": 1,
-        "xPct": 52.3,
-        "yPct": 57.1,
-        "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "W05",
-      "name": "W05",
-      "areaCode": "outdoor",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
         "xPct": 58.3,
         "yPct": 57.1,
         "widthPct": 4.5,
-        "heightPct": 3
+        "heightPct": 3,
+        "mapVersion": 1
       }
     },
     {
-      "code": "W06",
-      "name": "W06",
+      "code": "W6",
+      "name": "W6",
       "areaCode": "outdoor",
       "capacity": 4,
       "minimumSpendMinor": 0,
       "layout": {
-        "mapVersion": 1,
         "xPct": 64.1,
         "yPct": 57.1,
         "widthPct": 4.5,
-        "heightPct": 3
+        "heightPct": 3,
+        "mapVersion": 1
       }
     },
     {
-      "code": "W07",
-      "name": "W07",
+      "code": "W7",
+      "name": "W7",
       "areaCode": "outdoor",
       "capacity": 4,
       "minimumSpendMinor": 0,
       "layout": {
-        "mapVersion": 1,
         "xPct": 53.9,
         "yPct": 67.5,
         "widthPct": 4.5,
-        "heightPct": 3
+        "heightPct": 3,
+        "mapVersion": 1
       }
     },
     {
-      "code": "W08",
-      "name": "W08",
+      "code": "W8",
+      "name": "W8",
       "areaCode": "outdoor",
       "capacity": 8,
       "minimumSpendMinor": 0,
       "layout": {
-        "mapVersion": 1,
         "xPct": 79.6,
         "yPct": 59.3,
         "widthPct": 9,
-        "heightPct": 5
+        "heightPct": 5,
+        "mapVersion": 1
       }
     },
     {
-      "code": "W09",
-      "name": "W09",
+      "code": "W9",
+      "name": "W9",
       "areaCode": "outdoor",
       "capacity": 4,
       "minimumSpendMinor": 0,
       "layout": {
-        "mapVersion": 1,
         "xPct": 65.8,
         "yPct": 66,
         "widthPct": 4.5,
-        "heightPct": 3
+        "heightPct": 3,
+        "mapVersion": 1
       }
     },
     {
@@ -815,11 +265,11 @@
       "capacity": 4,
       "minimumSpendMinor": 0,
       "layout": {
-        "mapVersion": 1,
         "xPct": 41.6,
         "yPct": 72.8,
         "widthPct": 4.5,
-        "heightPct": 3
+        "heightPct": 3,
+        "mapVersion": 1
       }
     },
     {
@@ -829,11 +279,11 @@
       "capacity": 4,
       "minimumSpendMinor": 0,
       "layout": {
-        "mapVersion": 1,
         "xPct": 51.9,
         "yPct": 72.8,
         "widthPct": 4.5,
-        "heightPct": 3
+        "heightPct": 3,
+        "mapVersion": 1
       }
     },
     {
@@ -843,11 +293,11 @@
       "capacity": 4,
       "minimumSpendMinor": 0,
       "layout": {
-        "mapVersion": 1,
         "xPct": 52.6,
         "yPct": 81.2,
         "widthPct": 4.5,
-        "heightPct": 3
+        "heightPct": 3,
+        "mapVersion": 1
       }
     },
     {
@@ -857,25 +307,11 @@
       "capacity": 4,
       "minimumSpendMinor": 0,
       "layout": {
-        "mapVersion": 1,
         "xPct": 41.7,
         "yPct": 81.2,
         "widthPct": 4.5,
-        "heightPct": 3
-      }
-    },
-    {
-      "code": "W14",
-      "name": "W14",
-      "areaCode": "outdoor",
-      "capacity": 4,
-      "minimumSpendMinor": 0,
-      "layout": {
-        "mapVersion": 1,
-        "xPct": 31,
-        "yPct": 81.2,
-        "widthPct": 4.5,
-        "heightPct": 3
+        "heightPct": 3,
+        "mapVersion": 1
       }
     },
     {
@@ -885,11 +321,11 @@
       "capacity": 4,
       "minimumSpendMinor": 0,
       "layout": {
-        "mapVersion": 1,
         "xPct": 52.6,
         "yPct": 85.2,
         "widthPct": 4.5,
-        "heightPct": 3
+        "heightPct": 3,
+        "mapVersion": 1
       }
     },
     {
@@ -899,11 +335,11 @@
       "capacity": 4,
       "minimumSpendMinor": 0,
       "layout": {
-        "mapVersion": 1,
         "xPct": 41.7,
         "yPct": 85.2,
         "widthPct": 4.5,
-        "heightPct": 3
+        "heightPct": 3,
+        "mapVersion": 1
       }
     },
     {
@@ -913,68 +349,500 @@
       "capacity": 4,
       "minimumSpendMinor": 0,
       "layout": {
-        "mapVersion": 1,
         "xPct": 31.1,
         "yPct": 85.2,
         "widthPct": 4.5,
-        "heightPct": 3
+        "heightPct": 3,
+        "mapVersion": 1
       }
     },
     {
-      "code": "BAR1",
-      "name": "吧台1",
-      "areaCode": "bar",
-      "capacity": 1,
+      "code": "W18",
+      "name": "W18",
+      "areaCode": "outdoor",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {}
+    },
+    {
+      "code": "W19",
+      "name": "W19",
+      "areaCode": "outdoor",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {}
+    },
+    {
+      "code": "W20",
+      "name": "W20",
+      "areaCode": "outdoor",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {}
+    },
+    {
+      "code": "D1",
+      "name": "D1",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {}
+    },
+    {
+      "code": "D2",
+      "name": "D2",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {}
+    },
+    {
+      "code": "D3",
+      "name": "D3",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {}
+    },
+    {
+      "code": "D5",
+      "name": "D5",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {}
+    },
+    {
+      "code": "D6",
+      "name": "D6",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {}
+    },
+    {
+      "code": "D7",
+      "name": "D7",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {}
+    },
+    {
+      "code": "D8",
+      "name": "D8",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {}
+    },
+    {
+      "code": "D9",
+      "name": "D9",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {}
+    },
+    {
+      "code": "C1",
+      "name": "C1",
+      "areaCode": "main",
+      "capacity": 4,
       "minimumSpendMinor": 0,
       "layout": {
-        "mapVersion": 1,
-        "xPct": 53.2,
-        "yPct": 19.4,
-        "widthPct": 3.5,
-        "heightPct": 2.5
+        "xPct": 61.5,
+        "yPct": 49.6,
+        "widthPct": 4.5,
+        "heightPct": 3,
+        "mapVersion": 1
       }
     },
     {
-      "code": "BAR2",
-      "name": "吧台2",
-      "areaCode": "bar",
-      "capacity": 1,
+      "code": "C2",
+      "name": "C2",
+      "areaCode": "main",
+      "capacity": 4,
       "minimumSpendMinor": 0,
       "layout": {
-        "mapVersion": 1,
-        "xPct": 58.4,
-        "yPct": 19.4,
-        "widthPct": 3.5,
-        "heightPct": 2.5
+        "xPct": 57.5,
+        "yPct": 49.6,
+        "widthPct": 4.5,
+        "heightPct": 3,
+        "mapVersion": 1
       }
     },
     {
-      "code": "BAR3",
-      "name": "吧台3",
-      "areaCode": "bar",
-      "capacity": 1,
+      "code": "C3",
+      "name": "C3",
+      "areaCode": "main",
+      "capacity": 4,
       "minimumSpendMinor": 0,
       "layout": {
-        "mapVersion": 1,
-        "xPct": 63.6,
-        "yPct": 19.4,
-        "widthPct": 3.5,
-        "heightPct": 2.5
+        "xPct": 47.4,
+        "yPct": 49.6,
+        "widthPct": 4.5,
+        "heightPct": 3,
+        "mapVersion": 1
       }
     },
     {
-      "code": "BAR4",
-      "name": "吧台4",
-      "areaCode": "bar",
-      "capacity": 1,
+      "code": "C5",
+      "name": "C5",
+      "areaCode": "main",
+      "capacity": 4,
       "minimumSpendMinor": 0,
       "layout": {
-        "mapVersion": 1,
-        "xPct": 68.8,
-        "yPct": 19.4,
-        "widthPct": 3.5,
-        "heightPct": 2.5
+        "xPct": 39.2,
+        "yPct": 49.6,
+        "widthPct": 4.5,
+        "heightPct": 3,
+        "mapVersion": 1
       }
+    },
+    {
+      "code": "C6",
+      "name": "C6",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "xPct": 32.9,
+        "yPct": 49.6,
+        "widthPct": 4.5,
+        "heightPct": 3,
+        "mapVersion": 1
+      }
+    },
+    {
+      "code": "C7",
+      "name": "C7",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "xPct": 28.9,
+        "yPct": 49.6,
+        "widthPct": 4.5,
+        "heightPct": 3,
+        "mapVersion": 1
+      }
+    },
+    {
+      "code": "C8",
+      "name": "C8",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {}
+    },
+    {
+      "code": "C9",
+      "name": "C9",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {}
+    },
+    {
+      "code": "C10",
+      "name": "C10",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {}
+    },
+    {
+      "code": "C11",
+      "name": "C11",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {}
+    },
+    {
+      "code": "C12",
+      "name": "C12",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {}
+    },
+    {
+      "code": "C13",
+      "name": "C13",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {}
+    },
+    {
+      "code": "C15",
+      "name": "C15",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {}
+    },
+    {
+      "code": "C16",
+      "name": "C16",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {}
+    },
+    {
+      "code": "B1",
+      "name": "B1",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "xPct": 61.2,
+        "yPct": 41.6,
+        "widthPct": 4.5,
+        "heightPct": 3,
+        "mapVersion": 1
+      }
+    },
+    {
+      "code": "B2",
+      "name": "B2",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "xPct": 57,
+        "yPct": 41.6,
+        "widthPct": 4.5,
+        "heightPct": 3,
+        "mapVersion": 1
+      }
+    },
+    {
+      "code": "B3",
+      "name": "B3",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "xPct": 51.6,
+        "yPct": 41.6,
+        "widthPct": 4.5,
+        "heightPct": 3,
+        "mapVersion": 1
+      }
+    },
+    {
+      "code": "B5",
+      "name": "B5",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "xPct": 42.6,
+        "yPct": 41.6,
+        "widthPct": 4.5,
+        "heightPct": 3,
+        "mapVersion": 1
+      }
+    },
+    {
+      "code": "B6",
+      "name": "B6",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "xPct": 37.9,
+        "yPct": 41.6,
+        "widthPct": 4.5,
+        "heightPct": 3,
+        "mapVersion": 1
+      }
+    },
+    {
+      "code": "B7",
+      "name": "B7",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "xPct": 32.8,
+        "yPct": 41.6,
+        "widthPct": 4.5,
+        "heightPct": 3,
+        "mapVersion": 1
+      }
+    },
+    {
+      "code": "B8",
+      "name": "B8",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "xPct": 28.2,
+        "yPct": 41.6,
+        "widthPct": 4.5,
+        "heightPct": 3,
+        "mapVersion": 1
+      }
+    },
+    {
+      "code": "B9",
+      "name": "B9",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {}
+    },
+    {
+      "code": "B10",
+      "name": "B10",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {}
+    },
+    {
+      "code": "B11",
+      "name": "B11",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {}
+    },
+    {
+      "code": "A1",
+      "name": "A1",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "xPct": 61.2,
+        "yPct": 37.1,
+        "widthPct": 4.5,
+        "heightPct": 3,
+        "mapVersion": 1
+      }
+    },
+    {
+      "code": "A2",
+      "name": "A2",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "xPct": 57,
+        "yPct": 37.1,
+        "widthPct": 4.5,
+        "heightPct": 3,
+        "mapVersion": 1
+      }
+    },
+    {
+      "code": "A3",
+      "name": "A3",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "xPct": 51.6,
+        "yPct": 37.1,
+        "widthPct": 4.5,
+        "heightPct": 3,
+        "mapVersion": 1
+      }
+    },
+    {
+      "code": "A5",
+      "name": "A5",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "xPct": 42.6,
+        "yPct": 37.1,
+        "widthPct": 4.5,
+        "heightPct": 3,
+        "mapVersion": 1
+      }
+    },
+    {
+      "code": "A6",
+      "name": "A6",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "xPct": 37.9,
+        "yPct": 37.1,
+        "widthPct": 4.5,
+        "heightPct": 3,
+        "mapVersion": 1
+      }
+    },
+    {
+      "code": "A7",
+      "name": "A7",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "xPct": 32.8,
+        "yPct": 37.1,
+        "widthPct": 4.5,
+        "heightPct": 3,
+        "mapVersion": 1
+      }
+    },
+    {
+      "code": "A8",
+      "name": "A8",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {
+        "xPct": 28.2,
+        "yPct": 37.1,
+        "widthPct": 4.5,
+        "heightPct": 3,
+        "mapVersion": 1
+      }
+    },
+    {
+      "code": "A9",
+      "name": "A9",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {}
+    },
+    {
+      "code": "A10",
+      "name": "A10",
+      "areaCode": "main",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {}
+    },
+    {
+      "code": "G1",
+      "name": "G1",
+      "areaCode": "outdoor",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {}
+    },
+    {
+      "code": "G2",
+      "name": "G2",
+      "areaCode": "outdoor",
+      "capacity": 4,
+      "minimumSpendMinor": 0,
+      "layout": {}
     }
   ],
   "roles": [

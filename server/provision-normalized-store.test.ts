@@ -104,7 +104,10 @@ describe('normalized store provisioning config', () => {
       'utf8',
     )) as unknown
     const config = parseStoreProvisionConfig(source)
-    expect(config.version).toBe('2026.09.20-v25')
+    expect(config.version).toBe('2026.09.25-v26')
+    expect(config.tables).toHaveLength(68)
+    expect(config.tables.map(table=>table.code)).toContain('W1')
+    expect(config.tables.map(table=>table.code)).not.toContain('W01')
     for (const candidate of config.roles) {
       expect(candidate.permissions).toContain('refund.request')
       expect(candidate.approvalLimits?.some(limit=>limit.code==='refund.request')).not.toBe(true)

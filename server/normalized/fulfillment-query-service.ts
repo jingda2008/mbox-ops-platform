@@ -17,6 +17,7 @@ export type FulfillmentStation = 'bar' | 'kitchen' | 'cashier'
 export type FulfillmentKdsStatus = 'pending' | 'accepted' | 'preparing' | 'ready' | 'failed'
 
 export interface FulfillmentWorkItem {
+  productionScreen?: 'bar' | 'kitchen'
   quantities?: {total:number;unmade:number;started:number;ready:number;delivered:number;held:number;stopped:number}
   taskId: string
   businessDate: string
@@ -82,6 +83,7 @@ export interface FulfillmentStaffView {
 }
 
 interface FulfillmentRow extends Record<string, unknown> {
+  production_screen?: 'bar' | 'kitchen' | null
   remake_batch_id?:string|null
   quantity_facts?: FulfillmentWorkItem['quantities'] | null
   failure_reason?:string|null
@@ -189,6 +191,12 @@ async function readFulfillmentRows(
   const result = await transaction.query<FulfillmentRow>(`
     SELECT
       task.id AS task_id,
+      CASE WHEN task.station_code IN ('bar','kitchen') AND task.remake_of_task_id IS NULL
+        AND EXISTS(SELECT 1 FROM mbox.kitchen_production_units part
+          JOIN mbox.order_item_quantity_units unit ON (unit.tenant_id,unit.store_id,unit.id)=(part.tenant_id,part.store_id,part.unit_id)
+          WHERE part.tenant_id=task.tenant_id AND part.store_id=task.store_id AND part.kds_task_id=task.id
+            AND unit.production_state='started' AND unit.held_by_case_id IS NULL AND NOT unit.operationally_stopped)
+        THEN task.station_code END AS production_screen,
       (SELECT count(*)::integer FROM mbox.delivery_batch_items notice
         WHERE notice.tenant_id=task.tenant_id AND notice.store_id=task.store_id AND notice.kds_task_id=task.id) AS delivery_notice_version,
       remake.id AS remake_batch_id,
@@ -412,6 +420,7 @@ function mapWorkItem(row: FulfillmentRow): FulfillmentWorkItem {
   if(row.remake_batch_id)attentionMessages.unshift(`重做 ${row.quantity} 份，原单金额不变，按本批实际数量制作和取送`)
   return {
     ...(row.quantity_facts?{quantities:row.quantity_facts}:{}),
+    ...(row.production_screen?{productionScreen:row.production_screen}:{}),
     taskId: row.task_id,
     businessDate: row.business_date,
     carryover: row.carryover,

@@ -218,6 +218,11 @@ jobs:
         run: |
           node -e "const r=JSON.parse(require('fs').readFileSync('artifacts/normalized-browser/startup.json','utf8')); if(r.gate?.passed!==true) process.exit(1)"
           printf 'startup_report_b64=%s\n' "$(base64 -w0 artifacts/normalized-browser/startup.json)" >> "${GITHUB_OUTPUT}"
+      - name: Verify dedicated three-screen entry, orientation and resume on a fresh database
+        env:
+          NORMALIZED_E2E_THREE_SCREEN: 'true'
+          NORMALIZED_E2E_KITCHEN: 'true'
+        run: npm run test:e2e:normalized -- tests/normalized-e2e/normalized-three-screen-entry.spec.ts tests/normalized-e2e/normalized-kitchen-orientation.spec.ts tests/normalized-e2e/normalized-three-screen-density.spec.ts tests/normalized-e2e/normalized-screen-resume.spec.ts
       - name: Upload normalized browser evidence
         if: always()
         continue-on-error: true

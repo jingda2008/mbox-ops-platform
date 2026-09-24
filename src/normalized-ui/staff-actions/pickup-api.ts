@@ -103,7 +103,14 @@ export class PickupApi implements PickupApiPort {
   private board:PickupBoardData|null=null
   constructor(options:PickupApiOptions){this.session=options.staffSessionId;this.send=options.fetch??globalThis.fetch.bind(globalThis);this.storage=options.storage===undefined?optionalStorage():options.storage;this.timeoutMs=options.timeoutMs??8000;this.createKey=options.createIdempotencyKey??(()=>crypto.randomUUID())}
   async loadBoard(signal?:AbortSignal):Promise<PickupBoardData>{
-    const data=await this.request('/api/commerce/pickup-board',{method:'GET',signal})
+    let data:unknown
+    try{data=await this.request('/api/commerce/pickup-board',{method:'GET',signal})}
+    catch(error){
+      if(!(error instanceof PickupApiError)||error.code!=='PICKUP_SESSION_INVALID'||signal?.aborted)throw error
+      // Renew only the live lease, then read once. Never replay a pickup command here.
+      await this.request('/api/auth/heartbeat',{method:'POST',signal,body:'{}',headers:{'content-type':'application/json'}})
+      data=await this.request('/api/commerce/pickup-board',{method:'GET',signal})
+    }
     if(!isPickupBoard(data))throw new PickupApiError('取餐内容暂时无法读取，请重新读取','PICKUP_INVALID_RESPONSE')
     this.scope=data.commandScope;this.board=data
     return data

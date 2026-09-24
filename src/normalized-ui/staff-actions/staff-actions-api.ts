@@ -436,7 +436,11 @@ export class StaffActionsApi implements StaffActionsApiPort {
   }
 
   async loadKitchenBoard(signal?:AbortSignal,stationCode:'bar'|'kitchen'='kitchen'):Promise<KitchenBoardData>{
-    return this.getData(`/api/commerce/kitchen-board?station=${stationCode}`,signal)
+    const path=`/api/commerce/kitchen-board?station=${stationCode}`
+    const board=await this.getData<KitchenBoardData>(path,signal)
+    if(board.actionSessionValid!==false)return board
+    await this.request('/api/auth/heartbeat',{method:'POST',signal,body:'{}',headers:new Headers({'content-type':'application/json'})})
+    return this.getData(path,signal)
   }
   async loadKitchenHandoffPreview(batchId:string,stationCode:'bar'|'kitchen'='kitchen',signal?:AbortSignal):Promise<KitchenHandoffPreview>{
     return this.getData(`/api/commerce/kitchen-board/handoff-preview?batchId=${encodeURIComponent(batchId)}&station=${stationCode}`,signal)

@@ -27,6 +27,23 @@ describe('pickup API durable original-command recovery',()=>{
     const fetcher=vi.fn(async(url:RequestInfo|URL,init?:RequestInit)=>{sent.push({url:String(url),init:init??{}});const next=responses.shift();if(next instanceof Error)throw next;if(typeof next==='function')return next();if(!next)throw new Error('Unexpected network request');return next}) as unknown as typeof fetch
     return {api:new PickupApi({staffSessionId:session,storage,fetch:fetcher,createIdempotencyKey:()=>id(900)}),sent,responses}
   }
+  it('renews an idle pickup lease once without sending any business command',async()=>{
+    const {api,sent}=make([failed(403,'PICKUP_SESSION_INVALID'),okay({}),okay(board())])
+    expect((await api.loadBoard()).actor.canPickup).toBe(true)
+    expect(sent.map(x=>x.url)).toEqual(['/api/commerce/pickup-board','/api/auth/heartbeat','/api/commerce/pickup-board'])
+    expect(new Headers(sent[1]!.init.headers).get('content-type')).toBe('application/json')
+    expect(storage.length).toBe(0)
+  })
+  it('preserves expired login failure and does not loop renewal',async()=>{
+    const {api,sent}=make([failed(403,'PICKUP_SESSION_INVALID'),failed(401,'AUTH_REQUIRED')])
+    await expect(api.loadBoard()).rejects.toMatchObject({code:'AUTH_REQUIRED'});expect(sent).toHaveLength(2)
+    const denied=make([failed(403,'PICKUP_SESSION_INVALID'),okay({}),failed(403,'PICKUP_SESSION_INVALID')])
+    await expect(denied.api.loadBoard()).rejects.toMatchObject({code:'PICKUP_SESSION_INVALID'});expect(denied.sent).toHaveLength(3)
+  })
+  it('does not renew permission denial as if it were an expired session',async()=>{
+    const {api,sent}=make([failed(403,'PICKUP_FORBIDDEN')])
+    await expect(api.loadBoard()).rejects.toMatchObject({code:'PICKUP_FORBIDDEN'});expect(sent).toHaveLength(1)
+  })
   it('binds reads and commands to the original session with credentials',async()=>{
     const {api,sent}=make([okay(board()),okay(done())]);await api.loadBoard();await api.run(body())
     expect(sent).toHaveLength(2)

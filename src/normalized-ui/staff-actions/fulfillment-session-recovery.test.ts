@@ -5,6 +5,16 @@ const queue = (valid: boolean) => ({ actor: { employeeId: 'bar-1', actionSession
 const response = (data: unknown) => new Response(JSON.stringify({ data }))
 
 describe('fulfillment session recovery', () => {
+  it.each(['bar','kitchen'] as const)('renews an idle %s screen once and rereads authoritative permissions',async station=>{
+    const send=vi.fn<typeof fetch>().mockResolvedValueOnce(response({actionSessionValid:false})).mockResolvedValueOnce(response({})).mockResolvedValueOnce(response({actionSessionValid:true}))
+    expect((await new StaffActionsApi({fetch:send}).loadKitchenBoard(undefined,station)).actionSessionValid).toBe(true)
+    expect(send.mock.calls.map(([url])=>url)).toEqual([`/api/commerce/kitchen-board?station=${station}`,'/api/auth/heartbeat',`/api/commerce/kitchen-board?station=${station}`])
+  })
+  it('does not renew a station permission denial',async()=>{
+    const send=vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify({error:{code:'KDS_STATION_FORBIDDEN',message:'岗位不符'}}),{status:403}))
+    await expect(new StaffActionsApi({fetch:send}).loadKitchenBoard()).rejects.toMatchObject({status:403})
+    expect(send).toHaveBeenCalledTimes(1)
+  })
   it('renews a suspended phone session before returning the queue as unavailable', async () => {
     const send = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(response(queue(false)))

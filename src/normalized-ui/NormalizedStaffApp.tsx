@@ -1,5 +1,5 @@
 import {StaffReadyNotice} from './staff-actions/StaffReadyNotice'
-import {threeScreenMode} from './staff-actions/three-screen-route'
+import {threeScreenMode,pickupOnlyEntry} from './staff-actions/three-screen-route'
 import { StaffObjectFocus } from './StaffObjectFocus'
 import { StaffViewStateProvider, StaffRouteRestoration } from './staff-view-state'
 import { StaffMemberNavigation } from './StaffMemberNavigation'
@@ -33,7 +33,8 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
   const [initialBootstrap, setInitialBootstrap] = useState<StaffBootstrapView | null>(null)
   const [staffLocation, setStaffLocation] = useState(() => window.location.pathname + window.location.search)
   const staffRoute = normalizedStaffRoute(new URL(staffLocation, window.location.origin).pathname)
-  const dedicatedScreen=threeScreenMode(new URL(staffLocation,window.location.origin).pathname,new URL(staffLocation,window.location.origin).search)
+  const locationUrl=new URL(staffLocation,window.location.origin)
+  const dedicatedScreen=threeScreenMode(locationUrl.pathname,locationUrl.search)??pickupOnlyEntry(locationUrl.pathname,locationUrl.search,auth?.permissions??[])
   const [navigationError, setNavigationError] = useState<string | null>(null)
   const [navigationAttempt, setNavigationAttempt] = useState(0)
   const [staffNavigation, setStaffNavigation] = useState<StaffBootstrapView['navigation'] | null>(null)
@@ -205,7 +206,7 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
       {staffNavigation === null ? navigationError === null ? <StaffGateLoading /> : <div className="normalized-route-notice" role="alert"><p>{navigationError}</p><button type="button" onClick={() => setNavigationAttempt(value => value + 1)}>重新读取工作台</button></div> : !staffNavigation.some((item) => item.code === normalizedStaffNavigationCode(window.location.pathname))
         ? <div className="normalized-route-notice" role="alert">当前账号没有这个页面的有效权限。请由管理员授权后刷新；</div>
         : dedicatedScreen
-        ? <Suspense fallback={<StaffGateLoading/>}><ThreeScreenWorkspace key={`${staffWorkspaceIdentityKey(auth)}:${dedicatedScreen}`} mode={dedicatedScreen} employeeId={auth.employee.id} staffSessionId={auth.session.id} onExit={()=>navigate('/staff/fulfillment')} onLoginRequired={loginRequired}/></Suspense>
+        ? <Suspense fallback={<StaffGateLoading/>}><ThreeScreenWorkspace key={`${staffWorkspaceIdentityKey(auth)}:${dedicatedScreen}`} mode={dedicatedScreen} employeeId={auth.employee.id} staffSessionId={auth.session.id} onExit={()=>navigate(auth.permissions.includes('dashboard.view')?'/staff/fulfillment?view=all':'/')} onLoginRequired={loginRequired}/></Suspense>
         : isStaffActionsTab(staffRoute)
         ? <Suspense fallback={<StaffGateLoading />}><StaffActionsPanel key={`${staffWorkspaceIdentityKey(auth)}:${staffLocation}`}
             staffSessionId={auth.session.id}

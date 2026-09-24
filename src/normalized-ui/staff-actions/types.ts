@@ -191,6 +191,7 @@ export type FulfillmentStation = 'bar' | 'kitchen' | 'cashier'
 export type FulfillmentStatus = 'pending' | 'accepted' | 'preparing' | 'ready' | 'failed'
 
 export interface StaffFulfillmentItem {
+  productionScreen?: 'bar' | 'kitchen'
   quantities?: {total:number;unmade:number;started:number;ready:number;delivered:number;held:number;stopped:number}
   deliveryUnbatchedQuantity?:number
   taskId: string
@@ -232,6 +233,7 @@ export interface StaffFulfillmentItem {
 
 export interface StaffFulfillmentData {
   actor: {
+    roleCodes?:string[]
     threeScreenWorkflowEnabled?:boolean
     pickupDeviceConfigured?:boolean
     sharedPickupActive?:boolean

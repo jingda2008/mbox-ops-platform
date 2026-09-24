@@ -7,3 +7,33 @@
 .pickup-recovery-line{white-space:pre-wrap;overflow-wrap:anywhere;padding:10px 0;border-bottom:1px solid #d9e0d9}.pickup-attention a{display:inline-flex;align-items:center;min-height:48px;color:inherit;font-weight:550}
 @media(max-height:580px){.pickup-board{gap:3px;padding:6px}.pickup-top,.pickup-notice{min-height:44px}.pickup-top button{min-height:44px}.pickup-foot{display:none}.pickup-oldest{min-height:16px;font-size:11px}.pickup-tickets{gap:6px}.pickup-pages{margin-top:0}}
 @media(max-width:760px){.pickup-board{overflow:auto}.pickup-top{flex-wrap:wrap}.pickup-top>strong{font-size:20px}.pickup-top nav{order:2;width:100%}.pickup-notice{flex-wrap:wrap}.pickup-notice>span:first-child{white-space:normal;min-width:200px}.pickup-tickets{grid-template-columns:1fr}.pickup-waiting{overflow:visible;flex:none}.pickup-ticket{height:162px}.pickup-detail{min-height:350px;flex:none;max-height:calc(100dvh - 190px)}.pickup-stepper{gap:1px}.pickup-stepper input{width:34px}.pickup-adjust-line{gap:6px}.pickup-history{overflow:visible}.pickup-recent{margin-left:auto}.pickup-foot{margin-top:6px}.pickup-connection{margin-left:auto}}
+
+/* Routine instructions remain available to assistive technology without a permanent banner. */
+.pickup-notice.is-idle{position:absolute;width:1px;height:1px;min-height:0;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
+@media(min-width:761px){
+  .pickup-board{padding:6px;gap:4px}
+  .pickup-top{min-height:44px;gap:6px}
+  .pickup-top>strong{font-size:18px;margin-right:4px}
+  .pickup-top button{min-height:44px}
+  .pickup-notice{min-height:24px;font-size:13px}
+  .pickup-notice.is-warning{min-height:44px}
+  .pickup-foot{display:none}
+}
+
+/* The detail footer stays inside the visible area, including overlay keyboards.
+   Long notes and history scroll inside the workspace rather than moving its actions. */
+.pickup-board{top:var(--staff-screen-top,0px);bottom:auto;height:var(--staff-screen-height,100dvh);overflow:hidden}
+.pickup-board .pickup-detail{flex:1;min-height:0;max-height:none}
+.pickup-board .pickup-waiting{flex:1;min-height:0;overflow:auto}
+.pickup-board .pickup-history{overflow:auto}
+@media(orientation:portrait),(max-width:760px){
+  .pickup-top{flex-wrap:wrap;gap:4px}
+  .pickup-top nav{order:2;flex:1 0 100%}
+  .pickup-top nav button{flex:1}
+  .pickup-notice{flex-wrap:wrap;max-height:30%;overflow:auto}
+  .pickup-notice>span:first-child{white-space:normal;min-width:0;flex-basis:100%}
+  .pickup-foot{display:none}
+  .pickup-detail>header{padding:6px 8px;gap:6px}
+  .pickup-detail h2{font-size:20px}
+  .pickup-detail-actions{padding:6px 8px}
+}

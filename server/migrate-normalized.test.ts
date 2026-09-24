@@ -76,6 +76,7 @@ describe('normalized migration baseline', () => {
     expect(enrollPhoneGrant?.filename).toBe('247_membership_enroll_phone_release_grants.sql')
     expect(enrollPhoneGrant?.sql).toMatch(/GRANT UPDATE \(processing_status, revocation_reason_code\)\s+ON TABLE mbox\.customer_verified_contacts TO mbox_runtime/)
     expect(enrollPhoneGrant?.sql).not.toMatch(/REVOKE UPDATE ON TABLE mbox\.customer_verified_contacts/)
+    expect(enrollPhoneGrant?.sql).not.toMatch(/GRANT UPDATE ON TABLE mbox\.customer_verified_contacts TO mbox_runtime/)
     for (const migration of migrations) {
       expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/)
       expect(unwrapNormalizedMigrationTransaction(migration.sql).trim().length).toBeGreaterThan(0)

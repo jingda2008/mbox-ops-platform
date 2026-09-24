@@ -1,4 +1,5 @@
 import {KitchenProductionBoard} from './KitchenProductionBoard'
+import {productionEntry} from './three-screen-route'
 import { useStaffViewState } from '../staff-view-state'
 import { RefreshQueue } from './refresh-queue'
 import { StaffNoticeController, fulfillmentNoticeKey, fulfillmentNeedsPhoneAttention } from './staff-notice-controller'
@@ -296,7 +297,7 @@ export function StaffActionsPanel({
     } catch (error) {
       if (signal.aborted || accessDenied) return
       setPhase('error')
-      if (error instanceof StaffActionsApiError && [401, 403].includes(error.status ?? 0)) denySession()
+      if (error instanceof StaffActionsApiError && error.status === 401) denySession()
       else showNotice({ kind: 'error', message: actionError(error, '现场数据暂时无法读取，请重试') })
     } finally {
       await fulfillmentRead
@@ -459,6 +460,11 @@ export function StaffActionsPanel({
     serviceActions, initialFactId, (task) => task.id, serviceLimit,
   ), [initialFactId, serviceActions, serviceLimit])
   const threeScreenEnabled=fulfillment?.actor.threeScreenWorkflowEnabled===true||fulfillment?.actor.sharedPickupActive===true
+  useEffect(()=>{
+    if(tab!=='fulfillment'||!fulfillment||fulfillmentStale||fulfillment.actor.actionSessionValid===false||pendingFulfillment.size||pendingKds.length||legacyKdsTaskIds.length||!onNavigate||typeof window==='undefined')return
+    const screen=productionEntry(window.location.search,fulfillment.actor)
+    if(screen)onNavigate(`/staff/fulfillment?screen=${screen}`)
+  },[tab,fulfillment,fulfillmentStale,pendingFulfillment.size,pendingKds.length,legacyKdsTaskIds.length,onNavigate])
   const kitchenEnabled=fulfillment?.actor.kitchenBatchBoardEnabled===true&&!!api.loadKitchenBoard&&!!api.runKitchenCommand&&permissions.includes('kds.prepare')&&fulfillment?.actor.allowedStations.includes('kitchen')===true
   const filteredFulfillmentItems = useMemo(() => filterFulfillmentQueue(
     !threeScreenEnabled&&kitchenEnabled&&kitchenLegacyIds!==null&&fulfillmentHistory==='active'?fulfillmentVisibleItems.filter(item=>item.stationCode!=='kitchen'||kitchenLegacyIds.includes(item.taskId)):fulfillmentVisibleItems, fulfillmentHistory === 'delivery' ? 'delivery' : 'production', fulfillmentSearch,
@@ -835,6 +841,7 @@ export function StaffActionsPanel({
     if (api.unattributedKdsTaskIds?.().includes(item.taskId) || actionLocksRef.current.has(actionKey) || pendingFulfillmentRef.current.has(item.taskId)
       || api.pendingKdsActions?.().some(pending => pending.taskId === item.taskId)) return
     const action = fulfillmentAction(item, fulfillmentHistory === 'delivery' ? 'delivery' : 'production')
+    if(action==='complete'&&item.productionScreen){onNavigate?.(`/staff/fulfillment?screen=${item.productionScreen}`);return}
     if (threeScreenEnabled && action === 'deliver') { showNotice({kind:'success',message:'请在吧台取餐屏确认取走，这里会自动同步'}); return }
     if (action === null) return revealPermissionGuidance(item.readyForDelivery ? 'kds.deliver' : 'kds.prepare')
     actionLocksRef.current.add(actionKey)
@@ -1320,6 +1327,7 @@ export function StaffActionsPanel({
         <ActionList empty={fulfillment === null ? '出品队列暂时无法读取，请刷新后重试' : (fulfillmentSearch ? '没有匹配的待办' : fulfillmentHistory === 'delivery' ? '当前没有待取的出品' : '当前没有待制作的出品')}>
           {visibleFulfillmentCards.map((item) => {
             const fulfillmentCommand = fulfillmentAction(item,fulfillmentHistory==='delivery'?'delivery':'production')
+            const productionScreen=fulfillmentCommand==='complete'?item.productionScreen:undefined
             const missingPermission = item.kdsStatus === 'failed' ? 'kds.exception.manage' : item.readyForDelivery ? 'kds.deliver' : 'kds.prepare'
             return (
               <article
@@ -1365,11 +1373,12 @@ export function StaffActionsPanel({
                 </div>
                 <div className="staff-action-card-actions">
                   {(quantityBatchEnabled||quantityRecoveryAvailable)&&permissions.includes('refund.request')&&item.item.id&&<button type="button" disabled={fulfillmentBlocked(item.taskId)} onClick={()=>setRedeliveryItemId(item.item.id!)}>商品处理</button>}
-                  {!(threeScreenEnabled&&fulfillmentCommand==='deliver')&&(quantityBatchEnabled||item.quantities)&&fulfillmentCommand!==null&&fulfillmentCommand!=='remake'&&item.item.quantity>1&&<label className="staff-fulfillment-field">本次份数<input type="number" min="1" max={item.quantities?(fulfillmentCommand==='deliver'?item.quantities.ready:item.quantities.unmade+item.quantities.started):item.item.quantity}
+                  {!productionScreen&&!(threeScreenEnabled&&fulfillmentCommand==='deliver')&&(quantityBatchEnabled||item.quantities)&&fulfillmentCommand!==null&&fulfillmentCommand!=='remake'&&item.item.quantity>1&&<label className="staff-fulfillment-field">本次份数<input type="number" min="1" max={item.quantities?(fulfillmentCommand==='deliver'?item.quantities.ready:item.quantities.unmade+item.quantities.started):item.item.quantity}
                     aria-label={`${item.table.code}${item.item.productName}本次${fulfillmentCommand==='deliver'?'送达':'完成'}份数`}
                     value={quantitySelections[`${item.taskId}:${fulfillmentCommand}`]??(item.quantities?(fulfillmentCommand==='deliver'?item.quantities.ready:item.quantities.unmade+item.quantities.started):item.item.quantity)}
                     disabled={fulfillmentBlocked(item.taskId)} onChange={event=>setQuantitySelections(current=>({...current,[`${item.taskId}:${fulfillmentCommand}`]:event.target.value}))}/></label>}
-                  {fulfillmentCommand !== null && !(threeScreenEnabled&&fulfillmentCommand==='deliver') && (
+                  {productionScreen&&<button type="button" disabled={fulfillmentBlocked(item.taskId)||!onNavigate} onClick={()=>onNavigate?.(`/staff/fulfillment?screen=${productionScreen}`)}>到{productionScreen==='bar'?'酒水':'后厨'}制作屏完成</button>}
+                  {fulfillmentCommand !== null && !productionScreen && !(threeScreenEnabled&&fulfillmentCommand==='deliver') && (
                     <button type="button" onClick={() => void runFulfillmentAction(item)} disabled={fulfillmentBlocked(item.taskId)} aria-busy={pendingFulfillment.has(item.taskId)}>
                       {fulfillmentCommand === 'deliver' ? <Send size={18} /> : <ChefHat size={18} />}
                       {pendingFulfillment.get(item.taskId) === 'syncing' ? '已确认，等待同步' : pendingFulfillment.get(item.taskId) === 'submitting' ? '正在确认…' : pendingKds.some(pending => pending.taskId === item.taskId) ? '结果待确认' : fulfillmentCommand === 'deliver' ? ((item.quantities||quantitySelections[`${item.taskId}:${fulfillmentCommand}`]!==undefined)?'本次已送达':'全部已送达') : fulfillmentCommand === 'remake' ? '重新制作' : '制作完成'}

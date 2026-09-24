@@ -1,4 +1,7 @@
 import {useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react'
+import {requiresStaffLogin} from './staff-session-error'
+import {useScreenViewport} from './use-screen-viewport'
+import {ScreenFullscreenButton} from './ScreenFullscreenButton'
 import type {PickupBoardData,PickupReceipt} from '../../shared/pickup-workflow'
 import {staffErrorMessage} from '../../shared/staff-error-message'
 import {PickupApi,PickupApiError,type PickupApiPort,type PickupMutationResult,type PickupRequest} from './pickup-api'
@@ -12,6 +15,7 @@ const errorText=(error:unknown)=>error instanceof Error?error.message:'更新未
 const hint=(message:string|null)=>staffErrorMessage(message,'已有后续变化，请联系值班经理核对',409)
 
 export function PickupBoard({staffSessionId,api:suppliedApi,onExit,onLoginRequired}:PickupBoardProps){
+  const viewport=useScreenViewport()
   const api=useMemo(()=>suppliedApi??new PickupApi({staffSessionId}),[suppliedApi,staffSessionId])
   const [data,setData]=useState<PickupBoardData|null>(null),[stale,setStale]=useState(true),[busy,setBusy]=useState(false)
   const [online,setOnline]=useState(()=>typeof navigator==='undefined'||navigator.onLine!==false)
@@ -37,10 +41,10 @@ export function PickupBoard({staffSessionId,api:suppliedApi,onExit,onLoginRequir
       if(previous&&previous.commandScope===next.commandScope&&next.revision<previous.revision)return previous
       latest.current=next;serverClock.current={at:Date.parse(next.generatedAt),received:performance.now()}
       if(pointer.current&&!flight.current)queued.current=next;else setData(next)
-      setNow(serverClock.current.at);setStale(false);setLoginRequired(next.actor.actionSessionValid===false);setStorageVersion(value=>value+1)
+      setNow(serverClock.current.at);setStale(document.visibilityState!=='visible'||navigator.onLine===false);setLoginRequired(next.actor.actionSessionValid===false);setStorageVersion(value=>value+1)
       return next
     }catch(error){if(controller.signal.aborted)throw error
-      if(mounted.current&&sequence===readSequence.current){setStale(true);setMessage(errorText(error));if([401,403].includes((error as {status?:number})?.status??0))setLoginRequired(true)}
+      if(mounted.current&&sequence===readSequence.current){setStale(true);setMessage(errorText(error));setLoginRequired(requiresStaffLogin(error))}
       throw error
     }finally{if(sequence===readSequence.current)readBusy.current=false}
   },[api])
@@ -50,12 +54,16 @@ export function PickupBoard({staffSessionId,api:suppliedApi,onExit,onLoginRequir
     latest.current=null;queued.current=null;setData(null);setStale(true);setDraft(null);setUndo(null);setRecentId(null);setPage(0);setHistoryPage(0);setMode('waiting');setShowPrevious(false)
     void read().then(()=>{if(mounted.current)setMessage('核对实物后确认取走，送达同步完成')}).catch(()=>{})
     const refresh=()=>{if(document.visibilityState==='visible'&&!flight.current&&!readBusy.current)void read().catch(()=>{})}
-    const connected=()=>{setOnline(true);refresh()},disconnected=()=>{setOnline(false);setStale(true);setMessage('连接中断，暂停确认；恢复连接后核对原结果')}
+    const suspend=()=>{setStale(true);pointer.current=false;queued.current=null
+      if(!flight.current){readSequence.current++;readAbort.current?.abort();readBusy.current=false}}
+    const resume=()=>{suspend();refresh()}
+    const visibility=()=>{if(document.visibilityState==='visible')resume();else suspend()}
+    const connected=()=>{setOnline(true);resume()},disconnected=()=>{setOnline(false);suspend();setMessage('连接中断，暂停确认；恢复连接后核对原结果')}
     const changed=()=>setStorageVersion(value=>value+1)
     const poll=setInterval(refresh,5000),clockTick=setInterval(()=>setNow(serverClock.current.at+performance.now()-serverClock.current.received),1000)
-    document.addEventListener('visibilitychange',refresh);window.addEventListener('online',connected);window.addEventListener('offline',disconnected);window.addEventListener('storage',changed)
+    document.addEventListener('visibilitychange',visibility);window.addEventListener('pageshow',resume);window.addEventListener('online',connected);window.addEventListener('offline',disconnected);window.addEventListener('storage',changed)
     return()=>{mounted.current=false;generation.current=effectGeneration+1;readAbort.current?.abort();clearInterval(poll);clearInterval(clockTick);if(guardTimer.current)clearTimeout(guardTimer.current)
-      document.removeEventListener('visibilitychange',refresh);window.removeEventListener('online',connected);window.removeEventListener('offline',disconnected);window.removeEventListener('storage',changed)}
+      document.removeEventListener('visibilitychange',visibility);window.removeEventListener('pageshow',resume);window.removeEventListener('online',connected);window.removeEventListener('offline',disconnected);window.removeEventListener('storage',changed)}
   },[read])
   const protect=()=>{guardUntil.current=performance.now()+PICKUP_REPEAT_GUARD_MS;setGuard(true);if(guardTimer.current)clearTimeout(guardTimer.current)
     guardTimer.current=setTimeout(()=>{if(mounted.current)setGuard(false)},PICKUP_REPEAT_GUARD_MS+10)}
@@ -94,19 +102,19 @@ export function PickupBoard({staffSessionId,api:suppliedApi,onExit,onLoginRequir
         setRecentId(result.data.receipt.receiptId)
         setMessage(result.data.receipt.undo?`${result.data.receipt.tableCode} · 已撤回取走与送达确认`:`${result.data.receipt.tableCode} · 已取走 ${result.data.receipt.quantity}份，送达已确认`)
       }else{setDeviceLabel(result.data.device?.label??'吧台取餐屏');setMessage(result.data.setup.configured?'本机已设为取餐屏':'本机已停用取餐操作')}
-    }catch(error){if(mounted.current&&generation.current===runGeneration){setMessage(errorText(error));setStale(true);setStorageVersion(value=>value+1);if([401,403].includes((error as {status?:number})?.status??0))setLoginRequired(true)}}
+    }catch(error){if(mounted.current&&generation.current===runGeneration){setMessage(errorText(error));setStale(true);setStorageVersion(value=>value+1);setLoginRequired(requiresStaffLogin(error))}}
     finally{if(generation.current===runGeneration){flight.current=false;if(mounted.current)setBusy(false)}}
   }
   const pointerEnd=()=>{pointer.current=false;setTimeout(()=>{const next=queued.current
     if(next&&mounted.current&&!pointer.current&&!flight.current){queued.current=null;if(next.commandScope===latest.current?.commandScope&&next.revision===latest.current.revision)setData(next)}
   },0)}
-  return <section className="pickup-board" aria-label="吧台取餐工作台" onPointerDownCapture={()=>{pointer.current=true}} onPointerUpCapture={pointerEnd} onPointerCancel={pointerEnd}>
+  return <section className="pickup-board" style={viewport.style} aria-label="吧台取餐工作台" onPointerDownCapture={()=>{pointer.current=true}} onPointerUpCapture={pointerEnd} onPointerCancel={pointerEnd}>
     <header className="pickup-top"><strong>吧台取餐</strong><nav aria-label="取餐查看">
       <button type="button" aria-pressed={mode==='waiting'} disabled={busy} onClick={leave}>待取 {tables.reduce((sum,table)=>sum+table.units.length,0)}份</button>
       <button type="button" aria-pressed={mode==='history'} disabled={busy} onClick={()=>{setMode('history');setDraft(null);setUndo(null)}}>取走记录</button>
       <button type="button" aria-pressed={mode==='settings'} disabled={busy} onClick={()=>{setMode('settings');setDraft(null);setUndo(null);setDeviceLabel(data?.device?.label??'吧台取餐屏')}}>设置</button>
-    </nav><span className="pickup-connection">{!online?'连接中断':stale?'待更新':busy?'核对中':'已更新'}</span>{onExit&&<button type="button" onClick={onExit}>返回出品</button>}</header>
-    <div className={`pickup-notice ${stale||recovery.error?'is-warning':''}`} role="status" aria-live="polite">
+    </nav><span className="pickup-connection">{!online?'连接中断':stale?'待更新':busy?'核对中':'已更新'}</span><ScreenFullscreenButton/>{onExit&&<button type="button" onClick={onExit}>返回出品</button>}</header>
+    <div className={`pickup-notice ${stale||recovery.error?'is-warning':''} ${!stale&&!busy&&!unresolved&&!loginRequired&&!recent&&message==='核对实物后确认取走，送达同步完成'?'is-idle':''}`} data-action-reveal="off" role="status" aria-live="polite">
       <span>{busy?'正在核对原操作，请勿重复确认':recovery.error??(recovery.attempt?'有原操作结果待核对，请恢复后继续':recovery.previousAttempt?'本设备上次登录有取餐结果待核对':message)}</span>
       {recovery.attempt&&!recovery.error&&<button type="button" disabled={busy||!online||guard} onClick={()=>void submit()}>恢复原操作</button>}
       {recovery.previousAttempt&&!recovery.attempt&&!recovery.error&&<button type="button" disabled={busy} onClick={()=>setShowPrevious(true)}>查看本设备上次操作</button>}

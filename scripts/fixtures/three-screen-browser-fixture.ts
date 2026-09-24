@@ -9,6 +9,16 @@ export async function seedThreeScreenBrowserFixture(databaseUrl:string,tenantId:
     const areaId=(await db.query('SELECT id FROM mbox.areas WHERE tenant_id=$1 AND store_id=$2 ORDER BY id LIMIT 1',[tenantId,storeId])).rows[0].id
     const waiter=(await db.query("SELECT id FROM mbox.employees WHERE tenant_id=$1 AND store_id=$2 AND employee_code='tom'",[tenantId,storeId])).rows[0].id
     const role=(await db.query('SELECT role_id FROM mbox.employee_roles WHERE tenant_id=$1 AND store_id=$2 AND employee_id=$3 ORDER BY starts_at LIMIT 1',[tenantId,storeId,waiter])).rows[0].role_id
+    // Match the real pickup account's minimum permission; a waiter hides dashboard-entry failures.
+    const pickupEmployee=randomUUID(),pickupRole=randomUUID()
+    await db.query(`INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name,pin_hash)
+      SELECT $1,$2,$3,'test_pickup_only','隔离取餐屏',pin_hash FROM mbox.employees WHERE tenant_id=$2 AND store_id=$3 AND id=$4`,[pickupEmployee,tenantId,storeId,waiter])
+    await db.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,'PICKUP_SCREEN','隔离取餐屏')",[pickupRole,tenantId,storeId])
+    await db.query('DELETE FROM mbox.role_permission_assignments WHERE tenant_id=$1 AND store_id=$2 AND role_id=$3',[tenantId,storeId,pickupRole])
+    await db.query('INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id) VALUES($1,$2,$3,$4)',[tenantId,storeId,pickupEmployee,pickupRole])
+    await db.query(`INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id)
+      SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code='kds.deliver'`,[tenantId,storeId,pickupRole])
+    await db.query("INSERT INTO mbox.role_navigation_items(tenant_id,store_id,role_id,navigation_code,label,route) VALUES($1,$2,$3,'commerce','出品','/staff/fulfillment')",[tenantId,storeId,pickupRole])
     const products={bar:{id:randomUUID(),name:'三屏测试鸡尾酒'},kitchen:{id:randomUUID(),name:'三屏测试小食'}}
     for(const station of ['bar','kitchen'] as const)await db.query(`INSERT INTO mbox.products(id,tenant_id,store_id,code,name,category_code,fulfillment_station,inventory_control_mode)
       VALUES($1,$2,$3,$4,$5,'test',$6,'not_managed')`,[products[station].id,tenantId,storeId,`THREE-SCREEN-${station}`,products[station].name,station])

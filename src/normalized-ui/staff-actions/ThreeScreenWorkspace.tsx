@@ -15,10 +15,8 @@ export function ThreeScreenWorkspace({mode,employeeId,staffSessionId,onExit,onLo
   const changed=useCallback(async()=>{window.dispatchEvent(new Event('mbox:production-changed'))},[])
   if(mode==='pickup')return <PickupBoard staffSessionId={staffSessionId} onExit={onExit} onLoginRequired={onLoginRequired}/>
   return <section className="three-screen-production" aria-label={mode==='bar'?'酒水制作屏':'后厨制作屏'}>
-    <header className="three-screen-toolbar"><button type="button" onClick={onExit}>返回出品</button><strong>{mode==='bar'?'酒水制作':'后厨制作'}</strong>
-      {legacy.length>0&&<button type="button" onClick={onExit}>其他待办 {legacy.length}</button>}
-    </header>
     <KitchenProductionBoard key={`${staffSessionId}:${mode}`} api={api} employeeId={employeeId} stationCode={mode}
+      headerActions={<><button type="button" onClick={onExit}>返回出品</button>{legacy.length>0&&<button type="button" onClick={onExit}>其他待办 {legacy.length}</button>}</>}
       blocked={false} onChanged={changed} onLegacy={setLegacy} onLoginRequired={onLoginRequired}/>
   </section>
 }

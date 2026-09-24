@@ -1,4 +1,7 @@
-import {useCallback,useEffect,useMemo,useRef,useState} from 'react'
+import {useCallback,useEffect,useMemo,useRef,useState,type ReactNode} from 'react'
+import {useScreenViewport} from './use-screen-viewport'
+import {ScreenFullscreenButton} from './ScreenFullscreenButton'
+import {requiresStaffLogin} from './staff-session-error'
 import type {KitchenBoardData,KitchenCommand,KitchenCommandResult,KitchenStartSelection,KitchenHandoffPreview,ProductionStation} from '../../shared/kitchen-production'
 import {DurableStaffCommand} from '../durable-staff-command'
 import type {StaffActionsApiPort} from './staff-actions-api'
@@ -15,15 +18,17 @@ function shortOrder(value:string){return value.length>14?value.slice(-10):value}
 function clock(value:string){return new Date(value).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false})}
 function ProductionNote({text}:{text:string}){return text?<span className="kitchen-production-note">{text}</span>:null}
 
-export function KitchenProductionBoard({api,employeeId,blocked,onChanged,onLegacy,onLoginRequired,stationCode='kitchen'}:{
-  api:StaffActionsApiPort;employeeId:string;stationCode?:ProductionStation;blocked:boolean;onChanged:()=>Promise<void>;onLegacy:(ids:string[])=>void;onLoginRequired?:()=>void
+export function KitchenProductionBoard({api,employeeId,blocked,onChanged,onLegacy,onLoginRequired,stationCode='kitchen',headerActions}:{
+  api:StaffActionsApiPort;employeeId:string;stationCode?:ProductionStation;blocked:boolean;onChanged:()=>Promise<void>;onLegacy:(ids:string[])=>void;onLoginRequired?:()=>void;headerActions?:ReactNode
 }){
+  const viewport=useScreenViewport()
   const stationLabel=stationCode==='bar'?'酒水':'后厨',pickupPlace=stationCode==='bar'?'酒水吧台':'后厨取餐口'
   const storageKey=`mbox.${stationCode}.drafts.v1:${employeeId}`
   const [handoff,setHandoff]=useState<KitchenHandoffPreview|null>(null)
   const [handoffReason,setHandoffReason]=useState('交班接续制作')
   const [physicalChecked,setPhysicalChecked]=useState(false)
   const [data,setData]=useState<KitchenBoardData|null>(null)
+  const [loginRequired,setLoginRequired]=useState(false)
   const [expanded,setExpanded]=useState(true)
   const [stale,setStale]=useState(true)
   const [busy,setBusy]=useState(false)
@@ -32,6 +37,7 @@ export function KitchenProductionBoard({api,employeeId,blocked,onChanged,onLegac
   const [start,setStart]=useState<StartDraft|null>(()=>stored<{start:StartDraft|null}>(storageKey,{start:null}).start)
   const [drafts,setDrafts]=useState<Drafts>(()=>stored<{drafts:Drafts}>(storageKey,{drafts:{}}).drafts)
   const [selectedBatch,setSelectedBatch]=useState<string|null>(()=>stored<{selectedBatch?:string}>(storageKey,{}).selectedBatch??null)
+  const [activePane,setActivePane]=useState<'pending'|'working'>(()=>selectedBatch?'working':'pending')
   const [page,setPage]=useState(()=>stored<{page?:number}>(storageKey,{}).page??0)
   const [now,setNow]=useState(Date.now())
   const readBusy=useRef(false),flight=useRef(false),readRevision=useRef(0),controller=useRef<AbortController|null>(null),alive=useRef(true)
@@ -48,17 +54,24 @@ export function KitchenProductionBoard({api,employeeId,blocked,onChanged,onLegac
       const next=await api.loadKitchenBoard!(abort.signal,stationCode)
       if(!alive.current||revision!==readRevision.current)throw new Error('读取已中断，请恢复原操作')
       if(next.employeeId!==employeeId||next.stationCode!==stationCode)throw new Error('登录员工或岗位已改变，请重新进入制作屏')
-      setData(next);setStale(false);callbacks.current.onLegacy(next.legacyTaskIds)
+      setData(next);setStale(document.visibilityState!=='visible'||navigator.onLine===false);setLoginRequired(next.actionSessionValid===false);callbacks.current.onLegacy(next.legacyTaskIds)
     }catch(error){if(abort.signal.aborted)throw error
-      if(alive.current&&revision===readRevision.current){setStale(true);setMessage(error instanceof Error?error.message:'队列更新失败，请重新读取')
+      if(alive.current&&revision===readRevision.current){setStale(true);setLoginRequired(requiresStaffLogin(error));setMessage(error instanceof Error?error.message:'队列更新失败，请重新读取')
         if([401,403].includes((error as {status?:number})?.status??0))setData(null)}
       throw error
     }finally{if(revision===readRevision.current)readBusy.current=false}
   },[api,employeeId,stationCode])
   useEffect(()=>{alive.current=true;void read().then(()=>setMessage('按下单时间排列；新单不会加入已经开做的批次')).catch(()=>{})
     const timer=setInterval(()=>setNow(Date.now()),1000)
-    const poll=setInterval(()=>{if(!flight.current&&!readBusy.current)void read().catch(()=>{})},5000)
-    return()=>{alive.current=false;controller.current?.abort();clearInterval(timer);clearInterval(poll)}
+    const refresh=()=>{if(document.visibilityState==='visible'&&navigator.onLine!==false&&!flight.current&&!readBusy.current)void read().catch(()=>{})}
+    const suspend=()=>{setStale(true);pointer.current=null
+      if(!flight.current){readRevision.current++;controller.current?.abort();readBusy.current=false}}
+    const resume=()=>{suspend();refresh()}
+    const visibility=()=>{if(document.visibilityState==='visible')resume();else suspend()}
+    document.addEventListener('visibilitychange',visibility);window.addEventListener('online',resume);window.addEventListener('offline',suspend);window.addEventListener('pageshow',resume)
+    const poll=setInterval(refresh,5000)
+    return()=>{alive.current=false;controller.current?.abort();clearInterval(timer);clearInterval(poll)
+      document.removeEventListener('visibilitychange',visibility);window.removeEventListener('online',resume);window.removeEventListener('offline',suspend);window.removeEventListener('pageshow',resume)}
   },[read])
   useEffect(()=>{try{localStorage.setItem(storageKey,JSON.stringify({drafts,start,selectedBatch,page}))}catch{setMessage('选择暂时无法保存；提交前必须恢复设备存储')}},[drafts,start,selectedBatch,page,storageKey])
   useEffect(()=>{if(!expanded)return;const old=document.body.style.overflow;document.body.style.overflow='hidden'
@@ -98,6 +111,7 @@ export function KitchenProductionBoard({api,employeeId,blocked,onChanged,onLegac
     setPage(index<0?0:Math.floor(index/pageSize))
   }
   function choose(key:string,quantity?:string){
+    setActivePane('pending')
     const chosen=groups.find(item=>item.key===key);if(!chosen)return
     const preference=stored<Record<string,KitchenPreference>>(`mbox.${stationCode}.preferences:${employeeId}`,{})[key]
     const amount=quantity??String(kitchenPreferredBatchQuantity(chosen.items,preference?.quantity))
@@ -123,12 +137,12 @@ export function KitchenProductionBoard({api,employeeId,blocked,onChanged,onLegac
           const preferences=stored<Record<string,KitchenPreference>>(`mbox.${stationCode}.preferences:${employeeId}`,{})
           try{localStorage.setItem(`mbox.${stationCode}.preferences:${employeeId}`,JSON.stringify({...preferences,[original.compatibilityKey]:{quantity:result.quantity,equipment:original.equipment??'',minutes:original.expectedSeconds===null?'':String(original.expectedSeconds/60)}}))}catch{/* Original commands remain durably recorded. */}
         }
-        setStart(null);if(original.action==='start'){setSelectedBatch(result.batchId);setPage(0)}
+        setStart(null);if(original.action==='start'){setSelectedBatch(result.batchId);setPage(0);setActivePane('working')}
       }
       if(result.action==='handoff'){setHandoff(null);setPhysicalChecked(false)}
       setMessage('上次操作：'+(result.action==='handoff'?'已接续全部关联批次':result.action==='release'?'已确认设备清空':result.action==='start'?`已开始 ${result.quantity} 份`:`已确认 ${result.quantity} 份放好${pickupPlace}`))
       void callbacks.current.onChanged().catch(()=>{})
-    }catch(error){if(alive.current){setMessage(error instanceof Error?error.message:'操作结果未能确认，请恢复原操作');setStale(true)}}
+    }catch(error){if(alive.current){setMessage(error instanceof Error?error.message:'操作结果未能确认，请恢复原操作');setLoginRequired(requiresStaffLogin(error));setStale(true)}}
     finally{flight.current=false;if(alive.current)setBusy(false)}
   }
   async function previewHandoff(){
@@ -144,19 +158,23 @@ export function KitchenProductionBoard({api,employeeId,blocked,onChanged,onLegac
       onClick={()=>{const down=pointer.current;pointer.current=null;if(down!==null&&down!==signature){setMessage('刚才选择的批次已改变，请重新核对后点击');return}void submit(command)}}>{label}</button>
   }
   if(!expanded)return <button type="button" className="kitchen-open" onClick={()=>setExpanded(true)}>打开{stationLabel}制作屏{unresolved?' · 有待恢复操作':''}</button>
-  return <section className="kitchen-board" aria-label={`${stationLabel}制作工作台`} onKeyDown={event=>{if(event.key==='Escape')setExpanded(false)}}>
-    <header className="kitchen-top"><div><strong>{stationLabel}制作</strong><small>{overdue>0?`${overdue} 批计时已到 · 请核对实物`:`放好${pickupPlace}后确认备齐`}</small><span className="kitchen-pickup-summary">待取 {data?.pickupSummary.awaitingPickup??0} · <span title="当前营业日累计">已取走 {data?.pickupSummary.pickedUpThisShift??0}</span></span></div>
-      <label>找桌 / 品名 / 订单<input value={query} onChange={event=>{setQuery(event.target.value);if(selectedBatch)focusBatch(selectedBatch,event.target.value)}} placeholder="桌号、品名或订单"/></label>
+  return <section className="kitchen-board" style={viewport.style} data-short-viewport={viewport.short} aria-label={`${stationLabel}制作工作台`} onKeyDown={event=>{if(event.key==='Escape'&&!headerActions)setExpanded(false)}}>
+    <header className="kitchen-top">{headerActions}<div><strong>{stationLabel}制作</strong>{overdue>0&&<small className="kitchen-warning">{overdue} 批计时已到 · 请核对实物</small>}<span className="kitchen-pickup-summary">待取 {data?.pickupSummary.awaitingPickup??0} · <span title="当前营业日累计">已取走 {data?.pickupSummary.pickedUpThisShift??0}</span></span></div>
+      <label><span className="kitchen-search-label">找桌 / 品名 / 订单</span><input value={query} onChange={event=>{setQuery(event.target.value);if(selectedBatch)focusBatch(selectedBatch,event.target.value)}} placeholder="桌号、品名或订单"/></label>
       <button type="button" onClick={()=>void read().catch(()=>{})} disabled={busy}>刷新</button>
-      <button type="button" onClick={()=>setExpanded(false)}>收起</button>
+      {headerActions?<ScreenFullscreenButton/>:<button type="button" onClick={()=>setExpanded(false)}>收起</button>}
     </header>
-    <div className={`kitchen-notice ${stale?'is-stale':''}`} role="status" aria-label={`${stationLabel}操作反馈`}><span>{busy?'正在核对原操作，请勿再次制作…':unresolved?'有原操作结果待确认，恢复后才能继续':message}{stale&&!busy?'；操作暂停，重新读取后继续':''}</span>
+    <div className={`kitchen-notice ${stale?'is-stale':''} ${!stale&&!busy&&!unresolved&&!loginRequired&&message==='按下单时间排列；新单不会加入已经开做的批次'?'is-idle':''}`} data-action-reveal="off" role="status" aria-label={`${stationLabel}操作反馈`}><span>{busy?'正在核对原操作，请勿再次制作…':unresolved?'有原操作结果待确认，恢复后才能继续':message}{stale&&!busy?'；操作暂停，重新读取后继续':''}</span>
       {unresolved&&<button type="button" disabled={busy} onClick={()=>void submit()}>恢复原操作</button>}
-      {(!data||data.actionSessionValid===false)&&onLoginRequired&&<button type="button" onClick={onLoginRequired}>恢复登录</button>}
+      {loginRequired&&onLoginRequired&&<button type="button" onClick={onLoginRequired}>恢复登录</button>}
     </div>
     {data&&!data.canStart&&data.canPrepare&&<p className="kitchen-paused">新增制作已暂停；原批次可继续分装、放好或恢复原结果。</p>}
-    <div className="kitchen-columns">
-      <section className="kitchen-pane" aria-label="待制作"><h2>待制作 <span>{data?.pending.reduce((sum,item)=>sum+item.unmade,0)??0} 份</span></h2>
+    <nav className="kitchen-view-switch" aria-label="制作工序切换">
+      <button type="button" aria-pressed={activePane==='pending'} onClick={()=>setActivePane('pending')}>待制作 {data?.pending.reduce((sum,item)=>sum+item.unmade,0)??0} 份</button>
+      <button type="button" aria-pressed={activePane==='working'} onClick={()=>setActivePane('working')}>制作中 {data?.batches.length??0} 批</button>
+    </nav>
+    <div className="kitchen-columns" data-active-pane={activePane}>
+      <section className={`kitchen-pane ${start&&group?'has-selection':'is-browsing'}`} aria-label="待制作"><h2>待制作 <span>{data?.pending.reduce((sum,item)=>sum+item.unmade,0)??0} 份</span></h2>
         <div className="kitchen-cards">{groups.filter(item=>!needle||item.name.toLowerCase().includes(needle)||item.items.some(row=>row.tableCode.toLowerCase().includes(needle)||row.orderPublicId.toLowerCase().includes(needle))).map(item=><button type="button" className="kitchen-group" key={item.key} aria-pressed={start?.key===item.key} disabled={locked} onClick={()=>choose(item.key)}>
           <strong>{item.name} <b>{item.total} 份</b></strong><ProductionNote text={item.notes}/><small>{!item.notes&&'无特殊备注 · '}最早 {clock(item.anchor)}</small>
         </button>)}{data&&groups.length===0&&<p>当前没有待制作的出品</p>}</div>
@@ -167,7 +185,7 @@ export function KitchenProductionBoard({api,employeeId,blocked,onChanged,onLegac
               <input id={`${stationCode}-batch-quantity`} type="number" min="1" max="999" value={start.quantity} disabled={locked} onChange={event=>choose(start.key,event.target.value)}/>
               <button type="button" aria-label="本批增加一份" disabled={locked||Number(start.quantity)>=Math.min(group.total,999)} onClick={()=>choose(start.key,String(Math.min(group.total,999,Number(start.quantity)+1)))}>＋</button>
             </div></div>
-            <details className="kitchen-settings" open={stationCode==='kitchen'?true:undefined}>
+            <details className="kitchen-settings" open={stationCode==='kitchen'&&!headerActions?true:undefined}>
               <summary>制作设置{start.equipment?` · ${start.equipment}`:''}{start.minutes?` · ${start.minutes}分钟`:''}</summary>
               <div><label>实际设备<input list="kitchen-equipment" value={start.equipment} maxLength={40} placeholder="可不填" disabled={locked} onChange={event=>setStart({...start,equipment:event.target.value})}/><datalist id="kitchen-equipment">{data?.equipmentLabels.map(label=><option key={label} value={label}/>)}</datalist></label>
               <label>预计分钟<input type="number" min="0" max="600" step="0.5" placeholder="可不填" value={start.minutes} disabled={locked} onChange={event=>setStart({...start,minutes:event.target.value})}/></label></div>
@@ -181,11 +199,11 @@ export function KitchenProductionBoard({api,employeeId,blocked,onChanged,onLegac
         <footer className="kitchen-actions">{start? <>{button({action:'start',compatibilityKey:start.key,items:start.items,equipment:start.equipment.trim()||null,expectedSeconds:seconds},`开始制作 ${start.quantity||0} 份`,locked||!data?.canStart||!startValid||!timeValid||equipmentBusy)}
           {button({action:'quick-ready',compatibilityKey:start.key,items:start.items,equipment:null,expectedSeconds:null},`已放好${pickupPlace}`,locked||!data?.canStart||!startValid)}</>:<p>仅开始选中的份数，其余留在待制作。</p>}</footer>
       </section>
-      <section className="kitchen-pane" aria-label="正在制作"><h2>正在制作 <span>{data?.batches.length??0} 批</span></h2>
+      <section className={`kitchen-pane ${batch?'has-selection':'is-browsing'}`} aria-label="正在制作"><h2>正在制作 <span>{data?.batches.length??0} 批</span></h2>
         <div className="kitchen-cards">{data?.batches.filter(item=>!needle||item.productName.toLowerCase().includes(needle)||item.units.some(unit=>unit.tableCode.toLowerCase().includes(needle)||unit.orderPublicId.toLowerCase().includes(needle))).map(item=>{
           const remaining=item.units.filter(unit=>unit.state==='started'&&!unit.stopped).length,ready=item.units.filter(unit=>!unit.stopped&&unit.state==='ready').length,pickedUp=item.units.filter(unit=>!unit.stopped&&unit.state==='delivered').length
-          const elapsed=item.startedAt?Math.floor((now-Date.parse(item.startedAt))/60000):null
-          return <button type="button" key={item.id} className="kitchen-group" aria-pressed={selectedBatch===item.id} onClick={()=>focusBatch(item.id)}><strong>{item.productName} <b>余 {remaining} / {item.originalQuantity} 份</b></strong>
+          const elapsed=item.startedAt?Math.max(0,Math.floor((now-Date.parse(item.startedAt))/60000)):null
+          return <button type="button" key={item.id} className="kitchen-group" aria-pressed={selectedBatch===item.id} onClick={()=>{setActivePane('working');focusBatch(item.id)}}><strong>{item.productName} <b>余 {remaining} / {item.originalQuantity} 份</b></strong>
             <ProductionNote text={[item.specification,item.itemNote,item.orderNote].filter(Boolean).join(' · ')}/>
             <small>{!item.equipment?'制作中 · 无需设备':!item.releasedAt?`${item.equipment} · 制作中`:'设备已空 · 待分装'} · 开做 {item.startedAt?clock(item.startedAt):'直接备齐'}{elapsed!==null?` · 已 ${elapsed} 分钟`:''}</small><small>累计备齐 {ready+pickedUp} · 待取 {ready} · 已取 {pickedUp}</small></button>
         })}{data&&data.batches.length===0&&<p>当前没有在制批次</p>}</div>
@@ -200,7 +218,7 @@ export function KitchenProductionBoard({api,employeeId,blocked,onChanged,onLegac
             </label>})}</div>
 
         </>:<p className="kitchen-placeholder">选择正在制作的出品，按桌分装，放好取餐区后确认。</p>}</div>
-        {batch&&<div className="kitchen-pagination"><button type="button" disabled={safePage===0} onClick={()=>setPage(safePage-1)}>上一页</button><span>{safePage+1} / {pages} 页{otherQuantity>0?` · 其他页已选 ${otherQuantity} 份`:null}</span><button type="button" disabled={safePage+1>=pages} onClick={()=>setPage(safePage+1)}>下一页</button></div>}
+        {batch&&pages>1&&<div className="kitchen-pagination"><button type="button" disabled={safePage===0} onClick={()=>setPage(safePage-1)}>上一页</button><span>{safePage+1} / {pages} 页{otherQuantity>0?` · 其他页已选 ${otherQuantity} 份`:null}</span><button type="button" disabled={safePage+1>=pages} onClick={()=>setPage(safePage+1)}>下一页</button></div>}
         <footer className="kitchen-actions">{batch?<><button type="button" disabled={locked||batch.employeeId!==employeeId} onClick={()=>{
           const additions=visible.map(units=>kitchenReadySelection(units,units.filter(unit=>unit.state==='started'&&!unit.held&&!unit.stopped).length)).filter((item):item is KitchenReadySelection=>!!item)
           setDrafts(current=>({...current,[batch.id]:{...current[batch.id],...Object.fromEntries(additions.map(item=>[item.taskId,item]))}}))

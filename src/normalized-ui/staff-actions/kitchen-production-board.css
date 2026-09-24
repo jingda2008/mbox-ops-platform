@@ -11,10 +11,9 @@
 
 .kitchen-pane[aria-label="待制作"] .kitchen-actions>button:first-child{background:#315d46;color:#fff;flex:1;border-color:#315d46}.kitchen-pane[aria-label="待制作"] .kitchen-actions>button:nth-child(2){background:white;color:#315d46;flex:initial;border-color:#c6d1c8}
 
-/* Dedicated tablet shell contributes its own 48px toolbar. Keep primary actions
-   and pagination outside the scroll regions, including the 552px usable height. */
-.three-screen-production .kitchen-board{position:relative;inset:auto;height:calc(100dvh - 48px);z-index:1}
-.three-screen-production .kitchen-top>div>strong,.three-screen-production .kitchen-top>button:last-child{display:none}
+/* One toolbar inside the board; the entire visual viewport belongs to the workspace. */
+.three-screen-production .kitchen-board{position:relative;inset:auto;height:100dvh;z-index:1}
+
 .three-screen-production .kitchen-top>div{min-width:0}
 .kitchen-board .kitchen-production-note{display:block;margin:6px 0;padding:6px 8px;border-left:3px solid #9a6b13;border-radius:4px;background:#fff1c2;color:#382c16;font-size:20px;font-weight:700;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
 .kitchen-board .kitchen-cards{grid-auto-rows:max-content;align-items:start}
@@ -36,3 +35,69 @@
 .kitchen-settings>div{display:grid;grid-template-columns:minmax(85px,1fr) 80px;gap:6px}.kitchen-settings>div input{width:100%}
 .kitchen-pickup-summary{font-size:16px;font-weight:700;color:#315d46}
 @media(max-height:680px) and (min-width:761px){.kitchen-top small{font-size:13px}.kitchen-cards{flex-basis:20%;min-height:58px}.kitchen-top label{font-size:13px}.kitchen-actions{padding:5px 8px;gap:5px}.kitchen-pagination{padding:2px 8px}.kitchen-notice{min-height:24px;font-size:12px}}
+
+/* Dense landscape workspace: reserve space for facts, not empty selection panels. */
+.kitchen-notice.is-idle{position:absolute;width:1px;height:1px;min-height:0;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
+.kitchen-search-label{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
+.kitchen-pane.is-browsing .kitchen-cards{flex:1;max-height:none}
+.kitchen-pane.is-browsing>.kitchen-detail,.kitchen-pane.is-browsing>.kitchen-actions{display:none}
+@media(min-width:761px){
+  .kitchen-board{padding:6px;gap:4px}
+  .kitchen-top{gap:8px;min-height:44px}
+  .kitchen-top>div{display:flex;align-items:center;gap:12px;flex:1;flex-wrap:wrap;min-width:0}
+  .kitchen-top strong{font-size:18px;white-space:nowrap}
+  .kitchen-top .kitchen-warning{order:3;flex-basis:100%}
+  .kitchen-top input{width:170px}
+  .kitchen-pickup-summary{font-size:14px;white-space:nowrap}
+  .kitchen-columns{gap:6px}
+  .kitchen-pane h2{font-size:18px;padding:6px 10px}
+  .kitchen-pane.has-selection .kitchen-cards{flex:0 1 auto;max-height:130px;min-height:72px;padding:6px}
+  .kitchen-pane[aria-label="待制作"].has-selection .kitchen-cards{flex:1;max-height:none}
+  .kitchen-pane[aria-label="待制作"].has-selection .kitchen-detail{flex:0 1 auto;max-height:62%}
+  .kitchen-notice{min-height:20px;font-size:12px}
+  .kitchen-actions{padding:4px 6px;gap:6px}
+  .kitchen-detail{padding:6px 8px}
+}
+
+.kitchen-view-switch{display:none}
+/* Portrait tablets are a separate work surface, including the 768px-wide iPad.
+   Keep both panes mounted so rotation never resets a batch or portion draft. */
+@media(orientation:portrait),(max-width:760px){
+  .kitchen-board{display:flex;overflow:hidden;padding:6px;gap:4px}
+  .kitchen-top{display:flex;flex-wrap:wrap;gap:6px;margin:0;flex:none}
+  .kitchen-top>div{width:auto;min-width:0;flex:1;display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px}
+  .kitchen-top strong{font-size:18px;white-space:nowrap}
+  .kitchen-top .kitchen-warning{flex-basis:100%;order:3}
+  .kitchen-top label{order:3;flex:1 0 100%}
+  .kitchen-top input{width:100%;min-width:0}
+  .kitchen-top button{flex:none;padding:6px 8px}
+  .kitchen-pickup-summary{font-size:13px;white-space:nowrap}
+  .kitchen-notice{margin:0;min-height:20px;font-size:12px}
+  .kitchen-view-switch{display:flex;gap:6px;flex:none}
+  .kitchen-view-switch button{flex:1;font-weight:700;min-height:44px}
+  .kitchen-view-switch button[aria-pressed=true]{background:#315d46;border-color:#315d46;color:#fff}
+  .kitchen-columns{display:flex;flex:1;min-height:0}
+  .kitchen-columns[data-active-pane=pending]>.kitchen-pane[aria-label="正在制作"],
+  .kitchen-columns[data-active-pane=working]>.kitchen-pane[aria-label="待制作"]{display:none}
+  .kitchen-pane{height:auto;min-width:0;flex:1;margin:0}
+  .kitchen-pane h2{display:none}
+  .kitchen-board .kitchen-pane.has-selection .kitchen-cards{flex:0 1 auto;max-height:25%;min-height:76px;padding:6px}
+  .kitchen-pane.is-browsing .kitchen-cards{flex:1;max-height:none}
+  .kitchen-board .kitchen-pane.has-selection .kitchen-detail{flex:1;max-height:none;min-height:0;padding:6px 8px}
+  .kitchen-board .kitchen-actions{padding:5px 6px;gap:6px}
+  .kitchen-pagination{padding:2px 6px}
+  .kitchen-handoff{padding:10px}
+}
+@media(max-width:440px){
+  .kitchen-top>div{flex-basis:calc(100% - 110px)}
+  .kitchen-top label{flex:1;order:2;min-width:100px}
+  .kitchen-top>button:not(:first-child){order:2}
+  .kitchen-start-fields{grid-template-columns:1fr}
+  .kitchen-destination{grid-template-columns:minmax(100px,1fr) minmax(70px,.7fr) 66px}
+}
+
+.kitchen-board,.three-screen-production .kitchen-board{position:fixed;top:var(--staff-screen-top,0px);right:0;bottom:auto;left:0;height:var(--staff-screen-height,100dvh)}
+/* On a keyboard-reduced viewport, keep the selected details and action accessible. */
+.kitchen-board[data-short-viewport=true] .kitchen-pane.has-selection .kitchen-cards{display:none}
+.kitchen-board[data-short-viewport=true] .kitchen-handoff{overflow:auto}
+.kitchen-board[data-short-viewport=true] .kitchen-handoff-lines{flex:none;max-height:100px}

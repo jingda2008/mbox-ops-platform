@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { Client } from 'pg'
+import { reconcileTableRoster } from '../../scripts/reconcile-table-roster.mjs'
 import { describe, expect, it } from 'vitest'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
 import { parseStoreProvisionConfig, provisionNormalizedStore } from '../provision-normalized-store.js'
@@ -33,7 +34,7 @@ integration('versioned table rename preserves identity and rolls back ambiguity'
         VALUES($1::uuid,$2,$3,$4,$1::text,current_date,2,'open')`, [visit, tenantId, storeId, table.id])
       await client.query(`INSERT INTO mbox.table_qr_credentials(id,tenant_id,store_id,table_id,qr_version,credential_hash)
         VALUES($1,$2,$3,$4,1,$5)`, [qr, tenantId, storeId, table.id, 'a'.repeat(64)])
-      // A1 would be renamed first; W1 ambiguity must roll back that earlier change too.
+      // A01 display name would change first; W1 ambiguity must roll back that change too.
       const conflict = randomUUID()
       await client.query(`INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity)
         VALUES($1,$2,$3,$4,'W1','Conflict',4)`, [conflict, tenantId, storeId, table.area_id])
@@ -42,8 +43,16 @@ integration('versioned table rename preserves identity and rolls back ambiguity'
       const renamed = parseStoreProvisionConfig(source)
       await expect(provisionNormalizedStore({ ...input, config: renamed })).rejects.toThrow('Ambiguous table rename W01 -> W1')
       expect((await client.query('SELECT code FROM mbox.tables WHERE tenant_id=$1 ORDER BY code', [tenantId])).rows.map(t => t.code)).toEqual(['A01', 'W01', 'W1'])
+      expect((await client.query("SELECT display_name FROM mbox.tables WHERE tenant_id=$1 AND code='A01'", [tenantId])).rows[0].display_name).toBe('A01')
       await client.query('DELETE FROM mbox.tables WHERE id=$1', [conflict])
       await provisionNormalizedStore({ ...input, config: renamed })
+      await provisionNormalizedStore({ ...input, config: renamed })
+      expect((await client.query('SELECT id,code FROM mbox.tables WHERE tenant_id=$1 ORDER BY code', [tenantId])).rows)
+        .toEqual(original.map(t => ({ id: t.id, code: t.code })))
+      // Only after frontend activation: finalize codes atomically and audit them.
+      await client.query('BEGIN')
+      await reconcileTableRoster(client, { tenantId, storeId }, renamed.tables)
+      await client.query('COMMIT')
       await provisionNormalizedStore({ ...input, config: renamed })
       expect((await client.query('SELECT id,code FROM mbox.tables WHERE tenant_id=$1 ORDER BY code', [tenantId])).rows)
         .toEqual(original.map(t => ({ id: t.id, code: t.code.replace('0', '') })))

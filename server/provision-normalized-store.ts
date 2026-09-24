@@ -395,6 +395,7 @@ export async function provisionNormalizedStore(input: {
       areaIds.set(area.code, requiredRow(result.rows[0], `area ${area.code}`).id)
     }
     for (const table of input.config.tables) {
+      let provisionCode = table.code
       if (table.renameFrom !== undefined) {
         const matches = await client.query<{ id: string; code: string }>(`
           SELECT id, code FROM mbox.tables
@@ -404,10 +405,10 @@ export async function provisionNormalizedStore(input: {
           throw new Error(`Ambiguous table rename ${table.renameFrom} -> ${table.code}: both tables exist`)
         }
         const previous = matches.rows.find((row) => row.code === table.renameFrom)
-        if (previous) {
-          await client.query(`UPDATE mbox.tables SET code=$1 WHERE id=$2 AND tenant_id=$3 AND store_id=$4`,
-            [table.code, previous.id, tenant.id, store.id])
-        }
+        // Provisioning runs before application activation. Preserve the printed
+        // code until the compatible frontend is live; the audited roster tool
+        // finalizes the rename afterwards. Never create a duplicate table here.
+        if (previous) provisionCode = previous.code
       }
       await client.query(`INSERT INTO mbox.tables(
           tenant_id, store_id, area_id, code, display_name, capacity, minimum_spend_minor, currency, layout_snapshot)
@@ -415,7 +416,7 @@ export async function provisionNormalizedStore(input: {
         ON CONFLICT (tenant_id, store_id, code) DO UPDATE SET area_id = EXCLUDED.area_id,
           display_name = EXCLUDED.display_name, capacity = EXCLUDED.capacity,
           minimum_spend_minor = EXCLUDED.minimum_spend_minor, layout_snapshot = EXCLUDED.layout_snapshot,
-          status = 'available'`, [tenant.id, store.id, areaIds.get(table.areaCode), table.code,
+          status = 'available'`, [tenant.id, store.id, areaIds.get(table.areaCode), provisionCode,
         table.name, table.capacity, table.minimumSpendMinor ?? null, store.currency, JSON.stringify(table.layout)])
     }
 

@@ -54,7 +54,7 @@ export async function readOperatingHistory(tx: ScopedTransaction, input: Operati
   if(input.exportAll&&orders.rows.length>5000)throw new TypeError('筛选结果超过5000单，请缩小日期或桌台范围后导出；不会只导出部分数据')
   const page=input.exportAll?orders.rows:orders.rows.slice(0,50)
   const items=page.length?await tx.query<{id:string;order_id:string;name:string;quantity:number;unit_price_minor:string;
-    stock_return_capability?:import('../../src/shared/operating-history.js').StockReturnCapability|null;product_id?:string;category_label?:string|null;unit_label?:string|null;returned_quantity?:number;quantity_facts?:{total:number;held:number;stopped:number;ready:number;delivered:number;usedLoss:number}|null;total_amount_minor:string;parent_order_item_id:string|null;status:string;note:string|null;delivered_at:string|null;delivered_by:string|null;prepared_at:string|null;prepared_by:string|null;work_quantity:number|null}>(`
+    fulfillment_closure_note?:string|null;stock_return_capability?:import('../../src/shared/operating-history.js').StockReturnCapability|null;product_id?:string;category_label?:string|null;unit_label?:string|null;returned_quantity?:number;quantity_facts?:{total:number;held:number;stopped:number;ready:number;delivered:number;usedLoss:number}|null;total_amount_minor:string;parent_order_item_id:string|null;status:string;note:string|null;delivered_at:string|null;delivered_by:string|null;prepared_at:string|null;prepared_by:string|null;work_quantity:number|null}>(`
     SELECT item.id,item.order_id,item.product_id,
       NULLIF(item.product_snapshot->>'categoryName','') AS category_label,
       COALESCE(NULLIF(item.product_snapshot->>'unitName',''),NULLIF(item.product_snapshot->>'unit','')) AS unit_label,COALESCE(NULLIF(item.product_snapshot->>'name',''),product.name) AS name,
@@ -66,6 +66,19 @@ export async function readOperatingHistory(tx: ScopedTransaction, input: Operati
         OR EXISTS(SELECT 1 FROM mbox.inventory_movements movement WHERE movement.tenant_id=item.tenant_id AND movement.store_id=item.store_id
           AND movement.order_item_id=item.id AND movement.reference_type='refund_unmade' AND movement.movement_type='return')
       ) THEN item.quantity ELSE (SELECT COALESCE(sum(stock_return.quantity),0)::integer FROM mbox.order_stock_returns stock_return WHERE stock_return.tenant_id=item.tenant_id AND stock_return.store_id=item.store_id AND stock_return.order_item_id=item.id) END END AS returned_quantity,
+      CASE WHEN item.status='cancelled' AND quantity_facts.total=0
+        AND EXISTS(SELECT 1 FROM mbox.kds_tasks original_task WHERE original_task.tenant_id=item.tenant_id
+          AND original_task.store_id=item.store_id AND original_task.order_item_id=item.id
+          AND original_task.remake_of_task_id IS NULL AND original_task.ready_at IS NOT NULL)
+        AND NOT EXISTS(SELECT 1 FROM mbox.kds_tasks delivered_task JOIN mbox.audit_events delivery_event
+          ON delivery_event.tenant_id=delivered_task.tenant_id AND delivery_event.store_id=delivered_task.store_id
+            AND delivery_event.object_type='kds_task' AND delivery_event.object_id=delivered_task.id::text AND delivery_event.action='kds.deliver'
+          WHERE delivered_task.tenant_id=item.tenant_id AND delivered_task.store_id=item.store_id AND delivered_task.order_item_id=item.id)
+        AND EXISTS(SELECT 1 FROM mbox.orders source_order JOIN mbox.table_customer_left_turnover_events turnover
+          ON turnover.tenant_id=source_order.tenant_id AND turnover.store_id=source_order.store_id AND turnover.table_session_id=source_order.table_session_id
+          WHERE source_order.tenant_id=item.tenant_id AND source_order.store_id=item.store_id AND source_order.id=item.order_id
+            AND turnover.reason_code='automatic_cutoff')
+        THEN '有出品记录；送达未登记；桌次已跨日结束' END AS fulfillment_closure_note,
       delivery.delivered_at,delivery.delivered_by,preparation.prepared_at,preparation.prepared_by,work_result.quantity AS work_quantity
     FROM mbox.order_items item JOIN mbox.products product
       ON product.tenant_id=item.tenant_id AND product.store_id=item.store_id AND product.id=item.product_id
@@ -149,7 +162,7 @@ export async function readOperatingHistory(tx: ScopedTransaction, input: Operati
     orders:page.map(row=>({id:row.id,businessDate:row.business_date,publicId:row.public_id,tableCode:row.table_code,employeeName:row.employee_name,
       tableSessionId:row.table_session_id,sessionPublicId:row.session_public_id,areaName:row.area_name,
       submittedAt:row.submitted_at,status:row.status,paymentStatus:row.payment_status,totalMinor:minor(row.total_amount_minor),effectiveAmountMinor:minor(row.effective_amount_minor??row.total_amount_minor),stoppedAmountMinor:Math.max(0,minor(row.total_amount_minor)-minor(row.effective_amount_minor??row.total_amount_minor)),...(minor(row.effective_amount_minor??row.total_amount_minor)>minor(row.total_amount_minor)?{receivableIncreaseMinor:minor(row.effective_amount_minor??row.total_amount_minor)-minor(row.total_amount_minor)}:{}),
-      items:items.rows.filter(item=>item.order_id===row.id).map(item=>({id:item.id,name:item.name,quantity:item.quantity,...(item.work_quantity==null?{}:{workQuantity:item.work_quantity}),productId:item.product_id,categoryLabel:item.category_label??null,unitLabel:item.unit_label??null,bundleParentId:item.parent_order_item_id,
+      items:items.rows.filter(item=>item.order_id===row.id).map(item=>({id:item.id,name:item.name,quantity:item.quantity,...(item.fulfillment_closure_note?{fulfillmentClosureNote:item.fulfillment_closure_note}:{}),...(item.work_quantity==null?{}:{workQuantity:item.work_quantity}),productId:item.product_id,categoryLabel:item.category_label??null,unitLabel:item.unit_label??null,bundleParentId:item.parent_order_item_id,
         unitPriceMinor:minor(item.unit_price_minor),totalMinor:minor(item.total_amount_minor),includedInBundle:item.parent_order_item_id!=null,status:item.status,note:item.note,returnedQuantity:item.returned_quantity??0,...(item.stock_return_capability?{stockReturn:item.stock_return_capability}:{}),...(item.quantity_facts?{quantities:item.quantity_facts}:{}),
         deliveredAt:item.delivered_at??null,deliveredBy:item.delivered_by??null,preparedAt:item.prepared_at??null,preparedBy:item.prepared_by??null}))}))}
 }

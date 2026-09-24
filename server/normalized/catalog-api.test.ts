@@ -1235,6 +1235,7 @@ function fakeQuery(
       {
         id: employeeId,
         employee_code: "LIYAN",
+        resolved_at: '2026-08-11T10:00:00.123456Z',
         display_name: "李艳",
         status: "active",
       },

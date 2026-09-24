@@ -1298,7 +1298,8 @@ export function StaffActionsPanel({
           {permissions.includes('kds.prepare')&&fulfillment?.actor.allowedStations.includes('kitchen')&&<button type="button" onClick={()=>onNavigate?.('/staff/fulfillment?screen=kitchen')}>后厨制作屏</button>}
           {(permissions.includes('kds.deliver')||permissions.includes('staff.access.configure'))&&<button type="button" onClick={()=>onNavigate?.('/staff/fulfillment?screen=pickup')}>吧台取餐屏</button>}
         </nav>}
-        {threeScreenEnabled&&fulfillmentHistory==='delivery'&&<p role="status">在吧台取餐屏确认取走后，这里自动更新，无需手机再次确认。</p>}
+        {threeScreenEnabled&&fulfillment?.actor.pickupDeviceConfigured===false&&<p role="alert">尚未启用取餐设备，取走记录不会自动产生。请管理员在门店实际取餐平板打开“吧台取餐屏”，完成本机设置，再由取餐账号确认实物取走。</p>}
+        {threeScreenEnabled&&fulfillment?.actor.pickupDeviceConfigured!==false&&fulfillmentHistory==='delivery'&&<p role="status">在吧台取餐屏确认取走后，这里自动更新，无需手机再次确认。</p>}
         {!threeScreenEnabled&&kitchenEnabled&&fulfillmentHistory==='active'&&<KitchenProductionBoard key={operations.actor.id} api={api} employeeId={operations.actor.id}
           blocked={fulfillmentStale||pendingFulfillment.size>0||pendingKds.length>0||legacyKdsTaskIds.length>0}
           onChanged={()=>load(true)} onLegacy={setKitchenLegacyIds} onLoginRequired={onLoginRequired}/>}

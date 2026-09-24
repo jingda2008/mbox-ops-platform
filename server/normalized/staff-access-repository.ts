@@ -110,6 +110,7 @@ interface EmployeeRow extends Record<string, unknown> {
   employee_code: string
   display_name: string
   status: 'active' | 'suspended' | 'departed'
+  resolved_at: string
 }
 
 interface PermissionRow extends Record<string, unknown> {
@@ -167,9 +168,10 @@ export class StaffNotFoundError extends Error {
 export class StaffAccessRepository {
   constructor(private readonly transaction: ScopedTransaction) {}
 
-  async resolve(employeeId: string, resolvedAt = new Date().toISOString()): Promise<EffectiveStaffAccess> {
+  async resolve(employeeId: string, resolvedAt?: string): Promise<EffectiveStaffAccess> {
     const employeeResult = await this.transaction.query<EmployeeRow>(`
-      SELECT id, employee_code, display_name, status
+      SELECT id, employee_code, display_name, status,
+        to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS resolved_at
       FROM mbox.employees
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, employeeId])
@@ -178,6 +180,11 @@ export class StaffAccessRepository {
     if (employee.status !== 'active') {
       throw new StaffAccessDeniedError(`Employee is not active: ${employeeId}`)
     }
+
+    // Permission windows are stored with PostgreSQL microsecond precision. Use its
+    // clock without a JavaScript Date round-trip so a committed deny applies now.
+    resolvedAt ??= employee.resolved_at
+    if (!resolvedAt) throw new Error('Staff access evaluation time is unavailable')
 
     // A scoped transaction owns one PostgreSQL client; keep statements sequential on that client.
     const roles = await this.activeRoles(employeeId, resolvedAt)
@@ -232,7 +239,7 @@ export class StaffAccessRepository {
   async resolveApprovalAuthority(
     employeeId: string,
     approvalCode: string,
-    at = new Date().toISOString(),
+    at?: string,
   ): Promise<StaffApprovalAuthority | null> {
     const result = await this.transaction.query<ApprovalRow>(`
       SELECT al.id, al.approval_code, al.amount_minor::text, al.currency,
@@ -246,8 +253,8 @@ export class StaffAccessRepository {
       WHERE al.tenant_id = $1::uuid AND al.store_id = $2::uuid
         AND er.employee_id = $3::uuid AND al.approval_code = $4
         AND al.enabled = true AND r.status = 'active'
-        AND er.starts_at <= $5::timestamptz
-        AND (er.ends_at IS NULL OR er.ends_at > $5::timestamptz)
+        AND er.starts_at <= COALESCE($5::timestamptz, statement_timestamp())
+        AND (er.ends_at IS NULL OR er.ends_at > COALESCE($5::timestamptz, statement_timestamp()))
       ORDER BY al.amount_minor DESC NULLS LAST, al.id
       LIMIT 1
     `, [

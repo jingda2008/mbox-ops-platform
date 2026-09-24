@@ -326,7 +326,7 @@ function scriptedTransaction(permissionCodes: string[] = ['table.open']): Scoped
       const normalized = sql.replace(/\s+/g, ' ')
       let rows: Record<string, unknown>[]
       if (normalized.includes('FROM mbox.employees')) {
-        rows = [{ id: employeeId, employee_code: 'liyan', display_name: '李艳', status: 'active' }]
+        rows = [{ id: employeeId, employee_code: 'liyan', display_name: '李艳', status: 'active', resolved_at: '2026-08-11T10:00:00.123456Z' }]
       } else if (normalized.includes('permission_facts')) {
         rows = permissionCodes.map((code) => ({ code, role_granted: true, override_granted: false, override_denied: false }))
       } else if (normalized.includes('FROM mbox.employee_roles')) {

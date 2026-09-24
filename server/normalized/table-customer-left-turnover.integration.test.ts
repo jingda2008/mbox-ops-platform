@@ -1,3 +1,4 @@
+import {readOperatingHistory} from './operating-history-query.js'
 import { randomUUID } from 'node:crypto'
 import Fastify from 'fastify'
 import { ServiceTaskRepository } from './service-task-repository.js'
@@ -182,6 +183,11 @@ integration('customer-left table turnover', () => {
       }] })
     await expect(pool.query(`SELECT status FROM mbox.payments WHERE id=$1`, [fixture.paymentId]))
       .resolves.toMatchObject({ rows: [{ status: 'pending' }] })
+    const history=await runner.run({tenantId,storeId},tx=>readOperatingHistory(tx,{businessDate,table:'',employee:'',page:0,allowFinancialSummary:false}))
+    const closed=history.orders.find(order=>order.id===settled.orderId)!
+    expect(closed.items.find(item=>item.id===settled.unfulfilledItemId)).toMatchObject({status:'cancelled',fulfillmentClosureNote:'有出品记录；送达未登记；桌次已跨日结束'})
+    expect(closed.items.find(item=>item.id===settled.deliveredItemId)?.fulfillmentClosureNote).toBeUndefined()
+    expect(history.orders.find(order=>order.id===fixture.orderId)?.items.every(item=>item.fulfillmentClosureNote===undefined)).toBe(true)
     await expect(pool.query(`SELECT status,payment_status FROM mbox.orders WHERE id=$1`, [settled.orderId]))
       .resolves.toMatchObject({ rows: [{ status: 'submitted', payment_status: 'paid' }] })
     await expect(pool.query(`SELECT status FROM mbox.refunds WHERE id=$1`, [settled.refundId]))

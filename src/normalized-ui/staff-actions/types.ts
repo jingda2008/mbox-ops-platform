@@ -233,6 +233,7 @@ export interface StaffFulfillmentItem {
 export interface StaffFulfillmentData {
   actor: {
     threeScreenWorkflowEnabled?:boolean
+    pickupDeviceConfigured?:boolean
     sharedPickupActive?:boolean
     threeScreenRecoveryAvailable?:boolean
     kitchenBatchBoardEnabled?:boolean

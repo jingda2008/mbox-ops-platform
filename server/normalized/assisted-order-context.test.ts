@@ -83,7 +83,7 @@ function scriptedTransaction(input: {
         return result(input.denyContext ? [] : [contextRow()]) as PostgresQueryResult<Row>
       }
       if (sql.includes('FROM mbox.employees') && sql.includes('employee_code')) {
-        return result([{ id: employeeId, employee_code: 'LIYAN', display_name: '李艳', status: 'active' }]) as PostgresQueryResult<Row>
+        return result([{ id: employeeId, employee_code: 'LIYAN', display_name: '李艳', status: 'active', resolved_at: '2026-08-11T10:00:00.123456Z' }]) as PostgresQueryResult<Row>
       }
       if (sql.startsWith('SELECT DISTINCT r.code, r.name')) {
         return result([{ code: 'SERVICE', name: '服务员' }]) as PostgresQueryResult<Row>

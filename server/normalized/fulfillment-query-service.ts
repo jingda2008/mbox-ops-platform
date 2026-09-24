@@ -72,6 +72,7 @@ export interface FulfillmentStaffView {
     canViewAll: boolean
     kitchenBatchBoardEnabled?:boolean
     threeScreenWorkflowEnabled?:boolean
+    pickupDeviceConfigured?:boolean
     sharedPickupActive?:boolean
     threeScreenRecoveryAvailable?:boolean
     actionSessionValid?: boolean
@@ -146,9 +147,10 @@ export class FulfillmentQueryService {
         && (await readKitchenBatches(transaction,undefined,'kitchen')).length>0
       const barRecovery=canPrepare&&allowedStations.includes('bar')&&!this.threeScreenWorkflowEnabled
         && (await readKitchenBatches(transaction,undefined,'bar')).length>0
-      const sharedPickupActive=this.threeScreenWorkflowEnabled||(await transaction.query<{found:boolean}>(
+      const pickupDeviceConfigured=(await transaction.query<{found:boolean}>(
         `SELECT EXISTS(SELECT 1 FROM mbox.pickup_devices WHERE tenant_id=$1 AND store_id=$2 AND enabled) AS found`,
         [scope.tenantId,scope.storeId])).rows[0]?.found===true
+      const sharedPickupActive=this.threeScreenWorkflowEnabled||pickupDeviceConfigured
       const rows = await readFulfillmentRows(transaction, {
         employeeId,
         businessDate,
@@ -162,7 +164,7 @@ export class FulfillmentQueryService {
       })
 
       return {
-        actor: {...mapActor(access, allowedStations, canViewAll), threeScreenWorkflowEnabled:this.threeScreenWorkflowEnabled, sharedPickupActive, threeScreenRecoveryAvailable:barRecovery||sharedPickupActive, kitchenBatchBoardEnabled:canPrepare&&allowedStations.includes('kitchen')&&(this.kitchenBatchBoardEnabled||kitchenRecovery), ...(actionSession ? {actionSessionValid} : {})},
+        actor: {...mapActor(access, allowedStations, canViewAll), threeScreenWorkflowEnabled:this.threeScreenWorkflowEnabled, pickupDeviceConfigured, sharedPickupActive, threeScreenRecoveryAvailable:barRecovery||sharedPickupActive, kitchenBatchBoardEnabled:canPrepare&&allowedStations.includes('kitchen')&&(this.kitchenBatchBoardEnabled||kitchenRecovery), ...(actionSession ? {actionSessionValid} : {})},
         generatedAt: rows[0]?.generated_at ?? new Date().toISOString(),
         workItems: rows.map(row => { const item = mapWorkItem(row); return actionSessionValid ? item : { ...item, canPrepare:false, canDeliver:false, canRemake:false, attentionMessages:[...item.attentionMessages,'当前设备会话已失效，请恢复登录后继续原任务'] } }),
       }

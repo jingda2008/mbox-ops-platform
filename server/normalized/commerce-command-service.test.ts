@@ -244,7 +244,7 @@ describe('CommerceCommandService unit transaction composition', () => {
 
   it('requires a dedicated live permission and reason for manual KDS scheduling override', async () => {
     const transaction = new ScriptedTransaction([
-      { rows: [{ id: employeeId, employee_code: 'LIYAN', display_name: '李艳', status: 'active' }] },
+      { rows: [{ id: employeeId, employee_code: 'LIYAN', display_name: '李艳', status: 'active', resolved_at: '2026-08-11T10:00:00.123456Z' }] },
       { rows: [{ code: 'MANAGER', name: '店长' }] },
       { rows: [] },
       { rows: [] },

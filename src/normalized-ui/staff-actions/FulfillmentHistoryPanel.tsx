@@ -70,6 +70,7 @@ export function FulfillmentHistoryPanel({ api, kind, refreshRevision = 0, onOpen
       <div className="staff-fulfillment-history-items">{order.items.map(item => <div className="staff-fulfillment-history-item" key={item.id}>
         <strong>{item.name} · {item.workQuantity === undefined ? `原单 ${item.quantity} 份` : `本人${kind === 'prepared' ? '制作' : '送达'} ${item.workQuantity} 份`}</strong>{item.note && <p className="staff-action-note">备注：{item.note}</p>}
         {onOpenItem && <button type="button" disabled={!!error} onClick={() => onOpenItem(item.id)}>商品处理</button>}
+        {item.fulfillmentClosureNote&&<p>{item.fulfillmentClosureNote}</p>}
         <p>{kind === 'prepared' ? item.preparedBy : item.deliveredBy} · {((kind === 'prepared' ? item.preparedAt : item.deliveredAt)
           ? new Date((kind === 'prepared' ? item.preparedAt : item.deliveredAt)!).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) : '完成时间未留存')}</p>
       </div>)}</div>

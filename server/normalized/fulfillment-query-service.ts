@@ -417,6 +417,7 @@ function mapActor(
 function mapWorkItem(row: FulfillmentRow): FulfillmentWorkItem {
   const attentionMessages = [row.order_note, row.item_note]
     .filter((note): note is string => note !== null && note.trim().length > 0)
+  if(row.production_screen)attentionMessages.unshift(`本单已在${row.production_screen==='kitchen'?'后厨':'酒水'}制作屏开做；如仍显示旧版“制作完成”，请用浏览器刷新整个页面，再进入“制作中”继续，不要重新开做。`)
   if(row.remake_batch_id)attentionMessages.unshift(`重做 ${row.quantity} 份，原单金额不变，按本批实际数量制作和取送`)
   return {
     ...(row.quantity_facts?{quantities:row.quantity_facts}:{}),

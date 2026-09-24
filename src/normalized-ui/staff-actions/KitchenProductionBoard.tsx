@@ -1,4 +1,5 @@
 import {useCallback,useEffect,useMemo,useRef,useState,type ReactNode} from 'react'
+import {hasNewStaffPage} from './staff-page-version'
 import {useScreenViewport} from './use-screen-viewport'
 import {ScreenFullscreenButton} from './ScreenFullscreenButton'
 import {requiresStaffLogin} from './staff-session-error'
@@ -38,6 +39,13 @@ export function KitchenProductionBoard({api,employeeId,blocked,onChanged,onLegac
   const [drafts,setDrafts]=useState<Drafts>(()=>stored<{drafts:Drafts}>(storageKey,{drafts:{}}).drafts)
   const [selectedBatch,setSelectedBatch]=useState<string|null>(()=>stored<{selectedBatch?:string}>(storageKey,{}).selectedBatch??null)
   const [activePane,setActivePane]=useState<'pending'|'working'>(()=>selectedBatch?'working':'pending')
+  const initialPaneResolved=useRef(false)
+  const selectPane=(pane:'pending'|'working')=>{initialPaneResolved.current=true;setActivePane(pane)}
+  useEffect(()=>{
+    if(!data||initialPaneResolved.current)return
+    initialPaneResolved.current=true
+    if(!start&&data.pending.length===0&&data.batches.length>0)setActivePane('working')
+  },[data,start])
   const [page,setPage]=useState(()=>stored<{page?:number}>(storageKey,{}).page??0)
   const [now,setNow]=useState(Date.now())
   const readBusy=useRef(false),flight=useRef(false),readRevision=useRef(0),controller=useRef<AbortController|null>(null),alive=useRef(true)
@@ -103,6 +111,21 @@ export function KitchenProductionBoard({api,employeeId,blocked,onChanged,onLegac
   const timeValid=seconds===null||Number.isSafeInteger(seconds)&&seconds>0&&seconds<=36000
   const overdue=data?.batches.filter(item=>(!item.equipment||!item.releasedAt)&&item.startedAt&&item.expectedSeconds&&now-Date.parse(item.startedAt)>item.expectedSeconds*1000).length??0
 
+  async function refreshPage(){
+    if(flight.current||journal.pending())return
+    flight.current=true;setBusy(true)
+    try{
+      if(headerActions&&await hasNewStaffPage()){
+        if(!alive.current||journal.pending())return
+        // Persist the exact draft before loading a deployed UI update.
+        try{localStorage.setItem(storageKey,JSON.stringify({drafts,start,selectedBatch,page}))}
+        catch{setMessage('选择无法保存，请恢复设备存储后再刷新页面');return}
+        window.location.reload();return
+      }
+      await read()
+    }catch{/* read retains the last queue and displays its recovery state. */}
+    finally{flight.current=false;if(alive.current)setBusy(false)}
+  }
   function focusBatch(id:string,search=query){
     setSelectedBatch(id)
     const current=data?.batches.find(item=>item.id===id),find=search.trim().toLowerCase()
@@ -161,7 +184,7 @@ export function KitchenProductionBoard({api,employeeId,blocked,onChanged,onLegac
   return <section className="kitchen-board" style={viewport.style} data-short-viewport={viewport.short} aria-label={`${stationLabel}制作工作台`} onKeyDown={event=>{if(event.key==='Escape'&&!headerActions)setExpanded(false)}}>
     <header className="kitchen-top">{headerActions}<div><strong>{stationLabel}制作</strong>{overdue>0&&<small className="kitchen-warning">{overdue} 批计时已到 · 请核对实物</small>}<span className="kitchen-pickup-summary">待取 {data?.pickupSummary.awaitingPickup??0} · <span title="当前营业日累计">已取走 {data?.pickupSummary.pickedUpThisShift??0}</span></span></div>
       <label><span className="kitchen-search-label">找桌 / 品名 / 订单</span><input value={query} onChange={event=>{setQuery(event.target.value);if(selectedBatch)focusBatch(selectedBatch,event.target.value)}} placeholder="桌号、品名或订单"/></label>
-      <button type="button" onClick={()=>void read().catch(()=>{})} disabled={busy}>刷新</button>
+      <button type="button" onClick={()=>void refreshPage()} disabled={busy||!!unresolved} title={headerActions?'刷新队列；有新版时保留选择并更新页面':'重新读取队列'}>刷新</button>
       {headerActions?<ScreenFullscreenButton/>:<button type="button" onClick={()=>setExpanded(false)}>收起</button>}
     </header>
     <div className={`kitchen-notice ${stale?'is-stale':''} ${!stale&&!busy&&!unresolved&&!loginRequired&&message==='按下单时间排列；新单不会加入已经开做的批次'?'is-idle':''}`} data-action-reveal="off" role="status" aria-label={`${stationLabel}操作反馈`}><span>{busy?'正在核对原操作，请勿再次制作…':unresolved?'有原操作结果待确认，恢复后才能继续':message}{stale&&!busy?'；操作暂停，重新读取后继续':''}</span>
@@ -170,8 +193,8 @@ export function KitchenProductionBoard({api,employeeId,blocked,onChanged,onLegac
     </div>
     {data&&!data.canStart&&data.canPrepare&&<p className="kitchen-paused">新增制作已暂停；原批次可继续分装、放好或恢复原结果。</p>}
     <nav className="kitchen-view-switch" aria-label="制作工序切换">
-      <button type="button" aria-pressed={activePane==='pending'} onClick={()=>setActivePane('pending')}>待制作 {data?.pending.reduce((sum,item)=>sum+item.unmade,0)??0} 份</button>
-      <button type="button" aria-pressed={activePane==='working'} onClick={()=>setActivePane('working')}>制作中 {data?.batches.length??0} 批</button>
+      <button type="button" aria-pressed={activePane==='pending'} onClick={()=>selectPane('pending')}>待制作 {data?.pending.reduce((sum,item)=>sum+item.unmade,0)??0} 份</button>
+      <button type="button" aria-pressed={activePane==='working'} onClick={()=>selectPane('working')}>制作中 {data?.batches.length??0} 批</button>
     </nav>
     <div className="kitchen-columns" data-active-pane={activePane}>
       <section className={`kitchen-pane ${start&&group?'has-selection':'is-browsing'}`} aria-label="待制作"><h2>待制作 <span>{data?.pending.reduce((sum,item)=>sum+item.unmade,0)??0} 份</span></h2>

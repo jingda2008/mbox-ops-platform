@@ -103,8 +103,11 @@ integration('kitchen production real transaction boundary',()=>{
     const row=await item(),body=await start([row],null,3)
     const responses=await Promise.all([command(body),command(body)])
     expect(responses.map(response=>response.statusCode).sort()).toEqual([200,409])
-    await expect(runtime.run(scope,tx=>new ItemQuantityFulfillmentRepository(tx).complete({itemId:row.itemId,taskId:row.taskId,employeeId,quantity:5,eventKey:randomUUID()}))).rejects.toMatchObject({code:'QUANTITY_UNAVAILABLE'})
+    await expect(runtime.run(scope,tx=>new ItemQuantityFulfillmentRepository(tx).complete({itemId:row.itemId,taskId:row.taskId,employeeId,quantity:5,eventKey:randomUUID()}))).rejects.toMatchObject({code:'QUANTITY_UNAVAILABLE',message:expect.stringContaining('浏览器')})
     expect((await board()).pending.find(item=>item.taskId===row.taskId)?.unmade).toBe(2)
+    const queue=await new FulfillmentQueryService(runtime,true,true).getStaffWorkQueue(scope,employeeId,businessDate)
+    expect(queue.workItems.find(item=>item.taskId===row.taskId)).toMatchObject({productionScreen:'kitchen',attentionMessages:expect.arrayContaining([expect.stringContaining('浏览器')])})
+    expect((await pool.query('SELECT production_state FROM mbox.order_item_quantity_units WHERE order_item_id=$1 ORDER BY unit_index',[row.itemId])).rows.map(row=>row.production_state)).toEqual(['started','started','started','unmade','unmade'])
   })
   it('direct readiness selects only the requested unmade portions when legacy work is already started',async()=>{
     const row=await item('',true)

@@ -44,7 +44,12 @@ export class ItemQuantityFulfillmentRepository {
     const selectable=units.filter(unit=>!remade.has(unit.id)&&!unit.held_by_case_id&&!unit.operationally_stopped&&['unmade','started'].includes(unit.production_state)
       && (exact ? exact.has(unit.id) : !bound.has(unit.id)))
       .sort((a,b)=>Number(a.production_state==='unmade')-Number(b.production_state==='unmade')||a.unit_index-b.unit_index)
-    if(input.quantity>selectable.length)throw new ItemQuantityConflict('QUANTITY_UNAVAILABLE',`当前最多可完成${selectable.length}份，其余已完成、暂停或停止`)
+    if(input.quantity>selectable.length){
+      if(!exact&&units.some(unit=>bound.has(unit.id)&&!remade.has(unit.id)&&unit.production_state==='started'&&!unit.held_by_case_id&&!unit.operationally_stopped)){
+        throw new ItemQuantityConflict('QUANTITY_UNAVAILABLE','有份数已在制作屏开做，旧页面不能完成。请用浏览器刷新整个页面，进入对应制作屏的“制作中”继续；不要重新开做。')
+      }
+      throw new ItemQuantityConflict('QUANTITY_UNAVAILABLE',`当前最多可完成${selectable.length}份，其余已完成、暂停或停止`)
+    }
     const ids=selectable.slice(0,input.quantity).map(unit=>unit.id)
     await new ItemUnitInventoryRepository(this.tx).consumeUnheldUnits({itemId:input.itemId,unitIds:ids,employeeId:input.employeeId,taskId:input.taskId})
     await this.tx.query(`UPDATE mbox.order_item_quantity_units SET production_state='ready',updated_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND id=ANY($3::uuid[])`,[...this.scope,ids])

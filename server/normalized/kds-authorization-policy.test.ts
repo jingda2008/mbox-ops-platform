@@ -7,6 +7,7 @@ import {
   KDS_DELIVER_CAPABILITY,
   KDS_PREPARE_CAPABILITY,
   KdsAuthorizationError,
+  hasActiveKdsSession,
   NormalizedKdsAuthorization,
 } from './kds-authorization-policy.js'
 
@@ -242,6 +243,29 @@ postgresIntegration('NormalizedKdsAuthorization PostgreSQL integration', () => {
       INSERT INTO mbox.role_permission_assignments(tenant_id, store_id, role_id, permission_id)
       VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid) ON CONFLICT DO NOTHING
     `, [integrationTenantId, integrationStoreId, roleId, permissionId])
+  })
+
+  it('keeps an issued session usable after credential rotation while enforcing session and device revocation',async()=>{
+    const scope={tenantId:integrationTenantId,storeId:integrationStoreId}
+    const check=()=>runner.run(scope,transaction=>hasActiveKdsSession({transaction,employeeId:authorizedEmployeeId,staffSessionId,deviceAccessLeaseId:leaseId}),{readOnly:true})
+    expect(await check()).toBe(true)
+    try{
+      await pool.query('UPDATE mbox.store_daily_credentials SET revoked_at=clock_timestamp() WHERE id=$1',[credentialId])
+      expect(await check()).toBe(true)
+      await pool.query('UPDATE mbox.store_device_access_leases SET revoked_at=clock_timestamp() WHERE id=$1',[leaseId])
+      expect(await check()).toBe(false)
+      await pool.query('UPDATE mbox.store_device_access_leases SET revoked_at=NULL WHERE id=$1',[leaseId])
+      await pool.query('UPDATE mbox.staff_sessions SET revoked_at=clock_timestamp() WHERE id=$1',[staffSessionId])
+      expect(await check()).toBe(false)
+      await pool.query("UPDATE mbox.staff_sessions SET revoked_at=NULL,online_lease_until=issued_at WHERE id=$1",[staffSessionId])
+      expect(await check()).toBe(false)
+      await pool.query("UPDATE mbox.staff_sessions SET issued_at=statement_timestamp()-interval '7 hours',expires_at=statement_timestamp()-interval '1 hour',online_lease_until=statement_timestamp()-interval '1 hour' WHERE id=$1",[staffSessionId])
+      expect(await check()).toBe(false)
+    }finally{
+      await pool.query('UPDATE mbox.store_daily_credentials SET revoked_at=NULL WHERE id=$1',[credentialId])
+      await pool.query('UPDATE mbox.store_device_access_leases SET revoked_at=NULL WHERE id=$1',[leaseId])
+      await pool.query("UPDATE mbox.staff_sessions SET revoked_at=NULL,issued_at=statement_timestamp(),expires_at=statement_timestamp()+interval '6 hours',online_lease_until=statement_timestamp()+interval '10 minutes' WHERE id=$1",[staffSessionId])
+    }
   })
 
   it('keeps production station-scoped and lets delivery-capable staff support another table', async () => {

@@ -90,6 +90,17 @@ integration('kitchen production real transaction boundary',()=>{
     const nextView=await new FulfillmentQueryService(runtime).getStaffWorkQueue(scope,employeeId,businessDate)
     expect(nextView.workItems.find(item=>item.taskId===selection.items[0]!.taskId)).toMatchObject({readyForDelivery:true,deliveryNoticeVersion:2})
   })
+  it('continues an issued kitchen session and original batch after the login credential rotates',async()=>{
+    const row=await item(),created=await expectOk(await start([row],null,2))
+    try{
+      await pool.query('UPDATE mbox.store_daily_credentials SET revoked_at=clock_timestamp() WHERE id=$1',[credentialId])
+      expect((await board()).canPrepare).toBe(true)
+      await expectOk(await ready(created.batchId,1))
+      const current=(await board()).batches.find(batch=>batch.id===created.batchId)!
+      expect(current.units.filter(unit=>unit.state==='ready')).toHaveLength(1)
+      expect(current.units.filter(unit=>unit.state==='started')).toHaveLength(1)
+    }finally{await pool.query('UPDATE mbox.store_daily_credentials SET revoked_at=NULL WHERE id=$1',[credentialId])}
+  })
   it('rejects incompatible notes and rolls the whole batch back when inventory for a later item fails',async()=>{
     const first=await item(),second=await item('不要盐')
     const incompatible=await start([first,second]);expect((await command(incompatible)).statusCode).toBe(409)

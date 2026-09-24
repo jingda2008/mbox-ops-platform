@@ -90,6 +90,28 @@ integration('three-screen runtime SQL security and atomic receipts',()=>{
   const undo=(result:PickupCommandResult)=>({action:'undo',receiptId:result.receipt.receiptId,expectedRevision:result.receipt.revision,physicalStillAtPickupPoint:true} as const)
   async function ready(row:{itemId:string;taskId:string},quantity=5){return runtime.run(scope,tx=>new ItemQuantityFulfillmentRepository(tx).complete({...row,employeeId,quantity,eventKey:randomUUID()}))}
 
+  it('allows take and undo with an issued session after credential rotation, retaining receipt SQL guards',async()=>{
+    await configure()
+    const row=await item();await ready(row,1)
+    try{
+      await pool.query('UPDATE mbox.store_daily_credentials SET revoked_at=clock_timestamp() WHERE id=$1',[credentialId])
+      const taken=await ok(await take(row,1))
+      expect(taken.receipt.quantity).toBe(1)
+      await ok(undo(taken))
+      const group=(await board()).tables.find(group=>group.tableSessionId===row.tableSessionId)!
+      expect(group.units).toHaveLength(1)
+      await pool.query('UPDATE mbox.store_device_access_leases SET revoked_at=clock_timestamp() WHERE id=$1',[leaseId])
+      await expect(runtime.run(scope,tx=>rawReceipt(tx,group.units,group.units[0]!))).rejects.toThrow('pickup source lease invalid')
+      await pool.query('UPDATE mbox.store_device_access_leases SET revoked_at=NULL WHERE id=$1',[leaseId])
+      await pool.query('UPDATE mbox.staff_sessions SET revoked_at=clock_timestamp() WHERE id=$1',[staffSessionId])
+      await expect(runtime.run(scope,tx=>rawReceipt(tx,group.units,group.units[0]!))).rejects.toThrow('pickup source session invalid')
+    }finally{
+      await pool.query('UPDATE mbox.store_daily_credentials SET revoked_at=NULL WHERE id=$1',[credentialId])
+      await pool.query('UPDATE mbox.store_device_access_leases SET revoked_at=NULL WHERE id=$1',[leaseId])
+      await pool.query('UPDATE mbox.staff_sessions SET revoked_at=NULL WHERE id=$1',[staffSessionId])
+    }
+  })
+
   async function rawReceipt(tx:ScopedTransaction,units:PickupUnit[],table:Pick<PickupUnit,'tableId'|'tableSessionId'|'locationVersion'|'tableCode'>,receiptId=randomUUID()){
     const device=(await tx.query<{id:string;label:string}>('SELECT id,label FROM mbox.pickup_devices WHERE tenant_id=$1 AND store_id=$2 AND enabled',[tenantId,storeId])).rows[0]!
     const at=new Date().toISOString(),snapshot:PickupReceipt={receiptId,revision:1,tableId:table.tableId,tableCode:table.tableCode,tableSessionId:table.tableSessionId,takenAt:at,deliveryConfirmedAt:at,deliverySource:'pickup',source:{kind:'shared_pickup_device',deviceId:device.id,label:device.label},pickerEmployeeId:null,units,quantity:units.length,undo:null,canUndo:true,undoBlockedReason:null}

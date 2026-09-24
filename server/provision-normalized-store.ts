@@ -24,6 +24,7 @@ export interface StoreProvisionConfig {
     layout?: Record<string, unknown>
   }>
   tables: Array<{
+    renameFrom?: string
     code: string
     name: string
     areaCode: string
@@ -139,6 +140,7 @@ export function parseStoreProvisionConfig(value: unknown): StoreProvisionConfig 
     }
     return {
       code: code(table.code, `tables[${index}].code`),
+      ...(table.renameFrom === undefined ? {} : { renameFrom: code(table.renameFrom, `tables[${index}].renameFrom`) }),
       name: text(table.name, `tables[${index}].name`),
       areaCode: code(table.areaCode, `tables[${index}].areaCode`),
       capacity,
@@ -291,6 +293,10 @@ export function parseStoreProvisionConfig(value: unknown): StoreProvisionConfig 
   }
   assertUnique(result.areas.map((entry) => entry.code), 'area code')
   assertUnique(result.tables.map((entry) => entry.code), 'table code')
+  const tableCodes = new Set(result.tables.map((entry) => entry.code))
+  const renameSources = result.tables.flatMap((entry) => entry.renameFrom === undefined ? [] : [entry.renameFrom])
+  assertUnique(renameSources, 'table rename source')
+  if (renameSources.some((source) => tableCodes.has(source))) throw new TypeError('table rename source overlaps a target code')
   assertUnique(result.roles.map((entry) => entry.code), 'role code')
   assertUnique(result.employees.map((entry) => entry.code), 'employee code')
   const areaCodes = new Set(result.areas.map((entry) => entry.code))
@@ -389,13 +395,28 @@ export async function provisionNormalizedStore(input: {
       areaIds.set(area.code, requiredRow(result.rows[0], `area ${area.code}`).id)
     }
     for (const table of input.config.tables) {
+      let provisionCode = table.code
+      if (table.renameFrom !== undefined) {
+        const matches = await client.query<{ id: string; code: string }>(`
+          SELECT id, code FROM mbox.tables
+          WHERE tenant_id=$1 AND store_id=$2 AND code=ANY($3::text[])
+          ORDER BY id FOR UPDATE`, [tenant.id, store.id, [table.code, table.renameFrom]])
+        if (matches.rows.length > 1) {
+          throw new Error(`Ambiguous table rename ${table.renameFrom} -> ${table.code}: both tables exist`)
+        }
+        const previous = matches.rows.find((row) => row.code === table.renameFrom)
+        // Provisioning runs before application activation. Preserve the printed
+        // code until the compatible frontend is live; the audited roster tool
+        // finalizes the rename afterwards. Never create a duplicate table here.
+        if (previous) provisionCode = previous.code
+      }
       await client.query(`INSERT INTO mbox.tables(
           tenant_id, store_id, area_id, code, display_name, capacity, minimum_spend_minor, currency, layout_snapshot)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
         ON CONFLICT (tenant_id, store_id, code) DO UPDATE SET area_id = EXCLUDED.area_id,
           display_name = EXCLUDED.display_name, capacity = EXCLUDED.capacity,
           minimum_spend_minor = EXCLUDED.minimum_spend_minor, layout_snapshot = EXCLUDED.layout_snapshot,
-          status = 'available'`, [tenant.id, store.id, areaIds.get(table.areaCode), table.code,
+          status = 'available'`, [tenant.id, store.id, areaIds.get(table.areaCode), provisionCode,
         table.name, table.capacity, table.minimumSpendMinor ?? null, store.currency, JSON.stringify(table.layout)])
     }
 

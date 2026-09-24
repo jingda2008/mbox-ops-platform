@@ -28,6 +28,14 @@
     {
       "version": "2026.09.20-v25",
       "sha256": "4acdf69d2fe2453082d9e0afe5c5b372e453f7c5d67704583aa2e5430ed458b1"
+    },
+    {
+      "version": "2026.09.25-v26",
+      "sha256": "2a6175ad26e8efb7f53ce5688363132ee30d993aa3825e55c7db6e896874562e"
+    },
+    {
+      "version": "2026.09.25-v27",
+      "sha256": "5c42e3cd098a85b6a1da45d05b17b48470b00a947fd7edb4e73a9a064ac56aa0"
     }
   ]
 }

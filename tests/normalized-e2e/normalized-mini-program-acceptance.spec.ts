@@ -169,7 +169,7 @@ test('waiting_for_table resumes the same trusted QR into the real menu without a
         data: {
           status: 'waiting_for_table',
           message: '桌位已识别，请告知身边的服务人员为本桌开台。开台后菜单会自动出现。',
-          table: { code: 'W01', displayName: '室外 W01' },
+          table: { code: 'W1', displayName: '室外 W1' },
         },
       }),
     })
@@ -196,10 +196,10 @@ test('employee table observation is text-only and customer surfaces have no voic
   await page.getByRole('button', { name: /进入工作台/ }).click()
   await expect(page.getByTestId('normalized-workspace')).toBeVisible()
   await page.goto('/staff/live')
-  await page.getByLabel('搜索桌号或区域').fill('W01')
-  await page.locator('.staff-table-tile').filter({ hasText: 'W01' }).click()
+  await page.getByLabel('搜索桌号或区域').fill('W1')
+  await page.locator('.staff-table-tile').filter({ has: page.getByText('W1', { exact: true }) }).click()
   await page.getByRole('button', { name: '记录桌台情况' }).click()
-  const observation = page.getByRole('dialog', { name: 'W01记录桌台情况' })
+  const observation = page.getByRole('dialog', { name: 'W1记录桌台情况' })
   await expect(observation).toBeVisible()
   await expect(observation.getByLabel('一句话记录')).toBeVisible()
   await expect(observation.getByText(/语音记录|麦克风/)).toHaveCount(0)

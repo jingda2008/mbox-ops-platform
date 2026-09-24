@@ -54,10 +54,10 @@ integration('current M-BOX commercial configuration', () => {
       expectedCommitSha: sourceCommitSha,
     })
 
-    expect(provisionedStore).toMatchObject({ areaCount: 6, tableCount: 65, roleCount: 14, employeeCount: 13 })
+    expect(provisionedStore).toMatchObject({ areaCount: 6, tableCount: 68, roleCount: 14, employeeCount: 13 })
     expect(provisionedCatalog).toMatchObject({ productCount: 81, activeProductCount: 81, bundleCount: 17 })
     expect(readiness.snapshot).toMatchObject({
-      activeTables: 65,
+      activeTables: 68,
       activeEmployees: 13,
       activeProducts: 81,
       productsMissingCurrentPrice: 0,
@@ -68,14 +68,14 @@ integration('current M-BOX commercial configuration', () => {
       kdsRolesMissingStationScopes: [],
       operationalRolesMissingPermissions: [],
       tablesMissingMinimumSpend: 0,
-      tablesMissingLayout: 0,
+      tablesMissingLayout: 29,
     })
     expect(readiness.status).toBe('blocked')
-    expect(readiness.issues).toEqual([
-      expect.objectContaining({ severity: 'blocker', code: 'miniprogram.release_evidence_missing' }),
+    expect(readiness.issues.map(issue=>issue.code).sort()).toEqual([
+      'miniprogram.release_evidence_missing', 'tables.layout_unconfirmed',
     ])
-    expect(store.tables.every((table) => table.minimumSpendMinor === 0)).toBe(true)
-    expect(store.tables.every((table) => Object.keys(table.layout ?? {}).length > 0)).toBe(true)
+    expect(store.tables.every(table=>table.minimumSpendMinor === 0)).toBe(true)
+    expect(store.tables.filter(table=>Object.keys(table.layout ?? {}).length === 0)).toHaveLength(29)
     const inventoryModes = await readProductInventoryModes(databaseUrl!, tenantId, storeId)
     expect(inventoryModes.food).toEqual(['not_managed'])
     expect(inventoryModes.nonFood).toEqual(['tracked'])

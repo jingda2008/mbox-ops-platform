@@ -160,9 +160,9 @@ test('manager mobile pages prioritize current actions and keep low-frequency det
   await page.getByRole('button', { name: /人员与责任桌/ }).click()
   await expect(page.getByLabel('搜索责任区域或桌台')).toBeVisible()
   const areas = page.locator('.staff-assignment-area')
-  expect(await areas.count()).toBeGreaterThanOrEqual(6)
+  expect(await areas.count()).toBe(3) // Current roster uses VIP, indoor and outdoor areas.
   expect(await page.locator('.staff-assignment-area label').count()).toBeLessThanOrEqual(10)
-  await page.getByLabel('搜索责任区域或桌台').fill('W01')
+  await page.getByLabel('搜索责任区域或桌台').fill('W20')
   await expect(page.locator('.staff-assignment-area label')).toHaveCount(1)
   await expectNoHorizontalOverflow(page, 'responsibility assignment')
   await expectTouchTargets(page, '.staff-assignment-panel', 'responsibility assignment')

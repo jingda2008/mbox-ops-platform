@@ -22,16 +22,16 @@ test('table primary actions, more actions and return navigation preserve the lis
   await page.route('**/api/operations', async route => {
     const response = await route.fetch()
     const body = await response.json()
-    const table = (body.data as StaffOperationsData).tables.find(table => table.code === 'W01')
+    const table = (body.data as StaffOperationsData).tables.find(table => table.code === 'W1')
     if (table?.activeSession) table.activeSession.unpaidOrderCount = Math.max(1, table.activeSession.unpaidOrderCount)
     await route.fulfill({ response, json: body })
   })
   await page.getByRole('button', { name: '现场', exact: true }).first().click()
   await expect(page.locator('.staff-table-financial-alert')).toContainText('待收款')
   await page.getByRole('group', { name: '桌台显示范围' }).getByRole('button', { name: /^全部/ }).click()
-  await page.getByLabel('搜索桌号或区域').fill('W01')
+  await page.getByLabel('搜索桌号或区域').fill('W1')
   await page.locator('.staff-table-tile').first().click()
-  const dialog = page.getByRole('dialog', { name: 'W01桌台操作' })
+  const dialog = page.getByRole('dialog', { name: 'W1桌台操作' })
   await expect(dialog.getByRole('button', { name: '本桌收款', exact: true })).toBeVisible()
   await expect(dialog.getByRole('button', { name: '协助点单', exact: true })).toBeVisible()
   await expect(dialog.getByRole('button', { name: '转桌', exact: true })).toBeHidden()
@@ -42,7 +42,7 @@ test('table primary actions, more actions and return navigation preserve the lis
   await dialog.getByRole('button', { name: '关闭桌台操作' }).click()
   await page.getByRole('button', { name: '工作台', exact: true }).click()
   await page.goBack()
-  await expect(page.getByLabel('搜索桌号或区域')).toHaveValue('W01')
+  await expect(page.getByLabel('搜索桌号或区域')).toHaveValue('W1')
   await expect(page.getByRole('group', { name: '桌台显示范围' }).getByRole('button', { name: /^全部/ })).toHaveClass(/is-active/)
   await page.getByLabel('搜索桌号或区域').fill('')
   await page.evaluate(() => window.scrollTo(0, 500))
@@ -70,7 +70,7 @@ test('shared refund todo is counted once, opens its original record and preserve
   const baseline = await (await page.request.get('/api/payments/workbench?limit=100')).json()
   const refund = { id: 'ui-refund', publicId: 'UI-REFUND', paymentId: 'ui-payment', providerRefundId: null, amountMinor: 100, currency: 'CNY', status: 'requested', providerSubmissionState: 'not_started', reason: '浏览器只读展示核对', requestedByEmployeeId: 'another-employee', requestedByEmployeeName: '申请同事', approvedByEmployeeId: null, approvedByEmployeeName: null, decisionReason: null, receiptReference: null, completedAt: null, createdAt: new Date().toISOString(), allocations: [] }
   const payment = { id: 'ui-payment', publicId: 'UI-PAYMENT', provider: 'cash', method: 'cash', providerTransactionId: null, providerActionState: null, retryReleasedAt: null, retryReleaseReason: null, amountMinor: 100, currency: 'CNY', status: 'succeeded', succeededAt: new Date().toISOString(), createdAt: new Date().toISOString(), reservedRefundAmountMinor: 100, remainingRefundableMinor: 0, refundableItems: [], refunds: [refund] }
-  const order = { id: 'ui-order', publicId: 'UI-ORDER', tableCode: 'W01', channel: 'staff_assisted', status: 'confirmed', paymentStatus: 'paid', totalAmountMinor: 100, outstandingAmountMinor: 0, overCollectedAmountMinor: 0, currency: 'CNY', submittedAt: new Date().toISOString(), createdAt: new Date().toISOString(), items: [], kdsTasks: [], payments: [payment] }
+  const order = { id: 'ui-order', publicId: 'UI-ORDER', tableCode: 'W1', channel: 'staff_assisted', status: 'confirmed', paymentStatus: 'paid', totalAmountMinor: 100, outstandingAmountMinor: 0, overCollectedAmountMinor: 0, currency: 'CNY', submittedAt: new Date().toISOString(), createdAt: new Date().toISOString(), items: [], kdsTasks: [], payments: [payment] }
   let fail = 0
   let writes = 0
   page.on('request', request => { if (/\/api\/(refunds|payments)\//.test(request.url()) && request.method() !== 'GET') writes++ })
@@ -127,7 +127,7 @@ test('member workspace uses existing authorized routes and retains the last busi
 test('return-state memory is cleared when another employee signs in', async ({ page }) => {
   const fixture = await login(page)
   await page.getByRole('button', { name: '现场', exact: true }).first().click()
-  await page.getByLabel('搜索桌号或区域').fill('W01')
+  await page.getByLabel('搜索桌号或区域').fill('W1')
   await page.getByRole('button', { name: /切换账号/ }).click()
   const dialog = page.getByRole('dialog', { name: '切换员工', exact: true })
   await dialog.getByLabel('下一位员工账号').fill('tom')

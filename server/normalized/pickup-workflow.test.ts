@@ -1,6 +1,7 @@
 import {createHash,randomUUID} from 'node:crypto'
 import {readFileSync,writeFileSync} from 'node:fs'
 import {readPhysicalPickupUnits} from './pickup-workflow-query.js'
+import {readOperatingHistory} from './operating-history-query.js'
 import Fastify from 'fastify'
 import {Pool} from 'pg'
 import {afterAll,beforeAll,describe,expect,it} from 'vitest'
@@ -317,6 +318,23 @@ integration('trusted pickup exact physical transaction boundary',()=>{
       expect(denied.statusCode,denied.body).toBe(409);expect(denied.json().error).toMatchObject({code:'PICKUP_ADMISSION_PAUSED',commitDisposition:'not_committed'})
       expect((await act(body)).statusCode).toBe(403)
     }finally{await paused.close();await configure()}
+  })
+  it('keeps shared delivery history exact after a table rename and excludes undone receipts',async()=>{
+    const one=await item(),ten=await item()
+    await pool.query("UPDATE mbox.tables SET code='W01',display_name='W01' WHERE id=$1",[one.tableId])
+    await pool.query("UPDATE mbox.tables SET code='W10',display_name='W10' WHERE id=$1",[ten.tableId])
+    await ready(one,1);await ready(ten,1)
+    const picked=await ok(await take(one));await ok(await take(ten))
+    await pool.query("UPDATE mbox.tables SET code='W1',display_name='W1' WHERE id=$1",[one.tableId])
+    const read=(table:string)=>runtime.run(scope,tx=>readOperatingHistory(tx,{businessDate,table,employee:'',page:0,
+      allowFinancialSummary:false,workKind:'delivered',sharedDeliveryScope:{employeeId,canViewAllTables:true}}),{readOnly:true})
+    for(const table of ['W1','w01']){
+      const rows=(await read(table)).sharedDeliveries!
+      expect(rows.map(row=>row.receiptId)).toEqual([picked.receipt.receiptId])
+      expect(rows[0]).toMatchObject({tableCode:'W1',pickupTableCode:'W01'})
+    }
+    await ok({action:'undo',receiptId:picked.receipt.receiptId,expectedRevision:picked.receipt.revision,physicalStillAtPickupPoint:true})
+    expect((await read('W1')).sharedDeliveries).toEqual([])
   })
   it('RLS hides other scopes, immutable receipts resist edits, and revoked devices reject cached actions with unknown disposition',async()=>{
     const row=await item();await ready(row);const body=await take(row),key=randomUUID(),picked=await ok(body,key)

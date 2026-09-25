@@ -153,7 +153,7 @@ describe('CashierAfterSalesWorkbenchView', () => {
       onMutation: vi.fn(async () => true),
     }))
 
-    expect(html).toContain('单号、桌号或金额（如 136）')
+    expect(html).toContain('完整桌号优先，也可查单号或金额')
     expect(html).toContain('全部区域')
     expect(html).toContain('室内区')
     expect(html).toContain('外摆区')

@@ -114,6 +114,13 @@ describe('staff actions model', () => {
     expect(visibleStaffTables([refundOnly], 'unpaid', '', attention)).toEqual([])
   })
 
+  it('resolves complete and legacy codes before area text while keeping responsibility filters',()=>{
+    const rows=[{...table,id:'one',code:'W1',assignedToActor:false},{...table,id:'ten',code:'W10',areaName:'W1旁边',assignedToActor:true}]
+    expect(visibleStaffTables(rows,'all','w1').map(row=>row.id)).toEqual(['one'])
+    expect(visibleStaffTables(rows,'all','w01').map(row=>row.id)).toEqual(['one'])
+    expect(visibleStaffTables(rows,'mine','w1')).toEqual([])
+    expect(visibleStaffTables(rows,'all','W').map(row=>row.id)).toEqual(['one','ten'])
+  })
   it('counts each financially affected table once without treating a provider query as table state', () => {
     const withSession = (id: string, financialState: NonNullable<StaffActionTable['activeSession']>['financialState'],
       unpaidOrderCount: number, pendingPaymentCount: number, refundAttentionCount: number,

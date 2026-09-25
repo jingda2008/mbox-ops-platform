@@ -20,6 +20,26 @@ async function choose(page:Page,quantity:number){
   await board(page).getByLabel('本批份数',{exact:true}).fill(String(quantity))
   await board(page).getByLabel('实际设备',{exact:true}).fill('隔离炸篮 A')
 }
+test('完整桌号搜索不混入其他桌订单号或编号前缀',async({page},testInfo)=>{
+  await login(page)
+  const initial=await data(page),source=initial.pending[0]!
+  const pending=['A5','B2','W1','W10'].map((code,index)=>({...source,taskId:`search-task-${index}`,tableCode:code,
+    productName:`检索测试${code}菜品`,specification:`search-${index}`,orderPublicId:code==='B2'?'order-b2-ca546-sample':`order-${index}`}))
+  await page.route(/\/api\/commerce\/kitchen-board(?:\?.*)?$/,route=>route.fulfill({json:{data:{...initial,pending,batches:[],canStart:false,canPrepare:false}}}))
+  await page.reload()
+  const cards=board(page).locator('.kitchen-group'),search=board(page).getByLabel('找桌 / 品名 / 订单')
+  await expect(cards).toHaveCount(4)
+  for(const term of ['a5','A05']){
+    await search.fill(term);await expect(cards).toHaveCount(1);await expect(cards).toContainText('检索测试A5菜品')
+  }
+  for(const term of ['w1','w01']){
+    await search.fill(term);await expect(cards).toHaveCount(1);await expect(cards).toContainText('检索测试W1菜品')
+  }
+  await search.fill('A6');await expect(cards).toHaveCount(0)
+  await search.fill('ca546');await expect(cards).toHaveCount(1);await expect(cards).toContainText('检索测试B2菜品')
+  await search.fill('检索测试');await expect(cards).toHaveCount(4)
+  await search.fill('a5');await page.screenshot({path:testInfo.outputPath('exact-table-search.png'),fullPage:true})
+})
 test('60单180份：低高度双板、真实开批、跨页草稿、出锅释放及取送状态',async({page},testInfo)=>{
   const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message))
   const fixture=await login(page);expect(fixture.kitchenBatchFixture.orders).toBe(60)

@@ -23,6 +23,13 @@ describe('StaffActionsPanel', () => {
     expect(filterFulfillmentQueue(tasks, 'delivery', 'b05')).toHaveLength(1)
   })
 
+  it('keeps complete table matching separate from product-name matches in fulfillment',()=>{
+    const rows=[{taskId:'one',readyForDelivery:true,table:{code:'W1'},item:{productName:'气泡水'}},
+      {taskId:'ten',readyForDelivery:true,table:{code:'W10'},item:{productName:'W1套餐'}}] as StaffFulfillmentData['workItems']
+    expect(filterFulfillmentQueue(rows,'delivery','W01').map(row=>row.taskId)).toEqual(['one'])
+    expect(filterFulfillmentQueue(rows,'delivery','W1').map(row=>row.taskId)).toEqual(['one'])
+    expect(filterFulfillmentQueue(rows,'delivery','套餐').map(row=>row.taskId)).toEqual(['ten'])
+  })
   it('distinguishes confirmed refunds from a settled bill', () => {
     expect(tableFinancialLabel('refunded')).toBe('已退款')
     expect(tableFinancialLabel('partially_refunded')).toBe('已结清 · 含退款')
@@ -250,6 +257,11 @@ describe('StaffActionsPanel', () => {
     expect(normalizeMemberBenefitScanCode('MBOX_MEMBER_V1:MBX-1001')).toBe('MBX-1001')
     expect(filterMemberBenefitTasks(tasks,'MBOX_CLAIM_V1:DSN-ABCDEFGHIJ').dailySnacks).toHaveLength(1)
     expect(filterMemberBenefitTasks(tasks,'', 'session-2').dailySnacks[0]?.claimCode).toBe('DSN-ABCDEFGHIJ')
+    tasks.annualGifts[0]!.tableCode='A5'
+    tasks.dailySnacks[0]!.claimCode='DSN-A5-COLLISION'
+    expect(filterMemberBenefitTasks(tasks,'a5').annualGifts).toHaveLength(1)
+    expect(filterMemberBenefitTasks(tasks,'a5').dailySnacks).toHaveLength(0)
+    expect(filterMemberBenefitTasks(tasks,'A05').annualGifts).toHaveLength(1)
     const source = readFileSync(new URL('./StaffActionsPanel.tsx', import.meta.url), 'utf8')
     expect(source).toContain('扫描会员码或点心核销码')
     expect(source).toContain('会员权益待办')

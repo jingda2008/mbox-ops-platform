@@ -88,7 +88,7 @@ export function OperatingHistoryPanel({api,businessDate,standalone=false,initial
     <p>按营业日查询；超期未结和退款待办保留可见。查看历史记录不会增加退款或打印权限。</p>
     <nav aria-label="常用营业日"><button type="button" disabled={busy} onClick={()=>selectDay(businessDate)}>当前营业日</button><button type="button" disabled={busy} onClick={()=>selectDay(new Date(Date.parse(`${businessDate}T00:00:00Z`)-86400000).toISOString().slice(0,10))}>上一营业日</button><span>{date} 至 {endDate}</span></nav>
     <form onSubmit={event=>{event.preventDefault();void read()}}>
-      <label>搜索<input value={search} maxLength={80} placeholder="桌号、订单号或金额（如136）" onChange={event=>{reset();setSearch(event.target.value)}} /></label>
+      <label>搜索<input value={search} maxLength={80} placeholder="完整桌号优先匹配，也可查订单号或金额" onChange={event=>{reset();setSearch(event.target.value)}} /></label>
       <details><summary>日期与更多筛选</summary>      <label>区域<input value={area} maxLength={80} placeholder="全部区域" onChange={event=>{reset();setArea(event.target.value)}} /></label>
       <label>支付状态<select value={paymentStatus} onChange={event=>{reset();setPaymentStatus(event.target.value)}}>
         <option value="">全部状态</option><option value="unpaid">待支付</option><option value="pending">支付中</option><option value="partially_paid">部分付款</option><option value="paid">已支付</option><option value="partially_refunded">部分退款</option><option value="refunded">已退款</option>

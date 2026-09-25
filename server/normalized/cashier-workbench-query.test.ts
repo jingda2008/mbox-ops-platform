@@ -109,6 +109,7 @@ describe('PostgresCashierWorkbenchQuery', () => {
       null,
       null,
       null,
+      'VIP1',
     ])
     expect(runner.calls[0]?.sql).toContain("workbench_assignment.assignment_type IN ('primary','backup')")
     expect(runner.readOnly).toBe(true)
@@ -126,7 +127,7 @@ describe('PostgresCashierWorkbenchQuery', () => {
       capabilities: ['reconciliation.view'], query: '136', areaId, paymentState: 'processing', limit: 20,
     })
     expect(runner.calls[0]?.values).toEqual([
-      tenantId, storeId, '2026-08-13', '136', 20, employeeId, true, areaId, 'processing', 13_600,
+      tenantId, storeId, '2026-08-13', '136', 20, employeeId, true, areaId, 'processing', 13_600, '136',
     ])
     expect(runner.calls[0]?.sql).toContain('orders.total_amount_minor=$10::bigint')
     expect(runner.calls[0]?.sql).toContain('area.id=$8::uuid')
@@ -695,6 +696,17 @@ integration('PostgresCashierWorkbenchQuery PostgreSQL integration', () => {
     expect(stale.summary.carryoverPendingPaymentCount).toBe(0)
   })
 
+  it('does not mix activity payment IDs into a complete table lookup',async()=>{
+    const original=(await pool.query('SELECT public_id FROM mbox.community_activity_registrations WHERE id=$1',[integrationActivityRegistrationId])).rows[0].public_id
+    await pool.query("UPDATE mbox.community_activity_registrations SET public_id='activity-VIP1-search-collision' WHERE id=$1",[integrationActivityRegistrationId])
+    try{
+      const view=await query.get({scope:{tenantId:integrationTenantId,storeId:integrationStoreId},employeeId:integrationApproverId,
+        businessDate:'2026-08-13',capabilities:['reconciliation.view','community.activity.cashier'],query:'vip1',limit:20})
+      expect(view.orders.length).toBeGreaterThan(0)
+      expect(view.orders.every(order=>order.tableCode==='VIP1')).toBe(true)
+      expect(view.activityRegistrations).toEqual([])
+    }finally{await pool.query('UPDATE mbox.community_activity_registrations SET public_id=$2 WHERE id=$1',[integrationActivityRegistrationId,original])}
+  })
   it('keeps every historical late success with refundable money in the activity queue while excluding a newer fully-refunded payment', async () => {
     const view = await query.get({
       scope: { tenantId: integrationTenantId, storeId: integrationStoreId },

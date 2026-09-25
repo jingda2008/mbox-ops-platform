@@ -40,6 +40,20 @@ integration('customer experience analytics PostgreSQL contract', () => {
 
   afterAll(async () => { await pool?.end() })
 
+  it('keeps renamed table evidence reachable by the approved old code',async()=>{
+    await pool.query("UPDATE mbox.tables SET code='A1',display_name='A1' WHERE id=$1",[friendsTableId])
+    try{
+      for(const tableCode of ['A1','a01']){
+        const evidence=await transactions.run({tenantId,storeId},tx=>new CustomerExperienceAnalyticsRepository(tx).dashboard({
+          from:'2026-08-01T00:00:00.000Z',until:'2026-08-08T00:00:00.000Z',productId:null,employeeId:null,partySize:null,
+          occasion:null,performancePhase:null,tableCode,packageProductId:null,recommendationOutcome:'all',
+        }),{readOnly:true})
+        expect(evidence.dataQuality.totalInputs).toBe(1)
+        expect(evidence.products).toHaveLength(1)
+      }
+    }finally{await pool.query("UPDATE mbox.tables SET code='A01',display_name='A01' WHERE id=$1",[friendsTableId])}
+  })
+
   it('executes all normalized analytics queries without snapshot-based decisions', async () => {
     const view = await transactions.run({ tenantId,storeId }, (transaction) => (
       new CustomerExperienceAnalyticsRepository(transaction).dashboard({

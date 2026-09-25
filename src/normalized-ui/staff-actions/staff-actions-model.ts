@@ -1,3 +1,4 @@
+import {tableSearchMatcher} from '../../shared/table-search'
 import type {
   StaffActionPermission,
   StaffActionTable,
@@ -224,10 +225,9 @@ export function visibleStaffTables(
   query: string,
   attentionTableIds: ReadonlySet<string> = new Set(),
 ): StaffActionTable[] {
-  const normalizedQuery = query.trim().toLocaleLowerCase('zh-CN')
+  const matches = tableSearchMatcher(query,tables.map(table=>table.code))
   return tables.filter((table) => {
-    const matchesQuery = normalizedQuery.length === 0
-      || `${table.code} ${table.displayName} ${table.areaName}`.toLocaleLowerCase('zh-CN').includes(normalizedQuery)
+    const matchesQuery = matches(table.code,table.displayName,table.areaName)
     if (!matchesQuery) return false
     if (scope === 'all') return true
     if (scope === 'unpaid') return table.activeSession !== null

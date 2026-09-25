@@ -1,4 +1,5 @@
 import {useCallback,useEffect,useMemo,useRef,useState,type ReactNode} from 'react'
+import {tableSearchMatcher} from '../../shared/table-search'
 import {hasNewStaffPage} from './staff-page-version'
 import {useScreenViewport} from './use-screen-viewport'
 import {ScreenFullscreenButton} from './ScreenFullscreenButton'
@@ -85,7 +86,8 @@ export function KitchenProductionBoard({api,employeeId,blocked,onChanged,onLegac
   useEffect(()=>{if(!expanded)return;const old=document.body.style.overflow;document.body.style.overflow='hidden'
     return()=>{document.body.style.overflow=old}},[expanded])
 
-  const needle=query.trim().toLowerCase()
+  const tableCodes=[...(data?.pending??[]).map(item=>item.tableCode),...(data?.batches??[]).flatMap(item=>item.units.map(unit=>unit.tableCode))]
+  const matchesSearch=tableSearchMatcher(query,tableCodes)
   const groups=kitchenGroups(data?.pending??[])
   const group=groups.find(item=>item.key===start?.key)
   const batch=data?.batches.find(item=>item.id===selectedBatch)
@@ -128,9 +130,9 @@ export function KitchenProductionBoard({api,employeeId,blocked,onChanged,onLegac
   }
   function focusBatch(id:string,search=query){
     setSelectedBatch(id)
-    const current=data?.batches.find(item=>item.id===id),find=search.trim().toLowerCase()
+    const current=data?.batches.find(item=>item.id===id),matches=tableSearchMatcher(search,tableCodes)
     const taskIds=[...new Set(current?.units.filter(unit=>unit.state==='started'&&!unit.stopped).map(unit=>unit.taskId)??[])]
-    const index=find?taskIds.findIndex(taskId=>current?.units.some(unit=>unit.taskId===taskId&&(unit.tableCode.toLowerCase().includes(find)||unit.orderPublicId.toLowerCase().includes(find)))):0
+    const index=taskIds.findIndex(taskId=>current?.units.some(unit=>unit.taskId===taskId&&matches(unit.tableCode,unit.orderPublicId)))
     setPage(index<0?0:Math.floor(index/pageSize))
   }
   function choose(key:string,quantity?:string){
@@ -198,7 +200,7 @@ export function KitchenProductionBoard({api,employeeId,blocked,onChanged,onLegac
     </nav>
     <div className="kitchen-columns" data-active-pane={activePane}>
       <section className={`kitchen-pane ${start&&group?'has-selection':'is-browsing'}`} aria-label="待制作"><h2>待制作 <span>{data?.pending.reduce((sum,item)=>sum+item.unmade,0)??0} 份</span></h2>
-        <div className="kitchen-cards">{groups.filter(item=>!needle||item.name.toLowerCase().includes(needle)||item.items.some(row=>row.tableCode.toLowerCase().includes(needle)||row.orderPublicId.toLowerCase().includes(needle))).map(item=><button type="button" className="kitchen-group" key={item.key} aria-pressed={start?.key===item.key} disabled={locked} onClick={()=>choose(item.key)}>
+        <div className="kitchen-cards">{groups.filter(item=>item.items.some(row=>matchesSearch(row.tableCode,row.orderPublicId,item.name))).map(item=><button type="button" className="kitchen-group" key={item.key} aria-pressed={start?.key===item.key} disabled={locked} onClick={()=>choose(item.key)}>
           <strong>{item.name} <b>{item.total} 份</b></strong><ProductionNote text={item.notes}/><small>{!item.notes&&'无特殊备注 · '}最早 {clock(item.anchor)}</small>
         </button>)}{data&&groups.length===0&&<p>当前没有待制作的出品</p>}</div>
         <div className="kitchen-detail">{start&&group?<><h3>{group.name}</h3><ProductionNote text={group.notes}/>
@@ -223,7 +225,7 @@ export function KitchenProductionBoard({api,employeeId,blocked,onChanged,onLegac
           {button({action:'quick-ready',compatibilityKey:start.key,items:start.items,equipment:null,expectedSeconds:null},`已放好${pickupPlace}`,locked||!data?.canStart||!startValid)}</>:<p>仅开始选中的份数，其余留在待制作。</p>}</footer>
       </section>
       <section className={`kitchen-pane ${batch?'has-selection':'is-browsing'}`} aria-label="正在制作"><h2>正在制作 <span>{data?.batches.length??0} 批</span></h2>
-        <div className="kitchen-cards">{data?.batches.filter(item=>!needle||item.productName.toLowerCase().includes(needle)||item.units.some(unit=>unit.tableCode.toLowerCase().includes(needle)||unit.orderPublicId.toLowerCase().includes(needle))).map(item=>{
+        <div className="kitchen-cards">{data?.batches.filter(item=>matchesSearch(null,item.productName)||item.units.some(unit=>matchesSearch(unit.tableCode,unit.orderPublicId))).map(item=>{
           const remaining=item.units.filter(unit=>unit.state==='started'&&!unit.stopped).length,ready=item.units.filter(unit=>!unit.stopped&&unit.state==='ready').length,pickedUp=item.units.filter(unit=>!unit.stopped&&unit.state==='delivered').length
           const elapsed=item.startedAt?Math.max(0,Math.floor((now-Date.parse(item.startedAt))/60000)):null
           return <button type="button" key={item.id} className="kitchen-group" aria-pressed={selectedBatch===item.id} onClick={()=>{setActivePane('working');focusBatch(item.id)}}><strong>{item.productName} <b>余 {remaining} / {item.originalQuantity} 份</b></strong>

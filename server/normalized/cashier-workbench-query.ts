@@ -1,4 +1,6 @@
 import {closedDebtEligibilitySql,localUnpresentedPaymentSql} from './closed-debt-recovery.js'
+import {canonicalTableCode} from '../../src/shared/table-code-alias.js'
+import {historyTableIdSql} from './history-table-filter.js'
 import {approvedFailedRefundReservesSql} from './refund-attempt-sql.js'
 import {fullyWaivedQuantityItemSql,unreservedOrderExcessSql} from './quantity-late-capture-refund.js'
 import { orderNeedsCollectionSql, orderReceivableSql } from './order-collection-sql.js'
@@ -235,6 +237,7 @@ export class PostgresCashierWorkbenchQuery {
     const canUseActivityCashier = input.capabilities.includes('community.activity.cashier')
     return this.transactions.run(input.scope, async (transaction) => {
       const orderResult = await transaction.query<OrderRow>(`
+        WITH table_filter AS (SELECT ${historyTableIdSql('$4','$11')} AS id)
         SELECT orders.id, orders.public_id, table_row.code AS table_code,
           area.id AS area_id,area.name AS area_name,
           session.id AS table_session_id, session.status AS table_session_status,
@@ -266,7 +269,7 @@ export class PostgresCashierWorkbenchQuery {
           mbox.order_collection_due_amount_for_mode(orders.tenant_id,orders.store_id,orders.id,true) AS collection_due_minor,
           orders.submitted_at::text, orders.created_at::text,
           orders.business_date::text,${cashierCouponRefundReviewCountSql} AS coupon_refund_review_count
-        FROM mbox.orders AS orders
+        FROM mbox.orders AS orders CROSS JOIN table_filter
         JOIN mbox.table_sessions AS session
           ON session.tenant_id = orders.tenant_id
          AND session.store_id = orders.store_id
@@ -352,7 +355,8 @@ export class PostgresCashierWorkbenchQuery {
           )
           AND (
             $4::text = ''
-            OR orders.public_id ILIKE '%' || $4 || '%'
+            OR CASE WHEN table_filter.id IS NOT NULL THEN table_row.id=table_filter.id
+            ELSE orders.public_id ILIKE '%' || $4 || '%'
             OR table_row.code ILIKE '%' || $4 || '%'
             OR area.name ILIKE '%' || $4 || '%'
             OR ($10::bigint IS NOT NULL AND orders.total_amount_minor=$10::bigint)
@@ -381,6 +385,7 @@ export class PostgresCashierWorkbenchQuery {
                   OR searched_refund.provider_refund_id ILIKE '%' || $4 || '%'
                 )
             )
+            END
           )
           AND ($8::uuid IS NULL OR area.id=$8::uuid)
           AND (
@@ -417,6 +422,7 @@ export class PostgresCashierWorkbenchQuery {
         input.areaId ?? null,
         input.paymentState ?? null,
         searchedAmountMinor,
+        canonicalTableCode(normalizedQuery),
       ])
       const activityResult = canUseActivityCashier
         ? await transaction.query<ActivityRegistrationRow>(`
@@ -557,6 +563,7 @@ export class PostgresCashierWorkbenchQuery {
                 OR refund.public_id ILIKE '%' || $4 || '%'
                 OR refund.provider_refund_id ILIKE '%' || $4 || '%'
               )
+              AND ${historyTableIdSql('$4','$6')} IS NULL
             ORDER BY (registration.status='payment_pending') DESC,
               COALESCE(payment.succeeded_at,registration.created_at) DESC,registration.id DESC
             LIMIT $5
@@ -566,6 +573,7 @@ export class PostgresCashierWorkbenchQuery {
             input.businessDate,
             normalizedQuery,
             input.limit,
+            canonicalTableCode(normalizedQuery),
           ])
         : { rows: [] as ActivityRegistrationRow[] }
       const orderIds = orderResult.rows.map((row) => row.id)

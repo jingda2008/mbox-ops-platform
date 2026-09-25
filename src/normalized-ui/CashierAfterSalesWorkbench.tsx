@@ -556,7 +556,7 @@ export function CashierAfterSalesWorkbenchView({
         type="search"
         value={searchDraft}
         onChange={(event) => setSearchDraft(event.target.value)}
-        placeholder="单号、桌号或金额（如 136）"
+        placeholder="完整桌号优先，也可查单号或金额"
         aria-label="查找收银订单"
       />
       <button type="submit">查找</button>

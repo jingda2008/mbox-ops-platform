@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import {tableSearchMatcher} from '../../shared/table-search'
 import { Check, ChevronDown, LoaderCircle, Search, ShieldCheck, UserRoundCheck, X } from 'lucide-react'
 import type { StaffActionsApiPort } from './staff-actions-api'
 import { StaffActionsApiError } from './staff-actions-api'
@@ -46,16 +47,12 @@ export function ResponsibilityAssignmentPanel({ api, tables }: ResponsibilityAss
     return [...groups.values()].sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'))
   }, [activeTables])
   const visibleAreaGroups = useMemo(() => {
-    const query = tableQuery.trim().toLocaleLowerCase('zh-CN')
-    if (query === '') return areaGroups
+    const matches=tableSearchMatcher(tableQuery,activeTables.map(table=>table.code))
     return areaGroups.flatMap((area) => {
-      const areaMatches = `${area.name} ${area.id}`.toLocaleLowerCase('zh-CN').includes(query)
-      const matchingTables = areaMatches
-        ? area.tables
-        : area.tables.filter((table) => `${table.code} ${table.areaName}`.toLocaleLowerCase('zh-CN').includes(query))
+      const matchingTables = area.tables.filter(table=>matches(table.code,table.areaName))
       return matchingTables.length === 0 ? [] : [{ ...area, tables: matchingTables }]
     })
-  }, [areaGroups, tableQuery])
+  }, [areaGroups, activeTables, tableQuery])
   const selectedTables = useMemo(
     () => activeTables.filter((table) => selectedTableIds.has(table.id)),
     [activeTables, selectedTableIds],

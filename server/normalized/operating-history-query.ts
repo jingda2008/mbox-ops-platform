@@ -1,4 +1,6 @@
 import {currentRefundAttemptSql} from './refund-attempt-sql.js'
+import {canonicalTableCode} from '../../src/shared/table-code-alias.js'
+import {historyTableIdSql} from './history-table-filter.js'
 import {legacyStockReturnCapabilitySql,orderHasLegacyStockReturnSql} from './order-stock-return-capability.js'
 import {orderNeedsCollectionSql,orderReceivableSql} from './order-collection-sql.js'
 import type { ScopedTransaction } from './transaction-runner.js'
@@ -14,10 +16,11 @@ export interface OperatingHistoryFilter { businessDate: string; endDate?: string
 export async function readOperatingHistory(tx: ScopedTransaction, input: OperatingHistoryFilter): Promise<OperatingHistory> {
   const orders=await tx.query<{id:string;business_date:string;public_id:string;table_code:string;employee_name:string|null;
     submitted_at:string;status:string;payment_status:string;total_amount_minor:string;effective_amount_minor?:string;table_session_id:string;session_public_id:string;area_name:string}>(`
+    WITH table_filters AS (SELECT ${historyTableIdSql('$4','$15')} AS table_id,${historyTableIdSql('$9','$16')} AS search_table_id)
     SELECT ordering.id,ordering.business_date::text,ordering.public_id,venue.code AS table_code,employee.display_name AS employee_name,
       COALESCE(ordering.submitted_at,ordering.created_at)::text AS submitted_at,
       ordering.status,ordering.payment_status,ordering.total_amount_minor::text,(${orderReceivableSql('ordering')})::text AS effective_amount_minor,ordering.table_session_id,session.public_id AS session_public_id,area.name AS area_name
-    FROM mbox.orders ordering JOIN mbox.table_sessions session
+    FROM mbox.orders ordering CROSS JOIN table_filters JOIN mbox.table_sessions session
       ON session.tenant_id=ordering.tenant_id AND session.store_id=ordering.store_id AND session.id=ordering.table_session_id
     JOIN mbox.tables venue ON venue.tenant_id=session.tenant_id AND venue.store_id=session.store_id AND venue.id=session.table_id
     JOIN mbox.areas area ON area.tenant_id=venue.tenant_id AND area.store_id=venue.store_id AND area.id=venue.area_id
@@ -34,10 +37,12 @@ export async function readOperatingHistory(tx: ScopedTransaction, input: Operati
     WHERE ordering.tenant_id=$1::uuid AND ordering.store_id=$2::uuid
       AND (ordering.business_date BETWEEN $3::date AND $7::date OR (ordering.business_date<$3::date AND attention.needs_attention))
       AND ($8::date IS NULL OR ordering.business_date>=$8::date OR attention.needs_attention)
-      AND ordering.status<>'draft' AND ($4='' OR venue.code ILIKE '%'||$4||'%')
+      AND ordering.status<>'draft' AND ($4='' OR CASE WHEN table_filters.table_id IS NOT NULL
+        THEN venue.id=table_filters.table_id ELSE venue.code ILIKE '%'||$4||'%' END)
       AND ($5='' OR employee.display_name ILIKE '%'||$5||'%')
-      AND ($9='' OR ordering.public_id ILIKE '%'||$9||'%' OR venue.code ILIKE '%'||$9||'%'
-        OR ordering.total_amount_minor::numeric/100=CASE WHEN $9 ~ '^\\d+(\\.\\d{1,2})?$' THEN $9::numeric ELSE NULL END)
+      AND ($9='' OR CASE WHEN table_filters.search_table_id IS NOT NULL THEN venue.id=table_filters.search_table_id
+        ELSE ordering.public_id ILIKE '%'||$9||'%' OR venue.code ILIKE '%'||$9||'%'
+        OR ordering.total_amount_minor::numeric/100=CASE WHEN $9 ~ '^\\d+(\\.\\d{1,2})?$' THEN $9::numeric ELSE NULL END END)
       AND ($10='' OR ordering.payment_status=$10)
       AND ($11='' OR area.name ILIKE '%'||$11||'%')
       AND ($12::text IS NULL OR EXISTS(SELECT 1 FROM mbox.order_items history_item JOIN mbox.kds_tasks history_task
@@ -50,7 +55,8 @@ export async function readOperatingHistory(tx: ScopedTransaction, input: Operati
           AND ($14::text[] IS NULL OR history_task.station_code=ANY($14))))
     ORDER BY ordering.created_at DESC,ordering.id DESC LIMIT ${input.exportAll?5001:51} OFFSET $6
   `,[tx.scope.tenantId,tx.scope.storeId,input.businessDate,input.table,input.employee,input.exportAll?0:input.page*50,input.endDate??input.businessDate,
-    input.earliestBusinessDate??null,input.search??'',input.paymentStatus??'',input.area??'',input.workKind??null,input.workEmployeeId??null,input.workStations??null])
+    input.earliestBusinessDate??null,input.search??'',input.paymentStatus??'',input.area??'',input.workKind??null,input.workEmployeeId??null,input.workStations??null,
+    canonicalTableCode(input.table),canonicalTableCode(input.search??'')])
   if(input.exportAll&&orders.rows.length>5000)throw new TypeError('筛选结果超过5000单，请缩小日期或桌台范围后导出；不会只导出部分数据')
   const page=input.exportAll?orders.rows:orders.rows.slice(0,50)
   const items=page.length?await tx.query<{id:string;order_id:string;name:string;quantity:number;unit_price_minor:string;
@@ -169,15 +175,18 @@ export async function readOperatingHistory(tx: ScopedTransaction, input: Operati
 async function readSharedDeliveryHistory(tx:ScopedTransaction,input:OperatingHistoryFilter):Promise<{records:SharedDeliveryHistory[];hasMore:boolean}> {
   const scope=input.sharedDeliveryScope!
   const result=await tx.query<{id:string;business_date:string;table_session_id:string;table_code:string;pickup_table_code:string;taken_at:string;units:PickupUnit[]}>(`
+    WITH table_filter AS (SELECT ${historyTableIdSql('$6','$10')} AS id)
     SELECT receipt.id,receipt.business_date::text,receipt.table_session_id,venue.code AS table_code,
       receipt.snapshot->>'tableCode' AS pickup_table_code,receipt.taken_at::text,receipt.snapshot->'units' AS units
-    FROM mbox.pickup_receipts receipt JOIN mbox.table_sessions session
+    FROM mbox.pickup_receipts receipt CROSS JOIN table_filter JOIN mbox.table_sessions session
       ON (session.tenant_id,session.store_id,session.id)=(receipt.tenant_id,receipt.store_id,receipt.table_session_id)
     JOIN mbox.tables venue ON (venue.tenant_id,venue.store_id,venue.id)=(session.tenant_id,session.store_id,session.table_id)
     WHERE receipt.tenant_id=$1 AND receipt.store_id=$2
       AND receipt.business_date BETWEEN $3::date AND $4::date
       AND ($5::date IS NULL OR receipt.business_date>=$5::date)
-      AND ($6='' OR venue.code ILIKE '%'||$6||'%' OR receipt.snapshot->>'tableCode' ILIKE '%'||$6||'%')
+      AND ($6='' OR CASE WHEN table_filter.id IS NOT NULL THEN venue.id=table_filter.id
+        OR ${historyTableIdSql("(receipt.snapshot->>'tableCode')")}=table_filter.id
+        ELSE venue.code ILIKE '%'||$6||'%' OR receipt.snapshot->>'tableCode' ILIKE '%'||$6||'%' END)
       AND NOT EXISTS(SELECT 1 FROM mbox.pickup_undos undo
         WHERE (undo.tenant_id,undo.store_id,undo.receipt_id)=(receipt.tenant_id,receipt.store_id,receipt.id))
       AND ($7::boolean OR EXISTS(SELECT 1 FROM mbox.table_assignments assignment
@@ -186,7 +195,7 @@ async function readSharedDeliveryHistory(tx:ScopedTransaction,input:OperatingHis
           AND assignment.starts_at<=transaction_timestamp() AND (assignment.ends_at IS NULL OR assignment.ends_at>transaction_timestamp())))
     ORDER BY receipt.taken_at DESC,receipt.id DESC LIMIT ${input.exportAll?5001:51} OFFSET $9
   `,[tx.scope.tenantId,tx.scope.storeId,input.businessDate,input.endDate??input.businessDate,input.earliestBusinessDate??null,input.table,
-    scope.canViewAllTables,scope.employeeId,input.exportAll?0:input.page*50])
+    scope.canViewAllTables,scope.employeeId,input.exportAll?0:input.page*50,canonicalTableCode(input.table)])
   if(input.exportAll&&result.rows.length>5000)throw new TypeError('筛选结果超过5000条送达记录，请缩小日期或桌台范围后导出；不会只导出部分数据')
   return {hasMore:result.rows.length>50,records:(input.exportAll?result.rows:result.rows.slice(0,50)).map(row=>{
     const items=new Map<string,SharedDeliveryHistory['items'][number]>()

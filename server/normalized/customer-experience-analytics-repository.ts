@@ -1,4 +1,5 @@
 import type { ScopedTransaction } from './transaction-runner.js'
+import {historyTableIdSql} from './history-table-filter.js'
 
 export type PerformancePhaseCode =
   | 'before_show' | 'acoustic' | 'band_live' | 'intermission' | 'after_show'
@@ -339,7 +340,7 @@ export class CustomerExperienceAnalyticsRepository {
         AND ($7::integer IS NULL OR session.guest_count=$7::integer)
         AND ($8::text IS NULL OR table_occasion.occasion=$8::text)
         AND ($9::text IS NULL OR live_phase.phase_code=$9::text)
-        AND ($10::text IS NULL OR upper(venue_table.code)=upper($10::text))
+        AND ($10::text IS NULL OR venue_table.id=${historyTableIdSql('$10')})
         AND ($11::uuid IS NULL OR EXISTS (
           SELECT 1
           FROM mbox.order_items observed_item
@@ -398,7 +399,7 @@ export class CustomerExperienceAnalyticsRepository {
           AND ($7::integer IS NULL OR session.party_size=$7::integer)
           AND ($8::text IS NULL OR session.occasion=$8::text)
           AND ($9::text IS NULL OR live_phase.phase_code=$9::text)
-          AND ($10::text IS NULL OR upper(venue_table.code)=upper($10::text))
+        AND ($10::text IS NULL OR venue_table.id=${historyTableIdSql('$10')})
       ), option_metrics AS (
         SELECT option.id,option.product_id,product.name AS product_name,option.currency,
           count(DISTINCT event.id) FILTER (WHERE event.event_type='generated')::bigint AS generated,
@@ -615,7 +616,7 @@ export class CustomerExperienceAnalyticsRepository {
           AND ($7::integer IS NULL OR table_session.guest_count=$7::integer)
           AND ($8::text IS NULL OR table_occasion.occasion=$8::text)
           AND ($9::text IS NULL OR live_phase.phase_code=$9::text)
-          AND ($10::text IS NULL OR upper(venue_table.code)=upper($10::text))
+        AND ($10::text IS NULL OR venue_table.id=${historyTableIdSql('$10')})
           AND (($11::uuid IS NULL AND item.parent_order_item_id IS NULL) OR (
             $11::uuid IS NOT NULL
             AND (
@@ -677,7 +678,7 @@ export class CustomerExperienceAnalyticsRepository {
           AND ($7::integer IS NULL OR table_session.guest_count=$7::integer)
           AND ($8::text IS NULL OR table_occasion.occasion=$8::text)
           AND ($9::text IS NULL OR live_phase.phase_code=$9::text)
-          AND ($10::text IS NULL OR upper(venue_table.code)=upper($10::text))
+        AND ($10::text IS NULL OR venue_table.id=${historyTableIdSql('$10')})
           AND (($11::uuid IS NULL AND item.parent_order_item_id IS NULL) OR (
             $11::uuid IS NOT NULL
             AND (
@@ -745,7 +746,7 @@ export class CustomerExperienceAnalyticsRepository {
           AND ($7::integer IS NULL OR table_session.guest_count=$7::integer)
           AND ($8::text IS NULL OR table_occasion.occasion=$8::text)
           AND ($9::text IS NULL OR live_phase.phase_code=$9::text)
-          AND ($10::text IS NULL OR upper(venue_table.code)=upper($10::text))
+        AND ($10::text IS NULL OR venue_table.id=${historyTableIdSql('$10')})
           AND ($11::uuid IS NULL OR EXISTS (
             SELECT 1
             FROM mbox.order_items observed_item
@@ -838,7 +839,7 @@ export class CustomerExperienceAnalyticsRepository {
           AND ($6::uuid IS NULL OR input.recorded_by_employee_id=$6::uuid)
           AND ($7::integer IS NULL OR table_session.guest_count=$7::integer)
           AND ($8::text IS NULL OR table_occasion.occasion=$8::text)
-          AND ($10::text IS NULL OR upper(venue_table.code)=upper($10::text))
+        AND ($10::text IS NULL OR venue_table.id=${historyTableIdSql('$10')})
           AND (($5::uuid IS NULL AND $9::text IS NULL AND $11::uuid IS NULL) OR EXISTS (
             SELECT 1
             FROM mbox.observation_events event
@@ -932,7 +933,7 @@ export class CustomerExperienceAnalyticsRepository {
           AND ($7::integer IS NULL OR session.party_size=$7::integer)
           AND ($8::text IS NULL OR session.occasion=$8::text)
           AND ($9::text IS NULL OR live_phase.phase_code=$9::text)
-          AND ($10::text IS NULL OR upper(venue_table.code)=upper($10::text))
+        AND ($10::text IS NULL OR venue_table.id=${historyTableIdSql('$10')})
           AND ($5::uuid IS NULL OR EXISTS (
             SELECT 1 FROM mbox.recommendation_options option
             WHERE option.tenant_id=session.tenant_id AND option.store_id=session.store_id
@@ -981,7 +982,7 @@ export class CustomerExperienceAnalyticsRepository {
           AND ($7::integer IS NULL OR table_session.guest_count=$7::integer)
           AND ($8::text IS NULL OR table_occasion.occasion=$8::text)
           AND ($9::text IS NULL OR live_phase.phase_code=$9::text)
-          AND ($10::text IS NULL OR upper(venue_table.code)=upper($10::text))
+        AND ($10::text IS NULL OR venue_table.id=${historyTableIdSql('$10')})
       )
       SELECT
         (SELECT count(*)::bigint FROM scoped_sessions session WHERE NOT EXISTS (
@@ -1043,7 +1044,7 @@ export class CustomerExperienceAnalyticsRepository {
           AND ($6::uuid IS NULL OR input.recorded_by_employee_id=$6::uuid)
           AND ($7::integer IS NULL OR table_session.guest_count=$7::integer)
           AND ($8::text IS NULL OR table_occasion.occasion=$8::text)
-          AND ($10::text IS NULL OR upper(venue_table.code)=upper($10::text))
+        AND ($10::text IS NULL OR venue_table.id=${historyTableIdSql('$10')})
           AND (($5::uuid IS NULL AND $9::text IS NULL AND $11::uuid IS NULL) OR EXISTS (
             SELECT 1
             FROM mbox.observation_events filtered_event

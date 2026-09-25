@@ -8,6 +8,7 @@ import {ItemAfterSalesPendingPanel} from '../ItemAfterSalesPendingPanel'
 import {FulfillmentHistoryPanel} from './FulfillmentHistoryPanel'
 import { Children, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {DeliveryBatchComposer} from './DeliveryBatchComposer'
+import {tableSearchMatcher} from '../../shared/table-search'
 import {
   AlertTriangle,
   ArrowRightLeft,
@@ -1542,13 +1543,12 @@ export function filterMemberBenefitTasks(
 ):StaffMemberBenefitTasks {
   if (tasks===null) return {annualGifts:[],dailySnacks:[]}
   const needle=normalizeMemberBenefitScanCode(query).toLocaleUpperCase('zh-CN')
-  const matches=(values:Array<string|null|undefined>)=>needle===''||values.some((value)=>
-    value?.toLocaleUpperCase('zh-CN').includes(needle)===true)
+  const matches=tableSearchMatcher(needle,[...tasks.annualGifts,...tasks.dailySnacks].map(item=>item.tableCode))
   return {
     annualGifts:tasks.annualGifts.filter((item)=>(tableSessionId===null||item.tableSessionId===tableSessionId)
-      &&matches([item.memberNo,item.customerName,item.tableCode,item.title,item.reservationId])),
+      &&matches(item.tableCode,item.memberNo,item.customerName,item.title,item.reservationId)),
     dailySnacks:tasks.dailySnacks.filter((item)=>(tableSessionId===null||item.tableSessionId===tableSessionId)
-      &&matches([item.memberNo,item.customerName,item.tableCode,item.title,item.claimCode])),
+      &&matches(item.tableCode,item.memberNo,item.customerName,item.title,item.claimCode)),
   }
 }
 
@@ -1593,9 +1593,9 @@ function dailySnackTaskStatus(item:StaffDailySnackClaim):string {
 }
 
 export function filterFulfillmentQueue(items: readonly StaffFulfillmentItem[], queue: 'production' | 'delivery', query: string): StaffFulfillmentItem[] {
-  const term = query.trim().toLocaleLowerCase()
+  const matches=tableSearchMatcher(query,items.map(item=>item.table.code))
   return items.filter(item => (queue === 'delivery' ? item.readyForDelivery : item.quantities?item.quantities.unmade+item.quantities.started+item.quantities.held>0:!item.readyForDelivery)
-    && (!term || `${item.table.code} ${item.item.productName}`.toLocaleLowerCase().includes(term)))
+    && matches(item.table.code,item.item.productName))
 }
 
 export function prioritizeActionFact<T>(

@@ -22,7 +22,7 @@ describe('operating history',()=>{
     const result=await readOperatingHistory(tx,{businessDate:'2026-09-09',table:'L01',employee:'张三',page:2})
     expect(result.receipts).toEqual([{provider:'cash',receivedMinor:1000,refundedMinor:1800,netMinor:-800}])
     expect(result.orders).toEqual([])
-    expect(calls[0]?.values).toEqual(['tenant','store','2026-09-09','L01','张三',100,'2026-09-09',null,'','','',null,null,null])
+    expect(calls[0]?.values).toEqual(['tenant','store','2026-09-09','L01','张三',100,'2026-09-09',null,'','','',null,null,null,'L01',''])
     expect(calls[1]?.values).toEqual(['tenant','store','2026-09-09','2026-09-09'])
     expect(calls.every(call=>!/(UPDATE|INSERT|DELETE)/.test(call.sql))).toBe(true)
   })
@@ -33,7 +33,7 @@ describe('operating history',()=>{
       {summary:{orderCount:2,orderAmountMinor:'3000',unsettledCount:0,outstandingMinor:'0',pendingPaymentCount:0,pendingRefundCount:2}},
     ]:[]}}} as unknown as ScopedTransaction
     const result=await readOperatingHistory(tx,{businessDate:'2026-09-01',endDate:'2026-09-10',table:'W01',employee:'员工',page:0})
-    expect(calls).toEqual([['tenant','store','2026-09-01','W01','员工',0,'2026-09-10',null,'','','',null,null,null],['tenant','store','2026-09-01','2026-09-10'],['tenant','store','2026-09-01','2026-09-10']])
+    expect(calls).toEqual([['tenant','store','2026-09-01','W01','员工',0,'2026-09-10',null,'','','',null,null,null,'W1',''],['tenant','store','2026-09-01','2026-09-10'],['tenant','store','2026-09-01','2026-09-10']])
     expect(result.endDate).toBe('2026-09-10')
     expect(result.summary).toEqual({orderCount:3,orderAmountMinor:'5000',unsettledCount:1,outstandingMinor:'500',pendingPaymentCount:0,pendingRefundCount:3})
   })
@@ -68,6 +68,6 @@ describe('operating history',()=>{
     const result=await readOperatingHistory(tx,{...filter,sharedDeliveryScope:{employeeId:'reader',canViewAllTables:false}})
     expect(result.orders).toEqual([]);expect(result.hasMore).toBe(true);expect(result.sharedDeliveries).toHaveLength(50)
     expect(result.sharedDeliveries![0]).toMatchObject({source:'shared_pickup_device',tableCode:'A2',pickupTableCode:'A1',deliveredAt:'2026-09-21T01:23:45.000Z'})
-    expect(calls.find(call=>call.sql.includes('FROM mbox.pickup_receipts receipt'))?.values).toEqual(['tenant','store','2026-09-21','2026-09-21',null,'A',false,'reader',100])
+    expect(calls.find(call=>call.sql.includes('FROM mbox.pickup_receipts receipt'))?.values).toEqual(['tenant','store','2026-09-21','2026-09-21',null,'A',false,'reader',100,'A'])
   })
 })

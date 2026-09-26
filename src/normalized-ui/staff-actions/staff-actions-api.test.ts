@@ -2,6 +2,28 @@ import { describe, expect, it, vi } from 'vitest'
 import { StaffActionsApi, StaffActionsApiError } from './staff-actions-api'
 
 describe('StaffActionsApi', () => {
+  it('retries an uncertain member attendance with the original key and binds cancellation to its visit',async()=>{
+    const visit={id:'visit-original',businessDate:'2026-09-26',checkedInAt:'2026-09-26T03:00:00Z',employeeName:'员工',status:'checked_in'}
+    const send=vi.fn<typeof fetch>()
+      .mockRejectedValueOnce(new TypeError('connection lost after commit'))
+      .mockResolvedValueOnce(new Response(JSON.stringify({data:visit})))
+      .mockResolvedValueOnce(new Response(JSON.stringify({data:{...visit,status:'cancelled'}})))
+    let sequence=0
+    const api=new StaffActionsApi({fetch:send,staffSessionId:'bound-session',createIdempotencyKey:()=>`visit-${++sequence}`})
+    await expect(api.checkInMemberVisit('MBX-RETRY01','2026-09-26')).rejects.toMatchObject({code:'NETWORK_ERROR'})
+    await expect(api.checkInMemberVisit('MBX-RETRY01','2026-09-26')).resolves.toMatchObject({id:'visit-original'})
+    const headers=send.mock.calls.map(([,init])=>new Headers(init?.headers))
+    expect(headers[0]!.get('idempotency-key')).toBe(headers[1]!.get('idempotency-key'))
+    await api.cancelMemberVisit('MBX-RETRY01','2026-09-26','visit-original')
+    expect(JSON.parse(String(send.mock.calls[2]![1]?.body))).toMatchObject({code:'MBX-RETRY01',visitId:'visit-original',businessDate:'2026-09-26'})
+  })
+  it('reports malformed or unavailable attendance reads without a false pending mutation',async()=>{
+    const send=vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify({data:{}})))
+      .mockResolvedValueOnce(new Response('unavailable',{status:503}))
+    const api=new StaffActionsApi({fetch:send})
+    await expect(api.loadMemberVisit('MBX-123456')).rejects.toMatchObject({code:'INVALID_RESPONSE'})
+    await expect(api.loadMemberVisit('MBX-123456')).rejects.toMatchObject({message:'读取失败，请刷新重试'})
+  })
   it('isolates bar requests while preserving the original kitchen command body for recovery',async()=>{
     const send=vi.fn<typeof fetch>().mockImplementation(async()=>new Response(JSON.stringify({data:{batchId:'batch',action:'release',quantity:0,released:true}}),{status:200}))
     const api=new StaffActionsApi({fetch:send,staffSessionId:'session'})

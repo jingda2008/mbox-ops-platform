@@ -17,6 +17,62 @@ function result(memberNo: string): MemberParticipation {
   return { memberNo, displayName: memberNo === 'MBX-AAAAAA' ? '会员甲' : '会员乙', checkedAt: new Date().toISOString(),
     activitiesVisible: true, activities: [], benefits: [], registrations: [{ publicId: 'scan-registration', activityPublicId: 'scan-activity', title: '超嗨测试活动', startsAt: new Date().toISOString(), partySize: 2, guidance: '已确认报名，现场核对本人及人数后可签到', readyForCheckIn: true }] }
 }
+
+test('staff can choose attendance without registration, cancel mistakes, and choose activity separately', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await login(page)
+  await lookup(page, 'MBOX_MEMBER_V1:MBX-CARD320')
+  const choices=page.getByRole('group',{name:'选择签到方式'})
+  await expect(choices.getByRole('button',{name:'仅到店签到',exact:true})).toBeVisible()
+  await choices.getByRole('button',{name:'仅到店签到',exact:true}).click()
+  const visit=page.getByRole('region',{name:'仅到店签到',exact:true})
+  await expect(visit.getByRole('button',{name:'确认到店签到',exact:true})).toBeEnabled()
+  let unrelatedWrites=0
+  page.on('request',r=>{if(r.method()==='POST'&&/\/(activity-operations|benefit-reservations|annual-daily-snack-claims)\//.test(r.url()))unrelatedWrites++})
+  await visit.getByRole('button',{name:'确认到店签到',exact:true}).click()
+  await expect(visit.getByText('本营业日已签到',{exact:true})).toBeVisible()
+  await visit.getByRole('button',{name:'重新读取签到'}).click()
+  await expect(visit.getByRole('button',{name:'确认到店签到',exact:true})).toHaveCount(0)
+  await visit.screenshot({path:testInfo.outputPath('member-visit-confirmed-mobile.png')})
+  await visit.getByRole('button',{name:'撤回误签到'}).click()
+  await page.getByRole('alertdialog',{name:'撤回这次到店签到'}).getByRole('button',{name:'确认撤回',exact:true}).click()
+  await expect(visit.getByRole('button',{name:'确认到店签到',exact:true})).toBeEnabled()
+  await choices.getByRole('button',{name:'活动签到',exact:true}).click()
+  await expect(visit).toHaveCount(0)
+  await expect(page.getByText(/近期没有报名记录。可选择/)).toBeVisible()
+  expect(unrelatedWrites).toBe(0)
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth-window.innerWidth)).toBeLessThanOrEqual(1)
+})
+
+test('a lost attendance response can be read back and never appears on the next scanned member', async ({ page }) => {
+  await login(page)
+  const visit=page.getByRole('region',{name:'仅到店签到',exact:true})
+  await lookup(page,'MBX-CARD320')
+  await page.getByRole('group',{name:'选择签到方式'}).getByRole('button',{name:'仅到店签到',exact:true}).click()
+  await expect(visit.getByRole('button',{name:'确认到店签到',exact:true}).or(visit.getByText('本营业日已签到',{exact:true}))).toBeVisible()
+  const otherAlreadySignedIn=await visit.getByText('本营业日已签到',{exact:true}).isVisible()
+  await lookup(page,'MBX-CARD360')
+  await page.getByRole('group',{name:'选择签到方式'}).getByRole('button',{name:'仅到店签到',exact:true}).click()
+  let lost=false
+  await page.route('**/api/staff/member-visits/check-in',async route=>{
+    if(lost)return route.continue()
+    lost=true
+    const committed=await route.fetch()
+    expect(committed.status()).toBe(200)
+    await route.abort('failed')
+  })
+  await visit.getByRole('button',{name:'确认到店签到',exact:true}).click()
+  await expect(visit.getByRole('alert')).toBeVisible()
+  await visit.getByRole('button',{name:'重新读取签到'}).click()
+  await expect(visit.getByText('本营业日已签到',{exact:true})).toBeVisible()
+  await lookup(page,'MBX-CARD320')
+  await page.getByRole('group',{name:'选择签到方式'}).getByRole('button',{name:'仅到店签到',exact:true}).click()
+  if(otherAlreadySignedIn)await expect(visit.getByText('本营业日已签到',{exact:true})).toBeVisible()
+  else {
+    await expect(visit.getByRole('button',{name:'确认到店签到',exact:true})).toBeEnabled()
+    await expect(visit.getByText('本营业日已签到',{exact:true})).toHaveCount(0)
+  }
+})
 async function lookup(page: Page, code: string) {
   await page.getByLabel('输入会员号或核销码').fill(code)
   await page.getByRole('button', { name: '查询活动与权益', exact: true }).click()

@@ -13,10 +13,7 @@ export function readMemberScanCode(value: unknown): string {
   return memberNo
 }
 
-export async function loadMemberParticipation(
-  transaction: ScopedTransaction, memberNo: string, activitiesVisible: boolean,
-  paymentProviderConfigured: boolean, now = new Date(),
-): Promise<MemberParticipation> {
+export async function resolveMemberScanCustomer(transaction: ScopedTransaction, memberNo: string) {
   const { tenantId, storeId } = transaction.scope
   const matched = await transaction.query<{ customer_id: string }>(`
     SELECT customer_id FROM mbox.customer_memberships
@@ -26,6 +23,15 @@ export async function loadMemberParticipation(
   if (!matched.rows[0]) throw new CustomerNotFoundError('member')
   const customer = await new CustomerRepository(transaction).resolveCanonical(matched.rows[0].customer_id)
   if (customer.status !== 'active') throw new CustomerNotFoundError('member')
+  return customer
+}
+
+export async function loadMemberParticipation(
+  transaction: ScopedTransaction, memberNo: string, activitiesVisible: boolean,
+  paymentProviderConfigured: boolean, now = new Date(),
+): Promise<MemberParticipation> {
+  const { tenantId, storeId } = transaction.scope
+  const customer = await resolveMemberScanCustomer(transaction, memberNo)
   const experience = new CustomerExperienceRepository(transaction, paymentProviderConfigured)
   const benefits = await new BenefitRepository(transaction).listAvailableForCustomer(customer.id, now.toISOString())
   const activities = activitiesVisible ? await experience.publicActivities(customer.id) : []

@@ -245,6 +245,9 @@ export interface ObservationEventReplacement {
 }
 
 export interface StaffActionsApiPort {
+  loadMemberVisit?(code: string, signal?: AbortSignal): Promise<import('../../shared/member-visit').MemberVisitStatus>
+  checkInMemberVisit?(code: string, businessDate: string): Promise<import('../../shared/member-visit').MemberVisit>
+  cancelMemberVisit?(code: string, businessDate: string, visitId: string): Promise<import('../../shared/member-visit').MemberVisit>
   lookupMemberParticipation?(code: string, signal?: AbortSignal): Promise<import('../../shared/member-participation').MemberParticipation>
   loadKitchenBoard?(signal?:AbortSignal,stationCode?:'bar'|'kitchen'):Promise<KitchenBoardData>
   runKitchenCommand?(employeeId:string,command:KitchenCommand,key:string,stationCode?:'bar'|'kitchen'):Promise<KitchenCommandResult>
@@ -414,6 +417,32 @@ export interface StaffActionsApiOptions {
 }
 
 export class StaffActionsApi implements StaffActionsApiPort {
+  async loadMemberVisit(code: string, signal?: AbortSignal): Promise<import('../../shared/member-visit').MemberVisitStatus> {
+    const response = await this.request('/api/staff/member-visits/lookup', { method: 'POST', signal,
+      body: JSON.stringify({ code }), headers: new Headers({ 'content-type': 'application/json' }) }, true)
+    const payload = await readJson(response)
+    if (!isObject(payload) || !isObject(payload.data) || typeof payload.data.memberNo !== 'string'
+      || typeof payload.data.businessDate !== 'string' || typeof payload.data.canCheckIn !== 'boolean'
+      || !(payload.data.visit === null || isObject(payload.data.visit) && typeof payload.data.visit.id === 'string')) {
+      throw new StaffActionsApiError('签到状态未能读取，请重试', 'INVALID_RESPONSE', response.status)
+    }
+    return payload.data as unknown as import('../../shared/member-visit').MemberVisitStatus
+  }
+  async checkInMemberVisit(code: string, businessDate: string): Promise<import('../../shared/member-visit').MemberVisit> {
+    return this.memberVisitCommand('check-in', { code, businessDate })
+  }
+  async cancelMemberVisit(code: string, businessDate: string, visitId: string): Promise<import('../../shared/member-visit').MemberVisit> {
+    return this.memberVisitCommand('cancel', { code, businessDate, visitId, reason: '员工现场核对，撤回误签到' })
+  }
+  private async memberVisitCommand(action: 'check-in' | 'cancel', body: Record<string, string>): Promise<import('../../shared/member-visit').MemberVisit> {
+    return executeRecoverableCommand(`${this.employeeId}:member-visit:${action}`, body, `member-visit-${this.createIdempotencyKey()}`, async key => {
+      const response = await this.request(`/api/staff/member-visits/${action}`, { method: 'POST', body: JSON.stringify(body),
+        headers: new Headers({ 'content-type': 'application/json', 'idempotency-key': key }) })
+      const payload = await readJson(response)
+      if (!isObject(payload) || !isObject(payload.data) || typeof payload.data.id !== 'string') throw new StaffActionsApiError('签到结果未能读取，请重新读取状态', 'INVALID_RESPONSE', response.status)
+      return payload.data as unknown as import('../../shared/member-visit').MemberVisit
+    })
+  }
   async lookupMemberParticipation(code: string, signal?: AbortSignal): Promise<import('../../shared/member-participation').MemberParticipation> {
     const response = await this.request('/api/staff/member-participation/lookup', {
       method: 'POST', signal, body: JSON.stringify({ code }),

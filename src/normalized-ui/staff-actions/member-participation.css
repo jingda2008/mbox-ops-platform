@@ -6,3 +6,5 @@
 .staff-member-participation h4 { margin: 20px 0 8px; }
 .staff-member-participation a { color: inherit; text-decoration: underline; display: inline-block; padding: 10px 0; }
 .staff-member-participation button { min-height: 40px; }
+.member-check-in-choice { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+.member-check-in-choice button[aria-pressed="true"] { outline: 2px solid currentColor; outline-offset: 2px; }

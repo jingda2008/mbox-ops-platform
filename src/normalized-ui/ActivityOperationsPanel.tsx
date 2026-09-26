@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { CheckCircle2, ChevronDown, RefreshCw, UserCheck, XCircle } from 'lucide-react'
 import type { NormalizedApiClient, StaffAuthView } from '../normalized-api'
 import { useConfirmationDialog } from './ConfirmationDialog'
@@ -89,7 +89,12 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
   const canApproveRefund = auth.permissions.includes('refund.approve')
   const canExecuteRefund = auth.permissions.includes('refund.execute')
   const canRevealContact = auth.permissions.includes('community.activity.contact.reveal')
-  const [expanded, setExpanded] = useState(false)
+  const [scanTarget] = useState(() => {
+    const query = new URLSearchParams(window.location.search)
+    return { activity: query.get('activity'), registration: query.get('registration') }
+  })
+  const [expanded, setExpanded] = useState(!!scanTarget.activity)
+  const [scanOnly, setScanOnly] = useState(!!scanTarget.registration)
   const [activities, setActivities] = useState<ActivitySummary[]>([])
   const [selected, setSelected] = useState<string | null>(null)
   const [detail, setDetail] = useState<OperationsDetail | null>(null)
@@ -152,7 +157,6 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
     })
     return () => { current = false }
   }, [api, canManage, expanded])
-  if (!canView) return null
 
   async function loadActivities() {
     setPhase('loading'); setNotice('')
@@ -167,7 +171,7 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
     }
   }
 
-  async function loadDetail(publicId: string) {
+  const loadDetail = useCallback(async (publicId: string) => {
     const generation=++detailGeneration.current
     setRevealedContacts({})
     setDetail(null);setDraft(null);setReason('');setCreateUncertain(false);createAttempt.current=null
@@ -180,7 +184,12 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
       setDraft(loaded.activity.status === 'draft' ? draftFromActivity(loaded.activity) : null)
     } catch (error) { if(generation===detailGeneration.current)setNotice(message(error, '活动详情读取失败')) }
     finally { if(generation===detailGeneration.current)setBusy('') }
-  }
+  }, [api])
+
+  useEffect(() => {
+    if (canView && scanTarget.activity) void loadDetail(scanTarget.activity)
+  }, [loadDetail, canView, scanTarget.activity])
+  if (!canView) return null
 
   async function saveDraft(event: FormEvent) {
     event.preventDefault()
@@ -549,7 +558,11 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
           {canManage && <label className="activity-operation-reason">本次操作原因<input minLength={2} maxLength={1000} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="例如：顾客来电取消 / 现场确认未到" /></label>}
           {canManage && detail.activity.waitlistedSeats > 0 && <button type="button" disabled={busy === 'waitlist-retry'} onClick={() => void retryWaitlistPromotion(detail.activity)}>重试系统候补任务</button>}
           {detail.registrations.length === 0 && <p>当前还没有报名。</p>}
-          <div className="activity-registration-list">{detail.registrations.map((registration) => <article key={registration.publicId} className={`status-${registration.status}`}>
+          {scanTarget.registration && <label><input type="checkbox" checked={scanOnly} onChange={event=>setScanOnly(event.target.checked)}/>仅显示本次扫码报名</label>}
+          {scanOnly && !detail.registrations.some(item=>item.publicId===scanTarget.registration) && <p>当前活动未找到这条报名，请重新查询，或取消筛选查看完整名单。</p>}
+          <div className="activity-registration-list">{detail.registrations.filter(item=>!scanOnly || item.publicId===scanTarget.registration).map((registration) => <article key={registration.publicId} className={`status-${registration.status}`}>
+            {registration.publicId === scanTarget.registration && <strong>本次扫码会员的报名</strong>}
+            <small>报名号：{registration.publicId}</small>
             <header><div><strong>{registration.customerLabel}</strong><small>{registration.partySize} 人 · {dateText(registration.registeredAt)}</small></div><em>{registrationStatusLabel(registration.status)}</em></header>
             <p>{paymentText(registration)}</p>
             <div className="activity-contact-line"><span>联系：{revealedContacts[registration.publicId]?.value ?? registration.maskedContact}</span>

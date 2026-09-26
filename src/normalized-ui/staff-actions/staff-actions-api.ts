@@ -245,6 +245,10 @@ export interface ObservationEventReplacement {
 }
 
 export interface StaffActionsApiPort {
+  loadMemberVisit?(code: string, signal?: AbortSignal): Promise<import('../../shared/member-visit').MemberVisitStatus>
+  checkInMemberVisit?(code: string, businessDate: string): Promise<import('../../shared/member-visit').MemberVisit>
+  cancelMemberVisit?(code: string, businessDate: string, visitId: string): Promise<import('../../shared/member-visit').MemberVisit>
+  lookupMemberParticipation?(code: string, signal?: AbortSignal): Promise<import('../../shared/member-participation').MemberParticipation>
   loadKitchenBoard?(signal?:AbortSignal,stationCode?:'bar'|'kitchen'):Promise<KitchenBoardData>
   runKitchenCommand?(employeeId:string,command:KitchenCommand,key:string,stationCode?:'bar'|'kitchen'):Promise<KitchenCommandResult>
   loadKitchenHandoffPreview?(batchId:string,stationCode?:'bar'|'kitchen',signal?:AbortSignal):Promise<KitchenHandoffPreview>
@@ -413,6 +417,41 @@ export interface StaffActionsApiOptions {
 }
 
 export class StaffActionsApi implements StaffActionsApiPort {
+  async loadMemberVisit(code: string, signal?: AbortSignal): Promise<import('../../shared/member-visit').MemberVisitStatus> {
+    const response = await this.request('/api/staff/member-visits/lookup', { method: 'POST', signal,
+      body: JSON.stringify({ code }), headers: new Headers({ 'content-type': 'application/json' }) }, true)
+    const payload = await readJson(response)
+    if (!isObject(payload) || !isObject(payload.data) || typeof payload.data.memberNo !== 'string'
+      || typeof payload.data.businessDate !== 'string' || typeof payload.data.canCheckIn !== 'boolean'
+      || !(payload.data.visit === null || isObject(payload.data.visit) && typeof payload.data.visit.id === 'string')) {
+      throw new StaffActionsApiError('签到状态未能读取，请重试', 'INVALID_RESPONSE', response.status)
+    }
+    return payload.data as unknown as import('../../shared/member-visit').MemberVisitStatus
+  }
+  async checkInMemberVisit(code: string, businessDate: string): Promise<import('../../shared/member-visit').MemberVisit> {
+    return this.memberVisitCommand('check-in', { code, businessDate })
+  }
+  async cancelMemberVisit(code: string, businessDate: string, visitId: string): Promise<import('../../shared/member-visit').MemberVisit> {
+    return this.memberVisitCommand('cancel', { code, businessDate, visitId, reason: '员工现场核对，撤回误签到' })
+  }
+  private async memberVisitCommand(action: 'check-in' | 'cancel', body: Record<string, string>): Promise<import('../../shared/member-visit').MemberVisit> {
+    return executeRecoverableCommand(`${this.employeeId}:member-visit:${action}`, body, `member-visit-${this.createIdempotencyKey()}`, async key => {
+      const response = await this.request(`/api/staff/member-visits/${action}`, { method: 'POST', body: JSON.stringify(body),
+        headers: new Headers({ 'content-type': 'application/json', 'idempotency-key': key }) })
+      const payload = await readJson(response)
+      if (!isObject(payload) || !isObject(payload.data) || typeof payload.data.id !== 'string') throw new StaffActionsApiError('签到结果未能读取，请重新读取状态', 'INVALID_RESPONSE', response.status)
+      return payload.data as unknown as import('../../shared/member-visit').MemberVisit
+    })
+  }
+  async lookupMemberParticipation(code: string, signal?: AbortSignal): Promise<import('../../shared/member-participation').MemberParticipation> {
+    const response = await this.request('/api/staff/member-participation/lookup', {
+      method: 'POST', signal, body: JSON.stringify({ code }),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    }, true)
+    const body = await readJson(response)
+    if (!isObject(body) || !isObject(body.data)) throw new StaffActionsApiError('会员查询结果未能读取，请重试', 'INVALID_RESPONSE', response.status)
+    return body.data as unknown as import('../../shared/member-participation').MemberParticipation
+  }
   private readonly pendingKdsCommands = new Map<string, {key:string;quantity?:number}>()
   private readonly commandStorage:StaffActionsApiOptions['commandStorage']
   private employeeId = 'current-session'
@@ -1139,7 +1178,7 @@ export class StaffActionsApi implements StaffActionsApiPort {
     return value.data as Data
   }
 
-  private async request(url: string, init: RequestInit): Promise<Response> {
+  private async request(url: string, init: RequestInit, readOnly = false): Promise<Response> {
     if (!url.startsWith('/api/')) throw new StaffActionsApiError('接口地址不受信任', 'UNTRUSTED_ENDPOINT', null)
     const controller = new AbortController()
     const callerSignal = init.signal
@@ -1151,7 +1190,7 @@ export class StaffActionsApi implements StaffActionsApiPort {
     if (this.staffSessionId !== undefined) headers.set(STAFF_SESSION_BINDING_HEADER, this.staffSessionId)
     try {
       const response = await this.send(url, { ...init, headers, signal: controller.signal, credentials: 'include' })
-      if (!response.ok) throw await apiError(response, init.method ?? 'GET')
+      if (!response.ok) throw await apiError(response, readOnly ? 'GET' : init.method ?? 'GET')
       return response
     } catch (error) {
       if (error instanceof StaffActionsApiError) throw error

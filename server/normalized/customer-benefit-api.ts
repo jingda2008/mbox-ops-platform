@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { loadMemberParticipation, readMemberScanCode } from './member-participation-query.js'
 import { loadGuestCustomerOrderHistory } from './guest-table-orders-query.js'
 import { benefitWalletState, parseBenefitWalletCursor } from './benefit-wallet.js'
 import { CouponCalendarError } from './coupon-calendar.js'
@@ -71,6 +72,7 @@ export interface CustomerBenefitApiOptions {
   customers: CustomerCommandService
   benefits: BenefitCommandService
   dailySnackClaims?: AnnualDailySnackClaimService
+  activityPaymentProviderConfigured?: boolean
   now?: () => Date
   resolveSelfContext(request: FastifyRequest): Promise<CustomerBenefitGuestContext> | CustomerBenefitGuestContext
   resolveGuestContext(request: FastifyRequest): Promise<CustomerBenefitGuestContext> | CustomerBenefitGuestContext
@@ -128,6 +130,20 @@ export const customerBenefitApiPlugin: FastifyPluginAsync<CustomerBenefitApiOpti
   app,
   options,
 ) => {
+  app.post('/staff/member-participation/lookup', { bodyLimit: 4096 }, async (request, reply) => {
+    privateNoStore(reply)
+    return handleRoute(reply, async () => {
+      const context = await options.resolveStaffContext(request)
+      const code = readMemberScanCode(readObject(request.body).code)
+      const data = await options.transactions.run(context.scope, async transaction => {
+        const access = await staffAccess(options, transaction).assertPermission(context.employeeId, 'loyalty.account.view')
+        const activitiesVisible = ['community.activity.view', 'community.activity.manage', 'community.activity.publish']
+          .some(permission => access.permissions.includes(permission))
+        return loadMemberParticipation(transaction, code, activitiesVisible, options.activityPaymentProviderConfigured ?? false, options.now?.())
+      }, { readOnly: true })
+      return reply.send({ data })
+    })
+  })
   app.get('/public/mini/customer/orders', async (request, reply) => {
     privateNoStore(reply)
     return handleRoute(reply, async () => {

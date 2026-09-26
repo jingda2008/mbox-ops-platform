@@ -44,6 +44,8 @@ import { commercialOpsApiPlugin } from './commercial-ops-api.js'
 import { createGroupVoucherPlatformRegistry } from './group-voucher-platforms.js'
 import { ownerFinanceApiPlugin } from './owner-finance-api.js'
 import { customerBenefitApiPlugin } from './customer-benefit-api.js'
+import { memberVisitRewardApiPlugin } from './member-visit-reward-api.js'
+import { memberVisitApiPlugin } from './member-visit-api.js'
 import { customerExperienceAnalyticsApiPlugin } from './customer-experience-analytics-api.js'
 import { customerExperienceApiPlugin } from './customer-experience-api.js'
 import { CustomerExperienceService } from './customer-experience-service.js'
@@ -873,6 +875,8 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     }
     instance.register(memberCardApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveSelfContext: memberSelfContext, resolveStaffContext: staffReservationContext })
     instance.register(memberNumberApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext })
+    instance.register(memberVisitRewardApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext })
+    instance.register(memberVisitApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext })
     instance.register(socialBroadcastApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext })
     instance.register(launchPopupApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext, resolveSelfContext: memberSelfContext })
     instance.register(customerCustodyApiPlugin, { prefix: '/api', transactions, resolveSelfContext: memberSelfContext, protection: activityContactProtection })
@@ -886,6 +890,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       customers: new CustomerCommandService(commandExecutor),
       benefits: benefitCommands,
       dailySnackClaims: annualDailySnackClaims,
+      activityPaymentProviderConfigured: options.config.payment !== null,
       resolveSelfContext: memberSelfContext,
       resolveGuestContext: guestReservationContext,
       resolveStaffContext: staffReservationContext,

@@ -1,0 +1,10 @@
+.staff-member-participation { margin: 12px 0; padding: 16px; border: 1px solid #536376; border-radius: 12px; }
+.staff-member-participation > header { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.staff-member-participation > header div { display: flex; gap: 8px; }
+.staff-member-participation article { padding: 12px 0; border-bottom: 1px solid #536376; overflow-wrap: anywhere; }
+.staff-member-participation small { display: block; opacity: .8; }
+.staff-member-participation h4 { margin: 20px 0 8px; }
+.staff-member-participation a { color: inherit; text-decoration: underline; display: inline-block; padding: 10px 0; }
+.staff-member-participation button { min-height: 40px; }
+.member-check-in-choice { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+.member-check-in-choice button[aria-pressed="true"] { outline: 2px solid currentColor; outline-offset: 2px; }

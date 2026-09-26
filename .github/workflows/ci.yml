@@ -218,11 +218,20 @@ jobs:
         run: |
           node -e "const r=JSON.parse(require('fs').readFileSync('artifacts/normalized-browser/startup.json','utf8')); if(r.gate?.passed!==true) process.exit(1)"
           printf 'startup_report_b64=%s\n' "$(base64 -w0 artifacts/normalized-browser/startup.json)" >> "${GITHUB_OUTPUT}"
+      - name: Preserve baseline browser evidence
+        run: cp -R artifacts/normalized-browser artifacts/normalized-browser-baseline
       - name: Verify dedicated three-screen entry, orientation and resume on a fresh database
         env:
           NORMALIZED_E2E_THREE_SCREEN: 'true'
           NORMALIZED_E2E_KITCHEN: 'true'
         run: npm run test:e2e:normalized -- tests/normalized-e2e/normalized-three-screen-entry.spec.ts tests/normalized-e2e/normalized-button-audit.spec.ts tests/normalized-e2e/normalized-kitchen-orientation.spec.ts tests/normalized-e2e/normalized-three-screen-density.spec.ts tests/normalized-e2e/normalized-screen-resume.spec.ts
+      - name: Verify member scans and approval-gated recurring visit rewards on a fresh database
+        env:
+          NORMALIZED_E2E_MEMBER_CARDS: 'true'
+          NORMALIZED_E2E_MEMBER_VISIT_REWARDS: 'true'
+        run: |
+          cp -R artifacts/normalized-browser artifacts/normalized-browser-three-screen
+          npm run test:e2e:normalized -- tests/normalized-e2e/normalized-member-participation.spec.ts tests/normalized-e2e/normalized-member-visit-rewards.spec.ts tests/normalized-e2e/normalized-member-gifts.spec.ts
       - name: Upload normalized browser evidence
         if: always()
         continue-on-error: true
@@ -233,6 +242,8 @@ jobs:
             artifacts/normalized-browser/report
             artifacts/normalized-browser/results
             artifacts/normalized-browser/startup.json
+            artifacts/normalized-browser-baseline
+            artifacts/normalized-browser-three-screen
           if-no-files-found: warn
           retention-days: ${{ github.event_name == 'pull_request' && 3 || 14 }}
 

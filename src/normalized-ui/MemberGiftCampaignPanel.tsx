@@ -4,6 +4,7 @@ import {NumberInputWithUnit} from './NumberInputWithUnit'
 import {executeRecoverableCommand} from './recoverable-command'
 import {createIdempotencyKey} from './cashier-mutation'
 import {useConfirmationDialog} from './ConfirmationDialog'
+import {MemberVisitRewardPanel} from './MemberVisitRewardPanel'
 import {CouponRefundReviewPanel} from './CouponRefundReviewPanel'
 import './member-gift-campaign-panel.css'
 interface Option{id:string;name:string;code:string}
@@ -100,7 +101,7 @@ export function MemberGiftCampaignPanel({api,auth}:{api:NormalizedApiClient;auth
     </div></article>)}</div>{campaignCursor&&<button type="button" disabled={busy} onClick={()=>void load('campaigns',true)}>更多活动</button>}
     {canPublish&&<details><summary>向选定会员发券</summary><fieldset disabled={busy}><label>已发布活动<select value={target} onChange={event=>setTarget(event.target.value)}><option value="">请先读取活动并选择</option>{campaigns.filter(c=>c.status==='published'&&c.rule.trigger==='targeted').map(c=><option key={c.id} value={c.id}>{c.name} · {c.code}</option>)}</select></label><label>发放批次编号<input value={cycleKey} maxLength={100} onChange={event=>setCycleKey(event.target.value)}/></label></fieldset><p>同一活动、同一批次、同一客户只领一次。改变批次意味着允许再次领取，不应用来绕过预算。每批最多50人。</p><Selector api={api} kind="customers" label="目标会员" multiple value={customers} onChange={setCustomers} disabled={busy}/><button type="button" disabled={busy||!target||!cycleKey||!customers.length||customers.length>50} onClick={()=>void command(`${path}/campaigns/${target}/target`,{customerIds:customers.map(c=>c.id),cycleKey,reason},`向选定的 ${customers.length} 名会员提交发券任务；逐笔核对资格和预算。不会自动发送营销消息。`)}>提交发券任务</button></details>}
     <button type="button" disabled={busy} onClick={()=>void load('jobs')}>读取发券任务</button><div className="gift-records">{jobs.map(j=><article key={j.id}><strong>{j.name} · {names[j.status]||'待核实'}</strong><p>{j.customer_reference} · {j.quantity}份 · 已尝试{j.attempts}次</p>{j.last_error_code&&<p>{errors[j.last_error_code]||'请核对发券记录'}</p>}{canPublish&&['pending','blocked'].includes(j.status)&&<div className="gift-actions"><button type="button" disabled={busy} onClick={()=>void command(`${path}/jobs/${j.id}/control`,{action:'retry',reason},'重新排队，仍检查活动状态、资格、成本和预算，不保证即时发出。')}>核对后重试</button><button type="button" disabled={busy} onClick={()=>void command(`${path}/jobs/${j.id}/control`,{action:'cancel',reason},'取消此未发任务并保留原因；如已对客户承诺权益，应先确认补偿安排。')}>取消未发任务</button></div>}</article>)}</div>{jobCursor&&<button type="button" disabled={busy} onClick={()=>void load('jobs',true)}>更多发券任务</button>}
-    <CouponRefundReviewPanel api={api} auth={auth}/>
+    <MemberVisitRewardPanel api={api} auth={auth} campaigns={campaigns}/><CouponRefundReviewPanel api={api} auth={auth}/>
     {message&&<p role="status">{message}</p>}
   </section>
 }

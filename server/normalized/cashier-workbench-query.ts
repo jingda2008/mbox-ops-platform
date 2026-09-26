@@ -260,7 +260,12 @@ export class PostgresCashierWorkbenchQuery {
               WHERE (allocation.tenant_id,allocation.store_id,allocation.batch_id)=(payment.tenant_id,payment.store_id,payment.order_batch_id)) END
             ) ORDER BY payment.id)
             FROM mbox.order_payment_facts fact
-            JOIN mbox.payments payment ON (payment.tenant_id,payment.store_id,payment.id)=(fact.tenant_id,fact.store_id,fact.id)
+            -- Keep this lookup keyed to the selected order's payment fact. Under
+            -- RLS, flattening the join can repeatedly scan all historical
+            -- payments for every closed session in the cashier queue.
+            JOIN LATERAL (SELECT payment.* FROM mbox.payments payment
+              WHERE (payment.tenant_id,payment.store_id,payment.id)=(fact.tenant_id,fact.store_id,fact.id)
+              OFFSET 0) payment ON true
             WHERE (fact.tenant_id,fact.store_id,fact.order_id)=(orders.tenant_id,orders.store_id,orders.id)
               AND session.status='closed' AND ${localUnpresentedPaymentSql()}
           ),'[]'::jsonb) AS closable_unpresented_payments,

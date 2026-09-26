@@ -13,6 +13,7 @@
 .staff-module-blocker-fact em { color: #656052; font-style: normal; }
 .staff-module-body { display: grid; gap: 8px; padding: 10px; }
 .staff-module-summary { min-height: 66px; display: grid; grid-template-columns: 38px minmax(0, 1fr); align-items: center; gap: 10px; padding: 11px 12px; border: 1px solid #cbd2ca; border-radius: 7px; background: #fff; }
+.staff-module-panel #order-financial-recovery { display: block; min-width: 0; }
 .staff-module-summary.has-attention { border-color: #dfbd5d; background: #fffaf0; }
 .staff-module-summary > span { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 50%; background: #e7f3ec; color: #176b43; }
 .staff-module-summary > div { min-width: 0; display: grid; gap: 3px; }

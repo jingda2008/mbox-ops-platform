@@ -3,9 +3,9 @@ import {test,expect} from '@playwright/test'
 
 test.use({viewport:{width:1024,height:600},isMobile:false,hasTouch:true})
 
-// Audit reproduction: assert the observed defect, not a passing acceptance gate.
-test('AUDIT pickup-only original-task link loops back to the pickup screen',async({page},testInfo)=>{
+test('取餐异常由受限账号明确交接，有权限账号可进入原任务且不扩大取餐权限',async({page},testInfo)=>{
   const f=JSON.parse(await readFile('artifacts/normalized-browser/fixture.json','utf8'))
+  test.skip(!f.threeScreenFixture,'requires isolated three-screen fixture')
   await page.goto('/')
   await page.getByLabel('门店口令').fill(f.dailyCredential)
   await page.getByRole('button',{name:/验证设备/}).click()
@@ -20,7 +20,7 @@ test('AUDIT pickup-only original-task link loops back to the pickup screen',asyn
   await page.getByLabel('四位 PIN').fill(f.employeePin)
   await page.getByRole('button',{name:/进入工作台/}).click()
   await expect(page.locator('.pickup-connection')).toHaveText('已更新')
-  const taskId='caaa0000-0000-4000-8000-000000000099'
+  const taskId=f.threeScreenFixture.tables[0].tasks[0].taskId
   await page.route('**/api/commerce/pickup-board',async route=>{
     const response=await route.fetch(),body=await response.json()
     body.data.attention=[{taskId,message:'旧出品有退库、异常或拆份待核对，请从原任务继续处理；尚未标记取走',href:`/staff/fulfillment?factId=${taskId}`}]
@@ -28,11 +28,21 @@ test('AUDIT pickup-only original-task link loops back to the pickup screen',asyn
   })
   await page.goto('/staff/fulfillment?screen=pickup')
   await page.locator('.pickup-attention summary').click()
-  await page.getByRole('link',{name:'查看原出品',exact:true}).click()
-  await expect(page).toHaveURL(new RegExp(`factId=${taskId}`))
-  await expect(page.getByRole('region',{name:'吧台取餐工作台'})).toBeVisible()
-  await expect(page.locator(`[data-action-fact-id="${taskId}"]`)).toHaveCount(0)
+  await expect(page.getByRole('link',{name:'查看原出品',exact:true})).toHaveCount(0)
+  await expect(page.locator('.pickup-attention')).toContainText('其他正常出品仍可取走')
+  const session=await page.request.get('/api/auth/session')
+  expect((await session.json()).data.permissions).toEqual(['kds.deliver'])
+  expect((await page.request.get('/api/operations')).status()).toBe(403)
+  await page.getByRole('button',{name:'切换处理账号',exact:true}).click()
+  await page.getByLabel('员工账号').fill('liyan')
+  await page.getByLabel('四位 PIN').fill(f.employeePin)
+  await page.getByRole('button',{name:/进入工作台/}).click()
+  await expect(page.locator('.pickup-connection')).toHaveText('已更新')
   await page.locator('.pickup-attention summary').click()
   await expect(page.getByRole('link',{name:'查看原出品',exact:true})).toBeVisible()
-  await page.screenshot({path:testInfo.outputPath('pickup-original-task-loop.png')})
+  await page.getByRole('link',{name:'查看原出品',exact:true}).click()
+  await expect(page).toHaveURL(new RegExp(`factId=${taskId}`))
+  await expect(page.getByRole('region',{name:'吧台取餐工作台'})).toHaveCount(0)
+  await expect(page.locator(`[data-action-fact-id="${taskId}"]`)).toBeVisible()
+  await page.screenshot({path:testInfo.outputPath('pickup-original-task-handoff.png')})
 })

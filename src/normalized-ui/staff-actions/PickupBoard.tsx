@@ -9,12 +9,12 @@ import {adjustPickupAmount,pickupDraft,pickupDraftCount,pickupDraftCurrent,picku
   PICKUP_PAGE_SIZE,PICKUP_REPEAT_GUARD_MS,type PickupDraft,type PickupLine,type PickupTable} from './pickup-board-state'
 import './pickup-board.css'
 
-export interface PickupBoardProps {staffSessionId:string;api?:PickupApiPort;onExit?:()=>void;onLoginRequired?:()=>void}
+export interface PickupBoardProps {staffSessionId:string;api?:PickupApiPort;canViewOriginalTasks?:boolean;onExit?:()=>void;onLoginRequired?:()=>void}
 const clock=(value:string)=>new Date(value).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})
 const errorText=(error:unknown)=>error instanceof Error?error.message:'更新未完成，请核对原取餐操作'
 const hint=(message:string|null)=>staffErrorMessage(message,'已有后续变化，请联系值班经理核对',409)
 
-export function PickupBoard({staffSessionId,api:suppliedApi,onExit,onLoginRequired}:PickupBoardProps){
+export function PickupBoard({staffSessionId,api:suppliedApi,canViewOriginalTasks=false,onExit,onLoginRequired}:PickupBoardProps){
   const viewport=useScreenViewport()
   const api=useMemo(()=>suppliedApi??new PickupApi({staffSessionId}),[suppliedApi,staffSessionId])
   const [data,setData]=useState<PickupBoardData|null>(null),[stale,setStale]=useState(true),[busy,setBusy]=useState(false)
@@ -122,7 +122,10 @@ export function PickupBoard({staffSessionId,api:suppliedApi,onExit,onLoginRequir
       {(loginRequired||recovery.otherSession)&&onLoginRequired&&<button type="button" disabled={busy} onClick={onLoginRequired}>恢复登录</button>}
       {!draft&&!undo&&mode==='waiting'&&recent&&<span className="pickup-recent">{recent.tableCode} · {recent.undo?'已撤回':`刚取 ${recent.quantity}份`}{recent.canUndo&&<button type="button" disabled={locked||!data?.actor.canUndo} onClick={()=>beginUndo(recent)}>撤回</button>}</span>}
     </div>
-    {data?.attention.length!==0&&data?.attention.length!==undefined&&<details className="pickup-attention"><summary>{data.attention.length}项出品待核对</summary>{data.attention.map(item=><p key={item.taskId}>{hint(item.message)} <a href={item.href}>查看原出品</a></p>)}</details>}
+    {data?.attention.length!==0&&data?.attention.length!==undefined&&<details className="pickup-attention"><summary>{data.attention.length}项出品待核对</summary>
+      {data.attention.map((item,index)=><p key={item.taskId}>{canViewOriginalTasks?<>{hint(item.message)} <a href={item.href}>查看原出品</a></>:<>第{index+1}项：旧出品需值班经理核对，尚未标记取走</>}</p>)}
+      {!canViewOriginalTasks&&<p>请交由有出品处理权限的值班经理核对；其他正常出品仍可取走。{onLoginRequired&&<button type="button" disabled={busy||unresolved} onClick={onLoginRequired}>切换处理账号</button>}{unresolved&&'请先核对本设备的原取餐结果，再切换账号。'}</p>}
+    </details>}
     {showPrevious&&recovery.previousAttempt?<div className="pickup-detail" aria-label="本设备上次取餐操作"><header><h2>核对本设备上次操作</h2><button type="button" disabled={busy} onClick={()=>setShowPrevious(false)}>返回</button></header>
       <div className="pickup-detail-scroll"><h3>{recovery.previousAttempt.preview?.title??(recovery.previousAttempt.request.kind==='device'?'上次取餐屏设置':'上次取餐确认')}</h3>
         <p>{clock(recovery.previousAttempt.createdAt)} · 结果待核对</p>{recovery.previousAttempt.preview?.lines.map((line,index)=><p className="pickup-recovery-line" key={index}>{line}</p>)}</div>

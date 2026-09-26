@@ -222,7 +222,7 @@ jobs:
         env:
           NORMALIZED_E2E_THREE_SCREEN: 'true'
           NORMALIZED_E2E_KITCHEN: 'true'
-        run: npm run test:e2e:normalized -- tests/normalized-e2e/normalized-three-screen-entry.spec.ts tests/normalized-e2e/normalized-kitchen-orientation.spec.ts tests/normalized-e2e/normalized-three-screen-density.spec.ts tests/normalized-e2e/normalized-screen-resume.spec.ts
+        run: npm run test:e2e:normalized -- tests/normalized-e2e/normalized-three-screen-entry.spec.ts tests/normalized-e2e/normalized-button-audit.spec.ts tests/normalized-e2e/normalized-kitchen-orientation.spec.ts tests/normalized-e2e/normalized-three-screen-density.spec.ts tests/normalized-e2e/normalized-screen-resume.spec.ts
       - name: Upload normalized browser evidence
         if: always()
         continue-on-error: true

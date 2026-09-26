@@ -1,3 +1,4 @@
+import { MemberVisitRewardRepository } from './member-visit-reward-repository.js'
 import type { MemberVisit } from '../../src/shared/member-visit.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 import { resolveMemberScanCustomer } from './member-participation-query.js'
@@ -30,6 +31,7 @@ export class MemberVisitRepository {
   }
   private async lockCustomer(memberNo: string) {
     const customer = await resolveMemberScanCustomer(this.tx, memberNo)
+    await new MemberVisitRewardRepository(this.tx).lockCustomer(customer.id)
     const locked = await this.tx.query<{ status: string }>(`SELECT status FROM mbox.customers
       WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE`, [this.tx.scope.tenantId, this.tx.scope.storeId, customer.id])
     if (locked.rows[0]?.status !== 'active') throw new MemberVisitError('会员状态已变化，请重新扫码')
@@ -38,10 +40,11 @@ export class MemberVisitRepository {
   async checkIn(memberNo: string, businessDate: string, employeeId: string) {
     const customerId = await this.lockCustomer(memberNo)
     const existing = await this.currentForCustomer(customerId, businessDate)
-    if (existing) return { visit: existing, changed: false }
+    if (existing) { await new MemberVisitRewardRepository(this.tx).sync(customerId); return { visit: existing, changed: false } }
     const inserted = await this.tx.query<{ id: string }>(`INSERT INTO mbox.member_visit_checkins
       (tenant_id,store_id,customer_id,business_date,checked_in_by_employee_id)
       VALUES($1,$2,$3,$4::date,$5) RETURNING id`, [this.tx.scope.tenantId, this.tx.scope.storeId, customerId, businessDate, employeeId])
+    await new MemberVisitRewardRepository(this.tx).sync(customerId)
     return { visit: await this.byId(inserted.rows[0]!.id), changed: true }
   }
   async cancel(memberNo: string, businessDate: string, visitId: string, employeeId: string, reason: string) {
@@ -53,6 +56,7 @@ export class MemberVisitRepository {
     if (row.cancelled_at) return { visit: view(row), changed: false }
     await this.tx.query(`UPDATE mbox.member_visit_checkins SET cancelled_at=clock_timestamp(),cancelled_by_employee_id=$4,cancel_reason=$5
       WHERE tenant_id=$1 AND store_id=$2 AND id=$3`, [this.tx.scope.tenantId, this.tx.scope.storeId, visitId, employeeId, reason])
+    await new MemberVisitRewardRepository(this.tx).sync(customerId)
     return { visit: await this.byId(visitId), changed: true }
   }
   private async byId(id: string) {

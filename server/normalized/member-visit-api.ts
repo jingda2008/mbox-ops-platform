@@ -5,6 +5,7 @@ import { IdempotencyConflictError, IdempotencyInProgressError, type NormalizedCo
 import { StaffAccessRepository, StaffAccessDeniedError } from './staff-access-repository.js'
 import { isStaffAuthenticationRequiredError, STAFF_AUTHENTICATION_REQUIRED_ERROR } from './staff-api-authentication.js'
 import { CustomerNotFoundError } from './customer-repository.js'
+import { MemberVisitRewardRepository, MemberVisitRewardError } from './member-visit-reward-repository.js'
 import { readMemberScanCode } from './member-participation-query.js'
 import { MemberVisitRepository, MemberVisitError } from './member-visit-repository.js'
 import type { MemberVisit } from '../../src/shared/member-visit.js'
@@ -21,6 +22,7 @@ export const memberVisitApiPlugin: FastifyPluginAsync<Options> = async (app, opt
     if (error instanceof StaffAccessDeniedError) return reply.code(403).send({ error: { code: 'MEMBER_VISIT_FORBIDDEN', message: '当前账号没有会员到店签到权限，请由有权限员工办理' } })
     if (error instanceof CustomerNotFoundError) return reply.code(404).send({ error: { code: 'MEMBER_VISIT_MEMBER_NOT_FOUND', message: '会员不存在、已停用或不属于当前门店' } })
     if (error instanceof z.ZodError || error instanceof TypeError) return reply.code(400).send({ error: { code: 'MEMBER_VISIT_INVALID', message: '请重新扫码并核对签到信息' } })
+    if (error instanceof MemberVisitRewardError) return reply.code(409).send({ error: { code: 'MEMBER_VISIT_REWARD_BUSY', message: error.message } })
     if (error instanceof MemberVisitError) return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message } })
     if (error instanceof IdempotencyConflictError || error instanceof IdempotencyInProgressError) return reply.code(409).send({ error: { code: 'MEMBER_VISIT_RETRY', message: '原签到操作正在处理或已变化，请读取状态后重试' } })
     throw error
@@ -31,7 +33,8 @@ export const memberVisitApiPlugin: FastifyPluginAsync<Options> = async (app, opt
     return { data: await options.transactions.run(context.scope, async tx => {
       const access = await new StaffAccessRepository(tx).assertPermission(context.employeeId, 'loyalty.account.view')
       return { memberNo: code, businessDate: context.businessDate, canCheckIn: access.permissions.includes('customer.relationship.manage'),
-        visit: await new MemberVisitRepository(tx).current(code, context.businessDate) }
+        visit: await new MemberVisitRepository(tx).current(code, context.businessDate),
+        rewards: await new MemberVisitRewardRepository(tx).progressForMember(code) }
     }, { readOnly: true }) }
   })
   for (const action of ['check-in', 'cancel'] as const) app.post(`/staff/member-visits/${action}`, { bodyLimit: 2048 }, async request => {

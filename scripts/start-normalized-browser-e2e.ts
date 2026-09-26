@@ -1,3 +1,4 @@
+import { seedMemberVisitRewardBrowserFixture } from './fixtures/member-visit-reward-browser-fixture.js'
 import {seedThreeScreenBrowserFixture} from './fixtures/three-screen-browser-fixture.js'
 import {seedKitchenBrowserFixture} from './fixtures/kitchen-browser-fixture.js'
 import {QuantityRemakeRepository} from '../server/normalized/quantity-remake-repository.js'
@@ -122,6 +123,7 @@ try {
     await calendar.decide({versionId:saved.id,action:'approve',employeeId:approver,businessDate,reason:'隔离规则审核'})
     await calendar.decide({versionId:saved.id,action:'publish',employeeId:creator,businessDate,reason:'隔离规则发布'})
     for(const actor of [employeeId,approver,creator])for(const permissionCode of ['marketing.notice.view','marketing.notice.edit','marketing.notice.approve','marketing.notice.publish','marketing.send','marketing.refusal.record','marketing.consent.audit'])await access.setEmployeePermissionOverride({employeeId:actor,permissionCode,effect:'grant',reason:'隔离营销页面测试',configuredByEmployeeId:employeeId,startsAt})
+    if(process.env.NORMALIZED_E2E_MEMBER_VISIT_REWARDS==='true')await seedMemberVisitRewardBrowserFixture(transaction,{employeeId,approver,publisher:creator,businessDate,calendarId:saved.id,productId:giftProduct})
     const marketing=new MarketingContactRepository(transaction)
     const marketingNotice=await marketing.save({code:'BROWSER_MARKETING',expectedVersion:0,employeeId,businessDate,reason:'隔离无外部发送夹具',requestKey:'browser-marketing-notice',rule:{operatorName:'隔离测试经营主体',operatorContact:'隔离测试客服',summary:'仅用于隔离浏览器测试，不联系真实客户。',withdrawalInstructions:'联系偏好中随时停止，会员与点单不受影响。',purposes:['own_activities'],channels:['sms'],dataCategories:['本人验证手机号'],validFrom:from,validUntil:until,consentDays:7,contactStartMinute:0,contactEndMinute:1440,weekdays:[1,2,3,4,5,6,7],maximumPerDay:1,maximumPerMonth:4,sharingMode:'no_partner_list'}})
     await marketing.decide({noticeId:marketingNotice.noticeId,action:'approve',employeeId:approver,businessDate,reason:'隔离告知审核'})
@@ -236,6 +238,7 @@ try {
     employeeCode: 'liyan',
     employeePin: '5210',
     memberCardFixture,
+    memberVisitRewardFixture: memberCardFixture && process.env.NORMALIZED_E2E_MEMBER_VISIT_REWARDS === 'true',
     adminEmployeeCode: 'wuya',
     adminEmployeePin: '5210',
     orderableProductName: orderableProducts.bar,

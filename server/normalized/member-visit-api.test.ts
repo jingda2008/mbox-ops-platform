@@ -1,3 +1,4 @@
+import { MemberVisitRewardRepository } from './member-visit-reward-repository.js'
 import Fastify from 'fastify'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { memberVisitApiPlugin } from './member-visit-api.js'
@@ -22,6 +23,7 @@ function setup(mode: 'allowed' | 'anonymous' | 'read-only' = 'allowed') {
     if (mode === 'read-only' && code !== 'loyalty.account.view') throw new StaffAccessDeniedError('denied')
     return { permissions: mode === 'allowed' ? ['loyalty.account.view','customer.relationship.manage'] : ['loyalty.account.view'] } as never
   })
+  vi.spyOn(MemberVisitRewardRepository.prototype,'progressForMember').mockResolvedValue([])
   const current = vi.spyOn(MemberVisitRepository.prototype,'current').mockResolvedValue(null)
   const checkIn = vi.spyOn(MemberVisitRepository.prototype,'checkIn').mockResolvedValue({ visit, changed: true })
   const cancel = vi.spyOn(MemberVisitRepository.prototype,'cancel').mockResolvedValue({ visit: { ...visit, status: 'cancelled' }, changed: true })
@@ -39,7 +41,7 @@ describe('member attendance choices are independent of activity admission', () =
   it('reports current server business date and read-only access without granting write permission', async () => {
     const value=setup('read-only')
     const response=await value.app.inject({method:'POST',url:'/staff/member-visits/lookup',payload:{code:payload.code}})
-    expect(response.json().data).toEqual({memberNo:'MBX-100000',businessDate:'2026-09-26',canCheckIn:false,visit:null})
+    expect(response.json().data).toEqual({memberNo:'MBX-100000',businessDate:'2026-09-26',canCheckIn:false,visit:null,rewards:[]})
     expect(value.run).toHaveBeenCalledWith(scope,expect.any(Function),{readOnly:true})
     expect(value.checkIn).not.toHaveBeenCalled()
   })

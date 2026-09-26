@@ -9,5 +9,6 @@ export interface MemberVisitStatus {
   memberNo: string
   businessDate: string
   canCheckIn: boolean
+  rewards?: import('./member-visit-reward.js').MemberVisitRewardProgress[]
   visit: MemberVisit | null
 }

@@ -44,6 +44,7 @@ import { commercialOpsApiPlugin } from './commercial-ops-api.js'
 import { createGroupVoucherPlatformRegistry } from './group-voucher-platforms.js'
 import { ownerFinanceApiPlugin } from './owner-finance-api.js'
 import { customerBenefitApiPlugin } from './customer-benefit-api.js'
+import { memberVisitRewardApiPlugin } from './member-visit-reward-api.js'
 import { memberVisitApiPlugin } from './member-visit-api.js'
 import { customerExperienceAnalyticsApiPlugin } from './customer-experience-analytics-api.js'
 import { customerExperienceApiPlugin } from './customer-experience-api.js'
@@ -874,6 +875,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     }
     instance.register(memberCardApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveSelfContext: memberSelfContext, resolveStaffContext: staffReservationContext })
     instance.register(memberNumberApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext })
+    instance.register(memberVisitRewardApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext })
     instance.register(memberVisitApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext })
     instance.register(socialBroadcastApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext })
     instance.register(launchPopupApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext, resolveSelfContext: memberSelfContext })

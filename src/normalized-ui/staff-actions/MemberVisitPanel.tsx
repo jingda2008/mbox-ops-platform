@@ -30,7 +30,7 @@ export function MemberVisitPanel({ code, api }: { code: string; api: StaffAction
     const original = data
     inFlight.current = true; setBusy(true); setError(''); setNotice('')
     try {
-      if (action === 'cancel' && !await confirmAction({ title: '撤回这次到店签到', description: `${code} · ${original.businessDate} 营业日。保留原签到和撤回记录。`, confirmLabel: '确认撤回' })) return
+      if (action === 'cancel' && !await confirmAction({ title: '撤回这次到店签到', description: `${code} · ${original.businessDate} 营业日。保留原签到和撤回记录。未审批的奖励重新累计；已发券保留并标记异常，原计次不会再次领奖。`, confirmLabel: '确认撤回' })) return
       if (!current.active) return
       const visit = action === 'check-in' ? await api.checkInMemberVisit!(code, original.businessDate)
         : await api.cancelMemberVisit!(code, original.businessDate, original.visit!.id)
@@ -47,10 +47,11 @@ export function MemberVisitPanel({ code, api }: { code: string; api: StaffAction
     finally { if (current.active) { inFlight.current = false; setBusy(false) } }
   }
   return <section aria-label="仅到店签到">
-    <h4>仅到店签到</h4><p>只记录会员到店，不代表参加活动，不扣券、不发积分或套餐。</p>
+    <h4>仅到店签到</h4><p>记录会员到店，不代表参加具体活动。已启用的签到奖励按营业日累计，达标后等待管理审批。</p>
     {error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
     {!data && !error && <p>正在读取本营业日签到…</p>}
     {data && <>
+      {data.rewards?.map((reward,index)=><p key={index}>{reward.name}：每累计 {reward.requiredVisits} 次可领一轮；下一轮还差 {reward.remainingVisits} 次，待审批 {reward.pending} 轮，已发券 {reward.issued} 轮。</p>)}
       <p>营业日：{data.businessDate}（每日早上 6 点切换）</p>
       {data.visit ? <>
         <strong>本营业日已签到</strong><p>{new Date(data.visit.checkedInAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })} · 经办员工：{data.visit.employeeName}</p>

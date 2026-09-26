@@ -1814,6 +1814,12 @@ Page({
   async clearCart() {
     if (!this.data.cart.length || this.data.cartSyncing || this.data.clearingCart
       || this.data.checkoutLocked || this.data.cartWritesFrozen) return
+    const currentRequest = this.currentTableRequest()
+    if (!currentRequest || !this.isCurrentTableRequest(currentRequest)) return
+    // Copy the request: same-table rebasing can mutate the active object while the modal is open.
+    const tableRequest = Object.assign({}, currentRequest)
+    const expectedGeneration = this.data.cartGeneration
+    const expectedVersion = this.data.cartVersion
     const confirmed = await new Promise((resolve) => runtime.showModal({
       title: '清空本桌购物车？',
       content: '同桌顾客当前加入的商品都会被移除；已提交的订单不会受影响。',
@@ -1822,15 +1828,19 @@ Page({
       success: (result) => resolve(Boolean(result.confirm)),
       fail: () => resolve(false),
     }))
-    if (!confirmed) return
-    const tableRequest = this.currentTableRequest()
-    if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
+    if (!confirmed || !this.isCurrentTableRequest(tableRequest)) return
+    if (this.data.cartSyncing || this.data.clearingCart || this.data.busy
+      || this.data.checkoutLocked || this.data.cartWritesFrozen) return
+    if (this.data.cartGeneration !== expectedGeneration || this.data.cartVersion !== expectedVersion) {
+      this.setData({ error: '同桌购物车已经更新，未执行清空，请核对后重新操作。' })
+      return
+    }
     const writeGuard = this.ensureTableRequestGuard()
     const write = writeGuard.beginWrite(tableRequest.scope, 'cart')
     this.setData({ cartSyncing: true, clearingCart: true, error: '' })
     try {
       const sharedCart = await clearSharedCart(
-        this.data.cartGeneration, this.data.cartVersion, randomId('shared-cart-clear'),
+        expectedGeneration, expectedVersion, randomId('shared-cart-clear'),
       )
       if (!writeGuard.isCurrentWrite(write)) return
       this.updateCart(sharedCartView(sharedCart, this.data.products), sharedCart)

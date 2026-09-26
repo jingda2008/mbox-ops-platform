@@ -206,7 +206,7 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
       {staffNavigation === null ? navigationError === null ? <StaffGateLoading /> : <div className="normalized-route-notice" role="alert"><p>{navigationError}</p><button type="button" onClick={() => setNavigationAttempt(value => value + 1)}>重新读取工作台</button></div> : !staffNavigation.some((item) => item.code === normalizedStaffNavigationCode(window.location.pathname))
         ? <div className="normalized-route-notice" role="alert">当前账号没有这个页面的有效权限。请由管理员授权后刷新；</div>
         : dedicatedScreen
-        ? <Suspense fallback={<StaffGateLoading/>}><ThreeScreenWorkspace key={`${staffWorkspaceIdentityKey(auth)}:${dedicatedScreen}`} mode={dedicatedScreen} employeeId={auth.employee.id} staffSessionId={auth.session.id} onExit={()=>navigate(auth.permissions.includes('dashboard.view')?'/staff/fulfillment?view=all':'/')} onLoginRequired={loginRequired}/></Suspense>
+        ? <Suspense fallback={<StaffGateLoading/>}><ThreeScreenWorkspace key={`${staffWorkspaceIdentityKey(auth)}:${dedicatedScreen}`} mode={dedicatedScreen} employeeId={auth.employee.id} staffSessionId={auth.session.id} canViewOriginalTasks={auth.permissions.includes('dashboard.view')} onExit={()=>navigate(auth.permissions.includes('dashboard.view')?'/staff/fulfillment?view=all':'/')} onLoginRequired={loginRequired}/></Suspense>
         : isStaffActionsTab(staffRoute)
         ? <Suspense fallback={<StaffGateLoading />}><StaffActionsPanel key={`${staffWorkspaceIdentityKey(auth)}:${staffLocation}`}
             staffSessionId={auth.session.id}

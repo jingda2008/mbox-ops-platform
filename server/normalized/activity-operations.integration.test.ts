@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { loadMemberParticipation } from './member-participation-query.js'
 import { CustomerExperienceRepository } from './customer-experience-repository.js'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -43,6 +44,18 @@ integration('activity operations PostgreSQL integration', () => {
   })
 
   afterAll(async () => { await pool?.end() })
+
+  it('identifies a member and a free confirmed registration in a read-only scan without checking them in', async () => {
+    const memberNo = `MBX-${suffix.toUpperCase()}`
+    await pool.query('INSERT INTO mbox.customer_memberships(tenant_id,store_id,customer_id,member_no) VALUES($1,$2,$3,$4)', [tenantId,storeId,customerIds[0],memberNo])
+    await pool.query('INSERT INTO mbox.loyalty_accounts(tenant_id,store_id,membership_id,customer_id) SELECT tenant_id,store_id,id,customer_id FROM mbox.customer_memberships WHERE tenant_id=$1 AND store_id=$2 AND customer_id=$3', [tenantId,storeId,customerIds[0]])
+    const result = await runner.run({ tenantId, storeId }, transaction => loadMemberParticipation(transaction,memberNo,true,false), { readOnly:true })
+    expect(result.memberNo).toBe(memberNo)
+    expect(result.registrations).toEqual(expect.arrayContaining([expect.objectContaining({ publicId:'activity-ops-registration-free',readyForCheckIn:true })]))
+    const state = await pool.query('SELECT status FROM mbox.community_activity_registrations WHERE id=$1', [freeRegistrationId])
+    expect(state.rows[0].status).toBe('confirmed')
+    await expect(runner.run({tenantId,storeId}, transaction => loadMemberParticipation(transaction,memberNo.slice(0,-1),true,false), {readOnly:true})).rejects.toThrow()
+  })
 
   it('closes an empty draft without deleting history and refuses live registrations', async () => {
     await run(repository => repository.createDraft('activity-ops-close-empty', draftInput, employeeId))

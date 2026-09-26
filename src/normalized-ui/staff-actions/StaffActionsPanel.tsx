@@ -1,4 +1,5 @@
 import {KitchenProductionBoard} from './KitchenProductionBoard'
+import { MemberParticipationCard } from './MemberParticipationCard'
 import {productionEntry} from './three-screen-route'
 import { useStaffViewState } from '../staff-view-state'
 import { RefreshQueue } from './refresh-queue'
@@ -139,6 +140,7 @@ export function StaffActionsPanel({
   const [memberBenefits,setMemberBenefits]=useState<StaffMemberBenefitTasks|null>(null)
   const [memberBenefitQuery,setMemberBenefitQuery]=useState('')
   const [memberScannerOpen,setMemberScannerOpen]=useState(false)
+  const [memberLookup, setMemberLookup] = useState<{ code: string; revision: number } | null>(null)
   const [fulfillmentHistory,setFulfillmentHistory]=useStaffViewState<'active'|'delivery'|'prepared'|'delivered'>('fulfillment:history', 'active')
   const [fulfillmentLimit, setFulfillmentLimit] = useStaffViewState('fulfillment:limit', 24)
   const [fulfillmentSearch, setFulfillmentSearch] = useStaffViewState('fulfillment:search', '')
@@ -1055,6 +1057,11 @@ export function StaffActionsPanel({
     setMemberScannerOpen(false)
     setMemberBenefitQuery(normalized)
     setTab('tasks')
+    if (!/^MBOX_CLAIM_V1:/i.test(code.trim()) && !/^DSN-/i.test(normalized)) {
+      setMemberLookup(current => ({ code, revision: (current?.revision ?? 0) + 1 }))
+      return
+    }
+    setMemberLookup(null)
     const matched=memberBenefitTaskCount(filterMemberBenefitTasks(memberBenefits,normalized))
     showNotice(matched>0
       ? {kind:'success',message:`已定位 ${matched} 项会员权益待办`}
@@ -1238,9 +1245,11 @@ export function StaffActionsPanel({
       {tab === 'tasks' && (quantityBatchEnabled||quantityRecoveryAvailable)&&operations!==null&&<ItemAfterSalesPendingPanel employeeId={operations.actor.id}/>}
       {tab === 'tasks' && operations !== null && (
         <><div className="staff-member-benefit-tools">
-          <label><Search size={17}/><input value={memberBenefitQuery} onChange={(event)=>setMemberBenefitQuery(event.target.value)} placeholder="输入会员号或核销码" aria-label="输入会员号或核销码"/></label>
+          <label><Search size={17}/><input value={memberBenefitQuery} onChange={(event)=>{setMemberBenefitQuery(event.target.value);setMemberLookup(null)}} placeholder="输入会员号或核销码" aria-label="输入会员号或核销码"/></label>
+          <button type="button" disabled={!memberBenefitQuery.trim()} onClick={()=>acceptMemberCode(memberBenefitQuery)}>查询活动与权益</button>
           <button type="button" onClick={()=>setMemberScannerOpen(true)}><ScanLine size={17}/>扫描会员码</button>
         </div>
+        {memberLookup && <MemberParticipationCard key={memberLookup.revision} code={memberLookup.code} api={api} onClose={()=>setMemberLookup(null)}/>}
         {memberBenefits!==null&&<MemberBenefitTaskCards title="会员权益待办" tasks={filteredMemberBenefits}
           giftSelections={giftSelections} pendingAction={pendingAction}
           onSelection={(reservationId,selection)=>setGiftSelections((current)=>({...current,[reservationId]:selection}))}

@@ -886,6 +886,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       customers: new CustomerCommandService(commandExecutor),
       benefits: benefitCommands,
       dailySnackClaims: annualDailySnackClaims,
+      activityPaymentProviderConfigured: options.config.payment !== null,
       resolveSelfContext: memberSelfContext,
       resolveGuestContext: guestReservationContext,
       resolveStaffContext: staffReservationContext,

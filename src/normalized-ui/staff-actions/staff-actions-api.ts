@@ -245,6 +245,7 @@ export interface ObservationEventReplacement {
 }
 
 export interface StaffActionsApiPort {
+  lookupMemberParticipation?(code: string, signal?: AbortSignal): Promise<import('../../shared/member-participation').MemberParticipation>
   loadKitchenBoard?(signal?:AbortSignal,stationCode?:'bar'|'kitchen'):Promise<KitchenBoardData>
   runKitchenCommand?(employeeId:string,command:KitchenCommand,key:string,stationCode?:'bar'|'kitchen'):Promise<KitchenCommandResult>
   loadKitchenHandoffPreview?(batchId:string,stationCode?:'bar'|'kitchen',signal?:AbortSignal):Promise<KitchenHandoffPreview>
@@ -413,6 +414,15 @@ export interface StaffActionsApiOptions {
 }
 
 export class StaffActionsApi implements StaffActionsApiPort {
+  async lookupMemberParticipation(code: string, signal?: AbortSignal): Promise<import('../../shared/member-participation').MemberParticipation> {
+    const response = await this.request('/api/staff/member-participation/lookup', {
+      method: 'POST', signal, body: JSON.stringify({ code }),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    }, true)
+    const body = await readJson(response)
+    if (!isObject(body) || !isObject(body.data)) throw new StaffActionsApiError('会员查询结果未能读取，请重试', 'INVALID_RESPONSE', response.status)
+    return body.data as unknown as import('../../shared/member-participation').MemberParticipation
+  }
   private readonly pendingKdsCommands = new Map<string, {key:string;quantity?:number}>()
   private readonly commandStorage:StaffActionsApiOptions['commandStorage']
   private employeeId = 'current-session'
@@ -1139,7 +1149,7 @@ export class StaffActionsApi implements StaffActionsApiPort {
     return value.data as Data
   }
 
-  private async request(url: string, init: RequestInit): Promise<Response> {
+  private async request(url: string, init: RequestInit, readOnly = false): Promise<Response> {
     if (!url.startsWith('/api/')) throw new StaffActionsApiError('接口地址不受信任', 'UNTRUSTED_ENDPOINT', null)
     const controller = new AbortController()
     const callerSignal = init.signal
@@ -1151,7 +1161,7 @@ export class StaffActionsApi implements StaffActionsApiPort {
     if (this.staffSessionId !== undefined) headers.set(STAFF_SESSION_BINDING_HEADER, this.staffSessionId)
     try {
       const response = await this.send(url, { ...init, headers, signal: controller.signal, credentials: 'include' })
-      if (!response.ok) throw await apiError(response, init.method ?? 'GET')
+      if (!response.ok) throw await apiError(response, readOnly ? 'GET' : init.method ?? 'GET')
       return response
     } catch (error) {
       if (error instanceof StaffActionsApiError) throw error

@@ -1,10 +1,8 @@
 import type { ScopedTransaction } from '../../server/normalized/transaction-runner.js'
 import { MemberGiftCampaignRepository } from '../../server/normalized/member-gift-campaign-repository.js'
-import { StaffAccessRepository } from '../../server/normalized/staff-access-repository.js'
 // Only called in the opt-in throwaway browser database, never production.
 export async function seedMemberVisitRewardBrowserFixture(tx:ScopedTransaction,input:{employeeId:string;approver:string;publisher:string;businessDate:string;calendarId:string;productId:string}){
   const {employeeId,approver,publisher,businessDate,calendarId,productId}=input
-  await new StaffAccessRepository(tx).setEmployeePermissionOverride({employeeId,permissionCode:'loyalty.configuration.approve',effect:'grant',reason:'隔离签到审批浏览器测试',configuredByEmployeeId:employeeId,startsAt:new Date(Date.now()-60000).toISOString()})
   const gifts=new MemberGiftCampaignRepository(tx)
   const saved=await gifts.create({code:'BROWSER_VISIT_REWARD',name:'测试累计签到赠品',employeeId,businessDate,reason:'隔离签到赠品规则',requestKey:'browser-visit-reward-rule',rule:{
     trigger:'targeted',cardProjectId:null,audience:{minimumTier:'member',cardCodes:[],cardMatch:'any',tierAndCards:'and'},quantityPerCustomer:1,maximumQuantity:20,maximumDailyQuantity:20,maximumCostMinor:2000,maximumDailyCostMinor:2000,maximumUnitCostMinor:100,budgetDateBasis:'business',budgetDayStartMinute:360,currency:'CNY',availableFrom:new Date(Date.now()-3600000).toISOString(),availableUntil:new Date(Date.now()+86400000).toISOString(),couponCalendarVersionId:calendarId,productIds:[productId],

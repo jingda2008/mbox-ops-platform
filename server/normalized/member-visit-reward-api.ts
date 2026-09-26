@@ -20,7 +20,7 @@ export const memberVisitRewardApiPlugin:FastifyPluginAsync<Options>=async(app,op
   app.addHook('onRequest',async(_request,reply)=>{reply.header('cache-control','private, no-store')})
   app.setErrorHandler((error,_request,reply)=>{
     if(isStaffAuthenticationRequiredError(error))return reply.code(401).send({error:STAFF_AUTHENTICATION_REQUIRED_ERROR})
-    if(error instanceof StaffAccessDeniedError)return reply.code(403).send({error:{code:'VISIT_REWARD_FORBIDDEN',message:'需要管理人员的活动审批及发放权限'}})
+    if(error instanceof StaffAccessDeniedError)return reply.code(403).send({error:{code:'VISIT_REWARD_FORBIDDEN',message:'当前账号没有本操作所需的活动管理权限'}})
     if(error instanceof z.ZodError)return reply.code(400).send({error:{code:'VISIT_REWARD_INVALID',message:'请核对次数、活动、审批记录及原因'}})
     if(error instanceof MemberVisitRewardError||error instanceof MemberGiftCampaignError)return reply.code(409).send({error:{code:'VISIT_REWARD_CONFLICT',message:error.message}})
     if(error instanceof IdempotencyConflictError||error instanceof IdempotencyInProgressError)return reply.code(409).send({error:{code:'VISIT_REWARD_RETRY',message:'原操作正在处理或内容已变化，请重新读取核对'}})
@@ -39,8 +39,8 @@ export const memberVisitRewardApiPlugin:FastifyPluginAsync<Options>=async(app,op
     const context=await options.resolveStaffContext(request),input=body.parse(request.body)
     const key=z.string().regex(/^[A-Za-z0-9:_-]{8,128}$/).parse(request.headers['idempotency-key'])
     const authorize=async(tx:ScopedTransaction)=>{
-      await new StaffAccessRepository(tx).assertPermission(context.employeeId,'loyalty.policy.publish')
-      if(input.action!=='stop')await new StaffAccessRepository(tx).assertPermission(context.employeeId,input.action==='configure'?'loyalty.configuration.edit':'loyalty.configuration.approve')
+      await new StaffAccessRepository(tx).assertPermission(context.employeeId,
+        input.action==='configure'||input.action==='stop'?'loyalty.policy.publish':'loyalty.configuration.approve')
     }
     await options.transactions.run(context.scope,authorize,{readOnly:true})
     const result=await options.commands.execute({scope:context.scope,operationScope:'member.visit.reward',idempotencyKey:key,requestFingerprint:JSON.stringify({employeeId:context.employeeId,...input}),resultCodec:codec},async tx=>{

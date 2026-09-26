@@ -27,7 +27,6 @@ export class MemberVisitRewardRepository {
     return canonical
   }
   async create(input: {campaignVersionId:string;requiredVisits:number;employeeId:string;businessDate:string;reason:string}) {
-    await new StaffAccessRepository(this.tx).assertPermission(input.employeeId, 'loyalty.configuration.edit')
     await new StaffAccessRepository(this.tx).assertPermission(input.employeeId, 'loyalty.policy.publish')
     if (!Number.isInteger(input.requiredVisits) || input.requiredVisits < 1 || input.requiredVisits > 365) throw new MemberVisitRewardError('签到门槛为1至365次')
     const campaign = await new MemberGiftCampaignRepository(this.tx).find(input.campaignVersionId)
@@ -101,7 +100,6 @@ export class MemberVisitRewardRepository {
   }
   async decide(ids:string[],action:'approve'|'reject',employeeId:string,businessDate:string,reason:string) {
     await new StaffAccessRepository(this.tx).assertPermission(employeeId,'loyalty.configuration.approve')
-    await new StaffAccessRepository(this.tx).assertPermission(employeeId,'loyalty.policy.publish')
     if(!ids.length||ids.length>50||new Set(ids).size!==ids.length)throw new MemberVisitRewardError('每批选择1至50条不重复的待审批记录')
     const requests=(await this.tx.query<Request>(`SELECT * FROM mbox.member_visit_reward_requests WHERE tenant_id=$1 AND store_id=$2 AND id=ANY($3::uuid[]) ORDER BY customer_id,id`,[...this.scope,ids])).rows
     if(requests.length!==ids.length)throw new MemberVisitRewardError('审批记录不存在或不属于当前门店')

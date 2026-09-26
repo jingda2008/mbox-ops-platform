@@ -13,8 +13,8 @@ export function MemberVisitRewardPanel({api,auth,campaigns}:{api:NormalizedApiCl
   const [campaign,setCampaign]=useState(''),[threshold,setThreshold]=useState('3'),[reason,setReason]=useState(''),[busy,setBusy]=useState(false),[message,setMessage]=useState('')
   const active=useRef(true),operation=useRef(false),generation=useRef(0),{confirmAction}=useConfirmationDialog()
   useEffect(()=>{active.current=true;return()=>{active.current=false;generation.current++}},[])
-  const canConfigure=auth.permissions.includes('loyalty.configuration.edit')&&auth.permissions.includes('loyalty.policy.publish')
-  const canApprove=auth.permissions.includes('loyalty.configuration.approve')&&auth.permissions.includes('loyalty.policy.publish')
+  const canConfigure=auth.permissions.includes('loyalty.policy.publish')
+  const canApprove=auth.permissions.includes('loyalty.configuration.approve')
   const canStop=auth.permissions.includes('loyalty.policy.publish')
   const path='/api/staff/member-visit-rewards'
   async function read(more=false){

@@ -30,7 +30,7 @@ describe('attendance reward management API',()=>{
     expect(value.run).toHaveBeenCalledWith(scope,expect.any(Function),{readOnly:true})
     expect(value.list).toHaveBeenCalledWith('2026-09-25','pending',null);expect(value.decide).not.toHaveBeenCalled()
   })
-  it.each(['anonymous','loyalty.policy.publish','loyalty.configuration.approve'])('rejects %s before command replay or execution',async denied=>{
+  it.each(['anonymous','loyalty.configuration.approve'])('rejects %s before command replay or execution',async denied=>{
     const value=setup(denied),r=await value.app.inject({method:'POST',url:'/staff/member-visit-rewards',headers,payload})
     expect(r.statusCode).toBe(denied==='anonymous'?401:403);expect(value.execute).not.toHaveBeenCalled()
   })
@@ -48,12 +48,20 @@ describe('attendance reward management API',()=>{
   })
   it('does not trust permission that was revoked after the initial authorization',async()=>{
     const value=setup();let calls=0
-    value.permission.mockImplementation(async()=>{if(++calls>2)throw new StaffAccessDeniedError('revoked');return {} as never})
+    value.permission.mockImplementation(async()=>{if(++calls>1)throw new StaffAccessDeniedError('revoked');return {} as never})
     const r=await value.app.inject({method:'POST',url:'/staff/member-visit-rewards',headers,payload})
     expect(r.statusCode).toBe(403);expect(value.decide).not.toHaveBeenCalled()
   })
+  it('allows the operations approver without owner publishing rights',async()=>{
+    const value=setup('loyalty.policy.publish'),r=await value.app.inject({method:'POST',url:'/staff/member-visit-rewards',headers,payload})
+    expect(r.statusCode).toBe(200);expect(value.decide).toHaveBeenCalled()
+  })
+  it('does not let an approver enable a new rule without owner publishing rights',async()=>{
+    const value=setup('loyalty.policy.publish'),r=await value.app.inject({method:'POST',url:'/staff/member-visit-rewards',headers,payload:{action:'configure',campaignVersionId:id,requiredVisits:3,reason:'审批人不能启用'}})
+    expect(r.statusCode).toBe(403);expect(value.execute).not.toHaveBeenCalled()
+  })
   it('accepts a configurable threshold with server-controlled identity',async()=>{
-    const value=setup(),r=await value.app.inject({method:'POST',url:'/staff/member-visit-rewards',headers,payload:{action:'configure',campaignVersionId:id,requiredVisits:5,reason:'五次兑换一轮'}})
+    const value=setup('loyalty.configuration.edit'),r=await value.app.inject({method:'POST',url:'/staff/member-visit-rewards',headers,payload:{action:'configure',campaignVersionId:id,requiredVisits:5,reason:'五次兑换一轮'}})
     expect(r.statusCode).toBe(200);expect(value.create).toHaveBeenCalledWith(expect.objectContaining({requiredVisits:5,employeeId:'manager',businessDate:'2026-09-26'}))
   })
 })

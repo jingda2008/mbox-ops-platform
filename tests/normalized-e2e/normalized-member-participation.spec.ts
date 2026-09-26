@@ -2,6 +2,11 @@ import { readFile } from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
 import type { MemberParticipation } from '../../src/shared/member-participation'
 
+test.beforeEach(async () => {
+  const fixture = JSON.parse(await readFile('artifacts/normalized-browser/fixture.json', 'utf8'))
+  test.skip(!fixture.memberCardFixture, 'Requires isolated member identities; exercised by the dedicated member scan CI group')
+})
+
 async function login(page: Page) {
   const fixture = JSON.parse(await readFile('artifacts/normalized-browser/fixture.json', 'utf8'))
   await page.goto(fixture.staffUrl)

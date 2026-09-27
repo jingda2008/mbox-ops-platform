@@ -1,4 +1,4 @@
-import {canonicalTableCode} from './table-code-alias'
+import {canonicalTableCode} from './table-code-alias.js'
 
 /** Resolve once across the visible, authorized data before testing individual rows. */
 export function tableSearchMatcher(query:string,tableCodes:readonly (string|null|undefined)[]) {

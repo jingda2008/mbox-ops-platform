@@ -910,6 +910,7 @@ function assembleView(
 function actions(capabilities: readonly string[]) {
   const set = new Set(capabilities)
   return {
+    supportsGuardedClosedDebtCollection: true,
     canInitiateOnlinePayment: set.has('payment.initiate.staff'),
     canQueryOnlinePayment: set.has('payment.query'),
     onlinePaymentProvider: null,

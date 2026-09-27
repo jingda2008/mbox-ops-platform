@@ -45,6 +45,7 @@ import { InventoryBarcodeScanner } from '../InventoryBarcodeScanner'
 import { useConfirmationDialog } from '../ConfirmationDialog'
 import {
   fulfillmentAction,
+  prioritizeActionFact,
   actionableFulfillmentItems,
   actionableServiceTasks,
   guidanceForPermission,
@@ -1607,18 +1608,7 @@ export function filterFulfillmentQueue(items: readonly StaffFulfillmentItem[], q
     && matches(item.table.code,item.item.productName))
 }
 
-export function prioritizeActionFact<T>(
-  items: readonly T[],
-  factId: string | null,
-  identify: (item: T) => string,
-  limit = 8,
-): T[] {
-  if (!Number.isSafeInteger(limit) || limit < 1) return []
-  if (factId === null) return items.slice(0, limit)
-  const target = items.find((item) => identify(item) === factId)
-  if (target === undefined) return items.slice(0, limit)
-  return [target, ...items.filter((item) => identify(item) !== factId).slice(0, limit - 1)]
-}
+export { prioritizeActionFact } from './staff-actions-model'
 
 function PriorityQueue({ entries, canManage, pendingAction, onOverride }: {
   entries: StaffReservationIntakeEntry[] | null; canManage: boolean; pendingAction: string | null

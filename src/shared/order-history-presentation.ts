@@ -1,4 +1,4 @@
-import type {OperatingHistory} from './operating-history'
+import type {OperatingHistory} from './operating-history.js'
 
 export function groupOrdersBySession(orders:OperatingHistory['orders']) {
   const groups=new Map<string,OperatingHistory['orders']>()

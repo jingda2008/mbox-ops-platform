@@ -1,9 +1,9 @@
-import type { GuestMenuProduct, GuestMood } from './guest-model'
-import type { MenuRecommendationScene } from '../../shared/contracts'
-import type { MenuBundleUnitSelection } from '../../shared/contracts'
-import type { OnlinePaymentAction } from '../../shared/online-payment-contracts'
+import type { GuestMenuProduct, GuestMood } from './guest-model.js'
+import type { MenuRecommendationScene } from '../../shared/contracts.js'
+import type { MenuBundleUnitSelection } from '../../shared/contracts.js'
+import type { OnlinePaymentAction } from '../../shared/online-payment-contracts.js'
 
-export type { OnlinePaymentAction } from '../../shared/online-payment-contracts'
+export type { OnlinePaymentAction } from '../../shared/online-payment-contracts.js'
 
 export type GuestApiFailureKind = 'timeout' | 'network' | 'http' | 'invalid_response' | 'aborted'
 

@@ -176,4 +176,4 @@ import type {
   MenuBeverageFamily,
   MenuBundleChoiceGroup,
   MenuRecommendationConfig,
-} from '../../shared/contracts'
+} from '../../shared/contracts.js'

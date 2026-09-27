@@ -946,6 +946,16 @@ describe('paymentApiPlugin', () => {
     expect(query).not.toHaveBeenCalled()
   })
 
+  it('accepts guarded original historical collection without changing old payloads and rejects partial or malformed guards', async () => {
+    const value=fixture()
+    const base={orderId,provider:'cash',method:'cash',closedDebtGuard:{amountMinor:1000,authorizationId:orderId}}
+    const post=(payload:object)=>value.app.inject({method:'POST',url:'/api/payments/manual/closed-debt',headers:{'idempotency-key':'guarded-history-one'},payload})
+    expect((await post(base)).statusCode).toBe(201)
+    expect(value.commands.recordManual).toHaveBeenCalledWith(expect.objectContaining({closedDebtGuard:base.closedDebtGuard,orderId,orderIds:undefined,amountMinor:undefined}))
+    for(const payload of [{orderId,provider:'cash',method:'cash'},{...base,amountMinor:1000},{...base,orderIds:[orderId]},{...base,closedDebtGuard:{amountMinor:0,authorizationId:orderId}},{...base,closedDebtGuard:{amountMinor:1000,authorizationId:'wrong'}}]) expect((await post(payload)).statusCode).toBe(400)
+    expect(value.commands.recordManual).toHaveBeenCalledTimes(1)
+    await value.app.close()
+  })
   it('records cash or physical POS evidence with the authenticated employee, not a body actor', async () => {
     const value = fixture()
     const response = await value.app.inject({

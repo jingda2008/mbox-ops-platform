@@ -77,7 +77,11 @@ export interface InitiatePaymentCommand extends CommandMetadata {
     | { type: 'guest'; tableSessionId: string; customerId: string; guestSessionId: string }
 }
 
+// Thrown only inside the rolled-back mutation, before a payment is inserted.
+export class HistoricalCollectionChangedError extends Error {}
+
 export interface RecordManualPaymentCommand extends CommandMetadata {
+  closedDebtGuard?: Readonly<{ amountMinor: number; authorizationId: string }>
   orderIds?:readonly string[]
   amountMinor?:number
   orderId: string
@@ -360,6 +364,15 @@ export class PaymentCommandService {
       const recovery=input.orderIds===undefined?await lockClosedDebtRecovery(transaction,input.orderId):null
       if(recovery){
         assertClosedDebtWritable(recovery)
+      }
+      // Mutation-only: a successful original receipt remains replayable after settlement.
+      if(input.closedDebtGuard){
+        if(input.orderIds!==undefined || input.amountMinor!==undefined || !recovery
+          || !Number.isSafeInteger(input.closedDebtGuard.amountMinor) || input.closedDebtGuard.amountMinor<=0
+          || recovery.outstandingAmountMinor!==input.closedDebtGuard.amountMinor
+          || !recovery.authorizationId || recovery.authorizationId!==input.closedDebtGuard.authorizationId){
+          throw new HistoricalCollectionChangedError('历史欠款金额或重新收款授权已变化，请刷新原单；尚未登记本次收款')
+        }
       }
       const fulfillment = new PaymentFulfillmentRepository(transaction)
       if(!recovery)for(const orderId of orderIds)await fulfillment.ensureReservationBeforePayment(orderId)

@@ -77,6 +77,29 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
     await pool.query("UPDATE mbox.table_sessions SET status='closed',closed_at=clock_timestamp(),closed_by_employee_id=$2 WHERE id=$1",[session,cashier])
     return {order,session,item,pending,originalKey,originalPaymentId:paid.json().data.id}
   }
+  it('guards native confirmed amount and authorization before writing, preserves exact replay and legacy calls',async()=>{
+    const f=await fixture('partial'),approved=await authorize(f.order)
+    expect(approved.statusCode,approved.body).toBe(201)
+    const authorizationId=approved.json().data.id
+    const publicId=randomUUID(),payload={orderId:f.order,provider:'cash',method:'cash',publicId,closedDebtGuard:{amountMinor:1000,authorizationId}}
+    const count=async()=>Number((await pool.query('SELECT count(*) n FROM mbox.payments WHERE public_id=$1',[publicId])).rows[0].n)
+    const changed=await post('/payments/manual/closed-debt',{...payload,closedDebtGuard:{amountMinor:999,authorizationId}})
+    expect(changed.statusCode).toBe(409)
+    expect(changed.json().error).toMatchObject({code:'HISTORICAL_COLLECTION_CHANGED',commitDisposition:'not_committed'})
+    expect((await post('/payments/manual/closed-debt',{...payload,closedDebtGuard:{amountMinor:1000,authorizationId:randomUUID()}})).statusCode).toBe(409)
+    expect(await count()).toBe(0)
+    const next=await authorize(f.order)
+    expect((await post('/payments/manual/closed-debt',payload)).statusCode).toBe(409)
+    payload.closedDebtGuard.authorizationId=next.json().data.id
+    const key=randomUUID(),result=await post('/payments/manual/closed-debt',payload,key)
+    expect(result.statusCode,result.body).toBe(201)
+    expect(result.json().data).toMatchObject({publicId,orderId:f.order,amountMinor:1000,status:'succeeded',payableKind:'order'})
+    const replay=await post('/payments/manual/closed-debt',payload,key)
+    expect(replay.statusCode,replay.body).toBe(200);expect(replay.json().meta.replayed).toBe(true)
+    expect((await post('/payments/manual/closed-debt',{...payload,closedDebtGuard:{...payload.closedDebtGuard,amountMinor:999}},key)).statusCode).toBe(409)
+    expect(await count()).toBe(1)
+    expect((await pool.query('SELECT status FROM mbox.table_sessions WHERE id=$1',[f.session])).rows[0].status).toBe('closed')
+  })
   it('recovers only the ten-yuan balance, writes current-day audit/ledger, leaves closed table unchanged and replays',async()=>{
     const originalDate=new Date(Date.parse(`${date}T12:00:00Z`)-86400000).toISOString().slice(0,10)
     const f=await fixture('partial',originalDate);expect((await view(f.order)).closedDebtRecovery?.status).toBe('authorization_required')

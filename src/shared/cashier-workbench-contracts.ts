@@ -221,6 +221,7 @@ export interface CashierWorkbenchView {
   businessDate: string
   query: string
   actions: {
+    supportsGuardedClosedDebtCollection?: boolean
     canInitiateOnlinePayment: boolean
     canQueryOnlinePayment: boolean
     onlinePaymentProvider: 'postar' | 'simulation' | null

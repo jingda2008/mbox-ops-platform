@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   productDisplaySnapshotHasOperationalFields,
   sanitizeProductDisplaySnapshot,
-} from './product-display-snapshot'
+} from './product-display-snapshot.js'
 
 describe('product display snapshot compatibility', () => {
   it('removes legacy operational fields without losing display metadata', () => {

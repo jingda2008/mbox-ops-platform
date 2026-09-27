@@ -51,6 +51,7 @@ describe('PostgresCashierWorkbenchQuery', () => {
     expect(view.businessDate).toBe('2026-08-13')
     expect(view.query).toBe('VIP1')
     expect(view.actions).toEqual({
+      supportsGuardedClosedDebtCollection: true,
       canInitiateOnlinePayment: false,
       canQueryOnlinePayment: false,
       onlinePaymentProvider: null,

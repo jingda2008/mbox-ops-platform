@@ -1,5 +1,5 @@
 import {describe,it,expect} from 'vitest'
-import {allocateOrderPayment} from './order-payment-allocation'
+import {allocateOrderPayment} from './order-payment-allocation.js'
 describe('same-session collection allocation',()=>{
  const orders=[{id:'c',submittedAt:'2026-09-11T12:03:00Z',outstandingMinor:300},{id:'b',submittedAt:'2026-09-11T12:00:00Z',outstandingMinor:200},{id:'a',submittedAt:'2026-09-11T12:00:00Z',outstandingMinor:100}]
  it('uses submitted time then stable id for a partial payment and skips settled orders',()=>{

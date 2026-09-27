@@ -382,6 +382,8 @@ export async function queryRefundThroughProvider(input: QueryProviderRefundInput
       providerRefundId: refund.channelRefundId,
       originalProviderTransactionId: intent.channelTransactionId,
       merchantId: intent.merchantId,
+      amount: refund.amount,
+      currency: refund.currency,
     },
     { secrets: input.secrets },
   )

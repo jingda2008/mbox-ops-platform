@@ -20,6 +20,13 @@ import {normalizedOperationsApiPlugin} from './normalized-operations-api.js'
 import {TableSessionRepository,TableSessionCommandService} from './table-session-repository.js'
 import {ServiceTaskRepository} from './service-task-repository.js'
 import {PrintTicketSourceRepository} from './print-ticket-source.js'
+import {parsePrintTicketSnapshot} from './print-ticket-layout.js'
+
+function requireAuditRow<T>(rows:readonly T[]):T {
+  const row=rows[0]
+  if(row===undefined)throw new Error('审计前置数据缺失：查询或票据生成未返回记录')
+  return row
+}
 
 // Audit reproducers assert the observed discrepancy, not acceptance of the defect.
 // Seed only immutable product/table facts; all money and after-sales transitions
@@ -36,7 +43,7 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL
     afterSales=new ItemAfterSalesCommandService(commands,new ItemAfterSalesOperatingEffects())
     await pool.query("INSERT INTO mbox.tenants(id,code,name) VALUES($1,$2,'120 money audit')",[scope.tenantId,`money-${scope.tenantId}`])
     await pool.query("INSERT INTO mbox.stores(id,tenant_id,code,name,timezone,business_day_cutoff) VALUES($1,$2,'money','money audit','Asia/Shanghai','06:00')",[scope.storeId,scope.tenantId])
-    date=await runner.run(scope,async tx=>(await tx.query<{date:string}>('SELECT mbox.current_operating_business_date($1,$2)::text AS date',[scope.tenantId,scope.storeId])).rows[0].date)
+    date=await runner.run(scope,async tx=>requireAuditRow((await tx.query<{date:string}>('SELECT mbox.current_operating_business_date($1,$2)::text AS date',[scope.tenantId,scope.storeId])).rows).date)
     await pool.query("INSERT INTO mbox.areas(id,tenant_id,store_id,code,name,area_type) VALUES($1,$2,$3,'A','Audit','indoor')",[area,scope.tenantId,scope.storeId])
     await pool.query("INSERT INTO mbox.products(id,tenant_id,store_id,code,name,category_code,fulfillment_station) VALUES($1,$2,$3,'WATER','水','drink','bar')",[product,scope.tenantId,scope.storeId])
     const device=randomUUID()
@@ -92,10 +99,10 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL
   const due=(session:string)=>runner.run(scope,tx=>listTablePaymentOrdersForSession(tx,session))
   const closure=(session:string)=>runner.run(scope,tx=>readTableSessionClosureState(tx,session))
   const status=(order:string)=>pool.query('SELECT payment_status FROM mbox.orders WHERE id=$1',[order]).then(r=>r.rows[0].payment_status)
-  const daySummary=()=>runner.run(scope,async tx=>(await tx.query<{summary:{outstandingMinor:string}}> ('SELECT mbox.operating_day_summary($1,$2,$3) AS summary',[scope.tenantId,scope.storeId,date])).rows[0].summary)
+  const daySummary=()=>runner.run(scope,async tx=>requireAuditRow((await tx.query<{summary:{outstandingMinor:string}}> ('SELECT mbox.operating_day_summary($1,$2,$3) AS summary',[scope.tenantId,scope.storeId,date])).rows).summary)
   const bill=(session:string)=>runner.run(scope,async tx=>{
     const source=await appendOutboxMessage(tx,{aggregateType:'manual_print_request',aggregateId:randomUUID(),aggregateVersion:1,eventType:'manual.table-bill.requested.v1',payload:{tableSessionId:session}})
-    return (await new PrintTicketSourceRepository(tx,true).materializeManualTableBill(source,session,'审计收银员'))[0].printSnapshot
+    return parsePrintTicketSnapshot(requireAuditRow(await new PrintTicketSourceRepository(tx,true).materializeManualTableBill(source,session,'审计收银员')).printSnapshot)
   })
 
   it('control: ordinary service compensation does not create a new bill debt',async()=>{
@@ -128,7 +135,7 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL
     expect(close.outstandingAmountMinor).toBe(0)
     expect(close.blockers.some(b=>b.code==='ORDER_UNSETTLED')).toBe(false)
     expect(await runner.run(scope,tx=>readBusinessDayBlockerFacts(tx,f.session,'ORDER_UNSETTLED'))).toEqual([])
-    expect((await runner.run(scope,tx=>tx.query(`SELECT ${orderNeedsCollectionSql('o')} AS needs FROM mbox.orders o WHERE id=$1`,[f.order]))).rows[0].needs).toBe(true)
+    expect(requireAuditRow((await runner.run(scope,tx=>tx.query(`SELECT ${orderNeedsCollectionSql('o')} AS needs FROM mbox.orders o WHERE id=$1`,[f.order]))).rows).needs).toBe(true)
     // Complete the retained physical portions through the original quantity
     // fulfillment repository; no direct terminal-state SQL shortcuts.
     const tasks=(await pool.query('SELECT task.id,task.order_item_id FROM mbox.kds_tasks task JOIN mbox.order_items item ON item.id=task.order_item_id WHERE item.order_id=$1',[f.order])).rows

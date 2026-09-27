@@ -14,8 +14,7 @@ import {performKdsAction} from './commerce-kds-api.js'
 import {ServiceTaskRepository} from './service-task-repository.js'
 import {OperationsQueryService} from './operations-query-service.js'
 import {PostgresTableCustomerLeftTurnoverRepository} from './table-customer-left-turnover-repository.js'
-import {actionableServiceTasks} from '../../src/normalized-ui/staff-actions/staff-actions-model.js'
-import {prioritizeActionFact} from '../../src/normalized-ui/staff-actions/StaffActionsPanel.js'
+import {actionableServiceTasks,prioritizeActionFact} from '../../src/normalized-ui/staff-actions/staff-actions-model.js'
 import {kitchenProductionApiPlugin} from './kitchen-production-api.js'
 import {kitchenCompatibilityKey,type KitchenBoardData,type KitchenCommand} from '../../src/shared/kitchen-production.js'
 
@@ -67,10 +66,10 @@ integration('120 guests fulfillment audit real transaction boundary',()=>{
     const current=await board(),selected=rows.map(row=>current.pending.find(item=>item.taskId===row.taskId)!)
     return {action,compatibilityKey:kitchenCompatibilityKey(selected[0]!),items:selected.map(row=>({taskId:row.taskId,quantity,expectedUnmade:row.unmade,tableId:row.tableId,tableSessionId:row.tableSessionId,locationVersion:row.locationVersion})),equipment,expectedSeconds:null} as KitchenCommand
   }
-  function command(body:KitchenCommand,key=randomUUID()){return app.inject({method:'POST',url:'/api/commerce/kitchen-board/commands',headers:{'idempotency-key':key},payload:{employeeId,command:body}})}
+  function command(body:KitchenCommand,key:string=randomUUID()){return app.inject({method:'POST',url:'/api/commerce/kitchen-board/commands',headers:{'idempotency-key':key},payload:{employeeId,command:body}})}
   async function expectOk(body:KitchenCommand,key?:string){const response=await command(body,key);expect(response.statusCode,response.body).toBe(200);return response.json().data as {batchId:string;quantity:number;released:boolean}}
   it('conserves 120 kitchen portions under partial batches, concurrent readiness, four deliverers and replay',async()=>{
-    const rows=[]
+    const rows:Awaited<ReturnType<typeof item>>[]=[]
     for(let index=0;index<24;index++)rows.push(await item('',true))
     const batchA=await expectOk(await start(rows,null,3)),batchB=await expectOk(await start(rows,null,2))
     expect(batchA.quantity+batchB.quantity).toBe(120)
@@ -84,7 +83,7 @@ integration('120 guests fulfillment audit real transaction boundary',()=>{
     expect(outcomes.reduce((sum,result)=>sum+result.quantity,0)).toBe(120)
     const readyView=await new FulfillmentQueryService(runtime,true).getStaffWorkQueue(scope,employeeId,businessDate)
     expect(readyView.workItems.filter(work=>rows.some(row=>row.taskId===work.taskId)).reduce((sum,work)=>sum+(work.quantities?.ready??0),0)).toBe(120)
-    const servers=[],deliveryRole=randomUUID()
+    const servers:Array<{employeeId:string;staffSessionId:string}>=[],deliveryRole=randomUUID()
     await pool.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,'DELIVERY_TEST','取送')",[deliveryRole,tenantId,storeId])
     await pool.query("INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code='kds.deliver'",[tenantId,storeId,deliveryRole])
     for(let index=0;index<4;index++){
@@ -110,9 +109,9 @@ integration('120 guests fulfillment audit real transaction boundary',()=>{
   },120000)
 
   it('reproduces urgent complaint hidden behind eight assigned ordinary requests on service page',async()=>{
-    const serviceRows=[]
+    const serviceRows:Awaited<ReturnType<typeof item>>[]=[]
     for(let index=0;index<24;index++)serviceRows.push(await item())
-    const taskIds=[]
+    const taskIds:string[]=[]
     for(let index=0;index<120;index++){
       const row=serviceRows[Math.floor(index/5)]!
       const task=await runtime.run(scope,tx=>new ServiceTaskRepository(tx).create({tableId:row.tableId,tableSessionId:row.tableSessionId,publicId:randomUUID(),taskType:index===119?'guest.complaint':'guest.custom',title:index===119?'紧急投诉需要店长':'普通送水需求',priority:index===119?'urgent':'normal',source:'guest',requestedRoleCode:index===119?'MANAGER':'SERVER',assignedEmployeeId:index<8?employeeId:null,actor:{type:'guest'}}))

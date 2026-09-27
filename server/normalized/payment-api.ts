@@ -10,7 +10,7 @@ import {
   IdempotencyInProgressError,
   IdempotencyRecordError,
 } from './command-executor.js'
-import type { PaymentCommandService } from './payment-command-service.js'
+import { HistoricalCollectionChangedError, type PaymentCommandService } from './payment-command-service.js'
 import type { CashierWorkbenchView } from '../../src/shared/cashier-workbench-contracts.js'
 import type { CashierWorkbenchQueryInput } from './cashier-workbench-query.js'
 import {
@@ -359,7 +359,8 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
     return reply.code(execution.replayed?200:201).send(executionResponse(execution))
   }))
 
-  app.post('/payments/manual', async (request, reply) => handleRoute(reply, async () => {
+  // A dedicated path fails closed against older nodes during a rolling deployment.
+  for (const path of ['/payments/manual', '/payments/manual/closed-debt']) app.post(path, async (request, reply) => handleRoute(reply, async () => {
     const context = await resolveStaffContext(options, request)
     const body = readObject(request.body, '请求正文')
     assertActorBinding(body, context.actor)
@@ -388,15 +389,23 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       ?? (options.createPublicId ? createPublicId('payment')
         : `P${createHash('sha256').update(`${context.scope.tenantId}:${context.scope.storeId}:${idempotencyKey}`).digest('hex').slice(0, 32)}`)
     const {orderId,orderIds,amountMinor}=readOrderCollection(body)
+    if (path === '/payments/manual/closed-debt' && body.closedDebtGuard === undefined) throw new TypeError('历史补收必须确认原欠款金额和授权')
+    const closedDebtGuard = body.closedDebtGuard === undefined ? undefined : (() => {
+      if (orderIds !== undefined || amountMinor !== undefined) throw new TypeError('历史欠款只支持原单全额补收')
+      const guard = readObject(body.closedDebtGuard, '历史欠款确认')
+      return {amountMinor: readInteger(guard.amountMinor, '确认欠款金额', 1, Number.MAX_SAFE_INTEGER), authorizationId: readUuid(guard.authorizationId, '原重新收款授权')}
+    })()
     const execution = await options.commands.recordManual({
       ...metadata(request, context, idempotencyKey, {
         orderId, orderIds:orderIds??null, amountMinor:amountMinor??null,
+        ...(closedDebtGuard === undefined ? {} : {closedDebtGuard}),
         publicId,
         provider,
         method,
         evidence,
       }),
       orderId, orderIds, amountMinor,
+      ...(closedDebtGuard === undefined ? {} : {closedDebtGuard}),
       publicId,
       provider,
       method,
@@ -1569,6 +1578,9 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   if (error instanceof RefundRequiresCaseDecisionError) return apiError(409,error.code,error.message)
   if (error instanceof RefundNotFoundError) return apiError(404, 'REFUND_NOT_FOUND', error.message)
   if (error instanceof OrderNotPayableError) return apiError(409, 'ORDER_NOT_PAYABLE', error.reason==='unpaid item stop requires settlement'?'本单有停止菜品尚未核定减免，请在商品售后待办处理后收款；其他订单可单独收款':error.reason==='the order has no outstanding balance'?'本单已足额收清，不能再次收款':error.reason==='status is cancelled'?'订单已取消，不能收款':error.reason==='status is draft'?'订单仍为草稿，请先提交订单':'当前订单未通过收款条件校验，请刷新订单核对桌次、归属和待收金额')
+  if (error instanceof HistoricalCollectionChangedError) {
+    return apiError(409, 'HISTORICAL_COLLECTION_CHANGED', error.message, 'not_committed')
+  }
   if (error instanceof RecollectionAuthorizationRequiredError) {
     return apiError(409, 'REFUND_RECOLLECTION_AUTHORIZATION_REQUIRED', error.message)
   }
@@ -1649,8 +1661,8 @@ function safeErrorName(error: unknown): string {
   return value.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 96) || 'UnknownError'
 }
 
-function apiError(statusCode: number, code: string, message: string) {
-  return { statusCode, body: { error: { code, message } } }
+function apiError(statusCode: number, code: string, message: string, commitDisposition?: 'not_committed') {
+  return { statusCode, body: { error: { code, message, ...(commitDisposition === undefined ? {} : {commitDisposition}) } } }
 }
 
 function readOrderCollection(body:Record<string,unknown>):{orderId:string;orderIds?:string[];amountMinor?:number}{

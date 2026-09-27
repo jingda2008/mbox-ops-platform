@@ -417,6 +417,14 @@ describe('provider active query and partial refund', () => {
       requestedBy: 'cashier-1',
       idempotencyKey: 'provider-refund-query-1',
     })
+    expect(adapter.queryRefund).toHaveBeenCalledWith({
+      refundId: refund.id,
+      providerRefundId: 'provider-refund-1',
+      originalProviderTransactionId: 'provider-tx-1',
+      merchantId: 'merchant-mbox',
+      amount: 1200,
+      currency: 'CNY',
+    }, { secrets })
     expect(refund.status).toBe('succeeded')
     expect(refund.channelRefundTransactionId).toBe('provider-refund-tx-1')
   })

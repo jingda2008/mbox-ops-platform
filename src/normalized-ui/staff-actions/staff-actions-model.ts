@@ -1,10 +1,10 @@
-import {tableSearchMatcher} from '../../shared/table-search'
+import {tableSearchMatcher} from '../../shared/table-search.js'
 import type {
   StaffActionPermission,
   StaffActionTable,
   StaffFulfillmentItem,
   StaffServiceTask,
-} from './types'
+} from './types.js'
 
 const SERVICE_PRIORITY: Record<StaffServiceTask['priority'], number> = {
   urgent: 4,
@@ -251,4 +251,17 @@ export function guidanceForPermission(permission: StaffActionPermission): string
 function eventTime(value: string): number {
   const timestamp = Date.parse(value)
   return Number.isFinite(timestamp) ? timestamp : Number.MAX_SAFE_INTEGER
+}
+
+export function prioritizeActionFact<T>(
+  items: readonly T[],
+  factId: string | null,
+  identify: (item: T) => string,
+  limit = 8,
+): T[] {
+  if (!Number.isSafeInteger(limit) || limit < 1) return []
+  if (factId === null) return items.slice(0, limit)
+  const target = items.find((item) => identify(item) === factId)
+  if (target === undefined) return items.slice(0, limit)
+  return [target, ...items.filter((item) => identify(item) !== factId).slice(0, limit - 1)]
 }

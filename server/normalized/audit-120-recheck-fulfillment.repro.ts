@@ -11,8 +11,7 @@ import {NormalizedPaymentCapabilityAuthorization} from './payment-security-polic
 import {ServiceTaskRepository} from './service-task-repository.js'
 import {OperationsQueryService} from './operations-query-service.js'
 import {PostgresTableCustomerLeftTurnoverRepository} from './table-customer-left-turnover-repository.js'
-import {actionableServiceTasks} from '../../src/normalized-ui/staff-actions/staff-actions-model.js'
-import {prioritizeActionFact} from '../../src/normalized-ui/staff-actions/StaffActionsPanel.js'
+import {actionableServiceTasks,prioritizeActionFact} from '../../src/normalized-ui/staff-actions/staff-actions-model.js'
 import {PaymentCommandService,type RecordManualPaymentCommand} from './payment-command-service.js'
 import {pickupWorkflowApiPlugin} from './pickup-workflow-api.js'
 import type {PickupBoardData,PickupCommand} from '../../src/shared/pickup-workflow.js'
@@ -68,12 +67,12 @@ integration('120 guests recheck defects on frozen f8306c7 current three-screen r
     const current=await board(),selected=rows.map(row=>current.pending.find(item=>item.taskId===row.taskId)!)
     return {action,compatibilityKey:kitchenCompatibilityKey(selected[0]!),items:selected.map(row=>({taskId:row.taskId,quantity,expectedUnmade:row.unmade,tableId:row.tableId,tableSessionId:row.tableSessionId,locationVersion:row.locationVersion})),equipment,expectedSeconds:null} as KitchenCommand
   }
-  function command(body:KitchenCommand,key=randomUUID()){return app.inject({method:'POST',url:'/api/commerce/kitchen-board/commands',headers:{'idempotency-key':key},payload:{employeeId,command:body}})}
+  function command(body:KitchenCommand,key:string=randomUUID()){return app.inject({method:'POST',url:'/api/commerce/kitchen-board/commands',headers:{'idempotency-key':key},payload:{employeeId,command:body}})}
   async function expectOk(body:KitchenCommand,key?:string){const response=await command(body,key);expect(response.statusCode,response.body).toBe(200);return response.json().data as {batchId:string;quantity:number;released:boolean}}
   it('reproduces urgent complaint hidden behind eight assigned ordinary requests on service page',async()=>{
-    const serviceRows=[]
+    const serviceRows:Awaited<ReturnType<typeof item>>[]=[]
     for(let index=0;index<24;index++)serviceRows.push(await item())
-    const taskIds=[]
+    const taskIds:string[]=[]
     for(let index=0;index<120;index++){
       const row=serviceRows[Math.floor(index/5)]!
       const task=await runtime.run(scope,tx=>new ServiceTaskRepository(tx).create({tableId:row.tableId,tableSessionId:row.tableSessionId,publicId:randomUUID(),taskType:index===119?'guest.complaint':'guest.custom',title:index===119?'紧急投诉需要店长':'普通送水需求',priority:index===119?'urgent':'normal',source:'guest',requestedRoleCode:index===119?'MANAGER':'SERVER',assignedEmployeeId:index<8?employeeId:null,actor:{type:'guest'}}))

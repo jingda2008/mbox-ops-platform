@@ -710,6 +710,35 @@ describe('customer experience activity contact API', () => {
     })
   })
 
+  it('maps a store-wide phone authorization collision to a recoverable conflict', async () => {
+    const collision = Object.assign(
+      new Error('duplicate key value violates unique constraint "customer_verified_contact_actions_authorization_reference_uq"'),
+      {
+        code: '23505',
+        constraint: 'customer_verified_contact_actions_authorization_reference_uq',
+      },
+    )
+    const enrollMembership = vi.fn(async () => { throw collision })
+    const app = membershipTermsFixture({} as MembershipTermsService, enrollMembership)
+    const response = await app.inject({
+      method: 'POST', url: '/public/mini/membership/enroll-with-phone',
+      headers: { 'idempotency-key': 'membership-enroll-replay-conflict-01' },
+      payload: {
+        termsVersion: 3,
+        acknowledgementSource: 'mini_profile',
+        phoneAuthorizationCode: 'alipay-phone-cipher-replay-0001',
+        phoneAuthorizationProvider: 'alipay',
+      },
+    })
+    expect(response.statusCode).toBe(409)
+    expect(response.json()).toMatchObject({
+      error: {
+        code: 'PHONE_AUTHORIZATION_REPLAY_REJECTED',
+        message: '这次手机号授权已经使用过。请重新点一次授权；如果这是原来的会员，请使用「找回原会员」',
+      },
+    })
+  })
+
   it('separates membership terms view, draft, approval and publication permissions', async () => {
     const checkedPermissions: string[] = []
     vi.spyOn(StaffAccessRepository.prototype, 'assertPermission').mockImplementation(async (_employeeId, permission) => {

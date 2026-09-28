@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import { CustomerExperienceRequestError } from './customer-experience-repository.js'
 import type {
   MembershipRecoveryPhoneAuthorizationPort,
@@ -60,9 +60,16 @@ implements MembershipRecoveryPhoneAuthorizationPort {
         const payload = parseDecryptedPhone(decrypted)
         acceptedCiphertext = ciphertext
         const e164Phone = toE164(payload.mobile)
+        // AES-CBC with a fixed key and a zero IV makes this ciphertext stable
+        // for one phone number. The stable digest is a phone proof, not a
+        // one-time authorization nonce. The attempt suffix keeps the stored
+        // authorization reference unique so a repeat enroll does not collide
+        // with customer_verified_contact_actions_authorization_reference_uq.
+        const ciphertextSha256 = createHash('sha256').update(acceptedCiphertext).digest('hex')
         return {
           e164Phone,
-          providerReference: `alipay-phone:${createHash('sha256').update(acceptedCiphertext).digest('hex')}`,
+          providerReference: `alipay-phone:${ciphertextSha256}:${randomBytes(16).toString('hex')}`,
+          repeatableProofReference: `alipay-phone:${ciphertextSha256}`,
           verifiedAt: this.now().toISOString(),
         }
       } catch (error) {

@@ -18,8 +18,19 @@ describe('official Alipay phone authorization provider', () => {
     const provider = new OfficialAlipayPhoneAuthorizationProvider({ appId, aesKey })
     const verified = await provider.verify({ authorizationCode: ciphertext, customerId })
     expect(verified).toMatchObject({ e164Phone: '+8613800138000' })
-    expect(verified.providerReference).toMatch(/^alipay-phone:[0-9a-f]{64}$/)
+    expect(verified.providerReference).toMatch(/^alipay-phone:[0-9a-f]{64}:[0-9a-f]{32}$/)
+    expect(verified.repeatableProofReference).toMatch(/^alipay-phone:[0-9a-f]{64}$/)
+    expect(verified.providerReference.startsWith(`${verified.repeatableProofReference}:`)).toBe(true)
     expect(JSON.stringify(verified)).not.toContain(ciphertext)
+  })
+
+  it('keeps one phone proof and a fresh authorization reference for the same ciphertext', async () => {
+    const ciphertext = encryptAlipayPhoneFixture('13800138000', aesKey)
+    const provider = new OfficialAlipayPhoneAuthorizationProvider({ appId, aesKey })
+    const first = await provider.verify({ authorizationCode: ciphertext, customerId })
+    const second = await provider.verify({ authorizationCode: ciphertext, customerId })
+    expect(first.repeatableProofReference).toBe(second.repeatableProofReference)
+    expect(first.providerReference).not.toBe(second.providerReference)
   })
 
   it('accepts the mini-program JSON wrapper around the ciphertext', async () => {

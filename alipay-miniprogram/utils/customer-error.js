@@ -70,6 +70,9 @@ const CODE_MESSAGES = Object.freeze({
   RESERVATION_STATE_CONFLICT: '预约状态已变化，请刷新后重试',
   RESERVATION_SESSION_INVALID: '登录状态已失效，请重新进入后重试',
   HTTP_ERROR: '服务暂时未能确认，请稍后重试',
+  PHONE_AUTHORIZATION_REPLAY_REJECTED: '这次手机号授权已经使用过。请重新点一次授权；如果这是原来的会员，请使用「找回原会员」',
+  MEMBERSHIP_PHONE_AUTHORIZATION_CONFLICT: '这个手机号已经绑定了其他会员。请使用「找回原会员」完成登录，本次没有重复开卡',
+  CUSTOMER_EXPERIENCE_FAILED: '会员服务暂时没有接上，请稍后重试',
 })
 
 function customerErrorCode(error) {

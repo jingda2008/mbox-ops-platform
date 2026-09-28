@@ -12,6 +12,7 @@ import {
   type MembershipTermsAcknowledgementSource,
 } from './membership-terms-service.js'
 import {
+  MembershipPhoneOwnedElsewhereError,
   replaceVerifiedPhoneInTransaction,
   type MembershipRecoveryPhoneAuthorizationPort,
   type MembershipRecoveryPhoneProtector,
@@ -99,13 +100,39 @@ export class MembershipEnrollmentService {
         )
       }
 
-      const verifiedPhone = await replaceVerifiedPhoneInTransaction(transaction, {
+      const bindVerifiedPhone = () => replaceVerifiedPhoneInTransaction(transaction, {
         customerId: enrollCustomerId,
         protectedPhone,
         providerReferenceHash: sha256(verifiedAuthorization.providerReference),
+        repeatableProofSha256: verifiedAuthorization.repeatableProofReference
+          ? sha256(verifiedAuthorization.repeatableProofReference)
+          : null,
         verifiedAt: verifiedAuthorization.verifiedAt,
         idempotencyKey: input.idempotencyKey,
       })
+      let verifiedPhone: PublicVerifiedPhone
+      try {
+        verifiedPhone = await bindVerifiedPhone()
+      } catch (error) {
+        if (!(error instanceof MembershipPhoneOwnedElsewhereError)) throw error
+        const ownerCanonicalId = (await customers.resolveCanonical(error.ownerCustomerId)).id
+        if (ownerCanonicalId === enrollCustomerId) throw error
+        await releaseSourcePhonesForMerge(transaction, enrollCustomerId)
+        try {
+          await customers.merge(enrollCustomerId, ownerCanonicalId)
+        } catch (mergeError) {
+          if (!isPhoneFamilyMergeGuard(mergeError) && !(mergeError instanceof CustomerMergeConflictError)) {
+            throw mergeError
+          }
+          enrollCustomerId = (await customers.resolveCanonical(context.customerId)).id
+          if (enrollCustomerId !== ownerCanonicalId) {
+            await releaseSourcePhonesForMerge(transaction, enrollCustomerId)
+            await customers.merge(enrollCustomerId, ownerCanonicalId)
+          }
+        }
+        enrollCustomerId = ownerCanonicalId
+        verifiedPhone = await bindVerifiedPhone()
+      }
       const enrolled = await experience.enrollMembership(enrollCustomerId)
       const assignedMemberNo = enrolled.membership!.memberNo
       if (enrolled.created) {

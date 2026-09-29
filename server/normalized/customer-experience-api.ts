@@ -48,9 +48,10 @@ import { StaffAccessDeniedError, StaffAccessRepository } from './staff-access-re
 import { StaffSessionNotFoundError } from './staff-session-repository.js'
 import type { ScopedPostgresTransactionRunner, StoreScope } from './transaction-runner.js'
 import type { ActivityPaymentService } from './activity-payment-service.js'
-import type {
-  MembershipRecoveryPhoneAuthorizationPort,
-  MembershipRecoveryService,
+import {
+  mapVerifiedPhoneUniqueViolation,
+  type MembershipRecoveryPhoneAuthorizationPort,
+  type MembershipRecoveryService,
 } from './membership-recovery-service.js'
 import type { MembershipTermsService } from './membership-terms-service.js'
 import type { MembershipEnrollmentService } from './membership-enrollment-service.js'
@@ -1799,6 +1800,14 @@ function knownErrorResponse(error: unknown): { statusCode: number; code: string;
       statusCode: 409,
       code: 'MEMBERSHIP_IDENTITY_CONFLICT',
       message: '会员身份正在同步，请重新授权手机号完成登录',
+    }
+  }
+  const phoneConflict = mapVerifiedPhoneUniqueViolation(error)
+  if (phoneConflict !== null) {
+    return {
+      statusCode: phoneConflict.statusCode,
+      code: phoneConflict.code,
+      message: phoneConflict.message,
     }
   }
   return null

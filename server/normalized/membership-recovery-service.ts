@@ -14,6 +14,12 @@ import type {
 export interface VerifiedRecoveryPhoneAuthorization {
   e164Phone: string
   providerReference: string
+  /**
+   * Stable digest reference for a repeatable phone proof, currently
+   * `alipay-phone:` plus the ciphertext sha256. Absent for one-time WeChat
+   * authorization codes. This is never a phone number.
+   */
+  repeatableProofReference?: string
   verifiedAt: string
 }
 
@@ -53,6 +59,37 @@ export interface PublicVerifiedPhone {
   status: 'active'
   verifiedAt: string
   verificationSource: 'wechat_phone_authorization' | 'staff_controlled'
+}
+
+export class MembershipPhoneOwnedElsewhereError extends CustomerExperienceRequestError {
+  constructor(readonly ownerCustomerId: string) {
+    super(
+      '这个手机号已经绑定了其他会员。请使用「找回原会员」完成登录，本次没有重复开卡',
+      'MEMBERSHIP_PHONE_AUTHORIZATION_CONFLICT',
+      409,
+    )
+    this.name = 'MembershipPhoneOwnedElsewhereError'
+  }
+}
+
+export function phoneAuthorizationReplayRejected(): CustomerExperienceRequestError {
+  return new CustomerExperienceRequestError(
+    '这次手机号授权已经使用过。请重新点一次授权；如果这是原来的会员，请使用「找回原会员」',
+    'PHONE_AUTHORIZATION_REPLAY_REJECTED',
+    409,
+  )
+}
+
+export function mapVerifiedPhoneUniqueViolation(error: unknown): CustomerExperienceRequestError | null {
+  const fields = postgresErrorFields(error)
+  if (fields?.code !== '23505') return null
+  const constraint = fields.constraint
+  const message = fields.message
+  if (constraint === 'customer_verified_contact_actions_authorization_reference_uq'
+    || message.includes('customer_verified_contact_actions_authorization_reference_uq')) {
+    return phoneAuthorizationReplayRejected()
+  }
+  return null
 }
 
 interface ChallengeRow extends Record<string, unknown> {
@@ -154,8 +191,11 @@ export class MembershipRecoveryService {
       const contact = await upsertVerifiedContact(transaction, {
         customerId: context.customerId,
         protectedPhone,
+        // Published mini programs only accept this source or staff_controlled.
+        // Alipay repeatability is carried by repeatableProofSha256, not a new label.
         verificationSource: 'wechat_phone_authorization',
         providerReferenceHash,
+        repeatableProofSha256: repeatableProofSha256(input.verifiedPhone.repeatableProofReference),
         verifiedByCustomerId: context.customerId,
         verifiedByEmployeeId: null,
         verifiedAt,
@@ -287,6 +327,7 @@ export class MembershipRecoveryService {
       customerId: context.customerId,
       protectedPhone: this.phones.protect(input.verifiedPhone.e164Phone),
       providerReferenceHash: sha256(input.verifiedPhone.providerReference),
+      repeatableProofSha256: repeatableProofSha256(input.verifiedPhone.repeatableProofReference),
       verifiedAt: input.verifiedPhone.verifiedAt,
       idempotencyKey: input.idempotencyKey,
     }))
@@ -645,20 +686,32 @@ export async function replaceVerifiedPhoneInTransaction(
     customerId: string
     protectedPhone: ProtectedRecoveryPhone
     providerReferenceHash: string
+    repeatableProofSha256?: string | null
     verifiedAt: string
     idempotencyKey: string
   }>,
 ): Promise<PublicVerifiedPhone> {
   const verifiedAt = timestamp(input.verifiedAt, 'verifiedAt')
+  const repeatableProof = input.repeatableProofSha256 ?? null
+  await transaction.query(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [
+    `${transaction.scope.tenantId}:${transaction.scope.storeId}:phone-proof:${repeatableProof ?? input.providerReferenceHash}`,
+  ])
   await transaction.query(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [
     `${transaction.scope.tenantId}:${transaction.scope.storeId}:verified-phone:${input.customerId}`,
   ])
   const family = await canonicalCustomerFamily(transaction, input.customerId)
   const replay = await transaction.query<{
-    public_id: string; masked_value: string; verified_at: string
+    id: string
+    public_id: string
+    masked_value: string
+    verified_at: string
+    processing_status: string
+    authorization_reference_sha256: string
     verification_source: PublicVerifiedPhone['verificationSource']
   }>(`
-    SELECT contact.public_id,contact.masked_value,action.authorized_at::text AS verified_at,
+    SELECT contact.id,contact.public_id,contact.masked_value,contact.processing_status,
+      action.authorized_at::text AS verified_at,
+      action.authorization_reference_sha256,
       action.authorization_source AS verification_source
     FROM mbox.customer_verified_contact_actions action
     JOIN mbox.customer_verified_contacts contact
@@ -666,14 +719,54 @@ export async function replaceVerifiedPhoneInTransaction(
      AND contact.id=action.contact_id
     WHERE action.tenant_id=$1::uuid AND action.store_id=$2::uuid
       AND contact.customer_id=ANY($3::uuid[])
-      AND action.authorization_reference_sha256=$4 AND action.action='verified'
+      AND action.action='verified'
       AND contact.processing_status<>'disposed'
-    ORDER BY action.authorized_at DESC,action.id DESC LIMIT 1
+      AND (
+        action.authorization_reference_sha256=$4
+        OR ($5::char(64) IS NOT NULL AND (
+          contact.repeatable_proof_sha256=$5
+          OR action.authorization_reference_sha256=$5
+        ))
+      )
+    ORDER BY CASE contact.processing_status WHEN 'active' THEN 0 WHEN 'revoked' THEN 1 ELSE 2 END,
+      action.authorized_at DESC,action.id DESC
+    LIMIT 1
+    FOR UPDATE OF contact
   `, [
     transaction.scope.tenantId, transaction.scope.storeId,
-    family.customerIds, input.providerReferenceHash,
+    family.customerIds, input.providerReferenceHash, repeatableProof,
   ])
-  if (replay.rows[0]) return verifiedPhoneView(replay.rows[0])
+  const matched = replay.rows[0]
+  if (matched) {
+    if (matched.processing_status === 'revoked') {
+      await supersedeOtherActivePhones(transaction, family.customerIds, matched.id, {
+        customerId: input.customerId,
+        idempotencyKey: input.idempotencyKey,
+      })
+      if (sameDigest(matched.authorization_reference_sha256, input.providerReferenceHash)) {
+        await reactivateVerifiedContact(transaction, matched.id)
+      } else {
+        await reauthorizeVerifiedContact(transaction, matched.id, {
+          customerId: input.customerId,
+          providerReferenceHash: input.providerReferenceHash,
+          verifiedAt,
+          idempotencyKey: input.idempotencyKey,
+        })
+      }
+    }
+    return verifiedPhoneView({
+      ...matched,
+      verified_at: verifiedAt,
+      verification_source: matched.verification_source,
+    })
+  }
+  const actionReferenceHash = await preparePhoneProofForWrite(transaction, {
+    customerId: input.customerId,
+    familyCustomerIds: family.customerIds,
+    providerReferenceHash: input.providerReferenceHash,
+    repeatableProofSha256: repeatableProof,
+    idempotencyKey: input.idempotencyKey,
+  })
   const exact = await transaction.query<{
     id: string; public_id: string; masked_value: string
     verification_source: PublicVerifiedPhone['verificationSource']
@@ -711,21 +804,12 @@ export async function replaceVerifiedPhoneInTransaction(
     })
   }
   if (exactContact) {
-    const requestSha256 = sha256(JSON.stringify({
-      contactId: exactContact.id,
+    await reauthorizeVerifiedContact(transaction, exactContact.id, {
       customerId: input.customerId,
-      providerReferenceHash: input.providerReferenceHash,
-      authorizedAt: verifiedAt,
-    }))
-    await transaction.query(`
-      SELECT mbox.reauthorize_verified_membership_phone(
-        $1::uuid,$2::uuid,NULL::uuid,'wechat_phone_authorization',
-        $3::char(64),$4::timestamptz,$5,$6::char(64)
-      )
-    `, [
-      exactContact.id, input.customerId, input.providerReferenceHash,
-      verifiedAt, input.idempotencyKey, requestSha256,
-    ])
+      providerReferenceHash: actionReferenceHash,
+      verifiedAt,
+      idempotencyKey: input.idempotencyKey,
+    })
     return {
       publicId: exactContact.public_id,
       maskedPhone: exactContact.masked_value,
@@ -735,26 +819,273 @@ export async function replaceVerifiedPhoneInTransaction(
     }
   }
   const supersedesContactId = active.rows.at(-1)?.id ?? null
-  const inserted = await transaction.query<{
-    id: string; public_id: string; masked_value: string; verified_at: string
-    verification_source: PublicVerifiedPhone['verificationSource']
+  try {
+    const inserted = await transaction.query<{
+      id: string; public_id: string; masked_value: string; verified_at: string
+      verification_source: PublicVerifiedPhone['verificationSource']
+    }>(`
+      INSERT INTO mbox.customer_verified_contacts(
+        tenant_id,store_id,public_id,customer_id,contact_type,contact_hash,
+        encrypted_value,encryption_key_version,masked_value,verification_source,
+        contact_encryption_key_id,provider_reference_sha256,repeatable_proof_sha256,
+        verified_by_customer_id,verified_at,processing_status,supersedes_contact_id
+      ) VALUES ($1::uuid,$2::uuid,$3,$4::uuid,'phone',$5,$6::bytea,$7,$8,
+        -- Published mini programs reject any verification source other than
+        -- wechat_phone_authorization and staff_controlled. Alipay repeats are
+        -- distinguished by repeatable_proof_sha256, not by a new label.
+        'wechat_phone_authorization',$9,$10,$11::char(64),$4::uuid,$12::timestamptz,'active',$13::uuid)
+      RETURNING id,public_id,masked_value,verified_at::text,verification_source
+    `, [
+      transaction.scope.tenantId, transaction.scope.storeId,
+      `CVC${randomUUID().replaceAll('-', '').toUpperCase()}`, family.canonicalCustomerId,
+      input.protectedPhone.contactHash, input.protectedPhone.encryptedValue,
+      input.protectedPhone.encryptionKeyVersion, input.protectedPhone.maskedValue,
+      input.protectedPhone.encryptionKeyId, actionReferenceHash, repeatableProof,
+      verifiedAt, supersedesContactId,
+    ])
+    return verifiedPhoneView(required(inserted.rows[0], 'replaced verified phone'))
+  } catch (error) {
+    const mapped = mapVerifiedPhoneUniqueViolation(error)
+    if (mapped) throw mapped
+    throw error
+  }
+}
+
+function repeatableProofSha256(reference: string | undefined): string | null {
+  if (reference === undefined || reference.trim() === '') return null
+  return sha256(reference)
+}
+
+function postgresErrorFields(error: unknown): { code: string; constraint: string; message: string } | null {
+  const seen = new Set<unknown>()
+  let current: unknown = error
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current)
+    const record = current as {
+      code?: unknown
+      constraint?: unknown
+      message?: unknown
+      cause?: unknown
+    }
+    if (typeof record.code === 'string' && typeof record.message === 'string') {
+      return {
+        code: record.code,
+        constraint: typeof record.constraint === 'string' ? record.constraint : '',
+        message: record.message,
+      }
+    }
+    current = record.cause
+  }
+  return null
+}
+
+function sameDigest(left: string, right: string): boolean {
+  return left.trim() === right.trim()
+}
+
+async function preparePhoneProofForWrite(
+  transaction: ScopedTransaction,
+  input: Readonly<{
+    customerId: string
+    familyCustomerIds: readonly string[]
+    providerReferenceHash: string
+    repeatableProofSha256: string | null
+    idempotencyKey: string
+  }>,
+): Promise<string> {
+  if (input.repeatableProofSha256) {
+    const occupied = await lockRepeatableProofContact(transaction, input.repeatableProofSha256)
+    if (occupied && !input.familyCustomerIds.includes(occupied.customer_id)) {
+      if (await customerFamilyHasActiveModernMembership(transaction, occupied.customer_id)) {
+        const canonical = await transaction.query<{ id: string }>(`
+          SELECT mbox.canonical_customer_id($1::uuid,$2::uuid,$3::uuid) AS id
+        `, [transaction.scope.tenantId, transaction.scope.storeId, occupied.customer_id])
+        const ownerCustomerId = canonical.rows[0]?.id
+        if (!ownerCustomerId) {
+          throw recoveryError('RECOVERY_CUSTOMER_UNAVAILABLE', '这个手机号对应的会员身份不存在')
+        }
+        throw new MembershipPhoneOwnedElsewhereError(ownerCustomerId)
+      }
+      if (occupied.processing_status === 'active') {
+        await releaseUnboundRepeatableProof(transaction, occupied.id)
+      }
+    }
+  }
+  let actionReferenceHash = input.providerReferenceHash
+  if (await authorizationReferenceTaken(transaction, actionReferenceHash)) {
+    if (!input.repeatableProofSha256) throw phoneAuthorizationReplayRejected()
+    actionReferenceHash = sha256(`${input.providerReferenceHash}:${input.idempotencyKey}`)
+    if (await authorizationReferenceTaken(transaction, actionReferenceHash)) {
+      throw phoneAuthorizationReplayRejected()
+    }
+  }
+  return actionReferenceHash
+}
+
+async function lockRepeatableProofContact(
+  transaction: ScopedTransaction,
+  repeatableProof: string,
+): Promise<{ id: string; customer_id: string; processing_status: string } | null> {
+  const result = await transaction.query<{
+    id: string
+    customer_id: string
+    processing_status: string
   }>(`
-    INSERT INTO mbox.customer_verified_contacts(
-      tenant_id,store_id,public_id,customer_id,contact_type,contact_hash,
-      encrypted_value,encryption_key_version,masked_value,verification_source,
-      contact_encryption_key_id,provider_reference_sha256,verified_by_customer_id,verified_at,
-      processing_status,supersedes_contact_id
-    ) VALUES ($1::uuid,$2::uuid,$3,$4::uuid,'phone',$5,$6::bytea,$7,$8,
-      'wechat_phone_authorization',$9,$10,$4::uuid,$11::timestamptz,'active',$12::uuid)
-    RETURNING id,public_id,masked_value,verified_at::text,verification_source
+    SELECT contact.id, contact.customer_id, contact.processing_status
+    FROM mbox.customer_verified_contacts contact
+    WHERE contact.tenant_id=$1::uuid AND contact.store_id=$2::uuid
+      AND (
+        contact.repeatable_proof_sha256=$3
+        OR EXISTS (
+          SELECT 1 FROM mbox.customer_verified_contact_actions action
+          WHERE action.tenant_id=contact.tenant_id AND action.store_id=contact.store_id
+            AND action.contact_id=contact.id AND action.action='verified'
+            AND action.authorization_reference_sha256=$3
+        )
+      )
+    ORDER BY CASE contact.processing_status WHEN 'active' THEN 0 WHEN 'revoked' THEN 1 ELSE 2 END,
+      contact.verified_at DESC NULLS LAST, contact.id
+    LIMIT 1
+    FOR UPDATE OF contact
+  `, [transaction.scope.tenantId, transaction.scope.storeId, repeatableProof])
+  return result.rows[0] ?? null
+}
+
+async function customerFamilyHasActiveModernMembership(
+  transaction: ScopedTransaction,
+  customerId: string,
+): Promise<boolean> {
+  const result = await transaction.query(`
+    WITH RECURSIVE family(id) AS (
+      SELECT mbox.canonical_customer_id($1::uuid,$2::uuid,$3::uuid)
+      UNION ALL
+      SELECT child.id FROM mbox.customers child
+      JOIN family parent ON child.merged_into_customer_id=parent.id
+      WHERE child.tenant_id=$1::uuid AND child.store_id=$2::uuid
+    )
+    SELECT 1 FROM mbox.customer_memberships membership
+    WHERE membership.tenant_id=$1::uuid AND membership.store_id=$2::uuid
+      AND membership.status='active'
+      AND membership.customer_id IN (SELECT id FROM family WHERE id IS NOT NULL)
+      AND membership.member_no ~ '^[0-9]{6}$'
+      AND membership.member_no !~* '^MBX-'
+    LIMIT 1
+  `, [transaction.scope.tenantId, transaction.scope.storeId, customerId])
+  return (result.rowCount ?? 0) > 0
+}
+
+async function releaseUnboundRepeatableProof(
+  transaction: ScopedTransaction,
+  contactId: string,
+): Promise<void> {
+  await transaction.query(`
+    UPDATE mbox.customer_verified_contacts
+    SET processing_status='revoked',
+        revoked_at=clock_timestamp(),
+        revocation_reason_code='repeatable_phone_proof_rebind'
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+      AND contact_type='phone' AND processing_status='active'
+  `, [transaction.scope.tenantId, transaction.scope.storeId, contactId])
+}
+
+async function authorizationReferenceTaken(
+  transaction: ScopedTransaction,
+  authorizationReferenceHash: string,
+): Promise<boolean> {
+  const result = await transaction.query(`
+    SELECT 1 FROM mbox.customer_verified_contact_actions
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+      AND authorization_reference_sha256=$3
+    LIMIT 1
+  `, [transaction.scope.tenantId, transaction.scope.storeId, authorizationReferenceHash])
+  return (result.rowCount ?? 0) > 0
+}
+
+async function reactivateVerifiedContact(
+  transaction: ScopedTransaction,
+  contactId: string,
+): Promise<void> {
+  await transaction.query(
+    `SELECT set_config('app.verified_contact_reauthorization', $1, true)`,
+    [contactId],
+  )
+  const updated = await transaction.query(`
+    UPDATE mbox.customer_verified_contacts
+    SET processing_status='active',
+        revoked_at=NULL,
+        revoked_by_customer_id=NULL,
+        revoked_by_employee_id=NULL,
+        revocation_reason_code=NULL
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+      AND processing_status='revoked'
+  `, [transaction.scope.tenantId, transaction.scope.storeId, contactId])
+  await transaction.query(`SELECT set_config('app.verified_contact_reauthorization', '', true)`)
+  if ((updated.rowCount ?? 0) !== 1) {
+    throw recoveryError('RECOVERY_STATE_CONFLICT', '手机号授权状态已变化，请重新授权')
+  }
+}
+
+async function reauthorizeVerifiedContact(
+  transaction: ScopedTransaction,
+  contactId: string,
+  input: Readonly<{
+    customerId: string
+    providerReferenceHash: string
+    verifiedAt: string
+    idempotencyKey: string
+  }>,
+): Promise<void> {
+  const requestSha256 = sha256(JSON.stringify({
+    contactId,
+    actorCustomerId: input.customerId,
+    actorEmployeeId: null,
+    authorizationSource: 'wechat_phone_authorization',
+    authorizationReferenceSha256: input.providerReferenceHash,
+    authorizedAt: input.verifiedAt,
+  }))
+  try {
+    await transaction.query(`
+      SELECT mbox.reauthorize_verified_membership_phone(
+        $1::uuid,$2::uuid,NULL,'wechat_phone_authorization',$3::char(64),
+        $4::timestamptz,$5,$6::char(64)
+      )
+    `, [
+      contactId, input.customerId, input.providerReferenceHash, input.verifiedAt,
+      input.idempotencyKey, requestSha256,
+    ])
+  } catch (error) {
+    const mapped = mapVerifiedPhoneUniqueViolation(error)
+    if (mapped) throw mapped
+    throw error
+  }
+}
+
+async function supersedeOtherActivePhones(
+  transaction: ScopedTransaction,
+  familyCustomerIds: readonly string[],
+  keepContactId: string,
+  input: Readonly<{ customerId: string; idempotencyKey: string }>,
+): Promise<void> {
+  const active = await transaction.query<{ id: string }>(`
+    SELECT id FROM mbox.customer_verified_contacts
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+      AND customer_id=ANY($3::uuid[]) AND contact_type='phone'
+      AND processing_status='active' AND id<>$4::uuid
+    ORDER BY verified_at,id FOR UPDATE
   `, [
     transaction.scope.tenantId, transaction.scope.storeId,
-    `CVC${randomUUID().replaceAll('-', '').toUpperCase()}`, family.canonicalCustomerId,
-    input.protectedPhone.contactHash, input.protectedPhone.encryptedValue,
-    input.protectedPhone.encryptionKeyVersion, input.protectedPhone.maskedValue,
-    input.protectedPhone.encryptionKeyId, input.providerReferenceHash, verifiedAt, supersedesContactId,
+    familyCustomerIds, keepContactId,
   ])
-  return verifiedPhoneView(required(inserted.rows[0], 'replaced verified phone'))
+  for (const contact of active.rows) {
+    await revokeVerifiedContact(transaction, contact.id, {
+      customerId: input.customerId,
+      employeeId: null,
+      reasonCode: 'customer_replaced_phone',
+      reasonDetail: null,
+      idempotencyKey: input.idempotencyKey,
+      action: 'superseded',
+    })
+  }
 }
 
 async function assertCustomerCanRecover(transaction: ScopedTransaction, customerId: string): Promise<void> {
@@ -847,6 +1178,7 @@ async function upsertVerifiedContact(
     protectedPhone: ProtectedRecoveryPhone
     verificationSource: 'wechat_phone_authorization' | 'staff_controlled'
     providerReferenceHash: string
+    repeatableProofSha256?: string | null
     verifiedByCustomerId: string | null
     verifiedByEmployeeId: string | null
     verifiedAt: string
@@ -863,16 +1195,38 @@ async function upsertVerifiedContact(
   const verificationCustomerId = input.verifiedByCustomerId === null
     ? null
     : family.canonicalCustomerId
+  const repeatableProof = input.repeatableProofSha256 ?? null
+  await transaction.query(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [
+    `${transaction.scope.tenantId}:${transaction.scope.storeId}:phone-proof:${repeatableProof ?? input.providerReferenceHash}`,
+  ])
   const replay = await transaction.query<{ id: string }>(`
-    SELECT id FROM mbox.customer_verified_contacts
-    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND customer_id=ANY($3::uuid[])
-      AND contact_type='phone' AND provider_reference_sha256=$4
-    FOR UPDATE
+    SELECT contact.id FROM mbox.customer_verified_contacts contact
+    WHERE contact.tenant_id=$1::uuid AND contact.store_id=$2::uuid
+      AND contact.customer_id=ANY($3::uuid[]) AND contact.contact_type='phone'
+      AND contact.processing_status<>'disposed'
+      AND (
+        contact.provider_reference_sha256=$4
+        OR ($5::char(64) IS NOT NULL AND contact.repeatable_proof_sha256=$5)
+        OR EXISTS (
+          SELECT 1 FROM mbox.customer_verified_contact_actions action
+          WHERE action.tenant_id=contact.tenant_id AND action.store_id=contact.store_id
+            AND action.contact_id=contact.id AND action.action='verified'
+            AND action.authorization_reference_sha256=COALESCE($5::char(64), $4)
+        )
+      )
+    FOR UPDATE OF contact
   `, [
     transaction.scope.tenantId, transaction.scope.storeId,
-    family.customerIds, input.providerReferenceHash,
+    family.customerIds, input.providerReferenceHash, repeatableProof,
   ])
   if (replay.rows[0]) return replay.rows[0]
+  const actionReferenceHash = await preparePhoneProofForWrite(transaction, {
+    customerId: input.customerId,
+    familyCustomerIds: family.customerIds,
+    providerReferenceHash: input.providerReferenceHash,
+    repeatableProofSha256: repeatableProof,
+    idempotencyKey: input.idempotencyKey,
+  })
   const current = await transaction.query<{ id: string }>(`
     SELECT id FROM mbox.customer_verified_contacts
     WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND customer_id=ANY($3::uuid[])
@@ -916,7 +1270,7 @@ async function upsertVerifiedContact(
       actorCustomerId: input.verifiedByCustomerId,
       actorEmployeeId: input.verifiedByEmployeeId,
       authorizationSource: input.verificationSource,
-      authorizationReferenceSha256: input.providerReferenceHash,
+      authorizationReferenceSha256: actionReferenceHash,
       authorizedAt: input.verifiedAt,
     }))
     await transaction.query(`
@@ -925,31 +1279,37 @@ async function upsertVerifiedContact(
       )
     `, [
       sameContact.id, input.verifiedByCustomerId, input.verifiedByEmployeeId,
-      input.verificationSource, input.providerReferenceHash, input.verifiedAt,
+      input.verificationSource, actionReferenceHash, input.verifiedAt,
       input.idempotencyKey, requestSha256,
     ])
     return sameContact
   }
-  const result = await transaction.query<{ id: string }>(`
-    INSERT INTO mbox.customer_verified_contacts (
-      tenant_id,store_id,public_id,customer_id,contact_type,contact_hash,encrypted_value,
-      encryption_key_version,masked_value,verification_source,provider_reference_sha256,
-      contact_encryption_key_id,
-      verified_by_customer_id,verified_by_employee_id,verified_at,
-      processing_status,supersedes_contact_id
-    ) VALUES ($1::uuid,$2::uuid,$3,$4::uuid,'phone',$5,$6::bytea,$7,$8,$9,$10,$11,
-      $12::uuid,$13::uuid,$14::timestamptz,'active',$15::uuid)
-    RETURNING id
-  `, [
-    transaction.scope.tenantId, transaction.scope.storeId,
-    `CVC${randomUUID().replaceAll('-', '').toUpperCase()}`, family.canonicalCustomerId,
-    input.protectedPhone.contactHash, input.protectedPhone.encryptedValue,
-    input.protectedPhone.encryptionKeyVersion, input.protectedPhone.maskedValue,
-    input.verificationSource, input.providerReferenceHash,input.protectedPhone.encryptionKeyId,
-    verificationCustomerId, input.verifiedByEmployeeId, input.verifiedAt,
-    superseded?.id ?? null,
-  ])
-  return required(result.rows[0], 'verified contact')
+  try {
+    const result = await transaction.query<{ id: string }>(`
+      INSERT INTO mbox.customer_verified_contacts (
+        tenant_id,store_id,public_id,customer_id,contact_type,contact_hash,encrypted_value,
+        encryption_key_version,masked_value,verification_source,provider_reference_sha256,
+        repeatable_proof_sha256,contact_encryption_key_id,
+        verified_by_customer_id,verified_by_employee_id,verified_at,
+        processing_status,supersedes_contact_id
+      ) VALUES ($1::uuid,$2::uuid,$3,$4::uuid,'phone',$5,$6::bytea,$7,$8,$9,$10,$11::char(64),$12,
+        $13::uuid,$14::uuid,$15::timestamptz,'active',$16::uuid)
+      RETURNING id
+    `, [
+      transaction.scope.tenantId, transaction.scope.storeId,
+      `CVC${randomUUID().replaceAll('-', '').toUpperCase()}`, family.canonicalCustomerId,
+      input.protectedPhone.contactHash, input.protectedPhone.encryptedValue,
+      input.protectedPhone.encryptionKeyVersion, input.protectedPhone.maskedValue,
+      input.verificationSource, actionReferenceHash, repeatableProof, input.protectedPhone.encryptionKeyId,
+      verificationCustomerId, input.verifiedByEmployeeId, input.verifiedAt,
+      superseded?.id ?? null,
+    ])
+    return required(result.rows[0], 'verified contact')
+  } catch (error) {
+    const mapped = mapVerifiedPhoneUniqueViolation(error)
+    if (mapped) throw mapped
+    throw error
+  }
 }
 
 async function appendVerifiedContactAction(

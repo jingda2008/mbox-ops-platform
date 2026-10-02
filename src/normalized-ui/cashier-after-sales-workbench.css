@@ -140,9 +140,9 @@
 .cashier-workbench-boundary { margin: 0; padding: 9px 10px; border-left: 3px solid #c9aa43; background: #fff9e9; color: #625b46; font-size: 9px; line-height: 1.5; }
 .cashier-workbench-state { min-height: 128px; display: grid; place-items: center; align-content: center; gap: 7px; padding: 18px; border: 1px dashed #c8cdc6; border-radius: 7px; background: #fbfaf6; color: #657067; text-align: center; }
 .cashier-workbench-state strong { color: #2d342e; font-size: 13px; }
-.cashier-workbench-state p { margin: 0; font-size: 10px; }
+.cashier-workbench-state p { margin: 0; font-size: 13px; line-height: 1.6; }
 .cashier-workbench-state.is-error { color: #a53139; }
-.cashier-workbench-state button { padding: 0 14px; border: 1px solid #aeb5ad; border-radius: 5px; background: #fbfaf6; box-shadow: 0 2px 0 #aeb5ad; }
+.cashier-workbench-state button { min-height: 44px; color: #176c50; font: inherit; padding: 0 14px; border: 1px solid #aeb5ad; border-radius: 5px; background: #fbfaf6; box-shadow: 0 2px 0 #aeb5ad; }
 .cashier-workbench .is-spinning { animation: cashier-spin .8s linear infinite; }
 @keyframes cashier-spin { to { transform: rotate(360deg); } }
 @media (min-width: 760px) {
@@ -172,3 +172,8 @@
 .payment-finance-review article { padding: 12px 0; border-bottom: 1px solid #d2dfd9; }
 .payment-finance-review textarea { display: block; width: 100%; min-height: 72px; }
 .payment-finance-review button { min-height: 44px; margin: 6px; }
+
+.payment-finance-review nav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.payment-finance-review nav button { margin: 0; padding: 8px 12px; font: inherit; color: #176c50; border: 1px solid #aebfb5; border-radius: 8px; background: #fff; }
+.payment-finance-review nav button:disabled { color: #757e77; background: #edf0eb; }
+.payment-finance-review [role="alert"] { color: #a53139; line-height: 1.6; }

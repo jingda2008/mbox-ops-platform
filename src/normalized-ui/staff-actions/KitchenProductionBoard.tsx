@@ -34,6 +34,7 @@ export function KitchenProductionBoard({api,employeeId,blocked,onChanged,onLegac
   const [expanded,setExpanded]=useState(true)
   const [stale,setStale]=useState(true)
   const [busy,setBusy]=useState(false)
+  const [confirmedMessage,setConfirmedMessage]=useState('')
   const [message,setMessage]=useState(`正在读取${stationLabel}队列…`)
   const [query,setQuery]=useState('')
   const [start,setStart]=useState<StartDraft|null>(()=>stored<{start:StartDraft|null}>(storageKey,{start:null}).start)
@@ -150,10 +151,12 @@ export function KitchenProductionBoard({api,employeeId,blocked,onChanged,onLegac
   }
   async function submit(command?:KitchenCommand){
     if(flight.current)return
-    flight.current=true;setBusy(true);readRevision.current++;controller.current?.abort()
+    flight.current=true;setBusy(true);setConfirmedMessage('');readRevision.current++;controller.current?.abort()
     const original=command??journal.pending()?.body
     try{
       const result=command?await journal.submit(command):await journal.recover()
+      const confirmed=result.action==='handoff'?'已接续全部关联批次':result.action==='release'?'已确认设备清空':result.action==='start'?`已开始 ${result.quantity} 份`:`已确认 ${result.quantity} 份放好${pickupPlace}`
+      if(alive.current)setConfirmedMessage(confirmed)
       await journal.refresh(read)
       if(!alive.current)return
       if(original?.action==='ready')setDrafts(current=>({...current,[original.batchId]:kitchenDraftAfterReady(current[original.batchId]??{},original.items)}))
@@ -165,7 +168,7 @@ export function KitchenProductionBoard({api,employeeId,blocked,onChanged,onLegac
         setStart(null);if(original.action==='start'){setSelectedBatch(result.batchId);setPage(0);setActivePane('working')}
       }
       if(result.action==='handoff'){setHandoff(null);setPhysicalChecked(false)}
-      setMessage('上次操作：'+(result.action==='handoff'?'已接续全部关联批次':result.action==='release'?'已确认设备清空':result.action==='start'?`已开始 ${result.quantity} 份`:`已确认 ${result.quantity} 份放好${pickupPlace}`))
+      setConfirmedMessage('');setMessage('上次操作：'+confirmed)
       void callbacks.current.onChanged().catch(()=>{})
     }catch(error){if(alive.current){setMessage(error instanceof Error?error.message:'操作结果未能确认，请恢复原操作');setLoginRequired(requiresStaffLogin(error));setStale(true)}}
     finally{flight.current=false;if(alive.current)setBusy(false)}
@@ -189,7 +192,7 @@ export function KitchenProductionBoard({api,employeeId,blocked,onChanged,onLegac
       <button type="button" onClick={()=>void refreshPage()} disabled={busy||!!unresolved} title={headerActions?'刷新队列；有新版时保留选择并更新页面':'重新读取队列'}>刷新</button>
       {headerActions?<ScreenFullscreenButton/>:<button type="button" onClick={()=>setExpanded(false)}>收起</button>}
     </header>
-    <div className={`kitchen-notice ${stale?'is-stale':''} ${!stale&&!busy&&!unresolved&&!loginRequired&&message==='按下单时间排列；新单不会加入已经开做的批次'?'is-idle':''}`} data-action-reveal="off" role="status" aria-label={`${stationLabel}操作反馈`}><span>{busy?'正在核对原操作，请勿再次制作…':unresolved?'有原操作结果待确认，恢复后才能继续':message}{stale&&!busy?'；操作暂停，重新读取后继续':''}</span>
+    <div className={`kitchen-notice ${stale?'is-stale':''} ${!stale&&!busy&&!unresolved&&!loginRequired&&message==='按下单时间排列；新单不会加入已经开做的批次'?'is-idle':''}`} data-action-reveal="off" role="status" aria-label={`${stationLabel}操作反馈`}><span>{confirmedMessage?`${confirmedMessage}；${busy?'正在更新队列…':'队列更新未完成，请恢复原操作以重新读取，不会再次制作。'}`:busy?'正在提交，请勿再次制作…':unresolved?'有原操作结果待确认，恢复后才能继续':message}{stale&&!busy?'；操作暂停，重新读取后继续':''}</span>
       {unresolved&&<button type="button" disabled={busy} onClick={()=>void submit()}>恢复原操作</button>}
       {loginRequired&&onLoginRequired&&<button type="button" onClick={onLoginRequired}>恢复登录</button>}
     </div>

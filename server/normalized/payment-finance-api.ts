@@ -13,7 +13,13 @@ export const paymentFinanceApiPlugin:FastifyPluginAsync<Options>=async(app,optio
   if(!Number.isSafeInteger(page)||page<0||page>100000)return reply.code(400).send({error:{code:'REQUEST_INVALID',message:'查询页码无效'}})
   const data=await options.transactions.run(context.scope,async tx=>{
    await new StaffAccessRepository(tx).assertPermission(context.employeeId,'reconciliation.view')
-   return (await tx.query(`SELECT p.id,p.public_id AS "publicId",p.amount_minor::text AS "amountMinor",p.status,p.created_at::text AS "createdAt",
+   // Compute the store-wide monitoring view once, before associating it with payments.
+   // A correlated expansion repeats the historical ledger scan for every payment.
+   return (await tx.query(`WITH monitoring_signals AS MATERIALIZED (
+    SELECT tenant_id,store_id,subject_id,signal FROM mbox.payment_financial_monitoring_signals
+    WHERE tenant_id=$1 AND store_id=$2
+      AND signal IN ('order_overcollected','cancelled_order_captured','succeeded_payment_missing_reconciliation')
+   ) SELECT p.id,p.public_id AS "publicId",p.amount_minor::text AS "amountMinor",p.status,p.created_at::text AS "createdAt",
     s.phase,s.stop_reason AS "stopReason",s.next_query_at::text AS "nextQueryAt",s.total_query_count AS "queryCount",
     c.status AS "caseStatus",c.note,
     (SELECT jsonb_build_object('orders',h.after_snapshot->'association'->'orders') FROM mbox.audit_events h WHERE h.tenant_id=p.tenant_id AND h.store_id=p.store_id
@@ -27,7 +33,7 @@ export const paymentFinanceApiPlugin:FastifyPluginAsync<Options>=async(app,optio
     LEFT JOIN mbox.order_payment_batches batch ON batch.tenant_id=p.tenant_id AND batch.store_id=p.store_id AND batch.id=p.order_batch_id
     LEFT JOIN mbox.table_sessions visit ON visit.tenant_id=p.tenant_id AND visit.store_id=p.store_id AND visit.id=COALESCE(o.table_session_id,batch.table_session_id)
     LEFT JOIN mbox.tables t ON t.tenant_id=visit.tenant_id AND t.store_id=visit.store_id AND t.id=visit.table_id
-    LEFT JOIN LATERAL(SELECT array_agg(DISTINCT signal.signal) AS signals FROM (SELECT signal FROM mbox.payment_financial_monitoring_signals signal
+    LEFT JOIN LATERAL(SELECT array_agg(DISTINCT signal.signal) AS signals FROM (SELECT signal FROM monitoring_signals signal
       WHERE signal.tenant_id=p.tenant_id AND signal.store_id=p.store_id AND (signal.subject_id=p.id OR EXISTS(SELECT 1 FROM mbox.order_payment_facts fact WHERE fact.tenant_id=p.tenant_id AND fact.store_id=p.store_id AND fact.id=p.id AND fact.order_id=signal.subject_id))
         AND signal.signal IN ('order_overcollected','cancelled_order_captured','succeeded_payment_missing_reconciliation')
       UNION ALL SELECT 'confirmed_payment_not_applied' WHERE p.status NOT IN ('succeeded','partially_refunded','refunded') AND EXISTS(

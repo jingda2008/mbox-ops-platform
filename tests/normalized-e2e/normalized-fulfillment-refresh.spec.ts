@@ -244,3 +244,21 @@ test('出品批次确认后等候读回，旧可配送份数不能再次提交',
   await expect(page.getByText('合并本批配送单', { exact: true })).toHaveCount(0)
   expect(commands).toBe(1)
 })
+
+test('制作确认后的读回不排在未完成的桌台刷新后面',async({page})=>{
+ const {state,card}=await kitchen(page,false)
+ const hold=gate();let operations=0,commands=0
+ await page.route('**/api/operations',async route=>{operations++;const response=await route.fetch();await hold.promise;await route.fulfill({response})})
+ await page.route('**/api/commerce/kds/*/actions',async route=>{commands++;state.items=[];await route.fulfill({json:{id:taskId}})})
+ const before=state.reads
+ try{
+  await refresh(page)
+  await expect.poll(()=>operations).toBeGreaterThan(0)
+  await expect.poll(()=>state.reads).toBeGreaterThan(before)
+  await card.getByRole('button',{name:'制作完成',exact:true}).click()
+  // The operations response is still held. The confirmed production read must
+  // finish independently, with the original command sent only once.
+  await expect(card).toHaveCount(0,{timeout:2500})
+  expect(commands).toBe(1)
+ }finally{hold.release()}
+})

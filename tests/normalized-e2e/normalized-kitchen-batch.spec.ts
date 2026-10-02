@@ -134,3 +134,33 @@ test('服务员读取真实备齐数量并送达；厨师操作不冒充送达',
   await card.getByRole('button',{name:'本次已送达',exact:true}).click()
   await expect(page.getByRole('status').filter({hasText:'已确认送达'})).toBeVisible()
 })
+
+test('制作已确认时立即反馈，队列读取失败只恢复读取，不重复制作',async({page})=>{
+ await login(page)
+ await choose(page,1)
+ await board(page).getByLabel('实际设备',{exact:true}).fill('')
+ await board(page).getByRole('button',{name:'开始制作 1 份',exact:true}).click()
+ const right=board(page).getByRole('region',{name:'正在制作',exact:true})
+ await expect(right.getByRole('button',{name:'本页 1 份已放好',exact:true})).toBeEnabled()
+ let confirmed=false,commands=0,release!:()=>void,failed=false
+ const gate=new Promise<void>(resolve=>{release=resolve})
+ await page.route('**/api/commerce/kitchen-board/commands',async route=>{
+  commands++
+  const response=await route.fetch();expect(response.ok()).toBe(true)
+  confirmed=true
+  await route.fulfill({response})
+ })
+ await page.route(/\/api\/commerce\/kitchen-board(?:\?.*)?$/,async route=>{
+  if(confirmed&&!failed){failed=true;await gate;await route.fulfill({status:503,json:{error:{message:'隔离队列暂不可用'}}});return}
+  await route.continue()
+ })
+ await right.getByRole('button',{name:'本页 1 份已放好',exact:true}).click()
+ const feedback=board(page).getByRole('status',{name:'后厨操作反馈',exact:true})
+ await expect(feedback).toContainText('已确认 1 份放好后厨取餐口；正在更新队列')
+ await expect(right.getByRole('button',{name:'本页 1 份已放好',exact:true})).toBeDisabled()
+ release()
+ await expect(feedback).toContainText('队列更新未完成')
+ await board(page).getByRole('button',{name:'恢复原操作',exact:true}).click()
+ await expect(feedback).toContainText('上次操作：已确认 1 份放好')
+ expect(commands).toBe(1)
+})

@@ -1,10 +1,11 @@
+import {RefreshQueue} from './staff-actions/refresh-queue'
 import {businessStatus} from '../shared/staff-business-labels'
 import { useStaffViewState, staffLocationSearch } from './staff-view-state'
 import {ItemAfterSalesPanel} from './ItemAfterSalesPanel'
 import {PaymentFinanceReviewPanel} from './PaymentFinanceReviewPanel'
 import {REFUND_PURPOSE_LABELS} from '../shared/refund-purpose'
 import {CashierDaySummary} from './CashierDaySummary'
-import { useCallback, useEffect, useRef, useState, type FormEvent, type RefObject } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type RefObject } from 'react'
 import {
   Check,
   ChevronRight,
@@ -90,7 +91,6 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
 }) {
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading')
   const [message, setMessage] = useState<string | null>(null)
-  const [refreshDelayed,setRefreshDelayed]=useState(false)
   const [view, setView] = useState<CashierWorkbenchView | null>(null)
   const [query, setQuery] = useStaffViewState(`cashier:${staffLocationSearch()}:query`, () => new URLSearchParams(staffLocationSearch()).get('query') ?? '')
   const [areaId, setAreaId] = useStaffViewState(`cashier:${staffLocationSearch()}:area`, 'all')
@@ -103,11 +103,8 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
   const mutationCoordinator = useRef(new CashierMutationCoordinator())
   const attentionCountRef = useRef<number | null>(null)
 
-  const load = useCallback(async (searchQuery: string, quiet = false) => {
-    if (!quiet) {
-      setPhase('loading')
-      setMessage(null)
-    }
+  const read = useCallback(async (signal: AbortSignal) => {
+    const searchQuery = query
     try {
       // Keep the complete active cashier queue visible in normal store load.
       // The API caps this at 100 and prioritizes orders that still need money.
@@ -116,10 +113,11 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
       if (areaId !== 'all') search.set('areaId', areaId)
       if (paymentState !== 'all') search.set('paymentState', paymentState)
       const response = await api.getEndpoint<{ data: CashierWorkbenchView }>(
-        `/api/payments/workbench?${search.toString()}`,
+        `/api/payments/workbench?${search.toString()}`, {signal},
       )
+      if(signal.aborted)return
+      setMessage(null)
       setView(response.data)
-      setRefreshDelayed(false)
       setAreaOptions((current) => {
         const next = new Map(current.map((area) => [area.id, area.name]))
         for (const order of response.data.orders) {
@@ -134,7 +132,7 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
         + (response.data.summary.activityProcessingRefundCount ?? 0)
       const isGlobalView = searchQuery.trim() === '' && areaId === 'all' && paymentState === 'all'
       const previousAttentionCount = attentionCountRef.current
-      if (isGlobalView && quiet && previousAttentionCount !== null && attentionCount > previousAttentionCount) {
+      if (isGlobalView && previousAttentionCount !== null && attentionCount > previousAttentionCount) {
         setNotice({
           kind: 'attention',
           text: `新增 ${attentionCount - previousAttentionCount} 项退款或权益待办，请及时复核或执行。`,
@@ -143,33 +141,40 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
       if (isGlobalView) attentionCountRef.current = attentionCount
       setPhase('ready')
     } catch (error) {
+      if(signal.aborted)return
       if (error instanceof NormalizedApiError && error.recovery === 'login') {
         onLoginRequired()
         return
       }
-      if(quiet)setRefreshDelayed(true)
-      if (!quiet) {
-        setMessage(error instanceof Error ? error.message : '收银售后数据暂时无法读取')
-        setPhase('error')
-      }
+      setMessage(error instanceof Error ? error.message : '收银订单暂时无法读取')
+      setPhase('error')
     }
-  }, [api, areaId, onLoginRequired, paymentState])
+  }, [api, areaId, onLoginRequired, paymentState, query])
+  const refreshQueue = useMemo(() => new RefreshQueue(read), [read])
+  useEffect(() => () => refreshQueue.cancel(), [refreshQueue])
+  const load = useCallback(async (_searchQuery: string, quiet = false) => {
+    if (!quiet) { setPhase('loading'); setMessage(null) }
+    await refreshQueue.request(!quiet)
+  }, [refreshQueue])
 
   useEffect(() => { void load(query) }, [load, query, refreshToken])
   useEffect(() => {
-    if (phase !== 'ready') return
+    if (phase === 'loading') return
     const refresh = () => {
       if (document.visibilityState === 'visible' && busyKey === null) void load(query, true)
     }
+    const changed = () => {
+      if (document.visibilityState === 'visible' && busyKey === null) void refreshQueue.request(true)
+    }
     const timer = globalThis.setInterval(refresh, 15_000)
     document.addEventListener('visibilitychange', refresh)
-    window.addEventListener('mbox:after-sales-changed',refresh)
+    window.addEventListener('mbox:after-sales-changed',changed)
     return () => {
       globalThis.clearInterval(timer)
       document.removeEventListener('visibilitychange', refresh)
-      window.removeEventListener('mbox:after-sales-changed',refresh)
+      window.removeEventListener('mbox:after-sales-changed',changed)
     }
-  }, [busyKey, load, phase, query])
+  }, [busyKey, load, phase, query, refreshQueue])
   useEffect(() => {
     if (notice === null) return
     noticeRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
@@ -286,8 +291,11 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
     }
   }, [api, load, onLoginRequired, query])
 
-  return <>{refreshDelayed&&<p role="status" data-action-reveal="off">收银状态更新暂时延迟，已有记录保留，请刷新核对；不要因显示未变重复收退款。</p>}{view && auth.permissions.includes('reconciliation.view') && <CashierDaySummary api={api} businessDate={view.businessDate} revision={view} printEmployeeId={auth.permissions.includes('order.bill.print')?auth.employee.id:undefined}/>}{auth.permissions.includes('reconciliation.view')&&<PaymentFinanceReviewPanel api={api} canManage={auth.permissions.includes('reconciliation.manage')}/>} {view && auth.permissions.includes('reconciliation.view') && <OperatingHistoryPanel key={auth.employee.id} api={api} businessDate={view.businessDate} />}
-    <CashierAfterSalesWorkbenchView
+  const financePanel=auth.permissions.includes('reconciliation.view')?<PaymentFinanceReviewPanel api={api} canManage={auth.permissions.includes('reconciliation.manage')}/>:null
+  return <>{view && auth.permissions.includes('reconciliation.view') && <CashierDaySummary api={api} businessDate={view.businessDate} revision={view} printEmployeeId={auth.permissions.includes('order.bill.print')?auth.employee.id:undefined}/>}
+    {!view&&<CashierReadState phase={phase} message={message} onReload={()=>void load(query)}/>}
+    {financePanel}
+    {view&&<CashierAfterSalesWorkbenchView
       initialExpandedOrderId={new URLSearchParams(staffLocationSearch()).get('orderId')}
     auth={auth}
     view={view}
@@ -308,7 +316,15 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
     onCreateOnlinePayment={createOnlinePayment}
     onClosePendingBusinessDays={closePendingBusinessDays}
     onNavigate={onNavigate}
-  /></>
+  />}
+    {view && auth.permissions.includes('reconciliation.view') && <OperatingHistoryPanel key={auth.employee.id} api={api} businessDate={view.businessDate} />}
+  </>
+}
+
+function CashierReadState({phase,message,onReload}:{phase:'loading'|'ready'|'error';message:string|null;onReload():void}) {
+  if (phase === 'loading') return <div className="cashier-workbench-state" role="status"><LoaderCircle className="is-spinning" /><strong>正在读取本营业日订单</strong></div>
+  if (phase === 'error') return <div className="cashier-workbench-state is-error" role="alert"><CircleAlert /><strong>收银订单读取失败</strong><p>{message}。尚不能确认订单状态，请重新读取。</p><button type="button" onClick={onReload}>重新读取订单</button></div>
+  return null
 }
 
 export function CashierAfterSalesWorkbenchView({
@@ -478,13 +494,7 @@ export function CashierAfterSalesWorkbenchView({
     if (completed) setKdsCancellationDraft(null)
   }
 
-  if (phase === 'loading' && view === null) {
-    return <div className="cashier-workbench-state" role="status"><LoaderCircle className="is-spinning" /><strong>正在读取本营业日订单</strong></div>
-  }
-  if (phase === 'error' && view === null) {
-    return <div className="cashier-workbench-state is-error" role="alert"><CircleAlert /><strong>暂时没有接上收银数据</strong><p>{message}</p><button type="button" onClick={onReload}>重试</button></div>
-  }
-  if (view === null) return null
+  if (view === null) return <CashierReadState phase={phase} message={message} onReload={onReload}/>
 
   const filteredOrders = view.orders.filter((order) => {
     if (summaryFilter === 'all') return true
@@ -497,6 +507,8 @@ export function CashierAfterSalesWorkbenchView({
   })
 
   return <div className="cashier-workbench">
+    {phase==='loading'&&<p role="status">正在更新订单，当前显示上次读取的记录…</p>}
+    {phase==='error'&&<p role="alert">订单更新失败：{message}；当前显示上次记录，请重新读取后再核对，不要重复收退款。<button type="button" onClick={onReload}>重新读取订单</button></p>}
     {notice && <div ref={noticeRef} className={`cashier-workbench-notice is-${notice.kind}`} role={notice.kind === 'error' ? 'alert' : 'status'}>
       {notice.kind === 'success' ? <Check size={18} /> : <CircleAlert size={18} />}
       <span>{notice.text}</span>

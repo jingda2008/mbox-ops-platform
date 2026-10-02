@@ -214,11 +214,10 @@ export function StaffActionsPanel({
     setPendingFulfillment(new Map(pendingFulfillmentRef.current))
   }, [])
 
-  const refreshQueue = useMemo(() => new RefreshQueue(async (signal) => {
-    const previousOperations = operationsRef.current
-    let accessDenied = false
+  const refreshQueue = useMemo(() => {
+    let accessRevision = 0
     const denySession = () => {
-      accessDenied = true
+      accessRevision += 1
       fulfillmentRevisionRef.current += 1
       operationsRef.current = null
       setOperations(null)
@@ -230,12 +229,13 @@ export function StaffActionsPanel({
       setPhase('error')
       onLoginRequired?.()
     }
-    const readFulfillment = async () => {
+    const readFulfillment = async (signal: AbortSignal) => {
+      const accessAtStart = accessRevision
       const revision = fulfillmentRevisionRef.current
       const syncing = [...pendingFulfillmentRef.current].filter(([, state]) => state === 'syncing').map(([id]) => id)
       try {
         const next = await api.loadFulfillment(signal)
-        if (signal.aborted || accessDenied || revision !== fulfillmentRevisionRef.current) return
+        if (signal.aborted || accessAtStart !== accessRevision || revision !== fulfillmentRevisionRef.current) return
         const actor = operationsRef.current?.actor
         if (actor && next.actor.employeeId !== actor.id) {
           denySession()
@@ -246,7 +246,7 @@ export function StaffActionsPanel({
         setFulfillmentStale(false)
         for (const taskId of syncing) markFulfillmentPending(taskId, null)
       } catch (error) {
-        if (signal.aborted || accessDenied || revision !== fulfillmentRevisionRef.current) return
+        if (signal.aborted || accessAtStart !== accessRevision || revision !== fulfillmentRevisionRef.current) return
         fulfillmentStaleRef.current = true
         setFulfillmentStale(true)
         if (error instanceof StaffActionsApiError && error.status === 401) denySession()
@@ -258,55 +258,66 @@ export function StaffActionsPanel({
         // The persistent stale banner disables commands until a successful read.
       }
     }
-    const couldRead = previousOperations && FULFILLMENT_READ_PERMISSIONS.some(permission => previousOperations.actor.capabilities.includes(permission))
-    const fulfillmentRead = couldRead ? readFulfillment() : null
-    try {
-      const nextOperations = await api.loadOperations(signal)
-      if (signal.aborted || accessDenied) return
-      if (previousOperations && previousOperations.actor.id !== nextOperations.actor.id) {
-        denySession()
-        return
-      }
-      operationsRef.current = nextOperations
-      setOperations(nextOperations)
-      const { paymentDue, refunds } = staffTableFinancialSummary(nextOperations.tables)
-      const previousFinancialAttention = financialAttentionRef.current
-      financialAttentionRef.current = { paymentDue, refunds }
-      if (previousFinancialAttention !== null) {
-        const newRefunds = Math.max(0, refunds - previousFinancialAttention.refunds)
-        const newPaymentDue = Math.max(0, paymentDue - previousFinancialAttention.paymentDue)
-        if (newRefunds > 0) showNotice({ kind: 'attention', message: `新增 ${newRefunds} 张桌有退款待办，请立即进入收银与退款处理。` })
-        else if (newPaymentDue > 0) showNotice({ kind: 'attention', message: `新增 ${newPaymentDue} 张桌待收款，请核对桌台付款状态。` })
-      }
-      const canRead = FULFILLMENT_READ_PERMISSIONS.some(permission => nextOperations.actor.capabilities.includes(permission))
-      if (!canRead) {
-        fulfillmentRevisionRef.current += 1
-        setFulfillment(null)
-        knownActionKeysRef.current = null
-      } else if (!fulfillmentRead) await readFulfillment()
-      if (signal.aborted || accessDenied) return
-      if (nextOperations.actor.capabilities.includes('loyalty.redemption.fulfill') && api.loadMemberBenefitTasks) {
-        try {
-          const nextBenefits = await api.loadMemberBenefitTasks(null, signal)
-          if (signal.aborted || accessDenied) return
-          setMemberBenefits(nextBenefits)
+    const fulfillmentQueue = new RefreshQueue(readFulfillment)
+    const operationsQueue = new RefreshQueue(async (signal) => {
+      const previousOperations = operationsRef.current
+      const accessAtStart = accessRevision
+      const couldRead = previousOperations && FULFILLMENT_READ_PERMISSIONS.some(permission => previousOperations.actor.capabilities.includes(permission))
+      const fulfillmentRead = couldRead ? fulfillmentQueue.request() : null
+      try {
+        const nextOperations = await api.loadOperations(signal)
+        if (signal.aborted || accessAtStart !== accessRevision) return
+        if (previousOperations && previousOperations.actor.id !== nextOperations.actor.id) {
+          denySession()
+          return
         }
-        catch (error) {
-          if (signal.aborted) return
-          if (error instanceof StaffActionsApiError && error.status === 401) { denySession(); return }
-          setMemberBenefits(null)
+        operationsRef.current = nextOperations
+        setOperations(nextOperations)
+        const { paymentDue, refunds } = staffTableFinancialSummary(nextOperations.tables)
+        const previousFinancialAttention = financialAttentionRef.current
+        financialAttentionRef.current = { paymentDue, refunds }
+        if (previousFinancialAttention !== null) {
+          const newRefunds = Math.max(0, refunds - previousFinancialAttention.refunds)
+          const newPaymentDue = Math.max(0, paymentDue - previousFinancialAttention.paymentDue)
+          if (newRefunds > 0) showNotice({ kind: 'attention', message: `新增 ${newRefunds} 张桌有退款待办，请立即进入收银与退款处理。` })
+          else if (newPaymentDue > 0) showNotice({ kind: 'attention', message: `新增 ${newPaymentDue} 张桌待收款，请核对桌台付款状态。` })
         }
-      } else setMemberBenefits(null)
-      if (!signal.aborted && !accessDenied) setPhase('ready')
-    } catch (error) {
-      if (signal.aborted || accessDenied) return
-      setPhase('error')
-      if (error instanceof StaffActionsApiError && error.status === 401) denySession()
-      else showNotice({ kind: 'error', message: actionError(error, '现场数据暂时无法读取，请重试') })
-    } finally {
-      await fulfillmentRead
+        const canRead = FULFILLMENT_READ_PERMISSIONS.some(permission => nextOperations.actor.capabilities.includes(permission))
+        if (!canRead) {
+          fulfillmentRevisionRef.current += 1
+          setFulfillment(null)
+          knownActionKeysRef.current = null
+        } else if (!fulfillmentRead) await fulfillmentQueue.request()
+        if (signal.aborted || accessAtStart !== accessRevision) return
+        if (nextOperations.actor.capabilities.includes('loyalty.redemption.fulfill') && api.loadMemberBenefitTasks) {
+          try {
+            const nextBenefits = await api.loadMemberBenefitTasks(null, signal)
+            if (signal.aborted || accessAtStart !== accessRevision) return
+            setMemberBenefits(nextBenefits)
+          }
+          catch (error) {
+            if (signal.aborted) return
+            if (error instanceof StaffActionsApiError && error.status === 401) { denySession(); return }
+            setMemberBenefits(null)
+          }
+        } else setMemberBenefits(null)
+        if (!signal.aborted && accessAtStart === accessRevision) setPhase('ready')
+      } catch (error) {
+        if (signal.aborted || accessAtStart !== accessRevision) return
+        setPhase('error')
+        if (error instanceof StaffActionsApiError && error.status === 401) denySession()
+        else showNotice({ kind: 'error', message: actionError(error, '现场数据暂时无法读取，请重试') })
+      } finally {
+        await fulfillmentRead
+      }
+    })
+    return {
+      request: (afterCurrent = false) => operationsQueue.request(afterCurrent),
+      // A confirmed KDS action must not wait for unrelated table/benefit reads.
+      requestFulfillment: () => fulfillmentQueue.request(true),
+      cancel: () => { operationsQueue.cancel(); fulfillmentQueue.cancel() },
     }
-  }), [api, markFulfillmentPending, onLoginRequired, showNotice])
+  }, [api, markFulfillmentPending, onLoginRequired, showNotice])
 
   const load = useCallback((quiet = false, polling = false) => {
     if (!quiet) { setPhase('loading'); setHistoryRefreshRevision(value => value + 1) }
@@ -874,6 +885,7 @@ export function StaffActionsPanel({
     } finally {
       // Keep confirmed and unknown commands locked. Only a read begun after the
       // confirmation releases a task; unknown results require the original replay.
+      void refreshQueue.requestFulfillment()
       void load(true)
     }
   }
@@ -898,6 +910,7 @@ export function StaffActionsPanel({
       setHistoryRefreshRevision(value => value + 1)
       actionLocksRef.current.delete('kds:recover')
       setPendingAction(null)
+      void refreshQueue.requestFulfillment()
       void load(true)
     }
   }

@@ -1,3 +1,4 @@
+import {assertRuntimeDatabasePool} from './runtime-database-identity.js'
 import {readPackagedReturnEligibility} from './packaged-return-evidence.js'
 import {RecollectionAuthorizationRepository} from './recollection-authorization-repository.js'
 import {NormalizedKdsAuthorization} from './kds-authorization-policy.js'
@@ -204,7 +205,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     expect(attempts.filter(result=>result.status==='rejected')).toHaveLength(1)
     expect(await balance(row.stockId)).toEqual({on_hand:'5.000000',reserved:'0.000000'})
   })
-  it('recovers original redelivery HTTP commands after gate-off and exposes delivery counts without changing the old bill',async()=>{
+  it.each([false,true])('recovers redelivery with gate-off and original bill; native durable=%s',async(native)=>{
     await grantActor(employeeId,['refund.request','kds.deliver','fulfillment.view_all'])
     const row=await deliveredOriginal()
     const runtimeTransactions={run:<T>(current:typeof scope,operation:(tx:import('./transaction-runner.js').ScopedTransaction)=>Promise<T>)=>runner.run(current,async tx=>{await tx.query('SET LOCAL ROLE mbox_runtime');return operation(tx)})} as ScopedPostgresTransactionRunner
@@ -212,16 +213,27 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     const make=async(enabled:boolean)=>{const app=Fastify();await app.register(itemAfterSalesApiPlugin,{prefix:'/api',enabled,transactions:runner,commands,resolveContext:()=>({scope,employeeId,businessDate:businessDate,capabilities:['refund.request']})});return app}
     const live=await make(true),recovery=await make(false)
     try{
-      const body={orderItemId:row.itemId,quantity:2,reason:'原实物仍在需再次送达',originalGoodsAvailable:true},headers={'idempotency-key':`redelivery-request-${randomUUID()}`},url='/api/commerce/item-after-sales/redeliveries'
+      const body={orderItemId:row.itemId,quantity:2,reason:'原实物仍在需再次送达',originalGoodsAvailable:true},headers={'idempotency-key':`${native?'native-remedy-':'redelivery-request-'}${randomUUID()}`},url=`/api/commerce/item-after-sales/${native?'native-redeliveries':'redeliveries'}`
       const initial=await live.inject({method:'POST',url,headers,payload:body});expect(initial.statusCode,initial.body).toBe(201)
       const result=initial.json().data
+      if(native){
+        await pool.query('DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND idempotency_key=$2',[tenantId,headers['idempotency-key']])
+        const changed=await recovery.inject({method:'POST',url,headers,payload:{...body,quantity:1}})
+        expect(changed.statusCode).toBe(409);expect(changed.json().error.code).toBe('IDEMPOTENCY_CONFLICT')
+      }
       const repeat=await recovery.inject({method:'POST',url,headers,payload:body});expect(repeat.statusCode,repeat.body).toBe(200);expect(repeat.json()).toEqual({data:result,replayed:true})
-      const refused=await recovery.inject({method:'POST',url,headers:{'idempotency-key':randomUUID()},payload:body});expect(refused.statusCode).toBe(409);expect(refused.json().error.code).toBe('QUANTITY_BATCH_NOT_ENABLED')
+      const refused=await recovery.inject({method:'POST',url,headers:{'idempotency-key':`${native?'native-remedy-':''}${randomUUID()}`},payload:body});expect(refused.statusCode).toBe(409);expect(refused.json().error.code).toBe(native?'NATIVE_PHYSICAL_NOT_COMMITTED':'QUANTITY_BATCH_NOT_ENABLED');if(native)expect(refused.json().error.commitDisposition).toBe('not_committed')
       const workspace=await recovery.inject({method:'GET',url:`/api/commerce/item-after-sales/items/${row.itemId}`})
       expect(workspace.statusCode,workspace.body).toBe(200);expect(workspace.json().data).toMatchObject({canRequestRedelivery:false,canConfirmRedelivery:true,redeliveryAvailableQuantity:3,redeliveries:[{id:result.id,pendingQuantity:2}]})
-      const delivery={method:'POST' as const,url:`${url}/${result.id}/complete`,headers:{'idempotency-key':randomUUID()},payload:{quantity:1,reason:'原一瓶已补送给客人'}}
+      const delivery={method:'POST' as const,url:`${url}/${result.id}/complete`,headers:{'idempotency-key':`${native?'native-remedy-':''}${randomUUID()}`},payload:{quantity:1,reason:'原一瓶已补送给客人'}}
       const actual=await recovery.inject(delivery);expect(actual.statusCode,actual.body).toBe(200);expect(actual.json().data).toMatchObject({deliveredQuantity:1,pendingQuantity:1})
+      if(native)await pool.query("UPDATE mbox.idempotency_records SET created_at=clock_timestamp()-interval '2 days', expires_at=clock_timestamp()-interval '1 minute' WHERE tenant_id=$1 AND idempotency_key=$2",[tenantId,delivery.headers['idempotency-key']])
       expect((await recovery.inject(delivery)).json()).toEqual({...actual.json(),replayed:true})
+      if(native){
+        expect((await pool.query('SELECT count(*)::int n FROM mbox.quantity_redeliveries WHERE order_item_id=$1',[row.itemId])).rows[0].n).toBe(1)
+        expect((await recovery.inject({method:'POST',url,headers,payload:body})).json()).toEqual({data:result,replayed:true})
+        expect((await pool.query("SELECT count(*)::int n FROM mbox.audit_events WHERE tenant_id=$1 AND action='native.physical.receipt' AND metadata->>'idempotencyKey'=ANY($2::text[])",[tenantId,[headers['idempotency-key'],delivery.headers['idempotency-key']]])).rows[0].n).toBe(2)
+      }
       expect(await balance(row.stockId)).toEqual({on_hand:'5.000000',reserved:'0.000000'})
       expect((await pool.query('SELECT total_amount_minor::text AS total FROM mbox.orders WHERE id=$1',[row.orderId])).rows[0].total).toBe('4000')
       const customer=randomUUID();await pool.query('INSERT INTO mbox.customers(id,tenant_id,store_id,public_id) VALUES($1,$2,$3,$4)',[customer,tenantId,storeId,`redelivery-guest-${customer}`])
@@ -525,6 +537,30 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     expect(await balance(stockId)).toEqual({on_hand:'4.000000',reserved:'0.000000'})
     expect((await pool.query("SELECT count(*)::int n FROM mbox.inventory_movements WHERE inventory_item_id=$1 AND movement_type='return'",[stockId])).rows[0].n).toBe(1)
   })
+  it.skipIf(!process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL)('native closed-visit disposition keeps exact portions, durable receipts and current authorization',async()=>{
+    await grantActor(employeeId,['kds.exception.manage','order.cancel_unpaid','refund.request','inventory.receive','inventory.waste'])
+    const source=await freshTableSession(),row=await item('ready',0,source.id),stockId=await stock(row,'direct_sale')
+    const batch=await remake(repo=>repo.create({itemId:row.itemId,employeeId,quantity:2,originalGoodsLost:true,reason:'原商品损坏，两份另批重做',eventKey:randomUUID()}))
+    await remake((_repo,tx)=>new QuantityRemakeFulfillmentRepository(tx).act({taskId:batch.taskId,employeeId,action:'complete',quantity:2,eventKey:randomUUID()}))
+    const runtimePool=new Pool({connectionString:process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL});const runtime=new ScopedPostgresTransactionRunner(runtimePool),app=Fastify()
+    await assertRuntimeDatabasePool(runtimePool,process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL!)
+    await new PostgresOrderCancellationRepository(runtime).cancel({scope,employeeId,orderId:row.orderId,businessDate,reasonCode:'guest_left',reasonNote:'离店原单取消，原重做实物仍需交接',idempotencyKey:randomUUID()})
+    await app.register(itemAfterSalesApiPlugin,{transactions:runtime,commands:new NormalizedCommandExecutor(runtime),resolveContext:()=>({scope,employeeId,businessDate,capabilities:['refund.request','inventory.receive','inventory.waste']})})
+    const key='native-remedy-'+randomUUID(),url=`/commerce/item-after-sales/native-remakes/${batch.id}/after-visit-physical`,payload={actorId:employeeId,unitIds:[batch.units[0]!.id],disposition:'returned_unopened',unopenedReceived:true,reason:'已核对新瓶未开封实际收回'}
+    const send=(body=payload,k=key)=>app.inject({method:'POST',url,headers:{'idempotency-key':k},payload:body})
+    try{
+      const query=await app.inject('/commerce/item-after-sales/native-remake-handover');expect(query.statusCode,query.body).toBe(200);expect(query.json().data).toMatchObject({employeeId,protocol:1,supportsNativePhysicalRecovery:true});expect(query.json().data.items.find((r:{batchId:string})=>r.batchId===batch.id)).toMatchObject({pendingQuantity:2})
+      expect((await send({...payload,unopenedReceived:false})).json().error.commitDisposition).toBe('not_committed')
+      const first=await send();expect(first.statusCode,first.body).toBe(200);expect(first.json()).toMatchObject({protocol:1,replayed:false,data:{batchId:batch.id,itemId:row.itemId,remainingQuantity:1,employeeId,requestKey:key}})
+      const lost=await send({...payload,unitIds:[batch.units[1]!.id],disposition:'used_loss',unopenedReceived:false,reason:'另一份实物确认已耗用，不回补原料'},'native-remedy-'+randomUUID());expect(lost.statusCode,lost.body).toBe(200);expect(lost.json().data.remainingQuantity).toBe(0)
+      await pool.query('DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$3',[tenantId,storeId,key]);const recovered=await send();expect(recovered.statusCode,recovered.body).toBe(200);expect(recovered.json()).toMatchObject({replayed:true,data:first.json().data})
+      expect((await send({...payload,unitIds:[batch.units[1]!.id]})).statusCode).toBe(409)
+      expect((await send(payload,'native-remedy-'+randomUUID())).json().error.commitDisposition).toBe('not_committed')
+      expect(await balance(stockId)).toEqual({on_hand:'4.000000',reserved:'0.000000'});expect((await pool.query("SELECT count(*)::int n FROM mbox.inventory_movements WHERE inventory_item_id=$1 AND movement_type='return'",[stockId])).rows[0].n).toBe(1)
+      const override=randomUUID();await pool.query("INSERT INTO mbox.employee_permission_overrides(id,tenant_id,store_id,employee_id,permission_id,effect,reason,configured_by_employee_id,starts_at) SELECT $1,$2,$3,$4,id,'deny','撤权后禁止原生回放',$4,clock_timestamp()-interval '1 minute' FROM mbox.staff_permission_definitions WHERE tenant_id=$2 AND store_id=$3 AND code='inventory.receive'",[override,tenantId,storeId,employeeId]);try{expect((await send()).statusCode).toBe(403)}finally{await pool.query('DELETE FROM mbox.employee_permission_overrides WHERE id=$1',[override])}
+    }finally{await app.close();await runtimePool.end()}
+  })
+
   it('creates an explicit successor only for the selected actual previous batch and retains every independent consumption',async()=>{
     await grantActor(employeeId,['kds.exception.manage'])
     const row=await deliveredOriginal(),first=await remake(repo=>repo.create({itemId:row.itemId,employeeId,quantity:2,originalGoodsLost:true,reason:'原两份无法交付，另批制作',eventKey:randomUUID()}))
@@ -789,12 +825,23 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await new PostgresOrderCancellationRepository(runner).cancel({scope,employeeId,orderId:first,businessDate:businessDate,reasonCode:'other',reasonNote:'客人不要这份新商品，改选另一种',idempotencyKey:`replacement-cancel-${randomUUID()}`})
     const read=await new ItemAfterSalesQuery(runner).item({scope,employeeId,itemId:row.itemId})
     expect(read.cases.find(value=>value.caseId===source.caseId)).toMatchObject({canReplace:true,replacementOrder:{orderId:first,status:'cancelled'}})
+    expect(read.supportsNativeReplacementRecovery).toBe(true)
+    expect(read.replacementOrders).toEqual([expect.objectContaining({orderId:first,sourceCaseId:source.caseId,status:'cancelled'})])
     await expect(replacementOrder(source.caseId)).rejects.toThrow('已有换品新单')
     const attempts=await Promise.allSettled([replacementOrder(source.caseId,sessionId,false,first),replacementOrder(source.caseId,sessionId,false,first)])
     expect(attempts.filter(value=>value.status==='fulfilled')).toHaveLength(1)
     const latest=(await runner.run(scope,tx=>new ItemAfterSalesProgressRepository(tx).read(source.caseId))).replacementOrder!
     expect(latest.orderId).not.toBe(first);expect(latest.status).toBe('submitted')
     expect((await pool.query('SELECT count(*)::int n FROM mbox.item_after_sales_replacement_orders WHERE root_case_id=$1',[source.caseId])).rows[0].n).toBe(2)
+    const allLinks=await new ItemAfterSalesQuery(runner,true).item({scope,employeeId,itemId:row.itemId})
+    expect(allLinks.replacementOrders).toEqual(expect.arrayContaining([
+      expect.objectContaining({orderId:first,sourceCaseId:source.caseId,status:'cancelled'}),
+      expect.objectContaining({orderId:latest.orderId,sourceCaseId:source.caseId}),
+    ]))
+    expect(allLinks.replacementOrders).toHaveLength(2)
+    const unrelated=await item()
+    const otherLinks=await new ItemAfterSalesQuery(runner,true).item({scope,employeeId,itemId:unrelated.itemId})
+    expect(otherLinks.replacementOrders).toEqual([])
     await expect(replacementOrder(source.caseId,sessionId,false,first)).rejects.toThrow('已有换品新单')
   })
   it('rejects another table visit, closed visits and an actor without order creation while preserving the original stop',async()=>{
@@ -1981,16 +2028,17 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     expect((await pool.query('SELECT print_snapshot FROM mbox.print_jobs WHERE source_outbox_message_id=$1',[originalSource])).rows[0].print_snapshot.lines).toMatchObject([{name:'水',quantity:3}])
   })
 
-  it('creates an authorized quantity remake once, recovers across disabled admission and rejects stale sessions or changed requests',async()=>{
+  it.each([false,true])('creates quantity remake once across disabled admission; native durable=%s',async(native)=>{
     await grantActor(employeeId,['kds.exception.manage','fulfillment.view_all'])
+    if(native)await pool.query('UPDATE mbox.store_daily_credentials SET revoked_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND revoked_at IS NULL',[tenantId,storeId])
     const credentialId=randomUUID(),leaseId=randomUUID(),staffSessionId=randomUUID()
     await pool.query("INSERT INTO mbox.store_daily_credentials(id,tenant_id,store_id,business_date,credential_hash,valid_from,valid_until,configured_by_employee_id) VALUES($1,$2,$3,current_date,'scrypt$quantity-remake-test',clock_timestamp()-interval '1 hour',clock_timestamp()+interval '8 hours',$4)",[credentialId,tenantId,storeId,employeeId])
-    await pool.query("INSERT INTO mbox.store_device_access_leases(id,tenant_id,store_id,daily_credential_id,business_date,device_key_hash,lease_token_hash,issued_at,expires_at) VALUES($1,$2,$3,$4,current_date,repeat('a',64),repeat('b',64),clock_timestamp()-interval '1 hour',clock_timestamp()+interval '8 hours')",[leaseId,tenantId,storeId,credentialId])
-    await pool.query("INSERT INTO mbox.staff_sessions(id,tenant_id,store_id,employee_id,device_access_lease_id,session_token_hash,issued_at,expires_at,online_lease_until) VALUES($1,$2,$3,$4,$5,repeat('c',64),statement_timestamp(),statement_timestamp()+interval '6 hours',statement_timestamp()+interval '30 minutes')",[staffSessionId,tenantId,storeId,employeeId,leaseId])
+    await pool.query("INSERT INTO mbox.store_device_access_leases(id,tenant_id,store_id,daily_credential_id,business_date,device_key_hash,lease_token_hash,issued_at,expires_at) VALUES($1,$2,$3,$4,current_date,repeat(md5($1::uuid::text||'device'),2),repeat(md5($1::uuid::text||'lease'),2),clock_timestamp()-interval '1 hour',clock_timestamp()+interval '8 hours')",[leaseId,tenantId,storeId,credentialId])
+    await pool.query("INSERT INTO mbox.staff_sessions(id,tenant_id,store_id,employee_id,device_access_lease_id,session_token_hash,issued_at,expires_at,online_lease_until) VALUES($1,$2,$3,$4,$5,repeat(md5($1::uuid::text||'session'),2),statement_timestamp(),statement_timestamp()+interval '6 hours',statement_timestamp()+interval '30 minutes')",[staffSessionId,tenantId,storeId,employeeId,leaseId])
     const runtime={run:<T>(current:typeof scope,operation:(tx:import('./transaction-runner.js').ScopedTransaction)=>Promise<T>)=>runner.run(current,async tx=>{await tx.query('SET LOCAL ROLE mbox_runtime');return operation(tx)})} as ScopedPostgresTransactionRunner
     const executor=new NormalizedCommandExecutor(runtime),command=new QuantityRemakeCommandService(executor,true),row=await deliveredOriginal()
-    await pool.query("INSERT INTO mbox.role_data_scopes(tenant_id,store_id,role_id,scope_key,effect,scope_value,value_kind,text_values,enabled) SELECT tenant_id,store_id,role_id,'kds.station_codes','include','[\"bar\"]'::jsonb,'text_set',ARRAY['bar']::text[],true FROM mbox.employee_roles WHERE tenant_id=$1 AND store_id=$2 AND employee_id=$3 LIMIT 1",[tenantId,storeId,employeeId])
-    const input={scope,employeeId,staffSessionId,deviceAccessLeaseId:leaseId,businessDate:businessDate,taskId:row.taskId,quantity:2,originalGoodsLost:true,reason:'实际损坏两瓶，原单不再收款',idempotencyKey:randomUUID()}
+    await pool.query("INSERT INTO mbox.role_data_scopes(tenant_id,store_id,role_id,scope_key,effect,scope_value,value_kind,text_values,enabled) SELECT tenant_id,store_id,role_id,'kds.station_codes','include','[\"bar\"]'::jsonb,'text_set',ARRAY['bar']::text[],true FROM mbox.employee_roles WHERE tenant_id=$1 AND store_id=$2 AND employee_id=$3 LIMIT 1 ON CONFLICT DO NOTHING",[tenantId,storeId,employeeId])
+    const input={scope,employeeId,staffSessionId,deviceAccessLeaseId:leaseId,businessDate:businessDate,taskId:row.taskId,quantity:2,originalGoodsLost:true,reason:'实际损坏两瓶，原单不再收款',idempotencyKey:`${native?'native-remedy-':''}${randomUUID()}`}
     await runner.run(scope,async tx=>{
       const policy=new NormalizedKdsAuthorization()
       await expect(policy.assertCanActOnTask({transaction:tx,...input,action:'quantity_remake',stationCode:'kitchen',tableId})).rejects.toMatchObject({code:'KDS_STATION_FORBIDDEN'})
@@ -1998,6 +2046,12 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     })
     const first=await command.create(input)
     expect(first.value).toMatchObject({itemId:row.itemId,quantity:2});expect((await command.create(input)).replayed).toBe(true)
+    if(native){
+      await pool.query('DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND idempotency_key=$2',[tenantId,input.idempotencyKey])
+      const recovered=await new QuantityRemakeCommandService(executor,false).create({...input,businessDate:nextBusinessDate})
+      expect(recovered).toEqual({value:first.value,replayed:true})
+      expect((await pool.query("SELECT count(*)::int n FROM mbox.audit_events WHERE tenant_id=$1 AND action='native.physical.receipt' AND metadata->>'idempotencyKey'=$2",[tenantId,input.idempotencyKey])).rows[0].n).toBe(1)
+    }
     expect(await balance(row.stockId)).toEqual({on_hand:'5.000000',reserved:'2.000000'})
     await expect(command.create({...input,quantity:1})).rejects.toThrow()
     const notices=(await pool.query("SELECT id,aggregate_id,payload FROM mbox.outbox_messages WHERE tenant_id=$1 AND payload->>'remakeBatchId'=$2",[tenantId,first.value.batchId])).rows
@@ -2008,7 +2062,13 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     expect((await pool.query('SELECT print_snapshot FROM mbox.print_jobs WHERE source_outbox_message_id=$1',[notices[0].id])).rows[0].print_snapshot.lines).toMatchObject([{quantity:1}])
     await pool.query("UPDATE mbox.staff_sessions SET revoked_at=clock_timestamp() WHERE id=$1",[staffSessionId])
     await expect(command.create({...input,idempotencyKey:randomUUID()})).rejects.toMatchObject({code:'KDS_SESSION_INVALID'})
+    if(native){
+      await expect(command.create(input)).rejects.toMatchObject({code:'KDS_SESSION_INVALID'})
+      await pool.query('DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND idempotency_key=$2',[tenantId,input.idempotencyKey])
+      await expect(command.create(input)).rejects.toMatchObject({code:'KDS_SESSION_INVALID'})
+    } else {
     expect((await new QuantityRemakeCommandService(executor,false).create({...input,businessDate:nextBusinessDate})).value).toEqual(first.value)
+    }
     await expect(new QuantityRemakeCommandService(executor,false).create({...input,idempotencyKey:randomUUID()})).rejects.toThrow('暂不新增')
     expect((await pool.query('SELECT count(*)::int n FROM mbox.quantity_remake_batches WHERE order_item_id=$1',[row.itemId])).rows[0].n).toBe(1)
   })

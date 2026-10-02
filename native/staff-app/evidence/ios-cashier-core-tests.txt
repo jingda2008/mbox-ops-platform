@@ -1,0 +1,30 @@
+PASS exact cents
+PASS reject malformed amounts
+PASS occupied before empty
+PASS exact table search
+PASS partial area search ignores case and edge whitespace
+PASS partial numeric search
+PASS partial search respects empty filter
+PASS partial search respects occupied filter
+PASS blank search restores all tables
+PASS search table code only, never bill amount
+PASS exact hit first then occupied partial hits
+PASS exact table wins while searching even if empty
+PASS no matching table
+PASS paid remains occupied
+PASS unknown payment blocks another collection
+PASS open table
+PASS submit correct amount and clear scoped draft
+PASS same request replay does not duplicate order
+PASS same key different payload rejected
+PASS partial cash collection
+PASS change excluded from received amount
+PASS cash replay idempotent
+PASS undelivered order blocks close
+PASS transfer preserves session orders and draft
+PASS close releases table and old draft
+PASS stale session blocked
+PASS persistent journal roundtrip
+PASS recovery after restart does not repeat settled command
+PASS sold out order rejected atomically
+29 core checks passed

@@ -1,4 +1,6 @@
-import { randomUUID } from 'node:crypto'
+import {CashHandoverService,CashHandoverError,type CashHandoverCommand} from './cash-handover-service.js'
+import {VoucherOperationService,VoucherOperationError} from './voucher-operation-service.js'
+import { randomUUID,createHash } from 'node:crypto'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import {
   IdempotencyConflictError,
@@ -78,6 +80,7 @@ export interface CommercialOpsApiOptions {
   createRepository?(transaction: ScopedTransaction): CommercialOpsRepository
   createStaffAccessRepository?(transaction: ScopedTransaction): StaffAccessRepository
   createPublicId?(kind: 'cost' | 'sales-rule' | 'voucher'): string
+  createVoucherOperationService?():Pick<VoucherOperationService,'list'|'find'|'redeem'|'recover'|'review'|'approve'|'reject'>
   voucherVerification?: {
     registry: GroupVoucherPlatformRegistry
     signingSecret: string
@@ -371,6 +374,55 @@ export const commercialOpsApiPlugin: FastifyPluginAsync<CommercialOpsApiOptions>
     return reply.send({ data: rows.map(toEmployeeSalesDto) })
   }))
 
+  const cashHandovers=new CashHandoverService(options.transactions,options.commandExecutor)
+  const cashRoute=async(reply:FastifyReply,handler:()=>Promise<FastifyReply>)=>{try{return await handler()}catch(error){if(error instanceof CashHandoverError)return reply.code(409).send({error:{code:'CASH_HANDOVER_CHANGED',message:error.message,commitDisposition:error.notCommitted?'not_committed':undefined}});throw error}}
+  app.get('/commercial-ops/cash-handovers',async(request,reply)=>handleRoute(reply,()=>cashRoute(reply,async()=>{
+    return reply.send({data:await cashHandovers.view(await options.resolveContext(request)),meta:{protocol:1}})
+  })))
+  app.post('/commercial-ops/cash-handovers/commands',async(request,reply)=>handleRoute(reply,()=>cashRoute(reply,async()=>{
+    const context=await options.resolveContext(request),body=readObject(request.body)
+    const action=readString(body.action,'action',32)
+    if(!['open','movement','count','withdraw','approve'].includes(action))throw new CommercialApiRequestError('现金交接操作无效')
+    const input:CashHandoverCommand={action:action as CashHandoverCommand['action'],reason:readString(body.reason,'reason',500,4)}
+    if(action!=='open'){input.id=readUuid(body.id,'id');input.expectedRevision=readInteger(body.expectedRevision,'expectedRevision',1)}
+    if(action==='open'||action==='movement')input.amountMinor=readInteger(body.amountMinor,'amountMinor',0)
+    if(action==='movement'){const direction=readString(body.direction,'direction',3);if(direction!=='in'&&direction!=='out')throw new CommercialApiRequestError('请选择实际存入或取出');input.direction=direction;input.reference=readString(body.reference,'reference',256,3)}
+    if(action==='count'){const denominations=readObject(body.denominations);input.denominations={};for(const[key,value]of Object.entries(denominations))input.denominations[key]=readInteger(value,'张数',0)}
+    if(action==='approve')input.reviewCountedMinor=readInteger(body.reviewCountedMinor,'reviewCountedMinor',0)
+    const result=await cashHandovers.execute(context,readIdempotencyKey(request),input)
+    return reply.send({data:result.value,replayed:result.replayed,meta:{protocol:1}})
+  })))
+
+  const voucherOperations = options.createVoucherOperationService?.() ?? (options.voucherVerification ? new VoucherOperationService(options.transactions,options.voucherVerification) : null)
+  const operations=()=>{if(!voucherOperations)throw new VoucherOperationError('平台核销未配置',503);return voucherOperations}
+  const operationRoute=async(reply:FastifyReply,handler:()=>Promise<FastifyReply>)=>{
+    try {return await handler()} catch(error) {
+      if(error instanceof VoucherOperationError)return reply.code(error.statusCode).send({error:{code:'VOUCHER_OPERATION_REVIEW',message:error.message,commitDisposition:error.notCommitted?'not_committed':undefined}})
+      throw error
+    }
+  }
+  app.get('/commercial-ops/vouchers/operations',async(request,reply)=>handleRoute(reply,()=>operationRoute(reply,async()=>{
+    const context=await options.resolveContext(request)
+    return reply.send({data:await operations().list(context),meta:{protocol:1}})
+  })))
+  app.get<{Params:{publicId:string}}>('/commercial-ops/vouchers/operations/by-public-id/:publicId',async(request,reply)=>handleRoute(reply,()=>operationRoute(reply,async()=>{const context=await options.resolveContext(request);return reply.send({data:await operations().find(context,readString(request.params.publicId,'publicId',128,8)),meta:{protocol:1}})})))
+  app.post('/commercial-ops/vouchers/operations/redeem',async(request,reply)=>handleRoute(reply,()=>operationRoute(reply,async()=>{
+    const context=await options.resolveContext(request),body=readObject(request.body)
+    const input={platform:readPlatform(body.platform),voucherCode:readString(body.voucherCode,'voucherCode',256,4),prepareHandle:readString(body.prepareHandle,'prepareHandle',8192,16),publicId:readString(body.publicId,'publicId',128,8),orderId:body.orderId===undefined?null:readUuid(body.orderId,'orderId'),tableSessionId:body.tableSessionId===undefined?null:readUuid(body.tableSessionId,'tableSessionId')}
+    return reply.send({data:await operations().redeem(context,readIdempotencyKey(request),input),meta:{protocol:1}})
+  })))
+  for(const action of ['recover','review','approve','reject'] as const)app.post<{Params:{operationId:string}}>(`/commercial-ops/vouchers/operations/:operationId/${action}`,async(request,reply)=>handleRoute(reply,()=>operationRoute(reply,async()=>{
+    const context=await options.resolveContext(request),id=readUuid(request.params.operationId,'operationId'),body=readObject(request.body??{})
+    readIdempotencyKey(request)
+    if(action==='recover')return reply.send({data:await operations().recover(context,id),meta:{protocol:1}})
+    if(action==='approve')return reply.send({data:await operations().approve(context,id,readUuid(body.reviewId,'reviewId')),meta:{protocol:1}})
+    if(action==='reject')return reply.send({data:await operations().reject(context,id,readIdempotencyKey(request),readUuid(body.reviewId,'reviewId'),readString(body.reason,'reason',500,4)),meta:{protocol:1}})
+    const outcome=readString(body.outcome,'outcome',32)
+    if(outcome!=='consumed'&&outcome!=='not_consumed')throw new CommercialApiRequestError('请明确平台已核销或已证实未核销')
+    const review={outcome,certificateId:readOptionalString(body.certificateId,'certificateId',256)??'',verifyId:readOptionalString(body.verifyId,'verifyId',256)??'',evidenceReference:readString(body.evidenceReference,'evidenceReference',500,4),reason:readString(body.reason,'reason',500,4)} as const
+    return reply.send({data:await operations().review(context,id,review,readIdempotencyKey(request)),meta:{protocol:1}})
+  })))
+
   app.get('/commercial-ops/vouchers', async (request, reply) => handleRoute(reply, async () => {
     const context = await options.resolveContext(request)
     await assertLivePermission(options.transactions, createAccess, context, 'commercial.voucher.view')
@@ -431,9 +483,23 @@ export const commercialOpsApiPlugin: FastifyPluginAsync<CommercialOpsApiOptions>
 
   app.post('/commercial-ops/vouchers/redeem', async (request, reply) => handleRoute(reply, async () => {
     const context = await options.resolveContext(request)
+    // Provider consumption is irreversible; check current access before any external call.
+    await assertLivePermission(options.transactions, createAccess, context, 'commercial.voucher.redeem')
     const body = readObject(request.body)
     const voucherCode = readString(body.voucherCode, 'voucherCode', 256, 4)
     const verification = options.voucherVerification
+    if(verification){
+      const key=readIdempotencyKey(request),handle=readString(body.prepareHandle,'prepareHandle',8192,16)
+      const platform=body.platform===undefined?readGroupVoucherPrepareHandle(handle,verification.signingSecret,verification.now?.()??Date.now()).platform:readPlatform(body.platform)
+      if(body.reconciliationEntryId!==undefined)throw new CommercialApiRequestError('平台核销与到账结算分别核对，不能在消耗券时直接登记结算款')
+      return operationRoute(reply,async()=>{
+        const op=await operations().redeem(context,key,{platform,voucherCode,prepareHandle:handle,
+          publicId:readOptionalString(body.publicId,'publicId',128,8)??'voucher-'+createHash('sha256').update(context.scope.tenantId+':'+context.scope.storeId+':'+key).digest('hex').slice(0,40),
+          orderId:body.orderId===undefined?null:readUuid(body.orderId,'orderId'),tableSessionId:body.tableSessionId===undefined?null:readUuid(body.tableSessionId,'tableSessionId')})
+        if(op.status==='recorded'&&op.result)return reply.code(201).send({data:op.result,replayed:false})
+        return reply.code(409).send({error:{code:'VOUCHER_OPERATION_PENDING',message:'原券核销结果待核对，请在原核销事项恢复，不要重新消耗。'},operationId:op.id})
+      })
+    }
     let platformCode: GroupVoucherPlatformCode | null = body.platform === undefined
       ? null : parseGroupVoucherPlatform(readString(body.platform, 'platform', 64))
     let campaignName = readOptionalString(body.campaignName, 'campaignName', 128)
@@ -442,27 +508,6 @@ export const commercialOpsApiPlugin: FastifyPluginAsync<CommercialOpsApiOptions>
       ? 0 : readInteger(body.settlementAmountMinor, 'settlementAmountMinor', 0)
     let currency = body.currency === undefined ? 'CNY' : readCurrency(body.currency)
     let providerCertificateId: string | null = null
-    let prepareToken: string | null = null
-    if (verification) {
-      const handle = readGroupVoucherPrepareHandle(
-        readString(body.prepareHandle, 'prepareHandle', 8_192, 16),
-        verification.signingSecret,
-        verification.now?.() ?? Date.now(),
-      )
-      if (voucherCodeDigest(voucherCode) !== handle.codeHash) {
-        throw new CommercialApiRequestError('券码与查询结果不一致，请重新查询')
-      }
-      if (platformCode !== null && platformCode !== handle.platform) {
-        throw new CommercialApiRequestError('核销平台与查询结果不一致，请重新查询')
-      }
-      platformCode = handle.platform
-      campaignName = handle.campaignName
-      faceValueMinor = handle.faceValueMinor
-      settlementAmountMinor = handle.settlementAmountMinor
-      currency = handle.currency
-      providerCertificateId = handle.certificateId
-      prepareToken = handle.prepareToken
-    }
     if (platformCode === null) throw new CommercialApiRequestError('platform is invalid')
     const platformLabel = groupVoucherPlatformLabel(platformCode)
     const input = {
@@ -486,25 +531,6 @@ export const commercialOpsApiPlugin: FastifyPluginAsync<CommercialOpsApiOptions>
     }
     const voucherHash = voucherCodeDigest(voucherCode)
     const idempotencyKey = readIdempotencyKey(request)
-    try {
-      if (verification && prepareToken !== null) {
-        const consumed = await verification.registry.adapter(platformCode).consume({
-          voucherCode, prepareToken, requestId: idempotencyKey,
-        })
-        input.campaignName = consumed.campaignName || input.campaignName
-        input.faceValueMinor = consumed.faceValueMinor || input.faceValueMinor
-        input.settlementAmountMinor = consumed.settlementAmountMinor || input.settlementAmountMinor
-        input.providerCertificateId = consumed.certificateId
-        input.providerVerifyId = consumed.verifyId
-      }
-    } catch (error) {
-      await recordAttempt(options, context, {
-        platformCode, action: 'consume', outcome: attemptOutcome(error),
-        voucherCode, campaignName: input.campaignName, message: attemptMessage(error),
-        providerCode: error instanceof GroupVoucherPlatformError ? error.code : null,
-      })
-      throw error
-    }
     const execution = await options.commandExecutor.execute({
       scope: context.scope, operationScope: 'commercial.voucher.redeem', idempotencyKey,
       requestFingerprint: fingerprint({
@@ -514,13 +540,6 @@ export const commercialOpsApiPlugin: FastifyPluginAsync<CommercialOpsApiOptions>
     }, async (transaction) => {
       await createAccess(transaction).assertPermission(context.employeeId, 'commercial.voucher.redeem')
       const voucher = await createRepository(transaction).redeemVoucher(input)
-      if (verification) {
-        await createRepository(transaction).recordVoucherVerificationAttempt({
-          platformCode, action: 'consume', outcome: 'success', voucherCode,
-          campaignName: voucher.campaignName, message: '平台核销成功并已留痕',
-          employeeId: context.employeeId,
-        })
-      }
       const result = toVoucherResult(voucher)
       return {
         result,
@@ -594,7 +613,7 @@ function readScopeIds(value: JsonValue): string[] {
   return []
 }
 
-function readCostInput(
+export function readCostInput(
   body: Record<string, unknown>,
   context: NormalizedOperationsRequestContext,
   defaultPublicIdValue: string,
@@ -638,7 +657,7 @@ function readSafeSnapshot(value: unknown): JsonObject {
   return JSON.parse(serialized) as JsonObject
 }
 
-function toCostResult(cost: OperatingCostEntry): CostResult {
+export function toCostResult(cost: OperatingCostEntry): CostResult {
   return {
     id: cost.id, publicId: cost.publicId, category: cost.category,
     recognitionState: cost.recognitionState, allocationPeriod: cost.allocationPeriod,
@@ -873,7 +892,7 @@ function defaultPublicId(kind: 'cost' | 'sales-rule' | 'voucher'): string {
   return `${kind}-${randomUUID()}`
 }
 
-class CommercialApiRequestError extends Error {}
+export class CommercialApiRequestError extends Error {}
 
 async function handleRoute(reply: FastifyReply, operation: () => Promise<FastifyReply>) {
   try {

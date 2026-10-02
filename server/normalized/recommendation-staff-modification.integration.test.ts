@@ -123,6 +123,17 @@ integration('recommendation staff modification PostgreSQL authority',()=>{
     expect(await behaviorCount()).toBe(beforeCount)
   })
 
+  it('native recommendation keeps the original receipt and audit after expiry cleanup',async()=>{
+    const key='native-business-'+randomUUID()
+    const request=()=>app.inject({method:'POST',url:`/staff/native-customer-experience/recommendations/${recommendationPublicId}/modifications`,headers:{'idempotency-key':key},payload:{sourceProductId,targetProductId,reasonCode:'customer_request'}})
+    const first=await request();expect(first.statusCode,first.body).toBe(201)
+    await pool.query('DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND expires_at<clock_timestamp()',[tenantId])
+    const replay=await request();expect(replay.statusCode,replay.body).toBe(200);expect(replay.json().data).toEqual(first.json().data);expect(replay.json().meta.replayed).toBe(true)
+    expect((await pool.query('SELECT expires_at::text FROM mbox.idempotency_records WHERE tenant_id=$1 AND idempotency_key=$2',[tenantId,key])).rows[0].expires_at).toBe('infinity')
+    expect((await pool.query('SELECT count(*)::int AS n FROM mbox.recommendation_behavior_events WHERE tenant_id=$1 AND staff_modification_idempotency_key=$2',[tenantId,key])).rows[0].n).toBe(1)
+    const board=await app.inject({method:'GET',url:`/staff/native-customer-experience/recommendations?tableSessionId=${tableSessionId}`});expect(board.statusCode,board.body).toBe(200);expect(board.json().data).toMatchObject({durable:true,tableSessionId,snapshot:{recommendationPublicId}})
+  })
+
   async function run<Result>(operation:(repository:RecommendationStaffModificationRepository)=>Promise<Result>) {
     return runner.run({ tenantId,storeId },(transaction)=>operation(new RecommendationStaffModificationRepository(transaction)))
   }

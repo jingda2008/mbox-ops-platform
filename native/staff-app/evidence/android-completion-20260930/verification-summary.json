@@ -1,0 +1,38 @@
+{
+  "recordedAt": "2026-09-30 23:26 CST",
+  "android": {
+    "tests": 166,
+    "failed": 0,
+    "skipped": 0,
+    "assemble": "passed",
+    "lint": "passed",
+    "versionName": "0.3.0",
+    "versionCode": 5
+  },
+  "backend": {
+    "passed": 2894,
+    "skipped": 1,
+    "failed": 0
+  },
+  "webCompatibility": {
+    "passed": 326,
+    "skipped": 13,
+    "failed": 0
+  },
+  "artifact": {
+    "path": "/Users/jingda/mbox/outputs/native-installers/20260930/MBOX-Staff-0.3.0-Android-preview.apk",
+    "sha256": "4412ac0579f54c56602c2cb52af5ab1b20ad58c102f6d1c0e1625a039f9a7937",
+    "signing": "existing-debug"
+  },
+  "emulator": {
+    "serial": "emulator-5554",
+    "overwriteInstall": "success",
+    "uiAcceptance": false
+  },
+  "productionDeployment": false,
+  "catalogue": {
+    "C": 42,
+    "I": 30,
+    "N": 9
+  }
+}

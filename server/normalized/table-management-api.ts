@@ -1,3 +1,5 @@
+import { registerNativeTableConfiguration } from './native-table-configuration.js'
+import { registerNativeAssignmentSchedule } from './native-assignment-schedule.js'
 import { createHash, randomUUID } from 'node:crypto'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type { NormalizedOperationsRequestContext } from './normalized-operations-api.js'
@@ -13,6 +15,8 @@ import {
   StaffNotFoundError,
 } from './staff-access-repository.js'
 import {
+  AssignmentNotCommittedError,
+  ParticipantMovementNotCommittedError,
   CapacityOverrideReasonRequiredError,
   TableManagementCommandService,
   TableManagementConflictError,
@@ -40,12 +44,13 @@ type TableManagementCommandPort = Pick<TableManagementCommandService,
 
 export interface TableManagementApiOptions {
   transactions: TransactionRunnerPort
+  nativeCommands?: Pick<import('./command-executor.js').NormalizedCommandExecutor, 'execute'>
   commands: TableManagementCommandPort
   resolveContext(request: FastifyRequest): Promise<NormalizedOperationsRequestContext> | NormalizedOperationsRequestContext
 }
 
 interface ApiErrorBody {
-  error: { code: string; message: string }
+  error: { code: string; message: string; commitDisposition?: 'not_committed' }
 }
 
 class TableManagementRequestError extends Error {
@@ -56,6 +61,8 @@ class TableManagementRequestError extends Error {
 }
 
 export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOptions> = async (app, options) => {
+  await registerNativeAssignmentSchedule(app, options)
+  registerNativeTableConfiguration(app, options)
   app.get('/table-management/areas', async (request, reply) => handle(reply, async () => {
     const context = await authorizedContext(options, request)
     const data = await options.transactions.run(context.scope, async (transaction) => {
@@ -90,7 +97,7 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
         context.employeeId,
         TABLE_ASSIGNMENT_MANAGE_PERMISSION,
       )
-      return new TableManagementRepository(transaction).listAssignmentOptions()
+      return { ...await new TableManagementRepository(transaction).listAssignmentOptions(), supportsGuardedAssignmentRecovery: true, ...(options.nativeCommands ? { supportsNativeAssignmentSchedule: true } : {}), currentEmployeeId: context.employeeId }
     }, { readOnly: true })
     return reply.send({ data })
   }))
@@ -142,7 +149,7 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
     return reply.send(commandResponse(execution))
   }))
 
-  app.post('/table-management/assignments', async (request, reply) => handle(reply, async () => {
+  for (const guarded of [false, true]) app.post(`/table-management/${guarded ? 'guarded-assignments' : 'assignments'}`, async (request, reply) => handle(reply, async () => {
     const context = await authorizedContext(options, request)
     const body = readObject(request.body)
     const execution = await options.commands.assign(commandBase(request, context, body, '分配桌台责任', {
@@ -152,11 +159,11 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
       assignmentType: readEnum(body.assignmentType, 'assignmentType', ['primary', 'backup', 'temporary']),
       startsAt: readTimestamp(body.startsAt, 'startsAt'),
       endsAt: optionalTimestamp(body.endsAt, 'endsAt'),
-    }))
+    }), guarded)
     return reply.code(201).send(commandResponse(execution))
-  }))
+  }, guarded))
 
-  app.post('/table-management/assignments/batch', async (request, reply) => handle(reply, async () => {
+  for (const guarded of [false, true]) app.post(`/table-management/${guarded ? 'guarded-assignments' : 'assignments'}/batch`, async (request, reply) => handle(reply, async () => {
     const context = await authorizedContext(options, request)
     const body = readObject(request.body)
     const execution = await options.commands.assignMany(commandBase(request, context, body, '批量分配桌台责任', {
@@ -166,19 +173,19 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
       assignmentType: readEnum(body.assignmentType, 'assignmentType', ['primary', 'backup', 'temporary']),
       startsAt: readTimestamp(body.startsAt, 'startsAt'),
       endsAt: optionalTimestamp(body.endsAt, 'endsAt'),
-    }))
+    }), guarded)
     return reply.code(201).send(commandResponse(execution))
-  }))
+  }, guarded))
 
-  app.post('/table-management/assignments/:assignmentId/end', async (request, reply) => handle(reply, async () => {
+  for (const guarded of [false, true]) app.post(`/table-management/${guarded ? 'guarded-assignments' : 'assignments'}/:assignmentId/end`, async (request, reply) => handle(reply, async () => {
     const context = await authorizedContext(options, request)
     const body = readObject(request.body)
     const execution = await options.commands.endAssignment(commandBase(request, context, body, '结束桌台责任', {
       assignmentId: readUuid(readParams(request).assignmentId, 'assignmentId'),
       endsAt: readTimestamp(body.endsAt, 'endsAt'),
-    }))
+    }), guarded)
     return reply.send(commandResponse(execution))
-  }))
+  }, guarded))
 
   app.post('/table-management/sessions/open', async (request, reply) => handle(reply, async () => {
     const context = await authorizedContext(options, request)
@@ -459,7 +466,7 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
       const count=Number(targetState.blockerCounts[key])
       return count>0 ? [{ code,count,label,resolution }] : []
     })
-    return reply.send({ data:{ movementKind,movedGuestCount,
+    return reply.send({ data:{ supportsNativeParticipantRecovery:true,movementKind,movedGuestCount,
       selectedParticipantCount:participantPublicIds.length,
       targetTableId,targetTableSessionId,targetCapacity:targetState.capacity,
       projectedGuestCount,requiresCapacityOverride,
@@ -470,9 +477,21 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
     } })
   }))
 
-  app.post('/table-management/sessions/:tableSessionId/participant-movements', async (request, reply) => handle(reply, async () => {
+  for(const movementRoute of ['participant-movements','native-participant-movements']) app.post(`/table-management/sessions/:tableSessionId/${movementRoute}`, async (request, reply) => handle(reply, async () => {
     const context=await authorizedContext(options,request)
     const body=readObject(request.body)
+    const native=movementRoute==='native-participant-movements'
+    if(native && (body.employeeId!==context.employeeId || !readIdempotencyKey(request).startsWith('native-participants-'))) {
+      throw new TableManagementRequestError('原员工或原生拆并桌请求号不匹配')
+    }
+    const guard=native?readObject(body.nativeGuard):null
+    const nativeGuard=guard?{
+      sourceTableId:readUuid(guard.sourceTableId,'sourceTableId'),
+      sourceLocationVersion:readInteger(guard.sourceLocationVersion,'sourceLocationVersion',0,Number.MAX_SAFE_INTEGER),
+      sourceGuestCount:readInteger(guard.sourceGuestCount,'sourceGuestCount',1,200),
+      targetGuestCount:readInteger(guard.targetGuestCount,'targetGuestCount',0,200),
+      targetCapacity:readInteger(guard.targetCapacity,'targetCapacity',1,200),
+    }:undefined
     const movementKind=readEnum(body.movementKind,'movementKind',['participant_split','participant_merge'] as const)
     const participantPublicIds=readPublicIdArray(body.participantPublicIds,'participantPublicIds',200,true)
     if (movementKind==='participant_split' && participantPublicIds.length===0) {
@@ -483,7 +502,7 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
       throw new TableManagementRequestError('移动人数不能少于已选择的顾客人数')
     }
     const execution=await options.commands.moveParticipants(commandBase(request,context,body,'调整顾客所在桌次',{
-      movementKind,sourceTableSessionId:readUuid(readParams(request).tableSessionId,'tableSessionId'),
+      ...(nativeGuard?{nativeGuard}:{}),movementKind,sourceTableSessionId:readUuid(readParams(request).tableSessionId,'tableSessionId'),
       targetTableId:readUuid(body.targetTableId,'targetTableId'),
       targetTableSessionId:body.targetTableSessionId===null || body.targetTableSessionId===undefined
         ? null : readUuid(body.targetTableSessionId,'targetTableSessionId'),
@@ -666,16 +685,21 @@ function commandResponse<Result>(execution: { value: Result; replayed: boolean }
   return { data: execution.value, meta: { replayed: execution.replayed } }
 }
 
-async function handle(reply: FastifyReply, operation: () => Promise<unknown>) {
+async function handle(reply: FastifyReply, operation: () => Promise<unknown>, guardedAssignment = false) {
   try {
     return await operation()
   } catch (error) {
+    if (guardedAssignment && error instanceof TypeError) throw error
     const mapped = mapError(error)
-    return reply.code(mapped.status).send({ error: { code: mapped.code, message: mapped.message } } satisfies ApiErrorBody)
+    return reply.code(mapped.status).send({ error: { code: mapped.code, message: mapped.message,
+      ...(mapped.commitDisposition ? { commitDisposition: mapped.commitDisposition } : {}) } } satisfies ApiErrorBody)
   }
 }
 
-function mapError(error: unknown): { status: number; code: string; message: string } {
+function mapError(error: unknown): { status: number; code: string; message: string; commitDisposition?: 'not_committed' } {
+  if (error instanceof ParticipantMovementNotCommittedError) return { status:409,code:'TABLE_PARTICIPANT_NOT_COMMITTED',message:error.message,commitDisposition:'not_committed' }
+  if (error instanceof AssignmentNotCommittedError) return { status: 409,
+    code: 'TABLE_ASSIGNMENT_NOT_COMMITTED', message: error.message, commitDisposition: 'not_committed' }
   if (error instanceof TableManagementRequestError || error instanceof TypeError) {
     return { status: 400, code: 'TABLE_REQUEST_INVALID', message: error.message }
   }

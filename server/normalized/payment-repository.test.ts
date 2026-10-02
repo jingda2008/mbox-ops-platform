@@ -20,6 +20,14 @@ const customerId = '77777777-7777-4777-8777-777777777777'
 const employeePrincipal = { type: 'employee' as const, employeeId }
 
 describe('PaymentRepository', () => {
+  it('rejects a changed frozen activity amount under the original registration lock before any payment or capacity mutation', async () => {
+    const transaction = new ScriptedTransaction([rows([refundedActivityRegistrationRow()])])
+    await expect(new PaymentRepository(transaction).recordManualForActivityRegistration({...activityManualInput(),expectedAmountMinor:1999}))
+      .rejects.toThrow('activity amount changed')
+    expect(transaction.calls).toHaveLength(1)
+    expect(transaction.calls[0]?.sql).toContain('FOR UPDATE')
+  })
+
   it('closes only an online payment that never left M-BOX before manual collection', async () => {
     const transaction = new ScriptedTransaction([
       rows([orderRow(8800)]),

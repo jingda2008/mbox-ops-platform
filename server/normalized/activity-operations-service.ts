@@ -27,7 +27,7 @@ export interface ActivityOperationsStaffContext {
 export class ActivityOperationsService {
   constructor(
     private readonly transactions: Pick<ScopedPostgresTransactionRunner, 'run'>,
-    private readonly commands: NormalizedCommandExecutor,
+    private readonly commands: Pick<NormalizedCommandExecutor,'execute'>,
   ) {}
 
   list(context: ActivityOperationsStaffContext) {

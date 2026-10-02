@@ -1,0 +1,18 @@
+{
+  "auth": {
+    "session": {"id":"session-1","employeeId":"employee-1","expiresAt":"2099-01-01T00:00:00Z","onlineLeaseUntil":"2099-01-01T00:00:00Z"},
+    "employee":{"id":"employee-1","code":"staff","displayName":"测试员工","roleCodes":["server"]},
+    "permissions":["dashboard.view","table.open","table.close","table.transfer","guest.cart.freeze","service.execute","payment.refund"],
+    "deniedPermissions":["payment.refund"]
+  },
+  "operations": {
+    "actor":{"id":"employee-1","capabilities":["dashboard.view","table.open","table.close","table.transfer","guest.cart.freeze","service.execute"]},
+    "tables":[
+      {"id":"table-1","code":"A5","capacity":4,"status":"available","areaName":"大厅","assignedToActor":true,
+       "activeSession":{"id":"table-session-1","guestCount":2,"status":"open","locationVersion":7,"openedAt":"2026-09-26T10:00:00Z","guestCartWritesFrozen":false,"financialState":"paid","orderAmountMinor":10000,"netCollectedAmountMinor":10000,"refundedAmountMinor":0}},
+      {"id":"table-2","code":"A6","capacity":4,"status":"available","areaName":"大厅","assignedToActor":true,"activeSession":null},
+      {"id":"table-3","code":"A7","capacity":4,"status":"paused","areaName":"大厅","assignedToActor":true,"activeSession":null}
+    ],
+    "tasks":[{"id":"task-1","tableId":"table-1","tableCode":"A5","tableSessionId":"table-session-1","title":"补充纸巾","detail":null,"priority":"normal","status":"pending","assignedToActor":true,"interactionMode":"quick_complete"}]
+  }
+}

@@ -1,3 +1,5 @@
+import {nativePhysicalExecutor} from './native-physical-command.js'
+import {NativeCommandNotCommittedError} from './command-executor.js'
 import {searchGuestCatalog,publicCatalogProduct} from './guest-commerce-service-api.js'
 import {z} from 'zod'
 import type {FastifyPluginAsync} from 'fastify'
@@ -25,11 +27,14 @@ export const launchPopupApiPlugin:FastifyPluginAsync<Options>=async(app,options)
  app.setErrorHandler((error,_req,reply)=>{
   if(isStaffAuthenticationRequiredError(error)||error instanceof ReservationGuestSessionInvalidError)return reply.code(401).send({error:STAFF_AUTHENTICATION_REQUIRED_ERROR})
   if(error instanceof StaffAccessDeniedError)return reply.code(403).send({error:{code:'POPUP_ACCESS_DENIED',message:'没有首页弹窗配置权限'}})
+  if(error instanceof NativeCommandNotCommittedError&&!(error.original instanceof IdempotencyConflictError))return reply.code(409).send({error:{code:'NATIVE_BUSINESS_NOT_COMMITTED',message:error.original instanceof z.ZodError?'原商品已下架或不再允许公开展示，请重新选择':'弹窗配置已变化，请刷新后核对',commitDisposition:'not_committed'}})
   if(error instanceof z.ZodError)return reply.code(400).send({error:{code:'POPUP_INVALID',message:'请核对标题、频次和推荐商品'}})
   if(error instanceof IdempotencyConflictError||error instanceof IdempotencyInProgressError||(error instanceof Error&&error.message==='POPUP_CONFLICT'))return reply.code(409).send({error:{code:'POPUP_CONFLICT',message:'配置已变化，请刷新后重新编辑'}})
   throw error
  })
  app.get('/public/mini/launch-popup',async request=>{const ctx=await options.resolveSelfContext(request);return{data:await options.transactions.run(ctx.scope,tx=>readLaunchPopup(tx,true,ctx.customerId),{readOnly:true})}})
+ app.get('/staff/native-launch-popup',async request=>{const ctx=await options.resolveStaffContext(request);const row=await options.transactions.run(ctx.scope,async tx=>{await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'community.activity.manage');return readLaunchPopup(tx)},{readOnly:true,isolation:'repeatable-read'});return{data:{employeeId:ctx.employeeId,protocol:1,durableCommands:true,row}}})
+ app.get('/staff/native-launch-popup/product-options',async request=>{const ctx=await options.resolveStaffContext(request),q=z.object({cursor:z.string().uuid().optional(),search:z.string().trim().max(80).default('')}).strict().parse(request.query);const data=await options.transactions.run(ctx.scope,async tx=>{await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'community.activity.manage');const rows=(await tx.query<{id:string;name:string;code:string}>(`SELECT p.id,p.name,p.code FROM mbox.products p WHERE p.tenant_id=$1 AND p.store_id=$2 AND p.status='active' AND p.guest_visible AND 'guest_qr'=ANY(p.allowed_channels) AND NOT EXISTS(SELECT 1 FROM mbox.member_card_menu_items mi WHERE mi.tenant_id=p.tenant_id AND mi.store_id=p.store_id AND mi.product_id=p.id AND mi.active AND mi.exclusive) AND ($3::uuid IS NULL OR p.id>$3) AND (p.name ILIKE $4 OR p.code ILIKE $4) ORDER BY p.id LIMIT 51`,[ctx.scope.tenantId,ctx.scope.storeId,q.cursor??null,`%${q.search.replace(/[\\%_]/g,'\\$&')}%`])).rows;return{employeeId:ctx.employeeId,protocol:1,durableCommands:true,rows:rows.slice(0,50),next:rows.length>50?rows[49]!.id:null}},{readOnly:true});return{data}})
  app.get('/staff/launch-popup',async request=>{const ctx=await options.resolveStaffContext(request);return{data:await options.transactions.run(ctx.scope,async tx=>{await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'community.activity.manage');return readLaunchPopup(tx)},{readOnly:true})}})
  app.get('/staff/launch-popup/product-options',async request=>{
   const ctx=await options.resolveStaffContext(request),query=z.object({offset:z.coerce.number().int().min(0).max(1000000).default(0)}).parse(request.query)
@@ -39,10 +44,12 @@ export const launchPopupApiPlugin:FastifyPluginAsync<Options>=async(app,options)
    return {items:rows.slice(0,100),nextOffset:rows.length>100?query.offset+100:null}
   },{readOnly:true})}
  })
- app.post('/staff/launch-popup',{bodyLimit:8192},async request=>{
-  const ctx=await options.resolveStaffContext(request),input=schema.parse(request.body),key=z.string().regex(/^[A-Za-z0-9:_-]{8,128}$/).parse(request.headers['idempotency-key'])
+ for(const native of [false,true])app.post(native?'/staff/native-launch-popup':'/staff/launch-popup',{bodyLimit:8192},async request=>{
+  const ctx=await options.resolveStaffContext(request),input=(native?schema.extend({reason:z.string().trim().min(2).max(500)}):schema).parse(request.body),key=z.string().regex(/^[A-Za-z0-9:_-]{8,128}$/).parse(request.headers['idempotency-key'])
   await options.transactions.run(ctx.scope,tx=>new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'community.activity.manage'),{readOnly:true})
-  const result=await options.commands.execute({scope:ctx.scope,operationScope:'launch.popup.configure',idempotencyKey:key,requestFingerprint:JSON.stringify({employeeId:ctx.employeeId,input}),resultCodec:codec},async tx=>{
+  if(native&&!/^native-business-[a-f0-9-]{36}$/.test(key))throw new z.ZodError([])
+  const executor=native?nativePhysicalExecutor(options.commands,ctx,async tx=>{const current=await options.resolveStaffContext(request);if(current.employeeId!==ctx.employeeId||current.scope.tenantId!==ctx.scope.tenantId||current.scope.storeId!==ctx.scope.storeId)throw new StaffAccessDeniedError('身份变化');await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'community.activity.manage')}):options.commands
+  const result=await executor.execute({scope:ctx.scope,operationScope:native?'launch.popup.configure.native':'launch.popup.configure',retainReceipt:native,idempotencyKey:key,requestFingerprint:JSON.stringify({employeeId:ctx.employeeId,input}),resultCodec:codec},async tx=>{
    await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'community.activity.manage')
    const s=[ctx.scope.tenantId,ctx.scope.storeId],inserted=await tx.query('INSERT INTO mbox.launch_popup_policies(tenant_id,store_id) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING store_id',s)
    const row=(await tx.query<{version:number}>('SELECT version FROM mbox.launch_popup_policies WHERE tenant_id=$1 AND store_id=$2 FOR UPDATE',s)).rows[0]!
@@ -53,6 +60,6 @@ export const launchPopupApiPlugin:FastifyPluginAsync<Options>=async(app,options)
    await tx.query('DELETE FROM mbox.launch_popup_products WHERE tenant_id=$1 AND store_id=$2',s)
    for(const [index,id] of input.productIds.entries())await tx.query('INSERT INTO mbox.launch_popup_products(tenant_id,store_id,product_id,sort_order) VALUES($1,$2,$3,$4)',[...s,id,index])
    return{result:JSON.parse(JSON.stringify(await readLaunchPopup(tx))) as JsonObject,auditEvents:[{actor:{type:'employee' as const,employeeId:ctx.employeeId},businessDate:ctx.businessDate,action:'launch.popup.configured',objectType:'launch_popup_policy',objectId:ctx.scope.storeId,afterData:input}],outboxMessages:[]}
-  });return{data:result.value,meta:{replayed:result.replayed}}
+  });return native?{data:{employeeId:ctx.employeeId,requestKey:key,row:result.value},meta:{protocol:1,replayed:result.replayed}}:{data:result.value,meta:{replayed:result.replayed}}
  })
 }

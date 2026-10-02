@@ -41,15 +41,25 @@ export class PostgresOrderSettlementExceptionRepository {
   constructor(private readonly transactions: ScopedPostgresTransactionRunner) {}
 
   async settle(input: Readonly<SettleCancelledUnpaidOrderInput>): Promise<SettleCancelledUnpaidOrderResult> {
+    try {
+      return await this.transactions.run(input.scope, async (transaction) => {
+        // Use the permanent event's original date for legacy fingerprint compatibility.
+        // The database function still checks current permission and operating date.
+        await transaction.query(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`,[
+          `${input.scope.tenantId}:${input.scope.storeId}:order.settle_exception:${input.idempotencyKey}`,
+        ])
+        const original=(await transaction.query<{action_business_date:string}>(`
+          SELECT action_business_date::text FROM mbox.order_settlement_exception_events
+          WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$3`,[
+          input.scope.tenantId,input.scope.storeId,input.idempotencyKey,
+        ])).rows[0]
     const fingerprint = createHash('sha256').update(JSON.stringify({
       orderId: input.orderId,
       employeeId: input.employeeId,
-      businessDate: input.businessDate,
+      businessDate: original?.action_business_date ?? input.businessDate,
       reasonCode: input.reasonCode,
       reasonNote: input.reasonNote.trim(),
     }), 'utf8').digest('hex')
-    try {
-      return await this.transactions.run(input.scope, async (transaction) => {
         const result = await transaction.query<SettlementRow>(`
           SELECT event_id,order_public_id,source_business_date::text,action_business_date::text,
             settled_amount_minor,occurred_at::text,replayed

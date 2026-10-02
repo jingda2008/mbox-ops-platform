@@ -1,0 +1,37 @@
+PASS server denial overrides allowed permission
+PASS invalid PIN never reaches network
+PASS device admission precedes login
+PASS valid employee/session binding
+PASS heartbeat binds both session and employee
+PASS 403 retains identity but is not success
+PASS 401 invalidates identity
+PASS unexpected heartbeat identity never replaces active employee
+PASS logout handles empty 204 and clears identity
+PASS reject off-origin request before transport
+PASS operations maps authoritative table and tasks
+PASS refund never becomes invented outstanding balance
+PASS open uses actual server payload and key header
+PASS paused table cannot open
+PASS malformed success retains original command and its key
+PASS server command envelope accepted
+PASS transfer carries source location version
+PASS freeze requires explicit reason
+PASS close keeps server two-phase protocol
+PASS interrupted close persists completed begin step
+PASS relaunch replay reuses original key without duplicate effects
+PASS completed writes are never repeated for refresh recovery
+PASS ambiguous 409 must retain original request
+PASS server price and fuzzy product search
+PASS bundle choice is mandatory
+PASS sold out choice rejected
+PASS duplicate selections rejected
+PASS product limit aggregates different bundle selections
+PASS restart preserves unit choices and isolates employees and sessions
+PASS one bundle unit carries exact selected ids and note
+PASS catalog blocks invalid allowedChannels
+PASS catalog blocks invalid inventoryAvailable
+PASS catalog blocks invalid standardPrice
+PASS same product submits one line with per-unit bundle choices
+PASS conflicting product notes are never silently merged
+PASS item note follows server 300 UTF16 limit
+36 live contract checks passed

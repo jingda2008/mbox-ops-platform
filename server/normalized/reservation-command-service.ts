@@ -15,7 +15,7 @@ import {
   type CreateReservationInput,
   type Reservation,
 } from './reservation-repository.js'
-import type { StoreScope } from './transaction-runner.js'
+import type { ScopedTransaction, StoreScope } from './transaction-runner.js'
 
 export interface CreateReservationCommand extends Omit<
   CreateReservationInput,
@@ -26,12 +26,17 @@ export interface CreateReservationCommand extends Omit<
   businessDate: string
   idempotencyKey: string
   requestFingerprint: string
+  nativeReceipt?: boolean
+  authorizeNative?: (transaction: ScopedTransaction) => Promise<void>
+  prepareNative?: (transaction: ScopedTransaction) => Promise<Partial<CreateReservationInput>>
   anonymousCustomer?: CreateAnonymousCustomerInput
   arrivalGraceEndsAt?: string
   reservationPolicyVersion?: number
 }
 
 export interface ReservationTransitionCommand {
+  nativeReceipt?: boolean
+  authorizeNative?: (transaction: ScopedTransaction) => Promise<void>
   scope: Readonly<StoreScope>
   actor: AuditActor
   businessDate: string
@@ -51,11 +56,13 @@ export class ReservationCommandService {
     }
     return this.commands.execute({
       scope: input.scope,
-      operationScope: 'reservation.create',
+      operationScope: input.nativeReceipt ? 'reservation.create.native' : 'reservation.create',
+      retainReceipt: input.nativeReceipt === true,
       idempotencyKey: input.idempotencyKey,
       requestFingerprint: input.requestFingerprint,
       resultCodec: reservationCodec,
     }, async (transaction) => {
+      const prepared = input.nativeReceipt ? await input.prepareNative?.(transaction) : undefined
       const anonymous = input.anonymousCustomer === undefined
         ? null
         : await new CustomerRepository(transaction).createAnonymous(input.anonymousCustomer)
@@ -80,8 +87,9 @@ export class ReservationCommandService {
       }
       const reservation = await new ReservationRepository(transaction).create({
         ...input,
+        ...prepared,
         customerId: input.customerId ?? anonymous?.customer.id ?? null,
-        requestHoldExpiresAt: input.requestHoldExpiresAt ?? input.holdExpiresAt ?? null,
+        requestHoldExpiresAt: prepared?.requestHoldExpiresAt ?? prepared?.holdExpiresAt ?? input.requestHoldExpiresAt ?? input.holdExpiresAt ?? null,
         arrivalGraceEndsAt: policyArrivalGraceEndsAt,
         reservationPolicyVersion: policyRow.policy_version,
       })
@@ -120,7 +128,7 @@ export class ReservationCommandService {
         payload: reservationEventJson(reservation),
       })
       return { result: reservation, auditEvents, outboxMessages }
-    })
+    }, input.nativeReceipt ? input.authorizeNative : undefined)
   }
 
   confirm(input: Readonly<ReservationTransitionCommand>): Promise<CommandExecution<Reservation>> {
@@ -146,7 +154,8 @@ export class ReservationCommandService {
   ): Promise<CommandExecution<Reservation>> {
     return this.commands.execute({
       scope: input.scope,
-      operationScope: `reservation.${transition}`,
+      operationScope: input.nativeReceipt ? `reservation.${transition}.native` : `reservation.${transition}`,
+      retainReceipt: input.nativeReceipt === true,
       idempotencyKey: input.idempotencyKey,
       requestFingerprint: input.requestFingerprint,
       resultCodec: reservationCodec,
@@ -184,7 +193,7 @@ export class ReservationCommandService {
           payload,
         }],
       }
-    })
+    }, input.nativeReceipt ? input.authorizeNative : undefined)
   }
 }
 

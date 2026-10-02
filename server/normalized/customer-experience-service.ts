@@ -1623,7 +1623,8 @@ export class CustomerExperienceService {
     })
   }
 
-  loyaltyReconciliation(context: StaffCustomerExperienceContext) {
+  loyaltyReconciliation(context: StaffCustomerExperienceContext, pagination?:{offset:number;limit:number}) {
+    if(pagination&&(!Number.isSafeInteger(pagination.offset)||pagination.offset<0||pagination.offset>1000000||pagination.limit!==101))throw new TypeError("Invalid supplement pagination")
     return this.transactions.run(context.scope, async (transaction) => {
       const result = await transaction.query<{
         order_public_id: string
@@ -1739,8 +1740,8 @@ export class CustomerExperienceService {
         LEFT JOIN mbox.loyalty_order_awards award
           ON award.tenant_id=$1::uuid AND award.store_id=$2::uuid AND award.order_id=expected.id
         ORDER BY CASE WHEN award.id IS NULL THEN 0 ELSE 1 END, expected.public_id
-        LIMIT 200
-      `, [transaction.scope.tenantId, transaction.scope.storeId])
+        LIMIT $3 OFFSET $4
+      `, [transaction.scope.tenantId, transaction.scope.storeId,pagination?.limit??200,pagination?.offset??0])
       return result.rows.map((row) => ({
         orderPublicId: row.order_public_id,
         memberNo: row.member_no,
@@ -1755,7 +1756,8 @@ export class CustomerExperienceService {
     }, { readOnly: true })
   }
 
-  loyaltySupplementRequests(context: StaffCustomerExperienceContext) {
+  loyaltySupplementRequests(context: StaffCustomerExperienceContext, pagination?:{offset:number;limit:number}) {
+    if(pagination&&(!Number.isSafeInteger(pagination.offset)||pagination.offset<0||pagination.offset>1000000||pagination.limit!==101))throw new TypeError("Invalid supplement pagination")
     return this.transactions.run(context.scope, async (transaction) => {
       const result = await transaction.query<{
         public_id: string
@@ -1793,8 +1795,8 @@ export class CustomerExperienceService {
         WHERE request.tenant_id=$1::uuid AND request.store_id=$2::uuid
         ORDER BY CASE request.status WHEN 'requested' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END,
           request.created_at DESC, request.id DESC
-        LIMIT 200
-      `, [transaction.scope.tenantId, transaction.scope.storeId])
+        LIMIT $3 OFFSET $4
+      `, [transaction.scope.tenantId, transaction.scope.storeId,pagination?.limit??200,pagination?.offset??0])
       return result.rows.map((row) => ({
         publicId: row.public_id,
         orderPublicId: row.order_public_id,
@@ -2287,6 +2289,7 @@ export class CustomerExperienceService {
         result.productId,
         context.businessDate,
         { phaseCodes: result.phaseCodes, reason: input.reason },
+        1, `recommendation.product-performance-phases.configured:${fingerprint(input.idempotencyKey)}`,
       )
     })
   }
@@ -2637,7 +2640,7 @@ export class CustomerExperienceService {
       requestFingerprint: fingerprint({ ...input, configuration }),
       resultCodec: objectCodec<{ featureCode: string; rolloutState: string }>(),
     }, async (transaction) => {
-      const result = await transaction.query<{ feature_code: string; rollout_state: string }>(`
+      const result = await transaction.query<{ id: string; feature_code: string; rollout_state: string }>(`
         INSERT INTO mbox.customer_experience_features (
           tenant_id, store_id, feature_code, rollout_state, configuration,
           reason, approved_by_employee_id, effective_from
@@ -2648,7 +2651,7 @@ export class CustomerExperienceService {
           reason = EXCLUDED.reason,
           approved_by_employee_id = EXCLUDED.approved_by_employee_id,
           effective_from = clock_timestamp(), effective_until = NULL
-        RETURNING feature_code, rollout_state
+        RETURNING id, feature_code, rollout_state
       `, [
         transaction.scope.tenantId,
         transaction.scope.storeId,
@@ -2665,9 +2668,10 @@ export class CustomerExperienceService {
         staffActor(context),
         'customer.experience.feature.set',
         'customer_experience_feature',
-        input.featureCode,
+        row.id,
         context.businessDate,
-        { rolloutState: input.rolloutState, configuration: input.configuration, reason: input.reason },
+        { featureCode: input.featureCode, rolloutState: input.rolloutState, configuration: input.configuration, reason: input.reason },
+        1, `customer.experience.feature.set:${createHash('sha256').update(input.idempotencyKey).digest('hex')}`, input.featureCode,
       )
     })
   }
@@ -3381,6 +3385,7 @@ export class CustomerExperienceService {
   parseObservation(
     context: StaffCustomerExperienceContext,
     input: Readonly<{
+      nativeReceipt?:boolean
       tableSessionId: string
       rawContent: string
       inputKind: ObservationInputKind
@@ -3391,9 +3396,10 @@ export class CustomerExperienceService {
     const publicId = deterministicPublicId('observation', context.scope.storeId, input.idempotencyKey)
     return this.commands.execute({
       scope: context.scope,
-      operationScope: 'customer.observation.parse',
+      operationScope: input.nativeReceipt ? 'customer.observation.parse.native' : 'customer.observation.parse',
+      retainReceipt: input.nativeReceipt===true,
       idempotencyKey: input.idempotencyKey,
-      requestFingerprint: fingerprint(input),
+      requestFingerprint: fingerprint(input.nativeReceipt ? {...input,employeeId:context.employeeId} : input),
       resultCodec: objectCodec<ObservationDraftView>(),
     }, async (transaction) => {
       const access = await new StaffAccessRepository(transaction)
@@ -3419,7 +3425,17 @@ export class CustomerExperienceService {
           parseConfidence: result.parseConfidence,
         },
       )
-    })
+    },input.nativeReceipt ? async tx=>{await new StaffAccessRepository(tx).assertPermission(context.employeeId,'observation.record')} : undefined)
+  }
+
+  nativeObservationBoard(context:StaffCustomerExperienceContext,tableSessionId:string){
+    return this.transactions.run(context.scope,async tx=>{
+      const access=await new StaffAccessRepository(tx).assertPermission(context.employeeId,'observation.record')
+      const repo=new CustomerExperienceObservationRepository(tx),allowAllTables=access.permissions.includes('observation.record.all')
+      const items=await repo.recent({tableSessionId,employeeId:context.employeeId,allowAllTables,includeRaw:access.permissions.includes('observation.view.raw'),limit:5})
+      const draft=await repo.latestOwnDraft(tableSessionId,context.employeeId,allowAllTables)
+      return {tableSessionId,durable:true,history:{items,permissions:{canCorrect:access.permissions.includes('observation.correct'),canViewRaw:access.permissions.includes('observation.view.raw')}},draft}
+    },{readOnly:true})
   }
 
   recentObservations(
@@ -3447,13 +3463,14 @@ export class CustomerExperienceService {
 
   confirmObservation(
     context: StaffCustomerExperienceContext,
-    input: Readonly<{ publicId: string; events: readonly ObservationEventInput[]; idempotencyKey: string }>,
+    input: Readonly<{ nativeReceipt?:boolean; publicId: string; events: readonly ObservationEventInput[]; idempotencyKey: string }>,
   ) {
     return this.commands.execute({
       scope: context.scope,
-      operationScope: 'customer.observation.confirm',
+      operationScope: input.nativeReceipt ? 'customer.observation.confirm.native' : 'customer.observation.confirm',
+      retainReceipt: input.nativeReceipt===true,
       idempotencyKey: input.idempotencyKey,
-      requestFingerprint: fingerprint(input),
+      requestFingerprint: fingerprint(input.nativeReceipt ? {...input,employeeId:context.employeeId} : input),
       resultCodec: objectCodec<{ publicId: string; status: 'confirmed'; events: JsonObject[]; serviceTaskId: string | null }>(),
     }, async (transaction) => {
       const access = await new StaffAccessRepository(transaction)
@@ -3473,12 +3490,13 @@ export class CustomerExperienceService {
         context.businessDate,
         { eventCount: result.events.length, serviceTaskId: result.serviceTaskId },
       )
-    })
+    },input.nativeReceipt ? async tx=>{await new StaffAccessRepository(tx).assertPermission(context.employeeId,'observation.confirm')} : undefined)
   }
 
   reviseObservation(
     context: StaffCustomerExperienceContext,
     input: Readonly<{
+      nativeReceipt?:boolean
       publicId: string
       previousEventId: string
       reason: string
@@ -3488,9 +3506,10 @@ export class CustomerExperienceService {
   ) {
     return this.commands.execute({
       scope: context.scope,
-      operationScope: 'customer.observation.revise',
+      operationScope: input.nativeReceipt ? 'customer.observation.revise.native' : 'customer.observation.revise',
+      retainReceipt: input.nativeReceipt===true,
       idempotencyKey: input.idempotencyKey,
-      requestFingerprint: fingerprint(input),
+      requestFingerprint: fingerprint(input.nativeReceipt ? {...input,employeeId:context.employeeId} : input),
       resultCodec: objectCodec<JsonObject>(),
     }, async (transaction) => {
       const access = await new StaffAccessRepository(transaction)
@@ -3512,7 +3531,7 @@ export class CustomerExperienceService {
         context.businessDate,
         { previousEventId: input.previousEventId, reason: input.reason },
       )
-    })
+    },input.nativeReceipt ? async tx=>{const access=new StaffAccessRepository(tx);await access.assertPermission(context.employeeId,'observation.correct');await access.assertPermission(context.employeeId,'observation.view.raw')} : undefined)
   }
 
   createRecommendationPolicy(

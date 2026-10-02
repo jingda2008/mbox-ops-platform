@@ -1,0 +1,12 @@
+**/build/
+**/.gradle/
+**/local.properties
+**/.DS_Store
+**/xcuserdata/
+evidence/*.png
+evidence/*.log
+
+**/__pycache__/
+
+# Binary JUnit transport caches are not reviewable release evidence.
+evidence/**/binary/

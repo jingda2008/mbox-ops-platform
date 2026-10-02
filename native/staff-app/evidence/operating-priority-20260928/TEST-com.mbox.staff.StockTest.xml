@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mbox.staff.StockTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-09-28T05:02:28.923Z" hostname="jingdadeMacBook-Pro.local" time="0.004">
+  <properties/>
+  <testcase name="productVersionAndStockApprovalGuards" classname="com.mbox.staff.StockTest" time="0.002"/>
+  <testcase name="quantitiesAndDurableReceiptGuards" classname="com.mbox.staff.StockTest" time="0.002"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,90 @@
+PASS refund captures explicit purpose and original allocation amount
+PASS restart preserves refund key body and acknowledgement binding
+PASS item or payment cap blocks excess refund
+PASS foreign item cannot be allocated to original payment
+PASS funds-only allocation rejects return_goods
+PASS funds-only allocation rejects service_compensation
+PASS explicit deny overrides refund approval grant
+PASS server workbench flag independently blocks refund
+PASS requester cannot approve own refund
+PASS requester cannot reject own refund
+PASS different employee approval retains reason
+PASS associated item case cannot bypass original after-sales approval
+PASS requested refund cannot execute before approval
+PASS cash refund receipt is assigned by server after physical confirmation
+PASS online refund cannot be manually marked paid
+PASS submitted online refund cannot be executed again
+PASS channel query processing is a completed query not a successful refund
+PASS lost refund acknowledgement retries identical original body and key
+PASS wrong refund amount never clears original request
+PASS wrong original payment cannot acknowledge refund
+PASS local closure with pending channel observation remains a query result
+PASS refund receipt must match original item allocations
+PASS export is UTF8 BOM with spreadsheet compatible row breaks
+PASS CSV uses explicit Shanghai time rather than device timezone
+PASS bundle included lines do not invent a second charge
+PASS missing preparation and delivery evidence remains blank
+PASS CSV escapes formulas quotes commas and line breaks
+PASS CSV money retains exact cents as numeric text
+PASS CSV protects leading CRLF as well as a single newline
+PASS all export preserves literal filters and resets pagination
+PASS page export keeps selected page
+PASS over-limit CSV refuses rather than silently truncates
+PASS cashier-only role retains original session for readback without changing server payload
+PASS history closure binds whole batch instead of displayed allocation
+PASS history close confirmation includes all original order public ids
+PASS history close restart retains scope reason key and body
+PASS history closure enforces denied capability payment.recollect.authorize
+PASS history closure enforces denied capability payment.initiate.staff
+PASS history closure enforces denied capability reconciliation.view
+PASS history closure enforces denied capability payment.collect.all_tables
+PASS history closure requires meaningful reason
+PASS history closure rejects recovery state available
+PASS history closure rejects recovery state settled
+PASS history closure rejects recovery state permission_required
+PASS legacy close ids alone cannot invent full batch scope
+PASS whole original local-close receipt validates
+PASS history closure rejects wrong amountMinor
+PASS history closure rejects wrong id
+PASS history closure rejects wrong status
+PASS history closure rejects wrong payableKind
+PASS recollection binds original order and confirmed due without requiring payment selection
+PASS pending original payment cannot be bypassed by recollection authorization
+PASS authorization receipt has no payment status and replayed expiry is not new collection permission
+PASS recollection receipt rejects changed amountMinor
+PASS recollection receipt rejects changed orderId
+PASS recollection receipt rejects changed authorizedByEmployeeId
+PASS recollection receipt rejects changed reason
+PASS lost history-close reply reuses persisted original idempotency request
+PASS historical full collection never selects batch partial payment contract
+PASS history binds confirmed amount and refreshes cashier rather than closed session payment list
+PASS historical cash tender and change do not inflate recorded amount
+PASS historical cash requires sufficient actual tender
+PASS historical cash requires sufficient actual tender
+PASS history physical_pos requires original receipt
+PASS history external_manual requires original receipt
+PASS history external method whitelist enforced
+PASS history external actual collection explanation required
+PASS old server lacking guarded capability never receives history collection
+PASS history collection enforces denied payment.manual.cash.record
+PASS history collection enforces denied payment.collect.all_tables
+PASS history collection enforces denied payment.recollect.authorize
+PASS stale form rejects changed amount before send
+PASS stale form rejects changed session before send
+PASS stale form rejects changed authorization before send
+PASS stale form rejects changed pending before send
+PASS historical cash exact receipt validated
+PASS historical external_manual exact receipt validated
+PASS historical physical_pos exact receipt validated
+PASS historical receipt rejects wrong amountMinor
+PASS historical receipt rejects wrong orderId
+PASS historical receipt rejects wrong status
+PASS historical receipt rejects wrong payableKind
+PASS historical receipt rejects wrong providerTransactionId
+PASS historical receipt rejects wrong currency
+PASS historical receipt rejects wrong collector
+PASS lost historical receipt resumes exact guarded original request after restart
+PASS explicit rolled-back history guard failure can be acknowledged and refreshed
+PASS missing not-committed proof keeps historical request unresolved
+PASS duplicate financial receipt still needs original payment lookup
+89 cashier checks passed

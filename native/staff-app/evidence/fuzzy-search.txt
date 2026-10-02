@@ -1,0 +1,5 @@
+2026-09-26 22:23 CST
+Search contract: table-code substring only; case-insensitive; trim outer whitespace; status filters retained; exact code first, then occupied tables; blank query restores original ordering.
+Swift core 29 assertions PASS; Android JUnit 6 tests, failures=0/errors=0. Both native builds succeeded and installed.
+Device Hub iOS UI: " a " -> A5,A6,A8,A9; "5" -> A5; "ZZ" -> no match with partial-code hint; empty -> A5,A6,B2,B3,A8,A9.
+Unit fixtures also cover A5 vs BA5/A50, exact empty table outranking a partial occupied match, filter combination, and exclusion of bill amounts. Android visual acceptance remains pending.

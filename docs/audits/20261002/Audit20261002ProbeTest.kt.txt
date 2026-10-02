@@ -1,0 +1,42 @@
+package com.mbox.staff
+
+import org.junit.Test
+import org.junit.Assert.*
+import org.json.JSONObject
+import org.json.JSONArray
+import java.time.OffsetDateTime
+import java.time.format.DateTimeParseException
+
+/** Audit probes assert the observed defects, not acceptance of correct behavior. */
+class Audit20261002ProbeTest {
+    private fun actor(permission: String) = StaffIdentity("s","e","admin","管理员",
+        "2099-01-01T00:00:00Z","2099-01-01T00:00:00Z",emptyList(),setOf(permission),emptySet())
+
+    @Test fun credentialEditorDropsSecondsThenOwnParserRejectsIt() {
+        val board=StaffAdministrationBoard(JSONObject().put("employeeId","e").put("protocol",1)
+            .put("durableCommands",true).put("credentialVersion","a".repeat(64))
+            .put("overview",JSONObject().put("configurationVersion","a".repeat(64))
+                .put("employees",JSONArray()).put("roles",JSONArray())))
+        val from=OffsetDateTime.parse("2098-10-02T09:00:00+08:00").toString()
+        val until=OffsetDateTime.parse("2098-10-03T09:00:00+08:00").toString()
+        assertEquals("2098-10-02T09:00+08:00",from)
+        assertThrows(DateTimeParseException::class.java) {
+            staffAdministrationCommand(actor("staff.access.configure"),board,"credential",
+                JSONObject().put("credential","audit-secret").put("reason","审计更换口令")
+                    .put("validFrom",from).put("validUntil",until),"更换口令")
+        }
+    }
+
+    @Test fun invalidAreaSortIsPersistableButServerValidationErrorCannotReleasePending() {
+        val board=TableConfigurationBoard(JSONObject().put("employeeId","e").put("protocol",1)
+            .put("durableCommands",true).put("areas",JSONArray()).put("tables",JSONArray()))
+        val command=tableConfigurationCommand(actor("table.manage"),board,"area-create",
+            JSONObject().put("code","AUDIT").put("name","审计区域").put("areaType","indoor")
+                .put("status","active").put("sortOrder",100001).put("reason","审计排序边界"),"新增区域")
+        assertEquals(100001,JSONObject(command.steps[0].body).getInt("sortOrder"))
+        assertEquals(command,LiveCommand.parse(command.json()))
+        assertFalse(StaffAPIError(400,"TABLE_CONFIGURATION_INVALID","请核对名称、编号、容量、原版本和修改原因").definitivelyRejected)
+        assertFalse(command.rejected)
+        assertEquals(0,command.completedSteps)
+    }
+}

@@ -1,0 +1,10 @@
+{
+  "ios-app-executable": {
+    "path": "/Users/jingda/mbox/mbox-native-staff-app-20260926/native/staff-app/ios/build/Build/Products/Debug-iphonesimulator/MBOXStaff.app/MBOXStaff",
+    "sha256": "5d52e0c78ed19b7e33a99a2ad7da80f2b9efd3f80a0324fad45564311f49d35f"
+  },
+  "android-debug-apk": {
+    "path": "/Users/jingda/mbox/mbox-native-staff-app-20260926/native/staff-app/android/app/build/outputs/apk/debug/app-debug.apk",
+    "sha256": "db0c1463b4f3254a656ba80b45bfc388275dfcd2b1e7b2b5900938f32ae70222"
+  }
+}

@@ -2,8 +2,10 @@ import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { commercialOpsApiPlugin, type CommercialOpsApiOptions } from './commercial-ops-api.js'
-import { createGroupVoucherPlatformRegistry } from './group-voucher-platforms.js'
+import { createGroupVoucherPlatformRegistry,readGroupVoucherPrepareHandle } from './group-voucher-platforms.js'
 import { StaffAccessDeniedError, type EffectiveStaffAccess } from './staff-access-repository.js'
+import {voucherCodeDigest} from './commercial-ops-repository.js'
+import {VoucherOperationError} from './voucher-operation-service.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
 const tenantId = randomUUID()
@@ -79,6 +81,29 @@ describe('commercialOpsApiPlugin', () => {
       data: { platform: '美团', platformCode: 'meituan', voucherCodeMasked: 'MT********99' },
     })
     expect(fixture.recordAttempt).toHaveBeenCalled()
+  })
+
+  it('does not consume a prepared voucher after live redemption permission is revoked', async () => {
+    const verification = simulationVerification()
+    const consume = vi.spyOn(verification.registry.adapter('meituan'), 'consume')
+    const fixture = buildFixture({ voucherVerification: verification })
+    const prepared = await fixture.app.inject({
+      method: 'POST', url: '/api/commercial-ops/vouchers/prepare',
+      payload: { platform: 'meituan', voucherCode: 'MT-OK-778899' },
+    })
+    expect(prepared.statusCode).toBe(200)
+    fixture.assertPermission.mockRejectedValue(new StaffAccessDeniedError('revoked'))
+    const redeemed = await fixture.app.inject({
+      method: 'POST', url: '/api/commercial-ops/vouchers/redeem',
+      headers: { 'idempotency-key': 'commercial-voucher-revoked-0001' },
+      payload: {
+        platform: 'meituan', voucherCode: 'MT-OK-778899',
+        prepareHandle: prepared.json().data.prepareHandle,
+      },
+    })
+    expect(redeemed.statusCode).toBe(403)
+    expect(consume).not.toHaveBeenCalled()
+    expect(fixture.commands).toHaveLength(0)
   })
 
   it('rejects already used, missing and mismatched prepare handles before consuming', async () => {
@@ -245,6 +270,12 @@ function buildFixture(overrides: {
       recordVoucherVerificationAttempt,
     } as never),
     createPublicId: (kind) => `${kind}-api-generated-0001`,
+    createVoucherOperationService:overrides.voucherVerification?()=>({redeem:async(context,key,input)=>{
+      const handle=readGroupVoucherPrepareHandle(input.prepareHandle,overrides.voucherVerification!.signingSecret,overrides.voucherVerification!.now?.()??Date.now())
+      if(handle.codeHash!==voucherCodeDigest(input.voucherCode))throw new VoucherOperationError('券码与查询结果不一致',400)
+      await overrides.voucherVerification!.registry.adapter(input.platform).consume({voucherCode:input.voucherCode,prepareToken:handle.prepareToken,requestId:key})
+      return {status:'recorded',result:{platform:'美团',platformCode:input.platform,voucherCodeMasked:'MT********99'},id:voucherId} as never
+    }} as Pick<import('./voucher-operation-service.js').VoucherOperationService,'list'|'find'|'redeem'|'recover'|'review'|'approve'|'reject'>):undefined,
     voucherVerification: overrides.voucherVerification,
   })
   return { app, commands, outcomes, assertPermission, createCost, listEmployeeSales, recordAttempt: recordVoucherVerificationAttempt }

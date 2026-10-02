@@ -302,6 +302,24 @@ integration('FulfillmentQueryService PostgreSQL authorization and ordering', () 
       && Number.isSafeInteger(item.item.totalAmountMinor))).toBe(true)
   })
 
+  it('keeps exception-capable production employees inside their station while managers retain global cancellation', async () => {
+    await pool.query(`INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name)
+      VALUES($1,$2,'kds.exception.manage','出品异常') ON CONFLICT DO NOTHING`, [tenantId,storeId])
+    await pool.query(`INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id)
+      SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2
+        AND code IN ('kds.exception.manage','fulfillment.view_all') ON CONFLICT DO NOTHING`, [tenantId,storeId,barRoleId])
+    try {
+      const view = await service.getStaffWorkQueue({tenantId,storeId},bartenderId,'2026-08-11')
+      expect(view.workItems).toHaveLength(2)
+      expect(view.workItems.every(item => item.stationCode === 'bar')).toBe(true)
+      expect(view.workItems.find(item => item.canPrepare)?.canManagerCancel).toBe(true)
+    } finally {
+      await pool.query(`DELETE FROM mbox.role_permission_assignments WHERE tenant_id=$1 AND store_id=$2 AND role_id=$3
+        AND permission_id IN (SELECT id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2
+        AND code IN ('kds.exception.manage','fulfillment.view_all'))`, [tenantId,storeId,barRoleId])
+    }
+  })
+
   it('keeps bootstrap fulfillment counts identical to each employee action scope', async () => {
     const query = new StaffBootstrapQuery(new ScopedPostgresTransactionRunner(asPool(pool)))
     const businessDate = '2026-08-11'

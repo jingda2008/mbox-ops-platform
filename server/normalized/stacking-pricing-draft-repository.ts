@@ -32,6 +32,10 @@ export class StackingPricingDraftRepository {
       WHERE tenant_id=$1 AND store_id=$2 ORDER BY created_at DESC,id DESC LIMIT 50`, [this.transaction.scope.tenantId, this.transaction.scope.storeId])
     return rows.rows.map(view)
   }
+  async listNative(cursor:string|null=null,search='') {
+    const rows=await this.transaction.query<DraftRow>(`SELECT ${selected} FROM mbox.stacking_pricing_drafts WHERE tenant_id=$1 AND store_id=$2 AND ($3::uuid IS NULL OR id>$3) AND policy_code ILIKE $4 ORDER BY id LIMIT 31`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,cursor,`%${search.replace(/[\\%_]/g,'\\$&')}%`])
+    return {rows:rows.rows.slice(0,30).map(view),next:rows.rows.length>30?rows.rows[29]!.id:null}
+  }
   async find(versionId:string){
     if(typeof versionId!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(versionId))throw new StackingPricingError('规则版本编号无效')
     const row=(await this.transaction.query<DraftRow>(`SELECT ${selected} FROM mbox.stacking_pricing_drafts WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,versionId])).rows[0]

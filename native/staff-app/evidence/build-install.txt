@@ -1,0 +1,7 @@
+Build evidence: SwiftUI iOS simulator build SUCCEEDED; Compose Android assembleDebug and testDebugUnitTest BUILD SUCCESSFUL.
+iOS: installed and launched com.mbox.staff.native on 2EA116D3-018A-4D1E-9BB0-A908E2F29F7A (iOS 26.5).
+Android: adb install -r Success; am start -S launched com.mbox.staff.nativeapp/com.mbox.staff.MainActivity on emulator-5554.
+Final iOS restart: A8 empty; Orders tab retains one delivered A8 order for 28.00; returned to Tables tab.
+Android visual/click acceptance remains OPEN (CUA cannot resolve qemu application window).
+ios/build/Build/Products/Debug-iphonesimulator/MBOXStaff.app/MBOXStaff sha256=318592f70052f3ca46d1f81c41cc6a65e0229ce53a73937c388c02a843bfa62f
+android/app/build/outputs/apk/debug/app-debug.apk sha256=7dfcd64b51b096b2dcf36352a62bca3e8ca3019377730df2d795ef466d2888d2

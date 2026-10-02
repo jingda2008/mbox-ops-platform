@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mbox.staff.ReplacementTest" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-09-27T19:28:10.709Z" hostname="jingdadeMacBook-Pro.local" time="0.011">
+  <properties/>
+  <testcase name="durableRequestKeepsBodyKeyAndSource" classname="com.mbox.staff.ReplacementTest" time="0.001"/>
+  <testcase name="staleSourceAndOldBackendBlocked" classname="com.mbox.staff.ReplacementTest" time="0.003"/>
+  <testcase name="cancelledPredecessorRequiresExplicitNewGeneration" classname="com.mbox.staff.ReplacementTest" time="0.001"/>
+  <testcase name="cancelledSupersededOrderRecoversWithoutCreatingAnother" classname="com.mbox.staff.ReplacementTest" time="0.001"/>
+  <testcase name="ambiguousConflictAndExpiredContextStayPending" classname="com.mbox.staff.ReplacementTest" time="0.001"/>
+  <testcase name="ordinaryAndReplacementDraftsAreSeparate" classname="com.mbox.staff.ReplacementTest" time="0.0"/>
+  <testcase name="creationReceiptIsCheckpointedBeforeSecondaryReadFinishes" classname="com.mbox.staff.ReplacementTest" time="0.001"/>
+  <testcase name="anotherCaseOrDuplicateReceiptCannotClearOriginalRequest" classname="com.mbox.staff.ReplacementTest" time="0.001"/>
+  <testcase name="separatelyPricedOriginalBinding" classname="com.mbox.staff.ReplacementTest" time="0.001"/>
+  <testcase name="deniedEmployeeCannotReplace" classname="com.mbox.staff.ReplacementTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

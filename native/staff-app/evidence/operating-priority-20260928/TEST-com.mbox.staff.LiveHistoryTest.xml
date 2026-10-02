@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mbox.staff.LiveHistoryTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-09-28T05:02:28.826Z" hostname="jingdadeMacBook-Pro.local" time="0.005">
+  <properties/>
+  <testcase name="csvRoundTripAndLimits" classname="com.mbox.staff.LiveHistoryTest" time="0.004"/>
+  <testcase name="financialHistoryDoesNotImplyReceiptsOrBundleCharges" classname="com.mbox.staff.LiveHistoryTest" time="0.0"/>
+  <testcase name="dateRangesAndLiteralFilters" classname="com.mbox.staff.LiveHistoryTest" time="0.001"/>
+  <testcase name="exportsKeepAppliedFilters" classname="com.mbox.staff.LiveHistoryTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

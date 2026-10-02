@@ -143,6 +143,8 @@ export class ReservationPerformanceRevisionRepository {
   constructor(private readonly transaction: ScopedTransaction) {}
 
   async revise(input: Readonly<RevisePerformanceInput>): Promise<PerformanceScheduleRevision> {
+    // Match ScheduleRepository's timeline -> schedule lock order before revision.
+    await this.transaction.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`${this.transaction.scope.tenantId}:${this.transaction.scope.storeId}:performance-timeline`])
     const schedules = new ScheduleRepository(this.transaction)
     const current = await schedules.findById(input.scheduleId, true)
     if (current === null) throw error('演出场次不存在', 'PERFORMANCE_SCHEDULE_NOT_FOUND', 404)

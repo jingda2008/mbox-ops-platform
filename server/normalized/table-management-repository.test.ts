@@ -1,12 +1,15 @@
+import Fastify from 'fastify'
+import {tableManagementApiPlugin} from './table-management-api.js'
 import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
-import { NormalizedCommandExecutor } from './command-executor.js'
+import { NormalizedCommandExecutor, IdempotencyConflictError } from './command-executor.js'
 import {
   StaffAccessDeniedError,StaffAccessRepository,type EffectiveStaffAccess,
 } from './staff-access-repository.js'
 import {
+  AssignmentNotCommittedError,
   CapacityOverrideReasonRequiredError,
   TableManagementCommandService,
   TableManagementConflictError,
@@ -284,6 +287,86 @@ integration('normalized table management PostgreSQL concurrency', () => {
     expect(audit.rows[0]?.count).toBe('1')
   })
 
+  it('replays guarded assignments after cache deletion and a new business day without duplicate audit or outbox', async () => {
+    const command = assignmentCommand(employeeOneId, managerRoleId, 'backup',
+      '2026-10-01T10:00:00Z', '2026-10-01T18:00:00Z', 'guarded-durable')
+    const first = await commands.assign(command, true)
+    await pool.query(`DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$3`,
+      [tenantId, storeId, command.idempotencyKey])
+    const replay = await commands.assign({ ...command, businessDate: '2026-10-02' }, true)
+    expect(replay).toEqual({ value: first.value, replayed: true })
+    const counts = (await pool.query(`SELECT
+      (SELECT count(*)::int FROM mbox.table_assignments WHERE id=$3::uuid) AS assignments,
+      (SELECT count(*)::int FROM mbox.audit_events WHERE tenant_id=$1 AND store_id=$2 AND object_id=$3::text) AS audits,
+      (SELECT count(*)::int FROM mbox.outbox_messages WHERE tenant_id=$1 AND store_id=$2 AND aggregate_id=$3::uuid) AS messages`,
+      [tenantId, storeId, first.value.id])).rows[0]
+    expect(counts).toEqual({ assignments: 1, audits: 1, messages: 1 })
+  })
+
+  it('refuses modified guarded requests even after their cache expires', async () => {
+    const command = assignmentCommand(employeeOneId, managerRoleId, 'backup',
+      '2026-10-02T10:00:00Z', '2026-10-02T18:00:00Z', 'guarded-key-conflict')
+    await commands.assign(command, true)
+    await pool.query(`UPDATE mbox.idempotency_records SET created_at=clock_timestamp()-interval '2 days', expires_at=clock_timestamp()-interval '1 second'
+      WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$3`, [tenantId, storeId, command.idempotencyKey])
+    await expect(commands.assign({ ...command, requestFingerprint: 'different-payload',
+      endsAt: '2026-10-02T19:00:00Z' }, true)).rejects.toBeInstanceOf(IdempotencyConflictError)
+  })
+
+  it('replays an original guarded end without overwriting a later, shorter responsibility period', async () => {
+    const created = await commands.assign(assignmentCommand(employeeOneId, managerRoleId, 'backup',
+      '2026-10-03T10:00:00Z', '2026-10-03T18:00:00Z', 'guarded-end-setup'), true)
+    const original = { ...base('guarded-end'), assignmentId: created.value.id, endsAt: '2026-10-03T17:00:00Z' }
+    const ended = await commands.endAssignment(original, true)
+    await commands.endAssignment({ ...base('guarded-end-later'), assignmentId: created.value.id, endsAt: '2026-10-03T16:00:00Z' }, true)
+    await pool.query(`DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$3`,
+      [tenantId, storeId, original.idempotencyKey])
+    expect(await commands.endAssignment(original, true)).toEqual({ value: ended.value, replayed: true })
+    const row = (await pool.query('SELECT ends_at FROM mbox.table_assignments WHERE id=$1', [created.value.id])).rows[0]
+    expect(row.ends_at.toISOString()).toBe('2026-10-03T16:00:00.000Z')
+  })
+
+  it('rolls an entire guarded batch back on conflict and allows a corrected request', async () => {
+    const common = { employeeId: employeeOneId, roleId: managerRoleId, assignmentType: 'primary' as const,
+      startsAt: '2026-10-04T10:00:00Z', endsAt: '2026-10-04T18:00:00Z' }
+    const sorted = [batchOneId, batchTwoId].sort()
+    await commands.assign({ ...base('guarded-batch-blocker'), ...common, tableId: sorted[1]! })
+    const command = { ...base('guarded-batch-conflict'), ...common,
+      tableIds: sorted, employeeId: employeeTwoId, roleId: bartenderRoleId }
+    await expect(commands.assignMany(command, true)).rejects.toBeInstanceOf(AssignmentNotCommittedError)
+    const count = (await pool.query(`SELECT count(*)::int AS count FROM mbox.table_assignments
+      WHERE tenant_id=$1 AND store_id=$2 AND employee_id=$3 AND starts_at=$4`,
+      [tenantId, storeId, employeeTwoId, common.startsAt])).rows[0]
+    expect(count.count).toBe(0)
+    const corrected = await commands.assignMany({ ...command, ...base('guarded-batch-corrected'), assignmentType: 'backup' }, true)
+    expect(corrected.value.assignments).toHaveLength(2)
+    await pool.query(`DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$3`,
+      [tenantId, storeId, command.idempotencyKey])
+  })
+
+  it('checks live permissions before returning even a cached guarded success', async () => {
+    const command = assignmentCommand(employeeOneId, managerRoleId, 'backup',
+      '2026-10-05T10:00:00Z', '2026-10-05T18:00:00Z', 'guarded-revocation')
+    const first = await commands.assign(command, true)
+    await pool.query(`UPDATE mbox.employee_roles SET ends_at=clock_timestamp()-interval '1 second'
+      WHERE tenant_id=$1 AND store_id=$2 AND employee_id=$3`, [tenantId, storeId, employeeOneId])
+    try {
+      await expect(commands.assign(command, true)).rejects.toBeInstanceOf(StaffAccessDeniedError)
+    } finally {
+      await pool.query(`UPDATE mbox.employee_roles SET ends_at=NULL
+        WHERE tenant_id=$1 AND store_id=$2 AND employee_id=$3`, [tenantId, storeId, employeeOneId])
+    }
+    expect(await commands.assign(command, true)).toEqual({ value: first.value, replayed: true })
+  })
+
+  it('serializes a concurrent guarded duplicate into one assignment and one replay', async () => {
+    const command = assignmentCommand(employeeOneId, managerRoleId, 'backup',
+      '2026-10-06T10:00:00Z', '2026-10-06T18:00:00Z', 'guarded-concurrent')
+    const results = await Promise.all([commands.assign(command, true), commands.assign(command, true)])
+    expect(results[0]!.value).toEqual(results[1]!.value)
+    expect(results.map((result) => result.replayed).sort()).toEqual([false, true])
+  })
+
   it('shows all areas to table.open staff even when no table is assigned to them', async () => {
     const rows = await transactions.run({ tenantId, storeId }, async (transaction) => {
       const liveAccess = await new StaffAccessRepository(transaction).resolve(employeeOneId)
@@ -325,6 +408,56 @@ integration('normalized table management PostgreSQL concurrency', () => {
       SELECT table_id::text FROM mbox.table_sessions WHERE id = $1
     `, [opened.value.id])
     expect(session.rows[0]?.table_id).toBe(transferTargetId)
+  })
+
+  it('native configuration preserves layouts, guards busy tables and stale revisions, and retains exact receipts',async()=>{
+    const runtimePool=new Pool({connectionString:process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL??databaseUrl,max:4})
+    const runtime=new ScopedPostgresTransactionRunner(asPool(runtimePool)),executor=new NormalizedCommandExecutor(runtime)
+    const app=Fastify();await app.register(tableManagementApiPlugin,{transactions:runtime,nativeCommands:executor,commands:new TableManagementCommandService(executor),resolveContext:()=>({scope:{tenantId,storeId},employeeId:employeeOneId,businessDate:'2026-08-11',capabilities:['table.manage']})})
+    const send=(action:string,payload:object,key='native-business-'+randomUUID())=>app.inject({method:'POST',url:'/table-management/native-configuration/'+action,headers:{'idempotency-key':key},payload})
+    try{
+      const invalidBody={code:'INVALID-AREA',name:'排序边界',areaType:'indoor',sortOrder:100001,status:'active',reason:'验证未提交恢复'},invalidKey='native-business-'+randomUUID();
+      const invalid=await send('area-create',invalidBody,invalidKey);expect(invalid.statusCode,invalid.body).toBe(409);expect(invalid.json().error).toMatchObject({code:'NATIVE_BUSINESS_NOT_COMMITTED',commitDisposition:'not_committed'});
+      expect((await pool.query('SELECT 1 FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$3',[tenantId,storeId,invalidKey])).rowCount).toBe(0);
+      const valid=await send('area-create',{...invalidBody,sortOrder:100000},invalidKey);expect(valid.statusCode,valid.body).toBe(200);
+      const changed=await send('area-create',invalidBody,invalidKey);expect(changed.statusCode,changed.body).toBe(409);expect(changed.json().error.code).toBe('TABLE_CONFIGURATION_CONFLICT');expect(changed.json().error.commitDisposition).toBeUndefined();
+      const created=await send('area-create',{code:'NATIVE-CONFIG',name:'原生配置区域',areaType:'indoor',sortOrder:10,status:'active',reason:'原区域配置核对'})
+      expect(created.statusCode,created.body).toBe(200);const area=created.json().data.result
+      const table=await send('table-create',{code:'NATIVE-01',displayName:'原生桌',areaId:area.id,capacity:4,minimumSpendMinor:null,status:'available',reason:'原桌配置核对'})
+      expect(table.statusCode,table.body).toBe(200);const id=table.json().data.result.id
+      await pool.query("UPDATE mbox.tables SET layout_snapshot='{\"xPct\":25,\"yPct\":35}'::jsonb WHERE id=$1",[id])
+      const board=await app.inject({method:'GET',url:'/table-management/native-configuration'});expect(board.statusCode,board.body).toBe(200);const row=board.json().data.tables.find((r:{id:string})=>r.id===id)
+      const input={code:row.code,displayName:'调整后的桌牌名称',areaId:area.id,tableId:id,capacity:6,minimumSpendMinor:1200,status:'available',expectedUpdatedAt:row.updatedAt,reason:'现场调整容量'},key='native-business-'+randomUUID()
+      const update=await send('table-update',input,key);expect(update.statusCode,update.body).toBe(200);expect(update.json().data.result).toMatchObject({id,capacity:6,layoutSnapshot:{xPct:25,yPct:35}})
+      expect((await send('table-update',{...input,capacity:8})).statusCode).toBe(409)
+      await pool.query('DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND expires_at<=clock_timestamp()',[tenantId,storeId])
+      const replay=await send('table-update',input,key);expect(replay.json().data).toEqual(update.json().data);expect(replay.json().meta.replayed).toBe(true)
+      await commands.open(openCommand(id,2,'native-config-busy'))
+      expect((await send('table-update',{...input,expectedUpdatedAt:update.json().data.result.updatedAt})).statusCode).toBe(409)
+      expect((await send('area-update',{areaId:area.id,name:area.name,areaType:'indoor',sortOrder:10,status:'paused',expectedUpdatedAt:area.updatedAt,reason:'计划暂停此区域'})).statusCode).toBe(409)
+      const rename=await send('area-update',{areaId:area.id,name:'原区域更名',areaType:'indoor',sortOrder:20,status:'active',expectedUpdatedAt:area.updatedAt,reason:'仅修改区域名称'})
+      expect(rename.statusCode,rename.body).toBe(200)
+      await pool.query("UPDATE mbox.employees SET status='suspended' WHERE id=$1",[employeeOneId])
+      expect((await send('table-update',input,key)).statusCode).toBe(403)
+    }finally{await pool.query("UPDATE mbox.employees SET status='active' WHERE id=$1",[employeeOneId]);await app.close();await runtimePool.end()}
+  })
+
+  it('rechecks area status after a concurrent table lock instead of opening from an obsolete joined snapshot',async()=>{
+    const area=await commands.createArea({...base('race-area'),code:'AREA-RACE',name:'状态竞态区',areaType:'indoor',sortOrder:0,status:'active'})
+    const table=await commands.createTable({...base('race-table'),areaId:area.value.id,code:'AREA-RACE-T',displayName:'竞态桌',capacity:4,status:'available'})
+    const marker='native-area-race-'+randomUUID(),rp=new Pool({connectionString:process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL??databaseUrl,application_name:marker,max:1})
+    const runtime=new ScopedPostgresTransactionRunner(asPool(rp)),service=new TableManagementCommandService(new NormalizedCommandExecutor(runtime)),locked=await pool.connect()
+    let result:Promise<unknown>|null=null
+    try{
+      await locked.query('BEGIN');await locked.query('SELECT id FROM mbox.tables WHERE id=$1 FOR UPDATE',[table.value.id])
+      result=service.open(openCommand(table.value.id,2,'area-race-open')).then(v=>({ok:true,v}),e=>({ok:false,e}))
+      let blocked=false
+      for(let i=0;i<100;i++){const q=await pool.query("SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock'",[marker]);if(q.rowCount){blocked=true;break}await new Promise(r=>setTimeout(r,10))}
+      expect(blocked).toBe(true)
+      await locked.query("UPDATE mbox.areas SET status='paused' WHERE id=$1",[area.value.id]);await locked.query('COMMIT')
+      const outcome=await result as {ok:boolean;e:unknown};expect(outcome.ok).toBe(false);expect(outcome.e).toBeInstanceOf(TableManagementConflictError)
+      expect((await pool.query('SELECT 1 FROM mbox.table_sessions WHERE table_id=$1',[table.value.id])).rowCount).toBe(0)
+    }finally{await locked.query('ROLLBACK');locked.release();if(result)await result;await rp.end()}
   })
 
   function base(suffix: string) {

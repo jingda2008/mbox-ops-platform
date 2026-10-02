@@ -20,7 +20,7 @@ integration('table customer location movements', () => {
   const employeeId=randomUUID()
   const unauthorizedEmployeeId=randomUUID()
   const roleId=randomUUID()
-  const tables=Array.from({ length: 43 }, () => randomUUID())
+  const tables=Array.from({ length: 49 }, () => randomUUID())
   let pool: Pool
   let runtime: Pool
 
@@ -708,6 +708,57 @@ integration('table customer location movements', () => {
     expect(namespaced.rows.map((row) => row.idempotency_key)).toEqual([
       `participant_merge:${sharedKey}`,`whole_table_transfer:${sharedKey}`,
     ])
+  })
+
+  it('native personnel movement recovers permanent receipt after cache deletion and authorizes cached replay',async()=>{
+    const source=await createSession(tables[43]!,2),customer=await createCustomer('native-movement')
+    const participation=await linkParticipant(source,customer,'guest')
+    const participant=(await pool.query<{public_id:string}>('SELECT public_id FROM mbox.table_session_customer_participations WHERE id=$1',[participation])).rows[0]!.public_id
+    const runner=new ScopedPostgresTransactionRunner(runtime as unknown as PostgresPool)
+    let actor=employeeId
+    const app=Fastify()
+    await app.register(tableManagementApiPlugin,{transactions:runner,commands:new TableManagementCommandService(new NormalizedCommandExecutor(runner)),resolveContext:async()=>({scope:{tenantId,storeId},employeeId:actor,businessDate:'2026-08-16'})})
+    const key=`native-participants-${randomUUID()}`
+    const body={employeeId,movementKind:'participant_split',targetTableId:tables[44],targetTableSessionId:null,movedGuestCount:1,participantPublicIds:[participant],reason:'现场确认拆桌',nativeGuard:{sourceTableId:tables[43],sourceLocationVersion:0,sourceGuestCount:2,targetGuestCount:0,targetCapacity:8}}
+    const send=()=>app.inject({method:'POST',url:`/table-management/sessions/${source}/native-participant-movements`,headers:{'x-idempotency-key':key},payload:body})
+    try {
+      const first=await send();expect(first.statusCode,first.body).toBe(200)
+      expect(first.json()).toMatchObject({data:{movedParticipantCount:1,targetGuestCountBefore:0,targetGuestCountAfter:1},meta:{replayed:false}})
+      await pool.query("DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND operation_scope='table.participation.move.native' AND idempotency_key=$3",[tenantId,storeId,key])
+      const recovered=await send();expect(recovered.statusCode,recovered.body).toBe(200)
+      expect(recovered.json()).toEqual({...first.json(),meta:{replayed:true}})
+      const counts=(await pool.query(`SELECT count(*)::int n FROM mbox.audit_events WHERE tenant_id=$1 AND store_id=$2 AND object_id=$3`,[tenantId,storeId,first.json().data.eventId])).rows[0]
+      expect(counts.n).toBe(1)
+      actor=unauthorizedEmployeeId
+      const another=await send();expect(another.statusCode).toBe(400)
+      actor=employeeId
+      const permission=(await pool.query("SELECT id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code='table.participation.manage'",[tenantId,storeId])).rows[0].id
+      const deny=randomUUID()
+      await pool.query("INSERT INTO mbox.employee_permission_overrides(id,tenant_id,store_id,employee_id,permission_id,effect,reason,configured_by_employee_id) VALUES($1,$2,$3,$4,$5,'deny','原生恢复撤权验证',$4)",[deny,tenantId,storeId,employeeId,permission])
+      try { expect((await send()).statusCode).toBe(403) } finally { await pool.query('DELETE FROM mbox.employee_permission_overrides WHERE id=$1',[deny]) }
+    } finally { await app.close() }
+  })
+
+  it('native stale source guard proves rollback while unknown key conflicts stay ambiguous',async()=>{
+    const source=await createSession(tables[45]!,2),customer=await createCustomer('native-stale')
+    const participation=await linkParticipant(source,customer,'guest')
+    const participant=(await pool.query<{public_id:string}>('SELECT public_id FROM mbox.table_session_customer_participations WHERE id=$1',[participation])).rows[0]!.public_id
+    const runner=new ScopedPostgresTransactionRunner(runtime as unknown as PostgresPool),app=Fastify()
+    await app.register(tableManagementApiPlugin,{transactions:runner,commands:new TableManagementCommandService(new NormalizedCommandExecutor(runner)),resolveContext:async()=>({scope:{tenantId,storeId},employeeId,businessDate:'2026-08-16'})})
+    const key=`native-participants-${randomUUID()}`
+    const body={employeeId,movementKind:'participant_split',targetTableId:tables[46],targetTableSessionId:null,movedGuestCount:1,participantPublicIds:[participant],reason:'现场确认拆桌',nativeGuard:{sourceTableId:tables[45],sourceLocationVersion:0,sourceGuestCount:3,targetGuestCount:0,targetCapacity:8}}
+    const send=()=>app.inject({method:'POST',url:`/table-management/sessions/${source}/native-participant-movements`,headers:{'x-idempotency-key':key},payload:body})
+    try {
+      const denied=await send();expect(denied.statusCode,denied.body).toBe(409)
+      expect(denied.json().error).toMatchObject({code:'TABLE_PARTICIPANT_NOT_COMMITTED',commitDisposition:'not_committed'})
+      expect((await pool.query('SELECT guest_count FROM mbox.table_sessions WHERE id=$1',[source])).rows[0].guest_count).toBe(2)
+      body.nativeGuard.sourceGuestCount=2
+      const success=await send();expect(success.statusCode,success.body).toBe(200)
+      await pool.query("DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND operation_scope='table.participation.move.native' AND idempotency_key=$3",[tenantId,storeId,key])
+      body.reason='不同内容不能冒充原请求'
+      const conflict=await send();expect(conflict.statusCode).toBe(409)
+      expect(conflict.json().error.commitDisposition).toBeUndefined()
+    } finally { await app.close() }
   })
 
   async function createSession(tableId: string,guestCount: number) {

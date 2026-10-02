@@ -1,3 +1,4 @@
+import { NativeCommandNotCommittedError } from './command-executor.js'
 import { z } from 'zod'
 import type { FastifyPluginAsync } from 'fastify'
 import type { CustomerBenefitApiOptions } from './customer-benefit-api.js'
@@ -19,9 +20,10 @@ const codec:JsonCodec<JsonValue>={encode:value=>value,decode:value=>value as Jso
 export const memberVisitRewardApiPlugin:FastifyPluginAsync<Options>=async(app,options)=>{
   app.addHook('onRequest',async(_request,reply)=>{reply.header('cache-control','private, no-store')})
   app.setErrorHandler((error,_request,reply)=>{
+    if(error instanceof NativeCommandNotCommittedError)return reply.code(409).send({error:{code:'NATIVE_BUSINESS_NOT_COMMITTED',message:error.original instanceof Error && (error.original instanceof MemberVisitRewardError) ? error.original.message : '本次会员操作未提交，请重新读取后核对',commitDisposition:'not_committed'}})
     if(isStaffAuthenticationRequiredError(error))return reply.code(401).send({error:STAFF_AUTHENTICATION_REQUIRED_ERROR})
     if(error instanceof StaffAccessDeniedError)return reply.code(403).send({error:{code:'VISIT_REWARD_FORBIDDEN',message:'当前账号没有本操作所需的活动管理权限'}})
-    if(error instanceof z.ZodError)return reply.code(400).send({error:{code:'VISIT_REWARD_INVALID',message:'请核对次数、活动、审批记录及原因'}})
+    if(error instanceof z.ZodError || error instanceof TypeError)return reply.code(400).send({error:{code:'VISIT_REWARD_INVALID',message:'请核对次数、活动、审批记录及原因'}})
     if(error instanceof MemberVisitRewardError||error instanceof MemberGiftCampaignError)return reply.code(409).send({error:{code:'VISIT_REWARD_CONFLICT',message:error.message}})
     if(error instanceof IdempotencyConflictError||error instanceof IdempotencyInProgressError)return reply.code(409).send({error:{code:'VISIT_REWARD_RETRY',message:'原操作正在处理或内容已变化，请重新读取核对'}})
     throw error
@@ -32,25 +34,28 @@ export const memberVisitRewardApiPlugin:FastifyPluginAsync<Options>=async(app,op
     return{data:await options.transactions.run(context.scope,async tx=>{
       await new StaffAccessRepository(tx).assertPermission(context.employeeId,'loyalty.configuration.view')
       const repo=new MemberVisitRewardRepository(tx)
-      return {businessDate:context.businessDate,rules:await repo.rules(),...await repo.list(query.date??null,query.status,query.cursor??null)}
+      return {durableNativeDecisions:true,businessDate:context.businessDate,rules:await repo.rules(),...await repo.list(query.date??null,query.status,query.cursor??null)}
     },{readOnly:true})}
   })
-  app.post('/staff/member-visit-rewards',{bodyLimit:8192},async request=>{
+  for(const namespace of ['member-visit-rewards','native-member-visit-rewards'] as const) app.post(`/staff/${namespace}`,{bodyLimit:8192},async request=>{
     const context=await options.resolveStaffContext(request),input=body.parse(request.body)
+    const native=namespace==='native-member-visit-rewards'
+    if(native && !['approve','reject'].includes(input.action))throw new TypeError('原生此入口仅处理奖励审批')
     const key=z.string().regex(/^[A-Za-z0-9:_-]{8,128}$/).parse(request.headers['idempotency-key'])
+    if(native && !/^native-business-[a-f0-9-]{36}$/.test(key))throw new TypeError('原请求编号无效')
     const authorize=async(tx:ScopedTransaction)=>{
       await new StaffAccessRepository(tx).assertPermission(context.employeeId,
         input.action==='configure'||input.action==='stop'?'loyalty.policy.publish':'loyalty.configuration.approve')
     }
     await options.transactions.run(context.scope,authorize,{readOnly:true})
-    const result=await options.commands.execute({scope:context.scope,operationScope:'member.visit.reward',idempotencyKey:key,requestFingerprint:JSON.stringify({employeeId:context.employeeId,...input}),resultCodec:codec},async tx=>{
+    const result=await options.commands.execute({scope:context.scope,operationScope:native?'member.visit.reward.native':'member.visit.reward',retainReceipt:native,idempotencyKey:key,requestFingerprint:JSON.stringify({employeeId:context.employeeId,...input}),resultCodec:codec},async tx=>{
       await authorize(tx)
       const repo=new MemberVisitRewardRepository(tx)
       const result=input.action==='configure'?await repo.create({...input,employeeId:context.employeeId,businessDate:context.businessDate})
         :input.action==='stop'?await repo.stop(input.id,context.employeeId,context.businessDate,input.reason)
         :await repo.decide(input.ids,input.action,context.employeeId,context.businessDate,input.reason)
       return{result:result as JsonValue,auditEvents:[],outboxMessages:[]}
-    })
+    },native?authorize:undefined)
     return{data:result.value,meta:{replayed:result.replayed}}
   })
 }

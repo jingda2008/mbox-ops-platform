@@ -75,6 +75,8 @@ export interface IdempotentCommand<Result> {
   idempotencyKey: string
   requestFingerprint: string
   resultCodec: JsonCodec<Result>
+  /** Opt-in native command receipts survive routine idempotency cleanup. */
+  retainReceipt?: boolean
   ttlMs?: number
   lockMs?: number
   // Only explicitly non-final outcomes may resume, under the original row lock
@@ -132,8 +134,12 @@ export class OutboxMessageConflictError extends Error {
   }
 }
 
+export class NativeCommandNotCommittedError extends Error {
+  constructor(readonly original: unknown) { super("本次操作未提交，请刷新记录后重新确认"); this.name = "NativeCommandNotCommittedError" }
+}
+
 export class NormalizedCommandExecutor {
-  constructor(private readonly transactions: ScopedPostgresTransactionRunner) {}
+  constructor(private readonly transactions: Pick<ScopedPostgresTransactionRunner, 'run'>) {}
 
   execute<Result>(
     command: Readonly<IdempotentCommand<Result>>,
@@ -151,6 +157,7 @@ export class NormalizedCommandExecutor {
         }
       }
 
+      try {
       const outcome = await handler(transaction)
       for (const auditEvent of outcome.auditEvents) {
         await appendAuditEvent(transaction, auditEvent)
@@ -160,6 +167,12 @@ export class NormalizedCommandExecutor {
       }
       await completeIdempotency(transaction, command, outcome.result)
       return { value: outcome.result, replayed: false }
+      } catch (error) {
+        // Only the acquired, never-committed execution is safe to release.
+        // Claim conflicts, authorization checks and COMMIT errors remain unknown.
+        if (command.retainReceipt) throw new NativeCommandNotCommittedError(error)
+        throw error
+      }
     })
   }
 }
@@ -181,7 +194,7 @@ async function claimIdempotency<Result>(
     command.idempotencyKey,
     requestHash,
     command.lockMs ?? DEFAULT_LOCK_MS,
-    command.ttlMs ?? DEFAULT_TTL_MS,
+    command.retainReceipt ? 0 : command.ttlMs ?? DEFAULT_TTL_MS,
   ] as const
 
   // A cleanup worker may delete an expired row after INSERT observes the conflict
@@ -194,7 +207,7 @@ async function claimIdempotency<Result>(
       ) VALUES (
         $1::uuid, $2::uuid, $3, $4, $5, 'processing',
         clock_timestamp() + ($6::bigint * interval '1 millisecond'),
-        clock_timestamp() + ($7::bigint * interval '1 millisecond')
+        CASE WHEN $7::bigint = 0 THEN 'infinity'::timestamptz ELSE clock_timestamp() + ($7::bigint * interval '1 millisecond') END
       )
       ON CONFLICT (tenant_id, store_id, operation_scope, idempotency_key) DO NOTHING
       RETURNING id
@@ -226,7 +239,7 @@ async function claimIdempotency<Result>(
             resource_type = NULL,
             resource_id = NULL,
             locked_until = clock_timestamp() + ($7::bigint * interval '1 millisecond'),
-            expires_at = clock_timestamp() + ($8::bigint * interval '1 millisecond'),
+            expires_at = CASE WHEN $8::bigint = 0 THEN 'infinity'::timestamptz ELSE clock_timestamp() + ($8::bigint * interval '1 millisecond') END,
             created_at = clock_timestamp(),
             updated_at = clock_timestamp()
         WHERE tenant_id = $1::uuid

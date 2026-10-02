@@ -33,6 +33,7 @@ export interface FulfillmentWorkItem {
   canPrepare: boolean
   canDeliver: boolean
   canRemake: boolean
+  canManagerCancel?: boolean
   dueAt: string | null
   nextActionAt: string
   createdAt: string
@@ -76,6 +77,7 @@ export interface FulfillmentStaffView {
     pickupDeviceConfigured?:boolean
     sharedPickupActive?:boolean
     threeScreenRecoveryAvailable?:boolean
+    supportsNativePhysicalRecovery?: boolean
     actionSessionValid?: boolean
   }
   generatedAt: string
@@ -99,6 +101,7 @@ interface FulfillmentRow extends Record<string, unknown> {
   can_prepare: boolean
   can_deliver: boolean
   can_remake: boolean
+  can_manager_cancel?: boolean
   due_at: string | null
   next_action_at: string
   task_created_at: string
@@ -166,9 +169,9 @@ export class FulfillmentQueryService {
       })
 
       return {
-        actor: {...mapActor(access, allowedStations, canViewAll), threeScreenWorkflowEnabled:this.threeScreenWorkflowEnabled, pickupDeviceConfigured, sharedPickupActive, threeScreenRecoveryAvailable:barRecovery||sharedPickupActive, kitchenBatchBoardEnabled:canPrepare&&allowedStations.includes('kitchen')&&(this.kitchenBatchBoardEnabled||kitchenRecovery), ...(actionSession ? {actionSessionValid} : {})},
+        actor: {...mapActor(access, allowedStations, canViewAll), supportsNativePhysicalRecovery:true, threeScreenWorkflowEnabled:this.threeScreenWorkflowEnabled, pickupDeviceConfigured, sharedPickupActive, threeScreenRecoveryAvailable:barRecovery||sharedPickupActive, kitchenBatchBoardEnabled:canPrepare&&allowedStations.includes('kitchen')&&(this.kitchenBatchBoardEnabled||kitchenRecovery), ...(actionSession ? {actionSessionValid} : {})},
         generatedAt: rows[0]?.generated_at ?? new Date().toISOString(),
-        workItems: rows.map(row => { const item = mapWorkItem(row); return actionSessionValid ? item : { ...item, canPrepare:false, canDeliver:false, canRemake:false, attentionMessages:[...item.attentionMessages,'当前设备会话已失效，请恢复登录后继续原任务'] } }),
+        workItems: rows.map(row => { const item = mapWorkItem(row); return actionSessionValid ? item : { ...item, canPrepare:false, canDeliver:false, canRemake:false, canManagerCancel:false, attentionMessages:[...item.attentionMessages,'当前设备会话已失效，请恢复登录后继续原任务'] } }),
       }
     }, { isolation: 'repeatable-read', readOnly: true })
   }
@@ -227,6 +230,9 @@ async function readFulfillmentRows(
         AND task.station_code = ANY($11::text[])
         AND ($10::boolean OR assignment.assignment_type IS NOT NULL)
       ) AS can_remake,
+      ($9::boolean AND task.status IN ('pending','accepted','preparing','failed') AND portions.total=0
+        AND (cardinality($11::text[]) = 0 OR task.station_code = ANY($11::text[]))
+        AND ($10::boolean OR assignment.assignment_type IS NOT NULL)) AS can_manager_cancel,
       task.due_at::text,
       task.next_action_at::text,
       task.created_at::text AS task_created_at,
@@ -339,8 +345,8 @@ async function readFulfillmentRows(
         )
         OR (
           $9::boolean
-          AND task.status = 'failed'
-          AND task.station_code = ANY($11::text[])
+          AND task.status IN ('pending','accepted','preparing','failed')
+          AND (cardinality($11::text[]) = 0 OR task.station_code = ANY($11::text[]))
           AND ($10::boolean OR assignment.assignment_type IS NOT NULL)
         )
       )
@@ -436,6 +442,7 @@ function mapWorkItem(row: FulfillmentRow): FulfillmentWorkItem {
     canPrepare: row.can_prepare,
     canDeliver: row.can_deliver,
     canRemake: row.can_remake,
+    canManagerCancel: row.can_manager_cancel === true,
     dueAt: row.due_at,
     nextActionAt: row.next_action_at,
     createdAt: row.task_created_at,

@@ -1,3 +1,4 @@
+import { AssignmentRecovery, stableAssignmentIntent, validateAssignmentReceipt, type AssignmentRecoverySummary } from './assignment-recovery'
 import type {KitchenBoardData,KitchenCommand,KitchenCommandResult,KitchenHandoffPreview} from '../../shared/kitchen-production'
 import { staffErrorMessage, staffUnavailableMessage } from '../../shared/staff-error-message'
 import { STAFF_SESSION_BINDING_HEADER } from '../../shared/staff-session-binding'
@@ -26,6 +27,7 @@ export class StaffActionsApiError extends Error {
   readonly status: number | null
   readonly partialMutation: boolean
   readonly referenceId: string | null
+  commitDisposition?: string
 
   constructor(
     message: string,
@@ -268,6 +270,8 @@ export interface StaffActionsApiPort {
   loadReservations(options?: StaffReservationListOptions, signal?: AbortSignal): Promise<StaffReservation[]>
   loadReservationIntake?(signal?: AbortSignal): Promise<StaffReservationIntakeEntry[]>
   overrideReservationPriority?(input: Readonly<{ kind: 'reservation' | 'waitlist'; publicId: string; mode: 'promote' | 'demote' | 'clear'; reason: string }>): Promise<void>
+  pendingTableAssignment?(): AssignmentRecoverySummary | null
+  recoverTableAssignment?(): Promise<void>
   loadTableAssignments(signal?: AbortSignal): Promise<StaffTableAssignment[]>
   loadTableAssignmentOptions(signal?: AbortSignal): Promise<StaffTableAssignmentOptions>
   assignTables(input: Readonly<{
@@ -455,6 +459,8 @@ export class StaffActionsApi implements StaffActionsApiPort {
   private readonly pendingKdsCommands = new Map<string, {key:string;quantity?:number}>()
   private readonly commandStorage:StaffActionsApiOptions['commandStorage']
   private employeeId = 'current-session'
+  private guardedAssignments = false
+  private readonly assignmentRecovery: AssignmentRecovery
   private readonly staffSessionId: string | undefined
   private readonly send: typeof fetch
   private readonly timeoutMs: number
@@ -466,6 +472,15 @@ export class StaffActionsApi implements StaffActionsApiPort {
     this.send = options.fetch ?? globalThis.fetch.bind(globalThis)
     this.timeoutMs = options.timeoutMs ?? 8_000
     this.createIdempotencyKey = options.createIdempotencyKey ?? (() => crypto.randomUUID())
+    this.assignmentRecovery = new AssignmentRecovery(this.commandStorage,
+      () => ({ employeeId: this.employeeId === 'current-session' ? null : this.employeeId, sessionId: this.staffSessionId ?? null }),
+      async (path, body, key) => {
+        const actorId = this.employeeId
+        const response = await this.request(path, { method: 'POST', body,
+          headers: new Headers({ 'content-type': 'application/json', 'x-idempotency-key': key }) })
+        const receipt = await readJson(response)
+        validateAssignmentReceipt(receipt, path, body, actorId)
+      })
   }
 
   async loadOperations(signal?: AbortSignal): Promise<StaffOperationsData> {
@@ -563,12 +578,31 @@ export class StaffActionsApi implements StaffActionsApiPort {
     }, 'idempotency-key')
   }
 
-  loadTableAssignments(signal?: AbortSignal): Promise<StaffTableAssignment[]> {
-    return this.getData('/api/table-management/assignments', signal)
+  pendingTableAssignment(): AssignmentRecoverySummary | null {
+    // Old servers retain the original webpage behavior; an already recorded
+    // guarded command remains recoverable even during a server rollback.
+    try {
+      if (!this.guardedAssignments && this.commandStorage?.getItem('mbox.assignment-recovery.v1') == null) return null
+    } catch { /* summary reports storage damage without crashing the page */ }
+    return this.assignmentRecovery.summary()
+  }
+  async recoverTableAssignment(): Promise<void> { await this.assignmentRecovery.recover() }
+  async loadTableAssignments(signal?: AbortSignal): Promise<StaffTableAssignment[]> {
+    const confirmationKey = this.pendingTableAssignment() ? this.assignmentRecovery.confirmedReadToken() : null
+    const rows = await this.getData<StaffTableAssignment[]>('/api/table-management/assignments', signal)
+    if (!Array.isArray(rows)) throw new StaffActionsApiError('责任列表无法确认，请重新读取', 'INVALID_RESPONSE', null)
+    if (!signal?.aborted) await this.assignmentRecovery.acknowledgeRead(confirmationKey)
+    return rows
   }
 
-  loadTableAssignmentOptions(signal?: AbortSignal): Promise<StaffTableAssignmentOptions> {
-    return this.getData('/api/table-management/assignment-options', signal)
+  async loadTableAssignmentOptions(signal?: AbortSignal): Promise<StaffTableAssignmentOptions> {
+    this.guardedAssignments = false
+    const data = await this.getData<StaffTableAssignmentOptions>('/api/table-management/assignment-options', signal)
+    if (!signal?.aborted) {
+      this.guardedAssignments = data.supportsGuardedAssignmentRecovery === true
+      if (typeof data.currentEmployeeId === 'string' && data.currentEmployeeId) this.employeeId = data.currentEmployeeId
+    }
+    return data
   }
 
   async assignTables(input: Readonly<{
@@ -580,10 +614,24 @@ export class StaffActionsApi implements StaffActionsApiPort {
     endsAt?: string | null
     reason: string
   }>): Promise<void> {
+    if (this.guardedAssignments || this.pendingTableAssignment()) {
+      const body = { ...input, tableIds: [...input.tableIds].sort(), endsAt: input.endsAt ?? null }
+      await this.assignmentRecovery.run(stableAssignmentIntent({ kind: 'batch', ...body }), () => ({
+        path: '/api/table-management/guarded-assignments/batch', body, key: `web-assignment-${this.createIdempotencyKey()}`,
+      }))
+      return
+    }
     await this.command('/api/table-management/assignments/batch', input, 'x-idempotency-key')
   }
 
   async endTableAssignment(assignmentId: string, reason: string): Promise<void> {
+    if (this.guardedAssignments || this.pendingTableAssignment()) {
+      await this.assignmentRecovery.run(stableAssignmentIntent({ kind: 'end', assignmentId, reason }), () => ({
+        path: `/api/table-management/guarded-assignments/${encodeURIComponent(assignmentId)}/end`,
+        body: { endsAt: new Date().toISOString(), reason }, key: `web-assignment-${this.createIdempotencyKey()}`,
+      }))
+      return
+    }
     await this.command(
       `/api/table-management/assignments/${encodeURIComponent(assignmentId)}/end`,
       { endsAt: new Date().toISOString(), reason },
@@ -1213,13 +1261,15 @@ async function apiError(response: Response, method: string): Promise<StaffAction
       ? body.error.referenceId
       : null
     const message = staffErrorMessage(body.error.message, fallback, response.status)
-    return new StaffActionsApiError(
+    const error = new StaffActionsApiError(
       message,
       typeof body.error.code === 'string' ? body.error.code : 'HTTP_ERROR',
       response.status,
       false,
       referenceId,
     )
+    if (typeof body.error.commitDisposition === 'string') error.commitDisposition = body.error.commitDisposition
+    return error
   }
   return new StaffActionsApiError(fallback, 'HTTP_ERROR', response.status)
 }

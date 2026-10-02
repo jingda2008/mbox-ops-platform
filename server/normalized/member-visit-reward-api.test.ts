@@ -24,6 +24,11 @@ function setup(denied:string|null=null){
   return {app,run,execute,permission,decide,create,list}
 }
 describe('attendance reward management API',()=>{
+  it('native approval retains original receipt and rechecks authority before replay',async()=>{
+    const value=setup();const r=await value.app.inject({method:'POST',url:'/staff/native-member-visit-rewards',headers:{'idempotency-key':'native-business-33333333-3333-4333-8333-333333333333'},payload})
+    expect(r.statusCode).toBe(200);expect(value.execute.mock.calls[0]?.[0]).toMatchObject({operationScope:'member.visit.reward.native',retainReceipt:true})
+    const before=value.execute.mock.calls[0]?.[2];expect(before).toBeTypeOf('function');value.permission.mockRejectedValue(new StaffAccessDeniedError('revoked'));await expect(before({scope})).rejects.toThrow('revoked')
+  })
   it('keeps reads scoped, private and read-only with date and state filters',async()=>{
     const value=setup(),r=await value.app.inject({method:'GET',url:'/staff/member-visit-rewards?date=2026-09-25&status=pending'})
     expect(r.statusCode).toBe(200);expect(r.headers['cache-control']).toContain('no-store')

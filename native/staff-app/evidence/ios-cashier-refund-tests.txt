@@ -1,0 +1,34 @@
+PASS refund captures explicit purpose and original allocation amount
+PASS restart preserves refund key body and acknowledgement binding
+PASS item or payment cap blocks excess refund
+PASS foreign item cannot be allocated to original payment
+PASS funds-only allocation rejects return_goods
+PASS funds-only allocation rejects service_compensation
+PASS explicit deny overrides refund approval grant
+PASS server workbench flag independently blocks refund
+PASS requester cannot approve own refund
+PASS requester cannot reject own refund
+PASS different employee approval retains reason
+PASS associated item case cannot bypass original after-sales approval
+PASS requested refund cannot execute before approval
+PASS cash refund receipt is assigned by server after physical confirmation
+PASS online refund cannot be manually marked paid
+PASS submitted online refund cannot be executed again
+PASS channel query processing is a completed query not a successful refund
+PASS lost refund acknowledgement retries identical original body and key
+PASS wrong refund amount never clears original request
+PASS wrong original payment cannot acknowledge refund
+PASS local closure with pending channel observation remains a query result
+PASS refund receipt must match original item allocations
+PASS export is UTF8 BOM with spreadsheet compatible row breaks
+PASS CSV uses explicit Shanghai time rather than device timezone
+PASS bundle included lines do not invent a second charge
+PASS missing preparation and delivery evidence remains blank
+PASS CSV escapes formulas quotes commas and line breaks
+PASS CSV money retains exact cents as numeric text
+PASS CSV protects leading CRLF as well as a single newline
+PASS all export preserves literal filters and resets pagination
+PASS page export keeps selected page
+PASS over-limit CSV refuses rather than silently truncates
+PASS cashier-only role retains original session for readback without changing server payload
+33 cashier checks passed

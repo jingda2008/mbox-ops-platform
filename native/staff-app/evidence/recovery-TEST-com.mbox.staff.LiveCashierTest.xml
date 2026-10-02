@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mbox.staff.LiveCashierTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-09-26T18:18:38.626Z" hostname="jingdadeMacBook-Pro.local" time="0.035">
+  <properties/>
+  <testcase name="executionAndManualResultBoundaries" classname="com.mbox.staff.LiveCashierTest" time="0.01"/>
+  <testcase name="lostAcknowledgementAndWrongMoney" classname="com.mbox.staff.LiveCashierTest" time="0.004"/>
+  <testcase name="makerCheckerAndCaseIsolation" classname="com.mbox.staff.LiveCashierTest" time="0.003"/>
+  <testcase name="historyCloseLostReceiptRetainsOriginalCommand" classname="com.mbox.staff.LiveCashierTest" time="0.005"/>
+  <testcase name="historyCloseWholeScopeAndCapabilities" classname="com.mbox.staff.LiveCashierTest" time="0.005"/>
+  <testcase name="originalItemCapsAndPurpose" classname="com.mbox.staff.LiveCashierTest" time="0.002"/>
+  <testcase name="recollectionAuthorizationIsNotCollection" classname="com.mbox.staff.LiveCashierTest" time="0.004"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

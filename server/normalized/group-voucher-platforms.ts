@@ -34,6 +34,8 @@ export interface PreparedGroupVoucher {
 }
 
 export interface ConsumedGroupVoucher {
+  faceValueProvided?: boolean
+  settlementAmountProvided?: boolean
   platform: GroupVoucherPlatformCode
   campaignName: string
   faceValueMinor: number
@@ -552,6 +554,8 @@ function mapMeituanConsume(payload: Record<string, unknown>, code: string): Cons
     campaignName: readString(deal.dealTitle) ?? '美团团购券',
     faceValueMinor: yuanToMinor(deal.dealPrice ?? deal.faceValue),
     settlementAmountMinor: yuanToMinor(deal.merchantAmount ?? deal.dealPromoPrice ?? deal.dealPrice),
+    faceValueProvided: (deal.dealPrice ?? deal.faceValue) !== undefined && (deal.dealPrice ?? deal.faceValue) !== null,
+    settlementAmountProvided: (deal.merchantAmount ?? deal.dealPromoPrice ?? deal.dealPrice) !== undefined && (deal.merchantAmount ?? deal.dealPromoPrice ?? deal.dealPrice) !== null,
     currency: 'CNY',
     certificateId: readString(deal.receiptCode) ?? code,
     verifyId: readString(deal.verifyId) ?? readString(payload.orderId) ?? code,
@@ -581,6 +585,8 @@ function mapDianpingConsume(payload: Record<string, unknown>, code: string): Con
     campaignName: readString(deal.deal_title) ?? '大众点评团购券',
     faceValueMinor: yuanToMinor(deal.deal_price ?? deal.face_value),
     settlementAmountMinor: yuanToMinor(deal.settlement_amount ?? deal.deal_price),
+    faceValueProvided: (deal.deal_price ?? deal.face_value) !== undefined && (deal.deal_price ?? deal.face_value) !== null,
+    settlementAmountProvided: (deal.settlement_amount ?? deal.deal_price) !== undefined && (deal.settlement_amount ?? deal.deal_price) !== null,
     currency: 'CNY',
     certificateId: readString(deal.receipt_id) ?? code,
     verifyId: readString(deal.verify_id) ?? readString(payload.order_id) ?? code,
@@ -615,6 +621,8 @@ function mapDouyinConsume(payload: Record<string, unknown>, requestId: string): 
     campaignName: readString(verify.title) ?? '抖音团购券',
     faceValueMinor: fenToMinor(verify.origin_amount ?? verify.market_price),
     settlementAmountMinor: fenToMinor(verify.settle_amount ?? verify.origin_amount),
+    faceValueProvided: (verify.origin_amount ?? verify.market_price) !== undefined && (verify.origin_amount ?? verify.market_price) !== null,
+    settlementAmountProvided: (verify.settle_amount ?? verify.origin_amount) !== undefined && (verify.settle_amount ?? verify.origin_amount) !== null,
     currency: 'CNY',
     certificateId: readString(verify.certificate_id) ?? readString(verify.encrypted_code) ?? requestId,
     verifyId: readString(verify.verify_id) ?? readString(data.verify_id) ?? requestId,
@@ -645,6 +653,8 @@ function mapKuaishouConsume(payload: Record<string, unknown>, requestId: string)
     campaignName: readString(data.title) ?? '快手团购券',
     faceValueMinor: fenToMinor(data.market_price ?? data.origin_amount),
     settlementAmountMinor: fenToMinor(data.settle_amount ?? data.market_price),
+    faceValueProvided: (data.market_price ?? data.origin_amount) !== undefined && (data.market_price ?? data.origin_amount) !== null,
+    settlementAmountProvided: (data.settle_amount ?? data.market_price) !== undefined && (data.settle_amount ?? data.market_price) !== null,
     currency: 'CNY',
     certificateId: readString(data.certificate_id) ?? requestId,
     verifyId: readString(data.verify_id) ?? requestId,

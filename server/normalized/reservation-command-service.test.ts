@@ -610,6 +610,24 @@ integration('normalized reservation, customer and benefit transactions', () => {
     expect(rollbackEvidence.rows[0]).toEqual({ benefits: '0', idempotency: '0' })
   })
 
+  it('retains native creation through cleanup and skips changed timing on replay while rechecking authority', async()=>{
+    const table=randomUUID()
+    await nativePool.query(`INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity) VALUES($1,$2,$3,$4,$5,'Native table',4)`,[table,tenantId,storeId,areaId,'NC'+table.slice(0,8)])
+    let preparations=0,authorizations=0,revoked=false
+    const key='native-business-'+randomUUID()
+    const input={scope:{tenantId,storeId},actor:{type:'system' as const,ref:'native-test'},businessDate:'2026-09-28',publicId:'NRES-'+randomUUID(),customerName:'Native guest',contactToken:'private-native-contact',guestCount:2,arrivalAt:new Date(Date.now()+86400000).toISOString(),expectedEndAt:new Date(Date.now()+93600000).toISOString(),source:'phone' as const,initialStatus:'confirmed' as const,tableIds:[table],idempotencyKey:key,requestFingerprint:'native-create-original',nativeReceipt:true,
+      authorizeNative:async()=>{authorizations++;if(revoked)throw new Error('permission revoked')},prepareNative:async()=>{preparations++;if(preparations>1)throw new Error('arrival now past');return {customerCancelUntil:new Date(Date.now()+3600000).toISOString()}}}
+    const first=await reservations.create(input)
+    await nativePool.query(`DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND expires_at<clock_timestamp()`,[tenantId,storeId])
+    const replay=await reservations.create(input)
+    expect(replay.replayed).toBe(true);expect(replay.value.id).toBe(first.value.id);expect(preparations).toBe(1);expect(authorizations).toBe(2)
+    const evidence=await nativePool.query(`SELECT expires_at::text FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$3`,[tenantId,storeId,key])
+    expect(evidence.rows[0].expires_at).toBe('infinity')
+    revoked=true;await expect(reservations.create(input)).rejects.toThrow('permission revoked')
+    revoked=false;await expect(reservations.create({...input,requestFingerprint:'different-employee'})).rejects.toThrow()
+    const audit=await nativePool.query(`SELECT count(*)::int n FROM mbox.audit_events WHERE tenant_id=$1 AND store_id=$2 AND object_id=$3 AND action='reservation.created'`,[tenantId,storeId,first.value.id]);expect(audit.rows[0].n).toBe(1)
+  })
+
   function customerCreate(suffix: string, hashCharacter: string) {
     return {
       scope: { tenantId, storeId },

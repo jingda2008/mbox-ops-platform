@@ -1,3 +1,5 @@
+import {nativePhysicalExecutor,isNativePhysicalKey} from './native-physical-command.js'
+import {assertEmployeeEffectivePermission} from './employee-table-access.js'
 import {NormalizedCommandExecutor,type JsonCodec,type JsonValue} from './command-executor.js'
 import type {ScopedTransaction,StoreScope} from './transaction-runner.js'
 import {QuantityRedeliveryRepository} from './quantity-redelivery-repository.js'
@@ -19,7 +21,9 @@ export class QuantityRedeliveryCommandService {
     return this.execute(input,'cancel',{redeliveryId:input.redeliveryId},tx=>new QuantityRedeliveryRepository(tx).cancel({...input,eventKey:`${input.idempotencyKey}:cancel`}))
   }
   private execute(input:Metadata,action:'request'|'complete'|'cancel',selection:Record<string,JsonValue>,handler:(tx:ScopedTransaction)=>Promise<Progress>){
-    return this.commands.execute({scope:input.scope,operationScope:`quantity.redelivery.${action}`,idempotencyKey:input.idempotencyKey,
+    const commands=isNativePhysicalKey(input.idempotencyKey)?nativePhysicalExecutor(this.commands,input,
+      tx=>assertEmployeeEffectivePermission(tx,input.employeeId,action==='request'?'refund.request':action==='complete'?'kds.deliver':'service.execute')):this.commands
+    return commands.execute({scope:input.scope,operationScope:`quantity.redelivery.${action}`,idempotencyKey:input.idempotencyKey,
       requestFingerprint:JSON.stringify({employeeId:input.employeeId,action,...selection,reason:input.reason.trim()}),resultCodec:codec},async tx=>{
       const result=await handler(tx)
       return {result,auditEvents:[{actor:{type:'employee' as const,employeeId:input.employeeId},action:`quantity_redelivery.${action}`,objectType:'service_task',objectId:result.taskId,businessDate:input.businessDate,reason:input.reason.trim(),metadata:{redeliveryId:result.id,orderItemId:result.itemId,...selection}}],outboxMessages:[{aggregateType:'service_task',aggregateId:result.taskId,aggregateVersion:result.selectedQuantity+result.deliveredQuantity+result.cancelledQuantity,eventType:'service_task.redelivery_progress.v1',payload:{taskId:result.taskId,redeliveryId:result.id,status:result.status,pendingQuantity:result.pendingQuantity,deliveredQuantity:result.deliveredQuantity}}]}

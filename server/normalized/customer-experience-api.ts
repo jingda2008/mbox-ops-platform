@@ -1,3 +1,4 @@
+import { NativeCommandNotCommittedError } from './command-executor.js'
 import { createHash } from 'node:crypto'
 import { selectPublicPrivacyPolicy, type PublicPrivacyPolicyView } from './approved-privacy-policy.js'
 import {registerOrderFinancialRecoveryRoutes} from './order-financial-recovery-api.js'
@@ -882,10 +883,18 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
     return reply.send({ data: result })
   }))
 
-  app.post<{ Params: { tableSessionId: string } }>('/staff/table-sessions/:tableSessionId/observations/parse', async (request, reply) => handle(reply, async () => {
+  app.get<{Params:{tableSessionId:string}}>('/staff/native-table-sessions/:tableSessionId/observations',async(request,reply)=>handle(reply,async()=>{
+    reply.header('cache-control','private, no-store')
+    const context=await staffContextWithPermission(options,request,'observation.record')
+    return reply.send({data:await options.service.nativeObservationBoard(context,uuid(request.params.tableSessionId,'桌次'))})
+  }))
+  for(const native of [false,true]){
+  app.post<{ Params: { tableSessionId: string } }>(`/staff/${native?'native-table-sessions':'table-sessions'}/:tableSessionId/observations/parse`, async (request, reply) => handle(reply, async () => {
     const context = await staffContextWithPermission(options, request, 'observation.record')
     const body = objectBody(request.body)
+    if(native && !/^native-business-[a-f0-9-]{36}$/.test(idempotencyKey(request)))throw new CustomerExperienceRequestError('原请求编号无效')
     const result = await options.service.parseObservation(context, {
+      ...(native ? {nativeReceipt:true} : {}),
       tableSessionId: uuid(request.params.tableSessionId, '桌次'),
       rawContent: text(body.rawContent, '观察原文', 1, 2000),
       inputKind: enumValue(body.inputKind ?? 'text', '输入方式', ['text', 'voice_transcript'] as const),
@@ -895,10 +904,13 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
     return reply.code(result.replayed ? 200 : 201).send({ data: result.value, meta: { replayed: result.replayed } })
   }))
 
-  app.post<{ Params: { publicId: string } }>('/staff/observations/:publicId/confirm', async (request, reply) => handle(reply, async () => {
+  app.post<{ Params: { publicId: string } }>(`/staff/${native?'native-observations':'observations'}/:publicId/confirm`, async (request, reply) => handle(reply, async () => {
     const context = await staffContextWithPermission(options, request, 'observation.confirm')
     const body = objectBody(request.body)
+    if(native && !/^native-business-[a-f0-9-]{36}$/.test(idempotencyKey(request)))throw new CustomerExperienceRequestError('原请求编号无效')
+    if(native && (!Array.isArray(body.events) || body.events.length===0))throw new CustomerExperienceRequestError('请核对并选择具体观察事实')
     const result = await options.service.confirmObservation(context, {
+      ...(native ? {nativeReceipt:true} : {}),
       publicId: publicId(request.params.publicId),
       events: observationEvents(body.events ?? body.corrections ?? []),
       idempotencyKey: idempotencyKey(request),
@@ -906,10 +918,12 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
     return reply.send({ data: result.value, meta: { replayed: result.replayed } })
   }))
 
-  app.post<{ Params: { publicId: string; eventId: string } }>('/staff/observations/:publicId/events/:eventId/revise', async (request, reply) => handle(reply, async () => {
+  app.post<{ Params: { publicId: string; eventId: string } }>(`/staff/${native?'native-observations':'observations'}/:publicId/events/:eventId/revise`, async (request, reply) => handle(reply, async () => {
     const context = await staffContextWithPermission(options, request, 'observation.correct')
     const body = objectBody(request.body)
+    if(native && !/^native-business-[a-f0-9-]{36}$/.test(idempotencyKey(request)))throw new CustomerExperienceRequestError('原请求编号无效')
     const result = await options.service.reviseObservation(context, {
+      ...(native ? {nativeReceipt:true} : {}),
       publicId: publicId(request.params.publicId),
       previousEventId: uuid(request.params.eventId, '原观察事件'),
       reason: text(body.reason, '修正原因', 2, 500),
@@ -918,6 +932,8 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
     })
     return reply.send({ data: result.value, meta: { replayed: result.replayed } })
   }))
+
+  }
 
   app.get('/staff/customer-experience/recommendation-policies', async (request, reply) => handle(reply, async () => {
     const context = await staffContextWithPermission(options, request, 'recommendation.rule.view')
@@ -1209,6 +1225,7 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
       const result = await options.activityPayments.requestRefund(context, {
         registrationPublicId: publicId(request.params.registrationPublicId),
         paymentPublicId: optionalText(body.paymentPublicId, '付款编号', 128),
+        ...(body.expectedPaymentPublicId === undefined ? {} : { expectedPaymentPublicId: optionalText(body.expectedPaymentPublicId, '原付款编号', 128) }),
         reason: text(body.reason, '退款原因', 2, 1000),
         idempotencyKey: idempotencyKey(request),
       })
@@ -1728,6 +1745,7 @@ async function staffContextWithAnyPermission(
 
 async function handle(reply: FastifyReply, action: () => Promise<unknown>) {
   try { return await action() } catch (error) {
+    if(error instanceof NativeCommandNotCommittedError)return reply.code(409).send({error:{code:'NATIVE_BUSINESS_NOT_COMMITTED',message:error.original instanceof CustomerExperienceRequestError ? error.original.message : '观察记录尚未提交，请刷新后核对',commitDisposition:'not_committed'}})
     const mapped = errorResponse(error)
     return reply.code(mapped.statusCode).send({ error: { code: mapped.code, message: mapped.message } })
   }

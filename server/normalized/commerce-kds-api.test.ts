@@ -369,6 +369,7 @@ function fixture(input: {
       if (sql.includes('FROM mbox.role_approval_limits') || sql.includes('FROM mbox.role_navigation_items')) {
         return rows([]) as PostgresQueryResult<Row>
       }
+      if (sql.includes("action='native.physical.receipt'")) return rows([]) as PostgresQueryResult<Row>
       throw new Error(`Unexpected command query: ${sql}`)
     },
   }
@@ -380,7 +381,9 @@ function fixture(input: {
     execute: vi.fn(async <Result>(
       command: Readonly<IdempotentCommand<Result>>,
       operation: (transaction: ScopedTransaction) => Promise<CommandOutcome<Result>>,
+      beforeClaim?: (transaction: ScopedTransaction) => Promise<void>,
     ) => {
+      await beforeClaim?.(commandTransaction)
       const outcome = await operation(commandTransaction)
       executions.push({
         command: command as IdempotentCommand<unknown>,
@@ -1190,6 +1193,28 @@ describe('commerceKdsApiPlugin', () => {
     })
     expect(conflictResponse.statusCode).toBe(409)
     expect(conflictResponse.json()).toMatchObject({ error: { code: 'IDEMPOTENCY_CONFLICT' } })
+  })
+
+  it.each(['start','complete','fail','manager-cancel'])('routes native %s through permanent receipt and live authorization',async action=>{
+    const {app,executions}=fixture({kdsStatus:action==='manager-cancel'?'pending':'preparing'})
+    const suffix=action==='manager-cancel'?action:'actions'
+    const response=await app.inject({method:'POST',url:`/api/commerce/native-kds/${taskId}/${suffix}`,
+      headers:{'idempotency-key':`native-fulfillment-${action}`},payload:{action,employeeId,reasonCode:'production_exception',reason:'现场核对原任务'}})
+    expect(response.statusCode,response.body).toBe(200)
+    expect(executions[0]!.command.operationScope).toMatch(/\.native$/)
+    expect(executions[0]!.outcome.auditEvents.at(-1)).toMatchObject({action:'native.physical.receipt',actor:{employeeId}})
+  })
+  it('does not downgrade native route with an unguarded key',async()=>{
+    const {app,executions}=fixture()
+    const response=await app.inject({method:'POST',url:`/api/commerce/native-kds/${taskId}/actions`,
+      headers:{'idempotency-key':'old-web-key'},payload:{action:'complete',employeeId}})
+    expect(response.statusCode).toBe(400);expect(executions).toHaveLength(0)
+  })
+  it('denies native KDS mutations after permission revocation before any receipt',async()=>{
+    const {app,executions}=fixture({permissions:['order.view']})
+    const response=await app.inject({method:'POST',url:`/api/commerce/native-kds/${taskId}/manager-cancel`,
+      headers:{'idempotency-key':'native-fulfillment-revoked'},payload:{employeeId,reasonCode:'production_exception',reason:'现场核对原任务'}})
+    expect(response.statusCode).toBe(403);expect(executions).toHaveLength(0)
   })
 
   it('contains no dependency on retired state or projection paths', async () => {

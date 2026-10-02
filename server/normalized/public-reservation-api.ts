@@ -1,3 +1,4 @@
+import { NativeCommandNotCommittedError } from './command-executor.js'
 import {lockReservationPolicy} from './reservation-policy-lock.js'
 import { createHash, randomUUID } from 'node:crypto'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
@@ -651,10 +652,62 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
     })
   ))
 
-  app.post<{ Params: { kind: string; publicId: string } }>('/staff/reservation-intake/:kind/:publicId/priority-override', async (request, reply) => handle(reply, async () => {
+  app.get('/staff/native-waitlist-capabilities', async (request, reply) => handle(reply, async () => {
+    const context = await options.resolveStaff(request)
+    requirePermission(context, 'reservation.view')
+    return reply.send({data:{durableTransitions:true}})
+  }))
+
+  app.post<{Params:{publicId:string}}>('/staff/native-waitlist/:publicId/transition', async(request,reply)=>handle(reply,async()=>{
+    const context=await options.resolveStaff(request)
+    requirePermission(context,'reservation.manage')
+    const body=readObject(request.body)
+    const publicId=readPublicId(request.params.publicId)
+    const expectedStatus=readString(body.expectedStatus,'原候位状态',1,32)
+    const to=readString(body.to,'目标候位状态',1,32)
+    const reason=readString(body.reason,'处理说明',2,500)
+    if(!['waiting','notified','arrived'].includes(expectedStatus)
+      || !['notified','arrived','seated','cancelled','expired'].includes(to)) throw new PublicReservationRequestError('候位状态无效')
+    const key=readIdempotencyKey(request)
+    if(!/^native-business-[a-f0-9-]{36}$/.test(key))throw new PublicReservationRequestError('原请求编号无效')
+    const businessDate=await options.currentBusinessDate(context.scope)
+    const execution=await options.commands.execute({scope:context.scope,
+      operationScope:'waitlist.transition.native',retainReceipt:true,idempotencyKey:key,
+      requestFingerprint:fingerprint({publicId,expectedStatus,to,reason,employeeId:context.employeeId}),
+      resultCodec:nativeWaitlistReceiptCodec,
+    },async tx=>{
+      const row=(await tx.query<{id:string;status:string}>(`SELECT id,status FROM mbox.waitlist_entries
+        WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND public_id=$3 FOR UPDATE`,
+        [context.scope.tenantId,context.scope.storeId,publicId])).rows[0]
+      if(!row)throw new PublicReservationOwnershipError()
+      if(row.status!==expectedStatus)throw new PublicReservationRequestError('候位状态已变化，请刷新后重新核对')
+      const mutation=await new WaitlistRepository(tx).transition({id:row.id,
+        to:to as 'notified'|'arrived'|'seated'|'cancelled'|'expired',actorType:'employee',
+        actorRefHash:createHash('sha256').update(context.employeeId).digest('hex'),reason})
+      const result={id:mutation.entry.id,publicId,status:mutation.entry.status,previousStatus:expectedStatus,reason}
+      return {result,auditEvents:[{actor:{type:'employee' as const,employeeId:context.employeeId},
+        action:'waitlist.transition.native',objectType:'waitlist_entry',objectId:row.id,businessDate,reason,
+        beforeData:{status:expectedStatus},afterData:result}],outboxMessages:[]}
+    },async tx=>{
+      // Apply visibility before both fresh writes and durable receipt replay, including terminal rows.
+      const current=await options.resolveStaff(request)
+      requirePermission(current,'reservation.manage')
+      if(current.employeeId!==context.employeeId || current.scope.storeId!==context.scope.storeId
+        || current.scope.tenantId!==context.scope.tenantId)throw new PublicReservationStaffPermissionError()
+      const visible=await tx.query(`SELECT id FROM mbox.waitlist_entries WHERE tenant_id=$1::uuid
+        AND store_id=$2::uuid AND public_id=$3 AND ($4::boolean OR owner_employee_id=ANY($5::uuid[])) FOR UPDATE`,
+        [current.scope.tenantId,current.scope.storeId,publicId,current.permissions.includes('reservation.view.all'),[...current.visibleOwnerEmployeeIds]])
+      if(visible.rowCount!==1)throw new PublicReservationOwnershipError()
+    })
+    return reply.send({data:execution.value,meta:{replayed:execution.replayed}})
+  }))
+
+  for (const namespace of ['reservation-intake','native-reservation-intake'] as const) {
+  app.post<{ Params: { kind: string; publicId: string } }>(`/staff/${namespace}/:kind/:publicId/priority-override`, async (request, reply) => handle(reply, async () => {
     const context = await options.resolveStaff(request)
     requirePermission(context, 'reservation.manage')
     const body = readObject(request.body)
+    if(namespace === 'native-reservation-intake' && !/^native-business-[a-f0-9-]{36}$/.test(readIdempotencyKey(request))) throw new PublicReservationRequestError('原请求编号无效')
     const targetKind = readPriorityQueueTargetKind(request.params.kind)
     const publicId = readPublicId(request.params.publicId)
     const mode = readPriorityQueueOverrideMode(body.mode)
@@ -662,12 +715,13 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
     const businessDate = await options.currentBusinessDate(context.scope)
     const execution = await options.commands.execute({
       scope: context.scope,
-      operationScope: 'reservation.priority-queue.override',
+      operationScope: namespace === 'native-reservation-intake' ? 'reservation.priority-queue.override.native' : 'reservation.priority-queue.override',
+      retainReceipt: namespace === 'native-reservation-intake',
       idempotencyKey: readIdempotencyKey(request),
-      requestFingerprint: fingerprint({ targetKind, publicId, mode, reason }),
+      requestFingerprint: fingerprint(namespace === 'native-reservation-intake' ? { targetKind, publicId, mode, reason, employeeId:context.employeeId } : { targetKind, publicId, mode, reason }),
       resultCodec: priorityQueueOverrideCodec,
     }, async (transaction) => {
-      const target = await findVisiblePriorityQueueTarget(transaction, context, targetKind, publicId)
+      const target = await findVisiblePriorityQueueTarget(transaction, context, targetKind, publicId, namespace === 'native-reservation-intake')
       if (target === null) throw new PublicReservationOwnershipError()
       const inserted = await transaction.query<{
         id: string
@@ -728,6 +782,8 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
     })
     return reply.send({ data: execution.value, meta: { replayed: execution.replayed } })
   }))
+
+  } // priority route namespaces
 
   app.get('/staff/reservation-intake', async (request, reply) => handle(reply, async () => {
     const context = await options.resolveStaff(request)
@@ -1383,6 +1439,7 @@ async function findVisiblePriorityQueueTarget(
   context: PublicReservationStaffContext,
   targetKind: PriorityQueueTargetKind,
   publicId: string,
+  nativeLock = false,
 ): Promise<{ id: string; publicId: string } | null> {
   const table = targetKind === 'reservation' ? 'mbox.reservations' : 'mbox.waitlist_entries'
   const liveStatuses = targetKind === 'reservation'
@@ -1394,7 +1451,7 @@ async function findVisiblePriorityQueueTarget(
     WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND public_id=$3
       AND status=ANY($4::text[])
       AND ($5::boolean OR owner_employee_id=ANY($6::uuid[]))
-    FOR KEY SHARE
+    ${nativeLock ? 'FOR UPDATE' : 'FOR KEY SHARE'}
   `, [
     transaction.scope.tenantId,
     transaction.scope.storeId,
@@ -1436,6 +1493,10 @@ async function handle(reply: FastifyReply, operation: () => Promise<FastifyReply
     reply.header('cache-control', 'no-store')
     return await operation()
   } catch (error) {
+    if (error instanceof NativeCommandNotCommittedError) {
+      const mapped = mapError(error.original)
+      return reply.code(409).send({error:{code:"NATIVE_BUSINESS_NOT_COMMITTED",message:mapped.status < 500 ? mapped.message : error.message,commitDisposition:"not_committed"}})
+    }
     const mapped = mapError(error)
     return reply.code(mapped.status).send({ error: { code: mapped.code, message: mapped.message, retryAt: mapped.retryAt } })
   }
@@ -1622,4 +1683,15 @@ function postgresCode(error: unknown): string | undefined {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+
+interface NativeWaitlistReceipt { id:string; publicId:string; status:string; previousStatus:string; reason:string }
+const nativeWaitlistReceiptCodec: JsonCodec<NativeWaitlistReceipt> = {
+  encode(value){return {...value}},
+  decode(value){
+    if(!isObject(value))throw new Error('Invalid waitlist receipt')
+    for(const key of ['id','publicId','status','previousStatus','reason'])if(typeof value[key]!=='string')throw new Error('Invalid waitlist receipt')
+    return value as unknown as NativeWaitlistReceipt
+  },
 }

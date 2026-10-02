@@ -1,0 +1,228 @@
+{
+  "at": "2026-09-28 02:14 CST",
+  "swift": 521,
+  "android": 119,
+  "androidSuites": [
+    {
+      "suite": "com.mbox.staff.LiveCatalogTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0
+    },
+    {
+      "suite": "com.mbox.staff.LiveHistoryTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0
+    },
+    {
+      "suite": "com.mbox.staff.ParticipantTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0
+    },
+    {
+      "suite": "com.mbox.staff.AppUpdateTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0
+    },
+    {
+      "suite": "com.mbox.staff.LiveOrderingTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0
+    },
+    {
+      "suite": "com.mbox.staff.DomainTest",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0
+    },
+    {
+      "suite": "com.mbox.staff.LivePickupTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0
+    },
+    {
+      "suite": "com.mbox.staff.RemediationTest",
+      "tests": 13,
+      "failures": 0,
+      "errors": 0
+    },
+    {
+      "suite": "com.mbox.staff.DailyPaymentTest",
+      "tests": 14,
+      "failures": 0,
+      "errors": 0
+    },
+    {
+      "suite": "com.mbox.staff.LiveContractTest",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0
+    },
+    {
+      "suite": "com.mbox.staff.PaymentCompletionTest",
+      "tests": 15,
+      "failures": 0,
+      "errors": 0
+    },
+    {
+      "suite": "com.mbox.staff.LiveCashierTest",
+      "tests": 11,
+      "failures": 0,
+      "errors": 0
+    },
+    {
+      "suite": "com.mbox.staff.ServiceTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0
+    },
+    {
+      "suite": "com.mbox.staff.LiveKitchenTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0
+    },
+    {
+      "suite": "com.mbox.staff.LiveCollectionTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0
+    },
+    {
+      "suite": "com.mbox.staff.ReservationTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0
+    },
+    {
+      "suite": "com.mbox.staff.LiveAssignmentsTest",
+      "tests": 8,
+      "failures": 0,
+      "errors": 0
+    },
+    {
+      "suite": "com.mbox.staff.ReplacementTest",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0
+    }
+  ],
+  "dbBatches": {
+    "participants": 57,
+    "reservations": 52,
+    "serviceAndKitchen": 55
+  },
+  "deployment": false,
+  "realBusinessWrites": false,
+  "files": {
+    "native/staff-app/ios/Sources/LiveActivityCashierView.swift": "c4d7c383d6e0316c21a93c00dde70a6c1167cf1ce99fe8d7b4b3c4d1d816f10d",
+    "native/staff-app/ios/Sources/LiveCashier.swift": "7300270fcadfc45532903dc386e4b57d2e4845bb50c1c1d0febbd2fcfe47b7f0",
+    "native/staff-app/ios/Sources/LiveKitchenView.swift": "8ce0ff7a4b5fd025a04468e102b7912acac4fa133e5c59605e1b00747a64bbd9",
+    "native/staff-app/ios/Sources/LivePickup.swift": "ad391e0eb8a566e9bc21367d04cffc12feefaccf9afc681627261e17107ee911",
+    "native/staff-app/ios/Sources/LiveService.swift": "593583c5ce373b2f88433fedf6827b7b4e17d2e6b2b922d91bf837cd9e50dc19",
+    "native/staff-app/ios/Sources/LiveFinanceView.swift": "6c4d2d126e139049a5f085654271e8395360f140f226607ee7099fc211b5d80a",
+    "native/staff-app/ios/Sources/LivePrintingView.swift": "23daaa83b63c68f43dce0d9c6e58f5fb0baf40fd7034a327a4fb738ddc583316",
+    "native/staff-app/ios/Sources/LiveOnlinePaymentView.swift": "011db380378b8b71f49f0276f193cccbbbd75984f9e7971418b075f971544ff8",
+    "native/staff-app/ios/Sources/LiveOperations.swift": "ada2581bd5210baaa46a60c6c8c999d8e6b2670e5e2f631bcdf4803b406c2ed4",
+    "native/staff-app/ios/Sources/LiveCollectionView.swift": "a81df68581d438772c644e7882a273214e6b48cfe99463803eba422d6801810c",
+    "native/staff-app/ios/Sources/LiveCashHandoverView.swift": "45026e71ba4514f35f8fae10ac5e7177f46c6247935d24006f78294d468b88c8",
+    "native/staff-app/ios/Sources/LiveOrdering.swift": "9cfc613f3b0b483a1b1d56a833c2fa8d474e65b0725b4745a0af3ed76986193f",
+    "native/staff-app/ios/Sources/LiveAssignments.swift": "4a6acdb0a39b7d33b20b036f2c2f266c66eef2d6eb6d20d0d96e43362e6abb79",
+    "native/staff-app/ios/Sources/LiveReservations.swift": "157bfce025fe0ec85bbc1e40b4ffbc15a87acbf643778202241c91d362561489",
+    "native/staff-app/ios/Sources/LiveAfterSalesView.swift": "89f78e13e897b970471298469afa07f26bd713082c98a98a6e8848345e72d980",
+    "native/staff-app/ios/Sources/LiveOrderCheckout.swift": "2d306a87394a7f94013c6bc1467d931d6b99410eaa82df0a0c10c371193d3ee5",
+    "native/staff-app/ios/Sources/LiveParticipantsView.swift": "ca31b5a43ead0386152cd097be715b910bfaf70159362c06301638b5b08bc559",
+    "native/staff-app/ios/Sources/LiveCashierView.swift": "7db992d81be71a84c92351cfc2ac6446424b00f2e5cde29c6e8e8e27ee653b1d",
+    "native/staff-app/ios/Sources/LiveReservationsView.swift": "a66ffc752041120259c752bd8775b7d4e1ac0308285b16363ea0348a8bb2af98",
+    "native/staff-app/ios/Sources/AppModel.swift": "6665850b699217f08dbc6eb736f6a81d492c927f4aed7066f092b4e5c0f348b6",
+    "native/staff-app/ios/Sources/LiveCommand.swift": "3bcf859b95d3db174e3007b675a46ff94471f911f9db4dbeb37ec20494d661b3",
+    "native/staff-app/ios/Sources/StaffAPI.swift": "9a32080d0e6154a3aec8da7643531765eb2ea435fbbdd996d75afad31c5bfd8a",
+    "native/staff-app/ios/Sources/LiveCashHandover.swift": "c10249d1bca4073c272a1ce6b035dd3e0ddf0a11f4f19adebcad9f00eab38412",
+    "native/staff-app/ios/Sources/LiveServiceView.swift": "b5fad9fd2ab1ec2516f042662189607062d74a4542df930058cddff2ef0d7d74",
+    "native/staff-app/ios/Sources/LiveAfterSales.swift": "c80a267b436046925d82c913c10417a84dfa64b640a4618304a6dd980ed53dab",
+    "native/staff-app/ios/Sources/LivePrinting.swift": "2436acaccd12a446b56722da824894006c3a0a636b1f0148ebb608392a6475d2",
+    "native/staff-app/ios/Sources/LiveVouchers.swift": "37af270ff920a98f46cec5b6f4488983f5c1618f9ddebbd9ef74c181b8d6adfd",
+    "native/staff-app/ios/Sources/ButtonDesign.swift": "3bc1bf3ff996410fc082a39bf86b0a5a87eaf3a1d9a331d3b9025c666062470d",
+    "native/staff-app/ios/Sources/LiveFinance.swift": "d2e2196935dccba3c11b562568821fe6828ed00d000b6b712f64bc21110b682a",
+    "native/staff-app/ios/Sources/LiveFulfillmentView.swift": "699ff673bd19d96083c64b7a8c5c7bc9d68b675e0617851abf9bc9eb29aa39f1",
+    "native/staff-app/ios/Sources/HistoryExport.swift": "15c7b344148c6e1d2a4578f1d7f6299dcf4c747a529ea6853550083f1346cf18",
+    "native/staff-app/ios/Sources/LiveParticipants.swift": "d3cff4b90f7c69d260e2077489f9f7a42a9d85769bc5de9969f3faeac8b54264",
+    "native/staff-app/ios/Sources/LiveOnlinePayment.swift": "19c46ee75e3ff70a225a91f9b2240a97323c03a3fe84a1747f4ba0261347db42",
+    "native/staff-app/ios/Sources/LiveCatalog.swift": "48ac06a6c0791080c0dcf677c65f1702ac149ff0a978f45a56073dfb89ebdc98",
+    "native/staff-app/ios/Sources/LiveAccountView.swift": "c26f56920d03b8f3b85fcd3f5d8ae85fafedd60b70172ba34cb5322484ed548b",
+    "native/staff-app/ios/Sources/LiveCollection.swift": "01ab4e835fb8c330faed09a162d4c98738ea1d06e571e61a380410d5422de3fe",
+    "native/staff-app/ios/Sources/LiveAssignmentsView.swift": "6a4990f6cda70db65816b362e14c889337bcece8c207c53e105c10859ef6aa94",
+    "native/staff-app/ios/Sources/LiveKitchenBatchView.swift": "18a82faab90c6feafc792d4fea22cbcc6a0959cc38c7d42f3a03221002971064",
+    "native/staff-app/ios/Sources/LiveCatalogView.swift": "c3b5b9fc82704a2acc8676cdf2426684e31e3b03f7a0118926d652dfbc95edce",
+    "native/staff-app/ios/Sources/Domain.swift": "289a4cf9f1def52b665a4050a921ed19887fe7066c5803158e3365760f3198b6",
+    "native/staff-app/ios/Sources/LiveKitchen.swift": "8a435ef69faad3df0de018f87697162f3b5a0655cfd8f47541617626417100b5",
+    "native/staff-app/ios/Sources/LiveTableActions.swift": "5a0da4aebacc2389c193ed60d505d6d7ddee0db3eae24257aa5dc52240f47bb7",
+    "native/staff-app/ios/Sources/LiveActivityCashier.swift": "2a01276671ccb4ef1370788ddd139de5b11aebb1042760bc6890f202f615e778",
+    "native/staff-app/ios/Sources/AppUpdate.swift": "016d22c9e054c561b14aa1f043f70a90fdb2045ea849969c4b463c210723580f",
+    "native/staff-app/ios/Sources/MBOXApp.swift": "ba2e9743b9d6945b1f3681b744637bf64d0145fdcee5b61514e265a5f8c0d006",
+    "native/staff-app/ios/Sources/LiveVouchersView.swift": "6e93ca109bf98489a9c6b3792a5349c28d3d4aee74735121c8c637c676055a42",
+    "native/staff-app/ios/Sources/LiveHistoryView.swift": "11c35e46c92abc08bc96f541bbbbb164456ab0f247a8aec0640c24a489ce69fc",
+    "native/staff-app/ios/Sources/AppUpdateView.swift": "093ee95e7f522e0156a252734478e8efe7dd318ad05da9bcc6e74a97468bc33b",
+    "native/staff-app/ios/Sources/PaymentSecrets.swift": "0f9b51f1e8b2f593d90ad9376934852416cdfe4a6f98dbb9ed80edab444c4a16",
+    "native/staff-app/ios/Sources/LivePickupView.swift": "b2f48d75a2816824168e3b524458ea6fb0af84e16acd2d0f09e8d22b94649b6f",
+    "native/staff-app/ios/Sources/LiveHistory.swift": "773fcf52f522e264bba34fdf217f1fd02bc43f7d436f1155304587e884a312b7",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/AppUpdateView.kt": "f32495d10daefc8d5082f6509bfe3b6787d03b20298842206570fe451e327f78",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LivePrinting.kt": "2156df00783e7e241fe6c15c31c7ee815960b9b53b678a9c22aa0aee5268128b",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveKitchen.kt": "83fb4b6eaec983d7a194cfbdf94eebddc2150c0f01ece0ccb50210f0cf708194",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveCollectionView.kt": "1b70217e100ea946a5c58eeefd1c7020d075c934114b9658dde8e4474fe24ced",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveFinanceView.kt": "65ca46f7a0576c4d49748c5bf08891cfe3552d0a3761636cfee015910324b5e8",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveVouchers.kt": "d40953ac7d82762f59c4458c3adef71f1d11574dd716e648384172a9beef9a7c",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveVouchersView.kt": "3c5a10598c62838c14865ee4ec25e4d6c4cc623fad2896e249d9eda3e3a54b34",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/MainActivity.kt": "9d9b67c8f21b6450cb20aa3f1df5563a4a9b149a25d8d241df106793af0184e2",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveCashHandover.kt": "783ec2d5ee648c65a5086c03fbe122562833ab02f5052de701d6d94dd800c2fe",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveAfterSalesView.kt": "542ccfdd19f7a964ff0174d8d6b54ccb35ba378fc78f82fa51df43c1729450f3",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveCollection.kt": "e4e3e6107f3d46d8faafde2072ea1c0623637fb1a0cfe83f68cb65e39ade3046",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveAssignmentsView.kt": "01b4ebed9bd1e6cd7c33d23f35a6ee1bd74a4e91ec4a87b0b67ff257a94d4150",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/StaffAPI.kt": "4b68eb38aa6e7d870ef231cb710943e09bfe3879a0c1641d3a8695c1bcd252ad",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveCashHandoverView.kt": "a8e486c7bbe3e843a5c0e987890800c9e6a51971d5294c159b6913cbd70ec066",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveOrdering.kt": "43d0aa09731066f5fb59d4b90fb3d08afb0ba704303b80bd7a133e3d7a86ce70",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveActivityCashierView.kt": "929d7135cb0da66ce9dc2cc0de573d72b9022f1e6e043d227140f6246824f491",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveOnlinePayment.kt": "3badf0f684ac8bbb27fbdd7f7539820c841d03ee8a4923d7d6a0e35a8d1d0e1e",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/PaymentSecrets.kt": "42f5d55db3081b571084c60bc073913e553c4882dc73e38c2eb0355a28589c0e",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveCommand.kt": "658c38920c4b9a003fb82886b2d948dd7729e3892cbad84c7ea3c5bee072443c",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveFinance.kt": "c337adbe863034bba1235ed87043d3170cda4a4efc4f7e158b079ae816098582",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveParticipantsView.kt": "6fe4933b2cdf2936715090b8ea89b4f70912ca9397169328f9f5fe96d39293e6",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveAccountView.kt": "66ee98c397dbb8a0f420ddd2b195e7cf5eb98335a110fa6a123a6ea9fcd66be4",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveOnlinePaymentView.kt": "26a4f266c77b17e6a4b4eff8b40198c0e12092d1a2fb44483ee8a95fe89c0619",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/AndroidUpdater.kt": "dde5fe72ef0624432d628addb851483a85af8b7b211c79b50a2d6e0acb531fa1",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/HistoryExport.kt": "f6f1fecf0d16f28df4878d7be183840c34a5d8da341f6915b50b88aa59d3eac7",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveKitchenView.kt": "a36fed158bde385095e78daf93e8ea9d5f7e194e8daacb16f42a499f4cf81161",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveService.kt": "a9cddcc5a47adcebf8aec1dfa229794f058c63799ef89c24bac64c7437cd16cc",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveAfterSales.kt": "436d27cb207b3c6f361c78f2b30bb7a10794fb38602a209468d3efdd8aae6f02",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveActivityCashier.kt": "965592ef5ba51333a5c9ea3d24c0bea3fa03e2126327e0d9e117c43e31b3b299",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveCashierView.kt": "e5dabf4ac061dbae7012b10a7a7995f50c80763ffc5c6c0b9922468b7fe9b42d",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveCatalog.kt": "1d51af65619ecf073be92157820f7e606849e00f938821d207f6b176b9e05092",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveHistory.kt": "2247314fbdbd808bc1ba7d4330ec3bf70e217caf7420ab07708da27c1e982a50",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LivePrintingView.kt": "c4829d24939936cd0704371a322f24a09567560608571fd8cf2672b1c9094518",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/AppModel.kt": "3115a0ab11227a7d71f06eab03cb3ca7ac97b3ad2063ffd77cb9bdd4a7ed6e60",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/Domain.kt": "2a569c7e4c465da7a8b2f4000310585350eb703b4d8e135cf1aaa9afb4025e8d",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveReservationsView.kt": "12d61e30bdbb76a4007c1b966f914f6b1096899e3c4c81fffb86876adec07b2c",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveParticipants.kt": "9408055ce20a867bb2b3f6a70a883d6dbaef340428c53ae5681819ba8574b59d",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveAssignments.kt": "104650c98abfc4bc28eb07e0cd5e6d565c844f0d869527f24af0ff2867def425",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveCatalogView.kt": "703b331cba3970048b003e5abd73a02f6aeebb2f5aca414e58e7b5cd343e9c71",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/ButtonDesign.kt": "f7c6abd487cb697a80f1d2bd0d4ad2b00c3d1b4a52c25378d0683e6aeb77223f",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveKitchenBatchView.kt": "15410b7c341c8e261df558d76a31d24e62f54fc67c27de7c8f86e0d5ca38b064",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveFulfillmentView.kt": "6e81acb3139806f8ffd894f9dd821f27a1b2d2809cf8314169276c273e99a6ed",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveCashier.kt": "e928e2420ff11ec73fa6dc80622019d02957cdc1af979568282b4d7cfa804028",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/AppUpdate.kt": "4851c27cb369d6b3d4f1853e2ebd20072b87c6da14ae1710b46926982033537d",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveServiceView.kt": "5499f87133c023aa145573f4dc58ab462b005caf35eb26ad12c15484c9edd989",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveTableActions.kt": "a3862a15d5957bd8aca4272c34d42f223bc232c2ee2945614559314c41658182",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveReservations.kt": "1464b6e4b05c1ba5e8b3c038cb00f1cb5da9c70c64f82335f9dc4a51a98bf14b",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LivePickup.kt": "8ab6aaee2a77465e010ac462a596e6b6cb96b0a8de0079f8ff17a0de490e8d1a",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveOrderCheckout.kt": "6b4b7cb5daa0529a2bc836875052d8628ba77af86351caffdd28b1ece4e21365",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LivePickupView.kt": "06a020d99945483fd7e2b7b6df0490c6f96d5bd0a7c14eb85a6c7f68f0bb6593",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveHistoryView.kt": "864935facf6423d6547a8019bb025a3c86f7f54236f3f7face2555a30bbeab02",
+    "server/normalized/native-service-api.ts": "c7e6309cc4224c7495a3b45b7c7d73ee9559f1ebb2423c1ad30c749879813985",
+    "server/normalized/command-executor.ts": "6024e5a57e84e2a76b9bb43612bbe658a3219d68fd23e659a8161776aee360e3"
+  }
+}

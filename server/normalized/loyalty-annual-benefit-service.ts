@@ -80,7 +80,7 @@ export class LoyaltyAnnualBenefitService {
     private readonly commands: Pick<NormalizedCommandExecutor, 'execute'>,
   ) {}
 
-  configuration(context: AnnualBenefitStaffContext) {
+  configuration(context: AnnualBenefitStaffContext, native?: { cursor?: string; only?: string; code?: string }) {
     return this.transactions.run(context.scope, async (transaction) => {
       const policies = await transaction.query<{
           id: string; policy_code: string; version: number; status: string; timezone: string
@@ -90,8 +90,8 @@ export class LoyaltyAnnualBenefitService {
         }>(`SELECT id,policy_code,version,status,timezone,effective_from::text,effective_until::text,
             drafted_by_employee_id,approved_by_employee_id,approved_at::text,published_by_employee_id,
             published_at::text,reason FROM mbox.loyalty_annual_benefit_policy_versions
-          WHERE tenant_id=$1::uuid AND store_id=$2::uuid ORDER BY policy_code,version DESC,id DESC`,
-          [transaction.scope.tenantId, transaction.scope.storeId])
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid ${native ? 'AND ($3::uuid IS NULL OR id>$3) AND ($4::uuid IS NULL OR id=$4) AND ($5::text IS NULL OR policy_code=$5) ORDER BY id LIMIT 21' : 'ORDER BY policy_code,version DESC,id DESC'}`,
+          native ? [transaction.scope.tenantId, transaction.scope.storeId,native.cursor??null,native.only??null,native.code??null] : [transaction.scope.tenantId, transaction.scope.storeId])
       const rules = await transaction.query<{
           id: string; policy_version_id: string; rule_code: string; title: string; rule_kind: AnnualBenefitRuleKind
           eligible_tier: AnnualBenefitTier; inherit_to_higher_tiers: boolean; benefit_definition_id: string
@@ -113,23 +113,24 @@ export class LoyaltyAnnualBenefitService {
                 AND substitute.rule_id=rule.id),'[]'::jsonb) AS substitutes,enabled
           FROM mbox.loyalty_annual_benefit_rules rule
           WHERE rule.tenant_id=$1::uuid AND rule.store_id=$2::uuid
-          ORDER BY policy_version_id,rule_code,id`, [transaction.scope.tenantId, transaction.scope.storeId])
+          ${native ? 'AND policy_version_id=ANY($3::uuid[])' : ''} ORDER BY policy_version_id,rule_code,id`, native ? [transaction.scope.tenantId, transaction.scope.storeId,policies.rows.map(r=>r.id)] : [transaction.scope.tenantId, transaction.scope.storeId])
       const occurrences = await transaction.query<{
           id: string; rule_id: string; cycle_year: number; starts_on: string; ends_on: string
           confirmed_by_employee_id: string; confirmation_reference: string; confirmed_at: string
         }>(`SELECT id,rule_id,cycle_year,starts_on::text,ends_on::text,confirmed_by_employee_id,
             confirmation_reference,confirmed_at::text FROM mbox.loyalty_annual_benefit_occurrences
-          WHERE tenant_id=$1::uuid AND store_id=$2::uuid ORDER BY cycle_year DESC,starts_on,rule_id`,
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid ${native ? 'AND false' : ''} ORDER BY cycle_year DESC,starts_on,rule_id`,
           [transaction.scope.tenantId, transaction.scope.storeId])
       const definitions = await transaction.query<{ id: string; name: string; benefit_kind: string; status: string }>(
           `SELECT id,name,benefit_kind,status FROM mbox.loyalty_benefit_definitions
-            WHERE tenant_id=$1::uuid AND store_id=$2::uuid ORDER BY status,name,id`,
+            WHERE tenant_id=$1::uuid AND store_id=$2::uuid ${native ? 'AND false' : ''} ORDER BY status,name,id`,
           [transaction.scope.tenantId, transaction.scope.storeId],
         )
       const products = await transaction.query<{ id: string; name: string; status: string }>(`
         SELECT product.id,product.name,product.status
         FROM mbox.products product
         WHERE product.tenant_id=$1::uuid AND product.store_id=$2::uuid
+          ${native ? 'AND false' : ''}
           AND product.status='active'
           AND product.recommendation_beverage_family='non_alcoholic'
           AND EXISTS (
@@ -222,12 +223,13 @@ export class LoyaltyAnnualBenefitService {
   }>) {
     const effectiveFrom = timestamp(input.effectiveFrom, '生效时间')
     const effectiveUntil = input.effectiveUntil === null ? null : timestamp(input.effectiveUntil, '失效时间')
-    if (Date.parse(effectiveFrom) <= Date.now()) throw failure('年度礼遇只能安排未来生效，禁止追溯生成权益', 'ANNUAL_BENEFIT_RETROACTIVE_PUBLICATION_DENIED', 400)
     if (effectiveUntil !== null && Date.parse(effectiveUntil) <= Date.parse(effectiveFrom)) throw failure('失效时间必须晚于生效时间', 'ANNUAL_BENEFIT_WINDOW_INVALID', 400)
     return this.commands.execute({
       scope: context.scope, operationScope: 'loyalty.annual-benefit.publish', idempotencyKey: input.idempotencyKey,
       requestFingerprint: fingerprint({ ...input, effectiveFrom, effectiveUntil }), resultCodec: objectCodec<{ id: string; status: string }>(),
     }, async (transaction) => {
+      if (Date.parse(effectiveFrom) <= Date.now()) throw failure('年度礼遇只能安排未来生效，禁止追溯生成权益', 'ANNUAL_BENEFIT_RETROACTIVE_PUBLICATION_DENIED', 400)
+
       const policy = (await transaction.query<{
         id: string; policy_code: string; status: string; drafted_by_employee_id: string; approved_by_employee_id: string | null
       }>(`SELECT id,policy_code,status,drafted_by_employee_id,approved_by_employee_id

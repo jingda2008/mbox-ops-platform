@@ -67,6 +67,12 @@ export class CouponCalendarRepository {
     const result = await this.transaction.query<Row>(`SELECT ${columns} FROM mbox.coupon_calendar_versions WHERE tenant_id=$1 AND store_id=$2 ORDER BY created_at DESC,id DESC LIMIT 30`, this.scope)
     return this.hydrate(result.rows)
   }
+  async listNative(search:string,cursor:{at:string;id:string}|null=null){
+    const result=await this.transaction.query<Row & {at:string}>(`SELECT ${columns},to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') at
+      FROM mbox.coupon_calendar_versions WHERE tenant_id=$1 AND store_id=$2 AND strpos(lower(code),lower($3))>0
+      AND ($4::timestamptz IS NULL OR (created_at,id)<($4::timestamptz,$5::uuid)) ORDER BY created_at DESC,id DESC LIMIT 31`,[...this.scope,search,cursor?.at??null,cursor?.id??null])
+    const rows=await this.hydrate(result.rows.slice(0,30)),last=result.rows[29];return{rows,next:result.rows.length>30&&last?Buffer.from(JSON.stringify({at:last.at,id:last.id})).toString('base64url'):null}
+  }
   async walletViews(benefitIds: string[], at: Date): Promise<Map<string, CouponCalendarWalletView>> {
     const result = new Map<string, CouponCalendarWalletView>()
     if (!benefitIds.length) return result

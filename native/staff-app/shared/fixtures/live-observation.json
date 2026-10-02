@@ -1,0 +1,118 @@
+{
+  "auth": {
+    "session": {
+      "id": "session-1",
+      "employeeId": "employee-1",
+      "expiresAt": "2099-01-01T00:00:00Z",
+      "onlineLeaseUntil": "2099-01-01T00:00:00Z"
+    },
+    "employee": {
+      "id": "employee-1",
+      "code": "staff",
+      "displayName": "测试员工",
+      "roleCodes": [
+        "server"
+      ]
+    },
+    "permissions": [
+      "observation.record",
+      "observation.confirm",
+      "observation.correct",
+      "observation.view.raw",
+      "recommendation.staff.modify"
+    ],
+    "deniedPermissions": [
+      "payment.refund"
+    ]
+  },
+  "board": {
+    "tableSessionId": "session-1",
+    "durable": true,
+    "draft": {
+      "publicId": "observation-1",
+      "status": "draft",
+      "inputKind": "text",
+      "rawContent": "客人说招牌饮品太甜",
+      "parseConfidence": 0.9,
+      "needsImmediateAction": true,
+      "clarificationRequired": false,
+      "clarificationPrompt": null,
+      "serviceTaskId": null,
+      "candidates": [
+        {
+          "id": "candidate-1",
+          "productId": "product-1",
+          "productName": "招牌饮品",
+          "orderItemId": "line-1",
+          "rawMention": "招牌饮品",
+          "confidence": 0.9
+        }
+      ]
+    },
+    "history": {
+      "permissions": {
+        "canCorrect": true,
+        "canViewRaw": true
+      },
+      "items": [
+        {
+          "publicId": "observation-old",
+          "recordedBy": "员工甲",
+          "confirmedBy": "员工甲",
+          "confirmedAt": "2026-09-28T01:00:00Z",
+          "rawContent": "客人说招牌饮品太甜",
+          "serviceTaskId": "task-1",
+          "serviceTaskStatus": "pending",
+          "events": [
+            {
+              "id": "event-1",
+              "eventGroupId": "group-1",
+              "revision": 1,
+              "expressionKind": "customer_quote",
+              "scopeKind": "product",
+              "eventType": "too_sweet",
+              "degree": null,
+              "reasonCode": null,
+              "seatLabel": null,
+              "customerId": null,
+              "productId": "product-1",
+              "productName": "招牌饮品",
+              "orderItemId": "line-1",
+              "selectedCandidateId": "candidate-1",
+              "confidence": 0.9,
+              "rawExcerpt": "客人说招牌饮品太甜"
+            }
+          ],
+          "revisions": []
+        }
+      ]
+    }
+  },
+  "recommendation": {
+    "tableSessionId": "session-1",
+    "durable": true,
+    "snapshot": {
+      "recommendationPublicId": "recommendation-1",
+      "tableSessionId": "session-1",
+      "createdAt": "2026-09-28T01:00:00Z",
+      "options": [
+        {
+          "productId": "product-1",
+          "productName": "招牌饮品",
+          "rank": 1,
+          "tier": "comfortable",
+          "amountMinor": 5800,
+          "currency": "CNY"
+        },
+        {
+          "productId": "product-2",
+          "productName": "清爽饮品",
+          "rank": 2,
+          "tier": "enhanced",
+          "amountMinor": 6800,
+          "currency": "CNY"
+        }
+      ]
+    }
+  }
+}

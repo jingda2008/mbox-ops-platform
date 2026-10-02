@@ -194,9 +194,18 @@ integration('unpaid order cancellation', () => {
   })
 
   it('keeps cancellation and settlement usable after manual day end and attributes new orders to the new day',async()=>{
+    const original=await createOrder('unpaid',null,true)
+    const cancellation={scope:{tenantId,storeId},orderId:original.orderId,employeeId,businessDate:actionBusinessDate,
+      reasonCode:'guest_left' as const,reasonNote:'跨营业日前原取消请求',idempotencyKey:`cross-day-cancel:${randomUUID()}`}
+    const settlement={...cancellation,reasonCode:'manager_comp' as const,reasonNote:'跨营业日前原免单请求',idempotencyKey:`cross-day-settle:${randomUUID()}`}
+    const cancellationReceipt=await repository.cancel(cancellation)
+    const settlementReceipt=await settlementRepository.settle(settlement)
     await pool.query(`INSERT INTO mbox.manual_business_day_ends(tenant_id,store_id,business_date,next_business_date,calendar_business_date,employee_id,reason,ledger_snapshot)
       VALUES($1,$2,$3::date,$3::date+1,$3::date,$4,'隔离验证提前日结','[]')`,[tenantId,storeId,actionBusinessDate,employeeId])
     const next=(await pool.query('SELECT ($1::date+1)::text AS day',[actionBusinessDate])).rows[0].day
+    expect(await repository.cancel({...cancellation,businessDate:next})).toEqual({...cancellationReceipt,replayed:true})
+    expect(await settlementRepository.settle({...settlement,businessDate:next})).toEqual({...settlementReceipt,replayed:true})
+    await expect(repository.cancel({...cancellation,businessDate:next,reasonNote:'不能更改原操作原因'})).rejects.toBeInstanceOf(UnpaidOrderCancellationConflictError)
     const fixture=await createOrder('unpaid',null,true)
     const cancelled=await repository.cancel({scope:{tenantId,storeId},orderId:fixture.orderId,employeeId,businessDate:next,
       reasonCode:'guest_left',reasonNote:'提前日结后客人离店取消未送达',idempotencyKey:`next-day-cancel:${randomUUID()}`})

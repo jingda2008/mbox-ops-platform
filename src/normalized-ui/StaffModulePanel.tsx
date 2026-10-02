@@ -1,3 +1,4 @@
+import { StaffPermissionReceiptPanel } from './StaffPermissionReceiptPanel'
 import {OrderFinancialRecoveryPanel} from './OrderFinancialRecoveryPanel'
 import {InventoryWastePanel,InventoryWasteReviewPanel} from './InventoryWastePanel'
 import {openTaskSection} from './TaskSections'
@@ -1671,7 +1672,7 @@ function SettingsModule({ api, auth, policy, onChanged }: { api: NormalizedApiCl
     {notice !== '' && <p className="staff-module-notice" role="status">{notice}</p>}
     <details className="staff-module-disclosure"><summary>支付安全边界</summary><p className="staff-module-footnote">支付渠道密钥和远端连接只能由受控部署配置提供，门店开关不会读取、显示或覆盖它们。修改时填写原因；系统保留操作记录；关闭只阻止新支付，不得中断在途回调、查单、退款或对账。</p></details>
     {auth.permissions.includes('table.manage') && <VenueManagementPanel api={api} />}
-    {auth.permissions.includes('staff.access.configure') && <StaffAccessManagementPanel api={api} currentEmployeeId={auth.employee.id} />}
+    {auth.permissions.includes('staff.access.configure') ? <StaffAccessManagementPanel api={api} currentEmployeeId={auth.employee.id} /> : <StaffPermissionReceiptPanel api={api} employeeId={auth.employee.id} />}
     {(auth.permissions.includes('customer.public-profile.manage')
       || auth.permissions.includes('customer.public-profile.publish')
       || auth.permissions.includes('privacy.policy.view')

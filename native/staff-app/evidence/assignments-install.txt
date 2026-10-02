@@ -1,0 +1,4 @@
+2026-09-27 10:54 CST
+iOS: simulator 2EA116D3-018A-4D1E-9BB0-A908E2F29F7A, com.mbox.staff.native, install exit 0, launch PID 45616.
+Android: emulator-5554, install -r Success, am start -S exit 0, com.mbox.staff.nativeapp/com.mbox.staff.MainActivity.
+Install/launch only, not authenticated UI or operating acceptance.

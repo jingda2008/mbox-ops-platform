@@ -1,3 +1,6 @@
+import Fastify from 'fastify'
+import { memberVisitRewardApiPlugin } from './member-visit-reward-api.js'
+import { NormalizedCommandExecutor } from './command-executor.js'
 import { randomUUID } from 'node:crypto'
 import { beforeAll, beforeEach, afterAll, describe, it, expect } from 'vitest'
 import { Pool } from 'pg'
@@ -66,6 +69,21 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL
     expect((await requests(ruleId)).map(q=>q.status)).toEqual(['issued','issued'])
     const rows=await reward(repo=>repo.list('2026-09-03','issued',null));expect(rows.items).toHaveLength(1);expect(rows.items[0]).toMatchObject({required_visits:3,quantity:1,quantity_redeemed:0,visit_dates:['2026-09-01','2026-09-02','2026-09-03']})
     expect((await pool.query('SELECT id FROM mbox.orders WHERE tenant_id=$1 AND store_id=$2',[tenantId,storeId])).rowCount).toBe(0)
+  })
+  it('native lost approval reply replays one issued coupon and forbids a different employee',async()=>{
+    const {customerId,ruleId}=await setup(1);await visit(customerId,1);const q=(await requests(ruleId))[0]
+    let actor=publisher
+    const app=Fastify();app.register(memberVisitRewardApiPlugin,{transactions:runner,commands:new NormalizedCommandExecutor(runner),resolveStaffContext:async()=>({scope,employeeId:actor,businessDate})})
+    try{
+      const key='native-business-'+randomUUID(),input={method:'POST' as const,url:'/staff/native-member-visit-rewards',headers:{'idempotency-key':key},payload:{action:'approve',ids:[q.id],reason:'现场核实奖励'}}
+      const first=await app.inject(input);expect(first.statusCode).toBe(200);expect(first.json().data.items).toEqual([{id:q.id,status:'issued'}])
+      await pool.query('DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND expires_at<clock_timestamp()',[tenantId,storeId])
+      const repeat=await app.inject(input);expect(repeat.statusCode).toBe(200);expect(repeat.json().meta.replayed).toBe(true)
+      expect((await requests(ruleId))[0].status).toBe('issued')
+      const record=await pool.query('SELECT expires_at::text FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$3',[tenantId,storeId,key]);expect(record.rows[0].expires_at).toBe('infinity')
+      actor=editor;const different=await app.inject(input);expect(different.statusCode).toBe(409);expect(different.json().error.commitDisposition).toBeUndefined()
+      actor=denied;expect((await app.inject(input)).statusCode).toBe(403)
+    }finally{await app.close()}
   })
   it('invalidates an unapproved cycle on cancellation and reuses only remaining valid dates',async()=>{
     const {customerId,ruleId}=await setup()

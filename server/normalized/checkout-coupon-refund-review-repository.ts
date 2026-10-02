@@ -11,6 +11,7 @@ const relations=`FROM mbox.refunds r
  JOIN mbox.benefit_reservations b ON b.tenant_id=h.tenant_id AND b.store_id=h.store_id AND b.id=h.reservation_id
  JOIN mbox.benefits benefit ON benefit.tenant_id=b.tenant_id AND benefit.store_id=b.store_id AND benefit.id=b.benefit_id
  LEFT JOIN mbox.checkout_coupon_refund_decisions d ON d.tenant_id=r.tenant_id AND d.store_id=r.store_id AND d.refund_id=r.id AND d.reservation_id=b.id`
+const nativeReviewColumns=`r.id AS refund_id,b.id AS reservation_id,o.public_id AS order_reference,r.public_id AS refund_reference,r.amount_minor::text AS refund_amount_minor,r.currency,benefit.benefit_code,b.quantity,b.status,d.action,d.reason,d.evidence_reference,d.replacement_benefit_id,d.replacement_quantity`
 const uuid=/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i
 /** Correlated to the already permission-scoped cashier alias `orders`. Only a
  * count is exposed there, not customer identity, reasons, or evidence. */
@@ -36,6 +37,10 @@ export class CheckoutCouponRefundReviewRepository{
     AND ($4::uuid IS NULL OR (r.id,b.id)>($4::uuid,$5::uuid)) ORDER BY r.id,b.id LIMIT 51`,[...this.scope,state,after?.[0]??null,after?.[1]??null])
   const items=result.rows.slice(0,50),last=items.at(-1)
   return{items,nextCursor:result.rows.length>50&&last?`${last.refund_id}:${last.reservation_id}`:null}
+ }
+ async nativeSnapshot(refundId:string,reservationId:string){
+  identifier(refundId);identifier(reservationId)
+  return(await this.tx.query<Record<string,unknown>>(`SELECT ${nativeReviewColumns} ${relations} WHERE r.tenant_id=$1 AND r.store_id=$2 AND r.id=$3 AND b.id=$4 AND r.status='succeeded' AND (b.status IN('reserved','redeemed') OR d.refund_id IS NOT NULL) FOR SHARE OF r,b`,[...this.scope,refundId,reservationId])).rows[0]??null
  }
  async replacementOptions(employeeId:string,refundId:string,reservationId:string,cursor:string|null=null){
   await new StaffAccessRepository(this.tx).assertPermission(employeeId,'loyalty.policy.publish')

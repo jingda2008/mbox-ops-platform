@@ -1,3 +1,4 @@
+import { registerNativeServiceRoutes } from './native-service-api.js'
 import {ExperiencePlanLifecycleRepository,ExperiencePlanLifecycleConflict} from './experience-plan-lifecycle-repository.js'
 import {QuantityRedeliveryRepository} from './quantity-redelivery-repository.js'
 import {ItemQuantityConflict} from './order-item-quantity-plan.js'
@@ -73,7 +74,7 @@ export interface NormalizedOperationsRequestContext {
   capabilities: readonly string[]
 }
 
-type OperationsQueryPort = Pick<OperationsQueryService, 'getStaffView'> & Partial<Pick<OperationsQueryService,'getOperatingHistory'|'getManualDayEndPreview'>>
+type OperationsQueryPort = Pick<OperationsQueryService, 'getStaffView'> & Partial<Pick<OperationsQueryService,'getOperatingHistory'|'getManualDayEndPreview'|'getNativeServiceEmployees'>>
 type TableSessionCommandPort = Pick<TableSessionCommandService, 'open'>
 type CommandExecutorPort = Pick<NormalizedCommandExecutor, 'execute'>
 type TableSessionRepositoryPort = Pick<TableSessionRepository, 'beginClosing' | 'completeClosing'>
@@ -178,6 +179,7 @@ export const normalizedOperationsApiPlugin: FastifyPluginAsync<NormalizedOperati
   options,
 ) => {
   const createPublicId = options.createPublicId ?? defaultPublicId
+  await registerNativeServiceRoutes(app,options)
   app.get('/business-days/end-current/preview',async(request,reply)=>handleRoute(reply,async()=>{
     await resolveAndValidateContext(options,request)
     return reply.code(410).send({error:{code:'MANUAL_BUSINESS_DAY_END_DISABLED',message:'不支持提前结束营业日，系统会按门店设定时间自动切日。'}})

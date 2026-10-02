@@ -1,5 +1,6 @@
+import { NativeCommandNotCommittedError } from './command-executor.js'
 import {readMonthlySchedule,previewMonthlySchedule} from './monthly-schedule.js'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type { JsonObject, JsonValue } from './command-executor.js'
 import {
@@ -119,7 +120,7 @@ type SongRequestRepositoryPort = Pick<SongRequestRepository, 'findById'>
 export interface ReservationPerformanceApiOptions {
   transactions: Pick<ScopedPostgresTransactionRunner, 'run'>
   reservations: ReservationCommands
-  performance: PerformanceCommands & Partial<Pick<PerformanceCommandService, 'publishMonthly'>>
+  performance: PerformanceCommands & Partial<Pick<PerformanceCommandService, 'publishMonthly' | 'nativeSong'>>
   resolveGuestContext(request: FastifyRequest): Promise<GuestReservationPerformanceContext>
     | GuestReservationPerformanceContext
   resolveStaffContext(request: FastifyRequest): Promise<StaffReservationPerformanceContext>
@@ -356,6 +357,54 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
     }),
   )
 
+  app.get('/staff/native-reservation-capabilities', async (request, reply) => handleRoute(reply, async () => {
+    await authorizedStaff(options, request, 'reservation.view', createAccess)
+    return reply.send({data:{durableTransitions:true,durablePriority:true,durableCreate:true}})
+  }))
+
+  app.get('/staff/native-reservation-tables', async (request, reply) => handleRoute(reply, async () => {
+    const context=await authorizedStaff(options,request,'reservation.manage',createAccess)
+    const tables=await options.transactions.run(context.scope,async tx=>(await tx.query<{
+      id:string;code:string;capacity:number;areaName:string
+    }>(`SELECT t.id,t.code,t.capacity,a.name AS "areaName" FROM mbox.tables t JOIN mbox.areas a
+      ON a.tenant_id=t.tenant_id AND a.store_id=t.store_id AND a.id=t.area_id
+      WHERE t.tenant_id=$1::uuid AND t.store_id=$2::uuid AND t.status='available'
+      ORDER BY a.sort_order,t.code LIMIT 1000`,[context.scope.tenantId,context.scope.storeId])).rows,{readOnly:true})
+    return reply.send({data:tables})
+  }))
+
+  app.post('/staff/native-reservations', async (request,reply)=>handleRoute(reply,async()=>{
+    const context=await authorizedStaff(options,request,'reservation.manage',createAccess)
+    const body=readObject(request.body)
+    rejectClaims(body,['actor','scope','employeeId','ownerEmployeeId','customerId','holdExpiresAt','customerCancelUntil','cancellationPolicySnapshot','reservationSnapshot','allowUnassignedTable'])
+    const key=readIdempotencyKey(request)
+    if(!/^native-business-[a-f0-9-]{36}$/.test(key))throw new ApiRequestError('原请求编号无效')
+    const input=readReservationInput(body)
+    if(input.publicId===null || !/^NRES-[a-f0-9-]{36}$/.test(input.publicId))throw new ApiRequestError('预约编号无效')
+    const initialStatus=readInitialReservationStatus(body.initialStatus)
+    const source=readReservationSource(body.source)
+    if(!['phone','employee'].includes(source))throw new ApiRequestError('请选择员工代订渠道')
+    const execution=await options.reservations.create({
+      ...input,publicId:input.publicId,source,initialStatus,
+      ownerEmployeeId:context.employeeId,
+      scope:context.scope,actor:employeeActor(context.employeeId),businessDate:context.businessDate,
+      idempotencyKey:key,requestFingerprint:fingerprint(request,context,{...input,source,initialStatus}),
+      nativeReceipt:true,
+      authorizeNative:async tx=>{await createAccess(tx).assertPermission(context.employeeId,'reservation.manage')},
+      prepareNative:async tx=>{
+        // Timing and current capacity apply only to a new command, never to receipt replay.
+        const timing=serverReservationTiming(input.arrivalAt,now(),holdTtlMinutes,maxAdvanceDays,cancellationCutoffMinutes)
+        const tables=await tx.query<{id:string;capacity:number}>(`SELECT id,capacity FROM mbox.tables
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=ANY($3::uuid[]) AND status='available'
+          ORDER BY id FOR UPDATE`,[context.scope.tenantId,context.scope.storeId,input.tableIds])
+        if(tables.rowCount!==new Set(input.tableIds).size || tables.rows.reduce((sum,row)=>sum+row.capacity,0)<input.guestCount)
+          throw new ApiRequestError('所选桌台容量不足或已停用，请刷新后重选')
+        return {holdExpiresAt:initialStatus==='pending'?timing.holdExpiresAt:null,customerCancelUntil:timing.customerCancelUntil,cancellationPolicySnapshot:timing.policySnapshot}
+      },
+    })
+    return reply.code(execution.replayed?200:201).send({data:staffReservation(execution.value,context.access.permissions.includes('reservation.contact.view')),meta:{replayed:execution.replayed}})
+  }))
+
   app.get('/staff/reservations', async (request, reply) => handleRoute(reply, async () => {
     const context = await authorizedStaff(options, request, 'reservation.view', createAccess)
     const query = readQuery(request)
@@ -494,9 +543,10 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
     })
   }))
 
+  for (const namespace of ['reservations','native-reservations'] as const) {
   for (const transition of ['confirm', 'arrive', 'complete'] as const) {
     app.post<{ Params: { reservationId: string } }>(
-      `/staff/reservations/:reservationId/${transition}`,
+      `/staff/${namespace}/:reservationId/${transition}`,
       async (request, reply) => handleRoute(reply, async () => {
         const context = await authorizedStaff(options, request, 'reservation.manage', createAccess)
         const body = readOptionalObject(request.body)
@@ -504,7 +554,11 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
         const reservationId = readUuid(request.params.reservationId, 'reservationId')
         const reason = readOptionalString(body.reason, '原因', 500)
         const idempotencyKey = readIdempotencyKey(request)
+        const nativeReceipt = namespace === 'native-reservations'
+        if (nativeReceipt && !/^native-business-[a-f0-9-]{36}$/.test(idempotencyKey)) throw new ApiRequestError('原请求编号无效')
         const execution = await options.reservations[transition]({
+          nativeReceipt,
+          authorizeNative: nativeReceipt ? nativeReservationAuthorization(context,reservationId,false,createAccess) : undefined,
           scope: context.scope,
           actor: employeeActor(context.employeeId),
           businessDate: context.businessDate,
@@ -513,13 +567,13 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
           idempotencyKey,
           requestFingerprint: fingerprint(request, context, { reservationId, transition, reason }),
         })
-        return reply.send({ data: execution.value, meta: { replayed: execution.replayed } })
+        return reply.send({ data: nativeReceipt ? staffReservation(execution.value,context.access.permissions.includes('reservation.contact.view')) : execution.value, meta: { replayed: execution.replayed } })
       }),
     )
   }
 
   app.post<{ Params: { reservationId: string } }>(
-    '/staff/reservations/:reservationId/cancel',
+    `/staff/${namespace}/:reservationId/cancel`,
     async (request, reply) => handleRoute(reply, async () => {
       const context = await authorizedStaff(options, request, 'reservation.manage', createAccess)
       const body = readOptionalObject(request.body)
@@ -534,7 +588,11 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
         if (reason === null) throw new ApiRequestError('例外取消必须填写原因')
       }
       const idempotencyKey = readIdempotencyKey(request)
+      const nativeReceipt = namespace === 'native-reservations'
+      if (nativeReceipt && !/^native-business-[a-f0-9-]{36}$/.test(idempotencyKey)) throw new ApiRequestError('原请求编号无效')
       const execution = await options.reservations.cancel({
+        nativeReceipt,
+        authorizeNative: nativeReceipt ? nativeReservationAuthorization(context,reservationId,overridePolicy,createAccess) : undefined,
         scope: context.scope,
         actor: employeeActor(context.employeeId),
         businessDate: context.businessDate,
@@ -544,9 +602,11 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
         idempotencyKey,
         requestFingerprint: fingerprint(request, context, { reservationId, reason, overridePolicy }),
       })
-      return reply.send({ data: execution.value, meta: { replayed: execution.replayed } })
+      return reply.send({ data: nativeReceipt ? staffReservation(execution.value,context.access.permissions.includes('reservation.contact.view')) : execution.value, meta: { replayed: execution.replayed } })
     }),
   )
+
+  } // reservation route namespaces
 
   app.get('/staff/performers', async (request, reply) => handleRoute(reply, async () => {
     const context = await authorizedStaffAny(options, request, ['song.view', 'song.manage'], createAccess)
@@ -753,6 +813,55 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
       return reply.send({ data: execution.value, meta: { replayed: execution.replayed } })
     }),
   )
+
+  app.get('/staff/native-song-capabilities', async (request, reply) => handleRoute(reply, async () => {
+    await authorizedStaffAny(options, request, ['song.view', 'song.manage', 'song.payment.record'], createAccess)
+    return reply.send({data: {durableTransitions: !!options.performance.nativeSong}})
+  }))
+
+  app.get<{Params: {requestId: string}}>('/staff/native-song-requests/:requestId/payment-evidence', async (request, reply) => handleRoute(reply, async () => {
+    const context = await authorizedStaff(options, request, 'song.payment.record', createAccess)
+    const id = readUuid(request.params.requestId, 'requestId')
+    const rows = await options.transactions.run(context.scope, async tx => {
+      const song = await new SongRequestRepository(tx).findById(id)
+      if (!song) throw new SongRequestNotFoundError(id)
+      if (song.status !== 'accepted' || song.quotedAmountMinor === null || song.currency !== 'CNY') throw new ApiRequestError('请先确认点歌报价')
+      return (await tx.query(`SELECT p.id AS "paymentId", r.id AS "reconciliationEntryId", p.public_id AS "publicId",
+        p.provider, p.amount_minor::text AS "amountMinor", p.currency, p.created_at::text AS "createdAt"
+        FROM mbox.payments p JOIN mbox.orders o ON o.tenant_id=p.tenant_id AND o.store_id=p.store_id AND o.id=p.order_id
+        JOIN mbox.table_sessions t ON t.tenant_id=o.tenant_id AND t.store_id=o.store_id AND t.id=o.table_session_id
+        JOIN mbox.reconciliation_entries r ON r.tenant_id=p.tenant_id AND r.store_id=p.store_id AND r.payment_id=p.id
+        WHERE p.tenant_id=$1 AND p.store_id=$2 AND o.table_session_id=$3 AND p.amount_minor=$4 AND p.currency=$5
+          AND p.status IN ('succeeded','partially_refunded') AND r.entry_type='payment'
+          AND r.business_date=t.business_date AND r.amount_minor=p.amount_minor AND r.currency=p.currency
+        ORDER BY p.created_at DESC LIMIT 100`, [context.scope.tenantId,context.scope.storeId,song.tableSessionId,song.quotedAmountMinor,song.currency])).rows
+    }, {readOnly: true})
+    return reply.send({data: rows})
+  }))
+
+  app.post<{Params: {requestId: string; action: string}}>('/staff/native-song-requests/:requestId/:action', async (request, reply) => handleRoute(reply, async () => {
+    const action = request.params.action
+    if (!['confirm', 'reject', 'paid', 'performed', 'cancel'].includes(action)) throw new ApiRequestError('点歌操作无效')
+    const context = await authorizedStaff(options, request, action === 'paid' ? 'song.payment.record' : 'song.manage', createAccess)
+    if (!options.performance.nativeSong) return reply.code(503).send({error: {code: 'NATIVE_SONG_UNAVAILABLE', message: '尚未启用原生点歌操作'}})
+    const body = readObject(request.body)
+    rejectClaims(body, ['employeeId', 'actorEmployeeId', 'actor', 'scope'])
+    const requestId = readUuid(request.params.requestId, 'requestId')
+    const expectedStatus = readOptionalSongStatus(body.expectedStatus)
+    if (!expectedStatus) throw new ApiRequestError('缺少原点歌状态')
+    if (typeof body.reason !== 'string' || body.reason.trim().length < 2 || body.reason.trim().length > 500) throw new ApiRequestError('请填写2至500字处理说明')
+    const reason = body.reason.trim()
+    const extra = action === 'confirm' ? {quotedAmountMinor: readInteger(body.quotedAmountMinor, 'quotedAmountMinor', 0, Number.MAX_SAFE_INTEGER), currency: readCurrency(body.currency)}
+      : action === 'paid' ? {paymentId: readUuid(body.paymentId, 'paymentId'), reconciliationEntryId: readUuid(body.reconciliationEntryId, 'reconciliationEntryId')} : {}
+    if ('currency' in extra && extra.currency !== 'CNY') throw new ApiRequestError('仅支持人民币报价')
+    const payload = {requestId, expectedStatus, action: action as 'confirm'|'reject'|'paid'|'performed'|'cancel', reason, ...extra}
+    const key = readIdempotencyKey(request)
+    if (!/^native-business-[a-f0-9-]{36}$/.test(key)) throw new ApiRequestError('原请求编号无效')
+    const execution = await options.performance.nativeSong({...payload, scope: context.scope,
+      employeeId: context.employeeId, actor: employeeActor(context.employeeId), businessDate: context.businessDate,
+      idempotencyKey: key, requestFingerprint: createHash('sha256').update(JSON.stringify({...payload,employeeId:context.employeeId})).digest('hex')})
+    return reply.send({data: execution.value, meta: {replayed: execution.replayed}})
+  }))
 
   app.get('/staff/song-requests', async (request, reply) => handleRoute(reply, async () => {
     const context = await authorizedStaffAny(options, request, ['song.view', 'song.manage'], createAccess)
@@ -1010,6 +1119,23 @@ function publicSongRequestSubmission(submission: {
     slot: submission.slot,
     extensionRequested: submission.extensionRequested,
     requiresStaffConfirmation: submission.requiresStaffConfirmation,
+  }
+}
+
+function nativeReservationAuthorization(context: AuthorizedStaffContext, reservationId:string, override:boolean, createAccess:(transaction:ScopedTransaction)=>StaffAccessPort) {
+  return async(transaction:ScopedTransaction):Promise<void> => {
+    const access=await createAccess(transaction).assertPermission(context.employeeId,'reservation.manage')
+    if(override) requireAccessPermission(access,'reservation.cancel.override')
+    const visibility=reservationVisibility({...context,access})
+    const visible=await transaction.query(`SELECT reservation.id FROM mbox.reservations AS reservation
+      WHERE reservation.tenant_id=$1::uuid AND reservation.store_id=$2::uuid AND reservation.id=$3::uuid
+      AND ($4::boolean OR reservation.owner_employee_id=ANY($5::uuid[]) OR EXISTS (
+        SELECT 1 FROM mbox.reservation_table_locks AS table_lock JOIN mbox.tables AS venue_table
+        ON venue_table.tenant_id=table_lock.tenant_id AND venue_table.store_id=table_lock.store_id AND venue_table.id=table_lock.table_id
+        WHERE table_lock.tenant_id=reservation.tenant_id AND table_lock.store_id=reservation.store_id
+          AND table_lock.reservation_id=reservation.id AND venue_table.area_id=ANY($6::uuid[])))
+      FOR UPDATE OF reservation`,[context.scope.tenantId,context.scope.storeId,reservationId,visibility.all,visibility.ownerEmployeeIds,visibility.areaIds])
+    if(visible.rowCount!==1) throw new GuestResourceNotFoundError()
   }
 }
 
@@ -1439,6 +1565,10 @@ async function handleRoute(
   try {
     return await operation()
   } catch (error) {
+    if (error instanceof NativeCommandNotCommittedError) {
+      const mapped = mapError(error.original)
+      return reply.code(409).send({error:{code:"NATIVE_BUSINESS_NOT_COMMITTED",message:mapped.statusCode < 500 ? mapped.body.error.message : error.message,commitDisposition:"not_committed"}})
+    }
     const mapped = mapError(error)
     if (mapped.statusCode >= 500) {
       reply.request.log.error({ errorCode: safeErrorCode(error) }, 'reservation performance API failed')

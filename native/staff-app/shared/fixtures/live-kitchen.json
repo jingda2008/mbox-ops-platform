@@ -1,0 +1,69 @@
+{
+  "employeeId": "employee-1",
+  "stationCode": "kitchen",
+  "canStart": true,
+  "canPrepare": true,
+  "canHandoff": false,
+  "actionSessionValid": true,
+  "generatedAt": "2026-09-27T00:00:00Z",
+  "pending": [
+    {
+      "taskId": "task1",
+      "itemId": "item1",
+      "productId": "product1",
+      "productName": "小食",
+      "specification": "规格/A",
+      "itemNote": "少盐",
+      "orderNote": "",
+      "tableId": "table1",
+      "tableSessionId": "ts1",
+      "tableCode": "A5",
+      "orderPublicId": "APP-one",
+      "locationVersion": 7,
+      "unmade": 3,
+      "canPrepare": true
+    }
+  ],
+  "batches": [
+    {
+      "id": "batch1",
+      "productName": "小食",
+      "specification": "规格/A",
+      "itemNote": "少盐",
+      "orderNote": "",
+      "employeeId": "employee-1",
+      "employeeName": "测试",
+      "ownershipVersion": 4,
+      "equipment": "炸炉",
+      "releasedAt": null,
+      "units": [
+        {
+          "unitId": "unit1",
+          "taskId": "task1",
+          "tableId": "table1",
+          "tableSessionId": "ts1",
+          "tableCode": "A5",
+          "locationVersion": 7,
+          "state": "started",
+          "held": false,
+          "stopped": false
+        },
+        {
+          "unitId": "held",
+          "taskId": "task1",
+          "tableId": "table1",
+          "tableSessionId": "ts1",
+          "tableCode": "A5",
+          "locationVersion": 7,
+          "state": "started",
+          "held": true,
+          "stopped": false
+        }
+      ]
+    }
+  ],
+  "equipmentLabels": [
+    "炸炉"
+  ],
+  "legacyTaskIds": []
+}

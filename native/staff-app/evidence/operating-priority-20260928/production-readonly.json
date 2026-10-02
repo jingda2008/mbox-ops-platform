@@ -1,0 +1,17 @@
+{
+  "queriedAt": "2026-09-28T05:03:27.995513+00:00",
+  "checks": [
+    {
+      "path": "/",
+      "status": 200,
+      "bytes": 1242
+    },
+    {
+      "path": "/api/ready",
+      "status": 200,
+      "bytes": 600,
+      "readiness": "ready",
+      "deploymentTier": "production"
+    }
+  ]
+}

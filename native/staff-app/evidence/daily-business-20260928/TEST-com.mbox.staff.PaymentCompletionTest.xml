@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mbox.staff.PaymentCompletionTest" tests="15" skipped="0" failures="0" errors="0" timestamp="2026-09-27T18:10:15.442Z" hostname="jingdadeMacBook-Pro.local" time="0.059">
+  <properties/>
+  <testcase name="originalAfterSalesAcknowledgement" classname="com.mbox.staff.PaymentCompletionTest" time="0.002"/>
+  <testcase name="voucherSecretsAreSeparateAndReviewCannotApproveSelf" classname="com.mbox.staff.PaymentCompletionTest" time="0.005"/>
+  <testcase name="fundingMustMatchActualOriginalMoney" classname="com.mbox.staff.PaymentCompletionTest" time="0.003"/>
+  <testcase name="durableVoucherRecoveryDoesNotNeedLostDeviceSecret" classname="com.mbox.staff.PaymentCompletionTest" time="0.002"/>
+  <testcase name="reprintAcknowledgementBoundToImmutableOriginal" classname="com.mbox.staff.PaymentCompletionTest" time="0.001"/>
+  <testcase name="concurrentOnlineReuseRequiresServerBindingOfOriginalScope" classname="com.mbox.staff.PaymentCompletionTest" time="0.0"/>
+  <testcase name="onlineRefundCannotBeMarkedCashPaid" classname="com.mbox.staff.PaymentCompletionTest" time="0.001"/>
+  <testcase name="lateSuccessStopsReplacementAndRefundTargetsOriginal" classname="com.mbox.staff.PaymentCompletionTest" time="0.003"/>
+  <testcase name="unknownResultsNeverDiscardOriginalCommands" classname="com.mbox.staff.PaymentCompletionTest" time="0.0"/>
+  <testcase name="originalBundleAndAvailableQuantity" classname="com.mbox.staff.PaymentCompletionTest" time="0.002"/>
+  <testcase name="physicalTruthAndNoticesDoNotAutomaticallyClear" classname="com.mbox.staff.PaymentCompletionTest" time="0.004"/>
+  <testcase name="activityConfirmationEvidenceAndOldServerGate" classname="com.mbox.staff.PaymentCompletionTest" time="0.022"/>
+  <testcase name="changedActivityAmountCannotBeAcknowledged" classname="com.mbox.staff.PaymentCompletionTest" time="0.001"/>
+  <testcase name="cashCountRequiresAnotherPersonAndFreshLedger" classname="com.mbox.staff.PaymentCompletionTest" time="0.009"/>
+  <testcase name="printingDistinguishesFailureUnknownAndInFlight" classname="com.mbox.staff.PaymentCompletionTest" time="0.003"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

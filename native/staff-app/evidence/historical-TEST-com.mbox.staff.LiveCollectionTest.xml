@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mbox.staff.LiveCollectionTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-09-27T02:22:49.873Z" hostname="jingdadeMacBook-Pro.local" time="0.009">
+  <properties/>
+  <testcase name="serverReceiptMustMatchAndBeSettled" classname="com.mbox.staff.LiveCollectionTest" time="0.003"/>
+  <testcase name="receiptAndScopeRules" classname="com.mbox.staff.LiveCollectionTest" time="0.005"/>
+  <testcase name="originalSessionReadbackSurvivesRestartWithoutTablePermissions" classname="com.mbox.staff.LiveCollectionTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

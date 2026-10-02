@@ -24,6 +24,7 @@ export interface ResolveComplimentaryFulfillmentInput {
   reason: string
   compensationReference: string | null
   idempotencyKey: string
+  nativeExpected?: {orderId:string;benefitId:string;tableSessionId:string;updatedAt:string;attemptCount:number}
 }
 
 export interface ComplimentaryFulfillmentResolutionResult {
@@ -55,6 +56,7 @@ interface LockedIntentRow extends Record<string, unknown> {
   table_session_id: string
   status: string
   attempt_count: number
+  updated_at: string
   last_error_code: string | null
   total_amount_minor: string
   order_status: string
@@ -109,6 +111,10 @@ export class ComplimentaryFulfillmentResolutionService {
         'SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
         [`complimentary-resolution:${transaction.scope.tenantId}:${transaction.scope.storeId}:${input.idempotencyKey}`],
       )
+      if(input.nativeExpected)await assertEmployeeTableSessionAccess(transaction,{
+        employeeId:input.employeeId,tableSessionId:input.nativeExpected.tableSessionId,
+        allTablePermissionCodes:['table.view_all'],lockTableSession:true,
+      })
       const replay = await findResolutionByIdempotencyKey(transaction, input.idempotencyKey)
       if (replay !== null) {
         if (replay.request_fingerprint !== requestFingerprint
@@ -138,6 +144,7 @@ export class ComplimentaryFulfillmentResolutionService {
       if (intent === null || intent.table_session_id !== tableSessionId) {
         throw failure('COMPLIMENTARY_FULFILLMENT_STATE_CHANGED', '礼遇履约状态已变化，请刷新后处理')
       }
+      if(input.nativeExpected&&(intent.order_id!==input.nativeExpected.orderId||intent.benefit_id!==input.nativeExpected.benefitId||intent.table_session_id!==input.nativeExpected.tableSessionId||intent.updated_at!==input.nativeExpected.updatedAt||intent.attempt_count!==input.nativeExpected.attemptCount))throw failure('COMPLIMENTARY_FULFILLMENT_STATE_CHANGED','原礼遇履约已变化，请刷新后核对')
       if (intent.status !== 'failed') {
         throw failure(
           'COMPLIMENTARY_FULFILLMENT_NOT_TERMINAL',
@@ -326,7 +333,7 @@ async function lockIntent(
   intentId: string,
 ): Promise<LockedIntentRow | null> {
   const locked = await transaction.query<LockedIntentRow>(`
-    SELECT intent.id,intent.order_id,intent.benefit_id,intent.status,intent.attempt_count,
+    SELECT intent.id,intent.order_id,intent.benefit_id,intent.status,intent.attempt_count,intent.updated_at::text,
       intent.last_error_code,order_row.table_session_id,order_row.total_amount_minor::text,
       order_row.status AS order_status,order_row.payment_status,order_row.fulfillment_state
     FROM mbox.complimentary_fulfillment_intents intent
@@ -418,6 +425,7 @@ function fingerprint(input: Readonly<ResolveComplimentaryFulfillmentInput>): str
     action: input.action,
     reason: input.reason.trim(),
     compensationReference: input.compensationReference?.trim() ?? null,
+    ...(input.nativeExpected?{nativeExpected:input.nativeExpected}:{}),
   })).digest('hex')
 }
 

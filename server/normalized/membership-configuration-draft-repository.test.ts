@@ -1,3 +1,4 @@
+import {nativeMembershipConfigurationApiPlugin} from './native-membership-configuration-api.js'
 import {assertRuntimeDatabasePool} from './runtime-database-identity.js'
 import Fastify from 'fastify'
 import {membershipConfigurationApiPlugin} from './membership-configuration-api.js'
@@ -273,6 +274,76 @@ integration('membership configuration saved drafts and server impact evidence',(
     await expect(runner.run(scope,tx=>tx.query('SELECT * FROM mbox.approve_managed_notification_draft($1,1,$2,$3)',[unreviewed,ids.approver,'未经影响审核']))).rejects.toThrow(/immutable server impact approval fact/)
     await expect(runner.run(scope,tx=>tx.query('SELECT * FROM mbox.replace_managed_notification_draft($1,1,$2::jsonb,$3)',[unreviewed,JSON.stringify(contents.wechat_notifications),'缺少编辑事实']))).rejects.toThrow(/strong contributor fact/)
     expect((await pool.query('SELECT governance_mode,status,template_id FROM mbox.wechat_notification_policies WHERE id=$1',[ids.legacyNotification])).rows[0]).toMatchObject({governance_mode:'legacy_unattributed',status:'draft',template_id:'legacy-template-094'})
+  })
+
+  it('runs native create/edit/preview/approve/publish with durable receipts and current permission checks',async()=>{
+    const scope={tenantId:ids.tenant,storeId:ids.store},role=randomUUID()
+    await pool.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,'NATIVE_RULES','原生规则测试')",[role,ids.tenant,ids.store])
+    const permissions=['loyalty.configuration.view','loyalty.configuration.edit','loyalty.configuration.preview','loyalty.configuration.approve','loyalty.policy.manage','loyalty.policy.publish','loyalty.redemption.catalog.manage','loyalty.redemption.catalog.publish','loyalty.promotion.manage','loyalty.promotion.publish','membership.terms.manage','membership.terms.publish','loyalty.operations.view','loyalty.operations.control']
+    for(const code of permissions){await pool.query('INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name) VALUES($1,$2,$3,$3) ON CONFLICT DO NOTHING',[ids.tenant,ids.store,code]);await pool.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code=$4',[ids.tenant,ids.store,role,code])}
+    for(const employee of[ids.drafter,ids.editor,ids.approver,ids.publisher])await pool.query('INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id) VALUES($1,$2,$3,$4)',[ids.tenant,ids.store,employee,role])
+    const app=Fastify();await app.register(nativeMembershipConfigurationApiPlugin,{transactions:runner,resolveContext:request=>({scope,employeeId:String(request.headers['x-employee-id']??ids.drafter),businessDate:'2026-10-01'})})
+    const send=(payload:unknown,employee=ids.drafter,key=`native-business-${randomUUID()}`)=>app.inject({method:'POST',url:'/staff/native-membership-config/commands',headers:{'x-employee-id':employee,'idempotency-key':key},payload})
+    const read=async(path='')=>{const r=await app.inject({method:'GET',url:'/staff/native-membership-config'+path,headers:{'x-employee-id':ids.drafter}});expect(r.statusCode,r.body).toBe(200);return r.json().data}
+    try{
+      const create={action:'create',content:contents.base_points,reason:'原生起草积分规则'},createKey=`native-business-${randomUUID()}`
+      const created=await send(create,ids.drafter,createKey);expect(created.statusCode,created.body).toBe(200);const id=created.json().data.configurationId;expect((await send(create,ids.drafter,createKey)).json().meta.replayed).toBe(true)
+      const target={domain:'base_points',configurationId:id,expectedRevision:1},content={...contents.base_points,pointsNumerator:4}
+      const editKey=`native-business-${randomUUID()}`,edit={action:'edit',...target,content,reason:'按原消费调整积分比例'}
+      const edited=await send(edit,ids.editor,editKey);expect(edited.statusCode,edited.body).toBe(200);expect(edited.json().data.result.revision).toBe(2)
+      expect((await send(edit,ids.editor,editKey)).json().meta.replayed).toBe(true);expect((await send(edit)).json().error.commitDisposition).toBe('not_committed')
+      const next={...target,expectedRevision:2};const previewKey=`native-business-${randomUUID()}`,previewRequest={action:'preview',...next}
+      const preview=await send(previewRequest,ids.approver,previewKey);expect(preview.statusCode,preview.body).toBe(200);expect((await send(previewRequest,ids.approver,previewKey)).json().meta.replayed).toBe(true)
+      const saved=await read('/base_points/'+id);expect(saved.preview.publicId).toBe(preview.json().data.result.publicId);expect(saved.draft.content.pointsNumerator).toBe(4)
+      const approve={action:'approve',...next,impactPreviewPublicId:saved.preview.publicId,reason:'原账、成本与履约均已独立核对'}
+      for(const employee of[ids.drafter,ids.editor])expect((await send(approve,employee)).json().error.message).toContain('不能审批')
+      const approved=await send(approve,ids.approver);expect(approved.statusCode,approved.body).toBe(200)
+      const publish={action:'publish',...next,effectiveFrom:new Date(Date.now()+7200_000).toISOString(),effectiveUntil:null,reason:'第三人确认后安排生效'}
+      for(const employee of[ids.drafter,ids.editor,ids.approver])expect((await send(publish,employee)).statusCode).toBe(409)
+      const publishKey=`native-business-${randomUUID()}`,published=await send(publish,ids.publisher,publishKey);expect(published.statusCode,published.body).toBe(200);expect((await send(publish,ids.publisher,publishKey)).json().meta.replayed).toBe(true)
+      expect((await read()).items.find((r:{configurationId:string})=>r.configurationId===id)).toMatchObject({status:'published',revision:2,approvedByEmployeeId:ids.approver})
+      await pool.query("INSERT INTO mbox.employee_permission_overrides(tenant_id,store_id,employee_id,permission_id,effect,reason,configured_by_employee_id) SELECT $1,$2,$3,id,'deny','撤权回执测试',$4 FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code='loyalty.policy.publish'",[ids.tenant,ids.store,ids.publisher,ids.editor])
+      expect((await send(publish,ids.publisher,publishKey)).statusCode).toBe(403)
+      await pool.query("DELETE FROM mbox.employee_permission_overrides WHERE tenant_id=$1 AND store_id=$2 AND employee_id=$3",[ids.tenant,ids.store,ids.publisher])
+      const count=await pool.query("SELECT count(*)::int n FROM mbox.audit_events WHERE tenant_id=$1 AND store_id=$2 AND object_id=$3 AND action='membership.configuration.native.publish'",[ids.tenant,ids.store,id]);expect(count.rows[0].n).toBe(1)
+      const control={action:'control',capability:'points_accrual',operation:'pause',expectedVersion:0,reviewAt:null,reason:'核对异常前暂停积分累积'},controlKey=`native-business-${randomUUID()}`
+      const paused=await send(control,ids.publisher,controlKey);expect(paused.statusCode,paused.body).toBe(200);expect((await send(control,ids.publisher,controlKey)).json().meta.replayed).toBe(true)
+      expect((await send(control)).json().error.commitDisposition).toBe('not_committed')
+      const resumed=await send({...control,operation:'resume',expectedVersion:1},ids.publisher);expect(resumed.statusCode,resumed.body).toBe(200)
+      expect((await read('?section=controls')).items.find((r:{capability:string})=>r.capability==='points_accrual')).toMatchObject({version:2,state:'active'})
+    }finally{await app.close()}
+  })
+
+  it('native governance carries all typed domains and never commits a rejected input or duplicate preview',async()=>{
+    const scope={tenantId:ids.tenant,storeId:ids.store},app=Fastify();await app.register(nativeMembershipConfigurationApiPlugin,{transactions:runner,resolveContext:request=>({scope,employeeId:String(request.headers['x-employee-id']??ids.drafter),businessDate:'2026-10-01'})})
+    const send=(payload:unknown,employee=ids.drafter)=>app.inject({method:'POST',url:'/staff/native-membership-config/commands',headers:{'x-employee-id':employee,'idempotency-key':`native-business-${randomUUID()}`},payload})
+    try{
+      // Publish the existing independently approved tier first: benefit drafts must name a published tier.
+      const tier=await service.get('tier_policy',ids.tier)
+      const publish=await send({action:'publish',domain:'tier_policy',configurationId:ids.tier,expectedRevision:tier.revision,effectiveFrom:new Date(Date.now()+3600_000).toISOString(),effectiveUntil:null,reason:'发布原等级规则'},ids.publisher);expect(publish.statusCode,publish.body).toBe(200)
+      let publishedTier=ids.tier
+      for(const domain of domains.filter(d=>!['base_points','wechat_notifications'].includes(d))){
+        const content=structuredClone(contents[domain])
+        if(content.domain==='tier_benefits')content.tierPolicyVersionId=publishedTier
+        if(content.domain==='redemption_catalog')content.items[0].publicId='native-'+randomUUID()
+        if(content.domain==='promotion_points'){
+          const activityId=randomUUID();await pool.query(`INSERT INTO mbox.community_activities(id,tenant_id,store_id,public_id,activity_kind,title,summary,starts_at,ends_at,assembly_location,capacity,created_by_employee_id) VALUES($1,$2,$3,$4,'other','原生规则测试活动','未结束活动用于促销草稿',clock_timestamp()+interval '2 days',clock_timestamp()+interval '2 days 2 hours','MBOX',20,$5)`,[activityId,ids.tenant,ids.store,'native-'+activityId,ids.drafter]);content.activityId=activityId;content.campaignCode="NATIVE_RULES_1001";await publishActivity(pool,activityId)
+        }
+        const created=await send({action:'create',content,reason:'验证此类原生起草与复核'});expect(created.statusCode,created.body).toBe(200);const id=created.json().data.configurationId
+        const edit=await send({action:'edit',domain,configurationId:id,expectedRevision:1,content,reason:'确认实际门店规则'},ids.editor);expect(edit.statusCode,edit.body).toBe(200)
+        const preview=await send({action:'preview',domain,configurationId:id,expectedRevision:2},ids.approver);expect(preview.statusCode,preview.body).toBe(200)
+        const approved=await send({action:'approve',domain,configurationId:id,expectedRevision:2,impactPreviewPublicId:preview.json().data.result.publicId,reason:'独立复核原业务影响'},ids.approver);expect(approved.statusCode,approved.body).toBe(200)
+        const published=await send({action:'publish',domain,configurationId:id,expectedRevision:2,effectiveFrom:new Date(Date.now()+7200_000).toISOString(),effectiveUntil:null,reason:'按已核对草稿正式发布'},ids.publisher);expect(published.statusCode,published.body).toBe(200)
+        if(domain==='tier_policy')publishedTier=id
+      }
+      const notification=(await pool.query<{id:string}>("SELECT id FROM mbox.wechat_notification_policies WHERE tenant_id=$1 AND store_id=$2 AND status='draft' AND governance_mode='managed' ORDER BY policy_version DESC LIMIT 1",[ids.tenant,ids.store])).rows[0]!.id
+      const edited=await send({action:'edit',domain:'wechat_notifications',configurationId:notification,expectedRevision:1,content:contents.wechat_notifications,reason:'核对托管通知参数'},ids.editor);expect(edited.statusCode,edited.body).toBe(200)
+      const preview=await send({action:'preview',domain:'wechat_notifications',configurationId:notification,expectedRevision:2},ids.approver);expect(preview.statusCode,preview.body).toBe(200)
+      const approve=await send({action:'approve',domain:'wechat_notifications',configurationId:notification,expectedRevision:2,impactPreviewPublicId:preview.json().data.result.publicId,reason:'独立复核通知影响'},ids.approver);expect(approve.statusCode,approve.body).toBe(200)
+      const published=await send({action:'publish',domain:'wechat_notifications',configurationId:notification,expectedRevision:2,effectiveFrom:new Date(Date.now()+7200_000).toISOString(),effectiveUntil:null,reason:'独立安排通知发布时间'},ids.publisher);expect(published.statusCode,published.body).toBe(200)
+      const invalid=await send({action:'create',content:{...contents.base_points,pointsDenominatorMinor:0},reason:'禁止非法分母'});expect(invalid.statusCode).toBe(400)
+      const before=await pool.query("SELECT count(*)::int n FROM mbox.loyalty_tier_policy_versions WHERE tenant_id=$1 AND store_id=$2",[ids.tenant,ids.store]);const invalidOrder=await send({action:'create',content:{...contents.tier_policy,silverUpgradeGrowth:9999},reason:'升级门槛顺序无效'});expect(invalidOrder.json().error.commitDisposition).toBe('not_committed');expect((await pool.query("SELECT count(*)::int n FROM mbox.loyalty_tier_policy_versions WHERE tenant_id=$1 AND store_id=$2",[ids.tenant,ids.store])).rows).toEqual(before.rows)
+    }finally{await app.close()}
   })
 
   function repository(){return new PostgresMembershipConfigurationDraftRepository(runner,{tenantId:ids.tenant,storeId:ids.store})}

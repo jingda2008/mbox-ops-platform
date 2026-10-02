@@ -1,3 +1,4 @@
+import {isNativePhysicalKey,NativePhysicalNotCommittedError} from './native-physical-command.js'
 import type {CommerceKdsRequestContext} from './commerce-kds-api.js'
 import {QuantityRemakeHandoverQuery,QuantityRemakeHandoverCommand} from './quantity-remake-handover.js'
 import {QuantityRedeliveryCommandService} from './quantity-redelivery-command-service.js'
@@ -64,21 +65,43 @@ export const itemAfterSalesApiPlugin:FastifyPluginAsync<ItemAfterSalesApiOptions
     const result=await new QuantityRemakeHandoverCommand(options.commands).dispose({...input,batchId:uuid(object(request.params).batchId),unitIds:body.unitIds.map(uuid),disposition,unopenedReceived:body.unopenedReceived===true})
     return {data:result.value,replayed:result.replayed}
   }))
-  app.post('/commerce/item-after-sales/redeliveries',async(request,reply)=>handle(reply,async()=>{
-    const input=await metadata(request),body=object(request.body)
+  app.get('/commerce/item-after-sales/native-remake-handover',async(request,reply)=>handle(reply,async()=>{
+    const context=await options.resolveContext(request),params=object(request.query)
+    const cursor=params.cursorId===undefined?undefined:{id:uuid(params.cursorId),createdAt:String(params.createdAt??'')}
+    const data=await new QuantityRemakeHandoverQuery(options.transactions).list({...context,cursor})
+    return {data:{...data,employeeId:context.employeeId,supportsNativePhysicalRecovery:true,protocol:1}}
+  }))
+  app.post('/commerce/item-after-sales/native-remakes/:batchId/after-visit-physical',async(request,reply)=>handle(reply,async()=>{
+    const input=await metadata(request),body=object(request.body),disposition=body.disposition
+    if(!/^native-remedy-[a-f0-9-]{36}$/.test(input.idempotencyKey)||body.actorId!==input.employeeId)throw new TypeError('原生实物处理的员工或原请求编号无效')
+    if(typeof body.reason!=='string'||body.reason.trim().length<2||body.reason.trim().length>500)throw new TypeError('请填写2至500字实际处理原因')
+    if(disposition!=='used_loss'&&disposition!=='returned_unopened')throw new TypeError('请选择实际实物去向')
+    if(!Array.isArray(body.unitIds))throw new TypeError('请选择本批实际处理份数')
+    const result=await new QuantityRemakeHandoverCommand(options.commands).dispose({...input,batchId:uuid(object(request.params).batchId),unitIds:body.unitIds.map(uuid),disposition,unopenedReceived:body.unopenedReceived===true})
+    return {data:{...result.value,employeeId:input.employeeId,requestKey:input.idempotencyKey},replayed:result.replayed,protocol:1}
+  }))
+  for(const redeliveryPath of ['redeliveries','native-redeliveries']){
+  const nativeMetadata=async(request:FastifyRequest)=>{
+    const input=await metadata(request)
+    if(redeliveryPath==='native-redeliveries'&&!isNativePhysicalKey(input.idempotencyKey))throw new TypeError('请保留原生原操作编号')
+    return input
+  }
+  app.post(`/commerce/item-after-sales/${redeliveryPath}`,async(request,reply)=>handle(reply,async()=>{
+    const input=await nativeMetadata(request),body=object(request.body)
     const result=await redelivery.request({...input,orderItemId:uuid(body.orderItemId),quantity:quantity(body.quantity),originalGoodsAvailable:body.originalGoodsAvailable===true})
     reply.code(result.replayed?200:201);return {data:result.value,replayed:result.replayed}
   }))
-  app.post('/commerce/item-after-sales/redeliveries/:redeliveryId/cancel',async(request,reply)=>handle(reply,async()=>{
-    const input=await metadata(request)
+  app.post(`/commerce/item-after-sales/${redeliveryPath}/:redeliveryId/cancel`,async(request,reply)=>handle(reply,async()=>{
+    const input=await nativeMetadata(request)
     const result=await redelivery.cancel({...input,redeliveryId:uuid(object(request.params).redeliveryId)})
     return {data:result.value,replayed:result.replayed}
   }))
-  app.post('/commerce/item-after-sales/redeliveries/:redeliveryId/complete',async(request,reply)=>handle(reply,async()=>{
-    const input=await metadata(request),body=object(request.body)
+  app.post(`/commerce/item-after-sales/${redeliveryPath}/:redeliveryId/complete`,async(request,reply)=>handle(reply,async()=>{
+    const input=await nativeMetadata(request),body=object(request.body)
     const result=await redelivery.complete({...input,redeliveryId:uuid(object(request.params).redeliveryId),quantity:quantity(body.quantity)})
     return {data:result.value,replayed:result.replayed}
   }))
+  }
   app.post('/commerce/item-after-sales/requests',async(request,reply)=>handle(reply,async()=>{
     const input=await metadata(request),body=object(request.body)
     const result=await service.request({...input,orderItemId:uuid(body.orderItemId),quantity:quantity(body.quantity)})
@@ -132,6 +155,7 @@ function uuid(value:unknown){if(typeof value!=='string'||!/^[0-9a-f]{8}-[0-9a-f]
 function quantity(value:unknown){if(typeof value!=='number'||!Number.isSafeInteger(value)||value<1||value>999)throw new TypeError('请选择1至999份实际数量');return value}
 async function handle(reply:FastifyReply,run:()=>Promise<unknown>){
   try{return await run()}catch(error){
+    if(error instanceof NativePhysicalNotCommittedError)return reply.code(409).send({error:{code:'NATIVE_PHYSICAL_NOT_COMMITTED',message:error.message,commitDisposition:'not_committed'}})
     const [status,code,message]=error instanceof NormalizedAuthenticationRequiredError||error instanceof StaffSessionNotFoundError?[401,'STAFF_SESSION_REQUIRED','请恢复员工登录后继续原操作']
       :error instanceof StaffAccessDeniedError||error instanceof EmployeeTableAccessDeniedError?[403,'STAFF_ACCESS_FORBIDDEN',error.message]
       :error instanceof RefundLimitError?[409,'PRICE_REVIEW_REQUIRED','原付款可退余额或商品退款分摊已变化，请核对原申请，未创建新的退款']

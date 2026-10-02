@@ -223,6 +223,11 @@
 .staff-assignment-message.is-error { color: #8d2f35; border-color: #e5afb2; background: #fff3f3; }
 .staff-assignment-boundary { padding: 9px 10px; border-left: 4px solid #c4a24c; background: #fff9e8; display: flex; align-items: flex-start; gap: 8px; color: #62501d; font-size: 12px; line-height: 1.5; }
 .staff-assignment-boundary svg { flex: 0 0 auto; margin-top: 1px; }
+.staff-assignment-recovery { flex-wrap: wrap; align-items: center; }
+.staff-assignment-recovery > span { flex: 1 1 190px; }
+.staff-assignment-recovery > button { flex: 0 0 auto; min-height: 44px; padding: 0 12px; border: 1px solid var(--staff-green); border-radius: 8px; background: #fffdf9; color: var(--staff-green-deep); font: inherit; font-weight: 800; white-space: nowrap; }
+.staff-assignment-recovery > button:disabled { opacity: .55; }
+
 .staff-assignment-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
 .staff-assignment-fields label { min-width: 0; display: grid; gap: 5px; color: #586159; font-size: 12px; font-weight: 700; }
 .staff-assignment-fields input, .staff-assignment-fields select { width: 100%; min-width: 0; min-height: 44px; padding: 0 9px; border: 1px solid #b8c1b9; border-radius: 5px; background: #fff; color: var(--staff-ink); font: inherit; }

@@ -1,3 +1,4 @@
+import {nativePhysicalExecutor, NativePhysicalNotCommittedError} from './native-physical-command.js';
 import { createHash } from "node:crypto";
 import { productTasteProfile } from '../../src/shared/product-taste-profile.js';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
@@ -354,6 +355,21 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
     }),
   );
 
+  app.get('/native/catalog/products', async (request, reply) => handleRoute(reply, async () => {
+    const context = await resolveStaffContext(options, request);
+    const query = readProductListQuery(request.query, false);
+    const data = await options.transactions.run(context.scope, async tx => {
+      await assertLivePermission(tx, context.employeeId, CATALOG_PRODUCT_MANAGE_PERMISSION);
+      const includeCost = await hasLivePermission(tx, context.employeeId, INVENTORY_COST_VIEW_PERMISSION);
+      return {currentEmployeeId: context.employeeId, durableProducts: true, configurationProtocol: 1, operationalProtocol: 1,
+        categories: (await listMenuCategories(tx)).map(mapMenuCategory),
+        canPrice: await hasLivePermission(tx, context.employeeId, CATALOG_PRICE_MANAGE_PERMISSION),
+        products: (await listProducts(tx, query)).map(row=>{const product=mapProduct(row,false,includeCost);return {...product,nativeVersion:nativeProductVersion(product)}}),
+        offset: query.offset, limit: query.limit};
+    }, {readOnly:true});
+    return reply.send({data});
+  }));
+
   app.get("/catalog/products", async (request, reply) =>
     handleRoute(reply, async () => {
       const context = await resolveStaffContext(options, request);
@@ -390,7 +406,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
     }),
   );
 
-  app.post("/catalog/menu-categories", async (request, reply) =>
+  for (const native of [false,true]) app.post(native ? "/native/catalog/menu-categories" : "/catalog/menu-categories", async (request, reply) =>
     handleRoute(reply, async () => {
       const context = await resolveStaffContext(options, request);
       const input = readCreateMenuCategory(request.body);
@@ -402,7 +418,8 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
         idempotencyKey,
         input,
       );
-      const execution = await options.commandExecutor.execute(
+      const executor = native ? nativePhysicalExecutor(options.commandExecutor,context,tx=>assertLivePermission(tx,context.employeeId,CATALOG_PRODUCT_MANAGE_PERMISSION)) : options.commandExecutor;
+      const execution = await executor.execute(
         command,
         async (transaction) => {
           await assertLivePermission(
@@ -449,22 +466,25 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
     }),
   );
 
-  app.patch<{ Params: { categoryCode: string } }>(
-    "/catalog/menu-categories/:categoryCode",
+  for (const native of [false,true]) app.route<{ Params: { categoryCode: string } }>({
+    method:native ? "POST" : "PATCH", url:native ? "/native/catalog/menu-categories/:categoryCode" : "/catalog/menu-categories/:categoryCode", handler:
     async (request, reply) =>
       handleRoute(reply, async () => {
         const context = await resolveStaffContext(options, request);
         const categoryCode = requiredCode(request.params.categoryCode, "categoryCode");
-        const patch = readUpdateMenuCategory(request.body);
+        const input=readJsonObject(request.body,"请求正文");
+        const expected=native ? requiredText(input.expectedUpdatedAt,"expectedUpdatedAt",100) : null;
+        const patch = readUpdateMenuCategory(native ? input.patch : request.body);
         const idempotencyKey = readIdempotencyKey(request);
         const command = menuCategoryCommand(
           request,
           context,
           "catalog.menu-category.update",
           idempotencyKey,
-          { categoryCode, ...patch },
+          { categoryCode, ...patch, ...(native ? {expectedUpdatedAt:expected} : {}) },
         );
-        const execution = await options.commandExecutor.execute(
+        const executor = native ? nativePhysicalExecutor(options.commandExecutor,context,tx=>assertLivePermission(tx,context.employeeId,CATALOG_PRODUCT_MANAGE_PERMISSION)) : options.commandExecutor;
+        const execution = await executor.execute(
           command,
           async (transaction) => {
             await assertLivePermission(
@@ -473,6 +493,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
               CATALOG_PRODUCT_MANAGE_PERMISSION,
             );
             const before = await getMenuCategoryByCode(transaction, categoryCode, true);
+            if(native && before.updatedAt!==expected)throw new NativePhysicalNotCommittedError('分类已变化，本次未提交，请刷新原分类');
             const afterInput = {
               displayName: patch.displayName ?? before.displayName,
               parentCode: patch.parentCode === undefined ? before.parentCode : patch.parentCode,
@@ -521,7 +542,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
         );
         return reply.send(executionResponse(execution));
       }),
-  );
+  });
 
   app.get("/guest/catalog/products", async (request, reply) =>
     handleRoute(reply, async () => {
@@ -543,7 +564,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
     }),
   );
 
-  app.post("/catalog/products", async (request, reply) =>
+  for (const native of [false,true]) app.post(native ? "/native/catalog/products" : "/catalog/products", async (request, reply) =>
       handleRoute(reply, async () => {
         const context = await resolveStaffContext(options, request);
         const input = readCreateProduct(request.body);
@@ -565,7 +586,14 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
         idempotencyKey,
         input,
       );
-      const execution = await options.commandExecutor.execute(
+      let mayReadCost=false;
+      const executor=native ? nativePhysicalExecutor(options.commandExecutor,context,async tx=>{
+        await assertLivePermission(tx,context.employeeId,CATALOG_PRODUCT_MANAGE_PERMISSION);
+        if(input.standardPrice!==null)await assertLivePermission(tx,context.employeeId,CATALOG_PRICE_MANAGE_PERMISSION);
+        if(input.costAmountProvided)await assertCostPermission(tx,context.employeeId);
+        mayReadCost=await hasLivePermission(tx,context.employeeId,INVENTORY_COST_VIEW_PERMISSION);
+      }) : options.commandExecutor;
+      const execution = await executor.execute(
         command,
         async (transaction) => {
           await assertLivePermission(
@@ -682,26 +710,37 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
       );
       return reply
         .code(execution.replayed ? 200 : 201)
-        .send(executionResponse(execution));
+        .send(executionResponse(native ? {...execution,value:redactProductCost(execution.value,mayReadCost)} : execution));
     }),
   );
 
-  app.patch<{ Params: { productId: string } }>(
-    "/catalog/products/:productId",
-    async (request, reply) =>
+  const productUpdateHandler = (native: boolean) =>
+    async (request: FastifyRequest<{Params:{productId:string}}>, reply: FastifyReply) =>
       handleRoute(reply, async () => {
         const context = await resolveStaffContext(options, request);
         const productId = readUuid(request.params.productId, "productId");
-        const patch = readUpdateProduct(request.body);
+        const input = native ? readJsonObject(request.body, "请求正文") : null;
+        const expected = input?.expectedVersion;
+        if (native && (typeof expected !== 'string' || !/^[a-f0-9]{64}$/.test(expected))) throw new CatalogRequestError('请先刷新原商品版本');
+        const rawPatch = native ? readJsonObject(input!.patch, "patch") : request.body;
+        if (native && Object.keys(rawPatch as JsonObject).some(key => !['status','guestVisible','menuSortOrder','standardPrice','name','categoryCode','fulfillmentStation','productKind','inventoryControlMode','bundleComponents','bundleChoiceGroups','availableFrom','availableUntil','allowedChannels','maxOrderQuantity','kdsPriority','fulfillmentSlaSeconds','searchText','productSnapshot','costChangeReason',...PRODUCT_OPERATIONAL_INPUT_KEYS].includes(key))) throw new CatalogRequestError('该入口不支持该商品配置字段');
+        const patch = readUpdateProduct(rawPatch);
         const idempotencyKey = readIdempotencyKey(request);
         const command = catalogCommand(
           request,
           context,
           "catalog.product.update",
           idempotencyKey,
-          { productId, ...patch },
+          { productId, ...patch, ...(native ? {expectedVersion: expected} : {}) },
         );
-        const execution = await options.commandExecutor.execute(
+        let mayReadCost = false;
+        const executor = native ? nativePhysicalExecutor(options.commandExecutor, context, async tx => {
+          await assertLivePermission(tx, context.employeeId, CATALOG_PRODUCT_MANAGE_PERMISSION);
+          if (patch.standardPrice !== null) await assertLivePermission(tx, context.employeeId, CATALOG_PRICE_MANAGE_PERMISSION);
+          if (patch.costAmountProvided) await assertCostPermission(tx, context.employeeId);
+          mayReadCost = await hasLivePermission(tx, context.employeeId, INVENTORY_COST_VIEW_PERMISSION);
+        }) : options.commandExecutor;
+        const execution = await executor.execute(
           command,
           async (transaction) => {
             await assertLivePermission(
@@ -723,6 +762,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
             }
             await lockProduct(transaction, productId);
             const before = mapProduct(await getProduct(transaction, productId));
+            if (native && nativeProductVersion(before) !== expected) throw new NativePhysicalNotCommittedError('商品已被其他员工修改，本次未提交，请刷新后重新核对');
             const targetKind = patch.productKind ?? before.productKind;
             const targetInventoryControlMode =
               patch.inventoryControlMode ?? before.inventoryControlMode;
@@ -903,9 +943,10 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
             );
           },
         );
-        return reply.send(executionResponse(execution));
-      }),
-  );
+        return reply.send(executionResponse(native ? {...execution, value: redactProductCost(execution.value, mayReadCost)} : execution));
+      });
+  app.patch<{Params:{productId:string}}>('/catalog/products/:productId', productUpdateHandler(false));
+  app.post<{Params:{productId:string}}>('/native/catalog/products/:productId', productUpdateHandler(true));
 
   app.put<{ Params: { productId: string } }>(
     "/catalog/products/:productId/standard-price",
@@ -3403,6 +3444,7 @@ async function handleRoute(
 }
 
 function sendError(reply: FastifyReply, error: unknown): FastifyReply {
+  if (error instanceof NativePhysicalNotCommittedError) return reply.code(409).send({error:{code:'NATIVE_PHYSICAL_NOT_COMMITTED',message:error.message,commitDisposition:'not_committed'}});
   if (error instanceof CatalogRequestError || error instanceof TypeError) {
     return apiError(reply, 400, "CATALOG_REQUEST_INVALID", error.message);
   }
@@ -3565,4 +3607,11 @@ function apiError(
 ): FastifyReply {
   const body: ApiErrorBody = { error: { code, message } };
   return reply.code(statusCode).send(body);
+}
+
+function nativeProductVersion(product: CatalogProduct): string {
+  // Exclude per-role cost visibility and time-varying sellability. Include the
+  // price row identity as well as fields, so even same-millisecond edits conflict.
+  return createHash('sha256').update(JSON.stringify([product.id,product.updatedAt,
+    product.status,product.guestVisible,product.menuSortOrder,product.standardPrice,product.name,product.categoryCode,product.fulfillmentStation,product.productKind,product.inventoryControlMode,product.bundleComponents.map(componentInput),product.bundleChoiceGroups.map(choiceGroupInput),product.availableFrom,product.availableUntil,product.allowedChannels,product.maxOrderQuantity,product.kdsPriority,product.fulfillmentSlaSeconds,product.searchText,product.productSnapshot,PRODUCT_OPERATIONAL_INPUT_KEYS.filter(k=>k!=='costAmountMinor').map(k=>product[k])])).digest('hex');
 }

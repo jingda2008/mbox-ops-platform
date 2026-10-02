@@ -1,0 +1,19 @@
+{
+  "archive": "/Users/jingda/mbox/outputs/native-installers/20260928/MBOX-Staff-0.2.0-iPhone-preview-unsigned.xcarchive",
+  "version": "0.2.0",
+  "build": "2",
+  "minimumOS": "17.0",
+  "updateChannel": "preview",
+  "platform": "IOS",
+  "signed": false,
+  "installable": false,
+  "binarySHA256": "0843cafbba4339b984690e69030ac6356392d6645964371e6f2e56c6f4ccabc0",
+  "assetsSHA256": "b4917981ae30422bbcc77a87be9a0fc8a3ae467114d918e142f9d168f4f3317e",
+  "privacySHA256": "86e8b51babb604cf9a30dc4902a9e7c3d5195eec21fadceb1f231b856fba33c9",
+  "unsignedIPA": "/Users/jingda/mbox/outputs/native-installers/20260928/MBOX-Staff-0.2.0-iPhone-UNSIGNED-NOT-INSTALLABLE.ipa",
+  "unsignedIPASHA256": "409341de928f9133bb87e04ff841ad369c5cc93c15311515ff7161b343cdb73d",
+  "unsignedIPABytes": 2328632,
+  "xcodeAccount": "signed in",
+  "teamType": "Personal Team",
+  "provisionedDevices": 0
+}

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mbox.staff.DomainTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-09-26T15:32:35.374Z" hostname="jingdadeMacBook-Pro.local" time="0.032">
+  <properties/>
+  <testcase name="unknownPaymentBlocked" classname="com.mbox.staff.DomainTest" time="0.008"/>
+  <testcase name="fullCycleAndReplay" classname="com.mbox.staff.DomainTest" time="0.013"/>
+  <testcase name="orderingAndSearch" classname="com.mbox.staff.DomainTest" time="0.007"/>
+  <testcase name="fuzzyTableSearch" classname="com.mbox.staff.DomainTest" time="0.001"/>
+  <testcase name="soldOutAndDuplicateLinesRejected" classname="com.mbox.staff.DomainTest" time="0.0"/>
+  <testcase name="exactCents" classname="com.mbox.staff.DomainTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

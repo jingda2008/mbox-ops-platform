@@ -5,7 +5,7 @@ import type {
   JsonObject,
   NormalizedCommandExecutor,
 } from './command-executor.js'
-import { hashRequestFingerprint } from './command-executor.js'
+import { hashRequestFingerprint, IdempotencyConflictError } from './command-executor.js'
 import { randomUUID } from 'node:crypto'
 import {
   StaffAccessDeniedError,StaffAccessRepository,type EffectiveStaffAccess,
@@ -234,6 +234,7 @@ export interface TransferTableCommand extends TableManagementCommandBase {
 }
 
 export interface MoveTableParticipantsCommand extends TableManagementCommandBase {
+  nativeGuard?: { sourceTableId:string;sourceLocationVersion:number;sourceGuestCount:number;targetGuestCount:number;targetCapacity:number }
   movementKind: 'participant_split'|'participant_merge'
   sourceTableSessionId: string
   targetTableId: string
@@ -371,6 +372,16 @@ export class TableManagementConflictError extends Error {
     super(message)
     this.name = 'TableManagementConflictError'
   }
+}
+
+// Only emitted from a guarded assignment transaction after its domain operation rejects.
+// Idempotency conflicts, permissions, transport failures and commit uncertainty stay unknown.
+export class ParticipantMovementNotCommittedError extends TableManagementConflictError {
+  constructor(message:string) { super(message);this.name='ParticipantMovementNotCommittedError' }
+}
+
+export class AssignmentNotCommittedError extends TableManagementConflictError {
+  constructor(message: string) { super(message); this.name = 'AssignmentNotCommittedError' }
 }
 
 export class CapacityOverrideReasonRequiredError extends Error {
@@ -699,7 +710,13 @@ export class TableManagementRepository {
       FOR UPDATE OF venue_table
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.tableId])
     const table = requiredRow(tableResult.rows[0], '桌台')
-    if (table.table_status !== 'available' || table.area_status !== 'active') {
+    // Read the area after the table lock: a paused-area transaction may have
+    // committed while the original joined statement waited for this table.
+    const freshArea = await this.transaction.query<{status: AreaStatus}>(`SELECT area.status FROM mbox.areas area
+      JOIN mbox.tables t ON (t.tenant_id,t.store_id,t.area_id)=(area.tenant_id,area.store_id,area.id)
+      WHERE t.tenant_id=$1 AND t.store_id=$2 AND t.id=$3 FOR SHARE OF area`,
+      [this.transaction.scope.tenantId,this.transaction.scope.storeId,input.tableId])
+    if (table.table_status !== 'available' || freshArea.rows[0]?.status !== 'active') {
       throw new TableManagementConflictError('当前桌台或所在区域已停用，不能开台')
     }
     const overCapacity = input.guestCount > table.capacity
@@ -796,7 +813,11 @@ export class TableManagementRepository {
     if (tableResult.rowCount !== 2) throw new TableManagementNotFoundError('源桌台或目标桌台')
     const source = tableResult.rows.find((row) => row.id === session.tableId)!
     const target = tableResult.rows.find((row) => row.id === input.targetTableId)!
-    if (target.table_status !== 'available' || target.area_status !== 'active') {
+    const freshTargetArea = await this.transaction.query<{status: AreaStatus}>(`SELECT area.status FROM mbox.areas area
+      JOIN mbox.tables t ON (t.tenant_id,t.store_id,t.area_id)=(area.tenant_id,area.store_id,area.id)
+      WHERE t.tenant_id=$1 AND t.store_id=$2 AND t.id=$3 FOR SHARE OF area`,
+      [this.transaction.scope.tenantId,this.transaction.scope.storeId,input.targetTableId])
+    if (target.table_status !== 'available' || freshTargetArea.rows[0]?.status !== 'active') {
       throw new TableManagementConflictError('目标桌台或所在区域已停用')
     }
     const targetOverCapacity = session.guestCount > target.capacity
@@ -901,6 +922,33 @@ export class TableManagementRepository {
         capacityOverrideReason:stored.capacity_override_reason }
       Object.defineProperty(value,'movementStoreReplayed',{ value:true,enumerable:false })
       return value
+    }
+    try { return await this.applyParticipantMovement(input,movementKey,movementFingerprint) }
+    catch(error) {
+      if(input.nativeGuard && (error instanceof TableManagementConflictError || error instanceof TableManagementNotFoundError || error instanceof CapacityOverrideReasonRequiredError))
+        throw new ParticipantMovementNotCommittedError(error.message)
+      throw error
+    }
+  }
+
+  private async applyParticipantMovement(input:ManagedParticipantMovementInput,movementKey:string,movementFingerprint:string):Promise<TableParticipantMovementResult> {
+    if(input.nativeGuard) {
+      const expected=input.nativeGuard
+      await this.transaction.query(`SELECT id FROM mbox.table_sessions
+        WHERE tenant_id=$1 AND store_id=$2 AND id=ANY($3::uuid[]) ORDER BY id FOR UPDATE`,
+        [this.transaction.scope.tenantId,this.transaction.scope.storeId,[input.sourceTableSessionId,...(input.targetTableSessionId?[input.targetTableSessionId]:[])]])
+      const current=(await this.transaction.query<{source_table_id:string;source_location_version:number;source_guest_count:number;target_guest_count:number;target_capacity:number;target_session_id:string|null}>(`
+        SELECT source.table_id AS source_table_id,source.location_version AS source_location_version,
+          source.guest_count AS source_guest_count,COALESCE(target_session.guest_count,0) AS target_guest_count,
+          COALESCE(target_session.capacity_at_open,target.capacity) AS target_capacity,target_session.id AS target_session_id
+        FROM mbox.table_sessions source JOIN mbox.tables target ON target.tenant_id=source.tenant_id AND target.store_id=source.store_id AND target.id=$4
+        LEFT JOIN mbox.table_sessions target_session ON target_session.tenant_id=target.tenant_id AND target_session.store_id=target.store_id AND target_session.table_id=target.id AND target_session.status IN ('open','closing')
+        WHERE source.tenant_id=$1 AND source.store_id=$2 AND source.id=$3 AND source.status='open' FOR UPDATE OF source,target`,
+        [this.transaction.scope.tenantId,this.transaction.scope.storeId,input.sourceTableSessionId,input.targetTableId])).rows[0]
+      if(!current || current.source_table_id!==expected.sourceTableId || Number(current.source_location_version)!==expected.sourceLocationVersion
+        || current.source_guest_count!==expected.sourceGuestCount || current.target_guest_count!==expected.targetGuestCount
+        || current.target_capacity!==expected.targetCapacity || current.target_session_id!==input.targetTableSessionId)
+        throw new TableManagementConflictError('源桌或目标桌位置、人数、容量已变化，请重新预检')
     }
     // The scoped movement lock above and the definer command below serialize
     // participant changes; runtime must not acquire UPDATE rights on evidence.
@@ -1055,24 +1103,24 @@ export class TableManagementCommandService {
       repository.updateTable(command), 'table', 'table.updated.v1')
   }
 
-  assign(command: Readonly<AssignTableCommand>) {
+  assign(command: Readonly<AssignTableCommand>, guarded = false) {
     return this.execute(command, 'table.assignment.create', TABLE_ASSIGNMENT_MANAGE_PERMISSION,
       async (repository) => repository.assign({ ...command, createdByEmployeeId: command.actor.employeeId }),
-      'table_assignment', 'table.assignment.created.v1')
+      'table_assignment', 'table.assignment.created.v1', guarded)
   }
 
-  assignMany(command: Readonly<AssignTablesCommand>) {
+  assignMany(command: Readonly<AssignTablesCommand>, guarded = false) {
     return this.execute(command, 'table.assignment.batch_create', TABLE_ASSIGNMENT_MANAGE_PERMISSION,
       async (repository) => repository.assignMany({
         ...command,
         createdByEmployeeId: command.actor.employeeId,
-      }), 'table_assignment_batch', 'table.assignment.batch_created.v1')
+      }), 'table_assignment_batch', 'table.assignment.batch_created.v1', guarded)
   }
 
-  endAssignment(command: Readonly<EndAssignmentCommand>) {
+  endAssignment(command: Readonly<EndAssignmentCommand>, guarded = false) {
     return this.execute(command, 'table.assignment.end', TABLE_ASSIGNMENT_MANAGE_PERMISSION,
       async (repository) => repository.endAssignment(command.assignmentId, command.endsAt),
-      'table_assignment', 'table.assignment.ended.v1')
+      'table_assignment', 'table.assignment.ended.v1', guarded)
   }
 
   open(command: Readonly<OpenManagedTableCommand>) {
@@ -1104,8 +1152,16 @@ export class TableManagementCommandService {
     operation: (repository: TableManagementRepository) => Promise<Result>,
     objectType: string,
     eventType: string,
+    guardedAssignment = false,
   ): Promise<CommandExecution<Result>> {
     validateCommandBase(command)
+    // Separate namespace prevents an old, expired webpage request from being
+    // mistaken for a new guarded request without a permanent receipt.
+    const nativeMovement=operationScope==='table.participation.move' && command.idempotencyKey.startsWith('native-participants-')
+    if(nativeMovement)operationScope+='.native'
+    if (guardedAssignment) operationScope += '.guarded'
+    const recoveryTrace = `assignment-recovery:${hashRequestFingerprint(`${operationScope}:${command.idempotencyKey}`)}`
+    let durableReplayed = false
     return this.commands.execute({
       scope: command.scope,
       operationScope,
@@ -1114,11 +1170,40 @@ export class TableManagementCommandService {
       resultCodec: jsonResultCodec<Result>(),
     }, async (transaction) => {
       await new StaffAccessRepository(transaction).assertPermission(command.actor.employeeId, permission)
-      const result = await operation(new TableManagementRepository(transaction))
+      if (guardedAssignment) {
+        const original = (await transaction.query<{ after_snapshot: JsonObject; metadata: JsonObject; actor_employee_id: string }>(`
+          SELECT after_snapshot, metadata, actor_employee_id
+          FROM mbox.audit_events
+          WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND action = $3 AND trace_id = $5
+            AND metadata->>'assignmentRecoveryProtocol' = '1'
+            AND metadata->>'idempotencyKey' = $4
+          ORDER BY occurred_at, id LIMIT 1
+        `, [command.scope.tenantId, command.scope.storeId, eventType.replace(/\.v1$/, ''), command.idempotencyKey, recoveryTrace])).rows[0]
+        if (original) {
+          if (original.actor_employee_id !== command.actor.employeeId
+            || original.metadata.requestFingerprint !== command.requestFingerprint) {
+            throw new IdempotencyConflictError(operationScope, command.idempotencyKey)
+          }
+          durableReplayed = true
+          return { result: jsonResultCodec<Result>().decode(original.after_snapshot), auditEvents: [], outboxMessages: [] }
+        }
+      }
+      let result: Result
+      try {
+        result = await operation(new TableManagementRepository(transaction))
+      } catch (error) {
+        if (guardedAssignment && (error instanceof TableManagementConflictError
+          || error instanceof TableManagementNotFoundError)) {
+          // Propagate through the executor so the entire batch rolls back first.
+          throw new AssignmentNotCommittedError(error.message)
+        }
+        throw error
+      }
       const objectId = result.id ?? result.eventId ?? result.tableSessionId
       if (objectId === undefined) throw new TypeError('桌台命令结果缺少对象标识')
       const payload = asJsonObject(result)
       const movementStoreReplayed=(result as { movementStoreReplayed?:boolean }).movementStoreReplayed===true
+      if(nativeMovement && movementStoreReplayed)durableReplayed=true
       return {
         result,
         auditEvents: movementStoreReplayed ? [] : [{
@@ -1129,8 +1214,11 @@ export class TableManagementCommandService {
           businessDate: command.businessDate,
           reason: command.reason,
           afterData: payload,
+          ...(guardedAssignment ? { traceId: recoveryTrace, metadata: { assignmentRecoveryProtocol: '1',
+            idempotencyKey: command.idempotencyKey, requestFingerprint: command.requestFingerprint } } : {}),
         }],
         outboxMessages: movementStoreReplayed ? [] : [{
+          ...(guardedAssignment ? { businessEventKey: recoveryTrace } : {}),
           aggregateType: objectType,
           aggregateId: objectId,
           aggregateVersion: 1,
@@ -1138,7 +1226,10 @@ export class TableManagementCommandService {
           payload,
         }],
       }
-    })
+    }, guardedAssignment || nativeMovement ? async (transaction) => {
+      // Runs before cached replay too: revoked employees cannot read old receipts.
+      await new StaffAccessRepository(transaction).assertPermission(command.actor.employeeId, permission)
+    } : undefined).then((execution) => durableReplayed ? { ...execution, replayed: true } : execution)
   }
 }
 

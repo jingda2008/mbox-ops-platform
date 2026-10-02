@@ -482,6 +482,21 @@ describe('customer experience activity contact API', () => {
     }), { tableSessionId, limit: 5 })
   })
 
+  it('native observations require explicit facts and a stable native key while preserving the web contract',async()=>{
+    vi.spyOn(StaffAccessRepository.prototype,'assertPermission').mockResolvedValue({permissions:['observation.record','observation.confirm']} as never)
+    const confirmObservation=vi.fn(async(_context:unknown,_input:unknown)=>({value:{publicId:'observation-native-test',status:'confirmed',events:[],serviceTaskId:null},replayed:false}))
+    const parseObservation=vi.fn(async()=>({value:{publicId:'observation-native-test',status:'draft'},replayed:false}))
+    const nativeObservationBoard=vi.fn(async()=>({tableSessionId:'82000000-0000-4000-8000-000000000010',durable:true,history:{items:[],permissions:{canCorrect:false,canViewRaw:false}},draft:null}))
+    const app=staffReleaseFixture({confirmObservation,parseObservation,nativeObservationBoard})
+    const key='native-business-82000000-0000-4000-8000-000000000021',url='/staff/native-observations/observation-native-test/confirm'
+    const empty=await app.inject({method:'POST',url,headers:{'idempotency-key':key},payload:{events:[]}});expect(empty.statusCode).toBe(400);expect(confirmObservation).not.toHaveBeenCalled()
+    const event={expressionKind:'customer_quote',scopeKind:'table',eventType:'other',degree:null,reasonCode:null,seatLabel:null,customerId:null,candidateId:null,productId:null,confidence:0.4,rawExcerpt:'客人原话'}
+    const good=await app.inject({method:'POST',url,headers:{'idempotency-key':key},payload:{events:[event]}});expect(good.statusCode,good.body).toBe(200);expect(confirmObservation).toHaveBeenLastCalledWith(expect.anything(),expect.objectContaining({nativeReceipt:true,events:[event]}))
+    const bad=await app.inject({method:'POST',url,headers:{'idempotency-key':'web-original-key'},payload:{events:[event]}});expect(bad.statusCode).toBe(400)
+    const legacy=await app.inject({method:'POST',url:'/staff/observations/observation-native-test/confirm',headers:{'idempotency-key':'web-original-key'},payload:{events:[event]}});expect(legacy.statusCode).toBe(200);expect(confirmObservation.mock.calls.at(-1)?.[1]).not.toHaveProperty('nativeReceipt')
+    const board=await app.inject({method:'GET',url:'/staff/native-table-sessions/82000000-0000-4000-8000-000000000010/observations'});expect(board.statusCode).toBe(200);expect(board.json().data.durable).toBe(true)
+  })
+
   it('uses separate approval and highest-publication contracts for loyalty rules', async () => {
     const checkedPermissions: string[] = []
     vi.spyOn(StaffAccessRepository.prototype, 'assertPermission').mockImplementation(async (_employeeId, permission) => {

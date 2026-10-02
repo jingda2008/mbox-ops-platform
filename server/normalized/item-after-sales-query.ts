@@ -105,7 +105,17 @@ export class ItemAfterSalesQuery {
       const remakeReturn=await readPackagedReturnEligibility(tx,latestPhysical.map(part=>part.id),true)
       const unitsWithReturn=units.map(unit=>{const latest=latestPhysical.find(part=>part.unit_id===unit.id)
         return {...unit,returnEligibility:latest&&latest.production_state==='unmade'?{canReturn:true,releaseOnly:true,reason:'新批仍未制作，仅停止新批并释放其预留，不增加实物回库流水。'}:latest?remakeReturn.get(latest.id):originalReturn.get(unit.id)}})
-      return {quantityEntryUnavailableReason,redeliveries,redeliveryAvailableQuantity,canConfirmRedelivery,canCancelRedelivery,
+      // Keep every immutable replacement link visible for recovery of a lost native
+      // acknowledgement, including an older new order later cancelled/replaced.
+      const replacementOrders=(await tx.query<{orderId:string;publicId:string;status:string;sourceCaseId:string}>(`
+        SELECT replacement.id AS "orderId",replacement.public_id AS "publicId",
+          replacement.status,link.case_id AS "sourceCaseId"
+        FROM mbox.item_after_sales_replacement_orders link
+        JOIN mbox.orders replacement ON replacement.tenant_id=link.tenant_id
+          AND replacement.store_id=link.store_id AND replacement.id=link.order_id
+        WHERE link.tenant_id=$1 AND link.store_id=$2 AND link.case_id=ANY($3::uuid[])
+        ORDER BY replacement.created_at,replacement.id`,[...scope,cases.map(value=>value.id)])).rows
+      return {supportsNativeReplacementRecovery:true,replacementOrders,supportsNativePhysicalRecovery:true,quantityEntryUnavailableReason,redeliveries,redeliveryAvailableQuantity,canConfirmRedelivery,canCancelRedelivery,
         remakes,canManageRemake,firstRemakeAvailableQuantity,originalKdsTaskId:rootTask?.id??null,
 
         canRequestRedelivery:this.acceptNewRequests&&permissions.includes('refund.request')&&!item.bundle_header&&item.fulfillment_active&&['open','closing'].includes(item.session_status)&&redeliveryAvailableQuantity>0,

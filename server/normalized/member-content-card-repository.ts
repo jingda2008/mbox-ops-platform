@@ -67,6 +67,22 @@ const CARD_COLUMNS = `
 export class MemberContentCardRepository {
   constructor(private readonly transaction: ScopedTransaction) {}
 
+  async nativeList(search:string,cursor:string|null) {
+    const rows=(await this.transaction.query<CardRow>(`SELECT ${CARD_COLUMNS}
+      FROM mbox.member_content_cards WHERE tenant_id=$1 AND store_id=$2
+      AND ($3::text IS NULL OR code>$3) AND (code ILIKE $4 OR title ILIKE $4)
+      ORDER BY code LIMIT 31`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,cursor,
+      `%${search.replace(/[\\%_]/g,'\\$&')}%`])).rows
+    return {rows:rows.slice(0,30).map(cardView),next:rows.length>30?rows[29]!.code:null}
+  }
+
+  async nativeFind(code:string,lock=false):Promise<MemberContentCardView|null> {
+    const row=(await this.transaction.query<CardRow>(`SELECT ${CARD_COLUMNS}
+      FROM mbox.member_content_cards WHERE tenant_id=$1 AND store_id=$2 AND code=$3 ${lock?'FOR UPDATE':''}`,
+      [this.transaction.scope.tenantId,this.transaction.scope.storeId,code])).rows[0]
+    return row?cardView(row):null
+  }
+
   async list(): Promise<MemberContentCardView[]> {
     const result = await this.transaction.query<CardRow>(`
       SELECT ${CARD_COLUMNS}

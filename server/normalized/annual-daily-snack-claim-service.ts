@@ -223,7 +223,7 @@ export class AnnualDailySnackClaimService {
     })
   }
 
-  listForStaff(context: AnnualDailySnackStaffContext, tableSessionId?: string | null) {
+  listForStaff(context: AnnualDailySnackStaffContext, tableSessionId?: string | null, nativeBinding = false) {
     return this.transactions.run(context.scope, async (transaction) => {
       const result = await transaction.query<ClaimRow>(`${claimSelectSql()}
         AND ($3::uuid IS NULL OR claim.table_session_id=$3::uuid)
@@ -253,7 +253,7 @@ export class AnnualDailySnackClaimService {
       [transaction.scope.tenantId, transaction.scope.storeId, tableSessionId ?? null, context.businessDate, context.employeeId])
       return result.rows.flatMap((row) => {
         const value = mapClaim(row)
-        return value === null ? [] : [value]
+        return value === null ? [] : [{ ...value, ...(nativeBinding ? {customerId: row.customer_id as string} : {}) }]
       })
     }, { readOnly: true })
   }
@@ -500,7 +500,7 @@ function claimSelectSql() {
   return `SELECT claim.id,claim.claim_code,claim.benefit_id,claim.benefit_reservation_id,claim.gift_order_id,claim.attempt_no,
     claim.quantity,claim.status,claim.expires_at::text,claim.redeemed_by_employee_id,
     employee.display_name AS redeemed_by_employee_name,claim.redeemed_at::text,claim.fulfilled_at::text,
-    rule.title,venue_table.code AS table_code,claim.table_session_id,
+    rule.title,venue_table.code AS table_code,claim.table_session_id,claim.customer_id,
     mbox.pickup_order_current_fulfillment(claim.tenant_id,claim.store_id,claim.gift_order_id) AS current_fulfillment_status,
     membership.member_no,profile.display_name AS customer_name
     FROM mbox.annual_daily_snack_claims claim

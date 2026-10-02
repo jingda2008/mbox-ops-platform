@@ -171,6 +171,14 @@ export class StaffNotFoundError extends Error {
 export class OperationsQueryService {
   constructor(private readonly transactions: ScopedPostgresTransactionRunner) {}
 
+  getNativeServiceEmployees(scope:Readonly<StoreScope>,employeeId:string){
+    return this.transactions.run(scope,async tx=>{
+      const access=await new StaffAccessRepository(tx).assertPermission(employeeId,'service.execute')
+      if(!access.permissions.includes('service.manage'))return []
+      const rows=await tx.query<{id:string;name:string;canManage:boolean}>(`SELECT id,display_name AS name,mbox.employee_has_effective_permission(tenant_id,store_id,id,'service.manage') AS "canManage" FROM mbox.employees WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND status='active' AND mbox.employee_has_effective_permission(tenant_id,store_id,id,'service.execute') ORDER BY display_name,id`,[scope.tenantId,scope.storeId]);return rows.rows
+    },{readOnly:true})
+  }
+
   getManualDayEndPreview(scope: Readonly<StoreScope>, employeeId: string, businessDate: string) {
     return this.transactions.run(scope,async transaction=>{
       await new StaffAccessRepository(transaction).assertPermission(employeeId,'business_day.close')

@@ -1,0 +1,18 @@
+PASS iOS manifest chooses its platform and validated distribution link
+PASS minimum OS is compared numerically
+PASS foreign app rejected
+PASS untrusted installation destination rejected: http://testflight.apple.com/join/TESTONLY
+PASS untrusted installation destination rejected: https://testflight.apple.com.evil.example/join/TESTONLY
+PASS untrusted installation destination rejected: https://user@testflight.apple.com/join/TESTONLY
+PASS untrusted installation destination rejected: https://testflight.apple.com/join/TESTONLY?redirect=bad
+PASS untrusted installation destination rejected: https://mbox.shmbox.com/app.ipa
+PASS invalid build rejected
+PASS invalid operating system requirement rejected
+PASS server cannot request forced app termination
+PASS unpublished channel is not reported as current version
+PASS duplicate platform entries rejected
+PASS App Store updates supported without executable hot patching
+PASS preview install rejects stable manifest
+PASS stable install accepts its App Store release
+PASS stable channel cannot silently switch users to TestFlight
+17 update checks passed

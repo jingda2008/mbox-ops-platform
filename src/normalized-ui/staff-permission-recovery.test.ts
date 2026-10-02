@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { StaffPermissionRecovery } from './staff-permission-recovery'
+import { StaffPermissionRecovery, permissionReceiptIntents } from './staff-permission-recovery'
 import type { StaffPermissionDeploymentResult } from '../shared/normalized-contracts'
 
 function storage() {
@@ -26,6 +26,15 @@ describe('permission publication durable original intent', () => {
     await freshPage.execute({ ...body, reason: '后来编辑的新原因' }, retry)
     expect(retry).toHaveBeenCalledWith(persisted)
     expect(freshPage.pending()).toBeNull()
+  })
+
+  it('finds only the original employee receipt without overview permission and clears a minimal replay', async () => {
+    const saved=storage(),recovery=new StaffPermissionRecovery('tenant:store','admin',saved)
+    await expect(recovery.execute(body,async()=>{throw Error('lost response')})).rejects.toThrow()
+    expect(permissionReceiptIntents('other',saved)).toEqual([])
+    expect(permissionReceiptIntents('admin',saved)).toEqual([recovery.pending()])
+    const receipt=await recovery.execute(null,async()=>({...result,overview:null}))
+    expect(receipt.overview).toBeNull();expect(permissionReceiptIntents('admin',saved)).toEqual([])
   })
 
   it('deduplicates double clicks and separates actor and store recovery', async () => {

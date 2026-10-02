@@ -1,0 +1,18 @@
+{
+  "server/normalized/customer-benefit-api.ts": "1dad75a603a71210469be9891d467b7210a25fee1333e2cd71d9edbca347bf29",
+  "server/normalized/benefit-repository.ts": "0abaa74cdcd79ccc74e517a38e9aef336e67817b646fd35b587f004325e405ae",
+  "server/normalized/annual-daily-snack-claim-service.ts": "8897d5c80ce30059f4bf3a29eaebad11657f6b7ce383bcfddefc91cefa01f1af",
+  "server/normalized/customer-benefit-api.test.ts": "b701d550b5618889a4016983e5828afc5acfe51b6fb43694212ac8b7d6cc98a4",
+  "server/normalized/benefit-repository.test.ts": "3bb64af2139ae0fae1f8e495b4553937bb3665eb2cff80e3ad7ea0679dc2a137",
+  "native/staff-app/ios/Sources/LiveMembers.swift": "96a536a2c57ef7854779ba481e1df239c286a3c4a9ba446c9925acfca6831ceb",
+  "native/staff-app/ios/Sources/LiveBenefitsView.swift": "f3a41a163e74100292e82af0c25498ca8e66eb2cb34faa5d07e80a0d107c7545",
+  "native/staff-app/ios/Sources/AppModel.swift": "1c0e5d305b4db79b2f13e8cb4d4940720febd333555ab5bce75e0fe66b2421ad",
+  "native/staff-app/ios/Sources/MBOXApp.swift": "06db40477489c9178634f59a74d696afa1a296a28cab21f5f18ee25c16d1d6ab",
+  "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveMembers.kt": "6da3b460a67e0d523c36f98bca2e0b966830ba3afa2483f4c84ac4b9c93435e0",
+  "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveBenefitsView.kt": "fc91b918aedc81274e5f4928ec701db02deab8bc7372858115fdbb4dd7f80c65",
+  "native/staff-app/android/app/src/main/java/com/mbox/staff/AppModel.kt": "f4bb42846516716b5fa81004f8c04e24b8e6fca8d2973720401fcc6fc25248d1",
+  "native/staff-app/android/app/src/main/java/com/mbox/staff/MainActivity.kt": "a0245661e8db624e70ac93273fd5be3cbb7322ac268c14ac787b57c4859b23dc",
+  "native/staff-app/shared/fixtures/live-members.json": "76c9cbd26320d864572bdebffe86b91635ead1630630b6fa35421cae7484f360",
+  "native/staff-app/ios/Tests/MemberTests.swift": "bfeddf7b1cfbb404a7e8bbd687ebccbd0d8d585fb059730352583007b93611ec",
+  "native/staff-app/android/app/src/test/java/com/mbox/staff/MemberTest.kt": "2f7ed2b55702918ecf11dfb29bc2512af056739523219404587b6aee388f6f38"
+}

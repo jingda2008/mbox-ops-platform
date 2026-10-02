@@ -1,3 +1,4 @@
+import {executeNativeSong, type NativeSongInput} from './native-song-command.js'
 import {randomUUID} from 'node:crypto'
 import {readMonthlySchedule,previewMonthlySchedule,type MonthlyScheduleInput} from './monthly-schedule.js'
 import {StaffAccessRepository} from './staff-access-repository.js'
@@ -82,6 +83,8 @@ export interface SongRequestTransitionCommand extends CommandMetadata {
 
 export class PerformanceCommandService {
   constructor(private readonly commands: Pick<NormalizedCommandExecutor, 'execute'>) {}
+
+  nativeSong(input: NativeSongInput) { return executeNativeSong(this.commands, input) }
 
   createPerformer(input: Readonly<CreatePerformerCommand>): Promise<CommandExecution<Performer>> {
     return this.commands.execute(command(input, 'performer.create', performerCodec), async (transaction) => {

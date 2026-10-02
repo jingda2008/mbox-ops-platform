@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mbox.staff.ServiceTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-09-27T19:28:10.725Z" hostname="jingdadeMacBook-Pro.local" time="0.003">
+  <properties/>
+  <testcase name="receiptAndSpecialized" classname="com.mbox.staff.ServiceTest" time="0.001"/>
+  <testcase name="experienceLifecycleReceipt" classname="com.mbox.staff.ServiceTest" time="0.0"/>
+  <testcase name="complaintGuards" classname="com.mbox.staff.ServiceTest" time="0.001"/>
+  <testcase name="scopedWorkHistory" classname="com.mbox.staff.ServiceTest" time="0.001"/>
+  <testcase name="compatibleCrossTableBatch" classname="com.mbox.staff.ServiceTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

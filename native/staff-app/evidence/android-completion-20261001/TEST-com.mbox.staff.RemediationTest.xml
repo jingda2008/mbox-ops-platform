@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mbox.staff.RemediationTest" tests="15" skipped="0" failures="0" errors="0" timestamp="2026-09-30T22:35:25.961Z" hostname="jingdadeMacBook-Pro.local" time="0.013">
+  <properties/>
+  <testcase name="heldPortionsAndRemainingCancellation" classname="com.mbox.staff.RemediationTest" time="0.001"/>
+  <testcase name="batchLostSecondReplyStopsAndReplaysOnlyOriginalSecondKey" classname="com.mbox.staff.RemediationTest" time="0.001"/>
+  <testcase name="batchEndRequiresSeparateEligibleCarryoverTasks" classname="com.mbox.staff.RemediationTest" time="0.001"/>
+  <testcase name="originalRedeliveryAndExplicitConfirmation" classname="com.mbox.staff.RemediationTest" time="0.0"/>
+  <testcase name="legacyExceptionDoesNotUseQuantityRemake" classname="com.mbox.staff.RemediationTest" time="0.001"/>
+  <testcase name="lostReplyAndCompletedRefreshKeepOriginalCommand" classname="com.mbox.staff.RemediationTest" time="0.001"/>
+  <testcase name="productionReceiptRejectsDuplicateUnitsAndForeignRemake" classname="com.mbox.staff.RemediationTest" time="0.0"/>
+  <testcase name="remakeReceiptBindsNewPhysicalBatch" classname="com.mbox.staff.RemediationTest" time="0.001"/>
+  <testcase name="oldServerCannotReceiveUnsafeNativeMutations" classname="com.mbox.staff.RemediationTest" time="0.0"/>
+  <testcase name="receiptMustMatchItemTaskAndCounts" classname="com.mbox.staff.RemediationTest" time="0.001"/>
+  <testcase name="permissionDenialWinsOverCapability" classname="com.mbox.staff.RemediationTest" time="0.0"/>
+  <testcase name="cannotBypassPhysicalBatchBoardOrExpiredSession" classname="com.mbox.staff.RemediationTest" time="0.001"/>
+  <testcase name="remakeGenerationsAndCounts" classname="com.mbox.staff.RemediationTest" time="0.001"/>
+  <testcase name="invalidCountsAndExplicitRollbackProof" classname="com.mbox.staff.RemediationTest" time="0.001"/>
+  <testcase name="queueIdentityQuantityAndSharedPickup" classname="com.mbox.staff.RemediationTest" time="0.002"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mbox.staff.Audit20261002ProbeTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-10-02T15:41:04.874Z" hostname="jingdadeMacBook-Pro.local" time="0.023">
+  <properties/>
+  <testcase name="credentialEditorDropsSecondsThenOwnParserRejectsIt" classname="com.mbox.staff.Audit20261002ProbeTest" time="0.017"/>
+  <testcase name="invalidAreaSortIsPersistableButServerValidationErrorCannotReleasePending" classname="com.mbox.staff.Audit20261002ProbeTest" time="0.005"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,3 +1,4 @@
+import { NativeCommandNotCommittedError } from './command-executor.js'
 import { z } from 'zod'
 import type { FastifyPluginAsync } from 'fastify'
 import type { CustomerBenefitApiOptions } from './customer-benefit-api.js'
@@ -18,6 +19,7 @@ const commandBody = z.object({ code: member, businessDate: z.iso.date(), visitId
 export const memberVisitApiPlugin: FastifyPluginAsync<Options> = async (app, options) => {
   app.addHook('onRequest', async (_request, reply) => { reply.header('cache-control', 'private, no-store') })
   app.setErrorHandler((error, _request, reply) => {
+    if(error instanceof NativeCommandNotCommittedError)return reply.code(409).send({error:{code:'NATIVE_BUSINESS_NOT_COMMITTED',message:error.original instanceof Error && (error.original instanceof MemberVisitRewardError || error.original instanceof MemberVisitError) ? error.original.message : '本次会员操作未提交，请重新读取后核对',commitDisposition:'not_committed'}})
     if (isStaffAuthenticationRequiredError(error)) return reply.code(401).send({ error: STAFF_AUTHENTICATION_REQUIRED_ERROR })
     if (error instanceof StaffAccessDeniedError) return reply.code(403).send({ error: { code: 'MEMBER_VISIT_FORBIDDEN', message: '当前账号没有会员到店签到权限，请由有权限员工办理' } })
     if (error instanceof CustomerNotFoundError) return reply.code(404).send({ error: { code: 'MEMBER_VISIT_MEMBER_NOT_FOUND', message: '会员不存在、已停用或不属于当前门店' } })
@@ -32,23 +34,26 @@ export const memberVisitApiPlugin: FastifyPluginAsync<Options> = async (app, opt
     const { code } = z.object({ code: member }).strict().parse(request.body)
     return { data: await options.transactions.run(context.scope, async tx => {
       const access = await new StaffAccessRepository(tx).assertPermission(context.employeeId, 'loyalty.account.view')
-      return { memberNo: code, businessDate: context.businessDate, canCheckIn: access.permissions.includes('customer.relationship.manage'),
+      return { durableNativeVisits:true, memberNo: code, businessDate: context.businessDate, canCheckIn: access.permissions.includes('customer.relationship.manage'),
         visit: await new MemberVisitRepository(tx).current(code, context.businessDate),
         rewards: await new MemberVisitRewardRepository(tx).progressForMember(code) }
     }, { readOnly: true }) }
   })
-  for (const action of ['check-in', 'cancel'] as const) app.post(`/staff/member-visits/${action}`, { bodyLimit: 2048 }, async request => {
+  for(const namespace of ['member-visits','native-member-visits'] as const)
+  for (const action of ['check-in', 'cancel'] as const) app.post(`/staff/${namespace}/${action}`, { bodyLimit: 2048 }, async request => {
     const context = await options.resolveStaffContext(request)
     const input = commandBody.parse(request.body)
     if (action === 'cancel' && (!input.visitId || !input.reason)) throw new TypeError('撤回需要原签到与原因')
     if (action === 'check-in' && (input.visitId || input.reason)) throw new TypeError('签到参数不正确')
     const idempotencyKey = z.string().regex(/^[A-Za-z0-9:_-]{8,128}$/).parse(request.headers['idempotency-key'])
+    const native=namespace==='native-member-visits'
+    if(native && !/^native-business-[a-f0-9-]{36}$/.test(idempotencyKey))throw new TypeError('原请求编号无效')
     const authorize = async (tx: import('./transaction-runner.js').ScopedTransaction) => {
       await new StaffAccessRepository(tx).assertPermission(context.employeeId, 'loyalty.account.view')
       await new StaffAccessRepository(tx).assertPermission(context.employeeId, 'customer.relationship.manage')
     }
     await options.transactions.run(context.scope, authorize, { readOnly: true })
-    const result = await options.commands.execute({ scope: context.scope, operationScope: `member.visit.${action}`, idempotencyKey,
+    const result = await options.commands.execute({ scope: context.scope, operationScope: native?`member.visit.${action}.native`:`member.visit.${action}`,retainReceipt:native, idempotencyKey,
       requestFingerprint: JSON.stringify({ employeeId: context.employeeId, ...input }), resultCodec: codec }, async tx => {
       await authorize(tx)
       if (context.businessDate !== input.businessDate) throw new MemberVisitError('已切换营业日，请重新读取后签到', 'MEMBER_VISIT_DAY_CHANGED')
@@ -58,7 +63,7 @@ export const memberVisitApiPlugin: FastifyPluginAsync<Options> = async (app, opt
       return { result: visit, auditEvents: changed ? [{ actor: { type: 'employee' as const, employeeId: context.employeeId },
         businessDate: input.businessDate, action: `member.visit.${action}`, objectType: 'member_visit_checkin', objectId: visit.id,
         reason: action === 'check-in' ? '员工现场确认会员到店' : input.reason!, afterData: { status: visit.status, businessDate: visit.businessDate } }] : [], outboxMessages: [] }
-    })
-    return { data: result.value, meta: { replayed: result.replayed } }
+    }, native ? authorize : undefined)
+    return { data: native?{...result.value,memberNo:input.code}:result.value, meta: { replayed: result.replayed } }
   })
 }

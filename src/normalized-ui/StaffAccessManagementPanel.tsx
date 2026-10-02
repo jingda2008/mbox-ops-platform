@@ -168,7 +168,7 @@ export function StaffAccessManagementPanel({ api, currentEmployeeId }: { api: No
       setOverview(result.overview); resetDrafts()
       setNotice({ tone: 'success',
         title: recover || existing || result.replayed ? '原权限发布已确认，当前配置已重新读取' : `${result.changes.length}项配置已发布并复核`,
-        detail: '下方展示当前权限；原发布后的其他管理员修改不会被恢复操作覆盖。发布记录已留痕。',
+        detail: result.overview ? '下方展示当前权限；原发布后的其他管理员修改不会被恢复操作覆盖。发布记录已留痕。' : '原修改已确认。当前账号已移交管理权限，管理配置不再显示；请返回工作台。',
       })
     } catch (error) {
       const code = error && typeof error === 'object' && 'code' in error ? error.code : null
@@ -219,7 +219,7 @@ export function StaffAccessManagementPanel({ api, currentEmployeeId }: { api: No
 
   if (phase === 'loading' && overview === null) return <div className="staff-access-state" role="status"><LoaderCircle className="is-spinning" /><strong>正在核对人员与权限</strong></div>
   if (phase === 'error' && overview === null) return <div className="staff-access-state is-error" role="alert"><CircleAlert /><strong>{notice?.title}</strong><span>{notice?.detail}</span><button type="button" onClick={() => void load()}>重新读取</button></div>
-  if (overview === null) return null
+  if (overview === null) return notice ? <div role="status" className="staff-access-state"><CheckCircle2 /><strong>{notice.title}</strong><span>{notice.detail}</span></div> : null
 
   return <div className="staff-access-management">
     {notice && <div className={`staff-access-notice is-${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'} data-action-reveal>

@@ -41,28 +41,7 @@ export const membershipConfigurationApiPlugin:FastifyPluginAsync<MembershipConfi
   app.get('/staff/loyalty/configuration-center',async(request,reply)=>handle(reply,async()=>{
     const context=await authorized(options,request,'loyalty.configuration.view')
     const rows=await options.transactions.run(context.scope,async(transaction)=>{
-      const result=await transaction.query<ConfigurationListRow>(`
-        SELECT * FROM (
-          SELECT 'base_points'::text domain,id,status,draft_revision,version,
-            policy_code AS title,updated_at,effective_from,effective_until,approved_by_employee_id FROM mbox.loyalty_policy_versions
-          WHERE tenant_id=$1::uuid AND store_id=$2::uuid
-          UNION ALL SELECT 'tier_policy',id,status,draft_revision,version,'会员等级',updated_at,effective_from,effective_until,approved_by_employee_id
-            FROM mbox.loyalty_tier_policy_versions WHERE tenant_id=$1::uuid AND store_id=$2::uuid
-          UNION ALL SELECT 'tier_benefits',id,status,draft_revision,version,'等级权益',updated_at,effective_from,effective_until,approved_by_employee_id
-            FROM mbox.loyalty_tier_benefit_policy_versions WHERE tenant_id=$1::uuid AND store_id=$2::uuid
-          UNION ALL SELECT 'redemption_catalog',id,status,draft_revision,version,'积分兑换',updated_at,effective_from,effective_until,approved_by_employee_id
-            FROM mbox.redemption_catalog_versions WHERE tenant_id=$1::uuid AND store_id=$2::uuid
-          UNION ALL SELECT 'promotion_points',id,status,draft_revision,version,name,updated_at,effective_from,effective_until,approved_by_employee_id
-            FROM mbox.loyalty_promotion_policy_versions WHERE tenant_id=$1::uuid AND store_id=$2::uuid
-          UNION ALL SELECT 'membership_terms',id,status,draft_revision,version,title,updated_at,effective_from,effective_until,approved_by_employee_id
-            FROM mbox.membership_terms_versions WHERE tenant_id=$1::uuid AND store_id=$2::uuid
-          UNION ALL SELECT 'wechat_notifications',id,status,draft_revision,policy_version,notification_type,updated_at,effective_from,effective_until,approved_by_employee_id
-            FROM mbox.wechat_notification_policies WHERE tenant_id=$1::uuid AND store_id=$2::uuid
-              AND governance_mode='managed'
-        ) configuration ORDER BY updated_at DESC,domain,version DESC,id
-      `,[transaction.scope.tenantId,transaction.scope.storeId])
-      return result.rows.map((row)=>({domain:row.domain,configurationId:row.id,status:row.status,
-        revision:row.draft_revision,version:row.version,title:row.title,updatedAt:row.updated_at,effectiveFrom:row.effective_from,effectiveUntil:row.effective_until,approvedByEmployeeId:row.approved_by_employee_id}))
+      return listMembershipConfigurations(transaction)
     },{readOnly:true})
     return reply.send({data:rows})
   }))
@@ -70,18 +49,7 @@ export const membershipConfigurationApiPlugin:FastifyPluginAsync<MembershipConfi
   app.get('/staff/loyalty/configuration-center/references',async(request,reply)=>handle(reply,async()=>{
     const context=await authorized(options,request,'loyalty.configuration.view')
     const data=await options.transactions.run(context.scope,async(transaction)=>{
-      const result=await transaction.query<{kind:string;id:string;name:string;status:string}>(`
-        SELECT 'tierPolicyVersionId'::text kind,id,'会员等级 第' || version || '版' AS name,status
-          FROM mbox.loyalty_tier_policy_versions WHERE tenant_id=$1::uuid AND store_id=$2::uuid
-        UNION ALL SELECT 'benefitDefinitionId',id,name,status FROM mbox.loyalty_benefit_definitions
-          WHERE tenant_id=$1::uuid AND store_id=$2::uuid
-        UNION ALL SELECT 'productId',id,name,status FROM mbox.products
-          WHERE tenant_id=$1::uuid AND store_id=$2::uuid
-        UNION ALL SELECT 'activityId',id,title,status FROM mbox.community_activities
-          WHERE tenant_id=$1::uuid AND store_id=$2::uuid
-        ORDER BY kind,name,id
-      `,[transaction.scope.tenantId,transaction.scope.storeId])
-      return result.rows
+      return membershipConfigurationReferences(transaction)
     },{readOnly:true})
     return reply.send({data})
   }))
@@ -164,3 +132,42 @@ function object(value:unknown):Record<string,unknown>{if(typeof value!=='object'
 function integer(value:unknown,label:string){if(!Number.isSafeInteger(value)||(value as number)<1)throw invalid(`${label}无效`);return value as number}
 function text(value:unknown,label:string,min:number,max:number){if(typeof value!=='string'||value.trim().length<min||value.trim().length>max)throw invalid(`${label}无效`);return value.trim()}
 function invalid(message:string){return new CustomerExperienceRequestError(message,'INVALID_REQUEST',400)}
+
+export async function listMembershipConfigurations(transaction:ScopedTransaction){
+      const result=await transaction.query<ConfigurationListRow>(`
+        SELECT * FROM (
+          SELECT 'base_points'::text domain,id,status,draft_revision,version,
+            policy_code AS title,updated_at,effective_from,effective_until,approved_by_employee_id FROM mbox.loyalty_policy_versions
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+          UNION ALL SELECT 'tier_policy',id,status,draft_revision,version,'会员等级',updated_at,effective_from,effective_until,approved_by_employee_id
+            FROM mbox.loyalty_tier_policy_versions WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+          UNION ALL SELECT 'tier_benefits',id,status,draft_revision,version,'等级权益',updated_at,effective_from,effective_until,approved_by_employee_id
+            FROM mbox.loyalty_tier_benefit_policy_versions WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+          UNION ALL SELECT 'redemption_catalog',id,status,draft_revision,version,'积分兑换',updated_at,effective_from,effective_until,approved_by_employee_id
+            FROM mbox.redemption_catalog_versions WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+          UNION ALL SELECT 'promotion_points',id,status,draft_revision,version,name,updated_at,effective_from,effective_until,approved_by_employee_id
+            FROM mbox.loyalty_promotion_policy_versions WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+          UNION ALL SELECT 'membership_terms',id,status,draft_revision,version,title,updated_at,effective_from,effective_until,approved_by_employee_id
+            FROM mbox.membership_terms_versions WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+          UNION ALL SELECT 'wechat_notifications',id,status,draft_revision,policy_version,notification_type,updated_at,effective_from,effective_until,approved_by_employee_id
+            FROM mbox.wechat_notification_policies WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+              AND governance_mode='managed'
+        ) configuration ORDER BY updated_at DESC,domain,version DESC,id
+      `,[transaction.scope.tenantId,transaction.scope.storeId])
+      return result.rows.map((row)=>({domain:row.domain,configurationId:row.id,status:row.status,
+        revision:row.draft_revision,version:row.version,title:row.title,updatedAt:row.updated_at,effectiveFrom:row.effective_from,effectiveUntil:row.effective_until,approvedByEmployeeId:row.approved_by_employee_id}))
+}
+export async function membershipConfigurationReferences(transaction:ScopedTransaction){
+      const result=await transaction.query<{kind:string;id:string;name:string;status:string}>(`
+        SELECT 'tierPolicyVersionId'::text kind,id,'会员等级 第' || version || '版' AS name,status
+          FROM mbox.loyalty_tier_policy_versions WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        UNION ALL SELECT 'benefitDefinitionId',id,name,status FROM mbox.loyalty_benefit_definitions
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        UNION ALL SELECT 'productId',id,name,status FROM mbox.products
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        UNION ALL SELECT 'activityId',id,title,status FROM mbox.community_activities
+          WHERE tenant_id=$1::uuid AND store_id=$2::uuid
+        ORDER BY kind,name,id
+      `,[transaction.scope.tenantId,transaction.scope.storeId])
+      return result.rows
+}

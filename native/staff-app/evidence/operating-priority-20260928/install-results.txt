@@ -1,0 +1,4 @@
+iOS simctl install succeeded; simctl launch returned com.mbox.staff.native: 60951
+Android adb install -r returned Success on emulator-5554
+iOS CUA verified training table A5 original bill and full menu navigation; no new order.
+Android interactive UI not verified.

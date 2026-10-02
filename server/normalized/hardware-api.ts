@@ -1,3 +1,4 @@
+import {registerNativeHardware} from './native-hardware-management.js'
 import {currentRefundAttemptSql} from './refund-attempt-sql.js'
 import {orderHasLegacyStockReturnSql} from './order-stock-return-capability.js'
 import { buildDailyReportLines, type DailyReportOptions } from './daily-report-format.js'
@@ -60,6 +61,7 @@ class HardwareAccessDeniedError extends Error {
 }
 
 export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (app, options) => {
+  await registerNativeHardware(app,options)
   app.post('/operations/delivery-batches',async(request,reply)=>handle(reply,async()=>{
     const context=await options.resolveContext(request),body=readObject(request.body)
     requireAny(context,['kds.deliver'])

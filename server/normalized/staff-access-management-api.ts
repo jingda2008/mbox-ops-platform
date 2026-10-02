@@ -77,6 +77,7 @@ export const staffAccessManagementApiPlugin: FastifyPluginAsync<{
       reason,
       changes,
       expectedVersion,
+      receiptOnly: body.receiptOnly === true,
     })
     return reply.send({ data, meta: { generatedAt: data.verifiedAt } })
   }))
@@ -111,7 +112,7 @@ function object(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>
 }
 
-function changeArray(value: unknown): StaffPermissionDeploymentChange[] {
+export function changeArray(value: unknown): StaffPermissionDeploymentChange[] {
   if (!Array.isArray(value) || value.length < 1 || value.length > 100) throw new RequestError('每次需发布1至100项权限修改')
   return value.map((entry) => {
     const item = object(entry)

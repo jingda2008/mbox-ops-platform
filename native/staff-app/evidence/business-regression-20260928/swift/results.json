@@ -1,0 +1,66 @@
+[
+  {
+    "script": "native/staff-app/ios/test-assignments.sh",
+    "exit": 0
+  },
+  {
+    "script": "native/staff-app/ios/test-cashier.sh",
+    "exit": 0
+  },
+  {
+    "script": "native/staff-app/ios/test-core.sh",
+    "exit": 0
+  },
+  {
+    "script": "native/staff-app/ios/test-live.sh",
+    "exit": 0
+  },
+  {
+    "script": "native/staff-app/ios/test-members.sh",
+    "exit": 0
+  },
+  {
+    "script": "native/staff-app/ios/test-observation.sh",
+    "exit": 0
+  },
+  {
+    "script": "native/staff-app/ios/test-order.sh",
+    "exit": 0
+  },
+  {
+    "script": "native/staff-app/ios/test-participants.sh",
+    "exit": 0
+  },
+  {
+    "script": "native/staff-app/ios/test-payment-completion.sh",
+    "exit": 0
+  },
+  {
+    "script": "native/staff-app/ios/test-payments-daily.sh",
+    "exit": 0
+  },
+  {
+    "script": "native/staff-app/ios/test-remediation.sh",
+    "exit": 0
+  },
+  {
+    "script": "native/staff-app/ios/test-replacement.sh",
+    "exit": 0
+  },
+  {
+    "script": "native/staff-app/ios/test-reservations.sh",
+    "exit": 0
+  },
+  {
+    "script": "native/staff-app/ios/test-service.sh",
+    "exit": 0
+  },
+  {
+    "script": "native/staff-app/ios/test-session.sh",
+    "exit": 0
+  },
+  {
+    "script": "native/staff-app/ios/test-update.sh",
+    "exit": 0
+  }
+]

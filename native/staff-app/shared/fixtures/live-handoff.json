@@ -1,0 +1,32 @@
+{
+  "stationCode": "kitchen",
+  "anchorBatchId": "batch1",
+  "batches": [
+    {
+      "batchId": "batch1",
+      "expectedCurrentOwnerId": "previous-employee",
+      "expectedOwnershipVersion": 4
+    }
+  ],
+  "tasks": [
+    {
+      "taskId": "task1",
+      "expectedEmployeeId": null
+    }
+  ],
+  "displayLines": [
+    {
+      "batchId": "batch1",
+      "productName": "小食",
+      "specification": "",
+      "itemNote": "",
+      "orderNote": "",
+      "tableCodes": [
+        "A5"
+      ],
+      "remaining": 2,
+      "equipment": "炸炉",
+      "released": false
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mbox.staff.AppUpdateTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-09-26T18:18:38.563Z" hostname="jingdadeMacBook-Pro.local" time="0.032">
+  <properties/>
+  <testcase name="updateURLAndPackageMetadataAreBounded" classname="com.mbox.staff.AppUpdateTest" time="0.025"/>
+  <testcase name="manifestUsesExactApplicationAndChannel" classname="com.mbox.staff.AppUpdateTest" time="0.002"/>
+  <testcase name="incompleteAndTamperedPayloadNeverReachesInstaller" classname="com.mbox.staff.AppUpdateTest" time="0.001"/>
+  <testcase name="apkRequiresSameSignerExactBuildAndNoDowngrade" classname="com.mbox.staff.AppUpdateTest" time="0.002"/>
+  <testcase name="stableAndPreviewChannelsDoNotMix" classname="com.mbox.staff.AppUpdateTest" time="0.002"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

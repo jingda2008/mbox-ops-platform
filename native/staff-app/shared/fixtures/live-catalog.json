@@ -1,0 +1,62 @@
+{
+  "product": {
+    "id": "p-bundle",
+    "code": "PK01",
+    "name": "双人自选套餐",
+    "categoryCode": "packages",
+    "categoryName": "套餐",
+    "productKind": "bundle",
+    "bundleComponents": [
+      {
+        "productId": "fixed",
+        "name": "固定小食",
+        "quantity": 1,
+        "note": null
+      }
+    ],
+    "bundleChoiceGroups": [
+      {
+        "id": "g1",
+        "name": "饮品",
+        "selectionCount": 1,
+        "options": [
+          {
+            "productId": "p1",
+            "name": "饮品甲",
+            "quantity": 2,
+            "available": true,
+            "unavailableReason": null
+          },
+          {
+            "productId": "p2",
+            "name": "饮品乙",
+            "quantity": 2,
+            "available": true,
+            "unavailableReason": null
+          },
+          {
+            "productId": "p3",
+            "name": "饮品丙",
+            "quantity": 2,
+            "available": false,
+            "unavailableReason": "库存不足"
+          }
+        ]
+      }
+    ],
+    "allowedChannels": [
+      "staff_assisted"
+    ],
+    "maxOrderQuantity": 2,
+    "menuSortOrder": 1,
+    "status": "active",
+    "isAvailable": true,
+    "inventoryConfigurationComplete": true,
+    "inventoryAvailable": true,
+    "availabilityReasons": [],
+    "standardPrice": {
+      "amountMinor": "19800",
+      "currency": "CNY"
+    }
+  }
+}

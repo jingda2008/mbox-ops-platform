@@ -104,6 +104,8 @@ export interface UpdateDeviceInput {
 }
 
 export interface UpsertPrinterRouteInput {
+  /** Native creation must not overwrite a route inserted after its preview. */
+  createOnly?: boolean
   code: string
   name: string
   stationCode: HardwareStation
@@ -361,14 +363,14 @@ export class HardwareRepository {
         tenant_id, store_id, code, name, station_code, product_category_code,
         printer_device_id, copies, priority, status
       ) VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7::uuid, $8, $9, $10)
-      ON CONFLICT (tenant_id, store_id, code) DO UPDATE
+      ON CONFLICT (tenant_id, store_id, code) ${input.createOnly ? 'DO NOTHING' : `DO UPDATE
       SET name = EXCLUDED.name,
           station_code = EXCLUDED.station_code,
           product_category_code = EXCLUDED.product_category_code,
           printer_device_id = EXCLUDED.printer_device_id,
           copies = EXCLUDED.copies,
           priority = EXCLUDED.priority,
-          status = EXCLUDED.status
+          status = EXCLUDED.status`}
       RETURNING id, code, name, station_code, product_category_code,
         printer_device_id, copies, priority, status, created_at, updated_at
     `, [
@@ -383,6 +385,7 @@ export class HardwareRepository {
       input.priority ?? 100,
       input.status ?? 'active',
     ])
+    if (input.createOnly && !result.rows[0]) throw new HardwareConflictError('打印路由刚被创建，请刷新后核对')
     return mapRoute(requireRow(result.rows[0], '打印路由保存失败'))
   }
 

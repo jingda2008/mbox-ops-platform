@@ -1,0 +1,152 @@
+[
+  {
+    "name": "com.mbox.staff.LiveCatalogTest",
+    "tests": "2",
+    "skipped": "0",
+    "failures": "0",
+    "errors": "0",
+    "timestamp": "2026-09-27T17:03:48.363Z",
+    "hostname": "jingdadeMacBook-Pro.local",
+    "time": "0.009"
+  },
+  {
+    "name": "com.mbox.staff.LiveHistoryTest",
+    "tests": "4",
+    "skipped": "0",
+    "failures": "0",
+    "errors": "0",
+    "timestamp": "2026-09-27T17:03:48.450Z",
+    "hostname": "jingdadeMacBook-Pro.local",
+    "time": "0.019"
+  },
+  {
+    "name": "com.mbox.staff.AppUpdateTest",
+    "tests": "5",
+    "skipped": "0",
+    "failures": "0",
+    "errors": "0",
+    "timestamp": "2026-09-27T17:03:48.121Z",
+    "hostname": "jingdadeMacBook-Pro.local",
+    "time": "0.081"
+  },
+  {
+    "name": "com.mbox.staff.LiveOrderingTest",
+    "tests": "3",
+    "skipped": "0",
+    "failures": "0",
+    "errors": "0",
+    "timestamp": "2026-09-27T17:03:48.491Z",
+    "hostname": "jingdadeMacBook-Pro.local",
+    "time": "0.023"
+  },
+  {
+    "name": "com.mbox.staff.DomainTest",
+    "tests": "6",
+    "skipped": "0",
+    "failures": "0",
+    "errors": "0",
+    "timestamp": "2026-09-27T17:03:48.258Z",
+    "hostname": "jingdadeMacBook-Pro.local",
+    "time": "0.015"
+  },
+  {
+    "name": "com.mbox.staff.LivePickupTest",
+    "tests": "3",
+    "skipped": "0",
+    "failures": "0",
+    "errors": "0",
+    "timestamp": "2026-09-27T17:03:48.516Z",
+    "hostname": "jingdadeMacBook-Pro.local",
+    "time": "0.011"
+  },
+  {
+    "name": "com.mbox.staff.RemediationTest",
+    "tests": "13",
+    "skipped": "0",
+    "failures": "0",
+    "errors": "0",
+    "timestamp": "2026-09-27T17:03:48.582Z",
+    "hostname": "jingdadeMacBook-Pro.local",
+    "time": "0.037"
+  },
+  {
+    "name": "com.mbox.staff.DailyPaymentTest",
+    "tests": "14",
+    "skipped": "0",
+    "failures": "0",
+    "errors": "0",
+    "timestamp": "2026-09-27T17:03:48.204Z",
+    "hostname": "jingdadeMacBook-Pro.local",
+    "time": "0.051"
+  },
+  {
+    "name": "com.mbox.staff.LiveContractTest",
+    "tests": "6",
+    "skipped": "0",
+    "failures": "0",
+    "errors": "0",
+    "timestamp": "2026-09-27T17:03:48.380Z",
+    "hostname": "jingdadeMacBook-Pro.local",
+    "time": "0.068"
+  },
+  {
+    "name": "com.mbox.staff.PaymentCompletionTest",
+    "tests": "15",
+    "skipped": "0",
+    "failures": "0",
+    "errors": "0",
+    "timestamp": "2026-09-27T17:03:48.528Z",
+    "hostname": "jingdadeMacBook-Pro.local",
+    "time": "0.052"
+  },
+  {
+    "name": "com.mbox.staff.LiveCashierTest",
+    "tests": "11",
+    "skipped": "0",
+    "failures": "0",
+    "errors": "0",
+    "timestamp": "2026-09-27T17:03:48.317Z",
+    "hostname": "jingdadeMacBook-Pro.local",
+    "time": "0.044"
+  },
+  {
+    "name": "com.mbox.staff.LiveKitchenTest",
+    "tests": "3",
+    "skipped": "0",
+    "failures": "0",
+    "errors": "0",
+    "timestamp": "2026-09-27T17:03:48.470Z",
+    "hostname": "jingdadeMacBook-Pro.local",
+    "time": "0.015"
+  },
+  {
+    "name": "com.mbox.staff.LiveCollectionTest",
+    "tests": "3",
+    "skipped": "0",
+    "failures": "0",
+    "errors": "0",
+    "timestamp": "2026-09-27T17:03:48.373Z",
+    "hostname": "jingdadeMacBook-Pro.local",
+    "time": "0.005"
+  },
+  {
+    "name": "com.mbox.staff.LiveAssignmentsTest",
+    "tests": "8",
+    "skipped": "0",
+    "failures": "0",
+    "errors": "0",
+    "timestamp": "2026-09-27T17:03:48.275Z",
+    "hostname": "jingdadeMacBook-Pro.local",
+    "time": "0.041"
+  },
+  {
+    "name": "com.mbox.staff.ReplacementTest",
+    "tests": "10",
+    "skipped": "0",
+    "failures": "0",
+    "errors": "0",
+    "timestamp": "2026-09-27T17:03:48.620Z",
+    "hostname": "jingdadeMacBook-Pro.local",
+    "time": "0.017"
+  }
+]

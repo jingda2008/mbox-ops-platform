@@ -53,7 +53,7 @@ export const activityOperationsApiPlugin: FastifyPluginAsync<ActivityOperationsA
     const context = await authorized(options, request, ['community.activity.manage'])
     const body = object(request.body, '活动草稿')
     const result = await options.service.createDraft(context, {
-      draft: draft(body),
+      draft: parseActivityDraft(body),
       reason: text(body.reason, '建立原因', 2, 500),
       idempotencyKey: idempotencyKey(request),
     })
@@ -85,7 +85,7 @@ export const activityOperationsApiPlugin: FastifyPluginAsync<ActivityOperationsA
       const body = object(request.body, '活动草稿')
       const result = await options.service.updateDraft(context, {
         publicId: publicId(request.params.publicId),
-        draft: draft(body),
+        draft: parseActivityDraft(body),
         reason: text(body.reason, '修改原因', 2, 500),
         idempotencyKey: idempotencyKey(request),
       })
@@ -203,7 +203,7 @@ async function authorizedAny(
   return context
 }
 
-function draft(value: Record<string, unknown>): ActivityDraftInput {
+export function parseActivityDraft(value: Record<string, unknown>): ActivityDraftInput {
   const visibility = enumeration(value.visibility, '可见范围', ['public','member','segment'] as const)
   const audienceMemberLevels = stringList(
     value.audienceMemberLevels,
@@ -375,7 +375,7 @@ async function handle(reply: FastifyReply, execute: () => Promise<unknown>) {
   }
 }
 
-class ActivityOperationsApiRequestError extends Error {}
+export class ActivityOperationsApiRequestError extends Error {}
 
 function invalid(message: string) { return new ActivityOperationsApiRequestError(message) }
 

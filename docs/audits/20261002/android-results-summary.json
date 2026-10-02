@@ -1,0 +1,283 @@
+{
+  "suites": 68,
+  "counts": {
+    "tests": 260,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "classes": [
+    {
+      "name": "com.mbox.staff.StockCostTest",
+      "tests": 1
+    },
+    {
+      "name": "com.mbox.staff.OwnerFinanceTest",
+      "tests": 2
+    },
+    {
+      "name": "com.mbox.staff.BenefitWalletTest",
+      "tests": 2
+    },
+    {
+      "name": "com.mbox.staff.PublicationTest",
+      "tests": 2
+    },
+    {
+      "name": "com.mbox.staff.MarketingTest",
+      "tests": 3
+    },
+    {
+      "name": "com.mbox.staff.CouponCalendarsTest",
+      "tests": 3
+    },
+    {
+      "name": "com.mbox.staff.RecipeConfigurationTest",
+      "tests": 1
+    },
+    {
+      "name": "com.mbox.staff.LiveCatalogTest",
+      "tests": 4
+    },
+    {
+      "name": "com.mbox.staff.StaffNavigationTest",
+      "tests": 2
+    },
+    {
+      "name": "com.mbox.staff.ExperiencePlansTest",
+      "tests": 2
+    },
+    {
+      "name": "com.mbox.staff.LiveHistoryTest",
+      "tests": 4
+    },
+    {
+      "name": "com.mbox.staff.SocialOperationsTest",
+      "tests": 3
+    },
+    {
+      "name": "com.mbox.staff.AssignmentScheduleTest",
+      "tests": 2
+    },
+    {
+      "name": "com.mbox.staff.ParticipantTest",
+      "tests": 5
+    },
+    {
+      "name": "com.mbox.staff.AppUpdateTest",
+      "tests": 5
+    },
+    {
+      "name": "com.mbox.staff.SessionTest",
+      "tests": 6
+    },
+    {
+      "name": "com.mbox.staff.LiveOrderingTest",
+      "tests": 3
+    },
+    {
+      "name": "com.mbox.staff.MembershipRecoveryTest",
+      "tests": 3
+    },
+    {
+      "name": "com.mbox.staff.ServiceAttentionTest",
+      "tests": 1
+    },
+    {
+      "name": "com.mbox.staff.DomainTest",
+      "tests": 6
+    },
+    {
+      "name": "com.mbox.staff.ServiceRecoveryTest",
+      "tests": 2
+    },
+    {
+      "name": "com.mbox.staff.MemberTest",
+      "tests": 7
+    },
+    {
+      "name": "com.mbox.staff.PerformanceTest",
+      "tests": 3
+    },
+    {
+      "name": "com.mbox.staff.MembershipConfigTest",
+      "tests": 3
+    },
+    {
+      "name": "com.mbox.staff.LivePickupTest",
+      "tests": 3
+    },
+    {
+      "name": "com.mbox.staff.StackingPoliciesTest",
+      "tests": 3
+    },
+    {
+      "name": "com.mbox.staff.BusinessReportsTest",
+      "tests": 2
+    },
+    {
+      "name": "com.mbox.staff.ObservationTest",
+      "tests": 3
+    },
+    {
+      "name": "com.mbox.staff.RemediationTest",
+      "tests": 15
+    },
+    {
+      "name": "com.mbox.staff.DailyPaymentTest",
+      "tests": 14
+    },
+    {
+      "name": "com.mbox.staff.LiveContractTest",
+      "tests": 6
+    },
+    {
+      "name": "com.mbox.staff.ProductOperationsTest",
+      "tests": 3
+    },
+    {
+      "name": "com.mbox.staff.TableConfigurationTest",
+      "tests": 1
+    },
+    {
+      "name": "com.mbox.staff.PaymentCompletionTest",
+      "tests": 15
+    },
+    {
+      "name": "com.mbox.staff.CustodyTest",
+      "tests": 3
+    },
+    {
+      "name": "com.mbox.staff.CheckoutManagementTest",
+      "tests": 4
+    },
+    {
+      "name": "com.mbox.staff.LoyaltySupplementsTest",
+      "tests": 1
+    },
+    {
+      "name": "com.mbox.staff.CommercePolicyTest",
+      "tests": 2
+    },
+    {
+      "name": "com.mbox.staff.RemakeHandoverTest",
+      "tests": 1
+    },
+    {
+      "name": "com.mbox.staff.SongTest",
+      "tests": 2
+    },
+    {
+      "name": "com.mbox.staff.MemberCardsTest",
+      "tests": 2
+    },
+    {
+      "name": "com.mbox.staff.LiveCashierTest",
+      "tests": 11
+    },
+    {
+      "name": "com.mbox.staff.MemberGiftsTest",
+      "tests": 5
+    },
+    {
+      "name": "com.mbox.staff.StaffToolsTest",
+      "tests": 3
+    },
+    {
+      "name": "com.mbox.staff.RecommendationPoliciesTest",
+      "tests": 3
+    },
+    {
+      "name": "com.mbox.staff.ServiceTest",
+      "tests": 5
+    },
+    {
+      "name": "com.mbox.staff.HomeContentTest",
+      "tests": 3
+    },
+    {
+      "name": "com.mbox.staff.AnnualPoliciesTest",
+      "tests": 4
+    },
+    {
+      "name": "com.mbox.staff.ActivityOperationsTest",
+      "tests": 3
+    },
+    {
+      "name": "com.mbox.staff.ServiceReminderTest",
+      "tests": 3
+    },
+    {
+      "name": "com.mbox.staff.LiveKitchenTest",
+      "tests": 3
+    },
+    {
+      "name": "com.mbox.staff.ContactGovernanceTest",
+      "tests": 3
+    },
+    {
+      "name": "com.mbox.staff.NativeInputsTest",
+      "tests": 3
+    },
+    {
+      "name": "com.mbox.staff.StaffStartupTest",
+      "tests": 3
+    },
+    {
+      "name": "com.mbox.staff.LaunchPopupTest",
+      "tests": 2
+    },
+    {
+      "name": "com.mbox.staff.LiveCollectionTest",
+      "tests": 3
+    },
+    {
+      "name": "com.mbox.staff.ReservationTest",
+      "tests": 6
+    },
+    {
+      "name": "com.mbox.staff.ServerTimeTest",
+      "tests": 8
+    },
+    {
+      "name": "com.mbox.staff.FulfillmentHistoryTest",
+      "tests": 3
+    },
+    {
+      "name": "com.mbox.staff.LoyaltyRefundTest",
+      "tests": 2
+    },
+    {
+      "name": "com.mbox.staff.LiveAssignmentsTest",
+      "tests": 8
+    },
+    {
+      "name": "com.mbox.staff.CatalogConfigurationTest",
+      "tests": 2
+    },
+    {
+      "name": "com.mbox.staff.ReplacementTest",
+      "tests": 10
+    },
+    {
+      "name": "com.mbox.staff.MemberNumberTest",
+      "tests": 2
+    },
+    {
+      "name": "com.mbox.staff.BenefitExceptionsTest",
+      "tests": 2
+    },
+    {
+      "name": "com.mbox.staff.DeviceTest",
+      "tests": 2
+    },
+    {
+      "name": "com.mbox.staff.StaffAdministrationTest",
+      "tests": 1
+    },
+    {
+      "name": "com.mbox.staff.StockTest",
+      "tests": 2
+    }
+  ]
+}

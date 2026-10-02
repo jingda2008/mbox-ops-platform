@@ -1,0 +1,202 @@
+/Users/jingda/mbox/mbox-android-completion-integration-20261001/native/staff-app/android/app/build.gradle.kts:32: Warning: A newer version of androidx.compose:compose-bom than 2025.12.01 is available: 2026.09.00 [GradleDependency]
+ implementation(platform("androidx.compose:compose-bom:2025.12.01"))
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/Users/jingda/mbox/mbox-android-completion-integration-20261001/native/staff-app/android/app/build.gradle.kts:33: Warning: A newer version of androidx.activity:activity-compose than 1.12.1 is available: 1.13.0 [GradleDependency]
+ implementation("androidx.activity:activity-compose:1.12.1")
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+   Explanation for issues of type "GradleDependency":
+   This detector looks for usages of libraries where the version you are using
+   is not the current stable release. Using older versions is fine, and there
+   are cases where you deliberately want to stick with an older version.
+   However, you may simply not be aware that a more recent version is
+   available, and that is what this lint check helps find.
+
+/Users/jingda/mbox/mbox-android-completion-integration-20261001/native/staff-app/android/app/build.gradle.kts:38: Warning: A newer version of org.robolectric:robolectric than 4.14.1 is available: 4.17 [NewerVersionAvailable]
+ testImplementation("org.robolectric:robolectric:4.14.1")
+                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+   Explanation for issues of type "NewerVersionAvailable":
+   This detector checks with a central repository to see if there are newer
+   versions available for the dependencies used by this project. This is
+   similar to the GradleDependency check, which checks for newer versions
+   available in the Android SDK tools and libraries, but this works with any
+   MavenCentral dependency, and connects to the library every time, which
+   makes it more flexible but also much slower.
+
+/Users/jingda/mbox/mbox-android-completion-integration-20261001/native/staff-app/android/app/src/main/res/mipmap-anydpi-v26: Warning: This folder configuration (v26) is unnecessary; minSdkVersion is 26. Merge all the resources in this folder into mipmap-anydpi. [ObsoleteSdkInt]
+
+   Explanation for issues of type "ObsoleteSdkInt":
+   This check flags version checks that are not necessary, because the
+   minSdkVersion (or surrounding known API level) is already at least as high
+   as the version checked for.
+
+   Similarly, it also looks for resources in -vNN folders, such as values-v14
+   where the version qualifier is less than or equal to the minSdkVersion,
+   where the contents should be merged into the best folder.
+
+/Users/jingda/mbox/mbox-android-completion-integration-20261001/native/staff-app/android/app/src/main/java/com/mbox/staff/AppModel.kt:4906: Hint: Prefer mutableIntStateOf instead of mutableStateOf [AutoboxingStateCreation from androidx.compose.runtime]
+    var assignmentSchedulePage by mutableStateOf(0)
+                                  ~~~~~~~~~~~~~~
+/Users/jingda/mbox/mbox-android-completion-integration-20261001/native/staff-app/android/app/src/main/java/com/mbox/staff/LiveActivityEditor.kt:40: Hint: Prefer mutableIntStateOf instead of mutableStateOf [AutoboxingStateCreation from androidx.compose.runtime]
+ var f by remember{mutableStateOf(JSONObject(original.toString()))};var image by remember{mutableStateOf(false)};var search by remember{mutableStateOf("")};var options by remember{mutableStateOf<List<JSONObject>>(emptyList())};var next by remember{mutableStateOf<String?>(null)};var loading by remember{mutableStateOf(false)};var generation by remember{mutableStateOf(0)};var error by remember{mutableStateOf("")};var names by remember{mutableStateOf<Map<String,String>>(m.activityOperationsDetail?.data?.optJSONArray("componentItems")?.objects()?.associate{it.getString("id") to "${it.getString("name")}（${it.getString("baseUnit")}）"}?:emptyMap())};val scope=rememberCoroutineScope()
+                                                                                                                                                                                                                                                                                                                                                                 ~~~~~~~~~~~~~~
+/Users/jingda/mbox/mbox-android-completion-integration-20261001/native/staff-app/android/app/src/main/java/com/mbox/staff/LiveAnnualEditor.kt:15: Hint: Prefer mutableIntStateOf instead of mutableStateOf [AutoboxingStateCreation from androidx.compose.runtime]
+ var rules by remember(original){mutableStateOf(original?.getJSONArray("rules")?.objects()?.map{JSONObject(it.toString())}?:listOf(newAnnualRule()))};var timezone by remember(original){mutableStateOf(original?.getString("timezone")?:"Asia/Shanghai")};var reason by remember{mutableStateOf("")};var expanded by remember{mutableStateOf(0)};var picker by remember{mutableStateOf("")};var pickerIndex by remember{mutableStateOf(-1)};var error by remember{mutableStateOf("")}
+                                                                                                                                                                                                                                                                                                                               ~~~~~~~~~~~~~~
+/Users/jingda/mbox/mbox-android-completion-integration-20261001/native/staff-app/android/app/src/main/java/com/mbox/staff/LiveAnnualEditor.kt:15: Hint: Prefer mutableIntStateOf instead of mutableStateOf [AutoboxingStateCreation from androidx.compose.runtime]
+ var rules by remember(original){mutableStateOf(original?.getJSONArray("rules")?.objects()?.map{JSONObject(it.toString())}?:listOf(newAnnualRule()))};var timezone by remember(original){mutableStateOf(original?.getString("timezone")?:"Asia/Shanghai")};var reason by remember{mutableStateOf("")};var expanded by remember{mutableStateOf(0)};var picker by remember{mutableStateOf("")};var pickerIndex by remember{mutableStateOf(-1)};var error by remember{mutableStateOf("")}
+                                                                                                                                                                                                                                                                                                                                                                                                                         ~~~~~~~~~~~~~~
+/Users/jingda/mbox/mbox-android-completion-integration-20261001/native/staff-app/android/app/src/main/java/com/mbox/staff/LiveCatalogConfigurationView.kt:35: Hint: Prefer mutableIntStateOf instead of mutableStateOf [AutoboxingStateCreation from androidx.compose.runtime]
+ val access=remember{m.priorityAccessKey};val version=remember{m.workspaceVersion};var name by remember{mutableStateOf(p.getString("name"))};var category by remember{mutableStateOf(p.getString("categoryCode"))};var kind by remember{mutableStateOf(p.getString("productKind"))};var station by remember{mutableStateOf(p.getString("fulfillmentStation"))};var mode by remember{mutableStateOf(p.getString("inventoryControlMode"))};var max by remember{mutableStateOf(p.getInt("maxOrderQuantity").toString())};var from by remember{mutableStateOf(p.textOrNull("availableFrom")?.take(5)?:"")};var until by remember{mutableStateOf(p.textOrNull("availableUntil")?.take(5)?:"")};var channels by remember{mutableStateOf(p.getJSONArray("allowedChannels").strings())};var components by remember{mutableStateOf(p.getJSONArray("bundleComponents").objects().map{r->JSONObject().put("productId",r.getString("productId")).put("quantity",r.getInt("quantity")).put("sortOrder",r.getInt("sortOrder")).put("note",r.textOrNull("note")?:JSONObject.NULL).put("name",r.optString("productName",r.optString("name",r.getString("productId"))))})};var groups by remember{mutableStateOf(p.getJSONArray("bundleChoiceGroups").objects().map{JSONObject(it.toString())})};var selectedGroup by remember{mutableStateOf(-1)};var picker by remember{mutableStateOf(false)};var notice by remember{mutableStateOf("")};var proposed by remember{mutableStateOf<LiveCommand?>(null)}
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              ~~~~~~~~~~~~~~
+/Users/jingda/mbox/mbox-android-completion-integration-20261001/native/staff-app/android/app/src/main/java/com/mbox/staff/LiveCatalogConfigurationView.kt:55: Hint: Prefer mutableIntStateOf instead of mutableStateOf [AutoboxingStateCreation from androidx.compose.runtime]
+@Composable fun ProductConfigurationPicker(m:AppModel,exclude:String,singleOnly:Boolean=true,close:()->Unit,choose:(JSONObject)->Unit){var query by remember{mutableStateOf("")};var rows by remember{mutableStateOf(emptyList<JSONObject>())};var offset by remember{mutableStateOf(0)};var loading by remember{mutableStateOf(false)};var error by remember{mutableStateOf("")};val scope=rememberCoroutineScope();fun load(page:Int){if(loading)return;scope.launch{loading=true;try{rows=m.queryProductConfigurationChoices(query,page,singleOnly).filter{it.getString("id")!=exclude};offset=page;error=""}catch(e:Exception){rows=emptyList();error=e.message.orEmpty()}finally{loading=false}}};LaunchedEffect(Unit){load(0)}
+                                                                                                                                                                                                                                                                      ~~~~~~~~~~~~~~
+/Users/jingda/mbox/mbox-android-completion-integration-20261001/native/staff-app/android/app/src/main/java/com/mbox/staff/LiveCouponCalendarsView.kt:33: Hint: Prefer mutableIntStateOf instead of mutableStateOf [AutoboxingStateCreation from androidx.compose.runtime]
+ var f by remember{mutableStateOf(calendarEditor(row))};var error by remember{mutableStateOf("")};var preview by remember{mutableStateOf<JSONObject?>(null)};var loading by remember{mutableStateOf(false)};var issuedAt by remember{mutableStateOf("")};var at by remember{mutableStateOf(calendarLocal(java.time.Instant.now().toString()))};var generation by remember{mutableStateOf(0)};val scope=rememberCoroutineScope()
+                                                                                                                                                                                                                                                                                                                                                                          ~~~~~~~~~~~~~~
+/Users/jingda/mbox/mbox-android-completion-integration-20261001/native/staff-app/android/app/src/main/java/com/mbox/staff/LiveHomeContentView.kt:33: Hint: Prefer mutableIntStateOf instead of mutableStateOf [AutoboxingStateCreation from androidx.compose.runtime]
+ var f by remember{mutableStateOf(row?.let{JSONObject(it.toString())}?:JSONObject().put("code","").put("type","article").put("title","").put("summary","").put("imageUrl",JSONObject.NULL).put("ctaLabel","查看详情").put("targetPath","/pages/community/index").put("priority",100).put("displayMode","rotation").put("visibility","public").put("audienceMemberLevels",JSONArray()).put("audienceLifecycleStages",JSONArray()))};var start by remember{mutableStateOf(row?.getString("validFrom")?.let(::calendarLocal)?:"")};var end by remember{mutableStateOf(row?.getString("validUntil")?.let(::calendarLocal)?:"")};var priority by remember{mutableStateOf(f.getInt("priority").toString())};var reason by remember{mutableStateOf("")};var error by remember{mutableStateOf("")};var images by remember{mutableStateOf(false)};var activitySearch by remember{mutableStateOf("")};var activityRows by remember{mutableStateOf<List<JSONObject>>(emptyList())};var next by remember{mutableStateOf<String?>(null)};var loading by remember{mutableStateOf(false)};var generation by remember{mutableStateOf(0)};val scope=rememberCoroutineScope()
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  ~~~~~~~~~~~~~~
+/Users/jingda/mbox/mbox-android-completion-integration-20261001/native/staff-app/android/app/src/main/java/com/mbox/staff/LiveKitchenBatchView.kt:166: Hint: Prefer mutableLongStateOf instead of mutableStateOf [AutoboxingStateCreation from androidx.compose.runtime]
+    var elapsed by remember(batch.id, generatedAt) { mutableStateOf(0L) }
+                                                     ~~~~~~~~~~~~~~
+/Users/jingda/mbox/mbox-android-completion-integration-20261001/native/staff-app/android/app/src/main/java/com/mbox/staff/LiveLaunchPopupView.kt:14: Hint: Prefer mutableIntStateOf instead of mutableStateOf [AutoboxingStateCreation from androidx.compose.runtime]
+ val access=remember{m.priorityAccessKey};val workspace=remember{m.workspaceVersion};var draft by remember{mutableStateOf<JSONObject?>(null)};var reason by remember{mutableStateOf("")};var proposed by remember{mutableStateOf<LiveCommand?>(null)};var error by remember{mutableStateOf("")};var names by remember{mutableStateOf<Map<String,String>>(emptyMap())};var search by remember{mutableStateOf("")};var options by remember{mutableStateOf<List<JSONObject>>(emptyList())};var next by remember{mutableStateOf<String?>(null)};var loading by remember{mutableStateOf(false)};var generation by remember{mutableStateOf(0)};val scope=rememberCoroutineScope()
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      ~~~~~~~~~~~~~~
+/Users/jingda/mbox/mbox-android-completion-integration-20261001/native/staff-app/android/app/src/main/java/com/mbox/staff/LiveMemberGiftsView.kt:56: Hint: Prefer mutableIntStateOf instead of mutableStateOf [AutoboxingStateCreation from androidx.compose.runtime]
+ var search by remember{mutableStateOf("")};var rows by remember{mutableStateOf<List<JSONObject>>(emptyList())};var chosen by remember{mutableStateOf(initial.associateBy{it.getString("id")})};var next by remember{mutableStateOf<String?>(null)};var loading by remember{mutableStateOf(false)};var error by remember{mutableStateOf("")};val scope=rememberCoroutineScope();var generation by remember{mutableStateOf(0)}
+                                                                                                                                                                                                                                                                                                                                                                                                           ~~~~~~~~~~~~~~
+/Users/jingda/mbox/mbox-android-completion-integration-20261001/native/staff-app/android/app/src/main/java/com/mbox/staff/LiveStackingPoliciesView.kt:38: Hint: Prefer mutableIntStateOf instead of mutableStateOf [AutoboxingStateCreation from androidx.compose.runtime]
+ var units by remember{mutableStateOf(listOf(stackingUnitDraft()))};var effects by remember{mutableStateOf<List<JSONObject>>(emptyList())};var generation by remember{mutableStateOf(0)};var preview by remember{mutableStateOf<JSONObject?>(null)};var error by remember{mutableStateOf("")};var loading by remember{mutableStateOf(false)};val scope=rememberCoroutineScope()
+                                                                                                                                                                      ~~~~~~~~~~~~~~
+
+   Explanation for issues of type "AutoboxingStateCreation":
+   Calling mutableStateOf<T>() when T is either backed by a primitive type on
+   the JVM or is a value class results in a state implementation that requires
+   all state values to be boxed. This usually causes an additional allocation
+   for each state write, and adds some additional work to auto-unbox values
+   when reading the value of the state. Instead, prefer to use a specialized
+   primitive state implementation for Int, Long, Float, and Double when the
+   state does not need to track null values and does not override the default
+   SnapshotMutationPolicy. See mutableIntStateOf(), mutableLongStateOf(),
+   mutableFloatStateOf(), and mutableDoubleStateOf() for more information.
+
+   Vendor: Jetpack Compose
+   Identifier: androidx.compose.runtime
+   Feedback: https://issuetracker.google.com/issues/new?component=612128
+
+/Users/jingda/mbox/mbox-android-completion-integration-20261001/native/staff-app/android/app/src/main/java/com/mbox/staff/AndroidUpdater.kt:151: Warning: Consider also using StorageManager#getAllocatableBytes and allocateBytes which will consider clearable cached data [UsableSpace]
+                require(dir.usableSpace >= candidate.bytes * 2 + 20 * 1024 * 1024) {
+                            ~~~~~~~~~~~
+
+   Explanation for issues of type "UsableSpace":
+   When you need to allocate disk space for large files, consider using the
+   new allocateBytes(FileDescriptor, long) API, which will automatically clear
+   cached files belonging to other apps (as needed) to meet your request.
+
+   When deciding if the device has enough disk space to hold your new data,
+   call getAllocatableBytes(UUID) instead of using getUsableSpace(), since the
+   former will consider any cached data that the system is willing to clear on
+   your behalf.
+
+   Note that these methods require API level 26. If your app is running on
+   older devices, you will probably need to use both APIs, conditionally
+   switching on Build.VERSION.SDK_INT. Lint only looks in the same compilation
+   unit to see if you are already using both APIs, so if it warns even though
+   you are already using the new API, consider moving the calls to the same
+   file or suppressing the warning.
+
+/Users/jingda/mbox/mbox-android-completion-integration-20261001/native/staff-app/android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml:1: Warning: The application adaptive icon is missing a monochrome tag [MonochromeLauncherIcon]
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+^
+
+   Explanation for issues of type "MonochromeLauncherIcon":
+   If android:roundIcon and android:icon are both in your manifest, you must
+   either remove the reference to android:roundIcon if it is not needed; or,
+   supply the monochrome icon in the drawable defined by the android:roundIcon
+   and android:icon attribute.
+
+   For example, if android:roundIcon and android:icon are both in the
+   manifest, a launcher might choose to use android:roundIcon over
+   android:icon to display the adaptive app icon. Therefore, your themed
+   application iconwill not show if your monochrome attribute is not also
+   specified in android:roundIcon.
+
+/Users/jingda/mbox/mbox-android-completion-integration-20261001/native/staff-app/android/app/src/main/java/com/mbox/staff/AndroidUpdater.kt:255: Warning: Use the KTX extension function String.toUri instead? [UseKtx]
+                            Uri.parse("package:${app.packageName}"),
+                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/Users/jingda/mbox/mbox-android-completion-integration-20261001/native/staff-app/android/app/src/main/java/com/mbox/staff/AppModel.kt:1336: Warning: Use the KTX extension function SharedPreferences.edit instead? [UseKtx]
+                    prefs.edit().putString("key", it).apply()
+                    ~~~~~~~~~~~~
+/Users/jingda/mbox/mbox-android-completion-integration-20261001/native/staff-app/android/app/src/main/java/com/mbox/staff/ServiceReminderWorker.kt:34: Warning: Use the KTX extension function SharedPreferences.edit instead? [UseKtx]
+        check(prefs(c).edit().clear().putString("employee",actor.employeeId).putString("session",actor.sessionId).putString("status","等待系统首次检查").commit()){"提醒设置保存失败"}
+              ~~~~~~~~~~~~~~~
+/Users/jingda/mbox/mbox-android-completion-integration-20261001/native/staff-app/android/app/src/main/java/com/mbox/staff/ServiceReminderWorker.kt:39: Warning: Use the KTX extension function SharedPreferences.edit instead? [UseKtx]
+        check(prefs(c).edit().clear().commit()) { "提醒设置未清除，请重试" }
+              ~~~~~~~~~~~~~~~
+/Users/jingda/mbox/mbox-android-completion-integration-20261001/native/staff-app/android/app/src/main/java/com/mbox/staff/ServiceReminderWorker.kt:49: Warning: Use the KTX extension function SharedPreferences.edit instead? [UseKtx]
+        if(saved.isFailure){prefs(c).edit().putString("status","安全登录暂不可读取，请解锁手机后检查").apply();return@synchronized}
+                            ~~~~~~~~~~~~~~~
+/Users/jingda/mbox/mbox-android-completion-integration-20261001/native/staff-app/android/app/src/main/java/com/mbox/staff/ServiceReminderWorker.kt:62: Warning: Use the KTX extension function SharedPreferences.edit instead? [UseKtx]
+        val editor=p.edit().putString("status",status)
+                   ~~~~~~~~
+
+   Explanation for issues of type "UseKtx":
+   The Android KTX libraries decorates the Android platform SDK as well as
+   various libraries with more convenient extension functions available from
+   Kotlin, allowing you to use default parameters, named parameters, and
+   more.
+
+   Available options:
+
+   **remove-defaults** (default is true):
+   Whether to skip arguments that match the defaults provided by the extension.
+
+   Extensions often provide default values for some of the parameters. For example:
+   ```kotlin
+   fun Path.readLines(charset: Charset = Charsets.UTF_8): List<String> { return Files.readAllLines(this, charset) }
+   ```
+   This lint check will by default automatically omit parameters that match the default, so if your code was calling
+
+   ```kotlin
+   Files.readAllLines(file, Charset.UTF_8)
+   ```
+   lint would replace this with
+   ```kotlin
+   file.readLines()
+   ```
+   rather than
+
+   ```kotlin
+   file.readLines(Charset.UTF_8
+   ```
+   You can turn this behavior off using this option.
+
+   To configure this option, use a `lint.xml` file with an <option> like this:
+
+   ```xml
+   <lint>
+       <issue id="UseKtx">
+           <option name="remove-defaults" value="true" />
+       </issue>
+   </lint>
+   ```
+
+   **require-present** (default is true):
+   Whether to only offer extensions already available.
+
+   This option lets you only have lint suggest extension replacements if those extensions are already available on the class path (in other words, you're already depending on the library containing the extension method.)
+
+   To configure this option, use a `lint.xml` file with an <option> like this:
+
+   ```xml
+   <lint>
+       <issue id="UseKtx">
+           <option name="require-present" value="true" />
+       </issue>
+   </lint>
+   ```
+
+0 errors, 12 warnings, 12 hints

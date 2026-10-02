@@ -13,7 +13,7 @@ import type {
 import { validRefundApprovalLimit } from '../../src/shared/refund-review-configuration.js'
 import type { JsonCodec, JsonObject, JsonValue } from './command-executor.js'
 import { IdempotencyConflictError, NormalizedCommandExecutor } from './command-executor.js'
-import { StaffAccessRepository } from './staff-access-repository.js'
+import { StaffAccessRepository, StaffAccessDeniedError } from './staff-access-repository.js'
 import { ScryptCredentialHasher, type CredentialHasher } from './staff-auth-command-service.js'
 import { ScopedPostgresTransactionRunner, type ScopedTransaction, type StoreScope } from './transaction-runner.js'
 
@@ -108,18 +108,34 @@ export class StaffAccessManagementService {
     reason: string
     changes: StaffPermissionDeploymentChange[]
     expectedVersion: string
+    receiptOnly?: boolean
   }>): Promise<StaffPermissionDeploymentResult> {
     assertDeployment(input)
     if (!/^[0-9a-f]{64}$/.test(input.expectedVersion)) throw new TypeError('请重新读取权限配置后发布')
-    // Authorize before a generic cached replay, and again inside the write transaction.
-    await this.transactions.run(input.scope, async (transaction) => {
-      await lockStaffAccessConfiguration(transaction)
-      await requireAdministrator(transaction, input.actorEmployeeId)
-    })
     const fingerprint = stableConfigurationJson({ actorEmployeeId: input.actorEmployeeId,
       expectedVersion: input.expectedVersion, reason: input.reason, changes: input.changes })
     const requestHash = createHash('sha256').update(fingerprint).digest('hex')
     const operationKey = createHash('sha256').update(`${input.actorEmployeeId}:${input.idempotencyKey}`).digest('hex')
+    // A still-active original employee may read only their exact committed receipt
+    // after handing off permission. No receipt means ordinary administrator access.
+    const prior = await this.transactions.run(input.scope, async transaction => {
+      await lockStaffAccessConfiguration(transaction)
+      const access = await new StaffAccessRepository(transaction).resolve(input.actorEmployeeId)
+      const receipt = await transaction.query<{ request_sha256: string; result: unknown }>(`
+        SELECT request_sha256,result FROM mbox.staff_permission_deployment_receipts
+        WHERE tenant_id=$1 AND store_id=$2 AND actor_employee_id=$3 AND operation_key=$4`,
+        [input.scope.tenantId,input.scope.storeId,input.actorEmployeeId,input.idempotencyKey])
+      if (receipt.rows[0]) {
+        if (receipt.rows[0].request_sha256 !== requestHash) throw new IdempotencyConflictError('staff.permission-deployment', input.idempotencyKey)
+        const result = deploymentCodec.decode(receipt.rows[0].result)
+        return {status: 'verified' as const, verifiedAt: result.verifiedAt, replayed: true,
+          changes: result.changes, overview: access.permissions.includes('staff.access.configure') ? await readOverview(transaction) : null}
+      }
+      await requireAdministrator(transaction, input.actorEmployeeId)
+      return null
+    })
+    if (prior) return prior
+    if (input.receiptOnly) throw new StaffAccessDeniedError('原请求尚无已提交回执，只读核对不会发起新的修改')
     let recovered = false
     const execution = await this.commands.execute({
       scope: input.scope,
@@ -236,13 +252,22 @@ export class StaffAccessManagementService {
           payload: evidence,
         }],
       }
+    }, async transaction => {
+      await lockStaffAccessConfiguration(transaction)
+      await requireAdministrator(transaction, input.actorEmployeeId)
     })
+    let overview: StaffAccessManagementOverview | null
+    try { overview = await this.getOverview({ scope: input.scope, actorEmployeeId: input.actorEmployeeId }) }
+    catch (error) {
+      if (!(error instanceof StaffAccessDeniedError)) throw error
+      overview = null
+    }
     return {
       status: 'verified',
       verifiedAt: execution.value.verifiedAt,
       replayed: execution.replayed || recovered,
       changes: execution.value.changes,
-      overview: await this.getOverview({ scope: input.scope, actorEmployeeId: input.actorEmployeeId }),
+      overview,
     }
   }
 
@@ -355,7 +380,7 @@ async function databaseTimestamp(transaction: ScopedTransaction): Promise<string
   return value
 }
 
-async function readOverview(transaction: ScopedTransaction): Promise<StaffAccessManagementOverview> {
+export async function readOverview(transaction: ScopedTransaction): Promise<StaffAccessManagementOverview> {
   const roleResult = await transaction.query<RoleRow>(`
     SELECT role.id, role.code, role.name, role.status,
       (SELECT count(DISTINCT employee_role.employee_id)::text

@@ -1,3 +1,23 @@
+import {nativeAnnualPolicyApiPlugin} from './native-annual-policy-api.js'
+import {nativeMembershipRecoveryApiPlugin} from './native-membership-recovery-api.js'
+import {nativeCheckoutManagementApiPlugin} from './native-checkout-management-api.js'
+import {nativeSocialOperationsApiPlugin} from './native-social-operations-api.js'
+import {nativeContactGovernanceApiPlugin} from './native-contact-governance-api.js'
+import {nativeMarketingContactApiPlugin} from './native-marketing-contact-api.js'
+import {nativeActivityOperationsApiPlugin} from './native-activity-operations-api.js'
+import {nativeRecommendationPolicyApiPlugin} from './native-recommendation-policy-api.js'
+import {nativeStackingPolicyApiPlugin} from './native-stacking-policy-api.js'
+import {nativeMemberGiftApiPlugin} from './native-member-gift-api.js'
+import {nativeCouponCalendarApiPlugin} from './native-coupon-calendar-api.js'
+import {nativeProductPhaseApiPlugin} from './native-product-phase-api.js'
+import {nativeExperiencePlanApiPlugin} from './native-experience-plan-api.js'
+import {nativeCustomerPublicationApiPlugin} from './native-customer-publication-api.js'
+import {nativeStaffAdministrationApiPlugin} from './native-staff-administration-api.js'
+import { nativeMembershipConfigurationApiPlugin } from './native-membership-configuration-api.js'
+import { nativeLoyaltySupplementsApiPlugin } from './native-loyalty-supplements-api.js'
+import { nativeBenefitExceptionsApiPlugin } from './native-benefit-exceptions-api.js'
+import { nativeMemberCardsApiPlugin } from './native-member-cards-api.js'
+import { nativePerformanceApiPlugin } from './native-performance-api.js'
 import {loadGiftBenefitProducts} from './gift-benefit-products.js'
 import {kitchenProductionApiPlugin} from './kitchen-production-api.js'
 import {assertRuntimeDatabasePool, RuntimeDatabaseIdentityError} from './runtime-database-identity.js'
@@ -172,7 +192,7 @@ import { isStaffAuthenticationRequiredError, STAFF_AUTHENTICATION_REQUIRED_ERROR
 import { GuestAuthenticationRequiredError, GuestCapabilityDeniedError } from './guest-request-context.js'
 import { StaffAccessDeniedError } from './staff-access-repository.js'
 import { MembershipTermsService } from './membership-terms-service.js'
-import { memberContentCardApiPlugin } from './member-content-card-api.js'
+import { memberContentCardApiPlugin,nativeMemberContentCardApiPlugin } from './member-content-card-api.js'
 import { MemberContentCardService } from './member-content-card-service.js'
 import { mediaAssetApiPlugin } from './media-asset-api.js'
 import { MediaAssetService } from './media-asset-service.js'
@@ -570,6 +590,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       query: new StaffBootstrapQuery(transactions),
       resolveContext: operationsContext,
     })
+    instance.register(nativeStaffAdministrationApiPlugin, {fingerprintSecret:options.config.secret,prefix: '/api',transactions,commands:commandExecutor,resolveStaffContext:operationsContext,authFactory:commands=>new StaffAuthCommandService(transactions,commands,staffRateLimiter)})
     instance.register(staffAccessManagementApiPlugin, {
       prefix: '/api',
       service: new StaffAccessManagementService(transactions, commandExecutor),
@@ -765,6 +786,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       transactions,
       membershipPhoneProtection,
     )
+    instance.register(nativeMembershipRecoveryApiPlugin,{prefix:'/api',transactions,commands:commandExecutor,phones:membershipPhoneProtection,resolveContext:staffReservationContext})
     const membershipEnrollment = recoveryPhoneAuthorization === undefined
       ? undefined
       : new MembershipEnrollmentService(
@@ -873,6 +895,8 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       const businessDate = (await businessClock.current(scope)).businessDate
       return { scope, customerId: session.customerId, tableSessionId: null, businessDate, actorRef: session.actorRef }
     }
+    instance.register(nativeBenefitExceptionsApiPlugin, { prefix:'/api', transactions, commands:commandExecutor, resolveStaffContext:staffReservationContext })
+    instance.register(nativeMemberCardsApiPlugin, { prefix:'/api', transactions, commands:commandExecutor, resolveStaffContext:staffReservationContext })
     instance.register(memberCardApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveSelfContext: memberSelfContext, resolveStaffContext: staffReservationContext })
     instance.register(memberNumberApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext })
     instance.register(memberVisitRewardApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext })
@@ -881,6 +905,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     instance.register(launchPopupApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext, resolveSelfContext: memberSelfContext })
     instance.register(customerCustodyApiPlugin, { prefix: '/api', transactions, resolveSelfContext: memberSelfContext, protection: activityContactProtection })
     instance.register(bottleCustodyApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext, protection: activityContactProtection })
+    instance.register(bottleCustodyApiPlugin, { prefix: '/api/native', nativeReceipts: true, transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext, protection: activityContactProtection })
     instance.register(socialAccountApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext, protection: activityContactProtection, scope })
     instance.register(memberGiftCampaignApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveSelfContext: memberSelfContext, resolveStaffContext: staffReservationContext })
     instance.register(marketingContactApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveSelfContext: memberSelfContext, resolveStaffContext: staffReservationContext })
@@ -913,6 +938,23 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
         signingSecret: options.config.secret,
       },
     })
+    instance.register(nativeStackingPolicyApiPlugin,{prefix:'/api',transactions,commands:commandExecutor,resolveContext:operationsContext})
+    instance.register(nativeMemberGiftApiPlugin,{prefix:'/api',transactions,commands:commandExecutor,resolveContext:operationsContext})
+    instance.register(nativeCouponCalendarApiPlugin,{prefix:'/api',transactions,commands:commandExecutor,resolveContext:operationsContext})
+    instance.register(nativeProductPhaseApiPlugin,{prefix:'/api',transactions,commands:commandExecutor,resolveContext:operationsContext})
+    instance.register(nativeExperiencePlanApiPlugin,{prefix:'/api',transactions,commands:commandExecutor,resolveContext:operationsContext})
+    instance.register(nativeAnnualPolicyApiPlugin,{prefix:'/api',transactions,commands:commandExecutor,resolveContext:operationsContext})
+    instance.register(nativeCheckoutManagementApiPlugin,{prefix:'/api',transactions,commands:commandExecutor,resolveContext:operationsContext})
+    instance.register(nativeSocialOperationsApiPlugin,{prefix:'/api',transactions,commands:commandExecutor,protection:activityContactProtection,resolveContext:operationsContext})
+    instance.register(nativeContactGovernanceApiPlugin,{prefix:'/api',transactions,protection:activityContactProtection,resolveContext:operationsContext})
+    instance.register(nativeMarketingContactApiPlugin,{prefix:'/api',transactions,commands:commandExecutor,resolveContext:operationsContext})
+    instance.register(nativeActivityOperationsApiPlugin,{prefix:'/api',transactions,commands:commandExecutor,providerConfigured:paymentProviderConfigured,resolveContext:operationsContext})
+    instance.register(nativeRecommendationPolicyApiPlugin,{prefix:'/api',transactions,commands:commandExecutor,resolveContext:operationsContext})
+    instance.register(nativeCustomerPublicationApiPlugin,{prefix:'/api',transactions,commands:commandExecutor,resolveContext:operationsContext})
+    instance.register(nativeMembershipConfigurationApiPlugin, { prefix:'/api', transactions, resolveContext:operationsContext })
+    instance.register(nativeLoyaltySupplementsApiPlugin, { prefix:'/api', transactions, commands:commandExecutor, customers:new CustomerCommandService(commandExecutor), resolveContext:operationsContext })
+    instance.register(nativePerformanceApiPlugin, { prefix:'/api', transactions, commands:commandExecutor, customers:new CustomerCommandService(commandExecutor), resolveContext:operationsContext })
+    instance.register(ownerFinanceApiPlugin, { prefix:'/api/native', nativeReceipts:true, transactions, commandExecutor, resolveContext:operationsContext })
     instance.register(ownerFinanceApiPlugin, {
       prefix: '/api',
       transactions,
@@ -923,6 +965,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       prefix: '/api',
       transactions,
       commands: tableManagement,
+      nativeCommands: commandExecutor,
       resolveContext: operationsContext,
     })
     instance.register(normalizedNotificationApiPlugin, {
@@ -968,6 +1011,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       resolveContext: operationsContext,
     })
     instance.register(printBridgeApiPlugin, {
+      commands: commandExecutor,
       prefix: '/api',
       scope,
       transactions,
@@ -1154,6 +1198,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
         activityPayments,
         resolveStaffContext: staffReservationContext,
       })
+      await reservationApp.register(nativeMemberContentCardApiPlugin, {transactions,commands:commandExecutor,resolveStaffContext:staffReservationContext})
       await reservationApp.register(memberContentCardApiPlugin, {
         transactions,
         service: new MemberContentCardService(transactions, commandExecutor),

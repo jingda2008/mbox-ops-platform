@@ -583,12 +583,13 @@ export class CommercialOpsRepository {
     return reversed
   }
 
-  async redeemVoucher(input: Readonly<RedeemGroupVoucherInput>): Promise<GroupVoucherRedemption> {
+  async redeemVoucher(input: Readonly<RedeemGroupVoucherInput>, preserveVerifiedOriginalAssociation = false, verifiedIdentity?: Readonly<{codeHash:string;masked:string}>): Promise<GroupVoucherRedemption> {
     validateVoucher(input)
     if (input.reconciliationEntryId) await this.assertVoucherReconciliation(input)
-    if (input.orderId || input.tableSessionId) await this.assertVoucherOwnership(input)
+    if (input.orderId || input.tableSessionId) await this.assertVoucherOwnership(input,preserveVerifiedOriginalAssociation)
     const normalizedCode = normalizeVoucherCode(input.voucherCode)
-    const codeHash = voucherCodeDigest(normalizedCode)
+    if(verifiedIdentity && (!preserveVerifiedOriginalAssociation || !/^[a-f0-9]{64}$/.test(verifiedIdentity.codeHash) || verifiedIdentity.masked.length<4 || verifiedIdentity.masked.length>256))throw new TypeError('Invalid server-verified voucher identity')
+    const codeHash = verifiedIdentity?.codeHash ?? voucherCodeDigest(normalizedCode)
     try {
       const result = await this.transaction.query<VoucherRow>(`
         INSERT INTO mbox.group_voucher_redemptions (
@@ -606,7 +607,7 @@ export class CommercialOpsRepository {
       `, [
         this.transaction.scope.tenantId, this.transaction.scope.storeId,
         input.publicId, input.platform.trim(), input.platformCode?.trim() || null, input.campaignName.trim(), codeHash,
-        maskVoucher(normalizedCode), input.faceValueMinor, input.settlementAmountMinor,
+        verifiedIdentity?.masked ?? maskVoucher(normalizedCode), input.faceValueMinor, input.settlementAmountMinor,
         input.currency, input.orderId ?? null, input.tableSessionId ?? null,
         input.reconciliationEntryId ?? null, input.providerCertificateId?.trim() || null,
         input.providerVerifyId?.trim() || null, input.providerStatus?.trim() || null,
@@ -760,17 +761,17 @@ export class CommercialOpsRepository {
     }
   }
 
-  private async assertVoucherOwnership(input: Readonly<RedeemGroupVoucherInput>): Promise<void> {
+  private async assertVoucherOwnership(input: Readonly<RedeemGroupVoucherInput>, preserveVerifiedOriginalAssociation = false): Promise<void> {
     if (!input.orderId || !input.tableSessionId) {
       throw new CommercialIntegrityError('orderId and tableSessionId must be provided together')
     }
     const result = await this.transaction.query<{ id: string }>(`
       SELECT id FROM mbox.orders
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid
-        AND id = $3::uuid AND table_session_id = $4::uuid AND status <> 'cancelled'
+        AND id = $3::uuid AND table_session_id = $4::uuid AND (status <> 'cancelled' OR $5::boolean)
     `, [
       this.transaction.scope.tenantId, this.transaction.scope.storeId,
-      input.orderId, input.tableSessionId,
+      input.orderId, input.tableSessionId,preserveVerifiedOriginalAssociation,
     ])
     if (!result.rowCount) throw new CommercialIntegrityError('Voucher order does not belong to the table session')
   }

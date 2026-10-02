@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mbox.staff.LiveOrderingTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-09-27T02:22:49.932Z" hostname="jingdadeMacBook-Pro.local" time="0.009">
+  <properties/>
+  <testcase name="submissionRules" classname="com.mbox.staff.LiveOrderingTest" time="0.007"/>
+  <testcase name="initialRejectionNeverTreatsAmbiguityAsFailure" classname="com.mbox.staff.LiveOrderingTest" time="0.001"/>
+  <testcase name="retryIdentityAndReceiptBinding" classname="com.mbox.staff.LiveOrderingTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

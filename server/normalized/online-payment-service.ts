@@ -468,9 +468,9 @@ export class OnlinePaymentService {
     const secrets = this.secrets
     const config = this.config
     if (adapter === null || secrets === null || config === null) throw new OnlinePaymentUnavailableError()
-    if (context.provider !== 'postar' || !['created', 'pending'].includes(context.status)) {
-      throw new OnlinePaymentUnavailableError('这笔付款已有明确结果，无需关闭')
-    }
+    if (context.provider !== 'postar') throw new OnlinePaymentUnavailableError('此渠道不支持安全关单')
+    if (['succeeded','partially_refunded','refunded','failed'].includes(context.status)) throw new OnlinePaymentAlreadyResolvedError(context,context.status as TerminalOnlinePaymentStatus)
+    if (!['created','pending','closed'].includes(context.status)) throw new OnlinePaymentUnavailableError('此原款状态不支持安全关单')
     const queried = await queryPaymentWithUnknownBoundary(adapter, {
       paymentIntentId: context.publicId,
       merchantId: config.merchantId,

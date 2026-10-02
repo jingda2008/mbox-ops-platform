@@ -4,7 +4,7 @@ import {
   StaffAccessDeniedError,
   StaffAccessRepository,
 } from "./staff-access-repository.js";
-import type { StoreScope } from "./transaction-runner.js";
+import type { StoreScope, ScopedTransaction } from "./transaction-runner.js";
 import { ScopedPostgresTransactionRunner } from "./transaction-runner.js";
 import { InventoryRepository, type RecipeCostPreview } from './inventory-repository.js';
 import type { StockCountReview, StockCountReviewPage } from '../../src/shared/inventory-stock-count.js';
@@ -70,7 +70,9 @@ export interface StoredBottleView {
   updatedAt: string;
 }
 
+export interface InventoryReceiptFilter { page:number; status:string; search:string; from:string|null; to:string|null }
 export interface InventoryDashboard {
+  receiptsPage?: {page:number;hasMore:boolean};
   items: InventoryItemView[];
   lowStockCount: number;
   receipts: PurchaseReceiptView[];
@@ -232,6 +234,7 @@ export class InventoryQueryService {
   getDashboard(
     scope: Readonly<StoreScope>,
     employeeId: string,
+    receiptFilter?: InventoryReceiptFilter,
   ): Promise<InventoryDashboard> {
     return this.transactions.run(
       scope,
@@ -318,11 +321,18 @@ export class InventoryQueryService {
           ON item.tenant_id = line.tenant_id AND item.store_id = line.store_id
          AND item.id = line.inventory_item_id
         WHERE receipt.tenant_id = $1::uuid AND receipt.store_id = $2::uuid
+          AND ($4::text='' OR receipt.status=$4)
+          AND ($5::text='' OR receipt.public_id ILIKE '%' || $5 || '%' OR EXISTS (
+            SELECT 1 FROM mbox.purchase_receipt_lines match_line JOIN mbox.inventory_items match_item
+              ON match_item.tenant_id=match_line.tenant_id AND match_item.store_id=match_line.store_id AND match_item.id=match_line.inventory_item_id
+            WHERE match_line.tenant_id=receipt.tenant_id AND match_line.store_id=receipt.store_id AND match_line.receipt_id=receipt.id AND (match_item.name ILIKE '%' || $5 || '%' OR match_item.sku ILIKE '%' || $5 || '%')))
+          AND ($6::date IS NULL OR receipt.created_at >= ($6::date::timestamp AT TIME ZONE 'Asia/Shanghai'))
+          AND ($7::date IS NULL OR receipt.created_at < (($7::date+1)::timestamp AT TIME ZONE 'Asia/Shanghai'))
         GROUP BY receipt.id
         ORDER BY CASE WHEN receipt.status = 'draft' THEN 0 ELSE 1 END,
-          receipt.created_at DESC, receipt.id DESC LIMIT 100
+          receipt.created_at DESC, receipt.id DESC LIMIT $8 OFFSET $9
       `,
-          [scope.tenantId, scope.storeId, canViewCosts],
+          [scope.tenantId, scope.storeId, canViewCosts,receiptFilter?.status??'',receiptFilter?.search??'',receiptFilter?.from??null,receiptFilter?.to??null,receiptFilter?101:100,(receiptFilter?.page??0)*100],
         );
 
         const bottles = canViewBottles
@@ -394,7 +404,8 @@ export class InventoryQueryService {
         return {
           items: itemViews,
           lowStockCount: itemViews.filter((item) => item.lowStock).length,
-          receipts: receipts.rows.map((row) => ({
+          ...(receiptFilter?{receiptsPage:{page:receiptFilter.page,hasMore:receipts.rows.length>100}}:{}),
+          receipts: receipts.rows.slice(0,100).map((row) => ({
             id: row.id,
             publicId: row.public_id,
             status: row.status,
@@ -445,6 +456,46 @@ export class InventoryQueryService {
     return this.transactions.run(
       scope,
       async (transaction) => {
+        return readActiveRecipe(transaction,employeeId,productId);
+      },
+      { readOnly: true },
+    );
+  }
+
+  getRecipeCostPreview(
+    scope: Readonly<StoreScope>,
+    employeeId: string,
+    productId: string,
+  ): Promise<RecipeCostPreview> {
+    return this.transactions.run(scope, async (transaction) => {
+      await new StaffAccessRepository(transaction).assertPermission(employeeId, 'inventory.cost.view');
+      return new InventoryRepository(transaction).previewRecipeCost(productId);
+    }, { readOnly: true });
+  }
+}
+
+export function assertInventoryPermission(
+  permissions: readonly string[],
+  permission: string,
+): void {
+  if (!permissions.includes(permission))
+    throw new StaffAccessDeniedError(
+      `Employee does not have permission ${permission}`,
+    );
+}
+
+export function assertInventoryDashboardAccess(permissions: readonly string[]): void {
+  const dashboardPermissions = [
+    'inventory.view', 'inventory.manage', 'inventory.cost.view', 'inventory.receive',
+    'inventory.count', 'inventory.count.approve', 'inventory.waste', 'inventory.barcode.bind', 'inventory.cost.correct',
+  ]
+  if (!dashboardPermissions.some((permission) => permissions.includes(permission))) {
+    throw new StaffAccessDeniedError('Employee does not have inventory dashboard access')
+  }
+}
+
+export async function readActiveRecipe(transaction:ScopedTransaction,employeeId:string,productId:string):Promise<ActiveRecipeView|null>{
+ const scope=transaction.scope;
         await new StaffAccessRepository(transaction).assertPermission(
           employeeId,
           "inventory.manage",
@@ -505,39 +556,4 @@ export class InventoryQueryService {
             expectedWasteQuantity: component.expected_waste_quantity,
           })),
         };
-      },
-      { readOnly: true },
-    );
-  }
-
-  getRecipeCostPreview(
-    scope: Readonly<StoreScope>,
-    employeeId: string,
-    productId: string,
-  ): Promise<RecipeCostPreview> {
-    return this.transactions.run(scope, async (transaction) => {
-      await new StaffAccessRepository(transaction).assertPermission(employeeId, 'inventory.cost.view');
-      return new InventoryRepository(transaction).previewRecipeCost(productId);
-    }, { readOnly: true });
-  }
-}
-
-export function assertInventoryPermission(
-  permissions: readonly string[],
-  permission: string,
-): void {
-  if (!permissions.includes(permission))
-    throw new StaffAccessDeniedError(
-      `Employee does not have permission ${permission}`,
-    );
-}
-
-export function assertInventoryDashboardAccess(permissions: readonly string[]): void {
-  const dashboardPermissions = [
-    'inventory.view', 'inventory.manage', 'inventory.cost.view', 'inventory.receive',
-    'inventory.count', 'inventory.count.approve', 'inventory.waste', 'inventory.barcode.bind', 'inventory.cost.correct',
-  ]
-  if (!dashboardPermissions.some((permission) => permissions.includes(permission))) {
-    throw new StaffAccessDeniedError('Employee does not have inventory dashboard access')
-  }
 }

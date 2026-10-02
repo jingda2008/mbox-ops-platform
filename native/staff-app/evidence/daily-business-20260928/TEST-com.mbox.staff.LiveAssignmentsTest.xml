@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mbox.staff.LiveAssignmentsTest" tests="8" skipped="0" failures="0" errors="0" timestamp="2026-09-27T18:10:15.118Z" hostname="jingdadeMacBook-Pro.local" time="0.084">
+  <properties/>
+  <testcase name="lostAcknowledgementUsesOriginalRequestAndConflictsRemainUnknown" classname="com.mbox.staff.LiveAssignmentsTest" time="0.029"/>
+  <testcase name="endBindsOriginalAssignmentAndKeepsOriginalReason" classname="com.mbox.staff.LiveAssignmentsTest" time="0.006"/>
+  <testcase name="batchReceiptRequiresExactSetAndOriginalDetails" classname="com.mbox.staff.LiveAssignmentsTest" time="0.033"/>
+  <testcase name="scopeSearchAndTime" classname="com.mbox.staff.LiveAssignmentsTest" time="0.0"/>
+  <testcase name="validationNeverGrantsPermissionsOrUsesUnseenOptions" classname="com.mbox.staff.LiveAssignmentsTest" time="0.009"/>
+  <testcase name="guardedCapabilityAndOriginalReceiptsRemainCompatible" classname="com.mbox.staff.LiveAssignmentsTest" time="0.003"/>
+  <testcase name="guardedFailureNeedsExplicitUncommittedEvidence" classname="com.mbox.staff.LiveAssignmentsTest" time="0.0"/>
+  <testcase name="knownOverlapAndAdjacentIntervals" classname="com.mbox.staff.LiveAssignmentsTest" time="0.003"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

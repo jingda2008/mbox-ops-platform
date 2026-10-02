@@ -1,6 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { CommercialApiRequestError, readCostInput, toCostResult } from "./commercial-ops-api.js";
+import { randomUUID, createHash } from "node:crypto";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import {
+  NativeCommandNotCommittedError,
   IdempotencyConflictError,
   IdempotencyInProgressError,
   IdempotencyRecordError,
@@ -31,6 +33,7 @@ type TransactionRunnerPort = Pick<ScopedPostgresTransactionRunner, "run">;
 type CommandExecutorPort = Pick<NormalizedCommandExecutor, "execute">;
 
 export interface OwnerFinanceApiOptions {
+  nativeReceipts?: boolean;
   transactions: TransactionRunnerPort;
   commandExecutor: CommandExecutorPort;
   resolveContext(
@@ -56,6 +59,30 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
   const access = (transaction: ScopedTransaction) =>
     options.createStaffAccessRepository?.(transaction) ??
     new StaffAccessRepository(transaction);
+
+  if(options.nativeReceipts) {
+    app.addHook("onRequest", async (_request, reply) => { reply.header("Cache-Control","private, no-store") });
+    app.get("/commercial-ops/native-capabilities", async (request,reply) => handle(reply,async()=> {
+      const context=await options.resolveContext(request);
+      const effective=await options.transactions.run(context.scope,tx=>access(tx).resolve(context.employeeId),{readOnly:true});
+      if(!effective.permissions.some(p=>p.startsWith("commercial.cost.")||p.startsWith("commercial.payroll."))) throw new StaffAccessDeniedError("无经营财务权限");
+      return reply.send({data:{durableCommands:true,employeeId:context.employeeId,protocol:1}});
+    }));
+    for(const correction of [false,true]) app.post<{Params:{costId:string}}>(correction?"/commercial-ops/costs/:costId/corrections":"/commercial-ops/costs",async(request,reply)=>handle(reply,async()=>{
+      const context=await options.resolveContext(request),body=object(request.body);
+      const costId=correction?uuid(request.params.costId,"原费用"):null;
+      const reason=correction?text(body.correctionReason,"更正原因",1000,2):null;
+      // Read with the same validator as the existing web API. Generated IDs are
+      // deliberately excluded from the immutable request fingerprint.
+      const input=readCostInput(body,context,`cost-${randomUUID()}`);
+      return commandReply(reply,options,context,request,correction?"commercial.cost.correct":"commercial.cost.create",{costId,reason,input:{...input,publicId:body.publicId??null}},async tx=>{
+        await access(tx).assertPermission(context.employeeId,"commercial.cost.manage");
+        const repo=new CommercialOpsRepository(tx);
+        const value=correction?await repo.correctCost(costId!,input,reason!):await repo.createCost(input);
+        return {...toCostResult(value),status:"recorded",aggregateVersion:1};
+      },correction?"commercial.cost.corrected":"commercial.cost.created","operating_cost");
+    }));
+  }
 
   app.get("/commercial-ops/owner-finance", async (request, reply) =>
     handle(reply, async () => {
@@ -92,7 +119,7 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
             ids(context),
           );
           const recurring = await transaction.query(
-            `SELECT rule.id,rule.public_id AS "publicId",rule.name,definition.name AS "categoryName",definition.system_category AS "systemCategory",rule.category_definition_id AS "categoryDefinitionId",rule.cost_center_id AS "costCenterId",center.name AS "costCenterName",rule.recurrence,rule.starts_on::text AS "startsOn",rule.ends_on::text AS "endsOn",rule.allocation_period AS "allocationPeriod",rule.recognition_state AS "recognitionState",rule.net_amount_minor::text AS "netAmountMinor",rule.tax_amount_minor::text AS "taxAmountMinor",rule.gross_amount_minor::text AS "grossAmountMinor",rule.currency,rule.source_type AS "sourceType",rule.counterparty,rule.note,rule.status FROM mbox.recurring_operating_cost_rules rule JOIN mbox.operating_cost_category_definitions definition ON definition.tenant_id=rule.tenant_id AND definition.store_id=rule.store_id AND definition.id=rule.category_definition_id JOIN mbox.cost_centers center ON center.tenant_id=rule.tenant_id AND center.store_id=rule.store_id AND center.id=rule.cost_center_id WHERE rule.tenant_id=$1::uuid AND rule.store_id=$2::uuid ORDER BY rule.status,rule.starts_on DESC,rule.id`,
+            `SELECT rule.id,rule.public_id AS "publicId",rule.name,definition.name AS "categoryName",definition.system_category AS "systemCategory",rule.category_definition_id AS "categoryDefinitionId",rule.cost_center_id AS "costCenterId",center.name AS "costCenterName",rule.recurrence,rule.starts_on::text AS "startsOn",rule.ends_on::text AS "endsOn",rule.allocation_period AS "allocationPeriod",rule.recognition_state AS "recognitionState",rule.net_amount_minor::text AS "netAmountMinor",rule.tax_amount_minor::text AS "taxAmountMinor",rule.gross_amount_minor::text AS "grossAmountMinor",rule.currency,rule.source_type AS "sourceType",rule.counterparty,rule.note,rule.status,rule.version FROM mbox.recurring_operating_cost_rules rule JOIN mbox.operating_cost_category_definitions definition ON definition.tenant_id=rule.tenant_id AND definition.store_id=rule.store_id AND definition.id=rule.category_definition_id JOIN mbox.cost_centers center ON center.tenant_id=rule.tenant_id AND center.store_id=rule.store_id AND center.id=rule.cost_center_id WHERE rule.tenant_id=$1::uuid AND rule.store_id=$2::uuid ORDER BY rule.status,rule.starts_on DESC,rule.id`,
             ids(context),
           );
           const costs = await transaction.query(
@@ -864,15 +891,35 @@ async function commandReply(
   objectType: string,
 ) {
   const idempotencyKey = idempotency(request);
+  const native = options.nativeReceipts === true;
+  if(native && !/^native-business-[a-f0-9-]{36}$/.test(idempotencyKey)) throw new OwnerFinanceRequestError("原生请求编号无效");
+  const data = input as Record<string,unknown>;
+  const guarded = native && (Boolean(data.runId) || operationScope === "commercial.recurring-cost.status");
+  const expectedVersion=guarded?integer(Number(request.headers["x-owner-version"]),"记录版本",1,1_000_000):null;
+  const expectedCompensation=native && operationScope === "commercial.compensation-rule.create"?text(request.headers["x-owner-compensation"],"当前薪资标准",64):null;
+  const permission=operationScope.startsWith("commercial.cost")||operationScope.startsWith("commercial.recurring-")?"commercial.cost.manage":operationScope==="commercial.payroll-run.post"?"commercial.payroll.post":"commercial.payroll.manage";
   const execution = await options.commandExecutor.execute(
     {
       scope: context.scope,
-      operationScope,
+      operationScope: native ? operationScope+".native" : operationScope,
       idempotencyKey,
-      requestFingerprint: JSON.stringify({ input, actor: context.employeeId }),
+      ...(native ? {retainReceipt:true} : {}),
+      requestFingerprint: native ? createHash("sha256").update(JSON.stringify({input,actor:context.employeeId,expectedVersion,expectedCompensation})).digest("hex") : JSON.stringify({ input, actor: context.employeeId }),
       resultCodec: codec<FinanceResult>(),
     },
     async (transaction) => {
+      if(native) {
+        if(guarded) {
+          const table=data.runId?"payroll_runs":"recurring_operating_cost_rules";
+          const current=one(await transaction.query<{version:number}>(`SELECT version FROM mbox.${table} WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE`,[...ids(context),data.runId??data.ruleId]));
+          if(current.version!==expectedVersion) throw new OwnerFinanceRequestError("记录已变化，请刷新核对，未覆盖他人修改");
+        }
+        if(expectedCompensation!==null) {
+          await transaction.query("SELECT id FROM mbox.employees WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE",[...ids(context),data.employeeId]);
+          const current=(await transaction.query<{id:string}>("SELECT id FROM mbox.employee_compensation_rules WHERE tenant_id=$1 AND store_id=$2 AND employee_id=$3 AND status='active' FOR UPDATE",[...ids(context),data.employeeId])).rows[0];
+          if((current?.id??"none")!==expectedCompensation) throw new OwnerFinanceRequestError("薪资标准已变化，请刷新后核对");
+        }
+      }
       const value = await work(transaction);
       return {
         result: value,
@@ -900,10 +947,16 @@ async function commandReply(
         ],
       };
     },
+    native ? async tx => {
+      const current=await options.resolveContext(request);
+      if(current.employeeId!==context.employeeId || current.scope.storeId!==context.scope.storeId || current.scope.tenantId!==context.scope.tenantId) throw new StaffAccessDeniedError("账号已变化");
+      const repository=options.createStaffAccessRepository?.(tx)??new StaffAccessRepository(tx);
+      await repository.assertPermission(context.employeeId,permission);
+    } : undefined,
   );
-  return reply
-    .code(execution.replayed ? 200 : 201)
-    .send({ data: execution.value, replayed: execution.replayed });
+  return reply.code(execution.replayed ? 200 : 201).send(native
+    ? {data:{operation:operationScope,employeeId:context.employeeId,requestKey:idempotencyKey,result:execution.value},meta:{protocol:1,replayed:execution.replayed}}
+    : { data: execution.value, replayed: execution.replayed });
 }
 
 type RecurringDbRow = {
@@ -1220,6 +1273,7 @@ async function handle(
   try {
     return await operation();
   } catch (error) {
+    if(error instanceof NativeCommandNotCommittedError) return reply.code(409).send({error:{code:"NATIVE_BUSINESS_NOT_COMMITTED",message:error.original instanceof OwnerFinanceRequestError?error.original.message:"本次费用或工资操作未提交，请刷新核对输入和状态",commitDisposition:"not_committed"}});
     if (error instanceof StaffAccessDeniedError)
       return reply
         .code(403)
@@ -1240,6 +1294,7 @@ async function handle(
         });
     if (
       error instanceof OwnerFinanceRequestError ||
+      error instanceof CommercialApiRequestError ||
       error instanceof TypeError ||
       error instanceof RangeError
     )

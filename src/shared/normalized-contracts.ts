@@ -217,7 +217,7 @@ export interface StaffPermissionDeploymentResult {
     effectiveEmployeeCount: number
     affectedEmployeeCount: number
   }>
-  overview: StaffAccessManagementOverview
+  overview: StaffAccessManagementOverview | null
 }
 
 export interface NormalizedApiMeta {

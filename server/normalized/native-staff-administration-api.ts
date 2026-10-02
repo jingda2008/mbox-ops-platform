@@ -1,4 +1,4 @@
-import {createHash} from 'node:crypto'
+import {createHash,createHmac} from 'node:crypto'
 import type {FastifyPluginAsync,FastifyRequest} from 'fastify'
 import {z} from 'zod'
 import {StaffAccessManagementService,readOverview} from './staff-access-management-service.js'
@@ -20,12 +20,13 @@ const schemas={
  deploy:z.object({...base,changes:z.array(z.unknown()).min(1).max(100)}).strict(),
 }
 type Context={scope:StoreScope;employeeId:string;businessDate:string}
-type Options={transactions:ScopedPostgresTransactionRunner;commands:Pick<NormalizedCommandExecutor,'execute'>;resolveStaffContext(request:FastifyRequest):Promise<Context>|Context;authFactory(commands:Pick<NormalizedCommandExecutor,'execute'>):Pick<StaffAuthCommandService,'setEmployeePin'|'configureDailyStoreCredential'>}
+type Options={fingerprintSecret:string;transactions:ScopedPostgresTransactionRunner;commands:Pick<NormalizedCommandExecutor,'execute'>;resolveStaffContext(request:FastifyRequest):Promise<Context>|Context;authFactory(commands:Pick<NormalizedCommandExecutor,'execute'>):Pick<StaffAuthCommandService,'setEmployeePin'|'configureDailyStoreCredential'>}
 async function credentialState(tx:ScopedTransaction){
  const rows=(await tx.query(`SELECT id,business_date::text AS "businessDate",valid_from::text AS "validFrom",valid_until::text AS "validUntil",reusable_across_business_dates AS reusable FROM mbox.store_daily_credentials WHERE tenant_id=$1 AND store_id=$2 AND revoked_at IS NULL ORDER BY business_date,id`,[tx.scope.tenantId,tx.scope.storeId])).rows
  return{credentials:rows,credentialVersion:createHash('sha256').update(JSON.stringify(rows)).digest('hex')}
 }
 export const nativeStaffAdministrationApiPlugin:FastifyPluginAsync<Options>=async(app,options)=>{
+ if(options.fingerprintSecret.length<32)throw new Error('Native credential fingerprint key must contain at least 32 characters')
  app.addHook('onRequest',async(_request,reply)=>{reply.header('Cache-Control','private, no-store')})
  app.setErrorHandler((error,_request,reply)=>{
   if(isStaffAuthenticationRequiredError(error))return reply.code(401).send({error:STAFF_AUTHENTICATION_REQUIRED_ERROR})
@@ -46,9 +47,9 @@ export const nativeStaffAdministrationApiPlugin:FastifyPluginAsync<Options>=asyn
  app.post<{Params:{action:string}}>('/staff/native-administration/:action',{bodyLimit:64000},async request=>{
   const action=z.enum(['create','status','pin','credential','deploy']).parse(request.params.action),input=schemas[action].parse(request.body),key=z.string().regex(/^native-business-[a-f0-9-]{36}$/).parse(request.headers['idempotency-key'])
   const ctx=await options.resolveStaffContext(request)
-  // Secret values never enter audit fingerprints, command titles or receipts.
+  // Bind low-entropy secrets with a server-keyed MAC; never store a raw PIN or unkeyed PIN digest.
   const {pin:_pin,credential:_credential,...publicInput}=input as typeof input&{pin?:string;credential?:string}
-  const fingerprint={action,employeeId:ctx.employeeId,input:publicInput,secretConfigured:action==='pin'||action==='create'||action==='credential'}
+  const fingerprint={action,employeeId:ctx.employeeId,input:publicInput,secretConfigured:action==='pin'||action==='create'||action==='credential',...((_pin??_credential)===undefined?{}:{secretBinding:createHmac('sha256',options.fingerprintSecret).update(JSON.stringify(['native-staff-secret-v1',ctx.scope,ctx.employeeId,action,key,_pin??_credential])).digest('hex')})}
   const guarded=nativeGuardedExecutor(options.commands,{fingerprint,authorize:async tx=>{await lockStaffAccessConfiguration(tx);await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'staff.access.configure')},guard:async tx=>{
    if((await readOverview(tx)).configurationVersion!==input.expectedVersion)throw new StaffAccessVersionConflictError()
    if(action==='credential'){const v=schemas.credential.parse(input);if((await credentialState(tx)).credentialVersion!==v.credentialVersion)throw new StaffAccessVersionConflictError();if(Date.parse(v.validUntil)<=Date.now()||Date.parse(v.validUntil)<=Date.parse(v.validFrom))throw new TypeError('口令结束时间须晚于生效时间与当前时间')}

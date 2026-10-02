@@ -77,6 +77,7 @@ export const staffAccessManagementApiPlugin: FastifyPluginAsync<{
       reason,
       changes,
       expectedVersion,
+      receiptOnly: body.receiptOnly === true,
     })
     return reply.send({ data, meta: { generatedAt: data.verifiedAt } })
   }))

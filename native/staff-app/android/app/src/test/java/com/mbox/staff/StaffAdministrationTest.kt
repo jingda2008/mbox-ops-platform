@@ -18,4 +18,13 @@ class StaffAdministrationTest{
   val credential=staffAdministrationCommand(actor,b,"credential",JSONObject().put("credential","unique-store-secret").put("reason","换门店口令").put("validFrom","2099-01-01T00:00:00+08:00").put("validUntil","2099-01-02T00:00:00+08:00"),"更换口令")
   assertFalse(secureStaffAdministrationCommand(credential){k,v->vault[k]=v}.json().toString().contains("unique-store-secret"));assertEquals(version,JSONObject(vault[credential.id]!!).getString("credentialVersion"))
  }
+ @Test fun wholeMinuteCredentialTimesStayCanonical(){
+  for(value in listOf("2099-01-01T09:00:00+08:00","2099-01-01T09:00+08:00","2099-01-01T09:00:30.123+08:00","2099-01-01T01:00Z"))assertEquals(java.time.OffsetDateTime.parse(value).toInstant(),serverInstant(staffCredentialTime(value)))
+ }
+ @Test fun revokedPermissionMayOnlyAttemptOwnDeploymentReceiptRecovery(){
+  val proof=JSONObject().put("staffAdministration",JSONObject().put("action","deploy"))
+  val command=LiveCommand("id","e","核对原发布","staff.access.configure",listOf(LiveStep("/api/staff/native-administration/deploy","{}","idempotency-key","key",proof.toString())))
+  assertTrue(command.isStaffPermissionReceiptRecovery());assertFalse(command.copy(steps=command.steps+command.steps).isStaffPermissionReceiptRecovery())
+  assertFalse(command.copy(steps=listOf(command.steps[0].copy(recoveryBody=JSONObject().put("staffAdministration",JSONObject().put("action","pin")).toString()))).isStaffPermissionReceiptRecovery())
+ }
 }

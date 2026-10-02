@@ -7,3 +7,6 @@ evidence/*.png
 evidence/*.log
 
 **/__pycache__/
+
+# Binary JUnit transport caches are not reviewable release evidence.
+evidence/**/binary/

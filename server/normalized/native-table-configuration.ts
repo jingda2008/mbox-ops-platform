@@ -33,9 +33,19 @@ export function registerNativeTableConfiguration(app:FastifyInstance,options:Tab
   },{readOnly:true,isolation:'repeatable-read'});return{data}
  }))
  app.post<{Params:{action:string}}>('/table-management/native-configuration/:action',{bodyLimit:12000},async(request,reply)=>handle(reply,async()=>{
-  const action=z.enum(['area-create','area-update','table-create','table-update']).parse(request.params.action),input=schemas[action].parse(request.body)
+  const action=z.enum(['area-create','area-update','table-create','table-update']).parse(request.params.action)
+  const parsed=schemas[action].safeParse(request.body)
   const key=z.string().regex(/^native-business-[a-f0-9-]{36}$/).parse(request.headers['idempotency-key']),ctx=await options.resolveContext(request)
   if(!options.nativeCommands)return reply.code(503).send({error:{code:'NATIVE_CONFIGURATION_UNAVAILABLE',message:'后台尚未支持原生配置恢复'}})
+  if(!parsed.success){
+   // Claim the SAME domain key before classifying an invalid request. An old
+   // committed request with changed content must remain a conflict, not clearable.
+   const scopes={'area-create':'table.area.create','area-update':'table.area.update','table-create':'table.create','table-update':'table.update'}
+   const invalid=nativeGuardedExecutor(options.nativeCommands,{fingerprint:{employeeId:ctx.employeeId,action,input:request.body},authorize:async tx=>{await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'table.manage')}})
+   const result=await invalid.execute({scope:ctx.scope,operationScope:scopes[action],idempotencyKey:key,requestFingerprint:'invalid',resultCodec:{encode:v=>v as never,decode:v=>v}},async()=>{throw new TypeError('区域排序须在-100000至100000之间，请核对配置字段')})
+   return{data:{employeeId:ctx.employeeId,requestKey:key,action,result:result.value},meta:{protocol:1,replayed:result.replayed}}
+  }
+  const input=parsed.data
   const service=new TableManagementCommandService(nativeGuardedExecutor(options.nativeCommands,{fingerprint:{employeeId:ctx.employeeId,action,input},authorize:async tx=>{await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'table.manage')},guard:async tx=>{
    const args=[ctx.scope.tenantId,ctx.scope.storeId]
    // Follow existing open/transfer order: table rows before active session checks.

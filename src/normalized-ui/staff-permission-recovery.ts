@@ -80,3 +80,20 @@ function validIntent(value: unknown, scopeKey: string, employeeId: string): valu
     && typeof item.body.reason === 'string' && item.body.reason.trim().length >= 2
     && Array.isArray(item.body.changes) && item.body.changes.length > 0 && item.body.changes.length <= 100
 }
+
+/** Discover only this employee's existing intents when their overview access was removed. */
+export function permissionReceiptIntents(employeeId: string, storage: StoragePort): PermissionDeploymentIntent[] {
+  const found: PermissionDeploymentIntent[] = []
+  for (let i=0;i<storage.length;i++) {
+    const key=storage.key(i)
+    if (!key?.startsWith('mbox.staff-permission-intent.v1:')) continue
+    try {
+      const value: unknown=JSON.parse(storage.getItem(key) || 'null')
+      if (!value || typeof value !== 'object') continue
+      const candidate=value as PermissionDeploymentIntent
+      if (candidate.employeeId!==employeeId || typeof candidate.scopeKey!=='string') continue
+      if (validIntent(candidate,candidate.scopeKey,employeeId) && key===`mbox.staff-permission-intent.v1:${candidate.scopeKey}:${employeeId}:${candidate.key}`) found.push(candidate)
+    } catch { /* Keep unreadable evidence untouched; never send it as a new write. */ }
+  }
+  return found.sort((a,b)=>a.createdAt.localeCompare(b.createdAt))
+}

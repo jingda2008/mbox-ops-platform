@@ -10,6 +10,7 @@ fun tableConfigurationCommand(actor:StaffIdentity,board:TableConfigurationBoard,
  require(action in setOf("area-create","area-update","table-create","table-update"));require(board.enabled&&board.employee==actor.employeeId&&actor.allows("table.manage"))
  require(body.getString(if(action.startsWith("table"))"displayName" else "name").trim().length in 1..120){"名称须为1至120字"}
  require(body.getString("reason").trim().length in 2..500){"请填写2至500字修改原因"}
+ if(action.startsWith("area"))require(body.getInt("sortOrder") in -100000..100000){"区域排序须为-100000至100000的整数"}
  if(action.startsWith("table")){
   require(body.getInt("capacity") in 1..200){"容量须为1至200人"};require(board.areas.any{it.getString("id")==body.getString("areaId")}){"请选择原门店区域"};if(!body.isNull("minimumSpendMinor"))require(body.getLong("minimumSpendMinor") in 0..100000000)
  }

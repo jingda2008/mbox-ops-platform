@@ -416,6 +416,11 @@ integration('normalized table management PostgreSQL concurrency', () => {
     const app=Fastify();await app.register(tableManagementApiPlugin,{transactions:runtime,nativeCommands:executor,commands:new TableManagementCommandService(executor),resolveContext:()=>({scope:{tenantId,storeId},employeeId:employeeOneId,businessDate:'2026-08-11',capabilities:['table.manage']})})
     const send=(action:string,payload:object,key='native-business-'+randomUUID())=>app.inject({method:'POST',url:'/table-management/native-configuration/'+action,headers:{'idempotency-key':key},payload})
     try{
+      const invalidBody={code:'INVALID-AREA',name:'排序边界',areaType:'indoor',sortOrder:100001,status:'active',reason:'验证未提交恢复'},invalidKey='native-business-'+randomUUID();
+      const invalid=await send('area-create',invalidBody,invalidKey);expect(invalid.statusCode,invalid.body).toBe(409);expect(invalid.json().error).toMatchObject({code:'NATIVE_BUSINESS_NOT_COMMITTED',commitDisposition:'not_committed'});
+      expect((await pool.query('SELECT 1 FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$3',[tenantId,storeId,invalidKey])).rowCount).toBe(0);
+      const valid=await send('area-create',{...invalidBody,sortOrder:100000},invalidKey);expect(valid.statusCode,valid.body).toBe(200);
+      const changed=await send('area-create',invalidBody,invalidKey);expect(changed.statusCode,changed.body).toBe(409);expect(changed.json().error.code).toBe('TABLE_CONFIGURATION_CONFLICT');expect(changed.json().error.commitDisposition).toBeUndefined();
       const created=await send('area-create',{code:'NATIVE-CONFIG',name:'原生配置区域',areaType:'indoor',sortOrder:10,status:'active',reason:'原区域配置核对'})
       expect(created.statusCode,created.body).toBe(200);const area=created.json().data.result
       const table=await send('table-create',{code:'NATIVE-01',displayName:'原生桌',areaId:area.id,capacity:4,minimumSpendMinor:null,status:'available',reason:'原桌配置核对'})

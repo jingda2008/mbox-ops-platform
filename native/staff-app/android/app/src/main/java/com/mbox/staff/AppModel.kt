@@ -2334,7 +2334,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 identity = withContext(Dispatchers.IO) { api.heartbeat() }
                 if (
                     current.completedSteps < current.steps.size &&
-                        identity?.allows(current.permission) != true
+                        identity?.allows(current.permission) != true && !current.isStaffPermissionReceiptRecovery()
                 )
                     throw StaffAPIError(403, "ACCESS_REVOKED", "操作权限已撤销，请联系管理员核对原请求")
                 current =
@@ -2610,7 +2610,13 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 else if (step?.publicationProof != null) fetchPublication()
                 else if (step?.recipeConfigurationProof != null) fetchRecipeConfiguration(step.recipeConfigurationProof!!.getString("productId"))
                 else if (step?.categoryConfigurationProof != null) fetchProducts()
-                else if (step?.staffAdministrationProof != null) fetchStaffAdministration()
+                else if (step?.staffAdministrationProof != null) {
+                    // The receipt has already been verified and checkpointed. A
+                    // post-change permission/session loss must not strand it again.
+                    try { identity = withContext(Dispatchers.IO) { api.heartbeat() }; fetchStaffAdministration() }
+                    catch(e: kotlinx.coroutines.CancellationException) { throw e }
+                    catch(e: Exception) { staffAdministrationBoard=null; staffAdministrationState="原修改已确认，请刷新或重新登录查看当前权限"; handleLiveError(e) }
+                }
                 else if (step?.tableConfigurationProof != null) fetchTableConfiguration()
                 else if (step?.benefitWalletProof != null) fetchBenefitWallet()
                 else if (step?.remakeHandoverProof != null) fetchRemakeHandover()

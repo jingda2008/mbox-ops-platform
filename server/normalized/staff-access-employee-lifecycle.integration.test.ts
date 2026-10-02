@@ -166,7 +166,7 @@ integration("staff employee lifecycle", () => {
     const scope = {tenantId,storeId}; const businessDate = new Date().toISOString().slice(0,10);
     let expired = false;
     const app = Fastify();
-    await app.register(nativeStaffAdministrationApiPlugin,{prefix:'/api',transactions:tx,commands,
+    await app.register(nativeStaffAdministrationApiPlugin,{fingerprintSecret:'audit-fixture-key-not-for-production-20261003',prefix:'/api',transactions:tx,commands,
       resolveStaffContext:()=>{if(expired)throw new StaffSessionNotFoundError();return{scope,employeeId:adminId,businessDate}},
       authFactory:executor=>new StaffAuthCommandService(tx,executor,{consume:async()=>{}})});
     const read=async()=>{const response=await app.inject({url:'/api/staff/native-administration'});expect(response.statusCode,response.body).toBe(200);return response.json().data};
@@ -182,6 +182,8 @@ integration("staff employee lifecycle", () => {
       const credential={expectedVersion:board.overview.configurationVersion,credentialVersion:board.credentialVersion,reason:'测试门店设备验证',credential:'native-store-secret',validFrom:new Date(Date.now()-60000).toISOString(),validUntil:new Date(Date.now()+3600000).toISOString()};
       const configured=await send('credential',credential,credentialKey);expect(configured.statusCode,configured.body).toBe(200);
       expect((await send('credential',credential,credentialKey)).json().meta.replayed).toBe(true);
+      expect((await send('credential',{...credential,credential:'different-native-secret'},credentialKey)).json().error.code).toBe('STAFF_ADMIN_CONFLICT');
+      expect((await send('create',{...create,pin:'0000'},createKey)).json().error.code).toBe('STAFF_ADMIN_CONFLICT');
       const device=await auth.verifyDailyStoreCredential({scope,businessDate,credential:'native-store-secret',deviceKey:'native-administration-test-device'});
       const login=await auth.login({scope,deviceAccessToken:device.leaseToken,employeeCode:'NATIVE001',pin:'5719'});
       board=await read();const pin={expectedVersion:board.overview.configurationVersion,employeeId,pin:'8462',reason:'测试原生重置PIN'};const pinKey=`native-business-${randomUUID()}`;
@@ -189,10 +191,20 @@ integration("staff employee lifecycle", () => {
       expect((await pool.query('SELECT revoked_at IS NOT NULL AS revoked FROM mbox.staff_sessions WHERE id=$1',[login.session.id])).rows[0].revoked).toBe(true);
       const fresh=await auth.login({scope,deviceAccessToken:device.leaseToken,employeeCode:'NATIVE001',pin:'8462'});
       expect((await send('pin',pin,pinKey)).json().meta.replayed).toBe(true);
+      const changedPin=await send('pin',{...pin,pin:'9216'},pinKey);expect(changedPin.statusCode,changedPin.body).toBe(409);expect(changedPin.json().error.code).toBe('STAFF_ADMIN_CONFLICT');
+      await expect(auth.login({scope,deviceAccessToken:device.leaseToken,employeeCode:'NATIVE001',pin:'9216'})).rejects.toThrow();
       expect((await pool.query('SELECT revoked_at IS NULL AS active FROM mbox.staff_sessions WHERE id=$1',[fresh.session.id])).rows[0].active).toBe(true);
       board=await read();const deploy={expectedVersion:board.overview.configurationVersion,reason:'测试原生岗位发布',changes:[{kind:'role_permission',roleId:staffRoleId,permissionCode:'staff.access.configure',enabled:true}]};const deployKey=`native-business-${randomUUID()}`;
       const deployed=await send('deploy',deploy,deployKey);expect(deployed.statusCode,deployed.body).toBe(200);expect(deployed.json().data.result.status).toBe('verified');
       expect((await send('deploy',deploy,deployKey)).json().meta.replayed).toBe(true);
+      board=await read();
+      const selfDeny={expectedVersion:board.overview.configurationVersion,reason:'移交管理员权限',changes:[{kind:'employee_override',employeeId:adminId,permissionCode:'staff.access.configure',effect:'deny'}]};const selfKey=`native-business-${randomUUID()}`;
+      const denied=await send('deploy',selfDeny,selfKey);expect(denied.statusCode,denied.body).toBe(200);expect(denied.json().data.result.overview).toBeNull();
+      const recovered=await send('deploy',selfDeny,selfKey);expect(recovered.statusCode,recovered.body).toBe(200);expect(recovered.json().meta.replayed).toBe(true);expect(recovered.json().data.result.overview).toBeNull();
+      expect((await send('deploy',{...selfDeny,reason:'同键改内容'},selfKey)).statusCode).toBe(409);
+      expect((await send('deploy',selfDeny)).statusCode).toBe(403);
+      expect((await app.inject({url:'/api/staff/native-administration'})).statusCode).toBe(403);
+      await pool.query('DELETE FROM mbox.employee_permission_overrides WHERE tenant_id=$1 AND store_id=$2 AND employee_id=$3',[tenantId,storeId,adminId]);
       board=await read();const paused=await send('status',{expectedVersion:board.overview.configurationVersion,employeeId,status:'suspended',reason:'员工离岗暂停'});expect(paused.statusCode,paused.body).toBe(200);
       const persisted=await pool.query('SELECT request_sha256::text,response_snapshot::text FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2',[tenantId,storeId]);
       expect(JSON.stringify(persisted.rows)).not.toContain('native-store-secret');

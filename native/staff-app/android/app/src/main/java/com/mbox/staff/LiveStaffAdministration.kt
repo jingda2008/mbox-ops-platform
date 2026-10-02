@@ -1,6 +1,7 @@
 package com.mbox.staff
 import java.util.UUID
 import org.json.JSONObject
+fun staffCredentialTime(value:String):String=java.time.OffsetDateTime.parse(value.trim()).format(java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME)
 const val staffAdminRoot="/api/staff/native-administration"
 class StaffAdministrationBoard(val data:JSONObject){val employee=data.getString("employeeId");val enabled=data.getInt("protocol")==1&&data.getBoolean("durableCommands");val overview=data.getJSONObject("overview");val version=overview.getString("configurationVersion");val employees=overview.getJSONArray("employees").objects();val roles=overview.getJSONArray("roles").objects()}
 fun staffAdministrationCommand(actor:StaffIdentity,board:StaffAdministrationBoard,action:String,body:JSONObject,confirmation:String):LiveCommand{
@@ -21,3 +22,5 @@ fun secureStaffAdministrationCommand(command:LiveCommand,store:(String,String)->
 fun validateStaffAdministrationReply(text:String,step:LiveStep,body:JSONObject){val root=JSONObject(text);val d=root.getJSONObject("data");val p=step.staffAdministrationProof!!;val action=p.getString("action");val r=d.getJSONObject("result");require(root.getJSONObject("meta").getInt("protocol")==1&&root.getJSONObject("meta").get("replayed") is Boolean);require(d.getString("employeeId")==p.getString("employeeId")&&d.getString("action")==action&&d.getString("requestKey")==step.key)
  when(action){"create"->UUID.fromString(r.getString("employeeId"));"status"->{require(r.getString("employeeId")==body.getString("employeeId")&&r.getString("status")==body.getString("status"))};"pin"->{require(r.getString("employeeId")==body.getString("employeeId")&&r.getBoolean("pinConfigured")&&r.getInt("revokedSessionCount")>=0)};"credential"->{UUID.fromString(r.getString("credentialId"));require(serverInstant(r.getString("validFrom"))==serverInstant(body.getString("validFrom"))&&serverInstant(r.getString("validUntil"))==serverInstant(body.getString("validUntil")))};"deploy"->require(r.getString("status")=="verified"&&r.getJSONArray("changes").length()==body.getJSONArray("changes").length())}
 }
+
+fun LiveCommand.isStaffPermissionReceiptRecovery():Boolean=steps.size==1&&steps[0].staffAdministrationProof?.optString("action")=="deploy"

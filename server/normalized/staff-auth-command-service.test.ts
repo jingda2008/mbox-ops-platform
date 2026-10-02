@@ -237,6 +237,8 @@ integration('normalized staff authentication PostgreSQL integration', () => {
       idempotencyKey: 'permission-durable-original', requestFingerprint: 'fixture-original', reason: '原页面授权',
       changes: [{ kind: 'employee_override' as const, employeeId: employeeOneId, permissionCode: 'order.create', effect: 'grant' as const }],
     }
+    await expect(accessManagement.deployPermissions({ ...original, receiptOnly: true }))
+      .rejects.toBeInstanceOf(StaffAccessDeniedError)
     await accessManagement.deployPermissions(original)
     // A second authorized administrator corrects the same permission.
     await pool.query(`INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id)
@@ -250,7 +252,7 @@ integration('normalized staff authentication PostgreSQL integration', () => {
       await pool.query("DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND operation_scope='staff.permission-deployment'", [tenantId,storeId])
       const restored = await accessManagement.deployPermissions(original)
       expect(restored.replayed).toBe(true)
-      expect(restored.overview.employees.find((employee) => employee.id === employeeOneId)?.overrides)
+      expect(restored.overview!.employees.find((employee) => employee.id === employeeOneId)?.overrides)
         .toEqual([expect.objectContaining({ permissionCode: 'order.create', effect: 'deny' })])
       await expect(accessManagement.deployPermissions({ ...original, idempotencyKey: 'permission-new-key-stale' }))
         .rejects.toThrow('权限配置已发生变化')
@@ -258,11 +260,18 @@ integration('normalized staff authentication PostgreSQL integration', () => {
       const evidence = await pool.query(`SELECT count(*)::int AS count FROM mbox.staff_permission_deployment_receipts
         WHERE tenant_id=$1 AND store_id=$2 AND operation_key LIKE 'permission-durable-%'`, [tenantId,storeId])
       expect(evidence.rows[0].count).toBe(2)
-      // Losing management rights must block cached recovery before any overview is returned.
+      // An active actor may recover their own receipt after handoff, without management data or new writes.
       await runner.run(scope, (transaction) => new StaffAccessRepository(transaction).setEmployeePermissionOverride({
         employeeId: adminId, permissionCode: 'staff.access.configure', effect: 'deny', reason: '撤销管理员权限', configuredByEmployeeId: employeeTwoId,
       }))
-      await expect(accessManagement.deployPermissions(original)).rejects.toBeInstanceOf(StaffAccessDeniedError)
+      const handedOff = await accessManagement.deployPermissions({ ...original, receiptOnly: true })
+      expect(handedOff).toMatchObject({ status: 'verified', replayed: true, overview: null })
+      await expect(accessManagement.deployPermissions({ ...original, idempotencyKey: 'permission-after-handoff' }))
+        .rejects.toBeInstanceOf(StaffAccessDeniedError)
+      await expect(accessManagement.getOverview({ scope, actorEmployeeId: adminId }))
+        .rejects.toBeInstanceOf(StaffAccessDeniedError)
+      await expect(accessManagement.deployPermissions({ ...original, reason: '篡改回执内容', receiptOnly: true }))
+        .rejects.toThrow('Idempotency key conflicts')
     } finally {
       await pool.query('DELETE FROM mbox.employee_roles WHERE tenant_id=$1 AND store_id=$2 AND employee_id=$3 AND role_id=$4', [tenantId,storeId,employeeTwoId,adminRoleId])
     }

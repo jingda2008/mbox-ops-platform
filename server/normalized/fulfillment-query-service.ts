@@ -231,6 +231,7 @@ async function readFulfillmentRows(
         AND ($10::boolean OR assignment.assignment_type IS NOT NULL)
       ) AS can_remake,
       ($9::boolean AND task.status IN ('pending','accepted','preparing','failed') AND portions.total=0
+        AND (cardinality($11::text[]) = 0 OR task.station_code = ANY($11::text[]))
         AND ($10::boolean OR assignment.assignment_type IS NOT NULL)) AS can_manager_cancel,
       task.due_at::text,
       task.next_action_at::text,
@@ -345,6 +346,7 @@ async function readFulfillmentRows(
         OR (
           $9::boolean
           AND task.status IN ('pending','accepted','preparing','failed')
+          AND (cardinality($11::text[]) = 0 OR task.station_code = ANY($11::text[]))
           AND ($10::boolean OR assignment.assignment_type IS NOT NULL)
         )
       )

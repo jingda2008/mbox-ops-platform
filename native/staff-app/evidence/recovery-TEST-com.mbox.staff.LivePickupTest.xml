@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mbox.staff.LivePickupTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-09-26T18:18:38.746Z" hostname="jingdadeMacBook-Pro.local" time="0.008">
+  <properties/>
+  <testcase name="handoffFullScopeAndPermissions" classname="com.mbox.staff.LivePickupTest" time="0.004"/>
+  <testcase name="originalScopeRecoveryAndWrongReceipt" classname="com.mbox.staff.LivePickupTest" time="0.003"/>
+  <testcase name="pickupPhysicalUnitsAndRestart" classname="com.mbox.staff.LivePickupTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

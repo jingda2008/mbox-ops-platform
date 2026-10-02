@@ -11,7 +11,7 @@ import type { ScopedPostgresTransactionRunner } from './transaction-runner.js'
 export class MemberContentCardService {
   constructor(
     private readonly transactions: Pick<ScopedPostgresTransactionRunner,'run'>,
-    private readonly commands: NormalizedCommandExecutor,
+    private readonly commands: Pick<NormalizedCommandExecutor,'execute'>,
   ) {}
 
   list(context: ActivityOperationsStaffContext) {

@@ -1,3 +1,4 @@
+import {nativePhysicalExecutor,isNativePhysicalKey} from './native-physical-command.js'
 import {readPackagedReturnEligibility} from './packaged-return-evidence.js'
 import type {ScopedPostgresTransactionRunner,ScopedTransaction,StoreScope} from './transaction-runner.js'
 import {StaffAccessRepository,StaffAccessDeniedError} from './staff-access-repository.js'
@@ -49,7 +50,8 @@ export class QuantityRemakeHandoverCommand {
   dispose(input:{scope:Readonly<StoreScope>;employeeId:string;businessDate:string;idempotencyKey:string;batchId:string;unitIds:readonly string[];reason:string;disposition:'used_loss'|'returned_unopened';unopenedReceived:boolean}){
     const unitIds=[...input.unitIds].sort()
     if(!unitIds.length||unitIds.length>999||new Set(unitIds).size!==unitIds.length)throw new ItemQuantityConflict('QUANTITY_INVALID','请选择本批实际处理份数')
-    return this.commands.execute({scope:input.scope,operationScope:'quantity.remake.handover',idempotencyKey:input.idempotencyKey,
+    const commands=isNativePhysicalKey(input.idempotencyKey)?nativePhysicalExecutor(this.commands,input,async tx=>{await assertEmployeeEffectivePermission(tx,input.employeeId,'refund.request');await assertEmployeeEffectivePermission(tx,input.employeeId,input.disposition==='returned_unopened'?'inventory.receive':'inventory.waste')}):this.commands
+    return commands.execute({scope:input.scope,operationScope:'quantity.remake.handover',idempotencyKey:input.idempotencyKey,
       requestFingerprint:JSON.stringify({batchId:input.batchId,unitIds,employeeId:input.employeeId,reason:input.reason.trim(),disposition:input.disposition,unopenedReceived:input.unopenedReceived}),resultCodec:codec},async tx=>{
       await assertEmployeeEffectivePermission(tx,input.employeeId,'refund.request')
       await assertEmployeeEffectivePermission(tx,input.employeeId,input.disposition==='returned_unopened'?'inventory.receive':'inventory.waste')

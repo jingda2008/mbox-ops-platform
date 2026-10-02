@@ -1,0 +1,69 @@
+PASS paid order retains settlement choice
+PASS gift uses authorized table account and reason
+PASS gift reason required
+PASS gift cap checked on complete order
+PASS removed product rejected before submission
+PASS changed price requires renewed staff confirmation
+PASS restart retains exact request identity payload and draft units
+PASS same session can replay original request
+PASS relogin cannot replay under a different staff session
+PASS aged request requires readback rather than blind replay
+PASS explicit deny blocks order even when access response allows it
+PASS server receipt establishes order amount
+PASS retry transport preserves original key and context
+PASS another order receipt cannot clear pending request
+PASS initial rejection whitelist keeps ambiguous or gateway errors pending
+PASS partial collection preserves exact amount and single order recovery path
+PASS batch collection contains only selected original order ids
+PASS overpayment and duplicate batch targets rejected
+PASS unknown online payment blocks manual collection
+PASS cash permission required independently of ordering
+PASS POS collection requires original reference
+PASS external receipt records method and original evidence
+PASS manual payment acknowledges only matching successful receipt
+PASS pending provider response never becomes received money
+PASS production carries exact group identity remaining quantity and table location
+PASS cannot start more portions than remain
+PASS direct readiness never implies using or releasing equipment
+PASS readiness binds exact units and original batch ownership version
+PASS held portion cannot be declared ready
+PASS ordering permission cannot start production
+PASS kitchen command uses its distinct receipt envelope
+PASS other batch receipt cannot clear production request
+PASS customer departure follows dedicated retained debt contract
+PASS ordinary staff cannot authorize unsettled turnover
+PASS original and remake units remain distinct and bind table location
+PASS stale selection cannot record pickup
+PASS pickup requires delivery permission
+PASS undo binds receipt revision and explicit physical confirmation
+PASS paused admission cannot authorize new device
+PASS existing device can be disabled while admission paused
+PASS pickup recovery proof and original body survive restart
+PASS previous persisted steps remain readable
+PASS handoff requires physical scope verification
+PASS unassigned task remains explicit null in handoff scope
+PASS handoff needs management permission
+PASS handoff acknowledges entire affected scope and incremented ownership version
+PASS unchanged ownership version cannot acknowledge handoff
+PASS wrong production quantity cannot acknowledge command
+PASS same login sends original pickup command
+PASS new login recovers exact original device session and key
+PASS new login does not rewrite original pickup body
+PASS wrong table receipt cannot clear original pickup
+PASS unknown pickup commit disposition preserves request
+PASS explicit uncommitted stale pickup can return to selection
+PASS initial history date comes from server business clock
+PASS history filters encode literals without widening employee scope
+PASS invalid leap day rejected
+PASS reversed history date range rejected
+PASS history date range remains bounded
+PASS unsupported payment filter rejected
+PASS history retains effective amount bundle inclusion and financial visibility
+PASS wrong history page cannot replace selected page
+PASS over capacity opening retains explicit physical seating reason
+PASS over capacity opening without reason rejected
+PASS server maximum guest count enforced
+PASS ordinary capacity omits stale override reason
+PASS transfer to smaller table requires reason
+PASS over capacity transfer retains original location guard and reason
+68 ordering checks passed

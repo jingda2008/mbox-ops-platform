@@ -1,0 +1,4 @@
+2026-09-26 CST | Device Hub / iOS 26.5 simulator
+CUA actual taps: A8 open for 2 guests -> one fresh lemon sparkling water, normal ice -> submit -> cash 30.00 for bill 28.00 -> receipt applied 28.00/change 2.00 -> remains occupied -> delivered -> close.
+Persisted state verified: A8 session cleared; one delivered order totaling 2800 cents; one cash receipt applied 2800/given 3000; no pending command.
+This is local training only, no production order or cash record.

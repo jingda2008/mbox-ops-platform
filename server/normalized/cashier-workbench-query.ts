@@ -69,6 +69,9 @@ interface ItemRow extends Record<string, unknown> {
 }
 
 interface PaymentRow extends Record<string, unknown> {
+  original_amount_minor?:string|number
+  original_order_public_ids?:string[]
+  payable_kind?:string
   unreserved_excess_minor?:string|number
   id: string
   order_id: string
@@ -488,10 +491,34 @@ export class PostgresCashierWorkbenchQuery {
                 'remainingRefundableMinor',candidate.remaining_refundable_minor,
                 'currency',candidate.currency,
                 'succeededAt',candidate.succeeded_at,
-                'refundStatus',candidate.refund_status
+                'refundStatus',candidate.refund_status,
+                'payment',jsonb_build_object(
+                  'id',candidate.id,'publicId',candidate.public_id,'provider',candidate.provider,'method',candidate.method,
+                  'providerTransactionId',candidate.provider_transaction_id,'providerActionState',NULL,
+                  'retryReleasedAt',candidate.retry_released_at,'retryReleaseReason',candidate.retry_release_reason,
+                  'amountMinor',candidate.amount_minor,'currency',candidate.currency,'status',candidate.status,
+                  'succeededAt',candidate.succeeded_at,'createdAt',candidate.created_at,
+                  'reservedRefundAmountMinor',candidate.reserved_refund_minor,
+                  'remainingRefundableMinor',GREATEST(0,candidate.amount_minor-candidate.reserved_refund_minor),
+                  'refundableItems','[]'::jsonb,'refunds',candidate.refunds
+                )
               ) ORDER BY candidate.succeeded_at DESC,candidate.created_at DESC,candidate.id DESC),'[]'::jsonb) AS payments
               FROM (
                 SELECT candidate.id,candidate.public_id,candidate.amount_minor,candidate.currency,
+                  candidate.provider,candidate.method,candidate.provider_transaction_id,candidate.status,
+                  candidate.retry_released_at::text,candidate.retry_release_reason,
+                  (SELECT COALESCE(SUM(r.amount_minor),0) FROM mbox.refunds r
+                    WHERE r.tenant_id=candidate.tenant_id AND r.store_id=candidate.store_id AND r.payment_id=candidate.id
+                      AND r.status IN ('requested','approved','processing','succeeded')) AS reserved_refund_minor,
+                  COALESCE((SELECT jsonb_build_array(jsonb_build_object(
+                    'id',r.id,'publicId',r.public_id,'paymentId',r.payment_id,'providerRefundId',r.provider_refund_id,
+                    'amountMinor',r.amount_minor,'currency',r.currency,'status',r.status,'providerSubmissionState',r.provider_submission_state,
+                    'reason',r.reason,'requestedByEmployeeId',r.requested_by_employee_id,'requestedByEmployeeName',COALESCE(e.display_name,'已离职员工'),
+                    'approvedByEmployeeId',r.approved_by_employee_id,'approvedByEmployeeName',NULL,'decisionReason',r.decision_reason,
+                    'receiptReference',NULLIF(r.provider_snapshot->>'receiptReference',''),'completedAt',r.completed_at::text,'createdAt',r.created_at::text,'allocations','[]'::jsonb
+                  )) FROM mbox.refunds r LEFT JOIN mbox.employees e ON e.tenant_id=r.tenant_id AND e.store_id=r.store_id AND e.id=r.requested_by_employee_id
+                    WHERE r.tenant_id=candidate.tenant_id AND r.store_id=candidate.store_id AND r.payment_id=candidate.id
+                    ORDER BY r.created_at DESC,r.id DESC LIMIT 1),'[]'::jsonb) AS refunds,
                   candidate.succeeded_at::text AS succeeded_at,candidate.created_at,
                   candidate.amount_minor-COALESCE((
                     SELECT SUM(succeeded_refund.amount_minor)
@@ -610,10 +637,15 @@ export class PostgresCashierWorkbenchQuery {
             payment.retry_released_at::text AS retry_released_at,
             payment.retry_release_reason,
             payment.amount_minor, payment.currency, payment.status,payment.provider_snapshot,
+            original.amount_minor AS original_amount_minor,original.payable_kind,
+            CASE WHEN original.order_id IS NOT NULL THEN ARRAY(SELECT public_id FROM mbox.orders WHERE tenant_id=original.tenant_id AND store_id=original.store_id AND id=original.order_id)
+              ELSE ARRAY(SELECT o.public_id FROM mbox.order_payment_allocations a JOIN mbox.orders o ON o.tenant_id=a.tenant_id AND o.store_id=a.store_id AND o.id=a.order_id
+                WHERE a.tenant_id=original.tenant_id AND a.store_id=original.store_id AND a.batch_id=original.order_batch_id ORDER BY a.position) END AS original_order_public_ids,
             CASE WHEN payment.provider_snapshot->'lateSuccessAfterClose'='true'::jsonb THEN ${unreservedOrderExcessSql('payment')} ELSE 0 END::text AS unreserved_excess_minor,
             payment.succeeded_at::text, payment.created_at::text,
             EXISTS(SELECT 1 FROM mbox.order_cancellation_events cancellation WHERE cancellation.tenant_id=payment.tenant_id AND cancellation.store_id=payment.store_id AND cancellation.order_id=payment.order_id AND cancellation.occurred_at<=payment.succeeded_at) AS cancelled_after_attempt
           FROM mbox.order_payment_facts payment
+          JOIN mbox.payments original ON original.tenant_id=payment.tenant_id AND original.store_id=payment.store_id AND original.id=payment.id
           LEFT JOIN mbox.payment_provider_actions provider_action
             ON provider_action.tenant_id = payment.tenant_id
            AND provider_action.store_id = payment.store_id
@@ -782,6 +814,7 @@ function assembleView(
         retryReleasedAt: payment.retry_released_at,
         retryReleaseReason: payment.retry_release_reason,
         amountMinor: asSafeMinor(payment.amount_minor, 'payment amount'),
+        ...(payment.original_amount_minor===undefined?{}:{originalAmountMinor:asSafeMinor(payment.original_amount_minor,'whole original payment'),originalOrderPublicIds:payment.original_order_public_ids??[],payableKind:payment.payable_kind}),
         currency: payment.currency,
         status: payment.status,
         succeededAt: payment.succeeded_at,
@@ -911,6 +944,8 @@ function actions(capabilities: readonly string[]) {
   const set = new Set(capabilities)
   return {
     supportsGuardedClosedDebtCollection: true,
+    supportsGuardedActivityCashier: true,
+    supportsProviderClose: true,
     canInitiateOnlinePayment: set.has('payment.initiate.staff'),
     canQueryOnlinePayment: set.has('payment.query'),
     onlinePaymentProvider: null,
@@ -1038,6 +1073,7 @@ function mapActivityPayment(row: ActivityRegistrationRow): CashierWorkbenchPayme
     retryReleasedAt: row.payment_retry_released_at,
     retryReleaseReason: row.payment_retry_release_reason,
     amountMinor,
+    originalAmountMinor:amountMinor,payableKind:'activity_registration',originalOrderPublicIds:[],
     currency: requireText(row.payment_currency, 'activity payment currency'),
     status,
     succeededAt: row.payment_succeeded_at,
@@ -1097,6 +1133,7 @@ function parseLateSuccessPayments(
       currency,
       succeededAt,
       refundStatus: asRefundStatus(source.refundStatus),
+      ...(source.payment === undefined ? {} : { payment: source.payment as CashierWorkbenchPayment }),
     }
   })
 }

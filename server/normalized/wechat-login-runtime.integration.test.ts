@@ -87,7 +87,8 @@ integration('WeChat login with the production runtime column permissions', () =>
 
   it('rejects saves outside the repository store before writing', async () => {
     const openId = `scoped-guest-${randomUUID()}`
-    expect((await login(openId)).statusCode).toBe(200)
+    const loginResult = await login(openId)
+    expect(loginResult.statusCode, loginResult.body).toBe(200)
     const original = (await repository.findByAppOpenId(scope.tenantId, scope.appId, openId))!
     await expect(repository.save({ ...original, storeId: randomUUID() })).rejects.toThrow()
     expect(await repository.findByAppOpenId(scope.tenantId, scope.appId, openId)).toEqual(original)

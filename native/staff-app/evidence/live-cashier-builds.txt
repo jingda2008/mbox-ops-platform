@@ -1,0 +1,10 @@
+2026-09-27 01:37 CST
+iOS BUILD SUCCEEDED; Android BUILD SUCCESSFUL
+iOS 29 core + 36 live + 68 ordering + 33 cashier/export = 166 assertions
+Android 34 JUnit tests, 0 failures/errors/skips
+iOS simulator install/launch com.mbox.staff.native PID13773
+Android emulator-5554 install Success and MainActivity start
+MBOXStaff.debug.dylib SHA256 06de45e9640e8a0184122ac22a718d73bb680d91bb7ed31aae71de7358562029
+app-debug.apk SHA256 c46b6d86f1375d4a3a95f4f52329c26ff48cd69f79c51cdf5318c79fe9f7e48d
+No real account or production business writes; web/backend unchanged; no push/deploy/release.
+Final wording build/install: 2026-09-27 01:40 CST; CUA iPhone More page verified updated availability text.

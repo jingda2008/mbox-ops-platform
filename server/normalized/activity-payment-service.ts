@@ -275,12 +275,12 @@ export class ActivityPaymentService {
 
   async requestRefund(
     context: StaffCustomerExperienceContext,
-    input: Readonly<{ registrationPublicId: string; paymentPublicId?: string | null; reason: string; idempotencyKey: string }>,
+    input: Readonly<{ registrationPublicId: string; paymentPublicId?: string | null; expectedPaymentPublicId?: string | null; reason: string; idempotencyKey: string }>,
   ) {
     const payment = await this.transactions.run(context.scope, async (transaction) => (
-      staffActivityPayment(transaction, input.registrationPublicId, input.paymentPublicId ?? null)
+      staffActivityPayment(transaction, input.registrationPublicId, input.paymentPublicId ?? null, input.expectedPaymentPublicId ?? null)
     ), { readOnly: true })
-    if (payment.payment_id === null || payment.authoritative_payment_status !== 'succeeded') {
+    if (payment.payment_id === null) {
       throw new CustomerExperienceRequestError('只有已成功支付的活动报名可以发起退款', 'ACTIVITY_REFUND_NOT_ALLOWED', 409)
     }
     return this.commands.requestActivityRefund({
@@ -365,6 +365,7 @@ async function staffActivityPayment(
   transaction: ScopedTransaction,
   registrationPublicId: string,
   lateSuccessPaymentPublicId: string | null,
+  expectedPaymentPublicId: string | null = null,
 ) {
   const result = await transaction.query<ActivityPaymentRow>(`
     SELECT registration.id AS registration_id, registration.public_id AS registration_public_id,
@@ -380,7 +381,8 @@ async function staffActivityPayment(
     LEFT JOIN mbox.payments payment ON payment.tenant_id=registration.tenant_id
       AND payment.store_id=registration.store_id
       AND (
-        ($4::text IS NULL AND payment.id=registration.payment_id)
+        ($4::text IS NULL AND $5::text IS NULL AND payment.id=registration.payment_id)
+        OR ($5::text IS NOT NULL AND payment.public_id=$5::text AND payment.activity_registration_id=registration.id AND payment.payable_kind='activity_registration')
         OR (
           $4::text IS NOT NULL AND payment.public_id=$4::text
           AND payment.activity_registration_id=registration.id
@@ -388,7 +390,6 @@ async function staffActivityPayment(
             payment.activity_registration_cycle IS NULL
             OR payment.activity_registration_cycle<registration.registration_cycle
           )
-          AND payment.status IN ('succeeded','partially_refunded')
         )
       )
     LEFT JOIN mbox.payment_provider_actions provider_action ON provider_action.tenant_id=payment.tenant_id
@@ -400,7 +401,7 @@ async function staffActivityPayment(
     ) latest_refund ON true
     WHERE registration.tenant_id=$1::uuid AND registration.store_id=$2::uuid
       AND registration.public_id=$3
-  `, [transaction.scope.tenantId, transaction.scope.storeId, registrationPublicId, lateSuccessPaymentPublicId])
+  `, [transaction.scope.tenantId, transaction.scope.storeId, registrationPublicId, lateSuccessPaymentPublicId, expectedPaymentPublicId])
   const row = result.rows[0]
   if (row === undefined) throw new CustomerExperienceRequestError('活动报名不存在', 'ACTIVITY_REGISTRATION_NOT_FOUND', 404)
   return row

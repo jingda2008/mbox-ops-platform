@@ -1,0 +1,80 @@
+{
+  "counts": {
+    "tests": 96,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "suites": [
+    {
+      "name": "com.mbox.staff.LiveCatalogTest",
+      "tests": 2,
+      "failures": 0
+    },
+    {
+      "name": "com.mbox.staff.LiveHistoryTest",
+      "tests": 4,
+      "failures": 0
+    },
+    {
+      "name": "com.mbox.staff.AppUpdateTest",
+      "tests": 5,
+      "failures": 0
+    },
+    {
+      "name": "com.mbox.staff.LiveOrderingTest",
+      "tests": 3,
+      "failures": 0
+    },
+    {
+      "name": "com.mbox.staff.DomainTest",
+      "tests": 6,
+      "failures": 0
+    },
+    {
+      "name": "com.mbox.staff.LivePickupTest",
+      "tests": 3,
+      "failures": 0
+    },
+    {
+      "name": "com.mbox.staff.RemediationTest",
+      "tests": 13,
+      "failures": 0
+    },
+    {
+      "name": "com.mbox.staff.DailyPaymentTest",
+      "tests": 14,
+      "failures": 0
+    },
+    {
+      "name": "com.mbox.staff.LiveContractTest",
+      "tests": 6,
+      "failures": 0
+    },
+    {
+      "name": "com.mbox.staff.PaymentCompletionTest",
+      "tests": 15,
+      "failures": 0
+    },
+    {
+      "name": "com.mbox.staff.LiveCashierTest",
+      "tests": 11,
+      "failures": 0
+    },
+    {
+      "name": "com.mbox.staff.LiveKitchenTest",
+      "tests": 3,
+      "failures": 0
+    },
+    {
+      "name": "com.mbox.staff.LiveCollectionTest",
+      "tests": 3,
+      "failures": 0
+    },
+    {
+      "name": "com.mbox.staff.LiveAssignmentsTest",
+      "tests": 8,
+      "failures": 0
+    }
+  ]
+}

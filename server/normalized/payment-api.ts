@@ -348,7 +348,14 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       idempotencyKey,
       ...(customerAuthCode === undefined ? {} : { customerAuthCode }),
     })
-    return reply.code(execution.replayed ? 200 : 201).send(paymentExecutionResponse(execution, action))
+    // This association is returned only after the original command fingerprint and
+    // the locked, immutable payment allocations have been checked by initiate.
+    const response=paymentExecutionResponse(execution,action)
+    return reply.code(execution.replayed ? 200 : 201).send({...response,meta:{...response.meta,requestBinding:{
+      protocol:1,idempotencyKey,requestedPublicId:publicId,paymentId:execution.value.id,
+      paymentPublicId:execution.value.publicId,orderIds:orderIds??[orderId],amountMinor:execution.value.amountMinor,
+      provider,method,employeeId:context.actor.type==='employee'?context.actor.employeeId:null,
+    }}})
   }))
 
   app.post<{Params:{paymentId:string}}>('/payments/:paymentId/close-unpresented-history',async(request,reply)=>handleRoute(reply,async()=>{
@@ -426,6 +433,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       requireStaffCapability(context, 'community.activity.cashier')
       const body = readObject(request.body, '请求正文')
       assertActorBinding(body, context.actor)
+      const expectedAmountMinor = body.expectedAmountMinor === undefined ? undefined : readInteger(body.expectedAmountMinor, 'expectedAmountMinor', 1, Number.MAX_SAFE_INTEGER)
       const provider = readManualProvider(body.provider)
       const method = readManualMethod(body.method)
       assertManualMethod(provider, method)
@@ -456,12 +464,14 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       const execution = await options.commands.recordManualActivity({
         ...metadata(request, context, idempotencyKey, {
           registrationPublicId,
+          ...(expectedAmountMinor === undefined ? {} : { expectedAmountMinor }),
           publicId,
           provider,
           method,
           evidence,
         }),
         registrationPublicId,
+        expectedAmountMinor,
         publicId,
         provider,
         method,
@@ -528,6 +538,29 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       return reply.send(executionResponse(execution))
     }),
   )
+
+  app.post<{Params:{paymentId:string}}>('/payments/:paymentId/provider-close',async(request,reply)=>handleRoute(reply,async()=>{
+    if(!options.onlinePayments) throw new OnlinePaymentUnavailableError()
+    const context=await resolveStaffContext(options,request)
+    requireStaffCapability(context,'payment.initiate.staff');requireStaffCapability(context,'reconciliation.view')
+    const body=readObject(request.body,'请求正文');assertActorBinding(body,context.actor)
+    const paymentId=readUuid(request.params.paymentId,'paymentId'),reason=readString(body.reason,'reason',500,4)
+    const expectedAmountMinor=readPositiveMinor(body.expectedAmountMinor,'原付款整笔金额')
+    const key=readIdempotencyKey(request)
+    await options.commands.authorizeProviderCloseForReplacement({...metadata(request,context,key,{paymentId,reason,expectedAmountMinor}),paymentId,reason,expectedAmountMinor})
+    let closed:OnlinePaymentQueryResult
+    try { closed=await options.onlinePayments.close({scope:context.scope,paymentId,closeBindingId:key,principal:paymentInitiationPrincipal(context)}) }
+    catch(error) {
+      if(!(error instanceof OnlinePaymentAlreadyResolvedError)) throw error
+      return reply.send({data:{id:error.context.id,publicId:error.context.publicId,status:error.paymentStatus,amountMinor:error.context.amountMinor,currency:error.context.currency},meta:{replayed:false,resultSource:'local_payment',providerClosed:false}})
+    }
+    // A provider success wins the race: apply money instead of pretending to close it.
+    // Observation id supplies a stable recovery key even across a callback/query race.
+    const execution=await recordOnlinePaymentObservation(options,request,context,closed,
+      `provider-close-${closed.verifiedObservationId ?? createHash('sha256').update(key).digest('hex')}`,'postar-staff-close')
+    if(!execution) throw new OnlinePaymentUnknownError()
+    return reply.send({...executionResponse(execution),meta:{replayed:execution.replayed,providerClosed:closed.observation.status==='closed'}})
+  }))
 
   app.post<{ Params: { paymentId: string } }>(
     '/payments/:paymentId/provider-query',

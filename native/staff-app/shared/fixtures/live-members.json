@@ -1,0 +1,124 @@
+{
+  "auth": {
+    "session": {
+      "id": "session-1",
+      "employeeId": "employee-1",
+      "expiresAt": "2099-01-01T00:00:00Z",
+      "onlineLeaseUntil": "2099-01-01T00:00:00Z"
+    },
+    "employee": {
+      "id": "employee-1",
+      "code": "staff",
+      "displayName": "测试员工",
+      "roleCodes": [
+        "server"
+      ]
+    },
+    "permissions": [
+      "dashboard.view",
+      "table.open",
+      "table.close",
+      "table.transfer",
+      "guest.cart.freeze",
+      "service.execute",
+      "payment.refund",
+      "reservation.view",
+      "reservation.manage",
+      "reservation.cancel.override",
+      "loyalty.account.view",
+      "customer.relationship.manage",
+      "loyalty.configuration.view",
+      "loyalty.configuration.approve",
+      "loyalty.redemption.fulfill"
+    ],
+    "deniedPermissions": [
+      "payment.refund"
+    ]
+  },
+  "visit": {
+    "durableNativeVisits": true,
+    "memberNo": "MBX-100000",
+    "businessDate": "2026-09-28",
+    "canCheckIn": true,
+    "visit": null,
+    "rewards": []
+  },
+  "reward": {
+    "businessDate": "2026-09-28",
+    "durableNativeDecisions": true,
+    "rules": [],
+    "items": [
+      {
+        "id": "reward-1",
+        "name": "三次到店赠礼",
+        "member_no": "MBX-100000",
+        "earned_business_date": "2026-09-28",
+        "required_visits": 3,
+        "quantity": 1,
+        "products": "赠礼商品",
+        "status": "pending",
+        "decision_reason": null,
+        "cancelled_sources": 0,
+        "benefit_status": null,
+        "quantity_redeemed": 0,
+        "visit_dates": [
+          "2026-09-26",
+          "2026-09-27",
+          "2026-09-28"
+        ]
+      }
+    ],
+    "nextCursor": null
+  },
+  "benefit": {
+    "durable": true,
+    "businessDate": "2026-09-28",
+    "snacksEnabled": true,
+    "gifts": [
+      {
+        "reservationId": "77777777-7777-4777-8777-777777777777",
+        "benefitId": "66666666-6666-4666-8666-666666666666",
+        "customerId": "33333333-3333-4333-8333-333333333333",
+        "tableSessionId": "55555555-5555-4555-8555-555555555555",
+        "tableCode": "A5",
+        "memberNo": "MBX-100000",
+        "customerName": "测试会员",
+        "title": "生日赠饮",
+        "quantity": 1,
+        "expiresAt": "2099-01-01T00:00:00Z",
+        "originalProductId": "88888888-8888-4888-8888-888888888888",
+        "allowedProducts": [
+          {
+            "productId": "88888888-8888-4888-8888-888888888888",
+            "name": "原赠饮",
+            "isOriginal": true
+          },
+          {
+            "productId": "99999999-9999-4999-8999-999999999999",
+            "name": "替代赠饮",
+            "isOriginal": false
+          }
+        ]
+      }
+    ],
+    "snacks": [
+      {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "claimCode": "DSN-ABCDEFGHIJKL",
+        "benefitId": "66666666-6666-4666-8666-666666666666",
+        "benefitReservationId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "customerId": "33333333-3333-4333-8333-333333333333",
+        "tableSessionId": "55555555-5555-4555-8555-555555555555",
+        "tableCode": "A5",
+        "memberNo": "MBX-100000",
+        "customerName": "测试会员",
+        "title": "每日点心",
+        "status": "reserved",
+        "quantity": 1,
+        "expiresAt": "2099-01-01T00:00:00Z",
+        "giftOrderId": null,
+        "currentFulfillmentStatus": null
+      }
+    ]
+  }
+}

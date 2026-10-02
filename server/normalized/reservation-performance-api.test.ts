@@ -389,6 +389,39 @@ describe('reservationPerformanceApiPlugin guest reservation flows', () => {
 })
 
 describe('reservationPerformanceApiPlugin staff reservation permissions', () => {
+  it('isolates native durable transitions, masks contact and binds original employee', async()=>{
+    const value=fixture()
+    value.assertPermission.mockResolvedValue({...await value.assertPermission(),permissions:['reservation.view','reservation.manage']})
+    const capability=await value.app.inject({method:'GET',url:'/api/staff/native-reservation-capabilities'})
+    expect(capability.statusCode).toBe(200)
+    const reply=await value.app.inject({method:'POST',url:`/api/staff/native-reservations/${reservationId}/confirm`,headers:{'idempotency-key':'native-business-12345678-1234-4234-8234-123456789012'},payload:{reason:'已核对预约'}})
+    expect(reply.statusCode).toBe(200)
+    expect(reply.json().data.contactToken).toBeUndefined()
+    expect(value.reservations.confirm).toHaveBeenCalledWith(expect.objectContaining({nativeReceipt:true,authorizeNative:expect.any(Function),actor:{type:'employee',employeeId}}))
+    const bad=await value.app.inject({method:'POST',url:`/api/staff/native-reservations/${reservationId}/confirm`,headers:{'idempotency-key':'web-key-123456789'}})
+    expect(bad.statusCode).toBe(400)
+  })
+  it('native creation binds owner, uses deferred time checks and returns contact only with permission',async()=>{
+    const value=fixture();value.assertPermission.mockResolvedValue({...await value.assertPermission(),permissions:['reservation.view','reservation.manage']})
+    const payload={publicId:'NRES-12345678-1234-4234-8234-123456789012',customerName:'代订顾客',contactToken:'contact-private',guestCount:2,arrivalAt:'2026-08-12T12:00:00Z',expectedEndAt:'2026-08-12T14:00:00Z',source:'phone',tableIds:[tableId],initialStatus:'confirmed'}
+    const headers={'idempotency-key':'native-business-32345678-1234-4234-8234-123456789012'}
+    const response=await value.app.inject({method:'POST',url:'/api/staff/native-reservations',headers,payload})
+    expect(response.statusCode).toBe(201);expect(response.json().data.contactToken).toBeUndefined()
+    expect(value.reservations.create).toHaveBeenCalledWith(expect.objectContaining({nativeReceipt:true,ownerEmployeeId:employeeId,authorizeNative:expect.any(Function),prepareNative:expect.any(Function)}))
+    const claimed=await value.app.inject({method:'POST',url:'/api/staff/native-reservations',headers,payload:{...payload,ownerEmployeeId:otherCustomerId}})
+    expect(claimed.statusCode).toBe(400)
+  })
+  it('native cancellation is separate from guest cancellation and requires live override permission',async()=>{
+    const value=fixture()
+    const reply=await value.app.inject({method:'POST',url:`/api/staff/native-reservations/${reservationId}/cancel`,headers:{'idempotency-key':'native-business-22345678-1234-4234-8234-123456789012'},payload:{reason:'客户取消预约',overridePolicy:true}})
+    expect(reply.statusCode).toBe(200)
+    expect(value.reservations.cancel).toHaveBeenCalledWith(expect.objectContaining({nativeReceipt:true,overridePolicy:true}))
+    value.assertPermission.mockRejectedValueOnce(new StaffAccessDeniedError('revoked'))
+    const replay=await value.app.inject({method:'POST',url:`/api/staff/native-reservations/${reservationId}/cancel`,headers:{'idempotency-key':'native-business-22345678-1234-4234-8234-123456789012'},payload:{reason:'客户取消预约',overridePolicy:true}})
+    expect(replay.statusCode).toBe(403)
+    expect(replay.json().error.commitDisposition).toBeUndefined()
+  })
+
   it('returns only unresolved prior-business-day reservations for the carryover worklist', async () => {
     const value = fixture()
     const response = await value.app.inject({ method: 'GET', url: '/api/staff/reservations?range=carryover' })
@@ -724,6 +757,27 @@ describe('reservationPerformanceApiPlugin performance and song requests', () => 
     expect(value.performance.submitSongRequest).not.toHaveBeenCalled()
   })
 
+  it('binds native song requests to current employee and stable cross-day fingerprints', async () => {
+    let day = '2026-08-11'
+    const value = fixture({resolveStaffContext: () => ({...staffContext,businessDate:day})})
+    const native = vi.fn(async () => ({value: {request:{...songRequest,status:'accepted' as const},previousStatus:'confirming',action:'confirm',reason:'确认报价',paymentId:null,reconciliationEntryId:null},replayed:false}))
+    value.performance.nativeSong = native
+    const headers = {'idempotency-key': `native-business-${randomUUID()}`}
+    const url = `/api/staff/native-song-requests/${songRequestId}/confirm`
+    const payload = {expectedStatus:'confirming',quotedAmountMinor:0,currency:'CNY',reason:'确认报价'}
+    expect((await value.app.inject({method:'POST',url,headers,payload})).statusCode).toBe(200)
+    expect(value.assertPermission).toHaveBeenLastCalledWith(employeeId,'song.manage')
+    const first = vi.mocked(value.performance.nativeSong).mock.calls[0]![0]
+    expect(first).toMatchObject({employeeId,requestId:songRequestId,expectedStatus:'confirming',action:'confirm',quotedAmountMinor:0})
+    day = '2026-08-12'
+    expect((await value.app.inject({method:'POST',url,headers,payload})).statusCode).toBe(200)
+    expect(vi.mocked(value.performance.nativeSong).mock.calls[1]![0].requestFingerprint).toBe(first.requestFingerprint)
+    for (const invalid of [{...payload,employeeId:otherCustomerId},{...payload,reason:''},{...payload,currency:'USD'},{...payload,expectedStatus:'unknown'}]) {
+      expect((await value.app.inject({method:'POST',url,headers,payload:invalid})).statusCode).toBe(400)
+    }
+    expect(native).toHaveBeenCalledTimes(2)
+  })
+
   it('uses a dedicated cashier permission and requires payment evidence to mark a song paid', async () => {
     const value = fixture()
     const response = await value.app.inject({
@@ -904,6 +958,16 @@ postgresIntegration('reservationPerformanceApiPlugin PostgreSQL privacy and data
       typeof value.contactToken === 'string' && value.contactToken.startsWith('private-contact-')
     ))).toBe(true)
   })
+  it('reads native table catalog and atomically rejects conflicts and insufficient capacity',async()=>{
+    staffAccess=scopedAccess({employeeId:scopedEmployeeId,roleCodes:['MANAGER'],permissions:['reservation.view','reservation.manage'],dataScopes:[]})
+    const catalog=await app.inject({method:'GET',url:'/api/staff/native-reservation-tables'})
+    expect(catalog.statusCode).toBe(200);expect(catalog.json().data.some((t:{id:string})=>t.id===firstTableId)).toBe(true)
+    const payload={publicId:'NRES-'+randomUUID(),customerName:'新预约',contactToken:'private',guestCount:2,arrivalAt:'2026-08-12T12:00:00Z',expectedEndAt:'2026-08-12T13:00:00Z',source:'employee',tableIds:[firstTableId],initialStatus:'confirmed'}
+    const conflict=await app.inject({method:'POST',url:'/api/staff/native-reservations',headers:{'idempotency-key':'native-business-'+randomUUID()},payload})
+    expect(conflict.statusCode).toBe(409);expect(conflict.json().error.commitDisposition).toBe('not_committed')
+    const crowded=await app.inject({method:'POST',url:'/api/staff/native-reservations',headers:{'idempotency-key':'native-business-'+randomUUID()},payload:{...payload,publicId:'NRES-'+randomUUID(),guestCount:200,arrivalAt:'2026-08-13T12:00:00Z',expectedEndAt:'2026-08-13T13:00:00Z'}})
+    expect(crowded.statusCode).toBe(409);expect(crowded.json().error.commitDisposition).toBe('not_committed')
+  })
 })
 
 describe('normalized architecture boundary', () => {
@@ -917,6 +981,8 @@ describe('normalized architecture boundary', () => {
     ]
     for (const token of forbidden) expect(source).not.toContain(token)
   })
+
+
 })
 
 function asPostgresPool(pool: Pool): PostgresPool {

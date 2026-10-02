@@ -127,8 +127,8 @@ integration('public reservation API with PostgreSQL', () => {
         permissions: staffPermissions,
         visibleOwnerEmployeeIds: [],
       }),
-      protectContact: () => ({
-        hash: createHash('sha256').update(rawContact).digest('hex'),
+      protectContact: (contact) => ({
+        hash: createHash('sha256').update(contact).digest('hex'),
         encryptedBase64: Buffer.from(`encrypted-contact:${rawContact}`).toString('base64'),
         keyId: 'test-key-v1',
         masked: maskedContact,
@@ -580,6 +580,48 @@ integration('public reservation API with PostgreSQL', () => {
     expect(response.body).not.toContain(outsiderCustomerId)
     expect(response.body).not.toContain(rawContact)
   })
+
+  it('retains native waitlist receipts across terminal states and rechecks permissions on replay', async () => {
+    const permissions = [...staffPermissions]
+    staffPermissions = ['reservation.view', 'reservation.view.all', 'reservation.manage']
+    try {
+      const created = await app.inject({ method: 'POST', url: '/public/waitlist',
+        headers: { 'idempotency-key': `waitlist-native-create-${randomUUID()}` },
+        payload: { customerName: '原生候位测试', contact: '13800138001', guestCount: 2, desiredArrivalAt: crossMidnight.arrivalAt },
+      })
+      expect(created.statusCode, created.body).toBe(201)
+      const publicId = created.json().data.publicId as string
+      const url = `/staff/native-waitlist/${encodeURIComponent(publicId)}/transition`
+      const key = `native-business-${randomUUID()}`
+      const payload = { expectedStatus: 'waiting', to: 'notified', reason: '员工已电话联系客人' }
+      const send = (body = payload, idempotencyKey = key) => app.inject({ method: 'POST', url,
+        headers: { 'idempotency-key': idempotencyKey }, payload: body })
+      const first = await send()
+      expect(first.statusCode, first.body).toBe(200)
+      expect(first.json()).toMatchObject({data: {publicId, status: 'notified', previousStatus: 'waiting'}, meta: {replayed: false}})
+      const replay = await send()
+      expect(replay.json()).toMatchObject({data: first.json().data, meta: {replayed: true}})
+      expect((await send({...payload, reason: '不同请求'})).statusCode).toBe(409)
+      const stale = await send(payload, `native-business-${randomUUID()}`)
+      expect(stale.statusCode).toBe(409)
+      expect(stale.json().error.code).toBe('NATIVE_BUSINESS_NOT_COMMITTED')
+      for (const [expectedStatus, to] of [['notified', 'arrived'], ['arrived', 'seated']]) {
+        const result = await send({expectedStatus: expectedStatus!, to: to!, reason: '现场已核对实际状态'}, `native-business-${randomUUID()}`)
+        expect(result.statusCode, result.body).toBe(200)
+      }
+      expect((await send()).json()).toMatchObject({data: first.json().data, meta: {replayed: true}})
+      const state = await pool.query('SELECT status FROM mbox.waitlist_entries WHERE tenant_id=$1 AND store_id=$2 AND public_id=$3', [tenantId, storeId, publicId])
+      expect(state.rows[0].status).toBe('seated')
+      const events = await pool.query(`SELECT count(*)::integer AS count FROM mbox.waitlist_events
+        WHERE waitlist_entry_id=$1 AND event_type='waitlist.notified'`, [first.json().data.id])
+      expect(events.rows[0].count).toBe(1)
+      staffPermissions = ['reservation.view', 'reservation.view.all']
+      expect((await send()).statusCode).toBe(403)
+      staffPermissions = ['reservation.view', 'reservation.manage']
+      expect((await send()).statusCode).toBe(404)
+    } finally { staffPermissions = permissions }
+  })
+
 })
 
 function asPool(pool: Pool): PostgresPool {

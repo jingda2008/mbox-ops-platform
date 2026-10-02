@@ -1,0 +1,4 @@
+HEAD baseline errors: 48
+Current errors: 48
+After normalizing workspace absolute paths and shifted line positions, diagnostics match: True
+Both tsc commands exit 2. This is not a passing whole-server type check.

@@ -305,6 +305,14 @@ export class CustomerExperienceObservationRepository {
     }))
   }
 
+  async latestOwnDraft(tableSessionId:string,employeeId:string,allowAllTables:boolean):Promise<ObservationDraftView|null>{
+    await this.assertEmployeeTableAccess(tableSessionId,employeeId,allowAllTables)
+    const rows=await this.transaction.query<ObservationInputRow>(`SELECT id,public_id,table_session_id,raw_content,input_kind,needs_immediate_action,service_task_id,parse_confidence,status
+      FROM mbox.observation_inputs WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND table_session_id=$3::uuid
+      AND recorded_by_employee_id=$4::uuid AND status='draft' ORDER BY created_at DESC,id DESC LIMIT 1`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,tableSessionId,employeeId])
+    const row=rows.rows[0];return row?draftView(row,await this.listCandidates(row.id)):null
+  }
+
   async parse(input: Readonly<{
     publicId: string
     tableSessionId: string

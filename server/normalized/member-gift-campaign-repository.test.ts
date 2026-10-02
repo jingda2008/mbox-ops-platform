@@ -1,3 +1,6 @@
+import Fastify from 'fastify'
+import {NormalizedCommandExecutor} from './command-executor.js'
+import {nativeMemberGiftApiPlugin} from './native-member-gift-api.js'
 import {loadGiftBenefitProducts} from './gift-benefit-products.js'
 import {assertRuntimeDatabasePool} from './runtime-database-identity.js'
 import {randomUUID} from 'node:crypto'
@@ -300,7 +303,20 @@ const runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
       expect((await pool.query(`SELECT ${cashierCouponRefundReviewCountSql} AS n FROM mbox.orders orders WHERE id=$1`,[placed.id])).rows[0].n).toBe(1)
       await expect(reviews(repo=>repo.decide({...decision,employeeId:denied}))).rejects.toThrow()
       await expect(reviews(repo=>repo.decide({...decision,reservationId:randomUUID()}))).rejects.toThrow('不属于同一订单')
-      expect(await reviews(repo=>repo.decide(decision))).toEqual({recorded:true,replayed:false})
+      const native=Fastify();await native.register(nativeMemberGiftApiPlugin,{transactions:runner,commands:new NormalizedCommandExecutor(runner),resolveContext:request=>({scope,employeeId:String(request.headers['x-test-actor']??publisher),businessDate})})
+      const nativeRows=(await native.inject('/staff/native-member-gifts/refund-pending')).json().data.rows
+      const nativeRow=nativeRows.find((r:{refund_id:string})=>r.refund_id===refundId),nativeKey='native-business-'+randomUUID()
+      const nativeDecision={refundId,reservationId,expectedVersion:nativeRow.nativeVersion,action:decision.action,reason:decision.reason,evidenceReference:decision.evidenceReference}
+      const nativeSend=(payload:unknown,key=nativeKey,actor=publisher)=>native.inject({method:'POST',url:'/staff/native-member-gifts/refund',headers:{'idempotency-key':key,'x-test-actor':actor},payload})
+      try{
+       const rejected=await nativeSend({...nativeDecision,expectedVersion:'0'.repeat(64)},'native-business-'+randomUUID());expect(rejected.statusCode,rejected.body).toBe(409);expect(rejected.json().error.commitDisposition).toBe('not_committed')
+       const recorded=await nativeSend(nativeDecision);expect(recorded.statusCode,recorded.body).toBe(200);expect(recorded.json().data.row).toMatchObject({refund_id:refundId,reservation_id:reservationId,action:'no_return'})
+       expect((await nativeSend({...nativeDecision,action:'external_compensation'},'native-business-'+randomUUID())).statusCode).toBe(409)
+       await pool.query('DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND idempotency_key=$2',[tenantId,nativeKey]);const replay=await nativeSend(nativeDecision);expect(replay.statusCode,replay.body).toBe(200);expect(replay.json().meta.replayed).toBe(true)
+       await pool.query("UPDATE mbox.employees SET status='suspended' WHERE id=$1",[publisher]);try{expect((await nativeSend(nativeDecision)).statusCode).toBe(403)}finally{await pool.query("UPDATE mbox.employees SET status='active' WHERE id=$1",[publisher])}
+       expect((await native.inject('/staff/native-member-gifts/refund-resolved')).json().data.rows.some((r:{refund_id:string})=>r.refund_id===refundId)).toBe(true)
+      }finally{await native.close()}
+
       expect(await reviews(repo=>repo.decide(decision))).toEqual({recorded:true,replayed:true})
       await expect(reviews(repo=>repo.decide({...decision,action:'external_compensation'}))).rejects.toThrow('不能覆盖历史')
       expect((await reviews(repo=>repo.list(editor))).items).toHaveLength(0)
@@ -327,7 +343,16 @@ const runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
       await expect(reviews(repo=>repo.decide({...replacementDecision,replacementBenefitId:otherReplacementId}))).rejects.toThrow('补偿券不存在')
       await expect(reviews(repo=>repo.decide({...replacementDecision,replacementBenefitId:row.id as string}))).rejects.toThrow('补偿券不存在')
       await expect(reviews(repo=>repo.decide({...replacementDecision,replacementBenefitId:randomUUID()}))).rejects.toThrow('补偿券不存在')
-      expect(await reviews(repo=>repo.decide(replacementDecision))).toEqual({recorded:true,replayed:false})
+      const nativeReplacement=Fastify();await nativeReplacement.register(nativeMemberGiftApiPlugin,{transactions:runner,commands:new NormalizedCommandExecutor(runner),resolveContext:()=>({scope,employeeId:publisher,businessDate})})
+      try{
+       const rows=(await nativeReplacement.inject('/staff/native-member-gifts/refund-pending')).json().data.rows,selected=rows.find((r:{refund_id:string})=>r.refund_id===secondRefundId)
+       const options=await nativeReplacement.inject(`/staff/native-member-gifts/refund-options?refundId=${secondRefundId}&reservationId=${reservationId}`);expect(options.statusCode,options.body).toBe(200);expect(options.json().data.rows.some((r:{id:string})=>r.id===replacementId)).toBe(true)
+       const body={refundId:secondRefundId,reservationId,expectedVersion:selected.nativeVersion,action:'replacement_coupon',reason:replacementDecision.reason,evidenceReference:decision.evidenceReference,replacementBenefitId:replacementId}
+       const send=(payload:unknown)=>nativeReplacement.inject({method:'POST',url:'/staff/native-member-gifts/refund',headers:{'idempotency-key':'native-business-'+randomUUID()},payload})
+       const other=await send({...body,replacementBenefitId:otherReplacementId});expect(other.statusCode,other.body).toBe(409)
+       const saved=await send(body);expect(saved.statusCode,saved.body).toBe(200);expect(saved.json().data.row).toMatchObject({replacement_benefit_id:replacementId,replacement_quantity:1,action:'replacement_coupon'})
+      }finally{await nativeReplacement.close()}
+
       expect(await reviews(repo=>repo.decide(replacementDecision))).toEqual({recorded:true,replayed:true})
       expect((await reviews(repo=>repo.list(editor,'resolved'))).items).toEqual(expect.arrayContaining([expect.objectContaining({refund_id:secondRefundId,action:'replacement_coupon',replacement_benefit_id:replacementId,replacement_quantity:1})]))
       expect((await reviews(repo=>repo.replacementOptions(publisher,secondRefundId,reservationId))).items.some(item=>item.id===replacementId)).toBe(false)

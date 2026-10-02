@@ -1,9 +1,11 @@
 import Fastify from 'fastify'
+import { StaffActionsApi } from '../../src/normalized-ui/staff-actions/staff-actions-api.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CapacityOverrideReasonRequiredError } from './table-management-repository.js'
-import { TableManagementConflictError } from './table-management-repository.js'
+import { TableManagementConflictError, AssignmentNotCommittedError } from './table-management-repository.js'
 import { StaffAccessDeniedError } from './staff-access-repository.js'
 import { tableManagementApiPlugin } from './table-management-api.js'
+import { IdempotencyConflictError, IdempotencyInProgressError, IdempotencyRecordError } from './command-executor.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
 const tenantId = '11111111-1111-4111-8111-111111111111'
@@ -189,7 +191,83 @@ describe('table management API', () => {
     expect(commands.assignMany).toHaveBeenCalledWith(expect.objectContaining({
       tableIds: [tableId, secondTableId], employeeId, roleId,
       assignmentType: 'primary', reason: '李艳负责室外区晚班服务',
-    }))
+    }), false)
+  })
+
+  it('recovers the webpage original guarded request through the new server after a lost reply', async () => {
+    const commands = commandPort()
+    commands.assignMany.mockImplementation(async (command) => ({ value: { id: tableId, assignments: command.tableIds.map((tableId: string) => ({ ...command, id: tableId, tableId, createdByEmployeeId: employeeId })) }, replayed: true }))
+    commands.endAssignment.mockImplementation(async (command) => ({ value: { id: command.assignmentId, endsAt: command.endsAt }, replayed: false }))
+    const app = await build(commands, scriptedTransaction(['table.assignment.manage']))
+    let loseReply = true
+    const paths: string[] = []
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = String(input).replace(/^\/api/, '')
+      paths.push(url)
+      const response = await app.inject({ method: init?.method === 'POST' ? 'POST' : 'GET', url,
+        headers: Object.fromEntries(new Headers(init?.headers)), payload: init?.body as string | undefined })
+      if (url.endsWith('/batch') && loseReply) { loseReply = false; throw new TypeError('reply lost after server commit') }
+      return new Response(response.body, { status: response.statusCode, headers: { 'content-type': 'application/json' } })
+    }
+    let sequence = 0
+    const storage = new Map<string, string>()
+    const web = new StaffActionsApi({ fetch: fetcher, staffSessionId: 'web-session',
+      commandStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => { storage.set(key, value) }, removeItem: key => { storage.delete(key) } },
+      createIdempotencyKey: () => `web-original-${++sequence}` })
+    const options = await web.loadTableAssignmentOptions()
+    expect(options.employees[0]?.id).toBe(employeeId)
+    const input = { tableIds: [tableId], employeeId, roleId: sourceTableId, assignmentType: 'backup' as const,
+      startsAt: '2026-09-27T10:00:00Z', endsAt: '2026-09-27T18:00:00Z', reason: '交班安排' }
+    await expect(web.assignTables(input)).rejects.toMatchObject({ code: 'NETWORK_ERROR' })
+    await web.assignTables(input)
+    expect(commands.assignMany.mock.calls[0]?.[0].idempotencyKey).toBe(commands.assignMany.mock.calls[1]?.[0].idempotencyKey)
+    expect(commands.assignMany.mock.calls[0]?.[0].requestFingerprint).toBe(commands.assignMany.mock.calls[1]?.[0].requestFingerprint)
+    expect(commands.assignMany.mock.calls.every((call) => call[1] === true)).toBe(true)
+    await web.loadTableAssignments()
+    await web.endTableAssignment(tableId, '交班结束')
+    expect(commands.endAssignment.mock.calls[0]?.[1]).toBe(true)
+    expect(paths.filter(path => path.endsWith('/batch')).every(path => path.includes('guarded-assignments'))).toBe(true)
+  })
+
+  it.each(['single', 'batch', 'end'] as const)('keeps legacy %s responses and opts only the new route into recovery', async (kind) => {
+    const commands = commandPort()
+    const method = kind === 'single' ? commands.assign : kind === 'batch' ? commands.assignMany : commands.endAssignment
+    const value = { id: tableId, assignments: [] }
+    method.mockResolvedValue({ value, replayed: true })
+    const app = await build(commands)
+    const suffix = kind === 'single' ? '' : kind === 'batch' ? '/batch' : `/${tableId}/end`
+    const payload = { tableId, tableIds: [tableId], employeeId, roleId: sourceTableId,
+      assignmentType: 'backup', startsAt: '2026-09-27T10:00:00Z', endsAt: '2026-09-27T18:00:00Z', reason: '交班安排' }
+    for (const guarded of [false, true]) {
+      const response = await app.inject({ method: 'POST',
+        url: `/table-management/${guarded ? 'guarded-assignments' : 'assignments'}${suffix}`,
+        headers: { 'x-idempotency-key': 'assignment-compatibility-001' }, payload })
+      expect(response.statusCode).toBe(kind === 'end' ? 200 : 201)
+      expect(response.json()).toEqual({ data: value, meta: { replayed: true } })
+      expect(method.mock.calls.at(-1)?.[1]).toBe(guarded)
+    }
+  })
+
+  it.each([
+    [new AssignmentNotCommittedError('责任时段冲突'), 409, 'TABLE_ASSIGNMENT_NOT_COMMITTED', 'not_committed'],
+    [new TableManagementConflictError('旧接口冲突'), 409, 'TABLE_OPERATION_CONFLICT', undefined],
+    [new IdempotencyConflictError('assignment', 'original-key'), 409, 'TABLE_OPERATION_CONFLICT', undefined],
+    [new IdempotencyInProgressError('assignment', 'original-key'), 409, 'TABLE_OPERATION_CONFLICT', undefined],
+    [new IdempotencyRecordError('lost receipt'), 503, 'IDEMPOTENCY_UNAVAILABLE', undefined],
+    [new StaffAccessDeniedError('revoked'), 403, 'TABLE_PERMISSION_DENIED', undefined],
+    [new TypeError('bad cached result'), 500, undefined, undefined],
+    [new Error('connection lost during commit'), 500, undefined, undefined],
+  ])('classifies guarded recovery without treating uncertain failures as uncommitted: %s', async (error, status, code, disposition) => {
+    const commands = commandPort()
+    commands.endAssignment.mockRejectedValue(error)
+    const app = await build(commands)
+    const response = await app.inject({ method: 'POST',
+      url: `/table-management/guarded-assignments/${tableId}/end`,
+      headers: { 'x-idempotency-key': 'assignment-classification-001' },
+      payload: { endsAt: '2026-09-27T18:00:00Z', reason: '交班结束' } })
+    expect(response.statusCode).toBe(status)
+    if (code) expect(response.json().error.code).toBe(code)
+    expect(response.json().error?.commitDisposition).toBe(disposition)
   })
 
   it('only exposes employee and role assignment options to configured managers', async () => {
@@ -200,6 +278,7 @@ describe('table management API', () => {
     expect(response.json().data).toEqual({
       employees: [{ id: employeeId, code: 'liyan', displayName: '李艳' }],
       roles: [{ id: '66666666-6666-4666-8666-666666666666', code: 'WAITER', name: '服务员' }],
+      supportsGuardedAssignmentRecovery: true, currentEmployeeId: employeeId,
     })
   })
 
@@ -325,7 +404,9 @@ function scriptedTransaction(permissionCodes: string[] = ['table.open']): Scoped
     query: async <Row extends Record<string, unknown>>(sql: string) => {
       const normalized = sql.replace(/\s+/g, ' ')
       let rows: Record<string, unknown>[]
-      if (normalized.includes('FROM mbox.employees')) {
+      if (normalized.includes('FROM mbox.table_assignments AS assignment')) {
+        rows = []
+      } else if (normalized.includes('FROM mbox.employees')) {
         rows = [{ id: employeeId, employee_code: 'liyan', display_name: '李艳', status: 'active', resolved_at: '2026-08-11T10:00:00.123456Z' }]
       } else if (normalized.includes('permission_facts')) {
         rows = permissionCodes.map((code) => ({ code, role_granted: true, override_granted: false, override_denied: false }))

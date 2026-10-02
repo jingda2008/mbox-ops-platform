@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mbox.staff.ReservationTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-09-27T18:10:15.577Z" hostname="jingdadeMacBook-Pro.local" time="0.022">
+  <properties/>
+  <testcase name="transitions" classname="com.mbox.staff.ReservationTest" time="0.002"/>
+  <testcase name="dates" classname="com.mbox.staff.ReservationTest" time="0.001"/>
+  <testcase name="queue" classname="com.mbox.staff.ReservationTest" time="0.004"/>
+  <testcase name="receipt" classname="com.mbox.staff.ReservationTest" time="0.015"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

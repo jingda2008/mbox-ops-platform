@@ -1,3 +1,4 @@
+import {nativeLoyaltySupplementsApiPlugin} from './native-loyalty-supplements-api.js'
 import {randomUUID} from 'node:crypto'
 import Fastify from 'fastify'
 import {Pool} from 'pg'
@@ -35,6 +36,7 @@ integration('actual-goods refund reward review with restricted LOGIN',()=>{
   service=new PaymentCommandService(commands,{assertEmployeeCapability:async()=>{},assertEmployeeOrderAccess:async()=>{},assertRefundRequestLimit:async()=>{},assertRefundApproval:async()=>{}},new NormalizedProviderObservationAuthority())
   customers=new CustomerExperienceService(runner,commands,{updateProfile:async()=>{throw new Error('unused')}})
   control=new LoyaltyOperationalControlService(runner,commands);observations=new VerifiedProviderObservationService(runner);reviews=new LoyaltyRefundReviewService(runner)
+  await app.register(nativeLoyaltySupplementsApiPlugin,{prefix:'/api',transactions:runner,commands,customers:{updateProfile:async()=>{throw new Error('unused')}},resolveContext:()=>staff(actor)})
   await app.register(async api=>registerLoyaltyRefundReviewRoutes(api,{transactions:runner,resolveStaffContext:()=>staff(actor)}),{prefix:'/api'})
  },30000)
  afterAll(async()=>{await app.close();await runtimePool?.end();await pool?.end()})
@@ -85,6 +87,38 @@ integration('actual-goods refund reward review with restricted LOGIN',()=>{
   const v=await view(id);return {basisVersion:v.basisVersion,reason:'财务逐笔核实真实退货商品及原退款凭证',allocations:[{orderItemId:s.orderItemId,salesRefundAmountMinor:eligible},...(3000-eligible>0?[{orderItemId:s.ineligibleItemId!,salesRefundAmountMinor:3000-eligible}]:[])]}
  }
  async function approve(requestId:string,basisVersion:string,key=randomUUID()){return reviews.decide(staff(),requestId,{basisVersion,decision:'approve',reason:'第二人核实实际退货商品与超收部分'},key)}
+
+ it('uses native permanent supplement requests and independent exact original-award execution',async()=>{
+  const s=await createScenario(pool),pause=async(operation:'pause'|'resume')=>{const value=(await control.list(staff())).find(row=>row.capability==='points_accrual')!;return control.set(staff(),{capability:'points_accrual',operation,reason:'验证原生漏积分复核',reviewAt:null,expectedVersion:value.version,idempotencyKey:randomUUID()})}
+  const root='/api/staff/native-loyalty-supplements'
+  const send=(action:string,payload:object,key=`native-business-${randomUUID()}`)=>app.inject({method:'POST',url:root+'/commands/'+action,headers:{'idempotency-key':key},payload})
+  await pause('pause');await pay(s);await pause('resume');actor=base.drafter
+  const board=await app.inject({method:'GET',url:root+'?section=reconciliation&page=0'});expect(board.statusCode,board.body).toBe(200);expect(board.json().data.items.find((r:any)=>r.orderPublicId===s.orderPublicId).status).toBe('missing')
+  const body={publicId:s.orderPublicId,reason:'核对原订单已付款但漏积分'},key=`native-business-${randomUUID()}`,first=await send('request',body,key);expect(first.statusCode,first.body).toBe(200)
+  expect((await send('request',body,key)).json()).toMatchObject({data:first.json().data,meta:{replayed:true,protocol:1}})
+  const pending=await app.inject({method:'GET',url:root+'?section=requests'});expect(pending.json().data.items.find((r:any)=>r.publicId===first.json().data.result.publicId).requestedByEmployeeId).toBe(base.drafter)
+  const decision={publicId:first.json().data.result.publicId,reason:'第二人核对原款与规则'},decisionKey=`native-business-${randomUUID()}`
+  expect((await send('approve',decision,decisionKey)).json().error).toMatchObject({code:'NATIVE_BUSINESS_NOT_COMMITTED',commitDisposition:'not_committed'})
+  actor=base.approver;const approved=await send('approve',decision,decisionKey);expect(approved.statusCode,approved.body).toBe(200);expect(approved.json().data.result).toMatchObject({status:'executed'})
+  expect((await send('approve',decision,decisionKey)).json().meta.replayed).toBe(true);expect((await snapshot(s)).awards).toBe(1)
+  await pool.query("UPDATE mbox.employee_roles SET ends_at=clock_timestamp()-interval '1 second' WHERE employee_id=$1",[base.approver]);expect((await send('approve',decision,decisionKey)).statusCode).toBe(403);await pool.query('UPDATE mbox.employee_roles SET ends_at=NULL WHERE employee_id=$1',[base.approver])
+ })
+
+ it('exposes native permanent actor-bound receipts and rejects self-review and revoked replay',async()=>{
+  const {s,r}=await mixed(),input=await proposal(s,r.id),key=`native-business-${randomUUID()}`
+  const send=(action:string,payload:object,requestKey=key)=>app.inject({method:'POST',url:'/api/staff/native-loyalty-refunds/commands/'+action,headers:{'idempotency-key':requestKey},payload})
+  actor=base.drafter
+  const board=await app.inject({method:'GET',url:'/api/staff/native-loyalty-refunds?page=0'});expect(board.statusCode,board.body).toBe(200);expect(board.json().data).toMatchObject({employeeId:base.drafter,durableCommands:true,protocol:1,page:0})
+  const body={refundId:r.id,...input,historicalAllocations:[]},first=await send('request',body);expect(first.statusCode,first.body).toBe(200)
+  const original=first.json().data;expect(original).toMatchObject({action:'request',employeeId:base.drafter,requestKey:key,result:{refundId:r.id,status:'requested',pointsDelta:0,growthDelta:0}})
+  expect((await send('request',body)).json()).toMatchObject({data:original,meta:{replayed:true,protocol:1}})
+  const decision={requestId:original.result.requestId,basisVersion:input.basisVersion,decision:'approve',reason:'独立核对原退款及实际商品归属'},decisionKey=`native-business-${randomUUID()}`
+  expect((await send('decision',decision,decisionKey)).json().error.code).toContain('SELF_APPROVAL')
+  actor=base.approver;const approved=await send('decision',decision,decisionKey);expect(approved.statusCode,approved.body).toBe(200);expect(approved.json().data.result).toMatchObject({refundId:r.id,status:'approved'})
+  expect((await send('decision',decision,decisionKey)).json().meta.replayed).toBe(true)
+  await pool.query("UPDATE mbox.employee_roles SET ends_at=clock_timestamp()-interval '1 second' WHERE employee_id=$1",[base.approver]);expect((await send('decision',decision,decisionKey)).statusCode).toBe(403);await pool.query('UPDATE mbox.employee_roles SET ends_at=NULL WHERE employee_id=$1',[base.approver])
+  const empty=await app.inject({method:'GET',url:'/api/staff/native-loyalty-refunds?page=1'});expect(empty.json().data).toMatchObject({items:[],hasMore:false,page:1})
+ })
 
  it('separates actual goods from 50 excess, applies original carry once, and persists recovery receipts',async()=>{
   const {s,r}=await mixed({multiplierNumerator:3,multiplierDenominator:2})

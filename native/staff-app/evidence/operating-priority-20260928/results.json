@@ -1,0 +1,27 @@
+{
+  "recordedAt": "2026-09-28T13:05:15.253159+08:00",
+  "android": {
+    "suites": 23,
+    "tests": 141,
+    "failures": 0
+  },
+  "iosSelectedChecks": 280,
+  "backendBusinessTests": 74,
+  "latestInventoryAndCatalogIntegrationTests": 25,
+  "webBaseline": {
+    "passed": 326,
+    "skipped": 13
+  },
+  "productionMutations": false,
+  "productionDeployment": false,
+  "nativeCameraHardwareAcceptance": false,
+  "nativeBusinessVisualAcceptance": false,
+  "iosTrainingMenuSmoke": "passed using native Device Hub accessibility; no order submission",
+  "androidInteractiveUI": "not verified; emulator window unavailable to supported UI automation",
+  "webPostgres": {
+    "passed": 339,
+    "skipped": 0
+  },
+  "iosSimulatorInstalled": true,
+  "androidEmulatorInstalled": true
+}

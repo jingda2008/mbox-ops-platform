@@ -1,3 +1,7 @@
+import Fastify from "fastify";
+import { nativeStaffAdministrationApiPlugin } from "./native-staff-administration-api.js";
+import { StaffAuthCommandService } from "./staff-auth-command-service.js";
+import { StaffSessionNotFoundError } from "./staff-session-repository.js";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
@@ -153,6 +157,51 @@ integration("staff employee lifecycle", () => {
       }),
     ).rejects.toThrow("不能停用当前登录账号");
   });
+
+  it("native administration uses runtime privileges, freezes versions, revokes PIN sessions and reauthorizes durable replay", async () => {
+    const runtime = new Pool({connectionString: process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL, max: 4});
+    const tx = new ScopedPostgresTransactionRunner(asPool(runtime));
+    const commands = new NormalizedCommandExecutor(tx);
+    const auth = new StaffAuthCommandService(tx, commands, {consume: async()=>{}});
+    const scope = {tenantId,storeId}; const businessDate = new Date().toISOString().slice(0,10);
+    let expired = false;
+    const app = Fastify();
+    await app.register(nativeStaffAdministrationApiPlugin,{prefix:'/api',transactions:tx,commands,
+      resolveStaffContext:()=>{if(expired)throw new StaffSessionNotFoundError();return{scope,employeeId:adminId,businessDate}},
+      authFactory:executor=>new StaffAuthCommandService(tx,executor,{consume:async()=>{}})});
+    const read=async()=>{const response=await app.inject({url:'/api/staff/native-administration'});expect(response.statusCode,response.body).toBe(200);return response.json().data};
+    const send=(action:string,body:object,key=`native-business-${randomUUID()}`)=>app.inject({method:'POST',url:`/api/staff/native-administration/${action}`,headers:{'idempotency-key':key},payload:body});
+    try {
+      expired=true; expect((await app.inject({url:'/api/staff/native-administration'})).statusCode).toBe(401);expired=false;
+      let board=await read();const staleVersion=board.overview.configurationVersion;
+      const create={expectedVersion:staleVersion,reason:'原生员工入职',employeeCode:'NATIVE001',displayName:'原生员工',pin:'5719',roleId:staffRoleId};
+      const createKey=`native-business-${randomUUID()}`;const created=await send('create',create,createKey);expect(created.statusCode,created.body).toBe(200);const employeeId=created.json().data.result.employeeId;
+      expect((await send('create',create,createKey)).json().meta.replayed).toBe(true);
+      expect((await send('status',{employeeId,status:'suspended',reason:'过期版本拦截',expectedVersion:staleVersion})).statusCode).toBe(409);
+      board=await read();const credentialKey=`native-business-${randomUUID()}`;
+      const credential={expectedVersion:board.overview.configurationVersion,credentialVersion:board.credentialVersion,reason:'测试门店设备验证',credential:'native-store-secret',validFrom:new Date(Date.now()-60000).toISOString(),validUntil:new Date(Date.now()+3600000).toISOString()};
+      const configured=await send('credential',credential,credentialKey);expect(configured.statusCode,configured.body).toBe(200);
+      expect((await send('credential',credential,credentialKey)).json().meta.replayed).toBe(true);
+      const device=await auth.verifyDailyStoreCredential({scope,businessDate,credential:'native-store-secret',deviceKey:'native-administration-test-device'});
+      const login=await auth.login({scope,deviceAccessToken:device.leaseToken,employeeCode:'NATIVE001',pin:'5719'});
+      board=await read();const pin={expectedVersion:board.overview.configurationVersion,employeeId,pin:'8462',reason:'测试原生重置PIN'};const pinKey=`native-business-${randomUUID()}`;
+      const reset=await send('pin',pin,pinKey);expect(reset.statusCode,reset.body).toBe(200);expect(reset.json().data.result.revokedSessionCount).toBe(1);
+      expect((await pool.query('SELECT revoked_at IS NOT NULL AS revoked FROM mbox.staff_sessions WHERE id=$1',[login.session.id])).rows[0].revoked).toBe(true);
+      const fresh=await auth.login({scope,deviceAccessToken:device.leaseToken,employeeCode:'NATIVE001',pin:'8462'});
+      expect((await send('pin',pin,pinKey)).json().meta.replayed).toBe(true);
+      expect((await pool.query('SELECT revoked_at IS NULL AS active FROM mbox.staff_sessions WHERE id=$1',[fresh.session.id])).rows[0].active).toBe(true);
+      board=await read();const deploy={expectedVersion:board.overview.configurationVersion,reason:'测试原生岗位发布',changes:[{kind:'role_permission',roleId:staffRoleId,permissionCode:'staff.access.configure',enabled:true}]};const deployKey=`native-business-${randomUUID()}`;
+      const deployed=await send('deploy',deploy,deployKey);expect(deployed.statusCode,deployed.body).toBe(200);expect(deployed.json().data.result.status).toBe('verified');
+      expect((await send('deploy',deploy,deployKey)).json().meta.replayed).toBe(true);
+      board=await read();const paused=await send('status',{expectedVersion:board.overview.configurationVersion,employeeId,status:'suspended',reason:'员工离岗暂停'});expect(paused.statusCode,paused.body).toBe(200);
+      const persisted=await pool.query('SELECT request_sha256::text,response_snapshot::text FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2',[tenantId,storeId]);
+      expect(JSON.stringify(persisted.rows)).not.toContain('native-store-secret');
+      await pool.query("UPDATE mbox.employees SET status='suspended' WHERE id=$1",[adminId]);
+      expect((await send('pin',pin,pinKey)).statusCode).toBe(403);
+      expect((await send('deploy',deploy,deployKey)).statusCode).toBe(403);
+    } finally {await pool.query("UPDATE mbox.employees SET status='active' WHERE id=$1",[adminId]);await app.close();await runtime.end()}
+  });
+
 });
 
 function asPool(pool: Pool): PostgresPool {

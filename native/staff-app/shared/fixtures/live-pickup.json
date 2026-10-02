@@ -1,0 +1,96 @@
+{
+  "revision": 8,
+  "generatedAt": "2026-09-27T00:00:00Z",
+  "commandScope": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "recoveryAvailable": true,
+  "device": {
+    "id": "device1",
+    "label": "厨房取餐屏"
+  },
+  "setup": {
+    "enabled": false,
+    "configured": true,
+    "canConfigure": true
+  },
+  "actor": {
+    "actionSessionValid": true,
+    "canPickup": true,
+    "canUndo": true,
+    "canConfigure": true
+  },
+  "tables": [
+    {
+      "tableId": "table1",
+      "tableCode": "A5",
+      "tableSessionId": "ts1",
+      "locationVersion": 7,
+      "units": [
+        {
+          "kind": "original",
+          "unitId": "unit1",
+          "taskId": "task1",
+          "version": 3,
+          "productName": "小食",
+          "specification": "少辣",
+          "itemNote": "少盐",
+          "orderNote": "一起出",
+          "station": "kitchen",
+          "pickupLocation": "厨房口"
+        },
+        {
+          "kind": "remake",
+          "unitId": "unit1",
+          "taskId": "task1",
+          "version": 3,
+          "productName": "小食",
+          "specification": "少辣",
+          "itemNote": "少盐",
+          "orderNote": "一起出",
+          "station": "kitchen",
+          "pickupLocation": "厨房口"
+        }
+      ]
+    }
+  ],
+  "history": [
+    {
+      "receiptId": "receipt1",
+      "revision": 8,
+      "tableId": "table1",
+      "tableCode": "A5",
+      "tableSessionId": "ts1",
+      "quantity": 2,
+      "takenAt": "2026-09-27T00:00:00Z",
+      "units": [
+        {
+          "kind": "original",
+          "unitId": "unit1",
+          "taskId": "task1",
+          "version": 3,
+          "productName": "小食",
+          "specification": "少辣",
+          "itemNote": "少盐",
+          "orderNote": "一起出",
+          "station": "kitchen",
+          "pickupLocation": "厨房口"
+        },
+        {
+          "kind": "remake",
+          "unitId": "unit1",
+          "taskId": "task1",
+          "version": 3,
+          "productName": "小食",
+          "specification": "少辣",
+          "itemNote": "少盐",
+          "orderNote": "一起出",
+          "station": "kitchen",
+          "pickupLocation": "厨房口"
+        }
+      ],
+      "undo": null,
+      "canUndo": true,
+      "undoBlockedReason": null
+    }
+  ],
+  "attention": []
+}

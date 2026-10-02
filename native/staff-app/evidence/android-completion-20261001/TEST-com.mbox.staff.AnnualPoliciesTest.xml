@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mbox.staff.AnnualPoliciesTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-09-30T22:35:25.515Z" hostname="jingdadeMacBook-Pro.local" time="0.01">
+  <properties/>
+  <testcase name="preventsInvalidCalendarAndSnackShapes" classname="com.mbox.staff.AnnualPoliciesTest" time="0.002"/>
+  <testcase name="birthdayPriorityAndDuplicatePrioritySeatingCannotPublishAsDraft" classname="com.mbox.staff.AnnualPoliciesTest" time="0.004"/>
+  <testcase name="receiptMustMatchOriginalCompleteRuleAndActor" classname="com.mbox.staff.AnnualPoliciesTest" time="0.003"/>
+  <testcase name="independentReviewAndOriginalFestivalVersionAreRequired" classname="com.mbox.staff.AnnualPoliciesTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

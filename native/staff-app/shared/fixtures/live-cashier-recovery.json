@@ -1,0 +1,112 @@
+{
+  "businessDate": "2026-09-26",
+  "query": "",
+  "actions": {
+    "canRequestRefund": true,
+    "canApproveRefund": true,
+    "canExecuteRefund": true,
+    "canQueryOnlinePayment": true,
+    "onlinePaymentProvider": "postar",
+    "canAuthorizeRecollection": true,
+    "canViewReconciliation": true,
+    "canInitiateOnlinePayment": true
+  },
+  "orders": [
+    {
+      "id": "order1",
+      "publicId": "APP-order",
+      "tableCode": "A5",
+      "tableSessionId": "table-session-1",
+      "tableSessionStatus": "closed",
+      "businessDate": "2026-09-26",
+      "status": "completed",
+      "paymentStatus": "partially_paid",
+      "totalAmountMinor": 10000,
+      "outstandingAmountMinor": 2000,
+      "overCollectedAmountMinor": 0,
+      "currency": "CNY",
+      "payments": [
+        {
+          "id": "pay1",
+          "publicId": "PAY-one",
+          "provider": "postar",
+          "method": "cash",
+          "providerActionState": null,
+          "retryReleasedAt": null,
+          "retryReleaseReason": null,
+          "amountMinor": 10000,
+          "currency": "CNY",
+          "status": "pending",
+          "remainingRefundableMinor": 5000,
+          "reservedRefundAmountMinor": 1000,
+          "refundableItems": [
+            {
+              "id": "item1",
+              "productName": "原商品",
+              "quantity": 1,
+              "totalAmountMinor": 10000,
+              "status": "delivered",
+              "remainingRefundableMinor": 5000,
+              "fundsOnly": false
+            }
+          ],
+          "refunds": [
+            {
+              "id": "refund1",
+              "publicId": "REF-one",
+              "paymentId": "pay1",
+              "amountMinor": 1000,
+              "currency": "CNY",
+              "status": "requested",
+              "providerSubmissionState": "not_started",
+              "reason": "退回差额",
+              "requestedByEmployeeId": "other-employee",
+              "requestedByEmployeeName": "原申请人",
+              "decisionReason": null,
+              "receiptReference": null,
+              "purpose": "price_adjustment",
+              "afterSalesCase": null
+            }
+          ]
+        }
+      ],
+      "items": [
+        {
+          "id": "item1",
+          "productName": "原商品",
+          "quantity": 1,
+          "totalAmountMinor": 10000,
+          "status": "delivered",
+          "remainingRefundableMinor": 5000,
+          "fundsOnly": false
+        }
+      ],
+      "closedDebtRecovery": {
+        "status": "pending_payment",
+        "originalBusinessDate": "2026-09-26",
+        "pendingPaymentIds": [
+          "pay1"
+        ],
+        "closableUnpresentedPaymentIds": [
+          "pay1"
+        ],
+        "closableUnpresentedPayments": [
+          {
+            "paymentId": "pay1",
+            "payableKind": "order_batch",
+            "totalAmountMinor": 15000,
+            "currency": "CNY",
+            "orderIds": [
+              "order1",
+              "order2"
+            ],
+            "orderPublicIds": [
+              "APP-order",
+              "APP-second"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

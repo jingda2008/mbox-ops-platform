@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mbox.staff.LiveCashierTest" tests="11" skipped="0" failures="0" errors="0" timestamp="2026-09-27T19:28:10.609Z" hostname="jingdadeMacBook-Pro.local" time="0.019">
+  <properties/>
+  <testcase name="executionAndManualResultBoundaries" classname="com.mbox.staff.LiveCashierTest" time="0.001"/>
+  <testcase name="lostAcknowledgementAndWrongMoney" classname="com.mbox.staff.LiveCashierTest" time="0.001"/>
+  <testcase name="historicalMismatchAndLostReceiptStayBoundToOriginal" classname="com.mbox.staff.LiveCashierTest" time="0.003"/>
+  <testcase name="makerCheckerAndCaseIsolation" classname="com.mbox.staff.LiveCashierTest" time="0.001"/>
+  <testcase name="onlyExplicitHistoricalRollbackUnlocksRecheck" classname="com.mbox.staff.LiveCashierTest" time="0.0"/>
+  <testcase name="historicalOldServerDeniedAndStaleForm" classname="com.mbox.staff.LiveCashierTest" time="0.002"/>
+  <testcase name="historyCloseLostReceiptRetainsOriginalCommand" classname="com.mbox.staff.LiveCashierTest" time="0.001"/>
+  <testcase name="historyCloseWholeScopeAndCapabilities" classname="com.mbox.staff.LiveCashierTest" time="0.003"/>
+  <testcase name="originalItemCapsAndPurpose" classname="com.mbox.staff.LiveCashierTest" time="0.001"/>
+  <testcase name="recollectionAuthorizationIsNotCollection" classname="com.mbox.staff.LiveCashierTest" time="0.001"/>
+  <testcase name="historicalOriginalFullAmountAndEvidence" classname="com.mbox.staff.LiveCashierTest" time="0.005"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

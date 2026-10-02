@@ -1,3 +1,4 @@
+import {nativeExperiencePlanApiPlugin} from './native-experience-plan-api.js'
 import {createHash,randomUUID} from 'node:crypto'
 import {Pool} from 'pg'
 import Fastify from 'fastify'
@@ -39,7 +40,7 @@ const newIds=()=>({
   async function fixture(ageMinutes=120){
     const id=newIds(),scope={tenantId:id.tenant,storeId:id.store},employeeId=id.policyPublisher
     await seed(pool,id)
-    const role=randomUUID(),permissions=['service.execute','customer.experience.manage','table.close','table.view_all','payment.manual.cash.record','payment.collect.all_tables']
+    const role=randomUUID(),permissions=['service.manage','service.execute','customer.experience.manage','table.close','table.view_all','payment.manual.cash.record','payment.collect.all_tables']
     await pool.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,'LIFECYCLE','Lifecycle')",[role,scope.tenantId,scope.storeId])
     await pool.query('INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id) VALUES($1,$2,$3,$4)',[scope.tenantId,scope.storeId,employeeId,role])
     for(const code of permissions){
@@ -58,6 +59,7 @@ const newIds=()=>({
     await app.register(normalizedOperationsApiPlugin,{operationsQuery:{getStaffView:async()=>{throw Error('unused')}},tableSessions:new TableSessionCommandService(commands),commandExecutor:commands,
       resolveContext:async()=>({scope,employeeId,businessDate:date,capabilities:(await runner.run(scope,tx=>new StaffAccessRepository(tx).resolve(employeeId))).permissions}),
       createTableSessionRepository:tx=>new TableSessionRepository(tx),createServiceTaskRepository:tx=>new ServiceTaskRepository(tx)})
+    await app.register(nativeExperiencePlanApiPlugin,{transactions:runner,commands,resolveContext:()=>({scope,employeeId,businessDate:date})})
     const worker=new ExperienceCueDispatchWorker(runner)
     const service=new CustomerExperienceService(runner,commands,{updateProfile:async()=>{throw Error('unused')}})
     await app.register(customerExperienceApiPlugin,{transactions:runner,service,resolveStaffContext:()=>({scope,employeeId,businessDate:date}),resolvePublicContext:()=>{throw Error('unused')},resolveGuestContext:()=>{throw Error('unused')},protectContact:()=>{throw Error('unused')}})
@@ -65,6 +67,28 @@ const newIds=()=>({
     const complete=(taskId:string,key=randomUUID())=>app.inject({method:'POST',url:`/service-tasks/${taskId}/complete`,headers:{'idempotency-key':key},payload:{note:'已按本桌节点要求实际完成服务'}})
     return {id,scope,employeeId,date,app,worker,service,rows,complete}
   }
+  it('native plan controls preserve fulfilled facts, cancel outstanding tasks atomically and replay after cache cleanup',async()=>{
+    const f=await fixture(),read=async()=>{const r=await f.app.inject('/staff/native-experience-plans');expect(r.statusCode,r.body).toBe(200);return r.json().data.rows[0]};let plan=await read();const originalOrder=(await pool.query('SELECT status,total_amount_minor FROM mbox.orders WHERE id=$1',[f.id.tableTabOrder])).rows;
+    const send=(action:string,row=plan,key='native-business-'+randomUUID(),extra={})=>f.app.inject({method:'POST',url:'/staff/native-experience-plans/'+row.id,headers:{'idempotency-key':key},payload:{action,expectedVersion:row.expectedVersion,reason:'主管核对现场服务安排',...extra}});
+    expect((await send('pause')).statusCode).toBe(200);expect((await f.worker.runBatch(f.scope,'paused-plan')).dispatchedCueIds).toHaveLength(0);
+    expect((await send('resume')).statusCode).toBe(409);plan=await read();expect((await send('resume')).statusCode).toBe(200);
+    await f.worker.runBatch(f.scope,'resumed-plan');plan=await read();expect((await send('pause')).statusCode).toBe(409);
+    const first=(await f.rows())[0];expect((await f.complete(first.service_task_id)).statusCode).toBe(200);expect((await send('cancel')).statusCode).toBe(409);
+    plan=await read();const key='native-business-'+randomUUID();const cancelled=await send('cancel',plan,key);expect(cancelled.statusCode,cancelled.body).toBe(200);expect(cancelled.json().data.state).toBe('cancelled');
+    const rows=await f.rows();expect(rows.find(r=>r.id===first.id).status).toBe('completed');expect(rows.filter(r=>r.id!==first.id).every(r=>r.status==='skipped')).toBe(true);
+    expect((await pool.query("SELECT status,count(*)::int n FROM mbox.service_tasks WHERE tenant_id=$1 GROUP BY status ORDER BY status",[f.id.tenant])).rows).toEqual([{status:'cancelled',n:8},{status:'completed',n:1}]);
+    expect((await pool.query('SELECT status,total_amount_minor FROM mbox.orders WHERE id=$1',[f.id.tableTabOrder])).rows).toEqual(originalOrder);
+    await pool.query('DELETE FROM mbox.idempotency_records WHERE tenant_id=$1',[f.id.tenant]);const replay=await send('cancel',plan,key);expect(replay.statusCode,replay.body).toBe(200);expect(replay.json().data).toEqual(cancelled.json().data);expect(replay.json().meta.replayed).toBe(true);
+    expect((await runner.run(f.scope,tx=>readTableSessionClosureState(tx,f.id.tableTabSession))).blockers).toEqual([]);
+    await pool.query("UPDATE mbox.employees SET status='suspended' WHERE id=$1",[f.employeeId]);expect((await send('cancel',plan,key)).statusCode).toBe(403);
+  })
+  it('native plan timing only changes a future undispatched elapsed cue and cannot fabricate an activation',async()=>{
+    const f=await fixture(0);const r=await f.app.inject('/staff/native-experience-plans');expect(r.statusCode,r.body).toBe(200);let plan=r.json().data.rows[0];const cue=plan.cues.find((c:{trigger_kind:string})=>c.trigger_kind==='elapsed');
+    const send=(offsetMinutes:number)=>f.app.inject({method:'POST',url:'/staff/native-experience-plans/'+plan.id,headers:{'idempotency-key':'native-business-'+randomUUID()},payload:{action:'reschedule',expectedVersion:plan.expectedVersion,cueId:cue.id,offsetMinutes,reason:'按客人实际到店时间调整'}});
+    const changed=await send(240);expect(changed.statusCode,changed.body).toBe(200);expect(changed.json().data.offsetMinutes).toBe(240);expect((await send(120)).statusCode).toBe(409);
+    plan=(await f.app.inject('/staff/native-experience-plans')).json().data.rows[0];expect((await send(0)).statusCode).toBe(409);
+    const saved=(await pool.query("SELECT trigger_offset_minutes,due_at=plan.activated_at+interval '240 minutes' exact FROM mbox.experience_plan_cues cue JOIN mbox.customer_experience_plans plan ON plan.id=cue.experience_plan_id WHERE cue.id=$1",[cue.id])).rows[0];expect(saved).toEqual({trigger_offset_minutes:240,exact:true});
+  })
   it('normal service completion converges every linked cue and then the plan, allowing ordinary table closure',async()=>{
     const f=await fixture();const batch=await f.worker.runBatch(f.scope,'lifecycle-red')
     expect(batch.dispatchedCueIds.length).toBe(9)
@@ -74,6 +98,29 @@ const newIds=()=>({
     expect(rows.every(row=>row.plan_state==='completed'&&row.plan_completed_at!==null)).toBe(true)
     expect((await runner.run(f.scope,tx=>readTableSessionClosureState(tx,f.id.tableTabSession))).blockers).toEqual([])
     for(const transition of ['begin-closing','close']){const result=await f.app.inject({method:'POST',url:`/table-sessions/${f.id.tableTabSession}/${transition}`,headers:{'idempotency-key':randomUUID()},payload:{}});expect(result.statusCode,result.body).toBe(200)}
+  })
+  it('native task completion binds the original cue and finishes the plan once through retained receipts',async()=>{
+    const f=await fixture();await f.worker.runBatch(f.scope,'native-lifecycle')
+    for(const cue of await f.rows()){
+      const task=(await pool.query('SELECT task_type,status,priority,assigned_employee_id FROM mbox.service_tasks WHERE id=$1',[cue.service_task_id])).rows[0]
+      const key='native-business-'+randomUUID(),payload={employeeId:f.employeeId,tableSessionId:f.id.tableTabSession,taskType:task.task_type,expectedStatus:task.status,expectedPriority:task.priority,expectedAssignedEmployeeId:task.assigned_employee_id,note:'已按原体验节点完成服务'}
+      const send=()=>f.app.inject({method:'POST',url:`/native-service-tasks/${cue.service_task_id}/complete`,headers:{'idempotency-key':key},payload})
+      const first=await send();expect(first.statusCode,first.body).toBe(200)
+      expect(first.json().data.nativeExperienceCue).toMatchObject({cueId:cue.id,planId:cue.plan_id,serviceTaskId:cue.service_task_id,tableSessionId:f.id.tableTabSession,status:'completed'})
+      await pool.query('DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND expires_at<clock_timestamp()',[f.id.tenant])
+      const replay=await send();expect(replay.statusCode,replay.body).toBe(200);expect(replay.json()).toEqual({data:first.json().data,meta:{replayed:true}})
+    }
+    expect((await f.rows()).every(row=>row.status==='completed'&&row.plan_state==='completed')).toBe(true)
+    expect(await countPlanEvents(f)).toEqual({audits:1,outbox:1})
+    expect((await runner.run(f.scope,tx=>readTableSessionClosureState(tx,f.id.tableTabSession))).blockers).toEqual([])
+  })
+  it('native completion rolls back when the real experience plan is no longer active',async()=>{
+    const f=await fixture();await f.worker.runBatch(f.scope,'native-cancelled-plan')
+    const cue=(await f.rows())[0]!,task=(await pool.query('SELECT task_type,status,priority,assigned_employee_id FROM mbox.service_tasks WHERE id=$1',[cue.service_task_id])).rows[0]
+    await pool.query("UPDATE mbox.customer_experience_plans SET plan_state='cancelled' WHERE id=$1",[cue.plan_id])
+    const result=await f.app.inject({method:'POST',url:`/native-service-tasks/${cue.service_task_id}/complete`,headers:{'idempotency-key':'native-business-'+randomUUID()},payload:{employeeId:f.employeeId,tableSessionId:f.id.tableTabSession,taskType:task.task_type,expectedStatus:task.status,expectedPriority:task.priority,expectedAssignedEmployeeId:task.assigned_employee_id,note:'现场核对'}})
+    expect(result.statusCode,result.body).toBe(409);expect(result.json().error.commitDisposition).toBe('not_committed')
+    expect((await pool.query('SELECT status FROM mbox.service_tasks WHERE id=$1',[cue.service_task_id])).rows[0].status).toBe(task.status)
   })
   it('the explicit cue completion path also finishes the active plan exactly when every real node is done',async()=>{
     const f=await fixture();await f.worker.runBatch(f.scope,'lifecycle-explicit')

@@ -1,0 +1,54 @@
+[
+  {
+    "script": "test-assignments.sh",
+    "exit": 0
+  },
+  {
+    "script": "test-cashier.sh",
+    "exit": 0
+  },
+  {
+    "script": "test-core.sh",
+    "exit": 0
+  },
+  {
+    "script": "test-live.sh",
+    "exit": 0
+  },
+  {
+    "script": "test-order.sh",
+    "exit": 0
+  },
+  {
+    "script": "test-participants.sh",
+    "exit": 0
+  },
+  {
+    "script": "test-payment-completion.sh",
+    "exit": 0
+  },
+  {
+    "script": "test-payments-daily.sh",
+    "exit": 0
+  },
+  {
+    "script": "test-remediation.sh",
+    "exit": 0
+  },
+  {
+    "script": "test-replacement.sh",
+    "exit": 0
+  },
+  {
+    "script": "test-reservations.sh",
+    "exit": 0
+  },
+  {
+    "script": "test-service.sh",
+    "exit": 0
+  },
+  {
+    "script": "test-update.sh",
+    "exit": 0
+  }
+]

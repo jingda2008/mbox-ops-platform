@@ -93,6 +93,7 @@ export interface IssueBenefitInput {
 }
 
 export interface ReserveBenefitInput {
+  expectedVersion?: number
   benefitId: string
   customerId: string
   tableSessionId: string
@@ -129,24 +130,34 @@ export interface CancelBenefitReservationInput {
 }
 
 export interface IssueBenefitCommand extends IssueBenefitInput {
+  nativeReceipt?: NativeBenefitReceipt
   scope: Readonly<StoreScope>
   actor: AuditActor
   businessDate: string
 }
 
 export interface ReserveBenefitCommand extends ReserveBenefitInput {
+  nativeReceipt?: NativeBenefitReceipt
   scope: Readonly<StoreScope>
   actor: AuditActor
   businessDate: string
 }
 
+export interface NativeBenefitReceipt {
+  permission?: 'benefit.issue' | 'loyalty.redemption.fulfill' | 'benefit.cancel'
+  /** Server-owned validation runs only for a newly acquired command, never before receipt recovery. */
+  validate(transaction: ScopedTransaction): Promise<void>
+}
+
 export interface RedeemBenefitCommand extends RedeemBenefitInput {
+  nativeReceipt?: NativeBenefitReceipt
   scope: Readonly<StoreScope>
   actor: AuditActor
   businessDate: string
 }
 
 export interface CancelBenefitReservationCommand extends CancelBenefitReservationInput {
+  nativeReceipt?: NativeBenefitReceipt
   scope: Readonly<StoreScope>
   actor: AuditActor
   businessDate: string
@@ -449,6 +460,7 @@ export class BenefitRepository {
     const benefit = await this.selectById(input.benefitId, true)
     if (benefit === null) throw new BenefitNotFoundError(input.benefitId)
     if (!await this.isSameCustomerFamily(benefit.customer_id, canonical.id)) throw new BenefitOwnershipError()
+    if (input.expectedVersion !== undefined && Number(benefit.aggregate_version) !== input.expectedVersion) throw new BenefitUnavailableError('权益数量或状态已变化，请刷新后重新确认')
     await this.assertAnnualDailySnackClaimReservation(
       benefit.id, input.tableSessionId, input.annualDailySnackClaimId,
     )
@@ -858,6 +870,7 @@ export class BenefitCommandService {
       redemptionIdempotencyKey?: string
       redemptionFingerprint?: string
       reason?: string | null
+      nativeReceipt?: NativeBenefitReceipt
     }>,
     codec: JsonCodec<Result>,
     operation: (repository: BenefitRepository) => Promise<{ result: Result; action: string }>,
@@ -869,13 +882,23 @@ export class BenefitCommandService {
     if (idempotencyKey === undefined || requestFingerprint === undefined) {
       throw new TypeError('Benefit command idempotency fields are required')
     }
+    const nativeEmployee = input.nativeReceipt && input.actor.type === 'employee' ? input.actor.employeeId : null
+    if (input.nativeReceipt && (!nativeEmployee || !/^native-business-[a-f0-9-]{36}$/.test(idempotencyKey))) {
+      throw new TypeError('Native benefit commands require an employee and original request number')
+    }
+    const authorize = async (transaction: ScopedTransaction) => {
+      if (nativeEmployee) await new StaffAccessRepository(transaction).assertPermission(nativeEmployee, input.nativeReceipt?.permission ?? 'loyalty.redemption.fulfill')
+    }
+    const effectiveScope = input.nativeReceipt ? operationScope + '.native' : operationScope
     return this.commands.execute({
       scope: input.scope,
-      operationScope,
+      operationScope: effectiveScope,
+      retainReceipt: !!input.nativeReceipt,
       idempotencyKey,
-      requestFingerprint,
+      requestFingerprint: input.nativeReceipt ? JSON.stringify({ employeeId: nativeEmployee, requestFingerprint }) : requestFingerprint,
       resultCodec: codec,
     }, async (transaction) => {
+      await input.nativeReceipt?.validate(transaction)
       const outcome = await operation(new BenefitRepository(transaction))
       const payload = codec.encode(outcome.result) as JsonObject
       const benefitId = 'benefitId' in outcome.result ? outcome.result.benefitId : outcome.result.id
@@ -899,7 +922,7 @@ export class BenefitCommandService {
           afterData: payload,
         }],
         outboxMessages: [{
-          businessEventKey: `${operationScope}:${idempotencyKey}`,
+          businessEventKey: `${effectiveScope}:${idempotencyKey}`,
           aggregateType: 'benefit',
           aggregateId: benefitId,
           aggregateVersion: currentBenefit.aggregateVersion,
@@ -907,7 +930,7 @@ export class BenefitCommandService {
           payload,
         }],
       }
-    })
+    }, input.nativeReceipt ? authorize : undefined)
   }
 }
 

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mbox.staff.LiveKitchenTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-09-27T02:22:49.925Z" hostname="jingdadeMacBook-Pro.local" time="0.005">
+  <properties/>
+  <testcase name="portionsLocationAndOwnerGuards" classname="com.mbox.staff.LiveKitchenTest" time="0.004"/>
+  <testcase name="retainedDebtTurnoverNeedsBothCapabilities" classname="com.mbox.staff.LiveKitchenTest" time="0.001"/>
+  <testcase name="tableCapacityOverrideUsesExistingServerContract" classname="com.mbox.staff.LiveKitchenTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

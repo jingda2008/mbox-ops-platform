@@ -1,3 +1,6 @@
+import Fastify from 'fastify'
+import {NormalizedCommandExecutor} from './command-executor.js'
+import {nativeActivityOperationsApiPlugin} from './native-activity-operations-api.js'
 import { randomUUID } from 'node:crypto'
 import { loadMemberParticipation } from './member-participation-query.js'
 import { CustomerExperienceRepository } from './customer-experience-repository.js'
@@ -240,6 +243,29 @@ integration('activity operations PostgreSQL integration', () => {
       expect(own.registrationClosedAt).toBeTruthy()
       expect(own.publicId).toBe('activity-ops-published')
     })
+  })
+
+  it.skipIf(!process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL)('native operator reuses real registration and refund authorities with a restricted LOGIN',async()=>{
+    const runtime=new Pool({connectionString:process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL}),txs=new ScopedPostgresTransactionRunner(runtime),app=Fastify(),roleId=randomUUID(),scope={tenantId,storeId}
+    try{
+      expect((await runtime.query('SELECT rolsuper,rolbypassrls,current_user=session_user direct FROM pg_roles WHERE rolname=current_user')).rows[0]).toEqual({rolsuper:false,rolbypassrls:false,direct:true})
+      await pool.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,'NATIVE_ACTIVITY','native activity')",[roleId,tenantId,storeId]);await pool.query('INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id) VALUES($1,$2,$3,$4)',[tenantId,storeId,employeeId,roleId]);for(const code of ['community.activity.view','community.activity.manage','refund.request'])await pool.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) SELECT tenant_id,store_id,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code=$4 ON CONFLICT DO NOTHING',[tenantId,storeId,roleId,code])
+      await app.register(nativeActivityOperationsApiPlugin,{transactions:txs,commands:new NormalizedCommandExecutor(txs),providerConfigured:true,resolveContext:()=>({scope,employeeId,businessDate:'2026-10-01'})})
+      const root='/staff/native-activity-operations',read=async()=>{const r=await app.inject(root+'/activity-ops-published');expect(r.statusCode,r.body).toBe(200);return r.json().data},send=(action:string,payload:unknown,key='native-business-'+randomUUID())=>app.inject({method:'POST',url:root+'/commands/'+action,headers:{'idempotency-key':key},payload})
+      let data=await read();expect(JSON.stringify(data)).not.toContain('encryptedContact');expect(data.componentItems).toEqual(expect.arrayContaining([expect.objectContaining({id:packageInventoryItemId})]))
+      const filtered=await app.inject(root+'/activity-ops-published?search='+encodeURIComponent('顾客2'));expect(filtered.statusCode,filtered.body).toBe(200);expect(filtered.json().data.rows.map(r=>r.publicId)).toEqual(['activity-ops-registration-no-show'])
+      const one=await app.inject(root+'/activity-ops-published?registration=activity-ops-registration-paid');expect(one.json().data.rows).toHaveLength(1)
+      const delivered=data.rows.find(r=>r.publicId==='activity-ops-registration-package');const repeatDelivery=await send('fulfill-package',{publicId:'activity-ops-published',registrationPublicId:delivered.publicId,expectedVersion:delivered.nativeVersion,reason:'已领取的套餐不能再次扣料'});expect(repeatDelivery.statusCode,repeatDelivery.body).toBe(409)
+      const r=data.rows.find(r=>r.publicId==='activity-ops-registration-no-show'),key='native-business-'+randomUUID(),body={publicId:'activity-ops-published',registrationPublicId:r.publicId,expectedVersion:r.nativeVersion,reason:'核对原报名顾客实际到场'}
+      const check=await send('check-in',body,key);expect(check.statusCode,check.body).toBe(200);expect(check.json().data.row.status).toBe('checked_in');expect((await send('no-show',body)).statusCode).toBe(409)
+      data=await read();const paid=data.rows.find(r=>r.publicId==='activity-ops-registration-paid');expect(paid.refundableAmountMinor).toBe(5000)
+      const refundBody={publicId:'activity-ops-published',registrationPublicId:paid.publicId,expectedVersion:paid.nativeVersion,paymentId:paid.paymentId,expectedAmountMinor:5000,reason:'顾客申请按原活动付款退款'},refundKey='native-business-'+randomUUID()
+      const incorrect=await send('refund-request',{...refundBody,expectedAmountMinor:4900});expect(incorrect.statusCode,incorrect.body).toBe(409);expect((await pool.query('SELECT count(*)::int AS n FROM mbox.refunds WHERE payment_id=$1',[paidPaymentId])).rows[0].n).toBe(0)
+      const refund=await send('refund-request',refundBody,refundKey);expect(refund.statusCode,refund.body).toBe(200);expect(refund.json().data.row).toMatchObject({paymentId:paidPaymentId,status:'requested',amountMinor:5000});expect((await read()).rows.find(r=>r.publicId===paid.publicId).refundableAmountMinor).toBe(0)
+      await pool.query('DELETE FROM mbox.idempotency_records WHERE tenant_id=$1',[tenantId]);for(const [action,input,k]of [['check-in',body,key],['refund-request',refundBody,refundKey]]as const){const replay=await send(action,input,k);expect(replay.statusCode,replay.body).toBe(200);expect(replay.json().meta.replayed).toBe(true)}expect((await pool.query('SELECT count(*)::int AS n FROM mbox.refunds WHERE payment_id=$1',[paidPaymentId])).rows[0].n).toBe(1)
+      const pending=data.rows.find(r=>r.publicId==='activity-ops-registration-pending');const blocked=await send('cancel-registration',{publicId:'activity-ops-published',registrationPublicId:pending.publicId,expectedVersion:pending.nativeVersion,reason:'渠道尚不明确不能释放名额'});expect(blocked.statusCode,blocked.body).toBe(409)
+      await pool.query("UPDATE mbox.employees SET status='suspended' WHERE id=$1",[employeeId]);try{expect((await send('refund-request',refundBody,refundKey)).statusCode).toBe(403)}finally{await pool.query("UPDATE mbox.employees SET status='active' WHERE id=$1",[employeeId])}
+    }finally{await app.close();await runtime.end()}
   })
 
   async function run<Result>(operation: (repository: ActivityOperationsRepository) => Promise<Result>) {

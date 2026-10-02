@@ -1,0 +1,10 @@
+2026-09-27 02:02 CST
+iOS 17 new update contract assertions PASS; previous 166 business assertions not rerun in this turn.
+Android complete JUnit suite: 39 tests, 0 failures/errors/skips.
+Publisher: 2 Python tests PASS; actual signed debug APK rejected; output manifest not created.
+iOS BUILD SUCCEEDED; Android BUILD SUCCESSFUL.
+Both simulator installs/launches succeeded: iOS PID15825, Android MainActivity.
+Version 0.2.0 build 2. No production updates published; no real business writes.
+Native UI: iPhone startup seen; Mac locked during More click, further UI testing not completed.
+MBOXStaff.debug.dylib SHA256 e9ebe2c388c7c2b52fda8acbfc014da95f7e84d491d74412ac677769c5093502
+app-debug.apk SHA256 793097e10c738a07a3cedba50934105808dc7a81532858423a9445f1ad2fcc59

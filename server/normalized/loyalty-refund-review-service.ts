@@ -24,12 +24,13 @@ interface ReviewBasis {review:ReviewRow;view:LoyaltyRefundReviewView;items:ItemR
 export class LoyaltyRefundReviewService {
   constructor(private readonly transactions:Pick<ScopedPostgresTransactionRunner,'run'>){}
 
-  list(context:StaffCustomerExperienceContext):Promise<LoyaltyRefundReviewView[]>{
+  list(context:StaffCustomerExperienceContext,pagination?:{offset:number;limit:number}):Promise<LoyaltyRefundReviewView[]>{
+    if(pagination&&(!Number.isSafeInteger(pagination.offset)||pagination.offset<0||pagination.offset>1000000||![100,101].includes(pagination.limit)))throw new TypeError("Invalid review pagination")
     return this.transactions.run(context.scope,async tx=>{
       await permission(tx,context.employeeId,'view')
       const rows=await tx.query<{refund_id:string}>(`SELECT r.refund_id FROM mbox.loyalty_refund_reviews r
         WHERE r.tenant_id=$1 AND r.store_id=$2 ORDER BY
-        EXISTS(SELECT 1 FROM mbox.loyalty_refund_review_decisions d WHERE (d.tenant_id,d.store_id,d.refund_id)=(r.tenant_id,r.store_id,r.refund_id) AND d.decision='approved'),r.created_at,r.refund_id LIMIT 100`,scope(tx))
+        EXISTS(SELECT 1 FROM mbox.loyalty_refund_review_decisions d WHERE (d.tenant_id,d.store_id,d.refund_id)=(r.tenant_id,r.store_id,r.refund_id) AND d.decision='approved'),r.created_at,r.refund_id LIMIT $3 OFFSET $4`,[...scope(tx),pagination?.limit??100,pagination?.offset??0])
       const result:LoyaltyRefundReviewView[]=[]
       for(const row of rows.rows)result.push((await loadBasis(tx,row.refund_id)).view)
       return result

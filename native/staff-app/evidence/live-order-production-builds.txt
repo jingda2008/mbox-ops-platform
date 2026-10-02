@@ -1,0 +1,10 @@
+2026-09-27 00:51 CST
+iOS BUILD SUCCEEDED; Android BUILD SUCCESSFUL
+iOS 29 core + 36 live + 68 ordering = 133 assertions
+Android 27 JUnit cases, 0 failures/errors
+iOS install/launch com.mbox.staff.native PID9571
+Android install Success, launch MainActivity
+CUA iPhone native startup and empty secure login verified before final capacity change. Authenticated screens not accepted; Android visual checks pending.
+iOS dylib SHA256 798472961dda12d94556ef94b63e47a23fd34cc9c37c3dd756292f38630b54ed
+Android APK SHA256 ca49ac74246fcca6d68bb85dbb5aa7edd5dc1e2b977fda2364e69806e8b97cc4
+No production business mutation, server/web change, push/deploy/release.

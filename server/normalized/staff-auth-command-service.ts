@@ -182,6 +182,7 @@ export class StaffAuthCommandService {
   async setEmployeePin(input: Readonly<AccessChangeMetadata & {
     employeeId: string
     pin: string
+    revokeSessions?: boolean
   }>) {
     assertPin(input.pin)
     const pinHash = await this.hasher.hash(input.pin)
@@ -195,7 +196,14 @@ export class StaffAuthCommandService {
       await lockStaffAccessConfiguration(transaction)
       await requireAccessAdministrator(transaction, input.actorEmployeeId)
       await new StaffSessionRepository(transaction).updateEmployeePinHash(input.employeeId, pinHash)
-      const result: JsonObject = { employeeId: input.employeeId, pinConfigured: true }
+      let result: JsonObject = { employeeId: input.employeeId, pinConfigured: true }
+      if (input.revokeSessions) {
+        const revoked = await transaction.query(`UPDATE mbox.staff_sessions
+          SET revoked_at = now(), revoked_by_employee_id = $4::uuid, revoke_reason = $5
+          WHERE tenant_id=$1 AND store_id=$2 AND employee_id=$3::uuid AND revoked_at IS NULL
+          RETURNING id`, [transaction.scope.tenantId, transaction.scope.storeId, input.employeeId, input.actorEmployeeId, input.reason])
+        result = { ...result, revokedSessionCount: revoked.rows.length }
+      }
       return accessChangeOutcome(input, 'staff.pin.configured', 'employee', input.employeeId, result)
     })
   }

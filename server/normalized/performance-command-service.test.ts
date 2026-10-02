@@ -1,3 +1,5 @@
+import Fastify from 'fastify'
+import {reservationPerformanceApiPlugin} from './reservation-performance-api.js'
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { Pool } from 'pg'
@@ -321,6 +323,52 @@ integration('PerformanceCommandService PostgreSQL integration', () => {
     expect((await pool.query("SELECT count(*)::int AS count FROM mbox.schedules WHERE tenant_id=$1 AND store_id=$2 AND starts_at>='2026-09-01'",[tenantId,storeId])).rows[0].count).toBe(2)
     await pool.query('DELETE FROM mbox.employee_roles WHERE tenant_id=$1 AND store_id=$2 AND employee_id=$3 AND role_id=$4',[tenantId,storeId,employeeId,role])
     await expect(service.publishMonthly({...input,...metadata('monthly-publish-no-access')})).rejects.toThrow()
+  })
+
+
+  it('keeps native song receipts, blocks unpaid performance and rejects replay after revocation', async () => {
+    const role = randomUUID()
+    await pool.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,'NATIVE_SONG','点歌测试')", [role,tenantId,storeId])
+    await pool.query('INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id) VALUES($1,$2,$3,$4)', [tenantId,storeId,employeeId,role])
+    await pool.query("INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code IN ('song.manage','song.payment.record')", [tenantId,storeId,role])
+    try {
+      for (const amount of [0, 8800]) {
+        const submitted = await service.submitSongRequest({...metadata(`native-song-submit-${amount}`, {type:'guest' as const}),
+          tableSessionId, customerId, scheduleId: nextScheduleId, songTitle: `测试点歌${amount}`, requestType: 'custom', requestedAt: '2026-08-11T13:00:00.000Z'})
+        const input = {...metadata(`native-business-${randomUUID()}`), employeeId, requestId: submitted.value.request.id,
+          expectedStatus: submitted.value.request.status, action:'confirm' as const, quotedAmountMinor: amount, currency: 'CNY', reason:'现场确认报价'}
+        const first = await service.nativeSong(input)
+        expect(first.value.request.status).toBe('accepted')
+        expect(await service.nativeSong(input)).toEqual({value:first.value,replayed:true})
+        await expect(service.nativeSong({...input,...metadata(`native-business-${randomUUID()}`)})).rejects.toThrow()
+        const perform = {...input,...metadata(`native-business-${randomUUID()}`),action:'performed' as const,expectedStatus:'accepted' as const}
+        if (amount > 0) {
+          await expect(service.nativeSong(perform)).rejects.toThrow()
+          const payment = {...input,...metadata(`native-business-${randomUUID()}`),action:'paid' as const,expectedStatus:'accepted' as const,paymentId:randomUUID(),reconciliationEntryId:randomUUID()}
+          await expect(service.nativeSong(payment)).rejects.toThrow()
+          const evidence = await seedPaymentEvidence(pool, amount)
+          const api = Fastify()
+          await api.register(reservationPerformanceApiPlugin, {transactions:runner, performance:service, reservations:{} as never,
+            resolveStaffContext:()=>({scope:{tenantId,storeId},employeeId,businessDate}),
+            resolveGuestContext:()=>{throw new Error('unused guest route')}})
+          try {
+            const choices = await api.inject({method:'GET',url:`/staff/native-song-requests/${input.requestId}/payment-evidence`})
+            expect(choices.statusCode, choices.body).toBe(200)
+            expect(choices.json().data).toContainEqual(expect.objectContaining(evidence))
+          } finally { await api.close() }
+          const paid = await service.nativeSong({...payment,...metadata(`native-business-${randomUUID()}`),...evidence})
+          expect(paid.value.request.status).toBe('paid')
+          expect(paid.value.paymentId).toBe(evidence.paymentId)
+          expect((await service.nativeSong({...perform,...metadata(`native-business-${randomUUID()}`),expectedStatus:'paid'})).value.request.status).toBe('performed')
+        } else expect((await service.nativeSong(perform)).value.request.status).toBe('performed')
+        expect(await service.nativeSong({...input,businessDate:'2026-08-12'})).toEqual({value:first.value,replayed:true})
+        const counts = await pool.query("SELECT count(*)::int AS count FROM mbox.audit_events WHERE object_id=$1 AND action='song_request.accepted'", [input.requestId])
+        expect(counts.rows[0].count).toBe(1)
+        await pool.query('DELETE FROM mbox.employee_roles WHERE employee_id=$1 AND role_id=$2', [employeeId,role])
+        await expect(service.nativeSong(input)).rejects.toThrow()
+        await pool.query('INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id) VALUES($1,$2,$3,$4)', [tenantId,storeId,employeeId,role])
+      }
+    } finally { await pool.query('DELETE FROM mbox.employee_roles WHERE employee_id=$1 AND role_id=$2', [employeeId,role]) }
   })
 
 })

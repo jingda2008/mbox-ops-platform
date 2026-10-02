@@ -1,0 +1,19 @@
+{
+  "updatedAt": "2026-09-27 18:48 CST",
+  "productionWrites": false,
+  "deployed": false,
+  "iosAssertions": 399,
+  "androidTests": 83,
+  "compatibilityPassed": 309,
+  "isolatedDatabasePassed": 40,
+  "sourceSHA256": {
+    "server/normalized/table-management-api.ts": "b177c1518a8289eec7228ffe10dfe2f8448900640f933cc22194f125de42ec3f",
+    "server/normalized/table-management-repository.ts": "93292a60a421925b9d12739a298027c91f9de9189c9b9aa3a77c07c2a39d9a51",
+    "native/staff-app/ios/Sources/LiveAssignments.swift": "4a6acdb0a39b7d33b20b036f2c2f266c66eef2d6eb6d20d0d96e43362e6abb79",
+    "native/staff-app/ios/Sources/StaffAPI.swift": "84c687faee2d4eaa8b16622d10cf93857baad1db212425ac47c61ff1ea652b60",
+    "native/staff-app/ios/Sources/AppModel.swift": "8e2a421731cda59d86098655c452dfd549e2596632483b0fb1e347f34c62ad72",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveAssignments.kt": "104650c98abfc4bc28eb07e0cd5e6d565c844f0d869527f24af0ff2867def425",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/StaffAPI.kt": "9cbc400dd691e5604ca764b4ccd120fc15f1ca94b0440179fa28075b602d309c",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/AppModel.kt": "333ce8ca5392f625ab8f5f955d70f18b3c54b07a2207ca39b45292fec5bc6ea5"
+  }
+}

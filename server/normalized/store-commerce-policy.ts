@@ -1,3 +1,6 @@
+import {nativePhysicalExecutor} from './native-physical-command.js'
+import {NativeCommandNotCommittedError} from './command-executor.js'
+import {isStaffAuthenticationRequiredError,STAFF_AUTHENTICATION_REQUIRED_ERROR} from './staff-api-authentication.js'
 import { createHash } from 'node:crypto'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type { JsonCodec, JsonObject, NormalizedCommandExecutor } from './command-executor.js'
@@ -97,6 +100,8 @@ export class StoreCommercePolicyRepository {
     if (input.enabled && !input.providerConfigured) {
       throw new StoreCommercePolicyConflictError('支付渠道尚未配置完成，不能开放线上支付')
     }
+    // Serialize first creation too: an absent row cannot be protected by FOR UPDATE.
+    await this.transaction.query("SELECT pg_advisory_xact_lock(hashtextextended('store-commerce-policy:' || mbox.current_tenant_id()::text || ':' || mbox.current_store_id()::text,0))")
     const current = await this.transaction.query<PolicyRow>(`
       SELECT online_payment_enabled, payment_reservation_minutes, policy_version, reason,
         updated_by_employee_id, updated_at::text
@@ -139,6 +144,24 @@ export async function resolveEffectiveOnlinePayment(
 }
 
 export const storeCommercePolicyApiPlugin: FastifyPluginAsync<StoreCommercePolicyApiOptions> = async (app, options) => {
+  app.get('/staff/native-commerce-policy',async(request,reply)=>handle(reply,async()=>{
+    reply.header('Cache-Control','private, no-store')
+    const ctx=await options.resolveContext(request),row=await options.transactions.run(ctx.scope,async tx=>{await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'payment.policy.manage');return new StoreCommercePolicyRepository(tx).get(options.providerConfigured,options.provider)},{readOnly:true})
+    return reply.send({data:{employeeId:ctx.employeeId,protocol:1,durableCommands:true,row,providerDiagnostics:options.providerDiagnostics??null}})
+  }))
+  for(const action of ['online-payment','payment-reservation']as const)app.post('/staff/native-commerce-policy/'+action,async(request,reply)=>handle(reply,async()=>{
+    reply.header('Cache-Control','private, no-store')
+    const ctx=await options.resolveContext(request),body=readObject(request.body),expectedVersion=readInteger(body.expectedVersion,'expectedVersion',0),reason=readString(body.reason,'reason',1000,3),key=readIdempotencyKey(request)
+    if(!/^native-business-[a-f0-9-]{36}$/.test(key)||Object.keys(body).some(k=>!['expectedVersion','reason',action==='online-payment'?'enabled':'paymentReservationMinutes'].includes(k)))throw new StoreCommercePolicyRequestError('原请求编号或字段无效')
+    const input=action==='online-payment'?{enabled:readBoolean(body.enabled,'enabled'),expectedVersion,reason}:{paymentReservationMinutes:readIntegerRange(body.paymentReservationMinutes,'paymentReservationMinutes',2,30),expectedVersion,reason}
+    const executor=nativePhysicalExecutor(options.commands,ctx,async tx=>{const current=await options.resolveContext(request);if(current.employeeId!==ctx.employeeId||current.scope.tenantId!==ctx.scope.tenantId||current.scope.storeId!==ctx.scope.storeId)throw new StaffAccessDeniedError('身份变化');await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'payment.policy.manage')})
+    const execution=await executor.execute<JsonObject>({scope:ctx.scope,operationScope:'store.commerce-policy.native.'+action,idempotencyKey:key,retainReceipt:true,requestFingerprint:createHash('sha256').update(JSON.stringify({employeeId:ctx.employeeId,input})).digest('hex'),resultCodec:codec<JsonObject>()},async tx=>{
+      const repository=new StoreCommercePolicyRepository(tx),before=await repository.get(options.providerConfigured,options.provider),row=await repository.set({enabled:input.enabled??before.policyOnlinePaymentEnabled,...('paymentReservationMinutes'in input?{paymentReservationMinutes:input.paymentReservationMinutes}:{}),expectedVersion,employeeId:ctx.employeeId,reason,providerConfigured:options.providerConfigured,provider:options.provider}),event=action==='online-payment'?'store.online_payment_policy.changed.v1':'store.payment_reservation_policy.changed.v1'
+      return{result:JSON.parse(JSON.stringify({employeeId:ctx.employeeId,requestKey:key,action,row})),auditEvents:[{actor:{type:'employee',employeeId:ctx.employeeId},businessDate:ctx.businessDate,action:event,objectType:'store_commerce_policy',objectId:ctx.scope.storeId,reason,beforeData:policyAudit(before),afterData:policyAudit(row)}],outboxMessages:[{aggregateType:'store_commerce_policy',aggregateId:ctx.scope.storeId,aggregateVersion:row.policyVersion,eventType:event,payload:policyAudit(row)}]}
+    })
+    return reply.send({data:execution.value,meta:{protocol:1,replayed:execution.replayed}})
+  }))
+
   app.get('/store/commerce-policy', async (request, reply) => handle(reply, async () => {
     const context = await options.resolveContext(request)
     const data = await options.transactions.run(context.scope, async (transaction) => {
@@ -306,6 +329,8 @@ async function handle(reply: FastifyReply, operation: () => Promise<FastifyReply
   try {
     return await operation()
   } catch (error) {
+    if(isStaffAuthenticationRequiredError(error))return reply.code(401).send({error:STAFF_AUTHENTICATION_REQUIRED_ERROR})
+    if(error instanceof NativeCommandNotCommittedError&&!(error.original instanceof IdempotencyConflictError))return reply.code(409).send({error:{code:'NATIVE_BUSINESS_NOT_COMMITTED',message:error.original instanceof StoreCommercePolicyConflictError?error.original.message:'策略已变化，本次未提交，请刷新核对',commitDisposition:'not_committed'}})
     if (error instanceof StaffAccessDeniedError) return reply.code(403).send({ error: { code: 'PAYMENT_POLICY_FORBIDDEN', message: '当前岗位无权修改线上支付策略' } })
     if (error instanceof StaffNotFoundError) return reply.code(401).send({ error: { code: 'AUTH_REQUIRED', message: '请重新登录' } })
     if (error instanceof StoreCommercePolicyConflictError || error instanceof IdempotencyConflictError || error instanceof IdempotencyInProgressError) return reply.code(409).send({ error: { code: 'PAYMENT_POLICY_CONFLICT', message: error.message } })

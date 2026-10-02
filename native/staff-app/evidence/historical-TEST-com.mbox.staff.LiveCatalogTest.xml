@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mbox.staff.LiveCatalogTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-09-27T02:22:49.865Z" hostname="jingdadeMacBook-Pro.local" time="0.007">
+  <properties/>
+  <testcase name="durableDraftScopesAndPerUnitSelections" classname="com.mbox.staff.LiveCatalogTest" time="0.005"/>
+  <testcase name="actualCatalogRestrictionsAndBundleRules" classname="com.mbox.staff.LiveCatalogTest" time="0.002"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mbox.staff.DailyPaymentTest" tests="14" skipped="0" failures="0" errors="0" timestamp="2026-09-27T18:10:14.957Z" hostname="jingdadeMacBook-Pro.local" time="0.127">
+  <properties/>
+  <testcase name="unresolvedMoneyCannotBeResolvedOrManagedWithoutPermission" classname="com.mbox.staff.DailyPaymentTest" time="0.038"/>
+  <testcase name="unpaidCancellationAndExceptionBindOriginalOrderAndMoney" classname="com.mbox.staff.DailyPaymentTest" time="0.031"/>
+  <testcase name="financeReceiptMustMatchActorPaymentNoteAndAction" classname="com.mbox.staff.DailyPaymentTest" time="0.002"/>
+  <testcase name="pendingOrCapturedPaymentNeverAllowsUnpaidCancellation" classname="com.mbox.staff.DailyPaymentTest" time="0.001"/>
+  <testcase name="lostReplyReusesOriginalKeyAndEncryptedCode" classname="com.mbox.staff.DailyPaymentTest" time="0.007"/>
+  <testcase name="retryReleaseKeepsPendingAndBindsOriginalPayment" classname="com.mbox.staff.DailyPaymentTest" time="0.003"/>
+  <testcase name="paymentCodeNeverStoredInJournalAndOriginalIdSurvives" classname="com.mbox.staff.DailyPaymentTest" time="0.006"/>
+  <testcase name="wrongReceiptsCannotConfirmMoney" classname="com.mbox.staff.DailyPaymentTest" time="0.002"/>
+  <testcase name="emptyClosureValidButInventedCountersRejected" classname="com.mbox.staff.DailyPaymentTest" time="0.001"/>
+  <testcase name="signedLedgerAndCursorGuards" classname="com.mbox.staff.DailyPaymentTest" time="0.001"/>
+  <testcase name="boundsAndOriginalOrders" classname="com.mbox.staff.DailyPaymentTest" time="0.004"/>
+  <testcase name="expiredAndConfirmedQRNeverDisplayed" classname="com.mbox.staff.DailyPaymentTest" time="0.026"/>
+  <testcase name="currentActorPermissionAndProvider" classname="com.mbox.staff.DailyPaymentTest" time="0.002"/>
+  <testcase name="ledgerQueryAndInvalidDates" classname="com.mbox.staff.DailyPaymentTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

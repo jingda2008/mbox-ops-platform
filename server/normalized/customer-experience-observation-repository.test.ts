@@ -422,6 +422,35 @@ integration('observation confirmation privacy with PostgreSQL', () => {
       WHERE policy.public_id=$1`,[policy.value.publicId])
     expect(policyRows.rows).toHaveLength(1)
   })
+  it('retains native parse/confirm receipts after cleanup and recovers only the acting employees own draft',async()=>{
+    const service=new CustomerExperienceService(transactions,new NormalizedCommandExecutor(transactions),{updateProfile:async()=>{throw new Error('unused')}})
+    const context={scope:integrationScope,employeeId,businessDate:new Date().toISOString().slice(0,10)}
+    const input={nativeReceipt:true,tableSessionId,rawContent:'客人原话：请跟进这桌服务',inputKind:'text' as const,needsImmediateAction:true,idempotencyKey:'native-business-'+randomUUID()}
+    const first=await service.parseObservation(context,input)
+    const board=await service.nativeObservationBoard(context,tableSessionId)
+    expect(board.draft?.publicId).toBe(first.value.publicId)
+    expect(board.draft?.rawContent).toBe(input.rawContent)
+    expect(board.history.items.every(row=>row.rawContent===null)).toBe(true)
+    expect(await transactions.run(integrationScope,tx=>new CustomerExperienceObservationRepository(tx).latestOwnDraft(tableSessionId,randomUUID(),true),{readOnly:true})).toBeNull()
+    await pool.query('DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND expires_at<clock_timestamp()',[tenantId])
+    expect((await service.parseObservation(context,input))).toEqual({...first,replayed:true})
+    const confirm={nativeReceipt:true,publicId:first.value.publicId,idempotencyKey:'native-business-'+randomUUID(),events:[{
+      expressionKind:'customer_quote' as const,scopeKind:'table' as const,eventType:'other' as const,degree:null,
+      reasonCode:null,seatLabel:null,customerId:null,candidateId:null,productId:null,confidence:0.4,rawExcerpt:input.rawContent,
+    }]}
+    const confirmed=await service.confirmObservation(context,confirm)
+    await pool.query('DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND expires_at<clock_timestamp()',[tenantId])
+    expect((await service.confirmObservation(context,confirm))).toEqual({...confirmed,replayed:true})
+    expect((await service.nativeObservationBoard(context,tableSessionId)).draft?.publicId).not.toBe(first.value.publicId)
+    const stored=await pool.query('SELECT expires_at::text FROM mbox.idempotency_records WHERE tenant_id=$1 AND idempotency_key=ANY($2::text[])',[tenantId,[input.idempotencyKey,confirm.idempotencyKey]])
+    expect(stored.rows).toEqual([{expires_at:'infinity'},{expires_at:'infinity'}])
+    const count=await pool.query('SELECT count(*)::int AS n FROM mbox.service_tasks WHERE tenant_id=$1 AND id=$2',[tenantId,confirmed.value.serviceTaskId]);expect(count.rows[0].n).toBe(1)
+    await pool.query(`INSERT INTO mbox.employee_permission_overrides(tenant_id,store_id,employee_id,permission_id,effect,reason,configured_by_employee_id)
+      SELECT $1,$2,$3,id,'deny','native replay permission revoked',$3 FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code='observation.confirm'`,[tenantId,storeId,employeeId])
+    try{await expect(service.confirmObservation(context,confirm)).rejects.toMatchObject({name:'StaffAccessDeniedError'})}
+    finally{await pool.query('DELETE FROM mbox.employee_permission_overrides WHERE tenant_id=$1 AND store_id=$2 AND employee_id=$3',[tenantId,storeId,employeeId])}
+  })
+
 
 
 })

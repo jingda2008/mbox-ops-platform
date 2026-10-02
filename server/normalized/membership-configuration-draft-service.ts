@@ -642,7 +642,7 @@ function eligibleTierCount(counts: Readonly<Record<MembershipTier, number>>, tie
   if (tier === 'silver') return counts.silver + counts.gold
   return counts.gold
 }
-function assertContent(content: MembershipConfigurationContent) {
+export function assertContent(content: MembershipConfigurationContent) {
   if (content.domain === 'base_points') {
     positive(content.pointsDenominatorMinor); positive(content.growthDenominatorMinor)
     nonnegative(content.pointsNumerator); nonnegative(content.growthNumerator)

@@ -355,7 +355,7 @@ async function databaseTimestamp(transaction: ScopedTransaction): Promise<string
   return value
 }
 
-async function readOverview(transaction: ScopedTransaction): Promise<StaffAccessManagementOverview> {
+export async function readOverview(transaction: ScopedTransaction): Promise<StaffAccessManagementOverview> {
   const roleResult = await transaction.query<RoleRow>(`
     SELECT role.id, role.code, role.name, role.status,
       (SELECT count(DISTINCT employee_role.employee_id)::text

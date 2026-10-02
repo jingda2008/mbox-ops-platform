@@ -1,3 +1,4 @@
+import { NativeCommandNotCommittedError } from './command-executor.js'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import {
   IdempotencyConflictError,
@@ -35,12 +36,20 @@ export const recommendationStaffModificationApiPlugin: FastifyPluginAsync<
     return reply.send({ data: await options.service.latestForTable(context,tableSessionId) })
   }))
 
+  app.get('/staff/native-customer-experience/recommendations',async(request,reply)=>handle(reply,async()=>{
+    reply.header('cache-control','private, no-store')
+    const context=await options.resolveStaffContext(request),tableSessionId=uuid(object(request.query).tableSessionId,'桌次')
+    return reply.send({data:{durable:true,tableSessionId,snapshot:await options.service.latestForTable(context,tableSessionId)}})
+  }))
+  for(const native of [false,true])
   app.post<{ Params: { recommendationPublicId: string } }>(
-    '/staff/customer-experience/recommendations/:recommendationPublicId/modifications',
+    `/staff/${native?'native-customer-experience':'customer-experience'}/recommendations/:recommendationPublicId/modifications`,
     async (request, reply) => handle(reply, async () => {
       const context = await options.resolveStaffContext(request)
       const body = object(request.body)
+      if(native && !/^native-business-[a-f0-9-]{36}$/.test(idempotencyKey(request)))throw new RecommendationStaffModificationApiError('原请求编号无效')
       const result = await options.service.modify(context, {
+        ...(native?{nativeReceipt:true}:{}),
         recommendationPublicId: publicId(request.params.recommendationPublicId),
         sourceProductId: uuid(body.sourceProductId,'原推荐商品'),
         targetProductId: uuid(body.targetProductId,'调整后商品'),
@@ -56,6 +65,7 @@ export const recommendationStaffModificationApiPlugin: FastifyPluginAsync<
 
 async function handle(reply: FastifyReply, execute: () => Promise<unknown>) {
   try { return await execute() } catch (error) {
+    if(error instanceof NativeCommandNotCommittedError)return reply.code(409).send({error:{code:'NATIVE_BUSINESS_NOT_COMMITTED',message:error.original instanceof RecommendationStaffModificationError ? error.original.message : '推荐调整尚未提交，请刷新后核对',commitDisposition:'not_committed'}})
     if (isStaffAuthenticationRequiredError(error)) return reply.code(401).send({
       error: STAFF_AUTHENTICATION_REQUIRED_ERROR,
     })

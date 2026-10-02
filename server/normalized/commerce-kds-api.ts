@@ -1,3 +1,4 @@
+import {nativePhysicalExecutor,isNativePhysicalKey,NativePhysicalNotCommittedError} from './native-physical-command.js'
 import {QuantityRemakeCommandService} from './quantity-remake-command-service.js'
 import {pickupWorkflowApiPlugin} from './pickup-workflow-api.js'
 import {orderReceivableSql} from './order-collection-sql.js'
@@ -625,8 +626,9 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
     return reply.send({ data: view })
   }))
 
+  for (const kdsPath of ['kds', 'native-kds']) {
   app.post<{ Params: { taskId: string } }>(
-    '/commerce/kds/:taskId/actions',
+    `/commerce/${kdsPath}/:taskId/actions`,
     async (request, reply) => handleCommerceRoute(reply, async () => {
       const context = await resolveContext(options, request)
       const body = readObject(request.body, '请求正文')
@@ -657,6 +659,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
       const quantity=body.quantity===undefined?undefined:Number(body.quantity)
       if(quantity!==undefined&&(!Number.isSafeInteger(quantity)||quantity<1||quantity>999))throw new CommerceKdsRequestError('KDS_QUANTITY_INVALID','请选择1至999的实际份数',400)
       const idempotencyKey = readIdempotencyKey(request, body)
+      if(kdsPath==='native-kds'&&!isNativePhysicalKey(idempotencyKey))throw new CommerceKdsRequestError('NATIVE_PHYSICAL_KEY_INVALID','请保留原生原操作编号',400)
       const execution = await executeKdsAction(
         options,
         context,
@@ -672,13 +675,14 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
   )
 
   app.post<{ Params: { taskId: string } }>(
-    '/commerce/kds/:taskId/manager-cancel',
+    `/commerce/${kdsPath}/:taskId/manager-cancel`,
     async (request, reply) => handleCommerceRoute(reply, async () => {
       const context = await resolveContext(options, request)
       const body = readObject(request.body, '请求正文')
       assertActorBinding(body, context.employeeId)
       const taskId = readUuid(request.params.taskId, 'taskId')
       const idempotencyKey = readIdempotencyKey(request, body)
+      if(kdsPath==='native-kds'&&!isNativePhysicalKey(idempotencyKey))throw new CommerceKdsRequestError('NATIVE_PHYSICAL_KEY_INVALID','请保留原生原操作编号',400)
       const reason = readExceptionReason(body)
       const execution = await executeManagerCancellation(
         options,
@@ -697,7 +701,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
   // manager; the API records the decision and creates a new KDS task rather
   // than reopening and rewriting the failed historical task.
   app.post<{ Params: { taskId: string } }>(
-    '/commerce/kds/:taskId/remake',
+    `/commerce/${kdsPath}/:taskId/remake`,
     async (request, reply) => handleCommerceRoute(reply, async () => {
       const context = await resolveContext(options, request)
       const body = readObject(request.body, '请求正文')
@@ -705,6 +709,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
       const taskId = readUuid(request.params.taskId, 'taskId')
       const reason = readExceptionReason(body)
       const idempotencyKey = readIdempotencyKey(request, body)
+      if(kdsPath==='native-kds'&&!isNativePhysicalKey(idempotencyKey))throw new CommerceKdsRequestError('NATIVE_PHYSICAL_KEY_INVALID','请保留原生原操作编号',400)
       if(body.quantity!==undefined){
         if(typeof body.quantity!=='number'||!Number.isSafeInteger(body.quantity)||body.quantity<1||body.quantity>999)throw new TypeError('请选择1至999的实际重做份数')
         if(typeof body.originalGoodsLost!=='boolean')throw new TypeError('请确认原实物是否已无法交付')
@@ -722,6 +727,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
       return reply.send(kdsResponse(execution))
     }),
   )
+  }
 }
 
 async function executeKdsAction(
@@ -734,7 +740,12 @@ async function executeKdsAction(
   reason: KdsExceptionReason | null,
   quantity?:number,
 ): Promise<CommandExecution<KdsActionResult>> {
-  return options.commandExecutor.execute({
+  const commands = isNativePhysicalKey(idempotencyKey) ? nativePhysicalExecutor(options.commandExecutor, context, async transaction => {
+    const target = await lockKdsCommandTarget(transaction, taskId)
+    await new NormalizedKdsAuthorization().assertCanActOnTask({transaction, ...context,
+      action: action === 'pickupAndDeliver' || action === 'deliver' ? 'deliver' : action, stationCode: target.task.stationCode, tableId: target.tableId})
+  }) : options.commandExecutor
+  return commands.execute({
     scope: context.scope,
     operationScope: 'commerce.kds.action',
     idempotencyKey,
@@ -912,7 +923,12 @@ async function executeManagerCancellation(
   requestId: string,
   reason: KdsExceptionReason,
 ): Promise<CommandExecution<KdsActionResult>> {
-  return options.commandExecutor.execute({
+  const commands = isNativePhysicalKey(idempotencyKey) ? nativePhysicalExecutor(options.commandExecutor, context, async transaction => {
+    const target = await lockKdsCommandTarget(transaction, taskId)
+    await new NormalizedKdsAuthorization().assertCanActOnTask({transaction, ...context,
+      action: 'manager_cancel', stationCode: target.task.stationCode, tableId: target.tableId})
+  }) : options.commandExecutor
+  return commands.execute({
     scope: context.scope,
     operationScope: 'commerce.kds.manager_cancel',
     idempotencyKey,
@@ -939,7 +955,7 @@ async function executeManagerCancellation(
       `SELECT set_config('app.kds_manager_cancel_task_id',$1,true)`,
       [taskId],
     )
-    const task = await options.createKdsRepository(transaction).cancel({
+    const task = target.task.status==='failed' ? await terminalizeFailedTask(transaction,target,context.employeeId,idempotencyKey,reason) : await options.createKdsRepository(transaction).cancel({
       taskId,
       actorEmployeeId: context.employeeId,
       eventIdempotencyKey: `${idempotencyKey}:manager-cancel`,
@@ -1024,7 +1040,12 @@ async function executeKdsRemake(
   requestId: string,
   reason: KdsExceptionReason,
 ): Promise<CommandExecution<KdsActionResult>> {
-  return options.commandExecutor.execute({
+  const commands = isNativePhysicalKey(idempotencyKey) ? nativePhysicalExecutor(options.commandExecutor, context, async transaction => {
+    const target = await lockKdsCommandTarget(transaction, taskId)
+    await new NormalizedKdsAuthorization().assertCanActOnTask({transaction, ...context,
+      action: 'manager_remake', stationCode: target.task.stationCode, tableId: target.tableId})
+  }) : options.commandExecutor
+  return commands.execute({
     scope: context.scope,
     operationScope: 'commerce.kds.remake',
     idempotencyKey,
@@ -1175,6 +1196,19 @@ async function executeKdsRemake(
       }],
     }
   })
+}
+
+/** A failed task is terminal in the generic repository. Only this already-authorized
+ * manager path may end it, retaining its failure event and unresolved money/stock facts. */
+async function terminalizeFailedTask(transaction:ScopedTransaction,target:KdsCommandTarget,employeeId:string,key:string,reason:KdsExceptionReason){
+  const updated=await transaction.query<{cancelled_at:string}>(`UPDATE mbox.kds_tasks SET status='cancelled',cancelled_at=clock_timestamp(),updated_at=clock_timestamp()
+    WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND status='failed' RETURNING cancelled_at::text`,[transaction.scope.tenantId,transaction.scope.storeId,target.task.id])
+  if(updated.rowCount!==1)throw new ItemQuantityConflict('QUANTITY_UNAVAILABLE','原失败任务已经变化，请刷新核对')
+  await transaction.query(`INSERT INTO mbox.kds_task_events(tenant_id,store_id,kds_task_id,event_type,from_status,to_status,actor_employee_id,metadata,idempotency_key)
+    VALUES($1,$2,$3,'task.manager_cancelled','failed','cancelled',$4,$5::jsonb,$6)`,[transaction.scope.tenantId,transaction.scope.storeId,target.task.id,employeeId,JSON.stringify({reasonCode:reason.code,reasonNote:reason.note,financialTruth:'unchanged_pending_review',inventoryTruth:'unchanged_pending_review'}),key+':manager-cancel'])
+  await transaction.query(`UPDATE mbox.kds_exceptions SET status='remediating',required_actions='["financial_review","inventory_review","guest_communication"]'::jsonb,
+    resolution_note=$4 WHERE tenant_id=$1 AND store_id=$2 AND kds_task_id=$3 AND status IN ('open','remediating')`,[transaction.scope.tenantId,transaction.scope.storeId,target.task.id,'主管确认不再重做：'+reason.note+'；原财务及库存仍待复核'])
+  return {...target.task,status:'cancelled' as const,cancelledAt:updated.rows[0]!.cancelled_at}
 }
 
 async function insertKdsException(
@@ -1835,6 +1869,7 @@ export async function handleCommerceRoute(
   try {
     return await operation()
   } catch (error) {
+    if(error instanceof NativePhysicalNotCommittedError)return reply.code(409).send({error:{code:'NATIVE_PHYSICAL_NOT_COMMITTED',message:error.message,commitDisposition:'not_committed'}})
     const mapped = mapError(error)
     if (mapped.statusCode === 403 && reply.request.routeOptions.url?.includes('/kds/')) {
       const referenceId = safeReferenceId(reply.request.id)

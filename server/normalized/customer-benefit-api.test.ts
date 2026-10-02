@@ -1,3 +1,4 @@
+import { NativeCommandNotCommittedError } from './command-executor.js'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Benefit, BenefitReservation } from './benefit-repository.js'
@@ -89,6 +90,45 @@ const apps: FastifyInstance[] = []
 afterEach(async () => Promise.all(apps.splice(0).map((app) => app.close())))
 
 describe('customerBenefitApiPlugin privacy and permission boundaries', () => {
+  it('advertises native durable fulfillment without changing the legacy queue envelope', async () => {
+    const {app}=fixture()
+    const native=await app.inject({method:'GET',url:'/api/staff/native-benefit-fulfillment'})
+    expect(native.statusCode).toBe(200)
+    expect(native.headers['cache-control']).toContain('no-store')
+    expect(native.json().data).toMatchObject({durable:true,gifts:[],snacks:[],snacksEnabled:false})
+    const web=await app.inject({method:'GET',url:'/api/staff/annual-benefit-reservations'})
+    expect(web.json()).toEqual({data:[]})
+  })
+  it('passes original native bindings to retained command validation without filtering away a completed receipt', async () => {
+    const cancelReservation=vi.fn(async()=>({value:{...reservation,status:'cancelled',cancelReason:'客人取消'},replayed:true}))
+    const {app}=fixture({benefits:{cancelReservation} as unknown as CustomerBenefitApiOptions['benefits']})
+    const response=await app.inject({method:'POST',url:`/api/staff/native-benefit-reservations/${reservationId}/cancel`,
+      headers:{'idempotency-key':'native-business-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'},payload:{kind:'annual',benefitId,customerId,tableSessionId,quantity:1,reason:'客人取消'}})
+    expect(response.statusCode).toBe(200)
+    expect(response.json().meta.replayed).toBe(true)
+    expect(cancelReservation).toHaveBeenCalledWith(expect.objectContaining({benefitReservationId:reservationId,customerId,tableSessionId,
+      nativeReceipt:{validate:expect.any(Function)},actor:{type:'employee',employeeId},employeePermission:'loyalty.redemption.fulfill'}))
+    // New execution still validates the exact queue record, unlike receipt replay.
+    const command=cancelReservation.mock.calls[0] as unknown as [{nativeReceipt:{validate(tx:ScopedTransaction):Promise<void>}}]
+    await expect(command[0].nativeReceipt.validate({scope:{tenantId,storeId},query:vi.fn(async()=>({rows:[],rowCount:0}))} as unknown as ScopedTransaction)).rejects.toThrow('原礼遇暂留已变化')
+  })
+  it('rejects wrong native source, quantity, substitution and original key before submitting', async () => {
+    const {app,cancelReservation}=fixture()
+    for(const patch of [{quantity:0},{kind:'snack'},{selectedProductId:benefitId},{unknown:true}]) {
+      const response=await app.inject({method:'POST',url:`/api/staff/native-benefit-reservations/${reservationId}/cancel`,
+        headers:{'idempotency-key':'native-business-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'},
+        payload:{kind:'annual',benefitId,customerId,tableSessionId,quantity:1,reason:'客人取消',...patch}})
+      expect(response.statusCode).toBe(400)
+    }
+    expect(cancelReservation).not.toHaveBeenCalled()
+  })
+  it('labels a rolled back native benefit command as not committed', async () => {
+    const {app}=fixture({benefits:{cancelReservation:vi.fn(async()=>{throw new NativeCommandNotCommittedError(new Error('stock changed'))})} as unknown as CustomerBenefitApiOptions['benefits']})
+    const response=await app.inject({method:'POST',url:`/api/staff/native-benefit-reservations/${reservationId}/cancel`,
+      headers:{'idempotency-key':'native-business-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'},payload:{kind:'annual',benefitId,customerId,tableSessionId,quantity:1,reason:'客人取消'}})
+    expect(response.statusCode).toBe(409)
+    expect(response.json().error).toMatchObject({code:'NATIVE_BUSINESS_NOT_COMMITTED',commitDisposition:'not_committed'})
+  })
   it('lists future and historical wallet states without leaking internal benefit fields', async () => {
     const { app } = fixture()
     const response = await app.inject({ method: 'GET', url: '/api/public/mini/customer/benefit-wallet' })

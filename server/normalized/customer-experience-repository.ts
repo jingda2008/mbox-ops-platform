@@ -5054,7 +5054,7 @@ export function recommendationInputConfiguration(displayConfiguration: JsonObjec
   }
 }
 
-function normalizeRecommendationDisplayConfiguration(displayConfiguration: JsonObject): JsonObject {
+export function normalizeRecommendationDisplayConfiguration(displayConfiguration: JsonObject): JsonObject {
   const configuration = recommendationInputConfiguration(displayConfiguration)
   return {
     ...displayConfiguration,

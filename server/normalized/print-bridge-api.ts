@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
-import { appendAuditEvent, type JsonObject } from './command-executor.js'
+import { appendAuditEvent, NativeCommandNotCommittedError, IdempotencyConflictError, IdempotencyInProgressError, type NormalizedCommandExecutor, type JsonObject } from './command-executor.js'
+import {createHash} from 'node:crypto'
 import type { NormalizedOperationsRequestContext } from './normalized-operations-api.js'
 import { NormalizedAuthenticationRequiredError } from './normalized-request-context.js'
 import {
@@ -11,6 +12,7 @@ import { StaffSessionNotFoundError } from './staff-session-repository.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction, StoreScope } from './transaction-runner.js'
 
 export interface PrintBridgeApiOptions {
+  commands?: Pick<NormalizedCommandExecutor, 'execute'>
   scope: Readonly<StoreScope>
   transactions: Pick<ScopedPostgresTransactionRunner, 'run'>
   hashSecret: string
@@ -30,6 +32,31 @@ export const printBridgeApiPlugin: FastifyPluginAsync<PrintBridgeApiOptions> = a
   const repository = (transaction: ScopedTransaction) => (
     options.createRepository?.(transaction) ?? new PrintBridgeRepository(transaction, options.hashSecret)
   )
+
+  app.get('/hardware/native-print-bridges/capabilities',async(request,reply)=>handle(reply,async()=>{
+    requirePrinterManager(await options.resolveStaffContext(request))
+    return reply.send({data:{durableRevocation:!!options.commands}})
+  }))
+  app.post<{Params:{bridgeId:string}}>('/hardware/native-print-bridges/:bridgeId/revoke',async(request,reply)=>handle(reply,async()=>{
+    const context=await options.resolveStaffContext(request);requirePrinterManager(context)
+    if(!options.commands)return reply.code(503).send({error:{code:'NATIVE_BRIDGE_UNAVAILABLE',message:'后台未启用安全撤销'}})
+    const body=readObject(request.body),reason=readString(body.reason,'reason',500,3),id=readUuid(request.params.bridgeId,'bridgeId')
+    if(body.kind!=='bridge-revoke'||body.id!==id)throw new PrintBridgeRequestError('桥接器原请求不匹配')
+    const key=request.headers['idempotency-key']
+    if(typeof key!=='string'||!/^native-business-[a-f0-9-]{36}$/.test(key))throw new PrintBridgeRequestError('原请求编号无效')
+    const execution=await options.commands.execute({scope:context.scope,operationScope:'native.hardware.bridge-revoke',retainReceipt:true,idempotencyKey:key,
+      requestFingerprint:createHash('sha256').update(JSON.stringify({id,reason,employeeId:context.employeeId})).digest('hex'),
+      resultCodec:{encode:(value:JsonObject)=>value,decode:value=>readObject(value) as JsonObject}},async tx=>{
+      const changed=await repository(tx).revoke(id)
+      const result={kind:'bridge-revoke',employeeId:context.employeeId,reason,row:changed.bridge}
+      return {result,auditEvents:[{actor:{type:'employee' as const,employeeId:context.employeeId},action:'print.bridge.revoked',
+        objectType:'print_bridge',objectId:id,businessDate:context.businessDate,reason,beforeData:changed.before,afterData:changed.bridge}],outboxMessages:[]}
+    },async()=>{
+      const current=await options.resolveStaffContext(request);requirePrinterManager(current)
+      if(current.employeeId!==context.employeeId||current.scope.tenantId!==context.scope.tenantId||current.scope.storeId!==context.scope.storeId)throw new PrintBridgeAccessDeniedError()
+    })
+    return reply.send({data:execution.value,meta:{replayed:execution.replayed}})
+  }))
 
   app.get('/hardware/print-bridges', async (request, reply) => handle(reply, async () => {
     const context = await options.resolveStaffContext(request)
@@ -216,6 +243,9 @@ async function handle(reply: FastifyReply, operation: () => Promise<FastifyReply
   try {
     return await operation()
   } catch (error) {
+    if(error instanceof NativeCommandNotCommittedError)return reply.code(409).send({error:{code:'NATIVE_BUSINESS_NOT_COMMITTED',message:'本次撤销未提交，请刷新桥接器后核对',commitDisposition:'not_committed'}})
+    if(error instanceof IdempotencyConflictError||error instanceof IdempotencyInProgressError)return reply.code(409).send({error:{code:'PRINT_BRIDGE_CONFLICT',message:'请保留原请求并核对'}})
+
     if (error instanceof NormalizedAuthenticationRequiredError || error instanceof StaffSessionNotFoundError) {
       return reply.code(401).send({ error: { code: 'AUTH_REQUIRED', message: '登录信息无效或已过期，请重新登录' } })
     }

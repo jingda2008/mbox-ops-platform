@@ -1,3 +1,6 @@
+import { registerNativeBenefitWallet } from './native-benefit-wallet-api.js'
+import { z } from 'zod'
+import { NativeCommandNotCommittedError, IdempotencyConflictError } from './command-executor.js'
 import { createHash } from 'node:crypto'
 import { loadMemberParticipation, readMemberScanCode } from './member-participation-query.js'
 import { loadGuestCustomerOrderHistory } from './guest-table-orders-query.js'
@@ -130,6 +133,7 @@ export const customerBenefitApiPlugin: FastifyPluginAsync<CustomerBenefitApiOpti
   app,
   options,
 ) => {
+  registerNativeBenefitWallet(app, options, handleRoute)
   app.post('/staff/member-participation/lookup', { bodyLimit: 4096 }, async (request, reply) => {
     privateNoStore(reply)
     return handleRoute(reply, async () => {
@@ -305,6 +309,74 @@ export const customerBenefitApiPlugin: FastifyPluginAsync<CustomerBenefitApiOpti
       })
       return reply.send({ data: toPublicReservation(result.value), meta: { replayed: result.replayed } })
     }))
+
+  // Native aliases preserve the web contract and keep the original successful receipt after queue changes.
+  app.get('/staff/native-benefit-fulfillment', async (request, reply) => handleRoute(reply, async () => {
+    privateNoStore(reply)
+    const context = await options.resolveStaffContext(request)
+    const tableSessionId = optionalUuid(readObject(request.query).tableSessionId, '桌次')
+    const gifts = await options.transactions.run(context.scope, async transaction => {
+      await staffAccess(options, transaction).assertPermission(context.employeeId, 'loyalty.redemption.fulfill')
+      return listStaffAnnualBenefitReservations(transaction, context.employeeId, tableSessionId)
+    }, { readOnly: true })
+    const snacks = options.dailySnackClaims ? await options.dailySnackClaims.listForStaff(context, tableSessionId, true) : []
+    return reply.send({data: {durable: true, businessDate: context.businessDate, gifts, snacks, snacksEnabled: !!options.dailySnackClaims}})
+  }))
+  for (const action of ['redeem', 'cancel'] as const) {
+    app.post(`/staff/native-benefit-reservations/:reservationId/${action}`, {bodyLimit: 4096}, async (request, reply) => handleRoute(reply, async () => {
+      const context = await options.resolveStaffContext(request)
+      await assertPermission(options, context, 'loyalty.redemption.fulfill')
+      const reservationId = z.string().uuid().parse(readRouteId(request.params, 'reservationId'))
+      const input = z.object({
+        kind: z.enum(['annual', 'snack']), benefitId: z.string().uuid(), customerId: z.string().uuid(),
+        tableSessionId: z.string().uuid(), quantity: z.number().int().min(1).max(100),
+        claimCode: z.string().regex(/^DSN-[A-Z0-9]{10,24}$/).optional(),
+        selectedProductId: z.string().uuid().optional(), substitutionReason: z.string().trim().min(2).max(240).optional(),
+        reason: z.string().trim().min(2).max(256).optional(),
+      }).strict().parse(request.body)
+      if ((input.kind === 'snack') !== !!input.claimCode || (action === 'cancel') !== !!input.reason
+        || (action === 'cancel' && (input.selectedProductId || input.substitutionReason))
+        || (input.kind === 'snack' && (input.selectedProductId || input.substitutionReason))) {
+        throw new CustomerBenefitRequestError('请重新核对原权益、核销商品和取消原因')
+      }
+      const key = z.string().regex(/^native-business-[a-f0-9-]{36}$/).parse(readIdempotencyKey(request))
+      const nativeReceipt = {validate: async (transaction: ScopedTransaction) => {
+        if (input.kind === 'annual') {
+          const rows = await listStaffAnnualBenefitReservations(transaction, context.employeeId, input.tableSessionId, reservationId)
+          const row = rows.find(row => row.reservationId === reservationId && row.benefitId === input.benefitId
+            && row.customerId === input.customerId && row.quantity === input.quantity)
+          if (!row) throw new CustomerBenefitRequestError('原礼遇暂留已变化，请刷新后核对')
+          if (action === 'redeem' && (!input.selectedProductId || !row.allowedProducts.some(p => p.productId === input.selectedProductId)
+            || (input.selectedProductId !== row.originalProductId && !input.substitutionReason))) {
+            throw new CustomerBenefitRequestError('请选择允许的兑付商品；替换原商品需要原因')
+          }
+        } else {
+          if (!options.dailySnackClaims) throw new CustomerBenefitRequestError('每日点心服务尚未启用')
+          const claim = await transaction.query(`SELECT id FROM mbox.annual_daily_snack_claims
+            WHERE tenant_id=$1 AND store_id=$2 AND claim_code=$3 AND benefit_id=$4 AND benefit_reservation_id=$5
+              AND customer_id=$6 AND table_session_id=$7 AND quantity=$8 AND status='reserved'
+              AND ($9::boolean OR expires_at>clock_timestamp())`,
+            [context.scope.tenantId, context.scope.storeId, input.claimCode, input.benefitId, reservationId,
+              input.customerId, input.tableSessionId, input.quantity, action === 'cancel'])
+          if (claim.rowCount !== 1) throw new CustomerBenefitRequestError('原点心暂留已变化，请刷新后核对')
+        }
+      }}
+      const common = {scope: context.scope, actor: {type: 'employee' as const, employeeId: context.employeeId},
+        businessDate: context.businessDate, customerId: input.customerId, tableSessionId: input.tableSessionId,
+        benefitReservationId: reservationId, nativeReceipt}
+      const requestFingerprint = fingerprint({employeeId: context.employeeId, reservationId, action, ...input})
+      const result = action === 'redeem' ? await options.benefits.redeem({...common,
+        benefitId: input.benefitId, redeemedByEmployeeId: context.employeeId,
+        selectedProductId: input.selectedProductId, substitutionReason: input.substitutionReason,
+        authorizationSource: input.kind === 'snack'
+          ? {kind: 'annual_daily_snack', claimCode: input.claimCode!, employeeId: context.employeeId}
+          : {kind: 'employee', employeeId: context.employeeId},
+        redemptionIdempotencyKey: key, redemptionFingerprint: requestFingerprint,
+      }) : await options.benefits.cancelReservation({...common, reason: input.reason!,
+        employeePermission: 'loyalty.redemption.fulfill', cancellationIdempotencyKey: key, cancellationFingerprint: requestFingerprint})
+      return reply.send({data: result.value, meta: {replayed: result.replayed}})
+    }))
+  }
 
   app.get('/staff/annual-benefit-reservations', async (request, reply) => handleRoute(reply, async () => {
     const context = await options.resolveStaffContext(request)
@@ -791,9 +863,10 @@ async function listStaffAnnualBenefitReservations(
   }))
 }
 
-async function listComplimentaryFulfillmentExceptions(
+export async function listComplimentaryFulfillmentExceptions(
   transaction:ScopedTransaction,
   employeeId:string,
+  pagination?:{offset:number;limit:number},
 ) {
   const result=await transaction.query<ComplimentaryFulfillmentExceptionRow>(`
     SELECT intent.id,intent.order_id,intent.benefit_id,order_row.table_session_id,
@@ -841,8 +914,8 @@ async function listComplimentaryFulfillmentExceptions(
           )
       )
     ORDER BY (intent.status='failed') DESC,intent.last_error_at,intent.id
-    LIMIT 200
-  `,[transaction.scope.tenantId,transaction.scope.storeId,employeeId])
+    LIMIT $4 OFFSET $5
+  `,[transaction.scope.tenantId,transaction.scope.storeId,employeeId,pagination?.limit??200,pagination?.offset??0])
   return result.rows.map((row) => ({
     id:row.id,orderId:row.order_id,benefitId:row.benefit_id,tableSessionId:row.table_session_id,
     tableCode:row.table_code,orderPublicId:row.order_public_id,status:row.status,
@@ -948,6 +1021,9 @@ function readProfile(value: unknown) {
 
 async function handleRoute(reply: FastifyReply, operation: () => Promise<FastifyReply>): Promise<FastifyReply> {
   try { return await operation() } catch (error) {
+    if (error instanceof NativeCommandNotCommittedError) return reply.code(409).send({error: {
+      code: 'NATIVE_BUSINESS_NOT_COMMITTED', message: error.original instanceof CustomerBenefitRequestError
+        ? error.original.message : error.original instanceof BenefitUnavailableError || error.original instanceof BenefitAuthorizationError ? benefitReasonMessage(error.original.message) : '本次权益操作未提交，请刷新原暂留及库存后核对', commitDisposition: 'not_committed'}})
     const mapped = mapError(error)
     return reply.code(mapped.statusCode).send(mapped.body)
   }
@@ -978,7 +1054,7 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   if (error instanceof BenefitUnavailableError) {
     return apiError(409, 'BENEFIT_UNAVAILABLE', benefitReasonMessage(error.message))
   }
-  if (error instanceof BenefitIdempotencyConflictError || error instanceof CustomerIdentityConflictError
+  if (error instanceof IdempotencyConflictError || error instanceof BenefitIdempotencyConflictError || error instanceof CustomerIdentityConflictError
     || error instanceof CustomerMergeConflictError) {
     return apiError(409, 'CUSTOMER_BENEFIT_CONFLICT', error.message)
   }
@@ -994,7 +1070,7 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
     }
     return apiError(409,error.code,error.message)
   }
-  if (error instanceof CustomerBenefitRequestError || error instanceof TypeError || error instanceof CouponCalendarError) {
+  if (error instanceof CustomerBenefitRequestError || error instanceof z.ZodError || error instanceof TypeError || error instanceof CouponCalendarError) {
     return apiError(400, 'CUSTOMER_BENEFIT_REQUEST_INVALID', error.message)
   }
   return apiError(500, 'CUSTOMER_BENEFIT_INTERNAL_ERROR', '客户权益服务暂时不可用，请稍后再试')

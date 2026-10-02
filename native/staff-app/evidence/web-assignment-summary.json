@@ -1,0 +1,18 @@
+{
+  "updatedAt": "2026-09-27 19:13 CST",
+  "productionWrites": false,
+  "deployed": false,
+  "compatibilityPassed": 326,
+  "compatibilityDatabaseSkipped": 13,
+  "isolatedDatabasePassed": 40,
+  "browserPassed": 2,
+  "browser": "Chromium via Playwright; local isolated database",
+  "sourceSHA256": {
+    "src/normalized-ui/staff-actions/assignment-recovery.ts": "b8137ac79906a5afbdb36a1097a0e1cded5c29752f2701471c2cf726a55033b2",
+    "src/normalized-ui/staff-actions/staff-actions-api.ts": "3f04fd58b190247413cc3cae065b09de736decbd5476c5e08a946edd8e85ec35",
+    "src/normalized-ui/staff-actions/ResponsibilityAssignmentPanel.tsx": "2292ca626f775296d31a33b1b5297fe3ac2f9f319545ede1cf5d0b97042afd65",
+    "src/normalized-ui/staff-actions/staff-actions-panel.css": "2f4cdba9ab90a15b2de075c5c53ac26a3a15b212d643276d63cd71acdb4bb8fa",
+    "server/normalized/table-management-api.ts": "b4e47979090e9655725ce1adaa6326514d31b687100785c0d875b7f15ddbc88f",
+    "tests/normalized-e2e/normalized-assignment-recovery.spec.ts": "463a222ff7535da6b13ee3b7705152948250eda51d64d8fef8a9ce2fe03103f7"
+  }
+}

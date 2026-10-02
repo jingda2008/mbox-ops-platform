@@ -1,3 +1,6 @@
+import {nativeProductPhaseApiPlugin} from './native-product-phase-api.js';
+import {CustomerExperienceService} from './customer-experience-service.js';
+import {catalogApiPlugin} from './catalog-api.js';
 import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance } from "fastify";
 import { Pool } from "pg";
@@ -66,12 +69,159 @@ integration("normalized inventory API PostgreSQL integration", () => {
         return `${kind}-${randomUUID()}`;
       },
     });
+    await app.register(catalogApiPlugin, {
+      prefix:'/api',transactions:runner,commandExecutor:new NormalizedCommandExecutor(runner),
+      resolveContext(request){const employee=request.headers['x-employee-id'];return {scope:{tenantId,storeId},employeeId:typeof employee==='string'?employee:managerId,businessDate:'2026-08-11',capabilities:[]}},
+      resolveGuestContext(){return {scope:{tenantId,storeId}}},
+    });
     await app.ready();
   });
 
   afterAll(async () => {
     await app?.close();
     await pool?.end();
+  });
+
+  it('native product edits protect versions, old prices, permissions and durable replay', async()=>{
+    const id=randomUUID();
+    await pool.query("INSERT INTO mbox.products(id,tenant_id,store_id,code,name,category_code,fulfillment_station,inventory_control_mode) VALUES ($1,$2,$3,'NATIVE-PRICE','原生商品测试','snack','none','not_managed')",[id,tenantId,storeId]);
+    const get=()=>app.inject({method:'GET',url:'/api/native/catalog/products?status=all&search=NATIVE-PRICE',headers:headers(managerId,'native-product-list-0001')});
+    const first=await get();expect(first.statusCode).toBe(200);
+    const original=first.json().data.products[0];expect(original.nativeVersion).toMatch(/^[a-f0-9]{64}$/);
+    const request={method:'POST' as const,url:`/api/native/catalog/products/${id}`,headers:headers(managerId,'native-product-update-0001'),payload:{expectedVersion:original.nativeVersion,patch:{guestVisible:false,menuSortOrder:99,standardPrice:{amountMinor:1234,currency:'CNY',reason:'原生报价版本测试'}}}};
+    const updated=await app.inject(request);expect(updated.statusCode,updated.body).toBe(200);expect(updated.json().data).toMatchObject({id,guestVisible:false,menuSortOrder:99,standardPrice:{amountMinor:'1234'}});
+    const stale=await app.inject({...request,headers:headers(managerId,'native-product-update-stale'),payload:{...request.payload,patch:{status:'sold_out'}}});expect(stale.statusCode).toBe(409);expect(stale.json().error.commitDisposition).toBe('not_committed');
+    const next=(await get()).json().data.products[0];expect(next.nativeVersion).not.toBe(original.nativeVersion);
+    const changed=await app.inject({...request,headers:headers(managerId,'native-product-price-next'),payload:{expectedVersion:next.nativeVersion,patch:{standardPrice:{amountMinor:1500,currency:'CNY',reason:'第二次改价'}}}});expect(changed.statusCode,changed.body).toBe(200);
+    await pool.query("DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key='native-product-update-0001'",[tenantId,storeId]);
+    const replay=await app.inject(request);expect(replay.statusCode).toBe(200);expect(replay.json()).toMatchObject({data:{standardPrice:{amountMinor:'1234'}},meta:{replayed:true}});
+    expect((await get()).json().data.products[0].standardPrice.amountMinor).toBe('1500');
+    const prices=await pool.query('SELECT amount_minor::text AS amount,valid_until FROM mbox.product_prices WHERE product_id=$1 ORDER BY valid_from',[id]);
+    expect(prices.rows.map(r=>r.amount)).toEqual(['1234','1500']);expect(prices.rows[0].valid_until).not.toBeNull();
+    await pool.query("DELETE FROM mbox.role_permission_assignments a USING mbox.staff_permission_definitions p WHERE a.permission_id=p.id AND a.role_id=$1 AND p.code IN ('catalog.price.manage','inventory.cost.view')",[managerRoleId]);
+    try{expect((await app.inject(request)).statusCode).toBe(403);expect((await get()).json().data.canPrice).toBe(false)}finally{await grant(pool,managerRoleId,['catalog.price.manage','inventory.cost.view'])}
+    const web=await app.inject({method:'GET',url:'/api/catalog/products?status=all&search=NATIVE-PRICE',headers:headers(managerId,'web-native-compat')});expect(web.statusCode).toBe(200);expect(web.json().data[0].nativeVersion).toBeUndefined();
+  });
+
+  it('native menu configuration creates categories and bundles with original versions and durable reauthorization',async()=>{
+    const runtime=new Pool({connectionString:process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL,max:4});
+    const runner=new ScopedPostgresTransactionRunner(runtime as unknown as PostgresPool);const native=Fastify();
+    await native.register(catalogApiPlugin,{prefix:'/api',transactions:runner,commandExecutor:new NormalizedCommandExecutor(runner),resolveContext:()=>({scope:{tenantId,storeId},employeeId:managerId,businessDate:'2026-10-01',capabilities:[]})});
+    await native.register(inventoryApiPlugin,{prefix:'/api',transactions:runner,commands:new NormalizedCommandExecutor(runner),query:new InventoryQueryService(runner),resolveContext:()=>({scope:{tenantId,storeId},employeeId:managerId,businessDate:'2026-10-01',capabilities:[]})});
+    await native.register(nativeProductPhaseApiPlugin,{prefix:'/api',transactions:runner,commands:new NormalizedCommandExecutor(runner),resolveContext:()=>({scope:{tenantId,storeId},employeeId:managerId,businessDate:'2026-10-01'})});
+    const post=(path:string,payload:object,key=`native-product-${randomUUID()}`)=>native.inject({method:'POST',url:'/api/native/catalog/'+path,headers:{'idempotency-key':key},payload});
+    const read=async(search='')=>{const r=await native.inject({url:'/api/native/catalog/products?status=all&limit=100&search='+encodeURIComponent(search)});expect(r.statusCode,r.body).toBe(200);return r.json().data};
+    try{
+      const top=await post('menu-categories',{code:'native_cfg_root',displayName:'原生分类',parentCode:null,guestVisible:true,sortOrder:100});expect(top.statusCode,top.body).toBe(201);
+      const child=await post('menu-categories',{code:'native_cfg_child',displayName:'原生单品',parentCode:'native_cfg_root',guestVisible:true,sortOrder:10});expect(child.statusCode,child.body).toBe(201);
+      const c=child.json().data;const categoryBody={expectedUpdatedAt:c.updatedAt,patch:{displayName:'原生分类已更新',parentCode:'native_cfg_root',guestVisible:true,sortOrder:20}};const categoryKey=`native-category-${randomUUID()}`;
+      expect((await post('menu-categories/native_cfg_child',categoryBody,categoryKey)).statusCode).toBe(200);
+      expect((await post('menu-categories/native_cfg_child',{...categoryBody,patch:{...categoryBody.patch,sortOrder:30}})).statusCode).toBe(409);
+      const product=await post('products',{code:'NATIVE-CONFIG-SINGLE',name:'配置单品',categoryCode:'native_cfg_child',productKind:'single',inventoryControlMode:'not_managed',fulfillmentStation:'kitchen',status:'inactive',standardPrice:{amountMinor:1600,currency:'CNY',reason:'建立商品售价'}});expect(product.statusCode,product.body).toBe(201);const single=product.json().data;
+      const body={code:'NATIVE-CONFIG-BUNDLE',name:'配置套餐',categoryCode:'native_cfg_child',productKind:'bundle',inventoryControlMode:'not_managed',fulfillmentStation:'none',status:'inactive',bundleComponents:[{productId:single.id,quantity:2,sortOrder:10,note:'固定两份'}],bundleChoiceGroups:[{code:'choice_one',name:'选一种',selectionCount:1,sortOrder:10,options:[{productId:single.id,quantity:1,sortOrder:10}]}]};
+      const createKey=`native-product-${randomUUID()}`;const bundle=await post('products',body,createKey);expect(bundle.statusCode,bundle.body).toBe(201);const bundleId=bundle.json().data.id;
+      const original=(await read('NATIVE-CONFIG-BUNDLE')).products[0];expect((await read()).configurationProtocol).toBe(1);
+      const patch={name:'配置套餐修订',categoryCode:'native_cfg_child',productKind:'bundle',fulfillmentStation:'none',inventoryControlMode:'not_managed',allowedChannels:['staff_assisted'],maxOrderQuantity:12,availableFrom:'18:00',availableUntil:'02:00',bundleComponents:[{productId:single.id,quantity:3,sortOrder:10,note:'固定三份'}],bundleChoiceGroups:body.bundleChoiceGroups};
+      const updateKey=`native-product-${randomUUID()}`;const update={expectedVersion:original.nativeVersion,patch};const saved=await post('products/'+bundleId,update,updateKey);expect(saved.statusCode,saved.body).toBe(200);expect(saved.json().data.bundleComponents[0].quantity).toBe(3);
+      expect((await post('products/'+bundleId,{...update,patch:{name:'过期改名'}})).statusCode).toBe(409);
+      await pool.query('DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=ANY($3::text[])',[tenantId,storeId,[categoryKey,createKey,updateKey]]);
+      for(const [path,payload,key] of [['menu-categories/native_cfg_child',categoryBody,categoryKey],['products',body,createKey],['products/'+bundleId,update,updateKey]] as const){const replay=await post(path,payload,key);expect(replay.statusCode,replay.body).toBe(200);expect(replay.json().meta.replayed).toBe(true)}
+      expect((await read('NATIVE-CONFIG-BUNDLE')).products).toHaveLength(1);
+      const material=await createItem('NATIVE-RECIPE-MATERIAL','配方测试物料',true,'native-recipe-material-key');
+      const recipeUrl=`/api/native/inventory/products/${single.id}/recipe`;
+      const readRecipe=async()=>{const r=await native.inject({url:recipeUrl});expect(r.statusCode,r.body).toBe(200);return r.json().data};
+      const initial=await readRecipe();expect(initial.recipe).toBeNull();expect(initial.items.some((r:any)=>r.id===material.id)).toBe(true);
+      const recipeKey=`native-recipe-${randomUUID()}`;const recipeInput={expectedVersion:initial.expectedVersion,yieldQuantity:2,instructionsSnapshot:{notes:'原物料制作说明'},components:[{inventoryItemId:material.id,quantity:'2.125',expectedWasteQuantity:'0.05'}]};
+      const recipeRequest={method:'POST' as const,url:recipeUrl,headers:{'idempotency-key':recipeKey},payload:recipeInput};
+      const savedRecipe=await native.inject(recipeRequest);expect(savedRecipe.statusCode,savedRecipe.body).toBe(200);expect(savedRecipe.json().data.version).toBe(1);
+      const nextRecipe=await readRecipe();expect(nextRecipe.recipe.components[0].quantity).toBe('2.125000');
+      expect((await native.inject({...recipeRequest,headers:{'idempotency-key':`native-recipe-${randomUUID()}`}})).statusCode).toBe(409);
+      const revised=await native.inject({...recipeRequest,headers:{'idempotency-key':`native-recipe-${randomUUID()}`},payload:{...recipeInput,expectedVersion:nextRecipe.expectedVersion,yieldQuantity:3}});expect(revised.statusCode,revised.body).toBe(200);
+      await pool.query('DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$3',[tenantId,storeId,recipeKey]);
+      const replayRecipe=await native.inject(recipeRequest);expect(replayRecipe.statusCode,replayRecipe.body).toBe(200);expect(replayRecipe.json()).toMatchObject({data:{id:savedRecipe.json().data.id,version:1},meta:{replayed:true}});expect((await readRecipe()).recipe.version).toBe(2);
+      const originalOperations=(await read('NATIVE-CONFIG-SINGLE')).products[0];
+      const operationPatch={recommendationEnabled:true,recommendationMinGuests:2,recommendationMaxGuests:6,recommendationPriority:80,recommendationSceneTags:['date'],recommendationIntentTags:['relaxed'],recommendationTasteTags:['refreshing'],recommendationDwellTags:['one_set'],recommendationSingleWaveEligible:true,recommendationExpectedPrepMinutes:15,recommendationHoldMinutes:20,recommendationUpgradeProductId:bundleId,kdsPriority:90,fulfillmentSlaSeconds:300,productSnapshot:{description:'原生规则测试',salesSpecificationType:'glass',tasteProfile:{acidity:0,sweetness:null}}};
+      const operationKey=`native-product-${randomUUID()}`,operationRequest={expectedVersion:originalOperations.nativeVersion,patch:operationPatch};
+      const updated=await post('products/'+originalOperations.id,operationRequest,operationKey);expect(updated.statusCode,updated.body).toBe(200);expect(updated.json().data).toMatchObject(operationPatch);expect((await post('products/'+originalOperations.id,operationRequest)).statusCode).toBe(409);
+      const current=(await read('NATIVE-CONFIG-SINGLE')).products[0];const invalid=await post('products/'+originalOperations.id,{expectedVersion:current.nativeVersion,patch:{recommendationMinGuests:8,recommendationMaxGuests:2}});expect(invalid.statusCode).toBe(400);
+      await pool.query('DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$3',[tenantId,storeId,operationKey]);const operationReplay=await post('products/'+originalOperations.id,operationRequest,operationKey);expect(operationReplay.statusCode,operationReplay.body).toBe(200);expect(operationReplay.json().meta.replayed).toBe(true);expect(operationReplay.json().data).toMatchObject(operationPatch);
+      await pool.query("INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name,category) VALUES($1,$2,'recommendation.phase.configure','阶段配置','operations') ON CONFLICT DO NOTHING",[tenantId,storeId]);await grant(pool,managerRoleId,['recommendation.phase.configure']);
+      const phaseUrl='/api/staff/native-product-phases/'+single.id;const readPhase=async()=>{const r=await native.inject(phaseUrl);expect(r.statusCode,r.body).toBe(200);return r.json().data};const initialPhase=await readPhase();
+      const phaseKey='native-business-'+randomUUID();const phaseRequest={method:'POST' as const,url:phaseUrl,headers:{'idempotency-key':phaseKey},payload:{expectedVersion:initialPhase.expectedVersion,phaseCodes:['band_live'],reason:'乐队阶段限定供应'}};
+      const phaseSaved=await native.inject(phaseRequest);expect(phaseSaved.statusCode,phaseSaved.body).toBe(200);expect(phaseSaved.json().data.phaseCodes).toEqual(['band_live']);
+      expect((await native.inject({...phaseRequest,headers:{'idempotency-key':'native-business-'+randomUUID()},payload:{...phaseRequest.payload,phaseCodes:[]}})).statusCode).toBe(409);
+      const phaseService=new CustomerExperienceService(runner,new NormalizedCommandExecutor(runner),{updateProfile:async()=>{throw Error('unused')}});const phaseCtx={scope:{tenantId,storeId},employeeId:managerId,businessDate:'2026-10-01'};
+      await phaseService.configureProductPerformancePhases(phaseCtx,{productId:single.id,phaseCodes:['acoustic'],reason:'网页调整不插电阶段',idempotencyKey:randomUUID()});await phaseService.configureProductPerformancePhases(phaseCtx,{productId:single.id,phaseCodes:[],reason:'网页再次取消阶段限制',idempotencyKey:randomUUID()});
+      expect((await readPhase()).phaseCodes).toEqual([]);expect((await readPhase()).expectedVersion).not.toBe(initialPhase.expectedVersion);
+      await pool.query('DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$3',[tenantId,storeId,phaseKey]);const phaseReplay=await native.inject(phaseRequest);expect(phaseReplay.statusCode,phaseReplay.body).toBe(200);expect(phaseReplay.json()).toMatchObject({data:{phaseCodes:['band_live']},meta:{replayed:true}});expect((await readPhase()).phaseCodes).toEqual([]);
+      await pool.query("DELETE FROM mbox.role_permission_assignments a USING mbox.staff_permission_definitions p WHERE a.permission_id=p.id AND a.role_id=$1 AND p.code='recommendation.phase.configure'",[managerRoleId]);expect((await native.inject(phaseRequest)).statusCode).toBe(403);
+      const manual=await post('products',{code:'NATIVE-MANUAL-COST',name:'非库存成本测试',categoryCode:'native_cfg_child',productKind:'single',inventoryControlMode:'not_managed',fulfillmentStation:'none',status:'inactive',costAmountMinor:1234});expect(manual.statusCode,manual.body).toBe(201);const manualRow=(await read('NATIVE-MANUAL-COST')).products[0];const costKey=`native-product-${randomUUID()}`,costRequest={expectedVersion:manualRow.nativeVersion,patch:{costAmountMinor:0,costChangeReason:'核对实际零成本'}};
+      const costSaved=await post('products/'+manualRow.id,costRequest,costKey);expect(costSaved.statusCode,costSaved.body).toBe(200);expect(String(costSaved.json().data.costAmountMinor)).toBe('0');
+      await pool.query("DELETE FROM mbox.role_permission_assignments a USING mbox.staff_permission_definitions p WHERE a.permission_id=p.id AND a.role_id=$1 AND p.code='inventory.cost.view'",[managerRoleId]);try{expect((await post('products/'+manualRow.id,costRequest,costKey)).statusCode).toBe(403)}finally{await grant(pool,managerRoleId,['inventory.cost.view'])}
+      const oldWeb=await native.inject({url:'/api/catalog/menu-categories'});expect(oldWeb.statusCode).toBe(200);expect(oldWeb.json().data.find((r:any)=>r.code==='native_cfg_child').displayName).toBe('原生分类已更新');
+      await pool.query("DELETE FROM mbox.role_permission_assignments a USING mbox.staff_permission_definitions p WHERE a.permission_id=p.id AND a.role_id=$1 AND p.code='catalog.product.manage'",[managerRoleId]);
+      expect((await post('products',body,createKey)).statusCode).toBe(403);expect((await post('menu-categories/native_cfg_child',categoryBody,categoryKey)).statusCode).toBe(403);
+    }finally{await pool.query("DELETE FROM mbox.role_permission_assignments a USING mbox.staff_permission_definitions p WHERE a.permission_id=p.id AND a.role_id=$1 AND p.code='catalog.product.manage'",[managerRoleId]);await grant(pool,managerRoleId,['catalog.product.manage']);await native.close();await runtime.end()}
+  });
+
+  it('native count and waste keep the original receipt and reject concurrent stock or self approval',async()=>{
+    const item=await createItem('NATIVE-COUNT','原生盘点测试',true,'native-count-item-0001');
+    const read=async()=>{const r=await app.inject({method:'GET',url:'/api/native/inventory',headers:headers(managerId,'native-count-read')});expect(r.statusCode).toBe(200);return r.json().data};
+    const board=await read();
+    const make=(b:any,key:string,quantity:string)=>({method:'POST' as const,url:'/api/native/inventory/stock-count-submissions',headers:headers(managerId,key),payload:{lines:[{inventoryItemId:item.id,countedQuantity:quantity,reason:'实物复核',expectedOnHandQuantity:b.items.find((i:any)=>i.id===item.id).onHandQuantity,observedAt:b.inventoryObservedAt}]}});
+    const create=make(board,'native-count-submit-0001','10');const result=await app.inject(create);expect(result.statusCode,result.body).toBe(201);const countId=result.json().data.id;expect(result.json().data.status).toBe('submitted');
+    const approve={method:'POST' as const,url:`/api/native/inventory/stock-counts/${countId}/approve`,headers:headers(approverId,'native-count-approve-0001'),payload:{}};
+    const self=await app.inject({...approve,headers:headers(managerId,'native-count-self-0001')});expect(self.statusCode).toBe(409);expect(self.json().error.commitDisposition).toBe('not_committed');
+    expect((await app.inject(approve)).json().data.status).toBe('approved');
+    await pool.query("DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key IN ('native-count-submit-0001','native-count-approve-0001')",[tenantId,storeId]);
+    for(const req of [create,approve]){const r=await app.inject(req);expect(r.statusCode).toBe(200);expect(r.json().meta.replayed).toBe(true);expect(r.json().data.id).toBe(countId)}
+    const stale=await app.inject(make(board,'native-count-stale-0001','9'));expect(stale.statusCode).toBe(409);expect(stale.json().error.commitDisposition).toBe('not_committed');
+    const fresh=await read();const fractional=await app.inject(make(fresh,'native-count-fractional','0.5'));expect(fractional.statusCode).toBe(409);
+    const pending=await app.inject(make(fresh,'native-count-submit-0002','9'));expect(pending.statusCode).toBe(201);
+    const waste={method:'POST' as const,url:`/api/native/inventory/items/${item.id}/waste`,headers:headers(managerId,'native-waste-submit-0001'),payload:{quantity:'2',reason:'实物损耗',wasteType:'discarded',requestApproval:true}};
+    const w=await app.inject(waste);expect(w.statusCode,w.body).toBe(200);expect(w.json().data.status).toBe('pending');const wasteId=w.json().data.id;
+    const wa={method:'POST' as const,url:`/api/native/inventory/waste-requests/${wasteId}/approve`,headers:headers(approverId,'native-waste-approve-0001'),payload:{reason:'现场核实'}};
+    expect((await app.inject({...wa,headers:headers(managerId,'native-waste-self-0001')})).statusCode).toBe(409);
+    expect((await app.inject(wa)).json().data.status).toBe('approved');
+    const staleApproval=await app.inject({...approve,url:`/api/native/inventory/stock-counts/${pending.json().data.id}/approve`,headers:headers(approverId,'native-count-approve-stale')});expect(staleApproval.statusCode).toBe(409);expect(staleApproval.json().error.commitDisposition).toBe('not_committed');
+    await pool.query("DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key IN ('native-waste-submit-0001','native-waste-approve-0001')",[tenantId,storeId]);
+    expect((await app.inject(waste)).json().data.id).toBe(wasteId);expect((await app.inject(wa)).json().meta.replayed).toBe(true);
+    const remaining=await pool.query('SELECT on_hand_quantity::text q FROM mbox.inventory_balances WHERE inventory_item_id=$1',[item.id]);expect(Number(remaining.rows[0].q)).toBe(8);
+    const page=await app.inject({method:'GET',url:'/api/native/inventory/stock-counts',headers:headers(approverId,'native-count-query')});expect(page.json().data).toMatchObject({nativeCommands:true,currentEmployeeId:approverId});expect(page.json().data.counts.find((c:any)=>c.id===pending.json().data.id).lines[0].stale).toBe(true);
+    const wp=await app.inject({method:'GET',url:'/api/native/inventory/waste-requests?page=1',headers:headers(approverId,'native-waste-query')});expect(wp.json().data).toMatchObject({nativeCommands:true,currentEmployeeId:approverId,page:1});
+  });
+
+  it('native receipts survive deleted cache without duplicate stock and reauthorize every replay', async () => {
+    const item=await createItem('NATIVE-BOX','原生收货测试物料',true,'native-stock-item-0001');
+    const code='NATIVE-BOX-CODE';
+    expect((await app.inject({method:'POST',url:`/api/inventory/items/${item.id}/barcodes`,headers:headers(managerId,'native-barcode-0001'),payload:{code,codeType:'barcode',packageQuantity:'12'}})).statusCode).toBe(200);
+    const scan=await app.inject({method:'GET',url:`/api/native/inventory/scan?code=${code}`,headers:headers(managerId,'native-scan-0001')});
+    expect(scan.statusCode).toBe(200);expect(scan.json().data).toMatchObject({inventoryItemId:item.id,packageQuantity:'12.000000',currentEmployeeId:managerId});
+    expect((await app.inject({method:'POST',url:'/api/native/inventory/items',headers:headers(managerId,'unsupported-native-item'),payload:{}})).statusCode).toBe(404);
+    const nativeBoard=await app.inject({method:'GET',url:'/api/native/inventory',headers:headers(managerId,'native-board-0001')});
+    expect(nativeBoard.json().data).toMatchObject({nativeCommands:true,currentEmployeeId:managerId});
+    const webBoard=await app.inject({method:'GET',url:'/api/inventory',headers:headers(managerId,'web-board-0001')});
+    expect(webBoard.json().data.nativeCommands).toBeUndefined();
+    const create={method:'POST' as const,url:'/api/native/inventory/receipts',headers:headers(managerId,'native-stock-create-0001'),payload:{currency:'CNY',invoiceTotalMinor:'2400',lines:[{scanCode:code,packages:'2',expectedInventoryItemId:item.id,expectedPackageQuantity:'12',totalCostMinor:'2400'}]}};
+    const wrongBinding=await app.inject({...create,headers:headers(managerId,'native-stock-wrong-binding'),payload:{...create.payload,lines:[{...create.payload.lines[0],expectedPackageQuantity:'6'}]}});
+    expect(wrongBinding.statusCode).toBe(409);expect(wrongBinding.json().error.commitDisposition).toBe('not_committed');
+    const first=await app.inject(create);expect(first.statusCode).toBe(201);
+    const id=first.json().data.id;
+    const receive={method:'POST' as const,url:`/api/native/inventory/receipts/${id}/receive`,headers:headers(managerId,'native-stock-receive-0001'),payload:{}};
+    expect((await app.inject(receive)).json().data.status).toBe('received');
+    await pool.query("DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key IN ('native-stock-create-0001','native-stock-receive-0001')",[tenantId,storeId]);
+    const repeated=await app.inject(create);expect(repeated.statusCode).toBe(200);expect(repeated.json()).toMatchObject({data:{id,status:'draft'},meta:{replayed:true}});
+    const receives=await Promise.all([app.inject(receive),app.inject(receive)]);
+    for(const r of receives){expect(r.statusCode).toBe(200);expect(r.json()).toMatchObject({data:{id,status:'received'},meta:{replayed:true}})}
+    const balance=await pool.query('SELECT on_hand_quantity::text amount FROM mbox.inventory_balances WHERE inventory_item_id=$1',[item.id]);
+    expect(Number(balance.rows[0].amount)).toBe(24);
+    const changed=await app.inject({...create,payload:{...create.payload,invoiceTotalMinor:'4800'}});expect(changed.statusCode).toBe(409);
+    await grant(pool,viewerRoleId,['inventory.receive']);
+    try {expect((await app.inject({...create,headers:headers(viewerId,'native-stock-create-0001')})).statusCode).toBe(409)}
+    finally {await pool.query("DELETE FROM mbox.role_permission_assignments a USING mbox.staff_permission_definitions p WHERE a.permission_id=p.id AND a.role_id=$1 AND p.code='inventory.receive'",[viewerRoleId])}
+    await pool.query("DELETE FROM mbox.role_permission_assignments a USING mbox.staff_permission_definitions p WHERE a.permission_id=p.id AND a.role_id=$1 AND p.code='inventory.receive'",[managerRoleId]);
+    try {expect((await app.inject(create)).statusCode).toBe(403);expect((await app.inject(receive)).statusCode).toBe(403)}
+    finally {await grant(pool,managerRoleId,['inventory.receive'])}
   });
 
   it("creates an inventory item idempotently with one audit event and one outbox message", async () => {
@@ -1682,6 +1832,7 @@ async function seed(pool: Pool) {
     "bottle.manage",
     "bottle.manage.all",
     "catalog.product.manage",
+    "catalog.price.manage",
   ];
   for (const code of permissions) {
     await pool.query(

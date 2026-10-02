@@ -23,7 +23,7 @@ const secret = 'isolated-provider-concurrency-fixture-at-least-32-bytes'
   let date: string
   beforeAll(async () => {
     await runNormalizedMigrations(adminUrl!)
-    admin = new Pool({ connectionString: adminUrl, max: 5, options: '-c statement_timeout=3000' })
+    admin = new Pool({ connectionString: adminUrl, max: 5, options: '-c statement_timeout=3000 -c TimeZone=UTC -c DateStyle=ISO,YMD' })
     runtime = new Pool({ connectionString: runtimeUrl, max: 8 })
     runner = new ScopedPostgresTransactionRunner(runtime)
     expect((await runtime.query('SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname=session_user')).rows[0]).toEqual({ rolsuper: false, rolbypassrls: false })

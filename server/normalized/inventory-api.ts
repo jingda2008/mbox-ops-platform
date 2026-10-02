@@ -1,3 +1,5 @@
+import {z} from 'zod';
+import {nativePhysicalExecutor, NativePhysicalNotCommittedError} from './native-physical-command.js';
 import {InventoryWasteRepository} from './inventory-waste-repository.js';
 import type {WasteResult} from '../../src/shared/inventory-waste.js';
 import { createHash, randomUUID } from "node:crypto";
@@ -19,7 +21,7 @@ import type {
   InventoryDashboard,
   InventoryQueryService,
 } from "./inventory-query-service.js";
-import { assertInventoryPermission } from './inventory-query-service.js';
+import { assertInventoryPermission, readActiveRecipe } from './inventory-query-service.js';
 import type {
   CreateInventoryItemInput,
   CreatePurchaseReceiptInput,
@@ -53,6 +55,7 @@ import type { ScopedTransaction, ScopedPostgresTransactionRunner } from "./trans
 import { isLiquidInventoryCategory } from '../../src/shared/inventory-unit-policy.js';
 
 export interface InventoryApiOptions {
+  nativeProtocol?: boolean;
   transactions: Pick<ScopedPostgresTransactionRunner, 'run'>;
   commands: Pick<NormalizedCommandExecutor, "execute">;
   query: Pick<InventoryQueryService, "getDashboard" | "getActiveRecipe" | "getRecipeCostPreview" | "getStockCounts" | "getWasteRequests">;
@@ -141,6 +144,34 @@ const decimalPattern = /^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/;
 export const inventoryApiPlugin: FastifyPluginAsync<
   InventoryApiOptions
 > = async (app, options) => {
+  if (!options.nativeProtocol) {
+    await app.register(inventoryApiPlugin, {...options, nativeProtocol: true, prefix: '/native'});
+  }
+  if (options.nativeProtocol) {
+    // Only explicitly delivered native workflows opt into the durable protocol.
+    // Bottle, material maintenance and other web routes keep their
+    // original contract; registering this plugin must not expose aliases for them.
+    const reads=new Set(['/inventory/products/:productId/recipe','/inventory/products/:productId/recipe-cost','/inventory','/inventory/scan','/inventory/stock-counts','/inventory/waste-requests']);
+    const writes=new Set(['/inventory/products/:productId/recipe','/inventory/items/:itemId/cost-corrections','/inventory/receipts','/inventory/receipts/:receiptId/receive',
+      '/inventory/stock-count-submissions','/inventory/stock-counts/:countId/approve',
+      '/inventory/stock-counts/:countId/reject','/inventory/items/:itemId/waste',
+      '/inventory/waste-requests/:requestId/approve','/inventory/waste-requests/:requestId/reject']);
+    app.addHook('preHandler',async(request,reply)=>{
+      const route=request.routeOptions.url?.split('/native').pop() ?? '';
+      const supported=(request.method==='GET'||request.method==='HEAD')?reads.has(route):request.method==='POST'&&writes.has(route);
+      if(!supported)return reply.code(404).send({error:{code:'NATIVE_INVENTORY_UNSUPPORTED',message:'此库存功能尚未提供原生接口'}});
+    });
+    app.get<{Querystring:{code?: string}}>('/inventory/scan', async (request, reply) => handleRoute(reply, async () => {
+      const context = await options.resolveContext(request);
+      const code = readString(request.query.code, 'code', 128);
+      const data = await options.transactions.run(context.scope, async tx => {
+        await (options.createStaffAccessRepository?.(tx) ?? new StaffAccessRepository(tx)).assertPermission(context.employeeId, 'inventory.receive');
+        const match = await (options.createInventoryRepository?.(tx) ?? new InventoryRepository(tx)).resolveBarcode(code);
+        return {...match, code, currentEmployeeId: context.employeeId};
+      }, {readOnly: true});
+      return reply.send({data});
+    }));
+  }
   const createInventory =
     options.createInventoryRepository ??
     ((transaction) => new InventoryRepository(transaction));
@@ -150,11 +181,19 @@ export const inventoryApiPlugin: FastifyPluginAsync<
   app.get("/inventory", async (request, reply) =>
     handleRoute(reply, async () => {
       const context = await options.resolveContext(request);
+      const observedAt = options.nativeProtocol ? await options.transactions.run(context.scope,async tx => {
+        const r=await tx.query<{at:string}>('SELECT clock_timestamp()::text AS at');return r.rows[0]!.at;
+      },{readOnly:true}) : undefined;
+      const filters=options.nativeProtocol?z.object({
+        receiptsPage:z.coerce.number().int().min(0).max(10000).default(0),receiptStatus:z.enum(['','draft','received','cancelled']).default(''),receiptSearch:z.string().trim().max(120).default(''),receiptFrom:z.iso.date().optional(),receiptTo:z.iso.date().optional()
+      }).strict().parse(request.query):null;
+      if(filters?.receiptFrom&&filters.receiptTo&&filters.receiptFrom>filters.receiptTo)throw new InventoryRequestError('采购查询开始日期不能晚于结束日期');
       const data = await options.query.getDashboard(
         context.scope,
         context.employeeId,
+        filters?{page:filters.receiptsPage,status:filters.receiptStatus,search:filters.receiptSearch,from:filters.receiptFrom??null,to:filters.receiptTo??null}:undefined,
       );
-      return reply.send({ data });
+      return reply.send({ data: options.nativeProtocol ? {...data, inventoryObservedAt: observedAt, nativeCostCorrections:true, nativeCommands: true, currentEmployeeId: context.employeeId} : data });
     }),
   );
 
@@ -164,11 +203,13 @@ export const inventoryApiPlugin: FastifyPluginAsync<
       handleRoute(reply, async () => {
         const context = await options.resolveContext(request);
         const productId = readUuid(request.params.productId, "productId");
-        const data = await options.query.getActiveRecipe(
-          context.scope,
-          context.employeeId,
-          productId,
-        );
+        const data = options.nativeProtocol ? await options.transactions.run(context.scope,async tx=>{
+          const recipe=await readActiveRecipe(tx,context.employeeId,productId);
+          const product=(await tx.query('SELECT id,name,product_kind,inventory_control_mode,updated_at::text FROM mbox.products WHERE tenant_id=$1 AND store_id=$2 AND id=$3',[context.scope.tenantId,context.scope.storeId,productId])).rows[0];
+          if(!product)throw new InventoryConflictError('原商品不存在');
+          const items=(await tx.query(`SELECT id,sku,name,base_unit AS "baseUnit" FROM mbox.inventory_items WHERE tenant_id=$1 AND store_id=$2 AND status='active' ORDER BY category_code,name,id`,[context.scope.tenantId,context.scope.storeId])).rows;
+          return{recipe,product,items,currentEmployeeId:context.employeeId,nativeRecipeProtocol:1,expectedVersion:nativeRecipeVersion(recipe,product)};
+        },{readOnly:true,isolation:'repeatable-read'}) : await options.query.getActiveRecipe(context.scope,context.employeeId,productId);
         return reply.send({ data });
       }),
   );
@@ -284,6 +325,12 @@ export const inventoryApiPlugin: FastifyPluginAsync<
           }>(),
           async (transaction, permissions) => {
             assertInventoryPermission(permissions, "inventory.cost.view");
+            if(options.nativeProtocol){
+              const observed=z.iso.datetime({offset:true}).parse(body.expectedObservedAt);
+              const expected=body.expectedWeightedUnitCostMinor===null?null:readDecimal(body.expectedWeightedUnitCostMinor,"expectedWeightedUnitCostMinor",true);
+              const current=(await transaction.query<{stale:boolean;matches:boolean}>(`SELECT updated_at>$4::timestamptz AS stale, weighted_unit_cost_minor IS NOT DISTINCT FROM $5::numeric AS matches FROM mbox.inventory_balances WHERE tenant_id=$1 AND store_id=$2 AND inventory_item_id=$3 FOR UPDATE`,[context.scope.tenantId,context.scope.storeId,itemId,observed,expected])).rows[0];
+              if(!current||current.stale||!current.matches)throw new InventoryConflictError('库存或单位成本已变化，请刷新后重新核对');
+            }
             return createInventory(transaction).correctInventoryCost(
               itemId,
               readDecimal(body.weightedUnitCostMinor, "weightedUnitCostMinor", true),
@@ -296,9 +343,8 @@ export const inventoryApiPlugin: FastifyPluginAsync<
       }),
   );
 
-  app.put<{ Params: { productId: string } }>(
-    "/inventory/products/:productId/recipe",
-    async (request, reply) =>
+  app.route<{ Params: { productId: string } }>({
+    method:options.nativeProtocol ? "POST" : "PUT",url:"/inventory/products/:productId/recipe",handler:async (request, reply) =>
       handleRoute(reply, async () => {
         const context = await options.resolveContext(request);
         const body = readObject(request.body);
@@ -341,6 +387,13 @@ export const inventoryApiPlugin: FastifyPluginAsync<
           "inventory.manage",
           codec<{ id: string; version: number }>(),
           async (transaction) => {
+            if(options.nativeProtocol){
+              await transaction.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`inventory-recipe:${context.scope.tenantId}:${context.scope.storeId}:${input.productId}`]);
+              const product=(await transaction.query('SELECT id,name,product_kind,inventory_control_mode,updated_at::text FROM mbox.products WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE',[context.scope.tenantId,context.scope.storeId,input.productId])).rows[0];
+              const original=await readActiveRecipe(transaction,context.employeeId,input.productId);
+              if(!product||product.product_kind!=='single')throw new InventoryConflictError('配方只用于原单品，套餐请编辑组成商品');
+              if(typeof body.expectedVersion!=='string'||body.expectedVersion!==nativeRecipeVersion(original,product))throw new InventoryConflictError('原配方或商品已修改，本次未提交，请刷新核对');
+            }
             const inventory = createInventory(transaction);
             const recipe = await inventory.replaceActiveRecipe(input);
             await inventory.synchronizeTrackedRecipeCostsForInventoryItems(
@@ -353,7 +406,7 @@ export const inventoryApiPlugin: FastifyPluginAsync<
         );
         return reply.send(response(execution));
       }),
-  );
+  });
 
   app.post<{ Params: { productId: string } }>(
     "/inventory/products/:productId/recipe-cost/apply",
@@ -420,6 +473,8 @@ export const inventoryApiPlugin: FastifyPluginAsync<
         return {
           inventoryItemId,
           scanCode,
+          expectedInventoryItemId:options.nativeProtocol && scanCode!==null?readUuid(line.expectedInventoryItemId,'expectedInventoryItemId'):null,
+          expectedPackageQuantity:options.nativeProtocol && scanCode!==null?readDecimal(line.expectedPackageQuantity,'expectedPackageQuantity',false):null,
           // Batch/receipt numbers improve traceability when staff have one,
           // but they must not block a normal scan + quantity + total-cost
           // receipt. The generated value remains visible on the receipt.
@@ -472,6 +527,7 @@ export const inventoryApiPlugin: FastifyPluginAsync<
             const barcode = line.scanCode === null
               ? null
               : await repository.resolveBarcode(line.scanCode);
+            if(options.nativeProtocol && barcode && (barcode.inventoryItemId!==line.expectedInventoryItemId || multiplyDecimal(barcode.packageQuantity,"1")!==multiplyDecimal(line.expectedPackageQuantity!,"1")))throw new InventoryConflictError('条码物料或包装量已变更，本次未建单，请重新扫码核对');
             const selectedItemPackage = line.scanCode === null && line.quantity === null
               ? await repository.resolveReceiptPackageQuantity(line.inventoryItemId!)
               : null;
@@ -582,9 +638,30 @@ export const inventoryApiPlugin: FastifyPluginAsync<
       const status = readEnum(request.query.status ?? 'submitted', 'status', ['submitted', 'processed']);
       const page = readInteger(Number(request.query.page ?? 0), 'page', 0, 10000);
       const pageSize = readInteger(Number(request.query.pageSize ?? 20), 'pageSize', 1, 50);
-      return reply.send({ data: await options.query.getStockCounts(context.scope, context.employeeId, { status, page, pageSize }) });
+      const data=await options.query.getStockCounts(context.scope, context.employeeId, { status, page, pageSize });
+      return reply.send({ data: options.nativeProtocol ? {...data,currentEmployeeId:context.employeeId,nativeCommands:true}:data });
     }),
   );
+
+  if(options.nativeProtocol) app.post('/inventory/stock-count-submissions',async(request,reply)=>handleRoute(reply,async()=>{
+    const context=await options.resolveContext(request),body=readObject(request.body);
+    const lines=readArray(body.lines,'lines',500).map(raw=>{const line=readObject(raw);return {inventoryItemId:readUuid(line.inventoryItemId,'inventoryItemId'),countedQuantity:readDecimal(line.countedQuantity,'countedQuantity',true),reason:readString(line.reason,'reason',500),expectedOnHandQuantity:readDecimal(line.expectedOnHandQuantity,'expectedOnHandQuantity',true),observedAt:readString(line.observedAt,'observedAt',100)}});
+    if(new Set(lines.map(l=>l.inventoryItemId)).size!==lines.length)throw new TypeError('同一物料只能出现一次');
+    const execution=await execute(options,context,request,'inventory.stock-count.native-submit','inventory.count',stockCountCodec,async tx=>{
+      const repo=createInventory(tx);
+      for(const line of [...lines].sort((a,b)=>a.inventoryItemId.localeCompare(b.inventoryItemId))){
+        if(!Number.isFinite(Date.parse(line.observedAt)))throw new TypeError('库存基准时间无效');
+        const balance=await tx.query<{unchanged:boolean}>(`SELECT b.on_hand_quantity=$4::numeric AND (NOT i.whole_unit_count OR $5::numeric=trunc($5::numeric)) AS unchanged FROM mbox.inventory_balances b JOIN mbox.inventory_items i ON (i.tenant_id,i.store_id,i.id)=(b.tenant_id,b.store_id,b.inventory_item_id) WHERE b.tenant_id=$1 AND b.store_id=$2 AND b.inventory_item_id=$3 FOR UPDATE OF b`,[context.scope.tenantId,context.scope.storeId,line.inventoryItemId,line.expectedOnHandQuantity,line.countedQuantity]);
+        const moves=await tx.query<{invalid:boolean}>(`SELECT $4::timestamptz>clock_timestamp() OR $4::timestamptz<clock_timestamp()-interval '4 hours' OR EXISTS(SELECT 1 FROM mbox.inventory_movements WHERE tenant_id=$1 AND store_id=$2 AND inventory_item_id=$3 AND occurred_at >= $4::timestamptz) AS invalid`,[context.scope.tenantId,context.scope.storeId,line.inventoryItemId,line.observedAt]);
+        if(!balance.rows[0]?.unchanged || moves.rows[0]?.invalid)throw new InventoryConflictError('读取库存后已有出入库或基准已过期，本次未提交，请重新清点');
+      }
+      // Capture and submit one count atomically, so no invisible orphan draft
+      // can be created if the client disconnects between two requests.
+      const count=await repo.createStockCount(createPublicId('stock-count'),context.employeeId,lines,readOptionalString(body.note,'note',1000));
+      return repo.submitStockCount(count.id,context.employeeId);
+    });
+    return reply.code(execution.replayed?200:201).send(response(execution));
+  }));
 
   app.post("/inventory/stock-counts", async (request, reply) =>
     handleRoute(reply, async () => {
@@ -721,7 +798,8 @@ export const inventoryApiPlugin: FastifyPluginAsync<
     const query=request.query as Record<string,unknown>;
     const page=Number(query.page??1);
     if(!Number.isSafeInteger(page)||page<1)throw new TypeError('页码无效');
-    return reply.send({data:await options.query.getWasteRequests(context.scope,context.employeeId,page)});
+    const data=await options.query.getWasteRequests(context.scope,context.employeeId,page);
+    return reply.send({data:options.nativeProtocol?{...data,currentEmployeeId:context.employeeId,nativeCommands:true,page}:data});
   }));
   for(const decision of ['approve','reject'] as const){
     app.post<{Params:{requestId:string}}>(`/inventory/waste-requests/:requestId/${decision}`,async(request,reply)=>handleRoute(reply,async()=>{
@@ -1047,13 +1125,19 @@ async function execute<Result>(
   const durableWaste = ['inventory.waste.record', 'inventory.waste.submit',
     'inventory.waste-request.approve', 'inventory.waste-request.reject'].includes(operationScope);
   // Even a transport-cache replay must require current employee permission.
-  const currentPermissions = durableWaste ? await options.transactions.run(context.scope, async transaction => (
+  let currentPermissions = durableWaste ? await options.transactions.run(context.scope, async transaction => (
     await (options.createStaffAccessRepository?.(transaction) ?? new StaffAccessRepository(transaction))
       .assertPermission(context.employeeId, permission)
   ).permissions, { readOnly: true }) : null;
   const requestFingerprint = fingerprint(request, context);
   let domainReplayed = false;
-  const execution = await options.commands.execute(
+  const commands = options.nativeProtocol ? nativePhysicalExecutor(options.commands, context, async tx => {
+    const current=await options.resolveContext(request);
+    if(current.employeeId!==context.employeeId||current.scope.storeId!==context.scope.storeId||current.scope.tenantId!==context.scope.tenantId)throw new StaffAccessDeniedError('账号已变化');
+    currentPermissions = (await (options.createStaffAccessRepository?.(tx) ?? new StaffAccessRepository(tx)).assertPermission(context.employeeId, permission)).permissions;
+    if(operationScope==='inventory.cost.correct')assertInventoryPermission(currentPermissions,'inventory.cost.view');
+  }) : options.commands;
+  const execution = await commands.execute(
     {
       scope: context.scope,
       operationScope,
@@ -1087,7 +1171,11 @@ async function execute<Result>(
           throw new InventoryConflictError('该历史报损操作已有成功记录，但原请求回执已清理。请联系有权人员核对原记录，不要重新报损。');
         }
       }
-      const result = await handler(transaction, access.permissions);
+      let result: Result;
+      try {result = await handler(transaction, access.permissions)} catch(error) {
+        if(options.nativeProtocol && error instanceof InventoryConflictError) throw new NativePhysicalNotCommittedError(error.message);
+        throw error;
+      }
       const json = resultCodec.encode(result);
       if (!isJsonObject(json))
         throw new TypeError("Inventory command result must be a JSON object");
@@ -1541,6 +1629,8 @@ async function handleRoute(
   try {
     return await operation();
   } catch (error) {
+    if(error instanceof z.ZodError)return reply.code(400).send({error:{code:"INVENTORY_REQUEST_INVALID",message:"请核对查询日期、原库存状态和必填字段"}});
+    if (error instanceof NativePhysicalNotCommittedError) return reply.code(409).send({error: {code: 'NATIVE_PHYSICAL_NOT_COMMITTED', message: error.message, commitDisposition: 'not_committed'}});
     const mapped = mapError(error);
     return reply
       .code(mapped.status)
@@ -1626,3 +1716,5 @@ function mapError(error: unknown): {
 }
 
 export type { InventoryDashboard };
+
+function nativeRecipeVersion(recipe:unknown,product:unknown){return createHash("sha256").update(JSON.stringify({recipe,product})).digest("hex")}

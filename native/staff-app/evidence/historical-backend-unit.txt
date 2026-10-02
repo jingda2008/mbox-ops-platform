@@ -1,0 +1,10 @@
+
+ RUN  v4.1.11 /Users/jingda/mbox/mbox-native-staff-app-20260926
+
+·····················----········------·······························································
+
+ Test Files  4 passed (4)
+      Tests  92 passed | 10 skipped (102)
+   Start at  10:22:46
+   Duration  1.20s (transform 1.36s, setup 0ms, import 2.05s, tests 401ms, environment 0ms)
+

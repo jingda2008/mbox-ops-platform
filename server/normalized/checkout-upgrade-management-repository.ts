@@ -125,7 +125,7 @@ interface CapacityRow extends Record<string, unknown> {
 export class CheckoutUpgradeManagementRepository {
   constructor(private readonly transaction: ScopedTransaction) {}
 
-  async listRules(): Promise<CheckoutUpgradeRuleAdminView[]> {
+  async listRules(native?:{cursor?:string;only?:string;code?:string}): Promise<CheckoutUpgradeRuleAdminView[]> {
     const result = await this.transaction.query<RuleRow>(`
       SELECT rule.id,rule.code,rule.revision,rule.name,rule.status,
         rule.source_product_id,source.name AS source_product_name,
@@ -143,9 +143,8 @@ export class CheckoutUpgradeManagementRepository {
       JOIN mbox.products target ON target.tenant_id=rule.tenant_id
         AND target.store_id=rule.store_id AND target.id=rule.target_product_id
       WHERE rule.tenant_id=$1::uuid AND rule.store_id=$2::uuid
-      ORDER BY rule.code,rule.revision DESC,rule.id
-      LIMIT 300
-    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId])
+      ${native?'AND ($3::uuid IS NULL OR rule.id>$3) AND ($4::uuid IS NULL OR rule.id=$4) AND ($5::text IS NULL OR rule.code=$5) ORDER BY rule.id LIMIT 31':'ORDER BY rule.code,rule.revision DESC,rule.id LIMIT 300'}
+    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,...(native?[native.cursor??null,native.only??null,native.code??null]:[])])
     const qualifications=await new CheckoutUpgradeQualificationRepository(this.transaction).many(result.rows.filter(row=>row.has_qualification).map(row=>row.id))
     return result.rows.map(row=>({...ruleView(row),...(qualifications.has(row.id)?{qualification:qualifications.get(row.id)!}:{})}))
   }
@@ -351,7 +350,7 @@ export class CheckoutUpgradeManagementRepository {
     })
   }
 
-  async listOutcomes(): Promise<CheckoutUpgradeOutcomeView[]> {
+  async listOutcomes(native?:{cursor?:string}): Promise<CheckoutUpgradeOutcomeView[]> {
     const result = await this.transaction.query<Record<string, unknown>>(`
       WITH offer_candidates AS (
         SELECT id,tenant_id,store_id,public_id,rule_id,rule_revision,status,
@@ -438,8 +437,8 @@ export class CheckoutUpgradeManagementRepository {
           AND event.offer_id=offer.id
       ) event_fact ON true
       WHERE offer.tenant_id=$1::uuid AND offer.store_id=$2::uuid
-      ORDER BY offer.created_at DESC,offer.id DESC LIMIT 300
-    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId])
+      ${native?'AND ($3::text IS NULL OR offer.public_id>$3) ORDER BY offer.public_id LIMIT 31':'ORDER BY offer.created_at DESC,offer.id DESC LIMIT 300'}
+    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,...(native?[native.cursor??null]:[])])
     return result.rows.map((row) => ({
       offerPublicId:String(row.public_id),ruleCode:String(row.code),ruleRevision:Number(row.rule_revision),
       status:String(row.status),sourceProductName:String(row.source_name_at_offer ?? ''),
@@ -453,7 +452,7 @@ export class CheckoutUpgradeManagementRepository {
     }))
   }
 
-  async listCapacityPolicies(): Promise<CapacityPolicyView[]> {
+  async listCapacityPolicies(native?:{cursor?:string;only?:string}): Promise<CapacityPolicyView[]> {
     const result = await this.transaction.query<CapacityRow>(`
       SELECT policy.id,policy.station_code,policy.policy_version,policy.status,
         policy.drafted_by_employee_id,policy.approved_by_employee_id,
@@ -471,8 +470,9 @@ export class CheckoutUpgradeManagementRepository {
         WHERE reservation.tenant_id=window_row.tenant_id AND reservation.store_id=window_row.store_id
           AND reservation.capacity_window_id=window_row.id AND reservation.status IN ('reserved','active')) usage ON true
       WHERE policy.tenant_id=$1::uuid AND policy.store_id=$2::uuid
-      GROUP BY policy.id ORDER BY policy.station_code,policy.policy_version DESC,policy.id
-    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId])
+      ${native?'AND ($3::uuid IS NULL OR policy.id>$3) AND ($4::uuid IS NULL OR policy.id=$4)':''}
+      GROUP BY policy.id ${native?'ORDER BY policy.id LIMIT 31':'ORDER BY policy.station_code,policy.policy_version DESC,policy.id'}
+    `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,...(native?[native.cursor??null,native.only??null]:[])])
     return result.rows.map(capacityView)
   }
 
@@ -504,7 +504,7 @@ export class CheckoutUpgradeManagementRepository {
       `, [this.transaction.scope.tenantId,this.transaction.scope.storeId,id,
         window.startsAt,window.endsAt,window.capacityLimitUnits])
     }
-    return required((await this.listCapacityPolicies()).find((item)=>item.id===id),'capacity policy view')
+    return required((await this.listCapacityPolicies({only:id})).find((item)=>item.id===id),'capacity policy view')
   }
 
   async approveCapacity(policyId: string, employeeId: string): Promise<CapacityPolicyView> {
@@ -518,7 +518,7 @@ export class CheckoutUpgradeManagementRepository {
     if (result.rowCount!==1) throw new CustomerExperienceRequestError(
       '产能版本必须由另一名授权人员审批','FULFILLMENT_CAPACITY_APPROVAL_DENIED',409,
     )
-    return required((await this.listCapacityPolicies()).find((item)=>item.id===policyId),'capacity policy view')
+    return required((await this.listCapacityPolicies({only:policyId})).find((item)=>item.id===policyId),'capacity policy view')
   }
 
   async publishCapacity(policyId: string, employeeId: string): Promise<CapacityPolicyView> {
@@ -547,7 +547,7 @@ export class CheckoutUpgradeManagementRepository {
     if (published.rowCount!==1) throw new CustomerExperienceRequestError(
       '已审批产能版本必须由第三名授权人员发布','FULFILLMENT_CAPACITY_PUBLICATION_DENIED',409,
     )
-    return required((await this.listCapacityPolicies()).find((item)=>item.id===policyId),'capacity policy view')
+    return required((await this.listCapacityPolicies({only:policyId})).find((item)=>item.id===policyId),'capacity policy view')
   }
 }
 

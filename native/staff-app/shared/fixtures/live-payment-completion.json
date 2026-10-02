@@ -1,0 +1,427 @@
+{
+  "auth": {
+    "session": {
+      "id": "session-1",
+      "employeeId": "employee-1",
+      "expiresAt": "2099-01-01T00:00:00Z",
+      "onlineLeaseUntil": "2099-01-01T00:00:00Z"
+    },
+    "employee": {
+      "id": "employee-1",
+      "code": "staff",
+      "displayName": "测试员工",
+      "roleCodes": [
+        "server"
+      ]
+    },
+    "permissions": [
+      "refund.request",
+      "refund.approve",
+      "refund.execute",
+      "inventory.receive",
+      "inventory.waste",
+      "order.cancel_unpaid",
+      "order.settle_exception",
+      "community.activity.cashier",
+      "payment.manual.cash.record",
+      "payment.manual.pos.record",
+      "payment.manual.external.record",
+      "payment.recollect.authorize",
+      "reconciliation.view",
+      "order.bill.print",
+      "order.history.view",
+      "print.reprint",
+      "print.retry",
+      "hardware.manage",
+      "printer.manage",
+      "commercial.voucher.view",
+      "commercial.voucher.redeem",
+      "payment.initiate.staff",
+      "reconciliation.manage"
+    ],
+    "deniedPermissions": []
+  },
+  "afterSales": {
+    "item": {
+      "id": "item-original",
+      "orderId": "order-original",
+      "name": "套餐内啤酒",
+      "status": "submitted",
+      "orderPublicId": "ORDER-ORIGINAL",
+      "tableCode": "A5",
+      "quantity": 3,
+      "originalAmountMinor": 12000,
+      "bundle": true,
+      "includedInBundle": true
+    },
+    "fundingSources": [
+      {
+        "paymentId": "payment-cash",
+        "provider": "cash",
+        "availableMinor": 5000
+      },
+      {
+        "paymentId": "payment-pos",
+        "provider": "physical_pos",
+        "availableMinor": 5000
+      }
+    ],
+    "units": [
+      {
+        "id": "unit-held",
+        "index": 1,
+        "productionState": "made",
+        "inventoryEvidence": "confirmed",
+        "heldByCaseId": "case-original",
+        "stoppedByCaseId": null,
+        "operationallyStopped": false,
+        "returnEligibility": {
+          "canReturn": true,
+          "releaseOnly": false
+        }
+      },
+      {
+        "id": "unit-unmade",
+        "index": 2,
+        "productionState": "unmade",
+        "inventoryEvidence": "confirmed",
+        "heldByCaseId": "case-original",
+        "stoppedByCaseId": null,
+        "operationallyStopped": false,
+        "returnEligibility": {
+          "canReturn": true,
+          "releaseOnly": true
+        }
+      },
+      {
+        "id": "unit-free",
+        "index": 3,
+        "productionState": "unmade",
+        "inventoryEvidence": "confirmed",
+        "heldByCaseId": null,
+        "stoppedByCaseId": null,
+        "operationallyStopped": false,
+        "returnEligibility": {
+          "canReturn": false
+        }
+      }
+    ],
+    "cases": [
+      {
+        "caseId": "case-original",
+        "orderId": "order-original",
+        "kind": "paid_refund",
+        "status": "requested",
+        "businessDate": "2026-09-26",
+        "reason": "客人退两瓶",
+        "amountMinor": 8000,
+        "selectedQuantity": 2,
+        "heldQuantity": 2,
+        "stoppedQuantity": 0,
+        "madeQuantity": 1,
+        "inventoryReviewQuantity": 0,
+        "succeededMinor": 0,
+        "unconfirmedNoticeCount": 1,
+        "physicalComplete": false,
+        "moneyComplete": false,
+        "refundFailed": false,
+        "refundNeedsReview": false,
+        "awaitingCashPayout": false,
+        "canApprove": true,
+        "canReject": true,
+        "canWithdraw": false,
+        "canResume": false,
+        "canResolveUnpaid": false,
+        "canRevise": false,
+        "canDisposeMade": true,
+        "canDisposeHeldUnmade": false,
+        "requiresFundingChoice": true,
+        "paymentAllocationReview": false,
+        "unpaidPaymentChanged": false,
+        "pricing": null,
+        "refunds": [
+          {
+            "id": "refund-original",
+            "status": "failed",
+            "provider": "postar",
+            "amountMinor": 8000,
+            "canRetry": true
+          }
+        ],
+        "notices": [
+          {
+            "id": "notice-original",
+            "stationCode": "bar",
+            "instruction": "暂停两瓶",
+            "createdAt": "2026-09-27T04:00:00Z",
+            "printState": "pending"
+          }
+        ]
+      }
+    ],
+    "canRequest": true,
+    "canExecuteRefund": true,
+    "canReceive": true,
+    "canRecordUsed": true,
+    "canAcknowledgeNotices": true
+  },
+  "cashier": {
+    "businessDate": "2026-09-26",
+    "query": "",
+    "actions": {
+      "canRequestRefund": true,
+      "canApproveRefund": true,
+      "canExecuteRefund": true,
+      "canQueryOnlinePayment": true,
+      "onlinePaymentProvider": "postar",
+      "canUseActivityCashier": true,
+      "supportsGuardedActivityCashier": true,
+      "canAuthorizeRecollection": true,
+      "canRecordManualCash": true,
+      "canRecordManualPos": true,
+      "canRecordManualExternal": true
+    },
+    "orders": [
+      {
+        "id": "order1",
+        "publicId": "APP-order",
+        "tableCode": "A5",
+        "tableSessionId": "table-session-1",
+        "tableSessionStatus": "open",
+        "businessDate": "2026-09-26",
+        "status": "completed",
+        "paymentStatus": "paid",
+        "totalAmountMinor": 10000,
+        "outstandingAmountMinor": 0,
+        "overCollectedAmountMinor": 0,
+        "currency": "CNY",
+        "payments": [
+          {
+            "id": "pay1",
+            "publicId": "PAY-one",
+            "provider": "cash",
+            "method": "cash",
+            "providerActionState": null,
+            "retryReleasedAt": null,
+            "retryReleaseReason": null,
+            "amountMinor": 10000,
+            "currency": "CNY",
+            "status": "succeeded",
+            "remainingRefundableMinor": 5000,
+            "reservedRefundAmountMinor": 1000,
+            "refundableItems": [
+              {
+                "id": "item1",
+                "productName": "原商品",
+                "quantity": 1,
+                "totalAmountMinor": 10000,
+                "status": "delivered",
+                "remainingRefundableMinor": 5000,
+                "fundsOnly": false
+              }
+            ],
+            "refunds": [
+              {
+                "id": "refund1",
+                "publicId": "REF-one",
+                "paymentId": "pay1",
+                "amountMinor": 1000,
+                "currency": "CNY",
+                "status": "requested",
+                "providerSubmissionState": "not_started",
+                "reason": "退回差额",
+                "requestedByEmployeeId": "other-employee",
+                "requestedByEmployeeName": "原申请人",
+                "decisionReason": null,
+                "receiptReference": null,
+                "purpose": "price_adjustment",
+                "afterSalesCase": null
+              }
+            ]
+          }
+        ],
+        "items": [
+          {
+            "id": "item1",
+            "productName": "原商品",
+            "quantity": 1,
+            "totalAmountMinor": 10000,
+            "status": "delivered",
+            "remainingRefundableMinor": 5000,
+            "fundsOnly": false
+          }
+        ]
+      }
+    ],
+    "activityRegistrations": [
+      {
+        "id": "activity-reg",
+        "publicId": "ACT-REG-ORIGINAL",
+        "activityPublicId": "ACT-ORIGINAL",
+        "activityTitle": "周末现场音乐",
+        "startsAt": "2099-01-01T18:00:00Z",
+        "partySize": 2,
+        "status": "payment_pending",
+        "paymentStatus": "pending",
+        "amountDueMinor": 8800,
+        "paidAmountMinor": 0,
+        "currency": "CNY",
+        "payment": null,
+        "lateSuccessPayments": [],
+        "recollectionAuthorization": null
+      }
+    ]
+  },
+  "printJob": {
+    "id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed",
+    "stationCode": "cashier",
+    "sourceReference": "PAY-ORIGINAL",
+    "printerName": "收银打印机",
+    "connectivityStatus": "offline",
+    "reprintOfJobId": null,
+    "failureCode": "paper_out",
+    "printedAt": null,
+    "attempts": 1,
+    "maxAttempts": 3,
+    "copies": 1
+  },
+  "cashHandover": {
+    "businessDate": "2026-09-27",
+    "ledger": {
+      "net": 200,
+      "count": 1
+    },
+    "canCount": true,
+    "canManage": true,
+    "handovers": [
+      {
+        "id": "33333333-3333-4333-8333-333333333333",
+        "businessDate": "2026-09-27",
+        "openedBy": "employee-original",
+        "openedAt": "2026-09-27T01:00:00Z",
+        "openingReason": "门店全部现金实点",
+        "openingMinor": 10000,
+        "openingDifferenceMinor": 0,
+        "movementMinor": -2000,
+        "expectedMinor": 8200,
+        "status": "count_submitted",
+        "revision": 3,
+        "closedBy": null,
+        "closedAt": null,
+        "count": {
+          "countedMinor": 8100,
+          "expectedMinor": 8200,
+          "differenceMinor": -100,
+          "ledgerNet": 200,
+          "ledgerCount": 1,
+          "employeeId": "employee-1",
+          "reason": "实点少一元待查",
+          "submittedAt": "2026-09-27T02:00:00Z",
+          "denominations": {
+            "5000": 1,
+            "1000": 3,
+            "100": 1
+          }
+        }
+      }
+    ]
+  },
+  "voucherPlatform": {
+    "code": "meituan",
+    "label": "美团",
+    "mode": "production",
+    "enabled": true
+  },
+  "voucherPreview": {
+    "platform": "meituan",
+    "platformLabel": "美团",
+    "campaignName": "原双人券",
+    "voucherCodeMasked": "VO****01",
+    "currency": "CNY",
+    "statusLabel": "可使用",
+    "expiresAt": "2026-09-28T00:00:00Z",
+    "prepareHandle": "original-signed-handle-for-fixture",
+    "faceValueMinor": 20000,
+    "settlementAmountMinor": 18800,
+    "quantity": 2
+  },
+  "voucherOperation": {
+    "id": "44444444-4444-4444-8444-444444444444",
+    "platform": "meituan",
+    "voucherCodeMasked": "VO****01",
+    "campaignName": "原双人券",
+    "currency": "CNY",
+    "status": "unknown",
+    "businessDate": "2026-09-27",
+    "publicId": "ORIGINAL-VOUCHER-001",
+    "actorEmployeeId": "employee-1",
+    "createdAt": "2026-09-27T00:00:00Z",
+    "faceValueMinor": 20000,
+    "settlementAmountMinor": 18800,
+    "orderId": null,
+    "tableSessionId": null,
+    "review": {
+      "id": "55555555-5555-4555-8555-555555555555",
+      "outcome": "consumed",
+      "certificateId": "CERT001",
+      "verifyId": "VERIFY001",
+      "evidenceReference": "CASE001",
+      "reason": "已核对平台原记录",
+      "employeeId": "employee-1"
+    }
+  },
+  "onlineReuse": {
+    "body": {
+      "publicId": "NEW-NATIVE-INTENT",
+      "orderIds": [
+        "77777777-7777-4777-8777-777777777777"
+      ],
+      "orderId": "77777777-7777-4777-8777-777777777777",
+      "amountMinor": 8800,
+      "provider": "postar",
+      "method": "native_qr"
+    },
+    "proof": {
+      "online": "init",
+      "employeeId": "employee-1",
+      "tableSessionId": "original-session"
+    },
+    "key": "native-online-concurrent-001",
+    "reply": {
+      "data": {
+        "id": "66666666-6666-4666-8666-666666666666",
+        "publicId": "ORIGINAL-PAYMENT",
+        "status": "pending",
+        "currency": "CNY",
+        "provider": "postar",
+        "method": "native_qr",
+        "amountMinor": 8800,
+        "providerAction": {
+          "paymentId": "66666666-6666-4666-8666-666666666666",
+          "paymentPublicId": "ORIGINAL-PAYMENT",
+          "status": "pending",
+          "presentation": "qr",
+          "expiresAt": "2026-09-28T00:00:00Z"
+        }
+      },
+      "meta": {
+        "replayed": false,
+        "requestBinding": {
+          "protocol": 1,
+          "idempotencyKey": "native-online-concurrent-001",
+          "requestedPublicId": "NEW-NATIVE-INTENT",
+          "paymentId": "66666666-6666-4666-8666-666666666666",
+          "paymentPublicId": "ORIGINAL-PAYMENT",
+          "orderIds": [
+            "77777777-7777-4777-8777-777777777777"
+          ],
+          "amountMinor": 8800,
+          "provider": "postar",
+          "method": "native_qr",
+          "employeeId": "employee-1"
+        }
+      }
+    }
+  }
+}

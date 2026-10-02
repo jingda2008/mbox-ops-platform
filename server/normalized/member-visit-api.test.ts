@@ -32,6 +32,13 @@ function setup(mode: 'allowed' | 'anonymous' | 'read-only' = 'allowed') {
   return { app, run, execute, permission, current, checkIn, cancel }
 }
 describe('member attendance choices are independent of activity admission', () => {
+  it('uses isolated retained native receipts with pre-replay authorization and member-bound response',async()=>{
+    const value=setup();const r=await value.app.inject({method:'POST',url:'/staff/native-member-visits/check-in',headers:{'idempotency-key':'native-business-33333333-3333-4333-8333-333333333333'},payload})
+    expect(r.statusCode).toBe(200);expect(r.json().data.memberNo).toBe('MBX-100000')
+    expect(value.execute.mock.calls[0]?.[0]).toMatchObject({operationScope:'member.visit.check-in.native',retainReceipt:true})
+    const before=value.execute.mock.calls[0]?.[2];expect(before).toBeTypeOf('function')
+    value.permission.mockRejectedValue(new StaffAccessDeniedError('revoked'));await expect(before({scope})).rejects.toThrow('revoked')
+  })
   it('authenticates before reading and never exposes member attendance to guests', async () => {
     const value = setup('anonymous')
     const response = await value.app.inject({method:'POST',url:'/staff/member-visits/lookup',payload:{code:payload.code}})
@@ -41,7 +48,7 @@ describe('member attendance choices are independent of activity admission', () =
   it('reports current server business date and read-only access without granting write permission', async () => {
     const value=setup('read-only')
     const response=await value.app.inject({method:'POST',url:'/staff/member-visits/lookup',payload:{code:payload.code}})
-    expect(response.json().data).toEqual({memberNo:'MBX-100000',businessDate:'2026-09-26',canCheckIn:false,visit:null,rewards:[]})
+    expect(response.json().data).toEqual({durableNativeVisits:true,memberNo:'MBX-100000',businessDate:'2026-09-26',canCheckIn:false,visit:null,rewards:[]})
     expect(value.run).toHaveBeenCalledWith(scope,expect.any(Function),{readOnly:true})
     expect(value.checkIn).not.toHaveBeenCalled()
   })

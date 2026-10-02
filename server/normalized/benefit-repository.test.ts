@@ -1,3 +1,6 @@
+import {StaffSessionNotFoundError} from './staff-session-repository.js'
+import Fastify from 'fastify'
+import { customerBenefitApiPlugin } from './customer-benefit-api.js'
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { Pool } from 'pg'
@@ -5,7 +8,7 @@ import { runNormalizedMigrations } from '../migrate-normalized.js'
 import { BenefitCommandService, BenefitRepository, BenefitUnavailableError } from './benefit-repository.js'
 import { parseBenefitWalletCursor } from './benefit-wallet.js'
 import { CouponCalendarRepository } from './coupon-calendar-repository.js'
-import { NormalizedCommandExecutor } from './command-executor.js'
+import { NormalizedCommandExecutor, NativeCommandNotCommittedError } from './command-executor.js'
 import {
   ComplimentaryFulfillmentResolutionError,
   ComplimentaryFulfillmentResolutionService,
@@ -195,6 +198,61 @@ integration('BenefitRepository normalized grant and redemption integrity', () =>
     expect(evidence.rows[0]).toEqual({
       redemptions: '1', reserved: 0, redeemed: 1, gift_orders: '1', gift_order_items: '1',
     })
+  })
+
+  for (const action of ['redeem', 'cancel'] as const) it(`retains native ${action} receipt after mutable queue changes and expired-cache cleanup`, async () => {
+    const issued = await benefits.issue(issueCommand('native-' + action, 100, 1))
+    const reserved = await benefits.reserve({scope: {tenantId, storeId}, actor: {type: 'guest', ref: guestActorRef},
+      businessDate: '2026-08-11', benefitId: issued.value.id, customerId, tableSessionId,
+      expiresAt: new Date(Date.now() + 600000).toISOString(), reservationIdempotencyKey: randomUUID(), reservationFingerprint: randomUUID()})
+    const key = 'native-business-' + randomUUID()
+    const validate = vi.fn(async () => {})
+    const common = {scope:{tenantId,storeId},actor:{type:'employee' as const,employeeId},businessDate:'2026-08-11',
+      customerId,tableSessionId,benefitReservationId:reserved.value.id,nativeReceipt:{validate}}
+    const redeem = {...common,benefitId:issued.value.id,redeemedByEmployeeId:employeeId,
+      authorizationSource:{kind:'employee',employeeId},redemptionIdempotencyKey:key,redemptionFingerprint:'original-native-body'}
+    const cancel = {...common,reason:'客人现场取消暂留',employeePermission:'loyalty.redemption.fulfill' as const,
+      cancellationIdempotencyKey:key,cancellationFingerprint:'original-native-body'}
+    const run = () => action === 'redeem' ? benefits.redeem(redeem) : benefits.cancelReservation(cancel)
+    const first = await run()
+    const receipt = await pool.query("SELECT expires_at::text AS expiry FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$3",[tenantId,storeId,key])
+    expect(receipt.rows).toEqual([{expiry:'infinity'}])
+    await pool.query("DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND expires_at<=clock_timestamp()",[tenantId,storeId])
+    validate.mockRejectedValue(new Error('original queue row has disappeared'))
+    const recovered = await run()
+    expect(recovered).toEqual({value:first.value,replayed:true})
+    expect(validate).toHaveBeenCalledTimes(1)
+    const otherEmployee = randomUUID()
+    await pool.query("INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($1,$2,$3,$4,'Other manager')",[otherEmployee,tenantId,storeId,'OTHER-'+otherEmployee.slice(0,8)])
+    await pool.query('INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id) VALUES($1,$2,$3,$4)',[tenantId,storeId,otherEmployee,roleId])
+    const otherActor={type:'employee' as const,employeeId:otherEmployee}
+    await expect(action==='redeem' ? benefits.redeem({...redeem,actor:otherActor}) : benefits.cancelReservation({...cancel,actor:otherActor})).rejects.toThrow()
+    // Current employee authority is rechecked even for a successful old receipt.
+    await pool.query("UPDATE mbox.employees SET status='suspended' WHERE id=$1",[employeeId])
+    try { await expect(run()).rejects.toThrow() }
+    finally {await pool.query("UPDATE mbox.employees SET status='active' WHERE id=$1",[employeeId])}
+    const changed = action === 'redeem'
+      ? benefits.redeem({...redeem,redemptionFingerprint:'different-body'})
+      : benefits.cancelReservation({...cancel,cancellationFingerprint:'different-body'})
+    await expect(changed).rejects.toThrow()
+    const counts = await pool.query('SELECT quantity_reserved,quantity_redeemed FROM mbox.benefits WHERE id=$1',[issued.value.id])
+    expect(counts.rows[0]).toEqual({quantity_reserved:0,quantity_redeemed:action==='redeem'?1:0})
+  })
+
+  it('rolls back a native gift and reservation together on inventory adapter failure', async () => {
+    const issued = await benefits.issue(issueCommand('native-rollback',100,1))
+    const reserved = await benefits.reserve({scope:{tenantId,storeId},actor:{type:'guest',ref:guestActorRef},businessDate:'2026-08-11',
+      benefitId:issued.value.id,customerId,tableSessionId,expiresAt:new Date(Date.now()+600000).toISOString(),
+      reservationIdempotencyKey:randomUUID(),reservationFingerprint:randomUUID()})
+    const key='native-business-'+randomUUID()
+    const failing = new BenefitCommandService(new NormalizedCommandExecutor(transactions),{createGiftOrder:async()=>{throw new Error('stock changed')}})
+    await expect(failing.redeem({scope:{tenantId,storeId},actor:{type:'employee',employeeId},businessDate:'2026-08-11',
+      benefitId:issued.value.id,benefitReservationId:reserved.value.id,customerId,tableSessionId,redeemedByEmployeeId:employeeId,
+      authorizationSource:{kind:'employee',employeeId},redemptionIdempotencyKey:key,redemptionFingerprint:'stock-failure',nativeReceipt:{validate:async()=>{}}})).rejects.toBeInstanceOf(NativeCommandNotCommittedError)
+    const state=await pool.query('SELECT status,quantity_reserved,quantity_redeemed FROM mbox.benefits WHERE id=$1',[issued.value.id])
+    expect(state.rows[0]).toMatchObject({quantity_reserved:1,quantity_redeemed:0})
+    expect((await pool.query('SELECT 1 FROM mbox.benefit_redemptions WHERE benefit_id=$1',[issued.value.id])).rowCount).toBe(0)
+    expect((await pool.query('SELECT 1 FROM mbox.idempotency_records WHERE idempotency_key=$1',[key])).rowCount).toBe(0)
   })
 
   it('cancels a reservation idempotently and restores available quantity', async () => {
@@ -667,6 +725,49 @@ integration('BenefitRepository normalized grant and redemption integrity', () =>
       issuanceFingerprint: `benefit-issue-${suffix}-fingerprint`,
     }
   }
+
+  it('native wallet uses real runtime authorization, immutable issue/hold receipts and original unit ownership', async () => {
+    const runtimePool=new Pool({connectionString:process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL??databaseUrl,max:4})
+    const runtime=new ScopedPostgresTransactionRunner(asPool(runtimePool))
+    const member='MBX-NWALLET001'
+    await pool.query("INSERT INTO mbox.customer_memberships(tenant_id,store_id,customer_id,member_no,level) VALUES($1,$2,$3,$4,'gold') ON CONFLICT DO NOTHING",[tenantId,storeId,customerId,member])
+    await pool.query("INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name,category) VALUES($1,$2,'loyalty.account.view','Wallet read','loyalty') ON CONFLICT DO NOTHING",[tenantId,storeId])
+    await pool.query("INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code='loyalty.account.view' ON CONFLICT DO NOTHING",[tenantId,storeId,roleId])
+    let expired=false
+    const app=Fastify(),ctx={scope:{tenantId,storeId},employeeId,businessDate:'2026-08-11'}
+    await app.register(customerBenefitApiPlugin,{transactions:runtime,customers,benefits:new BenefitCommandService(new NormalizedCommandExecutor(runtime),{createGiftOrder:giftOrder}),resolveStaffContext:()=>{if(expired)throw new StaffSessionNotFoundError();return ctx},resolveGuestContext:()=>{throw new Error('not used')},resolveSelfContext:()=>{throw new Error('not used')}})
+    const send=(action:string,payload:object,key='native-business-'+randomUUID())=>app.inject({method:'POST',url:'/staff/native-benefit-wallet/commands/'+action,headers:{'idempotency-key':key},payload})
+    const payload={customerId,benefitCode:'NATIVE-WALLET',title:'现场原授权赠饮',benefitType:'gift_product',valueAmountMinor:100,quantity:4,authorizationLimitId:approvalLimitId,allowedProductIds:[productId],validFrom:new Date(Date.now()-60000).toISOString(),validUntil:null,reason:'现场会员关怀'}
+    try{
+      const read=await app.inject({method:'POST',url:'/staff/native-benefit-wallet/lookup',payload:{code:member}})
+      expect(read.statusCode,read.body).toBe(200);expect(read.json().data).toMatchObject({employeeId,customerId,protocol:1,durableCommands:true});expect(read.json().data.tables).toContainEqual({id:tableSessionId,code:'B01'})
+      expect((await send('issue',{...payload,valueAmountMinor:1001})).statusCode).toBe(409)
+      const issueKey='native-business-'+randomUUID(),issue=await send('issue',payload,issueKey)
+      expect(issue.statusCode,issue.body).toBe(200);const benefit=issue.json().data.result
+      expect(benefit.quantityTotal).toBe(4)
+      const holdBody={customerId,benefitId:benefit.id,tableSessionId,quantity:1,expectedVersion:benefit.aggregateVersion},holdKey='native-business-'+randomUUID()
+      const hold=await send('reserve',holdBody,holdKey);expect(hold.statusCode,hold.body).toBe(200)
+      expect((await send('reserve',holdBody)).statusCode).toBe(409)
+      const reservation=hold.json().data.result,cancelBody={customerId,benefitId:benefit.id,tableSessionId,quantity:1,reservationId:reservation.id,reason:'顾客取消此份暂留'},cancelKey='native-business-'+randomUUID()
+      expect((await send('cancel',{...cancelBody,quantity:2})).statusCode).toBe(409)
+      const cancel=await send('cancel',cancelBody,cancelKey);expect(cancel.statusCode,cancel.body).toBe(200)
+      const permanent=await pool.query("SELECT expires_at::text AS expiry FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=ANY($3::text[])",[tenantId,storeId,[issueKey,holdKey,cancelKey]])
+      expect(permanent.rows).toEqual([{expiry:'infinity'},{expiry:'infinity'},{expiry:'infinity'}])
+      await pool.query('DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND expires_at<=clock_timestamp()',[tenantId,storeId])
+      for(const [action,body,key] of [['issue',payload,issueKey],['reserve',holdBody,holdKey],['cancel',cancelBody,cancelKey]] as const){const replay=await send(action,body,key);expect(replay.statusCode,action+replay.body).toBe(200);expect(replay.json().meta.replayed).toBe(true)}
+      const refreshed=await runtime.run({tenantId,storeId},tx=>new BenefitRepository(tx).findById(benefit.id),{readOnly:true})
+      const secondHold=await send('reserve',{...holdBody,expectedVersion:refreshed!.aggregateVersion});expect(secondHold.statusCode,secondHold.body).toBe(200)
+      const redeemBody={customerId,benefitId:benefit.id,tableSessionId,quantity:1,reservationId:secondHold.json().data.result.id,selectedProductId:productId},redeemKey='native-business-'+randomUUID()
+      expect((await send('redeem',{...redeemBody,selectedProductId:randomUUID()})).statusCode).toBe(409)
+      const redeem=await send('redeem',redeemBody,redeemKey);expect(redeem.statusCode,redeem.body).toBe(200);expect(redeem.json().data.result.giftOrderReference).toBeTruthy()
+      expect((await send('redeem',redeemBody,redeemKey)).json().meta.replayed).toBe(true)
+      const page=await app.inject({method:'POST',url:'/staff/native-benefit-wallet/lookup',payload:{code:member}});expect(page.statusCode,page.body).toBe(200)
+      expect(page.json().data.items.find((b:{id:string})=>b.id===benefit.id)).toMatchObject({quantityTotal:4,quantityRedeemed:1,quantityReserved:0,quantityAvailable:3})
+      await pool.query("UPDATE mbox.employees SET status='suspended' WHERE id=$1",[employeeId])
+      for(const [a,b,k] of [['issue',payload,issueKey],['reserve',holdBody,holdKey],['cancel',cancelBody,cancelKey],['redeem',redeemBody,redeemKey]] as const)expect((await send(a,b,k)).statusCode).toBe(403)
+      expired=true;expect((await app.inject({method:'POST',url:'/staff/native-benefit-wallet/lookup',payload:{code:member}})).statusCode).toBe(401)
+    }finally{await pool.query("UPDATE mbox.employees SET status='active' WHERE id=$1",[employeeId]);await app.close();await runtimePool.end()}
+  })
 
   async function seedStore(): Promise<void> {
     await pool.query(`INSERT INTO mbox.tenants (id, code, name) VALUES ($1, $2, 'Benefit Tenant')`,

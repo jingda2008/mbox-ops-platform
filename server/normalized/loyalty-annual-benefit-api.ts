@@ -30,7 +30,7 @@ export const loyaltyAnnualBenefitApiPlugin: FastifyPluginAsync<LoyaltyAnnualBene
     if (!Array.isArray(body.rules)) throw invalid('年度礼遇规则必须是数组')
     const result = await options.service.draft(context, {
       policyCode: code(body.policyCode, '政策编号'), timezone: text(body.timezone ?? 'Asia/Shanghai', '时区', 3, 64),
-      reason: text(body.reason, '起草说明', 2, 500), rules: body.rules.map((item, index) => rule(object(item, `第${index + 1}条规则`))),
+      reason: text(body.reason, '起草说明', 2, 500), rules: body.rules.map((item, index) => parseAnnualBenefitRule(object(item, `第${index + 1}条规则`))),
       idempotencyKey: idempotency(request),
     })
     return reply.code(result.replayed ? 200 : 201).send({ data: result.value, meta: { replayed: result.replayed } })
@@ -73,7 +73,7 @@ async function authorize(options: LoyaltyAnnualBenefitApiOptions, request: Fasti
   return context
 }
 
-function rule(value: Record<string, unknown>): AnnualBenefitRuleInput {
+export function parseAnnualBenefitRule(value: Record<string, unknown>): AnnualBenefitRuleInput {
   return {
     ruleCode: code(value.ruleCode, '规则编号'), title: text(value.title, '规则名称', 2, 120),
     ruleKind: enumeration(value.ruleKind, '规则类型', ANNUAL_BENEFIT_RULE_KINDS),

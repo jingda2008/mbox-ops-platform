@@ -147,7 +147,7 @@ interface RefundAllocationRow extends Record<string, unknown> {
   amount_minor: string | number
 }
 
-const RESERVING_REFUND_STATUSES: readonly RefundStatus[] = [
+export const RESERVING_REFUND_STATUSES: readonly RefundStatus[] = [
   'requested',
   'approved',
   'processing',

@@ -143,7 +143,7 @@ export function ResponsibilityAssignmentPanel({ api, tables }: ResponsibilityAss
       setSelectedTableIds(new Set())
       setAssignments(await api.loadTableAssignments())
     } catch (error) {
-      setMessage({ kind: 'error', text: assignmentError(error, '责任桌未生效；本批次没有留下部分结果') })
+      setMessage({ kind: 'error', text: assignmentError(error, '责任操作结果待核对，请恢复原操作，不要重复提交') })
     } finally {
       setBusy(false)
     }
@@ -168,6 +168,22 @@ export function ResponsibilityAssignmentPanel({ api, tables }: ResponsibilityAss
     }
   }
 
+  const recovery = api.pendingTableAssignment?.() ?? null
+  const recoverOriginal = async () => {
+    if (!api.recoverTableAssignment || busy) return
+    setBusy(true)
+    setMessage(null)
+    try {
+      await api.recoverTableAssignment()
+      setAssignments(await api.loadTableAssignments())
+      setSelectedTableIds(new Set())
+      setEndingId(null)
+      setMessage({ kind: 'success', text: '原责任操作已确认，列表已刷新' })
+    } catch (error) {
+      setMessage({ kind: 'error', text: assignmentError(error, '原责任操作仍待核对，请勿重复提交') })
+    } finally { setBusy(false) }
+  }
+
   return <section className={`staff-assignment-panel ${expanded ? 'is-expanded' : ''}`} aria-label="责任桌人员安排">
     <button type="button" className="staff-assignment-trigger" aria-expanded={expanded} onClick={toggleExpanded}>
       <span><UserRoundCheck size={19} /><strong>人员与责任桌</strong><small>安排主服务员、候补或临时支援</small></span>
@@ -177,9 +193,13 @@ export function ResponsibilityAssignmentPanel({ api, tables }: ResponsibilityAss
     {expanded && <div className="staff-assignment-body">
       {phase === 'loading' && <p className="staff-assignment-loading"><LoaderCircle className="is-spinning" size={18} /> 正在读取人员与责任桌</p>}
       {message !== null && <p className={`staff-assignment-message is-${message.kind}`} role="status">{message.kind === 'success' && <Check size={17} />}{message.text}</p>}
+      {recovery !== null && <div role="status" className="staff-assignment-boundary staff-assignment-recovery">
+        <span>{recovery.message}</span>
+        {recovery.canRecover && <button type="button" disabled={busy} onClick={() => void recoverOriginal()}>恢复原责任操作</button>}
+      </div>}
       {phase === 'error' && <button type="button" onClick={() => void load()}>重新读取</button>}
       {phase === 'ready' && options !== null && <>
-        <div className="staff-assignment-boundary"><ShieldCheck size={18} /><span>仅有“分配责任桌台”权限的岗位可发布。所选桌台将一起安排；如有冲突，本次安排不会生效</span></div>
+        <div className="staff-assignment-boundary"><ShieldCheck size={18} /><span>仅有“分配责任桌台”权限的岗位可发布。所选桌台将一起安排；明确冲突时整批拒绝，结果待核对时请先恢复原操作</span></div>
         <div className="staff-assignment-fields">
           <label>员工<select value={employeeId} onChange={(event) => setEmployeeId(event.target.value)}>{options.employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName} · {employee.code}</option>)}</select></label>
           <label>本次岗位<select value={roleId} onChange={(event) => setRoleId(event.target.value)}>{options.roles.map((role) => <option key={role.id} value={role.id}>{role.name} · {role.code}</option>)}</select></label>
@@ -224,13 +244,13 @@ export function ResponsibilityAssignmentPanel({ api, tables }: ResponsibilityAss
           {visibleAreaGroups.length === 0 && <p className="staff-assignment-no-results">没有匹配的区域或桌台</p>}
         </div>
 
-        <button type="button" className="staff-assignment-submit" disabled={busy || selectedTableIds.size === 0} onClick={() => void submit()}>{busy ? <LoaderCircle className="is-spinning" size={18} /> : <UserRoundCheck size={18} />}发布 {selectedTableIds.size > 0 ? `${selectedTableIds.size} 张桌台` : '责任安排'}</button>
+        <button type="button" className="staff-assignment-submit" disabled={busy || recovery !== null || selectedTableIds.size === 0} onClick={() => void submit()}>{busy ? <LoaderCircle className="is-spinning" size={18} /> : <UserRoundCheck size={18} />}发布 {selectedTableIds.size > 0 ? `${selectedTableIds.size} 张桌台` : '责任安排'}</button>
 
         <section className="staff-assignment-active" aria-label="当前责任安排">
           <header><strong>当前生效</strong><span>{assignments.length}项</span></header>
           {assignments.length === 0 ? <p>还没有生效中的责任桌安排。</p> : assignments.map((assignment) => <article key={assignment.id}>
             <div><strong>{assignment.tableCode} · {assignment.employeeName}</strong><span>{assignmentTypeLabel(assignment.assignmentType)} · {assignment.roleCode}</span><small>{formatDateTime(assignment.startsAt)} 起{assignment.endsAt === null ? '' : ` · ${formatDateTime(assignment.endsAt)} 止`}</small></div>
-            <button type="button" className={endingId === assignment.id ? 'is-confirming' : ''} disabled={busy} onClick={() => void endAssignment(assignment)}>{endingId === assignment.id ? '再次确认结束' : '结束责任'}</button>
+            <button type="button" className={endingId === assignment.id ? 'is-confirming' : ''} disabled={busy || recovery !== null} onClick={() => void endAssignment(assignment)}>{endingId === assignment.id ? '再次确认结束' : '结束责任'}</button>
           </article>)}
         </section>
       </>}

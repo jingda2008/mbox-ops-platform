@@ -864,7 +864,9 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
       expect(saved.statusCode).toBe(200)
       expect(saved.json().data).toMatchObject({ownerEmployeeId:cashierId,status:'reviewing'})
       expect((await send('finance-case-save-1',false)).json().replayed).toBe(true)
-      expect((await send('finance-case-close-1',true)).statusCode).toBe(400)
+      const blockedClose=await send('finance-case-close-1',true)
+      expect(blockedClose.statusCode).toBe(400)
+      expect(blockedClose.json().error.commitDisposition).toBe('not_committed')
       expect((await pool.query('SELECT status FROM mbox.payments WHERE id=$1',[pending.id])).rows[0].status).toBe('pending')
       await service.recordProviderQueryResult({...metadata(`finance-apply-${randomUUID()}`,{type:'integration',ref:'postar-active-query'}),
         paymentPublicId:pending.publicId,verifiedObservationId:financeProof,provider:'postar',providerTransactionId:financeTransaction,
@@ -875,6 +877,7 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
       expect((await app.inject({method:'GET',url:'/payments/finance-review'})).json().data.some((row:{id:string})=>row.id===pending.id)).toBe(false)
       await pool.query('DELETE FROM mbox.employee_roles WHERE tenant_id=$1 AND store_id=$2 AND employee_id=$3 AND role_id=$4',[tenantId,storeId,cashierId,role])
       expect((await send('finance-case-revoked-1',false)).statusCode).toBe(403)
+      expect((await send('finance-case-save-1',false)).statusCode).toBe(403)
       expect((await app.inject({method:'GET',url:'/payments/finance-review'})).statusCode).toBe(403)
     }finally{await app.close()}
   })

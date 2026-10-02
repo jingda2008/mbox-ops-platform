@@ -47,6 +47,7 @@ export class RecommendationStaffModificationService {
   modify(
     context: RecommendationStaffContext,
     input: Readonly<{
+      nativeReceipt?:boolean
       recommendationPublicId: string
       sourceProductId: string
       targetProductId: string
@@ -63,7 +64,8 @@ export class RecommendationStaffModificationService {
     })
     return this.commands.execute({
       scope: context.scope,
-      operationScope: 'customer.experience.recommendation.staff-modify',
+      operationScope: input.nativeReceipt ? 'customer.experience.recommendation.staff-modify.native':'customer.experience.recommendation.staff-modify',
+      retainReceipt:input.nativeReceipt===true,
       idempotencyKey: input.idempotencyKey,
       requestFingerprint,
       resultCodec: modificationCodec,

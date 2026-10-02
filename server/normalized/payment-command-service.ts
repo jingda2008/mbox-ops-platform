@@ -92,6 +92,7 @@ export interface RecordManualPaymentCommand extends CommandMetadata {
 }
 
 export interface RecordManualActivityPaymentCommand extends CommandMetadata {
+  expectedAmountMinor?: number
   registrationPublicId: string
   publicId: string
   provider: Extract<PaymentProvider, 'cash' | 'physical_pos' | 'external_manual'>
@@ -187,6 +188,7 @@ export interface ReleaseUnresolvedPaymentForRetryCommand extends CommandMetadata
  * and only its verified result may change the payment status.
  */
 export interface AuthorizeProviderCloseForReplacementCommand extends CommandMetadata {
+  expectedAmountMinor?: number
   paymentId: string
   reason: string
 }
@@ -309,12 +311,16 @@ export class PaymentCommandService {
       })
       const payments = new PaymentRepository(transaction)
       const payment = await payments.prepareOrderPaymentForProviderClose(input.paymentId)
-      if (payment.orderId === null) throw new Error('order payment lost its order target')
-      await this.authorization.assertEmployeeOrderAccess({
-        transaction,
-        employeeId,
-        orderId: payment.orderId,
-      })
+      if(input.expectedAmountMinor!==undefined && payment.amountMinor!==input.expectedAmountMinor) throw new TypeError('原付款整笔金额已变化，请重新核对')
+      if(payment.payableKind==='activity_registration') {
+        await this.authorization.assertEmployeeCapability({transaction,employeeId,capability:'community.activity.cashier'})
+      } else {
+        const targets=payment.orderId ? [{id:payment.orderId}] : (await transaction.query<{id:string}>(`
+          SELECT order_id AS id FROM mbox.order_payment_allocations WHERE tenant_id=$1 AND store_id=$2 AND batch_id=$3 ORDER BY order_id`,
+          [input.scope.tenantId,input.scope.storeId,payment.orderBatchId])).rows
+        if(!targets.length) throw new TypeError('原合并付款缺少订单关联')
+        for(const target of targets) await this.authorization.assertEmployeeOrderAccess({transaction,employeeId,orderId:target.id})
+      }
       return {
         result: payment,
         auditEvents: [{
@@ -493,6 +499,7 @@ export class PaymentCommandService {
         capability: 'community.activity.cashier',
       })
       const result = await new PaymentRepository(transaction).recordManualForActivityRegistration({
+        expectedAmountMinor: input.expectedAmountMinor,
         registrationPublicId: input.registrationPublicId,
         publicId: input.publicId,
         provider: input.provider,

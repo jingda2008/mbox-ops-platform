@@ -138,6 +138,8 @@ export interface StaffTableAssignment {
 }
 
 export interface StaffTableAssignmentOptions {
+  supportsGuardedAssignmentRecovery?: boolean
+  currentEmployeeId?: string
   employees: Array<{
     id: string
     code: string

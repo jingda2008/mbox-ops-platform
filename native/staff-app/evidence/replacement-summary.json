@@ -1,0 +1,47 @@
+{
+  "time": "2026-09-28T01:06:50.160104+08:00",
+  "iosExistingAssertions": 438,
+  "iosNewAssertions": 28,
+  "iosTotalAssertions": 466,
+  "androidJUnit": 106,
+  "androidFailures": 0,
+  "isolatedDatabaseApiTests": 182,
+  "webCompatibilityPassed": 326,
+  "webCompatibilityDbSkipped": 13,
+  "iosBuild": true,
+  "androidBuild": true,
+  "simulatorInstallLaunch": {
+    "ios": true,
+    "android": true
+  },
+  "productionDeployed": false,
+  "productionBusinessWrites": false,
+  "realAccountNewFlowUiAcceptance": false,
+  "realDeviceOrStoreAcceptance": false,
+  "sourceSha256": {
+    "server/normalized/item-after-sales-query.ts": "44ec397ecafc502cd5e4904c92f6771716c55d6d509f257032f51bd22c17f38a",
+    "server/normalized/item-quantity-repository.test.ts": "8b32ca4bb2ad7c56a3438ca99acab133208e601eb48874e78da5f3da1d6532c6",
+    "native/staff-app/ios/Sources/LiveOrdering.swift": "9cfc613f3b0b483a1b1d56a833c2fa8d474e65b0725b4745a0af3ed76986193f",
+    "native/staff-app/ios/Sources/LiveAfterSales.swift": "c80a267b436046925d82c913c10417a84dfa64b640a4618304a6dd980ed53dab",
+    "native/staff-app/ios/Sources/LiveCatalogView.swift": "c3b5b9fc82704a2acc8676cdf2426684e31e3b03f7a0118926d652dfbc95edce",
+    "native/staff-app/ios/Sources/LiveOrderCheckout.swift": "2d306a87394a7f94013c6bc1467d931d6b99410eaa82df0a0c10c371193d3ee5",
+    "native/staff-app/ios/Sources/LiveAfterSalesView.swift": "89f78e13e897b970471298469afa07f26bd713082c98a98a6e8848345e72d980",
+    "native/staff-app/ios/Sources/LiveTableActions.swift": "5c680a1bab1ebc17849ae2c1573f2ddd0f2b0df932ed3ddcc02c51abb89b2506",
+    "native/staff-app/ios/Sources/AppModel.swift": "c824e51bb6542a9887917aaaaacc6e8b949f5c43455452be33acfcdcf10ac98b",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveOrdering.kt": "43d0aa09731066f5fb59d4b90fb3d08afb0ba704303b80bd7a133e3d7a86ce70",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveCatalogView.kt": "703b331cba3970048b003e5abd73a02f6aeebb2f5aca414e58e7b5cd343e9c71",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveOrderCheckout.kt": "6b4b7cb5daa0529a2bc836875052d8628ba77af86351caffdd28b1ece4e21365",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveAfterSalesView.kt": "542ccfdd19f7a964ff0174d8d6b54ccb35ba378fc78f82fa51df43c1729450f3",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/LiveTableActions.kt": "b634f2112bf96dd97498a3ead4422d684fb1f9ad8093388b9d759ae1a31d9d9d",
+    "native/staff-app/android/app/src/main/java/com/mbox/staff/AppModel.kt": "96c2e325723e174b8dcef6ac4d8b0a5f5f8c5d3aceafb1ac0a88bc84c1e72b5e",
+    "native/staff-app/shared/fixtures/live-replacement.json": "6086f191111ca49152332082c0c45b7bc2127ae74d39c57b6e73d1770c478075",
+    "native/staff-app/ios/Tests/ReplacementTests.swift": "5488c8e88f8be2114d8c08888df65a80ea88a82dc5a35cb44a0f673d66b5138d",
+    "native/staff-app/ios/test-replacement.sh": "8d290a1af22ad45c6988ce2fa978a90fe46df854bfb1975fbfd18de564c8fe53",
+    "native/staff-app/android/app/src/test/java/com/mbox/staff/ReplacementTest.kt": "9322790bccbaff94326091f7b2b93f59a1b47f7dddf4d68833a103ccbbc4ae46"
+  },
+  "binarySha256": {
+    "native/staff-app/ios/build/Build/Products/Debug-iphonesimulator/MBOXStaff.app/MBOXStaff": "318592f70052f3ca46d1f81c41cc6a65e0229ce53a73937c388c02a843bfa62f",
+    "native/staff-app/ios/build/Build/Products/Debug-iphonesimulator/MBOXStaff.app/MBOXStaff.debug.dylib": "1cff9ef22572e206d0ec1920109124e734002b6306d3c55948fa65c7dcd3a203",
+    "native/staff-app/android/app/build/outputs/apk/debug/app-debug.apk": "eafb3f73e46d29c2bb84f1b4cf76f48135f5e95a19fc28960106660b9777e64d"
+  }
+}

@@ -57,6 +57,7 @@ export interface CreatePaymentForActivityRegistrationInput {
 }
 
 export interface RecordManualPaymentForActivityRegistrationInput {
+  expectedAmountMinor?: number
   registrationPublicId: string
   publicId: string
   provider: Extract<PaymentProvider, 'cash' | 'physical_pos' | 'external_manual'>
@@ -258,9 +259,7 @@ export class PaymentRepository {
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId])
     const row = selected.rows[0]
     if (row === undefined) throw new PaymentNotFoundError(paymentId)
-    if (row.order_id === null) {
-      throw new OrderNotPayableError(paymentId, 'only a table-order payment can be closed before changing collection method')
-    }
+    if (!['order','order_batch','activity_registration'].includes(row.payable_kind)) throw new OrderNotPayableError(paymentId, 'unsupported payable kind')
     if (!['postar', 'wechat'].includes(row.provider) || !['created', 'pending'].includes(row.status)) {
       throw new OrderNotPayableError(paymentId, 'payment already has a final result or is not an online payment')
     }
@@ -599,6 +598,9 @@ export class PaymentRepository {
     const amountMinor = isRefunded
       ? toSafeMinor(registration.paid_amount_minor, 'refunded activity payment')
       : toSafeMinor(registration.amount_due_minor, 'activity amount due')
+    if (input.expectedAmountMinor !== undefined && (!Number.isSafeInteger(input.expectedAmountMinor) || input.expectedAmountMinor !== amountMinor)) {
+      throw new OrderNotPayableError(registration.id, 'activity amount changed since cashier confirmation')
+    }
     if (amountMinor <= 0 || registration.currency.length !== 3) {
       throw new OrderNotPayableError(registration.id, 'activity registration has no collectible balance')
     }

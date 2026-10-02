@@ -1,7 +1,13 @@
+import {createHash} from 'node:crypto'
+import {z} from 'zod'
+import {nativePhysicalExecutor} from './native-physical-command.js'
+import {nativeGuardedExecutor} from './native-guarded-executor.js'
+import {NativeCommandNotCommittedError,type NormalizedCommandExecutor} from './command-executor.js'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import { safeContentTargetPath } from './customer-experience-repository.js'
 import {
-  MemberContentCardError,
+  MemberContentCardError,MemberContentCardRepository,
+  type MemberContentCardView,
   type MemberContentCardDraft,
   type MemberContentCardDisplayMode,
   type MemberContentCardType,
@@ -109,6 +115,8 @@ function draft(value:Record<string,unknown>,fixedCode?:string):MemberContentCard
 
 async function handle(reply:FastifyReply,execute:()=>Promise<unknown>){try{return await execute()}catch(error){
   if(isStaffAuthenticationRequiredError(error))return reply.code(401).send({error:STAFF_AUTHENTICATION_REQUIRED_ERROR})
+  if(error instanceof NativeCommandNotCommittedError)return reply.code(409).send({error:{code:'NATIVE_BUSINESS_NOT_COMMITTED',message:error.original instanceof MemberContentCardError?error.original.message:'内容已变化，请重新读取',commitDisposition:'not_committed'}})
+  if(error instanceof z.ZodError)return reply.code(400).send({error:{code:'HOME_CONTENT_INPUT_INVALID',message:'请核对内容、原因与原版本'}})
   if(error instanceof InputError)return reply.code(400).send({error:{code:'HOME_CONTENT_INPUT_INVALID',message:error.message}})
   if(error instanceof MemberContentCardError)return reply.code(error.statusCode).send({error:{code:error.code,message:error.message}})
   if(error instanceof StaffAccessDeniedError)return reply.code(403).send({error:{code:'STAFF_ACCESS_DENIED',message:'没有管理首页内容的权限'}})
@@ -129,3 +137,46 @@ function enumeration<const Values extends readonly string[]>(value:unknown,label
 function list<const Values extends readonly string[]>(value:unknown,label:string,values:Values){if(!Array.isArray(value)||value.some(item=>typeof item!=='string'||!values.includes(item)))throw invalid(`${label}格式不正确`);return [...new Set(value)] as Values[number][]}
 function cardCode(value:unknown){const result=text(value,'内容编号',3,64);if(!/^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/.test(result))throw invalid('内容编号只能使用字母、数字、点、横线或下划线');return result}
 function key(request:FastifyRequest){const value=request.headers['idempotency-key'];if(Array.isArray(value))throw invalid('Idempotency-Key格式不正确');const result=text(value,'Idempotency-Key',8,128);if(!/^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}$/.test(result))throw invalid('Idempotency-Key格式不正确');return result}
+
+const contentVersion=(row:MemberContentCardView)=>createHash('sha256').update(JSON.stringify(row)).digest('hex')
+const nativeContentRow=(row:MemberContentCardView)=>({...row,nativeVersion:contentVersion(row)})
+export const nativeMemberContentCardApiPlugin:FastifyPluginAsync<Omit<MemberContentCardApiOptions,'service'>&{commands:Pick<NormalizedCommandExecutor,'execute'>}>=async(app,options)=>{
+ app.addHook('onRequest',async(_request,reply)=>{reply.header('Cache-Control','private, no-store')})
+ const base='/staff/native-home-content'
+ app.get(base,async(request,reply)=>handle(reply,async()=>{
+  const q=z.object({search:z.string().trim().max(80).default(''),cursor:z.string().max(64).optional()}).strict().parse(request.query)
+  const ctx=await options.resolveStaffContext(request)
+  const data=await options.transactions.run(ctx.scope,async tx=>{
+   const access=await new StaffAccessRepository(tx).resolve(ctx.employeeId)
+   if(!['community.activity.view','community.activity.manage','community.activity.publish'].some(p=>access.permissions.includes(p)))throw new StaffAccessDeniedError('无内容读取权限')
+   const result=await new MemberContentCardRepository(tx).nativeList(q.search,q.cursor??null)
+   return{employeeId:ctx.employeeId,protocol:1,durableCommands:true,rows:result.rows.map(nativeContentRow),next:result.next}
+  },{readOnly:true,isolation:'repeatable-read'});return reply.send({data})
+ }))
+ app.get(base+'/activity-options',async(request,reply)=>handle(reply,async()=>{
+  const ctx=await options.resolveStaffContext(request),q=z.object({search:z.string().trim().max(80).default(''),cursor:z.string().max(128).optional()}).strict().parse(request.query)
+  const data=await options.transactions.run(ctx.scope,async tx=>{
+   await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'community.activity.manage')
+   const rows=(await tx.query<{id:string;name:string}>(`SELECT public_id AS id,title AS name FROM mbox.community_activities WHERE tenant_id=$1 AND store_id=$2 AND status IN ('published','full') AND ($3::text IS NULL OR public_id>$3) AND (title ILIKE $4 OR public_id ILIKE $4) ORDER BY public_id LIMIT 31`,[ctx.scope.tenantId,ctx.scope.storeId,q.cursor??null,`%${q.search.replace(/[\\%_]/g,'\\$&')}%`])).rows
+   return{employeeId:ctx.employeeId,protocol:1,durableCommands:true,rows:rows.slice(0,30),next:rows.length>30?rows[29]!.id:null}
+  },{readOnly:true});return reply.send({data})
+ }))
+ app.post<{Params:{action:string}}>(base+'/:action',{bodyLimit:16000},async(request,reply)=>handle(reply,async()=>{
+  const action=z.enum(['create','update','publish','pause']).parse(request.params.action),body=object(request.body),code=cardCode(body.code),reason=text(body.reason,'操作原因',2,500),idempotencyKey=z.string().regex(/^native-business-[a-f0-9-]{36}$/).parse(key(request)),ctx=await options.resolveStaffContext(request)
+  const permission=action==='create'||action==='update'?'community.activity.manage':'community.activity.publish'
+  const expectedVersion=action==='create'?z.null().parse(body.expectedVersion):z.string().regex(/^[a-f0-9]{64}$/).parse(body.expectedVersion)
+  const parsedDraft=action==='create'||action==='update'?draft(body,code):null
+  const authorize=async(tx:ScopedTransaction)=>{
+   const current=await options.resolveStaffContext(request);if(current.employeeId!==ctx.employeeId||current.scope.tenantId!==ctx.scope.tenantId||current.scope.storeId!==ctx.scope.storeId)throw new StaffAccessDeniedError('身份变化')
+   await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,permission)
+  }
+  const guarded=nativeGuardedExecutor(nativePhysicalExecutor(options.commands,ctx,authorize),{fingerprint:{employeeId:ctx.employeeId,action,code,reason,expectedVersion,draft:parsedDraft},authorize,guard:async tx=>{
+   await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`native-home-content:${ctx.scope.tenantId}:${ctx.scope.storeId}:${code}`])
+   const current=await new MemberContentCardRepository(tx).nativeFind(code,true)
+   if(action==='create'?current!==null:current===null||contentVersion(current)!==expectedVersion)throw new MemberContentCardError('原内容已变化，请重新读取后核对','HOME_CONTENT_STALE')
+  }})
+  const service=new MemberContentCardService(options.transactions,guarded),common={code,reason,idempotencyKey}
+  const result=action==='create'?await service.create(ctx,{...common,draft:parsedDraft!}):action==='update'?await service.update(ctx,{...common,draft:parsedDraft!}):action==='publish'?await service.publish(ctx,common):await service.pause(ctx,common)
+  return reply.send({data:{employeeId:ctx.employeeId,requestKey:idempotencyKey,action,row:nativeContentRow(result.value)},meta:{protocol:1,replayed:result.replayed}})
+ }))
+}

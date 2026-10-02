@@ -22,6 +22,8 @@
     "db:provision:normalized": "tsx server/provision-normalized-store.ts",
     "db:provision:normalized:catalog": "tsx server/provision-normalized-catalog.ts",
     "db:verify:normalized:commercial": "tsx server/verify-normalized-commercial-readiness.ts",
+    "test:native-web-compat": "vitest run server/normalized/table-management-api.test.ts server/normalized/table-management-repository.test.ts server/normalized/payment-api.test.ts server/normalized/commercial-ops-api.test.ts server/normalized/activity-payment-service.test.ts src/normalized-ui/staff-actions src/normalized-ui/recoverable-command.test.ts --reporter=dot",
+    "check:native-web-compat": "tsc --noEmit -p tsconfig.server.json && npm run typecheck:web && npm run test:native-web-compat && npm run build",
     "test:normalized": "vitest run server/migrate-normalized.test.ts server/provision-normalized-store.test.ts server/normalized src/normalized-ui --reporter=dot && node --test scripts/normalized-load-acceptance.test.mjs",
     "test:normalized:postgres": "node scripts/run-normalized-postgres-tests.mjs",
     "test:normalized:postgres:runner": "node --test scripts/run-normalized-postgres-tests.test.mjs",

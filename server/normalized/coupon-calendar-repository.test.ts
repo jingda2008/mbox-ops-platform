@@ -37,6 +37,11 @@ describe('coupon calendar bounded batch reads', () => {
     expect(result[29]).toMatchObject({ status: 'draft', rule: { excludedDates: [], windows: [{ startMinute: 29, endMinute: 1440 }] }, limits: { perCustomerDay: 30 } })
   })
 
+  it('pages native history without adding a query per rule',async()=>{
+    const {query,repository,rows}=setup(31);for(const row of rows)Object.assign(row,{at:'2037-01-01T00:00:00.000001Z'});
+    const page=await repository.listNative('TEST');expect(page.rows).toHaveLength(30);expect(query).toHaveBeenCalledTimes(4);expect(query.mock.calls[0]![0]).toContain('LIMIT 31');expect(JSON.parse(Buffer.from(page.next!,'base64url').toString())).toEqual({at:'2037-01-01T00:00:00.000001Z',id:rows[29]!.id});
+  })
+
   it('projects 50 wallet rules in five queries with no internal approval data', async () => {
     const { query, repository, rows } = setup(50)
     const result = await repository.walletViews(rows.map(row => `benefit-${row.code}`), new Date('2037-09-09T04:00:00Z'))

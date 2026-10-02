@@ -504,7 +504,7 @@ describe('paymentApiPlugin', () => {
     })
 
     expect(response.statusCode).toBe(201)
-    expect(response.json()).toEqual({ data: { ...payment, providerAction: null }, meta: { replayed: false } })
+    expect(response.json()).toEqual({ data: { ...payment, providerAction: null }, meta: { replayed: false,requestBinding:{protocol:1,idempotencyKey:'payment-init-0001',requestedPublicId:'payment-generated-0001',paymentId:payment.id,paymentPublicId:payment.publicId,orderIds:[orderId],amountMinor:payment.amountMinor,provider:'postar',method:'jsapi',employeeId:null} } })
     expect(value.commands.initiate).toHaveBeenCalledWith(expect.objectContaining({
       scope: { tenantId, storeId },
       actor: { type: 'guest', ref: `guest-session:${guestSessionId}` },
@@ -881,6 +881,26 @@ describe('paymentApiPlugin', () => {
     }))
   })
 
+  it.each(['closed','succeeded'] as const)('applies verified provider close outcome %s without inventing a failed payment',async(status)=>{
+    const close=vi.fn(async()=>({context:{id:paymentId,publicId:payment.publicId,amountMinor:8800,currency:'CNY'},
+      observation:{status,providerTransactionId:'POSTAR-ORIGINAL',amount:8800,currency:'CNY',occurredAt:'2026-08-11T12:05:00Z'},verifiedObservationId:verifiedPaymentObservationId}))
+    const value=fixture({resolveStaffContext:()=>({scope:{tenantId,storeId},actor:{type:'employee',employeeId},employeeId,businessDate:'2026-08-11',capabilities:['payment.initiate.staff','reconciliation.view']}),
+      onlinePayments:{assertAvailable:vi.fn(),resolveActivePayment:vi.fn(),create:vi.fn(),query:vi.fn(),querySystem:vi.fn(),requestRefund:vi.fn(),queryRefund:vi.fn(),listStalePendingPostarPaymentIds:vi.fn(),close} as never})
+    const response=await value.app.inject({method:'POST',url:`/api/payments/${paymentId}/provider-close`,headers:{'idempotency-key':'native-close-original-0001'},payload:{expectedAmountMinor:8800,reason:'顾客明确取消扫码'}})
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({data:{id:paymentId,status},meta:{providerClosed:status==='closed'}})
+    expect(value.commands.authorizeProviderCloseForReplacement).toHaveBeenCalledWith(expect.objectContaining({paymentId,expectedAmountMinor:8800,reason:'顾客明确取消扫码'}))
+    expect(value.commands.recordProviderQueryResult).toHaveBeenCalledWith(expect.objectContaining({verifiedObservationId:verifiedPaymentObservationId,status,idempotencyKey:`provider-close-${verifiedPaymentObservationId}`}))
+    expect(close).toHaveBeenCalledWith(expect.objectContaining({paymentId,closeBindingId:'native-close-original-0001'}))
+  })
+  it('does not contact the provider when close authority was revoked',async()=>{
+    const close=vi.fn()
+    const value=fixture({resolveStaffContext:()=>({scope:{tenantId,storeId},actor:{type:'employee',employeeId},employeeId,businessDate:'2026-08-11',capabilities:['reconciliation.view']}),
+      onlinePayments:{assertAvailable:vi.fn(),resolveActivePayment:vi.fn(),create:vi.fn(),query:vi.fn(),querySystem:vi.fn(),requestRefund:vi.fn(),queryRefund:vi.fn(),listStalePendingPostarPaymentIds:vi.fn(),close} as never})
+    expect((await value.app.inject({method:'POST',url:`/api/payments/${paymentId}/provider-close`,headers:{'idempotency-key':'native-close-revoked-0001'},payload:{expectedAmountMinor:8800,reason:'顾客明确取消扫码'}})).statusCode).toBe(403)
+    expect(close).not.toHaveBeenCalled();expect(value.commands.authorizeProviderCloseForReplacement).not.toHaveBeenCalled()
+  })
+
   it('refuses staff provider query without reconciliation permission', async () => {
     const value = fixture({
       resolveActorContext: () => ({
@@ -1019,13 +1039,13 @@ describe('paymentApiPlugin', () => {
       url: '/api/activity-registrations/activity-registration-0001/manual-collections',
       headers: { 'idempotency-key': 'activity-manual-cash-0001' },
       payload: {
-        provider: 'cash', method: 'cash', receiptReference: 'ACT-CASH-0001',
+        provider: 'cash', method: 'cash', receiptReference: 'ACT-CASH-0001', expectedAmountMinor:2000,
         contact: '13800138000', occurredAt: '1999-01-01T00:00:00.000Z',
       },
     })
     expect(response.statusCode).toBe(201)
     expect(value.commands.recordManualActivity).toHaveBeenCalledWith(expect.objectContaining({
-      registrationPublicId: 'activity-registration-0001', provider: 'cash', method: 'cash',
+      registrationPublicId: 'activity-registration-0001', provider: 'cash', method: 'cash', expectedAmountMinor:2000,
       evidence: { receiptReference: 'ACT-CASH-0001', collectedByEmployeeId: employeeId },
     }))
     expect(JSON.stringify(value.commands.recordManualActivity.mock.calls[0]?.[0])).not.toContain('13800138000')

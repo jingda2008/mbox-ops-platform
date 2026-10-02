@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "channel": "preview",
+  "releases": [
+    {
+      "platform": "ios",
+      "appId": "com.mbox.staff.native",
+      "version": "0.3.0",
+      "build": 3,
+      "minimumOS": "17.0",
+      "priority": "normal",
+      "notes": "更新桌台与收银体验。",
+      "delivery": "testflight",
+      "url": "https://testflight.apple.com/join/TESTONLY"
+    },
+    {
+      "platform": "android",
+      "appId": "com.mbox.staff.nativeapp",
+      "version": "0.3.0",
+      "build": 3,
+      "minimumOS": "26",
+      "priority": "normal",
+      "notes": "更新桌台与收银体验。",
+      "delivery": "apk",
+      "url": "https://mbox.shmbox.com/native-updates/staff/mbox-3.apk",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "bytes": 4096
+    }
+  ]
+}

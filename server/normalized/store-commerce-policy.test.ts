@@ -114,6 +114,7 @@ function transactionFixture(initial?: MutablePolicyRow) {
     },
     query: async <ResultRow extends Record<string, unknown>>(text: string, values: readonly unknown[] = []): Promise<PostgresQueryResult<ResultRow>> => {
       const sql = text.replace(/\s+/g, ' ').trim()
+      if (sql.startsWith('SELECT pg_advisory_xact_lock')) return {rows:[],rowCount:1}
       if (sql.startsWith('SELECT online_payment_enabled')) {
         return { rows: row === undefined ? [] : [row as ResultRow], rowCount: row === undefined ? 0 : 1 }
       }

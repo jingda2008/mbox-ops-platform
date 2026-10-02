@@ -1,3 +1,5 @@
+import Fastify from 'fastify'
+import {nativeContactGovernanceApiPlugin} from './native-contact-governance-api.js'
 import {assertRuntimeDatabasePool} from './runtime-database-identity.js'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { afterAll,beforeAll,describe,expect,it } from 'vitest'
@@ -267,6 +269,27 @@ integration('095 personal-contact governance PostgreSQL boundaries',()=>{
       return client.query(`SELECT public_id FROM mbox.community_activity_registration_contact_versions WHERE id=$1`,[contact.id])
     })
     expect(isolated.rows).toHaveLength(0)
+  })
+
+
+  it('native governance retains original decisions and holds with restricted login, paging and revoked replay',async()=>{
+    const runner=new ScopedPostgresTransactionRunner(runtime),app=Fastify(),root='/staff/native-contact-governance'
+    await app.register(nativeContactGovernanceApiPlugin,{transactions:runner,protection:contactProtection,resolveContext:request=>staff(String(request.headers['x-test-actor']??id.approver))});await app.ready()
+    const send=(action:string,payload:unknown,actor=id.approver,key='native-business-'+randomUUID())=>app.inject({method:'POST',url:root+'/'+action,payload,headers:{'x-test-actor':actor,'idempotency-key':key}})
+    try{
+      const draft={resourceKind:'verified_membership_phone',retentionDaysAfterPurposeEnd:45,legalBasisReference:'隔离测试已核准保留依据',reason:'核对完整联系方式保留流程'},key='native-business-'+randomUUID();const saved=await send('draft',draft,id.approver,key);expect(saved.statusCode,saved.body).toBe(200);let row=saved.json().data.row;expect(row.draftedByEmployeeId).toBe(id.approver)
+      const approval={publicId:row.publicId,expectedVersion:row.nativeVersion,reason:'独立核对保留依据与期限'};expect((await send('approve',approval)).statusCode).not.toBe(200);const approved=await send('approve',approval,id.ops);expect(approved.statusCode,approved.body).toBe(200);row=approved.json().data.row
+      const publish={publicId:row.publicId,expectedVersion:row.nativeVersion,reason:'第三人核对排期',effectiveFrom:new Date(Date.now()+86400000).toISOString()},publishKey='native-business-'+randomUUID();expect((await send('publish',publish,id.ops)).statusCode).not.toBe(200);const published=await send('publish',publish,id.owner,publishKey);expect(published.statusCode,published.body).toBe(200);expect(new Date(published.json().data.row.effectiveFrom).toISOString()).toBe(publish.effectiveFrom)
+      const stale=await send('approve',approval,id.ops);expect(stale.statusCode).toBe(409)
+      const resourceResponse=await app.inject({url:root+'?area=resources&search=CVC',headers:{'x-test-actor':id.owner}});expect(resourceResponse.statusCode,resourceResponse.body).toBe(200);const resource=resourceResponse.json().data.rows[0];expect(resource).toBeDefined();expect(resourceResponse.body).not.toMatch(/encrypted|contact_hash|13812345678/)
+      const holdInput={resourceKind:resource.resourceKind,resourcePublicId:resource.publicId,expectedVersion:resource.nativeVersion,legalBasisReference:'隔离争议处理保留依据',reason:'保留指定原版本',holdUntil:new Date(Date.now()+86400000).toISOString()},holdKey='native-business-'+randomUUID();const held=await send('hold',holdInput,id.owner,holdKey);expect(held.statusCode,held.body).toBe(200);const h=held.json().data.row;expect(h.resourcePublicId).toBe(resource.publicId);expect(h.createdByEmployeeId).toBe(id.owner)
+      const released=await send('release',{publicId:h.publicId,expectedVersion:h.nativeVersion,reason:'争议处理完成释放保留'},id.owner);expect(released.statusCode,released.body).toBe(200);expect(released.json().data.row.status).toBe('released')
+      await pool.query('DELETE FROM mbox.idempotency_records WHERE tenant_id=$1',[id.tenant]);for(const [action,body,actor,k]of [['draft',draft,id.approver,key],['publish',publish,id.owner,publishKey],['hold',holdInput,id.owner,holdKey]]as const){const replay=await send(action,body,actor,k);expect(replay.statusCode,replay.body).toBe(200);expect(replay.json().meta.replayed).toBe(true)}
+      const holds=await app.inject({url:root+'?area=holds',headers:{'x-test-actor':id.owner}});expect(holds.json().data.rows.find(x=>x.publicId===h.publicId).status).toBe('released')
+      for(const area of ['policies','dispositions']){const response=await app.inject({url:root+'?area='+area,headers:{'x-test-actor':id.owner}});expect(response.statusCode,response.body).toBe(200);expect(response.body).not.toMatch(/encrypted|contact_hash/)}
+      await pool.query("UPDATE mbox.employees SET status='suspended' WHERE id=$1",[id.owner]);try{expect((await send('hold',holdInput,id.owner,holdKey)).statusCode).toBe(403)}finally{await pool.query("UPDATE mbox.employees SET status='active' WHERE id=$1",[id.owner])}
+      for(let n=0;n<51;n++){const r=await send('draft',draft);expect(r.statusCode,r.body).toBe(200)}const first=(await app.inject(root+'?area=policies')).json().data;expect(first.rows).toHaveLength(50);const next=(await app.inject(root+'?area=policies&cursor='+first.next)).json().data;expect(next.rows.length).toBeGreaterThan(0);expect(next.rows.some(r=>first.rows.some(x=>x.publicId===r.publicId))).toBe(false)
+    }finally{await app.close()}
   })
 
   async function activityContact(registrationId:string){

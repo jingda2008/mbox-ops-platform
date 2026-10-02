@@ -1,0 +1,52 @@
+server/normalized/audit-120-fulfillment.repro.ts(18,36): error TS6142: Module '../../src/normalized-ui/staff-actions/StaffActionsPanel.js' was resolved to '/Users/jingda/mbox/mbox-native-staff-app-20260926/src/normalized-ui/staff-actions/StaffActionsPanel.tsx', but '--jsx' is not set.
+server/normalized/audit-120-fulfillment.repro.ts(71,94): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}` | undefined'.
+  Type 'string' is not assignable to type '`${string}-${string}-${string}-${string}-${string}`'.
+server/normalized/audit-120-fulfillment.repro.ts(73,11): error TS7034: Variable 'rows' implicitly has type 'any[]' in some locations where its type cannot be determined.
+server/normalized/audit-120-fulfillment.repro.ts(79,46): error TS7005: Variable 'rows' implicitly has an 'any[]' type.
+server/normalized/audit-120-fulfillment.repro.ts(86,45): error TS7005: Variable 'rows' implicitly has an 'any[]' type.
+server/normalized/audit-120-fulfillment.repro.ts(87,11): error TS7034: Variable 'servers' implicitly has type 'any[]' in some locations where its type cannot be determined.
+server/normalized/audit-120-fulfillment.repro.ts(97,102): error TS7005: Variable 'servers' implicitly has an 'any[]' type.
+server/normalized/audit-120-fulfillment.repro.ts(115,11): error TS7034: Variable 'taskIds' implicitly has type 'any[]' in some locations where its type cannot be determined.
+server/normalized/audit-120-fulfillment.repro.ts(122,44): error TS7005: Variable 'taskIds' implicitly has an 'any[]' type.
+server/normalized/audit-120-fulfillment.repro.ts(126,48): error TS7005: Variable 'taskIds' implicitly has an 'any[]' type.
+server/normalized/audit-120-fulfillment.repro.ts(127,55): error TS7006: Parameter 'task' implicitly has an 'any' type.
+server/normalized/audit-120-fulfillment.repro.ts(129,25): error TS7006: Parameter 'task' implicitly has an 'any' type.
+server/normalized/audit-120-fulfillment.repro.ts(129,41): error TS7005: Variable 'taskIds' implicitly has an 'any[]' type.
+server/normalized/audit-120-fulfillment.repro.ts(131,57): error TS7006: Parameter 'task' implicitly has an 'any' type.
+server/normalized/audit-120-money.repro.ts(39,43): error TS2532: Object is possibly 'undefined'.
+server/normalized/audit-120-money.repro.ts(95,51): error TS2532: Object is possibly 'undefined'.
+server/normalized/audit-120-money.repro.ts(98,12): error TS2532: Object is possibly 'undefined'.
+server/normalized/audit-120-money.repro.ts(131,12): error TS2532: Object is possibly 'undefined'.
+server/normalized/audit-120-recheck-fulfillment.repro.ts(15,36): error TS6142: Module '../../src/normalized-ui/staff-actions/StaffActionsPanel.js' was resolved to '/Users/jingda/mbox/mbox-native-staff-app-20260926/src/normalized-ui/staff-actions/StaffActionsPanel.tsx', but '--jsx' is not set.
+server/normalized/audit-120-recheck-fulfillment.repro.ts(72,94): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}` | undefined'.
+  Type 'string' is not assignable to type '`${string}-${string}-${string}-${string}-${string}`'.
+server/normalized/audit-120-recheck-fulfillment.repro.ts(76,11): error TS7034: Variable 'taskIds' implicitly has type 'any[]' in some locations where its type cannot be determined.
+server/normalized/audit-120-recheck-fulfillment.repro.ts(83,44): error TS7005: Variable 'taskIds' implicitly has an 'any[]' type.
+server/normalized/audit-120-recheck-fulfillment.repro.ts(87,48): error TS7005: Variable 'taskIds' implicitly has an 'any[]' type.
+server/normalized/audit-120-recheck-fulfillment.repro.ts(88,55): error TS7006: Parameter 'task' implicitly has an 'any' type.
+server/normalized/audit-120-recheck-fulfillment.repro.ts(90,25): error TS7006: Parameter 'task' implicitly has an 'any' type.
+server/normalized/audit-120-recheck-fulfillment.repro.ts(90,41): error TS7005: Variable 'taskIds' implicitly has an 'any[]' type.
+server/normalized/audit-120-recheck-fulfillment.repro.ts(93,57): error TS7006: Parameter 'task' implicitly has an 'any' type.
+server/normalized/audit-120-recheck-money.repro.ts(40,43): error TS2532: Object is possibly 'undefined'.
+server/normalized/audit-120-recheck-money.repro.ts(96,51): error TS2532: Object is possibly 'undefined'.
+server/normalized/audit-120-recheck-money.repro.ts(99,12): error TS2532: Object is possibly 'undefined'.
+server/normalized/audit-120-recheck-money.repro.ts(120,156): error TS18049: 'ticket.lines' is possibly 'null' or 'undefined'.
+server/normalized/audit-120-recheck-money.repro.ts(120,169): error TS2339: Property 'filter' does not exist on type 'string | number | boolean | JsonObject | JsonValue[]'.
+  Property 'filter' does not exist on type 'string'.
+server/normalized/audit-120-recheck-money.repro.ts(120,176): error TS7006: Parameter 'line' implicitly has an 'any' type.
+server/normalized/audit-120-recheck-money.repro.ts(133,12): error TS2532: Object is possibly 'undefined'.
+server/payment-provider.ts(380,5): error TS2345: Argument of type '{ refundId: string; providerRefundId: string; originalProviderTransactionId: string; merchantId: string; }' is not assignable to parameter of type 'ProviderRefundQueryRequest'.
+  Type '{ refundId: string; providerRefundId: string; originalProviderTransactionId: string; merchantId: string; }' is missing the following properties from type 'ProviderRefundQueryRequest': amount, currency
+src/normalized-ui/guest/guest-api.ts(1,50): error TS2835: Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Did you mean './guest-model.js'?
+src/normalized-ui/guest/guest-api.ts(2,46): error TS2835: Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Did you mean '../../shared/contracts.js'?
+src/normalized-ui/guest/guest-api.ts(3,46): error TS2835: Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Did you mean '../../shared/contracts.js'?
+src/normalized-ui/guest/guest-api.ts(4,42): error TS2835: Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Did you mean '../../shared/online-payment-contracts.js'?
+src/normalized-ui/guest/guest-api.ts(6,42): error TS2835: Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Did you mean '../../shared/online-payment-contracts.js'?
+src/normalized-ui/staff-actions/staff-actions-model.ts(1,34): error TS2835: Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Did you mean '../../shared/table-search.js'?
+src/normalized-ui/staff-actions/staff-actions-model.ts(7,8): error TS2835: Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Did you mean './types.js'?
+src/normalized-ui/staff-actions/staff-actions-model.ts(88,24): error TS2532: Object is possibly 'undefined'.
+src/normalized-ui/staff-actions/staff-actions-model.ts(88,59): error TS2532: Object is possibly 'undefined'.
+src/shared/order-history-presentation.ts(1,37): error TS2835: Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Did you mean './operating-history.js'?
+src/shared/order-payment-allocation.test.ts(2,36): error TS2835: Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Did you mean './order-payment-allocation.js'?
+src/shared/product-display-snapshot.test.ts(5,8): error TS2835: Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Did you mean './product-display-snapshot.js'?
+src/shared/table-search.ts(1,34): error TS2835: Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Did you mean './table-code-alias.js'?

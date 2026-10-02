@@ -201,6 +201,15 @@ describe('ActivityPaymentService', () => {
     expect(recordProviderQueryResult).not.toHaveBeenCalled()
   })
 
+  it('allows the original refund command to recover after the original payment has finished refunding', async () => {
+    const requestActivityRefund = vi.fn(async () => ({value:{status:'requested'},replayed:true}))
+    const service = serviceFor({...paymentRow(),authoritative_payment_status:'refunded'},undefined,{requestActivityRefund})
+    await service.requestRefund({scope,employeeId:'91000000-0000-4000-8000-000000000005',businessDate:'2026-08-17'}, {
+      registrationPublicId,expectedPaymentPublicId:'activity-original-frozen',reason:'原活动退款',idempotencyKey:'activity-recover-original-0001',
+    })
+    expect(requestActivityRefund).toHaveBeenCalledWith(expect.objectContaining({paymentId}))
+  })
+
   it('starts a paid activity refund through the existing maker-checker command', async () => {
     const requestActivityRefund = vi.fn(async () => ({ value: { status: 'requested' }, replayed: false }))
     const service = serviceFor(

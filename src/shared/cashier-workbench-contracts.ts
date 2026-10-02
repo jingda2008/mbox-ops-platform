@@ -88,6 +88,9 @@ export interface CashierWorkbenchKdsTask {
 }
 
 export interface CashierWorkbenchPayment {
+  originalAmountMinor?: number
+  originalOrderPublicIds?: string[]
+  payableKind?: string
   id: string
   publicId: string
   provider: CashierPaymentProvider
@@ -148,6 +151,7 @@ export interface CashierWorkbenchActivityRegistration {
     remainingRefundableMinor: number
     currency: string
     succeededAt: string | null
+    payment?: CashierWorkbenchPayment
     refundStatus: CashierRefundStatus | null
   }[]
   recollectionAuthorization?: {
@@ -222,6 +226,8 @@ export interface CashierWorkbenchView {
   query: string
   actions: {
     supportsGuardedClosedDebtCollection?: boolean
+    supportsGuardedActivityCashier?: boolean
+    supportsProviderClose?: boolean
     canInitiateOnlinePayment: boolean
     canQueryOnlinePayment: boolean
     onlinePaymentProvider: 'postar' | 'simulation' | null

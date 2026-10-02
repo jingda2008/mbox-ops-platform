@@ -52,6 +52,8 @@ describe('PostgresCashierWorkbenchQuery', () => {
     expect(view.query).toBe('VIP1')
     expect(view.actions).toEqual({
       supportsGuardedClosedDebtCollection: true,
+      supportsGuardedActivityCashier: true,
+      supportsProviderClose: true,
       canInitiateOnlinePayment: false,
       canQueryOnlinePayment: false,
       onlinePaymentProvider: null,

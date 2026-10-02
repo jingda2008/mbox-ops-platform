@@ -6,6 +6,7 @@ import {
   IdempotencyConflictError,
   IdempotencyInProgressError,
   NormalizedCommandExecutor,
+  NativeCommandNotCommittedError,
   type JsonCodec,
 } from './command-executor.js'
 import { IdempotencyCleanupWorker } from './idempotency-cleanup-worker.js'
@@ -61,6 +62,27 @@ integration('normalized command idempotency expiry', () => {
 
   afterAll(async () => {
     await pool?.end()
+  })
+
+  it('retains opt-in receipts through cleanup and still checks actor fingerprint', async () => {
+    const input={...command('native-receipt-0001','actor-one'),retainReceipt:true}
+    let count=0
+    const run=()=>executor.execute(input,async()=>({result:`result-${++count}`,auditEvents:[],outboxMessages:[]}))
+    expect(await run()).toEqual({value:'result-1',replayed:false})
+    const stored=await pool.query("SELECT expires_at::text AS expiry FROM mbox.idempotency_records WHERE idempotency_key=$1",[input.idempotencyKey])
+    expect(stored.rows[0].expiry).toBe('infinity')
+    await cleanup.runBatch(scope,{limit:50})
+    expect(await run()).toEqual({value:'result-1',replayed:true})
+    expect(count).toBe(1)
+    await expect(executor.execute({...input,requestFingerprint:'actor-two'},async()=>({result:'wrong',auditEvents:[],outboxMessages:[]}))).rejects.toBeInstanceOf(IdempotencyConflictError)
+  })
+  it('marks only newly acquired callback rollback as not committed',async()=>{
+    const input={...command('native-receipt-rollback-0001','actor-one'),retainReceipt:true}
+    await expect(executor.execute(input,async()=>{throw new Error('business changed')})).rejects.toBeInstanceOf(NativeCommandNotCommittedError)
+    const stored=await pool.query("SELECT id FROM mbox.idempotency_records WHERE idempotency_key=$1",[input.idempotencyKey])
+    expect(stored.rowCount).toBe(0)
+    await expect(executor.execute(input,async()=>({result:'unused',auditEvents:[],outboxMessages:[]}),async()=>{throw new Error('revoked before claim')})).rejects.toThrow('revoked before claim')
+    expect(await executor.execute(input,async()=>({result:'retry',auditEvents:[],outboxMessages:[]}))).toEqual({value:'retry',replayed:false})
   })
 
   it.each(['completed', 'failed', 'processing'] as const)(

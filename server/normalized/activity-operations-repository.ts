@@ -413,7 +413,12 @@ export class ActivityOperationsRepository {
     const row = result.rows[0]
     if (!row) throw new ActivityOperationsError('活动草稿未能建立', 'ACTIVITY_DRAFT_CREATE_FAILED', 503)
     await this.replaceDraftPackages(publicId, input.packages)
-    return (await this.detail(publicId)).activity
+    return (await this.detail(publicId,{limit:0})).activity
+  }
+
+  async nativeList(search:string,cursor:string|null){
+    const result=await this.transaction.query<ActivitySummaryRow>(ACTIVITY_SUMMARY_QUERY.replace('GROUP BY activity.id',`AND activity.public_id IN (SELECT public_id FROM mbox.community_activities WHERE tenant_id=$1 AND store_id=$2 AND ($3::text IS NULL OR public_id>$3) AND (title ILIKE $4 OR public_id ILIKE $4) ORDER BY public_id LIMIT 31) GROUP BY activity.id ORDER BY activity.public_id`),[this.transaction.scope.tenantId,this.transaction.scope.storeId,cursor,`%${search.replace(/[\\%_]/g,'\\$&')}%`])
+    return{rows:result.rows.slice(0,30).map(summaryView),next:result.rows.length>30?result.rows[29]!.public_id:null}
   }
 
   async list(): Promise<ActivityOperationsSummary[]> {
@@ -439,7 +444,7 @@ export class ActivityOperationsRepository {
     }))
   }
 
-  async detail(publicId: string): Promise<ActivityOperationsDetail> {
+  async detail(publicId: string, nativePage?:{cursor?:string;only?:string;search?:string;limit:number}): Promise<ActivityOperationsDetail> {
     const activityResult = await this.transaction.query<ActivityDetailRow>(`${ACTIVITY_DETAIL_QUERY}
       WHERE activity.tenant_id=$1::uuid AND activity.store_id=$2::uuid AND activity.public_id=$3
       GROUP BY activity.id
@@ -526,9 +531,8 @@ export class ActivityOperationsRepository {
        AND fulfillment_intent.registration_cycle=registration.registration_cycle
       WHERE registration.tenant_id=$1::uuid AND registration.store_id=$2::uuid
         AND activity.public_id=$3
-      ORDER BY CASE registration.status WHEN 'waitlisted' THEN 1 ELSE 0 END,
-        registration.registered_at, registration.id
-    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, publicId])
+        ${nativePage?'AND ($4::text IS NULL OR registration.public_id>$4) AND ($5::text IS NULL OR registration.public_id=$5) AND (registration.public_id ILIKE $7 OR customer.public_id ILIKE $7 OR COALESCE(profile.display_name,\'\') ILIKE $7) ORDER BY registration.public_id LIMIT $6':"ORDER BY CASE registration.status WHEN 'waitlisted' THEN 1 ELSE 0 END, registration.registered_at, registration.id"}
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, publicId,...(nativePage?[nativePage.cursor??null,nativePage.only??null,nativePage.limit,`%${(nativePage.search??'').replace(/[\\%_]/g,'\\$&')}%`]:[])])
     return {
       activity: { ...detailView(activityRow), packages: await this.packages(publicId) },
       registrations: registrations.rows.map(registrationView),
@@ -598,7 +602,7 @@ export class ActivityOperationsRepository {
     const row = result.rows[0]
     if (row) {
       await this.replaceDraftPackages(publicId, input.packages)
-      return (await this.detail(publicId)).activity
+      return (await this.detail(publicId,{limit:0})).activity
     }
     const existing = await this.transaction.query<{ status: ActivityStatus }>(`
       SELECT status FROM mbox.community_activities
@@ -637,7 +641,7 @@ export class ActivityOperationsRepository {
       'ACTIVITY_PACKAGE_AVAILABILITY_CONFLICT',
       409,
     )
-    return (await this.detail(activityPublicId)).activity
+    return (await this.detail(activityPublicId,{limit:0})).activity
   }
 
   async stopRegistration(publicId:string):Promise<ActivityOperationsActivity> {
@@ -646,7 +650,7 @@ export class ActivityOperationsRepository {
       SET registration_closed_at=COALESCE(registration_closed_at,clock_timestamp()),updated_at=clock_timestamp()
       WHERE tenant_id=$1 AND store_id=$2 AND public_id=$3 AND status IN ('published','full') RETURNING id`,[scope.tenantId,scope.storeId,publicId])
     if(!result.rows.length)throw new ActivityOperationsError('活动不存在或已结束','ACTIVITY_UNAVAILABLE',409)
-    return (await this.detail(publicId)).activity
+    return (await this.detail(publicId,{limit:0})).activity
   }
 
   async closeActivity(publicId: string, status: 'cancelled' | 'completed'): Promise<ActivityOperationsActivity> {
@@ -657,7 +661,7 @@ export class ActivityOperationsRepository {
     `, [scope.tenantId, scope.storeId, publicId])
     const activity = locked.rows[0]
     if (!activity) throw new ActivityOperationsError('活动不存在', 'ACTIVITY_NOT_FOUND', 404)
-    if (activity.status === status) return (await this.detail(publicId)).activity
+    if (activity.status === status) return (await this.detail(publicId,{limit:0})).activity
     if (['cancelled','completed'].includes(activity.status)) throw new ActivityOperationsError('活动已经结束，不能改写原结果', 'ACTIVITY_TERMINAL', 409)
     if (status === 'completed' && (!activity.started || activity.status === 'draft')) throw new ActivityOperationsError('未开始的活动不能登记已完成，请使用取消活动', 'ACTIVITY_NOT_STARTED', 409)
     const unresolved = await this.transaction.query<{ count: string }>(`
@@ -687,7 +691,7 @@ export class ActivityOperationsRepository {
       `还有 ${unresolved.rows[0]!.count} 笔报名或收退款未处理，请先完成签到、未到、取消报名及退款核对；不会自动退款或删除记录`, 'ACTIVITY_CLOSE_BLOCKED', 409)
     await this.transaction.query(`UPDATE mbox.community_activities SET status=$4,updated_at=clock_timestamp()
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid`, [scope.tenantId,scope.storeId,activity.id,status])
-    return (await this.detail(publicId)).activity
+    return (await this.detail(publicId,{limit:0})).activity
   }
 
   private async replaceDraftPackages(

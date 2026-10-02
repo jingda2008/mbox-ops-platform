@@ -14,3 +14,13 @@
 发布阻塞证据：现有SSH别名经`139.224.254.60:6122`转发时，在认证前返回`Connection closed`；未修改系统代理、DNS或服务器配置。独立发布目录已npm ci（0漏洞）及浏览器启动预检通过，公网HTTP/浏览器正式冒烟仍有间歇连接/超时失败。API只读就绪仍是rc.243、schema251、SHA33168ef7、workers healthy。没有生产写入，备份、迁移、切流及OSS完成证据均不能标记完成。
 
 原始本地证据保存在发布/开发目录的`.runtime`及本机交付目录，不将凭据、APK、构建缓存或未经审查的运行日志提交入库。后续部署须核对不可变标签、镜像摘要、备份/OSS读回及公开网页；后台部署与员工覆盖安装APK分别确认。
+
+## 2026-10-03 02:07 CST 发布包完成，部署受阻
+
+- 标签 `v1.0.0-rc.244` / `e67b327eedd7693a5eb31317976eaa9939ab9c0b`；[标签CI](https://github.com/jingda2008/mbox-ops-platform/actions/runs/37042949372)及[发布流程](https://github.com/jingda2008/mbox-ops-platform/actions/runs/37042949440)全部成功。
+- [固定候选发布包](https://github.com/jingda2008/mbox-ops-platform/releases/tag/v1.0.0-rc.244)已生成。镜像`mbox-normalized:1.0.0-rc.244-e67b327`，摘要`sha256:c5fded05c01733d3f66b3dc73cc7d621a45f22cfa5805517d7aa6a3ddda58b9a`，平台摘要`sha256:63fe8a83253cafb32d3e75aa1aa649b866fe5315ef9006fb34b3cf31d9db172a`。
+- 独立发布目录通过npm ci和浏览器预检；本次进程经既有代理保留TLS验证后，原线上rc.243四个入口的正式HTTP及浏览器冒烟全部通过，先前公网验证阻塞已恢复。
+- 实际运行唯一入口`deploy/aliyun/deploy-release.sh`：发布清单/归档/证据校验及敏感内容检查通过，第一条应用主机SSH检查经`139.224.254.60:6122`中继在认证前断开，退出255。没有执行远端备份、数据库迁移、候选启动或切流，不能标为部署完成。
+- 停止后只读检查：`ready`、workers healthy，生产仍为`33168ef756cb2a8c7761ba134e8660d947d68614`、schema251、原镜像`sha256:d1bde0f9d78b3660b8e7e040894a10962421f41f18b79aeaa014f3647de3408d`。
+
+剩余条件是恢复既有SSH通道或提供经核实的新连接方式，然后从固定标签重新执行标准部署链。仍须取得新的备份/OSS读回、schema258候选健康、切流后就绪及公开网页证据。安卓build7为预览签名；手机安装与后端上线分别确认，真实营业验收继续开放。

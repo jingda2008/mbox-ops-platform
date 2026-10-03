@@ -3,8 +3,25 @@ import {readFile} from 'node:fs/promises'
 const fixtureFile = process.env.NORMALIZED_E2E_FIXTURE_FILE ?? 'artifacts/normalized-browser/fixture.json'
 async function setup(page:any,quantity:number){
   const f=JSON.parse(await readFile(fixtureFile,'utf8'))
+  const cartRead = page.waitForResponse((response:any) => new URL(response.url()).pathname === '/api/guest/shared-cart' && response.request().method() === 'GET')
   await page.goto(f.guestUrl)
   await expect(page.getByTestId('normalized-guest-app')).toBeVisible()
+  const response = await cartRead
+  expect(response.status()).toBe(200)
+  const cart = (await response.json()).data
+  // The full suite intentionally leaves a shared cart in its two-device test.
+  // Establish an empty server cart instead of assuming an isolated page means
+  // isolated table data; all checkout writes below still use the real API.
+  if (cart.lines.length) {
+    const clear = await page.request.post('/api/guest/shared-cart/clear', {
+      headers: { 'x-mbox-guest-device': response.request().headers()['x-mbox-guest-device'], 'idempotency-key': `closure-setup-${crypto.randomUUID()}` },
+      data: { expectedGeneration: cart.generation, expectedVersion: cart.version },
+    })
+    expect(clear.status()).toBe(200)
+    expect((await clear.json()).data.lines).toHaveLength(0)
+    await page.reload()
+    await expect(page.getByTestId('normalized-guest-app')).toBeVisible()
+  }
   await page.getByLabel('搜索菜单商品').fill(f.orderableProductName)
   for(let i=0;i<quantity;i++){
     await page.getByRole('button',{name:`${i===0?'加入':'增加'}${f.orderableProductName}`,exact:true}).click()

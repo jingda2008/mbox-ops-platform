@@ -152,11 +152,12 @@ export class GuestOrderSafetyRepository {
 }
 
 function basketFingerprint(lines: readonly SubmitOrderLineInput[]): Record<string, number> {
-  return Object.fromEntries(
-    [...lines]
-      .sort((left, right) => left.productId.localeCompare(right.productId))
-      .map((line) => [line.productId, line.quantity]),
-  )
+  // Match the persisted-order SUM above. Notes/coupons split one product into
+  // multiple billable portions; neither may change duplicate protection.
+  // Preserve the existing policy: product totals, independent of notes/choices.
+  const quantities = new Map<string, number>()
+  for (const line of lines) quantities.set(line.productId, (quantities.get(line.productId) ?? 0) + line.quantity)
+  return Object.fromEntries([...quantities].sort(([left], [right]) => left.localeCompare(right)))
 }
 
 function requiredRetryAt(value: string | null | undefined): string {

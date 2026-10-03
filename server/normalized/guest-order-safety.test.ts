@@ -66,6 +66,17 @@ describe('GuestOrderSafetyRepository', () => {
     expect(transaction.calls[2]?.params[4]).toBe(JSON.stringify({ [productId]: 2 }))
   })
 
+  it('compares total product quantities when notes or coupons split one product into portions', async () => {
+    const transaction = new ScriptedTransaction([
+      ...openAndRate(),
+      { rows: [{ public_id: 'guest-order-existing-0001', created_at: '2026-08-13T12:00:30.000Z' }] },
+    ])
+    await expect(new GuestOrderSafetyRepository(transaction).assertAllowed({
+      ...input(), lines: [{ productId, quantity: 1 }, { productId, quantity: 2 }],
+    })).rejects.toBeInstanceOf(GuestOrderDuplicateConfirmationRequiredError)
+    expect(transaction.calls[2]?.params[4]).toBe(JSON.stringify({ [productId]: 3 }))
+  })
+
   it('requires confirmation for the latest same-table exact basket, regardless of customer', async () => {
     const transaction = new ScriptedTransaction([
       ...openAndRate(1, 2),

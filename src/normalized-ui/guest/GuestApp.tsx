@@ -18,7 +18,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError } from '../../shared/api-error'
-import { MenuOrderingWorkspace, type MenuSubmitOptions } from '../../components/MenuOrderingWorkspace'
+import { MenuOrderingWorkspace, type MenuSubmitOptions, type MenuCartItem } from '../../components/MenuOrderingWorkspace'
 import type { MenuBundleUnitSelection, MenuRecommendationScene } from '../../shared/contracts'
 import {
   GuestApiClient,
@@ -44,6 +44,8 @@ import { guestGatePresentation, type GuestGateReason } from './guest-gate-model'
 import { guestMenuProductToMenuProduct } from './menu-product-adapter'
 import { shortPublicReference } from '../public-reference'
 import { GuestServiceRecovery, type GuestServiceIntent } from './guest-service-recovery'
+import { GuestCheckoutRecovery, guestCheckoutLineNotes, resolveGuestDeviceKey, type GuestCheckoutIntent, type GuestCheckoutInput } from './guest-checkout-recovery'
+import { clearPersistedCart } from '../../components/menu-cart-storage'
 import './guest-app.css'
 
 type GuestApiPort = Pick<GuestApiClient, 'waitForTable' | 'scanTable' | 'loadSession' | 'searchMenu' | 'submitOrder' | 'loadSharedCart' | 'adjustSharedCart' | 'replaceSharedCartBundleSelection' | 'removeSharedCartLine' | 'checkoutSharedCart' | 'loadTableOrders' | 'loadTodayPerformance' | 'payTableOrder' | 'abandonCheckout' | 'requestService' | 'recordMood'>
@@ -101,6 +103,10 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const [selectedMood, setSelectedMood] = useState<GuestMood | null>(null)
   const [pendingMood, setPendingMood] = useState<GuestMood | null>(null)
   const [moodExpanded, setMoodExpanded] = useState(false)
+  const [checkoutIntent, setCheckoutIntent] = useState<GuestCheckoutIntent | null>(null)
+  const [checkoutRecoveryError, setCheckoutRecoveryError] = useState<string | null>(null)
+  const [checkoutViewRevision, setCheckoutViewRevision] = useState(0)
+  const checkoutRecoveryRef = useRef<GuestCheckoutRecovery | null>(null)
   const [submittingOrder, setSubmittingOrder] = useState(false)
   const [orderResult, setOrderResult] = useState<GuestOrderResult | null>(null)
   const [tableOrders, setTableOrders] = useState<GuestTableOrder[]>([])
@@ -304,6 +310,11 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       return false
     }
     setTable(session.table)
+    checkoutRecoveryRef.current = null
+    setCheckoutIntent(null)
+    setCheckoutRecoveryError(null)
+    setOrderResult(null)
+    setPanel(null)
     serviceRecoveryRef.current = null
     setServiceIntent(null)
     setPendingService(null)
@@ -324,6 +335,11 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       setServiceIntent(recovery.pending())
       serviceRecoveryRef.current = recovery
     } catch { setServiceRecoveryError('服务恢复记录暂时无法读取，请重新连接或联系服务员。') }
+    try {
+      const recovery = new GuestCheckoutRecovery(window.localStorage, session.cartScope ?? '', serviceDeviceRef.current)
+      setCheckoutIntent(recovery.pending())
+      checkoutRecoveryRef.current = recovery
+    } catch { setCheckoutRecoveryError('原下单记录暂时无法读取，请重新连接或联系服务员核对。') }
     const protocolVersion = session.cartProtocolVersion === 2 ? 2 : 1
     setCartProtocolVersion(protocolVersion)
     setCartStorageKey(protocolVersion === 1 ? guestCartStorageKey(session) : undefined)
@@ -392,7 +408,9 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       setGateMessage(parsed.error ?? '没有识别到桌号，请重新扫描桌面二维码。')
       return
     }
-    const deviceKey = resolveDeviceKey(window.sessionStorage)
+    let deviceKey: string
+    try { deviceKey = resolveGuestDeviceKey(window.sessionStorage, window.localStorage) }
+    catch { deviceKey = `guest-web-${crypto.randomUUID()}` }
     serviceDeviceRef.current = deviceKey
     apiRef.current = apiFactory?.(deviceKey) ?? new GuestApiClient(deviceKey)
     void connectTable()
@@ -564,12 +582,14 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   },[blockForSession,loadSharedCart,sharedCart])
 
   const submitOrder = useCallback(async (
-    items: Array<{ productId: string; quantity: number;bundleSelections?:MenuBundleUnitSelection[] }>,
-    options: MenuSubmitOptions,
+    items: MenuCartItem[] | null,
+    options: MenuSubmitOptions = { fulfillmentNote: '' },
   ) => {
     const api = apiRef.current
-    if (api === null || items.length === 0 || orderSubmittingRef.current) return
-    if (!options.confirmedDuplicateOrderId) {
+    if (api === null || items?.length === 0 || orderSubmittingRef.current) return
+    const recovery = checkoutRecoveryRef.current
+    if (!recovery) throw new Error('下单恢复记录无法保存，请重新连接桌位。')
+    if (items && !options.confirmedDuplicateOrderId) {
       const duplicate = findRecentDuplicateOrder(tableOrders, items)
       if (duplicate !== null) {
         throw new ApiError(
@@ -584,31 +604,34 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     setSubmittingOrder(true)
     haptic(8)
     try {
-      const result = cartProtocolVersion === 2
-        ? await (() => {
-          if (sharedCart === null) throw new Error('同桌购物车正在同步，请稍后再试。')
-          if (!sharedCart.allowedActions.includes('checkout')) {
-            throw new Error('购物车中有暂不可结算的商品，请处理或刷新后再结账。')
-          }
-          return api.checkoutSharedCart({
-            expectedGeneration: sharedCart.generation,
-            expectedVersion: sharedCart.version,
-            note: options.fulfillmentNote || null,
-            ...(options.confirmedDuplicateOrderId
-              ? { confirmedDuplicateOrderId: options.confirmedDuplicateOrderId }
-              : {}),
-          }, { idempotencyKey: safeIdempotencyKey('guest-shared-cart-checkout') })
-        })()
-        : await api.submitOrder(
-          {
-            items,
-            note: options.fulfillmentNote || null,
-            ...(options.confirmedDuplicateOrderId
-              ? { confirmedDuplicateOrderId: options.confirmedDuplicateOrderId }
-              : {}),
-          },
-          { idempotencyKey: safeIdempotencyKey('guest-order') },
-        )
+      let input: GuestCheckoutInput | null = null
+      if (items) {
+        const common = {
+          note: options.fulfillmentNote || null,
+          ...(options.confirmedDuplicateOrderId ? { confirmedDuplicateOrderId: options.confirmedDuplicateOrderId } : {}),
+        }
+        if (cartProtocolVersion === 2) {
+          if (!sharedCart) throw new Error('同桌购物车正在同步，请稍后再试。')
+          if (!sharedCart.allowedActions.includes('checkout')) throw new Error('购物车中有暂不可结算的商品，请处理或刷新后再结账。')
+          input = { protocol: 2, body: {
+            ...common, expectedGeneration: sharedCart.generation, expectedVersion: sharedCart.version,
+            lineNotes: guestCheckoutLineNotes(sharedCart, items),
+          } }
+        } else input = { protocol: 1, body: { ...common, items } }
+      }
+      const result = await recovery.execute(input, intent => {
+        setCheckoutIntent(intent)
+        return intent.input.protocol === 2
+          ? api.checkoutSharedCart(intent.input.body, { idempotencyKey: intent.key })
+          : api.submitOrder(intent.input.body, { idempotencyKey: intent.key })
+      })
+      if (checkoutRecoveryRef.current !== recovery || apiRef.current !== api) return
+      setCheckoutIntent(null)
+      setCheckoutRecoveryError(null)
+      if (!items && cartProtocolVersion === 1) {
+        clearPersistedCart(cartStorageKey)
+        setCheckoutViewRevision(value => value + 1)
+      }
       setOrderResult(result)
       setPanel('checkout')
       void loadTableOrders(true)
@@ -639,6 +662,11 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
         }
       }
     } catch (error) {
+      if (checkoutRecoveryRef.current !== recovery || apiRef.current !== api) return
+      if (recovery.pending()) {
+        setCheckoutViewRevision(value => value + 1)
+        notify('下单结果尚未确认，请点击“恢复原订单”核对，暂不重新下单。', 'info')
+      }
       if (error instanceof GuestApiError
         && (error.code === 'GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED'
           || error.code === 'SHARED_CART_VERSION_CONFLICT')) {
@@ -646,14 +674,18 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
         throw new ApiError(error.message, error.status ?? 409, error.code, error.details)
       }
       if (blockForSession(error)) {
-        throw new ApiError('订单没有提交，已为您保留购物车。重新扫码并开台后可继续。', 401, 'GUEST_SESSION_RECONNECT_REQUIRED')
+        throw new ApiError('原下单记录已保留，重新连接后请恢复核对订单。', 401, 'GUEST_SESSION_RECONNECT_REQUIRED')
       }
       throw error
     } finally {
       orderSubmittingRef.current = false
       setSubmittingOrder(false)
+      if (checkoutRecoveryRef.current === recovery) {
+        try { setCheckoutIntent(recovery.pending()) }
+        catch { setCheckoutRecoveryError('原下单记录暂时无法读取，请联系服务员核对。') }
+      }
     }
-  }, [blockForSession, cartProtocolVersion, loadSharedCart, loadTableOrders, notify, sharedCart, tableOrders])
+  }, [blockForSession, cartStorageKey, cartProtocolVersion, loadSharedCart, loadTableOrders, notify, sharedCart, tableOrders])
 
   if (phase !== 'ready') {
     return <GuestGate
@@ -718,10 +750,14 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
         </button>
       </section>
 
+      {(checkoutIntent !== null || checkoutRecoveryError !== null) && <div className="guest-inline-error" role="status" data-testid="guest-checkout-recovery">
+        <AlertCircle /><span>{checkoutRecoveryError ?? '有一笔下单结果待确认，请先恢复原订单，再继续点单。'}</span>
+        {checkoutIntent !== null && <button type="button" disabled={submittingOrder} onClick={() => void submitOrder(null).catch(error => notify(error instanceof Error ? error.message : '原订单暂未恢复，请稍后重试。', 'error'))}>恢复原订单</button>}
+      </div>}
       {menuError !== null && <div className="guest-inline-error" role="alert"><AlertCircle /><span>{menuError}</span><button type="button" onClick={() => void loadMenu()}>重试</button></div>}
       {menuLoading || (cartProtocolVersion === 2 && sharedCart === null) ? <div className="guest-menu-loading"><LoaderCircle className="is-spinning" /> {sharedCartError ?? (cartProtocolVersion === 2 ? '正在同步同桌购物车' : '正在准备菜单')}{sharedCartError !== null && <button type="button" onClick={() => void loadSharedCart()}>重试</button>}</div> : (
         <MenuOrderingWorkspace
-          key={cartStorageKey}
+          key={`${cartStorageKey ?? "shared"}:${checkoutViewRevision}`}
           products={menuProducts}
           tableLabel={table?.displayName ?? table?.code ?? ''}
           submitLabel="确认订单并微信支付"
@@ -739,13 +775,13 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
             cartUnitAmountMinors: sharedCartUnitAmountMinors,
             cartBundleSelections:sharedCartBundleSelections,
             cartTotalAmountMinor: sharedCart?.totalAmountMinor,
-            cartReadOnly: sharedCart?.guestWritesFrozen ?? false,
-            cartReadOnlyMessage: '服务人员正在核对本桌点单，暂时只能查看购物车；完成后会恢复修改。',
             onCartAdjust: adjustSharedCart,
             onCartReplaceBundleSelection:replaceSharedCartBundleSelection,
             onCartRemove:removeSharedCartLine,
           } : {})}
-          submitDisabled={cartProtocolVersion === 2 && (
+          cartReadOnly={checkoutIntent !== null || checkoutRecoveryError !== null || (sharedCart?.guestWritesFrozen ?? false)}
+          cartReadOnlyMessage={checkoutIntent !== null || checkoutRecoveryError !== null ? '请先恢复原订单核对结果，再继续点单。' : '服务人员正在核对本桌点单，暂时只能查看购物车；完成后会恢复修改。'}
+          submitDisabled={checkoutIntent !== null || checkoutRecoveryError !== null || cartProtocolVersion === 2 && (
             sharedCart === null || !sharedCart.allowedActions.includes('checkout')
           )}
           onSubmit={submitOrder}
@@ -852,10 +888,10 @@ function findRecentDuplicateOrder(
 }
 
 function basketFingerprint(items: readonly { productId: string; quantity: number }[]): string {
-  return [...items]
-    .sort((left, right) => left.productId.localeCompare(right.productId))
-    .map((item) => `${item.productId}:${item.quantity}`)
-    .join('|')
+  const quantities = new Map<string, number>()
+  for (const item of items) quantities.set(item.productId, (quantities.get(item.productId) ?? 0) + item.quantity)
+  return [...quantities].sort(([left], [right]) => left.localeCompare(right))
+    .map(([productId, quantity]) => `${productId}:${quantity}`).join('|')
 }
 
 export function GuestGate({ reason, message, table, refreshing, onRetry }: {
@@ -1050,19 +1086,6 @@ function panelTitle(panel: Exclude<Panel, null>): string {
   if (panel === 'complaint') return '我们想马上处理好'
   if (panel === 'custom') return '告诉我们您的需要'
   return '订单与支付状态'
-}
-
-function resolveDeviceKey(storage: Storage): string {
-  const key = 'mbox-normalized-guest-device-v1'
-  try {
-    const existing = storage.getItem(key)
-    if (existing !== null && existing.length >= 8 && existing.length <= 256) return existing
-    const created = `guest-web-${crypto.randomUUID()}`
-    storage.setItem(key, created)
-    return created
-  } catch {
-    return `guest-web-${crypto.randomUUID()}`
-  }
 }
 
 function errorMessage(error: unknown, fallback: string): string {

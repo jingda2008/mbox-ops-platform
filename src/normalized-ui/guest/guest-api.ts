@@ -103,6 +103,7 @@ export interface GuestSharedCart {
     currency: string | null
     available: boolean
     unavailableReason: string | null
+    portionIds?: string[]
     bundleSelections?: MenuBundleUnitSelection[]
   }>
   totalAmountMinor: number | null
@@ -271,7 +272,7 @@ export class GuestApiClient {
 
   async submitOrder(
     input: Readonly<{
-      items: Array<{ productId: string; quantity: number;bundleSelections?:MenuBundleUnitSelection[] }>
+      items: Array<{ productId: string; quantity: number; note?: string; bundleSelections?:MenuBundleUnitSelection[] }>
       note: string | null
       confirmedDuplicateOrderId?: string
     }>,
@@ -343,6 +344,7 @@ export class GuestApiClient {
       expectedGeneration: number
       expectedVersion: number
       note: string | null
+      lineNotes?: Array<{ portionId: string; note: string }>
       confirmedDuplicateOrderId?: string
     }>,
     options: Readonly<RequestOptions> & { idempotencyKey: string },
@@ -529,6 +531,7 @@ function isSharedCart(value: unknown): value is GuestSharedCart {
     && Array.isArray(value.lines)
     && value.lines.every((line) => isObject(line)
       && typeof line.productId === 'string'
+      && (line.portionIds === undefined || Array.isArray(line.portionIds) && line.portionIds.every(id => typeof id === 'string'))
       && typeof line.name === 'string'
       && Number.isSafeInteger(line.quantity)
       && (line.unitPriceMinor === null || Number.isSafeInteger(line.unitPriceMinor))

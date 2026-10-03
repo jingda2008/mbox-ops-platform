@@ -2061,6 +2061,7 @@ Page({
         lineNotes: attempt.lineNotes || [],
         expectedGeneration: attempt.expectedGeneration,
         expectedVersion: attempt.expectedVersion,
+        ...(attempt.confirmedDuplicateOrderId ? { confirmedDuplicateOrderId: attempt.confirmedDuplicateOrderId } : {}),
         checkoutUpgradeOfferPublicId: attempt.offerPublicId,
         ...(attempt.couponQuoteId ? { couponQuoteId: attempt.couponQuoteId } : {}),
         recommendationAttribution: attemptAttribution,
@@ -2113,6 +2114,12 @@ Page({
         })
         return
       }
+      if (error && error.code === 'GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED') {
+        wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
+        this.setData({ checkoutLocked: false })
+        await this.confirmDuplicateCheckout(error, attempt, tableRequest)
+        return
+      }
       if (CHECKOUT_REJECTED_BEFORE_ORDER.has(String(error && error.code || ''))) {
         wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
         this.setData({
@@ -2126,6 +2133,36 @@ Page({
         checkoutLocked: true,
       })
     } finally { if (this.isCurrentTableRequest(tableRequest)) this.setData({ busy: false }) }
+  },
+
+  async confirmDuplicateCheckout(error, attempt, request) {
+    const conflictingOrderId = error && error.details && error.details.conflictingOrderId
+    // The table guard may rebase a live request. Freeze the reviewed scope.
+    const reviewedRequest = Object.assign({}, request)
+    const stillReviewed = () => this.isCurrentTableRequest(reviewedRequest)
+      && attempt.tableScope === tableSessionCacheScope()
+      && attempt.expectedGeneration === this.data.cartGeneration
+      && attempt.expectedVersion === this.data.cartVersion
+    if (typeof conflictingOrderId !== 'string' || conflictingOrderId.length < 8 || conflictingOrderId.length > 128 || !stillReviewed()) {
+      this.setData({ error: '同桌订单或购物车已经变化，请刷新核对后再结账。' })
+      return
+    }
+    const confirmed = await new Promise(resolve => wx.showModal({
+      title: '确认继续加单？',
+      content: `本桌刚提交过相同商品（订单尾号 ${conflictingOrderId.slice(-6)}）。请先核对桌账，确认这是继续加单，避免重复点单。`,
+      confirmText: '继续加单', cancelText: '返回核对',
+      success: result => resolve(Boolean(result.confirm)), fail: () => resolve(false),
+    }))
+    if (!this.isCurrentTableRequest(reviewedRequest)) return
+    if (!confirmed) { this.setData({ error: '已取消本次加单，购物车保留。' }); return }
+    if (!stillReviewed()) {
+      this.setData({ error: '确认期间同桌购物车已更新，请核对最新商品后重新结账。' })
+      return
+    }
+    const confirmedAttempt = Object.assign({}, attempt, {
+      idempotencyKey: randomId('guest-order'), confirmedDuplicateOrderId: conflictingOrderId,
+    })
+    await this.submitOrder(attempt.offerPublicId || null, true, confirmedAttempt, reviewedRequest)
   },
 
   async handlePaymentAction(action, request) {

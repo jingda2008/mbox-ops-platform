@@ -40,3 +40,5 @@
 证据：发布机 `.runtime/deploy/v1.0.0-rc.244/deployment/deployment-manifest.json`，交付目录 `outputs/rc244/` 的同名清单、`post-deploy-ready.json` 和 `deploy-via-proxy.log`；服务端 `/opt/mbox/releases/e67b327/` 的备份/部署/完成 OSS 验证报告。上述“部署受阻”记录为历史状态，当前已解除。
 
 本次完成后端上线，Android build7安装包未变；员工手机仍需安装该包，正式签名、线上更新分发渠道及真实收退款、打印、双设备、整班验收仍开放，不能将上线健康视为全部营业验收完成。
+
+收尾本地复核：发布工作区在部署期间另出现`docs/commercialization-pending-checklist.md`修改和未跟踪的`docs/code-function-audit-20261003.md`，为本次部署步骤之外的审计记录；未修改、删除或混入本次提交。工作区业务文件无新增差异，已部署版本仍为固定标签。该审计记录引用的早期生产快照不替代本次上线后就绪证据，其中新增问题未被本次部署标记修复。

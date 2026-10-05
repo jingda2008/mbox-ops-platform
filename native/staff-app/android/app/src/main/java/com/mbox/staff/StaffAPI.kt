@@ -6,6 +6,10 @@ import java.net.HttpCookie
 import java.net.HttpURLConnection
 import java.net.URI
 import java.time.Instant
+import java.time.Duration
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
+import java.time.format.ResolverStyle
 import org.json.JSONObject
 
 class StaffAPIError(
@@ -13,6 +17,7 @@ class StaffAPIError(
     val code: String,
     override val message: String,
     val commitDisposition: String? = null,
+    val retryAfterSeconds: Long? = null,
 ) : Exception(message) {
     val definitivelyRejected
         get() =
@@ -63,6 +68,23 @@ class StaffAPIError(
                             "TABLE_SESSION_TRANSITION_CONFLICT",
                             "SERVICE_TASK_TRANSITION_CONFLICT",
                         )
+}
+
+/** A server delay, never a commit receipt. Malformed, negative and past values are unknown. */
+fun parseRetryAfterSeconds(value: String?, now: Instant = Instant.now()): Long? {
+    if (value == null || value.length > 128 || value.any { it == '\r' || it == '\n' || it.code < 32 && it != '\t' }) return null
+    val text = value.trim()
+    if (Regex("^[0-9]+$").matches(text)) return text.toLongOrNull()
+    return runCatching {
+        val date = ZonedDateTime.parse(text, DateTimeFormatter.RFC_1123_DATE_TIME.withResolverStyle(ResolverStyle.STRICT)).toInstant()
+        val wait = Duration.between(now, date)
+        if (wait.isNegative) null else Math.addExact(wait.seconds, if (wait.nano == 0) 0L else 1L)
+    }.getOrNull()
+}
+
+private fun responseRetryAfterSeconds(headers: Map<String, List<String>>): Long? {
+    val values = headers.entries.filter { it.key.equals("Retry-After", ignoreCase = true) }.flatMap { it.value }
+    return values.singleOrNull()?.let { parseRetryAfterSeconds(it) }
 }
 
 fun invalidResponse(): Nothing = throw StaffAPIError(0, "INVALID_RESPONSE", "服务器数据格式不兼容，请刷新重试")
@@ -153,6 +175,11 @@ class StaffAPI(
 
     private val cookies = CookieManager(null, CookiePolicy.ACCEPT_ORIGINAL_SERVER)
     private val cookieExpiry = mutableMapOf<String, Instant>()
+
+    private fun nonEmptyCookieHeaders(uri: URI): Map<String, String> =
+        cookies.get(uri, emptyMap()).mapNotNull { (name, values) ->
+            values.filter { it.isNotBlank() }.joinToString("; ").takeIf { it.isNotBlank() }?.let { name to it }
+        }.toMap()
 
     private fun receiveCookies(uri: URI, headers: Map<out String?, List<String>?>) {
         cookies.put(
@@ -621,7 +648,7 @@ class StaffAPI(
         try {
             conn.instanceFollowRedirects=false;conn.connectTimeout=15000;conn.readTimeout=15000
             identity?.let{conn.setRequestProperty("x-mbox-staff-session-id",it.sessionId);conn.setRequestProperty("x-mbox-staff-employee-id",it.employeeId)}
-            cookies.get(uri,emptyMap()).forEach{(k,v)->conn.setRequestProperty(k,v.joinToString("; "))}
+            nonEmptyCookieHeaders(uri).forEach { (name, value) -> conn.setRequestProperty(name, value) }
             if(conn.responseCode!=200)throw StaffAPIError(conn.responseCode,"MEDIA_PREVIEW_FAILED","图片预览暂不可用")
             require(conn.contentType?.substringBefore(';') in setOf("image/jpeg","image/png","image/webp"))
             val bytes=conn.inputStream.use{readMediaBytes(it)};require(bytes.size<=204800);return bytes
@@ -644,7 +671,7 @@ class StaffAPI(
         }
         headers.putAll(extraHeaders)
         if (transport != null)
-            cookies.get(uri, emptyMap()).forEach { (k, v) -> headers[k] = v.joinToString("; ") }
+            headers.putAll(nonEmptyCookieHeaders(uri))
         val response =
             transport?.invoke(APIRequest(path, body, headers))
                 ?: run {
@@ -655,8 +682,8 @@ class StaffAPI(
                         conn.readTimeout = 20000
                         conn.requestMethod = if (body == null) "GET" else "POST"
                         headers.forEach { (k, v) -> conn.setRequestProperty(k, v) }
-                        cookies.get(uri, emptyMap()).forEach { (k, v) ->
-                            conn.setRequestProperty(k, v.joinToString("; "))
+                        nonEmptyCookieHeaders(uri).forEach { (name, value) ->
+                            conn.setRequestProperty(name, value)
                         }
                         if (body != null) {
                             conn.setRequestProperty("Content-Type", "application/json")
@@ -671,6 +698,11 @@ class StaffAPI(
                         APIResponse(
                             status,
                             stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: "",
+                            conn.headerFields.entries
+                                .filter { it.key?.equals("Retry-After", ignoreCase = true) == true }
+                                .flatMap { it.value ?: emptyList() }
+                                .takeIf { it.isNotEmpty() }
+                                ?.let { mapOf("Retry-After" to it) } ?: emptyMap(),
                         )
                     } finally {
                         conn.disconnect()
@@ -698,6 +730,7 @@ class StaffAPI(
                 error?.optString("code") ?: "HTTP_ERROR",
                 error?.optString("message")?.takeIf { it.isNotBlank() } ?: fallback,
                 error?.optString("commitDisposition"),
+                responseRetryAfterSeconds(response.headers),
             )
         }
         return response

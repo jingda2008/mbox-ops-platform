@@ -12,7 +12,284 @@ import org.json.JSONObject
 
 data class Saved(val world: World, val pending: Command?) : Serializable
 
-class AppModel(app: Application) : AndroidViewModel(app) {
+class AppModel @JvmOverloads constructor(
+    app: Application,
+    notificationStoreOverride: NotificationStateStore? = null,
+    apiOverride: StaffAPI? = null,
+    pushStateStoreOverride: NotificationStateStore? = null,
+) : AndroidViewModel(app) {
+    private val notificationPersistence by lazy {
+        NotificationRecoveryPersistence(notificationStoreOverride ?: KeystoreNotificationStateStore(app))
+    }
+    private var notificationRecovery: NotificationTaskRecovery? = null
+    private var unsavedNotificationChange: NotificationTaskTransition? = null
+    private var notificationIntentVersion = 0L
+    private var notificationForegroundVersion = 0L
+    var notificationOpenStatus by mutableStateOf("")
+        private set
+    var hasPendingNotification by mutableStateOf(false)
+        private set
+    var notificationOpenTarget by mutableStateOf<ServiceAttention.Entry?>(null)
+        private set
+    var nativePushStatus by mutableStateOf("实时通知尚未启用；后台定期检查可单独开启")
+        private set
+    private val pushLifecycle by lazy {
+        NativePushLifecycle(pushStateStoreOverride ?: KeystoreNotificationStateStore(app, NotificationStorePurpose.REGISTRATION))
+    }
+    private var pushRevocationBusy = false
+    private var nextPushRevocationAttempt = 0L
+    var pendingPushRevocations by mutableStateOf(0)
+        private set
+
+    private fun synchronizePushOwner() {
+        try {
+            val owner = identity?.takeIf { it.canReadService() }?.let(NativePushOwner::from)
+            pushLifecycle.reconcileOwner(owner)
+            pendingPushRevocations = pushLifecycle.pendingRevocationCount
+            if (owner == null) runCatching { ServiceReminders.disable(getApplication()) }
+        } catch (_: Exception) {
+            nativePushStatus = "实时通知保持关闭；安全记录暂不可读取或保存，原记录已保留"
+        }
+    }
+
+    private fun disableNativePush() {
+        try {
+            pushLifecycle.disable()
+            pendingPushRevocations = pushLifecycle.pendingRevocationCount
+        } catch (_: Exception) {
+            nativePushStatus = "实时通知已在本机停用；原撤销记录仍需联网核对"
+        }
+        runCatching { ServiceReminders.clearNotice(getApplication()) }
+    }
+
+    /** Also called after returning from system notification settings. No SDK is enabled in v1. */
+    fun resumeNativePushRecovery() {
+        if (!ServiceReminders.allowed(getApplication())) disableNativePush()
+        flushPushRevocations()
+    }
+
+    fun flushPushRevocations() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (pushRevocationBusy || now < nextPushRevocationAttempt) return
+        val state = try { pushLifecycle.also { pendingPushRevocations = it.pendingRevocationCount } }
+        catch (_: Exception) {
+            nativePushStatus = "实时通知保持关闭；安全记录暂不可读取，原记录已保留"
+            return
+        }
+        if (state.pendingRevocationCount == 0) return
+        pushRevocationBusy = true
+        nextPushRevocationAttempt = now + 60_000
+        viewModelScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    // This worker can outlive logout or run during a new employee's operation.
+                    // Never race the foreground cookie jar; only the original revoke capability
+                    // is sent by a fresh anonymous client. No old authentication is persisted.
+                    NativePushRevocationRecovery(state, NativePushClient(api)).run { null }
+                }
+                pendingPushRevocations = result.remaining
+                if (result.rateLimited) {
+                    val current = android.os.SystemClock.elapsedRealtime()
+                    val seconds = maxOf(60L, result.retryAfterSeconds ?: 900L)
+                    nextPushRevocationAttempt = current + minOf(seconds, (Long.MAX_VALUE - current) / 1000) * 1000
+                }
+                nativePushStatus = if (result.remaining > 0)
+                    "实时通知保持关闭；有 ${result.remaining} 条原绑定撤销记录待联网核对"
+                else "实时通知保持关闭；原绑定撤销请求已受理，已在途的系统通知仍需打开时核对"
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                nativePushStatus = "实时通知保持关闭；原撤销请求已保留，可稍后重试"
+            } finally {
+                pushRevocationBusy = false
+            }
+        }
+    }
+
+    fun checkNativePushChannel() {
+        if (!live || identity == null || busy || heartbeatBusy) return
+        busy = true
+        val expected = workspaceReadIdentity()
+        viewModelScope.launch {
+            try {
+                identity = readCurrentWorkspace(expected, { workspaceReadIdentity() }) {
+                    withContext(Dispatchers.IO) { api.heartbeat() }
+                }
+                val current = workspaceReadIdentity()
+                val owner = NativePushOwner.from(identity!!)
+                val capabilities = readCurrentWorkspace(current, { workspaceReadIdentity() }) {
+                    withContext(Dispatchers.IO) { NativePushClient(api).capabilities(owner) }
+                }
+                check(!capabilities.androidAvailable)
+                nativePushStatus = "安卓实时通知通道尚未接入，当前不会注册推送；下方定期检查可继续使用"
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (expected.employee == identity?.employeeId && expected.session == identity?.sessionId) {
+                    nativePushStatus = if ((e as? StaffAPIError)?.status == 404)
+                        "服务器暂未提供实时通知能力，当前保持关闭"
+                    else "实时通知能力暂未核实，当前保持关闭，可稍后重试"
+                    if ((e as? StaffAPIError)?.status in listOf(401, 403)) handleLiveError(e)
+                }
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    private fun notificationIdentity() = identity?.let {
+        NotificationTaskIdentity(it.employeeId, it.sessionId, priorityAccessKey, it.canReadService())
+    }
+
+    private fun notificationState(): NotificationTaskRecovery = unsavedNotificationChange?.recovery ?: notificationRecovery
+        ?: notificationPersistence.read().also {
+            notificationRecovery = it
+            hasPendingNotification = it.pending != null
+        }
+
+    private fun saveNotificationTransition(change: NotificationTaskTransition) {
+        // Retain the latest click/dismissal in memory if disk is temporarily unavailable.
+        // Never resume an older saved intention while a newer one is awaiting persistence.
+        unsavedNotificationChange = change
+        notificationPersistence.write(change.recovery)
+        notificationRecovery = change.recovery
+        unsavedNotificationChange = null
+        hasPendingNotification = change.recovery.pending != null
+        notificationOpenStatus = when (val decision = change.decision) {
+            NotificationTaskDecision.Idle, NotificationTaskDecision.Opened -> ""
+            NotificationTaskDecision.LoginRequired -> "请先恢复原员工登录，再核对提醒对应的任务"
+            is NotificationTaskDecision.RefreshRequired -> "正在核对提醒对应的原任务"
+            is NotificationTaskDecision.AwaitingVerification -> decision.reason.message
+            is NotificationTaskDecision.Rejected -> decision.reason.message
+            NotificationTaskDecision.Duplicate -> "这条提醒已打开或正在核对，请查看服务任务"
+            is NotificationTaskDecision.Focus -> "原任务已核实，正在打开"
+        }
+    }
+
+    fun receiveNotificationTarget(target: NotificationTaskTarget): Boolean = try {
+        notificationIntentVersion++
+        val transition = notificationState().offer(target, notificationIdentity(), java.time.Instant.now())
+        notificationOpenTarget = null
+        saveNotificationTransition(transition)
+        if (transition.decision !is NotificationTaskDecision.Rejected) resumeNotificationOpen()
+        true
+    } catch (_: Exception) {
+        notificationOpenStatus = "提醒记录暂不可保存，原记录已保留；请解锁后重试或从服务任务列表核对"
+        message = notificationOpenStatus
+        false
+    }
+
+    fun resumeNotificationOpen() {
+        if (!foreground || !live || busy || heartbeatBusy || notificationOpenTarget != null) return
+        try {
+            unsavedNotificationChange?.let(::saveNotificationTransition)
+            val retry = notificationState().retry(notificationIdentity(), java.time.Instant.now())
+            if (retry.decision == NotificationTaskDecision.Idle) return
+            saveNotificationTransition(retry)
+            if (retry.decision !is NotificationTaskDecision.RefreshRequired) return
+        } catch (_: Exception) {
+            notificationOpenStatus = "提醒安全记录暂不可读取，原记录已保留，请解锁后重试"
+            return
+        }
+        busy = true
+        val original = workspaceReadIdentity()
+        val intendedVersion = notificationIntentVersion
+        val foregroundVersion = notificationForegroundVersion
+        viewModelScope.launch {
+            try {
+                identity = readCurrentWorkspace(original, { workspaceReadIdentity() }) {
+                    withContext(Dispatchers.IO) { api.heartbeat() }
+                }
+                if (!foreground || foregroundVersion != notificationForegroundVersion) return@launch
+                // A heartbeat may remove access. Recheck before reading and before focus.
+                val retry = notificationState().retry(notificationIdentity(), java.time.Instant.now())
+                saveNotificationTransition(retry)
+                if (retry.decision !is NotificationTaskDecision.RefreshRequired) return@launch
+                val expected = workspaceReadIdentity()
+                val reader = notificationIdentity()!!
+                val started = java.time.Instant.now()
+                val board = readCurrentWorkspace(expected, { workspaceReadIdentity() }) {
+                    withContext(Dispatchers.IO) { LiveServiceBoard(api.data("/api/native-service-center")) }
+                }
+                require(board.employee == reader.employeeId) { "服务任务员工身份不一致" }
+                val finished = java.time.Instant.now()
+                if (!foreground || foregroundVersion != notificationForegroundVersion) {
+                    saveNotificationTransition(notificationState().defer(notificationIdentity(), finished))
+                    return@launch
+                }
+                val snapshot = AuthorizedNotificationTaskSnapshot(reader, started, finished,
+                    board.tasks.map { NotificationTaskFact(it.id, it.session, it.status, true) }, complete = true)
+                val resolved = notificationState().resolve(notificationIdentity(), snapshot, finished)
+                saveNotificationTransition(resolved)
+                val focus = resolved.decision as? NotificationTaskDecision.Focus ?: return@launch
+                val task = board.tasks.single { it.id == focus.target.taskId && it.session == focus.target.tableSessionId }
+                serviceBoard = board
+                serviceUpdated = finished
+                serviceState = "已核对提醒对应的原任务；查看提醒不会完成任务"
+                notificationOpenTarget = ServiceAttention.Entry(task.id, task.session, task.table, task.priority)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (original.employee == identity?.employeeId && original.session == identity?.sessionId && original.workspace == workspaceVersion) {
+                    if ((e as? StaffAPIError)?.status in listOf(401, 403)) handleLiveError(e)
+                    runCatching {
+                        saveNotificationTransition(notificationState().defer(notificationIdentity(), java.time.Instant.now()))
+                    }.onFailure { notificationOpenStatus = "提醒状态暂不可保存，原记录已保留，请解锁后重试" }
+                }
+            } finally {
+                busy = false
+                // Only a superseding click/foreground transition earns an automatic follow-up.
+                // Ordinary network failures remain pending without a tight retry loop.
+                if (foreground && (intendedVersion != notificationIntentVersion || foregroundVersion != notificationForegroundVersion)) {
+                    resumeNotificationOpen()
+                }
+            }
+        }
+    }
+
+    fun suspendNotificationOpen() {
+        notificationForegroundVersion++
+        notificationOpenTarget = null
+        if (notificationRecovery != null || unsavedNotificationChange != null) runCatching {
+            saveNotificationTransition(notificationState().defer(notificationIdentity(), java.time.Instant.now()))
+        }.onFailure { notificationOpenStatus = "原提醒已保留，返回工作台后重新核对" }
+    }
+
+    fun consumeNotificationNavigation(open: (ServiceAttention.Entry) -> Unit) {
+        if (!foreground || busy || heartbeatBusy) return
+        val target = notificationOpenTarget ?: return
+        var opened = false
+        try {
+            val transition = notificationState().acknowledgeOpened(notificationIdentity(), java.time.Instant.now())
+            if (transition.decision == NotificationTaskDecision.Opened) {
+                open(target)
+                opened = true
+            }
+            saveNotificationTransition(transition)
+        } catch (_: Exception) {
+            if (!opened) runCatching {
+                saveNotificationTransition(notificationState().defer(notificationIdentity(), java.time.Instant.now()))
+            }
+            notificationOpenStatus = if (opened) "已打开原任务，但提醒记录保存失败；原引用仍保留待核对"
+                else "原任务暂未打开，原提醒已保留，请重新核对"
+        } finally {
+            notificationOpenTarget = null
+        }
+    }
+
+    fun dismissNotificationOpen() {
+        notificationIntentVersion++
+        notificationOpenTarget = null
+        try {
+            val state = notificationState()
+            saveNotificationTransition(NotificationTaskTransition(
+                NotificationTaskRecovery.restore(null, state.consumed, state.policy), NotificationTaskDecision.Idle))
+            notificationOpenTarget = null
+        } catch (_: Exception) {
+            notificationOpenStatus = "提醒记录暂不可清除，请解锁后重试"
+        }
+    }
+
     val updater = AndroidUpdater(app)
     var world by mutableStateOf(World(emptyList(), emptyList()))
         private set
@@ -31,8 +308,13 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     var staffName by mutableStateOf("未登录")
         private set
 
-    var identity by mutableStateOf<StaffIdentity?>(null)
-        private set
+    private var currentIdentity by mutableStateOf<StaffIdentity?>(null)
+    var identity: StaffIdentity?
+        get() = currentIdentity
+        private set(value) {
+            currentIdentity = value
+            synchronizePushOwner()
+        }
 
     var deviceReady by mutableStateOf(false)
         private set
@@ -1469,7 +1751,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     private val liveDraftFile = AtomicFile(File(app.filesDir, "live-drafts-v1.json"))
     private val liveFile = AtomicFile(File(app.filesDir, "live-pending-v1.json"))
-    val api = StaffAPI(credentialStore = KeystoreStaffSessionStore(app))
+    val api = apiOverride ?: StaffAPI(credentialStore = KeystoreStaffSessionStore(app))
     var rememberLogin by mutableStateOf(false)
     var savedLoginAvailable by mutableStateOf(false)
     private var restoreAttempted = false
@@ -1779,6 +2061,8 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 if (identity != null) handleLiveError(e)
             } finally {
                 busy = false
+                resumeNotificationOpen()
+                flushPushRevocations()
             }
         }
     }
@@ -1793,6 +2077,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
             return
         busy = true
         val switching = identity != null
+        disableNativePush()
         runCatching { ServiceReminders.disable(getApplication()) }
         viewModelScope.launch {
             try {
@@ -1871,6 +2156,8 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 message = e.message ?: "登录失败，请检查网络"
             } finally {
                 busy = false
+                resumeNotificationOpen()
+                flushPushRevocations()
             }
         }
     }
@@ -1884,6 +2171,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         )
             return
         busy = true
+        disableNativePush()
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) { api.logout() }
@@ -1902,12 +2190,15 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 } else handleLiveError(e)
             } finally {
                 busy = false
+                flushPushRevocations()
             }
         }
     }
 
     private fun lockLiveSession() {
+        disableNativePush()
         runCatching { ServiceReminders.disable(getApplication()) }
+        notificationOpenTarget = null
         api.clearIdentity()
         identity = null
         paymentOrders = emptyList()
@@ -1966,6 +2257,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         staffName = "未登录"
         resetDailyBusinessViews()
         workspaceVersion++
+        flushPushRevocations()
     }
 
     private fun handleLiveError(e: Exception) {
@@ -2057,6 +2349,8 @@ class AppModel(app: Application) : AndroidViewModel(app) {
             } finally {
                 busy = false
                 heartbeatBusy = false
+                resumeNotificationOpen()
+                flushPushRevocations()
             }
         }
     }

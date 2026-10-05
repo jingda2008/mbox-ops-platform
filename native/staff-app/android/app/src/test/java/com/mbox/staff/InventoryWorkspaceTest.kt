@@ -31,6 +31,11 @@ class InventoryWorkspaceTest {
 
     @Suppress("UNCHECKED_CAST")
     private fun state(name: String, value: Any?, target: AppModel = model) {
+        if (name == "identity") {
+            AppModel::class.java.getDeclaredMethod("setIdentity", StaffIdentity::class.java)
+                .apply { isAccessible = true }.invoke(target, value as StaffIdentity?)
+            return
+        }
         val field = AppModel::class.java.getDeclaredField(name + "\$delegate").apply { isAccessible = true }
         (field.get(target) as MutableState<Any?>).value = value
     }

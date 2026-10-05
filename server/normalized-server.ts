@@ -33,6 +33,7 @@ async function main(): Promise<void> {
         config.workerIntervalMs,
         adapters !== null,
         adapters?.capabilities ?? [],
+        !!config.nativePush,
       )
     : null
   const appConfig = config.startWorkers ? Object.freeze({ ...config, startWorkers: false }) : config
@@ -114,6 +115,7 @@ async function main(): Promise<void> {
         workerId,
         intervalMs: config.workerIntervalMs,
         hashSecret: config.secret,
+        nativePush: config.nativePush,
         transactions: workerTransactions,
         aiExecutions: runtime.services.ai,
         adapters,

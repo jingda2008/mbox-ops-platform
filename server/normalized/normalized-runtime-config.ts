@@ -1,3 +1,4 @@
+import { readNativePushConfig, type NativePushConfig } from './native-push-config.js'
 import type {WechatServiceAccountSubscribeConfig} from './wechat-service-account-subscribe.js'
 import { isAbsolute } from 'node:path'
 import type { GuestCheckoutPaymentMode } from './guest-commerce-service-api.js'
@@ -90,6 +91,7 @@ export interface NormalizedRuntimeConfig {
   workerPoolMax: number
   trustProxyHops: number
   staticDir: string | null
+  nativePush?: NativePushConfig | null
   nativeUpdatesDir?: string | null
   startWorkers: boolean
   kitchenBatchBoardEnabled?: boolean
@@ -236,6 +238,8 @@ export function loadNormalizedRuntimeConfig(
     errors,
   )
 
+  let nativePush: NativePushConfig | null = null
+  try { nativePush = readNativePushConfig(environment) } catch { errors.push('MBOX_NATIVE_PUSH_CONFIGURATION') }
   if (errors.length > 0) throw new NormalizedRuntimeConfigurationError([...new Set(errors)])
   return Object.freeze({
     nodeEnv,
@@ -269,6 +273,7 @@ export function loadNormalizedRuntimeConfig(
     trustProxyHops,
     staticDir,
     nativeUpdatesDir,
+    nativePush,
     startWorkers,
     kitchenBatchBoardEnabled,
     threeScreenWorkflowEnabled,

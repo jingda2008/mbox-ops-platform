@@ -155,8 +155,10 @@ jobs:
           cp release-artifact/migration-manifest.json release-metadata/
           cp release-artifact/mbox-lujiazui.store.json release-metadata/
           cp release-artifact/menu-catalog-2026-07-27.json release-metadata/
-          cp release-artifact/{deploy-release,activate-release,rollback-activated-release,verify-public-app,stage-release-evidence,upload-oss-verified,send-sls-events,prune-oss-images,release-state,normalize-runtime-env,backup-postgres,restore-postgres}.sh release-metadata/
-          cp release-artifact/maintenance-bootstrap.{sh,py} release-artifact/maintenance-ingress.mjs release-metadata/
+          deployment_scripts=$(jq -er '.deploymentScripts[].file' release-artifact/release-manifest.json)
+          while IFS= read -r script_name; do
+            cp "release-artifact/${script_name}" release-metadata/
+          done <<< "${deployment_scripts}"
           node scripts/build-aliyun-evidence-bundle.mjs \
             --output oss-ready-evidence \
             --channel rc \

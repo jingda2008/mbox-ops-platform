@@ -27,47 +27,83 @@ internal val reservationSeatPreferences = linkedMapOf(
 )
 
 @Composable
-fun ReservationCreateView(m: AppModel, close: () -> Unit) {
+fun ReservationCreateView(m: AppModel, token: Long, close: () -> Unit) {
     // Contact stays in this in-memory form until the secured original command is submitted.
-    var draft by remember {
+    var draft by remember(token) {
         val arrival = Instant.now().plusSeconds(3600).truncatedTo(ChronoUnit.MINUTES)
         mutableStateOf(ReservationReceptionDraft(arrival, arrival.plusSeconds(7200)))
     }
-    var error by remember { mutableStateOf("") }
-    var proposed by remember { mutableStateOf<LiveCommand?>(null) }
-    var seatMenu by remember { mutableStateOf(false) }
-    val version = remember { m.workspaceVersion }
+    var error by remember(token) { mutableStateOf("") }
+    var proposed by remember(token) { mutableStateOf<LiveCommand?>(null) }
+    var seatMenu by remember(token) { mutableStateOf(false) }
+    var waitingForRead by remember(token) { mutableStateOf(m.businessRequestInFlight) }
+    var active by remember(token) { mutableStateOf(true) }
+    var datePicker by remember(token) { mutableStateOf<DatePickerDialog?>(null) }
+    var timePicker by remember(token) { mutableStateOf<TimePickerDialog?>(null) }
+    val version = remember(token) { m.workspaceVersion }
+    fun viewCurrent() = active && version == m.workspaceVersion && m.isReceptionViewCurrent(token)
+    fun closeView() {
+        active = false
+        datePicker?.dismiss(); timePicker?.dismiss()
+        m.closeReceptionView(token)
+        close()
+    }
+    DisposableEffect(m, token) {
+        onDispose {
+            active = false
+            datePicker?.dismiss(); timePicker?.dismiss()
+            m.closeReceptionView(token)
+        }
+    }
     val supported = m.reservationCapabilities?.opt("admissionCreateV1") == true &&
         m.reservationCapabilities?.opt("receptionSeatV1") == true
-    val editable = !m.busy && m.livePending == null && m.liveOrderPending == null
-    val options = m.receptionOptions?.takeIf { it.arrival == draft.arrival && it.end == draft.end }
-    LaunchedEffect(m.workspaceVersion) { if (version != m.workspaceVersion) close() }
-    LaunchedEffect(Unit) { if (supported) m.loadReceptionOptions(draft.arrival, draft.end) }
+    val editable = viewCurrent() && !m.businessRequestInFlight && m.livePending == null && m.liveOrderPending == null
+    val options = m.receptionOptions?.takeIf { viewCurrent() && it.arrival == draft.arrival && it.end == draft.end }
+    fun loadOptions() {
+        if (!viewCurrent()) return
+        error = ""; waitingForRead = false
+        m.loadReceptionOptions(draft.arrival, draft.end, viewToken = token)
+    }
+    LaunchedEffect(token, m.workspaceVersion) { if (version != m.workspaceVersion) closeView() }
+    LaunchedEffect(token) {
+        if (!viewCurrent()) return@LaunchedEffect
+        if (m.businessRequestInFlight) waitingForRead = true
+        else if (supported) loadOptions()
+    }
     val context = LocalContext.current
     fun pick(at: Instant, update: (Instant) -> Unit) {
+        if (!viewCurrent()) return
+        datePicker?.dismiss(); timePicker?.dismiss()
         val d = at.atZone(ReservationQuery.zone)
-        DatePickerDialog(
+        datePicker = DatePickerDialog(
             context,
             { _, year, month, day ->
-                TimePickerDialog(
-                    context,
-                    { _, hour, minute ->
-                        update(LocalDateTime.of(year, month + 1, day, hour, minute)
-                            .atZone(ReservationQuery.zone).toInstant())
-                        error = ""
-                    },
-                    d.hour, d.minute, true,
-                ).show()
+                if (viewCurrent()) {
+                    timePicker = TimePickerDialog(
+                        context,
+                        { _, hour, minute ->
+                            if (viewCurrent()) {
+                                m.invalidateReceptionRead(viewToken = token)
+                                proposed = null
+                                waitingForRead = false
+                                update(LocalDateTime.of(year, month + 1, day, hour, minute)
+                                    .atZone(ReservationQuery.zone).toInstant())
+                                error = ""
+                            }
+                        },
+                        d.hour, d.minute, true,
+                    ).also { it.show() }
+                }
             },
             d.year, d.monthValue - 1, d.dayOfMonth,
-        ).show()
+        ).also { it.show() }
     }
-    Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Dialog(onDismissRequest = ::closeView, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize(), color = Paper) {
             Column(Modifier.safeDrawingPadding().imePadding().padding(16.dp)) {
                 Row {
                     Text("新建预约", Modifier.weight(1f), fontSize = 20.sp)
-                    TextButton(onClick = close) { Text("返回") }
+                    TextButton(onClick = ::closeView) { Text("返回") }
                 }
                 Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("先登记人数、时段和位置偏好；到店后核对实际桌位。预约不预占具体桌台。", fontSize = 12.sp)
@@ -94,9 +130,10 @@ fun ReservationCreateView(m: AppModel, close: () -> Unit) {
                     SecondaryAction(onClick = { pick(draft.end) { draft = draft.copy(end = it) } },
                         enabled = editable && supported) { Text("预计结束 · " + reservationDraftTime(draft.end)) }
                     Text("请核对到店和结束时间，均按上海时区填写。", fontSize = 12.sp)
-                    SecondaryAction(onClick = { error = ""; m.loadReceptionOptions(draft.arrival, draft.end) },
+                    SecondaryAction(onClick = ::loadOptions,
                         enabled = editable && supported) { Text(if (options == null) "查询所选时段容量" else "重新核对时段容量") }
-                    if (m.receptionState.isNotBlank()) Text(m.receptionState, fontSize = 12.sp)
+                    if (waitingForRead) Text(if (m.businessRequestInFlight) "等待原读取结束后刷新" else "原读取已结束，请查询当前所选时段容量", fontSize = 12.sp)
+                    else if (m.receptionState.isNotBlank()) Text(m.receptionState, fontSize = 12.sp)
                     if (options == null) {
                         Text("提交前须读取与所选时段一致的预约政策和容量。", fontSize = 12.sp)
                     } else {
@@ -135,10 +172,11 @@ fun ReservationCreateView(m: AppModel, close: () -> Unit) {
                         label = { Text("备注（选填）") }, enabled = editable && supported,
                         modifier = Modifier.fillMaxWidth())
                     if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error)
-                    Primary("下一步 · 核对预约", m.canCreateReception && options != null &&
+                    Primary("下一步 · 核对预约", viewCurrent() && m.canCreateReception && options != null &&
                         draft.people <= options.remainingGuests) {
                         try {
-                            proposed = m.prepareReceptionCreate(draft)
+                            check(viewCurrent()) { "预约页面已变化，请在当前页面重新核对" }
+                            proposed = m.prepareReceptionCreate(draft, viewToken = token)
                             error = ""
                         } catch (e: Exception) { error = e.message ?: "请重新读取时段后核对预约" }
                     }
@@ -158,8 +196,11 @@ fun ReservationCreateView(m: AppModel, close: () -> Unit) {
                 }
             },
             confirmButton = {
-                TextButton(onClick = { proposed = null; m.executeLive(command); close() },
-                    enabled = m.canExecuteLive(command)) { Text("确认创建预约") }
+                TextButton(onClick = {
+                    if (viewCurrent() && m.canExecuteLive(command)) {
+                        proposed = null; m.executeLive(command); closeView()
+                    }
+                }, enabled = viewCurrent() && m.canExecuteLive(command)) { Text("确认创建预约") }
             },
             dismissButton = { TextButton(onClick = { proposed = null }) { Text("返回修改") } })
     }

@@ -5,7 +5,6 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
@@ -50,7 +49,14 @@ object ServiceReminders {
         if(!reminderSessionMatches(saved.getOrNull(),owner.first,owner.second)) { disable(c);return@synchronized }
         val p=prefs(c)
         if(snapshot!=null && snapshot.count>0 && !foreground && allowed(c) && p.getString("fingerprint",null)!=snapshot.fingerprint) {
-            val intent=Intent(c,MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            val issuedAt = java.time.Instant.now()
+            val taskId = snapshot.firstTaskId ?: return@synchronized
+            val tableSessionId = snapshot.firstTableSessionId ?: return@synchronized
+            val target = NotificationTaskTarget(
+                java.util.UUID.randomUUID().toString(), owner.first, owner.second,
+                taskId, tableSessionId, issuedAt, issuedAt.plusSeconds(30 * 60),
+            )
+            val intent = NotificationIntents.create(c, target)
             val pending=PendingIntent.getActivity(c,notificationID,intent,PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
             val notice=NotificationCompat.Builder(c,channel).setSmallIcon(R.drawable.ic_service_notification).setContentTitle("M-BOX 服务待办")
                 .setContentText("有待处理事项，请打开工作台核对最新状态")

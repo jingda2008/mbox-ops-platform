@@ -132,6 +132,7 @@ fun StaffLoginScreen(m: AppModel) {
         Column(Modifier.padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("登录后查看门店桌台与订单", fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
             Text("使用门店现有员工账号和 PIN；首次使用需验证门店设备。", fontSize = 14.sp)
+            if (m.notificationOpenStatus.isNotBlank()) Text(m.notificationOpenStatus, fontSize = 13.sp)
             if (m.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
             Panel { LiveAccountView(m) }
             Text("门店服务器：mbox.shmbox.com", fontSize = 12.sp)

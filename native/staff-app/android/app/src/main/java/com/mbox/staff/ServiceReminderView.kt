@@ -23,6 +23,10 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
     val permission=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()){granted->if(granted&&requestedKey==currentKey)enable()else notice="未开启通知，可继续使用前台待办";requestedKey=null;revision++}
     LaunchedEffect(key){revision++}
     val enabled=remember(revision,key){ServiceReminders.enabled(context,m.identity)}
+    Text("实时通知",style=MaterialTheme.typography.titleMedium)
+    Text(m.nativePushStatus)
+    TextButton(onClick={m.checkNativePushChannel()},enabled=actor!=null&&!m.busy){Text("检查实时通知通道")}
+    if(m.pendingPushRevocations>0)TextButton(onClick={m.flushPushRevocations()}){Text("重试原通知绑定撤销（${m.pendingPushRevocations}）")}
     Text("后台待办检查",style=MaterialTheme.typography.titleMedium)
     Text("约每15分钟检查一次，可能因省电、断网或系统限制延迟。不是实时呼叫推送，营业值班请保持工作台前台。")
     Text("需要记住本机登录；退出、切换员工或取消记住登录后停止。通知不显示顾客、桌号、金额等信息。")

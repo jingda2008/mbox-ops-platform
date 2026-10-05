@@ -822,7 +822,7 @@ class PaymentFlowTransaction implements ScopedTransaction {
         id: this.paymentId, payable_kind: 'order', order_id: this.orderId, activity_registration_id: null,
       }])
     }
-    if (sql.includes('FROM mbox.table_sessions') && sql.includes('FOR SHARE')) {
+    if ((sql.includes('FROM mbox.table_sessions') || sql.includes('FROM mbox.orders original JOIN mbox.table_sessions session')) && sql.includes('FOR SHARE')) {
       return result([{ id: '99999999-9999-4999-8999-999999999999' }])
     }
     if (sql.includes('AS gross_paid_minor')) {

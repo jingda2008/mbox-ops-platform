@@ -56,7 +56,7 @@
 .cashier-order-toggle > span:nth-child(2) { justify-items: end; }
 .cashier-order-toggle b { font-size: 15px; }
 .cashier-order-toggle strong { font-size: 14px; }
-.cashier-order-toggle small { overflow: hidden; color: #6b726b; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.cashier-order-toggle small { color: #6b726b; font-size: 10px; white-space: normal; overflow-wrap: anywhere; }
 .cashier-order-toggle em { color: #216c49; font-size: 9px; font-style: normal; font-weight: 800; }
 .cashier-order-toggle svg { color: #70766f; transition: transform .16s ease; }
 .cashier-order-toggle svg.is-open { transform: rotate(180deg); }
@@ -123,7 +123,7 @@
 .cashier-form-total { display: flex; align-items: center; justify-content: space-between; font-size: 11px; }
 .cashier-form-total strong { font-size: 17px; }
 .cashier-action-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
-.cashier-action-row button { min-width: 0; padding-inline: 8px; gap: 4px; white-space: nowrap; }
+.cashier-action-row button { min-width: 0; padding-inline: 8px; gap: 4px; white-space: normal; overflow-wrap: anywhere; }
 .cashier-inline-error { margin: 0; color: #a32e36; font-size: 13px; font-weight: 750; }
 .cashier-refund-row { display: grid; gap: 7px; padding: 9px; border: 1px solid #d7dbd4; border-left: 4px solid #a6ada4; border-radius: 5px; background: #f8f8f4; }
 .cashier-refund-row.is-requested { border-left-color: #cc9d28; }
@@ -156,6 +156,12 @@
 .cashier-activity-worklist > header small { color: #58685f; font-size: 10px; line-height: 1.45; }
 .cashier-activity-worklist > header > strong { color: #216c49; font-size: 12px; white-space: nowrap; }
 .cashier-activity-registration { border-left: 4px solid #216c49; }
+@media (max-width: 600px) {
+  .cashier-activity-registration .cashier-order-toggle { grid-template-columns: minmax(0, 1fr) 22px; }
+  .cashier-activity-registration .cashier-order-toggle > span:nth-child(2) { grid-column: 1; justify-items: start; }
+  .cashier-activity-registration .cashier-order-toggle > svg { grid-column: 2; grid-row: 1 / 3; }
+}
+
 @media (max-width: 380px) {
   .cashier-workbench { padding: 8px; }
   .cashier-workbench-search { grid-template-columns: 20px minmax(0, 1fr) 56px; }

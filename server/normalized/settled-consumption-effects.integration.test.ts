@@ -310,7 +310,11 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
     const b=await fixture();await compensate(b,1000,'price_adjustment')
     const otherRefund=(await pool.query("SELECT id FROM mbox.refunds WHERE order_id=$1 AND status='succeeded'",[b.order])).rows[0].id
     await expect(runner.run(scope,tx=>tx.query('INSERT INTO mbox.order_recollection_refund_obligations(tenant_id,store_id,order_id,refund_id,authorization_id) VALUES($1,$2,$3,$4,$5)',[scope.tenantId,scope.storeId,b.order,otherRefund,auth.id]))).rejects.toMatchObject({code:'23503'})
-    await expect(runner.run(scope,tx=>tx.query('UPDATE mbox.order_recollection_authorizations SET order_id=$2 WHERE id=$1',[auth.id,b.order]))).rejects.toMatchObject({code:'23503'})
+    // The immutable causal identity now rejects this before the composite FK;
+    // the separate obligation INSERT above still exercises its original proof.
+    await expect(runner.run(scope,tx=>tx.query('UPDATE mbox.order_recollection_authorizations SET order_id=$2 WHERE id=$1',[auth.id,b.order]))).rejects.toMatchObject({code:'55000',message:'recollection causal identity is immutable'})
+    expect((await pool.query('SELECT order_id FROM mbox.order_recollection_authorizations WHERE id=$1',[auth.id])).rows[0].order_id).toBe(a.order)
+    expect((await pool.query('SELECT count(*)::int n FROM mbox.order_recollection_refund_obligations WHERE order_id=$1',[b.order])).rows[0].n).toBe(0)
     await compensate(a,500,'price_adjustment')
     expect(await summary(a.order)).toMatchObject({due:0,net:3500})
     expect((await pool.query('SELECT count(*)::int n FROM mbox.order_recollection_refund_obligations WHERE order_id=$1',[a.order])).rows[0].n).toBe(1)

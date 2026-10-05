@@ -1405,7 +1405,16 @@ export class PaymentRepository {
       return
     }
     if (reference.payable_kind === 'order' && reference.order_id !== null) {
-      await this.lockOrder(reference.order_id)
+      // Provider callbacks have no employee access pre-lock. Keep the same
+      // parent-first order as refunds, closure and the batch path above.
+      const session = await this.transaction.query<{id:string}>(`SELECT session.id
+        FROM mbox.orders original JOIN mbox.table_sessions session
+          ON (session.tenant_id,session.store_id,session.id)=(original.tenant_id,original.store_id,original.table_session_id)
+        WHERE original.tenant_id=$1 AND original.store_id=$2 AND original.id=$3
+        FOR SHARE OF session`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,reference.order_id])
+      if(session.rowCount!==1)throw new PaymentNotFoundError('order session missing')
+      const order=await this.lockOrder(reference.order_id)
+      if(order.table_session_id!==session.rows[0]!.id)throw new OrderNotPayableError(reference.order_id,'order table changed; retry the verified payment result')
       return
     }
     if (reference.payable_kind === 'activity_registration' && reference.activity_registration_id !== null) {

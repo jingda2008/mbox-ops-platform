@@ -23,13 +23,18 @@ async function expectNoHorizontalOverflow(page: import('@playwright/test').Page)
   expect(dimensions.page).toBeLessThanOrEqual(dimensions.viewport + 1)
 }
 
-async function expectReservationTouchTargets(page: import('@playwright/test').Page) {
-  const undersized = await page.locator('[data-testid="reservation-booking"] button, [data-testid="reservation-booking"] input, [data-testid="reservation-booking"] select, [data-testid="reservation-booking"] textarea')
-    .evaluateAll((elements) => elements
+async function expectTouchTargets(page: import('@playwright/test').Page, selector: string) {
+  // Query and measure in one browser turn. evaluateAll first captures an array
+  // handle, which can retain controls unmounted by an intervening React update.
+  const targets = await page.evaluate((query) => [...document.querySelectorAll(query)]
       .filter((element) => {
+        if (!element.isConnected) return false
         const style = getComputedStyle(element)
-        const rect = element.getBoundingClientRect()
-        return style.visibility !== 'hidden' && style.display !== 'none' && (rect.width < 44 || rect.height < 44)
+        if (style.visibility === 'hidden' || style.visibility === 'collapse') return false
+        for (let ancestor: Element | null = element; ancestor; ancestor = ancestor.parentElement) {
+          if (getComputedStyle(ancestor).display === 'none') return false
+        }
+        return true
       })
       .map((element) => {
         const rect = element.getBoundingClientRect()
@@ -38,27 +43,90 @@ async function expectReservationTouchTargets(page: import('@playwright/test').Pa
           width: rect.width,
           height: rect.height,
         }
-      }))
-  expect(undersized).toEqual([])
+      }), selector)
+  expect(targets.length, 'touch target checks must measure a nonempty rendered surface').toBeGreaterThan(0)
+  // Keep connected zero-size controls in the failure set; never hide a real
+  // undersized target merely because it has no positive bounding rectangle.
+  expect(targets.filter(({ width, height }) => width < 44 || height < 44)).toEqual([])
+}
+
+async function expectReservationTouchTargets(page: import('@playwright/test').Page) {
+  await expectTouchTargets(page, '[data-testid="reservation-booking"] button, [data-testid="reservation-booking"] input, [data-testid="reservation-booking"] select, [data-testid="reservation-booking"] textarea')
 }
 
 async function expectCashierTouchTargets(page: import('@playwright/test').Page) {
-  const undersized = await page.locator('.cashier-workbench button, .cashier-workbench input, .cashier-workbench textarea')
-    .evaluateAll((elements) => elements
-      .filter((element) => {
-        const style = getComputedStyle(element)
-        const rect = element.getBoundingClientRect()
-        return style.visibility !== 'hidden' && style.display !== 'none' && (rect.width < 44 || rect.height < 44)
-      })
-      .map((element) => {
-        const rect = element.getBoundingClientRect()
-        return {
-          label: element.getAttribute('aria-label') ?? element.textContent?.trim() ?? element.tagName,
-          width: rect.width,
-          height: rect.height,
-        }
-      }))
-  expect(undersized).toEqual([])
+  await expectTouchTargets(page, '.cashier-workbench button, .cashier-workbench input, .cashier-workbench textarea')
+}
+
+async function setRenderedTextScale(page: import('@playwright/test').Page, scale: 1 | 2) {
+  await page.evaluate((factor) => {
+    type SavedStyle = { element: HTMLElement; fontSize: string; fontPriority: string; lineHeight: string; linePriority: string }
+    const state = window as typeof window & { refundLayoutOriginalStyles?: SavedStyle[] }
+    for (const saved of state.refundLayoutOriginalStyles ?? []) {
+      const style = saved.element.style
+      if (saved.fontSize) style.setProperty('font-size', saved.fontSize, saved.fontPriority)
+      else style.removeProperty('font-size')
+      if (saved.lineHeight) style.setProperty('line-height', saved.lineHeight, saved.linePriority)
+      else style.removeProperty('line-height')
+    }
+    delete state.refundLayoutOriginalStyles
+    if (factor === 1) return
+
+    const elements = [...document.querySelectorAll('body, body *')]
+      .filter((element): element is HTMLElement => element instanceof HTMLElement
+        && !['SCRIPT', 'STYLE', 'NOSCRIPT'].includes(element.tagName))
+    state.refundLayoutOriginalStyles = elements.map((element) => ({
+      element,
+      fontSize: element.style.getPropertyValue('font-size'),
+      fontPriority: element.style.getPropertyPriority('font-size'),
+      lineHeight: element.style.getPropertyValue('line-height'),
+      linePriority: element.style.getPropertyPriority('line-height'),
+    }))
+    // Sample every original size before applying any override, so inherited
+    // text is doubled once. Keep viewport/layout widths unchanged; this is a
+    // text-only stress check, not page zoom or a device-font acceptance claim.
+    const sizes = elements.map((element) => {
+      const style = getComputedStyle(element)
+      return { element, font: parseFloat(style.fontSize), line: style.lineHeight }
+    })
+    for (const { element, font, line } of sizes) {
+      element.style.setProperty('font-size', `${font * factor}px`, 'important')
+      if (line !== 'normal') element.style.setProperty('line-height', `${parseFloat(line) * factor}px`, 'important')
+    }
+  }, scale)
+}
+
+async function expectCompleteButtonLabel(button: import('@playwright/test').Locator, label: string) {
+  await expect(button).toHaveText(label)
+  await expect(button).toBeEnabled()
+  await button.scrollIntoViewIfNeeded()
+  await button.click({ trial: true }) // Check hit testing without submitting a refund decision.
+  const geometry = await button.evaluate((element) => {
+    const bounds = element.getBoundingClientRect()
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
+    const textRects: DOMRect[] = []
+    let node = walker.nextNode()
+    while (node) {
+      if (node.textContent?.trim()) {
+        const range = document.createRange()
+        range.selectNodeContents(node)
+        textRects.push(...range.getClientRects())
+      }
+      node = walker.nextNode()
+    }
+    return {
+      width: bounds.width,
+      height: bounds.height,
+      textRectCount: textRects.length,
+      overflowingText: textRects.filter((rect) => rect.left < bounds.left - 1 || rect.right > bounds.right + 1
+        || rect.top < bounds.top - 1 || rect.bottom > bounds.bottom + 1)
+        .map((rect) => ({ width: rect.width, height: rect.height })),
+    }
+  })
+  expect(geometry.width, `${label} touch width`).toBeGreaterThanOrEqual(44)
+  expect(geometry.height, `${label} touch height`).toBeGreaterThanOrEqual(44)
+  expect(geometry.textRectCount, `${label} must render visible text`).toBeGreaterThan(0)
+  expect(geometry.overflowingText, `${label} must remain entirely inside its button`).toEqual([])
 }
 
 async function fixture(): Promise<Fixture> {
@@ -499,6 +567,8 @@ test('reservation actions keep mobile touch targets at least 44px through confir
   await page.setViewportSize({ width: 320, height: 568 })
   await page.goto(data.reservationUrl)
   await expect(page.getByTestId('reservation-booking')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '选择日期和人数', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: /下一步：位置与联系/ })).toBeEnabled()
   await expectReservationTouchTargets(page)
   await page.screenshot({ path: 'artifacts/normalized-browser/audit-rc78-reservation/reservation-initial-320.png', fullPage: true })
 
@@ -625,7 +695,7 @@ test('mobile manager can initiate but cannot review cashier refund work', async 
   await page.screenshot({ path: 'artifacts/normalized-browser/refund-policy/manager-refund-request-320.png', fullPage: true })
 })
 
-test('mobile cashier can review but cannot initiate manager refund work', async ({ page }) => {
+test('mobile cashier can review but cannot initiate manager refund work', async ({ page }, testInfo) => {
   const data = await fixture()
   await page.setViewportSize({ width: 320, height: 800 })
   await page.route('**/api/payments/workbench?*', (route) => route.fulfill({
@@ -649,11 +719,45 @@ test('mobile cashier can review but cannot initiate manager refund work', async 
   await expect(page.getByLabel('复核说明')).toBeVisible()
   await expect(page.getByRole('button', { name: '复核驳回' })).toBeVisible()
   await expect(page.getByRole('button', { name: '复核通过' })).toBeVisible()
-  for (const label of ['复核驳回', '复核通过']) {
-    const button = page.getByRole('button', { name: label })
-    await expect(button).toHaveCSS('white-space', 'nowrap')
-    expect((await button.boundingBox())?.height).toBeLessThanOrEqual(48)
+  await page.getByLabel('复核说明').fill('隔离页面核对原商品和退款金额')
+  const decisionRequests: string[] = []
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && new URL(request.url()).pathname.startsWith('/api/refunds/')) {
+      decisionRequests.push(request.url())
+    }
+  })
+  for (const width of [320, 390]) {
+    await setRenderedTextScale(page, 1)
+    await page.setViewportSize({ width, height: 800 })
+    const originalFontSize = await page.getByRole('button', { name: '复核通过', exact: true })
+      .evaluate((element) => parseFloat(getComputedStyle(element).fontSize))
+    for (const scale of [1, 2] as const) {
+      await setRenderedTextScale(page, scale)
+      const actualFontSize = await page.getByRole('button', { name: '复核通过', exact: true })
+        .evaluate((element) => parseFloat(getComputedStyle(element).fontSize))
+      expect(actualFontSize).toBeCloseTo(originalFontSize * scale)
+      for (const label of ['复核驳回', '复核通过']) {
+        await expectCompleteButtonLabel(page.getByRole('button', { name: label, exact: true }), label)
+      }
+      const buttons = await page.locator('.cashier-decision-form .cashier-action-row button')
+        .evaluateAll((elements) => elements.map((element) => {
+          const rect = element.getBoundingClientRect()
+          return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }
+        }))
+      expect(buttons).toHaveLength(2)
+      const [reject, approve] = buttons
+      expect(reject.right <= approve.left + 1 || approve.right <= reject.left + 1
+        || reject.bottom <= approve.top + 1 || approve.bottom <= reject.top + 1,
+      'refund decision buttons must not overlap').toBe(true)
+      await expect(page.getByRole('button', { name: '选择原商品发起退款' })).toHaveCount(0)
+      await expectCashierTouchTargets(page)
+      await expectNoHorizontalOverflow(page)
+      await page.screenshot({ path: testInfo.outputPath(`cashier-refund-review-${width}-${scale * 100}.png`) })
+    }
   }
+  await setRenderedTextScale(page, 1)
+  await page.setViewportSize({ width: 320, height: 800 })
+  expect(decisionRequests, 'layout checks must not submit refund decisions').toEqual([])
   await expect(page.getByRole('button', { name: '选择原商品发起退款' })).toHaveCount(0)
   await expectCashierTouchTargets(page)
   await expectNoHorizontalOverflow(page)

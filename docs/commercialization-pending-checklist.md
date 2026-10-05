@@ -2,7 +2,7 @@
 
 历史版本说明（2026-09-08阶段，后续发布见分时记录；非当前部署结论）：当时最近一次已留存生产发布证据为 `1.0.0-rc.178`（提交 `90d3cfb077c1bb3b22236abcbba595eb9f2a65e6`）、schema `158`、门店配置 `2026.09.07-v20`；当前远端主线已包含自选套餐 schema `159`、老板经营费用与工资 schema `160`及门店配置候选 `2026.09.08-v21`，本地发布候选在其上新增支付/退款持久化退避和运营反馈修复 schema `161`。本轮尚未提交、合并、部署或上传小程序。真实资金、工资发放、退款、对账与门店岗位验收未完成，商业发布继续为`DENY`
 形成日期：`2026-07-27`
-最后更新：`2026-10-05 20:59 CST`
+最后更新：`2026-10-05 21:09 CST`
 
 适用范围：上海 M-BOX 陆家嘴店验证环境、门店试运行和商业生产发布
 清单负责人：乌鸦（系统管理员）
@@ -5845,3 +5845,5 @@ PR333准确head`76171e947c2ca4260557b919e6b8b0666b1ab687`经全部适用CI后已
 | ANDROID-RELEASE-20261005-03 | P1待核实；Android打包负责人；build10 | 旧包graphics-path的ZIP及PT_LOAD可16KB对齐，但GNU_RELRO末端未16KB对齐；官方新增检查要求明确此项。尚未复现运行崩溃，需同时核查native加载的API条件，不能直接推定所有新版手机不能用 | 核实依赖加载路径和修复版本，对实际候选记录ZIP/ELF/RELRO、4KB与可用16KB运行证据；不以zipalign单项代替完整设备兼容 |
 
 | 2026-10-05 20:59 CST | ANDROID-RELEASE-20261005-03：固定AOSP linker与实际库逐段交叉检查确认16KB取整保护未覆盖RELRO外可写字节；原库及官方新版皆不符合简化末端模数，保留该诊断且不臆断崩溃。发布工具新增实际ZIP/ELF/RELRO保护交集、损坏/ABI错误和压缩库extractNativeLibs配置门禁，16项Python回归通过，独立复核通过；不升级图形依赖 | 4KB native曲线路径500轮/18000段通过；16KB独立镜像下载中，实际运行待验，不能据静态检查宣布兼容。证据`outputs/android-graphics-path-16kb-20261005/review.md`与`outputs/android-release-build10-20261005/publisher-tests.log`；准备冻结build10本地正式候选，未发布 |
+
+| 2026-10-05 21:09 CST | ANDROID-RESERVATION-20261005-02／ANDROID-RELEASE-20261005-03：从c4cbbcef18b01e1a5b70d2062166563957e1ecce冻结323输入，正式0.4.0-rc.5/build10签名构建与lintRelease通过，证书沿用05362998…a4ccc0；APK SHA256为56f3b03ee0e32aecb7dc8ddfcea92b60f1b8ed4bbb3909d363c31a27d78728b3，15,624,539字节。API36/4KB原build9→10覆盖保留UID/首次安装时间/私有QA标记；API35/16KB首次安装、原生员工登录启动通过；两者500轮/18000段native conic探针通过。最新main31ea829a整合后全部构建输入不变 | 证据`outputs/android-release-build10-20261005`；[说明](../native/staff-app/ANDROID_BUILD10_20261005.md)。不代表真实营业数据迁移、多品牌实体机或整班验收，正式stable未发布、后端262/263本批未部署。仅安卓继续；供应商退货和iOS排除；真实厂商推送软件适配仍开放，支付/打印现场另验。PR341 CI与唯一系统发布分别核实 |

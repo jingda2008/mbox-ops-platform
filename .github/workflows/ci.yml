@@ -241,7 +241,7 @@ jobs:
           path: |
             artifacts/normalized-browser/report
             artifacts/normalized-browser/results
-            artifacts/normalized-browser/startup.json
+            artifacts/normalized-browser/startup*.json
             artifacts/normalized-browser-baseline
             artifacts/normalized-browser-three-screen
           if-no-files-found: warn

@@ -8,7 +8,25 @@
 
 以下01—10项缺陷描述是修复前的审计基线。后续收到用户经监督会话核验的“全部修复、提交合并部署”授权，修复及安卓集成已合并；当前交付状态见下一节，文末分时记录保留当时事实。生产业务仍未作测试性写入。优先级是修复排序：P1 优先处理数据一致性，P2 修复流程和操作问题，P3 改善工程资料或体验；不代表已经发生同等级生产事故。
 
-## 最新交付状态（2026-10-05 23:57 CST）
+## 最新交付状态（2026-10-06 00:59 CST）
+
+现登记23组系统审计问题，含13/14/20三项已排除的iOS历史；当前范围20组中前19组已有实现修复，新增AUDIT-20261006-23正在修复。Android通知导航补修另列ANDROID-NAV-20261006-01，不重复计数。
+
+PR344已合并233ec2eb，不可变rc249标签CI37340096238与Release37340096182成功：351文件3160数据库断言，零跳过/未处理错误，HTTP通过；主浏览器实际127通过、2项首次失败后重试通过、36条件跳过，独立三屏18、会员8通过。保留原失败日志、截图、trace及startup原60样本，不改写为129项首次通过。
+
+盘点失败追查确认共享依赖问题：同一员工/会话、相同权限的heartbeat读回仍产生新数组与登录回调，触发岗位重复读取；新inventory对象令子组件重置。trace确认受控503约132ms后自动读到200，源码还会清空选择，状态丢失控制回归正在进行。因此取消rc249生产激活计划，保留标签及资产，修复后使用新不可变rc250。
+
+startup首次顾客p95 554.4ms超过原500ms门槛，重试334.5ms不能抹去首次结果。慢样本有真实API等待，尚未证明产品回归或全部由CPU/锁等待造成；现criticalPaths漏掉实际就绪所需共享车，诊断补齐时维持原阈值、样本数和零错误门禁。
+
+Android PR345正式557项/98类、零跳过，lint16警告/13提示/0错误，全CI数据库3160、HTTP及浏览器129/18/8通过且零重试，已合并83db1a59。build10取消分发且未曾公开发布；build11固定源944f5ae正式签名，同证书、4KB从9升级、16KB安装及原生probe已独立核验，候选PR准确CI仍待完成。模拟器不是多品牌真机或完整业务迁移证明；厂商SDK和Android后端推送协议仍未完成。
+
+当前生产仍rc247/schema261与Android9。统一激活须等Web修复准确CI和build11就绪，避免后端要求升级却没有兼容包。当前双小程序平台上传/审核/发布、实体设备、资金、纸票与整班营业验收分别开放；没有生产测试收退款/库存业务写入。
+
+[首次失败回读](../../outputs/system-audit-20261005/rc249-tag-browser-readback.md)、[原始时间线](../../outputs/system-audit-20261005/rc249-tag-browser-flaky-triage.json)、[标签资产核验](../../outputs/system-audit-20261005/rc249-release-bundle-verified.json)。下文保留分时历史。
+
+## 交付历史快照（2026-10-05 23:57 CST）
+
+本节保留当时的门禁状态，不覆盖后续回执。后续PR344第二轮浏览器结果见[固定日志回读](../../outputs/system-audit-20261005/pr344-second-browser-readback.md)；rc249标签、Release、生产身份与部署回读须按[rc249发布记录](release-1.0.0-rc.249.md)及其实际不可变证据逐项确认，不由本段预先判定成功。Android原0.4.0-rc.5/build10为历史签名候选，受通知入口route授权缺口影响不分发；后续计划由包含修复的build11独立完成源码冻结、正式签名、APK验证、更新源CAS和公网回读。后端rc249与APK交付是独立门禁，本文未据计划宣称build11已发布。
 
 现登记22组，当前范围19组均已有实现修复；其中新增22已通过定向浏览器验证，最终PR和标签CI仍待完成；13/14/20为停止前iOS历史项，不计入当前完成门禁。PR343最终head `575167bb` 对应CI37324935814适用项全通过后已合并 `9bf966df`；该PR运行实际检出合并预览，并非生产。主浏览器126通过/36条件跳过，独立三屏18、会员8，本轮实际零重试；CI本身仍允许一次重试，三组不相加为去重业务场景。
 
@@ -18,7 +36,7 @@
 
 Android厂商推送仍缺真实SDK、客户端注册/轮换与后台安卓协议；通用原请求持久化及未知结果恢复可离线继续，已交安卓负责人在独立分支推进，冻结build10不变。具体提供方和项目配置尚未确定，真实送达、多品牌设备、资金、纸票及整班营业分别验收。双mini当前版本平台上传/审核/发布仍开放。没有生产测试收退款或库存写入。
 
-[21项独立回读](../../outputs/system-audit-20261005/final-audit-item-readback.md)、[浏览器证据边界](../../outputs/system-audit-20261005/final-browser-validation-readback.md)、[rc248数据库失败脱敏日志](../../outputs/system-audit-20261005/rc248-tag-database-failed-redacted.log)、[剩余软件与验收复核](../../outputs/system-audit-20261005/recollection-independent-probe/rc248-remaining-software-and-acceptance-review.md)。以下分时记录保留历史，不覆盖本节最新状态。
+[21项历史独立回读](../../outputs/system-audit-20261005/final-audit-item-readback.md)、[22项独立回读（2026-10-06 00:02快照）](../../outputs/system-audit-20261005/final-audit-item-readback-22.md)、[浏览器证据边界](../../outputs/system-audit-20261005/final-browser-validation-readback.md)、[rc248数据库失败脱敏日志](../../outputs/system-audit-20261005/rc248-tag-database-failed-redacted.log)、[剩余软件与验收复核](../../outputs/system-audit-20261005/recollection-independent-probe/rc248-remaining-software-and-acceptance-review.md)。以下分时记录保留历史，不覆盖本节最新状态。
 
 rc249定向验证更新（2026-10-05 23:19 CST）：受控真实PG与受限LOGIN证明旧pool.end返回时client尚未结束、服务端仍1连接，FORCE触发57P01；两金融升级夹具现等待服务端零连接，再带服务端DDL超时非强制删除，管理员finally关闭。3文件45项通过、零未处理异常，lint与独立审查通过；该初始清理提交仅测试/版本/文档改变。5秒排空预算不含pool.end，只有未排空且未发DROP的超时可保证库保留，DROP结果未知不能冒称已保留。待新PR与标签全CI；[冻结交付](../../outputs/system-audit-20261005/recollection-independent-probe/rc249-fixture-cleanup-delivery.md)。
 
@@ -46,7 +64,7 @@ PR343第二轮补记（2026-10-05 22:27 CST）：官方检查均SUCCESS，但主
 
 独立隔离PostgreSQL受限LOGIN与真实PaymentRepository复现：单笔分支先持订单锁再取桌次锁，与退款/关桌使用的桌次→订单前缀相反；callback和query两场景均形成真实反向等待并出现40P01死锁回滚。受害事务在此次探针中为并发方，不能说每次一定是回调失败，更不能据此声称重复扣款。
 
-候选统一先桌次SHARE、再订单UPDATE并复核当前关联；同脚本两场景修后均成功，新增仓库真实PG2/2回归通过。批量路径原已按父先子后，未把该问题泛化为所有付款。独立报告确认264最终受限角色序列USAGE/SELECT/UPDATE均false，并校核旧ledger/新授权混链拒绝、退款集合与授权不可变边界。[独立修前/修后和权限证据](../../outputs/system-audit-20261005/recollection-independent-probe/financial-causal-order-independent-review.md)。当前登记21组（包含已停止推进的iOS历史发现）；264完整升级矩阵、准确提交CI及生产验证仍待本轮最终交付。
+候选统一先桌次SHARE、再订单UPDATE并复核当前关联；同脚本两场景修后均成功，新增仓库真实PG2/2回归通过。批量路径原已按父先子后，未把该问题泛化为所有付款。独立报告确认264最终受限角色序列USAGE/SELECT/UPDATE均false，并校核旧ledger/新授权混链拒绝、退款集合与授权不可变边界。[独立修前/修后和权限证据](../../outputs/system-audit-20261005/recollection-independent-probe/financial-causal-order-independent-review.md)。截至本段记录时登记21组（包含已停止推进的iOS历史发现），当时264完整升级矩阵、准确提交CI及生产验证仍待完成；后续矩阵、CI及发布回执见顶部索引，不将此历史等待状态作当前阻断。
 
 ## 停止iOS前交付快照（2026-10-05 21:03 CST）
 
@@ -62,9 +80,9 @@ PR343第二轮补记（2026-10-05 22:27 CST）：官方检查均SUCCESS，但主
 | 双小程序 | 91f最终本地候选和支付宝官方离线编译证据已存 | 本版未上传/审核/发布；微信门禁29项仍缺证据，旧版本上传回执不能移用 |
 | 财务时钟顺序 | AUDIT-19受限PG可控回拨两个实际业务场景复现 | 追加264修复和新旧历史/并发独立复核进行中；不修改235/237、不回填历史金额 |
 
-真实支付渠道、纸票、手机安装/锁屏/推送和门店整班验收未由本地测试替代。唯一明确排除的业务范围为供应商采购退货；账号和设备条件只阻塞其对应证据，不将仍可完成的软件工作写成外部阻塞。
+真实支付渠道、纸票、手机安装/锁屏/推送和门店整班验收未由本地测试替代。截至21:03范围变更前，唯一明确排除的业务范围为供应商采购退货；21:03:34后iOS开发、测试、签名与验收也由用户明确排除，见顶部直接人类证据。此前账号和设备条件只阻塞其对应证据，不将当时仍可完成的软件工作写成外部阻塞。
 
-## iOS共享私密记录清理缺失（AUDIT-20261005-20，P2，已修复待交付）
+## iOS共享私密记录清理缺失（AUDIT-20261005-20，P2，停止前已修复待交付的历史记录）
 
 旧共享完成/拒绝处理先删除普通pending索引，再调用丢弃 `SecItemDelete` 错误的删除函数；私密安全槽清理失败后无原入口可重试。另有先写私密槽后写普通pending失败的孤儿路径。受影响九类业务包括工资、员工PIN、会员手机号、存酒、演出、体验/重做、支付码和券凭据，数据敏感性不同；槽仍受本机Keychain保护，不能将残留机制等同于已泄露或重复扣款。
 
@@ -110,9 +128,9 @@ PR343第二轮补记（2026-10-05 22:27 CST）：官方检查均SUCCESS，但主
 
 在初审10组与交付扩查2项之外，原始双端需求复核新增两组现有功能缺陷：AUDIT-13，iOS恢复登录失败残留运行身份、退出断网／503未锁本机；AUDIT-14，商品售后现金退款在approved直接登记结果、遗漏execute，POS／其他线下同域缺执行及结果凭证入口。两项已在固定提交`dc869db2d35e17d6dec06a2022f7786e57ea7f69`修复，19组Swift合同共788项通过、模拟器构建通过，629个归档源码文件与Git逐个核对一致；[验证记录](../../outputs/system-audit-20261005/ios-dc869db2-validation-result.md)。普通独立退款已有执行流程，不扩大为全部退款故障。
 
-本轮修复登记现为14组，以下13:04交付状态只对应当时12组，不能把后续iOS补修代码算进已发布6e4后端、build8 APK或91f双mini。iOS功能迁移和后台实时推送在原双端需求中仍未完成，未找到用户排除；不能将这些软件工作统称外部验收。本轮用户明确的开发对象为Android，唯有供应商采购退货被明确排除，原始依据及逐项状态见[商业化清单](commercialization-pending-checklist.md)末尾与[人类范围证据](../../outputs/system-audit-20261005/native-scope-direct-human-evidence.json)。
+本轮修复登记现为14组，以下13:04交付状态只对应当时12组，不能把后续iOS补修代码算进已发布6e4后端、build8 APK或91f双mini。截至本段13:32记录时，iOS功能迁移和后台实时推送在原双端需求中仍未完成，当时未找到用户排除；不能将当时的软件工作统称外部验收。21:03:34后用户已明确排除后续iOS，见顶部范围变更；本段不再构成当前iOS交付要求。截至该13:32快照，用户明确的开发对象为Android，当时仅供应商采购退货被明确排除，原始依据及逐项状态见[商业化清单](commercialization-pending-checklist.md)末尾与[人类范围证据](../../outputs/system-audit-20261005/native-scope-direct-human-evidence.json)。
 
-## 当前交付状态（2026-10-05 13:04 CST）
+## 初批交付历史状态（2026-10-05 13:04 CST）
 
 系统修复PR #327已合并，后端固定提交`6e4a76a2359413f6d7e78eb1c7a37e923087f523`、标签`v1.0.0-rc.246`、schema260于12:35:48 CST标准部署成功；Android PR #326已先行合并，build8于12:41正式分发。固定6e4的tag-ci、release、main-ci及android-main四个workflow均成功，16脚本正式资产和标准部署摘要一致。PR／main中按规则跳过的任务不计为执行通过，tag镜像及release有独立成功证据。扩查两项补修PR #328已于12:56:56 CST合并，后续主线提交为`91f84ff59df0fff9007991d639edaad5c296828b`。PR CI首次运行37264307284于12:52:55成功、未重跑；该检查绑定PR合并预览提交，不冒称对最终91f重新跑过。海报与短期归档修复只在后续主线，不在冻结后端6e4标签中；双小程序最终交付候选已按91f重新生成并完成本地门禁／支付宝官方离线编译，尚未上传；首批6e4候选保留历史。
 
@@ -127,7 +145,7 @@ PR343第二轮补记（2026-10-05 22:27 CST）：官方检查均SUCCESS，但主
 | 05 整桌付款终态恢复 | 原身份／桌次／载荷下先恢复旧请求，新付款仍查当前余额；API／PG回归通过 | 后端已部署 | 渠道资金、终端未知结果与历史付款分别核验；未证实生产重复扣款 |
 | 06 打印控件与继承份数 | 控件命中、null继承、开关／显式份数及原生契约已修；PG／浏览器／回滚门禁通过 | schema259及员工网页已部署；正式APK已分发 | 实际多路由纸票、实体手机及生产回滚实演独立；不兼容回滚可能被受控阻断 |
 | 07 待办时间真实性 | 全部来源成功才推进总成功时间，首次不完整读取不冒称成功；浏览器失败注入通过 | 员工网页已部署 | 已修总成功时间，未新增每源独立成功／失败时间；不宣称穷尽全部离线和重新授权组合 |
-| 08 活动收银跨屏样式 | 基础CSS移出窄屏断点，375/390/844/1440宽度复验通过；关键字号同步改善 | 员工网页已部署 | 网页200%文本、品牌真机、门店距离／照度另验；不是金额或审批逻辑修复 |
+| 08 活动收银跨屏样式 | 基础CSS移出窄屏断点，375/390/844/1440宽度复验通过；关键字号同步改善 | 员工网页已部署 | 当时网页200%文本待验；后续指定页面文字压力法证据见顶部，其余页面、原生zoom、品牌真机及门店距离／照度仍另验；不是金额或审批逻辑修复 |
 | 09 潜伏支付渠道依赖 | 按所选渠道预检和恢复旧付款，相关合同验证通过 | 后端已部署；支付宝正式能力仍关闭 | 平台身份／支付／手机号／通知及真实资金另验，不称支付宝已上线 |
 | 10 当前工程入口与资料 | 规范化入口、配置及Android当前摘要已修；收尾文档区分已部署、已分发和待验收 | 规范化入口已合并；本记录统一实际部署、候选及验收证据 | Android交付不代表iOS；采购退货排除本轮；测试和页面数不是完成率 |
 
@@ -164,6 +182,8 @@ PR #328证据：[CI终态与计数](../../outputs/system-audit-20261005/pr328-ci
 
 ## 修复前缺陷基线
 
+本节01—10的26处源码引用已逐条核对初审固定提交`5372ecb3368cf001eba6e9d1591070fcb9047bb9`并使用GitHub `#L`锚点；它们描述该时点缺陷或既有正确对照，不指向后续修后的同名文件。交付扩查及原生新增事项继续使用各自证据版本，不沿用初审SHA。仓库外outputs链接为本机审计证据，不代表随GitHub公开归档。
+
 ### 01 旧退库路径恢复了数量却没有恢复正确成本
 
 `AUDIT-20261005-01`，P1，已在真实本地 PostgreSQL 和受限运行角色下复现。
@@ -172,7 +192,7 @@ PR #328证据：[CI终态与计数](../../outputs/system-audit-20261005/pr328-ci
 
 复现：现存 6 件、每件成本 500 分，退回 2 件历史成本 300 分的商品。数量正确变为 8，但成本仍是 500 分；正确加权成本应为 `(6×500+2×300)/8=450` 分。自动退款退回 1 件的两条分支也得到 500 分，正确值应为 471.428571 分。影响库存估值、后续消耗成本和毛利分析，不能直接推导现金损失或生产受影响金额。
 
-位置：[旧实物退库](../server/normalized/order-stock-return-repository.ts:56)、[普通退款退库](../server/normalized/refund-fulfillment-repository.ts:130)、[另一个自动退库分支](../server/normalized/refund-fulfillment-repository.ts:169)、[新按份成本恢复](../server/normalized/quantity-inventory-return-balance.ts:6)。证据：[backend-probe-results.json](/Users/jingda/mbox/outputs/system-audit-20261005/backend-probe-results.json)。
+位置：[旧实物退库](https://github.com/jingda2008/mbox-ops-platform/blob/5372ecb3368cf001eba6e9d1591070fcb9047bb9/server/normalized/order-stock-return-repository.ts#L61)、[普通退款退库](https://github.com/jingda2008/mbox-ops-platform/blob/5372ecb3368cf001eba6e9d1591070fcb9047bb9/server/normalized/refund-fulfillment-repository.ts#L130)、[另一个自动退库分支](https://github.com/jingda2008/mbox-ops-platform/blob/5372ecb3368cf001eba6e9d1591070fcb9047bb9/server/normalized/refund-fulfillment-repository.ts#L169)、[新按份成本恢复](https://github.com/jingda2008/mbox-ops-platform/blob/5372ecb3368cf001eba6e9d1591070fcb9047bb9/server/normalized/quantity-inventory-return-balance.ts#L6)。证据：[backend-probe-results.json](/Users/jingda/mbox/outputs/system-audit-20261005/backend-probe-results.json)。
 
 关闭标准：所有退库入口共用经过校验的历史成本恢复逻辑；覆盖不同进货价、零库存、未知成本、部分退回、多次退回和并发。未知历史成本保持待核对，不能补零或直接批量改历史账；另做生产只读影响评估再决定历史修复。
 
@@ -182,7 +202,7 @@ PR #328证据：[CI终态与计数](../../outputs/system-audit-20261005/pr328-ci
 
 网页提交退款申请不传 `publicId`。后端每次生成随机退款单号，并把这个新单号算入幂等请求指纹。同员工、同请求编号、同正文再次提交，第一次201，第二次409 `IDEMPOTENCY_CONFLICT`，无法沿原请求找回成功结果。数据库仍只有1条申请，未执行渠道退款。页面轮询可能让员工稍后看到申请，但不能替代请求本身恢复。
 
-位置：[随机默认编号与指纹](../server/normalized/payment-api.ts:666)、[网页退款提交](../src/normalized-ui/CashierAfterSalesWorkbench.tsx:439)。[网页截获证据](/Users/jingda/mbox/outputs/system-audit-20261005/visual/refund-retry-client.json)显示两次请求同键、同正文、均无publicId；该浏览器场景的付款数据为桩且未转发写请求。后端独立复现见上述 backend JSON。
+位置：[随机默认编号与指纹](https://github.com/jingda2008/mbox-ops-platform/blob/5372ecb3368cf001eba6e9d1591070fcb9047bb9/server/normalized/payment-api.ts#L667)、[网页退款提交](https://github.com/jingda2008/mbox-ops-platform/blob/5372ecb3368cf001eba6e9d1591070fcb9047bb9/src/normalized-ui/CashierAfterSalesWorkbench.tsx#L443)。[网页截获证据](/Users/jingda/mbox/outputs/system-audit-20261005/visual/refund-retry-client.json)显示两次请求同键、同正文、均无publicId；该浏览器场景的付款数据为桩且未转发写请求。后端独立复现见上述 backend JSON。
 
 同类扩查还发现活动现金/POS收款的默认支付编号随机，并进入指纹；这两条仅执行真实路由合同探针，未将活动支付落库，作为同根因待补联验分支。普通订单的线上/现金/POS新建支付已有按请求编号确定ID的逻辑，不能泛称所有支付都存在此问题。
 
@@ -194,7 +214,7 @@ PR #328证据：[CI终态与计数](../../outputs/system-audit-20261005/pr328-ci
 
 服务端返回409及 `error.details.conflictingOrderId`，两端请求适配器只保留错误码、状态码和retryAt，丢弃details。已新增的页面确认逻辑读不到原单编号，因此不弹“继续加单”，而提示刷新。此前12项页面专项直接模拟含details的错误，绕过请求适配层，因而未覆盖此缺口。
 
-位置：[微信请求适配](../miniprogram/utils/request.js:228)、[支付宝请求适配](../alipay-miniprogram/utils/request.js:265)、[微信页面消费](../miniprogram/pages/order/index.js:2139)。本轮贯穿真实request、checkout API、submitOrder和确认方法，仅平台网络I/O为桩；两端 `errorHasDetails=false`、`modalCount=0`。支付宝走实际平台HTTP错误归一化路径，且其支付目前仍强制关闭，不能称为支付宝线上付款事故。[客户端复现](/Users/jingda/mbox/outputs/system-audit-20261005/client-contract-repro.json)。
+位置：[微信请求适配](https://github.com/jingda2008/mbox-ops-platform/blob/5372ecb3368cf001eba6e9d1591070fcb9047bb9/miniprogram/utils/request.js#L228)、[支付宝请求适配](https://github.com/jingda2008/mbox-ops-platform/blob/5372ecb3368cf001eba6e9d1591070fcb9047bb9/alipay-miniprogram/utils/request.js#L266)、[微信页面消费](https://github.com/jingda2008/mbox-ops-platform/blob/5372ecb3368cf001eba6e9d1591070fcb9047bb9/miniprogram/pages/order/index.js#L2139)。本轮贯穿真实request、checkout API、submitOrder和确认方法，仅平台网络I/O为桩；两端 `errorHasDetails=false`、`modalCount=0`。支付宝走实际平台HTTP错误归一化路径，且其支付目前仍强制关闭，不能称为支付宝线上付款事故。[客户端复现](/Users/jingda/mbox/outputs/system-audit-20261005/client-contract-repro.json)。
 
 关闭标准：安全地传递和校验所需结构化错误字段，跨真实适配器验证确认、取消、换桌、购物车变化和原请求恢复；重新编译候选并单列平台/真机证据。不能仅修改页面测试再次宣布闭环，也不能为验证此项开启支付宝生产支付。
 
@@ -204,7 +224,7 @@ PR #328证据：[CI终态与计数](../../outputs/system-audit-20261005/pr328-ci
 
 两端 `createCustomerReservation` 每次生成新请求编号，仅收到成功响应后才保存预约编号。若后台已创建预约但响应丢失，页面解锁后重试同一表单，会作为新预约再次占用容量。后台保护总容量，但不自动合并不同编号的同顾客同场次预约；容量已满时，也可能让已经预约成功的客人看到失败提示。
 
-位置：[微信预约API](../miniprogram/utils/api.js:566)、[支付宝预约API](../alipay-miniprogram/utils/api.js:498)、[后端创建](../server/normalized/public-reservation-api.ts:303)。真实客户端函数复现同正文两次编号不同且无原attempt持久化；此脚本的后台提交为桩。现有 [数据库测试](../server/normalized/public-reservation-api.test.ts:252)对同顾客同载荷不同键提交，容量6人时三个2人预约成功、第四个拒绝；该文件包含在本轮全库运行中，没有报告失败。不能将两段证据写成已做完平台真机到真实数据库的端到端复现。
+位置：[微信预约API](https://github.com/jingda2008/mbox-ops-platform/blob/5372ecb3368cf001eba6e9d1591070fcb9047bb9/miniprogram/utils/api.js#L566)、[支付宝预约API](https://github.com/jingda2008/mbox-ops-platform/blob/5372ecb3368cf001eba6e9d1591070fcb9047bb9/alipay-miniprogram/utils/api.js#L498)、[后端创建](https://github.com/jingda2008/mbox-ops-platform/blob/5372ecb3368cf001eba6e9d1591070fcb9047bb9/server/normalized/public-reservation-api.ts#L303)。真实客户端函数复现同正文两次编号不同且无原attempt持久化；此脚本的后台提交为桩。现有 [数据库测试](https://github.com/jingda2008/mbox-ops-platform/blob/5372ecb3368cf001eba6e9d1591070fcb9047bb9/server/normalized/public-reservation-api.test.ts#L252)对同顾客同载荷不同键提交，容量6人时三个2人预约成功、第四个拒绝；该文件包含在本轮全库运行中，没有报告失败。不能将两段证据写成已做完平台真机到真实数据库的端到端复现。
 
 关闭标准：提交前保存原顾客/门店、完整载荷和编号；网络未知及重开页面先恢复原预约，得到同一publicId，预约、容量、通知只增加一次。用户确实要再订一场时应允许新的明确意图，不使用简单手机号去重替代幂等恢复。
 
@@ -214,7 +234,7 @@ PR #328证据：[CI终态与计数](../../outputs/system-audit-20261005/pr328-ci
 
 `payment-batch` 在读原请求之前重新要求所有订单仍有应付余额。当付款成功、余额变零，原请求重试直接400“已结清、已取消或不属于当前可查看桌账”，未进入已有的幂等服务。复现首请求200、pending同键重试200、注入本地成功付款事实后同键400；直接调用底层原服务仍能 `replayed=true` 找回同一付款，支付记录数未增加。
 
-位置：[余额前置检查](../server/normalized/guest-commerce-service-api.ts:593)。影响是未知结果恢复和错误语义，刷新桌账或已有支付查询路径可能帮助核对；没有证据显示重复支付。关闭标准：在原身份、桌次和请求绑定下先恢复已存在请求，新增支付才检查当前余额；覆盖已付、部分成功、关桌、权限失效及载荷变化，不以放开新支付限制来恢复旧结果。
+位置：[余额前置检查](https://github.com/jingda2008/mbox-ops-platform/blob/5372ecb3368cf001eba6e9d1591070fcb9047bb9/server/normalized/guest-commerce-service-api.ts#L595)。影响是未知结果恢复和错误语义，刷新桌账或已有支付查询路径可能帮助核对；没有证据显示重复支付。关闭标准：在原身份、桌次和请求绑定下先恢复已存在请求，新增支付才检查当前余额；覆盖已付、部分成功、关桌、权限失效及载荷变化，不以放开新支付限制来恢复旧结果。
 
 ### 06 手机打印配置点下拉箭头会命中保存并改写继承份数
 
@@ -222,7 +242,7 @@ PR #328证据：[CI终态与计数](../../outputs/system-audit-20261005/pr328-ci
 
 在320/390px宽度，份数选择框宽98px，与保存按钮重叠14px；下拉箭头位置的实际命中对象是保存按钮。填写修改原因后点击该位置会触发保存请求。与此同时，界面显示“沿用路由”，保存却把null自动转为1份，之后也没有恢复继承的选项；服务端策略份数会覆盖路由份数。
 
-位置：[打印布局](../src/normalized-ui/print-source-recovery-panel.css:22)、[默认1份](../src/normalized-ui/PrintTicketPolicyPanel.tsx:20)、[继承选项](../src/normalized-ui/PrintTicketPolicyPanel.tsx:39)、[接口要求显式份数](../server/normalized/hardware-api.ts:206)。844/1440px未复现控件重叠。本轮截获请求后返回503，**没有把修改转发入库，也没有实体打印证据**。
+位置：[打印布局](https://github.com/jingda2008/mbox-ops-platform/blob/5372ecb3368cf001eba6e9d1591070fcb9047bb9/src/normalized-ui/print-source-recovery-panel.css#L22)、[默认1份](https://github.com/jingda2008/mbox-ops-platform/blob/5372ecb3368cf001eba6e9d1591070fcb9047bb9/src/normalized-ui/PrintTicketPolicyPanel.tsx#L20)、[继承选项](https://github.com/jingda2008/mbox-ops-platform/blob/5372ecb3368cf001eba6e9d1591070fcb9047bb9/src/normalized-ui/PrintTicketPolicyPanel.tsx#L39)、[接口要求显式份数](https://github.com/jingda2008/mbox-ops-platform/blob/5372ecb3368cf001eba6e9d1591070fcb9047bb9/server/normalized/hardware-api.ts#L206)。844/1440px未复现控件重叠。本轮截获请求后返回503，**没有把修改转发入库，也没有实体打印证据**。
 
 ![390px打印配置重叠](/Users/jingda/mbox/outputs/system-audit-20261005/visual/printer-control-overlap-390.png)
 
@@ -236,7 +256,7 @@ PR #328证据：[CI终态与计数](../../outputs/system-audit-20261005/pr328-ci
 
 保留旧数据和显示“部分待办未能更新”的行为是正确的；问题是失败后仍把“最近核对”时间推进。本地成功显示10:28后，注入退款/打印读取失败并推进测试时钟，界面变为“最近核对10:30”，同时显示失败。不能误报成没有失败提示或所有待办被清空。
 
-位置：[更新时间](../src/normalized-ui/StaffTodoPanel.tsx:48)、[显示语义](../src/normalized-ui/StaffTodoPanel.tsx:65)。证据见 [前后截图和结果](/Users/jingda/mbox/outputs/system-audit-20261005/visual/targeted-results.json)。本次缺陷关闭标准：全部来源成功才更新“最近全部核对成功”，部分失败保留旧结果并标明失败，403清除对应无权读取的旧结果，首次未完整读取不显示成功时间。原建议中的每源独立成功／失败时间未实现，不计为已完成；浏览器复验覆盖成功后部分失败及重开首次失败，不扩大为所有离线／重新授权组合。
+位置：[更新时间](https://github.com/jingda2008/mbox-ops-platform/blob/5372ecb3368cf001eba6e9d1591070fcb9047bb9/src/normalized-ui/StaffTodoPanel.tsx#L48)、[显示语义](https://github.com/jingda2008/mbox-ops-platform/blob/5372ecb3368cf001eba6e9d1591070fcb9047bb9/src/normalized-ui/StaffTodoPanel.tsx#L65)。证据见 [前后截图和结果](/Users/jingda/mbox/outputs/system-audit-20261005/visual/targeted-results.json)。本次缺陷关闭标准：全部来源成功才更新“最近全部核对成功”，部分失败保留旧结果并标明失败，403清除对应无权读取的旧结果，首次未完整读取不显示成功时间。原建议中的每源独立成功／失败时间未实现，不计为已完成；浏览器复验覆盖成功后部分失败及重开首次失败，不扩大为所有离线／重新授权组合。
 
 修后本地失败注入：[保留总成功时间及失败提示](../../outputs/system-audit-20261005/visual/fixed-browser-results/normalized-system-audit-ui-04a88-tial-failure-is-not-loading/todo-failed-refresh-fixed.png)。
 
@@ -246,7 +266,7 @@ PR #328证据：[CI终态与计数](../../outputs/system-audit-20261005/pr328-ci
 
 活动收银列表的基础grid、间距、边框及头部flex全部位于 `max-width:380px` 媒体查询内。真实授权收银员页面在375px时为grid、padding10px，390/844/1440px则为block、padding0、无分组边框。较宽设备反而失去应有的层次，增加列表和金额阅读成本；没有证实金额或审批逻辑错误。
 
-位置：[断点范围](../src/normalized-ui/cashier-after-sales-workbench.css:152)。采用 [activity-real-result.json](/Users/jingda/mbox/outputs/system-audit-20261005/visual/activity-real-result.json)及同目录真实活动页面截图，早期无活动权限角色的样式探针不作为主证据。关闭标准：把基础样式放到通用范围，断点只覆盖差异；375/390/844/1440下验证真实数据及异常提示。修后已复验这些宽度，200%网页文本及门店阅读条件另留验收项，不能用原生登录页放大测试代替。
+位置：[断点范围](https://github.com/jingda2008/mbox-ops-platform/blob/5372ecb3368cf001eba6e9d1591070fcb9047bb9/src/normalized-ui/cashier-after-sales-workbench.css#L152)。采用 [activity-real-result.json](/Users/jingda/mbox/outputs/system-audit-20261005/visual/activity-real-result.json)及同目录真实活动页面截图，早期无活动权限角色的样式探针不作为主证据。关闭标准：把基础样式放到通用范围，断点只覆盖差异；375/390/844/1440下验证真实数据及异常提示。初批修后已复验这些宽度，当时200%网页文本另留验收项；后续指定页面文字压力法已有[实拍证据](../../outputs/system-audit-20261005/web-text-200-audit/report.md)，不泛化到其余页面、原生浏览器zoom、系统大字或门店阅读条件，也不能用原生登录页放大测试代替。
 
 修后本地真实浏览器：[活动分组与关键说明](../../outputs/system-audit-20261005/visual/fixed-browser-results/normalized-system-audit-ui-c311d-ent-guidance-stays-readable/activity-grouping-fixed.png)。
 
@@ -258,7 +278,7 @@ PR #328证据：[CI终态与计数](../../outputs/system-audit-20261005/pr328-ci
 
 整桌合付和单订单新付款分支直接调用 `assertGuestJsapiReady`，没有按已选渠道分发。真实路由探针在alipay_jsapi和simulation模式均返回409 `WECHAT_IDENTITY_REQUIRED`，微信预检被调用、支付宝预检为0。初次结账已有渠道分支，桌账再次付款遗漏。
 
-位置：[合付](../server/normalized/guest-commerce-service-api.ts:598)、[单单再次付款](../server/normalized/guest-commerce-service-api.ts:620)。当前支付宝客户端强制关闭身份、支付、手机号和通知，因此仅登记潜伏缺陷。关闭标准：各支付模式的初次结账、再次付款、整桌合付和旧付款恢复走同一明确渠道合同；启用正式能力仍须独立平台和资金验收。
+位置：[合付](https://github.com/jingda2008/mbox-ops-platform/blob/5372ecb3368cf001eba6e9d1591070fcb9047bb9/server/normalized/guest-commerce-service-api.ts#L598)、[单单再次付款](https://github.com/jingda2008/mbox-ops-platform/blob/5372ecb3368cf001eba6e9d1591070fcb9047bb9/server/normalized/guest-commerce-service-api.ts#L621)。当前支付宝客户端强制关闭身份、支付、手机号和通知，因此仅登记潜伏缺陷。关闭标准：各支付模式的初次结账、再次付款、整桌合付和旧付款恢复走同一明确渠道合同；启用正式能力仍须独立平台和资金验收。
 
 ### 10 README和原生状态摘要仍混用旧系统口径
 
@@ -266,21 +286,21 @@ PR #328证据：[CI终态与计数](../../outputs/system-audit-20261005/pr328-ci
 
 README仍写rc.178，启动例子传 `MBOX_STORE_UUID` 和旧session/QR密钥，当前规范化服务要求 `MBOX_STORE_ID` 和 `MBOX_NORMALIZED_SECRET`。只执行配置校验、不联网的复现立即报这两个字段缺失；README的 `/api/health` 在当前本地服务返回404。文档关于自动样例员工上下文和旧JSON仓储的介绍，也不能作为现规范化主入口的说明。[配置探针](/Users/jingda/mbox/outputs/system-audit-20261005/readme-config-repro.json)。
 
-原生 `ANDROID_COMPLETION.md` 的当前摘要仍有rc.243/schema251未发布口径，与rc.245/schema258发布记录不一致；FEATURE_PARITY的部分Android状态也落后于完成表。历史记录可以保留，但当前摘要应链接单一最新状态，不能让旧摘要覆盖已确认发布事实。位置：[README](../README.md:29)、[当前配置加载器](../server/normalized/normalized-runtime-config.ts:124)、[Android记录](../native/staff-app/ANDROID_COMPLETION.md:23)。
+原生 `ANDROID_COMPLETION.md` 的当前摘要仍有rc.243/schema251未发布口径，与rc.245/schema258发布记录不一致；FEATURE_PARITY的部分Android状态也落后于完成表。历史记录可以保留，但当前摘要应链接单一最新状态，不能让旧摘要覆盖已确认发布事实。位置：[README](https://github.com/jingda2008/mbox-ops-platform/blob/5372ecb3368cf001eba6e9d1591070fcb9047bb9/README.md#L29)、[当前配置加载器](https://github.com/jingda2008/mbox-ops-platform/blob/5372ecb3368cf001eba6e9d1591070fcb9047bb9/server/normalized/normalized-runtime-config.ts#L133)、[Android记录](https://github.com/jingda2008/mbox-ops-platform/blob/5372ecb3368cf001eba6e9d1591070fcb9047bb9/native/staff-app/ANDROID_COMPLETION.md#L23)。
 
 旧架构文件仍在仓库，但本轮规范化生产入口的旧全店状态依赖检查为0，前端导入闭包233文件未引入被禁止的旧api/offline依赖，Docker启动规范化服务。不能因全仓搜到旧代码就推断生产仍运行旧架构。关闭标准：统一当前启动、部署入口和各端交付状态；保留有明确标识的历史文档及旧系统验证入口。
 
 ## 视觉建议和已有能力边界
 
-修复前收银关键说明存在9px、部分错误/退款辅助文字10px，本轮已适度提高关键说明和错误字号。可读性风险属于设计判断，未做门店距离、照度及不同视力人员研究；200%网页文本放大、横竖屏和忙时点击仍需独立实测。不要把所有说明都提高到同等视觉权重，避免挤压金额、桌号、状态和主操作。
+修复前收银关键说明存在9px、部分错误/退款辅助文字10px，本轮已适度提高关键说明和错误字号。可读性风险属于设计判断，未做门店距离、照度及不同视力人员研究；后续指定页面／宽度的100%／200%文字压力和横竖屏已有独立证据；其余页面、原生浏览器zoom、系统大字、实体机、阅读照度及忙时混合操作仍分别验收。不要把所有说明都提高到同等视觉权重，避免挤压金额、桌号、状态和主操作。
 
-本轮没有把已存在的岗位导航、统一待办、旧数据提示、返回位置恢复、精确桌号搜索列为缺失。iOS功能表仍有多项管理流程未迁移，Android后续功能不自动代表iOS完成；Android正式签名候选已验证，分发、真实手机和整班验收分别取证，15分钟周期后台提醒不是实时厂商推送。初始审计的客户端分项见[报告](/Users/jingda/mbox/outputs/system-audit-20261005/client-legacy-findings.md)，当时未改Android隔离工作树；后续原生修复已统一合并，当前交付状态以顶部和原生检查表为准。
+本轮没有把已存在的岗位导航、统一待办、旧数据提示、返回位置恢复、精确桌号搜索列为缺失。iOS功能表仍有多项管理流程未迁移，Android后续功能不自动代表iOS完成；Android正式签名候选已验证，分发、真实手机和整班验收分别取证，15分钟周期后台提醒不是实时厂商推送。初始审计的客户端分项见[报告](/Users/jingda/mbox/outputs/system-audit-20261005/client-legacy-findings.md)，当时未改Android隔离工作树；后续已统一合并的原生修复仅指Android及其后端／Web依赖；PR340 iOS历史代码保留待定，不在该合并结论内。当前交付状态以顶部和原生检查表的对应回执为准。
 
 ## 回归与覆盖
 
 本轮测试和截图数量是执行记录，不是业务覆盖百分比，互相重叠的测试不能相加为独立场景总数。缺陷复现脚本的“通过”代表复现成功，不代表修复完成。
 
-当前适用PR CI、跨屏和客户端候选证据见顶部状态及[发布记录](release-1.0.0-rc.246.md)；下方基线和分时回归保留原失败、重跑及条件跳过记录。标签发布、生产回读和终端验收继续分别追加。
+初批rc246的CI、跨屏和客户端候选证据见[初批发布历史记录](release-1.0.0-rc.246.md)；后续阶段分别见顶部回读索引与[rc249发布记录](release-1.0.0-rc.249.md)，须以其中实际回执确认已完成状态。下方基线和分时回归保留原失败、重跑及条件跳过记录；标签发布、生产回读和终端验收分别记账。
 
 ## 修复顺序和仍需取得的证据
 

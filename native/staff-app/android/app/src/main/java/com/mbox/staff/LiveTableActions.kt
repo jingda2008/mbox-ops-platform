@@ -45,16 +45,20 @@ fun LivePendingView(m: AppModel) {
         }
     }
     m.livePending?.let { command ->
+        val receptionConfirmed = command.steps.singleOrNull()?.receptionPayloadKey != null &&
+            command.completedSteps == command.steps.size && !command.rejected
         Panel {
-            Text(command.title + if (command.rejected) " · 未完成" else " · 结果待确认")
-            Text("原请求已保留，请由原员工核对。", fontSize = 12.sp)
+            Text(if (receptionConfirmed) "预约操作已确认 · 等待刷新与本机清理"
+                else command.title + if (command.rejected) " · 未完成" else " · 结果待确认")
+            Text(if (receptionConfirmed) "服务器回执已核验；继续只刷新结果并完成本机清理，不会重复提交预约或入座。"
+                else "原请求已保留，请由原员工核对。", fontSize = 12.sp)
             if(command.steps.size>1){Text("已确认 ${command.completedSteps}/${command.steps.size} 步；中途停止保留已确认结果。",fontSize=12.sp);if(command.rejected)Text("清除仅移除本机失败请求，不撤销此前已成功步骤；未执行步骤须刷新后重新核对。",fontSize=12.sp)}
             SecondaryAction(
                 onClick = { if (command.rejected) m.dismissRejectedLive() else m.recoverLive() },
                 enabled = !m.busy && command.employeeID == m.identity?.employeeId,
                 icon = Icons.Outlined.Refresh,
             ) {
-                Text(if (command.rejected) "已知晓，清除失败请求" else "核对原操作结果")
+                Text(if (command.rejected) "已知晓，清除失败请求" else if (receptionConfirmed) "刷新已确认结果并完成清理" else "核对原操作结果")
             }
             if(runCatching { serviceRecoveryStep(command) }.isSuccess)
                 TextButton(onClick={supervisorCommand=command},enabled=!m.busy&&!m.liveStorageDamaged) { Text("原员工无法处理？主管核对") }

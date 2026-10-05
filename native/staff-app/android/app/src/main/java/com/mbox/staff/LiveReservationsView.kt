@@ -220,7 +220,7 @@ fun LiveReservationsView(m: AppModel, close: () -> Unit) {
                                 fontSize = 12.sp,
                             )
                             row.source.textOrNull("note")?.let { Text(it, fontSize = 12.sp) }
-                            if (receptionSupported && m.identity?.allows("reservation.view") == true)
+                            if (m.identity?.allows("reservation.view") == true)
                                 SecondaryAction(onClick = { receptionID = row.id }, enabled = !m.busy) {
                                     Text(if (row.receptionProtocol == 1 && row.status == "arrived") "核对已开桌次 · 确认入座" else "查看接待详情")
                                 }

@@ -15,8 +15,8 @@ import java.time.format.DateTimeFormatter
 
 @Composable
 fun LiveReservationsView(m: AppModel, close: () -> Unit) {
-    var creating by remember { mutableStateOf(false) }
-    var receptionID by remember { mutableStateOf<String?>(null) }
+    var creatingToken by remember { mutableStateOf<Long?>(null) }
+    var receptionSelection by remember { mutableStateOf<Pair<String, Long>?>(null) }
     var range by remember { mutableStateOf("current") }
     var from by remember { mutableStateOf(ReservationQuery.day()) }
     var to by remember { mutableStateOf(ReservationQuery.day()) }
@@ -30,17 +30,39 @@ fun LiveReservationsView(m: AppModel, close: () -> Unit) {
     var editing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var proposed by remember { mutableStateOf<LiveCommand?>(null) }
-    if (creating) ReservationCreateView(m) { creating = false }
-    receptionID?.let { id ->
-        ReservationReceptionView(m, id, close = { receptionID = null },
-            leaveReservations = { receptionID = null; close() })
+    var active by remember { mutableStateOf(true) }
+    val version = remember { m.workspaceVersion }
+    fun listCurrent() = active && version == m.workspaceVersion && creatingToken == null && receptionSelection == null
+    fun closeReservations() {
+        if (!active) return
+        active = false
+        creatingToken?.let { m.closeReceptionView(it) }
+        receptionSelection?.second?.let { m.closeReceptionView(it) }
+        creatingToken = null
+        receptionSelection = null
+        close()
+    }
+    DisposableEffect(m) {
+        onDispose {
+            active = false
+            creatingToken?.let { m.closeReceptionView(it) }
+            receptionSelection?.second?.let { m.closeReceptionView(it) }
+        }
+    }
+    creatingToken?.let { token ->
+        ReservationCreateView(m, token) { if (creatingToken == token) creatingToken = null }
+    }
+    receptionSelection?.let { (id, token) ->
+        ReservationReceptionView(m, id, token,
+            close = { if (receptionSelection?.second == token) receptionSelection = null },
+            leaveReservations = { if (receptionSelection?.second == token) closeReservations() })
     }
     val query = ReservationQuery(range, from, to)
-    val actionable = m.canUseReservations && query == m.reservationQuery
+    val actionable = listCurrent() && m.canUseReservations && query == m.reservationQuery
     val receptionSupported = m.reservationCapabilities?.opt("admissionCreateV1") == true &&
         m.reservationCapabilities?.opt("receptionSeatV1") == true
-    val version = remember { m.workspaceVersion }
     fun choose(id: String, a: String) {
+        if (!listCurrent()) return
         selectedID = id
         action = a
         reason = ""
@@ -48,32 +70,36 @@ fun LiveReservationsView(m: AppModel, close: () -> Unit) {
         error = ""
         editing = true
     }
-    LaunchedEffect(Unit) { m.loadReservations(query) }
-    LaunchedEffect(m.workspaceVersion) { if (version != m.workspaceVersion) close() }
+    LaunchedEffect(Unit) { if (listCurrent()) m.loadReservations(query) }
+    LaunchedEffect(m.workspaceVersion) { if (version != m.workspaceVersion) closeReservations() }
     Dialog(
-        onDismissRequest = close,
+        onDismissRequest = ::closeReservations,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
         Surface(Modifier.fillMaxSize(), color = Paper) {
             Column(Modifier.safeDrawingPadding().imePadding().padding(16.dp)) {
                 Row {
                     Text("预约与排队", Modifier.weight(1f), fontSize = 20.sp)
-                    TextButton(onClick = close) { Text("关闭") }
+                    TextButton(onClick = ::closeReservations) { Text("关闭") }
                 }
                 Column(
                     Modifier.verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     LivePendingView(m)
-                    ReceptionPendingRetryView(m)
+                    ReceptionPendingRetryView(m, currentView = ::listCurrent)
                     Text(m.reservationState, fontSize = 12.sp)
                     if (m.identity?.allows("reservation.manage") == true) {
                         Primary(
                             "新建预约",
-                            !m.busy && !m.liveStorageDamaged && m.livePending == null &&
+                            listCurrent() && !m.liveStorageDamaged && m.livePending == null &&
                                 m.liveOrderPending == null && receptionSupported,
                         ) {
-                            creating = true
+                            if (listCurrent() && m.identity?.allows("reservation.manage") == true) {
+                                val token = m.beginReceptionCreation()
+                                receptionSelection = null
+                                creatingToken = token
+                            }
                         }
                         if (!m.busy && !receptionSupported)
                             Text("后台尚未确认新版预约接待能力，请刷新；仍未启用时需由管理员升级后台。原有未决请求仍可核对。",
@@ -123,7 +149,7 @@ fun LiveReservationsView(m: AppModel, close: () -> Unit) {
                             )
                             Text("按上海自然日查询，最多31天。", fontSize = 12.sp)
                         }
-                    SecondaryAction(onClick = { m.loadReservations(query) }, enabled = !m.busy) {
+                    SecondaryAction(onClick = { if (listCurrent()) m.loadReservations(query) }, enabled = listCurrent() && !m.businessRequestInFlight) {
                         Text("读取所选范围")
                     }
                     OutlinedTextField(
@@ -221,7 +247,13 @@ fun LiveReservationsView(m: AppModel, close: () -> Unit) {
                             )
                             row.source.textOrNull("note")?.let { Text(it, fontSize = 12.sp) }
                             if (m.identity?.allows("reservation.view") == true)
-                                SecondaryAction(onClick = { receptionID = row.id }, enabled = !m.busy) {
+                                SecondaryAction(onClick = {
+                                    if (listCurrent() && m.identity?.allows("reservation.view") == true) {
+                                        val token = m.selectReception(row.id)
+                                        creatingToken = null
+                                        receptionSelection = row.id to token
+                                    }
+                                }, enabled = listCurrent()) {
                                     Text(if (row.receptionProtocol == 1 && row.status == "arrived") "核对已开桌次 · 确认入座" else "查看接待详情")
                                 }
                             if (m.identity?.allows("reservation.manage") == true)
@@ -261,6 +293,7 @@ fun LiveReservationsView(m: AppModel, close: () -> Unit) {
                     enabled = actionable,
                     onClick = {
                         try {
+                            check(listCurrent()) { "预约页面已变化，请返回当前列表核对" }
                             proposed =
                                 if (action.startsWith("waitlist:")) m.prepareWaitlist(selectedID, action.substringAfter(':'), reason)
                                 else if (queue) m.prepareReservationPriority(selectedID, action, reason)
@@ -283,10 +316,12 @@ fun LiveReservationsView(m: AppModel, close: () -> Unit) {
             text = { Text(command.steps[0].reservationProof!!.getString("confirmation")) },
             confirmButton = {
                 TextButton(
-                    enabled = m.canExecuteLive(command),
+                    enabled = listCurrent() && m.canExecuteLive(command),
                     onClick = {
-                        proposed = null
-                        m.executeLive(command)
+                        if (listCurrent() && m.canExecuteLive(command)) {
+                            proposed = null
+                            m.executeLive(command)
+                        }
                     },
                 ) {
                     Text("确认执行")

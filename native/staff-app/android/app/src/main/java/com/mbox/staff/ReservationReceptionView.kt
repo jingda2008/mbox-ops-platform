@@ -14,41 +14,65 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 
 @Composable
-fun ReservationReceptionView(m: AppModel, reservationId: String, close: () -> Unit, leaveReservations: () -> Unit) {
-    var selected by remember(reservationId) { mutableStateOf(emptySet<String>()) }
-    var search by remember(reservationId) { mutableStateOf("") }
-    var reason by remember(reservationId) { mutableStateOf("") }
-    var allGuestsChecked by remember(reservationId) { mutableStateOf(false) }
-    var showReferences by remember(reservationId) { mutableStateOf(false) }
-    var error by remember(reservationId) { mutableStateOf("") }
-    var proposed by remember(reservationId) { mutableStateOf<LiveCommand?>(null) }
-    val version = remember { m.workspaceVersion }
-    val detail = m.receptionDetail?.takeIf { it.reservation.id == reservationId }
-    val board = m.receptionSessions?.takeIf { it.reservationId == reservationId }
-    val canRead = !m.busy && m.identity?.allows("reservation.view") == true
+fun ReservationReceptionView(m: AppModel, reservationId: String, token: Long, close: () -> Unit, leaveReservations: () -> Unit) {
+    var selected by remember(token) { mutableStateOf(emptySet<String>()) }
+    var search by remember(token) { mutableStateOf("") }
+    var reason by remember(token) { mutableStateOf("") }
+    var allGuestsChecked by remember(token) { mutableStateOf(false) }
+    var showReferences by remember(token) { mutableStateOf(false) }
+    var error by remember(token) { mutableStateOf("") }
+    var proposed by remember(token) { mutableStateOf<LiveCommand?>(null) }
+    var waitingForRead by remember(token) { mutableStateOf(m.businessRequestInFlight) }
+    var active by remember(token) { mutableStateOf(true) }
+    val version = remember(token) { m.workspaceVersion }
+    fun viewCurrent() = active && version == m.workspaceVersion && m.isReceptionViewCurrent(token)
+    fun closeView() { active = false; m.closeReceptionView(token); close() }
+    fun leaveView() {
+        if (!viewCurrent()) return
+        active = false; m.closeReceptionView(token); leaveReservations()
+    }
+    DisposableEffect(m, token) { onDispose { active = false; m.closeReceptionView(token) } }
+    val detail = m.receptionDetail?.takeIf { viewCurrent() && it.reservation.id == reservationId }
+    val board = m.receptionSessions?.takeIf { viewCurrent() && it.reservationId == reservationId }
+    val canRead = viewCurrent() && !m.businessRequestInFlight && m.identity?.allows("reservation.view") == true
     val supported = m.reservationCapabilities?.opt("admissionCreateV1") == true &&
         m.reservationCapabilities?.opt("receptionSeatV1") == true
-    val canEdit = !m.busy && m.livePending == null && m.liveOrderPending == null
+    val canEdit = viewCurrent() && !m.businessRequestInFlight && m.livePending == null && m.liveOrderPending == null
+    fun loadDetail() {
+        if (!viewCurrent()) return
+        error = ""; waitingForRead = false
+        m.loadReceptionDetail(reservationId, viewToken = token)
+    }
+    fun loadSessions() {
+        if (!viewCurrent()) return
+        error = ""; waitingForRead = false
+        m.loadReceptionSessions(reservationId, viewToken = token)
+    }
     val selectedSessions = board?.sessions.orEmpty().filter { it.tableSessionId in selected }
     val selectedPeople = selectedSessions.sumOf { it.guestCount }
     val missingSelection = selected.size != selectedSessions.size
     // A refresh may change a table's location or guest count. Keep the entered reason,
     // but require a new group check before a changed board can be submitted.
-    LaunchedEffect(board?.source?.toString()) { allGuestsChecked = false; proposed = null }
-    LaunchedEffect(reservationId) { m.loadReceptionDetail(reservationId) }
-    LaunchedEffect(m.workspaceVersion) { if (version != m.workspaceVersion) close() }
-    Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    LaunchedEffect(token, board?.source?.toString()) { allGuestsChecked = false; proposed = null }
+    LaunchedEffect(token, reservationId) {
+        if (!viewCurrent()) return@LaunchedEffect
+        if (m.businessRequestInFlight) waitingForRead = true
+        else loadDetail()
+    }
+    LaunchedEffect(token, m.workspaceVersion) { if (version != m.workspaceVersion) closeView() }
+    Dialog(onDismissRequest = ::closeView, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize(), color = Paper) {
             Column(Modifier.safeDrawingPadding().imePadding().padding(16.dp)) {
                 Row {
                     Text("预约接待", Modifier.weight(1f), fontSize = 20.sp)
-                    TextButton(onClick = close) { Text("返回") }
+                    TextButton(onClick = ::closeView) { Text("返回") }
                 }
                 Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     LivePendingView(m)
-                    ReceptionPendingRetryView(m)
-                    if (m.receptionState.isNotBlank()) Text(m.receptionState, fontSize = 12.sp)
-                    SecondaryAction(onClick = { error = ""; m.loadReceptionDetail(reservationId) }, enabled = canRead) {
+                    ReceptionPendingRetryView(m, viewToken = token, currentView = ::viewCurrent)
+                    if (waitingForRead) Text(if (m.businessRequestInFlight) "等待原读取结束后刷新" else "原读取已结束，请刷新当前接待详情", fontSize = 12.sp)
+                    else if (m.receptionState.isNotBlank()) Text(m.receptionState, fontSize = 12.sp)
+                    SecondaryAction(onClick = ::loadDetail, enabled = canRead) {
                         Text("刷新接待详情")
                     }
                     if (detail == null) {
@@ -98,14 +122,14 @@ fun ReservationReceptionView(m: AppModel, reservationId: String, close: () -> Un
                             if (!supported) Text("后台尚未启用新版到店接待，请联系管理员升级后刷新。", color = MaterialTheme.colorScheme.error)
                             val hasPermission = m.identity?.allows("reservation.manage") == true && m.identity?.allows("table.open") == true
                             if (!hasPermission) Text("确认入座需要预约管理和开台权限，请由有权限的员工处理。", fontSize = 12.sp)
-                            SecondaryAction(onClick = { error = ""; m.loadReceptionSessions(reservationId) },
+                            SecondaryAction(onClick = ::loadSessions,
                                 enabled = canRead && canEdit && supported && hasPermission) { Text("读取已开桌次") }
                             if (board != null) {
                                 if (board.status != "arrived") Text("预约状态已变化，请刷新详情。", color = MaterialTheme.colorScheme.error)
                                 if (board.sessions.isEmpty()) {
                                     Text("没有可关联的桌次。只会显示当前营业日内、您有权查看且尚未关联预约的已开桌次。", fontSize = 12.sp)
                                     Text("返回主界面，进入「桌台」按现有流程开台，再回来刷新；此页面不会自动开台。", fontSize = 12.sp)
-                                    SecondaryAction(onClick = leaveReservations, enabled = canEdit) { Text("返回主界面") }
+                                    SecondaryAction(onClick = ::leaveView, enabled = canEdit) { Text("返回主界面") }
                                 } else {
                                     OutlinedTextField(search, { search = it }, label = { Text("模糊搜索桌号") },
                                         singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -148,10 +172,11 @@ fun ReservationReceptionView(m: AppModel, reservationId: String, close: () -> Un
                                     Text("已核对本组全部实际桌位和人数，没有遗漏桌次", Modifier.weight(1f), fontSize = 14.sp)
                                 }
                                 if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error)
-                                Primary("下一步 · 核对整组入座", m.canSeatReception && selected.size in 1..20 &&
+                                Primary("下一步 · 核对整组入座", viewCurrent() && m.canSeatReception && selected.size in 1..20 &&
                                     !missingSelection && allGuestsChecked && reason.trim().length in 4..1000) {
                                     try {
-                                        proposed = m.prepareReceptionSeat(reservationId, selected, reason)
+                                        check(viewCurrent()) { "预约页面已变化，请在当前页面重新核对" }
+                                        proposed = m.prepareReceptionSeat(reservationId, selected, reason, viewToken = token)
                                         error = ""
                                     } catch (e: Exception) { error = e.message ?: "请刷新预约和实际桌次后重新核对" }
                                 }
@@ -167,8 +192,11 @@ fun ReservationReceptionView(m: AppModel, reservationId: String, close: () -> Un
             text = { Text(command.steps.single().receptionProof!!.getString("confirmation"),
                 Modifier.verticalScroll(rememberScrollState())) },
             confirmButton = {
-                TextButton(onClick = { proposed = null; allGuestsChecked = false; m.executeLive(command) },
-                    enabled = m.canExecuteLive(command)) { Text("确认关联全部桌次") }
+                TextButton(onClick = {
+                    if (viewCurrent() && m.canExecuteLive(command)) {
+                        proposed = null; allGuestsChecked = false; m.executeLive(command)
+                    }
+                }, enabled = viewCurrent() && m.canExecuteLive(command)) { Text("确认关联全部桌次") }
             }, dismissButton = { TextButton(onClick = { proposed = null }) { Text("返回核对") } })
     }
 }
@@ -183,19 +211,21 @@ private fun receptionSessionStatus(status: String): String = when (status) {
 
 /** The common pending card retains all legacy recovery. This adds only the explicit v1 retry. */
 @Composable
-internal fun ReceptionPendingRetryView(m: AppModel) {
+internal fun ReceptionPendingRetryView(m: AppModel, viewToken: Long? = null, currentView: () -> Boolean = { true }) {
     val command = m.livePending ?: return
     val step = command.steps.singleOrNull() ?: return
     if (step.receptionProof?.optString("kind") != "reception-create" || command.rejected ||
         command.completedSteps >= command.steps.size) return
     var retry by remember(command.id) { mutableStateOf(false) }
+    fun canRetry() = currentView() && (viewToken == null || m.isReceptionViewCurrent(viewToken)) &&
+        !m.businessRequestInFlight && m.livePending == command && command.employeeID == m.identity?.employeeId
     Text("查询暂未找到原预约时，仍不能判定未创建。可继续核对，或使用已保存的同一请求重试。", fontSize = 12.sp)
-    SecondaryAction(onClick = { retry = true }, enabled = !m.busy && command.employeeID == m.identity?.employeeId) {
+    SecondaryAction(onClick = { if (canRetry()) retry = true }, enabled = canRetry()) {
         Text("重试原预约请求")
     }
     if (retry) AlertDialog(onDismissRequest = { retry = false }, title = { Text("重试原预约请求") },
         text = { Text("将使用原预约编号、原内容和原请求键重试，不会另建新预约。请先确认正在处理这笔未决预约。") },
-        confirmButton = { TextButton(onClick = { retry = false; m.recoverLive(retryReceptionOriginal = true) },
-            enabled = !m.busy && m.livePending == command && command.employeeID == m.identity?.employeeId) { Text("确认重试原请求") } },
+        confirmButton = { TextButton(onClick = { if (canRetry()) { retry = false; m.recoverLive(retryReceptionOriginal = true) } },
+            enabled = canRetry()) { Text("确认重试原请求") } },
         dismissButton = { TextButton(onClick = { retry = false }) { Text("继续核对结果") } })
 }

@@ -310,11 +310,21 @@ class AppModel @JvmOverloads constructor(
     var staffName by mutableStateOf("未登录")
         private set
 
+    private var receptionAuthorityEpoch = 0L
+    private fun receptionAuthority(actor: StaffIdentity?) = actor?.let {
+        listOf(it.employeeId, it.sessionId, it.permissions.sorted(), it.denied.sorted(), it.roles.sorted(), it.navigationRoutes?.sorted())
+    }
     private var currentIdentity by mutableStateOf<StaffIdentity?>(null)
     var identity: StaffIdentity?
         get() = currentIdentity
         private set(value) {
+            val changed = receptionAuthority(currentIdentity) != receptionAuthority(value)
             currentIdentity = value
+            if (changed) {
+                receptionAuthorityEpoch++
+                invalidateReceptionRead()
+                receptionState = "身份或权限已变化，请重新读取预约"
+            }
             synchronizePushOwner()
         }
 
@@ -1348,6 +1358,40 @@ class AppModel @JvmOverloads constructor(
     val canUseSongs get() = memberReady && songEmployee == identity?.employeeId && songEnabled &&
         songUpdated?.let { java.time.Duration.between(it, java.time.Instant.now()).seconds in 0..59 } == true
 
+    private var receptionViewGeneration = 0L
+    private var receptionRequestGeneration = 0L
+    private var receptionTarget: String? = null
+    private data class ReceptionReadToken(val view: Long, val request: Long, val target: String?,
+        val authorityEpoch: Long, val identity: WorkspaceReadIdentity)
+
+    private var receptionPreparedId: String? = null
+    private var receptionPreparedToken: ReceptionReadToken? = null
+    fun isReceptionViewCurrent(token: Long) = token == receptionViewGeneration
+
+    fun invalidateReceptionRead(viewToken: Long? = null) {
+        if (viewToken != null && !isReceptionViewCurrent(viewToken)) return
+        receptionRequestGeneration++
+        receptionPreparedId = null; receptionPreparedToken = null
+        receptionOptions = null; receptionSessions = null; receptionDetail = null
+        receptionOptionsUpdated = null; receptionSessionsUpdated = null; receptionActor = null
+    }
+
+    fun selectReception(id: String?): Long {
+        receptionViewGeneration++
+        receptionTarget = id
+        invalidateReceptionRead()
+        receptionState = if (id == null) "" else if (busy) "等待原读取结束后刷新当前预约" else "请读取当前预约"
+        return receptionViewGeneration
+    }
+    fun beginReceptionCreation(): Long = selectReception("create")
+    fun closeReceptionView(token: Long) { if (token == receptionViewGeneration) selectReception(null) }
+    private fun receptionToken() = ReceptionReadToken(receptionViewGeneration, receptionRequestGeneration,
+        receptionTarget, receptionAuthorityEpoch, workspaceReadIdentity())
+    private fun receptionReadCurrent(token: ReceptionReadToken) = token == receptionToken()
+    private fun requireReceptionRead(token: ReceptionReadToken) {
+        if (!receptionReadCurrent(token)) throw CancellationException("忽略已离开页面或旧权限下的预约读取")
+    }
+
     var receptionOptions by mutableStateOf<ReservationReceptionOptions?>(null)
         private set
     var receptionSessions by mutableStateOf<ReservationReceptionSessions?>(null)
@@ -1367,9 +1411,10 @@ class AppModel @JvmOverloads constructor(
         receptionActor == identity?.employeeId &&
         identity?.onlineLeaseUntil?.let(::assignmentDate)?.isAfter(java.time.Instant.now()) == true &&
         reservationCapabilities?.opt("admissionCreateV1") == true && reservationCapabilities?.opt("receptionSeatV1") == true
-    val canCreateReception get() = receptionReady && receptionOptions != null && freshReception(receptionOptionsUpdated)
+    val canCreateReception get() = receptionReady && receptionTarget == "create" && receptionOptions != null && freshReception(receptionOptionsUpdated)
     val canSeatReception get() = receptionReady && identity?.allows("table.open") == true &&
-        receptionSessions?.status == "arrived" && receptionDetail?.reservation?.id == receptionSessions?.reservationId &&
+        receptionSessions?.status == "arrived" && receptionTarget == receptionSessions?.reservationId &&
+        receptionDetail?.reservation?.id == receptionSessions?.reservationId &&
         freshReception(receptionSessionsUpdated)
 
     var reservations by mutableStateOf<List<LiveReservation>>(emptyList())
@@ -2706,7 +2751,8 @@ class AppModel @JvmOverloads constructor(
                 serviceBoard?.tasks?.any { it.id == p.getString("taskId") } == true
         }
         command.steps.singleOrNull()?.receptionProof?.let { p ->
-            if (command.employeeID != identity?.employeeId) return false
+            if (command.employeeID != identity?.employeeId || command.id != receptionPreparedId ||
+                receptionPreparedToken?.let(::receptionReadCurrent) != true) return false
             return runCatching {
                 val body = JSONObject(command.steps.single().body)
                 when(p.getString("kind")) {
@@ -3472,8 +3518,7 @@ class AppModel @JvmOverloads constructor(
         resetParticipantPreview()
         participants = emptyList()
         participantState = ""
-        receptionOptions = null; receptionSessions = null; receptionDetail = null; receptionState = ""
-        receptionOptionsUpdated = null; receptionSessionsUpdated = null; receptionActor = null
+        selectReception(null)
         reservations = emptyList()
         reservationIntake = emptyList()
         reservationCapabilities = null
@@ -3856,14 +3901,15 @@ class AppModel @JvmOverloads constructor(
         catch (e: Exception) { target.failWrite(stream); throw e }
     }
 
-    private suspend fun refreshReceptionIdentity(version: Int): StaffIdentity {
-        val previous = identity ?: error("请先登录")
+    private suspend fun refreshReceptionIdentity(token: ReceptionReadToken): StaffIdentity {
+        requireReceptionRead(token)
         val actor = withContext(Dispatchers.IO) { api.heartbeat() }
-        require(version == workspaceVersion && actor.employeeId == previous.employeeId) { "员工工作区已变化，请重新读取" }
+        requireReceptionRead(token)
         identity = actor
+        requireReceptionRead(token)
         require(actor.allows("reservation.view")) { "当前员工没有预约查看权限" }
         val capability = withContext(Dispatchers.IO) { api.data("/api/staff/native-reservation-capabilities") }
-        require(version == workspaceVersion && identity?.employeeId == actor.employeeId) { "员工工作区已变化" }
+        requireReceptionRead(token)
         reservationCapabilities = capability
         receptionActor = actor.employeeId
         return actor
@@ -3875,76 +3921,88 @@ class AppModel @JvmOverloads constructor(
         }
     }
 
-    fun loadReceptionOptions(arrival: java.time.Instant, end: java.time.Instant) {
-        if (!live || busy || heartbeatBusy) return
-        receptionOptions = null; receptionOptionsUpdated = null
-        val version = workspaceVersion
-        busy = true; receptionState = "正在读取所选时段名额"
+    private fun beginReceptionRead(target: String, status: String, viewToken: Long?): ReceptionReadToken? {
+        if (!live || (viewToken != null && (!isReceptionViewCurrent(viewToken) || receptionTarget != target))) return null
+        if (receptionTarget != target) selectReception(target) else invalidateReceptionRead()
+        if (busy || heartbeatBusy) {
+            receptionState = "等待原读取结束后刷新当前预约"
+            return null
+        }
+        busy = true; receptionState = status
+        return receptionToken()
+    }
+
+    fun loadReceptionOptions(arrival: java.time.Instant, end: java.time.Instant, viewToken: Long? = null) {
+        val token = beginReceptionRead("create", "正在读取所选时段名额", viewToken) ?: return
         viewModelScope.launch {
             try {
-                val actor = refreshReceptionIdentity(version)
+                val actor = refreshReceptionIdentity(token)
                 require(actor.allows("reservation.manage")) { "当前员工没有预约管理权限" }
                 requireReceptionCapabilities()
-                val path = "/api/staff/reservation-receptions/options?arrivalAt=${LiveCommand.part(arrival.toString())}&expectedEndAt=${LiveCommand.part(end.toString())}"
-                val options = withContext(Dispatchers.IO) { ReservationReceptionOptions(api.data(path)) }
-                require(version == workspaceVersion && identity?.employeeId == actor.employeeId && options.arrival == arrival && options.end == end) { "预约时段或工作区已变化，请重新读取" }
+                val options = withContext(Dispatchers.IO) { ReservationReceptionOptions(api.data(ReservationReceptionOptions.path(arrival, end))) }
+                requireReceptionRead(token)
+                require(options.arrival == arrival && options.end == end) { "预约时段已变化，请重新读取" }
                 receptionOptions = options; receptionOptionsUpdated = java.time.Instant.now()
                 receptionState = "名额已读取；最终名额以提交时核验为准"
-            } catch(e: Exception) { receptionState = e.message ?: "名额读取失败"; handleLiveError(e) }
+            } catch(e: CancellationException) { throw e
+            } catch(e: Exception) { if (receptionReadCurrent(token)) { receptionState = e.message ?: "名额读取失败"; handleLiveError(e) } }
             finally { busy = false }
         }
     }
 
-    fun loadReceptionDetail(id: String) {
-        if (!live || busy || heartbeatBusy) return
-        receptionDetail = null; receptionSessions = null; receptionSessionsUpdated = null
-        val version = workspaceVersion
-        busy = true; receptionState = "正在读取预约接待详情"
+    fun loadReceptionDetail(id: String, viewToken: Long? = null) {
+        val token = beginReceptionRead(id, "正在读取预约接待详情", viewToken) ?: return
         viewModelScope.launch {
             try {
-                val actor = refreshReceptionIdentity(version)
-                val detail = withContext(Dispatchers.IO) { ReservationReceptionDetail(api.data("/api/staff/reservation-receptions/${LiveCommand.part(id)}")) }
-                require(version == workspaceVersion && identity?.employeeId == actor.employeeId && detail.reservation.id == id) { "预约或工作区已变化" }
+                refreshReceptionIdentity(token)
+                val detail = withContext(Dispatchers.IO) { ReservationReceptionDetail(api.data(ReservationReceptionDetail.path(id))) }
+                requireReceptionRead(token)
+                require(detail.reservation.id == id) { "预约已变化" }
                 receptionDetail = detail
                 receptionState = "预约接待详情已读取"
-            } catch(e: Exception) { receptionState = e.message ?: "预约详情读取失败"; handleLiveError(e) }
+            } catch(e: CancellationException) { throw e
+            } catch(e: Exception) { if (receptionReadCurrent(token)) { receptionState = e.message ?: "预约详情读取失败"; handleLiveError(e) } }
             finally { busy = false }
         }
     }
 
-    fun loadReceptionSessions(id: String) {
-        if (!live || busy || heartbeatBusy) return
-        receptionSessions = null; receptionSessionsUpdated = null
-        val version = workspaceVersion
-        busy = true; receptionState = "正在核对当前实际桌次"
+    fun loadReceptionSessions(id: String, viewToken: Long? = null) {
+        val token = beginReceptionRead(id, "正在核对当前实际桌次", viewToken) ?: return
         viewModelScope.launch {
             try {
-                val actor = refreshReceptionIdentity(version)
+                val actor = refreshReceptionIdentity(token)
                 require(actor.allows("reservation.manage") && actor.allows("table.open")) { "请由具有预约管理和开台权限的员工核对" }
                 requireReceptionCapabilities()
-                val (detail, board) = withContext(Dispatchers.IO) {
-                    ReservationReceptionDetail(api.data("/api/staff/reservation-receptions/${LiveCommand.part(id)}")) to
-                        ReservationReceptionSessions(api.data("/api/staff/reservation-receptions/${LiveCommand.part(id)}/table-sessions"))
-                }
-                require(version == workspaceVersion && identity?.employeeId == actor.employeeId && board.reservationId == id && detail.reservation.id == id &&
+                val detail = withContext(Dispatchers.IO) { ReservationReceptionDetail(api.data(ReservationReceptionDetail.path(id))) }
+                requireReceptionRead(token)
+                val board = withContext(Dispatchers.IO) { ReservationReceptionSessions(api.data(ReservationReceptionSessions.path(id))) }
+                requireReceptionRead(token)
+                require(board.reservationId == id && detail.reservation.id == id &&
                     detail.reservation.source.getLong("aggregateVersion") == board.version && detail.reservation.status == board.status && detail.reservation.count == board.guestCount) {
                     "预约在读取期间已变化，请重新读取整组实际桌次"
                 }
                 receptionDetail = detail; receptionSessions = board; receptionSessionsUpdated = java.time.Instant.now()
                 receptionState = "仅列当前营业日、您有权且尚未关联预约的已开桌次"
-            } catch(e: Exception) { receptionState = e.message ?: "实际桌次读取失败"; handleLiveError(e) }
+            } catch(e: CancellationException) { throw e
+            } catch(e: Exception) { if (receptionReadCurrent(token)) { receptionState = e.message ?: "实际桌次读取失败"; handleLiveError(e) } }
             finally { busy = false }
         }
     }
 
-    fun prepareReceptionCreate(draft: ReservationReceptionDraft): LiveCommand {
+    fun prepareReceptionCreate(draft: ReservationReceptionDraft, viewToken: Long? = null): LiveCommand {
+        require(viewToken == null || isReceptionViewCurrent(viewToken)) { "预约页面已变化，请重新核对" }
         require(canCreateReception) { "名额或权限已过期，请重新读取时段" }
-        return draft.command(identity!!, receptionOptions!!)
+        return draft.command(identity!!, receptionOptions!!).also {
+            receptionPreparedId = it.id; receptionPreparedToken = receptionToken()
+        }
     }
 
-    fun prepareReceptionSeat(id: String, selectedSessionIds: Set<String>, reason: String): LiveCommand {
+    fun prepareReceptionSeat(id: String, selectedSessionIds: Set<String>, reason: String, viewToken: Long? = null): LiveCommand {
+        require(viewToken == null || isReceptionViewCurrent(viewToken)) { "预约页面已变化，请重新核对" }
         require(canSeatReception && receptionDetail?.reservation?.id == id) { "预约或实际桌次已过期，请重新读取" }
-        return reservationReceptionSeatCommand(receptionDetail!!.reservation, receptionSessions!!, selectedSessionIds, reason, identity!!)
+        return reservationReceptionSeatCommand(receptionDetail!!.reservation, receptionSessions!!, selectedSessionIds, reason, identity!!).also {
+            receptionPreparedId = it.id; receptionPreparedToken = receptionToken()
+        }
     }
 
     fun loadReservations(query: ReservationQuery) {

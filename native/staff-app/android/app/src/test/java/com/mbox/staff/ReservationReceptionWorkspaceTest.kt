@@ -91,13 +91,14 @@ class ReservationReceptionWorkspaceTest {
     }
 
     private fun activate(): LiveCommand {
+        val token = model.beginReceptionCreation()
         val now = Instant.now()
         val arrival = now.plusSeconds(3600); val end = now.plusSeconds(10800)
         val options = ReservationReceptionOptions(f.optionsJson().put("arrivalAt", arrival.toString()).put("expectedEndAt", end.toString()))
         state(name = "ReceptionOptions", value = options)
         field("receptionOptionsUpdated", now); field("receptionActor", f.employeeId)
         model.reservationCapabilities = JSONObject().put("admissionCreateV1", true).put("receptionSeatV1", true)
-        return f.draft().copy(arrival = arrival, end = end).command(f.actor, options, now)
+        return model.prepareReceptionCreate(f.draft().copy(arrival = arrival, end = end), viewToken = token)
     }
 
     @After fun tearDown() {
@@ -125,13 +126,16 @@ class ReservationReceptionWorkspaceTest {
     }
 
     @Test fun seatingGateUsesReservationIdAndEveryFreshTableTuple() {
-        activate()
-        val command = f.seat()
+        val token = model.selectReception(f.reservationId)
+        field("receptionActor", f.employeeId)
+        model.reservationCapabilities = JSONObject().put("admissionCreateV1", true).put("receptionSeatV1", true)
         state(name = "ReceptionDetail", value = ReservationReceptionDetail(JSONObject().put("protocol", 1)
             .put("reservation", f.reservation()).put("seating", JSONObject.NULL)))
         state(name = "ReceptionSessions", value = ReservationReceptionSessions(f.sessionsJson()))
         field("receptionSessionsUpdated", Instant.now())
         assertTrue(model.canSeatReception)
+        val command = model.prepareReceptionSeat(f.reservationId, setOf(f.firstSession, f.secondSession),
+            "已核对本组全部实际桌位和人数", viewToken = token)
         assertTrue(model.canExecuteLive(command))
         val moved = f.sessionsJson()
         moved.getJSONArray("sessions").getJSONObject(1).put("locationVersion", 5)

@@ -341,6 +341,8 @@ export type StaffReservationStatus =
   | 'no_show'
 
 export interface StaffReservation {
+  reservationSnapshot?: { receptionProtocol?: number }
+  aggregateVersion?: number
   id: string
   publicId: string
   customerName: string

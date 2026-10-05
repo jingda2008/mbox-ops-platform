@@ -17,11 +17,16 @@ struct LiveServiceView: View {
   @State var error = ""
   @State var proposed: LiveCommand?
   @State var itemID: String?
+  @State private var showExperiencePlans = false
   var body: some View {
     NavigationStack {
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 12) {
           LivePendingView()
+          if model.identity?.allows("customer.experience.manage") == true && model.identity?.allows("service.execute") == true {
+            Button("桌边体验计划与主管处理") { showExperiencePlans = true }
+              .buttonStyle(Primary(tone: .secondary, symbol: "list.bullet.clipboard"))
+          }
           Text(model.serviceState).font(.caption)
           if focusedTask != nil && !showAll {
             Text("正在核对提醒对应的原桌次任务").font(.caption)
@@ -104,6 +109,7 @@ struct LiveServiceView: View {
       }
     }
     .task { await model.loadService() }.onChange(of: model.workspaceVersion) { _, _ in dismiss() }
+    .sheet(isPresented: $showExperiencePlans, onDismiss: { Task { await model.loadService() } }) { LiveExperiencePlansView() }
     .sheet(item: $selected) { row in
       NavigationStack {
         ScrollView {

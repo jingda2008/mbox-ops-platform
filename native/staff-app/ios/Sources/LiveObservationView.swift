@@ -124,6 +124,10 @@ struct LiveObservationView: View {
       if board.draft == nil {
         Foldout(title: "记录新观察") {
           TextField("记录现场事实、客人原话或员工判断", text: $raw, axis: .vertical).textFieldStyle(.roundedBorder)
+          NativeSpeechInputView(
+            context: speechContext, enabled: model.canUseObservation,
+            stillAllowed: { model.canUseObservation && model.observationBoard?.tableSessionId == session },
+            text: $raw)
           Toggle("需要立即跟进", isOn: $immediate)
           Text("仅按本桌真实订单识别商品，识别后仍需员工确认。").font(.caption)
           Button("识别并核对") {
@@ -193,6 +197,10 @@ struct LiveObservationView: View {
         }
       }
     }
+  }
+  var speechContext: String {
+    [model.identity?.employee.id ?? "", model.identity?.session.id ?? "", session,
+     String(model.workspaceVersion)].joined(separator: "|")
   }
   var eventSelectors: some View {
     Group {

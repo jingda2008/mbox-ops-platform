@@ -30,6 +30,7 @@ struct LiveAssignments {
     let employees: [Employee]
     let roles: [Role]
     var supportsGuardedAssignmentRecovery: Bool? = nil
+    var supportsNativeAssignmentSchedule: Bool? = nil
   }
   struct Table: Decodable, Identifiable {
     let id: String
@@ -56,6 +57,7 @@ struct LiveAssignments {
   let options: Options
   let tables: [Table]
   let assignments: [Assignment]
+  var schedule: AssignmentSchedule? = nil
   var commandRoot: String {
     options.supportsGuardedAssignmentRecovery == true
       ? "/api/table-management/guarded-assignments" : "/api/table-management/assignments"
@@ -185,6 +187,10 @@ extension LiveCommand.Step {
   }
 }
 func validateAssignmentReply(_ bytes: Data, step: LiveCommand.Step) throws {
+  if step.assignmentProof?["assignment"] as? String == "schedule" {
+    try validateAssignmentScheduleReply(bytes, step: step)
+    return
+  }
   struct EnvelopeMeta: Decodable {
     struct Meta: Decodable { let replayed: Bool }
     let meta: Meta
@@ -236,5 +242,161 @@ func validateAssignmentReply(_ bytes: Data, step: LiveCommand.Step) throws {
     guard equalTime(data["startsAt"], proof["startsAt"]),
       equalTime(data["endsAt"], step.object["endsAt"])
     else { throw StaffAPIError.invalid }
+  }
+}
+
+struct AssignmentSchedule: Decodable, Equatable {
+  static let modes = ["future", "history", "cancelled"]
+  static let labels = ["future": "未来安排", "history": "已结束", "cancelled": "已取消"]
+  struct Row: Codable, Equatable, Identifiable {
+    let id, tableId, tableCode, employeeId, employeeName, roleId, roleCode: String
+    let assignmentType, startsAt, reason, updatedAt, configurationFingerprint: String
+    let endsAt, cancelledAt, cancellationReason: String?
+  }
+  struct Change: Codable, Equatable {
+    let employeeId, roleId, assignmentType, startsAt: String
+    let endsAt: String?
+    init(employeeID: String, roleID: String, kind: String, start: Date, end: Date?) throws {
+      guard UUID(uuidString: employeeID) != nil, UUID(uuidString: roleID) != nil,
+        assignmentKinds[kind] != nil, start.timeIntervalSince1970.isFinite,
+        end == nil || (end!.timeIntervalSince1970.isFinite && end! > start)
+      else { throw CatalogError("请核对原安排的员工、岗位和起止时间") }
+      let iso = ISO8601DateFormatter()
+      employeeId = employeeID; roleId = roleID; assignmentType = kind
+      startsAt = iso.string(from: start); endsAt = end.map(iso.string)
+      guard endsAt == nil || assignmentDate(endsAt!)! > assignmentDate(startsAt)! else {
+        throw CatalogError("结束时间必须晚于开始时间")
+      }
+    }
+    var object: [String: Any] {
+      ["employeeId": employeeId, "roleId": roleId, "assignmentType": assignmentType,
+        "startsAt": startsAt, "endsAt": endsAt as Any? ?? NSNull()]
+    }
+  }
+  let employeeId, mode: String
+  let page: Int
+  let hasMore: Bool
+  let rows: [Row]
+  static func path(mode: String, page: Int) throws -> String {
+    guard modes.contains(mode), (0...10000).contains(page) else { throw StaffAPIError.invalid }
+    return "/api/table-management/native-assignment-schedule?mode=\(mode)&page=\(page)"
+  }
+  func validate(actorID: String, mode: String, page: Int) throws {
+    guard employeeId == actorID, self.mode == mode, self.page == page,
+      Self.modes.contains(mode), (0...10000).contains(page), rows.count <= 50,
+      Set(rows.map(\.id)).count == rows.count
+    else { throw StaffAPIError.invalid }
+    for row in rows {
+      guard [row.id, row.tableId, row.employeeId, row.roleId].allSatisfy({ UUID(uuidString: $0) != nil }),
+        !row.tableCode.isEmpty, !row.employeeName.isEmpty, !row.roleCode.isEmpty,
+        assignmentKinds[row.assignmentType] != nil,
+        let start = assignmentDate(row.startsAt), assignmentDate(row.updatedAt) != nil,
+        row.configurationFingerprint.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil
+      else { throw StaffAPIError.invalid }
+      if let cancellation = row.cancelledAt {
+        guard mode == "cancelled", assignmentDate(cancellation) != nil,
+          row.endsAt.flatMap(assignmentDate) == start,
+          (2...1000).contains((row.cancellationReason ?? "").utf16.count)
+        else { throw StaffAPIError.invalid }
+      } else {
+        guard mode != "cancelled", row.endsAt == nil || row.endsAt.flatMap(assignmentDate).map({ $0 > start }) == true,
+          mode != "history" || row.endsAt != nil
+        else { throw StaffAPIError.invalid }
+      }
+    }
+  }
+}
+
+extension LiveAssignments {
+  func changeSchedule(
+    actor: StaffIdentity, id: String, reason: String, change: AssignmentSchedule.Change?,
+    now: Date = Date()
+  ) throws -> LiveCommand {
+    guard options.supportsNativeAssignmentSchedule == true, let schedule else {
+      throw CatalogError("配套后台尚未提供未来安排管理，请在原管理端核对")
+    }
+    try schedule.validate(actorID: actor.employee.id, mode: schedule.mode, page: schedule.page)
+    guard actor.allows(Self.permission), schedule.mode == "future",
+      let row = schedule.rows.first(where: { $0.id == id }), row.cancelledAt == nil,
+      let originalStart = assignmentDate(row.startsAt), originalStart > now
+    else { throw CatalogError("仅能修改或取消尚未生效的原安排，请刷新核对") }
+    let note = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard (2...1000).contains(note.utf16.count) else { throw CatalogError("请填写2—1000字实际原因") }
+    var body: [String: Any] = ["kind": change == nil ? "cancel" : "update", "id": id,
+      "expected": row.configurationFingerprint, "reason": note]
+    var confirmation = "\(row.tableCode) · \(row.employeeName) · \(assignmentKinds[row.assignmentType]!)\n原岗位：\(row.roleCode)\n原时段：\(assignmentTime(row.startsAt)) → \(row.endsAt.map(assignmentTime) ?? "不设结束") · 上海时间"
+    if let change {
+      guard let employee = options.employees.first(where: { $0.id == change.employeeId }),
+        let role = options.roles.first(where: { $0.id == change.roleId }),
+        tables.contains(where: { $0.id == row.tableId && $0.status == "available" }),
+        assignmentKinds[change.assignmentType] != nil,
+        let start = assignmentDate(change.startsAt), start > now,
+        change.endsAt == nil || change.endsAt.flatMap(assignmentDate).map({ $0 > start }) == true
+      else { throw CatalogError("请刷新并选择可用桌台、在职员工、岗位及未来开始时间") }
+      body["schedule"] = change.object
+      confirmation += "\n新员工：\(employee.displayName) · \(assignmentKinds[change.assignmentType]!)\n新岗位：\(role.name)\n新时段：\(assignmentTime(change.startsAt)) → \(change.endsAt.map(assignmentTime) ?? "不设结束") · 上海时间\n修改后按新安排生效；岗位仅记录分工，不授予账号权限。"
+    } else {
+      confirmation += "\n取消后不再生效，原记录和取消原因保留。已生效责任应使用结束责任；此操作不关桌、不清除该桌待办。"
+    }
+    confirmation += "\n原因：\(note)\n若其他人已修改或时段冲突，服务器会拒绝本次变更，请刷新核对。"
+    let before = try JSONSerialization.jsonObject(with: JSONEncoder().encode(row))
+    let proof: [String: Any] = ["assignment": "schedule", "actorId": actor.employee.id,
+      "before": before, "confirmation": confirmation]
+    let key = UUID().uuidString.lowercased()
+    return LiveCommand(id: key, employeeID: actor.employee.id,
+      title: (change == nil ? "取消未来安排" : "修改未来安排") + " · " + row.tableCode,
+      permission: Self.permission, steps: [.init(
+        path: "/api/table-management/native-assignment-schedule/commands",
+        body: try JSONSerialization.data(withJSONObject: body, options: .sortedKeys),
+        keyHeader: "idempotency-key", key: "native-business-" + key,
+        recoveryBody: try JSONSerialization.data(withJSONObject: proof, options: .sortedKeys))])
+  }
+}
+
+func validateAssignmentScheduleReply(_ bytes: Data, step: LiveCommand.Step) throws {
+  struct Envelope: Decodable {
+    struct Meta: Decodable { let replayed: Bool }
+    let meta: Meta
+  }
+  _ = try JSONDecoder().decode(Envelope.self, from: bytes)
+  let body = step.object
+  guard step.path == "/api/table-management/native-assignment-schedule/commands",
+    let proof = step.assignmentProof, proof["assignment"] as? String == "schedule",
+    let before = proof["before"] as? [String: Any],
+    let root = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+    let data = root["data"] as? [String: Any], let row = data["row"] as? [String: Any],
+    let kind = body["kind"] as? String, ["update", "cancel"].contains(kind),
+    data["kind"] as? String == kind, data["reason"] as? String == body["reason"] as? String,
+    let actorID = proof["actorId"] as? String, !actorID.isEmpty,
+    data["employeeId"] as? String == actorID,
+    let expected = body["expected"] as? String,
+    expected == before["configurationFingerprint"] as? String,
+    data["previousFingerprint"] as? String == expected,
+    let id = body["id"] as? String, row["id"] as? String == id, before["id"] as? String == id,
+    let tableID = before["tableId"] as? String, row["tableId"] as? String == tableID
+  else { throw StaffAPIError.invalid }
+  func equalTime(_ a: Any?, _ b: Any?) -> Bool {
+    if a == nil || a is NSNull { return b == nil || b is NSNull }
+    guard let a = a as? String, let b = b as? String,
+      let first = assignmentDate(a), let second = assignmentDate(b) else { return false }
+    return abs(first.timeIntervalSince(second)) < 0.001
+  }
+  if kind == "cancel" {
+    guard let cancelledAt = row["cancelledAt"] as? String, assignmentDate(cancelledAt) != nil,
+      row["cancellationReason"] as? String == body["reason"] as? String,
+      equalTime(row["startsAt"], before["startsAt"]), equalTime(row["endsAt"], row["startsAt"])
+    else { throw StaffAPIError.invalid }
+    for key in ["employeeId", "roleId", "assignmentType", "reason"] {
+      guard row[key] as? String == before[key] as? String else { throw StaffAPIError.invalid }
+    }
+  } else {
+    guard let change = body["schedule"] as? [String: Any],
+      row["cancelledAt"] == nil || row["cancelledAt"] is NSNull,
+      row["reason"] as? String == body["reason"] as? String,
+      equalTime(row["startsAt"], change["startsAt"]), equalTime(row["endsAt"], change["endsAt"])
+    else { throw StaffAPIError.invalid }
+    for key in ["employeeId", "roleId", "assignmentType"] {
+      guard row[key] as? String == change[key] as? String else { throw StaffAPIError.invalid }
+    }
   }
 }

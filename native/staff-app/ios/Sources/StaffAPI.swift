@@ -18,6 +18,8 @@ struct StaffIdentity: Codable, Equatable {
   let employee: Employee
   let permissions: [String]
   let deniedPermissions: [String]
+  struct Navigation: Codable, Equatable { let route: String }
+  var navigation: [Navigation]? = nil
   func allows(_ permission: String) -> Bool {
     permissions.contains(permission) && !deniedPermissions.contains(permission)
   }
@@ -56,6 +58,8 @@ struct StaffAPIError: Error, LocalizedError {
       "HISTORICAL_COLLECTION_CHANGED", "TABLE_ASSIGNMENT_NOT_COMMITTED",
       "NATIVE_PHYSICAL_NOT_COMMITTED", "TABLE_PARTICIPANT_NOT_COMMITTED",
       "NATIVE_BUSINESS_NOT_COMMITTED",
+      "RESERVATION_RECEPTION_REQUIRED", "RESERVATION_RECEPTION_CHANGED",
+      "RESERVATION_POLICY_CHANGED", "RESERVATION_CAPACITY_UNAVAILABLE",
     ].contains(code) {
       return status == 409 && commitDisposition == "not_committed"
     }
@@ -89,6 +93,7 @@ struct StaffAPIError: Error, LocalizedError {
   private let credentialStore: StaffSessionStore?
   var rememberSession = false
   private(set) var persistenceNotice = ""
+  private var authGeneration: UInt64 = 0
   private(set) var identity: StaffIdentity?
   private(set) var deviceGrant: DeviceGrant?
   let origin = URL(string: "https://mbox.shmbox.com")!
@@ -100,6 +105,26 @@ struct StaffAPIError: Error, LocalizedError {
     session = URLSession(configuration: config, delegate: NoRedirect(), delegateQueue: nil)
     self.transport = transport
   }
+  func supervisorClient(now: Date = Date()) throws -> StaffAPI {
+    guard let grant = deviceGrant, StaffIdentity.date(grant.expiresAt).map({ $0 > now }) == true else {
+      throw CatalogError("门店设备授权已过期，请先重新授权后核对原请求")
+    }
+    let leases = (session.configuration.httpCookieStorage?.cookies(for: origin) ?? []).filter {
+      $0.name == "__Host-mbox_device_lease" && $0.isSecure && $0.path == "/"
+        && $0.domain == origin.host && !$0.value.isEmpty && ($0.expiresDate.map { $0 > now } ?? true)
+    }
+    guard leases.count == 1 else { throw CatalogError("当前门店设备授权不可用，请保留原请求") }
+    let client = StaffAPI(transport: transport, store: nil)
+    client.session.configuration.httpCookieStorage?.setCookie(leases[0])
+    client.deviceGrant = grant
+    return client
+  }
+  func clearTemporarySession() {
+    clearIdentity(); deviceGrant = nil
+    for cookie in session.configuration.httpCookieStorage?.cookies ?? [] {
+      session.configuration.httpCookieStorage?.deleteCookie(cookie)
+    }
+  }
   func clearIdentity() {
     do {
       try credentialStore?.remove()
@@ -108,6 +133,7 @@ struct StaffAPIError: Error, LocalizedError {
     clearRuntimeIdentity()
   }
   private func clearRuntimeIdentity() {
+    authGeneration &+= 1
     identity = nil
     for cookie in session.configuration.httpCookieStorage?.cookies ?? []
     where cookie.name == "__Host-mbox_staff_session" {
@@ -119,6 +145,7 @@ struct StaffAPIError: Error, LocalizedError {
     guard (6...128).contains(credential.count), deviceKey.count >= 8 else {
       throw StaffAPIError(status: 0, code: "INPUT_INVALID", message: "请填写有效的门店口令")
     }
+    authGeneration &+= 1
     let result: DeviceGrant = try await data(
       "/api/auth/device-access", body: ["credential": credential, "deviceKey": deviceKey])
     guard let until = StaffIdentity.date(result.expiresAt), until > Date() else {
@@ -132,6 +159,8 @@ struct StaffAPIError: Error, LocalizedError {
     guard !code.isEmpty, code.count <= 64, pin.count == 4,
       pin.allSatisfy({ $0.isASCII && $0.isNumber })
     else { throw StaffAPIError(status: 0, code: "INPUT_INVALID", message: "请输入员工账号和4位数字PIN") }
+    authGeneration &+= 1
+    let generation = authGeneration
     do {
       let result: StaffIdentity = try await data(
         switching ? "/api/auth/switch" : "/api/auth/login",
@@ -142,7 +171,7 @@ struct StaffAPIError: Error, LocalizedError {
       return result
     } catch {
       // A switched response may be lost after the server revoked the old employee.
-      if switching { clearIdentity() }
+      if switching && generation == authGeneration { clearIdentity() }
       throw error
     }
   }
@@ -150,12 +179,13 @@ struct StaffAPIError: Error, LocalizedError {
     guard let previous = identity else {
       throw StaffAPIError(status: 401, code: "AUTH_REQUIRED", message: "请先登录员工账号")
     }
+    let generation = authGeneration
     let next: StaffIdentity
     do {
       next = try await data("/api/auth/heartbeat", body: [:])
     } catch {
       // Authentication denial revokes this login; a business-route 403 does not.
-      if (error as? StaffAPIError)?.status == 403 { clearIdentity() }
+      if generation == authGeneration && (error as? StaffAPIError)?.status == 403 { clearIdentity() }
       throw error
     }
     try next.validate()
@@ -186,11 +216,12 @@ struct StaffAPIError: Error, LocalizedError {
   }
   func restoreSession() async throws -> StaffIdentity? {
     clearRuntimeIdentity()
+    let generation = authGeneration
     var verified = false
     defer {
       // A timeout does not revoke the saved login, but no failed restore may
       // leave the cached actor or a partially restored staff cookie active.
-      if !verified { clearRuntimeIdentity() }
+      if !verified && generation == authGeneration { clearRuntimeIdentity() }
     }
     guard let data = try credentialStore?.read() else { return nil }
     let saved: SavedStaffSession
@@ -251,7 +282,8 @@ struct StaffAPIError: Error, LocalizedError {
   }
   func logout() async throws {
     // The shared device must lock even if remote revocation's response is lost.
-    defer { clearIdentity() }
+    let generation = authGeneration
+    defer { if generation == authGeneration { clearIdentity() } }
     let (_, status) = try await raw("/api/auth/logout", body: [:])
     guard status == 204 else { throw StaffAPIError.invalid }
   }
@@ -407,17 +439,35 @@ struct StaffAPIError: Error, LocalizedError {
       throw StaffAPIError.invalid
     }
   }
-  func raw(_ path: String, body: [String: Any]? = nil, headers: [String: String] = [:]) async throws
+  func raw(_ path: String, body: [String: Any]? = nil, headers: [String: String] = [:],
+    method: String? = nil) async throws
     -> (Data, Int)
   {
     guard path.hasPrefix("/api/"), !path.contains(".."), !path.contains("#"),
       let url = URL(string: path, relativeTo: origin)?.absoluteURL, url.host == origin.host
     else { throw StaffAPIError.invalid }
     var request = URLRequest(url: url)
-    request.httpMethod = body == nil ? "GET" : "POST"
+    let requestMethod = method ?? (body == nil ? "GET" : "POST")
+    guard ["GET", "POST", "PUT"].contains(requestMethod), requestMethod != "GET" || body == nil
+    else { throw StaffAPIError.invalid }
+    request.httpMethod = requestMethod
+    let pushRequest = path.hasPrefix("/api/native/push/")
+    let requestIdentity = identity
+    let generation = authGeneration
+    if pushRequest && requestIdentity == nil {
+      throw StaffAPIError(status: 401, code: "AUTH_REQUIRED", message: "请先登录员工账号")
+    }
+    // Bind every response, including Set-Cookie and authentication errors, to
+    // the originating login. URLSession must not mutate cookies before this check.
+    request.httpShouldHandleCookies = false
+    if let cookies = session.configuration.httpCookieStorage?.cookies(for: url) {
+      for (key, value) in HTTPCookie.requestHeaderFields(with: cookies) {
+        request.setValue(value, forHTTPHeaderField: key)
+      }
+    }
     request.setValue("application/json", forHTTPHeaderField: "Accept")
     if let body {
-      request.httpBody = try JSONSerialization.data(withJSONObject: body)
+      request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     }
     if let identity {
@@ -428,25 +478,28 @@ struct StaffAPIError: Error, LocalizedError {
     let bytes: Data
     let response: HTTPURLResponse
     if let transport {
-      if let cookies = session.configuration.httpCookieStorage?.cookies(for: url) {
-        for (k, v) in HTTPCookie.requestHeaderFields(with: cookies) {
-          request.setValue(v, forHTTPHeaderField: k)
-        }
-      }
       (bytes, response) = try await transport(request)
-      let headers = Dictionary(
+    } else {
+      let result = try await session.data(for: request)
+      guard let http = result.1 as? HTTPURLResponse else { throw StaffAPIError.invalid }
+      (bytes, response) = (result.0, http)
+    }
+    guard generation == authGeneration,
+      requestIdentity?.session.id == identity?.session.id,
+      requestIdentity?.employee.id == identity?.employee.id else {
+      throw StaffAPIError(status: 409, code: "CLIENT_SESSION_CHANGED",
+        message: "登录已变化，请在当前账号重新核对")
+    }
+    if !pushRequest {
+      let responseHeaders = Dictionary(
         uniqueKeysWithValues: response.allHeaderFields.compactMap {
           key, value -> (String, String)? in
           guard let key = key as? String, let value = value as? String else { return nil }
           return (key, value)
         })
-      HTTPCookie.cookies(withResponseHeaderFields: headers, for: url).forEach {
+      HTTPCookie.cookies(withResponseHeaderFields: responseHeaders, for: url).forEach {
         session.configuration.httpCookieStorage?.setCookie($0)
       }
-    } else {
-      let result = try await session.data(for: request)
-      guard let http = result.1 as? HTTPURLResponse else { throw StaffAPIError.invalid }
-      (bytes, response) = (result.0, http)
     }
     guard (200..<300).contains(response.statusCode) else {
       let object = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any]

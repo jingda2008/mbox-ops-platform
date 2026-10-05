@@ -2,8 +2,17 @@ import SwiftUI
 
 struct LivePendingView: View {
   @EnvironmentObject var model: AppModel
+  @State private var supervisorCommand: LiveCommand?
   var body: some View {
-    if model.liveStorageDamaged {
+    if model.localCleanupBlocked {
+      VStack(alignment: .leading, spacing: 8) {
+        Text("本机私密记录尚未清理完毕，请解锁设备后继续；不会重发业务。")
+          .font(.caption).foregroundStyle(.secondary)
+        Button("继续本机清理") { model.retryLocalCommandCleanup() }
+          .buttonStyle(Primary(tone: .secondary, symbol: "arrow.clockwise"))
+          .disabled(model.busy || model.heartbeatBusy)
+      }
+    } else if model.liveStorageDamaged {
       Text("未决操作记录异常，真实操作已锁定，请联系管理员").font(.caption).foregroundStyle(.red)
     }
     if let order = model.liveOrderPending {
@@ -40,7 +49,13 @@ struct LivePendingView: View {
           )
           .disabled(model.busy || command.employeeID != model.identity?.employee.id)
         }
+        if (try? serviceRecoveryStep(command)) != nil {
+          Button("原员工无法核对 · 主管处理") { supervisorCommand = command }
+            .buttonStyle(Primary(tone: .secondary, symbol: "person.badge.shield.checkmark"))
+            .disabled(model.busy || model.heartbeatBusy || model.liveStorageDamaged || model.liveOrderPending != nil)
+        }
       }.padding(10).background(gold.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+        .sheet(item: $supervisorCommand) { original in LiveServiceRecoveryView(command: original) }
     }
   }
 }

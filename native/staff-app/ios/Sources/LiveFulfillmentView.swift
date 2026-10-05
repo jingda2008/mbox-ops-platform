@@ -8,11 +8,19 @@ struct LiveFulfillmentView: View {
   @State private var showKitchen = false
   @State private var showPickup = false
   @State private var filter = "all"
+  @State private var showHistory = false
+  @State private var showRemakeHandover = false
   var body: some View {
     NavigationStack {
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 12) {
           LivePendingView()
+          if canReadFulfillmentHistory(model.identity) {
+            Button("制作与送达历史") { showHistory = true }
+          }
+          if model.identity?.allows("refund.request") == true && (model.identity?.allows("inventory.receive") == true || model.identity?.allows("inventory.waste") == true) {
+            Button("离店重做实物交接") { showRemakeHandover = true }
+          }
           Picker("任务范围", selection: $filter) {
             Text("全部").tag("all")
             Text("异常").tag("failed")
@@ -46,6 +54,8 @@ struct LiveFulfillmentView: View {
       .onChange(of: model.workspaceVersion) { _, _ in dismiss() }
       .sheet(isPresented: $showKitchen, onDismiss: refresh) { LiveKitchenView() }
       .sheet(isPresented: $showPickup, onDismiss: refresh) { LivePickupView() }
+      .sheet(isPresented: $showHistory) { LiveFulfillmentHistoryView() }
+      .sheet(isPresented: $showRemakeHandover, onDismiss: refresh) { LiveRemakeHandoverView() }
       .sheet(
         isPresented: Binding(get: { itemID != nil }, set: { if !$0 { itemID = nil } }),
         onDismiss: refresh
@@ -131,7 +141,7 @@ private struct FulfillmentTaskCard: View {
         Button("到取餐台核对实物") { openPickup() }.buttonStyle(
           Primary(tone: .secondary, symbol: "tray.and.arrow.up"))
       }
-      if row.canPrepare && row.productionScreen == nil || row.canRemake
+      if row.canPrepare && row.productionScreen == nil || row.canRemake || row.allowsManagerCancel && row.quantities == nil
         || row.canDeliver && !board.usesPickup
       {
         Foldout(title: "处理此任务") {
@@ -164,6 +174,8 @@ private struct FulfillmentTaskCard: View {
           if row.canRemake && row.quantities == nil {
             Button("按原异常重新制作") { propose("remake") }.buttonStyle(Primary(symbol: "arrow.clockwise"))
               .disabled(!model.canUseFulfillment || !checked)
+          }
+          if row.allowsManagerCancel && row.quantities == nil {
             Button("主管结束原制作任务") { propose("manager-cancel") }.buttonStyle(
               Primary(tone: .danger, symbol: "xmark.circle")
             ).disabled(!model.canUseFulfillment || !checked)

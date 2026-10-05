@@ -220,13 +220,15 @@ struct LiveOnlinePaymentView: View {
 struct NativePaymentScanner: UIViewControllerRepresentable {
   var inventory = false
   var memberMode = false
+  var tableMode = false
+  private var mode: NativeScanMode { tableMode ? .table : memberMode ? .member : inventory ? .inventory : .payment }
   let received: (String) -> Void
   let failed: (String) -> Void
   func makeCoordinator() -> Coordinator { Coordinator(self) }
   func makeUIViewController(context: Context) -> DataScannerViewController {
     let view = DataScannerViewController(
       recognizedDataTypes: [
-        .barcode(symbologies: inventory ? [.ean13, .ean8, .upce, .code128, .qr] : [.qr, .code128])
+        .barcode(symbologies: tableMode ? [.qr] : inventory ? [.ean13, .ean8, .upce, .code128, .qr] : [.qr, .code128])
       ], qualityLevel: .balanced,
       recognizesMultipleItems: false, isGuidanceEnabled: true, isHighlightingEnabled: true)
     view.delegate = context.coordinator
@@ -249,19 +251,8 @@ struct NativePaymentScanner: UIViewControllerRepresentable {
         if case .barcode(let code) = item, let text = code.payloadStringValue {
           received = true
           scanner.stopScanning()
-          if parent.memberMode {
-            if text.uppercased().hasPrefix("MBOX_MEMBER_V1:"),
-              let value = try? MemberCommands.code(text)
-            {
-              parent.received(value)
-            } else {
-              parent.failed("请扫描顾客小程序中的会员码")
-            }
-          } else if text.range(of: "^[0-9]{16,32}$", options: .regularExpression) != nil {
-            parent.received(text)
-          } else {
-            parent.failed("识别的不是有效付款码，请顾客打开付款码后重试")
-          }
+          do { parent.received(try nativeScannedCode(text, mode: parent.mode)) }
+          catch { parent.failed(error.localizedDescription) }
           return
         }
       }

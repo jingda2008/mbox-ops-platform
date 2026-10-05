@@ -222,6 +222,164 @@ import Foundation
     }
     check(!StaffAPIError(status: 409, code: "TABLE_OPERATION_CONFLICT", message: "原键冲突",
       commitDisposition: "not_committed").definitivelyRejected, "old ambiguous conflict never clears")
+    checks += try await assignmentScheduleChecks(actor: actor, fixture: fixture)
     print("\(checks) assignment contract checks passed")
   }
+}
+
+@MainActor private func assignmentScheduleChecks(actor: StaffIdentity, fixture: [String: Any]) async throws -> Int {
+  var checks = 0
+  func check(_ value: Bool, _ label: String) { precondition(value, label); checks += 1; print("PASS " + label) }
+  func bytes(_ value: Any) throws -> Data { try JSONSerialization.data(withJSONObject: value, options: .sortedKeys) }
+  func decode<T: Decodable>(_ type: T.Type, _ value: Any) throws -> T {
+    try JSONDecoder().decode(type, from: bytes(value))
+  }
+  func rejects(_ block: () throws -> Void) -> Bool { do { try block(); return false } catch { return true } }
+  let now = assignmentDate("2026-10-06T10:00:00Z")!
+  let original = (fixture["assignments"] as! [[String: Any]])[0]
+  var row = original
+  row["startsAt"] = "2026-10-06 20:00:00+08"
+  row["endsAt"] = "2026-10-06T23:00:00+08:00"
+  row["updatedAt"] = "2026-10-06T10:00:00Z"
+  row["cancelledAt"] = NSNull(); row["cancellationReason"] = NSNull()
+  row["configurationFingerprint"] = String(repeating: "a", count: 64)
+  var options = try decode(LiveAssignments.Options.self, fixture["options"]!)
+  options.supportsNativeAssignmentSchedule = true
+  let tables = try decode([LiveAssignments.Table].self, fixture["tables"]!)
+  func schedule(_ rows: [[String: Any]]? = nil, mode: String = "future", page: Int = 0,
+    employee: String? = nil) throws -> AssignmentSchedule {
+    try decode(AssignmentSchedule.self, ["rows": rows ?? [row], "mode": mode, "page": page,
+      "employeeId": employee ?? actor.employee.id, "hasMore": false])
+  }
+  func board(_ value: AssignmentSchedule? = nil) throws -> LiveAssignments {
+    LiveAssignments(options: options, tables: tables, assignments: [], schedule: try value ?? schedule())
+  }
+  let list = try schedule()
+  try list.validate(actorID: actor.employee.id, mode: "future", page: 0)
+  try schedule(mode: "history").validate(actorID: actor.employee.id, mode: "history", page: 0)
+  check(true, "schedule ended history is readable without granting actions")
+  var cancelledRow = row
+  cancelledRow["cancelledAt"] = now.ISO8601Format()
+  cancelledRow["cancellationReason"] = "员工请假取消"
+  cancelledRow["endsAt"] = row["startsAt"]
+  try schedule([cancelledRow], mode: "cancelled").validate(actorID: actor.employee.id, mode: "cancelled", page: 0)
+  check(true, "schedule cancelled history preserves original zero-length row and reason")
+  check(rejects { try schedule([cancelledRow]).validate(actorID: actor.employee.id, mode: "future", page: 0) },
+    "schedule cancelled record cannot appear as future work")
+  check(try AssignmentSchedule.path(mode: "history", page: 2)
+    == "/api/table-management/native-assignment-schedule?mode=history&page=2", "schedule history uses bounded server pagination")
+  for (mode, page) in [("wrong", 0), ("future", -1), ("cancelled", 10001)] {
+    check(rejects { _ = try AssignmentSchedule.path(mode: mode, page: page) }, "schedule query rejects \(mode)/\(page)")
+  }
+  check(rejects { try list.validate(actorID: "other", mode: "future", page: 0) }, "schedule response binds current employee")
+  check(rejects { try list.validate(actorID: actor.employee.id, mode: "history", page: 0) }
+    && rejects { try list.validate(actorID: actor.employee.id, mode: "future", page: 1) }, "schedule response cannot substitute mode or page")
+  for key in ["id", "tableId", "employeeId", "roleId", "startsAt", "endsAt", "updatedAt", "configurationFingerprint", "assignmentType"] {
+    var invalid = row; invalid[key] = "invalid"
+    check(rejects { try schedule([invalid]).validate(actorID: actor.employee.id, mode: "future", page: 0) }, "schedule list rejects invalid \(key)")
+  }
+  check(rejects { try schedule([row, row]).validate(actorID: actor.employee.id, mode: "future", page: 0) }, "schedule list rejects duplicate originals")
+  check(rejects { try schedule(Array(repeating: row, count: 51)).validate(actorID: actor.employee.id, mode: "future", page: 0) }, "schedule list never accepts unbounded page")
+  let change = try AssignmentSchedule.Change(employeeID: options.employees[0].id,
+    roleID: options.roles[0].id, kind: "backup", start: now.addingTimeInterval(14400), end: nil)
+  let current = try board()
+  let updated = try current.changeSchedule(actor: actor, id: list.rows[0].id, reason: "延后晚班负责人", change: change, now: now)
+  let cancelled = try current.changeSchedule(actor: actor, id: list.rows[0].id, reason: "员工请假取消", change: nil, now: now)
+  check(updated.steps[0].keyHeader == "idempotency-key" && updated.steps[0].key.hasPrefix("native-business-")
+    && updated.steps[0].object["expected"] as? String == row["configurationFingerprint"] as? String,
+    "schedule update freezes optimistic version with native permanent-receipt key")
+  check(cancelled.steps[0].object["schedule"] == nil && cancelled.steps[0].object["kind"] as? String == "cancel",
+    "schedule cancellation carries no replacement schedule")
+  let confirmation = updated.steps[0].assignmentProof!["confirmation"] as! String
+  check(confirmation.contains(options.employees[0].displayName) && confirmation.contains(options.roles[0].name)
+    && confirmation.contains("新时段") && confirmation.contains("上海时间"), "schedule confirmation shows original and new responsibility")
+  check(rejects { _ = try current.changeSchedule(actor: actor, id: "foreign", reason: "原安排核对", change: nil, now: now) }, "schedule never targets unseen row")
+  check(rejects { _ = try current.changeSchedule(actor: actor, id: list.rows[0].id, reason: "原安排核对", change: nil, now: now.addingTimeInterval(7200)) }, "activated schedule cannot be cancelled")
+  for mode in ["history", "cancelled"] {
+    check(rejects { _ = try board(schedule(mode: mode)).changeSchedule(actor: actor, id: list.rows[0].id, reason: "原安排核对", change: nil, now: now) }, "\(mode) schedule cannot be changed")
+  }
+  var deniedValue = try JSONSerialization.jsonObject(with: JSONEncoder().encode(actor)) as! [String: Any]
+  deniedValue["deniedPermissions"] = [LiveAssignments.permission]
+  let denied = try decode(StaffIdentity.self, deniedValue)
+  check(rejects { _ = try current.changeSchedule(actor: denied, id: list.rows[0].id, reason: "原安排核对", change: nil, now: now) }, "schedule explicit permission denial wins")
+  check(rejects { _ = try board(schedule(employee: "other")).changeSchedule(actor: actor, id: list.rows[0].id, reason: "原安排核对", change: nil, now: now) }, "schedule cached under another actor cannot submit")
+  check(rejects { _ = try current.changeSchedule(actor: actor, id: list.rows[0].id, reason: " ", change: nil, now: now) }, "schedule reason required")
+  let unavailable = try AssignmentSchedule.Change(employeeID: UUID().uuidString, roleID: options.roles[0].id,
+    kind: "backup", start: now.addingTimeInterval(14400), end: nil)
+  check(rejects { _ = try current.changeSchedule(actor: actor, id: list.rows[0].id, reason: "人员变化核对", change: unavailable, now: now) }, "schedule inactive or foreign employee rejected")
+  check(rejects { _ = try AssignmentSchedule.Change(employeeID: options.employees[0].id,
+    roleID: options.roles[0].id, kind: "backup", start: now, end: now.addingTimeInterval(0.1)) }, "schedule seconds precision cannot collapse interval")
+  let past = try AssignmentSchedule.Change(employeeID: options.employees[0].id,
+    roleID: options.roles[0].id, kind: "backup", start: now, end: nil)
+  check(rejects { _ = try current.changeSchedule(actor: actor, id: list.rows[0].id, reason: "时间变化核对", change: past, now: now) }, "schedule update must remain future")
+  var oldOptions = options; oldOptions.supportsNativeAssignmentSchedule = nil
+  let oldServer = LiveAssignments(options: oldOptions, tables: tables, assignments: [], schedule: list)
+  check(rejects { _ = try oldServer.changeSchedule(actor: actor, id: list.rows[0].id, reason: "旧后台核对", change: nil, now: now) }, "schedule capability missing cannot silently use unsafe route")
+  func reply(_ command: LiveCommand, replayed: Bool = false) throws -> [String: Any] {
+    let body = command.steps[0].object
+    var result = row
+    result.removeValue(forKey: "configurationFingerprint")
+    if let values = body["schedule"] as? [String: Any] {
+      for (key, value) in values { result[key] = value }; result["reason"] = body["reason"]
+    } else {
+      result["cancelledAt"] = now.ISO8601Format(); result["cancellationReason"] = body["reason"]
+      result["endsAt"] = result["startsAt"]
+    }
+    return ["meta": ["replayed": replayed], "data": ["kind": body["kind"]!,
+      "employeeId": actor.employee.id, "reason": body["reason"]!, "previousFingerprint": body["expected"]!, "row": result]]
+  }
+  for command in [updated, cancelled] {
+    let step = command.steps[0], operation = step.object["kind"] as! String
+    try validateAssignmentReply(bytes(reply(command)), step: step)
+    check(true, "schedule \(operation) exact receipt accepted")
+    let restored = try JSONDecoder().decode(LiveCommand.self, from: JSONEncoder().encode(command))
+    check(restored == command, "schedule \(operation) persists original key body and version")
+    for key in ["kind", "employeeId", "reason", "previousFingerprint"] {
+      var response = try reply(command); var data = response["data"] as! [String: Any]
+      data[key] = "wrong"; response["data"] = data
+      check(rejects { try validateAssignmentReply(bytes(response), step: step) }, "schedule \(operation) rejects wrong receipt \(key)")
+    }
+    for key in ["id", "tableId", "employeeId", "roleId", "assignmentType", "startsAt", "endsAt", "reason"] {
+      var response = try reply(command); var data = response["data"] as! [String: Any]
+      var result = data["row"] as! [String: Any]; result[key] = "wrong"; data["row"] = result; response["data"] = data
+      check(rejects { try validateAssignmentReply(bytes(response), step: step) }, "schedule \(operation) rejects changed original \(key)")
+    }
+    var malformed = try reply(command); malformed["meta"] = ["replayed": 1]
+    check(rejects { try validateAssignmentReply(bytes(malformed), step: step) }, "schedule \(operation) numeric replay marker rejected")
+    for key in operation == "cancel" ? ["cancelledAt", "cancellationReason"] : ["cancelledAt"] {
+      var response = try reply(command); var data = response["data"] as! [String: Any]
+      var result = data["row"] as! [String: Any]; result[key] = "wrong"; data["row"] = result; response["data"] = data
+      check(rejects { try validateAssignmentReply(bytes(response), step: step) }, "schedule \(operation) rejects wrong \(key)")
+    }
+    var commits = 0, sends = 0
+    var persisted = try JSONEncoder().encode(command)
+    let api = StaffAPI(transport: { request in
+      sends += 1
+      guard request.url?.path == step.path, request.httpMethod == "POST",
+        request.value(forHTTPHeaderField: step.keyHeader) == step.key,
+        let payload = request.httpBody,
+        NSDictionary(dictionary: try JSONSerialization.jsonObject(with: payload) as! [String: Any]).isEqual(to: step.object)
+      else { throw StaffAPIError.invalid }
+      if commits == 0 { commits += 1; throw URLError(.timedOut) }
+      return (try bytes(reply(command, replayed: true)), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+    })
+    do { _ = try await LiveCommandRunner.advance(restored, send: { try await api.execute($0) },
+      checkpoint: { persisted = try JSONEncoder().encode($0) }); preconditionFailure("lost schedule response accepted") } catch {}
+    let relaunched = try JSONDecoder().decode(LiveCommand.self, from: persisted)
+    check(relaunched == command, "schedule \(operation) unknown result keeps original pending intent")
+    let complete = try await LiveCommandRunner.advance(relaunched, send: { try await api.execute($0) },
+      checkpoint: { persisted = try JSONEncoder().encode($0) })
+    check(commits == 1 && sends == 2 && complete.completedSteps == 1,
+      "schedule \(operation) lost receipt recovers through real API adapter without second change")
+    _ = try await LiveCommandRunner.advance(complete, send: { try await api.execute($0) }, checkpoint: { _ in })
+    check(sends == 2, "schedule \(operation) failed readback retry never resends checkpointed write")
+  }
+  for disposition in [nil, "unknown", "not_committed"] as [String?] {
+    check(StaffAPIError(status: 409, code: "NATIVE_BUSINESS_NOT_COMMITTED", message: "时段并发变化",
+      commitDisposition: disposition).definitivelyRejected == (disposition == "not_committed"),
+      "schedule conflict clears only with explicit noncommit proof")
+  }
+  check(!StaffAPIError(status: 409, code: "ASSIGNMENT_CONFLICT", message: "原键处理中").definitivelyRejected,
+    "schedule original-key conflict remains recoverable")
+  return checks
 }

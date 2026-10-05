@@ -1,6 +1,10 @@
 import Foundation
 
 struct LiveReservation: Decodable, Identifiable {
+  struct ReceptionSnapshot: Decodable { let receptionProtocol: Int? }
+  var reservationSnapshot: ReceptionSnapshot? = nil
+  var aggregateVersion: Int? = nil
+  var requiresReception: Bool { reservationSnapshot?.receptionProtocol == 1 }
   struct Lock: Decodable { let tableCode, status: String }
   let id, publicId, customerName, arrivalAt, expectedEndAt, status, seatPreference: String
   let guestCount: Int
@@ -9,13 +13,15 @@ struct LiveReservation: Decodable, Identifiable {
   let tableLocks: [Lock]
   var tables: String {
     let codes = tableLocks.filter { ["held", "confirmed"].contains($0.status) }.map(\.tableCode)
+    if codes.isEmpty && requiresReception && ["seated", "completed"].contains(status) { return "实际桌次见接待记录" }
     return codes.isEmpty ? "待安排桌位" : codes.joined(separator: "、")
   }
   var actions: [String] {
     switch status {
     case "pending": return ["confirm", "arrive", "cancel"]
     case "confirmed": return ["arrive", "cancel"]
-    case "arrived", "seated": return ["complete", "cancel"]
+    case "arrived": return requiresReception ? ["cancel"] : ["complete", "cancel"]
+    case "seated": return ["complete"]
     default: return []
     }
   }
@@ -35,13 +41,23 @@ struct LiveReservationIntake: Decodable, Identifiable {
   let queueOverride: Override?
   var id: String { kind + ":" + publicId }
   var active: Bool {
-    !["completed", "cancelled", "no_show", "expired", "converted"].contains(status)
+    if kind == "waitlist" { return ["waiting", "notified", "arrived"].contains(status) }
+    return !["completed", "cancelled", "no_show", "expired", "converted"].contains(status)
+  }
+  var statusLabel: String {
+    kind == "waitlist" ? ReservationCommands.waitlistStatuses[status] ?? "状态待核对"
+      : LiveReservation.labels[status] ?? "状态待核对"
   }
 }
 struct ReservationCapabilities: Decodable {
   let durableTransitions, durablePriority: Bool
+  var admissionCreateV1: Bool? = nil
+  var receptionSeatV1: Bool? = nil
+  var tableBoundCreate: Bool? = nil
   let durableCreate: Bool?
+  var durableWaitlist: Bool? = nil
 }
+struct WaitlistCapabilities: Decodable { let durableTransitions: Bool }
 struct ReservationQuery: Equatable {
   let range, from, to: String
   static func day(_ date: Date) -> String {
@@ -84,6 +100,34 @@ struct ReservationQuery: Equatable {
   }
 }
 enum ReservationCommands {
+  static let waitlistStatuses = ["waiting": "等待中", "notified": "已联系", "arrived": "已到店",
+    "seated": "已入座", "cancelled": "已取消", "expired": "已过期"]
+  static let waitlistLabels = ["notified": "已联系客人", "arrived": "确认已到店",
+    "seated": "已安排入座", "cancelled": "取消候位", "expired": "结束过期候位"]
+  static func waitlistActions(_ status: String) -> [String] {
+    switch status {
+    case "waiting": return ["notified", "arrived", "cancelled", "expired"]
+    case "notified": return ["arrived", "cancelled", "expired"]
+    case "arrived": return ["seated", "cancelled"]
+    default: return []
+    }
+  }
+  static func waitlist(
+    _ row: LiveReservationIntake, to: String, reason: String, actor: StaffIdentity
+  ) throws -> LiveCommand {
+    let note = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard row.kind == "waitlist", waitlistActions(row.status).contains(to),
+      actor.allows("reservation.manage"), (2...500).contains(note.utf16.count),
+      (8...128).contains(row.publicId.utf16.count),
+      row.publicId.trimmingCharacters(in: .whitespacesAndNewlines) == row.publicId
+    else { throw CatalogError("请刷新核对原候位状态，填写2—500字实际处理说明") }
+    return try make(actor: actor, title: "\(waitlistLabels[to]!) · \(row.customerName)",
+      path: "/api/staff/native-waitlist/" + LiveCommand.pathPart(row.publicId) + "/transition",
+      body: ["expectedStatus": row.status, "to": to, "reason": note],
+      proof: ["kind": "waitlist", "publicId": row.publicId, "status": to,
+        "previousStatus": row.status, "reason": note,
+        "confirmation": "\(row.customerName) · \(row.guestCount)人 · \(row.publicId)\n候位状态：\(row.statusLabel) → \(waitlistStatuses[to]!)\n\(waitlistLabels[to]!)\n说明：\(note)\n仅记录已完成的现场处理，不会自动联系客人、开台或退款。取消候位不代替已有收款的退款处理。"])
+  }
   static let labels = [
     "confirm": "确认预约", "arrive": "确认已到店", "complete": "完成预约", "cancel": "取消预约", "promote": "上调优先级",
     "demote": "下调优先级", "clear": "恢复默认排序",
@@ -158,6 +202,11 @@ extension LiveCommand.Step {
   }
 }
 func validateReservationReply(_ bytes: Data, step: LiveCommand.Step) throws {
+  struct Envelope: Decodable {
+    struct Meta: Decodable { let replayed: Bool }
+    let meta: Meta
+  }
+  _ = try JSONDecoder().decode(Envelope.self, from: bytes)
   guard let p = step.reservationProof,
     let root = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
     let data = root["data"] as? [String: Any], let meta = root["meta"] as? [String: Any],
@@ -179,6 +228,17 @@ func validateReservationReply(_ bytes: Data, step: LiveCommand.Step) throws {
     guard id == p["id"] as? String, data["status"] as? String == p["status"] as? String else {
       throw StaffAPIError.invalid
     }
+  } else if p["kind"] as? String == "waitlist" {
+    guard let publicID = p["publicId"] as? String,
+      step.path == "/api/staff/native-waitlist/" + LiveCommand.pathPart(publicID) + "/transition",
+      let previous = p["previousStatus"] as? String, let target = p["status"] as? String,
+      ReservationCommands.waitlistActions(previous).contains(target),
+      data["status"] as? String == target, data["previousStatus"] as? String == previous,
+      data["reason"] as? String == p["reason"] as? String,
+      step.object["expectedStatus"] as? String == previous,
+      step.object["to"] as? String == target,
+      step.object["reason"] as? String == p["reason"] as? String
+    else { throw StaffAPIError.invalid }
   } else {
     guard p["kind"] as? String == "priority",
       data["targetKind"] as? String == p["targetKind"] as? String,

@@ -8,6 +8,8 @@ struct Primary: ButtonStyle {
   var symbol: String? = nil
   @Environment(\.isEnabled) private var enabled
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @ScaledMetric(relativeTo: .body) private var labelSize = 16
+  @ScaledMetric(relativeTo: .body) private var symbolSize = 17
 
   func makeBody(configuration: Configuration) -> some View {
     let pressed = enabled && configuration.isPressed
@@ -25,13 +27,16 @@ struct Primary: ButtonStyle {
           ? [Color(hex: 0xFFFCFA), Color(hex: 0xF8EEEA)] : [.white, Color(hex: 0xEEF2EB)]
     HStack(spacing: 9) {
       if let symbol {
-        Image(systemName: symbol).font(.system(size: 17, weight: .semibold)).accessibilityHidden(
+        Image(systemName: symbol).font(.system(size: symbolSize, weight: .semibold)).accessibilityHidden(
           true)
       }
       configuration.label
+        .fixedSize(horizontal: false, vertical: true)
     }
-    .font(.system(size: 16, weight: .semibold))
+    .font(.system(size: labelSize, weight: .semibold))
+    .multilineTextAlignment(.center)
     .padding(.horizontal, 14)
+    .padding(.vertical, 10)
     .frame(maxWidth: .infinity, minHeight: tone == .primary ? 50 : 44)
     .foregroundStyle(foreground)
     .background(LinearGradient(colors: colors, startPoint: .top, endPoint: .bottom), in: shape)

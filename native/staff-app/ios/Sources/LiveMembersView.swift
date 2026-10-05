@@ -146,7 +146,7 @@ struct LiveMembersView: View {
                 Text("资格成长 \(account.qualificationGrowth) · 累计成长 \(account.lifetimeGrowth)").font(
                   .caption)
                 if let ends = account.tierPeriodEndsAt {
-                  Text("等级周期结束 · " + reservationTime(ends)).font(.caption)
+                  Text("等级周期结束 · " + membershipRecordTime(ends)).font(.caption)
                 }
               }
               Card {
@@ -182,7 +182,7 @@ struct LiveMembersView: View {
                   Text("\(b.title) · \(b.quantity)份").font(.headline)
                   Text(b.guidance).font(.caption)
                   if let until = b.validUntil {
-                    Text("有效至 " + reservationTime(until)).font(.caption)
+                    Text("有效至 " + membershipRecordTime(until)).font(.caption)
                   }
                 }
               }
@@ -201,13 +201,13 @@ struct LiveMembersView: View {
               Foldout(title: "最近20条积分流水") {
                 ForEach(Array(account.pointEntries.enumerated()), id: \.offset) { _, e in
                   Text("\(e.delta>0 ? "+":"")\(e.delta) · 余额\(e.balanceAfter)")
-                  Text(e.reason + " · " + reservationTime(e.occurredAt)).font(.caption)
+                  Text(e.reason + " · " + membershipRecordTime(e.occurredAt)).font(.caption)
                 }
               }
               Foldout(title: "最近20条成长流水") {
                 ForEach(Array(account.growthEntries.enumerated()), id: \.offset) { _, e in
                   Text("\(e.delta>0 ? "+":"")\(e.delta) · 余额\(e.balanceAfter)")
-                  Text(e.reason + " · " + reservationTime(e.occurredAt)).font(.caption)
+                  Text(e.reason + " · " + membershipRecordTime(e.occurredAt)).font(.caption)
                 }
               }
             }

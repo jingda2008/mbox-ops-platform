@@ -1,0 +1,994 @@
+{
+  "sources": {
+    "coupon-calendar.ts": "8e4671b33ed8c03eaf228889a3679df06374ed5b05d84c1b5279e81b38b80c2c",
+    "stacking-pricing.ts": "94fb397dfc233283882bea52b747ce3f6edc2009822a997da91e8690ffb429e0"
+  },
+  "calendars": [
+    {
+      "body": {
+        "rule": {
+          "timezone": "Asia/Shanghai",
+          "dateBasis": "business",
+          "businessDayStartMinute": 360,
+          "dateFrom": "2026-10-05",
+          "dateThrough": "2026-11-05",
+          "validFrom": "2026-10-04T16:00:00.000Z",
+          "validUntil": "2026-11-06T00:00:00.000Z",
+          "weekdays": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "weekStartsOn": 1,
+          "windows": [
+            {
+              "startMinute": 1080,
+              "endMinute": 120
+            }
+          ],
+          "excludedDates": [
+            "2026-10-06"
+          ],
+          "relativeValidity": {
+            "days": 2,
+            "basis": "business_end"
+          }
+        },
+        "at": "2026-10-05T12:00:00Z"
+      },
+      "response": {
+        "data": {
+          "employeeId": "00000000-0000-4000-8000-000000000001",
+          "protocol": 1,
+          "previewOnly": true,
+          "issuanceValidity": null,
+          "rule": {
+            "timezone": "Asia/Shanghai",
+            "dateBasis": "business",
+            "businessDayStartMinute": 360,
+            "dateFrom": "2026-10-05",
+            "dateThrough": "2026-11-05",
+            "validFrom": "2026-10-04T16:00:00.000Z",
+            "validUntil": "2026-11-06T00:00:00.000Z",
+            "weekdays": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7
+            ],
+            "weekStartsOn": 1,
+            "windows": [
+              {
+                "startMinute": 1080,
+                "endMinute": 120
+              }
+            ],
+            "excludedDates": [
+              "2026-10-06"
+            ],
+            "relativeValidity": {
+              "days": 2,
+              "basis": "business_end"
+            }
+          },
+          "available": true,
+          "nextAvailableAt": "2026-10-05T12:00:00.000Z",
+          "lastAvailableUntil": "2026-11-05T18:00:00.000Z",
+          "hasUsableWindow": true,
+          "calendar": [
+            {
+              "date": "2026-10-05",
+              "windows": [
+                {
+                  "from": "2026-10-05T10:00:00.000Z",
+                  "until": "2026-10-05T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-10-06",
+              "windows": [],
+              "reasons": [
+                "该日期已被明确排除"
+              ]
+            },
+            {
+              "date": "2026-10-07",
+              "windows": [
+                {
+                  "from": "2026-10-07T10:00:00.000Z",
+                  "until": "2026-10-07T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-10-08",
+              "windows": [
+                {
+                  "from": "2026-10-08T10:00:00.000Z",
+                  "until": "2026-10-08T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-10-09",
+              "windows": [
+                {
+                  "from": "2026-10-09T10:00:00.000Z",
+                  "until": "2026-10-09T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-10-10",
+              "windows": [
+                {
+                  "from": "2026-10-10T10:00:00.000Z",
+                  "until": "2026-10-10T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-10-11",
+              "windows": [
+                {
+                  "from": "2026-10-11T10:00:00.000Z",
+                  "until": "2026-10-11T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-10-12",
+              "windows": [
+                {
+                  "from": "2026-10-12T10:00:00.000Z",
+                  "until": "2026-10-12T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-10-13",
+              "windows": [
+                {
+                  "from": "2026-10-13T10:00:00.000Z",
+                  "until": "2026-10-13T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-10-14",
+              "windows": [
+                {
+                  "from": "2026-10-14T10:00:00.000Z",
+                  "until": "2026-10-14T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-10-15",
+              "windows": [
+                {
+                  "from": "2026-10-15T10:00:00.000Z",
+                  "until": "2026-10-15T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-10-16",
+              "windows": [
+                {
+                  "from": "2026-10-16T10:00:00.000Z",
+                  "until": "2026-10-16T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-10-17",
+              "windows": [
+                {
+                  "from": "2026-10-17T10:00:00.000Z",
+                  "until": "2026-10-17T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-10-18",
+              "windows": [
+                {
+                  "from": "2026-10-18T10:00:00.000Z",
+                  "until": "2026-10-18T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-10-19",
+              "windows": [
+                {
+                  "from": "2026-10-19T10:00:00.000Z",
+                  "until": "2026-10-19T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-10-20",
+              "windows": [
+                {
+                  "from": "2026-10-20T10:00:00.000Z",
+                  "until": "2026-10-20T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-10-21",
+              "windows": [
+                {
+                  "from": "2026-10-21T10:00:00.000Z",
+                  "until": "2026-10-21T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-10-22",
+              "windows": [
+                {
+                  "from": "2026-10-22T10:00:00.000Z",
+                  "until": "2026-10-22T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-10-23",
+              "windows": [
+                {
+                  "from": "2026-10-23T10:00:00.000Z",
+                  "until": "2026-10-23T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-10-24",
+              "windows": [
+                {
+                  "from": "2026-10-24T10:00:00.000Z",
+                  "until": "2026-10-24T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-10-25",
+              "windows": [
+                {
+                  "from": "2026-10-25T10:00:00.000Z",
+                  "until": "2026-10-25T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-10-26",
+              "windows": [
+                {
+                  "from": "2026-10-26T10:00:00.000Z",
+                  "until": "2026-10-26T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-10-27",
+              "windows": [
+                {
+                  "from": "2026-10-27T10:00:00.000Z",
+                  "until": "2026-10-27T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-10-28",
+              "windows": [
+                {
+                  "from": "2026-10-28T10:00:00.000Z",
+                  "until": "2026-10-28T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-10-29",
+              "windows": [
+                {
+                  "from": "2026-10-29T10:00:00.000Z",
+                  "until": "2026-10-29T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-10-30",
+              "windows": [
+                {
+                  "from": "2026-10-30T10:00:00.000Z",
+                  "until": "2026-10-30T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-10-31",
+              "windows": [
+                {
+                  "from": "2026-10-31T10:00:00.000Z",
+                  "until": "2026-10-31T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-11-01",
+              "windows": [
+                {
+                  "from": "2026-11-01T10:00:00.000Z",
+                  "until": "2026-11-01T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-11-02",
+              "windows": [
+                {
+                  "from": "2026-11-02T10:00:00.000Z",
+                  "until": "2026-11-02T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-11-03",
+              "windows": [
+                {
+                  "from": "2026-11-03T10:00:00.000Z",
+                  "until": "2026-11-03T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-11-04",
+              "windows": [
+                {
+                  "from": "2026-11-04T10:00:00.000Z",
+                  "until": "2026-11-04T18:00:00.000Z"
+                }
+              ]
+            }
+          ],
+          "nextCalendarDate": "2026-11-05",
+          "usageDate": "2026-10-05",
+          "usageWeekStart": "2026-10-05",
+          "boundary": "start_inclusive_end_exclusive"
+        }
+      }
+    },
+    {
+      "body": {
+        "rule": {
+          "timezone": "Asia/Shanghai",
+          "dateBasis": "business",
+          "businessDayStartMinute": 360,
+          "dateFrom": "2026-10-05",
+          "dateThrough": "2026-11-05",
+          "validFrom": "2026-10-04T16:00:00.000Z",
+          "validUntil": "2026-11-06T00:00:00.000Z",
+          "weekdays": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "weekStartsOn": 1,
+          "windows": [
+            {
+              "startMinute": 1080,
+              "endMinute": 120
+            }
+          ],
+          "excludedDates": [
+            "2026-10-06"
+          ],
+          "relativeValidity": {
+            "days": 2,
+            "basis": "business_end"
+          }
+        },
+        "at": "2026-10-05T12:00:00Z",
+        "issuedAt": "2026-10-05T12:30:00Z"
+      },
+      "response": {
+        "data": {
+          "employeeId": "00000000-0000-4000-8000-000000000001",
+          "protocol": 1,
+          "previewOnly": true,
+          "issuanceValidity": {
+            "validFrom": "2026-10-05T12:30:00.000Z",
+            "validUntil": "2026-10-06T22:00:00.000Z"
+          },
+          "rule": {
+            "timezone": "Asia/Shanghai",
+            "dateBasis": "business",
+            "businessDayStartMinute": 360,
+            "dateFrom": "2026-10-05",
+            "dateThrough": "2026-11-05",
+            "validFrom": "2026-10-05T12:30:00.000Z",
+            "validUntil": "2026-10-06T22:00:00.000Z",
+            "weekdays": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7
+            ],
+            "weekStartsOn": 1,
+            "windows": [
+              {
+                "startMinute": 1080,
+                "endMinute": 120
+              }
+            ],
+            "excludedDates": [
+              "2026-10-06"
+            ],
+            "relativeValidity": {
+              "days": 2,
+              "basis": "business_end"
+            }
+          },
+          "available": false,
+          "nextAvailableAt": "2026-10-05T12:30:00.000Z",
+          "lastAvailableUntil": "2026-10-05T18:00:00.000Z",
+          "hasUsableWindow": true,
+          "calendar": [
+            {
+              "date": "2026-10-05",
+              "windows": [
+                {
+                  "from": "2026-10-05T12:30:00.000Z",
+                  "until": "2026-10-05T18:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "date": "2026-10-06",
+              "windows": [],
+              "reasons": [
+                "该日期已被明确排除"
+              ]
+            },
+            {
+              "date": "2026-10-07",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-10-08",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-10-09",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-10-10",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-10-11",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-10-12",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-10-13",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-10-14",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-10-15",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-10-16",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-10-17",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-10-18",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-10-19",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-10-20",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-10-21",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-10-22",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-10-23",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-10-24",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-10-25",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-10-26",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-10-27",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-10-28",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-10-29",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-10-30",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-10-31",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-11-01",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-11-02",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-11-03",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            },
+            {
+              "date": "2026-11-04",
+              "windows": [],
+              "reasons": [
+                "该日期已超过实际有效期结束（含发放后有效期限制）",
+                "配置的时段与实际有效期没有交集，请核对绝对时间及发放后期限"
+              ]
+            }
+          ],
+          "nextCalendarDate": "2026-11-05",
+          "usageDate": "2026-10-05",
+          "usageWeekStart": "2026-10-05",
+          "boundary": "start_inclusive_end_exclusive"
+        }
+      }
+    }
+  ],
+  "stacking": [
+    {
+      "body": {
+        "policy": {
+          "allowMemberPrice": true,
+          "allowBundlePrice": true,
+          "allowCheckoutUpgrade": true,
+          "allowOtherCoupons": true,
+          "allowPoints": true,
+          "maxCoupons": 2,
+          "calculationOrder": [
+            "member",
+            "coupon",
+            "points"
+          ],
+          "maximumDiscountMinor": null,
+          "minimumPayableMinor": 0
+        },
+        "scenario": {
+          "units": [
+            {
+              "id": "unit-1",
+              "amountMinor": 10001,
+              "costMinor": null,
+              "bundle": false,
+              "upgraded": false
+            },
+            {
+              "id": "unit-2",
+              "amountMinor": 999,
+              "costMinor": 100,
+              "bundle": true,
+              "upgraded": false
+            }
+          ],
+          "effects": [
+            {
+              "id": "member-1",
+              "stage": "member",
+              "kind": "rate",
+              "value": 8000,
+              "unitIds": [
+                "unit-1",
+                "unit-2"
+              ],
+              "minimumSpendMinor": 0
+            },
+            {
+              "id": "coupon-1",
+              "stage": "coupon",
+              "kind": "amount_off",
+              "value": 300,
+              "unitIds": [
+                "unit-1",
+                "unit-2"
+              ],
+              "minimumSpendMinor": 0
+            },
+            {
+              "id": "points-1",
+              "stage": "points",
+              "kind": "amount_off",
+              "value": 150,
+              "unitIds": [
+                "unit-1"
+              ],
+              "minimumSpendMinor": 0
+            }
+          ]
+        }
+      },
+      "response": {
+        "data": {
+          "employeeId": "00000000-0000-4000-8000-000000000001",
+          "protocol": 1,
+          "previewOnly": true,
+          "orderAuthorization": false,
+          "currency": "CNY",
+          "subtotalMinor": 11000,
+          "discountMinor": 2650,
+          "payableMinor": 8350,
+          "costMinor": null,
+          "grossProfitMinor": null,
+          "steps": [
+            {
+              "effectId": "member-1",
+              "stage": "member",
+              "kind": "rate",
+              "discountMinor": 2200,
+              "payableMinor": 8800,
+              "allocations": [
+                {
+                  "unitId": "unit-1",
+                  "discountMinor": 2000
+                },
+                {
+                  "unitId": "unit-2",
+                  "discountMinor": 200
+                }
+              ]
+            },
+            {
+              "effectId": "coupon-1",
+              "stage": "coupon",
+              "kind": "amount_off",
+              "discountMinor": 300,
+              "payableMinor": 8500,
+              "allocations": [
+                {
+                  "unitId": "unit-1",
+                  "discountMinor": 273
+                },
+                {
+                  "unitId": "unit-2",
+                  "discountMinor": 27
+                }
+              ]
+            },
+            {
+              "effectId": "points-1",
+              "stage": "points",
+              "kind": "amount_off",
+              "discountMinor": 150,
+              "payableMinor": 8350,
+              "allocations": [
+                {
+                  "unitId": "unit-1",
+                  "discountMinor": 150
+                }
+              ]
+            }
+          ],
+          "units": [
+            {
+              "id": "unit-1",
+              "originalMinor": 10001,
+              "discountMinor": 2423,
+              "payableMinor": 7578
+            },
+            {
+              "id": "unit-2",
+              "originalMinor": 999,
+              "discountMinor": 227,
+              "payableMinor": 772
+            }
+          ]
+        }
+      }
+    },
+    {
+      "body": {
+        "policy": {
+          "allowMemberPrice": true,
+          "allowBundlePrice": true,
+          "allowCheckoutUpgrade": true,
+          "allowOtherCoupons": true,
+          "allowPoints": true,
+          "maxCoupons": 2,
+          "calculationOrder": [
+            "member",
+            "coupon",
+            "points"
+          ],
+          "maximumDiscountMinor": null,
+          "minimumPayableMinor": 0
+        },
+        "scenario": {
+          "units": [
+            {
+              "id": "unit-1",
+              "amountMinor": 100,
+              "costMinor": 200,
+              "bundle": false,
+              "upgraded": false
+            }
+          ],
+          "effects": [
+            {
+              "id": "coupon-1",
+              "stage": "coupon",
+              "kind": "free",
+              "value": 0,
+              "unitIds": [
+                "unit-1"
+              ],
+              "minimumSpendMinor": 0
+            }
+          ]
+        }
+      },
+      "response": {
+        "data": {
+          "employeeId": "00000000-0000-4000-8000-000000000001",
+          "protocol": 1,
+          "previewOnly": true,
+          "orderAuthorization": false,
+          "currency": "CNY",
+          "subtotalMinor": 100,
+          "discountMinor": 100,
+          "payableMinor": 0,
+          "costMinor": 200,
+          "grossProfitMinor": -200,
+          "steps": [
+            {
+              "effectId": "coupon-1",
+              "stage": "coupon",
+              "kind": "free",
+              "discountMinor": 100,
+              "payableMinor": 0,
+              "allocations": [
+                {
+                  "unitId": "unit-1",
+                  "discountMinor": 100
+                }
+              ]
+            }
+          ],
+          "units": [
+            {
+              "id": "unit-1",
+              "originalMinor": 100,
+              "discountMinor": 100,
+              "payableMinor": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "body": {
+        "policy": {
+          "allowMemberPrice": true,
+          "allowBundlePrice": true,
+          "allowCheckoutUpgrade": true,
+          "allowOtherCoupons": true,
+          "allowPoints": true,
+          "maxCoupons": 2,
+          "calculationOrder": [
+            "member",
+            "coupon",
+            "points"
+          ],
+          "maximumDiscountMinor": null,
+          "minimumPayableMinor": 0
+        },
+        "scenario": {
+          "units": [
+            {
+              "id": "unit-1",
+              "amountMinor": 9007199254740991,
+              "costMinor": 0,
+              "bundle": false,
+              "upgraded": false
+            }
+          ],
+          "effects": []
+        }
+      },
+      "response": {
+        "data": {
+          "employeeId": "00000000-0000-4000-8000-000000000001",
+          "protocol": 1,
+          "previewOnly": true,
+          "orderAuthorization": false,
+          "currency": "CNY",
+          "subtotalMinor": 9007199254740991,
+          "discountMinor": 0,
+          "payableMinor": 9007199254740991,
+          "costMinor": 0,
+          "grossProfitMinor": 9007199254740991,
+          "steps": [],
+          "units": [
+            {
+              "id": "unit-1",
+              "originalMinor": 9007199254740991,
+              "discountMinor": 0,
+              "payableMinor": 9007199254740991
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

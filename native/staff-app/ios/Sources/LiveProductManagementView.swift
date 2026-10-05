@@ -5,6 +5,13 @@ struct LiveProductManagementView: View {
   @Environment(\.dismiss) var dismiss
   @State private var query = ""
   @State private var editing: ProductManagementBoard.Product?
+  @State private var operationalProduct: CatalogConfigurationRecord?
+  @State private var companionSource: CatalogConfigurationRecord?
+  @State private var configuring: CatalogConfigurationRecord?
+  @State private var creating = false
+  @State private var categories = false
+  @State private var recipeProduct: ProductManagementBoard.Product?
+  @State private var phaseProduct: ProductManagementBoard.Product?
   var body: some View {
     NavigationStack {
       ScrollView {
@@ -14,6 +21,10 @@ struct LiveProductManagementView: View {
           HStack {
             TextField("商品名称或编码", text: $query).textFieldStyle(.roundedBorder)
             Button("查询") { Task { await model.loadProducts(query: query) } }.disabled(model.busy)
+          }
+          if model.catalogConfigurationBoard?.enabled == true {
+            Button("新建商品或套餐") { creating = true }.disabled(!model.canUseProducts)
+            Button("菜单分类") { categories = true }.disabled(!model.canUseProducts)
           }
           if let board = model.productBoard {
             if board.products.isEmpty { Text("没有匹配商品") }
@@ -27,6 +38,23 @@ struct LiveProductManagementView: View {
                 Button("编辑商品") { editing = p }.buttonStyle(
                   Primary(tone: .secondary, symbol: "slider.horizontal.3")
                 ).disabled(!model.canUseProducts)
+                if let configuration = model.catalogConfigurationBoard?.products.first(where: { $0.id == p.id }) {
+                  Button("商品、套餐与供应配置") { configuring = configuration }.disabled(!model.canUseProducts)
+                  if model.catalogConfigurationBoard?.operationalEnabled == true {
+                    Button("规格、推荐与出品规则") { operationalProduct = configuration }.disabled(!model.canUseProducts)
+                    if configuration.text("productKind") == "single", configuration.text("inventoryControlMode") == "tracked",
+                      let snapshot = configuration.object["productSnapshot"] as? [String: Any], let specification = snapshot["salesSpecificationType"] as? String,
+                      ["whole_bottle", "glass"].contains(specification) {
+                      Button(specification == "whole_bottle" ? "新建对应单杯商品" : "新建对应整瓶商品") { companionSource = configuration }.disabled(!model.canUseProducts)
+                    }
+                  }
+                }
+                if p.productKind == "single", model.identity?.allows("inventory.manage") == true {
+                  Button("配方、耗料与成本") { recipeProduct = p }.disabled(model.busy || model.heartbeatBusy)
+                }
+                if model.identity?.allows("recommendation.phase.configure") == true {
+                  Button("演出阶段供应限制") { phaseProduct = p }.disabled(model.busy || model.heartbeatBusy)
+                }
               }
             }
             HStack {
@@ -59,6 +87,13 @@ struct LiveProductManagementView: View {
       .onChange(of: model.priorityAccessKey) { dismiss() }.sheet(
       item: $editing
     ) { ProductManagementEditor(product: $0) }
+      .sheet(item: $recipeProduct) { LiveRecipeConfigurationView(product: $0) }
+      .sheet(item: $phaseProduct) { LiveProductPhasesView(product: $0) }
+      .sheet(item: $operationalProduct) { LiveProductOperationsView(product: $0) }
+      .sheet(item: $companionSource) { LiveCatalogConfigurationView(product: nil, companionSource: $0) }
+      .sheet(item: $configuring) { LiveCatalogConfigurationView(product: $0) }
+      .sheet(isPresented: $creating) { LiveCatalogConfigurationView(product: nil) }
+      .sheet(isPresented: $categories) { LiveCategoryConfigurationView() }
   }
 }
 private struct ProductManagementEditor: View {
@@ -95,7 +130,7 @@ private struct ProductManagementEditor: View {
           Section("售价") {
             TextField("人民币元", text: $price).keyboardType(.decimalPad)
             TextField("改价原因", text: $reason)
-            Text("已有账单不改价；套餐构成及分类配置仍需网页管理。恢复在售不代表配方或库存必然满足。").font(.caption)
+            Text("已有账单不改价；套餐构成及分类可在商品管理的配置入口调整。恢复在售不代表配方或库存必然满足。").font(.caption)
           }
         }
         if !error.isEmpty { Text(error).foregroundStyle(.red) }

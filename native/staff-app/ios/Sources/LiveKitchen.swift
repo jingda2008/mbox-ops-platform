@@ -240,6 +240,8 @@ struct LiveFulfillment: Decodable {
     var id: String { taskId }
     let taskId, businessDate, stationCode, kdsStatus: String
     let carryover, canPrepare, canDeliver, canRemake: Bool
+    let canManagerCancel: Bool?
+    var allowsManagerCancel: Bool { canManagerCancel ?? (canRemake && kdsStatus == "failed") }
     let productionScreen, failureReason: String?
     let quantities: Quantities?
     let order: Order
@@ -309,13 +311,20 @@ struct LiveFulfillment: Decodable {
       suffix = "actions"
       body["action"] = "fail"
       title = "登记制作异常"
-    case "remake", "manager-cancel":
+    case "remake":
       guard row.canRemake, row.kdsStatus == "failed", row.quantities == nil else {
         throw CatalogError("原异常或管理权限已变化")
       }
       permission = "kds.exception.manage"
       suffix = action
-      title = action == "remake" ? "按原异常重新制作" : "主管结束原制作任务"
+      title = "按原异常重新制作"
+    case "manager-cancel":
+      guard row.allowsManagerCancel, row.quantities == nil,
+        ["pending", "accepted", "preparing", "ready", "failed"].contains(row.kdsStatus)
+      else { throw CatalogError("原任务或主管结束权限已变化；按份商品须处理原份数") }
+      permission = "kds.exception.manage"
+      suffix = action
+      title = "主管结束原制作任务"
     default: throw CatalogError("不支持的出品操作")
     }
     guard identity.allows(permission) else { throw CatalogError("当前岗位权限已变化") }

@@ -70,7 +70,7 @@ describe('normalized migration baseline', () => {
       '192',
       '193',
       '194',
-      '195', '196', '197', '198', '199', '200', '201', '202', '203', '204', '205', '206', '207', '208', '209', '210', '211', '212', '213', '214', '215', '216', '217', '218', '219', '220', '221', '222', '223', '224', '225', '226', '227', '228', '229', '230', '231', '232', '233', '234', '235', '236', '237', '238', '239', '240', '241', '242', '243', '244', '245', '246', '247', '248', '249', '250', '251', '252', '253', '254', '255', '256', '257', '258', '259', '260', '261', '262', '263',
+      '195', '196', '197', '198', '199', '200', '201', '202', '203', '204', '205', '206', '207', '208', '209', '210', '211', '212', '213', '214', '215', '216', '217', '218', '219', '220', '221', '222', '223', '224', '225', '226', '227', '228', '229', '230', '231', '232', '233', '234', '235', '236', '237', '238', '239', '240', '241', '242', '243', '244', '245', '246', '247', '248', '249', '250', '251', '252', '253', '254', '255', '256', '257', '258', '259', '260', '261', '262', '263', '264',
     ])
     const enrollPhoneGrant = migrations.find((migration) => migration.version === '247')
     expect(enrollPhoneGrant?.filename).toBe('247_membership_enroll_phone_release_grants.sql')
@@ -87,7 +87,7 @@ describe('normalized migration baseline', () => {
       expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/)
       expect(unwrapNormalizedMigrationTransaction(migration.sql).trim().length).toBeGreaterThan(0)
     }
-    expect(migrations.filter((migration) => ['102', '103', '104', '261', '262', '263'].includes(migration.version)).map(({ version, filename, checksum }) => ({ version, filename, checksum }))).toEqual([
+    expect(migrations.filter((migration) => ['102', '103', '104', '261', '262', '263', '264'].includes(migration.version)).map(({ version, filename, checksum }) => ({ version, filename, checksum }))).toEqual([
       {
         version: '102',
         filename: '102_printer_management_permission.sql',
@@ -117,6 +117,11 @@ describe('normalized migration baseline', () => {
         version: '263',
         filename: '263_contact_legal_basis_length.sql',
         checksum: '515732ae9177ad35ebe546576527f5d22f108fafe29636547a14b27006796f6a',
+      },
+      {
+        version: '264',
+        filename: '264_recollection_causal_order.sql',
+        checksum: '810d235201d102a9a3a298171ed6c8f97748bc450850b14a398edfe1526a38d8',
       },
     ])
   })

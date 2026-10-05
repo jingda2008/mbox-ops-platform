@@ -127,6 +127,11 @@ private final class NavigationStore: StaffSessionStore {
     check(try actor(["loyalty.accrual.exception.view", "reconciliation.view"], routes: ["/staff/member-exceptions"]).canOpen(.loyaltyRefunds), "refund reconciliation requires both original read grants")
     check(try actor(["order.history.view"], routes: ["/staff/fulfillment"]).canOpen(.fulfillmentHistory)
       && actor(["reconciliation.view"], routes: ["/staff/payments"]).canOpen(.fulfillmentHistory), "permitted fulfillment/payment岗位 can directly reach original read-only history")
+    check(try actor(["marketing.refusal.record"], routes: ["/staff/member-management"]).canOpen(.marketing),
+      "marketing refusal employee can reach authorized workspace without notice read")
+    check(try !actor(["marketing.notice.view"], routes: ["/staff/customer-experience"]).canOpen(.marketing)
+      && !actor(["marketing.notice.publish"], routes: ["/staff/member-management"]).canOpen(.marketing),
+      "marketing unrelated route or publication alone cannot replace workspace read authority")
     check(try actor(["privacy.contact.retention.view"], routes: ["/staff/customer-experience"]).canOpen(.contactGovernance),
       "contact governance reader retains authorized customer experience entry")
     check(try !actor(["privacy.contact.retention.view"], routes: ["/staff/settings"]).canOpen(.contactGovernance)

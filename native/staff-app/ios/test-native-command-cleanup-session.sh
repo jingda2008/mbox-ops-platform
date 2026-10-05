@@ -4,7 +4,7 @@ base=$(cd "$(dirname "$0")" && pwd)
 test_dir=$(mktemp -d)
 trap 'rm -rf "$test_dir"' EXIT
 cp -R "$base/Sources" "$test_dir/Sources"
-cp "$base/Tests/NativeManagementSessionTests.swift" "$test_dir/NativeManagementSessionTests.swift"
+cp "$base/Tests/NativeCommandCleanupSessionTests.swift" "$test_dir/NativeCommandCleanupSessionTests.swift"
 if [[ -n "${NATIVE_CLEANUP_EVIDENCE_DIR:-}" ]]; then
   mkdir -p "$NATIVE_CLEANUP_EVIDENCE_DIR"
   python3 - "$test_dir" "$NATIVE_CLEANUP_EVIDENCE_DIR/source-manifest.json" <<'PYMETA'
@@ -20,5 +20,5 @@ for source in "$test_dir"/Sources/*.swift; do
   esac
   sources+=("$source")
 done
-swiftc -target "$(uname -m)-apple-macosx14.0" "${sources[@]}" "$test_dir/NativeManagementSessionTests.swift" -o "$test_dir/native-management-session-tests"
-"$test_dir/native-management-session-tests"
+swiftc -target "$(uname -m)-apple-macosx14.0" "${sources[@]}" "$test_dir/NativeCommandCleanupSessionTests.swift" -o "$test_dir/native-command-cleanup-session-tests"
+"$test_dir/native-command-cleanup-session-tests"

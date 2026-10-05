@@ -26,11 +26,27 @@ private final class ManagementSessionStore: StaffSessionStore {
     defer { try? FileManager.default.removeItem(at: folder) }
     for operation in ["pin", "deploy"] {
       var payloads: [String: String] = [:], receipts: [String: String] = [:]
+      var cleanupTickets: [String: Data] = [:]
       var requests: [URLRequest] = [], invalidAfterWrite = false, crashAfterACK = true
       let persistence = NativeManagementPersistence(readPayload: { guard let value = payloads[$0] else { throw StaffAPIError.invalid }; return value },
         storePayload: { payloads[$0] = $1 }, removePayload: { payloads.removeValue(forKey: $0) },
         readReceipt: { receipts[$0] }, storeReceipt: { receipts[$0] = $1; if crashAfterACK { throw URLError(.cannotWriteToFile) } },
         removeReceipt: { receipts.removeValue(forKey: $0) })
+      let cleanup = NativeCommandCleanupPersistence(readTicket: { cleanupTickets[$0] },
+        storeTicket: { cleanupTickets[$0] = $1 }, listTickets: { cleanupTickets }, removeTicket: { cleanupTickets.removeValue(forKey: $0) },
+        removeSlot: { slot in
+          if slot.module == .managementPayload { payloads.removeValue(forKey: slot.key) }
+          else if slot.module == .managementReceipt { receipts.removeValue(forKey: slot.key) }
+          else { throw StaffAPIError.invalid }
+        }, slotExists: { slot in
+          if slot.module == .managementPayload { return payloads[slot.key] != nil }
+          if slot.module == .managementReceipt { return receipts[slot.key] != nil }
+          throw StaffAPIError.invalid
+        })
+      let emptyReception = ReservationReceptionPersistence(payloadExists: { _ in false },
+        readPayload: { _ in throw StaffAPIError.invalid }, storePayload: { _, _ in throw StaffAPIError.invalid }, removePayload: { _ in throw StaffAPIError.invalid },
+        readReceipt: { _ in nil }, storeReceipt: { _, _ in throw StaffAPIError.invalid }, removeReceipt: { _ in throw StaffAPIError.invalid },
+        readCleanupTicket: { _ in nil }, storeCleanupTicket: { _, _ in throw StaffAPIError.invalid }, removeCleanupTicket: { _ in throw StaffAPIError.invalid }, listCleanupTicketKeys: { [] })
       let api = StaffAPI(transport: { request in
         requests.append(request)
         let path = request.url!.path
@@ -58,7 +74,7 @@ private final class ManagementSessionStore: StaffSessionStore {
       }, store: ManagementSessionStore())
       let url = folder.appendingPathComponent(operation + ".json")
       let model = AppModel(api: api, loadPersistedState: false, trainingAllowed: false,
-        livePendingURL: url, nativeManagementPersistence: persistence)
+        livePendingURL: url, nativeManagementPersistence: persistence, reservationReceptionPersistence: emptyReception, nativeCleanupPersistence: cleanup)
       model.identity = try await api.login(code: "admin", pin: "1234", switching: false)
       await model.loadNativeManagement(.staff)
       check(model.canUseNativeManagement, "\(operation) real model fresh staff board permits original operation")
@@ -74,12 +90,12 @@ private final class ManagementSessionStore: StaffSessionStore {
       check(model.livePending?.id == command.id && saved.completedSteps == 0, "\(operation) checkpoint failure retains ordinary original uncompleted pending")
       let before = requests.count
       let reopened = AppModel(api: api, loadPersistedState: false, trainingAllowed: false,
-        livePendingURL: url, nativeManagementPersistence: persistence)
+        livePendingURL: url, nativeManagementPersistence: persistence, reservationReceptionPersistence: emptyReception, nativeCleanupPersistence: cleanup)
       reopened.livePending = saved
       await reopened.recoverLive()
       check(reopened.livePending == nil && !FileManager.default.fileExists(atPath: url.path), "\(operation) cold-start signed-out model safely finishes exact acknowledged request")
       check(requests.count == before && receipts.isEmpty && payloads.isEmpty, "\(operation) acknowledgement cleanup performs zero heartbeat or repeat writes and removes original secure slots")
-      check(reopened.message.contains("已确认") && reopened.identity == nil, "\(operation) completion does not resurrect removed identity")
+      check(reopened.message.contains("服务器确认") && reopened.identity == nil, "\(operation) completion does not resurrect removed identity")
       crashAfterACK = false
       let secured = try secureNativeManagementCommand(command, store: persistence.storePayload)
       var forged = secured; forged.completedSteps = 1

@@ -54,13 +54,14 @@ enum StaffDestination: Int, CaseIterable, Identifiable {
 }
 
 enum StaffTool: String, CaseIterable {
-  case contactGovernance, annualPolicies, stockAudit, overview, ownerFinance, products, stock, service, members, benefits, businessReports, couponCalendars, stackingPolicies, benefitExceptions, loyaltySupplements, loyaltyRefunds
+  case marketing, contactGovernance, annualPolicies, stockAudit, overview, ownerFinance, products, stock, service, members, benefits, businessReports, couponCalendars, stackingPolicies, benefitExceptions, loyaltySupplements, loyaltyRefunds
   case reservations, assignments, fulfillment, kitchen, pickup, printing, vouchers, benefitWallet, memberCards, deviceManagement, bottleStorage, membershipConfig, memberGifts, membershipOverview, memberNumber, membershipRecovery, show, showRequests, staffSettings, tableSettings, commerceSettings, publicationSettings, remakeHandover, fulfillmentHistory
   func available(to actor: StaffIdentity) -> Bool {
     func grant(_ route: String, _ permissions: [String]) -> Bool {
       actor.hasStaffRoute(route) && permissions.contains(where: actor.allows)
     }
     switch self {
+    case .marketing: return grant("/staff/member-management", marketingAreas.map { $0.2 })
     case .contactGovernance: return grant("/staff/customer-experience", ["privacy.contact.retention.view"])
     case .annualPolicies: return grant("/staff/member-management", ["loyalty.annual-benefit.view"])
     case .stockAudit:

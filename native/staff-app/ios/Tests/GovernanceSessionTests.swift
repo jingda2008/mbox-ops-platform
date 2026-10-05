@@ -13,10 +13,10 @@ private final class GovernanceSessionStore: StaffSessionStore {
     func data(_ value: Any) throws -> Data { try JSONSerialization.data(withJSONObject: value) }
     let employee = "00000000-0000-4000-8000-000000000001"
     let nextEmployee = "00000000-0000-4000-8000-000000000002"
-    for kind in ["annual", "contact"] {
-      let path = kind == "annual" ? annualPolicyRoot : contactGovernanceRoot
-      let permission = kind == "annual" ? "loyalty.annual-benefit.view" : "privacy.contact.retention.view"
-      let route = kind == "annual" ? "/staff/member-management" : "/staff/customer-experience"
+    for kind in ["annual", "contact", "marketing"] {
+      let path = kind == "annual" ? annualPolicyRoot : kind == "contact" ? contactGovernanceRoot : marketingRoot + "/notices"
+      let permission = kind == "annual" ? "loyalty.annual-benefit.view" : kind == "contact" ? "privacy.contact.retention.view" : "marketing.notice.view"
+      let route = kind == "contact" ? "/staff/customer-experience" : "/staff/member-management"
       var auth: [String: Any] = ["employee": ["id": employee, "code": "original", "displayName": "治理员工", "roleCodes": []],
         "session": ["id": "original-session", "employeeId": employee, "expiresAt": "2099-01-01T00:00:00Z", "onlineLeaseUntil": "2099-01-01T00:00:00Z"],
         "permissions": [permission], "deniedPermissions": [], "navigation": [["route": route]]]
@@ -39,10 +39,11 @@ private final class GovernanceSessionStore: StaffSessionStore {
       let model = AppModel(api: api, loadPersistedState: false, trainingAllowed: false)
       func load() async {
         if kind == "annual" { await model.loadAnnualPolicies() }
-        else { await model.loadContactGovernance() }
+        else if kind == "contact" { await model.loadContactGovernance() }
+        else { await model.loadMarketing() }
       }
-      func ready() -> Bool { kind == "annual" ? model.canUseAnnualPolicies : model.canUseContactGovernance }
-      func empty() -> Bool { kind == "annual" ? model.annualPolicyBoard == nil : model.contactGovernanceBoard == nil }
+      func ready() -> Bool { kind == "annual" ? model.canUseAnnualPolicies : kind == "contact" ? model.canUseContactGovernance : model.canUseMarketing }
+      func empty() -> Bool { kind == "annual" ? model.annualPolicyBoard == nil : kind == "contact" ? model.contactGovernanceBoard == nil : model.marketingBoard == nil }
       model.identity = try await api.login(code: "original", pin: "1234", switching: false)
       await load()
       check(ready(), kind + " real AppModel accepts current employee's empty authorized board")
@@ -64,6 +65,13 @@ private final class GovernanceSessionStore: StaffSessionStore {
         auth["permissions"] = [permission, "privacy.contact.legal_hold"]
         await model.loadContactGovernance(area: "resources")
         check(model.contactGovernanceBoard?.area == "resources" && ready(), "contact resource selection reads only after both current grants")
+      }
+      if kind == "marketing" {
+        let beforeReads = requests.filter { !$0.url!.path.hasPrefix("/api/auth/") }.count
+        do { _ = try await model.readMarketingCustomers(purpose: "send", search: "MB01"); preconditionFailure("missing send grant") }
+        catch { check(requests.filter { !$0.url!.path.hasPrefix("/api/auth/") }.count == beforeReads, "notice permission never grants marketing recipient search") }
+        do { _ = try await model.readMarketingHistory(customerId: nextEmployee, reason: "核对本人许可"); preconditionFailure("missing audit grant") }
+        catch { check(requests.filter { !$0.url!.path.hasPrefix("/api/auth/") }.count == beforeReads, "notice permission never grants audited consent-history POST") }
       }
       for status in [200, 401] {
         intercept = nil; auth = original; responseStatus = status

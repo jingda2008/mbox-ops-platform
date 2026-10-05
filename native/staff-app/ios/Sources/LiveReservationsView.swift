@@ -4,6 +4,7 @@ struct LiveReservationsView: View {
   @EnvironmentObject var model: AppModel
   @Environment(\.dismiss) var dismiss
   @State var creating = false
+  @State var receptionID: String?
   @State var range = "current"
   @State var from = Date()
   @State var to = Date()
@@ -36,8 +37,8 @@ struct LiveReservationsView: View {
           LivePendingView()
           Text(model.reservationState).font(.caption)
           if model.identity?.allows("reservation.manage") == true {
-            Button("新建预约") { creating = true }.buttonStyle(Primary(symbol: "calendar.badge.plus"))
-              .disabled(!actionable || model.reservationCapabilities?.durableCreate != true)
+            Button("登记预约名额") { creating = true }.buttonStyle(Primary(symbol: "calendar.badge.plus"))
+              .disabled(!actionable || model.reservationCapabilities?.admissionCreateV1 != true)
           }
           Picker("业务", selection: $queue) {
             Text("预约").tag(false)
@@ -138,6 +139,13 @@ struct LiveReservationsView: View {
                   ][row.seatPreference] ?? "位置偏好待确认"
                 ).font(.caption)
                 if let note = row.note, !note.isEmpty { Text(note).font(.caption) }
+                if model.reservationCapabilities?.receptionSeatV1 == true {
+                  Button(row.status == "arrived" ? "核对实际入座桌次" : "查看接待与桌次") { receptionID = row.id }
+                    .buttonStyle(Primary(tone: .secondary, symbol: "table.furniture")).disabled(model.busy)
+                }
+                if row.requiresReception && row.status == "arrived" {
+                  Text("请先安排并核对本组全部实际桌次，关联后再完成接待。").font(.caption)
+                }
                 if model.identity?.allows("reservation.manage") == true {
                   ForEach(row.actions, id: \.self) { action in
                     Button(ReservationCommands.labels[action] ?? "处理") { choose(row.id, action) }
@@ -158,7 +166,10 @@ struct LiveReservationsView: View {
     }.task { await model.loadReservations(query) }.onChange(of: model.workspaceVersion) { _, _ in
       dismiss()
     }
-    .sheet(isPresented: $creating) { ReservationCreateView() }
+    .sheet(isPresented: $creating) { ReservationAdmissionCreateView() }
+    .sheet(isPresented: Binding(get: { receptionID != nil }, set: { if !$0 { receptionID = nil } })) {
+      if let id = receptionID { ReservationReceptionView(reservationId: id) }
+    }
     .sheet(isPresented: $editing) {
       NavigationStack {
         ScrollView {
@@ -171,7 +182,7 @@ struct LiveReservationsView: View {
               Text("请先完成并核对现场处理，再登记结果；此操作不会自动联系客人、开台或退款。").font(.caption)
             }
             if selectedAction == "cancel" {
-              Text("取消会释放预约桌位；已有定金仍须按收款与退款记录处理。").font(.caption)
+              Text("取消会释放接待名额及旧预约保留；已有定金仍须按收款与退款记录处理。").font(.caption)
               if model.identity?.allows("reservation.cancel.override") == true {
                 Toggle("主管例外取消", isOn: $override)
               }

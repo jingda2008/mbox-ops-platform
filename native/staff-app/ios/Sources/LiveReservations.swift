@@ -1,6 +1,10 @@
 import Foundation
 
 struct LiveReservation: Decodable, Identifiable {
+  struct ReceptionSnapshot: Decodable { let receptionProtocol: Int? }
+  var reservationSnapshot: ReceptionSnapshot? = nil
+  var aggregateVersion: Int? = nil
+  var requiresReception: Bool { reservationSnapshot?.receptionProtocol == 1 }
   struct Lock: Decodable { let tableCode, status: String }
   let id, publicId, customerName, arrivalAt, expectedEndAt, status, seatPreference: String
   let guestCount: Int
@@ -9,13 +13,15 @@ struct LiveReservation: Decodable, Identifiable {
   let tableLocks: [Lock]
   var tables: String {
     let codes = tableLocks.filter { ["held", "confirmed"].contains($0.status) }.map(\.tableCode)
+    if codes.isEmpty && requiresReception && ["seated", "completed"].contains(status) { return "实际桌次见接待记录" }
     return codes.isEmpty ? "待安排桌位" : codes.joined(separator: "、")
   }
   var actions: [String] {
     switch status {
     case "pending": return ["confirm", "arrive", "cancel"]
     case "confirmed": return ["arrive", "cancel"]
-    case "arrived", "seated": return ["complete", "cancel"]
+    case "arrived": return requiresReception ? ["cancel"] : ["complete", "cancel"]
+    case "seated": return ["complete"]
     default: return []
     }
   }
@@ -45,6 +51,9 @@ struct LiveReservationIntake: Decodable, Identifiable {
 }
 struct ReservationCapabilities: Decodable {
   let durableTransitions, durablePriority: Bool
+  var admissionCreateV1: Bool? = nil
+  var receptionSeatV1: Bool? = nil
+  var tableBoundCreate: Bool? = nil
   let durableCreate: Bool?
   var durableWaitlist: Bool? = nil
 }

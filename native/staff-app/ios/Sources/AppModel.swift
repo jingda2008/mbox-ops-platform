@@ -35,6 +35,8 @@ import SwiftUI
   @Published var workspaceVersion = 0
   let api: StaffAPI
   let trainingAllowed: Bool
+  private let nativeCleanupPersistence: NativeCommandCleanupPersistence
+  private let reservationReceptionPersistence: ReservationReceptionPersistence
   private let nativeManagementPersistence: NativeManagementPersistence
   @Published var rememberLogin = false
   @Published var savedLoginAvailable = false
@@ -443,6 +445,84 @@ import SwiftUI
       identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions,
       identity?.navigation == actor.navigation else { throw StaffAPIError.invalid }
     contactGovernanceBoard = board; contactGovernanceUpdated = Date(); contactGovernanceState = "已读取原保留记录；草稿、独立审批、发布与法定保留分别执行。"
+  }
+  @Published var marketingBoard: MarketingBoard?
+  @Published var marketingState = "请读取营销告知与本人许可"
+  private var marketingUpdated: Date?
+  private var marketingArea = "notices"
+  private var marketingCode = ""
+  private var marketingCursor = ""
+  var canUseMarketing: Bool {
+    memberReady && marketingBoard?.enabled == true && marketingBoard?.employeeID == identity?.employee.id
+      && identity?.canOpen(.marketing) == true
+      && identity.map { canReadMarketing($0, area: marketingArea) } == true
+      && marketingUpdated.map { (0..<60).contains(Date().timeIntervalSince($0)) } == true
+  }
+  func loadMarketing(area: String = "notices", code: String = "", cursor: String = "") async {
+    guard live, !busy, !heartbeatBusy, let previous = identity else { return }
+    busy = true; defer { busy = false }
+    let generation = workspaceVersion
+    marketingBoard = nil; marketingUpdated = nil; marketingState = "正在读取营销告知与本人许可"
+    do {
+      _ = try MarketingBoard.query(area: area, code: code, cursor: cursor)
+      let actor = try await api.heartbeat()
+      guard generation == workspaceVersion, identity?.employee.id == previous.employee.id,
+        identity?.session.id == previous.session.id, actor.employee.id == previous.employee.id,
+        actor.session.id == previous.session.id else { throw StaffAPIError.invalid }
+      identity = actor; marketingArea = area; marketingCode = code; marketingCursor = cursor
+      try await fetchMarketing()
+    } catch {
+      if generation == workspaceVersion, identity?.employee.id == previous.employee.id,
+        identity?.session.id == previous.session.id {
+        marketingState = error.localizedDescription; handleLiveError(error)
+      }
+    }
+  }
+  private func fetchMarketing() async throws {
+    let area = marketingArea, code = marketingCode, cursor = marketingCursor, generation = workspaceVersion
+    guard let actor = identity, actor.canOpen(.marketing), canReadMarketing(actor, area: area) else { throw StaffAPIError.invalid }
+    let (data, _) = try await api.raw(MarketingBoard.query(area: area, code: code, cursor: cursor))
+    let board = try MarketingBoard(data: data, actor: actor, area: area, code: code, cursor: cursor)
+    guard generation == workspaceVersion, identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+      identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions,
+      identity?.navigation == actor.navigation else { throw StaffAPIError.invalid }
+    marketingBoard = board; marketingUpdated = Date(); marketingState = "已读取原记录；排队、渠道受理与确认送达是不同状态。"
+  }
+  private func canReadMarketing(_ actor: StaffIdentity, area: String) -> Bool {
+    if area == "workspace" { return marketingAreas.contains { actor.allows($0.2) } }
+    return actor.allows(area == "notices" ? "marketing.notice.view" : area == "jobs" ? "marketing.send" : "invalid")
+  }
+  func readMarketingCustomers(purpose: String, search: String, cursor: String = "") async throws -> MarketingCustomerPage {
+    let path = try MarketingCustomerPage.query(purpose: purpose, search: search, cursor: cursor)
+    let (data, actor) = try await readMarketingData(path: path, permission: marketingCustomerPermission(purpose))
+    return try MarketingCustomerPage(data: data, actor: actor, purpose: purpose, search: search)
+  }
+  func readMarketingHistory(customerId: String, reason: String, cursor: String = "") async throws -> MarketingHistoryPage {
+    let body = try MarketingHistoryPage.body(customerId: customerId, reason: reason, cursor: cursor)
+    let (data, actor) = try await readMarketingData(path: marketingRoot + "/history", permission: "marketing.consent.audit", body: body)
+    return try MarketingHistoryPage(data: data, actor: actor, customerId: customerId)
+  }
+  private func readMarketingData(path: String, permission: String, body: [String: Any]? = nil) async throws -> (Data, StaffIdentity) {
+    guard live, !busy, !heartbeatBusy, let previous = identity else { throw StaffAPIError.invalid }
+    busy = true; defer { busy = false }
+    let generation = workspaceVersion
+    do {
+      let actor = try await api.heartbeat()
+      guard generation == workspaceVersion, identity?.employee.id == previous.employee.id,
+        identity?.session.id == previous.session.id, actor.employee.id == previous.employee.id,
+        actor.session.id == previous.session.id else { throw StaffAPIError.invalid }
+      identity = actor
+      guard actor.canOpen(.marketing), actor.allows(permission) else { throw CatalogError("当前岗位没有此项本人许可查询权限") }
+      let (data, _) = try await api.raw(path, body: body)
+      guard generation == workspaceVersion, identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+        identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions,
+        identity?.navigation == actor.navigation else { throw StaffAPIError.invalid }
+      return (data, actor)
+    } catch {
+      if generation == workspaceVersion, identity?.employee.id == previous.employee.id,
+        identity?.session.id == previous.session.id { handleLiveError(error) }
+      throw error
+    }
   }
   @Published var annualPolicyBoard: AnnualPolicyBoard?
   @Published var annualPolicyState = "请读取年度礼遇政策"
@@ -1421,6 +1501,94 @@ import SwiftUI
       && identity?.allows("loyalty.configuration.approve") == true
       && memberRewardUpdated.map { (0..<60).contains(Date().timeIntervalSince($0)) } == true
   }
+  private var reservationReceptionActor: StaffIdentity?
+  private var reservationReceptionCapabilities: ReservationCapabilities?
+  private var reservationAdmissionOptions: ReservationAdmissionOptions?
+  private var reservationReceptionSelection: ReservationReceptionSelection?
+  private func clearReservationReceptionReadiness() {
+    reservationReceptionActor = nil
+    reservationReceptionCapabilities = nil
+    reservationAdmissionOptions = nil
+    reservationReceptionSelection = nil
+  }
+  func readReservationAdmission(arrivalAt: String, expectedEndAt: String) async throws -> ReservationAdmissionOptions {
+    let (data, actor, capabilities) = try await readReservationReception(path: ReservationAdmissionOptions.path(arrivalAt: arrivalAt, expectedEndAt: expectedEndAt), write: true)
+    let options = try ReservationAdmissionOptions(data: data, actor: actor, arrivalAt: arrivalAt, expectedEndAt: expectedEndAt)
+    reservationReceptionActor = actor
+    reservationReceptionCapabilities = capabilities
+    reservationAdmissionOptions = options
+    return options
+  }
+  func readReservationReceptionSessions(id: String) async throws -> ReservationReceptionSelection {
+    let (data, actor, capabilities) = try await readReservationReception(path: ReservationReceptionSelection.path(id: id), write: true, seat: true)
+    let selection = try ReservationReceptionSelection(data: data, actor: actor, id: id)
+    reservationReceptionActor = actor
+    reservationReceptionCapabilities = capabilities
+    reservationReceptionSelection = selection
+    return selection
+  }
+  func readReservationReceptionDetail(id: String) async throws -> ReservationReceptionDetail {
+    let (data, actor, _) = try await readReservationReception(path: ReservationReceptionDetail.path(id: id))
+    return try ReservationReceptionDetail(data: data, actor: actor, id: id)
+  }
+  private func readReservationReception(path: String, write: Bool = false, seat: Bool = false) async throws -> (Data, StaffIdentity, ReservationCapabilities?) {
+    guard live, !busy, !heartbeatBusy, let previous = identity else { throw StaffAPIError.invalid }
+    clearReservationReceptionReadiness()
+    busy = true; defer { busy = false }
+    let generation = workspaceVersion
+    do {
+      let actor = try await api.heartbeat()
+      guard generation == workspaceVersion, identity?.employee.id == previous.employee.id,
+        identity?.session.id == previous.session.id, actor.employee.id == previous.employee.id,
+        actor.session.id == previous.session.id else { throw StaffAPIError.invalid }
+      identity = actor
+      guard actor.canOpen(.reservations), !write || actor.allows("reservation.manage"),
+        !seat || actor.allows("table.open") else { throw CatalogError("当前岗位没有此项预约接待权限") }
+      var capabilities: ReservationCapabilities?
+      if write {
+        capabilities = try await api.data("/api/staff/native-reservation-capabilities")
+        guard seat ? capabilities?.receptionSeatV1 == true : capabilities?.admissionCreateV1 == true else {
+          throw CatalogError("当前服务器尚未启用此项预约接待操作")
+        }
+      }
+      let (data, _) = try await api.raw(path)
+      guard generation == workspaceVersion, identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+        identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions,
+        identity?.navigation == actor.navigation else { throw StaffAPIError.invalid }
+      return (data, actor, capabilities)
+    } catch {
+      if generation == workspaceVersion, identity?.employee.id == previous.employee.id,
+        identity?.session.id == previous.session.id { handleLiveError(error) }
+      throw error
+    }
+  }
+  private func canExecuteReservationReception(_ command: LiveCommand) -> Bool {
+    guard memberReady, let actor = identity, actor.canOpen(.reservations), let readActor = reservationReceptionActor,
+      actor.employee.id == readActor.employee.id, actor.session.id == readActor.session.id,
+      actor.permissions == readActor.permissions, actor.deniedPermissions == readActor.deniedPermissions,
+      actor.navigation == readActor.navigation,
+      validReservationReceptionCommand(command: command, actor: actor, capabilities: reservationReceptionCapabilities),
+      let step = command.steps.first, let proof = step.reservationReceptionProof,
+      let body = try? JSONSerialization.jsonObject(with: step.body) as? [String: Any] else { return false }
+    if proof["operation"] as? String == "create" {
+      guard let options = reservationAdmissionOptions, (0...30).contains(Date().timeIntervalSince(options.loadedAt)),
+        body["reservationPolicyVersion"] as? Int == options.policyVersion,
+        let arrivalAt = body["arrivalAt"] as? String, let endAt = body["expectedEndAt"] as? String,
+        receptionDate(arrivalAt) == receptionDate(options.arrivalAt), receptionDate(endAt) == receptionDate(options.expectedEndAt),
+        let arrival = receptionDate(arrivalAt), arrival > Date(),
+        let guests = body["guestCount"] as? Int, guests <= options.remainingGuests else { return false }
+      return true
+    }
+    guard let selection = reservationReceptionSelection, (0...30).contains(Date().timeIntervalSince(selection.loadedAt)),
+      selection.reservationStatus == "arrived", proof["target"] as? String == selection.reservationId,
+      proof["reservationGuestCount"] as? Int == selection.reservationGuestCount,
+      body["reservationVersion"] as? Int == selection.reservationVersion,
+      let rows = body["sessions"] as? [[String: Any]] else { return false }
+    return rows.allSatisfy { row in
+      guard let selected = selection.sessions.first(where: { $0.id == row["tableSessionId"] as? String }) else { return false }
+      return NSDictionary(dictionary: row).isEqual(to: selected.request)
+    }
+  }
   @Published var reservations: [LiveReservation] = []
   @Published var reservationIntake: [LiveReservationIntake] = []
   @Published var reservationState = ""
@@ -1598,9 +1766,13 @@ import SwiftUI
   }()
   init(api: StaffAPI? = nil, loadPersistedState: Bool = true,
     trainingAllowed: Bool = NativeBuildPolicy.allowsTraining, livePendingURL: URL? = nil,
-    nativeManagementPersistence: NativeManagementPersistence = .device) {
+    nativeManagementPersistence: NativeManagementPersistence = .device,
+    reservationReceptionPersistence: ReservationReceptionPersistence = .device,
+    nativeCleanupPersistence: NativeCommandCleanupPersistence = .device) {
     self.api = api ?? StaffAPI(store: KeychainStaffSessionStore())
     self.trainingAllowed = trainingAllowed
+    self.nativeCleanupPersistence = nativeCleanupPersistence
+    self.reservationReceptionPersistence = reservationReceptionPersistence
     self.nativeManagementPersistence = nativeManagementPersistence
     self.livePendingURL = livePendingURL ?? URL.documentsDirectory.appending(path: "mbox-live-pending-v1.json")
     if !trainingAllowed {
@@ -1646,21 +1818,43 @@ import SwiftUI
     }
   }
   func readLivePending() {
-    guard FileManager.default.fileExists(atPath: livePendingURL.path) else { return }
     do {
-      livePending = try JSONDecoder().decode(
-        LiveCommand.self, from: Data(contentsOf: livePendingURL))
-      if let saved = livePending,
-        saved.steps.isEmpty || !(0...saved.steps.count).contains(saved.completedSteps)
-      {
-        throw StaffAPIError.invalid
+      if FileManager.default.fileExists(atPath: livePendingURL.path) {
+        livePending = try JSONDecoder().decode(LiveCommand.self, from: Data(contentsOf: livePendingURL))
+        if let saved = livePending,
+          saved.steps.isEmpty || !(0...saved.steps.count).contains(saved.completedSteps) { throw StaffAPIError.invalid }
       }
     } catch {
       message = "未决操作记录无法读取，真实写操作已锁定，请联系管理员"
-      liveStorageDamaged = true
+      durableRecordDamaged = true
+      return
+    }
+    retryLocalCommandCleanup()
+  }
+  func retryLocalCommandCleanup() {
+    guard !busy, !heartbeatBusy, !durableRecordDamaged else { return }
+    do {
+      if let command = livePending { _ = try finishAcknowledgedReservationReception(command) }
+      try removeOrphanedReservationReceptionCleanupTickets(pending: livePending, persistence: reservationReceptionPersistence)
+      let cleaned = try resumeNativeCommandCleanups(pending: livePending, persistence: nativeCleanupPersistence,
+        removePending: { _ in
+          if FileManager.default.fileExists(atPath: self.livePendingURL.path) { try FileManager.default.removeItem(at: self.livePendingURL) }
+        })
+      if let pending = livePending, cleaned.contains(pending.id) { livePending = nil; resetDailyBusinessViews() }
+      let wasBlocked = localCleanupBlocked
+      localCleanupBlocked = false
+      if wasBlocked { message = "本机安全记录已重新核对；原业务仍须以已保存回执及当前服务器状态为准。" }
+    } catch {
+      localCleanupBlocked = true
+      message = "本机私密记录尚未完成清理，请解锁设备后继续本机清理；不会重发业务。"
     }
   }
-  @Published var liveStorageDamaged = false
+  @Published var localCleanupBlocked = false
+  @Published private var durableRecordDamaged = false
+  var liveStorageDamaged: Bool {
+    get { durableRecordDamaged || localCleanupBlocked }
+    set { durableRecordDamaged = newValue }
+  }
   func persist() throws { try JSONEncoder().encode(world).write(to: stateURL, options: .atomic) }
   func draft(_ session: String) -> [Line] { world.drafts[session] ?? [] }
   func change(_ product: Product, variant: String, session: String, delta: Int) {
@@ -2319,10 +2513,13 @@ import SwiftUI
         && identity?.allows(command.permission) == true
         && serviceBoard?.tasks.contains { $0.id == proof["taskId"] as? String } == true
     }
+    if command.steps.first?.reservationReceptionProof != nil {
+      return canExecuteReservationReception(command)
+    }
     if let proof = command.steps.first?.reservationProof {
       return command.steps.count == 1 && canUseReservations
         && (proof["kind"] as? String == "create"
-          ? reservationCapabilities?.durableCreate == true
+          ? reservationCapabilities?.durableCreate == true && reservationCapabilities?.tableBoundCreate != false
           : proof["kind"] as? String == "transition"
             ? reservations.contains { $0.id == proof["id"] as? String }
             : proof["kind"] as? String == "waitlist"
@@ -2390,6 +2587,10 @@ import SwiftUI
     if command.steps.first?.contactGovernanceProof != nil {
       guard canUseContactGovernance, let board = contactGovernanceBoard, let actor = identity else { return false }
       return validContactGovernanceSelection(command: command, board: board, actor: actor)
+    }
+    if command.steps.first?.marketingProof != nil {
+      guard canUseMarketing, let board = marketingBoard, let actor = identity else { return false }
+      return validMarketingSelection(command: command, board: board, actor: actor)
     }
     if command.steps.first?.annualPolicyProof != nil {
       guard canUseAnnualPolicies, let board = annualPolicyBoard, let actor = identity else { return false }
@@ -2496,7 +2697,17 @@ import SwiftUI
       message = "操作条件已变化，请刷新后重试"
       return
     }
+    var initializationCommand = command
+    var initializationPrepared = false
+    var enteredRecovery = false
     do {
+      if command.steps.first?.reservationReceptionProof != nil {
+        try recordReservationReceptionInitialization(command, persistence: reservationReceptionPersistence)
+        initializationPrepared = true
+      } else {
+        initializationPrepared = try recordNativeCommandCleanup(command, disposition: .neverSent,
+          verifyTerminal: {}, persistence: nativeCleanupPersistence) != nil
+      }
       if command.steps.contains(where: {
         ["/api/payments/manual", "/api/payments/manual/closed-debt"].contains($0.path)
       }) {
@@ -2511,23 +2722,50 @@ import SwiftUI
       let experience = try secureExperiencePlanCommand(show, store: ExperiencePlanSecrets.store)
       let handover = try secureRemakeHandoverCommand(experience, store: RemakeHandoverSecrets.store)
       let recovery = try secureMembershipRecoveryCommand(handover, store: MembershipRecoverySecrets.store)
-      let secured = try secureNativeManagementCommand(recovery, store: nativeManagementPersistence.storePayload)
+      let reception = try secureReservationReceptionCommand(recovery, store: reservationReceptionPersistence.storePayload)
+      let secured = try secureNativeManagementCommand(reception, store: nativeManagementPersistence.storePayload)
+      initializationCommand = secured
       try JSONEncoder().encode(secured).write(to: livePendingURL, options: .atomic)
       livePending = secured
+      if secured.steps.first?.reservationReceptionProof != nil {
+        try discardReservationReceptionInitialization(secured, persistence: reservationReceptionPersistence)
+      } else if initializationPrepared {
+        guard try discardNativeCommandInitialization(secured, persistence: nativeCleanupPersistence) else { throw NativeCommandCleanupError() }
+      }
+      enteredRecovery = true
       await recoverLive()
-    } catch { message = "原请求未能保存，未发送操作，请检查设备空间" }
+    } catch {
+      guard initializationPrepared, !enteredRecovery else {
+        message = "原请求未能安全初始化，未发送操作；请核对本机原记录。"
+        return
+      }
+      livePending = initializationCommand
+      do {
+        let cleaned: Bool
+        if initializationCommand.steps.first?.reservationReceptionProof != nil {
+          cleaned = try finishAcknowledgedReservationReception(initializationCommand)
+        } else { cleaned = try finishSensitiveCommandCleanup(initializationCommand) }
+        guard cleaned else { throw NativeCommandCleanupError() }
+      } catch {
+        localCleanupBlocked = true
+        message = "本次操作尚未发送，本机核对尚未完成，原请求仍保留；请解锁设备后继续本机清理。"
+      }
+    }
   }
   func recoverLive() async {
-    guard let command = livePending, !busy, !heartbeatBusy, !liveStorageDamaged else { return }
+    guard let command = livePending, !busy, !heartbeatBusy, !durableRecordDamaged else { return }
     // A signed-in role may revoke its own session or permissions. A separately
     // secured, fully bound server receipt permits only local completion, without
     // sending a request or trusting the ordinary completedSteps checkpoint.
     do {
+      if try finishAcknowledgedReservationReception(command) { return }
+      if try finishSensitiveCommandCleanup(command) { return }
       if try finishAcknowledgedManagement(command) { return }
     } catch {
       message = error.localizedDescription
       return
     }
+    guard !localCleanupBlocked else { return }
     guard command.employeeID == identity?.employee.id else {
       message = "请由发起操作的员工登录后核对"
       return
@@ -2540,6 +2778,13 @@ import SwiftUI
     defer { busy = false }
     var current = command
     do {
+      // A legacy ordinary checkpoint cannot certify a protected response.
+      // Re-read/replay only its same original key and payload to validate it.
+      if current.completedSteps > 0, !(try nativeCommandCleanupSlots(current)).isEmpty {
+        current.completedSteps = 0
+        try JSONEncoder().encode(current).write(to: livePendingURL, options: .atomic)
+        livePending = current
+      }
       identity = try await api.heartbeat()
       guard
         current.completedSteps == current.steps.count
@@ -2594,6 +2839,15 @@ import SwiftUI
             let (reply, _) = try await self.api.raw(step.path, body: step.object,
               headers: [step.keyHeader: step.key])
             try validateProductPhasesReply(reply, step: step)
+          } else if step.reservationReceptionProof != nil {
+            guard let actor = self.identity else { throw StaffAPIError.invalid }
+            let body = try reservationReceptionRequestBody(current, step: step, actor: actor,
+              read: reservationReceptionPersistence.readPayload)
+            let (reply, _) = try await self.api.raw(step.path, body: body,
+              headers: [step.keyHeader: step.key])
+            try recordReservationReceptionAcknowledgement(reply, command: current, step: step, actor: actor,
+              readPayload: reservationReceptionPersistence.readPayload, readReceipt: reservationReceptionPersistence.readReceipt,
+              storeReceipt: reservationReceptionPersistence.storeReceipt)
           } else if step.nativeManagementProof != nil {
             guard let actor = self.identity else { throw StaffAPIError.invalid }
             let body = try nativeManagementRequestBody(current, step: step, actor: actor,
@@ -2627,6 +2881,9 @@ import SwiftUI
           } else if step.contactGovernanceProof != nil {
             let (reply, _) = try await api.raw(step.path, body: step.object, headers: [step.keyHeader: step.key])
             try validateContactGovernanceReply(reply, step: step)
+          } else if step.marketingProof != nil {
+            let (reply, _) = try await api.raw(step.path, body: step.object, headers: [step.keyHeader: step.key])
+            try validateMarketingReply(reply, step: step)
           } else if step.annualPolicyProof != nil {
             let (reply, _) = try await api.raw(step.path, body: step.object, headers: [step.keyHeader: step.key])
             try validateAnnualPolicyReply(reply, step: step)
@@ -2723,11 +2980,17 @@ import SwiftUI
           } else {
             try await self.api.execute(step)
           }
+          // Every protected branch above has validated the actual original
+          // response (or independently saved online receipt) before this point.
+          try recordNativeCommandCleanup(current, disposition: .acknowledged,
+            verifyTerminal: {}, persistence: self.nativeCleanupPersistence)
         },
         checkpoint: { next in
           try JSONEncoder().encode(next).write(to: self.livePendingURL, options: .atomic)
           self.livePending = next
         })
+      if try finishAcknowledgedReservationReception(current) { return }
+      if try finishSensitiveCommandCleanup(current) { return }
       if try finishAcknowledgedManagement(current) { return }
       // Refresh is part of closure. A failed refresh keeps completed steps for read-only recovery.
       if let step = current.steps.first, step.path == "/api/commerce/kitchen-board/commands",
@@ -2819,6 +3082,10 @@ import SwiftUI
         guard let area = proof["area"] as? String, let search = proof["search"] as? String else { throw StaffAPIError.invalid }
         contactGovernanceArea = area; contactGovernanceSearch = search; contactGovernanceCursor = ""
         try await fetchContactGovernance()
+      } else if let proof = current.steps.first?.marketingProof {
+        guard let area = proof["area"] as? String, let code = proof["code"] as? String else { throw StaffAPIError.invalid }
+        marketingArea = area; marketingCode = code; marketingCursor = ""
+        try await fetchMarketing()
       } else if let proof = current.steps.first?.annualPolicyProof {
         guard let code = proof["code"] as? String else { throw StaffAPIError.invalid }
         annualPolicyCode = code; annualPolicyCursor = ""
@@ -2879,25 +3146,6 @@ import SwiftUI
         participants = []
         participantState = "人员调整已确认，请让顾客扫描目标桌二维码；如需继续，请刷新名单。"
       }
-      if let key = current.steps.first?.nativeManagementProof?["payloadKey"] as? String {
-        nativeManagementPersistence.removePayload(key)
-      }
-      if let key = current.steps.first?.experiencePlanProof?["payloadKey"] as? String { ExperiencePlanSecrets.remove(key) }
-      if let key = current.steps.first?.remakeHandoverProof?["payloadKey"] as? String { RemakeHandoverSecrets.remove(key) }
-      if let key = current.steps.first?.membershipRecoveryProof?["payloadKey"] as? String { MembershipRecoverySecrets.remove(key) }
-      if let key = current.steps.first?.showProof?["payloadKey"] as? String { ShowSecrets.remove(key) }
-      if let key = current.steps.first?.bottleStorageProof?["payloadKey"] as? String {
-        BottleStorageSecrets.remove(key)
-      }
-      if let key = current.steps.first?.ownerFinanceProof?["payloadKey"] as? String {
-        OwnerFinanceSecrets.remove(key)
-      }
-      if let key = current.steps.first?.voucherProof?["voucherSecretKey"] as? String {
-        PaymentSecrets.remove(key)
-      }
-      if let key = current.steps.first?.onlineProof?["authCodeKey"] as? String {
-        PaymentSecrets.remove(key)
-      }
       if current.steps.first?.assignmentProof != nil {
         assignmentReceipt = current.title + " · 已确认"
       }
@@ -2909,32 +3157,71 @@ import SwiftUI
       if let failure = error as? StaffAPIError, failure.definitivelyRejected,
         current.completedSteps < current.steps.count
       {
-        current.rejected = true
         do {
+          if current.steps.first?.reservationReceptionProof != nil {
+            guard let actor = identity else { throw StaffAPIError.invalid }
+            try recordReservationReceptionRejection(failure, command: current, actor: actor, persistence: reservationReceptionPersistence)
+          } else {
+            try recordNativeCommandCleanup(current, disposition: .rejected, verifyTerminal: {
+              guard failure.definitivelyRejected else { throw StaffAPIError.invalid }
+            }, persistence: nativeCleanupPersistence)
+          }
+          current.rejected = true
           try JSONEncoder().encode(current).write(to: livePendingURL, options: .atomic)
           livePending = current
-        } catch { liveStorageDamaged = true }
+        } catch { message = "原请求及安全记录尚未完成核对，请保留原请求恢复" }
       }
       handleLiveError(error)
     }
   }
-  private func finishAcknowledgedManagement(_ command: LiveCommand) throws -> Bool {
-    guard let proof = command.steps.first?.nativeManagementProof else { return false }
-    guard try hasNativeManagementAcknowledgement(command, readPayload: nativeManagementPersistence.readPayload,
-      readReceipt: nativeManagementPersistence.readReceipt) else {
-      if command.completedSteps > 0 {
-        throw CatalogError("原管理请求缺少安全回执，不能根据本机完成标记清除；请保留原请求核对")
-      }
-      return false
+  private func finishAcknowledgedReservationReception(_ command: LiveCommand) throws -> Bool {
+    guard command.steps.first?.reservationReceptionProof != nil else { return false }
+    let existing = try reservationReceptionCleanupDisposition(command, persistence: reservationReceptionPersistence)
+    if existing != "rejected" {
+      guard try prepareReservationReceptionCleanup(command, persistence: reservationReceptionPersistence) else { return false }
     }
-    try FileManager.default.removeItem(at: livePendingURL)
+    guard let disposition = try reservationReceptionCleanupDisposition(command, persistence: reservationReceptionPersistence) else { throw StaffAPIError.invalid }
+    try removeReservationReceptionPrivateSlots(command, disposition: disposition, persistence: reservationReceptionPersistence)
+    if FileManager.default.fileExists(atPath: livePendingURL.path) {
+      try FileManager.default.removeItem(at: livePendingURL)
+    }
+    try removeReservationReceptionCleanupTicket(command, disposition: disposition, persistence: reservationReceptionPersistence)
     livePending = nil
-    if let key = proof["payloadKey"] as? String { nativeManagementPersistence.removePayload(key) }
-    nativeManagementPersistence.removeReceipt(command.id)
-    nativeManagementBoard = nil; nativeManagementUpdated = nil; clearBridgePairing()
-    nativeManagementState = "原管理操作已有服务器确认，请重新读取当前配置"
-    message = "原管理操作已确认；如本次修改了本人登录或权限，请重新登录后读取配置。"
+    localCleanupBlocked = false
+    clearReservationReceptionReadiness()
+    reservations = []; reservationIntake = []; reservationTables = []; reservationCapabilities = nil
+    reservationUpdated = nil; reservationEmployee = nil
+    reservationState = "请重新读取预约接待状态"
+    message = disposition == "never-sent" ? "操作尚未发送，本机私密草稿已清理。"
+      : disposition == "rejected" ? "原预约接待已核验被拒绝，本机私密记录已清理。"
+      : "原预约接待操作已确认，本机私密记录已清理；请重新读取，不会重复登记或关联。"
     return true
+  }
+  private func finishSensitiveCommandCleanup(_ command: LiveCommand) throws -> Bool {
+    guard !(try nativeCommandCleanupSlots(command, allowUnsecured: true)).isEmpty,
+      let data = try nativeCleanupPersistence.readTicket(command.id) else { return false }
+    let ticket = try decodeNativeCommandCleanupTicket(data, key: command.id)
+    guard try finishNativeCommandCleanup(command, persistence: nativeCleanupPersistence, removePending: { _ in
+      if FileManager.default.fileExists(atPath: self.livePendingURL.path) { try FileManager.default.removeItem(at: self.livePendingURL) }
+    }) else { return false }
+    livePending = nil
+    localCleanupBlocked = false
+    resetDailyBusinessViews()
+    nativeManagementBoard = nil; nativeManagementUpdated = nil; clearBridgePairing()
+    message = ticket.disposition == .acknowledged
+      ? "原操作已有服务器确认，本机私密记录已清理；请重新读取当前业务状态。"
+      : ticket.disposition == .neverSent ? "操作尚未发送，本机私密草稿已清理。" : "已核验原操作被拒绝，本机私密记录已清理；请重新读取后处理。"
+    return true
+  }
+  private func finishAcknowledgedManagement(_ command: LiveCommand) throws -> Bool {
+    guard command.steps.first?.nativeManagementProof != nil else { return false }
+    guard try hasNativeManagementAcknowledgement(command, readPayload: nativeManagementPersistence.readPayload,
+      readReceipt: nativeManagementPersistence.readReceipt) else { return false }
+    try recordNativeCommandCleanup(command, disposition: .acknowledged, verifyTerminal: {
+      guard try hasNativeManagementAcknowledgement(command, readPayload: nativeManagementPersistence.readPayload,
+        readReceipt: nativeManagementPersistence.readReceipt) else { throw StaffAPIError.invalid }
+    }, persistence: nativeCleanupPersistence)
+    return try finishSensitiveCommandCleanup(command)
   }
   func dismissRejectedLive() {
     guard let command = livePending, command.rejected, command.employeeID == identity?.employee.id,
@@ -2942,22 +3229,19 @@ import SwiftUI
     else { return }
     resetParticipantPreview()
     do {
-      try FileManager.default.removeItem(at: livePendingURL)
+      if command.steps.first?.reservationReceptionProof != nil {
+        guard try hasRejectedReservationReceptionCleanup(command, persistence: reservationReceptionPersistence) else {
+          throw CatalogError("缺少已核验拒绝记录，不能按普通失败标记清除原预约")
+        }
+        try removeReservationReceptionPrivateSlots(command, disposition: "rejected", persistence: reservationReceptionPersistence)
+        if FileManager.default.fileExists(atPath: livePendingURL.path) { try FileManager.default.removeItem(at: livePendingURL) }
+        try removeReservationReceptionCleanupTicket(command, disposition: "rejected", persistence: reservationReceptionPersistence)
+      } else if !(try nativeCommandCleanupSlots(command)).isEmpty {
+        guard try finishSensitiveCommandCleanup(command) else {
+          throw NativeCommandCleanupError("缺少已核验终态回执，不能按普通失败标记清除原请求")
+        }
+      } else { try FileManager.default.removeItem(at: livePendingURL) }
       livePending = nil
-      if let key = command.steps.first?.nativeManagementProof?["payloadKey"] as? String {
-        nativeManagementPersistence.removePayload(key)
-        nativeManagementPersistence.removeReceipt(command.id)
-      }
-      if let key = command.steps.first?.experiencePlanProof?["payloadKey"] as? String { ExperiencePlanSecrets.remove(key) }
-      if let key = command.steps.first?.remakeHandoverProof?["payloadKey"] as? String { RemakeHandoverSecrets.remove(key) }
-      if let key = command.steps.first?.membershipRecoveryProof?["payloadKey"] as? String { MembershipRecoverySecrets.remove(key) }
-      if let key = command.steps.first?.showProof?["payloadKey"] as? String { ShowSecrets.remove(key) }
-      if let key = command.steps.first?.bottleStorageProof?["payloadKey"] as? String {
-        BottleStorageSecrets.remove(key)
-      }
-      if let key = command.steps.first?.ownerFinanceProof?["payloadKey"] as? String {
-        OwnerFinanceSecrets.remove(key)
-      }
       ownerFinanceUpdated = nil
       ownerFinanceBoard = nil
       if let key = command.steps.first?.voucherProof?["voucherSecretKey"] as? String {
@@ -2992,6 +3276,8 @@ import SwiftUI
     participantPrepared = nil
   }
   private func resetDailyBusinessViews() {
+    marketingBoard = nil; marketingUpdated = nil; marketingArea = "notices"; marketingCode = ""; marketingCursor = ""
+    marketingState = "请读取营销告知与本人许可"
     contactGovernanceBoard = nil; contactGovernanceUpdated = nil; contactGovernanceArea = "policies"; contactGovernanceSearch = ""; contactGovernanceCursor = ""
     contactGovernanceState = "请读取联系方式保留治理"
     annualPolicyBoard = nil; annualPolicyUpdated = nil; annualPolicyCode = ""; annualPolicyCursor = ""
@@ -3084,6 +3370,7 @@ import SwiftUI
     reservationUpdated = nil
     reservationEmployee = nil
     reservationState = ""
+    clearReservationReceptionReadiness()
     serviceBoard = nil
     serviceUpdated = nil
     serviceState = ""
@@ -3285,6 +3572,7 @@ import SwiftUI
     reservationTables = []
     reservations = []
     reservationIntake = []
+    clearReservationReceptionReadiness()
     reservationState = "正在读取预约与候位"
     do {
       identity = try await api.heartbeat()
@@ -3318,7 +3606,7 @@ import SwiftUI
     guard actor.employee.id == identity?.employee.id, actor.employee.id == api.identity?.employee.id
     else { throw StaffAPIError.invalid }
     let tables: [ReservationTable] =
-      capability?.durableCreate == true && actor.allows("reservation.manage")
+      capability?.durableCreate == true && capability?.tableBoundCreate != false && actor.allows("reservation.manage")
       ? try await api.data("/api/staff/native-reservation-tables") : []
     guard Set(tables.map(\.id)).count == tables.count else { throw StaffAPIError.invalid }
     reservationTables = tables

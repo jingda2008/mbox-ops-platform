@@ -741,6 +741,7 @@ struct MoreView: View {
   @State private var showBenefitExceptions = false
   @State private var showLoyaltySupplements = false
   @State private var showLoyaltyRefunds = false
+  @State private var showMarketing = false
   @State private var showContactGovernance = false
   @State private var showAnnualPolicies = false
   @State private var showOwnerFinance = false
@@ -779,6 +780,7 @@ struct MoreView: View {
       if actor.canOpen(.couponCalendars) { Button("券日历与使用次数") { showCouponCalendars = true }.buttonStyle(Primary(tone: .secondary, symbol: "calendar")) }
       if actor.canOpen(.stackingPolicies) { Button("优惠叠加规则") { showStackingPolicies = true }.buttonStyle(Primary(tone: .secondary, symbol: "square.stack")) }
       if actor.canOpen(.benefitExceptions) { Button("礼遇出品异常") { showBenefitExceptions = true }.buttonStyle(Primary(tone: .secondary, symbol: "exclamationmark.bubble")) }
+      if actor.canOpen(.marketing) { Button("营销告知与本人许可") { showMarketing = true }.buttonStyle(Primary(tone: .secondary, symbol: "person.crop.circle.badge.checkmark")) }
       if actor.canOpen(.contactGovernance) { Button("联系方式保留治理") { showContactGovernance = true }.buttonStyle(Primary(tone: .secondary, symbol: "person.badge.shield.checkmark")) }
       if actor.canOpen(.annualPolicies) { Button("年度礼遇政策") { showAnnualPolicies = true }.buttonStyle(Primary(tone: .secondary, symbol: "calendar.badge.checkmark")) }
       if actor.canOpen(.loyaltyRefunds) { Button("退款积分复核") { showLoyaltyRefunds = true }.buttonStyle(Primary(tone: .secondary, symbol: "arrow.uturn.backward.circle")) }
@@ -933,6 +935,7 @@ struct MoreView: View {
     .sheet(isPresented: $showCouponCalendars) { LiveCouponCalendarsView() }
     .sheet(isPresented: $showStackingPolicies) { LiveStackingPoliciesView() }
     .sheet(isPresented: $showBenefitExceptions) { LiveBenefitExceptionsView() }
+    .sheet(isPresented: $showMarketing) { LiveMarketingView() }
     .sheet(isPresented: $showContactGovernance) { LiveContactGovernanceView() }
     .sheet(isPresented: $showAnnualPolicies) { LiveAnnualPoliciesView() }
     .sheet(isPresented: $showLoyaltyRefunds) { LiveLoyaltyRefundsView() }

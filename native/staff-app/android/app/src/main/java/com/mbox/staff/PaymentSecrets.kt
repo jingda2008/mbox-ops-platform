@@ -44,7 +44,7 @@ class PaymentSecrets(private val context: Context, private val namespace: String
 
     fun store(key: String, code: String) {
         val target = file(key)
-        if (target.baseFile.exists()) {
+        if (target.baseFile.exists() || File(target.baseFile.path + ".bak").exists()) {
             require(read(key) == code) { "安全存储与原请求不一致，未发送" }
             return
         }

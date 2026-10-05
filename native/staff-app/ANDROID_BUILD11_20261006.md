@@ -23,6 +23,6 @@
 
 证据目录：`/Users/jingda/mbox/outputs/android-release-build11-20261006/`。包含`source-manifest.json`、`source-and-build-verification.json`、`distribution/verification.json`、`4kb/verification.json`、`16kb/verification.json`、官方CI原始报告、截图、安装与原生探针日志。根系统负责人核对最终PR合并源与同一manifest后，唯一执行不可变上传、HTTPS摘要回读及stable CAS。
 
-build10原包保留、不分发；线上基线为已发布build9，直接升级11。配套后台249须等候选和发布门禁就绪再激活并紧接分发11。当前本会话未部署后台、未修改线上stable、未向营业数据写入测试操作。
+build10原包保留、不分发；线上基线为已发布build9，直接升级11。配套后台目标为schema264与接待v1合同，最终不可变发布版本由系统负责人核验确定。系统随后发现rc249标签的真实Web读取依赖缺陷，249不激活，准备独立rc250；若仅Web修复且Android输入与本manifest相同，不重建本包。待最终后台及候选发布门禁就绪后再激活并紧接分发11。当前本会话未部署后台、未修改线上stable、未向营业数据写入测试操作。
 
 同签名升级的私有QA标记保留不证明全部历史业务数据迁移；模拟器不替代多品牌实体机、相机/语音、锁屏省电/杀进程送达、真实资金、纸票和整班营业。实际厂商SDK及Android后端推送合同仍是未完成软件项。供应商采购退货和iOS仍在本轮范围外。

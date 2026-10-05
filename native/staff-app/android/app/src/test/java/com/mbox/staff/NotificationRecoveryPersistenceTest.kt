@@ -167,4 +167,78 @@ class NotificationRecoveryPersistenceTest {
         assertThrows(IOException::class.java) { NotificationRecoveryPersistence(store).read() }
         assertEquals(saved, store.value)
     }
+
+    @Test fun remoteSuppressionUpgradesV1AndSurvivesConsumptionUntilExplicitlyCleared() {
+        val store = MemoryStore()
+        val focus = focused(store)
+        val marker = "native-push-11111111-1111-4111-8111-111111111111"
+        val codec = NotificationRecoveryPersistence(store)
+        assertEquals(1, JSONObject(store.value!!).getInt("version"))
+        assertNull(codec.suppressedRemoteRequestKey())
+
+        codec.write(focus, marker)
+        assertEquals(setOf("version", "pending", "consumed", "suppressedRemoteRequestKey"),
+            JSONObject(store.value!!).keys().asSequence().toSet())
+        assertEquals(2, JSONObject(store.value!!).getInt("version"))
+        assertEquals(marker, NotificationRecoveryPersistence(store).suppressedRemoteRequestKey())
+        assertEquals(focus.pending, NotificationRecoveryPersistence(store).read().pending)
+
+        val opened = focus.acknowledgeOpened(actor, now.plusSeconds(4)).recovery
+        codec.write(opened) // The normal local consume must preserve suppression in the same record.
+        val restarted = NotificationRecoveryPersistence(store)
+        assertNull(restarted.read().pending)
+        assertEquals(opened.consumed, restarted.read().consumed)
+        assertEquals(marker, restarted.suppressedRemoteRequestKey())
+
+        restarted.write(restarted.read(), suppressedRemoteRequestKey = "*")
+        restarted.write(restarted.read())
+        assertEquals("*", NotificationRecoveryPersistence(store).suppressedRemoteRequestKey())
+
+        restarted.write(restarted.read(), suppressedRemoteRequestKey = null)
+        assertEquals(setOf("version", "pending", "consumed"), JSONObject(store.value!!).keys().asSequence().toSet())
+        assertEquals(1, JSONObject(store.value!!).getInt("version"))
+        assertNull(restarted.suppressedRemoteRequestKey())
+        // A conforming v2 reader also accepts an explicit JSON null marker.
+        store.value = JSONObject(store.value!!).put("version", 2).put("suppressedRemoteRequestKey", JSONObject.NULL).toString()
+        assertNull(NotificationRecoveryPersistence(store).suppressedRemoteRequestKey())
+        assertEquals(opened.consumed, NotificationRecoveryPersistence(store).read().consumed)
+    }
+
+    @Test fun malformedSuppressionFailsClosedAndFailedWriteKeepsWholePreviousRecord() {
+        val store = MemoryStore()
+        val state = pending(store)
+        val marker = "native-push-11111111-1111-4111-8111-111111111111"
+        val codec = NotificationRecoveryPersistence(store)
+        codec.write(state, marker)
+        val valid = store.value!!
+        val corruptions: List<(JSONObject) -> Unit> = listOf(
+            { it.remove("suppressedRemoteRequestKey") },
+            { it.put("suppressedRemoteRequestKey", 123) },
+            { it.put("suppressedRemoteRequestKey", true) },
+            { it.put("suppressedRemoteRequestKey", "null") },
+            { it.put("suppressedRemoteRequestKey", marker.uppercase()) },
+            { it.put("suppressedRemoteRequestKey", marker + "\n") },
+            { it.put("version", "2") },
+            { it.put("version", 2.5) },
+            { it.put("version", 1) },
+            { it.put("unexpected", "value") },
+            { it.put("consumed", JSONObject()) },
+        )
+        for (change in corruptions) {
+            val corrupt = JSONObject(valid).also(change).toString()
+            store.value = corrupt
+            assertThrows(Exception::class.java) { codec.read() }
+            assertThrows(Exception::class.java) { codec.suppressedRemoteRequestKey() }
+            assertThrows(Exception::class.java) { codec.write(state) }
+            assertEquals(corrupt, store.value)
+        }
+        store.value = valid
+        assertThrows(IllegalArgumentException::class.java) { codec.write(state, "not-an-original-request-key") }
+        assertEquals(valid, store.value)
+        store.failWrites = true
+        assertThrows(IOException::class.java) { codec.write(NotificationTaskRecovery.empty(), suppressedRemoteRequestKey = null) }
+        assertEquals(valid, store.value)
+        assertEquals(marker, codec.suppressedRemoteRequestKey())
+        assertEquals(state.pending, codec.read().pending)
+    }
 }

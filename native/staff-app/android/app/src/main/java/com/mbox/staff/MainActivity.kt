@@ -228,7 +228,7 @@ fun StaffApp(m: AppModel) {
         confirm = null
         serviceTarget = null
     }
-        LaunchedEffect(m.notificationOpenTarget, m.foreground, m.businessRequestInFlight) {
+    LaunchedEffect(m.notificationOpenTarget, m.foreground, m.businessRequestInFlight, m.identity?.canOpenServiceTasks()) {
         if (m.notificationOpenTarget != null && m.foreground) {
             m.consumeNotificationNavigation { serviceTarget = it }
         }
@@ -299,11 +299,13 @@ fun StaffApp(m: AppModel) {
                     Text(m.connection, Modifier.weight(1f), fontSize = 12.sp)
                     val entry =
                         m.serviceAttention.firstUnread ?: m.serviceAttention.entries.firstOrNull()
-                    if (m.identity?.allows("service.execute") == true && entry != null) {
+                    if (m.identity?.canOpenServiceTasks() == true && entry != null) {
                         TextButton(
                             onClick = {
-                                serviceTarget = entry
-                                m.serviceAttention = m.serviceAttention.viewed(entry)
+                                if (m.identity?.canOpenServiceTasks() == true) {
+                                    serviceTarget = entry
+                                    m.serviceAttention = m.serviceAttention.viewed(entry)
+                                }
                             }
                         ) {
                             Text(

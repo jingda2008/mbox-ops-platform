@@ -21,6 +21,10 @@ fun LiveServiceView(
     focusedSession: String? = null,
     close: () -> Unit,
 ) {
+    if (m.identity?.canOpenServiceTasks() != true) {
+        LaunchedEffect(Unit) { close() }
+        return
+    }
     var plansVisible by remember { mutableStateOf(false) }
     if(plansVisible) LiveExperiencePlansView(m){plansVisible=false;m.loadService()}
     var showAll by remember { mutableStateOf(false) }

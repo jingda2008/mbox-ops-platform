@@ -8,7 +8,7 @@ fun staffTools(a:StaffIdentity?):List<StaffTool>{
  fun route(vararg r:String)=r.any{a.hasRoute("/staff/$it")}
  return buildList{
   fun addIf(show:Boolean,id:String,title:String,group:String,detail:String){if(show)add(StaffTool(id,title,group,detail))}
-  addIf(a.canReadService()&&route("tasks"),"service","服务任务","桌边服务","任务、紧急事项与主管转交")
+  addIf(a.canOpenServiceTasks(),"service","服务任务","桌边服务","任务、紧急事项与主管转交")
   addIf(any("reservation.view")&&route("reservations"),"reservations","预约与排队","桌边服务","确认、到店、入座及历史")
   addIf(route("live","tasks","fulfillment"),"assignments","人员与责任桌","桌边服务","主责、备援、未来排班")
   addIf(any("song.view","song.manage")&&route("performance"),"songs","现场点歌","桌边服务","报价、原款与演唱处理")

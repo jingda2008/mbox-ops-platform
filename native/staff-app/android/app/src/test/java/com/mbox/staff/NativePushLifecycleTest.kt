@@ -60,7 +60,7 @@ class NativePushLifecycleTest {
         assertFalse(NativePushLifecycle(store).remoteEnabled)
         val json = JSONObject(store.value!!)
         assertEquals(setOf("version", "remoteEnabled", "installationId", "generation", "owner", "binding",
-            "revocations", "remoteOpen", "observations"), json.keys().asSequence().toSet())
+            "revocations", "remoteOpen", "observations", "pendingRegistration", "queuedToken", "registrationAttempted", "registeredToken", "consumedOpens"), json.keys().asSequence().toSet())
         assertFalse(json.has("token")); assertFalse(json.has("cookie")); assertFalse(json.has("pin"))
     }
 

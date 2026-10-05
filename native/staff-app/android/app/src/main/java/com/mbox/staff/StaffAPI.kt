@@ -142,7 +142,15 @@ data class StaffIdentity(
     }
 }
 
-data class APIRequest(val path: String, val body: JSONObject?, val headers: Map<String, String>)
+data class APIRequest(
+    val path: String,
+    val body: JSONObject?,
+    val headers: Map<String, String>,
+    val method: String = if (body == null) "GET" else "POST",
+) {
+    // Requests may contain PINs, session cookies and push credentials, including in the path.
+    override fun toString() = "APIRequest(redacted)"
+}
 
 data class APIResponse(
     val status: Int,
@@ -659,7 +667,11 @@ class StaffAPI(
         path: String,
         body: JSONObject? = null,
         extraHeaders: Map<String, String> = emptyMap(),
+        method: String = if (body == null) "GET" else "POST",
     ): APIResponse {
+        require(method in setOf("GET", "POST", "PUT") && (method != "GET" || body == null)) {
+            "Unsupported HTTP method or request body"
+        }
         if (!path.startsWith("/api/") || path.contains("..") || path.contains("#"))
             invalidResponse()
         val uri = URI("https://mbox.shmbox.com$path")
@@ -673,14 +685,14 @@ class StaffAPI(
         if (transport != null)
             headers.putAll(nonEmptyCookieHeaders(uri))
         val response =
-            transport?.invoke(APIRequest(path, body, headers))
+            transport?.invoke(APIRequest(path, body, headers, method))
                 ?: run {
                     val conn = uri.toURL().openConnection() as HttpURLConnection
                     try {
                         conn.instanceFollowRedirects = false
                         conn.connectTimeout = 20000
                         conn.readTimeout = 20000
-                        conn.requestMethod = if (body == null) "GET" else "POST"
+                        conn.requestMethod = method
                         headers.forEach { (k, v) -> conn.setRequestProperty(k, v) }
                         nonEmptyCookieHeaders(uri).forEach { (name, value) ->
                             conn.setRequestProperty(name, value)

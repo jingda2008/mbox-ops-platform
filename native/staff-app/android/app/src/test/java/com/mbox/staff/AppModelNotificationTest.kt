@@ -128,6 +128,135 @@ class AppModelNotificationTest {
     private fun idle(model: AppModel) = await("AppModel notification read did not finish") { !model.businessRequestInFlight }
     private fun persisted(store: MemoryStore) = NotificationRecoveryPersistence(store).read()
 
+    @Test fun explicitClosedTaskRoutePreservesLocalClickUntilSameSessionRouteReturns() {
+        for (restoredRoute in listOf("explicit", "legacy-omitted")) {
+            val store = MemoryStore()
+            val offline = wire()
+            offline.auth.put("navigation", JSONArray())
+            val m = model(store, offline)
+            val original = target("route-closed-$restoredRoute")
+            assertTrue(m.identity!!.allows("service.view"))
+            assertEquals(emptyList<String>(), m.identity!!.navigationRoutes)
+            assertTrue(m.receiveNotificationTarget(original))
+            idle(m)
+            assertEquals(0, offline.serviceReads())
+            assertNull(m.notificationOpenTarget)
+            assertEquals(original, persisted(store).pending!!.target)
+            var opened = 0
+            m.consumeNotificationNavigation { opened++ }
+            assertEquals(0, opened)
+            assertEquals(original, persisted(store).pending!!.target)
+            assertTrue(persisted(store).consumed.isEmpty())
+
+            if (restoredRoute == "explicit") offline.auth.put("navigation", JSONArray().put(JSONObject().put("route", "/staff/tasks")))
+            else offline.auth.remove("navigation")
+            identity(m, offline.api.heartbeat())
+            assertEquals(original.employeeId, m.identity!!.employeeId)
+            assertEquals(original.staffSessionId, m.identity!!.sessionId)
+            m.resumeNotificationOpen()
+            idle(m)
+            assertEquals(1, offline.serviceReads())
+            assertEquals(original.taskId, m.notificationOpenTarget?.id)
+            m.consumeNotificationNavigation { opened++ }
+            assertEquals(1, opened)
+            assertEquals(original, persisted(store).consumed.single().target)
+            m.viewModelScope.cancel()
+        }
+    }
+
+    @Test fun heartbeatRemovingTaskRouteStopsLocalTaskReadWithoutConsumingPending() {
+        val store = MemoryStore()
+        val offline = wire()
+        offline.auth.put("navigation", JSONArray().put(JSONObject().put("route", "/staff/tasks")))
+        val m = model(store, offline)
+        val original = target("heartbeat-route-closed")
+        offline.auth.put("navigation", JSONArray())
+        assertTrue(m.receiveNotificationTarget(original))
+        idle(m)
+        assertEquals(emptyList<String>(), m.identity!!.navigationRoutes)
+        assertTrue(m.identity!!.allows("service.view"))
+        assertEquals(0, offline.serviceReads())
+        assertNull(m.notificationOpenTarget)
+        assertEquals(original, persisted(store).pending!!.target)
+        var opened = false
+        m.consumeNotificationNavigation { opened = true }
+        assertFalse(opened)
+        assertEquals(original, persisted(store).pending!!.target)
+        assertTrue(persisted(store).consumed.isEmpty())
+    }
+
+    @Test fun localUiClaimCannotOpenAfterTaskRouteClosesAndMustReadAgainWhenRestored() {
+        val store = MemoryStore()
+        val offline = wire()
+        val m = model(store, offline)
+        val original = target("route-closed-before-ui")
+        assertNull(m.identity!!.navigationRoutes) // Older responses omit navigation and remain supported.
+        m.receiveNotificationTarget(original)
+        idle(m)
+        assertNotNull(m.notificationOpenTarget)
+        val actor = m.identity!!
+        identity(m, actor.copy(navigationRoutes = emptyList()))
+        var opened = 0
+        m.consumeNotificationNavigation { opened++ }
+        assertEquals(0, opened)
+        assertEquals(original, persisted(store).pending!!.target)
+        assertTrue(persisted(store).consumed.isEmpty())
+        val reads = offline.serviceReads()
+        identity(m, actor)
+        m.resumeNotificationOpen()
+        idle(m)
+        assertEquals(reads + 1, offline.serviceReads())
+        m.consumeNotificationNavigation { opened++ }
+        assertEquals(1, opened)
+        assertEquals(original, persisted(store).consumed.single().target)
+    }
+
+    @Test fun taskRouteClosingDuringLocalBoardReadPreservesLatestClickUntilFreshAllowedRead() {
+        for (superseded in listOf(false, true)) {
+            val store = MemoryStore()
+            val offline = wire()
+            offline.auth.put("navigation", JSONArray().put(JSONObject().put("route", "/staff/tasks")))
+            val m = model(store, offline)
+            val original = target("inflight-local-route")
+            val latest = if (superseded) target("newer-local-while-route-closed") else original
+            val entered = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            offline.service = {
+                entered.countDown()
+                check(release.await(5, TimeUnit.SECONDS))
+                response(fixture().getJSONObject("board"))
+            }
+            try {
+                assertTrue(m.receiveNotificationTarget(original))
+                await("Local board read was not entered") { entered.count == 0L }
+                offline.auth.put("navigation", JSONArray())
+                identity(m, m.identity!!.copy(navigationRoutes = emptyList()))
+                if (superseded) assertTrue(m.receiveNotificationTarget(latest))
+                assertEquals(latest, persisted(store).pending!!.target)
+                release.countDown()
+                idle(m)
+                assertNull(m.notificationOpenTarget)
+                assertNull(m.serviceBoard)
+                assertEquals(1, offline.serviceReads())
+                assertEquals(latest, persisted(store).pending!!.target)
+                assertTrue(persisted(store).consumed.isEmpty())
+                var opened = 0
+                m.consumeNotificationNavigation { opened++ }
+                assertEquals(0, opened)
+
+                offline.auth.put("navigation", JSONArray().put(JSONObject().put("route", "/staff/tasks")))
+                identity(m, offline.api.heartbeat())
+                m.resumeNotificationOpen()
+                idle(m)
+                assertEquals(2, offline.serviceReads())
+                assertEquals(latest.taskId, m.notificationOpenTarget?.id)
+                m.consumeNotificationNavigation { opened++ }
+                assertEquals(1, opened)
+                assertEquals(latest, persisted(store).consumed.single().target)
+            } finally { release.countDown(); m.viewModelScope.cancel() }
+        }
+    }
+
     @Test fun coldStartRetainsPendingAndRealLoginThenFreshReadsFocusTheOriginalTask() {
         val store = MemoryStore(); val original = target()
         val beforeRestart = model(store, wire(), signedIn = false)

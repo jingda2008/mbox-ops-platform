@@ -13,6 +13,10 @@ class LiveReservation(val source: JSONObject) {
     val count = source.getInt("guestCount")
     val arrival = source.getString("arrivalAt")
     val status = source.getString("status")
+    val receptionProtocol: Int? = source.optJSONObject("reservationSnapshot")?.let {
+        if (!it.has("receptionProtocol") || it.isNull("receptionProtocol")) null
+        else receptionInteger(it, "receptionProtocol", 1, Int.MAX_VALUE.toLong()).toInt()
+    }
     val tables =
         source
             .getJSONArray("tableLocks")
@@ -25,7 +29,7 @@ class LiveReservation(val source: JSONObject) {
             when (status) {
                 "pending" -> listOf("confirm", "arrive", "cancel")
                 "confirmed" -> listOf("arrive", "cancel")
-                "arrived",
+                "arrived" -> if (receptionProtocol != null) listOf("cancel") else listOf("complete", "cancel")
                 "seated" -> listOf("complete", "cancel")
                 else -> emptyList()
             }

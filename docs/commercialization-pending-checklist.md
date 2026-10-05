@@ -2,7 +2,7 @@
 
 历史版本说明（2026-09-08阶段，后续发布见分时记录；非当前部署结论）：当时最近一次已留存生产发布证据为 `1.0.0-rc.178`（提交 `90d3cfb077c1bb3b22236abcbba595eb9f2a65e6`）、schema `158`、门店配置 `2026.09.07-v20`；当前远端主线已包含自选套餐 schema `159`、老板经营费用与工资 schema `160`及门店配置候选 `2026.09.08-v21`，本地发布候选在其上新增支付/退款持久化退避和运营反馈修复 schema `161`。本轮尚未提交、合并、部署或上传小程序。真实资金、工资发放、退款、对账与门店岗位验收未完成，商业发布继续为`DENY`
 形成日期：`2026-07-27`
-最后更新：`2026-10-05 19:11 CST`
+最后更新：`2026-10-05 20:00 CST`
 
 适用范围：上海 M-BOX 陆家嘴店验证环境、门店试运行和商业生产发布
 清单负责人：乌鸦（系统管理员）
@@ -5777,3 +5777,18 @@ PR331最新aa214e33220e5509dee077b547ffa5816b876a64全部适用CI通过并合并
 | 2026-10-05 19:09 CST | ANDROID-SALES-20261005-01：完整Android 86组407项通过（新增12项，其中真实AppModel／StaffAPI链路8项），lintDebug与assembleDebug通过；lint无错误、12警告和13提示均在本次未改文件；独立数量／金额／成本边界审查通过。日志`outputs/android-sales-decimal-validation-20261005.log`，原始XML与lint报告`outputs/android-sales-decimal-20261005/`，修前失败证据保留 | 本地修复已验证，待独立PR与统一集成；不修改server／网页／已发布build9／线上stable。WEB-SALES-CONTRACT-20261005-01已单独登记待系统负责人处理，实体设备及分发不以本地回归替代 |
 
 | 2026-10-05 19:11 CST | ANDROID-SALES-20261005-01：独立PR [#333](https://github.com/jingda2008/mbox-ops-platform/pull/333)已创建，功能源`cdc85cb3172bd6cab6835c623cfb81b4f285d284`与407项通过的源码一致；314个构建输入归档与逐文件SHA256已冻结，证据`outputs/android-sales-decimal-20261005/verification.json`及`source-manifest.json` | 云端CI仍运行；本记录仅追加交接文档，不改Android源。未自行合并、生成后续正式包或发布；共享交接`outputs/session-supervision-20261005/android-sales-decimal-handoff.json`供统一集成负责人读取 |
+
+
+### 2026-10-05 20:00 CST Android预约接待v1独立接入
+
+| 编号 | 优先级／负责人／目标 | 实际范围与状态 | 关闭标准与证据 |
+|---|---|---|---|
+| ANDROID-RESERVATION-20261005-01 | P1；Android实现／系统统一集成；build9之后统一候选 | 按系统冻结reception-v1合同开发：无预绑桌登记名额、到店1—20真实桌次整组关联、原员工原key回执、安全原请求及旧tableIds未决兼容；独立分支基于main58b42e7d，不混入PR335冻结源码 | 真实StaffAPI/持久化恢复专项、完整Android测试/lint/构建、原与现桌展示、精确head CI、最终版本签名分别留证；后端部署与多品牌设备验收另记，本条仍开放 |
+
+供应商采购退货按用户明确决定不纳入本轮；实时厂商推送适配仍是待开发软件项。预约不会自动开台、绑定会员身份或付款退款。联系方式不得明文进入新本地未决日志；旧未决按原body/key迁移安全槽，不因404生成新意图。
+
+#### 变更记录
+
+| 时间 | 变更 | 状态边界 |
+|---|---|---|
+| 2026-10-05 20:00 CST | ANDROID-RESERVATION-20261005-01开始按冻结三端合同接入，拆分模型、UI与真实恢复测试；联系人治理legalBasisReference的500/240冲突确认由系统migration263修数据库，Android500不变 | 本批实现与测试进行中；不重发build9，不选择版本或发布stable；现有网页不改 |

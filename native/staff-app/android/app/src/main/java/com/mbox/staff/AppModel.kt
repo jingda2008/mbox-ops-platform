@@ -17,7 +17,9 @@ class AppModel @JvmOverloads constructor(
     notificationStoreOverride: NotificationStateStore? = null,
     apiOverride: StaffAPI? = null,
     pushStateStoreOverride: NotificationStateStore? = null,
+    receptionSecretsOverride: ReservationReceptionSecretStore? = null,
 ) : AndroidViewModel(app) {
+    private val receptionSecrets by lazy { receptionSecretsOverride ?: KeystoreReservationReceptionSecrets(app) }
     private val notificationPersistence by lazy {
         NotificationRecoveryPersistence(notificationStoreOverride ?: KeystoreNotificationStateStore(app))
     }
@@ -1346,6 +1348,30 @@ class AppModel @JvmOverloads constructor(
     val canUseSongs get() = memberReady && songEmployee == identity?.employeeId && songEnabled &&
         songUpdated?.let { java.time.Duration.between(it, java.time.Instant.now()).seconds in 0..59 } == true
 
+    var receptionOptions by mutableStateOf<ReservationReceptionOptions?>(null)
+        private set
+    var receptionSessions by mutableStateOf<ReservationReceptionSessions?>(null)
+        private set
+    var receptionDetail by mutableStateOf<ReservationReceptionDetail?>(null)
+        private set
+    var receptionState by mutableStateOf("")
+        private set
+    private var receptionOptionsUpdated: java.time.Instant? = null
+    private var receptionSessionsUpdated: java.time.Instant? = null
+    private var receptionActor: String? = null
+    private fun freshReception(at: java.time.Instant?) = at?.let {
+        java.time.Duration.between(it, java.time.Instant.now()).seconds in 0..59
+    } == true
+    private val receptionReady get() = live && !busy && !heartbeatBusy && !liveStorageDamaged &&
+        livePending == null && liveOrderPending == null && identity?.allows("reservation.manage") == true &&
+        receptionActor == identity?.employeeId &&
+        identity?.onlineLeaseUntil?.let(::assignmentDate)?.isAfter(java.time.Instant.now()) == true &&
+        reservationCapabilities?.opt("admissionCreateV1") == true && reservationCapabilities?.opt("receptionSeatV1") == true
+    val canCreateReception get() = receptionReady && receptionOptions != null && freshReception(receptionOptionsUpdated)
+    val canSeatReception get() = receptionReady && identity?.allows("table.open") == true &&
+        receptionSessions?.status == "arrived" && receptionDetail?.reservation?.id == receptionSessions?.reservationId &&
+        freshReception(receptionSessionsUpdated)
+
     var reservations by mutableStateOf<List<LiveReservation>>(emptyList())
     var reservationIntake by mutableStateOf<List<LiveReservationIntake>>(emptyList())
     var reservationState by mutableStateOf("")
@@ -1779,6 +1805,12 @@ class AppModel @JvmOverloads constructor(
                 LiveCommand.parse(
                     JSONObject(liveFile.openRead().bufferedReader().use { it.readText() })
                 )
+            livePending?.takeIf { it.steps.singleOrNull()?.reservationProof?.optString("kind") == "create" && it.steps.single().receptionPayloadKey == null }?.let {
+                val secured = secureReservationReceptionCommand(it, receptionSecrets)
+                saveLive(secured)
+                livePending = secured
+            }
+            livePending?.let(::validateReservationReceptionPending)
         } catch (_: FileNotFoundException) {} catch (_: Exception) {
             liveStorageDamaged = true
             message = "未决操作记录无法读取，真实写操作已锁定，请联系管理员"
@@ -2673,12 +2705,29 @@ class AppModel @JvmOverloads constructor(
                 identity?.allows(command.permission) == true &&
                 serviceBoard?.tasks?.any { it.id == p.getString("taskId") } == true
         }
+        command.steps.singleOrNull()?.receptionProof?.let { p ->
+            if (command.employeeID != identity?.employeeId) return false
+            return runCatching {
+                val body = JSONObject(command.steps.single().body)
+                when(p.getString("kind")) {
+                    "reception-create" -> canCreateReception && body.getLong("reservationPolicyVersion") == receptionOptions!!.policyVersion &&
+                        serverInstant(body.getString("arrivalAt")) == receptionOptions!!.arrival && serverInstant(body.getString("expectedEndAt")) == receptionOptions!!.end
+                    "reception-seat" -> canSeatReception && p.getString("reservationId") == receptionDetail!!.reservation.id &&
+                        body.getLong("reservationVersion") == receptionSessions!!.version &&
+                        body.getJSONArray("sessions").objects().all { selected -> receptionSessions!!.sessions.any {
+                            it.tableSessionId == selected.getString("tableSessionId") && it.tableId == selected.getString("expectedTableId") &&
+                                it.locationVersion == selected.getLong("expectedLocationVersion") && it.guestCount == selected.getInt("expectedGuestCount")
+                        } }
+                    else -> false
+                }
+            }.getOrDefault(false)
+        }
         command.steps.firstOrNull()?.reservationProof?.let { p ->
             return command.steps.size == 1 &&
                 command.employeeID == identity?.employeeId &&
                 canUseReservations &&
                 (if (p.getString("kind") == "create")
-                    reservationCapabilities?.optBoolean("durableCreate") == true
+                    false // Legacy create is recovery-only; never generate a new table-bound intent.
                 else if (p.getString("kind") == "waitlist")
                     reservationCapabilities?.optBoolean("durableWaitlist") == true && reservationIntake.any { it.kind == "waitlist" && it.publicId == p.getString("publicId") && it.status == p.getString("previousStatus") }
                 else if (p.getString("kind") == "transition")
@@ -2762,15 +2811,16 @@ class AppModel @JvmOverloads constructor(
                     secureOnlineCommand(command, paymentSecrets::store),
                     paymentSecrets::store,
                 ), paymentSecrets::store),paymentSecrets::store),paymentSecrets::store),paymentSecrets::store),paymentSecrets::store),paymentSecrets::store)
-            saveLive(secured)
-            livePending = secured
-            recoverLive()
+            val receptionSecured = secureReservationReceptionCommand(secured, receptionSecrets)
+            saveLive(receptionSecured)
+            livePending = receptionSecured
+            recoverLive(retryReceptionOriginal = true)
         } catch (_: Exception) {
             message = "原请求未能保存，未发送操作，请检查设备空间"
         }
     }
 
-    fun recoverLive() {
+    fun recoverLive(retryReceptionOriginal: Boolean = false) {
         val command = livePending ?: return
         if (busy || heartbeatBusy || liveStorageDamaged) return
         if (command.employeeID != identity?.employeeId) {
@@ -2781,11 +2831,23 @@ class AppModel @JvmOverloads constructor(
             message = "服务器已拒绝此操作，请确认提示后清除失败请求，再刷新处理"
             return
         }
+        try { validateReservationReceptionPending(command) }
+        catch (e: Exception) { message = e.message ?: "预约安全记录不一致，未发送"; return }
         busy = true
         viewModelScope.launch {
             var current = command
             try {
                 identity = withContext(Dispatchers.IO) { api.heartbeat() }
+                require(identity?.employeeId == current.employeeID) { "请由原员工登录核对原请求" }
+                if (current.steps.singleOrNull()?.reservationProof?.optString("kind") == "create" &&
+                    current.steps.single().receptionPayloadKey == null) {
+                    current = secureReservationReceptionCommand(current, receptionSecrets)
+                    saveLive(current)
+                    livePending = current
+                }
+                validateReservationReceptionPending(current)
+                if (current.completedSteps < current.steps.size && current.steps.singleOrNull()?.receptionProof?.optString("kind") == "reception-seat")
+                    require(identity?.allows("table.open") == true) { "当前员工没有开台权限，原入座请求已保留" }
                 if (
                     current.completedSteps < current.steps.size &&
                         identity?.allows(current.permission) != true && !current.isStaffPermissionReceiptRecovery()
@@ -2858,6 +2920,13 @@ class AppModel @JvmOverloads constructor(
                                                 .getJSONObject("response")
                                                 .getJSONObject("data")
                                                 .getString("id") to "pending")
+                                }
+                            } else if (step.receptionPayloadKey != null) {
+                                withContext(Dispatchers.IO) {
+                                    performReservationReceptionStep(step, receptionSecrets,
+                                        read = { api.raw(it).text },
+                                        send = { original -> api.raw(original.path, JSONObject(original.body), mapOf(original.keyHeader to original.key)).text },
+                                        readOnly = step.receptionProof?.optString("kind") == "reception-create" && !retryReceptionOriginal)
                                 }
                             } else if (step.memberGiftProof != null) {
                                 withContext(Dispatchers.IO){validateMemberGiftReply(api.raw(step.path,JSONObject(step.body),mapOf(step.keyHeader to step.key)).text,step)}
@@ -3149,7 +3218,12 @@ class AppModel @JvmOverloads constructor(
                 }
                 else if (step?.deviceProof != null) fetchDevices()
                 else if (step?.songProof != null) fetchSongs(songFilter)
-                else if (step?.reservationProof != null) fetchReservations(reservationQuery)
+                else if (step?.reservationProof != null || step?.receptionProof != null) {
+                    fetchReservations(reservationQuery)
+                    receptionOptions = null; receptionSessions = null; receptionDetail = null
+                    receptionOptionsUpdated = null; receptionSessionsUpdated = null
+                    receptionState = "原预约操作已确认，请重新读取当前预约与桌次"
+                }
                 else if (step?.financeProof != null) fetchFinance(financeQuery)
                 else if (step?.assignmentProof != null) fetchAssignments()
                 else if (step?.cashHandoverProof != null) fetchCashHandover()
@@ -3160,6 +3234,7 @@ class AppModel @JvmOverloads constructor(
                 else if (step?.path?.startsWith("/api/commerce/pickup-board/") == true)
                     fetchPickup()
                 else loadOperations()
+                removeReservationReceptionPayload(current.steps.firstOrNull(), receptionSecrets)
                 clearLiveFile()
                 livePending = null
                 if (current.steps.firstOrNull()?.participantProof != null) {
@@ -3194,11 +3269,13 @@ class AppModel @JvmOverloads constructor(
             } catch (e: Exception) {
                 current = livePending ?: current
                 if (
-                    (e as? StaffAPIError)?.definitivelyRejected == true &&
+                    (if (current.steps.singleOrNull()?.let { it.receptionProof != null || it.receptionPayloadKey != null } == true)
+                        reservationReceptionDefinitivelyRejected(e) else (e as? StaffAPIError)?.definitivelyRejected == true) &&
                         current.completedSteps < current.steps.size
                 ) {
                     current = current.copy(rejected = true)
                     try {
+                        if (current.steps.singleOrNull()?.receptionPayloadKey != null) saveReceptionRefusal(current, e as StaffAPIError)
                         saveLive(current)
                         livePending = current
                     } catch (_: Exception) {
@@ -3263,6 +3340,7 @@ class AppModel @JvmOverloads constructor(
         if (!command.rejected || command.employeeID != identity?.employeeId || busy) return
         resetParticipantPreview()
         try {
+            removeReservationReceptionPayload(command.steps.firstOrNull(), receptionSecrets)
             clearLiveFile()
             livePending = null
             command.steps
@@ -3394,6 +3472,8 @@ class AppModel @JvmOverloads constructor(
         resetParticipantPreview()
         participants = emptyList()
         participantState = ""
+        receptionOptions = null; receptionSessions = null; receptionDetail = null; receptionState = ""
+        receptionOptionsUpdated = null; receptionSessionsUpdated = null; receptionActor = null
         reservations = emptyList()
         reservationIntake = emptyList()
         reservationCapabilities = null
@@ -3764,6 +3844,109 @@ class AppModel @JvmOverloads constructor(
         return SongCommands.command(row, identity!!, action, reason, amount, evidence)
     }
 
+    private fun saveReceptionRefusal(command: LiveCommand, error: StaffAPIError) {
+        val step = command.steps.single()
+        val evidence = JSONObject().put("commandId", command.id).put("employeeId", command.employeeID)
+            .put("path", step.path).put("requestKey", step.key).put("status", error.status)
+            .put("code", error.code).put("commitDisposition", error.commitDisposition)
+            .put("recordedAt", java.time.Instant.now().toString())
+        val target = AtomicFile(File(getApplication<Application>().filesDir, "reservation-refusal-${command.id}.json"))
+        val stream = target.startWrite()
+        try { stream.write(evidence.toString().toByteArray()); target.finishWrite(stream) }
+        catch (e: Exception) { target.failWrite(stream); throw e }
+    }
+
+    private suspend fun refreshReceptionIdentity(version: Int): StaffIdentity {
+        val previous = identity ?: error("请先登录")
+        val actor = withContext(Dispatchers.IO) { api.heartbeat() }
+        require(version == workspaceVersion && actor.employeeId == previous.employeeId) { "员工工作区已变化，请重新读取" }
+        identity = actor
+        require(actor.allows("reservation.view")) { "当前员工没有预约查看权限" }
+        val capability = withContext(Dispatchers.IO) { api.data("/api/staff/native-reservation-capabilities") }
+        require(version == workspaceVersion && identity?.employeeId == actor.employeeId) { "员工工作区已变化" }
+        reservationCapabilities = capability
+        receptionActor = actor.employeeId
+        return actor
+    }
+
+    private fun requireReceptionCapabilities() {
+        require(reservationCapabilities?.opt("admissionCreateV1") == true && reservationCapabilities?.opt("receptionSeatV1") == true) {
+            "后台尚未启用新版预约接待，请更新后台；原未决请求仍可核对"
+        }
+    }
+
+    fun loadReceptionOptions(arrival: java.time.Instant, end: java.time.Instant) {
+        if (!live || busy || heartbeatBusy) return
+        receptionOptions = null; receptionOptionsUpdated = null
+        val version = workspaceVersion
+        busy = true; receptionState = "正在读取所选时段名额"
+        viewModelScope.launch {
+            try {
+                val actor = refreshReceptionIdentity(version)
+                require(actor.allows("reservation.manage")) { "当前员工没有预约管理权限" }
+                requireReceptionCapabilities()
+                val path = "/api/staff/reservation-receptions/options?arrivalAt=${LiveCommand.part(arrival.toString())}&expectedEndAt=${LiveCommand.part(end.toString())}"
+                val options = withContext(Dispatchers.IO) { ReservationReceptionOptions(api.data(path)) }
+                require(version == workspaceVersion && identity?.employeeId == actor.employeeId && options.arrival == arrival && options.end == end) { "预约时段或工作区已变化，请重新读取" }
+                receptionOptions = options; receptionOptionsUpdated = java.time.Instant.now()
+                receptionState = "名额已读取；最终名额以提交时核验为准"
+            } catch(e: Exception) { receptionState = e.message ?: "名额读取失败"; handleLiveError(e) }
+            finally { busy = false }
+        }
+    }
+
+    fun loadReceptionDetail(id: String) {
+        if (!live || busy || heartbeatBusy) return
+        receptionDetail = null; receptionSessions = null; receptionSessionsUpdated = null
+        val version = workspaceVersion
+        busy = true; receptionState = "正在读取预约接待详情"
+        viewModelScope.launch {
+            try {
+                val actor = refreshReceptionIdentity(version)
+                val detail = withContext(Dispatchers.IO) { ReservationReceptionDetail(api.data("/api/staff/reservation-receptions/${LiveCommand.part(id)}")) }
+                require(version == workspaceVersion && identity?.employeeId == actor.employeeId && detail.reservation.id == id) { "预约或工作区已变化" }
+                receptionDetail = detail
+                receptionState = "预约接待详情已读取"
+            } catch(e: Exception) { receptionState = e.message ?: "预约详情读取失败"; handleLiveError(e) }
+            finally { busy = false }
+        }
+    }
+
+    fun loadReceptionSessions(id: String) {
+        if (!live || busy || heartbeatBusy) return
+        receptionSessions = null; receptionSessionsUpdated = null
+        val version = workspaceVersion
+        busy = true; receptionState = "正在核对当前实际桌次"
+        viewModelScope.launch {
+            try {
+                val actor = refreshReceptionIdentity(version)
+                require(actor.allows("reservation.manage") && actor.allows("table.open")) { "请由具有预约管理和开台权限的员工核对" }
+                requireReceptionCapabilities()
+                val (detail, board) = withContext(Dispatchers.IO) {
+                    ReservationReceptionDetail(api.data("/api/staff/reservation-receptions/${LiveCommand.part(id)}")) to
+                        ReservationReceptionSessions(api.data("/api/staff/reservation-receptions/${LiveCommand.part(id)}/table-sessions"))
+                }
+                require(version == workspaceVersion && identity?.employeeId == actor.employeeId && board.reservationId == id && detail.reservation.id == id &&
+                    detail.reservation.source.getLong("aggregateVersion") == board.version && detail.reservation.status == board.status && detail.reservation.count == board.guestCount) {
+                    "预约在读取期间已变化，请重新读取整组实际桌次"
+                }
+                receptionDetail = detail; receptionSessions = board; receptionSessionsUpdated = java.time.Instant.now()
+                receptionState = "仅列当前营业日、您有权且尚未关联预约的已开桌次"
+            } catch(e: Exception) { receptionState = e.message ?: "实际桌次读取失败"; handleLiveError(e) }
+            finally { busy = false }
+        }
+    }
+
+    fun prepareReceptionCreate(draft: ReservationReceptionDraft): LiveCommand {
+        require(canCreateReception) { "名额或权限已过期，请重新读取时段" }
+        return draft.command(identity!!, receptionOptions!!)
+    }
+
+    fun prepareReceptionSeat(id: String, selectedSessionIds: Set<String>, reason: String): LiveCommand {
+        require(canSeatReception && receptionDetail?.reservation?.id == id) { "预约或实际桌次已过期，请重新读取" }
+        return reservationReceptionSeatCommand(receptionDetail!!.reservation, receptionSessions!!, selectedSessionIds, reason, identity!!)
+    }
+
     fun loadReservations(query: ReservationQuery) {
         if (!live || busy || heartbeatBusy) return
         busy = true
@@ -3820,19 +4003,7 @@ class AppModel @JvmOverloads constructor(
         }
         reservations = rows
         reservationIntake = queue
-        reservationTables =
-            if (
-                capability?.optBoolean("durableCreate") == true &&
-                    actor.allows("reservation.manage")
-            )
-                withContext(Dispatchers.IO) {
-                    JSONObject(api.raw("/api/staff/native-reservation-tables").text)
-                        .getJSONArray("data")
-                        .objects()
-                        .map { ReservationTable.parse(it) }
-                }
-            else emptyList()
-        require(reservationTables.map { it.id }.distinct().size == reservationTables.size)
+        reservationTables = emptyList() // Legacy table-bound creation is recovery-only.
         reservationCapabilities = capability
         reservationQuery = query
         reservationEmployee = actor.employeeId

@@ -5,7 +5,7 @@ import type {
   JsonCodec,
   JsonObject,
 } from './command-executor.js'
-import { NormalizedCommandExecutor } from './command-executor.js'
+import { hashRequestFingerprint, IdempotencyConflictError, NormalizedCommandExecutor } from './command-executor.js'
 import {
   CustomerRepository,
   type CreateAnonymousCustomerInput,
@@ -26,6 +26,7 @@ export interface CreateReservationCommand extends Omit<
   businessDate: string
   idempotencyKey: string
   requestFingerprint: string
+  retireTableBoundCreate?: boolean
   nativeReceipt?: boolean
   authorizeNative?: (transaction: ScopedTransaction) => Promise<void>
   prepareNative?: (transaction: ScopedTransaction) => Promise<Partial<CreateReservationInput>>
@@ -47,6 +48,10 @@ export interface ReservationTransitionCommand {
   overridePolicy?: boolean
 }
 
+export class ReservationTablePreassignmentRetiredError extends Error {
+  constructor(){super('预约已改为接待名额登记，请更新客户端后重新填写；尚未创建或绑定桌台');this.name='ReservationTablePreassignmentRetiredError'}
+}
+
 export class ReservationCommandService {
   constructor(private readonly commands: Pick<NormalizedCommandExecutor, 'execute'>) {}
 
@@ -57,11 +62,12 @@ export class ReservationCommandService {
     return this.commands.execute({
       scope: input.scope,
       operationScope: input.nativeReceipt ? 'reservation.create.native' : 'reservation.create',
-      retainReceipt: input.nativeReceipt === true,
+      retainReceipt: input.nativeReceipt === true || input.retireTableBoundCreate === true,
       idempotencyKey: input.idempotencyKey,
       requestFingerprint: input.requestFingerprint,
       resultCodec: reservationCodec,
     }, async (transaction) => {
+      if(input.retireTableBoundCreate)throw new ReservationTablePreassignmentRetiredError()
       const prepared = input.nativeReceipt ? await input.prepareNative?.(transaction) : undefined
       const anonymous = input.anonymousCustomer === undefined
         ? null
@@ -128,7 +134,23 @@ export class ReservationCommandService {
         payload: reservationEventJson(reservation),
       })
       return { result: reservation, auditEvents, outboxMessages }
-    }, input.nativeReceipt ? input.authorizeNative : undefined)
+    }, async transaction => {
+      if(input.nativeReceipt || input.retireTableBoundCreate)await input.authorizeNative?.(transaction)
+      if(input.retireTableBoundCreate){
+        const operationScope=input.nativeReceipt?'reservation.create.native':'reservation.create'
+        const row=(await transaction.query<{request_sha256:string;status:string;response_snapshot:JsonObject}>(`SELECT request_sha256,status,response_snapshot FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND operation_scope=$3 AND idempotency_key=$4 FOR UPDATE`,[input.scope.tenantId,input.scope.storeId,operationScope,input.idempotencyKey])).rows[0]
+        if(row?.status==='completed'){
+          if(row.request_sha256!==hashRequestFingerprint(input.requestFingerprint))throw new IdempotencyConflictError(operationScope,input.idempotencyKey)
+          // Old web fingerprints omitted these two accepted fields. Check them
+          // against the original stored result before allowing legacy recovery.
+          const original=row.response_snapshot.result
+          if(!input.nativeReceipt && (!original || typeof original!=='object' || Array.isArray(original)
+            || original.customerId!==(input.customerId??null)
+            || original.ownerEmployeeId!==(input.ownerEmployeeId??null)))throw new IdempotencyConflictError(operationScope,input.idempotencyKey)
+          await transaction.query("UPDATE mbox.idempotency_records SET expires_at='infinity'::timestamptz WHERE tenant_id=$1 AND store_id=$2 AND operation_scope=$3 AND idempotency_key=$4",[input.scope.tenantId,input.scope.storeId,operationScope,input.idempotencyKey])
+        }
+      }
+    })
   }
 
   confirm(input: Readonly<ReservationTransitionCommand>): Promise<CommandExecution<Reservation>> {

@@ -21,9 +21,10 @@ import {
   type PerformerSongInput,
   type PerformerSongStatus,
 } from './performer-song-repository.js'
-import type { ReservationCommandService } from './reservation-command-service.js'
+import { ReservationTablePreassignmentRetiredError,type ReservationCommandService } from './reservation-command-service.js'
 import {
   ReservationConflictError,
+  ReservationReceptionRequiredError,
   ReservationCancellationPolicyError,
   ReservationCustomerNotFoundError,
   ReservationHoldExpiredError,
@@ -236,14 +237,12 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
     ])
     const idempotencyKey = readIdempotencyKey(request)
     const input = readReservationInput(body)
-    const timing = serverReservationTiming(
-      input.arrivalAt,
-      now(),
-      holdTtlMinutes,
-      maxAdvanceDays,
-      cancellationCutoffMinutes,
-    )
     const execution = await options.reservations.create({
+      retireTableBoundCreate:true,
+      authorizeNative:async tx=>{
+        const customer=await tx.query("SELECT id FROM mbox.customers WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND status='active'",[context.scope.tenantId,context.scope.storeId,context.customerId])
+        if(customer.rowCount!==1)throw new GuestResourceNotFoundError()
+      },
       scope: context.scope,
       actor: { type: 'guest', ref: context.actorRef },
       businessDate: context.businessDate,
@@ -262,9 +261,6 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
       reservationSnapshot: input.reservationSnapshot,
       tableIds: input.tableIds,
       initialStatus: 'pending',
-      holdExpiresAt: timing.holdExpiresAt,
-      customerCancelUntil: timing.customerCancelUntil,
-      cancellationPolicySnapshot: timing.policySnapshot,
     })
     return reply.code(execution.replayed ? 200 : 201).send({
       data: publicReservation(execution.value),
@@ -359,7 +355,7 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
 
   app.get('/staff/native-reservation-capabilities', async (request, reply) => handleRoute(reply, async () => {
     await authorizedStaff(options, request, 'reservation.view', createAccess)
-    return reply.send({data:{durableTransitions:true,durablePriority:true,durableCreate:true}})
+    return reply.send({data:{durableTransitions:true,durablePriority:true,durableCreate:true,admissionCreateV1:true,receptionSeatV1:true,tableBoundCreate:false}})
   }))
 
   app.get('/staff/native-reservation-tables', async (request, reply) => handleRoute(reply, async () => {
@@ -385,7 +381,7 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
     const source=readReservationSource(body.source)
     if(!['phone','employee'].includes(source))throw new ApiRequestError('请选择员工代订渠道')
     const execution=await options.reservations.create({
-      ...input,publicId:input.publicId,source,initialStatus,
+      ...input,publicId:input.publicId,source,initialStatus,retireTableBoundCreate:true,
       ownerEmployeeId:context.employeeId,
       scope:context.scope,actor:employeeActor(context.employeeId),businessDate:context.businessDate,
       idempotencyKey:key,requestFingerprint:fingerprint(request,context,{...input,source,initialStatus}),
@@ -476,6 +472,14 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
                 AND table_lock.reservation_id = reservation.id
                 AND venue_table.area_id = ANY($8::uuid[])
             )
+            OR EXISTS (
+              SELECT 1 FROM mbox.reservation_seating_batches reception
+              JOIN mbox.reservation_seating_sessions link ON (link.tenant_id,link.store_id,link.batch_id)=(reception.tenant_id,reception.store_id,reception.id)
+              JOIN mbox.table_sessions session ON (session.tenant_id,session.store_id,session.id)=(link.tenant_id,link.store_id,link.table_session_id)
+              JOIN mbox.tables venue_table ON (venue_table.tenant_id,venue_table.store_id,venue_table.id)=(session.tenant_id,session.store_id,session.table_id)
+              WHERE (reception.tenant_id,reception.store_id,reception.reservation_id)=(reservation.tenant_id,reservation.store_id,reservation.id)
+                AND venue_table.area_id=ANY($8::uuid[])
+            )
           )
         ORDER BY reservation.arrival_at ASC, reservation.id ASC
         LIMIT 500
@@ -506,14 +510,9 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
     const input = readReservationInput(body)
     const source = readReservationSource(body.source)
     const initialStatus = readInitialReservationStatus(body.initialStatus)
-    const timing = serverReservationTiming(
-      input.arrivalAt,
-      now(),
-      holdTtlMinutes,
-      maxAdvanceDays,
-      cancellationCutoffMinutes,
-    )
     const execution = await options.reservations.create({
+      retireTableBoundCreate:true,
+      authorizeNative:async tx=>{await createAccess(tx).assertPermission(context.employeeId,'reservation.manage')},
       scope: context.scope,
       actor: employeeActor(context.employeeId),
       businessDate: context.businessDate,
@@ -533,12 +532,9 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
       reservationSnapshot: input.reservationSnapshot,
       tableIds: input.tableIds,
       initialStatus,
-      holdExpiresAt: initialStatus === 'pending' ? timing.holdExpiresAt : null,
-      customerCancelUntil: timing.customerCancelUntil,
-      cancellationPolicySnapshot: timing.policySnapshot,
     })
     return reply.code(execution.replayed ? 200 : 201).send({
-      data: execution.value,
+      data: staffReservation(execution.value,context.access.permissions.includes('reservation.contact.view')),
       meta: { replayed: execution.replayed },
     })
   }))
@@ -1133,13 +1129,20 @@ function nativeReservationAuthorization(context: AuthorizedStaffContext, reserva
         SELECT 1 FROM mbox.reservation_table_locks AS table_lock JOIN mbox.tables AS venue_table
         ON venue_table.tenant_id=table_lock.tenant_id AND venue_table.store_id=table_lock.store_id AND venue_table.id=table_lock.table_id
         WHERE table_lock.tenant_id=reservation.tenant_id AND table_lock.store_id=reservation.store_id
-          AND table_lock.reservation_id=reservation.id AND venue_table.area_id=ANY($6::uuid[])))
+          AND table_lock.reservation_id=reservation.id AND venue_table.area_id=ANY($6::uuid[]))
+        OR EXISTS (
+          SELECT 1 FROM mbox.reservation_seating_batches reception
+          JOIN mbox.reservation_seating_sessions link ON (link.tenant_id,link.store_id,link.batch_id)=(reception.tenant_id,reception.store_id,reception.id)
+          JOIN mbox.table_sessions session ON (session.tenant_id,session.store_id,session.id)=(link.tenant_id,link.store_id,link.table_session_id)
+          JOIN mbox.tables venue_table ON (venue_table.tenant_id,venue_table.store_id,venue_table.id)=(session.tenant_id,session.store_id,session.table_id)
+          WHERE (reception.tenant_id,reception.store_id,reception.reservation_id)=(reservation.tenant_id,reservation.store_id,reservation.id)
+            AND venue_table.area_id=ANY($6::uuid[])))
       FOR UPDATE OF reservation`,[context.scope.tenantId,context.scope.storeId,reservationId,visibility.all,visibility.ownerEmployeeIds,visibility.areaIds])
     if(visible.rowCount!==1) throw new GuestResourceNotFoundError()
   }
 }
 
-function reservationVisibility(context: AuthorizedStaffContext) {
+export function reservationVisibility(context: AuthorizedStaffContext) {
   const all = context.access.permissions.includes('reservation.view.all')
     || context.access.dataScopes.some((scope) => (
       scope.key === 'reservation.visibility' && scope.effect === 'include' && scope.value === 'all'
@@ -1567,6 +1570,7 @@ async function handleRoute(
   } catch (error) {
     if (error instanceof NativeCommandNotCommittedError) {
       const mapped = mapError(error.original)
+      if(error.original instanceof ReservationTablePreassignmentRetiredError)return reply.code(409).send({error:{...mapped.body.error,commitDisposition:'not_committed'}})
       return reply.code(409).send({error:{code:"NATIVE_BUSINESS_NOT_COMMITTED",message:mapped.statusCode < 500 ? mapped.body.error.message : error.message,commitDisposition:"not_committed"}})
     }
     const mapped = mapError(error)
@@ -1578,6 +1582,7 @@ async function handleRoute(
 }
 
 function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
+  if(error instanceof ReservationTablePreassignmentRetiredError)return apiError(409,'RESERVATION_RECEPTION_REQUIRED',error.message)
   if (
     error instanceof NormalizedAuthenticationRequiredError
     || error instanceof StaffSessionNotFoundError
@@ -1609,6 +1614,7 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   }
   if (error instanceof ReservationHoldExpiredError) return apiError(409, 'RESERVATION_HOLD_EXPIRED', '桌位保留时间已过，请重新选择')
   if (error instanceof ReservationLockUnavailableError) return apiError(409, 'RESERVATION_LOCK_UNAVAILABLE', '预约桌位锁已失效')
+  if (error instanceof ReservationReceptionRequiredError) return apiError(409, 'RESERVATION_SEATING_REQUIRED', error.message)
   if (error instanceof ReservationTransitionError) return apiError(409, 'RESERVATION_STATE_CONFLICT', `预约当前为${operationStateLabel(error.from)}，不能改为${operationStateLabel(error.to)}；请刷新该记录查看可用操作`)
   if (error instanceof ScheduleConflictError) return apiError(409, 'SCHEDULE_CONFLICT', '演出时间与现有排班冲突')
   if (error instanceof ScheduleTransitionError) return apiError(409, 'SCHEDULE_STATE_CONFLICT', `演出当前为${operationStateLabel(error.from)}，不能改为${operationStateLabel(error.to)}；请刷新该记录查看可用操作`)

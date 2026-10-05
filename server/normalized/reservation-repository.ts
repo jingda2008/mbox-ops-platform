@@ -149,6 +149,10 @@ export class ReservationConflictError extends Error {
   }
 }
 
+export class ReservationReceptionRequiredError extends Error {
+  constructor(){super('请先核对并关联本次全部实际入座桌次，再完成接待');this.name='ReservationReceptionRequiredError'}
+}
+
 export class ReservationTransitionError extends Error {
   constructor(readonly id: string, readonly from: ReservationStatus, readonly to: ReservationStatus) {
     super(`Reservation ${id} cannot transition from ${from} to ${to}`)
@@ -406,6 +410,9 @@ export class ReservationRepository {
     }
     if (!allowedFrom.includes(current.status)) {
       throw new ReservationTransitionError(id, current.status, targetStatus)
+    }
+    if (targetStatus === 'completed' && current.status !== 'seated' && current.reservation_snapshot.receptionProtocol === 1) {
+      throw new ReservationReceptionRequiredError()
     }
     const currentWithLocks = await this.hydrate(current)
     if (targetStatus === 'cancelled' && !overrideCancellationPolicy) {

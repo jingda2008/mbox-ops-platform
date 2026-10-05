@@ -726,6 +726,13 @@ test('mobile cashier can review but cannot initiate manager refund work', async 
       decisionRequests.push(request.url())
     }
   })
+  const navigationStyles = () => page.locator('.normalized-mobile-nav button').evaluateAll((buttons) => buttons.map((button) => {
+    const computed = getComputedStyle(button)
+    const inline = (button as HTMLElement).style
+    return { fontSize: computed.fontSize, color: computed.color, inlineFontSize: inline.fontSize, inlineLineHeight: inline.lineHeight, inlineColor: inline.color }
+  }))
+  const originalNavigationStyles = await navigationStyles()
+  expect(originalNavigationStyles.every((style) => style.fontSize === '11px' && style.inlineFontSize === '' && style.inlineColor === '')).toBe(true)
   for (const width of [320, 390]) {
     await setRenderedTextScale(page, 1)
     await page.setViewportSize({ width, height: 800 })
@@ -757,6 +764,7 @@ test('mobile cashier can review but cannot initiate manager refund work', async 
   }
   await setRenderedTextScale(page, 1)
   await page.setViewportSize({ width: 320, height: 800 })
+  expect(await navigationStyles(), 'Axe must check restored production navigation styles after the 200% layout checks').toEqual(originalNavigationStyles)
   expect(decisionRequests, 'layout checks must not submit refund decisions').toEqual([])
   await expect(page.getByRole('button', { name: '选择原商品发起退款' })).toHaveCount(0)
   await expectCashierTouchTargets(page)

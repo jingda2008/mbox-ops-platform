@@ -2,7 +2,7 @@
 
 历史版本说明（2026-09-08阶段，后续发布见分时记录；非当前部署结论）：当时最近一次已留存生产发布证据为 `1.0.0-rc.178`（提交 `90d3cfb077c1bb3b22236abcbba595eb9f2a65e6`）、schema `158`、门店配置 `2026.09.07-v20`；当前远端主线已包含自选套餐 schema `159`、老板经营费用与工资 schema `160`及门店配置候选 `2026.09.08-v21`，本地发布候选在其上新增支付/退款持久化退避和运营反馈修复 schema `161`。本轮尚未提交、合并、部署或上传小程序。真实资金、工资发放、退款、对账与门店岗位验收未完成，商业发布继续为`DENY`
 形成日期：`2026-07-27`
-最后更新：`2026-10-05 14:57 CST`
+最后更新：`2026-10-05 19:11 CST`
 
 适用范围：上海 M-BOX 陆家嘴店验证环境、门店试运行和商业生产发布
 清单负责人：乌鸦（系统管理员）
@@ -5751,3 +5751,29 @@ PR331最新aa214e33220e5509dee077b547ffa5816b876a64全部适用CI通过并合并
 | 变更记录时间 | 条目 | 实际变化与证据 |
 |---|---|---|
 | 2026-10-05 14:57 CST | AUTH10／NATIVE-NOTIFY-20261005-01；root统一集成 | PR331准确head合并；PR332 48065dc6 quality/performance过、数据库/浏览器仍运行。当前上线仍rc246与build8；原现场关闭条件不变 |
+
+
+### 2026-10-05 19:03 CST Android员工销售数量合同修复
+
+| 编号 | 优先级／负责人／目标 | 已证事实与候选处理 | 关闭标准与证据 |
+|---|---|---|---|
+| ANDROID-SALES-20261005-01 | P1；Android客户端负责人／系统集成负责人；build9之后统一候选 | 服务端`EmployeeSalesRow.quantity`及公开DTO返回`SUM(quantity_delta)::text`，Android误按JSON Number拒绝有行报表；既有测试用数字1掩盖。候选仅为数量接纳有限有符号十进制字符串，保留精度、退款负数及旧数字兼容；金额整数分及未知成本边界保持 | 修前真实字符串夹具失败，修后真实StaffAPI／AppModel合同覆盖有行、退款负数、空行、非法数量、整数金额及未知成本；完整Android测试／lint／构建、独立审查及CI分别留证。统一集成／新版本分发／实体手机验收仍待完成，不改已发布build9或线上stable |
+
+服务端空员工范围隔离由系统集成负责人独立修复，本分支不修改server或网页。供应商退货仍为用户明确排除的本轮范围。
+
+附带静态合同审计发现网页的独立问题，交统一集成负责人处理，不纳入本Android源码修复：
+
+| 编号 | 优先级／负责人／目标 | 已证事实 | 关闭标准与证据 |
+|---|---|---|---|
+| WEB-SALES-CONTRACT-20261005-01 | P1；系统集成／网页负责人；后续统一候选 | `StaffModulePanel.tsx`员工销售解析强制`employeeId/productId`，公开`toEmployeeSalesDto`不返回内部ID，非空记录会被过滤；同页`formatAmount`取绝对值，退款日负销售额会丢失符号 | 网页使用实际安全DTO，不为兼容旧解析暴露内部ID；真实形状非空／空行／退款负金额／未知成本及岗位范围回归。当前仅静态确认，未改网页、未做浏览器或生产验证 |
+
+
+#### 变更记录
+
+| 时间 | 变更 | 状态边界 |
+|---|---|---|
+| 2026-10-05 19:03 CST | ANDROID-SALES-20261005-01：核对实际SQL、DTO与原数据库用例；修前6项中4项失败的日志保留，开始数量合同与真实请求回归 | 本地候选开发中；已发布build9不包含本修复，未合并、未打新包、未发布 |
+
+| 2026-10-05 19:09 CST | ANDROID-SALES-20261005-01：完整Android 86组407项通过（新增12项，其中真实AppModel／StaffAPI链路8项），lintDebug与assembleDebug通过；lint无错误、12警告和13提示均在本次未改文件；独立数量／金额／成本边界审查通过。日志`outputs/android-sales-decimal-validation-20261005.log`，原始XML与lint报告`outputs/android-sales-decimal-20261005/`，修前失败证据保留 | 本地修复已验证，待独立PR与统一集成；不修改server／网页／已发布build9／线上stable。WEB-SALES-CONTRACT-20261005-01已单独登记待系统负责人处理，实体设备及分发不以本地回归替代 |
+
+| 2026-10-05 19:11 CST | ANDROID-SALES-20261005-01：独立PR [#333](https://github.com/jingda2008/mbox-ops-platform/pull/333)已创建，功能源`cdc85cb3172bd6cab6835c623cfb81b4f285d284`与407项通过的源码一致；314个构建输入归档与逐文件SHA256已冻结，证据`outputs/android-sales-decimal-20261005/verification.json`及`source-manifest.json` | 云端CI仍运行；本记录仅追加交接文档，不改Android源。未自行合并、生成后续正式包或发布；共享交接`outputs/session-supervision-20261005/android-sales-decimal-handoff.json`供统一集成负责人读取 |

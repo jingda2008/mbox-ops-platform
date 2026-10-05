@@ -8,6 +8,7 @@ import java.util.UUID
 import org.json.JSONObject
 
 object BusinessReports {
+    private val signedDecimal = Regex("[+-]?[0-9]+(?:\\.[0-9]+)?")
     val occasions = linkedMapOf("" to "全部场景", "business" to "商务", "friends" to "朋友", "date" to "约会", "birthday" to "生日", "music" to "音乐", "relax" to "放松", "other" to "其他")
     val phases = linkedMapOf("" to "全部阶段", "before_show" to "演出前", "acoustic" to "弹唱", "band_live" to "乐队", "intermission" to "中场", "after_show" to "演出后")
     val outcomes = linkedMapOf("all" to "全部结果", "paid" to "已付款", "refunded" to "已退款", "complaint" to "关联投诉", "follow_on_order" to "同桌后续付款", "repeat_purchase" to "同品复购", "margin_unavailable" to "缺成交成本")
@@ -46,7 +47,15 @@ object BusinessReports {
         }
         if(kind == "sales") for(row in result.getJSONArray("rows").objects()) {
             strings(row,"employeeDisplayName","employeeCode","productName","productCode","currency")
-            numbers(row,listOf("quantity","salesAmountMinor","refundReversalAmountMinor"))
+            // EmployeeSalesRow keeps SUM(quantity_delta)::text, including fractional refunds.
+            // Validate the decimal without rounding through Double or changing the displayed value.
+            val quantity = row.get("quantity")
+            require(when(quantity) {
+                is String -> signedDecimal.matches(quantity) && quantity.toBigDecimalOrNull() != null
+                is Number -> quantity.toDouble().isFinite()
+                else -> false
+            }) { "报表数量无效，请重试" }
+            numbers(row,listOf("salesAmountMinor","refundReversalAmountMinor"))
             numbers(row,listOf("costAmountMinor","contributionProfitMinor"),true)
             require(row.get("costCoverageComplete") is Boolean)
         } else {

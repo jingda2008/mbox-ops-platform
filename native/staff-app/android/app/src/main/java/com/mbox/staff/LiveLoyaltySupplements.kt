@@ -18,6 +18,15 @@ fun validateLoyaltySupplementReply(text:String,step:LiveStep){
  val root=JSONObject(text);val proof=step.loyaltySupplementProof!!;val action=proof.getString("action");val body=JSONObject(step.body);val meta=root.getJSONObject("meta");require(meta.getInt("protocol")==1&&meta.get("replayed") is Boolean)
  val data=root.getJSONObject("data");require(data.getString("action")==action&&data.getString("employeeId")==proof.getString("employeeId")&&data.getString("requestKey")==step.key&&data.getString("sourcePublicId")==body.getString("publicId"))
  val result=data.getJSONObject("result");require(Regex("^LSP-[a-f0-9-]{36}$").matches(result.getString("publicId")))
- if(action=="request")require(result.getString("status")=="requested"&&result.getInt("requestedPoints")>=0&&result.getInt("requestedGrowth")>=0)
- else {require(result.getString("publicId")==body.getString("publicId"));require(result.getString("status") in if(action=="reject")setOf("rejected") else setOf("executed","not_required"));require(result.getInt("pointsDelta")>=0&&result.getInt("growthDelta")>=0);if(result.getString("status") in setOf("rejected","not_required"))require(result.getInt("pointsDelta")==0&&result.getInt("growthDelta")==0)}
+ if(action=="request"){
+  require(result.getString("status")=="requested")
+  val points=loyaltyReceiptInteger(result,"requestedPoints");val growth=loyaltyReceiptInteger(result,"requestedGrowth")
+  require(points>=0&&growth>=0&&(points>0||growth>0))
+ }else{
+  require(result.getString("publicId")==body.getString("publicId"));require(result.getString("status") in if(action=="reject")setOf("rejected") else setOf("executed","not_required"))
+  val points=loyaltyReceiptInteger(result,"pointsDelta");val growth=loyaltyReceiptInteger(result,"growthDelta")
+  // Approval applies historical refunds before reporting the final account delta.
+  // Even not_required describes the positive award, not a guarantee of no reversal.
+  if(action=="reject")require(points==0L&&growth==0L)
+ }
 }

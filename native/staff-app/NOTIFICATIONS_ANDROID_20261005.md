@@ -1,6 +1,6 @@
 # Android 通知接收与原任务恢复
 
-更新时间：2026-10-05 14:28 CST
+更新时间：2026-10-05 14:36 CST
 
 本轮接续 AUTH-10 / NATIVE-20261001-32，基于 main 91f84ff5 的独立客户端分支。只修改 Android 客户端及验证文档，已发布 build8、长期签名和 stable 清单保持不变。服务端原生推送协议及迁移由系统集成负责人独占；v1 合同已核对，本文件不替代该合同。
 
@@ -33,3 +33,15 @@
 Android厂商或聚合推送平台尚未选定并接入，未提供可验证的该项目应用配置和真实SDK token。已向用户询问现有平台名称，不索取聊天明文密钥。这里包含后续提供方适配开发，不能只写成“差真机验收”。本机只连接模拟器，各实际品牌/系统的锁屏、省电、杀进程、换人和送达需独立验证。代码、模拟传输与服务器accepted均不等于物理手机已显示通知。
 
 已分配下一候选版本 `0.4.0-rc.4 / versionCode 9`。Android负责人负责固定源码和既有正式证书构建、逐文件源码清单及APK验证，系统负责人负责合并与统一分发。签名候选的实际结果另存交接回执；分配版本不等于已生成、已发布或已验收。网页版、已发布build8及线上stable保持不变。
+
+## build 9 正式签名候选
+
+冻结构建源码：`8b399dc804ebdcb6869d03cf88236782b783e5e8`。从Git archive导出，构建前后逐一核对313个Git blob，完整清单与独立源码归档留存。相对395项通过的d1c5fb13，Android构建输入仅版本默认值改为9 / 0.4.0-rc.4，业务源码与共享数据未变。本次执行Release编译、lint、真实APK签名/清单和升级元数据验证；没有重复执行已通过的业务全量测试。
+
+- 包：`MBOX-Staff-0.4.0-rc.4-build9-a023dddfac7d.apk`，15542619字节。
+- APK SHA256：`a023dddfac7dae1031fcc7f0688d5e7c048b97c3f2ad35b9ec1a038fe5a788e5`。
+- 正式证书 SHA256：`05362998aab4266397f069cbcb37049176aa29eb7ab778cc7d55cfb5caa4ccc0`，与build8一致。
+- 已核验包名`com.mbox.staff.nativeapp`、versionCode9、versionName0.4.0-rc.4、minimumSDK26/targetSDK36、非debuggable、禁本地演练、stable渠道及zipalign；使用build8本地已验清单证明递增且新URL不可变。
+- 本机交接目录：`outputs/android-notification-release-20261005-build9/`，包含APK、local stable、verification、source-manifest和source-and-build-verification；源码归档与私有构建日志另在`outputs/android-notification-build9-20261005/`。
+
+该候选未上传、未安装实体机，build8及线上stable保持原样。最终系统集成SHA可能不同，须逐文件比对其Android输入与本候选source-manifest后才能分发；本记录后续文档提交不改变上述冻结输入。

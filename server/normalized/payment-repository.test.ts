@@ -199,7 +199,8 @@ describe('PaymentRepository', () => {
   it('accepts an already-applied identical callback without a second update', async () => {
     const transaction = new ScriptedTransaction([
       rows([paymentTargetRow()]),
-      rows([{ id: orderId }]),
+      rows([{id:tableSessionId}]),
+      rows([orderRow(8800)]),
       rows([paymentRow('succeeded', 8800, 'provider-payment-001')]),
     ])
 
@@ -213,13 +214,17 @@ describe('PaymentRepository', () => {
 
     expect(application.payment.status).toBe('succeeded')
     expect(application.applied).toBe(false)
-    expect(transaction.calls).toHaveLength(3)
+    expect(transaction.calls[1]?.sql).toContain('FOR SHARE OF session')
+    expect(transaction.calls[2]?.sql).toContain('FROM mbox.orders')
+    expect(transaction.calls[2]?.sql).toContain('FOR UPDATE')
+    expect(transaction.calls).toHaveLength(4)
   })
 
   it('records a signed late success after a previously accepted close instead of losing the collection', async () => {
     const transaction = new ScriptedTransaction([
       rows([paymentTargetRow()]),
-      rows([{ id: orderId }]),
+      rows([{id:tableSessionId}]),
+      rows([orderRow(8800)]),
       rows([paymentRow('closed', 8800)]),
       rows([paymentRow('succeeded', 8800, 'provider-payment-late-closed-001')]),
     ])
@@ -234,8 +239,8 @@ describe('PaymentRepository', () => {
     })
 
     expect(application).toMatchObject({ applied: true, payment: { status: 'succeeded' } })
-    expect(transaction.calls[3]?.sql).toContain("status IN ('created', 'pending', 'closed')")
-    expect(JSON.parse(String(transaction.calls[3]?.values[4]))).toMatchObject({
+    expect(transaction.calls[4]?.sql).toContain("status IN ('created', 'pending', 'closed')")
+    expect(JSON.parse(String(transaction.calls[4]?.values[4]))).toMatchObject({
       lateSuccessAfterClose: true,
     })
   })
@@ -243,7 +248,8 @@ describe('PaymentRepository', () => {
   it('enriches a captured payment only when a later authoritative result supplies the missing channel', async () => {
     const transaction = new ScriptedTransaction([
       rows([paymentTargetRow()]),
-      rows([{ id: orderId }]),
+      rows([{id:tableSessionId}]),
+      rows([orderRow(8800)]),
       rows([paymentRow('succeeded', 8800, 'provider-payment-001')]),
       rows([{ ...paymentRow('succeeded', 8800, 'provider-payment-001'), settlement_channel: 'wechat' }]),
     ])
@@ -258,14 +264,15 @@ describe('PaymentRepository', () => {
     })
 
     expect(application).toMatchObject({ applied: false, payment: { settlementChannel: 'wechat' } })
-    expect(transaction.calls[3]?.sql).toContain('SET settlement_channel=$4')
-    expect(transaction.calls[3]?.sql).not.toContain("SET status = 'succeeded'")
+    expect(transaction.calls[4]?.sql).toContain('SET settlement_channel=$4')
+    expect(transaction.calls[4]?.sql).not.toContain("SET status = 'succeeded'")
   })
 
   it('rejects a later authoritative settlement channel that conflicts with the stored one', async () => {
     const transaction = new ScriptedTransaction([
       rows([paymentTargetRow()]),
-      rows([{ id: orderId }]),
+      rows([{id:tableSessionId}]),
+      rows([orderRow(8800)]),
       rows([{ ...paymentRow('succeeded', 8800, 'provider-payment-001'), settlement_channel: 'wechat' }]),
     ])
 
@@ -277,12 +284,13 @@ describe('PaymentRepository', () => {
       reportedCurrency: 'CNY',
       settlementChannel: 'alipay',
     })).rejects.toBeInstanceOf(PaymentCallbackMismatchError)
-    expect(transaction.calls).toHaveLength(3)
+    expect(transaction.calls).toHaveLength(4)
   })
 
   it('applies a signed active query success once and consumes the provider action', async () => {
     const transaction = new ScriptedTransaction([
       rows([paymentTargetRow()]),
+      rows([{id:tableSessionId}]),
       rows([orderRow(8800)]),
       rows([paymentRow('pending', 8800)]),
       rows([{ ...paymentRow('succeeded', 8800, 'provider-payment-001'), settlement_channel: 'wechat' }]),
@@ -305,17 +313,18 @@ describe('PaymentRepository', () => {
       applied: true,
       payment: { status: 'succeeded', settlementChannel: 'wechat' },
     })
-    expect(transaction.calls[3]?.sql).toContain("SET status = $4")
-    expect(transaction.calls[3]?.sql).toContain('settlement_channel = COALESCE(settlement_channel, $8)')
-    expect(transaction.calls[3]?.values[3]).toBe('succeeded')
-    expect(transaction.calls[3]?.values[7]).toBe('wechat')
-    expect(transaction.calls[4]?.sql).toContain("SET state = 'consumed'")
+    expect(transaction.calls[4]?.sql).toContain("SET status = $4")
+    expect(transaction.calls[4]?.sql).toContain('settlement_channel = COALESCE(settlement_channel, $8)')
+    expect(transaction.calls[4]?.values[3]).toBe('succeeded')
+    expect(transaction.calls[4]?.values[7]).toBe('wechat')
+    expect(transaction.calls[5]?.sql).toContain("SET state = 'consumed'")
   })
 
   it('stores a verified callback settlement channel in the strong payment column', async () => {
     const transaction = new ScriptedTransaction([
       rows([paymentTargetRow()]),
-      rows([{ id: orderId }]),
+      rows([{id:tableSessionId}]),
+      rows([orderRow(8800)]),
       rows([paymentRow('pending', 8800)]),
       rows([{ ...paymentRow('succeeded', 8800, 'provider-payment-003'), settlement_channel: 'alipay' }]),
     ])
@@ -331,13 +340,14 @@ describe('PaymentRepository', () => {
     })
 
     expect(application.payment.settlementChannel).toBe('alipay')
-    expect(transaction.calls[3]?.sql).toContain('settlement_channel = COALESCE(settlement_channel, $7)')
-    expect(transaction.calls[3]?.values[6]).toBe('alipay')
+    expect(transaction.calls[4]?.sql).toContain('settlement_channel = COALESCE(settlement_channel, $7)')
+    expect(transaction.calls[4]?.values[6]).toBe('alipay')
   })
 
   it('releases the order for a new attempt after a verified failed provider query', async () => {
     const transaction = new ScriptedTransaction([
       rows([paymentTargetRow()]),
+      rows([{id:tableSessionId}]),
       rows([orderRow(8800)]),
       rows([paymentRow('pending', 8800)]),
       rows([paymentRow('failed', 8800, 'provider-payment-002')]),
@@ -356,8 +366,8 @@ describe('PaymentRepository', () => {
     })
 
     expect(application).toMatchObject({ applied: true, payment: { status: 'failed' } })
-    expect(transaction.calls[4]?.sql).toContain("SET state = 'failed'")
-    expect(transaction.calls[4]?.values[3]).toBe('provider-query:failed')
+    expect(transaction.calls[5]?.sql).toContain("SET state = 'failed'")
+    expect(transaction.calls[5]?.values[3]).toBe('provider-query:failed')
   })
 
   it('stores only allowlisted provider evidence and excludes credentials and customer identifiers', async () => {
@@ -396,7 +406,8 @@ describe('PaymentRepository', () => {
   it('rejects a callback amount that differs from the order-derived amount', async () => {
     const transaction = new ScriptedTransaction([
       rows([paymentTargetRow()]),
-      rows([{ id: orderId }]),
+      rows([{id:tableSessionId}]),
+      rows([orderRow(8800)]),
       rows([paymentRow('pending', 8800)]),
     ])
 
@@ -408,7 +419,7 @@ describe('PaymentRepository', () => {
       reportedCurrency: 'CNY',
     })).rejects.toBeInstanceOf(PaymentCallbackMismatchError)
 
-    expect(transaction.calls).toHaveLength(3)
+    expect(transaction.calls).toHaveLength(4)
   })
 
   it('requires auditable evidence for cash and physical POS payments', async () => {

@@ -158,6 +158,7 @@ import {
   type ReservationIdentityPort,
 } from './reservation-guest-session.js'
 import { reservationPerformanceApiPlugin } from './reservation-performance-api.js'
+import { reservationReceptionApiPlugin } from './reservation-reception-api.js'
 import { reservationPerformanceNotificationApiPlugin } from './reservation-performance-notification-api.js'
 import { reservationPerformanceRevisionApiPlugin } from './reservation-performance-revision-api.js'
 import { ReservationPerformanceRevisionService } from './reservation-performance-revision-service.js'
@@ -890,6 +891,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
         await businessClock.current(merchant.scope)
       ).businessDate,
     })
+    instance.register(reservationReceptionApiPlugin,{prefix:'/api',transactions,commands:commandExecutor,resolveStaffContext:staffReservationContext,protectContact:value=>activityContactProtection.protect(value)})
     instance.register(reservationPerformanceApiPlugin, {
       prefix: '/api',
       transactions,

@@ -302,7 +302,7 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
       : readEnum(body.seatPreference, '座位偏好', SEAT_PREFERENCES)
     const acknowledgedPolicyVersion = readInteger(body.reservationPolicyVersion, '预约规则版本', 1, 2_147_483_647)
     const preferredScheduleId = readOptionalUuid(body.preferredScheduleId, '演出偏好')
-    if (body.tableCodes !== undefined) throw new PublicReservationRequestError('预约只登记位置偏好，具体位置到店后由门店安排')
+    if (body.tableCodes !== undefined || body.tableIds !== undefined) throw new PublicReservationRequestError('预约只登记位置偏好，具体位置到店后由门店安排')
     const idempotencyKey = readIdempotencyKey(request)
     const requestedPublicId = readOptionalString(body.publicId, '预约编号', 128)
     const requestedExpectedEndAt = body.expectedEndAt === undefined ? null : readTimestamp(body.expectedEndAt, '预计结束时间')
@@ -359,6 +359,7 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
         source: 'wechat',
         note,
         reservationSnapshot: {
+          receptionProtocol: 1,
           requestFingerprint,
           bookingMode: mode,
           depositRule: deposit,
@@ -1114,7 +1115,7 @@ async function ownedReservationInTransaction(
   return reservation
 }
 
-async function readPolicy(transaction: ScopedTransaction, lock = false): Promise<ReservationPolicyRow> {
+export async function readPolicy(transaction: ScopedTransaction, lock = false): Promise<ReservationPolicyRow> {
   if (lock) await lockReservationPolicy(transaction)
   const result = await transaction.query<ReservationPolicyRow>(`
     SELECT policy_version, hold_minutes, arrival_grace_minutes, max_advance_days, default_duration_minutes,
@@ -1168,7 +1169,7 @@ async function readAnnualReservationPriority(
   return result.rows[0] ?? null
 }
 
-async function readReservationCapacity(
+export async function readReservationCapacity(
   transaction: ScopedTransaction,
   arrivalAt: string,
   expectedEndAt: string,
@@ -1214,7 +1215,7 @@ async function readReservationCapacity(
   return result.rows[0] ?? { total_capacity: 0, committed_guests: 0 }
 }
 
-function capacityAccepts(capacity: ReservationCapacityRow, guestCount: number): boolean {
+export function capacityAccepts(capacity: ReservationCapacityRow, guestCount: number): boolean {
   return Number(capacity.total_capacity) >= Number(capacity.committed_guests) + guestCount
 }
 
@@ -1258,7 +1259,7 @@ async function listReservationTables(
   return result.rows
 }
 
-async function insertPrivateContact(
+export async function insertPrivateContact(
   transaction: ScopedTransaction,
   reservationId: string,
   contact: ProtectedContact,
@@ -1345,7 +1346,7 @@ function groupPublicTables(rows: readonly AvailableTableRow[]): Array<{
   return [...groups.values()]
 }
 
-async function assertPreferredSchedule(
+export async function assertPreferredSchedule(
   transaction: ScopedTransaction,
   scheduleId: string | null,
   arrivalAt: string,
@@ -1673,7 +1674,7 @@ function setSessionCookie(reply: FastifyReply, result: ReservationGuestSessionIs
   ].join('; '))
 }
 
-function validateReservationWindow(arrivalAt: string, expectedEndAt: string, current: Date, maxDays: number): void {
+export function validateReservationWindow(arrivalAt: string, expectedEndAt: string, current: Date, maxDays: number): void {
   const start = Date.parse(arrivalAt)
   const end = Date.parse(expectedEndAt)
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {

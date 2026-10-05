@@ -292,6 +292,71 @@ integration('095 personal-contact governance PostgreSQL boundaries',()=>{
     }finally{await app.close()}
   })
 
+  it.each([240,241,500,501])('native retention draft enforces the documented legal-basis boundary at %i characters and replays the original key',async length=>{
+    const runner=new ScopedPostgresTransactionRunner(runtime),app=Fastify(),root='/staff/native-contact-governance'
+    await app.register(nativeContactGovernanceApiPlugin,{transactions:runner,protection:contactProtection,resolveContext:()=>staff(id.approver)});await app.ready()
+    const body={resourceKind:'verified_membership_phone',retentionDaysAfterPurposeEnd:30,legalBasisReference:'依'.repeat(length),reason:'核对保留依据长度与原请求回执'}
+    const key='native-business-'+randomUUID()
+    const send=()=>app.inject({method:'POST',url:root+'/draft',payload:body,headers:{'idempotency-key':key}})
+    try{
+      const before=Number((await pool.query('SELECT count(*) AS count FROM mbox.personal_contact_retention_policy_versions WHERE tenant_id=$1',[id.tenant])).rows[0].count)
+      const response=await send()
+      if(length===501){
+        expect(response.statusCode,response.body).toBe(400)
+        expect(response.json().error.code).toBe('CONTACT_GOVERNANCE_INVALID')
+        expect((await send()).statusCode).toBe(400)
+        expect(Number((await pool.query('SELECT count(*) AS count FROM mbox.personal_contact_retention_policy_versions WHERE tenant_id=$1',[id.tenant])).rows[0].count)).toBe(before)
+        return
+      }
+      expect(response.statusCode,response.body).toBe(200)
+      const receipt=response.json().data
+      expect(receipt).toMatchObject({employeeId:id.approver,requestKey:key,action:'draft',accepted:body,row:{legalBasisReference:body.legalBasisReference,draftedByEmployeeId:id.approver}})
+      const stored=await pool.query('SELECT legal_basis_reference FROM mbox.personal_contact_retention_policy_versions WHERE tenant_id=$1 AND public_id=$2',[id.tenant,receipt.row.publicId])
+      expect(stored.rows).toEqual([{legal_basis_reference:body.legalBasisReference}])
+      // Loss of the first response and routine idempotency cleanup must both
+      // resolve to the one durable native receipt, without a second policy.
+      for(const cleanup of [false,true]){
+        if(cleanup)await pool.query('DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND idempotency_key=$2',[id.tenant,key])
+        const replay=await send();expect(replay.statusCode,replay.body).toBe(200)
+        expect(replay.json()).toMatchObject({data:receipt,meta:{protocol:1,replayed:true}})
+      }
+      expect(Number((await pool.query('SELECT count(*) AS count FROM mbox.personal_contact_retention_policy_versions WHERE tenant_id=$1',[id.tenant])).rows[0].count)).toBe(before+1)
+    }finally{await app.close()}
+  })
+
+  it.each([240,241,500,501])('native legal hold enforces the documented legal-basis boundary at %i characters and replays the original key',async length=>{
+    const runner=new ScopedPostgresTransactionRunner(runtime),app=Fastify(),root='/staff/native-contact-governance'
+    await app.register(nativeContactGovernanceApiPlugin,{transactions:runner,protection:contactProtection,resolveContext:()=>staff(id.owner)});await app.ready()
+    try{
+      const response=await app.inject(root+'?area=resources&search=CVC')
+      expect(response.statusCode,response.body).toBe(200)
+      const resource=response.json().data.rows[0];expect(resource).toBeDefined()
+      const body={resourceKind:resource.resourceKind,resourcePublicId:resource.publicId,expectedVersion:resource.nativeVersion,legalBasisReference:'据'.repeat(length),reason:'核对法定保留依据长度与原请求回执',holdUntil:null}
+      const key='native-business-'+randomUUID(),send=()=>app.inject({method:'POST',url:root+'/hold',payload:body,headers:{'idempotency-key':key}})
+      const before=Number((await pool.query('SELECT count(*) AS count FROM mbox.personal_contact_legal_holds WHERE tenant_id=$1',[id.tenant])).rows[0].count)
+      const saved=await send()
+      if(length===501){
+        expect(saved.statusCode,saved.body).toBe(400)
+        expect(saved.json().error.code).toBe('CONTACT_GOVERNANCE_INVALID')
+        expect((await send()).statusCode).toBe(400)
+        expect(Number((await pool.query('SELECT count(*) AS count FROM mbox.personal_contact_legal_holds WHERE tenant_id=$1',[id.tenant])).rows[0].count)).toBe(before)
+        return
+      }
+      expect(saved.statusCode,saved.body).toBe(200)
+      const receipt=saved.json().data
+      expect(receipt).toMatchObject({employeeId:id.owner,requestKey:key,action:'hold',accepted:body,row:{legalBasisReference:body.legalBasisReference,createdByEmployeeId:id.owner,status:'active'}})
+      expect((await pool.query('SELECT legal_basis_reference FROM mbox.personal_contact_legal_holds WHERE tenant_id=$1 AND public_id=$2',[id.tenant,receipt.row.publicId])).rows).toEqual([{legal_basis_reference:body.legalBasisReference}])
+      for(const cleanup of [false,true]){
+        if(cleanup)await pool.query('DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND idempotency_key=$2',[id.tenant,key])
+        const replay=await send();expect(replay.statusCode,replay.body).toBe(200)
+        expect(replay.json()).toMatchObject({data:receipt,meta:{protocol:1,replayed:true}})
+      }
+      expect(Number((await pool.query('SELECT count(*) AS count FROM mbox.personal_contact_legal_holds WHERE tenant_id=$1',[id.tenant])).rows[0].count)).toBe(before+1)
+      const released=await app.inject({method:'POST',url:root+'/release',headers:{'idempotency-key':'native-business-'+randomUUID()},payload:{publicId:receipt.row.publicId,expectedVersion:receipt.row.nativeVersion,reason:'边界测试核对完成释放保留'}})
+      expect(released.statusCode,released.body).toBe(200)
+    }finally{await app.close()}
+  })
+
   async function activityContact(registrationId:string){
     const result=await pool.query<{id:string;public_id:string}>(`SELECT id,public_id
       FROM mbox.community_activity_registration_contact_versions

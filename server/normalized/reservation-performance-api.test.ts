@@ -4,9 +4,9 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { Pool } from 'pg'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
-import { NormalizedCommandExecutor } from './command-executor.js'
+import { NativeCommandNotCommittedError, NormalizedCommandExecutor } from './command-executor.js'
 import { PerformanceCommandService } from './performance-command-service.js'
-import { ReservationCommandService } from './reservation-command-service.js'
+import { ReservationCommandService, ReservationTablePreassignmentRetiredError } from './reservation-command-service.js'
 import {
   reservationPerformanceApiPlugin,
   type GuestReservationPerformanceContext,
@@ -243,8 +243,9 @@ function fixture(overrides: Partial<ReservationPerformanceApiOptions> = {}) {
 }
 
 describe('reservationPerformanceApiPlugin guest reservation flows', () => {
-  it('creates a customer-owned pending reservation and table hold without trusting identity claims', async () => {
+  it('restores a legacy customer-owned receipt without revalidating old time windows or trusting identity claims', async () => {
     const value = fixture()
+    vi.mocked(value.reservations.create).mockResolvedValue({value:reservation,replayed:true})
     const response = await value.app.inject({
       method: 'POST',
       url: '/api/guest/reservations',
@@ -260,10 +261,10 @@ describe('reservationPerformanceApiPlugin guest reservation flows', () => {
       },
     })
 
-    expect(response.statusCode).toBe(201)
+    expect(response.statusCode).toBe(200)
     expect(response.json()).toMatchObject({
       data: { publicId: reservation.publicId, contactAvailable: true },
-      meta: { replayed: false, tableLockMode: 'held' },
+      meta: { replayed: true, tableLockMode: 'held' },
     })
     expect(JSON.stringify(response.json())).not.toContain('private-contact-token')
     expect(Object.keys(response.json().data).sort()).toEqual([
@@ -276,8 +277,8 @@ describe('reservationPerformanceApiPlugin guest reservation flows', () => {
       initialStatus: 'pending',
       tableIds: [tableId],
       actor: { type: 'guest', ref: guestContext.actorRef },
-      holdExpiresAt: '2026-08-11T13:20:00.000Z',
-      customerCancelUntil: '2026-08-11T12:30:00.000Z',
+      retireTableBoundCreate: true,
+      authorizeNative: expect.any(Function),
     }))
 
     const forged = await value.app.inject({
@@ -313,6 +314,7 @@ describe('reservationPerformanceApiPlugin guest reservation flows', () => {
     })
     expect(clientExpiry.statusCode).toBe(400)
 
+    vi.mocked(value.reservations.create).mockRejectedValueOnce(new NativeCommandNotCommittedError(new ReservationTablePreassignmentRetiredError()))
     const tooFarAhead = await value.app.inject({
       method: 'POST',
       url: '/api/guest/reservations',
@@ -326,8 +328,8 @@ describe('reservationPerformanceApiPlugin guest reservation flows', () => {
         tableIds: [tableId],
       },
     })
-    expect(tooFarAhead.statusCode).toBe(400)
-    expect(tooFarAhead.json()).toMatchObject({ error: { code: 'REQUEST_INVALID' } })
+    expect(tooFarAhead.statusCode).toBe(409)
+    expect(tooFarAhead.json()).toMatchObject({ error: { code: 'RESERVATION_RECEPTION_REQUIRED', commitDisposition: 'not_committed' } })
   })
 
   it('lists and reads only the authenticated customer reservations without exposing contact tokens', async () => {

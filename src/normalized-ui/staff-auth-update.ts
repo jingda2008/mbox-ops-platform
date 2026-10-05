@@ -6,7 +6,8 @@ import type { StaffAuthView } from '../normalized-api'
 function authorizationSnapshot(auth: StaffAuthView): unknown {
   const wire = { ...auth } as Record<string, unknown>
   delete wire.resolvedAt
-  // Session lookup supplies these response annotations; heartbeat does not.
+  // Compare these annotations separately when both responses supply them.
+  // Session lookup supplies them today; heartbeat does not.
   delete wire.businessDate
   delete wire.timezone
   const session = { ...auth.session } as Record<string, unknown>
@@ -29,7 +30,13 @@ function canonicalJson(value: unknown): string {
 
 export function reconcileStaffAuth(previous: StaffAuthView | null, next: StaffAuthView): StaffAuthView {
   if (previous === null) return next
-  const unchanged = canonicalJson(authorizationSnapshot(previous)) === canonicalJson(authorizationSnapshot(next))
+  const previousWire = previous as unknown as Record<string, unknown>
+  const nextWire = next as unknown as Record<string, unknown>
+  const sameOperatingContext = ['businessDate', 'timezone'].every(key =>
+    !Object.hasOwn(previousWire, key) || !Object.hasOwn(nextWire, key)
+    || canonicalJson(previousWire[key]) === canonicalJson(nextWire[key]))
+  const unchanged = sameOperatingContext
+    && canonicalJson(authorizationSnapshot(previous)) === canonicalJson(authorizationSnapshot(next))
   return {
     ...next,
     // Module loaders depend on permissions identity. Reuse only for equivalent

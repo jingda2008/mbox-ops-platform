@@ -28,12 +28,21 @@ describe('staff heartbeat authorization identity', () => {
     expect(previous.permissions).toEqual(['inventory.view', 'inventory.count'])
     expect(next.permissions).toEqual(['inventory.count', 'inventory.view'])
   })
+  it('accepts newly supplied operating annotations without reloading, while retaining their values', () => {
+    const next = auth()
+    const { businessDate: _date, timezone: _zone, ...previous } = auth()
+    const updated = reconcileStaffAuth(previous, next)
+    expect(updated.permissions).toBe(previous.permissions)
+    expect(updated).toMatchObject({ businessDate: next.businessDate, timezone: next.timezone })
+  })
   it('ignores object property ordering but not scope or approval content', () => {
     const previous = auth(), next = auth()
     next.approvalLimits = { amount: { requiresSecondActor: true, fixedAmountMinor: 100 } }
     expect(reconcileStaffAuth(previous, next).permissions).toBe(previous.permissions)
   })
   const changes: [string, (next: ReturnType<typeof auth>) => void][] = [
+    ['business date', next => { next.businessDate = '2026-10-06' }],
+    ['timezone', next => { next.timezone = 'UTC' }],
     ['permission removal', next => { next.permissions.pop() }],
     ['denial', next => { next.deniedPermissions.push('inventory.view') }],
     ['role', next => { next.employee.roleCodes = ['counter'] }],
